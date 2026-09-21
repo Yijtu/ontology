@@ -1,0 +1,58 @@
+{
+  "workspaceGlobs": [
+    "packages/*/package.json",
+    "packages/adapters/*/package.json",
+    "packages/extensions/*/package.json",
+    "industry-packs/*/package.json",
+    "apps/*/package.json"
+  ],
+  "sourceRoot": "src",
+  "layers": {
+    "contracts": [],
+    "core": ["contracts"],
+    "application": ["contracts", "core"],
+    "services": ["contracts", "core", "services"],
+    "adapters": ["contracts", "core"],
+    "extensions": ["contracts"],
+    "industry-packs": ["contracts"],
+    "apps": "*"
+  },
+  "layerPackageGlobs": {
+    "contracts": ["@ontology/contracts"],
+    "core": ["@ontology/core"],
+    "application": ["@ontology/application"],
+    "services": ["@ontology/tool-services", "@ontology/semantic-engine", "@ontology/provenance"],
+    "adapters": ["@ontology/adapter-*"],
+    "extensions": ["@ontology/extension-*"],
+    "industry-packs": ["@ontology/industry-pack-*"],
+    "apps": ["@ontology/app-*"]
+  },
+  "sdkRestrictedLayers": [
+    "contracts",
+    "core",
+    "application",
+    "services",
+    "extensions",
+    "industry-packs"
+  ],
+  "sdkDenylist": [
+    "@aws-sdk/client-s3",
+    "@duckdb/node-api",
+    "@earendil-works/pi",
+    "@modelcontextprotocol/sdk",
+    "@opentelemetry/api",
+    "@opentelemetry/sdk-node",
+    "duckdb",
+    "express",
+    "fastify",
+    "home-assistant-js-websocket",
+    "ioredis",
+    "koa",
+    "pg",
+    "postgres",
+    "react",
+    "react-dom",
+    "undici",
+    "vite"
+  ]
+}

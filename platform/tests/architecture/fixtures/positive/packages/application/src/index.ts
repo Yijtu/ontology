@@ -1,0 +1,2 @@
+import '@ontology/core'
+export {}
