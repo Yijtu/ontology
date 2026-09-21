@@ -21,6 +21,7 @@
     "@ontology/application": "workspace:*",
     "@ontology/contracts": "workspace:*",
     "@ontology/provenance": "workspace:*",
+    "@ontology/semantic-engine": "workspace:*",
     "@types/node": "^26.6.2",
     "@types/pg": "^8.15.5",
     "ajv": "^8.20.0",
