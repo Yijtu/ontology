@@ -20,6 +20,7 @@
   "devDependencies": {
     "@ontology/adapter-blob-local": "workspace:*",
     "@ontology/adapter-control-postgres": "workspace:*",
+    "@ontology/adapter-data-postgres": "workspace:*",
     "@ontology/adapter-extraction-document": "workspace:*",
     "@ontology/adapter-model-company": "workspace:*",
     "@ontology/adapter-transport-local": "workspace:*",
