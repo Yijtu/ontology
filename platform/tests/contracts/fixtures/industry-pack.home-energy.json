@@ -1,0 +1,66 @@
+{
+  "namespace": "home-energy",
+  "maturity": "preview",
+  "standardProvenance": [
+    {
+      "standardRef": {
+        "id": "iec-61850-7-420",
+        "version": "2.0.0",
+        "digest": "sha256:1111111111111111111111111111111111111111111111111111111111111111"
+      },
+      "provenanceKind": "international_standard",
+      "clauseRef": "IEC 61850-7-420 Ed.2 clause 5"
+    },
+    {
+      "standardRef": {
+        "id": "home-energy.synthetic-assumptions",
+        "version": "0.1.0",
+        "digest": "sha256:2222222222222222222222222222222222222222222222222222222222222222"
+      },
+      "provenanceKind": "synthetic_assumption",
+      "clauseRef": "hackathon fixture assumptions"
+    }
+  ],
+  "definitionsRef": {
+    "id": "home-energy.definitions",
+    "version": "0.1.0",
+    "digest": "sha256:3333333333333333333333333333333333333333333333333333333333333333"
+  },
+  "identityPolicyRef": {
+    "id": "home-energy.identity-policy",
+    "version": "0.1.0",
+    "digest": "sha256:4444444444444444444444444444444444444444444444444444444444444444"
+  },
+  "rulePolicyRef": {
+    "id": "home-energy.rule-policy",
+    "version": "0.1.0",
+    "digest": "sha256:5555555555555555555555555555555555555555555555555555555555555555"
+  },
+  "queryTemplatesRef": {
+    "id": "home-energy.query-templates",
+    "version": "0.1.0",
+    "digest": "sha256:6666666666666666666666666666666666666666666666666666666666666666"
+  },
+  "requiredCapabilities": [
+    { "name": "structured_query", "versionRange": { "min": "1.0.0", "max": "2.0.0" } },
+    { "name": "document_search", "versionRange": { "min": "1.0.0" } },
+    { "name": "telemetry_read", "versionRange": { "min": "1.0.0", "max": "2.0.0" } },
+    { "name": "compute.home-energy.plan", "versionRange": { "min": "1.0.0", "max": "2.0.0" } }
+  ],
+  "testSuiteRef": {
+    "id": "home-energy.test-suite",
+    "version": "0.1.0",
+    "digest": "sha256:7777777777777777777777777777777777777777777777777777777777777777"
+  },
+  "operationRefs": [
+    { "id": "home-energy.plan", "version": "1" },
+    { "id": "home-energy.simulate", "version": "1" }
+  ],
+  "extensionRefs": [
+    {
+      "id": "extension-home-energy",
+      "version": "1.0.0",
+      "digest": "sha256:8888888888888888888888888888888888888888888888888888888888888888"
+    }
+  ]
+}

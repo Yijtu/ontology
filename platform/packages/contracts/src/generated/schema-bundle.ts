@@ -3167,6 +3167,51 @@ export const SCHEMA_DOCUMENTS: readonly JsonSchemaObject[] = [
           "decision"
         ]
       },
+      "IndustryMaturity": {
+        "title": "IndustryMaturity",
+        "description": "FR-31/US-023: every industry pack declares how ready it is. A pack that only defines preparation material stays 'planned' and must never be reported as available; maturity is part of the exported asset, not UI copy.",
+        "type": "string",
+        "enum": [
+          "planned",
+          "preview",
+          "stable",
+          "deprecated"
+        ]
+      },
+      "ProvenanceKind": {
+        "title": "ProvenanceKind",
+        "description": "Where a declared definition comes from. A synthetic assumption must be labelled as such and never presented as an official standard.",
+        "type": "string",
+        "enum": [
+          "international_standard",
+          "national_standard",
+          "industry_standard",
+          "vendor_specification",
+          "internal_policy",
+          "synthetic_assumption"
+        ]
+      },
+      "StandardProvenance": {
+        "title": "StandardProvenance",
+        "description": "Cites the published artifact a definition is derived from. The cited source is a VersionRef resolved by the registry, so a pack cannot smuggle a free-form URL, a credential or an executable resource in as its 'standard'.",
+        "type": "object",
+        "additionalProperties": false,
+        "required": [
+          "standardRef",
+          "provenanceKind"
+        ],
+        "properties": {
+          "standardRef": {
+            "$ref": "./common.schema.json#/$defs/VersionRef"
+          },
+          "provenanceKind": {
+            "$ref": "#/$defs/ProvenanceKind"
+          },
+          "clauseRef": {
+            "$ref": "./common.schema.json#/$defs/NonEmptyString"
+          }
+        }
+      },
       "MappingRef": {
         "title": "MappingRef",
         "description": "Role-to-source mapping. Owns the translation from source naming/units into canonical metrics.",
@@ -3343,6 +3388,8 @@ export const SCHEMA_DOCUMENTS: readonly JsonSchemaObject[] = [
         "additionalProperties": false,
         "required": [
           "namespace",
+          "maturity",
+          "standardProvenance",
           "definitionsRef",
           "identityPolicyRef",
           "rulePolicyRef",
@@ -3353,6 +3400,17 @@ export const SCHEMA_DOCUMENTS: readonly JsonSchemaObject[] = [
         "properties": {
           "namespace": {
             "$ref": "./common.schema.json#/$defs/Namespace"
+          },
+          "maturity": {
+            "$ref": "#/$defs/IndustryMaturity"
+          },
+          "standardProvenance": {
+            "description": "FR-31: the published sources the pack's definitions are derived from. At least one is required so a pack can never present invented semantics as an unlabelled fact.",
+            "type": "array",
+            "items": {
+              "$ref": "#/$defs/StandardProvenance"
+            },
+            "minItems": 1
           },
           "definitionsRef": {
             "$ref": "./common.schema.json#/$defs/VersionRef"
@@ -3381,6 +3439,14 @@ export const SCHEMA_DOCUMENTS: readonly JsonSchemaObject[] = [
             "items": {
               "$ref": "./operations.schema.json#/$defs/OperationRef"
             }
+          },
+          "extensionRefs": {
+            "description": "ADR-10/US-003: enterprise or vendor extensions this pack expects, declared as opaque refs to separately published components. A pack never inlines extension code, customer instance data or a runtime binding.",
+            "type": "array",
+            "items": {
+              "$ref": "./common.schema.json#/$defs/VersionRef"
+            },
+            "uniqueItems": true
           }
         }
       },
@@ -3659,6 +3725,54 @@ export const SCHEMA_DOCUMENTS: readonly JsonSchemaObject[] = [
           },
           "resolvedAt": {
             "$ref": "./common.schema.json#/$defs/Rfc3339UtcTimestamp"
+          }
+        }
+      },
+      "DeploymentEnvironment": {
+        "title": "DeploymentEnvironment",
+        "description": "The environment a deployment profile targets. Production is the only environment where a non-loopback authentication principal is allowed (SPEC 3).",
+        "type": "string",
+        "enum": [
+          "local_dev",
+          "ci",
+          "staging",
+          "production"
+        ]
+      },
+      "DeploymentProfile": {
+        "title": "DeploymentProfile",
+        "description": "SPEC 2.2 deployment-profiles/: a named ProfileSpec plus its environment. It stores references only. A secret value, credential or customer payload never appears here; physical addressing lives behind the adapter and its secret ref.",
+        "type": "object",
+        "additionalProperties": false,
+        "required": [
+          "id",
+          "version",
+          "environment",
+          "spec"
+        ],
+        "properties": {
+          "id": {
+            "$ref": "./common.schema.json#/$defs/NonEmptyString"
+          },
+          "version": {
+            "$ref": "./common.schema.json#/$defs/Semver"
+          },
+          "environment": {
+            "$ref": "#/$defs/DeploymentEnvironment"
+          },
+          "description": {
+            "$ref": "./common.schema.json#/$defs/NonEmptyString"
+          },
+          "spec": {
+            "$ref": "#/$defs/ProfileSpec"
+          },
+          "artifactRefs": {
+            "description": "Deployment-level artifact refs (migrations, policy bundles, fixtures). Refs only.",
+            "type": "array",
+            "items": {
+              "$ref": "./common.schema.json#/$defs/VersionRef"
+            },
+            "uniqueItems": true
           }
         }
       },
