@@ -18,6 +18,7 @@
   "devDependencies": {
     "@ontology/adapter-blob-local": "workspace:*",
     "@ontology/adapter-control-postgres": "workspace:*",
+    "@ontology/application": "workspace:*",
     "@ontology/contracts": "workspace:*",
     "@ontology/provenance": "workspace:*",
     "@types/node": "^26.6.2",
