@@ -1,0 +1,2 @@
+import '@ontology/contracts'
+export {}
