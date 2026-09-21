@@ -1,7 +1,21 @@
 import { createHash } from 'node:crypto'
-import { canRetireComponentVersion, canTransitionLifecycle, isToolContext } from '@ontology/contracts'
+import {
+  ComponentStoreError,
+  canRetireComponentVersion,
+  canTransitionLifecycle,
+  componentKeyFromRef,
+  componentKeyOf,
+  componentKeyString,
+  isToolContext,
+} from '@ontology/contracts'
 import type {
+  ActiveComponentReference,
   BlobPort,
+  ComponentKey,
+  ComponentLifecycleAudit,
+  ComponentLifecycleEvent,
+  ComponentListFilter,
+  ComponentRegistryStore,
   ComponentVersionRecord,
   ControlAppendEventRequest,
   ControlRepository,
@@ -17,19 +31,8 @@ import { tryParseSemver } from '@ontology/contracts'
 import { ComponentRegistryError } from './errors'
 import { isSha256DigestValue, toFieldErrors, validateComponentManifestSemantics } from './manifest'
 import type { ManifestValidator } from './manifest'
-import { ComponentStoreError } from './store'
-import type { ComponentLifecycleAudit, ComponentRegistryStore } from './store'
-import {
-  componentKeyFromRef,
-  componentKeyOf,
-  componentKeyString,
-} from './types'
 import type {
-  ActiveComponentReference,
   ActiveComponentReferenceInput,
-  ComponentKey,
-  ComponentLifecycleEvent,
-  ComponentListFilter,
   ComponentReferenceInput,
   RegisterComponentInput,
   RegistrationSource,

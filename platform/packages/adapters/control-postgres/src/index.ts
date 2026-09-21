@@ -4,6 +4,7 @@ export type {
   ControlQueryResult,
   ControlScope,
 } from './database'
+export { PostgresComponentRegistryStore } from './component-registry-store'
 export { ControlPostgresRepository } from './repository'
 export type {
   ControlOperationContext,
