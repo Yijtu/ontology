@@ -20,6 +20,9 @@ importers:
       '@ontology/adapter-model-company':
         specifier: workspace:*
         version: link:packages/adapters/model-company
+      '@ontology/adapter-model-jev':
+        specifier: workspace:*
+        version: link:packages/adapters/model-jev
       '@ontology/adapter-transport-local':
         specifier: workspace:*
         version: link:packages/adapters/transport-local
