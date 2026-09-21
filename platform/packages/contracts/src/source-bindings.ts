@@ -185,6 +185,11 @@ export interface SourceStore {
     completion: SourceProbeJobCompletion,
     ctx: ToolContext,
   ): Promise<SourceProbeJobRecord>
+  /**
+   * Record the fingerprints a preflight observed, keyed by `(profileRef, snapshotHash)`.
+   * Re-recording replaces the previous observation: a re-preflight after a source change
+   * must be able to clear the staleness it was recorded to detect.
+   */
   insertPreflightBinding(
     scopeRef: ScopeRef,
     record: SourcePreflightBindingRecord,

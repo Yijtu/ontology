@@ -25,10 +25,21 @@ export {
   createPostgresRunStore,
 } from './composition/run-service'
 export type { RunServiceComposition, RunServiceCompositionOptions } from './composition/run-service'
-export { createRunApi } from './http/server'
+export { createApiServer, createRunApi } from './http/app'
+export type { ApiServerOptions } from './http/app'
+export { registerRunRoutes } from './http/server'
 export type { AuthenticatedRequest, RequestAuthenticator, RunApiOptions } from './http/server'
+export { registerWorkbenchRoutes } from './http/workbench'
+export type { WorkbenchApiOptions, WorkbenchRouteDependencies } from './http/workbench'
 export { createRequestToolContext } from './http/context'
 export type { RequestToolContextInput } from './http/context'
 export { formatSseFrame, SSE_HEADERS } from './http/sse'
-export { failureBody, isRetryable } from './http/errors'
-export type { ApiFailureBody } from './http/errors'
+export { failureBody, isClassifiedError, isRetryable } from './http/errors'
+export type { ApiFailureBody, ClassifiedApiError } from './http/errors'
+export {
+  ForbiddenError,
+  InvalidRequestFieldError,
+  installErrorHandler,
+  readRevisionHeader,
+  scopeRefFor,
+} from './http/shared'

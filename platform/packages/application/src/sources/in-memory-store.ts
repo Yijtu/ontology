@@ -188,7 +188,9 @@ export class InMemorySourceStore implements SourceStore {
   ): Promise<void> {
     resolveStoreScope(scopeRef, ctx)
     const key = preflightKey(scopeRef, record.profileRef, record.snapshotHash)
-    if (this.#preflights.has(key)) return
+    // A re-preflight replaces the recorded observation. Keeping the first record forever
+    // would leave a preflight permanently stale after a source change, so the record must
+    // reflect the fingerprints the latest preflight actually observed.
     this.#preflights.set(key, structuredClone(record))
   }
 

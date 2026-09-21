@@ -2,6 +2,7 @@ node_modules/
 dist/
 coverage/
 *.log
+platform/tests/e2e/artifacts/
 .loop-state.json
 .graph_state
 graph.html
