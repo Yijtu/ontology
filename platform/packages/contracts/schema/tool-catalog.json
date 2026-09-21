@@ -1,0 +1,78 @@
+{
+  "$comment": "Canonical four-tool catalogue (ADR-04 / C4). inputSchema and outputSchema are JSON Pointer references resolved by scripts/generate-contracts.mjs. verify_result and final_answer are controller services and MUST NOT appear here.",
+  "catalogueVersion": "1.0.0",
+  "tools": [
+    {
+      "toolId": "ontology_lookup",
+      "version": "1.0.0",
+      "inputSchema": {
+        "$ref": "./tools.schema.json#/$defs/OntologyLookupInput"
+      },
+      "outputSchema": {
+        "$ref": "./tools.schema.json#/$defs/OntologyLookupOutput"
+      },
+      "requiredCapabilities": ["ontology.definitions", "ontology.facts"],
+      "readOnly": true,
+      "resultLimits": {
+        "maxRows": 500,
+        "maxBytes": 262144,
+        "maxDurationMs": 30000,
+        "maxCallsPerRun": 8
+      }
+    },
+    {
+      "toolId": "data_query",
+      "version": "1.0.0",
+      "inputSchema": {
+        "$ref": "./tools.schema.json#/$defs/DataQueryInput"
+      },
+      "outputSchema": {
+        "$ref": "./tools.schema.json#/$defs/DataQueryOutput"
+      },
+      "requiredCapabilities": ["catalog.describe", "structured_query.execute"],
+      "readOnly": true,
+      "resultLimits": {
+        "maxRows": 1000,
+        "maxBytes": 1048576,
+        "maxDurationMs": 60000,
+        "maxCallsPerRun": 8
+      }
+    },
+    {
+      "toolId": "document_search",
+      "version": "1.0.0",
+      "inputSchema": {
+        "$ref": "./data.schema.json#/$defs/DocumentSearchRequest"
+      },
+      "outputSchema": {
+        "$ref": "./tools.schema.json#/$defs/DocumentSearchOutput"
+      },
+      "requiredCapabilities": ["document_search.keyword"],
+      "readOnly": true,
+      "resultLimits": {
+        "maxRows": 200,
+        "maxBytes": 1048576,
+        "maxDurationMs": 30000,
+        "maxCallsPerRun": 8
+      }
+    },
+    {
+      "toolId": "web_search",
+      "version": "1.0.0",
+      "inputSchema": {
+        "$ref": "./tools.schema.json#/$defs/WebSearchInput"
+      },
+      "outputSchema": {
+        "$ref": "./tools.schema.json#/$defs/WebSearchOutput"
+      },
+      "requiredCapabilities": ["web_search.fetch"],
+      "readOnly": true,
+      "resultLimits": {
+        "maxRows": 50,
+        "maxBytes": 524288,
+        "maxDurationMs": 30000,
+        "maxCallsPerRun": 4
+      }
+    }
+  ]
+}

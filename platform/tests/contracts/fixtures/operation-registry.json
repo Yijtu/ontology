@@ -1,0 +1,60 @@
+{
+  "namespace": "home-energy",
+  "registryVersion": "1.0.0",
+  "registryDigest": "sha256:1111111111111111111111111111111111111111111111111111111111111111",
+  "operations": [
+    {
+      "operationRef": { "id": "home-energy.plan", "version": "1" },
+      "inputSchema": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": ["siteRef", "strategyWhitelist"],
+        "properties": {
+          "siteRef": { "type": "string", "minLength": 1 },
+          "strategyWhitelist": {
+            "type": "array",
+            "items": { "enum": ["self_consumption", "reserve_first", "price_window"] },
+            "minItems": 1
+          }
+        }
+      },
+      "outputSchema": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": ["candidates"],
+        "properties": { "candidates": { "type": "array" } }
+      },
+      "inputSchemaDigest": "sha256:2222222222222222222222222222222222222222222222222222222222222222",
+      "outputSchemaDigest": "sha256:3333333333333333333333333333333333333333333333333333333333333333",
+      "handlerRef": { "id": "extension-home-energy", "version": "0.1.0", "digest": "sha256:4444444444444444444444444444444444444444444444444444444444444444" },
+      "handlerDigest": "sha256:5555555555555555555555555555555555555555555555555555555555555555",
+      "readOnly": true,
+      "requiredCapabilities": ["home-energy.planning"],
+      "limits": { "maxRows": 96, "maxBytes": 262144, "maxDurationMs": 2000 },
+      "dataMode": "simulation"
+    },
+    {
+      "operationRef": { "id": "home-energy.simulate", "version": "1" },
+      "inputSchema": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": ["planRef"],
+        "properties": { "planRef": { "type": "string", "minLength": 1 } }
+      },
+      "outputSchema": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": ["violations"],
+        "properties": { "violations": { "type": "array" } }
+      },
+      "inputSchemaDigest": "sha256:6666666666666666666666666666666666666666666666666666666666666666",
+      "outputSchemaDigest": "sha256:7777777777777777777777777777777777777777777777777777777777777777",
+      "handlerRef": { "id": "extension-home-energy", "version": "0.1.0", "digest": "sha256:4444444444444444444444444444444444444444444444444444444444444444" },
+      "handlerDigest": "sha256:5555555555555555555555555555555555555555555555555555555555555555",
+      "readOnly": true,
+      "requiredCapabilities": ["home-energy.simulation"],
+      "limits": { "maxRows": 96, "maxBytes": 262144, "maxDurationMs": 2000 },
+      "dataMode": "simulation"
+    }
+  ]
+}

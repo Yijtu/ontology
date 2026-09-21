@@ -1,0 +1,199 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://ontology.local/schema/evidence.schema.json",
+  "title": "EvidenceContracts",
+  "$comment": "ADR-13 provenance envelope. Raw and derived records are both append-only and versioned; the envelope binds an evidence item to the exact source snapshots, integrity digest and dependency edges it was derived from.",
+  "$defs": {
+    "EvidenceKind": {
+      "title": "EvidenceKind",
+      "type": "string",
+      "enum": [
+        "observation",
+        "document_span",
+        "computation",
+        "rule_derivation",
+        "identity_decision",
+        "model_output",
+        "web_page"
+      ]
+    },
+    "EvidenceProducer": {
+      "title": "EvidenceProducer",
+      "description": "What produced this evidence. At most one of run/operation/rule applies per kind, and the component ref is always present.",
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["componentRef"],
+      "properties": {
+        "componentRef": {
+          "$ref": "./common.schema.json#/$defs/VersionRef"
+        },
+        "runId": {
+          "$ref": "./common.schema.json#/$defs/Uuid"
+        },
+        "attemptId": {
+          "$ref": "./common.schema.json#/$defs/Uuid"
+        },
+        "operationRef": {
+          "$ref": "./operations.schema.json#/$defs/OperationRef"
+        },
+        "ruleRef": {
+          "$ref": "./common.schema.json#/$defs/VersionRef"
+        }
+      }
+    },
+    "EvidenceDependencyRelation": {
+      "title": "EvidenceDependencyRelation",
+      "description": "How a dependency contributed. A support can be one of several alternatives; withdrawing one support only removes the conclusion when no valid support remains.",
+      "type": "string",
+      "enum": ["supports", "contradicts", "derives_from", "corrects", "retracts", "same_source"]
+    },
+    "EvidenceDependencyDirection": {
+      "title": "EvidenceDependencyDirection",
+      "type": "string",
+      "enum": ["inbound", "outbound"]
+    },
+    "EvidenceDependency": {
+      "title": "EvidenceDependency",
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["evidenceRef", "relation", "direction"],
+      "properties": {
+        "evidenceRef": {
+          "$ref": "./common.schema.json#/$defs/ResourceRef"
+        },
+        "relation": {
+          "$ref": "#/$defs/EvidenceDependencyRelation"
+        },
+        "direction": {
+          "$ref": "#/$defs/EvidenceDependencyDirection"
+        },
+        "premiseGroup": {
+          "description": "Premises in the same group are equivalent alternatives; different groups are all required (AND of ORs).",
+          "$ref": "./common.schema.json#/$defs/NonEmptyString"
+        }
+      }
+    },
+    "EvidenceEnvelope": {
+      "title": "EvidenceEnvelope",
+      "description": "Every evidence item records the source snapshots it observed, its result digest, its integrity proof, its dependency edges and its data mode. A traceable success cannot be returned when evidence persistence failed.",
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "evidenceId",
+        "kind",
+        "scopeRef",
+        "producedBy",
+        "observedAt",
+        "sourceSnapshots",
+        "resultDigest",
+        "integrity",
+        "dependencies",
+        "dataMode"
+      ],
+      "properties": {
+        "evidenceId": {
+          "$ref": "./common.schema.json#/$defs/Uuid"
+        },
+        "kind": {
+          "$ref": "#/$defs/EvidenceKind"
+        },
+        "scopeRef": {
+          "$ref": "./common.schema.json#/$defs/ScopeRef"
+        },
+        "producedBy": {
+          "$ref": "#/$defs/EvidenceProducer"
+        },
+        "observedAt": {
+          "$ref": "./common.schema.json#/$defs/Rfc3339UtcTimestamp"
+        },
+        "recordedSeq": {
+          "$ref": "./common.schema.json#/$defs/RevisionString"
+        },
+        "validity": {
+          "$ref": "./common.schema.json#/$defs/ValidityInterval"
+        },
+        "sourceSnapshots": {
+          "description": "The source states this evidence observed. Pure derivations (rule justifications, identity decisions) may have none; anything read from a backend must record at least one.",
+          "type": "array",
+          "items": {
+            "$ref": "./data.schema.json#/$defs/SourceSnapshot"
+          }
+        },
+        "resultDigest": {
+          "$ref": "./common.schema.json#/$defs/Sha256Digest"
+        },
+        "integrity": {
+          "$ref": "./common.schema.json#/$defs/Integrity"
+        },
+        "dependencies": {
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/EvidenceDependency"
+          }
+        },
+        "dataMode": {
+          "$ref": "./common.schema.json#/$defs/DataMode"
+        },
+        "payloadRef": {
+          "$ref": "./common.schema.json#/$defs/ResourceRef"
+        },
+        "limitations": {
+          "type": "array",
+          "items": {
+            "$ref": "./common.schema.json#/$defs/NonEmptyString"
+          }
+        },
+        "supersedes": {
+          "type": "array",
+          "items": {
+            "$ref": "./common.schema.json#/$defs/Uuid"
+          }
+        }
+      }
+    },
+    "EvidenceManifest": {
+      "title": "EvidenceManifest",
+      "description": "The manifest a draft/answer binds to. Published answers are immutable and always reference one exact manifest hash and verification.",
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["manifestHash", "evidenceRefs", "createdAt", "policyVersion"],
+      "properties": {
+        "manifestHash": {
+          "$ref": "./common.schema.json#/$defs/Sha256Digest"
+        },
+        "evidenceRefs": {
+          "type": "array",
+          "items": {
+            "$ref": "./common.schema.json#/$defs/ResourceRef"
+          }
+        },
+        "createdAt": {
+          "$ref": "./common.schema.json#/$defs/Rfc3339UtcTimestamp"
+        },
+        "policyVersion": {
+          "$ref": "./common.schema.json#/$defs/Semver"
+        },
+        "truncated": {
+          "type": "boolean"
+        }
+      }
+    },
+    "EvidenceQuery": {
+      "title": "EvidenceQuery",
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["evidenceId"],
+      "properties": {
+        "evidenceId": {
+          "$ref": "./common.schema.json#/$defs/Uuid"
+        },
+        "asOf": {
+          "$ref": "./common.schema.json#/$defs/Rfc3339UtcTimestamp"
+        },
+        "validAt": {
+          "$ref": "./common.schema.json#/$defs/Rfc3339UtcTimestamp"
+        }
+      }
+    }
+  }
+}

@@ -1,0 +1,535 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://ontology.local/schema/industry.schema.json",
+  "title": "IndustryContracts",
+  "$comment": "C1 scenario assembly. Industry packs declare logical roles only (telemetry/catalog/documents); they never carry URLs, credentials or physical table names. Preflight resolves exact versions and reports missing capabilities instead of silently intersecting them away.",
+  "$defs": {
+    "LogicalRole": {
+      "title": "LogicalRole",
+      "description": "Logical backend role. A mapping ref is what turns a role into concrete source objects, columns and unit conversions.",
+      "type": "string",
+      "enum": ["telemetry", "catalog", "documents"]
+    },
+    "ModelRole": {
+      "title": "ModelRole",
+      "type": "string",
+      "enum": ["generation", "decision"]
+    },
+    "MappingRef": {
+      "title": "MappingRef",
+      "description": "Role-to-source mapping. Owns the translation from source naming/units into canonical metrics.",
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["id", "version", "digest", "role", "sourceObjectRef"],
+      "properties": {
+        "id": {
+          "$ref": "./common.schema.json#/$defs/NonEmptyString"
+        },
+        "version": {
+          "$ref": "./common.schema.json#/$defs/Semver"
+        },
+        "digest": {
+          "$ref": "./common.schema.json#/$defs/Sha256Digest"
+        },
+        "role": {
+          "$ref": "#/$defs/LogicalRole"
+        },
+        "sourceObjectRef": {
+          "$ref": "./common.schema.json#/$defs/SourceObjectRef"
+        },
+        "unitConversionsRef": {
+          "$ref": "./common.schema.json#/$defs/NonEmptyString"
+        },
+        "schemaRevision": {
+          "$ref": "./data.schema.json#/$defs/SchemaVersion"
+        }
+      }
+    },
+    "BackendBinding": {
+      "title": "BackendBinding",
+      "description": "Binds a logical role to an adapter. Deliberately has no url/host/table/credential field: physical addressing lives behind the adapter and its secret ref.",
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["role", "adapterRef"],
+      "properties": {
+        "role": {
+          "$ref": "#/$defs/LogicalRole"
+        },
+        "adapterRef": {
+          "$ref": "./common.schema.json#/$defs/VersionRef"
+        },
+        "capabilityNames": {
+          "type": "array",
+          "items": {
+            "$ref": "./common.schema.json#/$defs/NonEmptyString"
+          },
+          "uniqueItems": true
+        },
+        "scopeRef": {
+          "$ref": "./common.schema.json#/$defs/ScopeRef"
+        },
+        "mappingRef": {
+          "$ref": "./common.schema.json#/$defs/NonEmptyString"
+        }
+      }
+    },
+    "ModelBinding": {
+      "title": "ModelBinding",
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["role", "modelRef", "fallbackPolicy", "enabled"],
+      "properties": {
+        "role": {
+          "$ref": "#/$defs/ModelRole"
+        },
+        "modelRef": {
+          "$ref": "./common.schema.json#/$defs/VersionRef"
+        },
+        "fallbackPolicy": {
+          "type": "string",
+          "enum": ["deterministic", "generative_classification", "clarify", "reject"]
+        },
+        "enabled": {
+          "type": "boolean"
+        },
+        "contextLimitTokens": {
+          "type": "integer",
+          "minimum": 1
+        },
+        "outputLimitTokens": {
+          "type": "integer",
+          "minimum": 1
+        }
+      }
+    },
+    "ToolBinding": {
+      "title": "ToolBinding",
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["toolId", "enabled"],
+      "properties": {
+        "toolId": {
+          "$ref": "./tools.schema.json#/$defs/ToolId"
+        },
+        "enabled": {
+          "type": "boolean"
+        },
+        "policyRef": {
+          "$ref": "./common.schema.json#/$defs/NonEmptyString"
+        },
+        "maxCallsPerRun": {
+          "type": "integer",
+          "minimum": 1,
+          "maximum": 1000
+        }
+      }
+    },
+    "ComputeBinding": {
+      "title": "ComputeBinding",
+      "description": "Binds a declared operation id to a trusted handler. A user question can never choose a package path, and a disabled binding cannot execute even with correct parameters.",
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "operationRef",
+        "handlerRef",
+        "inputSchemaRef",
+        "outputSchemaRef",
+        "readOnly",
+        "enabled",
+        "limits"
+      ],
+      "properties": {
+        "operationRef": {
+          "$ref": "./operations.schema.json#/$defs/OperationRef"
+        },
+        "handlerRef": {
+          "$ref": "./common.schema.json#/$defs/VersionRef"
+        },
+        "inputSchemaRef": {
+          "$ref": "./common.schema.json#/$defs/VersionRef"
+        },
+        "outputSchemaRef": {
+          "$ref": "./common.schema.json#/$defs/VersionRef"
+        },
+        "readOnly": {
+          "const": true
+        },
+        "enabled": {
+          "type": "boolean"
+        },
+        "limits": {
+          "$ref": "./component.schema.json#/$defs/CapabilityLimits"
+        }
+      }
+    },
+    "IndustryManifest": {
+      "title": "IndustryManifest",
+      "description": "C1 IndustryManifest field set: namespace, definitionsRef, identityPolicyRef, rulePolicyRef, queryTemplatesRef, requiredCapabilities, testSuiteRef.",
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "namespace",
+        "definitionsRef",
+        "identityPolicyRef",
+        "rulePolicyRef",
+        "queryTemplatesRef",
+        "requiredCapabilities",
+        "testSuiteRef"
+      ],
+      "properties": {
+        "namespace": {
+          "$ref": "./common.schema.json#/$defs/Namespace"
+        },
+        "definitionsRef": {
+          "$ref": "./common.schema.json#/$defs/VersionRef"
+        },
+        "identityPolicyRef": {
+          "$ref": "./common.schema.json#/$defs/VersionRef"
+        },
+        "rulePolicyRef": {
+          "$ref": "./common.schema.json#/$defs/VersionRef"
+        },
+        "queryTemplatesRef": {
+          "$ref": "./common.schema.json#/$defs/VersionRef"
+        },
+        "requiredCapabilities": {
+          "type": "array",
+          "items": {
+            "$ref": "./component.schema.json#/$defs/CapabilityRequirement"
+          },
+          "minItems": 1
+        },
+        "testSuiteRef": {
+          "$ref": "./common.schema.json#/$defs/VersionRef"
+        },
+        "operationRefs": {
+          "type": "array",
+          "items": {
+            "$ref": "./operations.schema.json#/$defs/OperationRef"
+          }
+        }
+      }
+    },
+    "ProfileRef": {
+      "title": "ProfileRef",
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["id", "version"],
+      "properties": {
+        "id": {
+          "$ref": "./common.schema.json#/$defs/NonEmptyString"
+        },
+        "version": {
+          "$ref": "./common.schema.json#/$defs/Semver"
+        }
+      }
+    },
+    "ResolvedProfileRef": {
+      "title": "ResolvedProfileRef",
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["id", "version", "snapshotHash"],
+      "properties": {
+        "id": {
+          "$ref": "./common.schema.json#/$defs/NonEmptyString"
+        },
+        "version": {
+          "$ref": "./common.schema.json#/$defs/Semver"
+        },
+        "snapshotHash": {
+          "$ref": "./common.schema.json#/$defs/Sha256Digest"
+        }
+      }
+    },
+    "ProfileSpec": {
+      "title": "ProfileSpec",
+      "description": "C1 ProfileSpec field set. NOTE: ResolvedProfile repeats these properties instead of using allOf so that additionalProperties:false stays sound; tests assert the two property sets stay in sync.",
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "industryRef",
+        "mappingRefs",
+        "runtimeRef",
+        "backendBindings",
+        "modelBindings",
+        "toolBindings",
+        "computeBindings",
+        "policyRef"
+      ],
+      "properties": {
+        "industryRef": {
+          "$ref": "./common.schema.json#/$defs/VersionRef"
+        },
+        "mappingRefs": {
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/MappingRef"
+          },
+          "minItems": 1
+        },
+        "runtimeRef": {
+          "$ref": "./common.schema.json#/$defs/VersionRef"
+        },
+        "backendBindings": {
+          "type": "object",
+          "propertyNames": {
+            "$ref": "#/$defs/LogicalRole"
+          },
+          "additionalProperties": {
+            "$ref": "#/$defs/BackendBinding"
+          }
+        },
+        "modelBindings": {
+          "type": "object",
+          "propertyNames": {
+            "$ref": "#/$defs/ModelRole"
+          },
+          "additionalProperties": {
+            "$ref": "#/$defs/ModelBinding"
+          }
+        },
+        "toolBindings": {
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/ToolBinding"
+          }
+        },
+        "computeBindings": {
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/ComputeBinding"
+          }
+        },
+        "policyRef": {
+          "$ref": "./common.schema.json#/$defs/VersionRef"
+        }
+      }
+    },
+    "ResolvedCapability": {
+      "title": "ResolvedCapability",
+      "description": "A capability resolved to an exact component version, with the provider that supplied it.",
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "name",
+        "version",
+        "limits",
+        "consistency",
+        "cancellation",
+        "pagination",
+        "supportedDataTypes",
+        "sourceComponentRef"
+      ],
+      "properties": {
+        "name": {
+          "$ref": "./common.schema.json#/$defs/NonEmptyString"
+        },
+        "version": {
+          "$ref": "./common.schema.json#/$defs/Semver"
+        },
+        "limits": {
+          "$ref": "./component.schema.json#/$defs/CapabilityLimits"
+        },
+        "consistency": {
+          "$ref": "./common.schema.json#/$defs/ConsistencyLevel"
+        },
+        "cancellation": {
+          "$ref": "./component.schema.json#/$defs/CancellationSupport"
+        },
+        "pagination": {
+          "$ref": "./component.schema.json#/$defs/PaginationKind"
+        },
+        "supportedDataTypes": {
+          "type": "array",
+          "items": {
+            "$ref": "./component.schema.json#/$defs/SupportedDataType"
+          },
+          "minItems": 1,
+          "uniqueItems": true
+        },
+        "sourceComponentRef": {
+          "$ref": "./common.schema.json#/$defs/VersionRef"
+        }
+      }
+    },
+    "ExplicitDegradation": {
+      "title": "ExplicitDegradation",
+      "description": "A declared, visible capability reduction with its reason and fallback. Degradations are never silent.",
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["capability", "reason", "fallback", "fallbackReason"],
+      "properties": {
+        "capability": {
+          "$ref": "./common.schema.json#/$defs/NonEmptyString"
+        },
+        "reason": {
+          "$ref": "./errors.schema.json#/$defs/ErrorCode"
+        },
+        "fallback": {
+          "type": "string",
+          "enum": ["deterministic", "generative_classification", "clarify", "reject", "none"]
+        },
+        "fallbackReason": {
+          "$ref": "./common.schema.json#/$defs/NonEmptyString"
+        },
+        "originalFailureEvidenceRef": {
+          "$ref": "./common.schema.json#/$defs/ResourceRef"
+        }
+      }
+    },
+    "ResolvedProfile": {
+      "title": "ResolvedProfile",
+      "description": "ProfileSpec plus exact versions/digests, resolved capabilities, explicit degradations and a snapshot hash. The resolved output is itself versioned and is redone when inputs change before activation.",
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "industryRef",
+        "mappingRefs",
+        "runtimeRef",
+        "backendBindings",
+        "modelBindings",
+        "toolBindings",
+        "computeBindings",
+        "policyRef",
+        "resolvedVersions",
+        "resolvedCapabilities",
+        "explicitDegradations",
+        "snapshotHash",
+        "resolvedAt"
+      ],
+      "properties": {
+        "industryRef": {
+          "$ref": "./common.schema.json#/$defs/VersionRef"
+        },
+        "mappingRefs": {
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/MappingRef"
+          },
+          "minItems": 1
+        },
+        "runtimeRef": {
+          "$ref": "./common.schema.json#/$defs/VersionRef"
+        },
+        "backendBindings": {
+          "type": "object",
+          "propertyNames": {
+            "$ref": "#/$defs/LogicalRole"
+          },
+          "additionalProperties": {
+            "$ref": "#/$defs/BackendBinding"
+          }
+        },
+        "modelBindings": {
+          "type": "object",
+          "propertyNames": {
+            "$ref": "#/$defs/ModelRole"
+          },
+          "additionalProperties": {
+            "$ref": "#/$defs/ModelBinding"
+          }
+        },
+        "toolBindings": {
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/ToolBinding"
+          }
+        },
+        "computeBindings": {
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/ComputeBinding"
+          }
+        },
+        "policyRef": {
+          "$ref": "./common.schema.json#/$defs/VersionRef"
+        },
+        "resolvedVersions": {
+          "type": "array",
+          "items": {
+            "$ref": "./common.schema.json#/$defs/VersionRef"
+          }
+        },
+        "resolvedCapabilities": {
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/ResolvedCapability"
+          }
+        },
+        "explicitDegradations": {
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/ExplicitDegradation"
+          }
+        },
+        "snapshotHash": {
+          "$ref": "./common.schema.json#/$defs/Sha256Digest"
+        },
+        "resolvedAt": {
+          "$ref": "./common.schema.json#/$defs/Rfc3339UtcTimestamp"
+        }
+      }
+    },
+    "MissingCapability": {
+      "title": "MissingCapability",
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["name", "versionRange", "requiredBy"],
+      "properties": {
+        "name": {
+          "$ref": "./common.schema.json#/$defs/NonEmptyString"
+        },
+        "versionRange": {
+          "$ref": "./component.schema.json#/$defs/ContractRange"
+        },
+        "requiredBy": {
+          "$ref": "./common.schema.json#/$defs/VersionRef"
+        }
+      }
+    },
+    "PreflightStatus": {
+      "title": "PreflightStatus",
+      "type": "string",
+      "enum": ["resolved", "missing_capabilities", "incompatible"]
+    },
+    "PreflightResult": {
+      "title": "PreflightResult",
+      "description": "Output of the preflight algorithm. The output is versioned; if inputs change before activation the preflight is redone rather than reused.",
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["status", "profileRef", "outputVersion", "outputDigest", "checkedAt"],
+      "properties": {
+        "status": {
+          "$ref": "#/$defs/PreflightStatus"
+        },
+        "profileRef": {
+          "$ref": "#/$defs/ProfileRef"
+        },
+        "outputVersion": {
+          "$ref": "./common.schema.json#/$defs/Semver"
+        },
+        "outputDigest": {
+          "$ref": "./common.schema.json#/$defs/Sha256Digest"
+        },
+        "checkedAt": {
+          "$ref": "./common.schema.json#/$defs/Rfc3339UtcTimestamp"
+        },
+        "resolvedProfile": {
+          "$ref": "#/$defs/ResolvedProfile"
+        },
+        "missingCapabilities": {
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/MissingCapability"
+          }
+        },
+        "incompatibleReasons": {
+          "type": "array",
+          "items": {
+            "$ref": "./common.schema.json#/$defs/NonEmptyString"
+          }
+        }
+      }
+    }
+  }
+}

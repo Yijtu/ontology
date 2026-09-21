@@ -1,0 +1,513 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://ontology.local/schema/runtime.schema.json",
+  "title": "RuntimeContracts",
+  "$comment": "C2 runtime contract. RuntimeDependencies is a restricted closure injected by the host and is never deserialized from model-serializable parameters. Every RuntimeEvent carries runId/eventId/sequence. 'collection_complete' only means a draft may be attempted; it does not mean the answer passed verification.",
+  "$defs": {
+    "RuntimeEventType": {
+      "title": "RuntimeEventType",
+      "type": "string",
+      "enum": [
+        "plan_proposed",
+        "step_started",
+        "evidence_added",
+        "clarification_requested",
+        "collection_complete",
+        "checkpoint_ready",
+        "cancelled",
+        "failed"
+      ]
+    },
+    "BudgetRemaining": {
+      "title": "BudgetRemaining",
+      "description": "Remaining run budget. One shared ledger for the whole run: replanning, repair, runtime turns and transport retries all draw from it and never reset it.",
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["deadline", "toolCallsRemaining", "repairAttemptsRemaining", "parallelToolLimit"],
+      "properties": {
+        "deadline": {
+          "$ref": "./common.schema.json#/$defs/Rfc3339UtcTimestamp"
+        },
+        "toolCallsRemaining": {
+          "type": "integer",
+          "minimum": 0
+        },
+        "repairAttemptsRemaining": {
+          "type": "integer",
+          "minimum": 0
+        },
+        "parallelToolLimit": {
+          "type": "integer",
+          "minimum": 1,
+          "maximum": 16
+        },
+        "tokensRemaining": {
+          "type": "integer",
+          "minimum": 0
+        }
+      }
+    },
+    "Deficit": {
+      "title": "Deficit",
+      "description": "A known gap that drives the next collection step. Deficits are explicit; the runtime must not invent values to fill them.",
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["kind", "description"],
+      "properties": {
+        "kind": {
+          "type": "string",
+          "enum": [
+            "missing_evidence",
+            "missing_input",
+            "ambiguous_entity",
+            "capability_unavailable",
+            "stale_source",
+            "conflicting_evidence"
+          ]
+        },
+        "description": {
+          "$ref": "./common.schema.json#/$defs/NonEmptyString"
+        },
+        "resolvedBy": {
+          "$ref": "./common.schema.json#/$defs/NonEmptyString"
+        }
+      }
+    },
+    "ConfirmedContext": {
+      "title": "ConfirmedContext",
+      "description": "User-confirmed business context. Instants stay UTC; the zone is a separate IANA name.",
+      "type": "object",
+      "additionalProperties": true,
+      "required": ["timeZone"],
+      "properties": {
+        "timeZone": {
+          "$ref": "./common.schema.json#/$defs/IanaTimeZone"
+        },
+        "siteRef": {
+          "$ref": "./common.schema.json#/$defs/NonEmptyString"
+        }
+      }
+    },
+    "RuntimeInput": {
+      "title": "RuntimeInput",
+      "description": "C2 RuntimeInput. Carries references and confirmed context only: no database connection, no secret value and no full tool result bodies.",
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "runId",
+        "resolvedProfileRef",
+        "question",
+        "confirmedContext",
+        "evidenceRefs",
+        "deficits",
+        "remainingBudget"
+      ],
+      "properties": {
+        "runId": {
+          "$ref": "./common.schema.json#/$defs/Uuid"
+        },
+        "resolvedProfileRef": {
+          "$ref": "./industry.schema.json#/$defs/ResolvedProfileRef"
+        },
+        "question": {
+          "$ref": "./common.schema.json#/$defs/NonEmptyString"
+        },
+        "confirmedContext": {
+          "$ref": "#/$defs/ConfirmedContext"
+        },
+        "evidenceRefs": {
+          "type": "array",
+          "items": {
+            "$ref": "./common.schema.json#/$defs/ResourceRef"
+          }
+        },
+        "deficits": {
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/Deficit"
+          }
+        },
+        "planRef": {
+          "$ref": "./common.schema.json#/$defs/ResourceRef"
+        },
+        "remainingBudget": {
+          "$ref": "#/$defs/BudgetRemaining"
+        }
+      }
+    },
+    "RuntimeCheckpointRef": {
+      "title": "RuntimeCheckpointRef",
+      "description": "Public checkpoint handle. The runtime-private blob holds the SDK/adapter version and hash; cross-kernel restore is only claimed when the same runtime and version are used.",
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["checkpointId", "runId", "runtimeKind", "runtimeVersion", "stateDigest", "createdAt"],
+      "properties": {
+        "checkpointId": {
+          "$ref": "./common.schema.json#/$defs/Uuid"
+        },
+        "runId": {
+          "$ref": "./common.schema.json#/$defs/Uuid"
+        },
+        "runtimeKind": {
+          "$ref": "./common.schema.json#/$defs/NonEmptyString"
+        },
+        "runtimeVersion": {
+          "$ref": "./common.schema.json#/$defs/Semver"
+        },
+        "stateDigest": {
+          "$ref": "./common.schema.json#/$defs/Sha256Digest"
+        },
+        "createdAt": {
+          "$ref": "./common.schema.json#/$defs/Rfc3339UtcTimestamp"
+        }
+      }
+    },
+    "ClarificationResponse": {
+      "title": "ClarificationResponse",
+      "description": "A typed answer to a clarification. It cannot change the principal, the allowlist or the budget, and it cannot carry arbitrary instructions.",
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["clarificationId", "typedResponse", "expectedRevision"],
+      "properties": {
+        "clarificationId": {
+          "$ref": "./common.schema.json#/$defs/Uuid"
+        },
+        "typedResponse": {
+          "type": "object"
+        },
+        "expectedRevision": {
+          "$ref": "./common.schema.json#/$defs/RevisionString"
+        }
+      }
+    },
+    "ResumeInput": {
+      "title": "ResumeInput",
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["runId", "checkpointRef", "remainingBudget"],
+      "properties": {
+        "runId": {
+          "$ref": "./common.schema.json#/$defs/Uuid"
+        },
+        "checkpointRef": {
+          "$ref": "#/$defs/RuntimeCheckpointRef"
+        },
+        "clarificationResponse": {
+          "$ref": "#/$defs/ClarificationResponse"
+        },
+        "remainingBudget": {
+          "$ref": "#/$defs/BudgetRemaining"
+        }
+      }
+    },
+    "PlanProposedEvent": {
+      "title": "PlanProposedEvent",
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["type", "runId", "eventId", "sequence", "occurredAt", "planRef", "stepCount", "toolIds"],
+      "properties": {
+        "type": {
+          "const": "plan_proposed"
+        },
+        "runId": {
+          "$ref": "./common.schema.json#/$defs/Uuid"
+        },
+        "eventId": {
+          "$ref": "./common.schema.json#/$defs/Uuid"
+        },
+        "sequence": {
+          "type": "integer",
+          "minimum": 0
+        },
+        "occurredAt": {
+          "$ref": "./common.schema.json#/$defs/Rfc3339UtcTimestamp"
+        },
+        "planRef": {
+          "$ref": "./common.schema.json#/$defs/ResourceRef"
+        },
+        "stepCount": {
+          "type": "integer",
+          "minimum": 1
+        },
+        "toolIds": {
+          "type": "array",
+          "items": {
+            "$ref": "./tools.schema.json#/$defs/ToolId"
+          },
+          "minItems": 1
+        }
+      }
+    },
+    "StepStartedEvent": {
+      "title": "StepStartedEvent",
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["type", "runId", "eventId", "sequence", "occurredAt", "stepId", "toolId", "attempt"],
+      "properties": {
+        "type": {
+          "const": "step_started"
+        },
+        "runId": {
+          "$ref": "./common.schema.json#/$defs/Uuid"
+        },
+        "eventId": {
+          "$ref": "./common.schema.json#/$defs/Uuid"
+        },
+        "sequence": {
+          "type": "integer",
+          "minimum": 0
+        },
+        "occurredAt": {
+          "$ref": "./common.schema.json#/$defs/Rfc3339UtcTimestamp"
+        },
+        "stepId": {
+          "$ref": "./common.schema.json#/$defs/NonEmptyString"
+        },
+        "toolId": {
+          "$ref": "./tools.schema.json#/$defs/ToolId"
+        },
+        "attempt": {
+          "type": "integer",
+          "minimum": 0
+        }
+      }
+    },
+    "EvidenceAddedEvent": {
+      "title": "EvidenceAddedEvent",
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["type", "runId", "eventId", "sequence", "occurredAt", "evidenceRefs"],
+      "properties": {
+        "type": {
+          "const": "evidence_added"
+        },
+        "runId": {
+          "$ref": "./common.schema.json#/$defs/Uuid"
+        },
+        "eventId": {
+          "$ref": "./common.schema.json#/$defs/Uuid"
+        },
+        "sequence": {
+          "type": "integer",
+          "minimum": 0
+        },
+        "occurredAt": {
+          "$ref": "./common.schema.json#/$defs/Rfc3339UtcTimestamp"
+        },
+        "evidenceRefs": {
+          "type": "array",
+          "items": {
+            "$ref": "./common.schema.json#/$defs/ResourceRef"
+          },
+          "minItems": 1
+        }
+      }
+    },
+    "ClarificationRequestedEvent": {
+      "title": "ClarificationRequestedEvent",
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["type", "runId", "eventId", "sequence", "occurredAt", "clarificationId", "questionRef", "questionType"],
+      "properties": {
+        "type": {
+          "const": "clarification_requested"
+        },
+        "runId": {
+          "$ref": "./common.schema.json#/$defs/Uuid"
+        },
+        "eventId": {
+          "$ref": "./common.schema.json#/$defs/Uuid"
+        },
+        "sequence": {
+          "type": "integer",
+          "minimum": 0
+        },
+        "occurredAt": {
+          "$ref": "./common.schema.json#/$defs/Rfc3339UtcTimestamp"
+        },
+        "clarificationId": {
+          "$ref": "./common.schema.json#/$defs/Uuid"
+        },
+        "questionRef": {
+          "$ref": "./common.schema.json#/$defs/VersionRef"
+        },
+        "questionType": {
+          "$ref": "./model.schema.json#/$defs/DecisionQuestionType"
+        }
+      }
+    },
+    "CollectionCompleteEvent": {
+      "title": "CollectionCompleteEvent",
+      "description": "Means a draft may be attempted. It never means the answer passed verification.",
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["type", "runId", "eventId", "sequence", "occurredAt", "draftAllowed", "evidenceCount"],
+      "properties": {
+        "type": {
+          "const": "collection_complete"
+        },
+        "runId": {
+          "$ref": "./common.schema.json#/$defs/Uuid"
+        },
+        "eventId": {
+          "$ref": "./common.schema.json#/$defs/Uuid"
+        },
+        "sequence": {
+          "type": "integer",
+          "minimum": 0
+        },
+        "occurredAt": {
+          "$ref": "./common.schema.json#/$defs/Rfc3339UtcTimestamp"
+        },
+        "draftAllowed": {
+          "const": true
+        },
+        "evidenceCount": {
+          "type": "integer",
+          "minimum": 0
+        }
+      }
+    },
+    "CheckpointReadyEvent": {
+      "title": "CheckpointReadyEvent",
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["type", "runId", "eventId", "sequence", "occurredAt", "checkpointRef"],
+      "properties": {
+        "type": {
+          "const": "checkpoint_ready"
+        },
+        "runId": {
+          "$ref": "./common.schema.json#/$defs/Uuid"
+        },
+        "eventId": {
+          "$ref": "./common.schema.json#/$defs/Uuid"
+        },
+        "sequence": {
+          "type": "integer",
+          "minimum": 0
+        },
+        "occurredAt": {
+          "$ref": "./common.schema.json#/$defs/Rfc3339UtcTimestamp"
+        },
+        "checkpointRef": {
+          "$ref": "#/$defs/RuntimeCheckpointRef"
+        }
+      }
+    },
+    "CancelledEvent": {
+      "title": "CancelledEvent",
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["type", "runId", "eventId", "sequence", "occurredAt", "reason", "abandonedAttempts"],
+      "properties": {
+        "type": {
+          "const": "cancelled"
+        },
+        "runId": {
+          "$ref": "./common.schema.json#/$defs/Uuid"
+        },
+        "eventId": {
+          "$ref": "./common.schema.json#/$defs/Uuid"
+        },
+        "sequence": {
+          "type": "integer",
+          "minimum": 0
+        },
+        "occurredAt": {
+          "$ref": "./common.schema.json#/$defs/Rfc3339UtcTimestamp"
+        },
+        "reason": {
+          "$ref": "./common.schema.json#/$defs/NonEmptyString"
+        },
+        "abandonedAttempts": {
+          "type": "array",
+          "items": {
+            "$ref": "./errors.schema.json#/$defs/AbandonedAttempt"
+          }
+        }
+      }
+    },
+    "FailedEvent": {
+      "title": "FailedEvent",
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["type", "runId", "eventId", "sequence", "occurredAt", "error"],
+      "properties": {
+        "type": {
+          "const": "failed"
+        },
+        "runId": {
+          "$ref": "./common.schema.json#/$defs/Uuid"
+        },
+        "eventId": {
+          "$ref": "./common.schema.json#/$defs/Uuid"
+        },
+        "sequence": {
+          "type": "integer",
+          "minimum": 0
+        },
+        "occurredAt": {
+          "$ref": "./common.schema.json#/$defs/Rfc3339UtcTimestamp"
+        },
+        "error": {
+          "$ref": "./errors.schema.json#/$defs/PlatformError"
+        }
+      }
+    },
+    "RuntimeEvent": {
+      "title": "RuntimeEvent",
+      "description": "The fixed runtime event union. Each member carries runId, eventId and sequence so the event log is replayable and de-duplicable.",
+      "oneOf": [
+        {
+          "$ref": "#/$defs/PlanProposedEvent"
+        },
+        {
+          "$ref": "#/$defs/StepStartedEvent"
+        },
+        {
+          "$ref": "#/$defs/EvidenceAddedEvent"
+        },
+        {
+          "$ref": "#/$defs/ClarificationRequestedEvent"
+        },
+        {
+          "$ref": "#/$defs/CollectionCompleteEvent"
+        },
+        {
+          "$ref": "#/$defs/CheckpointReadyEvent"
+        },
+        {
+          "$ref": "#/$defs/CancelledEvent"
+        },
+        {
+          "$ref": "#/$defs/FailedEvent"
+        }
+      ]
+    },
+    "RuntimeCancelReceipt": {
+      "title": "RuntimeCancelReceipt",
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["runId", "status", "acceptedAt", "abandonedAttempts"],
+      "properties": {
+        "runId": {
+          "$ref": "./common.schema.json#/$defs/Uuid"
+        },
+        "status": {
+          "type": "string",
+          "enum": ["cancelling", "cancelled", "already_terminal", "not_found"]
+        },
+        "acceptedAt": {
+          "$ref": "./common.schema.json#/$defs/Rfc3339UtcTimestamp"
+        },
+        "abandonedAttempts": {
+          "type": "array",
+          "items": {
+            "$ref": "./errors.schema.json#/$defs/AbandonedAttempt"
+          }
+        }
+      }
+    }
+  }
+}

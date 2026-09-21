@@ -1,0 +1,521 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://ontology.local/schema/model.schema.json",
+  "title": "ModelContracts",
+  "$comment": "ADR-09: generation and probabilistic decision are different ports with different semantics. GenerationPort streams text/structured candidates/tool calls and never executes tools. DecisionPort answers fixed choice/score/noul questions and never emits code or explanation.",
+  "$defs": {
+    "ModelRef": {
+      "title": "ModelRef",
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["modelId", "version"],
+      "properties": {
+        "modelId": {
+          "$ref": "./common.schema.json#/$defs/NonEmptyString"
+        },
+        "version": {
+          "$ref": "./common.schema.json#/$defs/NonEmptyString"
+        },
+        "provider": {
+          "$ref": "./common.schema.json#/$defs/NonEmptyString"
+        }
+      }
+    },
+    "GenerationRole": {
+      "title": "GenerationRole",
+      "type": "string",
+      "enum": ["planner", "extractor", "draft_writer", "sql_proposer", "classifier", "repair"]
+    },
+    "GenerationMessageRole": {
+      "title": "GenerationMessageRole",
+      "type": "string",
+      "enum": ["system", "user", "assistant", "tool"]
+    },
+    "GenerationMessage": {
+      "title": "GenerationMessage",
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["role", "content"],
+      "properties": {
+        "role": {
+          "$ref": "#/$defs/GenerationMessageRole"
+        },
+        "content": {
+          "type": "string"
+        },
+        "toolCallId": {
+          "$ref": "./common.schema.json#/$defs/Uuid"
+        }
+      }
+    },
+    "GenerationOutputLimit": {
+      "title": "GenerationOutputLimit",
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["maxTokens"],
+      "properties": {
+        "maxTokens": {
+          "type": "integer",
+          "minimum": 1,
+          "maximum": 1000000
+        }
+      }
+    },
+    "GenerationRequest": {
+      "title": "GenerationRequest",
+      "description": "A generation request carries role, messages/evidence refs, a response schema ref or tool schemas, the model ref and an output limit. It never carries secrets or a database connection.",
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["role", "messages", "evidenceRefs", "modelRef", "outputLimit"],
+      "properties": {
+        "role": {
+          "$ref": "#/$defs/GenerationRole"
+        },
+        "messages": {
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/GenerationMessage"
+          }
+        },
+        "evidenceRefs": {
+          "type": "array",
+          "items": {
+            "$ref": "./common.schema.json#/$defs/ResourceRef"
+          }
+        },
+        "responseSchemaRef": {
+          "$ref": "./common.schema.json#/$defs/VersionRef"
+        },
+        "toolSchemas": {
+          "type": "array",
+          "items": {
+            "$ref": "./tools.schema.json#/$defs/ToolId"
+          },
+          "uniqueItems": true
+        },
+        "modelRef": {
+          "$ref": "#/$defs/ModelRef"
+        },
+        "outputLimit": {
+          "$ref": "#/$defs/GenerationOutputLimit"
+        },
+        "temperature": {
+          "type": "number",
+          "minimum": 0,
+          "maximum": 2
+        }
+      },
+      "anyOf": [
+        {
+          "required": ["responseSchemaRef"],
+          "properties": {
+            "responseSchemaRef": {}
+          }
+        },
+        {
+          "required": ["toolSchemas"],
+          "properties": {
+            "toolSchemas": {}
+          }
+        }
+      ]
+    },
+    "GenerationEventType": {
+      "title": "GenerationEventType",
+      "type": "string",
+      "enum": ["text_delta", "tool_call_delta", "usage", "completed", "error"]
+    },
+    "GenerationUsage": {
+      "title": "GenerationUsage",
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["inputTokens", "outputTokens"],
+      "properties": {
+        "inputTokens": {
+          "type": "integer",
+          "minimum": 0
+        },
+        "outputTokens": {
+          "type": "integer",
+          "minimum": 0
+        },
+        "usageUnknown": {
+          "type": "boolean"
+        }
+      }
+    },
+    "GenerationTextDelta": {
+      "title": "GenerationTextDelta",
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["type", "text"],
+      "properties": {
+        "type": {
+          "const": "text_delta"
+        },
+        "text": {
+          "type": "string"
+        }
+      }
+    },
+    "GenerationToolCallDelta": {
+      "title": "GenerationToolCallDelta",
+      "description": "A proposed tool call. The runtime must route it through the gateway; the model cannot execute it directly.",
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["type", "callId", "toolId", "argumentsDelta"],
+      "properties": {
+        "type": {
+          "const": "tool_call_delta"
+        },
+        "callId": {
+          "$ref": "./common.schema.json#/$defs/Uuid"
+        },
+        "toolId": {
+          "$ref": "./tools.schema.json#/$defs/ToolId"
+        },
+        "argumentsDelta": {
+          "type": "string"
+        }
+      }
+    },
+    "GenerationUsageEvent": {
+      "title": "GenerationUsageEvent",
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["type", "usage"],
+      "properties": {
+        "type": {
+          "const": "usage"
+        },
+        "usage": {
+          "$ref": "#/$defs/GenerationUsage"
+        }
+      }
+    },
+    "GenerationCompleted": {
+      "title": "GenerationCompleted",
+      "description": "SDK final natural-language output is only a candidate draft; it is never published automatically (INV-09).",
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["type", "stopReason", "candidateOnly"],
+      "properties": {
+        "type": {
+          "const": "completed"
+        },
+        "stopReason": {
+          "type": "string",
+          "enum": ["stop", "length", "tool_calls", "content_filter"]
+        },
+        "candidateOnly": {
+          "const": true
+        },
+        "outputDigest": {
+          "$ref": "./common.schema.json#/$defs/Sha256Digest"
+        }
+      }
+    },
+    "GenerationErrorEvent": {
+      "title": "GenerationErrorEvent",
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["type", "error"],
+      "properties": {
+        "type": {
+          "const": "error"
+        },
+        "error": {
+          "$ref": "./errors.schema.json#/$defs/PlatformError"
+        }
+      }
+    },
+    "GenerationEvent": {
+      "title": "GenerationEvent",
+      "oneOf": [
+        {
+          "$ref": "#/$defs/GenerationTextDelta"
+        },
+        {
+          "$ref": "#/$defs/GenerationToolCallDelta"
+        },
+        {
+          "$ref": "#/$defs/GenerationUsageEvent"
+        },
+        {
+          "$ref": "#/$defs/GenerationCompleted"
+        },
+        {
+          "$ref": "#/$defs/GenerationErrorEvent"
+        }
+      ]
+    },
+    "DecisionQuestionType": {
+      "title": "DecisionQuestionType",
+      "description": "The only decision question shapes. 'choice' picks from a fixed option set, 'score' scores every option on a rubric, 'noul' is a null-option judgement with no option set.",
+      "type": "string",
+      "enum": ["choice", "score", "noul"]
+    },
+    "DecisionOption": {
+      "title": "DecisionOption",
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["optionId", "label"],
+      "properties": {
+        "optionId": {
+          "$ref": "./common.schema.json#/$defs/NonEmptyString"
+        },
+        "label": {
+          "$ref": "./common.schema.json#/$defs/NonEmptyString"
+        }
+      }
+    },
+    "DecisionScoreScale": {
+      "title": "DecisionScoreScale",
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["min", "max"],
+      "properties": {
+        "min": {
+          "type": "number"
+        },
+        "max": {
+          "type": "number"
+        }
+      }
+    },
+    "ChoiceQuestion": {
+      "title": "ChoiceQuestion",
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["questionId", "type", "prompt", "options", "optionSetHash", "definitionVersion"],
+      "properties": {
+        "questionId": {
+          "$ref": "./common.schema.json#/$defs/Uuid"
+        },
+        "type": {
+          "const": "choice"
+        },
+        "prompt": {
+          "$ref": "./common.schema.json#/$defs/NonEmptyString"
+        },
+        "options": {
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/DecisionOption"
+          },
+          "minItems": 2,
+          "maxItems": 64
+        },
+        "optionSetHash": {
+          "$ref": "./common.schema.json#/$defs/Sha256Digest"
+        },
+        "definitionVersion": {
+          "$ref": "./common.schema.json#/$defs/Semver"
+        }
+      }
+    },
+    "ScoreQuestion": {
+      "title": "ScoreQuestion",
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["questionId", "type", "prompt", "options", "rubricRef", "scale", "optionSetHash", "definitionVersion"],
+      "properties": {
+        "questionId": {
+          "$ref": "./common.schema.json#/$defs/Uuid"
+        },
+        "type": {
+          "const": "score"
+        },
+        "prompt": {
+          "$ref": "./common.schema.json#/$defs/NonEmptyString"
+        },
+        "options": {
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/DecisionOption"
+          },
+          "minItems": 1,
+          "maxItems": 64
+        },
+        "rubricRef": {
+          "$ref": "./common.schema.json#/$defs/VersionRef"
+        },
+        "scale": {
+          "$ref": "#/$defs/DecisionScoreScale"
+        },
+        "optionSetHash": {
+          "$ref": "./common.schema.json#/$defs/Sha256Digest"
+        },
+        "definitionVersion": {
+          "$ref": "./common.schema.json#/$defs/Semver"
+        }
+      }
+    },
+    "NoulQuestion": {
+      "title": "NoulQuestion",
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["questionId", "type", "prompt", "definitionVersion"],
+      "properties": {
+        "questionId": {
+          "$ref": "./common.schema.json#/$defs/Uuid"
+        },
+        "type": {
+          "const": "noul"
+        },
+        "prompt": {
+          "$ref": "./common.schema.json#/$defs/NonEmptyString"
+        },
+        "definitionVersion": {
+          "$ref": "./common.schema.json#/$defs/Semver"
+        }
+      }
+    },
+    "DecisionQuestion": {
+      "title": "DecisionQuestion",
+      "oneOf": [
+        {
+          "$ref": "#/$defs/ChoiceQuestion"
+        },
+        {
+          "$ref": "#/$defs/ScoreQuestion"
+        },
+        {
+          "$ref": "#/$defs/NoulQuestion"
+        }
+      ]
+    },
+    "DecisionRequest": {
+      "title": "DecisionRequest",
+      "description": "DecisionPort request: a state reference, fixed-shape questions and a model ref. It carries no messages, tool schemas or free-form instructions.",
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["stateRef", "questions", "modelRef"],
+      "properties": {
+        "stateRef": {
+          "$ref": "./common.schema.json#/$defs/ResourceRef"
+        },
+        "questions": {
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/DecisionQuestion"
+          },
+          "minItems": 1,
+          "maxItems": 32
+        },
+        "modelRef": {
+          "$ref": "#/$defs/ModelRef"
+        }
+      }
+    },
+    "ProbabilityDistribution": {
+      "title": "ProbabilityDistribution",
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["optionSetHash", "entries"],
+      "properties": {
+        "optionSetHash": {
+          "$ref": "./common.schema.json#/$defs/Sha256Digest"
+        },
+        "entries": {
+          "type": "array",
+          "items": {
+            "type": "object",
+            "additionalProperties": false,
+            "required": ["optionId", "probability"],
+            "properties": {
+              "optionId": {
+                "$ref": "./common.schema.json#/$defs/NonEmptyString"
+              },
+              "probability": {
+                "type": "number",
+                "minimum": 0,
+                "maximum": 1
+              }
+            }
+          },
+          "minItems": 1
+        }
+      }
+    },
+    "DecisionScore": {
+      "title": "DecisionScore",
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["optionId", "score"],
+      "properties": {
+        "optionId": {
+          "$ref": "./common.schema.json#/$defs/NonEmptyString"
+        },
+        "score": {
+          "type": "number"
+        },
+        "confidence": {
+          "type": "number",
+          "minimum": 0,
+          "maximum": 1
+        }
+      }
+    },
+    "DecisionFallback": {
+      "title": "DecisionFallback",
+      "description": "JEV unavailability follows the profile: deterministic fallback, an explicitly labelled generative classification fallback, or clarification. A calibrated field is never silently fabricated.",
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["fallback", "fallbackReason", "originalFailure"],
+      "properties": {
+        "fallback": {
+          "type": "string",
+          "enum": ["deterministic", "generative_classification", "clarify"]
+        },
+        "fallbackReason": {
+          "$ref": "./common.schema.json#/$defs/NonEmptyString"
+        },
+        "originalFailure": {
+          "$ref": "./errors.schema.json#/$defs/PlatformError"
+        }
+      }
+    },
+    "DecisionResult": {
+      "title": "DecisionResult",
+      "description": "Preserves the option set, probability distribution, confidence (when supported) and definition version. It can never carry generated code or free-form explanation; scores across different question types or option sets are not directly rankable.",
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["questionId", "questionType", "definitionVersion", "optionSetHash"],
+      "properties": {
+        "questionId": {
+          "$ref": "./common.schema.json#/$defs/Uuid"
+        },
+        "questionType": {
+          "$ref": "#/$defs/DecisionQuestionType"
+        },
+        "definitionVersion": {
+          "$ref": "./common.schema.json#/$defs/Semver"
+        },
+        "optionSetHash": {
+          "$ref": "./common.schema.json#/$defs/Sha256Digest"
+        },
+        "selectedOptionId": {
+          "$ref": "./common.schema.json#/$defs/NonEmptyString"
+        },
+        "distribution": {
+          "$ref": "#/$defs/ProbabilityDistribution"
+        },
+        "scores": {
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/DecisionScore"
+          }
+        },
+        "confidence": {
+          "type": "number",
+          "minimum": 0,
+          "maximum": 1
+        },
+        "fallback": {
+          "$ref": "#/$defs/DecisionFallback"
+        }
+      }
+    }
+  }
+}

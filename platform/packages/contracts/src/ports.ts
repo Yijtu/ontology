@@ -1,0 +1,205 @@
+import type {
+  BlobGetAuthorizedRequest,
+  BlobGetAuthorizedResponse,
+  BlobPutImmutableRequest,
+  BlobPutImmutableResponse,
+  BudgetRemaining,
+  BudgetReservationRef,
+  CancelRequest,
+  CancelResponse,
+  CatalogDescribeRequest,
+  CatalogDescribeResponse,
+  CatalogListRequest,
+  CatalogListResponse,
+  ComponentManifest,
+  ComputeDescribeOperationRequest,
+  ComputeDescribeOperationResponse,
+  ComputeExecuteRequest,
+  ComputeExecuteResponse,
+  ControlAppendEventRequest,
+  ControlAppendEventResponse,
+  ControlReadProjectionRequest,
+  ControlTransactionRequest,
+  DecisionRequest,
+  DecisionResult,
+  DocumentSearchRequest,
+  DocumentSearchResponse,
+  GenerationEvent,
+  GenerationRequest,
+  ProjectionState,
+  ReadSpanRequest,
+  ReadSpanResponse,
+  ResumeInput,
+  RuntimeCancelReceipt,
+  RuntimeCheckpointRef,
+  RuntimeEvent,
+  RuntimeInput,
+  ScopedArtifactReaderRequest,
+  StructuredQueryExecuteRequest,
+  StructuredQueryExecuteResponse,
+  StructuredQueryValidateRequest,
+  StructuredQueryValidateResponse,
+  TelemetryReadCurrentRequest,
+  TelemetryReadCurrentResponse,
+  TelemetryReadSeriesRequest,
+  TelemetryReadSeriesResponse,
+  ToolCall,
+  ToolResult,
+  ToolUsage,
+} from './generated/contracts'
+import type { ToolContext } from './trusted'
+
+/**
+ * C2/C3 port contracts. These are type-only interfaces: this package contains no
+ * adapters, services or persistence. Every method takes the trusted ToolContext,
+ * which the host injects and the model can never supply.
+ */
+export interface RuntimeAdapter {
+  readonly manifest: ComponentManifest
+  start(input: RuntimeInput, deps: RuntimeDependencies): AsyncIterable<RuntimeEvent>
+  resume(input: ResumeInput, deps: RuntimeDependencies): AsyncIterable<RuntimeEvent>
+  cancel(runId: string, reason: string): Promise<RuntimeCancelReceipt>
+}
+
+/**
+ * Host-injected restricted closure. It is built in process from real adapters and is
+ * never deserialized from model-serializable parameters.
+ */
+export interface RuntimeDependencies {
+  readonly gateway: ToolGateway
+  readonly generation: GenerationPort
+  readonly decision: DecisionPort
+  readonly checkpoints: RuntimeCheckpointPort
+  readonly budget: BudgetPort
+  readonly signal: AbortSignal
+}
+
+export interface RuntimeCheckpointPort {
+  save(
+    runId: string,
+    state: RuntimeCheckpointRef,
+    payload: Uint8Array,
+    ctx: ToolContext,
+  ): Promise<RuntimeCheckpointRef>
+  load(runId: string, checkpointRef: RuntimeCheckpointRef, ctx: ToolContext): Promise<Uint8Array>
+}
+
+export interface BudgetReservationRequest {
+  readonly toolCalls: number
+  readonly bytes: number
+  readonly modelTokens?: number
+}
+
+export interface BudgetPort {
+  reserve(
+    runId: string,
+    request: BudgetReservationRequest,
+    ctx: ToolContext,
+  ): Promise<BudgetReservationRef>
+  settle(reservation: BudgetReservationRef, usage: ToolUsage, ctx: ToolContext): Promise<void>
+  remaining(runId: string, ctx: ToolContext): Promise<BudgetRemaining>
+}
+
+/**
+ * ADR-04: every tool path goes through this gateway. The gateway validates the call,
+ * atomically reserves budget, records intent, executes, persists evidence/result and
+ * settles. No transport, SDK or model call may bypass it.
+ */
+export interface ToolGateway {
+  invoke(call: ToolCall, ctx: ToolContext): Promise<ToolResult>
+  cancel(callId: string, reason: string, ctx: ToolContext): Promise<CancelResponse>
+}
+
+/**
+ * ADR-09: generation streams candidates and proposed tool calls. It never executes a
+ * tool, and its final natural-language output is only a candidate draft (INV-09).
+ */
+export interface GenerationPort {
+  generate(request: GenerationRequest, ctx: ToolContext): AsyncIterable<GenerationEvent>
+}
+
+/**
+ * ADR-09: decision answers fixed choice/score/noul questions and returns a preserved
+ * option set, distribution, confidence and definition version. It is a different port
+ * from GenerationPort and cannot be mocked or replaced by it.
+ */
+export interface DecisionPort {
+  decide(request: DecisionRequest, ctx: ToolContext): Promise<DecisionResult>
+}
+
+export interface CatalogPort {
+  describe(request: CatalogDescribeRequest, ctx: ToolContext): Promise<CatalogDescribeResponse>
+  listResources(request: CatalogListRequest, ctx: ToolContext): Promise<CatalogListResponse>
+}
+
+export interface StructuredQueryPort {
+  validate(
+    request: StructuredQueryValidateRequest,
+    ctx: ToolContext,
+  ): Promise<StructuredQueryValidateResponse>
+  execute(
+    request: StructuredQueryExecuteRequest,
+    ctx: ToolContext,
+  ): Promise<StructuredQueryExecuteResponse>
+  cancel(request: CancelRequest, ctx: ToolContext): Promise<CancelResponse>
+}
+
+export interface DocumentSearchPort {
+  search(request: DocumentSearchRequest, ctx: ToolContext): Promise<DocumentSearchResponse>
+  readSpan(request: ReadSpanRequest, ctx: ToolContext): Promise<ReadSpanResponse>
+}
+
+export interface TelemetryPort {
+  readSeries(
+    request: TelemetryReadSeriesRequest,
+    ctx: ToolContext,
+  ): Promise<TelemetryReadSeriesResponse>
+  readCurrent(
+    request: TelemetryReadCurrentRequest,
+    ctx: ToolContext,
+  ): Promise<TelemetryReadCurrentResponse>
+}
+
+export interface BlobPort {
+  putImmutable(
+    request: BlobPutImmutableRequest,
+    ctx: ToolContext,
+  ): Promise<BlobPutImmutableResponse>
+  getAuthorized(
+    request: BlobGetAuthorizedRequest,
+    ctx: ToolContext,
+  ): Promise<BlobGetAuthorizedResponse>
+}
+
+/**
+ * C3: ComputePort never opens a database connection. The service layer resolves the
+ * source bindings, then hands the handler bounded immutable snapshot refs.
+ */
+export interface ComputePort {
+  describeOperation(
+    request: ComputeDescribeOperationRequest,
+    ctx: ToolContext,
+  ): Promise<ComputeDescribeOperationResponse>
+  execute(request: ComputeExecuteRequest, ctx: ToolContext): Promise<ComputeExecuteResponse>
+  cancel(request: CancelRequest, ctx: ToolContext): Promise<CancelResponse>
+}
+
+export interface ScopedArtifactReader {
+  read(request: ScopedArtifactReaderRequest, ctx: ToolContext): Promise<Uint8Array>
+}
+
+/**
+ * C3: control persistence is its own port and is never merged with
+ * StructuredQueryPort.
+ */
+export interface ControlRepository {
+  transaction(request: ControlTransactionRequest, ctx: ToolContext): Promise<void>
+  readProjection(
+    request: ControlReadProjectionRequest,
+    ctx: ToolContext,
+  ): Promise<ProjectionState>
+  appendEvent(
+    request: ControlAppendEventRequest,
+    ctx: ToolContext,
+  ): Promise<ControlAppendEventResponse>
+}

@@ -1,0 +1,334 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://ontology.local/schema/common.schema.json",
+  "title": "CommonContracts",
+  "$comment": "Shared value objects for the whole platform. Time is RFC3339 UTC only; user/billing time zones live in separate IANA-name fields. Internal resource ids are UUIDs; source ids stay verbatim plus a namespace.",
+  "$defs": {
+    "Rfc3339UtcTimestamp": {
+      "title": "Rfc3339UtcTimestamp",
+      "description": "RFC3339 instant normalized to UTC. Only the literal 'Z' offset is accepted; a separate IanaTimeZone field carries the user/billing zone.",
+      "type": "string",
+      "format": "date-time",
+      "pattern": "^\\d{4}-\\d{2}-\\d{2}T\\d{2}:\\d{2}:\\d{2}(\\.\\d{1,9})?Z$"
+    },
+    "IanaTimeZone": {
+      "title": "IanaTimeZone",
+      "description": "IANA time zone name (e.g. Asia/Shanghai). Stored separately from instants so no local-offset arithmetic happens on the wire.",
+      "type": "string",
+      "pattern": "^(UTC|[A-Z][A-Za-z0-9_+-]*(?:\\/[A-Za-z0-9_+-]+)+)$",
+      "maxLength": 64
+    },
+    "Uuid": {
+      "title": "Uuid",
+      "description": "Canonical lowercase UUID identifying an internal platform resource.",
+      "type": "string",
+      "format": "uuid",
+      "pattern": "^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$"
+    },
+    "Semver": {
+      "title": "Semver",
+      "type": "string",
+      "pattern": "^(0|[1-9]\\d*)\\.(0|[1-9]\\d*)\\.(0|[1-9]\\d*)(?:-((?:0|[1-9]\\d*|\\d*[a-zA-Z-][0-9a-zA-Z-]*)(?:\\.(?:0|[1-9]\\d*|\\d*[a-zA-Z-][0-9a-zA-Z-]*))*))?(?:\\+([0-9a-zA-Z-]+(?:\\.[0-9a-zA-Z-]+)*))?$"
+    },
+    "DecimalString": {
+      "title": "DecimalString",
+      "description": "Exact decimal rendered as a string. Exponent notation and JSON numbers are rejected so money and physical quantities never lose precision in billing paths.",
+      "type": "string",
+      "pattern": "^-?(?:0|[1-9]\\d*)(?:\\.\\d+)?$",
+      "maxLength": 64
+    },
+    "CurrencyCode": {
+      "title": "CurrencyCode",
+      "description": "ISO 4217 alphabetic currency code.",
+      "type": "string",
+      "pattern": "^[A-Z]{3}$"
+    },
+    "UnitCode": {
+      "title": "UnitCode",
+      "description": "Canonical unit token (e.g. kWh, kW, Wh, W, %).",
+      "type": "string",
+      "pattern": "^[A-Za-z][A-Za-z0-9_./%*^-]*$",
+      "maxLength": 32
+    },
+    "Sha256Digest": {
+      "title": "Sha256Digest",
+      "description": "Content integrity digest. Algorithm is prefixed so the digest scheme can evolve without ambiguity.",
+      "type": "string",
+      "pattern": "^sha256:[0-9a-f]{64}$"
+    },
+    "NonEmptyString": {
+      "title": "NonEmptyString",
+      "type": "string",
+      "minLength": 1,
+      "maxLength": 512
+    },
+    "Namespace": {
+      "title": "Namespace",
+      "description": "Lowercase dotted-free namespace owned by an industry pack or adapter.",
+      "type": "string",
+      "pattern": "^[a-z][a-z0-9-]*$",
+      "maxLength": 64
+    },
+    "OpaqueCursor": {
+      "title": "OpaqueCursor",
+      "description": "Opaque pagination cursor. Clients must echo it verbatim and never parse it.",
+      "type": "string",
+      "minLength": 1,
+      "maxLength": 2048
+    },
+    "DecimalQuantity": {
+      "title": "DecimalQuantity",
+      "description": "Physical quantity with an exact decimal amount and a canonical unit. Never a JSON float.",
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["amount", "unit"],
+      "properties": {
+        "amount": {
+          "$ref": "#/$defs/DecimalString"
+        },
+        "unit": {
+          "$ref": "#/$defs/UnitCode"
+        }
+      }
+    },
+    "Money": {
+      "title": "Money",
+      "description": "Exact monetary amount plus ISO 4217 currency. Billing never uses a JSON float.",
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["amount", "currency"],
+      "properties": {
+        "amount": {
+          "$ref": "#/$defs/DecimalString"
+        },
+        "currency": {
+          "$ref": "#/$defs/CurrencyCode"
+        }
+      }
+    },
+    "VersionRef": {
+      "title": "VersionRef",
+      "description": "Reference to a published, immutable artifact (component, industry pack, policy, schema, operation).",
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["id", "version", "digest"],
+      "properties": {
+        "id": {
+          "$ref": "#/$defs/NonEmptyString"
+        },
+        "version": {
+          "$ref": "#/$defs/Semver"
+        },
+        "digest": {
+          "$ref": "#/$defs/Sha256Digest"
+        }
+      }
+    },
+    "ResourceKind": {
+      "title": "ResourceKind",
+      "type": "string",
+      "enum": [
+        "profile",
+        "run",
+        "evidence",
+        "draft",
+        "verification",
+        "answer",
+        "artifact",
+        "document",
+        "chunk",
+        "plan",
+        "simulation",
+        "computation",
+        "dataset",
+        "checkpoint",
+        "tool_result",
+        "job",
+        "source"
+      ]
+    },
+    "ResourceRef": {
+      "title": "ResourceRef",
+      "description": "Reference to an internal platform resource. Internal resources use UUID ids; digests pin the exact immutable revision.",
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["id", "version", "digest", "kind"],
+      "properties": {
+        "id": {
+          "$ref": "#/$defs/Uuid"
+        },
+        "version": {
+          "$ref": "#/$defs/Semver"
+        },
+        "digest": {
+          "$ref": "#/$defs/Sha256Digest"
+        },
+        "kind": {
+          "$ref": "#/$defs/ResourceKind"
+        }
+      }
+    },
+    "SourceRef": {
+      "title": "SourceRef",
+      "description": "Source-system identity: the native id is kept verbatim and disambiguated by namespace instead of being rewritten into a canonical id.",
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["namespace", "sourceId"],
+      "properties": {
+        "namespace": {
+          "$ref": "#/$defs/Namespace"
+        },
+        "sourceId": {
+          "$ref": "#/$defs/NonEmptyString"
+        }
+      }
+    },
+    "SourceObjectRef": {
+      "title": "SourceObjectRef",
+      "description": "A physical source object (table/view/collection/entity/metric) addressed only through the mapping layer.",
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["sourceRef", "objectPath"],
+      "properties": {
+        "sourceRef": {
+          "$ref": "#/$defs/SourceRef"
+        },
+        "objectPath": {
+          "$ref": "#/$defs/NonEmptyString"
+        }
+      }
+    },
+    "ScopeRef": {
+      "title": "ScopeRef",
+      "description": "Tenant/space scope boundary. Every entity id, version and FK is scoped by this.",
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["tenantId", "spaceId"],
+      "properties": {
+        "tenantId": {
+          "$ref": "#/$defs/Uuid"
+        },
+        "spaceId": {
+          "$ref": "#/$defs/Uuid"
+        },
+        "namespace": {
+          "$ref": "#/$defs/Namespace"
+        }
+      }
+    },
+    "Principal": {
+      "title": "Principal",
+      "description": "Trusted subject identity established by the server (OIDC/JWKS in production, loopback-only local-dev principal in development). Never taken from model or tool arguments.",
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["tenantId", "subjectId", "roles", "scopes", "authEpoch"],
+      "properties": {
+        "tenantId": {
+          "$ref": "#/$defs/Uuid"
+        },
+        "subjectId": {
+          "$ref": "#/$defs/NonEmptyString"
+        },
+        "roles": {
+          "type": "array",
+          "items": {
+            "type": "string",
+            "pattern": "^[a-z][a-z0-9-]*$"
+          },
+          "uniqueItems": true
+        },
+        "scopes": {
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/NonEmptyString"
+          },
+          "uniqueItems": true
+        },
+        "authEpoch": {
+          "description": "Monotonic authorization epoch. Bumping it invalidates previously issued delegations and tool contexts.",
+          "type": "integer",
+          "minimum": 0
+        }
+      }
+    },
+    "ValidityInterval": {
+      "title": "ValidityInterval",
+      "description": "Half-open business validity interval [validFrom, validTo).",
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["validFrom"],
+      "properties": {
+        "validFrom": {
+          "$ref": "#/$defs/Rfc3339UtcTimestamp"
+        },
+        "validTo": {
+          "$ref": "#/$defs/Rfc3339UtcTimestamp"
+        }
+      }
+    },
+    "ConsistencyLevel": {
+      "title": "ConsistencyLevel",
+      "description": "Snapshot consistency actually offered by a backend. repeatable_read is only valid inside the originating transaction; it must never be advertised as a permanently re-readable version.",
+      "type": "string",
+      "enum": ["immutable", "repeatable_read", "read_time", "unknown"]
+    },
+    "DataMode": {
+      "title": "DataMode",
+      "description": "INV-10: simulation, real observation, forecast and device execution state are explicit contract values, never distinguished by UI copy.",
+      "type": "string",
+      "enum": ["synthetic", "observed", "forecast", "simulation", "live"]
+    },
+    "CompletenessStatus": {
+      "title": "CompletenessStatus",
+      "description": "Completeness of a retrieval over a declared scope. A truncated recall range never proves that nothing else exists.",
+      "type": "string",
+      "enum": ["complete", "partial", "truncated", "unknown"]
+    },
+    "DomainResultStatus": {
+      "title": "DomainResultStatus",
+      "description": "Domain-level outcome. Kept separate from tool execution failure: infeasible can be a successful computation, and no-match evidence does not make a proposition false.",
+      "type": "string",
+      "enum": ["known", "unknown", "conflict", "infeasible", "not_applicable"]
+    },
+    "Integrity": {
+      "title": "Integrity",
+      "description": "Integrity proof for a stored artifact or evidence payload.",
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["algorithm", "digest"],
+      "properties": {
+        "algorithm": {
+          "const": "sha256"
+        },
+        "digest": {
+          "$ref": "#/$defs/Sha256Digest"
+        },
+        "verifiedAt": {
+          "$ref": "#/$defs/Rfc3339UtcTimestamp"
+        }
+      }
+    },
+    "ByteSize": {
+      "title": "ByteSize",
+      "type": "integer",
+      "minimum": 0
+    },
+    "DurationMs": {
+      "title": "DurationMs",
+      "type": "integer",
+      "minimum": 0
+    },
+    "RevisionString": {
+      "title": "RevisionString",
+      "description": "Monotonic revision rendered as a decimal string so large integers survive JavaScript number precision.",
+      "type": "string",
+      "pattern": "^(0|[1-9]\\d*)$"
+    },
+    "RunId": {
+      "title": "RunId",
+      "type": "string",
+      "format": "uuid",
+      "pattern": "^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$"
+    }
+  }
+}

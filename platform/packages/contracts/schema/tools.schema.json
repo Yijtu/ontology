@@ -1,0 +1,816 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://ontology.local/schema/tools.schema.json",
+  "title": "ToolContracts",
+  "$comment": "ADR-04/C4: exactly four model-visible read-only data tools. verify_result and final_answer are controller services and are deliberately absent from the tool catalogue. The ToolContext is host-injected and is never reachable from a tool argument schema.",
+  "$defs": {
+    "ToolId": {
+      "title": "ToolId",
+      "description": "The complete, closed model-visible tool catalogue.",
+      "type": "string",
+      "enum": ["ontology_lookup", "data_query", "document_search", "web_search"]
+    },
+    "ControllerServiceId": {
+      "title": "ControllerServiceId",
+      "description": "Controller-owned services that are NOT model-selectable tools.",
+      "type": "string",
+      "enum": ["verify_result", "final_answer"]
+    },
+    "ResultLimits": {
+      "title": "ResultLimits",
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["maxRows", "maxBytes", "maxDurationMs"],
+      "properties": {
+        "maxRows": {
+          "type": "integer",
+          "minimum": 1,
+          "maximum": 1000000
+        },
+        "maxBytes": {
+          "$ref": "./common.schema.json#/$defs/ByteSize"
+        },
+        "maxDurationMs": {
+          "$ref": "./common.schema.json#/$defs/DurationMs"
+        },
+        "maxCallsPerRun": {
+          "type": "integer",
+          "minimum": 1,
+          "maximum": 1000
+        }
+      }
+    },
+    "ToolDefinition": {
+      "title": "ToolDefinition",
+      "description": "C4 ToolDefinition field set: toolId, version, inputSchema, outputSchema, requiredCapabilities, readOnly, resultLimits.",
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "toolId",
+        "version",
+        "inputSchema",
+        "outputSchema",
+        "requiredCapabilities",
+        "readOnly",
+        "resultLimits"
+      ],
+      "properties": {
+        "toolId": {
+          "$ref": "#/$defs/ToolId"
+        },
+        "version": {
+          "$ref": "./common.schema.json#/$defs/Semver"
+        },
+        "inputSchema": {
+          "description": "JSON Schema for the tool arguments. The ToolContext must never appear in this schema.",
+          "type": "object"
+        },
+        "outputSchema": {
+          "description": "JSON Schema for the tool-specific payload carried in ToolResult.inlineData.",
+          "type": "object"
+        },
+        "requiredCapabilities": {
+          "type": "array",
+          "items": {
+            "$ref": "./common.schema.json#/$defs/NonEmptyString"
+          },
+          "uniqueItems": true
+        },
+        "readOnly": {
+          "const": true
+        },
+        "resultLimits": {
+          "$ref": "#/$defs/ResultLimits"
+        }
+      }
+    },
+    "ToolCall": {
+      "title": "ToolCall",
+      "description": "A single model-proposed tool call. Arguments are untrusted input and are schema-validated before execution.",
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["callId", "toolId", "arguments"],
+      "properties": {
+        "callId": {
+          "$ref": "./common.schema.json#/$defs/Uuid"
+        },
+        "toolId": {
+          "$ref": "#/$defs/ToolId"
+        },
+        "arguments": {
+          "type": "object"
+        },
+        "attempt": {
+          "type": "integer",
+          "minimum": 0
+        }
+      }
+    },
+    "ToolResultStatus": {
+      "title": "ToolResultStatus",
+      "description": "An empty query is a successful 'empty' result, never an error. Domain unknown/conflict/infeasible outcomes travel in domainStatus and are not execution failures.",
+      "type": "string",
+      "enum": ["ok", "partial", "empty", "error"]
+    },
+    "ToolCoverage": {
+      "title": "ToolCoverage",
+      "description": "Coverage of the returned page. A truncated recall range never proves that the full set is absent.",
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["returned", "truncated"],
+      "properties": {
+        "returned": {
+          "type": "integer",
+          "minimum": 0
+        },
+        "knownTotal": {
+          "type": "integer",
+          "minimum": 0
+        },
+        "cursor": {
+          "$ref": "./common.schema.json#/$defs/OpaqueCursor"
+        },
+        "truncated": {
+          "type": "boolean"
+        },
+        "completeness": {
+          "$ref": "./common.schema.json#/$defs/CompletenessStatus"
+        }
+      }
+    },
+    "ToolUsage": {
+      "title": "ToolUsage",
+      "description": "Measured usage. usageUnknown means the remote may have been billed; the budget stays reserved until reconciliation and is not released as free.",
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["durationMs"],
+      "properties": {
+        "durationMs": {
+          "$ref": "./common.schema.json#/$defs/DurationMs"
+        },
+        "bytes": {
+          "$ref": "./common.schema.json#/$defs/ByteSize"
+        },
+        "rows": {
+          "type": "integer",
+          "minimum": 0
+        },
+        "modelTokens": {
+          "type": "integer",
+          "minimum": 0
+        },
+        "calls": {
+          "type": "integer",
+          "minimum": 0
+        },
+        "usageUnknown": {
+          "type": "boolean"
+        }
+      }
+    },
+    "ToolWarning": {
+      "title": "ToolWarning",
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["code", "message"],
+      "properties": {
+        "code": {
+          "$ref": "./common.schema.json#/$defs/NonEmptyString"
+        },
+        "message": {
+          "$ref": "./common.schema.json#/$defs/NonEmptyString"
+        },
+        "detailsRef": {
+          "$ref": "./common.schema.json#/$defs/ResourceRef"
+        }
+      }
+    },
+    "ToolResult": {
+      "title": "ToolResult",
+      "description": "C4 unified tool result. Evidence and source snapshots are mandatory so no traceable success can be returned without them. A successful (ok/partial) result must carry dataRef or inlineData; an empty or error result may carry neither.",
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "callId",
+        "status",
+        "schemaRef",
+        "evidenceRefs",
+        "sourceSnapshots",
+        "coverage",
+        "usage",
+        "warnings"
+      ],
+      "properties": {
+        "callId": {
+          "$ref": "./common.schema.json#/$defs/Uuid"
+        },
+        "status": {
+          "$ref": "#/$defs/ToolResultStatus"
+        },
+        "dataRef": {
+          "$ref": "./common.schema.json#/$defs/ResourceRef"
+        },
+        "inlineData": {
+          "type": ["object", "array"]
+        },
+        "schemaRef": {
+          "$ref": "./common.schema.json#/$defs/VersionRef"
+        },
+        "evidenceRefs": {
+          "type": "array",
+          "items": {
+            "$ref": "./common.schema.json#/$defs/ResourceRef"
+          }
+        },
+        "sourceSnapshots": {
+          "type": "array",
+          "items": {
+            "$ref": "./data.schema.json#/$defs/SourceSnapshot"
+          }
+        },
+        "coverage": {
+          "$ref": "#/$defs/ToolCoverage"
+        },
+        "usage": {
+          "$ref": "#/$defs/ToolUsage"
+        },
+        "warnings": {
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/ToolWarning"
+          }
+        },
+        "domainStatus": {
+          "$ref": "./common.schema.json#/$defs/DomainResultStatus"
+        },
+        "error": {
+          "$ref": "./errors.schema.json#/$defs/PlatformError"
+        }
+      }
+    },
+    "BudgetReservationRef": {
+      "title": "BudgetReservationRef",
+      "description": "Atomic budget reservation written before a call executes. failed/cancelled calls still record consumed usage.",
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["reservationId", "runId", "grantedAt", "expiresAt"],
+      "properties": {
+        "reservationId": {
+          "$ref": "./common.schema.json#/$defs/Uuid"
+        },
+        "runId": {
+          "$ref": "./common.schema.json#/$defs/Uuid"
+        },
+        "grantedAt": {
+          "$ref": "./common.schema.json#/$defs/Rfc3339UtcTimestamp"
+        },
+        "expiresAt": {
+          "$ref": "./common.schema.json#/$defs/Rfc3339UtcTimestamp"
+        },
+        "reservedRows": {
+          "type": "integer",
+          "minimum": 0
+        },
+        "reservedBytes": {
+          "$ref": "./common.schema.json#/$defs/ByteSize"
+        }
+      }
+    },
+    "AllowedResources": {
+      "title": "AllowedResources",
+      "description": "Authorized resource envelope for one tool context. Models can never widen it.",
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["tenantId", "spaceId", "resourceKinds", "sourceRefs", "collectionRefs", "domains", "maxRows"],
+      "properties": {
+        "tenantId": {
+          "$ref": "./common.schema.json#/$defs/Uuid"
+        },
+        "spaceId": {
+          "$ref": "./common.schema.json#/$defs/Uuid"
+        },
+        "resourceKinds": {
+          "type": "array",
+          "items": {
+            "$ref": "./common.schema.json#/$defs/ResourceKind"
+          },
+          "uniqueItems": true
+        },
+        "sourceRefs": {
+          "type": "array",
+          "items": {
+            "$ref": "./common.schema.json#/$defs/SourceRef"
+          }
+        },
+        "collectionRefs": {
+          "type": "array",
+          "items": {
+            "$ref": "./common.schema.json#/$defs/NonEmptyString"
+          }
+        },
+        "domains": {
+          "type": "array",
+          "items": {
+            "$ref": "./common.schema.json#/$defs/NonEmptyString"
+          }
+        },
+        "maxRows": {
+          "type": "integer",
+          "minimum": 1,
+          "maximum": 1000000
+        }
+      }
+    },
+    "ToolContextData": {
+      "title": "ToolContextData",
+      "description": "Field shape of the trusted ToolContext. It is host-injected by the gateway and is never deserialized from model output or tool arguments; the exported TypeScript ToolContext is a branded type produced only by createToolContext.",
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "principal",
+        "runId",
+        "resolvedProfileHash",
+        "policyVersion",
+        "deadline",
+        "budgetReservation",
+        "allowedResources",
+        "traceId"
+      ],
+      "properties": {
+        "principal": {
+          "$ref": "./common.schema.json#/$defs/Principal"
+        },
+        "runId": {
+          "$ref": "./common.schema.json#/$defs/Uuid"
+        },
+        "resolvedProfileHash": {
+          "$ref": "./common.schema.json#/$defs/Sha256Digest"
+        },
+        "policyVersion": {
+          "$ref": "./common.schema.json#/$defs/Semver"
+        },
+        "deadline": {
+          "$ref": "./common.schema.json#/$defs/Rfc3339UtcTimestamp"
+        },
+        "budgetReservation": {
+          "$ref": "#/$defs/BudgetReservationRef"
+        },
+        "allowedResources": {
+          "$ref": "#/$defs/AllowedResources"
+        },
+        "traceId": {
+          "$ref": "./common.schema.json#/$defs/NonEmptyString"
+        }
+      }
+    },
+    "TimeContext": {
+      "title": "TimeContext",
+      "description": "Business time context. Instants stay UTC; the zone is a separate IANA name.",
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["asOf", "timeZone"],
+      "properties": {
+        "asOf": {
+          "$ref": "./common.schema.json#/$defs/Rfc3339UtcTimestamp"
+        },
+        "validAt": {
+          "$ref": "./common.schema.json#/$defs/Rfc3339UtcTimestamp"
+        },
+        "timeZone": {
+          "$ref": "./common.schema.json#/$defs/IanaTimeZone"
+        }
+      }
+    },
+    "OntologyLookupIntent": {
+      "title": "OntologyLookupIntent",
+      "type": "string",
+      "enum": ["definitions", "resolve", "relations", "rules", "facts"]
+    },
+    "OntologyConceptRef": {
+      "title": "OntologyConceptRef",
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["namespace", "conceptId"],
+      "properties": {
+        "namespace": {
+          "$ref": "./common.schema.json#/$defs/Namespace"
+        },
+        "conceptId": {
+          "$ref": "./common.schema.json#/$defs/NonEmptyString"
+        },
+        "definitionVersion": {
+          "$ref": "./common.schema.json#/$defs/Semver"
+        }
+      }
+    },
+    "OntologyLookupInput": {
+      "title": "OntologyLookupInput",
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["scopeRef", "intent"],
+      "properties": {
+        "scopeRef": {
+          "$ref": "./common.schema.json#/$defs/ScopeRef"
+        },
+        "concepts": {
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/OntologyConceptRef"
+          }
+        },
+        "entityRefs": {
+          "type": "array",
+          "items": {
+            "$ref": "./common.schema.json#/$defs/ResourceRef"
+          }
+        },
+        "intent": {
+          "$ref": "#/$defs/OntologyLookupIntent"
+        },
+        "timeContext": {
+          "$ref": "#/$defs/TimeContext"
+        },
+        "cursor": {
+          "$ref": "./common.schema.json#/$defs/OpaqueCursor"
+        },
+        "limit": {
+          "type": "integer",
+          "minimum": 1,
+          "maximum": 500
+        }
+      }
+    },
+    "OntologyLookupItem": {
+      "title": "OntologyLookupItem",
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["kind", "ref"],
+      "properties": {
+        "kind": {
+          "type": "string",
+          "enum": ["definition", "mapping", "fact", "rule", "relation"]
+        },
+        "ref": {
+          "$ref": "./common.schema.json#/$defs/VersionRef"
+        },
+        "conceptRef": {
+          "$ref": "#/$defs/OntologyConceptRef"
+        },
+        "label": {
+          "$ref": "./common.schema.json#/$defs/NonEmptyString"
+        },
+        "validity": {
+          "$ref": "./common.schema.json#/$defs/ValidityInterval"
+        },
+        "payload": true
+      }
+    },
+    "OntologyLookupOutput": {
+      "title": "OntologyLookupOutput",
+      "description": "Local visible definitions, mapping/fact references, gaps and versions. Nothing is auto-published.",
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["items", "gaps", "definitionVersion", "autoPublished"],
+      "properties": {
+        "items": {
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/OntologyLookupItem"
+          }
+        },
+        "gaps": {
+          "type": "array",
+          "items": {
+            "$ref": "./common.schema.json#/$defs/NonEmptyString"
+          }
+        },
+        "definitionVersion": {
+          "$ref": "./common.schema.json#/$defs/VersionRef"
+        },
+        "autoPublished": {
+          "const": false
+        }
+      }
+    },
+    "DataQueryDescribeInput": {
+      "title": "DataQueryDescribeInput",
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["kind"],
+      "properties": {
+        "kind": {
+          "const": "describe"
+        },
+        "resourceRefs": {
+          "type": "array",
+          "items": {
+            "$ref": "./common.schema.json#/$defs/SourceObjectRef"
+          }
+        },
+        "cursor": {
+          "$ref": "./common.schema.json#/$defs/OpaqueCursor"
+        },
+        "limit": {
+          "type": "integer",
+          "minimum": 1,
+          "maximum": 1000
+        }
+      }
+    },
+    "DataQueryDirectQueryInput": {
+      "title": "DataQueryDirectQueryInput",
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["kind", "mode", "queryPlan"],
+      "properties": {
+        "kind": {
+          "const": "query"
+        },
+        "mode": {
+          "const": "direct"
+        },
+        "queryPlan": {
+          "$ref": "./data.schema.json#/$defs/DirectSqlQueryPlan"
+        },
+        "cursor": {
+          "$ref": "./common.schema.json#/$defs/OpaqueCursor"
+        },
+        "limit": {
+          "type": "integer",
+          "minimum": 1,
+          "maximum": 1000
+        }
+      }
+    },
+    "DataQuerySemanticQueryInput": {
+      "title": "DataQuerySemanticQueryInput",
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["kind", "mode", "queryPlan"],
+      "properties": {
+        "kind": {
+          "const": "query"
+        },
+        "mode": {
+          "const": "semantic"
+        },
+        "queryPlan": {
+          "$ref": "./data.schema.json#/$defs/SemanticQueryPlan"
+        },
+        "cursor": {
+          "$ref": "./common.schema.json#/$defs/OpaqueCursor"
+        },
+        "limit": {
+          "type": "integer",
+          "minimum": 1,
+          "maximum": 1000
+        }
+      }
+    },
+    "DataQueryComputeInput": {
+      "title": "DataQueryComputeInput",
+      "description": "ADR-11 compute branch: a pre-registered operation plus typed parameters and bounded read-only input refs. There is no code or arbitrary-script field, and an unregistered operation cannot execute even with well-formed parameters.",
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["kind", "operationRef", "inputSchemaDigest", "inputRefs", "parameters"],
+      "properties": {
+        "kind": {
+          "const": "compute"
+        },
+        "operationRef": {
+          "$ref": "./operations.schema.json#/$defs/OperationRef"
+        },
+        "inputSchemaDigest": {
+          "$ref": "./common.schema.json#/$defs/Sha256Digest"
+        },
+        "inputRefs": {
+          "type": "array",
+          "items": {
+            "$ref": "./common.schema.json#/$defs/ResourceRef"
+          },
+          "minItems": 1
+        },
+        "parameters": {
+          "type": "object"
+        },
+        "dataMode": {
+          "$ref": "./common.schema.json#/$defs/DataMode"
+        }
+      }
+    },
+    "DataQueryInput": {
+      "title": "DataQueryInput",
+      "description": "C4 discriminated union: describe | query(mode direct|semantic) | compute. Every branch has a complete schema.",
+      "oneOf": [
+        {
+          "$ref": "#/$defs/DataQueryDescribeInput"
+        },
+        {
+          "$ref": "#/$defs/DataQueryDirectQueryInput"
+        },
+        {
+          "$ref": "#/$defs/DataQuerySemanticQueryInput"
+        },
+        {
+          "$ref": "#/$defs/DataQueryComputeInput"
+        }
+      ]
+    },
+    "WebSearchFreshnessHint": {
+      "title": "WebSearchFreshnessHint",
+      "type": "string",
+      "enum": ["any", "day", "week", "month", "year"]
+    },
+    "WebSearchInput": {
+      "title": "WebSearchInput",
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["query", "allowedDomains"],
+      "properties": {
+        "query": {
+          "$ref": "./common.schema.json#/$defs/NonEmptyString"
+        },
+        "allowedDomains": {
+          "type": "array",
+          "items": {
+            "type": "string",
+            "pattern": "^[a-z0-9](?:[a-z0-9-]*[a-z0-9])?(?:\\.[a-z0-9](?:[a-z0-9-]*[a-z0-9])?)+$"
+          },
+          "minItems": 1
+        },
+        "freshnessHint": {
+          "$ref": "#/$defs/WebSearchFreshnessHint"
+        },
+        "cursor": {
+          "$ref": "./common.schema.json#/$defs/OpaqueCursor"
+        },
+        "limit": {
+          "type": "integer",
+          "minimum": 1,
+          "maximum": 50
+        }
+      }
+    },
+    "WebPageEvidence": {
+      "title": "WebPageEvidence",
+      "description": "INV-07: public page content has no instruction authority. contentTrust is fixed to untrusted_data.",
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["url", "title", "fetchedAt", "snippet", "contentTrust", "contentDigest"],
+      "properties": {
+        "url": {
+          "type": "string",
+          "format": "uri",
+          "pattern": "^https://",
+          "maxLength": 2048
+        },
+        "title": {
+          "$ref": "./common.schema.json#/$defs/NonEmptyString"
+        },
+        "publishedAt": {
+          "$ref": "./common.schema.json#/$defs/Rfc3339UtcTimestamp"
+        },
+        "fetchedAt": {
+          "$ref": "./common.schema.json#/$defs/Rfc3339UtcTimestamp"
+        },
+        "snippet": {
+          "type": "string",
+          "maxLength": 8192
+        },
+        "contentTrust": {
+          "const": "untrusted_data"
+        },
+        "contentDigest": {
+          "$ref": "./common.schema.json#/$defs/Sha256Digest"
+        }
+      }
+    },
+    "WebSearchOutput": {
+      "title": "WebSearchOutput",
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["pages"],
+      "properties": {
+        "pages": {
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/WebPageEvidence"
+          }
+        }
+      }
+    },
+    "DocumentSearchOutput": {
+      "title": "DocumentSearchOutput",
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["spans", "scoreKind", "indexVersion", "completeness"],
+      "properties": {
+        "spans": {
+          "type": "array",
+          "items": {
+            "$ref": "./data.schema.json#/$defs/DocumentSpan"
+          }
+        },
+        "scoreKind": {
+          "$ref": "./data.schema.json#/$defs/ScoreKind"
+        },
+        "indexVersion": {
+          "$ref": "./data.schema.json#/$defs/IndexVersion"
+        },
+        "completeness": {
+          "$ref": "./common.schema.json#/$defs/CompletenessStatus"
+        }
+      }
+    },
+    "AggregateStatistic": {
+      "title": "AggregateStatistic",
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["fieldRef", "kind", "value"],
+      "properties": {
+        "fieldRef": {
+          "$ref": "./common.schema.json#/$defs/NonEmptyString"
+        },
+        "kind": {
+          "$ref": "./data.schema.json#/$defs/AggregationKind"
+        },
+        "value": {
+          "$ref": "./common.schema.json#/$defs/DecimalQuantity"
+        }
+      }
+    },
+    "TableData": {
+      "title": "TableData",
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["columns", "rows"],
+      "properties": {
+        "columns": {
+          "type": "array",
+          "items": {
+            "$ref": "./data.schema.json#/$defs/QueryColumn"
+          }
+        },
+        "rows": {
+          "type": "array",
+          "items": {
+            "type": "array"
+          }
+        }
+      }
+    },
+    "ComputationData": {
+      "title": "ComputationData",
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["operationRef", "resultRef", "algorithmVersion", "domainStatus"],
+      "properties": {
+        "operationRef": {
+          "$ref": "./operations.schema.json#/$defs/OperationRef"
+        },
+        "resultRef": {
+          "$ref": "./common.schema.json#/$defs/ResourceRef"
+        },
+        "algorithmVersion": {
+          "$ref": "./common.schema.json#/$defs/VersionRef"
+        },
+        "metrics": {
+          "type": "object"
+        },
+        "violations": {
+          "type": "array",
+          "items": {
+            "$ref": "./common.schema.json#/$defs/NonEmptyString"
+          }
+        },
+        "domainStatus": {
+          "$ref": "./common.schema.json#/$defs/DomainResultStatus"
+        }
+      }
+    },
+    "DataQueryOutput": {
+      "title": "DataQueryOutput",
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["resultKind"],
+      "properties": {
+        "resultKind": {
+          "type": "string",
+          "enum": ["table", "statistics", "computation"]
+        },
+        "table": {
+          "$ref": "#/$defs/TableData"
+        },
+        "statistics": {
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/AggregateStatistic"
+          }
+        },
+        "computation": {
+          "$ref": "#/$defs/ComputationData"
+        }
+      }
+    }
+  }
+}

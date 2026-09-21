@@ -1,0 +1,377 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://ontology.local/schema/errors.schema.json",
+  "title": "ErrorContracts",
+  "$comment": "C6.2 error codes and retryability. An empty query is a successful 'empty' result, not an error, and a domain infeasible outcome can be a successful computation rather than a platform exception.",
+  "$defs": {
+    "ErrorCode": {
+      "title": "ErrorCode",
+      "type": "string",
+      "enum": [
+        "INVALID_ARGUMENT",
+        "INVALID_SCHEMA",
+        "UNAUTHENTICATED",
+        "FORBIDDEN",
+        "VERSION_CONFLICT",
+        "IDEMPOTENCY_CONFLICT",
+        "CAPABILITY_NOT_CONFIGURED",
+        "PROFILE_INCOMPATIBLE",
+        "SNAPSHOT_UNAVAILABLE",
+        "CHECKPOINT_INCOMPATIBLE",
+        "SOURCE_UNAVAILABLE",
+        "MODEL_UNAVAILABLE",
+        "RATE_LIMITED",
+        "DEADLINE_EXCEEDED",
+        "BUDGET_EXHAUSTED",
+        "NO_PROGRESS",
+        "DATA_STALE",
+        "DATA_CONFLICT",
+        "INSUFFICIENT_DATA",
+        "VERIFICATION_FAILED",
+        "RESULT_TOO_LARGE",
+        "UNSUPPORTED_QUERY",
+        "INTERNAL_ERROR",
+        "EVIDENCE_PERSIST_FAILED"
+      ]
+    },
+    "Retryability": {
+      "title": "Retryability",
+      "description": "never: stop. limited: bounded backoff, still inside the shared run budget. depends_on_effect: read-only calls may retry a limited number of times and the remote state must be recorded as unknown. not_mechanical: fix data, clarify or return a bounded domain answer. within_repair_budget: repair attempts share one run budget. depends_on_idempotency: retry only when the effect is idempotent.",
+      "type": "string",
+      "enum": [
+        "never",
+        "limited",
+        "depends_on_effect",
+        "not_mechanical",
+        "within_repair_budget",
+        "depends_on_idempotency"
+      ]
+    },
+    "HttpStatus": {
+      "title": "HttpStatus",
+      "type": "integer",
+      "enum": [400, 401, 403, 404, 409, 413, 422, 428, 429, 500, 503, 504]
+    },
+    "ErrorDescriptor": {
+      "title": "ErrorDescriptor",
+      "description": "One row of the C6.2 error/retryability table.",
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["code", "httpStatus", "retryable", "behavior"],
+      "properties": {
+        "code": {
+          "$ref": "#/$defs/ErrorCode"
+        },
+        "httpStatus": {
+          "$ref": "#/$defs/HttpStatus"
+        },
+        "retryable": {
+          "$ref": "#/$defs/Retryability"
+        },
+        "behavior": {
+          "$ref": "./common.schema.json#/$defs/NonEmptyString"
+        },
+        "maxRetries": {
+          "type": "integer",
+          "minimum": 0,
+          "maximum": 10
+        },
+        "respectsRetryAfter": {
+          "type": "boolean"
+        },
+        "recordsRemoteStateUnknown": {
+          "type": "boolean"
+        }
+      }
+    },
+    "ErrorCatalog": {
+      "title": "ErrorCatalog",
+      "description": "The complete C6.2 table. Every ErrorCode has exactly one descriptor; a new code is a contract change, not a silent addition.",
+      "type": "object",
+      "propertyNames": {
+        "$ref": "#/$defs/ErrorCode"
+      },
+      "properties": {
+        "INVALID_ARGUMENT": {
+          "$ref": "#/$defs/ErrorDescriptor"
+        },
+        "INVALID_SCHEMA": {
+          "$ref": "#/$defs/ErrorDescriptor"
+        },
+        "UNAUTHENTICATED": {
+          "$ref": "#/$defs/ErrorDescriptor"
+        },
+        "FORBIDDEN": {
+          "$ref": "#/$defs/ErrorDescriptor"
+        },
+        "VERSION_CONFLICT": {
+          "$ref": "#/$defs/ErrorDescriptor"
+        },
+        "IDEMPOTENCY_CONFLICT": {
+          "$ref": "#/$defs/ErrorDescriptor"
+        },
+        "CAPABILITY_NOT_CONFIGURED": {
+          "$ref": "#/$defs/ErrorDescriptor"
+        },
+        "PROFILE_INCOMPATIBLE": {
+          "$ref": "#/$defs/ErrorDescriptor"
+        },
+        "SNAPSHOT_UNAVAILABLE": {
+          "$ref": "#/$defs/ErrorDescriptor"
+        },
+        "CHECKPOINT_INCOMPATIBLE": {
+          "$ref": "#/$defs/ErrorDescriptor"
+        },
+        "SOURCE_UNAVAILABLE": {
+          "$ref": "#/$defs/ErrorDescriptor"
+        },
+        "MODEL_UNAVAILABLE": {
+          "$ref": "#/$defs/ErrorDescriptor"
+        },
+        "RATE_LIMITED": {
+          "$ref": "#/$defs/ErrorDescriptor"
+        },
+        "DEADLINE_EXCEEDED": {
+          "$ref": "#/$defs/ErrorDescriptor"
+        },
+        "BUDGET_EXHAUSTED": {
+          "$ref": "#/$defs/ErrorDescriptor"
+        },
+        "NO_PROGRESS": {
+          "$ref": "#/$defs/ErrorDescriptor"
+        },
+        "DATA_STALE": {
+          "$ref": "#/$defs/ErrorDescriptor"
+        },
+        "DATA_CONFLICT": {
+          "$ref": "#/$defs/ErrorDescriptor"
+        },
+        "INSUFFICIENT_DATA": {
+          "$ref": "#/$defs/ErrorDescriptor"
+        },
+        "VERIFICATION_FAILED": {
+          "$ref": "#/$defs/ErrorDescriptor"
+        },
+        "RESULT_TOO_LARGE": {
+          "$ref": "#/$defs/ErrorDescriptor"
+        },
+        "UNSUPPORTED_QUERY": {
+          "$ref": "#/$defs/ErrorDescriptor"
+        },
+        "INTERNAL_ERROR": {
+          "$ref": "#/$defs/ErrorDescriptor"
+        },
+        "EVIDENCE_PERSIST_FAILED": {
+          "$ref": "#/$defs/ErrorDescriptor"
+        }
+      },
+      "required": [
+        "INVALID_ARGUMENT",
+        "INVALID_SCHEMA",
+        "UNAUTHENTICATED",
+        "FORBIDDEN",
+        "VERSION_CONFLICT",
+        "IDEMPOTENCY_CONFLICT",
+        "CAPABILITY_NOT_CONFIGURED",
+        "PROFILE_INCOMPATIBLE",
+        "SNAPSHOT_UNAVAILABLE",
+        "CHECKPOINT_INCOMPATIBLE",
+        "SOURCE_UNAVAILABLE",
+        "MODEL_UNAVAILABLE",
+        "RATE_LIMITED",
+        "DEADLINE_EXCEEDED",
+        "BUDGET_EXHAUSTED",
+        "NO_PROGRESS",
+        "DATA_STALE",
+        "DATA_CONFLICT",
+        "INSUFFICIENT_DATA",
+        "VERIFICATION_FAILED",
+        "RESULT_TOO_LARGE",
+        "UNSUPPORTED_QUERY",
+        "INTERNAL_ERROR",
+        "EVIDENCE_PERSIST_FAILED"
+      ]
+    },
+    "FieldError": {
+      "title": "FieldError",
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["pointer", "reason"],
+      "properties": {
+        "pointer": {
+          "description": "RFC 6901 JSON Pointer into the rejected payload.",
+          "type": "string",
+          "pattern": "^(|(?:/(?:[^~/]|~0|~1)*)+)$",
+          "maxLength": 1024
+        },
+        "reason": {
+          "$ref": "./common.schema.json#/$defs/NonEmptyString"
+        }
+      }
+    },
+    "PlatformError": {
+      "title": "PlatformError",
+      "description": "Error payload. Carries a code, a safe message and trace id; never a secret, credential or full customer payload.",
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["code", "message", "retryable"],
+      "properties": {
+        "code": {
+          "$ref": "#/$defs/ErrorCode"
+        },
+        "message": {
+          "$ref": "./common.schema.json#/$defs/NonEmptyString"
+        },
+        "retryable": {
+          "type": "boolean"
+        },
+        "safeMessage": {
+          "$ref": "./common.schema.json#/$defs/NonEmptyString"
+        },
+        "traceId": {
+          "$ref": "./common.schema.json#/$defs/NonEmptyString"
+        },
+        "detailsRef": {
+          "$ref": "./common.schema.json#/$defs/ResourceRef"
+        },
+        "fieldErrors": {
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/FieldError"
+          }
+        },
+        "retryAfterMs": {
+          "$ref": "./common.schema.json#/$defs/DurationMs"
+        },
+        "remoteStateUnknown": {
+          "description": "Set when a timed-out remote call may or may not have taken effect.",
+          "type": "boolean"
+        }
+      }
+    },
+    "FailureEnvelope": {
+      "title": "FailureEnvelope",
+      "description": "C6 public failure shape.",
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["error", "traceId"],
+      "properties": {
+        "error": {
+          "$ref": "#/$defs/PlatformError"
+        },
+        "traceId": {
+          "$ref": "./common.schema.json#/$defs/NonEmptyString"
+        }
+      }
+    },
+    "RunCancellationState": {
+      "title": "RunCancellationState",
+      "type": "string",
+      "enum": ["cancelling", "cancelled", "already_terminal", "not_found"]
+    },
+    "AttemptState": {
+      "title": "AttemptState",
+      "description": "attempt bookkeeping. usage_unknown means the remote may have been billed and the budget is conservatively held until reconciled.",
+      "type": "string",
+      "enum": ["reserved", "running", "settled", "failed", "abandoned", "usage_unknown"]
+    },
+    "AttemptDisposition": {
+      "title": "AttemptDisposition",
+      "type": "string",
+      "enum": ["settled", "abandoned"]
+    },
+    "AbandonedAttempt": {
+      "title": "AbandonedAttempt",
+      "description": "A late or uncancellable attempt. Its late result is quarantined and can never revive or publish a cancelled run.",
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["attemptId", "abandonedAt", "lateResultPolicy"],
+      "properties": {
+        "attemptId": {
+          "$ref": "./common.schema.json#/$defs/Uuid"
+        },
+        "callId": {
+          "$ref": "./common.schema.json#/$defs/Uuid"
+        },
+        "toolId": {
+          "$ref": "./tools.schema.json#/$defs/ToolId"
+        },
+        "abandonedAt": {
+          "$ref": "./common.schema.json#/$defs/Rfc3339UtcTimestamp"
+        },
+        "lateResultPolicy": {
+          "const": "quarantined"
+        },
+        "reason": {
+          "$ref": "./common.schema.json#/$defs/NonEmptyString"
+        }
+      }
+    },
+    "CancellationRecord": {
+      "title": "CancellationRecord",
+      "description": "Cancellation is best-effort notification. When a backend cannot cancel, the platform records the attempt as abandoned and isolates late output instead of claiming the remote task stopped.",
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["runId", "state", "reason", "requestedAt", "requestedBy", "abandonedAttempts"],
+      "properties": {
+        "runId": {
+          "$ref": "./common.schema.json#/$defs/Uuid"
+        },
+        "state": {
+          "$ref": "#/$defs/RunCancellationState"
+        },
+        "reason": {
+          "$ref": "./common.schema.json#/$defs/NonEmptyString"
+        },
+        "requestedAt": {
+          "$ref": "./common.schema.json#/$defs/Rfc3339UtcTimestamp"
+        },
+        "requestedBy": {
+          "$ref": "./common.schema.json#/$defs/NonEmptyString"
+        },
+        "settledAt": {
+          "$ref": "./common.schema.json#/$defs/Rfc3339UtcTimestamp"
+        },
+        "abandonedAttempts": {
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/AbandonedAttempt"
+          }
+        }
+      }
+    },
+    "ToolAttemptRecord": {
+      "title": "ToolAttemptRecord",
+      "description": "Persisted tool attempt. Intent and budget reservation are written before execution; the attempt is settled or abandoned after it.",
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["attemptId", "callId", "toolId", "state", "disposition", "reservedAt"],
+      "properties": {
+        "attemptId": {
+          "$ref": "./common.schema.json#/$defs/Uuid"
+        },
+        "callId": {
+          "$ref": "./common.schema.json#/$defs/Uuid"
+        },
+        "toolId": {
+          "$ref": "./tools.schema.json#/$defs/ToolId"
+        },
+        "state": {
+          "$ref": "#/$defs/AttemptState"
+        },
+        "disposition": {
+          "$ref": "#/$defs/AttemptDisposition"
+        },
+        "reservedAt": {
+          "$ref": "./common.schema.json#/$defs/Rfc3339UtcTimestamp"
+        },
+        "settledAt": {
+          "$ref": "./common.schema.json#/$defs/Rfc3339UtcTimestamp"
+        },
+        "resultDigest": {
+          "$ref": "./common.schema.json#/$defs/Sha256Digest"
+        }
+      }
+    }
+  }
+}
