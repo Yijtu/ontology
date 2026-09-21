@@ -1,0 +1,2 @@
+# The PDF fixtures are parsed byte-for-byte; never let git normalize them.
+*.pdf binary

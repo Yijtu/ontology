@@ -14,6 +14,9 @@ importers:
       '@ontology/adapter-control-postgres':
         specifier: workspace:*
         version: link:packages/adapters/control-postgres
+      '@ontology/adapter-extraction-document':
+        specifier: workspace:*
+        version: link:packages/adapters/extraction-document
       '@ontology/app-api':
         specifier: workspace:*
         version: link:apps/api
@@ -311,6 +314,9 @@ importers:
       '@ontology/core':
         specifier: workspace:*
         version: link:../../core
+      unpdf:
+        specifier: 1.8.1
+        version: 1.8.1
 
   packages/adapters/model-company:
     dependencies:
@@ -1834,6 +1840,15 @@ packages:
     resolution: {integrity: sha512-/y4/bH9YNU5hi9NIrpOuvGXFcxrj3CMrV+/AYpowAYTpHn8gX/XPFjNy766FPoYY0miQhdW977JFWKGNhBdwyQ==}
     engines: {node: '>=22.19.0'}
 
+  unpdf@1.8.1:
+    resolution: {integrity: sha512-xkURhy2SoGpOIH0a1gLHNkASPIQYonadDJs2AQwPEfUakafeD9EA1WTWWsaR++gfTCXJpV27W7tU1nXuk82UKQ==}
+    engines: {node: '>=22'}
+    peerDependencies:
+      '@napi-rs/canvas': ^0.1.69 || ^1.0.0
+    peerDependenciesMeta:
+      '@napi-rs/canvas':
+        optional: true
+
   uri-js@4.4.1:
     resolution: {integrity: sha512-7rKUyy33Q1yc98pQ1DAmLtwX109F7TIfWlW1Ydo8Wl1ii1SeHieeh0HHfPeL2fMXK6z0s8ecKs9frCuLJvndBg==}
 
@@ -3256,6 +3271,8 @@ snapshots:
   undici-types@8.9.0: {}
 
   undici@8.10.2: {}
+
+  unpdf@1.8.1: {}
 
   uri-js@4.4.1:
     dependencies:
