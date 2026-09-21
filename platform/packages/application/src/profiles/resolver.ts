@@ -34,6 +34,7 @@ import type {
   PublishProfileInput,
   ResolvedProfileQuery,
 } from './types'
+import type { RunProfileBinding } from '../runs/types'
 import type { ProfileSpecValidator } from './validator'
 
 export interface ProfileResolverDependencies {
@@ -323,6 +324,51 @@ export class ProfileResolver {
       active.revision,
     )
     return active
+  }
+
+  /**
+   * Resolve (and persist) the exact manifest a run binds to. Unlike `preflight` this is not
+   * an editing action: a business user may bind the published profile their run uses, but
+   * cannot publish, preflight or activate one. The returned `resolvedProfileHash` is what the
+   * run locks immutably, so a later profile or component version never alters that run.
+   */
+  async bindRunProfile(
+    profileRef: ProfileRef,
+    scopeRef: ScopeRef,
+    ctx: ToolContext,
+  ): Promise<RunProfileBinding> {
+    resolveTrustedScope(scopeRef, ctx)
+    const result = await this.#resolve(scopeRef, profileRef, ctx)
+    const resolved = result.resolvedProfile
+    if (result.status !== 'resolved' || resolved === undefined) {
+      const missing = result.missingCapabilities ?? []
+      const reasons = result.incompatibleReasons ?? []
+      throw new ProfileResolverError(
+        result.status === 'incompatible' ? 'PROFILE_INCOMPATIBLE' : 'CAPABILITY_NOT_CONFIGURED',
+        `profile ${profileLabel(profileRef)} cannot be bound to a run (${result.status})${
+          missing.length > 0 ? `: missing ${missing.map((entry) => entry.name).join(', ')}` : ''
+        }${reasons.length > 0 ? `: ${reasons.join('; ')}` : ''}`,
+        {
+          ...(result.missingCapabilities === undefined
+            ? {}
+            : { missingCapabilities: result.missingCapabilities }),
+          ...(result.incompatibleReasons === undefined
+            ? {}
+            : { incompatibleReasons: result.incompatibleReasons }),
+        },
+      )
+    }
+    await this.#persistResolved(scopeRef, profileRef, result, ctx)
+    return {
+      profileRef,
+      resolvedProfileHash: resolved.snapshotHash,
+      resolvedProfileRef: {
+        id: profileRef.id,
+        version: profileRef.version,
+        snapshotHash: resolved.snapshotHash,
+      },
+      runtimeRef: resolved.runtimeRef,
+    }
   }
 
   async getProfileVersion(input: ProfileReferenceInput, ctx: ToolContext): Promise<ProfileVersionRecord> {

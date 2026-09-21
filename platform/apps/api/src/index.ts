@@ -20,3 +20,15 @@ export type {
   SourceRegistryComposition,
   SourceRegistryCompositionOptions,
 } from './composition/source-registry'
+export {
+  createPostgresRunService,
+  createPostgresRunStore,
+} from './composition/run-service'
+export type { RunServiceComposition, RunServiceCompositionOptions } from './composition/run-service'
+export { createRunApi } from './http/server'
+export type { AuthenticatedRequest, RequestAuthenticator, RunApiOptions } from './http/server'
+export { createRequestToolContext } from './http/context'
+export type { RequestToolContextInput } from './http/context'
+export { formatSseFrame, SSE_HEADERS } from './http/sse'
+export { failureBody, isRetryable } from './http/errors'
+export type { ApiFailureBody } from './http/errors'
