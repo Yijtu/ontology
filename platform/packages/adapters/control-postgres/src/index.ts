@@ -5,6 +5,7 @@ export type {
   ControlScope,
 } from './database'
 export { PostgresComponentRegistryStore } from './component-registry-store'
+export { PostgresProfileStore } from './profile-store'
 export { ControlPostgresRepository } from './repository'
 export type {
   ControlOperationContext,
