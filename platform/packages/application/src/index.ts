@@ -7,3 +7,4 @@
  * adapter, extension, industry pack or SDK/driver.
  */
 export * from './registry'
+export * from './profiles'
