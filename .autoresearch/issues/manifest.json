@@ -4,8 +4,8 @@
   "created_at": "2026-09-21",
   "project_root": "D:/work/ontology",
   "platform": "local",
-  "status": "planned",
-  "implementation_started": false,
+  "status": "in_progress",
+  "implementation_started": true,
   "github_repository": "Yijtu/ontology",
   "sources": [
     "tasks/prd-industry-semantic-agent-v0.2.md",
@@ -198,8 +198,8 @@
       "file": "issue-001-typescript-workspace.md",
       "type": "infra",
       "priority": "high",
-      "state": "planned",
-      "readiness": "ready",
+      "state": "done",
+      "readiness": "done",
       "phase": "A 基础契约",
       "dependencies": [],
       "user_stories": [
@@ -224,7 +224,7 @@
       "type": "backend",
       "priority": "high",
       "state": "planned",
-      "readiness": "waiting_dependencies",
+      "readiness": "ready",
       "phase": "A 基础契约",
       "dependencies": [
         "LOCAL-001"
