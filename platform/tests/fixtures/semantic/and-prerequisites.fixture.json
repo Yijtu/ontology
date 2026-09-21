@@ -1,0 +1,276 @@
+{
+  "fixtureId": "and-prerequisites-known",
+  "scenarioKind": "and_prerequisites",
+  "title": "AND prerequisites: every premise group needs a valid alternative before the rule conclusion holds",
+  "provenance": {
+    "specRefs": ["tasks/spec-v0.2/data-execution.md#D5"],
+    "functionalRequirements": ["FR-18"],
+    "userStories": ["US-016"],
+    "acceptanceRefs": ["US-016.A1"],
+    "derivation": "D5 states a rule justification needs several premise groups and each group may hold several equivalent valid sources; groups are AND, alternatives inside a group are OR. With exactly one valid alternative in each of the two groups the conclusion site.reserve_ready is known. Gold is read off the spec, not produced by any evaluator."
+  },
+  "scopeRef": {
+    "tenantId": "11111111-2222-4333-8444-555555555555",
+    "spaceId": "99999999-8888-4777-8666-555555555555"
+  },
+  "assertions": [
+    {
+      "assertionId": "assert-soc-floor",
+      "logicalAssertionId": "la-soc-floor",
+      "recordedSeq": "1",
+      "op": "assert",
+      "subject": "site.home-1.battery",
+      "predicate": "battery.soc_pct",
+      "value": { "amount": "55.0", "unit": "pct" },
+      "validity": { "validFrom": "2026-09-21T00:00:00Z", "validTo": "2026-09-22T00:00:00Z" },
+      "sourceRef": { "namespace": "ha-anker", "sourceId": "sensor.battery_soc" },
+      "evidenceId": "e0000000-0000-4000-8000-000000000001"
+    },
+    {
+      "assertionId": "assert-grid-connected",
+      "logicalAssertionId": "la-grid-connected",
+      "recordedSeq": "2",
+      "op": "assert",
+      "subject": "site.home-1",
+      "predicate": "site.grid_connected",
+      "value": true,
+      "validity": { "validFrom": "2026-09-21T00:00:00Z", "validTo": "2026-09-22T00:00:00Z" },
+      "sourceRef": { "namespace": "ha-anker", "sourceId": "binary_sensor.grid" },
+      "evidenceId": "e0000000-0000-4000-8000-000000000002"
+    }
+  ],
+  "rules": [
+    {
+      "ruleRef": {
+        "id": "rule.reserve-ready",
+        "version": "1.0.0",
+        "digest": "sha256:cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc"
+      },
+      "ruleId": "rule.reserve-ready",
+      "premiseGroups": [
+        {
+          "groupId": "g-soc",
+          "filter": { "fieldRef": "battery.soc_pct", "op": "gte", "values": ["20.0"] },
+          "alternatives": [{ "alternativeId": "alt-soc", "assertionId": "assert-soc-floor" }]
+        },
+        {
+          "groupId": "g-grid",
+          "filter": { "fieldRef": "site.grid_connected", "op": "eq", "values": [true] },
+          "alternatives": [{ "alternativeId": "alt-grid", "assertionId": "assert-grid-connected" }]
+        }
+      ],
+      "conclusion": {
+        "propositionKey": "site.reserve_ready",
+        "predicate": "site.reserve_ready",
+        "value": true
+      }
+    }
+  ],
+  "evidence": [
+    {
+      "evidenceId": "e0000000-0000-4000-8000-000000000001",
+      "kind": "observation",
+      "scopeRef": {
+        "tenantId": "11111111-2222-4333-8444-555555555555",
+        "spaceId": "99999999-8888-4777-8666-555555555555"
+      },
+      "producedBy": {
+        "componentRef": {
+          "id": "data-backend.duckdb",
+          "version": "0.1.0",
+          "digest": "sha256:bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb"
+        },
+        "runId": "3f1a2b4c-5d6e-4f70-8a9b-0c1d2e3f4a5b"
+      },
+      "observedAt": "2026-09-21T12:00:00Z",
+      "recordedSeq": "1",
+      "validity": { "validFrom": "2026-09-21T00:00:00Z", "validTo": "2026-09-22T00:00:00Z" },
+      "sourceSnapshots": [
+        {
+          "sourceRef": { "namespace": "ha-anker", "sourceId": "sensor.battery_soc" },
+          "schemaVersion": "2026-09-01",
+          "readAt": "2026-09-21T12:00:00Z",
+          "consistency": "read_time",
+          "watermark": { "kind": "sequence", "value": "41" },
+          "resultDigest": "sha256:1111111111111111111111111111111111111111111111111111111111111111"
+        }
+      ],
+      "resultDigest": "sha256:1111111111111111111111111111111111111111111111111111111111111111",
+      "integrity": {
+        "algorithm": "sha256",
+        "digest": "sha256:1111111111111111111111111111111111111111111111111111111111111111",
+        "verifiedAt": "2026-09-21T12:00:00Z"
+      },
+      "dependencies": [],
+      "dataMode": "observed"
+    },
+    {
+      "evidenceId": "e0000000-0000-4000-8000-000000000002",
+      "kind": "observation",
+      "scopeRef": {
+        "tenantId": "11111111-2222-4333-8444-555555555555",
+        "spaceId": "99999999-8888-4777-8666-555555555555"
+      },
+      "producedBy": {
+        "componentRef": {
+          "id": "data-backend.duckdb",
+          "version": "0.1.0",
+          "digest": "sha256:bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb"
+        },
+        "runId": "3f1a2b4c-5d6e-4f70-8a9b-0c1d2e3f4a5b"
+      },
+      "observedAt": "2026-09-21T12:00:00Z",
+      "recordedSeq": "2",
+      "validity": { "validFrom": "2026-09-21T00:00:00Z", "validTo": "2026-09-22T00:00:00Z" },
+      "sourceSnapshots": [
+        {
+          "sourceRef": { "namespace": "ha-anker", "sourceId": "binary_sensor.grid" },
+          "schemaVersion": "2026-09-01",
+          "readAt": "2026-09-21T12:00:00Z",
+          "consistency": "read_time",
+          "watermark": { "kind": "sequence", "value": "42" },
+          "resultDigest": "sha256:2222222222222222222222222222222222222222222222222222222222222222"
+        }
+      ],
+      "resultDigest": "sha256:2222222222222222222222222222222222222222222222222222222222222222",
+      "integrity": {
+        "algorithm": "sha256",
+        "digest": "sha256:2222222222222222222222222222222222222222222222222222222222222222",
+        "verifiedAt": "2026-09-21T12:00:00Z"
+      },
+      "dependencies": [],
+      "dataMode": "observed"
+    },
+    {
+      "evidenceId": "e0000000-0000-4000-8000-000000000003",
+      "kind": "rule_derivation",
+      "scopeRef": {
+        "tenantId": "11111111-2222-4333-8444-555555555555",
+        "spaceId": "99999999-8888-4777-8666-555555555555"
+      },
+      "producedBy": {
+        "componentRef": {
+          "id": "semantic-engine",
+          "version": "0.1.0",
+          "digest": "sha256:ffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffff"
+        },
+        "ruleRef": {
+          "id": "rule.reserve-ready",
+          "version": "1.0.0",
+          "digest": "sha256:cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc"
+        }
+      },
+      "observedAt": "2026-09-21T12:00:00Z",
+      "recordedSeq": "3",
+      "validity": { "validFrom": "2026-09-21T00:00:00Z", "validTo": "2026-09-22T00:00:00Z" },
+      "sourceSnapshots": [],
+      "resultDigest": "sha256:3333333333333333333333333333333333333333333333333333333333333333",
+      "integrity": {
+        "algorithm": "sha256",
+        "digest": "sha256:3333333333333333333333333333333333333333333333333333333333333333",
+        "verifiedAt": "2026-09-21T12:00:00Z"
+      },
+      "dependencies": [
+        {
+          "evidenceRef": {
+            "id": "e0000000-0000-4000-8000-000000000001",
+            "version": "1.0.0",
+            "digest": "sha256:1111111111111111111111111111111111111111111111111111111111111111",
+            "kind": "evidence"
+          },
+          "relation": "derives_from",
+          "direction": "inbound",
+          "premiseGroup": "g-soc"
+        },
+        {
+          "evidenceRef": {
+            "id": "e0000000-0000-4000-8000-000000000002",
+            "version": "1.0.0",
+            "digest": "sha256:2222222222222222222222222222222222222222222222222222222222222222",
+            "kind": "evidence"
+          },
+          "relation": "derives_from",
+          "direction": "inbound",
+          "premiseGroup": "g-grid"
+        }
+      ],
+      "dataMode": "observed",
+      "limitations": ["derived from observed inputs; not a device command"]
+    }
+  ],
+  "operations": [
+    { "stepId": "s1", "kind": "publish_assertion", "assertionId": "assert-soc-floor", "asOfRecordedSeq": "1" },
+    {
+      "stepId": "s2",
+      "kind": "publish_assertion",
+      "assertionId": "assert-grid-connected",
+      "asOfRecordedSeq": "2"
+    },
+    {
+      "stepId": "s3",
+      "kind": "evaluate_rule",
+      "ruleId": "rule.reserve-ready",
+      "asOfRecordedSeq": "2",
+      "validAt": "2026-09-21T12:00:00Z"
+    },
+    {
+      "stepId": "s4",
+      "kind": "read_projection",
+      "asOfRecordedSeq": "2",
+      "validAt": "2026-09-21T12:00:00Z"
+    }
+  ],
+  "expected": {
+    "views": [
+      {
+        "viewId": "current",
+        "description": "Latest recorded version at noon; both premise groups have one valid alternative.",
+        "request": {
+          "scopeRef": {
+            "tenantId": "11111111-2222-4333-8444-555555555555",
+            "spaceId": "99999999-8888-4777-8666-555555555555"
+          },
+          "projectionRef": {
+            "id": "projection.semantic",
+            "version": "1.0.0",
+            "digest": "sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
+          },
+          "asOfRecordedSeq": "2",
+          "validAt": "2026-09-21T12:00:00Z"
+        },
+        "isCurrent": true,
+        "conclusions": [
+          {
+            "propositionKey": "site.reserve_ready",
+            "domainStatus": "known",
+            "value": true,
+            "satisfiedBy": [
+              { "groupId": "g-soc", "alternativeIds": ["alt-soc"] },
+              { "groupId": "g-grid", "alternativeIds": ["alt-grid"] }
+            ],
+            "note": "AND of ORs: both groups required; each group currently has one valid alternative."
+          }
+        ],
+        "gaps": [],
+        "conflicts": []
+      }
+    ],
+    "evidenceConditions": [
+      {
+        "evidenceId": "e0000000-0000-4000-8000-000000000001",
+        "condition": "Observation keeps its source snapshot, watermark and resultDigest.",
+        "required": true
+      },
+      {
+        "evidenceId": "e0000000-0000-4000-8000-000000000002",
+        "condition": "Observation keeps its source snapshot, watermark and resultDigest.",
+        "required": true
+      },
+      {
+        "evidenceId": "e0000000-0000-4000-8000-000000000003",
+        "condition": "Rule derivation must depend on both premise evidence items, tagged premiseGroup g-soc and g-grid.",
+        "required": true
+      }
+    ]
+  }
+}

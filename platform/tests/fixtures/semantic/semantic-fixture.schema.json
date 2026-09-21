@@ -1,0 +1,315 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://ontology.local/tests/semantic-fixture.schema.json",
+  "title": "SemanticRegressionFixture",
+  "description": "LOCAL-048 spec-driven semantic regression fixture. Every contract-shaped member is a $ref into the canonical @ontology/contracts schemas (common/data/evidence), so a fixture can never drift into a private parallel shape. Only fixture metadata (provenance, operation sequence, expected views) is defined locally. Fixtures declare inputs and gold outcomes only; they never encode an implementation's proof counts, field layout or test counts.",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "fixtureId",
+    "scenarioKind",
+    "title",
+    "provenance",
+    "scopeRef",
+    "assertions",
+    "rules",
+    "evidence",
+    "operations",
+    "expected"
+  ],
+  "properties": {
+    "fixtureId": {
+      "type": "string",
+      "pattern": "^[a-z0-9]+(?:-[a-z0-9]+)*$",
+      "maxLength": 64
+    },
+    "scenarioKind": { "$ref": "#/$defs/ScenarioKind" },
+    "title": { "$ref": "https://ontology.local/schema/common.schema.json#/$defs/NonEmptyString" },
+    "provenance": { "$ref": "#/$defs/Provenance" },
+    "notes": {
+      "description": "Optional clarifications for reviewers, e.g. an intentionally unpublished assertion referenced by a rule to exercise the unknown case.",
+      "type": "array",
+      "items": { "$ref": "https://ontology.local/schema/common.schema.json#/$defs/NonEmptyString" }
+    },
+    "scopeRef": { "$ref": "https://ontology.local/schema/common.schema.json#/$defs/ScopeRef" },
+    "assertions": {
+      "type": "array",
+      "minItems": 1,
+      "items": { "$ref": "#/$defs/Assertion" }
+    },
+    "rules": {
+      "description": "Empty for fixtures that exercise assertion resolution and bitemporal projection without a derived rule.",
+      "type": "array",
+      "items": { "$ref": "#/$defs/Rule" }
+    },
+    "evidence": {
+      "type": "array",
+      "minItems": 1,
+      "items": {
+        "$ref": "https://ontology.local/schema/evidence.schema.json#/$defs/EvidenceEnvelope"
+      }
+    },
+    "operations": {
+      "type": "array",
+      "minItems": 1,
+      "items": { "$ref": "#/$defs/OperationStep" }
+    },
+    "expected": { "$ref": "#/$defs/Expected" }
+  },
+  "$defs": {
+    "ScenarioKind": {
+      "type": "string",
+      "description": "The required regression scenario this fixture encodes (card LOCAL-048).",
+      "enum": [
+        "and_prerequisites",
+        "or_alternative_support",
+        "last_support_retraction",
+        "unknown_conflict",
+        "numeric_boundary",
+        "partial_validity_correction",
+        "history_view"
+      ]
+    },
+    "Provenance": {
+      "type": "object",
+      "description": "Where the fixture and its gold values come from. specRefs must point at files in the current repository SPEC/PRD, never at a historical prototype.",
+      "additionalProperties": false,
+      "required": ["specRefs", "functionalRequirements", "userStories", "derivation"],
+      "properties": {
+        "specRefs": {
+          "type": "array",
+          "minItems": 1,
+          "items": {
+            "type": "string",
+            "pattern": "^tasks/[A-Za-z0-9._/-]+\\.md(#[A-Za-z0-9._-]+)?$"
+          }
+        },
+        "functionalRequirements": {
+          "type": "array",
+          "items": { "type": "string", "pattern": "^FR-[0-9]+$" }
+        },
+        "userStories": {
+          "type": "array",
+          "items": { "type": "string", "pattern": "^US-[0-9]{3}$" }
+        },
+        "acceptanceRefs": {
+          "type": "array",
+          "items": { "type": "string", "pattern": "^US-[0-9]{3}\\.A[0-9]+$" }
+        },
+        "derivation": {
+          "$ref": "https://ontology.local/schema/common.schema.json#/$defs/NonEmptyString"
+        }
+      }
+    },
+    "AssertionValue": {
+      "description": "Exact decimal quantity, categorical string or boolean. Floats are deliberately not allowed so numeric boundaries keep exact semantics (D1/D3).",
+      "anyOf": [
+        { "$ref": "https://ontology.local/schema/common.schema.json#/$defs/DecimalQuantity" },
+        { "type": "string" },
+        { "type": "boolean" }
+      ]
+    },
+    "Assertion": {
+      "type": "object",
+      "description": "One version of a logical assertion as published into the append-only event stream (D3.1). correct/retract are new events scoped to an explicit validity interval; they never overwrite the historical payload.",
+      "additionalProperties": false,
+      "required": [
+        "assertionId",
+        "logicalAssertionId",
+        "recordedSeq",
+        "op",
+        "subject",
+        "predicate",
+        "validity",
+        "sourceRef"
+      ],
+      "properties": {
+        "assertionId": { "$ref": "https://ontology.local/schema/common.schema.json#/$defs/NonEmptyString" },
+        "logicalAssertionId": { "$ref": "https://ontology.local/schema/common.schema.json#/$defs/NonEmptyString" },
+        "recordedSeq": { "$ref": "https://ontology.local/schema/common.schema.json#/$defs/RevisionString" },
+        "op": { "type": "string", "enum": ["assert", "correct", "retract"] },
+        "subject": { "$ref": "https://ontology.local/schema/common.schema.json#/$defs/NonEmptyString" },
+        "predicate": { "$ref": "https://ontology.local/schema/common.schema.json#/$defs/NonEmptyString" },
+        "value": { "$ref": "#/$defs/AssertionValue" },
+        "validity": { "$ref": "https://ontology.local/schema/common.schema.json#/$defs/ValidityInterval" },
+        "sourceRef": { "$ref": "https://ontology.local/schema/common.schema.json#/$defs/SourceRef" },
+        "evidenceId": { "$ref": "https://ontology.local/schema/common.schema.json#/$defs/Uuid" }
+      }
+    },
+    "Alternative": {
+      "type": "object",
+      "description": "One equivalent source inside a premise group. Premises in the same group are OR alternatives; different groups are AND prerequisites (D5).",
+      "additionalProperties": false,
+      "required": ["alternativeId", "assertionId"],
+      "properties": {
+        "alternativeId": { "$ref": "https://ontology.local/schema/common.schema.json#/$defs/NonEmptyString" },
+        "assertionId": { "$ref": "https://ontology.local/schema/common.schema.json#/$defs/NonEmptyString" }
+      }
+    },
+    "PremiseGroup": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["groupId", "filter", "alternatives"],
+      "properties": {
+        "groupId": { "$ref": "https://ontology.local/schema/common.schema.json#/$defs/NonEmptyString" },
+        "filter": {
+          "description": "Canonical comparison applied to every alternative's assertion value. Reuses the published SemanticFilter shape instead of inventing a rule-AST dialect.",
+          "$ref": "https://ontology.local/schema/data.schema.json#/$defs/SemanticFilter"
+        },
+        "alternatives": {
+          "type": "array",
+          "minItems": 1,
+          "items": { "$ref": "#/$defs/Alternative" }
+        }
+      }
+    },
+    "Conclusion": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["propositionKey"],
+      "properties": {
+        "propositionKey": { "$ref": "https://ontology.local/schema/common.schema.json#/$defs/NonEmptyString" },
+        "predicate": { "$ref": "https://ontology.local/schema/common.schema.json#/$defs/NonEmptyString" },
+        "value": { "$ref": "#/$defs/AssertionValue" }
+      }
+    },
+    "Rule": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["ruleRef", "ruleId", "premiseGroups", "conclusion"],
+      "properties": {
+        "ruleRef": { "$ref": "https://ontology.local/schema/common.schema.json#/$defs/VersionRef" },
+        "ruleId": { "$ref": "https://ontology.local/schema/common.schema.json#/$defs/NonEmptyString" },
+        "premiseGroups": {
+          "type": "array",
+          "minItems": 1,
+          "items": { "$ref": "#/$defs/PremiseGroup" }
+        },
+        "conclusion": { "$ref": "#/$defs/Conclusion" }
+      }
+    },
+    "OperationStep": {
+      "type": "object",
+      "description": "Ordered operation sequence. publish/correct/retract append semantic events; evaluate_rule and read_projection are the observable reads a consumer must reproduce.",
+      "additionalProperties": false,
+      "required": ["stepId", "kind"],
+      "properties": {
+        "stepId": { "$ref": "https://ontology.local/schema/common.schema.json#/$defs/NonEmptyString" },
+        "kind": {
+          "type": "string",
+          "enum": [
+            "publish_assertion",
+            "correct_assertion",
+            "retract_assertion",
+            "evaluate_rule",
+            "read_projection"
+          ]
+        },
+        "assertionId": { "$ref": "https://ontology.local/schema/common.schema.json#/$defs/NonEmptyString" },
+        "ruleId": { "$ref": "https://ontology.local/schema/common.schema.json#/$defs/NonEmptyString" },
+        "asOfRecordedSeq": { "$ref": "https://ontology.local/schema/common.schema.json#/$defs/RevisionString" },
+        "validAt": { "$ref": "https://ontology.local/schema/common.schema.json#/$defs/Rfc3339UtcTimestamp" }
+      }
+    },
+    "SatisfiedBy": {
+      "type": "object",
+      "description": "Which alternatives of a premise group the expected conclusion rests on. The array length is a gold fact for this fixture, not a required proof count for any implementation.",
+      "additionalProperties": false,
+      "required": ["groupId", "alternativeIds"],
+      "properties": {
+        "groupId": { "$ref": "https://ontology.local/schema/common.schema.json#/$defs/NonEmptyString" },
+        "alternativeIds": {
+          "type": "array",
+          "minItems": 1,
+          "items": { "$ref": "https://ontology.local/schema/common.schema.json#/$defs/NonEmptyString" }
+        }
+      }
+    },
+    "ConclusionExpectation": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["propositionKey", "domainStatus"],
+      "properties": {
+        "propositionKey": { "$ref": "https://ontology.local/schema/common.schema.json#/$defs/NonEmptyString" },
+        "domainStatus": {
+          "description": "Canonical domain outcome. 'not_satisfied' from D5 is expressed as a known-false value; missing data is 'unknown' and must never be coerced to false.",
+          "$ref": "https://ontology.local/schema/common.schema.json#/$defs/DomainResultStatus"
+        },
+        "value": { "$ref": "#/$defs/AssertionValue" },
+        "satisfiedBy": {
+          "type": "array",
+          "items": { "$ref": "#/$defs/SatisfiedBy" }
+        },
+        "note": { "$ref": "https://ontology.local/schema/common.schema.json#/$defs/NonEmptyString" }
+      }
+    },
+    "ConflictExpectation": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["propositionKey", "assertionIds"],
+      "properties": {
+        "propositionKey": { "$ref": "https://ontology.local/schema/common.schema.json#/$defs/NonEmptyString" },
+        "assertionIds": {
+          "type": "array",
+          "minItems": 2,
+          "items": { "$ref": "https://ontology.local/schema/common.schema.json#/$defs/NonEmptyString" }
+        },
+        "note": { "$ref": "https://ontology.local/schema/common.schema.json#/$defs/NonEmptyString" }
+      }
+    },
+    "EvidenceCondition": {
+      "type": "object",
+      "description": "The evidence that must remain bound for the conclusion to be publishable/traceable (C3/C4, INV: evidence persistence failure cannot return a traceable success).",
+      "additionalProperties": false,
+      "required": ["evidenceId", "condition", "required"],
+      "properties": {
+        "evidenceId": { "$ref": "https://ontology.local/schema/common.schema.json#/$defs/Uuid" },
+        "condition": { "$ref": "https://ontology.local/schema/common.schema.json#/$defs/NonEmptyString" },
+        "required": { "type": "boolean" }
+      }
+    },
+    "ViewExpectation": {
+      "type": "object",
+      "description": "One bitemporal projection read. asOfRecordedSeq selects the system version, validAt selects the business instant (D3.1); the canonical ControlReadProjectionRequest carries both.",
+      "additionalProperties": false,
+      "required": ["viewId", "description", "request", "isCurrent", "conclusions"],
+      "properties": {
+        "viewId": { "$ref": "https://ontology.local/schema/common.schema.json#/$defs/NonEmptyString" },
+        "description": { "$ref": "https://ontology.local/schema/common.schema.json#/$defs/NonEmptyString" },
+        "request": {
+          "$ref": "https://ontology.local/schema/data.schema.json#/$defs/ControlReadProjectionRequest"
+        },
+        "isCurrent": { "type": "boolean" },
+        "conclusions": {
+          "type": "array",
+          "items": { "$ref": "#/$defs/ConclusionExpectation" }
+        },
+        "gaps": {
+          "type": "array",
+          "items": { "$ref": "https://ontology.local/schema/common.schema.json#/$defs/NonEmptyString" }
+        },
+        "conflicts": {
+          "type": "array",
+          "items": { "$ref": "#/$defs/ConflictExpectation" }
+        }
+      }
+    },
+    "Expected": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["views", "evidenceConditions"],
+      "properties": {
+        "views": {
+          "type": "array",
+          "minItems": 1,
+          "items": { "$ref": "#/$defs/ViewExpectation" }
+        },
+        "evidenceConditions": {
+          "type": "array",
+          "minItems": 1,
+          "items": { "$ref": "#/$defs/EvidenceCondition" }
+        }
+      }
+    }
+  }
+}

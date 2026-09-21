@@ -1,0 +1,272 @@
+{
+  "fixtureId": "unknown-conflict",
+  "scenarioKind": "unknown_conflict",
+  "title": "Unknown and conflict: missing data stays unknown and contradictory single-valued data is a conflict",
+  "provenance": {
+    "specRefs": [
+      "tasks/spec-v0.2/data-execution.md#D5",
+      "tasks/spec-industry-semantic-agent-v0.2.md#2.1"
+    ],
+    "functionalRequirements": ["FR-18", "FR-19"],
+    "userStories": ["US-016"],
+    "acceptanceRefs": ["US-016.A1"],
+    "derivation": "D5: an unfound value defaults to unknown, never false; domain constraints return unknown/conflict distinctly; a new fact that contradicts a single-valued judgement invalidates the previous single value. The capacity rule has no published assertion, so its conclusion is unknown. Two valid observations disagree on device.firmware_channel, so that proposition is conflict."
+  },
+  "notes": [
+    "rule.capacity-positive intentionally references assertionId 'assert-capacity-not-yet-published', which is absent from 'assertions': the rule predicate scope exists but no matching fact has been published, so the premise must evaluate to unknown. This is the D5 'unfound data stays unknown' case, not a broken reference."
+  ],
+  "scopeRef": {
+    "tenantId": "11111111-2222-4333-8444-555555555555",
+    "spaceId": "99999999-8888-4777-8666-555555555555"
+  },
+  "assertions": [
+    {
+      "assertionId": "assert-firmware-stable",
+      "logicalAssertionId": "la-firmware-channel",
+      "recordedSeq": "1",
+      "op": "assert",
+      "subject": "device.home-1.inverter",
+      "predicate": "device.firmware_channel",
+      "value": "stable",
+      "validity": { "validFrom": "2026-09-21T00:00:00Z", "validTo": "2026-09-22T00:00:00Z" },
+      "sourceRef": { "namespace": "ha-anker", "sourceId": "device_registry.firmware_channel" },
+      "evidenceId": "e0000000-0000-4000-8000-000000000030"
+    },
+    {
+      "assertionId": "assert-firmware-beta",
+      "logicalAssertionId": "la-firmware-channel",
+      "recordedSeq": "2",
+      "op": "assert",
+      "subject": "device.home-1.inverter",
+      "predicate": "device.firmware_channel",
+      "value": "beta",
+      "validity": { "validFrom": "2026-09-21T00:00:00Z", "validTo": "2026-09-22T00:00:00Z" },
+      "sourceRef": { "namespace": "ha-anker", "sourceId": "inverter_portal.firmware_channel" },
+      "evidenceId": "e0000000-0000-4000-8000-000000000031"
+    }
+  ],
+  "rules": [
+    {
+      "ruleRef": {
+        "id": "rule.capacity-positive",
+        "version": "1.0.0",
+        "digest": "sha256:cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc"
+      },
+      "ruleId": "rule.capacity-positive",
+      "premiseGroups": [
+        {
+          "groupId": "g-capacity",
+          "filter": { "fieldRef": "device.installed_capacity_kwh", "op": "gt", "values": ["0"] },
+          "alternatives": [
+            { "alternativeId": "alt-capacity", "assertionId": "assert-capacity-not-yet-published" }
+          ]
+        }
+      ],
+      "conclusion": {
+        "propositionKey": "device.installed_capacity_positive",
+        "predicate": "device.installed_capacity_positive",
+        "value": true
+      }
+    },
+    {
+      "ruleRef": {
+        "id": "rule.firmware-channel",
+        "version": "1.0.0",
+        "digest": "sha256:dddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddd"
+      },
+      "ruleId": "rule.firmware-channel",
+      "premiseGroups": [
+        {
+          "groupId": "g-firmware",
+          "filter": { "fieldRef": "device.firmware_channel", "op": "is_not_null", "values": [] },
+          "alternatives": [
+            { "alternativeId": "alt-fw-stable", "assertionId": "assert-firmware-stable" },
+            { "alternativeId": "alt-fw-beta", "assertionId": "assert-firmware-beta" }
+          ]
+        }
+      ],
+      "conclusion": {
+        "propositionKey": "device.firmware_channel",
+        "predicate": "device.firmware_channel"
+      }
+    }
+  ],
+  "evidence": [
+    {
+      "evidenceId": "e0000000-0000-4000-8000-000000000030",
+      "kind": "observation",
+      "scopeRef": {
+        "tenantId": "11111111-2222-4333-8444-555555555555",
+        "spaceId": "99999999-8888-4777-8666-555555555555"
+      },
+      "producedBy": {
+        "componentRef": {
+          "id": "data-backend.duckdb",
+          "version": "0.1.0",
+          "digest": "sha256:bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb"
+        },
+        "runId": "3f1a2b4c-5d6e-4f70-8a9b-0c1d2e3f4a5b"
+      },
+      "observedAt": "2026-09-21T12:00:00Z",
+      "recordedSeq": "1",
+      "validity": { "validFrom": "2026-09-21T00:00:00Z", "validTo": "2026-09-22T00:00:00Z" },
+      "sourceSnapshots": [
+        {
+          "sourceRef": { "namespace": "ha-anker", "sourceId": "device_registry.firmware_channel" },
+          "schemaVersion": "2026-09-01",
+          "readAt": "2026-09-21T12:00:00Z",
+          "consistency": "read_time",
+          "watermark": { "kind": "sequence", "value": "71" },
+          "resultDigest": "sha256:6060606060606060606060606060606060606060606060606060606060606060"
+        }
+      ],
+      "resultDigest": "sha256:6060606060606060606060606060606060606060606060606060606060606060",
+      "integrity": {
+        "algorithm": "sha256",
+        "digest": "sha256:6060606060606060606060606060606060606060606060606060606060606060",
+        "verifiedAt": "2026-09-21T12:00:00Z"
+      },
+      "dependencies": [],
+      "dataMode": "observed"
+    },
+    {
+      "evidenceId": "e0000000-0000-4000-8000-000000000031",
+      "kind": "observation",
+      "scopeRef": {
+        "tenantId": "11111111-2222-4333-8444-555555555555",
+        "spaceId": "99999999-8888-4777-8666-555555555555"
+      },
+      "producedBy": {
+        "componentRef": {
+          "id": "data-backend.duckdb",
+          "version": "0.1.0",
+          "digest": "sha256:bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb"
+        },
+        "runId": "3f1a2b4c-5d6e-4f70-8a9b-0c1d2e3f4a5b"
+      },
+      "observedAt": "2026-09-21T12:00:00Z",
+      "recordedSeq": "2",
+      "validity": { "validFrom": "2026-09-21T00:00:00Z", "validTo": "2026-09-22T00:00:00Z" },
+      "sourceSnapshots": [
+        {
+          "sourceRef": { "namespace": "ha-anker", "sourceId": "inverter_portal.firmware_channel" },
+          "schemaVersion": "2026-09-01",
+          "readAt": "2026-09-21T12:00:00Z",
+          "consistency": "read_time",
+          "watermark": { "kind": "sequence", "value": "72" },
+          "resultDigest": "sha256:7070707070707070707070707070707070707070707070707070707070707070"
+        }
+      ],
+      "resultDigest": "sha256:7070707070707070707070707070707070707070707070707070707070707070",
+      "integrity": {
+        "algorithm": "sha256",
+        "digest": "sha256:7070707070707070707070707070707070707070707070707070707070707070",
+        "verifiedAt": "2026-09-21T12:00:00Z"
+      },
+      "dependencies": [
+        {
+          "evidenceRef": {
+            "id": "e0000000-0000-4000-8000-000000000030",
+            "version": "1.0.0",
+            "digest": "sha256:6060606060606060606060606060606060606060606060606060606060606060",
+            "kind": "evidence"
+          },
+          "relation": "contradicts",
+          "direction": "inbound"
+        }
+      ],
+      "dataMode": "observed",
+      "limitations": ["independent source contradicts the earlier firmware channel"]
+    }
+  ],
+  "operations": [
+    {
+      "stepId": "s1",
+      "kind": "publish_assertion",
+      "assertionId": "assert-firmware-stable",
+      "asOfRecordedSeq": "1"
+    },
+    {
+      "stepId": "s2",
+      "kind": "publish_assertion",
+      "assertionId": "assert-firmware-beta",
+      "asOfRecordedSeq": "2"
+    },
+    {
+      "stepId": "s3",
+      "kind": "evaluate_rule",
+      "ruleId": "rule.capacity-positive",
+      "asOfRecordedSeq": "2",
+      "validAt": "2026-09-21T12:00:00Z"
+    },
+    {
+      "stepId": "s4",
+      "kind": "evaluate_rule",
+      "ruleId": "rule.firmware-channel",
+      "asOfRecordedSeq": "2",
+      "validAt": "2026-09-21T12:00:00Z"
+    },
+    {
+      "stepId": "s5",
+      "kind": "read_projection",
+      "asOfRecordedSeq": "2",
+      "validAt": "2026-09-21T12:00:00Z"
+    }
+  ],
+  "expected": {
+    "views": [
+      {
+        "viewId": "current",
+        "description": "One proposition has no data (unknown) and one has contradictory data (conflict).",
+        "request": {
+          "scopeRef": {
+            "tenantId": "11111111-2222-4333-8444-555555555555",
+            "spaceId": "99999999-8888-4777-8666-555555555555"
+          },
+          "projectionRef": {
+            "id": "projection.semantic",
+            "version": "1.0.0",
+            "digest": "sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
+          },
+          "asOfRecordedSeq": "2",
+          "validAt": "2026-09-21T12:00:00Z"
+        },
+        "isCurrent": true,
+        "conclusions": [
+          {
+            "propositionKey": "device.installed_capacity_positive",
+            "domainStatus": "unknown",
+            "note": "The rule predicate has no published assertion; unfound data is unknown, never false."
+          },
+          {
+            "propositionKey": "device.firmware_channel",
+            "domainStatus": "conflict",
+            "note": "Two valid single-valued observations disagree; the previous single judgement is invalidated."
+          }
+        ],
+        "gaps": [
+          "device.installed_capacity_positive: no observation matches the rule predicate scope; keep it unknown."
+        ],
+        "conflicts": [
+          {
+            "propositionKey": "device.firmware_channel",
+            "assertionIds": ["assert-firmware-stable", "assert-firmware-beta"],
+            "note": "Single-valued predicate with two contradictory sources."
+          }
+        ]
+      }
+    ],
+    "evidenceConditions": [
+      {
+        "evidenceId": "e0000000-0000-4000-8000-000000000030",
+        "condition": "Contradicted observation is retained so the conflict can be explained.",
+        "required": true
+      },
+      {
+        "evidenceId": "e0000000-0000-4000-8000-000000000031",
+        "condition": "Contradicting observation records its source snapshot and the contradicts dependency.",
+        "required": true
+      }
+    ]
+  }
+}
