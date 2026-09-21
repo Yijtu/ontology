@@ -9,6 +9,7 @@ export { PostgresProfileStore } from './profile-store'
 export { PostgresSourceStore } from './source-store'
 export { PostgresRunStore } from './run-store'
 export { PostgresBudgetLedgerStore } from './budget-ledger-store'
+export { PostgresJobStore } from './job-store'
 export { ControlPostgresRepository } from './repository'
 export type {
   ControlOperationContext,
