@@ -30,6 +30,11 @@ export {
   createPostgresJobStore,
 } from './composition/job-service'
 export type { JobServiceComposition, JobServiceCompositionOptions } from './composition/job-service'
+export { createBlobArtifactWriter, createToolGatewayComposition } from './composition/tool-gateway'
+export type {
+  ToolGatewayComposition,
+  ToolGatewayCompositionOptions,
+} from './composition/tool-gateway'
 export { createApiServer, createJobApi, createRunApi } from './http/app'
 export type { ApiServerOptions } from './http/app'
 export { registerRunRoutes } from './http/server'

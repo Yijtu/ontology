@@ -26,6 +26,7 @@ import type {
   DocumentSearchResponse,
   GenerationEvent,
   GenerationRequest,
+  NonEmptyString,
   ProjectionState,
   ReadSpanRequest,
   ReadSpanResponse,
@@ -35,6 +36,7 @@ import type {
   RuntimeEvent,
   RuntimeInput,
   ScopedArtifactReaderRequest,
+  ScopeRef,
   StructuredQueryExecuteRequest,
   StructuredQueryExecuteResponse,
   StructuredQueryValidateRequest,
@@ -186,6 +188,27 @@ export interface ComputePort {
 
 export interface ScopedArtifactReader {
   read(request: ScopedArtifactReaderRequest, ctx: ToolContext): Promise<Uint8Array>
+}
+
+/**
+ * Write side of the immutable artifact store (ADR-08, C3.1).
+ *
+ * `BlobPort.putImmutable` only declares an already-staged digest, so a service that
+ * must archive bounded result bytes (a tool result, an evidence payload) needs a port
+ * that accepts the content. The adapter stages, verifies and publishes in that order
+ * and derives the object key from the content digest, so a retry of the same bytes is
+ * idempotent. The service receives this capability by injection and never a driver,
+ * a connection string or a filesystem handle.
+ */
+export interface ArtifactWriteRequest {
+  readonly scopeRef: ScopeRef
+  readonly content: Uint8Array
+  readonly mediaType: NonEmptyString
+  readonly tenantAuthorizedRef?: NonEmptyString
+}
+
+export interface ImmutableArtifactWriter {
+  putBytes(request: ArtifactWriteRequest, ctx: ToolContext): Promise<BlobPutImmutableResponse>
 }
 
 /**
