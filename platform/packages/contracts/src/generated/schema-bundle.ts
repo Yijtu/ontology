@@ -5196,6 +5196,150 @@ export const SCHEMA_DOCUMENTS: readonly JsonSchemaObject[] = [
           }
         ]
       },
+      "PlanFailureBehaviour": {
+        "title": "PlanFailureBehaviour",
+        "description": "What a step's failure does to the rest of the plan. 'abort' fails the run; 'continue' records the failed step as a deficit, never runs a dependent step on a failed predecessor, and keeps executing independent steps.",
+        "type": "string",
+        "enum": [
+          "abort",
+          "continue"
+        ]
+      },
+      "PlanLiteralArgument": {
+        "title": "PlanLiteralArgument",
+        "description": "A fixed, plan-authored value. It is never derived from the model at run time.",
+        "type": "object",
+        "additionalProperties": false,
+        "required": [
+          "kind",
+          "value"
+        ],
+        "properties": {
+          "kind": {
+            "const": "literal"
+          },
+          "value": {}
+        }
+      },
+      "PlanPredecessorArgument": {
+        "title": "PlanPredecessorArgument",
+        "description": "Binds an argument to the actual output of a predecessor step. 'pointer' is an RFC 6901 JSON Pointer into that step's ToolResult.inlineData; the runtime never reads a result body through a store, only the bounded inline payload the gateway returned.",
+        "type": "object",
+        "additionalProperties": false,
+        "required": [
+          "kind",
+          "stepId",
+          "pointer"
+        ],
+        "properties": {
+          "kind": {
+            "const": "predecessor"
+          },
+          "stepId": {
+            "$ref": "./common.schema.json#/$defs/NonEmptyString"
+          },
+          "pointer": {
+            "description": "RFC 6901 JSON Pointer. The empty pointer selects the whole predecessor inline payload.",
+            "type": "string",
+            "pattern": "^(|(?:/(?:[^~/]|~0|~1)*)+)$",
+            "maxLength": 1024
+          }
+        }
+      },
+      "PlanArgumentSource": {
+        "title": "PlanArgumentSource",
+        "oneOf": [
+          {
+            "$ref": "#/$defs/PlanLiteralArgument"
+          },
+          {
+            "$ref": "#/$defs/PlanPredecessorArgument"
+          }
+        ]
+      },
+      "PlanArgument": {
+        "title": "PlanArgument",
+        "description": "One named tool argument. A required argument with no resolvable source makes the runtime return a typed clarification instead of guessing or defaulting a value.",
+        "type": "object",
+        "additionalProperties": false,
+        "required": [
+          "name"
+        ],
+        "properties": {
+          "name": {
+            "$ref": "./common.schema.json#/$defs/NonEmptyString"
+          },
+          "required": {
+            "type": "boolean"
+          },
+          "source": {
+            "$ref": "#/$defs/PlanArgumentSource"
+          }
+        }
+      },
+      "PlanStep": {
+        "title": "PlanStep",
+        "description": "One registered plan node. It references a whitelisted toolId, typed args (literal or predecessor-output bindings), declared dependencies and a failure behaviour. readOnly marks a node that may run concurrently with other independent read-only nodes.",
+        "type": "object",
+        "additionalProperties": false,
+        "required": [
+          "stepId",
+          "toolId",
+          "readOnly",
+          "args",
+          "dependsOn",
+          "failureBehaviour"
+        ],
+        "properties": {
+          "stepId": {
+            "$ref": "./common.schema.json#/$defs/NonEmptyString"
+          },
+          "toolId": {
+            "$ref": "./tools.schema.json#/$defs/ToolId"
+          },
+          "readOnly": {
+            "type": "boolean"
+          },
+          "args": {
+            "type": "array",
+            "items": {
+              "$ref": "#/$defs/PlanArgument"
+            }
+          },
+          "dependsOn": {
+            "type": "array",
+            "items": {
+              "$ref": "./common.schema.json#/$defs/NonEmptyString"
+            },
+            "uniqueItems": true
+          },
+          "failureBehaviour": {
+            "$ref": "#/$defs/PlanFailureBehaviour"
+          }
+        }
+      },
+      "PlanSpec": {
+        "title": "PlanSpec",
+        "description": "A published template plan. It is already registered and validated before a run uses it; the runtime executes it through the injected gateway and never opens a database, SDK or filesystem.",
+        "type": "object",
+        "additionalProperties": false,
+        "required": [
+          "planRef",
+          "steps"
+        ],
+        "properties": {
+          "planRef": {
+            "$ref": "./common.schema.json#/$defs/ResourceRef"
+          },
+          "steps": {
+            "type": "array",
+            "items": {
+              "$ref": "#/$defs/PlanStep"
+            },
+            "minItems": 1
+          }
+        }
+      },
       "RuntimeCancelReceipt": {
         "title": "RuntimeCancelReceipt",
         "type": "object",

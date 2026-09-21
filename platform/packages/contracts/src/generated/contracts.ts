@@ -552,6 +552,18 @@ export type RuntimeEvent =
   | CancelledEvent
   | FailedEvent
 /**
+ * What a step's failure does to the rest of the plan. 'abort' fails the run; 'continue' records the failed step as a deficit, never runs a dependent step on a failed predecessor, and keeps executing independent steps.
+ *
+ * This interface was referenced by `OntologyContracts`'s JSON-Schema
+ * via the `definition` "PlanFailureBehaviour".
+ */
+export type PlanFailureBehaviour = 'abort' | 'continue'
+/**
+ * This interface was referenced by `OntologyContracts`'s JSON-Schema
+ * via the `definition` "PlanArgumentSource".
+ */
+export type PlanArgumentSource = PlanLiteralArgument | PlanPredecessorArgument
+/**
  * Controller-owned services that are NOT model-selectable tools.
  *
  * This interface was referenced by `OntologyContracts`'s JSON-Schema
@@ -2392,6 +2404,68 @@ export interface FailedEvent {
   sequence: number
   occurredAt: Rfc3339UtcTimestamp
   error: PlatformError
+}
+/**
+ * A fixed, plan-authored value. It is never derived from the model at run time.
+ *
+ * This interface was referenced by `OntologyContracts`'s JSON-Schema
+ * via the `definition` "PlanLiteralArgument".
+ */
+export interface PlanLiteralArgument {
+  kind: 'literal'
+  value: unknown
+}
+/**
+ * Binds an argument to the actual output of a predecessor step. 'pointer' is an RFC 6901 JSON Pointer into that step's ToolResult.inlineData; the runtime never reads a result body through a store, only the bounded inline payload the gateway returned.
+ *
+ * This interface was referenced by `OntologyContracts`'s JSON-Schema
+ * via the `definition` "PlanPredecessorArgument".
+ */
+export interface PlanPredecessorArgument {
+  kind: 'predecessor'
+  stepId: NonEmptyString
+  /**
+   * RFC 6901 JSON Pointer. The empty pointer selects the whole predecessor inline payload.
+   */
+  pointer: string
+}
+/**
+ * One named tool argument. A required argument with no resolvable source makes the runtime return a typed clarification instead of guessing or defaulting a value.
+ *
+ * This interface was referenced by `OntologyContracts`'s JSON-Schema
+ * via the `definition` "PlanArgument".
+ */
+export interface PlanArgument {
+  name: NonEmptyString
+  required?: boolean
+  source?: PlanArgumentSource
+}
+/**
+ * One registered plan node. It references a whitelisted toolId, typed args (literal or predecessor-output bindings), declared dependencies and a failure behaviour. readOnly marks a node that may run concurrently with other independent read-only nodes.
+ *
+ * This interface was referenced by `OntologyContracts`'s JSON-Schema
+ * via the `definition` "PlanStep".
+ */
+export interface PlanStep {
+  stepId: NonEmptyString
+  toolId: ToolId
+  readOnly: boolean
+  args: PlanArgument[]
+  dependsOn: NonEmptyString[]
+  failureBehaviour: PlanFailureBehaviour
+}
+/**
+ * A published template plan. It is already registered and validated before a run uses it; the runtime executes it through the injected gateway and never opens a database, SDK or filesystem.
+ *
+ * This interface was referenced by `OntologyContracts`'s JSON-Schema
+ * via the `definition` "PlanSpec".
+ */
+export interface PlanSpec {
+  planRef: ResourceRef
+  /**
+   * @minItems 1
+   */
+  steps: PlanStep[]
 }
 /**
  * This interface was referenced by `OntologyContracts`'s JSON-Schema

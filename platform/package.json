@@ -23,6 +23,7 @@
     "@ontology/adapter-extraction-document": "workspace:*",
     "@ontology/adapter-model-company": "workspace:*",
     "@ontology/adapter-model-jev": "workspace:*",
+    "@ontology/adapter-runtime-template": "workspace:*",
     "@ontology/adapter-transport-local": "workspace:*",
     "@ontology/app-api": "workspace:*",
     "@ontology/app-web": "workspace:*",

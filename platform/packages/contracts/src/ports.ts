@@ -66,8 +66,14 @@ export interface RuntimeAdapter {
 /**
  * Host-injected restricted closure. It is built in process from real adapters and is
  * never deserialized from model-serializable parameters.
+ *
+ * `ctx` is the host-minted trusted tool context. Every port method takes it, and it
+ * cannot be produced by JSON.parse of model output, so it belongs to the injected
+ * closure rather than to `RuntimeInput`. It is not one of the six C2 capability ports;
+ * it is the server-established identity/scope/deadline the runtime passes through.
  */
 export interface RuntimeDependencies {
+  readonly ctx: ToolContext
   readonly gateway: ToolGateway
   readonly generation: GenerationPort
   readonly decision: DecisionPort
