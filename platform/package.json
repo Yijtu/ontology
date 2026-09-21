@@ -16,11 +16,14 @@
     "verify": "pnpm run lint && pnpm run typecheck && pnpm run test"
   },
   "devDependencies": {
+    "@ontology/adapter-control-postgres": "workspace:*",
     "@ontology/contracts": "workspace:*",
     "@types/node": "^26.6.2",
+    "@types/pg": "^8.15.5",
     "ajv": "^8.20.0",
     "ajv-formats": "^3.0.1",
     "eslint": "^10.11.0",
+    "pg": "^8.16.3",
     "typescript": "^5.9.3",
     "typescript-eslint": "^8.70.0",
     "vitest": "^5.0.1"
