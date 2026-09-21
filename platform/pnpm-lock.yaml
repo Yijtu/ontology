@@ -17,6 +17,9 @@ importers:
       '@ontology/adapter-extraction-document':
         specifier: workspace:*
         version: link:packages/adapters/extraction-document
+      '@ontology/adapter-model-company':
+        specifier: workspace:*
+        version: link:packages/adapters/model-company
       '@ontology/app-api':
         specifier: workspace:*
         version: link:apps/api
