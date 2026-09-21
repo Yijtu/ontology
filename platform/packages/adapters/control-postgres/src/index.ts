@@ -8,6 +8,7 @@ export { PostgresComponentRegistryStore } from './component-registry-store'
 export { PostgresProfileStore } from './profile-store'
 export { PostgresSourceStore } from './source-store'
 export { PostgresRunStore } from './run-store'
+export { PostgresBudgetLedgerStore } from './budget-ledger-store'
 export { ControlPostgresRepository } from './repository'
 export type {
   ControlOperationContext,
