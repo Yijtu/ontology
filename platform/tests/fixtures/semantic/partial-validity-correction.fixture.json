@@ -1,0 +1,293 @@
+{
+  "fixtureId": "partial-validity-correction",
+  "scenarioKind": "partial_validity_correction",
+  "title": "Partial-validity correction: a correction scoped to one interval must not erase the other intervals",
+  "provenance": {
+    "specRefs": ["tasks/spec-v0.2/data-execution.md#D3", "tasks/prd-industry-semantic-agent-v0.2.md#US-017"],
+    "functionalRequirements": ["FR-19", "FR-20"],
+    "userStories": ["US-017"],
+    "acceptanceRefs": ["US-017.A2"],
+    "derivation": "D3.1: a correction/retraction is a new event scoped to an explicit validity interval and never overwrites the historical payload; a partial-interval correction does not erase the other intervals and projections may split. The correction covers only [12:00,18:00), so validAt before 12:00 and at/after 18:00 still resolve the original value, and the pre-correction recorded version never shows the correction."
+  },
+  "scopeRef": {
+    "tenantId": "11111111-2222-4333-8444-555555555555",
+    "spaceId": "99999999-8888-4777-8666-555555555555"
+  },
+  "assertions": [
+    {
+      "assertionId": "assert-inverter-mode",
+      "logicalAssertionId": "la-inverter-mode",
+      "recordedSeq": "1",
+      "op": "assert",
+      "subject": "device.home-1.inverter",
+      "predicate": "inverter.mode",
+      "value": "self_consumption",
+      "validity": { "validFrom": "2026-09-21T00:00:00Z", "validTo": "2026-09-22T00:00:00Z" },
+      "sourceRef": { "namespace": "documents", "sourceId": "manual.inverter.v1" },
+      "evidenceId": "e0000000-0000-4000-8000-000000000050"
+    },
+    {
+      "assertionId": "correct-inverter-mode",
+      "logicalAssertionId": "la-inverter-mode",
+      "recordedSeq": "2",
+      "op": "correct",
+      "subject": "device.home-1.inverter",
+      "predicate": "inverter.mode",
+      "value": "reserve_first",
+      "validity": { "validFrom": "2026-09-21T12:00:00Z", "validTo": "2026-09-21T18:00:00Z" },
+      "sourceRef": { "namespace": "documents", "sourceId": "manual.inverter.v2" },
+      "evidenceId": "e0000000-0000-4000-8000-000000000051"
+    }
+  ],
+  "rules": [],
+  "evidence": [
+    {
+      "evidenceId": "e0000000-0000-4000-8000-000000000050",
+      "kind": "document_span",
+      "scopeRef": {
+        "tenantId": "11111111-2222-4333-8444-555555555555",
+        "spaceId": "99999999-8888-4777-8666-555555555555"
+      },
+      "producedBy": {
+        "componentRef": {
+          "id": "extraction-document",
+          "version": "0.1.0",
+          "digest": "sha256:abababababababababababababababababababababababababababababababab"
+        }
+      },
+      "observedAt": "2026-09-21T00:00:00Z",
+      "recordedSeq": "1",
+      "validity": { "validFrom": "2026-09-21T00:00:00Z", "validTo": "2026-09-22T00:00:00Z" },
+      "sourceSnapshots": [
+        {
+          "sourceRef": { "namespace": "documents", "sourceId": "manual.inverter.v1" },
+          "schemaVersion": "2026-09-01",
+          "readAt": "2026-09-21T00:00:00Z",
+          "consistency": "immutable",
+          "resultDigest": "sha256:a0a0a0a0a0a0a0a0a0a0a0a0a0a0a0a0a0a0a0a0a0a0a0a0a0a0a0a0a0a0a0a0"
+        }
+      ],
+      "resultDigest": "sha256:a0a0a0a0a0a0a0a0a0a0a0a0a0a0a0a0a0a0a0a0a0a0a0a0a0a0a0a0a0a0a0a0",
+      "integrity": {
+        "algorithm": "sha256",
+        "digest": "sha256:a0a0a0a0a0a0a0a0a0a0a0a0a0a0a0a0a0a0a0a0a0a0a0a0a0a0a0a0a0a0a0a0",
+        "verifiedAt": "2026-09-21T00:00:00Z"
+      },
+      "dependencies": [],
+      "dataMode": "observed"
+    },
+    {
+      "evidenceId": "e0000000-0000-4000-8000-000000000051",
+      "kind": "document_span",
+      "scopeRef": {
+        "tenantId": "11111111-2222-4333-8444-555555555555",
+        "spaceId": "99999999-8888-4777-8666-555555555555"
+      },
+      "producedBy": {
+        "componentRef": {
+          "id": "extraction-document",
+          "version": "0.1.0",
+          "digest": "sha256:abababababababababababababababababababababababababababababababab"
+        }
+      },
+      "observedAt": "2026-09-21T09:00:00Z",
+      "recordedSeq": "2",
+      "validity": { "validFrom": "2026-09-21T12:00:00Z", "validTo": "2026-09-21T18:00:00Z" },
+      "sourceSnapshots": [
+        {
+          "sourceRef": { "namespace": "documents", "sourceId": "manual.inverter.v2" },
+          "schemaVersion": "2026-09-01",
+          "readAt": "2026-09-21T09:00:00Z",
+          "consistency": "immutable",
+          "resultDigest": "sha256:b0b0b0b0b0b0b0b0b0b0b0b0b0b0b0b0b0b0b0b0b0b0b0b0b0b0b0b0b0b0b0b0"
+        }
+      ],
+      "resultDigest": "sha256:b0b0b0b0b0b0b0b0b0b0b0b0b0b0b0b0b0b0b0b0b0b0b0b0b0b0b0b0b0b0b0b0",
+      "integrity": {
+        "algorithm": "sha256",
+        "digest": "sha256:b0b0b0b0b0b0b0b0b0b0b0b0b0b0b0b0b0b0b0b0b0b0b0b0b0b0b0b0b0b0b0b0",
+        "verifiedAt": "2026-09-21T09:00:00Z"
+      },
+      "dependencies": [
+        {
+          "evidenceRef": {
+            "id": "e0000000-0000-4000-8000-000000000050",
+            "version": "1.0.0",
+            "digest": "sha256:a0a0a0a0a0a0a0a0a0a0a0a0a0a0a0a0a0a0a0a0a0a0a0a0a0a0a0a0a0a0a0a0",
+            "kind": "evidence"
+          },
+          "relation": "corrects",
+          "direction": "inbound"
+        }
+      ],
+      "dataMode": "observed",
+      "limitations": ["correction applies only to the stated validity interval"]
+    }
+  ],
+  "operations": [
+    {
+      "stepId": "s1",
+      "kind": "publish_assertion",
+      "assertionId": "assert-inverter-mode",
+      "asOfRecordedSeq": "1"
+    },
+    {
+      "stepId": "s2",
+      "kind": "correct_assertion",
+      "assertionId": "correct-inverter-mode",
+      "asOfRecordedSeq": "2"
+    },
+    {
+      "stepId": "s3",
+      "kind": "read_projection",
+      "asOfRecordedSeq": "2",
+      "validAt": "2026-09-21T06:00:00Z"
+    },
+    {
+      "stepId": "s4",
+      "kind": "read_projection",
+      "asOfRecordedSeq": "2",
+      "validAt": "2026-09-21T15:00:00Z"
+    },
+    {
+      "stepId": "s5",
+      "kind": "read_projection",
+      "asOfRecordedSeq": "2",
+      "validAt": "2026-09-21T20:00:00Z"
+    },
+    {
+      "stepId": "s6",
+      "kind": "read_projection",
+      "asOfRecordedSeq": "1",
+      "validAt": "2026-09-21T15:00:00Z"
+    }
+  ],
+  "expected": {
+    "views": [
+      {
+        "viewId": "before-correction-window",
+        "description": "Before the corrected interval the original value still applies.",
+        "request": {
+          "scopeRef": {
+            "tenantId": "11111111-2222-4333-8444-555555555555",
+            "spaceId": "99999999-8888-4777-8666-555555555555"
+          },
+          "projectionRef": {
+            "id": "projection.semantic",
+            "version": "1.0.0",
+            "digest": "sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
+          },
+          "asOfRecordedSeq": "2",
+          "validAt": "2026-09-21T06:00:00Z"
+        },
+        "isCurrent": false,
+        "conclusions": [
+          {
+            "propositionKey": "inverter.mode",
+            "domainStatus": "known",
+            "value": "self_consumption",
+            "note": "The correction interval starts at 12:00, so 06:00 resolves the original version."
+          }
+        ],
+        "gaps": [],
+        "conflicts": []
+      },
+      {
+        "viewId": "current",
+        "description": "Inside the corrected interval the correction is the current value.",
+        "request": {
+          "scopeRef": {
+            "tenantId": "11111111-2222-4333-8444-555555555555",
+            "spaceId": "99999999-8888-4777-8666-555555555555"
+          },
+          "projectionRef": {
+            "id": "projection.semantic",
+            "version": "1.0.0",
+            "digest": "sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
+          },
+          "asOfRecordedSeq": "2",
+          "validAt": "2026-09-21T15:00:00Z"
+        },
+        "isCurrent": true,
+        "conclusions": [
+          {
+            "propositionKey": "inverter.mode",
+            "domainStatus": "known",
+            "value": "reserve_first",
+            "note": "Latest correction covering validAt 15:00 wins inside the selected recorded version."
+          }
+        ],
+        "gaps": [],
+        "conflicts": []
+      },
+      {
+        "viewId": "after-correction-window",
+        "description": "At and after the corrected interval's upper bound the original value applies again.",
+        "request": {
+          "scopeRef": {
+            "tenantId": "11111111-2222-4333-8444-555555555555",
+            "spaceId": "99999999-8888-4777-8666-555555555555"
+          },
+          "projectionRef": {
+            "id": "projection.semantic",
+            "version": "1.0.0",
+            "digest": "sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
+          },
+          "asOfRecordedSeq": "2",
+          "validAt": "2026-09-21T20:00:00Z"
+        },
+        "isCurrent": false,
+        "conclusions": [
+          {
+            "propositionKey": "inverter.mode",
+            "domainStatus": "known",
+            "value": "self_consumption",
+            "note": "Partial correction does not erase the other intervals (D3.1)."
+          }
+        ],
+        "gaps": [],
+        "conflicts": []
+      },
+      {
+        "viewId": "old-recorded-version",
+        "description": "A recorded version before the correction never sees it, even inside the later-corrected interval.",
+        "request": {
+          "scopeRef": {
+            "tenantId": "11111111-2222-4333-8444-555555555555",
+            "spaceId": "99999999-8888-4777-8666-555555555555"
+          },
+          "projectionRef": {
+            "id": "projection.semantic",
+            "version": "1.0.0",
+            "digest": "sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
+          },
+          "asOfRecordedSeq": "1",
+          "validAt": "2026-09-21T15:00:00Z"
+        },
+        "isCurrent": false,
+        "conclusions": [
+          {
+            "propositionKey": "inverter.mode",
+            "domainStatus": "known",
+            "value": "self_consumption",
+            "note": "asOfRecordedSeq 1 predates the correction event."
+          }
+        ],
+        "gaps": [],
+        "conflicts": []
+      }
+    ],
+    "evidenceConditions": [
+      {
+        "evidenceId": "e0000000-0000-4000-8000-000000000050",
+        "condition": "Original document evidence is preserved unchanged after the correction.",
+        "required": true
+      },
+      {
+        "evidenceId": "e0000000-0000-4000-8000-000000000051",
+        "condition": "Correction evidence records the corrects dependency and its own validity interval.",
+        "required": true
+      }
+    ]
+  }
+}

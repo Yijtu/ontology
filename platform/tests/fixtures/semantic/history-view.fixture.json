@@ -1,0 +1,437 @@
+{
+  "fixtureId": "history-view",
+  "scenarioKind": "history_view",
+  "title": "Historical knowledge views: asOfRecordedSeq and validAt select different system and business versions",
+  "provenance": {
+    "specRefs": ["tasks/spec-v0.2/data-execution.md#D3", "tasks/prd-industry-semantic-agent-v0.2.md#US-017"],
+    "functionalRequirements": ["FR-19", "FR-20"],
+    "userStories": ["US-017"],
+    "acceptanceRefs": ["US-017.A2"],
+    "derivation": "D3.1: asOfRecordedSeq plus validAt together decide the view; an old recorded version must not read aliases/rules/sources learned later, and a retraction tombstone means the interval has no current support while history stays append-only. This fixture contrasts four (asOfRecordedSeq, validAt) pairs over one tariff correction and one alias retraction."
+  },
+  "scopeRef": {
+    "tenantId": "11111111-2222-4333-8444-555555555555",
+    "spaceId": "99999999-8888-4777-8666-555555555555"
+  },
+  "assertions": [
+    {
+      "assertionId": "assert-tariff-flat",
+      "logicalAssertionId": "la-tariff-plan",
+      "recordedSeq": "1",
+      "op": "assert",
+      "subject": "site.home-1.tariff",
+      "predicate": "tariff.plan",
+      "value": "flat",
+      "validity": { "validFrom": "2026-09-21T00:00:00Z", "validTo": "2026-10-21T00:00:00Z" },
+      "sourceRef": { "namespace": "documents", "sourceId": "tariff.schedule.v1" },
+      "evidenceId": "e0000000-0000-4000-8000-000000000060"
+    },
+    {
+      "assertionId": "assert-alias-battery",
+      "logicalAssertionId": "la-device-alias",
+      "recordedSeq": "2",
+      "op": "assert",
+      "subject": "device.home-1.battery",
+      "predicate": "device.alias",
+      "value": "Battery-A",
+      "validity": { "validFrom": "2026-09-21T00:00:00Z", "validTo": "2026-10-21T00:00:00Z" },
+      "sourceRef": { "namespace": "ha-anker", "sourceId": "device_registry.alias" },
+      "evidenceId": "e0000000-0000-4000-8000-000000000061"
+    },
+    {
+      "assertionId": "correct-tariff-tou",
+      "logicalAssertionId": "la-tariff-plan",
+      "recordedSeq": "3",
+      "op": "correct",
+      "subject": "site.home-1.tariff",
+      "predicate": "tariff.plan",
+      "value": "tou",
+      "validity": { "validFrom": "2026-10-01T00:00:00Z", "validTo": "2026-10-11T00:00:00Z" },
+      "sourceRef": { "namespace": "documents", "sourceId": "tariff.schedule.v2" },
+      "evidenceId": "e0000000-0000-4000-8000-000000000062"
+    },
+    {
+      "assertionId": "retract-alias-battery",
+      "logicalAssertionId": "la-device-alias",
+      "recordedSeq": "4",
+      "op": "retract",
+      "subject": "device.home-1.battery",
+      "predicate": "device.alias",
+      "validity": { "validFrom": "2026-09-21T00:00:00Z", "validTo": "2026-10-21T00:00:00Z" },
+      "sourceRef": { "namespace": "ha-anker", "sourceId": "device_registry.alias" }
+    }
+  ],
+  "rules": [],
+  "evidence": [
+    {
+      "evidenceId": "e0000000-0000-4000-8000-000000000060",
+      "kind": "document_span",
+      "scopeRef": {
+        "tenantId": "11111111-2222-4333-8444-555555555555",
+        "spaceId": "99999999-8888-4777-8666-555555555555"
+      },
+      "producedBy": {
+        "componentRef": {
+          "id": "extraction-document",
+          "version": "0.1.0",
+          "digest": "sha256:abababababababababababababababababababababababababababababababab"
+        }
+      },
+      "observedAt": "2026-09-21T00:00:00Z",
+      "recordedSeq": "1",
+      "validity": { "validFrom": "2026-09-21T00:00:00Z", "validTo": "2026-10-21T00:00:00Z" },
+      "sourceSnapshots": [
+        {
+          "sourceRef": { "namespace": "documents", "sourceId": "tariff.schedule.v1" },
+          "schemaVersion": "2026-09-01",
+          "readAt": "2026-09-21T00:00:00Z",
+          "consistency": "immutable",
+          "resultDigest": "sha256:c0c0c0c0c0c0c0c0c0c0c0c0c0c0c0c0c0c0c0c0c0c0c0c0c0c0c0c0c0c0c0c0"
+        }
+      ],
+      "resultDigest": "sha256:c0c0c0c0c0c0c0c0c0c0c0c0c0c0c0c0c0c0c0c0c0c0c0c0c0c0c0c0c0c0c0c0",
+      "integrity": {
+        "algorithm": "sha256",
+        "digest": "sha256:c0c0c0c0c0c0c0c0c0c0c0c0c0c0c0c0c0c0c0c0c0c0c0c0c0c0c0c0c0c0c0c0",
+        "verifiedAt": "2026-09-21T00:00:00Z"
+      },
+      "dependencies": [],
+      "dataMode": "observed"
+    },
+    {
+      "evidenceId": "e0000000-0000-4000-8000-000000000061",
+      "kind": "observation",
+      "scopeRef": {
+        "tenantId": "11111111-2222-4333-8444-555555555555",
+        "spaceId": "99999999-8888-4777-8666-555555555555"
+      },
+      "producedBy": {
+        "componentRef": {
+          "id": "data-backend.duckdb",
+          "version": "0.1.0",
+          "digest": "sha256:bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb"
+        },
+        "runId": "3f1a2b4c-5d6e-4f70-8a9b-0c1d2e3f4a5b"
+      },
+      "observedAt": "2026-09-21T09:00:00Z",
+      "recordedSeq": "2",
+      "validity": { "validFrom": "2026-09-21T00:00:00Z", "validTo": "2026-10-21T00:00:00Z" },
+      "sourceSnapshots": [
+        {
+          "sourceRef": { "namespace": "ha-anker", "sourceId": "device_registry.alias" },
+          "schemaVersion": "2026-09-01",
+          "readAt": "2026-09-21T09:00:00Z",
+          "consistency": "read_time",
+          "watermark": { "kind": "sequence", "value": "91" },
+          "resultDigest": "sha256:d0d0d0d0d0d0d0d0d0d0d0d0d0d0d0d0d0d0d0d0d0d0d0d0d0d0d0d0d0d0d0d0"
+        }
+      ],
+      "resultDigest": "sha256:d0d0d0d0d0d0d0d0d0d0d0d0d0d0d0d0d0d0d0d0d0d0d0d0d0d0d0d0d0d0d0d0",
+      "integrity": {
+        "algorithm": "sha256",
+        "digest": "sha256:d0d0d0d0d0d0d0d0d0d0d0d0d0d0d0d0d0d0d0d0d0d0d0d0d0d0d0d0d0d0d0d0",
+        "verifiedAt": "2026-09-21T09:00:00Z"
+      },
+      "dependencies": [],
+      "dataMode": "observed"
+    },
+    {
+      "evidenceId": "e0000000-0000-4000-8000-000000000062",
+      "kind": "document_span",
+      "scopeRef": {
+        "tenantId": "11111111-2222-4333-8444-555555555555",
+        "spaceId": "99999999-8888-4777-8666-555555555555"
+      },
+      "producedBy": {
+        "componentRef": {
+          "id": "extraction-document",
+          "version": "0.1.0",
+          "digest": "sha256:abababababababababababababababababababababababababababababababab"
+        }
+      },
+      "observedAt": "2026-10-01T00:00:00Z",
+      "recordedSeq": "3",
+      "validity": { "validFrom": "2026-10-01T00:00:00Z", "validTo": "2026-10-11T00:00:00Z" },
+      "sourceSnapshots": [
+        {
+          "sourceRef": { "namespace": "documents", "sourceId": "tariff.schedule.v2" },
+          "schemaVersion": "2026-09-01",
+          "readAt": "2026-10-01T00:00:00Z",
+          "consistency": "immutable",
+          "resultDigest": "sha256:e0e0e0e0e0e0e0e0e0e0e0e0e0e0e0e0e0e0e0e0e0e0e0e0e0e0e0e0e0e0e0e0"
+        }
+      ],
+      "resultDigest": "sha256:e0e0e0e0e0e0e0e0e0e0e0e0e0e0e0e0e0e0e0e0e0e0e0e0e0e0e0e0e0e0e0e0",
+      "integrity": {
+        "algorithm": "sha256",
+        "digest": "sha256:e0e0e0e0e0e0e0e0e0e0e0e0e0e0e0e0e0e0e0e0e0e0e0e0e0e0e0e0e0e0e0e0",
+        "verifiedAt": "2026-10-01T00:00:00Z"
+      },
+      "dependencies": [
+        {
+          "evidenceRef": {
+            "id": "e0000000-0000-4000-8000-000000000060",
+            "version": "1.0.0",
+            "digest": "sha256:c0c0c0c0c0c0c0c0c0c0c0c0c0c0c0c0c0c0c0c0c0c0c0c0c0c0c0c0c0c0c0c0",
+            "kind": "evidence"
+          },
+          "relation": "corrects",
+          "direction": "inbound"
+        }
+      ],
+      "dataMode": "observed",
+      "limitations": ["applies only to the October price-window interval"]
+    },
+    {
+      "evidenceId": "e0000000-0000-4000-8000-000000000063",
+      "kind": "document_span",
+      "scopeRef": {
+        "tenantId": "11111111-2222-4333-8444-555555555555",
+        "spaceId": "99999999-8888-4777-8666-555555555555"
+      },
+      "producedBy": {
+        "componentRef": {
+          "id": "extraction-document",
+          "version": "0.1.0",
+          "digest": "sha256:abababababababababababababababababababababababababababababababab"
+        }
+      },
+      "observedAt": "2026-09-28T00:00:00Z",
+      "recordedSeq": "4",
+      "validity": { "validFrom": "2026-09-21T00:00:00Z", "validTo": "2026-10-21T00:00:00Z" },
+      "sourceSnapshots": [
+        {
+          "sourceRef": { "namespace": "documents", "sourceId": "device_registry.alias.correction" },
+          "schemaVersion": "2026-09-01",
+          "readAt": "2026-09-28T00:00:00Z",
+          "consistency": "immutable",
+          "resultDigest": "sha256:f0f0f0f0f0f0f0f0f0f0f0f0f0f0f0f0f0f0f0f0f0f0f0f0f0f0f0f0f0f0f0f0"
+        }
+      ],
+      "resultDigest": "sha256:f0f0f0f0f0f0f0f0f0f0f0f0f0f0f0f0f0f0f0f0f0f0f0f0f0f0f0f0f0f0f0f0",
+      "integrity": {
+        "algorithm": "sha256",
+        "digest": "sha256:f0f0f0f0f0f0f0f0f0f0f0f0f0f0f0f0f0f0f0f0f0f0f0f0f0f0f0f0f0f0f0f0",
+        "verifiedAt": "2026-09-28T00:00:00Z"
+      },
+      "dependencies": [
+        {
+          "evidenceRef": {
+            "id": "e0000000-0000-4000-8000-000000000061",
+            "version": "1.0.0",
+            "digest": "sha256:d0d0d0d0d0d0d0d0d0d0d0d0d0d0d0d0d0d0d0d0d0d0d0d0d0d0d0d0d0d0d0d0",
+            "kind": "evidence"
+          },
+          "relation": "retracts",
+          "direction": "inbound"
+        }
+      ],
+      "dataMode": "observed",
+      "limitations": ["tombstone: the alias has no current support in this interval"]
+    }
+  ],
+  "operations": [
+    { "stepId": "s1", "kind": "publish_assertion", "assertionId": "assert-tariff-flat", "asOfRecordedSeq": "1" },
+    {
+      "stepId": "s2",
+      "kind": "publish_assertion",
+      "assertionId": "assert-alias-battery",
+      "asOfRecordedSeq": "2"
+    },
+    {
+      "stepId": "s3",
+      "kind": "correct_assertion",
+      "assertionId": "correct-tariff-tou",
+      "asOfRecordedSeq": "3"
+    },
+    {
+      "stepId": "s4",
+      "kind": "retract_assertion",
+      "assertionId": "retract-alias-battery",
+      "asOfRecordedSeq": "4"
+    },
+    {
+      "stepId": "s5",
+      "kind": "read_projection",
+      "asOfRecordedSeq": "1",
+      "validAt": "2026-09-26T00:00:00Z"
+    },
+    {
+      "stepId": "s6",
+      "kind": "read_projection",
+      "asOfRecordedSeq": "3",
+      "validAt": "2026-10-05T00:00:00Z"
+    },
+    {
+      "stepId": "s7",
+      "kind": "read_projection",
+      "asOfRecordedSeq": "4",
+      "validAt": "2026-10-05T00:00:00Z"
+    },
+    {
+      "stepId": "s8",
+      "kind": "read_projection",
+      "asOfRecordedSeq": "4",
+      "validAt": "2026-10-15T00:00:00Z"
+    }
+  ],
+  "expected": {
+    "views": [
+      {
+        "viewId": "old-recorded-version",
+        "description": "At recordedSeq 1 the alias learned later is invisible; the tariff is still flat.",
+        "request": {
+          "scopeRef": {
+            "tenantId": "11111111-2222-4333-8444-555555555555",
+            "spaceId": "99999999-8888-4777-8666-555555555555"
+          },
+          "projectionRef": {
+            "id": "projection.semantic",
+            "version": "1.0.0",
+            "digest": "sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
+          },
+          "asOfRecordedSeq": "1",
+          "validAt": "2026-09-26T00:00:00Z"
+        },
+        "isCurrent": false,
+        "conclusions": [
+          {
+            "propositionKey": "tariff.plan",
+            "domainStatus": "known",
+            "value": "flat",
+            "note": "Only the first event is visible."
+          },
+          {
+            "propositionKey": "device.alias",
+            "domainStatus": "unknown",
+            "note": "The alias was recorded later; an old system version must not read it."
+          }
+        ],
+        "gaps": ["device.alias is not visible at asOfRecordedSeq 1; old versions must not read later aliases."],
+        "conflicts": []
+      },
+      {
+        "viewId": "mid-recorded-version",
+        "description": "At recordedSeq 3 the correction is visible inside its interval and the alias is known but not yet retracted.",
+        "request": {
+          "scopeRef": {
+            "tenantId": "11111111-2222-4333-8444-555555555555",
+            "spaceId": "99999999-8888-4777-8666-555555555555"
+          },
+          "projectionRef": {
+            "id": "projection.semantic",
+            "version": "1.0.0",
+            "digest": "sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
+          },
+          "asOfRecordedSeq": "3",
+          "validAt": "2026-10-05T00:00:00Z"
+        },
+        "isCurrent": false,
+        "conclusions": [
+          {
+            "propositionKey": "tariff.plan",
+            "domainStatus": "known",
+            "value": "tou",
+            "note": "Correction covers 2026-10-01 to 2026-10-11."
+          },
+          {
+            "propositionKey": "device.alias",
+            "domainStatus": "known",
+            "value": "Battery-A",
+            "note": "Alias recorded at seq 2 and not yet retracted at seq 3."
+          }
+        ],
+        "gaps": [],
+        "conflicts": []
+      },
+      {
+        "viewId": "current",
+        "description": "Latest recorded version: correction applies inside its window and the retracted alias is gone.",
+        "request": {
+          "scopeRef": {
+            "tenantId": "11111111-2222-4333-8444-555555555555",
+            "spaceId": "99999999-8888-4777-8666-555555555555"
+          },
+          "projectionRef": {
+            "id": "projection.semantic",
+            "version": "1.0.0",
+            "digest": "sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
+          },
+          "asOfRecordedSeq": "4",
+          "validAt": "2026-10-05T00:00:00Z"
+        },
+        "isCurrent": true,
+        "conclusions": [
+          {
+            "propositionKey": "tariff.plan",
+            "domainStatus": "known",
+            "value": "tou",
+            "note": "Correction still applies at this validAt."
+          },
+          {
+            "propositionKey": "device.alias",
+            "domainStatus": "unknown",
+            "note": "Retraction tombstone covers the whole interval; history is preserved but not current."
+          }
+        ],
+        "gaps": ["device.alias is retracted for the whole interval; report a gap, not a stale alias."],
+        "conflicts": []
+      },
+      {
+        "viewId": "after-correction-window",
+        "description": "After the correction window the original tariff applies; the alias stays retracted.",
+        "request": {
+          "scopeRef": {
+            "tenantId": "11111111-2222-4333-8444-555555555555",
+            "spaceId": "99999999-8888-4777-8666-555555555555"
+          },
+          "projectionRef": {
+            "id": "projection.semantic",
+            "version": "1.0.0",
+            "digest": "sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
+          },
+          "asOfRecordedSeq": "4",
+          "validAt": "2026-10-15T00:00:00Z"
+        },
+        "isCurrent": false,
+        "conclusions": [
+          {
+            "propositionKey": "tariff.plan",
+            "domainStatus": "known",
+            "value": "flat",
+            "note": "validAt 2026-10-15 is outside the corrected interval, so the original value applies."
+          },
+          {
+            "propositionKey": "device.alias",
+            "domainStatus": "unknown",
+            "note": "Retraction still covers this validAt."
+          }
+        ],
+        "gaps": [],
+        "conflicts": []
+      }
+    ],
+    "evidenceConditions": [
+      {
+        "evidenceId": "e0000000-0000-4000-8000-000000000060",
+        "condition": "Original tariff evidence remains queryable from the old recorded version.",
+        "required": true
+      },
+      {
+        "evidenceId": "e0000000-0000-4000-8000-000000000061",
+        "condition": "Alias observation remains as history after retraction; the tombstone does not delete it.",
+        "required": true
+      },
+      {
+        "evidenceId": "e0000000-0000-4000-8000-000000000062",
+        "condition": "Tariff correction records the corrects dependency and its October-only validity.",
+        "required": true
+      },
+      {
+        "evidenceId": "e0000000-0000-4000-8000-000000000063",
+        "condition": "Alias retraction records the retracts dependency and its tombstone interval.",
+        "required": true
+      }
+    ]
+  }
+}

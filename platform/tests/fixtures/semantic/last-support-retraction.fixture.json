@@ -1,0 +1,247 @@
+{
+  "fixtureId": "last-support-retraction",
+  "scenarioKind": "last_support_retraction",
+  "title": "Last-support retraction: the conclusion leaves the current projection once no valid support remains",
+  "provenance": {
+    "specRefs": ["tasks/spec-v0.2/data-execution.md#D5", "tasks/prd-industry-semantic-agent-v0.2.md#US-017"],
+    "functionalRequirements": ["FR-19", "FR-20"],
+    "userStories": ["US-016", "US-017"],
+    "acceptanceRefs": ["US-017.A1"],
+    "derivation": "D5: all supports must disappear before a conclusion is withdrawn from the current valid result. US-017.A1: after the last support fails the current result withdraws. The single alternative is retracted at recordedSeq 2; the latest view therefore has no valid support and must report unknown, never false."
+  },
+  "scopeRef": {
+    "tenantId": "11111111-2222-4333-8444-555555555555",
+    "spaceId": "99999999-8888-4777-8666-555555555555"
+  },
+  "assertions": [
+    {
+      "assertionId": "assert-islanding-supported",
+      "logicalAssertionId": "la-islanding-supported",
+      "recordedSeq": "1",
+      "op": "assert",
+      "subject": "device.home-1.battery",
+      "predicate": "device.islanding_supported",
+      "value": true,
+      "validity": { "validFrom": "2026-09-21T00:00:00Z", "validTo": "2026-09-22T00:00:00Z" },
+      "sourceRef": { "namespace": "ha-anker", "sourceId": "device_registry.battery_nameplate" },
+      "evidenceId": "e0000000-0000-4000-8000-000000000020"
+    },
+    {
+      "assertionId": "retract-islanding-supported",
+      "logicalAssertionId": "la-islanding-supported",
+      "recordedSeq": "2",
+      "op": "retract",
+      "subject": "device.home-1.battery",
+      "predicate": "device.islanding_supported",
+      "validity": { "validFrom": "2026-09-21T00:00:00Z", "validTo": "2026-09-22T00:00:00Z" },
+      "sourceRef": { "namespace": "ha-anker", "sourceId": "device_registry.battery_nameplate" }
+    }
+  ],
+  "rules": [
+    {
+      "ruleRef": {
+        "id": "rule.islanding-ready",
+        "version": "1.0.0",
+        "digest": "sha256:cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc"
+      },
+      "ruleId": "rule.islanding-ready",
+      "premiseGroups": [
+        {
+          "groupId": "g-islanding",
+          "filter": { "fieldRef": "device.islanding_supported", "op": "eq", "values": [true] },
+          "alternatives": [{ "alternativeId": "alt-islanding", "assertionId": "assert-islanding-supported" }]
+        }
+      ],
+      "conclusion": {
+        "propositionKey": "site.islanding_ready",
+        "predicate": "site.islanding_ready",
+        "value": true
+      }
+    }
+  ],
+  "evidence": [
+    {
+      "evidenceId": "e0000000-0000-4000-8000-000000000020",
+      "kind": "observation",
+      "scopeRef": {
+        "tenantId": "11111111-2222-4333-8444-555555555555",
+        "spaceId": "99999999-8888-4777-8666-555555555555"
+      },
+      "producedBy": {
+        "componentRef": {
+          "id": "data-backend.duckdb",
+          "version": "0.1.0",
+          "digest": "sha256:bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb"
+        },
+        "runId": "3f1a2b4c-5d6e-4f70-8a9b-0c1d2e3f4a5b"
+      },
+      "observedAt": "2026-09-21T12:00:00Z",
+      "recordedSeq": "1",
+      "validity": { "validFrom": "2026-09-21T00:00:00Z", "validTo": "2026-09-22T00:00:00Z" },
+      "sourceSnapshots": [
+        {
+          "sourceRef": { "namespace": "ha-anker", "sourceId": "device_registry.battery_nameplate" },
+          "schemaVersion": "2026-09-01",
+          "readAt": "2026-09-21T12:00:00Z",
+          "consistency": "read_time",
+          "watermark": { "kind": "sequence", "value": "61" },
+          "resultDigest": "sha256:4040404040404040404040404040404040404040404040404040404040404040"
+        }
+      ],
+      "resultDigest": "sha256:4040404040404040404040404040404040404040404040404040404040404040",
+      "integrity": {
+        "algorithm": "sha256",
+        "digest": "sha256:4040404040404040404040404040404040404040404040404040404040404040",
+        "verifiedAt": "2026-09-21T12:00:00Z"
+      },
+      "dependencies": [],
+      "dataMode": "observed"
+    },
+    {
+      "evidenceId": "e0000000-0000-4000-8000-000000000021",
+      "kind": "rule_derivation",
+      "scopeRef": {
+        "tenantId": "11111111-2222-4333-8444-555555555555",
+        "spaceId": "99999999-8888-4777-8666-555555555555"
+      },
+      "producedBy": {
+        "componentRef": {
+          "id": "semantic-engine",
+          "version": "0.1.0",
+          "digest": "sha256:ffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffff"
+        },
+        "ruleRef": {
+          "id": "rule.islanding-ready",
+          "version": "1.0.0",
+          "digest": "sha256:cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc"
+        }
+      },
+      "observedAt": "2026-09-21T12:00:00Z",
+      "recordedSeq": "1",
+      "validity": { "validFrom": "2026-09-21T00:00:00Z", "validTo": "2026-09-22T00:00:00Z" },
+      "sourceSnapshots": [],
+      "resultDigest": "sha256:5050505050505050505050505050505050505050505050505050505050505050",
+      "integrity": {
+        "algorithm": "sha256",
+        "digest": "sha256:5050505050505050505050505050505050505050505050505050505050505050",
+        "verifiedAt": "2026-09-21T12:00:00Z"
+      },
+      "dependencies": [
+        {
+          "evidenceRef": {
+            "id": "e0000000-0000-4000-8000-000000000020",
+            "version": "1.0.0",
+            "digest": "sha256:4040404040404040404040404040404040404040404040404040404040404040",
+            "kind": "evidence"
+          },
+          "relation": "derives_from",
+          "direction": "inbound",
+          "premiseGroup": "g-islanding"
+        }
+      ],
+      "dataMode": "observed",
+      "limitations": ["historical derivation kept for provenance after the premise is retracted"]
+    }
+  ],
+  "operations": [
+    {
+      "stepId": "s1",
+      "kind": "publish_assertion",
+      "assertionId": "assert-islanding-supported",
+      "asOfRecordedSeq": "1"
+    },
+    {
+      "stepId": "s2",
+      "kind": "evaluate_rule",
+      "ruleId": "rule.islanding-ready",
+      "asOfRecordedSeq": "1",
+      "validAt": "2026-09-21T12:00:00Z"
+    },
+    {
+      "stepId": "s3",
+      "kind": "retract_assertion",
+      "assertionId": "retract-islanding-supported",
+      "asOfRecordedSeq": "2"
+    },
+    {
+      "stepId": "s4",
+      "kind": "read_projection",
+      "asOfRecordedSeq": "2",
+      "validAt": "2026-09-21T12:00:00Z"
+    }
+  ],
+  "expected": {
+    "views": [
+      {
+        "viewId": "before-retraction",
+        "description": "The only support is still valid.",
+        "request": {
+          "scopeRef": {
+            "tenantId": "11111111-2222-4333-8444-555555555555",
+            "spaceId": "99999999-8888-4777-8666-555555555555"
+          },
+          "projectionRef": {
+            "id": "projection.semantic",
+            "version": "1.0.0",
+            "digest": "sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
+          },
+          "asOfRecordedSeq": "1",
+          "validAt": "2026-09-21T12:00:00Z"
+        },
+        "isCurrent": false,
+        "conclusions": [
+          {
+            "propositionKey": "site.islanding_ready",
+            "domainStatus": "known",
+            "value": true,
+            "satisfiedBy": [{ "groupId": "g-islanding", "alternativeIds": ["alt-islanding"] }],
+            "note": "Sole support valid at recordedSeq 1."
+          }
+        ],
+        "gaps": [],
+        "conflicts": []
+      },
+      {
+        "viewId": "current",
+        "description": "The last support is retracted; the conclusion withdraws from the current valid result.",
+        "request": {
+          "scopeRef": {
+            "tenantId": "11111111-2222-4333-8444-555555555555",
+            "spaceId": "99999999-8888-4777-8666-555555555555"
+          },
+          "projectionRef": {
+            "id": "projection.semantic",
+            "version": "1.0.0",
+            "digest": "sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
+          },
+          "asOfRecordedSeq": "2",
+          "validAt": "2026-09-21T12:00:00Z"
+        },
+        "isCurrent": true,
+        "conclusions": [
+          {
+            "propositionKey": "site.islanding_ready",
+            "domainStatus": "unknown",
+            "note": "No valid support remains after the last-support retraction; unknown must not be coerced to false."
+          }
+        ],
+        "gaps": [
+          "site.islanding_ready has no current support in this interval; report a gap instead of a negative fact."
+        ],
+        "conflicts": []
+      }
+    ],
+    "evidenceConditions": [
+      {
+        "evidenceId": "e0000000-0000-4000-8000-000000000020",
+        "condition": "Retracted observation is preserved as an append-only historical event, not deleted.",
+        "required": false
+      },
+      {
+        "evidenceId": "e0000000-0000-4000-8000-000000000021",
+        "condition": "Historical derivation stays queryable by recordedSeq even though it is no longer current.",
+        "required": true
+      }
+    ]
+  }
+}

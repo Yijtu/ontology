@@ -1,0 +1,325 @@
+{
+  "fixtureId": "numeric-boundary",
+  "scenarioKind": "numeric_boundary",
+  "title": "Numeric boundaries: inclusive/exclusive comparison edges, exact negative decimals and half-open validity",
+  "provenance": {
+    "specRefs": [
+      "tasks/spec-v0.2/data-execution.md#D5",
+      "tasks/spec-v0.2/home-energy.md#E4",
+      "tasks/spec-v0.2/data-execution.md#D3"
+    ],
+    "functionalRequirements": ["FR-18"],
+    "userStories": ["US-016"],
+    "acceptanceRefs": ["US-016.A1"],
+    "derivation": "D5 supports explicit numeric ranges; D3 uses half-open validity [from,to); E4 keeps exact decimals and states negative prices are possible inputs that must not be zeroed. gte at exactly 20.0 is satisfied, gt at exactly 20.0 is not, -0.05 stays below 0, and an assertion is absent at its own validTo instant."
+  },
+  "scopeRef": {
+    "tenantId": "11111111-2222-4333-8444-555555555555",
+    "spaceId": "99999999-8888-4777-8666-555555555555"
+  },
+  "assertions": [
+    {
+      "assertionId": "assert-soc-at-floor",
+      "logicalAssertionId": "la-soc-at-floor",
+      "recordedSeq": "1",
+      "op": "assert",
+      "subject": "site.home-1.battery",
+      "predicate": "battery.soc_pct",
+      "value": { "amount": "20.0", "unit": "pct" },
+      "validity": { "validFrom": "2026-09-21T00:00:00Z", "validTo": "2026-09-21T12:00:00Z" },
+      "sourceRef": { "namespace": "ha-anker", "sourceId": "sensor.battery_soc" },
+      "evidenceId": "e0000000-0000-4000-8000-000000000040"
+    },
+    {
+      "assertionId": "assert-price-negative",
+      "logicalAssertionId": "la-price-negative",
+      "recordedSeq": "2",
+      "op": "assert",
+      "subject": "site.home-1.tariff",
+      "predicate": "tariff.purchase_price_cny_per_kwh",
+      "value": { "amount": "-0.05", "unit": "CNY/kWh" },
+      "validity": { "validFrom": "2026-09-21T00:00:00Z", "validTo": "2026-09-22T00:00:00Z" },
+      "sourceRef": { "namespace": "ha-anker", "sourceId": "tariff.purchase_price" },
+      "evidenceId": "e0000000-0000-4000-8000-000000000041"
+    }
+  ],
+  "rules": [
+    {
+      "ruleRef": {
+        "id": "rule.at-or-above-floor",
+        "version": "1.0.0",
+        "digest": "sha256:cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc"
+      },
+      "ruleId": "rule.at-or-above-floor",
+      "premiseGroups": [
+        {
+          "groupId": "g-soc-inclusive",
+          "filter": { "fieldRef": "battery.soc_pct", "op": "gte", "values": ["20.0"] },
+          "alternatives": [{ "alternativeId": "alt-soc-inclusive", "assertionId": "assert-soc-at-floor" }]
+        }
+      ],
+      "conclusion": {
+        "propositionKey": "battery.at_or_above_floor",
+        "predicate": "battery.at_or_above_floor",
+        "value": true
+      }
+    },
+    {
+      "ruleRef": {
+        "id": "rule.above-floor",
+        "version": "1.0.0",
+        "digest": "sha256:dddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddd"
+      },
+      "ruleId": "rule.above-floor",
+      "premiseGroups": [
+        {
+          "groupId": "g-soc-exclusive",
+          "filter": { "fieldRef": "battery.soc_pct", "op": "gt", "values": ["20.0"] },
+          "alternatives": [{ "alternativeId": "alt-soc-exclusive", "assertionId": "assert-soc-at-floor" }]
+        }
+      ],
+      "conclusion": {
+        "propositionKey": "battery.above_floor",
+        "predicate": "battery.above_floor",
+        "value": false
+      }
+    },
+    {
+      "ruleRef": {
+        "id": "rule.negative-price",
+        "version": "1.0.0",
+        "digest": "sha256:eeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeee"
+      },
+      "ruleId": "rule.negative-price",
+      "premiseGroups": [
+        {
+          "groupId": "g-price-negative",
+          "filter": { "fieldRef": "tariff.purchase_price_cny_per_kwh", "op": "lt", "values": ["0"] },
+          "alternatives": [{ "alternativeId": "alt-price-negative", "assertionId": "assert-price-negative" }]
+        }
+      ],
+      "conclusion": {
+        "propositionKey": "tariff.negative_price",
+        "predicate": "tariff.negative_price",
+        "value": true
+      }
+    }
+  ],
+  "evidence": [
+    {
+      "evidenceId": "e0000000-0000-4000-8000-000000000040",
+      "kind": "observation",
+      "scopeRef": {
+        "tenantId": "11111111-2222-4333-8444-555555555555",
+        "spaceId": "99999999-8888-4777-8666-555555555555"
+      },
+      "producedBy": {
+        "componentRef": {
+          "id": "data-backend.duckdb",
+          "version": "0.1.0",
+          "digest": "sha256:bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb"
+        },
+        "runId": "3f1a2b4c-5d6e-4f70-8a9b-0c1d2e3f4a5b"
+      },
+      "observedAt": "2026-09-21T06:00:00Z",
+      "recordedSeq": "1",
+      "validity": { "validFrom": "2026-09-21T00:00:00Z", "validTo": "2026-09-21T12:00:00Z" },
+      "sourceSnapshots": [
+        {
+          "sourceRef": { "namespace": "ha-anker", "sourceId": "sensor.battery_soc" },
+          "schemaVersion": "2026-09-01",
+          "readAt": "2026-09-21T06:00:00Z",
+          "consistency": "read_time",
+          "watermark": { "kind": "sequence", "value": "81" },
+          "resultDigest": "sha256:8080808080808080808080808080808080808080808080808080808080808080"
+        }
+      ],
+      "resultDigest": "sha256:8080808080808080808080808080808080808080808080808080808080808080",
+      "integrity": {
+        "algorithm": "sha256",
+        "digest": "sha256:8080808080808080808080808080808080808080808080808080808080808080",
+        "verifiedAt": "2026-09-21T06:00:00Z"
+      },
+      "dependencies": [],
+      "dataMode": "observed"
+    },
+    {
+      "evidenceId": "e0000000-0000-4000-8000-000000000041",
+      "kind": "observation",
+      "scopeRef": {
+        "tenantId": "11111111-2222-4333-8444-555555555555",
+        "spaceId": "99999999-8888-4777-8666-555555555555"
+      },
+      "producedBy": {
+        "componentRef": {
+          "id": "data-backend.duckdb",
+          "version": "0.1.0",
+          "digest": "sha256:bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb"
+        },
+        "runId": "3f1a2b4c-5d6e-4f70-8a9b-0c1d2e3f4a5b"
+      },
+      "observedAt": "2026-09-21T06:00:00Z",
+      "recordedSeq": "2",
+      "validity": { "validFrom": "2026-09-21T00:00:00Z", "validTo": "2026-09-22T00:00:00Z" },
+      "sourceSnapshots": [
+        {
+          "sourceRef": { "namespace": "ha-anker", "sourceId": "tariff.purchase_price" },
+          "schemaVersion": "2026-09-01",
+          "readAt": "2026-09-21T06:00:00Z",
+          "consistency": "read_time",
+          "watermark": { "kind": "sequence", "value": "82" },
+          "resultDigest": "sha256:9090909090909090909090909090909090909090909090909090909090909090"
+        }
+      ],
+      "resultDigest": "sha256:9090909090909090909090909090909090909090909090909090909090909090",
+      "integrity": {
+        "algorithm": "sha256",
+        "digest": "sha256:9090909090909090909090909090909090909090909090909090909090909090",
+        "verifiedAt": "2026-09-21T06:00:00Z"
+      },
+      "dependencies": [],
+      "dataMode": "observed"
+    }
+  ],
+  "operations": [
+    { "stepId": "s1", "kind": "publish_assertion", "assertionId": "assert-soc-at-floor", "asOfRecordedSeq": "1" },
+    {
+      "stepId": "s2",
+      "kind": "publish_assertion",
+      "assertionId": "assert-price-negative",
+      "asOfRecordedSeq": "2"
+    },
+    {
+      "stepId": "s3",
+      "kind": "evaluate_rule",
+      "ruleId": "rule.at-or-above-floor",
+      "asOfRecordedSeq": "2",
+      "validAt": "2026-09-21T06:00:00Z"
+    },
+    {
+      "stepId": "s4",
+      "kind": "evaluate_rule",
+      "ruleId": "rule.above-floor",
+      "asOfRecordedSeq": "2",
+      "validAt": "2026-09-21T06:00:00Z"
+    },
+    {
+      "stepId": "s5",
+      "kind": "evaluate_rule",
+      "ruleId": "rule.negative-price",
+      "asOfRecordedSeq": "2",
+      "validAt": "2026-09-21T06:00:00Z"
+    },
+    {
+      "stepId": "s6",
+      "kind": "read_projection",
+      "asOfRecordedSeq": "2",
+      "validAt": "2026-09-21T06:00:00Z"
+    },
+    {
+      "stepId": "s7",
+      "kind": "read_projection",
+      "asOfRecordedSeq": "2",
+      "validAt": "2026-09-21T12:00:00Z"
+    }
+  ],
+  "expected": {
+    "views": [
+      {
+        "viewId": "current",
+        "description": "Inside the half-open validity window: inclusive boundary holds, exclusive boundary does not, negative price preserved.",
+        "request": {
+          "scopeRef": {
+            "tenantId": "11111111-2222-4333-8444-555555555555",
+            "spaceId": "99999999-8888-4777-8666-555555555555"
+          },
+          "projectionRef": {
+            "id": "projection.semantic",
+            "version": "1.0.0",
+            "digest": "sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
+          },
+          "asOfRecordedSeq": "2",
+          "validAt": "2026-09-21T06:00:00Z"
+        },
+        "isCurrent": true,
+        "conclusions": [
+          {
+            "propositionKey": "battery.at_or_above_floor",
+            "domainStatus": "known",
+            "value": true,
+            "satisfiedBy": [{ "groupId": "g-soc-inclusive", "alternativeIds": ["alt-soc-inclusive"] }],
+            "note": "gte is inclusive: 20.0 >= 20.0 holds."
+          },
+          {
+            "propositionKey": "battery.above_floor",
+            "domainStatus": "known",
+            "value": false,
+            "note": "gt is exclusive: 20.0 > 20.0 does not hold; a determinate false, not unknown."
+          },
+          {
+            "propositionKey": "tariff.negative_price",
+            "domainStatus": "known",
+            "value": true,
+            "satisfiedBy": [{ "groupId": "g-price-negative", "alternativeIds": ["alt-price-negative"] }],
+            "note": "-0.05 is kept as an exact negative decimal; negative prices must not be zeroed (E4)."
+          }
+        ],
+        "gaps": [],
+        "conflicts": []
+      },
+      {
+        "viewId": "half-open-upper-bound",
+        "description": "At exactly the assertion's validTo the assertion is absent because validity is half-open [from,to).",
+        "request": {
+          "scopeRef": {
+            "tenantId": "11111111-2222-4333-8444-555555555555",
+            "spaceId": "99999999-8888-4777-8666-555555555555"
+          },
+          "projectionRef": {
+            "id": "projection.semantic",
+            "version": "1.0.0",
+            "digest": "sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
+          },
+          "asOfRecordedSeq": "2",
+          "validAt": "2026-09-21T12:00:00Z"
+        },
+        "isCurrent": false,
+        "conclusions": [
+          {
+            "propositionKey": "battery.at_or_above_floor",
+            "domainStatus": "unknown",
+            "note": "The soc assertion validTo equals this instant and is excluded by half-open validity."
+          },
+          {
+            "propositionKey": "battery.above_floor",
+            "domainStatus": "unknown",
+            "note": "Same exclusion; unknown rather than a stale boundary value."
+          },
+          {
+            "propositionKey": "tariff.negative_price",
+            "domainStatus": "known",
+            "value": true,
+            "satisfiedBy": [{ "groupId": "g-price-negative", "alternativeIds": ["alt-price-negative"] }],
+            "note": "The tariff assertion covers this instant, so it stays known."
+          }
+        ],
+        "gaps": [
+          "battery.soc_pct has no valid assertion at 2026-09-21T12:00:00Z because validity is half-open."
+        ],
+        "conflicts": []
+      }
+    ],
+    "evidenceConditions": [
+      {
+        "evidenceId": "e0000000-0000-4000-8000-000000000040",
+        "condition": "Exact decimal 20.0 is preserved; no float rounding at the boundary.",
+        "required": true
+      },
+      {
+        "evidenceId": "e0000000-0000-4000-8000-000000000041",
+        "condition": "Exact decimal -0.05 is preserved and not clamped to 0.",
+        "required": true
+      }
+    ]
+  }
+}

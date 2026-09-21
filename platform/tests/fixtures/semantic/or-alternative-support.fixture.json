@@ -1,0 +1,316 @@
+{
+  "fixtureId": "or-alternative-support",
+  "scenarioKind": "or_alternative_support",
+  "title": "OR alternative support: withdrawing one of several equivalent sources keeps the conclusion",
+  "provenance": {
+    "specRefs": ["tasks/spec-v0.2/data-execution.md#D5", "tasks/prd-industry-semantic-agent-v0.2.md#US-017"],
+    "functionalRequirements": ["FR-18", "FR-19"],
+    "userStories": ["US-016", "US-017"],
+    "acceptanceRefs": ["US-017.A1"],
+    "derivation": "D5: premise groups hold several equivalent valid sources; a support withdrawn only removes the conclusion when no valid support remains. US-017.A1: one retracted support keeps the alternative. Here premise group g-battery has two equivalent sources; retracting alt-nameplate at recordedSeq 3 leaves alt-meter, so device.battery_present stays known."
+  },
+  "scopeRef": {
+    "tenantId": "11111111-2222-4333-8444-555555555555",
+    "spaceId": "99999999-8888-4777-8666-555555555555"
+  },
+  "assertions": [
+    {
+      "assertionId": "assert-battery-meter",
+      "logicalAssertionId": "la-battery-meter",
+      "recordedSeq": "1",
+      "op": "assert",
+      "subject": "device.home-1.battery",
+      "predicate": "device.battery_present",
+      "value": true,
+      "validity": { "validFrom": "2026-09-21T00:00:00Z", "validTo": "2026-09-22T00:00:00Z" },
+      "sourceRef": { "namespace": "ha-anker", "sourceId": "sensor.battery_power" },
+      "evidenceId": "e0000000-0000-4000-8000-000000000010"
+    },
+    {
+      "assertionId": "assert-battery-nameplate",
+      "logicalAssertionId": "la-battery-nameplate",
+      "recordedSeq": "2",
+      "op": "assert",
+      "subject": "device.home-1.battery",
+      "predicate": "device.battery_present",
+      "value": true,
+      "validity": { "validFrom": "2026-09-21T00:00:00Z", "validTo": "2026-09-22T00:00:00Z" },
+      "sourceRef": { "namespace": "ha-anker", "sourceId": "device_registry.battery_nameplate" },
+      "evidenceId": "e0000000-0000-4000-8000-000000000011"
+    },
+    {
+      "assertionId": "retract-battery-nameplate",
+      "logicalAssertionId": "la-battery-nameplate",
+      "recordedSeq": "3",
+      "op": "retract",
+      "subject": "device.home-1.battery",
+      "predicate": "device.battery_present",
+      "validity": { "validFrom": "2026-09-21T00:00:00Z", "validTo": "2026-09-22T00:00:00Z" },
+      "sourceRef": { "namespace": "ha-anker", "sourceId": "device_registry.battery_nameplate" }
+    }
+  ],
+  "rules": [
+    {
+      "ruleRef": {
+        "id": "rule.battery-present",
+        "version": "1.0.0",
+        "digest": "sha256:cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc"
+      },
+      "ruleId": "rule.battery-present",
+      "premiseGroups": [
+        {
+          "groupId": "g-battery",
+          "filter": { "fieldRef": "device.battery_present", "op": "eq", "values": [true] },
+          "alternatives": [
+            { "alternativeId": "alt-meter", "assertionId": "assert-battery-meter" },
+            { "alternativeId": "alt-nameplate", "assertionId": "assert-battery-nameplate" }
+          ]
+        }
+      ],
+      "conclusion": {
+        "propositionKey": "device.battery_present",
+        "predicate": "device.battery_present",
+        "value": true
+      }
+    }
+  ],
+  "evidence": [
+    {
+      "evidenceId": "e0000000-0000-4000-8000-000000000010",
+      "kind": "observation",
+      "scopeRef": {
+        "tenantId": "11111111-2222-4333-8444-555555555555",
+        "spaceId": "99999999-8888-4777-8666-555555555555"
+      },
+      "producedBy": {
+        "componentRef": {
+          "id": "data-backend.duckdb",
+          "version": "0.1.0",
+          "digest": "sha256:bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb"
+        },
+        "runId": "3f1a2b4c-5d6e-4f70-8a9b-0c1d2e3f4a5b"
+      },
+      "observedAt": "2026-09-21T12:00:00Z",
+      "recordedSeq": "1",
+      "validity": { "validFrom": "2026-09-21T00:00:00Z", "validTo": "2026-09-22T00:00:00Z" },
+      "sourceSnapshots": [
+        {
+          "sourceRef": { "namespace": "ha-anker", "sourceId": "sensor.battery_power" },
+          "schemaVersion": "2026-09-01",
+          "readAt": "2026-09-21T12:00:00Z",
+          "consistency": "read_time",
+          "watermark": { "kind": "sequence", "value": "51" },
+          "resultDigest": "sha256:1010101010101010101010101010101010101010101010101010101010101010"
+        }
+      ],
+      "resultDigest": "sha256:1010101010101010101010101010101010101010101010101010101010101010",
+      "integrity": {
+        "algorithm": "sha256",
+        "digest": "sha256:1010101010101010101010101010101010101010101010101010101010101010",
+        "verifiedAt": "2026-09-21T12:00:00Z"
+      },
+      "dependencies": [],
+      "dataMode": "observed"
+    },
+    {
+      "evidenceId": "e0000000-0000-4000-8000-000000000011",
+      "kind": "observation",
+      "scopeRef": {
+        "tenantId": "11111111-2222-4333-8444-555555555555",
+        "spaceId": "99999999-8888-4777-8666-555555555555"
+      },
+      "producedBy": {
+        "componentRef": {
+          "id": "data-backend.duckdb",
+          "version": "0.1.0",
+          "digest": "sha256:bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb"
+        },
+        "runId": "3f1a2b4c-5d6e-4f70-8a9b-0c1d2e3f4a5b"
+      },
+      "observedAt": "2026-09-21T12:00:00Z",
+      "recordedSeq": "2",
+      "validity": { "validFrom": "2026-09-21T00:00:00Z", "validTo": "2026-09-22T00:00:00Z" },
+      "sourceSnapshots": [
+        {
+          "sourceRef": { "namespace": "ha-anker", "sourceId": "device_registry.battery_nameplate" },
+          "schemaVersion": "2026-09-01",
+          "readAt": "2026-09-21T12:00:00Z",
+          "consistency": "read_time",
+          "watermark": { "kind": "sequence", "value": "52" },
+          "resultDigest": "sha256:2020202020202020202020202020202020202020202020202020202020202020"
+        }
+      ],
+      "resultDigest": "sha256:2020202020202020202020202020202020202020202020202020202020202020",
+      "integrity": {
+        "algorithm": "sha256",
+        "digest": "sha256:2020202020202020202020202020202020202020202020202020202020202020",
+        "verifiedAt": "2026-09-21T12:00:00Z"
+      },
+      "dependencies": [],
+      "dataMode": "observed"
+    },
+    {
+      "evidenceId": "e0000000-0000-4000-8000-000000000012",
+      "kind": "rule_derivation",
+      "scopeRef": {
+        "tenantId": "11111111-2222-4333-8444-555555555555",
+        "spaceId": "99999999-8888-4777-8666-555555555555"
+      },
+      "producedBy": {
+        "componentRef": {
+          "id": "semantic-engine",
+          "version": "0.1.0",
+          "digest": "sha256:ffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffff"
+        },
+        "ruleRef": {
+          "id": "rule.battery-present",
+          "version": "1.0.0",
+          "digest": "sha256:cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc"
+        }
+      },
+      "observedAt": "2026-09-21T12:00:00Z",
+      "recordedSeq": "4",
+      "validity": { "validFrom": "2026-09-21T00:00:00Z", "validTo": "2026-09-22T00:00:00Z" },
+      "sourceSnapshots": [],
+      "resultDigest": "sha256:3030303030303030303030303030303030303030303030303030303030303030",
+      "integrity": {
+        "algorithm": "sha256",
+        "digest": "sha256:3030303030303030303030303030303030303030303030303030303030303030",
+        "verifiedAt": "2026-09-21T12:00:00Z"
+      },
+      "dependencies": [
+        {
+          "evidenceRef": {
+            "id": "e0000000-0000-4000-8000-000000000010",
+            "version": "1.0.0",
+            "digest": "sha256:1010101010101010101010101010101010101010101010101010101010101010",
+            "kind": "evidence"
+          },
+          "relation": "derives_from",
+          "direction": "inbound",
+          "premiseGroup": "g-battery"
+        },
+        {
+          "evidenceRef": {
+            "id": "e0000000-0000-4000-8000-000000000011",
+            "version": "1.0.0",
+            "digest": "sha256:2020202020202020202020202020202020202020202020202020202020202020",
+            "kind": "evidence"
+          },
+          "relation": "derives_from",
+          "direction": "inbound",
+          "premiseGroup": "g-battery"
+        }
+      ],
+      "dataMode": "observed",
+      "limitations": ["keeps the 'other alternatives exist' completeness hint when explaining"]
+    }
+  ],
+  "operations": [
+    { "stepId": "s1", "kind": "publish_assertion", "assertionId": "assert-battery-meter", "asOfRecordedSeq": "1" },
+    {
+      "stepId": "s2",
+      "kind": "publish_assertion",
+      "assertionId": "assert-battery-nameplate",
+      "asOfRecordedSeq": "2"
+    },
+    {
+      "stepId": "s3",
+      "kind": "evaluate_rule",
+      "ruleId": "rule.battery-present",
+      "asOfRecordedSeq": "2",
+      "validAt": "2026-09-21T12:00:00Z"
+    },
+    {
+      "stepId": "s4",
+      "kind": "retract_assertion",
+      "assertionId": "retract-battery-nameplate",
+      "asOfRecordedSeq": "3"
+    },
+    {
+      "stepId": "s5",
+      "kind": "read_projection",
+      "asOfRecordedSeq": "3",
+      "validAt": "2026-09-21T12:00:00Z"
+    }
+  ],
+  "expected": {
+    "views": [
+      {
+        "viewId": "before-retraction",
+        "description": "Both equivalent sources are valid; the group has two alternatives.",
+        "request": {
+          "scopeRef": {
+            "tenantId": "11111111-2222-4333-8444-555555555555",
+            "spaceId": "99999999-8888-4777-8666-555555555555"
+          },
+          "projectionRef": {
+            "id": "projection.semantic",
+            "version": "1.0.0",
+            "digest": "sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
+          },
+          "asOfRecordedSeq": "2",
+          "validAt": "2026-09-21T12:00:00Z"
+        },
+        "isCurrent": false,
+        "conclusions": [
+          {
+            "propositionKey": "device.battery_present",
+            "domainStatus": "known",
+            "value": true,
+            "satisfiedBy": [{ "groupId": "g-battery", "alternativeIds": ["alt-meter", "alt-nameplate"] }],
+            "note": "OR group fully supported before the retraction."
+          }
+        ],
+        "gaps": [],
+        "conflicts": []
+      },
+      {
+        "viewId": "current",
+        "description": "After retracting one alternative the other still supports the conclusion.",
+        "request": {
+          "scopeRef": {
+            "tenantId": "11111111-2222-4333-8444-555555555555",
+            "spaceId": "99999999-8888-4777-8666-555555555555"
+          },
+          "projectionRef": {
+            "id": "projection.semantic",
+            "version": "1.0.0",
+            "digest": "sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
+          },
+          "asOfRecordedSeq": "3",
+          "validAt": "2026-09-21T12:00:00Z"
+        },
+        "isCurrent": true,
+        "conclusions": [
+          {
+            "propositionKey": "device.battery_present",
+            "domainStatus": "known",
+            "value": true,
+            "satisfiedBy": [{ "groupId": "g-battery", "alternativeIds": ["alt-meter"] }],
+            "note": "Withdrawing one support must not delete a conclusion still supported by another (D5, US-017.A1)."
+          }
+        ],
+        "gaps": [],
+        "conflicts": []
+      }
+    ],
+    "evidenceConditions": [
+      {
+        "evidenceId": "e0000000-0000-4000-8000-000000000010",
+        "condition": "Remaining alternative keeps its source snapshot and resultDigest.",
+        "required": true
+      },
+      {
+        "evidenceId": "e0000000-0000-4000-8000-000000000011",
+        "condition": "Retracted alternative is preserved as history, not deleted, so the explanation can still say other alternatives existed.",
+        "required": false
+      },
+      {
+        "evidenceId": "e0000000-0000-4000-8000-000000000012",
+        "condition": "Derivation keeps both premise dependencies tagged premiseGroup g-battery.",
+        "required": true
+      }
+    ]
+  }
+}
