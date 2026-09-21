@@ -442,7 +442,10 @@ export class PostgresSourceStore implements SourceStore {
            current_setting('app.space_id')::uuid,
            $1, $2, $3, $4::jsonb, $5::timestamptz, $6
          )
-         ON CONFLICT DO NOTHING`,
+         ON CONFLICT (tenant_id, space_id, profile_id, version, snapshot_hash) DO UPDATE
+           SET fingerprints = excluded.fingerprints,
+               recorded_at = excluded.recorded_at,
+               recorded_by = excluded.recorded_by`,
         [
           record.profileRef.id,
           record.profileRef.version,

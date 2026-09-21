@@ -1,0 +1,221 @@
+:root {
+  color-scheme: light;
+  --ink: #1c2330;
+  --muted: #5b6472;
+  --line: #d9dee7;
+  --accent: #2f5bd7;
+  --warn: #a35b00;
+  --danger: #b3261e;
+  --surface: #ffffff;
+  --canvas: #f4f6fb;
+}
+
+* {
+  box-sizing: border-box;
+}
+
+body {
+  margin: 0;
+  font-family: "Segoe UI", "Microsoft YaHei", system-ui, sans-serif;
+  color: var(--ink);
+  background: var(--canvas);
+}
+
+.workbench {
+  max-width: 1100px;
+  margin: 0 auto;
+  padding: 24px;
+}
+
+.workbench__header h1 {
+  margin: 0 0 4px;
+  font-size: 22px;
+}
+
+.workbench__hint {
+  margin: 0;
+  color: var(--muted);
+  font-size: 13px;
+}
+
+.workbench__body {
+  display: grid;
+  grid-template-columns: minmax(0, 1.4fr) minmax(0, 1fr);
+  gap: 16px;
+  margin-top: 16px;
+}
+
+.workbench__body > * {
+  background: var(--surface);
+  border: 1px solid var(--line);
+  border-radius: 10px;
+  padding: 16px;
+}
+
+.workbench__body > .component-picker,
+.workbench__body > .profile-actions {
+  grid-column: 1 / -1;
+}
+
+.state-panel {
+  margin-top: 16px;
+  background: var(--surface);
+  border: 1px solid var(--line);
+  border-left: 4px solid var(--accent);
+  border-radius: 10px;
+  padding: 16px;
+}
+
+.state-panel[data-state="failure"] {
+  border-left-color: var(--danger);
+}
+
+.state-panel[data-state="permission_denied"] {
+  border-left-color: var(--warn);
+}
+
+.state-panel[data-state="not_configured"] {
+  border-left-color: var(--warn);
+}
+
+.state-panel__title {
+  margin: 0 0 8px;
+  font-size: 16px;
+}
+
+.state-panel__trace {
+  color: var(--muted);
+  font-size: 12px;
+}
+
+.component-picker__fields {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 12px;
+}
+
+.picker {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  min-width: 220px;
+}
+
+.picker__label {
+  font-size: 12px;
+  color: var(--muted);
+}
+
+.picker select {
+  padding: 6px 8px;
+  border: 1px solid var(--line);
+  border-radius: 6px;
+  background: var(--surface);
+}
+
+.picker__empty {
+  font-size: 12px;
+  color: var(--warn);
+}
+
+.capability-gaps ul,
+.degradations ul,
+.sources ul {
+  list-style: none;
+  margin: 8px 0 0;
+  padding: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
+
+.capability-gaps li,
+.degradations li,
+.sources li {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+  align-items: baseline;
+  padding: 8px 10px;
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  font-size: 13px;
+}
+
+.capability-gaps__state {
+  color: var(--warn);
+  font-weight: 600;
+}
+
+.profile-actions__buttons {
+  display: flex;
+  gap: 8px;
+  margin: 8px 0;
+}
+
+button {
+  border: 1px solid var(--accent);
+  background: var(--accent);
+  color: #fff;
+  padding: 7px 14px;
+  border-radius: 6px;
+  cursor: pointer;
+  font-size: 13px;
+}
+
+button:disabled {
+  background: #c4cbdb;
+  border-color: #c4cbdb;
+  cursor: not-allowed;
+}
+
+.profile-actions__notice {
+  color: #1c6b3a;
+}
+
+.profile-actions__conflict {
+  color: var(--danger);
+  font-weight: 600;
+}
+
+.sources__ref {
+  font-family: Consolas, "Courier New", monospace;
+  color: var(--muted);
+}
+
+.sources__status,
+.sources__job {
+  font-size: 12px;
+}
+
+.bound-run dl {
+  display: grid;
+  grid-template-columns: max-content minmax(0, 1fr);
+  gap: 4px 12px;
+  font-size: 13px;
+}
+
+.bound-run dd {
+  margin: 0;
+  font-family: Consolas, "Courier New", monospace;
+  overflow-wrap: anywhere;
+}
+
+/* Narrow viewport: a single column, controls stacked, and the picker fields full width. */
+@media (max-width: 719px) {
+  .workbench {
+    padding: 12px;
+  }
+
+  .workbench__body {
+    grid-template-columns: minmax(0, 1fr);
+  }
+
+  .picker {
+    min-width: 100%;
+  }
+
+  .workbench__body > * {
+    padding: 12px;
+  }
+}

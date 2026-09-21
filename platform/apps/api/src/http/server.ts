@@ -1,18 +1,20 @@
-import Fastify from 'fastify'
-import type { FastifyError, FastifyInstance, FastifyReply, FastifyRequest } from 'fastify'
+import type { FastifyInstance, FastifyRequest } from 'fastify'
 import { RunServiceError, parseCreateRunRequest } from '@ontology/application'
 import type { RunService } from '@ontology/application'
-import type { CreateRunResponse, Principal, RevisionString } from '@ontology/contracts'
+import type { CreateRunResponse, RevisionString } from '@ontology/contracts'
 import { createRequestToolContext } from './context'
-import { failureBody } from './errors'
-import { SSE_HEADERS, formatSseFrame } from './sse'
+import { formatSseFrame, SSE_HEADERS } from './sse'
+import {
+  authenticateRequest,
+  isRecord,
+  readHeader,
+  readRevisionHeader,
+  readTraceId,
+  requireNonEmptyString,
+} from './shared'
+import type { AuthenticatedRequest, RequestAuthenticator } from './shared'
 
-export interface AuthenticatedRequest {
-  readonly principal: Principal
-  readonly spaceId: string
-}
-
-export type RequestAuthenticator = (request: FastifyRequest) => AuthenticatedRequest | undefined
+export type { AuthenticatedRequest, RequestAuthenticator } from './shared'
 
 export interface RunApiOptions {
   readonly service: RunService
@@ -24,31 +26,18 @@ export interface RunApiOptions {
   readonly logger?: boolean
 }
 
-const REVISION_PATTERN = /^(0|[1-9]\d*)$/
-
-function isRecord(value: unknown): value is Record<string, unknown> {
-  return typeof value === 'object' && value !== null && !Array.isArray(value)
-}
-
-function readHeader(request: FastifyRequest, name: string): string | undefined {
-  const raw = request.headers[name]
-  const value = Array.isArray(raw) ? raw[0] : raw
-  return typeof value === 'string' && value.length > 0 ? value : undefined
-}
-
-function readTraceId(request: FastifyRequest): string {
-  const header = readHeader(request, 'x-trace-id')
-  return header ?? request.id
+export interface RunRouteDependencies {
+  readonly service: RunService
+  readonly authenticate: RequestAuthenticator
 }
 
 function readIfMatch(request: FastifyRequest): RevisionString | undefined {
-  const raw = readHeader(request, 'if-match')
-  if (raw === undefined) return undefined
-  const normalized = raw.trim().replace(/^W\//, '').replace(/^"|"$/g, '').trim()
-  if (!REVISION_PATTERN.test(normalized)) {
+  const header = readRevisionHeader(request)
+  if (header.kind === 'absent') return undefined
+  if (header.kind !== 'revision') {
     throw new RunServiceError('INVALID_ARGUMENT', 'If-Match must be a decimal revision string')
   }
-  return normalized
+  return header.value
 }
 
 function resolveExpectedRevision(
@@ -65,19 +54,12 @@ function resolveExpectedRevision(
   return headerRevision
 }
 
-function requireNonEmptyString(value: unknown, field: string): string {
-  if (typeof value !== 'string' || value.trim().length === 0) {
-    throw new RunServiceError('INVALID_ARGUMENT', `${field} must be a non-empty string`)
-  }
-  return value
-}
-
 function readLastEventId(request: FastifyRequest): RevisionString | undefined {
   const query = isRecord(request.query) ? request.query['lastEventId'] : undefined
   const raw = readHeader(request, 'last-event-id') ?? (typeof query === 'string' ? query : undefined)
   if (raw === undefined) return undefined
   const normalized = raw.trim()
-  if (!REVISION_PATTERN.test(normalized)) {
+  if (!/^(0|[1-9]\d*)$/.test(normalized)) {
     throw new RunServiceError('INVALID_ARGUMENT', 'Last-Event-ID must be a decimal sequence')
   }
   return normalized
@@ -87,25 +69,11 @@ function readLastEventId(request: FastifyRequest): RevisionString | undefined {
  * The C6 HTTP surface for runs. It lives in `apps/api` (the apps layer may use an SDK); the
  * application layer never imports the framework. Each handler establishes the trusted
  * context from the server-side authentication result, then delegates to `RunService`.
+ *
+ * The routes are registered onto a caller-supplied Fastify instance so the workbench
+ * surface shares one server, one envelope and one error boundary (see `createApiServer`).
  */
-export function createRunApi(options: RunApiOptions): FastifyInstance {
-  const app = Fastify({ logger: options.logger ?? false })
-
-  const authenticate = (
-    request: FastifyRequest,
-    reply: FastifyReply,
-  ): AuthenticatedRequest | undefined => {
-    const auth = options.authenticate(request)
-    if (auth === undefined) {
-      reply.status(401).send({
-        error: { code: 'UNAUTHENTICATED', message: 'authentication is required', retryable: false },
-        traceId: readTraceId(request),
-      })
-      return undefined
-    }
-    return auth
-  }
-
+export function registerRunRoutes(app: FastifyInstance, dependencies: RunRouteDependencies): void {
   const contextFor = (auth: AuthenticatedRequest, traceId: string, runId: string, hash?: string) =>
     createRequestToolContext({
       principal: auth.principal,
@@ -115,29 +83,9 @@ export function createRunApi(options: RunApiOptions): FastifyInstance {
       ...(hash === undefined ? {} : { resolvedProfileHash: hash }),
     })
 
-  app.setErrorHandler((error: FastifyError, request, reply) => {
-    const traceId = readTraceId(request)
-    if (error instanceof RunServiceError) {
-      reply.status(error.httpStatus).send(failureBody(error, traceId))
-      return
-    }
-    const statusCode = error.statusCode ?? 500
-    if (statusCode >= 500) {
-      reply.status(statusCode).send({
-        error: { code: 'INTERNAL_ERROR', message: 'the request could not be completed', retryable: false },
-        traceId,
-      })
-      return
-    }
-    reply.status(statusCode).send({
-      error: { code: 'INVALID_ARGUMENT', message: error.message, retryable: false },
-      traceId,
-    })
-  })
-
   app.post('/api/v1/runs', async (request, reply) => {
     const traceId = readTraceId(request)
-    const auth = authenticate(request, reply)
+    const auth = authenticateRequest(dependencies.authenticate, request, reply)
     if (auth === undefined) return reply
     const idempotencyKey = readHeader(request, 'idempotency-key')
     if (idempotencyKey === undefined) {
@@ -145,7 +93,7 @@ export function createRunApi(options: RunApiOptions): FastifyInstance {
     }
     const fields = parseCreateRunRequest(request.body)
     const runId = globalThis.crypto.randomUUID()
-    const result = await options.service.createRun(
+    const result = await dependencies.service.createRun(
       { runId, ...fields, idempotencyKey },
       contextFor(auth, traceId, runId),
     )
@@ -161,10 +109,10 @@ export function createRunApi(options: RunApiOptions): FastifyInstance {
 
   app.get<{ Params: { runId: string } }>('/api/v1/runs/:runId', async (request, reply) => {
     const traceId = readTraceId(request)
-    const auth = authenticate(request, reply)
+    const auth = authenticateRequest(dependencies.authenticate, request, reply)
     if (auth === undefined) return reply
     const runId = request.params.runId
-    const view = await options.service.getRun(runId, contextFor(auth, traceId, runId))
+    const view = await dependencies.service.getRun(runId, contextFor(auth, traceId, runId))
     reply.status(200).send({ data: view, meta: { traceId, revision: view.revision } })
     return reply
   })
@@ -173,7 +121,7 @@ export function createRunApi(options: RunApiOptions): FastifyInstance {
     '/api/v1/runs/:runId/responses',
     async (request, reply) => {
       const traceId = readTraceId(request)
-      const auth = authenticate(request, reply)
+      const auth = authenticateRequest(dependencies.authenticate, request, reply)
       if (auth === undefined) return reply
       const runId = request.params.runId
       const body = request.body
@@ -186,7 +134,7 @@ export function createRunApi(options: RunApiOptions): FastifyInstance {
         throw new RunServiceError('INVALID_ARGUMENT', 'typedResponse must be a JSON object')
       }
       const expectedRevision = resolveExpectedRevision(readIfMatch(request), body['expectedRevision'])
-      const view = await options.service.respondToClarification(
+      const view = await dependencies.service.respondToClarification(
         { runId, clarificationId, typedResponse, expectedRevision },
         contextFor(auth, traceId, runId),
       )
@@ -200,7 +148,7 @@ export function createRunApi(options: RunApiOptions): FastifyInstance {
 
   app.post<{ Params: { runId: string } }>('/api/v1/runs/:runId/cancel', async (request, reply) => {
     const traceId = readTraceId(request)
-    const auth = authenticate(request, reply)
+    const auth = authenticateRequest(dependencies.authenticate, request, reply)
     if (auth === undefined) return reply
     const runId = request.params.runId
     const body = request.body
@@ -209,7 +157,7 @@ export function createRunApi(options: RunApiOptions): FastifyInstance {
     }
     const reason = requireNonEmptyString(body['reason'], 'reason')
     const expectedRevision = resolveExpectedRevision(readIfMatch(request), body['expectedRevision'])
-    const view = await options.service.cancelRun(
+    const view = await dependencies.service.cancelRun(
       { runId, reason, expectedRevision },
       contextFor(auth, traceId, runId),
     )
@@ -222,7 +170,7 @@ export function createRunApi(options: RunApiOptions): FastifyInstance {
 
   app.post<{ Params: { runId: string } }>('/api/v1/runs/:runId/resume', async (request, reply) => {
     const traceId = readTraceId(request)
-    const auth = authenticate(request, reply)
+    const auth = authenticateRequest(dependencies.authenticate, request, reply)
     if (auth === undefined) return reply
     const runId = request.params.runId
     const body = request.body
@@ -234,7 +182,7 @@ export function createRunApi(options: RunApiOptions): FastifyInstance {
     const runtimeVersion = requireNonEmptyString(body['runtimeVersion'], 'runtimeVersion')
     const stateDigest = requireNonEmptyString(body['stateDigest'], 'stateDigest')
     const expectedRevision = resolveExpectedRevision(readIfMatch(request), body['expectedRevision'])
-    const view = await options.service.resumeRun(
+    const view = await dependencies.service.resumeRun(
       { runId, checkpointId, runtimeKind, runtimeVersion, stateDigest, expectedRevision },
       contextFor(auth, traceId, runId),
     )
@@ -247,11 +195,11 @@ export function createRunApi(options: RunApiOptions): FastifyInstance {
 
   app.get<{ Params: { runId: string } }>('/api/v1/runs/:runId/events', async (request, reply) => {
     const traceId = readTraceId(request)
-    const auth = authenticate(request, reply)
+    const auth = authenticateRequest(dependencies.authenticate, request, reply)
     if (auth === undefined) return reply
     const runId = request.params.runId
     const afterSequence = readLastEventId(request)
-    const events = await options.service.listEvents(
+    const events = await dependencies.service.listEvents(
       runId,
       afterSequence,
       contextFor(auth, traceId, runId),
@@ -264,6 +212,4 @@ export function createRunApi(options: RunApiOptions): FastifyInstance {
     reply.raw.end()
     return reply
   })
-
-  return app
 }

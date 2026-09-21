@@ -6,5 +6,5 @@
     "apps/**/src/**/*.ts",
     "tests/**/*.ts"
   ],
-  "exclude": ["tests/architecture/fixtures/**"]
+  "exclude": ["tests/architecture/fixtures/**", "tests/ui/**", "tests/e2e/**", "apps/web/**"]
 }

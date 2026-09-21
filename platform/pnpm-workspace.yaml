@@ -4,3 +4,6 @@ packages:
   - packages/extensions/*
   - industry-packs/*
   - apps/*
+
+allowBuilds:
+  esbuild: true
