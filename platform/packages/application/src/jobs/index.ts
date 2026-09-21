@@ -4,7 +4,6 @@ export type { JobWorkerDependencies } from './worker'
 export { OutboxDispatcher } from './dispatcher'
 export type { OutboxDispatcherDependencies } from './dispatcher'
 export { InMemoryJobStore } from './in-memory-store'
-export { InMemoryJobQuota } from './in-memory-quota'
 export { JobServiceError, JobStageFailure, isJobServiceError, httpStatusForJobError } from './errors'
 export type { JobServiceErrorCode } from './errors'
 export {

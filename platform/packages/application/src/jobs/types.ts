@@ -1,7 +1,7 @@
 import type {
+  BudgetLedgerPort,
   JobErrorInfo,
   JobKind,
-  JobQuotaPort,
   JobStageCounts,
   JobAttemptRecord,
   JobStore,
@@ -108,8 +108,13 @@ export interface JobPublicationIntent {
 export interface JobStageContext {
   readonly job: LogicalJobRecord
   readonly attempt: JobAttemptRecord
-  /** Background quota, separate from the online run budget (SPEC §9). */
-  readonly quota: JobQuotaPort
+  /**
+   * Shared budget ledger (kind `background`), separate from the online run ledger, so an
+   * ingestion backlog cannot consume or be consumed by an online run's quota (SPEC §9).
+   */
+  readonly budget: BudgetLedgerPort
+  /** The background ledger opened for this job. */
+  readonly ledgerId: Uuid
   /** Trusted tool context, so a handler can use injected ports without minting identity. */
   readonly ctx: ToolContext
   readonly signal: AbortSignal

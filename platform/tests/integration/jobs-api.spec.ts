@@ -1,11 +1,11 @@
 import { randomUUID } from 'node:crypto'
 import { afterAll, beforeAll, describe, expect, it } from 'vitest'
 import { PostgresJobStore } from '@ontology/adapter-control-postgres'
-import { InMemoryJobQuota, JobWorker } from '@ontology/application'
+import { JobWorker } from '@ontology/application'
 import { createJobApi, createPostgresJobService } from '@ontology/app-api'
 import type { AuthenticatedRequest, JobServiceComposition } from '@ontology/app-api'
 import { toolContext } from '../unit/component-registry-fixtures'
-import { pipelineHandlers } from '../unit/job-fixtures'
+import { createBudgetHarness, pipelineHandlers } from '../unit/job-fixtures'
 import {
   JOB_SPACE_A,
   JOB_SPACE_B,
@@ -191,7 +191,7 @@ describe('POST /jobs/{id}/retry', () => {
     const worker = new JobWorker({
       store,
       handlers: pipelineHandlers({ failAt: 'extracted' }),
-      quota: new InMemoryJobQuota(),
+      budget: createBudgetHarness().budget,
       workerId: 'api-worker',
       now: () => new Date().toISOString(),
       newId: () => randomUUID(),

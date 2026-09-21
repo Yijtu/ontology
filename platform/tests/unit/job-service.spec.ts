@@ -1,6 +1,6 @@
 import { randomUUID } from 'node:crypto'
 import { describe, expect, it } from 'vitest'
-import { InMemoryJobQuota, InMemoryJobStore, JobService, JobStageFailure, JobWorker, OutboxDispatcher } from '@ontology/application'
+import { InMemoryJobStore, JobService, JobStageFailure, JobWorker, OutboxDispatcher } from '@ontology/application'
 import { canAdvanceJobStage, isRunnableJobStage } from '@ontology/contracts'
 import type { JobView } from '@ontology/application'
 import type { LogicalJobRecord } from '@ontology/contracts'
@@ -8,41 +8,41 @@ import {
   EDITOR_A,
   EDITOR_B,
   ManualClock,
-  OnlineBudgetSpy,
   PUBLICATION_VERSION,
   RecordingOutboxConsumer,
   SCOPE_A,
   STRANGER_A,
   VIEWER_A,
+  createBudgetHarness,
   newJobInput,
   pipelineHandlers,
 } from './job-fixtures'
 
 function harness() {
   const store = new InMemoryJobStore()
-  const quota = new InMemoryJobQuota()
+  const budget = createBudgetHarness()
   const clock = new ManualClock()
   const service = new JobService({ store, now: clock.now, newId: () => randomUUID() })
-  return { store, quota, clock, service }
+  return { store, budget, clock, service }
 }
 
 function workerFor(
   store: InMemoryJobStore,
-  quota: InMemoryJobQuota,
+  budget: ReturnType<typeof createBudgetHarness>,
   clock: ManualClock,
   handlers: ReturnType<typeof pipelineHandlers>,
 ) {
-  return new JobWorker({ store, handlers, quota, now: clock.now, newId: () => randomUUID(), workerId: 'w1' })
+  return new JobWorker({ store, handlers, budget: budget.budget, now: clock.now, newId: () => randomUUID(), workerId: 'w1' })
 }
 
 async function runToStop(
   store: InMemoryJobStore,
-  quota: InMemoryJobQuota,
+  budget: ReturnType<typeof createBudgetHarness>,
   clock: ManualClock,
   handlers: ReturnType<typeof pipelineHandlers>,
   jobId: string,
 ) {
-  const worker = workerFor(store, quota, clock, handlers)
+  const worker = workerFor(store, budget, clock, handlers)
   const result = await worker.runOnce(SCOPE_A, EDITOR_A)
   expect(result.jobId).toBe(jobId)
   return result
@@ -50,12 +50,12 @@ async function runToStop(
 
 describe('logical job and attempt separation', () => {
   it('runs one attempt through the pipeline to awaiting_review without a second attempt', async () => {
-    const { store, quota, clock, service } = harness()
+    const { store, budget, clock, service } = harness()
     const input = newJobInput()
     const created = await service.createJob(input, EDITOR_A)
     expect(created.stage).toBe('received')
 
-    const result = await runToStop(store, quota, clock, pipelineHandlers(), input.jobId)
+    const result = await runToStop(store, budget, clock, pipelineHandlers(), input.jobId)
     expect(result.disposition).toBe('stopped')
     expect(result.stage).toBe('awaiting_review')
 
@@ -68,10 +68,10 @@ describe('logical job and attempt separation', () => {
   })
 
   it('retry creates a new attempt of the same logical job and never a new logical job', async () => {
-    const { store, quota, clock, service } = harness()
+    const { store, budget, clock, service } = harness()
     const input = newJobInput()
     await service.createJob(input, EDITOR_A)
-    await runToStop(store, quota, clock, pipelineHandlers({ failAt: 'extracted' }), input.jobId)
+    await runToStop(store, budget, clock, pipelineHandlers({ failAt: 'extracted' }), input.jobId)
 
     const failed = await store.getJob(SCOPE_A, input.jobId, EDITOR_A)
     expect(failed?.stage).toBe('failed')
@@ -96,7 +96,7 @@ describe('logical job and attempt separation', () => {
     expect(attemptsAfterRetry).toHaveLength(2)
     expect(attemptsAfterRetry[1]?.state).toBe('pending')
 
-    await runToStop(store, quota, clock, pipelineHandlers(), input.jobId)
+    await runToStop(store, budget, clock, pipelineHandlers(), input.jobId)
     const done = await store.getJob(SCOPE_A, input.jobId, EDITOR_A)
     expect(done?.stage).toBe('awaiting_review')
     expect(done?.attemptCount).toBe(2)
@@ -218,10 +218,10 @@ describe('lease acquisition, expiry and reclaim', () => {
   })
 
   it('never re-runs a job that is waiting on a human decision', async () => {
-    const { store, quota, clock, service } = harness()
+    const { store, budget, clock, service } = harness()
     const input = newJobInput()
     await service.createJob(input, EDITOR_A)
-    await runToStop(store, quota, clock, pipelineHandlers(), input.jobId)
+    await runToStop(store, budget, clock, pipelineHandlers(), input.jobId)
 
     clock.advance(10 * 60_000)
     const lease = await store.acquireLease(
@@ -235,10 +235,10 @@ describe('lease acquisition, expiry and reclaim', () => {
   })
 
   it('does not auto-retry a failed job without an explicit retry', async () => {
-    const { store, quota, clock, service } = harness()
+    const { store, budget, clock, service } = harness()
     const input = newJobInput()
     await service.createJob(input, EDITOR_A)
-    await runToStop(store, quota, clock, pipelineHandlers({ failAt: 'parsed' }), input.jobId)
+    await runToStop(store, budget, clock, pipelineHandlers({ failAt: 'parsed' }), input.jobId)
 
     clock.advance(60 * 60_000)
     const lease = await store.acquireLease(
@@ -307,10 +307,10 @@ describe('transactional outbox', () => {
 
 describe('error counting and query view', () => {
   it('counts processed items and exposes a classified, payload-free error', async () => {
-    const { store, quota, clock, service } = harness()
+    const { store, budget, clock, service } = harness()
     const input = newJobInput()
     await service.createJob(input, EDITOR_A)
-    await runToStop(store, quota, clock, pipelineHandlers({ failAt: 'extracted' }), input.jobId)
+    await runToStop(store, budget, clock, pipelineHandlers({ failAt: 'extracted' }), input.jobId)
 
     const view = await service.getJob(input.jobId, VIEWER_A)
     expect(view.stage).toBe('failed')
@@ -326,17 +326,25 @@ describe('error counting and query view', () => {
   })
 })
 
-describe('background and online quota separation', () => {
-  it('consumes the background quota and leaves the online run budget untouched', async () => {
-    const { store, quota, clock, service } = harness()
-    const onlineBudget = new OnlineBudgetSpy()
+describe('background and online budget separation', () => {
+  it('consumes the background ledger and leaves the online run ledger untouched', async () => {
+    const { store, budget, clock, service } = harness()
     const input = newJobInput()
     await service.createJob(input, EDITOR_A)
-    await runToStop(store, quota, clock, pipelineHandlers({ useQuota: true }), input.jobId)
 
-    expect(quota.settledModelCalls).toBe(4)
-    expect(onlineBudget.reserveCalls).toBe(0)
-    expect(onlineBudget.settleCalls).toBe(0)
+    // An online run opens its own `run` ledger in the same shared budget service.
+    const runLedgerId = randomUUID()
+    await budget.service.openLedger({ ledgerId: runLedgerId, kind: 'run' }, EDITOR_A)
+    const runBefore = await budget.service.remaining(runLedgerId, EDITOR_A)
+
+    await runToStop(store, budget, clock, pipelineHandlers({ useQuota: true }), input.jobId)
+
+    // The job opened a distinct `background` ledger and consumed only from it.
+    const jobLedger = await budget.store.getLedger(SCOPE_A, input.jobId, EDITOR_A)
+    expect(jobLedger?.kind).toBe('background')
+    expect(jobLedger?.consumed.modelTokens).toBe(40)
+    const runAfter = await budget.service.remaining(runLedgerId, EDITOR_A)
+    expect(runAfter).toEqual(runBefore)
   })
 })
 
@@ -359,10 +367,10 @@ describe('permissions and tenant isolation', () => {
 
 describe('publication exactly-once', () => {
   it('publishes once and re-publishing the same key inserts nothing', async () => {
-    const { store, quota, clock, service } = harness()
+    const { store, budget, clock, service } = harness()
     const input = newJobInput()
     await service.createJob(input, EDITOR_A)
-    await runToStop(store, quota, clock, pipelineHandlers({ publish: true }), input.jobId)
+    await runToStop(store, budget, clock, pipelineHandlers({ publish: true }), input.jobId)
 
     const job: LogicalJobRecord | undefined = await store.getJob(SCOPE_A, input.jobId, EDITOR_A)
     expect(job?.stage).toBe('published')
@@ -450,10 +458,10 @@ describe('publication exactly-once', () => {
 
 describe('retry idempotency and bounded progress', () => {
   it('replays a retry idempotently even after the job advanced past the failed stage', async () => {
-    const { store, quota, clock, service } = harness()
+    const { store, budget, clock, service } = harness()
     const input = newJobInput()
     await service.createJob(input, EDITOR_A)
-    await runToStop(store, quota, clock, pipelineHandlers({ failAt: 'extracted' }), input.jobId)
+    await runToStop(store, budget, clock, pipelineHandlers({ failAt: 'extracted' }), input.jobId)
     const failed = await store.getJob(SCOPE_A, input.jobId, EDITOR_A)
     if (failed === undefined) throw new Error('failed job missing')
     const retryKey = `retry-${randomUUID()}`
@@ -462,7 +470,7 @@ describe('retry idempotency and bounded progress', () => {
       { jobId: input.jobId, failedStage: 'extracted', idempotencyKey: retryKey, expectedRevision: failed.revision },
       EDITOR_A,
     )
-    await runToStop(store, quota, clock, pipelineHandlers(), input.jobId)
+    await runToStop(store, budget, clock, pipelineHandlers(), input.jobId)
     const done = await store.getJob(SCOPE_A, input.jobId, EDITOR_A)
     expect(done?.stage).toBe('awaiting_review')
     expect(done?.attemptCount).toBe(2)
@@ -477,7 +485,7 @@ describe('retry idempotency and bounded progress', () => {
   })
 
   it('fails a handler that makes no progress instead of retrying it forever', async () => {
-    const { store, quota, clock, service } = harness()
+    const { store, budget, clock, service } = harness()
     const input = newJobInput()
     await service.createJob(input, EDITOR_A)
     const registry = {
@@ -492,7 +500,7 @@ describe('retry idempotency and bounded progress', () => {
             }
           : undefined,
     }
-    const worker = new JobWorker({ store, handlers: registry, quota, now: clock.now, newId: () => randomUUID() })
+    const worker = new JobWorker({ store, handlers: registry, budget: budget.budget, now: clock.now, newId: () => randomUUID() })
     const result = await worker.runOnce(SCOPE_A, EDITOR_A)
     expect(result.disposition).toBe('failed')
     const view = await service.getJob(input.jobId, VIEWER_A)
@@ -524,7 +532,7 @@ describe('retry idempotency and bounded progress', () => {
 
 describe('stage failure classification', () => {
   it('classifies an unexpected handler error without leaking its message', async () => {
-    const { store, quota, clock, service } = harness()
+    const { store, budget, clock, service } = harness()
     const input = newJobInput()
     await service.createJob(input, EDITOR_A)
     const registry = {
@@ -538,7 +546,7 @@ describe('stage failure classification', () => {
             }
           : undefined,
     }
-    const worker = new JobWorker({ store, handlers: registry, quota, now: clock.now, newId: () => randomUUID() })
+    const worker = new JobWorker({ store, handlers: registry, budget: budget.budget, now: clock.now, newId: () => randomUUID() })
     await worker.runOnce(SCOPE_A, EDITOR_A)
     const view: JobView = await service.getJob(input.jobId, VIEWER_A)
     expect(view.stage).toBe('failed')
@@ -548,7 +556,7 @@ describe('stage failure classification', () => {
   })
 
   it('exposes a classified stage failure unchanged', async () => {
-    const { store, quota, clock, service } = harness()
+    const { store, budget, clock, service } = harness()
     const input = newJobInput()
     await service.createJob(input, EDITOR_A)
     const registry = {
@@ -562,7 +570,7 @@ describe('stage failure classification', () => {
             }
           : undefined,
     }
-    const worker = new JobWorker({ store, handlers: registry, quota, now: clock.now, newId: () => randomUUID() })
+    const worker = new JobWorker({ store, handlers: registry, budget: budget.budget, now: clock.now, newId: () => randomUUID() })
     await worker.runOnce(SCOPE_A, EDITOR_A)
     const view = await service.getJob(input.jobId, VIEWER_A)
     expect(view.lastError?.code).toBe('DATA_STALE')

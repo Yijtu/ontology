@@ -1,15 +1,12 @@
 import { randomUUID } from 'node:crypto'
+import { BudgetService, InMemoryBudgetLedgerStore } from '@ontology/core'
 import type {
-  BudgetPort,
-  BudgetRemaining,
-  BudgetReservationRef,
-  BudgetReservationRequest,
+  BudgetLedgerPort,
   JobStageCounts,
   OutboxMessageRecord,
   PipelineStage,
   RunnableJobStage,
   ToolContext,
-  ToolUsage,
   Uuid,
   VersionRef,
 } from '@ontology/contracts'
@@ -20,7 +17,7 @@ import type {
   OutboxConsumer,
 } from '@ontology/application'
 import { JobStageFailure } from '@ontology/application'
-import { toolContext } from './component-registry-fixtures'
+import { RecordingControlRepository, toolContext } from './component-registry-fixtures'
 import { SCOPE_A, SCOPE_B } from './profile-resolver-fixtures'
 
 export { SCOPE_A, SCOPE_B }
@@ -94,16 +91,35 @@ export function pipelineHandlers(options: PipelineOptions = {}): JobStageHandler
       run: async (context): Promise<JobStageOutcome> => {
         options.onStage?.(stage, context.job.jobId)
         if (options.useQuota === true) {
-          const reservation = await context.quota.reserve(
-            context.job.jobId,
-            { budgetClass: 'background_job', modelCalls: 1 },
+          const outcome = await context.budget.reserve(
+            {
+              ledgerId: context.ledgerId,
+              idempotencyKey: `job-stage:${context.job.jobId}:${context.attempt.attemptId}:${stage}`,
+              modelTokens: 10,
+            },
             context.ctx,
           )
-          await context.quota.settle(
-            reservation,
-            { modelCalls: 1, modelTokens: 10 },
-            context.ctx,
-          )
+          if (outcome.granted && outcome.reservation !== undefined) {
+            await context.budget.settle(
+              {
+                ledgerId: context.ledgerId,
+                reservationId: outcome.reservation.reservationId,
+                status: 'completed',
+                usage: { durationMs: 1, modelTokens: 10 },
+                // A completed settlement requires persisted evidence (SPEC §8); the controlled
+                // handler supplies a synthetic reference instead of a real artifact.
+                evidenceRefs: [
+                  {
+                    id: randomUUID(),
+                    version: '1.0.0',
+                    digest: `sha256:${'e'.repeat(64)}`,
+                    kind: 'evidence',
+                  },
+                ],
+              },
+              context.ctx,
+            )
+          }
         }
         if (options.failAt === stage) {
           throw new JobStageFailure('SOURCE_UNAVAILABLE', 'the controlled source was unavailable', true)
@@ -145,50 +161,24 @@ export class RecordingOutboxConsumer implements OutboxConsumer {
 }
 
 /**
- * Spy on the online run budget. The background quota must never touch it, so a job run leaves
- * every counter at zero.
+ * The shared budget ledger, used by both online runs and background jobs. Jobs draw from a
+ * `background` ledger; an online run has its own `run` ledger, so the two never share quota.
  */
-export class OnlineBudgetSpy implements BudgetPort {
-  reserveCalls = 0
-  settleCalls = 0
+export interface BudgetHarness {
+  readonly budget: BudgetLedgerPort
+  readonly store: InMemoryBudgetLedgerStore
+  readonly service: BudgetService
+}
 
-  async reserve(
-    runId: string,
-    _request: BudgetReservationRequest,
-    _ctx: ToolContext,
-  ): Promise<BudgetReservationRef> {
-    void _request
-    void _ctx
-    this.reserveCalls += 1
-    return {
-      reservationId: randomUUID(),
-      runId,
-      grantedAt: new Date().toISOString(),
-      expiresAt: new Date(Date.now() + 60_000).toISOString(),
-    }
-  }
-
-  async settle(
-    _reservation: BudgetReservationRef,
-    _usage: ToolUsage,
-    _ctx: ToolContext,
-  ): Promise<void> {
-    void _reservation
-    void _usage
-    void _ctx
-    this.settleCalls += 1
-  }
-
-  async remaining(_runId: string, _ctx: ToolContext): Promise<BudgetRemaining> {
-    void _runId
-    void _ctx
-    return {
-      deadline: new Date(Date.now() + 60_000).toISOString(),
-      toolCallsRemaining: 8,
-      repairAttemptsRemaining: 2,
-      parallelToolLimit: 2,
-    }
-  }
+export function createBudgetHarness(): BudgetHarness {
+  const store = new InMemoryBudgetLedgerStore()
+  const service = new BudgetService({
+    store,
+    control: new RecordingControlRepository(),
+    now: () => new Date().toISOString(),
+    newId: () => randomUUID(),
+  })
+  return { budget: service, store, service }
 }
 
 export interface NewJobInput {

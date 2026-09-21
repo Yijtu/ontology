@@ -1,14 +1,14 @@
 import { JobWorker, OutboxDispatcher } from '@ontology/application'
 import type { JobStageHandlerRegistry, OutboxConsumer } from '@ontology/application'
 import { ControlPostgresDatabase, PostgresJobStore } from '@ontology/adapter-control-postgres'
-import type { JobQuotaPort, JobStore, ScopeRef, ToolContext } from '@ontology/contracts'
+import type { BudgetLedgerPort, JobStore, ScopeRef, ToolContext } from '@ontology/contracts'
 
 export interface JobWorkerCompositionOptions {
   readonly connectionString: string
   /** Parse/extract/review handlers are owned by later nodes; they arrive by injection. */
   readonly handlers: JobStageHandlerRegistry
-  /** Background quota, separate from the online run budget (SPEC §9). */
-  readonly quota: JobQuotaPort
+  /** Shared budget ledger; the worker opens a `background` ledger per job (SPEC §9). */
+  readonly budget: BudgetLedgerPort
   readonly outboxConsumer: OutboxConsumer
   readonly workerId?: string
   readonly leaseDurationMs?: number
@@ -41,7 +41,7 @@ export function createPostgresJobWorker(
   const worker = new JobWorker({
     store,
     handlers: options.handlers,
-    quota: options.quota,
+    budget: options.budget,
     ...(options.workerId === undefined ? {} : { workerId: options.workerId }),
     ...(options.leaseDurationMs === undefined ? {} : { leaseDurationMs: options.leaseDurationMs }),
     ...(options.now === undefined ? {} : { now: options.now }),

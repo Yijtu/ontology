@@ -1,6 +1,6 @@
 import type {
+  BudgetLedgerPort,
   JobErrorInfo,
-  JobQuotaPort,
   JobStageAdvance,
   JobStore,
   LogicalJobRecord,
@@ -20,8 +20,11 @@ import type {
 export interface JobWorkerDependencies {
   readonly store: JobStore
   readonly handlers: JobStageHandlerRegistry
-  /** Background quota, separate from the online run budget (SPEC §9). */
-  readonly quota: JobQuotaPort
+  /**
+   * Shared budget ledger. The worker opens a `background` ledger per job, so an import job's
+   * quota is a different ledger from every online run's (SPEC §9).
+   */
+  readonly budget: BudgetLedgerPort
   readonly workerId?: string
   readonly leaseDurationMs?: number
   readonly now?: () => string
@@ -67,7 +70,7 @@ function classifyFailure(error: unknown, stage: PipelineStage, occurredAt: strin
 export class JobWorker {
   readonly #store: JobStore
   readonly #handlers: JobStageHandlerRegistry
-  readonly #quota: JobQuotaPort
+  readonly #budget: BudgetLedgerPort
   readonly #workerId: string
   readonly #leaseDurationMs: number
   readonly #now: () => string
@@ -76,7 +79,7 @@ export class JobWorker {
   constructor(dependencies: JobWorkerDependencies) {
     this.#store = dependencies.store
     this.#handlers = dependencies.handlers
-    this.#quota = dependencies.quota
+    this.#budget = dependencies.budget
     this.#workerId = dependencies.workerId ?? 'worker'
     this.#leaseDurationMs = dependencies.leaseDurationMs ?? DEFAULT_LEASE_DURATION_MS
     this.#now = dependencies.now ?? (() => new Date().toISOString())
@@ -94,6 +97,12 @@ export class JobWorker {
 
     let job = lease.job
     const attempt = lease.attempt
+    // A background ledger is opened once per claimed job; `ensureLedger` is idempotent, so a
+    // reclaimed attempt reuses the same ledger rather than resetting the budget.
+    const ledger = await this.#budget.openLedger(
+      { ledgerId: job.jobId, kind: 'background', runId: job.jobId },
+      ctx,
+    )
     const reclaimed =
       lease.reclaimedAttemptId === undefined
         ? {}
@@ -151,7 +160,14 @@ export class JobWorker {
       const controller = new AbortController()
       let outcome
       try {
-        outcome = await handler.run({ job, attempt, quota: this.#quota, ctx, signal: controller.signal })
+        outcome = await handler.run({
+          job,
+          attempt,
+          budget: this.#budget,
+          ledgerId: ledger.ledgerId,
+          ctx,
+          signal: controller.signal,
+        })
       } catch (error) {
         const info = classifyFailure(error, job.stage, this.#now())
         const failed = await this.#store.failAttempt(

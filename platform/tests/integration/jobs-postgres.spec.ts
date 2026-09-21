@@ -5,17 +5,18 @@ import {
   PostgresJobStore,
   runControlMigrations,
 } from '@ontology/adapter-control-postgres'
-import { InMemoryJobQuota, JobService, JobWorker, OutboxDispatcher } from '@ontology/application'
+import { JobService, JobWorker, OutboxDispatcher } from '@ontology/application'
 import type { JobPublicationRequest, JobStageAdvance, ScopeRef, ToolContext } from '@ontology/contracts'
 import { toolContext } from '../unit/component-registry-fixtures'
 import {
   ManualClock,
-  OnlineBudgetSpy,
   PUBLICATION_VERSION,
   RecordingOutboxConsumer,
+  createBudgetHarness,
   newJobInput,
   pipelineHandlers,
 } from '../unit/job-fixtures'
+import type { BudgetHarness } from '../unit/job-fixtures'
 import { MIGRATIONS_DIR, createJobScope, startJobDatabase } from './job-postgres-harness'
 import type { JobDbHarness } from './job-postgres-harness'
 
@@ -29,14 +30,14 @@ interface TestContext {
   readonly viewer: ToolContext
   readonly clock: ManualClock
   readonly service: JobService
-  readonly quota: InMemoryJobQuota
+  readonly budget: BudgetHarness
 }
 
-/** Fresh tenant/space, clock, service and quota per test, so the reclaimer never sees another test's jobs. */
+/** Fresh tenant/space, clock, service and budget per test, so the reclaimer never sees another test's jobs. */
 async function newContext(prefix: string): Promise<TestContext> {
   const scope = await createJobScope(harness.adminClient, prefix)
   const clock = new ManualClock()
-  const quota = new InMemoryJobQuota()
+  const budget = createBudgetHarness()
   const service = new JobService({ store, now: clock.now, newId: () => randomUUID() })
   return {
     scopeRef: scope.scopeRef,
@@ -44,7 +45,7 @@ async function newContext(prefix: string): Promise<TestContext> {
     viewer: toolContext(scope.tenantId, scope.spaceId, ['scoped-reader'], `${prefix}-viewer`),
     clock,
     service,
-    quota,
+    budget,
   }
 }
 
@@ -57,7 +58,7 @@ function workerFor(
   return new JobWorker({
     store: jobStore,
     handlers,
-    quota: context.quota,
+    budget: context.budget.budget,
     now: context.clock.now,
     newId: () => randomUUID(),
     workerId,
@@ -417,12 +418,16 @@ describe('retry against a real database', () => {
   })
 })
 
-describe('error counting and background quota separation', () => {
-  it('counts processed items, records a classified error and does not touch the online budget', async () => {
+describe('error counting and background budget separation', () => {
+  it('counts processed items, records a classified error and does not touch the online run ledger', async () => {
     const context = await newContext('pg-error')
-    const onlineBudget = new OnlineBudgetSpy()
     const input = newJobInput()
     await context.service.createJob(input, context.editor)
+
+    const runLedgerId = randomUUID()
+    await context.budget.service.openLedger({ ledgerId: runLedgerId, kind: 'run' }, context.editor)
+    const runBefore = await context.budget.service.remaining(runLedgerId, context.editor)
+
     await workerFor(
       context,
       store,
@@ -439,8 +444,11 @@ describe('error counting and background quota separation', () => {
     expect(view.attempts).toHaveLength(1)
     expect(view.attempts[0]?.error?.code).toBe('SOURCE_UNAVAILABLE')
 
-    expect(context.quota.settledModelCalls).toBe(3)
-    expect(onlineBudget.reserveCalls).toBe(0)
-    expect(onlineBudget.settleCalls).toBe(0)
+    // Three stages reserved and settled against the job's own background ledger.
+    const jobLedger = await context.budget.store.getLedger(context.scopeRef, input.jobId, context.editor)
+    expect(jobLedger?.kind).toBe('background')
+    expect(jobLedger?.consumed.modelTokens).toBe(30)
+    const runAfter = await context.budget.service.remaining(runLedgerId, context.editor)
+    expect(runAfter).toEqual(runBefore)
   })
 })
