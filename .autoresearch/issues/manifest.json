@@ -214,7 +214,7 @@
       ],
       "external_gates": [],
       "execution_mode": "local-implementation",
-      "github_issue": null
+      "github_issue": 1
     },
     {
       "id": "LOCAL-002",

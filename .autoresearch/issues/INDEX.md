@@ -2,7 +2,14 @@
 
 基于 [PRD v0.2](../../tasks/prd-industry-semantic-agent-v0.2.md)、[SPEC](../../tasks/spec-industry-semantic-agent-v0.2.md) 与[家庭能源场景](../../tasks/scenario-home-energy-hackathon.md)。
 
-已生成 **54 张本地 Issue**：51 张本地实现/验收任务，3 张外部条件任务。工程位于 `D:/work/ontology`，已关联 [Yijtu/ontology](https://github.com/Yijtu/ontology)。所有编号仍为 LOCAL 编号，尚未创建远程 Issue。全部状态 planned，未启动代码实现；任务和验收不依赖历史原型。
+已生成 **54 张本地 Issue**：51 张本地实现/验收任务，3 张外部条件任务。工程位于 `D:/work/ontology`，已关联 [Yijtu/ontology](https://github.com/Yijtu/ontology)。全部状态 planned，未启动代码实现；任务和验收不依赖历史原型。
+
+远程映射（增量进行，不批量预建）：
+
+| LOCAL | GitHub Issue | 状态 |
+|---|---|---|
+| LOCAL-001 | [#1](https://github.com/Yijtu/ontology/issues/1) | open，本批执行 |
+| LOCAL-002 ~ LOCAL-054 | 未创建 | 待前置完成后逐批创建 |
 
 - [机器可读清单](manifest.json)：依赖、状态、源文档hash、进入条件。
 - [需求覆盖](coverage.md)：25 个故事的每条验收、34 条 FR、18 个设计任务。
