@@ -53,9 +53,9 @@ export const SCHEMA_DOCUMENTS: readonly JsonSchemaObject[] = [
       },
       "UnitCode": {
         "title": "UnitCode",
-        "description": "Canonical unit token (e.g. kWh, kW, Wh, W, %).",
+        "description": "Canonical unit token (e.g. kWh, kW, Wh, W, %). A percent sign is also valid as a standalone token.",
         "type": "string",
-        "pattern": "^[A-Za-z][A-Za-z0-9_./%*^-]*$",
+        "pattern": "^(?:[A-Za-z][A-Za-z0-9_./%*^-]*|%)$",
         "maxLength": 32
       },
       "Sha256Digest": {

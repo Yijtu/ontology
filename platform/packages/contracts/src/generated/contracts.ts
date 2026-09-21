@@ -42,7 +42,7 @@ export type DecimalString = string
  */
 export type CurrencyCode = string
 /**
- * Canonical unit token (e.g. kWh, kW, Wh, W, %).
+ * Canonical unit token (e.g. kWh, kW, Wh, W, %). A percent sign is also valid as a standalone token.
  *
  * This interface was referenced by `OntologyContracts`'s JSON-Schema
  * via the `definition` "UnitCode".
