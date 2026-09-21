@@ -20,6 +20,9 @@ importers:
       '@ontology/adapter-model-company':
         specifier: workspace:*
         version: link:packages/adapters/model-company
+      '@ontology/adapter-transport-local':
+        specifier: workspace:*
+        version: link:packages/adapters/transport-local
       '@ontology/app-api':
         specifier: workspace:*
         version: link:apps/api
@@ -41,6 +44,9 @@ importers:
       '@ontology/semantic-engine':
         specifier: workspace:*
         version: link:packages/semantic-engine
+      '@ontology/tool-services':
+        specifier: workspace:*
+        version: link:packages/tool-services
       '@playwright/test':
         specifier: ^1.62.0
         version: 1.62.0
