@@ -6,6 +6,7 @@ export type {
 } from './database'
 export { PostgresComponentRegistryStore } from './component-registry-store'
 export { PostgresProfileStore } from './profile-store'
+export { PostgresSourceStore } from './source-store'
 export { ControlPostgresRepository } from './repository'
 export type {
   ControlOperationContext,

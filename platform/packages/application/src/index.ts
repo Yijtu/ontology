@@ -8,3 +8,4 @@
  */
 export * from './registry'
 export * from './profiles'
+export * from './sources'
