@@ -1,0 +1,2255 @@
+{
+  "schema_version": 1,
+  "kind": "local-issue-backlog",
+  "created_at": "2026-09-21",
+  "project_root": "D:/work/ontology",
+  "platform": "local",
+  "status": "planned",
+  "implementation_started": false,
+  "github_repository": "Yijtu/ontology",
+  "sources": [
+    "tasks/prd-industry-semantic-agent-v0.2.md",
+    "tasks/spec-industry-semantic-agent-v0.2.md",
+    "tasks/scenario-home-energy-hackathon.md",
+    "tasks/spec-v0.2/contracts-api.md",
+    "tasks/spec-v0.2/data-execution.md",
+    "tasks/spec-v0.2/home-energy.md",
+    "tasks/spec-v0.2/verification-plan.md"
+  ],
+  "input_sha256": {
+    "tasks/prd-industry-semantic-agent-v0.2.md": "d35e3b3b46a0381b8cc9578d88d69a71f1b710a6f1158aa129a1b620ca0ab736",
+    "tasks/spec-industry-semantic-agent-v0.2.md": "bcc9b19dda3c738e3ec0e4c80ebed33162133c87635e9d8c9f525ca98d61ee88",
+    "tasks/scenario-home-energy-hackathon.md": "339bc950daae85b4b818d88f3dd9470f57fbd27d3d97262ca828d1eb07ddb1d1",
+    "tasks/spec-v0.2/contracts-api.md": "b74dc3532decf68491c60d997527028c2c1c537dff73d902b396d699d1e5e620",
+    "tasks/spec-v0.2/data-execution.md": "9ef036ee01ebc21ae25d2e4be420b953a19f2bf889ad1437fef6b3fb30c6f993",
+    "tasks/spec-v0.2/home-energy.md": "aa43bb2bfd5fbab883dcc2e71d1f9bbc51ca30a7ae8996ea7d3bf8e228008737",
+    "tasks/spec-v0.2/verification-plan.md": "1e579633bdfec43ec1e01634dd2cc946db3bfe59119f9e0c3cecf2536f0a63ed"
+  },
+  "entry_ready_ids": [
+    "LOCAL-001"
+  ],
+  "local_delivery_ids": [
+    "LOCAL-001",
+    "LOCAL-002",
+    "LOCAL-003",
+    "LOCAL-004",
+    "LOCAL-005",
+    "LOCAL-006",
+    "LOCAL-007",
+    "LOCAL-008",
+    "LOCAL-009",
+    "LOCAL-010",
+    "LOCAL-011",
+    "LOCAL-012",
+    "LOCAL-013",
+    "LOCAL-014",
+    "LOCAL-015",
+    "LOCAL-016",
+    "LOCAL-017",
+    "LOCAL-018",
+    "LOCAL-019",
+    "LOCAL-020",
+    "LOCAL-021",
+    "LOCAL-022",
+    "LOCAL-023",
+    "LOCAL-024",
+    "LOCAL-025",
+    "LOCAL-026",
+    "LOCAL-027",
+    "LOCAL-028",
+    "LOCAL-029",
+    "LOCAL-030",
+    "LOCAL-031",
+    "LOCAL-032",
+    "LOCAL-033",
+    "LOCAL-034",
+    "LOCAL-035",
+    "LOCAL-036",
+    "LOCAL-037",
+    "LOCAL-038",
+    "LOCAL-039",
+    "LOCAL-040",
+    "LOCAL-041",
+    "LOCAL-042",
+    "LOCAL-043",
+    "LOCAL-044",
+    "LOCAL-045",
+    "LOCAL-046",
+    "LOCAL-047",
+    "LOCAL-048",
+    "LOCAL-049",
+    "LOCAL-050",
+    "LOCAL-054"
+  ],
+  "external_condition_ids": [
+    "LOCAL-051",
+    "LOCAL-052",
+    "LOCAL-053"
+  ],
+  "topological_waves": [
+    [
+      "LOCAL-001"
+    ],
+    [
+      "LOCAL-002"
+    ],
+    [
+      "LOCAL-003",
+      "LOCAL-004",
+      "LOCAL-048"
+    ],
+    [
+      "LOCAL-005"
+    ],
+    [
+      "LOCAL-006"
+    ],
+    [
+      "LOCAL-007",
+      "LOCAL-025"
+    ],
+    [
+      "LOCAL-008",
+      "LOCAL-009"
+    ],
+    [
+      "LOCAL-010",
+      "LOCAL-022",
+      "LOCAL-037"
+    ],
+    [
+      "LOCAL-011",
+      "LOCAL-015",
+      "LOCAL-023"
+    ],
+    [
+      "LOCAL-012",
+      "LOCAL-013",
+      "LOCAL-016",
+      "LOCAL-017",
+      "LOCAL-021",
+      "LOCAL-024",
+      "LOCAL-027"
+    ],
+    [
+      "LOCAL-014",
+      "LOCAL-018",
+      "LOCAL-026",
+      "LOCAL-028",
+      "LOCAL-029"
+    ],
+    [
+      "LOCAL-019",
+      "LOCAL-030",
+      "LOCAL-042"
+    ],
+    [
+      "LOCAL-020",
+      "LOCAL-031",
+      "LOCAL-043"
+    ],
+    [
+      "LOCAL-032",
+      "LOCAL-038",
+      "LOCAL-041",
+      "LOCAL-044"
+    ],
+    [
+      "LOCAL-033",
+      "LOCAL-045"
+    ],
+    [
+      "LOCAL-034",
+      "LOCAL-046"
+    ],
+    [
+      "LOCAL-035",
+      "LOCAL-049"
+    ],
+    [
+      "LOCAL-036"
+    ],
+    [
+      "LOCAL-039",
+      "LOCAL-050"
+    ],
+    [
+      "LOCAL-040"
+    ],
+    [
+      "LOCAL-047"
+    ],
+    [
+      "LOCAL-054"
+    ],
+    [
+      "LOCAL-051",
+      "LOCAL-052"
+    ],
+    [
+      "LOCAL-053"
+    ]
+  ],
+  "issues": [
+    {
+      "id": "LOCAL-001",
+      "number": 1,
+      "title": "建立 TypeScript 工作区与依赖边界检查",
+      "file": "issue-001-typescript-workspace.md",
+      "type": "infra",
+      "priority": "high",
+      "state": "planned",
+      "readiness": "ready",
+      "phase": "A 基础契约",
+      "dependencies": [],
+      "user_stories": [
+        "US-001"
+      ],
+      "functional_requirements": [
+        "FR-1"
+      ],
+      "acceptance_refs": [],
+      "design_tasks": [
+        "S01"
+      ],
+      "external_gates": [],
+      "execution_mode": "local-implementation",
+      "github_issue": null
+    },
+    {
+      "id": "LOCAL-002",
+      "number": 2,
+      "title": "定义公共 JSON Schema、端口及统一结果协议",
+      "file": "issue-002-canonical-contracts.md",
+      "type": "backend",
+      "priority": "high",
+      "state": "planned",
+      "readiness": "waiting_dependencies",
+      "phase": "A 基础契约",
+      "dependencies": [
+        "LOCAL-001"
+      ],
+      "user_stories": [
+        "US-004",
+        "US-006",
+        "US-008",
+        "US-018"
+      ],
+      "functional_requirements": [
+        "FR-5",
+        "FR-6",
+        "FR-7",
+        "FR-10",
+        "FR-21"
+      ],
+      "acceptance_refs": [
+        "US-006.A1"
+      ],
+      "design_tasks": [
+        "S01"
+      ],
+      "external_gates": [],
+      "execution_mode": "local-implementation",
+      "github_issue": null
+    },
+    {
+      "id": "LOCAL-003",
+      "number": 3,
+      "title": "定义行业包与场景配置清单",
+      "file": "issue-003-package-profile-manifests.md",
+      "type": "backend",
+      "priority": "high",
+      "state": "planned",
+      "readiness": "waiting_dependencies",
+      "phase": "A 基础契约",
+      "dependencies": [
+        "LOCAL-002"
+      ],
+      "user_stories": [
+        "US-001",
+        "US-002",
+        "US-003",
+        "US-023"
+      ],
+      "functional_requirements": [
+        "FR-1",
+        "FR-2",
+        "FR-3",
+        "FR-4",
+        "FR-31",
+        "FR-32"
+      ],
+      "acceptance_refs": [
+        "US-001.A1"
+      ],
+      "design_tasks": [
+        "S01",
+        "S03"
+      ],
+      "external_gates": [],
+      "execution_mode": "local-implementation",
+      "github_issue": null
+    },
+    {
+      "id": "LOCAL-004",
+      "number": 4,
+      "title": "实现 PostgreSQL 控制存储基础与租户隔离",
+      "file": "issue-004-control-postgres-foundation.md",
+      "type": "infra",
+      "priority": "high",
+      "state": "planned",
+      "readiness": "waiting_dependencies",
+      "phase": "A 基础契约",
+      "dependencies": [
+        "LOCAL-002"
+      ],
+      "user_stories": [
+        "US-001",
+        "US-008",
+        "US-011",
+        "US-023"
+      ],
+      "functional_requirements": [
+        "FR-1",
+        "FR-3",
+        "FR-10",
+        "FR-13",
+        "FR-31",
+        "FR-32"
+      ],
+      "acceptance_refs": [],
+      "design_tasks": [
+        "S02"
+      ],
+      "external_gates": [],
+      "execution_mode": "local-implementation",
+      "github_issue": null
+    },
+    {
+      "id": "LOCAL-005",
+      "number": 5,
+      "title": "实现不可变工件与来源定位存储",
+      "file": "issue-005-immutable-artifacts.md",
+      "type": "backend",
+      "priority": "high",
+      "state": "planned",
+      "readiness": "waiting_dependencies",
+      "phase": "A 基础契约",
+      "dependencies": [
+        "LOCAL-002",
+        "LOCAL-004"
+      ],
+      "user_stories": [
+        "US-010",
+        "US-012",
+        "US-022"
+      ],
+      "functional_requirements": [
+        "FR-12",
+        "FR-14",
+        "FR-30"
+      ],
+      "acceptance_refs": [],
+      "design_tasks": [
+        "S02",
+        "S06"
+      ],
+      "external_gates": [],
+      "execution_mode": "local-implementation",
+      "github_issue": null
+    },
+    {
+      "id": "LOCAL-006",
+      "number": 6,
+      "title": "实现组件注册、生命周期和版本冻结",
+      "file": "issue-006-component-registry.md",
+      "type": "backend",
+      "priority": "high",
+      "state": "planned",
+      "readiness": "waiting_dependencies",
+      "phase": "B 装配与执行基础",
+      "dependencies": [
+        "LOCAL-003",
+        "LOCAL-004",
+        "LOCAL-005"
+      ],
+      "user_stories": [
+        "US-001",
+        "US-023"
+      ],
+      "functional_requirements": [
+        "FR-1",
+        "FR-3",
+        "FR-31",
+        "FR-32"
+      ],
+      "acceptance_refs": [
+        "US-001.A1",
+        "US-001.A2"
+      ],
+      "design_tasks": [
+        "S03"
+      ],
+      "external_gates": [],
+      "execution_mode": "local-implementation",
+      "github_issue": null
+    },
+    {
+      "id": "LOCAL-007",
+      "number": 7,
+      "title": "实现场景预检、版本清单与激活接口",
+      "file": "issue-007-profile-composition.md",
+      "type": "backend",
+      "priority": "high",
+      "state": "planned",
+      "readiness": "waiting_dependencies",
+      "phase": "B 装配与执行基础",
+      "dependencies": [
+        "LOCAL-003",
+        "LOCAL-004",
+        "LOCAL-006"
+      ],
+      "user_stories": [
+        "US-002",
+        "US-023"
+      ],
+      "functional_requirements": [
+        "FR-2",
+        "FR-3",
+        "FR-31",
+        "FR-32"
+      ],
+      "acceptance_refs": [
+        "US-002.A1",
+        "US-023.A1"
+      ],
+      "design_tasks": [
+        "S03"
+      ],
+      "external_gates": [],
+      "execution_mode": "local-implementation",
+      "github_issue": null
+    },
+    {
+      "id": "LOCAL-008",
+      "number": 8,
+      "title": "实现数据源登记与能力探测框架",
+      "file": "issue-008-source-bindings-probe.md",
+      "type": "backend",
+      "priority": "high",
+      "state": "planned",
+      "readiness": "waiting_dependencies",
+      "phase": "B 装配与执行基础",
+      "dependencies": [
+        "LOCAL-002",
+        "LOCAL-004",
+        "LOCAL-007"
+      ],
+      "user_stories": [
+        "US-008",
+        "US-009"
+      ],
+      "functional_requirements": [
+        "FR-10",
+        "FR-11"
+      ],
+      "acceptance_refs": [
+        "US-008.A1",
+        "US-008.A2"
+      ],
+      "design_tasks": [
+        "S03",
+        "S05"
+      ],
+      "external_gates": [],
+      "execution_mode": "local-implementation",
+      "github_issue": null
+    },
+    {
+      "id": "LOCAL-009",
+      "number": 9,
+      "title": "实现运行记录、事件 API 与并发修订",
+      "file": "issue-009-run-events-api.md",
+      "type": "backend",
+      "priority": "high",
+      "state": "planned",
+      "readiness": "waiting_dependencies",
+      "phase": "B 装配与执行基础",
+      "dependencies": [
+        "LOCAL-002",
+        "LOCAL-004",
+        "LOCAL-007"
+      ],
+      "user_stories": [
+        "US-004",
+        "US-019",
+        "US-022",
+        "US-023"
+      ],
+      "functional_requirements": [
+        "FR-3",
+        "FR-5",
+        "FR-21",
+        "FR-22",
+        "FR-23",
+        "FR-24",
+        "FR-30",
+        "FR-31",
+        "FR-32"
+      ],
+      "acceptance_refs": [],
+      "design_tasks": [
+        "S09"
+      ],
+      "external_gates": [],
+      "execution_mode": "local-implementation",
+      "github_issue": null
+    },
+    {
+      "id": "LOCAL-010",
+      "number": 10,
+      "title": "实现共享预算、工具意图与用量账本",
+      "file": "issue-010-budget-ledger.md",
+      "type": "backend",
+      "priority": "high",
+      "state": "planned",
+      "readiness": "waiting_dependencies",
+      "phase": "B 装配与执行基础",
+      "dependencies": [
+        "LOCAL-004",
+        "LOCAL-009"
+      ],
+      "user_stories": [
+        "US-006",
+        "US-018",
+        "US-019"
+      ],
+      "functional_requirements": [
+        "FR-6",
+        "FR-7",
+        "FR-21",
+        "FR-22",
+        "FR-23",
+        "FR-24"
+      ],
+      "acceptance_refs": [
+        "US-019.A2"
+      ],
+      "design_tasks": [
+        "S04"
+      ],
+      "external_gates": [],
+      "execution_mode": "local-implementation",
+      "github_issue": null
+    },
+    {
+      "id": "LOCAL-011",
+      "number": 11,
+      "title": "实现统一工具网关、本地注册与证据结果",
+      "file": "issue-011-tool-gateway-local.md",
+      "type": "backend",
+      "priority": "high",
+      "state": "planned",
+      "readiness": "waiting_dependencies",
+      "phase": "B 装配与执行基础",
+      "dependencies": [
+        "LOCAL-002",
+        "LOCAL-005",
+        "LOCAL-006",
+        "LOCAL-007",
+        "LOCAL-009",
+        "LOCAL-010"
+      ],
+      "user_stories": [
+        "US-006",
+        "US-020",
+        "US-021"
+      ],
+      "functional_requirements": [
+        "FR-6",
+        "FR-7",
+        "FR-25",
+        "FR-26",
+        "FR-27",
+        "FR-28",
+        "FR-29"
+      ],
+      "acceptance_refs": [
+        "US-001.A2",
+        "US-004.A2",
+        "US-006.A1",
+        "US-006.A2",
+        "US-020.A2"
+      ],
+      "design_tasks": [
+        "S04"
+      ],
+      "external_gates": [],
+      "execution_mode": "local-implementation",
+      "github_issue": null
+    },
+    {
+      "id": "LOCAL-012",
+      "number": 12,
+      "title": "实现 PostgreSQL 只读查询适配器",
+      "file": "issue-012-postgres-query-adapter.md",
+      "type": "backend",
+      "priority": "high",
+      "state": "planned",
+      "readiness": "waiting_dependencies",
+      "phase": "C 数据与协议适配",
+      "dependencies": [
+        "LOCAL-008",
+        "LOCAL-011"
+      ],
+      "user_stories": [
+        "US-008",
+        "US-009",
+        "US-020"
+      ],
+      "functional_requirements": [
+        "FR-10",
+        "FR-11",
+        "FR-25",
+        "FR-26"
+      ],
+      "acceptance_refs": [
+        "US-008.A1",
+        "US-009.A1",
+        "US-020.A2"
+      ],
+      "design_tasks": [
+        "S05"
+      ],
+      "external_gates": [],
+      "execution_mode": "local-implementation",
+      "github_issue": null
+    },
+    {
+      "id": "LOCAL-013",
+      "number": 13,
+      "title": "实现 DuckDB 本地查询适配器",
+      "file": "issue-013-duckdb-query-adapter.md",
+      "type": "backend",
+      "priority": "high",
+      "state": "planned",
+      "readiness": "waiting_dependencies",
+      "phase": "C 数据与协议适配",
+      "dependencies": [
+        "LOCAL-008",
+        "LOCAL-011"
+      ],
+      "user_stories": [
+        "US-008",
+        "US-009",
+        "US-020",
+        "US-024"
+      ],
+      "functional_requirements": [
+        "FR-10",
+        "FR-11",
+        "FR-25",
+        "FR-26",
+        "FR-33"
+      ],
+      "acceptance_refs": [
+        "US-008.A1",
+        "US-009.A1",
+        "US-020.A2"
+      ],
+      "design_tasks": [
+        "S05"
+      ],
+      "external_gates": [],
+      "execution_mode": "local-implementation",
+      "github_issue": null
+    },
+    {
+      "id": "LOCAL-014",
+      "number": 14,
+      "title": "实现 stdio MCP 与本地工具等价调用",
+      "file": "issue-014-mcp-transport.md",
+      "type": "backend",
+      "priority": "high",
+      "state": "planned",
+      "readiness": "waiting_dependencies",
+      "phase": "C 数据与协议适配",
+      "dependencies": [
+        "LOCAL-011",
+        "LOCAL-012"
+      ],
+      "user_stories": [
+        "US-007",
+        "US-024"
+      ],
+      "functional_requirements": [
+        "FR-6",
+        "FR-8",
+        "FR-9",
+        "FR-33"
+      ],
+      "acceptance_refs": [
+        "US-007.A1",
+        "US-007.A2"
+      ],
+      "design_tasks": [
+        "S07"
+      ],
+      "external_gates": [],
+      "execution_mode": "local-implementation",
+      "github_issue": null
+    },
+    {
+      "id": "LOCAL-015",
+      "number": 15,
+      "title": "实现生成式模型端口与公司 API 适配",
+      "file": "issue-015-generation-model-adapter.md",
+      "type": "backend",
+      "priority": "high",
+      "state": "planned",
+      "readiness": "waiting_dependencies",
+      "phase": "D Agent 运行时",
+      "dependencies": [
+        "LOCAL-002",
+        "LOCAL-009",
+        "LOCAL-010"
+      ],
+      "user_stories": [
+        "US-004",
+        "US-012",
+        "US-018",
+        "US-021"
+      ],
+      "functional_requirements": [
+        "FR-5",
+        "FR-14",
+        "FR-21",
+        "FR-27",
+        "FR-28",
+        "FR-29"
+      ],
+      "acceptance_refs": [],
+      "design_tasks": [
+        "S08"
+      ],
+      "external_gates": [],
+      "execution_mode": "local-implementation",
+      "github_issue": null
+    },
+    {
+      "id": "LOCAL-016",
+      "number": 16,
+      "title": "实现 JEV 决策适配与显式降级",
+      "file": "issue-016-jev-decision-adapter.md",
+      "type": "backend",
+      "priority": "high",
+      "state": "planned",
+      "readiness": "waiting_dependencies",
+      "phase": "D Agent 运行时",
+      "dependencies": [
+        "LOCAL-002",
+        "LOCAL-010",
+        "LOCAL-015"
+      ],
+      "user_stories": [
+        "US-018",
+        "US-021",
+        "US-024"
+      ],
+      "functional_requirements": [
+        "FR-21",
+        "FR-27",
+        "FR-28",
+        "FR-29",
+        "FR-33"
+      ],
+      "acceptance_refs": [
+        "US-018.A2"
+      ],
+      "design_tasks": [
+        "S08"
+      ],
+      "external_gates": [],
+      "execution_mode": "local-implementation",
+      "github_issue": null
+    },
+    {
+      "id": "LOCAL-017",
+      "number": 17,
+      "title": "实现模板运行时适配器",
+      "file": "issue-017-template-runtime.md",
+      "type": "backend",
+      "priority": "high",
+      "state": "planned",
+      "readiness": "waiting_dependencies",
+      "phase": "D Agent 运行时",
+      "dependencies": [
+        "LOCAL-009",
+        "LOCAL-011",
+        "LOCAL-015"
+      ],
+      "user_stories": [
+        "US-005",
+        "US-019"
+      ],
+      "functional_requirements": [
+        "FR-5",
+        "FR-21",
+        "FR-22",
+        "FR-23",
+        "FR-24"
+      ],
+      "acceptance_refs": [
+        "US-005.A1",
+        "US-019.A1"
+      ],
+      "design_tasks": [
+        "S09"
+      ],
+      "external_gates": [],
+      "execution_mode": "local-implementation",
+      "github_issue": null
+    },
+    {
+      "id": "LOCAL-018",
+      "number": 18,
+      "title": "实现 Pi Agent Core 运行时适配器",
+      "file": "issue-018-pi-runtime.md",
+      "type": "backend",
+      "priority": "high",
+      "state": "planned",
+      "readiness": "waiting_dependencies",
+      "phase": "D Agent 运行时",
+      "dependencies": [
+        "LOCAL-009",
+        "LOCAL-011",
+        "LOCAL-015",
+        "LOCAL-016"
+      ],
+      "user_stories": [
+        "US-004",
+        "US-005",
+        "US-019"
+      ],
+      "functional_requirements": [
+        "FR-5",
+        "FR-21",
+        "FR-22",
+        "FR-23",
+        "FR-24"
+      ],
+      "acceptance_refs": [
+        "US-004.A1",
+        "US-004.A2",
+        "US-005.A1",
+        "US-005.A2",
+        "US-019.A1"
+      ],
+      "design_tasks": [
+        "S09"
+      ],
+      "external_gates": [],
+      "execution_mode": "local-implementation",
+      "github_issue": null
+    },
+    {
+      "id": "LOCAL-019",
+      "number": 19,
+      "title": "实现 WorkflowController 生命周期与恢复协调",
+      "file": "issue-019-workflow-controller.md",
+      "type": "backend",
+      "priority": "high",
+      "state": "planned",
+      "readiness": "waiting_dependencies",
+      "phase": "D Agent 运行时",
+      "dependencies": [
+        "LOCAL-007",
+        "LOCAL-009",
+        "LOCAL-010",
+        "LOCAL-017",
+        "LOCAL-018"
+      ],
+      "user_stories": [
+        "US-004",
+        "US-005",
+        "US-019",
+        "US-021"
+      ],
+      "functional_requirements": [
+        "FR-5",
+        "FR-21",
+        "FR-22",
+        "FR-23",
+        "FR-24",
+        "FR-27",
+        "FR-28",
+        "FR-29"
+      ],
+      "acceptance_refs": [
+        "US-005.A2",
+        "US-006.A2",
+        "US-019.A2"
+      ],
+      "design_tasks": [
+        "S09"
+      ],
+      "external_gates": [],
+      "execution_mode": "local-implementation",
+      "github_issue": null
+    },
+    {
+      "id": "LOCAL-020",
+      "number": 20,
+      "title": "实现路由、小计划与无进展守卫",
+      "file": "issue-020-route-plan-loop.md",
+      "type": "backend",
+      "priority": "high",
+      "state": "planned",
+      "readiness": "waiting_dependencies",
+      "phase": "D Agent 运行时",
+      "dependencies": [
+        "LOCAL-011",
+        "LOCAL-016",
+        "LOCAL-017",
+        "LOCAL-018",
+        "LOCAL-019"
+      ],
+      "user_stories": [
+        "US-018",
+        "US-019",
+        "US-020"
+      ],
+      "functional_requirements": [
+        "FR-21",
+        "FR-22",
+        "FR-23",
+        "FR-24",
+        "FR-25",
+        "FR-26"
+      ],
+      "acceptance_refs": [
+        "US-018.A1",
+        "US-018.A2",
+        "US-019.A1",
+        "US-019.A2"
+      ],
+      "design_tasks": [
+        "S09"
+      ],
+      "external_gates": [],
+      "execution_mode": "local-implementation",
+      "github_issue": null
+    },
+    {
+      "id": "LOCAL-021",
+      "number": 21,
+      "title": "实现受限 Web 搜索适配器",
+      "file": "issue-021-web-search-adapter.md",
+      "type": "backend",
+      "priority": "high",
+      "state": "planned",
+      "readiness": "waiting_dependencies",
+      "phase": "C 数据与协议适配",
+      "dependencies": [
+        "LOCAL-008",
+        "LOCAL-011"
+      ],
+      "user_stories": [
+        "US-020",
+        "US-024"
+      ],
+      "functional_requirements": [
+        "FR-25",
+        "FR-26",
+        "FR-33"
+      ],
+      "acceptance_refs": [
+        "US-020.A1",
+        "US-020.A2"
+      ],
+      "design_tasks": [
+        "S10",
+        "S16"
+      ],
+      "external_gates": [],
+      "execution_mode": "local-implementation",
+      "github_issue": null
+    },
+    {
+      "id": "LOCAL-022",
+      "number": 22,
+      "title": "实现异步作业、租约与事务 Outbox",
+      "file": "issue-022-durable-jobs-outbox.md",
+      "type": "backend",
+      "priority": "high",
+      "state": "planned",
+      "readiness": "waiting_dependencies",
+      "phase": "E 文档与语义",
+      "dependencies": [
+        "LOCAL-004",
+        "LOCAL-005",
+        "LOCAL-008"
+      ],
+      "user_stories": [
+        "US-011",
+        "US-009"
+      ],
+      "functional_requirements": [
+        "FR-10",
+        "FR-11",
+        "FR-13"
+      ],
+      "acceptance_refs": [
+        "US-009.A2",
+        "US-011.A1",
+        "US-011.A2"
+      ],
+      "design_tasks": [
+        "S02",
+        "S11"
+      ],
+      "external_gates": [],
+      "execution_mode": "local-implementation",
+      "github_issue": null
+    },
+    {
+      "id": "LOCAL-023",
+      "number": 23,
+      "title": "实现文档解析与可追溯分块",
+      "file": "issue-023-document-parser-spans.md",
+      "type": "backend",
+      "priority": "high",
+      "state": "planned",
+      "readiness": "waiting_dependencies",
+      "phase": "E 文档与语义",
+      "dependencies": [
+        "LOCAL-005",
+        "LOCAL-008",
+        "LOCAL-022"
+      ],
+      "user_stories": [
+        "US-010",
+        "US-012",
+        "US-013"
+      ],
+      "functional_requirements": [
+        "FR-12",
+        "FR-14",
+        "FR-15"
+      ],
+      "acceptance_refs": [
+        "US-010.A1"
+      ],
+      "design_tasks": [
+        "S06"
+      ],
+      "external_gates": [],
+      "execution_mode": "local-implementation",
+      "github_issue": null
+    },
+    {
+      "id": "LOCAL-024",
+      "number": 24,
+      "title": "实现 BM25 文档检索与证据返回",
+      "file": "issue-024-bm25-document-search.md",
+      "type": "backend",
+      "priority": "high",
+      "state": "planned",
+      "readiness": "waiting_dependencies",
+      "phase": "E 文档与语义",
+      "dependencies": [
+        "LOCAL-011",
+        "LOCAL-022",
+        "LOCAL-023"
+      ],
+      "user_stories": [
+        "US-010",
+        "US-020"
+      ],
+      "functional_requirements": [
+        "FR-12",
+        "FR-25",
+        "FR-26"
+      ],
+      "acceptance_refs": [
+        "US-010.A1",
+        "US-010.A2",
+        "US-020.A1"
+      ],
+      "design_tasks": [
+        "S06"
+      ],
+      "external_gates": [],
+      "execution_mode": "local-implementation",
+      "github_issue": null
+    },
+    {
+      "id": "LOCAL-025",
+      "number": 25,
+      "title": "实现行业模型与语义定义版本存储",
+      "file": "issue-025-semantic-model-versions.md",
+      "type": "backend",
+      "priority": "high",
+      "state": "planned",
+      "readiness": "waiting_dependencies",
+      "phase": "E 文档与语义",
+      "dependencies": [
+        "LOCAL-003",
+        "LOCAL-004",
+        "LOCAL-006"
+      ],
+      "user_stories": [
+        "US-003",
+        "US-012",
+        "US-015",
+        "US-023"
+      ],
+      "functional_requirements": [
+        "FR-3",
+        "FR-4",
+        "FR-14",
+        "FR-31",
+        "FR-32"
+      ],
+      "acceptance_refs": [
+        "US-003.A2"
+      ],
+      "design_tasks": [
+        "S11",
+        "S13"
+      ],
+      "external_gates": [],
+      "execution_mode": "local-implementation",
+      "github_issue": null
+    },
+    {
+      "id": "LOCAL-026",
+      "number": 26,
+      "title": "实现语义映射、查询编译与本体工具",
+      "file": "issue-026-semantic-mapping-query.md",
+      "type": "backend",
+      "priority": "high",
+      "state": "planned",
+      "readiness": "waiting_dependencies",
+      "phase": "E 文档与语义",
+      "dependencies": [
+        "LOCAL-011",
+        "LOCAL-012",
+        "LOCAL-013",
+        "LOCAL-025"
+      ],
+      "user_stories": [
+        "US-003",
+        "US-009",
+        "US-020",
+        "US-024"
+      ],
+      "functional_requirements": [
+        "FR-4",
+        "FR-10",
+        "FR-11",
+        "FR-25",
+        "FR-26",
+        "FR-33"
+      ],
+      "acceptance_refs": [
+        "US-003.A1",
+        "US-009.A1",
+        "US-009.A2",
+        "US-020.A1"
+      ],
+      "design_tasks": [
+        "S05",
+        "S13"
+      ],
+      "external_gates": [],
+      "execution_mode": "local-implementation",
+      "github_issue": null
+    },
+    {
+      "id": "LOCAL-027",
+      "number": 27,
+      "title": "实现实体和关系候选抽取流水线",
+      "file": "issue-027-entity-relation-extraction.md",
+      "type": "backend",
+      "priority": "high",
+      "state": "planned",
+      "readiness": "waiting_dependencies",
+      "phase": "E 文档与语义",
+      "dependencies": [
+        "LOCAL-015",
+        "LOCAL-022",
+        "LOCAL-023",
+        "LOCAL-025"
+      ],
+      "user_stories": [
+        "US-012",
+        "US-015"
+      ],
+      "functional_requirements": [
+        "FR-14"
+      ],
+      "acceptance_refs": [
+        "US-012.A1",
+        "US-012.A2"
+      ],
+      "design_tasks": [
+        "S11"
+      ],
+      "external_gates": [],
+      "execution_mode": "local-implementation",
+      "github_issue": null
+    },
+    {
+      "id": "LOCAL-028",
+      "number": 28,
+      "title": "实现规则候选抽取与表达校验",
+      "file": "issue-028-rule-candidate-extraction.md",
+      "type": "backend",
+      "priority": "high",
+      "state": "planned",
+      "readiness": "waiting_dependencies",
+      "phase": "E 文档与语义",
+      "dependencies": [
+        "LOCAL-015",
+        "LOCAL-022",
+        "LOCAL-023",
+        "LOCAL-025",
+        "LOCAL-027"
+      ],
+      "user_stories": [
+        "US-013",
+        "US-015"
+      ],
+      "functional_requirements": [
+        "FR-14",
+        "FR-15"
+      ],
+      "acceptance_refs": [
+        "US-013.A1",
+        "US-013.A2"
+      ],
+      "design_tasks": [
+        "S11"
+      ],
+      "external_gates": [],
+      "execution_mode": "local-implementation",
+      "github_issue": null
+    },
+    {
+      "id": "LOCAL-029",
+      "number": 29,
+      "title": "实现实体候选召回与身份作用域",
+      "file": "issue-029-identity-candidate-retrieval.md",
+      "type": "backend",
+      "priority": "high",
+      "state": "planned",
+      "readiness": "waiting_dependencies",
+      "phase": "E 文档与语义",
+      "dependencies": [
+        "LOCAL-024",
+        "LOCAL-025",
+        "LOCAL-027"
+      ],
+      "user_stories": [
+        "US-014"
+      ],
+      "functional_requirements": [
+        "FR-16",
+        "FR-17"
+      ],
+      "acceptance_refs": [
+        "US-014.A1"
+      ],
+      "design_tasks": [
+        "S11"
+      ],
+      "external_gates": [],
+      "execution_mode": "local-implementation",
+      "github_issue": null
+    },
+    {
+      "id": "LOCAL-030",
+      "number": 30,
+      "title": "实现实体裁决、澄清和可撤销身份记录",
+      "file": "issue-030-identity-decisions.md",
+      "type": "backend",
+      "priority": "high",
+      "state": "planned",
+      "readiness": "waiting_dependencies",
+      "phase": "E 文档与语义",
+      "dependencies": [
+        "LOCAL-004",
+        "LOCAL-022",
+        "LOCAL-025",
+        "LOCAL-027",
+        "LOCAL-029"
+      ],
+      "user_stories": [
+        "US-014",
+        "US-015"
+      ],
+      "functional_requirements": [
+        "FR-14",
+        "FR-16",
+        "FR-17"
+      ],
+      "acceptance_refs": [
+        "US-014.A1",
+        "US-014.A2"
+      ],
+      "design_tasks": [
+        "S11"
+      ],
+      "external_gates": [],
+      "execution_mode": "local-implementation",
+      "github_issue": null
+    },
+    {
+      "id": "LOCAL-031",
+      "number": 31,
+      "title": "实现语义发布事务与审核状态 API",
+      "file": "issue-031-semantic-publication.md",
+      "type": "backend",
+      "priority": "high",
+      "state": "planned",
+      "readiness": "waiting_dependencies",
+      "phase": "E 文档与语义",
+      "dependencies": [
+        "LOCAL-022",
+        "LOCAL-025",
+        "LOCAL-027",
+        "LOCAL-028",
+        "LOCAL-030"
+      ],
+      "user_stories": [
+        "US-015",
+        "US-011",
+        "US-012"
+      ],
+      "functional_requirements": [
+        "FR-13",
+        "FR-14"
+      ],
+      "acceptance_refs": [
+        "US-012.A2",
+        "US-015.A1",
+        "US-015.A2"
+      ],
+      "design_tasks": [
+        "S11"
+      ],
+      "external_gates": [],
+      "execution_mode": "local-implementation",
+      "github_issue": null
+    },
+    {
+      "id": "LOCAL-032",
+      "number": 32,
+      "title": "实现声明式规则求值与紧凑支撑 DAG",
+      "file": "issue-032-rule-evaluator-supports.md",
+      "type": "backend",
+      "priority": "high",
+      "state": "planned",
+      "readiness": "waiting_dependencies",
+      "phase": "F 推理与输出",
+      "dependencies": [
+        "LOCAL-025",
+        "LOCAL-031",
+        "LOCAL-048"
+      ],
+      "user_stories": [
+        "US-016"
+      ],
+      "functional_requirements": [
+        "FR-18"
+      ],
+      "acceptance_refs": [
+        "US-016.A1"
+      ],
+      "design_tasks": [
+        "S12"
+      ],
+      "external_gates": [],
+      "execution_mode": "local-implementation",
+      "github_issue": null
+    },
+    {
+      "id": "LOCAL-033",
+      "number": 33,
+      "title": "实现增量物化、双时态投影和失效围栏",
+      "file": "issue-033-incremental-materialization.md",
+      "type": "backend",
+      "priority": "high",
+      "state": "planned",
+      "readiness": "waiting_dependencies",
+      "phase": "F 推理与输出",
+      "dependencies": [
+        "LOCAL-022",
+        "LOCAL-031",
+        "LOCAL-032"
+      ],
+      "user_stories": [
+        "US-016",
+        "US-017"
+      ],
+      "functional_requirements": [
+        "FR-18",
+        "FR-19",
+        "FR-20"
+      ],
+      "acceptance_refs": [
+        "US-016.A2",
+        "US-017.A1",
+        "US-017.A2"
+      ],
+      "design_tasks": [
+        "S12"
+      ],
+      "external_gates": [],
+      "execution_mode": "local-implementation",
+      "github_issue": null
+    },
+    {
+      "id": "LOCAL-034",
+      "number": 34,
+      "title": "实现按需溯源、历史和受控明细接口",
+      "file": "issue-034-provenance-history-api.md",
+      "type": "backend",
+      "priority": "high",
+      "state": "planned",
+      "readiness": "waiting_dependencies",
+      "phase": "F 推理与输出",
+      "dependencies": [
+        "LOCAL-005",
+        "LOCAL-009",
+        "LOCAL-031",
+        "LOCAL-032",
+        "LOCAL-033"
+      ],
+      "user_stories": [
+        "US-017",
+        "US-022"
+      ],
+      "functional_requirements": [
+        "FR-19",
+        "FR-20",
+        "FR-30"
+      ],
+      "acceptance_refs": [
+        "US-017.A2",
+        "US-022.A1"
+      ],
+      "design_tasks": [
+        "S12",
+        "S10"
+      ],
+      "external_gates": [],
+      "execution_mode": "local-implementation",
+      "github_issue": null
+    },
+    {
+      "id": "LOCAL-035",
+      "number": 35,
+      "title": "实现回答草稿与组合核验服务",
+      "file": "issue-035-draft-verification.md",
+      "type": "backend",
+      "priority": "high",
+      "state": "planned",
+      "readiness": "waiting_dependencies",
+      "phase": "F 推理与输出",
+      "dependencies": [
+        "LOCAL-011",
+        "LOCAL-015",
+        "LOCAL-016",
+        "LOCAL-020",
+        "LOCAL-034"
+      ],
+      "user_stories": [
+        "US-021"
+      ],
+      "functional_requirements": [
+        "FR-27",
+        "FR-28",
+        "FR-29"
+      ],
+      "acceptance_refs": [
+        "US-021.A1"
+      ],
+      "design_tasks": [
+        "S10"
+      ],
+      "external_gates": [],
+      "execution_mode": "local-implementation",
+      "github_issue": null
+    },
+    {
+      "id": "LOCAL-036",
+      "number": 36,
+      "title": "实现最终答案原子发布与过期检查",
+      "file": "issue-036-answer-publication-gate.md",
+      "type": "backend",
+      "priority": "high",
+      "state": "planned",
+      "readiness": "waiting_dependencies",
+      "phase": "F 推理与输出",
+      "dependencies": [
+        "LOCAL-009",
+        "LOCAL-019",
+        "LOCAL-033",
+        "LOCAL-034",
+        "LOCAL-035"
+      ],
+      "user_stories": [
+        "US-021",
+        "US-022",
+        "US-019"
+      ],
+      "functional_requirements": [
+        "FR-21",
+        "FR-22",
+        "FR-23",
+        "FR-24",
+        "FR-27",
+        "FR-28",
+        "FR-29",
+        "FR-30"
+      ],
+      "acceptance_refs": [
+        "US-004.A2",
+        "US-006.A2",
+        "US-021.A2"
+      ],
+      "design_tasks": [
+        "S10"
+      ],
+      "external_gates": [],
+      "execution_mode": "local-implementation",
+      "github_issue": null
+    },
+    {
+      "id": "LOCAL-037",
+      "number": 37,
+      "title": "实现配置工作台和数据源能力界面",
+      "file": "issue-037-ui-profiles-sources.md",
+      "type": "frontend",
+      "priority": "high",
+      "state": "planned",
+      "readiness": "waiting_dependencies",
+      "phase": "G 产品界面",
+      "dependencies": [
+        "LOCAL-006",
+        "LOCAL-007",
+        "LOCAL-008",
+        "LOCAL-009"
+      ],
+      "user_stories": [
+        "US-002",
+        "US-008",
+        "US-023"
+      ],
+      "functional_requirements": [
+        "FR-2",
+        "FR-3",
+        "FR-10",
+        "FR-31",
+        "FR-32"
+      ],
+      "acceptance_refs": [
+        "US-002.A2",
+        "US-008.A2"
+      ],
+      "design_tasks": [
+        "S03",
+        "S10"
+      ],
+      "external_gates": [],
+      "execution_mode": "local-implementation",
+      "github_issue": null
+    },
+    {
+      "id": "LOCAL-038",
+      "number": 38,
+      "title": "实现导入任务与候选审核界面",
+      "file": "issue-038-ui-jobs-review.md",
+      "type": "frontend",
+      "priority": "high",
+      "state": "planned",
+      "readiness": "waiting_dependencies",
+      "phase": "G 产品界面",
+      "dependencies": [
+        "LOCAL-022",
+        "LOCAL-023",
+        "LOCAL-027",
+        "LOCAL-028",
+        "LOCAL-029",
+        "LOCAL-030",
+        "LOCAL-031",
+        "LOCAL-037"
+      ],
+      "user_stories": [
+        "US-010",
+        "US-011",
+        "US-014",
+        "US-015"
+      ],
+      "functional_requirements": [
+        "FR-12",
+        "FR-13",
+        "FR-14",
+        "FR-16",
+        "FR-17"
+      ],
+      "acceptance_refs": [
+        "US-010.A2",
+        "US-011.A2",
+        "US-014.A2",
+        "US-015.A2"
+      ],
+      "design_tasks": [
+        "S11"
+      ],
+      "external_gates": [],
+      "execution_mode": "local-implementation",
+      "github_issue": null
+    },
+    {
+      "id": "LOCAL-039",
+      "number": 39,
+      "title": "实现业务问答、进度和澄清界面",
+      "file": "issue-039-ui-query-workflow.md",
+      "type": "frontend",
+      "priority": "high",
+      "state": "planned",
+      "readiness": "waiting_dependencies",
+      "phase": "G 产品界面",
+      "dependencies": [
+        "LOCAL-019",
+        "LOCAL-020",
+        "LOCAL-021",
+        "LOCAL-024",
+        "LOCAL-026",
+        "LOCAL-035",
+        "LOCAL-036",
+        "LOCAL-037"
+      ],
+      "user_stories": [
+        "US-019",
+        "US-020",
+        "US-021"
+      ],
+      "functional_requirements": [
+        "FR-21",
+        "FR-22",
+        "FR-23",
+        "FR-24",
+        "FR-25",
+        "FR-26",
+        "FR-27",
+        "FR-28",
+        "FR-29"
+      ],
+      "acceptance_refs": [
+        "US-019.A2",
+        "US-021.A2"
+      ],
+      "design_tasks": [
+        "S10"
+      ],
+      "external_gates": [],
+      "execution_mode": "local-implementation",
+      "github_issue": null
+    },
+    {
+      "id": "LOCAL-040",
+      "number": 40,
+      "title": "实现证据展开与历史对比界面",
+      "file": "issue-040-ui-provenance-history.md",
+      "type": "frontend",
+      "priority": "high",
+      "state": "planned",
+      "readiness": "waiting_dependencies",
+      "phase": "G 产品界面",
+      "dependencies": [
+        "LOCAL-034",
+        "LOCAL-036",
+        "LOCAL-039"
+      ],
+      "user_stories": [
+        "US-017",
+        "US-022"
+      ],
+      "functional_requirements": [
+        "FR-19",
+        "FR-20",
+        "FR-30"
+      ],
+      "acceptance_refs": [
+        "US-017.A2",
+        "US-022.A1",
+        "US-022.A2"
+      ],
+      "design_tasks": [
+        "S10",
+        "S15"
+      ],
+      "external_gates": [],
+      "execution_mode": "local-implementation",
+      "github_issue": null
+    },
+    {
+      "id": "LOCAL-041",
+      "number": 41,
+      "title": "实现行业包导出、成熟度与兼容升级",
+      "file": "issue-041-package-export-upgrade.md",
+      "type": "backend",
+      "priority": "high",
+      "state": "planned",
+      "readiness": "waiting_dependencies",
+      "phase": "H 行业资产与能源",
+      "dependencies": [
+        "LOCAL-006",
+        "LOCAL-007",
+        "LOCAL-009",
+        "LOCAL-025",
+        "LOCAL-031"
+      ],
+      "user_stories": [
+        "US-003",
+        "US-023"
+      ],
+      "functional_requirements": [
+        "FR-3",
+        "FR-4",
+        "FR-31",
+        "FR-32"
+      ],
+      "acceptance_refs": [
+        "US-003.A2",
+        "US-023.A1",
+        "US-023.A2"
+      ],
+      "design_tasks": [
+        "S03",
+        "S13",
+        "S16"
+      ],
+      "external_gates": [],
+      "execution_mode": "local-implementation",
+      "github_issue": null
+    },
+    {
+      "id": "LOCAL-042",
+      "number": 42,
+      "title": "定义家庭能源行业包和两套样例映射",
+      "file": "issue-042-home-energy-package.md",
+      "type": "backend",
+      "priority": "high",
+      "state": "planned",
+      "readiness": "waiting_dependencies",
+      "phase": "H 行业资产与能源",
+      "dependencies": [
+        "LOCAL-003",
+        "LOCAL-025",
+        "LOCAL-026"
+      ],
+      "user_stories": [
+        "US-003",
+        "US-012",
+        "US-023"
+      ],
+      "functional_requirements": [
+        "FR-3",
+        "FR-4",
+        "FR-14",
+        "FR-31",
+        "FR-32"
+      ],
+      "acceptance_refs": [
+        "US-003.A1"
+      ],
+      "design_tasks": [
+        "S13"
+      ],
+      "external_gates": [],
+      "execution_mode": "local-implementation",
+      "github_issue": null
+    },
+    {
+      "id": "LOCAL-043",
+      "number": 43,
+      "title": "实现能源时序规范化与输入快照",
+      "file": "issue-043-energy-input-normalization.md",
+      "type": "backend",
+      "priority": "high",
+      "state": "planned",
+      "readiness": "waiting_dependencies",
+      "phase": "H 行业资产与能源",
+      "dependencies": [
+        "LOCAL-005",
+        "LOCAL-008",
+        "LOCAL-022",
+        "LOCAL-042"
+      ],
+      "user_stories": [
+        "US-009",
+        "US-016",
+        "US-024"
+      ],
+      "functional_requirements": [
+        "FR-10",
+        "FR-11",
+        "FR-18",
+        "FR-33"
+      ],
+      "acceptance_refs": [],
+      "design_tasks": [
+        "S13",
+        "S14"
+      ],
+      "external_gates": [],
+      "execution_mode": "local-implementation",
+      "github_issue": null
+    },
+    {
+      "id": "LOCAL-044",
+      "number": 44,
+      "title": "实现独立能源仿真与物理约束检查",
+      "file": "issue-044-energy-simulator.md",
+      "type": "backend",
+      "priority": "high",
+      "state": "planned",
+      "readiness": "waiting_dependencies",
+      "phase": "H 行业资产与能源",
+      "dependencies": [
+        "LOCAL-002",
+        "LOCAL-043"
+      ],
+      "user_stories": [
+        "US-016",
+        "US-024"
+      ],
+      "functional_requirements": [
+        "FR-18",
+        "FR-33"
+      ],
+      "acceptance_refs": [],
+      "design_tasks": [
+        "S14"
+      ],
+      "external_gates": [],
+      "execution_mode": "local-implementation",
+      "github_issue": null
+    },
+    {
+      "id": "LOCAL-045",
+      "number": 45,
+      "title": "实现有限候选策略与公平基线比较",
+      "file": "issue-045-energy-planner.md",
+      "type": "backend",
+      "priority": "high",
+      "state": "planned",
+      "readiness": "waiting_dependencies",
+      "phase": "H 行业资产与能源",
+      "dependencies": [
+        "LOCAL-043",
+        "LOCAL-044"
+      ],
+      "user_stories": [
+        "US-016",
+        "US-018",
+        "US-024"
+      ],
+      "functional_requirements": [
+        "FR-18",
+        "FR-21",
+        "FR-33"
+      ],
+      "acceptance_refs": [],
+      "design_tasks": [
+        "S14"
+      ],
+      "external_gates": [],
+      "execution_mode": "local-implementation",
+      "github_issue": null
+    },
+    {
+      "id": "LOCAL-046",
+      "number": 46,
+      "title": "注册能源 Compute 操作与模拟执行服务",
+      "file": "issue-046-energy-compute-simulation.md",
+      "type": "backend",
+      "priority": "high",
+      "state": "planned",
+      "readiness": "waiting_dependencies",
+      "phase": "H 行业资产与能源",
+      "dependencies": [
+        "LOCAL-011",
+        "LOCAL-019",
+        "LOCAL-022",
+        "LOCAL-033",
+        "LOCAL-043",
+        "LOCAL-044",
+        "LOCAL-045"
+      ],
+      "user_stories": [
+        "US-006",
+        "US-016",
+        "US-019",
+        "US-020"
+      ],
+      "functional_requirements": [
+        "FR-6",
+        "FR-7",
+        "FR-18",
+        "FR-21",
+        "FR-22",
+        "FR-23",
+        "FR-24",
+        "FR-25",
+        "FR-26"
+      ],
+      "acceptance_refs": [],
+      "design_tasks": [
+        "S14",
+        "S15"
+      ],
+      "external_gates": [],
+      "execution_mode": "local-implementation",
+      "github_issue": null
+    },
+    {
+      "id": "LOCAL-047",
+      "number": 47,
+      "title": "实现家庭能源计划、对比与仿真界面",
+      "file": "issue-047-ui-home-energy.md",
+      "type": "frontend",
+      "priority": "high",
+      "state": "planned",
+      "readiness": "waiting_dependencies",
+      "phase": "H 行业资产与能源",
+      "dependencies": [
+        "LOCAL-039",
+        "LOCAL-040",
+        "LOCAL-042",
+        "LOCAL-046"
+      ],
+      "user_stories": [
+        "US-021",
+        "US-022"
+      ],
+      "functional_requirements": [
+        "FR-27",
+        "FR-28",
+        "FR-29",
+        "FR-30"
+      ],
+      "acceptance_refs": [
+        "US-021.A2"
+      ],
+      "design_tasks": [
+        "S15"
+      ],
+      "external_gates": [],
+      "execution_mode": "local-implementation",
+      "github_issue": null
+    },
+    {
+      "id": "LOCAL-048",
+      "number": 48,
+      "title": "构建规格驱动的语义回归夹具",
+      "file": "issue-048-semantic-regression-fixtures.md",
+      "type": "infra",
+      "priority": "high",
+      "state": "planned",
+      "readiness": "waiting_dependencies",
+      "phase": "A 基础契约",
+      "dependencies": [
+        "LOCAL-002"
+      ],
+      "user_stories": [
+        "US-016",
+        "US-017",
+        "US-024"
+      ],
+      "functional_requirements": [
+        "FR-18",
+        "FR-19",
+        "FR-20",
+        "FR-33"
+      ],
+      "acceptance_refs": [
+        "US-017.A1",
+        "US-017.A2"
+      ],
+      "design_tasks": [
+        "S12",
+        "S16"
+      ],
+      "external_gates": [],
+      "execution_mode": "local-implementation",
+      "github_issue": null
+    },
+    {
+      "id": "LOCAL-049",
+      "number": 49,
+      "title": "建立真实适配器与架构替换验收套件",
+      "file": "issue-049-composition-conformance.md",
+      "type": "infra",
+      "priority": "high",
+      "state": "planned",
+      "readiness": "waiting_dependencies",
+      "phase": "I 验证与收尾",
+      "dependencies": [
+        "LOCAL-014",
+        "LOCAL-017",
+        "LOCAL-018",
+        "LOCAL-026",
+        "LOCAL-041",
+        "LOCAL-046"
+      ],
+      "user_stories": [
+        "US-001",
+        "US-005",
+        "US-007",
+        "US-024"
+      ],
+      "functional_requirements": [
+        "FR-1",
+        "FR-5",
+        "FR-6",
+        "FR-8",
+        "FR-9",
+        "FR-33"
+      ],
+      "acceptance_refs": [
+        "US-005.A1",
+        "US-005.A2",
+        "US-007.A1",
+        "US-024.A1"
+      ],
+      "design_tasks": [
+        "S16"
+      ],
+      "external_gates": [],
+      "execution_mode": "local-implementation",
+      "github_issue": null
+    },
+    {
+      "id": "LOCAL-050",
+      "number": 50,
+      "title": "建立质量、负载与故障恢复评测工具",
+      "file": "issue-050-evaluation-load-harness.md",
+      "type": "infra",
+      "priority": "high",
+      "state": "planned",
+      "readiness": "waiting_dependencies",
+      "phase": "I 验证与收尾",
+      "dependencies": [
+        "LOCAL-020",
+        "LOCAL-024",
+        "LOCAL-033",
+        "LOCAL-036",
+        "LOCAL-046",
+        "LOCAL-049"
+      ],
+      "user_stories": [
+        "US-011",
+        "US-017",
+        "US-024"
+      ],
+      "functional_requirements": [
+        "FR-13",
+        "FR-19",
+        "FR-20",
+        "FR-33"
+      ],
+      "acceptance_refs": [
+        "US-024.A2"
+      ],
+      "design_tasks": [
+        "S16"
+      ],
+      "external_gates": [],
+      "execution_mode": "local-implementation",
+      "github_issue": null
+    },
+    {
+      "id": "LOCAL-051",
+      "number": 51,
+      "title": "验证真实公司模型与 JEV 的接口和业务质量",
+      "file": "issue-051-live-model-validation.md",
+      "type": "infra",
+      "priority": "medium",
+      "state": "planned",
+      "readiness": "needs_external_input",
+      "phase": "J 外部条件任务",
+      "dependencies": [
+        "LOCAL-015",
+        "LOCAL-016",
+        "LOCAL-035",
+        "LOCAL-038",
+        "LOCAL-047",
+        "LOCAL-050",
+        "LOCAL-054"
+      ],
+      "user_stories": [
+        "US-018",
+        "US-021",
+        "US-024"
+      ],
+      "functional_requirements": [
+        "FR-21",
+        "FR-27",
+        "FR-28",
+        "FR-29",
+        "FR-33"
+      ],
+      "acceptance_refs": [
+        "US-024.A2"
+      ],
+      "design_tasks": [
+        "S17"
+      ],
+      "external_gates": [
+        "用户明确要求进行真实模型调用，并确定预算与可发送的数据。",
+        "公司生成模型和 Jev 实际端点、访问权限、模型版本与配额已确认。"
+      ],
+      "execution_mode": "external-validation",
+      "github_issue": null
+    },
+    {
+      "id": "LOCAL-052",
+      "number": 52,
+      "title": "接入真实 Home Assistant 只读遥测",
+      "file": "issue-052-ha-read-integration.md",
+      "type": "backend",
+      "priority": "medium",
+      "state": "planned",
+      "readiness": "needs_external_input",
+      "phase": "J 外部条件任务",
+      "dependencies": [
+        "LOCAL-043",
+        "LOCAL-046",
+        "LOCAL-049",
+        "LOCAL-054"
+      ],
+      "user_stories": [
+        "US-008",
+        "US-009",
+        "US-024"
+      ],
+      "functional_requirements": [
+        "FR-10",
+        "FR-11",
+        "FR-33"
+      ],
+      "acceptance_refs": [],
+      "design_tasks": [
+        "S18"
+      ],
+      "external_gates": [
+        "已取得实际设备、固件、Home Assistant 插件/API 资料与可访问测试环境。",
+        "用户明确授权对指定测试站点进行只读连接。"
+      ],
+      "execution_mode": "external-integration",
+      "github_issue": null
+    },
+    {
+      "id": "LOCAL-053",
+      "number": 53,
+      "title": "评审并实现受控设备执行扩展",
+      "file": "issue-053-live-device-actions.md",
+      "type": "backend",
+      "priority": "low",
+      "state": "planned",
+      "readiness": "needs_external_input",
+      "phase": "J 外部条件任务",
+      "dependencies": [
+        "LOCAL-046",
+        "LOCAL-050",
+        "LOCAL-052",
+        "LOCAL-054"
+      ],
+      "user_stories": [
+        "US-019",
+        "US-021"
+      ],
+      "functional_requirements": [
+        "FR-21",
+        "FR-22",
+        "FR-23",
+        "FR-24",
+        "FR-27",
+        "FR-28",
+        "FR-29"
+      ],
+      "acceptance_refs": [],
+      "design_tasks": [
+        "S18"
+      ],
+      "external_gates": [
+        "LOCAL-052 的只读接口与设备能力验证完成。",
+        "用户另行确认真实控制范围、设备、参数边界、停止策略及测试时段；活动规则不替代授权。"
+      ],
+      "execution_mode": "future-live-actions",
+      "github_issue": null
+    },
+    {
+      "id": "LOCAL-054",
+      "number": 54,
+      "title": "完成跨层端到端验收与本地交付报告",
+      "file": "issue-054-end-to-end-acceptance.md",
+      "type": "fullstack",
+      "priority": "high",
+      "state": "planned",
+      "readiness": "waiting_dependencies",
+      "phase": "I 验证与收尾",
+      "dependencies": [
+        "LOCAL-037",
+        "LOCAL-038",
+        "LOCAL-039",
+        "LOCAL-040",
+        "LOCAL-041",
+        "LOCAL-047",
+        "LOCAL-048",
+        "LOCAL-049",
+        "LOCAL-050"
+      ],
+      "user_stories": [
+        "US-025"
+      ],
+      "functional_requirements": [
+        "FR-34"
+      ],
+      "acceptance_refs": [
+        "US-025.A1",
+        "US-025.A2",
+        "US-025.A3",
+        "US-025.A4"
+      ],
+      "design_tasks": [
+        "S16"
+      ],
+      "external_gates": [],
+      "execution_mode": "local-implementation",
+      "github_issue": null
+    }
+  ],
+  "github_remote_url": "https://github.com/Yijtu/ontology.git",
+  "migration": {
+    "date": "2026-09-21",
+    "from": "D:/work/ontology-mvp",
+    "prototype_retained_at": "D:/work/ontology-mvp",
+    "documents_only": true,
+    "github_issues_created": false,
+    "historical_record_only": true
+  },
+  "implementation_baseline": {
+    "requirements": "current PRD/SPEC",
+    "prototype_required": false,
+    "prototype_compatibility_required": false,
+    "prototype_data_migration_required": false,
+    "test_oracle": "independently verified specification fixtures"
+  }
+}
