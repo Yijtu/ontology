@@ -10,6 +10,8 @@
   },
   "dependencies": {
     "@ontology/contracts": "workspace:*",
-    "@ontology/core": "workspace:*"
+    "@ontology/core": "workspace:*",
+    "pg": "^8.23.0",
+    "pgsql-ast-parser": "^12.0.2"
   }
 }
