@@ -8,8 +8,9 @@
 
 | LOCAL | GitHub Issue | 状态 |
 |---|---|---|
-| LOCAL-001 | [#1](https://github.com/Yijtu/ontology/issues/1) | open，本批执行 |
-| LOCAL-002 ~ LOCAL-054 | 未创建 | 待前置完成后逐批创建 |
+| LOCAL-001 | [#1](https://github.com/Yijtu/ontology/issues/1) | 已交付（PR [#2](https://github.com/Yijtu/ontology/pull/2) 合入，CI 通过） |
+| LOCAL-002 | 未创建 | 依赖已交付，就绪；待用户授权后创建 |
+| LOCAL-003 ~ LOCAL-054 | 未创建 | 待前置完成后逐批创建 |
 
 - [机器可读清单](manifest.json)：依赖、状态、源文档hash、进入条件。
 - [需求覆盖](coverage.md)：25 个故事的每条验收、34 条 FR、18 个设计任务。
@@ -17,14 +18,14 @@
 
 ## 建议起点
 
-仅 **[LOCAL-001：建立工作区与边界检查](issue-001-typescript-workspace.md)** 无前置依赖。它是输入已齐的首张卡，不代表本轮已授权实现。完成并验证后再解锁 LOCAL-002；公共契约完成后即可准备 LOCAL-048 的独立语义夹具，供后续规则实现消费。不要把 54 张卡直接当作一个全量自动执行批次。
+仅 **[LOCAL-001：建立工作区与边界检查](issue-001-typescript-workspace.md)** 无前置依赖。LOCAL-001 已交付并验证（`platform/` 工作区、依赖边界检查、正负夹具、只读 CI），**LOCAL-002 现为就绪**；公共契约完成后即可准备 LOCAL-048 的独立语义夹具，供后续规则实现消费。不要把 54 张卡直接当作一个全量自动执行批次。
 
 ## Issue 清单
 
 | ID | 任务 | 类型 | 优先级 | 前置 | 当前就绪状态 |
 |---|---|---|---|---|---|
-| [LOCAL-001](issue-001-typescript-workspace.md) | 建立 TypeScript 工作区与依赖边界检查 | infra | high | 无 | 输入就绪 |
-| [LOCAL-002](issue-002-canonical-contracts.md) | 定义公共 JSON Schema、端口及统一结果协议 | backend | high | LOCAL-001 | 等待依赖 |
+| [LOCAL-001](issue-001-typescript-workspace.md) | 建立 TypeScript 工作区与依赖边界检查 | infra | high | 无 | 已交付 #1 |
+| [LOCAL-002](issue-002-canonical-contracts.md) | 定义公共 JSON Schema、端口及统一结果协议 | backend | high | LOCAL-001 | 输入就绪 |
 | [LOCAL-003](issue-003-package-profile-manifests.md) | 定义行业包与场景配置清单 | backend | high | LOCAL-002 | 等待依赖 |
 | [LOCAL-004](issue-004-control-postgres-foundation.md) | 实现 PostgreSQL 控制存储基础与租户隔离 | infra | high | LOCAL-002 | 等待依赖 |
 | [LOCAL-005](issue-005-immutable-artifacts.md) | 实现不可变工件与来源定位存储 | backend | high | LOCAL-002, LOCAL-004 | 等待依赖 |
