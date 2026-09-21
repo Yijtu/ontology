@@ -23,6 +23,9 @@ importers:
       '@ontology/adapter-model-jev':
         specifier: workspace:*
         version: link:packages/adapters/model-jev
+      '@ontology/adapter-runtime-template':
+        specifier: workspace:*
+        version: link:packages/adapters/runtime-template
       '@ontology/adapter-transport-local':
         specifier: workspace:*
         version: link:packages/adapters/transport-local
