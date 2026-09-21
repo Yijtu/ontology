@@ -1,26 +1,26 @@
 import type {
+  ComponentKind,
   ComponentManifest,
-  ComponentVersionRecord,
   ModuleLifecycleState,
   ResourceRef,
   ScopeRef,
-  Semver,
-  Sha256Digest,
   VersionRef,
 } from '@ontology/contracts'
 
-export type ComponentKind = ComponentManifest['kind']
-
 /**
- * Component identity. It is `(kind, id, version)` per D2's unique key; the digest is
- * the freeze value, not part of the identity, so the same id+version with another
- * digest is a conflict rather than a second component.
+ * The store-level identity, history and reference types now live in `@ontology/contracts`
+ * next to the `ComponentRegistryStore` port, so an adapter can implement the port without
+ * depending on this package. They are re-exported here to keep the application public
+ * entry stable.
  */
-export interface ComponentKey {
-  readonly kind: ComponentKind
-  readonly id: string
-  readonly version: Semver
-}
+export type {
+  ActiveComponentReference,
+  ComponentKey,
+  ComponentKind,
+  ComponentLifecycleEvent,
+  ComponentListFilter,
+} from '@ontology/contracts'
+export { componentKeyFromRef, componentKeyOf, componentKeyString } from '@ontology/contracts'
 
 /**
  * Where a registration request came from. Only a direct operator request may install
@@ -57,44 +57,4 @@ export interface ActiveComponentReferenceInput extends ComponentReferenceInput {
   readonly runId: string
 }
 
-export interface ComponentListFilter {
-  readonly kind?: ComponentKind
-  readonly lifecycleState?: ModuleLifecycleState
-}
-
-/** A run pinning one exact component version. Retiring is refused while any exists. */
-export interface ActiveComponentReference {
-  readonly key: ComponentKey
-  readonly runId: string
-  readonly acquiredAt: string
-}
-
-/**
- * One append-only lifecycle record. `payloadDigest` and `idempotencyKey` also exist in
- * the control event ledger, so the reconstructable history can be checked against a
- * stream that cannot be rewritten.
- */
-export interface ComponentLifecycleEvent {
-  readonly key: ComponentKey
-  readonly digest: Sha256Digest
-  readonly fromState: ModuleLifecycleState | null
-  readonly toState: ModuleLifecycleState
-  readonly payloadDigest: Sha256Digest
-  readonly idempotencyKey: string
-  readonly occurredAt: string
-  readonly actor: string
-}
-
-export function componentKeyOf(manifest: ComponentManifest): ComponentKey {
-  return { kind: manifest.kind, id: manifest.id, version: manifest.version }
-}
-
-export function componentKeyFromRef(kind: ComponentKind, ref: VersionRef): ComponentKey {
-  return { kind, id: ref.id, version: ref.version }
-}
-
-export function componentKeyString(key: ComponentKey): string {
-  return `${key.kind}\u0000${key.id}\u0000${key.version}`
-}
-
-export type { ComponentVersionRecord }
+export type { ComponentVersionRecord } from '@ontology/contracts'
