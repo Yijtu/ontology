@@ -3,5 +3,7 @@ dist/
 coverage/
 *.log
 .loop-state.json
+.graph_state
+graph.html
 .env
 .env.*
