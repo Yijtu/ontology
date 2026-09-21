@@ -23,6 +23,9 @@ importers:
       '@ontology/contracts':
         specifier: workspace:*
         version: link:packages/contracts
+      '@ontology/core':
+        specifier: workspace:*
+        version: link:packages/core
       '@ontology/provenance':
         specifier: workspace:*
         version: link:packages/provenance
