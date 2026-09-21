@@ -25,10 +25,17 @@ export {
   createPostgresRunStore,
 } from './composition/run-service'
 export type { RunServiceComposition, RunServiceCompositionOptions } from './composition/run-service'
-export { createApiServer, createRunApi } from './http/app'
+export {
+  createPostgresJobService,
+  createPostgresJobStore,
+} from './composition/job-service'
+export type { JobServiceComposition, JobServiceCompositionOptions } from './composition/job-service'
+export { createApiServer, createJobApi, createRunApi } from './http/app'
 export type { ApiServerOptions } from './http/app'
 export { registerRunRoutes } from './http/server'
 export type { AuthenticatedRequest, RequestAuthenticator, RunApiOptions } from './http/server'
+export { registerJobRoutes } from './http/jobs'
+export type { JobApiOptions, JobRouteDependencies } from './http/jobs'
 export { registerWorkbenchRoutes } from './http/workbench'
 export type { WorkbenchApiOptions, WorkbenchRouteDependencies } from './http/workbench'
 export { createRequestToolContext } from './http/context'
