@@ -14,6 +14,9 @@ importers:
       '@ontology/adapter-control-postgres':
         specifier: workspace:*
         version: link:packages/adapters/control-postgres
+      '@ontology/application':
+        specifier: workspace:*
+        version: link:packages/application
       '@ontology/contracts':
         specifier: workspace:*
         version: link:packages/contracts
