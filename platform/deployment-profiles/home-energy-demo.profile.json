@@ -1,0 +1,156 @@
+{
+  "id": "home-energy-demo",
+  "version": "1.0.0",
+  "environment": "local_dev",
+  "description": "Home energy demo composition. References only: no secret value, connection URL or customer payload is stored here.",
+  "spec": {
+    "industryRef": {
+      "id": "home-energy",
+      "version": "0.1.0",
+      "digest": "sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
+    },
+    "mappingRefs": [
+      {
+        "id": "home-energy.mapping.ha-anker",
+        "version": "1.0.0",
+        "digest": "sha256:bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
+        "role": "telemetry",
+        "sourceObjectRef": {
+          "sourceRef": { "namespace": "ha-anker", "sourceId": "sensor.battery_soc" },
+          "objectPath": "states.sensor_battery_soc"
+        },
+        "unitConversionsRef": "home-energy.units.ha-anker",
+        "schemaRevision": "2026-09-01"
+      },
+      {
+        "id": "home-energy.mapping.catalog",
+        "version": "1.0.0",
+        "digest": "sha256:cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc",
+        "role": "catalog",
+        "sourceObjectRef": {
+          "sourceRef": { "namespace": "control-postgres", "sourceId": "public.device_catalog" },
+          "objectPath": "public.device_catalog"
+        },
+        "schemaRevision": "3"
+      },
+      {
+        "id": "home-energy.mapping.documents",
+        "version": "1.0.0",
+        "digest": "sha256:dddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddd",
+        "role": "documents",
+        "sourceObjectRef": {
+          "sourceRef": { "namespace": "control-postgres", "sourceId": "public.documents" },
+          "objectPath": "public.documents"
+        },
+        "schemaRevision": "2"
+      }
+    ],
+    "runtimeRef": {
+      "id": "runtime-template",
+      "version": "1.0.0",
+      "digest": "sha256:eeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeee"
+    },
+    "backendBindings": {
+      "catalog": {
+        "role": "catalog",
+        "adapterRef": {
+          "id": "data-postgres",
+          "version": "1.0.0",
+          "digest": "sha256:ffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffff"
+        },
+        "capabilityNames": ["structured_query"],
+        "scopeRef": {
+          "tenantId": "11111111-2222-4333-8444-555555555555",
+          "spaceId": "66666666-7777-4888-8999-aaaaaaaaaaaa"
+        },
+        "mappingRef": "home-energy.mapping.catalog"
+      },
+      "documents": {
+        "role": "documents",
+        "adapterRef": {
+          "id": "search-bm25",
+          "version": "1.0.0",
+          "digest": "sha256:1010101010101010101010101010101010101010101010101010101010101010"
+        },
+        "capabilityNames": ["document_search"],
+        "scopeRef": {
+          "tenantId": "11111111-2222-4333-8444-555555555555",
+          "spaceId": "66666666-7777-4888-8999-aaaaaaaaaaaa"
+        },
+        "mappingRef": "home-energy.mapping.documents"
+      },
+      "telemetry": {
+        "role": "telemetry",
+        "adapterRef": {
+          "id": "data-duckdb",
+          "version": "1.0.0",
+          "digest": "sha256:2020202020202020202020202020202020202020202020202020202020202020"
+        },
+        "capabilityNames": ["telemetry_read"],
+        "scopeRef": {
+          "tenantId": "11111111-2222-4333-8444-555555555555",
+          "spaceId": "66666666-7777-4888-8999-aaaaaaaaaaaa"
+        },
+        "mappingRef": "home-energy.mapping.ha-anker"
+      }
+    },
+    "modelBindings": {
+      "generation": {
+        "role": "generation",
+        "modelRef": {
+          "id": "company-llm",
+          "version": "1.0.0",
+          "digest": "sha256:3030303030303030303030303030303030303030303030303030303030303030"
+        },
+        "fallbackPolicy": "reject",
+        "enabled": true,
+        "contextLimitTokens": 32000,
+        "outputLimitTokens": 4000
+      },
+      "decision": {
+        "role": "decision",
+        "modelRef": {
+          "id": "company-jev",
+          "version": "1.0.0",
+          "digest": "sha256:4040404040404040404040404040404040404040404040404040404040404040"
+        },
+        "fallbackPolicy": "deterministic",
+        "enabled": false
+      }
+    },
+    "toolBindings": [
+      { "toolId": "ontology_lookup", "enabled": true },
+      { "toolId": "data_query", "enabled": true, "maxCallsPerRun": 8 },
+      { "toolId": "document_search", "enabled": true, "maxCallsPerRun": 4 },
+      { "toolId": "web_search", "enabled": false }
+    ],
+    "computeBindings": [
+      {
+        "operationRef": { "id": "home-energy.plan", "version": "1" },
+        "handlerRef": {
+          "id": "extension-home-energy",
+          "version": "1.0.0",
+          "digest": "sha256:5050505050505050505050505050505050505050505050505050505050505050"
+        },
+        "inputSchemaRef": {
+          "id": "home-energy.plan.input",
+          "version": "1.0.0",
+          "digest": "sha256:6060606060606060606060606060606060606060606060606060606060606060"
+        },
+        "outputSchemaRef": {
+          "id": "home-energy.plan.output",
+          "version": "1.0.0",
+          "digest": "sha256:7070707070707070707070707070707070707070707070707070707070707070"
+        },
+        "readOnly": true,
+        "enabled": true,
+        "limits": { "maxRows": 96, "maxBytes": 1048576, "maxDurationMs": 2000, "maxConcurrency": 1 }
+      }
+    ],
+    "policyRef": {
+      "id": "policy-default",
+      "version": "1.0.0",
+      "digest": "sha256:8080808080808080808080808080808080808080808080808080808080808080"
+    }
+  }
+}

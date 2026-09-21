@@ -438,6 +438,33 @@ export type LogicalRole = 'telemetry' | 'catalog' | 'documents'
  */
 export type ModelRole = 'generation' | 'decision'
 /**
+ * FR-31/US-023: every industry pack declares how ready it is. A pack that only defines preparation material stays 'planned' and must never be reported as available; maturity is part of the exported asset, not UI copy.
+ *
+ * This interface was referenced by `OntologyContracts`'s JSON-Schema
+ * via the `definition` "IndustryMaturity".
+ */
+export type IndustryMaturity = 'planned' | 'preview' | 'stable' | 'deprecated'
+/**
+ * Where a declared definition comes from. A synthetic assumption must be labelled as such and never presented as an official standard.
+ *
+ * This interface was referenced by `OntologyContracts`'s JSON-Schema
+ * via the `definition` "ProvenanceKind".
+ */
+export type ProvenanceKind =
+  | 'international_standard'
+  | 'national_standard'
+  | 'industry_standard'
+  | 'vendor_specification'
+  | 'internal_policy'
+  | 'synthetic_assumption'
+/**
+ * The environment a deployment profile targets. Production is the only environment where a non-loopback authentication principal is allowed (SPEC 3).
+ *
+ * This interface was referenced by `OntologyContracts`'s JSON-Schema
+ * via the `definition` "DeploymentEnvironment".
+ */
+export type DeploymentEnvironment = 'local_dev' | 'ci' | 'staging' | 'production'
+/**
  * This interface was referenced by `OntologyContracts`'s JSON-Schema
  * via the `definition` "PreflightStatus".
  */
@@ -1691,6 +1718,17 @@ export interface RunResponseResponse {
   revision: RevisionString
 }
 /**
+ * Cites the published artifact a definition is derived from. The cited source is a VersionRef resolved by the registry, so a pack cannot smuggle a free-form URL, a credential or an executable resource in as its 'standard'.
+ *
+ * This interface was referenced by `OntologyContracts`'s JSON-Schema
+ * via the `definition` "StandardProvenance".
+ */
+export interface StandardProvenance {
+  standardRef: VersionRef
+  provenanceKind: ProvenanceKind
+  clauseRef?: NonEmptyString
+}
+/**
  * Role-to-source mapping. Owns the translation from source naming/units into canonical metrics.
  *
  * This interface was referenced by `OntologyContracts`'s JSON-Schema
@@ -1763,6 +1801,13 @@ export interface ComputeBinding {
  */
 export interface IndustryManifest {
   namespace: Namespace
+  maturity: IndustryMaturity
+  /**
+   * FR-31: the published sources the pack's definitions are derived from. At least one is required so a pack can never present invented semantics as an unlabelled fact.
+   *
+   * @minItems 1
+   */
+  standardProvenance: StandardProvenance[]
   definitionsRef: VersionRef
   identityPolicyRef: VersionRef
   rulePolicyRef: VersionRef
@@ -1773,6 +1818,10 @@ export interface IndustryManifest {
   requiredCapabilities: CapabilityRequirement[]
   testSuiteRef: VersionRef
   operationRefs?: OperationRef[]
+  /**
+   * ADR-10/US-003: enterprise or vendor extensions this pack expects, declared as opaque refs to separately published components. A pack never inlines extension code, customer instance data or a runtime binding.
+   */
+  extensionRefs?: VersionRef[]
 }
 /**
  * This interface was referenced by `OntologyContracts`'s JSON-Schema
@@ -1865,6 +1914,23 @@ export interface ResolvedProfile {
   explicitDegradations: ExplicitDegradation[]
   snapshotHash: Sha256Digest
   resolvedAt: Rfc3339UtcTimestamp
+}
+/**
+ * SPEC 2.2 deployment-profiles/: a named ProfileSpec plus its environment. It stores references only. A secret value, credential or customer payload never appears here; physical addressing lives behind the adapter and its secret ref.
+ *
+ * This interface was referenced by `OntologyContracts`'s JSON-Schema
+ * via the `definition` "DeploymentProfile".
+ */
+export interface DeploymentProfile {
+  id: NonEmptyString
+  version: Semver
+  environment: DeploymentEnvironment
+  description?: NonEmptyString
+  spec: ProfileSpec
+  /**
+   * Deployment-level artifact refs (migrations, policy bundles, fixtures). Refs only.
+   */
+  artifactRefs?: VersionRef[]
 }
 /**
  * This interface was referenced by `OntologyContracts`'s JSON-Schema
