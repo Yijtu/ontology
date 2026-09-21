@@ -32,13 +32,69 @@ export interface ImmutableObjectStore {
   remove(contentDigest: string): Promise<void>
 }
 
-async function writeAtomic(targetPath: string, content: Uint8Array): Promise<void> {
+const RENAME_RETRY_LIMIT = 8
+const RENAME_RETRY_BASE_DELAY_MS = 5
+
+function isTransientRenameError(error: unknown): boolean {
+  const code = (error as { code?: unknown } | null)?.code
+  return code === 'EPERM' || code === 'EACCES' || code === 'EBUSY'
+}
+
+function delay(ms: number): Promise<void> {
+  return new Promise((resolve) => {
+    setTimeout(resolve, ms)
+  })
+}
+
+async function storedDigest(path: string): Promise<string | undefined> {
+  try {
+    return sha256Digest(await readFile(path))
+  } catch {
+    return undefined
+  }
+}
+
+/**
+ * Replace `targetPath` with the staged file.
+ *
+ * The object is content-addressed, so concurrent writers of the same digest race
+ * onto one target path. On Windows `rename` fails with EPERM/EACCES while the
+ * destination is held by another writer (POSIX rename simply overwrites), so a
+ * transient failure is retried, and a destination that already holds the expected
+ * digest is accepted as success — the write is idempotent by construction.
+ */
+async function replaceAtomically(
+  temporaryPath: string,
+  targetPath: string,
+  contentDigest: string,
+): Promise<void> {
+  let lastError: unknown
+  for (let attempt = 0; attempt < RENAME_RETRY_LIMIT; attempt += 1) {
+    try {
+      await rename(temporaryPath, targetPath)
+      return
+    } catch (error) {
+      lastError = error
+      if (!isTransientRenameError(error)) throw error
+      if ((await storedDigest(targetPath)) === contentDigest) {
+        await rm(temporaryPath, { force: true }).catch(() => undefined)
+        return
+      }
+      await delay(RENAME_RETRY_BASE_DELAY_MS * 2 ** attempt)
+    }
+  }
+  throw lastError
+}
+
+async function writeAtomic(
+  targetPath: string,
+  content: Uint8Array,
+  contentDigest: string,
+): Promise<void> {
   const temporaryPath = `${targetPath}.tmp-${randomUUID()}`
   await writeFile(temporaryPath, content)
   try {
-    // Rename is atomic within one filesystem and replaces an existing object on
-    // Windows and POSIX alike, so a reader never observes a partial object.
-    await rename(temporaryPath, targetPath)
+    await replaceAtomically(temporaryPath, targetPath, contentDigest)
   } catch (error) {
     await rm(temporaryPath, { force: true }).catch(() => undefined)
     throw error
@@ -69,7 +125,7 @@ export class FileSystemObjectStore implements ImmutableObjectStore {
     const contentDigest = sha256Digest(content)
     const directory = this.#stagingDir(scope)
     await mkdir(directory, { recursive: true })
-    await writeAtomic(join(directory, objectKeyForDigest(contentDigest)), content)
+    await writeAtomic(join(directory, objectKeyForDigest(contentDigest)), content, contentDigest)
     return { contentDigest, byteSize: content.byteLength }
   }
 
@@ -95,7 +151,7 @@ export class FileSystemObjectStore implements ImmutableObjectStore {
 
   async publish(contentDigest: string, content: Uint8Array): Promise<void> {
     await mkdir(join(this.#rootDir, 'objects'), { recursive: true })
-    await writeAtomic(this.#objectPath(contentDigest), content)
+    await writeAtomic(this.#objectPath(contentDigest), content, contentDigest)
   }
 
   async read(contentDigest: string): Promise<Uint8Array> {
