@@ -1,0 +1,258 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://ontology.local/schema/component.schema.json",
+  "title": "ComponentContracts",
+  "$comment": "C1 component registration and capability declarations. Manifests describe what a component provides/requires; they never carry credentials or physical addresses.",
+  "$defs": {
+    "ComponentKind": {
+      "title": "ComponentKind",
+      "type": "string",
+      "enum": [
+        "runtime",
+        "generation",
+        "decision",
+        "data_backend",
+        "document_backend",
+        "blob_backend",
+        "compute_extension",
+        "industry_pack",
+        "transport",
+        "control_store"
+      ]
+    },
+    "TrustStatus": {
+      "title": "TrustStatus",
+      "description": "Publication trust of a component version. Unknown packages are never auto-downloaded from the network.",
+      "type": "string",
+      "enum": ["untrusted", "local_dev", "verified", "revoked"]
+    },
+    "ModuleLifecycleState": {
+      "title": "ModuleLifecycleState",
+      "description": "Module lifecycle: registered -> validated -> active -> deprecated -> retired. A version referenced by an active run can never be retired.",
+      "type": "string",
+      "enum": ["registered", "validated", "active", "deprecated", "retired"]
+    },
+    "ContractRange": {
+      "title": "ContractRange",
+      "description": "Half-open version contract range [min, max). Used for preflight resolution; required capabilities are never silently dropped by intersection.",
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["min"],
+      "properties": {
+        "min": {
+          "$ref": "./common.schema.json#/$defs/Semver"
+        },
+        "max": {
+          "$ref": "./common.schema.json#/$defs/Semver"
+        }
+      }
+    },
+    "CapabilityLimits": {
+      "title": "CapabilityLimits",
+      "description": "Hard, declared resource ceilings. Deployment profiles and scenarios may tighten them; models can never widen them.",
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["maxRows", "maxBytes", "maxDurationMs"],
+      "properties": {
+        "maxRows": {
+          "type": "integer",
+          "minimum": 1,
+          "maximum": 1000000
+        },
+        "maxBytes": {
+          "$ref": "./common.schema.json#/$defs/ByteSize"
+        },
+        "maxDurationMs": {
+          "$ref": "./common.schema.json#/$defs/DurationMs"
+        },
+        "maxConcurrency": {
+          "type": "integer",
+          "minimum": 1,
+          "maximum": 64
+        }
+      }
+    },
+    "CancellationSupport": {
+      "title": "CancellationSupport",
+      "description": "How well a backend can actually stop work. 'unsupported' means the platform must not claim the remote task was terminated.",
+      "type": "string",
+      "enum": ["supported", "best_effort", "unsupported"]
+    },
+    "PaginationKind": {
+      "title": "PaginationKind",
+      "type": "string",
+      "enum": ["none", "offset", "cursor", "opaque_cursor"]
+    },
+    "SupportedDataType": {
+      "title": "SupportedDataType",
+      "type": "string",
+      "enum": ["string", "integer", "decimal", "boolean", "timestamp", "json", "binary"]
+    },
+    "Capability": {
+      "title": "Capability",
+      "description": "A capability a component provides. Declared, versioned and probed; an unprobed or failed backend is never reported as ready.",
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "name",
+        "version",
+        "limits",
+        "consistency",
+        "cancellation",
+        "pagination",
+        "supportedDataTypes"
+      ],
+      "properties": {
+        "name": {
+          "$ref": "./common.schema.json#/$defs/NonEmptyString"
+        },
+        "version": {
+          "$ref": "./common.schema.json#/$defs/Semver"
+        },
+        "limits": {
+          "$ref": "#/$defs/CapabilityLimits"
+        },
+        "consistency": {
+          "$ref": "./common.schema.json#/$defs/ConsistencyLevel"
+        },
+        "cancellation": {
+          "$ref": "#/$defs/CancellationSupport"
+        },
+        "pagination": {
+          "$ref": "#/$defs/PaginationKind"
+        },
+        "supportedDataTypes": {
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/SupportedDataType"
+          },
+          "minItems": 1,
+          "uniqueItems": true
+        }
+      }
+    },
+    "CapabilityRequirement": {
+      "title": "CapabilityRequirement",
+      "description": "A capability a component or profile requires. Missing entries surface as missing-capabilities instead of being silently intersected away.",
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["name", "versionRange"],
+      "properties": {
+        "name": {
+          "$ref": "./common.schema.json#/$defs/NonEmptyString"
+        },
+        "versionRange": {
+          "$ref": "#/$defs/ContractRange"
+        }
+      }
+    },
+    "EntrypointRef": {
+      "title": "EntrypointRef",
+      "description": "Opaque reference to a component entrypoint resolved by the composition root. No inline code and no network download.",
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["kind", "ref"],
+      "properties": {
+        "kind": {
+          "type": "string",
+          "enum": ["module", "package", "service", "worker_handler"]
+        },
+        "ref": {
+          "$ref": "./common.schema.json#/$defs/NonEmptyString"
+        },
+        "exportName": {
+          "$ref": "./common.schema.json#/$defs/NonEmptyString"
+        }
+      }
+    },
+    "ComponentManifest": {
+      "title": "ComponentManifest",
+      "description": "C1 ComponentManifest field set: kind, id, version, digest, contractRange, provides, requires, entrypointRef, trustStatus.",
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "kind",
+        "id",
+        "version",
+        "digest",
+        "contractRange",
+        "provides",
+        "requires",
+        "entrypointRef",
+        "trustStatus"
+      ],
+      "properties": {
+        "kind": {
+          "$ref": "#/$defs/ComponentKind"
+        },
+        "id": {
+          "$ref": "./common.schema.json#/$defs/NonEmptyString"
+        },
+        "version": {
+          "$ref": "./common.schema.json#/$defs/Semver"
+        },
+        "digest": {
+          "$ref": "./common.schema.json#/$defs/Sha256Digest"
+        },
+        "contractRange": {
+          "$ref": "#/$defs/ContractRange"
+        },
+        "provides": {
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/Capability"
+          },
+          "minItems": 1
+        },
+        "requires": {
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/CapabilityRequirement"
+          }
+        },
+        "entrypointRef": {
+          "$ref": "#/$defs/EntrypointRef"
+        },
+        "trustStatus": {
+          "$ref": "#/$defs/TrustStatus"
+        },
+        "namespace": {
+          "$ref": "./common.schema.json#/$defs/Namespace"
+        }
+      }
+    },
+    "ComponentVersionRecord": {
+      "title": "ComponentVersionRecord",
+      "description": "Registered component version plus its lifecycle state. Binding changes only ever create a new profile version.",
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["manifestRef", "manifest", "lifecycleState", "registeredAt"],
+      "properties": {
+        "manifestRef": {
+          "$ref": "./common.schema.json#/$defs/VersionRef"
+        },
+        "manifest": {
+          "$ref": "#/$defs/ComponentManifest"
+        },
+        "lifecycleState": {
+          "$ref": "#/$defs/ModuleLifecycleState"
+        },
+        "registeredAt": {
+          "$ref": "./common.schema.json#/$defs/Rfc3339UtcTimestamp"
+        },
+        "validatedAt": {
+          "$ref": "./common.schema.json#/$defs/Rfc3339UtcTimestamp"
+        },
+        "activatedAt": {
+          "$ref": "./common.schema.json#/$defs/Rfc3339UtcTimestamp"
+        },
+        "deprecatedAt": {
+          "$ref": "./common.schema.json#/$defs/Rfc3339UtcTimestamp"
+        },
+        "retiredAt": {
+          "$ref": "./common.schema.json#/$defs/Rfc3339UtcTimestamp"
+        }
+      }
+    }
+  }
+}

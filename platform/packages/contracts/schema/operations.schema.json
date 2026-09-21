@@ -1,0 +1,119 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://ontology.local/schema/operations.schema.json",
+  "title": "OperationContracts",
+  "$comment": "ADR-11: domain computation is exposed through a versioned, pre-registered operation. The operation id is declared by the industry pack, the implementation is chosen by the composition root, and no request may carry code or a package path.",
+  "$defs": {
+    "OperationId": {
+      "title": "OperationId",
+      "description": "Namespaced operation id, e.g. home-energy.plan. At least one dot separates the declaring namespace from the operation name.",
+      "type": "string",
+      "pattern": "^[a-z][a-z0-9-]*(?:\\.[a-z][a-z0-9-]*)+$",
+      "maxLength": 128
+    },
+    "OperationVersion": {
+      "title": "OperationVersion",
+      "description": "Monotonic operation version, rendered as the digits after '@' (e.g. home-energy.plan@1).",
+      "type": "string",
+      "pattern": "^(0|[1-9]\\d*)$",
+      "maxLength": 8
+    },
+    "OperationRef": {
+      "title": "OperationRef",
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["id", "version"],
+      "properties": {
+        "id": {
+          "$ref": "#/$defs/OperationId"
+        },
+        "version": {
+          "$ref": "#/$defs/OperationVersion"
+        }
+      }
+    },
+    "RegisteredOperation": {
+      "title": "RegisteredOperation",
+      "description": "A compute operation that preflight has validated: required capabilities, input/output schema, read-only snapshot inputs, CPU budget and handler digest. Unregistered operations cannot be executed even when their parameters are well-formed.",
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "operationRef",
+        "inputSchema",
+        "outputSchema",
+        "inputSchemaDigest",
+        "outputSchemaDigest",
+        "handlerRef",
+        "handlerDigest",
+        "readOnly",
+        "requiredCapabilities",
+        "limits",
+        "dataMode"
+      ],
+      "properties": {
+        "operationRef": {
+          "$ref": "#/$defs/OperationRef"
+        },
+        "inputSchema": {
+          "description": "JSON Schema for the operation's typed parameters. Validated before the handler runs.",
+          "type": "object"
+        },
+        "outputSchema": {
+          "type": "object"
+        },
+        "inputSchemaDigest": {
+          "$ref": "./common.schema.json#/$defs/Sha256Digest"
+        },
+        "outputSchemaDigest": {
+          "$ref": "./common.schema.json#/$defs/Sha256Digest"
+        },
+        "handlerRef": {
+          "$ref": "./common.schema.json#/$defs/VersionRef"
+        },
+        "handlerDigest": {
+          "$ref": "./common.schema.json#/$defs/Sha256Digest"
+        },
+        "readOnly": {
+          "const": true
+        },
+        "requiredCapabilities": {
+          "type": "array",
+          "items": {
+            "$ref": "./common.schema.json#/$defs/NonEmptyString"
+          },
+          "uniqueItems": true
+        },
+        "limits": {
+          "$ref": "./component.schema.json#/$defs/CapabilityLimits"
+        },
+        "dataMode": {
+          "$ref": "./common.schema.json#/$defs/DataMode"
+        }
+      }
+    },
+    "OperationRegistry": {
+      "title": "OperationRegistry",
+      "description": "The set of compute operations a deployment has registered. The registry is versioned and digested; adding an operation is a new registry version, never an in-place mutation.",
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["namespace", "registryVersion", "registryDigest", "operations"],
+      "properties": {
+        "namespace": {
+          "$ref": "./common.schema.json#/$defs/Namespace"
+        },
+        "registryVersion": {
+          "$ref": "./common.schema.json#/$defs/Semver"
+        },
+        "registryDigest": {
+          "$ref": "./common.schema.json#/$defs/Sha256Digest"
+        },
+        "operations": {
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/RegisteredOperation"
+          }
+        }
+      }
+    }
+  }
+}

@@ -1,1 +1,15 @@
-export {}
+/**
+ * @ontology/contracts — canonical cross-process contracts (INV-01).
+ *
+ * This package contains only data types, JSON Schema, version and error definitions.
+ * It imports no SDK, database, HTTP or industry package. The TypeScript types are
+ * generated from `schema/*.schema.json`; `pnpm --filter @ontology/contracts run
+ * check:contracts` fails when the committed output drifts from the canonical schema.
+ */
+export * from './generated/contracts'
+export * from './generated/schema-bundle'
+export * from './generated/tool-catalogue'
+export * from './generated/error-catalogue'
+export * from './ports'
+export * from './trusted'
+export * from './operations'

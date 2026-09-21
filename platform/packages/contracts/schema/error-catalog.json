@@ -1,0 +1,154 @@
+{
+  "$comment": "Canonical C6.2 error/retryability table. One row per ErrorCode; adding a code is a contract change. retryable uses the Retryability vocabulary from errors.schema.json.",
+  "catalogVersion": "0.2.0",
+  "catalog": {
+    "INVALID_ARGUMENT": {
+      "code": "INVALID_ARGUMENT",
+      "httpStatus": 400,
+      "retryable": "never",
+      "behavior": "Name the offending field; never invent default data."
+    },
+    "INVALID_SCHEMA": {
+      "code": "INVALID_SCHEMA",
+      "httpStatus": 422,
+      "retryable": "never",
+      "behavior": "Name the offending field; never invent default data."
+    },
+    "UNAUTHENTICATED": {
+      "code": "UNAUTHENTICATED",
+      "httpStatus": 401,
+      "retryable": "never",
+      "behavior": "Stop, or ask the user to resolve their identity."
+    },
+    "FORBIDDEN": {
+      "code": "FORBIDDEN",
+      "httpStatus": 403,
+      "retryable": "never",
+      "behavior": "Stop, or ask the user to resolve their identity."
+    },
+    "VERSION_CONFLICT": {
+      "code": "VERSION_CONFLICT",
+      "httpStatus": 409,
+      "retryable": "never",
+      "behavior": "Refresh and decide again; never overwrite."
+    },
+    "IDEMPOTENCY_CONFLICT": {
+      "code": "IDEMPOTENCY_CONFLICT",
+      "httpStatus": 409,
+      "retryable": "never",
+      "behavior": "Refresh and decide again; never overwrite."
+    },
+    "CAPABILITY_NOT_CONFIGURED": {
+      "code": "CAPABILITY_NOT_CONFIGURED",
+      "httpStatus": 409,
+      "retryable": "never",
+      "behavior": "Return the missing list; never implicitly register a capability."
+    },
+    "PROFILE_INCOMPATIBLE": {
+      "code": "PROFILE_INCOMPATIBLE",
+      "httpStatus": 409,
+      "retryable": "never",
+      "behavior": "Return the missing list; never implicitly register a capability."
+    },
+    "SNAPSHOT_UNAVAILABLE": {
+      "code": "SNAPSHOT_UNAVAILABLE",
+      "httpStatus": 409,
+      "retryable": "never",
+      "behavior": "State the re-run or historical-view limitation explicitly."
+    },
+    "CHECKPOINT_INCOMPATIBLE": {
+      "code": "CHECKPOINT_INCOMPATIBLE",
+      "httpStatus": 409,
+      "retryable": "never",
+      "behavior": "State the re-run or historical-view limitation explicitly."
+    },
+    "SOURCE_UNAVAILABLE": {
+      "code": "SOURCE_UNAVAILABLE",
+      "httpStatus": 503,
+      "retryable": "limited",
+      "maxRetries": 2,
+      "behavior": "Read-only calls may back off at most twice and still stay inside the shared run budget."
+    },
+    "MODEL_UNAVAILABLE": {
+      "code": "MODEL_UNAVAILABLE",
+      "httpStatus": 503,
+      "retryable": "limited",
+      "maxRetries": 2,
+      "behavior": "Read-only calls may back off at most twice and still stay inside the shared run budget."
+    },
+    "RATE_LIMITED": {
+      "code": "RATE_LIMITED",
+      "httpStatus": 429,
+      "retryable": "limited",
+      "respectsRetryAfter": true,
+      "behavior": "Respect retry-after; stop once the run deadline is exceeded."
+    },
+    "DEADLINE_EXCEEDED": {
+      "code": "DEADLINE_EXCEEDED",
+      "httpStatus": 504,
+      "retryable": "depends_on_effect",
+      "recordsRemoteStateUnknown": true,
+      "behavior": "Read-only calls may retry a bounded number of times and the remote state must be recorded as unknown."
+    },
+    "BUDGET_EXHAUSTED": {
+      "code": "BUDGET_EXHAUSTED",
+      "httpStatus": 409,
+      "retryable": "never",
+      "behavior": "Return a bounded answer or stop; the budget is never reset."
+    },
+    "NO_PROGRESS": {
+      "code": "NO_PROGRESS",
+      "httpStatus": 409,
+      "retryable": "never",
+      "behavior": "Return a bounded answer or stop; the budget is never reset."
+    },
+    "DATA_STALE": {
+      "code": "DATA_STALE",
+      "httpStatus": 422,
+      "retryable": "not_mechanical",
+      "behavior": "Collect more data, clarify, or return a bounded domain answer."
+    },
+    "DATA_CONFLICT": {
+      "code": "DATA_CONFLICT",
+      "httpStatus": 422,
+      "retryable": "not_mechanical",
+      "behavior": "Collect more data, clarify, or return a bounded domain answer."
+    },
+    "INSUFFICIENT_DATA": {
+      "code": "INSUFFICIENT_DATA",
+      "httpStatus": 422,
+      "retryable": "not_mechanical",
+      "behavior": "Collect more data, clarify, or return a bounded domain answer."
+    },
+    "VERIFICATION_FAILED": {
+      "code": "VERIFICATION_FAILED",
+      "httpStatus": 422,
+      "retryable": "within_repair_budget",
+      "behavior": "Repair inside the shared budget; never publish an unverified draft."
+    },
+    "RESULT_TOO_LARGE": {
+      "code": "RESULT_TOO_LARGE",
+      "httpStatus": 413,
+      "retryable": "not_mechanical",
+      "behavior": "Paginate, aggregate or narrow the scope; never treat it as empty data."
+    },
+    "UNSUPPORTED_QUERY": {
+      "code": "UNSUPPORTED_QUERY",
+      "httpStatus": 422,
+      "retryable": "not_mechanical",
+      "behavior": "Paginate, aggregate or narrow the scope; never treat it as empty data."
+    },
+    "INTERNAL_ERROR": {
+      "code": "INTERNAL_ERROR",
+      "httpStatus": 500,
+      "retryable": "depends_on_idempotency",
+      "behavior": "Keep the trace; never return a fake success."
+    },
+    "EVIDENCE_PERSIST_FAILED": {
+      "code": "EVIDENCE_PERSIST_FAILED",
+      "httpStatus": 500,
+      "retryable": "depends_on_idempotency",
+      "behavior": "Keep the trace; never return a fake success."
+    }
+  }
+}

@@ -1,0 +1,250 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://ontology.local/schema/http.schema.json",
+  "title": "HttpContracts",
+  "$comment": "C6 wire shapes for /api/v1. Identity is established by the server; POST /runs never accepts a client-supplied principal, budget override, tool allowlist or secret. Create/retry calls require Idempotency-Key and updates require If-Match.",
+  "$defs": {
+    "ResponseMeta": {
+      "title": "ResponseMeta",
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["traceId"],
+      "properties": {
+        "traceId": {
+          "$ref": "./common.schema.json#/$defs/NonEmptyString"
+        },
+        "revision": {
+          "$ref": "./common.schema.json#/$defs/RevisionString"
+        },
+        "nextCursor": {
+          "$ref": "./common.schema.json#/$defs/OpaqueCursor"
+        }
+      }
+    },
+    "SuccessEnvelope": {
+      "title": "SuccessEnvelope",
+      "description": "C6 success shape: {data, meta:{traceId, revision?, nextCursor?}}.",
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["data", "meta"],
+      "properties": {
+        "data": {
+          "type": ["object", "array"]
+        },
+        "meta": {
+          "$ref": "#/$defs/ResponseMeta"
+        }
+      }
+    },
+    "IdempotencyKey": {
+      "title": "IdempotencyKey",
+      "description": "Same key plus the same canonical payload returns the same resource; a different payload returns 409 IDEMPOTENCY_CONFLICT.",
+      "type": "string",
+      "minLength": 8,
+      "maxLength": 256
+    },
+    "IfMatchRevision": {
+      "title": "IfMatchRevision",
+      "description": "Optimistic-concurrency revision. A missing header returns 428.",
+      "type": "string",
+      "pattern": "^(0|[1-9]\\d*)$"
+    },
+    "RunState": {
+      "title": "RunState",
+      "type": "string",
+      "enum": [
+        "created",
+        "preflight",
+        "collecting",
+        "drafting",
+        "verifying",
+        "published",
+        "awaiting_input",
+        "cancelling",
+        "cancelled",
+        "blocked",
+        "failed"
+      ]
+    },
+    "RunRoutePreference": {
+      "title": "RunRoutePreference",
+      "type": "string",
+      "enum": ["auto", "template", "pi"]
+    },
+    "CreateRunContext": {
+      "title": "CreateRunContext",
+      "description": "Business context supplied by the caller. It carries no identity: the principal always comes from the server-side authentication context.",
+      "type": "object",
+      "additionalProperties": true,
+      "required": ["timeZone"],
+      "properties": {
+        "siteRef": {
+          "$ref": "./common.schema.json#/$defs/NonEmptyString"
+        },
+        "timeZone": {
+          "$ref": "./common.schema.json#/$defs/IanaTimeZone"
+        }
+      }
+    },
+    "RunPreferences": {
+      "title": "RunPreferences",
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["route", "allowWeb"],
+      "properties": {
+        "route": {
+          "$ref": "#/$defs/RunRoutePreference"
+        },
+        "allowWeb": {
+          "type": "boolean"
+        }
+      }
+    },
+    "CreateRunRequest": {
+      "title": "CreateRunRequest",
+      "description": "C6.1 example shape. No principal, no budget override, no tool allowlist and no secret field exists here.",
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["profileRef", "question", "context", "preferences"],
+      "properties": {
+        "profileRef": {
+          "$ref": "./industry.schema.json#/$defs/ProfileRef"
+        },
+        "question": {
+          "$ref": "./common.schema.json#/$defs/NonEmptyString"
+        },
+        "context": {
+          "$ref": "#/$defs/CreateRunContext"
+        },
+        "preferences": {
+          "$ref": "#/$defs/RunPreferences"
+        }
+      }
+    },
+    "CreateRunResponse": {
+      "title": "CreateRunResponse",
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["runId", "state", "eventsUrl", "resolvedProfileHash"],
+      "properties": {
+        "runId": {
+          "$ref": "./common.schema.json#/$defs/Uuid"
+        },
+        "state": {
+          "$ref": "#/$defs/RunState"
+        },
+        "eventsUrl": {
+          "type": "string",
+          "format": "uri-reference",
+          "pattern": "^/api/v1/runs/[0-9a-f-]{36}/events$",
+          "maxLength": 256
+        },
+        "resolvedProfileHash": {
+          "$ref": "./common.schema.json#/$defs/Sha256Digest"
+        }
+      }
+    },
+    "SseEventType": {
+      "title": "SseEventType",
+      "description": "Public SSE event names. There is no unverified_answer.delta event exposed to business UIs.",
+      "type": "string",
+      "enum": [
+        "run.state",
+        "plan.summary",
+        "tool.started",
+        "tool.completed",
+        "evidence.available",
+        "clarification.required",
+        "answer.published",
+        "run.failed"
+      ]
+    },
+    "SseEvent": {
+      "title": "SseEvent",
+      "description": "Every SSE event carries a persisted, monotonically increasing sequence used as the SSE id so Last-Event-ID reconnect can replay in order and clients can de-duplicate.",
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["id", "event", "data"],
+      "properties": {
+        "id": {
+          "$ref": "./common.schema.json#/$defs/RevisionString"
+        },
+        "event": {
+          "$ref": "#/$defs/SseEventType"
+        },
+        "data": {
+          "type": "object"
+        },
+        "retry": {
+          "$ref": "./common.schema.json#/$defs/DurationMs"
+        }
+      }
+    },
+    "RunCancelRequest": {
+      "title": "RunCancelRequest",
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["reason", "expectedRevision"],
+      "properties": {
+        "reason": {
+          "$ref": "./common.schema.json#/$defs/NonEmptyString"
+        },
+        "expectedRevision": {
+          "$ref": "./common.schema.json#/$defs/RevisionString"
+        }
+      }
+    },
+    "RunCancelResponse": {
+      "title": "RunCancelResponse",
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["runId", "state", "revision"],
+      "properties": {
+        "runId": {
+          "$ref": "./common.schema.json#/$defs/Uuid"
+        },
+        "state": {
+          "$ref": "#/$defs/RunState"
+        },
+        "revision": {
+          "$ref": "./common.schema.json#/$defs/RevisionString"
+        }
+      }
+    },
+    "RunResponseRequest": {
+      "title": "RunResponseRequest",
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["clarificationId", "typedResponse", "expectedRevision"],
+      "properties": {
+        "clarificationId": {
+          "$ref": "./common.schema.json#/$defs/Uuid"
+        },
+        "typedResponse": {
+          "type": "object"
+        },
+        "expectedRevision": {
+          "$ref": "./common.schema.json#/$defs/RevisionString"
+        }
+      }
+    },
+    "RunResponseResponse": {
+      "title": "RunResponseResponse",
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["runId", "state", "revision"],
+      "properties": {
+        "runId": {
+          "$ref": "./common.schema.json#/$defs/Uuid"
+        },
+        "state": {
+          "type": "string",
+          "enum": ["continued", "blocked"]
+        },
+        "revision": {
+          "$ref": "./common.schema.json#/$defs/RevisionString"
+        }
+      }
+    }
+  }
+}
