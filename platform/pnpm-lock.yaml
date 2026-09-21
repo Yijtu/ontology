@@ -8,12 +8,18 @@ importers:
 
   .:
     devDependencies:
+      '@ontology/adapter-blob-local':
+        specifier: workspace:*
+        version: link:packages/adapters/blob-local
       '@ontology/adapter-control-postgres':
         specifier: workspace:*
         version: link:packages/adapters/control-postgres
       '@ontology/contracts':
         specifier: workspace:*
         version: link:packages/contracts
+      '@ontology/provenance':
+        specifier: workspace:*
+        version: link:packages/provenance
       '@types/node':
         specifier: ^26.6.2
         version: 26.6.2
@@ -185,6 +191,13 @@ importers:
       '@ontology/core':
         specifier: workspace:*
         version: link:../../core
+      pg:
+        specifier: ^8.16.3
+        version: 8.23.0
+    devDependencies:
+      '@types/pg':
+        specifier: ^8.15.5
+        version: 8.23.1
 
   packages/adapters/blob-s3:
     dependencies:
