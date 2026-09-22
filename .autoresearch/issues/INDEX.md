@@ -2,7 +2,7 @@
 
 基于 [PRD v0.2](../../tasks/prd-industry-semantic-agent-v0.2.md)、[SPEC](../../tasks/spec-industry-semantic-agent-v0.2.md) 与[家庭能源场景](../../tasks/scenario-home-energy-hackathon.md)。
 
-已生成 **54 张计划内本地 Issue**（51 张实现/验收 + 3 张外部条件），执行期另补 **13 张计划外卡片**，共 68 张。工程位于 `D:/work/ontology`，已关联 [Yijtu/ontology](https://github.com/Yijtu/ontology)。任务和验收不依赖历史原型。
+已生成 **54 张计划内本地 Issue**（51 张实现/验收 + 3 张外部条件），执行期另补 **13 张计划外卡片**，另加 **1 张用户追加核对卡**，共 69 张。工程位于 `D:/work/ontology`，已关联 [Yijtu/ontology](https://github.com/Yijtu/ontology)。任务和验收不依赖历史原型。
 
 远程映射（增量进行，不批量预建；编号为 GitHub issue 编号，与 PR 共用序列）：
 
@@ -163,6 +163,22 @@
 | [LOCAL-066](issue-066-forecast-port.md) | 新增 ForecastPort 并按端口读取 forecast 输入 | backend | 已交付 #94 |
 | [LOCAL-067](issue-067-bm25-connection-error-classification.md) | search-bm25 连接层错误分类为 SOURCE_UNAVAILABLE | backend | 已交付 #95 |
 | [LOCAL-068](issue-068-test-deadline-fixtures.md) | tool-handler-assembly 测试的固定 +60s deadline 在慢 beforeAll 下导致 DEADLINE_EXCEEDED | infra | 已交付 #106 |
+
+| [LOCAL-069](issue-069-materialization-worker-wiring.md) | 把 IncrementalMaterializer 接入 worker 装配并注册语义物化 outbox 消费者 | backend | 已交付 #117 |
+| [LOCAL-070](issue-070-publication-fence-in-transaction.md) | 发布事务内开启失效围栏（消除 publish-commit→worker-consume 窗口） | backend | 已交付 #123 |
+
+| [LOCAL-069](issue-069-materialization-worker-wiring.md) | 把 IncrementalMaterializer 接入 worker 装配并注册语义物化 outbox 消费者 | backend | 已交付 #117 |
+| [LOCAL-070](issue-070-publication-fence-in-transaction.md) | 发布事务内开启失效围栏（消除 publish-commit→worker-consume 窗口） | backend | 已交付 #123 |
+
+## 用户追加卡片
+
+| ID | 主题 | 类型 | 状态 |
+|---|---|---|---|
+| [LOCAL-071](issue-071-nl2sql-pipeline-alignment.md) | 对齐 NL2SQL 标准流水线（改写/召回/裁剪/Schema/示例/试执行/反馈） | backend | 待主体开发完成后核对 |
+
+- 来源：用户明确要求（`origin: user-requested`），非执行期自动发现。
+- 依赖 LOCAL-054；在端到端验收完成后逐项核对标准流水线的覆盖情况，不进入当前自动执行批次。
+- manifest 的 `issues` 数组需在下次同步时补入 LOCAL-069（`readiness: waiting_dependencies`，不加入 `topological_waves`）。
 
 ## 外部条件与范围
 
