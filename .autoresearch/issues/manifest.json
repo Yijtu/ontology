@@ -25,9 +25,7 @@
     "tasks/spec-v0.2/home-energy.md": "aa43bb2bfd5fbab883dcc2e71d1f9bbc51ca30a7ae8996ea7d3bf8e228008737",
     "tasks/spec-v0.2/verification-plan.md": "1e579633bdfec43ec1e01634dd2cc946db3bfe59119f9e0c3cecf2536f0a63ed"
   },
-  "entry_ready_ids": [
-    "LOCAL-047"
-  ],
+  "entry_ready_ids": [],
   "local_delivery_ids": [
     "LOCAL-001",
     "LOCAL-002",
@@ -1958,8 +1956,8 @@
       "file": "issue-047-ui-home-energy.md",
       "type": "frontend",
       "priority": "high",
-      "state": "planned",
-      "readiness": "ready",
+      "state": "done",
+      "readiness": "done",
       "phase": "H 行业资产与能源",
       "dependencies": [
         "LOCAL-039",
@@ -1985,7 +1983,7 @@
       ],
       "external_gates": [],
       "execution_mode": "local-implementation",
-      "github_issue": null
+      "github_issue": 136
     },
     {
       "id": "LOCAL-048",
@@ -2235,8 +2233,8 @@
       "file": "issue-054-end-to-end-acceptance.md",
       "type": "fullstack",
       "priority": "high",
-      "state": "planned",
-      "readiness": "waiting_dependencies",
+      "state": "done",
+      "readiness": "done",
       "phase": "I 验证与收尾",
       "dependencies": [
         "LOCAL-037",
@@ -2266,7 +2264,7 @@
       ],
       "external_gates": [],
       "execution_mode": "local-implementation",
-      "github_issue": null
+      "github_issue": 139
     },
     {
       "id": "LOCAL-055",
