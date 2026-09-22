@@ -18,6 +18,8 @@ export type DocumentSearchErrorCode =
   | 'INDEX_BUILD_FAILED'
   | 'CORPUS_UNAVAILABLE'
   | 'STORE_FAILED'
+  /** The search was cancelled/timed out; the remote state is recorded as unknown. */
+  | 'DEADLINE_EXCEEDED'
 
 const EXTRA_HTTP_STATUS: Readonly<Record<DocumentSearchErrorCode, number>> = {
   INVALID_REQUEST: 400,
@@ -28,6 +30,7 @@ const EXTRA_HTTP_STATUS: Readonly<Record<DocumentSearchErrorCode, number>> = {
   INDEX_BUILD_FAILED: 500,
   CORPUS_UNAVAILABLE: 503,
   STORE_FAILED: 500,
+  DEADLINE_EXCEEDED: 504,
 }
 
 const CATALOGUE_HTTP_STATUS: Readonly<Record<string, number>> = Object.fromEntries(

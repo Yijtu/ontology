@@ -1,7 +1,9 @@
-import type { DocumentSearchOutput, ToolContext, ToolCoverage } from '@ontology/contracts'
+import type { DocumentSearchOutput, ToolCoverage } from '@ontology/contracts'
+import { DocumentSearchError } from './errors'
 import { parseDocumentSearchRequest } from './parse'
 import type { Bm25DocumentSearchService } from './service'
 import type {
+  DocumentSearchDetail,
   DocumentSearchToolHandler,
   DocumentSearchToolOutcome,
   DocumentSearchToolRequest,
@@ -11,13 +13,35 @@ import type {
 
 export interface Bm25DocumentSearchToolDependencies {
   readonly service: Bm25DocumentSearchService
-  /**
-   * The host-minted trusted context for the run this handler serves. The gateway
-   * binds a gateway to one run but passes no context to a handler, so the handler
-   * is bound to the run's context at composition time (like the gateway is bound
-   * to the run's ledger and profile). It is never taken from model input.
-   */
-  readonly ctx: ToolContext
+}
+
+/**
+ * Stop waiting for the search as soon as the propagated signal aborts. The keyword
+ * index is an in-process read, so the handler cannot confirm a remote interrupt; it
+ * reports the catalogue's `DEADLINE_EXCEEDED` (remote state unknown) so the gateway
+ * settles the reservation conservatively instead of returning a traceable success.
+ */
+function raceWithSignal(
+  work: Promise<DocumentSearchDetail>,
+  signal: AbortSignal,
+): Promise<DocumentSearchDetail> {
+  const cancelled = (): DocumentSearchError =>
+    new DocumentSearchError('DEADLINE_EXCEEDED', 'the document search was cancelled')
+  if (signal.aborted) return Promise.reject(cancelled())
+  return new Promise<DocumentSearchDetail>((resolve, reject) => {
+    const onAbort = (): void => reject(cancelled())
+    signal.addEventListener('abort', onAbort, { once: true })
+    work.then(
+      (value) => {
+        signal.removeEventListener('abort', onAbort)
+        resolve(value)
+      },
+      (error: unknown) => {
+        signal.removeEventListener('abort', onAbort)
+        reject(error)
+      },
+    )
+  })
 }
 
 /**
@@ -38,7 +62,10 @@ export function createBm25DocumentSearchToolHandler(
     toolId: 'document_search',
     async execute(request: DocumentSearchToolRequest): Promise<DocumentSearchToolOutcome> {
       const parsed = parseDocumentSearchRequest(request.arguments)
-      const detail = await dependencies.service.searchDetailed(parsed, dependencies.ctx)
+      const detail = await raceWithSignal(
+        dependencies.service.searchDetailed(parsed, request.ctx),
+        request.signal,
+      )
       const spans = detail.response.spans
       const coverage: ToolCoverage = {
         returned: spans.length,

@@ -155,7 +155,6 @@ describe('ontology_lookup local semantic reads', () => {
     const handler = new OntologyLookupHandler({
       lookup: service,
       sourceRef: { namespace: 'platform', sourceId: 'semantic-definitions' },
-      ctx,
     })
     const request: ToolExecutionRequest = {
       callId: '11111111-2222-4333-8444-555555555555',
@@ -169,6 +168,7 @@ describe('ontology_lookup local semantic reads', () => {
       resultLimits: { maxRows: 500, maxBytes: 262_144, maxDurationMs: 30_000 },
       deadline: ctx.deadline,
       traceId: ctx.traceId,
+      ctx,
       signal: new AbortController().signal,
     }
     const outcome = await handler.execute(request)

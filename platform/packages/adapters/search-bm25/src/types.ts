@@ -238,6 +238,8 @@ export interface DocumentSearchToolRequest {
   readonly resultLimits: ResultLimits
   readonly deadline: Rfc3339UtcTimestamp
   readonly traceId: string
+  /** The run's trusted, host-minted context, injected by the gateway on the execute path. */
+  readonly ctx: ToolContext
   readonly signal: AbortSignal
 }
 

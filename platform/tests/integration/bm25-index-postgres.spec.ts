@@ -470,7 +470,7 @@ describe('BM25 keyword index against real PostgreSQL, blob-local and the parse s
     const first = await publishText('tool-a')
     const second = await publishText('tool-b')
     await buildIndexAsJob(collection, [first, second])
-    const handler = createBm25DocumentSearchToolHandler({ service: searchService, ctx: CTX_A })
+    const handler = createBm25DocumentSearchToolHandler({ service: searchService })
     const outcome = await handler.execute({
       callId: randomUUID(),
       toolId: 'document_search',
@@ -478,6 +478,7 @@ describe('BM25 keyword index against real PostgreSQL, blob-local and the parse s
       resultLimits: { maxRows: 200, maxBytes: 1048576, maxDurationMs: 30000 },
       deadline: new Date(Date.now() + 30_000).toISOString(),
       traceId: 'trace-bm25-integration',
+      ctx: CTX_A,
       signal: new AbortController().signal,
     })
     expect(outcome.status).toBe('partial')
@@ -496,6 +497,7 @@ describe('BM25 keyword index against real PostgreSQL, blob-local and the parse s
         resultLimits: { maxRows: 200, maxBytes: 1048576, maxDurationMs: 30000 },
         deadline: new Date(Date.now() + 30_000).toISOString(),
         traceId: 'trace-bm25-integration',
+        ctx: CTX_A,
         signal: new AbortController().signal,
       }),
     ).rejects.toMatchObject({ code: 'UNSUPPORTED_QUERY' })

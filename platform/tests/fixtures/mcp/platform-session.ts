@@ -213,7 +213,7 @@ export async function buildPlatformSession(config: PlatformSessionConfig): Promi
   const handlers: readonly ToolHandler[] =
     config.handlerFactory === undefined
       ? [
-          new DataQueryHandler({ query, mappings: new InMemorySemanticMappingRegistry([]), ctx: context }),
+          new DataQueryHandler({ query, mappings: new InMemorySemanticMappingRegistry([]) }),
           new ContextEchoHandler(context),
           new StaticToolHandler('document_search', {
             spans: [],

@@ -153,7 +153,6 @@ beforeAll(async () => {
     allowWeb: true,
     resolvedProfile: fullProfile(),
     sourceRef: SOURCE_REF,
-    ctx: CONTEXT_A,
   })
   const composition = createToolGatewayComposition({
     database: controlDatabase,

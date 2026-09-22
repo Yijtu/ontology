@@ -164,7 +164,6 @@ async function invokeSemantic(
   const handler = new DataQueryHandler({
     query: adapter,
     mappings: new InMemorySemanticMappingRegistry([mapping]),
-    ctx,
   })
   const harness = buildGateway(handler)
   await harness.budget.openLedger({ ledgerId: GATEWAY_LEDGER, kind: 'run', runId: GATEWAY_RUN }, ctx)
@@ -291,7 +290,6 @@ describe('semantic query compilation against real engines', () => {
     const handler = new DataQueryHandler({
       query: pg,
       mappings: new InMemorySemanticMappingRegistry([MAPPING_CROSS_SOURCE]),
-      ctx,
     })
     const harness = buildGateway(handler)
     await harness.budget.openLedger({ ledgerId: GATEWAY_LEDGER, kind: 'run', runId: GATEWAY_RUN }, ctx)
@@ -320,7 +318,6 @@ describe('semantic query compilation against real engines', () => {
     const handler = new DataQueryHandler({
       query: pg,
       mappings: new InMemorySemanticMappingRegistry([]),
-      ctx,
     })
     const harness = buildGateway(handler)
     await harness.budget.openLedger({ ledgerId: GATEWAY_LEDGER, kind: 'run', runId: GATEWAY_RUN }, ctx)
