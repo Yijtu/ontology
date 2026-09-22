@@ -3,6 +3,7 @@ import type { FastifyInstance } from 'fastify'
 import type { JobService, RunService } from '@ontology/application'
 import { registerRunRoutes } from './server'
 import type { RunApiOptions } from './server'
+import type { RunProgressReader } from './run-progress'
 import { registerJobRoutes } from './jobs'
 import type { JobApiOptions } from './jobs'
 import { registerWorkbenchRoutes } from './workbench'
@@ -30,7 +31,7 @@ import type { RequestAuthenticator } from './shared'
 export interface ApiServerOptions {
   readonly authenticate: RequestAuthenticator
   /** Register the run surface (`POST /runs`, events, cancel, resume). */
-  readonly runs?: { readonly service: RunService }
+  readonly runs?: { readonly service: RunService; readonly progress?: RunProgressReader }
   /** Register the durable-job surface (`POST /ingestions`, `GET /jobs/{id}`, retry). */
   readonly jobs?: { readonly service: JobService }
   /** Register the configuration workbench surface (components/profiles/sources). */
@@ -54,7 +55,11 @@ export function createApiServer(options: ApiServerOptions): FastifyInstance {
   const app = Fastify({ logger: options.logger ?? false })
   installErrorHandler(app)
   if (options.runs !== undefined) {
-    registerRunRoutes(app, { service: options.runs.service, authenticate: options.authenticate })
+    registerRunRoutes(app, {
+      service: options.runs.service,
+      authenticate: options.authenticate,
+      ...(options.runs.progress === undefined ? {} : { progress: options.runs.progress }),
+    })
   }
   if (options.jobs !== undefined) {
     registerJobRoutes(app, { service: options.jobs.service, authenticate: options.authenticate })
@@ -87,7 +92,10 @@ export function createApiServer(options: ApiServerOptions): FastifyInstance {
 export function createRunApi(options: RunApiOptions): FastifyInstance {
   return createApiServer({
     authenticate: options.authenticate,
-    runs: { service: options.service },
+    runs: {
+      service: options.service,
+      ...(options.progress === undefined ? {} : { progress: options.progress }),
+    },
     ...(options.logger === undefined ? {} : { logger: options.logger }),
   })
 }

@@ -3,6 +3,7 @@ import type { ProfileRef } from '@ontology/contracts'
 import type { WorkbenchClient } from '../api/client'
 import { CandidateReviewPanel } from './CandidateReviewPanel'
 import { JobProgressPanel } from './JobProgressPanel'
+import { QueryPanel } from './QueryPanel'
 import { useViewport } from './useViewport'
 import { Workbench } from './Workbench'
 
@@ -12,7 +13,7 @@ import { Workbench } from './Workbench'
  * (`?view=jobs&job=<id>`, `?view=review&candidate=<id>`) so a state can be reproduced in a
  * browser without navigating by hand. It talks to the API over HTTP only.
  */
-export type AppView = 'workbench' | 'jobs' | 'review'
+export type AppView = 'workbench' | 'query' | 'jobs' | 'review'
 
 export interface AppProps {
   readonly client: WorkbenchClient
@@ -25,6 +26,7 @@ export interface AppProps {
 
 const TABS: readonly { readonly view: AppView; readonly label: string }[] = [
   { view: 'workbench', label: '配置工作台' },
+  { view: 'query', label: '业务问答' },
   { view: 'jobs', label: '导入任务' },
   { view: 'review', label: '候选审核' },
 ]
@@ -60,6 +62,13 @@ export function App({
 
       {view === 'workbench' ? (
         <Workbench client={client} {...(profileRef === undefined ? {} : { profileRef })} {...(boundRunId === undefined ? {} : { boundRunId })} />
+      ) : null}
+      {view === 'query' ? (
+        <QueryPanel
+          client={client}
+          {...(profileRef === undefined ? {} : { profileRef })}
+          {...(boundRunId === undefined ? {} : { initialRunId: boundRunId })}
+        />
       ) : null}
       {view === 'jobs' ? <JobProgressPanel client={client} {...(initialJobId === undefined ? {} : { initialJobId })} /> : null}
       {view === 'review' ? (

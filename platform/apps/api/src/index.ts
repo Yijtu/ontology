@@ -55,6 +55,15 @@ export { createApiServer, createJobApi, createRunApi } from './http/app'
 export type { ApiServerOptions } from './http/app'
 export { registerRunRoutes } from './http/server'
 export type { AuthenticatedRequest, RequestAuthenticator, RunApiOptions } from './http/server'
+export { RunProgressService } from './http/run-progress'
+export type {
+  DegradationView,
+  RunProgressDependencies,
+  RunProgressReader,
+  RunProgressSubject,
+  RunProgressView,
+  RunScopeView,
+} from './http/run-progress'
 export { registerJobRoutes } from './http/jobs'
 export type { JobApiOptions, JobRouteDependencies } from './http/jobs'
 export { registerWorkbenchRoutes } from './http/workbench'

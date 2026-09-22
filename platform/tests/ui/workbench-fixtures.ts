@@ -1,18 +1,28 @@
+import { randomUUID } from 'node:crypto'
 import Ajv2020 from 'ajv/dist/2020.js'
 import addFormats from 'ajv-formats'
-import { createApiServer } from '@ontology/app-api'
-import type { AuthenticatedRequest } from '@ontology/app-api'
+import { createApiServer, RunProgressService } from '@ontology/app-api'
+import type { AnswerReader, AuthenticatedRequest } from '@ontology/app-api'
 import {
   InMemoryComponentRegistryStore,
   InMemoryIndustryManifestSource,
   InMemoryProfileStore,
   InMemoryRunStore,
   InMemorySourceStore,
+  InMemoryWorkflowStore,
   ProfileResolver,
   RunService,
   SourceRegistry,
 } from '@ontology/application'
-import type { ProfileSpecValidator } from '@ontology/application'
+import type {
+  CreateRunInput,
+  CreateRunResult,
+  ProfileSpecValidator,
+  RunProfileBinder,
+  RunProfileBinding,
+  RunServiceDependencies,
+} from '@ontology/application'
+import { BudgetService, InMemoryBudgetLedgerStore } from '@ontology/core'
 import { SCHEMA_DOCUMENTS, SecretValue, createToolContext } from '@ontology/contracts'
 import type {
   Capability,
@@ -29,6 +39,10 @@ import type {
   ProfileRef,
   ProfileSpec,
   ProjectionState,
+  PublishedAnswer,
+  ResourceRef,
+  RevisionString,
+  RunState,
   ScopeRef,
   SecretResolver,
   SourceProbeAdapter,
@@ -38,6 +52,7 @@ import type {
   VersionRef,
 } from '@ontology/contracts'
 import { WorkbenchClient } from '@ontology/app-web/client'
+import type { RunEventStreamFactory } from '@ontology/app-web/client'
 
 /**
  * Shared workbench fixture. It builds a real Fastify API over in-memory stores so both the
@@ -295,11 +310,11 @@ function sequentialIds(prefix: string): () => string {
   }
 }
 
-export function toolContext(roles: readonly string[]): ToolContext {
+export function toolContext(roles: readonly string[], subjectId = 'ui-fixture'): ToolContext {
   return createToolContext({
     principal: {
       tenantId: SCOPE.tenantId,
-      subjectId: 'ui-fixture',
+      subjectId,
       roles: [...roles],
       scopes: [],
       authEpoch: 1,
@@ -390,11 +405,66 @@ export function loopbackTestAuthenticator(): AuthenticatedRequest {
   }
 }
 
+const HARNESS_NOW = '2026-09-21T00:00:00Z'
+
+/**
+ * Test-only run service that opens the run's one shared budget ledger and saves its manifest
+ * when a run is created — the bookkeeping the real `WorkflowController.startRun` performs.
+ * The fixture has no runtime adapter, so the UI tests focus on the ask/progress/clarify
+ * surface while the real-DB integration suite proves the same budget semantics end to end.
+ */
+class HarnessRunService extends RunService {
+  readonly #onCreated: (runId: string, ctx: ToolContext) => Promise<void>
+
+  constructor(
+    dependencies: RunServiceDependencies,
+    onCreated: (runId: string, ctx: ToolContext) => Promise<void>,
+  ) {
+    super(dependencies)
+    this.#onCreated = onCreated
+  }
+
+  override async createRun(input: CreateRunInput, ctx: ToolContext): Promise<CreateRunResult> {
+    const result = await super.createRun(input, ctx)
+    if (!result.reused) await this.#onCreated(result.runId, ctx)
+    return result
+  }
+}
+
+/** The answer route reader for the fixture; the verified answer is seeded explicitly. */
+class HarnessAnswerReader implements AnswerReader {
+  readonly #runs: RunService
+  readonly #answers: Map<string, PublishedAnswer>
+
+  constructor(runs: RunService, answers: Map<string, PublishedAnswer>) {
+    this.#runs = runs
+    this.#answers = answers
+  }
+
+  async getRun(
+    runId: string,
+    ctx: ToolContext,
+  ): Promise<{ readonly state: RunState; readonly revision: RevisionString }> {
+    const view = await this.#runs.getRun(runId, ctx)
+    return { state: view.state, revision: view.revision }
+  }
+
+  getAnswer(runId: string): Promise<PublishedAnswer | undefined> {
+    return Promise.resolve(this.#answers.get(runId))
+  }
+}
+
 export interface Harness {
   readonly app: ReturnType<typeof createApiServer>
   readonly client: WorkbenchClient
   readonly registry: SourceRegistry
   readonly baseUrl: string
+  readonly runService: RunService
+  /** A trusted context in the harness scope for driving runs and budget directly. */
+  readonly ctx: ToolContext
+  readonly seedAnswer: (runId: string, answer: PublishedAnswer) => void
+  /** Consume `toolCalls` from the run's shared ledger (real `BudgetService`, in-memory store). */
+  readonly consumeBudget: (runId: string, toolCalls: number) => Promise<void>
 }
 
 export interface HarnessOptions {
@@ -404,6 +474,8 @@ export interface HarnessOptions {
   readonly seedProfile?: boolean
   /** Use the fixed loopback principal (browser E2E) instead of header-driven identity. */
   readonly fixedPrincipal?: boolean
+  /** Override the SSE stream factory (the jsdom tests push frames without a real EventSource). */
+  readonly streamFactory?: RunEventStreamFactory
 }
 
 export async function startHarness(options: HarnessOptions = {}): Promise<Harness> {
@@ -440,20 +512,55 @@ export async function startHarness(options: HarnessOptions = {}): Promise<Harnes
     now: () => '2026-09-21T00:00:00Z',
     newId: sequentialIds('77777777'),
   })
-  const runService = new RunService({
-    store: new InMemoryRunStore(),
+  const budget = new BudgetService({
+    store: new InMemoryBudgetLedgerStore(),
     control: new RecordingControl(),
-    profiles: {
-      bindProfileForRun: (profileRef, scopeRef, ctx) => resolver.bindRunProfile(profileRef, scopeRef, ctx),
-    },
-    now: () => '2026-09-21T00:00:00Z',
+    now: () => HARNESS_NOW,
+    newId: () => randomUUID(),
   })
+  const manifests = new InMemoryWorkflowStore()
+  const bindings = new Map<string, RunProfileBinding>()
+  const binder: RunProfileBinder = {
+    bindProfileForRun: async (profileRef, scopeRef, ctx) => {
+      const binding = await resolver.bindRunProfile(profileRef, scopeRef, ctx)
+      bindings.set(ctx.runId, binding)
+      return binding
+    },
+  }
+  const openRunBudget = async (runId: string, ctx: ToolContext): Promise<void> => {
+    const binding = bindings.get(runId)
+    if (binding === undefined) return
+    const ledger = await budget.openLedger({ ledgerId: randomUUID(), kind: 'run', runId }, ctx)
+    await manifests.saveRunManifest(
+      {
+        runId,
+        resolvedProfileRef: binding.resolvedProfileRef,
+        runtimeRef: binding.runtimeRef,
+        budgetLedgerId: ledger.ledgerId,
+        inputManifestId: randomUUID(),
+        createdAt: HARNESS_NOW,
+      },
+      ctx,
+    )
+  }
+  const runService = new HarnessRunService(
+    {
+      store: new InMemoryRunStore(),
+      control: new RecordingControl(),
+      profiles: binder,
+      now: () => HARNESS_NOW,
+    },
+    openRunBudget,
+  )
+  const progress = new RunProgressService({ profiles: profileStore, binder, manifests, budget })
+  const answers = new Map<string, PublishedAnswer>()
 
   const app = createApiServer({
     authenticate:
       options.fixedPrincipal === true ? loopbackTestAuthenticator : headerAuthenticator,
-    runs: { service: runService },
+    runs: { service: runService, progress },
     workbench: { profiles: resolver, sources: registry, components },
+    answers: { reader: new HarnessAnswerReader(runService, answers) },
   })
   await app.listen({ host: '127.0.0.1', port: 0 })
   const address = app.server.address()
@@ -473,6 +580,7 @@ export async function startHarness(options: HarnessOptions = {}): Promise<Harnes
           'x-test-scope': 'a',
         },
       }),
+    ...(options.streamFactory === undefined ? {} : { eventStreamFactory: options.streamFactory }),
   })
 
   if (options.seedProfile ?? true) {
@@ -490,5 +598,50 @@ export async function startHarness(options: HarnessOptions = {}): Promise<Harnes
     await client.probeSource(binding.sourceId)
   }
 
-  return { app, client, registry, baseUrl }
+  const harnessCtx = toolContext(
+    ['business-user', 'scoped-reader'],
+    options.fixedPrincipal === true ? 'e2e-owner' : 'ui-owner',
+  )
+  const consumeBudget = async (runId: string, toolCalls: number): Promise<void> => {
+    const manifest = await manifests.getRunManifest(runId, harnessCtx)
+    if (manifest === undefined) throw new Error(`run ${runId} has no shared budget ledger`)
+    const outcome = await budget.reserve(
+      {
+        ledgerId: manifest.budgetLedgerId,
+        idempotencyKey: `harness-consume-${randomUUID()}`,
+        toolCalls,
+      },
+      harnessCtx,
+    )
+    if (outcome.reservation === undefined) {
+      throw new Error(`the harness budget reservation was denied for run ${runId}`)
+    }
+    const evidence: ResourceRef = {
+      id: randomUUID(),
+      version: '1.0.0',
+      digest: `sha256:${'e'.repeat(64)}`,
+      kind: 'evidence',
+    }
+    await budget.settle(
+      {
+        ledgerId: manifest.budgetLedgerId,
+        reservationId: outcome.reservation.reservationId,
+        status: 'completed',
+        usage: { durationMs: 1 },
+        evidenceRefs: [evidence],
+      },
+      harnessCtx,
+    )
+  }
+
+  return {
+    app,
+    client,
+    registry,
+    baseUrl,
+    runService,
+    ctx: harnessCtx,
+    seedAnswer: (runId, answer) => answers.set(runId, answer),
+    consumeBudget,
+  }
 }

@@ -12,10 +12,23 @@ export { JobProgressPanel } from './components/JobProgressPanel'
 export type { JobProgressPanelProps } from './components/JobProgressPanel'
 export { CandidateReviewPanel } from './components/CandidateReviewPanel'
 export type { CandidateReviewPanelProps } from './components/CandidateReviewPanel'
+export { QueryPanel } from './components/QueryPanel'
+export type { QueryPanelProps } from './components/QueryPanel'
+export { initialQueryState, isRunActive, queryReducer } from './state/query'
+export type {
+  ClarificationView,
+  ProgressEntry,
+  QueryEvent,
+  QueryOutcome,
+  QueryPhase,
+  QueryState,
+} from './state/query'
 export { WorkbenchClient } from './api/client'
+export { PUBLIC_SSE_EVENTS, isPublicSseEvent } from './api/client'
 export type {
   ActivateProfileRequest,
   BoundRunView,
+  CancelRunRequest,
   CandidateDetailView,
   CandidateFilter,
   CandidateReviewRecord,
@@ -26,6 +39,9 @@ export type {
   ComponentFilter,
   CreateIngestionRequest,
   CreateJobResponse,
+  CreateRunRequest,
+  CreateRunView,
+  DegradationView,
   IdentityDecisionRequest,
   IdentityDecisionView,
   JobAttemptView,
@@ -34,9 +50,18 @@ export type {
   PublishProfileRequest,
   PublishSemanticsRequest,
   PublishedStatement,
+  QueryRunView,
   RegisterSourceRequest,
+  RespondToClarificationRequest,
   RetryJobRequest,
   RetryJobResponse,
+  RunAnswerResult,
+  RunEvent,
+  RunEventHandlers,
+  RunEventStream,
+  RunEventStreamFactory,
+  RunProgressView,
+  RunScopeView,
   SemanticPublicationVersion,
   StatementRevisionRecord,
   StatementRevisionRequest,

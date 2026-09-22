@@ -402,16 +402,126 @@ button:disabled {
   margin: 8px 0;
 }
 
+.query {
+  max-width: 1100px;
+  margin: 0 auto;
+  padding: 24px;
+}
+
+.query__body {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) minmax(0, 2fr);
+  gap: 16px;
+  margin-top: 16px;
+}
+
+.query__scope,
+.query__ask,
+.query__run {
+  background: var(--surface);
+  border: 1px solid var(--line);
+  border-radius: 10px;
+  padding: 16px;
+}
+
+.query__scope,
+.query__ask {
+  grid-column: 1 / -1;
+}
+
+.query__field {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  font-size: 13px;
+  margin-bottom: 8px;
+}
+
+.query__field textarea,
+.query__field input,
+.query__field select {
+  min-width: 240px;
+  padding: 6px 8px;
+  border: 1px solid var(--line);
+  border-radius: 6px;
+  font: inherit;
+}
+
+.query__checkbox {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  font-size: 13px;
+  margin-bottom: 8px;
+}
+
+.query__budget,
+.query__progress,
+.query__limitations,
+.query__tools,
+.query__degradations {
+  list-style: none;
+  padding: 0;
+  margin: 8px 0;
+  font-size: 13px;
+}
+
+.query__progress li,
+.query__limitations li,
+.query__tools li,
+.query__degradations li {
+  padding: 3px 0;
+  border-bottom: 1px dashed var(--line);
+}
+
+.query__rejected {
+  color: var(--danger);
+  font-size: 13px;
+}
+
+.query__notice {
+  color: #1c6b3a;
+  font-size: 13px;
+}
+
+.query__outcome {
+  border-left: 3px solid var(--accent);
+  padding-left: 10px;
+  margin-top: 12px;
+}
+
+.query__answer dl {
+  display: grid;
+  grid-template-columns: max-content minmax(0, 1fr);
+  gap: 4px 12px;
+  font-size: 13px;
+}
+
+.query__answer dd {
+  margin: 0;
+  font-family: Consolas, "Courier New", monospace;
+  overflow-wrap: anywhere;
+}
+
+.query__clarification {
+  border: 1px solid var(--warn);
+  border-radius: 8px;
+  padding: 12px;
+  margin: 12px 0;
+}
+
 /* Narrow viewport: a single column, controls stacked, and the picker fields full width. */
 @media (max-width: 719px) {
   .workbench,
   .jobs,
-  .review {
+  .review,
+  .query {
     padding: 12px;
   }
 
   .workbench__body,
-  .review__body {
+  .review__body,
+  .query__body {
     grid-template-columns: minmax(0, 1fr);
   }
 
