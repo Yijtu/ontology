@@ -9,6 +9,9 @@ import type {
   IndustryRelationSchema,
   IndustrySchema,
   RelationCandidate,
+  RuleCandidate,
+  RuleExpressionNode,
+  RuleUnhandledCandidate,
   Uuid,
 } from '@ontology/contracts'
 
@@ -255,7 +258,12 @@ export function validateRelation(
 
 /** Every issue except an explicit truncation is a hard validation failure (D4.1/D4.3). */
 export function isHardIssue(candidateIssue: CandidateIssue): boolean {
-  return candidateIssue.code !== 'TRUNCATED_CHUNK'
+  if (candidateIssue.code === 'TRUNCATED_CHUNK') return false
+  // An unrepresentable rule and a conflict are explicit review states, not silent failures:
+  // the candidate must stay visible for a human decision, never be published.
+  if (candidateIssue.code === 'RULE_UNSUPPORTED_EXPRESSION') return false
+  if (candidateIssue.code === 'CONFLICTING_RULE') return false
+  return true
 }
 
 /** Stable de-duplication so a re-validation does not append the same issue twice. */
@@ -277,4 +285,100 @@ export function truncatedChunkIssue(chunkId: Uuid): CandidateIssue {
     message: `the source chunk ${chunkId} is known to be truncated; the candidate cannot be treated as complete`,
     field: 'sourceSpans',
   }
+}
+
+function validateRuleExpression(
+  out: CandidateIssue[],
+  schema: IndustrySchema,
+  object: IndustryObjectSchema,
+  expression: RuleExpressionNode,
+  field: string,
+): void {
+  switch (expression.op) {
+    case 'all':
+    case 'any':
+      expression.operands.forEach((operand, index) => {
+        validateRuleExpression(out, schema, object, operand, `${field}.operands[${String(index)}]`)
+      })
+      return
+    case 'not':
+      validateRuleExpression(out, schema, object, expression.operand, `${field}.operand`)
+      return
+    case 'compare':
+    case 'range': {
+      const attribute = attributeById(object, expression.attributeId)
+      if (attribute === undefined) {
+        if (attributeOnAnyObject(schema, expression.attributeId)) {
+          issue(
+            out,
+            'ATTRIBUTE_NOT_ON_OBJECT',
+            `rule attribute ${expression.attributeId} does not belong to object ${object.objectId}`,
+            field,
+          )
+        } else {
+          issue(out, 'UNKNOWN_ATTRIBUTE', `rule attribute ${expression.attributeId} is not declared`, field)
+        }
+        return
+      }
+      if (expression.op === 'range' && attribute.valueType !== 'quantity' && attribute.valueType !== 'number') {
+        issue(out, 'TYPE_MISMATCH', `range requires a numeric attribute, got ${attribute.valueType}`, field)
+      }
+      if (attribute.valueType === 'quantity' && attribute.unitCode !== undefined) {
+        if (expression.unitCode !== attribute.unitCode) {
+          issue(out, 'UNIT_MISMATCH', `rule expects unit ${attribute.unitCode}`, field)
+        }
+      }
+      return
+    }
+    case 'relation': {
+      if (relationById(schema, expression.relationId) === undefined) {
+        issue(out, 'UNKNOWN_RELATION', `rule relation ${expression.relationId} is not declared`, field)
+      }
+      return
+    }
+  }
+}
+
+/**
+ * Deterministic validation of a representable rule candidate against the published schema
+ * (D4.3/D5). Unknown references and unit mismatches are hard failures; a conflict is surfaced
+ * as an explicit review issue.
+ */
+export function validateRule(candidate: RuleCandidate, schema: IndustrySchema): CandidateIssue[] {
+  const out: CandidateIssue[] = []
+  validateSpans(out, candidate.sourceSpans.length)
+  const object = objectById(schema, candidate.objectId)
+  if (object === undefined) {
+    issue(out, 'UNKNOWN_OBJECT', `rule object ${candidate.objectId} is not declared in the industry schema`)
+    return out
+  }
+  validateRuleExpression(out, schema, object, candidate.expression, 'expression')
+  candidate.exceptions.forEach((exception, index) => {
+    validateRuleExpression(out, schema, object, exception.condition, `exceptions[${String(index)}].condition`)
+  })
+  for (const conflict of candidate.conflicts) {
+    issue(
+      out,
+      'CONFLICTING_RULE',
+      `rule ${candidate.ruleId} conflicts with ${conflict.withRuleId} on ${conflict.attributeId}: ${conflict.reason}`,
+      'expression',
+    )
+  }
+  return out
+}
+
+/**
+ * An unrepresentable rule is recorded with its reason and kept in review; it is never a hard
+ * failure that would hide the unhandled item.
+ */
+export function validateRuleUnhandled(candidate: RuleUnhandledCandidate): CandidateIssue[] {
+  const out: CandidateIssue[] = []
+  validateSpans(out, candidate.sourceSpans.length)
+  issue(
+    out,
+    'RULE_UNSUPPORTED_EXPRESSION',
+    `rule ${candidate.ruleId ?? '(unnamed)'} was not represented: ${candidate.reason} — ${candidate.detail}`,
+    'rawExpression',
+  )
+  return out
 }

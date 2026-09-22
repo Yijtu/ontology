@@ -1,0 +1,142 @@
+import type { DocumentSpan, Sha256Digest, Uuid } from './generated/contracts'
+import type { SpanPrecision } from './document-parse'
+
+/**
+ * Bounded rule AST and rule-candidate contracts (SPEC D4.3/D5, US-013/US-015, FR-14/FR-15).
+ *
+ * The extractor may only represent the rule subset the semantic engine can publish and later
+ * evaluate: typed `all`/`any`, explicit attribute comparison, numeric ranges and confirmed
+ * relation queries. Every node carries the source spans it was derived from, so an AND/OR
+ * operand, a negation, a unit-bearing condition, an applicability scope and an exception can
+ * each be traced back to the original text (D4.1/D4.3).
+ *
+ * An expression outside this subset is never weakened into a looser rule. It is recorded as
+ * an explicit unhandled item with a reason (see `RuleUnhandledReason`) and enters review. The
+ * shape mirrors `RuleExpression` in `@ontology/semantic-engine`, but lives in `contracts` so
+ * the application layer can build a candidate without importing the definition service.
+ */
+
+export type RuleComparisonOperator = 'eq' | 'ne' | 'lt' | 'lte' | 'gt' | 'gte'
+
+/**
+ * The provenance of one AST element. It keeps the parse/chunk identity and the locator the
+ * parse stage produced (LOCAL-023) so an element is traceable to the exact source location,
+ * and `precision` stays `approximate` for an OCR span.
+ */
+export interface RuleProvenanceSpan {
+  readonly parseId: Uuid
+  readonly chunkId: Uuid
+  readonly locator: DocumentSpan['locator']
+  readonly spanKind: DocumentSpan['spanKind']
+  readonly precision: SpanPrecision
+  readonly quoteDigest: Sha256Digest
+}
+
+export interface RuleComparisonNode {
+  readonly op: 'compare'
+  readonly attributeId: string
+  readonly operator: RuleComparisonOperator
+  readonly value: string | number | boolean
+  /** Required when the compared attribute is a quantity, so the unit is not lost. */
+  readonly unitCode?: string
+  readonly spans: readonly RuleProvenanceSpan[]
+}
+
+export interface RuleRangeNode {
+  readonly op: 'range'
+  readonly attributeId: string
+  readonly min?: number
+  readonly max?: number
+  readonly unitCode?: string
+  readonly spans: readonly RuleProvenanceSpan[]
+}
+
+export interface RuleRelationNode {
+  readonly op: 'relation'
+  readonly relationId: string
+  readonly spans: readonly RuleProvenanceSpan[]
+}
+
+export interface RuleAllNode {
+  readonly op: 'all'
+  readonly operands: readonly RuleExpressionNode[]
+  readonly spans: readonly RuleProvenanceSpan[]
+}
+
+export interface RuleAnyNode {
+  readonly op: 'any'
+  readonly operands: readonly RuleExpressionNode[]
+  readonly spans: readonly RuleProvenanceSpan[]
+}
+
+/** Explicit negation. It only negates an observed value or a declared complete-range condition. */
+export interface RuleNotNode {
+  readonly op: 'not'
+  readonly operand: RuleExpressionNode
+  readonly spans: readonly RuleProvenanceSpan[]
+}
+
+export type RuleExpressionNode =
+  | RuleComparisonNode
+  | RuleRangeNode
+  | RuleRelationNode
+  | RuleAllNode
+  | RuleAnyNode
+  | RuleNotNode
+
+/**
+ * One exception attached to a rule. An exception stays attached to its rule even when the
+ * source text lives in a different chunk or section; the semantic reading is
+ * `all(condition, not(exception))`, but the exception is kept as a distinct element so it can
+ * never be silently dropped.
+ */
+export interface RuleExceptionNode {
+  readonly exceptionId: string
+  readonly condition: RuleExpressionNode
+  readonly spans: readonly RuleProvenanceSpan[]
+}
+
+/**
+ * How much a rule can affect downstream computation. A high-impact rule always needs a human
+ * review before it can ever be published; a low-impact rule is only eligible for a configured
+ * publication policy. Neither is auto-published by extraction (D4.6).
+ */
+export type RuleImpact = 'high' | 'low'
+
+export type RuleReviewRequirement = 'required' | 'policy_eligible'
+
+/** A contradictory rule found on the same applicability scope. Surfaced, never auto-picked. */
+export interface RuleConflict {
+  readonly withRuleId: string
+  readonly withCandidateId: Uuid
+  readonly attributeId: string
+  readonly reason: string
+}
+
+/**
+ * Why the extractor could not faithfully represent a rule. Each code is an explicit, queryable
+ * state; an unhandled rule is never converted into a looser one.
+ */
+export type RuleUnhandledReason =
+  | 'UNSUPPORTED_OPERATOR'
+  | 'UNSUPPORTED_QUANTIFIER'
+  | 'CYCLIC_EXPRESSION'
+  | 'UNRESOLVED_REFERENCE'
+  | 'EXCEPTION_UNREPRESENTABLE'
+  | 'UNRESOLVED_EXCEPTION_TARGET'
+  | 'MALFORMED_EXPRESSION'
+
+/** The draft a generation response carries before it is validated into a bounded AST. */
+export interface DraftRuleException {
+  readonly targetRuleId: string
+  readonly condition: unknown
+}
+
+export interface DraftRule {
+  readonly ruleId: string
+  readonly objectId: string
+  readonly severity: 'hard' | 'soft'
+  readonly impact: RuleImpact
+  readonly expression: unknown
+  readonly exceptions: readonly unknown[]
+}

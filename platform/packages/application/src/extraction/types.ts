@@ -51,12 +51,18 @@ export interface ExtractionResult {
   /** Generation calls made by this stage. A deterministic-only run is zero (US-012.A2). */
   readonly modelCalls: number
   readonly deterministicCandidates: number
+  /** Representable rule candidates produced in this stage (LOCAL-028). */
+  readonly ruleCandidates: number
+  /** Expressions the extractor could not represent, recorded with a reason (never loosened). */
+  readonly unhandledRules: number
 }
 
 export interface ValidationResult {
   readonly counts: JobStageCounts
   readonly pendingReview: number
   readonly failed: number
+  /** Rule candidates flagged with an explicit same-scope conflict (never auto-resolved). */
+  readonly conflicts: number
 }
 
 export type { ScopeRef }

@@ -1,5 +1,6 @@
-import type { CandidateAttributeValue } from '@ontology/contracts'
+import type { CandidateAttributeValue, DraftRule, DraftRuleException } from '@ontology/contracts'
 import { ExtractionError } from './errors'
+import { parseRuleDrafts } from './rule-output'
 
 /**
  * The structured generation response the extraction role returns. The model output is
@@ -27,6 +28,8 @@ export interface DraftRelation {
 export interface DraftCandidates {
   readonly entities: readonly DraftEntity[]
   readonly relations: readonly DraftRelation[]
+  readonly rules: readonly DraftRule[]
+  readonly exceptions: readonly DraftRuleException[]
 }
 
 function isRecord(value: unknown): value is Record<string, unknown> {
@@ -99,6 +102,7 @@ export function parseModelCandidates(text: string): DraftCandidates {
   }
   const rawEntities = parsed['entities'] === undefined ? [] : requireArray(parsed['entities'], 'entities')
   const rawRelations = parsed['relations'] === undefined ? [] : requireArray(parsed['relations'], 'relations')
+  const { rules, exceptions } = parseRuleDrafts(parsed)
 
   const entities: DraftEntity[] = rawEntities.map((entry, index) => {
     if (!isRecord(entry)) {
@@ -124,5 +128,5 @@ export function parseModelCandidates(text: string): DraftCandidates {
     }
   })
 
-  return { entities, relations }
+  return { entities, relations, rules, exceptions }
 }

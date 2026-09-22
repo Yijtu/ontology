@@ -28,6 +28,19 @@ export { candidateIdFor, canonicalJson, sha256DigestOf } from './canonical'
 export { parseModelCandidates } from './model-output'
 export type { DraftCandidates, DraftEntity, DraftRelation, DraftRelationEndpoint } from './model-output'
 
+export { parseRuleDrafts } from './rule-output'
+export type { DraftRules } from './rule-output'
+
+export {
+  buildRuleAst,
+  collectRuleReferences,
+  detectCyclicRules,
+  flattenComparisons,
+} from './rule-ast'
+export type { RuleAstOk, RuleAstResult, RuleAstUnhandled, RuleExceptionDraft } from './rule-ast'
+
+export { detectRuleConflicts } from './rule-conflicts'
+
 export { mapNativeEntities, parseNativeRecord } from './native-mapping'
 export type { NativeEntityMapping } from './native-mapping'
 
@@ -39,6 +52,8 @@ export {
   truncatedChunkIssue,
   validateEntity,
   validateRelation,
+  validateRule,
+  validateRuleUnhandled,
 } from './schema-validation'
 
 export { ExtractionPipeline, EXTRACTION_RESPONSE_SCHEMA_REF } from './extraction-service'

@@ -13,6 +13,8 @@ import type {
   ExtractionInputVersion,
   GenerationUsage,
   RelationCandidate,
+  RuleCandidate,
+  RuleUnhandledCandidate,
   ScopeRef,
   ToolContext,
   Uuid,
@@ -85,7 +87,37 @@ function toCandidateRecord(row: CandidateRow): CandidateRecord {
     from: row.payload['from'] as RelationCandidate['from'],
     to: row.payload['to'] as RelationCandidate['to'],
   }
-  return relation
+  if (row.kind === 'relation') return relation
+
+  if (row.kind === 'rule') {
+    const rule: RuleCandidate = {
+      ...common,
+      kind: 'rule',
+      ruleId: typeof row.payload['ruleId'] === 'string' ? row.payload['ruleId'] : '',
+      objectId: typeof row.payload['objectId'] === 'string' ? row.payload['objectId'] : '',
+      severity: row.payload['severity'] === 'hard' ? 'hard' : 'soft',
+      impact: row.payload['impact'] === 'high' ? 'high' : 'low',
+      reviewRequirement: row.payload['reviewRequirement'] === 'required' ? 'required' : 'policy_eligible',
+      expression: row.payload['expression'] as RuleCandidate['expression'],
+      exceptions: Array.isArray(row.payload['exceptions'])
+        ? (row.payload['exceptions'] as RuleCandidate['exceptions'])
+        : [],
+      conflicts: Array.isArray(row.payload['conflicts'])
+        ? (row.payload['conflicts'] as RuleCandidate['conflicts'])
+        : [],
+    }
+    return rule
+  }
+
+  const unhandled: RuleUnhandledCandidate = {
+    ...common,
+    kind: 'rule_unhandled',
+    ...(typeof row.payload['ruleId'] === 'string' ? { ruleId: row.payload['ruleId'] } : {}),
+    reason: row.payload['reason'] as RuleUnhandledCandidate['reason'],
+    detail: typeof row.payload['detail'] === 'string' ? row.payload['detail'] : '',
+    rawExpression: typeof row.payload['rawExpression'] === 'string' ? row.payload['rawExpression'] : '',
+  }
+  return unhandled
 }
 
 function payloadOf(candidate: CandidateRecord): Record<string, unknown> {
@@ -97,7 +129,27 @@ function payloadOf(candidate: CandidateRecord): Record<string, unknown> {
       attributes: candidate.attributes,
     }
   }
-  return { relationId: candidate.relationId, from: candidate.from, to: candidate.to }
+  if (candidate.kind === 'relation') {
+    return { relationId: candidate.relationId, from: candidate.from, to: candidate.to }
+  }
+  if (candidate.kind === 'rule') {
+    return {
+      ruleId: candidate.ruleId,
+      objectId: candidate.objectId,
+      severity: candidate.severity,
+      impact: candidate.impact,
+      reviewRequirement: candidate.reviewRequirement,
+      expression: candidate.expression,
+      exceptions: candidate.exceptions,
+      conflicts: candidate.conflicts,
+    }
+  }
+  return {
+    ...(candidate.ruleId === undefined ? {} : { ruleId: candidate.ruleId }),
+    reason: candidate.reason,
+    detail: candidate.detail,
+    rawExpression: candidate.rawExpression,
+  }
 }
 
 /**
