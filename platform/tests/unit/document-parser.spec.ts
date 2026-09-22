@@ -61,6 +61,7 @@ async function ingest(
   harnessed: Harness,
   bytes: Uint8Array,
   mediaType: string,
+  maxPages?: number,
 ): Promise<Awaited<ReturnType<LocalDocumentExtractionService['parse']>>> {
   const staged = await harnessed.blobs.stage(bytes, { scopeRef: SCOPE_A }, CTX)
   const published = await harnessed.blobs.publish(
@@ -73,7 +74,14 @@ async function ingest(
     },
     CTX,
   )
-  return harnessed.service.parse({ scopeRef: SCOPE_A, originalRef: published.blobRef }, CTX)
+  return harnessed.service.parse(
+    {
+      scopeRef: SCOPE_A,
+      originalRef: published.blobRef,
+      ...(maxPages === undefined ? {} : { maxPages }),
+    },
+    CTX,
+  )
 }
 
 describe('plain text parsing', () => {
@@ -249,6 +257,54 @@ describe('real PDF parsing', () => {
     expect(parsed.coverage.skippedUnits).toBe(1)
     expect(parsed.coverage.skippedReasons.join(' ')).toContain('page 2')
     expect(parsed.chunks.some((chunk) => chunk.text.includes('Readable first page clause'))).toBe(true)
+  })
+
+  it('exposes the ids of chunks adjacent to a skipped page instead of reporting them complete', async () => {
+    const harnessed = harness()
+    const parsed = await ingest(harnessed, fixture('broken-page-2.pdf'), 'application/pdf')
+
+    // Page 2 is a real gap (its content stream is corrupt), so the last chunk captured before it
+    // may be missing continuation text.
+    expect(parsed.truncatedChunkIds.length).toBeGreaterThan(0)
+    const clause = parsed.chunks.find((chunk) => chunk.text.includes('Readable first page clause'))
+    expect(clause).toBeDefined()
+    if (clause === undefined) return
+    expect(parsed.truncatedChunkIds).toContain(clause.chunkId)
+    expect(clause.truncated).toBe(true)
+  })
+
+  it('marks the last captured chunk as truncated when the parse budget cuts the document short', async () => {
+    const harnessed = harness()
+    const parsed = await ingest(harnessed, fixture('service-terms.pdf'), 'application/pdf', 1)
+
+    expect(parsed.coverage.completeness).toBe('truncated')
+    expect(parsed.coverage.parsedUnits).toBe(1)
+    expect(parsed.coverage.totalUnits).toBe(2)
+    const pageOneChunks = parsed.chunks.filter((chunk) => chunk.locator.page === 1)
+    const lastPageOne = pageOneChunks[pageOneChunks.length - 1]
+    expect(lastPageOne).toBeDefined()
+    if (lastPageOne === undefined) return
+    expect(parsed.truncatedChunkIds).toEqual([lastPageOne.chunkId])
+  })
+
+  it('reports no truncated chunks when every page was captured', async () => {
+    const harnessed = harness()
+    const parsed = await ingest(harnessed, fixture('service-terms.pdf'), 'application/pdf')
+
+    expect(parsed.coverage.status).toBe('complete')
+    expect(parsed.truncatedChunkIds).toEqual([])
+    expect(parsed.chunks.every((chunk) => chunk.truncated === undefined)).toBe(true)
+  })
+
+  it('keeps the truncation lineage on a reused parse', async () => {
+    const harnessed = harness()
+    const bytes = fixture('broken-page-2.pdf')
+    const first = await ingest(harnessed, bytes, 'application/pdf')
+    const second = await ingest(harnessed, bytes, 'application/pdf')
+
+    expect(second.reused).toBe(true)
+    expect(second.truncatedChunkIds.length).toBeGreaterThan(0)
+    expect(second.truncatedChunkIds).toEqual(first.truncatedChunkIds)
   })
 
   it('refuses an image-only page when no OCR provider is configured', async () => {

@@ -1,5 +1,6 @@
 import { isToolContext } from '@ontology/contracts'
 import type {
+  DocumentChunkRecord,
   DocumentParseRecord,
   DocumentParseRequest,
   DocumentParserPort,
@@ -10,7 +11,7 @@ import type {
   Sha256Digest,
   ToolContext,
 } from '@ontology/contracts'
-import { buildChunkRecords, chunkLines } from './chunker'
+import { buildChunkRecords, chunkLines, truncatedChunkIdsOf } from './chunker'
 import { DocumentExtractionError } from './errors'
 import { extractDocument } from './extract'
 import { deterministicUuid, sha256DigestOfBytes } from './hashing'
@@ -129,7 +130,7 @@ export class LocalDocumentExtractionService implements DocumentParserPort {
     )
     if (existing !== undefined) {
       const chunks = await this.#store.listChunks(scope, existing.parseId, ctx)
-      return { ...existing, chunks, reused: true }
+      return this.#withTruncation(existing, chunks, true)
     }
 
     const authorized = await this.#blobs.getAuthorized(
@@ -266,9 +267,28 @@ export class LocalDocumentExtractionService implements DocumentParserPort {
         )
       }
       const winnerChunks = await this.#store.listChunks(scope, winner.parseId, ctx)
-      return { ...winner, chunks: winnerChunks, reused: true }
+      return this.#withTruncation(winner, winnerChunks, true)
     }
-    return { ...record, chunks, reused: false }
+    return this.#withTruncation(record, chunks, false)
+  }
+
+  /**
+   * Attach the truncation lineage derived from the parser's real coverage: the ids of chunks
+   * adjacent to a skipped page/stream, plus the per-chunk `truncated` flag. The derivation is
+   * pure (chunks + captured pages + total units), so it is identical for a fresh parse and a
+   * reused one and never has to be persisted as a second source of truth.
+   */
+  #withTruncation(
+    record: DocumentParseRecord,
+    chunks: readonly DocumentChunkRecord[],
+    reused: boolean,
+  ): ParsedDocument {
+    const truncatedChunkIds = truncatedChunkIdsOf(chunks, record.pages, record.coverage.totalUnits)
+    const truncated = new Set(truncatedChunkIds)
+    const marked = chunks.map((chunk) =>
+      truncated.has(chunk.chunkId) ? { ...chunk, truncated: true } : chunk,
+    )
+    return { ...record, chunks: marked, truncatedChunkIds, reused }
   }
 
   async #publishArtifact(

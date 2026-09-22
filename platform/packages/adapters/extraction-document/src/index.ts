@@ -37,6 +37,7 @@ export {
   isConditionLine,
   isExceptionLine,
   isTableRow,
+  truncatedChunkIdsOf,
 } from './chunker'
 export type { BuildChunkContext, ChunkOptions } from './chunker'
 

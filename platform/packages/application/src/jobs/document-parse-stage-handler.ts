@@ -149,6 +149,9 @@ export class DocumentParseStageHandler implements JobStageHandler {
       ...(ingestionRef.documentVersionRef === undefined
         ? {}
         : { documentVersionRef: ingestionRef.documentVersionRef }),
+      // The parser's real truncation lineage travels with the checkpoint, so a downstream stage
+      // never treats a truncated chunk as complete evidence (SPEC D4.1/D4.3, INV-06).
+      truncatedChunkIds: parsed.truncatedChunkIds,
     }
     return {
       nextStage: 'parsed',

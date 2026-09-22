@@ -1,5 +1,6 @@
 import type {
   DocumentChunkRecord,
+  DocumentPageRecord,
   NonEmptyString,
   OffsetUnit,
   Sha256Digest,
@@ -266,4 +267,54 @@ export function buildChunkRecords(
     records.push(record)
   })
   return records
+}
+
+/** The page a chunk was captured from; a byte-offset document has the single page 1. */
+function chunkPageOf(chunk: DocumentChunkRecord): number {
+  const locator = chunk.locator
+  return typeof locator.page === 'number' ? locator.page : 1
+}
+
+/**
+ * The ids of the chunks whose capture is genuinely incomplete (SPEC D4.1/D4.3, INV-06).
+ *
+ * A page the parser skipped (a corrupt stream, a page beyond the parse budget, an image-only
+ * page without OCR) leaves a *gap* in the captured text. The last chunk captured before that gap
+ * and the first captured after it may be missing continuation text, so they are marked
+ * truncated rather than being treated as complete evidence. A document whose every page was
+ * captured yields an empty list, so a caller can never mistake "no known gap" for "incomplete".
+ */
+export function truncatedChunkIdsOf(
+  chunks: readonly DocumentChunkRecord[],
+  pages: readonly DocumentPageRecord[],
+  totalUnits: number,
+): Uuid[] {
+  if (chunks.length === 0) return []
+  const captured = new Set(pages.map((page) => page.page))
+  const headBoundary = new Set<number>()
+  const tailBoundary = new Set<number>()
+  for (const page of captured) {
+    if (page > 1 && !captured.has(page - 1)) headBoundary.add(page)
+    if (page < totalUnits && !captured.has(page + 1)) tailBoundary.add(page)
+  }
+  if (headBoundary.size === 0 && tailBoundary.size === 0) return []
+
+  const firstOfPage = new Map<number, Uuid>()
+  const lastOfPage = new Map<number, Uuid>()
+  for (const chunk of chunks) {
+    const page = chunkPageOf(chunk)
+    if (!firstOfPage.has(page)) firstOfPage.set(page, chunk.chunkId)
+    lastOfPage.set(page, chunk.chunkId)
+  }
+
+  const truncated = new Set<Uuid>()
+  for (const page of headBoundary) {
+    const chunkId = firstOfPage.get(page)
+    if (chunkId !== undefined) truncated.add(chunkId)
+  }
+  for (const page of tailBoundary) {
+    const chunkId = lastOfPage.get(page)
+    if (chunkId !== undefined) truncated.add(chunkId)
+  }
+  return chunks.map((chunk) => chunk.chunkId).filter((chunkId) => truncated.has(chunkId))
 }
