@@ -838,6 +838,29 @@ export class PostgresJobStore implements JobStore {
     })
   }
 
+  async appendOutbox(
+    scopeRef: ScopeRef,
+    jobId: Uuid,
+    message: NewOutboxMessage,
+    ctx: ToolContext,
+  ): Promise<OutboxMessageRecord> {
+    return this.#withScope(scopeRef, ctx, async (query) => {
+      await this.#insertOutbox(query, jobId, message)
+      const result = await query.query<OutboxRow>(
+        `SELECT ${OUTBOX_COLUMNS} FROM agent_platform.job_outbox
+          WHERE tenant_id = current_setting('app.tenant_id')::uuid
+            AND space_id = current_setting('app.space_id')::uuid
+            AND idempotency_key = $1`,
+        [message.idempotencyKey],
+      )
+      const row = result.rows[0]
+      if (row === undefined) {
+        throw new JobStoreError('JOB_NOT_FOUND', `outbox message ${message.outboxId} was not appended`)
+      }
+      return toOutboxRecord(row)
+    })
+  }
+
   async listPendingOutbox(
     scopeRef: ScopeRef,
     limit: number,
