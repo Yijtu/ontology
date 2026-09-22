@@ -5,6 +5,7 @@ export type {
   ControlScope,
 } from './database'
 export { PostgresComponentRegistryStore } from './component-registry-store'
+export { PostgresSemanticDefinitionStore } from './semantic-definition-store'
 export { PostgresProfileStore } from './profile-store'
 export { PostgresSourceStore } from './source-store'
 export { PostgresRunStore } from './run-store'

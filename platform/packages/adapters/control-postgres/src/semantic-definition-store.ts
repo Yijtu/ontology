@@ -1,41 +1,27 @@
 import type { QueryResultRow } from 'pg'
-import type { ControlPostgresDatabase } from '@ontology/adapter-control-postgres'
-import type { ResourceRef, ScopeRef, ToolContext } from '@ontology/contracts'
 import {
   SemanticDefinitionStoreError,
   definitionRecordOf,
   definitionVersionFromRecord,
-} from '@ontology/semantic-engine'
+} from '@ontology/contracts'
 import type {
+  DefinitionBinding,
+  ResourceRef,
+  ScopeRef,
   SemanticDefinitionAudit,
   SemanticDefinitionListFilter,
   SemanticDefinitionRecord,
   SemanticDefinitionStore,
   SemanticDefinitionVersion,
-} from '@ontology/semantic-engine'
+  ToolContext,
+} from '@ontology/contracts'
+import { ControlPostgresDatabase } from './database'
 
-/**
- * Real PostgreSQL implementation of the semantic definition store port.
- *
- * It is shared by the LOCAL-025 and LOCAL-042 integration suites. It runs as the
- * non-owner `ontology_app` role so row-level security applies to every statement, and it
- * enforces the same invariants as the in-memory reference store: immutable append-only
- * versions, an audit event per publication and a data set bound to exactly one version.
- */
-class ScopedQuery {
-  constructor(
-    private readonly run: <Row extends QueryResultRow>(
-      text: string,
-      values?: readonly unknown[],
-    ) => Promise<{ rows: Row[]; rowCount: number }>,
-  ) {}
-
+interface ScopedQuery {
   query<Row extends QueryResultRow>(
     text: string,
     values?: readonly unknown[],
-  ): Promise<{ rows: Row[]; rowCount: number }> {
-    return this.run<Row>(text, values)
-  }
+  ): Promise<{ rows: Row[]; rowCount: number }>
 }
 
 interface VersionRow extends QueryResultRow {
@@ -70,6 +56,16 @@ function pgCodeOf(error: unknown): unknown {
 
 type DefinitionBindingInput = Parameters<SemanticDefinitionStore['bindData']>[1]
 
+/**
+ * Real PostgreSQL implementation of the semantic definition store port (D2/D3).
+ *
+ * It runs as the non-owner `ontology_app` role inside a transaction whose trusted scope
+ * is set with `SET LOCAL` semantics, so row-level security applies to every statement and
+ * a later request can never inherit the previous tenant/space. It enforces the same
+ * invariants as the in-memory reference store: immutable append-only versions, an audit
+ * event per publication and a data set bound to exactly one version. A driver error is
+ * mapped onto the classified `SemanticDefinitionStoreError`; it never escapes the port.
+ */
 export class PostgresSemanticDefinitionStore implements SemanticDefinitionStore {
   readonly #database: ControlPostgresDatabase
 
@@ -234,7 +230,11 @@ export class PostgresSemanticDefinitionStore implements SemanticDefinitionStore 
     })
   }
 
-  async findBinding(scopeRef: ScopeRef, dataRefId: string, ctx: ToolContext) {
+  async findBinding(
+    scopeRef: ScopeRef,
+    dataRefId: string,
+    ctx: ToolContext,
+  ): Promise<DefinitionBinding | undefined> {
     return this.#withScope(scopeRef, ctx, async (query) => {
       const result = await query.query<BindingRow>(
         `SELECT data_ref, namespace, definition_id, definition_version, definition_digest, bound_at
@@ -310,12 +310,12 @@ export class PostgresSemanticDefinitionStore implements SemanticDefinitionStore 
     return this.#database.withIdentityScope(
       { tenantId: scopeRef.tenantId, spaceId: scopeRef.spaceId },
       async (client) =>
-        run(
-          new ScopedQuery(async <Row extends QueryResultRow>(text: string, values?: readonly unknown[]) => {
+        run({
+          query: async <Row extends QueryResultRow>(text: string, values?: readonly unknown[]) => {
             const result = await client.query<Row>(text, values === undefined ? undefined : [...values])
             return { rows: result.rows, rowCount: result.rowCount ?? 0 }
-          }),
-        ),
+          },
+        }),
     )
   }
 }

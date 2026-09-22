@@ -7,6 +7,7 @@ import type {
   OntologyLookupOutput,
   ResourceRef,
   ScopeRef,
+  SemanticDefinitionVersion,
   Semver,
   Sha256Digest,
   TimeContext,
@@ -14,7 +15,6 @@ import type {
   VersionRef,
   ValidityInterval,
 } from '@ontology/contracts'
-import type { SemanticDefinitionVersion } from '../definitions/types'
 import type { SemanticDefinitionService } from '../definitions/service'
 import { SemanticMappingError } from './errors'
 import type { SemanticMappingRegistry } from './types'

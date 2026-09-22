@@ -5,6 +5,7 @@ import { afterAll, beforeAll, describe, expect, it } from 'vitest'
 import {
   ControlPostgresDatabase,
   ControlPostgresRepository,
+  PostgresSemanticDefinitionStore,
   runControlMigrations,
 } from '@ontology/adapter-control-postgres'
 import { BusinessPostgresDatabase, PostgresQueryAdapter } from '@ontology/adapter-data-postgres'
@@ -40,7 +41,6 @@ import {
   sourceARows,
   sourceBRows,
 } from '../fixtures/home-energy'
-import { PostgresSemanticDefinitionStore } from './postgres-semantic-definition-store'
 import { startPostgresContainer } from './postgres-container'
 import type { PostgresContainer } from './postgres-container'
 

@@ -4,6 +4,14 @@ export {
 } from './composition/component-registry'
 export type { ComponentRegistryComposition, ComponentRegistryCompositionOptions } from './composition/component-registry'
 export {
+  createPostgresSemanticDefinitionService,
+  createPostgresSemanticDefinitionStore,
+} from './composition/semantic-definition-store'
+export type {
+  SemanticDefinitionComposition,
+  SemanticDefinitionCompositionOptions,
+} from './composition/semantic-definition-store'
+export {
   createPostgresProfileResolver,
   createPostgresProfileStore,
 } from './composition/profile-resolver'

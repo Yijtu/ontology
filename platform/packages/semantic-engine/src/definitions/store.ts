@@ -1,54 +1,15 @@
-import { isToolContext } from '@ontology/contracts'
-import type { ScopeRef, ToolContext } from '@ontology/contracts'
+import { SemanticDefinitionStoreError, isToolContext } from '@ontology/contracts'
 import type {
   DefinitionBinding,
+  ScopeRef,
   SemanticDefinitionAudit,
   SemanticDefinitionEvent,
   SemanticDefinitionListFilter,
+  SemanticDefinitionStore,
   SemanticDefinitionVersion,
-} from './types'
-import { SemanticDefinitionStoreError } from './errors'
+  ToolContext,
+} from '@ontology/contracts'
 import { definitionRefKey } from './canonical'
-
-/**
- * Persistence port for published definition versions (D2/D3).
- *
- * It stores immutable versions, an append-only publication history and the data→version
- * bindings. Every key is tenant/space scoped and `ControlRepository` remains the durable,
- * monotonic event ledger; this port is the reconstructable version projection. A new
- * version is a new row — there is no update path for a published version.
- */
-export interface SemanticDefinitionStore {
-  findVersion(
-    namespace: string,
-    definitionId: string,
-    version: string,
-    scopeRef: ScopeRef,
-    ctx: ToolContext,
-  ): Promise<SemanticDefinitionVersion | undefined>
-  listVersions(
-    scopeRef: ScopeRef,
-    filter: SemanticDefinitionListFilter,
-    ctx: ToolContext,
-  ): Promise<SemanticDefinitionVersion[]>
-  insertVersion(
-    scopeRef: ScopeRef,
-    version: SemanticDefinitionVersion,
-    audit: SemanticDefinitionAudit,
-    ctx: ToolContext,
-  ): Promise<void>
-  listEvents(
-    scopeRef: ScopeRef,
-    definitionId: string,
-    ctx: ToolContext,
-  ): Promise<SemanticDefinitionEvent[]>
-  bindData(scopeRef: ScopeRef, binding: DefinitionBinding, ctx: ToolContext): Promise<void>
-  findBinding(
-    scopeRef: ScopeRef,
-    dataRefId: string,
-    ctx: ToolContext,
-  ): Promise<DefinitionBinding | undefined>
-}
 
 function resolveStoreScope(scopeRef: ScopeRef, ctx: ToolContext): { tenantId: string; spaceId: string } {
   if (!isToolContext(ctx)) {
