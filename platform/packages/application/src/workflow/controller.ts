@@ -1,4 +1,5 @@
 import type {
+  AnswerDraft,
   BudgetPort,
   BudgetRemaining,
   BudgetSettlementStatus,
@@ -17,12 +18,13 @@ import type {
   ToolContext,
   ToolUsage,
   Uuid,
+  VerificationResult,
   WorkflowInputEntry,
   WorkflowInputManifest,
   WorkflowRunState,
 } from '@ontology/contracts'
 import { DEFAULT_WORKFLOW_LIMITS } from '@ontology/contracts'
-import { inputManifestDigest } from './canonical'
+import { inputManifestDigest, scenarioManifestHash } from './canonical'
 import { PublicationRejectedError, WorkflowControllerError } from './errors'
 import type {
   CancelWorkflowInput,
@@ -347,14 +349,16 @@ export class WorkflowController {
   }
 
   async #draftAndVerify(runId: Uuid, ctx: ToolContext): Promise<WorkflowView> {
+    let lastFailure: { readonly draft: AnswerDraft; readonly verification: VerificationResult } | undefined
     for (;;) {
       const run = await this.#deps.phase.requireRun(runId, ctx)
       if (run.state !== 'drafting') return this.#view(runId, ctx)
 
       const state = await this.#requireRunState(runId, ctx)
       if (state.draftAttempts >= this.#maxDraftAttempts) {
-        await this.#advance(run, 'blocked', { cancelReason: 'draft repair budget exhausted' }, ctx)
-        return this.#view(runId, ctx)
+        // The bounded repair budget is exhausted. Never publish the unverified draft: fall
+        // back once to a limited factual/gap result drawn only from already-supported claims.
+        return this.#limitedFallback(runId, lastFailure, 'draft repair budget exhausted', ctx)
       }
       const attempt = state.draftAttempts + 1
       await this.#deps.manifests.saveRunState(
@@ -375,13 +379,12 @@ export class WorkflowController {
         ctx,
       )
       if (!reservation.granted || reservation.reservation === undefined) {
-        await this.#advance(
-          run,
-          'blocked',
-          { cancelReason: reservation.denial?.code ?? 'BUDGET_EXHAUSTED' },
+        return this.#limitedFallback(
+          runId,
+          lastFailure,
+          reservation.denial?.code ?? 'BUDGET_EXHAUSTED',
           ctx,
         )
-        return this.#view(runId, ctx)
       }
 
       let written: DraftWriterResult
@@ -436,6 +439,7 @@ export class WorkflowController {
       await this.#deps.verifications.record({ runId, verification }, ctx)
 
       if (verification.verdict !== 'pass') {
+        lastFailure = { draft: written.draft, verification }
         const failed = await this.#deps.phase.requireRun(runId, ctx)
         if (failed.state === 'verifying') {
           await this.#advance(failed, 'drafting', {}, ctx)
@@ -443,56 +447,134 @@ export class WorkflowController {
         continue
       }
 
-      const grant: PublicationGrant = {
-        grantId: this.#newId(),
-        runId,
-        draftId: written.draft.draftId,
-        draftHash: written.draft.contentHash,
-        verificationId: verification.verificationId,
-        evidenceManifestHash: verification.evidenceManifestHash,
-        expectedRunRevision: verifying.revision,
-        issuedBy: 'workflow-controller',
-        issuedAt: this.#now(),
+      return this.#publishVerified(runId, written.draft, verification, verifying.revision, ctx)
+    }
+  }
+
+  /**
+   * Mint the grant, publish through the real gate and record the public `answer.published`
+   * event. The event carries only answer ids/hashes/limitations — never draft text — so the
+   * business SSE stream can never leak an unverified draft (C6.1).
+   */
+  async #publishVerified(
+    runId: Uuid,
+    draft: AnswerDraft,
+    verification: VerificationResult,
+    expectedRunRevision: string,
+    ctx: ToolContext,
+  ): Promise<WorkflowView> {
+    const manifest = await this.#requireRunManifest(runId, ctx)
+    const inputManifest = await this.#requireInputManifest(manifest.inputManifestId, ctx)
+    const grant: PublicationGrant = {
+      grantId: this.#newId(),
+      runId,
+      draftId: draft.draftId,
+      draftHash: draft.contentHash,
+      verificationId: verification.verificationId,
+      evidenceManifestHash: verification.evidenceManifestHash,
+      scenarioManifestHash: scenarioManifestHash(manifest, inputManifest),
+      expectedRunRevision,
+      issuedBy: 'workflow-controller',
+      issuedAt: this.#now(),
+    }
+    let answer: PublishedAnswer
+    try {
+      answer = await this.#deps.publisher.publish({ grant, draft, verification }, ctx)
+    } catch (error) {
+      if (error instanceof PublicationRejectedError) {
+        throw new WorkflowControllerError('PUBLICATION_REJECTED', error.message, {
+          cause: error,
+          failedChecks: verification.failedChecks,
+        })
       }
-      let answer: PublishedAnswer
-      try {
-        answer = await this.#deps.publisher.publish(
-          { grant, draft: written.draft, verification },
-          ctx,
-        )
-      } catch (error) {
-        if (error instanceof PublicationRejectedError) {
-          throw new WorkflowControllerError('PUBLICATION_REJECTED', error.message, {
-            cause: error,
-            failedChecks: verification.failedChecks,
-          })
-        }
-        throw error
-      }
-      const publishable = await this.#deps.phase.requireRun(runId, ctx)
-      if (publishable.state !== 'verifying') {
-        // The run was cancelled between verification and publication; the answer is
-        // recorded by the publisher only if the run was still verifying, so never publish.
-        throw new WorkflowControllerError(
-          'VERSION_CONFLICT',
-          `run ${runId} left verifying before publication and cannot publish`,
-        )
-      }
-      await this.#advance(publishable, 'published', {}, ctx)
-      await this.#deps.phase.appendEvent(
-        runId,
-        `run-published:${runId}`,
-        'answer.published',
-        {
-          answerId: answer.answerId,
-          draftHash: answer.contentHash,
-          verificationId: answer.verificationId,
-        },
-        this.#now(),
-        ctx,
+      throw error
+    }
+    const publishable = await this.#deps.phase.requireRun(runId, ctx)
+    if (publishable.state !== 'verifying') {
+      // The run was cancelled between verification and publication; the answer store only
+      // records an answer while the run is still verifying, so this never publishes.
+      throw new WorkflowControllerError(
+        'VERSION_CONFLICT',
+        `run ${runId} left verifying before publication and cannot publish`,
       )
+    }
+    await this.#advance(publishable, 'published', {}, ctx)
+    await this.#deps.phase.appendEvent(
+      runId,
+      `run-published:${runId}`,
+      'answer.published',
+      {
+        answerId: answer.answerId,
+        draftHash: answer.contentHash,
+        verificationId: answer.verificationId,
+        publicationKind: answer.publicationKind,
+        limitations: answer.limitations,
+      },
+      this.#now(),
+      ctx,
+    )
+    return this.#view(runId, ctx)
+  }
+
+  /**
+   * Fallback after the shared repair budget is exhausted: compose one limited result from the
+   * last recorded verdict (only already-supported claims survive), verify it with the same
+   * verifier and publish it only if it passes. If nothing can be supported, or the limited
+   * draft still fails, the run is blocked with an explicit reason — unverified prose is never
+   * published.
+   */
+  async #limitedFallback(
+    runId: Uuid,
+    lastFailure: { readonly draft: AnswerDraft; readonly verification: VerificationResult } | undefined,
+    reason: string,
+    ctx: ToolContext,
+  ): Promise<WorkflowView> {
+    const run = await this.#deps.phase.requireRun(runId, ctx)
+    if (run.state !== 'drafting') return this.#view(runId, ctx)
+    const state = await this.#requireRunState(runId, ctx)
+    if (state.limitedResultAttempted) {
+      await this.#advance(run, 'blocked', { cancelReason: reason }, ctx)
       return this.#view(runId, ctx)
     }
+    await this.#deps.manifests.saveRunState(
+      { ...state, limitedResultAttempted: true, updatedAt: this.#now() },
+      ctx,
+    )
+
+    const manifest = await this.#requireRunManifest(runId, ctx)
+    const inputManifest = await this.#requireInputManifest(manifest.inputManifestId, ctx)
+    const limited = await this.#deps.limited.compose(
+      {
+        runId,
+        question: run.question,
+        inputManifest,
+        ...(lastFailure === undefined
+          ? {}
+          : {
+              previousDraft: lastFailure.draft,
+              failedVerification: lastFailure.verification,
+            }),
+        remainingBudget: await this.#remaining(manifest.budgetLedgerId, ctx),
+      },
+      ctx,
+    )
+
+    const fresh = await this.#deps.phase.requireRun(runId, ctx)
+    if (fresh.state !== 'drafting') return this.#view(runId, ctx)
+    const verifying = await this.#advance(fresh, 'verifying', {}, ctx)
+    const verification = await this.#deps.verifier.verify(
+      { runId, draft: limited.draft, inputManifest },
+      ctx,
+    )
+    await this.#deps.verifications.record({ runId, verification }, ctx)
+    if (verification.verdict !== 'pass') {
+      const blocked = await this.#deps.phase.requireRun(runId, ctx)
+      if (blocked.state === 'verifying') {
+        await this.#advance(blocked, 'blocked', { cancelReason: reason }, ctx)
+      }
+      return this.#view(runId, ctx)
+    }
+    return this.#publishVerified(runId, limited.draft, verification, verifying.revision, ctx)
   }
 
   async #advance(
@@ -697,6 +779,7 @@ export class WorkflowController {
       recheckCount: 0,
       staleEntryIds: [],
       usageUnknown: false,
+      limitedResultAttempted: false,
       updatedAt: this.#now(),
     }
   }

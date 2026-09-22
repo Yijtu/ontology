@@ -1,4 +1,9 @@
-import type { Sha256Digest, Uuid } from '@ontology/contracts'
+import type {
+  RunManifest,
+  Sha256Digest,
+  Uuid,
+  WorkflowInputManifest,
+} from '@ontology/contracts'
 import { canonicalJson, sha256DigestOf } from '../profiles/canonical'
 
 /**
@@ -18,6 +23,28 @@ export function answerDraftContentHash(
   claims: readonly unknown[] = [],
 ): Sha256Digest {
   return sha256DigestOf(canonicalJson({ runId, blocks, evidenceManifestHash, claims }))
+}
+
+/**
+ * Deterministic digest of the locked scenario version manifest (SPEC §4.1). It pins the
+ * resolved profile snapshot, the runtime version, the one run manifest and the shared input
+ * manifest digest, so a published answer id can be bound to the exact scenario version that
+ * produced it. Both the controller and the publisher compute it independently from the same
+ * persisted manifests, so a mismatched binding is refused rather than trusted.
+ */
+export function scenarioManifestHash(
+  manifest: RunManifest,
+  inputManifest: WorkflowInputManifest,
+): Sha256Digest {
+  return sha256DigestOf(
+    canonicalJson({
+      runId: manifest.runId,
+      resolvedProfileRef: manifest.resolvedProfileRef,
+      runtimeRef: manifest.runtimeRef,
+      inputManifestId: manifest.inputManifestId,
+      inputManifestDigest: inputManifest.digest,
+    }),
+  )
 }
 
 /** Deterministic digest of an input manifest, independent of its revision counter. */

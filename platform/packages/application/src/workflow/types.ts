@@ -6,6 +6,7 @@ import type {
   CreateRunContext,
   DraftWriterPort,
   InputValidityPort,
+  LimitedAnswerPort,
   ProfileRef,
   PublishedAnswer,
   RevisionString,
@@ -37,6 +38,12 @@ export interface WorkflowControllerDependencies {
   /** Builds the host-injected restricted runtime closure for one run. */
   readonly capabilities: RuntimeCapabilityFactoryPort
   readonly draftWriter: DraftWriterPort
+  /**
+   * Bounded deterministic fallback used when the shared draft-repair budget is exhausted:
+   * it keeps only already-supported claims and states the gaps, so the controller never
+   * publishes unverified prose.
+   */
+  readonly limited: LimitedAnswerPort
   readonly verifier: AnswerVerifierPort
   readonly verifications: VerificationStorePort
   readonly publisher: AnswerPublisherPort

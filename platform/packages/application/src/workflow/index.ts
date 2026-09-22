@@ -17,7 +17,12 @@ export {
   StaticInputValidity,
 } from './restricted'
 export { createRunCheckpointPort } from './checkpoints'
-export { answerDraftContentHash, inputManifestDigest } from './canonical'
+export { answerDraftContentHash, inputManifestDigest, scenarioManifestHash } from './canonical'
+export { AnswerPublicationService } from './publication'
+export type { AnswerPublicationDependencies } from './publication'
+export { InMemoryAnswerStore } from './answers'
+export { InMemoryPublicationValidity } from './validity'
+export { RestrictedLimitedAnswerComposer } from './limited-answer'
 export { RunPlanner, parseSemanticQueryPlan } from './planning'
 export type { PlanRequest, RunPlannerDependencies } from './planning'
 export { NoProgressGuard, SmallPlanExecutor } from './evidence-loop'
