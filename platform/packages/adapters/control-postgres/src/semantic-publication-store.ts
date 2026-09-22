@@ -6,6 +6,7 @@ import type {
   PublishedRuleVersion,
   PublishedStatement,
   PublishedStatementStatus,
+  PublicationMaterializationFence,
   PublicationPublishResult,
   PublishSemanticPublicationInput,
   RevisionString,
@@ -20,6 +21,7 @@ import type {
 } from '@ontology/contracts'
 import type { QueryResultRow } from 'pg'
 import { ControlPostgresDatabase } from './database'
+import { MATERIALIZED_PROJECTION_REF } from './materialization-store'
 
 interface ScopedQuery {
   query<Row extends QueryResultRow>(
@@ -570,6 +572,8 @@ export class PostgresSemanticPublicationStore implements SemanticPublicationStor
         [revisionNumber],
       )
 
+      await this.#openMaterializationFences(query, input.materializationFences ?? [])
+
       this.#faultInjection?.beforeCommit?.()
       return { publication, created: true }
     })
@@ -809,8 +813,49 @@ export class PostgresSemanticPublicationStore implements SemanticPublicationStor
           input.statementId,
         ],
       )
+      await this.#openMaterializationFences(query, input.materializationFences ?? [])
       return toRevision(row)
     })
+  }
+
+  /**
+   * Open the invalidation fences in the same transaction as the publication/revision and its
+   * outbox event, so the window between the commit and the worker's asynchronous advance can
+   * never serve a stale conclusion (SPEC D5.1, ADR-13, LOCAL-070). The fence generation is read
+   * without a lock: it is descriptive only, and `commitProjection` closes a fence by id.
+   */
+  async #openMaterializationFences(
+    query: ScopedQuery,
+    fences: readonly PublicationMaterializationFence[],
+  ): Promise<void> {
+    if (fences.length === 0) return
+    const state = await query.query<{ generation: string }>(
+      `SELECT generation::text AS generation FROM agent_platform.projection_state
+        WHERE tenant_id = current_setting('app.tenant_id')::uuid
+          AND space_id = current_setting('app.space_id')::uuid
+          AND projection_ref = $1`,
+      [MATERIALIZED_PROJECTION_REF],
+    )
+    const generation = state.rows[0]?.generation ?? '0'
+    for (const fence of fences) {
+      await query.query(
+        `INSERT INTO agent_platform.materialization_fences
+           (tenant_id, space_id, projection_ref, fence_id, generation, reason, proposition_keys,
+            state, opened_at)
+         VALUES (
+           current_setting('app.tenant_id')::uuid,
+           current_setting('app.space_id')::uuid,
+           $1, $2, $3::bigint, $4, $5::jsonb, 'open', $6::timestamptz)`,
+        [
+          MATERIALIZED_PROJECTION_REF,
+          fence.fenceId,
+          generation,
+          fence.reason,
+          JSON.stringify(fence.propositionKeys),
+          fence.openedAt,
+        ],
+      )
+    }
   }
 
   async getStatementRevision(

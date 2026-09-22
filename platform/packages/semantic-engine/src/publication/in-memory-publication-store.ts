@@ -2,7 +2,9 @@ import { SemanticPublicationStoreError, isToolContext } from '@ontology/contract
 import type {
   AppendCandidateReviewInput,
   CandidateReviewRecord,
+  MaterializationStore,
   NewOutboxMessage,
+  PublicationMaterializationFence,
   PublishedRuleFilter,
   PublishedRuleVersion,
   PublishedStatement,
@@ -55,6 +57,7 @@ interface ScopeState {
   readonly ruleVersions: PublishedRuleVersion[]
   readonly blockedIdentity: Set<string>
   readonly outbox: NewOutboxMessage[]
+  readonly fences: PublicationMaterializationFence[]
 }
 
 function emptyState(): ScopeState {
@@ -69,7 +72,17 @@ function emptyState(): ScopeState {
     ruleVersions: [],
     blockedIdentity: new Set(),
     outbox: [],
+    fences: [],
   }
+}
+
+export interface InMemorySemanticPublicationStoreOptions {
+  /**
+   * When supplied, the fences carried by a publication/revision are opened through it, so the
+   * reference composition observes the same atomic fence-before-advance behaviour as the
+   * database store (LOCAL-070).
+   */
+  readonly materialization?: MaterializationStore
 }
 
 /**
@@ -81,6 +94,11 @@ function emptyState(): ScopeState {
  */
 export class InMemorySemanticPublicationStore implements SemanticPublicationStore {
   readonly #scopes = new Map<string, ScopeState>()
+  readonly #materialization: MaterializationStore | undefined
+
+  constructor(options?: InMemorySemanticPublicationStoreOptions) {
+    this.#materialization = options?.materialization
+  }
 
   #state(scopeRef: ScopeRef): ScopeState {
     const key = scopeKey(scopeRef)
@@ -99,6 +117,32 @@ export class InMemorySemanticPublicationStore implements SemanticPublicationStor
   /** Test seam: the outbox messages written by `publish`/`reviseStatement`. */
   outboxMessages(scopeRef: ScopeRef): readonly NewOutboxMessage[] {
     return [...this.#state(scopeRef).outbox]
+  }
+
+  /** Test seam: the invalidation fences committed by `publish`/`reviseStatement`. */
+  materializationFences(scopeRef: ScopeRef): readonly PublicationMaterializationFence[] {
+    return [...this.#state(scopeRef).fences]
+  }
+
+  async #openFences(
+    scopeRef: ScopeRef,
+    fences: readonly PublicationMaterializationFence[],
+    ctx: ToolContext,
+  ): Promise<void> {
+    const state = this.#state(scopeRef)
+    for (const fence of fences) {
+      state.fences.push(clone(fence))
+      await this.#materialization?.openFence(
+        scopeRef,
+        {
+          fenceId: fence.fenceId,
+          reason: fence.reason,
+          propositionKeys: fence.propositionKeys,
+          openedAt: fence.openedAt,
+        },
+        ctx,
+      )
+    }
   }
 
   async latestReviewRevision(
@@ -225,6 +269,7 @@ export class InMemorySemanticPublicationStore implements SemanticPublicationStor
     })
     state.publicationHead = revisionNumber
     state.outbox.push(clone(input.outbox))
+    await this.#openFences(scopeRef, input.materializationFences ?? [], ctx)
     return { publication: clone(publication), created: true }
   }
 
@@ -346,6 +391,7 @@ export class InMemorySemanticPublicationStore implements SemanticPublicationStor
       ...(input.validTo === undefined ? {} : { validTo: input.validTo }),
     })
     state.outbox.push(clone(input.outbox))
+    await this.#openFences(scopeRef, input.materializationFences ?? [], ctx)
     return clone(record)
   }
 

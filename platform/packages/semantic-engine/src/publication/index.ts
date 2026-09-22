@@ -9,6 +9,7 @@
  */
 export { SemanticPublicationService } from './publication-service'
 export { InMemorySemanticPublicationStore } from './in-memory-publication-store'
+export type { InMemorySemanticPublicationStoreOptions } from './in-memory-publication-store'
 export { SemanticPublicationError, isSemanticPublicationError } from './errors'
 export type { PublicationRejectionReason, SemanticPublicationErrorCode } from './errors'
 export type { SemanticPublicationServiceDependencies } from './types'

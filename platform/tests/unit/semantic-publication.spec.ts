@@ -3,8 +3,11 @@ import { describe, expect, it, beforeEach } from 'vitest'
 import { InMemoryCandidateStore, InMemoryIndustrySchemaSource } from '@ontology/application'
 import {
   IdentityDecisionService,
+  IncrementalMaterializer,
   InMemoryIdentityDecisionStore,
+  InMemoryMaterializationStore,
   InMemorySemanticPublicationStore,
+  PublishedSemanticSource,
   SemanticPublicationService,
 } from '@ontology/semantic-engine'
 import type { CandidateRecord, SemanticPublicationVersion } from '@ontology/contracts'
@@ -16,6 +19,8 @@ import {
   ruleFor,
   unhandledRuleFor,
 } from './publication-fixtures'
+
+const PROJECTION_REF = { id: 'projection.materialized', version: '1.0.0', digest: `sha256:${'a'.repeat(64)}` }
 
 const scopeRef = { tenantId: TENANT_A, spaceId: SPACE_A }
 const ctx = toolContext(TENANT_A, SPACE_A, ['semantic-reviewer', 'semantic-publisher', 'platform-admin'])
@@ -283,6 +288,86 @@ describe('semantic publication service (in-memory)', () => {
     })
     expect(await publicationStore.latestPublicationRevision(scopeRef, ctx)).toBe('0')
     expect(await service.listStatements({}, ctx)).toHaveLength(0)
+  })
+
+  it('opens a scope-wide invalidation fence inside the publication transaction and replays idempotently', async () => {
+    const first = await seedApprovedEntity()
+    const publication = await publish([{ candidateId: first.candidateId, kind: 'entity' }], 'pub-fence')
+
+    const fences = publicationStore.materializationFences(scopeRef)
+    expect(fences).toHaveLength(1)
+    expect(fences[0]).toMatchObject({ changeId: first.candidateId, propositionKeys: [] })
+    const payload = publicationStore.outboxMessages(scopeRef)[0]?.payload
+    expect(payload?.['materializationFences']).toEqual([
+      { changeId: first.candidateId, fenceId: fences[0]?.fenceId },
+    ])
+
+    // A retry with the same idempotency key returns the existing publication and opens no fence.
+    const replay = await publish([{ candidateId: first.candidateId, kind: 'entity' }], 'pub-fence')
+    expect(replay.publicationId).toBe(publication.publicationId)
+    expect(publicationStore.materializationFences(scopeRef)).toHaveLength(1)
+    expect(publicationStore.outboxMessages(scopeRef)).toHaveLength(1)
+  })
+
+  it('opens a scope-wide invalidation fence inside the statement-revision transaction', async () => {
+    const first = await seedApprovedEntity()
+    await publish([{ candidateId: first.candidateId, kind: 'entity' }], 'pub-rev-fence')
+    await service.reviseStatement(
+      {
+        statementId: first.candidateId,
+        kind: 'retraction',
+        reason: 'source withdrawn',
+        expectedRevision: '1',
+        idempotencyKey: 'rev-fence',
+      },
+      ctx,
+    )
+    const fences = publicationStore.materializationFences(scopeRef)
+    expect(fences).toHaveLength(2)
+    expect(fences[1]?.propositionKeys).toEqual([])
+  })
+
+  it('withholds a stale conclusion immediately after the commit, before any worker consumes', async () => {
+    const materialization = new InMemoryMaterializationStore()
+    const store = new InMemorySemanticPublicationStore({ materialization })
+    const windowService = new SemanticPublicationService({
+      store,
+      candidates,
+      schemaSource: new InMemoryIndustrySchemaSource([
+        { ref: PUBLICATION_DEFINITION_REF, schema: publicationSchema(PUBLICATION_DEFINITION_REF) },
+      ]),
+      identity: identityStore,
+      now: () => '2026-09-22T00:00:00Z',
+      newId: () => randomUUID(),
+    })
+    const candidateId = randomUUID()
+    await insert(ruleFor({ candidateId, idempotencyKey: idempotencyKey() }))
+    await windowService.reviewCandidate(
+      { candidateId, decision: 'approve', reason: 'source verified', expectedRevision: '0' },
+      ctx,
+    )
+    await windowService.publish(
+      {
+        approvedCandidateRefs: [{ candidateId, kind: 'rule' }],
+        schemaRef: PUBLICATION_DEFINITION_REF,
+        expectedRevision: '0',
+        idempotencyKey: 'pub-window',
+      },
+      ctx,
+    )
+
+    // The publication transaction opened the fence; no worker has run yet.
+    expect(await materialization.listOpenFences(scopeRef, ctx)).toHaveLength(1)
+    const materializer = new IncrementalMaterializer({
+      publishedSource: new PublishedSemanticSource(store),
+      materialization,
+    })
+    const read = await materializer.read(
+      { scopeRef, projectionRef: PROJECTION_REF, asOfRecordedSeq: '5', validAt: '2026-09-21T12:00:00Z' },
+      ctx,
+    )
+    expect(read.status).toBe('fenced')
+    expect(read.conclusions).toHaveLength(0)
   })
 
   it('records a review decision and reads it back with its reason', async () => {

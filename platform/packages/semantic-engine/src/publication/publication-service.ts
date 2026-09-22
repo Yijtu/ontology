@@ -11,6 +11,7 @@ import type {
   PropositionView,
   PublicationCandidateRef,
   PublicationIdentityBinding,
+  PublicationMaterializationFence,
   PublishedRuleFilter,
   PublishedRuleVersion,
   PublishedStatement,
@@ -226,6 +227,17 @@ export class SemanticPublicationService {
       throw new SemanticPublicationError('INVALID_ARGUMENT', 'a publication needs at least one approved candidate')
     }
 
+    // The invalidation fences are committed with the publication and its outbox event, so the
+    // window between the publish commit and the worker consuming the event cannot serve a stale
+    // conclusion (SPEC D5.1, ADR-13, LOCAL-070). The affected fan-out is not enumerated here, so
+    // each fence conservatively covers the scope; the worker only advances afterwards.
+    const materializationFences: PublicationMaterializationFence[] = [
+      ...statements.map((statement) =>
+        this.#fenceFor(statement.statementId, 'assertion_published', publishedAt),
+      ),
+      ...ruleVersions.map((rule) => this.#fenceFor(rule.ruleVersionId, 'rule_changed', publishedAt)),
+    ]
+
     const contentDigest = sha256DigestOf({ schemaRef: request.schemaRef, statements, ruleVersions })
     const versionRef: VersionRef = { id: publicationId, version: '1.0.0', digest: contentDigest }
     const outbox: NewOutboxMessage = {
@@ -238,6 +250,10 @@ export class SemanticPublicationService {
         statementIds: statements.map((statement) => statement.statementId),
         ruleVersionIds: ruleVersions.map((rule) => rule.ruleVersionId),
         approvedCandidateRefs,
+        materializationFences: materializationFences.map((fence) => ({
+          changeId: fence.changeId,
+          fenceId: fence.fenceId,
+        })),
       },
       idempotencyKey: `semantic-publication:${publicationId}`,
       availableAt: publishedAt,
@@ -267,6 +283,7 @@ export class SemanticPublicationService {
       identityBindings,
       outbox,
       outboxJobId,
+      materializationFences,
     }
     const result = await this.#mapStoreError(() => this.#store.publish(scopeRef, input, ctx))
     return result.publication
@@ -352,6 +369,15 @@ export class SemanticPublicationService {
     const revisionId = this.#newId()
     const topic =
       request.kind === 'retraction' ? 'semantic.statement.retracted' : 'semantic.statement.corrected'
+    // A correction or retraction invalidates the affected conclusions just like a publication:
+    // the fence is committed with the revision and its outbox event (SPEC D5.1, LOCAL-070).
+    const materializationFences: PublicationMaterializationFence[] = [
+      this.#fenceFor(
+        revisionId,
+        request.kind === 'retraction' ? 'assertion_retracted' : 'assertion_corrected',
+        recordedAt,
+      ),
+    ]
     const outbox: NewOutboxMessage = {
       outboxId: this.#newId(),
       topic,
@@ -362,6 +388,10 @@ export class SemanticPublicationService {
         reason: request.reason,
         supersedesVersion: statement.version,
         revisionId,
+        materializationFences: materializationFences.map((fence) => ({
+          changeId: fence.changeId,
+          fenceId: fence.fenceId,
+        })),
       },
       idempotencyKey: `statement-revision:${revisionId}`,
       availableAt: recordedAt,
@@ -379,6 +409,7 @@ export class SemanticPublicationService {
       recordedAt,
       actor: ctx.principal.subjectId,
       outbox,
+      materializationFences,
     }
     return this.#mapStoreError(() => this.#store.reviseStatement(scopeRef, input, ctx))
   }
@@ -589,6 +620,22 @@ export class SemanticPublicationService {
       recordedAt,
       sourceCandidateId: candidate.candidateId,
       publicationId,
+    }
+  }
+
+  /**
+   * Build one scope-wide invalidation fence for a change committed by the publication
+   * transaction. The dependency index is not consulted here: at publication time the affected
+   * fan-out has not been enumerated, so the fence conservatively withholds the whole scope until
+   * the worker has advanced it (SPEC D5.1, ADR-13).
+   */
+  #fenceFor(changeId: Uuid, kind: string, openedAt: string): PublicationMaterializationFence {
+    return {
+      changeId,
+      fenceId: this.#newId(),
+      reason: `change ${changeId} (${kind})`,
+      propositionKeys: [],
+      openedAt,
     }
   }
 

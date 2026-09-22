@@ -248,6 +248,36 @@ export function parseMaterializationChange(value: unknown): MaterializationChang
   }
 }
 
+/**
+ * Read the `changeId → fenceId` bindings the publication/revision transaction wrote into the
+ * outbox payload. When present, the fence was already opened atomically with the state change, so
+ * the consumer must reuse it instead of opening a second one after the commit (LOCAL-070). An
+ * absent field is the pre-LOCAL-070 shape, for which the consumer falls back to opening the fence
+ * itself.
+ */
+function parseFenceBindings(payload: Readonly<Record<string, unknown>>): ReadonlyMap<Uuid, Uuid> {
+  const raw = payload['materializationFences']
+  if (raw === undefined) return new Map()
+  if (!Array.isArray(raw)) {
+    throw new MaterializationOutboxError(
+      'INVALID_MESSAGE',
+      'the materializationFences field must be an array',
+    )
+  }
+  const bindings = new Map<Uuid, Uuid>()
+  for (const entry of raw) {
+    const record = asRecord(entry)
+    if (record === undefined) {
+      throw new MaterializationOutboxError(
+        'INVALID_MESSAGE',
+        'each materializationFence binding must be a JSON object',
+      )
+    }
+    bindings.set(requiredString(record, 'changeId'), requiredString(record, 'fenceId'))
+  }
+  return bindings
+}
+
 function parseUuidArray(value: unknown): readonly Uuid[] {
   if (!Array.isArray(value)) {
     throw new MaterializationOutboxError('INVALID_MESSAGE', 'separatedCandidateIds must be an array')
@@ -356,6 +386,7 @@ export class MaterializationOutboxConsumer implements OutboxConsumer {
         `publication ${publicationId} is not visible in this scope`,
       )
     }
+    const fences = parseFenceBindings(message.payload)
     const statements = await this.#publications.listStatements(
       scopeRef,
       { publicationId, limit: this.#pageSize },
@@ -380,6 +411,7 @@ export class MaterializationOutboxConsumer implements OutboxConsumer {
           validity: validityOf(statement),
         }),
         ctx,
+        fences.get(statement.statementId),
       )
     }
     const rules = await this.#publications.listRuleVersions(
@@ -402,6 +434,7 @@ export class MaterializationOutboxConsumer implements OutboxConsumer {
           propositionKey: rule.objectId,
         }),
         ctx,
+        fences.get(rule.ruleVersionId),
       )
     }
   }
@@ -424,6 +457,7 @@ export class MaterializationOutboxConsumer implements OutboxConsumer {
       )
     }
     const kind = topic === STATEMENT_RETRACTED_TOPIC ? 'assertion_retracted' : 'assertion_corrected'
+    const fences = parseFenceBindings(message.payload)
     await this.#openAndEnqueue(
       scopeRef,
       revisionId,
@@ -440,14 +474,19 @@ export class MaterializationOutboxConsumer implements OutboxConsumer {
         validity: validityOf(statement),
       }),
       ctx,
+      fences.get(revisionId),
     )
   }
 
   /**
-   * Open the invalidation fence for one change and enqueue the asynchronous advance request. The
-   * fence is opened before the request is enqueued, so a reader that observes the committed
-   * publication and an open fence never sees a stale conclusion. If the enqueue fails the fence
-   * is released again, so a retried delivery starts from a clean state.
+   * Enqueue the asynchronous advance request for one change.
+   *
+   * When the publication/revision transaction already opened the fence, `preOpenedFenceId` is
+   * supplied and the consumer reuses it: the window between the commit and this consumption is
+   * therefore already covered, and the worker only advances (LOCAL-070). Otherwise (a legacy
+   * message without a binding) the consumer opens the fence here, before enqueuing, as before.
+   * A fence the consumer opened itself is released again if the enqueue fails, so a retried
+   * delivery starts from a clean state; a fence opened by the transaction is never released here.
    */
   async #openAndEnqueue(
     scopeRef: ScopeRef,
@@ -455,23 +494,28 @@ export class MaterializationOutboxConsumer implements OutboxConsumer {
     jobId: Uuid,
     build: (recordedSeq: RevisionString, recordedAt: Rfc3339UtcTimestamp) => MaterializationChange,
     ctx: ToolContext,
+    preOpenedFenceId?: Uuid,
   ): Promise<void> {
     const recordedAt = this.#now()
     const recordedSeq = await this.#sequence.next(scopeRef, `materialization:${changeId}`, ctx)
     const change = build(recordedSeq, recordedAt)
-    const ticket = await this.#materializer.beginChange(change, ctx)
+    let fenceId = preOpenedFenceId
+    if (fenceId === undefined) {
+      const ticket = await this.#materializer.beginChange(change, ctx)
+      fenceId = ticket.fenceId
+    }
     const message: NewOutboxMessage = {
       outboxId: this.#newId(),
       topic: REQUEST_TOPIC,
-      payload: { fenceId: ticket.fenceId, change: serializeMaterializationChange(change) },
-      idempotencyKey: `materialization-request:${ticket.fenceId}`,
+      payload: { fenceId, change: serializeMaterializationChange(change) },
+      idempotencyKey: `materialization-request:${fenceId}`,
       availableAt: recordedAt,
       createdAt: recordedAt,
     }
     try {
       await this.#outbox.appendOutbox(scopeRef, jobId, message, ctx)
     } catch (error) {
-      await this.#releaseFence(scopeRef, ticket.fenceId, ctx)
+      if (preOpenedFenceId === undefined) await this.#releaseFence(scopeRef, fenceId, ctx)
       throw error
     }
   }
