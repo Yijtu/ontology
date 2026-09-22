@@ -7,3 +7,4 @@
  */
 export * from './definitions'
 export * from './mapping'
+export * from './identity'
