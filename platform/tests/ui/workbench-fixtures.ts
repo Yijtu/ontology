@@ -2,7 +2,7 @@ import { randomUUID } from 'node:crypto'
 import Ajv2020 from 'ajv/dist/2020.js'
 import addFormats from 'ajv-formats'
 import { createApiServer, RunProgressService } from '@ontology/app-api'
-import type { AnswerReader, AuthenticatedRequest } from '@ontology/app-api'
+import type { AnswerReader, AuthenticatedRequest, EvidenceReadSurface, HistoryReadSurface } from '@ontology/app-api'
 import {
   InMemoryComponentRegistryStore,
   InMemoryIndustryManifestSource,
@@ -476,6 +476,11 @@ export interface HarnessOptions {
   readonly fixedPrincipal?: boolean
   /** Override the SSE stream factory (the jsdom tests push frames without a real EventSource). */
   readonly streamFactory?: RunEventStreamFactory
+  /** Register the C6 evidence/history routes with a controlled read surface (UI/E2E fixtures). */
+  readonly provenance?: {
+    readonly evidence: EvidenceReadSurface
+    readonly history: HistoryReadSurface
+  }
 }
 
 export async function startHarness(options: HarnessOptions = {}): Promise<Harness> {
@@ -561,6 +566,12 @@ export async function startHarness(options: HarnessOptions = {}): Promise<Harnes
     runs: { service: runService, progress },
     workbench: { profiles: resolver, sources: registry, components },
     answers: { reader: new HarnessAnswerReader(runService, answers) },
+    ...(options.provenance === undefined
+      ? {}
+      : {
+          evidence: { service: options.provenance.evidence },
+          history: { service: options.provenance.history },
+        }),
   })
   await app.listen({ host: '127.0.0.1', port: 0 })
   const address = app.server.address()
