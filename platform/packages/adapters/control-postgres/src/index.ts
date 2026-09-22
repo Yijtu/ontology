@@ -19,6 +19,10 @@ export type {
   PostgresSemanticPublicationStoreOptions,
   PublicationFaultInjection,
 } from './semantic-publication-store'
+export {
+  PostgresMaterializationStore,
+  MATERIALIZED_PROJECTION_REF,
+} from './materialization-store'
 export { ControlPostgresRepository } from './repository'
 export type {
   ControlOperationContext,
