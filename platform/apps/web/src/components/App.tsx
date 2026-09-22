@@ -2,6 +2,7 @@ import { useState } from 'react'
 import type { ProfileRef } from '@ontology/contracts'
 import type { WorkbenchClient } from '../api/client'
 import { CandidateReviewPanel } from './CandidateReviewPanel'
+import { EnergyPlanPanel } from './EnergyPlanPanel'
 import { EvidencePanel } from './EvidencePanel'
 import { JobProgressPanel } from './JobProgressPanel'
 import { QueryPanel } from './QueryPanel'
@@ -10,12 +11,12 @@ import { Workbench } from './Workbench'
 
 /**
  * The operator app shell. It composes the configuration workbench (LOCAL-037) with the
- * ingestion-job, candidate-review and provenance/history surfaces, and deep-links each surface
- * (`?view=jobs&job=<id>`, `?view=review&candidate=<id>`, `?view=evidence&evidence=<id>&object=<id>`)
- * so a state can be reproduced in a browser without navigating by hand. It talks to the API
- * over HTTP only.
+ * ingestion-job, candidate-review, provenance/history and home-energy plan/simulation surfaces,
+ * and deep-links each surface (`?view=jobs&job=<id>`, `?view=review&candidate=<id>`,
+ * `?view=evidence&evidence=<id>&object=<id>`, `?view=energy`) so a state can be reproduced in a
+ * browser without navigating by hand. It talks to the API over HTTP only.
  */
-export type AppView = 'workbench' | 'query' | 'jobs' | 'review' | 'evidence'
+export type AppView = 'workbench' | 'query' | 'jobs' | 'review' | 'evidence' | 'energy'
 
 export interface AppProps {
   readonly client: WorkbenchClient
@@ -34,6 +35,7 @@ const TABS: readonly { readonly view: AppView; readonly label: string }[] = [
   { view: 'jobs', label: '导入任务' },
   { view: 'review', label: '候选审核' },
   { view: 'evidence', label: '证据与历史' },
+  { view: 'energy', label: '家庭能源计划' },
 ]
 
 export function App({
@@ -88,6 +90,7 @@ export function App({
           {...(initialObjectId === undefined ? {} : { initialObjectId })}
         />
       ) : null}
+      {view === 'energy' ? <EnergyPlanPanel client={client} /> : null}
     </div>
   )
 }

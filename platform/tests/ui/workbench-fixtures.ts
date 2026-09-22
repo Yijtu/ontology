@@ -1,8 +1,39 @@
 import { randomUUID } from 'node:crypto'
+import { mkdtemp, rm } from 'node:fs/promises'
+import { tmpdir } from 'node:os'
+import { join } from 'node:path'
 import Ajv2020 from 'ajv/dist/2020.js'
 import addFormats from 'ajv-formats'
-import { createApiServer, RunProgressService } from '@ontology/app-api'
-import type { AnswerReader, AuthenticatedRequest, EvidenceReadSurface, HistoryReadSurface } from '@ontology/app-api'
+import {
+  FileSystemObjectStore,
+  LocalImmutableBlobStore,
+  resourceKindForPurpose,
+} from '@ontology/adapter-blob-local'
+import type {
+  ArtifactBlobRecord,
+  ArtifactReferenceRecord,
+  ArtifactReferenceView,
+  ArtifactRegistry,
+  BlobScope,
+  RecordArtifactReferenceInput,
+  RecordArtifactReferenceResult,
+} from '@ontology/adapter-blob-local'
+import {
+  createApiServer,
+  createBlobArtifactWriter,
+  createEnergySimulationSurface,
+  createScopedBlobReader,
+  createSimulationExecutionSurface,
+  RunProgressService,
+} from '@ontology/app-api'
+import type {
+  AnswerReader,
+  AuthenticatedRequest,
+  EvidenceReadSurface,
+  ExecutionSurface,
+  HistoryReadSurface,
+  SimulationSurface,
+} from '@ontology/app-api'
 import {
   InMemoryComponentRegistryStore,
   InMemoryIndustryManifestSource,
@@ -36,6 +67,7 @@ import type {
   IndustryManifest,
   LogicalRole,
   MappingRef,
+  OperationRegistry,
   ProfileRef,
   ProfileSpec,
   ProjectionState,
@@ -51,6 +83,8 @@ import type {
   ToolContext,
   VersionRef,
 } from '@ontology/contracts'
+import { ENERGY_OPERATION_REGISTRY, createEnergyComputeHandlers } from '@ontology/extension-home-energy'
+import type { SimulationJobPort } from '@ontology/extension-home-energy'
 import { WorkbenchClient } from '@ontology/app-web/client'
 import type { RunEventStreamFactory } from '@ontology/app-web/client'
 
@@ -408,6 +442,84 @@ export function loopbackTestAuthenticator(): AuthenticatedRequest {
 const HARNESS_NOW = '2026-09-21T00:00:00Z'
 
 /**
+ * A minimal in-memory artifact registry behind the real on-disk object store, so the UI tests
+ * drive the real blob-local write/read path without a database. The integration suite uses the
+ * real PostgreSQL registry instead; this keeps the browser/jsdom path free of Docker.
+ */
+class MemoryArtifactRegistry implements ArtifactRegistry {
+  readonly #blobs = new Map<string, ArtifactBlobRecord>()
+  readonly #refs = new Map<string, ArtifactReferenceRecord>()
+
+  async recordReference(input: RecordArtifactReferenceInput): Promise<RecordArtifactReferenceResult> {
+    const refKey = `${input.scope.tenantId}:${input.scope.spaceId}:${input.blobRefId}`
+    const blobKey = `${input.scope.tenantId}:${input.scope.spaceId}:${input.contentDigest}`
+    const deduplicated = this.#refs.has(refKey)
+    const blob = this.#blobs.get(blobKey) ?? {
+      tenantId: input.scope.tenantId,
+      spaceId: input.scope.spaceId,
+      contentDigest: input.contentDigest,
+      mediaType: input.mediaType,
+      byteSize: input.byteSize,
+      objectKey: input.objectKey,
+      lineageId: '77777777-2222-4333-8444-555555555555',
+      createdAt: HARNESS_NOW,
+    }
+    this.#blobs.set(blobKey, blob)
+    const reference: ArtifactReferenceRecord = {
+      tenantId: input.scope.tenantId,
+      spaceId: input.scope.spaceId,
+      blobRefId: input.blobRefId,
+      contentDigest: input.contentDigest,
+      purpose: input.purpose,
+      ...(input.runId === undefined ? {} : { runId: input.runId }),
+      ...(input.tenantAuthorizedRef === undefined ? {} : { tenantAuthorizedRef: input.tenantAuthorizedRef }),
+      origin: input.origin ?? {},
+      createdAt: HARNESS_NOW,
+    }
+    this.#refs.set(refKey, reference)
+    return {
+      blobRef: {
+        id: input.blobRefId,
+        version: '1.0.0',
+        digest: input.contentDigest,
+        kind: resourceKindForPurpose(input.purpose),
+      },
+      lineageId: blob.lineageId,
+      deduplicated,
+      reference,
+    }
+  }
+
+  async findReference(scope: BlobScope, blobRefId: string): Promise<ArtifactReferenceView | undefined> {
+    const reference = this.#refs.get(`${scope.tenantId}:${scope.spaceId}:${blobRefId}`)
+    if (reference === undefined) return undefined
+    const blob = this.#blobs.get(`${scope.tenantId}:${scope.spaceId}:${reference.contentDigest}`)
+    if (blob === undefined) return undefined
+    return { reference, blob }
+  }
+
+  async listOrigins(scope: BlobScope, contentDigest: string): Promise<readonly ArtifactReferenceRecord[]> {
+    return [...this.#refs.values()].filter(
+      (reference) =>
+        reference.tenantId === scope.tenantId &&
+        reference.spaceId === scope.spaceId &&
+        reference.contentDigest === contentDigest,
+    )
+  }
+
+  async close(): Promise<void> {}
+}
+
+/** A simulation job port that records nothing durable; the execution surface only needs an id. */
+function inMemorySimulationJobs(): SimulationJobPort {
+  return {
+    async enqueue(input) {
+      return { jobId: input.jobId, reused: false }
+    },
+  }
+}
+
+/**
  * Test-only run service that opens the run's one shared budget ledger and saves its manifest
  * when a run is created — the bookkeeping the real `WorkflowController.startRun` performs.
  * The fixture has no runtime adapter, so the UI tests focus on the ask/progress/clarify
@@ -465,6 +577,13 @@ export interface Harness {
   readonly seedAnswer: (runId: string, answer: PublishedAnswer) => void
   /** Consume `toolCalls` from the run's shared ledger (real `BudgetService`, in-memory store). */
   readonly consumeBudget: (runId: string, toolCalls: number) => Promise<void>
+  /** Present only when the home-energy surface was wired; records any device-driver call. */
+  readonly energy: EnergyHarness | undefined
+}
+
+export interface EnergyHarness {
+  /** Every device request the execution driver observed. It must stay empty. */
+  readonly deviceRequests: readonly string[]
 }
 
 export interface HarnessOptions {
@@ -480,6 +599,58 @@ export interface HarnessOptions {
   readonly provenance?: {
     readonly evidence: EvidenceReadSurface
     readonly history: HistoryReadSurface
+  }
+  /** Wire the home-energy simulation surface (real compute handlers + blob-local). */
+  readonly energy?: {
+    /** Omit the registered operations so a plan request returns CAPABILITY_NOT_CONFIGURED. */
+    readonly withoutOperations?: boolean
+  }
+}
+
+/**
+ * Wire the home-energy simulation surface over the real compute handlers and blob-local. The
+ * device driver is a recording double: the surface must never call it, so the UI/E2E tests can
+ * prove no device request is sent for a simulation or for a refused live request.
+ */
+async function createEnergyHarness(options: { readonly withoutOperations?: boolean }): Promise<{
+  readonly simulations: { readonly service: SimulationSurface; readonly execution: ExecutionSurface }
+  readonly harness: EnergyHarness
+  readonly cleanup: () => Promise<void>
+}> {
+  const objectDir = await mkdtemp(join(tmpdir(), 'ui-energy-blob-'))
+  const objectStore = new FileSystemObjectStore(objectDir)
+  await objectStore.init()
+  const blobStore = new LocalImmutableBlobStore({ objectStore, registry: new MemoryArtifactRegistry() })
+  const artifacts = createBlobArtifactWriter(blobStore)
+  const reader = createScopedBlobReader(blobStore)
+  const operations: OperationRegistry =
+    options.withoutOperations === true
+      ? { namespace: 'home-energy', registryVersion: '1.0.0', registryDigest: digest('z'), operations: [] }
+      : ENERGY_OPERATION_REGISTRY
+  const service = createEnergySimulationSurface({
+    blobStore,
+    artifacts,
+    reader,
+    operations,
+    handlers: createEnergyComputeHandlers(),
+  })
+  const deviceRequests: string[] = []
+  const execution = createSimulationExecutionSurface({
+    jobs: inMemorySimulationJobs(),
+    deviceDriver: {
+      async sendCommand() {
+        deviceRequests.push('device')
+      },
+    },
+  })
+  return {
+    simulations: { service, execution },
+    harness: { deviceRequests },
+    cleanup: () =>
+      rm(objectDir, { recursive: true, force: true }).then(
+        () => undefined,
+        () => undefined,
+      ),
   }
 }
 
@@ -559,6 +730,7 @@ export async function startHarness(options: HarnessOptions = {}): Promise<Harnes
   )
   const progress = new RunProgressService({ profiles: profileStore, binder, manifests, budget })
   const answers = new Map<string, PublishedAnswer>()
+  const energy = options.energy === undefined ? undefined : await createEnergyHarness(options.energy)
 
   const app = createApiServer({
     authenticate:
@@ -572,7 +744,13 @@ export async function startHarness(options: HarnessOptions = {}): Promise<Harnes
           evidence: { service: options.provenance.evidence },
           history: { service: options.provenance.history },
         }),
+    ...(energy === undefined ? {} : { simulations: energy.simulations }),
   })
+  if (energy !== undefined) {
+    app.addHook('onClose', async () => {
+      await energy.cleanup()
+    })
+  }
   await app.listen({ host: '127.0.0.1', port: 0 })
   const address = app.server.address()
   if (address === null || typeof address === 'string') throw new Error('the API did not bind a TCP port')
@@ -654,5 +832,6 @@ export async function startHarness(options: HarnessOptions = {}): Promise<Harnes
     ctx: harnessCtx,
     seedAnswer: (runId, answer) => answers.set(runId, answer),
     consumeBudget,
+    energy: energy?.harness,
   }
 }

@@ -26,6 +26,21 @@ import type {
   VersionRef,
 } from '@ontology/contracts'
 import { ApiError, toApiFailure } from './errors'
+import {
+  asExecutionRecord,
+  asScenarioDescriptor,
+  asSimulationDetail,
+  asSimulationRecord,
+} from './energy'
+import type {
+  CreateScenarioRequest,
+  ExecutionRecordView,
+  RequestExecutionRequest,
+  RequestSimulationInput,
+  ScenarioDescriptor,
+  SimulationDetailView,
+  SimulationRecordView,
+} from './energy'
 import { dependencyQuery, optionalTimeQuery } from './provenance'
 import type { DependencyPage, HistoryPage } from './provenance'
 import { defaultRunEventStreamFactory, isRunState } from './query'
@@ -193,6 +208,21 @@ function dataOf<T>(body: unknown, path: string): T {
     })
   }
   return body['data'] as T
+}
+
+/**
+ * A server response whose envelope was well-formed but whose typed body the UI cannot safely
+ * display. Rendering a guessed shape would risk showing an unlabelled or unverified number, so
+ * this is an explicit failure instead.
+ */
+function malformedResponse(path: string, detail: string): ApiError {
+  return new ApiError(500, {
+    code: 'MALFORMED_RESPONSE',
+    message: `${detail} (${path})`,
+    retryable: false,
+    reasons: [],
+    missingCapabilities: [],
+  })
 }
 
 export class WorkbenchClient {
@@ -520,6 +550,59 @@ export class WorkbenchClient {
     return this.#requestWithMeta<ObjectHistoryView>(
       `/api/v1/objects/${encodeURIComponent(objectId)}/history${optionalTimeQuery(query)}`,
     ).then(({ data, nextCursor }) => ({ view: data, nextCursor }))
+  }
+
+  /**
+   * `POST /simulations/inputs`: archive a synthetic scenario from the operator's two intents and
+   * return its descriptor (opaque `inputRef` plus unit/time/sampling/mode labels).
+   */
+  buildEnergyScenario(request: CreateScenarioRequest): Promise<ScenarioDescriptor> {
+    const path = '/api/v1/simulations/inputs'
+    return this.#request<unknown>('POST', path, { body: request, idempotencyKey: this.#newId() }).then(
+      (data) => {
+        const scenario = asScenarioDescriptor(data)
+        if (scenario === undefined) throw malformedResponse(path, 'the scenario descriptor was not recognised')
+        return scenario
+      },
+    )
+  }
+
+  /** `POST /simulations`: run a registered operation over approved input refs. */
+  requestSimulation(request: RequestSimulationInput): Promise<SimulationRecordView> {
+    const path = '/api/v1/simulations'
+    return this.#request<unknown>('POST', path, { body: request, idempotencyKey: this.#newId() }).then(
+      (data) => {
+        const record = asSimulationRecord(data)
+        if (record === undefined) throw malformedResponse(path, 'the simulation record was not recognised')
+        return record
+      },
+    )
+  }
+
+  /** `GET /simulations/{id}`: the typed result, its scenario labels and the integrity outcome. */
+  getSimulation(simulationId: string): Promise<SimulationDetailView> {
+    const path = `/api/v1/simulations/${encodeURIComponent(simulationId)}`
+    return this.#request<unknown>('GET', path).then((data) => {
+      const detail = asSimulationDetail(data)
+      if (detail === undefined) throw malformedResponse(path, 'the simulation detail was not recognised')
+      return detail
+    })
+  }
+
+  /**
+   * `POST /executions`: schedule a simulation execution. A `mode=live` request is refused by the
+   * server with `CAPABILITY_NOT_CONFIGURED`; the UI surfaces that as an explicit failure and never
+   * as a completed execution.
+   */
+  requestExecution(request: RequestExecutionRequest): Promise<ExecutionRecordView> {
+    const path = '/api/v1/executions'
+    return this.#request<unknown>('POST', path, { body: request, idempotencyKey: this.#newId() }).then(
+      (data) => {
+        const record = asExecutionRecord(data)
+        if (record === undefined) throw malformedResponse(path, 'the execution record was not recognised')
+        return record
+      },
+    )
   }
 
   async #requestWithMeta<T>(path: string): Promise<{ data: T; nextCursor: string | undefined }> {
