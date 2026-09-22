@@ -96,6 +96,12 @@ export interface JobStageOutcome {
   readonly outbox?: NewOutboxMessage
   /** Present when the stage publishes a version; the worker runs the exactly-once publication. */
   readonly publication?: JobPublicationIntent
+  /**
+   * Present when the stage replaces the logical job's opaque input reference (for example the
+   * `received → parsed` stage rewrites the ingestion reference into the structured extraction
+   * reference). The worker commits it in the same transaction as the checkpoint.
+   */
+  readonly documentRef?: string
 }
 
 export interface JobPublicationIntent {

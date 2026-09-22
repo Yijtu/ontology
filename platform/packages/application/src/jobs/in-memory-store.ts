@@ -266,6 +266,7 @@ export class InMemoryJobStore implements JobStore {
     this.#checkpoints.set(checkpointKey, stages)
     job.stage = advance.stage
     job.counts = clone(advance.counts)
+    if (advance.documentRef !== undefined) job.documentRef = advance.documentRef
     job.revision = String(Number(job.revision) + 1)
     job.updatedAt = advance.completedAt
     attempt.stage = advance.stage

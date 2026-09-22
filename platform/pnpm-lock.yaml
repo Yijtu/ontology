@@ -56,6 +56,9 @@ importers:
       '@ontology/app-web':
         specifier: workspace:*
         version: link:apps/web
+      '@ontology/app-worker':
+        specifier: workspace:*
+        version: link:apps/worker
       '@ontology/application':
         specifier: workspace:*
         version: link:packages/application

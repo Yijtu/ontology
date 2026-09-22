@@ -583,12 +583,20 @@ export class PostgresJobStore implements JobStore {
       )
       const updated = await query.query<JobRow>(
         `UPDATE agent_platform.jobs
-            SET stage = $1, counts = $2::jsonb, revision = revision + 1, updated_at = $3::timestamptz
+            SET stage = $1, counts = $2::jsonb,
+                document_ref = COALESCE($5::text, document_ref),
+                revision = revision + 1, updated_at = $3::timestamptz
           WHERE tenant_id = current_setting('app.tenant_id')::uuid
             AND space_id = current_setting('app.space_id')::uuid
             AND job_id = $4
           RETURNING ${JOB_COLUMNS}`,
-        [advance.stage, JSON.stringify(advance.counts), advance.completedAt, jobId],
+        [
+          advance.stage,
+          JSON.stringify(advance.counts),
+          advance.completedAt,
+          jobId,
+          advance.documentRef ?? null,
+        ],
       )
       const row = updated.rows[0]
       if (row === undefined) throw new JobStoreError('JOB_NOT_FOUND', `job ${jobId} disappeared`)
