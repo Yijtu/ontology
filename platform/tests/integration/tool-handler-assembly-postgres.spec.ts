@@ -5,7 +5,7 @@ import { join } from 'node:path'
 import { fileURLToPath } from 'node:url'
 import { setTimeout as delay } from 'node:timers/promises'
 import { Client } from 'pg'
-import { afterAll, beforeAll, describe, expect, it, vi } from 'vitest'
+import { afterAll, beforeAll, beforeEach, describe, expect, it, vi } from 'vitest'
 import {
   FileSystemObjectStore,
   LocalImmutableBlobStore,
@@ -90,6 +90,13 @@ function connectionStringFor(base: string, user: string, password: string, datab
   return `${url.protocol}//${encodeURIComponent(user)}:${encodeURIComponent(password)}@${url.hostname}${port}/${database}`
 }
 
+// This suite starts a real PostgreSQL container in `beforeAll`, which under a loaded
+// machine can take well over a minute. A context deadline captured at module-import
+// time therefore expires before the tests even run. Every time-dependent context is
+// built relative to the moment it is used, with a margin that comfortably outlasts the
+// 120s integration test budget.
+const TEST_DEADLINE_MARGIN_MS = 5 * 60_000
+
 function toolContext(input: {
   readonly tenantId: string
   readonly spaceId: string
@@ -99,7 +106,8 @@ function toolContext(input: {
   readonly deadline?: string
 }): ToolContext {
   const grantedAt = new Date()
-  const expiresAt = input.deadline ?? new Date(grantedAt.getTime() + 60_000).toISOString()
+  const expiresAt =
+    input.deadline ?? new Date(grantedAt.getTime() + TEST_DEADLINE_MARGIN_MS).toISOString()
   return createToolContext({
     principal: {
       tenantId: input.tenantId,
@@ -131,20 +139,54 @@ function toolContext(input: {
   })
 }
 
-const CTX_A = toolContext({
-  tenantId: TENANT_A,
-  spaceId: SPACE_A,
-  sourceRefs: [SOURCE_BUSINESS],
-  collectionRefs: [COLLECTION],
-  domains: ['example.com'],
-})
-const CTX_B = toolContext({
-  tenantId: TENANT_B,
-  spaceId: SPACE_B,
-  sourceRefs: [SOURCE_BUSINESS],
-  collectionRefs: [COLLECTION],
-  domains: ['example.com'],
-})
+let CTX_A: ToolContext
+let CTX_B: ToolContext
+let noIndexContext: ToolContext
+let corruptContext: ToolContext
+let cursorContext: ToolContext
+
+/**
+ * Rebuild every time-dependent context from the current clock. `beforeAll` calls this
+ * for the container/index setup and `beforeEach` refreshes it, so a test's deadline is
+ * relative to that test rather than to module import.
+ */
+function buildTestContexts(): void {
+  CTX_A = toolContext({
+    tenantId: TENANT_A,
+    spaceId: SPACE_A,
+    sourceRefs: [SOURCE_BUSINESS],
+    collectionRefs: [COLLECTION],
+    domains: ['example.com'],
+  })
+  CTX_B = toolContext({
+    tenantId: TENANT_B,
+    spaceId: SPACE_B,
+    sourceRefs: [SOURCE_BUSINESS],
+    collectionRefs: [COLLECTION],
+    domains: ['example.com'],
+  })
+  noIndexContext = toolContext({
+    tenantId: TENANT_A,
+    spaceId: SPACE_A,
+    sourceRefs: [SOURCE_BUSINESS],
+    collectionRefs: [MISSING_COLLECTION],
+    domains: ['example.com'],
+  })
+  corruptContext = toolContext({
+    tenantId: TENANT_A,
+    spaceId: SPACE_A,
+    sourceRefs: [SOURCE_BUSINESS],
+    collectionRefs: [CORRUPT_COLLECTION],
+    domains: ['example.com'],
+  })
+  cursorContext = toolContext({
+    tenantId: TENANT_A,
+    spaceId: SPACE_A,
+    sourceRefs: [SOURCE_BUSINESS],
+    collectionRefs: [CURSOR_COLLECTION],
+    domains: ['example.com'],
+  })
+}
 
 const MAPPINGS: readonly BusinessObjectMapping[] = [
   {
@@ -307,7 +349,10 @@ async function lastReservationStatus(ledgerId: string, ctx: ToolContext): Promis
   return reservations.at(-1)?.status
 }
 
+beforeEach(buildTestContexts)
+
 beforeAll(async () => {
+  buildTestContexts()
   fixture = await startWebSearchFixture()
 
   const provided = process.env.CONTROL_TEST_DATABASE_URL
@@ -628,28 +673,6 @@ describe('adapter-raised port errors keep their canonical classification on the 
 })
 
 describe('document_search index-state failures keep their canonical code on the tool path', () => {
-  const noIndexContext = toolContext({
-    tenantId: TENANT_A,
-    spaceId: SPACE_A,
-    sourceRefs: [SOURCE_BUSINESS],
-    collectionRefs: [MISSING_COLLECTION],
-    domains: ['example.com'],
-  })
-  const corruptContext = toolContext({
-    tenantId: TENANT_A,
-    spaceId: SPACE_A,
-    sourceRefs: [SOURCE_BUSINESS],
-    collectionRefs: [CORRUPT_COLLECTION],
-    domains: ['example.com'],
-  })
-  const cursorContext = toolContext({
-    tenantId: TENANT_A,
-    spaceId: SPACE_A,
-    sourceRefs: [SOURCE_BUSINESS],
-    collectionRefs: [CURSOR_COLLECTION],
-    domains: ['example.com'],
-  })
-
   function docCallFor(callId: string, collection: string, cursor?: string): ToolCall {
     return {
       callId,
