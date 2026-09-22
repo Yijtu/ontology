@@ -38,6 +38,7 @@
     "@ontology/application": "workspace:*",
     "@ontology/contracts": "workspace:*",
     "@ontology/core": "workspace:*",
+    "@ontology/extension-home-energy": "workspace:*",
     "@ontology/industry-pack-home-energy": "workspace:*",
     "@ontology/provenance": "workspace:*",
     "@ontology/semantic-engine": "workspace:*",

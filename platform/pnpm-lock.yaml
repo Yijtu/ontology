@@ -68,6 +68,9 @@ importers:
       '@ontology/core':
         specifier: workspace:*
         version: link:packages/core
+      '@ontology/extension-home-energy':
+        specifier: workspace:*
+        version: link:packages/extensions/home-energy
       '@ontology/industry-pack-home-energy':
         specifier: workspace:*
         version: link:industry-packs/home-energy
