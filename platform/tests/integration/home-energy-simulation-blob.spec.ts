@@ -40,6 +40,7 @@ import type {
   RawTelemetryPoint,
 } from '@ontology/extension-home-energy'
 import {
+  HOME_ENERGY_FORECAST_MODEL_VERSION,
   HOME_ENERGY_INPUT_VERSIONS,
   HOME_ENERGY_SOURCE_A_REF,
   HOME_ENERGY_SOURCE_B_REF,
@@ -130,6 +131,7 @@ function pvForecast(): ForecastSeriesInput {
     targetInterval: HORIZON,
     method: 'fixture-persistence',
     assumptions: ['synthetic fixture'],
+    modelVersion: HOME_ENERGY_FORECAST_MODEL_VERSION,
     points: [point('2026-01-01T00:00:00Z', 4.0), point('2026-01-01T00:15:00Z', 0.0)],
     sourceRef: HOME_ENERGY_SOURCE_A_REF,
     sourceSnapshot: sourceSnapshot(
