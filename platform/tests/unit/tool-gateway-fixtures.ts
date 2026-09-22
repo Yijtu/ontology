@@ -274,13 +274,13 @@ export interface GatewayHarness {
   readonly ledgerStore: InMemoryBudgetLedgerStore
   readonly evidence: InMemoryEvidenceStore
   readonly artifacts: InMemoryArtifactWriter
-  readonly handlers: readonly RecordingHandler[]
+  readonly handlers: readonly ToolHandler[]
   readonly tools: readonly ToolDefinition[]
   readonly log: string[]
 }
 
 export function buildGateway(options: {
-  readonly handlers: readonly RecordingHandler[]
+  readonly handlers: readonly ToolHandler[]
   readonly profile?: ResolvedProfile
   readonly ctx?: ToolContext
   readonly now?: () => string

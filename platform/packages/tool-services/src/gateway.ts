@@ -309,15 +309,19 @@ export class ToolGatewayService implements ToolGateway {
         signal: controller.signal,
       })
     } catch (error) {
-      await this.#settleFailed(reservation, ctx, startedAt)
-      throw this.#classify(error, 'HANDLER_FAILED', 'the tool handler failed')
+      const classified = this.#classify(error, 'HANDLER_FAILED', 'the tool handler failed')
+      // A timeout or dropped connection may already have been billed by the remote, so
+      // the reservation is held as `usage_unknown` instead of released as a free failure.
+      await this.#settleFailed(reservation, ctx, startedAt, classified.remoteStateUnknown)
+      throw classified
     } finally {
       clearTimeout(timer)
     }
     if (controller.signal.aborted) {
-      await this.#settleFailed(reservation, ctx, startedAt)
+      await this.#settleFailed(reservation, ctx, startedAt, true)
       throw new ToolGatewayError('HANDLER_FAILED', 'the tool handler exceeded its deadline', {
         platformCode: 'DEADLINE_EXCEEDED',
+        remoteStateUnknown: true,
       })
     }
 
@@ -526,6 +530,7 @@ export class ToolGatewayService implements ToolGateway {
     reservation: BudgetReservationRecord,
     ctx: ToolContext,
     startedAt: number,
+    usageUnknown = false,
   ): Promise<void> {
     try {
       await this.#deps.budget.settle(
@@ -533,7 +538,13 @@ export class ToolGatewayService implements ToolGateway {
           ledgerId: this.#binding.ledgerId,
           reservationId: reservation.reservationId,
           status: 'failed',
-          usage: { durationMs: Date.now() - startedAt, calls: 1, rows: 0, bytes: 0 },
+          usage: {
+            durationMs: Date.now() - startedAt,
+            calls: 1,
+            rows: 0,
+            bytes: 0,
+            ...(usageUnknown ? { usageUnknown: true } : {}),
+          },
           evidenceRefs: [],
         },
         ctx,

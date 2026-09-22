@@ -31,6 +31,12 @@ export {
 } from './envelope'
 export { INLINE_RESULT_BYTES, ToolGatewayService, createRunToolGateway } from './gateway'
 export type { ToolGatewayDependencies } from './gateway'
+export { WebSearchHandler, resolveWebSearchEnablement } from './web-search'
+export type {
+  WebSearchDisabledReason,
+  WebSearchEnablement,
+  WebSearchHandlerOptions,
+} from './web-search'
 export {
   canonicalJson,
   digestOfSchema,
