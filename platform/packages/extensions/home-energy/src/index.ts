@@ -7,3 +7,4 @@
  * arrives by construction injection.
  */
 export * from './input'
+export * from './simulation'

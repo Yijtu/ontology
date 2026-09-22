@@ -6,6 +6,7 @@ export {
   sourceBRows,
 } from './datasets'
 export * from './energy-input'
+export * from './simulation'
 export type { LogicalObservation, PhysicalRow, SyntheticDatasetMetadata } from './datasets'
 export {
   HOME_ENERGY_COMPILE_BUDGET,
