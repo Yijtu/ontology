@@ -26,7 +26,7 @@
     "tasks/spec-v0.2/verification-plan.md": "1e579633bdfec43ec1e01634dd2cc946db3bfe59119f9e0c3cecf2536f0a63ed"
   },
   "entry_ready_ids": [
-    "LOCAL-001"
+    "LOCAL-033"
   ],
   "local_delivery_ids": [
     "LOCAL-001",
@@ -79,7 +79,21 @@
     "LOCAL-048",
     "LOCAL-049",
     "LOCAL-050",
-    "LOCAL-054"
+    "LOCAL-054",
+    "LOCAL-055",
+    "LOCAL-056",
+    "LOCAL-057",
+    "LOCAL-058",
+    "LOCAL-059",
+    "LOCAL-060",
+    "LOCAL-061",
+    "LOCAL-062",
+    "LOCAL-063",
+    "LOCAL-064",
+    "LOCAL-065",
+    "LOCAL-066",
+    "LOCAL-067",
+    "LOCAL-068"
   ],
   "external_condition_ids": [
     "LOCAL-051",
@@ -99,14 +113,21 @@
       "LOCAL-048"
     ],
     [
-      "LOCAL-005"
+      "LOCAL-055"
+    ],
+    [
+      "LOCAL-005",
+      "LOCAL-056"
     ],
     [
       "LOCAL-006"
     ],
     [
-      "LOCAL-007",
-      "LOCAL-025"
+      "LOCAL-025",
+      "LOCAL-057"
+    ],
+    [
+      "LOCAL-007"
     ],
     [
       "LOCAL-008",
@@ -136,23 +157,33 @@
       "LOCAL-018",
       "LOCAL-026",
       "LOCAL-028",
-      "LOCAL-029"
+      "LOCAL-029",
+      "LOCAL-059",
+      "LOCAL-060",
+      "LOCAL-061"
     ],
     [
       "LOCAL-019",
       "LOCAL-030",
-      "LOCAL-042"
+      "LOCAL-042",
+      "LOCAL-062",
+      "LOCAL-063",
+      "LOCAL-064"
     ],
     [
       "LOCAL-020",
       "LOCAL-031",
-      "LOCAL-043"
+      "LOCAL-043",
+      "LOCAL-065",
+      "LOCAL-066",
+      "LOCAL-067"
     ],
     [
       "LOCAL-032",
       "LOCAL-038",
       "LOCAL-041",
-      "LOCAL-044"
+      "LOCAL-044",
+      "LOCAL-068"
     ],
     [
       "LOCAL-033",
@@ -184,9 +215,7 @@
     ],
     [
       "LOCAL-051",
-      "LOCAL-052"
-    ],
-    [
+      "LOCAL-052",
       "LOCAL-053"
     ]
   ],
@@ -259,8 +288,8 @@
       "file": "issue-003-package-profile-manifests.md",
       "type": "backend",
       "priority": "high",
-      "state": "planned",
-      "readiness": "ready",
+      "state": "done",
+      "readiness": "done",
       "phase": "A 基础契约",
       "dependencies": [
         "LOCAL-002"
@@ -288,7 +317,7 @@
       ],
       "external_gates": [],
       "execution_mode": "local-implementation",
-      "github_issue": null
+      "github_issue": 7
     },
     {
       "id": "LOCAL-004",
@@ -297,8 +326,8 @@
       "file": "issue-004-control-postgres-foundation.md",
       "type": "infra",
       "priority": "high",
-      "state": "planned",
-      "readiness": "ready",
+      "state": "done",
+      "readiness": "done",
       "phase": "A 基础契约",
       "dependencies": [
         "LOCAL-002"
@@ -323,7 +352,7 @@
       ],
       "external_gates": [],
       "execution_mode": "local-implementation",
-      "github_issue": null
+      "github_issue": 8
     },
     {
       "id": "LOCAL-005",
@@ -332,8 +361,8 @@
       "file": "issue-005-immutable-artifacts.md",
       "type": "backend",
       "priority": "high",
-      "state": "planned",
-      "readiness": "waiting_dependencies",
+      "state": "done",
+      "readiness": "done",
       "phase": "A 基础契约",
       "dependencies": [
         "LOCAL-002",
@@ -356,7 +385,7 @@
       ],
       "external_gates": [],
       "execution_mode": "local-implementation",
-      "github_issue": null
+      "github_issue": 15
     },
     {
       "id": "LOCAL-006",
@@ -365,8 +394,8 @@
       "file": "issue-006-component-registry.md",
       "type": "backend",
       "priority": "high",
-      "state": "planned",
-      "readiness": "waiting_dependencies",
+      "state": "done",
+      "readiness": "done",
       "phase": "B 装配与执行基础",
       "dependencies": [
         "LOCAL-003",
@@ -392,7 +421,7 @@
       ],
       "external_gates": [],
       "execution_mode": "local-implementation",
-      "github_issue": null
+      "github_issue": 19
     },
     {
       "id": "LOCAL-007",
@@ -401,8 +430,8 @@
       "file": "issue-007-profile-composition.md",
       "type": "backend",
       "priority": "high",
-      "state": "planned",
-      "readiness": "waiting_dependencies",
+      "state": "done",
+      "readiness": "done",
       "phase": "B 装配与执行基础",
       "dependencies": [
         "LOCAL-003",
@@ -428,7 +457,7 @@
       ],
       "external_gates": [],
       "execution_mode": "local-implementation",
-      "github_issue": null
+      "github_issue": 25
     },
     {
       "id": "LOCAL-008",
@@ -437,8 +466,8 @@
       "file": "issue-008-source-bindings-probe.md",
       "type": "backend",
       "priority": "high",
-      "state": "planned",
-      "readiness": "waiting_dependencies",
+      "state": "done",
+      "readiness": "done",
       "phase": "B 装配与执行基础",
       "dependencies": [
         "LOCAL-002",
@@ -463,7 +492,7 @@
       ],
       "external_gates": [],
       "execution_mode": "local-implementation",
-      "github_issue": null
+      "github_issue": 27
     },
     {
       "id": "LOCAL-009",
@@ -472,8 +501,8 @@
       "file": "issue-009-run-events-api.md",
       "type": "backend",
       "priority": "high",
-      "state": "planned",
-      "readiness": "waiting_dependencies",
+      "state": "done",
+      "readiness": "done",
       "phase": "B 装配与执行基础",
       "dependencies": [
         "LOCAL-002",
@@ -503,7 +532,7 @@
       ],
       "external_gates": [],
       "execution_mode": "local-implementation",
-      "github_issue": null
+      "github_issue": 28
     },
     {
       "id": "LOCAL-010",
@@ -512,8 +541,8 @@
       "file": "issue-010-budget-ledger.md",
       "type": "backend",
       "priority": "high",
-      "state": "planned",
-      "readiness": "waiting_dependencies",
+      "state": "done",
+      "readiness": "done",
       "phase": "B 装配与执行基础",
       "dependencies": [
         "LOCAL-004",
@@ -540,7 +569,7 @@
       ],
       "external_gates": [],
       "execution_mode": "local-implementation",
-      "github_issue": null
+      "github_issue": 31
     },
     {
       "id": "LOCAL-011",
@@ -549,8 +578,8 @@
       "file": "issue-011-tool-gateway-local.md",
       "type": "backend",
       "priority": "high",
-      "state": "planned",
-      "readiness": "waiting_dependencies",
+      "state": "done",
+      "readiness": "done",
       "phase": "B 装配与执行基础",
       "dependencies": [
         "LOCAL-002",
@@ -586,7 +615,7 @@
       ],
       "external_gates": [],
       "execution_mode": "local-implementation",
-      "github_issue": null
+      "github_issue": 37
     },
     {
       "id": "LOCAL-012",
@@ -595,8 +624,8 @@
       "file": "issue-012-postgres-query-adapter.md",
       "type": "backend",
       "priority": "high",
-      "state": "planned",
-      "readiness": "waiting_dependencies",
+      "state": "done",
+      "readiness": "done",
       "phase": "C 数据与协议适配",
       "dependencies": [
         "LOCAL-008",
@@ -623,7 +652,7 @@
       ],
       "external_gates": [],
       "execution_mode": "local-implementation",
-      "github_issue": null
+      "github_issue": 43
     },
     {
       "id": "LOCAL-013",
@@ -632,8 +661,8 @@
       "file": "issue-013-duckdb-query-adapter.md",
       "type": "backend",
       "priority": "high",
-      "state": "planned",
-      "readiness": "waiting_dependencies",
+      "state": "done",
+      "readiness": "done",
       "phase": "C 数据与协议适配",
       "dependencies": [
         "LOCAL-008",
@@ -662,7 +691,7 @@
       ],
       "external_gates": [],
       "execution_mode": "local-implementation",
-      "github_issue": null
+      "github_issue": 44
     },
     {
       "id": "LOCAL-014",
@@ -671,8 +700,8 @@
       "file": "issue-014-mcp-transport.md",
       "type": "backend",
       "priority": "high",
-      "state": "planned",
-      "readiness": "waiting_dependencies",
+      "state": "done",
+      "readiness": "done",
       "phase": "C 数据与协议适配",
       "dependencies": [
         "LOCAL-011",
@@ -697,7 +726,7 @@
       ],
       "external_gates": [],
       "execution_mode": "local-implementation",
-      "github_issue": null
+      "github_issue": 62
     },
     {
       "id": "LOCAL-015",
@@ -706,8 +735,8 @@
       "file": "issue-015-generation-model-adapter.md",
       "type": "backend",
       "priority": "high",
-      "state": "planned",
-      "readiness": "waiting_dependencies",
+      "state": "done",
+      "readiness": "done",
       "phase": "D Agent 运行时",
       "dependencies": [
         "LOCAL-002",
@@ -734,7 +763,7 @@
       ],
       "external_gates": [],
       "execution_mode": "local-implementation",
-      "github_issue": null
+      "github_issue": 38
     },
     {
       "id": "LOCAL-016",
@@ -743,8 +772,8 @@
       "file": "issue-016-jev-decision-adapter.md",
       "type": "backend",
       "priority": "high",
-      "state": "planned",
-      "readiness": "waiting_dependencies",
+      "state": "done",
+      "readiness": "done",
       "phase": "D Agent 运行时",
       "dependencies": [
         "LOCAL-002",
@@ -771,7 +800,7 @@
       ],
       "external_gates": [],
       "execution_mode": "local-implementation",
-      "github_issue": null
+      "github_issue": 45
     },
     {
       "id": "LOCAL-017",
@@ -780,8 +809,8 @@
       "file": "issue-017-template-runtime.md",
       "type": "backend",
       "priority": "high",
-      "state": "planned",
-      "readiness": "waiting_dependencies",
+      "state": "done",
+      "readiness": "done",
       "phase": "D Agent 运行时",
       "dependencies": [
         "LOCAL-009",
@@ -808,7 +837,7 @@
       ],
       "external_gates": [],
       "execution_mode": "local-implementation",
-      "github_issue": null
+      "github_issue": 46
     },
     {
       "id": "LOCAL-018",
@@ -817,8 +846,8 @@
       "file": "issue-018-pi-runtime.md",
       "type": "backend",
       "priority": "high",
-      "state": "planned",
-      "readiness": "waiting_dependencies",
+      "state": "done",
+      "readiness": "done",
       "phase": "D Agent 运行时",
       "dependencies": [
         "LOCAL-009",
@@ -850,7 +879,7 @@
       ],
       "external_gates": [],
       "execution_mode": "local-implementation",
-      "github_issue": null
+      "github_issue": 63
     },
     {
       "id": "LOCAL-019",
@@ -859,8 +888,8 @@
       "file": "issue-019-workflow-controller.md",
       "type": "backend",
       "priority": "high",
-      "state": "planned",
-      "readiness": "waiting_dependencies",
+      "state": "done",
+      "readiness": "done",
       "phase": "D Agent 运行时",
       "dependencies": [
         "LOCAL-007",
@@ -895,7 +924,7 @@
       ],
       "external_gates": [],
       "execution_mode": "local-implementation",
-      "github_issue": null
+      "github_issue": 78
     },
     {
       "id": "LOCAL-020",
@@ -904,8 +933,8 @@
       "file": "issue-020-route-plan-loop.md",
       "type": "backend",
       "priority": "high",
-      "state": "planned",
-      "readiness": "waiting_dependencies",
+      "state": "done",
+      "readiness": "done",
       "phase": "D Agent 运行时",
       "dependencies": [
         "LOCAL-011",
@@ -938,7 +967,7 @@
       ],
       "external_gates": [],
       "execution_mode": "local-implementation",
-      "github_issue": null
+      "github_issue": 90
     },
     {
       "id": "LOCAL-021",
@@ -947,8 +976,8 @@
       "file": "issue-021-web-search-adapter.md",
       "type": "backend",
       "priority": "high",
-      "state": "planned",
-      "readiness": "waiting_dependencies",
+      "state": "done",
+      "readiness": "done",
       "phase": "C 数据与协议适配",
       "dependencies": [
         "LOCAL-008",
@@ -973,7 +1002,7 @@
       ],
       "external_gates": [],
       "execution_mode": "local-implementation",
-      "github_issue": null
+      "github_issue": 54
     },
     {
       "id": "LOCAL-022",
@@ -982,8 +1011,8 @@
       "file": "issue-022-durable-jobs-outbox.md",
       "type": "backend",
       "priority": "high",
-      "state": "planned",
-      "readiness": "waiting_dependencies",
+      "state": "done",
+      "readiness": "done",
       "phase": "E 文档与语义",
       "dependencies": [
         "LOCAL-004",
@@ -1010,7 +1039,7 @@
       ],
       "external_gates": [],
       "execution_mode": "local-implementation",
-      "github_issue": null
+      "github_issue": 32
     },
     {
       "id": "LOCAL-023",
@@ -1019,8 +1048,8 @@
       "file": "issue-023-document-parser-spans.md",
       "type": "backend",
       "priority": "high",
-      "state": "planned",
-      "readiness": "waiting_dependencies",
+      "state": "done",
+      "readiness": "done",
       "phase": "E 文档与语义",
       "dependencies": [
         "LOCAL-005",
@@ -1045,7 +1074,7 @@
       ],
       "external_gates": [],
       "execution_mode": "local-implementation",
-      "github_issue": null
+      "github_issue": 39
     },
     {
       "id": "LOCAL-024",
@@ -1054,8 +1083,8 @@
       "file": "issue-024-bm25-document-search.md",
       "type": "backend",
       "priority": "high",
-      "state": "planned",
-      "readiness": "waiting_dependencies",
+      "state": "done",
+      "readiness": "done",
       "phase": "E 文档与语义",
       "dependencies": [
         "LOCAL-011",
@@ -1081,7 +1110,7 @@
       ],
       "external_gates": [],
       "execution_mode": "local-implementation",
-      "github_issue": null
+      "github_issue": 55
     },
     {
       "id": "LOCAL-025",
@@ -1090,8 +1119,8 @@
       "file": "issue-025-semantic-model-versions.md",
       "type": "backend",
       "priority": "high",
-      "state": "planned",
-      "readiness": "waiting_dependencies",
+      "state": "done",
+      "readiness": "done",
       "phase": "E 文档与语义",
       "dependencies": [
         "LOCAL-003",
@@ -1120,7 +1149,7 @@
       ],
       "external_gates": [],
       "execution_mode": "local-implementation",
-      "github_issue": null
+      "github_issue": 22
     },
     {
       "id": "LOCAL-026",
@@ -1129,8 +1158,8 @@
       "file": "issue-026-semantic-mapping-query.md",
       "type": "backend",
       "priority": "high",
-      "state": "planned",
-      "readiness": "waiting_dependencies",
+      "state": "done",
+      "readiness": "done",
       "phase": "E 文档与语义",
       "dependencies": [
         "LOCAL-011",
@@ -1164,7 +1193,7 @@
       ],
       "external_gates": [],
       "execution_mode": "local-implementation",
-      "github_issue": null
+      "github_issue": 56
     },
     {
       "id": "LOCAL-027",
@@ -1173,8 +1202,8 @@
       "file": "issue-027-entity-relation-extraction.md",
       "type": "backend",
       "priority": "high",
-      "state": "planned",
-      "readiness": "waiting_dependencies",
+      "state": "done",
+      "readiness": "done",
       "phase": "E 文档与语义",
       "dependencies": [
         "LOCAL-015",
@@ -1198,7 +1227,7 @@
       ],
       "external_gates": [],
       "execution_mode": "local-implementation",
-      "github_issue": null
+      "github_issue": 57
     },
     {
       "id": "LOCAL-028",
@@ -1207,8 +1236,8 @@
       "file": "issue-028-rule-candidate-extraction.md",
       "type": "backend",
       "priority": "high",
-      "state": "planned",
-      "readiness": "waiting_dependencies",
+      "state": "done",
+      "readiness": "done",
       "phase": "E 文档与语义",
       "dependencies": [
         "LOCAL-015",
@@ -1234,7 +1263,7 @@
       ],
       "external_gates": [],
       "execution_mode": "local-implementation",
-      "github_issue": null
+      "github_issue": 64
     },
     {
       "id": "LOCAL-029",
@@ -1243,8 +1272,8 @@
       "file": "issue-029-identity-candidate-retrieval.md",
       "type": "backend",
       "priority": "high",
-      "state": "planned",
-      "readiness": "waiting_dependencies",
+      "state": "done",
+      "readiness": "done",
       "phase": "E 文档与语义",
       "dependencies": [
         "LOCAL-024",
@@ -1266,7 +1295,7 @@
       ],
       "external_gates": [],
       "execution_mode": "local-implementation",
-      "github_issue": null
+      "github_issue": 65
     },
     {
       "id": "LOCAL-030",
@@ -1275,8 +1304,8 @@
       "file": "issue-030-identity-decisions.md",
       "type": "backend",
       "priority": "high",
-      "state": "planned",
-      "readiness": "waiting_dependencies",
+      "state": "done",
+      "readiness": "done",
       "phase": "E 文档与语义",
       "dependencies": [
         "LOCAL-004",
@@ -1303,7 +1332,7 @@
       ],
       "external_gates": [],
       "execution_mode": "local-implementation",
-      "github_issue": null
+      "github_issue": 79
     },
     {
       "id": "LOCAL-031",
@@ -1312,8 +1341,8 @@
       "file": "issue-031-semantic-publication.md",
       "type": "backend",
       "priority": "high",
-      "state": "planned",
-      "readiness": "waiting_dependencies",
+      "state": "done",
+      "readiness": "done",
       "phase": "E 文档与语义",
       "dependencies": [
         "LOCAL-022",
@@ -1341,7 +1370,7 @@
       ],
       "external_gates": [],
       "execution_mode": "local-implementation",
-      "github_issue": null
+      "github_issue": 91
     },
     {
       "id": "LOCAL-032",
@@ -1350,8 +1379,8 @@
       "file": "issue-032-rule-evaluator-supports.md",
       "type": "backend",
       "priority": "high",
-      "state": "planned",
-      "readiness": "waiting_dependencies",
+      "state": "done",
+      "readiness": "done",
       "phase": "F 推理与输出",
       "dependencies": [
         "LOCAL-025",
@@ -1372,7 +1401,7 @@
       ],
       "external_gates": [],
       "execution_mode": "local-implementation",
-      "github_issue": null
+      "github_issue": 102
     },
     {
       "id": "LOCAL-033",
@@ -1382,7 +1411,7 @@
       "type": "backend",
       "priority": "high",
       "state": "planned",
-      "readiness": "waiting_dependencies",
+      "readiness": "ready",
       "phase": "F 推理与输出",
       "dependencies": [
         "LOCAL-022",
@@ -1534,8 +1563,8 @@
       "file": "issue-037-ui-profiles-sources.md",
       "type": "frontend",
       "priority": "high",
-      "state": "planned",
-      "readiness": "waiting_dependencies",
+      "state": "done",
+      "readiness": "done",
       "phase": "G 产品界面",
       "dependencies": [
         "LOCAL-006",
@@ -1565,7 +1594,7 @@
       ],
       "external_gates": [],
       "execution_mode": "local-implementation",
-      "github_issue": null
+      "github_issue": 33
     },
     {
       "id": "LOCAL-038",
@@ -1574,8 +1603,8 @@
       "file": "issue-038-ui-jobs-review.md",
       "type": "frontend",
       "priority": "high",
-      "state": "planned",
-      "readiness": "waiting_dependencies",
+      "state": "done",
+      "readiness": "done",
       "phase": "G 产品界面",
       "dependencies": [
         "LOCAL-022",
@@ -1611,7 +1640,7 @@
       ],
       "external_gates": [],
       "execution_mode": "local-implementation",
-      "github_issue": null
+      "github_issue": 103
     },
     {
       "id": "LOCAL-039",
@@ -1704,8 +1733,8 @@
       "file": "issue-041-package-export-upgrade.md",
       "type": "backend",
       "priority": "high",
-      "state": "planned",
-      "readiness": "waiting_dependencies",
+      "state": "done",
+      "readiness": "done",
       "phase": "H 行业资产与能源",
       "dependencies": [
         "LOCAL-006",
@@ -1736,7 +1765,7 @@
       ],
       "external_gates": [],
       "execution_mode": "local-implementation",
-      "github_issue": null
+      "github_issue": 104
     },
     {
       "id": "LOCAL-042",
@@ -1745,8 +1774,8 @@
       "file": "issue-042-home-energy-package.md",
       "type": "backend",
       "priority": "high",
-      "state": "planned",
-      "readiness": "waiting_dependencies",
+      "state": "done",
+      "readiness": "done",
       "phase": "H 行业资产与能源",
       "dependencies": [
         "LOCAL-003",
@@ -1773,7 +1802,7 @@
       ],
       "external_gates": [],
       "execution_mode": "local-implementation",
-      "github_issue": null
+      "github_issue": 70
     },
     {
       "id": "LOCAL-043",
@@ -1782,8 +1811,8 @@
       "file": "issue-043-energy-input-normalization.md",
       "type": "backend",
       "priority": "high",
-      "state": "planned",
-      "readiness": "waiting_dependencies",
+      "state": "done",
+      "readiness": "done",
       "phase": "H 行业资产与能源",
       "dependencies": [
         "LOCAL-005",
@@ -1809,7 +1838,7 @@
       ],
       "external_gates": [],
       "execution_mode": "local-implementation",
-      "github_issue": null
+      "github_issue": 80
     },
     {
       "id": "LOCAL-044",
@@ -1818,8 +1847,8 @@
       "file": "issue-044-energy-simulator.md",
       "type": "backend",
       "priority": "high",
-      "state": "planned",
-      "readiness": "waiting_dependencies",
+      "state": "done",
+      "readiness": "done",
       "phase": "H 行业资产与能源",
       "dependencies": [
         "LOCAL-002",
@@ -1839,7 +1868,7 @@
       ],
       "external_gates": [],
       "execution_mode": "local-implementation",
-      "github_issue": null
+      "github_issue": 92
     },
     {
       "id": "LOCAL-045",
@@ -1848,8 +1877,8 @@
       "file": "issue-045-energy-planner.md",
       "type": "backend",
       "priority": "high",
-      "state": "planned",
-      "readiness": "waiting_dependencies",
+      "state": "done",
+      "readiness": "done",
       "phase": "H 行业资产与能源",
       "dependencies": [
         "LOCAL-043",
@@ -1871,7 +1900,7 @@
       ],
       "external_gates": [],
       "execution_mode": "local-implementation",
-      "github_issue": null
+      "github_issue": 105
     },
     {
       "id": "LOCAL-046",
@@ -1961,8 +1990,8 @@
       "file": "issue-048-semantic-regression-fixtures.md",
       "type": "infra",
       "priority": "high",
-      "state": "planned",
-      "readiness": "ready",
+      "state": "done",
+      "readiness": "done",
       "phase": "A 基础契约",
       "dependencies": [
         "LOCAL-002"
@@ -1988,7 +2017,7 @@
       ],
       "external_gates": [],
       "execution_mode": "local-implementation",
-      "github_issue": null
+      "github_issue": 9
     },
     {
       "id": "LOCAL-049",
@@ -2082,7 +2111,7 @@
       "type": "infra",
       "priority": "medium",
       "state": "planned",
-      "readiness": "needs_external_input",
+      "readiness": "waiting_external_condition",
       "phase": "J 外部条件任务",
       "dependencies": [
         "LOCAL-015",
@@ -2126,7 +2155,7 @@
       "type": "backend",
       "priority": "medium",
       "state": "planned",
-      "readiness": "needs_external_input",
+      "readiness": "waiting_external_condition",
       "phase": "J 外部条件任务",
       "dependencies": [
         "LOCAL-043",
@@ -2163,7 +2192,7 @@
       "type": "backend",
       "priority": "low",
       "state": "planned",
-      "readiness": "needs_external_input",
+      "readiness": "waiting_external_condition",
       "phase": "J 外部条件任务",
       "dependencies": [
         "LOCAL-046",
@@ -2234,6 +2263,326 @@
       "external_gates": [],
       "execution_mode": "local-implementation",
       "github_issue": null
+    },
+    {
+      "id": "LOCAL-055",
+      "number": 55,
+      "title": "修复 canonical UnitCode pattern 接受独立 % 单位",
+      "file": "issue-055-unit-code-percent.md",
+      "type": "backend",
+      "priority": "high",
+      "state": "done",
+      "readiness": "done",
+      "phase": "A 基础契约",
+      "dependencies": [],
+      "user_stories": [],
+      "functional_requirements": [],
+      "acceptance_refs": [],
+      "design_tasks": [],
+      "external_gates": [],
+      "origin": "discovered-during-execution",
+      "execution_mode": "local-implementation",
+      "github_issue": 13
+    },
+    {
+      "id": "LOCAL-056",
+      "number": 56,
+      "title": "修复 blob-local 内容寻址发布的并发 rename 竞争",
+      "file": "issue-056-blob-local-atomic-rename.md",
+      "type": "backend",
+      "priority": "high",
+      "state": "done",
+      "readiness": "done",
+      "phase": "A 基础契约",
+      "dependencies": [
+        "LOCAL-005"
+      ],
+      "user_stories": [],
+      "functional_requirements": [],
+      "acceptance_refs": [],
+      "design_tasks": [],
+      "external_gates": [],
+      "origin": "discovered-during-execution",
+      "execution_mode": "local-implementation",
+      "github_issue": 17
+    },
+    {
+      "id": "LOCAL-057",
+      "number": 57,
+      "title": "将 ComponentRegistryStore 的 PostgreSQL 实现从测试提升到 control-postgres 适配器",
+      "file": "issue-057-registry-store-promotion.md",
+      "type": "backend",
+      "priority": "high",
+      "state": "done",
+      "readiness": "done",
+      "phase": "B 装配与执行基础",
+      "dependencies": [
+        "LOCAL-006"
+      ],
+      "user_stories": [],
+      "functional_requirements": [],
+      "acceptance_refs": [],
+      "design_tasks": [],
+      "external_gates": [],
+      "origin": "discovered-during-execution",
+      "execution_mode": "local-implementation",
+      "github_issue": 21
+    },
+    {
+      "id": "LOCAL-058",
+      "number": 58,
+      "title": "在 API 路由层接线 SourceRegistry 预检失效检查",
+      "file": null,
+      "type": "backend",
+      "priority": "high",
+      "state": "done",
+      "readiness": "done",
+      "phase": "B 装配与执行基础",
+      "dependencies": [
+        "LOCAL-008",
+        "LOCAL-009"
+      ],
+      "user_stories": [],
+      "functional_requirements": [],
+      "acceptance_refs": [],
+      "design_tasks": [],
+      "external_gates": [],
+      "origin": "discovered-during-execution",
+      "execution_mode": "local-implementation",
+      "github_issue": null
+    },
+    {
+      "id": "LOCAL-059",
+      "number": 59,
+      "title": "统一 tool handler 装配（注入 run ToolContext + gateway 取消/错误分类保真）",
+      "file": "issue-059-tool-handler-assembly.md",
+      "type": "backend",
+      "priority": "high",
+      "state": "done",
+      "readiness": "done",
+      "phase": "C 数据与协议适配",
+      "dependencies": [
+        "LOCAL-011",
+        "LOCAL-012",
+        "LOCAL-021",
+        "LOCAL-024",
+        "LOCAL-026"
+      ],
+      "user_stories": [],
+      "functional_requirements": [],
+      "acceptance_refs": [],
+      "design_tasks": [],
+      "external_gates": [],
+      "origin": "discovered-during-execution",
+      "execution_mode": "local-implementation",
+      "github_issue": 71
+    },
+    {
+      "id": "LOCAL-060",
+      "number": 60,
+      "title": "data-postgres/data-duckdb 实现 SourceProbeAdapter",
+      "file": "issue-060-source-probe-adapters.md",
+      "type": "backend",
+      "priority": "high",
+      "state": "done",
+      "readiness": "done",
+      "phase": "C 数据与协议适配",
+      "dependencies": [
+        "LOCAL-008",
+        "LOCAL-012",
+        "LOCAL-013"
+      ],
+      "user_stories": [],
+      "functional_requirements": [],
+      "acceptance_refs": [],
+      "design_tasks": [],
+      "external_gates": [],
+      "origin": "discovered-during-execution",
+      "execution_mode": "local-implementation",
+      "github_issue": 72
+    },
+    {
+      "id": "LOCAL-061",
+      "number": 61,
+      "title": "把文档解析接入 durable job 的 received→parsed 阶段",
+      "file": "issue-061-document-parse-job-stage.md",
+      "type": "backend",
+      "priority": "high",
+      "state": "done",
+      "readiness": "done",
+      "phase": "E 文档与语义",
+      "dependencies": [
+        "LOCAL-022",
+        "LOCAL-023",
+        "LOCAL-027"
+      ],
+      "user_stories": [],
+      "functional_requirements": [],
+      "acceptance_refs": [],
+      "design_tasks": [],
+      "external_gates": [],
+      "origin": "discovered-during-execution",
+      "execution_mode": "local-implementation",
+      "github_issue": 73
+    },
+    {
+      "id": "LOCAL-062",
+      "number": 62,
+      "title": "把 SemanticDefinitionStore 的 PostgreSQL 实现提升到 control-postgres 适配器",
+      "file": "issue-062-semantic-definition-store-promotion.md",
+      "type": "backend",
+      "priority": "high",
+      "state": "done",
+      "readiness": "done",
+      "phase": "E 文档与语义",
+      "dependencies": [
+        "LOCAL-025",
+        "LOCAL-042"
+      ],
+      "user_stories": [],
+      "functional_requirements": [],
+      "acceptance_refs": [],
+      "design_tasks": [],
+      "external_gates": [],
+      "origin": "discovered-during-execution",
+      "execution_mode": "local-implementation",
+      "github_issue": 81
+    },
+    {
+      "id": "LOCAL-063",
+      "number": 63,
+      "title": "补齐 document_search 适配器错误码到 canonical 目录并保真映射",
+      "file": "issue-063-document-search-error-codes.md",
+      "type": "backend",
+      "priority": "high",
+      "state": "done",
+      "readiness": "done",
+      "phase": "E 文档与语义",
+      "dependencies": [
+        "LOCAL-024",
+        "LOCAL-059"
+      ],
+      "user_stories": [],
+      "functional_requirements": [],
+      "acceptance_refs": [],
+      "design_tasks": [],
+      "external_gates": [],
+      "origin": "discovered-during-execution",
+      "execution_mode": "local-implementation",
+      "github_issue": 82
+    },
+    {
+      "id": "LOCAL-064",
+      "number": 64,
+      "title": "解析器暴露截断 chunk ids 并接线到 ExtractionJobRef.truncatedChunkIds",
+      "file": "issue-064-truncated-chunk-lineage.md",
+      "type": "backend",
+      "priority": "high",
+      "state": "done",
+      "readiness": "done",
+      "phase": "E 文档与语义",
+      "dependencies": [
+        "LOCAL-023",
+        "LOCAL-061"
+      ],
+      "user_stories": [],
+      "functional_requirements": [],
+      "acceptance_refs": [],
+      "design_tasks": [],
+      "external_gates": [],
+      "origin": "discovered-during-execution",
+      "execution_mode": "local-implementation",
+      "github_issue": 83
+    },
+    {
+      "id": "LOCAL-065",
+      "number": 65,
+      "title": "集成测试稳定性加固（容器化测试超时/串行度）+ architecture 超时",
+      "file": "issue-065-integration-test-stability.md",
+      "type": "infra",
+      "priority": "high",
+      "state": "done",
+      "readiness": "done",
+      "phase": "J 收尾",
+      "dependencies": [
+        "LOCAL-022"
+      ],
+      "user_stories": [],
+      "functional_requirements": [],
+      "acceptance_refs": [],
+      "design_tasks": [],
+      "external_gates": [],
+      "origin": "discovered-during-execution",
+      "execution_mode": "local-implementation",
+      "github_issue": 93
+    },
+    {
+      "id": "LOCAL-066",
+      "number": 66,
+      "title": "新增 ForecastPort 并按端口读取 forecast 输入",
+      "file": "issue-066-forecast-port.md",
+      "type": "backend",
+      "priority": "high",
+      "state": "done",
+      "readiness": "done",
+      "phase": "H 行业资产与能源",
+      "dependencies": [
+        "LOCAL-043"
+      ],
+      "user_stories": [],
+      "functional_requirements": [],
+      "acceptance_refs": [],
+      "design_tasks": [],
+      "external_gates": [],
+      "origin": "discovered-during-execution",
+      "execution_mode": "local-implementation",
+      "github_issue": 94
+    },
+    {
+      "id": "LOCAL-067",
+      "number": 67,
+      "title": "search-bm25 连接层错误分类为 SOURCE_UNAVAILABLE",
+      "file": "issue-067-bm25-connection-error-classification.md",
+      "type": "backend",
+      "priority": "high",
+      "state": "done",
+      "readiness": "done",
+      "phase": "E 文档与语义",
+      "dependencies": [
+        "LOCAL-024",
+        "LOCAL-063"
+      ],
+      "user_stories": [],
+      "functional_requirements": [],
+      "acceptance_refs": [],
+      "design_tasks": [],
+      "external_gates": [],
+      "origin": "discovered-during-execution",
+      "execution_mode": "local-implementation",
+      "github_issue": 95
+    },
+    {
+      "id": "LOCAL-068",
+      "number": 68,
+      "title": "tool-handler-assembly 测试的固定 +60s deadline 在慢 beforeAll 下导致 DEADLINE_EXCEEDED",
+      "file": "issue-068-test-deadline-fixtures.md",
+      "type": "infra",
+      "priority": "high",
+      "state": "done",
+      "readiness": "done",
+      "phase": "J 收尾",
+      "dependencies": [
+        "LOCAL-059",
+        "LOCAL-065"
+      ],
+      "user_stories": [],
+      "functional_requirements": [],
+      "acceptance_refs": [],
+      "design_tasks": [],
+      "external_gates": [],
+      "origin": "discovered-during-execution",
+      "execution_mode": "local-implementation",
+      "github_issue": 106
     }
   ],
   "github_remote_url": "https://github.com/Yijtu/ontology.git",
@@ -2251,5 +2600,20 @@
     "prototype_compatibility_required": false,
     "prototype_data_migration_required": false,
     "test_oracle": "independently verified specification fixtures"
-  }
+  },
+  "out_of_plan_ids": [
+    "LOCAL-055",
+    "LOCAL-056",
+    "LOCAL-057",
+    "LOCAL-059",
+    "LOCAL-060",
+    "LOCAL-061",
+    "LOCAL-062",
+    "LOCAL-063",
+    "LOCAL-064",
+    "LOCAL-065",
+    "LOCAL-066",
+    "LOCAL-067",
+    "LOCAL-068"
+  ]
 }
