@@ -7,6 +7,7 @@ import type {
   BudgetReservationRef,
   CancelRequest,
   CancelResponse,
+  Capability,
   CatalogDescribeRequest,
   CatalogDescribeResponse,
   CatalogListRequest,
@@ -24,6 +25,8 @@ import type {
   DecisionResult,
   DocumentSearchRequest,
   DocumentSearchResponse,
+  ForecastReadRequest,
+  ForecastReadResponse,
   GenerationEvent,
   GenerationRequest,
   NonEmptyString,
@@ -166,6 +169,25 @@ export interface TelemetryPort {
     request: TelemetryReadCurrentRequest,
     ctx: ToolContext,
   ): Promise<TelemetryReadCurrentResponse>
+}
+
+/**
+ * C3/E1 forecast port. It is separate from `TelemetryPort` because a forecast is not an
+ * observation: it is issued at a time, targets a future window and comes from a model or a
+ * declared scenario, so it must be marked and versioned as such (INV-10).
+ *
+ * `readForecast` takes an `asOf` bound and must never return a forecast issued after it, so a
+ * snapshot taken at `T` cannot be given future information. The result carries the issue time,
+ * the validity window, the model version and an honest `SourceSnapshot`; the energy normaliser
+ * re-checks the issue time as defence in depth.
+ *
+ * `capability` is the same declared capability/limits shape preflight resolves, so a run that
+ * requires forecast support can be checked before it starts. When no backend is configured the
+ * capability is absent and the caller reports `not_configured` rather than inventing a forecast.
+ */
+export interface ForecastPort {
+  readonly capability: Capability
+  readForecast(request: ForecastReadRequest, ctx: ToolContext): Promise<ForecastReadResponse>
 }
 
 export interface BlobPort {

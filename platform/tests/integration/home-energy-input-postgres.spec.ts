@@ -301,6 +301,7 @@ function request(observationRequests: readonly ObservationReadSpec[]): BuildEner
     coverage: HOME_ENERGY_COVERAGE,
     versions: HOME_ENERGY_INPUT_VERSIONS,
     observationRequests,
+    forecastRequests: [],
   }
 }
 
@@ -431,7 +432,6 @@ describe('energy input normalisation against real PostgreSQL and blob-local', ()
             spec(LIVING_MEASUREMENT_POINT, 'source-a:living', 'energy', 'interval'),
             spec(GARAGE_MEASUREMENT_POINT, 'source-b:garage', 'energy', 'interval'),
           ]),
-          [],
           context.ctx,
         )
         captured.snapshot = snapshot
@@ -498,7 +498,7 @@ describe('energy input normalisation against real PostgreSQL and blob-local', ()
       spec(GARAGE_MEASUREMENT_POINT, 'source-b:garage', 'power', 'instantaneous'),
       spec(LIVING_MEASUREMENT_POINT, 'source-a:living', 'energy', 'interval'),
       spec(GARAGE_MEASUREMENT_POINT, 'source-b:garage', 'energy', 'interval'),
-    ]), [], ctx)))
+    ]), ctx)))
 
     const bytes = await requireValue(blobStore, 'blob store').readAuthorized(
       { scopeRef: activeScope.scopeRef, blobRef: snapshot.snapshotRef },
@@ -565,8 +565,8 @@ describe('energy input normalisation against real PostgreSQL and blob-local', ()
       spec(LIVING_MEASUREMENT_POINT, 'source-a:living', 'power', 'instantaneous'),
       spec(GARAGE_MEASUREMENT_POINT, 'source-b:garage', 'power', 'instantaneous'),
     ])
-    const first = await service.buildSnapshot(requests, [], ctx)
-    const second = await service.buildSnapshot(requests, [], ctx)
+    const first = await service.buildSnapshot(requests, ctx)
+    const second = await service.buildSnapshot(requests, ctx)
     expect(second.digest).toBe(first.digest)
     expect(second.snapshotRef.digest).toBe(first.snapshotRef.digest)
     const origins = await requireValue(blobStore, 'blob store').listOrigins(

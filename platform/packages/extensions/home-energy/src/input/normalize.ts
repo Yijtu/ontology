@@ -13,6 +13,7 @@ import {
   CANONICAL_UNIT,
   type EnergyInputBundle,
   type EnergyMetric,
+  type ForecastOutcomeStatus,
   type ForecastSeriesInput,
   type MissingInput,
   type NormalizeEnergyInputRequest,
@@ -284,6 +285,7 @@ function normalizeForecast(
     validityWindow: forecast.targetInterval,
     method: forecast.method,
     assumptions: [...forecast.assumptions],
+    modelVersion: forecast.modelVersion,
   }
 }
 
@@ -395,6 +397,29 @@ export function normalizeEnergyInput(
     })
   }
 
+  // A forecast the caller requested through `ForecastPort` but that never arrived is reported.
+  // Without a configured backend it is `forecast_not_configured`, never a silent empty result
+  // that a reader could mistake for "no forecast exists".
+  const forecastConfigured = bundle.forecastConfigured ?? true
+  const requestedForecasts = bundle.requestedForecasts ?? []
+  for (const requested of requestedForecasts) {
+    const read = bundle.forecasts.some(
+      (entry) =>
+        entry.measurementPointRef === requested.measurementPointRef &&
+        entry.metric === requested.metric,
+    )
+    if (read) continue
+    missingInputs.push({
+      measurementPointRef: requested.measurementPointRef,
+      metric: requested.metric,
+      purpose: 'forecast',
+      reason: forecastConfigured ? 'not_read' : 'forecast_not_configured',
+    })
+  }
+
+  const forecastOutcome: ForecastOutcomeStatus =
+    requestedForecasts.length > 0 && !forecastConfigured ? 'not_configured' : 'ok'
+
   series.sort((left, right) => {
     const point = left.measurementPointRef.localeCompare(right.measurementPointRef)
     if (point !== 0) return point
@@ -418,6 +443,7 @@ export function normalizeEnergyInput(
     dataMode: request.dataMode,
     sourceWatermarks: sourceWatermarksOf(series),
     missingInputs: sortMissingInputs(missingInputs),
+    forecastOutcome,
   }
 }
 

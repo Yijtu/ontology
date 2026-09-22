@@ -907,6 +907,120 @@
         }
       }
     },
+    "ForecastPoint": {
+      "title": "ForecastPoint",
+      "description": "One forecast sample at the time it targets. `targetTime` is when the value is expected, never when it was observed or issued, so a forecast point can never be mistaken for a recorded observation.",
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["targetTime", "quality"],
+      "properties": {
+        "targetTime": {
+          "$ref": "./common.schema.json#/$defs/Rfc3339UtcTimestamp"
+        },
+        "value": {
+          "$ref": "./common.schema.json#/$defs/DecimalQuantity"
+        },
+        "quality": {
+          "$ref": "#/$defs/TelemetryQuality"
+        }
+      }
+    },
+    "ForecastReadRequest": {
+      "title": "ForecastReadRequest",
+      "description": "C3 forecast read. `asOf` bounds the issue time: a backend must never return a forecast issued after it, so a historical snapshot cannot be given future information. The read is bounded by `targetWindow` and `maxPoints`.",
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["entityRef", "metric", "targetWindow", "asOf"],
+      "properties": {
+        "entityRef": {
+          "$ref": "./common.schema.json#/$defs/ResourceRef"
+        },
+        "metric": {
+          "$ref": "./common.schema.json#/$defs/NonEmptyString"
+        },
+        "targetWindow": {
+          "$ref": "#/$defs/TimeWindow"
+        },
+        "asOf": {
+          "$ref": "./common.schema.json#/$defs/Rfc3339UtcTimestamp"
+        },
+        "expectedUnit": {
+          "$ref": "./common.schema.json#/$defs/UnitCode"
+        },
+        "qualityFloor": {
+          "$ref": "#/$defs/TelemetryQuality"
+        },
+        "maxPoints": {
+          "type": "integer",
+          "minimum": 1,
+          "maximum": 100000
+        }
+      }
+    },
+    "ForecastReadResponse": {
+      "title": "ForecastReadResponse",
+      "description": "A forecast read result. `issuedAt` and `targetWindow` are preserved so a historical snapshot can prove which forecast it used and that the forecast predates the evaluation clock; `modelVersion` pins the producing model/method version and `snapshot` carries the exact source state.",
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "entityRef",
+        "metric",
+        "unit",
+        "issuedAt",
+        "targetWindow",
+        "method",
+        "assumptions",
+        "modelVersion",
+        "points",
+        "quality",
+        "snapshot",
+        "completeness"
+      ],
+      "properties": {
+        "entityRef": {
+          "$ref": "./common.schema.json#/$defs/ResourceRef"
+        },
+        "metric": {
+          "$ref": "./common.schema.json#/$defs/NonEmptyString"
+        },
+        "unit": {
+          "$ref": "./common.schema.json#/$defs/UnitCode"
+        },
+        "issuedAt": {
+          "$ref": "./common.schema.json#/$defs/Rfc3339UtcTimestamp"
+        },
+        "targetWindow": {
+          "$ref": "#/$defs/TimeWindow"
+        },
+        "method": {
+          "$ref": "./common.schema.json#/$defs/NonEmptyString"
+        },
+        "assumptions": {
+          "type": "array",
+          "items": {
+            "$ref": "./common.schema.json#/$defs/NonEmptyString"
+          }
+        },
+        "modelVersion": {
+          "$ref": "./common.schema.json#/$defs/VersionRef"
+        },
+        "points": {
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/ForecastPoint"
+          }
+        },
+        "quality": {
+          "$ref": "#/$defs/TelemetryQuality"
+        },
+        "snapshot": {
+          "$ref": "#/$defs/SourceSnapshot"
+        },
+        "completeness": {
+          "$ref": "./common.schema.json#/$defs/CompletenessStatus"
+        }
+      }
+    },
     "BlobPutImmutableRequest": {
       "title": "BlobPutImmutableRequest",
       "description": "Content-addressed, immutable write. Identical content and media type produce identical digests across local and S3 adapters.",
