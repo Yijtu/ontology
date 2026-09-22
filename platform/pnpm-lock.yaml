@@ -32,6 +32,9 @@ importers:
       '@ontology/adapter-runtime-template':
         specifier: workspace:*
         version: link:packages/adapters/runtime-template
+      '@ontology/adapter-search-bm25':
+        specifier: workspace:*
+        version: link:packages/adapters/search-bm25
       '@ontology/adapter-search-web':
         specifier: workspace:*
         version: link:packages/adapters/search-web
@@ -395,6 +398,13 @@ importers:
       '@ontology/core':
         specifier: workspace:*
         version: link:../../core
+      pg:
+        specifier: ^8.16.3
+        version: 8.23.0
+    devDependencies:
+      '@types/pg':
+        specifier: ^8.15.5
+        version: 8.23.1
 
   packages/adapters/search-web:
     dependencies:
