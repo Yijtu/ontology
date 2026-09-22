@@ -66,4 +66,20 @@ pnpm run test
 - 优先检查跨层依赖、租户隔离、预算/取消、证据丢失、时态与撤回、未经核验发布及模拟/实机混淆；发现问题给出具体触发条件与影响。
 - 区分明确缺陷、设计取舍和建议。格式交给现有 lint；不要为了个人风格扩大重构或改变当前任务范围。
 
+### 已知踩坑
+
+- **Docker 匿名卷泄漏（2026-09，泄漏 4013 个卷 / 约 177 GB，打满 C 盘）**：postgres 官方镜像会为 `/var/lib/postgresql/data` 创建**匿名卷**；`docker run --rm` 在容器被 `docker rm -f <name>` 这种**不带 `-v`**的方式拆除时**不会**回收该匿名卷，于是每跑一次集成测试就泄漏一个约 44 MB 的卷，累积到把宿主盘打满。
+  - 规则：测试里创建容器必须同时管理其**数据卷**。优先挂载**显式命名并打标签**的卷，teardown 时同时删除容器与卷（`docker rm -f -v <c>` + `docker volume rm -f <vol>`），不要依赖 `--rm` 回收匿名卷。
+  - 现状：`platform/tests/integration/postgres-container.ts` 已改为命名卷 + 显式回收，并导出 `sweepOrphanedPostgresVolumes()` 供兜底清扫。
+  - 排查与恢复：`docker system df` 看 `Local Volumes` 的可回收量；只清本项目的卷用
+    `docker volume ls -f label=ontology.test-harness=postgres -q | xargs -r docker volume rm -f`；
+    全局清用 `docker volume prune -f`。
+  - 注意：`docker volume prune` 只释放 VM 内的逻辑空间，**WSL2 的 `docker_data.vhdx` 不会自动收缩**（Docker Desktop 默认在 `C:\Users\<user>\AppData\Local\Docker\wsl\disk\`）。真正还回 C 盘空间需要**管理员**执行磁盘压缩：
+    ```powershell
+    wsl --shutdown
+    diskpart /s compact.txt   # compact.txt: select vdisk file="...\docker_data.vhdx" / attach vdisk readonly / compact vdisk / detach vdisk
+    ```
+    或改用 Docker Desktop 的稀疏磁盘设置。压缩前先确认 `docker system df` 已无可回收空间。
+- **并行测试的固定超时与模块加载期时间**：容器密集并行时 5s 默认超时会误报（见 LOCAL-065/068）。集成测试用显式超时与受控并发；时间相关的测试上下文必须在 `beforeAll`/用例内**相对当前时刻**构造，不要在模块加载时算固定偏移。
+
 本文件随工程约束演进，只保留稳定规则。只有模块出现长期独有要求时才增加局部 `AGENTS.md`，不重复整份 PRD/SPEC，也不维护多份相同约定。
