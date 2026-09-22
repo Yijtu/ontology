@@ -7,6 +7,8 @@ import { registerJobRoutes } from './jobs'
 import type { JobApiOptions } from './jobs'
 import { registerWorkbenchRoutes } from './workbench'
 import type { WorkbenchRouteDependencies } from './workbench'
+import { registerDecisionRoutes } from './decisions'
+import type { DecisionRouteDependencies } from './decisions'
 import { installErrorHandler } from './shared'
 import type { RequestAuthenticator } from './shared'
 
@@ -23,6 +25,8 @@ export interface ApiServerOptions {
   readonly jobs?: { readonly service: JobService }
   /** Register the configuration workbench surface (components/profiles/sources). */
   readonly workbench?: WorkbenchRouteDependencies
+  /** Register the candidate review surface (`GET /candidates`, `POST /candidates/{id}/decision`). */
+  readonly decisions?: Omit<DecisionRouteDependencies, 'authenticate'>
   readonly logger?: boolean
 }
 
@@ -37,6 +41,9 @@ export function createApiServer(options: ApiServerOptions): FastifyInstance {
   }
   if (options.workbench !== undefined) {
     registerWorkbenchRoutes(app, { ...options.workbench, authenticate: options.authenticate })
+  }
+  if (options.decisions !== undefined) {
+    registerDecisionRoutes(app, { ...options.decisions, authenticate: options.authenticate })
   }
   return app
 }
