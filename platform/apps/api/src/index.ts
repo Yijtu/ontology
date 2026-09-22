@@ -54,7 +54,18 @@ export type { JobApiOptions, JobRouteDependencies } from './http/jobs'
 export { registerWorkbenchRoutes } from './http/workbench'
 export type { WorkbenchApiOptions, WorkbenchRouteDependencies } from './http/workbench'
 export { registerDecisionRoutes } from './http/decisions'
-export type { CandidateSummary, DecisionRouteDependencies } from './http/decisions'
+export { detailOf } from './http/decisions'
+export type {
+  CandidateDetailView,
+  CandidateSourceView,
+  CandidateSpanSource,
+  CandidateSummary,
+  DecisionRouteDependencies,
+  EntityCandidateDetail,
+  RelationCandidateDetail,
+  RuleCandidateDetail,
+  RuleUnhandledCandidateDetail,
+} from './http/decisions'
 export { registerPublicationRoutes } from './http/publication'
 export type { PublicationRouteDependencies } from './http/publication'
 export { createRequestToolContext } from './http/context'
@@ -63,6 +74,7 @@ export { formatSseFrame, SSE_HEADERS } from './http/sse'
 export { failureBody, isClassifiedError, isRetryable } from './http/errors'
 export type { ApiFailureBody, ClassifiedApiError } from './http/errors'
 export {
+  CapabilityNotConfiguredError,
   ForbiddenError,
   InvalidRequestFieldError,
   installErrorHandler,

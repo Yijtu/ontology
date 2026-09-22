@@ -201,13 +201,217 @@ button:disabled {
   overflow-wrap: anywhere;
 }
 
+.app__tabs {
+  max-width: 1100px;
+  margin: 0 auto;
+  padding: 16px 24px 0;
+  display: flex;
+  gap: 8px;
+}
+
+.app__tab[data-active="true"] {
+  background: #1c2330;
+  border-color: #1c2330;
+}
+
+.panel__header h2 {
+  margin: 0 0 4px;
+  font-size: 20px;
+}
+
+.panel__hint {
+  margin: 0 0 12px;
+  color: var(--muted);
+  font-size: 13px;
+}
+
+.jobs,
+.review {
+  max-width: 1100px;
+  margin: 0 auto;
+  padding: 24px;
+}
+
+.jobs__lookup {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 12px;
+  align-items: flex-end;
+  background: var(--surface);
+  border: 1px solid var(--line);
+  border-radius: 10px;
+  padding: 16px;
+}
+
+.jobs__field,
+.review__field {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  font-size: 12px;
+  color: var(--muted);
+}
+
+.jobs__field input,
+.review__field input {
+  min-width: 320px;
+  padding: 6px 8px;
+  border: 1px solid var(--line);
+  border-radius: 6px;
+  font-size: 13px;
+}
+
+.jobs__body {
+  margin-top: 16px;
+  background: var(--surface);
+  border: 1px solid var(--line);
+  border-radius: 10px;
+  padding: 16px;
+}
+
+.jobs__stages {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+  list-style: none;
+  margin: 0 0 12px;
+  padding: 0;
+}
+
+.jobs__stage {
+  padding: 6px 10px;
+  border: 1px solid var(--line);
+  border-radius: 999px;
+  font-size: 12px;
+}
+
+.jobs__stage[data-done="true"] {
+  border-color: #1c6b3a;
+  color: #1c6b3a;
+}
+
+.jobs__stage[data-current="true"] {
+  border-color: var(--accent);
+  background: #eaf0ff;
+  font-weight: 600;
+}
+
+.jobs__counts {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 16px;
+}
+
+.jobs__counts [data-failed="true"] {
+  color: var(--danger);
+  font-weight: 600;
+}
+
+.jobs__publication {
+  margin-top: 12px;
+  border-top: 1px dashed var(--line);
+  padding-top: 8px;
+}
+
+.jobs__failure,
+.review__conflict {
+  color: var(--danger);
+  font-weight: 600;
+}
+
+.jobs__notice,
+.review__notice {
+  color: #1c6b3a;
+}
+
+.jobs__attempts ul,
+.review__history,
+.review__spans,
+.review__attributes {
+  list-style: none;
+  margin: 8px 0 0;
+  padding: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  font-size: 13px;
+}
+
+.review__body {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) minmax(0, 2fr);
+  gap: 16px;
+  margin-top: 16px;
+}
+
+.review__queue,
+.review__detail {
+  background: var(--surface);
+  border: 1px solid var(--line);
+  border-radius: 10px;
+  padding: 16px;
+}
+
+.review__queue ul {
+  list-style: none;
+  margin: 8px 0 0;
+  padding: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
+
+.review__queue button {
+  width: 100%;
+  text-align: left;
+  background: var(--surface);
+  color: var(--ink);
+  border-color: var(--line);
+}
+
+.review__queue button[data-selected="true"] {
+  border-color: var(--accent);
+  background: #eaf0ff;
+}
+
+.review__quote {
+  margin: 0;
+  padding: 8px 10px;
+  border-left: 3px solid var(--accent);
+  background: var(--canvas);
+  font-size: 13px;
+}
+
+.review__locator {
+  margin: 4px 0 0;
+  font-size: 12px;
+  color: var(--muted);
+}
+
+.review__source-error,
+.review__missing-source,
+.review__conflict {
+  color: var(--danger);
+  font-size: 13px;
+}
+
+.review__buttons {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+  margin: 8px 0;
+}
+
 /* Narrow viewport: a single column, controls stacked, and the picker fields full width. */
 @media (max-width: 719px) {
-  .workbench {
+  .workbench,
+  .jobs,
+  .review {
     padding: 12px;
   }
 
-  .workbench__body {
+  .workbench__body,
+  .review__body {
     grid-template-columns: minmax(0, 1fr);
   }
 
@@ -217,5 +421,10 @@ button:disabled {
 
   .workbench__body > * {
     padding: 12px;
+  }
+
+  .jobs__field input,
+  .review__field input {
+    min-width: 100%;
   }
 }

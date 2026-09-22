@@ -65,6 +65,21 @@ export class ForbiddenError extends Error {
   }
 }
 
+/**
+ * A surface whose backing capability is not wired on this deployment (for example the
+ * document reader when no parse store is registered). It is a distinct 409 rather than a
+ * 500, so the UI can render an explicit "not configured" state instead of a generic error.
+ */
+export class CapabilityNotConfiguredError extends Error {
+  readonly code = 'CAPABILITY_NOT_CONFIGURED'
+  readonly httpStatus = 409
+
+  constructor(message: string) {
+    super(message)
+    this.name = 'CapabilityNotConfiguredError'
+  }
+}
+
 export type RevisionHeader =
   | { readonly kind: 'absent' }
   | { readonly kind: 'wildcard' }
