@@ -7,6 +7,7 @@ export {
 } from './datasets'
 export * from './energy-input'
 export * from './simulation'
+export * from './planning'
 export type { LogicalObservation, PhysicalRow, SyntheticDatasetMetadata } from './datasets'
 export {
   HOME_ENERGY_COMPILE_BUDGET,
