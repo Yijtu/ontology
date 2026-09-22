@@ -1,6 +1,5 @@
 import { execFile } from 'node:child_process'
 import { randomBytes } from 'node:crypto'
-import { createServer } from 'node:net'
 import { setTimeout as delay } from 'node:timers/promises'
 import { promisify } from 'node:util'
 import { Client } from 'pg'
@@ -16,21 +15,21 @@ export interface PostgresContainer {
   stop(): Promise<void>
 }
 
-async function allocateLoopbackPort(): Promise<number> {
-  return new Promise((resolve, reject) => {
-    const server = createServer()
-    server.unref()
-    server.once('error', reject)
-    server.listen(0, '127.0.0.1', () => {
-      const address = server.address()
-      if (address === null || typeof address === 'string') {
-        server.close(() => reject(new Error('could not allocate a loopback port')))
-        return
-      }
-      const { port } = address
-      server.close(() => resolve(port))
-    })
-  })
+/**
+ * Read the loopback port Docker assigned to the container's 5432 binding. The daemon
+ * owns the allocation (`-p 127.0.0.1::5432`), so it cannot collide with another suite
+ * the way a manual probe-then-bind can.
+ */
+async function publishedLoopbackPort(containerName: string): Promise<number> {
+  const { stdout } = await execFileAsync('docker', ['port', containerName, '5432'])
+  const match = /^127\.0\.0\.1:(\d+)\s*$/m.exec(stdout)
+  const port = match?.[1] === undefined ? undefined : Number(match[1])
+  if (port === undefined || !Number.isInteger(port) || port <= 0) {
+    throw new Error(
+      `could not read the published PostgreSQL port from "docker port": ${stdout.trim()}`,
+    )
+  }
+  return port
 }
 
 async function waitUntilReady(connectionString: string, timeoutMs: number): Promise<void> {
@@ -84,17 +83,16 @@ async function selectImage(): Promise<string> {
 }
 
 /**
- * Start a throwaway PostgreSQL container on a unique name and loopback port so
- * parallel test runs never collide. Credentials are obvious throwaway values and
- * live only in this process.
+ * Start a throwaway PostgreSQL container on a unique name and an ephemeral loopback
+ * port so parallel test runs never collide. Credentials are obvious throwaway values
+ * and live only in this process.
  */
 export async function startPostgresContainer(): Promise<PostgresContainer> {
   const image = await selectImage()
   const suffix = `${process.pid}-${randomBytes(4).toString('hex')}`
-  const containerName = `ontology-pg-node4-${suffix}`
+  const containerName = `ontology-pg-${suffix}`
   const password = `throwaway_${randomBytes(6).toString('hex')}`
   const host = '127.0.0.1'
-  const port = await allocateLoopbackPort()
 
   try {
     await execFileAsync('docker', [
@@ -110,13 +108,21 @@ export async function startPostgresContainer(): Promise<PostgresContainer> {
       '-e',
       'POSTGRES_DB=postgres',
       '-p',
-      `${host}:${port}:5432`,
+      `${host}::5432`,
       image,
     ])
   } catch (error) {
     throw new Error('could not start the throwaway PostgreSQL container (is Docker running?)', {
       cause: error,
     })
+  }
+
+  let port: number
+  try {
+    port = await publishedLoopbackPort(containerName)
+  } catch (error) {
+    await execFileAsync('docker', ['rm', '-f', containerName]).catch(() => undefined)
+    throw error
   }
 
   const adminUrl = `postgresql://postgres:${encodeURIComponent(password)}@${host}:${port}/postgres`
