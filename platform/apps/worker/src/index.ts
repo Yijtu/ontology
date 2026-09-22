@@ -1,6 +1,7 @@
 export {
   createIngestionHandlerRegistry,
   createPostgresJobWorker,
+  createSimulationRunGuard,
   JobWorkerLoop,
   TopicOutboxConsumerRouter,
 } from './composition'
@@ -31,3 +32,5 @@ export type {
   MaterializationPublicationView,
   MaterializationRecordSequence,
 } from './materialization-consumer'
+export { SIMULATION_RESULT_MEDIA_TYPE, SimulationStageHandler, createWorkerStageRegistry } from './simulation-stage'
+export type { SimulationRunGuard, SimulationStageDependencies } from './simulation-stage'

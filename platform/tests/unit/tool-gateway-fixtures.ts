@@ -287,6 +287,8 @@ export function buildGateway(options: {
   readonly ledgerId?: string
   readonly log?: string[]
   readonly failIntent?: boolean
+  readonly operations?: OperationRegistry
+  readonly artifacts?: ImmutableArtifactWriter
 }): GatewayHarness {
   const profile = options.profile ?? fullProfile()
   const log = options.log ?? []
@@ -317,8 +319,9 @@ export function buildGateway(options: {
   }
   const evidence = new InMemoryEvidenceStore()
   evidence.log = log
-  const artifacts = new InMemoryArtifactWriter()
-  artifacts.log = log
+  const harnessArtifacts = new InMemoryArtifactWriter()
+  harnessArtifacts.log = log
+  const artifacts: ImmutableArtifactWriter = options.artifacts ?? harnessArtifacts
   const baseValidator = canonicalToolValidator()
   const validator: ToolSchemaValidator = {
     validateRef: (ref, value) => {
@@ -344,14 +347,14 @@ export function buildGateway(options: {
     runId: options.ctx?.runId ?? GATEWAY_RUN,
     ledgerId: options.ledgerId ?? GATEWAY_LEDGER,
     resolvedProfile: profile,
-    operations: operationRegistry(),
+    operations: options.operations ?? operationRegistry(),
   }
   return {
     gateway: createRunToolGateway(dependencies, binding),
     budget,
     ledgerStore,
     evidence,
-    artifacts,
+    artifacts: harnessArtifacts,
     handlers: options.handlers,
     tools: resolveEnabledTools(profile).map((entry) => entry.definition),
     log,

@@ -43,6 +43,12 @@ export type {
   ToolGatewayComposition,
   ToolGatewayCompositionOptions,
 } from './composition/tool-gateway'
+export {
+  createEnergyComputeConfig,
+  createScopedBlobReader,
+  createSimulationJobPort,
+} from './composition/energy-compute'
+export type { EnergyComputeCompositionOptions } from './composition/energy-compute'
 export { createToolHandlerSet } from './composition/tool-handlers'
 export type { ToolHandlerSetOptions } from './composition/tool-handlers'
 export { createApiServer, createJobApi, createRunApi } from './http/app'
