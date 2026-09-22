@@ -9,3 +9,4 @@
 export * from './input'
 export * from './simulation'
 export * from './planning'
+export * from './compute'

@@ -1,13 +1,19 @@
 import type {
   CatalogListRequest,
   CatalogPort,
+  ComputeOperationHandler,
   ConsistencyLevel,
   DataQueryOutput,
   DirectSqlQueryPlan,
+  ImmutableArtifactWriter,
+  OperationRegistry,
+  OperationRef,
   QueryColumn,
   QueryLimits,
+  ResourceRef,
   ScalarValue,
   ScopeRef,
+  ScopedArtifactReader,
   SemanticAggregation,
   SemanticQueryPlan,
   SourceObjectRef,
@@ -21,6 +27,7 @@ import type {
   ToolCoverage,
   ToolWarning,
 } from '@ontology/contracts'
+import { findRegisteredOperation } from '@ontology/contracts'
 import { cancellationError, raceWithAbort } from '../cancellation'
 import {
   compileSemanticQuery,
@@ -31,7 +38,21 @@ import {
   type SemanticMappingRegistry,
 } from '@ontology/semantic-engine'
 import { ToolGatewayError } from '../errors'
-import type { ToolExecutionOutcome, ToolExecutionRequest, ToolHandler, ToolSourceObservation } from '../types'
+import {
+  assertNoComputeBypass,
+  computeOutcomeOf,
+  computeRequestOf,
+  createScopedArtifactReader,
+  resolveComputeHandler,
+  runComputeWithBudget,
+} from './compute'
+import type {
+  ToolExecutionOutcome,
+  ToolExecutionRequest,
+  ToolHandler,
+  ToolSchemaValidator,
+  ToolSourceObservation,
+} from '../types'
 
 /**
  * `data_query` handler (C3/C4). It serves `describe` and the `query` union in both modes:
@@ -46,6 +67,19 @@ import type { ToolExecutionOutcome, ToolExecutionRequest, ToolHandler, ToolSourc
  * The handler never opens a connection (the port is injected), never calls a model and
  * never starts a planner.
  */
+export interface DataQueryComputeConfig {
+  /** The deployment's registered operations (ADR-11). */
+  readonly registry: OperationRegistry
+  /** The registered operation handlers, bound at the composition root, keyed by operation id. */
+  readonly handlers: readonly ComputeOperationHandler[]
+  /** Immutable, content-addressed result archive for a compute handler's own artifact. */
+  readonly artifacts: ImmutableArtifactWriter
+  /** Scoped reader for the approved immutable input refs; never a filesystem/DB credential. */
+  readonly reader: ScopedArtifactReader
+  /** Canonical schema validator, so the handler re-checks the registered input schema. */
+  readonly validator: ToolSchemaValidator
+}
+
 export interface DataQueryHandlerConfig {
   readonly query: StructuredQueryPort
   readonly catalog?: CatalogPort
@@ -56,6 +90,8 @@ export interface DataQueryHandlerConfig {
   readonly consistency?: ConsistencyLevel
   /** Source a catalog describe is attributed to when it returns no resources. */
   readonly catalogSourceRef?: SourceRef
+  /** Absent means `data_query.kind=compute` is explicitly not configured for this deployment. */
+  readonly compute?: DataQueryComputeConfig
 }
 
 const DEFAULT_MAX_JOIN_FANOUT = 1000
@@ -211,11 +247,107 @@ export class DataQueryHandler implements ToolHandler {
     const args = request.arguments
     if (args.kind === 'describe') return this.#describe(args, request)
     if (args.kind === 'query') return this.#query(args, request)
-    throw new ToolGatewayError(
-      'HANDLER_FAILED',
-      'compute data_query is served by a registered operation handler, not the query handler',
-      { platformCode: 'CAPABILITY_NOT_CONFIGURED' },
+    if (args.kind === 'compute') return this.#compute(args, request)
+    throw new ToolGatewayError('INVALID_ARGUMENTS', 'data_query requires kind describe, query or compute')
+  }
+
+  /**
+   * `kind=compute` (ADR-11, C3/C4). The gateway has already resolved the operation against
+   * the registered registry, the resolved profile and the operation schema. The handler
+   * re-checks the registered schema, refuses any file/network/script bypass field, hands the
+   * registered industry handler only a reader scoped to the approved input refs, and runs it
+   * under the operation's declared CPU budget and the propagated deadline. The operation
+   * handler itself is bound at the composition root, never selected by model input.
+   */
+  async #compute(
+    args: Readonly<Record<string, unknown>>,
+    request: ToolExecutionRequest,
+  ): Promise<ToolExecutionOutcome> {
+    const compute = this.#config.compute
+    if (compute === undefined) {
+      throw new ToolGatewayError(
+        'HANDLER_FAILED',
+        'compute operations are not configured for this deployment',
+        { platformCode: 'CAPABILITY_NOT_CONFIGURED' },
+      )
+    }
+    const operationRefValue = args.operationRef
+    const digest = args.inputSchemaDigest
+    const parameters = args.parameters
+    const inputRefs = args.inputRefs
+    if (
+      !isRecord(operationRefValue) ||
+      typeof operationRefValue.id !== 'string' ||
+      typeof operationRefValue.version !== 'string' ||
+      typeof digest !== 'string' ||
+      !isRecord(parameters) ||
+      !Array.isArray(inputRefs)
+    ) {
+      throw new ToolGatewayError(
+        'INVALID_ARGUMENTS',
+        'a compute call requires operationRef{id,version}, inputSchemaDigest, inputRefs and typed parameters',
+      )
+    }
+    const operationRef: OperationRef = { id: operationRefValue.id, version: operationRefValue.version }
+    const operation = findRegisteredOperation(compute.registry, operationRef, digest)
+    if (operation === undefined) {
+      throw new ToolGatewayError(
+        'UNKNOWN_COMPUTE_OPERATION',
+        `operation ${operationRef.id}@${operationRef.version} is not registered with the declared input schema digest`,
+        { platformCode: 'CAPABILITY_NOT_CONFIGURED' },
+      )
+    }
+    const validation = compute.validator.validateInline(operation.inputSchema, parameters)
+    if (!validation.valid) {
+      throw new ToolGatewayError(
+        'INVALID_ARGUMENTS',
+        'compute parameters do not match the registered operation schema',
+        {
+          fieldErrors: validation.issues.map((issue) => ({
+            pointer: `/parameters${issue.pointer === '' ? '' : issue.pointer}`,
+            reason: issue.reason,
+          })),
+        },
+      )
+    }
+    const refs = inputRefs as ResourceRef[]
+    if (args.dataMode === 'live') {
+      throw new ToolGatewayError(
+        'INVALID_ARGUMENTS',
+        'the compute path is simulation-only; a model-supplied live data mode is refused',
+        { platformCode: 'CAPABILITY_NOT_CONFIGURED' },
+      )
+    }
+    assertNoComputeBypass(parameters, refs)
+    const handler = resolveComputeHandler(compute.handlers, operationRef)
+    if (handler === undefined) {
+      throw new ToolGatewayError(
+        'HANDLER_NOT_REGISTERED',
+        `no handler is registered for the enabled operation ${operationRef.id}@${operationRef.version}`,
+        { platformCode: 'CAPABILITY_NOT_CONFIGURED' },
+      )
+    }
+    const readInput = createScopedArtifactReader(compute.reader, refs)
+    const result = await runComputeWithBudget(
+      ({ signal }) =>
+        handler.execute(
+          computeRequestOf({
+            operationRef,
+            parameters,
+            inputRefs: refs,
+            readInput,
+            artifacts: compute.artifacts,
+            limits: operation.limits,
+            deadline: request.deadline,
+            ctx: request.ctx,
+            signal,
+          }),
+        ),
+      operation.limits.maxDurationMs,
+      request.deadline,
+      request.signal,
     )
+    return computeOutcomeOf(result)
   }
 
   #limits(request: ToolExecutionRequest, requested: number | undefined): QueryLimits {

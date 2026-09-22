@@ -40,7 +40,15 @@ export type {
   WebSearchHandlerOptions,
 } from './web-search'
 export { DataQueryHandler, OntologyLookupHandler } from './handlers'
-export type { DataQueryHandlerConfig, OntologyLookupHandlerConfig } from './handlers'
+export type { DataQueryComputeConfig, DataQueryHandlerConfig, OntologyLookupHandlerConfig } from './handlers'
+export {
+  assertNoComputeBypass,
+  computeOutcomeOf,
+  computeRequestOf,
+  createScopedArtifactReader,
+  resolveComputeHandler,
+  runComputeWithBudget,
+} from './handlers'
 export {
   canonicalJson,
   digestOfSchema,

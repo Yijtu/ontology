@@ -12,6 +12,12 @@ const INTEGRATION_HOOK_TIMEOUT_MS = 300_000
 // has no container dependency, so it only needs a larger per-test budget.
 const ARCHITECTURE_TEST_TIMEOUT_MS = 60_000
 
+// The contracts project shells out to the schema-generation script. Under a loaded
+// machine (the integration suites are starting containers in parallel) that child
+// process can exceed vitest's 5s default, which made `pnpm run verify` intermittently
+// red. Give the unit/contracts project one explicit, generous budget too.
+const UNIT_TEST_TIMEOUT_MS = 30_000
+
 // Container-backed suites contend for the Docker daemon, host ports and child
 // processes. At the machine's default file parallelism they fight each other (and the
 // other worktrees sharing the host), which is what produced the intermittent timeouts.
@@ -33,6 +39,7 @@ export default defineConfig({
             'tests/contracts/**/*.spec.ts',
             'tests/ui/**/*.spec.ts',
           ],
+          testTimeout: UNIT_TEST_TIMEOUT_MS,
         },
       },
       {

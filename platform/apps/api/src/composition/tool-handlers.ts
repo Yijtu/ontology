@@ -10,7 +10,7 @@ import type {
 } from '@ontology/contracts'
 import type { OntologyLookupService, SemanticMappingRegistry } from '@ontology/semantic-engine'
 import { DataQueryHandler, OntologyLookupHandler, WebSearchHandler } from '@ontology/tool-services'
-import type { ToolHandler } from '@ontology/tool-services'
+import type { DataQueryComputeConfig, ToolHandler } from '@ontology/tool-services'
 
 /**
  * The tool-handler assembly for a deployment (C4, LOCAL-059).
@@ -44,6 +44,8 @@ export interface ToolHandlerSetOptions {
     readonly consistency?: ConsistencyLevel
     readonly catalogSourceRef?: SourceRef
   }
+  /** Absent means `data_query.kind=compute` is not configured for this deployment. */
+  readonly compute?: DataQueryComputeConfig
 }
 
 export function createToolHandlerSet(options: ToolHandlerSetOptions): readonly ToolHandler[] {
@@ -58,6 +60,7 @@ export function createToolHandlerSet(options: ToolHandlerSetOptions): readonly T
       : { estimatedBytesPerRow: dataQuery.estimatedBytesPerRow }),
     ...(dataQuery.consistency === undefined ? {} : { consistency: dataQuery.consistency }),
     ...(dataQuery.catalogSourceRef === undefined ? {} : { catalogSourceRef: dataQuery.catalogSourceRef }),
+    ...(options.compute === undefined ? {} : { compute: options.compute }),
   })
   const webHandler = new WebSearchHandler({
     ...(options.webSearch === undefined ? {} : { provider: options.webSearch }),

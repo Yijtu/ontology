@@ -1,5 +1,10 @@
 import { DocumentParseStageHandler, JobWorker, OutboxDispatcher } from '@ontology/application'
-import type { JobStageHandler, JobStageHandlerRegistry, OutboxConsumer } from '@ontology/application'
+import type {
+  JobStageHandler,
+  JobStageHandlerRegistry,
+  OutboxConsumer,
+  RunService,
+} from '@ontology/application'
 import {
   ControlPostgresDatabase,
   ControlPostgresRepository,
@@ -21,6 +26,7 @@ import {
   MaterializationOutboxConsumer,
 } from './materialization-consumer'
 import type { MaterializationPublicationView } from './materialization-consumer'
+import type { SimulationRunGuard } from './simulation-stage'
 
 export interface MaterializationWorkerOptions {
   /** The published read view (the real `PostgresSemanticPublicationStore` in production). */
@@ -183,6 +189,26 @@ export function createIngestionHandlerRegistry(
   byStage.set('received', new DocumentParseStageHandler({ parser: options.parser }))
   for (const handler of options.downstream) byStage.set(handler.stage, handler)
   return { get: (stage) => byStage.get(stage) }
+}
+
+/**
+ * Quarantine a simulation result when its run has already been cancelled. The guard reads the
+ * real run state and records a late result as an abandoned attempt, so a durable simulation
+ * job that finishes after a cancel can never revive or publish the run (SPEC C5/D7, ADR-12).
+ */
+export function createSimulationRunGuard(runService: RunService): SimulationRunGuard {
+  return {
+    async quarantineIfCancelled(runId, input, ctx): Promise<boolean> {
+      const run = await runService.getRun(runId, ctx)
+      if (run.state !== 'cancelled' && run.state !== 'cancelling') return false
+      await runService.recordLateResult(
+        runId,
+        { attemptId: input.attemptId, reason: input.reason },
+        ctx,
+      )
+      return true
+    },
+  }
 }
 
 /** One unit of work: the trusted tenant/space scope plus its server-minted tool context. */
