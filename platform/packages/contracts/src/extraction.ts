@@ -11,6 +11,14 @@ import type {
 } from './generated/contracts'
 import type { DocumentChunkRecord } from './document-parse'
 import type { ToolContext } from './trusted'
+import type {
+  RuleConflict,
+  RuleExceptionNode,
+  RuleExpressionNode,
+  RuleImpact,
+  RuleReviewRequirement,
+  RuleUnhandledReason,
+} from './rule-extraction'
 
 /**
  * Entity/relation candidate extraction contracts (SPEC D4, C2/C3, US-012/US-015).
@@ -26,8 +34,12 @@ import type { ToolContext } from './trusted'
  * a reviewer can locate the evidence and a later stage can pin the version.
  */
 
-/** The two candidate families LOCAL-027 produces. Rule candidates are LOCAL-028. */
-export type CandidateKind = 'entity' | 'relation'
+/**
+ * The candidate families the extraction pipeline produces. LOCAL-027 produces `entity` and
+ * `relation`; LOCAL-028 extends the same pipeline with `rule` (a representable bounded rule
+ * AST) and `rule_unhandled` (an expression that could not be represented faithfully).
+ */
+export type CandidateKind = 'entity' | 'relation' | 'rule' | 'rule_unhandled'
 
 /**
  * Candidate review lifecycle. `produced` is the state an extraction stage writes; the
@@ -55,6 +67,9 @@ export type CandidateIssueCode =
   | 'ENDPOINT_TYPE_MISMATCH'
   | 'SPAN_NOT_RESOLVED'
   | 'TRUNCATED_CHUNK'
+  | 'RULE_UNSUPPORTED_EXPRESSION'
+  | 'RULE_UNRESOLVED_REFERENCE'
+  | 'CONFLICTING_RULE'
 
 export interface CandidateIssue {
   readonly code: CandidateIssueCode
@@ -144,7 +159,45 @@ export interface RelationCandidate extends CandidateCommon {
   readonly to: CandidateEndpoint
 }
 
-export type CandidateRecord = EntityCandidate | RelationCandidate
+/**
+ * A representable rule candidate (D4.3/D5, US-013). It carries a bounded AST whose every
+ * element is span-linked, the exceptions kept attached to the rule, the applicability scope
+ * (`objectId`), the review requirement and any conflicts. It is a candidate only: it can never
+ * be published just because its JSON is valid (D4.6).
+ */
+export interface RuleCandidate extends CandidateCommon {
+  readonly kind: 'rule'
+  readonly ruleId: string
+  /** The applicability scope: the object the constraint applies to. */
+  readonly objectId: string
+  readonly severity: 'hard' | 'soft'
+  readonly impact: RuleImpact
+  readonly reviewRequirement: RuleReviewRequirement
+  readonly expression: RuleExpressionNode
+  readonly exceptions: readonly RuleExceptionNode[]
+  /** Contradictory rules on the same scope, surfaced explicitly and never auto-resolved. */
+  readonly conflicts: readonly RuleConflict[]
+}
+
+/**
+ * A rule the extractor could not represent faithfully. It is never weakened into a looser
+ * rule; the offending expression is kept verbatim with a classified reason and the candidate
+ * enters review (`pending_review`). It carries no executable expression.
+ */
+export interface RuleUnhandledCandidate extends CandidateCommon {
+  readonly kind: 'rule_unhandled'
+  readonly ruleId?: string
+  readonly reason: RuleUnhandledReason
+  readonly detail: string
+  /** The offending model expression, preserved verbatim so nothing is lost. */
+  readonly rawExpression: string
+}
+
+export type CandidateRecord =
+  | EntityCandidate
+  | RelationCandidate
+  | RuleCandidate
+  | RuleUnhandledCandidate
 
 export interface CandidateInsertResult {
   readonly inserted: number

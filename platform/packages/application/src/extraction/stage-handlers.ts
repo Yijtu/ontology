@@ -99,6 +99,8 @@ export class ExtractionStageHandler implements JobStageHandler {
           candidateCount: result.candidateIds.length,
           modelCalls: result.modelCalls,
           deterministicCandidates: result.deterministicCandidates,
+          ruleCandidates: result.ruleCandidates,
+          unhandledRules: result.unhandledRules,
         },
         idempotencyKey: `extraction-candidates-produced:${context.job.jobId}`,
         availableAt: now,

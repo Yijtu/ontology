@@ -9,6 +9,7 @@ import type {
   CandidateState,
   CandidateStore,
   DocumentChunkRecord,
+  DraftRule,
   EntityCandidate,
   ExtractionInputVersion,
   GenerationOutputLimit,
@@ -20,6 +21,8 @@ import type {
   ModelRef,
   RelationCandidate,
   ResourceRef,
+  RuleCandidate,
+  RuleUnhandledCandidate,
   ScopeRef,
   ToolContext,
   ToolUsage,
@@ -32,12 +35,17 @@ import type { DraftCandidates, DraftEntity, DraftRelation, DraftRelationEndpoint
 import { parseModelCandidates } from './model-output'
 import { mapNativeEntities, parseNativeRecord } from './native-mapping'
 import type { NativeEntityMapping } from './native-mapping'
+import { buildRuleAst, detectCyclicRules } from './rule-ast'
+import type { RuleExceptionDraft } from './rule-ast'
+import { detectRuleConflicts } from './rule-conflicts'
 import {
   dedupeIssues,
   isHardIssue,
   truncatedChunkIssue,
   validateEntity,
   validateRelation,
+  validateRule,
+  validateRuleUnhandled,
 } from './schema-validation'
 import type {
   ExtractionInput,
@@ -140,6 +148,28 @@ function extractionIdempotencyKey(payload: unknown): string {
   return sha256DigestOf(canonicalJson(payload))
 }
 
+function ruleSpanOf(chunk: DocumentChunkRecord, parseId: Uuid): CandidateSourceSpan {
+  return spanOf(chunk, parseId)
+}
+
+/** A rule draft collected from one chunk, before cross-chunk exception merging. */
+interface PendingRule {
+  readonly draft: DraftRule
+  readonly chunk: DocumentChunkRecord
+  readonly state: CandidateState
+  readonly issues: readonly CandidateIssue[]
+  readonly usage: GenerationUsage
+}
+
+/** An exception draft from one chunk, targeting a rule that may live in another chunk. */
+interface PendingException {
+  readonly exceptionId: string
+  readonly targetRuleId: string
+  readonly condition: unknown
+  readonly chunk: DocumentChunkRecord
+  readonly usage: GenerationUsage
+}
+
 function sortedAttributes(attributes: EntityCandidate['attributes']): readonly EntityCandidate['attributes'][number][] {
   return [...attributes].sort((left, right) => (left.attributeId < right.attributeId ? -1 : 1))
 }
@@ -185,6 +215,8 @@ export class ExtractionPipeline {
     const recordedAt = this.#now()
     const inputVersion = inputVersionOf(input)
     const records: CandidateRecord[] = []
+    const pendingRules: PendingRule[] = []
+    const pendingExceptions: PendingException[] = []
     let modelCalls = 0
     let deterministicCandidates = 0
 
@@ -247,12 +279,30 @@ export class ExtractionPipeline {
           }),
         )
       }
+      for (const draft of model.draft.rules) {
+        pendingRules.push({ draft, chunk, state, issues, usage: model.usage })
+      }
+      model.draft.exceptions.forEach((exception, index) => {
+        pendingExceptions.push({
+          exceptionId: `${exception.targetRuleId}:${chunk.chunkId}:${String(index)}`,
+          targetRuleId: exception.targetRuleId,
+          condition: exception.condition,
+          chunk,
+          usage: model.usage,
+        })
+      })
     }
+
+    records.push(
+      ...this.#ruleRecords({ input, inputVersion, recordedAt, schema, pendingRules, pendingExceptions }),
+    )
 
     const inserted =
       records.length === 0
         ? { inserted: 0, existing: 0, candidateIds: [] as Uuid[] }
         : await this.#candidates.insertCandidates(scopeRef, records, run.ctx)
+    const ruleCandidates = records.filter((record) => record.kind === 'rule').length
+    const unhandledRules = records.filter((record) => record.kind === 'rule_unhandled').length
     return {
       candidateIds: inserted.candidateIds,
       counts: {
@@ -263,6 +313,8 @@ export class ExtractionPipeline {
       },
       modelCalls,
       deterministicCandidates,
+      ruleCandidates,
+      unhandledRules,
     }
   }
 
@@ -279,13 +331,21 @@ export class ExtractionPipeline {
     const transitionedAt = this.#now()
     let pendingReview = 0
     let failed = 0
+    let conflicts = 0
 
     for (const candidate of candidates) {
       throwIfAborted(run.signal)
-      const discovered =
-        candidate.kind === 'entity'
-          ? validateEntity(candidate, schema)
-          : validateRelation(candidate, schema, entityById)
+      let discovered: CandidateIssue[]
+      if (candidate.kind === 'entity') {
+        discovered = validateEntity(candidate, schema)
+      } else if (candidate.kind === 'relation') {
+        discovered = validateRelation(candidate, schema, entityById)
+      } else if (candidate.kind === 'rule') {
+        discovered = validateRule(candidate, schema)
+        if (candidate.conflicts.length > 0) conflicts += 1
+      } else {
+        discovered = validateRuleUnhandled(candidate)
+      }
       const truncation = candidate.sourceSpans
         .filter((span) => truncated.has(span.chunkId))
         .map((span) => truncatedChunkIssue(span.chunkId))
@@ -306,6 +366,7 @@ export class ExtractionPipeline {
       counts: { total: candidates.length, processed: pendingReview, failed, skipped: 0 },
       pendingReview,
       failed,
+      conflicts,
     }
   }
 
@@ -440,6 +501,169 @@ export class ExtractionPipeline {
       deterministic: false,
       state: args.state,
       issues: [...args.issues],
+      inputVersion: args.inputVersion,
+      usage: args.usage,
+      idempotencyKey,
+      recordedAt: args.recordedAt,
+    }
+  }
+
+  /**
+   * Build the rule candidates and unhandled-rule records from the collected drafts (D4.3/D5).
+   *
+   * Cross-chunk exceptions are merged back onto their rule by `targetRuleId`, so an exception
+   * that lives in another chunk/section stays attached to the rule it qualifies. A cycle, an
+   * unsupported operator/quantifier or an unrepresentable exception is recorded as an explicit
+   * unhandled item with the raw expression kept verbatim; the rule is never loosened.
+   */
+  #ruleRecords(args: {
+    readonly input: ExtractionInput
+    readonly inputVersion: ExtractionInputVersion
+    readonly recordedAt: string
+    readonly schema: IndustrySchema
+    readonly pendingRules: readonly PendingRule[]
+    readonly pendingExceptions: readonly PendingException[]
+  }): CandidateRecord[] {
+    const cyclic = detectCyclicRules(args.pendingRules.map((entry) => entry.draft))
+    const exceptionsByTarget = new Map<string, PendingException[]>()
+    for (const exception of args.pendingExceptions) {
+      const list = exceptionsByTarget.get(exception.targetRuleId) ?? []
+      list.push(exception)
+      exceptionsByTarget.set(exception.targetRuleId, list)
+    }
+    const knownRuleIds = new Set(args.pendingRules.map((entry) => entry.draft.ruleId))
+
+    const candidates: RuleCandidate[] = []
+    const out: CandidateRecord[] = []
+
+    for (const entry of args.pendingRules) {
+      const ruleSpans = [ruleSpanOf(entry.chunk, args.input.parseId)]
+      const exceptionDrafts: RuleExceptionDraft[] = []
+      const exceptionSpans: CandidateSourceSpan[] = []
+      entry.draft.exceptions.forEach((condition, index) => {
+        exceptionDrafts.push({
+          exceptionId: `${entry.draft.ruleId}:inline:${String(index)}`,
+          condition,
+          spans: ruleSpans,
+        })
+      })
+      for (const exception of exceptionsByTarget.get(entry.draft.ruleId) ?? []) {
+        const spans = [ruleSpanOf(exception.chunk, args.input.parseId)]
+        exceptionDrafts.push({ exceptionId: exception.exceptionId, condition: exception.condition, spans })
+        exceptionSpans.push(...spans)
+      }
+
+      const result = buildRuleAst(entry.draft, ruleSpans, exceptionDrafts, cyclic)
+      if (result.kind === 'unhandled') {
+        out.push(
+          this.#unhandledRuleRecord({
+            input: args.input,
+            inputVersion: args.inputVersion,
+            recordedAt: args.recordedAt,
+            chunk: entry.chunk,
+            ruleId: entry.draft.ruleId,
+            reason: result.reason,
+            detail: result.detail,
+            rawExpression: JSON.stringify(entry.draft.expression),
+            usage: entry.usage,
+          }),
+        )
+        continue
+      }
+
+      const reviewRequirement =
+        entry.draft.impact === 'high' || entry.draft.severity === 'hard' ? 'required' : 'policy_eligible'
+      const idempotencyKey = extractionIdempotencyKey({
+        jobId: args.input.jobId,
+        chunkId: entry.chunk.chunkId,
+        kind: 'rule',
+        ruleId: entry.draft.ruleId,
+        expression: result.expression,
+        exceptions: result.exceptions,
+      })
+      candidates.push({
+        kind: 'rule',
+        candidateId: candidateIdFor(idempotencyKey),
+        jobId: args.input.jobId,
+        ruleId: entry.draft.ruleId,
+        objectId: entry.draft.objectId,
+        severity: entry.draft.severity,
+        impact: entry.draft.impact,
+        reviewRequirement,
+        expression: result.expression,
+        exceptions: result.exceptions,
+        conflicts: [],
+        sourceSpans: [...ruleSpans, ...exceptionSpans],
+        deterministic: false,
+        state: entry.state,
+        issues: [...entry.issues],
+        inputVersion: args.inputVersion,
+        usage: entry.usage,
+        idempotencyKey,
+        recordedAt: args.recordedAt,
+      })
+    }
+
+    const conflicts = detectRuleConflicts(candidates, args.schema)
+    for (const candidate of candidates) {
+      const found = conflicts.get(candidate.candidateId)
+      out.push(found === undefined ? candidate : { ...candidate, conflicts: found })
+    }
+
+    for (const [targetRuleId, exceptions] of exceptionsByTarget) {
+      if (knownRuleIds.has(targetRuleId)) continue
+      for (const exception of exceptions) {
+        out.push(
+          this.#unhandledRuleRecord({
+            input: args.input,
+            inputVersion: args.inputVersion,
+            recordedAt: args.recordedAt,
+            chunk: exception.chunk,
+            ruleId: targetRuleId,
+            reason: 'UNRESOLVED_EXCEPTION_TARGET',
+            detail: `exception targets rule "${targetRuleId}" which was not extracted`,
+            rawExpression: JSON.stringify(exception.condition),
+            usage: exception.usage,
+          }),
+        )
+      }
+    }
+    return out
+  }
+
+  #unhandledRuleRecord(args: {
+    readonly input: ExtractionInput
+    readonly inputVersion: ExtractionInputVersion
+    readonly recordedAt: string
+    readonly chunk: DocumentChunkRecord
+    readonly ruleId: string
+    readonly reason: RuleUnhandledCandidate['reason']
+    readonly detail: string
+    readonly rawExpression: string
+    readonly usage: GenerationUsage
+  }): RuleUnhandledCandidate {
+    const idempotencyKey = extractionIdempotencyKey({
+      jobId: args.input.jobId,
+      chunkId: args.chunk.chunkId,
+      kind: 'rule_unhandled',
+      ruleId: args.ruleId,
+      reason: args.reason,
+      detail: args.detail,
+    })
+    return {
+      kind: 'rule_unhandled',
+      candidateId: candidateIdFor(idempotencyKey),
+      jobId: args.input.jobId,
+      ruleId: args.ruleId,
+      reason: args.reason,
+      detail: args.detail,
+      rawExpression: args.rawExpression,
+      sourceSpans: [ruleSpanOf(args.chunk, args.input.parseId)],
+      deterministic: false,
+      // An unhandled rule enters review with its reason; it is never silently dropped and never
+      // becomes a looser executable rule.
+      state: 'pending_review',
+      issues: [],
       inputVersion: args.inputVersion,
       usage: args.usage,
       idempotencyKey,
