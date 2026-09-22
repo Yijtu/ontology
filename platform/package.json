@@ -10,9 +10,10 @@
   },
   "scripts": {
     "lint": "eslint .",
-    "typecheck": "tsc -p tsconfig.json && tsc -p apps/web/tsconfig.json",
+    "typecheck": "tsc -p tsconfig.json && tsc -p apps/web/tsconfig.json && tsc -p tsconfig.acceptance.json",
     "build:web": "pnpm --filter @ontology/app-web run build",
     "test": "vitest run",
+    "test:acceptance": "vitest run --project acceptance",
     "test:e2e": "vitest run --config vitest.e2e.config.ts",
     "boundaries": "vitest run tests/architecture",
     "verify": "pnpm run lint && pnpm run typecheck && pnpm run test"

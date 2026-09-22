@@ -36,6 +36,15 @@ const LOAD_HOOK_TIMEOUT_MS = 300_000
 const LOAD_MAX_WORKERS = 2
 const LOAD_GROUP_ORDER = 2
 
+// The cross-layer acceptance suite (LOCAL-054) starts its own PostgreSQL container, runs the
+// real ingestion worker, the real workflow controller with both runtimes and the real HTTP
+// host. It runs in its own sequence group after the load harness so the two container-backed
+// suites never compete for the Docker daemon or the host's ports.
+const ACCEPTANCE_TEST_TIMEOUT_MS = 180_000
+const ACCEPTANCE_HOOK_TIMEOUT_MS = 300_000
+const ACCEPTANCE_MAX_WORKERS = 2
+const ACCEPTANCE_GROUP_ORDER = 3
+
 export default defineConfig({
   test: {
     environment: 'node',
@@ -80,6 +89,17 @@ export default defineConfig({
           hookTimeout: LOAD_HOOK_TIMEOUT_MS,
           maxWorkers: LOAD_MAX_WORKERS,
           sequence: { groupOrder: LOAD_GROUP_ORDER },
+        },
+      },
+      {
+        extends: true,
+        test: {
+          name: 'acceptance',
+          include: ['tests/e2e/acceptance/**/*.acceptance.spec.ts'],
+          testTimeout: ACCEPTANCE_TEST_TIMEOUT_MS,
+          hookTimeout: ACCEPTANCE_HOOK_TIMEOUT_MS,
+          maxWorkers: ACCEPTANCE_MAX_WORKERS,
+          sequence: { groupOrder: ACCEPTANCE_GROUP_ORDER },
         },
       },
     ],
