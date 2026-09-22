@@ -12,6 +12,7 @@ export { PostgresBudgetLedgerStore } from './budget-ledger-store'
 export { PostgresEvidenceStore } from './evidence-store'
 export { PostgresJobStore } from './job-store'
 export { PostgresCandidateStore } from './candidate-store'
+export { PostgresIdentityDecisionStore } from './identity-decision-store'
 export { ControlPostgresRepository } from './repository'
 export type {
   ControlOperationContext,

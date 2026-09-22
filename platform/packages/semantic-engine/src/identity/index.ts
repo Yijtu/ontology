@@ -12,6 +12,20 @@ export { StructuredIdentityIndexReader } from './structured-reader'
 export { containsValidAt, normalizeIdentityText, uniqueStrings } from './canonical'
 export { IdentityRecallError, isIdentityRecallError } from './errors'
 export type { IdentityRecallErrorCode } from './errors'
+export { IdentityDecisionService } from './decision-service'
+export { InMemoryIdentityDecisionStore } from './in-memory-decision-store'
+export {
+  IdentityDecisionError,
+  isIdentityDecisionError,
+} from './decision-types'
+export type {
+  IdentityDecisionErrorCode,
+  IdentityDecisionListFilter,
+  IdentityDecisionRequest,
+  IdentityDecisionServiceDependencies,
+  IdentityDecisionView,
+  ResolvedIdentityTarget,
+} from './decision-types'
 export type {
   EntityCandidateRecallDependencies,
   EntityRecallRequest,
