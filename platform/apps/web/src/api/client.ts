@@ -3,12 +3,18 @@ import type {
   CapabilityRequirement,
   ComponentKind,
   ComponentVersionRecord,
+  DependencyGraphView,
+  DependencyTraversalRequest,
   DeploymentEnvironment,
+  EvidenceReadQuery,
   LogicalRole,
   MappingRef,
   ModuleLifecycleState,
+  ObjectHistoryQuery,
+  ObjectHistoryView,
   PreflightResult,
   ProfileRef,
+  ProvenanceEvidenceView,
   PublishedAnswer,
   ProfileSpec,
   ProfileVersionRecord,
@@ -20,6 +26,8 @@ import type {
   VersionRef,
 } from '@ontology/contracts'
 import { ApiError, toApiFailure } from './errors'
+import { dependencyQuery, optionalTimeQuery } from './provenance'
+import type { DependencyPage, HistoryPage } from './provenance'
 import { defaultRunEventStreamFactory, isRunState } from './query'
 import type {
   CancelRunRequest,
@@ -483,6 +491,57 @@ export class WorkbenchClient {
         idempotencyKey: this.#newId(),
       },
     )
+  }
+
+  /** `GET /evidence/{id}`: the authorized provenance view of one evidence item. */
+  getEvidence(evidenceId: string, query: EvidenceReadQuery = {}): Promise<ProvenanceEvidenceView> {
+    return this.#request<ProvenanceEvidenceView>(
+      'GET',
+      `/api/v1/evidence/${encodeURIComponent(evidenceId)}${optionalTimeQuery(query)}`,
+    )
+  }
+
+  /**
+   * `GET /evidence/{id}/dependencies`: one bounded page of the real evidence dependency graph.
+   * `nextCursor` is the envelope's `meta.nextCursor`; `graph.coverage.truncated` marks an
+   * incomplete traversal that must not be presented as completeness.
+   */
+  getEvidenceDependencies(
+    evidenceId: string,
+    traversal: DependencyTraversalRequest,
+  ): Promise<DependencyPage> {
+    return this.#requestWithMeta<DependencyGraphView>(
+      `/api/v1/evidence/${encodeURIComponent(evidenceId)}/dependencies?${dependencyQuery(traversal)}`,
+    ).then(({ data, nextCursor }) => ({ graph: data, nextCursor }))
+  }
+
+  /** `GET /objects/{id}/history`: one bounded page of immutable assertion versions. */
+  getObjectHistory(objectId: string, query: ObjectHistoryQuery = {}): Promise<HistoryPage> {
+    return this.#requestWithMeta<ObjectHistoryView>(
+      `/api/v1/objects/${encodeURIComponent(objectId)}/history${optionalTimeQuery(query)}`,
+    ).then(({ data, nextCursor }) => ({ view: data, nextCursor }))
+  }
+
+  async #requestWithMeta<T>(path: string): Promise<{ data: T; nextCursor: string | undefined }> {
+    const response = await this.#fetch(`${this.#baseUrl}${path}`, {
+      method: 'GET',
+      headers: { accept: 'application/json' },
+    })
+    const text = await response.text()
+    let parsed: unknown
+    try {
+      parsed = text.length === 0 ? undefined : JSON.parse(text)
+    } catch {
+      parsed = undefined
+    }
+    if (!response.ok) {
+      throw new ApiError(response.status, toApiFailure(response.status, parsed))
+    }
+    const data = dataOf<T>(parsed, path)
+    const meta = isRecord(parsed) && isRecord(parsed['meta']) ? parsed['meta'] : undefined
+    const nextCursor =
+      meta !== undefined && typeof meta['nextCursor'] === 'string' ? meta['nextCursor'] : undefined
+    return { data, nextCursor }
   }
 
   async #request<T>(method: string, path: string, options: RequestOptions = {}): Promise<T> {

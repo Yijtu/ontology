@@ -13,9 +13,14 @@ const params = new URLSearchParams(window.location.search)
 const boundRunId = params.get('run') ?? undefined
 const rawView = params.get('view')
 const initialView: AppView =
-  rawView === 'query' || rawView === 'jobs' || rawView === 'review' ? rawView : 'workbench'
+  rawView === 'query' || rawView === 'jobs' || rawView === 'review' || rawView === 'evidence'
+    ? rawView
+    : 'workbench'
 const jobId = params.get('job') ?? undefined
 const candidateId = params.get('candidate') ?? undefined
+// `?evidence=<id>&object=<id>` deep-links the provenance/history surface for browser repro.
+const evidenceId = params.get('evidence') ?? undefined
+const objectId = params.get('object') ?? undefined
 
 const container = document.getElementById('root')
 if (container !== null) {
@@ -26,6 +31,8 @@ if (container !== null) {
       {...(boundRunId === undefined ? {} : { boundRunId })}
       {...(jobId === undefined ? {} : { initialJobId: jobId })}
       {...(candidateId === undefined ? {} : { initialCandidateId: candidateId })}
+      {...(evidenceId === undefined ? {} : { initialEvidenceId: evidenceId })}
+      {...(objectId === undefined ? {} : { initialObjectId: objectId })}
     />,
   )
 }

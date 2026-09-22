@@ -14,6 +14,36 @@ export { CandidateReviewPanel } from './components/CandidateReviewPanel'
 export type { CandidateReviewPanelProps } from './components/CandidateReviewPanel'
 export { QueryPanel } from './components/QueryPanel'
 export type { QueryPanelProps } from './components/QueryPanel'
+export { EvidencePanel } from './components/EvidencePanel'
+export type { EvidencePanelProps } from './components/EvidencePanel'
+export { evidenceReducer, initialEvidenceState } from './state/evidence'
+export type {
+  AssertionComparison,
+  ComparisonChange,
+  EvidenceEvent,
+  EvidencePhase,
+  EvidenceState,
+} from './state/evidence'
+export { dependencyQuery, historyFingerprint, optionalTimeQuery } from './api/provenance'
+export type {
+  AssertionVersion,
+  DependencyDirection,
+  DependencyGraphView,
+  DependencyNodeView,
+  DependencyPage,
+  DependencyTraversalRequest,
+  EvidenceDependencyDirection,
+  EvidenceDependencyEdge,
+  EvidenceReadQuery,
+  HistoricalAssertionView,
+  HistoryPage,
+  ObjectHistoryQuery,
+  ObjectHistoryView,
+  ProvenanceEvidenceView,
+  ProvenancePremiseGroupView,
+  ProvenanceSourceView,
+  SourceReReadability,
+} from './api/provenance'
 export { initialQueryState, isRunActive, queryReducer } from './state/query'
 export type {
   ClarificationView,

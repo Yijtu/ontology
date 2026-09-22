@@ -5,8 +5,15 @@ import { createRequestToolContext } from './context'
 import { authenticateRequest, readQueryInteger, readQueryString, readTraceId } from './shared'
 import type { AuthenticatedRequest, RequestAuthenticator } from './shared'
 
+/**
+ * The read methods the history surface needs. The real `HistoryReadService` satisfies it;
+ * declaring the surface as the picked public methods lets the composition pass the concrete
+ * service and a UI test pass a controlled double without re-implementing the class.
+ */
+export type HistoryReadSurface = Pick<HistoryReadService, 'getObjectHistory'>
+
 export interface HistoryRouteDependencies {
-  readonly service: HistoryReadService
+  readonly service: HistoryReadSurface
   readonly authenticate: RequestAuthenticator
 }
 
