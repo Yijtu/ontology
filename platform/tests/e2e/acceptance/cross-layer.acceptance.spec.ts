@@ -28,6 +28,7 @@ let snapshotHash = ''
 let jobId = ''
 let candidateId = ''
 let statementId = ''
+let statementObjectId = ''
 let propositionKey = ''
 let lookupEvidenceId = ''
 
@@ -90,11 +91,14 @@ describe('LOCAL-054 cross-layer acceptance — ingestion and extraction', () => 
     const result = await injectJson(env.app, 'GET', `/api/v1/candidates?jobId=${jobId}`)
     expect(result.status).toBe(200)
     const candidates = dataOf<{
-      candidates: { candidateId: string; kind: string; state: string }[]
+      candidates: { candidateId: string; kind: string; state: string; objectId?: string }[]
     }>(result).candidates
     expect(candidates.length).toBeGreaterThanOrEqual(2)
     expect(candidates.every((entry) => entry.state === 'pending_review')).toBe(true)
-    const entity = candidates.find((entry) => entry.kind === 'entity')
+    // Prefer the `device` entity so the published statement and its history are deterministic.
+    const entity =
+      candidates.find((entry) => entry.kind === 'entity' && entry.objectId === 'device') ??
+      candidates.find((entry) => entry.kind === 'entity')
     if (entity === undefined) throw new Error('no entity candidate was produced')
     candidateId = entity.candidateId
   })
@@ -157,10 +161,12 @@ describe('LOCAL-054 cross-layer acceptance — review and semantic publication',
   it('reads the published statement back as active', async () => {
     const statement = await injectJson(env.app, 'GET', `/api/v1/statements/${statementId}`)
     expect(statement.status).toBe(200)
-    const data = dataOf<{ status: string; propositionKey: string }>(statement)
+    const data = dataOf<{ status: string; propositionKey: string; objectId: string }>(statement)
     expect(data.status).toBe('active')
     propositionKey = data.propositionKey
+    statementObjectId = data.objectId
     expect(propositionKey.length).toBeGreaterThan(0)
+    expect(statementObjectId.length).toBeGreaterThan(0)
   })
 })
 
@@ -299,7 +305,7 @@ describe('LOCAL-054 cross-layer acceptance — question, tools, verification, an
 
 describe('LOCAL-054 cross-layer acceptance — retraction and history replay', () => {
   it('retracts the statement, preserves history and replays at the original recordedAt', async () => {
-    const before = await env.history.getObjectHistory('device', {}, env.scope.ctx)
+    const before = await env.history.getObjectHistory(statementObjectId, {}, env.scope.ctx)
     const versionOne = before.assertions.find((assertion) => assertion.version === '1')
     if (versionOne === undefined) throw new Error('the published statement has no version 1')
 
@@ -314,7 +320,7 @@ describe('LOCAL-054 cross-layer acceptance — retraction and history replay', (
     expect(revisions.status).toBe(200)
     expect(dataOf<{ revisions: unknown[] }>(revisions).revisions).toHaveLength(1)
 
-    const full = await injectJson(env.app, 'GET', '/api/v1/objects/device/history')
+    const full = await injectJson(env.app, 'GET', `/api/v1/objects/${statementObjectId}/history`)
     expect(full.status).toBe(200)
     const versions = new Map(
       dataOf<{ assertions: { version: string; status: string }[] }>(full).assertions.map((entry) => [
@@ -328,7 +334,7 @@ describe('LOCAL-054 cross-layer acceptance — retraction and history replay', (
     const replay = await injectJson(
       env.app,
       'GET',
-      `/api/v1/objects/device/history?recordedAt=${encodeURIComponent(versionOne.recordedAt)}`,
+      `/api/v1/objects/${statementObjectId}/history?recordedAt=${encodeURIComponent(versionOne.recordedAt)}`,
     )
     expect(replay.status).toBe(200)
     const replayed = dataOf<{ assertions: { version: string }[] }>(replay).assertions
