@@ -6,6 +6,60 @@ import { Client } from 'pg'
 
 const execFileAsync = promisify(execFile)
 
+/**
+ * Harness label applied to the containers and data volumes this helper creates.
+ *
+ * PITFALL (observed 2026-09, leaked 4013 volumes / ~177 GB): the postgres image
+ * creates an anonymous volume for `/var/lib/postgresql/data`. `docker run --rm`
+ * does NOT reclaim that volume when the container is torn down with a bare
+ * `docker rm -f <name>` — the bare form leaves the anonymous volume orphaned, so
+ * every integration run leaked one ~44 MB volume until `docker system df` showed
+ * 177 GB of reclaimable volumes and the host disk filled up.
+ *
+ * The harness therefore mounts an explicitly *named*, labelled volume so cleanup
+ * is targeted and verifiable, and always removes both container and volume. If
+ * volumes are ever leaked again, reclaim only ours with:
+ *   docker volume ls -f label=ontology.test-harness=postgres -q | xargs -r docker volume rm -f
+ */
+const HARNESS_LABEL = 'ontology.test-harness=postgres'
+
+async function removeContainerAndVolume(containerName: string, volumeName: string): Promise<void> {
+  await execFileAsync('docker', ['rm', '-f', '-v', containerName]).catch(() => undefined)
+  await execFileAsync('docker', ['volume', 'rm', '-f', volumeName]).catch(() => undefined)
+}
+
+/**
+ * Remove harness data volumes left behind by an earlier crash or kill. Volumes
+ * still attached to a running container are refused by the daemon and skipped,
+ * so this never disturbs a concurrently running suite.
+ */
+export async function sweepOrphanedPostgresVolumes(): Promise<number> {
+  try {
+    const { stdout } = await execFileAsync('docker', [
+      'volume',
+      'ls',
+      '-f',
+      `label=${HARNESS_LABEL}`,
+      '-q',
+    ])
+    const names = stdout
+      .split('\n')
+      .map((line) => line.trim())
+      .filter((line) => line !== '')
+    let removed = 0
+    for (const name of names) {
+      const ok = await execFileAsync('docker', ['volume', 'rm', '-f', name]).then(
+        () => true,
+        () => false,
+      )
+      if (ok) removed += 1
+    }
+    return removed
+  } catch {
+    return 0
+  }
+}
+
 export interface PostgresContainer {
   readonly containerName: string
   readonly host: string
@@ -93,6 +147,11 @@ export async function startPostgresContainer(): Promise<PostgresContainer> {
   const containerName = `ontology-pg-${suffix}`
   const password = `throwaway_${randomBytes(6).toString('hex')}`
   const host = '127.0.0.1'
+  const volumeName = `ontology-pg-data-${suffix}`
+
+  await execFileAsync('docker', ['volume', 'create', '--label', HARNESS_LABEL, volumeName]).catch(
+    () => undefined,
+  )
 
   try {
     await execFileAsync('docker', [
@@ -107,11 +166,14 @@ export async function startPostgresContainer(): Promise<PostgresContainer> {
       'POSTGRES_USER=postgres',
       '-e',
       'POSTGRES_DB=postgres',
+      '-v',
+      `${volumeName}:/var/lib/postgresql/data`,
       '-p',
       `${host}::5432`,
       image,
     ])
   } catch (error) {
+    await removeContainerAndVolume(containerName, volumeName)
     throw new Error('could not start the throwaway PostgreSQL container (is Docker running?)', {
       cause: error,
     })
@@ -121,7 +183,7 @@ export async function startPostgresContainer(): Promise<PostgresContainer> {
   try {
     port = await publishedLoopbackPort(containerName)
   } catch (error) {
-    await execFileAsync('docker', ['rm', '-f', containerName]).catch(() => undefined)
+    await removeContainerAndVolume(containerName, volumeName)
     throw error
   }
 
@@ -129,7 +191,7 @@ export async function startPostgresContainer(): Promise<PostgresContainer> {
   try {
     await waitUntilReady(adminUrl, 90_000)
   } catch (error) {
-    await execFileAsync('docker', ['rm', '-f', containerName]).catch(() => undefined)
+    await removeContainerAndVolume(containerName, volumeName)
     throw error
   }
 
@@ -140,7 +202,7 @@ export async function startPostgresContainer(): Promise<PostgresContainer> {
     adminUrl,
     image,
     stop: async () => {
-      await execFileAsync('docker', ['rm', '-f', containerName]).catch(() => undefined)
+      await removeContainerAndVolume(containerName, volumeName)
     },
   }
 }
