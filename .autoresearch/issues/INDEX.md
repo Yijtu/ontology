@@ -170,6 +170,12 @@
 | [LOCAL-069](issue-069-materialization-worker-wiring.md) | 把 IncrementalMaterializer 接入 worker 装配并注册语义物化 outbox 消费者 | backend | 已交付 #117 |
 | [LOCAL-070](issue-070-publication-fence-in-transaction.md) | 发布事务内开启失效围栏（消除 publish-commit→worker-consume 窗口） | backend | 已交付 #123 |
 
+| [LOCAL-069](issue-069-materialization-worker-wiring.md) | 把 IncrementalMaterializer 接入 worker 装配并注册语义物化 outbox 消费者 | backend | 已交付 #117 |
+| [LOCAL-070](issue-070-publication-fence-in-transaction.md) | 发布事务内开启失效围栏（消除 publish-commit→worker-consume 窗口） | backend | 已交付 #123 |
+
+| [LOCAL-069](issue-069-materialization-worker-wiring.md) | 把 IncrementalMaterializer 接入 worker 装配并注册语义物化 outbox 消费者 | backend | 已交付 #117 |
+| [LOCAL-070](issue-070-publication-fence-in-transaction.md) | 发布事务内开启失效围栏（消除 publish-commit→worker-consume 窗口） | backend | 已交付 #123 |
+
 ## 用户追加卡片
 
 | ID | 主题 | 类型 | 状态 |
