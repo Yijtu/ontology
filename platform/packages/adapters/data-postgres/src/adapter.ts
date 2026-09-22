@@ -28,6 +28,7 @@ import type {
   StructuredQueryPort,
   StructuredQueryValidateRequest,
   StructuredQueryValidateResponse,
+  SupportedDataType,
   ToolContext,
   ToolCoverage,
   VersionRef,
@@ -67,6 +68,21 @@ const CANCEL_CONFIRM_TIMEOUT_MS = 5_000
 const PROBE_CANCEL_TIMEOUT_MS = 8_000
 const PROBE_REGISTER_TIMEOUT_MS = 2_000
 const PROBE_SLEEP_SECONDS = 5
+const PROBE_TYPE_TIMEOUT_MS = 5_000
+
+/**
+ * One expression per canonical data type. The probe runs this against the live read-only
+ * role and maps the observed result OIDs through the same `columnTypeFromOid` the query path
+ * uses, so `supportedDataTypes` is the set actually produced, not a static claim.
+ */
+const PROBE_TYPE_SQL = `SELECT
+  CAST('probe' AS text) AS string_value,
+  CAST(1 AS bigint) AS integer_value,
+  CAST(1.5 AS numeric) AS decimal_value,
+  CAST(true AS boolean) AS boolean_value,
+  CAST('2020-01-01T00:00:00Z' AS timestamptz) AS timestamp_value,
+  CAST('{"probe":1}' AS jsonb) AS json_value,
+  CAST('\\x00' AS bytea) AS binary_value`
 
 interface InFlightQuery {
   readonly targetRef: string
@@ -358,34 +374,51 @@ export class PostgresQueryAdapter implements StructuredQueryPort, CatalogPort, S
   /**
    * Bounded, real probe (C3/C6): it discovers the catalog, fetches a page, attempts a real
    * cancel and reports the snapshot consistency it actually observed.
+   *
+   * The resolved secret reaches the probe only through the injected connection the composition
+   * root built from it; the value is never inlined and is used here only to scrub any message
+   * the probe might otherwise surface. A source whose catalog cannot be observed throws, so
+   * the registry leaves it `failed` rather than `ready`.
    */
   async probe(request: SourceProbeRequest, ctx: ToolContext): Promise<SourceProbeObservation> {
     assertTrustedContext(ctx)
-    void request
-    const resources = await this.#discoverResources(ctx)
-    const schemaRevision = catalogRevisionOf(resources)
-    const catalog: CatalogDescribeResponse = {
-      resources: resources.map((resource) => ({ ...resource, schemaRevision })),
-      schemaRevision,
-    }
-    const page = await this.listResources({ scopeRef: scopeOf(ctx), limit: 1 }, ctx)
-    const cancellation = await this.#attemptCancellation()
-    return {
-      adapterRef: this.#adapterRef,
-      catalog,
-      pagination: {
-        kind: 'opaque_cursor',
-        pagesFetched: 1,
-        exhausted: page.nextCursor === null,
-      },
-      cancellation,
-      snapshot: { consistency: 'repeatable_read', schemaRevision },
-      limits: this.#limits,
-      supportedDataTypes: [...SUPPORTED_DATA_TYPES],
-      capabilities: [
-        { name: 'catalog.describe', version: '1.0.0' },
-        { name: 'structured_query.execute', version: '1.0.0' },
-      ],
+    try {
+      const resources = await this.#discoverResources(ctx)
+      if (resources.length === 0) {
+        throw new PostgresQueryError(
+          'SOURCE_UNAVAILABLE',
+          'the probe observed no mapped relation for this source',
+        )
+      }
+      const schemaRevision = catalogRevisionOf(resources)
+      const catalog: CatalogDescribeResponse = {
+        resources: resources.map((resource) => ({ ...resource, schemaRevision })),
+        schemaRevision,
+      }
+      const page = await this.listResources({ scopeRef: scopeOf(ctx), limit: 1 }, ctx)
+      const cancellation = await this.#attemptCancellation()
+      const supportedDataTypes = await this.#observeSupportedDataTypes()
+      return {
+        adapterRef: this.#adapterRef,
+        catalog,
+        pagination: {
+          kind: 'opaque_cursor',
+          pagesFetched: 1,
+          exhausted: page.nextCursor === null,
+        },
+        cancellation,
+        snapshot: { consistency: 'repeatable_read', schemaRevision },
+        limits: this.#limits,
+        supportedDataTypes,
+        capabilities: [
+          { name: 'catalog.describe', version: '1.0.0' },
+          { name: 'structured_query.execute', version: '1.0.0' },
+        ],
+      }
+    } catch (error) {
+      if (error instanceof PostgresQueryError) throw error
+      const message = error instanceof Error ? error.message : 'the source probe failed'
+      throw new PostgresQueryError('SOURCE_UNAVAILABLE', request.secret.redact(message), { cause: error })
     }
   }
 
@@ -568,6 +601,23 @@ export class PostgresQueryAdapter implements StructuredQueryPort, CatalogPort, S
           : 0,
     )
     return resources
+  }
+
+  /**
+   * Observe the canonical types the read-only role can actually produce. The probe returns the
+   * intersection of what it observed with the adapter's normalisation contract, so a type the
+   * backend could not produce is omitted instead of being asserted.
+   */
+  async #observeSupportedDataTypes(): Promise<SupportedDataType[]> {
+    const observed = await this.#db.withReadOnlySnapshot({
+      statementTimeoutMs: PROBE_TYPE_TIMEOUT_MS,
+      operation: async (session) => {
+        const result = await session.client.query(PROBE_TYPE_SQL)
+        return result.fields.map((field) => columnTypeFromOid(field.dataTypeID))
+      },
+    })
+    const produced = new Set(observed)
+    return SUPPORTED_DATA_TYPES.filter((type) => produced.has(type))
   }
 
   async #attemptCancellation(): Promise<{

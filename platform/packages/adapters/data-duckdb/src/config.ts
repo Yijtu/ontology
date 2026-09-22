@@ -3,6 +3,7 @@ import type {
   QueryColumn,
   SchemaVersion,
   SourceObjectRef,
+  VersionRef,
 } from '@ontology/contracts'
 
 /**
@@ -32,6 +33,12 @@ export interface DuckDbAdapterLimits {
 
 export interface DuckDbAdapterConfig {
   readonly relations: readonly RegisteredRelation[]
+  /**
+   * Adapter identity reported by `probe` and matched against the registered source binding.
+   * Defaults to `DATA_DUCKDB_ADAPTER_REF`; an override lets a test or a deployment register a
+   * distinct adapter version without changing the adapter code.
+   */
+  readonly adapterRef?: VersionRef
   /** Schema revision reported by the catalog and recorded on every snapshot. */
   readonly catalogSchemaRevision: SchemaVersion
   /** `:memory:` by default; a file path is opened read-only. */

@@ -1,3 +1,5 @@
+import { setTimeout as delay } from 'node:timers/promises'
+import { sha256DigestOf } from '@ontology/core'
 import {
   isToolContext,
   type CancelRequest,
@@ -9,27 +11,35 @@ import {
   type CatalogResource,
   type ColumnType,
   type DirectSqlQueryPlan,
+  type ObservedCancellation,
+  type ObservedPagination,
   type OpaqueCursor,
   type PlatformError,
+  type ProbeCapability,
   type QueryColumn,
   type QueryLimits,
   type QueryPlan,
   type ScalarValue,
   type ScopeRef,
   type SourceObjectRef,
+  type SourceProbeAdapter,
+  type SourceProbeObservation,
+  type SourceProbeRequest,
   type SourceRef,
   type SourceSnapshot,
   type StructuredQueryExecuteRequest,
   type StructuredQueryExecuteResponse,
   type StructuredQueryValidateRequest,
   type StructuredQueryValidateResponse,
+  type SupportedDataType,
   type ToolContext,
   type ToolCoverage,
+  type VersionRef,
 } from '@ontology/contracts'
 import { DuckDbAdapterError } from './errors'
 import type { DuckDbAdapterErrorCode } from './errors'
-import { DuckDbEngine } from './engine'
-import type { SessionExecution } from './engine'
+import { DuckDBTypeId, DuckDbEngine } from './engine'
+import type { DuckDbSession, SessionExecution } from './engine'
 import type { DuckDbAdapterConfig, DuckDbAdapterLimits, RegisteredRelation } from './config'
 import { DEFAULT_DUCKDB_LIMITS, RelationRegistry } from './config'
 import {
@@ -42,6 +52,47 @@ import { validateSql } from './validator'
 import type { SandboxValidation } from './validator'
 
 const DEFAULT_PAGE_LIMIT = 50
+
+/**
+ * Adapter identity a source binding pins. `probe` reports exactly this ref and the registry
+ * rejects an observation that answers for a different adapter version, so the identity is
+ * explicit rather than inferred from the class.
+ */
+export const DATA_DUCKDB_ADAPTER_REF: VersionRef = {
+  id: '@ontology/adapter-data-duckdb',
+  version: '1.0.0',
+  digest: sha256DigestOf('@ontology/adapter-data-duckdb@1.0.0'),
+}
+
+/**
+ * One real expression per canonical data type. The probe runs each against the live engine
+ * and reports only the types the engine actually accepted, so an unsupported type is omitted
+ * instead of being asserted from a static list.
+ */
+const PROBE_TYPE_CANDIDATES: readonly { readonly dataType: SupportedDataType; readonly sql: string }[] = [
+  { dataType: 'string', sql: "SELECT CAST('probe' AS VARCHAR) AS probe_value" },
+  { dataType: 'integer', sql: 'SELECT CAST(1 AS BIGINT) AS probe_value' },
+  { dataType: 'decimal', sql: 'SELECT CAST(1.5 AS DECIMAL(18,4)) AS probe_value' },
+  { dataType: 'boolean', sql: 'SELECT CAST(true AS BOOLEAN) AS probe_value' },
+  { dataType: 'timestamp', sql: "SELECT CAST('2020-01-01 00:00:00' AS TIMESTAMP) AS probe_value" },
+  { dataType: 'json', sql: "SELECT CAST({'probe': 1} AS STRUCT(probe INTEGER)) AS probe_value" },
+  { dataType: 'binary', sql: "SELECT CAST('\\x00'::BLOB AS BLOB) AS probe_value" },
+]
+
+/** A bounded, pure-CPU query used to observe whether an in-process interrupt really stops work. */
+const PROBE_CANCEL_SQL = 'SELECT count(*) AS probe_value FROM range(0, 100000000000) AS probe_range(i)'
+const PROBE_CANCEL_ARM_MS = 150
+const PROBE_CANCEL_TIMEOUT_MS = 8_000
+
+/**
+ * The capability names the adapter serves. Each is confirmed by a real operation during the
+ * probe (`catalog.describe` by reading the engine catalog, `structured_query.execute` by a
+ * bounded read), so the probe does not advertise an unexercised capability.
+ */
+const PROBE_CAPABILITIES: readonly ProbeCapability[] = [
+  { name: 'catalog.describe', version: '1.0.0' },
+  { name: 'structured_query.execute', version: '1.0.0' },
+]
 
 const DEFAULT_PHYSICAL_TYPES: Readonly<Record<ColumnType, string>> = {
   string: 'VARCHAR',
@@ -114,6 +165,10 @@ function sameObjectRef(left: SourceObjectRef, right: SourceObjectRef): boolean {
   return sameSourceRef(left.sourceRef, right.sourceRef) && left.objectPath === right.objectPath
 }
 
+function scopeOf(ctx: ToolContext): ScopeRef {
+  return { tenantId: ctx.principal.tenantId, spaceId: ctx.allowedResources.spaceId }
+}
+
 function platformError(code: PlatformError['code'], message: string): PlatformError {
   return { code, message, retryable: false }
 }
@@ -146,12 +201,13 @@ const PLATFORM_CODE: Readonly<Record<DuckDbAdapterErrorCode, PlatformError['code
  * see canonical columns, canonical values and a `SourceSnapshot`. Semantic plans are not
  * compiled here (that is LOCAL-026), so they are answered with `UNSUPPORTED_QUERY`.
  */
-export class DuckDbQueryAdapter {
+export class DuckDbQueryAdapter implements SourceProbeAdapter {
   readonly #config: DuckDbAdapterConfig
   readonly #registry: RelationRegistry
   readonly #engine: DuckDbEngine
   readonly #allowedTableFunctions: ReadonlySet<string>
   readonly #limits: DuckDbAdapterLimits
+  readonly #adapterRef: VersionRef
   readonly #now: () => string
   readonly #inFlight = new Map<string, Set<{ interrupt(): void; close(): void }>>()
   readonly #cancelled = new Set<string>()
@@ -165,10 +221,15 @@ export class DuckDbQueryAdapter {
       (config.allowedTableFunctions ?? []).map((name) => name.toLowerCase()),
     )
     this.#limits = { ...DEFAULT_DUCKDB_LIMITS, ...config.defaultLimits }
+    this.#adapterRef = config.adapterRef ?? DATA_DUCKDB_ADAPTER_REF
     this.#now = config.now ?? (() => new Date().toISOString())
     this.#engine = new DuckDbEngine(
       config.instancePath === undefined ? {} : { instancePath: config.instancePath },
     )
+  }
+
+  get adapterRef(): VersionRef {
+    return this.#adapterRef
   }
 
   async start(): Promise<void> {
@@ -189,6 +250,155 @@ export class DuckDbQueryAdapter {
   async engineVersion(): Promise<string> {
     await this.start()
     return this.#engine.version()
+  }
+
+  /**
+   * Bounded, real probe (C3/C6). It reads the live engine catalog, exercises a page of the
+   * catalog listing, attempts a real interrupt and observes which canonical types the engine
+   * actually accepts. Anything it cannot observe throws, so the registry leaves the binding
+   * `failed` instead of optimistically `ready`.
+   *
+   * The probe is a trusted setup path, but it must not widen what the engine may touch: it
+   * runs only against the registered relations and a pure-CPU `range` expression, through the
+   * same hardened instance (`enable_external_access=false`, no `ATTACH`/`INSTALL`/`LOAD`).
+   */
+  async probe(request: SourceProbeRequest, ctx: ToolContext): Promise<SourceProbeObservation> {
+    this.#assertTrustedContext(ctx)
+    await this.start()
+    try {
+      const catalog = await this.#observeCatalog()
+      const pagination = await this.#observePagination(scopeOf(ctx), ctx)
+      const cancellation = await this.#attemptCancellation()
+      const supportedDataTypes = await this.#observeSupportedDataTypes()
+      return {
+        adapterRef: this.#adapterRef,
+        catalog,
+        pagination,
+        cancellation,
+        snapshot: {
+          consistency: this.#config.consistency ?? 'repeatable_read',
+          schemaRevision: this.#config.catalogSchemaRevision,
+        },
+        limits: {
+          maxRows: this.#limits.maxRows,
+          maxBytes: this.#limits.maxBytes,
+          maxDurationMs: this.#limits.maxDurationMs,
+        },
+        supportedDataTypes,
+        capabilities: [...PROBE_CAPABILITIES],
+      }
+    } catch (error) {
+      if (error instanceof DuckDbAdapterError) throw error
+      const message = error instanceof Error ? error.message : 'the source probe failed'
+      throw new DuckDbAdapterError('SOURCE_UNAVAILABLE', request.secret.redact(message), { cause: error })
+    }
+  }
+
+  /**
+   * Read the catalog the engine actually holds for every registered relation. A relation that
+   * was declared but never materialised is a partial probe: the engine cannot describe it, so
+   * the probe fails rather than reporting a catalog it did not observe.
+   */
+  async #observeCatalog(): Promise<CatalogDescribeResponse> {
+    const registered = [...this.#registry.list()].sort((left, right) =>
+      left.relation < right.relation ? -1 : left.relation > right.relation ? 1 : 0,
+    )
+    if (registered.length === 0) {
+      throw new DuckDbAdapterError('SOURCE_UNAVAILABLE', 'the source registers no relation to probe')
+    }
+    const session = await this.#engine.createSession()
+    try {
+      const resources: CatalogResource[] = []
+      for (const relation of registered) {
+        resources.push({
+          objectRef: relation.objectRef,
+          schemaRevision: relation.schemaRevision,
+          columns: await this.#observeRelation(session, relation),
+        })
+      }
+      return { resources, schemaRevision: this.#config.catalogSchemaRevision }
+    } finally {
+      session.close()
+    }
+  }
+
+  async #observeRelation(session: DuckDbSession, relation: RegisteredRelation): Promise<QueryColumn[]> {
+    let execution: SessionExecution
+    try {
+      execution = await session.executeReadOnly(
+        `SELECT * FROM ${quoteRelation(relation.relation)} LIMIT 0`,
+        [],
+        0,
+      )
+    } catch (error) {
+      throw new DuckDbAdapterError(
+        'SOURCE_UNAVAILABLE',
+        `the registered relation "${relation.relation}" could not be observed in the engine`,
+        { cause: error },
+      )
+    }
+    return execution.columnNames.map((name, index) => ({
+      name,
+      type: normaliseColumnType(execution.columnTypeIds[index] ?? DuckDBTypeId.INVALID),
+    }))
+  }
+
+  /** Fetch real pages until the listing is exhausted, so `pagesFetched` is observed, not assumed. */
+  async #observePagination(scopeRef: ScopeRef, ctx: ToolContext): Promise<ObservedPagination> {
+    const first = await this.listResources({ scopeRef, limit: 1 }, ctx)
+    if (first.nextCursor === null) {
+      return { kind: 'opaque_cursor', pagesFetched: 1, exhausted: true }
+    }
+    const second = await this.listResources({ scopeRef, limit: 1, cursor: first.nextCursor }, ctx)
+    return { kind: 'opaque_cursor', pagesFetched: 2, exhausted: second.nextCursor === null }
+  }
+
+  /** Issue a real interrupt against a bounded CPU query and report whether it stopped the work. */
+  async #attemptCancellation(): Promise<ObservedCancellation> {
+    const session = await this.#engine.createSession()
+    try {
+      const settled = session
+        .executeReadOnly(PROBE_CANCEL_SQL, [], 1)
+        .then(() => 'settled' as const, () => 'interrupted' as const)
+      await delay(PROBE_CANCEL_ARM_MS)
+      session.interrupt()
+      const outcome = await Promise.race([
+        settled,
+        delay(PROBE_CANCEL_TIMEOUT_MS).then(() => 'timeout' as const),
+      ])
+      return outcome === 'interrupted'
+        ? { support: 'supported', attempted: true }
+        : { support: 'best_effort', attempted: false }
+    } finally {
+      session.interrupt()
+      session.close()
+    }
+  }
+
+  /**
+   * Observe type support by running one expression per canonical type. A type the engine
+   * refuses is omitted from the result, so the probe reports the actual supported scope.
+   */
+  async #observeSupportedDataTypes(): Promise<SupportedDataType[]> {
+    const session = await this.#engine.createSession()
+    try {
+      const supported: SupportedDataType[] = []
+      for (const candidate of PROBE_TYPE_CANDIDATES) {
+        try {
+          const execution = await session.executeReadOnly(candidate.sql, [], 1)
+          const typeId = execution.columnTypeIds[0]
+          if (typeId !== undefined && normaliseColumnType(typeId) === candidate.dataType) {
+            supported.push(candidate.dataType)
+          }
+        } catch {
+          // The engine refused the expression, so the canonical type is not offered. Omitting it
+          // is the honest report; the probe never claims a type it could not produce.
+        }
+      }
+      return supported
+    } finally {
+      session.close()
+    }
   }
 
   /**

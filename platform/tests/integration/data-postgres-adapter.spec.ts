@@ -91,7 +91,7 @@ function connectionStringFor(base: string, user: string, password: string, datab
   return `${url.protocol}//${encodeURIComponent(user)}:${encodeURIComponent(password)}@${url.hostname}${port}/${database}`
 }
 
-function toolContext(): ToolContext {
+function toolContext(sourceRefs: readonly SourceRef[] = [SOURCE]): ToolContext {
   return createToolContext({
     principal: {
       tenantId: TENANT,
@@ -114,7 +114,7 @@ function toolContext(): ToolContext {
       tenantId: TENANT,
       spaceId: SPACE,
       resourceKinds: ['artifact', 'dataset', 'evidence', 'document'],
-      sourceRefs: [SOURCE],
+      sourceRefs: [...sourceRefs],
       collectionRefs: [],
       domains: [],
       maxRows: 1000,
@@ -650,6 +650,20 @@ describe('source probe', () => {
     expect(observation.capabilities.map((capability) => capability.name)).toContain(
       'structured_query.execute',
     )
+  }, 60_000)
+
+  it('fails the probe instead of reporting ready when no mapped relation is visible', async () => {
+    await expect(
+      adapter.probe(
+        {
+          role: 'catalog',
+          secretRef: 'secret://data-postgres/test',
+          secret: new SecretValue('postgresql://redacted'),
+          requestedCapabilities: [],
+        },
+        toolContext([]),
+      ),
+    ).rejects.toMatchObject({ code: 'SOURCE_UNAVAILABLE' })
   }, 60_000)
 })
 
