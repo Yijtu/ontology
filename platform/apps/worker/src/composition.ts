@@ -1,7 +1,14 @@
-import { JobWorker, OutboxDispatcher } from '@ontology/application'
-import type { JobStageHandlerRegistry, OutboxConsumer } from '@ontology/application'
+import { DocumentParseStageHandler, JobWorker, OutboxDispatcher } from '@ontology/application'
+import type { JobStageHandler, JobStageHandlerRegistry, OutboxConsumer } from '@ontology/application'
 import { ControlPostgresDatabase, PostgresJobStore } from '@ontology/adapter-control-postgres'
-import type { BudgetLedgerPort, JobStore, ScopeRef, ToolContext } from '@ontology/contracts'
+import type {
+  BudgetLedgerPort,
+  DocumentParserPort,
+  JobStore,
+  PipelineStage,
+  ScopeRef,
+  ToolContext,
+} from '@ontology/contracts'
 
 export interface JobWorkerCompositionOptions {
   readonly connectionString: string
@@ -59,6 +66,28 @@ export function createPostgresJobWorker(
     dispatcher,
     close: () => database.close(),
   }
+}
+
+export interface IngestionHandlerRegistryOptions {
+  /** The real document parser (LOCAL-023) that backs the `received → parsed` stage. */
+  readonly parser: DocumentParserPort
+  /** The `parsed → extracted → validated` handlers owned by the extraction pipeline. */
+  readonly downstream: readonly JobStageHandler[]
+}
+
+/**
+ * Wire the real `received → parsed` stage (the document parser) together with the downstream
+ * extraction stages into one worker registry, so a `POST /ingestions` job runs end to end
+ * inside the worker. The composition root supplies the concrete parser; the handler itself
+ * depends only on the `DocumentParserPort` contract.
+ */
+export function createIngestionHandlerRegistry(
+  options: IngestionHandlerRegistryOptions,
+): JobStageHandlerRegistry {
+  const byStage = new Map<PipelineStage, JobStageHandler>()
+  byStage.set('received', new DocumentParseStageHandler({ parser: options.parser }))
+  for (const handler of options.downstream) byStage.set(handler.stage, handler)
+  return { get: (stage) => byStage.get(stage) }
 }
 
 /** One unit of work: the trusted tenant/space scope plus its server-minted tool context. */

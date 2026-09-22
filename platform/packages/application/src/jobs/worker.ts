@@ -195,6 +195,7 @@ export class JobWorker {
         counts: outcome.counts,
         completedAt: this.#now(),
         ...(outcome.outbox === undefined ? {} : { outbox: outcome.outbox }),
+        ...(outcome.documentRef === undefined ? {} : { documentRef: outcome.documentRef }),
       }
       const updated = await this.#store.advanceStage(
         scopeRef,

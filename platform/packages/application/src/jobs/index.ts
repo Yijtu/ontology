@@ -14,6 +14,15 @@ export {
 } from './state-machine'
 export { parseCreateJobRequest, parseRetryJobRequest } from './parse'
 export type { ParsedCreateJobRequest, ParsedRetryJobRequest } from './parse'
+export {
+  DocumentParseStageHandler,
+} from './document-parse-stage-handler'
+export type { DocumentParseStageHandlerDependencies } from './document-parse-stage-handler'
+export {
+  decodeDocumentIngestionRef,
+  encodeDocumentIngestionRef,
+} from './document-ingestion-ref'
+export type { DocumentIngestionRef } from './document-ingestion-ref'
 export type {
   CreateJobInput,
   CreateJobResult,

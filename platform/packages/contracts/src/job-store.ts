@@ -241,6 +241,15 @@ export interface JobStageAdvance {
   readonly counts: JobStageCounts
   readonly completedAt: Rfc3339UtcTimestamp
   readonly outbox?: NewOutboxMessage
+  /**
+   * Optional replacement for the logical job's opaque input reference, committed in the same
+   * transaction as the stage checkpoint. The `received → parsed` stage uses it to replace the
+   * ingestion reference with the structured extraction reference, so downstream stages resolve
+   * the parse from the job record without re-parsing and without a second source of truth. It
+   * is additive: a stage that does not set it leaves `documentRef` untouched, and an already
+   * committed checkpoint never rewrites it again.
+   */
+  readonly documentRef?: string
 }
 
 export interface JobAttemptCompletion {

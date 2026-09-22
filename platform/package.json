@@ -34,6 +34,7 @@
     "@ontology/adapter-transport-mcp": "workspace:*",
     "@ontology/app-api": "workspace:*",
     "@ontology/app-web": "workspace:*",
+    "@ontology/app-worker": "workspace:*",
     "@ontology/application": "workspace:*",
     "@ontology/contracts": "workspace:*",
     "@ontology/core": "workspace:*",
