@@ -54,7 +54,7 @@ export default defineConfig({
         extends: true,
         test: {
           name: 'integration',
-          include: ['tests/integration/**/*.spec.ts'],
+          include: ['tests/integration/**/*.spec.ts', 'tests/composition/**/*.spec.ts'],
           testTimeout: INTEGRATION_TEST_TIMEOUT_MS,
           hookTimeout: INTEGRATION_HOOK_TIMEOUT_MS,
           maxWorkers: INTEGRATION_MAX_WORKERS,
