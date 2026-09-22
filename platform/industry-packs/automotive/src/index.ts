@@ -1,1 +1,1 @@
-export {}
+export { AUTOMOTIVE_NAMESPACE, AUTOMOTIVE_PREPARATION } from './preparation'

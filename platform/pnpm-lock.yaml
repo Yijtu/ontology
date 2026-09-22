@@ -71,9 +71,18 @@ importers:
       '@ontology/extension-home-energy':
         specifier: workspace:*
         version: link:packages/extensions/home-energy
+      '@ontology/industry-pack-automotive':
+        specifier: workspace:*
+        version: link:industry-packs/automotive
+      '@ontology/industry-pack-health-services':
+        specifier: workspace:*
+        version: link:industry-packs/health-services
       '@ontology/industry-pack-home-energy':
         specifier: workspace:*
         version: link:industry-packs/home-energy
+      '@ontology/industry-pack-transport-government':
+        specifier: workspace:*
+        version: link:industry-packs/transport-government
       '@ontology/provenance':
         specifier: workspace:*
         version: link:packages/provenance
