@@ -1,6 +1,13 @@
 import { DocumentParseStageHandler, JobWorker, OutboxDispatcher } from '@ontology/application'
 import type { JobStageHandler, JobStageHandlerRegistry, OutboxConsumer } from '@ontology/application'
-import { ControlPostgresDatabase, PostgresJobStore } from '@ontology/adapter-control-postgres'
+import {
+  ControlPostgresDatabase,
+  ControlPostgresRepository,
+  PostgresJobStore,
+  PostgresMaterializationStore,
+} from '@ontology/adapter-control-postgres'
+import { IncrementalMaterializer, PublishedSemanticSource } from '@ontology/semantic-engine'
+import type { MaterializationFaultInjection } from '@ontology/semantic-engine'
 import type {
   BudgetLedgerPort,
   DocumentParserPort,
@@ -9,6 +16,21 @@ import type {
   ScopeRef,
   ToolContext,
 } from '@ontology/contracts'
+import {
+  controlRecordSequence,
+  MaterializationOutboxConsumer,
+} from './materialization-consumer'
+import type { MaterializationPublicationView } from './materialization-consumer'
+
+export interface MaterializationWorkerOptions {
+  /** The published read view (the real `PostgresSemanticPublicationStore` in production). */
+  readonly publications: MaterializationPublicationView
+  /** Above this many affected rules a change is conservatively deferred with a dirty scope. */
+  readonly maxFanout?: number
+  /** Test-only seam: run before the projection commit so a fault can leave the fence open. */
+  readonly faultInjection?: MaterializationFaultInjection
+  readonly streamRef?: string
+}
 
 export interface JobWorkerCompositionOptions {
   readonly connectionString: string
@@ -17,6 +39,13 @@ export interface JobWorkerCompositionOptions {
   /** Shared budget ledger; the worker opens a `background` ledger per job (SPEC §9). */
   readonly budget: BudgetLedgerPort
   readonly outboxConsumer: OutboxConsumer
+  /**
+   * Optional semantic-materialisation wiring (LOCAL-069). When present the composition
+   * constructs the `IncrementalMaterializer` and registers the materialisation outbox
+   * consumer, so a publication opens the invalidation fence and the worker advances the
+   * projection asynchronously.
+   */
+  readonly materialization?: MaterializationWorkerOptions
   readonly workerId?: string
   readonly leaseDurationMs?: number
   readonly maxPoolSize?: number
@@ -29,6 +58,9 @@ export interface JobWorkerComposition {
   readonly store: JobStore
   readonly worker: JobWorker
   readonly dispatcher: OutboxDispatcher
+  /** Present when the composition was given `materialization` options. */
+  readonly materializer?: IncrementalMaterializer
+  readonly materializationConsumer?: MaterializationOutboxConsumer
   close(): Promise<void>
 }
 
@@ -54,9 +86,41 @@ export function createPostgresJobWorker(
     ...(options.now === undefined ? {} : { now: options.now }),
     ...(options.newId === undefined ? {} : { newId: options.newId }),
   })
+
+  const materialization = options.materialization
+  let materializer: IncrementalMaterializer | undefined
+  let materializationConsumer: MaterializationOutboxConsumer | undefined
+  let consumer = options.outboxConsumer
+  if (materialization !== undefined) {
+    const materializationStore = new PostgresMaterializationStore(database)
+    materializer = new IncrementalMaterializer({
+      publishedSource: new PublishedSemanticSource(materialization.publications),
+      materialization: materializationStore,
+      ...(materialization.maxFanout === undefined ? {} : { maxFanout: materialization.maxFanout }),
+      ...(materialization.faultInjection === undefined
+        ? {}
+        : { faultInjection: materialization.faultInjection }),
+      ...(options.now === undefined ? {} : { now: options.now }),
+      ...(options.newId === undefined ? {} : { newId: options.newId }),
+    })
+    materializationConsumer = new MaterializationOutboxConsumer({
+      materializer,
+      publications: materialization.publications,
+      sequence: controlRecordSequence(
+        new ControlPostgresRepository(database),
+        materialization.streamRef,
+      ),
+      outbox: store,
+      materialization: materializationStore,
+      ...(options.now === undefined ? {} : { now: options.now }),
+      ...(options.newId === undefined ? {} : { newId: options.newId }),
+    })
+    consumer = new TopicOutboxConsumerRouter([materializationConsumer], options.outboxConsumer)
+  }
+
   const dispatcher = new OutboxDispatcher({
     store,
-    consumer: options.outboxConsumer,
+    consumer,
     ...(options.now === undefined ? {} : { now: options.now }),
   })
   return {
@@ -64,7 +128,38 @@ export function createPostgresJobWorker(
     store,
     worker,
     dispatcher,
+    ...(materializer === undefined ? {} : { materializer }),
+    ...(materializationConsumer === undefined ? {} : { materializationConsumer }),
     close: () => database.close(),
+  }
+}
+
+/** A consumer that owns a fixed set of outbox topics. */
+export interface TopicOutboxConsumer extends OutboxConsumer {
+  readonly topics: readonly string[]
+}
+
+/**
+ * Route each outbox message to the consumer that owns its topic. Messages whose topic no
+ * registered consumer claims fall through to the injected consumer, so adding the
+ * materialisation topics never hides a message from the existing worker wiring.
+ */
+export class TopicOutboxConsumerRouter implements OutboxConsumer {
+  readonly #byTopic: ReadonlyMap<string, OutboxConsumer>
+  readonly #fallback: OutboxConsumer
+
+  constructor(routed: readonly TopicOutboxConsumer[], fallback: OutboxConsumer) {
+    const byTopic = new Map<string, OutboxConsumer>()
+    for (const consumer of routed) {
+      for (const topic of consumer.topics) byTopic.set(topic, consumer)
+    }
+    this.#byTopic = byTopic
+    this.#fallback = fallback
+  }
+
+  async consume(message: Parameters<OutboxConsumer['consume']>[0], ctx: ToolContext): Promise<void> {
+    const consumer = this.#byTopic.get(message.topic) ?? this.#fallback
+    await consumer.consume(message, ctx)
   }
 }
 

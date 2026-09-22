@@ -417,6 +417,25 @@ export class InMemoryJobStore implements JobStore {
     return { publication: clone(publication), created: true, job: clone(job) }
   }
 
+  async appendOutbox(
+    scopeRef: ScopeRef,
+    jobId: Uuid,
+    message: NewOutboxMessage,
+    ctx: ToolContext,
+  ): Promise<OutboxMessageRecord> {
+    resolveStoreScope(scopeRef, ctx)
+    this.#requireStored(`${scopePrefix(scopeRef)}${jobId}`)
+    this.#insertOutbox(scopeRef, jobId, message)
+    const outboxId =
+      this.#outboxIdempotency.get(`${scopePrefix(scopeRef)}${message.idempotencyKey}`) ??
+      message.outboxId
+    const record = this.#outbox.get(`${scopePrefix(scopeRef)}${outboxId}`)
+    if (record === undefined) {
+      throw new JobStoreError('JOB_NOT_FOUND', `outbox message ${message.outboxId} was not appended`)
+    }
+    return clone(record)
+  }
+
   async listPendingOutbox(
     scopeRef: ScopeRef,
     limit: number,

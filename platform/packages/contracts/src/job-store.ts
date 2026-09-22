@@ -417,6 +417,20 @@ export interface JobStore {
     request: JobPublicationRequest,
     ctx: ToolContext,
   ): Promise<JobPublicationResult>
+  /**
+   * Append one side-effect message to an existing logical job's outbox without a stage
+   * advance. A consumer that must hand a follow-up change back to the worker (for example the
+   * semantic materialisation request emitted after a publication) uses this instead of
+   * inventing a second outbox table. The `(tenant, space, idempotency_key)` unique key makes a
+   * replayed append a no-op, so an at-least-once producer never enqueues the same side effect
+   * twice; the returned record is the existing message on replay.
+   */
+  appendOutbox(
+    scopeRef: ScopeRef,
+    jobId: Uuid,
+    message: NewOutboxMessage,
+    ctx: ToolContext,
+  ): Promise<OutboxMessageRecord>
   listPendingOutbox(
     scopeRef: ScopeRef,
     limit: number,
