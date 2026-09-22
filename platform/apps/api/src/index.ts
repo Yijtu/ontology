@@ -49,6 +49,34 @@ export {
   createSimulationJobPort,
 } from './composition/energy-compute'
 export type { EnergyComputeCompositionOptions } from './composition/energy-compute'
+export {
+  SimulationSurfaceError,
+  createEnergySimulationSurface,
+  createSimulationExecutionSurface,
+} from './composition/energy-simulation'
+export type {
+  EnergySimulationCompositionOptions,
+  ExecutionSurface,
+  RequestSimulationInput,
+  SimulationDetailView,
+  SimulationRecordView,
+  SimulationSurface,
+} from './composition/energy-simulation'
+export {
+  MAX_BACKUP_REQUIREMENT_KWH,
+  WEATHER_SCENARIOS,
+  buildSyntheticScenarioInput,
+  createSyntheticScenarioCatalog,
+  isWeatherScenario,
+  scenarioDescriptorOf,
+} from './composition/home-energy-scenario'
+export type {
+  ScenarioCatalog,
+  ScenarioDescriptor,
+  ScenarioRequest,
+  ScenarioSeriesDescriptor,
+  WeatherScenario,
+} from './composition/home-energy-scenario'
 export { createToolHandlerSet } from './composition/tool-handlers'
 export type { ToolHandlerSetOptions } from './composition/tool-handlers'
 export { createApiServer, createJobApi, createRunApi } from './http/app'
@@ -91,6 +119,8 @@ export { registerHistoryRoutes } from './http/history'
 export type { HistoryReadSurface, HistoryRouteDependencies } from './http/history'
 export { registerAnswerRoutes } from './http/answers'
 export type { AnswerReader, AnswerRouteDependencies } from './http/answers'
+export { registerSimulationRoutes } from './http/simulations'
+export type { SimulationRouteDependencies } from './http/simulations'
 export { createPostgresProvenanceRead } from './composition/provenance-read'
 export type {
   ProvenanceReadComposition,

@@ -654,20 +654,219 @@ button:disabled {
   margin-top: 12px;
 }
 
+/* Home-energy plan/simulation surface (LOCAL-047). Every datum is rendered with its unit,
+   source, time and mode, so the layout keeps the labels next to the value. */
+.energy {
+  max-width: 1100px;
+  margin: 0 auto;
+  padding: 24px;
+}
+
+.energy__header h1 {
+  margin: 0 0 4px;
+  font-size: 22px;
+}
+
+.energy__hint {
+  margin: 0;
+  color: var(--muted);
+  font-size: 13px;
+}
+
+.energy__body {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) minmax(0, 1fr);
+  gap: 16px;
+  margin-top: 16px;
+}
+
+.energy__body > * {
+  background: var(--surface);
+  border: 1px solid var(--line);
+  border-radius: 10px;
+  padding: 16px;
+}
+
+.energy__scenario,
+.energy__versions,
+.energy__compare,
+.energy__execution,
+.energy__notice {
+  grid-column: 1 / -1;
+}
+
+.energy__field {
+  display: inline-flex;
+  flex-direction: column;
+  gap: 4px;
+  margin-right: 12px;
+  font-size: 13px;
+}
+
+.energy__field input,
+.energy__field select {
+  min-width: 140px;
+  padding: 6px 8px;
+  border: 1px solid var(--line);
+  border-radius: 6px;
+}
+
+.energy__buttons {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+  margin-top: 10px;
+}
+
+.energy__buttons button {
+  padding: 6px 12px;
+  border: 1px solid var(--accent);
+  border-radius: 6px;
+  background: var(--accent);
+  color: #fff;
+  cursor: pointer;
+}
+
+.energy__buttons button:disabled {
+  opacity: 0.5;
+  cursor: not-allowed;
+}
+
+.energy__scenario-summary,
+.energy__version,
+.energy__compare-block {
+  margin-top: 12px;
+  border-top: 1px solid var(--line);
+  padding-top: 10px;
+}
+
+.energy__version-head {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+  align-items: center;
+}
+
+.energy__version-head h3 {
+  margin: 0;
+  font-size: 16px;
+}
+
+.energy__badge {
+  display: inline-block;
+  padding: 2px 8px;
+  border-radius: 999px;
+  background: #eef2ff;
+  color: var(--accent);
+  font-size: 12px;
+}
+
+.energy__badge--ok {
+  background: #e7f6ec;
+  color: #1c6b3a;
+}
+
+.energy__badge--warn {
+  background: #fdecea;
+  color: var(--danger);
+}
+
+.energy__series,
+.energy__candidates {
+  list-style: none;
+  margin: 8px 0 0;
+  padding: 0;
+}
+
+.energy__candidate {
+  margin-top: 8px;
+  padding: 8px;
+  border: 1px dashed var(--line);
+  border-radius: 8px;
+}
+
+.energy__candidate-name {
+  display: inline-block;
+  min-width: 130px;
+  font-weight: 600;
+}
+
+.datum {
+  display: inline-flex;
+  flex-wrap: wrap;
+  gap: 6px;
+  align-items: baseline;
+  margin: 4px 12px 0 0;
+  font-size: 13px;
+}
+
+.datum__label {
+  color: var(--muted);
+}
+
+.datum__value {
+  font-variant-numeric: tabular-nums;
+  font-weight: 600;
+}
+
+.datum__unit,
+.datum__source,
+.datum__time {
+  color: var(--muted);
+  font-size: 12px;
+}
+
+.datum__mode {
+  padding: 1px 6px;
+  border-radius: 999px;
+  background: #f0f2f7;
+  color: var(--muted);
+  font-size: 11px;
+}
+
+.datum[data-mode="forecast"] .datum__mode {
+  background: #eef2ff;
+  color: var(--accent);
+}
+
+.datum[data-mode="observed"] .datum__mode {
+  background: #e7f6ec;
+  color: #1c6b3a;
+}
+
+.datum[data-mode="simulated"] .datum__mode {
+  background: #fff4e5;
+  color: var(--warn);
+}
+
+.energy__refusal,
+.energy__unverified,
+.energy__live-unavailable {
+  color: var(--danger);
+  font-size: 13px;
+}
+
+.energy__notice {
+  color: #1c6b3a;
+  font-size: 13px;
+}
+
 /* Narrow viewport: a single column, controls stacked, and the picker fields full width. */
 @media (max-width: 719px) {
   .workbench,
   .jobs,
   .review,
   .query,
-  .evidence {
+  .evidence,
+  .energy {
     padding: 12px;
   }
 
   .workbench__body,
   .review__body,
   .query__body,
-  .evidence__body {
+  .evidence__body,
+  .energy__body {
     grid-template-columns: minmax(0, 1fr);
   }
 
@@ -683,5 +882,15 @@ button:disabled {
   .review__field input,
   .evidence__field input {
     min-width: 100%;
+  }
+
+  .energy__field input,
+  .energy__field select {
+    min-width: 100%;
+  }
+
+  .energy__field {
+    display: flex;
+    margin-right: 0;
   }
 }

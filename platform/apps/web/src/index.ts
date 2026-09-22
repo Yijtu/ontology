@@ -16,6 +16,51 @@ export { QueryPanel } from './components/QueryPanel'
 export type { QueryPanelProps } from './components/QueryPanel'
 export { EvidencePanel } from './components/EvidencePanel'
 export type { EvidencePanelProps } from './components/EvidencePanel'
+export { EnergyPlanPanel } from './components/EnergyPlanPanel'
+export type { EnergyPlanPanelProps } from './components/EnergyPlanPanel'
+export { Datum } from './components/Datum'
+export type { DatumMode, DatumProps } from './components/Datum'
+export {
+  buildComparison,
+  constraintGapsOf,
+  DEFAULT_BACKUP_REQUIREMENT_KWH,
+  DEFAULT_WEATHER_SCENARIO,
+  energyReducer,
+  initialEnergyState,
+} from './state/energy'
+export type {
+  ConstraintGap,
+  EnergyEvent,
+  EnergyPhase,
+  EnergyPlanComparison,
+  EnergyPlanVersion,
+  EnergyState,
+  SourceChange,
+} from './state/energy'
+export {
+  asExecutionRecord,
+  asPlanResult,
+  asScenarioDescriptor,
+  asSimulationDetail,
+  asSimulationRecord,
+  isWeatherScenario,
+  WEATHER_SCENARIOS,
+} from './api/energy'
+export type {
+  CreateScenarioRequest,
+  EnergySourceView,
+  ExecutionRecordView,
+  PlanCandidateView,
+  PlanComparisonView,
+  PlanResultView,
+  RequestExecutionRequest,
+  RequestSimulationInput,
+  ScenarioDescriptor,
+  ScenarioSeriesDescriptor,
+  SimulationDetailView,
+  SimulationRecordView,
+  WeatherScenario,
+} from './api/energy'
 export { evidenceReducer, initialEvidenceState } from './state/evidence'
 export type {
   AssertionComparison,

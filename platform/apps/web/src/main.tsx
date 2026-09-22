@@ -13,7 +13,7 @@ const params = new URLSearchParams(window.location.search)
 const boundRunId = params.get('run') ?? undefined
 const rawView = params.get('view')
 const initialView: AppView =
-  rawView === 'query' || rawView === 'jobs' || rawView === 'review' || rawView === 'evidence'
+  rawView === 'query' || rawView === 'jobs' || rawView === 'review' || rawView === 'evidence' || rawView === 'energy'
     ? rawView
     : 'workbench'
 const jobId = params.get('job') ?? undefined
