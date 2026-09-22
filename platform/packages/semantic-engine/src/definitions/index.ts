@@ -19,6 +19,7 @@ export {
 } from './canonical'
 export { definitionVersionDigest, scanDefinitionPurity, validateDefinitionVersion } from './validate'
 export type { DefinitionValidationOptions } from './validate'
+export { projectIndustrySchema } from './industry-schema'
 export { InMemorySemanticDefinitionStore } from './store'
 export type { SemanticDefinitionStore } from './store'
 export { SemanticDefinitionService } from './service'
