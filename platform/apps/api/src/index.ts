@@ -68,6 +68,8 @@ export type {
 } from './http/decisions'
 export { registerPublicationRoutes } from './http/publication'
 export type { PublicationRouteDependencies } from './http/publication'
+export { registerPackRoutes } from './http/packs'
+export type { PackApiOptions, PackRouteDependencies } from './http/packs'
 export { createRequestToolContext } from './http/context'
 export type { RequestToolContextInput } from './http/context'
 export { formatSseFrame, SSE_HEADERS } from './http/sse'

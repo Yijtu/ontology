@@ -1,1 +1,1 @@
-export {}
+export { HEALTH_SERVICES_NAMESPACE, HEALTH_SERVICES_PREPARATION } from './preparation'
