@@ -1,0 +1,21 @@
+{
+  "logicalQuery": "SELECT meter_id, recorded_at, energy_kwh, is_estimated FROM readings WHERE energy_kwh >= ? AND quality_flag = ? ORDER BY meter_id, recorded_at",
+  "postgresQuery": "SELECT meter_id, recorded_at, energy_kwh, is_estimated FROM readings WHERE energy_kwh >= $1 AND quality_flag = $2 ORDER BY meter_id, recorded_at",
+  "parameters": [10, 1],
+  "columns": [
+    { "name": "meter_id", "type": "string" },
+    { "name": "recorded_at", "type": "timestamp" },
+    { "name": "energy_kwh", "type": "decimal" },
+    { "name": "is_estimated", "type": "boolean" }
+  ],
+  "rows": [
+    ["m1", "2026-01-01T00:00:00.000Z", "12.5000", false],
+    ["m1", "2026-01-03T00:00:00.000Z", "15.0000", true],
+    ["m2", "2026-01-01T00:00:00.000Z", "20.0000", false],
+    ["m3", "2026-01-01T00:00:00.000Z", "11.0000", false]
+  ],
+  "crossEngine": {
+    "status": "verified",
+    "note": "DuckDB and PostgreSQL run the same logical query over the same fixture; normalised columns, rows and resultDigest are equal (tests/integration/x03-cross-engine-equivalence.spec.ts). The only difference between the two queries is the dialect placeholder syntax ('?' vs '$n'), which is confined to the adapter-side query text."
+  }
+}

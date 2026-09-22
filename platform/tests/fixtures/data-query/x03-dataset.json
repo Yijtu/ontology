@@ -1,0 +1,26 @@
+{
+  "relation": "readings",
+  "objectPath": "public.readings",
+  "schemaRevision": "2026-09-01",
+  "columns": [
+    { "name": "reading_id", "type": "string" },
+    { "name": "meter_id", "type": "string" },
+    { "name": "recorded_at", "type": "timestamp" },
+    { "name": "energy_kwh", "type": "decimal" },
+    { "name": "quality_flag", "type": "integer" },
+    { "name": "is_estimated", "type": "boolean" }
+  ],
+  "physicalTypes": {
+    "energy_kwh": "DECIMAL(18,4)",
+    "recorded_at": "TIMESTAMPTZ",
+    "quality_flag": "INTEGER"
+  },
+  "rows": [
+    ["r1", "m1", "2026-01-01T00:00:00Z", 12.5, 1, false],
+    ["r2", "m1", "2026-01-02T00:00:00Z", 8.25, 0, false],
+    ["r3", "m1", "2026-01-03T00:00:00Z", 15.0, 1, true],
+    ["r4", "m2", "2026-01-01T00:00:00Z", 20.0, 1, false],
+    ["r5", "m2", "2026-01-02T00:00:00Z", 9.75, 0, false],
+    ["r6", "m3", "2026-01-01T00:00:00Z", 11.0, 1, false]
+  ]
+}
