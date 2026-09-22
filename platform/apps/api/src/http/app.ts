@@ -9,6 +9,8 @@ import { registerWorkbenchRoutes } from './workbench'
 import type { WorkbenchRouteDependencies } from './workbench'
 import { registerDecisionRoutes } from './decisions'
 import type { DecisionRouteDependencies } from './decisions'
+import { registerPublicationRoutes } from './publication'
+import type { PublicationRouteDependencies } from './publication'
 import { installErrorHandler } from './shared'
 import type { RequestAuthenticator } from './shared'
 
@@ -27,6 +29,8 @@ export interface ApiServerOptions {
   readonly workbench?: WorkbenchRouteDependencies
   /** Register the candidate review surface (`GET /candidates`, `POST /candidates/{id}/decision`). */
   readonly decisions?: Omit<DecisionRouteDependencies, 'authenticate'>
+  /** Register the semantic publication surface (`POST /semantic-publications`, revisions). */
+  readonly publications?: Omit<PublicationRouteDependencies, 'authenticate'>
   readonly logger?: boolean
 }
 
@@ -44,6 +48,9 @@ export function createApiServer(options: ApiServerOptions): FastifyInstance {
   }
   if (options.decisions !== undefined) {
     registerDecisionRoutes(app, { ...options.decisions, authenticate: options.authenticate })
+  }
+  if (options.publications !== undefined) {
+    registerPublicationRoutes(app, { ...options.publications, authenticate: options.authenticate })
   }
   return app
 }
