@@ -13,6 +13,10 @@ import { registerPublicationRoutes } from './publication'
 import type { PublicationRouteDependencies } from './publication'
 import { registerPackRoutes } from './packs'
 import type { PackRouteDependencies } from './packs'
+import { registerEvidenceRoutes } from './evidence'
+import type { EvidenceRouteDependencies } from './evidence'
+import { registerHistoryRoutes } from './history'
+import type { HistoryRouteDependencies } from './history'
 import { installErrorHandler } from './shared'
 import type { RequestAuthenticator } from './shared'
 
@@ -35,6 +39,10 @@ export interface ApiServerOptions {
   readonly publications?: Omit<PublicationRouteDependencies, 'authenticate'>
   /** Register the industry-pack export/upgrade surface (`/industry-packs`). */
   readonly packs?: Omit<PackRouteDependencies, 'authenticate'>
+  /** Register the on-demand provenance surface (`GET /evidence/{id}`, dependencies, export). */
+  readonly evidence?: Omit<EvidenceRouteDependencies, 'authenticate'>
+  /** Register the object history surface (`GET /objects/{id}/history`). */
+  readonly history?: Omit<HistoryRouteDependencies, 'authenticate'>
   readonly logger?: boolean
 }
 
@@ -58,6 +66,12 @@ export function createApiServer(options: ApiServerOptions): FastifyInstance {
   }
   if (options.packs !== undefined) {
     registerPackRoutes(app, { ...options.packs, authenticate: options.authenticate })
+  }
+  if (options.evidence !== undefined) {
+    registerEvidenceRoutes(app, { ...options.evidence, authenticate: options.authenticate })
+  }
+  if (options.history !== undefined) {
+    registerHistoryRoutes(app, { ...options.history, authenticate: options.authenticate })
   }
   return app
 }

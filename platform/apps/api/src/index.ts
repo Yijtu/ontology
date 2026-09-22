@@ -70,6 +70,15 @@ export { registerPublicationRoutes } from './http/publication'
 export type { PublicationRouteDependencies } from './http/publication'
 export { registerPackRoutes } from './http/packs'
 export type { PackApiOptions, PackRouteDependencies } from './http/packs'
+export { registerEvidenceRoutes } from './http/evidence'
+export type { EvidenceRouteDependencies } from './http/evidence'
+export { registerHistoryRoutes } from './http/history'
+export type { HistoryRouteDependencies } from './http/history'
+export { createPostgresProvenanceRead } from './composition/provenance-read'
+export type {
+  ProvenanceReadComposition,
+  ProvenanceReadCompositionOptions,
+} from './composition/provenance-read'
 export { createRequestToolContext } from './http/context'
 export type { RequestToolContextInput } from './http/context'
 export { formatSseFrame, SSE_HEADERS } from './http/sse'

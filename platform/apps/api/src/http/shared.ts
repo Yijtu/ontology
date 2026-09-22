@@ -102,6 +102,29 @@ export function readRevisionHeader(request: FastifyRequest): RevisionHeader {
   return { kind: 'revision', value: normalized }
 }
 
+/** A non-empty query-string parameter, or `undefined` when it is absent. */
+export function readQueryString(request: FastifyRequest, name: string): string | undefined {
+  const query = request.query
+  if (typeof query !== 'object' || query === null) return undefined
+  const value = (query as Record<string, unknown>)[name]
+  return typeof value === 'string' && value.length > 0 ? value : undefined
+}
+
+/**
+ * A numeric query-string parameter. An absent value is `undefined`; a present but non-numeric
+ * value is a classified 400 rather than a silent default, so a caller cannot ask for a page it
+ * did not get.
+ */
+export function readQueryInteger(request: FastifyRequest, name: string): number | undefined {
+  const raw = readQueryString(request, name)
+  if (raw === undefined) return undefined
+  const parsed = Number(raw)
+  if (!Number.isFinite(parsed)) {
+    throw new InvalidRequestFieldError(`${name} must be a finite number`)
+  }
+  return parsed
+}
+
 /** The tenant/space scope is derived from the trusted principal, never from the body. */
 export function scopeRefFor(auth: AuthenticatedRequest): ScopeRef {
   return { tenantId: auth.principal.tenantId, spaceId: auth.spaceId }
