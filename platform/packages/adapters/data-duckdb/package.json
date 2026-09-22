@@ -9,6 +9,7 @@
     ".": "./src/index.ts"
   },
   "dependencies": {
+    "@duckdb/node-api": "^1.5.5-r.5",
     "@ontology/contracts": "workspace:*",
     "@ontology/core": "workspace:*"
   }
