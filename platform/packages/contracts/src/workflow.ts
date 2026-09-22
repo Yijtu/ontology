@@ -88,6 +88,12 @@ export interface WorkflowRunState {
   readonly staleEntryIds: readonly Uuid[]
   /** A possibly-billed remote call was left unresolved; it is never treated as free. */
   readonly usageUnknown: boolean
+  /**
+   * Whether the bounded draft repair budget was exhausted and the controller already fell
+   * back to composing one limited factual/gap result. It is set once so the fallback can
+   * never loop or silently retry the same repair.
+   */
+  readonly limitedResultAttempted: boolean
   readonly updatedAt: Rfc3339UtcTimestamp
 }
 
@@ -172,6 +178,10 @@ export interface AnswerVerifierPort {
  * The unforgeable handle the controller mints only after a passing verification. The
  * publisher accepts nothing else, so a draft, a runtime event or a framework message
  * cannot be published directly.
+ *
+ * `scenarioManifestHash` binds the answer to the locked scenario (resolved profile snapshot,
+ * runtime version and input manifest digest), so an answer id can never be detached from the
+ * exact scenario version that produced it (SPEC §4.1).
  */
 export interface PublicationGrant {
   readonly grantId: Uuid
@@ -180,17 +190,39 @@ export interface PublicationGrant {
   readonly draftHash: Sha256Digest
   readonly verificationId: Uuid
   readonly evidenceManifestHash: Sha256Digest
+  readonly scenarioManifestHash: Sha256Digest
   readonly expectedRunRevision: RevisionString
   readonly issuedBy: 'workflow-controller'
   readonly issuedAt: Rfc3339UtcTimestamp
 }
 
+/**
+ * How the published answer relates to the current world. `verified` is a current,
+ * still-valid result; `history_limited` is the same verified content published with an
+ * explicit as-of point because the supporting data moved on after verification (D7.4). The
+ * marker is part of the answer, so an older result is never presented as current.
+ */
+export type PublicationKind = 'verified' | 'history_limited'
+
+/**
+ * The final answer version. Its id binds the exact `draftHash`, `evidenceManifestHash`,
+ * `verificationId` and scenario manifest the controller published, so a mismatched binding
+ * can be detected instead of trusted (SPEC §4.1, INV-09).
+ */
 export interface PublishedAnswer {
   readonly answerId: Uuid
   readonly runId: Uuid
   readonly draftId: Uuid
   readonly verificationId: Uuid
+  /** The verified draft content hash. */
   readonly contentHash: Sha256Digest
+  readonly evidenceManifestHash: Sha256Digest
+  readonly scenarioManifestHash: Sha256Digest
+  readonly publicationKind: PublicationKind
+  /** The explicit history point; present only for a `history_limited` publication. */
+  readonly asOf?: Rfc3339UtcTimestamp
+  /** Explicit gaps/limitations the verified content carries; never hidden by rendering. */
+  readonly limitations: readonly string[]
   readonly publishedAt: Rfc3339UtcTimestamp
 }
 
@@ -204,6 +236,111 @@ export interface AnswerPublisherPort {
   publish(request: PublishRequest, ctx: ToolContext): Promise<PublishedAnswer>
   /** The published answer for a run, or `undefined` when none was published. */
   findAnswer(runId: Uuid, ctx: ToolContext): Promise<PublishedAnswer | undefined>
+}
+
+/**
+ * Persistence for published answers. It is separate from `AnswerPublisherPort` so the gate
+ * (hash binding, invalidation, history limit) is application logic while the durable,
+ * idempotent, scope-checked write is an adapter. `record` re-checks the run state and
+ * revision in the same transaction as the insert, so a run cancelled between verification
+ * and publication can never leave an answer row behind.
+ */
+export interface RecordAnswerInput {
+  readonly answer: PublishedAnswer
+  readonly expectedRunState: RunState
+  readonly expectedRunRevision: RevisionString
+}
+
+export type AnswerStoreErrorCode =
+  | 'SCOPE_MISMATCH'
+  | 'RUN_NOT_PUBLISHABLE'
+  | 'ANSWER_PERSIST_FAILED'
+
+export class AnswerStoreError extends Error {
+  readonly code: AnswerStoreErrorCode
+
+  constructor(code: AnswerStoreErrorCode, message: string, options?: ErrorOptions) {
+    super(message, options)
+    this.name = 'AnswerStoreError'
+    this.code = code
+  }
+}
+
+export interface AnswerStorePort {
+  record(input: RecordAnswerInput, ctx: ToolContext): Promise<PublishedAnswer>
+  findByRun(runId: Uuid, ctx: ToolContext): Promise<PublishedAnswer | undefined>
+}
+
+/** Why a post-verification publication check refused or downgraded a publication. */
+export type PublicationBlockReason =
+  | 'run_cancelled'
+  | 'permission_revoked'
+  | 'evidence_retracted'
+  | 'evidence_unverifiable'
+  | 'data_stale'
+
+/**
+ * The post-verification validity check (D7.4: 发布前复核权限/当前有效性/fence). The evidence
+ * hash and refs are re-read so the check is about the exact verified content, not a
+ * re-derived one.
+ */
+export interface PublicationValidityRequest {
+  readonly runId: Uuid
+  readonly runRevision: RevisionString
+  readonly verificationId: Uuid
+  readonly evidenceManifestHash: Sha256Digest
+  readonly evidenceRefs: readonly ResourceRef[]
+  readonly verifiedAt: Rfc3339UtcTimestamp
+}
+
+/**
+ * The result of the validity check. `historyLimited` is set only when the support still
+ * exists but the world moved on, so the caller may publish the older result **explicitly
+ * marked** with `asOf`. A retracted basis, a revoked permission or a cancelled run sets
+ * `historyLimited` to `false`: those can never be published, not even historically.
+ */
+export interface PublicationValidityReport {
+  readonly publishable: boolean
+  readonly blockedReasons: readonly PublicationBlockReason[]
+  readonly historyLimited: boolean
+  readonly asOf?: Rfc3339UtcTimestamp
+  readonly details: readonly string[]
+}
+
+export interface PublicationValidityPort {
+  check(
+    request: PublicationValidityRequest,
+    ctx: ToolContext,
+  ): Promise<PublicationValidityReport>
+}
+
+/**
+ * A bounded, deterministic limited-answer composer (D7.3/D7.4: 局部正确但证据不足返回有限事实
+ * 与缺口). It is a single-shot port like the draft writer: it never starts an agent and it
+ * never invents a claim — it may only keep claims that already passed every hard check and
+ * mark the rest as explicit gaps.
+ */
+export interface LimitedAnswerRequest {
+  readonly runId: Uuid
+  readonly question: NonEmptyString
+  readonly inputManifest: WorkflowInputManifest
+  /** The last draft the bounded repair produced, if any. */
+  readonly previousDraft?: AnswerDraft
+  /** The last recorded verdict; only its supported claims may survive into the limited result. */
+  readonly failedVerification?: VerificationResult
+  readonly remainingBudget: BudgetRemaining
+}
+
+export interface LimitedAnswerResult {
+  readonly draft: AnswerDraft
+  /** The explicit gaps the limited result declares; never empty when facts were dropped. */
+  readonly gaps: readonly string[]
+  readonly usage?: ToolUsage
+  readonly evidenceRefs?: readonly ResourceRef[]
+}
+
+export interface LimitedAnswerPort {
+  compose(request: LimitedAnswerRequest, ctx: ToolContext): Promise<LimitedAnswerResult>
 }
 
 export interface VerificationRecord {

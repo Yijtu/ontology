@@ -236,6 +236,10 @@ export class RestrictedAnswerPublisher implements AnswerPublisherPort {
       draftId: draft.draftId,
       verificationId: verification.verificationId,
       contentHash: draft.contentHash,
+      evidenceManifestHash: draft.evidenceManifestHash,
+      scenarioManifestHash: grant.scenarioManifestHash,
+      publicationKind: 'verified',
+      limitations: [...draft.limitations],
       publishedAt: this.#now(),
     }
     this.#answers.set(`${scopeOf(ctx)}\u0000${grant.runId}`, answer)

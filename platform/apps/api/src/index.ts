@@ -80,6 +80,8 @@ export { registerEvidenceRoutes } from './http/evidence'
 export type { EvidenceRouteDependencies } from './http/evidence'
 export { registerHistoryRoutes } from './http/history'
 export type { HistoryRouteDependencies } from './http/history'
+export { registerAnswerRoutes } from './http/answers'
+export type { AnswerReader, AnswerRouteDependencies } from './http/answers'
 export { createPostgresProvenanceRead } from './composition/provenance-read'
 export type {
   ProvenanceReadComposition,

@@ -1,0 +1,68 @@
+import { AnswerStoreError, isToolContext } from '@ontology/contracts'
+import type {
+  AnswerStorePort,
+  PublishedAnswer,
+  RecordAnswerInput,
+  RunStore,
+  ScopeRef,
+  ToolContext,
+  Uuid,
+} from '@ontology/contracts'
+import { WorkflowControllerError } from './errors'
+
+function scopeOf(ctx: ToolContext): ScopeRef {
+  if (!isToolContext(ctx)) {
+    throw new WorkflowControllerError('SCOPE_MISMATCH', 'a host-minted trusted tool context is required')
+  }
+  const tenantId = ctx.principal.tenantId
+  const spaceId = ctx.allowedResources.spaceId
+  if (ctx.allowedResources.tenantId !== tenantId) {
+    throw new WorkflowControllerError('SCOPE_MISMATCH', 'trusted context carries inconsistent tenant scope')
+  }
+  return { tenantId, spaceId }
+}
+
+function clone<T>(value: T): T {
+  return structuredClone(value)
+}
+
+/**
+ * Reference answer store for unit tests and local composition. It mirrors the real adapter's
+ * atomicity contract: the run state and revision are re-read in the same call as the insert,
+ * so a run cancelled between verification and publication can never leave an answer row.
+ * It is append-only per run: a repeated record of the same run returns the stored answer.
+ */
+export class InMemoryAnswerStore implements AnswerStorePort {
+  readonly #runs: RunStore
+  readonly #answers = new Map<string, PublishedAnswer>()
+
+  constructor(runs: RunStore) {
+    this.#runs = runs
+  }
+
+  async record(input: RecordAnswerInput, ctx: ToolContext): Promise<PublishedAnswer> {
+    const scopeRef = scopeOf(ctx)
+    const key = `${scopeRef.tenantId}\u0000${scopeRef.spaceId}\u0000${input.answer.runId}`
+    const existing = this.#answers.get(key)
+    if (existing !== undefined) return clone(existing)
+
+    const run = await this.#runs.getRun(scopeRef, input.answer.runId, ctx)
+    if (run === undefined) {
+      throw new AnswerStoreError('RUN_NOT_PUBLISHABLE', 'the run is not visible in this scope')
+    }
+    if (run.state !== input.expectedRunState || run.revision !== input.expectedRunRevision) {
+      throw new AnswerStoreError(
+        'RUN_NOT_PUBLISHABLE',
+        `run ${input.answer.runId} is ${run.state} at revision ${run.revision} and is not publishable`,
+      )
+    }
+    this.#answers.set(key, clone(input.answer))
+    return clone(input.answer)
+  }
+
+  findByRun(runId: Uuid, ctx: ToolContext): Promise<PublishedAnswer | undefined> {
+    const scopeRef = scopeOf(ctx)
+    const found = this.#answers.get(`${scopeRef.tenantId}\u0000${scopeRef.spaceId}\u0000${runId}`)
+    return Promise.resolve(found === undefined ? undefined : clone(found))
+  }
+}

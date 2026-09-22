@@ -1,12 +1,15 @@
 import { randomUUID } from 'node:crypto'
 import { BudgetService, InMemoryBudgetLedgerStore } from '@ontology/core'
 import {
+  AnswerPublicationService,
+  InMemoryAnswerStore,
+  InMemoryPublicationValidity,
   InMemoryRunStore,
   InMemoryWorkflowStore,
   InMemoryVerificationStore,
-  RestrictedAnswerPublisher,
   RestrictedAnswerVerifier,
   RestrictedDraftWriter,
+  RestrictedLimitedAnswerComposer,
   RunPhaseDriver,
   RunService,
   StaticInputValidity,
@@ -369,6 +372,9 @@ export interface WorkflowHarness {
   readonly verifier: RecordingVerifier
   readonly publisher: RecordingPublisher
   readonly validity: StaticInputValidity
+  readonly publicationValidity: InMemoryPublicationValidity
+  readonly answers: InMemoryAnswerStore
+  readonly limited: RestrictedLimitedAnswerComposer
   readonly probe: LoopProbe
   readonly capabilities: StaticCapabilityFactory
   readonly gateway: ScriptedGateway
@@ -378,6 +384,10 @@ export function buildWorkflowHarness(options: {
   readonly runtime: ScriptedRuntime
   readonly probe?: LoopProbe
   readonly gateway?: ScriptedGateway
+  /** Override the bounded draft writer (e.g. to emit structured claims). */
+  readonly draftWriter?: DraftWriterPort
+  /** Override the verifier (e.g. the real combined `DraftVerificationService`). */
+  readonly verifier?: AnswerVerifierPort
 }): WorkflowHarness {
   const probe = options.probe ?? options.runtime.probe
   const store = new InMemoryRunStore()
@@ -408,10 +418,21 @@ export function buildWorkflowHarness(options: {
     checkpoints: createRunCheckpointPort(store),
   })
   const selector = new RecordingRuntimeSelector(options.runtime, probe)
-  const draftWriter = new RecordingDraftWriter(new RestrictedDraftWriter())
-  const verifier = new RecordingVerifier(new RestrictedAnswerVerifier())
+  const draftWriter = new RecordingDraftWriter(options.draftWriter ?? new RestrictedDraftWriter())
+  const verifier = new RecordingVerifier(options.verifier ?? new RestrictedAnswerVerifier())
+  const publicationValidity = new InMemoryPublicationValidity()
+  const answers = new InMemoryAnswerStore(store)
+  const limited = new RestrictedLimitedAnswerComposer()
   const publisher = new RecordingPublisher(
-    new RestrictedAnswerPublisher({ store, verifications }),
+    new AnswerPublicationService({
+      runs: store,
+      answers,
+      verifications,
+      manifests: workflowStore,
+      validity: publicationValidity,
+      now: fixedClock(),
+      newId: () => randomUUID(),
+    }),
   )
   const controller = new WorkflowController({
     runs: service,
@@ -421,6 +442,7 @@ export function buildWorkflowHarness(options: {
     runtimes: selector,
     capabilities,
     draftWriter,
+    limited,
     verifier,
     verifications,
     publisher,
@@ -443,6 +465,9 @@ export function buildWorkflowHarness(options: {
     verifier,
     publisher,
     validity,
+    publicationValidity,
+    answers,
+    limited,
     probe,
     capabilities,
     gateway,
