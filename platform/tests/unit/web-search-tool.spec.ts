@@ -63,7 +63,6 @@ function handlerFor(options: {
     allowWeb: options.allowWeb,
     resolvedProfile: options.profile ?? PROFILE,
     sourceRef: SOURCE_REF,
-    ctx: options.ctx,
   })
 }
 

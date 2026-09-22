@@ -6,7 +6,6 @@ import type {
   ScopeRef,
   SourceRef,
   TimeContext,
-  ToolContext,
   ToolCoverage,
 } from '@ontology/contracts'
 import type { OntologyLookupService } from '@ontology/semantic-engine'
@@ -23,7 +22,6 @@ export interface OntologyLookupHandlerConfig {
   readonly lookup: OntologyLookupService
   /** The control/semantic store this lookup read from; never fabricated by the handler. */
   readonly sourceRef: SourceRef
-  readonly ctx: ToolContext
 }
 
 const INTENTS: readonly OntologyLookupIntent[] = ['definitions', 'resolve', 'relations', 'rules', 'facts']
@@ -131,7 +129,7 @@ export class OntologyLookupHandler implements ToolHandler {
 
   async execute(request: ToolExecutionRequest): Promise<ToolExecutionOutcome> {
     const input = parseLookupInput(request.arguments)
-    const page = await this.#config.lookup.lookup(input, this.#config.ctx)
+    const page = await this.#config.lookup.lookup(input, request.ctx)
     const truncated = page.nextCursor !== null
     const coverage: ToolCoverage = {
       returned: page.output.items.length,

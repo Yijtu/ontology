@@ -35,6 +35,8 @@ export type {
   ToolGatewayComposition,
   ToolGatewayCompositionOptions,
 } from './composition/tool-gateway'
+export { createToolHandlerSet } from './composition/tool-handlers'
+export type { ToolHandlerSetOptions } from './composition/tool-handlers'
 export { createApiServer, createJobApi, createRunApi } from './http/app'
 export type { ApiServerOptions } from './http/app'
 export { registerRunRoutes } from './http/server'

@@ -171,10 +171,7 @@ function isRecord(value: unknown): value is Record<string, unknown> {
 /** A thin `data_query` handler that routes the direct branch to the real adapter. */
 class PostgresDataQueryHandler implements ToolHandler {
   readonly toolId = 'data_query'
-  constructor(
-    private readonly adapter: PostgresQueryAdapter,
-    private readonly ctx: ToolContext,
-  ) {}
+  constructor(private readonly adapter: PostgresQueryAdapter) {}
 
   async execute(request: ToolExecutionRequest): Promise<ToolExecutionOutcome> {
     const plan = directPlanOf(request.arguments)
@@ -188,7 +185,7 @@ class PostgresDataQueryHandler implements ToolHandler {
         },
         snapshotRequest: { consistency: 'repeatable_read' },
       },
-      this.ctx,
+      request.ctx,
     )
     const status: ToolExecutionOutcome['status'] = response.coverage.truncated
       ? 'partial'
@@ -356,7 +353,7 @@ beforeAll(async () => {
     store: new PostgresBudgetLedgerStore(controlDatabase),
     control: new ControlPostgresRepository(controlDatabase),
   })
-  const handler = new PostgresDataQueryHandler(adapter, CONTEXT)
+  const handler = new PostgresDataQueryHandler(adapter)
   const composition = createToolGatewayComposition({
     database: controlDatabase,
     blobStore,

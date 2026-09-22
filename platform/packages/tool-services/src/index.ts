@@ -9,6 +9,7 @@
  */
 export { ToolGatewayError, isToolGatewayError, toPlatformError } from './errors'
 export type { ToolGatewayErrorCode } from './errors'
+export { cancellationError, raceWithAbort } from './cancellation'
 export {
   assertCatalogueExcludesControllerServices,
   findEnabledTool,

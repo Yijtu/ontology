@@ -1,6 +1,7 @@
 import {
   BudgetLedgerError,
   CONTROLLER_SERVICE_IDS,
+  ERROR_CATALOG,
   isToolContext,
   TOOL_CATALOGUE,
 } from '@ontology/contracts'
@@ -84,8 +85,56 @@ const DEFAULT_GATEWAY_REF: VersionRef = {
   digest: sha256DigestOf('tool-gateway@1.0.0'),
 }
 
+const CANCEL_CONFIRM_TIMEOUT_MS = 5_000
+
+interface InFlightCall {
+  readonly controller: AbortController
+  readonly settled: Promise<void>
+  readonly resolveSettled: () => void
+}
+
+function createInFlightCall(): InFlightCall {
+  const controller = new AbortController()
+  let resolveSettled: () => void = () => undefined
+  const settled = new Promise<void>((resolve) => {
+    resolveSettled = resolve
+  })
+  return { controller, settled, resolveSettled }
+}
+
 function denialCode(value: string): ErrorCode | undefined {
   return DENIAL_CODES.includes(value) ? (value as ErrorCode) : undefined
+}
+
+interface ClassifiedPortFailure {
+  readonly code: ErrorCode
+  readonly remoteStateUnknown: boolean
+}
+
+/**
+ * Recognise a port/adapter failure that already carries a canonical `ErrorCode` and map
+ * it faithfully on the tool path (C6.2).
+ *
+ * The gateway is the single classification point, so a backend error cannot be silently
+ * downgraded to `INTERNAL_ERROR` just because the handler did not re-wrap it. The code
+ * must be a published catalogue entry; an unrecognised code is left to the caller's
+ * fallback. `remoteStateUnknown` is preserved from the error, and the catalogue's own
+ * `recordsRemoteStateUnknown` flag (e.g. `DEADLINE_EXCEEDED`) is honoured too, so a
+ * timed-out/cancelled read still settles as `usage_unknown`.
+ */
+function classifyPortFailure(error: unknown): ClassifiedPortFailure | undefined {
+  if (!(error instanceof Error)) return undefined
+  const candidate = error as { code?: unknown; remoteStateUnknown?: unknown }
+  if (typeof candidate.code !== 'string' || !Object.hasOwn(ERROR_CATALOG, candidate.code)) {
+    return undefined
+  }
+  const code = candidate.code as ErrorCode
+  return {
+    code,
+    remoteStateUnknown:
+      candidate.remoteStateUnknown === true ||
+      ERROR_CATALOG[code].recordsRemoteStateUnknown === true,
+  }
 }
 
 function inlineDataOf(
@@ -121,6 +170,8 @@ export class ToolGatewayService implements ToolGateway {
   readonly #now: () => string
   readonly #newId: () => string
   readonly #gatewayRef: VersionRef
+  /** In-flight handler calls, so a run cancellation can interrupt the backend. */
+  readonly #inFlight = new Map<string, InFlightCall>()
 
   constructor(deps: ToolGatewayDependencies, binding: RunToolBinding) {
     assertCatalogueExcludesControllerServices(deps.catalogue ?? TOOL_CATALOGUE)
@@ -174,14 +225,36 @@ export class ToolGatewayService implements ToolGateway {
   }
 
   /**
-   * Cancellation is best-effort notification. This transport keeps no in-flight remote
-   * handle yet, so it reports `unsupported` instead of claiming the remote task stopped
-   * (C5); the runtime adapters add real propagation in LOCAL-017/018.
+   * Cancel one in-flight tool call. The gateway owns the call's signal, so it aborts it
+   * and waits briefly for the handler to unwind. This is best-effort notification (C5):
+   * a backend that cannot confirm it stopped yields `cancelling`, and the run's late
+   * output is quarantined as abandoned rather than revived. A call that already settled
+   * is `already_terminal`.
    */
   async cancel(callId: string, reason: string, ctx: ToolContext): Promise<CancelResponse> {
     this.#assertTrustedContext(ctx)
-    void reason
-    return { targetRef: callId, state: 'unsupported', acceptedAt: this.#now() }
+    const acceptedAt = this.#now()
+    const inFlight = this.#inFlight.get(callId)
+    if (inFlight === undefined) {
+      return { targetRef: callId, state: 'already_terminal', acceptedAt }
+    }
+    inFlight.controller.abort(reason)
+    const settled = await this.#waitFor(inFlight.settled, CANCEL_CONFIRM_TIMEOUT_MS)
+    return { targetRef: callId, state: settled ? 'cancelled' : 'cancelling', acceptedAt }
+  }
+
+  async #waitFor(promise: Promise<void>, ms: number): Promise<boolean> {
+    let timer: ReturnType<typeof setTimeout> | undefined
+    try {
+      return await Promise.race([
+        promise.then(() => true),
+        new Promise<boolean>((resolve) => {
+          timer = setTimeout(() => resolve(false), ms)
+        }),
+      ])
+    } finally {
+      if (timer !== undefined) clearTimeout(timer)
+    }
   }
 
   #assertTrustedContext(ctx: ToolContext): ToolContext {
@@ -294,9 +367,11 @@ export class ToolGatewayService implements ToolGateway {
       throw this.#classify(error, 'INTENT_NOT_RECORDED', 'the tool intent could not be persisted')
     }
 
-    // 5. execute the registered handler under the propagated deadline.
-    const controller = new AbortController()
-    const timer = setTimeout(() => controller.abort(), this.#remainingMs(deadline))
+    // 5. execute the registered handler under the propagated deadline and the run's
+    // cancellation. The trusted context is injected here; a handler never captures it.
+    const inFlight = createInFlightCall()
+    const timer = setTimeout(() => inFlight.controller.abort(), this.#remainingMs(deadline))
+    this.#inFlight.set(call.callId, inFlight)
     let result: ToolExecutionOutcome
     try {
       result = await this.#handlerFor(definition.toolId).execute({
@@ -306,7 +381,8 @@ export class ToolGatewayService implements ToolGateway {
         resultLimits: limits,
         deadline,
         traceId: ctx.traceId,
-        signal: controller.signal,
+        ctx,
+        signal: inFlight.controller.signal,
       })
     } catch (error) {
       const classified = this.#classify(error, 'HANDLER_FAILED', 'the tool handler failed')
@@ -316,8 +392,10 @@ export class ToolGatewayService implements ToolGateway {
       throw classified
     } finally {
       clearTimeout(timer)
+      this.#inFlight.delete(call.callId)
+      inFlight.resolveSettled()
     }
-    if (controller.signal.aborted) {
+    if (inFlight.controller.signal.aborted) {
       await this.#settleFailed(reservation, ctx, startedAt, true)
       throw new ToolGatewayError('HANDLER_FAILED', 'the tool handler exceeded its deadline', {
         platformCode: 'DEADLINE_EXCEEDED',
@@ -564,7 +642,18 @@ export class ToolGatewayService implements ToolGateway {
         ...(platformCode === undefined ? {} : { platformCode }),
       })
     }
+    // An adapter-raised port error (PostgresQueryError, DocumentSearchError,
+    // WebSearchProviderError, …) already carries a canonical code: keep it instead of
+    // collapsing the port's semantics into INTERNAL_ERROR.
     const detail = error instanceof Error ? error.message : 'unknown failure'
+    const portFailure = classifyPortFailure(error)
+    if (portFailure !== undefined) {
+      return new ToolGatewayError(code, `${message}: ${detail}`, {
+        cause: error,
+        platformCode: portFailure.code,
+        ...(portFailure.remoteStateUnknown ? { remoteStateUnknown: true } : {}),
+      })
+    }
     return new ToolGatewayError(code, `${message}: ${detail}`, { cause: error })
   }
 

@@ -34,6 +34,7 @@ const NOW = '2026-09-21T00:00:00Z'
 
 class FakeStructuredQueryPort implements StructuredQueryPort {
   readonly executed: StructuredQueryExecuteRequest[] = []
+  readonly contexts: ToolContext[] = []
   validateCalls = 0
   #rows: unknown[][] = [['m1', '2026-01-01T00:00:00.000Z', '12.5000000000', 'good']]
 
@@ -44,8 +45,10 @@ class FakeStructuredQueryPort implements StructuredQueryPort {
 
   async execute(
     request: StructuredQueryExecuteRequest,
+    ctx: ToolContext,
   ): Promise<StructuredQueryExecuteResponse> {
     this.executed.push(request)
+    this.contexts.push(ctx)
     return {
       snapshot: {
         sourceRef: SOURCE_A,
@@ -127,7 +130,7 @@ describe('data_query handler through the gateway', () => {
   it('executes a direct plan through the gateway, catalogue and permission path', async () => {
     const port = new FakeStructuredQueryPort()
     const ctx = gatewayContext({ sourceRefs: [SOURCE_A] })
-    const handler = new DataQueryHandler({ query: port, mappings: new InMemorySemanticMappingRegistry([]), ctx })
+    const handler = new DataQueryHandler({ query: port, mappings: new InMemorySemanticMappingRegistry([]) })
     const harness = buildGateway(handler)
     await openLedger(harness.budget, ctx)
 
@@ -139,6 +142,10 @@ describe('data_query handler through the gateway', () => {
     expect(result.status).toBe('ok')
     expect(port.executed).toHaveLength(1)
     expect(port.executed[0]?.plan).toMatchObject({ mode: 'direct', sql: directPlan().sql })
+    // The adapter received exactly the run context the gateway was invoked with; the
+    // handler captured no context of its own.
+    expect(port.contexts).toHaveLength(1)
+    expect(port.contexts[0]).toBe(ctx)
     expect(harness.evidence.records).toHaveLength(1)
     expect(result.evidenceRefs).toHaveLength(1)
   })
@@ -147,7 +154,7 @@ describe('data_query handler through the gateway', () => {
     const port = new FakeStructuredQueryPort()
     const ctx = gatewayContext({ sourceRefs: [SOURCE_A] })
     const mappings: SemanticMappingRegistry = new InMemorySemanticMappingRegistry([MAPPING_A])
-    const handler = new DataQueryHandler({ query: port, mappings, ctx })
+    const handler = new DataQueryHandler({ query: port, mappings })
     const harness = buildGateway(handler)
     await openLedger(harness.budget, ctx)
 
@@ -175,7 +182,7 @@ describe('data_query handler through the gateway', () => {
   it('refuses a direct plan whose source is outside the trusted allowlist', async () => {
     const port = new FakeStructuredQueryPort()
     const ctx = gatewayContext({ sourceRefs: [{ namespace: 'other', sourceId: 'warehouse' }] })
-    const handler = new DataQueryHandler({ query: port, mappings: new InMemorySemanticMappingRegistry([]), ctx })
+    const handler = new DataQueryHandler({ query: port, mappings: new InMemorySemanticMappingRegistry([]) })
     const harness = buildGateway(handler)
     await openLedger(harness.budget, ctx)
 
@@ -191,7 +198,7 @@ describe('data_query handler through the gateway', () => {
   it('refuses the compute branch because it is served by a registered operation handler', async () => {
     const port = new FakeStructuredQueryPort()
     const ctx = gatewayContext({ sourceRefs: [SOURCE_A] })
-    const handler = new DataQueryHandler({ query: port, mappings: new InMemorySemanticMappingRegistry([]), ctx })
+    const handler = new DataQueryHandler({ query: port, mappings: new InMemorySemanticMappingRegistry([]) })
     const harness = buildGateway(handler)
     await openLedger(harness.budget, ctx)
 
@@ -212,7 +219,7 @@ describe('data_query handler through the gateway', () => {
   it('is rejected when the pinned mapping version is not available', async () => {
     const port = new FakeStructuredQueryPort()
     const ctx = gatewayContext({ sourceRefs: [SOURCE_A] })
-    const handler = new DataQueryHandler({ query: port, mappings: new InMemorySemanticMappingRegistry([]), ctx })
+    const handler = new DataQueryHandler({ query: port, mappings: new InMemorySemanticMappingRegistry([]) })
     const harness = buildGateway(handler)
     await openLedger(harness.budget, ctx)
 

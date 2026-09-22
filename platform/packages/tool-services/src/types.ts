@@ -12,6 +12,7 @@ import type {
   SourceRef,
   SourceSnapshot,
   SourceWatermark,
+  ToolContext,
   ToolCoverage,
   ToolDefinition,
   ToolId,
@@ -75,6 +76,17 @@ export interface ToolExecutionRequest {
   /** The propagated child deadline (min of the run ledger and the tool limit). */
   readonly deadline: Rfc3339UtcTimestamp
   readonly traceId: string
+  /**
+   * The run's trusted, host-minted context (C4). The gateway injects it from the
+   * `invoke(call, ctx)` it was called with, so a handler never captures a context at
+   * construction time and cannot run without one: the assembly layer is the only place
+   * that mints a `ToolContext`, and it reaches a handler only through this field.
+   */
+  readonly ctx: ToolContext
+  /**
+   * The propagated child signal (min of the run cancellation and the tool deadline).
+   * A handler must honour it and interrupt its backend when it aborts.
+   */
   readonly signal: AbortSignal
 }
 

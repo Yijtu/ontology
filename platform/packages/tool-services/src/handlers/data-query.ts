@@ -21,6 +21,7 @@ import type {
   ToolCoverage,
   ToolWarning,
 } from '@ontology/contracts'
+import { cancellationError, raceWithAbort } from '../cancellation'
 import {
   compileSemanticQuery,
   isSemanticMappingError,
@@ -49,7 +50,6 @@ export interface DataQueryHandlerConfig {
   readonly query: StructuredQueryPort
   readonly catalog?: CatalogPort
   readonly mappings: SemanticMappingRegistry
-  readonly ctx: ToolContext
   /** Maximum join fanout a compiled plan may declare. */
   readonly maxJoinFanout?: number
   readonly estimatedBytesPerRow?: number
@@ -86,6 +86,24 @@ function isRecord(value: unknown): value is Record<string, unknown> {
 
 function scopeOf(ctx: ToolContext): ScopeRef {
   return { tenantId: ctx.principal.tenantId, spaceId: ctx.allowedResources.spaceId }
+}
+
+/**
+ * Optional backend capability: an adapter that lists the in-flight target refs it can
+ * cancel. The real PostgreSQL adapter exposes this (`activeTargets`) for its probe and
+ * cancellation path; a backend without it is still cancellable from the caller's side
+ * (the handler stops waiting), just without a confirmed remote interrupt.
+ */
+function activeTargetLister(port: StructuredQueryPort): (() => readonly string[]) | undefined {
+  // `Reflect.get` walks the prototype chain, so a class method is found too.
+  const list: unknown = Reflect.get(port, 'activeTargets')
+  if (typeof list !== 'function') return undefined
+  return () => {
+    const value: unknown = Reflect.apply(list, port, [])
+    return Array.isArray(value)
+      ? value.filter((entry): entry is string => typeof entry === 'string')
+      : []
+  }
 }
 
 function parseDirectPlan(value: unknown): DirectSqlQueryPlan {
@@ -201,7 +219,7 @@ export class DataQueryHandler implements ToolHandler {
   }
 
   #limits(request: ToolExecutionRequest, requested: number | undefined): QueryLimits {
-    const ceiling = Math.min(request.resultLimits.maxRows, this.#config.ctx.allowedResources.maxRows)
+    const ceiling = Math.min(request.resultLimits.maxRows, request.ctx.allowedResources.maxRows)
     const maxRows = Math.max(1, Math.min(requested ?? ceiling, ceiling))
     return {
       maxRows,
@@ -269,8 +287,43 @@ export class DataQueryHandler implements ToolHandler {
       snapshotRequest: { consistency },
       ...(cursor === undefined ? {} : { cursor }),
     }
-    const response = await this.#config.query.execute(executeRequest, this.#config.ctx)
+    const response = await this.#executeQuery(executeRequest, request)
     return tableOutcome(response, warnings)
+  }
+
+  /**
+   * Run the plan under the propagated signal. Cancelling the run aborts the signal, so
+   * the handler asks the backend to interrupt the real query and stops waiting: a
+   * cancelled read is never returned as a success. The original adapter error wins if it
+   * arrives first, keeping its own classification.
+   */
+  async #executeQuery(
+    executeRequest: StructuredQueryExecuteRequest,
+    request: ToolExecutionRequest,
+  ): Promise<StructuredQueryExecuteResponse> {
+    const { signal } = request
+    if (signal.aborted) throw cancellationError('the data query was cancelled before it started')
+    const listTargets = activeTargetLister(this.#config.query)
+    const before = listTargets === undefined ? undefined : new Set(listTargets())
+    const onAbort = (): void => {
+      if (listTargets === undefined) return
+      for (const targetRef of listTargets()) {
+        if (before?.has(targetRef) === true) continue
+        void this.#config.query
+          .cancel({ targetRef, reason: 'the run was cancelled' }, request.ctx)
+          .catch(() => undefined)
+      }
+    }
+    signal.addEventListener('abort', onAbort, { once: true })
+    try {
+      return await raceWithAbort(
+        this.#config.query.execute(executeRequest, request.ctx),
+        signal,
+        'the data query was cancelled',
+      )
+    } finally {
+      signal.removeEventListener('abort', onAbort)
+    }
   }
 
   async #describe(
@@ -286,11 +339,11 @@ export class DataQueryHandler implements ToolHandler {
     const limits = this.#limits(request, typeof args.limit === 'number' ? args.limit : undefined)
     const cursor = typeof args.cursor === 'string' ? args.cursor : undefined
     const listRequest: CatalogListRequest = {
-      scopeRef: scopeOf(this.#config.ctx),
+      scopeRef: scopeOf(request.ctx),
       limit: limits.maxRows,
       ...(cursor === undefined ? {} : { cursor }),
     }
-    const response = await catalog.listResources(listRequest, this.#config.ctx)
+    const response = await catalog.listResources(listRequest, request.ctx)
     const columns: QueryColumn[] = [
       { name: 'object_path', type: 'string' },
       { name: 'schema_revision', type: 'string' },

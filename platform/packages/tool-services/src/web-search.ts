@@ -60,8 +60,6 @@ export interface WebSearchHandlerOptions {
   readonly resolvedProfile: ResolvedProfile
   /** The registered public-web source this tool reads, used for the evidence snapshot. */
   readonly sourceRef: SourceRef
-  /** The trusted context; forwarded to the provider and never derived from arguments. */
-  readonly ctx: ToolContext
   readonly schemaVersion?: string
 }
 
@@ -101,7 +99,6 @@ export class WebSearchHandler implements ToolHandler {
   readonly #provider: WebSearchProvider | undefined
   readonly #enablement: WebSearchEnablement
   readonly #sourceRef: SourceRef
-  readonly #ctx: ToolContext
   readonly #schemaVersion: string
 
   constructor(options: WebSearchHandlerOptions) {
@@ -112,7 +109,6 @@ export class WebSearchHandler implements ToolHandler {
       providerConfigured: options.provider !== undefined,
     })
     this.#sourceRef = options.sourceRef
-    this.#ctx = options.ctx
     this.#schemaVersion = options.schemaVersion ?? options.provider?.providerRef.version ?? '1.0.0'
   }
 
@@ -144,15 +140,19 @@ export class WebSearchHandler implements ToolHandler {
     const cursor = readString(args.cursor)
     const limit = readLimit(args.limit, request.resultLimits.maxRows)
 
-    const result = await this.#callProvider(provider, {
-      query,
-      allowedDomains,
-      limit,
-      ...(freshnessHint === undefined ? {} : { freshnessHint }),
-      ...(cursor === undefined ? {} : { cursor }),
-      deadline: request.deadline,
-      signal: request.signal,
-    })
+    const result = await this.#callProvider(
+      provider,
+      {
+        query,
+        allowedDomains,
+        limit,
+        ...(freshnessHint === undefined ? {} : { freshnessHint }),
+        ...(cursor === undefined ? {} : { cursor }),
+        deadline: request.deadline,
+        signal: request.signal,
+      },
+      request.ctx,
+    )
 
     const pages: WebPageEvidence[] = []
     let excluded = result.excludedCount
@@ -213,9 +213,10 @@ export class WebSearchHandler implements ToolHandler {
   async #callProvider(
     provider: WebSearchProvider,
     request: Parameters<WebSearchProvider['search']>[0],
+    ctx: ToolContext,
   ): ReturnType<WebSearchProvider['search']> {
     try {
-      return await provider.search(request, this.#ctx)
+      return await provider.search(request, ctx)
     } catch (error) {
       // The provider is an adapter and this is a service: they share only `contracts`, so
       // the classified failure is recognised structurally by its canonical error code

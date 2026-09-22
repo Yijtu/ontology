@@ -352,7 +352,7 @@ describe('coverage semantics', () => {
       doc({ chunkId: '00000000-0000-4000-8000-000000000001', text: 'the service is best effort' }),
     ])
     const service = serviceWith(store)
-    const handler = createBm25DocumentSearchToolHandler({ service, ctx: CTX_A })
+    const handler = createBm25DocumentSearchToolHandler({ service })
     const outcome = await handler.execute({
       callId: randomUUID(),
       toolId: 'document_search',
@@ -360,6 +360,7 @@ describe('coverage semantics', () => {
       resultLimits: { maxRows: 200, maxBytes: 1048576, maxDurationMs: 30000 },
       deadline: '2026-09-21T00:10:00Z',
       traceId: 'trace-bm25',
+      ctx: CTX_A,
       signal: new AbortController().signal,
     })
     expect(outcome.status).toBe('empty')
@@ -443,7 +444,7 @@ describe('index build stage handler', () => {
   it('is usable as the application ToolHandler for document_search', () => {
     const store = new InMemoryKeywordIndexStore()
     const service = serviceWith(store)
-    const handler: ToolHandler = createBm25DocumentSearchToolHandler({ service, ctx: CTX_A })
+    const handler: ToolHandler = createBm25DocumentSearchToolHandler({ service })
     expect(handler.toolId).toBe('document_search')
   })
 
