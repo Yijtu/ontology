@@ -12,7 +12,7 @@ import type {
   ToolContext,
   VersionRef,
 } from '@ontology/contracts'
-import { DocumentSearchError } from './errors'
+import { DocumentSearchError, asStoreFailure } from './errors'
 import { resolveTrustedScope } from './scope'
 import type {
   GenerationWriteResult,
@@ -205,6 +205,12 @@ export class PostgresKeywordIndexStore implements KeywordIndexStore {
         ? {}
         : { connectionTimeoutMillis: config.connectionTimeoutMs }),
     })
+    // A pooled connection that dies while idle has no caller to report to:
+    // `pg-pool` discards it and re-emits the error on the pool, and an unhandled
+    // `error` event would crash the process. The next operation opens a fresh
+    // connection and, if the database is still unreachable, fails with the
+    // classified `SOURCE_UNAVAILABLE` from `#withScope`.
+    this.#pool.on('error', () => undefined)
   }
 
   async #withScope<T>(
@@ -212,7 +218,14 @@ export class PostgresKeywordIndexStore implements KeywordIndexStore {
     run: (client: PoolClient) => Promise<T>,
     options?: { readonly readOnly?: boolean },
   ): Promise<T> {
-    const client = await this.#pool.connect()
+    let client: PoolClient
+    try {
+      client = await this.#pool.connect()
+    } catch (error) {
+      // Pool exhaustion or a refused initial connection: classify so the tool path
+      // sees the canonical retryable `SOURCE_UNAVAILABLE`, not an opaque driver error.
+      throw asStoreFailure(error) ?? error
+    }
     try {
       await client.query(options?.readOnly === true ? 'BEGIN READ ONLY' : 'BEGIN')
       await client.query(
@@ -228,7 +241,9 @@ export class PostgresKeywordIndexStore implements KeywordIndexStore {
       } catch {
         // keep the original failure; a broken connection is discarded below
       }
-      throw error
+      // A dropped connection becomes `SOURCE_UNAVAILABLE`; a `DocumentSearchError`
+      // or a genuine internal fault is rethrown unchanged.
+      throw asStoreFailure(error) ?? error
     } finally {
       let reset = true
       try {
