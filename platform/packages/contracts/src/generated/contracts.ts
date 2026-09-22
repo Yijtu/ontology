@@ -1249,6 +1249,52 @@ export interface TelemetryReadCurrentResponse {
   stale?: boolean
 }
 /**
+ * One forecast sample at the time it targets. `targetTime` is when the value is expected, never when it was observed or issued, so a forecast point can never be mistaken for a recorded observation.
+ *
+ * This interface was referenced by `OntologyContracts`'s JSON-Schema
+ * via the `definition` "ForecastPoint".
+ */
+export interface ForecastPoint {
+  targetTime: Rfc3339UtcTimestamp
+  value?: DecimalQuantity
+  quality: TelemetryQuality
+}
+/**
+ * C3 forecast read. `asOf` bounds the issue time: a backend must never return a forecast issued after it, so a historical snapshot cannot be given future information. The read is bounded by `targetWindow` and `maxPoints`.
+ *
+ * This interface was referenced by `OntologyContracts`'s JSON-Schema
+ * via the `definition` "ForecastReadRequest".
+ */
+export interface ForecastReadRequest {
+  entityRef: ResourceRef
+  metric: NonEmptyString
+  targetWindow: TimeWindow
+  asOf: Rfc3339UtcTimestamp
+  expectedUnit?: UnitCode
+  qualityFloor?: TelemetryQuality
+  maxPoints?: number
+}
+/**
+ * A forecast read result. `issuedAt` and `targetWindow` are preserved so a historical snapshot can prove which forecast it used and that the forecast predates the evaluation clock; `modelVersion` pins the producing model/method version and `snapshot` carries the exact source state.
+ *
+ * This interface was referenced by `OntologyContracts`'s JSON-Schema
+ * via the `definition` "ForecastReadResponse".
+ */
+export interface ForecastReadResponse {
+  entityRef: ResourceRef
+  metric: NonEmptyString
+  unit: UnitCode
+  issuedAt: Rfc3339UtcTimestamp
+  targetWindow: TimeWindow
+  method: NonEmptyString
+  assumptions: NonEmptyString[]
+  modelVersion: VersionRef
+  points: ForecastPoint[]
+  quality: TelemetryQuality
+  snapshot: SourceSnapshot
+  completeness: CompletenessStatus
+}
+/**
  * Content-addressed, immutable write. Identical content and media type produce identical digests across local and S3 adapters.
  *
  * This interface was referenced by `OntologyContracts`'s JSON-Schema

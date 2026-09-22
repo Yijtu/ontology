@@ -78,17 +78,41 @@ export interface ForecastSeriesInput {
   readonly targetInterval: TimeWindow
   readonly method: string
   readonly assumptions: readonly string[]
+  /** The model/scenario version that produced the forecast; a forecast is never version-free. */
+  readonly modelVersion: VersionRef
   readonly points: readonly RawTelemetryPoint[]
   readonly sourceRef: SourceRef
   readonly sourceSnapshot: SourceSnapshot
   readonly mappingVersion: VersionRef
 }
 
-/** The bounded, already-read inputs handed to the pure normaliser. */
+/**
+ * The bounded, already-read inputs handed to the pure normaliser.
+ *
+ * `forecastConfigured` and `requestedForecasts` let the caller state that a forecast was
+ * requested through `ForecastPort`. When the port is absent the normaliser reports the request
+ * as `forecast_not_configured` instead of silently treating "no forecast read" as "no forecast
+ * exists". A caller that supplies forecasts directly (no port) leaves both unset, which keeps the
+ * pre-existing behaviour: no requested forecast means no forecast gap.
+ */
 export interface EnergyInputBundle {
   readonly observations: readonly ObservationSeriesInput[]
   readonly forecasts: readonly ForecastSeriesInput[]
+  readonly forecastConfigured?: boolean
+  readonly requestedForecasts?: readonly ForecastRequestDeclaration[]
 }
+
+/** A forecast the caller asked `ForecastPort` to read, so a gap can be reported explicitly. */
+export interface ForecastRequestDeclaration {
+  readonly measurementPointRef: string
+  readonly metric: EnergyMetric
+}
+
+/**
+ * The explicit forecast outcome of a normalisation. `not_configured` means a forecast was
+ * requested but no backend exists; it is never replaced by an empty or invented forecast.
+ */
+export type ForecastOutcomeStatus = 'ok' | 'not_configured'
 
 /**
  * One measurement point's declared coverage. `parentCoverageRef` names the coverage this point
@@ -199,9 +223,14 @@ export interface NormalizedSeries {
   readonly validityWindow?: TimeWindow
   readonly method?: string
   readonly assumptions?: readonly string[]
+  readonly modelVersion?: VersionRef
 }
 
-export type MissingInputReason = 'not_read' | 'issued_after_evaluation_clock' | 'no_samples'
+export type MissingInputReason =
+  | 'not_read'
+  | 'issued_after_evaluation_clock'
+  | 'no_samples'
+  | 'forecast_not_configured'
 
 export interface MissingInput {
   readonly measurementPointRef: string
@@ -225,6 +254,8 @@ export interface NormalizedEnergyInput {
   readonly dataMode: DataMode
   readonly sourceWatermarks: readonly SourceWatermarkRef[]
   readonly missingInputs: readonly MissingInput[]
+  /** Explicit forecast outcome. `not_configured` is never a fabricated or empty forecast. */
+  readonly forecastOutcome: ForecastOutcomeStatus
 }
 
 export interface NormalizeEnergyInputRequest {

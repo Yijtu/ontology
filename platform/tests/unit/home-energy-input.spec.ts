@@ -38,6 +38,7 @@ import {
   GARAGE_MEASUREMENT_POINT,
   HOME_ENERGY_COVERAGE,
   HOME_ENERGY_CONFLICTING_COVERAGE,
+  HOME_ENERGY_FORECAST_MODEL_VERSION,
   HOME_ENERGY_INPUT_VERSIONS,
   HOME_ENERGY_SOURCE_A_REF,
   HOME_ENERGY_SOURCE_B_REF,
@@ -411,6 +412,7 @@ describe('issue time, validity window, versions and no future leakage (E-09)', (
     targetInterval,
     method: 'persistence',
     assumptions: ['clear-sky'],
+    modelVersion: HOME_ENERGY_FORECAST_MODEL_VERSION,
     points: [point(targetInterval.start, 4.0)],
     sourceRef: HOME_ENERGY_SOURCE_A_REF,
     sourceSnapshot: sourceSnapshot(HOME_ENERGY_SOURCE_A_REF, '2026-01-01T00:00:00Z', issuedAt, 'd'),
@@ -437,6 +439,7 @@ describe('issue time, validity window, versions and no future leakage (E-09)', (
     })
     expect(forecasts[0]?.method).toBe('persistence')
     expect(forecasts[0]?.assumptions).toEqual(['clear-sky'])
+    expect(forecasts[0]?.modelVersion).toEqual(HOME_ENERGY_FORECAST_MODEL_VERSION)
     expect(input.missingInputs).toEqual([
       { measurementPointRef: SITE_MEASUREMENT_POINT, metric: 'power', purpose: 'forecast', reason: 'issued_after_evaluation_clock' },
     ])

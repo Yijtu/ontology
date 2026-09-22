@@ -55,6 +55,9 @@ export type {
 export { readObservationSeries } from './telemetry'
 export type { ObservationReadSpec } from './telemetry'
 
+export { readForecastSeries } from './forecast'
+export type { ForecastReadSpec } from './forecast'
+
 export {
   alignSlots,
   assertTimeZone,
@@ -74,6 +77,8 @@ export type {
   EnergyInputManifest,
   EnergyInputSnapshot,
   EnergyMetric,
+  ForecastOutcomeStatus,
+  ForecastRequestDeclaration,
   ForecastSeriesInput,
   InputVersions,
   MeterResetPolicy,

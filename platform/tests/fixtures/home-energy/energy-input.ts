@@ -62,6 +62,13 @@ export const HOME_ENERGY_INPUT_VERSIONS: InputVersions = {
   userConstraint: versionRef('home-energy.user-constraint', '1.0.0', '4'),
 }
 
+/** The model/scenario version a forecast names; a forecast is never version-free. */
+export const HOME_ENERGY_FORECAST_MODEL_VERSION: VersionRef = versionRef(
+  'home-energy.forecast.persistence',
+  '1.0.0',
+  '8',
+)
+
 function metricOfDimension(dimension: string): 'power' | 'energy' | undefined {
   if (dimension === 'power') return 'power'
   if (dimension === 'energy') return 'energy'
