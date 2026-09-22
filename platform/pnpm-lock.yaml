@@ -65,6 +65,9 @@ importers:
       '@ontology/core':
         specifier: workspace:*
         version: link:packages/core
+      '@ontology/industry-pack-home-energy':
+        specifier: workspace:*
+        version: link:industry-packs/home-energy
       '@ontology/provenance':
         specifier: workspace:*
         version: link:packages/provenance
