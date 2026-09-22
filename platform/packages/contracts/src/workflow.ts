@@ -19,6 +19,7 @@ import type {
   ToolGateway,
 } from './ports'
 import type { ToolContext } from './trusted'
+import type { ClaimExplanation, DraftClaim, VerificationFinding } from './verification'
 
 /**
  * Workflow controller ports and records (SPEC D7, ADR-14, INV-09).
@@ -95,6 +96,12 @@ export interface AnswerDraft {
   readonly draftId: Uuid
   readonly runId: Uuid
   readonly blocks: readonly unknown[]
+  /**
+   * The structured, result-bound claims of the draft (D7.4). A draft written by the
+   * combined verification path always carries them; they are part of `contentHash`, so a
+   * revision of any claim produces a new draft hash and invalidates an older verdict.
+   */
+  readonly claims?: readonly DraftClaim[]
   readonly evidenceManifestHash: Sha256Digest
   readonly contentHash: Sha256Digest
   readonly limitations: readonly string[]
@@ -130,12 +137,21 @@ export interface DraftWriterPort {
 
 export interface VerificationResult {
   readonly verificationId: Uuid
+  readonly draftId?: Uuid
   readonly draftHash: Sha256Digest
   readonly evidenceManifestHash: Sha256Digest
   readonly verdict: 'pass' | 'fail'
   readonly failedChecks: readonly string[]
   readonly policyVersion: NonEmptyString
   readonly verifiedAt: Rfc3339UtcTimestamp
+  /** Claim ids that passed every hard check (D7.4 `supportedClaims`). */
+  readonly supportedClaimIds?: readonly Uuid[]
+  /** Evidence ids a claim referenced but the verifier could not resolve. */
+  readonly missingEvidence?: readonly Uuid[]
+  /** Located hard/semantic/policy findings; empty on a clean pass. */
+  readonly findings?: readonly VerificationFinding[]
+  /** Restricted-template explanations of the findings, never model/JEV prose. */
+  readonly explanations?: readonly ClaimExplanation[]
 }
 
 export interface VerifierRequest {
