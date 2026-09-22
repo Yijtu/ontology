@@ -91,7 +91,7 @@ const DOCUMENT_COLUMNS = `chunk_id, parse_id, document_ref_id, document_ref_vers
 
 function fail(message: string, cause?: unknown): never {
   throw new DocumentSearchError(
-    'STORE_FAILED',
+    'SOURCE_UNAVAILABLE',
     message,
     cause === undefined ? undefined : { cause },
   )
@@ -428,7 +428,7 @@ export class PostgresKeywordIndexStore implements KeywordIndexStore {
       const row = target.rows[0]
       if (row === undefined) {
         throw new DocumentSearchError(
-          'INDEX_VERSION_NOT_FOUND',
+          'SNAPSHOT_UNAVAILABLE',
           `generation ${generation} of ${collectionRef} does not exist`,
         )
       }

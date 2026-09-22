@@ -33,26 +33,26 @@ export function decodeCursor(value: string): SearchCursor {
   try {
     parsed = JSON.parse(Buffer.from(value, 'base64url').toString('utf8'))
   } catch (error) {
-    throw new DocumentSearchError('INVALID_REQUEST', 'the cursor is not a valid opaque cursor', {
+    throw new DocumentSearchError('INVALID_ARGUMENT', 'the cursor is not a valid opaque cursor', {
       cause: error,
     })
   }
   if (!isRecord(parsed)) {
-    throw new DocumentSearchError('INVALID_REQUEST', 'the cursor is not a valid opaque cursor')
+    throw new DocumentSearchError('INVALID_ARGUMENT', 'the cursor is not a valid opaque cursor')
   }
   if (parsed.version !== 1 || typeof parsed.queryDigest !== 'string') {
-    throw new DocumentSearchError('INVALID_REQUEST', 'the cursor version or digest is invalid')
+    throw new DocumentSearchError('INVALID_ARGUMENT', 'the cursor version or digest is invalid')
   }
   if (!Number.isInteger(parsed.offset) || (parsed.offset as number) < 0) {
-    throw new DocumentSearchError('INVALID_REQUEST', 'the cursor offset is invalid')
+    throw new DocumentSearchError('INVALID_ARGUMENT', 'the cursor offset is invalid')
   }
   const rawCollections = parsed.collections
   if (!Array.isArray(rawCollections) || rawCollections.length === 0) {
-    throw new DocumentSearchError('INVALID_REQUEST', 'the cursor does not name any collection')
+    throw new DocumentSearchError('INVALID_ARGUMENT', 'the cursor does not name any collection')
   }
   const collections: SearchCursorCollection[] = rawCollections.map((entry) => {
     if (!isRecord(entry) || typeof entry.collectionRef !== 'string' || typeof entry.generation !== 'string') {
-      throw new DocumentSearchError('INVALID_REQUEST', 'a cursor collection entry is invalid')
+      throw new DocumentSearchError('INVALID_ARGUMENT', 'a cursor collection entry is invalid')
     }
     return { collectionRef: entry.collectionRef, generation: entry.generation }
   })

@@ -11,7 +11,7 @@ import { DocumentSearchError } from './errors'
 export function resolveTrustedScope(scopeRef: ScopeRef, ctx: ToolContext): ScopeRef {
   if (!isToolContext(ctx)) {
     throw new DocumentSearchError(
-      'SCOPE_MISMATCH',
+      'FORBIDDEN',
       'a host-minted trusted tool context is required',
     )
   }
@@ -19,13 +19,13 @@ export function resolveTrustedScope(scopeRef: ScopeRef, ctx: ToolContext): Scope
   const spaceId = ctx.allowedResources.spaceId
   if (ctx.allowedResources.tenantId !== tenantId) {
     throw new DocumentSearchError(
-      'SCOPE_MISMATCH',
+      'FORBIDDEN',
       'trusted context carries inconsistent tenant scope',
     )
   }
   if (scopeRef.tenantId !== tenantId || scopeRef.spaceId !== spaceId) {
     throw new DocumentSearchError(
-      'SCOPE_MISMATCH',
+      'FORBIDDEN',
       'request scope does not match the trusted principal scope',
     )
   }
@@ -36,7 +36,7 @@ export function resolveTrustedScope(scopeRef: ScopeRef, ctx: ToolContext): Scope
 export function trustedScope(ctx: ToolContext): ScopeRef {
   if (!isToolContext(ctx)) {
     throw new DocumentSearchError(
-      'SCOPE_MISMATCH',
+      'FORBIDDEN',
       'a host-minted trusted tool context is required',
     )
   }
@@ -44,7 +44,7 @@ export function trustedScope(ctx: ToolContext): ScopeRef {
   const spaceId = ctx.allowedResources.spaceId
   if (ctx.allowedResources.tenantId !== tenantId) {
     throw new DocumentSearchError(
-      'SCOPE_MISMATCH',
+      'FORBIDDEN',
       'trusted context carries inconsistent tenant scope',
     )
   }

@@ -248,6 +248,7 @@ export type ErrorCode =
   | 'PROFILE_INCOMPATIBLE'
   | 'SNAPSHOT_UNAVAILABLE'
   | 'CHECKPOINT_INCOMPATIBLE'
+  | 'INDEX_NOT_FOUND'
   | 'SOURCE_UNAVAILABLE'
   | 'MODEL_UNAVAILABLE'
   | 'RATE_LIMITED'
@@ -1464,6 +1465,7 @@ export interface ErrorCatalog {
   PROFILE_INCOMPATIBLE: ErrorDescriptor
   SNAPSHOT_UNAVAILABLE: ErrorDescriptor
   CHECKPOINT_INCOMPATIBLE: ErrorDescriptor
+  INDEX_NOT_FOUND: ErrorDescriptor
   SOURCE_UNAVAILABLE: ErrorDescriptor
   MODEL_UNAVAILABLE: ErrorDescriptor
   RATE_LIMITED: ErrorDescriptor

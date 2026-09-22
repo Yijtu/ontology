@@ -174,6 +174,8 @@ describe('adapter-raised port errors keep their canonical classification', () =>
     'INVALID_ARGUMENT',
     'FORBIDDEN',
     'SOURCE_UNAVAILABLE',
+    'SNAPSHOT_UNAVAILABLE',
+    'INDEX_NOT_FOUND',
     'RATE_LIMITED',
     'BUDGET_EXHAUSTED',
   ]

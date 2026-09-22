@@ -24,7 +24,9 @@ describe('the C6.2 error catalogue', () => {
     const canonical = readSchemaData('error-catalog.json').catalog
     expectValid(validate, canonical, 'canonical error catalogue')
 
-    expect(ERROR_CODES).toHaveLength(24)
+    // The catalogue grew by INDEX_NOT_FOUND for the document_search index state
+    // (LOCAL-063); every code still has exactly one descriptor.
+    expect(ERROR_CODES).toHaveLength(25)
     expect([...ERROR_CODES].sort()).toEqual(Object.keys(ERROR_CATALOG).sort())
     for (const [code, descriptor] of Object.entries(ERROR_CATALOG)) {
       expect(descriptor.code, `descriptor code for ${code}`).toBe(code)
@@ -71,12 +73,17 @@ describe('the C6.2 error catalogue', () => {
     expect(ERROR_CATALOG.VERSION_CONFLICT).toMatchObject({ httpStatus: 409, retryable: 'never' })
     expect(ERROR_CATALOG.VERIFICATION_FAILED.retryable).toBe('within_repair_budget')
     expect(ERROR_CATALOG.RESULT_TOO_LARGE).toMatchObject({ httpStatus: 413, retryable: 'not_mechanical' })
+    // A missing index is a state conflict, not a transient failure, so it is never
+    // mechanically retried — unlike the store failure mapped onto SOURCE_UNAVAILABLE.
+    expect(ERROR_CATALOG.INDEX_NOT_FOUND).toMatchObject({ httpStatus: 409, retryable: 'never' })
+    expect(ERROR_CATALOG.SOURCE_UNAVAILABLE).toMatchObject({ httpStatus: 503, retryable: 'limited' })
   })
 
   it('keeps every code in the ErrorCode union', () => {
     const codes: readonly ErrorCode[] = ERROR_CODES
     expect(codes).toContain('INVALID_SCHEMA')
     expect(codes).toContain('UNSUPPORTED_QUERY')
+    expect(codes).toContain('INDEX_NOT_FOUND')
     expect(codes).not.toContain('CANCELLED' as ErrorCode)
   })
 })
