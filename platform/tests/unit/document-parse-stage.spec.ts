@@ -187,6 +187,8 @@ describe('received → parsed stage', () => {
     expect(extractionRef.parserVersion).toBe('1.0.0')
     expect(extractionRef.definitionRef).toEqual(DEFINITION_REF)
     expect(extractionRef.parseId).toBeDefined()
+    // A fully captured document carries an explicit empty truncation lineage, never undefined.
+    expect(extractionRef.truncatedChunkIds).toEqual([])
     // The downstream stage observed the exact parse the received stage committed.
     expect(harness.downstreamParseIds).toContain(extractionRef.parseId)
   })

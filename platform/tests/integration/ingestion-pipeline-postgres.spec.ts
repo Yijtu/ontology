@@ -1,7 +1,9 @@
 import { randomUUID } from 'node:crypto'
+import { readFileSync } from 'node:fs'
 import { mkdtemp, rm } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
+import { fileURLToPath } from 'node:url'
 import { afterAll, beforeAll, describe, expect, it, vi } from 'vitest'
 import {
   ControlPostgresDatabase,
@@ -28,6 +30,7 @@ import {
   JobService,
   JobWorker,
   ReviewHandoffStageHandler,
+  decodeDocumentIngestionRef,
   decodeExtractionJobRef,
   encodeDocumentIngestionRef,
 } from '@ontology/application'
@@ -172,6 +175,14 @@ async function publishOriginal(
   mediaType = 'text/plain',
 ): Promise<ResourceRef> {
   const bytes = new TextEncoder().encode(text)
+  return publishOriginalBytes(context, bytes, mediaType)
+}
+
+async function publishOriginalBytes(
+  context: IngestionContext,
+  bytes: Uint8Array,
+  mediaType: string,
+): Promise<ResourceRef> {
   const staged = await blobStore.stage(bytes, { scopeRef: context.scopeRef }, context.ctx)
   const published = await blobStore.publish(
     {
@@ -184,6 +195,13 @@ async function publishOriginal(
     context.ctx,
   )
   return published.blobRef
+}
+
+/** A real two-page PDF whose second content stream is corrupt, so page 2 is a genuine gap. */
+function brokenPageTwoPdf(): Uint8Array {
+  return new Uint8Array(
+    readFileSync(fileURLToPath(new URL('../fixtures/documents/broken-page-2.pdf', import.meta.url))),
+  )
 }
 
 function ingestionDocumentRef(context: IngestionContext, originalRef: ResourceRef): string {
@@ -447,6 +465,106 @@ describe('POST /ingestions runs received → parsed → awaiting_review with the
         [context.scopeRef.tenantId, context.scopeRef.spaceId, firstRef.digest],
       ),
     ).toBe(2)
+  })
+})
+
+describe('received → parsed truncation lineage with the real parser', () => {
+  it('carries a real truncation case into the job reference and keeps it out of complete evidence', async () => {
+    const context = await newContext('ingestion-truncation')
+    const originalRef = await publishOriginalBytes(context, brokenPageTwoPdf(), 'application/pdf')
+    const created = await ingest(context, ingestionDocumentRef(context, originalRef))
+    const jobId = (created.json() as { data: { jobId: string } }).data.jobId
+
+    const worker = buildWorker(context, parser, store, 'ingestion-truncation-worker')
+    await worker.runUntilIdle(context.scopeRef, context.ctx)
+
+    const view = await jobService.getJob(jobId, context.ctx)
+    expect(view.stage).toBe('awaiting_review')
+    expect(view.documentRef).toBeDefined()
+    if (view.documentRef === undefined) return
+    const ref = decodeExtractionJobRef(view.documentRef)
+    expect(ref.truncatedChunkIds).toBeDefined()
+    const truncatedChunkIds = ref.truncatedChunkIds ?? []
+    expect(truncatedChunkIds.length).toBeGreaterThan(0)
+
+    // The parse itself is partial, and the truncated ids are exactly the parser's lineage.
+    const parse = await parseStore.findParseByDigest(
+      context.scopeRef,
+      originalRef.digest,
+      '1.0.0',
+      context.ctx,
+    )
+    expect(parse?.coverage.status).toBe('partial')
+    expect(parse?.parseId).toBe(ref.parseId)
+
+    // Downstream: a candidate grounded in a truncated chunk is never produced as complete.
+    const candidates = await candidateStore.listCandidates(context.scopeRef, { jobId }, context.ctx)
+    expect(candidates.length).toBeGreaterThan(0)
+    const truncated = new Set(truncatedChunkIds)
+    const fromTruncated = candidates.filter((candidate) =>
+      candidate.sourceSpans.some((span) => truncated.has(span.chunkId)),
+    )
+    expect(fromTruncated.length).toBeGreaterThan(0)
+    expect(fromTruncated.every((candidate) => candidate.state === 'pending_review')).toBe(true)
+    expect(
+      fromTruncated.every((candidate) =>
+        candidate.issues.some((issue) => issue.code === 'TRUNCATED_CHUNK'),
+      ),
+    ).toBe(true)
+  })
+
+  it('commits the truncation lineage atomically with the parsed checkpoint', async () => {
+    const context = await newContext('ingestion-truncation-atomic')
+    const originalRef = await publishOriginalBytes(context, brokenPageTwoPdf(), 'application/pdf')
+    const created = await ingest(context, ingestionDocumentRef(context, originalRef))
+    const jobId = (created.json() as { data: { jobId: string } }).data.jobId
+
+    const faultStore = new FaultInjectingJobStore(database)
+    faultStore.failNextAdvanceBeforeCommit = true
+    const crashing = buildWorker(context, parser, faultStore, 'ingestion-truncation-crash')
+    await expect(crashing.runOnce(context.scopeRef, context.ctx)).rejects.toThrow(
+      /simulated crash after archival/,
+    )
+
+    // The parse archived its chunks, but the checkpoint never committed, so the job still carries
+    // the ingestion reference and no truncation lineage has leaked into it.
+    const afterCrash = await store.getJob(context.scopeRef, jobId, context.ctx)
+    expect(afterCrash?.stage).toBe('received')
+    expect(afterCrash?.documentRef).toBeDefined()
+    if (afterCrash?.documentRef === undefined) return
+    expect(decodeDocumentIngestionRef(afterCrash.documentRef).kind).toBe('document_ingestion')
+
+    clock.advance(5 * 60_000)
+    const recovering = buildWorker(context, parser, store, 'ingestion-truncation-recover')
+    const result = await recovering.runOnce(context.scopeRef, context.ctx)
+    expect(result.disposition).toBe('stopped')
+
+    // Recovery commits the extraction reference and its truncated ids together with the checkpoint.
+    const done = await jobService.getJob(jobId, context.ctx)
+    expect(done.stage).toBe('awaiting_review')
+    expect(done.documentRef).toBeDefined()
+    if (done.documentRef === undefined) return
+    const ref = decodeExtractionJobRef(done.documentRef)
+    expect(ref.truncatedChunkIds?.length ?? 0).toBeGreaterThan(0)
+  })
+
+  it('reports an empty truncation lineage for a fully captured document', async () => {
+    const context = await newContext('ingestion-clean')
+    const originalRef = await publishOriginal(
+      context,
+      'SERVICE TERMS\n7.1 A complete clause.\n7.2 Another complete clause.',
+    )
+    const created = await ingest(context, ingestionDocumentRef(context, originalRef))
+    const jobId = (created.json() as { data: { jobId: string } }).data.jobId
+
+    const worker = buildWorker(context, parser, store, 'ingestion-clean-worker')
+    await worker.runUntilIdle(context.scopeRef, context.ctx)
+
+    const view = await jobService.getJob(jobId, context.ctx)
+    expect(view.stage).toBe('awaiting_review')
+    if (view.documentRef === undefined) return
+    const ref = decodeExtractionJobRef(view.documentRef)
+    expect(ref.truncatedChunkIds).toEqual([])
   })
 })
 

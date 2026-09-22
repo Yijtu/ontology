@@ -1,5 +1,9 @@
 import { describe, expect, it } from 'vitest'
-import { chunkLines } from '@ontology/adapter-extraction-document'
+import {
+  buildChunkRecords,
+  chunkLines,
+  truncatedChunkIdsOf,
+} from '@ontology/adapter-extraction-document'
 import type { StructuralLine } from '@ontology/adapter-extraction-document'
 
 function line(
@@ -108,5 +112,58 @@ describe('structure-aware chunking', () => {
       ),
     )
     expect(chunks[1]?.text).toBe('4.2 Risk passes on delivery.')
+  })
+})
+
+describe('truncation lineage', () => {
+  const PARSE_ID = '11111111-1111-4111-8111-111111111111'
+
+  function recordsFor(
+    lines: readonly StructuralLine[],
+  ): ReturnType<typeof buildChunkRecords> {
+    const drafts = chunkLines(lines, { offsetUnit: 'character', approximatePages: new Set() })
+    return buildChunkRecords(drafts, { parseId: PARSE_ID, offsetUnit: 'character' })
+  }
+
+  function page(pageNumber: number): {
+    page: number
+    startOffset: number
+    endOffset: number
+    approximate: boolean
+  } {
+    return { page: pageNumber, startOffset: 0, endOffset: 1, approximate: false }
+  }
+
+  it('marks the last chunk before a skipped page and the first chunk after it', () => {
+    const chunks = recordsFor([
+      line('1. A clause on the first page.', 0, { page: 1 }),
+      line('2. A clause on the third page.', 32, { page: 3 }),
+    ])
+    expect(chunks).toHaveLength(2)
+
+    const ids = truncatedChunkIdsOf(chunks, [page(1), page(3)], 3)
+
+    // Page 2 was skipped: both neighbours of the gap may be missing continuation text.
+    expect(ids).toEqual([chunks[0]?.chunkId, chunks[1]?.chunkId])
+  })
+
+  it('marks only the final chunk when the parse budget cuts the document short', () => {
+    const chunks = recordsFor([
+      line('1. A clause on the first page.', 0, { page: 1 }),
+      line('2. A clause on the second page.', 32, { page: 2 }),
+    ])
+
+    const ids = truncatedChunkIdsOf(chunks, [page(1)], 2)
+
+    expect(ids).toEqual([chunks[0]?.chunkId])
+  })
+
+  it('yields no ids when every page of the document was captured', () => {
+    const chunks = recordsFor([
+      line('1. A clause on the first page.', 0, { page: 1 }),
+      line('2. A clause on the second page.', 32, { page: 2 }),
+    ])
+
+    expect(truncatedChunkIdsOf(chunks, [page(1), page(2)], 2)).toEqual([])
   })
 })

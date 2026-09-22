@@ -88,6 +88,12 @@ export interface DocumentChunkRecord {
   readonly caption?: string
   readonly tableHeader?: string
   readonly parentChunkId?: Uuid
+  /**
+   * True when the parser knows the chunk was captured incompletely: its page/stream is adjacent
+   * to a region the parse skipped, so it may be missing continuation text. Such a chunk must not
+   * be treated as complete evidence (SPEC D4.1/D4.3, INV-06). Absent means no known truncation.
+   */
+  readonly truncated?: boolean
 }
 
 /** A durable parse run: parser identity, coverage and the artifacts it produced. */
@@ -118,6 +124,14 @@ export interface DocumentParseRecord {
 /** The parse result returned to a caller, including the chunks to index. */
 export interface ParsedDocument extends DocumentParseRecord {
   readonly chunks: readonly DocumentChunkRecord[]
+  /**
+   * The ids of the chunks the parser could not capture completely (SPEC D4.1/D4.3, INV-06):
+   * each is adjacent to a page/stream the parse skipped, so its continuation may be missing.
+   * Empty when every page of the original was captured. The `received → parsed` stage carries
+   * these ids into `ExtractionJobRef.truncatedChunkIds` so downstream stages never treat a
+   * truncated chunk as complete evidence.
+   */
+  readonly truncatedChunkIds: readonly Uuid[]
   /** True when an existing parse of the same bytes + parser version was reused. */
   readonly reused: boolean
 }
