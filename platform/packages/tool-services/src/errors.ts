@@ -61,12 +61,17 @@ const RETRYABLE: Readonly<Record<ErrorCode, boolean>> = Object.fromEntries(
  * A classified refusal raised by the gateway. `code` is the gateway policy reason;
  * `platformCode` is the canonical catalogue entry the wire result reports. It never
  * carries a secret, credential or full customer payload.
+ *
+ * `remoteStateUnknown` marks a failure where the remote call may already have taken
+ * effect (a timeout or a dropped connection after send). The gateway settles such a
+ * reservation as `usage_unknown` instead of a free failure, so the estimate stays held.
  */
 export class ToolGatewayError extends Error {
   readonly code: ToolGatewayErrorCode
   readonly platformCode: ErrorCode
   readonly retryable: boolean
   readonly fieldErrors: readonly FieldError[]
+  readonly remoteStateUnknown: boolean
 
   constructor(
     code: ToolGatewayErrorCode,
@@ -75,6 +80,8 @@ export class ToolGatewayError extends Error {
       readonly fieldErrors?: readonly FieldError[]
       /** Override the catalogue entry, e.g. report a specific budget denial code. */
       readonly platformCode?: ErrorCode
+      /** True when the remote may already have been billed. */
+      readonly remoteStateUnknown?: boolean
     },
   ) {
     super(message, options?.cause === undefined ? undefined : { cause: options.cause })
@@ -83,6 +90,7 @@ export class ToolGatewayError extends Error {
     this.platformCode = options?.platformCode ?? PLATFORM_CODE[code]
     this.retryable = RETRYABLE[this.platformCode]
     this.fieldErrors = options?.fieldErrors ?? []
+    this.remoteStateUnknown = options?.remoteStateUnknown ?? false
   }
 }
 
@@ -97,6 +105,7 @@ export function toPlatformError(error: ToolGatewayError, traceId: string): Platf
     message: error.message,
     retryable: error.retryable,
     traceId,
+    ...(error.remoteStateUnknown ? { remoteStateUnknown: true } : {}),
   }
   if (error.fieldErrors.length === 0) return platformError
   return { ...platformError, fieldErrors: [...error.fieldErrors] }

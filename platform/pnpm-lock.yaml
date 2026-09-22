@@ -32,6 +32,9 @@ importers:
       '@ontology/adapter-runtime-template':
         specifier: workspace:*
         version: link:packages/adapters/runtime-template
+      '@ontology/adapter-search-web':
+        specifier: workspace:*
+        version: link:packages/adapters/search-web
       '@ontology/adapter-transport-local':
         specifier: workspace:*
         version: link:packages/adapters/transport-local
@@ -385,6 +388,15 @@ importers:
         version: link:../../core
 
   packages/adapters/search-bm25:
+    dependencies:
+      '@ontology/contracts':
+        specifier: workspace:*
+        version: link:../../contracts
+      '@ontology/core':
+        specifier: workspace:*
+        version: link:../../core
+
+  packages/adapters/search-web:
     dependencies:
       '@ontology/contracts':
         specifier: workspace:*
