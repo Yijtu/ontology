@@ -133,10 +133,10 @@ export class Bm25DocumentSearchService {
     assertKeywordMode(request)
     assertSupportedFilters(request.filters)
     if (request.query.trim().length === 0) {
-      throw new DocumentSearchError('INVALID_REQUEST', 'query must be a non-empty string')
+      throw new DocumentSearchError('INVALID_ARGUMENT', 'query must be a non-empty string')
     }
     if (request.allowedCollectionRefs.length === 0) {
-      throw new DocumentSearchError('INVALID_REQUEST', 'at least one authorized collection is required')
+      throw new DocumentSearchError('INVALID_ARGUMENT', 'at least one authorized collection is required')
     }
     const collections = [...new Set(request.allowedCollectionRefs)]
     const queryDigest = sha256DigestOf(
@@ -279,7 +279,7 @@ export class Bm25DocumentSearchService {
     const cursor = decodeCursor(request.cursor)
     if (cursor.queryDigest !== queryDigest) {
       throw new DocumentSearchError(
-        'INVALID_REQUEST',
+        'INVALID_ARGUMENT',
         'the cursor belongs to a different query and cannot be replayed',
       )
     }
@@ -287,7 +287,7 @@ export class Bm25DocumentSearchService {
     for (const collectionRef of pinned) {
       if (!collections.includes(collectionRef)) {
         throw new DocumentSearchError(
-          'INVALID_REQUEST',
+          'INVALID_ARGUMENT',
           `the cursor names collection ${collectionRef}, which this request is not authorized for`,
         )
       }
@@ -302,7 +302,7 @@ export class Bm25DocumentSearchService {
       )
       if (generation === undefined) {
         throw new DocumentSearchError(
-          'INDEX_VERSION_NOT_FOUND',
+          'SNAPSHOT_UNAVAILABLE',
           `index generation ${entry.generation} of ${entry.collectionRef} is no longer available`,
         )
       }

@@ -66,6 +66,12 @@ export const ERROR_CATALOG: Readonly<Record<ErrorCode, ErrorDescriptor>> = {
     "retryable": "never",
     "behavior": "State the re-run or historical-view limitation explicitly."
   },
+  "INDEX_NOT_FOUND": {
+    "code": "INDEX_NOT_FOUND",
+    "httpStatus": 409,
+    "retryable": "never",
+    "behavior": "State that the authorized collection has no active keyword index; never return an empty result as if the corpus lacked the query."
+  },
   "SOURCE_UNAVAILABLE": {
     "code": "SOURCE_UNAVAILABLE",
     "httpStatus": 503,

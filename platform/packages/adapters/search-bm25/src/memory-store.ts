@@ -53,7 +53,7 @@ export class InMemoryKeywordIndexStore implements KeywordIndexStore {
     if (existingByNumber !== undefined) {
       // The same generation number must never be reused for different content.
       throw new DocumentSearchError(
-        'STORE_FAILED',
+        'SOURCE_UNAVAILABLE',
         `generation ${input.generation} already exists with a different corpus digest`,
       )
     }
@@ -64,7 +64,7 @@ export class InMemoryKeywordIndexStore implements KeywordIndexStore {
         // A duplicate chunk id inside one generation is a programming error; the
         // database primary key would reject it, so the reference store does too.
         throw new DocumentSearchError(
-          'STORE_FAILED',
+          'SOURCE_UNAVAILABLE',
           `duplicate chunk ${document.chunkId} in generation ${input.generation}`,
         )
       }
@@ -139,7 +139,7 @@ export class InMemoryKeywordIndexStore implements KeywordIndexStore {
     const target = generations?.get(generation)
     if (generations === undefined || target === undefined) {
       throw new DocumentSearchError(
-        'INDEX_VERSION_NOT_FOUND',
+        'SNAPSHOT_UNAVAILABLE',
         `generation ${generation} of ${collectionRef} does not exist`,
       )
     }
@@ -179,7 +179,7 @@ export class InMemoryKeywordIndexStore implements KeywordIndexStore {
     const entry = this.#generations.get(generationKey(scope, collectionRef))?.get(generation)
     if (entry === undefined) {
       throw new DocumentSearchError(
-        'INDEX_VERSION_NOT_FOUND',
+        'SNAPSHOT_UNAVAILABLE',
         `generation ${generation} of ${collectionRef} does not exist`,
       )
     }

@@ -72,7 +72,7 @@ export class Bm25IndexBuilder {
   async build(request: IndexBuildRequest, ctx: ToolContext): Promise<IndexBuildResult> {
     const scope = trustedScope(ctx)
     if (request.collectionRef.trim().length === 0) {
-      throw new DocumentSearchError('INVALID_REQUEST', 'collectionRef must be a non-empty string')
+      throw new DocumentSearchError('INVALID_ARGUMENT', 'collectionRef must be a non-empty string')
     }
 
     const byChunkId = new Map<string, IndexedDocument>()

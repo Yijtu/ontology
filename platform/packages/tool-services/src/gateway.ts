@@ -121,6 +121,11 @@ interface ClassifiedPortFailure {
  * fallback. `remoteStateUnknown` is preserved from the error, and the catalogue's own
  * `recordsRemoteStateUnknown` flag (e.g. `DEADLINE_EXCEEDED`) is honoured too, so a
  * timed-out/cancelled read still settles as `usage_unknown`.
+ *
+ * The document_search index-state codes travel this path unchanged (LOCAL-063):
+ * `INDEX_NOT_FOUND` (no active index, never retryable) and `SNAPSHOT_UNAVAILABLE`
+ * (a pinned generation is gone, never retryable) stay distinct from the retryable
+ * `SOURCE_UNAVAILABLE` a store read failure raises.
  */
 function classifyPortFailure(error: unknown): ClassifiedPortFailure | undefined {
   if (!(error instanceof Error)) return undefined

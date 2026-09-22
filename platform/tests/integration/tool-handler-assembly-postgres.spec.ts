@@ -26,6 +26,8 @@ import {
   Bm25DocumentSearchService,
   PostgresKeywordIndexStore,
   canonicalIndexDigest,
+  decodeCursor,
+  encodeCursor,
   termFrequencies,
   tokenize,
 } from '@ontology/adapter-search-bm25'
@@ -78,6 +80,9 @@ const SCOPE_A: ScopeRef = { tenantId: TENANT_A, spaceId: SPACE_A }
 const SOURCE_BUSINESS: SourceRef = { namespace: 'demo', sourceId: 'business-db' }
 const SOURCE_WEB: SourceRef = { namespace: 'public-web', sourceId: 'search' }
 const COLLECTION = 'manuals/assembly'
+const MISSING_COLLECTION = 'manuals/no-index'
+const CORRUPT_COLLECTION = 'manuals/store-failure'
+const CURSOR_COLLECTION = 'manuals/cursor-state'
 
 function connectionStringFor(base: string, user: string, password: string, database: string): string {
   const url = new URL(base)
@@ -464,6 +469,8 @@ describe('the assembly layer injects the run ToolContext for all three handlers'
     const other = await gatewayB.invoke(documentCall(randomUUID()), CTX_B)
     expect(other.status).toBe('error')
     // The real index is scoped to tenant A, so tenant B's context resolves no generation.
+    expect(other.error?.code).toBe('INDEX_NOT_FOUND')
+    expect(other.error?.retryable).toBe(false)
     expect(other.error?.message).toContain('no active keyword index')
     expect(other.evidenceRefs).toEqual([])
   })
@@ -617,5 +624,142 @@ describe('adapter-raised port errors keep their canonical classification on the 
     const result = await gatewayBudget.invoke(documentCall(randomUUID()), CTX_A)
     expect(result.status).toBe('error')
     expect(result.error?.code).toBe('BUDGET_EXHAUSTED')
+  })
+})
+
+describe('document_search index-state failures keep their canonical code on the tool path', () => {
+  const noIndexContext = toolContext({
+    tenantId: TENANT_A,
+    spaceId: SPACE_A,
+    sourceRefs: [SOURCE_BUSINESS],
+    collectionRefs: [MISSING_COLLECTION],
+    domains: ['example.com'],
+  })
+  const corruptContext = toolContext({
+    tenantId: TENANT_A,
+    spaceId: SPACE_A,
+    sourceRefs: [SOURCE_BUSINESS],
+    collectionRefs: [CORRUPT_COLLECTION],
+    domains: ['example.com'],
+  })
+  const cursorContext = toolContext({
+    tenantId: TENANT_A,
+    spaceId: SPACE_A,
+    sourceRefs: [SOURCE_BUSINESS],
+    collectionRefs: [CURSOR_COLLECTION],
+    domains: ['example.com'],
+  })
+
+  function docCallFor(callId: string, collection: string, cursor?: string): ToolCall {
+    return {
+      callId,
+      toolId: 'document_search',
+      arguments: {
+        query: 'battery warranty',
+        allowedCollectionRefs: [collection],
+        mode: 'keyword',
+        ...(cursor === undefined ? {} : { cursor }),
+      },
+    }
+  }
+
+  it('preserves INDEX_NOT_FOUND for an authorized collection with no active index', async () => {
+    const gatewayCase = await openGateway(randomUUID(), noIndexContext)
+    const result = await gatewayCase.invoke(
+      docCallFor(randomUUID(), MISSING_COLLECTION),
+      noIndexContext,
+    )
+    expect(result.status).toBe('error')
+    expect(result.error?.code).toBe('INDEX_NOT_FOUND')
+    expect(result.error?.retryable).toBe(false)
+    expect(result.evidenceRefs).toEqual([])
+  })
+
+  it('preserves SOURCE_UNAVAILABLE when the real index store returns an untrustworthy row', async () => {
+    const documents = [indexedDoc('the battery warranty covers five years')]
+    const indexDigest = canonicalIndexDigest(CORRUPT_COLLECTION, documents)
+    const input: WriteGenerationInput = {
+      collectionRef: CORRUPT_COLLECTION,
+      generation: '1',
+      indexDigest,
+      indexRef: { id: CORRUPT_COLLECTION, version: '1.0.0', digest: indexDigest },
+      docCount: documents.length,
+      avgDocLength: documents.reduce((sum, entry) => sum + entry.length, 0) / documents.length,
+      completeness: 'complete',
+      builtAt: '2026-09-21T00:00:00Z',
+      documents,
+    }
+    await indexStore.writeGeneration(SCOPE_A, input, CTX_A)
+    await indexStore.activateGeneration(SCOPE_A, CORRUPT_COLLECTION, '1', '2026-09-21T00:00:00Z', CTX_A)
+    // The real store reads this back on the search path; a locator value it cannot
+    // trust is a store integrity failure, not an empty result.
+    await adminClient.query(
+      `UPDATE agent_platform.keyword_index_documents SET locator = '{"kind":"corrupt"}'::jsonb
+        WHERE tenant_id = $1 AND space_id = $2 AND collection_ref = $3`,
+      [TENANT_A, SPACE_A, CORRUPT_COLLECTION],
+    )
+
+    const gatewayCase = await openGateway(randomUUID(), corruptContext)
+    const result = await gatewayCase.invoke(
+      docCallFor(randomUUID(), CORRUPT_COLLECTION),
+      corruptContext,
+    )
+    expect(result.status).toBe('error')
+    expect(result.error?.code).toBe('SOURCE_UNAVAILABLE')
+    expect(result.error?.retryable).toBe(true)
+    expect(result.evidenceRefs).toEqual([])
+  })
+
+  it('preserves SNAPSHOT_UNAVAILABLE when a cursor pins a generation that is gone', async () => {
+    const documents = [
+      indexedDoc('the battery warranty covers five years'),
+      indexedDoc('the battery warranty excludes misuse'),
+    ]
+    const indexDigest = canonicalIndexDigest(CURSOR_COLLECTION, documents)
+    const input: WriteGenerationInput = {
+      collectionRef: CURSOR_COLLECTION,
+      generation: '1',
+      indexDigest,
+      indexRef: { id: CURSOR_COLLECTION, version: '1.0.0', digest: indexDigest },
+      docCount: documents.length,
+      avgDocLength: documents.reduce((sum, entry) => sum + entry.length, 0) / documents.length,
+      completeness: 'complete',
+      builtAt: '2026-09-21T00:00:00Z',
+      documents,
+    }
+    await indexStore.writeGeneration(SCOPE_A, input, CTX_A)
+    await indexStore.activateGeneration(SCOPE_A, CURSOR_COLLECTION, '1', '2026-09-21T00:00:00Z', CTX_A)
+
+    const first = await searchService.search(
+      {
+        query: 'battery warranty',
+        allowedCollectionRefs: [CURSOR_COLLECTION],
+        mode: 'keyword',
+        limit: 1,
+      },
+      CTX_A,
+    )
+    const pinned = first.nextCursor
+    if (pinned === null || pinned === undefined) throw new Error('expected a pinned cursor')
+    const decoded = decodeCursor(pinned)
+    const stale = encodeCursor({
+      version: 1,
+      queryDigest: decoded.queryDigest,
+      collections: decoded.collections.map((entry) => ({
+        collectionRef: entry.collectionRef,
+        generation: '999999',
+      })),
+      offset: decoded.offset,
+    })
+
+    const gatewayCase = await openGateway(randomUUID(), cursorContext)
+    const result = await gatewayCase.invoke(
+      docCallFor(randomUUID(), CURSOR_COLLECTION, stale),
+      cursorContext,
+    )
+    expect(result.status).toBe('error')
+    expect(result.error?.code).toBe('SNAPSHOT_UNAVAILABLE')
+    expect(result.error?.retryable).toBe(false)
+    expect(result.evidenceRefs).toEqual([])
   })
 })

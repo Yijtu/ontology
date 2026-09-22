@@ -2204,6 +2204,7 @@ export const SCHEMA_DOCUMENTS: readonly JsonSchemaObject[] = [
           "PROFILE_INCOMPATIBLE",
           "SNAPSHOT_UNAVAILABLE",
           "CHECKPOINT_INCOMPATIBLE",
+          "INDEX_NOT_FOUND",
           "SOURCE_UNAVAILABLE",
           "MODEL_UNAVAILABLE",
           "RATE_LIMITED",
@@ -2326,6 +2327,9 @@ export const SCHEMA_DOCUMENTS: readonly JsonSchemaObject[] = [
           "CHECKPOINT_INCOMPATIBLE": {
             "$ref": "#/$defs/ErrorDescriptor"
           },
+          "INDEX_NOT_FOUND": {
+            "$ref": "#/$defs/ErrorDescriptor"
+          },
           "SOURCE_UNAVAILABLE": {
             "$ref": "#/$defs/ErrorDescriptor"
           },
@@ -2380,6 +2384,7 @@ export const SCHEMA_DOCUMENTS: readonly JsonSchemaObject[] = [
           "PROFILE_INCOMPATIBLE",
           "SNAPSHOT_UNAVAILABLE",
           "CHECKPOINT_INCOMPATIBLE",
+          "INDEX_NOT_FOUND",
           "SOURCE_UNAVAILABLE",
           "MODEL_UNAVAILABLE",
           "RATE_LIMITED",

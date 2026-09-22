@@ -1,5 +1,6 @@
 import { randomUUID } from 'node:crypto'
 import { describe, expect, it } from 'vitest'
+import { TOOL_CONTEXT_BRAND } from '@ontology/contracts'
 import type {
   DocumentChunkRecord,
   DocumentParseRecord,
@@ -402,6 +403,8 @@ describe('authorization', () => {
     await seedGeneration(store, COLLECTION, '1', [doc({ text: 'target tenant a' })], CTX_A)
     await expect(serviceWith(store).search(keywordRequest(), CTX_B)).rejects.toMatchObject({
       code: 'INDEX_NOT_FOUND',
+      httpStatus: 409,
+      retryable: false,
     })
     expect(store.hasScope(SCOPE_A)).toBe(true)
   })
@@ -410,7 +413,56 @@ describe('authorization', () => {
     const store = new InMemoryKeywordIndexStore()
     await expect(serviceWith(store).search(keywordRequest(), CTX_A)).rejects.toMatchObject({
       code: 'INDEX_NOT_FOUND',
+      httpStatus: 409,
     })
+  })
+
+  it('refuses an untrusted context as FORBIDDEN before any read', async () => {
+    const store = new InMemoryKeywordIndexStore()
+    await seedGeneration(store, COLLECTION, '1', [doc({ text: 'target' })])
+    const forged: ToolContext = { ...CTX_A }
+    Reflect.deleteProperty(forged, TOOL_CONTEXT_BRAND)
+    await expect(serviceWith(store).search(keywordRequest(), forged)).rejects.toMatchObject({
+      code: 'FORBIDDEN',
+      httpStatus: 403,
+      retryable: false,
+    })
+  })
+})
+
+describe('index version and store failures keep honest retryability', () => {
+  it('reports a missing pinned generation as SNAPSHOT_UNAVAILABLE, not retryable', async () => {
+    const store = new InMemoryKeywordIndexStore()
+    await seedGeneration(store, COLLECTION, '1', [doc({ text: 'target' })])
+    await expect(
+      store.activateGeneration(SCOPE_A, COLLECTION, '404', '2026-09-21T00:00:02Z', CTX_A),
+    ).rejects.toMatchObject({ code: 'SNAPSHOT_UNAVAILABLE', httpStatus: 409, retryable: false })
+    await expect(
+      store.listMatchingDocuments(SCOPE_A, COLLECTION, '404', ['target'], 10, CTX_A),
+    ).rejects.toMatchObject({ code: 'SNAPSHOT_UNAVAILABLE', httpStatus: 409 })
+  })
+
+  it('reports a store integrity failure as SOURCE_UNAVAILABLE, which is retryable', async () => {
+    const store = new InMemoryKeywordIndexStore()
+    const duplicate = doc({ chunkId: '00000000-0000-4000-8000-000000000001', text: 'target' })
+    const indexDigest = canonicalIndexDigest(COLLECTION, [duplicate])
+    await expect(
+      store.writeGeneration(
+        SCOPE_A,
+        {
+          collectionRef: COLLECTION,
+          generation: '1',
+          indexDigest,
+          indexRef: { id: COLLECTION, version: '1.0.0', digest: indexDigest },
+          docCount: 2,
+          avgDocLength: 1,
+          completeness: 'complete',
+          builtAt: '2026-09-21T00:00:00Z',
+          documents: [duplicate, duplicate],
+        },
+        CTX_A,
+      ),
+    ).rejects.toMatchObject({ code: 'SOURCE_UNAVAILABLE', httpStatus: 503, retryable: true })
   })
 })
 
@@ -435,7 +487,7 @@ describe('generation write atomicity', () => {
         },
         CTX_A,
       ),
-    ).rejects.toMatchObject({ code: 'STORE_FAILED' })
+    ).rejects.toMatchObject({ code: 'SOURCE_UNAVAILABLE', httpStatus: 503 })
     expect(await store.getGeneration(SCOPE_A, COLLECTION, '1', CTX_A)).toBeUndefined()
   })
 })
