@@ -13,3 +13,9 @@ export type {
   ArtifactProvenanceServiceDependencies,
   AuthorizedArtifactReader,
 } from './provenance-service'
+export { ProvenanceReadService, ProvenanceReadError, isProvenanceReadError } from './read'
+export type {
+  EvidenceDependencySource,
+  ProvenanceReadErrorCode,
+  ProvenanceReadServiceDependencies,
+} from './read'
