@@ -5,11 +5,11 @@ import { afterAll, beforeAll, describe, expect, it } from 'vitest'
 import {
   ControlPostgresDatabase,
   ControlPostgresRepository,
+  PostgresSemanticDefinitionStore,
   runControlMigrations,
 } from '@ontology/adapter-control-postgres'
 import type { ScopeRef } from '@ontology/contracts'
 import { SemanticDefinitionError, SemanticDefinitionService } from '@ontology/semantic-engine'
-import { PostgresSemanticDefinitionStore } from './postgres-semantic-definition-store'
 import {
   DATA_REF_ID,
   NAMESPACE,

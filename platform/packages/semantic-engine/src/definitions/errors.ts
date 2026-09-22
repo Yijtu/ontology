@@ -89,24 +89,3 @@ export function toFieldErrors(issues: readonly DefinitionValidationIssue[]): Fie
     reason: `${issue.code}: ${issue.reason}`,
   }))
 }
-
-/**
- * Persistence-level failures. The service maps these onto `SemanticDefinitionError`; a
- * driver error never escapes the store port.
- */
-export type SemanticDefinitionStoreErrorCode =
-  | 'SCOPE_MISMATCH'
-  | 'VERSION_EXISTS'
-  | 'VERSION_NOT_FOUND'
-  | 'BINDING_EXISTS'
-  | 'BINDING_CONFLICT'
-
-export class SemanticDefinitionStoreError extends Error {
-  readonly code: SemanticDefinitionStoreErrorCode
-
-  constructor(code: SemanticDefinitionStoreErrorCode, message: string, options?: ErrorOptions) {
-    super(message, options)
-    this.name = 'SemanticDefinitionStoreError'
-    this.code = code
-  }
-}

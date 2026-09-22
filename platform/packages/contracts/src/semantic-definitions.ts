@@ -8,7 +8,9 @@ import type {
   StandardProvenance,
   UnitCode,
   VersionRef,
-} from '@ontology/contracts'
+} from './generated/contracts'
+import type { RuleComparisonOperator } from './rule-extraction'
+import type { ToolContext } from './trusted'
 
 /**
  * Semantic definition model (SPEC D2–D4, C1/C3).
@@ -19,6 +21,10 @@ import type {
  * connection address, no credential and no physical column name (INV-03 / ADR-10). The
  * physical mapping from a logical role to a source object lives in `MappingRef`, which
  * is a deployment concern, not a definition.
+ *
+ * The model, the persistence port and the store error live in `contracts` next to
+ * `ControlRepository`/`ComponentRegistryStore`, so an adapter can implement the port while
+ * depending on `contracts` alone (SPEC §2: adapters → contracts).
  */
 
 /** Every definition family shares one id space per kind, inside one published version. */
@@ -118,8 +124,6 @@ export interface IdentityScopeDefinition {
   readonly standardProvenance: readonly StandardProvenance[]
 }
 
-export type ComparisonOperator = 'eq' | 'ne' | 'lt' | 'lte' | 'gt' | 'gte'
-
 export type RuleExpression =
   | { readonly op: 'all'; readonly operands: readonly RuleExpression[] }
   | { readonly op: 'any'; readonly operands: readonly RuleExpression[] }
@@ -127,7 +131,7 @@ export type RuleExpression =
   | {
       readonly op: 'compare'
       readonly attributeId: string
-      readonly operator: ComparisonOperator
+      readonly operator: RuleComparisonOperator
       readonly value: string | number | boolean
     }
   | {
@@ -282,4 +286,72 @@ export interface ResolveDataDefinitionInput {
 export interface ResolvedDataDefinition {
   readonly binding: DefinitionBinding
   readonly version: SemanticDefinitionVersion
+}
+
+/**
+ * Persistence-level failures. The service maps these onto `SemanticDefinitionError`; a
+ * driver error never escapes the store port.
+ *
+ * The taxonomy lives next to the port so every implementation — in-memory reference
+ * store, PostgreSQL adapter — throws the same class the application layer catches.
+ */
+export type SemanticDefinitionStoreErrorCode =
+  | 'SCOPE_MISMATCH'
+  | 'VERSION_EXISTS'
+  | 'VERSION_NOT_FOUND'
+  | 'BINDING_EXISTS'
+  | 'BINDING_CONFLICT'
+
+export class SemanticDefinitionStoreError extends Error {
+  readonly code: SemanticDefinitionStoreErrorCode
+
+  constructor(code: SemanticDefinitionStoreErrorCode, message: string, options?: ErrorOptions) {
+    super(message, options)
+    this.name = 'SemanticDefinitionStoreError'
+    this.code = code
+  }
+}
+
+/**
+ * Persistence port for published definition versions (D2/D3).
+ *
+ * It stores immutable versions, an append-only publication history and the data→version
+ * bindings. Every key is tenant/space scoped and `ControlRepository` remains the durable,
+ * monotonic event ledger; this port is the reconstructable version projection. A new
+ * version is a new row — there is no update path for a published version.
+ *
+ * The port is declared here, next to `ControlRepository`/`ComponentRegistryStore`, so an
+ * adapter can implement it while depending on `contracts` alone (SPEC §2: adapters →
+ * contracts). It carries no driver type: `pg` stays inside the adapter.
+ */
+export interface SemanticDefinitionStore {
+  findVersion(
+    namespace: string,
+    definitionId: string,
+    version: string,
+    scopeRef: ScopeRef,
+    ctx: ToolContext,
+  ): Promise<SemanticDefinitionVersion | undefined>
+  listVersions(
+    scopeRef: ScopeRef,
+    filter: SemanticDefinitionListFilter,
+    ctx: ToolContext,
+  ): Promise<SemanticDefinitionVersion[]>
+  insertVersion(
+    scopeRef: ScopeRef,
+    version: SemanticDefinitionVersion,
+    audit: SemanticDefinitionAudit,
+    ctx: ToolContext,
+  ): Promise<void>
+  listEvents(
+    scopeRef: ScopeRef,
+    definitionId: string,
+    ctx: ToolContext,
+  ): Promise<SemanticDefinitionEvent[]>
+  bindData(scopeRef: ScopeRef, binding: DefinitionBinding, ctx: ToolContext): Promise<void>
+  findBinding(
+    scopeRef: ScopeRef,
+    dataRefId: string,
+    ctx: ToolContext,
+  ): Promise<DefinitionBinding | undefined>
 }

@@ -1,27 +1,25 @@
-import { isToolContext } from '@ontology/contracts'
-import type {
-  ControlAppendEventRequest,
-  ControlRepository,
-  ScopeRef,
-  ToolContext,
-  VersionRef,
-} from '@ontology/contracts'
-import { SemanticDefinitionError, SemanticDefinitionStoreError } from './errors'
-import { definitionRefKey, sha256DigestOf } from './canonical'
-import { definitionVersionDigest, validateDefinitionVersion } from './validate'
-import type { SemanticDefinitionStore } from './store'
+import { SemanticDefinitionStoreError, isToolContext } from '@ontology/contracts'
 import type {
   BindDataInput,
+  ControlAppendEventRequest,
+  ControlRepository,
   DefinitionBinding,
   ResolveDataDefinitionInput,
   ResolvedDataDefinition,
+  ScopeRef,
   SemanticDefinitionAudit,
   SemanticDefinitionEvent,
   SemanticDefinitionListFilter,
   SemanticDefinitionQuery,
+  SemanticDefinitionStore,
   SemanticDefinitionVersion,
   SemanticDefinitionVersionDraft,
-} from './types'
+  ToolContext,
+  VersionRef,
+} from '@ontology/contracts'
+import { SemanticDefinitionError } from './errors'
+import { definitionRefKey, sha256DigestOf } from './canonical'
+import { definitionVersionDigest, validateDefinitionVersion } from './validate'
 
 export interface SemanticDefinitionServiceDependencies {
   /** Durable, monotonic, idempotent control ledger (C1/D2). */

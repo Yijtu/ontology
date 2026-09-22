@@ -1,11 +1,12 @@
 import type {
+  AttributeDefinition,
   IndustryAttributeSchema,
   IndustryIdentityScopeSchema,
   IndustryObjectSchema,
   IndustryRelationSchema,
   IndustrySchema,
+  SemanticDefinitionVersion,
 } from '@ontology/contracts'
-import type { AttributeDefinition, SemanticDefinitionVersion } from './types'
 
 /**
  * Read-only projection of a published definition version into the extraction contract

@@ -1,13 +1,15 @@
 import type {
   AggregationKind,
+  AttributeValueType,
+  Cardinality,
   ColumnType,
   ComparisonOperator,
   ScalarValue,
   SourceObjectRef,
   UnitCode,
+  UnitRef,
   VersionRef,
 } from '@ontology/contracts'
-import type { AttributeValueType, Cardinality, UnitRef } from '../definitions/types'
 
 /**
  * The confirmed physical mapping (SPEC C1/C3, INV-03).

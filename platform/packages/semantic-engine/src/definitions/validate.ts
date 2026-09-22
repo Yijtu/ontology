@@ -1,16 +1,17 @@
 import { findIndustryPackViolations } from '@ontology/contracts'
-import type { ProvenanceKind, Sha256Digest } from '@ontology/contracts'
 import type {
   AttributeDefinition,
   AttributeValueType,
   Cardinality,
   IdentityScopeDefinition,
   ObjectDefinition,
+  ProvenanceKind,
   RelationDefinition,
   SemanticDefinitionVersion,
   SemanticDefinitionVersionDraft,
+  Sha256Digest,
   UnitRef,
-} from './types'
+} from '@ontology/contracts'
 import { definitionKey, isDefinitionIdentifier, isNamespace, isSemverValue, isSha256DigestValue, isUnitCode, sha256DigestOf } from './canonical'
 import type { DefinitionValidationIssue } from './errors'
 
