@@ -18,6 +18,13 @@ export {
 } from './restricted'
 export { createRunCheckpointPort } from './checkpoints'
 export { answerDraftContentHash, inputManifestDigest } from './canonical'
+export { RunPlanner, parseSemanticQueryPlan } from './planning'
+export type { PlanRequest, RunPlannerDependencies } from './planning'
+export { NoProgressGuard, SmallPlanExecutor } from './evidence-loop'
+export type {
+  PlanExecutionResult,
+  SmallPlanExecutorDependencies,
+} from './evidence-loop'
 export type {
   CancelWorkflowInput,
   RespondWorkflowInput,
