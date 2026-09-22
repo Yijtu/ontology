@@ -227,6 +227,50 @@ describe('materialization outbox consumer (LOCAL-069)', () => {
     expect(await h.store.listOpenFences(h.scopeRef, h.ctx)).toHaveLength(0)
   })
 
+  it('reuses the fence the publication transaction opened instead of opening a second one', async () => {
+    const h = harness()
+    const statementFenceId = randomUUID()
+    const ruleFenceId = randomUUID()
+    await h.store.openFence(
+      h.scopeRef,
+      { fenceId: statementFenceId, reason: 'opened in the publication transaction', propositionKeys: [], openedAt: '2026-09-21T06:00:00Z' },
+      h.ctx,
+    )
+    await h.store.openFence(
+      h.scopeRef,
+      { fenceId: ruleFenceId, reason: 'opened in the publication transaction', propositionKeys: [], openedAt: '2026-09-21T06:00:00Z' },
+      h.ctx,
+    )
+
+    await h.consumer.consume(
+      messageOf(PUBLICATION_PUBLISHED_TOPIC, {
+        publicationId: h.publicationId,
+        materializationFences: [
+          { changeId: '11111111-1111-4111-8111-111111111111', fenceId: statementFenceId },
+          { changeId: '22222222-2222-4222-8222-222222222222', fenceId: ruleFenceId },
+        ],
+      }),
+      h.ctx,
+    )
+
+    // The consumer must not open a third fence; it binds the two already-committed ones.
+    expect(await h.store.listOpenFences(h.scopeRef, h.ctx)).toHaveLength(2)
+    const requests = h.outbox.messages.filter((message) => message.topic === MATERIALIZATION_REQUESTED_TOPIC)
+    expect(requests).toHaveLength(2)
+    expect(requests.map((message) => message.payload['fenceId']).sort()).toEqual(
+      [statementFenceId, ruleFenceId].sort(),
+    )
+
+    for (const message of requests) await h.consumer.consume(message, h.ctx)
+    expect(await h.store.listOpenFences(h.scopeRef, h.ctx)).toHaveLength(0)
+    const advanced = await h.materializer.read(
+      { scopeRef: h.scopeRef, projectionRef: PROJECTION_REF, asOfRecordedSeq: '9', validAt: '2026-09-21T12:00:00Z' },
+      h.ctx,
+    )
+    expect(advanced.status).toBe('materialized')
+    expect(advanced.conclusions.find((entry) => entry.propositionKey === PREDICATE)?.value).toBe(true)
+  })
+
   it('does not advance twice when the same request is re-delivered after a crash reclaim', async () => {
     const h = harness()
     await h.consumer.consume(messageOf(PUBLICATION_PUBLISHED_TOPIC, { publicationId: h.publicationId }), h.ctx)

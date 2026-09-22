@@ -162,6 +162,26 @@ export interface PublicationIdentityBinding {
 }
 
 /**
+ * A materialisation invalidation fence opened inside the publication transaction (SPEC D5.1,
+ * ADR-13, LOCAL-070).
+ *
+ * The fence is committed atomically with the publication and its outbox event, so a reader that
+ * observes the committed publication immediately meets an open fence instead of a stale
+ * conclusion; the worker only advances the projection afterwards. `changeId` is the change the
+ * fence guards (a statement id or a rule-version id), which is what lets the consumer bind the
+ * fence to the asynchronous advance request. At publication time the affected fan-out has not
+ * been enumerated yet, so `propositionKeys` is empty: the fence conservatively covers the whole
+ * scope, exactly as D5.1 prescribes when the affected set is not yet exhausted.
+ */
+export interface PublicationMaterializationFence {
+  readonly changeId: Uuid
+  readonly fenceId: Uuid
+  readonly reason: string
+  readonly propositionKeys: readonly string[]
+  readonly openedAt: Rfc3339UtcTimestamp
+}
+
+/**
  * Everything `publish` applies in one transaction. Splitting any part across transactions
  * would let a committed fact lose its outbox event, or an identity conflict slip past the
  * check (SPEC D5/D6/§8).
@@ -176,6 +196,12 @@ export interface PublishSemanticPublicationInput {
   readonly outbox: NewOutboxMessage
   /** The ingestion job that anchors the outbox message (the first candidate's job). */
   readonly outboxJobId: Uuid
+  /**
+   * The invalidation fences to open in the same transaction as the publication and its outbox
+   * event (LOCAL-070). Empty or absent means the caller opened no fence, which is only valid for
+   * a caller that does not drive the materialisation window.
+   */
+  readonly materializationFences?: readonly PublicationMaterializationFence[]
 }
 
 export interface PublicationPublishResult {
@@ -230,6 +256,12 @@ export interface ReviseStatementInput {
   readonly recordedAt: Rfc3339UtcTimestamp
   readonly actor: string
   readonly outbox: NewOutboxMessage
+  /**
+   * The invalidation fence to open in the same transaction as the revision and its outbox event
+   * (LOCAL-070). The affected fan-out is not enumerated here, so it conservatively covers the
+   * scope (SPEC D5.1).
+   */
+  readonly materializationFences?: readonly PublicationMaterializationFence[]
 }
 
 export interface PublishedStatementFilter {
