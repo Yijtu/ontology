@@ -26,6 +26,16 @@ const UNIT_TEST_TIMEOUT_MS = 30_000
 const INTEGRATION_MAX_WORKERS = 4
 const INTEGRATION_GROUP_ORDER = 1
 
+// The load/evaluation harness (LOCAL-050) starts its own PostgreSQL container, real stdio MCP
+// children and a full workflow, and deliberately measures wall-clock latency under load. It
+// runs in its own sequence group after the integration project so it never competes with the
+// other container-backed suites for the Docker daemon, and it keeps a small worker count so a
+// P95 is not distorted by the machine's own scheduling noise.
+const LOAD_TEST_TIMEOUT_MS = 180_000
+const LOAD_HOOK_TIMEOUT_MS = 300_000
+const LOAD_MAX_WORKERS = 2
+const LOAD_GROUP_ORDER = 2
+
 export default defineConfig({
   test: {
     environment: 'node',
@@ -59,6 +69,17 @@ export default defineConfig({
           hookTimeout: INTEGRATION_HOOK_TIMEOUT_MS,
           maxWorkers: INTEGRATION_MAX_WORKERS,
           sequence: { groupOrder: INTEGRATION_GROUP_ORDER },
+        },
+      },
+      {
+        extends: true,
+        test: {
+          name: 'load',
+          include: ['tests/load/**/*.spec.ts'],
+          testTimeout: LOAD_TEST_TIMEOUT_MS,
+          hookTimeout: LOAD_HOOK_TIMEOUT_MS,
+          maxWorkers: LOAD_MAX_WORKERS,
+          sequence: { groupOrder: LOAD_GROUP_ORDER },
         },
       },
     ],
