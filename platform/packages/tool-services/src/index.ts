@@ -37,6 +37,8 @@ export type {
   WebSearchEnablement,
   WebSearchHandlerOptions,
 } from './web-search'
+export { DataQueryHandler, OntologyLookupHandler } from './handlers'
+export type { DataQueryHandlerConfig, OntologyLookupHandlerConfig } from './handlers'
 export {
   canonicalJson,
   digestOfSchema,

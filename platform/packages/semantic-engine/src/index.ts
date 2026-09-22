@@ -6,3 +6,4 @@
  * so it imports no adapter, extension, industry pack or SDK/driver (INV-02).
  */
 export * from './definitions'
+export * from './mapping'
