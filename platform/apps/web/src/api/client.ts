@@ -9,6 +9,7 @@ import type {
   ModuleLifecycleState,
   PreflightResult,
   ProfileRef,
+  PublishedAnswer,
   ProfileSpec,
   ProfileVersionRecord,
   RevisionString,
@@ -19,6 +20,19 @@ import type {
   VersionRef,
 } from '@ontology/contracts'
 import { ApiError, toApiFailure } from './errors'
+import { defaultRunEventStreamFactory, isRunState } from './query'
+import type {
+  CancelRunRequest,
+  CreateRunRequest,
+  CreateRunView,
+  QueryRunView,
+  RespondToClarificationRequest,
+  RunAnswerResult,
+  RunEventHandlers,
+  RunEventStream,
+  RunEventStreamFactory,
+  RunScopeView,
+} from './query'
 import type {
   CandidateDetailView,
   CandidateFilter,
@@ -41,6 +55,27 @@ import type {
 } from './review'
 
 export { ApiError } from './errors'
+export {
+  PUBLIC_SSE_EVENTS,
+  defaultRunEventStreamFactory,
+  isPublicSseEvent,
+  parseRunEventData,
+} from './query'
+export type {
+  CancelRunRequest,
+  CreateRunRequest,
+  CreateRunView,
+  DegradationView,
+  QueryRunView,
+  RespondToClarificationRequest,
+  RunAnswerResult,
+  RunEvent,
+  RunEventHandlers,
+  RunEventStream,
+  RunEventStreamFactory,
+  RunProgressView,
+  RunScopeView,
+} from './query'
 export type {
   CandidateDetailView,
   CandidateFilter,
@@ -80,6 +115,8 @@ export interface WorkbenchClientOptions {
   readonly baseUrl: string
   readonly fetchImpl?: typeof fetch
   readonly newId?: () => string
+  /** Opens the run event stream. Defaults to a real `EventSource` in the browser. */
+  readonly eventStreamFactory?: RunEventStreamFactory
 }
 
 export interface PublishProfileRequest {
@@ -154,11 +191,13 @@ export class WorkbenchClient {
   readonly #baseUrl: string
   readonly #fetch: typeof fetch
   readonly #newId: () => string
+  readonly #eventStream: RunEventStreamFactory
 
   constructor(options: WorkbenchClientOptions) {
     this.#baseUrl = options.baseUrl.replace(/\/$/, '')
     this.#fetch = options.fetchImpl ?? ((input, init) => globalThis.fetch(input, init))
     this.#newId = options.newId ?? defaultId
+    this.#eventStream = options.eventStreamFactory ?? defaultRunEventStreamFactory
   }
 
   listComponents(filter: ComponentFilter = {}): Promise<ComponentVersionRecord[]> {
@@ -222,8 +261,93 @@ export class WorkbenchClient {
     )
   }
 
-  getRun(runId: string): Promise<BoundRunView> {
-    return this.#request<BoundRunView>('GET', `/api/v1/runs/${encodeURIComponent(runId)}`)
+  getRun(runId: string): Promise<QueryRunView> {
+    return this.#request<QueryRunView>('GET', `/api/v1/runs/${encodeURIComponent(runId)}`)
+  }
+
+  /** Resolve the scenario scope for a profile so the ask form offers only what it allows. */
+  getRunScope(profileRef: ProfileRef): Promise<RunScopeView> {
+    const query = new URLSearchParams({ profileId: profileRef.id, version: profileRef.version })
+    return this.#request<RunScopeView>('GET', `/api/v1/runs/scope?${query.toString()}`)
+  }
+
+  createRun(request: CreateRunRequest): Promise<CreateRunView> {
+    return this.#request<CreateRunView>('POST', '/api/v1/runs', {
+      body: request,
+      idempotencyKey: this.#newId(),
+    })
+  }
+
+  respondToClarification(
+    runId: string,
+    request: RespondToClarificationRequest,
+  ): Promise<{ readonly runId: string; readonly state: string; readonly revision: RevisionString }> {
+    return this.#request('POST', `/api/v1/runs/${encodeURIComponent(runId)}/responses`, {
+      body: {
+        clarificationId: request.clarificationId,
+        typedResponse: request.typedResponse,
+        expectedRevision: request.expectedRevision,
+      },
+      ifMatch: request.expectedRevision,
+    })
+  }
+
+  cancelRun(
+    runId: string,
+    request: CancelRunRequest,
+  ): Promise<{ readonly runId: string; readonly state: string; readonly revision: RevisionString }> {
+    return this.#request('POST', `/api/v1/runs/${encodeURIComponent(runId)}/cancel`, {
+      body: { reason: request.reason, expectedRevision: request.expectedRevision },
+      ifMatch: request.expectedRevision,
+    })
+  }
+
+  /**
+   * Read the verified answer. A 202 (in progress) and a 404 (terminal without a verified
+   * answer) are explicit results, not thrown errors, and are never rendered as an answer.
+   */
+  async getAnswer(runId: string): Promise<RunAnswerResult> {
+    const response = await this.#fetch(
+      `${this.#baseUrl}/api/v1/runs/${encodeURIComponent(runId)}/answer`,
+      { method: 'GET', headers: { accept: 'application/json' } },
+    )
+    const text = await response.text()
+    let parsed: unknown
+    try {
+      parsed = text.length === 0 ? undefined : JSON.parse(text)
+    } catch {
+      parsed = undefined
+    }
+    if (response.status === 202) {
+      const data = isRecord(parsed) && isRecord(parsed['data']) ? parsed['data'] : {}
+      const state = data['state']
+      return { kind: 'in_progress', state: isRunState(state) ? state : 'collecting' }
+    }
+    if (response.status === 404) {
+      const error = isRecord(parsed) && isRecord(parsed['error']) ? parsed['error'] : {}
+      return {
+        kind: 'unavailable',
+        code: typeof error['code'] === 'string' ? error['code'] : 'ANSWER_NOT_AVAILABLE',
+        message:
+          typeof error['message'] === 'string'
+            ? error['message']
+            : 'the run has no verified answer',
+      }
+    }
+    if (!response.ok) {
+      throw new ApiError(response.status, toApiFailure(response.status, parsed))
+    }
+    return { kind: 'published', answer: dataOf<PublishedAnswer>(parsed, `/api/v1/runs/${runId}/answer`) }
+  }
+
+  /** Subscribe to the run's persisted public events. Unknown event names are dropped. */
+  openRunEvents(
+    runId: string,
+    lastEventId: string | undefined,
+    handlers: RunEventHandlers,
+  ): RunEventStream {
+    const url = `${this.#baseUrl}/api/v1/runs/${encodeURIComponent(runId)}/events`
+    return this.#eventStream(url, lastEventId, handlers)
   }
 
   createIngestion(request: CreateIngestionRequest): Promise<CreateJobResponse> {

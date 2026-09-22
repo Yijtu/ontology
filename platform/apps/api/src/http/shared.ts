@@ -9,6 +9,12 @@ import { failureBody, isClassifiedError } from './errors'
 export interface AuthenticatedRequest {
   readonly principal: Principal
   readonly spaceId: string
+  /**
+   * The domains the trusted context approves for web search. Optional: an authenticator that
+   * does not grant web access leaves it absent, and the run scope then reports no domains
+   * rather than a wildcard.
+   */
+  readonly allowedDomains?: readonly string[]
 }
 
 export type RequestAuthenticator = (request: FastifyRequest) => AuthenticatedRequest | undefined

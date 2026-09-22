@@ -10,6 +10,8 @@ export interface RequestToolContextInput {
   readonly traceId: string
   readonly runId: string
   readonly resolvedProfileHash?: string
+  /** Domains the trusted context approves for web search; absent means none. */
+  readonly allowedDomains?: readonly string[]
 }
 
 /**
@@ -42,7 +44,7 @@ export function createRequestToolContext(input: RequestToolContextInput): ToolCo
       resourceKinds: [],
       sourceRefs: [],
       collectionRefs: [],
-      domains: [],
+      domains: input.allowedDomains === undefined ? [] : [...input.allowedDomains],
       maxRows: 0,
     },
     traceId: input.traceId,

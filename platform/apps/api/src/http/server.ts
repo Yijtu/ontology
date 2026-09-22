@@ -4,10 +4,13 @@ import type { RunService } from '@ontology/application'
 import type { CreateRunResponse, RevisionString } from '@ontology/contracts'
 import { createRequestToolContext } from './context'
 import { formatSseFrame, SSE_HEADERS } from './sse'
+import type { RunProgressReader } from './run-progress'
 import {
   authenticateRequest,
+  CapabilityNotConfiguredError,
   isRecord,
   readHeader,
+  readQueryString,
   readRevisionHeader,
   readTraceId,
   requireNonEmptyString,
@@ -23,12 +26,19 @@ export interface RunApiOptions {
    * for an unauthenticated request; the run surface never reads identity from the body.
    */
   readonly authenticate: RequestAuthenticator
+  /**
+   * Optional sanitised progress projection (shared budget + resolved scenario scope). When
+   * absent the run surface still works; the business UI then shows no budget/scope instead
+   * of inventing one.
+   */
+  readonly progress?: RunProgressReader
   readonly logger?: boolean
 }
 
 export interface RunRouteDependencies {
   readonly service: RunService
   readonly authenticate: RequestAuthenticator
+  readonly progress?: RunProgressReader
 }
 
 function readIfMatch(request: FastifyRequest): RevisionString | undefined {
@@ -81,6 +91,7 @@ export function registerRunRoutes(app: FastifyInstance, dependencies: RunRouteDe
       traceId,
       runId,
       ...(hash === undefined ? {} : { resolvedProfileHash: hash }),
+      ...(auth.allowedDomains === undefined ? {} : { allowedDomains: auth.allowedDomains }),
     })
 
   app.post('/api/v1/runs', async (request, reply) => {
@@ -107,13 +118,45 @@ export function registerRunRoutes(app: FastifyInstance, dependencies: RunRouteDe
     return reply
   })
 
+  // The resolved scenario scope for a profile, so the ask form offers only the enabled
+  // tools and never a capability the profile disables. Registered before the parametric
+  // route; the static segment wins in the router regardless of order.
+  app.get('/api/v1/runs/scope', async (request, reply) => {
+    const traceId = readTraceId(request)
+    const auth = authenticateRequest(dependencies.authenticate, request, reply)
+    if (auth === undefined) return reply
+    const progress = dependencies.progress
+    if (progress === undefined) {
+      throw new CapabilityNotConfiguredError('the run scope projection is not configured')
+    }
+    const profileId = requireNonEmptyString(readQueryString(request, 'profileId'), 'profileId')
+    const version = requireNonEmptyString(readQueryString(request, 'version'), 'version')
+    const ctx = contextFor(auth, traceId, profileId)
+    const scope = await progress.scopeForProfile({ id: profileId, version }, ctx)
+    reply.status(200).send({ data: scope, meta: { traceId } })
+    return reply
+  })
+
   app.get<{ Params: { runId: string } }>('/api/v1/runs/:runId', async (request, reply) => {
     const traceId = readTraceId(request)
     const auth = authenticateRequest(dependencies.authenticate, request, reply)
     if (auth === undefined) return reply
     const runId = request.params.runId
     const view = await dependencies.service.getRun(runId, contextFor(auth, traceId, runId))
-    reply.status(200).send({ data: view, meta: { traceId, revision: view.revision } })
+    const progress =
+      dependencies.progress === undefined
+        ? {}
+        : await dependencies.progress.progressForRun(
+            {
+              runId: view.runId,
+              profileRef: view.profileRef,
+              resolvedProfileHash: view.resolvedProfileHash,
+            },
+            contextFor(auth, traceId, runId, view.resolvedProfileHash),
+          )
+    reply
+      .status(200)
+      .send({ data: { ...view, ...progress }, meta: { traceId, revision: view.revision } })
     return reply
   })
 

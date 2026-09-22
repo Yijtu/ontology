@@ -12,6 +12,8 @@ const TITLES: Record<Exclude<WorkbenchPhase, 'ready'>, string> = {
 export interface StatePanelProps {
   readonly phase: Exclude<WorkbenchPhase, 'ready'>
   readonly error?: WorkbenchError
+  /** A surface-specific title; the default is the workbench wording. */
+  readonly title?: string
   readonly children?: ReactNode
 }
 
@@ -20,10 +22,10 @@ export interface StatePanelProps {
  * `permission_denied` never suggests a retry; `failure` carries the classified code and the
  * server trace id so the operator can quote it.
  */
-export function StatePanel({ phase, error, children }: StatePanelProps) {
+export function StatePanel({ phase, error, title, children }: StatePanelProps) {
   return (
     <section className="state-panel" data-state={phase} role="status" aria-live="polite">
-      <h2 className="state-panel__title">{TITLES[phase]}</h2>
+      <h2 className="state-panel__title">{title ?? TITLES[phase]}</h2>
       {error === undefined ? null : (
         <div className="state-panel__detail">
           <p data-testid="state-error-code">错误码：{error.code}</p>
