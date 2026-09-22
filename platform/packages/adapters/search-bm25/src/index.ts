@@ -15,7 +15,9 @@
  */
 export {
   DocumentSearchError,
+  asStoreFailure,
   httpStatusForDocumentSearchError,
+  isConnectionFailure,
   isDocumentSearchError,
 } from './errors'
 export type { DocumentSearchErrorCode } from './errors'
