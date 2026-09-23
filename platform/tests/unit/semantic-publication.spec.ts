@@ -16,6 +16,7 @@ import {
   PUBLICATION_DEFINITION_REF,
   entityFor,
   publicationSchema,
+  relationFor,
   ruleFor,
   unhandledRuleFor,
 } from './publication-fixtures'
@@ -71,13 +72,16 @@ async function createEntity(candidateId: string): Promise<string> {
 }
 
 async function matchEntity(candidateId: string, entityId: string, expectedRevision = '0'): Promise<void> {
+  const candidate = await candidates.getCandidate(scopeRef, candidateId, ctx)
+  const nativeId = candidate?.kind === 'entity' ? candidate.attributes.find((attribute) => attribute.attributeId === 'device_native_id')?.value : undefined
+  if (typeof nativeId !== 'string') throw new Error('identity fixture is missing its native key')
   await identityService.decide(
     {
       candidateId,
       kind: 'match',
       expectedRevision,
       targetEntityId: entityId,
-      strongIdentity: { kind: 'native_id', value: `N-${candidateId}` },
+      strongIdentity: { kind: 'native_id', value: nativeId },
     },
     ctx,
   )
@@ -115,10 +119,39 @@ async function seedApprovedEntity(): Promise<{
 }
 
 describe('semantic publication service (in-memory)', () => {
+  it('publishes a relation only after both endpoint candidates are approved and entity-bound', async () => {
+    const from = await seedApprovedEntity()
+    const to = await seedApprovedEntity()
+    const relationId = randomUUID()
+    await insert(relationFor({ candidateId: relationId, idempotencyKey: idempotencyKey(), fromCandidateId: from.candidateId, toCandidateId: to.candidateId }))
+    await approve(relationId)
+
+    const publication = await publish([
+      { candidateId: from.candidateId, kind: 'entity' },
+      { candidateId: to.candidateId, kind: 'entity' },
+      { candidateId: relationId, kind: 'relation' },
+    ], 'pub-relation')
+    const relation = publication.statements.find((statement) => statement.statementId === relationId)
+    expect(relation).toMatchObject({
+      kind: 'relation', predicate: 'feeds', subjectEntityId: from.entityId,
+      value: { fromEntityId: from.entityId, toEntityId: to.entityId },
+    })
+
+    const unresolvedId = randomUUID()
+    await insert(relationFor({ candidateId: unresolvedId, idempotencyKey: idempotencyKey(), fromCandidateId: from.candidateId, toCandidateId: randomUUID() }))
+    await approve(unresolvedId)
+    await expect(publish([{ candidateId: unresolvedId, kind: 'relation' }], 'pub-unresolved', '1')).rejects.toMatchObject({ code: 'CANDIDATE_NOT_FOUND' })
+  })
   it('publishes only approved candidates and keeps the candidate and published read views separate', async () => {
     const first = await seedApprovedEntity()
     const secondCandidate = randomUUID()
-    await insert(entityFor({ candidateId: secondCandidate, idempotencyKey: idempotencyKey() }))
+    await insert(entityFor({
+      candidateId: secondCandidate, idempotencyKey: idempotencyKey(),
+      attributes: [
+        { attributeId: 'device_native_id', value: `DEV-${first.candidateId.slice(0, 4)}` },
+        { attributeId: 'device_name', value: 'Charger One' },
+      ],
+    }))
     await matchEntity(secondCandidate, first.entityId)
     await approve(secondCandidate)
 
@@ -398,14 +431,14 @@ describe('semantic publication service (in-memory)', () => {
       entityFor({
         candidateId: first,
         idempotencyKey: idempotencyKey(),
-        attributes: [{ attributeId: 'device_name', value: 'Charger One' }],
+        attributes: [{ attributeId: 'device_native_id', value: 'DEV-SHARED' }, { attributeId: 'device_name', value: 'Charger One' }],
       }),
     )
     await insert(
       entityFor({
         candidateId: second,
         idempotencyKey: idempotencyKey(),
-        attributes: [{ attributeId: 'device_name', value: 'Charger One' }],
+        attributes: [{ attributeId: 'device_native_id', value: 'DEV-SHARED' }, { attributeId: 'device_name', value: 'Charger One' }],
       }),
     )
     const entityId = await createEntity(first)

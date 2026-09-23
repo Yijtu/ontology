@@ -37,6 +37,7 @@ import {
   PUBLICATION_DEFINITION_REF,
   entityFor,
   publicationSchema,
+  relationFor,
   ruleFor,
 } from '../unit/publication-fixtures'
 import { createJobScope, startJobDatabase } from './job-postgres-harness'
@@ -134,13 +135,16 @@ async function createEntity(candidateId: string): Promise<string> {
 }
 
 async function matchEntity(candidateId: string, entityId: string, expectedRevision = '0'): Promise<void> {
+  const candidate = await candidateStore.getCandidate(scope.scopeRef, candidateId, ctx)
+  const nativeId = candidate?.kind === 'entity' ? candidate.attributes.find((attribute) => attribute.attributeId === 'device_native_id')?.value : undefined
+  if (typeof nativeId !== 'string') throw new Error('identity fixture is missing its native key')
   await identityService.decide(
     {
       candidateId,
       kind: 'match',
       expectedRevision,
       targetEntityId: entityId,
-      strongIdentity: { kind: 'native_id', value: `N-${candidateId}` },
+      strongIdentity: { kind: 'native_id', value: nativeId },
     },
     ctx,
   )
@@ -245,6 +249,31 @@ async function countFor(sql: string, params: readonly unknown[]): Promise<number
 }
 
 describe('semantic publication against real PostgreSQL', () => {
+  it('persists a relation with both approved endpoints bound to active entity identities', async () => {
+    const from = await seedResolvedEntity()
+    const to = await seedResolvedEntity()
+    await reviewViaHttp(from.candidateId, 'approve', 'verified source')
+    await reviewViaHttp(to.candidateId, 'approve', 'verified source')
+    const fromEntityId = (await identityStore.listAssertions(scope.scopeRef, { candidateId: from.candidateId, openOnly: true }, ctx))[0]?.entityId
+    const toEntityId = (await identityStore.listAssertions(scope.scopeRef, { candidateId: to.candidateId, openOnly: true }, ctx))[0]?.entityId
+    if (fromEntityId === undefined || toEntityId === undefined) throw new Error('relation endpoints need confirmed identities')
+
+    const relationId = randomUUID()
+    const raw = relationFor({ candidateId: relationId, idempotencyKey: candidateIdempotencyKey(), fromCandidateId: from.candidateId, toCandidateId: to.candidateId })
+    await insert({ ...raw, jobId, inputVersion: { ...raw.inputVersion, parseId } })
+    await reviewViaHttp(relationId, 'approve', 'relation span checked')
+    const published = await publishViaHttp([
+      { candidateId: from.candidateId, kind: 'entity' },
+      { candidateId: to.candidateId, kind: 'entity' },
+      { candidateId: relationId, kind: 'relation' },
+    ], 'pub-grounded-relation')
+    expect(published.statusCode).toBe(201)
+    expect(await service.getStatement(relationId, ctx)).toMatchObject({
+      kind: 'relation', relationId: 'feeds', subjectEntityId: fromEntityId,
+      value: { fromEntityId, toEntityId },
+    })
+  })
+
   it('reads every published statement and rule page through the scoped PostgreSQL keyset', async () => {
     const publicationId = randomUUID()
     const ids = [randomUUID(), randomUUID(), randomUUID()].sort()
@@ -514,11 +543,19 @@ describe('semantic publication against real PostgreSQL', () => {
     await insert(candidate)
     const entityId = await createEntity(candidateId)
     await matchEntity(candidateId, entityId, '1')
-    // A reject with a target records a cannot-link while the open assertion remains.
-    await identityService.decide(
-      { candidateId, kind: 'reject', expectedRevision: '2', targetEntityId: entityId, justification: 'not the same device' },
-      ctx,
-    )
+    // The decision service now forbids this contradiction. Inject a legacy/corrupt store
+    // state directly to prove the publication transaction still refuses it independently.
+    const decisionId = randomUUID()
+    const entity = await identityStore.getEntity(scope.scopeRef, entityId, ctx)
+    if (entity === undefined) throw new Error('expected a target entity')
+    await identityStore.appendDecision(scope.scopeRef, {
+      expectedRevision: '2', expectedEntityRevision: entity.revision,
+      draft: {
+        decisionId, candidateId, objectId: 'device', identityScopeId: 'device_identity', kind: 'reject', targetEntityId: entityId,
+        evidenceRefs: [], recordedAt: '2026-09-22T00:00:00Z', actor: 'legacy-fixture',
+      },
+      linkConstraint: { constraintId: randomUUID(), candidateId, entityId, kind: 'cannot_link', decisionId, recordedAt: '2026-09-22T00:00:00Z' },
+    }, ctx)
     await reviewViaHttp(candidateId, 'approve', 'ok')
 
     const blocked = await publishViaHttp([{ candidateId, kind: 'entity' }], 'pub-cannot-link')
@@ -527,7 +564,7 @@ describe('semantic publication against real PostgreSQL', () => {
   })
 
   it('preserves history on a retraction, keeps a supported conclusion and emits the invalidation through the real outbox', async () => {
-    const attributes = [{ attributeId: 'device_name', value: 'Charger One' }]
+    const attributes = [{ attributeId: 'device_native_id', value: 'DEV-SHARED' }, { attributeId: 'device_name', value: 'Charger One' }]
     const first = await seedResolvedEntity(attributes)
     const secondCandidateId = randomUUID()
     await insert(candidateFor(secondCandidateId, attributes))

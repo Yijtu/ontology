@@ -104,6 +104,11 @@ describe('LOCAL-054 cross-layer acceptance — ingestion and extraction', () => 
   })
 
   it('resolves the entity identity through the real decision API', async () => {
+    const detail = await injectJson(env.app, 'GET', `/api/v1/candidates/${candidateId}`)
+    expect(detail.status).toBe(200)
+    const candidate = dataOf<{ candidate: { attributes: { attributeId: string; value: unknown }[] } }>(detail).candidate
+    const nativeId = candidate.attributes.find((attribute) => attribute.attributeId.endsWith('_native_id'))?.value
+    if (typeof nativeId !== 'string') throw new Error('the extracted candidate has no source-backed native identity key')
     const created = await injectJson(env.app, 'POST', `/api/v1/candidates/${candidateId}/decision`, {
       headers: { 'if-match': '0' },
       payload: { kind: 'create_pending' },
@@ -117,7 +122,7 @@ describe('LOCAL-054 cross-layer acceptance — ingestion and extraction', () => 
       payload: {
         kind: 'match',
         targetEntityId: entityId,
-        strongIdentity: { kind: 'native_id', value: `D-${candidateId.slice(0, 4)}` },
+        strongIdentity: { kind: 'native_id', value: nativeId },
       },
     })
     expect(matched.status).toBe(200)
