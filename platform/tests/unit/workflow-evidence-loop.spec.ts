@@ -188,3 +188,74 @@ describe('explicit stops and failure classification', () => {
     expect(result.failure?.code).toBe('SOURCE_UNAVAILABLE')
   })
 })
+
+describe('bounded failure repair in the deterministic loop (FR-29)', () => {
+  function repairExecutor(
+    gateway: QueuedGateway,
+    options: { readonly maxFailureRepairs: number; readonly remaining?: ReturnType<typeof budgetWith> },
+  ): SmallPlanExecutor {
+    return new SmallPlanExecutor({
+      gateway,
+      guard: new NoProgressGuard({ maxRounds: 8, maxFailureRepairs: options.maxFailureRepairs }),
+      remaining: () => Promise.resolve(options.remaining ?? budgetWith({})),
+    })
+  }
+
+  it('continues past a failed round instead of stopping immediately', async () => {
+    const gateway = new QueuedGateway()
+      .queue(toolResult({ status: 'error', errorCode: 'SOURCE_UNAVAILABLE' }))
+      .queue(toolResult({ status: 'ok', evidenceSeed: 'recovered' }))
+    const executor = repairExecutor(gateway, { maxFailureRepairs: 1 })
+
+    const result = await executor.execute(
+      plan([step('s1', 'data_query', { x: 1 }), step('s2', 'ontology_lookup', { y: 2 })]),
+      CTX,
+    )
+
+    expect(gateway.calls).toHaveLength(2)
+    expect(result.executedStepIds).toEqual(['s1', 's2'])
+    expect(result.stopped).toBe(false)
+    // The failure is still surfaced even though a repair round ran.
+    expect(result.failure?.code).toBe('SOURCE_UNAVAILABLE')
+    expect(result.decisions[0]?.action).toBe('continue')
+    expect(result.decisions[0]?.reason).toBe('failed')
+  })
+
+  it('stops once the failure-repair budget is exhausted', async () => {
+    const gateway = new QueuedGateway()
+      .queue(toolResult({ status: 'error', errorCode: 'SOURCE_UNAVAILABLE' }))
+      .queue(toolResult({ status: 'error', errorCode: 'SOURCE_UNAVAILABLE' }))
+    const executor = repairExecutor(gateway, { maxFailureRepairs: 1 })
+
+    const result = await executor.execute(
+      plan([step('s1', 'data_query', { x: 1 }), step('s2', 'ontology_lookup', { y: 2 })]),
+      CTX,
+    )
+
+    expect(gateway.calls).toHaveLength(2)
+    expect(result.stopped).toBe(true)
+    expect(result.decisions.at(-1)?.action).toBe('stop')
+    expect(result.decisions.at(-1)?.reason).toBe('failed')
+    expect(result.failure?.code).toBe('SOURCE_UNAVAILABLE')
+  })
+
+  it('never re-executes the failed call: a repeat is still a duplicate', async () => {
+    const gateway = new QueuedGateway().queue(
+      toolResult({ status: 'error', errorCode: 'SOURCE_UNAVAILABLE' }),
+    )
+    const executor = repairExecutor(gateway, { maxFailureRepairs: 1 })
+
+    const result = await executor.execute(
+      plan([step('s1', 'data_query', { x: 1 }), step('s2', 'data_query', { x: 1 })]),
+      CTX,
+    )
+
+    expect(gateway.calls).toHaveLength(1)
+    expect(result.executedStepIds).toEqual(['s1'])
+    expect(result.skippedStepIds).toEqual(['s2'])
+  })
+
+  it('rejects a negative failure-repair budget', () => {
+    expect(() => new NoProgressGuard({ maxRounds: 4, maxFailureRepairs: -1 })).toThrow()
+  })
+})

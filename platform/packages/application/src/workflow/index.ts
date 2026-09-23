@@ -46,6 +46,7 @@ export type {
   PlanExecutionResult,
   SmallPlanExecutorDependencies,
 } from './evidence-loop'
+export { repairFeedbackOf } from './repair-feedback'
 export type {
   CancelWorkflowInput,
   RespondWorkflowInput,

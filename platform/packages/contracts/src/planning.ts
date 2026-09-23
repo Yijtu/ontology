@@ -177,9 +177,11 @@ export type LoopReason =
   | 'failed'
 
 /**
- * The guard's verdict for one round. `action` is `continue` only when a genuinely new
- * result determines the next step; otherwise it is `stop` with an explicit reason. A tool
- * failure is carried as `failure` and is never reported as an empty result.
+ * The guard's verdict for one round. `action` is `continue` when a genuinely new result
+ * determines the next step, or when a failed round is within the bounded failure-repair
+ * budget (FR-29) so the deterministic loop may try one more non-identical step. Otherwise it
+ * is `stop` with an explicit reason. A tool failure is carried as `failure` and is never
+ * reported as an empty result.
  */
 export interface LoopDecision {
   readonly action: 'continue' | 'stop'
