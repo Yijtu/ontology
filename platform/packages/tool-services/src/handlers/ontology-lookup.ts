@@ -130,7 +130,7 @@ export class OntologyLookupHandler implements ToolHandler {
   async execute(request: ToolExecutionRequest): Promise<ToolExecutionOutcome> {
     const input = parseLookupInput(request.arguments)
     const page = await this.#config.lookup.lookup(input, request.ctx)
-    const truncated = page.nextCursor !== null
+    const truncated = page.nextCursor !== null || page.completeness === 'partial'
     const coverage: ToolCoverage = {
       returned: page.output.items.length,
       truncated,
