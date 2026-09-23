@@ -8,6 +8,7 @@
 export type ExtractionErrorCode =
   | 'SCOPE_MISMATCH'
   | 'SCHEMA_NOT_FOUND'
+  | 'SCHEMA_TOO_LARGE'
   | 'INVALID_JOB_REF'
   | 'NO_CHUNKS'
   | 'GENERATION_FAILED'

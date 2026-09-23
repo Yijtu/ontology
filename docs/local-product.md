@@ -2,9 +2,9 @@
 
 仓库提供可启动的本地工作台和 API。当前 local deployment 注册家庭能源、合成交通、operator 文档，以及可选的只读 PostgreSQL 交通视图任务，验证正式 HTTP → controller → task runtime → gateway → 来源 handler → 证据归档 → typed hard verification → Postgres 答案发布链路。能源与默认交通数据是合成 fixture；文档由 operator 提供。
 
-它不是已经接好任意客户数据的通用行业产品。页面 profile 包含两个家庭能源物理布局（宽表 SOC 与长表 metric-code SOC）、合成交通设施表、一个受控文档集合和一个可选 operator SQL 视图。前两种结构经各自已注册 mapping 对同一 SOC 问题给出相同口径；交通问题可在合成 DuckDB 与真实只读 PostgreSQL 视图上执行。SQL 视图仍要求部署时明确列契约和映射，不自动扫描/执行任意客户表。不会调用付费模型、JEV、Home Assistant 或真实设备。
+它不是已经接好任意客户数据的通用行业产品。页面 profile 包含两个家庭能源物理布局（宽表 SOC 与长表 metric-code SOC）、合成交通设施表、一个受控文档集合和一个可选 operator SQL 视图。前两种结构经各自已注册 mapping 对同一 SOC 问题给出相同口径；交通问题可在合成 DuckDB 与真实只读 PostgreSQL 视图上执行。SQL 视图仍要求部署时明确列契约和映射，不自动扫描/执行任意客户表。只有 operator 在服务端显式配置公司模型后，候选抽取才会调用生成模型；正式业务问答仍不调用 JEV、Home Assistant 或真实设备。
 
-页面支持站点 SOC、家庭储能候选计划、按区域筛选待巡检设施、以及在 operator 导入文档中查找原文。operator API 额外支持“完整 JSON 实体记录 → 解析/span → 确定性候选 job → SQL 身份召回与审计 → 人工决策/审核 → 语义发布”。非数字断言以 `VerifiedAssertion` 表示并绑定到证据结果 digest 与 JSON pointer；文档引文还校验文档引用、byte-offset locator 和原文 digest。未接通的断言类型会被硬拒绝。能源计划输出有限策略集合中最好的已测试候选，不承诺全局最优。每个文档 collection 当前只允许一份内容；同内容重试复用 parse/index，不同内容（包括已在另一 collection 解析的内容）返回 409。多实体在线规则回答、其他客户 schema 自动识别、任意 Text2SQL、真实模型和多实例并发恢复均未交付。
+页面支持站点 SOC、家庭储能候选计划、按区域筛选待巡检设施、以及在 operator 导入文档中查找原文。operator API 额外支持“完整 JSON 实体记录 → 解析/span → 确定性候选 job → SQL 身份召回与审计 → 人工决策/审核 → 语义发布”；服务端可选接入公司模型，将非结构化 span 提为待审候选。非数字断言以 `VerifiedAssertion` 表示并绑定到证据结果 digest 与 JSON pointer；文档引文还校验文档引用、byte-offset locator 和原文 digest。未接通的断言类型会被硬拒绝。能源计划输出有限策略集合中最好的已测试候选，不承诺全局最优。每个文档 collection 当前只允许一份内容；同内容重试复用 parse/index，不同内容（包括已在另一 collection 解析的内容）返回 409。多实体在线规则回答、其他客户 schema 自动识别、任意 Text2SQL、公司模型真实接口验收和多实例并发恢复均未交付。
 
 ## 启动
 
@@ -85,7 +85,11 @@ $recall = Invoke-RestMethod -Method Post -Uri "$base/candidates/$candidateId/ide
 
 此时应先检查 `$candidate.data.candidate.sourceSpans` 和 `$recall.data.result`：召回是**建议及审计**，不是合并事实。若无现成且已确认的实体，人工以 `If-Match: 0` 提交 `create_pending`，得到待确认 entity ID；再按真实候选强键/原文完成 `match`，随后提交候选 `approve` review，最后用 `$source.data.definitionRef` 与当前发布 revision 创建 semantic publication。若选择已有实体，需校验身份范围、native key 和人工理由；冲突或证据不足用 `clarify/reject`，不能强合并。写入端点的完整请求字段和状态见[公开 HTTP 路由](../platform/apps/api/src/http/decisions.ts)与[发布路由](../platform/apps/api/src/http/publication.ts)。发布后在网页切换到 `operator-sql-facilities`，问“north 区有哪些设施待巡检？”，观察只读 SQL 结果的来源证据。**当前该问题按 mapping 查业务视图，不把刚发布的语义事实作为运行时过滤/规则前提**；在线本体推理是后续缺口。可按 job ID、候选 ID、audit ID、publication ID 和 run ID 分别读回；API 重启后这些记录仍在。
 
-当前 `ONTOLOGY_LOCAL_OPERATOR_TOKEN` 仅供 loopback 单租户开发。它让本机 operator 获得数据编辑、语义审核与发布角色；不能作为生产认证或多人审批机制。自然语言政策抽取、关系/规则候选、自动相似度判断仍未配置模型，不会伪造“自动抽取成功”。
+当前 `ONTOLOGY_LOCAL_OPERATOR_TOKEN` 仅供 loopback 单租户开发。它让本机 operator 获得数据编辑、语义审核与发布角色；不能作为生产认证或多人审批机制。自动相似度判断仍未配置模型，不会伪造“自动消歧”。
+
+需要试验普通政策文本的实体、关系和规则**候选抽取**时，在启动 API 的服务端环境配置 `ONTOLOGY_COMPANY_MODEL_BASE_URL`、`ONTOLOGY_EXTRACTION_VENDOR_MODEL` 和 `ONTOLOGY_COMPANY_MODEL_API_KEY`；可选 `ONTOLOGY_COMPANY_MODEL_ENDPOINT` 与 `ONTOLOGY_COMPANY_MODEL_PROTOCOL=openai-compatible|private`。API key 只经环境 SecretResolver 读取，不放进请求、Git 或浏览器。配置了其中一个非密钥必填项而缺另一个时启动即拒绝；未配置时沿用上例的纯 JSON 强键映射。公司模型的真实接口兼容性须用该公司的实际网关另行验证，仓库只用受控响应测试了适配器与抽取路径。
+
+模型路径仍先锁定已发布行业 schema，把允许的对象/属性/关系标识传给模型，再对输出做结构、schema、精确来源 span 和人工审核。它不让模型定义新的 schema，也不直接发布事实。同步入口每个 job 最多处理 4 个非结构化 span，超限明确返回 `RESULT_TOO_LARGE`；批量异步抽取尚未交付。每个后台 job 使用独立共享预算，模型适配器负责自己的预留/结算，模型输出摘要写入 `model_output` 证据。`extract-candidates` 返回的 `modelCalls` 是需要生成处理的 span 数，不含网关内部的有界重试次数。
 
 停止 PostgreSQL 可运行：
 

@@ -49,7 +49,7 @@ function inputOf(
   }
 }
 
-function buildHarness(): {
+function buildHarness(generationAccountsUsage = false): {
   readonly pipeline: ExtractionPipeline
   readonly generation: CountingGenerationPort
   readonly candidates: InMemoryCandidateStore
@@ -68,6 +68,7 @@ function buildHarness(): {
     budget: budget.budget,
     modelRef: MODEL_REF,
     outputLimit: { maxTokens: 512 },
+    generationAccountsUsage,
     now: () => '2026-09-22T00:00:00Z',
   })
   return {
@@ -114,6 +115,12 @@ describe('extraction pipeline against the industry schema', () => {
     const extracted = await h.pipeline.extract(input, h.run)
     expect(extracted.modelCalls).toBe(1)
     expect(extracted.candidateIds).toHaveLength(3)
+    const request = h.generation.requests[0]
+    expect(request?.messages[1]?.role).toBe('system')
+    expect(request?.messages[1]?.content).toContain('"objectId":"device"')
+    expect(request?.messages[1]?.content).toContain('"relationId":"meter_monitors_device"')
+    expect(request?.messages[1]?.content).toContain(DEFINITION_REF.digest)
+    expect(request?.messages[2]).toEqual({ role: 'user', content: chunks[0]?.text })
 
     const validated = await h.pipeline.validate(input, h.run)
     expect(validated.pendingReview).toBe(3)
@@ -141,6 +148,16 @@ describe('extraction pipeline against the industry schema', () => {
     expect(reservations[0]?.status).toBe('settled')
     expect(reservations[0]?.actual?.modelTokens).toBe(19)
     expect(reservations[0]?.evidenceRefs[0]?.kind).toBe('chunk')
+  })
+
+  it('does not reserve or settle twice when the injected generation adapter owns accounting', async () => {
+    const h = buildHarness(true)
+    await h.budget.budget.openLedger({ ledgerId: LEDGER_ID, kind: 'background' }, EDITOR_CTX)
+    h.generation.enqueue(generationResponse({ entities: [], relations: [] }))
+    const result = await h.pipeline.extract(inputOf([chunkOf('unstructured policy text', 0)]), h.run)
+    expect(result.modelCalls).toBe(1)
+    expect(h.generation.callCount).toBe(1)
+    expect(await h.budget.store.listReservations(SCOPE_A, LEDGER_ID, EDITOR_CTX)).toHaveLength(0)
   })
 
   it('sends a missing required attribute to an explicit failed state', async () => {

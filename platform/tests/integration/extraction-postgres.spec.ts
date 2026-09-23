@@ -9,6 +9,7 @@ import {
   ControlPostgresRepository,
   PostgresBudgetLedgerStore,
   PostgresCandidateStore,
+  PostgresEvidenceStore,
   PostgresJobStore,
   runControlMigrations,
 } from '@ontology/adapter-control-postgres'
@@ -48,6 +49,9 @@ import {
   generationResponse,
 } from '../unit/extraction-fixtures'
 import { createJobScope, startJobDatabase } from './job-postgres-harness'
+import { createCompanyExtractionGeneration } from '../../apps/api/src/composition/company-extraction'
+import { LocalNativeCandidateIngestion } from '../../apps/api/src/composition/local-native-candidates'
+import { createRequestToolContext } from '../../apps/api/src/http/context'
 import type { JobDbHarness, JobTestScope } from './job-postgres-harness'
 
 const MIGRATIONS_DIR = fileURLToPath(new URL('../../migrations/control', import.meta.url))
@@ -110,6 +114,7 @@ let definitionService: SemanticDefinitionService
 let scope: JobTestScope
 let ctx: ToolContext
 let definitionRef: VersionRef
+let schemaSource: InMemoryIndustrySchemaSource
 let parseStore: PostgresDocumentParseStore
 let registry: PostgresArtifactRegistry
 let blobStore: LocalImmutableBlobStore
@@ -212,7 +217,7 @@ beforeAll(async () => {
     ctx,
   )
   definitionRef = published.ref
-  const schemaSource = new InMemoryIndustrySchemaSource([
+  schemaSource = new InMemoryIndustrySchemaSource([
     { ref: definitionRef, schema: projectIndustrySchema(published) },
   ])
 
@@ -331,6 +336,70 @@ describe('extraction candidates against a real PostgreSQL', () => {
     expect(candidates.length).toBeGreaterThan(0)
     expect(candidates.every((candidate) => candidate.state === 'pending_review')).toBe(true)
     expect(candidates.every((candidate) => candidate.issues.some((issue) => issue.code === 'TRUNCATED_CHUNK'))).toBe(true)
+  })
+
+  it('persists model-output evidence and review candidates against the job ledger', async () => {
+    const parsed = await publishAndParse('设备 D-7 是充电器，额定功率 7.2 kW。')
+    expect(parsed.chunks).toHaveLength(1)
+    const modelCtx = createRequestToolContext({
+      principal: { tenantId: scope.tenantId, subjectId: 'model-extraction-it', roles: ['platform-admin', 'data-editor'], scopes: [], authEpoch: 1 },
+      spaceId: scope.spaceId, runId: randomUUID(), traceId: 'model-extraction-postgres',
+      allowedResourceKinds: ['artifact', 'document', 'evidence'],
+    })
+    const payload = JSON.stringify({ entities: [{ objectId: 'device', attributes: [
+      { attributeId: 'device_native_id', value: 'D-7' },
+      { attributeId: 'device_kind', value: 'charger' },
+      { attributeId: 'rated_power', value: 7.2, unitCode: 'kW' },
+    ] }], relations: [], rules: [], exceptions: [] })
+    const sse = [
+      { id: 'chatcmpl-it', object: 'chat.completion.chunk', created: 1, model: 'test-vendor', choices: [{ index: 0, delta: { content: payload }, finish_reason: null }], usage: null },
+      { id: 'chatcmpl-it', object: 'chat.completion.chunk', created: 1, model: 'test-vendor', choices: [{ index: 0, delta: {}, finish_reason: 'stop' }], usage: { prompt_tokens: 32, completion_tokens: 24, total_tokens: 56 } },
+    ].map((event) => `data: ${JSON.stringify(event)}\n\n`).join('') + 'data: [DONE]\n\n'
+    let calls = 0
+    const fetchImpl: typeof fetch = async () => {
+      calls += 1
+      return new Response(sse, { status: 200, headers: { 'content-type': 'text/event-stream' } })
+    }
+    const evidence = new PostgresEvidenceStore(database)
+    const configured = createCompanyExtractionGeneration({
+      budget, evidence, fetchImpl,
+      env: {
+        ONTOLOGY_COMPANY_MODEL_BASE_URL: 'https://company.example/v1',
+        ONTOLOGY_COMPANY_MODEL_ENDPOINT: 'chat/completions',
+        ONTOLOGY_EXTRACTION_VENDOR_MODEL: 'test-vendor',
+        ONTOLOGY_COMPANY_MODEL_API_KEY: 'fake-postgres-test-key',
+      },
+    })
+    if (configured === undefined) throw new Error('test model configuration is missing')
+    const definition = await definitionService.getVersion({
+      scopeRef: scope.scopeRef, namespace: 'home-energy',
+      definitionId: definitionRef.id, version: definitionRef.version,
+    }, modelCtx)
+    const ingestion = new LocalNativeCandidateIngestion({
+      jobs: jobService, jobStore, candidates: candidateStore, parseStore,
+      definition, budget, generation: configured,
+    })
+    const idempotencyKey = `model-extraction-${randomUUID()}`
+    const result = await ingestion.extract(parsed.parseId, idempotencyKey, modelCtx)
+    const jobId = result.jobId
+    expect(result.stage).toBe('awaiting_review')
+    expect(result.modelCalls).toBe(1)
+    expect(result.deterministic).toBe(false)
+    const replay = await ingestion.extract(parsed.parseId, idempotencyKey, modelCtx)
+    expect(replay.jobId).toBe(jobId)
+    expect(calls).toBe(1)
+    const stored = await candidateStore.listCandidates(scope.scopeRef, { jobId }, modelCtx)
+    expect(stored).toHaveLength(1)
+    expect(stored[0]?.state).toBe('pending_review')
+    expect(stored[0]?.sourceSpans[0]?.chunkId).toBe(parsed.chunks[0]?.chunkId)
+    expect(stored[0]?.deterministic).toBe(false)
+    const modelEvidence = await evidence.listByRun(scope.scopeRef, jobId, modelCtx)
+    expect(modelEvidence).toHaveLength(1)
+    expect(modelEvidence[0]?.envelope.kind).toBe('model_output')
+    const reservations = await budgetStore.listReservations(scope.scopeRef, jobId, modelCtx)
+    expect(reservations).toHaveLength(1)
+    expect(reservations[0]?.status).toBe('settled')
+    expect(reservations[0]?.evidenceRefs[0]?.id).toBe(modelEvidence[0]?.evidenceRef.id)
   })
 
   it('maps native strong-ID records deterministically with zero model calls', async () => {

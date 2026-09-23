@@ -12,6 +12,7 @@ import { EntityCandidateRecallService, IdentityDecisionService, SemanticPublicat
 import { LocalDocumentCapability } from './local-documents'
 import type { LocalOperatorSqlProfile } from './registered-operator-sql'
 import { LocalNativeCandidateIngestion } from './local-native-candidates'
+import type { LocalExtractionGeneration } from './local-native-candidates'
 import { PostgresIndustrySchemaSource } from './operator-definition'
 
 export interface LocalCandidateLifecycle {
@@ -31,6 +32,7 @@ export function createLocalCandidateLifecycle(input: {
   readonly documents: LocalDocumentCapability
   readonly definition: SemanticDefinitionVersion
   readonly budget: BudgetLedgerPort
+  readonly generation?: LocalExtractionGeneration
 }): LocalCandidateLifecycle {
   const candidates = new PostgresCandidateStore(input.database)
   const identity = new PostgresIdentityDecisionStore(input.database)
@@ -52,6 +54,6 @@ export function createLocalCandidateLifecycle(input: {
     recall: new EntityCandidateRecallService({ schemaSource, index: reader }),
     recallAudits: new PostgresIdentityRecallAuditStore(input.database),
     jobs,
-    ingestion: new LocalNativeCandidateIngestion({ jobs, jobStore: new PostgresJobStore(input.database), candidates, parseStore: input.documents.parseStore, definition: input.definition, budget: input.budget }),
+    ingestion: new LocalNativeCandidateIngestion({ jobs, jobStore: new PostgresJobStore(input.database), candidates, parseStore: input.documents.parseStore, definition: input.definition, budget: input.budget, ...(input.generation === undefined ? {} : { generation: input.generation }) }),
   }
 }
