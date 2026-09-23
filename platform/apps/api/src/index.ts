@@ -92,6 +92,7 @@ export type {
 } from './composition/home-energy-scenario'
 export { createToolHandlerSet } from './composition/tool-handlers'
 export { createPublishedOntologyCapability } from './composition/published-ontology'
+export { createPublishedFactTask, PUBLISHED_FACT_TASK_ID } from './scenarios/published-fact-task'
 export type { ToolHandlerSetOptions } from './composition/tool-handlers'
 export { createApiServer, createJobApi, createRunApi } from './http/app'
 export { startLocalProduct } from './local-product'
