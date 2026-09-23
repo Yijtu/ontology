@@ -29,6 +29,12 @@ export type {
   SourceRegistryCompositionOptions,
 } from './composition/source-registry'
 export {
+  SecretResolutionError,
+  createEnvSecretResolver,
+  envVarNameOf,
+} from './composition/secret-resolver'
+export type { EnvSecretResolverOptions, SecretResolutionErrorCode } from './composition/secret-resolver'
+export {
   createPostgresRunService,
   createPostgresRunStore,
 } from './composition/run-service'
