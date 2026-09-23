@@ -17,6 +17,7 @@ import { createApiServer } from '@ontology/app-api'
 import type { AuthenticatedRequest } from '@ontology/app-api'
 import type {
   EntityCandidate,
+  IdentityDecisionDraft,
   IndustrySchema,
   OutboxMessageRecord,
   ToolContext,
@@ -146,8 +147,8 @@ function candidateFor(objectId: string, identityScopeId: string, attributeId: st
   }
 }
 
-async function seedCandidate(objectId: string, identityScopeId: string, attributeId: string): Promise<EntityCandidate> {
-  const candidate = candidateFor(objectId, identityScopeId, attributeId, 'Shared Name')
+async function seedCandidate(objectId: string, identityScopeId: string, attributeId: string, value = 'Shared Name'): Promise<EntityCandidate> {
+  const candidate = candidateFor(objectId, identityScopeId, attributeId, value)
   await candidateStore.insertCandidates(scope.scopeRef, [candidate], ctx)
   return candidate
 }
@@ -251,7 +252,7 @@ describe('identity decisions against real PostgreSQL', () => {
   })
 
   it('merges with a strong identity, keeps history and rejects a stale revision with 409', async () => {
-    const candidate = await seedCandidate('device', 'device_identity', 'device_name')
+    const candidate = await seedCandidate('device', 'device_identity', 'device_native_id', 'DEV-1')
     const created = await postDecision(candidate.candidateId, { kind: 'create_pending' }, '0')
     const entityId = (created.json() as { data: { targetEntityId: string } }).data.targetEntityId
 
@@ -311,8 +312,44 @@ describe('identity decisions against real PostgreSQL', () => {
     expect((blocked.json() as { error: { code: string } }).error.code).toBe('IDENTITY_CONFLICT')
   })
 
+  it('does not persist a cannot-link while its membership is still active', async () => {
+    const candidate = await seedCandidate('device', 'device_identity', 'device_native_id', 'DEV-1')
+    const created = await postDecision(candidate.candidateId, { kind: 'create_pending' }, '0')
+    const entityId = (created.json() as { data: { targetEntityId: string } }).data.targetEntityId
+    const matched = await postDecision(candidate.candidateId, {
+      kind: 'match', targetEntityId: entityId, strongIdentity: { kind: 'native_id', value: 'DEV-1' },
+    }, '1')
+    expect(matched.statusCode).toBe(200)
+
+    const conflicting = await postDecision(candidate.candidateId, { kind: 'reject', targetEntityId: entityId }, '2')
+    expect(conflicting.statusCode).toBe(409)
+    expect((conflicting.json() as { error: { code: string } }).error.code).toBe('IDENTITY_CONFLICT')
+    expect(await decisionStore.listAssertions(scope.scopeRef, { candidateId: candidate.candidateId, openOnly: true }, ctx)).toHaveLength(1)
+    expect(await decisionStore.listLinkConstraints(scope.scopeRef, candidate.candidateId, ctx)).toHaveLength(0)
+  })
+
+  it('CAS-locks the target entity so a stale cluster update cannot commit', async () => {
+    const candidate = await seedCandidate('device', 'device_identity', 'device_native_id', 'DEV-1')
+    const created = await postDecision(candidate.candidateId, { kind: 'create_pending' }, '0')
+    const entityId = (created.json() as { data: { targetEntityId: string } }).data.targetEntityId
+    const matched = await postDecision(candidate.candidateId, {
+      kind: 'match', targetEntityId: entityId, strongIdentity: { kind: 'native_id', value: 'DEV-1' },
+    }, '1')
+    expect(matched.statusCode).toBe(200)
+    expect((await decisionStore.getEntity(scope.scopeRef, entityId, ctx))?.revision).toBe('2')
+
+    const other = await seedCandidate('device', 'device_identity', 'device_native_id', 'DEV-1')
+    const draft: IdentityDecisionDraft = {
+      decisionId: randomUUID(), candidateId: other.candidateId, objectId: 'device', identityScopeId: 'device_identity',
+      kind: 'clarify', targetEntityId: entityId, evidenceRefs: [], recordedAt: '2026-09-22T00:00:00Z', actor: 'identity-reviewer',
+    }
+    await expect(decisionStore.appendDecision(scope.scopeRef, { expectedRevision: '0', expectedEntityRevision: '1', draft }, ctx)).rejects.toMatchObject({ code: 'REVISION_CONFLICT' })
+    expect(await decisionStore.latestRevision(scope.scopeRef, other.candidateId, ctx)).toBe('0')
+    expect((await decisionStore.getEntity(scope.scopeRef, entityId, ctx))?.revision).toBe('2')
+  })
+
   it('separates sources on a split and delivers the downstream invalidation through the real outbox', async () => {
-    const candidate = await seedCandidate('device', 'device_identity', 'device_name')
+    const candidate = await seedCandidate('device', 'device_identity', 'device_native_id', 'DEV-1')
     const created = await postDecision(candidate.candidateId, { kind: 'create_pending' }, '0')
     const entityId = (created.json() as { data: { targetEntityId: string } }).data.targetEntityId
     const matched = await postDecision(

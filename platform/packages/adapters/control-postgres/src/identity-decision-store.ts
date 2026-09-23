@@ -264,6 +264,29 @@ export class PostgresIdentityDecisionStore implements IdentityDecisionStore {
           `candidate ${draft.candidateId} is at revision ${head.revision}, not ${input.expectedRevision}`,
         )
       }
+      if (input.expectedEntityRevision !== undefined) {
+        const entityId = draft.targetEntityId
+        if (entityId === undefined) throw new IdentityDecisionStoreError('DECISION_STORE_FAILED', 'a target entity revision requires a targetEntityId')
+        const entity = await query.query<{ revision: string }>(
+          `SELECT revision::text AS revision FROM agent_platform.identity_entities
+            WHERE tenant_id = current_setting('app.tenant_id')::uuid
+              AND space_id = current_setting('app.space_id')::uuid
+              AND entity_id = $1 FOR UPDATE`,
+          [entityId],
+        )
+        const current = entity.rows[0]?.revision
+        if (current !== input.expectedEntityRevision) {
+          throw new IdentityDecisionStoreError('REVISION_CONFLICT', `entity ${entityId} is at revision ${current ?? 'missing'}, not ${input.expectedEntityRevision}`)
+        }
+        await query.query(
+          `UPDATE agent_platform.identity_entities
+              SET revision = revision + 1, updated_at = $2::timestamptz
+            WHERE tenant_id = current_setting('app.tenant_id')::uuid
+              AND space_id = current_setting('app.space_id')::uuid
+              AND entity_id = $1`,
+          [entityId, draft.recordedAt],
+        )
+      }
       const revisionNumber = Number(head.revision) + 1
       const revision = String(revisionNumber)
 
@@ -492,10 +515,18 @@ export class PostgresIdentityDecisionStore implements IdentityDecisionStore {
       if (filter.openOnly === true) {
         clauses.push(`valid_to IS NULL`)
       }
+      if (filter.limit !== undefined && (!Number.isSafeInteger(filter.limit) || filter.limit < 1 || filter.limit > 10_000)) {
+        throw new IdentityDecisionStoreError('DECISION_STORE_FAILED', 'assertion limit must be between 1 and 10000')
+      }
+      let limit = ''
+      if (filter.limit !== undefined) {
+        values.push(filter.limit)
+        limit = ` LIMIT $${String(values.length)}`
+      }
       const result = await query.query<AssertionRow>(
         `SELECT ${ASSERTION_COLUMNS} FROM agent_platform.identity_assertions
           WHERE ${clauses.join(' AND ')}
-          ORDER BY recorded_at, assertion_id`,
+          ORDER BY recorded_at, assertion_id${limit}`,
         values,
       )
       return result.rows.map(toAssertion)

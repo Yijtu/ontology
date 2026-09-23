@@ -27,6 +27,7 @@ import type {
 } from './decision-types'
 
 const DEFAULT_SCORE_THRESHOLD = 0.8
+const MAX_IDENTITY_CLUSTER_MEMBERS = 256
 const REVIEWER_ROLES: readonly string[] = ['semantic-reviewer', 'platform-admin']
 
 function scopeOf(ctx: ToolContext): ScopeRef {
@@ -81,12 +82,11 @@ function mergeEvidence(...groups: readonly (readonly ResourceRef[])[]): Resource
  * merge rules and appends one immutable decision version. It never recalls candidates,
  * never evaluates rules and never publishes semantics.
  *
- * Merge authority is deliberately narrow: a `match` is authorised by a strong identity
- * (native id / confirmed alias) or a human justification. A model/JEV score is recorded
- * as supporting evidence and can never merge on its own; a below-threshold score is
- * refused. A `cannot-link` constraint or a conflicting cluster membership blocks the
- * merge, and a cross-object/scope merge (device vs sensor) is refused from the
- * definition.
+ * Merge authority is deliberately narrow: a `match` needs a native identity key verified
+ * against both candidate and target cluster, or a human justification. A model/JEV score
+ * is supporting evidence only. A `cannot-link` or conflicting cluster key blocks the
+ * merge even with a justification; target entity revision CAS serialises concurrent
+ * membership changes. Cross-object/scope merges are refused from the definition.
  */
 export class IdentityDecisionService {
   readonly #deps: IdentityDecisionServiceDependencies
@@ -218,7 +218,7 @@ export class IdentityDecisionService {
         `candidate declares identity scope ${candidate.identityScopeId} but the definition declares ${identityScope.identityScopeId}`,
       )
     }
-    return { objectId: candidate.objectId, identityScopeId: identityScope.identityScopeId, candidate }
+    return { objectId: candidate.objectId, identityScopeId: identityScope.identityScopeId, identityAttributeIds: identityScope.identityAttributeIds, candidate }
   }
 
   #identityScopeOf(schema: IndustrySchema, objectId: string): IndustryIdentityScopeSchema {
@@ -256,7 +256,7 @@ export class IdentityDecisionService {
       case 'clarify':
         return { draft: { ...base, kind: 'clarify' } }
       case 'reject':
-        return this.#planReject(request, base)
+        return this.#planReject(request, target, base, scopeRef, ctx)
       case 'split':
         return this.#planSplit(request, candidate, target, base, scopeRef, ctx)
     }
@@ -309,21 +309,31 @@ export class IdentityDecisionService {
       )
     }
 
+    const members = await this.#compatibleClusterMembers(candidate, target, targetEntityId, scopeRef, ctx)
+
     const strongIdentity = request.strongIdentity ?? this.#nativeIdentityOf(candidate)
     const justification = request.justification
     const score = request.scoreEvidence
-    // A score is supporting evidence only: it can never authorise a merge by itself.
+    if (score !== undefined && score.score < this.#scoreThreshold) {
+      throw new IdentityDecisionError(
+        'IDENTITY_SCORE_BELOW_THRESHOLD',
+        `similarity score ${score.score} is below the ${this.#scoreThreshold} threshold and cannot support a merge`,
+      )
+    }
+    if (strongIdentity?.kind === 'native_id') {
+      await this.#validateNativeIdentity(candidate, target, targetEntityId, strongIdentity.value, request.expectedRevision, members, scopeRef, ctx)
+    }
+    // Confirmed aliases need a separately verified alias source, which this service does not
+    // receive. A reviewer may still merge with a recorded justification, but an asserted alias
+    // string alone is not a hard identity key.
     if (strongIdentity === undefined && !nonEmpty(justification)) {
-      if (score !== undefined && score.score < this.#scoreThreshold) {
-        throw new IdentityDecisionError(
-          'IDENTITY_SCORE_BELOW_THRESHOLD',
-          `similarity score ${score.score} is below the ${this.#scoreThreshold} threshold and cannot support a merge`,
-        )
-      }
       throw new IdentityDecisionError(
         'IDENTITY_EVIDENCE_REQUIRED',
-        'a match requires a strong identity (native id / confirmed alias) or a human justification; a model score alone never merges',
+        'a match requires a matching native identity key or a human justification; a model score alone never merges',
       )
+    }
+    if (strongIdentity?.kind === 'confirmed_alias' && !nonEmpty(justification)) {
+      throw new IdentityDecisionError('IDENTITY_EVIDENCE_REQUIRED', 'a confirmed alias must be independently verified or accompanied by a reviewer justification')
     }
     const assertion = this.#openAssertion(candidate, targetEntityId, base)
     return {
@@ -335,7 +345,81 @@ export class IdentityDecisionService {
         ...(score === undefined ? {} : { scoreEvidence: score }),
       },
       openAssertion: assertion,
+      expectedEntityRevision: entity.revision,
     }
+  }
+
+  async #compatibleClusterMembers(
+    candidate: EntityCandidate,
+    target: ResolvedIdentityTarget,
+    entityId: string,
+    scopeRef: ScopeRef,
+    ctx: ToolContext,
+  ): Promise<readonly EntityCandidate[]> {
+    const assertions = await this.#deps.store.listAssertions(scopeRef, { entityId, openOnly: true, limit: MAX_IDENTITY_CLUSTER_MEMBERS + 1 }, ctx)
+    if (assertions.length > MAX_IDENTITY_CLUSTER_MEMBERS) {
+      throw new IdentityDecisionError('IDENTITY_EVIDENCE_REQUIRED', 'the target cluster is too large for a complete automatic consistency check')
+    }
+    const members: EntityCandidate[] = []
+    const candidateKeys = new Map(candidate.attributes
+      .filter((attribute) => target.identityAttributeIds.includes(attribute.attributeId))
+      .map((attribute) => [attribute.attributeId, attribute.value] as const))
+    for (const assertion of assertions) {
+      const member = await this.#deps.candidates.getCandidate(scopeRef, assertion.candidateId, ctx)
+      if (member?.kind !== 'entity' || member.objectId !== target.objectId || member.identityScopeId !== target.identityScopeId) {
+        throw new IdentityDecisionError('IDENTITY_CONFLICT', 'the target cluster contains an unreadable or cross-scope member')
+      }
+      for (const attribute of member.attributes) {
+        if (candidateKeys.has(attribute.attributeId) && candidateKeys.get(attribute.attributeId) !== attribute.value) {
+          throw new IdentityDecisionError('IDENTITY_CONFLICT', 'the target cluster has a conflicting identity key')
+        }
+      }
+      if (candidate.nativeId !== undefined && member.nativeId !== undefined && candidate.nativeId !== member.nativeId) {
+        throw new IdentityDecisionError('IDENTITY_CONFLICT', 'the target cluster has a conflicting native id')
+      }
+      members.push(member)
+    }
+    return members
+  }
+
+  async #validateNativeIdentity(
+    candidate: EntityCandidate,
+    target: ResolvedIdentityTarget,
+    targetEntityId: string,
+    value: string,
+    expectedRevision: RevisionString | undefined,
+    members: readonly EntityCandidate[],
+    scopeRef: ScopeRef,
+    ctx: ToolContext,
+  ): Promise<void> {
+    const keys = candidate.attributes
+      .filter((attribute) => target.identityAttributeIds.includes(attribute.attributeId) && attribute.value === value)
+      .map((attribute) => attribute.attributeId)
+    if (candidate.nativeId !== undefined && candidate.nativeId !== value) {
+      throw new IdentityDecisionError('IDENTITY_CONFLICT', 'the claimed native id conflicts with the candidate native id')
+    }
+    if (keys.length === 0 && candidate.nativeId !== value) {
+      throw new IdentityDecisionError('IDENTITY_EVIDENCE_REQUIRED', 'the claimed native id is absent from the candidate identity keys')
+    }
+    const previous = expectedRevision === undefined || expectedRevision === '0'
+      ? undefined
+      : await this.#deps.store.getDecision(scopeRef, candidate.candidateId, expectedRevision, ctx)
+    if (previous?.kind === 'create_pending' && previous.targetEntityId === targetEntityId) return
+
+    let matched = false
+    for (const member of members) {
+      for (const key of keys) {
+        for (const attribute of member.attributes) {
+          if (attribute.attributeId !== key) continue
+          if (attribute.value === value) matched = true
+        }
+      }
+      if (keys.length === 0 && candidate.nativeId === value && member.nativeId !== undefined) {
+        if (member.nativeId === value) matched = true
+      }
+    }
+    if (matched) return
+    throw new IdentityDecisionError('IDENTITY_EVIDENCE_REQUIRED', 'the target entity has no confirmed member with the same native identity key')
   }
 
   #planCreatePending(
@@ -364,13 +448,27 @@ export class IdentityDecisionService {
     }
   }
 
-  #planReject(
+  async #planReject(
     request: IdentityDecisionRequest,
+    target: ResolvedIdentityTarget,
     base: Omit<IdentityDecisionDraft, 'kind'>,
-  ): Omit<AppendIdentityDecisionInput, 'expectedRevision'> {
+    scopeRef: ScopeRef,
+    ctx: ToolContext,
+  ): Promise<Omit<AppendIdentityDecisionInput, 'expectedRevision'>> {
     const targetEntityId = request.targetEntityId
     if (targetEntityId === undefined) {
       return { draft: { ...base, kind: 'reject' } }
+    }
+    const entity = await this.#deps.store.getEntity(scopeRef, targetEntityId, ctx)
+    if (entity === undefined) {
+      throw new IdentityDecisionError('ENTITY_NOT_FOUND', `entity ${targetEntityId} is not visible in this scope`)
+    }
+    if (entity.objectId !== target.objectId || entity.identityScopeId !== target.identityScopeId) {
+      throw new IdentityDecisionError('IDENTITY_SCOPE_MISMATCH', 'cannot-link target belongs to another object or identity scope')
+    }
+    const open = await this.#deps.store.listAssertions(scopeRef, { candidateId: base.candidateId, openOnly: true }, ctx)
+    if (open.some((assertion) => assertion.entityId === targetEntityId)) {
+      throw new IdentityDecisionError('IDENTITY_CONFLICT', 'split the active membership before recording a cannot-link to the same entity')
     }
     const constraint: IdentityLinkConstraintRecord = {
       constraintId: this.#newId(),
@@ -383,6 +481,7 @@ export class IdentityDecisionService {
     return {
       draft: { ...base, kind: 'reject', targetEntityId },
       linkConstraint: constraint,
+      expectedEntityRevision: entity.revision,
     }
   }
 
@@ -437,6 +536,7 @@ export class IdentityDecisionService {
         separatedCandidateIds,
       },
       closeAssertions,
+      expectedEntityRevision: entity.revision,
       invalidation,
       outboxJobId: candidate.jobId,
     }

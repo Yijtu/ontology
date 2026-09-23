@@ -41,7 +41,7 @@ export interface IdentityDecisionRequest {
   readonly evidenceRefs?: readonly ResourceRef[]
   /** A human justification; with a strong identity it authorises a merge. */
   readonly justification?: string
-  /** A native id or confirmed alias; authorises a merge without a free-text reason. */
+  /** Native id must match the candidate and target cluster; alias still needs a reviewer reason. */
   readonly strongIdentity?: IdentityStrongIdentity
   /** A model/JEV similarity score. Supporting evidence only, never an authority to merge. */
   readonly scoreEvidence?: IdentityScoreEvidence
@@ -154,6 +154,7 @@ export function isIdentityDecisionError(value: unknown): value is IdentityDecisi
 export interface ResolvedIdentityTarget {
   readonly objectId: string
   readonly identityScopeId: string
+  readonly identityAttributeIds: readonly string[]
   readonly candidate: EntityCandidate
 }
 
