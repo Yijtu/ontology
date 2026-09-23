@@ -5,6 +5,7 @@ import type {
   ConsistencyLevel,
   DataQueryOutput,
   DirectSqlQueryPlan,
+  FieldError,
   ImmutableArtifactWriter,
   OperationRegistry,
   OperationRef,
@@ -22,6 +23,7 @@ import type {
   StructuredQueryExecuteRequest,
   StructuredQueryPort,
   StructuredQueryExecuteResponse,
+  StructuredQueryValidateResponse,
   TimeWindow,
   ToolContext,
   ToolCoverage,
@@ -122,6 +124,27 @@ function isRecord(value: unknown): value is Record<string, unknown> {
 
 function scopeOf(ctx: ToolContext): ScopeRef {
   return { tenantId: ctx.principal.tenantId, spaceId: ctx.allowedResources.spaceId }
+}
+
+/**
+ * Turn a `validate` rejection into a locatable gateway refusal. The adapter's
+ * `rejectedReason` already carries the catalogue code and a message that names the
+ * failing rule and the offending object/parameter (e.g. an unmapped relation, a
+ * forbidden function or an unsupplied `$n`); that message is preserved and mirrored
+ * into `fieldErrors` so a correction loop has a structured locator.
+ */
+function rejectedByPrecheck(validation: StructuredQueryValidateResponse): ToolGatewayError {
+  const reason = validation.rejectedReason
+  const message =
+    reason?.message ?? 'the generated SQL did not pass the static pre-execution check'
+  const fieldErrors: readonly FieldError[] =
+    reason !== undefined && reason.fieldErrors !== undefined && reason.fieldErrors.length > 0
+      ? reason.fieldErrors
+      : [{ pointer: '/queryPlan/sql', reason: message }]
+  return new ToolGatewayError('INVALID_ARGUMENTS', message, {
+    platformCode: reason?.code ?? 'UNSUPPORTED_QUERY',
+    fieldErrors,
+  })
 }
 
 /**
@@ -413,14 +436,57 @@ export class DataQueryHandler implements ToolHandler {
       throw new ToolGatewayError('INVALID_ARGUMENTS', 'data_query requires mode "direct" or "semantic"')
     }
 
+    // Static pre-execution check (LOCAL-077). Every generated plan — direct or compiled
+    // from a semantic plan — must pass the adapter's AST/allowlist/parameter validation
+    // before a single row is read. The handler no longer skips `validate`.
+    const precheck = await this.#precheckQuery(plan, limits, request)
+    warnings.push(...precheck.warnings)
+
     const executeRequest: StructuredQueryExecuteRequest = {
-      plan,
+      plan: precheck.plan,
       limits,
       snapshotRequest: { consistency },
       ...(cursor === undefined ? {} : { cursor }),
     }
     const response = await this.#executeQuery(executeRequest, request)
     return tableOutcome(response, warnings)
+  }
+
+  /**
+   * The static dry-run stage (C3/C4, LOCAL-077).
+   *
+   * The project's SQL subset is a single read-only SELECT / controlled CTE, so the
+   * textbook `EXPLAIN`-based dry-run is deliberately not used: it would conflict with
+   * the read-only subset and the DuckDB sandbox forbids `DESCRIBE`/`SHOW`. The dry-run
+   * is therefore a static/AST pre-check through the same `StructuredQueryPort.validate`
+   * the backend already exposes: it parses the statement, resolves every relation
+   * through the confirmed mapping, checks the function/object allowlists and binds the
+   * declared parameters. It opens no connection and reads no data.
+   *
+   * The normalized plan is returned so execution uses the exact plan that was checked,
+   * on the same read-only role and parameter-binding path (`validate` and `execute` are
+   * methods of the same injected port and receive the same context).
+   *
+   * A rejection is data (`valid: false` + `rejectedReason`), not an exception; it is
+   * raised here as a locatable gateway refusal that names the failing rule, object or
+   * parameter so the correction loop can act on it.
+   */
+  async #precheckQuery(
+    plan: DirectSqlQueryPlan,
+    limits: QueryLimits,
+    request: ToolExecutionRequest,
+  ): Promise<{ readonly plan: DirectSqlQueryPlan; readonly warnings: ToolWarning[] }> {
+    const validation = await this.#config.query.validate({ plan, limits }, request.ctx)
+    if (!validation.valid) {
+      throw rejectedByPrecheck(validation)
+    }
+    const normalized = validation.normalizedPlan
+    const checkedPlan = normalized !== undefined && normalized.mode === 'direct' ? normalized : plan
+    const warnings: ToolWarning[] = validation.warnings.map((message) => ({
+      code: 'QUERY_PRECHECK_WARNING',
+      message,
+    }))
+    return { plan: checkedPlan, warnings }
   }
 
   /**
