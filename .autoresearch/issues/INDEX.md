@@ -180,6 +180,19 @@
 
 | [LOCAL-073](issue-073-unhandled-rejection.md) | 修复 publication-fence 故障注入测试的 unhandled rejection | infra | 已交付 #147 |
 
+## NL2SQL 流水线补齐卡片（LOCAL-071 核对产出）
+
+LOCAL-071 逐项核对标准 NL2SQL 流水线后登记缺口，拆为以下卡片（均落在现有包/端口内，不新增工具、不改 core 边界；报告见 `platform/docs/local-071-nl2sql-pipeline-alignment.md`）：
+
+| ID | 主题 | 类型 | 状态 |
+|---|---|---|---|
+| [LOCAL-074](issue-074-question-rewriting.md) | 实现问题改写前置步 | backend | 已建卡 #152（就绪） |
+| [LOCAL-075](issue-075-schema-vocabulary-injection.md) | 实现语义 mapping 候选召回与 Schema/词表注入 | backend | 已建卡 #153（就绪） |
+| [LOCAL-076](issue-076-few-shot-example-retrieval.md) | 实现 Few-shot 示例检索 | backend | 已建卡 #154（就绪） |
+| [LOCAL-077](issue-077-static-pre-execution-check.md) | 实现静态试执行预检（dry-run） | backend | 已建卡 #155（就绪） |
+| [LOCAL-078](issue-078-feedback-collection.md) | 实现反馈收集（append-only） | backend | 已建卡 #156（就绪） |
+| [LOCAL-079](issue-079-failed-checks-feedback-loop.md) | 实现核验失败项回传到草稿生成（契约版本化闭环） | backend | 已建卡 #157（就绪） |
+
 ## 用户追加卡片
 
 | ID | 主题 | 类型 | 状态 |
