@@ -178,6 +178,8 @@
 
 | [LOCAL-072](issue-072-openai-compatible-decode.md) | 为 adapter-model-company 增加 OpenAI 兼容解码路径 | backend | 已交付 #144 |
 
+| [LOCAL-073](issue-073-unhandled-rejection.md) | 修复 publication-fence 故障注入测试的 unhandled rejection | infra | 已交付 #147 |
+
 ## 用户追加卡片
 
 | ID | 主题 | 类型 | 状态 |
