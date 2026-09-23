@@ -94,7 +94,8 @@
     "LOCAL-068",
     "LOCAL-069",
     "LOCAL-070",
-    "LOCAL-072"
+    "LOCAL-072",
+    "LOCAL-073"
   ],
   "external_condition_ids": [
     "LOCAL-051",
@@ -2684,6 +2685,28 @@
       "origin": "discovered-during-execution",
       "execution_mode": "local-implementation",
       "github_issue": 144
+    },
+    {
+      "id": "LOCAL-073",
+      "number": 73,
+      "title": "修复 publication-fence 故障注入测试的 unhandled rejection",
+      "file": "issue-073-unhandled-rejection.md",
+      "type": "infra",
+      "priority": "high",
+      "state": "done",
+      "readiness": "done",
+      "phase": "J 外部条件验证",
+      "dependencies": [
+        "LOCAL-070"
+      ],
+      "user_stories": [],
+      "functional_requirements": [],
+      "acceptance_refs": [],
+      "design_tasks": [],
+      "external_gates": [],
+      "origin": "discovered-during-execution",
+      "execution_mode": "local-implementation",
+      "github_issue": 147
     }
   ],
   "github_remote_url": "https://github.com/Yijtu/ontology.git",
@@ -2718,7 +2741,8 @@
     "LOCAL-068",
     "LOCAL-069",
     "LOCAL-070",
-    "LOCAL-072"
+    "LOCAL-072",
+    "LOCAL-073"
   ],
   "user_requested_ids": [
     "LOCAL-071"
