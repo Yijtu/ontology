@@ -28,6 +28,12 @@ export {
 } from './questions'
 export type { HomeEnergyQuestionIntent, HomeEnergyRepresentativeQuestion } from './questions'
 export {
+  HOME_ENERGY_EXAMPLE_COLLECTION_REF,
+  HOME_ENERGY_EXAMPLE_SET_REF,
+  HOME_ENERGY_FEW_SHOT_EXAMPLES,
+  buildHomeEnergyExampleSet,
+} from './examples'
+export {
   HOME_ENERGY_REQUIRED_OBJECTS,
   checkHomeEnergySemantics,
 } from './semantics'
