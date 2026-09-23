@@ -8,8 +8,9 @@ import { LocalDocumentCapability, MAX_LOCAL_DOCUMENT_BYTES } from '../compositio
 export function registerLocalDocumentImportRoute(app: FastifyInstance, dependencies: {
   readonly authenticate: RequestAuthenticator
   readonly documents: LocalDocumentCapability
+  readonly path?: string
 }): void {
-  app.post('/api/v1/operator/documents', async (request, reply) => {
+  app.post(dependencies.path ?? '/api/v1/operator/documents', async (request, reply) => {
     const traceId = readTraceId(request)
     const auth = authenticateRequest(dependencies.authenticate, request, reply)
     if (auth === undefined) return reply

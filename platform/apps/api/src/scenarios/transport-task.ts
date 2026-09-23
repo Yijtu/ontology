@@ -4,13 +4,15 @@ import { defineQueryTaskDescriptor } from '../composition/query-tasks'
 import type { RegisteredQueryTask } from '../composition/query-tasks'
 import type { EvidenceStorePort, DraftWriterPort, ImmutableArtifactWriter } from '@ontology/contracts'
 import type { LocalImmutableBlobStore } from '@ontology/adapter-blob-local'
-import type { LocalTransportProfile } from '../composition/registered-transport-profile'
 import { createTransportInspectionDraftWriter } from './task-drafts'
 
 export const TRANSPORT_INSPECTION_TASK_ID = 'transport.inspection-list'
 
 export function createTransportInspectionTask(input: {
-  readonly source: LocalTransportProfile
+  readonly source: {
+    readonly profileRef: ProfileRef
+    planForDistrict(district: string, scope?: { readonly tenantId: string; readonly spaceId: string }): import('@ontology/contracts').SemanticQueryPlan
+  }
   readonly evidence: EvidenceStorePort
   readonly artifacts: ImmutableArtifactWriter
   readonly blobStore: LocalImmutableBlobStore
@@ -31,7 +33,7 @@ export function createTransportInspectionTask(input: {
       const district = taskInput['district']
       if (typeof district !== 'string') { yield { type: 'failed', error: { code: 'INVALID_ARGUMENT', message: 'district must be text', retryable: false } }; return }
       let plan
-      try { plan = input.source.planForDistrict(district) }
+      try { plan = input.source.planForDistrict(district, { tenantId: ctx.principal.tenantId, spaceId: ctx.allowedResources.spaceId }) }
       catch { yield { type: 'failed', error: { code: 'INVALID_ARGUMENT', message: 'district is not a valid registered district key', retryable: false } }; return }
       yield { type: 'step_started', stepId: 'transport.inspection-query', toolId: 'data_query' }
       const result = await gateway.invoke({ callId: randomUUID(), toolId: 'data_query', arguments: { kind: 'query', mode: 'semantic', queryPlan: plan } }, ctx)

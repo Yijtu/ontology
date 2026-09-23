@@ -24,6 +24,8 @@ let browser: Browser
 let apiUrl: string
 let workDir: string
 let appDatabaseUrl: string
+let operatorSqlUrl: string
+let businessDatabaseName: string
 let tenantId: string
 let spaceId: string
 const operatorToken = `operator-${randomBytes(12).toString('hex')}`
@@ -31,6 +33,14 @@ const operatorToken = `operator-${randomBytes(12).toString('hex')}`
 function appUrlFor(adminUrl: string, password: string): string {
   const url = new URL(adminUrl)
   url.username = 'ontology_app'
+  url.password = password
+  return url.toString()
+}
+
+function databaseUrlFor(baseUrl: string, database: string, username: string, password: string): string {
+  const url = new URL(baseUrl)
+  url.pathname = `/${database}`
+  url.username = username
   url.password = password
   return url.toString()
 }
@@ -50,12 +60,52 @@ beforeAll(async () => {
     await admin.query(statement)
     await admin.query('INSERT INTO agent_platform.tenants (tenant_id,slug) VALUES ($1,$2)', [tenantId, `local-${tenantId}`])
     await admin.query('INSERT INTO agent_platform.spaces (tenant_id,space_id,name) VALUES ($1,$2,$3)', [tenantId, spaceId, 'browser-local-product'])
+    const facilityEntityId = 'facility-entity-001'
+    await admin.query(`INSERT INTO agent_platform.identity_entities (tenant_id,space_id,entity_id,object_id,identity_scope_id,display_name,state,revision,recorded_at,updated_at)
+      VALUES ($1,$2,$3,'road_facility','facility-key-within-district','Bridge N 01','confirmed',1,now(),now())`, [tenantId, spaceId, facilityEntityId])
+    businessDatabaseName = `customer_${tenantId.replaceAll('-', '').slice(0, 12)}`
+    const businessRolePassword = `readonly_${randomBytes(10).toString('hex')}`
+    await admin.query(`CREATE DATABASE ${businessDatabaseName}`)
+    const readerRoleStatement = await admin.query<{ statement: string }>("SELECT format('CREATE ROLE ontology_customer_reader LOGIN PASSWORD %L', $1::text) AS statement", [businessRolePassword])
+    const createRoleSql = readerRoleStatement.rows[0]?.statement
+    if (createRoleSql === undefined) throw new Error('could not create the read-only business role')
+    await admin.query(createRoleSql)
+    const businessAdminConfig = new URL(container.adminUrl)
+    businessAdminConfig.pathname = `/${businessDatabaseName}`
+    const businessAdminUrl = businessAdminConfig.toString()
+    const businessAdmin = new Client({ connectionString: businessAdminUrl })
+    await businessAdmin.connect()
+    try {
+      await businessAdmin.query(`CREATE TABLE public.ontology_facilities (
+        facility_key text NOT NULL, district_code text NOT NULL, condition_code text NOT NULL,
+        entity_id text NOT NULL, object_id text NOT NULL, identity_scope_id text NOT NULL, native_id text NOT NULL,
+        display_name text NOT NULL, normalized_name text NOT NULL, alias text, alias_normalized text,
+        alias_confirmed boolean NOT NULL, alias_valid_from timestamptz, alias_valid_to timestamptz,
+        site text, entity_type text NOT NULL, valid_from timestamptz NOT NULL, valid_to timestamptz,
+        tenant_id uuid NOT NULL, space_id uuid NOT NULL
+      )`)
+      await businessAdmin.query(`INSERT INTO public.ontology_facilities VALUES
+        ('bridge-n-01','north','needs_inspection','facility-entity-001','road_facility','facility-key-within-district','bridge-n-01',
+         'Bridge N 01','bridge n 01',NULL,NULL,false,NULL,NULL,'north-yard','road_facility','2020-01-01T00:00:00Z',NULL,$1,$2)`, [tenantId, spaceId])
+      await businessAdmin.query(`GRANT CONNECT ON DATABASE ${businessDatabaseName} TO ontology_customer_reader`)
+      await businessAdmin.query('GRANT USAGE ON SCHEMA public TO ontology_customer_reader')
+      await businessAdmin.query('GRANT SELECT ON public.ontology_facilities TO ontology_customer_reader')
+    } finally {
+      await businessAdmin.end()
+    }
+    operatorSqlUrl = databaseUrlFor(container.adminUrl, businessDatabaseName, 'ontology_customer_reader', businessRolePassword)
   } finally {
     await admin.end()
   }
   appDatabaseUrl = appUrlFor(container.adminUrl, password)
   workDir = await mkdtemp(join(tmpdir(), `ontology-local-product-${randomBytes(3).toString('hex')}-`))
   process.env['DATABASE_URL'] = appDatabaseUrl
+  process.env['ONTOLOGY_OPERATOR_SQL_URL'] = operatorSqlUrl
+  process.env['ONTOLOGY_OPERATOR_SQL_SCHEMA'] = 'public'
+  process.env['ONTOLOGY_OPERATOR_SQL_RELATION'] = 'ontology_facilities'
+  process.env['ONTOLOGY_OPERATOR_SQL_URL'] = operatorSqlUrl
+  process.env['ONTOLOGY_OPERATOR_SQL_SCHEMA'] = 'public'
+  process.env['ONTOLOGY_OPERATOR_SQL_RELATION'] = 'ontology_facilities'
   process.env['ONTOLOGY_TENANT_ID'] = tenantId
   process.env['ONTOLOGY_SPACE_ID'] = spaceId
   process.env['ONTOLOGY_BLOB_DIR'] = join(workDir, 'blobs')
@@ -178,16 +228,134 @@ describe('local product browser journey', () => {
     expect((await fetch(`${apiUrl}/api/v1/runs/${noDocumentRun}/answer`)).status).toBe(404)
     const deniedImport = await fetch(`${apiUrl}/api/v1/operator/documents`, { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ title: '无权限导入', content: '道路设施每年巡检一次。', mediaType: 'text/plain' }) })
     expect(deniedImport.status).toBe(403)
+    const policyContent = '在此虚构的演示文本中，北区道路设施每年进行两次例行巡检。此内容仅用于测试引文定位。'
     const imported = await fetch(`${apiUrl}/api/v1/operator/documents`, {
       method: 'POST', headers: { 'content-type': 'application/json', authorization: `Bearer ${operatorToken}` },
-      body: JSON.stringify({ title: '临时合成道路巡检说明', content: '在此虚构的演示文本中，北区道路设施每年进行两次例行巡检。此内容仅用于测试引文定位。', mediaType: 'text/plain' }),
+      body: JSON.stringify({ title: '临时合成道路巡检说明', content: policyContent, mediaType: 'text/plain' }),
     })
-    expect(imported.status, await imported.text()).toBe(201)
+    const importedText = await imported.text()
+    expect(imported.status, importedText).toBe(201)
+    const firstPolicy = (JSON.parse(importedText) as { data: { parseId: string; indexGeneration: string } }).data
+    const repeatedPolicy = await fetch(`${apiUrl}/api/v1/operator/documents`, {
+      method: 'POST', headers: { 'content-type': 'application/json', authorization: `Bearer ${operatorToken}` },
+      body: JSON.stringify({ title: '同一份合成说明重试', content: policyContent, mediaType: 'text/plain' }),
+    })
+    expect(repeatedPolicy.status).toBe(201)
+    const repeatedPolicyData = (await repeatedPolicy.json() as { data: { parseId: string; indexGeneration: string } }).data
+    expect(repeatedPolicyData.parseId).toBe(firstPolicy.parseId)
+    expect(repeatedPolicyData.indexGeneration).toBe(firstPolicy.indexGeneration)
     const secondDocument = await fetch(`${apiUrl}/api/v1/operator/documents`, {
       method: 'POST', headers: { 'content-type': 'application/json', authorization: `Bearer ${operatorToken}` },
       body: JSON.stringify({ title: '第二份合成文件', content: '另一个文件，应该被 collection 限制拒绝。', mediaType: 'text/markdown' }),
     })
     expect(secondDocument.status).toBe(409)
+
+    const sourceInfo = await fetch(`${apiUrl}/api/v1/operator/sql-source`, { headers: { authorization: `Bearer ${operatorToken}` } })
+    expect(sourceInfo.status).toBe(200)
+    const source = (await sourceInfo.json() as { data: { readOnly: boolean; definitionRef: { id: string; version: string; digest: string } } }).data
+    expect(source.readOnly).toBe(true)
+    const hiddenSourceInfo = await fetch(`${apiUrl}/api/v1/operator/sql-source`)
+    expect(hiddenSourceInfo.status).toBe(403)
+    expect(JSON.stringify(source)).not.toContain(operatorSqlUrl)
+    const readonlyClient = new Client({ connectionString: operatorSqlUrl })
+    await readonlyClient.connect()
+    try { await expect(readonlyClient.query('DELETE FROM public.ontology_facilities')).rejects.toBeDefined() }
+    finally { await readonlyClient.end() }
+    const candidateContent = '{"facility_key":"bridge-n-01","facility_name":"Bridge N 01","district":"north","inspection_state":"needs_inspection"}'
+    const candidateUploads = await Promise.all([
+      fetch(`${apiUrl}/api/v1/operator/candidate-documents`, {
+        method: 'POST', headers: { 'content-type': 'application/json', authorization: `Bearer ${operatorToken}` },
+        body: JSON.stringify({ title: '受控原生实体记录 A', content: candidateContent, mediaType: 'text/plain' }),
+      }),
+      fetch(`${apiUrl}/api/v1/operator/candidate-documents`, {
+        method: 'POST', headers: { 'content-type': 'application/json', authorization: `Bearer ${operatorToken}` },
+        body: JSON.stringify({ title: '受控原生实体记录 B', content: `${candidateContent} `, mediaType: 'text/plain' }),
+      }),
+    ])
+    expect(candidateUploads.map((response) => response.status).sort()).toEqual([201, 409])
+    const acceptedCandidateUpload = candidateUploads.find((response) => response.status === 201)
+    if (acceptedCandidateUpload === undefined) throw new Error('the per-collection lock did not accept exactly one concurrent document')
+    const candidateParseId = (await acceptedCandidateUpload.json() as { data: { parseId: string } }).data.parseId
+    const acceptedCandidateContent = candidateUploads[0]?.status === 201 ? candidateContent : `${candidateContent} `
+    const crossCollection = await fetch(`${apiUrl}/api/v1/operator/documents`, {
+      method: 'POST', headers: { 'content-type': 'application/json', authorization: `Bearer ${operatorToken}` },
+      body: JSON.stringify({ title: '另一个集合已有的候选文件', content: acceptedCandidateContent, mediaType: 'text/plain' }),
+    })
+    // A parse from the candidate collection must not authorise replacement of the policy index.
+    expect(crossCollection.status).toBe(409)
+    const extractResponse = await fetch(`${apiUrl}/api/v1/operator/documents/${candidateParseId}/extract-candidates`, {
+      method: 'POST', headers: { 'content-type': 'application/json', authorization: `Bearer ${operatorToken}`, 'idempotency-key': `extract-${candidateParseId}` }, body: '{}',
+    })
+    const extractionText = await extractResponse.text()
+    expect(extractResponse.status, extractionText).toBe(202)
+    const extracted = (JSON.parse(extractionText) as { data: { jobId: string; stage: string; candidateIds: string[]; deterministic: boolean; modelCalls: number } }).data
+    expect(extracted.stage).toBe('awaiting_review')
+    expect(extracted.candidateIds).toHaveLength(1)
+    expect(extracted.deterministic).toBe(true)
+    expect(extracted.modelCalls).toBe(0)
+    const job = await fetch(`${apiUrl}/api/v1/jobs/${extracted.jobId}`, { headers: { authorization: `Bearer ${operatorToken}` } })
+    expect((await job.json() as { data: { stage: string } }).data.stage).toBe('awaiting_review')
+
+    const candidateId = extracted.candidateIds[0]
+    if (candidateId === undefined) throw new Error('deterministic extraction produced no entity candidate')
+    const candidateSource = await fetch(`${apiUrl}/api/v1/candidates/${candidateId}/source`, { headers: { authorization: `Bearer ${operatorToken}` } })
+    expect(candidateSource.status).toBe(200)
+    const sourceSpans = (await candidateSource.json() as { data: { spans: readonly { status: string; text?: string }[] } }).data.spans
+    expect(sourceSpans[0]?.status).toBe('resolved')
+    expect(sourceSpans[0]?.text).toContain('bridge-n-01')
+    const recall = await fetch(`${apiUrl}/api/v1/candidates/${candidateId}/identity-recall`, {
+      method: 'POST', headers: { 'content-type': 'application/json', authorization: `Bearer ${operatorToken}` }, body: '{}',
+    })
+    expect(recall.status).toBe(200)
+    const recallView = (await recall.json() as { data: { auditId: string; result: { outcome: string; candidates: readonly { entityId: string; strategy: string; stableId: boolean }[]; similarity: { available: boolean } } } }).data
+    expect(recallView.result.outcome).toBe('candidates')
+    expect(recallView.result.candidates[0]).toMatchObject({ entityId: 'facility-entity-001', strategy: 'strong_identifier', stableId: true })
+    expect(recallView.result.similarity.available).toBe(false)
+    expect((await fetch(`${apiUrl}/api/v1/candidate-identity-recalls/${recallView.auditId}`, { headers: { authorization: `Bearer ${operatorToken}` } })).status).toBe(200)
+    expect((await fetch(`${apiUrl}/api/v1/candidates/${candidateId}/identity-recall`, { method: 'POST', headers: { 'content-type': 'application/json' }, body: '{}' })).status).toBe(403)
+
+    const clarifyResponse = await fetch(`${apiUrl}/api/v1/candidates/${candidateId}/decision`, {
+      method: 'POST', headers: { 'content-type': 'application/json', authorization: `Bearer ${operatorToken}`, 'if-match': '0' }, body: JSON.stringify({ kind: 'clarify' }),
+    })
+    expect(clarifyResponse.status).toBe(200)
+    const clarifiedRevision = (await clarifyResponse.json() as { meta: { revision: string } }).meta.revision
+    const matchResponse = await fetch(`${apiUrl}/api/v1/candidates/${candidateId}/decision`, {
+      method: 'POST', headers: { 'content-type': 'application/json', authorization: `Bearer ${operatorToken}`, 'if-match': clarifiedRevision }, body: JSON.stringify({ kind: 'match', targetEntityId: 'facility-entity-001', justification: '审核员已核对原文 span 与只读 SQL 强键召回记录。' }),
+    })
+    expect(matchResponse.status).toBe(200)
+    const decisionRevision = (await matchResponse.json() as { meta: { revision: string } }).meta.revision
+    expect(decisionRevision).toBe('2')
+    const candidateDetail = await fetch(`${apiUrl}/api/v1/candidates/${candidateId}`, { headers: { authorization: `Bearer ${operatorToken}` } })
+    expect((await candidateDetail.json() as { data: { candidate: { sourceSpans: readonly unknown[] } } }).data.candidate.sourceSpans).toHaveLength(1)
+
+    const approval = await fetch(`${apiUrl}/api/v1/candidates/${candidateId}/reviews`, {
+      method: 'POST', headers: { 'content-type': 'application/json', authorization: `Bearer ${operatorToken}`, 'if-match': '0' }, body: JSON.stringify({ decision: 'approve', reason: '核对来源 span 与已召回的强 native key。' }),
+    })
+    expect(approval.status).toBe(200)
+    const publication = await fetch(`${apiUrl}/api/v1/semantic-publications`, {
+      method: 'POST', headers: { 'content-type': 'application/json', authorization: `Bearer ${operatorToken}`, 'if-match': '0', 'idempotency-key': `publish-${candidateId}` },
+      body: JSON.stringify({ schemaRef: source.definitionRef, approvedCandidateRefs: [{ candidateId, kind: 'entity' }] }),
+    })
+    const publicationText = await publication.text()
+    expect(publication.status, publicationText).toBe(201)
+    const published = (JSON.parse(publicationText) as { data: { publicationId: string; approvedCandidateRefs: readonly unknown[]; statements: readonly unknown[] } }).data
+    expect(published.approvedCandidateRefs).toHaveLength(1)
+    expect(published.statements).toHaveLength(1)
+
+    await app.close()
+    app = await startLocalProduct()
+    apiUrl = app.origin
+    const recalledAfterRestart = await fetch(`${apiUrl}/api/v1/candidate-identity-recalls/${recallView.auditId}`, { headers: { authorization: `Bearer ${operatorToken}` } })
+    expect(recalledAfterRestart.status).toBe(200)
+    expect((await recalledAfterRestart.json() as { data: { resultDigest: string } }).data.resultDigest).toBeTruthy()
+    const publishedAfterRestart = await fetch(`${apiUrl}/api/v1/semantic-publications/${published.publicationId}`, { headers: { authorization: `Bearer ${operatorToken}` } })
+    expect(publishedAfterRestart.status).toBe(200)
+    expect((await publishedAfterRestart.json() as { data: { publicationId: string } }).data.publicationId).toBe(published.publicationId)
+    const sqlRun = await createRun('north 区有哪些设施待巡检？', 'synthetic-home-1', 'operator-sql-facilities', 'transport.inspection-list', { district: 'north' })
+    const sqlAnswerResponse = await fetch(`${apiUrl}/api/v1/runs/${sqlRun}/answer`)
+    expect(sqlAnswerResponse.status).toBe(200)
+    const sqlAnswer = (await sqlAnswerResponse.json() as { data: PublishedAnswer }).data
+    expect(sqlAnswer.assertions?.map((assertion) => assertion.predicate)).toEqual(expect.arrayContaining(['facility_id', 'inspection_state', 'district']))
     const transportRun = await createRun('north 区有哪些设施待巡检？', 'synthetic-home-1', 'transport-government-local', 'transport.inspection-list', { district: 'north' })
     const transportAnswerResponse = await fetch(`${apiUrl}/api/v1/runs/${transportRun}/answer`)
     expect(transportAnswerResponse.status).toBe(200)

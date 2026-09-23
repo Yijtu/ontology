@@ -83,7 +83,7 @@ interface ChunkRow extends QueryResultRow {
 const PARSE_SELECT = `SELECT parse_id, tenant_id, space_id, original_blob_ref_id,
   original_content_digest, original_media_type, original_kind, media_kind, parser_id,
   parser_version, offset_unit, parse_status, completeness, coverage, pages,
-  normalized_blob_ref_id, normalized_content_digest, normalized_media_type,
+  normalized_blob_ref_id, normalized_content_digest, normalized_media_type, normalized_byte_size,
   span_map_blob_ref_id, span_map_content_digest, span_map_media_type,
   source_namespace, source_id, document_version_ref, created_at
   FROM agent_platform.document_parse_runs`
@@ -434,6 +434,15 @@ export class PostgresDocumentParseStore implements DocumentParseStore {
     )
   }
 
+  async getParseById(scopeRef: ScopeRef, parseId: Uuid, ctx: ToolContext): Promise<DocumentParseRecord | undefined> {
+    const scope = scopeWith(scopeRef, ctx)
+    return this.#withScope(scope, async (client) => {
+      const result = await client.query<ParseRow>(`${PARSE_SELECT} WHERE tenant_id = $1 AND space_id = $2 AND parse_id = $3 LIMIT 1`, [scope.tenantId, scope.spaceId, parseId])
+      const row = result.rows[0]
+      return row === undefined ? undefined : toParseRecord(row)
+    }, { readOnly: true })
+  }
+
   async listChunks(
     scopeRef: ScopeRef,
     parseId: Uuid,
@@ -453,6 +462,22 @@ export class PostgresDocumentParseStore implements DocumentParseStore {
       },
       { readOnly: true },
     )
+  }
+
+  async listChunksBounded(
+    scopeRef: ScopeRef,
+    parseId: Uuid,
+    limit: number,
+    ctx: ToolContext,
+  ): Promise<DocumentChunkRecord[]> {
+    const scope = scopeWith(scopeRef, ctx)
+    if (!Number.isInteger(limit) || limit < 1 || limit > 1001) throw new DocumentExtractionError('INVALID_REQUEST', 'bounded chunk limit must be between 1 and 1001')
+    return this.#withScope(scope, async (client) => {
+      const result = await client.query<ChunkRow>(`${CHUNK_SELECT}
+        WHERE tenant_id = $1 AND space_id = $2 AND parse_id = $3
+        ORDER BY ordinal LIMIT $4`, [scope.tenantId, scope.spaceId, parseId, limit])
+      return result.rows.map(toChunkRecord)
+    }, { readOnly: true })
   }
 
   async listChunksByScope(

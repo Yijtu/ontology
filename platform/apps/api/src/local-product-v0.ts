@@ -15,6 +15,9 @@ import { createEnergyComputeConfig } from './composition/energy-compute'
 import { createLocalProductDeployment } from './composition/local-product-deployment'
 import { createLocalStructuredProfiles } from './composition/registered-source-profiles'
 import { createLocalTransportProfile } from './composition/registered-transport-profile'
+import { createLocalOperatorSqlProfile, OPERATOR_SQL_SOURCE } from './composition/registered-operator-sql'
+import { ensureOperatorFacilityDefinition } from './composition/operator-definition'
+import { createLocalCandidateLifecycle } from './composition/local-candidate-lifecycle'
 import { QueryTaskRuntime } from './composition/query-task-runtime'
 import { RunTaskAssignments, RegisteredTaskDraftWriter } from './composition/query-tasks'
 import { createBlobArtifactWriter, createToolGatewayComposition } from './composition/tool-gateway'
@@ -22,6 +25,9 @@ import { createApiServer } from './http/app'
 import type { AuthenticatedRequest } from './http/server'
 import { registerLocalDocumentImportRoute } from './http/local-documents'
 import { registerLocalPlanDetailRoute } from './http/local-plan-detail'
+import { registerLocalCandidateRoutes } from './http/local-candidates'
+import { createRequestToolContext } from './http/context'
+import { CapabilityNotConfiguredError } from './http/shared'
 
 const runtimeRef: VersionRef = { id: 'runtime-registered-tasks', version: '1.0.0', digest: sha256DigestOf('runtime-registered-tasks@1.0.0') }
 const policyRef: VersionRef = { id: 'policy-local-demo', version: '1.0.0', digest: sha256DigestOf('policy-local-demo@1.0.0') }
@@ -73,10 +79,30 @@ export async function startRegisteredLocalProduct(): Promise<{ close(): Promise<
   const energy = await createLocalStructuredProfiles({ tenantId, spaceId, runtimeRef, policyRef, industryRef })
   const transport = await createLocalTransportProfile({ tenantId, spaceId, runtimeRef, policyRef, industryRef: { id: 'transport-government-local', version: '1.0.0', digest: sha256DigestOf('transport-government-local@1.0.0') } })
   const evidence = new (await import('@ontology/adapter-control-postgres')).PostgresEvidenceStore(database)
-  const deployment = await createLocalProductDeployment({ tenantId, spaceId, database, connectionString, blobs, artifacts, evidence, validator, compute: createEnergyComputeConfig({ blobStore: blobs, validator }), energy, transport })
+  const operatorSqlUrl = process.env['ONTOLOGY_OPERATOR_SQL_URL']
+  let operatorDefinition: Awaited<ReturnType<typeof ensureOperatorFacilityDefinition>> | undefined
+  let operatorSql: Awaited<ReturnType<typeof createLocalOperatorSqlProfile>> | undefined
+  if (operatorSqlUrl !== undefined && operatorSqlUrl.trim().length > 0) {
+    operatorDefinition = await ensureOperatorFacilityDefinition({ database, tenantId, spaceId })
+    const principal = { tenantId, subjectId: 'local-product-bootstrap', roles: ['platform-admin'], scopes: ['tool:invoke'], authEpoch: 1 }
+    const sqlContext = createRequestToolContext({
+      principal, spaceId, runId: globalThis.crypto.randomUUID(), traceId: 'operator-sql-profile-bootstrap',
+      allowedResourceKinds: ['artifact', 'dataset', 'evidence'], allowedSourceRefs: [OPERATOR_SQL_SOURCE], maxRows: 250,
+    })
+    operatorSql = await createLocalOperatorSqlProfile({
+      connectionString: operatorSqlUrl,
+      ...(process.env['ONTOLOGY_OPERATOR_SQL_SCHEMA'] === undefined ? {} : { schema: process.env['ONTOLOGY_OPERATOR_SQL_SCHEMA'] }),
+      ...(process.env['ONTOLOGY_OPERATOR_SQL_RELATION'] === undefined ? {} : { relation: process.env['ONTOLOGY_OPERATOR_SQL_RELATION'] }),
+      tenantId, spaceId, runtimeRef, policyRef, industryRef: operatorDefinition.ref, ctx: sqlContext,
+    })
+  }
+  const deployment = await createLocalProductDeployment({ tenantId, spaceId, database, connectionString, blobs, artifacts, evidence, validator, compute: createEnergyComputeConfig({ blobStore: blobs, validator }), energy, transport, ...(operatorSql === undefined ? {} : { operatorSql }) })
   const gateway = createToolGatewayComposition({ database, blobStore: blobs, budget, validator, handlers: deployment.handlers })
   const assignments = new RunTaskAssignments()
   const runtime = new QueryTaskRuntime(deployment.tasks, assignments)
+  const candidateLifecycle = operatorSql === undefined || operatorDefinition === undefined
+    ? undefined
+    : createLocalCandidateLifecycle({ database, sql: operatorSql, documents: deployment.candidateDocuments, definition: operatorDefinition, budget })
 
   await database.withIdentityScope({ tenantId, spaceId }, async (client) => {
     for (const profile of deployment.profiles) {
@@ -89,7 +115,10 @@ export async function startRegisteredLocalProduct(): Promise<{ close(): Promise<
 
   const runService = new RunService({ store, control, profiles: { bindProfileForRun: async (profileRef): Promise<RunProfileBinding> => {
     const selected = deployment.profileById.get(profileRef.id)
-    if (selected === undefined || selected.profileRef.version !== profileRef.version) throw new Error(`unknown local profile ${profileRef.id}@${profileRef.version}`)
+    if (selected === undefined || selected.profileRef.version !== profileRef.version) {
+      if (profileRef.id === 'operator-sql-facilities' && candidateLifecycle === undefined) throw new RunServiceError('CAPABILITY_NOT_CONFIGURED', 'operator SQL source is not configured')
+      throw new RunServiceError('INVALID_ARGUMENT', `unknown local profile ${profileRef.id}@${profileRef.version}`)
+    }
     return { profileRef, resolvedProfileHash: selected.resolvedProfile.snapshotHash, resolvedProfileRef: { id: profileRef.id, version: profileRef.version, snapshotHash: selected.resolvedProfile.snapshotHash }, runtimeRef }
   } } })
   const phase = new RunPhaseDriver({ store, control })
@@ -124,7 +153,7 @@ export async function startRegisteredLocalProduct(): Promise<{ close(): Promise<
     const token = Array.isArray(rawAuth) ? rawAuth[0] : rawAuth
     const operator = operatorToken !== undefined && token === `Bearer ${operatorToken}`
     return {
-      principal: { tenantId, subjectId: operator ? 'local-operator' : 'local-business-user', roles: operator ? ['business-user', 'data-editor'] : ['business-user'], scopes: ['tool:invoke'], authEpoch: 1 },
+      principal: { tenantId, subjectId: operator ? 'local-operator' : 'local-business-user', roles: operator ? ['business-user', 'data-editor', 'semantic-reviewer', 'semantic-publisher'] : ['business-user'], scopes: ['tool:invoke'], authEpoch: 1 },
       spaceId, allowedDomains: [], allowedResourceKinds: ['artifact', 'dataset', 'document', 'evidence'],
       allowedSourceRefs: deployment.profiles.flatMap((profile) => profile.sourceRefs), allowedCollectionRefs: deployment.profiles.flatMap((profile) => profile.collectionRefs), maxRows: 100,
     }
@@ -132,25 +161,35 @@ export async function startRegisteredLocalProduct(): Promise<{ close(): Promise<
   const progress = {
     scopeForProfile: async (ref: ProfileRef, ctx: ToolContext) => {
       const selected = deployment.profileById.get(ref.id)
-      if (selected === undefined || selected.profileRef.version !== ref.version) throw new Error(`unknown local profile ${ref.id}@${ref.version}`)
+      if (selected === undefined || selected.profileRef.version !== ref.version) {
+        if (ref.id === 'operator-sql-facilities' && candidateLifecycle === undefined) throw new CapabilityNotConfiguredError('configure ONTOLOGY_OPERATOR_SQL_URL with a read-only role and approved view to use the operator SQL profile')
+        throw new RunServiceError('INVALID_ARGUMENT', `unknown local profile ${ref.id}@${ref.version}`)
+      }
       const canImportDocuments = ctx.principal.roles.includes('data-editor') || ctx.principal.roles.includes('platform-admin')
       return { profileRef: ref, resolvedProfileHash: selected.resolvedProfile.snapshotHash, webSearchEnabled: false, toolIds: selected.resolvedProfile.toolBindings.filter((binding) => binding.enabled).map((binding) => binding.toolId), allowedDomains: [], explicitDegradations: selected.resolvedProfile.explicitDegradations.map((item) => ({ capability: item.capability, reason: item.reason, fallback: item.fallback })), tasks: deployment.tasks.list(ref), operatorActions: canImportDocuments ? deployment.operatorActions.get(ref.id) ?? [] : [] }
     },
     progressForRun: async (subject: { profileRef: ProfileRef }, ctx: ToolContext) => ({ scope: await progress.scopeForProfile(subject.profileRef, ctx) }),
   }
-  const app = createApiServer({ authenticate, logger: true, runs: {
+  const app = createApiServer({ authenticate, logger: process.env['ONTOLOGY_LOCAL_API_LOGGER'] === 'true', runs: {
     service: runService, workflow: controller, progress,
     prepareRunContext: async (profileRef, context) => {
+      if (profileRef.id === 'operator-sql-facilities' && candidateLifecycle === undefined) throw new CapabilityNotConfiguredError('configure a server-side read-only SQL URL and approved view before creating runs with the operator SQL profile')
       try { return deployment.prepareTaskContext(profileRef, context) }
       catch { throw new RunServiceError('INVALID_ARGUMENT', 'taskId and taskInput must match a registered task in the selected profile') }
     },
     resolveToolAccess: async (profileRef) => {
       const selected = deployment.profileById.get(profileRef.id)
-      if (selected === undefined || selected.profileRef.version !== profileRef.version) throw new Error('unknown local profile')
+      if (selected === undefined || selected.profileRef.version !== profileRef.version) throw new RunServiceError('INVALID_ARGUMENT', 'the selected profile is not registered')
       return { sourceRefs: selected.sourceRefs, resourceKinds: selected.resourceKinds, collectionRefs: selected.collectionRefs, maxRows: selected.maxRows }
     },
-  } })
+  }, ...(candidateLifecycle === undefined ? {} : {
+    jobs: { service: candidateLifecycle.jobs },
+    decisions: { service: candidateLifecycle.decisions, candidates: candidateLifecycle.candidates, documents: deployment.candidateDocuments.parseStore },
+    publications: { service: candidateLifecycle.publications },
+  }) })
   registerLocalDocumentImportRoute(app, { authenticate, documents: deployment.documents })
+  registerLocalDocumentImportRoute(app, { authenticate, documents: deployment.candidateDocuments, path: '/api/v1/operator/candidate-documents' })
+  if (candidateLifecycle !== undefined && operatorSql !== undefined) registerLocalCandidateRoutes(app, { authenticate, lifecycle: candidateLifecycle, documents: deployment.candidateDocuments, sql: operatorSql, tenantId, spaceId })
   registerLocalPlanDetailRoute(app, { authenticate, getAnswer: (runId, ctx) => controller.getAnswer(runId, ctx), evidence, blobs })
   await app.listen({ host: '127.0.0.1', port: Number(process.env['PORT'] ?? 3000) })
   const address = app.server.address()

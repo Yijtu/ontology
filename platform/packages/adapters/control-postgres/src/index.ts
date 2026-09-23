@@ -17,6 +17,7 @@ export { PostgresWorkflowStore } from './workflow-store'
 export { PostgresJobStore } from './job-store'
 export { PostgresCandidateStore } from './candidate-store'
 export { PostgresIdentityDecisionStore } from './identity-decision-store'
+export { PostgresIdentityRecallAuditStore } from './identity-recall-audit-store'
 export { PostgresSemanticPublicationStore } from './semantic-publication-store'
 export type {
   PostgresSemanticPublicationStoreOptions,

@@ -88,9 +88,18 @@ export class JobWorker {
 
   /** Claim and process at most one unit of work. */
   async runOnce(scopeRef: ScopeRef, ctx: ToolContext): Promise<JobWorkerResult> {
+    return this.#runOnce(scopeRef, ctx)
+  }
+
+  /** Process one specified job without accidentally leasing another tenant job from the queue. */
+  async runJob(jobId: Uuid, scopeRef: ScopeRef, ctx: ToolContext): Promise<JobWorkerResult> {
+    return this.#runOnce(scopeRef, ctx, jobId)
+  }
+
+  async #runOnce(scopeRef: ScopeRef, ctx: ToolContext, jobId?: Uuid): Promise<JobWorkerResult> {
     const lease = await this.#store.acquireLease(
       scopeRef,
-      { workerId: this.#workerId, now: this.#now(), leaseDurationMs: this.#leaseDurationMs },
+      { workerId: this.#workerId, now: this.#now(), leaseDurationMs: this.#leaseDurationMs, ...(jobId === undefined ? {} : { jobId }) },
       ctx,
     )
     if (lease === undefined) return { disposition: 'idle' }

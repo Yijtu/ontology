@@ -8,6 +8,7 @@ const PROFILE_OPTIONS = [
   { profileRef: DEMO_PROFILE, label: '能源 A：宽表遥测' },
   { profileRef: { id: 'home-energy-demo-long', version: '1.0.0' }, label: '能源 B：长表 metric-code' },
   { profileRef: { id: 'transport-government-local', version: '1.0.0' }, label: '交通：设施巡检' },
+  { profileRef: { id: 'operator-sql-facilities', version: '1.0.0' }, label: '交通：operator 只读 SQL（需配置来源）' },
   { profileRef: { id: 'local-policy-documents', version: '1.0.0' }, label: '文档：政策引文' },
 ] as const
 

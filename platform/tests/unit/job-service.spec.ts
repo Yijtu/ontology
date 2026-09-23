@@ -67,6 +67,20 @@ describe('logical job and attempt separation', () => {
     expect(job?.attemptCount).toBe(1)
   })
 
+  it('can target one newly created operator job without leasing another queued job', async () => {
+    const { store, budget, clock, service } = harness()
+    const unrelated = newJobInput({ idempotencyKey: 'unrelated-queued-job-001' })
+    const target = newJobInput({ idempotencyKey: 'target-operator-job-001' })
+    await service.createJob(unrelated, EDITOR_A)
+    await service.createJob(target, EDITOR_A)
+
+    const result = await workerFor(store, budget, clock, pipelineHandlers()).runJob(target.jobId, SCOPE_A, EDITOR_A)
+    expect(result.jobId).toBe(target.jobId)
+    expect(result.stage).toBe('awaiting_review')
+    expect((await store.getJob(SCOPE_A, target.jobId, EDITOR_A))?.stage).toBe('awaiting_review')
+    expect((await store.getJob(SCOPE_A, unrelated.jobId, EDITOR_A))?.stage).toBe('received')
+  })
+
   it('retry creates a new attempt of the same logical job and never a new logical job', async () => {
     const { store, budget, clock, service } = harness()
     const input = newJobInput()

@@ -1,11 +1,13 @@
 import { readFileSync, readdirSync } from 'node:fs'
 import { fileURLToPath } from 'node:url'
 import { describe, expect, it } from 'vitest'
-import { DraftVerificationService } from '@ontology/application'
+import { DraftVerificationService, answerDraftContentHash } from '@ontology/application'
 import type {
   DecisionPort,
   EvidenceStorePort,
   VerificationPolicy,
+  VerifiedAssertion,
+  WorkflowInputManifest,
 } from '@ontology/contracts'
 import { sha256DigestOf } from '@ontology/core'
 import type { VerificationArtifactStore } from '@ontology/application'
@@ -55,6 +57,19 @@ function buildService(options: HarnessOptions = {}) {
     now: () => NOW,
   })
   return { service, evidence, artifacts }
+}
+
+function typedDraft(assertions: readonly VerifiedAssertion[], manifest: WorkflowInputManifest) {
+  const schemaVersion = 'answer-draft@2' as const
+  const blocks = assertions.map((assertion) => ({ kind: 'assertion', assertionId: assertion.assertionId }))
+  const limitations: readonly string[] = []
+  return {
+    ...buildDraft({ evidenceManifestHash: manifest.digest, claims: [], blocks }),
+    schemaVersion,
+    assertions,
+    limitations,
+    contentHash: answerDraftContentHash(RUN_ID, blocks, manifest.digest, [], assertions, { schemaVersion, limitations }),
+  }
 }
 
 /** Register one archived result payload plus its evidence envelope. */
@@ -465,5 +480,59 @@ describe('missing evidence, unbound claims and unavailable JEV (D7.4, C2)', () =
     expect(result.failedChecks).toContain('semantic_unavailable')
     // The provider's own free-text fallback reason never reaches a finding or an explanation.
     expect(JSON.stringify(result)).not.toContain('provider unavailable')
+  })
+})
+
+describe('versioned typed assertions', () => {
+  it('accepts a source-bound enum and rejects a changed subject even with a fresh draft hash', async () => {
+    const evidence = new InMemoryVerificationEvidence()
+    const artifacts = new InMemoryVerificationArtifacts()
+    const { ref, resultDigest } = await registerResult({ evidence, artifacts, payload: { facility: 'road-1', state: 'pending' } })
+    const manifest = buildInputManifest([ref])
+    const assertion: VerifiedAssertion = {
+      assertionId: '44444444-4444-4444-8444-444444444444', kind: 'enum',
+      subject: 'road-1', predicate: 'inspection_state', value: 'pending',
+      references: [{ evidenceRef: ref, resultDigest, subjectPointer: '/facility', valuePointer: '/state' }],
+    }
+    const { service } = buildService({ evidence, artifacts })
+    const valid = await service.verify({ runId: RUN_ID, draft: typedDraft([assertion], manifest), inputManifest: manifest }, ownerContext())
+    expect(valid.verdict).toBe('pass')
+
+    const forged: VerifiedAssertion = { ...assertion, subject: 'road-2' }
+    const rejected = await service.verify({ runId: RUN_ID, draft: typedDraft([forged], manifest), inputManifest: manifest }, ownerContext())
+    expect(rejected.verdict).toBe('fail')
+    expect(rejected.failedChecks).toContain('assertion_mismatch')
+  })
+
+  it('binds a document quote to archived text, version, digest and locator', async () => {
+    const text = 'Inspect twice each year.'
+    const documentRef = { id: '55555555-5555-4555-8555-555555555555', version: '1.0.0', digest: sha256DigestOf(text), kind: 'document' as const }
+    const locator = { kind: 'offset' as const, startOffset: 0, endOffset: text.length }
+    const digest = sha256DigestOf(text)
+    const evidence = new InMemoryVerificationEvidence()
+    const artifacts = new InMemoryVerificationArtifacts()
+    const { ref, resultDigest } = await registerResult({ evidence, artifacts, payload: { quotes: [{ documentRef, locator, text, textDigest: digest, quoteDigest: digest }] } })
+    const manifest = buildInputManifest([ref])
+    const assertion: VerifiedAssertion = {
+      assertionId: '66666666-6666-4666-8666-666666666666', kind: 'document_quote', subject: documentRef.id,
+      predicate: 'source_quote', quote: text, documentRef, locator, textDigest: digest, quoteDigest: digest, precision: 'exact',
+      references: [{ evidenceRef: ref, resultDigest, valuePointer: '/quotes/0/text', subjectPointer: '/quotes/0/documentRef/id', documentPointer: '/quotes/0/documentRef', locatorPointer: '/quotes/0/locator', textDigestPointer: '/quotes/0/textDigest', quoteDigestPointer: '/quotes/0/quoteDigest' }],
+    }
+    const { service } = buildService({ evidence, artifacts })
+    const verify = (candidate: VerifiedAssertion) => service.verify({ runId: RUN_ID, draft: typedDraft([candidate], manifest), inputManifest: manifest }, ownerContext())
+    expect((await verify(assertion)).verdict).toBe('pass')
+
+    const changedQuote: VerifiedAssertion = { ...assertion, quote: 'Inspect once each year.' }
+    expect((await verify(changedQuote)).failedChecks).toContain('document_quote_mismatch')
+    const changedLocator: VerifiedAssertion = { ...assertion, locator: { kind: 'offset', startOffset: 1, endOffset: text.length } }
+    expect((await verify(changedLocator)).failedChecks).toContain('document_quote_mismatch')
+    const changedDocument: VerifiedAssertion = { ...assertion, documentRef: { ...documentRef, version: '2.0.0' } }
+    expect((await verify(changedDocument)).failedChecks).toContain('document_quote_mismatch')
+    const changedResult: VerifiedAssertion = { ...assertion, references: [{ ...assertion.references[0]!, resultDigest: sha256DigestOf('other-result') }] }
+    expect((await verify(changedResult)).failedChecks).toContain('result_digest_mismatch')
+
+    const changedLimitations = { ...typedDraft([assertion], manifest), limitations: ['unsupported extra conclusion'] }
+    const forgedBody = await service.verify({ runId: RUN_ID, draft: changedLimitations, inputManifest: manifest }, ownerContext())
+    expect(forgedBody.failedChecks).toContain('draft_hash_mismatch')
   })
 })

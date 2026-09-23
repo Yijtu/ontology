@@ -425,6 +425,25 @@ export class PostgresKeywordIndexStore implements KeywordIndexStore {
     )
   }
 
+  /** Bounded lineage check for a single-document collection; never infer it from a parse in another collection. */
+  async listGenerationDocumentDigests(
+    scopeRef: ScopeRef,
+    collectionRef: string,
+    generation: RevisionString,
+    ctx: ToolContext,
+  ): Promise<Sha256Digest[]> {
+    const scope = resolveTrustedScope(scopeRef, ctx)
+    return this.#withScope(scope, async (client) => {
+      const result = await client.query<{ document_digest: Sha256Digest }>(
+        `SELECT DISTINCT document_digest FROM agent_platform.keyword_index_documents
+          WHERE tenant_id = $1 AND space_id = $2 AND collection_ref = $3 AND generation = $4
+          ORDER BY document_digest LIMIT 2`,
+        [scope.tenantId, scope.spaceId, collectionRef, generation],
+      )
+      return result.rows.map((row) => row.document_digest)
+    }, { readOnly: true })
+  }
+
   async activateGeneration(
     scopeRef: ScopeRef,
     collectionRef: string,
