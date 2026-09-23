@@ -31,6 +31,7 @@ function decisionSchema(ref: VersionRef): IndustrySchema {
         attributes: [
           { attributeId: 'device_native_id', valueType: 'string', minCardinality: 1, maxCardinality: 1, identityKey: true },
           { attributeId: 'device_name', valueType: 'string', minCardinality: 0, maxCardinality: 1, identityKey: false },
+          { attributeId: 'site', valueType: 'string', minCardinality: 1, maxCardinality: 1, identityKey: false },
         ],
       },
       {
@@ -40,6 +41,7 @@ function decisionSchema(ref: VersionRef): IndustrySchema {
         attributes: [
           { attributeId: 'sensor_native_id', valueType: 'string', minCardinality: 1, maxCardinality: 1, identityKey: true },
           { attributeId: 'sensor_name', valueType: 'string', minCardinality: 0, maxCardinality: 1, identityKey: false },
+          { attributeId: 'site', valueType: 'string', minCardinality: 1, maxCardinality: 1, identityKey: false },
         ],
       },
     ],
@@ -73,7 +75,7 @@ async function harness(): Promise<Harness> {
 }
 
 function deviceCandidate(overrides: Partial<EntityCandidate> = {}): EntityCandidate {
-  return {
+  const candidate: EntityCandidate = {
     ...entityCandidate({
       candidateId: randomUUID(),
       jobId: JOB_ID,
@@ -81,6 +83,8 @@ function deviceCandidate(overrides: Partial<EntityCandidate> = {}): EntityCandid
     }),
     ...overrides,
   }
+  return { ...candidate, attributes: candidate.attributes.some((attribute) => attribute.attributeId === 'site')
+    ? candidate.attributes : [...candidate.attributes, { attributeId: 'site', value: 'north-yard' }] }
 }
 
 function sensorCandidate(): EntityCandidate {
@@ -289,6 +293,12 @@ describe('IdentityDecisionService unit behaviour', () => {
     const matched = await decide(service, same, { kind: 'match', targetEntityId: entityId, strongIdentity: { kind: 'native_id', value: 'DEV-1' } })
     expect(matched.kind).toBe('match')
     expect(await store.listAssertions(SCOPE, { entityId, openOnly: true }, CTX)).toHaveLength(2)
+
+    const otherSite = deviceCandidate({ attributes: [
+      { attributeId: 'device_native_id', value: 'DEV-1' }, { attributeId: 'site', value: 'south-yard' },
+    ] })
+    await seed(candidates, otherSite)
+    await expect(decide(service, otherSite, { kind: 'match', targetEntityId: entityId, strongIdentity: { kind: 'native_id', value: 'DEV-1' } })).rejects.toMatchObject({ code: 'IDENTITY_SCOPE_MISMATCH' })
   })
 
   it('does not treat an unverified alias or a low score as merge authority', async () => {

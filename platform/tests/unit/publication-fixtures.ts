@@ -29,6 +29,7 @@ export function publicationSchema(ref: VersionRef): IndustrySchema {
         attributes: [
           { attributeId: 'device_native_id', valueType: 'string', minCardinality: 1, maxCardinality: 1, identityKey: true },
           { attributeId: 'device_name', valueType: 'string', minCardinality: 0, maxCardinality: 1, identityKey: false },
+          { attributeId: 'site', valueType: 'string', minCardinality: 1, maxCardinality: 1, identityKey: false },
         ],
       },
     ],
@@ -60,7 +61,7 @@ export function entityFor(
   overrides: Partial<EntityCandidate> & { readonly candidateId: string; readonly idempotencyKey: string },
 ): EntityCandidate {
   const candidateId = overrides.candidateId
-  return {
+  const candidate: EntityCandidate = {
     kind: 'entity',
     jobId: PUBLICATION_JOB_ID,
     objectId: 'device',
@@ -84,6 +85,8 @@ export function entityFor(
     candidateId,
     idempotencyKey: overrides.idempotencyKey,
   }
+  return { ...candidate, attributes: candidate.attributes.some((attribute) => attribute.attributeId === 'site')
+    ? candidate.attributes : [...candidate.attributes, { attributeId: 'site', value: 'north-yard' }] }
 }
 
 export function relationFor(input: { readonly candidateId: string; readonly idempotencyKey: string; readonly fromCandidateId: string; readonly toCandidateId: string }): RelationCandidate {
