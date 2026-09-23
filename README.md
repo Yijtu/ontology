@@ -1,6 +1,6 @@
 # ontology
 
-这是多行业语义与业务 Agent 平台的 TypeScript 仓库。**当前可直接运行的本地 POC 配置包含家庭能源、交通设施和受控文档三类有界任务**：同一个正式 run 会执行注册任务、调用来源工具、归档证据、硬核验并发布答案。演示数据均为合成或 operator 导入内容，不连接真实设备。
+这是多行业语义与业务 Agent 平台的 TypeScript 仓库。**当前可直接运行的本地 POC 包含家庭能源、交通设施、受控文档，以及配置后启用的 operator 只读 SQL 来源**。同一个正式 run 会执行注册任务、调用来源工具、归档证据、硬核验并发布答案。能源与默认交通数据为合成数据；SQL 来源需由 operator 在服务端配置，不连接真实设备。
 
 ## 这个页面究竟能做什么
 
@@ -11,9 +11,10 @@
 | “synthetic-home-1 的 SOC 均值是多少？” | 按所选 profile 将 `battery_soc_reading` 语义查询编译为受限 SQL，在 DuckDB 查询并计算平均值 | 站点、平均 SOC、单位、来源证据和核验状态。静态演示样本为 40% 与 50%，结果为 45%，不是实时设备读数 |
 | “明天如何安排充放电，在满足备电约束下尽量降低电费？” | 先查询同一站点 SOC，再用合成负荷、光伏、电价和电池参数测试有限的候选策略 | 估算费用与无电池基线、期末储能量、备电检查；展开后可查看选中策略、96 个 15 分钟时段的充放电和储能量轨迹 |
 | “north 区有哪些设施待巡检？” | 按交通 profile 确认的 semantic mapping 查询合成设施 DuckDB 表 | 有类型的设施 ID、区域和待巡检状态断言，各自绑定查询结果指针与来源证据 |
+| 同一个交通问题，切换 `operator-sql-facilities` | 在服务端配置只读 PostgreSQL 角色与符合固定列契约的授权视图后，按已登记 mapping 查询该视图 | 同一页面与 run/证据/核验链路读取业务库结果；未配置时显示能力缺失，不回退到合成表 |
 | “已导入文件中的巡检频率原文是什么？” | 在 operator 已导入并索引的文档中检索精确 span | 显示原文引句、byte-offset locator 与文档版本；不将关键词命中扩展成政策结论 |
 
-页面不是开放式聊天机器人。每个 profile 的任务、字段和执行 handler 均由部署注册；选择的任务不支持问题时会明确失败。无来源行、无文档或不完整检索不会变成普通已发布答案。真实客户数据、设备状态和公司模型 API 尚未接入这个本地入口。
+页面不是开放式聊天机器人。每个 profile 的任务、字段和执行 handler 均由部署注册；选择的任务不支持问题时会明确失败。无来源行、无文档或不完整检索不会变成普通已发布答案。operator SQL 演示证明**可用真正只读业务表替换合成来源**，但列契约仍是固定交通设施视图，并非任意客户 schema 自动识别；真实设备和公司模型 API 尚未接入。
 
 一次运行的操作顺序是：选择 profile 与部署任务 → 填写该任务声明的输入 → 提问 → 查看运行进度与共享预算 → 查看已发布答案及证据 → 如果是计划问题，展开归档计划明细。页面显示的 run ID 可以用于再次读取同一次结果。“场景允许范围”展示本次 profile 可调用的工具与 Web 搜索授权，不是操作菜单；当前只开通已注册任务。
 
@@ -35,6 +36,8 @@ pnpm run dev:local
 ```
 
 上面两处 PostgreSQL 密码必须相同。示例密码只供本机试用；你可以换成自己的值，但要同步修改连接地址。`prepare:local` 会创建表、演示租户和非管理员应用账号，并把应用连接写入已被 Git 忽略的 `platform/.env.local`。不要分享这个文件。
+
+拉取包含新数据库迁移的版本后，先重新执行 `pnpm run prepare:local` 再启动服务；它会追加迁移，不要求删除已有数据库卷。`ONTOLOGY_OPERATOR_SQL_URL` 是可选的**服务端环境变量**，必须指向只读 PostgreSQL 账号和已授权视图；不要写入 Git、浏览器地址或 HTTP 请求。未设置时能源、合成交通和文档任务仍可运行，operator SQL profile 会明确标为未配置。视图列契约与最小接入步骤见[本地产品说明](docs/local-product.md)。
 
 首次建库时 PostgreSQL 会短暂重启。如果 `prepare:local` 报 `Connection terminated unexpectedly`，先运行 `docker compose -f deploy/local/docker-compose.yml up -d --wait`，确认容器健康，再直接重跑 `pnpm run prepare:local`。准备成功前运行 `dev:local` 会因缺少 `.env.local` 报错；无需删除数据库卷。
 
@@ -66,11 +69,12 @@ docker compose -f deploy/local/docker-compose.yml stop
 | 同一业务问题适配不同物理表 | `能源 A：宽表遥测` 或 `能源 B：长表 metric-code` / `查询站点 SOC 均值` | 站点 `synthetic-home-1`，问题 `synthetic-home-1 的 SOC 均值是多少？`；两种布局均应得到合成均值 **45%**，并能查看各自来源 |
 | 有界领域计算 | 任一能源 profile / `生成储能候选计划` | 站点 `synthetic-home-1`，备电保留量 2 kWh、晴天，问题 `明天如何安排充放电，在满足备电约束下尽量降低电费？`；答案展示候选费用与备电约束，计划面板展示 96 个时段 |
 | 跨行业查询 | `交通：设施巡检` / `列出待巡检设施` | 区域 `north`，问题 `north 区有哪些设施待巡检？`；答案返回设施事实与证据指针。询问“巡检周期是多少”不应被误答为设施列表 |
+| 真实只读表替换 | `交通：operator 只读 SQL（需配置来源）` / `列出待巡检设施` | 服务端先配置固定视图与只读账号；仍填 `north`，正式 run 返回业务库行及来源证据。无配置、列类型不符或越权都必须失败 |
 | 文档原文溯源 | `文档：政策引文` / `从已导入文档定位原文` | 先按下方命令导入文档，再问 `已导入文件中的巡检频率原文是什么？`；展示原文、文档版本和定位信息。未导入时会明确失败 |
 
 | 控件 | 当前本地切片的含义 |
 | --- | --- |
-| profile 和任务 | 下拉项来自部署注册：能源 A/B 结构、交通设施查询、受控文档原文检索。每个任务有自己的字段与支持问题类型；其他问法会被拒绝。 |
+| profile 和任务 | 下拉项来自部署注册：能源 A/B 结构、合成交通、可选 operator SQL、受控文档原文检索。每个任务有自己的字段与支持问题类型；其他问法会被拒绝。 |
 | 站点/区域 | 只在声明这些字段的任务上显示；SOC 查询默认 `synthetic-home-1`，交通查询默认 `north`。这些是合成 fixture key。 |
 | 计划输入 | 备电保留量（kWh）与天气假设只属于储能候选计划，天气选项是确定性的合成场景。 |
 | 文档导入 | 由配置的 operator bearer token 调用专用 API；业务用户不能从请求体伪造 operator 身份。 |
@@ -105,7 +109,9 @@ Invoke-RestMethod -Method Post -Uri 'http://127.0.0.1:3000/api/v1/operator/docum
 
 若你改了启动终端中的 token，这里的 `$operatorToken` 也要使用同一个值。接口只接受有 `data-editor` 权限的 operator；业务页面不提供绕过权限的导入按钮。首版每个文档集合只允许导入一份，不同的第二份会返回 409，避免旧索引被悄悄覆盖。随后在页面选择文档任务，提问 `已导入文件中的巡检频率原文是什么？`；答案只能引用实际导入的原文，不会把相似词检索当成政策推断。
 
-本地 profiles 只是部署替换方式的 fixture，不代表任意客户 schema 已自动接通；文档 profile 当前每个 collection 只允许一份受控导入文档。尚未交付开放式 Text2SQL、自由问答/抽取、通用规则推理、实体跨源消歧、真实模型/JEV 或设备控制；逐时段能源明细经过完整性校验并与核验摘要核对，但未逐点作 claim 核验。接入边界和验证命令见[本地产品使用与验收说明](docs/local-product.md)。
+**候选抽取/消歧/发布的受控入口**：配置 operator SQL 后，可把一份每个 span 含一个完整实体 JSON 记录的文本导入 `/api/v1/operator/candidate-documents`。operator 用返回的 `parseId` 调用 `/api/v1/operator/documents/{parseId}/extract-candidates`，读取持久 job 与候选原文，再调用 `/api/v1/candidates/{candidateId}/identity-recall` 查看 SQL 强键/别名召回及审计。人工通过 `If-Match` 提交 `clarify/create_pending/match/reject` 决策、审核候选并发布语义版本；此后仍可从同一业务问答页对 operator SQL profile 提问。详细请求顺序和边界见[本地产品说明](docs/local-product.md)。这条无模型路径**只处理严格 JSON 原生实体记录**，不把普通政策自然语言声称为已自动抽取，也不自动发布关系或规则。
+
+本地 profiles 仍需部署侧明确映射，文档 profile 当前每个 collection 只允许一份受控导入文档。尚未交付开放式 Text2SQL、自由自然语言抽取、在线多跳/规则回答、可直接操作任意客户 schema 的管理界面、真实模型/JEV 或设备控制；关系导航和身份一致性已有领域服务，但还未注册为网页可选任务。逐时段能源明细经过完整性校验并与核验摘要核对，未逐点作 claim 核验。Anker PRD 的模拟执行、状态回读和重规划是下一阶段能源场景验收目标，见[Anker 场景 SPEC](tasks/spec-home-energy-anker-v1.0.md)。
 
 ## 设计思路：框架与场景分开
 
@@ -127,7 +133,7 @@ flowchart LR
   RT --> GW[ToolGateway：授权、限额、证据]
   GW --> Q[data_query：语义查询]
   Q --> MAP[版本化语义 mapping]
-  MAP --> DB[DuckDB：能源或交通数据]
+  MAP --> DB[DuckDB 合成表或已授权 PostgreSQL 视图]
   GW --> D[document_search：受控文档 span]
   GW --> C[场景计算：能源候选计划]
   Q --> EV[Postgres 证据记录 + 本地不可变 blob]
@@ -146,7 +152,7 @@ flowchart LR
 
 产品方向是把本体语义作为可选增强：简单问题可以直接查数据，复杂问题可借助语义、检索或领域计算；不要求每个请求先做本体推理。这个本地切片刻意走语义查询，以检验 A/B 映射是否真的复用同一个问题。
 
-当前页面已装配能源、交通与 operator 文档任务，但它们是本地受控 fixture，不是任意行业/客户连接器。仓库其他文档抽取、身份消歧、规则物化与模型组件仍未全部装配成可操作流程。JEV 概率决策、生成式规划、RAG/联网搜索、客户数据库上传和真实设备控制不能从本地页面使用；DataOS 不是本体推理服务的前提。
+当前页面已装配能源、交通、operator 文档与可选只读 SQL 任务；候选提取/身份召回/人工审核/发布通过 operator API 可走真实状态闭环。关系导航、规则物化、模型组件尚未完整接入业务问答运行链路。JEV 概率决策、生成式规划、RAG/联网搜索、任意客户数据库上传和真实设备控制不能从本地页面使用；DataOS 不是本体推理服务的前提。
 
 ## API 与数据存放
 
@@ -158,6 +164,10 @@ flowchart LR
 | `GET /api/v1/runs/{runId}/answer` | 读取已发布答案；运行中返回 202，失败且无答案时返回 404。 |
 | `GET /api/v1/runs/{runId}/plan` | 读取已发布储能计划的归档明细；纯 SOC 问答或失败运行返回 404。 |
 | `POST /api/v1/operator/documents` | 由配置 bearer token 的 operator 导入一份受控 Markdown/plain-text 文档；普通 business 用户返回 403。 |
+| `GET /api/v1/operator/sql-source` | 查看已配置只读视图的非敏感能力摘要；不返回连接凭据。 |
+| `POST /api/v1/operator/candidate-documents`、`POST /api/v1/operator/documents/{parseId}/extract-candidates` | 导入完整 JSON 原生实体记录并启动有界候选 job。 |
+| `POST /api/v1/candidates/{candidateId}/identity-recall`、`GET /api/v1/candidate-identity-recalls/{auditId}` | 返回来源绑定的身份召回建议及可重读审计；分数不等于合并决定。 |
+| `POST /api/v1/candidates/{candidateId}/decision`、`POST /api/v1/candidates/{candidateId}/reviews`、`POST /api/v1/semantic-publications` | 人工决策、审核与版本化发布；写操作要求可信角色、版本/幂等条件。 |
 
 API 默认只监听 `127.0.0.1:3000`，本地身份是开发用单租户配置，不是对外服务的登录/权限系统。`platform/.env.local` 保存本地应用数据库连接并被 Git 忽略；PostgreSQL 使用 Docker 命名卷保存控制数据，结果 blob 默认在被 Git 忽略的 `platform/apps/api/.local-data/blobs`。这个切片按单 API 实例使用，工作流状态写入尚没有跨进程版本 CAS，不能据此部署多副本。
 
@@ -174,7 +184,7 @@ API 默认只监听 `127.0.0.1:3000`，本地身份是开发用单租户配置�
 ## 项目资料
 
 - [最新工作交接](HANDOFF.md)
-- [PRD v0.2](tasks/prd-industry-semantic-agent-v0.2.md) · [SPEC v0.2](tasks/spec-industry-semantic-agent-v0.2.md) · [家庭充电储能场景](tasks/scenario-home-energy-hackathon.md)
+- [PRD v0.2](tasks/prd-industry-semantic-agent-v0.2.md) · [SPEC v0.3](tasks/spec-generalized-poc-core-v0.3.md) · [Anker 能源场景 SPEC](tasks/spec-home-energy-anker-v1.0.md)
 - [任务清单](.autoresearch/issues/INDEX.md) · [需求覆盖](.autoresearch/issues/coverage.md) · [模型开发与代码审查约定](AGENTS.md)
 - [当前实现逆向规格](docs/SPEC-as-built-2026-09-23.md) · [代码审查清单](docs/reviews/2026-09-23-code-review.md) · [多行业解耦方案](docs/scenario-decoupling-2026-09-23.md) · [Palantir 调研](docs/research/palantir-industry-assets-2026-09-23.md)
 
