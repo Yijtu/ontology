@@ -30,6 +30,7 @@ if (container !== null) {
       client={client}
       profileRef={deployment.profileRef}
       timeZone={deployment.timeZone}
+      profileOptions={deployment.profileOptions}
       scenarioViews={deployment.scenarioViews}
       initialView={initialView}
       {...(rawView !== null && allowedViews.includes(rawView) && rawView !== 'query' ? {} : { availableViews: ['query'] as const })}

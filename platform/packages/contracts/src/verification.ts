@@ -5,6 +5,7 @@ import type {
   Semver,
   Sha256Digest,
   Uuid,
+  VersionRef,
 } from './generated/contracts'
 
 /**
@@ -69,6 +70,38 @@ export interface DraftClaim {
   readonly references: readonly ClaimResultBinding[]
 }
 
+/** Evidence binding shared by non-numeric, versioned business assertions. */
+export interface AssertionEvidenceBinding {
+  readonly evidenceRef: ResourceRef
+  readonly resultDigest: Sha256Digest
+  readonly valuePointer: string
+  readonly subjectPointer: string
+  readonly unitPointer?: string
+  readonly spanPointer?: string
+  readonly documentPointer?: string
+  readonly locatorPointer?: string
+  readonly rulePointer?: string
+  readonly textDigestPointer?: string
+  readonly quoteDigestPointer?: string
+}
+
+interface TypedAssertionBase {
+  readonly assertionId: Uuid
+  readonly subject: string
+  readonly predicate: string
+  readonly references: readonly AssertionEvidenceBinding[]
+  readonly derived?: boolean
+}
+
+export type VerifiedAssertion =
+  | (TypedAssertionBase & { readonly kind: 'string' | 'enum'; readonly value: string })
+  | (TypedAssertionBase & { readonly kind: 'boolean'; readonly value: boolean })
+  | (TypedAssertionBase & { readonly kind: 'entity_ref'; readonly value: ResourceRef; readonly displayName?: string })
+  | (TypedAssertionBase & { readonly kind: 'relation_ref'; readonly value: { readonly type: string; readonly from: ResourceRef; readonly to: ResourceRef } })
+  | (TypedAssertionBase & { readonly kind: 'rule_judgement'; readonly value: 'true' | 'false' | 'unknown' | 'conflict'; readonly ruleRef: VersionRef; readonly premiseRefs: readonly ResourceRef[] })
+  | (TypedAssertionBase & { readonly kind: 'document_quote'; readonly quote: string; readonly documentRef: ResourceRef; readonly locator: { readonly kind: 'page' | 'offset' | 'approximate_locator'; readonly page?: number; readonly startOffset?: number; readonly endOffset?: number; readonly normalizationMapRef?: string }; readonly quoteDigest: Sha256Digest; readonly textDigest: Sha256Digest; readonly precision: 'exact' | 'approximate' })
+  | (TypedAssertionBase & { readonly kind: 'artifact_summary'; readonly artifactRef: ResourceRef; readonly summary: string })
+
 /** Which check produced a finding. Hard findings are programmatic and outrank any score. */
 export type VerificationFindingAxis = 'hard' | 'semantic' | 'policy'
 
@@ -90,6 +123,8 @@ export type VerificationFindingCode =
   | 'semantic_insufficient'
   | 'semantic_unavailable'
   | 'visible_statement_unbound'
+  | 'assertion_mismatch'
+  | 'document_quote_mismatch'
 
 /**
  * A located verification problem. `claimId`/`field`/`evidenceRef`/`pointer` identify exactly
@@ -99,6 +134,7 @@ export interface VerificationFinding {
   readonly code: VerificationFindingCode
   readonly axis: VerificationFindingAxis
   readonly claimId?: Uuid
+  readonly assertionId?: Uuid
   readonly field?: string
   readonly evidenceRef?: ResourceRef
   readonly pointer?: string
@@ -116,6 +152,7 @@ export interface ClaimExplanation {
   readonly templateId: NonEmptyString
   readonly message: string
   readonly claimId?: Uuid
+  readonly assertionId?: Uuid
   readonly field?: string
   readonly evidenceRef?: ResourceRef
 }

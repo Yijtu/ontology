@@ -36,6 +36,27 @@ export interface DegradationView {
   readonly fallback: string
 }
 
+export interface QueryTaskFieldView {
+  readonly name: string
+  readonly label: string
+  readonly kind: 'text' | 'number' | 'enum'
+  readonly required: boolean
+  readonly options?: readonly string[]
+  readonly maxLength?: number
+  readonly unit?: string
+  readonly control?: 'input' | 'textarea'
+  readonly minimum?: number
+  readonly maximum?: number
+  readonly defaultValue?: string | number
+}
+
+export interface QueryTaskView {
+  readonly taskId: string
+  readonly label: string
+  readonly description: string
+  readonly fields: readonly QueryTaskFieldView[]
+}
+
 /**
  * The resolved scenario scope. The ask form offers only `toolIds`; web search is offered
  * only when `webSearchEnabled`; domains are only the `allowedDomains` the server approves.
@@ -47,6 +68,8 @@ export interface RunScopeView {
   readonly toolIds: readonly string[]
   readonly allowedDomains: readonly string[]
   readonly explicitDegradations: readonly DegradationView[]
+  readonly tasks?: readonly QueryTaskView[]
+  readonly operatorActions?: readonly { readonly actionId: string; readonly label: string; readonly method: 'POST'; readonly path: string; readonly fields: readonly QueryTaskFieldView[] }[]
 }
 
 export interface RunProgressView {

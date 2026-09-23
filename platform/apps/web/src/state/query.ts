@@ -63,6 +63,7 @@ export interface QueryState {
 }
 
 export type QueryEvent =
+  | { readonly type: 'profileChanged' }
   | { readonly type: 'scopeLoadStarted' }
   | { readonly type: 'scopeLoaded'; readonly scope: RunScopeView }
   | { readonly type: 'askStarted' }
@@ -204,6 +205,8 @@ function answerOutcome(data: Readonly<Record<string, unknown>>): QueryOutcome {
 
 export function queryReducer(state: QueryState, event: QueryEvent): QueryState {
   switch (event.type) {
+    case 'profileChanged':
+      return { ...initialQueryState(), phase: 'loading', busy: true }
     case 'scopeLoadStarted':
       return { ...state, phase: 'loading', error: undefined, busy: true }
     case 'scopeLoaded':

@@ -263,9 +263,33 @@ class GatedKeywordIndexStore extends PostgresKeywordIndexStore {
   }
 }
 
-class UnusedSpanReader implements DocumentSpanReaderPort {
-  async readSpan(request: ReadSpanRequest): Promise<ReadSpanResponse> {
-    throw new Error(`readSpan is not exercised by the tool-assembly suite (${request.documentRef.id})`)
+class FixtureSpanReader implements DocumentSpanReaderPort {
+  readonly #documents: ReadonlyMap<string, IndexedDocument>
+
+  constructor(documents: readonly IndexedDocument[]) {
+    this.#documents = new Map(documents.map((document) => [document.documentRef.id, document]))
+  }
+
+  async readSpan(request: ReadSpanRequest, ctx: ToolContext): Promise<ReadSpanResponse> {
+    if (ctx.principal.tenantId !== TENANT_A || ctx.allowedResources.spaceId !== SPACE_A) {
+      throw new Error('fixture span is outside the trusted tenant/space')
+    }
+    const document = this.#documents.get(request.documentRef.id)
+    if (document === undefined || document.documentRef.digest !== request.documentRef.digest || JSON.stringify(document.locator) !== JSON.stringify(request.locator)) {
+      throw new Error('fixture span is not indexed at the requested version and locator')
+    }
+    return {
+      documentRef: document.documentRef,
+      text: document.text,
+      textDigest: document.textDigest,
+      snapshot: {
+        sourceRef: { namespace: 'ontology.document', sourceId: document.documentRef.id },
+        schemaVersion: '1.0.0',
+        readAt: new Date().toISOString(),
+        consistency: 'immutable',
+        resultDigest: document.documentDigest,
+      },
+    }
   }
 }
 
@@ -432,12 +456,12 @@ beforeAll(async () => {
   })
 
   indexStore = new GatedKeywordIndexStore({ connectionString: appUrl, maxPoolSize: 4 })
+  const documents = [indexedDoc('the battery warranty covers five years'), indexedDoc('solar inverter maintenance')]
   searchService = new Bm25DocumentSearchService({
     indexStore,
-    spanReader: new UnusedSpanReader(),
+    spanReader: new FixtureSpanReader(documents),
     now: () => new Date().toISOString(),
   })
-  const documents = [indexedDoc('the battery warranty covers five years'), indexedDoc('solar inverter maintenance')]
   const input: WriteGenerationInput = {
     collectionRef: COLLECTION,
     generation: '1',

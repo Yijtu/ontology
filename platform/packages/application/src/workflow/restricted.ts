@@ -61,9 +61,10 @@ export class RestrictedDraftWriter implements DraftWriterPort {
     const draft: AnswerDraft = {
       draftId,
       runId: request.runId,
+      schemaVersion: 'answer-draft@2',
       blocks,
       evidenceManifestHash: request.inputManifest.digest,
-      contentHash: answerDraftContentHash(request.runId, blocks, request.inputManifest.digest),
+      contentHash: answerDraftContentHash(request.runId, blocks, request.inputManifest.digest, [], [], { schemaVersion: 'answer-draft@2', limitations: request.deficits.length > 0 ? ['incomplete-evidence'] : [] }),
       limitations: request.deficits.length > 0 ? ['incomplete-evidence'] : [],
       producedInPhase: 'drafting',
       createdAt,
@@ -107,6 +108,9 @@ export class RestrictedAnswerVerifier implements AnswerVerifierPort {
       request.runId,
       request.draft.blocks,
       request.draft.evidenceManifestHash,
+      request.draft.claims ?? [],
+      request.draft.assertions ?? [],
+      ...(request.draft.schemaVersion === 'answer-draft@2' ? [{ schemaVersion: 'answer-draft@2' as const, limitations: request.draft.limitations }] : []),
     )
     if (recomputed !== request.draft.contentHash) failedChecks.push('draft_hash_mismatch')
     if (request.draft.evidenceManifestHash !== request.inputManifest.digest) {
@@ -242,6 +246,8 @@ export class RestrictedAnswerPublisher implements AnswerPublisherPort {
       limitations: [...draft.limitations],
       blocks: structuredClone(draft.blocks),
       claims: structuredClone(draft.claims ?? []),
+      ...(draft.schemaVersion === undefined ? {} : { schemaVersion: draft.schemaVersion }),
+      ...(draft.assertions === undefined ? {} : { assertions: structuredClone(draft.assertions) }),
       publishedAt: this.#now(),
     }
     this.#answers.set(`${scopeOf(ctx)}\u0000${grant.runId}`, answer)

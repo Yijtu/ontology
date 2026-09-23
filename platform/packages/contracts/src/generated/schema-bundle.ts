@@ -6329,6 +6329,12 @@ export const SCHEMA_DOCUMENTS: readonly JsonSchemaObject[] = [
               "$ref": "./data.schema.json#/$defs/DocumentSpan"
             }
           },
+          "quotes": {
+            "type": "array",
+            "items": {
+              "$ref": "#/$defs/DocumentQuote"
+            }
+          },
           "scoreKind": {
             "$ref": "./data.schema.json#/$defs/ScoreKind"
           },
@@ -6337,6 +6343,46 @@ export const SCHEMA_DOCUMENTS: readonly JsonSchemaObject[] = [
           },
           "completeness": {
             "$ref": "./common.schema.json#/$defs/CompletenessStatus"
+          }
+        }
+      },
+      "DocumentQuote": {
+        "title": "DocumentQuote",
+        "description": "Exact, bounded text read back from an indexed document span and archived with the search tool result.",
+        "type": "object",
+        "additionalProperties": false,
+        "required": [
+          "documentRef",
+          "locator",
+          "text",
+          "textDigest",
+          "quoteDigest",
+          "precision"
+        ],
+        "properties": {
+          "documentRef": {
+            "$ref": "./common.schema.json#/$defs/ResourceRef"
+          },
+          "locator": {
+            "$ref": "./data.schema.json#/$defs/DocumentSpan/properties/locator"
+          },
+          "text": {
+            "type": "string",
+            "$ref": "./common.schema.json#/$defs/NonEmptyString",
+            "maxLength": 4096
+          },
+          "textDigest": {
+            "$ref": "./common.schema.json#/$defs/Sha256Digest"
+          },
+          "quoteDigest": {
+            "$ref": "./common.schema.json#/$defs/Sha256Digest"
+          },
+          "precision": {
+            "type": "string",
+            "enum": [
+              "exact",
+              "approximate"
+            ]
           }
         }
       },

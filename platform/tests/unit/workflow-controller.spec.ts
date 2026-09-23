@@ -99,6 +99,15 @@ describe('WorkflowController phase transitions', () => {
     expect(harness.selector.selected).toHaveLength(1)
     expect(harness.runtime.startCalls).toHaveLength(1)
   })
+
+  it('does not verify or publish when immutable draft artifact archival fails', async () => {
+    const draftWriter = { async writeDraft() { throw new Error('draft artifact archival failed') } }
+    const harness = buildWorkflowHarness({ runtime: new ScriptedRuntime({ scripts: [completedScript()] }), draftWriter })
+
+    await expect(harness.controller.startRun(startInput(), OWNER)).rejects.toThrow('draft artifact archival failed')
+    expect(harness.verifier.calls).toHaveLength(0)
+    expect(harness.publisher.publishCalls).toHaveLength(0)
+  })
 })
 
 describe('clarification resume re-verification', () => {

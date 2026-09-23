@@ -109,6 +109,8 @@ export class AnswerPublicationService implements AnswerPublisherPort {
       draft.blocks,
       draft.evidenceManifestHash,
       draft.claims ?? [],
+      draft.assertions ?? [],
+      ...(draft.schemaVersion === 'answer-draft@2' ? [{ schemaVersion: 'answer-draft@2' as const, limitations: draft.limitations }] : []),
     )
     if (recomputed !== draft.contentHash) {
       throw new PublicationRejectedError(
@@ -224,6 +226,8 @@ export class AnswerPublicationService implements AnswerPublisherPort {
       limitations,
       blocks: structuredClone(draft.blocks),
       claims: structuredClone(draft.claims ?? []),
+      ...(draft.schemaVersion === undefined ? {} : { schemaVersion: draft.schemaVersion }),
+      ...(draft.assertions === undefined ? {} : { assertions: structuredClone(draft.assertions) }),
       publishedAt: this.#now(),
     }
 

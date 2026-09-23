@@ -7,6 +7,7 @@ import type {
   BudgetReservationRecord,
   DecisionPort,
   DraftClaim,
+  VerifiedAssertion,
   EvidenceRecord,
   EvidenceStorePort,
   ModelRef,
@@ -27,6 +28,7 @@ import { DraftVerificationError } from './errors'
 import { checkClaims, sortFindings } from './hard-checks'
 import type { ResolvedEvidence } from './hard-checks'
 import { RestrictedExplanationTemplates } from './templates'
+import { checkVerifiedAssertions } from './assertions'
 
 /**
  * The narrow authorized byte-read capability the verifier needs. `blob-local` implements it
@@ -106,14 +108,18 @@ export class DraftVerificationService implements AnswerVerifierPort {
     const now = this.#now()
     const draft = request.draft
     const claims = draft.claims ?? []
+    const assertions = draft.assertions ?? []
 
     const findings: VerificationFinding[] = []
 
     // The UI only renders claim blocks. Free text is not a verifiable business assertion:
     // accepting it beside a valid claim would reintroduce the R06 contradiction path.
     const claimIds = new Set(claims.map((claim) => claim.claimId))
+    const assertionIds = new Set(assertions.map((assertion) => assertion.assertionId))
     for (const [index, block] of draft.blocks.entries()) {
-      if (typeof block !== 'object' || block === null || !('kind' in block) || block.kind !== 'claim' || !('claimId' in block) || typeof block.claimId !== 'string' || !claimIds.has(block.claimId)) {
+      const claimBlock = typeof block === 'object' && block !== null && 'kind' in block && block.kind === 'claim' && 'claimId' in block && typeof block.claimId === 'string' && claimIds.has(block.claimId)
+      const assertionBlock = typeof block === 'object' && block !== null && 'kind' in block && block.kind === 'assertion' && 'assertionId' in block && typeof block.assertionId === 'string' && assertionIds.has(block.assertionId)
+      if (!claimBlock && !assertionBlock) {
         findings.push({ code: 'visible_statement_unbound', axis: 'hard', field: 'blocks', pointer: `/blocks/${String(index)}` })
       }
     }
@@ -123,6 +129,8 @@ export class DraftVerificationService implements AnswerVerifierPort {
       draft.blocks,
       draft.evidenceManifestHash,
       claims,
+      assertions,
+      ...(draft.schemaVersion === 'answer-draft@2' ? [{ schemaVersion: 'answer-draft@2' as const, limitations: draft.limitations }] : []),
     )
     if (recomputed !== draft.contentHash) {
       findings.push({ code: 'draft_hash_mismatch', axis: 'hard', field: 'contentHash' })
@@ -139,22 +147,23 @@ export class DraftVerificationService implements AnswerVerifierPort {
 
     let hardFindings: readonly VerificationFinding[] = []
     let supportedClaimIds: Uuid[] = []
-    if (claims.length === 0) {
+    if (claims.length === 0 && assertions.length === 0) {
       findings.push({ code: 'missing_claims', axis: 'hard', field: 'claims' })
-    } else if (claims.length > this.#policy.maxClaims) {
+    } else if (claims.length + assertions.length > this.#policy.maxClaims) {
       findings.push({
         code: 'claim_limit_exceeded',
         axis: 'policy',
         field: 'claims',
         expected: String(this.#policy.maxClaims),
-        actual: String(claims.length),
+        actual: String(claims.length + assertions.length),
       })
     } else {
-      const resolved = await this.#loadEvidence(claims, request.inputManifest, scopeRef, ctx)
+      const resolved = await this.#loadEvidence(claims, assertions, request.inputManifest, scopeRef, ctx)
       const outcome = checkClaims(claims, resolved, now)
       hardFindings = outcome.findings
       supportedClaimIds = [...outcome.supportedClaimIds]
       findings.push(...hardFindings)
+      findings.push(...checkVerifiedAssertions(assertions, resolved, ctx))
     }
 
     const semantic = await this.#reviewSemantics(claims, draft.contentHash, ctx)
@@ -195,6 +204,7 @@ export class DraftVerificationService implements AnswerVerifierPort {
       policyVersion: this.#policy.policyVersion,
       verifiedAt: now,
       supportedClaimIds: supportedClaimIds.filter((id) => !semanticFailedClaimIds.has(id)).sort(),
+      supportedAssertionIds: assertions.map((assertion) => assertion.assertionId).filter((id) => !sorted.some((finding) => finding.assertionId === id)).sort(),
       missingEvidence,
       findings: sorted,
       explanations,
@@ -208,6 +218,7 @@ export class DraftVerificationService implements AnswerVerifierPort {
    */
   async #loadEvidence(
     claims: readonly DraftClaim[],
+    assertions: readonly VerifiedAssertion[],
     manifest: WorkflowInputManifest,
     scopeRef: ScopeRef,
     ctx: ToolContext,
@@ -224,6 +235,11 @@ export class DraftVerificationService implements AnswerVerifierPort {
         if (manifestEvidenceIds.has(binding.evidenceRef.id)) {
           uniqueRefs.set(binding.evidenceRef.id, binding.evidenceRef)
         }
+      }
+    }
+    for (const assertion of assertions) {
+      for (const binding of assertion.references) {
+        if (manifestEvidenceIds.has(binding.evidenceRef.id)) uniqueRefs.set(binding.evidenceRef.id, binding.evidenceRef)
       }
     }
 

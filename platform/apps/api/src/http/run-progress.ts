@@ -13,6 +13,7 @@ import type {
   Uuid,
   WorkflowManifestStore,
 } from '@ontology/contracts'
+import type { OperatorActionDescriptor, QueryTaskDescriptor } from '../composition/query-tasks'
 
 /**
  * The sanitised progress projection the business query UI reads (C6 `GET /runs/{id}`:
@@ -37,6 +38,9 @@ export interface RunScopeView {
   /** The domains the trusted context approves; never a wildcard. */
   readonly allowedDomains: readonly string[]
   readonly explicitDegradations: readonly DegradationView[]
+  /** Deployment-registered tasks and their bounded input fields. */
+  readonly tasks?: readonly QueryTaskDescriptor[]
+  readonly operatorActions?: readonly OperatorActionDescriptor[]
 }
 
 export interface RunProgressView {

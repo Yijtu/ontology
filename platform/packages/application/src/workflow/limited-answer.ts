@@ -49,6 +49,7 @@ export class RestrictedLimitedAnswerComposer implements LimitedAnswerPort {
     const draft: AnswerDraft = {
       draftId: this.#newId(),
       runId: request.runId,
+      schemaVersion: 'answer-draft@2',
       blocks,
       claims: supportedClaims,
       evidenceManifestHash,
@@ -57,6 +58,8 @@ export class RestrictedLimitedAnswerComposer implements LimitedAnswerPort {
         blocks,
         evidenceManifestHash,
         supportedClaims,
+        [],
+        { schemaVersion: 'answer-draft@2', limitations },
       ),
       limitations,
       producedInPhase: 'drafting',

@@ -37,8 +37,11 @@ export interface RunApiOptions {
   readonly resolveToolAccess?: (profileRef: ProfileRef, auth: AuthenticatedRequest) => Promise<{
     readonly sourceRefs: readonly import('@ontology/contracts').SourceRef[]
     readonly resourceKinds: readonly import('@ontology/contracts').ResourceKind[]
+    readonly collectionRefs?: readonly string[]
     readonly maxRows: number
   }>
+  /** Validates and pins deployment task/ref/input digest from server-side registration. */
+  readonly prepareRunContext?: (profileRef: ProfileRef, context: import('@ontology/contracts').CreateRunContext) => Promise<import('@ontology/contracts').CreateRunContext>
   readonly workflow?: WorkflowController
   readonly logger?: boolean
 }
@@ -48,6 +51,7 @@ export interface RunRouteDependencies {
   readonly authenticate: RequestAuthenticator
   readonly progress?: RunProgressReader
   readonly resolveToolAccess?: RunApiOptions['resolveToolAccess']
+  readonly prepareRunContext?: RunApiOptions['prepareRunContext']
   readonly workflow?: WorkflowController
 }
 
@@ -106,7 +110,7 @@ export function registerRunRoutes(app: FastifyInstance, dependencies: RunRouteDe
       ...(auth.allowedSourceRefs === undefined ? {} : { allowedSourceRefs: auth.allowedSourceRefs }),
       ...(auth.allowedCollectionRefs === undefined ? {} : { allowedCollectionRefs: auth.allowedCollectionRefs }),
       ...(auth.maxRows === undefined ? {} : { maxRows: auth.maxRows }),
-      ...(toolAccess === undefined ? {} : { allowedResourceKinds: toolAccess.resourceKinds, allowedSourceRefs: toolAccess.sourceRefs, maxRows: toolAccess.maxRows }),
+      ...(toolAccess === undefined ? {} : { allowedResourceKinds: toolAccess.resourceKinds, allowedSourceRefs: toolAccess.sourceRefs, allowedCollectionRefs: toolAccess.collectionRefs ?? [], maxRows: toolAccess.maxRows }),
     })
 
   app.post('/api/v1/runs', async (request, reply) => {
@@ -118,17 +122,19 @@ export function registerRunRoutes(app: FastifyInstance, dependencies: RunRouteDe
       throw new RunServiceError('INVALID_ARGUMENT', 'the Idempotency-Key header is required')
     }
     const fields = parseCreateRunRequest(request.body)
+    const context = dependencies.prepareRunContext === undefined ? fields.context : await dependencies.prepareRunContext(fields.profileRef, fields.context)
+    const runFields = { ...fields, context }
     const runId = globalThis.crypto.randomUUID()
     const toolAccess = await dependencies.resolveToolAccess?.(fields.profileRef, auth)
     const runContext = contextFor(auth, traceId, runId, undefined, toolAccess)
     const result = await dependencies.service.createRun(
-      { runId, ...fields, idempotencyKey },
+      { runId, ...runFields, idempotencyKey },
       runContext,
     )
     if (dependencies.workflow !== undefined) {
       await dependencies.workflow.startRun({
         runId: result.runId,
-        ...fields,
+        ...runFields,
         idempotencyKey,
       }, contextFor(auth, traceId, result.runId, result.resolvedProfileHash, toolAccess))
     }

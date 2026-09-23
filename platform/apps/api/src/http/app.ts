@@ -33,7 +33,7 @@ import type { RequestAuthenticator } from './shared'
 export interface ApiServerOptions {
   readonly authenticate: RequestAuthenticator
   /** Register the run surface (`POST /runs`, events, cancel, resume). */
-  readonly runs?: { readonly service: RunService; readonly progress?: RunProgressReader; readonly workflow?: WorkflowController; readonly resolveToolAccess?: RunApiOptions['resolveToolAccess'] }
+  readonly runs?: { readonly service: RunService; readonly progress?: RunProgressReader; readonly workflow?: WorkflowController; readonly resolveToolAccess?: RunApiOptions['resolveToolAccess']; readonly prepareRunContext?: RunApiOptions['prepareRunContext'] }
   /** Register the durable-job surface (`POST /ingestions`, `GET /jobs/{id}`, retry). */
   readonly jobs?: { readonly service: JobService }
   /** Register the configuration workbench surface (components/profiles/sources). */
@@ -65,6 +65,7 @@ export function createApiServer(options: ApiServerOptions): FastifyInstance {
       ...(options.runs.progress === undefined ? {} : { progress: options.runs.progress }),
       ...(options.runs.workflow === undefined ? {} : { workflow: options.runs.workflow }),
       ...(options.runs.resolveToolAccess === undefined ? {} : { resolveToolAccess: options.runs.resolveToolAccess }),
+      ...(options.runs.prepareRunContext === undefined ? {} : { prepareRunContext: options.runs.prepareRunContext }),
     })
   }
   if (options.jobs !== undefined) {
@@ -107,6 +108,7 @@ export function createRunApi(options: RunApiOptions): FastifyInstance {
       service: options.service,
       ...(options.progress === undefined ? {} : { progress: options.progress }),
       ...(options.resolveToolAccess === undefined ? {} : { resolveToolAccess: options.resolveToolAccess }),
+      ...(options.prepareRunContext === undefined ? {} : { prepareRunContext: options.prepareRunContext }),
     },
     ...(options.logger === undefined ? {} : { logger: options.logger }),
   })

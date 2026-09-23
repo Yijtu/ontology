@@ -349,6 +349,13 @@ export class WorkbenchClient {
     })
   }
 
+  runOperatorAction<T>(path: string, body: Readonly<Record<string, unknown>>): Promise<T> {
+    if (!path.startsWith('/api/v1/operator/') || path.includes('..')) {
+      return Promise.reject(new Error('the deployment supplied an invalid operator action path'))
+    }
+    return this.#request<T>('POST', path, { body })
+  }
+
   respondToClarification(
     runId: string,
     request: RespondToClarificationRequest,

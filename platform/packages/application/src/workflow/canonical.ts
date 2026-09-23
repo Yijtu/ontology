@@ -21,8 +21,14 @@ export function answerDraftContentHash(
   blocks: readonly unknown[],
   evidenceManifestHash: Sha256Digest,
   claims: readonly unknown[] = [],
+  assertions: readonly unknown[] = [],
+  versionedBody?: { readonly schemaVersion: 'answer-draft@2'; readonly limitations: readonly string[] },
 ): Sha256Digest {
-  return sha256DigestOf(canonicalJson({ runId, blocks, evidenceManifestHash, claims }))
+  return sha256DigestOf(canonicalJson({
+    runId, blocks, evidenceManifestHash, claims,
+    ...(assertions.length === 0 ? {} : { assertions }),
+    ...(versionedBody === undefined ? {} : versionedBody),
+  }))
 }
 
 /**

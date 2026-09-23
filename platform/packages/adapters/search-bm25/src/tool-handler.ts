@@ -1,4 +1,5 @@
 import type { DocumentSearchOutput, ToolCoverage } from '@ontology/contracts'
+import { sha256DigestOf } from '@ontology/core'
 import { DocumentSearchError } from './errors'
 import { parseDocumentSearchRequest } from './parse'
 import type { Bm25DocumentSearchService } from './service'
@@ -67,6 +68,28 @@ export function createBm25DocumentSearchToolHandler(
         request.signal,
       )
       const spans = detail.response.spans
+      const quotes: NonNullable<DocumentSearchOutput['quotes']> = []
+      for (const span of spans) {
+        const read = await dependencies.service.readSpan(
+          { documentRef: span.documentRef, locator: span.locator, maxBytes: 4096 },
+          request.ctx,
+        )
+        if (read.truncated === true) {
+          throw new DocumentSearchError('UNSUPPORTED_QUERY', 'a matched source span exceeds the 4096-byte exact quote limit; no quote was returned')
+        }
+        const digest = sha256DigestOf(read.text)
+        if (digest !== read.textDigest || digest !== span.quoteDigest) {
+          throw new DocumentSearchError('SOURCE_UNAVAILABLE', 'the indexed quote does not match the exact stored span')
+        }
+        quotes.push({
+          documentRef: read.documentRef,
+          locator: span.locator,
+          text: read.text,
+          textDigest: digest,
+          quoteDigest: span.quoteDigest,
+          precision: span.spanKind === 'approximate' || span.locator.kind === 'approximate_locator' ? 'approximate' : 'exact',
+        })
+      }
       const coverage: ToolCoverage = {
         returned: spans.length,
         knownTotal: detail.matchedTotal,
@@ -75,6 +98,7 @@ export function createBm25DocumentSearchToolHandler(
       }
       const payload: DocumentSearchOutput = {
         spans,
+        quotes,
         scoreKind: detail.response.scoreKind,
         indexVersion: detail.response.indexVersion,
         completeness: detail.response.completeness,

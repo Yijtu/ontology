@@ -798,7 +798,7 @@ export class WorkflowController {
       {
         entryId: this.#newId(),
         kind: 'confirmed_context',
-        label: `site:${run.context.siteRef ?? 'unspecified'}`,
+        label: `context_digest:${sha256DigestOf(JSON.stringify(run.context))}`,
         addedInPhase: 'preflight',
         recordedAt: this.#now(),
         readAt: this.#now(),
@@ -927,6 +927,13 @@ function toConfirmedContext(run: RunRecord): ConfirmedContext {
   return {
     timeZone: run.context.timeZone,
     ...(run.context.siteRef === undefined ? {} : { siteRef: run.context.siteRef }),
+    // Deployment task identity and normalized inputs are pinned by the host before the
+    // run is created. The controller carries these explicitly validated fields through
+    // the runtime boundary; it does not interpret them or derive intent from prose.
+    ...(typeof run.context['taskId'] === 'string' ? { taskId: run.context['taskId'] } : {}),
+    ...(typeof run.context['taskRef'] === 'object' && run.context['taskRef'] !== null ? { taskRef: run.context['taskRef'] } : {}),
+    ...(typeof run.context['taskInput'] === 'object' && run.context['taskInput'] !== null ? { taskInput: run.context['taskInput'] } : {}),
+    ...(typeof run.context['taskInputDigest'] === 'string' ? { taskInputDigest: run.context['taskInputDigest'] } : {}),
   }
 }
 

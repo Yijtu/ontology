@@ -24,6 +24,7 @@ export interface QueryPanelProps {
   readonly client: WorkbenchClient
   readonly profileRef: ProfileRef
   readonly timeZone: string
+  readonly profileOptions?: readonly { readonly profileRef: ProfileRef; readonly label: string }[]
   /** Deep-linked run id (`?run=<id>`) so a state can be reproduced in a browser. */
   readonly initialRunId?: string
 }
@@ -229,6 +230,24 @@ function AnswerPanel({ state, client }: { readonly state: QueryState; readonly c
           ))}</ul>
         </section>
       )}
+      {(answer.assertions?.length ?? 0) === 0 ? null : (
+        <section aria-label="有据陈述" data-testid="answer-assertions">
+          <h4>已核验陈述</h4>
+          <ul>{(answer.assertions ?? []).map((assertion) => (
+            <li key={assertion.assertionId} data-testid="answer-assertion">
+              {assertion.kind === 'document_quote' ? (
+                <blockquote><small>原文命中摘录（关键词定位，不是政策结论）</small><p>{assertion.quote}</p><small>文件 {assertion.documentRef.id} · {assertion.locator.kind === 'page' ? `第 ${String(assertion.locator.page ?? '')} 页` : `${String(assertion.locator.startOffset ?? '')}–${String(assertion.locator.endOffset ?? '')}`} · 精度 {assertion.precision}</small></blockquote>
+              ) : assertion.kind === 'boolean' ? `${assertion.subject}：${assertion.predicate} = ${assertion.value ? '是' : '否'}`
+                : assertion.kind === 'rule_judgement' ? `${assertion.subject}：规则 ${assertion.ruleRef.id} 判断为 ${assertion.value}`
+                  : assertion.kind === 'entity_ref' ? `${assertion.subject}：${assertion.predicate} = ${assertion.displayName ?? assertion.value.id}`
+                    : assertion.kind === 'relation_ref' ? `${assertion.value.from.id} —${assertion.value.type}→ ${assertion.value.to.id}`
+                      : assertion.kind === 'artifact_summary' ? `${assertion.subject}：${assertion.summary}`
+                        : `${assertion.subject}：${assertion.predicate} = ${assertion.value}`}
+              {assertion.references.map((reference) => <small key={reference.evidenceRef.id}> 来源证据 {reference.evidenceRef.id}</small>)}
+            </li>
+          ))}</ul>
+        </section>
+      )}
       {hasPlan ? (
         <section aria-label="归档计划明细" data-testid="plan-detail">
           <h4>候选充放电计划</h4>
@@ -294,14 +313,15 @@ function AnswerPanel({ state, client }: { readonly state: QueryState; readonly c
   )
 }
 
-export function QueryPanel({ client, profileRef, timeZone, initialRunId }: QueryPanelProps) {
+export function QueryPanel({ client, profileRef, timeZone, profileOptions = [], initialRunId }: QueryPanelProps) {
   const viewport = useViewport()
   const [state, dispatch] = useReducer(queryReducer, undefined, initialQueryState)
   const [question, setQuestion] = useState('')
   const [selectedProfile, setSelectedProfile] = useState(profileRef)
-  const [siteRef, setSiteRef] = useState('synthetic-home-1')
-  const [backupRequirementKwh, setBackupRequirementKwh] = useState(2)
-  const [weatherScenario, setWeatherScenario] = useState<'sunny' | 'overcast' | 'storm'>('sunny')
+  const [taskId, setTaskId] = useState('')
+  const [taskInput, setTaskInput] = useState<Readonly<Record<string, unknown>>>({})
+  const [operatorValues, setOperatorValues] = useState<Readonly<Record<string, Readonly<Record<string, unknown>>>>>({})
+  const [operatorNotice, setOperatorNotice] = useState<string | undefined>(undefined)
   const [route, setRoute] = useState<RunRoutePreference>('auto')
   const [allowWeb, setAllowWeb] = useState(false)
   const [clarificationInput, setClarificationInput] = useState('')
@@ -382,6 +402,15 @@ export function QueryPanel({ client, profileRef, timeZone, initialRunId }: Query
     }
   }, [client, selectedProfile, initialRunId, openStream, loadAnswer, closeStream, scopeRetry])
 
+  useEffect(() => {
+    const tasks = state.scope?.tasks ?? []
+    if (tasks.length === 0 || tasks.some((task) => task.taskId === taskId)) return
+    const firstTask = tasks[0]
+    if (firstTask === undefined) return
+    setTaskId(firstTask.taskId)
+    setTaskInput(Object.fromEntries(firstTask.fields.filter((field) => field.defaultValue !== undefined).map((field) => [field.name, field.defaultValue])))
+  }, [state.scope, taskId])
+
   const ask = async () => {
     if (question.trim().length === 0) {
       dispatch({ type: 'notice', message: '请输入问题后再提交。' })
@@ -394,9 +423,8 @@ export function QueryPanel({ client, profileRef, timeZone, initialRunId }: Query
         question: question.trim(),
         context: {
           timeZone,
-          backupRequirementKwh,
-          weatherScenario,
-          ...(siteRef.trim().length === 0 ? {} : { siteRef: siteRef.trim() }),
+          taskId,
+          taskInput,
         },
         preferences: { route, allowWeb: state.scope?.webSearchEnabled === true && allowWeb },
       })
@@ -447,9 +475,20 @@ export function QueryPanel({ client, profileRef, timeZone, initialRunId }: Query
     }
   }
 
+  const runOperatorAction = async (action: NonNullable<NonNullable<typeof state.scope>['operatorActions']>[number]) => {
+    setOperatorNotice(undefined)
+    try {
+      const response = await client.runOperatorAction<{ readonly data?: { readonly title?: string; readonly chunkCount?: number; readonly indexGeneration?: string } }>(action.path, operatorValues[action.actionId] ?? {})
+      setOperatorNotice(`已导入 ${response.data?.title ?? '文档'}；解析 ${String(response.data?.chunkCount ?? 0)} 个 span；索引版本 ${response.data?.indexGeneration ?? '已激活'}。`)
+    } catch (error) {
+      dispatch(failureEvent(error))
+    }
+  }
+
   const phase = state.phase
   const webAllowed = state.scope?.webSearchEnabled === true
   const run = state.run
+  const selectedTask = state.scope?.tasks?.find((task) => task.taskId === taskId)
 
   return (
     <section
@@ -482,6 +521,22 @@ export function QueryPanel({ client, profileRef, timeZone, initialRunId }: Query
           <div className="query__body">
           <ScopePanel state={state} />
 
+          {state.scope?.operatorActions?.map((action) => (
+            <form className="query__ask" key={action.actionId} data-testid={`operator-action-${action.actionId}`} onSubmit={(event) => { event.preventDefault(); void runOperatorAction(action) }}>
+              <h3>{action.label}</h3>
+              {action.fields.map((field) => (
+                <label className="query__field" key={field.name}>
+                  <span>{field.label}{field.required ? ' *' : ''}</span>
+                  {field.control === 'textarea'
+                    ? <textarea required={field.required} maxLength={field.maxLength} value={String(operatorValues[action.actionId]?.[field.name] ?? '')} onChange={(event) => setOperatorValues((current) => ({ ...current, [action.actionId]: { ...current[action.actionId], [field.name]: event.target.value } }))} />
+                    : <input required={field.required} type={field.kind === 'number' ? 'number' : 'text'} maxLength={field.maxLength} value={String(operatorValues[action.actionId]?.[field.name] ?? '')} onChange={(event) => setOperatorValues((current) => ({ ...current, [action.actionId]: { ...current[action.actionId], [field.name]: event.target.value } }))} />}
+                </label>
+              ))}
+              <button type="submit">导入并建立文档索引</button>
+              {operatorNotice === undefined ? null : <p role="status" data-testid="operator-import-status">{operatorNotice}</p>}
+            </form>
+          ))}
+
           <form
             className="query__ask"
             data-testid="query-ask-form"
@@ -491,16 +546,42 @@ export function QueryPanel({ client, profileRef, timeZone, initialRunId }: Query
             }}
           >
             <h3>提问</h3>
-            <label className="query__field">
-              <span>数据结构 profile</span>
-              <select value={selectedProfile.id} onChange={(event) => {
-                const id = event.target.value
-                if (id === 'home-energy-demo' || id === 'home-energy-demo-wide' || id === 'home-energy-demo-long') setSelectedProfile({ id, version: '1.0.0' })
-              }}>
-                <option value="home-energy-demo">A：宽表遥测</option>
-                <option value="home-energy-demo-long">B：长表指标码（本地预处理）</option>
-              </select>
-            </label>
+            {profileOptions.length <= 1 ? <p data-testid="query-profile">{profileOptions[0]?.label ?? `${selectedProfile.id}@${selectedProfile.version}`}</p> : (
+              <label className="query__field">
+                <span>部署 profile</span>
+                <select value={selectedProfile.id} onChange={(event) => {
+                  const selected = profileOptions.find((option) => option.profileRef.id === event.target.value)
+                  if (selected !== undefined) { closeStream(); dispatch({ type: 'profileChanged' }); setSelectedProfile(selected.profileRef); setTaskId(''); setTaskInput({}) }
+                }}>
+                  {profileOptions.map((option) => <option key={`${option.profileRef.id}@${option.profileRef.version}`} value={option.profileRef.id}>{option.label}</option>)}
+                </select>
+              </label>
+            )}
+            {state.scope?.tasks === undefined || state.scope.tasks.length === 0 ? null : (
+              <label className="query__field">
+                <span>业务任务</span>
+                <select value={taskId} onChange={(event) => {
+                  const selected = state.scope?.tasks?.find((task) => task.taskId === event.target.value)
+                  setTaskId(event.target.value)
+                  setTaskInput(Object.fromEntries((selected?.fields ?? []).filter((field) => field.defaultValue !== undefined).map((field) => [field.name, field.defaultValue])))
+                }}>
+                  {state.scope.tasks.map((task) => <option key={task.taskId} value={task.taskId}>{task.label}</option>)}
+                </select>
+                {selectedTask?.description ? <small>{selectedTask.description}</small> : null}
+              </label>
+            )}
+            {selectedTask?.fields.map((field) => (
+              <label className="query__field" key={field.name}>
+                <span>{field.label}{field.unit === undefined ? '' : ` (${field.unit})`}{field.required ? ' *' : ''}</span>
+                {field.kind === 'enum' ? (
+                  <select value={String(taskInput[field.name] ?? '')} onChange={(event) => setTaskInput((current) => ({ ...current, [field.name]: event.target.value }))}>
+                    <option value="">请选择</option>{(field.options ?? []).map((option) => <option key={option} value={option}>{option}</option>)}
+                  </select>
+                ) : (
+                  <input type={field.kind === 'number' ? 'number' : 'text'} min={field.minimum} max={field.maximum} maxLength={field.maxLength} value={String(taskInput[field.name] ?? '')} onChange={(event) => setTaskInput((current) => ({ ...current, [field.name]: field.kind === 'number' && event.target.value !== '' ? Number(event.target.value) : event.target.value }))} />
+                )}
+              </label>
+            ))}
             <label className="query__field">
               <span>问题</span>
               <textarea
@@ -509,26 +590,6 @@ export function QueryPanel({ client, profileRef, timeZone, initialRunId }: Query
                 value={question}
                 onChange={(event) => setQuestion(event.target.value)}
               />
-            </label>
-            <label className="query__field">
-              <span>站点（可选）</span>
-              <input
-                type="text"
-                name="siteRef"
-                data-testid="query-site"
-                value={siteRef}
-                onChange={(event) => setSiteRef(event.target.value)}
-              />
-            </label>
-            <label className="query__field">
-              <span>备电保留量（kWh，合成假设）</span>
-              <input type="number" min="0" max="50" step="0.5" value={backupRequirementKwh} onChange={(event) => setBackupRequirementKwh(Number(event.target.value))} />
-            </label>
-            <label className="query__field">
-              <span>光伏天气假设</span>
-              <select value={weatherScenario} onChange={(event) => setWeatherScenario(event.target.value as typeof weatherScenario)}>
-                <option value="sunny">晴天</option><option value="overcast">阴天</option><option value="storm">暴风雨</option>
-              </select>
             </label>
             <label className="query__field">
               <span>执行路径</span>

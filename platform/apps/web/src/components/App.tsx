@@ -28,6 +28,7 @@ export interface AppProps {
   readonly client: WorkbenchClient
   readonly profileRef: ProfileRef
   readonly timeZone: string
+  readonly profileOptions?: readonly { readonly profileRef: ProfileRef; readonly label: string }[]
   readonly scenarioViews?: readonly AppViewContribution[]
   readonly boundRunId?: string
   readonly initialView?: AppView
@@ -50,6 +51,7 @@ export function App({
   client,
   profileRef,
   timeZone,
+  profileOptions = [],
   scenarioViews = [],
   boundRunId,
   initialView = 'workbench',
@@ -90,6 +92,7 @@ export function App({
           client={client}
           profileRef={profileRef}
           timeZone={timeZone}
+          profileOptions={profileOptions}
           {...(boundRunId === undefined ? {} : { initialRunId: boundRunId })}
         />
       ) : null}

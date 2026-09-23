@@ -1,19 +1,21 @@
 # ontology
 
-这是多行业语义与业务 Agent 平台的 TypeScript 仓库。**目前可直接运行的是家庭充电储能的本地 POC Core**：页面提问后，同一个 run 会执行 DuckDB 语义查询、候选计划仿真、证据归档与答案核验。演示数据是合成数据，不连接真实设备。
+这是多行业语义与业务 Agent 平台的 TypeScript 仓库。**当前可直接运行的本地 POC 配置包含家庭能源、交通设施和受控文档三类有界任务**：同一个正式 run 会执行注册任务、调用来源工具、归档证据、硬核验并发布答案。演示数据均为合成或 operator 导入内容，不连接真实设备。
 
 ## 这个页面究竟能做什么
 
-当前首页只有“业务问答”，因为它是一次 POC 的业务运行入口，不是数据接入或本体管理后台。它只识别两类明确问题：
+当前首页是“业务问答”入口，**不是空白后台或开放式聊天窗口**。它把已注册的业务任务跑成可审计的 `run`，目前提供：
 
 | 问题 | 实际执行 | 页面能看到 |
 | --- | --- | --- |
 | “synthetic-home-1 的 SOC 均值是多少？” | 按所选 profile 将 `battery_soc_reading` 语义查询编译为受限 SQL，在 DuckDB 查询并计算平均值 | 站点、平均 SOC、单位、来源证据和核验状态。静态演示样本为 40% 与 50%，结果为 45%，不是实时设备读数 |
 | “明天如何安排充放电，在满足备电约束下尽量降低电费？” | 先查询同一站点 SOC，再用合成负荷、光伏、电价和电池参数测试有限的候选策略 | 估算费用与无电池基线、期末储能量、备电检查；展开后可查看选中策略、96 个 15 分钟时段的充放电和储能量轨迹 |
+| “north 区有哪些设施待巡检？” | 按交通 profile 确认的 semantic mapping 查询合成设施 DuckDB 表 | 有类型的设施 ID、区域和待巡检状态断言，各自绑定查询结果指针与来源证据 |
+| “已导入文件中的巡检频率原文是什么？” | 在 operator 已导入并索引的文档中检索精确 span | 显示原文引句、byte-offset locator 与文档版本；不将关键词命中扩展成政策结论 |
 
-页面不是开放式聊天机器人。问“电池容量是多少”等当前未实现的问题会明确失败；输入没有 SOC 数据的站点也不会改用别的站点或编造一个已核验答案。真实客户数据、设备状态和公司模型 API 尚未接入这个本地入口。
+页面不是开放式聊天机器人。每个 profile 的任务、字段和执行 handler 均由部署注册；选择的任务不支持问题时会明确失败。无来源行、无文档或不完整检索不会变成普通已发布答案。真实客户数据、设备状态和公司模型 API 尚未接入这个本地入口。
 
-一次运行的操作顺序是：选择 A/B 数据结构 → 填站点及仿真假设 → 提问 → 查看运行进度与共享预算 → 查看已发布答案及证据 → 如果是计划问题，展开归档的计划明细。页面显示的 run ID 可以用于再次读取同一次结果。
+一次运行的操作顺序是：选择 profile 与部署任务 → 填写该任务声明的输入 → 提问 → 查看运行进度与共享预算 → 查看已发布答案及证据 → 如果是计划问题，展开归档计划明细。页面显示的 run ID 可以用于再次读取同一次结果。“场景允许范围”展示本次 profile 可调用的工具与 Web 搜索授权，不是操作菜单；当前只开通已注册任务。
 
 ## 本地启动（Windows PowerShell）
 
@@ -28,6 +30,7 @@ docker compose -f deploy/local/docker-compose.yml up -d --wait
 $env:CONTROL_DATABASE_URL = 'postgresql://postgres:local-only-change-this@127.0.0.1:54329/ontology'
 $env:ONTOLOGY_APP_PASSWORD = 'local-app-only-change-this'
 pnpm run prepare:local
+$env:ONTOLOGY_LOCAL_OPERATOR_TOKEN = 'local-operator-only-change-this'
 pnpm run dev:local
 ```
 
@@ -43,7 +46,7 @@ docker compose -f deploy/local/docker-compose.yml up -d --wait
 pnpm run dev:local
 ```
 
-如果页面只显示 `HTTP_500`，通常是页面打开时 API 尚未就绪；待终端出现 `Ontology POC Core API: http://127.0.0.1:3000` 后刷新页面，或点击“重试连接”。启动脚本现在会等 API 就绪后再启动页面。
+如果页面只显示 `HTTP_500`，先看 API 终端的具体异常并确认 `GET http://127.0.0.1:3000/api/v1/runs/scope?profileId=home-energy-demo-wide&version=1.0.0` 是否返回 200。页面初始化失败时可在 API 就绪后刷新；**若提问后仍报 `INTERNAL_ERROR`，刷新不会修复服务端运行错误**，应记录页面显示的 `traceId` 并检查 API 日志。旧版本地代码曾把来源证据引用误作草稿归档引用，导致创建 run 时返回 500；当前实现会先归档完整草稿，再核验和发布。启动脚本会等 API 就绪后再打开页面。
 
 需要停止数据库时，仍在 `platform/` 执行：
 
@@ -56,16 +59,22 @@ docker compose -f deploy/local/docker-compose.yml stop
 
 ## 怎么使用
 
-首页各控件的作用如下。页面在当前打开期间保留表单输入，但它不上传客户文件，也不自动发现新的数据库表。
+首页按 `/runs/scope` 返回的部署任务描述显示字段。普通业务问答不上传文件，也不自动发现数据库表；受控文档通过单独的 operator API 导入。首次试用按下表逐项选择，不需要自己写 SQL：
+
+| 想验证的能力 | 选择的 profile / 任务 | 输入与预期 |
+| --- | --- | --- |
+| 同一业务问题适配不同物理表 | `能源 A：宽表遥测` 或 `能源 B：长表 metric-code` / `查询站点 SOC 均值` | 站点 `synthetic-home-1`，问题 `synthetic-home-1 的 SOC 均值是多少？`；两种布局均应得到合成均值 **45%**，并能查看各自来源 |
+| 有界领域计算 | 任一能源 profile / `生成储能候选计划` | 站点 `synthetic-home-1`，备电保留量 2 kWh、晴天，问题 `明天如何安排充放电，在满足备电约束下尽量降低电费？`；答案展示候选费用与备电约束，计划面板展示 96 个时段 |
+| 跨行业查询 | `交通：设施巡检` / `列出待巡检设施` | 区域 `north`，问题 `north 区有哪些设施待巡检？`；答案返回设施事实与证据指针。询问“巡检周期是多少”不应被误答为设施列表 |
+| 文档原文溯源 | `文档：政策引文` / `从已导入文档定位原文` | 先按下方命令导入文档，再问 `已导入文件中的巡检频率原文是什么？`；展示原文、文档版本和定位信息。未导入时会明确失败 |
 
 | 控件 | 当前本地切片的含义 |
 | --- | --- |
-| 数据结构 profile | **A：宽表遥测**直接读取 SOC 百分数列；**B：长表指标码**先把 `metric_code / time / value` 整形成规范表，再把基点值换算为百分数。两份 profile 的物理表和映射版本不同，逻辑问题相同。下拉框切换的是演示数据结构，不是行业或 Agent 内核。 |
-| 问题 | 使用固定的 SOC 查询或储能计划意图。问题文本不会作为任意 SQL 或设备命令执行。 |
-| 站点 | 默认为 `synthetic-home-1`。查询限定到该站点；不存在的站点返回数据缺口。 |
-| 备电保留量 | 用户希望计划保留的电量，单位 kWh；只对储能计划问题生效。 |
-| 光伏天气假设 | 晴天、阴天、暴风雨三组**合成预测**输入；它不是实时天气。只对储能计划问题生效。 |
-| 执行路径、Web 搜索 | 通用工作台保留了执行路径偏好控件；这个本地切片实际使用固定的受控 runtime，不能靠下拉框对比 template/pi。Web 搜索在本地 profile 中禁用。 |
+| profile 和任务 | 下拉项来自部署注册：能源 A/B 结构、交通设施查询、受控文档原文检索。每个任务有自己的字段与支持问题类型；其他问法会被拒绝。 |
+| 站点/区域 | 只在声明这些字段的任务上显示；SOC 查询默认 `synthetic-home-1`，交通查询默认 `north`。这些是合成 fixture key。 |
+| 计划输入 | 备电保留量（kWh）与天气假设只属于储能候选计划，天气选项是确定性的合成场景。 |
+| 文档导入 | 由配置的 operator bearer token 调用专用 API；业务用户不能从请求体伪造 operator 身份。 |
+| Web 搜索/模型 | 本地 profile 禁用 web search；受控 runtime 不调用付费模型或 JEV。 |
 
 建议先分别选择 A 和 B，保持站点 `synthetic-home-1`，问同一个 SOC 问题，观察结果口径相同而来源版本不同；再问计划问题，改变备电保留量或天气，比较候选结果。可直接复制：
 
@@ -80,7 +89,23 @@ synthetic-home-1 的 SOC 均值是多少？
 
 页面会显示 run ID。已发布的结果也能由 API 读取：`GET /api/v1/runs/{runId}/answer` 返回核验答案；有能源计划的 run 还可用 `GET /api/v1/runs/{runId}/plan` 查看归档明细。关闭并重启 API 后，同一 run 的答案与明细仍可读取。
 
-本地入口尚未接入真实客户数据、其他行业、真实模型/JEV、任意 Text2SQL 或设备控制；逐时段明细经过文件完整性校验并与已核验摘要核对，但没有逐点作 claim 核验。接入边界和验证命令见[本地产品使用与验收说明](docs/local-product.md)。
+文档任务没有内置政策结论。需要先在**启动 API 的同一个终端**设置 `ONTOLOGY_LOCAL_OPERATOR_TOKEN`，然后在另一个 PowerShell 终端导入一份供本机演示的 Markdown/纯文本；下面是合成样例：
+
+```powershell
+$operatorToken = 'local-operator-only-change-this'
+$body = @{
+  title = '合成巡检说明'
+  mediaType = 'text/markdown'
+  content = "# 巡检说明`n北区设施每年巡检两次。"
+} | ConvertTo-Json -Depth 5
+Invoke-RestMethod -Method Post -Uri 'http://127.0.0.1:3000/api/v1/operator/documents' `
+  -Headers @{ Authorization = "Bearer $operatorToken" } `
+  -ContentType 'application/json; charset=utf-8' -Body $body
+```
+
+若你改了启动终端中的 token，这里的 `$operatorToken` 也要使用同一个值。接口只接受有 `data-editor` 权限的 operator；业务页面不提供绕过权限的导入按钮。首版每个文档集合只允许导入一份，不同的第二份会返回 409，避免旧索引被悄悄覆盖。随后在页面选择文档任务，提问 `已导入文件中的巡检频率原文是什么？`；答案只能引用实际导入的原文，不会把相似词检索当成政策推断。
+
+本地 profiles 只是部署替换方式的 fixture，不代表任意客户 schema 已自动接通；文档 profile 当前每个 collection 只允许一份受控导入文档。尚未交付开放式 Text2SQL、自由问答/抽取、通用规则推理、实体跨源消歧、真实模型/JEV 或设备控制；逐时段能源明细经过完整性校验并与核验摘要核对，但未逐点作 claim 核验。接入边界和验证命令见[本地产品使用与验收说明](docs/local-product.md)。
 
 ## 设计思路：框架与场景分开
 
@@ -96,17 +121,19 @@ synthetic-home-1 的 SOC 均值是多少？
 
 ```mermaid
 flowchart LR
-  UI[浏览器：问题、站点、约束] --> API[Fastify API：创建 run]
+  UI[浏览器：profile、任务、问题] --> API[Fastify API：创建 run]
   API --> CTRL[WorkflowController：预算、阶段、发布]
-  CTRL --> RT[本地受控 runtime]
+  CTRL --> RT[注册任务 runtime]
   RT --> GW[ToolGateway：授权、限额、证据]
   GW --> Q[data_query：语义查询]
-  Q --> MAP[A/B 版本化 mapping]
-  MAP --> DB[DuckDB：宽表或规范化长表]
-  GW --> C[home-energy 计算：候选策略和仿真]
+  Q --> MAP[版本化语义 mapping]
+  MAP --> DB[DuckDB：能源或交通数据]
+  GW --> D[document_search：受控文档 span]
+  GW --> C[场景计算：能源候选计划]
   Q --> EV[Postgres 证据记录 + 本地不可变 blob]
+  D --> EV
   C --> EV
-  EV --> VERIFY[硬核验：数值、单位、主体、来源]
+  EV --> VERIFY[硬核验：数值、事实、引文与来源]
   VERIFY --> ANSWER[Postgres：已发布答案]
   ANSWER --> UI
   EV --> DETAIL[只读计划明细：完整性与摘要一致性]
@@ -115,11 +142,11 @@ flowchart LR
 
 这个切片具体演示了两种来源的同一语义：A 的 `soc_readings_wide(site_key, sample_utc, soc_percent)` 直接存百分数；B 的原始 `soc_metrics_long(asset_id, time_utc, metric_code, number_value, unit_code)` 先筛选 SOC 指标并物化成规范表，再用显式比例换算。两者都映射为 `battery_soc_reading` 的 `site_ref / recorded_at / soc_percent`，所以同一个语义查询计划能得到同口径结果。这里的整形是已声明的演示代码，不是对任意客户长表的自动识别。
 
-一次运行先锁定 profile 与来源权限。runtime 只能通过已注册的 `data_query` 操作查询或调用能源计算；工具返回后先归档结果和来源，再生成带证据指针的 claim。硬核验通过后才发布同一份答案。回答和运行状态存 PostgreSQL，结果文件存本地 blob；API 重启后仍可按 run ID 读取。计划明细接口只能从已发布答案所引用的仿真证据追到归档文件，不会重新计算，也不会访问设备。
+一次运行先锁定 profile、版本化 task ref、task input digest 与来源权限。runtime 只能执行注册任务，经真实 gateway 调用 `data_query` 或文档检索；来源结果与最终草稿分别作为不可变 artifact 归档。数字 claim 和非数字 typed assertion 都绑定证据指针并硬核验，通过后才发布。回答与运行状态存 PostgreSQL，结果文件存本地 blob；API 重启后仍可按 run ID 读取。计划明细只从发布答案引用的仿真证据读取，不重新计算，也不访问设备。
 
 产品方向是把本体语义作为可选增强：简单问题可以直接查数据，复杂问题可借助语义、检索或领域计算；不要求每个请求先做本体推理。这个本地切片刻意走语义查询，以检验 A/B 映射是否真的复用同一个问题。
 
-这些接口为将来的行业/客户替换留下边界，但**有接口不等于本地产品已经挂载能力**：仓库中还有文档抽取、身份消歧、规则物化、检索、模型与其他行业声明等组件；当前首页没有把它们装配成可操作的流程。特别是 JEV 概率决策、生成式规划、RAG/联网搜索、客户数据上传和真实设备控制都不能从这个页面使用。DataOS 在此也不是本体推理服务的前提。
+当前页面已装配能源、交通与 operator 文档任务，但它们是本地受控 fixture，不是任意行业/客户连接器。仓库其他文档抽取、身份消歧、规则物化与模型组件仍未全部装配成可操作流程。JEV 概率决策、生成式规划、RAG/联网搜索、客户数据库上传和真实设备控制不能从本地页面使用；DataOS 不是本体推理服务的前提。
 
 ## API 与数据存放
 
@@ -130,6 +157,7 @@ flowchart LR
 | `GET /api/v1/runs/{runId}`、`GET /api/v1/runs/{runId}/events` | 查看运行状态与公开进度事件。 |
 | `GET /api/v1/runs/{runId}/answer` | 读取已发布答案；运行中返回 202，失败且无答案时返回 404。 |
 | `GET /api/v1/runs/{runId}/plan` | 读取已发布储能计划的归档明细；纯 SOC 问答或失败运行返回 404。 |
+| `POST /api/v1/operator/documents` | 由配置 bearer token 的 operator 导入一份受控 Markdown/plain-text 文档；普通 business 用户返回 403。 |
 
 API 默认只监听 `127.0.0.1:3000`，本地身份是开发用单租户配置，不是对外服务的登录/权限系统。`platform/.env.local` 保存本地应用数据库连接并被 Git 忽略；PostgreSQL 使用 Docker 命名卷保存控制数据，结果 blob 默认在被 Git 忽略的 `platform/apps/api/.local-data/blobs`。这个切片按单 API 实例使用，工作流状态写入尚没有跨进程版本 CAS，不能据此部署多副本。
 
@@ -141,7 +169,7 @@ API 默认只监听 `127.0.0.1:3000`，本地身份是开发用单租户配置�
 
 在 `platform/` 下执行 `pnpm run lint`、`pnpm run typecheck`、`pnpm run test`；真实浏览器验收先执行 `pnpm run build:web`，再执行 `pnpm run test:e2e`。浏览器用例会使用独立的临时 PostgreSQL 和 Chromium，不向本地演示库插入预制答案。
 
-若首页只显示 `HTTP_500`，先看终端是否已出现 API 就绪地址，再刷新或点“重试连接”；若 `prepare:local` 在首次建库时连接被中断，用 `docker compose ... up -d --wait` 等待数据库健康后重跑，**不要删除已有数据卷**。如果 API 的 3000 端口或页面的 5173 端口已被占用，先停掉旧的 `dev:local` 进程，避免同时运行两套本地服务。
+若首页只显示 `HTTP_500`，先检查 API 日志与上面的 scope 接口；若提问后显示 `INTERNAL_ERROR`，保留 `traceId` 并检查 API 终端，不要把它当成“问题没有答案”。`prepare:local` 首次建库连接中断时，用 `docker compose ... up -d --wait` 等待数据库健康后重跑，**不要删除已有数据卷**。如果 API 的 3000 端口或页面的 5173 端口已被占用，先停掉旧的 `dev:local` 进程，避免新旧代码同时运行。服务进程不会因 `git pull` 自动切换到新代码；更新代码后重启 `pnpm run dev:local`。
 
 ## 项目资料
 

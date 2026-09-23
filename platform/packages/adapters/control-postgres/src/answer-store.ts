@@ -22,7 +22,7 @@ interface AnswerRow extends QueryResultRow {
   publication_kind: PublicationKind
   as_of: Date | null
   limitations: string[]
-  body: { blocks: readonly unknown[]; claims: PublishedAnswer['claims'] } | null
+  body: { blocks: readonly unknown[]; claims: PublishedAnswer['claims']; assertions?: PublishedAnswer['assertions']; schemaVersion?: PublishedAnswer['schemaVersion'] } | null
   published_at: Date
 }
 
@@ -60,6 +60,8 @@ function toAnswer(row: AnswerRow): PublishedAnswer {
     limitations: row.limitations,
     blocks: row.body?.blocks ?? [],
     claims: row.body?.claims ?? [],
+    ...(row.body?.assertions === undefined ? {} : { assertions: row.body.assertions }),
+    ...(row.body?.schemaVersion === undefined ? {} : { schemaVersion: row.body.schemaVersion }),
     publishedAt: row.published_at.toISOString(),
   }
 }
@@ -132,7 +134,7 @@ export class PostgresAnswerStore implements AnswerStorePort {
             input.answer.asOf ?? null,
             JSON.stringify(input.answer.limitations),
             input.answer.publishedAt,
-            JSON.stringify({ blocks: input.answer.blocks, claims: input.answer.claims }),
+            JSON.stringify({ blocks: input.answer.blocks, claims: input.answer.claims, ...(input.answer.assertions === undefined ? {} : { assertions: input.answer.assertions }), ...(input.answer.schemaVersion === undefined ? {} : { schemaVersion: input.answer.schemaVersion }) }),
           ],
         )
       } catch (error) {

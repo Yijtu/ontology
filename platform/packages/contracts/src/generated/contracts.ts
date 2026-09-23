@@ -599,6 +599,8 @@ export type DataQueryInput =
  * via the `definition` "WebSearchFreshnessHint".
  */
 export type WebSearchFreshnessHint = 'any' | 'day' | 'week' | 'month' | 'year'
+export type NonEmptyString2 = string
+export type NonEmptyString3 = string
 
 /**
  * Canonical cross-process contract set, version 0.2.0.
@@ -2816,9 +2818,31 @@ export interface WebSearchOutput {
  */
 export interface DocumentSearchOutput {
   spans: DocumentSpan[]
+  quotes?: DocumentQuote[]
   scoreKind: ScoreKind
   indexVersion: IndexVersion
   completeness: CompletenessStatus
+}
+/**
+ * Exact, bounded text read back from an indexed document span and archived with the search tool result.
+ *
+ * This interface was referenced by `OntologyContracts`'s JSON-Schema
+ * via the `definition` "DocumentQuote".
+ */
+export interface DocumentQuote {
+  documentRef: ResourceRef
+  locator: Locator
+  text: NonEmptyString3
+  textDigest: Sha256Digest
+  quoteDigest: Sha256Digest
+  precision: 'exact' | 'approximate'
+}
+export interface Locator {
+  kind: 'page' | 'offset' | 'approximate_locator'
+  page?: number
+  startOffset?: number
+  endOffset?: number
+  normalizationMapRef?: NonEmptyString2
 }
 /**
  * This interface was referenced by `OntologyContracts`'s JSON-Schema

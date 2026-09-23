@@ -59,6 +59,8 @@ const TEMPLATES: Readonly<Record<VerificationFindingCode, Template>> = Object.fr
   semantic_unavailable: () =>
     'the policy semantic review was unavailable; only the hard checks are reported',
   visible_statement_unbound: (finding) => `${locate(finding)} contains visible text that is not rendered from a verified claim`,
+  assertion_mismatch: (finding) => `${locate(finding)} does not match the value at its bound evidence pointer`,
+  document_quote_mismatch: (finding) => `${locate(finding)} is not an exact quote from the cited document span`,
 })
 
 export class RestrictedExplanationTemplates {
@@ -71,6 +73,7 @@ export class RestrictedExplanationTemplates {
       templateId: `${RESTRICTED_TEMPLATE_VERSION}:${finding.code}`,
       message,
       ...(finding.claimId === undefined ? {} : { claimId: finding.claimId }),
+      ...(finding.assertionId === undefined ? {} : { assertionId: finding.assertionId }),
       ...(finding.field === undefined ? {} : { field: finding.field }),
       ...(finding.evidenceRef === undefined ? {} : { evidenceRef: finding.evidenceRef }),
     }
