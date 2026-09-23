@@ -57,7 +57,7 @@ Invoke-RestMethod -Method Post -Uri http://127.0.0.1:3000/api/v1/operator/docume
 
 只读业务账号需能访问一个**符合固定列契约**的表/视图。`registered-operator-sql.ts` 是当前部署契约的权威定义：业务列 `facility_key / district_code / condition_code`，实体与别名列 `entity_id / object_id / identity_scope_id / native_id / display_name / normalized_name / alias / alias_normalized / alias_confirmed`，有效时间/上下文列 `alias_valid_from / alias_valid_to / site / entity_type / valid_from / valid_to / tenant_id / space_id`。启动时会探测列名与类型；任一缺失即拒绝启用该 profile。`data_query` 只允许该已登记对象、受限字段/过滤和只读事务；`tenant_id`、`space_id` 来自可信上下文。若客户结构不同，先建立有来源/版本的只读规范视图或新增部署 mapping，不能让用户问题指定表名、连接串或任意 SQL。
 
-服务启动后，operator 使用同一个本地 bearer token 查询 `GET /api/v1/operator/sql-source`，确认返回 `readOnly: true`、`definitionRef` 和非敏感列摘要。没有 `ONTOLOGY_OPERATOR_SQL_URL` 时该能力返回未配置；普通业务身份没有候选导入/审核权限。下列 PowerShell 示例演示**新实体**路径，业务资料以一条完整 JSON 记录作为精确原文，不声称从任意政策句子自动抽取：
+服务启动后，operator 使用同一个本地 bearer token 查询 `GET /api/v1/operator/sql-source`，确认返回 `readOnly: true`、`definitionRef` 和非敏感列摘要。没有 `ONTOLOGY_OPERATOR_SQL_URL` 时该 operator 路由不注册，页面的 SQL profile scope 明确报未配置；普通业务身份没有候选导入/审核权限。下列 PowerShell 示例演示**新实体**路径，业务资料以一条完整 JSON 记录作为精确原文，不声称从任意政策句子自动抽取：
 
 ```powershell
 $token = 'local-operator-only-change-this'
@@ -75,7 +75,7 @@ $candidate = Invoke-RestMethod -Uri "$base/candidates/$candidateId" -Headers $au
 $recall = Invoke-RestMethod -Method Post -Uri "$base/candidates/$candidateId/identity-recall" -Headers $auth -ContentType 'application/json' -Body '{}'
 ```
 
-此时应先检查 `$candidate.data.candidate.sourceSpans` 和 `$recall.data.result`：召回是**建议及审计**，不是合并事实。若无现成且已确认的实体，人工以 `If-Match: 0` 提交 `create_pending`，得到待确认 entity ID；再按真实候选强键/原文完成 `match`，随后提交候选 `approve` review，最后用 `$source.data.definitionRef` 与当前发布 revision 创建 semantic publication。若选择已有实体，需校验身份范围、native key 和人工理由；冲突或证据不足用 `clarify/reject`，不能强合并。写入端点的完整请求字段和状态见[公开 HTTP 路由](../platform/apps/api/src/http/decisions.ts)与[发布路由](../platform/apps/api/src/http/publication.ts)。发布后在网页切换到 `operator-sql-facilities`，问“north 区有哪些设施待巡检？”，观察只读 SQL 结果的来源证据。可按 job ID、候选 ID、audit ID、publication ID 和 run ID 分别读回；API 重启后这些记录仍在。
+此时应先检查 `$candidate.data.candidate.sourceSpans` 和 `$recall.data.result`：召回是**建议及审计**，不是合并事实。若无现成且已确认的实体，人工以 `If-Match: 0` 提交 `create_pending`，得到待确认 entity ID；再按真实候选强键/原文完成 `match`，随后提交候选 `approve` review，最后用 `$source.data.definitionRef` 与当前发布 revision 创建 semantic publication。若选择已有实体，需校验身份范围、native key 和人工理由；冲突或证据不足用 `clarify/reject`，不能强合并。写入端点的完整请求字段和状态见[公开 HTTP 路由](../platform/apps/api/src/http/decisions.ts)与[发布路由](../platform/apps/api/src/http/publication.ts)。发布后在网页切换到 `operator-sql-facilities`，问“north 区有哪些设施待巡检？”，观察只读 SQL 结果的来源证据。**当前该问题按 mapping 查业务视图，不把刚发布的语义事实作为运行时过滤/规则前提**；在线本体推理是后续缺口。可按 job ID、候选 ID、audit ID、publication ID 和 run ID 分别读回；API 重启后这些记录仍在。
 
 当前 `ONTOLOGY_LOCAL_OPERATOR_TOKEN` 仅供 loopback 单租户开发。它让本机 operator 获得数据编辑、语义审核与发布角色；不能作为生产认证或多人审批机制。自然语言政策抽取、关系/规则候选、自动相似度判断仍未配置模型，不会伪造“自动抽取成功”。
 

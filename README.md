@@ -109,7 +109,7 @@ Invoke-RestMethod -Method Post -Uri 'http://127.0.0.1:3000/api/v1/operator/docum
 
 若你改了启动终端中的 token，这里的 `$operatorToken` 也要使用同一个值。接口只接受有 `data-editor` 权限的 operator；业务页面不提供绕过权限的导入按钮。首版每个文档集合只允许导入一份，不同的第二份会返回 409，避免旧索引被悄悄覆盖。随后在页面选择文档任务，提问 `已导入文件中的巡检频率原文是什么？`；答案只能引用实际导入的原文，不会把相似词检索当成政策推断。
 
-**候选抽取/消歧/发布的受控入口**：配置 operator SQL 后，可把一份每个 span 含一个完整实体 JSON 记录的文本导入 `/api/v1/operator/candidate-documents`。operator 用返回的 `parseId` 调用 `/api/v1/operator/documents/{parseId}/extract-candidates`，读取持久 job 与候选原文，再调用 `/api/v1/candidates/{candidateId}/identity-recall` 查看 SQL 强键/别名召回及审计。人工通过 `If-Match` 提交 `clarify/create_pending/match/reject` 决策、审核候选并发布语义版本；此后仍可从同一业务问答页对 operator SQL profile 提问。详细请求顺序和边界见[本地产品说明](docs/local-product.md)。这条无模型路径**只处理严格 JSON 原生实体记录**，不把普通政策自然语言声称为已自动抽取，也不自动发布关系或规则。
+**候选抽取/消歧/发布的受控入口**：配置 operator SQL 后，可把一份每个 span 含一个完整实体 JSON 记录的文本导入 `/api/v1/operator/candidate-documents`。operator 用返回的 `parseId` 调用 `/api/v1/operator/documents/{parseId}/extract-candidates`，读取持久 job 与候选原文，再调用 `/api/v1/candidates/{candidateId}/identity-recall` 查看 SQL 强键/别名召回及审计。人工通过 `If-Match` 提交 `clarify/create_pending/match/reject` 决策、审核候选并发布语义版本。随后同一业务问答页可对 operator SQL profile 提问，但**当前交通问题仍按已登记 mapping 查业务视图，尚未以新发布事实作在线推理前提**。详细请求顺序和边界见[本地产品说明](docs/local-product.md)。这条无模型路径**只处理严格 JSON 原生实体记录**，不把普通政策自然语言声称为已自动抽取，也不自动发布关系或规则。
 
 本地 profiles 仍需部署侧明确映射，文档 profile 当前每个 collection 只允许一份受控导入文档。尚未交付开放式 Text2SQL、自由自然语言抽取、在线多跳/规则回答、可直接操作任意客户 schema 的管理界面、真实模型/JEV 或设备控制；关系导航和身份一致性已有领域服务，但还未注册为网页可选任务。逐时段能源明细经过完整性校验并与核验摘要核对，未逐点作 claim 核验。Anker PRD 的模拟执行、状态回读和重规划是下一阶段能源场景验收目标，见[Anker 场景 SPEC](tasks/spec-home-energy-anker-v1.0.md)。
 
