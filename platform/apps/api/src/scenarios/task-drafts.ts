@@ -6,10 +6,10 @@ import type { LocalImmutableBlobStore } from '@ontology/adapter-blob-local'
 export interface TaskDraftEvidence {
   readonly evidence: EvidenceStorePort
   readonly artifacts: ImmutableArtifactWriter
-  readonly blobStore: LocalImmutableBlobStore
+  readonly blobStore: Pick<LocalImmutableBlobStore, 'readAuthorized'>
 }
 
-interface EvidencePayload {
+export interface EvidencePayload {
   readonly ref: NonNullable<import('@ontology/contracts').WorkflowInputEntry['ref']>
   readonly resultDigest: string
   readonly payload: Record<string, unknown>
@@ -19,7 +19,7 @@ function isRecord(value: unknown): value is Record<string, unknown> {
   return typeof value === 'object' && value !== null && !Array.isArray(value)
 }
 
-async function evidencePayloads(request: DraftWriterRequest, deps: TaskDraftEvidence, ctx: ToolContext): Promise<readonly EvidencePayload[]> {
+export async function evidencePayloads(request: DraftWriterRequest, deps: TaskDraftEvidence, ctx: ToolContext): Promise<readonly EvidencePayload[]> {
   const scope: ScopeRef = { tenantId: ctx.principal.tenantId, spaceId: ctx.allowedResources.spaceId }
   const entries = request.inputManifest.entries.filter((entry) => entry.kind === 'evidence' && entry.ref !== undefined)
   const output: EvidencePayload[] = []
@@ -51,7 +51,7 @@ export function draftFromVerifiedAssertions(request: DraftWriterRequest, asserti
   return draft
 }
 
-async function archiveDraft(draft: AnswerDraft, dependencies: TaskDraftEvidence, ctx: ToolContext): Promise<DraftWriterResult> {
+export async function archiveDraft(draft: AnswerDraft, dependencies: TaskDraftEvidence, ctx: ToolContext): Promise<DraftWriterResult> {
   const scopeRef: ScopeRef = { tenantId: ctx.principal.tenantId, spaceId: ctx.allowedResources.spaceId }
   const content = new TextEncoder().encode(JSON.stringify(draft))
   const archived = await dependencies.artifacts.putBytes({
