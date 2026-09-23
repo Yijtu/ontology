@@ -10,6 +10,7 @@
 | --- | --- | --- |
 | “synthetic-home-1 的 SOC 均值是多少？” | 按所选 profile 将 `battery_soc_reading` 语义查询编译为受限 SQL，在 DuckDB 查询并计算平均值 | 站点、平均 SOC、单位、来源证据和核验状态。静态演示样本为 40% 与 50%，结果为 45%，不是实时设备读数 |
 | “明天如何安排充放电，在满足备电约束下尽量降低电费？” | 先查询同一站点 SOC，再用合成负荷、光伏、电价和电池参数测试有限的候选策略 | 估算费用与无电池基线、期末储能量、备电检查；展开后可查看选中策略、96 个 15 分钟时段的充放电和储能量轨迹 |
+| Anker 家庭能源场景：生成计划后确认模拟执行 | 默认 `anker-home-1` 的合成 SOC 为 35%、备电目标 20%；先产生正式已核验计划，再让 Virtual SOLIX 逐步执行 | 96 条 Requested→Accepted→Observed 回执、每步状态引用、期末 SOC 与 execution ID；API 重启仍能读回。`live` 始终拒绝 |
 | “north 区有哪些设施待巡检？” | 按交通 profile 确认的 semantic mapping 查询合成设施 DuckDB 表 | 有类型的设施 ID、区域和待巡检状态断言，各自绑定查询结果指针与来源证据 |
 | 同一个交通问题，切换 `operator-sql-facilities` | 在服务端配置只读 PostgreSQL 角色与符合固定列契约的授权视图后，按已登记 mapping 查询该视图 | 同一页面与 run/证据/核验链路读取业务库结果；未配置时显示能力缺失，不回退到合成表 |
 | “已导入文件中的巡检频率原文是什么？” | 在 operator 已导入并索引的文档中检索精确 span | 显示原文引句、byte-offset locator 与文档版本；不将关键词命中扩展成政策结论 |
@@ -68,6 +69,7 @@ docker compose -f deploy/local/docker-compose.yml stop
 | --- | --- | --- |
 | 同一业务问题适配不同物理表 | `能源 A：宽表遥测` 或 `能源 B：长表 metric-code` / `查询站点 SOC 均值` | 站点 `synthetic-home-1`，问题 `synthetic-home-1 的 SOC 均值是多少？`；两种布局均应得到合成均值 **45%**，并能查看各自来源 |
 | 有界领域计算 | 任一能源 profile / `生成储能候选计划` | 站点 `synthetic-home-1`，备电保留量 2 kWh、晴天，问题 `明天如何安排充放电，在满足备电约束下尽量降低电费？`；答案展示候选费用与备电约束，计划面板展示 96 个时段 |
+| Anker 模拟执行 | 打开 `?view=energy` 的“家庭能源计划”视图 | 默认 35% SOC / 20% ReserveSOC，构建场景、生成计划，待正式 run 发布后点击“请求模拟执行”；看 96 条回执和 Virtual SOLIX 的期末 SOC。未发布的直接预览不能执行 |
 | 跨行业查询 | `交通：设施巡检` / `列出待巡检设施` | 区域 `north`，问题 `north 区有哪些设施待巡检？`；答案返回设施事实与证据指针。询问“巡检周期是多少”不应被误答为设施列表 |
 | 真实只读表替换 | `交通：operator 只读 SQL（需配置来源）` / `列出待巡检设施` | 服务端先配置固定视图与只读账号；仍填 `north`，正式 run 返回业务库行及来源证据。无配置、列类型不符或越权都必须失败 |
 | 文档原文溯源 | `文档：政策引文` / `从已导入文档定位原文` | 先按下方命令导入文档，再问 `已导入文件中的巡检频率原文是什么？`；展示原文、文档版本和定位信息。未导入时会明确失败 |
@@ -88,6 +90,8 @@ synthetic-home-1 的 SOC 均值是多少？
 ```
 
 第一个问题只执行语义查询。第二个问题先查 SOC，再由确定性能源计算测试 `self_consumption`、`reserve_first`、`price_window` 三种候选（实际可行性取决于输入）。页面的“已核验答案”展示费用、基线、末端储能量、备电满足情况以及每项引用的证据 ID；“候选充放电计划”展示选中策略、96 段轨迹、备电余量和归档结果 ID。计划是**合成输入上的候选仿真**，只在已测试方案中选择，不会下发设备动作，也不承诺全局最优。
+
+Anker 模拟执行从业务问答的**正式发布计划**授权，不凭 `/simulations` 的直接预览或浏览器状态放行。打开 [家庭能源计划视图](http://127.0.0.1:5173/?view=energy)，默认场景为 `anker-home-1`：来源读数 30%/40% 形成 35% 初态，10 kWh 电池的 ReserveSOC 为 20%。先构建场景和生成计划；页面核对直接计算预览与正式 run 的 planRef 一致后才开放“请求模拟执行”。执行会写入每个 15 分钟时段的 Requested、Accepted、Observed 回执和 Virtual SOLIX 后状态；`GET /api/v1/executions/{executionId}` 可读回。模拟动作不是设备控制；尝试 `mode=live` 会在创建任何设备任务前被拒绝。把旧站点 45% SOC 错接到 35% 计划时，正式 run 会因跨证据不一致阻断发布。
 
 “已核验”有明确范围：数值、单位、对象与归档证据经过硬检查；计划明细文件经过完整性检查，关键汇总数与已发布答案一致，但 96 个时段并未逐点生成核验 claim。它不代表现实设备或预测一定正确。页面底部的限制说明和 `simulation` 标记应与结论一起阅读。
 
@@ -111,7 +115,7 @@ Invoke-RestMethod -Method Post -Uri 'http://127.0.0.1:3000/api/v1/operator/docum
 
 **候选抽取/消歧/发布的受控入口**：配置 operator SQL 后，可把一份每个 span 含一个完整实体 JSON 记录的文本导入 `/api/v1/operator/candidate-documents`。operator 用返回的 `parseId` 调用 `/api/v1/operator/documents/{parseId}/extract-candidates`，读取持久 job 与候选原文，再调用 `/api/v1/candidates/{candidateId}/identity-recall` 查看 SQL 强键/别名召回及审计。人工通过 `If-Match` 提交 `clarify/create_pending/match/reject` 决策、审核候选并发布语义版本。随后同一业务问答页可对 operator SQL profile 提问，但**当前交通问题仍按已登记 mapping 查业务视图，尚未以新发布事实作在线推理前提**。详细请求顺序和边界见[本地产品说明](docs/local-product.md)。这条无模型路径**只处理严格 JSON 原生实体记录**，不把普通政策自然语言声称为已自动抽取，也不自动发布关系或规则。
 
-本地 profiles 仍需部署侧明确映射，文档 profile 当前每个 collection 只允许一份受控导入文档。尚未交付开放式 Text2SQL、自由自然语言抽取、在线多跳/规则回答、可直接操作任意客户 schema 的管理界面、真实模型/JEV 或设备控制；关系导航和身份一致性已有领域服务，但还未注册为网页可选任务。逐时段能源明细经过完整性校验并与核验摘要核对，未逐点作 claim 核验。Anker PRD 的模拟执行、状态回读和重规划是下一阶段能源场景验收目标，见[Anker 场景 SPEC](tasks/spec-home-energy-anker-v1.0.md)。
+本地 profiles 仍需部署侧明确映射，文档 profile 当前每个 collection 只允许一份受控导入文档。尚未交付开放式 Text2SQL、自由自然语言抽取、在线多跳/规则回答、可直接操作任意客户 schema 的管理界面、真实模型/JEV 或设备控制；关系导航有领域服务，已发布属性事实可通过 operator SQL profile 的专门任务查询。逐时段能源计划明细经过完整性与汇总核对；Virtual SOLIX 执行另有逐步状态回读，但这不等于现实设备或预测正确。Anker PRD 的天气/备电变化重规划、旧版 supersede 与变化原因解释仍在开发，见[Anker 场景 SPEC](tasks/spec-home-energy-anker-v1.0.md)。
 
 ## 设计思路：框架与场景分开
 
@@ -163,6 +167,8 @@ flowchart LR
 | `GET /api/v1/runs/{runId}`、`GET /api/v1/runs/{runId}/events` | 查看运行状态与公开进度事件。 |
 | `GET /api/v1/runs/{runId}/answer` | 读取已发布答案；运行中返回 202，失败且无答案时返回 404。 |
 | `GET /api/v1/runs/{runId}/plan` | 读取已发布储能计划的归档明细；纯 SOC 问答或失败运行返回 404。 |
+| `POST /api/v1/simulations/inputs`、`POST /api/v1/simulations` | 建立合成场景与直接计算预览；预览本身不能授权执行。 |
+| `POST /api/v1/executions`、`GET /api/v1/executions/{executionId}` | 对同一已发布核验计划请求 Virtual SOLIX 模拟执行、读取逐步回执与状态；live 未配置。 |
 | `POST /api/v1/operator/documents` | 由配置 bearer token 的 operator 导入一份受控 Markdown/plain-text 文档；普通 business 用户返回 403。 |
 | `GET /api/v1/operator/sql-source` | 查看已配置只读视图的非敏感能力摘要；不返回连接凭据。 |
 | `POST /api/v1/operator/candidate-documents`、`POST /api/v1/operator/documents/{parseId}/extract-candidates` | 导入完整 JSON 原生实体记录并启动有界候选 job。 |

@@ -38,6 +38,14 @@ API 默认监听 `127.0.0.1:3000`。停止工作台进程会同时停止 API；P
 
 已发布的能源计划可通过 `GET /api/v1/runs/{runId}/plan` 读取归档明细；只有 SOC 答案或失败运行返回 404。该只读接口先核对发布答案及其计算证据，再校验归档结果完整性，不会触发新的计算或设备动作。
 
+### Anker 家庭能源模拟执行
+
+打开 `http://127.0.0.1:5173/?view=energy`，默认选择 `anker-home-1`，其合成来源 SOC 为 30%/40%（平均 35%），电池容量 10 kWh，备电目标初值 20%。依次点击“构建场景”“生成计划”；页面会产生直接计算预览，并为同一场景提交正式 `POST /runs`。只有正式 run 发布核验答案、两条路径的完整 planRef 一致时，“请求模拟执行”才可点。直接预览模式和 45% 的旧站点样本不能授权执行 35% 初态的计划。
+
+模拟执行逐步应用 96 个 PlanStep，每步保存 Requested→Accepted→Observed、前后电量与不可变状态引用。页面显示期末 Virtual SOLIX SOC、execution ID 和逐步回执；`GET /api/v1/executions/{executionId}` 在 API 重启后仍可读取。同一幂等键重试复用原记录，换键重复执行同一 plan 被拒绝。请求 `mode=live` 会在创建任何执行 job 或设备调用前返回 `CAPABILITY_NOT_CONFIGURED`。旧预览宿主只展示计划，不会开放模拟执行。正式场景/执行的目标合同见[Anker 场景 SPEC](../tasks/spec-home-energy-anker-v1.0.md)。
+
+此阶段验证默认计划、同条件基线、逐步模拟回读。天气从晴转雨、ReserveSOC 从 20% 提到 60% 后基于**已回读状态**重新规划、标记旧版 Superseded 和解释变化原因，仍是下一波验收；目前不能把 UI 上重新生成的直接预览当作已完成该闭环。
+
 交通任务示例：
 
 > north 区有哪些设施待巡检？
