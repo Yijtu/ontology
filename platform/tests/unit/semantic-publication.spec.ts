@@ -8,6 +8,7 @@ import {
   InMemoryMaterializationStore,
   InMemorySemanticPublicationStore,
   PublishedRelationNavigator,
+  PublishedFactReferenceProvider,
   PublishedSemanticSource,
   SemanticPublicationService,
 } from '@ontology/semantic-engine'
@@ -168,11 +169,21 @@ describe('semantic publication service (in-memory)', () => {
     expect(path.paths).toHaveLength(1)
     expect(path.paths[0]?.endEntityId).toBe(to.entityId)
     expect(path.paths[0]?.hops[0]?.statementId).toBe(relationId)
+    const facts = new PublishedFactReferenceProvider({
+      publications: publicationStore, identity: identityStore, namespace: 'home-energy',
+      definitionRef: PUBLICATION_DEFINITION_REF, allowedConceptIds: ['device', 'feeds'],
+    })
+    const currentFacts = await facts.listFacts({ scopeRef, concepts: [{ namespace: 'home-energy', conceptId: 'feeds' }], entityRefs: [], limit: 10 }, ctx)
+    expect(currentFacts.covered).toBe(true)
+    expect(currentFacts.facts.map((fact) => fact.payload)).toContainEqual(expect.objectContaining({ statementId: relationId }))
 
     await identityService.decide({ candidateId: from.candidateId, kind: 'split', expectedRevision: '2', targetEntityId: from.entityId, justification: 'source identity correction' }, ctx)
     const afterSplit = await navigator.navigate({ startEntityId: from.entityId, relationIds: ['feeds'], validAt: '2026-09-22T00:00:00Z' }, ctx)
     expect(afterSplit.paths).toEqual([])
     expect(afterSplit.gaps).toContain('RELATION_IDENTITY_STALE')
+    const afterSplitFacts = await facts.listFacts({ scopeRef, concepts: [{ namespace: 'home-energy', conceptId: 'feeds' }], entityRefs: [], limit: 10 }, ctx)
+    expect(afterSplitFacts.facts).toEqual([])
+    expect(afterSplitFacts.covered).toBe(false)
 
     const unresolvedId = randomUUID()
     await insert(relationFor({ candidateId: unresolvedId, idempotencyKey: idempotencyKey(), fromCandidateId: from.candidateId, toCandidateId: randomUUID() }))

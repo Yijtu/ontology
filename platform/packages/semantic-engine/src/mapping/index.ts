@@ -15,6 +15,7 @@ export type {
 } from './vocabulary'
 export { InMemorySemanticMappingRegistry, defineSemanticMapping, semanticMappingDigest } from './registry'
 export { OntologyLookupService } from './lookup'
+export { PublishedFactReferenceProvider } from './published-facts'
 export type {
   OntologyFactPage,
   OntologyFactQuery,
