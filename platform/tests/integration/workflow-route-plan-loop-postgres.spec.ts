@@ -43,6 +43,10 @@ import {
 } from '../unit/tool-gateway-fixtures'
 import { RecordingControlRepository } from '../unit/component-registry-fixtures'
 import { CountingGeneration } from '../unit/workflow-planning-fixtures'
+import {
+  publishedVocabularyDefinition,
+  vocabularyService,
+} from '../fixtures/schema-vocabulary'
 
 /**
  * LOCAL-020 acceptance against a real PostgreSQL container.
@@ -219,7 +223,11 @@ describe('route, small plan and bounded loop against real PostgreSQL', () => {
     await harness.budget.openLedger({ ledgerId: GATEWAY_LEDGER, kind: 'run', runId: GATEWAY_RUN }, ctx)
 
     const generation = new CountingGeneration()
-    const planner = new RunPlanner({ compiler: compilerFor(MAPPING_JOIN), generation })
+    const planner = new RunPlanner({
+      vocabulary: vocabularyService([MAPPING_JOIN], [publishedVocabularyDefinition()]),
+      compiler: compilerFor(MAPPING_JOIN),
+      generation,
+    })
     const routed = await planner.route(
       {
         runId: GATEWAY_RUN,

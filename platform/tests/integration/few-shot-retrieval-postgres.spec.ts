@@ -32,6 +32,12 @@ import {
   HOME_ENERGY_EXAMPLE_COLLECTION_REF,
   buildHomeEnergyExampleSet,
 } from '@ontology/industry-pack-home-energy'
+import { MAPPING_JOIN } from '../fixtures/semantic-mapping'
+import {
+  VOCAB_DEFINITION_REF,
+  publishedVocabularyDefinition,
+  vocabularyService,
+} from '../fixtures/schema-vocabulary'
 import { startPostgresContainer } from './postgres-container'
 import type { PostgresContainer } from './postgres-container'
 
@@ -50,6 +56,8 @@ const SET = buildHomeEnergyExampleSet()
 const PV_EXAMPLE_ID = 'a0000000-0000-4000-8000-000000000002'
 
 const SCOPE_A: ScopeRef = { tenantId: TENANT_A, spaceId: SPACE_A }
+const PLANNER_VOCABULARY = vocabularyService([MAPPING_JOIN], [publishedVocabularyDefinition()])
+const PLAN_SOURCES = { mappingRefs: [MAPPING_JOIN.mappingRef], definitionRefs: [VOCAB_DEFINITION_REF] }
 
 function digestOf(value: string): string {
   return `sha256:${createHash('sha256').update(value, 'utf8').digest('hex')}`
@@ -281,7 +289,12 @@ describe('few-shot retrieval over the real BM25 index and PostgreSQL (LOCAL-076)
     })
     const examples: FewShotExampleProvider = retriever
     const generation = new RecordingGeneration()
-    const planner = new RunPlanner({ compiler: new DirectCompiler(), generation, examples })
+    const planner = new RunPlanner({
+      vocabulary: PLANNER_VOCABULARY,
+      compiler: new DirectCompiler(),
+      generation,
+      examples,
+    })
 
     const routed = await planner.route(
       {
@@ -289,6 +302,7 @@ describe('few-shot retrieval over the real BM25 index and PostgreSQL (LOCAL-076)
         question: '明天光伏发电预测如何？',
         context: { timeZone: 'Asia/Shanghai', siteRef: 'site-demo-a' },
         preferences: { route: 'auto', allowWeb: false },
+        ...PLAN_SOURCES,
       },
       CTX_A,
     )
@@ -302,7 +316,7 @@ describe('few-shot retrieval over the real BM25 index and PostgreSQL (LOCAL-076)
     expect(request.toolSchemas).toEqual(['data_query'])
     expect(request.role).toBe('sql_proposer')
     expect(request.outputLimit).toEqual({ maxTokens: 1024 })
-    const injected = request.messages[2]
+    const injected = request.messages[3]
     expect(injected?.role).toBe('user')
     expect(injected?.content).toContain('UNTRUSTED FEW-SHOT EXAMPLES')
     expect(injected?.content).toContain(PV_EXAMPLE_ID)

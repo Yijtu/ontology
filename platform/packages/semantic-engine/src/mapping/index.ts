@@ -3,6 +3,16 @@ export type { SemanticMappingErrorCode, SemanticMappingErrorOptions } from './er
 export { assertSafeIdentifier, buildMappingIndex, compileSemanticQuery } from './compile'
 export type { CompileOptions } from './compile'
 export { renderCompiledQuery } from './render'
+export {
+  DEFAULT_VOCABULARY_LIMITS,
+  SemanticSchemaVocabularyService,
+  buildSchemaVocabulary,
+} from './vocabulary'
+export type {
+  BuildSchemaVocabularyInput,
+  SemanticSchemaVocabularyDependencies,
+  VocabularyLimits,
+} from './vocabulary'
 export { InMemorySemanticMappingRegistry, defineSemanticMapping, semanticMappingDigest } from './registry'
 export { OntologyLookupService } from './lookup'
 export type {

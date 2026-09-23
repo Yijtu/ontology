@@ -15,6 +15,8 @@ import type {
   RouteSignals,
   RunPreferences,
   ScalarValue,
+  SchemaVocabulary,
+  SchemaVocabularyPort,
   SemanticAggregation,
   SemanticFilter,
   SemanticQueryCompilerPort,
@@ -29,6 +31,7 @@ import { WorkflowControllerError } from './errors'
 import type { QuestionRewriter } from './question-rewriting'
 import { renderFewShotExamplesData } from '../examples/few-shot-retriever'
 import type { FewShotExampleProvider } from '../examples/few-shot-retriever'
+import { renderVocabularyBlock, vocabularyEvidenceRef } from './vocabulary'
 
 /**
  * The run planner (SPEC D7.1, ADR-14).
@@ -54,11 +57,25 @@ export interface PlanRequest {
   /** A semantic query plan already proposed for the question (at most one model call). */
   readonly candidatePlan?: SemanticQueryPlan
   readonly signals?: RouteSignals
+  /**
+   * The exact confirmed-mapping / published-definition versions the run is bound to. They
+   * are resolved into the bounded schema vocabulary injected into the generation request.
+   * Absent/empty refs produce an explicit degradation, never a loose empty schema.
+   */
+  readonly mappingRefs?: readonly VersionRef[]
+  readonly definitionRefs?: readonly VersionRef[]
 }
 
 export interface RunPlannerDependencies {
   /** C3: resolves a semantic plan into one bounded backend query; starts no agent. */
   readonly compiler: SemanticQueryCompilerPort
+  /**
+   * The schema-construction stage. It builds the bounded vocabulary injected into the
+   * generation request from confirmed mappings and published definitions only. It is
+   * required: a generation proposal is never attempted without it, so the old
+   * loose-empty-schema path cannot be reached.
+   */
+  readonly vocabulary: SchemaVocabularyPort
   /** ADR-09: used only for genuine route ambiguity, never for a specified path. */
   readonly decision?: DecisionPort
   readonly decisionModelRef?: ModelRef
@@ -81,6 +98,15 @@ export interface RunPlannerDependencies {
 }
 
 const ROUTE_CHOICE_HASH = 'route-choice-v1'
+
+/** The application-side bound; the same small caps the engine defaults to. */
+const DEFAULT_VOCABULARY_LIMITS = { maxConcepts: 8, maxFields: 32 } as const
+
+/** The outcome of one bounded generation attempt. */
+type CandidateProposal =
+  | { readonly kind: 'proposed'; readonly plan: SemanticQueryPlan; readonly vocabularyRef: VersionRef }
+  | { readonly kind: 'degraded'; readonly reason: string }
+  | { readonly kind: 'unavailable' }
 
 export class RunPlanner {
   readonly #deps: RunPlannerDependencies
@@ -158,10 +184,31 @@ export class RunPlanner {
     }
 
     // Ordinary complex question: at most one proposal, compiled once.
-    const proposed = await this.#proposeCandidate(request, ctx)
-    if (proposed !== undefined) {
-      const plan = await this.#compileSingleQuery(request.runId, proposed, ctx)
-      return { route: 'small_plan', reason: 'one executable small plan by default', plan }
+    return this.#smallPlanRoute(request, ctx, 'one executable small plan by default')
+  }
+
+  /**
+   * Build one small plan from a single bounded generation proposal. The schema vocabulary
+   * is constructed first: when it is missing or empty the route degrades explicitly to a
+   * definition lookup instead of letting a loose empty schema silently produce SQL.
+   */
+  async #smallPlanRoute(
+    request: PlanRequest,
+    ctx: ToolContext,
+    reason: string,
+  ): Promise<RouteDecision> {
+    const proposal = await this.#proposeCandidate(request, ctx)
+    if (proposal.kind === 'proposed') {
+      const plan = await this.#compileSingleQuery(request.runId, proposal.plan, ctx)
+      return { route: 'small_plan', reason, plan, vocabularyRef: proposal.vocabularyRef }
+    }
+    if (proposal.kind === 'degraded') {
+      return {
+        route: 'small_plan',
+        reason: 'the semantic schema vocabulary is unavailable, so no SQL candidate is generated',
+        fallback: `vocabulary_gap:${proposal.reason}`,
+        plan: this.#defaultPlan(request),
+      }
     }
     return { route: 'small_plan', reason: 'bounded default plan', plan: this.#defaultPlan(request) }
   }
@@ -201,12 +248,7 @@ export class RunPlanner {
         ctx,
       )
       if (result.selectedOptionId === 'small_plan') {
-        const proposed = await this.#proposeCandidate(request, ctx)
-        const plan =
-          proposed === undefined
-            ? this.#defaultPlan(request)
-            : await this.#compileSingleQuery(request.runId, proposed, ctx)
-        return { route: 'small_plan', reason: 'the decision selected one small plan', plan }
+        return this.#smallPlanRoute(request, ctx, 'the decision selected one small plan')
       }
       return this.#clarify(request, 'the decision selected clarification')
     } catch {
@@ -217,22 +259,45 @@ export class RunPlanner {
     }
   }
 
+  /** Resolve the bounded vocabulary for this question from the run's confirmed sources. */
+  async #buildVocabulary(request: PlanRequest, ctx: ToolContext): Promise<SchemaVocabulary> {
+    return this.#deps.vocabulary.build(
+      {
+        question: request.question,
+        mappingRefs: request.mappingRefs ?? [],
+        definitionRefs: request.definitionRefs ?? [],
+        maxConcepts: DEFAULT_VOCABULARY_LIMITS.maxConcepts,
+        maxFields: DEFAULT_VOCABULARY_LIMITS.maxFields,
+      },
+      ctx,
+    )
+  }
+
   /**
    * One bounded generation proposal for an ordinary complex question. It is called at most
    * once and never per hop; the returned plan still compiles into a single query.
+   *
+   * The schema vocabulary is built first and injected as untrusted data. It is placed only
+   * in the message stream: the tool catalogue, model ref and output limit stay fixed, so no
+   * content in the vocabulary can widen authority (INV-07).
    */
-  async #proposeCandidate(
-    request: PlanRequest,
-    ctx: ToolContext,
-  ): Promise<SemanticQueryPlan | undefined> {
+  async #proposeCandidate(request: PlanRequest, ctx: ToolContext): Promise<CandidateProposal> {
     const generation = this.#deps.generation
-    if (generation === undefined) return undefined
+    if (generation === undefined) return { kind: 'unavailable' }
+    const vocabulary = await this.#buildVocabulary(request, ctx)
+    if (vocabulary.gaps.length > 0 || vocabulary.concepts.length === 0) {
+      return {
+        kind: 'degraded',
+        reason: vocabulary.gaps[0]?.code ?? 'EMPTY_VOCABULARY',
+      }
+    }
     const messages: GenerationMessage[] = [
       {
         role: 'system',
         content:
-          'Propose at most one bounded semantic data_query plan. Return it as a single tool call; do not answer the question.',
+          'Propose at most one bounded semantic data_query plan using only the supplied schema vocabulary. Return it as a single tool call; do not answer the question.',
       },
+      { role: 'system', content: renderVocabularyBlock(vocabulary) },
       { role: 'user', content: request.question },
     ]
     const examples = this.#deps.examples
@@ -248,7 +313,7 @@ export class RunPlanner {
     const generationRequest: GenerationRequest = {
       role: 'sql_proposer',
       messages,
-      evidenceRefs: [],
+      evidenceRefs: [vocabularyEvidenceRef(vocabulary)],
       toolSchemas: ['data_query'],
       modelRef: this.#deps.planModelRef ?? { modelId: 'plan-proposer', version: '1.0.0' },
       outputLimit: { maxTokens: 1024 },
@@ -259,12 +324,14 @@ export class RunPlanner {
         if (event.type === 'tool_call_delta' && event.toolId === 'data_query') {
           json += event.argumentsDelta
         }
-        if (event.type === 'error') return undefined
+        if (event.type === 'error') return { kind: 'unavailable' }
       }
     } catch {
-      return undefined
+      return { kind: 'unavailable' }
     }
-    return parseSemanticQueryPlan(json)
+    const plan = parseSemanticQueryPlan(json)
+    if (plan === undefined) return { kind: 'unavailable' }
+    return { kind: 'proposed', plan, vocabularyRef: vocabulary.vocabularyRef }
   }
 
   async #compileSingleQuery(

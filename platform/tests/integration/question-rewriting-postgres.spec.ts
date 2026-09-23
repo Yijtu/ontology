@@ -20,6 +20,12 @@ import type {
   ToolContext,
 } from '@ontology/contracts'
 import { BoundedQuestionRewriter, RunPlanner } from '@ontology/application'
+import { MAPPING_JOIN } from '../fixtures/semantic-mapping'
+import {
+  VOCAB_DEFINITION_REF,
+  publishedVocabularyDefinition,
+  vocabularyService,
+} from '../fixtures/schema-vocabulary'
 import { CountingCompiler, PLANNING_RUN, multiHopPlanJson } from '../unit/workflow-planning-fixtures'
 import { gatewayContext } from '../unit/tool-gateway-fixtures'
 import { SCOPE_A } from '../unit/profile-resolver-fixtures'
@@ -42,6 +48,8 @@ const CTX = gatewayContext({ runId: PLANNING_RUN })
 const CONTEXT: ConfirmedContext = { timeZone: 'Asia/Shanghai', siteRef: 'site-demo-a' }
 const PREFERENCES: RunPreferences = { route: 'auto', allowWeb: false }
 const MODEL_REF = { modelId: 'rewrite-model', version: '1.0.0' }
+const PLANNER_VOCABULARY = vocabularyService([MAPPING_JOIN], [publishedVocabularyDefinition()])
+const PLAN_SOURCES = { mappingRefs: [MAPPING_JOIN.mappingRef], definitionRefs: [VOCAB_DEFINITION_REF] }
 const ORIGINAL = 'which meters used the most energy and which site do they belong to'
 const REWRITTEN = 'List the meters with the highest total energy_kwh and their site names'
 
@@ -126,7 +134,7 @@ class BudgetedGeneration implements GenerationPort {
 }
 
 function planRequest(question = ORIGINAL) {
-  return { runId: PLANNING_RUN, question, context: CONTEXT, preferences: PREFERENCES }
+  return { runId: PLANNING_RUN, question, context: CONTEXT, preferences: PREFERENCES, ...PLAN_SOURCES }
 }
 
 async function openLedger(ledgerId: string, maxModelTokens: number): Promise<void> {
@@ -208,7 +216,12 @@ describe('question rewriting against a real PostgreSQL budget ledger', () => {
       ],
     ])
     const rewriter = new BoundedQuestionRewriter({ generation, modelRef: MODEL_REF, maxAttempts: 2 })
-    const planner = new RunPlanner({ compiler: new CountingCompiler(), generation, rewriter })
+    const planner = new RunPlanner({
+      vocabulary: PLANNER_VOCABULARY,
+      compiler: new CountingCompiler(),
+      generation,
+      rewriter,
+    })
 
     const decision = await planner.route(planRequest(), CTX)
 
@@ -245,7 +258,12 @@ describe('question rewriting against a real PostgreSQL budget ledger', () => {
       [clarifyText('the billing period is not specified'), completed()],
     ])
     const rewriter = new BoundedQuestionRewriter({ generation, modelRef: MODEL_REF })
-    const planner = new RunPlanner({ compiler: new CountingCompiler(), generation, rewriter })
+    const planner = new RunPlanner({
+      vocabulary: PLANNER_VOCABULARY,
+      compiler: new CountingCompiler(),
+      generation,
+      rewriter,
+    })
 
     const decision = await planner.route(planRequest('compare the energy strategies'), CTX)
 
