@@ -7,6 +7,7 @@ import {
   InMemoryIdentityDecisionStore,
   InMemoryMaterializationStore,
   InMemorySemanticPublicationStore,
+  PublishedRelationNavigator,
   PublishedSemanticSource,
   SemanticPublicationService,
 } from '@ontology/semantic-engine'
@@ -119,6 +120,31 @@ async function seedApprovedEntity(): Promise<{
 }
 
 describe('semantic publication service (in-memory)', () => {
+  it('navigates two confirmed relation hops and returns a gap for an absent path', async () => {
+    const first = await seedApprovedEntity()
+    const middle = await seedApprovedEntity()
+    const last = await seedApprovedEntity()
+    const firstRelationId = randomUUID()
+    const secondRelationId = randomUUID()
+    await insert(relationFor({ candidateId: firstRelationId, idempotencyKey: idempotencyKey(), fromCandidateId: first.candidateId, toCandidateId: middle.candidateId }))
+    await insert(relationFor({ candidateId: secondRelationId, idempotencyKey: idempotencyKey(), fromCandidateId: middle.candidateId, toCandidateId: last.candidateId }))
+    await approve(firstRelationId)
+    await approve(secondRelationId)
+    await publish([
+      { candidateId: first.candidateId, kind: 'entity' }, { candidateId: middle.candidateId, kind: 'entity' },
+      { candidateId: last.candidateId, kind: 'entity' },
+      { candidateId: firstRelationId, kind: 'relation' }, { candidateId: secondRelationId, kind: 'relation' },
+    ], 'pub-two-hop')
+    const navigator = new PublishedRelationNavigator({ publications: publicationStore, identity: identityStore, definitionRef: PUBLICATION_DEFINITION_REF, allowedRelationIds: ['feeds'], now: () => Date.parse('2026-09-21T00:05:00Z') })
+    const found = await navigator.navigate({ startEntityId: first.entityId, relationIds: ['feeds', 'feeds'], validAt: '2026-09-22T00:00:00Z' }, ctx)
+    expect(found.completeness).toBe('complete')
+    expect(found.paths.map((path) => [path.endEntityId, path.hops.map((hop) => hop.statementId)])).toEqual([[last.entityId, [firstRelationId, secondRelationId]]])
+    const absent = await navigator.navigate({ startEntityId: last.entityId, relationIds: ['feeds'], validAt: '2026-09-22T00:00:00Z' }, ctx)
+    expect(absent.paths).toEqual([])
+    expect(absent.gaps).toContain('NO_CONFIRMED_PATH')
+    await expect(navigator.navigate({ startEntityId: first.entityId, relationIds: ['unregistered'], validAt: '2026-09-22T00:00:00Z' }, ctx)).rejects.toMatchObject({ code: 'FORBIDDEN' })
+  })
+
   it('publishes a relation only after both endpoint candidates are approved and entity-bound', async () => {
     const from = await seedApprovedEntity()
     const to = await seedApprovedEntity()
@@ -136,11 +162,22 @@ describe('semantic publication service (in-memory)', () => {
       kind: 'relation', predicate: 'feeds', subjectEntityId: from.entityId,
       value: { fromEntityId: from.entityId, toEntityId: to.entityId },
     })
+    const navigator = new PublishedRelationNavigator({ publications: publicationStore, identity: identityStore, definitionRef: PUBLICATION_DEFINITION_REF, allowedRelationIds: ['feeds'], now: () => Date.parse('2026-09-21T00:05:00Z') })
+    const path = await navigator.navigate({ startEntityId: from.entityId, relationIds: ['feeds'], validAt: '2026-09-22T00:00:00Z' }, ctx)
+    expect(path.completeness).toBe('complete')
+    expect(path.paths).toHaveLength(1)
+    expect(path.paths[0]?.endEntityId).toBe(to.entityId)
+    expect(path.paths[0]?.hops[0]?.statementId).toBe(relationId)
+
+    await identityService.decide({ candidateId: from.candidateId, kind: 'split', expectedRevision: '2', targetEntityId: from.entityId, justification: 'source identity correction' }, ctx)
+    const afterSplit = await navigator.navigate({ startEntityId: from.entityId, relationIds: ['feeds'], validAt: '2026-09-22T00:00:00Z' }, ctx)
+    expect(afterSplit.paths).toEqual([])
+    expect(afterSplit.gaps).toContain('RELATION_IDENTITY_STALE')
 
     const unresolvedId = randomUUID()
     await insert(relationFor({ candidateId: unresolvedId, idempotencyKey: idempotencyKey(), fromCandidateId: from.candidateId, toCandidateId: randomUUID() }))
     await approve(unresolvedId)
-    await expect(publish([{ candidateId: unresolvedId, kind: 'relation' }], 'pub-unresolved', '1')).rejects.toMatchObject({ code: 'CANDIDATE_NOT_FOUND' })
+    await expect(publish([{ candidateId: unresolvedId, kind: 'relation' }], 'pub-unresolved', '1')).rejects.toMatchObject({ code: 'IDENTITY_UNRESOLVED' })
   })
   it('publishes only approved candidates and keeps the candidate and published read views separate', async () => {
     const first = await seedApprovedEntity()
