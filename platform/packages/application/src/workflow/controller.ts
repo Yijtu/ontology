@@ -5,6 +5,7 @@ import type {
   BudgetSettlementStatus,
   ConfirmedContext,
   DraftWriterResult,
+  PlatformError,
   PublicationGrant,
   PublishedAnswer,
   ResourceRef,
@@ -25,6 +26,7 @@ import type {
 } from '@ontology/contracts'
 import { DEFAULT_WORKFLOW_LIMITS } from '@ontology/contracts'
 import { inputManifestDigest, scenarioManifestHash } from './canonical'
+import { sha256DigestOf } from '../profiles/canonical'
 import { PublicationRejectedError, WorkflowControllerError } from './errors'
 import type {
   CancelWorkflowInput,
@@ -219,10 +221,14 @@ export class WorkflowController {
         case 'created':
           await this.#advance(run, 'preflight', {}, ctx)
           continue
-        case 'preflight':
+        case 'preflight': {
+          // The bounded rewrite runs before a runtime is selected or any collection starts.
+          // A clarify/failure stops the drive; a success is persisted on the run record.
+          if (await this.#rewriteQuestion(run, ctx)) return this.#view(runId, ctx)
           await this.#selectRuntime(run.runId, ctx, run)
           await this.#advance(run, 'collecting', {}, ctx)
           continue
+        }
         case 'collecting':
           collectionRounds += 1
           if (collectionRounds > this.#maxDraftAttempts + 2) {
@@ -254,6 +260,91 @@ export class WorkflowController {
     )
   }
 
+  /**
+   * The bounded question-rewriting pre-step (LOCAL-074/ADR-14), wired into the actual run
+   * path. It runs exactly once, during preflight, before a runtime is selected or any
+   * collection starts:
+   *
+   * - a successful rewrite is persisted on the durable run record, so the original →
+   *   rewrite → generated-SQL chain is replayable per run;
+   * - an ambiguity takes the existing `clarification_requested` path and waits for the user,
+   *   never guessing a value;
+   * - a failure fails the run explicitly with the classified error, never passing the
+   *   original question through as if it had been rewritten.
+   *
+   * It returns `true` when the run must stop driving (`awaiting_input` or `failed`).
+   */
+  async #rewriteQuestion(run: RunRecord, ctx: ToolContext): Promise<boolean> {
+    const rewriter = this.#deps.rewriter
+    if (rewriter === undefined) return false
+    const outcome = await rewriter.rewrite(
+      {
+        runId: run.runId,
+        question: run.question,
+        context: toConfirmedContext(run),
+        evidenceRefs: [],
+      },
+      ctx,
+    )
+    if (outcome.status === 'rewritten') {
+      await this.#deps.runs.recordQuestionRewrite(run.runId, outcome.rewrite, ctx)
+      return false
+    }
+    if (outcome.status === 'clarify') {
+      await this.#deps.runs.recordRuntimeEvent(
+        run.runId,
+        this.#clarificationRequestedEvent(run, outcome.reason),
+        ctx,
+      )
+      return true
+    }
+    await this.#deps.runs.recordRuntimeEvent(
+      run.runId,
+      this.#rewriteFailedEvent(run, outcome.error),
+      ctx,
+    )
+    return true
+  }
+
+  /**
+   * Synthesise the runtime `clarification_requested` event for a rewrite ambiguity. It reuses
+   * the existing projection (awaiting_input + `clarification.required`), so the run waits on
+   * the user through the same path a runtime clarification uses. The durable ledger allocates
+   * the real monotonic sequence when the event is recorded; the union's `sequence` is a
+   * placeholder here and is never persisted as the public id.
+   */
+  #clarificationRequestedEvent(run: RunRecord, reason: string): RuntimeEvent {
+    return {
+      type: 'clarification_requested',
+      runId: run.runId,
+      eventId: this.#newId(),
+      sequence: 0,
+      occurredAt: this.#now(),
+      clarificationId: this.#newId(),
+      questionRef: {
+        id: `rewrite-clarify:${run.runId}`,
+        version: '1.0.0',
+        digest: sha256DigestOf(reason),
+      },
+      questionType: 'noul',
+    }
+  }
+
+  /**
+   * Synthesise the runtime `failed` event for a rewrite failure. The classified error is
+   * carried unchanged; the original question is never routed.
+   */
+  #rewriteFailedEvent(run: RunRecord, error: PlatformError): RuntimeEvent {
+    return {
+      type: 'failed',
+      runId: run.runId,
+      eventId: this.#newId(),
+      sequence: 0,
+      occurredAt: this.#now(),
+      error,
+    }
+  }
+
   async #collect(runId: Uuid, ctx: ToolContext): Promise<void> {
     const manifest = await this.#requireRunManifest(runId, ctx)
     const run = await this.#deps.phase.requireRun(runId, ctx)
@@ -266,7 +357,10 @@ export class WorkflowController {
       const input: RuntimeInput = {
         runId,
         resolvedProfileRef: manifest.resolvedProfileRef,
-        question: run.question,
+        // Once a rewrite step has run, the runtime generates from the disambiguated question;
+        // the original stays immutable on the run record and the trace links the two. Without
+        // a rewrite the original question is used unchanged.
+        question: run.questionRewrite?.rewrittenQuestion ?? run.question,
         confirmedContext: toConfirmedContext(run),
         evidenceRefs: evidenceRefsOf(inputManifest),
         deficits: [],

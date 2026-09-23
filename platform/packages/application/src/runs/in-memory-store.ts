@@ -3,6 +3,7 @@ import type {
   AbandonedAttemptRecord,
   ClarificationResponseRecord,
   NewRunRecord,
+  QuestionRewrite,
   RevisionString,
   RunEventInput,
   RunEventRecord,
@@ -206,6 +207,26 @@ export class InMemoryRunStore implements RunStore {
         ? list
         : list.filter((event) => Number(event.sequence) > Number(afterSequence))
     return filtered.map((event) => clone(event))
+  }
+
+  async recordQuestionRewrite(
+    scopeRef: ScopeRef,
+    runId: Uuid,
+    rewrite: QuestionRewrite,
+    ctx: ToolContext,
+  ): Promise<void> {
+    resolveStoreScope(scopeRef, ctx)
+    const key = runKey(scopeRef, runId)
+    const run = this.#runs.get(key)
+    if (run === undefined) {
+      throw new RunStoreError('RUN_NOT_FOUND', `run ${runId} does not exist`)
+    }
+    // Written once and never overwritten: the trace is immutable metadata, not a state
+    // transition, so it never bumps the revision a concurrent compare-and-set depends on.
+    if (run.questionRewrite === undefined) {
+      run.questionRewrite = clone(rewrite)
+      this.#runs.set(key, run)
+    }
   }
 
   async saveCheckpoint(

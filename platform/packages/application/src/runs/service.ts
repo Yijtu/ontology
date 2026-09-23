@@ -3,6 +3,7 @@ import type {
   AbandonedAttemptRecord,
   ControlAppendEventRequest,
   ControlRepository,
+  QuestionRewrite,
   RevisionString,
   RunInsertResult,
   RunRecord,
@@ -116,6 +117,7 @@ function toView(run: RunRecord, checkpoint: RuntimeCheckpointRef | undefined): R
     ...(run.pendingClarificationId === undefined
       ? {}
       : { pendingClarificationId: run.pendingClarificationId }),
+    ...(run.questionRewrite === undefined ? {} : { questionRewrite: run.questionRewrite }),
     ...(checkpoint === undefined ? {} : { checkpoint }),
   }
 }
@@ -647,6 +649,33 @@ export class RunService {
       revision: updated.revision,
       eventId: event.eventId,
       ...(sequence === undefined ? {} : { sequence }),
+    }
+  }
+
+  /**
+   * Persist the bounded question-rewrite trace onto the durable run record (LOCAL-080). The
+   * controller calls this once, during preflight, before the collection loop starts. It is
+   * written once and never overwritten, so a replay always sees the rewrite that produced the
+   * routed question. A run that clarified or failed never records a trace — absence means no
+   * successful rewrite, never that a failed rewrite was silently passed through.
+   */
+  async recordQuestionRewrite(
+    runId: Uuid,
+    rewrite: QuestionRewrite,
+    ctx: ToolContext,
+  ): Promise<void> {
+    const scopeRef = scopeOf(ctx)
+    if (rewrite.runId !== runId) {
+      throw new RunServiceError(
+        'INVALID_ARGUMENT',
+        `question rewrite ${rewrite.rewriteId} names run ${rewrite.runId}, not ${runId}`,
+      )
+    }
+    await this.#requireRun(scopeRef, runId, ctx)
+    try {
+      await this.#store.recordQuestionRewrite(scopeRef, runId, rewrite, ctx)
+    } catch (error) {
+      mapStoreError(error)
     }
   }
 
