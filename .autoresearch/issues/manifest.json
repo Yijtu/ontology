@@ -2642,8 +2642,8 @@
       "file": "issue-071-nl2sql-pipeline-alignment.md",
       "type": "backend",
       "priority": "medium",
-      "state": "planned",
-      "readiness": "waiting_dependencies",
+      "state": "done",
+      "readiness": "done",
       "phase": "",
       "dependencies": [
         "LOCAL-054"
@@ -2661,7 +2661,7 @@
       "external_gates": [],
       "origin": "user-requested",
       "execution_mode": "post-delivery-verification",
-      "github_issue": null
+      "github_issue": 150
     },
     {
       "id": "LOCAL-072",

@@ -4,8 +4,8 @@ number: 71
 title: "对齐 NL2SQL 标准流水线（改写/召回/裁剪/Schema/示例/试执行/反馈）"
 type: backend
 priority: medium
-state: planned
-readiness: waiting_dependencies
+state: done
+readiness: done
 dependencies: [LOCAL-054]
 user_stories: [US-020]
 design_tasks: []
@@ -105,3 +105,31 @@ SPEC Reference: C4/C5、D7；FR-25、FR-26、FR-29。
 ## 需求追踪
 
 US-020（direct 与语义辅助 Text2SQL 路径）；FR-25、FR-26、FR-29。
+
+## 核对结论（LOCAL-071 执行记录）
+
+只读审计已完成，基线 `main` @ `32fc8b1`。完整报告（含逐项 `file:line` 证据、补齐建议、SPEC 冲突点、未验证项与复现命令）：[`platform/docs/local-071-nl2sql-pipeline-alignment.md`](../../platform/docs/local-071-nl2sql-pipeline-alignment.md)。
+
+10 环节结论：
+
+| # | 环节 | 结论 |
+|---|---|---|
+| P | 用户问题 | 已实现 |
+| 1 | 问题改写 | 缺失 |
+| 2 | 表召回 + 字段裁剪 | 部分实现（形态不同：确认 mapping 解析 + 投影级裁剪，无按问题检索） |
+| 3 | Schema 构造（动态注入） | 缺失 |
+| 4 | Few-shot 示例检索 | 缺失 |
+| 5 | LLM 生成 SQL | 部分实现（模型产出语义计划，平台编译成 SQL；无 SQL 专用 prompt/示例/schema） |
+| 6 | 语法 / Schema / 权限 / 安全校验 | 已实现（AST + 白名单 + 参数绑定 + 只读角色；FR-26/C3） |
+| 7 | 试执行（dry-run/EXPLAIN） | 缺失（且 `explain` 被只读子集禁止，属 SPEC 冲突点） |
+| 8 | 失败回传错误修正 | 部分实现（动态 runtime 内回灌；确定性路径遇错即停；核验修复有界但未回传失败项） |
+| 9 | 执行并返回结果 | 已实现（快照 + 证据闭环） |
+| 10 | 收集反馈 | 缺失 |
+
+主要缺口最小补齐建议（不扩大 core、不新增动态工具、不放宽校验）：问题改写归 `application/workflow/planning.ts`（复用注入的 `GenerationPort`）；召回/裁剪与 Schema 构造归 `semantic-engine`（只从确认 mapping 生成候选 ID 词表并注入 prompt）；few-shot 复用 `search-bm25`；试执行仅前置现有 `StructuredQueryPort.validate`，**不得**引入 EXPLAIN；反馈收集经 `ControlRepository`/`control-postgres` append-only 记录。
+
+SPEC 冲突点：EXPLAIN 试执行 vs 只读子集（`sql-validator.ts:124`）；新增召回/Schema 工具 vs 固定四工具（C4/FR-7）；模型选择标识符 vs C3 mapping-owned；放宽 SQL 校验 vs FR-26；失败项回传草稿模型需契约版本化（`DraftWriterRequest`）；反馈影响发布/权限 vs INV-09。
+
+验证：`pnpm run lint` 通过；`pnpm run typecheck` 通过；`pnpm run test` 通过（157 files / 1618 tests）。本卡仅 docs-only 变更。
+
+未验证：真实模型质量/改写收益/few-shot 收益（无授权端点，CI 用替身）；HA/实机（LOCAL-052/053）；EXPLAIN 真实后端可行性（不存在且不应引入）。
