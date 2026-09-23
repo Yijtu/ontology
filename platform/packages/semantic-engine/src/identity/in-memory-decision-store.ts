@@ -105,6 +105,19 @@ export class InMemoryIdentityDecisionStore implements IdentityDecisionStore {
         `candidate ${input.draft.candidateId} is at revision ${String(head)}, not ${input.expectedRevision}`,
       )
     }
+    let entityToAdvance: IdentityEntityRecord | undefined
+    if (input.expectedEntityRevision !== undefined) {
+      const entityId = input.draft.targetEntityId
+      const entity = entityId === undefined ? undefined : this.#scoped(this.#entities, scopeRef).get(entityId)
+      if (entity === undefined || entity.revision !== input.expectedEntityRevision) {
+        throw new IdentityDecisionStoreError('REVISION_CONFLICT', `entity ${entityId ?? 'missing'} is no longer at revision ${input.expectedEntityRevision}`)
+      }
+      entityToAdvance = {
+        ...entity,
+        revision: String(Number(entity.revision) + 1),
+        updatedAt: input.draft.recordedAt,
+      }
+    }
     const revision = String(head + 1)
     const revisionNumber = head + 1
 
@@ -146,6 +159,7 @@ export class InMemoryIdentityDecisionStore implements IdentityDecisionStore {
     const history = byCandidate.get(record.candidateId) ?? []
     history.push(clone(record))
     byCandidate.set(record.candidateId, history)
+    if (entityToAdvance !== undefined) this.#scoped(this.#entities, scopeRef).set(entityToAdvance.entityId, entityToAdvance)
     heads.set(record.candidateId, revisionNumber)
     return clone(record)
   }
@@ -185,7 +199,7 @@ export class InMemoryIdentityDecisionStore implements IdentityDecisionStore {
     records.sort((left, right) =>
       left.recordedAt < right.recordedAt ? -1 : left.recordedAt > right.recordedAt ? 1 : 0,
     )
-    return records.map(clone)
+    return (filter.limit === undefined ? records : records.slice(0, filter.limit)).map(clone)
   }
 
   async listLinkConstraints(

@@ -62,8 +62,10 @@ export interface IdentityEntityRecord {
 
 /**
  * The strong identity a `match` may rely on. A `native_id` is a deterministic source
- * identifier; a `confirmed_alias` is an alias a human already confirmed. Either one is
- * sufficient authority to merge without a free-text justification.
+ * identifier; a `confirmed_alias` is an alias a human already confirmed. The decision
+ * service checks native ids against both candidate and target cluster keys. An alias
+ * needs independently available confirmation; until then a reviewer justification is
+ * required and the alias is audit evidence, not automatic merge authority.
  */
 export interface IdentityStrongIdentity {
   readonly kind: 'native_id' | 'confirmed_alias'
@@ -170,6 +172,8 @@ export interface IdentityAssertionFilter {
   readonly entityId?: string
   readonly candidateId?: Uuid
   readonly openOnly?: boolean
+  /** Bounded read for consistency checks; a caller must reject an incomplete cluster. */
+  readonly limit?: number
 }
 
 export interface IdentityDecisionCloseAssertion {
@@ -186,6 +190,8 @@ export interface IdentityDecisionCloseAssertion {
 export interface AppendIdentityDecisionInput {
   /** The revision the caller last read; `0` means "no decision yet". */
   readonly expectedRevision: RevisionString
+  /** Pins the target cluster while membership or a cannot-link changes. */
+  readonly expectedEntityRevision?: RevisionString
   readonly draft: IdentityDecisionDraft
   /** Insert or advance the entity (used by `create_pending`). */
   readonly entity?: IdentityEntityRecord

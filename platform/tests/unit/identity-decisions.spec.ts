@@ -3,7 +3,7 @@ import { describe, expect, it } from 'vitest'
 import { InMemoryCandidateStore, InMemoryIndustrySchemaSource } from '@ontology/application'
 import { IdentityDecisionService, InMemoryIdentityDecisionStore } from '@ontology/semantic-engine'
 import type { IdentityDecisionRequest } from '@ontology/semantic-engine'
-import type { EntityCandidate, IndustrySchema, ScopeRef, VersionRef } from '@ontology/contracts'
+import type { EntityCandidate, IdentityDecisionDraft, IndustrySchema, ScopeRef, VersionRef } from '@ontology/contracts'
 import { entityCandidate, IDENTITY_DEFINITION_REF } from './identity-fixtures'
 import { toolContext } from './component-registry-fixtures'
 
@@ -247,6 +247,85 @@ describe('IdentityDecisionService unit behaviour', () => {
         strongIdentity: { kind: 'native_id', value: 'DEV-1' },
       }),
     ).rejects.toMatchObject({ code: 'IDENTITY_CONFLICT', httpStatus: 409 })
+  })
+
+  it('requires a split before rejecting a currently merged candidate against its own entity', async () => {
+    const { service, candidates, store } = await harness()
+    const candidate = deviceCandidate()
+    await seed(candidates, candidate)
+    const created = await decide(service, candidate, { kind: 'create_pending' })
+    const entityId = created.targetEntityId
+    if (entityId === undefined) throw new Error('expected a created entity')
+    await decide(service, candidate, {
+      kind: 'match', expectedRevision: '1', targetEntityId: entityId,
+      strongIdentity: { kind: 'native_id', value: 'DEV-1' },
+    })
+
+    await expect(decide(service, candidate, {
+      kind: 'reject', expectedRevision: '2', targetEntityId: entityId,
+    })).rejects.toMatchObject({ code: 'IDENTITY_CONFLICT', httpStatus: 409 })
+    expect(await store.listAssertions(SCOPE, { candidateId: candidate.candidateId, openOnly: true }, CTX)).toHaveLength(1)
+    expect(await store.listLinkConstraints(SCOPE, candidate.candidateId, CTX)).toHaveLength(0)
+  })
+
+  it('checks native identity against both the candidate and the target cluster', async () => {
+    const { service, candidates, store } = await harness()
+    const anchor = deviceCandidate()
+    await seed(candidates, anchor)
+    const created = await decide(service, anchor, { kind: 'create_pending' })
+    const entityId = created.targetEntityId
+    if (entityId === undefined) throw new Error('expected a created entity')
+    await decide(service, anchor, { kind: 'match', expectedRevision: '1', targetEntityId: entityId, strongIdentity: { kind: 'native_id', value: 'DEV-1' } })
+
+    const different = deviceCandidate({ attributes: [{ attributeId: 'device_native_id', value: 'DEV-2' }] })
+    await seed(candidates, different)
+    await expect(decide(service, different, { kind: 'match', targetEntityId: entityId, strongIdentity: { kind: 'native_id', value: 'DEV-2' } })).rejects.toMatchObject({ code: 'IDENTITY_CONFLICT' })
+    await expect(decide(service, different, { kind: 'match', targetEntityId: entityId, justification: 'reviewer believes these are the same' })).rejects.toMatchObject({ code: 'IDENTITY_CONFLICT' })
+    await expect(decide(service, different, { kind: 'match', targetEntityId: entityId, strongIdentity: { kind: 'native_id', value: 'DEV-1' } })).rejects.toMatchObject({ code: 'IDENTITY_CONFLICT' })
+    expect(await store.listAssertions(SCOPE, { entityId, openOnly: true }, CTX)).toHaveLength(1)
+
+    const same = deviceCandidate()
+    await seed(candidates, same)
+    const matched = await decide(service, same, { kind: 'match', targetEntityId: entityId, strongIdentity: { kind: 'native_id', value: 'DEV-1' } })
+    expect(matched.kind).toBe('match')
+    expect(await store.listAssertions(SCOPE, { entityId, openOnly: true }, CTX)).toHaveLength(2)
+  })
+
+  it('does not treat an unverified alias or a low score as merge authority', async () => {
+    const { service, candidates } = await harness()
+    const anchor = deviceCandidate()
+    await seed(candidates, anchor)
+    const created = await decide(service, anchor, { kind: 'create_pending' })
+    const entityId = created.targetEntityId
+    if (entityId === undefined) throw new Error('expected a created entity')
+    const next = deviceCandidate()
+    await seed(candidates, next)
+    await expect(decide(service, next, { kind: 'match', targetEntityId: entityId, strongIdentity: { kind: 'confirmed_alias', value: 'Charger One' } })).rejects.toMatchObject({ code: 'IDENTITY_EVIDENCE_REQUIRED' })
+    await expect(decide(service, next, {
+      kind: 'match', targetEntityId: entityId, justification: 'reviewed source identity',
+      scoreEvidence: { score: 0.1, backendRef: { id: 'similarity', version: '1.0.0', digest: `sha256:${'1'.repeat(64)}` } },
+    })).rejects.toMatchObject({ code: 'IDENTITY_SCORE_BELOW_THRESHOLD' })
+  })
+
+  it('uses an entity revision to reject a stale cluster update from another candidate', async () => {
+    const { service, candidates, store } = await harness()
+    const candidate = deviceCandidate()
+    await seed(candidates, candidate)
+    const created = await decide(service, candidate, { kind: 'create_pending' })
+    const entityId = created.targetEntityId
+    if (entityId === undefined) throw new Error('expected a created entity')
+    await decide(service, candidate, { kind: 'match', expectedRevision: '1', targetEntityId: entityId, strongIdentity: { kind: 'native_id', value: 'DEV-1' } })
+    expect((await store.getEntity(SCOPE, entityId, CTX))?.revision).toBe('2')
+
+    const other = deviceCandidate()
+    await seed(candidates, other)
+    const draft: IdentityDecisionDraft = {
+      decisionId: randomUUID(), candidateId: other.candidateId, objectId: 'device', identityScopeId: 'device_identity',
+      kind: 'clarify', targetEntityId: entityId, evidenceRefs: [], recordedAt: '2026-09-22T00:00:00Z', actor: 'reviewer',
+    }
+    await expect(store.appendDecision(SCOPE, { expectedRevision: '0', expectedEntityRevision: '1', draft }, CTX)).rejects.toMatchObject({ code: 'REVISION_CONFLICT' })
+    expect(await store.latestRevision(SCOPE, other.candidateId, CTX)).toBe('0')
+    expect((await store.getEntity(SCOPE, entityId, CTX))?.revision).toBe('2')
   })
 
   it('never merges a device and a sensor that share a display name', async () => {
