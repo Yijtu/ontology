@@ -8,6 +8,9 @@ import { DataQueryHandler } from '@ontology/tool-services'
 import type { DataQueryComputeConfig, ToolHandler } from '@ontology/tool-services'
 import type { ControlPostgresDatabase } from '@ontology/adapter-control-postgres'
 import type { LocalImmutableBlobStore } from '@ontology/adapter-blob-local'
+import { ENERGY_OPERATION_INPUT_MEDIA_TYPE, decodeEnergyOperationInput, encodeEnergyOperationInput } from '@ontology/extension-home-energy'
+import { buildSyntheticScenarioInput } from './home-energy-scenario'
+import { createRequestToolContext } from '../http/context'
 import type { LocalStructuredProfiles } from './registered-source-profiles'
 import type { LocalTransportProfile } from './registered-transport-profile'
 import type { LocalOperatorSqlProfile } from './registered-operator-sql'
@@ -44,8 +47,13 @@ export interface LocalProductDeployment {
   readonly operatorActions: ReadonlyMap<string, readonly OperatorActionDescriptor[]>
   readonly operatorSql: LocalOperatorSqlProfile | undefined
   close(): Promise<void>
-  prepareTaskContext(profileRef: ProfileRef, context: import('@ontology/contracts').CreateRunContext): import('@ontology/contracts').CreateRunContext
+  prepareTaskContext(profileRef: ProfileRef, context: import('@ontology/contracts').CreateRunContext): Promise<import('@ontology/contracts').CreateRunContext>
   operatorImport(profileRef: ProfileRef, input: { readonly title: string; readonly content: string; readonly mediaType?: 'text/plain' | 'text/markdown' }, ctx: import('@ontology/contracts').ToolContext): Promise<LocalDocumentImportResult>
+}
+
+/** An operator-supplied task/scenario input failed preflight; backend read failures stay unexpected. */
+export class LocalTaskContextError extends Error {
+  constructor(message: string) { super(message); this.name = 'LocalTaskContextError' }
 }
 
 function versionProfile(profile: ResolvedProfile, tasks: readonly RegisteredQueryTask[]): ResolvedProfile {
@@ -69,6 +77,7 @@ export async function createLocalProductDeployment(input: {
   readonly validator: import('@ontology/tool-services').ToolSchemaValidator
   readonly compute: DataQueryComputeConfig
   readonly energy: LocalStructuredProfiles
+  readonly getVirtualState: (ctx: import('@ontology/contracts').ToolContext) => Promise<import('./energy-simulation').VirtualBatteryStateView>
   readonly transport: LocalTransportProfile
   readonly operatorSql?: LocalOperatorSqlProfile
 }): Promise<LocalProductDeployment> {
@@ -80,7 +89,7 @@ export async function createLocalProductDeployment(input: {
   const wide = input.energy.profiles.find((profile) => profile.profileRef.id === 'home-energy-demo-wide')
   if (wide === undefined) throw new Error('the wide energy source profile is not registered')
   const energySourceProfiles = [...input.energy.profiles, { ...wide, profileRef: { id: 'home-energy-demo', version: wide.profileRef.version } }]
-  const energyTasks = createHomeEnergyTasks({ profiles: energySourceProfiles, artifacts: input.artifacts, evidence: input.evidence, blobStore: input.blobs })
+  const energyTasks = createHomeEnergyTasks({ profiles: energySourceProfiles, artifacts: input.artifacts, evidence: input.evidence, blobStore: input.blobs, getVirtualState: input.getVirtualState })
   const transportTask = createTransportInspectionTask({ source: input.transport, evidence: input.evidence, artifacts: input.artifacts, blobStore: input.blobs })
   const operatorSqlTask = input.operatorSql === undefined ? undefined : createTransportInspectionTask({ source: input.operatorSql, evidence: input.evidence, artifacts: input.artifacts, blobStore: input.blobs })
   const ontology = input.operatorSql === undefined ? undefined : createPublishedOntologyCapability({
@@ -168,7 +177,56 @@ export async function createLocalProductDeployment(input: {
   const operatorActions = new Map<string, readonly OperatorActionDescriptor[]>([[documentProfile.profileRef.id, [documentImportAction]], [candidateDocumentProfile.profileRef.id, [candidateDocumentImportAction]]])
   return {
     profiles, profileById, tasks, query, handlers, documents, candidateDocuments, operatorActions, operatorSql: input.operatorSql,
-    prepareTaskContext(profileRef, context) { return tasks.prepareRunContext(profileRef, context) },
+    async prepareTaskContext(profileRef, context) {
+      let prepared
+      try { prepared = tasks.prepareRunContext(profileRef, context) }
+      catch { throw new LocalTaskContextError('taskId and taskInput must match a registered task in the selected profile') }
+      if (context.taskId !== 'energy.plan-candidate') return prepared
+      const registered = tasks.resolve(profileRef, 'energy.plan-candidate')
+      if (registered === undefined) throw new LocalTaskContextError('energy plan task is not registered for this profile')
+      const taskInput = { ...(prepared.taskInput ?? {}) } as Record<string, unknown>
+      const principal = { tenantId: input.tenantId, subjectId: 'local-energy-scenario-preflight', roles: ['business-user'], scopes: ['tool:invoke'], authEpoch: 1 }
+      const stateContext = createRequestToolContext({ principal, spaceId: input.spaceId, runId: globalThis.crypto.randomUUID(), traceId: 'energy-scenario-preflight', allowedResourceKinds: ['artifact', 'dataset', 'evidence', 'plan'], allowedSourceRefs: profiles.flatMap((profile) => profile.sourceRefs), maxRows: 100 })
+      const state = await input.getVirtualState(stateContext)
+      const backup = taskInput['backupRequirementKwh']
+      const reserveWindowStartSlot = taskInput['reserveWindowStartSlot'] ?? 0
+      const weather = taskInput['weatherScenario']
+      if (typeof backup !== 'number' || typeof reserveWindowStartSlot !== 'number' || typeof weather !== 'string') throw new LocalTaskContextError('energy plan task is missing reserve window or weather inputs')
+      taskInput['reserveWindowStartSlot'] = reserveWindowStartSlot
+      if (taskInput['siteRef'] === undefined) taskInput['siteRef'] = 'virtual-solix-1'
+      let scenarioInput: ReturnType<typeof buildSyntheticScenarioInput>
+      if (typeof taskInput['scenarioRef'] !== 'string' || taskInput['scenarioRef'].trim().length === 0) {
+        scenarioInput = buildSyntheticScenarioInput({ backupRequirementKwh: backup, reserveWindowStartSlot, weatherScenario: weather as import('./home-energy-scenario').WeatherScenario }, state)
+        const stored = await input.artifacts.putBytes({ scopeRef: { tenantId: input.tenantId, spaceId: input.spaceId }, content: encodeEnergyOperationInput(scenarioInput), mediaType: ENERGY_OPERATION_INPUT_MEDIA_TYPE }, stateContext)
+        taskInput['scenarioRef'] = JSON.stringify(stored.blobRef)
+      } else {
+        if (typeof taskInput['scenarioRef'] !== 'string') throw new LocalTaskContextError('scenarioRef must be an immutable resource reference')
+        try {
+          const ref = JSON.parse(taskInput['scenarioRef']) as import('@ontology/contracts').ResourceRef
+          if (ref.kind !== 'artifact') throw new Error('bad kind')
+          scenarioInput = decodeEnergyOperationInput(await input.blobs.readAuthorized({ scopeRef: { tenantId: input.tenantId, spaceId: input.spaceId }, blobRef: ref }, stateContext))
+        } catch { throw new LocalTaskContextError('scenarioRef is unavailable or invalid in this tenant and space') }
+      }
+      const scenarioRevision = Number(scenarioInput.assumptions.find((item) => item.startsWith('state_revision='))?.slice('state_revision='.length) ?? 'NaN')
+      const stateRefText = scenarioInput.assumptions.find((item) => item.startsWith('state_ref='))?.slice('state_ref='.length)
+      let stateRefDigest: string | undefined
+      if (stateRefText !== undefined) {
+        try {
+          const ref: unknown = JSON.parse(stateRefText)
+          if (typeof ref !== 'object' || ref === null || !('digest' in ref) || typeof ref.digest !== 'string') throw new Error('invalid state ref')
+          stateRefDigest = ref.digest
+        } catch { throw new LocalTaskContextError('scenarioRef carries an invalid state reference') }
+      }
+      if (scenarioRevision !== state.revision || scenarioInput.battery.initialEnergyKwh !== state.energyKwh || scenarioInput.reserves[0]?.reserveEnergyKwh !== backup || (scenarioInput.reserves[0]?.windowStartSlot ?? 0) !== reserveWindowStartSlot || !scenarioInput.assumptions.includes(`weather_scenario=${weather}`) || stateRefDigest !== state.stateRef?.digest) throw new LocalTaskContextError('scenarioRef is stale or does not match the current Virtual SOLIX state, ReserveSOC window, and weather')
+      if (state.parentPlanRef === undefined) delete taskInput['parentPlanRef']
+      else taskInput['parentPlanRef'] = JSON.stringify(state.parentPlanRef)
+      const taskInputDigest = sha256DigestOf(JSON.stringify(
+        registered.descriptor.fields
+          .map((field) => [field.name, taskInput[field.name] ?? null] as const)
+          .sort(([left], [right]) => left.localeCompare(right)),
+      ))
+      return { ...prepared, taskInput, taskInputDigest }
+    },
     async operatorImport(profileRef, payload, ctx) {
       if (profileRef.id !== documentProfile.profileRef.id || profileRef.version !== documentProfile.profileRef.version) throw new Error('document import is not enabled in the selected profile')
       return documents.importMarkdown(payload, ctx)

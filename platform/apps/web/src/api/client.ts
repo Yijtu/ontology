@@ -29,6 +29,7 @@ import type {
 import { ApiError, toApiFailure } from './errors'
 import {
   asExecutionRecord,
+  asVirtualBatteryState,
   asScenarioDescriptor,
   asSimulationDetail,
   asSimulationRecord,
@@ -41,6 +42,7 @@ import type {
   ScenarioDescriptor,
   SimulationDetailView,
   SimulationRecordView,
+  VirtualBatteryStateView,
 } from './energy'
 import { dependencyQuery, optionalTimeQuery } from './provenance'
 import type { DependencyPage, HistoryPage } from './provenance'
@@ -182,6 +184,16 @@ export interface LocalPlanDetailView {
   readonly sourceEvidenceRef: ResourceRef
   readonly resultRef: ResourceRef
   readonly selectedPlanRef: ResourceRef
+  readonly inputManifestHash: string
+  readonly weatherScenario: string
+  readonly reserveSocPercent: number
+  readonly reserveWindowStartSlot: number
+  readonly initialEnergyKwh: number
+  readonly initialSocPercent: number
+  readonly stateRevision: number
+  readonly slotMinutes: number
+  readonly stateRef?: ResourceRef
+  readonly parentPlanRef?: ResourceRef
   readonly dataMode: 'simulation'
   readonly optimality: 'best_of_tested_candidates'
   readonly selectedStrategy: string
@@ -195,6 +207,7 @@ export interface LocalPlanDetailView {
     readonly endUtc: string
     readonly chargeKw: number
     readonly dischargeKw: number
+    readonly pvAvailableKw: number
     readonly energyStartKwh: number
     readonly energyEndKwh: number
   }[]
@@ -206,6 +219,31 @@ export interface LocalPlanDetailView {
     readonly satisfied: boolean
   }[]
   readonly assumptions: readonly string[]
+}
+
+export interface EnergyPlanVersionView {
+  readonly planKey: string
+  readonly versionId: string
+  readonly planRef: ResourceRef
+  readonly runId: string
+  readonly scenarioRef: ResourceRef
+  readonly parentPlanRef?: ResourceRef
+  readonly stateRevision: number
+  readonly status: 'Selected' | 'Superseded'
+  readonly detail: LocalPlanDetailView
+  readonly createdAt: string
+}
+export interface EnergyPlanDiffView {
+  readonly parentPlanRef: ResourceRef
+  readonly planRef: ResourceRef
+  readonly evidenceRefs: readonly ResourceRef[]
+  readonly resultRefs: readonly ResourceRef[]
+  readonly inputChanges: Readonly<Record<string, unknown>>
+  readonly forecast: { readonly pvBeforeKwh: number; readonly pvAfterKwh: number; readonly pvDeltaKwh: number }
+  readonly result: { readonly costBefore: number; readonly costAfter: number; readonly costDelta: number; readonly reserveSatisfiedBefore: boolean; readonly reserveSatisfiedAfter: boolean }
+  readonly affectedIntervals: readonly { readonly slotIndex: number; readonly pvBeforeKw: number; readonly pvAfterKw: number; readonly chargeBeforeKw: number; readonly chargeAfterKw: number; readonly dischargeBeforeKw: number; readonly dischargeAfterKw: number; readonly energyBeforeKwh: number; readonly energyAfterKwh: number }[]
+  readonly limitations: readonly string[]
+  readonly causeTrace: readonly Readonly<Record<string, unknown>>[]
 }
 
 export interface ComponentFilter {
@@ -424,6 +462,19 @@ export class WorkbenchClient {
     return this.#request<LocalPlanDetailView>('GET', `/api/v1/runs/${encodeURIComponent(runId)}/plan`)
   }
 
+  getEnergyPlanVersions(): Promise<{ readonly selected: EnergyPlanVersionView | undefined; readonly versions: readonly EnergyPlanVersionView[]; readonly historyTruncated: boolean }> {
+    return this.#request<{ readonly selected: EnergyPlanVersionView | undefined; readonly versions: readonly EnergyPlanVersionView[]; readonly historyTruncated: boolean }>('GET', '/api/v1/energy/plan-versions')
+  }
+
+  selectEnergyPlan(runId: string): Promise<EnergyPlanVersionView> {
+    return this.#request<EnergyPlanVersionView>('POST', '/api/v1/energy/plan-versions/select', { body: { runId }, idempotencyKey: this.#newId() })
+  }
+
+  getEnergyPlanDiff(parentPlanRef: ResourceRef, planRef: ResourceRef): Promise<EnergyPlanDiffView> {
+    const query = new URLSearchParams({ parentId: parentPlanRef.id, parentVersion: parentPlanRef.version, parentDigest: parentPlanRef.digest, id: planRef.id, version: planRef.version, digest: planRef.digest })
+    return this.#request<EnergyPlanDiffView>('GET', `/api/v1/energy/plan-versions/${encodeURIComponent(planRef.id)}/diff?${query.toString()}`)
+  }
+
   /** Subscribe to the run's persisted public events. Unknown event names are dropped. */
   openRunEvents(
     runId: string,
@@ -613,6 +664,15 @@ export class WorkbenchClient {
     )
   }
 
+  getVirtualBatteryState(): Promise<VirtualBatteryStateView> {
+    const path = '/api/v1/virtual-solix/state'
+    return this.#request<unknown>('GET', path).then((data) => {
+      const state = asVirtualBatteryState(data)
+      if (state === undefined) throw malformedResponse(path, 'the Virtual SOLIX state was not recognised')
+      return state
+    })
+  }
+
   /** `POST /simulations`: run a registered operation over approved input refs. */
   requestSimulation(request: RequestSimulationInput): Promise<SimulationRecordView> {
     const path = '/api/v1/simulations'
@@ -642,7 +702,7 @@ export class WorkbenchClient {
    */
   requestExecution(request: RequestExecutionRequest): Promise<ExecutionRecordView> {
     const path = '/api/v1/executions'
-    return this.#request<unknown>('POST', path, { body: request, idempotencyKey: this.#newId() }).then(
+    return this.#request<unknown>('POST', path, { body: request, idempotencyKey: this.#newId(), ifMatch: String(request.expectedStateRevision) }).then(
       (data) => {
         const record = asExecutionRecord(data)
         if (record === undefined) throw malformedResponse(path, 'the execution record was not recognised')

@@ -1,4 +1,4 @@
-import { useReducer } from 'react'
+import { useEffect, useReducer, useState } from 'react'
 import type { OperationRef } from '@ontology/contracts'
 import type { ProfileRef } from '@ontology/contracts'
 import { ApiError, type WorkbenchClient } from '../api/client'
@@ -11,6 +11,7 @@ import {
   type EnergyPlanVersion,
 } from '../state/energy'
 import type { WorkbenchError } from '../state/workbench'
+import type { EnergyPlanDiffView, EnergyPlanVersionView } from '../api/client'
 import { Datum } from './Datum'
 import { StatePanel } from './StatePanel'
 import { useViewport } from './useViewport'
@@ -38,6 +39,13 @@ export interface EnergyPlanPanelProps {
 const PLAN_OPERATION: OperationRef = { id: 'home-energy.plan', version: '1' }
 const SIMULATE_OPERATION: OperationRef = { id: 'home-energy.simulate', version: '1' }
 const STRATEGY_WHITELIST = ['self_consumption', 'reserve_first', 'price_window'] as const
+const WEATHER_LABELS: Readonly<Record<WeatherScenario, string>> = {
+  anker_base: '上午阴、下午晴',
+  afternoon_overcast: '上午阴、下午阴雨',
+  sunny: '全天晴',
+  overcast: '全天阴',
+  storm: '全天暴雨假设',
+}
 
 function toEnergyError(error: unknown): WorkbenchError {
   if (error instanceof ApiError) {
@@ -223,14 +231,30 @@ function VersionCard({ version }: { readonly version: EnergyPlanVersion }) {
 export function EnergyPlanPanel({ client, profileRef, publishedExecutionRequired = false }: EnergyPlanPanelProps) {
   const viewport = useViewport()
   const [state, dispatch] = useReducer(energyReducer, undefined, initialEnergyState)
+  const [savedVersions, setSavedVersions] = useState<readonly EnergyPlanVersionView[]>([])
+  const [historyTruncated, setHistoryTruncated] = useState(false)
+  const [latestDiff, setLatestDiff] = useState<EnergyPlanDiffView | undefined>()
   const phase = state.phase
   const latest = state.versions[state.versions.length - 1]
+
+  useEffect(() => {
+    if (!publishedExecutionRequired) return
+    let cancelled = false
+    void client.getEnergyPlanVersions().then((result) => {
+      if (cancelled) return
+      setSavedVersions(result.versions)
+      setHistoryTruncated(result.historyTruncated)
+      if (result.selected?.parentPlanRef !== undefined) void client.getEnergyPlanDiff(result.selected.parentPlanRef, result.selected.planRef).then((diff) => { if (!cancelled) setLatestDiff(diff) }).catch(() => undefined)
+    }).catch(() => undefined)
+    return () => { cancelled = true }
+  }, [client, publishedExecutionRequired])
 
   const buildScenario = async () => {
     dispatch({ type: 'busy' })
     try {
       const scenario = await client.buildEnergyScenario({
         reserveSocPercent: state.backupRequirementKwh / 10 * 100,
+        reserveWindowStartSlot: state.reserveWindowStartSlot,
         weatherScenario: state.weatherScenario,
       })
       dispatch({ type: 'scenarioBuilt', scenario })
@@ -251,6 +275,7 @@ export function EnergyPlanPanel({ client, profileRef, publishedExecutionRequired
       })
       const detail = await client.getSimulation(record.simulationId)
       const planResult = asPlanResult(detail.result)
+      if (planResult === undefined) throw new Error('仿真结果无法识别，无法选择或比较计划。')
       const previewRef = planResult === undefined ? undefined : (planResult.selection.selectedStrategy === undefined
         ? planResult.candidates[0]?.planRef ?? planResult.baseline?.planRef
         : planResult.candidates.find((candidate) => candidate.strategy === planResult.selection.selectedStrategy)?.planRef ?? planResult.baseline?.planRef)
@@ -267,11 +292,18 @@ export function EnergyPlanPanel({ client, profileRef, publishedExecutionRequired
       }
       let officialRunId = ''
       let executionPlanRef = version.executionPlanRef
+      let planDiff: EnergyPlanDiffView | undefined
+      let comparisonLimitation: string | undefined
+      if (publishedExecutionRequired && planResult.status !== 'feasible') {
+        dispatch({ type: 'planLoaded', version: { ...version, selectedStatus: 'Unselected' } })
+        dispatch({ type: 'notice', message: '新计划未通过硬约束校验，未替换当前选中版本；请查看具体时段缺口。' })
+        return
+      }
       if (publishedExecutionRequired) {
       const officialRun = await client.createRun({
         profileRef,
         question: '为家庭储能能源系统生成满足备电目标的确定性充放电计划。',
-        context: { timeZone: 'Asia/Shanghai', taskId: 'energy.plan-candidate', taskInput: { siteRef: 'anker-home-1', backupRequirementKwh: state.backupRequirementKwh, weatherScenario: state.weatherScenario } },
+        context: { timeZone: 'Asia/Shanghai', taskId: 'energy.plan-candidate', taskInput: { siteRef: 'virtual-solix-1', scenarioRef: JSON.stringify(scenario.inputRef), ...(scenario.parentPlanRef === undefined ? {} : { parentPlanRef: JSON.stringify(scenario.parentPlanRef) }), backupRequirementKwh: state.backupRequirementKwh, reserveWindowStartSlot: state.reserveWindowStartSlot, weatherScenario: state.weatherScenario } },
         preferences: { route: 'auto', allowWeb: false },
       })
       let published = false
@@ -288,10 +320,28 @@ export function EnergyPlanPanel({ client, profileRef, publishedExecutionRequired
       const authorizedPlan = await client.getLocalPlan(officialRun.runId)
       const previewPlanRef = selectedPlanRef(version)
       if (previewPlanRef === undefined || previewPlanRef.digest !== authorizedPlan.selectedPlanRef.digest || previewPlanRef.id !== authorizedPlan.selectedPlanRef.id) throw new Error('直接预览与正式发布计划不一致；已停止执行授权。')
+      if (authorizedPlan.stateRevision !== scenario.stateRevision || authorizedPlan.parentPlanRef?.digest !== scenario.parentPlanRef?.digest) throw new Error('正式计划状态版本或父计划与情景不一致；保留当前选中计划。')
+      await client.selectEnergyPlan(officialRun.runId)
+      const history = await client.getEnergyPlanVersions()
+      setSavedVersions(history.versions)
+      setHistoryTruncated(history.historyTruncated)
+      if (authorizedPlan.parentPlanRef !== undefined) {
+        try {
+          planDiff = await client.getEnergyPlanDiff(authorizedPlan.parentPlanRef, authorizedPlan.selectedPlanRef)
+          setLatestDiff(planDiff)
+        } catch (error) {
+          // Only a known horizon/state incompatibility is a non-fatal comparison gap.
+          // A missing version or broken parent link is a lineage integrity failure.
+          if (!(error instanceof ApiError) || error.code !== 'PLAN_DIFF_NOT_COMPARABLE' || error.status !== 409) throw error
+          comparisonLimitation = `新计划已选中，但父版与新版本差异不可比（${error.code}）；不展示跨时间窗或状态版本的因果成本差。`
+          setLatestDiff(undefined)
+        }
+      } else setLatestDiff(undefined)
       officialRunId = officialRun.runId
       executionPlanRef = authorizedPlan.selectedPlanRef
       }
-      dispatch({ type: 'planLoaded', version: { ...version, publishedRunId: officialRunId, executionPlanRef } })
+      dispatch({ type: 'planLoaded', version: { ...version, publishedRunId: officialRunId, executionPlanRef, ...(planDiff === undefined ? {} : { planDiff }), selectedStatus: publishedExecutionRequired ? 'Selected' : 'Unselected' } })
+      if (comparisonLimitation !== undefined) dispatch({ type: 'notice', message: comparisonLimitation })
     } catch (error) {
       dispatch(failureEvent(error))
     }
@@ -308,6 +358,7 @@ export function EnergyPlanPanel({ client, profileRef, publishedExecutionRequired
     try {
       const execution = await client.requestExecution({
         runId: latest.publishedRunId || globalThis.crypto.randomUUID(),
+        expectedStateRevision: latest.scenario.stateRevision,
         operationRef: SIMULATE_OPERATION,
         planRef: latest.executionPlanRef,
         inputRefs: latest.executionInputRefs,
@@ -365,9 +416,16 @@ export function EnergyPlanPanel({ client, profileRef, publishedExecutionRequired
               >
                 {WEATHER_SCENARIOS.map((scenario) => (
                   <option key={scenario} value={scenario}>
-                    {scenario}
+                    {WEATHER_LABELS[scenario]}
                   </option>
                 ))}
+              </select>
+            </label>
+            <label className="energy__field">
+              备电目标生效窗口
+              <select data-testid="reserve-window" value={state.reserveWindowStartSlot} onChange={(event) => dispatch({ type: 'setReserveWindow', value: Number(event.target.value) })}>
+                <option value={0}>全天最低保底</option>
+                <option value={68}>晚间 17:00 起保底</option>
               </select>
             </label>
             <div className="energy__buttons">
@@ -386,6 +444,9 @@ export function EnergyPlanPanel({ client, profileRef, publishedExecutionRequired
             {state.scenario === undefined ? null : (
               <div className="energy__scenario-summary" data-testid="scenario-summary">
                 <p data-testid="scenario-input-digest">输入摘要：{state.scenario.inputDigest}</p>
+                <p data-testid="scenario-start-state">Virtual SOLIX 起始状态：{formatNumber(state.scenario.initialEnergyKwh)} kWh · {formatNumber(state.scenario.initialSocPercent, 1)}% SOC · revision {state.scenario.stateRevision}</p>
+                <p data-testid="scenario-reserve-window">ReserveSOC {formatNumber(state.scenario.reserveSocPercent, 1)}% 生效时隙：{state.scenario.reserveWindowStartSlot} → 96</p>
+                <p data-testid="scenario-parent-plan">父计划：{state.scenario.parentPlanRef?.id ?? '首版场景'}</p>
                 <p data-testid="scenario-mode" data-mode={state.scenario.dataMode}>
                   数据模式：{state.scenario.dataMode} · 时区 {state.scenario.timeZone} · 时隙{' '}
                   {state.scenario.slotMinutes} 分钟 × {state.scenario.slotCount}
@@ -408,10 +469,38 @@ export function EnergyPlanPanel({ client, profileRef, publishedExecutionRequired
             )}
           </section>
 
+          {savedVersions.length === 0 ? null : (
+            <section className="energy__versions" data-testid="persisted-plan-versions">
+              <h3>已保存计划版本</h3>
+              {historyTruncated ? <p role="status" data-testid="plan-history-truncated">这里只展示最近 100 个版本；更早版本未包含在本页。</p> : null}
+              <ol>
+                {savedVersions.map((saved) => (
+                  <li key={saved.versionId} data-testid="persisted-plan-version" data-status={saved.status}>
+                    <span>{saved.status} · {saved.detail.weatherScenario} · ReserveSOC {formatNumber(saved.detail.reserveSocPercent, 1)}%（slot {saved.detail.reserveWindowStartSlot} 起）· 起始SOC {formatNumber(saved.detail.initialSocPercent, 1)}% · 成本 {formatNumber(saved.detail.candidateTotalCost)} CNY · plan {saved.planRef.id}</span>
+                  </li>
+                ))}
+              </ol>
+            </section>
+          )}
+
           {phase === 'ready' ? (
             <>
           <section className="energy__versions" data-testid="plan-versions">
             <h3>计划版本（新→旧）</h3>
+            {latestDiff === undefined ? null : (
+              <section data-testid="persisted-plan-diff">
+                <h4>本次重规划差异（由归档输入与计划计算）</h4>
+                {'weatherBefore' in latestDiff.inputChanges ? <p data-testid="diff-weather">天气：{String(latestDiff.inputChanges['weatherBefore'])} → {String(latestDiff.inputChanges['weatherAfter'])}</p> : null}
+                {'reserveSocBefore' in latestDiff.inputChanges ? <p data-testid="diff-reserve">ReserveSOC：{String(latestDiff.inputChanges['reserveSocBefore'])}% → {String(latestDiff.inputChanges['reserveSocAfter'])}%</p> : null}
+                {'reserveWindowBefore' in latestDiff.inputChanges ? <p data-testid="diff-reserve-window">备电生效窗口：slot {String(latestDiff.inputChanges['reserveWindowBefore'])} → slot {String(latestDiff.inputChanges['reserveWindowAfter'])}</p> : null}
+                <p data-testid="diff-pv">PV 预测：{formatNumber(latestDiff.forecast.pvBeforeKwh)} → {formatNumber(latestDiff.forecast.pvAfterKwh)} kWh（Δ {formatNumber(latestDiff.forecast.pvDeltaKwh)} kWh）</p>
+                <p data-testid="diff-cost">计划净成本：{formatNumber(latestDiff.result.costBefore)} → {formatNumber(latestDiff.result.costAfter)} CNY（Δ {formatNumber(latestDiff.result.costDelta)} CNY）</p>
+                <p data-testid="diff-affected-slots">SOC/动作受影响时隙：{latestDiff.affectedIntervals.length}</p>
+                <ul data-testid="diff-evidence-refs">{latestDiff.evidenceRefs.map((ref) => <li key={ref.id}>{ref.id} · {ref.digest}</li>)}</ul>
+                <ol data-testid="diff-cause-trace">{latestDiff.causeTrace.map((entry, index) => <li key={`${String(entry['stage'])}-${index}`}>{String(entry['stage'])} · 证据 {String((entry['evidence'] as { id?: unknown } | undefined)?.id ?? (entry['scenarioEvidence'] as { id?: unknown } | undefined)?.id ?? '')}</li>)}</ol>
+                {latestDiff.limitations.map((item) => <p key={item} className="energy__notice">{item}</p>)}
+              </section>
+            )}
             {state.versions.length === 0 ? (
               <p data-testid="versions-empty">尚未生成计划。</p>
             ) : (

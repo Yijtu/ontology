@@ -40,6 +40,8 @@ export interface ExecutionRecord {
   readonly operationRef: OperationRef
   readonly planRef: ResourceRef
   readonly inputRefs: readonly ResourceRef[]
+  /** Original If-Match revision, kept so an idempotent replay cannot change request identity. */
+  readonly expectedStateRevision?: number
   readonly phase: ExecutionPhase
   readonly requestedAt: Rfc3339UtcTimestamp
   readonly liveSupported: false
@@ -101,6 +103,7 @@ export interface RequestExecutionInput {
   readonly mode: ExecutionMode
   readonly runId: Uuid
   readonly idempotencyKey: string
+  readonly expectedStateRevision?: number
 }
 
 /** The bounded job payload encoded into the durable job's opaque `datasetRef`. */

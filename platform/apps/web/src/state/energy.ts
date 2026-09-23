@@ -6,6 +6,7 @@ import type {
   SimulationRecordView,
   WeatherScenario,
 } from '../api/energy'
+import type { EnergyPlanDiffView } from '../api/client'
 import type { WorkbenchError, WorkbenchPhase } from './workbench'
 
 /**
@@ -37,6 +38,8 @@ export interface EnergyPlanVersion {
   readonly publishedRunId: string
   readonly executionPlanRef: import('@ontology/contracts').ResourceRef
   readonly executionInputRefs: readonly import('@ontology/contracts').ResourceRef[]
+  readonly planDiff?: EnergyPlanDiffView
+  readonly selectedStatus?: 'Selected' | 'Superseded' | 'Unselected'
 }
 
 export interface ConstraintGap {
@@ -70,6 +73,7 @@ export interface EnergyState {
   readonly phase: EnergyPhase
   readonly backupRequirementKwh: number
   readonly weatherScenario: WeatherScenario
+  readonly reserveWindowStartSlot: number
   readonly scenario: ScenarioDescriptor | undefined
   readonly versions: readonly EnergyPlanVersion[]
   readonly comparison: EnergyPlanComparison | undefined
@@ -84,6 +88,7 @@ export type EnergyEvent =
   | { readonly type: 'busy' }
   | { readonly type: 'setBackup'; readonly value: number }
   | { readonly type: 'setWeather'; readonly value: WeatherScenario }
+  | { readonly type: 'setReserveWindow'; readonly value: number }
   | { readonly type: 'scenarioBuilt'; readonly scenario: ScenarioDescriptor }
   | { readonly type: 'planLoaded'; readonly version: EnergyPlanVersion }
   | { readonly type: 'executionLoaded'; readonly execution: ExecutionRecordView }
@@ -96,13 +101,14 @@ export type EnergyEvent =
 
 export const DEFAULT_BACKUP_REQUIREMENT_KWH = 2
 export const DEFAULT_RESERVE_SOC_PERCENT = 20
-export const DEFAULT_WEATHER_SCENARIO: WeatherScenario = 'sunny'
+export const DEFAULT_WEATHER_SCENARIO: WeatherScenario = 'anker_base'
 
 export function initialEnergyState(): EnergyState {
   return {
     phase: 'empty',
     backupRequirementKwh: DEFAULT_BACKUP_REQUIREMENT_KWH,
     weatherScenario: DEFAULT_WEATHER_SCENARIO,
+    reserveWindowStartSlot: 0,
     scenario: undefined,
     versions: [],
     comparison: undefined,
@@ -122,6 +128,7 @@ function sourceChangesOf(base: ScenarioDescriptor, compare: ScenarioDescriptor):
   push('inputDigest', base.inputDigest, compare.inputDigest)
   push('weatherScenario', base.weatherScenario, compare.weatherScenario)
   push('backupRequirementKwh', String(base.backupRequirementKwh), String(compare.backupRequirementKwh))
+  push('reserveWindowStartSlot', String(base.reserveWindowStartSlot), String(compare.reserveWindowStartSlot))
   push('dataMode', base.dataMode, compare.dataMode)
   push('timeZone', base.timeZone, compare.timeZone)
   push('slotMinutes', String(base.slotMinutes), String(compare.slotMinutes))
@@ -208,6 +215,8 @@ export function energyReducer(state: EnergyState, event: EnergyEvent): EnergySta
       return { ...state, backupRequirementKwh: event.value }
     case 'setWeather':
       return { ...state, weatherScenario: event.value }
+    case 'setReserveWindow':
+      return { ...state, reserveWindowStartSlot: event.value }
     case 'scenarioBuilt':
       return {
         ...state,

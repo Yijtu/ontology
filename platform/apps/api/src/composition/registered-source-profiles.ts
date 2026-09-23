@@ -22,9 +22,11 @@ const PROFILE_LONG: ProfileRef = { id: 'home-energy-demo-long', version: '1.0.0'
 const SOURCE_WIDE: SourceRef = { namespace: 'home-energy.synthetic', sourceId: 'soc-wide-v1' }
 const SOURCE_LONG_RAW: SourceRef = { namespace: 'home-energy.synthetic', sourceId: 'soc-long-raw-v1' }
 const SOURCE_LONG: SourceRef = { namespace: 'home-energy.synthetic', sourceId: 'soc-long-normalized-v1' }
+const SOURCE_VIRTUAL: SourceRef = { namespace: 'home-energy.virtual', sourceId: 'solix-state-current' }
 const OBJECT_WIDE: SourceObjectRef = { sourceRef: SOURCE_WIDE, objectPath: 'soc_readings_wide' }
 const OBJECT_LONG_RAW: SourceObjectRef = { sourceRef: SOURCE_LONG_RAW, objectPath: 'soc_metrics_long' }
 const OBJECT_LONG: SourceObjectRef = { sourceRef: SOURCE_LONG, objectPath: 'soc_readings_long_normalized' }
+const OBJECT_VIRTUAL: SourceObjectRef = { sourceRef: SOURCE_VIRTUAL, objectPath: 'virtual_solix_state' }
 
 const WIDE_ROWS = [
   ['synthetic-home-1', '2026-01-01T00:00:00Z', 40],
@@ -74,6 +76,11 @@ const relations: RegisteredRelation[] = [
     ],
     physicalTypes: { time_utc: 'TIMESTAMP', soc_basis_points: 'DECIMAL(12,2)' },
   },
+  {
+    relation: 'virtual_solix_state', objectRef: OBJECT_VIRTUAL, schemaRevision: 'virtual-solix-state@1',
+    columns: [ { name: 'device_id', type: 'string' }, { name: 'updated_at', type: 'timestamp' }, { name: 'soc_percent', type: 'decimal' } ],
+    physicalTypes: { updated_at: 'TIMESTAMP', soc_percent: 'DECIMAL(10,4)' },
+  },
 ]
 
 function normalizeLongRows(): (string | number)[][] {
@@ -111,6 +118,7 @@ function mappingFor(id: string, objectRef: SourceObjectRef, relation: string, si
 
 const MAPPING_WIDE = mappingFor(PROFILE_WIDE.id, OBJECT_WIDE, 'soc_readings_wide', 'site_key', 'sample_utc', 'soc_percent', 1)
 const MAPPING_LONG = mappingFor(PROFILE_LONG.id, OBJECT_LONG, 'soc_readings_long_normalized', 'asset_id', 'time_utc', 'soc_basis_points', 100)
+const MAPPING_VIRTUAL = mappingFor('home-energy.virtual-solix', OBJECT_VIRTUAL, 'virtual_solix_state', 'device_id', 'updated_at', 'soc_percent', 1)
 
 export interface LocalStructuredProfile {
   readonly profileRef: ProfileRef
@@ -124,6 +132,7 @@ export interface LocalStructuredProfiles {
   readonly query: DuckDbQueryAdapter
   readonly mappings: InMemorySemanticMappingRegistry
   readonly profiles: readonly LocalStructuredProfile[]
+  updateVirtualSoc(socPercent: number, updatedAt: string): Promise<void>
   resolveToolAccess(profileRef: ProfileRef): { sourceRefs: readonly SourceRef[]; maxRows: number } | undefined
   close(): void
 }
@@ -137,7 +146,7 @@ export async function createLocalStructuredProfiles(refs: {
   industryRef: VersionRef
 }): Promise<LocalStructuredProfiles> {
   const query = new DuckDbQueryAdapter({
-    relations, catalogSchemaRevision: 'synthetic-soc@1', consistency: 'immutable',
+    relations, catalogSchemaRevision: 'synthetic-soc@1', consistency: 'read_time',
     defaultLimits: { maxRows: 100, maxBytes: 65_536, maxDurationMs: 5_000 },
   })
   try {
@@ -145,6 +154,7 @@ export async function createLocalStructuredProfiles(refs: {
     await query.materialiseRelation('soc_readings_wide', WIDE_ROWS)
     await query.materialiseRelation('soc_metrics_long', LONG_ROWS)
     await query.materialiseRelation('soc_readings_long_normalized', normalizeLongRows())
+    await query.materialiseRelation('virtual_solix_state', [['virtual-solix-1', '2026-01-01T00:00:00Z', 35]])
   } catch (error) {
     query.close()
     throw error
@@ -153,10 +163,11 @@ export async function createLocalStructuredProfiles(refs: {
   const build = (
     profileRef: ProfileRef, mapping: typeof MAPPING_WIDE, objectRef: SourceObjectRef,
   ): LocalStructuredProfile => {
-    const snapshotHash = sha256DigestOf(`${profileRef.id}@${profileRef.version}:${mapping.mappingRef.digest}:synthetic-soc@1`)
+    const snapshotHash = sha256DigestOf(`${profileRef.id}@${profileRef.version}:${mapping.mappingRef.digest}:${MAPPING_VIRTUAL.mappingRef.digest}:synthetic-soc@1`)
+    const virtualMappingRef = { ...MAPPING_VIRTUAL.mappingRef, role: 'telemetry' as const, sourceObjectRef: OBJECT_VIRTUAL, schemaRevision: 'virtual-solix-state@1' }
     const resolvedProfile: ResolvedProfile = {
       industryRef: refs.industryRef,
-      mappingRefs: [{ ...mapping.mappingRef, role: 'telemetry', sourceObjectRef: objectRef, schemaRevision: 'synthetic-soc@1' }],
+      mappingRefs: [{ ...mapping.mappingRef, role: 'telemetry', sourceObjectRef: objectRef, schemaRevision: 'synthetic-soc@1' }, virtualMappingRef],
       runtimeRef: refs.runtimeRef,
       backendBindings: { telemetry: {
         role: 'telemetry', adapterRef: DATA_DUCKDB_ADAPTER_REF,
@@ -166,28 +177,33 @@ export async function createLocalStructuredProfiles(refs: {
       } },
       modelBindings: {}, toolBindings: [{ toolId: 'data_query', enabled: true, maxCallsPerRun: 2 }],
       computeBindings: [], policyRef: refs.policyRef,
-      resolvedVersions: [refs.industryRef, refs.runtimeRef, refs.policyRef, mapping.mappingRef, DATA_DUCKDB_ADAPTER_REF],
+      resolvedVersions: [refs.industryRef, refs.runtimeRef, refs.policyRef, mapping.mappingRef, MAPPING_VIRTUAL.mappingRef, DATA_DUCKDB_ADAPTER_REF],
       resolvedCapabilities: [], explicitDegradations: [], snapshotHash,
       resolvedAt: new Date().toISOString(),
     }
     return {
-      profileRef, resolvedProfile, sourceRefs: [objectRef.sourceRef], maxRows: 100,
+      profileRef, resolvedProfile, sourceRefs: [objectRef.sourceRef, SOURCE_VIRTUAL], maxRows: 100,
       planForSite(siteRef): SemanticQueryPlan {
         if (siteRef.length === 0 || siteRef.length > 128) throw new Error('siteRef must have 1–128 characters')
+        const virtual = siteRef === 'virtual-solix-1'
         return {
           mode: 'semantic', concepts: ['battery_soc_reading'],
           fields: ['site_ref', 'soc_percent'], links: [],
           filters: [{ fieldRef: 'site_ref', op: 'eq', values: [siteRef] }],
           aggregation: { kind: 'avg', fieldRefs: ['soc_percent'], groupBy: ['site_ref'] },
           orderBy: [], limit: 1,
-          mappingVersion: mapping.mappingRef,
+          mappingVersion: virtual ? MAPPING_VIRTUAL.mappingRef : mapping.mappingRef,
         }
       },
     }
   }
   const profiles = [build(PROFILE_WIDE, MAPPING_WIDE, OBJECT_WIDE), build(PROFILE_LONG, MAPPING_LONG, OBJECT_LONG)]
   return {
-    query, mappings: new InMemorySemanticMappingRegistry([MAPPING_WIDE, MAPPING_LONG]), profiles,
+    query, mappings: new InMemorySemanticMappingRegistry([MAPPING_WIDE, MAPPING_LONG, MAPPING_VIRTUAL]), profiles,
+    async updateVirtualSoc(socPercent, updatedAt) {
+      if (!Number.isFinite(socPercent) || socPercent < 0 || socPercent > 100) throw new Error('Virtual SOLIX SOC is outside [0, 100]')
+      await query.materialiseRelation('virtual_solix_state', [['virtual-solix-1', updatedAt, socPercent]])
+    },
     resolveToolAccess(profileRef) {
       const found = profiles.find((profile) => profile.profileRef.id === profileRef.id && profile.profileRef.version === profileRef.version)
       return found === undefined ? undefined : { sourceRefs: found.sourceRefs, maxRows: found.maxRows }

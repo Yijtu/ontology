@@ -10,7 +10,7 @@ import type { OperationRef, ResourceRef, Sha256Digest } from '@ontology/contract
  * never imports a server package: it only speaks HTTP.
  */
 
-export const WEATHER_SCENARIOS = ['sunny', 'overcast', 'storm'] as const
+export const WEATHER_SCENARIOS = ['anker_base', 'afternoon_overcast', 'sunny', 'overcast', 'storm'] as const
 
 export type WeatherScenario = (typeof WEATHER_SCENARIOS)[number]
 
@@ -61,6 +61,12 @@ export interface ScenarioDescriptor {
   readonly horizon: { readonly start: string; readonly end: string }
   readonly backupRequirementKwh: number
   readonly reserveSocPercent: number
+  readonly reserveWindowStartSlot: number
+  readonly initialEnergyKwh: number
+  readonly initialSocPercent: number
+  readonly stateRevision: number
+  readonly stateRef?: ResourceRef
+  readonly parentPlanRef?: ResourceRef
   readonly weatherScenario: WeatherScenario
   readonly batterySpecSource: string
   readonly series: readonly ScenarioSeriesDescriptor[]
@@ -71,6 +77,7 @@ export interface CreateScenarioRequest {
   readonly backupRequirementKwh?: number
   readonly reserveSocPercent?: number
   readonly weatherScenario: WeatherScenario
+  readonly reserveWindowStartSlot?: number
 }
 
 export interface SimulationRecordView {
@@ -108,6 +115,7 @@ export interface RequestSimulationInput {
 
 export interface RequestExecutionRequest {
   readonly runId: string
+  readonly expectedStateRevision: number
   readonly operationRef: OperationRef
   readonly planRef: ResourceRef
   readonly inputRefs: readonly ResourceRef[]
@@ -289,6 +297,8 @@ export function asScenarioDescriptor(value: unknown): ScenarioDescriptor | undef
       })
     }
   }
+  const stateRef = resourceRefOf(value.stateRef)
+  const parentPlanRef = resourceRefOf(value.parentPlanRef)
   return {
     inputRef,
     inputDigest: value.inputDigest,
@@ -299,6 +309,12 @@ export function asScenarioDescriptor(value: unknown): ScenarioDescriptor | undef
     horizon: { start: horizon.start, end: horizon.end },
     backupRequirementKwh: asNumber(value.backupRequirementKwh) ?? 0,
     reserveSocPercent: asNumber(value.reserveSocPercent) ?? (asNumber(value.backupRequirementKwh) ?? 0) * 10,
+    reserveWindowStartSlot: asNumber(value.reserveWindowStartSlot) ?? 0,
+    initialEnergyKwh: asNumber(value.initialEnergyKwh) ?? 3.5,
+    initialSocPercent: asNumber(value.initialSocPercent) ?? 35,
+    stateRevision: asNumber(value.stateRevision) ?? 0,
+    ...(stateRef === undefined ? {} : { stateRef }),
+    ...(parentPlanRef === undefined ? {} : { parentPlanRef }),
     weatherScenario: weather,
     batterySpecSource: asString(value.batterySpecSource) ?? 'unknown',
     series,
@@ -636,4 +652,24 @@ export function asExecutionRecord(value: unknown): ExecutionRecordView | undefin
     ...(finalStateRef === undefined ? {} : { finalStateRef }),
     ...(finalEnergy === undefined || finalSoc === undefined || finalRevision === undefined || finalStateValue?.mode !== 'simulation' ? {} : { finalState: { energyKwh: finalEnergy, socPercent: finalSoc, revision: finalRevision, mode: 'simulation' as const } }),
   }
+}
+
+export interface VirtualBatteryStateView {
+  readonly deviceId: string
+  readonly energyKwh: number
+  readonly capacityKwh: number
+  readonly socPercent: number
+  readonly revision: number
+  readonly mode: 'simulation'
+  readonly updatedAt: string
+  readonly simulatedAt: string
+  readonly stateRef?: ResourceRef
+}
+
+export function asVirtualBatteryState(value: unknown): VirtualBatteryStateView | undefined {
+  if (!isRecord(value) || value.mode !== 'simulation') return undefined
+  const stateRef = resourceRefOf(value.stateRef)
+  const deviceId = asString(value.deviceId), energyKwh = asNumber(value.energyKwh), capacityKwh = asNumber(value.capacityKwh), socPercent = asNumber(value.socPercent), revision = asNumber(value.revision), updatedAt = asString(value.updatedAt), simulatedAt = asString(value.simulatedAt)
+  if (deviceId === undefined || energyKwh === undefined || capacityKwh === undefined || socPercent === undefined || revision === undefined || updatedAt === undefined || simulatedAt === undefined || !Number.isSafeInteger(revision) || revision < 0) return undefined
+  return { deviceId, energyKwh, capacityKwh, socPercent, revision, mode: 'simulation', updatedAt, simulatedAt, ...(stateRef === undefined ? {} : { stateRef }) }
 }

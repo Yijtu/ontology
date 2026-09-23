@@ -36,7 +36,7 @@ import {
   createSyntheticScenarioCatalog,
   scenarioDescriptorOf,
 } from './home-energy-scenario'
-import type { ScenarioCatalog, ScenarioDescriptor, ScenarioRequest } from './home-energy-scenario'
+import type { ScenarioCatalog, ScenarioDescriptor, ScenarioRequest, ScenarioStateBinding } from './home-energy-scenario'
 
 /**
  * The home-energy simulation surface (SPEC E6–E8; C6, ADR-11/ADR-12, INV-10).
@@ -96,7 +96,7 @@ export interface SimulationDetailView extends SimulationRecordView {
 }
 
 export interface SimulationSurface {
-  buildScenario(request: ScenarioRequest, ctx: ToolContext): Promise<ScenarioDescriptor>
+  buildScenario(request: ScenarioRequest, ctx: ToolContext, state?: ScenarioStateBinding): Promise<ScenarioDescriptor>
   requestSimulation(request: RequestSimulationInput, ctx: ToolContext): Promise<SimulationRecordView>
   getSimulation(simulationId: string, ctx: ToolContext): Promise<SimulationDetailView>
 }
@@ -168,7 +168,7 @@ export function createEnergySimulationSurface(
   }
 
   return {
-    buildScenario: (request, ctx) => catalog.buildScenario(request, ctx),
+    buildScenario: (request, ctx, state) => catalog.buildScenario(request, ctx, state),
 
     async requestSimulation(request, ctx) {
       assertNoComputeBypass(request.parameters, request.inputRefs)
@@ -303,6 +303,16 @@ export function createEnergySimulationSurface(
 export interface ExecutionSurface {
   requestExecution(input: RequestExecutionInput, ctx: ToolContext): Promise<ExecutionRecord>
   getExecution?(executionId: string, ctx: ToolContext): Promise<ExecutionRecord | undefined>
+  getVirtualState?(ctx: ToolContext): Promise<VirtualBatteryStateView>
+}
+
+export interface VirtualBatteryStateView extends ScenarioStateBinding {
+  readonly deviceId: string
+  readonly capacityKwh: number
+  readonly socPercent: number
+  readonly mode: 'simulation'
+  readonly updatedAt: string
+  readonly simulatedAt: string
 }
 
 export function createSimulationExecutionSurface(options: {

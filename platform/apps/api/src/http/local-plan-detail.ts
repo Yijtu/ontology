@@ -12,6 +12,16 @@ export interface LocalPlanDetail {
   readonly sourceEvidenceRef: ResourceRef
   readonly resultRef: ResourceRef
   readonly selectedPlanRef: ResourceRef
+  readonly inputManifestHash: string
+  readonly weatherScenario: string
+  readonly reserveSocPercent: number
+  readonly reserveWindowStartSlot: number
+  readonly initialEnergyKwh: number
+  readonly initialSocPercent: number
+  readonly stateRevision: number
+  readonly slotMinutes: number
+  readonly stateRef?: ResourceRef
+  readonly parentPlanRef?: ResourceRef
   readonly dataMode: 'simulation'
   readonly optimality: 'best_of_tested_candidates'
   readonly selectedStrategy: string
@@ -25,6 +35,7 @@ export interface LocalPlanDetail {
     readonly endUtc: string
     readonly chargeKw: number
     readonly dischargeKw: number
+    readonly pvAvailableKw: number
     readonly energyStartKwh: number
     readonly energyEndKwh: number
   }[]
@@ -127,6 +138,7 @@ function projectPlan(result: unknown, answer: PublishedAnswer, evidenceRef: Reso
       slotIndex: number(entry['slotIndex'], 'slotIndex'),
       startUtc: string(entry['startUtc'], 'startUtc'), endUtc: string(entry['endUtc'], 'endUtc'),
       chargeKw: number(entry['chargeKw'], 'chargeKw'), dischargeKw: number(entry['dischargeKw'], 'dischargeKw'),
+      pvAvailableKw: number(entry['pvAvailableKw'], 'pvAvailableKw'),
       energyStartKwh: number(entry['energyStartKwh'], 'energyStartKwh'), energyEndKwh: number(entry['energyEndKwh'], 'energyEndKwh'),
     }
   })
@@ -148,9 +160,42 @@ function projectPlan(result: unknown, answer: PublishedAnswer, evidenceRef: Reso
   if (!Array.isArray(assumptions) || assumptions.length > 32 || assumptions.some((item) => typeof item !== 'string')) {
     throw new LocalPlanDetailError('PLAN_RESULT_INVALID', 409, 'plan assumptions are invalid')
   }
+  const assumption = (name: string): string | undefined => assumptions.find((item): item is string => typeof item === 'string' && item.startsWith(`${name}=`))?.slice(name.length + 1)
+  const initialEnergyKwh = number(intervals[0]?.energyStartKwh, 'initial energy')
+  const capacityKwh = Number(assumption('battery_capacity_kwh') ?? '10')
+  if (!Number.isFinite(capacityKwh) || capacityKwh <= 0) throw new LocalPlanDetailError('PLAN_RESULT_INVALID', 409, 'battery capacity assumption is invalid')
+  const revisionValue = Number(assumption('state_revision') ?? '0')
+  if (!Number.isSafeInteger(revisionValue) || revisionValue < 0) throw new LocalPlanDetailError('PLAN_RESULT_INVALID', 409, 'state revision assumption is invalid')
+  const refFromAssumption = (key: string): ResourceRef | undefined => {
+    const raw = assumption(key)
+    if (raw === undefined) return undefined
+    try {
+      const parsed = record(JSON.parse(raw) as unknown, key)
+      if (key === 'parent_plan_ref' && parsed['kind'] !== 'plan') throw new Error('wrong resource kind')
+      if (key === 'state_ref' && parsed['kind'] !== 'artifact') throw new Error('wrong resource kind')
+      return { id: string(parsed['id'], `${key}.id`), version: string(parsed['version'], `${key}.version`), digest: string(parsed['digest'], `${key}.digest`), kind: parsed['kind'] as ResourceRef['kind'] }
+    } catch { throw new LocalPlanDetailError('PLAN_RESULT_INVALID', 409, `${key} is invalid`) }
+  }
+  const stateRef = refFromAssumption('state_ref')
+  const parentPlanRef = refFromAssumption('parent_plan_ref')
+  const reserveWindowStartSlot = Number(assumption('reserve_window_start_slot') ?? '0')
+  if (!Number.isSafeInteger(reserveWindowStartSlot) || reserveWindowStartSlot < 0 || reserveWindowStartSlot >= 96) throw new LocalPlanDetailError('PLAN_RESULT_INVALID', 409, 'reserve target window is invalid')
+  const firstInterval = intervals[0]
+  const slotMinutes = firstInterval === undefined ? 0 : (Date.parse(firstInterval.endUtc) - Date.parse(firstInterval.startUtc)) / 60_000
+  if (!Number.isFinite(slotMinutes) || slotMinutes <= 0) throw new LocalPlanDetailError('PLAN_RESULT_INVALID', 409, 'plan interval duration is invalid')
   return {
     runId: answer.runId, answerId: answer.answerId, sourceEvidenceRef: evidenceRef, resultRef,
     selectedPlanRef: { id: selectedId, version: selectedVersion, digest: selectedDigest, kind: 'plan' },
+    inputManifestHash: string(planner['inputManifestHash'], 'input manifest hash'),
+    weatherScenario: assumption('weather_scenario') ?? 'unknown',
+    reserveSocPercent: (reserveMargins[0]?.reserveKwh ?? 0) / capacityKwh * 100,
+    reserveWindowStartSlot,
+    initialEnergyKwh,
+    initialSocPercent: initialEnergyKwh / capacityKwh * 100,
+    stateRevision: revisionValue,
+    slotMinutes,
+    ...(stateRef === undefined ? {} : { stateRef }),
+    ...(parentPlanRef === undefined ? {} : { parentPlanRef }),
     dataMode: 'simulation', optimality: 'best_of_tested_candidates',
     selectedStrategy: string(candidate['strategy'], 'selected strategy'),
     candidateTotalCost, baselineTotalCost, currency: string(objective['currency'], 'currency'), reserveSatisfied,
@@ -161,6 +206,7 @@ function projectPlan(result: unknown, answer: PublishedAnswer, evidenceRef: Reso
 export function registerLocalPlanDetailRoute(app: FastifyInstance, options: {
   readonly authenticate: RequestAuthenticator
   readonly getAnswer: (runId: string, ctx: ToolContext) => Promise<PublishedAnswer | undefined>
+  readonly getParentPlanRef?: (runId: string, ctx: ToolContext) => Promise<ResourceRef | undefined>
   readonly evidence: EvidenceStorePort
   readonly blobs: LocalImmutableBlobStore
 }): void {
@@ -173,25 +219,33 @@ export function registerLocalPlanDetailRoute(app: FastifyInstance, options: {
       principal: auth.principal, spaceId: auth.spaceId, traceId, runId,
       allowedResourceKinds: ['evidence', 'artifact'],
     })
-    const answer = await options.getAnswer(runId, ctx)
-    if (answer === undefined) throw new LocalPlanDetailError('PLAN_NOT_AVAILABLE', 404, 'the run has no published plan answer')
-    const cost = answer.claims.find((claim) => claim.predicate === 'candidate_total_cost')
-    const evidenceRef = cost?.references[0]?.evidenceRef
-    if (evidenceRef === undefined) throw new LocalPlanDetailError('PLAN_NOT_AVAILABLE', 404, 'the published answer has no plan evidence')
-    const scopeRef = { tenantId: auth.principal.tenantId, spaceId: auth.spaceId }
-    const evidence = await options.evidence.get(scopeRef, evidenceRef.id, ctx)
-    if (evidence === undefined || evidence.evidenceRef.digest !== evidenceRef.digest || evidence.envelope.dataMode !== 'simulation' || evidence.envelope.payloadRef === undefined) {
-      throw new LocalPlanDetailError('PLAN_EVIDENCE_INVALID', 409, 'published plan evidence is unavailable or no longer matches')
-    }
-    const authorizedEvidence = await options.blobs.getAuthorized({ scopeRef, blobRef: evidence.envelope.payloadRef }, ctx)
-    if (!authorizedEvidence.integrityVerified) throw new LocalPlanDetailError('PLAN_EVIDENCE_INVALID', 409, 'plan evidence integrity failed')
-    const payload = record(JSON.parse(new TextDecoder().decode(await options.blobs.readAuthorized({ scopeRef, blobRef: evidence.envelope.payloadRef }, ctx))) as unknown, 'plan evidence')
-    const computation = record(payload['computation'], 'plan computation')
-    const resultRef = artifactRef(computation['resultRef'])
-    const authorizedResult = await options.blobs.getAuthorized({ scopeRef, blobRef: resultRef }, ctx)
-    if (!authorizedResult.integrityVerified) throw new LocalPlanDetailError('PLAN_RESULT_INVALID', 409, 'plan artifact integrity failed')
-    const result: unknown = JSON.parse(new TextDecoder().decode(await options.blobs.readAuthorized({ scopeRef, blobRef: resultRef }, ctx)))
-    reply.status(200).send({ data: projectPlan(result, answer, evidenceRef, resultRef), meta: { traceId } })
+    const detail = await readLocalPlanDetail(runId, options, ctx)
+    const parentPlanRef = await options.getParentPlanRef?.(runId, ctx)
+    reply.status(200).send({ data: { ...detail, ...(parentPlanRef === undefined ? {} : { parentPlanRef }) }, meta: { traceId } })
     return reply
   })
+}
+
+export async function readLocalPlanDetail(runId: string, options: {
+  readonly getAnswer: (runId: string, ctx: ToolContext) => Promise<PublishedAnswer | undefined>
+  readonly evidence: EvidenceStorePort
+  readonly blobs: LocalImmutableBlobStore
+}, ctx: ToolContext): Promise<LocalPlanDetail> {
+  const answer = await options.getAnswer(runId, ctx)
+  if (answer === undefined) throw new LocalPlanDetailError('PLAN_NOT_AVAILABLE', 404, 'the run has no published plan answer')
+  const cost = answer.claims.find((claim) => claim.predicate === 'candidate_total_cost')
+  const evidenceRef = cost?.references[0]?.evidenceRef
+  if (evidenceRef === undefined) throw new LocalPlanDetailError('PLAN_NOT_AVAILABLE', 404, 'the published answer has no plan evidence')
+  const scopeRef = { tenantId: ctx.principal.tenantId, spaceId: ctx.allowedResources.spaceId }
+  const evidence = await options.evidence.get(scopeRef, evidenceRef.id, ctx)
+  if (evidence === undefined || evidence.evidenceRef.digest !== evidenceRef.digest || evidence.envelope.dataMode !== 'simulation' || evidence.envelope.payloadRef === undefined) throw new LocalPlanDetailError('PLAN_EVIDENCE_INVALID', 409, 'published plan evidence is unavailable or no longer matches')
+  const authorizedEvidence = await options.blobs.getAuthorized({ scopeRef, blobRef: evidence.envelope.payloadRef }, ctx)
+  if (!authorizedEvidence.integrityVerified) throw new LocalPlanDetailError('PLAN_EVIDENCE_INVALID', 409, 'plan evidence integrity failed')
+  const payload = record(JSON.parse(new TextDecoder().decode(await options.blobs.readAuthorized({ scopeRef, blobRef: evidence.envelope.payloadRef }, ctx))) as unknown, 'plan evidence')
+  const computation = record(payload['computation'], 'plan computation')
+  const resultRef = artifactRef(computation['resultRef'])
+  const authorizedResult = await options.blobs.getAuthorized({ scopeRef, blobRef: resultRef }, ctx)
+  if (!authorizedResult.integrityVerified) throw new LocalPlanDetailError('PLAN_RESULT_INVALID', 409, 'plan artifact integrity failed')
+  const result: unknown = JSON.parse(new TextDecoder().decode(await options.blobs.readAuthorized({ scopeRef, blobRef: resultRef }, ctx)))
+  return projectPlan(result, answer, evidenceRef, resultRef)
 }

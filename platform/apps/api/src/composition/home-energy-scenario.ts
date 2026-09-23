@@ -47,7 +47,7 @@ import type {
  * UI can only pass back the opaque `inputRef`; the compute handler reads exactly those bytes.
  */
 
-export const WEATHER_SCENARIOS = ['sunny', 'overcast', 'storm'] as const
+export const WEATHER_SCENARIOS = ['anker_base', 'afternoon_overcast', 'sunny', 'overcast', 'storm'] as const
 
 export type WeatherScenario = (typeof WEATHER_SCENARIOS)[number]
 
@@ -57,11 +57,15 @@ export function isWeatherScenario(value: unknown): value is WeatherScenario {
 
 export const MAX_BACKUP_REQUIREMENT_KWH = 50
 export const BATTERY_CAPACITY_KWH = 10
+export const INITIAL_BATTERY_ENERGY_KWH = 3.5
 
 const SLOT_MINUTES = 15
 const SLOT_COUNT = 96
+/** ReserveSOC is a target for the evening backup window, leaving daytime charging feasible. */
+export const EVENING_RESERVE_START_SLOT = 17 * 60 / SLOT_MINUTES
 /** Local 2026-01-01T00:00 in Asia/Shanghai (+08:00), expressed as the UTC instant. */
 const START_UTC: Rfc3339UtcTimestamp = '2025-12-31T16:00:00.000Z'
+export const DEFAULT_SCENARIO_START_UTC = START_UTC
 const LOAD_MEASUREMENT_POINT = 'mp-load'
 const PV_MEASUREMENT_POINT = 'mp-pv'
 const SOURCE_REF: SourceRef = { namespace: 'home-energy.synthetic', sourceId: 'ui-scenario' }
@@ -87,7 +91,17 @@ export interface ScenarioRequest {
   readonly backupRequirementKwh?: number
   readonly reserveSocPercent?: number
   readonly weatherScenario: WeatherScenario
+  readonly reserveWindowStartSlot?: number
   readonly timeZone?: string
+}
+
+/** Server-resolved Virtual SOLIX state. HTTP callers cannot set these fields. */
+export interface ScenarioStateBinding {
+  readonly energyKwh: number
+  readonly revision: number
+  readonly simulatedAt: string
+  readonly stateRef?: ResourceRef
+  readonly parentPlanRef?: ResourceRef
 }
 
 /** One declared series of the scenario: its unit, time base and sampling type, never implicit. */
@@ -120,6 +134,12 @@ export interface ScenarioDescriptor {
   readonly horizon: TimeWindow
   readonly backupRequirementKwh: number
   readonly reserveSocPercent: number
+  readonly reserveWindowStartSlot: number
+  readonly initialEnergyKwh: number
+  readonly initialSocPercent: number
+  readonly stateRevision: number
+  readonly stateRef?: ResourceRef
+  readonly parentPlanRef?: ResourceRef
   readonly weatherScenario: WeatherScenario
   readonly batterySpecSource: BatterySpecDeclaration['specSource']
   readonly series: readonly ScenarioSeriesDescriptor[]
@@ -127,7 +147,7 @@ export interface ScenarioDescriptor {
 }
 
 export interface ScenarioCatalog {
-  buildScenario(request: ScenarioRequest, ctx: ToolContext): Promise<ScenarioDescriptor>
+  buildScenario(request: ScenarioRequest, ctx: ToolContext, state?: ScenarioStateBinding): Promise<ScenarioDescriptor>
 }
 
 function round(value: number, decimals: number): number {
@@ -135,8 +155,8 @@ function round(value: number, decimals: number): number {
   return Math.round(value * factor) / factor
 }
 
-function timestampAt(slotIndex: number): Rfc3339UtcTimestamp {
-  return new Date(Date.parse(START_UTC) + slotIndex * SLOT_MINUTES * 60_000).toISOString()
+function timestampAt(slotIndex: number, startUtc: string = START_UTC): Rfc3339UtcTimestamp {
+  return new Date(Date.parse(startUtc) + slotIndex * SLOT_MINUTES * 60_000).toISOString()
 }
 
 function hourOf(slotIndex: number): number {
@@ -153,6 +173,8 @@ function loadKwAt(slotIndex: number): number {
 }
 
 const WEATHER_FACTOR: Readonly<Record<WeatherScenario, number>> = {
+  anker_base: 1,
+  afternoon_overcast: 1,
   sunny: 1,
   overcast: 0.35,
   storm: 0.08,
@@ -163,7 +185,12 @@ function pvKwAt(slotIndex: number, weather: WeatherScenario): number {
   const hour = hourOf(slotIndex)
   if (hour < 6 || hour >= 19) return 0
   const x = (hour - 12.5) / 3.5
-  return round(5.2 * Math.exp(-x * x) * WEATHER_FACTOR[weather], 3)
+  const factor = weather === 'anker_base'
+    ? (hour < 12 ? 0.35 : 1)
+    : weather === 'afternoon_overcast'
+      ? 0.35
+      : WEATHER_FACTOR[weather]
+  return round(5.2 * Math.exp(-x * x) * factor, 3)
 }
 
 /** A deterministic synthetic purchase-price profile with a cheap night and an expensive evening. */
@@ -174,10 +201,10 @@ function purchasePriceAt(slotIndex: number): number {
   return 0.65
 }
 
-function pointsFor(values: readonly number[]): readonly NormalizedPoint[] {
+function pointsFor(values: readonly number[], startUtc: string): readonly NormalizedPoint[] {
   return values.map((value, slotIndex) => ({
     slotIndex,
-    timestamp: timestampAt(slotIndex),
+    timestamp: timestampAt(slotIndex, startUtc),
     value,
     quality: 'good' as const,
     status: 'ok' as const,
@@ -191,6 +218,7 @@ function seriesFor(options: {
   readonly timeZone: string
   readonly horizon: TimeWindow
   readonly weather: WeatherScenario
+  readonly startUtc: string
 }): NormalizedSeries {
   const base = {
     measurementPointRef: options.measurementPointRef,
@@ -200,7 +228,7 @@ function seriesFor(options: {
     slotMinutes: SLOT_MINUTES,
     samplingType: options.samplingType,
     semantics: 'instantaneous' as const,
-    points: pointsFor(options.values),
+    points: pointsFor(options.values, options.startUtc),
     sourceRef: SOURCE_REF,
     mappingVersion: INPUT_VERSIONS.mapping,
     sourceSnapshot: {
@@ -234,7 +262,7 @@ const BATTERY: BatterySpecDeclaration = {
   dischargePowerLimitKw: 5,
   chargeEfficiency: 0.9,
   dischargeEfficiency: 0.9,
-  initialEnergyKwh: 3.5,
+  initialEnergyKwh: INITIAL_BATTERY_ENERGY_KWH,
   gridChargingAllowed: true,
   exportAllowed: true,
   islandingSupported: false,
@@ -260,24 +288,26 @@ function reserveInputs(request: ScenarioRequest): { readonly reserveSocPercent: 
   return { backupRequirementKwh, reserveSocPercent: backupRequirementKwh / BATTERY_CAPACITY_KWH * 100 }
 }
 
-function scenarioAssumptions(weather: WeatherScenario, backupRequirementKwh: number, reserveSocPercent: number): readonly string[] {
+function scenarioAssumptions(weather: WeatherScenario, backupRequirementKwh: number, reserveSocPercent: number, reserveWindowStartSlot: number): readonly string[] {
   return [
     'synthetic fixture scenario',
     `weather_scenario=${weather}`,
     `backup_requirement_kwh=${backupRequirementKwh}`,
     `reserve_soc_percent=${reserveSocPercent}`,
+    `reserve_window_start_slot=${String(reserveWindowStartSlot)}`,
+    `reserve_window_end_slot=${String(SLOT_COUNT)}`,
     'battery_spec=synthetic_assumption',
     'no_real_device_spec',
     'simulation_only',
   ]
 }
 
-function reservesFor(backupRequirementKwh: number): readonly ReserveConstraint[] {
+function reservesFor(backupRequirementKwh: number, windowStartSlot: number): readonly ReserveConstraint[] {
   if (backupRequirementKwh <= 0) return []
   return [
     {
       reserveEnergyKwh: backupRequirementKwh,
-      windowStartSlot: 0,
+      windowStartSlot,
       windowEndSlot: SLOT_COUNT,
       source: 'user_preference',
       severity: 'hard',
@@ -287,13 +317,19 @@ function reservesFor(backupRequirementKwh: number): readonly ReserveConstraint[]
 }
 
 /** Build the bounded, content-addressed input bundle for one named scenario. Pure and deterministic. */
-export function buildSyntheticScenarioInput(request: ScenarioRequest): EnergyOperationInput {
+export function buildSyntheticScenarioInput(request: ScenarioRequest, state?: ScenarioStateBinding): EnergyOperationInput {
   const timeZone = request.timeZone ?? 'Asia/Shanghai'
   const weather = request.weatherScenario
   const reserve = reserveInputs(request)
+  const reserveWindowStartSlot = request.reserveWindowStartSlot ?? 0
+  if (!Number.isSafeInteger(reserveWindowStartSlot) || reserveWindowStartSlot < 0 || reserveWindowStartSlot >= SLOT_COUNT) throw new Error('reserveWindowStartSlot must be a slot in [0, 95]')
+  const startUtc = state?.simulatedAt ?? START_UTC
+  const batteryVersion = versionRef('home-energy.device.ui', '1.0.0', `capacity=${BATTERY_CAPACITY_KWH};initial=${state?.energyKwh ?? 3.5};stateRevision=${state?.revision ?? 0};stateRef=${state?.stateRef?.digest ?? 'synthetic-default'}`)
+  const constraintVersion = versionRef('home-energy.constraints.ui', '1.0.0', `reserveKwh=${reserve.backupRequirementKwh};reserveStart=${reserveWindowStartSlot};weather=${weather}`)
+  const scenarioVersions = { ...INPUT_VERSIONS, deviceSpec: batteryVersion, userConstraint: constraintVersion }
   const loadKw = Array.from({ length: SLOT_COUNT }, (_unused, slotIndex) => loadKwAt(slotIndex))
   const pvKw = Array.from({ length: SLOT_COUNT }, (_unused, slotIndex) => pvKwAt(slotIndex, weather))
-  const horizon: TimeWindow = { start: START_UTC, end: timestampAt(SLOT_COUNT) }
+  const horizon: TimeWindow = { start: startUtc as Rfc3339UtcTimestamp, end: timestampAt(SLOT_COUNT, startUtc) }
   const tariff: TariffBinding = {
     tariffRef: INPUT_VERSIONS.tariff,
     currency: 'CNY',
@@ -310,6 +346,7 @@ export function buildSyntheticScenarioInput(request: ScenarioRequest): EnergyOpe
       timeZone,
       horizon,
       weather,
+      startUtc,
     }),
     seriesFor({
       measurementPointRef: PV_MEASUREMENT_POINT,
@@ -318,6 +355,7 @@ export function buildSyntheticScenarioInput(request: ScenarioRequest): EnergyOpe
       timeZone,
       horizon,
       weather,
+      startUtc,
     }),
   ]
   const manifest = {
@@ -329,7 +367,7 @@ export function buildSyntheticScenarioInput(request: ScenarioRequest): EnergyOpe
     slotMinutes: SLOT_MINUTES,
     slotCount: SLOT_COUNT,
     dataMode: 'synthetic' as const,
-    versions: INPUT_VERSIONS,
+    versions: scenarioVersions,
     coverage: { additive: [LOAD_MEASUREMENT_POINT, PV_MEASUREMENT_POINT], redundant: [], conflicts: [] },
     sourceWatermarks: [],
     missingInputs: [],
@@ -347,20 +385,29 @@ export function buildSyntheticScenarioInput(request: ScenarioRequest): EnergyOpe
     mediaType: 'application/vnd.ontology.energy-input-snapshot+json',
     manifest,
   }
+  const battery = { ...BATTERY, initialEnergyKwh: state?.energyKwh ?? INITIAL_BATTERY_ENERGY_KWH }
+  const assumptions = [
+    ...scenarioAssumptions(weather, reserve.backupRequirementKwh, reserve.reserveSocPercent, reserveWindowStartSlot),
+    `initial_energy_kwh=${battery.initialEnergyKwh}`,
+    `battery_capacity_kwh=${battery.energyCapacityKwh}`,
+    `state_revision=${state?.revision ?? 0}`,
+    `simulation_clock_start=${startUtc}`,
+    ...(state?.stateRef === undefined ? ['state_source=synthetic_default'] : [`state_ref=${JSON.stringify(state.stateRef)}`]),
+  ]
   return {
     kind: 'home-energy.operation-input',
     version: '1.0.0',
     dataMode: 'synthetic',
     snapshot,
     topology: TOPOLOGY,
-    battery: BATTERY,
+    battery,
     grid: GRID,
     load: [LOAD_BINDING],
     pv: [PV_BINDING],
     tariff,
-    reserves: reservesFor(reserve.backupRequirementKwh),
+    reserves: reservesFor(reserve.backupRequirementKwh, reserveWindowStartSlot),
     tolerance: DEFAULT_SIMULATION_TOLERANCE,
-    assumptions: scenarioAssumptions(weather, reserve.backupRequirementKwh, reserve.reserveSocPercent),
+    assumptions,
     // A declared, fixture-only valuation so candidates that end at a different terminal energy
     // can still be compared on one basis (SPEC E5, E-08). It is `fixture_declared`, not a real
     // tariff, and the comparison still refuses an unqualified saving claim without it.
@@ -404,6 +451,20 @@ export function scenarioDescriptorOf(
     : (reserve?.reserveEnergyKwh ?? 0)
   const reserveParsed = Number(assumptionValue(input.assumptions, 'reserve_soc_percent'))
   const reserveSocPercent = Number.isFinite(reserveParsed) ? reserveParsed : backupRequirementKwh / BATTERY_CAPACITY_KWH * 100
+  const reserveWindowParsed = Number(assumptionValue(input.assumptions, 'reserve_window_start_slot'))
+  const reserveWindowStartSlot = Number.isSafeInteger(reserveWindowParsed) && reserveWindowParsed >= 0 ? reserveWindowParsed : 0
+  const revisionParsed = Number(assumptionValue(input.assumptions, 'state_revision'))
+  const stateRevision = Number.isSafeInteger(revisionParsed) && revisionParsed >= 0 ? revisionParsed : 0
+  const initialEnergyKwh = input.battery.initialEnergyKwh ?? 0
+  const initialSocPercent = input.battery.energyCapacityKwh === undefined || input.battery.energyCapacityKwh <= 0 ? 0 : initialEnergyKwh / input.battery.energyCapacityKwh * 100
+  let stateRef: ResourceRef | undefined
+  const stateRefValue = assumptionValue(input.assumptions, 'state_ref')
+  if (stateRefValue !== undefined) {
+    try {
+      const parsed: unknown = JSON.parse(stateRefValue)
+      if (typeof parsed === 'object' && parsed !== null && 'id' in parsed && 'version' in parsed && 'digest' in parsed && 'kind' in parsed) stateRef = parsed as ResourceRef
+    } catch { /* invalid optional state pointers stay absent and fail closed at execution */ }
+  }
   const series = manifest.series.map((entry): ScenarioSeriesDescriptor => {
     const first = entry.points[0]
     const last = entry.points[entry.points.length - 1]
@@ -429,6 +490,11 @@ export function scenarioDescriptorOf(
     horizon: manifest.horizon,
     backupRequirementKwh,
     reserveSocPercent,
+    reserveWindowStartSlot,
+    initialEnergyKwh,
+    initialSocPercent,
+    stateRevision,
+    ...(stateRef === undefined ? {} : { stateRef }),
     weatherScenario: weather,
     batterySpecSource: input.battery.specSource,
     series,
@@ -444,8 +510,8 @@ export function createSyntheticScenarioCatalog(
   options: SyntheticScenarioCatalogOptions,
 ): ScenarioCatalog {
   return {
-    async buildScenario(request: ScenarioRequest, ctx: ToolContext): Promise<ScenarioDescriptor> {
-      const input = buildSyntheticScenarioInput(request)
+    async buildScenario(request: ScenarioRequest, ctx: ToolContext, state?: ScenarioStateBinding): Promise<ScenarioDescriptor> {
+      const input = buildSyntheticScenarioInput(request, state)
       const stored = await options.artifacts.putBytes(
         {
           scopeRef: { tenantId: ctx.principal.tenantId, spaceId: ctx.allowedResources.spaceId },
@@ -454,7 +520,7 @@ export function createSyntheticScenarioCatalog(
         },
         ctx,
       )
-      return scenarioDescriptorOf(input, stored.blobRef)
+      return { ...scenarioDescriptorOf(input, stored.blobRef), ...(state?.parentPlanRef === undefined ? {} : { parentPlanRef: state.parentPlanRef }) }
     },
   }
 }

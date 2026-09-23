@@ -156,14 +156,29 @@ export function registerSimulationRoutes(
       throw new InvalidRequestFieldError(`weatherScenario must be one of ${WEATHER_SCENARIOS.join(', ')}`)
     }
     const timeZone = typeof body.timeZone === 'string' && body.timeZone.length > 0 ? body.timeZone : undefined
+    const reserveWindowStartSlot = body.reserveWindowStartSlot ?? 0
+    if (typeof reserveWindowStartSlot !== 'number' || !Number.isSafeInteger(reserveWindowStartSlot) || reserveWindowStartSlot < 0 || reserveWindowStartSlot > 95) throw new InvalidRequestFieldError('reserveWindowStartSlot must be an integer slot in [0, 95]')
     const scenarioRequest: ScenarioRequest = {
       ...requestReserve,
       weatherScenario: weather,
+      reserveWindowStartSlot,
       ...(timeZone === undefined ? {} : { timeZone }),
     }
     const ctx = contextFor(auth, traceId, globalThis.crypto.randomUUID())
-    const scenario = await dependencies.service.buildScenario(scenarioRequest, ctx)
+    const currentState = await dependencies.execution.getVirtualState?.(ctx)
+    const scenario = await dependencies.service.buildScenario(scenarioRequest, ctx, currentState)
     reply.status(201).send({ data: scenario, meta: { traceId } })
+    return reply
+  })
+
+  app.get('/api/v1/virtual-solix/state', async (request, reply) => {
+    const traceId = readTraceId(request)
+    const auth = authenticateRequest(dependencies.authenticate, request, reply)
+    if (auth === undefined) return reply
+    requireSimulationRole(auth)
+    if (dependencies.execution.getVirtualState === undefined) throw new SimulationSurfaceError('CAPABILITY_NOT_CONFIGURED', 409, 'Virtual SOLIX state read-back is not configured')
+    const state = await dependencies.execution.getVirtualState(contextFor(auth, traceId, globalThis.crypto.randomUUID()))
+    reply.status(200).send({ data: state, meta: { traceId } })
     return reply
   })
 
@@ -226,6 +241,9 @@ export function registerSimulationRoutes(
       throw new InvalidRequestFieldError('mode must be simulation or live')
     }
     const runId = typeof body.runId === 'string' && body.runId.length > 0 ? body.runId : globalThis.crypto.randomUUID()
+    const ifMatch = readHeader(request, 'if-match')
+    const expectedStateRevision = ifMatch === undefined ? undefined : Number(ifMatch.replace(/^"|"$/gu, ''))
+    if (mode === 'simulation' && (expectedStateRevision === undefined || !Number.isSafeInteger(expectedStateRevision) || expectedStateRevision < 0)) throw new InvalidRequestFieldError('simulation execution requires a non-negative If-Match state revision')
     const executionInput: RequestExecutionInput = {
       operationRef,
       planRef,
@@ -233,6 +251,7 @@ export function registerSimulationRoutes(
       mode: mode as ExecutionMode,
       runId,
       idempotencyKey,
+      ...(expectedStateRevision === undefined ? {} : { expectedStateRevision }),
     }
     const ctx = contextFor(auth, traceId, runId)
     try {

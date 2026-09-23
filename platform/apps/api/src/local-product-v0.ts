@@ -10,13 +10,16 @@ import type { RunProfileBinding } from '@ontology/application'
 import { SCHEMA_DOCUMENTS } from '@ontology/contracts'
 import type { DecisionPort, GenerationPort, ProfileRef, ToolContext, VersionRef } from '@ontology/contracts'
 import { BudgetService, sha256DigestOf } from '@ontology/core'
-import { ENERGY_OPERATION_REGISTRY, createEnergyComputeHandlers, encodeEnergyOperationInput } from '@ontology/extension-home-energy'
+import { ENERGY_OPERATION_REGISTRY, createEnergyComputeHandlers, decodeEnergyOperationInput } from '@ontology/extension-home-energy'
 import { createEnergyComputeConfig, createScopedBlobReader } from './composition/energy-compute'
 import { createEnergySimulationSurface } from './composition/energy-simulation'
 import { createPostgresSimulationRecordStore } from './composition/postgres-energy-simulation-store'
 import { createVirtualSolixExecutionSurface } from './composition/virtual-solix-execution'
-import { buildSyntheticScenarioInput } from './composition/home-energy-scenario'
-import { createLocalProductDeployment } from './composition/local-product-deployment'
+import { recoverLegacyVirtualSolixState } from './composition/recover-virtual-solix-state'
+import { INITIAL_BATTERY_ENERGY_KWH, BATTERY_CAPACITY_KWH, DEFAULT_SCENARIO_START_UTC } from './composition/home-energy-scenario'
+import { createPostgresEnergyPlanVersionStore } from './composition/energy-plan-version-store'
+import type { ExecutionSurface, VirtualBatteryStateView } from './composition/energy-simulation'
+import { createLocalProductDeployment, LocalTaskContextError } from './composition/local-product-deployment'
 import { createLocalStructuredProfiles } from './composition/registered-source-profiles'
 import { createLocalTransportProfile } from './composition/registered-transport-profile'
 import { createLocalOperatorSqlProfile, OPERATOR_SQL_SOURCE } from './composition/registered-operator-sql'
@@ -28,7 +31,9 @@ import { createBlobArtifactWriter, createToolGatewayComposition } from './compos
 import { createApiServer } from './http/app'
 import type { AuthenticatedRequest } from './http/server'
 import { registerLocalDocumentImportRoute } from './http/local-documents'
-import { registerLocalPlanDetailRoute } from './http/local-plan-detail'
+import { readLocalPlanDetail, registerLocalPlanDetailRoute } from './http/local-plan-detail'
+import { registerEnergyPlanVersionRoutes } from './http/energy-plan-versions'
+import { EnergyPlanVersionError } from './composition/energy-plan-version-store'
 import { registerLocalCandidateRoutes } from './http/local-candidates'
 import { registerSimulationRoutes } from './http/simulations'
 import { createRequestToolContext } from './http/context'
@@ -72,6 +77,11 @@ export async function startRegisteredLocalProduct(): Promise<{ close(): Promise<
   const connectionString = process.env['DATABASE_URL']
   if (!connectionString) throw new Error('DATABASE_URL must point to the ontology_app PostgreSQL role; apply migrations first')
   const database = new ControlPostgresDatabase({ connectionString, maxPoolSize: 10 })
+  await database.withIdentityScope({ tenantId, spaceId }, async (client) => {
+    const initial = { energyKwh: INITIAL_BATTERY_ENERGY_KWH, socPercent: INITIAL_BATTERY_ENERGY_KWH / BATTERY_CAPACITY_KWH * 100, revision: 0, updatedAt: new Date().toISOString(), simulatedAt: DEFAULT_SCENARIO_START_UTC, mode: 'simulation', source: 'synthetic-default' }
+    await client.query(`INSERT INTO agent_platform.virtual_solix_states (tenant_id,space_id,device_id,revision,state) VALUES (current_setting('app.tenant_id')::uuid,current_setting('app.space_id')::uuid,'virtual-solix-1',0,$1::jsonb) ON CONFLICT DO NOTHING`, [JSON.stringify(initial)])
+  })
+  const planVersionStore = createPostgresEnergyPlanVersionStore(database)
   const control = new ControlPostgresRepository(database)
   const store = new PostgresRunStore(database)
   const workflowStore = new PostgresWorkflowStore(database)
@@ -83,8 +93,26 @@ export async function startRegisteredLocalProduct(): Promise<{ close(): Promise<
   const registry = new PostgresArtifactRegistry({ connectionString, maxPoolSize: 4 })
   const blobs = new LocalImmutableBlobStore({ objectStore, registry })
   const artifacts = createBlobArtifactWriter(blobs)
+  const getTrustedVirtualState = async (ctx: ToolContext): Promise<VirtualBatteryStateView> => {
+    const row = await database.withIdentityScope({ tenantId: ctx.principal.tenantId, spaceId: ctx.allowedResources.spaceId }, async (client) => {
+      const result = await client.query<{ state: { energyKwh: number; socPercent: number; revision: number; updatedAt: string; simulatedAt?: string; stateRef?: import('@ontology/contracts').ResourceRef } }>(`SELECT state FROM agent_platform.virtual_solix_states WHERE device_id='virtual-solix-1'`)
+      return result.rows[0]?.state
+    }, { readOnly: true })
+    let state = row ?? { energyKwh: INITIAL_BATTERY_ENERGY_KWH, socPercent: INITIAL_BATTERY_ENERGY_KWH / BATTERY_CAPACITY_KWH * 100, revision: 0, updatedAt: new Date().toISOString(), simulatedAt: DEFAULT_SCENARIO_START_UTC }
+    if (state.revision > 0 && state.stateRef === undefined) state = await recoverLegacyVirtualSolixState({ database, blobs, artifacts, state, ctx })
+    if (state.stateRef !== undefined) {
+      const bytes = await blobs.readAuthorized({ scopeRef: { tenantId: ctx.principal.tenantId, spaceId: ctx.allowedResources.spaceId }, blobRef: state.stateRef }, ctx)
+      const artifact = JSON.parse(new TextDecoder().decode(bytes)) as Record<string, unknown>
+      if (artifact['energyKwh'] !== state.energyKwh || artifact['socPercent'] !== state.socPercent || artifact['revision'] !== state.revision || artifact['simulatedAt'] !== state.simulatedAt) throw new Error('Virtual SOLIX control state and immutable state artifact differ')
+    } else if (state.revision !== 0) throw new Error('Virtual SOLIX state has no immutable read-back artifact')
+    const parent = await planVersionStore.getSelected('virtual-solix-1', ctx)
+    return { deviceId: 'virtual-solix-1', energyKwh: state.energyKwh, capacityKwh: BATTERY_CAPACITY_KWH, socPercent: state.socPercent, revision: state.revision, mode: 'simulation', updatedAt: state.updatedAt, simulatedAt: state.simulatedAt ?? DEFAULT_SCENARIO_START_UTC, ...(state.stateRef === undefined ? {} : { stateRef: state.stateRef }), ...(parent === undefined ? {} : { parentPlanRef: parent.planRef }) }
+  }
   const validator = schemaValidator()
   const energy = await createLocalStructuredProfiles({ tenantId, spaceId, runtimeRef, policyRef, industryRef })
+  const bootstrapContext = createRequestToolContext({ principal: { tenantId, subjectId: 'local-energy-state-bootstrap', roles: ['business-user'], scopes: ['tool:invoke'], authEpoch: 1 }, spaceId, runId: globalThis.crypto.randomUUID(), traceId: 'local-energy-state-bootstrap', allowedResourceKinds: ['artifact', 'evidence', 'plan'] })
+  const bootstrapState = await getTrustedVirtualState(bootstrapContext)
+  await energy.updateVirtualSoc(bootstrapState.socPercent, bootstrapState.updatedAt)
   const transport = await createLocalTransportProfile({ tenantId, spaceId, runtimeRef, policyRef, industryRef: { id: 'transport-government-local', version: '1.0.0', digest: sha256DigestOf('transport-government-local@1.0.0') } })
   const evidence = new (await import('@ontology/adapter-control-postgres')).PostgresEvidenceStore(database)
   const operatorSqlUrl = process.env['ONTOLOGY_OPERATOR_SQL_URL']
@@ -104,7 +132,12 @@ export async function startRegisteredLocalProduct(): Promise<{ close(): Promise<
       tenantId, spaceId, runtimeRef, policyRef, industryRef: operatorDefinition.ref, ctx: sqlContext,
     })
   }
-  const deployment = await createLocalProductDeployment({ tenantId, spaceId, database, connectionString, blobs, artifacts, evidence, validator, compute: createEnergyComputeConfig({ blobStore: blobs, validator }), energy, transport, ...(operatorSql === undefined ? {} : { operatorSql }) })
+  const deployment = await createLocalProductDeployment({ tenantId, spaceId, database, connectionString, blobs, artifacts, evidence, validator, compute: createEnergyComputeConfig({ blobStore: blobs, validator }), energy, getVirtualState: getTrustedVirtualState, transport, ...(operatorSql === undefined ? {} : { operatorSql }) })
+  const previousVirtualState = await database.withIdentityScope({ tenantId, spaceId }, async (client) => {
+    const result = await client.query<{ state: { socPercent?: number; updatedAt?: string; simulatedAt?: string } }>(`SELECT state FROM agent_platform.virtual_solix_states WHERE device_id='virtual-solix-1'`)
+    return result.rows[0]?.state
+  }, { readOnly: true })
+  if (typeof previousVirtualState?.socPercent === 'number') await energy.updateVirtualSoc(previousVirtualState.socPercent, previousVirtualState.simulatedAt ?? DEFAULT_SCENARIO_START_UTC)
   const gateway = createToolGatewayComposition({ database, blobStore: blobs, budget, validator, handlers: deployment.handlers })
   const assignments = new RunTaskAssignments()
   const runtime = new QueryTaskRuntime(deployment.tasks, assignments)
@@ -182,8 +215,11 @@ export async function startRegisteredLocalProduct(): Promise<{ close(): Promise<
     service: runService, workflow: controller, progress,
     prepareRunContext: async (profileRef, context) => {
       if (profileRef.id === 'operator-sql-facilities' && candidateLifecycle === undefined) throw new CapabilityNotConfiguredError('configure a server-side read-only SQL URL and approved view before creating runs with the operator SQL profile')
-      try { return deployment.prepareTaskContext(profileRef, context) }
-      catch { throw new RunServiceError('INVALID_ARGUMENT', 'taskId and taskInput must match a registered task in the selected profile') }
+      try { return await deployment.prepareTaskContext(profileRef, context) }
+      catch (error) {
+        if (error instanceof LocalTaskContextError) throw new RunServiceError('INVALID_ARGUMENT', error.message)
+        throw error
+      }
     },
     resolveToolAccess: async (profileRef) => {
       const selected = deployment.profileById.get(profileRef.id)
@@ -200,8 +236,8 @@ export async function startRegisteredLocalProduct(): Promise<{ close(): Promise<
     operations: ENERGY_OPERATION_REGISTRY, handlers: createEnergyComputeHandlers(),
     records: createPostgresSimulationRecordStore(database),
   })
-  const energyExecution = createVirtualSolixExecutionSurface({
-    database, blobs, artifacts,
+  const virtualExecution = createVirtualSolixExecutionSurface({
+    database, blobs, artifacts, requireSelectedPlanVersion: true,
     authorizePublishedPlan: async ({ runId, planRef, inputRefs, energyInput }, ctx) => {
       try {
         const run = await runService.getRun(runId, ctx)
@@ -212,9 +248,12 @@ export async function startRegisteredLocalProduct(): Promise<{ close(): Promise<
         if (typeof taskInput !== 'object' || taskInput === null || Array.isArray(taskInput)) return false
         const task = taskInput as Record<string, unknown>
         const reserve = energyInput.reserves[0]?.reserveEnergyKwh ?? 0
-        if (task['siteRef'] !== 'anker-home-1' || task['backupRequirementKwh'] !== reserve || typeof task['weatherScenario'] !== 'string' || !energyInput.assumptions.includes(`weather_scenario=${task['weatherScenario']}`)) return false
-        const expectedInput = buildSyntheticScenarioInput({ backupRequirementKwh: reserve, weatherScenario: task['weatherScenario'] as import('./composition/home-energy-scenario').WeatherScenario })
-        if (inputRefs.length !== 1 || inputRefs[0]?.kind !== 'artifact' || inputRefs[0].digest !== sha256DigestOf(new TextDecoder().decode(encodeEnergyOperationInput(expectedInput)))) return false
+        if (task['siteRef'] !== 'virtual-solix-1' || task['backupRequirementKwh'] !== reserve || task['reserveWindowStartSlot'] !== (energyInput.reserves[0]?.windowStartSlot ?? 0) || typeof task['weatherScenario'] !== 'string' || !energyInput.assumptions.includes(`weather_scenario=${task['weatherScenario']}`)) return false
+        if (typeof task['scenarioRef'] !== 'string') return false
+        const scenarioRef = JSON.parse(task['scenarioRef']) as import('@ontology/contracts').ResourceRef
+        if (scenarioRef.kind !== 'artifact' || inputRefs.length !== 1 || !sameResourceRef(inputRefs[0]!, scenarioRef)) return false
+        const selectedPlan = await planVersionStore.getSelected('virtual-solix-1', ctx)
+        if (selectedPlan === undefined || !sameResourceRef(selectedPlan.planRef, planRef)) return false
         const answer = await controller.getAnswer(runId, ctx)
         if (answer === undefined || answer.answerId.length === 0) return false
         const claim = answer.claims.find((entry) => entry.predicate === 'candidate_total_cost')
@@ -246,11 +285,64 @@ export async function startRegisteredLocalProduct(): Promise<{ close(): Promise<
       } catch { return false }
     },
   })
+  const energyExecution: ExecutionSurface = {
+    async getVirtualState(ctx) {
+      if (virtualExecution.getVirtualState === undefined) throw new Error('Virtual SOLIX state reader is missing')
+      const [state, selected] = await Promise.all([virtualExecution.getVirtualState(ctx), planVersionStore.getSelected('virtual-solix-1', ctx)])
+      return { ...state, ...(selected === undefined ? {} : { parentPlanRef: selected.planRef }) }
+    },
+    getExecution: (id, ctx) => virtualExecution.getExecution?.(id, ctx) ?? Promise.resolve(undefined),
+    async requestExecution(request, ctx) {
+      const record = await virtualExecution.requestExecution(request, ctx)
+      const state = await energyExecution.getVirtualState!(ctx)
+      await energy.updateVirtualSoc(state.socPercent, state.updatedAt)
+      return record
+    },
+  }
   registerSimulationRoutes(app, { authenticate, service: energySimulations, execution: energyExecution })
   registerLocalDocumentImportRoute(app, { authenticate, documents: deployment.documents })
   registerLocalDocumentImportRoute(app, { authenticate, documents: deployment.candidateDocuments, path: '/api/v1/operator/candidate-documents' })
   if (candidateLifecycle !== undefined && operatorSql !== undefined) registerLocalCandidateRoutes(app, { authenticate, lifecycle: candidateLifecycle, documents: deployment.candidateDocuments, sql: operatorSql, tenantId, spaceId })
-  registerLocalPlanDetailRoute(app, { authenticate, getAnswer: (runId, ctx) => controller.getAnswer(runId, ctx), evidence, blobs })
+  registerLocalPlanDetailRoute(app, {
+    authenticate, getAnswer: (runId, ctx) => controller.getAnswer(runId, ctx), evidence, blobs,
+    getParentPlanRef: async (runId, ctx) => {
+      const run = await runService.getRun(runId, ctx)
+      const taskInput = run.context.taskInput
+      if (typeof taskInput !== 'object' || taskInput === null || Array.isArray(taskInput) || typeof (taskInput as Record<string, unknown>)['parentPlanRef'] !== 'string') return undefined
+      try { return JSON.parse((taskInput as Record<string, unknown>)['parentPlanRef'] as string) as import('@ontology/contracts').ResourceRef } catch { return undefined }
+    },
+  })
+  registerEnergyPlanVersionRoutes(app, {
+    authenticate, store: planVersionStore, getVirtualState: (ctx) => energyExecution.getVirtualState!(ctx),
+    resolvePublishedPlan: async (runId, ctx) => {
+      const run = await runService.getRun(runId, ctx)
+      const energyProfileIds = new Set(['home-energy-demo-wide', 'home-energy-demo-long', 'home-energy-demo'])
+      if (run.state !== 'published' || run.context.taskId !== 'energy.plan-candidate' || !energyProfileIds.has(run.profileRef.id)) throw new EnergyPlanVersionError('PLAN_NOT_AVAILABLE', 409, 'only a published energy plan run can be selected')
+      const taskInput = run.context.taskInput
+      if (typeof taskInput !== 'object' || taskInput === null || Array.isArray(taskInput) || typeof (taskInput as Record<string, unknown>)['scenarioRef'] !== 'string') throw new EnergyPlanVersionError('PLAN_NOT_AVAILABLE', 409, 'published energy run has no scenario artifact reference')
+      const scenarioRef = JSON.parse((taskInput as Record<string, unknown>)['scenarioRef'] as string) as import('@ontology/contracts').ResourceRef
+      const detail = await readLocalPlanDetail(runId, { getAnswer: (id, context) => controller.getAnswer(id, context), evidence, blobs }, ctx)
+      const parentText = (taskInput as Record<string, unknown>)['parentPlanRef']
+      let parentPlanRef: import('@ontology/contracts').ResourceRef | undefined
+      if (parentText !== undefined) {
+        if (typeof parentText !== 'string') throw new EnergyPlanVersionError('PLAN_PARENT_INVALID', 422, 'parent plan reference is malformed')
+        try {
+          const parsed = JSON.parse(parentText) as import('@ontology/contracts').ResourceRef
+          if (parsed.kind !== 'plan' || typeof parsed.id !== 'string' || typeof parsed.version !== 'string' || typeof parsed.digest !== 'string') throw new Error('invalid plan ref')
+          parentPlanRef = parsed
+        } catch { throw new EnergyPlanVersionError('PLAN_PARENT_INVALID', 422, 'parent plan reference is malformed') }
+      }
+      const bytes = await blobs.readAuthorized({ scopeRef: { tenantId: ctx.principal.tenantId, spaceId: ctx.allowedResources.spaceId }, blobRef: scenarioRef }, ctx)
+      const operationInput = decodeEnergyOperationInput(bytes)
+      const task = taskInput as Record<string, unknown>
+      const reserve = operationInput.reserves[0]?.reserveEnergyKwh ?? 0
+      const initialEnergyKwh = operationInput.battery.initialEnergyKwh
+      const capacityKwh = operationInput.battery.energyCapacityKwh
+      const initialSocPercent = Number(initialEnergyKwh) / Number(capacityKwh) * 100
+      if (task['siteRef'] !== 'virtual-solix-1' || task['backupRequirementKwh'] !== reserve || task['reserveWindowStartSlot'] !== (operationInput.reserves[0]?.windowStartSlot ?? 0) || task['weatherScenario'] !== operationInput.assumptions.find((item) => item.startsWith('weather_scenario='))?.slice('weather_scenario='.length) || detail.inputManifestHash !== operationInput.snapshot.digest || !Number.isFinite(initialEnergyKwh) || !Number.isFinite(capacityKwh) || Number(capacityKwh) <= 0 || !Number.isFinite(detail.initialEnergyKwh) || !Number.isFinite(detail.initialSocPercent) || Math.abs(detail.initialEnergyKwh - Number(initialEnergyKwh)) > 1e-6 || Math.abs(detail.initialSocPercent - initialSocPercent) > 0.01 || detail.stateRevision !== Number(operationInput.assumptions.find((item) => item.startsWith('state_revision='))?.slice('state_revision='.length) ?? 0)) throw new EnergyPlanVersionError('PLAN_EVIDENCE_MISMATCH', 409, 'published plan does not match its archived state/weather/reserve inputs')
+      return { detail: { ...detail, ...(parentPlanRef === undefined ? {} : { parentPlanRef }) }, scenarioRef }
+    },
+  })
   await app.listen({ host: '127.0.0.1', port: Number(process.env['PORT'] ?? 3000) })
   const address = app.server.address()
   const port = typeof address === 'object' && address !== null ? address.port : Number(process.env['PORT'] ?? 3000)

@@ -64,6 +64,19 @@ describe('local registered structured profiles', () => {
     expect(rows(result)).toEqual([])
   })
 
+  it('projects the persistent Virtual SOLIX state as a read-time SOC source in both profile layouts', async () => {
+    const beforeWide = await run(0, 'virtual-solix-1')
+    const beforeLong = await run(1, 'virtual-solix-1')
+    expect(rows(beforeWide)[0]?.[1]).toBe('35.0000000000')
+    expect(rows(beforeLong)).toEqual(rows(beforeWide))
+    await composed.updateVirtualSoc(47.5, '2026-09-24T03:00:00.000Z')
+    const afterWide = await run(0, 'virtual-solix-1')
+    const afterLong = await run(1, 'virtual-solix-1')
+    expect(rows(afterWide)[0]?.[1]).toBe('47.5000000000')
+    expect(rows(afterLong)).toEqual(rows(afterWide))
+    expect(afterWide.evidenceRefs[0]?.digest).not.toBe(beforeWide.evidenceRefs[0]?.digest)
+  })
+
   it('authorizes only the selected profile’s normalized query source', () => {
     const wide = composed.profiles[0]
     const long = composed.profiles[1]

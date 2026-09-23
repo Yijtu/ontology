@@ -67,6 +67,8 @@ export {
 } from './composition/energy-simulation'
 export { createPostgresSimulationRecordStore, listPostgresSimulationRecords } from './composition/postgres-energy-simulation-store'
 export { createVirtualSolixExecutionSurface } from './composition/virtual-solix-execution'
+export { createPostgresEnergyPlanVersionStore } from './composition/energy-plan-version-store'
+export type { EnergyPlanVersionRecord, EnergyPlanVersionStore, EnergyPlanStatus } from './composition/energy-plan-version-store'
 export type {
   EnergySimulationCompositionOptions,
   ExecutionSurface,
@@ -77,6 +79,8 @@ export type {
 } from './composition/energy-simulation'
 export {
   MAX_BACKUP_REQUIREMENT_KWH,
+  INITIAL_BATTERY_ENERGY_KWH,
+  BATTERY_CAPACITY_KWH,
   WEATHER_SCENARIOS,
   buildSyntheticScenarioInput,
   createSyntheticScenarioCatalog,
@@ -87,6 +91,7 @@ export type {
   ScenarioCatalog,
   ScenarioDescriptor,
   ScenarioRequest,
+  ScenarioStateBinding,
   ScenarioSeriesDescriptor,
   WeatherScenario,
 } from './composition/home-energy-scenario'
