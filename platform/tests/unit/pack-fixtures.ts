@@ -18,6 +18,7 @@ import {
   HOME_ENERGY_DEFINITIONS,
   HOME_ENERGY_NAMESPACE,
   HOME_ENERGY_TEST_SUITE_REF,
+  buildHomeEnergyExampleSet,
   buildHomeEnergyManifest,
 } from '@ontology/industry-pack-home-energy'
 import { AUTOMOTIVE_PREPARATION } from '@ontology/industry-pack-automotive'
@@ -159,7 +160,12 @@ export async function buildPackHarness(): Promise<PackHarness> {
   })
 
   const catalogue = new InMemoryIndustryPackCatalogue()
-  catalogue.registerPack({ ref: INDUSTRY_REF, manifest, testSuite: homeEnergyTestSuite() })
+  catalogue.registerPack({
+    ref: INDUSTRY_REF,
+    manifest,
+    testSuite: homeEnergyTestSuite(),
+    exampleSet: buildHomeEnergyExampleSet(),
+  })
   catalogue.registerPreparation(AUTOMOTIVE_PREPARATION)
   catalogue.registerPreparation(HEALTH_SERVICES_PREPARATION)
   catalogue.registerPreparation(TRANSPORT_GOVERNMENT_PREPARATION)

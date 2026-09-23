@@ -6,6 +6,7 @@ import type {
   DecisionPort,
   ExecutablePlan,
   ExecutablePlanStep,
+  GenerationMessage,
   GenerationPort,
   GenerationRequest,
   ModelRef,
@@ -26,6 +27,8 @@ import type {
 import { canonicalJson, sha256DigestOf } from '../profiles/canonical'
 import { WorkflowControllerError } from './errors'
 import type { QuestionRewriter } from './question-rewriting'
+import { renderFewShotExamplesData } from '../examples/few-shot-retriever'
+import type { FewShotExampleProvider } from '../examples/few-shot-retriever'
 
 /**
  * The run planner (SPEC D7.1, ADR-14).
@@ -68,6 +71,12 @@ export interface RunPlannerDependencies {
    * `GenerationPort` and adds no model port and no public tool.
    */
   readonly rewriter?: QuestionRewriter
+  /**
+   * LOCAL-076: optional few-shot examples for the proposal prompt. They are retrieved from
+   * versioned example sets and injected as untrusted data only; absence or failure of the
+   * provider never changes the tool catalogue, budget or the validation the plan still passes.
+   */
+  readonly examples?: FewShotExampleProvider
   readonly newId?: () => string
 }
 
@@ -218,16 +227,27 @@ export class RunPlanner {
   ): Promise<SemanticQueryPlan | undefined> {
     const generation = this.#deps.generation
     if (generation === undefined) return undefined
+    const messages: GenerationMessage[] = [
+      {
+        role: 'system',
+        content:
+          'Propose at most one bounded semantic data_query plan. Return it as a single tool call; do not answer the question.',
+      },
+      { role: 'user', content: request.question },
+    ]
+    const examples = this.#deps.examples
+    if (examples !== undefined) {
+      // Best-effort enrichment: examples are untrusted data appended as their own message.
+      // A retrieval failure yields an explicit status and injects nothing; it never fabricates
+      // an example and never touches the tool catalogue, role, model or output limit below.
+      const retrieved = await examples.retrieve({ query: request.question }, ctx)
+      if (retrieved.examples.length > 0) {
+        messages.push({ role: 'user', content: renderFewShotExamplesData(retrieved.examples) })
+      }
+    }
     const generationRequest: GenerationRequest = {
       role: 'sql_proposer',
-      messages: [
-        {
-          role: 'system',
-          content:
-            'Propose at most one bounded semantic data_query plan. Return it as a single tool call; do not answer the question.',
-        },
-        { role: 'user', content: request.question },
-      ],
+      messages,
       evidenceRefs: [],
       toolSchemas: ['data_query'],
       modelRef: this.#deps.planModelRef ?? { modelId: 'plan-proposer', version: '1.0.0' },

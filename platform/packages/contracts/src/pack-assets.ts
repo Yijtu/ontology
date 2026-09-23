@@ -13,6 +13,7 @@ import type {
 } from './generated/contracts'
 import type { ScopeRef } from './generated/contracts'
 import type { AttributeValueType, SemanticDefinitionRecord } from './semantic-definitions'
+import type { FewShotExampleSet } from './few-shot'
 import type { ToolContext } from './trusted'
 
 /**
@@ -107,6 +108,12 @@ export interface PackAsset {
   readonly ref: VersionRef
   readonly manifest: IndustryManifest
   readonly testSuite: PackTestSuite
+  /**
+   * LOCAL-076: the pack's versioned few-shot example set. It is declaration data (a
+   * question plus a semantic query shape), so it exports with the pack and never carries
+   * a customer instance. Absent means the pack configures no examples.
+   */
+  readonly exampleSet?: FewShotExampleSet
 }
 
 /**
@@ -170,6 +177,11 @@ export interface IndustryPackExportBundle {
   readonly mappingTemplates: readonly MappingTemplate[]
   readonly standardProvenance: readonly StandardProvenance[]
   readonly testSuite: PackTestSuite
+  /**
+   * LOCAL-076: the portable few-shot example set, when the pack declares one. It is part
+   * of the deterministic content digest, so a changed example set produces a new export.
+   */
+  readonly exampleSet?: FewShotExampleSet
   readonly exportedAt: Rfc3339UtcTimestamp
   readonly contentDigest: Sha256Digest
 }

@@ -104,6 +104,7 @@ function buildExportBundle(
     mappingTemplates: definitions === undefined ? [] : mappingTemplatesOf(definitions),
     standardProvenance: manifest.standardProvenance,
     testSuite: asset.testSuite,
+    ...(asset.exampleSet === undefined ? {} : { exampleSet: asset.exampleSet }),
   }
   return { ...content, exportedAt, contentDigest: sha256DigestOf(canonicalJson(content)) }
 }
