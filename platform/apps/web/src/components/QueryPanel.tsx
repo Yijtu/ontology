@@ -22,13 +22,11 @@ import { useViewport } from './useViewport'
  */
 export interface QueryPanelProps {
   readonly client: WorkbenchClient
-  readonly profileRef?: ProfileRef
+  readonly profileRef: ProfileRef
+  readonly timeZone: string
   /** Deep-linked run id (`?run=<id>`) so a state can be reproduced in a browser. */
   readonly initialRunId?: string
 }
-
-const DEFAULT_PROFILE: ProfileRef = { id: 'home-energy-demo', version: '1.0.0' }
-const DEFAULT_TIME_ZONE = 'Asia/Shanghai'
 
 function toQueryError(error: unknown): WorkbenchError {
   if (error instanceof ApiError) {
@@ -296,7 +294,7 @@ function AnswerPanel({ state, client }: { readonly state: QueryState; readonly c
   )
 }
 
-export function QueryPanel({ client, profileRef = DEFAULT_PROFILE, initialRunId }: QueryPanelProps) {
+export function QueryPanel({ client, profileRef, timeZone, initialRunId }: QueryPanelProps) {
   const viewport = useViewport()
   const [state, dispatch] = useReducer(queryReducer, undefined, initialQueryState)
   const [question, setQuestion] = useState('')
@@ -395,7 +393,7 @@ export function QueryPanel({ client, profileRef = DEFAULT_PROFILE, initialRunId 
         profileRef: selectedProfile,
         question: question.trim(),
         context: {
-          timeZone: DEFAULT_TIME_ZONE,
+          timeZone,
           backupRequirementKwh,
           weatherScenario,
           ...(siteRef.trim().length === 0 ? {} : { siteRef: siteRef.trim() }),

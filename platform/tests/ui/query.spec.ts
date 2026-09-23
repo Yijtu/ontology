@@ -55,6 +55,7 @@ async function renderQuery(
       createElement(QueryPanel, {
         client,
         profileRef: PROFILE,
+        timeZone: 'Asia/Shanghai',
         ...(initialRunId === undefined ? {} : { initialRunId }),
       }),
     )

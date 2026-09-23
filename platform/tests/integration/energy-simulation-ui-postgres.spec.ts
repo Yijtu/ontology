@@ -23,6 +23,7 @@ import {
   createScopedBlobReader,
   createSimulationExecutionSurface,
   createSimulationJobPort,
+  registerSimulationRoutes,
 } from '@ontology/app-api'
 import type { AuthenticatedRequest } from '@ontology/app-api'
 import { createToolContext } from '@ontology/contracts'
@@ -227,7 +228,8 @@ beforeAll(async () => {
       },
     },
   })
-  app = createApiServer({ authenticate: loopbackAuth, simulations: { service, execution } })
+  app = createApiServer({ authenticate: loopbackAuth })
+  registerSimulationRoutes(app, { authenticate: loopbackAuth, service, execution })
 }, 300_000)
 
 afterAll(async () => {

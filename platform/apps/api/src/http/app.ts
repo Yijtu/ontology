@@ -22,8 +22,6 @@ import { registerAnswerRoutes } from './answers'
 import type { AnswerRouteDependencies } from './answers'
 import { registerFeedbackRoutes } from './feedback'
 import type { FeedbackRouteDependencies } from './feedback'
-import { registerSimulationRoutes } from './simulations'
-import type { SimulationRouteDependencies } from './simulations'
 import { installErrorHandler } from './shared'
 import type { RequestAuthenticator } from './shared'
 
@@ -54,8 +52,6 @@ export interface ApiServerOptions {
   readonly answers?: Omit<AnswerRouteDependencies, 'authenticate'>
   /** Register the append-only feedback surface (`POST/GET /runs/{id}/feedback`). */
   readonly feedback?: Omit<FeedbackRouteDependencies, 'authenticate'>
-  /** Register the simulation/plan/execution surface (`/simulations`, `/executions`). */
-  readonly simulations?: Omit<SimulationRouteDependencies, 'authenticate'>
   readonly logger?: boolean
 }
 
@@ -99,9 +95,6 @@ export function createApiServer(options: ApiServerOptions): FastifyInstance {
   }
   if (options.feedback !== undefined) {
     registerFeedbackRoutes(app, { ...options.feedback, authenticate: options.authenticate })
-  }
-  if (options.simulations !== undefined) {
-    registerSimulationRoutes(app, { ...options.simulations, authenticate: options.authenticate })
   }
   return app
 }

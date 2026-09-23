@@ -17,12 +17,10 @@ import { useViewport } from './useViewport'
 
 export interface WorkbenchProps {
   readonly client: WorkbenchClient
-  readonly profileRef?: ProfileRef
+  readonly profileRef: ProfileRef
   /** When set, the locked resolved-manifest hash of that run is shown alongside the workbench. */
   readonly boundRunId?: string
 }
-
-const DEFAULT_PROFILE: ProfileRef = { id: 'home-energy-demo', version: '1.0.0' }
 
 function toWorkbenchError(error: unknown): WorkbenchError {
   if (error instanceof ApiError) {
@@ -64,7 +62,7 @@ function resolvedOf(preflight: PreflightResult | undefined) {
  * check. It renders exactly one explicit state at a time, and it never displays secret
  * material — only the server-side `secretRef` reference.
  */
-export function Workbench({ client, profileRef = DEFAULT_PROFILE, boundRunId }: WorkbenchProps) {
+export function Workbench({ client, profileRef, boundRunId }: WorkbenchProps) {
   const viewport = useViewport()
   const [state, dispatch] = useReducer(workbenchReducer, undefined, initialWorkbenchState)
   const [selection, setSelection] = useState<CompositionSelection>({})
