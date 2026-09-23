@@ -307,6 +307,20 @@ describe('IdentityDecisionService unit behaviour', () => {
     })).rejects.toMatchObject({ code: 'IDENTITY_SCORE_BELOW_THRESHOLD' })
   })
 
+  it('keeps a reviewed justification distinct from an unverified automatic native-id match', async () => {
+    const { service, candidates } = await harness()
+    const anchor = deviceCandidate()
+    await seed(candidates, anchor)
+    const created = await decide(service, anchor, { kind: 'create_pending' })
+    const entityId = created.targetEntityId
+    if (entityId === undefined) throw new Error('expected a created entity')
+    const candidate = deviceCandidate({ nativeId: 'DEV-2', attributes: [{ attributeId: 'device_native_id', value: 'DEV-2' }] })
+    await seed(candidates, candidate)
+    await expect(decide(service, candidate, { kind: 'match', targetEntityId: entityId })).rejects.toMatchObject({ code: 'IDENTITY_EVIDENCE_REQUIRED' })
+    const reviewed = await decide(service, candidate, { kind: 'match', targetEntityId: entityId, justification: 'reviewed the original span and the operator SQL key against this empty target' })
+    expect(reviewed.kind).toBe('match')
+  })
+
   it('uses an entity revision to reject a stale cluster update from another candidate', async () => {
     const { service, candidates, store } = await harness()
     const candidate = deviceCandidate()

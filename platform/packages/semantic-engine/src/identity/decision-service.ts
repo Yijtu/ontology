@@ -311,8 +311,11 @@ export class IdentityDecisionService {
 
     const members = await this.#compatibleClusterMembers(candidate, target, targetEntityId, scopeRef, ctx)
 
-    const strongIdentity = request.strongIdentity ?? this.#nativeIdentityOf(candidate)
     const justification = request.justification
+    // A candidate's native id proves who the candidate is, not that an unrelated target
+    // entity has the same id. A reviewer-provided reason is a separate authority path;
+    // do not turn the candidate's own id into a falsely verified target match.
+    const strongIdentity = request.strongIdentity ?? (nonEmpty(justification) ? undefined : this.#nativeIdentityOf(candidate))
     const score = request.scoreEvidence
     if (score !== undefined && score.score < this.#scoreThreshold) {
       throw new IdentityDecisionError(
