@@ -37,12 +37,12 @@ async function harness(facts?: OntologyFactReferenceProvider): Promise<{
 describe('ontology_lookup local semantic reads', () => {
   it('marks a provider with more fact pages as incomplete instead of proving absence', async () => {
     const facts: OntologyFactReferenceProvider = {
-      listFacts: () => Promise.resolve({
+      listFacts: (query) => Promise.resolve({
         facts: [{
-          factRef: { id: 'published-fact', version: '1.0.0', digest: `sha256:${'a'.repeat(64)}` },
+          factRef: { id: query.cursor === undefined ? 'published-fact-1' : 'published-fact-2', version: '1.0.0', digest: `sha256:${'a'.repeat(64)}` },
           conceptRef: { namespace: NAMESPACE, conceptId: 'device' }, label: 'one indexed fact',
         }],
-        nextCursor: 'more-published-facts', covered: true,
+        nextCursor: query.cursor === undefined ? 'more-published-facts' : null, covered: query.cursor !== undefined,
       }),
     }
     const { service } = await harness(facts)
@@ -53,7 +53,15 @@ describe('ontology_lookup local semantic reads', () => {
     }, ctx)
     expect(page.output.items).toHaveLength(1)
     expect(page.completeness).toBe('partial')
+    expect(page.nextCursor).toBe('more-published-facts')
     expect(page.output.gaps).toContainEqual(expect.stringMatching(/^facts_truncated:/))
+    if (page.nextCursor === null) throw new Error('the first fact page must have a continuation cursor')
+    const second = await service.lookup({
+      scopeRef: { tenantId: ctx.principal.tenantId, spaceId: ctx.allowedResources.spaceId },
+      intent: 'facts', concepts: [{ namespace: NAMESPACE, conceptId: 'device' }], cursor: page.nextCursor,
+    }, ctx)
+    expect(second.output.items.map((item) => item.ref.id)).toEqual(['published-fact-2'])
+    expect(second.completeness).toBe('complete')
     const handler = new OntologyLookupHandler({ lookup: service, sourceRef: { namespace: 'platform', sourceId: 'published-facts' } })
     const outcome = await handler.execute({
       callId: '11111111-2222-4333-8444-555555555555', toolId: 'ontology_lookup',
@@ -63,6 +71,7 @@ describe('ontology_lookup local semantic reads', () => {
     })
     expect(outcome.status).toBe('partial')
     expect(outcome.coverage.truncated).toBe(true)
+    expect(outcome.coverage.cursor).toBe('more-published-facts')
   })
   it('paginates definitions and reports an explicit truncated page', async () => {
     const { service } = await harness()
