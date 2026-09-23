@@ -332,6 +332,8 @@ describe('local product browser journey', () => {
       method: 'POST', headers: { 'content-type': 'application/json', authorization: `Bearer ${operatorToken}`, 'if-match': '0' }, body: JSON.stringify({ decision: 'approve', reason: '核对来源 span 与已召回的强 native key。' }),
     })
     expect(approval.status).toBe(200)
+    const beforePublicationRun = await createRun('已发布的道路设施本体事实有哪些？', 'synthetic-home-1', 'operator-sql-facilities', 'ontology.published-facts', {})
+    expect((await fetch(`${apiUrl}/api/v1/runs/${beforePublicationRun}/answer`)).status).toBe(404)
     const publication = await fetch(`${apiUrl}/api/v1/semantic-publications`, {
       method: 'POST', headers: { 'content-type': 'application/json', authorization: `Bearer ${operatorToken}`, 'if-match': '0', 'idempotency-key': `publish-${candidateId}` },
       body: JSON.stringify({ schemaRef: source.definitionRef, approvedCandidateRefs: [{ candidateId, kind: 'entity' }] }),
@@ -340,6 +342,12 @@ describe('local product browser journey', () => {
     expect(publication.status, publicationText).toBe(201)
     const published = (JSON.parse(publicationText) as { data: { publicationId: string; approvedCandidateRefs: readonly unknown[]; statements: readonly unknown[] } }).data
     expect(published.approvedCandidateRefs).toHaveLength(1)
+    const ontologyRun = await createRun('已发布的道路设施本体事实有哪些？', 'synthetic-home-1', 'operator-sql-facilities', 'ontology.published-facts', {})
+    const ontologyAnswerResponse = await fetch(`${apiUrl}/api/v1/runs/${ontologyRun}/answer`)
+    expect(ontologyAnswerResponse.status).toBe(200)
+    const ontologyAnswer = (await ontologyAnswerResponse.json() as { data: PublishedAnswer }).data
+    expect(ontologyAnswer.assertions?.map((assertion) => assertion.predicate)).toEqual(expect.arrayContaining(['facility_key', 'district', 'inspection_state']))
+    expect(ontologyAnswer.assertions?.every((assertion) => assertion.subject === 'facility-entity-001')).toBe(true)
     expect(published.statements).toHaveLength(1)
 
     await app.close()
@@ -375,6 +383,9 @@ describe('local product browser journey', () => {
     const restoredDocumentAnswer = await fetch(`${apiUrl}/api/v1/runs/${documentRun}/answer`)
     expect(restoredDocumentAnswer.status).toBe(200)
     expect((await restoredDocumentAnswer.json() as { data: PublishedAnswer }).data.contentHash).toBe(documentAnswer.contentHash)
+    const restoredOntologyAnswer = await fetch(`${apiUrl}/api/v1/runs/${ontologyRun}/answer`)
+    expect(restoredOntologyAnswer.status).toBe(200)
+    expect((await restoredOntologyAnswer.json() as { data: PublishedAnswer }).data.contentHash).toBe(ontologyAnswer.contentHash)
 
     const crossProfileTask = await fetch(`${apiUrl}/api/v1/runs`, {
       method: 'POST', headers: { 'content-type': 'application/json', 'idempotency-key': `local-e2e-${randomUUID()}` },
