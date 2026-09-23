@@ -177,6 +177,13 @@ describe('semantic publication service (in-memory)', () => {
     expect(currentFacts.covered).toBe(true)
     expect(currentFacts.definitionVersion).toEqual(PUBLICATION_DEFINITION_REF)
     expect(currentFacts.facts.map((fact) => fact.payload)).toContainEqual(expect.objectContaining({ statementId: relationId }))
+    const wrongVersion = new PublishedFactReferenceProvider({
+      publications: publicationStore, identity: identityStore, namespace: 'home-energy',
+      definitionRef: { ...PUBLICATION_DEFINITION_REF, digest: `sha256:${'e'.repeat(64)}` }, allowedConceptIds: ['feeds'],
+    })
+    const rejectedVersion = await wrongVersion.listFacts({ scopeRef, concepts: [{ namespace: 'home-energy', conceptId: 'feeds' }], entityRefs: [], limit: 10 }, ctx)
+    expect(rejectedVersion.facts).toEqual([])
+    expect(rejectedVersion.covered).toBe(false)
 
     await identityService.decide({ candidateId: from.candidateId, kind: 'split', expectedRevision: '2', targetEntityId: from.entityId, justification: 'source identity correction' }, ctx)
     const afterSplit = await navigator.navigate({ startEntityId: from.entityId, relationIds: ['feeds'], validAt: '2026-09-22T00:00:00Z' }, ctx)
