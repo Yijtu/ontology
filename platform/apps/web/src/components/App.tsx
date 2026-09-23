@@ -1,8 +1,8 @@
 import { useState } from 'react'
+import type { ReactNode } from 'react'
 import type { ProfileRef } from '@ontology/contracts'
 import type { WorkbenchClient } from '../api/client'
 import { CandidateReviewPanel } from './CandidateReviewPanel'
-import { EnergyPlanPanel } from './EnergyPlanPanel'
 import { EvidencePanel } from './EvidencePanel'
 import { JobProgressPanel } from './JobProgressPanel'
 import { QueryPanel } from './QueryPanel'
@@ -11,16 +11,24 @@ import { Workbench } from './Workbench'
 
 /**
  * The operator app shell. It composes the configuration workbench (LOCAL-037) with the
- * ingestion-job, candidate-review, provenance/history and home-energy plan/simulation surfaces,
- * and deep-links each surface (`?view=jobs&job=<id>`, `?view=review&candidate=<id>`,
- * `?view=evidence&evidence=<id>&object=<id>`, `?view=energy`) so a state can be reproduced in a
- * browser without navigating by hand. It talks to the API over HTTP only.
+ * ingestion-job, candidate-review and provenance/history surfaces. A deployment can contribute
+ * scenario-specific views without editing the shared shell. The shell talks to the API over
+ * HTTP only and never imports a domain extension.
  */
-export type AppView = 'workbench' | 'query' | 'jobs' | 'review' | 'evidence' | 'energy'
+export type CoreAppView = 'workbench' | 'query' | 'jobs' | 'review' | 'evidence'
+export type AppView = CoreAppView | (string & {})
+
+export interface AppViewContribution {
+  readonly view: string
+  readonly label: string
+  render(input: { readonly client: WorkbenchClient; readonly profileRef: ProfileRef }): ReactNode
+}
 
 export interface AppProps {
   readonly client: WorkbenchClient
-  readonly profileRef?: ProfileRef
+  readonly profileRef: ProfileRef
+  readonly timeZone: string
+  readonly scenarioViews?: readonly AppViewContribution[]
   readonly boundRunId?: string
   readonly initialView?: AppView
   readonly initialJobId?: string
@@ -29,18 +37,19 @@ export interface AppProps {
   readonly initialObjectId?: string
 }
 
-const TABS: readonly { readonly view: AppView; readonly label: string }[] = [
+const CORE_TABS: readonly { readonly view: CoreAppView; readonly label: string }[] = [
   { view: 'workbench', label: '配置工作台' },
   { view: 'query', label: '业务问答' },
   { view: 'jobs', label: '导入任务' },
   { view: 'review', label: '候选审核' },
   { view: 'evidence', label: '证据与历史' },
-  { view: 'energy', label: '家庭能源计划' },
 ]
 
 export function App({
   client,
   profileRef,
+  timeZone,
+  scenarioViews = [],
   boundRunId,
   initialView = 'workbench',
   initialJobId,
@@ -50,11 +59,13 @@ export function App({
 }: AppProps) {
   const viewport = useViewport()
   const [view, setView] = useState<AppView>(initialView)
+  const contribution = scenarioViews.find((entry) => entry.view === view)
+  const tabs = [...CORE_TABS, ...scenarioViews.map(({ view: extraView, label }) => ({ view: extraView, label }))]
 
   return (
     <div className="app" data-viewport={viewport} data-view={view}>
       <nav className="app__tabs" aria-label="主导航">
-        {TABS.map((tab) => (
+        {tabs.map((tab) => (
           <button
             key={tab.view}
             type="button"
@@ -70,12 +81,13 @@ export function App({
       </nav>
 
       {view === 'workbench' ? (
-        <Workbench client={client} {...(profileRef === undefined ? {} : { profileRef })} {...(boundRunId === undefined ? {} : { boundRunId })} />
+        <Workbench client={client} profileRef={profileRef} {...(boundRunId === undefined ? {} : { boundRunId })} />
       ) : null}
       {view === 'query' ? (
         <QueryPanel
           client={client}
-          {...(profileRef === undefined ? {} : { profileRef })}
+          profileRef={profileRef}
+          timeZone={timeZone}
           {...(boundRunId === undefined ? {} : { initialRunId: boundRunId })}
         />
       ) : null}
@@ -90,7 +102,7 @@ export function App({
           {...(initialObjectId === undefined ? {} : { initialObjectId })}
         />
       ) : null}
-      {view === 'energy' ? <EnergyPlanPanel client={client} /> : null}
+      {contribution?.render({ client, profileRef })}
     </div>
   )
 }

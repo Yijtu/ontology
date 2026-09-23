@@ -24,6 +24,7 @@ import {
   createEnergySimulationSurface,
   createScopedBlobReader,
   createSimulationExecutionSurface,
+  registerSimulationRoutes,
   RunProgressService,
 } from '@ontology/app-api'
 import type {
@@ -744,9 +745,9 @@ export async function startHarness(options: HarnessOptions = {}): Promise<Harnes
           evidence: { service: options.provenance.evidence },
           history: { service: options.provenance.history },
         }),
-    ...(energy === undefined ? {} : { simulations: energy.simulations }),
   })
   if (energy !== undefined) {
+    registerSimulationRoutes(app, { ...energy.simulations, authenticate: options.fixedPrincipal === true ? loopbackTestAuthenticator : headerAuthenticator })
     app.addHook('onClose', async () => {
       await energy.cleanup()
     })
