@@ -35,6 +35,7 @@ describe('scenario-neutral web shell', () => {
           client,
           profileRef,
           timeZone: 'UTC',
+          queryContextFields: [{ name: 'district', label: '区域', kind: 'text', defaultValue: 'north' }],
           initialView: 'transport-inspection',
           scenarioViews: [{
             view: 'transport-inspection',
@@ -51,6 +52,8 @@ describe('scenario-neutral web shell', () => {
         queryTab.dispatchEvent(new MouseEvent('click', { bubbles: true }))
       })
       expect(container.querySelector('[data-testid="scope-profile"]')?.textContent).toContain(profileRef.id)
+      expect((container.querySelector('[data-testid="query-context-district"]') as HTMLInputElement | null)?.value).toBe('north')
+      expect(container.querySelector('[data-testid="query-context-siteRef"]')).toBeNull()
       expect(requested.some((url) => url.includes(`profileId=${profileRef.id}`))).toBe(true)
     } finally {
       await act(async () => root.unmount())

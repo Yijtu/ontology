@@ -24,8 +24,43 @@ export interface QueryPanelProps {
   readonly client: WorkbenchClient
   readonly profileRef: ProfileRef
   readonly timeZone: string
+  /** Deployment-owned context fields; the shared query view has no industry fields. */
+  readonly contextFields?: readonly QueryContextField[]
   /** Deep-linked run id (`?run=<id>`) so a state can be reproduced in a browser. */
   readonly initialRunId?: string
+}
+
+export type QueryContextField =
+  | { readonly name: string; readonly label: string; readonly kind: 'text'; readonly required?: boolean; readonly defaultValue?: string }
+  | { readonly name: string; readonly label: string; readonly kind: 'number'; readonly required?: boolean; readonly defaultValue?: number; readonly minimum?: number; readonly maximum?: number }
+  | { readonly name: string; readonly label: string; readonly kind: 'enum'; readonly required?: boolean; readonly defaultValue?: string; readonly options: readonly string[] }
+
+function initialContext(fields: readonly QueryContextField[]): Record<string, string> {
+  return Object.fromEntries(fields.map((field) => [field.name, String(field.defaultValue ?? '')]))
+}
+
+function contextFromFields(fields: readonly QueryContextField[], values: Readonly<Record<string, string>>): { readonly context: Record<string, string | number>; readonly error?: string } {
+  const context: Record<string, string | number> = {}
+  for (const field of fields) {
+    const raw = (values[field.name] ?? '').trim()
+    if (raw.length === 0) {
+      if (field.required) return { context, error: `请填写${field.label}。` }
+      continue
+    }
+    if (field.kind === 'number') {
+      const number = Number(raw)
+      if (!Number.isFinite(number) || (field.minimum !== undefined && number < field.minimum) || (field.maximum !== undefined && number > field.maximum)) {
+        return { context, error: `${field.label}超出允许范围。` }
+      }
+      context[field.name] = number
+    } else if (field.kind === 'enum') {
+      if (!field.options.includes(raw)) return { context, error: `${field.label}不是已注册选项。` }
+      context[field.name] = raw
+    } else {
+      context[field.name] = raw
+    }
+  }
+  return { context }
 }
 
 function toQueryError(error: unknown): WorkbenchError {
@@ -217,11 +252,11 @@ function AnswerPanel({ state }: { readonly state: QueryState }) {
   )
 }
 
-export function QueryPanel({ client, profileRef, timeZone, initialRunId }: QueryPanelProps) {
+export function QueryPanel({ client, profileRef, timeZone, contextFields = [], initialRunId }: QueryPanelProps) {
   const viewport = useViewport()
   const [state, dispatch] = useReducer(queryReducer, undefined, initialQueryState)
   const [question, setQuestion] = useState('')
-  const [siteRef, setSiteRef] = useState('')
+  const [contextValues, setContextValues] = useState<Record<string, string>>(() => initialContext(contextFields))
   const [route, setRoute] = useState<RunRoutePreference>('auto')
   const [allowWeb, setAllowWeb] = useState(false)
   const [clarificationInput, setClarificationInput] = useState('')
@@ -306,15 +341,17 @@ export function QueryPanel({ client, profileRef, timeZone, initialRunId }: Query
       dispatch({ type: 'notice', message: '请输入问题后再提交。' })
       return
     }
+    const parsed = contextFromFields(contextFields, contextValues)
+    if (parsed.error !== undefined) {
+      dispatch({ type: 'notice', message: parsed.error })
+      return
+    }
     dispatch({ type: 'askStarted' })
     try {
       const created = await client.createRun({
         profileRef,
         question: question.trim(),
-        context: {
-          timeZone,
-          ...(siteRef.trim().length === 0 ? {} : { siteRef: siteRef.trim() }),
-        },
+        context: { timeZone, ...parsed.context },
         preferences: { route, allowWeb: state.scope?.webSearchEnabled === true && allowWeb },
       })
       const run = await client.getRun(created.runId)
@@ -411,16 +448,32 @@ export function QueryPanel({ client, profileRef, timeZone, initialRunId }: Query
                 onChange={(event) => setQuestion(event.target.value)}
               />
             </label>
-            <label className="query__field">
-              <span>站点（可选）</span>
-              <input
-                type="text"
-                name="siteRef"
-                data-testid="query-site"
-                value={siteRef}
-                onChange={(event) => setSiteRef(event.target.value)}
-              />
-            </label>
+            {contextFields.map((field) => (
+              <label className="query__field" key={field.name}>
+                <span>{field.label}{field.required ? ' *' : ''}</span>
+                {field.kind === 'enum' ? (
+                  <select
+                    name={field.name}
+                    data-testid={`query-context-${field.name}`}
+                    value={contextValues[field.name] ?? ''}
+                    onChange={(event) => setContextValues((current) => ({ ...current, [field.name]: event.target.value }))}
+                  >
+                    {!field.required ? <option value="">未指定</option> : null}
+                    {field.options.map((option) => <option key={option} value={option}>{option}</option>)}
+                  </select>
+                ) : (
+                  <input
+                    type={field.kind === 'number' ? 'number' : 'text'}
+                    name={field.name}
+                    data-testid={`query-context-${field.name}`}
+                    value={contextValues[field.name] ?? ''}
+                    {...(field.kind === 'number' && field.minimum !== undefined ? { min: field.minimum } : {})}
+                    {...(field.kind === 'number' && field.maximum !== undefined ? { max: field.maximum } : {})}
+                    onChange={(event) => setContextValues((current) => ({ ...current, [field.name]: event.target.value }))}
+                  />
+                )}
+              </label>
+            ))}
             <label className="query__field">
               <span>执行路径</span>
               <select

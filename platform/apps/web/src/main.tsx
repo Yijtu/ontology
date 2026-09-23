@@ -30,6 +30,7 @@ if (container !== null) {
       client={client}
       profileRef={deployment.profileRef}
       timeZone={deployment.timeZone}
+      queryContextFields={deployment.queryContextFields}
       scenarioViews={deployment.scenarioViews}
       initialView={initialView}
       {...(boundRunId === undefined ? {} : { boundRunId })}

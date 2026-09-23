@@ -6,6 +6,7 @@ import { CandidateReviewPanel } from './CandidateReviewPanel'
 import { EvidencePanel } from './EvidencePanel'
 import { JobProgressPanel } from './JobProgressPanel'
 import { QueryPanel } from './QueryPanel'
+import type { QueryContextField } from './QueryPanel'
 import { useViewport } from './useViewport'
 import { Workbench } from './Workbench'
 
@@ -28,6 +29,7 @@ export interface AppProps {
   readonly client: WorkbenchClient
   readonly profileRef: ProfileRef
   readonly timeZone: string
+  readonly queryContextFields?: readonly QueryContextField[]
   readonly scenarioViews?: readonly AppViewContribution[]
   readonly boundRunId?: string
   readonly initialView?: AppView
@@ -49,6 +51,7 @@ export function App({
   client,
   profileRef,
   timeZone,
+  queryContextFields,
   scenarioViews = [],
   boundRunId,
   initialView = 'workbench',
@@ -88,6 +91,7 @@ export function App({
           client={client}
           profileRef={profileRef}
           timeZone={timeZone}
+          {...(queryContextFields === undefined ? {} : { contextFields: queryContextFields })}
           {...(boundRunId === undefined ? {} : { initialRunId: boundRunId })}
         />
       ) : null}
