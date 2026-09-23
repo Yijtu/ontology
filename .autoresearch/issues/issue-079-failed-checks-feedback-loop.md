@@ -4,11 +4,12 @@ number: 79
 title: "实现核验失败项回传到草稿生成（契约版本化闭环）"
 type: backend
 priority: high
-state: planned
-readiness: ready
+state: done
+readiness: done
 dependencies: [LOCAL-035, LOCAL-020, LOCAL-077]
 origin: nl2sql-pipeline-gap
 source_finding: LOCAL-071
+github_issue: 157
 execution_mode: local-implementation
 ---
 

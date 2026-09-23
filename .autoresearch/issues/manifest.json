@@ -25,14 +25,7 @@
     "tasks/spec-v0.2/home-energy.md": "aa43bb2bfd5fbab883dcc2e71d1f9bbc51ca30a7ae8996ea7d3bf8e228008737",
     "tasks/spec-v0.2/verification-plan.md": "1e579633bdfec43ec1e01634dd2cc946db3bfe59119f9e0c3cecf2536f0a63ed"
   },
-  "entry_ready_ids": [
-    "LOCAL-074",
-    "LOCAL-075",
-    "LOCAL-076",
-    "LOCAL-077",
-    "LOCAL-078",
-    "LOCAL-079"
-  ],
+  "entry_ready_ids": [],
   "local_delivery_ids": [
     "LOCAL-001",
     "LOCAL-002",
@@ -2730,8 +2723,8 @@
       "file": "issue-074-question-rewriting.md",
       "type": "backend",
       "priority": "high",
-      "state": "planned",
-      "readiness": "ready",
+      "state": "done",
+      "readiness": "done",
       "phase": "L NL2SQL 流水线补齐",
       "dependencies": [
         "LOCAL-020",
@@ -2760,8 +2753,8 @@
       "file": "issue-075-schema-vocabulary-injection.md",
       "type": "backend",
       "priority": "high",
-      "state": "planned",
-      "readiness": "ready",
+      "state": "done",
+      "readiness": "done",
       "phase": "L NL2SQL 流水线补齐",
       "dependencies": [
         "LOCAL-026",
@@ -2791,8 +2784,8 @@
       "file": "issue-076-few-shot-example-retrieval.md",
       "type": "backend",
       "priority": "medium",
-      "state": "planned",
-      "readiness": "ready",
+      "state": "done",
+      "readiness": "done",
       "phase": "L NL2SQL 流水线补齐",
       "dependencies": [
         "LOCAL-024",
@@ -2822,8 +2815,8 @@
       "file": "issue-077-static-pre-execution-check.md",
       "type": "backend",
       "priority": "high",
-      "state": "planned",
-      "readiness": "ready",
+      "state": "done",
+      "readiness": "done",
       "phase": "L NL2SQL 流水线补齐",
       "dependencies": [
         "LOCAL-011",
@@ -2854,8 +2847,8 @@
       "file": "issue-078-feedback-collection.md",
       "type": "backend",
       "priority": "medium",
-      "state": "planned",
-      "readiness": "ready",
+      "state": "done",
+      "readiness": "done",
       "phase": "L NL2SQL 流水线补齐",
       "dependencies": [
         "LOCAL-009",
@@ -2885,8 +2878,8 @@
       "file": "issue-079-failed-checks-feedback-loop.md",
       "type": "backend",
       "priority": "high",
-      "state": "planned",
-      "readiness": "ready",
+      "state": "done",
+      "readiness": "done",
       "phase": "L NL2SQL 流水线补齐",
       "dependencies": [
         "LOCAL-035",
@@ -2908,6 +2901,35 @@
       "source_finding": "LOCAL-071",
       "execution_mode": "local-implementation",
       "github_issue": 157
+    },
+    {
+      "id": "LOCAL-080",
+      "number": 80,
+      "title": "把问题改写接入运行路径并持久化改写 trace",
+      "file": "issue-080-question-rewriting-wiring.md",
+      "type": "backend",
+      "priority": "high",
+      "state": "done",
+      "readiness": "done",
+      "phase": "L NL2SQL 流水线补齐",
+      "dependencies": [
+        "LOCAL-074"
+      ],
+      "user_stories": [
+        "US-020"
+      ],
+      "functional_requirements": [
+        "FR-25",
+        "FR-26",
+        "FR-29"
+      ],
+      "acceptance_refs": [],
+      "design_tasks": [],
+      "external_gates": [],
+      "origin": "nl2sql-pipeline-gap",
+      "source_finding": "LOCAL-071",
+      "execution_mode": "local-implementation",
+      "github_issue": 164
     }
   ],
   "github_remote_url": "https://github.com/Yijtu/ontology.git",
@@ -2957,6 +2979,7 @@
     "LOCAL-076",
     "LOCAL-077",
     "LOCAL-078",
-    "LOCAL-079"
+    "LOCAL-079",
+    "LOCAL-080"
   ]
 }
