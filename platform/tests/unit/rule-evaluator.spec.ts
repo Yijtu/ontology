@@ -392,6 +392,76 @@ describe('cycle and negation rejection', () => {
     }
     expectRuleError(() => supportRuleFromPublishedRule(published, []), 'UNSUPPORTED_NEGATION')
   })
+
+  it('rejects attached exceptions instead of silently weakening a published rule', () => {
+    const published = {
+      ruleVersionId: '00000000-0000-4000-8000-000000000001',
+      ruleId: 'rule.with-exception',
+      version: '1',
+      objectId: 'battery',
+      severity: 'hard' as const,
+      impact: 'high' as const,
+      expression: { op: 'compare' as const, attributeId: 'enabled', operator: 'eq' as const, value: true, spans: [] },
+      exceptions: [{
+        exceptionId: 'maintenance',
+        condition: { op: 'compare' as const, attributeId: 'maintenance', operator: 'eq' as const, value: true, spans: [] },
+        spans: [],
+      }],
+      recordedAt: '2026-09-21T00:00:00Z',
+      sourceCandidateId: '00000000-0000-4000-8000-000000000002',
+      publicationId: '00000000-0000-4000-8000-000000000003',
+    }
+    expectRuleError(() => supportRuleFromPublishedRule(published, []), 'UNSUPPORTED_NEGATION')
+  })
+
+  it('rejects premises drawn from two separate entities rather than combining them as one', () => {
+    const facts = [
+      fact({ assertionId: 'enabled-A', subject: 'battery-A', predicate: 'enabled', value: true }),
+      fact({ assertionId: 'islanding-B', subject: 'battery-B', predicate: 'islanding', value: true }),
+    ]
+    const published = {
+      ruleVersionId: '00000000-0000-4000-8000-000000000001',
+      ruleId: 'rule.cross-entity',
+      version: '1',
+      objectId: 'battery',
+      severity: 'hard' as const,
+      impact: 'high' as const,
+      expression: {
+        op: 'all' as const,
+        operands: [
+          { op: 'compare' as const, attributeId: 'enabled', operator: 'eq' as const, value: true, spans: [] },
+          { op: 'compare' as const, attributeId: 'islanding', operator: 'eq' as const, value: true, spans: [] },
+        ],
+        spans: [],
+      },
+      exceptions: [],
+      recordedAt: '2026-09-21T00:00:00Z',
+      sourceCandidateId: '00000000-0000-4000-8000-000000000002',
+      publicationId: '00000000-0000-4000-8000-000000000003',
+    }
+    expectRuleError(() => supportRuleFromPublishedRule(published, facts), 'UNSUPPORTED_FILTER')
+  })
+
+  it('does not let a withdrawn fact for another subject block a single active subject', () => {
+    const published = {
+      ruleVersionId: '00000000-0000-4000-8000-000000000001',
+      ruleId: 'rule.single-active',
+      version: '1',
+      objectId: 'battery',
+      severity: 'soft' as const,
+      impact: 'low' as const,
+      expression: { op: 'compare' as const, attributeId: 'enabled', operator: 'eq' as const, value: true, spans: [] },
+      exceptions: [],
+      recordedAt: '2026-09-21T00:00:00Z',
+      sourceCandidateId: '00000000-0000-4000-8000-000000000002',
+      publicationId: '00000000-0000-4000-8000-000000000003',
+    }
+    const facts = [
+      fact({ assertionId: 'enabled-A', subject: 'battery-A', predicate: 'enabled', value: true }),
+      fact({ assertionId: 'enabled-B', subject: 'battery-B', predicate: 'enabled', value: true, op: 'retract' }),
+    ]
+    expect(supportRuleFromPublishedRule(published, facts).premiseGroups).toHaveLength(1)
+  })
 })
 
 describe('proposition key qualifiers', () => {

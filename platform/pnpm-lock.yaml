@@ -203,6 +203,12 @@ importers:
       '@ontology/tool-services':
         specifier: workspace:*
         version: link:../../packages/tool-services
+      ajv:
+        specifier: ^8.20.0
+        version: 8.20.0
+      ajv-formats:
+        specifier: ^3.0.1
+        version: 3.0.1(ajv@8.20.0)
       fastify:
         specifier: ^5.12.5
         version: 5.12.5

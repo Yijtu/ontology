@@ -284,6 +284,9 @@ export interface PublishedAnswer {
   readonly asOf?: Rfc3339UtcTimestamp
   /** Explicit gaps/limitations the verified content carries; never hidden by rendering. */
   readonly limitations: readonly string[]
+  /** Exact verified body and claim bindings. Persisted with the publication; never regenerated on read. */
+  readonly blocks: readonly unknown[]
+  readonly claims: readonly DraftClaim[]
   readonly publishedAt: Rfc3339UtcTimestamp
 }
 

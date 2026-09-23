@@ -257,7 +257,7 @@ describe('LOCAL-054 cross-layer acceptance — question, tools, verification, an
       entries,
       digest: inputManifestDigest(TEMPLATE_RUN, entries),
     }
-    const blocks = [{ kind: 'summary' }]
+    const blocks = [{ kind: 'claim', claimId: claim.claimId }]
     const draft: AnswerDraft = {
       draftId: randomUUID(),
       runId: TEMPLATE_RUN,

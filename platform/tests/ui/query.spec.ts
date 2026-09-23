@@ -192,6 +192,8 @@ function publishedAnswer(runId: string, overrides: Partial<PublishedAnswer> = {}
     scenarioManifestHash: `sha256:${'c'.repeat(64)}`,
     publicationKind: 'verified',
     limitations: [],
+    blocks: [],
+    claims: [],
     publishedAt: '2026-09-21T00:00:00Z',
     ...overrides,
   }
@@ -234,6 +236,31 @@ describe('business query UI states (real API fixture over HTTP)', () => {
     const container = await renderQuery(client)
     await waitFor(() => container.querySelector('[data-state="failure"]') !== null, 'failure state')
     expect(container.querySelector('[data-testid="state-error-code"]')?.textContent).toContain('NETWORK_ERROR')
+  })
+
+  it('can reload the scope after an early proxy 500 without leaving the page', async () => {
+    let requests = 0
+    const client = new WorkbenchClient({
+      baseUrl: 'http://api.test',
+      fetchImpl: () => {
+        requests += 1
+        return Promise.resolve(requests === 1
+          ? new Response('proxy is starting', { status: 500 })
+          : jsonResponse(200, { data: {
+            profileRef: { id: PROFILE.id, version: PROFILE.version },
+            resolvedProfileHash: `sha256:${'1'.repeat(64)}`,
+            webSearchEnabled: false, toolIds: ['data_query'], allowedDomains: [], explicitDegradations: [],
+          } }))
+      },
+    })
+    const container = await renderQuery(client)
+    await waitFor(() => container.querySelector('[data-testid="query-retry-scope"]') !== null, 'retry button')
+    const retry = container.querySelector('[data-testid="query-retry-scope"]')
+    if (retry === null) throw new Error('retry button was not rendered')
+    await click(retry)
+    await waitFor(() => container.querySelector('[data-testid="query-ask"]') !== null, 'ask form after retry')
+    expect(requests).toBe(2)
+    expect(container.querySelector('[data-testid="state-error-code"]')).toBeNull()
   })
 
   it('renders a permission-denied state for a 403', async () => {

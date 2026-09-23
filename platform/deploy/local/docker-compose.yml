@@ -1,0 +1,18 @@
+services:
+  control-postgres:
+    image: postgres:16-alpine
+    environment:
+      POSTGRES_USER: postgres
+      POSTGRES_PASSWORD: ${CONTROL_POSTGRES_PASSWORD:?set CONTROL_POSTGRES_PASSWORD}
+      POSTGRES_DB: ontology
+    ports:
+      - "127.0.0.1:54329:5432"
+    volumes:
+      - ontology-local-control:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U postgres -d ontology"]
+      interval: 2s
+      timeout: 3s
+      retries: 30
+volumes:
+  ontology-local-control:

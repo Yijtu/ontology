@@ -323,6 +323,10 @@ export class InMemorySemanticPublicationStore implements SemanticPublicationStor
       records = records.filter((record) => record.publicationId === filter.publicationId)
     }
     if (filter.status !== undefined) records = records.filter((record) => record.status === filter.status)
+    if (filter.afterStatementId !== undefined) {
+      const cursor = filter.afterStatementId
+      records = records.filter((record) => record.statementId > cursor)
+    }
     records.sort((left, right) => (left.statementId < right.statementId ? -1 : 1))
     return records.slice(0, filter.limit ?? records.length).map(clone)
   }
@@ -341,6 +345,17 @@ export class InMemorySemanticPublicationStore implements SemanticPublicationStor
     if (filter.publicationId !== undefined) {
       records = records.filter((record) => record.publicationId === filter.publicationId)
     }
+    if (filter.afterRule !== undefined) {
+      const cursor = filter.afterRule
+      records = records.filter(
+        (record) => record.ruleId > cursor.ruleId ||
+          (record.ruleId === cursor.ruleId && BigInt(record.version) > BigInt(cursor.version)),
+      )
+    }
+    records.sort((left, right) =>
+      left.ruleId.localeCompare(right.ruleId) ||
+      (BigInt(left.version) < BigInt(right.version) ? -1 : BigInt(left.version) > BigInt(right.version) ? 1 : 0),
+    )
     return records.slice(0, filter.limit ?? records.length).map(clone)
   }
 

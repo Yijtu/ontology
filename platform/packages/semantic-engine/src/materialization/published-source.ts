@@ -11,6 +11,7 @@ import type { SupportRule } from '../rules'
 import { ruleFactsFromStatements, supportRuleFromPublishedRule } from '../rules'
 import type { DependencyEntityBinding } from './dependency-index'
 import type { MaterializationPublishedSource, PublishedSemanticData } from './types'
+import { readAllPublishedRules, readAllPublishedStatements } from './published-pages'
 
 /**
  * The narrow published read view the source needs. `SemanticPublicationStore` (LOCAL-031)
@@ -57,9 +58,9 @@ export class PublishedSemanticSource implements MaterializationPublishedSource {
   }
 
   async load(scopeRef: ScopeRef, ctx: ToolContext): Promise<PublishedSemanticData> {
-    const statements = await this.#readView.listStatements(scopeRef, { limit: this.#pageSize }, ctx)
+    const statements = await readAllPublishedStatements(this.#readView, scopeRef, ctx, {}, { pageSize: this.#pageSize })
     const facts = ruleFactsFromStatements(statements)
-    const versions = await this.#readView.listRuleVersions(scopeRef, { limit: this.#pageSize }, ctx)
+    const versions = await readAllPublishedRules(this.#readView, scopeRef, ctx, {}, { pageSize: this.#pageSize })
     const latestByRule = new Map<string, PublishedRuleVersion>()
     for (const version of versions) {
       const existing = latestByRule.get(version.ruleId)

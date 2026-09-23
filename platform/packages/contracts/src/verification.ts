@@ -89,6 +89,7 @@ export type VerificationFindingCode =
   | 'semantic_unsupported'
   | 'semantic_insufficient'
   | 'semantic_unavailable'
+  | 'visible_statement_unbound'
 
 /**
  * A located verification problem. `claimId`/`field`/`evidenceRef`/`pointer` identify exactly

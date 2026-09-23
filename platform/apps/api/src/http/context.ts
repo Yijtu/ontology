@@ -1,5 +1,5 @@
 import { CONTRACT_VERSION, createToolContext } from '@ontology/contracts'
-import type { Principal, ToolContext } from '@ontology/contracts'
+import type { Principal, ResourceKind, SourceRef, ToolContext } from '@ontology/contracts'
 
 const PLACEHOLDER_PROFILE_HASH = `sha256:${'0'.repeat(64)}`
 const REQUEST_DEADLINE_MS = 5 * 60 * 1000
@@ -12,6 +12,10 @@ export interface RequestToolContextInput {
   readonly resolvedProfileHash?: string
   /** Domains the trusted context approves for web search; absent means none. */
   readonly allowedDomains?: readonly string[]
+  readonly allowedResourceKinds?: readonly ResourceKind[]
+  readonly allowedSourceRefs?: readonly SourceRef[]
+  readonly allowedCollectionRefs?: readonly string[]
+  readonly maxRows?: number
 }
 
 /**
@@ -41,11 +45,11 @@ export function createRequestToolContext(input: RequestToolContextInput): ToolCo
     allowedResources: {
       tenantId: input.principal.tenantId,
       spaceId: input.spaceId,
-      resourceKinds: [],
-      sourceRefs: [],
-      collectionRefs: [],
+      resourceKinds: input.allowedResourceKinds === undefined ? [] : [...input.allowedResourceKinds],
+      sourceRefs: input.allowedSourceRefs === undefined ? [] : [...input.allowedSourceRefs],
+      collectionRefs: input.allowedCollectionRefs === undefined ? [] : [...input.allowedCollectionRefs],
       domains: input.allowedDomains === undefined ? [] : [...input.allowedDomains],
-      maxRows: 0,
+      maxRows: input.maxRows ?? 0,
     },
     traceId: input.traceId,
   })

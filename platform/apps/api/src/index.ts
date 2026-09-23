@@ -91,6 +91,7 @@ export type {
 export { createToolHandlerSet } from './composition/tool-handlers'
 export type { ToolHandlerSetOptions } from './composition/tool-handlers'
 export { createApiServer, createJobApi, createRunApi } from './http/app'
+export { startLocalProduct } from './local-product'
 export type { ApiServerOptions } from './http/app'
 export { registerRunRoutes } from './http/server'
 export type { AuthenticatedRequest, RequestAuthenticator, RunApiOptions } from './http/server'

@@ -1,6 +1,6 @@
 import Fastify from 'fastify'
 import type { FastifyInstance } from 'fastify'
-import type { JobService, RunService } from '@ontology/application'
+import type { JobService, RunService, WorkflowController } from '@ontology/application'
 import { registerRunRoutes } from './server'
 import type { RunApiOptions } from './server'
 import type { RunProgressReader } from './run-progress'
@@ -35,7 +35,7 @@ import type { RequestAuthenticator } from './shared'
 export interface ApiServerOptions {
   readonly authenticate: RequestAuthenticator
   /** Register the run surface (`POST /runs`, events, cancel, resume). */
-  readonly runs?: { readonly service: RunService; readonly progress?: RunProgressReader }
+  readonly runs?: { readonly service: RunService; readonly progress?: RunProgressReader; readonly workflow?: WorkflowController; readonly resolveToolAccess?: RunApiOptions['resolveToolAccess'] }
   /** Register the durable-job surface (`POST /ingestions`, `GET /jobs/{id}`, retry). */
   readonly jobs?: { readonly service: JobService }
   /** Register the configuration workbench surface (components/profiles/sources). */
@@ -67,6 +67,8 @@ export function createApiServer(options: ApiServerOptions): FastifyInstance {
       service: options.runs.service,
       authenticate: options.authenticate,
       ...(options.runs.progress === undefined ? {} : { progress: options.runs.progress }),
+      ...(options.runs.workflow === undefined ? {} : { workflow: options.runs.workflow }),
+      ...(options.runs.resolveToolAccess === undefined ? {} : { resolveToolAccess: options.runs.resolveToolAccess }),
     })
   }
   if (options.jobs !== undefined) {
@@ -92,6 +94,8 @@ export function createApiServer(options: ApiServerOptions): FastifyInstance {
   }
   if (options.answers !== undefined) {
     registerAnswerRoutes(app, { ...options.answers, authenticate: options.authenticate })
+  } else if (options.runs?.workflow !== undefined) {
+    registerAnswerRoutes(app, { reader: options.runs.workflow, authenticate: options.authenticate })
   }
   if (options.feedback !== undefined) {
     registerFeedbackRoutes(app, { ...options.feedback, authenticate: options.authenticate })
@@ -109,6 +113,7 @@ export function createRunApi(options: RunApiOptions): FastifyInstance {
     runs: {
       service: options.service,
       ...(options.progress === undefined ? {} : { progress: options.progress }),
+      ...(options.resolveToolAccess === undefined ? {} : { resolveToolAccess: options.resolveToolAccess }),
     },
     ...(options.logger === undefined ? {} : { logger: options.logger }),
   })

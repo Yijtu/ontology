@@ -205,9 +205,9 @@ function answerOutcome(data: Readonly<Record<string, unknown>>): QueryOutcome {
 export function queryReducer(state: QueryState, event: QueryEvent): QueryState {
   switch (event.type) {
     case 'scopeLoadStarted':
-      return { ...state, phase: 'loading', busy: true }
+      return { ...state, phase: 'loading', error: undefined, busy: true }
     case 'scopeLoaded':
-      return { ...state, scope: event.scope, phase: 'empty', busy: false }
+      return { ...state, scope: event.scope, phase: 'empty', error: undefined, busy: false }
     case 'askStarted':
       return {
         ...state,

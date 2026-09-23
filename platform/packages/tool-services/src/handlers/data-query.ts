@@ -394,6 +394,7 @@ export class DataQueryHandler implements ToolHandler {
     const warnings: ToolWarning[] = []
 
     let plan: DirectSqlQueryPlan
+    let semanticColumns: readonly QueryColumn[] | undefined
     if (args.mode === 'direct') {
       plan = parseDirectPlan(args.queryPlan)
     } else if (args.mode === 'semantic') {
@@ -417,6 +418,11 @@ export class DataQueryHandler implements ToolHandler {
       try {
         const compiled = compileSemanticQuery(semanticPlan, mapping, { budget })
         const rendered = renderCompiledQuery(compiled)
+        semanticColumns = compiled.projections.map((projection) => ({
+          name: projection.fieldRef,
+          type: projection.columnType,
+          ...(projection.unit === undefined ? {} : { unit: projection.unit }),
+        }))
         plan = {
           mode: 'direct',
           statementKind: 'select',
@@ -449,7 +455,20 @@ export class DataQueryHandler implements ToolHandler {
       ...(cursor === undefined ? {} : { cursor }),
     }
     const response = await this.#executeQuery(executeRequest, request)
-    return tableOutcome(response, warnings)
+    if (semanticColumns === undefined) return tableOutcome(response, warnings)
+    if (
+      response.columns.length !== semanticColumns.length ||
+      response.columns.some((column, index) =>
+        column.name !== semanticColumns?.[index]?.name || column.type !== semanticColumns?.[index]?.type,
+      )
+    ) {
+      throw new ToolGatewayError('INVALID_ARGUMENTS', 'backend columns do not match the pinned semantic projection', {
+        platformCode: 'SOURCE_UNAVAILABLE',
+      })
+    }
+    return tableOutcome({ ...response, columns: semanticColumns.map((column, index) => ({
+      ...response.columns[index], ...column,
+    })) }, warnings)
   }
 
   /**

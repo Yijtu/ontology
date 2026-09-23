@@ -18,6 +18,8 @@ import {
 import type { OutboxConsumer } from '@ontology/application'
 import {
   IdentityDecisionService,
+  readAllPublishedRules,
+  readAllPublishedStatements,
   SemanticPublicationService,
 } from '@ontology/semantic-engine'
 import { createApiServer } from '@ontology/app-api'
@@ -243,6 +245,44 @@ async function countFor(sql: string, params: readonly unknown[]): Promise<number
 }
 
 describe('semantic publication against real PostgreSQL', () => {
+  it('reads every published statement and rule page through the scoped PostgreSQL keyset', async () => {
+    const publicationId = randomUUID()
+    const ids = [randomUUID(), randomUUID(), randomUUID()].sort()
+    for (const statementId of ids) {
+      await harness.adminClient.query(
+        `INSERT INTO agent_platform.published_statements
+           (tenant_id, space_id, statement_id, proposition_key, kind, object_id, predicate,
+            value, recorded_at, source_candidate_id, source_job_id, source_refs, publication_id,
+            version, status)
+         VALUES ($1, $2, $3, $4, 'entity', 'site', 'site.active',
+                 '{"value":true}'::jsonb, '2026-09-21T00:00:00Z', $5, $6, '[]'::jsonb, $7,
+                 1, 'active')`,
+        [scope.tenantId, scope.spaceId, statementId, `site:${statementId}`, randomUUID(), jobId, publicationId],
+      )
+    }
+    for (const [ruleId, version] of [['scan.rule.a', 1], ['scan.rule.a', 2], ['scan.rule.b', 1]] as const) {
+      await harness.adminClient.query(
+        `INSERT INTO agent_platform.published_rule_versions
+           (tenant_id, space_id, rule_version_id, rule_id, version, object_id, severity, impact,
+            expression, exceptions, recorded_at, source_candidate_id, publication_id)
+         VALUES ($1, $2, $3, $4, $5, 'site', 'soft', 'low',
+                 '{"op":"compare","attributeId":"site.active","operator":"eq","value":true,"spans":[]}'::jsonb,
+                 '[]'::jsonb, '2026-09-21T00:00:00Z', $6, $7)`,
+        [scope.tenantId, scope.spaceId, randomUUID(), ruleId, version, randomUUID(), publicationId],
+      )
+    }
+    const statements = await readAllPublishedStatements(
+      publicationStore, scope.scopeRef, ctx, { publicationId }, { pageSize: 1, maxRecords: 3 },
+    )
+    const rules = await readAllPublishedRules(
+      publicationStore, scope.scopeRef, ctx, { publicationId }, { pageSize: 1, maxRecords: 3 },
+    )
+    expect(statements.map((entry) => entry.statementId)).toEqual(ids)
+    expect(rules.map((entry) => `${entry.ruleId}@${entry.version}`)).toEqual([
+      'scan.rule.a@1', 'scan.rule.a@2', 'scan.rule.b@1',
+    ])
+  })
+
   it('publishes approved candidates atomically and reads the decision and publication back', async () => {
     const candidate = await seedResolvedEntity()
     const reviewed = await reviewViaHttp(candidate.candidateId, 'approve', 'source verified')

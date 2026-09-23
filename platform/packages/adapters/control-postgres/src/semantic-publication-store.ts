@@ -664,6 +664,10 @@ export class PostgresSemanticPublicationStore implements SemanticPublicationStor
         values.push(filter.status)
         clauses.push(`status = $${String(values.length)}`)
       }
+      if (filter.afterStatementId !== undefined) {
+        values.push(filter.afterStatementId)
+        clauses.push(`statement_id > $${String(values.length)}::uuid`)
+      }
       values.push(filter.limit ?? 1_000)
       const result = await query.query<StatementRow>(
         `SELECT ${STATEMENT_COLUMNS} FROM agent_platform.published_statements
@@ -698,6 +702,10 @@ export class PostgresSemanticPublicationStore implements SemanticPublicationStor
       if (filter.publicationId !== undefined) {
         values.push(filter.publicationId)
         clauses.push(`publication_id = $${String(values.length)}`)
+      }
+      if (filter.afterRule !== undefined) {
+        values.push(filter.afterRule.ruleId, filter.afterRule.version)
+        clauses.push(`(rule_id, version) > ($${String(values.length - 1)}::text, $${String(values.length)}::bigint)`)
       }
       values.push(filter.limit ?? 1_000)
       const result = await query.query<RuleRow>(

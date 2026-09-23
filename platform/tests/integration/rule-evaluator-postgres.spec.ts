@@ -131,9 +131,11 @@ async function loadFacts(): Promise<RuleFact[]> {
   return ruleFactsFromStatements(statements)
 }
 
-async function loadRules(facts: readonly RuleFact[]): Promise<SupportRule[]> {
+async function loadRules(facts: readonly RuleFact[], ruleIds?: readonly string[]): Promise<SupportRule[]> {
   const versions = await store.listRuleVersions(scope.scopeRef, { limit: 1_000 }, ctx)
-  return versions.map((version) => supportRuleFromPublishedRule(version, facts))
+  return versions
+    .filter((version) => ruleIds === undefined || ruleIds.includes(version.ruleId))
+    .map((version) => supportRuleFromPublishedRule(version, facts))
 }
 
 beforeAll(async () => {
@@ -172,7 +174,7 @@ describe('rule evaluation against published facts and rules in real PostgreSQL',
   let firmwareStableId: Uuid
   let firmwareBetaId: Uuid
 
-  it('loads published facts and rule ASTs from the real store and evaluates AND/OR/unknown/conflict', async () => {
+  it('refuses an unbound cross-entity AND while preserving same-entity alternatives and conflict', async () => {
     const seedPublication = randomUUID()
     const soc = statementFor(
       'battery.soc_pct',
@@ -224,8 +226,14 @@ describe('rule evaluation against published facts and rules in real PostgreSQL',
 
     const facts = await loadFacts()
     expect(facts).toHaveLength(6)
-    const rules = await loadRules(facts)
-    expect(rules).toHaveLength(3)
+    const versions = await store.listRuleVersions(scope.scopeRef, { limit: 1_000 }, ctx)
+    const unbound = versions.find((version) => version.ruleId === 'rule.reserve-ready')
+    if (unbound === undefined) throw new Error('the cross-entity rule was not published')
+    expect(() => supportRuleFromPublishedRule(unbound, facts)).toThrowError(
+      /multiple subjects without an entity binding/,
+    )
+    const rules = await loadRules(facts, ['rule.battery-present', 'rule.firmware-channel'])
+    expect(rules).toHaveLength(2)
 
     const evaluator = new RuleEvaluator()
     const result = evaluator.evaluate({
@@ -240,10 +248,6 @@ describe('rule evaluation against published facts and rules in real PostgreSQL',
     })
 
     const byKey = new Map(result.conclusions.map((conclusion) => [conclusion.propositionKey, conclusion]))
-    expect(byKey.get('site.reserve_ready')?.domainStatus).toBe('known')
-    expect(byKey.get('site.reserve_ready')?.value).toBe(true)
-    expect(byKey.get('site.reserve_ready')?.satisfiedBy).toHaveLength(2)
-
     expect(byKey.get('device.battery_present')?.domainStatus).toBe('known')
     expect(byKey.get('device.battery_present')?.satisfiedBy).toEqual([
       {
@@ -284,7 +288,7 @@ describe('rule evaluation against published facts and rules in real PostgreSQL',
     )
 
     const facts = await loadFacts()
-    const rules = await loadRules(facts)
+    const rules = await loadRules(facts, ['rule.battery-present', 'rule.firmware-channel'])
     const result = new RuleEvaluator().evaluate({
       scopeRef: scope.scopeRef,
       request: {
@@ -305,7 +309,7 @@ describe('rule evaluation against published facts and rules in real PostgreSQL',
 
   it('is deterministic for the same published inputs', async () => {
     const facts = await loadFacts()
-    const rules = await loadRules(facts)
+    const rules = await loadRules(facts, ['rule.battery-present', 'rule.firmware-channel'])
     const request = {
       scopeRef: scope.scopeRef,
       projectionRef: { id: 'projection.semantic', version: '1.0.0', digest: DIGEST },

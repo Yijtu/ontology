@@ -79,6 +79,8 @@ async function seedAnswer(
     scenarioManifestHash: DIGEST_A,
     publicationKind: 'verified',
     limitations: [],
+    blocks: [],
+    claims: [],
     publishedAt: '2026-09-21T00:05:00Z',
   }
   return answers.record({ answer, expectedRunState: 'created', expectedRunRevision: '1' }, ctx)

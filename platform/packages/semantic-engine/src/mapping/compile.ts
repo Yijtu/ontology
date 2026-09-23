@@ -303,6 +303,7 @@ function aggregateProjection(
     fieldRef: field.fieldRef,
     expression,
     columnType: isCounting ? 'integer' : canonicalColumnTypeOf(field.valueType),
+    ...(!isCounting && field.unit !== undefined ? { unit: field.unit.unitCode } : {}),
   }
 }
 

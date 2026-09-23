@@ -78,6 +78,47 @@ async function registerResult(input: {
 }
 
 describe('structured claim binding (D7.4, US-021)', () => {
+  it('accepts an exact canonical SQL DECIMAL string without rounding away a mismatch', async () => {
+    const verifyValue = async (value: string) => {
+      const evidence = new InMemoryVerificationEvidence()
+      const artifacts = new InMemoryVerificationArtifacts()
+      const { ref, resultDigest } = await registerResult({ evidence, artifacts, payload: { ...RESULT_PAYLOAD, value } })
+      const claim = buildClaim({ evidenceRef: ref, resultDigest, value: 12.5 })
+      const manifest = buildInputManifest([ref])
+      const draft = buildDraft({ evidenceManifestHash: manifest.digest, claims: [claim] })
+      const { service } = buildService({ evidence, artifacts, decision: new FixedSemanticDecision('supported') })
+      return service.verify({ runId: RUN_ID, draft, inputManifest: manifest }, ownerContext())
+    }
+    const result = await verifyValue('12.5000000000')
+    expect(result.verdict).toBe('pass')
+    const bad = await verifyValue('12.5000000001')
+    expect(bad.verdict).toBe('fail')
+    expect(bad.failedChecks).toContain('number_mismatch')
+  })
+
+  it('rejects a claimed source time when its evidence binding omits the time pointer', async () => {
+    const evidence = new InMemoryVerificationEvidence()
+    const artifacts = new InMemoryVerificationArtifacts()
+    const { ref, resultDigest } = await registerResult({ evidence, artifacts })
+    const original = buildClaim({ evidenceRef: ref, resultDigest })
+    const binding = original.references[0]
+    if (binding === undefined) throw new Error('claim fixture has no binding')
+    const withoutTimePointer = {
+      evidenceRef: binding.evidenceRef,
+      resultDigest: binding.resultDigest,
+      valuePointer: binding.valuePointer,
+      unitPointer: binding.unitPointer,
+      subjectPointer: binding.subjectPointer,
+    }
+    const claim = { ...original, references: [withoutTimePointer] }
+    const manifest = buildInputManifest([ref])
+    const draft = buildDraft({ evidenceManifestHash: manifest.digest, claims: [claim] })
+    const { service } = buildService({ evidence, artifacts, decision: new FixedSemanticDecision('supported') })
+    const result = await service.verify({ runId: RUN_ID, draft, inputManifest: manifest }, ownerContext())
+    expect(result.verdict).toBe('fail')
+    expect(result.failedChecks).toContain('time_mismatch')
+  })
+
   it('binds number, unit, subject and time to the cited result and passes', async () => {
     const ctx = ownerContext()
     const evidence = new InMemoryVerificationEvidence()

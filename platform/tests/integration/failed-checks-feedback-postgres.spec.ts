@@ -154,7 +154,7 @@ class FeedbackDraftWriter implements DraftWriterPort {
       resultDigest,
       unit: wrong ? 'MWh' : RESULT_PAYLOAD.unit,
     })
-    const blocks: readonly unknown[] = [{ kind: 'summary', attempt: request.attempt }]
+    const blocks: readonly unknown[] = [{ kind: 'claim', claimId: claim.claimId }]
     const draft = draftFor(request.runId, request.inputManifest.digest, [claim], blocks)
     const draftRef: ResourceRef = {
       id: draft.draftId,

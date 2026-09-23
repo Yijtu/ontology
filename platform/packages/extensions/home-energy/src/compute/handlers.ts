@@ -260,6 +260,7 @@ export function createEnergyComputeHandlers(): readonly ComputeOperationHandler[
           : { terminalEnergyValuation: input.terminalEnergyValuation }),
       }
       const result = planner.plan(planRequest)
+      const selected = result.candidates.find((candidate) => candidate.planRef.id === result.selection.selectedPlanRef?.id)
       return archiveAndFinish({
         request,
         input,
@@ -267,6 +268,13 @@ export function createEnergyComputeHandlers(): readonly ComputeOperationHandler[
         resultDigest: result.resultDigest,
         algorithm: result.algorithmVersion,
         domainStatus: result.domainStatus,
+        metrics: {
+          candidate_total_cost: selected?.objective.totalCost,
+          baseline_total_cost: result.baseline?.objective.totalCost,
+          terminal_energy_kwh: selected?.objective.terminalEnergyKwh,
+          reserve_satisfied: selected?.objective.reserveSatisfied === undefined ? undefined : (selected.objective.reserveSatisfied ? 1 : 0),
+          units: { candidate_total_cost: 'CNY', baseline_total_cost: 'CNY', terminal_energy_kwh: 'kWh', reserve_satisfied: 'boolean' },
+        },
       })
     },
   }

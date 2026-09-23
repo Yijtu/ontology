@@ -83,7 +83,7 @@ export class WorkflowController {
 
   /** Create a run, open its one ledger/manifest and drive it to a stable phase. */
   async startRun(input: StartWorkflowInput, ctx: ToolContext): Promise<WorkflowView> {
-    await this.#deps.runs.createRun(
+    const created = await this.#deps.runs.createRun(
       {
         runId: input.runId,
         profileRef: input.profileRef,
@@ -95,14 +95,15 @@ export class WorkflowController {
       ctx,
     )
 
-    const existing = await this.#deps.manifests.getRunManifest(input.runId, ctx)
+    const runId = created.runId
+    const existing = await this.#deps.manifests.getRunManifest(runId, ctx)
     if (existing !== undefined) {
       // Idempotent re-entry: the manifest is immutable, so a second call never re-opens
       // the run or resets its budget.
-      return this.#view(input.runId, ctx)
+      return this.#view(runId, ctx)
     }
 
-    const run = await this.#deps.phase.requireRun(input.runId, ctx)
+    const run = await this.#deps.phase.requireRun(runId, ctx)
     const inputManifest = await this.#createInputManifest(run, ctx)
     const ledger = await this.#deps.budget.openLedger(
       {

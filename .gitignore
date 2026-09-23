@@ -8,3 +8,4 @@ platform/tests/e2e/artifacts/
 graph.html
 .env
 .env.*
+.local-data/

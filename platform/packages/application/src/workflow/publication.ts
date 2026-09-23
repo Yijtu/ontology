@@ -222,6 +222,8 @@ export class AnswerPublicationService implements AnswerPublisherPort {
       publicationKind,
       ...(publicationKind === 'history_limited' ? { asOf: validity.asOf } : {}),
       limitations,
+      blocks: structuredClone(draft.blocks),
+      claims: structuredClone(draft.claims ?? []),
       publishedAt: this.#now(),
     }
 

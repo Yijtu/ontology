@@ -1,7 +1,7 @@
 import { useCallback, useEffect, useReducer, useRef, useState } from 'react'
 import type { ProfileRef, RunRoutePreference } from '@ontology/contracts'
 import { ApiError } from '../api/errors'
-import type { QueryRunView, RunEventStream, WorkbenchClient } from '../api/client'
+import type { LocalPlanDetailView, QueryRunView, RunEventStream, WorkbenchClient } from '../api/client'
 import {
   initialQueryState,
   queryReducer,
@@ -161,8 +161,23 @@ function OutcomePanel({ state }: { readonly state: QueryState }) {
   )
 }
 
-function AnswerPanel({ state }: { readonly state: QueryState }) {
+function AnswerPanel({ state, client }: { readonly state: QueryState; readonly client: WorkbenchClient }) {
   const answer = state.answer
+  const hasPlan = answer?.claims.some((claim) => claim.predicate === 'candidate_total_cost') === true
+  const [plan, setPlan] = useState<LocalPlanDetailView | undefined>(undefined)
+  const [planError, setPlanError] = useState(false)
+  useEffect(() => {
+    setPlan(undefined)
+    setPlanError(false)
+    if (answer === undefined || !hasPlan || typeof client.getLocalPlan !== 'function') return
+    let active = true
+    void client.getLocalPlan(answer.runId).then((detail) => {
+      if (active && detail.answerId === answer.answerId) setPlan(detail)
+    }).catch(() => {
+      if (active) setPlanError(true)
+    })
+    return () => { active = false }
+  }, [answer?.answerId, client, hasPlan])
   if (state.answerState === 'in_progress') {
     return (
       <section className="query__answer" data-testid="query-answer" data-answer-state="in_progress">
@@ -191,7 +206,69 @@ function AnswerPanel({ state }: { readonly state: QueryState }) {
   }
   return (
     <section className="query__answer" data-testid="query-answer" data-answer-state="published">
-      <h3>已核验答案（按内容哈希绑定）</h3>
+      <h3>已核验答案</h3>
+      <div className="query__answer-body" data-testid="answer-body">
+        {answer.blocks.length === 0 ? <p>没有可展示的已核验业务陈述。</p> : null}
+      </div>
+      {answer.claims.length === 0 ? null : (
+        <section aria-label="答案依据" data-testid="answer-claims">
+          <h4>核验过的结果</h4>
+          <ul>{answer.claims.map((claim) => (
+            <li key={claim.claimId} data-testid="answer-claim">
+              {claim.predicate === 'candidate_total_cost'
+                ? '已测试候选计划的估算总费用'
+                : claim.predicate === 'baseline_total_cost'
+                  ? '不使用电池的基线估算总费用'
+                  : claim.predicate === 'terminal_energy_kwh'
+                    ? '计划结束时电池储能量'
+                    : claim.predicate === 'reserve_satisfied'
+                      ? '备电约束是否满足'
+                      : claim.predicate === 'soc_percent'
+                        ? `${claim.subject} 的平均 SOC`
+                  : `${claim.subject}：${claim.predicate}`} = {claim.value.value} {claim.value.unit}
+              {claim.references.map((reference) => <small key={reference.evidenceRef.id}> 来源证据 {reference.evidenceRef.id}</small>)}
+            </li>
+          ))}</ul>
+        </section>
+      )}
+      {hasPlan ? (
+        <section aria-label="归档计划明细" data-testid="plan-detail">
+          <h4>候选充放电计划</h4>
+          {plan === undefined ? (
+            <p data-testid="plan-detail-status">{planError ? '计划明细暂不可读；已核验摘要仍可用。' : '正在读取归档仿真明细…'}</p>
+          ) : (
+            <>
+              <p data-testid="plan-strategy">已选策略：{plan.selectedStrategy}；仅为已测试候选中的较优方案。</p>
+              <p>仿真时段：{plan.intervals.length}；费用：{plan.candidateTotalCost} {plan.currency}，无电池基线：{plan.baselineTotalCost} {plan.currency}。</p>
+              <p>备电约束：{plan.reserveSatisfied ? '满足' : '不满足'}；明细来自已归档计算结果，摘要数值已与发布答案核对。</p>
+              <p>来源证据：{plan.sourceEvidenceRef.id}；结果文件：{plan.resultRef.id}（{plan.dataMode}）。</p>
+              {plan.assumptions.length === 0 ? null : <ul data-testid="plan-assumptions">{plan.assumptions.map((item, index) => <li key={`${String(index)}-${item}`}>{item}</li>)}</ul>}
+              <details data-testid="plan-trajectory">
+                <summary>查看逐时段充放电与储能轨迹（{plan.intervals.length} 段）</summary>
+                <div style={{ overflowX: 'auto' }}>
+                  <table>
+                    <thead><tr><th>时段</th><th>开始（UTC）</th><th>充电 kW</th><th>放电 kW</th><th>起始 kWh</th><th>结束 kWh</th></tr></thead>
+                    <tbody>{plan.intervals.map((interval) => (
+                      <tr key={interval.slotIndex} data-testid="plan-interval">
+                        <td>{interval.slotIndex}</td><td>{interval.startUtc}</td><td>{interval.chargeKw}</td>
+                        <td>{interval.dischargeKw}</td><td>{interval.energyStartKwh}</td><td>{interval.energyEndKwh}</td>
+                      </tr>
+                    ))}</tbody>
+                  </table>
+                </div>
+              </details>
+              <details data-testid="plan-reserves">
+                <summary>备电约束检查（{plan.reserveMargins.length} 项）</summary>
+                <ul>{plan.reserveMargins.map((margin, index) => (
+                  <li key={`${margin.windowStartSlot}-${margin.windowEndSlot}-${String(index)}`}>
+                    时段 {margin.windowStartSlot}–{margin.windowEndSlot}：要求 {margin.reserveKwh} kWh，余量 {margin.marginKwh} kWh，{margin.satisfied ? '满足' : '未满足'}。
+                  </li>
+                ))}</ul>
+              </details>
+            </>
+          )}
+        </section>
+      ) : null}
       <dl>
         <dt>答案 ID</dt>
         <dd data-testid="answer-id">{answer.answerId}</dd>
@@ -223,10 +300,14 @@ export function QueryPanel({ client, profileRef = DEFAULT_PROFILE, initialRunId 
   const viewport = useViewport()
   const [state, dispatch] = useReducer(queryReducer, undefined, initialQueryState)
   const [question, setQuestion] = useState('')
-  const [siteRef, setSiteRef] = useState('')
+  const [selectedProfile, setSelectedProfile] = useState(profileRef)
+  const [siteRef, setSiteRef] = useState('synthetic-home-1')
+  const [backupRequirementKwh, setBackupRequirementKwh] = useState(2)
+  const [weatherScenario, setWeatherScenario] = useState<'sunny' | 'overcast' | 'storm'>('sunny')
   const [route, setRoute] = useState<RunRoutePreference>('auto')
   const [allowWeb, setAllowWeb] = useState(false)
   const [clarificationInput, setClarificationInput] = useState('')
+  const [scopeRetry, setScopeRetry] = useState(0)
   const streamRef = useRef<RunEventStream | undefined>(undefined)
 
   const closeStream = useCallback(() => {
@@ -282,7 +363,7 @@ export function QueryPanel({ client, profileRef = DEFAULT_PROFILE, initialRunId 
     const load = async () => {
       dispatch({ type: 'scopeLoadStarted' })
       try {
-        const scope = await client.getRunScope(profileRef)
+        const scope = await client.getRunScope(selectedProfile)
         if (cancelled) return
         dispatch({ type: 'scopeLoaded', scope })
         if (initialRunId !== undefined) {
@@ -301,7 +382,7 @@ export function QueryPanel({ client, profileRef = DEFAULT_PROFILE, initialRunId 
       cancelled = true
       closeStream()
     }
-  }, [client, profileRef, initialRunId, openStream, loadAnswer, closeStream])
+  }, [client, selectedProfile, initialRunId, openStream, loadAnswer, closeStream, scopeRetry])
 
   const ask = async () => {
     if (question.trim().length === 0) {
@@ -311,10 +392,12 @@ export function QueryPanel({ client, profileRef = DEFAULT_PROFILE, initialRunId 
     dispatch({ type: 'askStarted' })
     try {
       const created = await client.createRun({
-        profileRef,
+        profileRef: selectedProfile,
         question: question.trim(),
         context: {
           timeZone: DEFAULT_TIME_ZONE,
+          backupRequirementKwh,
+          weatherScenario,
           ...(siteRef.trim().length === 0 ? {} : { siteRef: siteRef.trim() }),
         },
         preferences: { route, allowWeb: state.scope?.webSearchEnabled === true && allowWeb },
@@ -386,7 +469,13 @@ export function QueryPanel({ client, profileRef = DEFAULT_PROFILE, initialRunId 
       </header>
 
       {phase === 'loading' || phase === 'not_configured' || phase === 'failure' || phase === 'permission_denied' ? (
-        <StatePanel phase={phase} {...(state.error === undefined ? {} : { error: state.error })} />
+        <StatePanel phase={phase} {...(state.error === undefined ? {} : { error: state.error })}>
+          {phase === 'failure' && state.scope === undefined ? (
+            <button type="button" data-testid="query-retry-scope" onClick={() => setScopeRetry((value) => value + 1)}>
+              重试连接
+            </button>
+          ) : null}
+        </StatePanel>
       ) : null}
 
       {phase === 'empty' || phase === 'ready' ? (
@@ -405,6 +494,16 @@ export function QueryPanel({ client, profileRef = DEFAULT_PROFILE, initialRunId 
           >
             <h3>提问</h3>
             <label className="query__field">
+              <span>数据结构 profile</span>
+              <select value={selectedProfile.id} onChange={(event) => {
+                const id = event.target.value
+                if (id === 'home-energy-demo' || id === 'home-energy-demo-wide' || id === 'home-energy-demo-long') setSelectedProfile({ id, version: '1.0.0' })
+              }}>
+                <option value="home-energy-demo">A：宽表遥测</option>
+                <option value="home-energy-demo-long">B：长表指标码（本地预处理）</option>
+              </select>
+            </label>
+            <label className="query__field">
               <span>问题</span>
               <textarea
                 name="question"
@@ -422,6 +521,16 @@ export function QueryPanel({ client, profileRef = DEFAULT_PROFILE, initialRunId 
                 value={siteRef}
                 onChange={(event) => setSiteRef(event.target.value)}
               />
+            </label>
+            <label className="query__field">
+              <span>备电保留量（kWh，合成假设）</span>
+              <input type="number" min="0" max="50" step="0.5" value={backupRequirementKwh} onChange={(event) => setBackupRequirementKwh(Number(event.target.value))} />
+            </label>
+            <label className="query__field">
+              <span>光伏天气假设</span>
+              <select value={weatherScenario} onChange={(event) => setWeatherScenario(event.target.value as typeof weatherScenario)}>
+                <option value="sunny">晴天</option><option value="overcast">阴天</option><option value="storm">暴风雨</option>
+              </select>
             </label>
             <label className="query__field">
               <span>执行路径</span>
@@ -455,7 +564,7 @@ export function QueryPanel({ client, profileRef = DEFAULT_PROFILE, initialRunId 
           </form>
 
           {run === undefined ? null : (
-            <section className="query__run" data-testid="query-run" data-state={run.state}>
+            <section className="query__run" data-testid="query-run" data-run-id={run.runId} data-state={run.state}>
               <h3>运行进度</h3>
               <p data-testid="run-state">
                 运行状态：<strong>{run.state}</strong>
@@ -518,7 +627,7 @@ export function QueryPanel({ client, profileRef = DEFAULT_PROFILE, initialRunId 
               )}
 
               <OutcomePanel state={state} />
-              <AnswerPanel state={state} />
+              <AnswerPanel state={state} client={client} />
             </section>
           )}
           </div>

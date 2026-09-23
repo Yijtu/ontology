@@ -22,6 +22,7 @@ interface AnswerRow extends QueryResultRow {
   publication_kind: PublicationKind
   as_of: Date | null
   limitations: string[]
+  body: { blocks: readonly unknown[]; claims: PublishedAnswer['claims'] } | null
   published_at: Date
 }
 
@@ -31,7 +32,7 @@ interface RunStateRow extends QueryResultRow {
 }
 
 const ANSWER_COLUMNS =
-  'answer_id, run_id, draft_id, verification_id, content_hash, evidence_manifest_hash, scenario_manifest_hash, publication_kind, as_of, limitations, published_at'
+  'answer_id, run_id, draft_id, verification_id, content_hash, evidence_manifest_hash, scenario_manifest_hash, publication_kind, as_of, limitations, published_at, body'
 
 function scopeOf(ctx: ToolContext): { tenantId: string; spaceId: string } {
   if (!isToolContext(ctx)) {
@@ -57,6 +58,8 @@ function toAnswer(row: AnswerRow): PublishedAnswer {
     publicationKind: row.publication_kind,
     ...(row.as_of === null ? {} : { asOf: row.as_of.toISOString() }),
     limitations: row.limitations,
+    blocks: row.body?.blocks ?? [],
+    claims: row.body?.claims ?? [],
     publishedAt: row.published_at.toISOString(),
   }
 }
@@ -110,11 +113,11 @@ export class PostgresAnswerStore implements AnswerStorePort {
           `INSERT INTO agent_platform.answer_publications
              (tenant_id, space_id, run_id, answer_id, draft_id, verification_id, content_hash,
               evidence_manifest_hash, scenario_manifest_hash, publication_kind, as_of, limitations,
-              published_at)
+              published_at, body)
            VALUES (
              current_setting('app.tenant_id')::uuid,
              current_setting('app.space_id')::uuid,
-             $1, $2, $3, $4, $5, $6, $7, $8, $9::timestamptz, $10::jsonb, $11::timestamptz
+             $1, $2, $3, $4, $5, $6, $7, $8, $9::timestamptz, $10::jsonb, $11::timestamptz, $12::jsonb
            )
            ON CONFLICT (tenant_id, space_id, run_id) DO NOTHING`,
           [
@@ -129,6 +132,7 @@ export class PostgresAnswerStore implements AnswerStorePort {
             input.answer.asOf ?? null,
             JSON.stringify(input.answer.limitations),
             input.answer.publishedAt,
+            JSON.stringify({ blocks: input.answer.blocks, claims: input.answer.claims }),
           ],
         )
       } catch (error) {

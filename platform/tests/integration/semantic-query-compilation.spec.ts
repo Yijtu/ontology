@@ -258,7 +258,10 @@ describe('semantic query compilation against real engines', () => {
 
     const dataA = resultA.inlineData as DataQueryOutput | undefined
     const dataB = resultB.inlineData as DataQueryOutput | undefined
-    expect(dataA?.table?.columns).toEqual(EXPECTED_COLUMNS)
+    expect(dataA?.table?.columns).toEqual(EXPECTED_COLUMNS.map((column) =>
+      column.name === 'energy_kwh' ? { ...column, unit: 'kWh' } : column,
+    ))
+    expect(dataB?.table?.columns).toEqual(dataA?.table?.columns)
     expect(dataA?.table?.rows).toEqual(EXPECTED_ROWS)
     expect(dataB?.table?.rows).toEqual(dataA?.table?.rows)
 

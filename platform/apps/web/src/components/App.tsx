@@ -23,6 +23,7 @@ export interface AppProps {
   readonly profileRef?: ProfileRef
   readonly boundRunId?: string
   readonly initialView?: AppView
+  readonly availableViews?: readonly AppView[]
   readonly initialJobId?: string
   readonly initialCandidateId?: string
   readonly initialEvidenceId?: string
@@ -43,6 +44,7 @@ export function App({
   profileRef,
   boundRunId,
   initialView = 'workbench',
+  availableViews,
   initialJobId,
   initialCandidateId,
   initialEvidenceId,
@@ -54,7 +56,7 @@ export function App({
   return (
     <div className="app" data-viewport={viewport} data-view={view}>
       <nav className="app__tabs" aria-label="主导航">
-        {TABS.map((tab) => (
+        {TABS.filter((tab) => availableViews === undefined || availableViews.includes(tab.view)).map((tab) => (
           <button
             key={tab.view}
             type="button"

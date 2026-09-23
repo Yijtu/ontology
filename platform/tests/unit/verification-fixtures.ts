@@ -210,7 +210,7 @@ export function buildDraft(input: {
   readonly draftId?: Uuid
   readonly blocks?: readonly unknown[]
 }): AnswerDraft {
-  const blocks = input.blocks ?? [{ kind: 'summary' }]
+  const blocks = input.blocks ?? input.claims.map((claim) => ({ kind: 'claim', claimId: claim.claimId }))
   return {
     draftId: input.draftId ?? randomUUID(),
     runId: RUN_ID,

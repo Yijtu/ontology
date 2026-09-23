@@ -127,7 +127,7 @@ async function buildPublicationHarness(): Promise<PublicationHarness> {
     OWNER,
   )
 
-  const blocks: readonly unknown[] = [{ kind: 'summary' }]
+  const blocks: readonly unknown[] = []
   const draft: AnswerDraft = {
     draftId: randomUUID(),
     runId: RUN_A,
@@ -348,7 +348,7 @@ class ClaimDraftWriter implements DraftWriterPort {
     const good = buildClaim({ evidenceRef: ref, resultDigest: this.envelopeResultDigest })
     const bad = buildClaim({ evidenceRef: ref, resultDigest: this.envelopeResultDigest, value: 999 })
     const claims = [good, bad]
-    const blocks: readonly unknown[] = [{ kind: 'summary' }]
+    const blocks: readonly unknown[] = claims.map((claim) => ({ kind: 'claim', claimId: claim.claimId }))
     const evidenceManifestHash = request.inputManifest.digest
     const draft: AnswerDraft = {
       draftId: randomUUID(),

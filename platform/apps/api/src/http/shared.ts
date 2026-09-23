@@ -1,5 +1,5 @@
 import type { FastifyError, FastifyInstance, FastifyReply, FastifyRequest } from 'fastify'
-import type { Principal, RevisionString, ScopeRef } from '@ontology/contracts'
+import type { Principal, RevisionString, ResourceKind, ScopeRef, SourceRef } from '@ontology/contracts'
 import { failureBody, isClassifiedError } from './errors'
 
 /**
@@ -15,6 +15,10 @@ export interface AuthenticatedRequest {
    * rather than a wildcard.
    */
   readonly allowedDomains?: readonly string[]
+  readonly allowedResourceKinds?: readonly ResourceKind[]
+  readonly allowedSourceRefs?: readonly SourceRef[]
+  readonly allowedCollectionRefs?: readonly string[]
+  readonly maxRows?: number
 }
 
 export type RequestAuthenticator = (request: FastifyRequest) => AuthenticatedRequest | undefined
@@ -165,6 +169,7 @@ export function authenticateRequest(
 export function installErrorHandler(app: FastifyInstance): void {
   app.setErrorHandler((error: FastifyError, request, reply) => {
     const traceId = readTraceId(request)
+    request.log.error({ traceId, errorName: error.name, errorCode: 'code' in error ? error.code : undefined }, 'request failed')
     if (isClassifiedError(error)) {
       reply.status(error.httpStatus).send(failureBody(error, traceId))
       return

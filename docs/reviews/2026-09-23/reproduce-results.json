@@ -1,0 +1,199 @@
+[
+  {
+    "id": "HTTP-NO-DISPATCH",
+    "postStatus": 202,
+    "runState": "created",
+    "runtimeStarts": 0
+  },
+  {
+    "id": "ANSWER-METADATA-ONLY",
+    "fields": [
+      "answerId",
+      "runId",
+      "draftId",
+      "verificationId",
+      "contentHash",
+      "evidenceManifestHash",
+      "scenarioManifestHash",
+      "publicationKind",
+      "limitations",
+      "publishedAt"
+    ]
+  },
+  {
+    "id": "CONTROLLER-IDEMPOTENCY",
+    "sameKeyNewRunIdError": "RUN_NOT_FOUND"
+  },
+  {
+    "id": "UNBOUND-ANSWER-BLOCKS",
+    "archivedValue": 12.5,
+    "bodyValue": 9999,
+    "verdict": "pass",
+    "failedChecks": []
+  },
+  {
+    "id": "UNBOUND-CLAIM-TIME",
+    "archivedTime": "2026-09-20T00:00:00Z",
+    "claimedTime": "2099-01-01T00:00:00Z",
+    "verdict": "pass"
+  },
+  {
+    "id": "SEMANTIC-REVIEW-NO-CONTENT",
+    "sentRequest": {
+      "stateRef": {
+        "id": "sha256:fcdde1df70c970886b914787aa444a47517f7ffea2600308143b1f1b05f5381e",
+        "version": "combined-verification-policy@1",
+        "digest": "sha256:fcdde1df70c970886b914787aa444a47517f7ffea2600308143b1f1b05f5381e",
+        "kind": "artifact"
+      },
+      "questions": [
+        {
+          "questionId": "87008ef3-793e-4ed6-a189-94a9b8b6ad1a",
+          "type": "choice",
+          "prompt": "Is the structured claim 1b14155a-01d8-4b27-883d-7d231ee7ffdd supported by the evidence bound to it?",
+          "options": [
+            {
+              "optionId": "supported",
+              "label": "supported"
+            },
+            {
+              "optionId": "unsupported",
+              "label": "unsupported"
+            },
+            {
+              "optionId": "insufficient",
+              "label": "insufficient"
+            }
+          ],
+          "optionSetHash": "sha256:5b499ebd9f6476544b45d98e9ab63440c3441ba7583b4346e19bbe46f0475e8d",
+          "definitionVersion": "1.0.0"
+        }
+      ],
+      "modelRef": {
+        "modelId": "jev-semantic",
+        "version": "1.0.0"
+      }
+    }
+  },
+  {
+    "id": "JEV-PROTOCOL",
+    "actualPath": "/v1/decide",
+    "topLevelKeys": [
+      "model",
+      "state_ref",
+      "questions"
+    ],
+    "questionsIsArray": true,
+    "officialResponseDecode": {
+      "kind": "malformed",
+      "detail": "the response did not carry a model_version"
+    }
+  },
+  {
+    "id": "RULE-EXCEPTION-IGNORED",
+    "exceptionIsTrue": true,
+    "conclusion": {
+      "propositionKey": "battery",
+      "qualifiedPropositionKey": "sha256:ad6337dd43e8dd0df245438ac9cec068d49724b9c57534fd39efb9b9a9bc7f09",
+      "predicate": "battery",
+      "domainStatus": "known",
+      "satisfiedBy": [
+        {
+          "groupId": "review-rule:enabled",
+          "alternativeIds": [
+            "enabled"
+          ]
+        }
+      ],
+      "ruleRefs": [
+        {
+          "id": "review-rule",
+          "version": "1",
+          "digest": "sha256:0000000000000000000000000000000000000000000000000000000000000000"
+        }
+      ],
+      "factRefs": [
+        {
+          "assertionId": "enabled",
+          "logicalAssertionId": "enabled",
+          "recordedSeq": "1",
+          "digest": "sha256:90a15eeddbd6e1c73ebeed5720e96315f2df5e5eac679c1cd0dc41a0ca8236c6"
+        }
+      ],
+      "supportNodeId": "conclusion:battery",
+      "value": true
+    }
+  },
+  {
+    "id": "RULE-CROSS-ENTITY",
+    "facts": [
+      {
+        "subject": "battery-A",
+        "predicate": "enabled"
+      },
+      {
+        "subject": "battery-B",
+        "predicate": "islanding"
+      }
+    ],
+    "conclusion": {
+      "propositionKey": "battery",
+      "qualifiedPropositionKey": "sha256:ad6337dd43e8dd0df245438ac9cec068d49724b9c57534fd39efb9b9a9bc7f09",
+      "predicate": "battery",
+      "domainStatus": "known",
+      "satisfiedBy": [
+        {
+          "groupId": "review-rule.0:enabled",
+          "alternativeIds": [
+            "a"
+          ]
+        },
+        {
+          "groupId": "review-rule.1:islanding",
+          "alternativeIds": [
+            "b"
+          ]
+        }
+      ],
+      "ruleRefs": [
+        {
+          "id": "review-rule",
+          "version": "1",
+          "digest": "sha256:0000000000000000000000000000000000000000000000000000000000000000"
+        }
+      ],
+      "factRefs": [
+        {
+          "assertionId": "a",
+          "logicalAssertionId": "a",
+          "recordedSeq": "1",
+          "digest": "sha256:2ed647238b8e6b8d819b8903c0a86270fde215b66d99ee40d40d59e841de46b6"
+        },
+        {
+          "assertionId": "b",
+          "logicalAssertionId": "b",
+          "recordedSeq": "1",
+          "digest": "sha256:4adbe21cba668c75b60b922267cbd189005bdc32601aa67a2cba58491b6e0ed0"
+        }
+      ],
+      "supportNodeId": "conclusion:battery",
+      "value": true
+    }
+  },
+  {
+    "id": "MATERIALIZATION-FIRST-PAGE",
+    "availableStatements": 1001,
+    "loadedFacts": 1000,
+    "statementReads": 1,
+    "resultFields": [
+      "facts",
+      "rules",
+      "entityBindings"
+    ]
+  },
+  {
+    "id": "COMPANY-PROTOCOL",
+    "gatewayChunkKind": "chat.completion.chunk",
+    "decoderAccepts": false
+  }
+]

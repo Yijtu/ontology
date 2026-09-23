@@ -184,7 +184,7 @@ function draftFor(input: {
   readonly manifestDigest: string
   readonly claims: readonly DraftClaim[]
 }): AnswerDraft {
-  const blocks = [{ kind: 'summary' }]
+  const blocks = input.claims.map((claim) => ({ kind: 'claim', claimId: claim.claimId }))
   return {
     draftId: randomUUID(),
     runId: input.runId,

@@ -109,6 +109,15 @@ export class DraftVerificationService implements AnswerVerifierPort {
 
     const findings: VerificationFinding[] = []
 
+    // The UI only renders claim blocks. Free text is not a verifiable business assertion:
+    // accepting it beside a valid claim would reintroduce the R06 contradiction path.
+    const claimIds = new Set(claims.map((claim) => claim.claimId))
+    for (const [index, block] of draft.blocks.entries()) {
+      if (typeof block !== 'object' || block === null || !('kind' in block) || block.kind !== 'claim' || !('claimId' in block) || typeof block.claimId !== 'string' || !claimIds.has(block.claimId)) {
+        findings.push({ code: 'visible_statement_unbound', axis: 'hard', field: 'blocks', pointer: `/blocks/${String(index)}` })
+      }
+    }
+
     const recomputed = answerDraftContentHash(
       request.runId,
       draft.blocks,

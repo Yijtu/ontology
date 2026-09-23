@@ -11,6 +11,7 @@ import type {
 import { RuleEvaluationError, RuleEvaluator } from '../rules'
 import type { RuleConclusionResult, RuleFact, SupportRule } from '../rules'
 import { ruleFactsFromStatements, supportRuleFromPublishedRule } from '../rules'
+import { readAllPublishedRules, readAllPublishedStatements } from '../materialization'
 import type { PublishedSemanticReadView } from '../materialization'
 
 /**
@@ -118,9 +119,9 @@ export class SupportEvidenceDependencySource {
     validAt: string,
     ctx: ToolContext,
   ): Promise<EvidenceDependencyEdge[]> {
-    const statements = await this.#published.listStatements(scopeRef, { limit: this.#pageSize }, ctx)
+    const statements = await readAllPublishedStatements(this.#published, scopeRef, ctx, {}, { pageSize: this.#pageSize })
     const facts = ruleFactsFromStatements(statements)
-    const versions = await this.#published.listRuleVersions(scopeRef, { limit: this.#pageSize }, ctx)
+    const versions = await readAllPublishedRules(this.#published, scopeRef, ctx, {}, { pageSize: this.#pageSize })
     const rules = latestRules(versions, facts)
     if (rules.length === 0) return []
 

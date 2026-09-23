@@ -2,7 +2,7 @@ import { randomUUID } from 'node:crypto'
 import { chromium } from '@playwright/test'
 import type { Browser } from '@playwright/test'
 import { afterAll, beforeAll, describe, expect, it } from 'vitest'
-import type { ErrorCode, PublishedAnswer, RuntimeEvent } from '@ontology/contracts'
+import type { ErrorCode, RuntimeEvent } from '@ontology/contracts'
 import { PROFILE, SENTINEL_SECRET, startHarness } from '../../ui/workbench-fixtures'
 import type { Harness } from '../../ui/workbench-fixtures'
 import { capture, record, startWebHost } from '../web-host'
@@ -52,21 +52,6 @@ async function seedRun(): Promise<string> {
   return (created.json() as { data: { runId: string } }).data.runId
 }
 
-function publishedAnswer(runId: string): PublishedAnswer {
-  return {
-    answerId: randomUUID(),
-    runId,
-    draftId: randomUUID(),
-    verificationId: randomUUID(),
-    contentHash: `sha256:${'a'.repeat(64)}`,
-    evidenceManifestHash: `sha256:${'b'.repeat(64)}`,
-    scenarioManifestHash: `sha256:${'c'.repeat(64)}`,
-    publicationKind: 'verified',
-    limitations: [],
-    publishedAt: '2026-09-21T00:00:00Z',
-  }
-}
-
 function failedEvent(runId: string, code: ErrorCode): RuntimeEvent {
   return {
     type: 'failed',
@@ -78,13 +63,13 @@ function failedEvent(runId: string, code: ErrorCode): RuntimeEvent {
   }
 }
 
-describe('LOCAL-054 cross-layer acceptance in a real browser', () => {
-  it('drives configuration → question → normal answer → insufficient-data outcome with evidence', async () => {
+describe('LOCAL-054 browser projection checks (not a workflow end-to-end)', () => {
+  it('shows configuration and query state without fabricating a published answer', async () => {
     const context = await browser.newContext({ viewport: { width: 1280, height: 900 } })
     const page = await context.newPage()
 
     // 1. Configuration workbench: preflight resolves and the profile activates.
-    await page.goto(web.origin)
+    await page.goto(`${web.origin}/?view=workbench`)
     await page.waitForSelector('[data-testid="preflight"]')
     await page.click('[data-testid="preflight"]')
     await page.waitForSelector('[data-testid="preflight-status"][data-status="resolved"]')
@@ -104,19 +89,19 @@ describe('LOCAL-054 cross-layer acceptance in a real browser', () => {
     const budget = await page.textContent('[data-testid="budget-tool-calls"]')
     await capture(page, 'acceptance-2-query-asked')
 
-    // 3. Normal published answer.
-    const runId = await seedRun()
-    const answer = publishedAnswer(runId)
-    harness.seedAnswer(runId, answer)
+    // The HTTP route in this UI fixture only creates the run; this check deliberately
+    // asserts that the browser does not claim an answer until workflow dispatch is wired.
+    const runId = await page.getAttribute('[data-testid="query-run"]', 'data-run-id')
+    if (runId === null) throw new Error('the query panel did not expose its created run id')
     await page.goto(`${web.origin}/?view=query&run=${runId}`)
-    await page.waitForSelector('[data-testid="outcome-normal"]')
-    expect(await page.textContent('[data-testid="answer-hash"]')).toBe(answer.contentHash)
+    await page.waitForSelector('[data-testid="answer-unavailable"], [data-answer-state="in_progress"]')
+    expect(await page.locator('[data-testid="answer-hash"]').count()).toBe(0)
     const events = await page.evaluate(async (id: string) => {
       const response = await fetch(`/api/v1/runs/${id}/events`)
       return response.text()
     }, runId)
     expect(events).not.toContain('unverified_answer.delta')
-    await capture(page, 'acceptance-3-normal-answer')
+    await capture(page, 'acceptance-3-no-fabricated-answer')
 
     // 4. Abnormal: an insufficient-data outcome is distinct, and no secret leaks to the page.
     const gapRun = await seedRun()
@@ -132,7 +117,7 @@ describe('LOCAL-054 cross-layer acceptance in a real browser', () => {
       'viewport=1280x900',
       `webSearchDisabled=${String(webDisabled)}`,
       `budget=${budget ?? ''}`,
-      `answerHash=${answer.contentHash}`,
+      'seedAnswer=false',
       'hasDraftDelta=' + String(events.includes('unverified_answer.delta')),
       `containsSecret=${String(html.includes(SENTINEL_SECRET))}`,
     ])

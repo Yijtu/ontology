@@ -270,6 +270,8 @@ export interface PublishedStatementFilter {
   readonly sourceCandidateId?: Uuid
   readonly publicationId?: Uuid
   readonly status?: PublishedStatementStatus
+  /** Exclusive keyset cursor. A second page never repeats the previous statement. */
+  readonly afterStatementId?: Uuid
   /** Bounded page size; a caller never reads an unbounded table. */
   readonly limit?: number
 }
@@ -278,6 +280,8 @@ export interface PublishedRuleFilter {
   readonly objectId?: string
   readonly sourceCandidateId?: Uuid
   readonly publicationId?: Uuid
+  /** Exclusive keyset cursor over the stable (ruleId, numeric version) ordering. */
+  readonly afterRule?: { readonly ruleId: string; readonly version: RevisionString }
   readonly limit?: number
 }
 

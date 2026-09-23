@@ -29,6 +29,29 @@ export interface HardCheckOutcome {
   readonly supportedClaimIds: readonly Uuid[]
 }
 
+/** SQL NUMERIC/DECIMAL values are archived as exact strings by both query adapters. */
+function canonicalDecimal(value: string): string | undefined {
+  if (value.length > 256) return undefined
+  const match = /^([+-]?)(\d+)(?:\.(\d*))?(?:[eE]([+-]?\d{1,4}))?$/.exec(value)
+  if (match === null) return undefined
+  const fraction = match[3] ?? ''
+  const allDigits = `${match[2]}${fraction}`.replace(/^0+/u, '')
+  if (allDigits === '') return '0'
+  const significant = allDigits.replace(/0+$/u, '')
+  const trailingZeros = allDigits.length - significant.length
+  const exponent = Number(match[4] ?? '0') - fraction.length + trailingZeros
+  return `${match[1] === '-' ? '-' : ''}${significant}e${String(exponent)}`
+}
+
+function sameNumericValue(observed: unknown, claimed: number): boolean {
+  if (!Number.isFinite(claimed)) return false
+  if (typeof observed === 'number') return Number.isFinite(observed) && observed === claimed
+  if (typeof observed !== 'string') return false
+  const source = canonicalDecimal(observed)
+  const assertion = canonicalDecimal(String(claimed))
+  return source !== undefined && source === assertion
+}
+
 export function checkClaims(
   claims: readonly DraftClaim[],
   resolved: ReadonlyMap<string, ResolvedEvidence>,
@@ -75,7 +98,7 @@ export function checkClaims(
 
       const payload = evidence.payload
       const value = resolveJsonPointer(payload, binding.valuePointer)
-      if (!value.found || typeof value.value !== 'number') {
+      if (!value.found || (typeof value.value !== 'number' && typeof value.value !== 'string')) {
         claimFindings.push({
           code: 'number_mismatch',
           axis: 'hard',
@@ -86,7 +109,7 @@ export function checkClaims(
           expected: 'absent',
           actual: String(claim.value.value),
         })
-      } else if (value.value !== claim.value.value) {
+      } else if (!sameNumericValue(value.value, claim.value.value)) {
         claimFindings.push({
           code: 'number_mismatch',
           axis: 'hard',
@@ -149,7 +172,17 @@ export function checkClaims(
         })
       }
 
-      if (binding.timePointer !== undefined && claim.time.asOf !== undefined) {
+      if (claim.time.asOf !== undefined && binding.timePointer === undefined) {
+        claimFindings.push({
+          code: 'time_mismatch',
+          axis: 'hard',
+          claimId: claim.claimId,
+          field: 'time',
+          evidenceRef: binding.evidenceRef,
+          expected: 'a bound source time pointer',
+          actual: claim.time.asOf,
+        })
+      } else if (binding.timePointer !== undefined && claim.time.asOf !== undefined) {
         const time = resolveJsonPointer(payload, binding.timePointer)
         if (!time.found || time.value !== claim.time.asOf) {
           claimFindings.push({

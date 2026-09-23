@@ -46,6 +46,8 @@ const ANSWER: PublishedAnswer = {
   scenarioManifestHash: `sha256:${'c'.repeat(64)}`,
   publicationKind: 'verified',
   limitations: [],
+  blocks: [],
+  claims: [],
   publishedAt: '2026-09-21T00:00:00Z',
 }
 

@@ -13,6 +13,8 @@ import type { RuleFact, RulePremiseAlternative, RulePremiseGroup, SupportRule } 
  *    predicate.
  *  - `not` -> rejected as unsupported negation.
  *  - `relation` -> rejected as an unsupported premise form.
+ *  - attached exceptions -> rejected until their negative condition can be represented.
+ *  - facts from several subjects -> rejected until the rule is instantiated per entity.
  *
  * A rule outside the subset is refused instead of being weakened into a looser rule.
  */
@@ -20,7 +22,27 @@ export function supportRuleFromPublishedRule(
   rule: PublishedRuleVersion,
   facts: readonly RuleFact[],
 ): SupportRule {
+  if (rule.exceptions.length > 0) {
+    throw new RuleEvaluationError(
+      'UNSUPPORTED_NEGATION',
+      `rule ${rule.ruleId} has exceptions that this support-rule subset cannot represent`,
+    )
+  }
   const groups = compileNode(rule.expression, facts, rule.ruleId)
+  const referenced = new Set(
+    groups.flatMap((group) => group.alternatives.map((alternative) => alternative.assertionId)),
+  )
+  const subjects = new Set(
+    facts
+      .filter((fact) => referenced.has(fact.assertionId) && fact.op !== 'retract')
+      .map((fact) => fact.subject),
+  )
+  if (subjects.size > 1) {
+    throw new RuleEvaluationError(
+      'UNSUPPORTED_FILTER',
+      `rule ${rule.ruleId} matches multiple subjects without an entity binding`,
+    )
+  }
   return {
     ruleRef: {
       id: rule.ruleId,

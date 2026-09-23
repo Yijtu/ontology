@@ -1,10 +1,11 @@
 import type { FastifyInstance, FastifyRequest } from 'fastify'
 import { RunServiceError, parseCreateRunRequest } from '@ontology/application'
 import type { RunService } from '@ontology/application'
-import type { CreateRunResponse, RevisionString } from '@ontology/contracts'
+import type { CreateRunResponse, ProfileRef, RevisionString } from '@ontology/contracts'
 import { createRequestToolContext } from './context'
 import { formatSseFrame, SSE_HEADERS } from './sse'
 import type { RunProgressReader } from './run-progress'
+import type { WorkflowController } from '@ontology/application'
 import {
   authenticateRequest,
   CapabilityNotConfiguredError,
@@ -32,6 +33,13 @@ export interface RunApiOptions {
    * of inventing one.
    */
   readonly progress?: RunProgressReader
+  /** Server-owned mapping from a registered profile ref to its allowed data scope. */
+  readonly resolveToolAccess?: (profileRef: ProfileRef, auth: AuthenticatedRequest) => Promise<{
+    readonly sourceRefs: readonly import('@ontology/contracts').SourceRef[]
+    readonly resourceKinds: readonly import('@ontology/contracts').ResourceKind[]
+    readonly maxRows: number
+  }>
+  readonly workflow?: WorkflowController
   readonly logger?: boolean
 }
 
@@ -39,6 +47,8 @@ export interface RunRouteDependencies {
   readonly service: RunService
   readonly authenticate: RequestAuthenticator
   readonly progress?: RunProgressReader
+  readonly resolveToolAccess?: RunApiOptions['resolveToolAccess']
+  readonly workflow?: WorkflowController
 }
 
 function readIfMatch(request: FastifyRequest): RevisionString | undefined {
@@ -84,7 +94,7 @@ function readLastEventId(request: FastifyRequest): RevisionString | undefined {
  * surface shares one server, one envelope and one error boundary (see `createApiServer`).
  */
 export function registerRunRoutes(app: FastifyInstance, dependencies: RunRouteDependencies): void {
-  const contextFor = (auth: AuthenticatedRequest, traceId: string, runId: string, hash?: string) =>
+  const contextFor = (auth: AuthenticatedRequest, traceId: string, runId: string, hash?: string, toolAccess?: Awaited<ReturnType<NonNullable<RunRouteDependencies['resolveToolAccess']>>>) =>
     createRequestToolContext({
       principal: auth.principal,
       spaceId: auth.spaceId,
@@ -92,6 +102,11 @@ export function registerRunRoutes(app: FastifyInstance, dependencies: RunRouteDe
       runId,
       ...(hash === undefined ? {} : { resolvedProfileHash: hash }),
       ...(auth.allowedDomains === undefined ? {} : { allowedDomains: auth.allowedDomains }),
+      ...(auth.allowedResourceKinds === undefined ? {} : { allowedResourceKinds: auth.allowedResourceKinds }),
+      ...(auth.allowedSourceRefs === undefined ? {} : { allowedSourceRefs: auth.allowedSourceRefs }),
+      ...(auth.allowedCollectionRefs === undefined ? {} : { allowedCollectionRefs: auth.allowedCollectionRefs }),
+      ...(auth.maxRows === undefined ? {} : { maxRows: auth.maxRows }),
+      ...(toolAccess === undefined ? {} : { allowedResourceKinds: toolAccess.resourceKinds, allowedSourceRefs: toolAccess.sourceRefs, maxRows: toolAccess.maxRows }),
     })
 
   app.post('/api/v1/runs', async (request, reply) => {
@@ -104,10 +119,19 @@ export function registerRunRoutes(app: FastifyInstance, dependencies: RunRouteDe
     }
     const fields = parseCreateRunRequest(request.body)
     const runId = globalThis.crypto.randomUUID()
+    const toolAccess = await dependencies.resolveToolAccess?.(fields.profileRef, auth)
+    const runContext = contextFor(auth, traceId, runId, undefined, toolAccess)
     const result = await dependencies.service.createRun(
       { runId, ...fields, idempotencyKey },
-      contextFor(auth, traceId, runId),
+      runContext,
     )
+    if (dependencies.workflow !== undefined) {
+      await dependencies.workflow.startRun({
+        runId: result.runId,
+        ...fields,
+        idempotencyKey,
+      }, contextFor(auth, traceId, result.runId, result.resolvedProfileHash, toolAccess))
+    }
     const data: CreateRunResponse = {
       runId: result.runId,
       state: result.state,
@@ -177,10 +201,10 @@ export function registerRunRoutes(app: FastifyInstance, dependencies: RunRouteDe
         throw new RunServiceError('INVALID_ARGUMENT', 'typedResponse must be a JSON object')
       }
       const expectedRevision = resolveExpectedRevision(readIfMatch(request), body['expectedRevision'])
-      const view = await dependencies.service.respondToClarification(
-        { runId, clarificationId, typedResponse, expectedRevision },
-        contextFor(auth, traceId, runId),
-      )
+      const context = contextFor(auth, traceId, runId)
+      const view = dependencies.workflow === undefined
+        ? await dependencies.service.respondToClarification({ runId, clarificationId, typedResponse, expectedRevision }, context)
+        : await dependencies.workflow.respondToClarification({ runId, clarificationId, typedResponse, expectedRevision }, context)
       reply.status(200).send({
         data: { runId: view.runId, state: 'continued', revision: view.revision },
         meta: { traceId, revision: view.revision },
@@ -200,10 +224,10 @@ export function registerRunRoutes(app: FastifyInstance, dependencies: RunRouteDe
     }
     const reason = requireNonEmptyString(body['reason'], 'reason')
     const expectedRevision = resolveExpectedRevision(readIfMatch(request), body['expectedRevision'])
-    const view = await dependencies.service.cancelRun(
-      { runId, reason, expectedRevision },
-      contextFor(auth, traceId, runId),
-    )
+    const context = contextFor(auth, traceId, runId)
+    const view = dependencies.workflow === undefined
+      ? await dependencies.service.cancelRun({ runId, reason, expectedRevision }, context)
+      : await dependencies.workflow.cancel({ runId, reason, expectedRevision }, context)
     reply.status(200).send({
       data: { runId: view.runId, state: view.state, revision: view.revision },
       meta: { traceId, revision: view.revision },

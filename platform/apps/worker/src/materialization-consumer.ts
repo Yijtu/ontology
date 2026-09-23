@@ -15,7 +15,7 @@ import type {
   ValidityInterval,
 } from '@ontology/contracts'
 import type { OutboxConsumer } from '@ontology/application'
-import { sha256DigestOf } from '@ontology/semantic-engine'
+import { readAllPublishedRules, readAllPublishedStatements, sha256DigestOf } from '@ontology/semantic-engine'
 import type { IncrementalMaterializer, MaterializationTicket, PublishedSemanticReadView } from '@ontology/semantic-engine'
 
 /** The outbox topic a publication handler hands the worker to advance asynchronously. */
@@ -387,10 +387,12 @@ export class MaterializationOutboxConsumer implements OutboxConsumer {
       )
     }
     const fences = parseFenceBindings(message.payload)
-    const statements = await this.#publications.listStatements(
+    const statements = await readAllPublishedStatements(
+      this.#publications,
       scopeRef,
-      { publicationId, limit: this.#pageSize },
       ctx,
+      { publicationId },
+      { pageSize: this.#pageSize },
     )
     for (const statement of statements) {
       await this.#openAndEnqueue(
@@ -414,10 +416,12 @@ export class MaterializationOutboxConsumer implements OutboxConsumer {
         fences.get(statement.statementId),
       )
     }
-    const rules = await this.#publications.listRuleVersions(
+    const rules = await readAllPublishedRules(
+      this.#publications,
       scopeRef,
-      { publicationId, limit: this.#pageSize },
       ctx,
+      { publicationId },
+      { pageSize: this.#pageSize },
     )
     for (const rule of rules) {
       await this.#openAndEnqueue(

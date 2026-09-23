@@ -16,6 +16,7 @@ import type {
   ProfileRef,
   ProvenanceEvidenceView,
   PublishedAnswer,
+  ResourceRef,
   ProfileSpec,
   ProfileVersionRecord,
   RevisionString,
@@ -172,6 +173,38 @@ export interface BoundRunView {
   readonly ownerSubjectId: string
   readonly profileRef: ProfileRef
   readonly resolvedProfileHash: Sha256Digest
+}
+
+/** Local energy preview only: integrity-checked details linked to a published plan answer. */
+export interface LocalPlanDetailView {
+  readonly runId: string
+  readonly answerId: string
+  readonly sourceEvidenceRef: ResourceRef
+  readonly resultRef: ResourceRef
+  readonly dataMode: 'simulation'
+  readonly optimality: 'best_of_tested_candidates'
+  readonly selectedStrategy: string
+  readonly candidateTotalCost: number
+  readonly baselineTotalCost: number
+  readonly currency: string
+  readonly reserveSatisfied: boolean
+  readonly intervals: readonly {
+    readonly slotIndex: number
+    readonly startUtc: string
+    readonly endUtc: string
+    readonly chargeKw: number
+    readonly dischargeKw: number
+    readonly energyStartKwh: number
+    readonly energyEndKwh: number
+  }[]
+  readonly reserveMargins: readonly {
+    readonly windowStartSlot: number
+    readonly windowEndSlot: number
+    readonly reserveKwh: number
+    readonly marginKwh: number
+    readonly satisfied: boolean
+  }[]
+  readonly assumptions: readonly string[]
 }
 
 export interface ComponentFilter {
@@ -376,6 +409,11 @@ export class WorkbenchClient {
       throw new ApiError(response.status, toApiFailure(response.status, parsed))
     }
     return { kind: 'published', answer: dataOf<PublishedAnswer>(parsed, `/api/v1/runs/${runId}/answer`) }
+  }
+
+  /** Read a simulation trajectory only after its verified answer has been published. */
+  getLocalPlan(runId: string): Promise<LocalPlanDetailView> {
+    return this.#request<LocalPlanDetailView>('GET', `/api/v1/runs/${encodeURIComponent(runId)}/plan`)
   }
 
   /** Subscribe to the run's persisted public events. Unknown event names are dropped. */

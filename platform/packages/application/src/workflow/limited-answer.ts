@@ -43,14 +43,7 @@ export class RestrictedLimitedAnswerComposer implements LimitedAnswerPort {
       ]),
     ].sort()
 
-    const blocks: readonly unknown[] = [
-      {
-        kind: 'limited_result',
-        question: request.question,
-        supportedClaimIds: supportedClaims.map((claim) => claim.claimId),
-        gaps,
-      },
-    ]
+    const blocks: readonly unknown[] = supportedClaims.map((claim) => ({ kind: 'claim', claimId: claim.claimId }))
     const evidenceManifestHash = request.inputManifest.digest
     const limitations = ['limited_factual_result', ...gaps]
     const draft: AnswerDraft = {

@@ -58,6 +58,7 @@ const TEMPLATES: Readonly<Record<VerificationFindingCode, Template>> = Object.fr
     `${locate(finding)} has insufficient semantic support in the cited evidence`,
   semantic_unavailable: () =>
     'the policy semantic review was unavailable; only the hard checks are reported',
+  visible_statement_unbound: (finding) => `${locate(finding)} contains visible text that is not rendered from a verified claim`,
 })
 
 export class RestrictedExplanationTemplates {
