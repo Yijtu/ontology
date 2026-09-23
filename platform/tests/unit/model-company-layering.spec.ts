@@ -49,6 +49,10 @@ const VENDOR_TOKENS = [
   'finish_reason',
   'error_message',
   'vendorModel',
+  // OpenAI-compatible wire vocabulary must stay inside the adapter codec too.
+  'OpenAiStreamChunk',
+  'openai-wire',
+  'chat.completion',
 ]
 
 describe('model-company adapter layering (SPEC §2, §4.2)', () => {
@@ -65,6 +69,8 @@ describe('model-company adapter layering (SPEC §2, §4.2)', () => {
     expect(index).not.toMatch(/vendor\//)
     expect(index).not.toMatch(/CompanyWire/)
     expect(index).not.toMatch(/CompanyApi/)
+    expect(index).not.toMatch(/OpenAi/)
+    expect(index).not.toMatch(/openai/)
     for (const { file, source } of read(ADAPTER_DIR)) {
       if (file.endsWith('index.ts')) continue
       // The vendor module itself is allowed to name its own types; nothing else may.
@@ -72,6 +78,7 @@ describe('model-company adapter layering (SPEC §2, §4.2)', () => {
       expect(source, `${file} must not re-export a vendor type`).not.toMatch(
         /export .*CompanyWire/,
       )
+      expect(source, `${file} must not re-export an OpenAI wire type`).not.toMatch(/export .*OpenAi/)
     }
   })
 

@@ -114,6 +114,37 @@ function writeSse(
   response.end()
 }
 
+/** OpenAI-compatible `chat.completion.chunk` with the fixed fields a stream always carries. */
+function openAiChunk(
+  choices: readonly Record<string, unknown>[],
+  usage?: Record<string, unknown>,
+): Record<string, unknown> {
+  return {
+    id: 'chatcmpl-fixture',
+    object: 'chat.completion.chunk',
+    created: 1,
+    model: 'vendor-openai',
+    choices,
+    // The real gateway emits an explicit `null` on chunks that carry no usage.
+    usage: usage ?? null,
+  }
+}
+
+function openAiText(text: string): Record<string, unknown> {
+  return openAiChunk([{ index: 0, delta: { content: text }, finish_reason: null }])
+}
+
+/** Emit OpenAI-compatible SSE: each chunk on its own `data:` line, then `data: [DONE]`. */
+function writeOpenAiSse(
+  response: import('node:http').ServerResponse,
+  chunks: readonly Record<string, unknown>[],
+): void {
+  response.writeHead(200, { 'content-type': 'text/event-stream', 'cache-control': 'no-cache' })
+  for (const chunk of chunks) response.write(`data: ${JSON.stringify(chunk)}\n\n`)
+  response.write('data: [DONE]\n\n')
+  response.end()
+}
+
 function respond(
   fixture: string,
   response: import('node:http').ServerResponse,
@@ -249,6 +280,121 @@ function respond(
       return
     case 'vendor_error':
       writeSse(response, [{ type: 'error', error_code: 'overloaded', error_message: 'provider busy' }])
+      return
+    case 'openai_normal':
+      // finish_reason arrives before usage; the codec must still capture the usage.
+      writeOpenAiSse(response, [
+        openAiText('Hello '),
+        openAiText('world'),
+        openAiChunk([{ index: 0, delta: {}, finish_reason: 'stop' }]),
+        openAiChunk([], { prompt_tokens: 12, completion_tokens: 7 }),
+      ])
+      return
+    case 'openai_length':
+      writeOpenAiSse(response, [
+        openAiText('truncated answer'),
+        openAiChunk([{ index: 0, delta: {}, finish_reason: 'length' }]),
+      ])
+      return
+    case 'openai_structured':
+      writeOpenAiSse(response, [
+        openAiText('{"site":"'),
+        openAiText('site-demo-a","plan":"reserve_first"}'),
+        openAiChunk([{ index: 0, delta: {}, finish_reason: 'stop' }]),
+        openAiChunk([], { prompt_tokens: 20, completion_tokens: 9 }),
+      ])
+      return
+    case 'openai_fragmented_tool_call':
+      // Non-UUID id, `arguments` split across three fragments; only the complete JSON
+      // object may be emitted, once, with a normalised id.
+      writeOpenAiSse(response, [
+        openAiChunk([
+          {
+            index: 0,
+            delta: {
+              role: 'assistant',
+              tool_calls: [
+                {
+                  index: 0,
+                  id: 'call_abc123',
+                  type: 'function',
+                  function: { name: 'data_query', arguments: '' },
+                },
+              ],
+            },
+            finish_reason: null,
+          },
+        ]),
+        openAiChunk([
+          { index: 0, delta: { tool_calls: [{ index: 0, function: { arguments: '{"kind":' } }] }, finish_reason: null },
+        ]),
+        openAiChunk([
+          { index: 0, delta: { tool_calls: [{ index: 0, function: { arguments: '"describe"}' } }] }, finish_reason: null },
+        ]),
+        openAiChunk([{ index: 0, delta: {}, finish_reason: 'tool_calls' }]),
+        openAiChunk([], { prompt_tokens: 15, completion_tokens: 6 }),
+      ])
+      return
+    case 'openai_two_tool_calls':
+      writeOpenAiSse(response, [
+        openAiChunk([
+          {
+            index: 0,
+            delta: {
+              tool_calls: [
+                { index: 1, id: 'call_two', function: { name: 'document_search', arguments: '{"query":"tariff"}' } },
+              ],
+            },
+            finish_reason: null,
+          },
+        ]),
+        openAiChunk([
+          {
+            index: 0,
+            delta: {
+              tool_calls: [
+                { index: 0, id: 'call_one', function: { name: 'data_query', arguments: '{"kind":"describe"}' } },
+              ],
+            },
+            finish_reason: null,
+          },
+        ]),
+        openAiChunk([{ index: 0, delta: {}, finish_reason: 'tool_calls' }]),
+      ])
+      return
+    case 'openai_incomplete_tool_call':
+      // The stream claims a tool call but never completes the JSON arguments.
+      writeOpenAiSse(response, [
+        openAiChunk([
+          {
+            index: 0,
+            delta: {
+              tool_calls: [
+                { index: 0, id: 'call_broken', function: { name: 'data_query', arguments: '{"kind":' } },
+              ],
+            },
+            finish_reason: null,
+          },
+        ]),
+        openAiChunk([{ index: 0, delta: {}, finish_reason: 'tool_calls' }]),
+      ])
+      return
+    case 'openai_malformed_chunk':
+      writeOpenAiSse(response, [openAiText('before malformed'), { unexpected: true }])
+      return
+    case 'openai_error_chunk':
+      writeOpenAiSse(response, [
+        { error: { message: 'rate limited by provider', type: 'rate_limit_error', code: 'rate_limit' } },
+      ])
+      return
+    case 'openai_interrupted':
+      response.writeHead(200, { 'content-type': 'text/event-stream' })
+      response.write(`data: ${JSON.stringify(openAiText('before the drop '))}\n\n`)
+      response.write(`data: ${JSON.stringify(openAiText('still here'))}\n\n`)
+      setTimeout(() => {
+        response.socket?.destroy()
+        abortedResponses.push(1)
+      }, 30)
       return
     default:
       response.writeHead(500, { 'content-type': 'application/json' })
@@ -390,12 +536,14 @@ export interface AdapterOptions {
   readonly requestTimeoutMs?: number
   readonly signal?: AbortSignal
   readonly retryBaseDelayMs?: number
+  readonly protocol?: 'private' | 'openai-compatible'
 }
 
 export function makeAdapter(options: AdapterOptions): CompanyGenerationAdapter {
   const config: CompanyGenerationAdapterConfig = {
     baseUrl: options.server.baseUrl,
     secretRef: SECRET_REF,
+    ...(options.protocol === undefined ? {} : { protocol: options.protocol }),
     models: { [PLATFORM_MODEL_ID]: { vendorModel: options.fixture } },
     secrets: staticSecretResolver(),
     budget: options.harness.budget,

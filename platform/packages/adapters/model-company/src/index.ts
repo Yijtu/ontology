@@ -12,6 +12,7 @@ export type {
   CandidateValidationResult,
   CompanyGenerationAdapterConfig,
   CompanyModelBinding,
+  CompanyModelProtocol,
   ModelAdapterLogRecord,
   ModelAdapterLogger,
   ModelCallEvidenceRecorder,

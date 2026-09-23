@@ -73,11 +73,26 @@ export interface CompanyModelBinding {
   readonly vendorModel: string
 }
 
+/**
+ * Wire protocol a configured company gateway speaks. It selects the decode codec only;
+ * the emitted `GenerationEvent`s keep the same meaning either way (SPEC C2, §4.2).
+ *
+ *   - `private`: the gateway's own `{ type: ... }` chunk protocol (the original path);
+ *   - `openai-compatible`: `chat/completions` streaming — `data: {...}` chunks, text and
+ *     fragmented tool-call deltas, `finish_reason`, `usage`, terminated by `data: [DONE]`.
+ */
+export type CompanyModelProtocol = 'private' | 'openai-compatible'
+
 export interface CompanyGenerationAdapterConfig {
   /** Base URL of the company generation API, e.g. `http://127.0.0.1:0`. */
   readonly baseUrl: string
   /** Stream path; defaults to `/v1/generate`. */
   readonly endpoint?: string
+  /**
+   * Wire protocol the gateway speaks. Defaults to `private` so an existing deployment is
+   * unchanged; an OpenAI-compatible gateway must opt in explicitly.
+   */
+  readonly protocol?: CompanyModelProtocol
   /** Opaque server-side reference; resolved per call through the injected resolver. */
   readonly secretRef: string
   readonly models: Readonly<Record<string, CompanyModelBinding>>

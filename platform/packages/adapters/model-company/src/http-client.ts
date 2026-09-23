@@ -107,6 +107,14 @@ export class CompanyHttpClient {
   }
 }
 
+/**
+ * Build the tool declarations sent to the gateway. The catalogue's `inputSchema` is a
+ * `$ref` into the platform schema bundle, which an OpenAI-compatible gateway rejects
+ * (`parameters must be a JSON Schema of type object`). As in `runtime-pi`, the adapter
+ * therefore declares a permissive object schema: the tool gateway remains the authority
+ * that validates the canonical arguments, so the model is told *what* it may propose,
+ * not handed the platform's internal schema.
+ */
 function declarationsFor(toolIds: readonly ToolId[]): readonly CompanyWireToolDeclaration[] {
   const byId = new Map(TOOL_CATALOGUE.map((definition) => [definition.toolId, definition]))
   return toolIds.map((toolId): CompanyWireToolDeclaration => {
@@ -116,10 +124,20 @@ function declarationsFor(toolIds: readonly ToolId[]): readonly CompanyWireToolDe
       function: {
         name: toolId,
         description: definition === undefined ? toolId : `Platform tool ${toolId}`,
-        parameters: definition?.inputSchema ?? { type: 'object' },
+        parameters: objectParametersFor(definition?.inputSchema),
       },
     }
   })
+}
+
+/** Pass a self-contained object schema through; otherwise fall back to a permissive one. */
+function objectParametersFor(inputSchema: unknown): Readonly<Record<string, unknown>> {
+  return isObjectSchema(inputSchema) ? inputSchema : { type: 'object', additionalProperties: true }
+}
+
+function isObjectSchema(value: unknown): value is Record<string, unknown> {
+  if (typeof value !== 'object' || value === null || Array.isArray(value)) return false
+  return Reflect.get(value, 'type') === 'object'
 }
 
 /** RFC 9110 delta-seconds; anything malformed is treated as "not supplied". */
