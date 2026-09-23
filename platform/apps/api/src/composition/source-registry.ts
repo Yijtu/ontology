@@ -11,11 +11,16 @@ import type {
   SourceStore,
   VersionRef,
 } from '@ontology/contracts'
+import { createEnvSecretResolver } from './secret-resolver'
 
 export interface SourceRegistryCompositionOptions {
   readonly connectionString: string
-  /** Server-side secret resolution. Never returns a serializable secret value. */
-  readonly secrets: SecretResolver
+  /**
+   * Server-side secret resolution. Never returns a serializable secret value. Defaults to
+   * the environment-backed resolver, so a deployment resolves a `secretRef` by variable
+   * name from its own process environment instead of any repository configuration.
+   */
+  readonly secrets?: SecretResolver
   /** The probe targets the composition root has registered; LOCAL-012/013 supply the real ones. */
   readonly adapters: readonly SourceProbeAdapter[]
   readonly maxPoolSize?: number
@@ -68,7 +73,7 @@ export function createPostgresSourceRegistry(
   const registry = new SourceRegistry({
     control: new ControlPostgresRepository(database),
     store,
-    secrets: options.secrets,
+    secrets: options.secrets ?? createEnvSecretResolver(),
     adapters: createStaticProbeAdapterResolver(options.adapters),
     ...(options.now === undefined ? {} : { now: options.now }),
     ...(options.newId === undefined ? {} : { newId: options.newId }),
