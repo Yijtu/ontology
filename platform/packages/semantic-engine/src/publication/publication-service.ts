@@ -6,6 +6,7 @@ import type {
   CandidateReviewRecord,
   CandidateReviewRequest,
   EntityCandidate,
+  RelationCandidate,
   IndustrySchema,
   NewOutboxMessage,
   PropositionView,
@@ -161,7 +162,7 @@ export class SemanticPublicationService {
     if (request.approvedCandidateRefs.length === 0) {
       throw new SemanticPublicationError('INVALID_ARGUMENT', 'a publication needs at least one approved candidate')
     }
-    await this.#requireSchema(scopeRef, request.schemaRef, ctx)
+    const schema = await this.#requireSchema(scopeRef, request.schemaRef, ctx)
 
     const publicationId = this.#newId()
     const publishedAt = this.#now()
@@ -169,6 +170,7 @@ export class SemanticPublicationService {
     const statements: PublishedStatement[] = []
     const ruleVersions: PublishedRuleVersion[] = []
     const identityBindings: PublicationIdentityBinding[] = []
+    const entityCandidatesInPublication = new Set(request.approvedCandidateRefs.filter((ref) => ref.kind === 'entity').map((ref) => ref.candidateId))
     let outboxJobId: Uuid | undefined
 
     for (const ref of request.approvedCandidateRefs) {
@@ -189,7 +191,14 @@ export class SemanticPublicationService {
         identityBindings.push(binding)
         statements.push(this.#statementOfEntity(candidate, binding.entityId, publicationId, publishedAt))
       } else if (candidate.kind === 'relation') {
-        statements.push(this.#statementOfRelation(candidate, publicationId, publishedAt))
+        const relation = schema.relations.find((entry) => entry.relationId === candidate.relationId)
+        if (relation === undefined || candidate.from.objectId !== relation.fromObjectId || candidate.to.objectId !== relation.toObjectId) {
+          throw new SemanticPublicationError('SCHEMA_MISMATCH', `relation ${candidate.relationId} does not match the pinned definition endpoints`)
+        }
+        const from = await this.#resolveRelationEndpoint(scopeRef, candidate, 'from', relation.fromObjectId, entityCandidatesInPublication, ctx)
+        const to = await this.#resolveRelationEndpoint(scopeRef, candidate, 'to', relation.toObjectId, entityCandidatesInPublication, ctx)
+        identityBindings.push(from, to)
+        statements.push(this.#statementOfRelation(candidate, from.entityId, to.entityId, publicationId, publishedAt))
       } else if (candidate.kind === 'rule') {
         if (candidate.conflicts.length > 0) {
           throw new SemanticPublicationError(
@@ -527,13 +536,40 @@ export class SemanticPublicationService {
       ctx,
     )
     const assertion = assertions[0]
-    if (assertion === undefined) {
+    if (assertions.length !== 1 || assertion === undefined) {
       throw new SemanticPublicationError(
         'IDENTITY_UNRESOLVED',
-        `candidate ${candidate.candidateId} has no open identity assertion and cannot be published as a fact`,
+        `candidate ${candidate.candidateId} does not have exactly one open identity assertion`,
       )
     }
     return { candidateId: candidate.candidateId, entityId: assertion.entityId }
+  }
+
+  async #resolveRelationEndpoint(
+    scopeRef: ScopeRef,
+    relation: RelationCandidate,
+    side: 'from' | 'to',
+    expectedObjectId: string,
+    entityCandidatesInPublication: ReadonlySet<string>,
+    ctx: ToolContext,
+  ): Promise<PublicationIdentityBinding> {
+    const endpoint = relation[side]
+    if (endpoint.candidateId === undefined) {
+      throw new SemanticPublicationError('IDENTITY_UNRESOLVED', `relation ${relation.candidateId} ${side} endpoint has no reviewed candidate binding`)
+    }
+    const candidate = await this.#requireCandidate(scopeRef, endpoint.candidateId, ctx)
+    if (candidate.kind !== 'entity' || candidate.objectId !== expectedObjectId || candidate.objectId !== endpoint.objectId) {
+      throw new SemanticPublicationError('IDENTITY_UNRESOLVED', `relation ${relation.candidateId} ${side} endpoint has the wrong entity type`)
+    }
+    await this.#requireApproved(scopeRef, candidate, ctx)
+    const binding = await this.#resolveIdentity(scopeRef, candidate, ctx)
+    if (!entityCandidatesInPublication.has(candidate.candidateId)) {
+      const statement = await this.#store.getStatement(scopeRef, candidate.candidateId, ctx)
+      if (statement?.kind !== 'entity' || statement.status !== 'active' || statement.subjectEntityId !== binding.entityId) {
+        throw new SemanticPublicationError('IDENTITY_UNRESOLVED', `relation ${relation.candidateId} ${side} endpoint has no active published entity fact`)
+      }
+    }
+    return binding
   }
 
   #statementOfEntity(
@@ -573,22 +609,29 @@ export class SemanticPublicationService {
 
   #statementOfRelation(
     candidate: CandidateRecord & { readonly kind: 'relation' },
+    fromEntityId: string,
+    toEntityId: string,
     publicationId: Uuid,
     recordedAt: string,
   ): PublishedStatement {
     const propositionKey = sha256DigestOf({
       kind: 'relation',
       relationId: candidate.relationId,
-      from: candidate.from,
-      to: candidate.to,
+      fromEntityId,
+      toEntityId,
     })
     return {
       statementId: candidate.candidateId,
       propositionKey,
       kind: 'relation',
       relationId: candidate.relationId,
+      subjectEntityId: fromEntityId,
       predicate: candidate.relationId,
-      value: { from: candidate.from, to: candidate.to },
+      value: {
+        fromEntityId, toEntityId,
+        fromCandidateId: candidate.from.candidateId,
+        toCandidateId: candidate.to.candidateId,
+      },
       recordedAt,
       sourceCandidateId: candidate.candidateId,
       sourceRefs: candidate.sourceSpans.map((span) => ({

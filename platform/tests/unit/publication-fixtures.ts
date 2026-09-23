@@ -1,6 +1,7 @@
 import type {
   EntityCandidate,
   IndustrySchema,
+  RelationCandidate,
   RuleCandidate,
   RuleUnhandledCandidate,
   VersionRef,
@@ -31,7 +32,7 @@ export function publicationSchema(ref: VersionRef): IndustrySchema {
         ],
       },
     ],
-    relations: [],
+    relations: [{ relationId: 'feeds', fromObjectId: 'device', toObjectId: 'device', minCardinality: 0, maxCardinality: 'unbounded' }],
     identityScopes: [
       {
         identityScopeId: 'device_identity',
@@ -82,6 +83,19 @@ export function entityFor(
     ...overrides,
     candidateId,
     idempotencyKey: overrides.idempotencyKey,
+  }
+}
+
+export function relationFor(input: { readonly candidateId: string; readonly idempotencyKey: string; readonly fromCandidateId: string; readonly toCandidateId: string }): RelationCandidate {
+  return {
+    kind: 'relation', candidateId: input.candidateId, jobId: PUBLICATION_JOB_ID,
+    relationId: 'feeds',
+    from: { objectId: 'device', candidateId: input.fromCandidateId },
+    to: { objectId: 'device', candidateId: input.toCandidateId },
+    sourceSpans: [publicationSpan(input.candidateId)], deterministic: false,
+    state: 'pending_review', issues: [],
+    inputVersion: { definitionRef: PUBLICATION_DEFINITION_REF, parseId: PUBLICATION_PARSE_ID, parserVersion: '1.0.0', pipelineVersion: '1.0.0' },
+    idempotencyKey: input.idempotencyKey, recordedAt: '2026-09-22T00:00:00Z',
   }
 }
 
