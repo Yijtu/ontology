@@ -7,6 +7,7 @@ import type {
   StructuredQueryExecuteRequest,
   StructuredQueryExecuteResponse,
   StructuredQueryPort,
+  StructuredQueryValidateRequest,
   StructuredQueryValidateResponse,
   ToolContext,
   ToolCall,
@@ -34,12 +35,14 @@ const NOW = '2026-09-21T00:00:00Z'
 
 class FakeStructuredQueryPort implements StructuredQueryPort {
   readonly executed: StructuredQueryExecuteRequest[] = []
+  readonly validated: StructuredQueryValidateRequest[] = []
   readonly contexts: ToolContext[] = []
   validateCalls = 0
   #rows: unknown[][] = [['m1', '2026-01-01T00:00:00.000Z', '12.5000000000', 'good']]
 
-  async validate(): Promise<StructuredQueryValidateResponse> {
+  async validate(request: StructuredQueryValidateRequest): Promise<StructuredQueryValidateResponse> {
     this.validateCalls += 1
+    this.validated.push(request)
     return { valid: true, warnings: [] }
   }
 
@@ -164,10 +167,11 @@ describe('data_query handler through the gateway', () => {
     )
 
     expect(result.status).toBe('ok')
-    // Exactly one execute and no separate validate/plan round: the port only runs the
-    // compiled query, it does not start a second planner.
+    // The compiled query is statically pre-checked (LOCAL-077) and then executed exactly
+    // once: the port validates the compiled plan, it does not start a second planner.
     expect(port.executed).toHaveLength(1)
-    expect(port.validateCalls).toBe(0)
+    expect(port.validateCalls).toBe(1)
+    expect(port.validated[0]?.plan).toEqual(port.executed[0]?.plan)
     const plan = port.executed[0]?.plan
     expect(plan?.mode).toBe('direct')
     if (plan?.mode === 'direct') {
