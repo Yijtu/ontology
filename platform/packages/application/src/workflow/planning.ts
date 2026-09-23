@@ -24,6 +24,8 @@ import type {
   VersionRef,
 } from '@ontology/contracts'
 import { canonicalJson, sha256DigestOf } from '../profiles/canonical'
+import { WorkflowControllerError } from './errors'
+import type { QuestionRewriter } from './question-rewriting'
 
 /**
  * The run planner (SPEC D7.1, ADR-14).
@@ -60,6 +62,12 @@ export interface RunPlannerDependencies {
   /** ADR-09: at most one proposal call for an ordinary complex question. */
   readonly generation?: GenerationPort
   readonly planModelRef?: ModelRef
+  /**
+   * The bounded question-rewriting pre-step. When present it runs before any routing/SQL
+   * proposal; when absent the router behaves exactly as before. It reuses the injected
+   * `GenerationPort` and adds no model port and no public tool.
+   */
+  readonly rewriter?: QuestionRewriter
   readonly newId?: () => string
 }
 
@@ -74,8 +82,45 @@ export class RunPlanner {
     this.#newId = dependencies.newId ?? (() => globalThis.crypto.randomUUID())
   }
 
-  /** Resolve the execution route for a run. It never executes a tool or a query. */
+  /**
+   * Resolve the execution route for a run. It never executes a tool or a query.
+   *
+   * When a rewrite step is configured it runs first, before any routing or SQL proposal:
+   * an ambiguity returns the existing `clarify` route without ever guessing a value, a
+   * failure is surfaced as an explicit classified error (the original is never passed
+   * through as a rewrite), and a successful rewrite replaces the question the router sees
+   * while its traceable record rides on the returned decision.
+   */
   async route(request: PlanRequest, ctx: ToolContext): Promise<RouteDecision> {
+    const rewriter = this.#deps.rewriter
+    if (rewriter === undefined) return this.#routeEffective(request, ctx)
+
+    const outcome = await rewriter.rewrite(
+      {
+        runId: request.runId,
+        question: request.question,
+        context: request.context,
+        evidenceRefs: [],
+      },
+      ctx,
+    )
+    if (outcome.status === 'clarify') {
+      return this.#clarify(request, outcome.reason)
+    }
+    if (outcome.status === 'failed') {
+      throw new WorkflowControllerError(
+        outcome.error.code,
+        `question rewriting failed: ${outcome.error.message}`,
+      )
+    }
+    const decision = await this.#routeEffective(
+      { ...request, question: outcome.rewrite.rewrittenQuestion },
+      ctx,
+    )
+    return { ...decision, rewrite: outcome.rewrite }
+  }
+
+  async #routeEffective(request: PlanRequest, ctx: ToolContext): Promise<RouteDecision> {
     const signals = request.signals ?? {}
 
     // A concrete ambiguity is clarified first. No JEV decision is forced here.

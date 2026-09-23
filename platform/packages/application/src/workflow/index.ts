@@ -25,6 +25,17 @@ export { InMemoryPublicationValidity } from './validity'
 export { RestrictedLimitedAnswerComposer } from './limited-answer'
 export { RunPlanner, parseSemanticQueryPlan } from './planning'
 export type { PlanRequest, RunPlannerDependencies } from './planning'
+export {
+  BoundedQuestionRewriter,
+  QUESTION_REWRITE_VERSION,
+  parseQuestionRewrite,
+} from './question-rewriting'
+export type {
+  BoundedQuestionRewriterDependencies,
+  QuestionRewriteOutcome,
+  QuestionRewriteRequest,
+  QuestionRewriter,
+} from './question-rewriting'
 export { NoProgressGuard, SmallPlanExecutor } from './evidence-loop'
 export type {
   PlanExecutionResult,

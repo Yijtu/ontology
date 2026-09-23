@@ -1,12 +1,15 @@
 import type {
   DirectSqlQueryPlan,
+  ModelRef,
   NonEmptyString,
   PlatformError,
   ResourceRef,
+  Rfc3339UtcTimestamp,
   SemanticQueryPlan,
   Sha256Digest,
   ToolId,
   ToolResult,
+  Uuid,
   VersionRef,
 } from './generated/contracts'
 import type { ToolContext } from './trusted'
@@ -77,6 +80,31 @@ export interface RouteSignals {
   readonly routeAmbiguous?: boolean
 }
 
+/**
+ * Traceable question-rewrite record (SPEC D7.1, ADR-14).
+ *
+ * It is the bounded pre-step that runs *before* SQL generation: it records the exact
+ * original question, the rewritten question and the input references the rewrite read,
+ * each with a content digest and a rewrite version. Carrying it on the route decision is
+ * what lets the original → rewrite → generated-SQL chain be replayed from the run record;
+ * a rewrite is never silently discarded and the original is never passed through as if it
+ * had been rewritten.
+ */
+export interface QuestionRewrite {
+  readonly rewriteId: Uuid
+  readonly runId: Uuid
+  /** The rewrite-step contract version that produced this record. */
+  readonly version: NonEmptyString
+  readonly originalQuestion: NonEmptyString
+  readonly originalDigest: Sha256Digest
+  readonly rewrittenQuestion: NonEmptyString
+  readonly rewrittenDigest: Sha256Digest
+  /** The inputs the rewrite read; they make the rewrite replayable. */
+  readonly inputRefs: readonly ResourceRef[]
+  readonly modelRef: ModelRef
+  readonly recordedAt: Rfc3339UtcTimestamp
+}
+
 /** The router's decision. Exactly one of `plan`/`clarification` is present per route. */
 export interface RouteDecision {
   readonly route: ExecutionRoute
@@ -85,6 +113,12 @@ export interface RouteDecision {
   readonly clarification?: PlanClarification
   /** A deterministic fallback was used because the JEV decision was unavailable. */
   readonly fallback?: NonEmptyString
+  /**
+   * The traceable rewrite that produced the question this decision routed, when a rewrite
+   * step ran. Its absence means no rewrite step was configured, never that a failed rewrite
+   * was skipped.
+   */
+  readonly rewrite?: QuestionRewrite
 }
 
 /**
