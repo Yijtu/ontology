@@ -1,6 +1,6 @@
 import type { ProfileRef } from '@ontology/contracts'
 import type { AppViewContribution } from './components/App'
-import { HOME_ENERGY_VIEW } from './scenarios/home-energy-view'
+import { HOME_ENERGY_PREVIEW_VIEW, HOME_ENERGY_VIEW } from './scenarios/home-energy-view'
 
 /** Profiles are deployment configuration; the shared UI does not know their industry fields. */
 const DEMO_PROFILE: ProfileRef = { id: 'home-energy-demo-wide', version: '1.0.0' }
@@ -16,7 +16,7 @@ export interface WebDeployment {
   readonly profileRef: ProfileRef
   readonly timeZone: string
   readonly scenarioViews: readonly AppViewContribution[]
-  readonly profileOptions: typeof PROFILE_OPTIONS
+  readonly profileOptions: readonly { readonly profileRef: ProfileRef; readonly label: string }[]
 }
 
 /** Other deployments replace this assembly with their own profile and view contributions. */
@@ -32,7 +32,9 @@ export function resolveWebDeployment(params: URLSearchParams): WebDeployment {
   return {
     profileRef: { id, version },
     timeZone: params.get('timeZone') ?? 'UTC',
-    scenarioViews: id === DEMO_PROFILE.id || id === 'home-energy-demo-long' ? [HOME_ENERGY_VIEW] : [],
-    profileOptions: PROFILE_OPTIONS,
+    scenarioViews: id === 'home-energy-demo' ? [HOME_ENERGY_PREVIEW_VIEW] : id === DEMO_PROFILE.id || id === 'home-energy-demo-long' ? [HOME_ENERGY_VIEW] : [],
+    profileOptions: PROFILE_OPTIONS.some((option) => option.profileRef.id === id && option.profileRef.version === version)
+      ? PROFILE_OPTIONS
+      : [{ profileRef: { id, version }, label: `${id}@${version}` }, ...PROFILE_OPTIONS],
   }
 }

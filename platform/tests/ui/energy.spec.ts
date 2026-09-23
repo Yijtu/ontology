@@ -192,28 +192,21 @@ describe('home-energy plan and simulation surface', () => {
     expect(weatherChange).toContain('weatherScenario')
   })
 
-  it('keeps simulation and live distinct and sends no device request', async () => {
+  it('blocks execution of a direct preview until a formal run publishes the plan', async () => {
     const built = await harness()
     const container = await renderEnergy(built.client)
     await buildScenario(container)
     await requestPlan(container)
 
     const simulate = container.querySelector('[data-testid="request-simulation-execution"]')
-    if (simulate === null) throw new Error('the simulation execution control is missing')
-    await click(simulate)
-    await waitFor(() => container.querySelector('[data-testid="execution-record"]') !== null, 'execution record')
-    expect(container.querySelector('[data-testid="execution-record"]')?.getAttribute('data-mode')).toBe('simulation')
-    expect(container.querySelector('[data-testid="execution-device-requests"]')?.textContent).toContain('0')
-    expect(container.querySelector('[data-testid="execution-live-supported"]')?.textContent).toContain('false')
+    if (!(simulate instanceof HTMLButtonElement)) throw new Error('the simulation execution control is missing')
+    expect(simulate.disabled).toBe(true)
 
     const live = container.querySelector('[data-testid="request-live-execution"]')
-    if (live === null) throw new Error('the live execution control is missing')
-    await click(live)
-    await waitFor(() => container.querySelector('[data-testid="live-unavailable"]') !== null, 'live unavailable')
-    const unavailable = container.querySelector('[data-testid="live-unavailable"]')
-    expect(unavailable?.getAttribute('data-code')).toBe('CAPABILITY_NOT_CONFIGURED')
-    // The live attempt did not replace the simulation record with an execution.
-    expect(container.querySelector('[data-testid="execution-record"]')?.getAttribute('data-mode')).toBe('simulation')
+    if (!(live instanceof HTMLButtonElement)) throw new Error('the live execution control is missing')
+    expect(live.disabled).toBe(true)
+    expect(container.querySelector('[data-testid="execution-unavailable"]')?.textContent).toContain('正式 run 发布并核验')
+    expect(container.querySelector('[data-testid="execution-record"]')).toBeNull()
     expect(built.energy?.deviceRequests).toEqual([])
   })
 

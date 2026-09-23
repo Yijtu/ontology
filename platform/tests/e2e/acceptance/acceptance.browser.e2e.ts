@@ -8,6 +8,8 @@ import type { Harness } from '../../ui/workbench-fixtures'
 import { capture, record, startWebHost } from '../web-host'
 import type { WebHost } from '../web-host'
 
+const profileQuery = `profileId=${PROFILE.id}&profileVersion=${PROFILE.version}`
+
 /**
  * LOCAL-054 browser acceptance — one journey across the real UI slices.
  *
@@ -69,7 +71,7 @@ describe('LOCAL-054 browser projection checks (not a workflow end-to-end)', () =
     const page = await context.newPage()
 
     // 1. Configuration workbench: preflight resolves and the profile activates.
-    await page.goto(`${web.origin}/?view=workbench`)
+    await page.goto(`${web.origin}/?${profileQuery}&view=workbench`)
     await page.waitForSelector('[data-testid="preflight"]')
     await page.click('[data-testid="preflight"]')
     await page.waitForSelector('[data-testid="preflight-status"][data-status="resolved"]')
@@ -78,7 +80,7 @@ describe('LOCAL-054 browser projection checks (not a workflow end-to-end)', () =
     await capture(page, 'acceptance-1-workbench-activated')
 
     // 2. Business question: only the profile's enabled tools, web search disabled, shared budget.
-    await page.goto(`${web.origin}/?view=query`)
+    await page.goto(`${web.origin}/?${profileQuery}&view=query`)
     await page.waitForSelector('[data-testid="query-ask"]')
     const webDisabled = await page.locator('[data-testid="query-allow-web"]').isDisabled()
     expect(webDisabled).toBe(true)
@@ -93,7 +95,7 @@ describe('LOCAL-054 browser projection checks (not a workflow end-to-end)', () =
     // asserts that the browser does not claim an answer until workflow dispatch is wired.
     const runId = await page.getAttribute('[data-testid="query-run"]', 'data-run-id')
     if (runId === null) throw new Error('the query panel did not expose its created run id')
-    await page.goto(`${web.origin}/?view=query&run=${runId}`)
+    await page.goto(`${web.origin}/?${profileQuery}&view=query&run=${runId}`)
     await page.waitForSelector('[data-testid="answer-unavailable"], [data-answer-state="in_progress"]')
     expect(await page.locator('[data-testid="answer-hash"]').count()).toBe(0)
     const events = await page.evaluate(async (id: string) => {
@@ -106,7 +108,7 @@ describe('LOCAL-054 browser projection checks (not a workflow end-to-end)', () =
     // 4. Abnormal: an insufficient-data outcome is distinct, and no secret leaks to the page.
     const gapRun = await seedRun()
     await harness.runService.recordRuntimeEvent(gapRun, failedEvent(gapRun, 'INSUFFICIENT_DATA'), harness.ctx)
-    await page.goto(`${web.origin}/?view=query&run=${gapRun}`)
+    await page.goto(`${web.origin}/?${profileQuery}&view=query&run=${gapRun}`)
     await page.waitForSelector('[data-testid="outcome-gap"]')
     await capture(page, 'acceptance-4-insufficient-data')
 

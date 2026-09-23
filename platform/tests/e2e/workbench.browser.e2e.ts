@@ -6,6 +6,8 @@ import type { Harness } from '../ui/workbench-fixtures'
 import { capture, record, startWebHost } from './web-host'
 import type { WebHost } from './web-host'
 
+const profileQuery = `profileId=${PROFILE.id}&profileVersion=${PROFILE.version}`
+
 /**
  * Real-browser E2E for the configuration workbench.
  *
@@ -42,7 +44,7 @@ describe('workbench in a real browser', () => {
   it('runs the happy path on desktop: preflight, degradations, activation, no secret', async () => {
     const context = await browser.newContext({ viewport: { width: 1280, height: 900 } })
     const page = await context.newPage()
-    await page.goto(`${web.origin}/?view=workbench`)
+    await page.goto(`${web.origin}/?${profileQuery}&view=workbench`)
     await page.waitForSelector('[data-testid="preflight"]')
     expect(await page.getAttribute('.workbench', 'data-viewport')).toBe('desktop')
 
@@ -73,7 +75,7 @@ describe('workbench in a real browser', () => {
   it('renders the narrow layout and keeps the error path visible', async () => {
     const context = await browser.newContext({ viewport: { width: 390, height: 844 } })
     const page = await context.newPage()
-    await page.goto(`${web.origin}/?view=workbench`)
+    await page.goto(`${web.origin}/?${profileQuery}&view=workbench`)
     await page.waitForSelector('[data-testid="preflight"]')
     expect(await page.getAttribute('.workbench', 'data-viewport')).toBe('narrow')
 
@@ -105,7 +107,7 @@ describe('workbench in a real browser', () => {
     const context = await browser.newContext({ viewport: { width: 1024, height: 800 } })
     const page = await context.newPage()
     try {
-      await page.goto(`${host.origin}/?view=workbench`)
+      await page.goto(`${host.origin}/?${profileQuery}&view=workbench`)
       await page.waitForSelector('[data-testid="preflight"]')
       await page.click('[data-testid="preflight"]')
       await page.waitForSelector('[data-state="not_configured"]')
@@ -137,7 +139,7 @@ describe('workbench in a real browser', () => {
 
     const context = await browser.newContext({ viewport: { width: 1280, height: 900 } })
     const page = await context.newPage()
-    await page.goto(`${web.origin}/?view=workbench&run=${run.runId}`)
+    await page.goto(`${web.origin}/?${profileQuery}&view=workbench&run=${run.runId}`)
     await page.waitForSelector('[data-testid="bound-run-hash"]')
     expect(await page.textContent('[data-testid="bound-run-hash"]')).toBe(run.resolvedProfileHash)
 

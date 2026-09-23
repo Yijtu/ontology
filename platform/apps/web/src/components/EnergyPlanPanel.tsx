@@ -470,7 +470,7 @@ export function EnergyPlanPanel({ client, profileRef, publishedExecutionRequired
               <button
                 type="button"
                 data-testid="request-simulation-execution"
-                disabled={state.busy || latest === undefined}
+                disabled={state.busy || latest === undefined || latest.publishedRunId.length === 0}
                 onClick={() => void requestExecution('simulation')}
               >
                 请求模拟执行（mode=simulation）
@@ -478,12 +478,15 @@ export function EnergyPlanPanel({ client, profileRef, publishedExecutionRequired
               <button
                 type="button"
                 data-testid="request-live-execution"
-                disabled={state.busy || latest === undefined}
+                disabled={state.busy || latest === undefined || latest.publishedRunId.length === 0}
                 onClick={() => void requestExecution('live')}
               >
                 尝试实机执行（mode=live）
               </button>
             </div>
+            {latest !== undefined && latest.publishedRunId.length === 0 ? (
+              <p data-testid="execution-unavailable">当前仅为直接计算预览；需要正式 run 发布并核验同一计划后才能模拟执行。</p>
+            ) : null}
             {state.execution === undefined ? null : (
               <div className="energy__execution-record" data-testid="execution-record" data-mode={state.execution.mode} data-execution-id={state.execution.executionId}>
                 <span className="energy__badge" data-testid="execution-mode" data-mode={state.execution.mode}>

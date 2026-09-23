@@ -1,10 +1,12 @@
 import { chromium } from '@playwright/test'
 import type { Browser } from '@playwright/test'
 import { afterAll, beforeAll, describe, expect, it } from 'vitest'
-import { startHarness } from '../ui/workbench-fixtures'
+import { PROFILE, startHarness } from '../ui/workbench-fixtures'
 import type { Harness } from '../ui/workbench-fixtures'
 import { capture, record, startWebHost } from './web-host'
 import type { WebHost } from './web-host'
+
+const profileQuery = `profileId=${PROFILE.id}&profileVersion=${PROFILE.version}`
 
 /**
  * Real-browser E2E for the home-energy plan/comparison/simulation surface (US-021/US-022; E8).
@@ -47,7 +49,7 @@ describe('home-energy surface in a real browser', () => {
   it('labels every datum and never words a simulated benefit as an actual bill saving', async () => {
     const context = await browser.newContext({ viewport: { width: 1280, height: 900 } })
     const page = await context.newPage()
-    await page.goto(`${web.origin}/?view=energy`)
+    await page.goto(`${web.origin}/?${profileQuery}&view=energy`)
     await page.waitForSelector('[data-testid="build-scenario"]')
     expect(await page.getAttribute('.energy', 'data-viewport')).toBe('desktop')
     expect(await page.getAttribute('.energy', 'data-phase')).toBe('empty')
@@ -80,10 +82,10 @@ describe('home-energy surface in a real browser', () => {
     await context.close()
   })
 
-  it('shows a new version with constraint gaps and source changes, and keeps live unavailable', async () => {
+  it('shows a new version with constraint gaps and refuses execution of an unpublished preview', async () => {
     const context = await browser.newContext({ viewport: { width: 1280, height: 900 } })
     const page = await context.newPage()
-    await page.goto(`${web.origin}/?view=energy`)
+    await page.goto(`${web.origin}/?${profileQuery}&view=energy`)
     await page.waitForSelector('[data-testid="build-scenario"]')
     await buildScenario(page, '4', 'sunny')
     await page.click('[data-testid="request-plan"]')
@@ -104,24 +106,16 @@ describe('home-energy surface in a real browser', () => {
     expect(sourceFields).toContain('backupRequirementKwh')
     expect(sourceFields).toContain('weatherScenario')
 
-    await page.click('[data-testid="request-simulation-execution"]')
-    await page.waitForSelector('[data-testid="execution-record"][data-mode="simulation"]')
-    expect(await page.textContent('[data-testid="execution-device-requests"]')).toContain('0')
-
-    await page.click('[data-testid="request-live-execution"]')
-    await page.waitForSelector('[data-testid="live-unavailable"]')
-    expect(await page.getAttribute('[data-testid="live-unavailable"]', 'data-code')).toBe(
-      'CAPABILITY_NOT_CONFIGURED',
-    )
-    // The live attempt did not become an execution.
-    expect(await page.locator('[data-testid="execution-record"]').count()).toBe(1)
+    expect(await page.locator('[data-testid="request-simulation-execution"]').isDisabled()).toBe(true)
+    expect(await page.locator('[data-testid="request-live-execution"]').isDisabled()).toBe(true)
+    expect(await page.textContent('[data-testid="execution-unavailable"]')).toContain('正式 run 发布并核验')
+    expect(await page.locator('[data-testid="execution-record"]').count()).toBe(0)
 
     await capture(page, 'energy-desktop-version-compare-live')
     await record('energy-desktop-version-compare-live', [
       `gapCount=${gapCount}`,
       `sourceFields=${sourceFields.join(',')}`,
-      'liveCode=CAPABILITY_NOT_CONFIGURED',
-      'deviceRequests=0',
+      'execution=blocked_until_published_run',
     ])
     await context.close()
   })
@@ -129,7 +123,7 @@ describe('home-energy surface in a real browser', () => {
   it('renders the narrow layout and the not-configured state', async () => {
     const context = await browser.newContext({ viewport: { width: 390, height: 844 } })
     const page = await context.newPage()
-    await page.goto(`${web.origin}/?view=energy`)
+    await page.goto(`${web.origin}/?${profileQuery}&view=energy`)
     await page.waitForSelector('[data-testid="build-scenario"]')
     expect(await page.getAttribute('.energy', 'data-viewport')).toBe('narrow')
     const columns = await page.$eval('.energy__body', (node) => getComputedStyle(node).gridTemplateColumns)
@@ -150,7 +144,7 @@ describe('home-energy surface in a real browser', () => {
     const failureContext = await browser.newContext({ viewport: { width: 1024, height: 800 } })
     const failurePage = await failureContext.newPage()
     try {
-      await failurePage.goto(`${host.origin}/?view=energy`)
+      await failurePage.goto(`${host.origin}/?${profileQuery}&view=energy`)
       await failurePage.waitForSelector('[data-testid="build-scenario"]')
       await buildScenario(failurePage, '4', 'sunny')
       await failurePage.click('[data-testid="request-plan"]')

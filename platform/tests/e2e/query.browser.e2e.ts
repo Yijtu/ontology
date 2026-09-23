@@ -8,6 +8,8 @@ import type { Harness } from '../ui/workbench-fixtures'
 import { capture, record, startWebHost } from './web-host'
 import type { WebHost } from './web-host'
 
+const profileQuery = `profileId=${PROFILE.id}&profileVersion=${PROFILE.version}`
+
 /**
  * Real-browser E2E for the business query surface. The built app is served by the loopback
  * host that proxies `/api` to the real Fastify server, so the page uses the real HTTP and
@@ -115,7 +117,7 @@ describe('business query in a real browser', () => {
   it('asks within the allowed scope, shows progress and the shared budget, and no draft', async () => {
     const context = await browser.newContext({ viewport: { width: 1280, height: 900 } })
     const page = await context.newPage()
-    await page.goto(`${web.origin}/?view=query`)
+    await page.goto(`${web.origin}/?${profileQuery}&view=query`)
     await page.waitForSelector('[data-testid="query-ask"]')
     expect(await page.getAttribute('[data-testid="query-panel"]', 'data-viewport')).toBe('desktop')
 
@@ -151,7 +153,7 @@ describe('business query in a real browser', () => {
 
     const context = await browser.newContext({ viewport: { width: 1280, height: 900 } })
     const page = await context.newPage()
-    await page.goto(`${web.origin}/?view=query&run=${runId}`)
+    await page.goto(`${web.origin}/?${profileQuery}&view=query&run=${runId}`)
     await page.waitForSelector('[data-testid="outcome-normal"]')
     expect(await page.textContent('[data-testid="answer-hash"]')).toBe(answer.contentHash)
 
@@ -194,7 +196,7 @@ describe('business query in a real browser', () => {
 
     const context = await browser.newContext({ viewport: { width: 1280, height: 900 } })
     const page = await context.newPage()
-    await page.goto(`${web.origin}/?view=query&run=${runId}`)
+    await page.goto(`${web.origin}/?${profileQuery}&view=query&run=${runId}`)
     await page.waitForSelector('[data-testid="query-clarification"]')
     const before = await page.textContent('[data-testid="budget-tool-calls"]')
     expect(before).toContain('6')
@@ -241,7 +243,7 @@ describe('business query in a real browser', () => {
     const page = await context.newPage()
     const observed: string[] = []
     for (const scenario of scenarios) {
-      await page.goto(`${web.origin}/?view=query&run=${scenario.runId}`)
+      await page.goto(`${web.origin}/?${profileQuery}&view=query&run=${scenario.runId}`)
       await page.waitForSelector(scenario.selector)
       observed.push(`${scenario.name}=ok`)
       await capture(page, scenario.name)
@@ -254,7 +256,7 @@ describe('business query in a real browser', () => {
     const runId = await seedRun()
     const context = await browser.newContext({ viewport: { width: 390, height: 844 } })
     const page = await context.newPage()
-    await page.goto(`${web.origin}/?view=query&run=${runId}`)
+    await page.goto(`${web.origin}/?${profileQuery}&view=query&run=${runId}`)
     await page.waitForSelector('[data-testid="query-cancel"]')
     expect(await page.getAttribute('[data-testid="query-panel"]', 'data-viewport')).toBe('narrow')
     await page.click('[data-testid="query-cancel"]')
