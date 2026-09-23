@@ -119,6 +119,12 @@ export interface RouteDecision {
    * was skipped.
    */
   readonly rewrite?: QuestionRewrite
+  /**
+   * The exact schema-vocabulary version injected into the generation request, when a
+   * proposal was attempted. It is recorded so the run's schema-construction stage stays
+   * traceable (LOCAL-075); it is absent for routes that made no generation call.
+   */
+  readonly vocabularyRef?: VersionRef
 }
 
 /**

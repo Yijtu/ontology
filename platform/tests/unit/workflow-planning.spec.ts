@@ -1,6 +1,12 @@
 import { describe, expect, it } from 'vitest'
 import type { ConfirmedContext, RunPreferences } from '@ontology/contracts'
 import { RunPlanner } from '@ontology/application'
+import { MAPPING_JOIN } from '../fixtures/semantic-mapping'
+import {
+  VOCAB_DEFINITION_REF,
+  publishedVocabularyDefinition,
+  vocabularyService,
+} from '../fixtures/schema-vocabulary'
 import { gatewayContext } from './tool-gateway-fixtures'
 import {
   CountingCompiler,
@@ -15,6 +21,7 @@ import {
 const CTX = gatewayContext({ runId: PLANNING_RUN })
 const CONTEXT: ConfirmedContext = { timeZone: 'Asia/Shanghai', siteRef: 'site-demo-a' }
 const PREFERENCES: RunPreferences = { route: 'auto', allowWeb: false }
+const VOCABULARY = vocabularyService([MAPPING_JOIN], [publishedVocabularyDefinition()])
 
 function request(overrides?: {
   readonly fixedPlan?: ReturnType<typeof fixedPlan>
@@ -26,6 +33,8 @@ function request(overrides?: {
     question: 'which meters consumed the most energy and which site do they belong to',
     context: CONTEXT,
     preferences: PREFERENCES,
+    mappingRefs: [MAPPING_JOIN.mappingRef],
+    definitionRefs: [VOCAB_DEFINITION_REF],
     ...(overrides?.fixedPlan === undefined ? {} : { fixedPlan: overrides.fixedPlan }),
     ...(overrides?.candidatePlan === undefined ? {} : { candidatePlan: overrides.candidatePlan }),
     ...(overrides?.signals === undefined ? {} : { signals: overrides.signals }),
@@ -35,7 +44,7 @@ function request(overrides?: {
 describe('routing', () => {
   it('does not force a JEV decision on a clearly specified path', async () => {
     const decision = new CountingDecision()
-    const planner = new RunPlanner({ compiler: new CountingCompiler(), decision })
+    const planner = new RunPlanner({ vocabulary: VOCABULARY, compiler: new CountingCompiler(), decision })
     const fixed = fixedPlan()
 
     const routed = await planner.route(request({ fixedPlan: fixed }), CTX)
@@ -47,7 +56,7 @@ describe('routing', () => {
 
   it('gives an ordinary complex question one executable small plan by default', async () => {
     const generation = new CountingGeneration()
-    const planner = new RunPlanner({ compiler: new CountingCompiler(), generation })
+    const planner = new RunPlanner({ vocabulary: VOCABULARY, compiler: new CountingCompiler(), generation })
 
     const routed = await planner.route(request(), CTX)
 
@@ -60,7 +69,7 @@ describe('routing', () => {
 
   it('clarifies a concrete ambiguity first without consulting JEV', async () => {
     const decision = new CountingDecision()
-    const planner = new RunPlanner({ compiler: new CountingCompiler(), decision })
+    const planner = new RunPlanner({ vocabulary: VOCABULARY, compiler: new CountingCompiler(), decision })
 
     const routed = await planner.route(request({ signals: { ambiguous: true } }), CTX)
 
@@ -74,6 +83,7 @@ describe('routing', () => {
     const decision = new CountingDecision()
     decision.selected = 'small_plan'
     const planner = new RunPlanner({
+      vocabulary: VOCABULARY,
       compiler: new CountingCompiler(),
       decision,
       decisionModelRef: { modelId: 'jev', version: '1.0.0' },
@@ -94,7 +104,7 @@ describe('small plan and single-SQL multi-hop', () => {
   it('compiles a three-hop question into one bounded query without a per-hop model call', async () => {
     const compiler = new CountingCompiler()
     const generation = new CountingGeneration()
-    const planner = new RunPlanner({ compiler, generation })
+    const planner = new RunPlanner({ vocabulary: VOCABULARY, compiler, generation })
 
     const routed = await planner.route(request({ candidatePlan: multiHopPlan() }), CTX)
 
@@ -118,7 +128,7 @@ describe('small plan and single-SQL multi-hop', () => {
       },
       { type: 'completed', stopReason: 'tool_calls', candidateOnly: true },
     ])
-    const planner = new RunPlanner({ compiler, generation })
+    const planner = new RunPlanner({ vocabulary: VOCABULARY, compiler, generation })
 
     const routed = await planner.route(request(), CTX)
 

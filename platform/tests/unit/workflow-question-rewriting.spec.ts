@@ -12,6 +12,12 @@ import type {
   ToolContext,
 } from '@ontology/contracts'
 import { BoundedQuestionRewriter, RunPlanner, parseQuestionRewrite } from '@ontology/application'
+import { MAPPING_JOIN } from '../fixtures/semantic-mapping'
+import {
+  VOCAB_DEFINITION_REF,
+  publishedVocabularyDefinition,
+  vocabularyService,
+} from '../fixtures/schema-vocabulary'
 import { gatewayContext } from './tool-gateway-fixtures'
 import { RecordingControlRepository } from './component-registry-fixtures'
 import {
@@ -24,6 +30,8 @@ const CTX = gatewayContext({ runId: PLANNING_RUN })
 const CONTEXT: ConfirmedContext = { timeZone: 'Asia/Shanghai', siteRef: 'site-demo-a' }
 const PREFERENCES: RunPreferences = { route: 'auto', allowWeb: false }
 const MODEL_REF = { modelId: 'rewrite-model', version: '1.0.0' }
+const PLANNER_VOCABULARY = vocabularyService([MAPPING_JOIN], [publishedVocabularyDefinition()])
+const PLAN_SOURCES = { mappingRefs: [MAPPING_JOIN.mappingRef], definitionRefs: [VOCAB_DEFINITION_REF] }
 
 const ORIGINAL = 'which meters used the most energy and which site do they belong to'
 const REWRITTEN =
@@ -132,6 +140,7 @@ function request(question = ORIGINAL) {
     question,
     context: CONTEXT,
     preferences: PREFERENCES,
+    ...PLAN_SOURCES,
   }
 }
 
@@ -168,7 +177,12 @@ describe('question rewriting before SQL generation', () => {
       ],
     ])
     const rewriter = new BoundedQuestionRewriter({ generation, modelRef: MODEL_REF })
-    const planner = new RunPlanner({ compiler: new CountingCompiler(), generation, rewriter })
+    const planner = new RunPlanner({
+      vocabulary: PLANNER_VOCABULARY,
+      compiler: new CountingCompiler(),
+      generation,
+      rewriter,
+    })
 
     const decision = await planner.route(request(), CTX)
 
@@ -186,7 +200,12 @@ describe('question rewriting before SQL generation', () => {
   it('records a replayable original -> rewrite trace on the decision', async () => {
     const generation = new ScriptedGeneration([[rewriteText(REWRITTEN), completed()]])
     const rewriter = new BoundedQuestionRewriter({ generation, modelRef: MODEL_REF })
-    const planner = new RunPlanner({ compiler: new CountingCompiler(), generation, rewriter })
+    const planner = new RunPlanner({
+      vocabulary: PLANNER_VOCABULARY,
+      compiler: new CountingCompiler(),
+      generation,
+      rewriter,
+    })
 
     const decision = await planner.route(request(), CTX)
     const rewrite = decision.rewrite
@@ -208,7 +227,12 @@ describe('question rewriting before SQL generation', () => {
       [clarifyText('the billing period is not specified'), completed()],
     ])
     const rewriter = new BoundedQuestionRewriter({ generation, modelRef: MODEL_REF })
-    const planner = new RunPlanner({ compiler: new CountingCompiler(), generation, rewriter })
+    const planner = new RunPlanner({
+      vocabulary: PLANNER_VOCABULARY,
+      compiler: new CountingCompiler(),
+      generation,
+      rewriter,
+    })
 
     const decision = await planner.route(request('compare the energy strategies'), CTX)
 
@@ -223,7 +247,12 @@ describe('question rewriting before SQL generation', () => {
   it('surfaces an explicit failure when the rewrite model is unavailable', async () => {
     const generation = new ScriptedGeneration([[modelUnavailable()]])
     const rewriter = new BoundedQuestionRewriter({ generation, modelRef: MODEL_REF })
-    const planner = new RunPlanner({ compiler: new CountingCompiler(), generation, rewriter })
+    const planner = new RunPlanner({
+      vocabulary: PLANNER_VOCABULARY,
+      compiler: new CountingCompiler(),
+      generation,
+      rewriter,
+    })
 
     await expect(planner.route(request(), CTX)).rejects.toMatchObject({ code: 'MODEL_UNAVAILABLE' })
     // The original question is never passed through as if it had been rewritten.
@@ -236,7 +265,12 @@ describe('question rewriting before SQL generation', () => {
       [{ type: 'text_delta', text: '{"status":"guess"}' }, completed()],
     ])
     const rewriter = new BoundedQuestionRewriter({ generation, modelRef: MODEL_REF, maxAttempts: 2 })
-    const planner = new RunPlanner({ compiler: new CountingCompiler(), generation, rewriter })
+    const planner = new RunPlanner({
+      vocabulary: PLANNER_VOCABULARY,
+      compiler: new CountingCompiler(),
+      generation,
+      rewriter,
+    })
 
     await expect(planner.route(request(), CTX)).rejects.toMatchObject({ code: 'INVALID_SCHEMA' })
     // Bounded retries: exactly the configured attempts, then an explicit failure.
@@ -269,7 +303,12 @@ describe('question rewriting before SQL generation', () => {
       ],
     ])
     const rewriter = new BoundedQuestionRewriter({ generation, modelRef: MODEL_REF, maxAttempts: 2 })
-    const planner = new RunPlanner({ compiler: new CountingCompiler(), generation, rewriter })
+    const planner = new RunPlanner({
+      vocabulary: PLANNER_VOCABULARY,
+      compiler: new CountingCompiler(),
+      generation,
+      rewriter,
+    })
 
     const decision = await planner.route(request(), CTX)
 
@@ -294,7 +333,11 @@ describe('question rewriting before SQL generation', () => {
         completed(),
       ],
     ])
-    const planner = new RunPlanner({ compiler: new CountingCompiler(), generation })
+    const planner = new RunPlanner({
+      vocabulary: PLANNER_VOCABULARY,
+      compiler: new CountingCompiler(),
+      generation,
+    })
 
     const decision = await planner.route(request(), CTX)
 

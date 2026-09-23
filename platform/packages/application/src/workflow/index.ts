@@ -36,6 +36,11 @@ export type {
   QuestionRewriteRequest,
   QuestionRewriter,
 } from './question-rewriting'
+export {
+  VOCABULARY_UNTRUSTED_DATA_NOTICE,
+  renderVocabularyBlock,
+  vocabularyEvidenceRef,
+} from './vocabulary'
 export { NoProgressGuard, SmallPlanExecutor } from './evidence-loop'
 export type {
   PlanExecutionResult,

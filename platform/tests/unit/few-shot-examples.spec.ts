@@ -22,6 +22,12 @@ import {
 import type { FewShotExampleProvider, FewShotRetrievalResult } from '@ontology/application'
 import { RunPlanner } from '@ontology/application'
 import { HOME_ENERGY_EXAMPLE_SET_REF } from '@ontology/industry-pack-home-energy'
+import { MAPPING_JOIN } from '../fixtures/semantic-mapping'
+import {
+  VOCAB_DEFINITION_REF,
+  publishedVocabularyDefinition,
+  vocabularyService,
+} from '../fixtures/schema-vocabulary'
 import { INDUSTRY_REF, PACK_EDITOR_A, SCOPE_A, buildPackHarness } from './pack-fixtures'
 import { gatewayContext } from './tool-gateway-fixtures'
 import {
@@ -35,6 +41,8 @@ const TENANT_A = '11111111-1111-4111-8111-111111111111'
 const SPACE_A = 'aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa'
 const COLLECTION = 'home-energy/examples/few-shot'
 const SET_REF = { id: 'home-energy.few-shot-examples', version: '0.1.0', digest: `sha256:${'e'.repeat(64)}` }
+const PLANNER_VOCABULARY = vocabularyService([MAPPING_JOIN], [publishedVocabularyDefinition()])
+const PLAN_SOURCES = { mappingRefs: [MAPPING_JOIN.mappingRef], definitionRefs: [VOCAB_DEFINITION_REF] }
 
 function context(collectionRefs: readonly string[]): ToolContext {
   return createToolContext({
@@ -323,6 +331,7 @@ describe('few-shot injection into the generation request (LOCAL-076)', () => {
   it('injects examples as untrusted data without changing the catalogue, budget or role', async () => {
     const generation = new CountingGeneration()
     const planner = new RunPlanner({
+      vocabulary: PLANNER_VOCABULARY,
       compiler: new CountingCompiler(),
       generation,
       examples: staticProvider(
@@ -335,6 +344,7 @@ describe('few-shot injection into the generation request (LOCAL-076)', () => {
     const routed = await planner.route(
       {
         runId: PLANNING_CTX.runId,
+        ...PLAN_SOURCES,
         question: 'which tariff applies tomorrow',
         context: { timeZone: 'Asia/Shanghai', siteRef: 'site-demo-a' },
         preferences: { route: 'auto', allowWeb: false },
@@ -352,10 +362,11 @@ describe('few-shot injection into the generation request (LOCAL-076)', () => {
     expect(request.toolSchemas).toEqual(['data_query'])
     expect(request.outputLimit).toEqual({ maxTokens: 1024 })
     expect(request.modelRef).toEqual({ modelId: 'plan-proposer', version: '1.0.0' })
-    expect(request.messages.filter((message) => message.role === 'system')).toHaveLength(1)
+    // The base instruction and the injected schema vocabulary are the only system messages.
+    expect(request.messages.filter((message) => message.role === 'system')).toHaveLength(2)
 
-    // The example is a third, clearly-labelled user message that cannot become an instruction.
-    const injected = request.messages[2]
+    // The example is a clearly-labelled user message that cannot become an instruction.
+    const injected = request.messages[3]
     expect(injected?.role).toBe('user')
     expect(injected?.content.startsWith(FEW_SHOT_UNTRUSTED_HEADER)).toBe(true)
     const body = (injected?.content ?? '').slice(FEW_SHOT_UNTRUSTED_HEADER.length + 1)
@@ -367,6 +378,7 @@ describe('few-shot injection into the generation request (LOCAL-076)', () => {
   it('injects nothing when the example set is not configured', async () => {
     const generation = new CountingGeneration()
     const planner = new RunPlanner({
+      vocabulary: PLANNER_VOCABULARY,
       compiler: new CountingCompiler(),
       generation,
       examples: staticProvider({
@@ -382,6 +394,7 @@ describe('few-shot injection into the generation request (LOCAL-076)', () => {
     await planner.route(
       {
         runId: PLANNING_CTX.runId,
+        ...PLAN_SOURCES,
         question: 'which tariff applies tomorrow',
         context: { timeZone: 'Asia/Shanghai', siteRef: 'site-demo-a' },
         preferences: { route: 'auto', allowWeb: false },
@@ -389,7 +402,8 @@ describe('few-shot injection into the generation request (LOCAL-076)', () => {
       PLANNING_CTX,
     )
 
-    expect(generation.calls[0]?.messages).toHaveLength(2)
+    // Base system instruction, injected schema vocabulary and the question; no example message.
+    expect(generation.calls[0]?.messages).toHaveLength(3)
   })
 
   it('does not let an example bypass plan parsing, validation or the mapping compiler', async () => {
@@ -404,6 +418,7 @@ describe('few-shot injection into the generation request (LOCAL-076)', () => {
       { type: 'completed', stopReason: 'tool_calls', candidateOnly: true },
     ])
     const planner = new RunPlanner({
+      vocabulary: PLANNER_VOCABULARY,
       compiler,
       generation,
       examples: staticProvider(
@@ -414,6 +429,7 @@ describe('few-shot injection into the generation request (LOCAL-076)', () => {
     const routed = await planner.route(
       {
         runId: PLANNING_CTX.runId,
+        ...PLAN_SOURCES,
         question: 'which meters consumed the most energy and which site do they belong to',
         context: { timeZone: 'Asia/Shanghai', siteRef: 'site-demo-a' },
         preferences: { route: 'auto', allowWeb: false },
