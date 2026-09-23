@@ -256,8 +256,17 @@ describe('publication transaction opens the invalidation fence (LOCAL-070)', () 
     faultingStore.failNextMark = true
     const readPromise = materializer.read(readRequest, s.ctx)
     const dispatchPromise = faultingDispatcher.dispatchOnce(s.scopeRef, s.ctx)
+    // Attach the rejection handler in the same synchronous turn as the call so the
+    // injected crash can never surface as an unhandled rejection while we await the
+    // concurrent read (vitest fails the run on unhandled errors even when all tests pass).
+    const dispatchOutcome = dispatchPromise.then(
+      () => undefined,
+      (error: unknown) => error,
+    )
     const concurrent = await readPromise
-    await expect(dispatchPromise).rejects.toThrow('simulated crash before the outbox mark')
+    const dispatchError = await dispatchOutcome
+    expect(dispatchError).toBeInstanceOf(Error)
+    expect((dispatchError as Error).message).toBe('simulated crash before the outbox mark')
     expect(['fenced', 'materialized', 'on_demand']).toContain(concurrent.status)
     const concurrentConclusion = concurrent.conclusions.find(
       (entry) => entry.propositionKey === NEW_PREDICATE,
