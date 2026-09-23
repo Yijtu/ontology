@@ -139,7 +139,7 @@ export class OntologyLookupHandler implements ToolHandler {
     }
     return {
       payload: page.output,
-      status: truncated ? 'partial' : page.output.items.length === 0 ? 'empty' : 'ok',
+      status: page.completeness !== 'complete' ? 'partial' : page.output.items.length === 0 ? 'empty' : 'ok',
       coverage,
       sources: [
         {

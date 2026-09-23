@@ -63,15 +63,25 @@ describe('ontology_lookup local semantic reads', () => {
     expect(second.output.items.map((item) => item.ref.id)).toEqual(['published-fact-2'])
     expect(second.completeness).toBe('complete')
     const handler = new OntologyLookupHandler({ lookup: service, sourceRef: { namespace: 'platform', sourceId: 'published-facts' } })
-    const outcome = await handler.execute({
+    const request: ToolExecutionRequest = {
       callId: '11111111-2222-4333-8444-555555555555', toolId: 'ontology_lookup',
       arguments: { scopeRef: { tenantId: ctx.principal.tenantId, spaceId: ctx.allowedResources.spaceId }, intent: 'facts', concepts: [{ namespace: NAMESPACE, conceptId: 'device' }] },
       resultLimits: { maxRows: 500, maxBytes: 262_144, maxDurationMs: 30_000 },
       deadline: ctx.deadline, traceId: ctx.traceId, ctx, signal: new AbortController().signal,
-    })
+    }
+    const outcome = await handler.execute(request)
     expect(outcome.status).toBe('partial')
     expect(outcome.coverage.truncated).toBe(true)
     expect(outcome.coverage.cursor).toBe('more-published-facts')
+
+    const uncertain = await harness({ listFacts: () => Promise.resolve({
+      facts: [{ factRef: { id: 'one-fact', version: '1.0.0', digest: `sha256:${'b'.repeat(64)}` }, conceptRef: { namespace: NAMESPACE, conceptId: 'device' } }],
+      nextCursor: null, covered: false,
+    }) })
+    const uncertainHandler = new OntologyLookupHandler({ lookup: uncertain.service, sourceRef: { namespace: 'platform', sourceId: 'uncertain-facts' } })
+    const uncertainOutcome = await uncertainHandler.execute(request)
+    expect(uncertainOutcome.status).toBe('partial')
+    expect(uncertainOutcome.coverage.completeness).toBe('unknown')
   })
   it('paginates definitions and reports an explicit truncated page', async () => {
     const { service } = await harness()
