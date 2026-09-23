@@ -43,9 +43,9 @@ export class PublishedFactReferenceProvider implements OntologyFactReferenceProv
     const scope = scopeOf(query.scopeRef, ctx)
     if (!Number.isSafeInteger(query.limit) || query.limit < 1 || query.limit > MAX_PAGE) throw new SemanticMappingError('INVALID_QUERY_PLAN', 'fact page limit must be between 1 and 200')
     if (query.cursor !== undefined && !UUID.test(query.cursor)) throw new SemanticMappingError('INVALID_QUERY_PLAN', 'fact cursor must be a statement id')
-    if (query.timeContext !== undefined) return { facts: [], nextCursor: null, covered: false }
+    if (query.timeContext !== undefined) return { facts: [], nextCursor: null, covered: false, definitionVersion: this.#definitionRef }
     if (query.concepts.some((concept) => concept.namespace !== this.#namespace || !this.#allowedConceptIds.has(concept.conceptId))) {
-      return { facts: [], nextCursor: null, covered: false }
+      return { facts: [], nextCursor: null, covered: false, definitionVersion: this.#definitionRef }
     }
     const wanted = new Set(query.concepts.map((concept) => concept.conceptId))
     const entities = new Set(query.entityRefs.map((ref: ResourceRef) => ref.id))
@@ -98,8 +98,8 @@ export class PublishedFactReferenceProvider implements OntologyFactReferenceProv
       })
     }
     const revisionAfter = await this.#publications.latestPublicationRevision(scope, ctx)
-    if (revisionAfter !== revisionBefore) return { facts: [], nextCursor: null, covered: false }
+    if (revisionAfter !== revisionBefore) return { facts: [], nextCursor: null, covered: false, definitionVersion: this.#definitionRef }
     const nextCursor = page.length > query.limit ? visible.at(-1)?.statementId ?? null : null
-    return { facts, nextCursor, covered }
+    return { facts, nextCursor, covered, definitionVersion: this.#definitionRef }
   }
 }

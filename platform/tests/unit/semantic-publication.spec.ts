@@ -175,6 +175,7 @@ describe('semantic publication service (in-memory)', () => {
     })
     const currentFacts = await facts.listFacts({ scopeRef, concepts: [{ namespace: 'home-energy', conceptId: 'feeds' }], entityRefs: [], limit: 10 }, ctx)
     expect(currentFacts.covered).toBe(true)
+    expect(currentFacts.definitionVersion).toEqual(PUBLICATION_DEFINITION_REF)
     expect(currentFacts.facts.map((fact) => fact.payload)).toContainEqual(expect.objectContaining({ statementId: relationId }))
 
     await identityService.decide({ candidateId: from.candidateId, kind: 'split', expectedRevision: '2', targetEntityId: from.entityId, justification: 'source identity correction' }, ctx)
