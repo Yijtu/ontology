@@ -2,7 +2,7 @@
 
 基于 [PRD v0.2](../../tasks/prd-industry-semantic-agent-v0.2.md)、[SPEC](../../tasks/spec-industry-semantic-agent-v0.2.md) 与[家庭能源场景](../../tasks/scenario-home-energy-hackathon.md)。
 
-已生成 **54 张计划内本地 Issue**（51 张实现/验收 + 3 张外部条件），执行期另补 **13 张计划外卡片**，另加 **1 张用户追加核对卡**，共 69 张。工程位于 `D:/work/ontology`，已关联 [Yijtu/ontology](https://github.com/Yijtu/ontology)。任务和验收不依赖历史原型。
+已生成 **54 张计划内本地 Issue**（51 张实现/验收 + 3 张外部条件），执行期另补 **16 张计划外卡片**，另加 **1 张用户追加核对卡**，共 72 张。工程位于 `D:/work/ontology`，已关联 [Yijtu/ontology](https://github.com/Yijtu/ontology)。任务和验收不依赖历史原型。
 
 远程映射（增量进行，不批量预建；编号为 GitHub issue 编号，与 PR 共用序列）：
 
@@ -175,6 +175,8 @@
 
 | [LOCAL-069](issue-069-materialization-worker-wiring.md) | 把 IncrementalMaterializer 接入 worker 装配并注册语义物化 outbox 消费者 | backend | 已交付 #117 |
 | [LOCAL-070](issue-070-publication-fence-in-transaction.md) | 发布事务内开启失效围栏（消除 publish-commit→worker-consume 窗口） | backend | 已交付 #123 |
+
+| [LOCAL-072](issue-072-openai-compatible-decode.md) | 为 adapter-model-company 增加 OpenAI 兼容解码路径 | backend | 已交付 #144 |
 
 ## 用户追加卡片
 

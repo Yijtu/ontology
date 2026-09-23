@@ -93,7 +93,8 @@
     "LOCAL-067",
     "LOCAL-068",
     "LOCAL-069",
-    "LOCAL-070"
+    "LOCAL-070",
+    "LOCAL-072"
   ],
   "external_condition_ids": [
     "LOCAL-051",
@@ -210,7 +211,8 @@
       "LOCAL-040"
     ],
     [
-      "LOCAL-047"
+      "LOCAL-047",
+      "LOCAL-072"
     ],
     [
       "LOCAL-054"
@@ -2112,8 +2114,8 @@
       "file": "issue-051-live-model-validation.md",
       "type": "infra",
       "priority": "medium",
-      "state": "planned",
-      "readiness": "waiting_external_condition",
+      "state": "done",
+      "readiness": "done",
       "phase": "J 外部条件任务",
       "dependencies": [
         "LOCAL-015",
@@ -2147,7 +2149,7 @@
         "公司生成模型和 Jev 实际端点、访问权限、模型版本与配额已确认。"
       ],
       "execution_mode": "external-validation",
-      "github_issue": null
+      "github_issue": 142
     },
     {
       "id": "LOCAL-052",
@@ -2659,6 +2661,29 @@
       "origin": "user-requested",
       "execution_mode": "post-delivery-verification",
       "github_issue": null
+    },
+    {
+      "id": "LOCAL-072",
+      "number": 72,
+      "title": "为 adapter-model-company 增加 OpenAI 兼容解码路径",
+      "file": "issue-072-openai-compatible-decode.md",
+      "type": "backend",
+      "priority": "high",
+      "state": "done",
+      "readiness": "done",
+      "phase": "J 外部条件验证",
+      "dependencies": [
+        "LOCAL-015",
+        "LOCAL-051"
+      ],
+      "user_stories": [],
+      "functional_requirements": [],
+      "acceptance_refs": [],
+      "design_tasks": [],
+      "external_gates": [],
+      "origin": "discovered-during-execution",
+      "execution_mode": "local-implementation",
+      "github_issue": 144
     }
   ],
   "github_remote_url": "https://github.com/Yijtu/ontology.git",
@@ -2678,8 +2703,22 @@
     "test_oracle": "independently verified specification fixtures"
   },
   "out_of_plan_ids": [
+    "LOCAL-055",
+    "LOCAL-056",
+    "LOCAL-057",
+    "LOCAL-059",
+    "LOCAL-060",
+    "LOCAL-061",
+    "LOCAL-062",
+    "LOCAL-063",
+    "LOCAL-064",
+    "LOCAL-065",
+    "LOCAL-066",
+    "LOCAL-067",
+    "LOCAL-068",
     "LOCAL-069",
-    "LOCAL-070"
+    "LOCAL-070",
+    "LOCAL-072"
   ],
   "user_requested_ids": [
     "LOCAL-071"
