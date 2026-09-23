@@ -9,6 +9,7 @@ import type {
   ToolCoverage,
 } from '@ontology/contracts'
 import type { OntologyLookupService } from '@ontology/semantic-engine'
+import { sha256DigestOf } from '@ontology/core'
 import { ToolGatewayError } from '../errors'
 import type { ToolExecutionOutcome, ToolExecutionRequest, ToolHandler } from '../types'
 
@@ -146,7 +147,7 @@ export class OntologyLookupHandler implements ToolHandler {
           sourceRef: this.#config.sourceRef,
           schemaVersion: page.output.definitionVersion.digest,
           consistency: 'repeatable_read',
-          resultDigest: page.output.definitionVersion.digest,
+          resultDigest: sha256DigestOf(JSON.stringify(page.output)),
         },
       ],
       usage: { rows: page.output.items.length },

@@ -73,6 +73,12 @@ describe('ontology_lookup local semantic reads', () => {
     expect(outcome.status).toBe('partial')
     expect(outcome.coverage.truncated).toBe(true)
     expect(outcome.coverage.cursor).toBe('more-published-facts')
+    expect(outcome.sources[0]?.resultDigest).not.toBe(page.output.definitionVersion.digest)
+    const secondOutcome = await handler.execute({
+      ...request, callId: '22222222-2222-4333-8444-555555555555',
+      arguments: { ...request.arguments, cursor: page.nextCursor },
+    })
+    expect(secondOutcome.sources[0]?.resultDigest).not.toBe(outcome.sources[0]?.resultDigest)
 
     const uncertain = await harness({ listFacts: () => Promise.resolve({
       facts: [{ factRef: { id: 'one-fact', version: '1.0.0', digest: `sha256:${'b'.repeat(64)}` }, conceptRef: { namespace: NAMESPACE, conceptId: 'device' } }],
