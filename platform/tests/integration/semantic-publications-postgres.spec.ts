@@ -18,6 +18,7 @@ import {
 import type { OutboxConsumer } from '@ontology/application'
 import {
   IdentityDecisionService,
+  PublishedRelationNavigator,
   readAllPublishedRules,
   readAllPublishedStatements,
   SemanticPublicationService,
@@ -272,6 +273,14 @@ describe('semantic publication against real PostgreSQL', () => {
       kind: 'relation', relationId: 'feeds', subjectEntityId: fromEntityId,
       value: { fromEntityId, toEntityId },
     })
+    const navigator = new PublishedRelationNavigator({
+      publications: publicationStore, identity: identityStore,
+      definitionRef: PUBLICATION_DEFINITION_REF, allowedRelationIds: ['feeds'],
+      now: () => Date.parse('2026-09-21T00:05:00Z'),
+    })
+    const path = await navigator.navigate({ startEntityId: fromEntityId, relationIds: ['feeds'], validAt: '2026-09-22T00:00:00Z' }, ctx)
+    expect(path.paths.map((entry) => entry.endEntityId)).toContain(toEntityId)
+    expect(path.paths[0]?.hops[0]?.sourceRefs.length).toBeGreaterThan(0)
   })
 
   it('reads every published statement and rule page through the scoped PostgreSQL keyset', async () => {
