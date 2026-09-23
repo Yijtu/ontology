@@ -23,22 +23,36 @@ import { WorkflowControllerError } from './errors'
  * never re-executed. The loop continues only when a genuinely new result determines the
  * next step, and it stops explicitly on `NO_PROGRESS` or `BUDGET_EXHAUSTED`.
  *
- * A tool failure is classified as a failure and is never reported as an empty result.
+ * A tool failure is classified as a failure and is never reported as an empty result. It no
+ * longer aborts the deterministic loop on the first error (FR-29): up to `maxFailureRepairs`
+ * failed rounds may be followed by a repair round that draws on the same budget. The repair
+ * count and the round limit both bound the loop, and a repeat of the failed call is still a
+ * duplicate, so a repair is new work rather than an unbounded retry.
  */
 export class NoProgressGuard {
   readonly #maxRounds: number
+  readonly #maxFailureRepairs: number
   readonly #results = new Map<string, ToolResult>()
   readonly #digests = new Set<string>()
   #rounds = 0
+  #failureRepairs = 0
 
-  constructor(options: { readonly maxRounds: number }) {
+  constructor(options: { readonly maxRounds: number; readonly maxFailureRepairs?: number }) {
     if (!Number.isInteger(options.maxRounds) || options.maxRounds < 1) {
       throw new WorkflowControllerError(
         'INVALID_ARGUMENT',
         'the evidence loop requires a positive integer maxRounds',
       )
     }
+    const maxFailureRepairs = options.maxFailureRepairs ?? 1
+    if (!Number.isInteger(maxFailureRepairs) || maxFailureRepairs < 0) {
+      throw new WorkflowControllerError(
+        'INVALID_ARGUMENT',
+        'the evidence loop requires a non-negative integer maxFailureRepairs',
+      )
+    }
     this.#maxRounds = options.maxRounds
+    this.#maxFailureRepairs = maxFailureRepairs
   }
 
   /** tool + canonical arguments + source/semantic version. */
@@ -82,7 +96,14 @@ export class NoProgressGuard {
       return { action: 'stop', reason: 'round_limit', key, stopCode: 'NO_PROGRESS' }
     }
     if (result.status === 'error') {
-      return { action: 'stop', reason: 'failed', key, failure: failureOf(result) }
+      const failure = failureOf(result)
+      if (this.#failureRepairs < this.#maxFailureRepairs) {
+        // Bounded repair: the failed round is carried as a failure but the deterministic
+        // loop may run one more (non-identical) step on the same budget.
+        this.#failureRepairs += 1
+        return { action: 'continue', reason: 'failed', key, failure }
+      }
+      return { action: 'stop', reason: 'failed', key, failure }
     }
     if (prior !== undefined) {
       return { action: 'stop', reason: 'duplicate', key, stopCode: 'NO_PROGRESS' }
@@ -200,10 +221,12 @@ export class SmallPlanExecutor {
 
       const decision = this.#deps.guard.observe(call, result, remaining)
       decisions.push(decision)
+      // A failure is surfaced even when the guard allows a bounded repair, so the caller
+      // never mistakes a repaired round for a clean success.
+      if (decision.failure !== undefined) failure = decision.failure
       if (decision.action === 'stop') {
         stopped = true
         stopCode = decision.stopCode
-        if (decision.failure !== undefined) failure = decision.failure
         break
       }
     }

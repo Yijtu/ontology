@@ -24,10 +24,11 @@ import type {
   WorkflowInputManifest,
   WorkflowRunState,
 } from '@ontology/contracts'
-import { DEFAULT_WORKFLOW_LIMITS } from '@ontology/contracts'
+import { DEFAULT_WORKFLOW_LIMITS, DRAFT_WRITER_REQUEST_VERSION } from '@ontology/contracts'
 import { inputManifestDigest, scenarioManifestHash } from './canonical'
 import { sha256DigestOf } from '../profiles/canonical'
 import { PublicationRejectedError, WorkflowControllerError } from './errors'
+import { repairFeedbackOf } from './repair-feedback'
 import type {
   CancelWorkflowInput,
   RespondWorkflowInput,
@@ -481,6 +482,14 @@ export class WorkflowController {
         )
       }
 
+      // A repair attempt is told exactly what failed, in a versioned, locatable form. The
+      // feedback is derived from the previous verdict only; it carries claim/field/evidence
+      // locators and never draft prose, and it is delivered in process to the writer.
+      const failedChecks =
+        attempt > 1 && lastFailure !== undefined
+          ? repairFeedbackOf(lastFailure.verification)
+          : []
+
       let written: DraftWriterResult
       try {
         written = await this.#deps.draftWriter.writeDraft(
@@ -491,6 +500,8 @@ export class WorkflowController {
             deficits: state.staleEntryIds.map((id) => `stale_input:${id}`),
             remainingBudget: await this.#remaining(manifest.budgetLedgerId, ctx),
             attempt,
+            requestVersion: DRAFT_WRITER_REQUEST_VERSION,
+            ...(failedChecks.length === 0 ? {} : { failedChecks }),
           },
           ctx,
         )

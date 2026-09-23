@@ -19,7 +19,12 @@ import type {
   ToolGateway,
 } from './ports'
 import type { ToolContext } from './trusted'
-import type { ClaimExplanation, DraftClaim, VerificationFinding } from './verification'
+import type {
+  ClaimExplanation,
+  DraftClaim,
+  VerificationFinding,
+  VerificationFindingAxis,
+} from './verification'
 
 /**
  * Workflow controller ports and records (SPEC D7, ADR-14, INV-09).
@@ -115,6 +120,51 @@ export interface AnswerDraft {
   readonly createdAt: Rfc3339UtcTimestamp
 }
 
+/**
+ * The draft-writer request contract version (FR-29, D7.4).
+ *
+ * `@1` is the original request: it carries no verification feedback. `@2` adds the located
+ * `failedChecks` a bounded repair draws on. A request that omits `requestVersion` is read as
+ * `@1`, so an existing caller that never sets it and never sends `failedChecks` is unchanged;
+ * only the controller, which now feeds the previous verdict back, stamps `@2`.
+ */
+export type DraftWriterRequestVersion = 'draft-writer-request@1' | 'draft-writer-request@2'
+
+/** The version a repair-aware caller stamps on the request. */
+export const DRAFT_WRITER_REQUEST_VERSION: DraftWriterRequestVersion = 'draft-writer-request@2'
+
+/**
+ * The effective version of a request: an absent marker is the backward-compatible `@1`.
+ * This is the single place the default is applied, so a reader never re-derives it.
+ */
+export function draftWriterRequestVersionOf(request: {
+  readonly requestVersion?: DraftWriterRequestVersion
+}): DraftWriterRequestVersion {
+  return request.requestVersion ?? 'draft-writer-request@1'
+}
+
+/**
+ * One located verification failure fed back into a bounded repair draft (FR-29).
+ *
+ * It mirrors the verifier's own `VerificationFinding`: when the finding is available the
+ * claim, field, evidence and JSON pointer identify exactly what failed. `code` stays a plain
+ * string so a recorded `failedChecks` code from a verifier that returns no located finding is
+ * carried through verbatim rather than dropped or guessed. It is delivered only to the
+ * in-process `DraftWriterPort`; it is never appended to the business event stream (C6.1).
+ */
+export interface DraftRepairFeedback {
+  /** The verifier's finding code, or the recorded `failedChecks` code. */
+  readonly code: string
+  /** Present when the feedback came from a located finding. */
+  readonly axis?: VerificationFindingAxis
+  readonly claimId?: Uuid
+  readonly field?: string
+  readonly evidenceRef?: ResourceRef
+  readonly pointer?: string
+  readonly expected?: string
+  readonly actual?: string
+}
+
 export interface DraftWriterRequest {
   readonly runId: Uuid
   readonly question: NonEmptyString
@@ -123,6 +173,17 @@ export interface DraftWriterRequest {
   readonly remainingBudget: BudgetRemaining
   /** 1 for the first draft; greater than 1 for a bounded repair attempt. */
   readonly attempt: number
+  /**
+   * The request contract version. Optional so a `@1` caller is unaffected; see
+   * `draftWriterRequestVersionOf`. A repair attempt sends `@2`.
+   */
+  readonly requestVersion?: DraftWriterRequestVersion
+  /**
+   * The located checks a bounded repair must fix. Present only on a repair attempt
+   * (`attempt > 1`) of a `@2` request; absent on the first draft. Each entry names the
+   * claim/field/evidence it came from, so the repair is targeted rather than a blind retry.
+   */
+  readonly failedChecks?: readonly DraftRepairFeedback[]
 }
 
 export interface DraftWriterResult {
