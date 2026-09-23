@@ -1,7 +1,7 @@
 import { randomUUID } from 'node:crypto'
 import type { JobStore, ScopeRef, ToolContext, Uuid } from '@ontology/contracts'
-import type { CandidateStore, DocumentParseRecord, DocumentChunkRecord, GenerationPort } from '@ontology/contracts'
-import { ExtractionPipeline, JobServiceError, JobStageFailure, JobWorker, decodeExtractionJobRef, encodeExtractionJobRef, mapNativeEntities, parseNativeRecord } from '@ontology/application'
+import type { CandidateStore, DocumentParseRecord, DocumentChunkRecord, GenerationOutputLimit, GenerationPort, ModelRef } from '@ontology/contracts'
+import { ExtractionPipeline, JobServiceError, JobStageFailure, JobWorker, decodeExtractionJobRef, encodeExtractionJobRef, isExtractionError, mapNativeEntities, parseNativeRecord } from '@ontology/application'
 import type { JobService, JobStageHandler, JobStageHandlerRegistry } from '@ontology/application'
 import type { BudgetLedgerPort, IndustrySchema, IndustrySchemaSource, SemanticDefinitionVersion, VersionRef } from '@ontology/contracts'
 import { projectIndustrySchema } from '@ontology/semantic-engine'
@@ -10,6 +10,13 @@ import type { PostgresDocumentParseStore } from '@ontology/adapter-extraction-do
 const SOURCE_REF = 'operator.document-native-candidates'
 const PIPELINE_VERSION = '1.0.0'
 const CHUNK_LIMIT = 256
+const SYNCHRONOUS_MODEL_CHUNK_LIMIT = 4
+
+export interface LocalExtractionGeneration {
+  readonly create: (ledgerId: Uuid, signal: AbortSignal) => GenerationPort
+  readonly modelRef: ModelRef
+  readonly outputLimit: GenerationOutputLimit
+}
 
 class PinnedIndustrySchemaSource implements IndustrySchemaSource {
   readonly #ref: VersionRef
@@ -24,6 +31,9 @@ export class LocalNativeCandidateIngestion {
   readonly #jobs: JobService
   readonly #candidateStore: CandidateStore
   readonly #worker: JobWorker
+  readonly #parseStore: PostgresDocumentParseStore
+  readonly #schema: IndustrySchema
+  readonly #modelConfigured: boolean
 
   constructor(input: {
     readonly jobs: JobService
@@ -32,12 +42,22 @@ export class LocalNativeCandidateIngestion {
     readonly parseStore: PostgresDocumentParseStore
     readonly definition: SemanticDefinitionVersion
     readonly budget: BudgetLedgerPort
+    readonly generation?: LocalExtractionGeneration
   }) {
     this.#jobs = input.jobs
     this.#candidateStore = input.candidates
+    this.#parseStore = input.parseStore
+    this.#schema = projectIndustrySchema(input.definition)
+    this.#modelConfigured = input.generation !== undefined
     const schemaSource = new PinnedIndustrySchemaSource(input.definition)
-    const generation: GenerationPort = { async *generate() { throw new JobStageFailure('CAPABILITY_NOT_CONFIGURED', 'unstructured extraction is unavailable without a configured model; use an exact JSON record or enter a human candidate', false) } }
-    const pipeline = new ExtractionPipeline({ schemaSource, generation, candidates: input.candidates, budget: input.budget, modelRef: { modelId: 'not-configured', version: '0' }, outputLimit: { maxTokens: 1 } })
+    const unavailable: GenerationPort = { async *generate() { throw new JobStageFailure('CAPABILITY_NOT_CONFIGURED', 'unstructured extraction is unavailable without a configured model; use an exact JSON record or enter a human candidate', false) } }
+    const pipelineFor = (ledgerId: Uuid, signal: AbortSignal): ExtractionPipeline => new ExtractionPipeline({
+      schemaSource, candidates: input.candidates, budget: input.budget,
+      generation: input.generation?.create(ledgerId, signal) ?? unavailable,
+      modelRef: input.generation?.modelRef ?? { modelId: 'not-configured', version: '0' },
+      outputLimit: input.generation?.outputLimit ?? { maxTokens: 1 },
+      generationAccountsUsage: input.generation !== undefined,
+    })
     const handlers = new Map<string, JobStageHandler>()
     handlers.set('received', {
       stage: 'received',
@@ -50,13 +70,16 @@ export class LocalNativeCandidateIngestion {
             throw new JobStageFailure('INSUFFICIENT_DATA', 'candidate extraction requires a complete parse with at most 256 spans', false)
           }
           const schema = projectIndustrySchema(input.definition)
+          let modelChunks = 0
           for (const chunk of parsed.chunks) {
             if (chunk.truncated || chunk.precision !== 'exact') throw new JobStageFailure('INSUFFICIENT_DATA', 'approximate or truncated spans cannot produce candidates', false)
             const record = parseNativeRecord(chunk.text)
-            if (record === undefined || mapNativeEntities(schema, record).length === 0) {
+            if (record === undefined || mapNativeEntities(schema, record).length === 0) modelChunks += 1
+            if (input.generation === undefined && modelChunks > 0) {
               throw new JobStageFailure('UNSUPPORTED_QUERY', 'automatic extraction is disabled; each source span must contain one schema-valid native JSON record', false)
             }
           }
+          if (modelChunks > SYNCHRONOUS_MODEL_CHUNK_LIMIT) throw new JobStageFailure('RESULT_TOO_LARGE', 'synchronous model extraction supports at most four text spans per job; split the import into smaller batches', false)
           const extractionRef = encodeExtractionJobRef({
             parseId,
             parserVersion: parsed.record.parserVersion,
@@ -79,12 +102,24 @@ export class LocalNativeCandidateIngestion {
         if (job.documentRef === undefined) throw new JobStageFailure('INVALID_ARGUMENT', 'the extraction job is missing its pinned input ref', false)
         const ref = decodeExtractionJobRef(job.documentRef)
         const parsed = await parseFor(input.parseStore, ref.parseId, ctx)
-        const result = await pipeline.extract({
+        let result
+        try { result = await pipelineFor(ledgerId, signal).extract({
           jobId: job.jobId, parseId: parsed.record.parseId, parserVersion: parsed.record.parserVersion,
           pipelineVersion: PIPELINE_VERSION, definitionRef: ref.definitionRef,
           ...(ref.documentVersionRef === undefined ? {} : { documentVersionRef: ref.documentVersionRef }),
           chunks: parsed.chunks, truncatedChunkIds: ref.truncatedChunkIds ?? [],
-        }, { ledgerId, ctx, signal })
+        }, { ledgerId, ctx, signal }) } catch (error) {
+          if (isExtractionError(error)) {
+            const code = error.code === 'BUDGET_REFUSED' ? 'BUDGET_EXHAUSTED'
+              : error.code === 'INVALID_MODEL_OUTPUT' ? 'INVALID_SCHEMA'
+              : error.code === 'SCHEMA_TOO_LARGE' ? 'RESULT_TOO_LARGE'
+              : error.code === 'GENERATION_FAILED' ? 'MODEL_UNAVAILABLE'
+              : error.code === 'SCHEMA_NOT_FOUND' ? 'CAPABILITY_NOT_CONFIGURED'
+              : 'INVALID_ARGUMENT'
+            throw new JobStageFailure(code, error.message, false)
+          }
+          throw error
+        }
         return { nextStage: 'extracted', counts: { ...result.counts, processed: result.counts.total }, ...(job.documentRef === undefined ? {} : { documentRef: job.documentRef }) }
       },
     })
@@ -94,7 +129,7 @@ export class LocalNativeCandidateIngestion {
         if (job.documentRef === undefined) throw new JobStageFailure('INVALID_ARGUMENT', 'the extraction job is missing its pinned input ref', false)
         const ref = decodeExtractionJobRef(job.documentRef)
         const parsed = await parseFor(input.parseStore, ref.parseId, ctx)
-        const result = await pipeline.validate({
+        const result = await pipelineFor(ledgerId, signal).validate({
           jobId: job.jobId, parseId: parsed.record.parseId, parserVersion: parsed.record.parserVersion,
           pipelineVersion: PIPELINE_VERSION, definitionRef: ref.definitionRef,
           ...(ref.documentVersionRef === undefined ? {} : { documentVersionRef: ref.documentVersionRef }),
@@ -105,10 +140,10 @@ export class LocalNativeCandidateIngestion {
     })
     handlers.set('validated', { stage: 'validated', async run({ job }) { return { nextStage: 'awaiting_review', counts: job.counts, ...(job.documentRef === undefined ? {} : { documentRef: job.documentRef }) } } })
     const registry: JobStageHandlerRegistry = { get: (stage) => handlers.get(stage) }
-    this.#worker = new JobWorker({ store: input.jobStore, handlers: registry, budget: input.budget })
+    this.#worker = new JobWorker({ store: input.jobStore, handlers: registry, budget: input.budget, leaseDurationMs: input.generation === undefined ? 60_000 : 300_000 })
   }
 
-  async extract(parseId: Uuid, idempotencyKey: string, ctx: ToolContext): Promise<{ readonly jobId: Uuid; readonly stage: string; readonly candidateIds: readonly Uuid[]; readonly deterministic: true; readonly modelCalls: 0 }> {
+  async extract(parseId: Uuid, idempotencyKey: string, ctx: ToolContext): Promise<{ readonly jobId: Uuid; readonly stage: string; readonly candidateIds: readonly Uuid[]; readonly deterministic: boolean; readonly modelCalls: number }> {
     const scope: ScopeRef = { tenantId: ctx.principal.tenantId, spaceId: ctx.allowedResources.spaceId }
     const jobId = randomUUID()
     const created = await this.#jobs.createJob({ jobId, kind: 'ingestion', sourceRef: SOURCE_REF, documentRef: parseId, pipelineVersion: PIPELINE_VERSION, idempotencyKey }, ctx)
@@ -120,7 +155,11 @@ export class LocalNativeCandidateIngestion {
       throw new JobServiceError(code, `candidate pipeline failed in ${stage} (${code}): ${job.lastError?.message ?? 'no safe stage detail'}`)
     }
     const candidates = await this.#candidateStore.listCandidates(scope, { jobId: created.jobId, limit: CHUNK_LIMIT }, ctx)
-    return { jobId: created.jobId, stage: job.stage, candidateIds: candidates.map((candidate) => candidate.candidateId), deterministic: true, modelCalls: 0 }
+    const modelCalls = this.#modelConfigured ? (await parseFor(this.#parseStore, parseId, ctx)).chunks.filter((chunk) => {
+      const native = parseNativeRecord(chunk.text)
+      return native === undefined || mapNativeEntities(this.#schema, native).length === 0
+    }).length : 0
+    return { jobId: created.jobId, stage: job.stage, candidateIds: candidates.map((candidate) => candidate.candidateId), deterministic: modelCalls === 0, modelCalls }
   }
 }
 

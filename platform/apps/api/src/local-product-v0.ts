@@ -25,6 +25,7 @@ import { createLocalTransportProfile } from './composition/registered-transport-
 import { createLocalOperatorSqlProfile, OPERATOR_SQL_SOURCE } from './composition/registered-operator-sql'
 import { ensureOperatorFacilityDefinition } from './composition/operator-definition'
 import { createLocalCandidateLifecycle } from './composition/local-candidate-lifecycle'
+import { createCompanyExtractionGeneration } from './composition/company-extraction'
 import { QueryTaskRuntime } from './composition/query-task-runtime'
 import { RunTaskAssignments, RegisteredTaskDraftWriter } from './composition/query-tasks'
 import { createBlobArtifactWriter, createToolGatewayComposition } from './composition/tool-gateway'
@@ -141,9 +142,13 @@ export async function startRegisteredLocalProduct(): Promise<{ close(): Promise<
   const gateway = createToolGatewayComposition({ database, blobStore: blobs, budget, validator, handlers: deployment.handlers })
   const assignments = new RunTaskAssignments()
   const runtime = new QueryTaskRuntime(deployment.tasks, assignments)
+  const extractionGeneration = operatorSql === undefined ? undefined : createCompanyExtractionGeneration({ budget, evidence })
   const candidateLifecycle = operatorSql === undefined || operatorDefinition === undefined
     ? undefined
-    : createLocalCandidateLifecycle({ database, sql: operatorSql, documents: deployment.candidateDocuments, definition: operatorDefinition, budget })
+    : createLocalCandidateLifecycle({
+      database, sql: operatorSql, documents: deployment.candidateDocuments, definition: operatorDefinition, budget,
+      ...(extractionGeneration === undefined ? {} : { generation: extractionGeneration }),
+    })
 
   await database.withIdentityScope({ tenantId, spaceId }, async (client) => {
     for (const profile of deployment.profiles) {
