@@ -90,7 +90,7 @@ describe('home-energy surface in a real browser', () => {
     await page.waitForSelector('[data-testid="plan-version"]')
 
     // A backup requirement above the declared capacity makes every candidate infeasible.
-    await buildScenario(page, '20', 'storm')
+    await buildScenario(page, '100', 'storm')
     await page.click('[data-testid="request-plan"]')
     await page.waitForFunction(
       () => document.querySelectorAll('[data-testid="plan-version"]').length === 2,

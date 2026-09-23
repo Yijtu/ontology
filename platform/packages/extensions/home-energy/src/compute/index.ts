@@ -42,4 +42,5 @@ export type {
   SimulationExecutionDependencies,
   SimulationJobPort,
   SimulationJobRequest,
+  SimulationStepExecutionRecord,
 } from './execution'

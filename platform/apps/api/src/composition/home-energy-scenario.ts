@@ -56,6 +56,7 @@ export function isWeatherScenario(value: unknown): value is WeatherScenario {
 }
 
 export const MAX_BACKUP_REQUIREMENT_KWH = 50
+export const BATTERY_CAPACITY_KWH = 10
 
 const SLOT_MINUTES = 15
 const SLOT_COUNT = 96
@@ -83,7 +84,8 @@ const INPUT_VERSIONS = {
 } as const
 
 export interface ScenarioRequest {
-  readonly backupRequirementKwh: number
+  readonly backupRequirementKwh?: number
+  readonly reserveSocPercent?: number
   readonly weatherScenario: WeatherScenario
   readonly timeZone?: string
 }
@@ -117,6 +119,7 @@ export interface ScenarioDescriptor {
   readonly slotCount: number
   readonly horizon: TimeWindow
   readonly backupRequirementKwh: number
+  readonly reserveSocPercent: number
   readonly weatherScenario: WeatherScenario
   readonly batterySpecSource: BatterySpecDeclaration['specSource']
   readonly series: readonly ScenarioSeriesDescriptor[]
@@ -231,7 +234,7 @@ const BATTERY: BatterySpecDeclaration = {
   dischargePowerLimitKw: 5,
   chargeEfficiency: 0.9,
   dischargeEfficiency: 0.9,
-  initialEnergyKwh: 5,
+  initialEnergyKwh: 3.5,
   gridChargingAllowed: true,
   exportAllowed: true,
   islandingSupported: false,
@@ -249,11 +252,20 @@ const GRID: GridSpec = { connectionRef: 'grid-1' }
 const LOAD_BINDING: SeriesBinding = { measurementPointRef: LOAD_MEASUREMENT_POINT, samplingType: 'observed' }
 const PV_BINDING: SeriesBinding = { measurementPointRef: PV_MEASUREMENT_POINT, samplingType: 'forecast' }
 
-function scenarioAssumptions(weather: WeatherScenario, backupRequirementKwh: number): readonly string[] {
+function reserveInputs(request: ScenarioRequest): { readonly reserveSocPercent: number; readonly backupRequirementKwh: number } {
+  if (request.reserveSocPercent !== undefined) {
+    return { reserveSocPercent: request.reserveSocPercent, backupRequirementKwh: BATTERY_CAPACITY_KWH * request.reserveSocPercent / 100 }
+  }
+  const backupRequirementKwh = request.backupRequirementKwh ?? BATTERY_CAPACITY_KWH * 0.2
+  return { backupRequirementKwh, reserveSocPercent: backupRequirementKwh / BATTERY_CAPACITY_KWH * 100 }
+}
+
+function scenarioAssumptions(weather: WeatherScenario, backupRequirementKwh: number, reserveSocPercent: number): readonly string[] {
   return [
     'synthetic fixture scenario',
     `weather_scenario=${weather}`,
     `backup_requirement_kwh=${backupRequirementKwh}`,
+    `reserve_soc_percent=${reserveSocPercent}`,
     'battery_spec=synthetic_assumption',
     'no_real_device_spec',
     'simulation_only',
@@ -278,6 +290,7 @@ function reservesFor(backupRequirementKwh: number): readonly ReserveConstraint[]
 export function buildSyntheticScenarioInput(request: ScenarioRequest): EnergyOperationInput {
   const timeZone = request.timeZone ?? 'Asia/Shanghai'
   const weather = request.weatherScenario
+  const reserve = reserveInputs(request)
   const loadKw = Array.from({ length: SLOT_COUNT }, (_unused, slotIndex) => loadKwAt(slotIndex))
   const pvKw = Array.from({ length: SLOT_COUNT }, (_unused, slotIndex) => pvKwAt(slotIndex, weather))
   const horizon: TimeWindow = { start: START_UTC, end: timestampAt(SLOT_COUNT) }
@@ -345,9 +358,9 @@ export function buildSyntheticScenarioInput(request: ScenarioRequest): EnergyOpe
     load: [LOAD_BINDING],
     pv: [PV_BINDING],
     tariff,
-    reserves: reservesFor(request.backupRequirementKwh),
+    reserves: reservesFor(reserve.backupRequirementKwh),
     tolerance: DEFAULT_SIMULATION_TOLERANCE,
-    assumptions: scenarioAssumptions(weather, request.backupRequirementKwh),
+    assumptions: scenarioAssumptions(weather, reserve.backupRequirementKwh, reserve.reserveSocPercent),
     // A declared, fixture-only valuation so candidates that end at a different terminal energy
     // can still be compared on one basis (SPEC E5, E-08). It is `fixture_declared`, not a real
     // tariff, and the comparison still refuses an unqualified saving claim without it.
@@ -389,6 +402,8 @@ export function scenarioDescriptorOf(
   const backupRequirementKwh = Number.isFinite(backupParsed)
     ? backupParsed
     : (reserve?.reserveEnergyKwh ?? 0)
+  const reserveParsed = Number(assumptionValue(input.assumptions, 'reserve_soc_percent'))
+  const reserveSocPercent = Number.isFinite(reserveParsed) ? reserveParsed : backupRequirementKwh / BATTERY_CAPACITY_KWH * 100
   const series = manifest.series.map((entry): ScenarioSeriesDescriptor => {
     const first = entry.points[0]
     const last = entry.points[entry.points.length - 1]
@@ -413,6 +428,7 @@ export function scenarioDescriptorOf(
     slotCount: manifest.slotCount,
     horizon: manifest.horizon,
     backupRequirementKwh,
+    reserveSocPercent,
     weatherScenario: weather,
     batterySpecSource: input.battery.specSource,
     series,

@@ -15,6 +15,7 @@ import type { AuthenticatedRequest, RequestAuthenticator } from './shared'
 import { SimulationSurfaceError } from '../composition/energy-simulation'
 import type { ExecutionSurface, ScenarioRequest, SimulationSurface } from '../composition/energy-simulation'
 import {
+  BATTERY_CAPACITY_KWH,
   MAX_BACKUP_REQUIREMENT_KWH,
   WEATHER_SCENARIOS,
   isWeatherScenario,
@@ -106,6 +107,7 @@ function contextFor(auth: AuthenticatedRequest, traceId: string, runId: string):
     spaceId: auth.spaceId,
     traceId,
     runId,
+    allowedResourceKinds: ['artifact', 'plan', 'simulation', 'computation', 'evidence'],
   })
 }
 
@@ -136,24 +138,26 @@ export function registerSimulationRoutes(
     requireIdempotencyKey(request)
     const body = request.body
     if (!isRecord(body)) throw new InvalidRequestFieldError('the request body must be a JSON object')
-    const backup = body.backupRequirementKwh
-    if (
-      typeof backup !== 'number' ||
-      !Number.isFinite(backup) ||
-      backup < 0 ||
-      backup > MAX_BACKUP_REQUIREMENT_KWH
-    ) {
-      throw new InvalidRequestFieldError(
-        `backupRequirementKwh must be a finite number in [0, ${String(MAX_BACKUP_REQUIREMENT_KWH)}]`,
-      )
-    }
-    const weather = body.weatherScenario
+    const reserveSocPercent = body['reserveSocPercent']
+    const legacyBackup = body['backupRequirementKwh']
+    if (reserveSocPercent !== undefined && legacyBackup !== undefined) throw new InvalidRequestFieldError('provide reserveSocPercent or legacy backupRequirementKwh, not both')
+    const requestReserve = reserveSocPercent !== undefined
+      ? (() => {
+          if (typeof reserveSocPercent !== 'number' || !Number.isFinite(reserveSocPercent) || reserveSocPercent < 0 || reserveSocPercent > 100) throw new InvalidRequestFieldError('reserveSocPercent must be a finite percentage in [0, 100]')
+          return { reserveSocPercent }
+        })()
+      : (() => {
+          const backup = legacyBackup ?? BATTERY_CAPACITY_KWH * 0.2
+          if (typeof backup !== 'number' || !Number.isFinite(backup) || backup < 0 || backup > MAX_BACKUP_REQUIREMENT_KWH) throw new InvalidRequestFieldError(`backupRequirementKwh must be a finite number in [0, ${String(MAX_BACKUP_REQUIREMENT_KWH)}]`)
+          return { backupRequirementKwh: backup }
+        })()
+    const weather = body.weatherScenario ?? 'sunny'
     if (!isWeatherScenario(weather)) {
       throw new InvalidRequestFieldError(`weatherScenario must be one of ${WEATHER_SCENARIOS.join(', ')}`)
     }
     const timeZone = typeof body.timeZone === 'string' && body.timeZone.length > 0 ? body.timeZone : undefined
     const scenarioRequest: ScenarioRequest = {
-      backupRequirementKwh: backup,
+      ...requestReserve,
       weatherScenario: weather,
       ...(timeZone === undefined ? {} : { timeZone }),
     }
@@ -237,6 +241,18 @@ export function registerSimulationRoutes(
     } catch (error) {
       rethrowClassified(error)
     }
+    return reply
+  })
+
+  app.get<{ Params: { executionId: string } }>('/api/v1/executions/:executionId', async (request, reply) => {
+    const traceId = readTraceId(request)
+    const auth = authenticateRequest(dependencies.authenticate, request, reply)
+    if (auth === undefined) return reply
+    requireSimulationRole(auth)
+    if (dependencies.execution.getExecution === undefined) throw new SimulationSurfaceError('CAPABILITY_NOT_CONFIGURED', 409, 'execution read-back is not configured')
+    const record = await dependencies.execution.getExecution(request.params.executionId, contextFor(auth, traceId, request.params.executionId))
+    if (record === undefined) throw new SimulationSurfaceError('EXECUTION_NOT_FOUND', 404, 'execution record is not available in this scope')
+    reply.status(200).send({ data: record, meta: { traceId } })
     return reply
   })
 }

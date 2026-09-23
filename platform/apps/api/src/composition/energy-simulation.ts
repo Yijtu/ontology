@@ -111,6 +111,13 @@ export interface EnergySimulationCompositionOptions {
   readonly scenarioCatalog?: ScenarioCatalog
   readonly now?: () => string
   readonly newId?: () => string
+  readonly records?: SimulationRecordStore
+}
+
+/** Tenant-scoped durable record index; payload artifacts remain in the immutable blob store. */
+export interface SimulationRecordStore {
+  put(record: SimulationRecordView, ctx: ToolContext): Promise<void>
+  get(simulationId: string, ctx: ToolContext): Promise<SimulationRecordView | undefined>
 }
 
 function scopeKey(ctx: ToolContext): string {
@@ -228,12 +235,15 @@ export function createEnergySimulationSurface(
         createdAt: now(),
         status: 'completed',
       }
-      records.set(`${scopeKey(ctx)}:${record.simulationId}`, record)
+      if (options.records === undefined) records.set(`${scopeKey(ctx)}:${record.simulationId}`, record)
+      else await options.records.put(record, ctx)
       return record
     },
 
     async getSimulation(simulationId, ctx) {
-      const record = records.get(`${scopeKey(ctx)}:${simulationId}`)
+      const record = options.records === undefined
+        ? records.get(`${scopeKey(ctx)}:${simulationId}`)
+        : await options.records.get(simulationId, ctx)
       if (record === undefined) {
         throw new SimulationSurfaceError(
           'SIMULATION_NOT_FOUND',
@@ -292,6 +302,7 @@ export function createEnergySimulationSurface(
  */
 export interface ExecutionSurface {
   requestExecution(input: RequestExecutionInput, ctx: ToolContext): Promise<ExecutionRecord>
+  getExecution?(executionId: string, ctx: ToolContext): Promise<ExecutionRecord | undefined>
 }
 
 export function createSimulationExecutionSurface(options: {

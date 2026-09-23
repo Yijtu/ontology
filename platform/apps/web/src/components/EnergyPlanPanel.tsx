@@ -1,5 +1,6 @@
 import { useReducer } from 'react'
 import type { OperationRef } from '@ontology/contracts'
+import type { ProfileRef } from '@ontology/contracts'
 import { ApiError, type WorkbenchClient } from '../api/client'
 import { asPlanResult, WEATHER_SCENARIOS } from '../api/energy'
 import type { PlanCandidateView, WeatherScenario } from '../api/energy'
@@ -30,6 +31,8 @@ import { useViewport } from './useViewport'
  */
 export interface EnergyPlanPanelProps {
   readonly client: WorkbenchClient
+  readonly profileRef: ProfileRef
+  readonly publishedExecutionRequired?: boolean
 }
 
 const PLAN_OPERATION: OperationRef = { id: 'home-energy.plan', version: '1' }
@@ -217,7 +220,7 @@ function VersionCard({ version }: { readonly version: EnergyPlanVersion }) {
   )
 }
 
-export function EnergyPlanPanel({ client }: EnergyPlanPanelProps) {
+export function EnergyPlanPanel({ client, profileRef, publishedExecutionRequired = false }: EnergyPlanPanelProps) {
   const viewport = useViewport()
   const [state, dispatch] = useReducer(energyReducer, undefined, initialEnergyState)
   const phase = state.phase
@@ -227,7 +230,7 @@ export function EnergyPlanPanel({ client }: EnergyPlanPanelProps) {
     dispatch({ type: 'busy' })
     try {
       const scenario = await client.buildEnergyScenario({
-        backupRequirementKwh: state.backupRequirementKwh,
+        reserveSocPercent: state.backupRequirementKwh / 10 * 100,
         weatherScenario: state.weatherScenario,
       })
       dispatch({ type: 'scenarioBuilt', scenario })
@@ -247,14 +250,48 @@ export function EnergyPlanPanel({ client }: EnergyPlanPanelProps) {
         parameters: { strategyWhitelist: [...STRATEGY_WHITELIST] },
       })
       const detail = await client.getSimulation(record.simulationId)
+      const planResult = asPlanResult(detail.result)
+      const previewRef = planResult === undefined ? undefined : (planResult.selection.selectedStrategy === undefined
+        ? planResult.candidates[0]?.planRef ?? planResult.baseline?.planRef
+        : planResult.candidates.find((candidate) => candidate.strategy === planResult.selection.selectedStrategy)?.planRef ?? planResult.baseline?.planRef)
+      if (previewRef === undefined) throw new Error('仿真结果没有选中可执行候选计划。')
       const version: EnergyPlanVersion = {
         versionId: detail.scenario.inputDigest,
         scenario: detail.scenario,
         record,
         detail,
-        result: asPlanResult(detail.result),
+        result: planResult,
+        publishedRunId: '',
+        executionPlanRef: previewRef,
+        executionInputRefs: record.inputRefs,
       }
-      dispatch({ type: 'planLoaded', version })
+      let officialRunId = ''
+      let executionPlanRef = version.executionPlanRef
+      if (publishedExecutionRequired) {
+      const officialRun = await client.createRun({
+        profileRef,
+        question: '为家庭储能能源系统生成满足备电目标的确定性充放电计划。',
+        context: { timeZone: 'Asia/Shanghai', taskId: 'energy.plan-candidate', taskInput: { siteRef: 'anker-home-1', backupRequirementKwh: state.backupRequirementKwh, weatherScenario: state.weatherScenario } },
+        preferences: { route: 'auto', allowWeb: false },
+      })
+      let published = false
+      for (let attempt = 0; attempt < 240; attempt += 1) {
+        const answer = await client.getAnswer(officialRun.runId)
+        if (answer.kind === 'published') { published = true; break }
+        if (answer.kind === 'unavailable') {
+          const run = await client.getRun(officialRun.runId)
+          throw new Error(`能源计划未能发布：${answer.code}（run state=${run.state}）`)
+        }
+        await new Promise<void>((resolve) => setTimeout(resolve, 250))
+      }
+      if (!published) throw new Error('等待正式核验计划超时；本次直接计算预览不会开放执行。')
+      const authorizedPlan = await client.getLocalPlan(officialRun.runId)
+      const previewPlanRef = selectedPlanRef(version)
+      if (previewPlanRef === undefined || previewPlanRef.digest !== authorizedPlan.selectedPlanRef.digest || previewPlanRef.id !== authorizedPlan.selectedPlanRef.id) throw new Error('直接预览与正式发布计划不一致；已停止执行授权。')
+      officialRunId = officialRun.runId
+      executionPlanRef = authorizedPlan.selectedPlanRef
+      }
+      dispatch({ type: 'planLoaded', version: { ...version, publishedRunId: officialRunId, executionPlanRef } })
     } catch (error) {
       dispatch(failureEvent(error))
     }
@@ -262,17 +299,18 @@ export function EnergyPlanPanel({ client }: EnergyPlanPanelProps) {
 
   const requestExecution = async (mode: 'simulation' | 'live') => {
     if (latest === undefined) return
-    const planRef = selectedPlanRef(latest)
-    if (planRef === undefined) {
-      dispatch({ type: 'notice', message: '当前计划没有可执行的候选计划，无法请求执行。' })
+      const planRef = selectedPlanRef(latest)
+    if (planRef === undefined || (publishedExecutionRequired && latest.publishedRunId.length === 0)) {
+      dispatch({ type: 'notice', message: '当前没有与正式核验答案绑定的可执行计划。' })
       return
     }
     dispatch({ type: 'busy' })
     try {
       const execution = await client.requestExecution({
+        runId: latest.publishedRunId || globalThis.crypto.randomUUID(),
         operationRef: SIMULATE_OPERATION,
-        planRef,
-        inputRefs: latest.record.inputRefs,
+        planRef: latest.executionPlanRef,
+        inputRefs: latest.executionInputRefs,
         mode,
       })
       dispatch({ type: 'executionLoaded', execution })
@@ -307,15 +345,15 @@ export function EnergyPlanPanel({ client }: EnergyPlanPanelProps) {
           <section className="energy__scenario" data-testid="scenario-controls">
             <h3>情景输入（合成）</h3>
             <label className="energy__field">
-              备电要求（kWh）
+              ReserveSOC（%）
               <input
                 type="number"
                 min={0}
-                max={50}
+                max={100}
                 step={1}
                 data-testid="backup-requirement"
-                value={state.backupRequirementKwh}
-                onChange={(event) => dispatch({ type: 'setBackup', value: Number(event.target.value) })}
+                value={state.backupRequirementKwh / 10 * 100}
+                onChange={(event) => dispatch({ type: 'setBackup', value: Number(event.target.value) / 100 * 10 })}
               />
             </label>
             <label className="energy__field">
@@ -447,13 +485,32 @@ export function EnergyPlanPanel({ client }: EnergyPlanPanelProps) {
               </button>
             </div>
             {state.execution === undefined ? null : (
-              <div className="energy__execution-record" data-testid="execution-record" data-mode={state.execution.mode}>
+              <div className="energy__execution-record" data-testid="execution-record" data-mode={state.execution.mode} data-execution-id={state.execution.executionId}>
                 <span className="energy__badge" data-testid="execution-mode" data-mode={state.execution.mode}>
                   {state.execution.mode}
                 </span>
                 <span data-testid="execution-phase">阶段：{state.execution.phase}</span>
                 <span data-testid="execution-device-requests">设备请求：{state.execution.deviceRequestsSent}</span>
                 <span data-testid="execution-live-supported">liveSupported：{String(state.execution.liveSupported)}</span>
+                {state.execution.finalState === undefined ? null : (
+                  <p data-testid="virtual-solix-final-state" data-revision={state.execution.finalState.revision}>
+                    Virtual SOLIX 回读：{formatNumber(state.execution.finalState.energyKwh)} kWh · {formatNumber(state.execution.finalState.socPercent, 1)}% SOC · mode=simulation
+                  </p>
+                )}
+                {state.execution.stepRecords === undefined ? null : (
+                  <>
+                    <p data-testid="execution-step-count">已回读 {state.execution.stepRecords.length} 个 PlanStep 状态快照</p>
+                    <ol data-testid="execution-step-records">
+                      {state.execution.stepRecords.map((step) => (
+                        <li key={step.slotIndex} data-testid="execution-step" data-slot={step.slotIndex}>
+                          时隙 {step.slotIndex}：Requested 充电 {formatNumber(step.requested.chargeKw)} kW / 放电 {formatNumber(step.requested.dischargeKw)} kW；
+                          状态 {step.statusHistory.join(' → ')}；能量 {formatNumber(step.beforeEnergyKwh)} → {formatNumber(step.afterEnergyKwh)} kWh；
+                          状态工件 {step.stateRef.id}
+                        </li>
+                      ))}
+                    </ol>
+                  </>
+                )}
               </div>
             )}
             {state.liveUnavailable === undefined ? null : (

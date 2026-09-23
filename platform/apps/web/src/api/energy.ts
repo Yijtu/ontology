@@ -60,6 +60,7 @@ export interface ScenarioDescriptor {
   readonly slotCount: number
   readonly horizon: { readonly start: string; readonly end: string }
   readonly backupRequirementKwh: number
+  readonly reserveSocPercent: number
   readonly weatherScenario: WeatherScenario
   readonly batterySpecSource: string
   readonly series: readonly ScenarioSeriesDescriptor[]
@@ -67,7 +68,8 @@ export interface ScenarioDescriptor {
 }
 
 export interface CreateScenarioRequest {
-  readonly backupRequirementKwh: number
+  readonly backupRequirementKwh?: number
+  readonly reserveSocPercent?: number
   readonly weatherScenario: WeatherScenario
 }
 
@@ -105,6 +107,7 @@ export interface RequestSimulationInput {
 }
 
 export interface RequestExecutionRequest {
+  readonly runId: string
   readonly operationRef: OperationRef
   readonly planRef: ResourceRef
   readonly inputRefs: readonly ResourceRef[]
@@ -121,6 +124,9 @@ export interface ExecutionRecordView {
   readonly requestedAt: string
   readonly liveSupported: false
   readonly deviceRequestsSent: number
+  readonly stepRecords?: readonly { readonly slotIndex: number; readonly requested: { readonly chargeKw: number; readonly dischargeKw: number }; readonly accepted: boolean; readonly observed: boolean; readonly statusHistory: readonly ('Requested' | 'Accepted' | 'Observed')[]; readonly beforeEnergyKwh: number; readonly afterEnergyKwh: number; readonly stateRef: ResourceRef; readonly mode: 'simulation' }[]
+  readonly finalStateRef?: ResourceRef
+  readonly finalState?: { readonly energyKwh: number; readonly socPercent: number; readonly revision: number; readonly mode: 'simulation' }
 }
 
 export interface PlanViolationView {
@@ -292,6 +298,7 @@ export function asScenarioDescriptor(value: unknown): ScenarioDescriptor | undef
     slotCount,
     horizon: { start: horizon.start, end: horizon.end },
     backupRequirementKwh: asNumber(value.backupRequirementKwh) ?? 0,
+    reserveSocPercent: asNumber(value.reserveSocPercent) ?? (asNumber(value.backupRequirementKwh) ?? 0) * 10,
     weatherScenario: weather,
     batterySpecSource: asString(value.batterySpecSource) ?? 'unknown',
     series,
@@ -601,6 +608,20 @@ export function asExecutionRecord(value: unknown): ExecutionRecordView | undefin
     if (ref === undefined) return undefined
     inputRefs.push(ref)
   }
+  const stepRecords: NonNullable<ExecutionRecordView['stepRecords']>[number][] = []
+  if (Array.isArray(value.stepRecords)) for (const step of value.stepRecords) {
+    if (!isRecord(step) || !isRecord(step.requested)) continue
+    const stateRef = resourceRefOf(step.stateRef)
+    const slotIndex = asNumber(step.slotIndex), beforeEnergyKwh = asNumber(step.beforeEnergyKwh), afterEnergyKwh = asNumber(step.afterEnergyKwh)
+    const chargeKw = asNumber(step.requested.chargeKw), dischargeKw = asNumber(step.requested.dischargeKw)
+    const statusHistory = Array.isArray(step.statusHistory) ? step.statusHistory.filter((status): status is 'Requested' | 'Accepted' | 'Observed' => status === 'Requested' || status === 'Accepted' || status === 'Observed') : []
+    if (stateRef !== undefined && slotIndex !== undefined && beforeEnergyKwh !== undefined && afterEnergyKwh !== undefined && chargeKw !== undefined && dischargeKw !== undefined && typeof step.accepted === 'boolean' && typeof step.observed === 'boolean' && statusHistory.join(',') === 'Requested,Accepted,Observed' && step.mode === 'simulation') stepRecords.push({ slotIndex, requested: { chargeKw, dischargeKw }, accepted: step.accepted, observed: step.observed, statusHistory, beforeEnergyKwh, afterEnergyKwh, stateRef, mode: 'simulation' })
+  }
+  const finalStateRef = resourceRefOf(value.finalStateRef)
+  const finalStateValue = isRecord(value.finalState) ? value.finalState : undefined
+  const finalEnergy = finalStateValue === undefined ? undefined : asNumber(finalStateValue.energyKwh)
+  const finalSoc = finalStateValue === undefined ? undefined : asNumber(finalStateValue.socPercent)
+  const finalRevision = finalStateValue === undefined ? undefined : asNumber(finalStateValue.revision)
   return {
     executionId: value.executionId,
     mode: 'simulation',
@@ -611,5 +632,8 @@ export function asExecutionRecord(value: unknown): ExecutionRecordView | undefin
     requestedAt: value.requestedAt,
     liveSupported: false,
     deviceRequestsSent: asNumber(value.deviceRequestsSent) ?? 0,
+    ...(stepRecords.length === 0 ? {} : { stepRecords }),
+    ...(finalStateRef === undefined ? {} : { finalStateRef }),
+    ...(finalEnergy === undefined || finalSoc === undefined || finalRevision === undefined || finalStateValue?.mode !== 'simulation' ? {} : { finalState: { energyKwh: finalEnergy, socPercent: finalSoc, revision: finalRevision, mode: 'simulation' as const } }),
   }
 }

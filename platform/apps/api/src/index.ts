@@ -65,6 +65,8 @@ export {
   createEnergySimulationSurface,
   createSimulationExecutionSurface,
 } from './composition/energy-simulation'
+export { createPostgresSimulationRecordStore, listPostgresSimulationRecords } from './composition/postgres-energy-simulation-store'
+export { createVirtualSolixExecutionSurface } from './composition/virtual-solix-execution'
 export type {
   EnergySimulationCompositionOptions,
   ExecutionSurface,

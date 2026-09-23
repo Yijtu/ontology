@@ -2,7 +2,7 @@ import { randomUUID } from 'node:crypto'
 import type { SemanticQueryPlan, VersionRef } from '@ontology/contracts'
 import { defineQueryTaskDescriptor } from '../composition/query-tasks'
 import type { RegisteredQueryTask } from '../composition/query-tasks'
-import { ENERGY_OPERATION_REGISTRY, encodeEnergyOperationInput } from '@ontology/extension-home-energy'
+import { ENERGY_OPERATION_REGISTRY, ENERGY_OPERATION_INPUT_MEDIA_TYPE, encodeEnergyOperationInput } from '@ontology/extension-home-energy'
 import { buildSyntheticScenarioInput } from '../composition/home-energy-scenario'
 import type { LocalStructuredProfile } from '../composition/registered-source-profiles'
 import type { ImmutableArtifactWriter, EvidenceStorePort } from '@ontology/contracts'
@@ -55,7 +55,7 @@ function planTask(profile: LocalStructuredProfile, draftWriter: WriterPort, arti
       taskId: ENERGY_PLAN_TASK, version: '1.0.0', handlerVersion: '1.0.0', operationRefs: ENERGY_OPERATION_REGISTRY.operations.filter((operation) => operation.operationRef.id === 'home-energy.plan').map((operation) => ({ ...operation.operationRef, digest: operation.inputSchemaDigest } satisfies VersionRef)), label: '生成储能候选计划',
       description: '先读取已映射的 SOC 作为证据，再执行注册的确定性仿真策略。',
       fields: [
-        { name: 'siteRef', label: 'SOC 查询站点 ID', kind: 'text', required: true, maxLength: 128, defaultValue: 'synthetic-home-1' },
+        { name: 'siteRef', label: 'SOC 查询站点 ID', kind: 'text', required: true, maxLength: 128, defaultValue: 'anker-home-1' },
         { name: 'backupRequirementKwh', label: '备电保留量', kind: 'number', required: true, minimum: 0, maximum: 50, defaultValue: 2, unit: 'kWh' },
         { name: 'weatherScenario', label: '光伏天气假设', kind: 'enum', required: true, options: ['sunny', 'overcast', 'storm'], defaultValue: 'sunny' },
       ],
@@ -76,10 +76,23 @@ function planTask(profile: LocalStructuredProfile, draftWriter: WriterPort, arti
       yield { type: 'result', toolId: 'data_query', result: soc }
       if (soc.status !== 'ok') return
       const operationInput = buildSyntheticScenarioInput({ backupRequirementKwh: backup, weatherScenario: weather })
+      const inline = soc.inlineData
+      const table = typeof inline === 'object' && inline !== null && !Array.isArray(inline) ? (inline as Record<string, unknown>)['table'] : undefined
+      const columns = typeof table === 'object' && table !== null && !Array.isArray(table) ? (table as Record<string, unknown>)['columns'] : undefined
+      const rows = typeof table === 'object' && table !== null && !Array.isArray(table) ? (table as Record<string, unknown>)['rows'] : undefined
+      const socIndex = Array.isArray(columns) ? columns.findIndex((column) => typeof column === 'object' && column !== null && 'name' in column && (column as { name?: unknown }).name === 'soc_percent') : -1
+      const observedSoc = Array.isArray(rows) && Array.isArray(rows[0]) && socIndex >= 0 ? Number(rows[0][socIndex]) : Number.NaN
+      const plannedSoc = operationInput.battery.energyCapacityKwh === undefined || operationInput.battery.initialEnergyKwh === undefined
+        ? Number.NaN
+        : operationInput.battery.initialEnergyKwh / operationInput.battery.energyCapacityKwh * 100
+      if (!Number.isFinite(observedSoc) || !Number.isFinite(plannedSoc) || Math.abs(observedSoc - plannedSoc) > 0.01) {
+        yield { type: 'failed', error: { code: 'VERIFICATION_FAILED', message: 'the SOC source assertion does not match the plan starting state; no plan was published', retryable: false } }
+        return
+      }
       const stored = await artifacts.putBytes({
         scopeRef: { tenantId: ctx.principal.tenantId, spaceId: ctx.allowedResources.spaceId },
         content: encodeEnergyOperationInput(operationInput),
-        mediaType: 'application/vnd.ontology.energy-input-snapshot+json',
+        mediaType: ENERGY_OPERATION_INPUT_MEDIA_TYPE,
       }, ctx)
       yield { type: 'step_started', stepId: 'energy.plan', toolId: 'data_query' }
       const planResult = await gateway.invoke({ callId: randomUUID(), toolId: 'data_query', arguments: {

@@ -10,8 +10,12 @@ import type { RunProfileBinding } from '@ontology/application'
 import { SCHEMA_DOCUMENTS } from '@ontology/contracts'
 import type { DecisionPort, GenerationPort, ProfileRef, ToolContext, VersionRef } from '@ontology/contracts'
 import { BudgetService, sha256DigestOf } from '@ontology/core'
-import { ENERGY_OPERATION_REGISTRY } from '@ontology/extension-home-energy'
-import { createEnergyComputeConfig } from './composition/energy-compute'
+import { ENERGY_OPERATION_REGISTRY, createEnergyComputeHandlers, encodeEnergyOperationInput } from '@ontology/extension-home-energy'
+import { createEnergyComputeConfig, createScopedBlobReader } from './composition/energy-compute'
+import { createEnergySimulationSurface } from './composition/energy-simulation'
+import { createPostgresSimulationRecordStore } from './composition/postgres-energy-simulation-store'
+import { createVirtualSolixExecutionSurface } from './composition/virtual-solix-execution'
+import { buildSyntheticScenarioInput } from './composition/home-energy-scenario'
 import { createLocalProductDeployment } from './composition/local-product-deployment'
 import { createLocalStructuredProfiles } from './composition/registered-source-profiles'
 import { createLocalTransportProfile } from './composition/registered-transport-profile'
@@ -26,12 +30,16 @@ import type { AuthenticatedRequest } from './http/server'
 import { registerLocalDocumentImportRoute } from './http/local-documents'
 import { registerLocalPlanDetailRoute } from './http/local-plan-detail'
 import { registerLocalCandidateRoutes } from './http/local-candidates'
+import { registerSimulationRoutes } from './http/simulations'
 import { createRequestToolContext } from './http/context'
 import { CapabilityNotConfiguredError } from './http/shared'
 
 const runtimeRef: VersionRef = { id: 'runtime-registered-tasks', version: '1.0.0', digest: sha256DigestOf('runtime-registered-tasks@1.0.0') }
 const policyRef: VersionRef = { id: 'policy-local-demo', version: '1.0.0', digest: sha256DigestOf('policy-local-demo@1.0.0') }
 const industryRef: VersionRef = { id: 'local-profile-fixtures', version: '1.0.0', digest: sha256DigestOf('local-profile-fixtures@1.0.0') }
+function sameResourceRef(left: import('@ontology/contracts').ResourceRef, right: import('@ontology/contracts').ResourceRef): boolean {
+  return left.id === right.id && left.version === right.version && left.digest === right.digest && left.kind === right.kind
+}
 
 function schemaValidator() {
   const ajv = new Ajv2020({ allErrors: true, strict: true, allowUnionTypes: true, validateFormats: true })
@@ -187,6 +195,58 @@ export async function startRegisteredLocalProduct(): Promise<{ close(): Promise<
     decisions: { service: candidateLifecycle.decisions, candidates: candidateLifecycle.candidates, documents: deployment.candidateDocuments.parseStore },
     publications: { service: candidateLifecycle.publications },
   }) })
+  const energySimulations = createEnergySimulationSurface({
+    blobStore: blobs, artifacts, reader: createScopedBlobReader(blobs),
+    operations: ENERGY_OPERATION_REGISTRY, handlers: createEnergyComputeHandlers(),
+    records: createPostgresSimulationRecordStore(database),
+  })
+  const energyExecution = createVirtualSolixExecutionSurface({
+    database, blobs, artifacts,
+    authorizePublishedPlan: async ({ runId, planRef, inputRefs, energyInput }, ctx) => {
+      try {
+        const run = await runService.getRun(runId, ctx)
+        const registeredEnergyProfiles = new Set(['home-energy-demo-wide', 'home-energy-demo-long', 'home-energy-demo'])
+        if (!registeredEnergyProfiles.has(run.profileRef.id) || run.context.taskId !== 'energy.plan-candidate' || run.state !== 'published') return false
+        if (!deployment.tasks.list(run.profileRef).some((task) => task.taskId === 'energy.plan-candidate')) return false
+        const taskInput = run.context.taskInput
+        if (typeof taskInput !== 'object' || taskInput === null || Array.isArray(taskInput)) return false
+        const task = taskInput as Record<string, unknown>
+        const reserve = energyInput.reserves[0]?.reserveEnergyKwh ?? 0
+        if (task['siteRef'] !== 'anker-home-1' || task['backupRequirementKwh'] !== reserve || typeof task['weatherScenario'] !== 'string' || !energyInput.assumptions.includes(`weather_scenario=${task['weatherScenario']}`)) return false
+        const expectedInput = buildSyntheticScenarioInput({ backupRequirementKwh: reserve, weatherScenario: task['weatherScenario'] as import('./composition/home-energy-scenario').WeatherScenario })
+        if (inputRefs.length !== 1 || inputRefs[0]?.kind !== 'artifact' || inputRefs[0].digest !== sha256DigestOf(new TextDecoder().decode(encodeEnergyOperationInput(expectedInput)))) return false
+        const answer = await controller.getAnswer(runId, ctx)
+        if (answer === undefined || answer.answerId.length === 0) return false
+        const claim = answer.claims.find((entry) => entry.predicate === 'candidate_total_cost')
+        const evidenceRef = claim?.references[0]?.evidenceRef
+        if (evidenceRef === undefined || claim?.references[0]?.resultDigest === undefined) return false
+        const evidenceRecord = await evidence.get({ tenantId: ctx.principal.tenantId, spaceId: ctx.allowedResources.spaceId }, evidenceRef.id, ctx)
+        if (evidenceRecord === undefined || evidenceRecord.evidenceRef.digest !== evidenceRef.digest || evidenceRecord.envelope.resultDigest !== claim.references[0]?.resultDigest || evidenceRecord.envelope.payloadRef === undefined) return false
+        const evidenceBlob = evidenceRecord.envelope.payloadRef
+        if (!(await blobs.getAuthorized({ scopeRef: { tenantId, spaceId }, blobRef: evidenceBlob }, ctx)).integrityVerified) return false
+        const payload = JSON.parse(new TextDecoder().decode(await blobs.readAuthorized({ scopeRef: { tenantId, spaceId }, blobRef: evidenceBlob }, ctx))) as Record<string, unknown>
+        const computation = payload['computation'] as Record<string, unknown> | undefined
+        const resultRef = computation?.['resultRef'] as import('@ontology/contracts').ResourceRef | undefined
+        if (resultRef === undefined || resultRef.kind !== 'artifact' || !(await blobs.getAuthorized({ scopeRef: { tenantId, spaceId }, blobRef: resultRef }, ctx)).integrityVerified) return false
+        const planner = JSON.parse(new TextDecoder().decode(await blobs.readAuthorized({ scopeRef: { tenantId, spaceId }, blobRef: resultRef }, ctx))) as Record<string, unknown>
+        const selection = planner['selection'] as Record<string, unknown> | undefined
+        const selected = selection?.['selectedPlanRef'] as import('@ontology/contracts').ResourceRef | undefined
+        const snapshotRef = planner['snapshotRef'] as import('@ontology/contracts').ResourceRef | undefined
+        if (planner['status'] !== 'feasible' || selected === undefined || !sameResourceRef(selected, planRef) || snapshotRef === undefined || !sameResourceRef(snapshotRef, energyInput.snapshot.snapshotRef)) return false
+        const candidates = planner['candidates']
+        if (!Array.isArray(candidates)) return false
+        const candidate = candidates.find((entry) => typeof entry === 'object' && entry !== null && 'planRef' in entry && sameResourceRef((entry.planRef as import('@ontology/contracts').ResourceRef), planRef)) as { simulation?: { status?: string; reserveMargins?: readonly { reserveKwh: number }[] } } | undefined
+        if (candidate?.simulation?.status !== 'feasible') return false
+        const requestedReserves = energyInput.reserves.map((item) => item.reserveEnergyKwh).sort((a, b) => a - b)
+        const plannedReserves = (candidate.simulation.reserveMargins ?? []).map((item) => item.reserveKwh).sort((a, b) => a - b)
+        if (requestedReserves.length !== plannedReserves.length || requestedReserves.some((value, index) => value !== plannedReserves[index])) return false
+        const predicates = new Set(answer.claims.map((entry) => entry.predicate))
+        if (!['candidate_total_cost', 'baseline_total_cost', 'terminal_energy_kwh', 'reserve_satisfied'].every((predicate) => predicates.has(predicate))) return false
+        return true
+      } catch { return false }
+    },
+  })
+  registerSimulationRoutes(app, { authenticate, service: energySimulations, execution: energyExecution })
   registerLocalDocumentImportRoute(app, { authenticate, documents: deployment.documents })
   registerLocalDocumentImportRoute(app, { authenticate, documents: deployment.candidateDocuments, path: '/api/v1/operator/candidate-documents' })
   if (candidateLifecycle !== undefined && operatorSql !== undefined) registerLocalCandidateRoutes(app, { authenticate, lifecycle: candidateLifecycle, documents: deployment.candidateDocuments, sql: operatorSql, tenantId, spaceId })

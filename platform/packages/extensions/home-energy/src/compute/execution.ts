@@ -34,6 +34,7 @@ export type ExecutionPhase =
 
 export interface ExecutionRecord {
   readonly executionId: Uuid
+  readonly runId?: Uuid
   /** Always `simulation` in this version; the field is explicit so a reader never infers it. */
   readonly mode: 'simulation'
   readonly operationRef: OperationRef
@@ -44,6 +45,21 @@ export interface ExecutionRecord {
   readonly liveSupported: false
   /** Structural marker: a simulation execution sent no device request. */
   readonly deviceRequestsSent: 0
+  readonly stepRecords?: readonly SimulationStepExecutionRecord[]
+  readonly finalStateRef?: ResourceRef
+  readonly finalState?: { readonly energyKwh: number; readonly socPercent: number; readonly revision: number; readonly mode: 'simulation' }
+}
+
+export interface SimulationStepExecutionRecord {
+  readonly slotIndex: number
+  readonly requested: { readonly chargeKw: number; readonly dischargeKw: number }
+  readonly accepted: boolean
+  readonly observed: boolean
+  readonly statusHistory: readonly ('Requested' | 'Accepted' | 'Observed')[]
+  readonly beforeEnergyKwh: number
+  readonly afterEnergyKwh: number
+  readonly stateRef: ResourceRef
+  readonly mode: 'simulation'
 }
 
 /**
@@ -179,6 +195,7 @@ export class SimulationExecutionService {
     )
     return {
       executionId: job.jobId,
+      runId: input.runId,
       mode: 'simulation',
       operationRef: input.operationRef,
       planRef: input.planRef,

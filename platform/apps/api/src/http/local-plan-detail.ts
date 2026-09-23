@@ -11,6 +11,7 @@ export interface LocalPlanDetail {
   readonly answerId: string
   readonly sourceEvidenceRef: ResourceRef
   readonly resultRef: ResourceRef
+  readonly selectedPlanRef: ResourceRef
   readonly dataMode: 'simulation'
   readonly optimality: 'best_of_tested_candidates'
   readonly selectedStrategy: string
@@ -95,6 +96,7 @@ function projectPlan(result: unknown, answer: PublishedAnswer, evidenceRef: Reso
   const selectedRef = record(selection['selectedPlanRef'], 'selectedPlanRef')
   const selectedId = string(selectedRef['id'], 'selectedPlanRef.id')
   const selectedDigest = string(selectedRef['digest'], 'selectedPlanRef.digest')
+  const selectedVersion = string(selectedRef['version'], 'selectedPlanRef.version')
   if (!Array.isArray(planner['candidates'])) throw new LocalPlanDetailError('PLAN_RESULT_INVALID', 409, 'plan candidates are missing')
   const candidate = planner['candidates']
     .map((item) => record(item, 'candidate'))
@@ -148,6 +150,7 @@ function projectPlan(result: unknown, answer: PublishedAnswer, evidenceRef: Reso
   }
   return {
     runId: answer.runId, answerId: answer.answerId, sourceEvidenceRef: evidenceRef, resultRef,
+    selectedPlanRef: { id: selectedId, version: selectedVersion, digest: selectedDigest, kind: 'plan' },
     dataMode: 'simulation', optimality: 'best_of_tested_candidates',
     selectedStrategy: string(candidate['strategy'], 'selected strategy'),
     candidateTotalCost, baselineTotalCost, currency: string(objective['currency'], 'currency'), reserveSatisfied,

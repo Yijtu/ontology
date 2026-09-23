@@ -126,6 +126,58 @@ afterAll(async () => {
 }, 120_000)
 
 describe('local product browser journey', () => {
+  it('shows Anker planning defaults and real Virtual SOLIX step read-backs from the hosted PostgreSQL/blob path', async () => {
+    const mismatchedResponse = await fetch(`${apiUrl}/api/v1/runs`, {
+      method: 'POST', headers: { 'content-type': 'application/json', 'idempotency-key': randomUUID() },
+      body: JSON.stringify({ profileRef: { id: 'home-energy-demo-long', version: '1.0.0' }, question: '为家庭储能能源系统生成满足备电目标的确定性充放电计划。', context: { timeZone: 'Asia/Shanghai', taskId: 'energy.plan-candidate', taskInput: { siteRef: 'synthetic-home-1', backupRequirementKwh: 2, weatherScenario: 'sunny' } }, preferences: { route: 'auto', allowWeb: false } }),
+    })
+    expect(mismatchedResponse.status, await mismatchedResponse.clone().text()).toBe(202)
+    const mismatchedRunId = ((await mismatchedResponse.json()) as { data: { runId: string } }).data.runId
+    let mismatchFailed = false
+    for (let attempt = 0; attempt < 120; attempt += 1) {
+      const answer = await fetch(`${apiUrl}/api/v1/runs/${mismatchedRunId}/answer`)
+      if (answer.status === 404) { mismatchFailed = true; break }
+      await new Promise((resolve) => setTimeout(resolve, 250))
+    }
+    expect(mismatchFailed).toBe(true)
+    const mismatchEvents = await (await fetch(`${apiUrl}/api/v1/runs/${mismatchedRunId}/events`)).text()
+    expect(mismatchEvents).toContain('VERIFICATION_FAILED')
+
+    const page = await browser.newPage({ viewport: { width: 1280, height: 900 } })
+    await page.goto(`${web.origin}/?profileId=home-energy-demo-long&profileVersion=1.0.0&view=energy`)
+    await page.waitForSelector('[data-testid="build-scenario"]')
+    expect(await page.locator('[data-testid="backup-requirement"]').getAttribute('max')).toBe('100')
+    await page.click('[data-testid="build-scenario"]')
+    await page.waitForSelector('[data-testid="scenario-summary"]')
+    let publishedRunId = ''
+    page.on('response', async (response) => {
+      if (response.request().method() !== 'POST' || !response.url().endsWith('/api/v1/runs')) return
+      try { publishedRunId = ((await response.json()) as { data: { runId: string } }).data.runId } catch { /* preserve the assertion below */ }
+    })
+    await page.click('[data-testid="request-plan"]')
+    try { await page.waitForSelector('[data-testid="plan-verified"][data-verified="true"]', { timeout: 20_000 }) }
+    catch {
+      const events = publishedRunId === '' ? 'no run response was captured' : await (await fetch(`${apiUrl}/api/v1/runs/${publishedRunId}/events`)).text()
+      throw new Error(`Anker plan did not publish: ${await page.locator('body').innerText()}\nrunEvents=${events}`)
+    }
+    expect(await page.textContent('[data-testid="plan-selected-strategy"]')).not.toContain('无可行候选')
+    await page.click('[data-testid="request-simulation-execution"]')
+    await page.waitForSelector('[data-testid="execution-record"][data-mode="simulation"]')
+    await page.waitForSelector('[data-testid="execution-step-count"]')
+    expect(await page.locator('[data-testid="execution-step"]').count()).toBe(96)
+    expect(await page.locator('[data-testid="execution-step"]').first().textContent()).toContain('Requested → Accepted → Observed')
+    expect(await page.locator('[data-testid="virtual-solix-final-state"]').textContent()).toContain('SOC')
+    const executionId = await page.locator('[data-testid="execution-record"]').getAttribute('data-execution-id')
+    if (executionId === null) throw new Error('execution id was not rendered')
+    const receiptResponse = await fetch(`${apiUrl}/api/v1/executions/${executionId}`)
+    expect(receiptResponse.status).toBe(200)
+    const receipt = await receiptResponse.json() as { data: { phase: string; stepRecords: readonly { observed: boolean }[] } }
+    expect(receipt.data.phase).toBe('completed')
+    expect(receipt.data.stepRecords).toHaveLength(96)
+    expect(receipt.data.stepRecords.every((step) => step.observed)).toBe(true)
+    await page.close()
+  }, 300_000)
+
   it('runs through POST /runs, computes and verifies an answer, then reads the same answer after API restart', async () => {
     const scopeResponse = await fetch(`${apiUrl}/api/v1/runs/scope?profileId=home-energy-demo-long&version=1.0.0`)
     const scopeView = await scopeResponse.json() as { data?: { tasks?: readonly { taskId: string }[] } }

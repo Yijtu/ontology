@@ -5,5 +5,5 @@ import { EnergyPlanPanel } from '../components/EnergyPlanPanel'
 export const HOME_ENERGY_VIEW: AppViewContribution = {
   view: 'energy',
   label: '家庭能源计划',
-  render: ({ client }) => <EnergyPlanPanel client={client} />,
+  render: ({ client, profileRef }) => <EnergyPlanPanel client={client} profileRef={profileRef} publishedExecutionRequired />,
 }

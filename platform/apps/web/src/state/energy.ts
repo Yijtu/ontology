@@ -34,6 +34,9 @@ export interface EnergyPlanVersion {
   readonly record: SimulationRecordView
   readonly detail: SimulationDetailView
   readonly result: PlanResultView | undefined
+  readonly publishedRunId: string
+  readonly executionPlanRef: import('@ontology/contracts').ResourceRef
+  readonly executionInputRefs: readonly import('@ontology/contracts').ResourceRef[]
 }
 
 export interface ConstraintGap {
@@ -91,7 +94,8 @@ export type EnergyEvent =
   | { readonly type: 'empty' }
   | { readonly type: 'notice'; readonly message: string }
 
-export const DEFAULT_BACKUP_REQUIREMENT_KWH = 4
+export const DEFAULT_BACKUP_REQUIREMENT_KWH = 2
+export const DEFAULT_RESERVE_SOC_PERCENT = 20
 export const DEFAULT_WEATHER_SCENARIO: WeatherScenario = 'sunny'
 
 export function initialEnergyState(): EnergyState {

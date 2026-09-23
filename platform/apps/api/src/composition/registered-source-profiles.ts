@@ -30,6 +30,8 @@ const WIDE_ROWS = [
   ['synthetic-home-1', '2026-01-01T00:00:00Z', 40],
   ['synthetic-home-1', '2026-01-01T00:15:00Z', 50],
   ['synthetic-home-2', '2026-01-01T00:15:00Z', 80],
+  ['anker-home-1', '2026-01-01T00:00:00Z', 30],
+  ['anker-home-1', '2026-01-01T00:15:00Z', 40],
 ] as const
 
 const LONG_ROWS = [
@@ -38,6 +40,8 @@ const LONG_ROWS = [
   ['synthetic-home-1', '2026-01-01T00:15:00Z', 'BATTERY_SOC_BP', 5000, 'bp'],
   ['synthetic-home-1', '2026-01-01T00:15:00Z', 'BATTERY_TEMP_C', 23, 'C'],
   ['synthetic-home-2', '2026-01-01T00:15:00Z', 'BATTERY_SOC_BP', 8000, 'bp'],
+  ['anker-home-1', '2026-01-01T00:00:00Z', 'BATTERY_SOC_BP', 3000, 'bp'],
+  ['anker-home-1', '2026-01-01T00:15:00Z', 'BATTERY_SOC_BP', 4000, 'bp'],
 ] as const
 
 const relations: RegisteredRelation[] = [
@@ -92,7 +96,7 @@ function mappingFor(id: string, objectRef: SourceObjectRef, relation: string, si
     dialect: 'duckdb',
     objects: [{
       conceptId: 'battery_soc_reading', sourceObjectRef: objectRef,
-      schema: 'main', relation, relationKind: 'table', estimatedRows: 3,
+      schema: 'main', relation, relationKind: 'table', estimatedRows: 5,
       timeFieldRef: 'recorded_at',
       fields: [
         { fieldRef: 'site_ref', column: siteColumn, valueType: 'string' as const, identityKey: true },

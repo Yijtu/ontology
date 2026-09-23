@@ -181,6 +181,7 @@ export interface LocalPlanDetailView {
   readonly answerId: string
   readonly sourceEvidenceRef: ResourceRef
   readonly resultRef: ResourceRef
+  readonly selectedPlanRef: ResourceRef
   readonly dataMode: 'simulation'
   readonly optimality: 'best_of_tested_candidates'
   readonly selectedStrategy: string
@@ -648,6 +649,16 @@ export class WorkbenchClient {
         return record
       },
     )
+  }
+
+  /** `GET /executions/{id}` reads the durable simulation receipt after a process restart. */
+  getExecution(executionId: string): Promise<ExecutionRecordView> {
+    const path = `/api/v1/executions/${encodeURIComponent(executionId)}`
+    return this.#request<unknown>('GET', path).then((data) => {
+      const record = asExecutionRecord(data)
+      if (record === undefined) throw malformedResponse(path, 'the execution record was not recognised')
+      return record
+    })
   }
 
   async #requestWithMeta<T>(path: string): Promise<{ data: T; nextCursor: string | undefined }> {

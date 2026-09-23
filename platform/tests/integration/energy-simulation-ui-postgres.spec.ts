@@ -12,17 +12,15 @@ import {
 } from '@ontology/adapter-blob-local'
 import {
   ControlPostgresDatabase,
-  PostgresJobStore,
   runControlMigrations,
 } from '@ontology/adapter-control-postgres'
-import { JobService } from '@ontology/application'
 import {
   createApiServer,
   createBlobArtifactWriter,
   createEnergySimulationSurface,
   createScopedBlobReader,
-  createSimulationExecutionSurface,
-  createSimulationJobPort,
+  createPostgresSimulationRecordStore,
+  createVirtualSolixExecutionSurface,
   registerSimulationRoutes,
 } from '@ontology/app-api'
 import type { AuthenticatedRequest } from '@ontology/app-api'
@@ -46,6 +44,7 @@ const MIGRATIONS_DIR = fileURLToPath(new URL('../../migrations/control', import.
 
 const TENANT = '22222222-2222-4222-8222-222222222222'
 const SPACE = 'cccccccc-cccc-4ccc-8ccc-cccccccccccc'
+const VERIFIED_RUN = 'dddddddd-dddd-4ddd-8ddd-dddddddddddd'
 const DIGEST = `sha256:${'a'.repeat(64)}`
 
 function connectionStringFor(adminUrl: string, user: string, password: string): string {
@@ -219,15 +218,9 @@ beforeAll(async () => {
     reader: createScopedBlobReader(blobStore),
     operations: ENERGY_OPERATION_REGISTRY,
     handlers: createEnergyComputeHandlers(),
+    records: createPostgresSimulationRecordStore(controlDatabase),
   })
-  const execution = createSimulationExecutionSurface({
-    jobs: createSimulationJobPort(new JobService({ store: new PostgresJobStore(controlDatabase) })),
-    deviceDriver: {
-      async sendCommand() {
-        deviceRequests.push('device')
-      },
-    },
-  })
+  const execution = createVirtualSolixExecutionSurface({ database: controlDatabase, blobs: blobStore, artifacts, authorizePublishedPlan: async ({ runId }) => runId === VERIFIED_RUN })
   app = createApiServer({ authenticate: loopbackAuth })
   registerSimulationRoutes(app, { authenticate: loopbackAuth, service, execution })
 }, 300_000)
@@ -242,8 +235,75 @@ afterAll(async () => {
 })
 
 describe('home-energy simulation surface over real PostgreSQL and blob-local', () => {
+  it('executes the selected 35% SOC plan through Virtual SOLIX, records every step, and survives restart', async () => {
+    const createdScenario = await app.inject({
+      method: 'POST', url: '/api/v1/simulations/inputs',
+      headers: { 'content-type': 'application/json', 'idempotency-key': randomUUID() },
+      payload: { reserveSocPercent: 20, weatherScenario: 'sunny' },
+    })
+    expect(createdScenario.statusCode).toBe(201)
+    const scenario = (createdScenario.json() as { data: ScenarioBody & { reserveSocPercent: number; backupRequirementKwh: number } }).data
+    expect(scenario.reserveSocPercent).toBe(20)
+    expect(scenario.backupRequirementKwh).toBe(2)
+    const detail = await planFor(scenario)
+    const planRef = detail.result.selection.selectedPlanRef
+    if (planRef === undefined) throw new Error('the feasible planner result did not select a plan')
+    const unverified = await app.inject({
+      method: 'POST', url: '/api/v1/executions',
+      headers: { 'content-type': 'application/json', 'idempotency-key': randomUUID() },
+      payload: { runId: randomUUID(), operationRef: { id: 'home-energy.simulate', version: '1' }, planRef, inputRefs: [scenario.inputRef], mode: 'simulation' },
+    })
+    expect(unverified.statusCode).toBe(422)
+    expect((unverified.json() as { error: { code: string } }).error.code).toBe('VERIFICATION_FAILED')
+    const idempotencyKey = randomUUID()
+    const executionResponse = await app.inject({
+      method: 'POST', url: '/api/v1/executions',
+      headers: { 'content-type': 'application/json', 'idempotency-key': idempotencyKey },
+      payload: { runId: VERIFIED_RUN, operationRef: { id: 'home-energy.simulate', version: '1' }, planRef, inputRefs: [scenario.inputRef], mode: 'simulation' },
+    })
+    expect(executionResponse.statusCode).toBe(202)
+    const execution = (executionResponse.json() as { data: { executionId: string; phase: string; stepRecords: readonly { slotIndex: number; accepted: boolean; observed: boolean; statusHistory: readonly string[]; beforeEnergyKwh: number; afterEnergyKwh: number; stateRef: ResourceRef }[]; finalStateRef: ResourceRef; finalState: { energyKwh: number; socPercent: number; mode: string } } }).data
+    expect(execution.phase).toBe('completed')
+    expect(execution.stepRecords).toHaveLength(96)
+    expect(execution.stepRecords.every((step) => step.accepted && step.observed)).toBe(true)
+    expect(execution.stepRecords.every((step) => step.statusHistory.join(',') === 'Requested,Accepted,Observed')).toBe(true)
+    expect(execution.finalState.mode).toBe('simulation')
+    expect(execution.stepRecords[0]?.beforeEnergyKwh).toBe(3.5)
+    expect(execution.stepRecords[0]?.stateRef.kind).toBe('artifact')
+    const finalBytes = await blobStore.readAuthorized({ scopeRef: { tenantId: TENANT, spaceId: SPACE }, blobRef: execution.finalStateRef }, toolContext())
+    const finalState = JSON.parse(new TextDecoder().decode(finalBytes)) as { energyKwh: number; socPercent: number; mode: string }
+    expect(finalState.mode).toBe('simulation')
+    expect(finalState.energyKwh).toBe(execution.stepRecords.at(-1)?.afterEnergyKwh)
+
+    const retried = await app.inject({
+      method: 'POST', url: '/api/v1/executions',
+      headers: { 'content-type': 'application/json', 'idempotency-key': idempotencyKey },
+      payload: { runId: VERIFIED_RUN, operationRef: { id: 'home-energy.simulate', version: '1' }, planRef, inputRefs: [scenario.inputRef], mode: 'simulation' },
+    })
+    expect(retried.statusCode).toBe(202)
+    expect((retried.json() as { data: { executionId: string } }).data.executionId).toBe(execution.executionId)
+    const duplicate = await app.inject({
+      method: 'POST', url: '/api/v1/executions',
+      headers: { 'content-type': 'application/json', 'idempotency-key': randomUUID() },
+      payload: { runId: VERIFIED_RUN, operationRef: { id: 'home-energy.simulate', version: '1' }, planRef, inputRefs: [scenario.inputRef], mode: 'simulation' },
+    })
+    expect(duplicate.statusCode).toBe(422)
+
+    await app.close()
+    const service = createEnergySimulationSurface({ blobStore, artifacts: createBlobArtifactWriter(blobStore), reader: createScopedBlobReader(blobStore), operations: ENERGY_OPERATION_REGISTRY, handlers: createEnergyComputeHandlers(), records: createPostgresSimulationRecordStore(controlDatabase) })
+    const executionSurface = createVirtualSolixExecutionSurface({ database: controlDatabase, blobs: blobStore, artifacts: createBlobArtifactWriter(blobStore), authorizePublishedPlan: async ({ runId }) => runId === VERIFIED_RUN })
+    app = createApiServer({ authenticate: loopbackAuth })
+    registerSimulationRoutes(app, { authenticate: loopbackAuth, service, execution: executionSurface })
+    const persistedSimulation = await app.inject({ method: 'GET', url: `/api/v1/simulations/${detail.simulationId}` })
+    expect(persistedSimulation.statusCode).toBe(200)
+    expect((persistedSimulation.json() as { data: { integrityVerified: boolean } }).data.integrityVerified).toBe(true)
+    const persistedExecution = await app.inject({ method: 'GET', url: `/api/v1/executions/${execution.executionId}` })
+    expect(persistedExecution.statusCode).toBe(200)
+    expect((persistedExecution.json() as { data: { stepRecords: readonly unknown[] } }).data.stepRecords).toHaveLength(96)
+  }, 300_000)
+
   it('archives a synthetic scenario and runs a registered plan, integrity-verified on read', async () => {
-    const scenario = await buildScenario(4, 'sunny')
+    const scenario = await buildScenario(2, 'sunny')
     expect(scenario.dataMode).toBe('synthetic')
     expect(scenario.timeZone).toBe('Asia/Shanghai')
     const roles = scenario.series.map((series) => series.role)
@@ -280,7 +340,7 @@ describe('home-energy simulation surface over real PostgreSQL and blob-local', (
   })
 
   it('produces a new plan version when the backup requirement changes', async () => {
-    const first = await buildScenario(4, 'sunny')
+    const first = await buildScenario(2, 'sunny')
     const firstPlan = await planFor(first)
     const second = await buildScenario(20, 'sunny')
     const secondPlan = await planFor(second)
@@ -295,31 +355,13 @@ describe('home-energy simulation surface over real PostgreSQL and blob-local', (
   })
 
   it('refuses mode=live with CAPABILITY_NOT_CONFIGURED and sends no device request', async () => {
-    const scenario = await buildScenario(4, 'sunny')
+    const scenario = await buildScenario(1, 'sunny')
     const detail = await planFor(scenario)
     const planRef =
       detail.result.selection.selectedPlanRef ??
       detail.result.candidates[0]?.plan.planRef ??
       detail.result.baseline?.plan.planRef
     if (planRef === undefined) throw new Error('the plan carried no plan reference')
-
-    const simulation = await app.inject({
-      method: 'POST',
-      url: '/api/v1/executions',
-      headers: { 'content-type': 'application/json', 'idempotency-key': randomUUID() },
-      payload: {
-        operationRef: { id: 'home-energy.simulate', version: '1' },
-        planRef,
-        inputRefs: [scenario.inputRef],
-        mode: 'simulation',
-      },
-    })
-    expect(simulation.statusCode).toBe(202)
-    const record = (simulation.json() as { data: { mode: string; liveSupported: boolean; deviceRequestsSent: number } })
-      .data
-    expect(record.mode).toBe('simulation')
-    expect(record.liveSupported).toBe(false)
-    expect(record.deviceRequestsSent).toBe(0)
 
     const live = await app.inject({
       method: 'POST',

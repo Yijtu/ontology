@@ -30,7 +30,7 @@ async function renderEnergy(client: WorkbenchClient): Promise<HTMLElement> {
   document.body.appendChild(container)
   const root = createRoot(container)
   await act(async () => {
-    root.render(createElement(EnergyPlanPanel, { client }))
+    root.render(createElement(EnergyPlanPanel, { client, profileRef: { id: 'home-energy-demo-wide', version: '1.0.0' } }))
   })
   mounted.push({ root, container })
   return container
@@ -161,7 +161,7 @@ describe('home-energy plan and simulation surface', () => {
     // A backup requirement above the declared capacity makes every candidate infeasible.
     const backup = container.querySelector('[data-testid="backup-requirement"]')
     if (!(backup instanceof HTMLInputElement)) throw new Error('the backup control is not an input')
-    setControlValue(backup, '20')
+    setControlValue(backup, '100')
     await buildScenario(container)
     await requestPlan(container)
     await waitFor(() => container.querySelectorAll('[data-testid="plan-version"]').length === 2, 'two plan versions')
