@@ -5,6 +5,7 @@ import {
   OntologyLookupService,
   SemanticDefinitionService,
 } from '@ontology/semantic-engine'
+import type { OntologyFactReferenceProvider } from '@ontology/semantic-engine'
 import { OntologyLookupHandler } from '@ontology/tool-services'
 import type { ToolExecutionRequest } from '@ontology/tool-services'
 import { MAPPING_A, MAPPING_JOIN } from '../fixtures/semantic-mapping'
@@ -18,7 +19,7 @@ import { canonicalToolValidator } from './tool-gateway-fixtures'
 
 const NAMESPACE = 'home-energy'
 
-async function harness(): Promise<{
+async function harness(facts?: OntologyFactReferenceProvider): Promise<{
   readonly service: OntologyLookupService
   readonly control: RecordingControlRepository
 }> {
@@ -28,12 +29,41 @@ async function harness(): Promise<{
   await definitions.publish(sampleCoreDraft(), toolContext())
   const mappings = new InMemorySemanticMappingRegistry([MAPPING_A, MAPPING_JOIN])
   return {
-    service: new OntologyLookupService({ definitions, mappings, pageSize: 50 }),
+    service: new OntologyLookupService({ definitions, mappings, pageSize: 50, ...(facts === undefined ? {} : { facts }) }),
     control,
   }
 }
 
 describe('ontology_lookup local semantic reads', () => {
+  it('marks a provider with more fact pages as incomplete instead of proving absence', async () => {
+    const facts: OntologyFactReferenceProvider = {
+      listFacts: () => Promise.resolve({
+        facts: [{
+          factRef: { id: 'published-fact', version: '1.0.0', digest: `sha256:${'a'.repeat(64)}` },
+          conceptRef: { namespace: NAMESPACE, conceptId: 'device' }, label: 'one indexed fact',
+        }],
+        nextCursor: 'more-published-facts', covered: true,
+      }),
+    }
+    const { service } = await harness(facts)
+    const ctx = toolContext()
+    const page = await service.lookup({
+      scopeRef: { tenantId: ctx.principal.tenantId, spaceId: ctx.allowedResources.spaceId },
+      intent: 'facts', concepts: [{ namespace: NAMESPACE, conceptId: 'device' }],
+    }, ctx)
+    expect(page.output.items).toHaveLength(1)
+    expect(page.completeness).toBe('partial')
+    expect(page.output.gaps).toContainEqual(expect.stringMatching(/^facts_truncated:/))
+    const handler = new OntologyLookupHandler({ lookup: service, sourceRef: { namespace: 'platform', sourceId: 'published-facts' } })
+    const outcome = await handler.execute({
+      callId: '11111111-2222-4333-8444-555555555555', toolId: 'ontology_lookup',
+      arguments: { scopeRef: { tenantId: ctx.principal.tenantId, spaceId: ctx.allowedResources.spaceId }, intent: 'facts', concepts: [{ namespace: NAMESPACE, conceptId: 'device' }] },
+      resultLimits: { maxRows: 500, maxBytes: 262_144, maxDurationMs: 30_000 },
+      deadline: ctx.deadline, traceId: ctx.traceId, ctx, signal: new AbortController().signal,
+    })
+    expect(outcome.status).toBe('partial')
+    expect(outcome.coverage.truncated).toBe(true)
+  })
   it('paginates definitions and reports an explicit truncated page', async () => {
     const { service } = await harness()
     const ctx = toolContext()

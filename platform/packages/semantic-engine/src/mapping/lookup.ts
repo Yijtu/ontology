@@ -186,7 +186,7 @@ export class OntologyLookupService {
     const nextCursor = offset + page.length < items.length ? encodeCursor(offset + page.length) : null
     const definitionVersion = primaryRef ?? (await this.#fallbackRef(input.scopeRef, concepts, ctx))
     const completeness: CompletenessStatus =
-      nextCursor !== null
+      nextCursor !== null || gaps.some((gap) => gap.startsWith('facts_truncated:'))
         ? 'partial'
         : gaps.length > 0 && page.length === 0
           ? 'unknown'
@@ -424,6 +424,7 @@ export class OntologyLookupService {
     }))
     const gaps: string[] = []
     if (!page.covered) gaps.push('facts_uncovered:the provider did not search a complete fact set')
+    if (page.nextCursor !== null) gaps.push('facts_truncated:the provider returned more fact references than this lookup page can inspect')
     if (items.length === 0 && page.covered) gaps.push('facts_uncovered:no matching fact reference was found')
     return { items, gaps, primaryRef: page.facts[0]?.factRef }
   }
