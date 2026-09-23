@@ -9,7 +9,8 @@
  *   cd platform
  *   pnpm exec tsx scripts/validate-live-models.mjs \
  *     --env-file="$ONTOLOGY_SECRETS_FILE" \
- *     --out=tests/e2e/artifacts/live-model-validation.json
+ *     --out=tests/e2e/artifacts/live-model-validation.json \
+ *     [--company-protocol=openai-compatible|private]
  *
  * The script records only variable NAMES and presence; secret values are never written
  * to the report or to stdout. A blocked external condition is an honest result.
@@ -22,7 +23,13 @@ const HERE = dirname(fileURLToPath(import.meta.url))
 const DEFAULT_OUT = resolve(HERE, '..', 'tests', 'e2e', 'artifacts', 'live-model-validation.json')
 
 function parseArgs(argv) {
-  const args = { envFile: undefined, out: DEFAULT_OUT, modelRole: 'vendor-first', jevVendorModel: undefined }
+  const args = {
+    envFile: undefined,
+    out: DEFAULT_OUT,
+    modelRole: 'vendor-first',
+    jevVendorModel: undefined,
+    companyProtocol: 'openai-compatible',
+  }
   for (let index = 0; index < argv.length; index += 1) {
     const arg = argv[index]
     if (arg === undefined) continue
@@ -37,6 +44,11 @@ function parseArgs(argv) {
     else if (arg === '--out' || arg.startsWith('--out=')) args.out = readValue()
     else if (arg === '--model-role' || arg.startsWith('--model-role=')) args.modelRole = readValue()
     else if (arg === '--jev-vendor-model' || arg.startsWith('--jev-vendor-model=')) args.jevVendorModel = readValue()
+    else if (arg === '--company-protocol' || arg.startsWith('--company-protocol=')) {
+      const value = readValue()
+      if (value === 'private' || value === 'openai-compatible') args.companyProtocol = value
+      else throw new Error(`unknown --company-protocol "${String(value)}"; expected private or openai-compatible`)
+    }
   }
   return args
 }
@@ -86,6 +98,7 @@ async function main() {
     env,
     secretsFile,
     modelMapRole: args.modelRole,
+    companyProtocol: args.companyProtocol,
     ...(args.jevVendorModel === undefined ? {} : { jevVendorModel: args.jevVendorModel }),
   })
 

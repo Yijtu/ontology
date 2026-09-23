@@ -14,6 +14,7 @@ import type {
 import { BudgetService, InMemoryBudgetLedgerStore } from '@ontology/core'
 import { CompanyGenerationAdapter } from '@ontology/adapter-model-company'
 import type {
+  CompanyModelProtocol,
   ModelAdapterLogRecord,
   ModelCallEvidenceRecorder,
   ModelCallEvidenceRequest,
@@ -83,6 +84,11 @@ export interface LiveValidationOptions {
   readonly secretsFile: string
   readonly modelMapRole: ModelMapRole
   readonly jevVendorModel?: string
+  /**
+   * Wire protocol the company gateway speaks. The real gateway is OpenAI-compatible, so
+   * that is the default; `private` remains selectable for the original protocol.
+   */
+  readonly companyProtocol?: CompanyModelProtocol
   readonly fetchImpl?: typeof fetch
 }
 
@@ -745,7 +751,7 @@ async function runCompanyEndpointProbe(
       ? {}
       : { errorCode: 'INVALID_SCHEMA', errorMessage: 'the endpoint did not return a valid data_query tool call' }),
     notes: [
-      'raw wire-level probe; the endpoint returns OpenAI-style tool-call ids that are not canonical UUIDs, which the model-company adapter does not model',
+      'raw wire-level probe; the endpoint returns OpenAI-style tool-call ids that are not canonical UUIDs, which the model-company adapter normalises deterministically',
     ],
   })
 
@@ -791,6 +797,7 @@ async function runCompanyLive(
   const adapter = new CompanyGenerationAdapter({
     baseUrl: adapterBase,
     endpoint: adapterEndpoint,
+    protocol: options.companyProtocol ?? 'openai-compatible',
     secretRef: COMPANY_SECRET_REF,
     models: { [mapping.platformModelId]: { vendorModel: mapping.vendorModel } },
     secrets: createEnvSecretResolver({ env }),

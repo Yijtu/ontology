@@ -18,7 +18,8 @@ import { ModelAdapterError, modelErrorForHttpStatus } from './errors'
 import { CompanyHttpClient } from './http-client'
 import { mapVendorChunk, unknownUsage } from './mapping'
 import type { CandidateValidationResult, CompanyGenerationAdapterConfig, ModelAdapterLogRecord } from './types'
-import { decodeCompanyWireChunk } from './vendor/company-wire'
+import { createWireCodec } from './vendor/codec'
+import type { CompanyWireChunk } from './vendor/company-wire'
 
 const DEFAULT_MAX_ATTEMPTS = 3
 const DEFAULT_RETRY_BASE_DELAY_MS = 200
@@ -34,6 +35,14 @@ const DEFAULT_RETRY_BASE_DELAY_MS = 200
  * A structured candidate is streamed as `text_delta`; once the stream completes it is
  * parsed and validated against `responseSchemaRef`, and a malformed or schema-invalid
  * candidate is surfaced as an `INVALID_SCHEMA` error event instead of a completion.
+ *
+ * The wire protocol is selected by `protocol`: the original private `{ type: ... }` codec
+ * or the OpenAI-compatible `chat/completions` codec. Both decode into the same internal
+ * chunks, so the canonical event semantics (and the budget/cancellation behaviour below)
+ * are identical; only the wire decoding differs. An OpenAI-compatible stream terminates on
+ * `data: [DONE]` and is flushed through the codec's `finish`, which emits complete
+ * tool-call candidates (fragments accumulated, non-UUID ids normalised) and the terminal
+ * completion.
  *
  * Budget integration (D7.2): every attempt reserves a parallel slot and its estimated
  * token allowance from the run's single shared ledger. A retry draws from the same
@@ -168,17 +177,11 @@ export class CompanyGenerationAdapter implements GenerationPort {
               failure = withRetryAfter(failure, response.retryAfterMs)
             }
           } else {
-            for await (const payload of response.payloads) {
-              const chunk = decodeCompanyWireChunk(payload)
-              if (chunk === undefined) {
-                failure = new ModelAdapterError(
-                  'INTERNAL_ERROR',
-                  'the provider stream contained an unrecognised chunk',
-                  { remoteStateUnknown: true },
-                )
-                billingUnknown = true
-                break
-              }
+            // A fresh codec per attempt: cross-payload state (fragmented tool calls,
+            // finish reason) must never leak into a retry or a later call.
+            const codec = createWireCodec(this.#config.protocol)
+            let stop = false
+            const consume = function* (chunk: CompanyWireChunk): Generator<GenerationEvent, void, void> {
               const mapped = mapVendorChunk(chunk, redact)
               for (const event of mapped.events) {
                 if (event.type === 'text_delta') {
@@ -201,9 +204,36 @@ export class CompanyGenerationAdapter implements GenerationPort {
               if (mapped.failure !== undefined) {
                 failure = mapped.failure
                 billingUnknown = true
+                stop = true
+              }
+              if (completed !== undefined) stop = true
+            }
+
+            for await (const payload of response.payloads) {
+              const chunks = codec.decode(payload)
+              if (chunks === undefined) {
+                failure = new ModelAdapterError(
+                  'INTERNAL_ERROR',
+                  'the provider stream contained an unrecognised chunk',
+                  { remoteStateUnknown: true },
+                )
+                billingUnknown = true
                 break
               }
-              if (completed !== undefined) break
+              for (const chunk of chunks) {
+                yield* consume(chunk)
+                if (stop) break
+              }
+              if (stop) break
+            }
+            if (!stop && failure === undefined && completed === undefined) {
+              // Flush state that only completes at end-of-stream (fragmented tool calls,
+              // the terminal completion). The stream is exhausted, so this is the only
+              // point at which a complete tool-call candidate can be emitted.
+              for (const chunk of codec.finish()) {
+                yield* consume(chunk)
+                if (stop) break
+              }
             }
             if (failure === undefined && completed === undefined) {
               failure = new ModelAdapterError(
