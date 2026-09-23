@@ -64,6 +64,8 @@ export interface OntologyFactPage {
   readonly nextCursor: string | null
   /** True only when the provider actually searched the covered fact set. */
   readonly covered: boolean
+  /** The pinned industry definition, distinct from any individual fact revision. */
+  readonly definitionVersion?: VersionRef
 }
 
 /**
@@ -424,7 +426,7 @@ export class OntologyLookupService {
     if (page.nextCursor !== null) gaps.push('facts_truncated:continue with the returned cursor to cover the remaining published facts')
     if (items.length === 0 && page.covered) gaps.push('facts_uncovered:no matching fact reference was found')
     return {
-      output: { items, gaps, definitionVersion: page.facts[0]?.factRef ?? await this.#fallbackRef(scopeRef, concepts, ctx), autoPublished: false },
+      output: { items, gaps, definitionVersion: page.definitionVersion ?? await this.#fallbackRef(scopeRef, concepts, ctx), autoPublished: false },
       nextCursor: page.nextCursor,
       completeness: page.nextCursor !== null ? 'partial' : page.covered && items.length > 0 ? 'complete' : 'unknown',
     }
