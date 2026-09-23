@@ -218,7 +218,7 @@ export class IdentityDecisionService {
         `candidate declares identity scope ${candidate.identityScopeId} but the definition declares ${identityScope.identityScopeId}`,
       )
     }
-    return { objectId: candidate.objectId, identityScopeId: identityScope.identityScopeId, identityAttributeIds: identityScope.identityAttributeIds, candidate }
+    return { objectId: candidate.objectId, identityScopeId: identityScope.identityScopeId, identityAttributeIds: identityScope.identityAttributeIds, scopeDimensions: identityScope.scopeDimensions, candidate }
   }
 
   #identityScopeOf(schema: IndustrySchema, objectId: string): IndustryIdentityScopeSchema {
@@ -371,6 +371,16 @@ export class IdentityDecisionService {
       const member = await this.#deps.candidates.getCandidate(scopeRef, assertion.candidateId, ctx)
       if (member?.kind !== 'entity' || member.objectId !== target.objectId || member.identityScopeId !== target.identityScopeId) {
         throw new IdentityDecisionError('IDENTITY_CONFLICT', 'the target cluster contains an unreadable or cross-scope member')
+      }
+      for (const dimension of target.scopeDimensions) {
+        const candidateValue = candidate.attributes.find((attribute) => attribute.attributeId === dimension)?.value
+        const memberValue = member.attributes.find((attribute) => attribute.attributeId === dimension)?.value
+        if (candidateValue === undefined || memberValue === undefined) {
+          throw new IdentityDecisionError('IDENTITY_EVIDENCE_REQUIRED', `identity scope dimension ${dimension} is missing from one source`)
+        }
+        if (candidateValue !== memberValue) {
+          throw new IdentityDecisionError('IDENTITY_SCOPE_MISMATCH', `identity scope dimension ${dimension} differs from the target cluster`)
+        }
       }
       for (const attribute of member.attributes) {
         if (candidateKeys.has(attribute.attributeId) && candidateKeys.get(attribute.attributeId) !== attribute.value) {

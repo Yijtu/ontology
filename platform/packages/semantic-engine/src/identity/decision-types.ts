@@ -155,6 +155,7 @@ export interface ResolvedIdentityTarget {
   readonly objectId: string
   readonly identityScopeId: string
   readonly identityAttributeIds: readonly string[]
+  readonly scopeDimensions: readonly string[]
   readonly candidate: EntityCandidate
 }
 
