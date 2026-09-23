@@ -148,20 +148,18 @@ export class OntologyLookupService {
   async lookup(input: OntologyLookupInput, ctx: ToolContext): Promise<OntologyLookupPage> {
     this.#assertScope(input.scopeRef, ctx)
     const limit = Math.min(Math.max(input.limit ?? this.#pageSize, 1), this.#maxPageSize)
-    const offset = decodeCursor(input.cursor)
     const concepts = input.concepts ?? []
     const entityRefs = input.entityRefs ?? []
+    if (input.intent === 'facts') {
+      return this.#lookupFacts(input.scopeRef, concepts, entityRefs, input.cursor, limit, input.timeContext, ctx)
+    }
+    const offset = decodeCursor(input.cursor)
 
     const items: OntologyLookupItem[] = []
     const gaps: string[] = []
     let primaryRef: VersionRef | undefined
 
-    if (input.intent === 'facts') {
-      const facts = await this.#factItems(input.scopeRef, concepts, entityRefs, input.timeContext, ctx)
-      items.push(...facts.items)
-      gaps.push(...facts.gaps)
-      primaryRef = facts.primaryRef
-    } else if (input.intent === 'resolve') {
+    if (input.intent === 'resolve') {
       const resolved = await this.#resolveItems(input.scopeRef, concepts, ctx)
       items.push(...resolved.items)
       gaps.push(...resolved.gaps)
@@ -186,7 +184,7 @@ export class OntologyLookupService {
     const nextCursor = offset + page.length < items.length ? encodeCursor(offset + page.length) : null
     const definitionVersion = primaryRef ?? (await this.#fallbackRef(input.scopeRef, concepts, ctx))
     const completeness: CompletenessStatus =
-      nextCursor !== null || gaps.some((gap) => gap.startsWith('facts_truncated:'))
+      nextCursor !== null
         ? 'partial'
         : gaps.length > 0 && page.length === 0
           ? 'unknown'
@@ -389,27 +387,26 @@ export class OntologyLookupService {
     return { items, gaps, primaryRef }
   }
 
-  async #factItems(
+  async #lookupFacts(
     scopeRef: ScopeRef,
     concepts: readonly OntologyConceptRef[],
     entityRefs: readonly ResourceRef[],
+    cursor: string | undefined,
+    limit: number,
     timeContext: TimeContext | undefined,
     ctx: ToolContext,
-  ): Promise<{ items: OntologyLookupItem[]; gaps: string[]; primaryRef: VersionRef | undefined }> {
+  ): Promise<OntologyLookupPage> {
     const provider = this.#facts
     if (provider === undefined) {
-      return {
-        items: [],
-        gaps: ['facts_uncovered:no fact reference provider is configured'],
-        primaryRef: undefined,
-      }
+      return { output: { items: [], gaps: ['facts_uncovered:no fact reference provider is configured'], definitionVersion: await this.#fallbackRef(scopeRef, concepts, ctx), autoPublished: false }, nextCursor: null, completeness: 'unknown' }
     }
     const page = await provider.listFacts(
       {
         scopeRef,
         concepts,
         entityRefs,
-        limit: this.#maxPageSize,
+        limit,
+        ...(cursor === undefined ? {} : { cursor }),
         ...(timeContext === undefined ? {} : { timeContext }),
       },
       ctx,
@@ -424,9 +421,13 @@ export class OntologyLookupService {
     }))
     const gaps: string[] = []
     if (!page.covered) gaps.push('facts_uncovered:the provider did not search a complete fact set')
-    if (page.nextCursor !== null) gaps.push('facts_truncated:the provider returned more fact references than this lookup page can inspect')
+    if (page.nextCursor !== null) gaps.push('facts_truncated:continue with the returned cursor to cover the remaining published facts')
     if (items.length === 0 && page.covered) gaps.push('facts_uncovered:no matching fact reference was found')
-    return { items, gaps, primaryRef: page.facts[0]?.factRef }
+    return {
+      output: { items, gaps, definitionVersion: page.facts[0]?.factRef ?? await this.#fallbackRef(scopeRef, concepts, ctx), autoPublished: false },
+      nextCursor: page.nextCursor,
+      completeness: page.nextCursor !== null ? 'partial' : page.covered && items.length > 0 ? 'complete' : 'unknown',
+    }
   }
 
   async #fallbackRef(
