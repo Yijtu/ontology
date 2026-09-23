@@ -184,7 +184,7 @@
 
 | ID | 主题 | 类型 | 状态 |
 |---|---|---|---|
-| [LOCAL-071](issue-071-nl2sql-pipeline-alignment.md) | 对齐 NL2SQL 标准流水线（改写/召回/裁剪/Schema/示例/试执行/反馈） | backend | 待主体开发完成后核对 |
+| [LOCAL-071](issue-071-nl2sql-pipeline-alignment.md) | 对齐 NL2SQL 标准流水线（改写/召回/裁剪/Schema/示例/试执行/反馈） | backend | 已交付 #150 |
 
 - 来源：用户明确要求（`origin: user-requested`），非执行期自动发现。
 - 依赖 LOCAL-054；在端到端验收完成后逐项核对标准流水线的覆盖情况，不进入当前自动执行批次。
