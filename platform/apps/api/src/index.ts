@@ -89,6 +89,7 @@ export type {
   WeatherScenario,
 } from './composition/home-energy-scenario'
 export { createToolHandlerSet } from './composition/tool-handlers'
+export { createPublishedOntologyCapability } from './composition/published-ontology'
 export type { ToolHandlerSetOptions } from './composition/tool-handlers'
 export { createApiServer, createJobApi, createRunApi } from './http/app'
 export { startLocalProduct } from './local-product'

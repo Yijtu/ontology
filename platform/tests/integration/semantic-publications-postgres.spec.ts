@@ -24,7 +24,7 @@ import {
   readAllPublishedStatements,
   SemanticPublicationService,
 } from '@ontology/semantic-engine'
-import { createApiServer } from '@ontology/app-api'
+import { createApiServer, createPublishedOntologyCapability } from '@ontology/app-api'
 import type { AuthenticatedRequest } from '@ontology/app-api'
 import type {
   CandidateRecord,
@@ -289,6 +289,13 @@ describe('semantic publication against real PostgreSQL', () => {
     const facts = await factProvider.listFacts({ scopeRef: scope.scopeRef, concepts: [{ namespace: 'home-energy', conceptId: 'feeds' }], entityRefs: [], limit: 20 }, ctx)
     expect(facts.covered).toBe(true)
     expect(facts.facts.map((fact) => fact.payload)).toContainEqual(expect.objectContaining({ statementId: relationId }))
+    const capability = createPublishedOntologyCapability({
+      database, namespace: 'home-energy', definitionRef: PUBLICATION_DEFINITION_REF, allowedConceptIds: ['device', 'feeds'],
+    })
+    const lookup = await capability.lookup.lookup({ scopeRef: scope.scopeRef, intent: 'facts', concepts: [{ namespace: 'home-energy', conceptId: 'feeds' }], limit: 20 }, ctx)
+    expect(lookup.completeness).toBe('complete')
+    expect(lookup.output.definitionVersion).toEqual(PUBLICATION_DEFINITION_REF)
+    expect(lookup.output.items.map((item) => item.ref.id)).toContain(relationId)
   })
 
   it('reads every published statement and rule page through the scoped PostgreSQL keyset', async () => {
