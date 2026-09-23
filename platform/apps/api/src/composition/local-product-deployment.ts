@@ -11,6 +11,8 @@ import type { LocalImmutableBlobStore } from '@ontology/adapter-blob-local'
 import type { LocalStructuredProfiles } from './registered-source-profiles'
 import type { LocalTransportProfile } from './registered-transport-profile'
 import type { LocalOperatorSqlProfile } from './registered-operator-sql'
+import { OPERATOR_SQL_NAMESPACE } from './registered-operator-sql'
+import { createPublishedOntologyCapability } from './published-ontology'
 import { createLocalDocumentProfile, LOCAL_CANDIDATE_DOCUMENT_PROFILE } from './registered-document-profile'
 import { LocalDocumentCapability } from './local-documents'
 import { ProfileQueryPort, type RegisteredQueryPortBinding } from './profile-query-port'
@@ -18,6 +20,7 @@ import { QueryTaskRegistry, type OperatorActionDescriptor, type RegisteredQueryT
 import { createHomeEnergyTasks } from '../scenarios/home-energy-tasks'
 import { createTransportInspectionTask } from '../scenarios/transport-task'
 import { createDocumentQuoteTask } from '../scenarios/document-quote-task'
+import { createPublishedFactTask } from '../scenarios/published-fact-task'
 import type { LocalDocumentImportResult } from './local-documents'
 
 export interface ProductProfile {
@@ -80,6 +83,19 @@ export async function createLocalProductDeployment(input: {
   const energyTasks = createHomeEnergyTasks({ profiles: energySourceProfiles, artifacts: input.artifacts, evidence: input.evidence, blobStore: input.blobs })
   const transportTask = createTransportInspectionTask({ source: input.transport, evidence: input.evidence, artifacts: input.artifacts, blobStore: input.blobs })
   const operatorSqlTask = input.operatorSql === undefined ? undefined : createTransportInspectionTask({ source: input.operatorSql, evidence: input.evidence, artifacts: input.artifacts, blobStore: input.blobs })
+  const ontology = input.operatorSql === undefined ? undefined : createPublishedOntologyCapability({
+    database: input.database, namespace: OPERATOR_SQL_NAMESPACE,
+    definitionRef: input.operatorSql.resolvedProfile.industryRef, allowedConceptIds: ['road_facility'],
+  })
+  const publishedFactTask = input.operatorSql === undefined ? undefined : createPublishedFactTask({
+    profileRef: input.operatorSql.profileRef, namespace: OPERATOR_SQL_NAMESPACE, conceptId: 'road_facility',
+    definitionRef: input.operatorSql.resolvedProfile.industryRef,
+    attributes: [
+      { id: 'facility_key', kind: 'string' }, { id: 'facility_name', kind: 'string' },
+      { id: 'district', kind: 'string' }, { id: 'inspection_state', kind: 'enum' },
+    ],
+    evidence: input.evidence, artifacts: input.artifacts, blobStore: input.blobs,
+  })
   const documentProfile = createLocalDocumentProfile({
     runtimeRef: input.energy.profiles[0]?.resolvedProfile.runtimeRef ?? input.transport.resolvedProfile.runtimeRef,
     policyRef: input.energy.profiles[0]?.resolvedProfile.policyRef ?? input.transport.resolvedProfile.policyRef,
@@ -87,7 +103,7 @@ export async function createLocalProductDeployment(input: {
     spaceId: input.spaceId,
   })
   const documentTask = createDocumentQuoteTask({ profileRef: documentProfile.profileRef, documents, evidence: input.evidence, artifacts: input.artifacts, blobStore: input.blobs })
-  const tasks = new QueryTaskRegistry([...energyTasks, transportTask, ...(operatorSqlTask === undefined ? [] : [operatorSqlTask]), documentTask])
+  const tasks = new QueryTaskRegistry([...energyTasks, transportTask, ...(operatorSqlTask === undefined ? [] : [operatorSqlTask]), ...(publishedFactTask === undefined ? [] : [publishedFactTask]), documentTask])
 
   const profiles: ProductProfile[] = []
   for (const profile of input.energy.profiles) {
@@ -107,8 +123,13 @@ export async function createLocalProductDeployment(input: {
   }
   const transportTasks = [transportTask]
   profiles.push(profileRecord(input.transport.profileRef, versionProfile(input.transport.resolvedProfile, transportTasks), input.transport.sourceRefs, ['artifact', 'dataset', 'evidence'], [], 100))
-  if (input.operatorSql !== undefined && operatorSqlTask !== undefined) {
-    profiles.push(profileRecord(input.operatorSql.profileRef, versionProfile(input.operatorSql.resolvedProfile, [operatorSqlTask]), input.operatorSql.sourceRefs, ['artifact', 'dataset', 'evidence'], [], input.operatorSql.maxRows))
+  if (input.operatorSql !== undefined && operatorSqlTask !== undefined && publishedFactTask !== undefined && ontology !== undefined) {
+    const resolvedProfile: ResolvedProfile = {
+      ...input.operatorSql.resolvedProfile,
+      toolBindings: [...input.operatorSql.resolvedProfile.toolBindings, { toolId: 'ontology_lookup', enabled: true, maxCallsPerRun: 2 }],
+      snapshotHash: sha256DigestOf(`${input.operatorSql.resolvedProfile.snapshotHash}:${ontology.sourceRef.namespace}:${ontology.sourceRef.sourceId}`),
+    }
+    profiles.push(profileRecord(input.operatorSql.profileRef, versionProfile(resolvedProfile, [operatorSqlTask, publishedFactTask]), [...input.operatorSql.sourceRefs, ontology.sourceRef], ['artifact', 'dataset', 'evidence'], [], input.operatorSql.maxRows))
   }
   const documentTasks = [documentTask]
   profiles.push(profileRecord(documentProfile.profileRef, versionProfile(documentProfile.resolvedProfile, documentTasks), [documentProfile.sourceRef], ['artifact', 'document', 'evidence'], [documentProfile.collectionRef], 10))
@@ -134,7 +155,7 @@ export async function createLocalProductDeployment(input: {
   ]
   const query = new ProfileQueryPort(queryBindings, mappings)
   const dataQuery = new DataQueryHandler({ query, mappings, compute: input.compute })
-  const handlers = [dataQuery, documents.searchHandler]
+  const handlers = [dataQuery, documents.searchHandler, ...(ontology === undefined ? [] : [ontology.handler])]
   const documentImportAction: OperatorActionDescriptor = {
     actionId: 'documents.import-markdown', label: '导入一份受控政策文档', method: 'POST', path: '/api/v1/operator/documents',
     fields: [
