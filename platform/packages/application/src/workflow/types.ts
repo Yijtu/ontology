@@ -23,6 +23,7 @@ import type {
 import type { RuntimeCapabilityFactoryPort } from '@ontology/contracts'
 import type { RunService } from '../runs'
 import type { RunPhaseDriver } from './phase-driver'
+import type { QuestionRewriter } from './question-rewriting'
 
 export interface WorkflowControllerDependencies {
   /** Run creation, cancellation, clarification and the public event log (LOCAL-009). */
@@ -48,6 +49,14 @@ export interface WorkflowControllerDependencies {
   readonly verifications: VerificationStorePort
   readonly publisher: AnswerPublisherPort
   readonly validity: InputValidityPort
+  /**
+   * The bounded question-rewriting pre-step (LOCAL-074/LOCAL-080). When present the
+   * controller runs it once during preflight, before it selects a runtime or starts
+   * collection: a successful rewrite is persisted on the durable run record, an ambiguity
+   * takes the existing `clarification_requested` path, and a failure fails the run
+   * explicitly. When absent the run path is unchanged.
+   */
+  readonly rewriter?: QuestionRewriter
   readonly now?: () => string
   readonly newId?: () => string
   readonly limits?: Partial<WorkflowLimits>

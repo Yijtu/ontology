@@ -1,6 +1,7 @@
 import type {
   CreateRunContext,
   ProfileRef,
+  QuestionRewrite,
   ResolvedProfileRef,
   RevisionString,
   RunPreferences,
@@ -118,6 +119,11 @@ export interface RunView {
   readonly pendingClarificationId?: Uuid
   /** Public checkpoint handle only; the private blob is never returned. */
   readonly checkpoint?: RuntimeCheckpointRef
+  /**
+   * The persisted question-rewrite trace, when a bounded rewrite step ran before collection.
+   * It lets the public run read surface replay original → rewrite → generated SQL (LOCAL-080).
+   */
+  readonly questionRewrite?: QuestionRewrite
 }
 
 export interface PublicRunEvent {

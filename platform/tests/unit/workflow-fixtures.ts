@@ -17,6 +17,7 @@ import {
   createRunCheckpointPort,
 } from '@ontology/application'
 import type { RunProfileBinder, RunProfileBinding } from '@ontology/application'
+import type { QuestionRewriter } from '@ontology/application'
 import type {
   AnswerPublisherPort,
   AnswerVerifierPort,
@@ -107,6 +108,7 @@ export class LoopProbe {
 export class ScriptedRuntime implements RuntimeAdapter {
   readonly manifest: ComponentManifest
   readonly startCalls: string[] = []
+  readonly startQuestions: string[] = []
   readonly resumeCalls: string[] = []
   readonly cancelCalls: { readonly runId: string; readonly reason: string }[] = []
   readonly budgetReserveAttempts: string[] = []
@@ -144,6 +146,7 @@ export class ScriptedRuntime implements RuntimeAdapter {
 
   async *start(input: RuntimeInput, deps: RuntimeDependencies): AsyncGenerator<RuntimeEvent, void, void> {
     this.startCalls.push(input.runId)
+    this.startQuestions.push(input.question)
     this.probe.runtimeLoops += 1
     await this.#tryReserveBudget(deps)
     if (this.#gate !== undefined) await this.#gate
@@ -388,6 +391,8 @@ export function buildWorkflowHarness(options: {
   readonly draftWriter?: DraftWriterPort
   /** Override the verifier (e.g. the real combined `DraftVerificationService`). */
   readonly verifier?: AnswerVerifierPort
+  /** Wire the bounded question-rewriting pre-step into the actual controller run path. */
+  readonly rewriter?: QuestionRewriter
 }): WorkflowHarness {
   const probe = options.probe ?? options.runtime.probe
   const store = new InMemoryRunStore()
@@ -447,6 +452,7 @@ export function buildWorkflowHarness(options: {
     verifications,
     publisher,
     validity,
+    ...(options.rewriter === undefined ? {} : { rewriter: options.rewriter }),
     now: fixedClock(),
     newId: () => randomUUID(),
   })

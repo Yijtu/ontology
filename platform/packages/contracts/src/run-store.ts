@@ -13,6 +13,7 @@ import type {
   Uuid,
   VersionRef,
 } from './generated/contracts'
+import type { QuestionRewrite } from './planning'
 import type { ToolContext } from './trusted'
 
 /**
@@ -62,6 +63,13 @@ export interface RunRecord extends NewRunRecord {
   readonly cancelledAt?: Rfc3339UtcTimestamp
   /** The clarification the run is currently waiting on, if any. */
   readonly pendingClarificationId?: Uuid
+  /**
+   * The bounded question-rewrite trace the run recorded before collection (LOCAL-080).
+   * It is written once and is immutable: the original → rewrite → generated-SQL chain is
+   * replayable from the durable run record. Absent means no rewrite step ran (or it
+   * clarified/failed before producing a trace), never that a successful rewrite was dropped.
+   */
+  readonly questionRewrite?: QuestionRewrite
 }
 
 /**
@@ -195,6 +203,18 @@ export interface RunStore {
     afterSequence: RevisionString | undefined,
     ctx: ToolContext,
   ): Promise<RunEventRecord[]>
+  /**
+   * Persist the bounded question-rewrite trace onto the durable run record. It is written
+   * once and never overwritten, so a replayed run keeps the exact rewrite that produced its
+   * question. It does not change the run's monotonic `revision` (it is metadata, not a state
+   * transition), so it can never invalidate a concurrent compare-and-set.
+   */
+  recordQuestionRewrite(
+    scopeRef: ScopeRef,
+    runId: Uuid,
+    rewrite: QuestionRewrite,
+    ctx: ToolContext,
+  ): Promise<void>
   saveCheckpoint(
     scopeRef: ScopeRef,
     runId: Uuid,

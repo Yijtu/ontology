@@ -4,6 +4,7 @@ import type {
   ClarificationResponseRecord,
   CreateRunContext,
   NewRunRecord,
+  QuestionRewrite,
   RevisionString,
   RunEventInput,
   RunEventRecord,
@@ -47,6 +48,7 @@ interface RunRow extends QueryResultRow {
   cancel_reason: string | null
   cancelled_at: Date | null
   pending_clarification_id: string | null
+  question_rewrite: QuestionRewrite | null
   created_at: Date
   updated_at: Date
 }
@@ -113,6 +115,7 @@ function toRunRecord(row: RunRow): RunRecord {
     ...(row.pending_clarification_id === null
       ? {}
       : { pendingClarificationId: row.pending_clarification_id }),
+    ...(row.question_rewrite === null ? {} : { questionRewrite: row.question_rewrite }),
   }
 }
 
@@ -141,7 +144,7 @@ function toCheckpointRef(runId: string, row: CheckpointRefRow): RuntimeCheckpoin
 
 const RUN_COLUMNS = `run_id, owner_subject_id, profile_id, profile_version, resolved_profile_hash,
   runtime_ref, question, context, preferences, state, revision, idempotency_key, request_digest,
-  cancel_reason, cancelled_at, pending_clarification_id, created_at, updated_at`
+  cancel_reason, cancelled_at, pending_clarification_id, question_rewrite, created_at, updated_at`
 
 /**
  * Real PostgreSQL implementation of the run store (C6/D7).
@@ -304,6 +307,41 @@ export class PostgresRunStore implements RunStore {
         'REVISION_CONFLICT',
         `run ${runId} revision changed since ${expectedRevision}`,
       )
+    })
+  }
+
+  async recordQuestionRewrite(
+    scopeRef: ScopeRef,
+    runId: Uuid,
+    rewrite: QuestionRewrite,
+    ctx: ToolContext,
+  ): Promise<void> {
+    return this.#withScope(scopeRef, ctx, async (query) => {
+      const updated = await query.query<{ run_id: string }>(
+        `UPDATE agent_platform.runs
+            SET question_rewrite = $2::jsonb
+          WHERE tenant_id = current_setting('app.tenant_id')::uuid
+            AND space_id = current_setting('app.space_id')::uuid
+            AND run_id = $1
+            AND question_rewrite IS NULL
+        RETURNING run_id`,
+        [runId, JSON.stringify(rewrite)],
+      )
+      if (updated.rows[0] !== undefined) return
+      // The trace is written once. A no-op here means the run is missing or already carried a
+      // trace; only a missing run is an error, so a retry never overwrites an earlier rewrite.
+      const exists = await query.query<{ exists: boolean }>(
+        `SELECT EXISTS (
+           SELECT 1 FROM agent_platform.runs
+            WHERE tenant_id = current_setting('app.tenant_id')::uuid
+              AND space_id = current_setting('app.space_id')::uuid
+              AND run_id = $1
+         ) AS exists`,
+        [runId],
+      )
+      if (exists.rows[0]?.exists !== true) {
+        throw new RunStoreError('RUN_NOT_FOUND', `run ${runId} does not exist`)
+      }
     })
   }
 
