@@ -40,6 +40,11 @@ export {
 } from './composition/run-service'
 export type { RunServiceComposition, RunServiceCompositionOptions } from './composition/run-service'
 export {
+  createPostgresFeedbackService,
+  createPostgresFeedbackStore,
+} from './composition/feedback-service'
+export type { FeedbackServiceComposition } from './composition/feedback-service'
+export {
   createPostgresJobService,
   createPostgresJobStore,
 } from './composition/job-service'
@@ -125,6 +130,8 @@ export { registerHistoryRoutes } from './http/history'
 export type { HistoryReadSurface, HistoryRouteDependencies } from './http/history'
 export { registerAnswerRoutes } from './http/answers'
 export type { AnswerReader, AnswerRouteDependencies } from './http/answers'
+export { registerFeedbackRoutes } from './http/feedback'
+export type { FeedbackRouteDependencies, FeedbackWriter } from './http/feedback'
 export { registerSimulationRoutes } from './http/simulations'
 export type { SimulationRouteDependencies } from './http/simulations'
 export { createPostgresProvenanceRead } from './composition/provenance-read'

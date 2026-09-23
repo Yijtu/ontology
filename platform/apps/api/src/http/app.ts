@@ -20,6 +20,8 @@ import { registerHistoryRoutes } from './history'
 import type { HistoryRouteDependencies } from './history'
 import { registerAnswerRoutes } from './answers'
 import type { AnswerRouteDependencies } from './answers'
+import { registerFeedbackRoutes } from './feedback'
+import type { FeedbackRouteDependencies } from './feedback'
 import { registerSimulationRoutes } from './simulations'
 import type { SimulationRouteDependencies } from './simulations'
 import { installErrorHandler } from './shared'
@@ -50,6 +52,8 @@ export interface ApiServerOptions {
   readonly history?: Omit<HistoryRouteDependencies, 'authenticate'>
   /** Register the verified-answer surface (`GET /runs/{id}/answer`). */
   readonly answers?: Omit<AnswerRouteDependencies, 'authenticate'>
+  /** Register the append-only feedback surface (`POST/GET /runs/{id}/feedback`). */
+  readonly feedback?: Omit<FeedbackRouteDependencies, 'authenticate'>
   /** Register the simulation/plan/execution surface (`/simulations`, `/executions`). */
   readonly simulations?: Omit<SimulationRouteDependencies, 'authenticate'>
   readonly logger?: boolean
@@ -88,6 +92,9 @@ export function createApiServer(options: ApiServerOptions): FastifyInstance {
   }
   if (options.answers !== undefined) {
     registerAnswerRoutes(app, { ...options.answers, authenticate: options.authenticate })
+  }
+  if (options.feedback !== undefined) {
+    registerFeedbackRoutes(app, { ...options.feedback, authenticate: options.authenticate })
   }
   if (options.simulations !== undefined) {
     registerSimulationRoutes(app, { ...options.simulations, authenticate: options.authenticate })
