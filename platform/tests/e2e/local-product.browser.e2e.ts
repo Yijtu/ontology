@@ -1,4 +1,4 @@
-import { randomBytes, randomUUID } from 'node:crypto'
+import { createHash, randomBytes, randomUUID } from 'node:crypto'
 import { mkdtemp, rm } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
@@ -8,8 +8,15 @@ import type { Browser } from '@playwright/test'
 import { Client } from 'pg'
 import { afterAll, beforeAll, describe, expect, it } from 'vitest'
 import { runControlMigrations } from '@ontology/adapter-control-postgres'
+import { ControlPostgresDatabase, PostgresCandidateStore, PostgresJobStore, PostgresIdentityDecisionStore, PostgresSemanticPublicationStore } from '@ontology/adapter-control-postgres'
+import { PostgresDocumentParseStore } from '@ontology/adapter-extraction-document'
+import { JobService } from '@ontology/application'
 import { startLocalProduct } from '@ontology/app-api'
-import type { PublishedAnswer, ResourceRef } from '@ontology/contracts'
+import type { EntityCandidate, PublishedAnswer, RelationCandidate, ResourceRef, ScopeRef, ToolContext, VersionRef } from '@ontology/contracts'
+import { createRequestToolContext } from '../../apps/api/src/http/context'
+import { definitionVersionDigest } from '@ontology/semantic-engine'
+import { HOME_ENERGY_DEFINITIONS } from '@ontology/industry-pack-home-energy'
+import { PublishedRelationNavigator } from '@ontology/semantic-engine'
 import type { LocalPlanDetailView } from '../../apps/web/src/api/client'
 import { startPostgresContainer } from '../integration/postgres-container'
 import type { PostgresContainer } from '../integration/postgres-container'
@@ -43,6 +50,114 @@ function databaseUrlFor(baseUrl: string, database: string, username: string, pas
   url.username = username
   url.password = password
   return url.toString()
+}
+
+function digestFor(value: string): string {
+  return `sha256:${createHash('sha256').update(value).digest('hex')}`
+}
+
+async function publishRunBoundEnergyRelations(runId: string, scenarioRef: ResourceRef, detail: LocalPlanDetailView): Promise<void> {
+  const scope: ScopeRef = { tenantId, spaceId }
+  const principal = { tenantId, subjectId: 'local-operator', roles: ['platform-admin', 'data-editor', 'semantic-reviewer', 'semantic-publisher'], scopes: ['tool:invoke', 'semantic:publish'], authEpoch: 1 }
+  const ctx: ToolContext = createRequestToolContext({ principal, spaceId, runId: globalThis.crypto.randomUUID(), traceId: `a4-e2e-${runId}`, allowedResourceKinds: ['artifact', 'document', 'dataset', 'evidence', 'plan'], maxRows: 100 })
+  const importedResponse = await fetch(`${apiUrl}/api/v1/operator/energy-explanation-documents`, {
+    method: 'POST', headers: { authorization: `Bearer ${operatorToken}`, 'content-type': 'application/json' },
+    body: JSON.stringify({ title: `A4 relation evidence for ${runId}`, mediaType: 'text/markdown', content: [
+      `Weather instance weather:${scenarioRef.digest} records the exact scenario used by run ${runId}.`,
+      `Solar forecast instance solar:${detail.resultRef.digest} is the deterministic PV output archived by this run.`,
+      `Energy plan instance plan:${detail.selectedPlanRef.id}@${detail.selectedPlanRef.version}:${detail.selectedPlanRef.digest} is the selected plan for run ${runId}.`,
+      'Battery instance device:virtual-solix-1 is the simulated battery bound to this scenario.',
+      `Confirmed relation weather_informs_solar_forecast: weather:${scenarioRef.digest} informs solar:${detail.resultRef.digest}.`,
+      `Confirmed relation solar_forecast_guides_energy_plan: solar:${detail.resultRef.digest} guides plan:${detail.selectedPlanRef.id}@${detail.selectedPlanRef.version}:${detail.selectedPlanRef.digest}.`,
+      `Confirmed relation energy_plan_controls_device: plan:${detail.selectedPlanRef.id}@${detail.selectedPlanRef.version}:${detail.selectedPlanRef.digest} controls device:virtual-solix-1.`,
+    ].join('\n\n') }),
+  })
+  expect(importedResponse.status).toBe(201)
+  const imported = (await importedResponse.json() as { data: { parseId: string; documentVersionRef: ResourceRef } }).data
+  const database = new ControlPostgresDatabase({ connectionString: appDatabaseUrl, maxPoolSize: 2 })
+  const parseStore = new PostgresDocumentParseStore({ connectionString: appDatabaseUrl, maxPoolSize: 2 })
+  try {
+    const parses = await parseStore.getParseById(scope, imported.parseId, ctx)
+    if (parses === undefined || parses.documentVersionRef === undefined) throw new Error('A4 evidence parse was not readable')
+    const chunks = await parseStore.listChunksBounded(scope, imported.parseId, 257, ctx)
+    const spanFor = (text: string): EntityCandidate['sourceSpans'][number] => {
+      const chunk = chunks.find((entry) => entry.text.includes(text))
+      if (chunk === undefined) throw new Error(`A4 source span was not parsed: ${text}`)
+      return { parseId: imported.parseId, chunkId: chunk.chunkId, locator: chunk.locator, spanKind: chunk.spanKind, precision: chunk.precision, quoteDigest: chunk.textDigest, textDigest: chunk.textDigest }
+    }
+    const jobId = globalThis.crypto.randomUUID()
+    await new JobService({ store: new PostgresJobStore(database) }).createJob({ jobId, kind: 'ingestion', sourceRef: 'local-operator-documents/uploaded-native-records', documentRef: imported.parseId, pipelineVersion: '1.0.0', idempotencyKey: `a4-${runId}` }, ctx)
+    const definitionRef: VersionRef = { id: HOME_ENERGY_DEFINITIONS.definitionId, version: HOME_ENERGY_DEFINITIONS.version, digest: definitionVersionDigest({ scopeRef: scope, ...HOME_ENERGY_DEFINITIONS }) }
+    const inputVersion = { definitionRef, parseId: imported.parseId, parserVersion: '1.0.0', pipelineVersion: '1.0.0', documentVersionRef: parses.documentVersionRef }
+    const entity = (input: { objectId: string; identityScopeId: string; nativeAttribute: string; nativeId: string; attributes: EntityCandidate['attributes']; mention: string }): EntityCandidate => {
+      const candidateId = globalThis.crypto.randomUUID()
+      return { kind: 'entity', candidateId, jobId, objectId: input.objectId, identityScopeId: input.identityScopeId, nativeId: input.nativeId, attributes: [{ attributeId: input.nativeAttribute, value: input.nativeId }, ...input.attributes], sourceSpans: [spanFor(input.mention)], deterministic: true, state: 'pending_review', issues: [], inputVersion, idempotencyKey: digestFor(`${runId}:${candidateId}`), recordedAt: new Date().toISOString() }
+    }
+    const weatherNativeId = `weather:${scenarioRef.digest}`
+    const solarNativeId = `solar:${detail.resultRef.digest}`
+    const planNativeId = `plan:${detail.selectedPlanRef.id}@${detail.selectedPlanRef.version}:${detail.selectedPlanRef.digest}`
+    const deviceNativeId = 'device:virtual-solix-1'
+    const entities = [
+      entity({ objectId: 'weather_forecast', identityScopeId: 'weather_forecast_identity', nativeAttribute: 'weather_forecast_native_id', nativeId: weatherNativeId, attributes: [{ attributeId: 'weather_scenario', value: detail.weatherScenario }, { attributeId: 'weather_target_start', value: detail.intervals[0]!.startUtc }, { attributeId: 'weather_target_end', value: detail.intervals.at(-1)!.endUtc }], mention: weatherNativeId }),
+      entity({ objectId: 'solar_forecast', identityScopeId: 'solar_forecast_identity', nativeAttribute: 'solar_forecast_native_id', nativeId: solarNativeId, attributes: [{ attributeId: 'solar_energy_kwh', value: detail.intervals.reduce((sum, item) => sum + item.pvAvailableKw * detail.slotMinutes / 60, 0), unitCode: 'kWh' }, { attributeId: 'solar_target_start', value: detail.intervals[0]!.startUtc }, { attributeId: 'solar_target_end', value: detail.intervals.at(-1)!.endUtc }], mention: solarNativeId }),
+      entity({ objectId: 'energy_plan', identityScopeId: 'energy_plan_identity', nativeAttribute: 'energy_plan_native_id', nativeId: planNativeId, attributes: [{ attributeId: 'plan_status', value: 'feasible' }, { attributeId: 'input_manifest_hash', value: detail.inputManifestHash }, { attributeId: 'algorithm', value: detail.selectedStrategy }, { attributeId: 'optimality', value: 'best_of_tested_candidates' }, { attributeId: 'plan_data_mode', value: 'simulation' }], mention: planNativeId }),
+      entity({ objectId: 'device', identityScopeId: 'device_identity', nativeAttribute: 'device_native_id', nativeId: deviceNativeId, attributes: [{ attributeId: 'device_kind', value: 'battery' }, { attributeId: 'device_name', value: 'Virtual SOLIX' }], mention: deviceNativeId }),
+    ]
+    const relation = (relationId: string, from: EntityCandidate, to: EntityCandidate, mention: string): RelationCandidate => {
+      const candidateId = globalThis.crypto.randomUUID()
+      return { kind: 'relation', candidateId, jobId, relationId, from: { objectId: from.objectId, candidateId: from.candidateId }, to: { objectId: to.objectId, candidateId: to.candidateId }, sourceSpans: [spanFor(mention)], deterministic: true, state: 'pending_review', issues: [], inputVersion, idempotencyKey: digestFor(`${runId}:${candidateId}`), recordedAt: new Date().toISOString() }
+    }
+    const relations = [
+      relation('weather_informs_solar_forecast', entities[0]!, entities[1]!, 'Confirmed relation weather_informs_solar_forecast'),
+      relation('solar_forecast_guides_energy_plan', entities[1]!, entities[2]!, 'Confirmed relation solar_forecast_guides_energy_plan'),
+      relation('energy_plan_controls_device', entities[2]!, entities[3]!, 'Confirmed relation energy_plan_controls_device'),
+    ]
+    const all = [...entities, ...relations]
+    await new PostgresCandidateStore(database).insertCandidates(scope, all, ctx)
+    const request = async (path: string, body: unknown, method: 'POST' = 'POST', extraHeaders: Record<string, string> = {}) => fetch(`${apiUrl}${path}`, { method, headers: { authorization: `Bearer ${operatorToken}`, 'content-type': 'application/json', ...extraHeaders }, body: JSON.stringify(body) })
+    let weatherEntityId = ''
+    for (const candidate of entities) {
+      const created = await request(`/api/v1/candidates/${candidate.candidateId}/decision`, { kind: 'create_pending' }, 'POST', { 'if-match': '0' })
+      expect(created.status).toBe(200)
+      const identity = (await created.json() as { data: { targetEntityId: string } }).data
+      if (candidate.objectId === 'weather_forecast') weatherEntityId = identity.targetEntityId
+      const matched = await request(`/api/v1/candidates/${candidate.candidateId}/decision`, { kind: 'match', targetEntityId: identity.targetEntityId, justification: 'Operator reviewed the exact source span against this run artifact and the typed instance key.' }, 'POST', { 'if-match': '1' })
+      expect(matched.status).toBe(200)
+    }
+    for (const candidate of all) {
+      const reviewed = await request(`/api/v1/candidates/${candidate.candidateId}/reviews`, { decision: 'approve', reason: 'Operator verified the exact source span and run-specific resource binding.' }, 'POST', { 'if-match': '0' })
+      expect(reviewed.status).toBe(200)
+    }
+    const published = await request('/api/v1/semantic-publications', { schemaRef: definitionRef, approvedCandidateRefs: all.map((candidate) => ({ candidateId: candidate.candidateId, kind: candidate.kind })) }, 'POST', { 'if-match': '0', 'idempotency-key': `a4-pub-${runId}` })
+    expect(published.status).toBe(201)
+    const previousDefinitionReader = new PublishedRelationNavigator({ publications: new PostgresSemanticPublicationStore(database), identity: new PostgresIdentityDecisionStore(database), definitionRef: { ...definitionRef, version: '0.1.0', digest: digestFor('home-energy.core@0.1.0') }, allowedRelationIds: ['weather_informs_solar_forecast', 'solar_forecast_guides_energy_plan', 'energy_plan_controls_device'] })
+    const previousVersionPath = await previousDefinitionReader.navigate({ startEntityId: weatherEntityId, relationIds: ['weather_informs_solar_forecast', 'solar_forecast_guides_energy_plan', 'energy_plan_controls_device'], validAt: detail.intervals[0]!.startUtc }, ctx)
+    expect(previousVersionPath.paths).toEqual([])
+    expect(previousVersionPath.gaps).toContain('RELATION_DEFINITION_MISMATCH')
+  } finally {
+    await parseStore.close()
+    await database.close()
+  }
+}
+
+async function assertAnotherTenantCannotReadEnergyExplanation(): Promise<void> {
+  const database = new ControlPostgresDatabase({ connectionString: appDatabaseUrl, maxPoolSize: 2 })
+  const otherTenantId = randomUUID()
+  const otherSpaceId = randomUUID()
+  try {
+    const ctx = createRequestToolContext({ principal: { tenantId: otherTenantId, subjectId: 'other-tenant-user', roles: ['business-user'], scopes: ['tool:invoke'], authEpoch: 1 }, spaceId: otherSpaceId, runId: globalThis.crypto.randomUUID(), traceId: 'a4-cross-tenant-scope', allowedResourceKinds: ['artifact', 'document', 'dataset', 'evidence', 'plan'] })
+    const scope: ScopeRef = { tenantId: otherTenantId, spaceId: otherSpaceId }
+    const [entities, candidates, publicationRevision] = await Promise.all([
+      new PostgresIdentityDecisionStore(database).listEntities(scope, { objectId: 'weather_forecast', limit: 32 }, ctx),
+      new PostgresCandidateStore(database).listCandidates(scope, { kind: 'relation', limit: 32 }, ctx),
+      new PostgresSemanticPublicationStore(database).latestPublicationRevision(scope, ctx),
+    ])
+    expect(entities).toEqual([])
+    expect(candidates).toEqual([])
+    expect(publicationRevision).toBe('0')
+  } finally {
+    await database.close()
+  }
 }
 
 beforeAll(async () => {
@@ -174,6 +289,41 @@ describe('local product browser journey', () => {
     await page.keyboard.press('Home')
     await page.waitForFunction(() => (document.querySelector('[data-testid="energy-slot-picker"]') as HTMLInputElement | null)?.value === '0')
     expect(await solar.locator('[data-testid="datum-value"]').textContent()).toBe('0.000')
+    const limitedResponse = await fetch(`${apiUrl}/api/v1/runs/${publishedRunId}/energy-explanation`)
+    expect(limitedResponse.status).toBe(200)
+    const limited = (await limitedResponse.json() as { data: { status: string; gaps: readonly string[]; definition: { declaredRelations: readonly string[] } } }).data
+    expect(limited.status).toBe('limited')
+    expect(limited.gaps).toContain('CURRENT_WEATHER_INSTANCE_NOT_CONFIRMED')
+    expect(limited.definition.declaredRelations).toHaveLength(3)
+    const runResponse = await fetch(`${apiUrl}/api/v1/runs/${publishedRunId}`)
+    const runView = (await runResponse.json() as { data: { context: Record<string, unknown> } }).data
+    const taskInput = runView.context['taskInput'] as Record<string, unknown>
+    const scenarioRef = JSON.parse(taskInput['scenarioRef'] as string) as ResourceRef
+    const planResponse = await fetch(`${apiUrl}/api/v1/runs/${publishedRunId}/plan`)
+    const planDetail = (await planResponse.json() as { data: LocalPlanDetailView }).data
+    await publishRunBoundEnergyRelations(publishedRunId, scenarioRef, planDetail)
+    const verifiedResponse = await fetch(`${apiUrl}/api/v1/runs/${publishedRunId}/energy-explanation`)
+    expect(verifiedResponse.status).toBe(200)
+    const verified = (await verifiedResponse.json() as { data: { status: string; gaps: readonly string[]; instancePath: readonly { relationId: string; statementId: string; statementVersion: string; sourceRefs: readonly ResourceRef[] }[]; runEvidence: { resultRef: ResourceRef; selectedPlanRef: ResourceRef } } }).data
+    expect(verified.status, JSON.stringify(verified)).toBe('verified')
+    expect(verified.gaps).toEqual([])
+    expect(verified.instancePath.map((hop) => hop.relationId)).toEqual(['weather_informs_solar_forecast', 'solar_forecast_guides_energy_plan', 'energy_plan_controls_device'])
+    expect(verified.instancePath.every((hop) => hop.sourceRefs.length > 0)).toBe(true)
+    expect(verified.runEvidence.resultRef).toEqual(planDetail.resultRef)
+    expect(verified.runEvidence.selectedPlanRef).toEqual(planDetail.selectedPlanRef)
+    await assertAnotherTenantCannotReadEnergyExplanation()
+    await page.reload()
+    await page.waitForSelector('[data-testid="energy-a4-status"]')
+    expect(await page.getAttribute('[data-testid="energy-a4-explanation"]', 'data-status')).toBe('verified')
+    expect(await page.textContent('[data-testid="energy-a4-instance-path"]')).toContain('weather_informs_solar_forecast')
+    const revision = await fetch(`${apiUrl}/api/v1/statements/${verified.instancePath[0]!.statementId}/revisions`, {
+      method: 'POST', headers: { authorization: `Bearer ${operatorToken}`, 'content-type': 'application/json', 'if-match': verified.instancePath[0]!.statementVersion, 'idempotency-key': `a4-retract-${publishedRunId}` },
+      body: JSON.stringify({ kind: 'retraction', reason: 'The reviewer withdrew this synthetic relation after checking the source.' }),
+    })
+    expect(revision.status).toBe(200)
+    const withdrawn = (await (await fetch(`${apiUrl}/api/v1/runs/${publishedRunId}/energy-explanation`)).json() as { data: { status: string; gaps: readonly string[] } }).data
+    expect(withdrawn.status).toBe('limited')
+    expect(withdrawn.gaps).toContain('CONFIRMED_RELATION_PATH_MISSING')
     await page.close()
   }, 300_000)
 
@@ -533,8 +683,10 @@ describe('local product browser journey', () => {
     expect(approval.status).toBe(200)
     const beforePublicationRun = await createRun('已发布的道路设施本体事实有哪些？', 'synthetic-home-1', 'operator-sql-facilities', 'ontology.published-facts', {})
     expect((await fetch(`${apiUrl}/api/v1/runs/${beforePublicationRun}/answer`)).status).toBe(404)
+    const publicationHistory = await fetch(`${apiUrl}/api/v1/semantic-publications?limit=200`, { headers: { authorization: `Bearer ${operatorToken}` } })
+    const publicationHead = Math.max(0, ...((await publicationHistory.json() as { data: { publications: readonly { revision?: string }[] } }).data.publications.map((entry) => Number(entry.revision ?? 0))))
     const publication = await fetch(`${apiUrl}/api/v1/semantic-publications`, {
-      method: 'POST', headers: { 'content-type': 'application/json', authorization: `Bearer ${operatorToken}`, 'if-match': '0', 'idempotency-key': `publish-${candidateId}` },
+      method: 'POST', headers: { 'content-type': 'application/json', authorization: `Bearer ${operatorToken}`, 'if-match': String(publicationHead), 'idempotency-key': `publish-${candidateId}` },
       body: JSON.stringify({ schemaRef: source.definitionRef, approvedCandidateRefs: [{ candidateId, kind: 'entity' }] }),
     })
     const publicationText = await publication.text()

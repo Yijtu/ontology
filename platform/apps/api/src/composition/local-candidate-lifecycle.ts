@@ -33,11 +33,12 @@ export function createLocalCandidateLifecycle(input: {
   readonly definition: SemanticDefinitionVersion
   readonly budget: BudgetLedgerPort
   readonly generation?: LocalExtractionGeneration
+  readonly additionalDefinitionNamespaces?: readonly string[]
 }): LocalCandidateLifecycle {
   const candidates = new PostgresCandidateStore(input.database)
   const identity = new PostgresIdentityDecisionStore(input.database)
   const semanticPublications = new PostgresSemanticPublicationStore(input.database)
-  const schemaSource = new PostgresIndustrySchemaSource(input.database)
+  const schemaSource = new PostgresIndustrySchemaSource(input.database, input.additionalDefinitionNamespaces)
   const jobs = new JobService({ store: new PostgresJobStore(input.database) })
   const reader = new StructuredIdentityIndexReader({
     query: input.sql.query,

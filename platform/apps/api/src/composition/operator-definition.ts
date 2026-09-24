@@ -33,10 +33,13 @@ export async function ensureOperatorFacilityDefinition(input: { readonly databas
 
 export class PostgresIndustrySchemaSource implements IndustrySchemaSource {
   readonly #store: PostgresSemanticDefinitionStore
-  constructor(database: ControlPostgresDatabase) { this.#store = new PostgresSemanticDefinitionStore(database) }
+  readonly #namespaces: readonly string[]
+  constructor(database: ControlPostgresDatabase, additionalNamespaces: readonly string[] = []) { this.#store = new PostgresSemanticDefinitionStore(database); this.#namespaces = [...new Set([OPERATOR_SQL_NAMESPACE, ...additionalNamespaces])] }
   async getSchema(scopeRef: ScopeRef, definitionRef: VersionRef, ctx: ToolContext): Promise<IndustrySchema | undefined> {
-    const version = await this.#store.findVersion(OPERATOR_SQL_NAMESPACE, definitionRef.id, definitionRef.version, scopeRef, ctx)
-    if (version === undefined || version.ref.digest !== definitionRef.digest) return undefined
-    return projectIndustrySchema(version)
+    for (const namespace of this.#namespaces) {
+      const version = await this.#store.findVersion(namespace, definitionRef.id, definitionRef.version, scopeRef, ctx)
+      if (version !== undefined && version.ref.digest === definitionRef.digest) return projectIndustrySchema(version)
+    }
+    return undefined
   }
 }

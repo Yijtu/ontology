@@ -4,7 +4,7 @@ import Ajv2020 from 'ajv/dist/2020.js'
 import addFormats from 'ajv-formats'
 import type { SchemaObject } from 'ajv'
 import { FileSystemObjectStore, LocalImmutableBlobStore, PostgresArtifactRegistry } from '@ontology/adapter-blob-local'
-import { ControlPostgresDatabase, ControlPostgresRepository, PostgresAnswerStore, PostgresBudgetLedgerStore, PostgresRunStore, PostgresWorkflowStore } from '@ontology/adapter-control-postgres'
+import { ControlPostgresDatabase, ControlPostgresRepository, PostgresAnswerStore, PostgresBudgetLedgerStore, PostgresRunStore, PostgresWorkflowStore, PostgresSemanticPublicationStore, PostgresIdentityDecisionStore, PostgresCandidateStore } from '@ontology/adapter-control-postgres'
 import { AnswerPublicationService, DraftVerificationService, RestrictedLimitedAnswerComposer, RunPhaseDriver, RunService, RunServiceError, WorkflowController, createRunCheckpointPort } from '@ontology/application'
 import type { RunProfileBinding } from '@ontology/application'
 import { SCHEMA_DOCUMENTS } from '@ontology/contracts'
@@ -39,6 +39,9 @@ import { registerLocalCandidateRoutes } from './http/local-candidates'
 import { registerSimulationRoutes } from './http/simulations'
 import { createRequestToolContext } from './http/context'
 import { CapabilityNotConfiguredError } from './http/shared'
+import { ensureHomeEnergyDefinition } from './composition/home-energy-definition'
+import { HOME_ENERGY_NAMESPACE } from '@ontology/industry-pack-home-energy'
+import { registerEnergyExplanationRoute } from './http/energy-explanation'
 
 const runtimeRef: VersionRef = { id: 'runtime-registered-tasks', version: '1.0.0', digest: sha256DigestOf('runtime-registered-tasks@1.0.0') }
 const policyRef: VersionRef = { id: 'policy-local-demo', version: '1.0.0', digest: sha256DigestOf('policy-local-demo@1.0.0') }
@@ -83,6 +86,7 @@ export async function startRegisteredLocalProduct(): Promise<{ close(): Promise<
     await client.query(`INSERT INTO agent_platform.virtual_solix_states (tenant_id,space_id,device_id,revision,state) VALUES (current_setting('app.tenant_id')::uuid,current_setting('app.space_id')::uuid,'virtual-solix-1',0,$1::jsonb) ON CONFLICT DO NOTHING`, [JSON.stringify(initial)])
   })
   const planVersionStore = createPostgresEnergyPlanVersionStore(database)
+  const homeEnergyDefinition = await ensureHomeEnergyDefinition({ database, tenantId, spaceId })
   const control = new ControlPostgresRepository(database)
   const store = new PostgresRunStore(database)
   const workflowStore = new PostgresWorkflowStore(database)
@@ -142,6 +146,7 @@ export async function startRegisteredLocalProduct(): Promise<{ close(): Promise<
     ? undefined
     : createLocalCandidateLifecycle({
       database, sql: operatorSql, documents: deployment.candidateDocuments, definition: operatorDefinition, budget,
+      additionalDefinitionNamespaces: [HOME_ENERGY_NAMESPACE],
       ...(extractionGeneration === undefined ? {} : { generation: extractionGeneration }),
     })
 
@@ -302,6 +307,7 @@ export async function startRegisteredLocalProduct(): Promise<{ close(): Promise<
   registerSimulationRoutes(app, { authenticate, service: energySimulations, execution: energyExecution })
   registerLocalDocumentImportRoute(app, { authenticate, documents: deployment.documents })
   registerLocalDocumentImportRoute(app, { authenticate, documents: deployment.candidateDocuments, path: '/api/v1/operator/candidate-documents' })
+  registerLocalDocumentImportRoute(app, { authenticate, documents: deployment.energyExplanationDocuments, path: '/api/v1/operator/energy-explanation-documents' })
   if (candidateLifecycle !== undefined && operatorSql !== undefined) registerLocalCandidateRoutes(app, { authenticate, lifecycle: candidateLifecycle, documents: deployment.candidateDocuments, sql: operatorSql, tenantId, spaceId })
   registerLocalPlanDetailRoute(app, {
     authenticate, getAnswer: (runId, ctx) => controller.getAnswer(runId, ctx), evidence, blobs,
@@ -311,6 +317,20 @@ export async function startRegisteredLocalProduct(): Promise<{ close(): Promise<
       if (typeof taskInput !== 'object' || taskInput === null || Array.isArray(taskInput) || typeof (taskInput as Record<string, unknown>)['parentPlanRef'] !== 'string') return undefined
       try { return JSON.parse((taskInput as Record<string, unknown>)['parentPlanRef'] as string) as import('@ontology/contracts').ResourceRef } catch { return undefined }
     },
+  })
+  registerEnergyExplanationRoute(app, {
+    authenticate,
+    getRun: async (runId, ctx) => {
+      const run = await runService.getRun(runId, ctx)
+      const context = run.context as Record<string, unknown>
+      return { ...run, context: { taskId: context['taskId'], taskInput: context['taskInput'] } }
+    },
+    getPlanDetail: (runId, ctx) => readLocalPlanDetail(runId, { getAnswer: (id, context) => controller.getAnswer(id, context), evidence, blobs }, ctx),
+    readScenario: async (ref, ctx) => decodeEnergyOperationInput(await blobs.readAuthorized({ scopeRef: { tenantId: ctx.principal.tenantId, spaceId: ctx.allowedResources.spaceId }, blobRef: ref }, ctx)),
+    definitionRef: homeEnergyDefinition.ref,
+    publications: new PostgresSemanticPublicationStore(database),
+    identity: new PostgresIdentityDecisionStore(database),
+    candidates: new PostgresCandidateStore(database),
   })
   registerEnergyPlanVersionRoutes(app, {
     authenticate, store: planVersionStore, getVirtualState: (ctx) => energyExecution.getVirtualState!(ctx),
