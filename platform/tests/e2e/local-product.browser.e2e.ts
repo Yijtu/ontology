@@ -325,6 +325,22 @@ describe('local product browser journey', () => {
     await page.close()
   }, 300_000)
 
+  it('stops the energy panel on an expired forecast without selecting or enabling execution', async () => {
+    const page = await browser.newPage({ viewport: { width: 1280, height: 900 } })
+    await page.goto(`${web.origin}/?profileId=home-energy-demo-long&profileVersion=1.0.0&view=energy`)
+    await page.waitForSelector('[data-testid="build-scenario"]')
+    await page.selectOption('[data-testid="forecast-integrity"]', 'expired')
+    await page.click('[data-testid="build-scenario"]')
+    await page.waitForSelector('[data-testid="scenario-summary"]')
+    expect(await page.textContent('[data-testid="scenario-forecast-integrity"]')).toContain('expired')
+    await page.click('[data-testid="request-plan"]')
+    await page.waitForSelector('[data-testid="energy-notice"]')
+    expect(await page.textContent('[data-testid="energy-notice"]')).toContain('预测/输入不完整')
+    expect(await page.locator('[data-testid="request-simulation-execution"]').isDisabled()).toBe(true)
+    expect(await page.locator('[data-testid="execution-record"]').count()).toBe(0)
+    await page.close()
+  }, 300_000)
+
   it('runs through POST /runs, computes and verifies an answer, then reads the same answer after API restart', async () => {
     const scopeResponse = await fetch(`${apiUrl}/api/v1/runs/scope?profileId=home-energy-demo-long&version=1.0.0`)
     const scopeView = await scopeResponse.json() as { data?: { tasks?: readonly { taskId: string }[] } }

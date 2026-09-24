@@ -7,6 +7,7 @@ import type {
   PlanStep,
   PlanTrajectory,
   SimulationResult,
+  SimulationMissingInput,
 } from '../simulation'
 import { compareToBaseline, terminalEnergyOf, unaccountedCostItemsOf } from './baseline'
 import { EnergyPlannerError } from './errors'
@@ -74,6 +75,7 @@ interface PlannerResultBase {
   readonly inputManifestHash: Sha256Digest
   readonly snapshotRef: ResourceRef
   readonly candidates: readonly CandidatePlan[]
+  readonly missingInputs: readonly SimulationMissingInput[]
   readonly unavailableStrategies: readonly CandidateUnavailability[]
   readonly selection: PlannerSelection
   readonly baseline?: BaselinePlan
@@ -263,6 +265,7 @@ function evaluate<S extends CandidateStrategyKind | BaselineStrategyKind>(
 function assemble(request: EnergyPlanRequest, common: {
   readonly status: PlannerStatus
   readonly candidates: readonly CandidatePlan[]
+  readonly missingInputs?: readonly SimulationMissingInput[]
   readonly unavailableStrategies: readonly CandidateUnavailability[]
   readonly selection: PlannerSelection
   readonly baseline?: BaselinePlan
@@ -284,6 +287,7 @@ function assemble(request: EnergyPlanRequest, common: {
     inputManifestHash: request.snapshot.digest,
     snapshotRef: request.snapshot.snapshotRef,
     candidates: common.candidates,
+    missingInputs: common.missingInputs ?? [],
     unavailableStrategies: common.unavailableStrategies,
     selection: common.selection,
     ...(common.baseline === undefined ? {} : { baseline: common.baseline }),
@@ -326,6 +330,7 @@ export class EnergyPlanner implements EnergyPlannerPort {
         assemble(request, {
           status: baselineSimulation.status,
           candidates: [],
+          missingInputs: baselineSimulation.missingInputs,
           unavailableStrategies: [],
           selection: {
             reason: baselineSimulation.status,

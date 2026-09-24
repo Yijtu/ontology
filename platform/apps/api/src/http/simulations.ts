@@ -16,8 +16,10 @@ import { SimulationSurfaceError } from '../composition/energy-simulation'
 import type { ExecutionSurface, ScenarioRequest, SimulationSurface } from '../composition/energy-simulation'
 import {
   BATTERY_CAPACITY_KWH,
+  FORECAST_INTEGRITY_MODES,
   MAX_BACKUP_REQUIREMENT_KWH,
   WEATHER_SCENARIOS,
+  isForecastIntegrity,
   isWeatherScenario,
 } from '../composition/home-energy-scenario'
 
@@ -155,12 +157,15 @@ export function registerSimulationRoutes(
     if (!isWeatherScenario(weather)) {
       throw new InvalidRequestFieldError(`weatherScenario must be one of ${WEATHER_SCENARIOS.join(', ')}`)
     }
+    const forecastIntegrity = body.forecastIntegrity ?? 'complete'
+    if (!isForecastIntegrity(forecastIntegrity)) throw new InvalidRequestFieldError(`forecastIntegrity must be one of ${FORECAST_INTEGRITY_MODES.join(', ')}`)
     const timeZone = typeof body.timeZone === 'string' && body.timeZone.length > 0 ? body.timeZone : undefined
     const reserveWindowStartSlot = body.reserveWindowStartSlot ?? 0
     if (typeof reserveWindowStartSlot !== 'number' || !Number.isSafeInteger(reserveWindowStartSlot) || reserveWindowStartSlot < 0 || reserveWindowStartSlot > 95) throw new InvalidRequestFieldError('reserveWindowStartSlot must be an integer slot in [0, 95]')
     const scenarioRequest: ScenarioRequest = {
       ...requestReserve,
       weatherScenario: weather,
+      forecastIntegrity,
       reserveWindowStartSlot,
       ...(timeZone === undefined ? {} : { timeZone }),
     }

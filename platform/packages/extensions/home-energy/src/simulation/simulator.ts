@@ -437,6 +437,27 @@ export class EnergySimulator implements EnergySimulatorPort {
 
     const missing: SimulationMissingInput[] = []
 
+    // A populated forecast series is not usable if its declared validity misses this
+    // scenario horizon. This check also protects direct, already-normalised inputs that
+    // did not pass through NormalizeEnergyInput.
+    const horizonStart = Date.parse(manifest.horizon.start)
+    const horizonEnd = Date.parse(manifest.horizon.end)
+    const evaluationClock = Date.parse(manifest.evaluationClock)
+    for (const series of manifest.series) {
+      if (series.samplingType !== 'forecast') continue
+      const issuedAt = series.issuedAt === undefined ? Number.NaN : Date.parse(series.issuedAt)
+      const validFrom = series.validityWindow === undefined ? Number.NaN : Date.parse(series.validityWindow.start)
+      const validTo = series.validityWindow === undefined ? Number.NaN : Date.parse(series.validityWindow.end)
+      if (!Number.isFinite(issuedAt) || !Number.isFinite(validFrom) || !Number.isFinite(validTo) ||
+        !Number.isFinite(horizonStart) || !Number.isFinite(horizonEnd) || !Number.isFinite(evaluationClock) ||
+        issuedAt > evaluationClock || validFrom > horizonStart || validTo < horizonEnd) {
+        missing.push({
+          reason: 'forecast_expired', measurementPointRef: series.measurementPointRef,
+          detail: `forecast ${series.measurementPointRef} is not valid for the complete planning horizon; refresh its issued/validity window before planning`,
+        })
+      }
+    }
+
     // 2. Bind load and PV; a missing binding, a missing series or a missing slot value is explicit.
     if (request.load.length === 0) {
       missing.push({

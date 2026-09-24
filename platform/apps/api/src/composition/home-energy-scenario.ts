@@ -48,11 +48,17 @@ import type {
  */
 
 export const WEATHER_SCENARIOS = ['anker_base', 'afternoon_overcast', 'sunny', 'overcast', 'storm'] as const
+export const FORECAST_INTEGRITY_MODES = ['complete', 'expired', 'missing'] as const
 
 export type WeatherScenario = (typeof WEATHER_SCENARIOS)[number]
+export type ForecastIntegrity = (typeof FORECAST_INTEGRITY_MODES)[number]
 
 export function isWeatherScenario(value: unknown): value is WeatherScenario {
   return typeof value === 'string' && (WEATHER_SCENARIOS as readonly string[]).includes(value)
+}
+
+export function isForecastIntegrity(value: unknown): value is ForecastIntegrity {
+  return typeof value === 'string' && (FORECAST_INTEGRITY_MODES as readonly string[]).includes(value)
 }
 
 export const MAX_BACKUP_REQUIREMENT_KWH = 50
@@ -91,6 +97,8 @@ export interface ScenarioRequest {
   readonly backupRequirementKwh?: number
   readonly reserveSocPercent?: number
   readonly weatherScenario: WeatherScenario
+  /** Explicit synthetic fault injection; never presented as a real provider reading. */
+  readonly forecastIntegrity?: ForecastIntegrity
   readonly reserveWindowStartSlot?: number
   readonly timeZone?: string
 }
@@ -142,6 +150,7 @@ export interface ScenarioDescriptor {
   readonly stateRef?: ResourceRef
   readonly parentPlanRef?: ResourceRef
   readonly weatherScenario: WeatherScenario
+  readonly forecastIntegrity: ForecastIntegrity
   readonly batterySpecSource: BatterySpecDeclaration['specSource']
   readonly series: readonly ScenarioSeriesDescriptor[]
   readonly assumptions: readonly string[]
@@ -289,11 +298,12 @@ function reserveInputs(request: ScenarioRequest): { readonly reserveSocPercent: 
   return { backupRequirementKwh, reserveSocPercent: backupRequirementKwh / BATTERY_CAPACITY_KWH * 100 }
 }
 
-function scenarioAssumptions(weather: WeatherScenario, backupRequirementKwh: number, reserveSocPercent: number, reserveWindowStartSlot: number): readonly string[] {
+function scenarioAssumptions(weather: WeatherScenario, backupRequirementKwh: number, reserveSocPercent: number, reserveWindowStartSlot: number, forecastIntegrity: ForecastIntegrity): readonly string[] {
   return [
     'synthetic fixture scenario',
     'synthetic_daily_profile_repeats_each_simulated_day',
     `weather_scenario=${weather}`,
+    `forecast_integrity=${forecastIntegrity}`,
     `backup_requirement_kwh=${backupRequirementKwh}`,
     `reserve_soc_percent=${reserveSocPercent}`,
     `reserve_window_start_slot=${String(reserveWindowStartSlot)}`,
@@ -322,6 +332,8 @@ function reservesFor(backupRequirementKwh: number, windowStartSlot: number): rea
 export function buildSyntheticScenarioInput(request: ScenarioRequest, state?: ScenarioStateBinding): EnergyOperationInput {
   const timeZone = request.timeZone ?? 'Asia/Shanghai'
   const weather = request.weatherScenario
+  const forecastIntegrity = request.forecastIntegrity ?? 'complete'
+  if (!isForecastIntegrity(forecastIntegrity)) throw new Error('forecastIntegrity must be complete, expired, or missing')
   const reserve = reserveInputs(request)
   const reserveWindowStartSlot = request.reserveWindowStartSlot ?? 0
   if (!Number.isSafeInteger(reserveWindowStartSlot) || reserveWindowStartSlot < 0 || reserveWindowStartSlot >= SLOT_COUNT) throw new Error('reserveWindowStartSlot must be a slot in [0, 95]')
@@ -340,6 +352,20 @@ export function buildSyntheticScenarioInput(request: ScenarioRequest, state?: Sc
       exportPricePerKwh: 0.4,
     })),
   }
+  const pvSeries = seriesFor({
+    measurementPointRef: PV_MEASUREMENT_POINT,
+    values: pvKw,
+    samplingType: 'forecast',
+    timeZone,
+    horizon,
+    weather,
+    startUtc,
+  })
+  const faultyPvSeries: NormalizedSeries = forecastIntegrity === 'expired'
+    ? { ...pvSeries, validityWindow: { start: horizon.start, end: timestampAt(48, startUtc) } }
+    : forecastIntegrity === 'missing'
+      ? { ...pvSeries, points: pvSeries.points.map((point) => point.slotIndex >= 48 ? { slotIndex: point.slotIndex, timestamp: point.timestamp, quality: 'missing' as const, status: 'missing' as const } : point) }
+      : pvSeries
   const series: readonly NormalizedSeries[] = [
     seriesFor({
       measurementPointRef: LOAD_MEASUREMENT_POINT,
@@ -350,15 +376,7 @@ export function buildSyntheticScenarioInput(request: ScenarioRequest, state?: Sc
       weather,
       startUtc,
     }),
-    seriesFor({
-      measurementPointRef: PV_MEASUREMENT_POINT,
-      values: pvKw,
-      samplingType: 'forecast',
-      timeZone,
-      horizon,
-      weather,
-      startUtc,
-    }),
+    faultyPvSeries,
   ]
   const manifest = {
     normalizationVersion: '1.0.0',
@@ -389,7 +407,7 @@ export function buildSyntheticScenarioInput(request: ScenarioRequest, state?: Sc
   }
   const battery = { ...BATTERY, initialEnergyKwh: state?.energyKwh ?? INITIAL_BATTERY_ENERGY_KWH }
   const assumptions = [
-    ...scenarioAssumptions(weather, reserve.backupRequirementKwh, reserve.reserveSocPercent, reserveWindowStartSlot),
+    ...scenarioAssumptions(weather, reserve.backupRequirementKwh, reserve.reserveSocPercent, reserveWindowStartSlot, forecastIntegrity),
     `initial_energy_kwh=${battery.initialEnergyKwh}`,
     `battery_capacity_kwh=${battery.energyCapacityKwh}`,
     `state_revision=${state?.revision ?? 0}`,
@@ -453,6 +471,8 @@ export function scenarioDescriptorOf(
     : (reserve?.reserveEnergyKwh ?? 0)
   const reserveParsed = Number(assumptionValue(input.assumptions, 'reserve_soc_percent'))
   const reserveSocPercent = Number.isFinite(reserveParsed) ? reserveParsed : backupRequirementKwh / BATTERY_CAPACITY_KWH * 100
+  const forecastValue = assumptionValue(input.assumptions, 'forecast_integrity')
+  const forecastIntegrity = isForecastIntegrity(forecastValue) ? forecastValue : 'complete'
   const reserveWindowParsed = Number(assumptionValue(input.assumptions, 'reserve_window_start_slot'))
   const reserveWindowStartSlot = Number.isSafeInteger(reserveWindowParsed) && reserveWindowParsed >= 0 ? reserveWindowParsed : 0
   const revisionParsed = Number(assumptionValue(input.assumptions, 'state_revision'))
@@ -499,6 +519,7 @@ export function scenarioDescriptorOf(
     stateRevision,
     ...(stateRef === undefined ? {} : { stateRef }),
     weatherScenario: weather,
+    forecastIntegrity,
     batterySpecSource: input.battery.specSource,
     series,
     assumptions: [...input.assumptions],

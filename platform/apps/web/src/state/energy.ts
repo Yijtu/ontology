@@ -36,7 +36,7 @@ export interface EnergyPlanVersion {
   readonly detail: SimulationDetailView
   readonly result: PlanResultView | undefined
   readonly publishedRunId: string
-  readonly executionPlanRef: import('@ontology/contracts').ResourceRef
+  readonly executionPlanRef?: import('@ontology/contracts').ResourceRef
   readonly executionInputRefs: readonly import('@ontology/contracts').ResourceRef[]
   readonly planDiff?: EnergyPlanDiffView
   readonly selectedStatus?: 'Selected' | 'Superseded' | 'Unselected'
