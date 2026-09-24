@@ -137,6 +137,7 @@ export interface ScenarioDescriptor {
   readonly reserveWindowStartSlot: number
   readonly initialEnergyKwh: number
   readonly initialSocPercent: number
+  readonly batteryCapacityKwh: number
   readonly stateRevision: number
   readonly stateRef?: ResourceRef
   readonly parentPlanRef?: ResourceRef
@@ -493,6 +494,7 @@ export function scenarioDescriptorOf(
     reserveWindowStartSlot,
     initialEnergyKwh,
     initialSocPercent,
+    batteryCapacityKwh: input.battery.energyCapacityKwh ?? 0,
     stateRevision,
     ...(stateRef === undefined ? {} : { stateRef }),
     weatherScenario: weather,

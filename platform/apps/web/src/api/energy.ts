@@ -64,6 +64,7 @@ export interface ScenarioDescriptor {
   readonly reserveWindowStartSlot: number
   readonly initialEnergyKwh: number
   readonly initialSocPercent: number
+  readonly batteryCapacityKwh: number
   readonly stateRevision: number
   readonly stateRef?: ResourceRef
   readonly parentPlanRef?: ResourceRef
@@ -163,6 +164,22 @@ export interface PlanSimulationView {
   readonly reserveMargins: readonly ReserveMarginView[]
   readonly violations: readonly PlanViolationView[]
   readonly costs: { readonly currency: string; readonly netCost: number; readonly totalCost: number }
+  readonly intervals: readonly PlanIntervalView[]
+}
+
+export interface PlanIntervalView {
+  readonly slotIndex: number
+  readonly startUtc: string
+  readonly endUtc: string
+  readonly loadKw: number
+  readonly pvAvailableKw: number
+  readonly pvUsedKw: number
+  readonly chargeKw: number
+  readonly dischargeKw: number
+  readonly gridImportKw: number
+  readonly gridExportKw: number
+  readonly energyStartKwh: number
+  readonly energyEndKwh: number
 }
 
 export interface PlanCandidateView {
@@ -250,6 +267,7 @@ export function asScenarioDescriptor(value: unknown): ScenarioDescriptor | undef
   const timeZone = asString(value.timeZone)
   const slotMinutes = asNumber(value.slotMinutes)
   const slotCount = asNumber(value.slotCount)
+  const batteryCapacityKwh = asNumber(value.batteryCapacityKwh)
   const weather = value.weatherScenario
   if (
     inputRef === undefined ||
@@ -258,6 +276,7 @@ export function asScenarioDescriptor(value: unknown): ScenarioDescriptor | undef
     timeZone === undefined ||
     slotMinutes === undefined ||
     slotCount === undefined ||
+    batteryCapacityKwh === undefined || batteryCapacityKwh <= 0 ||
     horizon === undefined ||
     typeof horizon.start !== 'string' ||
     typeof horizon.end !== 'string' ||
@@ -312,6 +331,7 @@ export function asScenarioDescriptor(value: unknown): ScenarioDescriptor | undef
     reserveWindowStartSlot: asNumber(value.reserveWindowStartSlot) ?? 0,
     initialEnergyKwh: asNumber(value.initialEnergyKwh) ?? 3.5,
     initialSocPercent: asNumber(value.initialSocPercent) ?? 35,
+    batteryCapacityKwh,
     stateRevision: asNumber(value.stateRevision) ?? 0,
     ...(stateRef === undefined ? {} : { stateRef }),
     ...(parentPlanRef === undefined ? {} : { parentPlanRef }),
@@ -453,6 +473,29 @@ function asReserveMargins(value: unknown): ReserveMarginView[] {
 function asSimulationView(value: unknown): PlanSimulationView | undefined {
   if (!isRecord(value)) return undefined
   const costs = isRecord(value.costs) ? value.costs : undefined
+  const intervals: PlanIntervalView[] = []
+  if (Array.isArray(value.intervals)) {
+    for (const entry of value.intervals) {
+      if (!isRecord(entry)) return undefined
+      const slotIndex = asNumber(entry.slotIndex)
+      const startUtc = asString(entry.startUtc)
+      const endUtc = asString(entry.endUtc)
+      const loadKw = asNumber(entry.loadKw)
+      const pvAvailableKw = asNumber(entry.pvAvailableKw)
+      const pvUsedKw = asNumber(entry.pvUsedKw)
+      const chargeKw = asNumber(entry.chargeKw)
+      const dischargeKw = asNumber(entry.dischargeKw)
+      const gridImportKw = asNumber(entry.gridImportKw)
+      const gridExportKw = asNumber(entry.gridExportKw)
+      const energyStartKwh = asNumber(entry.energyStartKwh)
+      const energyEndKwh = asNumber(entry.energyEndKwh)
+      if (slotIndex === undefined || !Number.isSafeInteger(slotIndex) || startUtc === undefined || endUtc === undefined ||
+        loadKw === undefined || pvAvailableKw === undefined || pvUsedKw === undefined || chargeKw === undefined ||
+        dischargeKw === undefined || gridImportKw === undefined || gridExportKw === undefined ||
+        energyStartKwh === undefined || energyEndKwh === undefined) return undefined
+      intervals.push({ slotIndex, startUtc, endUtc, loadKw, pvAvailableKw, pvUsedKw, chargeKw, dischargeKw, gridImportKw, gridExportKw, energyStartKwh, energyEndKwh })
+    }
+  }
   return {
     status: asString(value.status) ?? 'unknown',
     executionMode: asString(value.executionMode) ?? 'unknown',
@@ -464,6 +507,7 @@ function asSimulationView(value: unknown): PlanSimulationView | undefined {
       netCost: costs === undefined ? 0 : (asNumber(costs.netCost) ?? 0),
       totalCost: costs === undefined ? 0 : (asNumber(costs.totalCost) ?? 0),
     },
+    intervals,
   }
 }
 

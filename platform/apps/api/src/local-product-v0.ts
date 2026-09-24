@@ -134,11 +134,6 @@ export async function startRegisteredLocalProduct(): Promise<{ close(): Promise<
     })
   }
   const deployment = await createLocalProductDeployment({ tenantId, spaceId, database, connectionString, blobs, artifacts, evidence, validator, compute: createEnergyComputeConfig({ blobStore: blobs, validator }), energy, getVirtualState: getTrustedVirtualState, transport, ...(operatorSql === undefined ? {} : { operatorSql }) })
-  const previousVirtualState = await database.withIdentityScope({ tenantId, spaceId }, async (client) => {
-    const result = await client.query<{ state: { socPercent?: number; updatedAt?: string; simulatedAt?: string } }>(`SELECT state FROM agent_platform.virtual_solix_states WHERE device_id='virtual-solix-1'`)
-    return result.rows[0]?.state
-  }, { readOnly: true })
-  if (typeof previousVirtualState?.socPercent === 'number') await energy.updateVirtualSoc(previousVirtualState.socPercent, previousVirtualState.simulatedAt ?? DEFAULT_SCENARIO_START_UTC)
   const gateway = createToolGatewayComposition({ database, blobStore: blobs, budget, validator, handlers: deployment.handlers })
   const assignments = new RunTaskAssignments()
   const runtime = new QueryTaskRuntime(deployment.tasks, assignments)

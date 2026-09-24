@@ -3,7 +3,7 @@ import type { OperationRef } from '@ontology/contracts'
 import type { ProfileRef } from '@ontology/contracts'
 import { ApiError, type WorkbenchClient } from '../api/client'
 import { asPlanResult, WEATHER_SCENARIOS } from '../api/energy'
-import type { PlanCandidateView, WeatherScenario } from '../api/energy'
+import type { PlanCandidateView, ScenarioDescriptor, WeatherScenario } from '../api/energy'
 import {
   energyReducer,
   initialEnergyState,
@@ -83,6 +83,58 @@ function selectedPlanRef(version: EnergyPlanVersion): PlanCandidateView['planRef
   const selected =
     strategy === undefined ? undefined : result.candidates.find((candidate) => candidate.strategy === strategy)
   return selected?.planRef ?? result.candidates[0]?.planRef ?? result.baseline?.planRef
+}
+
+function EnergyOverview({ scenario, version, slotIndex, onSlotChange }: {
+  readonly scenario: ScenarioDescriptor | undefined
+  readonly version: EnergyPlanVersion | undefined
+  readonly slotIndex: number
+  readonly onSlotChange: (value: number) => void
+}) {
+  const result = version?.detail.integrityVerified === true && version.result?.status === 'feasible' ? version.result : undefined
+  const candidate = result?.candidates.find((entry) => entry.strategy === result.selection.selectedStrategy)
+  const interval = candidate?.simulation.intervals.find((entry) => entry.slotIndex === slotIndex)
+  const visibleScenario = version?.scenario ?? scenario
+  const pvSource = visibleScenario?.series.find((entry) => entry.role === 'pv')?.sourceRef
+  const loadSource = visibleScenario?.series.find((entry) => entry.role === 'load')?.sourceRef
+  return (
+    <section className="energy__overview" data-testid="energy-overview" aria-label="家庭能源总览">
+      <div className="energy__overview-head">
+        <div>
+          <h2>家庭能源总览</h2>
+          <p>单户 Virtual SOLIX · 选择时隙查看归档仿真；预测与模拟值分别标注。</p>
+        </div>
+        <span className="energy__badge" data-mode="simulation">SIMULATION</span>
+      </div>
+      {visibleScenario === undefined ? <p>先构建情景，随后生成计划查看 Solar、Battery、Grid 和 HomeLoad。</p> : (
+        <>
+          <label className="energy__overview-timeline">
+            查看时隙 {slotIndex + 1} / {visibleScenario.slotCount}
+            <input type="range" min={0} max={visibleScenario.slotCount - 1} value={slotIndex} disabled={candidate?.simulation.intervals.length === 0 || candidate === undefined} onChange={(event) => onSlotChange(Number(event.target.value))} data-testid="energy-slot-picker" />
+          </label>
+          <div className="energy__overview-grid">
+            <article className="energy__overview-card" data-testid="overview-solar">
+              <h3>Solar · 光伏</h3>
+              {interval === undefined ? <p>等待计划预测</p> : <Datum label="光伏可用功率" value={formatNumber(interval.pvAvailableKw)} unit="kW" source={`${pvSource?.namespace ?? 'home-energy'}/${pvSource?.sourceId ?? 'synthetic'} · ${visibleScenario.inputRef.id}`} time={interval.startUtc} mode="forecast" />}
+            </article>
+            <article className="energy__overview-card" data-testid="overview-battery">
+              <h3>Battery · 储能</h3>
+              {interval === undefined ? <Datum label="场景初始 SOC" value={formatNumber(visibleScenario.initialSocPercent, 1)} unit="%" source={visibleScenario.inputRef.id} time={visibleScenario.horizon.start} mode="synthetic" /> : <Datum label="时隙末 SOC" value={formatNumber(interval.energyEndKwh / visibleScenario.batteryCapacityKwh * 100, 1)} unit="%" source={candidate?.planRef.id ?? visibleScenario.inputRef.id} time={interval.endUtc} mode="simulated" />}
+            </article>
+            <article className="energy__overview-card" data-testid="overview-grid">
+              <h3>Grid · 电网</h3>
+              {interval === undefined ? <p>等待计划仿真</p> : <Datum label="购电功率" value={formatNumber(interval.gridImportKw)} unit="kW" source={candidate?.planRef.id ?? visibleScenario.inputRef.id} time={interval.startUtc} mode="simulated" />}
+            </article>
+            <article className="energy__overview-card" data-testid="overview-load">
+              <h3>HomeLoad · 家庭负荷</h3>
+              {interval === undefined ? <p>等待计划输入</p> : <Datum label="负荷功率" value={formatNumber(interval.loadKw)} unit="kW" source={`${loadSource?.namespace ?? 'home-energy'}/${loadSource?.sourceId ?? 'synthetic'} · ${visibleScenario.inputRef.id}`} time={interval.startUtc} mode="synthetic" />}
+            </article>
+          </div>
+          {interval === undefined ? <p className="energy__overview-foot">尚无该时隙的可行、完整计划；这里不填预设功率值。</p> : <p className="energy__overview-foot">所示功率和 SOC 来自同一已归档计划的时隙结果；不代表真实设备读数或实际账单。</p>}
+        </>
+      )}
+    </section>
+  )
 }
 
 function CandidateCard({
@@ -234,6 +286,7 @@ export function EnergyPlanPanel({ client, profileRef, publishedExecutionRequired
   const [savedVersions, setSavedVersions] = useState<readonly EnergyPlanVersionView[]>([])
   const [historyTruncated, setHistoryTruncated] = useState(false)
   const [latestDiff, setLatestDiff] = useState<EnergyPlanDiffView | undefined>()
+  const [selectedSlot, setSelectedSlot] = useState(48)
   const phase = state.phase
   const latest = state.versions[state.versions.length - 1]
 
@@ -393,6 +446,7 @@ export function EnergyPlanPanel({ client, profileRef, publishedExecutionRequired
       )}
 
       <main className="energy__body">
+          <EnergyOverview scenario={state.scenario} version={latest} slotIndex={selectedSlot} onSlotChange={setSelectedSlot} />
           <section className="energy__scenario" data-testid="scenario-controls">
             <h3>情景输入（合成）</h3>
             <label className="energy__field">

@@ -207,6 +207,13 @@ button:disabled {
   padding: 16px 24px 0;
   display: flex;
   gap: 8px;
+  overflow-x: auto;
+  scrollbar-width: thin;
+}
+
+.app__tabs .app__tab {
+  flex: none;
+  white-space: nowrap;
 }
 
 .app__tab[data-active="true"] {
@@ -687,6 +694,49 @@ button:disabled {
   padding: 16px;
 }
 
+.energy__overview {
+  grid-column: 1 / -1;
+  background: linear-gradient(135deg, #f8fbff 0%, #eef5ff 100%);
+}
+
+.energy__overview-head {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 12px;
+}
+
+.energy__overview-head h2 { margin: 0 0 4px; font-size: 18px; }
+.energy__overview-head p,
+.energy__overview-foot { margin: 0; color: var(--muted); font-size: 12px; }
+
+.energy__overview-timeline {
+  display: grid;
+  gap: 6px;
+  margin: 18px 0;
+  font-size: 13px;
+  font-weight: 600;
+}
+.energy__overview-timeline input { width: 100%; accent-color: #165dff; }
+
+.energy__overview-grid {
+  display: grid;
+  grid-template-columns: repeat(4, minmax(0, 1fr));
+  gap: 12px;
+  margin: 16px 0;
+}
+.energy__overview-card {
+  min-width: 0;
+  padding: 14px;
+  border: 1px solid #d6e4fb;
+  border-radius: 10px;
+  background: #fff;
+}
+.energy__overview-card h3 { margin: 0 0 10px; font-size: 14px; }
+.energy__overview-card p { color: var(--muted); font-size: 12px; }
+.energy__overview-card .datum__source,
+.energy__overview-card .datum__time { overflow-wrap: anywhere; }
+
 .energy__scenario,
 .energy__versions,
 .energy__compare,
@@ -869,6 +919,8 @@ button:disabled {
   .energy__body {
     grid-template-columns: minmax(0, 1fr);
   }
+
+  .energy__overview-grid { grid-template-columns: repeat(2, minmax(0, 1fr)); }
 
   .picker {
     min-width: 100%;

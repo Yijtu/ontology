@@ -126,6 +126,7 @@ describe('home-energy surface in a real browser', () => {
     await page.goto(`${web.origin}/?${profileQuery}&view=energy`)
     await page.waitForSelector('[data-testid="build-scenario"]')
     expect(await page.getAttribute('.energy', 'data-viewport')).toBe('narrow')
+    expect((await page.locator('[data-testid="tab-energy"]').boundingBox())?.height ?? 0).toBeLessThan(60)
     const columns = await page.$eval('.energy__body', (node) => getComputedStyle(node).gridTemplateColumns)
     expect(columns.trim().split(/\s+/).length).toBe(1)
     await buildScenario(page, '4', 'sunny')

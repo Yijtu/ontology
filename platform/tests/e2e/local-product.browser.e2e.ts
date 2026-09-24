@@ -165,6 +165,15 @@ describe('local product browser journey', () => {
       throw new Error(`Anker plan did not publish: ${await page.locator('body').innerText()}\nrunEvents=${events}`)
     }
     expect(await page.textContent('[data-testid="plan-selected-strategy"]')).not.toContain('无可行候选')
+    expect(await page.locator('[data-testid="energy-overview"] [data-testid^="overview-"]').count()).toBe(4)
+    const solar = page.locator('[data-testid="overview-solar"] .datum')
+    expect(await solar.getAttribute('data-mode')).toBe('forecast')
+    expect(Number(await solar.locator('[data-testid="datum-value"]').textContent())).toBeGreaterThan(0)
+    expect(await solar.locator('[data-testid="datum-source"]').textContent()).toContain('home-energy.synthetic')
+    await page.locator('[data-testid="energy-slot-picker"]').focus()
+    await page.keyboard.press('Home')
+    await page.waitForFunction(() => (document.querySelector('[data-testid="energy-slot-picker"]') as HTMLInputElement | null)?.value === '0')
+    expect(await solar.locator('[data-testid="datum-value"]').textContent()).toBe('0.000')
     await page.close()
   }, 300_000)
 
