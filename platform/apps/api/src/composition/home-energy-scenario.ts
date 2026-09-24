@@ -164,7 +164,7 @@ function hourOf(slotIndex: number): number {
   return (slotIndex * SLOT_MINUTES) / 60
 }
 
-/** A deterministic synthetic household load: a small base plus morning/evening peaks. */
+/** A deterministic daily fixture, repeated at each simulated midnight; not a live load forecast. */
 function loadKwAt(slotIndex: number): number {
   const hour = hourOf(slotIndex)
   const morning = hour >= 6 && hour < 9 ? 1.4 : 0
@@ -292,6 +292,7 @@ function reserveInputs(request: ScenarioRequest): { readonly reserveSocPercent: 
 function scenarioAssumptions(weather: WeatherScenario, backupRequirementKwh: number, reserveSocPercent: number, reserveWindowStartSlot: number): readonly string[] {
   return [
     'synthetic fixture scenario',
+    'synthetic_daily_profile_repeats_each_simulated_day',
     `weather_scenario=${weather}`,
     `backup_requirement_kwh=${backupRequirementKwh}`,
     `reserve_soc_percent=${reserveSocPercent}`,

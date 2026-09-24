@@ -21,6 +21,12 @@ function asPlannerPayload(value: unknown): PlannerPayload | undefined {
 }
 function refEqual(a: ResourceRef, b: ResourceRef): boolean { return a.id === b.id && a.version === b.version && a.digest === b.digest && a.kind === b.kind }
 function refsEqual(a: readonly ResourceRef[], b: readonly ResourceRef[]): boolean { return a.length === b.length && a.every((ref, index) => { const other = b[index]; return other !== undefined && refEqual(ref, other) }) }
+function replayMatches(record: ExecutionRecord, request: RequestExecutionInput): boolean {
+  const revision = record.expectedStateRevision ?? (record.finalState === undefined || record.stepRecords === undefined ? undefined : record.finalState.revision - record.stepRecords.length)
+  return refEqual(record.planRef, request.planRef) && record.runId === request.runId &&
+    record.operationRef.id === request.operationRef.id && record.operationRef.version === request.operationRef.version &&
+    refsEqual(record.inputRefs, request.inputRefs) && revision === request.expectedStateRevision
+}
 function scope(ctx: ToolContext) { return { tenantId: ctx.principal.tenantId, spaceId: ctx.allowedResources.spaceId } }
 function refuse(code: string, message: string): never { throw new SimulationSurfaceError(code, code === 'CAPABILITY_NOT_CONFIGURED' ? 409 : 422, message) }
 
@@ -72,6 +78,16 @@ export function createVirtualSolixExecutionSurface(options: {
     async requestExecution(request: RequestExecutionInput, ctx: ToolContext): Promise<ExecutionRecord> {
       if (request.mode === 'live') refuse('CAPABILITY_NOT_CONFIGURED', 'live device execution is not configured; no device request was sent')
       if (request.operationRef.id !== 'home-energy.simulate' || request.planRef.kind !== 'plan') refuse('INVALID_ARGUMENT', 'only a registered home-energy plan can be simulated')
+      // A lost response may be retried after the battery advanced or a successor plan was
+      // selected. Return the exact prior request before rechecking current-state preflight.
+      const replay = await options.database.withIdentityScope(scope(ctx), async (client) => {
+        const result = await client.query<{ record: ExecutionRecord }>(`SELECT record FROM agent_platform.energy_execution_records WHERE idempotency_key=$1`, [request.idempotencyKey])
+        return result.rows[0]?.record
+      }, { readOnly: true })
+      if (replay !== undefined) {
+        if (!replayMatches(replay, request)) refuse('INVALID_ARGUMENT', 'idempotency key was already used for a different execution request')
+        return replay
+      }
       const records = await listPostgresSimulationRecords(options.database, ctx)
       let chosen: { resultRef: ResourceRef; payload: PlannerPayload } | undefined
       for (const record of records) {
@@ -103,11 +119,11 @@ export function createVirtualSolixExecutionSurface(options: {
 
       return options.database.withIdentityScope(scope(ctx), async (client) => {
         const key = request.idempotencyKey
+        await client.query(`SELECT pg_advisory_xact_lock(hashtextextended(current_setting('app.tenant_id') || ':' || current_setting('app.space_id') || ':execution:' || $1,0))`, [key])
         const prior = await client.query<{ record: ExecutionRecord }>(`SELECT record FROM agent_platform.energy_execution_records WHERE idempotency_key=$1`, [key])
         if (prior.rows[0] !== undefined) {
           const record = prior.rows[0].record
-          const replayRevision = record.expectedStateRevision ?? (record.finalState === undefined || record.stepRecords === undefined ? undefined : record.finalState.revision - record.stepRecords.length)
-          if (!refEqual(record.planRef, request.planRef) || record.runId !== request.runId || record.operationRef.id !== request.operationRef.id || record.operationRef.version !== request.operationRef.version || !refsEqual(record.inputRefs, request.inputRefs) || replayRevision !== request.expectedStateRevision) refuse('INVALID_ARGUMENT', 'idempotency key was already used for a different execution request')
+          if (!replayMatches(record, request)) refuse('INVALID_ARGUMENT', 'idempotency key was already used for a different execution request')
           return record
         }
         const existingPlan = await client.query<{ record: ExecutionRecord }>(`SELECT record FROM agent_platform.energy_execution_records WHERE plan_ref=$1::jsonb`, [JSON.stringify(request.planRef)])

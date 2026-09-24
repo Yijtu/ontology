@@ -44,7 +44,7 @@ API 默认监听 `127.0.0.1:3000`。停止工作台进程会同时停止 API；P
 
 先保持初态不执行，把天气改成“上午阴、下午阴雨”再构建/生成：上午 PV 预测不变，下午下降，B 的计划选中后 A 才 `Superseded`。再把 ReserveSOC 改为 60%，生效窗口选“晚间 17:00 起保底”，得到 C：当前仍是 35%，计划先补电、减少晚间放电，展示成本与备电差异。顶部 Solar/Battery/Grid/HomeLoad 卡片读取归档计划的同一时隙，可拖动滑块查看 96 段；每个数值标出单位、来源、时间与预测/模拟模式，缺可行结果时不展示预置功率。两次变更都来自真实新场景工件和正式 run；新旧计划只能在时窗与初态相同的前提下计算差值。
 
-点击当前 `Selected` 计划的“请求模拟执行”后，Virtual SOLIX 逐步应用 96 个 PlanStep，每步保存 Requested→Accepted→Observed、前后电量与不可变状态引用。页面显示期末 SOC、execution ID 和逐步回执；`GET /api/v1/executions/{executionId}` 在 API 重启后仍可读取。同一幂等键重试复用原记录；改变请求内容、换键重复执行同一 plan、旧版或过期状态均被拒绝。请求 `mode=live` 会在任何设备调用前返回 `CAPABILITY_NOT_CONFIGURED`。执行后的新场景从期末 SOC 和下一模拟时窗开始，跨时窗 diff 返回 `PLAN_DIFF_NOT_COMPARABLE` 并保留两版各自结果。
+点击当前 `Selected` 计划的“请求模拟执行”后，Virtual SOLIX 逐步应用 96 个 PlanStep，每步保存 Requested→Accepted→Observed、前后电量与不可变状态引用。页面显示期末 SOC、execution ID 和逐步回执；`GET /api/v1/executions/{executionId}` 在 API 重启后仍可读取。同一幂等键重试复用原记录；改变请求内容、换键重复执行同一 plan、旧版或过期状态均被拒绝。请求 `mode=live` 会在任何设备调用前返回 `CAPABILITY_NOT_CONFIGURED`。执行后的新场景从期末 SOC 和下一模拟时窗开始，但合成负荷、天气、电价只重复声明的日内模板，并非新的真实预测；跨时窗 diff 返回 `PLAN_DIFF_NOT_COMPARABLE` 并保留两版各自结果。
 
 目前真实 PostgreSQL、不可变 blob 与 Chromium 验收覆盖 A/B/C/E：同状态重规划、旧版替代、状态 CAS、96 步读回、重启和跨日续跑。A4 的 Weather→Solar→Battery 已确认实例关系链尚未绑定到本次预测/计划，页面只显示确定性变化与限制，不能宣称本体因果已验证；D1 中过期预测和异常回执仍需完整注入验收。正式合同见[Anker 场景 SPEC](../tasks/spec-home-energy-anker-v1.0.md)。
 

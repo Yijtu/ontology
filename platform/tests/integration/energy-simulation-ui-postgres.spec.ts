@@ -29,6 +29,7 @@ import { createToolContext } from '@ontology/contracts'
 import type { ResourceRef, ToolContext } from '@ontology/contracts'
 import { ENERGY_OPERATION_REGISTRY, createEnergyComputeHandlers, decodeEnergyOperationInput } from '@ontology/extension-home-energy'
 import { recoverLegacyVirtualSolixState } from '../../apps/api/src/composition/recover-virtual-solix-state'
+import { DEFAULT_SCENARIO_START_UTC, INITIAL_BATTERY_ENERGY_KWH } from '../../apps/api/src/composition/home-energy-scenario'
 import { startPostgresContainer } from './postgres-container'
 import type { PostgresContainer } from './postgres-container'
 
@@ -243,7 +244,7 @@ describe('home-energy simulation surface over real PostgreSQL and blob-local', (
       { id: 'plan-race-a', version: '1.0.0', digest: DIGEST, kind: 'plan' as const },
       { id: 'plan-race-b', version: '1.0.0', digest: DIGEST, kind: 'plan' as const },
     ]
-    const detail = { selectedPlanRef: refs[0], stateRevision: 0 } as never
+    const detail = { selectedPlanRef: refs[0], stateRevision: 0, initialEnergyKwh: INITIAL_BATTERY_ENERGY_KWH, intervals: [{ startUtc: DEFAULT_SCENARIO_START_UTC }] } as never
     const attempt = (planRef: typeof refs[number]) => store.select({
       planKey: 'concurrency-race-fixture', planRef, runId: randomUUID(),
       scenarioRef: { id: randomUUID(), version: '1.0.0', digest: DIGEST, kind: 'artifact' },
@@ -254,6 +255,28 @@ describe('home-energy simulation surface over real PostgreSQL and blob-local', (
     const rejected = results.find((result) => result.status === 'rejected')
     expect(rejected?.status).toBe('rejected')
     if (rejected?.status === 'rejected') expect((rejected.reason as { code?: string; httpStatus?: number }).httpStatus).toBe(409)
+  })
+
+  it('rejects a plan when Virtual SOLIX energy changed without a revision change', async () => {
+    const scopeRef = { tenantId: TENANT, spaceId: SPACE }
+    const context = toolContext()
+    await controlDatabase.withIdentityScope(scopeRef, async (client) => {
+      await client.query(`INSERT INTO agent_platform.virtual_solix_states (tenant_id,space_id,device_id,revision,state)
+        VALUES (current_setting('app.tenant_id')::uuid,current_setting('app.space_id')::uuid,'virtual-solix-1',0,$1::jsonb)`, [JSON.stringify({ energyKwh: 4, socPercent: 40, revision: 0, updatedAt: new Date().toISOString(), simulatedAt: DEFAULT_SCENARIO_START_UTC })])
+    })
+    try {
+      const store = createPostgresEnergyPlanVersionStore(controlDatabase)
+      await expect(store.select({
+        planKey: 'stale-state-fixture', planRef: { id: randomUUID(), version: '1.0.0', digest: DIGEST, kind: 'plan' },
+        runId: randomUUID(), scenarioRef: { id: randomUUID(), version: '1.0.0', digest: DIGEST, kind: 'artifact' },
+        stateRevision: 0,
+        detail: { initialEnergyKwh: INITIAL_BATTERY_ENERGY_KWH, intervals: [{ startUtc: DEFAULT_SCENARIO_START_UTC }] } as never,
+      }, context)).rejects.toMatchObject({ code: 'STALE_VIRTUAL_STATE', httpStatus: 409 })
+    } finally {
+      await controlDatabase.withIdentityScope(scopeRef, async (client) => {
+        await client.query(`DELETE FROM agent_platform.virtual_solix_states WHERE device_id='virtual-solix-1' AND revision=0`)
+      })
+    }
   })
 
   it('marks bounded history incomplete and still resolves an older plan by its indexed ref', async () => {
@@ -296,7 +319,7 @@ describe('home-energy simulation surface over real PostgreSQL and blob-local', (
     await versions.select({
       planKey: 'virtual-solix-1', planRef: oldPlan, runId: randomUUID(),
       scenarioRef: originalScenario.inputRef, stateRevision: 0,
-      detail: { inputManifestHash: original.result.inputManifestHash } as never,
+      detail: { inputManifestHash: original.result.inputManifestHash, initialEnergyKwh: INITIAL_BATTERY_ENERGY_KWH, intervals: [{ startUtc: DEFAULT_SCENARIO_START_UTC }] } as never,
     }, context)
     let replaced = false
     const protectedExecution = createVirtualSolixExecutionSurface({
@@ -306,7 +329,7 @@ describe('home-energy simulation surface over real PostgreSQL and blob-local', (
         await versions.select({
           planKey: 'virtual-solix-1', planRef: newPlan, runId: randomUUID(),
           scenarioRef: replacementScenario.inputRef, parentPlanRef: oldPlan, stateRevision: 0,
-          detail: { inputManifestHash: replacement.result.inputManifestHash } as never,
+          detail: { inputManifestHash: replacement.result.inputManifestHash, initialEnergyKwh: INITIAL_BATTERY_ENERGY_KWH, intervals: [{ startUtc: DEFAULT_SCENARIO_START_UTC }] } as never,
         }, ctx)
         replaced = true
         return true
@@ -345,13 +368,16 @@ describe('home-energy simulation surface over real PostgreSQL and blob-local', (
     expect(unverified.statusCode).toBe(422)
     expect((unverified.json() as { error: { code: string } }).error.code).toBe('VERIFICATION_FAILED')
     const idempotencyKey = randomUUID()
-    const executionResponse = await app.inject({
+    const execute = () => app.inject({
       method: 'POST', url: '/api/v1/executions',
       headers: { 'content-type': 'application/json', 'idempotency-key': idempotencyKey, 'if-match': '0' },
       payload: { runId: VERIFIED_RUN, operationRef: { id: 'home-energy.simulate', version: '1' }, planRef, inputRefs: [scenario.inputRef], mode: 'simulation' },
     })
+    const [executionResponse, concurrentReplay] = await Promise.all([execute(), execute()])
     expect(executionResponse.statusCode).toBe(202)
+    expect(concurrentReplay.statusCode).toBe(202)
     const execution = (executionResponse.json() as { data: { executionId: string; phase: string; stepRecords: readonly { slotIndex: number; accepted: boolean; observed: boolean; statusHistory: readonly string[]; beforeEnergyKwh: number; afterEnergyKwh: number; stateRef: ResourceRef }[]; finalStateRef: ResourceRef; finalState: { energyKwh: number; socPercent: number; mode: string } } }).data
+    expect((concurrentReplay.json() as { data: { executionId: string } }).data.executionId).toBe(execution.executionId)
     expect(execution.phase).toBe('completed')
     expect(execution.stepRecords).toHaveLength(96)
     expect(execution.stepRecords.every((step) => step.accepted && step.observed)).toBe(true)
@@ -371,6 +397,16 @@ describe('home-energy simulation surface over real PostgreSQL and blob-local', (
     })
     expect(retried.statusCode).toBe(202)
     expect((retried.json() as { data: { executionId: string } }).data.executionId).toBe(execution.executionId)
+    const replayAfterAuthorizationChanged = createVirtualSolixExecutionSurface({
+      database: controlDatabase, blobs: blobStore, artifacts: createBlobArtifactWriter(blobStore),
+      requireSelectedPlanVersion: true, authorizePublishedPlan: async () => false,
+    })
+    const recoveredReply = await replayAfterAuthorizationChanged.requestExecution({
+      runId: VERIFIED_RUN, operationRef: { id: 'home-energy.simulate', version: '1' },
+      planRef, inputRefs: [scenario.inputRef], mode: 'simulation',
+      expectedStateRevision: 0, idempotencyKey,
+    }, toolContext())
+    expect(recoveredReply.executionId).toBe(execution.executionId)
     const changedReplay = await app.inject({
       method: 'POST', url: '/api/v1/executions',
       headers: { 'content-type': 'application/json', 'idempotency-key': idempotencyKey, 'if-match': '1' },

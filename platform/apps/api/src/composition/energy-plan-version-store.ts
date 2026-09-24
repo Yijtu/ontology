@@ -1,6 +1,7 @@
 import type { ResourceRef, ToolContext } from '@ontology/contracts'
 import type { ControlPostgresDatabase } from '@ontology/adapter-control-postgres'
 import type { LocalPlanDetail } from '../http/local-plan-detail'
+import { DEFAULT_SCENARIO_START_UTC, INITIAL_BATTERY_ENERGY_KWH } from './home-energy-scenario'
 
 export type EnergyPlanStatus = 'Selected' | 'Superseded'
 export interface EnergyPlanVersionRecord {
@@ -47,9 +48,16 @@ export function createPostgresEnergyPlanVersionStore(database: ControlPostgresDa
       if (!Number.isSafeInteger(input.stateRevision) || input.stateRevision < 0) throw new EnergyPlanVersionError('INVALID_ARGUMENT', 422, 'plan state revision is invalid')
       return database.withIdentityScope(scope(ctx), async (client) => {
         await client.query(`SELECT pg_advisory_xact_lock(hashtextextended(current_setting('app.tenant_id') || ':' || current_setting('app.space_id') || ':' || $1,0))`, [input.planKey])
-        const state = await client.query<{ revision: string }>(`SELECT revision FROM agent_platform.virtual_solix_states WHERE device_id='virtual-solix-1' FOR UPDATE`)
+        const state = await client.query<{ revision: string; state: { energyKwh: number; simulatedAt?: string; stateRef?: ResourceRef } }>(`SELECT revision,state FROM agent_platform.virtual_solix_states WHERE device_id='virtual-solix-1' FOR UPDATE`)
         const currentRevision = Number(state.rows[0]?.revision ?? 0)
         if (currentRevision !== input.stateRevision) throw new EnergyPlanVersionError('STALE_VIRTUAL_STATE', 409, 'Virtual SOLIX state advanced while this plan was being verified; the plan stays unselected')
+        const currentEnergy = state.rows[0]?.state.energyKwh ?? INITIAL_BATTERY_ENERGY_KWH
+        const currentTime = state.rows[0]?.state.simulatedAt ?? DEFAULT_SCENARIO_START_UTC
+        const currentStateRef = state.rows[0]?.state.stateRef
+        if (!Number.isFinite(input.detail.initialEnergyKwh) || Math.abs(input.detail.initialEnergyKwh - currentEnergy) > 1e-6 ||
+          input.detail.intervals?.[0]?.startUtc !== currentTime || !sameRef(input.detail.stateRef, currentStateRef)) {
+          throw new EnergyPlanVersionError('STALE_VIRTUAL_STATE', 409, 'Virtual SOLIX energy, simulated time, or state artifact changed before the plan could be selected')
+        }
         const selected = await client.query<Record<string, unknown>>(`SELECT plan_key,version_id,plan_ref,run_id,scenario_ref,parent_plan_ref,state_revision,status,detail,created_at FROM agent_platform.energy_plan_versions WHERE plan_key=$1 AND status='Selected' FOR UPDATE`, [input.planKey])
         const currentRow = selected.rows[0]
         if (currentRow !== undefined) {

@@ -23,6 +23,7 @@ describe('Anker time-segmented synthetic scenarios', () => {
     expect(input.snapshot.manifest.horizon.start).toBe('2026-01-01T16:00:00.000Z')
     expect(input.battery.initialEnergyKwh).toBe(5.25)
     expect(input.assumptions).toContain('state_revision=96')
+    expect(input.assumptions).toContain('synthetic_daily_profile_repeats_each_simulated_day')
     expect(input.assumptions).toContain('reserve_soc_percent=60')
     expect(input.reserves[0]?.windowStartSlot).toBe(68)
   })
