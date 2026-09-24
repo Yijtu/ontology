@@ -196,7 +196,7 @@ API 默认只监听 `127.0.0.1:3000`，本地身份是开发用单租户配置�
 
 ## 项目资料
 
-- [最新工作交接](HANDOFF.md)
+- [最新工作交接（2026-09-24）](docs/handoff-2026-09-24.md) · [历史交接](HANDOFF.md)
 - [PRD v0.2](tasks/prd-industry-semantic-agent-v0.2.md) · [SPEC v0.3](tasks/spec-generalized-poc-core-v0.3.md) · [Anker 能源场景 SPEC](tasks/spec-home-energy-anker-v1.0.md)
 - [任务清单](.autoresearch/issues/INDEX.md) · [需求覆盖](.autoresearch/issues/coverage.md) · [模型开发与代码审查约定](AGENTS.md)
 - [当前实现逆向规格](docs/SPEC-as-built-2026-09-23.md) · [代码审查清单](docs/reviews/2026-09-23-code-review.md) · [多行业解耦方案](docs/scenario-decoupling-2026-09-23.md) · [Palantir 调研](docs/research/palantir-industry-assets-2026-09-23.md)
