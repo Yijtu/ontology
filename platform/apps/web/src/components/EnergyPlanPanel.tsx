@@ -3,7 +3,7 @@ import type { OperationRef } from '@ontology/contracts'
 import type { ProfileRef } from '@ontology/contracts'
 import { ApiError, type WorkbenchClient } from '../api/client'
 import { asPlanResult, WEATHER_SCENARIOS } from '../api/energy'
-import type { PlanCandidateView, ScenarioDescriptor, WeatherScenario } from '../api/energy'
+import type { ForecastIntegrity, PlanCandidateView, ScenarioDescriptor, WeatherScenario } from '../api/energy'
 import {
   energyReducer,
   initialEnergyState,
@@ -149,6 +149,24 @@ function CandidateCard({
   const source = version.result?.algorithmVersion.id ?? 'home-energy.planner'
   const time = version.record.createdAt
   const mode = candidate.simulation.executionMode === 'simulation' ? 'simulated' : 'synthetic'
+  if (candidate.simulation.status !== 'feasible') {
+    return (
+      <li className="energy__candidate" data-testid="plan-candidate" data-strategy={candidate.strategy}>
+        <span className="energy__candidate-name" data-testid="candidate-strategy">{candidate.strategy}</span>
+        <p role="status" data-testid="candidate-gap">候选状态：{candidate.simulation.status}；不展示未成立的费用或收益。</p>
+        {candidate.simulation.missingInputs.length === 0 ? null : (
+          <ul data-testid="candidate-missing-inputs">
+            {candidate.simulation.missingInputs.map((entry, index) => <li key={`${entry.reason}-${String(index)}`}>{entry.reason}：{entry.detail}</li>)}
+          </ul>
+        )}
+        {candidate.simulation.violations.length === 0 ? null : (
+          <ul data-testid="candidate-violations">
+            {candidate.simulation.violations.map((entry, index) => <li key={`${entry.constraint}-${String(entry.slotIndex)}-${String(index)}`}>{entry.constraint} @ 时隙 {entry.slotIndex}：{entry.detail}</li>)}
+          </ul>
+        )}
+      </li>
+    )
+  }
   return (
     <li className="energy__candidate" data-testid="plan-candidate" data-strategy={candidate.strategy}>
       <span className="energy__candidate-name" data-testid="candidate-strategy">
@@ -287,6 +305,7 @@ export function EnergyPlanPanel({ client, profileRef, publishedExecutionRequired
   const [historyTruncated, setHistoryTruncated] = useState(false)
   const [latestDiff, setLatestDiff] = useState<EnergyPlanDiffView | undefined>()
   const [selectedSlot, setSelectedSlot] = useState(48)
+  const [forecastIntegrity, setForecastIntegrity] = useState<ForecastIntegrity>('complete')
   const phase = state.phase
   const latest = state.versions[state.versions.length - 1]
 
@@ -309,6 +328,7 @@ export function EnergyPlanPanel({ client, profileRef, publishedExecutionRequired
         reserveSocPercent: state.backupRequirementKwh / 10 * 100,
         reserveWindowStartSlot: state.reserveWindowStartSlot,
         weatherScenario: state.weatherScenario,
+        forecastIntegrity,
       })
       dispatch({ type: 'scenarioBuilt', scenario })
     } catch (error) {
@@ -332,7 +352,6 @@ export function EnergyPlanPanel({ client, profileRef, publishedExecutionRequired
       const previewRef = planResult === undefined ? undefined : (planResult.selection.selectedStrategy === undefined
         ? planResult.candidates[0]?.planRef ?? planResult.baseline?.planRef
         : planResult.candidates.find((candidate) => candidate.strategy === planResult.selection.selectedStrategy)?.planRef ?? planResult.baseline?.planRef)
-      if (previewRef === undefined) throw new Error('仿真结果没有选中可执行候选计划。')
       const version: EnergyPlanVersion = {
         versionId: detail.scenario.inputDigest,
         scenario: detail.scenario,
@@ -340,7 +359,7 @@ export function EnergyPlanPanel({ client, profileRef, publishedExecutionRequired
         detail,
         result: planResult,
         publishedRunId: '',
-        executionPlanRef: previewRef,
+        ...(previewRef === undefined ? {} : { executionPlanRef: previewRef }),
         executionInputRefs: record.inputRefs,
       }
       let officialRunId = ''
@@ -349,7 +368,10 @@ export function EnergyPlanPanel({ client, profileRef, publishedExecutionRequired
       let comparisonLimitation: string | undefined
       if (publishedExecutionRequired && planResult.status !== 'feasible') {
         dispatch({ type: 'planLoaded', version: { ...version, selectedStatus: 'Unselected' } })
-        dispatch({ type: 'notice', message: '新计划未通过硬约束校验，未替换当前选中版本；请查看具体时段缺口。' })
+        const missing = planResult.missingInputs
+        dispatch({ type: 'notice', message: missing.length > 0
+          ? `预测/输入不完整，未替换当前选中版本：${missing[0]?.detail ?? '请刷新来源并重试。'}`
+          : '新计划未通过硬约束校验，未替换当前选中版本；请查看具体时段缺口。' })
         return
       }
       if (publishedExecutionRequired) {
@@ -393,7 +415,7 @@ export function EnergyPlanPanel({ client, profileRef, publishedExecutionRequired
       officialRunId = officialRun.runId
       executionPlanRef = authorizedPlan.selectedPlanRef
       }
-      dispatch({ type: 'planLoaded', version: { ...version, publishedRunId: officialRunId, executionPlanRef, ...(planDiff === undefined ? {} : { planDiff }), selectedStatus: publishedExecutionRequired ? 'Selected' : 'Unselected' } })
+      dispatch({ type: 'planLoaded', version: { ...version, publishedRunId: officialRunId, ...(executionPlanRef === undefined ? {} : { executionPlanRef }), ...(planDiff === undefined ? {} : { planDiff }), selectedStatus: publishedExecutionRequired ? 'Selected' : 'Unselected' } })
       if (comparisonLimitation !== undefined) dispatch({ type: 'notice', message: comparisonLimitation })
     } catch (error) {
       dispatch(failureEvent(error))
@@ -403,7 +425,7 @@ export function EnergyPlanPanel({ client, profileRef, publishedExecutionRequired
   const requestExecution = async (mode: 'simulation' | 'live') => {
     if (latest === undefined) return
       const planRef = selectedPlanRef(latest)
-    if (planRef === undefined || (publishedExecutionRequired && latest.publishedRunId.length === 0)) {
+    if (planRef === undefined || latest.executionPlanRef === undefined || (publishedExecutionRequired && latest.publishedRunId.length === 0)) {
       dispatch({ type: 'notice', message: '当前没有与正式核验答案绑定的可执行计划。' })
       return
     }
@@ -482,6 +504,14 @@ export function EnergyPlanPanel({ client, profileRef, publishedExecutionRequired
                 <option value={68}>晚间 17:00 起保底</option>
               </select>
             </label>
+            <label className="energy__field">
+              预测数据（故障注入）
+              <select data-testid="forecast-integrity" value={forecastIntegrity} onChange={(event) => setForecastIntegrity(event.target.value as ForecastIntegrity)}>
+                <option value="complete">完整有效</option>
+                <option value="expired">有效期不足</option>
+                <option value="missing">下午预测缺失</option>
+              </select>
+            </label>
             <div className="energy__buttons">
               <button type="button" data-testid="build-scenario" disabled={state.busy} onClick={() => void buildScenario()}>
                 构建情景
@@ -500,6 +530,7 @@ export function EnergyPlanPanel({ client, profileRef, publishedExecutionRequired
                 <p data-testid="scenario-input-digest">输入摘要：{state.scenario.inputDigest}</p>
                 <p data-testid="scenario-start-state">Virtual SOLIX 起始状态：{formatNumber(state.scenario.initialEnergyKwh)} kWh · {formatNumber(state.scenario.initialSocPercent, 1)}% SOC · revision {state.scenario.stateRevision}</p>
                 <p data-testid="scenario-reserve-window">ReserveSOC {formatNumber(state.scenario.reserveSocPercent, 1)}% 生效时隙：{state.scenario.reserveWindowStartSlot} → 96</p>
+                <p data-testid="scenario-forecast-integrity">预测数据：{state.scenario.forecastIntegrity}（合成故障注入，不是实时来源）</p>
                 <p data-testid="scenario-parent-plan">父计划：{state.scenario.parentPlanRef?.id ?? '首版场景'}</p>
                 <p data-testid="scenario-mode" data-mode={state.scenario.dataMode}>
                   数据模式：{state.scenario.dataMode} · 时区 {state.scenario.timeZone} · 时隙{' '}

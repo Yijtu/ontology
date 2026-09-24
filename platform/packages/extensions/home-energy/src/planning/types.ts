@@ -14,6 +14,7 @@ import type {
   ReserveConstraint,
   SeriesBinding,
   SimulationResult,
+  SimulationMissingInput,
   SimulationTolerance,
   TariffBinding,
   TopologyDeclaration,
@@ -216,6 +217,7 @@ export interface PlannerResult {
   readonly inputManifestHash: Sha256Digest
   readonly snapshotRef: ResourceRef
   readonly candidates: readonly CandidatePlan[]
+  readonly missingInputs: readonly SimulationMissingInput[]
   readonly unavailableStrategies: readonly CandidateUnavailability[]
   readonly selection: PlannerSelection
   readonly baseline?: BaselinePlan

@@ -219,6 +219,7 @@ export type SimulationMissingReason =
   | 'missing_tariff_price'
   | 'missing_plan_step'
   | 'missing_slot_value'
+  | 'forecast_expired'
 
 export interface SimulationMissingInput {
   readonly reason: SimulationMissingReason

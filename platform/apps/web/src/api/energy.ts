@@ -11,8 +11,10 @@ import type { OperationRef, ResourceRef, Sha256Digest } from '@ontology/contract
  */
 
 export const WEATHER_SCENARIOS = ['anker_base', 'afternoon_overcast', 'sunny', 'overcast', 'storm'] as const
+export const FORECAST_INTEGRITY_MODES = ['complete', 'expired', 'missing'] as const
 
 export type WeatherScenario = (typeof WEATHER_SCENARIOS)[number]
+export type ForecastIntegrity = (typeof FORECAST_INTEGRITY_MODES)[number]
 
 export function isWeatherScenario(value: unknown): value is WeatherScenario {
   return typeof value === 'string' && (WEATHER_SCENARIOS as readonly string[]).includes(value)
@@ -69,6 +71,7 @@ export interface ScenarioDescriptor {
   readonly stateRef?: ResourceRef
   readonly parentPlanRef?: ResourceRef
   readonly weatherScenario: WeatherScenario
+  readonly forecastIntegrity: ForecastIntegrity
   readonly batterySpecSource: string
   readonly series: readonly ScenarioSeriesDescriptor[]
   readonly assumptions: readonly string[]
@@ -78,6 +81,7 @@ export interface CreateScenarioRequest {
   readonly backupRequirementKwh?: number
   readonly reserveSocPercent?: number
   readonly weatherScenario: WeatherScenario
+  readonly forecastIntegrity?: ForecastIntegrity
   readonly reserveWindowStartSlot?: number
 }
 
@@ -163,8 +167,16 @@ export interface PlanSimulationView {
   readonly liveSupported: boolean
   readonly reserveMargins: readonly ReserveMarginView[]
   readonly violations: readonly PlanViolationView[]
+  readonly missingInputs: readonly PlanMissingInputView[]
   readonly costs: { readonly currency: string; readonly netCost: number; readonly totalCost: number }
   readonly intervals: readonly PlanIntervalView[]
+}
+
+export interface PlanMissingInputView {
+  readonly reason: string
+  readonly detail: string
+  readonly slotIndex?: number
+  readonly measurementPointRef?: string
 }
 
 export interface PlanIntervalView {
@@ -233,6 +245,7 @@ export interface PlanResultView {
   readonly algorithmVersion: { readonly id: string; readonly version: string; readonly digest: string }
   readonly selection: PlanSelectionView
   readonly candidates: readonly PlanCandidateView[]
+  readonly missingInputs: readonly PlanMissingInputView[]
   readonly baseline?: PlanCandidateView
   readonly comparisons: readonly PlanComparisonView[]
   readonly unavailableStrategies: readonly { readonly strategy: string; readonly reason: string }[]
@@ -269,6 +282,8 @@ export function asScenarioDescriptor(value: unknown): ScenarioDescriptor | undef
   const slotCount = asNumber(value.slotCount)
   const batteryCapacityKwh = asNumber(value.batteryCapacityKwh)
   const weather = value.weatherScenario
+  const forecastValue = value.forecastIntegrity
+  const forecastIntegrity: ForecastIntegrity = typeof forecastValue === 'string' && (FORECAST_INTEGRITY_MODES as readonly string[]).includes(forecastValue) ? forecastValue as ForecastIntegrity : 'complete'
   if (
     inputRef === undefined ||
     typeof value.inputDigest !== 'string' ||
@@ -336,6 +351,7 @@ export function asScenarioDescriptor(value: unknown): ScenarioDescriptor | undef
     ...(stateRef === undefined ? {} : { stateRef }),
     ...(parentPlanRef === undefined ? {} : { parentPlanRef }),
     weatherScenario: weather,
+    forecastIntegrity,
     batterySpecSource: asString(value.batterySpecSource) ?? 'unknown',
     series,
     assumptions: asStringArray(value.assumptions),
@@ -470,6 +486,21 @@ function asReserveMargins(value: unknown): ReserveMarginView[] {
   return out
 }
 
+function asMissingInputs(value: unknown): PlanMissingInputView[] {
+  const out: PlanMissingInputView[] = []
+  if (Array.isArray(value)) {
+    for (const item of value) {
+      if (!isRecord(item) || typeof item.reason !== 'string' || typeof item.detail !== 'string') continue
+      const slotIndex = asNumber(item.slotIndex)
+      const measurementPointRef = asString(item.measurementPointRef)
+      out.push({ reason: item.reason, detail: item.detail,
+        ...(slotIndex === undefined ? {} : { slotIndex }),
+        ...(measurementPointRef === undefined ? {} : { measurementPointRef }) })
+    }
+  }
+  return out
+}
+
 function asSimulationView(value: unknown): PlanSimulationView | undefined {
   if (!isRecord(value)) return undefined
   const costs = isRecord(value.costs) ? value.costs : undefined
@@ -502,6 +533,7 @@ function asSimulationView(value: unknown): PlanSimulationView | undefined {
     liveSupported: asBoolean(value.liveSupported) ?? false,
     reserveMargins: asReserveMargins(value.reserveMargins),
     violations: asViolations(value.violations),
+    missingInputs: asMissingInputs(value.missingInputs),
     costs: {
       currency: costs === undefined ? 'unknown' : (asString(costs.currency) ?? 'unknown'),
       netCost: costs === undefined ? 0 : (asNumber(costs.netCost) ?? 0),
@@ -636,6 +668,7 @@ export function asPlanResult(value: unknown): PlanResultView | undefined {
       ...(objectiveValue === undefined ? {} : { objectiveValue }),
     },
     candidates,
+    missingInputs: asMissingInputs(value.missingInputs),
     comparisons,
     unavailableStrategies,
     assumptions: asStringArray(value.assumptions),

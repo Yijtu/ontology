@@ -127,6 +127,7 @@ interface DetailBody {
     readonly inputManifestHash: string
     readonly resultDigest: string
     readonly selection: { readonly optimality: string; readonly selectedPlanRef?: ResourceRefBody }
+    readonly missingInputs: readonly { readonly reason: string; readonly slotIndex?: number; readonly measurementPointRef?: string }[]
     readonly candidates: readonly {
       readonly strategy: string
       readonly plan: { readonly planRef: ResourceRefBody }
@@ -484,6 +485,45 @@ describe('home-energy simulation surface over real PostgreSQL and blob-local', (
       candidate.simulation.violations.map((violation) => violation.constraint),
     )
     expect(constraints).toContain('backup_reserve')
+  })
+
+  it('stops on an expired or missing afternoon forecast without selecting or executing a plan', async () => {
+    for (const integrity of ['expired', 'missing'] as const) {
+      const created = await app.inject({
+        method: 'POST', url: '/api/v1/simulations/inputs',
+        headers: { 'content-type': 'application/json', 'idempotency-key': randomUUID() },
+        payload: { reserveSocPercent: 20, weatherScenario: 'anker_base', forecastIntegrity: integrity },
+      })
+      expect(created.statusCode).toBe(201)
+      const scenario = (created.json() as { data: ScenarioBody }).data
+      const detail = await planFor(scenario)
+      expect(detail.result.status).toBe('insufficient_data')
+      expect(detail.result.selection.selectedPlanRef).toBeUndefined()
+      expect(detail.result.candidates).toHaveLength(0)
+      if (integrity === 'expired') {
+        expect(detail.result.missingInputs.some((entry) => entry.reason === 'forecast_expired')).toBe(true)
+      } else {
+        expect(detail.result.missingInputs.some((entry) => entry.reason === 'missing_slot_value' && entry.slotIndex === 48)).toBe(true)
+      }
+      const refused = await app.inject({
+        method: 'POST', url: '/api/v1/executions',
+        headers: { 'content-type': 'application/json', 'idempotency-key': randomUUID(), 'if-match': '0' },
+        payload: {
+          runId: VERIFIED_RUN, operationRef: { id: 'home-energy.simulate', version: '1' },
+          planRef: { id: 'no-selected-plan', version: '1.0.0', digest: DIGEST, kind: 'plan' },
+          inputRefs: [scenario.inputRef], mode: 'simulation',
+        },
+      })
+      expect(refused.statusCode).toBe(422)
+      expect((refused.json() as { error: { code: string } }).error.code).toBe('INVALID_ARGUMENT')
+    }
+    const invalid = await app.inject({
+      method: 'POST', url: '/api/v1/simulations/inputs',
+      headers: { 'content-type': 'application/json', 'idempotency-key': randomUUID() },
+      payload: { reserveSocPercent: 20, weatherScenario: 'anker_base', forecastIntegrity: 'bogus' },
+    })
+    expect(invalid.statusCode).toBe(400)
+    expect((invalid.json() as { error: { code: string } }).error.code).toBe('INVALID_ARGUMENT')
   })
 
   it('refuses mode=live with CAPABILITY_NOT_CONFIGURED and sends no device request', async () => {
