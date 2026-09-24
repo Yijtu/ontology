@@ -26,7 +26,7 @@ import type {
 
 export const HOME_ENERGY_NAMESPACE = 'home-energy'
 export const HOME_ENERGY_DEFINITION_ID = 'home-energy.core'
-export const HOME_ENERGY_DEFINITION_VERSION = '0.1.0'
+export const HOME_ENERGY_DEFINITION_VERSION = '0.2.0'
 
 const IEC_PROVENANCE: StandardProvenance = {
   standardRef: {
@@ -178,6 +178,8 @@ export const HOME_ENERGY_DEFINITIONS: HomeEnergyDefinitionContent = {
     object('tariff', 'Tariff Schedule'),
     object('observation_series', 'Observation Series'),
     object('forecast_series', 'Forecast Series'),
+    object('weather_forecast', 'Weather Forecast Input'),
+    object('solar_forecast', 'Solar Generation Forecast'),
     object('energy_constraint', 'Energy Constraint'),
     object('energy_plan', 'Energy Plan'),
   ],
@@ -270,6 +272,19 @@ export const HOME_ENERGY_DEFINITIONS: HomeEnergyDefinitionContent = {
       enumValues: ['forecast', 'synthetic'],
     }),
 
+    nativeId('weather_forecast'),
+    attribute('weather_forecast', 'weather_scenario', 'enum', {
+      cardinality: { min: 1, max: 1 },
+      enumValues: ['anker_base', 'afternoon_overcast', 'sunny', 'overcast', 'storm'],
+    }),
+    attribute('weather_forecast', 'weather_target_start', 'timestamp', { cardinality: { min: 1, max: 1 } }),
+    attribute('weather_forecast', 'weather_target_end', 'timestamp', { cardinality: { min: 1, max: 1 } }),
+
+    nativeId('solar_forecast'),
+    attribute('solar_forecast', 'solar_energy_kwh', 'quantity', { unit: ENERGY_UNIT, cardinality: { min: 1, max: 1 } }),
+    attribute('solar_forecast', 'solar_target_start', 'timestamp', { cardinality: { min: 1, max: 1 } }),
+    attribute('solar_forecast', 'solar_target_end', 'timestamp', { cardinality: { min: 1, max: 1 } }),
+
     nativeId('energy_constraint'),
     attribute('energy_constraint', 'reserve_energy_kwh', 'quantity', { unit: ENERGY_UNIT }),
     attribute('energy_constraint', 'reserve_window_start', 'timestamp'),
@@ -300,6 +315,9 @@ export const HOME_ENERGY_DEFINITIONS: HomeEnergyDefinitionContent = {
     relation('load_group_parent', 'load_group', 'load_group', 'unbounded'),
     relation('load_group_covers_sensor', 'load_group', 'sensor', 'unbounded'),
     relation('plan_honours_constraint', 'energy_plan', 'energy_constraint', 'unbounded'),
+    relation('weather_informs_solar_forecast', 'weather_forecast', 'solar_forecast', 'unbounded'),
+    relation('solar_forecast_guides_energy_plan', 'solar_forecast', 'energy_plan', 'unbounded'),
+    relation('energy_plan_controls_device', 'energy_plan', 'device', 'unbounded'),
   ],
   identityScopes: [
     scope('site', ['source', 'site']),
@@ -309,6 +327,8 @@ export const HOME_ENERGY_DEFINITIONS: HomeEnergyDefinitionContent = {
     scope('tariff', ['source', 'region']),
     scope('observation_series', ['source', 'site', 'sensor_metric']),
     scope('forecast_series', ['source', 'site', 'sensor_metric']),
+    scope('weather_forecast', ['source', 'scenario']),
+    scope('solar_forecast', ['source', 'forecast']),
     scope('energy_constraint', ['source', 'site']),
     scope('energy_plan', ['source', 'site']),
   ],

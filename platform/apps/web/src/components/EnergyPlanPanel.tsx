@@ -11,7 +11,7 @@ import {
   type EnergyPlanVersion,
 } from '../state/energy'
 import type { WorkbenchError } from '../state/workbench'
-import type { EnergyPlanDiffView, EnergyPlanVersionView } from '../api/client'
+import type { EnergyPlanDiffView, EnergyPlanVersionView, EnergyRunExplanationView } from '../api/client'
 import { Datum } from './Datum'
 import { StatePanel } from './StatePanel'
 import { useViewport } from './useViewport'
@@ -304,6 +304,7 @@ export function EnergyPlanPanel({ client, profileRef, publishedExecutionRequired
   const [savedVersions, setSavedVersions] = useState<readonly EnergyPlanVersionView[]>([])
   const [historyTruncated, setHistoryTruncated] = useState(false)
   const [latestDiff, setLatestDiff] = useState<EnergyPlanDiffView | undefined>()
+  const [a4Explanation, setA4Explanation] = useState<{ readonly data?: EnergyRunExplanationView; readonly error?: string } | undefined>()
   const [selectedSlot, setSelectedSlot] = useState(48)
   const [forecastIntegrity, setForecastIntegrity] = useState<ForecastIntegrity>('complete')
   const phase = state.phase
@@ -316,6 +317,7 @@ export function EnergyPlanPanel({ client, profileRef, publishedExecutionRequired
       if (cancelled) return
       setSavedVersions(result.versions)
       setHistoryTruncated(result.historyTruncated)
+      if (result.selected !== undefined) void client.getEnergyRunExplanation(result.selected.runId).then((data) => { if (!cancelled) setA4Explanation({ data }) }).catch((error: unknown) => { if (!cancelled) setA4Explanation({ error: error instanceof ApiError ? error.code : 'ENERGY_EXPLANATION_UNAVAILABLE' }) })
       if (result.selected?.parentPlanRef !== undefined) void client.getEnergyPlanDiff(result.selected.parentPlanRef, result.selected.planRef).then((diff) => { if (!cancelled) setLatestDiff(diff) }).catch(() => undefined)
     }).catch(() => undefined)
     return () => { cancelled = true }
@@ -400,6 +402,8 @@ export function EnergyPlanPanel({ client, profileRef, publishedExecutionRequired
       const history = await client.getEnergyPlanVersions()
       setSavedVersions(history.versions)
       setHistoryTruncated(history.historyTruncated)
+      try { setA4Explanation({ data: await client.getEnergyRunExplanation(officialRun.runId) }) }
+      catch (error) { setA4Explanation({ error: error instanceof ApiError ? error.code : 'ENERGY_EXPLANATION_UNAVAILABLE' }) }
       if (authorizedPlan.parentPlanRef !== undefined) {
         try {
           planDiff = await client.getEnergyPlanDiff(authorizedPlan.parentPlanRef, authorizedPlan.selectedPlanRef)
@@ -565,6 +569,31 @@ export function EnergyPlanPanel({ client, profileRef, publishedExecutionRequired
                   </li>
                 ))}
               </ol>
+            </section>
+          )}
+
+          {a4Explanation === undefined ? null : (
+            <section className="energy__versions" data-testid="energy-a4-explanation" data-status={a4Explanation.data?.status ?? 'unavailable'}>
+              <h3>本体解释与本次运行证据</h3>
+              {a4Explanation.error === undefined ? null : <p role="status" data-testid="energy-a4-error">解释读取失败：{a4Explanation.error}</p>}
+              {a4Explanation.data === undefined ? null : (
+                <>
+                  <p data-testid="energy-a4-status">{a4Explanation.data.status === 'verified' ? '已确认实例关系与本次运行工件完整绑定' : '关系链未完整确认；以下计算数值不构成本体因果解释'}</p>
+                  <p>行业定义 {a4Explanation.data.definition.ref.id}@{a4Explanation.data.definition.ref.version} · digest {a4Explanation.data.definition.ref.digest}</p>
+                  <p>定义关系：{a4Explanation.data.definition.declaredRelations.join(' → ')}</p>
+                  {a4Explanation.data.instancePath.length === 0 ? <p data-testid="energy-a4-no-instance-path">没有可用于本次场景的已确认实例关系。</p> : (
+                    <ol data-testid="energy-a4-instance-path">
+                      {a4Explanation.data.instancePath.map((hop) => <li key={hop.statementId}>{hop.relationId} · statement {hop.statementId}@{hop.statementVersion} · {hop.fromEntityId} → {hop.toEntityId} · 来源 {hop.sourceRefs.map((ref) => `${ref.id}:${ref.digest}`).join(', ')}</li>)}
+                    </ol>
+                  )}
+                  <p data-testid="energy-a4-run-evidence">scenario {a4Explanation.data.runEvidence.scenarioRef.id}:{a4Explanation.data.runEvidence.scenarioRef.digest} · 输入清单 {a4Explanation.data.runEvidence.inputManifestHash} · SOC 来源 {a4Explanation.data.runEvidence.sourceEvidenceRef.id}:{a4Explanation.data.runEvidence.sourceEvidenceRef.digest} · 计算结果 {a4Explanation.data.runEvidence.resultRef.id}:{a4Explanation.data.runEvidence.resultRef.digest} · plan {a4Explanation.data.runEvidence.selectedPlanRef.id}:{a4Explanation.data.runEvidence.selectedPlanRef.digest}</p>
+                  <p>本次输入 {a4Explanation.data.runEvidence.weatherScenario} · {a4Explanation.data.runEvidence.horizon.startUtc} → {a4Explanation.data.runEvidence.horizon.endUtc} · ReserveSOC {formatNumber(a4Explanation.data.runEvidence.reserveSocPercent, 1)}%（slot {a4Explanation.data.runEvidence.reserveWindowStartSlot} 起）· state revision {a4Explanation.data.runEvidence.stateRevision}</p>
+                  <p data-testid="energy-a4-computation">确定性预测/计划工件：PV {formatNumber(a4Explanation.data.runEvidence.forecastPvKwh)} kWh · 计划成本 {formatNumber(a4Explanation.data.runEvidence.candidateTotalCost)} CNY · reserve {a4Explanation.data.runEvidence.reserveSatisfied ? '满足' : '不满足'}</p>
+                  <ul data-testid="energy-a4-constraints">{a4Explanation.data.runEvidence.reserveMargins.map((margin) => <li key={`${margin.windowStartSlot}-${margin.windowEndSlot}`}>ReserveSOC {formatNumber(margin.reserveKwh)} kWh · slot {margin.windowStartSlot} → {margin.windowEndSlot} · margin {formatNumber(margin.marginKwh)} kWh · {margin.satisfied ? '满足' : '缺口'}</li>)}</ul>
+                  {a4Explanation.data.gaps.length === 0 ? null : <ul data-testid="energy-a4-gaps">{a4Explanation.data.gaps.map((gap) => <li key={gap}>{gap}</li>)}</ul>}
+                  <p>发布 revision {a4Explanation.data.publicationRevision} · 当前解释状态：{a4Explanation.data.status}</p>
+                </>
+              )}
             </section>
           )}
 

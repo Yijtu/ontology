@@ -246,6 +246,16 @@ export interface EnergyPlanDiffView {
   readonly causeTrace: readonly Readonly<Record<string, unknown>>[]
 }
 
+export interface EnergyRunExplanationView {
+  readonly status: 'verified' | 'limited'
+  readonly runId: string
+  readonly definition: { readonly ref: VersionRef; readonly declaredRelations: readonly string[] }
+  readonly instancePath: readonly { readonly relationId: string; readonly statementId: string; readonly statementVersion: string; readonly fromEntityId: string; readonly toEntityId: string; readonly sourceRefs: readonly ResourceRef[] }[]
+  readonly runEvidence: { readonly scenarioRef: ResourceRef; readonly sourceEvidenceRef: ResourceRef; readonly resultRef: ResourceRef; readonly selectedPlanRef: ResourceRef; readonly inputManifestHash: string; readonly weatherScenario: string; readonly reserveSocPercent: number; readonly reserveWindowStartSlot: number; readonly reserveMargins: readonly { readonly windowStartSlot: number; readonly windowEndSlot: number; readonly reserveKwh: number; readonly marginKwh: number; readonly satisfied: boolean }[]; readonly stateRevision: number; readonly horizon: { readonly startUtc: string; readonly endUtc: string }; readonly forecastPvKwh: number; readonly candidateTotalCost: number; readonly reserveSatisfied: boolean }
+  readonly publicationRevision: string
+  readonly gaps: readonly string[]
+}
+
 export interface ComponentFilter {
   readonly kind?: ComponentKind
   readonly lifecycleState?: ModuleLifecycleState
@@ -473,6 +483,10 @@ export class WorkbenchClient {
   getEnergyPlanDiff(parentPlanRef: ResourceRef, planRef: ResourceRef): Promise<EnergyPlanDiffView> {
     const query = new URLSearchParams({ parentId: parentPlanRef.id, parentVersion: parentPlanRef.version, parentDigest: parentPlanRef.digest, id: planRef.id, version: planRef.version, digest: planRef.digest })
     return this.#request<EnergyPlanDiffView>('GET', `/api/v1/energy/plan-versions/${encodeURIComponent(planRef.id)}/diff?${query.toString()}`)
+  }
+
+  getEnergyRunExplanation(runId: string): Promise<EnergyRunExplanationView> {
+    return this.#request<EnergyRunExplanationView>('GET', `/api/v1/runs/${encodeURIComponent(runId)}/energy-explanation`)
   }
 
   /** Subscribe to the run's persisted public events. Unknown event names are dropped. */

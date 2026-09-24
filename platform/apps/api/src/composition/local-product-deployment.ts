@@ -44,6 +44,7 @@ export interface LocalProductDeployment {
   readonly handlers: readonly ToolHandler[]
   readonly documents: LocalDocumentCapability
   readonly candidateDocuments: LocalDocumentCapability
+  readonly energyExplanationDocuments: LocalDocumentCapability
   readonly operatorActions: ReadonlyMap<string, readonly OperatorActionDescriptor[]>
   readonly operatorSql: LocalOperatorSqlProfile | undefined
   close(): Promise<void>
@@ -85,6 +86,10 @@ export async function createLocalProductDeployment(input: {
   const candidateDocuments = new LocalDocumentCapability({
     connectionString: input.connectionString, blobs: input.blobs,
     collectionRef: 'local-candidate-records', sourceRef: { namespace: 'local-operator-documents', sourceId: 'uploaded-native-records' },
+  })
+  const energyExplanationDocuments = new LocalDocumentCapability({
+    connectionString: input.connectionString, blobs: input.blobs,
+    collectionRef: 'local-energy-explanation-sources', sourceRef: { namespace: 'local-home-energy-operator', sourceId: 'uploaded-relation-evidence' },
   })
   const wide = input.energy.profiles.find((profile) => profile.profileRef.id === 'home-energy-demo-wide')
   if (wide === undefined) throw new Error('the wide energy source profile is not registered')
@@ -176,7 +181,7 @@ export async function createLocalProductDeployment(input: {
   const candidateDocumentImportAction: OperatorActionDescriptor = { ...documentImportAction, actionId: 'documents.import-candidate-records', label: '导入一份受控候选记录 JSON 文档', path: '/api/v1/operator/candidate-documents' }
   const operatorActions = new Map<string, readonly OperatorActionDescriptor[]>([[documentProfile.profileRef.id, [documentImportAction]], [candidateDocumentProfile.profileRef.id, [candidateDocumentImportAction]]])
   return {
-    profiles, profileById, tasks, query, handlers, documents, candidateDocuments, operatorActions, operatorSql: input.operatorSql,
+    profiles, profileById, tasks, query, handlers, documents, candidateDocuments, energyExplanationDocuments, operatorActions, operatorSql: input.operatorSql,
     async prepareTaskContext(profileRef, context) {
       let prepared
       try { prepared = tasks.prepareRunContext(profileRef, context) }
@@ -231,6 +236,6 @@ export async function createLocalProductDeployment(input: {
       if (profileRef.id !== documentProfile.profileRef.id || profileRef.version !== documentProfile.profileRef.version) throw new Error('document import is not enabled in the selected profile')
       return documents.importMarkdown(payload, ctx)
     },
-    async close() { await Promise.all([documents.close(), candidateDocuments.close(), input.transport.close(), ...(input.operatorSql === undefined ? [] : [input.operatorSql.close()])]); input.energy.close() },
+    async close() { await Promise.all([documents.close(), candidateDocuments.close(), energyExplanationDocuments.close(), input.transport.close(), ...(input.operatorSql === undefined ? [] : [input.operatorSql.close()])]); input.energy.close() },
   }
 }
