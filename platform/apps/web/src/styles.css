@@ -1,13 +1,24 @@
 :root {
   color-scheme: light;
-  --ink: #1c2330;
-  --muted: #5b6472;
-  --line: #d9dee7;
-  --accent: #2f5bd7;
-  --warn: #a35b00;
-  --danger: #b3261e;
+  --ink: #18243b;
+  --muted: #526078;
+  --line: #dce3ec;
+  --accent: #165dff;
+  --accent-hover: #0e4fdb;
+  --accent-tint: #edf3ff;
+  --warn: #9a5b0b;
+  --warn-tint: #fff5e6;
+  --danger: #ba303e;
+  --green: #117b59;
+  --green-tint: #eaf7f0;
   --surface: #ffffff;
-  --canvas: #f4f6fb;
+  --subtle: #f0f3f8;
+  --canvas: #f5f7fa;
+  --radius: 16px;
+  --control-radius: 8px;
+  --shadow: 0 8px 24px -16px #18243b29, 0 1px 3px #18243b09;
+  --sidebar: 232px;
+  --font: "Segoe UI", "Microsoft YaHei UI", "PingFang SC", system-ui, sans-serif;
 }
 
 * {
@@ -16,9 +27,132 @@
 
 body {
   margin: 0;
-  font-family: "Segoe UI", "Microsoft YaHei", system-ui, sans-serif;
+  font-family: var(--font);
+  font-size: 14px;
+  line-height: 1.6;
+  font-variant-numeric: tabular-nums;
   color: var(--ink);
   background: var(--canvas);
+}
+
+h1,
+h2,
+h3,
+h4,
+p {
+  margin: 0;
+}
+
+/* Clarity shell: a fixed sidebar for navigation, a scrolling workspace beside it. */
+.app {
+  display: grid;
+  grid-template-columns: var(--sidebar) minmax(0, 1fr);
+  min-height: 100vh;
+}
+
+.app__sidebar {
+  position: sticky;
+  top: 0;
+  align-self: start;
+  height: 100vh;
+  background: var(--surface);
+  border-right: 1px solid var(--line);
+  padding: 26px 14px 20px;
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  overflow-y: auto;
+}
+
+.app__brand {
+  display: flex;
+  align-items: center;
+  gap: 11px;
+  padding: 0 10px 24px;
+}
+
+.app__brand-mark {
+  width: 34px;
+  height: 34px;
+  display: grid;
+  place-items: center;
+  border-radius: 10px;
+  background: var(--accent);
+  color: #fff;
+  box-shadow: 0 4px 12px #165dff26;
+  font-weight: 700;
+}
+
+.app__brand strong {
+  font-size: 20px;
+  letter-spacing: -0.7px;
+}
+
+.app__brand small {
+  display: block;
+  font-size: 10px;
+  letter-spacing: 1.5px;
+  text-transform: uppercase;
+  color: var(--muted);
+}
+
+.app__nav-caption {
+  font-size: 10px;
+  font-weight: 650;
+  letter-spacing: 1.7px;
+  color: var(--muted);
+  margin: 12px 12px 6px;
+}
+
+.app__nav {
+  display: grid;
+  gap: 4px;
+}
+
+.app__main {
+  min-width: 0;
+  padding: 26px 32px 48px;
+}
+
+@media (max-width: 900px) {
+  .app {
+    grid-template-columns: minmax(0, 1fr);
+  }
+
+  .app__sidebar {
+    position: static;
+    height: auto;
+    flex-direction: row;
+    align-items: center;
+    gap: 10px;
+    padding: 12px 16px;
+    overflow-x: auto;
+    border-right: 0;
+    border-bottom: 1px solid var(--line);
+  }
+
+  .app__brand {
+    padding: 0 12px 0 0;
+  }
+
+  .app__brand small,
+  .app__nav-caption {
+    display: none;
+  }
+
+  .app__nav {
+    display: flex;
+    gap: 6px;
+  }
+
+  .app__tab {
+    width: auto;
+    white-space: nowrap;
+  }
+
+  .app__main {
+    padding: 18px 16px 40px;
+  }
 }
 
 .workbench {
@@ -76,6 +210,18 @@ body {
 
 .state-panel[data-state="not_configured"] {
   border-left-color: var(--warn);
+}
+
+.state-panel[data-state="empty"] {
+  border-left-color: var(--line);
+  background: var(--subtle);
+  color: var(--muted);
+  box-shadow: none;
+}
+
+.state-panel[data-state="empty"] .state-panel__title {
+  font-size: 14px;
+  font-weight: 600;
 }
 
 .state-panel__title {
@@ -201,24 +347,33 @@ button:disabled {
   overflow-wrap: anywhere;
 }
 
-.app__tabs {
-  max-width: 1100px;
-  margin: 0 auto;
-  padding: 16px 24px 0;
+.app__tab {
   display: flex;
-  gap: 8px;
-  overflow-x: auto;
-  scrollbar-width: thin;
+  align-items: center;
+  gap: 10px;
+  width: 100%;
+  text-align: left;
+  padding: 10px 13px;
+  border: 1px solid transparent;
+  border-radius: 9px;
+  background: transparent;
+  color: var(--muted);
+  font-size: 13px;
+  font-weight: 500;
+  cursor: pointer;
+  transition: background 0.18s, color 0.18s, border-color 0.18s;
 }
 
-.app__tabs .app__tab {
-  flex: none;
-  white-space: nowrap;
+.app__tab:hover {
+  background: var(--subtle);
+  color: var(--ink);
 }
 
 .app__tab[data-active="true"] {
-  background: #1c2330;
-  border-color: #1c2330;
+  background: var(--accent-tint);
+  border-color: #cfe0ff;
+  color: var(--accent);
+  font-weight: 650;
 }
 
 .panel__header h2 {
@@ -944,5 +1099,422 @@ button:disabled {
   .energy__field {
     display: flex;
     margin-right: 0;
+  }
+}
+
+/* Clarity energy workspace: hero, metric strip, energy-flow diagram, decision insight,
+   scenario cards, then the detailed plan / ontology / execution panels. */
+.energy {
+  max-width: 1280px;
+  margin: 0;
+  padding: 0;
+}
+
+.energy__header {
+  margin-bottom: 20px;
+}
+
+.energy__eyebrow {
+  font-size: 11px;
+  font-weight: 650;
+  letter-spacing: 1.6px;
+  color: var(--accent);
+  text-transform: uppercase;
+}
+
+.energy__header h1 {
+  margin: 6px 0 8px;
+  font-size: 30px;
+  font-weight: 650;
+  letter-spacing: -0.8px;
+  line-height: 1.2;
+}
+
+.energy__hint {
+  max-width: 760px;
+  margin: 0;
+  color: var(--muted);
+  font-size: 13px;
+}
+
+.energy__metrics {
+  display: grid;
+  grid-template-columns: repeat(4, minmax(0, 1fr));
+  gap: 14px;
+  margin-bottom: 16px;
+}
+
+.energy-metric {
+  background: var(--surface);
+  border: 1px solid var(--line);
+  border-radius: var(--radius);
+  padding: 16px 18px;
+  box-shadow: var(--shadow);
+}
+
+.energy-metric__top {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  color: var(--muted);
+  font-size: 12px;
+  font-weight: 600;
+}
+
+.energy-metric__value {
+  margin: 8px 0 2px;
+  font-size: 28px;
+  font-weight: 650;
+  letter-spacing: -1px;
+  line-height: 1.1;
+}
+
+.energy-metric__value em {
+  font-size: 13px;
+  font-style: normal;
+  color: var(--muted);
+  margin-left: 4px;
+}
+
+.energy-metric small {
+  color: var(--muted);
+  font-size: 12px;
+}
+
+.energy__body {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr);
+  gap: 16px;
+  margin-top: 0;
+}
+
+.energy__body > * {
+  background: var(--surface);
+  border: 1px solid var(--line);
+  border-radius: var(--radius);
+  padding: 20px 22px;
+  box-shadow: var(--shadow);
+}
+
+.energy__body h3 {
+  font-size: 16px;
+  font-weight: 650;
+}
+
+.energy__overview {
+  background: linear-gradient(135deg, #f8fbff 0%, #eef5ff 100%);
+  border-color: #d6e4fb;
+}
+
+.energy__overview-head h2 {
+  font-size: 18px;
+  font-weight: 650;
+}
+
+.energy__overview-timeline {
+  display: grid;
+  gap: 6px;
+  margin: 16px 0;
+  font-size: 13px;
+  font-weight: 600;
+}
+
+.energy__overview-timeline input {
+  width: 100%;
+  accent-color: var(--accent);
+}
+
+.energy__overview-grid {
+  display: grid;
+  grid-template-columns: repeat(4, minmax(0, 1fr));
+  gap: 12px;
+  margin: 16px 0;
+}
+
+.energy__overview-card {
+  min-width: 0;
+  padding: 14px;
+  border: 1px solid #d6e4fb;
+  border-radius: 12px;
+  background: #fff;
+}
+
+.energy__overview-card h3 {
+  margin: 0 0 10px;
+  font-size: 14px;
+}
+
+.energy__overview-card p {
+  color: var(--muted);
+  font-size: 12px;
+}
+
+.energy__overview-card .datum {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  margin: 0;
+}
+
+.energy__overview-card .datum__source,
+.energy__overview-card .datum__time {
+  overflow-wrap: anywhere;
+}
+
+.energy__flow {
+  display: grid;
+  gap: 12px;
+}
+
+.energy__flow svg {
+  width: 100%;
+  height: auto;
+  max-height: 300px;
+}
+
+.energy__flow .flow-node {
+  fill: #fff;
+  stroke: #c9d8f2;
+  stroke-width: 1.2;
+}
+
+.energy__flow .flow-node-title {
+  font-size: 13px;
+  font-weight: 600;
+  fill: var(--ink);
+}
+
+.energy__flow .flow-node-value {
+  font-size: 17px;
+  font-weight: 650;
+  fill: var(--ink);
+}
+
+.energy__flow .flow-node-sub {
+  font-size: 11px;
+  fill: var(--muted);
+}
+
+.energy__flow .flow-link {
+  stroke: #99b8f4;
+  stroke-width: 1.6;
+  fill: none;
+  marker-end: url(#energy-arrow);
+}
+
+.energy__flow-legend {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 16px;
+  color: var(--muted);
+  font-size: 12px;
+}
+
+.energy__insight {
+  display: grid;
+  gap: 10px;
+}
+
+.energy__insight-lead {
+  font-size: 15px;
+  line-height: 1.65;
+}
+
+.energy__insight-lead b {
+  color: var(--accent);
+}
+
+.energy__insight-checks {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+  display: grid;
+  gap: 8px;
+}
+
+.energy__insight-checks li {
+  display: flex;
+  gap: 9px;
+  align-items: flex-start;
+  font-size: 13px;
+}
+
+.energy__insight-checks li::before {
+  content: "✓";
+  color: var(--green);
+  font-weight: 700;
+}
+
+.energy__insight-note {
+  color: var(--muted);
+  font-size: 12px;
+  border-top: 1px dashed var(--line);
+  padding-top: 10px;
+}
+
+.energy__scenario-cards {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(215px, 1fr));
+  gap: 12px;
+}
+
+.scenario-card {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  text-align: left;
+  padding: 16px;
+  border: 1px solid var(--line);
+  border-radius: 12px;
+  background: var(--surface);
+  color: var(--ink);
+  cursor: pointer;
+}
+
+.scenario-card:hover {
+  border-color: var(--accent);
+  background: var(--accent-tint);
+}
+
+.scenario-card[data-active="true"] {
+  border-color: var(--accent);
+  background: var(--accent-tint);
+}
+
+.scenario-card__index {
+  font-size: 11px;
+  font-weight: 650;
+  letter-spacing: 1.2px;
+  color: var(--muted);
+}
+
+.scenario-card h4 {
+  font-size: 14px;
+  font-weight: 650;
+}
+
+.scenario-card p {
+  color: var(--muted);
+  font-size: 12px;
+}
+
+.scenario-card__foot {
+  margin-top: auto;
+  color: var(--accent);
+  font-size: 12px;
+  font-weight: 600;
+}
+
+.energy__scenario-summary p,
+.energy__version p,
+.energy__compare p {
+  font-size: 13px;
+}
+
+.energy__scenario-summary {
+  display: grid;
+  gap: 4px;
+}
+
+.energy__version-head h3 {
+  font-size: 15px;
+  font-weight: 650;
+}
+
+.energy__candidates,
+.energy__series,
+[data-testid="execution-step-records"],
+[data-testid="persisted-plan-versions"] ol {
+  list-style: none;
+  margin: 8px 0 0;
+  padding: 0;
+  display: grid;
+  gap: 6px;
+  max-height: 340px;
+  overflow: auto;
+}
+
+.energy__candidate {
+  margin-top: 0;
+  padding: 10px 12px;
+  border: 1px solid var(--line);
+  border-radius: 10px;
+}
+
+.energy__candidate-name {
+  font-weight: 650;
+}
+
+[data-testid="execution-step"],
+[data-testid="persisted-plan-version"],
+[data-testid="plan-interval"] {
+  padding: 7px 10px;
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  font-size: 12.5px;
+  font-variant-numeric: tabular-nums;
+}
+
+[data-testid="persisted-plan-version"] {
+  list-style: none;
+}
+
+.energy__buttons button,
+.energy__field + .energy__buttons button {
+  padding: 8px 15px;
+  border-radius: var(--control-radius);
+  border: 1px solid var(--accent);
+  background: var(--accent);
+  color: #fff;
+  font-size: 13px;
+  font-weight: 600;
+}
+
+.energy__buttons button:hover:not(:disabled) {
+  background: var(--accent-hover);
+  border-color: var(--accent-hover);
+}
+
+.energy__badge {
+  background: var(--accent-tint);
+  color: var(--accent);
+  font-weight: 600;
+}
+
+.energy__badge--ok {
+  background: var(--green-tint);
+  color: var(--green);
+}
+
+.energy__notice {
+  grid-column: 1 / -1;
+  margin: 0;
+  padding: 10px 14px;
+  border: 1px solid #bde5cd;
+  border-radius: 10px;
+  background: var(--green-tint);
+  color: var(--green);
+  font-size: 13px;
+}
+
+@media (max-width: 1100px) {
+  .energy__metrics {
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+  }
+
+  .energy__overview-grid {
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+  }
+}
+
+@media (max-width: 640px) {
+  .energy__metrics,
+  .energy__scenario-cards,
+  .energy__overview-grid {
+    grid-template-columns: minmax(0, 1fr);
+  }
+
+  .energy__header h1 {
+    font-size: 24px;
   }
 }

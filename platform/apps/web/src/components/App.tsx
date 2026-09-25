@@ -68,46 +68,58 @@ export function App({
 
   return (
     <div className="app" data-viewport={viewport} data-view={view}>
-      <nav className="app__tabs" aria-label="主导航">
-        {tabs.filter((tab) => availableViews === undefined || availableViews.includes(tab.view)).map((tab) => (
-          <button
-            key={tab.view}
-            type="button"
-            className="app__tab"
-            data-testid={`tab-${tab.view}`}
-            data-active={tab.view === view}
-            aria-current={tab.view === view ? 'page' : undefined}
-            onClick={() => setView(tab.view)}
-          >
-            {tab.label}
-          </button>
-        ))}
-      </nav>
+      <aside className="app__sidebar">
+        <div className="app__brand">
+          <span className="app__brand-mark" aria-hidden="true">◧</span>
+          <span>
+            <strong>Energy</strong>
+            <small>Intelligent Home</small>
+          </span>
+        </div>
+        <div className="app__nav-caption">WORKSPACE</div>
+        <nav className="app__nav" aria-label="主导航">
+          {tabs.filter((tab) => availableViews === undefined || availableViews.includes(tab.view)).map((tab) => (
+            <button
+              key={tab.view}
+              type="button"
+              className="app__tab"
+              data-testid={`tab-${tab.view}`}
+              data-active={tab.view === view}
+              aria-current={tab.view === view ? 'page' : undefined}
+              onClick={() => setView(tab.view)}
+            >
+              {tab.label}
+            </button>
+          ))}
+        </nav>
+      </aside>
 
-      {view === 'workbench' ? (
-        <Workbench client={client} profileRef={profileRef} {...(boundRunId === undefined ? {} : { boundRunId })} />
-      ) : null}
-      {view === 'query' ? (
-        <QueryPanel
-          client={client}
-          profileRef={profileRef}
-          timeZone={timeZone}
-          profileOptions={profileOptions}
-          {...(boundRunId === undefined ? {} : { initialRunId: boundRunId })}
-        />
-      ) : null}
-      {view === 'jobs' ? <JobProgressPanel client={client} {...(initialJobId === undefined ? {} : { initialJobId })} /> : null}
-      {view === 'review' ? (
-        <CandidateReviewPanel client={client} {...(initialCandidateId === undefined ? {} : { initialCandidateId })} />
-      ) : null}
-      {view === 'evidence' ? (
-        <EvidencePanel
-          client={client}
-          {...(initialEvidenceId === undefined ? {} : { initialEvidenceId })}
-          {...(initialObjectId === undefined ? {} : { initialObjectId })}
-        />
-      ) : null}
-      {contribution?.render({ client, profileRef })}
+      <div className="app__main">
+        {view === 'workbench' ? (
+          <Workbench client={client} profileRef={profileRef} {...(boundRunId === undefined ? {} : { boundRunId })} />
+        ) : null}
+        {view === 'query' ? (
+          <QueryPanel
+            client={client}
+            profileRef={profileRef}
+            timeZone={timeZone}
+            profileOptions={profileOptions}
+            {...(boundRunId === undefined ? {} : { initialRunId: boundRunId })}
+          />
+        ) : null}
+        {view === 'jobs' ? <JobProgressPanel client={client} {...(initialJobId === undefined ? {} : { initialJobId })} /> : null}
+        {view === 'review' ? (
+          <CandidateReviewPanel client={client} {...(initialCandidateId === undefined ? {} : { initialCandidateId })} />
+        ) : null}
+        {view === 'evidence' ? (
+          <EvidencePanel
+            client={client}
+            {...(initialEvidenceId === undefined ? {} : { initialEvidenceId })}
+            {...(initialObjectId === undefined ? {} : { initialObjectId })}
+          />
+        ) : null}
+        {contribution?.render({ client, profileRef })}
+      </div>
     </div>
   )
 }

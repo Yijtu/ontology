@@ -106,6 +106,40 @@ function EnergyOverview({ scenario, version, slotIndex, onSlotChange }: {
         </div>
         <span className="energy__badge" data-mode="simulation">SIMULATION</span>
       </div>
+      <div className="energy__flow" role="img" aria-label="家庭能源流：光伏供给家庭并为电池充电，电池和电网供给家庭">
+        <svg viewBox="0 0 640 250" preserveAspectRatio="xMidYMid meet">
+          <defs>
+            <marker id="energy-arrow" markerWidth="7" markerHeight="7" refX="5.5" refY="3" orient="auto">
+              <path d="M0 0L6 3L0 6" fill="#99b8f4" />
+            </marker>
+          </defs>
+          <path className="flow-link" d="M150 62H262V112" />
+          <path className="flow-link" d="M150 190H250V150" />
+          <path className="flow-link" d="M320 88V104" />
+          <path className="flow-link" d="M476 138H392" />
+          <rect className="flow-node" x="14" y="26" width="140" height="74" rx="12" />
+          <text className="flow-node-title" x="30" y="52">Solar · 光伏</text>
+          <text className="flow-node-value" x="30" y="78">{interval === undefined ? '—' : `${formatNumber(interval.pvAvailableKw)} kW`}</text>
+          <text className="flow-node-sub" x="30" y="93">forecast</text>
+          <rect className="flow-node" x="14" y="154" width="140" height="74" rx="12" />
+          <text className="flow-node-title" x="30" y="180">Battery · 储能</text>
+          <text className="flow-node-value" x="30" y="206">{visibleScenario === undefined ? '—' : `${formatNumber((interval?.energyEndKwh ?? visibleScenario.initialEnergyKwh) / visibleScenario.batteryCapacityKwh * 100, 1)}%`}</text>
+          <text className="flow-node-sub" x="30" y="221">SOC</text>
+          <path className="flow-node" d="M292 96l58 42v84h-116v-84z" />
+          <path d="M262 106l59-52 59 52" fill="none" stroke="#165dff" strokeWidth="2.5" strokeLinecap="round" />
+          <text className="flow-node-title" x="321" y="150" textAnchor="middle">Home</text>
+          <text className="flow-node-sub" x="321" y="170" textAnchor="middle">家庭负载</text>
+          <text className="flow-node-sub" x="321" y="196" textAnchor="middle">{interval === undefined ? '—' : `${formatNumber(interval.loadKw)} kW`}</text>
+          <rect className="flow-node" x="478" y="96" width="148" height="74" rx="12" />
+          <text className="flow-node-title" x="494" y="122">Grid · 电网</text>
+          <text className="flow-node-value" x="494" y="148">{interval === undefined ? '—' : `${formatNumber(interval.gridImportKw)} kW`}</text>
+          <text className="flow-node-sub" x="494" y="163">simulated</text>
+        </svg>
+        <div className="energy__flow-legend">
+          <span>能源关系示意 · 非实时功率流</span>
+          <span>数值来自同一已归档计划的时隙结果</span>
+        </div>
+      </div>
       {visibleScenario === undefined ? <p>先构建情景，随后生成计划查看 Solar、Battery、Grid 和 HomeLoad。</p> : (
         <>
           <label className="energy__overview-timeline">
@@ -453,9 +487,36 @@ export function EnergyPlanPanel({ client, profileRef, publishedExecutionRequired
     }
   }
 
+  const dashboardResult =
+    latest?.detail.integrityVerified === true && latest.result?.status === 'feasible' ? latest.result : undefined
+  const dashboardCandidate = dashboardResult?.candidates.find(
+    (entry) => entry.strategy === dashboardResult.selection.selectedStrategy,
+  )
+  const dashboardInterval = dashboardCandidate?.simulation.intervals.find((entry) => entry.slotIndex === selectedSlot)
+  const dashboardSoc =
+    dashboardInterval === undefined
+      ? state.scenario?.initialSocPercent ?? latest?.scenario.initialSocPercent
+      : latest?.scenario.batteryCapacityKwh === undefined || latest.scenario.batteryCapacityKwh === 0
+        ? undefined
+        : (dashboardInterval.energyEndKwh / latest.scenario.batteryCapacityKwh) * 100
+  const reservePercent = (state.backupRequirementKwh / 10) * 100
+  const declaredRelations = a4Explanation?.data?.definition.declaredRelations.length
+  const planCost = dashboardCandidate?.objective.netCost
+  const activeScenario =
+    forecastIntegrity === 'expired'
+      ? 'D'
+      : state.backupRequirementKwh === 6
+        ? 'C'
+        : state.weatherScenario === 'afternoon_overcast'
+          ? 'B'
+          : state.weatherScenario === 'anker_base' && forecastIntegrity === 'complete'
+            ? 'A'
+            : undefined
+
   return (
     <div className={`energy energy--${viewport}`} data-viewport={viewport} data-phase={phase}>
       <header className="energy__header">
+        <div className="energy__eyebrow">HOME ENERGY / DIGITAL TWIN</div>
         <h1>家庭能源计划与仿真</h1>
         <p className="energy__hint">
           全部数据为合成/预测/观测输入，计算由确定性代码完成。模拟收益不等于实际账单；首版只支持
@@ -463,16 +524,114 @@ export function EnergyPlanPanel({ client, profileRef, publishedExecutionRequired
         </p>
       </header>
 
+      <div className="energy__metrics">
+        <article className="energy-metric" data-testid="metric-soc">
+          <div className="energy-metric__top"><span>电池 SOC</span></div>
+          <div className="energy-metric__value">
+            {dashboardSoc === undefined ? '—' : formatNumber(dashboardSoc, 1)}<em>%</em>
+          </div>
+          <small>时隙 {selectedSlot} / {state.scenario?.slotCount ?? 96} · 模拟</small>
+        </article>
+        <article className="energy-metric" data-testid="metric-reserve">
+          <div className="energy-metric__top"><span>备用电下限</span></div>
+          <div className="energy-metric__value">{formatNumber(reservePercent, 0)}<em>%</em></div>
+          <small>ReserveSOC 用户设定</small>
+        </article>
+        <article className="energy-metric" data-testid="metric-relations">
+          <div className="energy-metric__top"><span>本体关系</span></div>
+          <div className="energy-metric__value">{declaredRelations ?? '—'}</div>
+          <small>已声明的实例关系</small>
+        </article>
+        <article className="energy-metric" data-testid="metric-cost">
+          <div className="energy-metric__top"><span>计划净成本</span></div>
+          <div className="energy-metric__value">
+            {planCost === undefined ? '—' : formatNumber(planCost, 2)}<em>CNY</em>
+          </div>
+          <small>同条件仿真 · 非实际账单</small>
+        </article>
+      </div>
+
       {phase === 'ready' ? null : (
         <StatePanel
           phase={phase}
+          {...(phase === 'not_configured'
+            ? { title: '该能力未配置' }
+            : phase === 'empty'
+              ? { title: '尚未构建情景' }
+              : {})}
           {...(state.error === undefined ? {} : { error: state.error })}
-          {...(phase === 'not_configured' ? { title: '该能力未配置' } : {})}
         />
       )}
 
       <main className="energy__body">
           <EnergyOverview scenario={state.scenario} version={latest} slotIndex={selectedSlot} onSlotChange={setSelectedSlot} />
+
+          <section className="energy__insight" data-testid="energy-insight">
+            <h3>为什么这样安排</h3>
+            <p className="energy__insight-lead">
+              优先满足 <b>备用电约束</b>，再结合天气与分时电价安排充放电；规则约束优先于费用目标。
+            </p>
+            <ul className="energy__insight-checks">
+              <li>预测、计划和执行回执分开展示，模拟值不与实测混淆。</li>
+              <li>天气或备电要求变化后，重新校验并生成新版本计划，旧计划标记 Superseded。</li>
+              <li>预测过期或缺失时停止计划推进，不产生可执行成功。</li>
+            </ul>
+            <p className="energy__insight-note">
+              界面预演 PRD 中的业务状态；成本与 SOC 由确定性代码计算，不代表真实账单或设备读数。
+            </p>
+          </section>
+
+          <section className="energy__scenario-cards" data-testid="energy-scenario-cards" aria-label="验证场景">
+            <button
+              type="button"
+              className="scenario-card"
+              data-scene="A"
+              data-active={activeScenario === 'A'}
+              onClick={() => { dispatch({ type: 'setWeather', value: 'anker_base' }); dispatch({ type: 'setBackup', value: 2 }); dispatch({ type: 'setReserveWindow', value: 0 }); setForecastIntegrity('complete') }}
+            >
+              <span className="scenario-card__index">场景 A</span>
+              <h4>正常一天</h4>
+              <p>上午阴、下午晴；ReserveSOC 20%。</p>
+              <span className="scenario-card__foot">省钱目标 · 默认</span>
+            </button>
+            <button
+              type="button"
+              className="scenario-card"
+              data-scene="B"
+              data-active={activeScenario === 'B'}
+              onClick={() => { dispatch({ type: 'setWeather', value: 'afternoon_overcast' }); setForecastIntegrity('complete') }}
+            >
+              <span className="scenario-card__index">场景 B</span>
+              <h4>天气变化</h4>
+              <p>下午转阴雨，光伏预测下调后重规划。</p>
+              <span className="scenario-card__foot">Weather → Solar → Battery</span>
+            </button>
+            <button
+              type="button"
+              className="scenario-card"
+              data-scene="C"
+              data-active={activeScenario === 'C'}
+              onClick={() => { dispatch({ type: 'setBackup', value: 6 }); dispatch({ type: 'setReserveWindow', value: 68 }); setForecastIntegrity('complete') }}
+            >
+              <span className="scenario-card__index">场景 C</span>
+              <h4>提高备电</h4>
+              <p>ReserveSOC 20% → 60%，晚间 17:00 起保底。</p>
+              <span className="scenario-card__foot">用户约束 · 目标冲突</span>
+            </button>
+            <button
+              type="button"
+              className="scenario-card"
+              data-scene="D"
+              data-active={activeScenario === 'D'}
+              onClick={() => { setForecastIntegrity('expired') }}
+            >
+              <span className="scenario-card__index">场景 D</span>
+              <h4>预测数据过期</h4>
+              <p>有效期不足，暂停计划推进并给出恢复建议。</p>
+              <span className="scenario-card__foot">异常边界 · 不执行</span>
+            </button>
+          </section>
+
           <section className="energy__scenario" data-testid="scenario-controls">
             <h3>情景输入（合成）</h3>
             <label className="energy__field">
