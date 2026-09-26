@@ -20,6 +20,10 @@ export function isWeatherScenario(value: unknown): value is WeatherScenario {
   return typeof value === 'string' && (WEATHER_SCENARIOS as readonly string[]).includes(value)
 }
 
+export function isForecastIntegrity(value: unknown): value is ForecastIntegrity {
+  return typeof value === 'string' && (FORECAST_INTEGRITY_MODES as readonly string[]).includes(value)
+}
+
 export function isRecord(value: unknown): value is Record<string, unknown> {
   return typeof value === 'object' && value !== null && !Array.isArray(value)
 }
@@ -283,7 +287,7 @@ export function asScenarioDescriptor(value: unknown): ScenarioDescriptor | undef
   const batteryCapacityKwh = asNumber(value.batteryCapacityKwh)
   const weather = value.weatherScenario
   const forecastValue = value.forecastIntegrity
-  const forecastIntegrity: ForecastIntegrity = typeof forecastValue === 'string' && (FORECAST_INTEGRITY_MODES as readonly string[]).includes(forecastValue) ? forecastValue as ForecastIntegrity : 'complete'
+  const forecastIntegrity: ForecastIntegrity = isForecastIntegrity(forecastValue) ? forecastValue : 'complete'
   if (
     inputRef === undefined ||
     typeof value.inputDigest !== 'string' ||

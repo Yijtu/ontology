@@ -95,20 +95,22 @@ export async function explainEnergyRun(input: {
   const startIds: string[] = []
   for (const entity of entities) {
     const assertions = await input.identity.listAssertions(scope, { entityId: entity.entityId, openOnly: true, limit: 2 }, input.ctx)
-    if (assertions.length !== 1) continue
-    const candidate = await input.candidates.getCandidate(scope, assertions[0]!.candidateId, input.ctx)
+    const [assertion] = assertions
+    if (assertions.length !== 1 || assertion === undefined) continue
+    const candidate = await input.candidates.getCandidate(scope, assertion.candidateId, input.ctx)
     if (validNativeId(candidate, 'weather_forecast', `weather:${input.scenarioRef.digest}`)) startIds.push(entity.entityId)
   }
   if (startIds.length !== 1) gaps.add(startIds.length === 0 ? 'CURRENT_WEATHER_INSTANCE_NOT_CONFIRMED' : 'CURRENT_WEATHER_INSTANCE_AMBIGUOUS')
 
   let instancePath: EnergyRunExplanation['instancePath'] = []
   let publicationRevision = await input.publications.latestPublicationRevision(scope, input.ctx)
-  if (startIds.length === 1) {
+  const [startEntityId] = startIds
+  if (startIds.length === 1 && startEntityId !== undefined) {
     const navigator = new PublishedRelationNavigator({
       publications: input.publications, identity: input.identity, definitionRef: input.definitionRef,
       allowedRelationIds: ENERGY_EXPLANATION_RELATIONS,
     })
-    const navigation = await navigator.navigate({ startEntityId: startIds[0]!, relationIds: ENERGY_EXPLANATION_RELATIONS, validAt: input.validAt, maxPaths: 8 }, input.ctx)
+    const navigation = await navigator.navigate({ startEntityId, relationIds: ENERGY_EXPLANATION_RELATIONS, validAt: input.validAt, maxPaths: 8 }, input.ctx)
     publicationRevision = navigation.publicationRevision
     for (const gap of navigation.gaps) gaps.add(gap)
     if (navigation.completeness !== 'complete') gaps.add(`RELATION_PATH_${navigation.completeness.toUpperCase()}`)

@@ -2,7 +2,7 @@ import { useEffect, useReducer, useState } from 'react'
 import type { OperationRef } from '@ontology/contracts'
 import type { ProfileRef } from '@ontology/contracts'
 import { ApiError, type WorkbenchClient } from '../api/client'
-import { asPlanResult, WEATHER_SCENARIOS } from '../api/energy'
+import { asPlanResult, isForecastIntegrity, isWeatherScenario, WEATHER_SCENARIOS } from '../api/energy'
 import type { ForecastIntegrity, PlanCandidateView, ScenarioDescriptor, WeatherScenario } from '../api/energy'
 import {
   energyReducer,
@@ -651,7 +651,7 @@ export function EnergyPlanPanel({ client, profileRef, publishedExecutionRequired
               <select
                 data-testid="weather-scenario"
                 value={state.weatherScenario}
-                onChange={(event) => dispatch({ type: 'setWeather', value: event.target.value as WeatherScenario })}
+                onChange={(event) => { if (isWeatherScenario(event.target.value)) dispatch({ type: 'setWeather', value: event.target.value }) }}
               >
                 {WEATHER_SCENARIOS.map((scenario) => (
                   <option key={scenario} value={scenario}>
@@ -669,7 +669,7 @@ export function EnergyPlanPanel({ client, profileRef, publishedExecutionRequired
             </label>
             <label className="energy__field">
               预测数据（故障注入）
-              <select data-testid="forecast-integrity" value={forecastIntegrity} onChange={(event) => setForecastIntegrity(event.target.value as ForecastIntegrity)}>
+              <select data-testid="forecast-integrity" value={forecastIntegrity} onChange={(event) => { if (isForecastIntegrity(event.target.value)) setForecastIntegrity(event.target.value) }}>
                 <option value="complete">完整有效</option>
                 <option value="expired">有效期不足</option>
                 <option value="missing">下午预测缺失</option>
