@@ -10,7 +10,7 @@
 | --- | --- | --- |
 | “synthetic-home-1 的 SOC 均值是多少？” | 按所选 profile 将 `battery_soc_reading` 语义查询编译为受限 SQL，在 DuckDB 查询并计算平均值 | 站点、平均 SOC、单位、来源证据和核验状态。静态演示样本为 40% 与 50%，结果为 45%，不是实时设备读数 |
 | “明天如何安排充放电，在满足备电约束下尽量降低电费？” | 先查询同一站点 SOC，再用合成负荷、光伏、电价和电池参数测试有限的候选策略 | 估算费用与无电池基线、期末储能量、备电检查；展开后可查看选中策略、96 个 15 分钟时段的充放电和储能量轨迹 |
-| Anker 家庭能源场景：规划、重规划、模拟执行 | Virtual SOLIX 初始 SOC 35%，全天保底 20%；上午阴、下午晴。下午转阴雨或将晚间备电目标改为 60%，都会形成新场景与正式计划 | 已选/被替代的版本、同条件预测与费用差异、96 条 Requested→Accepted→Observed 回执、期末 SOC 与下一模拟日状态。`live` 始终拒绝 |
+| Anker 家庭能源场景：规划、重规划、模拟执行 | Virtual SOLIX 初始 SOC 35%，全天保底 20%；上午阴、下午晴。下午转阴雨或将晚间备电目标改为 60%，都会形成新场景与正式计划 | 已选/被替代的版本、同条件预测与费用差异、96 条 Requested→Accepted→Observed 回执、期末 SOC 与下一模拟日状态。`live` 始终拒绝。A4 展示已确认的 Weather→Solar→EnergyPlan→Device 三跳关系与本次运行证据；D1 注入预测过期/缺失时停止推进并给出原因与恢复建议 |
 | “north 区有哪些设施待巡检？” | 按交通 profile 确认的 semantic mapping 查询合成设施 DuckDB 表 | 有类型的设施 ID、区域和待巡检状态断言，各自绑定查询结果指针与来源证据 |
 | 同一个交通问题，切换 `operator-sql-facilities` | 在服务端配置只读 PostgreSQL 角色与符合固定列契约的授权视图后，按已登记 mapping 查询该视图 | 同一页面与 run/证据/核验链路读取业务库结果；未配置时显示能力缺失，不回退到合成表 |
 | “已导入文件中的巡检频率原文是什么？” | 在 operator 已导入并索引的文档中检索精确 span | 显示原文引句、byte-offset locator 与文档版本；不将关键词命中扩展成政策结论 |
@@ -69,7 +69,7 @@ docker compose -f deploy/local/docker-compose.yml stop
 | --- | --- | --- |
 | 同一业务问题适配不同物理表 | `能源 A：宽表遥测` 或 `能源 B：长表 metric-code` / `查询站点 SOC 均值` | 站点 `synthetic-home-1`，问题 `synthetic-home-1 的 SOC 均值是多少？`；两种布局均应得到合成均值 **45%**，并能查看各自来源 |
 | 有界领域计算 | 任一能源 profile / `生成储能候选计划` | 站点 `synthetic-home-1`，备电保留量 2 kWh、晴天，问题 `明天如何安排充放电，在满足备电约束下尽量降低电费？`；答案展示候选费用与备电约束，计划面板展示 96 个时段 |
-| Anker 场景 A/B/C 与模拟执行 | 打开 `?profileId=home-energy-demo-long&profileVersion=1.0.0&view=energy` | 先用默认 35% SOC、全天 20% 保底生成 A；只改下午天气得到 B；再把 60% 目标设为 17:00 起生效得到 C。查看正式版本和差异后，对当前 Selected 计划确认模拟执行。未发布的直接预览不能执行 |
+| Anker 场景 A/B/C/D 与模拟执行 | 打开 `?profileId=home-energy-demo-long&profileVersion=1.0.0&view=energy` | 用页面上的场景卡切换：A 默认 35% SOC、全天 20% 保底；B 只改下午天气；C 把 60% 目标设为 17:00 起生效；D 注入预测数据过期。查看正式版本和差异后，对当前 Selected 计划确认模拟执行。未发布的直接预览不能执行 |
 | 跨行业查询 | `交通：设施巡检` / `列出待巡检设施` | 区域 `north`，问题 `north 区有哪些设施待巡检？`；答案返回设施事实与证据指针。询问“巡检周期是多少”不应被误答为设施列表 |
 | 真实只读表替换 | `交通：operator 只读 SQL（需配置来源）` / `列出待巡检设施` | 服务端先配置固定视图与只读账号；仍填 `north`，正式 run 返回业务库行及来源证据。无配置、列类型不符或越权都必须失败 |
 | 文档原文溯源 | `文档：政策引文` / `从已导入文档定位原文` | 先按下方命令导入文档，再问 `已导入文件中的巡检频率原文是什么？`；展示原文、文档版本和定位信息。未导入时会明确失败 |
@@ -93,7 +93,7 @@ synthetic-home-1 的 SOC 均值是多少？
 
 Anker 模拟执行从**正式发布并选中的计划**授权，不凭 `/simulations` 的直接预览或浏览器状态放行。打开 [家庭能源计划视图](http://127.0.0.1:5173/?profileId=home-energy-demo-long&profileVersion=1.0.0&view=energy)。默认 Virtual SOLIX 为 3.5/10 kWh（35% SOC），全天 ReserveSOC 20%，上午阴、下午晴。点击“构建情景”再点击“生成计划”，等到计划状态为 `Selected`；页面核对预览与正式 run 的完整 planRef、状态版本和来源证据。
 
-随后选择“上午阴、下午阴雨”，保持 20% 与全天窗口，再构建/生成一次：上午 PV 预测不变，下午下降，新计划选中后旧计划才标 `Superseded`。要验证“明晚留 60%”，把 ReserveSOC 设为 60%，同时把生效窗口改成“晚间 17:00 起保底”；当前 SOC 仍为 35%，计划需先补电并检查晚间目标。页面顶部的 Solar/Battery/Grid/HomeLoad 总览可滑动 96 个时隙，预测与仿真数值均带单位、来源、时间和模式；没有可行计划时不填预设功率。版本区展示预测、费用、约束窗口、受影响时段和工件引用；它给出确定性仿真差异，不声称本体实例关系已验证天气因果。
+随后选择“上午阴、下午阴雨”，保持 20% 与全天窗口，再构建/生成一次：上午 PV 预测不变，下午下降，新计划选中后旧计划才标 `Superseded`。要验证“明晚留 60%”，把 ReserveSOC 设为 60%，同时把生效窗口改成“晚间 17:00 起保底”；当前 SOC 仍为 35%，计划需先补电并检查晚间目标。能源页采用参考 UI 的 Clarity 布局：左侧边栏切换视图，首屏是指标行（SOC / 备电下限 / 本体关系 / 计划净成本）、家庭能源流图和“为什么这样安排”，下方是场景卡 A/B/C/D。Solar/Battery/Grid/HomeLoad 总览可滑动 96 个时隙，预测与仿真数值均带单位、来源、时间和模式；没有可行计划时不填预设功率。版本区展示预测、费用、约束窗口、受影响时段和工件引用；“本体解释与本次运行证据”区块在实例关系已确认时展示三跳路径，否则给出 gap；它给出确定性仿真差异，不声称本体实例关系已验证天气因果。选择场景 D（预测数据过期/缺失）后计划会停在 `insufficient_data`，不产生 Selected 版本或执行回执。
 
 只对当前 `Selected` 版本点击“请求模拟执行”。执行写入 96 个 15 分钟时段的 Requested→Accepted→Observed 回执和 Virtual SOLIX 后状态；`GET /api/v1/executions/{executionId}` 可在重启后读回。同一幂等键复用回执，换键重复执行同一计划、过期状态版本和已被替代的计划会被拒绝。执行后的下一情景从期末 SOC 与下一模拟时窗开始；合成负荷、天气和电价按声明的日内模板重复，**不是第二天的真实预测**，跨日计划也不能把成本变化单独归因于天气。模拟动作不是设备控制；`mode=live` 在任何设备任务前返回未配置。把旧站点 45% SOC 错接到 35% 场景时，正式 run 会因证据不一致阻断发布。
 
@@ -119,7 +119,7 @@ Invoke-RestMethod -Method Post -Uri 'http://127.0.0.1:3000/api/v1/operator/docum
 
 **候选抽取/消歧/发布的受控入口**：配置 operator SQL 后，可把完整实体 JSON 记录导入 `/api/v1/operator/candidate-documents`，走零模型的确定性强键映射。若服务端另配公司模型 API，普通文本 span 可提出实体、关系和规则**候选**；一次同步 job 最多 4 个非结构化 span，超限明确拒绝。operator 用返回的 `parseId` 调用 `/api/v1/operator/documents/{parseId}/extract-candidates`，查看持久 job、候选和原文，再调用 `/api/v1/candidates/{candidateId}/identity-recall` 查看 SQL 强键/别名召回及审计。人工通过 `If-Match` 提交 `clarify/create_pending/match/reject` 决策、审核候选并发布语义版本。模型不会直接发布事实，也不自动完成实体合并。随后同一业务问答页可查询已登记来源；详细步骤与模型环境变量见[本地产品说明](docs/local-product.md)。
 
-本地 profiles 仍需部署侧明确映射，文档 profile 当前每个 collection 只允许一份受控导入文档。尚未交付开放式 Text2SQL、任意客户 schema 自动识别、在线多跳/规则回答、JEV 路由或真实设备控制；公司模型的真实网关兼容性尚未验证，缺配置时只开放确定性候选。已发布属性事实可由 operator SQL 的专门任务查询，关系导航服务尚未接入能源问答。能源计划明细经过完整性与汇总核对，Virtual SOLIX 执行另有逐步状态回读；这不等于现实设备或预测正确。Anker A/B/C/E 的合成闭环已跑通，**A4 的已确认本体关系解释与 D1 的完整异常注入仍是缺口**，见[Anker 场景 SPEC](tasks/spec-home-energy-anker-v1.0.md)。
+本地 profiles 仍需部署侧明确映射，文档 profile 当前每个 collection 只允许一份受控导入文档。尚未交付开放式 Text2SQL、任意客户 schema 自动识别、在线多跳/规则回答、JEV 路由或真实设备控制；公司模型的真实网关兼容性尚未验证，缺配置时只开放确定性候选。已发布属性事实可由 operator SQL 的专门任务查询，关系导航服务尚未接入能源问答。能源计划明细经过完整性与汇总核对，Virtual SOLIX 执行另有逐步状态回读；这不等于现实设备或预测正确。Anker A/B/C/E 的合成闭环已跑通；**A4 的已确认本体关系解释（Weather→Solar→EnergyPlan→Device 三跳实例路径 + 本次运行工件绑定）与 D1 的预测过期/缺失异常注入已完成，并通过真实 PostgreSQL / HTTP / 浏览器正反例**，见[Anker 场景 SPEC](tasks/spec-home-energy-anker-v1.0.md)。能源页已按所附 UI 参考改造为 Clarity 侧边栏工作台（指标行、能源流图、Why 面板、场景 A/B/C/D 卡片）。
 
 ## 设计思路：框架与场景分开
 
@@ -171,6 +171,7 @@ flowchart LR
 | `GET /api/v1/runs/{runId}`、`GET /api/v1/runs/{runId}/events` | 查看运行状态与公开进度事件。 |
 | `GET /api/v1/runs/{runId}/answer` | 读取已发布答案；运行中返回 202，失败且无答案时返回 404。 |
 | `GET /api/v1/runs/{runId}/plan` | 读取已发布储能计划的归档明细；纯 SOC 问答或失败运行返回 404。 |
+| `GET /api/v1/runs/{runId}/energy-explanation` | 读取该运行的已确认本体关系解释：三跳实例路径与本次运行工件绑定；关系未确认时返回 `limited` 与 gap，不虚构因果。 |
 | `POST /api/v1/simulations/inputs`、`POST /api/v1/simulations` | 建立合成场景与直接计算预览；预览本身不能授权执行。 |
 | `POST /api/v1/executions`、`GET /api/v1/executions/{executionId}` | 对同一已发布核验计划请求 Virtual SOLIX 模拟执行、读取逐步回执与状态；live 未配置。 |
 | `GET /api/v1/virtual-solix/state` | 读取模拟电池当前 SOC、状态版本、模拟时钟和不可变状态引用。 |

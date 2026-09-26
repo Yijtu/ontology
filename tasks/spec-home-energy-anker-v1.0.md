@@ -79,3 +79,22 @@ UI 参考所附 HTML 的清晰层级与布局，但数据只取正式 API：首�
 4. **P1 展示与异常**：按参考 UI 实现领域面板，再加 D1 与解释问答；先展示正式数据，不投入时间复刻静态模板的登录、通用方案页或占位指标。
 
 若一个阶段的真实端到端反例未通过，就先修该链路，不因为页面漂亮或单测变绿而宣布完成。首个可演示结果是 A1+B1+C1+E1 的一户模拟闭环；时间与正式赛事验收人尚未提供，不在本文编造交付日期或外部验收结论。
+
+## 8. 验收状态（2026-09-26 更新）
+
+在可运行分支 `feat/local-poc-core-20260923` 上，按本矩阵完成实现并独立复跑真实 PostgreSQL / HTTP / Chromium 验收。证据：整合后全量 Vitest 180 文件 / 1760 项通过；浏览器 E2E 7 文件 / 30 项通过（`pnpm run test:e2e`）。逐项状态：
+
+| ID | 状态 | 证据 |
+| --- | --- | --- |
+| A1 | 通过 | 默认场景生成可行计划、96 时段、费用/基线/约束与来源 trace（unit + 真实 PG + 浏览器） |
+| A2 | 通过 | 同输入重复规划一致，算法版本与输入摘要可查 |
+| A3 | 通过 | 同口径基线与候选比较；期末电量不等时拒绝无口径节省声明（`saving-refused`） |
+| A4 | 通过 | 已确认三跳实例路径（`weather_informs_solar_forecast → solar_forecast_guides_energy_plan → energy_plan_controls_device`）+ 运行工件绑定；缺实例/旧定义版本/撤回/跨租户返回 gap 或空（浏览器正反例） |
+| B1 | 通过 | 下午天气变化后上午 PV 不变、下午下降，新版本选中后旧版标 `Superseded`，输出差异与原因 |
+| C1 | 通过 | ReserveSOC 20%→60% + 17:00 起保底：当前 SOC 仍 35%，重算成本并校验晚间目标 |
+| E1 | 通过 | 96 个 PlanStep 的 Requested→Accepted→Observed、Virtual SOLIX 前后 SOC、ExecutionRecord 持久化并重启读回 |
+| E2 | 通过 | 同计划/幂等键不重复应用；`mode=live` 返回 `CAPABILITY_NOT_CONFIGURED` 且无设备调用 |
+| D1 | 通过 | 预测过期/缺失 → `insufficient_data`、无 Selected、无执行回执；仿真器对超功率、SOC 低于 MinSOC、不支持 Action 命名具体时隙与规则 |
+| X1 | 通过 | 能源操作留在场景扩展与部署装配，通用 App/API/Controller/Gateway 不依赖能源字段 |
+
+已交付的 D1 故障注入限于预测有效期与下午时段缺失；「不支持的 Action / 超功率 / SOC 低于 MinSOC」以仿真器单元反例覆盖具体时隙与规则，未新增独立的 HTTP 注入端点。真实硬件、停电预测与公司模型调用仍不在验收范围，缺资源时明确报未配置。
