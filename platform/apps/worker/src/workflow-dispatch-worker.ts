@@ -12,6 +12,8 @@ export interface WorkflowDispatchWorkerOptions {
   readonly controller: WorkflowController
   /** Trusted tenant/space context used only for the dispatch table. */
   readonly dispatchContext: ToolContext
+  /** Re-mints a live trusted context for each durable-store operation in a long-lived worker. */
+  readonly dispatchContextFactory?: () => ToolContext
   /** Creates a fresh trusted, canonical run context after the row has been claimed. */
   readonly contextForRun: (runId: Uuid) => Promise<ToolContext>
   readonly ownerId?: Uuid
@@ -51,10 +53,10 @@ export class WorkflowDispatchWorker {
   }
 
   async tick(): Promise<boolean> {
-    await this.#options.dispatch.reconcileOpenRuns(this.#options.dispatchContext)
+    await this.#options.dispatch.reconcileOpenRuns(this.#dispatchContext())
     const lease = await this.#options.dispatch.claimNext(
       { ownerId: this.#ownerId, leaseDurationMs: this.#leaseDurationMs },
-      this.#options.dispatchContext,
+      this.#dispatchContext(),
     )
     if (lease === undefined) return false
     await this.#driveLease(lease)
@@ -80,7 +82,7 @@ export class WorkflowDispatchWorker {
   }
 
   async #driveLease(initial: WorkflowDispatchLease): Promise<void> {
-    const { dispatch, controller, dispatchContext } = this.#options
+    const { dispatch, controller } = this.#options
     const runId = initial.payload.runId
     let lease = initial
     let leaseLost = false
@@ -126,7 +128,7 @@ export class WorkflowDispatchWorker {
               expectedRevision: lease.revision,
               leaseDurationMs: this.#leaseDurationMs,
             },
-            dispatchContext,
+            this.#dispatchContext(),
           )
           this.#options.onFenceChange?.(runId, publishFence())
         } catch (error) {
@@ -140,7 +142,7 @@ export class WorkflowDispatchWorker {
 
       if (leaseLost) return
       if (outcome.kind === 'success') {
-        await dispatch.complete(publishFence(), dispatchContext)
+        await dispatch.complete(publishFence(), this.#dispatchContext())
       } else {
         try {
           await controller.failPersistedRun(runId, errorCode(outcome.error), runContext)
@@ -165,12 +167,16 @@ export class WorkflowDispatchWorker {
           expectedRevision: lease.revision,
           failureCode: code,
         },
-        this.#options.dispatchContext,
+        this.#dispatchContext(),
       )
     } catch (failure) {
       this.#options.onError?.(failure)
     }
     this.#options.onError?.(error)
+  }
+
+  #dispatchContext(): ToolContext {
+    return this.#options.dispatchContextFactory?.() ?? this.#options.dispatchContext
   }
 }
 

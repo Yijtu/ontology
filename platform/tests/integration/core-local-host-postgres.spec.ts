@@ -203,6 +203,28 @@ describe('the mounted local Core host through normal HTTP', () => {
     if (transport === undefined) throw new Error('transport synthetic scenario was not mounted')
     const registry = transport.rawSources.find((entry) => entry.sourceRef.sourceId === 'registry-a')
     if (registry === undefined) throw new Error('transport registry source was not mounted')
+    const unsupportedTextImport = await request('/api/v1/core/imports', {
+      method: 'POST',
+      headers: { 'content-type': 'application/json', 'idempotency-key': 'core-disabled-model-text' },
+      body: JSON.stringify({
+        scenarioId: transport.scenarioId,
+        sourceId: registry.sourceRef.sourceId,
+        content: '{"text":"T-X-01 needs an inspection"}',
+      }),
+    })
+    expect(unsupportedTextImport.status).toBe(409)
+    expect((await unsupportedTextImport.json() as { error: { code: string } }).error.code).toBe('CAPABILITY_NOT_CONFIGURED')
+    const unsupportedPlainTextImport = await request('/api/v1/core/imports', {
+      method: 'POST',
+      headers: { 'content-type': 'application/json', 'idempotency-key': 'core-disabled-model-plain-text' },
+      body: JSON.stringify({
+        scenarioId: transport.scenarioId,
+        sourceId: registry.sourceRef.sourceId,
+        content: 'T-PLAIN-01 is a facility that needs an inspection.',
+      }),
+    })
+    expect(unsupportedPlainTextImport.status).toBe(409)
+    expect((await unsupportedPlainTextImport.json() as { error: { code: string } }).error.code).toBe('CAPABILITY_NOT_CONFIGURED')
     const rawContent = await readFile(registry.path, 'utf8')
     const importResponse = await request('/api/v1/core/imports', {
       method: 'POST',

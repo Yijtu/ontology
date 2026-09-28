@@ -1,7 +1,7 @@
 import { useCallback, useEffect, useState } from 'react'
 import type { ReactNode } from 'react'
 import type { ProfileRef, ResourceRef } from '@ontology/contracts'
-import type { CoreDeploymentScenario, WorkbenchClient } from '../api/client'
+import type { CoreDeploymentInfo, CoreDeploymentScenario, WorkbenchClient } from '../api/client'
 import { CandidateReviewPanel } from './CandidateReviewPanel'
 import { CoreImportPanel } from './CoreImportPanel'
 import { EvidencePanel } from './EvidencePanel'
@@ -31,7 +31,7 @@ export interface AppProps {
   readonly profileRef: ProfileRef
   readonly deploymentScenarios?: readonly CoreDeploymentScenario[]
   readonly deploymentClassification?: string
-  readonly deploymentModels?: 'disabled' | 'requested_but_not_connected'
+  readonly deploymentModels?: CoreDeploymentInfo['models']
   readonly deploymentOperatorEnabled?: boolean
   readonly timeZone: string
   readonly queryContextFields?: readonly QueryContextField[]
@@ -163,7 +163,7 @@ export function App({
           profileRef={activeProfileRef}
           timeZone={timeZone}
           availableTasks={availableTasks}
-          {...(deploymentModels === undefined ? {} : { modelStatus: deploymentModels })}
+          {...(deploymentModels === undefined ? {} : { modelCapabilities: deploymentModels })}
           onEvidenceReference={openSourceReference}
           {...(queryContextFields === undefined ? {} : { contextFields: queryContextFields })}
           {...(boundRunId === undefined ? {} : { initialRunId: boundRunId })}
@@ -176,6 +176,7 @@ export function App({
             client={client}
             scenarios={scenarioOptions}
             operatorEnabled={deploymentOperatorEnabled === true}
+            generationEnabled={deploymentModels?.generation === true}
             {...(activeScenario === undefined ? {} : { initialScenarioId: activeScenario.scenarioId })}
             onImported={setActiveJobId}
           />

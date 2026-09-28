@@ -210,6 +210,7 @@ describe('ontology_lookup local semantic reads', () => {
     const handler = new OntologyLookupHandler({
       lookup,
       sourceRef: { namespace: 'platform', sourceId: 'published-semantics' },
+      dataMode: 'synthetic',
     })
     const request: ToolExecutionRequest = {
       callId: '11111111-2222-4333-8444-555555555555',
@@ -230,6 +231,7 @@ describe('ontology_lookup local semantic reads', () => {
     const outcome = await handler.execute(request)
     const result = outcome.payload as { readonly gaps: readonly string[] }
     expect(outcome.status).toBe('partial')
+    expect(outcome.dataMode).toBe('synthetic')
     expect(result.gaps).toContain('facts_uncovered:result_page_truncated')
   })
 })

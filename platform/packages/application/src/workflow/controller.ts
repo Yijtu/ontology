@@ -792,6 +792,7 @@ export class WorkflowController {
         resolvedProfileRef: manifest.resolvedProfileRef,
         runtimeRef: manifest.runtimeRef,
         budgetLedgerId: manifest.budgetLedgerId,
+        signal,
       },
       ctx,
     )

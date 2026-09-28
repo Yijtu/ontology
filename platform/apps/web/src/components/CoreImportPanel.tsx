@@ -7,6 +7,7 @@ export interface CoreImportPanelProps {
   readonly scenarios: readonly CoreDeploymentScenario[]
   readonly initialScenarioId?: string
   readonly operatorEnabled?: boolean
+  readonly generationEnabled?: boolean
   readonly onImported?: (jobId: string) => void
 }
 
@@ -15,7 +16,7 @@ function errorMessage(error: unknown): string {
   return error instanceof Error ? error.message : '导入请求失败。'
 }
 
-export function CoreImportPanel({ client, scenarios, initialScenarioId, operatorEnabled = false, onImported }: CoreImportPanelProps) {
+export function CoreImportPanel({ client, scenarios, initialScenarioId, operatorEnabled = false, generationEnabled = false, onImported }: CoreImportPanelProps) {
   const initialScenario = scenarios.find((scenario) => scenario.scenarioId === initialScenarioId) ?? scenarios[0]
   const [scenarioId, setScenarioId] = useState(initialScenario?.scenarioId ?? '')
   const [sourceId, setSourceId] = useState(initialScenario?.rawSourceRefs[0]?.sourceId ?? '')
@@ -41,7 +42,11 @@ export function CoreImportPanel({ client, scenarios, initialScenarioId, operator
       <header className="panel__header">
         <h3>导入原始记录</h3>
         <p className="panel__hint">
-          选择已挂载的来源并粘贴 JSON 对象块。导入会创建真实解析任务；未配置生成模型时，非结构化文本会被明确拒绝。本地 API 还需由操作者显式启用导入权限。
+          选择已挂载的来源并粘贴{generationEnabled ? 'UTF-8原始文档或JSON记录' : '带强身份键的JSON记录'}。
+          {generationEnabled
+            ? '系统先尝试原生字段映射，其余内容走已配置的提取模型并进入候选审核。'
+            : '没有生成模型时，非原生文本会被明确拒绝。'}
+          本地 API 还需由操作者显式启用导入权限。
         </p>
       </header>
       <form
@@ -97,12 +102,12 @@ export function CoreImportPanel({ client, scenarios, initialScenarioId, operator
           </select>
         </label>
         <label>
-          原始 JSON 记录
+          原始文档内容
           <textarea
             data-testid="core-import-content"
             value={content}
             disabled={busy}
-            placeholder={'每条记录一个 JSON 对象；多条记录之间用空行分隔。'}
+            placeholder={generationEnabled ? 'UTF-8文本或JSON对象块；来源快照会被原样归档。' : '每条记录一个JSON对象，且字段需映射到已配置强身份键。'}
             onChange={(event) => setContent(event.target.value)}
           />
         </label>

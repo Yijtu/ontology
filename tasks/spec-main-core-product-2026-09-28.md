@@ -260,3 +260,13 @@ C1 对应 A12 的模块和 publication 测试、A13 的幂等 run id / CAS 测�
 当前 JSON 导入更新文档、候选和已发布语义事实；部署中的 DuckDB 业务快照仍从原始资产建立，不随导入自动更新。实际客户数据库接入与 Text2SQL 须声明独立来源、物理映射和更新机制，不能把该静态快照当成最新导入数据。
 
 最终仍需补齐 A11 的实际模型宿主/小计划/loop、正常规则计算与溯源、完整生命周期和撤回链，以及 C5 最终回归。详细命令与分阶段限制见[独立验证记录](../platform/docs/main-core-independent-review-2026-09-28.md)。
+
+### C3 公司生成模型与任务生命周期 checkpoint（2026-09-29）
+
+- 正常 Core 导入允许已声明来源的有界 UTF-8 文本。配置 Company `GenerationPort` 后，经原文归档、真实 parser、模型抽取与 Schema 验证进入待审候选；未启用模型时，非 native 资料在创建任务前明确拒绝，不产生模型账本调用。模型结果不会自动审核发布。
+- Runtime 能力工厂收到控制器的真实 collection signal；后台任务每轮重新建立 scope context，再按实际 jobId 创建 handler context。账本仍复用原 job/run ledger，不因重新 claim 重置。忽略取消后返回的 stage outcome 被阻断，不发布或推进迟到检查点；model recorder 在归档前拒绝 run/tenant/space 不匹配。
+- Core 的生成、JEV 配置状态分别用 `models.generation` / `models.decision` 返回；默认均关闭。合成部署的 ontology/data query 结果明确标为 synthetic。可配置 JEV 端口不意味着 Planner/语义核验已启用，默认事实问答依然不调用它。
+- 根代理独立验证：Company 与 native host 真实 PG/HTTP 两文件 5/5，38.50s；受影响 unit/UI/architecture 九文件 75/75，14.34s；26 个 TypeScript/TSX owner 文件 ESLint、platform/Web/acceptance typecheck、Web build 全通过。模型服务为受控 loopback HTTP；实际外部模型质量未验收。
+- 时钟反例初版固定在未来，不能证明过期上下文。修正为 bootstrap 实时时钟偏移 -6 分钟、导入前偏移归零并持续推进，确认旧 deadline 已过、新 deadline 有效且 PG `next_attempt_at` 已到期，再通过实际模型任务。未放宽等待或业务候选断言。
+
+本批说明见[模型宿主 checkpoint](../platform/docs/core-model-host-integration-2026-09-29.md)。下一批接口与依赖已记录为[规划/运行时接线方案](../platform/docs/core-planning-runtime-wiring-2026-09-29.md)：包括 Planner fatal 传播与可信 scope、不可变计划/澄清恢复、所选 runtime 的唯一 loop 与无进展停止、逐阶段模型取消与唯一计量、typed query/document writer、文档索引和结构化来源独立挂载。该文档是待实现方案，不把 A11 或 C5 标完成。

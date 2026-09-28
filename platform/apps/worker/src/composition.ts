@@ -258,22 +258,23 @@ export class JobWorkerLoop {
     this.#onError = options.onError ?? (() => undefined)
   }
 
-  async tick(): Promise<{ processed: number; dispatched: number }> {
+  async tick(signal?: AbortSignal): Promise<{ processed: number; dispatched: number }> {
     let processed = 0
     let dispatched = 0
     const scopes = await this.#scopes()
     for (const scope of scopes) {
-      processed += await this.#worker.runUntilIdle(scope.scopeRef, scope.ctx)
-      dispatched += await this.#dispatcher.dispatchOnce(scope.scopeRef, scope.ctx)
+      if (signalAborted(signal)) break
+      processed += await this.#worker.runUntilIdle(scope.scopeRef, scope.ctx, 100, signal)
+      if (!signalAborted(signal)) dispatched += await this.#dispatcher.dispatchOnce(scope.scopeRef, scope.ctx)
     }
     return { processed, dispatched }
   }
 
-  async start(): Promise<void> {
+  async start(signal?: AbortSignal): Promise<void> {
     this.#stopped = false
-    for (let iteration = 0; iteration < this.#maxIterations && !this.#stopped; iteration += 1) {
+    for (let iteration = 0; iteration < this.#maxIterations && !this.#stopped && !signalAborted(signal); iteration += 1) {
       try {
-        await this.tick()
+        await this.tick(signal)
       } catch (error) {
         this.#onError(error)
       }
@@ -285,4 +286,8 @@ export class JobWorkerLoop {
   stop(): void {
     this.#stopped = true
   }
+}
+
+function signalAborted(signal: AbortSignal | undefined): boolean {
+  return signal?.aborted ?? false
 }

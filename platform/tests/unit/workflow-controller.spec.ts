@@ -351,6 +351,7 @@ describe('cancellation is terminal', () => {
       { runId: RUN_A, reason: 'stop', expectedRevision: before.revision },
       OWNER,
     )
+    expect(harness.capabilities.executionSignals[0]?.aborted).toBe(true)
     runtime.release()
     await running
 

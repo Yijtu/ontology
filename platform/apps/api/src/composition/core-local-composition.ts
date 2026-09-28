@@ -14,6 +14,7 @@ import {
   PostgresBudgetLedgerStore,
   PostgresCandidateStore,
   PostgresComponentRegistryStore,
+  PostgresDecisionStateReferenceStore,
   PostgresEvidenceStore,
   PostgresIdentityDecisionStore,
   PostgresJobStore,
@@ -34,6 +35,7 @@ import {
   CandidateValidationStageHandler,
   DraftVerificationService,
   ExtractionPipeline,
+  EXTRACTION_RESPONSE_SCHEMA_REF,
   ExtractionStageHandler,
   InMemoryIndustryManifestSource,
   InMemoryIndustrySchemaSource,
@@ -49,6 +51,7 @@ import {
   createRunCheckpointPort,
   encodeDocumentIngestionRef,
   mapNativeEntities,
+  parseModelCandidates,
   ReviewHandoffStageHandler,
 } from '@ontology/application'
 import type { OutboxConsumer, ProfileSpecValidator, RunProfileBinder } from '@ontology/application'
@@ -82,6 +85,7 @@ import type {
   Uuid,
   VersionRef,
   WorkflowDispatchFence,
+  RuntimeCapabilityContext,
 } from '@ontology/contracts'
 import { DEFAULT_VERIFICATION_POLICY, SCHEMA_DOCUMENTS, TOOL_CATALOGUE, createToolContext } from '@ontology/contracts'
 import { BudgetService, sha256DigestOf } from '@ontology/core'
@@ -102,6 +106,10 @@ import { PublishedFactsDraftWriter } from './published-facts-draft'
 import { createStaticProbeAdapterResolver, createPostgresSourceStore } from './source-registry'
 import { createEnvSecretResolver } from './secret-resolver'
 import { createPostgresProvenanceRead } from './provenance-read'
+import { createCoreModelCapabilityFactory } from './core-model-capabilities'
+import { createCoreModelEvidenceRecorders } from './model-evidence'
+import { createCoreDecisionStateRefProvider } from './decision-state-reference'
+import { createCoreJevActualStateResolver } from './jev-actual-state'
 import { RunProgressService } from '../http/run-progress'
 import type { CoreExampleScenario, LoadedCoreExamples } from './core-example-loader'
 import type { RequestAuthenticator } from '../http/shared'
@@ -455,8 +463,9 @@ function workerContext(
   sourceRefs: readonly SourceRef[] = [],
   runId = WORKER_RUN_ID,
   resolvedProfileHash = sha256DigestOf('core-worker-profile'),
+  clock: () => Date = () => new Date(),
 ): ToolContext {
-  const now = new Date()
+  const now = clock()
   const deadline = new Date(now.getTime() + 5 * 60_000)
   return createToolContext({
     principal: {
@@ -748,6 +757,11 @@ export interface CoreLocalCompositionOptions {
   readonly examples: LoadedCoreExamples
   readonly allowLocalOperator?: boolean
   readonly modelsEnabled?: boolean
+  readonly jevEnabled?: boolean
+  /** Server-side model configuration. The browser process never receives this object. */
+  readonly modelEnvironment?: Readonly<Record<string, string | undefined>>
+  /** Injectable host clock for deadline/recovery verification; production defaults to wall time. */
+  readonly clock?: () => Date
   /** Test/host observer. The default logs no payload text. */
   readonly onWorkerError?: (error: unknown) => void
   readonly logger?: boolean
@@ -774,6 +788,7 @@ function registerCoreImportRoute(input: {
   readonly service: JobService
   readonly objectStore: FileSystemObjectStore
   readonly registry: PostgresArtifactRegistry
+  readonly generationEnabled: boolean
 }): void {
   input.app.post('/api/v1/core/imports', async (request, reply) => {
     const auth = input.authenticate(request)
@@ -796,10 +811,18 @@ function registerCoreImportRoute(input: {
     if (bytes.byteLength === 0 || bytes.byteLength > MAX_IMPORTED_BYTES) {
       throw new InvalidRequestFieldError(`content must be between 1 byte and ${String(MAX_IMPORTED_BYTES)} bytes`)
     }
-    const records = parseJsonRecordBlocks(content, 'import content')
+    let records: Record<string, ScalarValue>[]
+    try {
+      records = parseJsonRecordBlocks(content, 'import content')
+    } catch {
+      if (!input.generationEnabled) {
+        throw new CoreCapabilityError('this local profile accepts native JSON records only; generative extraction is not configured')
+      }
+      records = []
+    }
     const nativeRows = records.filter((record) => mapNativeEntities(scenario.industrySchema, record).length > 0)
-    if (nativeRows.length !== records.length) {
-      throw new CoreCapabilityError('this local profile accepts structured records only; generative extraction is not configured')
+    if ((records.length === 0 || nativeRows.length !== records.length) && !input.generationEnabled) {
+      throw new CoreCapabilityError('this local profile accepts native JSON records only; generative extraction is not configured')
     }
 
     const requestId = request.headers['idempotency-key']
@@ -1024,6 +1047,7 @@ export async function createCoreLocalComposition(options: CoreLocalCompositionOp
   })
   const cleanup: (() => Promise<void>)[] = [() => database.close()]
   let dispatchAbort: AbortController | undefined
+  let jobLoopAbort: AbortController | undefined
   let jobLoop: JobWorkerLoop | undefined
   let jobLoopPromise: Promise<void> | undefined
   let dispatchWorkerPromise: Promise<void> | undefined
@@ -1051,8 +1075,9 @@ export async function createCoreLocalComposition(options: CoreLocalCompositionOp
     cleanup.unshift(() => keywordIndexStore.close())
 
     const scopeRef = options.scopeRef
+    const hostClock = options.clock ?? (() => new Date())
     const allSourceRefs = [...new Map(options.examples.scenarios.flatMap(sourceRefsOf).map((ref) => [sourceKey(ref), ref])).values()]
-    const profileContext = workerContext(scopeRef, allSourceRefs, WORKER_RUN_ID, sha256DigestOf('core-bootstrap-profile'))
+    const profileContext = workerContext(scopeRef, allSourceRefs, WORKER_RUN_ID, sha256DigestOf('core-bootstrap-profile'), hostClock)
     const control = new ControlPostgresRepository(database)
     const componentStore = new PostgresComponentRegistryStore(database)
     const profileStore = new PostgresProfileStore(database)
@@ -1064,9 +1089,50 @@ export async function createCoreLocalComposition(options: CoreLocalCompositionOp
     const definitionStore = new PostgresSemanticDefinitionStore(database)
     const workflowStore = new PostgresWorkflowStore(database)
     const evidenceStore = new PostgresEvidenceStore(database)
+    const decisionStateReferences = new PostgresDecisionStateReferenceStore(database)
     const answerStore = new PostgresAnswerStore(database, { requireWorkflowDispatchFence: true })
     const dispatchStore = new PostgresWorkflowDispatchStore(database)
     const budget = new BudgetService({ store: new PostgresBudgetLedgerStore(database), control })
+    const modelEnvironment: Readonly<Record<string, string | undefined>> = {
+      ...(options.modelEnvironment ?? process.env),
+      CORE_ENABLE_MODELS: options.modelsEnabled === true ? 'true' : 'false',
+      CORE_ENABLE_JEV: options.jevEnabled === true ? 'true' : 'false',
+    }
+    const modelEvidence = createCoreModelEvidenceRecorders({ evidence: evidenceStore, blobs: blobStore, scopeRef })
+    const decisionStateRefProvider = createCoreDecisionStateRefProvider({
+      objectStore,
+      artifactRegistry,
+      references: decisionStateReferences,
+      scopeRef,
+    })
+    const jevStateResolver = createCoreJevActualStateResolver({
+      blobStore,
+      stateRefAuthorizer: {
+        isApproved: (input, ctx) => decisionStateReferences.isApproved(scopeRef, input, ctx),
+      },
+    })
+    const extractionSchemaValidator = {
+      async validate(schemaRef: VersionRef, candidate: unknown) {
+        if (!sameVersionRef(schemaRef, EXTRACTION_RESPONSE_SCHEMA_REF)) {
+          return { valid: false, errors: ['unknown extraction response schema'] }
+        }
+        try {
+          parseModelCandidates(canonicalJson(candidate))
+          return { valid: true }
+        } catch {
+          return { valid: false, errors: ['extraction response did not match the registered candidate contract'] }
+        }
+      },
+    }
+    const modelCapabilities = createCoreModelCapabilityFactory({
+      env: modelEnvironment,
+      secrets: createEnvSecretResolver({ env: modelEnvironment }),
+      budget,
+      generationEvidence: modelEvidence.generation,
+      decisionEvidence: modelEvidence.decision,
+      decisionStateResolver: jevStateResolver,
+      schemaValidator: extractionSchemaValidator,
+    })
     const schemaSource = schemaSourceFor(options.examples.scenarios)
     const semanticDefinitions = new SemanticDefinitionService({ control, store: definitionStore })
     const profileValidatorImpl = profileValidator(createAjv())
@@ -1137,12 +1203,13 @@ export async function createCoreLocalComposition(options: CoreLocalCompositionOp
     }))
     const facts = new CorePublishedFactsProvider(factsProviders)
     const lookup = new OntologyLookupService({ definitions: semanticDefinitions, mappings, facts, pageSize: 50, maxPageSize: 200 })
-    const lookupHandler = new OntologyLookupHandler({ lookup, sourceRef: FACTS_SOURCE_REF })
+    const lookupHandler = new OntologyLookupHandler({ lookup, sourceRef: FACTS_SOURCE_REF, dataMode: 'synthetic' })
     const dataQueryHandler = new DataQueryHandler({
       query: duckDb,
       catalog: duckDb,
       mappings,
       consistency: 'immutable',
+      dataMode: 'synthetic',
       catalogSourceRef: { namespace: 'ontology-core-local', sourceId: 'duckdb-synthetic-snapshot' },
     })
     const documentSearchHandler = createBm25DocumentSearchToolHandler({ service: documentSearch })
@@ -1188,7 +1255,10 @@ export async function createCoreLocalComposition(options: CoreLocalCompositionOp
         },
       } satisfies RuntimeSelectorPort,
       capabilities: {
-        async forRun(binding: { readonly runId: Uuid; readonly budgetLedgerId: Uuid; readonly resolvedProfileRef: { readonly id: string; readonly version: string; readonly snapshotHash: string } }, ctx: ToolContext) {
+        async forRun(binding: RuntimeCapabilityContext, ctx: ToolContext) {
+          if (binding.signal === undefined) {
+            throw new CoreCapabilityError('runtime capabilities require the controller execution AbortSignal')
+          }
           const run = await runs.getRun(binding.runId, ctx)
           const resolved = await profileResolver.getResolvedProfile({
             scopeRef: { tenantId: scopeRef.tenantId, spaceId: scopeRef.spaceId },
@@ -1201,10 +1271,14 @@ export async function createCoreLocalComposition(options: CoreLocalCompositionOp
             resolvedProfile: resolved.resolved,
             operations: operationRegistry(),
           })
+          const modelExecution = modelCapabilities.forExecution({
+            ledgerId: binding.budgetLedgerId,
+            signal: binding.signal,
+          })
           return {
             gateway,
-            generation: DISABLED_GENERATION,
-            decision: disabledDecision(),
+            generation: modelExecution.generation ?? DISABLED_GENERATION,
+            decision: modelExecution.decision ?? disabledDecision(),
             checkpoints: createRunCheckpointPort(runStore),
           } satisfies RuntimeCapabilitySet
         },
@@ -1214,6 +1288,7 @@ export async function createCoreLocalComposition(options: CoreLocalCompositionOp
       verifier: new DraftVerificationService({
         evidence: evidenceStore,
         artifacts: blobStore,
+        decisionStateRefProvider,
         policy: { ...DEFAULT_VERIFICATION_POLICY, semanticReview: 'disabled' },
       }),
       verifications: workflowStore,
@@ -1229,22 +1304,30 @@ export async function createCoreLocalComposition(options: CoreLocalCompositionOp
     }
     controller = new WorkflowController(controllerDependencies)
 
-    const workerDispatchContext = workerContext(scopeRef, allSourceRefs, WORKER_RUN_ID, sha256DigestOf('core-dispatch-worker'))
+    const workerDispatchContextForOperation = () => workerContext(
+      scopeRef,
+      allSourceRefs,
+      WORKER_RUN_ID,
+      sha256DigestOf('core-dispatch-worker'),
+      hostClock,
+    )
     const workflowDispatchWorker = new WorkflowDispatchWorker({
       dispatch: dispatchStore,
       controller,
-      dispatchContext: workerDispatchContext,
+      dispatchContext: workerDispatchContextForOperation(),
+      dispatchContextFactory: workerDispatchContextForOperation,
       contextForRun: async (runId) => {
-        const run = await runs.getRun(runId, workerDispatchContext)
+        const runContext = workerDispatchContextForOperation()
+        const run = await runs.getRun(runId, runContext)
         const { scenario } = await resolveScenarioProfile(
           profileResolver,
           options.examples.scenarios,
           run.profileRef,
           scopeRef,
-          workerDispatchContext,
+          runContext,
           run.resolvedProfileHash,
         )
-        return workerContext(scopeRef, sourceRefsOf(scenario), runId, run.resolvedProfileHash)
+        return workerContext(scopeRef, sourceRefsOf(scenario), runId, run.resolvedProfileHash, hostClock)
       },
       onFenceChange(runId, fence) {
         if (fence === undefined) {
@@ -1265,10 +1348,14 @@ export async function createCoreLocalComposition(options: CoreLocalCompositionOp
     const parser: DocumentParserPort = new LocalDocumentExtractionService({ blobs: blobStore, store: parseStore })
     const pipeline = new ExtractionPipeline({
       schemaSource,
-      generation: DISABLED_GENERATION,
+      accountingOwner: 'adapter',
+      generationForRun: ({ ledgerId, signal }) => modelCapabilities.forExecution({ ledgerId, signal }).generation,
       candidates: candidateStore,
       budget,
-      modelRef: { modelId: 'model-not-configured', version: COMPONENT_VERSION },
+      modelRef: {
+        modelId: options.modelsEnabled === true ? modelEnvironment['CORE_COMPANY_MODEL_PLATFORM_ID'] ?? 'model-not-configured' : 'model-not-configured',
+        version: COMPONENT_VERSION,
+      },
       outputLimit: { maxTokens: 2_048 },
     })
     const handlers = createIngestionHandlerRegistry({
@@ -1279,7 +1366,25 @@ export async function createCoreLocalComposition(options: CoreLocalCompositionOp
         new ReviewHandoffStageHandler(),
       ],
     })
-    const jobWorker = new JobWorker({ store: jobStore, handlers, budget, workerId: 'core-local-ingestion-worker' })
+    const jobWorker = new JobWorker({
+      store: jobStore,
+      handlers,
+      budget,
+      workerId: 'core-local-ingestion-worker',
+      now: () => hostClock().toISOString(),
+      contextForJob: (job) => {
+        const scenario = options.examples.scenarios.find((candidate) =>
+          candidate.rawSources.some((source) => `${source.sourceRef.namespace}/${source.sourceRef.sourceId}` === job.sourceRef),
+        )
+        return workerContext(
+          scopeRef,
+          scenario === undefined ? [] : sourceRefsOf(scenario),
+          job.jobId,
+          scenario?.definitionRef.digest ?? sha256DigestOf(`unmounted-ingestion-job:${job.jobId}`),
+          hostClock,
+        )
+      },
+    })
     const materializationStore = new PostgresMaterializationStore(database)
     const materializer = new IncrementalMaterializer({ publishedSource: multiSchemaSource, materialization: materializationStore })
     const materializationConsumer = new MaterializationOutboxConsumer({
@@ -1295,18 +1400,21 @@ export async function createCoreLocalComposition(options: CoreLocalCompositionOp
     )
     const dispatcher = new OutboxDispatcher({ store: jobStore, consumer: outboxConsumer })
     const provenanceRead = createPostgresProvenanceRead({ database, blobStore })
-    const jobContext = workerContext(scopeRef, allSourceRefs, WORKER_RUN_ID, sha256DigestOf('core-ingestion-worker'))
     jobLoop = new JobWorkerLoop({
       worker: jobWorker,
       dispatcher,
-      scopes: async () => [{ scopeRef, ctx: jobContext }],
+      scopes: async () => [{
+        scopeRef,
+        ctx: workerContext(scopeRef, allSourceRefs, WORKER_RUN_ID, sha256DigestOf('core-ingestion-worker'), hostClock),
+      }],
       intervalMs: 250,
       onError(error) {
         options.onWorkerError?.(error)
         process.stderr.write('[core-worker] ingestion/outbox cycle failed\n')
       },
     })
-    jobLoopPromise = jobLoop.start()
+    jobLoopAbort = new AbortController()
+    jobLoopPromise = jobLoop.start(jobLoopAbort.signal)
     dispatchAbort = new AbortController()
     dispatchWorkerPromise = workflowDispatchWorker.run(dispatchAbort.signal)
 
@@ -1364,7 +1472,10 @@ export async function createCoreLocalComposition(options: CoreLocalCompositionOp
       readScenarioProfile,
       profileRefsByScenario,
       profileSpecsByScenario,
-      modelsEnabled: options.modelsEnabled ?? false,
+      modelCapabilities: {
+        generation: modelCapabilities.generationEnabled,
+        decision: modelCapabilities.decisionEnabled,
+      },
       availableTasksByScenario,
       allowLocalOperator: options.allowLocalOperator ?? false,
       api: {
@@ -1394,6 +1505,7 @@ export async function createCoreLocalComposition(options: CoreLocalCompositionOp
         service: jobService,
         objectStore,
         registry: artifactRegistry,
+        generationEnabled: modelCapabilities.generationEnabled,
       }),
       ...(options.logger === undefined ? {} : { logger: options.logger }),
     }
@@ -1402,6 +1514,7 @@ export async function createCoreLocalComposition(options: CoreLocalCompositionOp
       dependencies,
       async close() {
         await dispatchAbort?.abort()
+        jobLoopAbort?.abort()
         jobLoop?.stop()
         for (const runId of activeRunIds) controller?.abortActiveWork(runId, 'Core host is shutting down')
         await Promise.allSettled([

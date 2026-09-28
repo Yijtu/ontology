@@ -36,6 +36,7 @@ import type {
   RuntimeAdapter,
   RuntimeCancelReceipt,
   RuntimeCapabilityFactoryPort,
+  RuntimeCapabilityContext,
   RuntimeCapabilitySet,
   RuntimeCheckpointRef,
   RuntimeDependencies,
@@ -219,6 +220,7 @@ export class RecordingRuntimeSelector implements RuntimeSelectorPort {
 export class StaticCapabilityFactory implements RuntimeCapabilityFactoryPort {
   readonly calls: Uuid[] = []
   readonly contextRunIds: Uuid[] = []
+  readonly executionSignals: (AbortSignal | undefined)[] = []
   readonly #gateway: ToolGateway
   readonly #generation: GenerationPort
   readonly #decision: DecisionPort
@@ -236,9 +238,10 @@ export class StaticCapabilityFactory implements RuntimeCapabilityFactoryPort {
     this.#decision = input.decision ?? forbiddenDecision
   }
 
-  forRun(context: { readonly runId: Uuid }, ctx: ToolContext): Promise<RuntimeCapabilitySet> {
+  forRun(context: RuntimeCapabilityContext, ctx: ToolContext): Promise<RuntimeCapabilitySet> {
     this.calls.push(context.runId)
     this.contextRunIds.push(ctx.runId)
+    this.executionSignals.push(context.signal)
     return Promise.resolve({
       gateway: this.#gateway,
       generation: this.#generation,

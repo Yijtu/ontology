@@ -13,7 +13,7 @@ describe('Core deployment metadata client', () => {
         return Promise.resolve(new Response(JSON.stringify({ data: {
           classification: 'public_synthetic_demo_not_an_industry_standard',
           operatorEnabled: true,
-          models: 'disabled',
+          models: { generation: false, decision: false },
           scenarios: [{
             scenarioId: 'transport-facility-inspection',
             label: '交通设施巡检（合成演示）',
@@ -56,7 +56,7 @@ describe('Core deployment metadata client', () => {
       fetchImpl: () => Promise.resolve(new Response(JSON.stringify({ data: {
         classification: 'public_synthetic_demo_not_an_industry_standard',
         operatorEnabled: true,
-        models: 'disabled',
+        models: { generation: false, decision: false },
         scenarios: [{
           scenarioId: 'transport',
           label: 'Transport',

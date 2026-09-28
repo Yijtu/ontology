@@ -2,7 +2,7 @@
 
 一个可以挂载行业语义、Agent runtime 和数据后端的业务问答框架。它把客户资料变成可审核的实体、属性、关系与规则，再通过受限工具查询数据、执行可表示的规则，并发布经过核验的回答及其来源。
 
-当前开发入口是 `platform/`。本轮重点是从 `main@51c8cb4` 补齐通用产品链，实施分支为 `feat/main-core-product-20260928`。**现在可以从浏览器完成原始 JSON 导入、原文对照、身份确认、审核发布、字段事实查询、正式正文和证据展开；新版 profile 的发布、预检、激活和刷新也已验证。进程重启后，同一个历史回答与证据仍可读取。** 自然语言规划、正常规则回答和模型接线继续验收，逐项证据见[独立验证记录](platform/docs/main-core-independent-review-2026-09-28.md)。
+当前开发入口是 `platform/`。本轮重点是从 `main@51c8cb4` 补齐通用产品链，实施分支为 `feat/main-core-product-20260928`。**现在可以从浏览器完成原始 JSON 导入、原文对照、身份确认、审核发布、字段事实查询、正式正文和证据展开；新版 profile 的发布、预检、激活和刷新也已验证。进程重启后，同一个历史回答与证据仍可读取。** 公司生成模型的普通文本抽取已接入，使用受控 HTTP 验证；自然语言规划和正常规则回答继续实现。逐项证据见[独立验证记录](platform/docs/main-core-independent-review-2026-09-28.md)。
 
 ## 输入和输出
 
@@ -91,7 +91,11 @@ pnpm exec node scripts/dev-core.mjs
 
 prepare 显式运行迁移，验证非 superuser、`NOBYPASSRLS` 的 `ontology_app`，并写入忽略提交的 `.env.core.local`。API 启动不会自动迁移；业务数据库与控制数据库也不是同一项配置。详细重启、端口、模型开关和故障处理见[启动说明](platform/docs/core-local-startup-2026-09-28.md)。
 
-模型默认关闭。当前 Core 宿主支持强标识 JSON 原始记录和注册的字段事实任务；普通自然语言问题返回 `CAPABILITY_NOT_CONFIGURED`，不会默认回答一个无关任务。`CORE_ENABLE_MODELS=true` 当前仅表示请求启用，尚未完成公司模型/JEV 在此宿主的实际接线。已有模型适配器的受控测试不代表宿主已接通真实模型。密钥留在 API 进程，不传给 Vite。
+模型默认关闭。强标识 JSON 记录可以零模型抽取；配置公司生成模型后，普通 UTF-8 文本可以通过正常导入、解析和模型抽取成为待审核候选。候选仍须经过身份确认和人工审核发布。每个模型 HTTP attempt 由适配器在同一后台任务账本计量，重试不重置预算；取消后返回的结果不能继续发布或推进检查点。
+
+`CORE_ENABLE_MODELS=true` 和 `CORE_ENABLE_JEV=true` 分别配置生成与决策能力，二者可独立启用。开启角色但缺少 endpoint、model 或 secret 配置会在启动阶段报错；密钥只留在 API 进程，不传给 Vite。设置方法见[模型配置](platform/docs/core-model-capabilities-2026-09-28.md)。部署元数据中的 `models.generation` / `models.decision` 表示已装配相应端口；它们不代表外部模型质量通过验收。
+
+目前正常问答仍只开放注册的字段事实任务。任意自然语言规划、自由生成和普通规则问答返回明确的能力限制；默认语义核验为 `not_run/disabled`。JEV 已能独立配置，Planner 和语义核验的正常宿主调用仍待下一批接线，不能因 `models.decision=true` 就认定这些路径已启用。下一批缺口与接口方案见[规划和运行时接线](platform/docs/core-planning-runtime-wiring-2026-09-29.md)。
 
 ## 已验证的 API 使用流程
 
@@ -99,7 +103,7 @@ prepare 显式运行迁移，验证非 superuser、`NOBYPASSRLS` 的 `ontology_a
 
 1. 选择顶部场景。工作台中的行业组件、查询任务和导入来源会随场景切换，旧导入草稿会清空。
 2. 在「配置工作台」填写新 SemVer，例如 `1.0.1`，点击「发布、预检并激活」。页面读取真实 active revision 后执行 CAS；发生并发冲突需刷新状态并重新预检。
-3. 在「导入任务」选择声明中的来源，粘贴示例原始 JSON 对象，点击「导入并解析」。原始示例文件位于 `platform/deploy/core/examples/`；多条对象用空行分隔。
+3. 在「导入任务」选择声明中的来源，粘贴示例原始 JSON 对象，点击「导入并解析」。原始示例文件位于 `platform/deploy/core/examples/`；多条对象用空行分隔。公司生成模型已配置时，也可导入原始普通文本，无需先包装成 JSON。
 4. 在「候选审核」选择候选，打开原文对照。新实体先「新建待确认」，再核对返回的目标实体 ID 并「匹配已有实体」，完成关联确认；然后批准并发布。
 5. 在「业务问答」选择已注册读取任务，例如 `facts:inspection_due`。当前只读取已发布属性事实；普通自然语言、自由生成和业务规则推理尚未在默认宿主启用。
 6. 正式回答出现后点击「打开来源」，查看真实归档证据及版本。`semanticReview: not_run/disabled` 表示只完成硬核验，不代表真实模型语义评估已通过。
@@ -116,7 +120,7 @@ pnpm exec node scripts/dev-core.mjs
 这只适用于 loopback 本机演示。默认关闭该开关时，业务用户只能读取和查询。它不代表生产 SSO、多人权限管理或远程部署已经交付。
 
 1. `GET /api/v1/core/deployment` 查看已挂载场景、profileRef、definitionRef、来源和可执行任务。首版任务形如 `facts:inspection_due` 或 `facts:operating_hours`；字段来自行业定义。
-2. `POST /api/v1/core/imports` 提交 `scenarioId`、声明中的 `sourceId`、UTF-8 `content`，并带 `Idempotency-Key`。目前导入支持每段一个强标识 JSON 记录，大小上限 1 MiB。返回 jobId 后，通过 `GET /api/v1/jobs/{jobId}` 等待 `awaiting_review`。
+2. `POST /api/v1/core/imports` 提交 `scenarioId`、声明中的 `sourceId`、UTF-8 `content`，并带 `Idempotency-Key`。大小上限 1 MiB；强标识 JSON 记录可原生处理，普通文本需启用并配置公司生成模型。返回 jobId 后，通过 `GET /api/v1/jobs/{jobId}` 等待 `awaiting_review`，并查看候选状态与失败计数；任务进入审核阶段不代表每个候选都有效。
 3. `GET /api/v1/candidates?jobId={jobId}&kind=entity` 与 `GET /api/v1/candidates/{candidateId}` 查看实际候选与原始标识。
 4. 先执行身份裁决，再审核候选。新实体的 `create_pending` 仅返回待确认的 entityId；还需要后续 `match` 裁决确认该候选与实体的关联。已有实体应核对强标识与范围后匹配，不能因名称相同而自动合并。
 5. `POST /api/v1/candidates/{candidateId}/reviews` 审核通过后，调用 `POST /api/v1/semantic-publications`，提交 approvedCandidateRefs 与挂载的 schemaRef。未确认身份或未审核的候选不能发布。

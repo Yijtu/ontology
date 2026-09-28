@@ -2,7 +2,7 @@
 
 本轮基线：`main@51c8cb4`；实施分支：`feat/main-core-product-20260928`。本文件记录根代理的独立复核，不代替实施 SPEC 的最终验收矩阵。
 
-最新代码检查点为 `f1e362d`：Planner 的 JEV 实际状态归档与失败分类；`444bdb5` 是真实 PostgreSQL 支撑定位和来源 UI，`b4c9164` 是启动器模型角色隔离，`6a20318` 是模型端口工厂和抽取计费边界。`5a0fb80` 已交付可用工作台、导入/审核/事实查询/来源 UI 和配置版本接线。正常原始导入至事实答案、浏览器配置激活和同回答/证据的进程重启读取已独立通过。正常规则回答、模型宿主规划与完整矩阵继续实现；下面的模块测试不代表整个产品已交付。
+已提交代码检查点包括 `ebac92b` 的实际 run 绑定 facts 计划、`f1e362d` 的 Planner JEV 实际状态边界、`444bdb5` 的真实 PostgreSQL 支撑定位、`6a20318` 的模型工厂，以及 `5a0fb80` 的可用浏览器产品链。本次新增公司模型普通文本抽取与任务生命周期冻结批次，已由根代理复核通过，见下表及[模型宿主说明](core-model-host-integration-2026-09-29.md)。正常规则回答、模型宿主规划与完整矩阵继续实现；下面的模块测试不代表整个产品已交付。
 
 ## 已独立验证的检查点
 
@@ -53,6 +53,9 @@
 | 正式支撑 PostgreSQL/HTTP 与来源 UI 正例恢复（09-29） | 两 PG 文件 / 9 项通过，25.89s；reader/producer/UI/architecture 四文件 / 34 项通过，20.60s；9 个代码/测试文件 ESLint 通过 | 实际 PublishedSemanticSource、IncrementalMaterializer 写不可变切片再归档；多实体歧义/精确 payload 定位、撤回后旧序列支撑、OR、关系排除、分页和隔离全部保留。UTC 等价序列化不改写工件/hash；UI 支撑覆盖独立显示，归档可复核不再称原来源可重读 |
 | Planner JEV 实际状态边界（09-29） | planner 与 question-rewriting 两文件 / 18 项通过，2.74s；三 owner TypeScript 文件 ESLint 通过 | 状态先归档/授权，不向官方 port 发送问题 hash；缺能力不调用 decision，取消/预算/归档 fatal 传播、可恢复失败显式标记。host/planner 正常模型执行仍另行验收 |
 | 启动器模型角色独立隔离（09-29） | Node 6 项通过，syntax 与两 owner 文件 ESLint 通过 | Company-only/JEV-only、默认全关和 Vite 配置过滤；没有据此声称实际外网模型接通 |
+| 实际运行绑定的 facts 小计划（09-29） | 一文件 / 6 项通过，2.59s；两 owner 文件 ESLint 通过 | 精确 profile/hash/definition/实际 mapping pins；行业与 profile ID 可不同、空映射和 Unicode 属性允许。最多三项；纯 builder，不代表宿主已执行多属性任务 |
+| 公司模型与生命周期冻结批次（09-29） | 真实 PostgreSQL/HTTP 两文件 / 5 项通过，38.50s；unit/UI/architecture 九文件 / 75 项通过，14.34s | 原始普通文本经受控 Company HTTP 产有效候选并读回来源；同 job 的唯一结算为 39 tokens。旧 bootstrap 截止时间实际已过、每次读取推进的时钟下仍可执行新任务；迟到取消结果不发布，模型归档前核验 run/tenant/space。两行业 native 事实链继续通过 |
+| 上述冻结批次类型、lint 与 Web 构建 | platform/Web/acceptance 三项目 typecheck 通过；26 个代码/测试文件 ESLint 通过；Web build 57 modules，1.02s | 仅表示该检查点可构建。后续规则 producer、规划/loop 或 writer 接线需要重新检查受影响范围；本次未运行全量 integration/load/acceptance/browser matrix |
 
 上表是不同时间的聚焦检查点，存在覆盖重叠；不相加为一次全量通过数量。实际 prepare 检查只覆盖当时已有迁移至 `053`，不包含后来新增的 `054`/`055`/`056`。本次生成的临时 env、验证脚本、容器和卷已回收。已有 3000/5173/54329 环境未改动。
 

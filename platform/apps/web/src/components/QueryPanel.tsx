@@ -12,6 +12,7 @@ import type { WorkbenchError } from '../state/workbench'
 import { StatePanel } from './StatePanel'
 import { useViewport } from './useViewport'
 import { PublishedAnswerBody } from './PublishedAnswerBody'
+import type { CoreDeploymentInfo } from '../api/client'
 
 /**
  * The business query surface (US-019/020/021). It lets a user ask within the resolved
@@ -27,7 +28,7 @@ export interface QueryPanelProps {
   readonly timeZone: string
   /** Deployment-owned safe task IDs offered as shortcuts; arbitrary queries remain possible. */
   readonly availableTasks?: readonly string[]
-  readonly modelStatus?: 'disabled' | 'requested_but_not_connected'
+  readonly modelCapabilities?: CoreDeploymentInfo['models']
   /** Deployment-owned context fields; the shared query view has no industry fields. */
   readonly contextFields?: readonly QueryContextField[]
   /** Deep-linked run id (`?run=<id>`) so a state can be reproduced in a browser. */
@@ -274,7 +275,7 @@ function AnswerPanel({
   )
 }
 
-export function QueryPanel({ client, profileRef, timeZone, availableTasks = [], modelStatus, contextFields = [], initialRunId, onEvidenceReference }: QueryPanelProps) {
+export function QueryPanel({ client, profileRef, timeZone, availableTasks = [], modelCapabilities, contextFields = [], initialRunId, onEvidenceReference }: QueryPanelProps) {
   const viewport = useViewport()
   const [state, dispatch] = useReducer(queryReducer, undefined, initialQueryState)
   const [question, setQuestion] = useState('')
@@ -442,13 +443,10 @@ export function QueryPanel({ client, profileRef, timeZone, availableTasks = [], 
         </p>
         {availableTasks.length === 0 ? null : (
           <p className="panel__hint" data-testid="query-capability-note">
-            当前仅开放已注册属性事实读取任务；
-            {modelStatus === 'requested_but_not_connected'
-              ? '外部模型虽被请求但尚未接入。'
-              : modelStatus === 'disabled'
-                ? '生成模型未配置。'
-                : '未提供生成模型状态。'}
-            任意自然语言分析、规则推理和自由生成暂不可用。
+            当前仅开放已注册属性事实读取任务；任意自然语言规划、规则推理和自由生成暂不可用。
+            {modelCapabilities === undefined ? '模型配置状态未知。' : (
+              `Company生成${modelCapabilities.generation ? '已配置' : '未启用'}；JEV决策${modelCapabilities.decision ? '已配置' : '未启用'}。`
+            )}
           </p>
         )}
       </header>

@@ -27,6 +27,8 @@ export interface JobWorkerDependencies {
   readonly budget: BudgetLedgerPort
   readonly workerId?: string
   readonly leaseDurationMs?: number
+  /** Trusted per-job context factory; table/lease operations keep using the scoped loop context. */
+  readonly contextForJob?: (job: LogicalJobRecord, scopeContext: ToolContext) => ToolContext
   readonly now?: () => string
   readonly newId?: () => string
 }
@@ -73,6 +75,7 @@ export class JobWorker {
   readonly #budget: BudgetLedgerPort
   readonly #workerId: string
   readonly #leaseDurationMs: number
+  readonly #contextForJob: ((job: LogicalJobRecord, scopeContext: ToolContext) => ToolContext) | undefined
   readonly #now: () => string
   readonly #newId: () => string
 
@@ -82,12 +85,14 @@ export class JobWorker {
     this.#budget = dependencies.budget
     this.#workerId = dependencies.workerId ?? 'worker'
     this.#leaseDurationMs = dependencies.leaseDurationMs ?? DEFAULT_LEASE_DURATION_MS
+    this.#contextForJob = dependencies.contextForJob
     this.#now = dependencies.now ?? (() => new Date().toISOString())
     this.#newId = dependencies.newId ?? (() => globalThis.crypto.randomUUID())
   }
 
   /** Claim and process at most one unit of work. */
-  async runOnce(scopeRef: ScopeRef, ctx: ToolContext): Promise<JobWorkerResult> {
+  async runOnce(scopeRef: ScopeRef, ctx: ToolContext, signal?: AbortSignal): Promise<JobWorkerResult> {
+    if (isAborted(signal)) return { disposition: 'idle' }
     const lease = await this.#store.acquireLease(
       scopeRef,
       { workerId: this.#workerId, now: this.#now(), leaseDurationMs: this.#leaseDurationMs },
@@ -97,6 +102,7 @@ export class JobWorker {
 
     let job = lease.job
     const attempt = lease.attempt
+    const handlerContext = this.#contextForJob?.(job, ctx) ?? ctx
     // A background ledger is opened once per claimed job; `ensureLedger` is idempotent, so a
     // reclaimed attempt reuses the same ledger rather than resetting the budget.
     const ledger = await this.#budget.openLedger(
@@ -158,6 +164,9 @@ export class JobWorker {
       }
 
       const controller = new AbortController()
+      const forwardAbort = (): void => controller.abort(signal?.reason)
+      if (isAborted(signal)) forwardAbort()
+      else signal?.addEventListener('abort', forwardAbort, { once: true })
       let outcome
       try {
         outcome = await handler.run({
@@ -165,11 +174,36 @@ export class JobWorker {
           attempt,
           budget: this.#budget,
           ledgerId: ledger.ledgerId,
-          ctx,
+          ctx: handlerContext,
           signal: controller.signal,
         })
       } catch (error) {
         const info = classifyFailure(error, job.stage, this.#now())
+        const failed = await this.#store.failAttempt(
+          scopeRef,
+          job.jobId,
+          attempt.attemptId,
+          { error: info, failedAt: info.occurredAt },
+          ctx,
+        )
+        return {
+          disposition: 'failed',
+          jobId: failed.jobId,
+          attemptId: attempt.attemptId,
+          stage: info.stage,
+          ...reclaimed,
+        }
+      } finally {
+        signal?.removeEventListener('abort', forwardAbort)
+      }
+
+      if (controller.signal.aborted) {
+        const interrupted = new JobStageFailure(
+          'DEADLINE_EXCEEDED',
+          'the stage execution was interrupted before its checkpoint; the result was not committed',
+          true,
+        )
+        const info = classifyFailure(interrupted, job.stage, this.#now())
         const failed = await this.#store.failAttempt(
           scopeRef,
           job.jobId,
@@ -262,10 +296,12 @@ export class JobWorker {
     scopeRef: ScopeRef,
     ctx: ToolContext,
     maxAttempts = 100,
+    signal?: AbortSignal,
   ): Promise<number> {
     let processed = 0
     for (let index = 0; index < maxAttempts; index += 1) {
-      const result = await this.runOnce(scopeRef, ctx)
+      if (isAborted(signal)) break
+      const result = await this.runOnce(scopeRef, ctx, signal)
       if (result.disposition === 'idle') break
       processed += 1
     }
@@ -314,4 +350,8 @@ export class JobWorker {
       ctx,
     )
   }
+}
+
+function isAborted(signal: AbortSignal | undefined): boolean {
+  return signal?.aborted === true
 }

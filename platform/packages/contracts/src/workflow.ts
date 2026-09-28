@@ -482,6 +482,8 @@ export interface RuntimeCapabilityContext {
   readonly resolvedProfileRef: ResolvedProfileRef
   readonly runtimeRef: VersionRef
   readonly budgetLedgerId: Uuid
+  /** The controller's real collection signal; optional only for source compatibility with older hosts. */
+  readonly signal?: AbortSignal
 }
 
 /**

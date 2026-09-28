@@ -198,7 +198,7 @@ export interface CoreDeploymentInfo {
   readonly classification: string
   readonly scenarios: readonly CoreDeploymentScenario[]
   readonly operatorEnabled: boolean
-  readonly models: 'disabled' | 'requested_but_not_connected'
+  readonly models: { readonly generation: boolean; readonly decision: boolean }
 }
 
 export interface CoreImportRequest {
@@ -296,7 +296,7 @@ function parseCoreDeployment(value: unknown): CoreDeploymentInfo {
   if (!isRecord(value) || typeof value['classification'] !== 'string' || typeof value['operatorEnabled'] !== 'boolean' || !Array.isArray(value['scenarios'])) {
     throw malformedResponse('/api/v1/core/deployment', 'the deployment response is missing its scenario list')
   }
-  if (value['models'] !== 'disabled' && value['models'] !== 'requested_but_not_connected') {
+  if (!isRecord(value['models']) || typeof value['models']['generation'] !== 'boolean' || typeof value['models']['decision'] !== 'boolean') {
     throw malformedResponse('/api/v1/core/deployment', 'the deployment response has an unknown model status')
   }
   const scenarios: CoreDeploymentScenario[] = value['scenarios'].map((candidate, index) => {
@@ -324,7 +324,12 @@ function parseCoreDeployment(value: unknown): CoreDeploymentInfo {
       ...(candidate['baseProfileSpec'] === undefined ? {} : { baseProfileSpec: candidate['baseProfileSpec'] }),
     }
   })
-  return { classification: value['classification'], scenarios, operatorEnabled: value['operatorEnabled'], models: value['models'] }
+  return {
+    classification: value['classification'],
+    scenarios,
+    operatorEnabled: value['operatorEnabled'],
+    models: { generation: value['models']['generation'], decision: value['models']['decision'] },
+  }
 }
 
 function dataOf<T>(body: unknown, path: string): T {

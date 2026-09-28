@@ -18,7 +18,6 @@ describe('core-main API bootstrap', () => {
       database: { queryUnscoped },
       scopeRef,
       examples: examples(),
-      modelsEnabled: false,
     })
     try {
       const ready = await app.inject({ method: 'GET', url: '/healthz' })
@@ -40,7 +39,6 @@ describe('core-main API bootstrap', () => {
       database: { queryUnscoped: async () => ({ rows: [], rowCount: 0 }) },
       scopeRef,
       examples: examples(),
-      modelsEnabled: false,
     })
     try {
       const response = await app.inject({
@@ -53,7 +51,8 @@ describe('core-main API bootstrap', () => {
         data: {
           classification: string
           scenarios: { scenarioId: string; namespace: string; availableTasks: string[]; rawSourceRefs: unknown[] }[]
-          models: string
+          models: { generation: boolean; decision: boolean }
+          operatorEnabled: boolean
         }
       }>()
       expect(body.data.classification).toBe('public_synthetic_demo_not_an_industry_standard')
@@ -65,7 +64,8 @@ describe('core-main API bootstrap', () => {
       expect(body.data.scenarios[0]?.rawSourceRefs).toHaveLength(3)
       expect(JSON.stringify(body)).not.toContain('D:/work')
       expect(JSON.stringify(body)).not.toContain('/records/')
-      expect(body.data.models).toBe('disabled')
+      expect(body.data.models).toEqual({ generation: false, decision: false })
+      expect(body.data.operatorEnabled).toBe(false)
     } finally {
       await app.close()
     }
@@ -76,7 +76,6 @@ describe('core-main API bootstrap', () => {
       database: { queryUnscoped: async () => ({ rows: [], rowCount: 0 }) },
       scopeRef,
       examples: examples(),
-      modelsEnabled: false,
     })
     try {
       const response = await app.inject({

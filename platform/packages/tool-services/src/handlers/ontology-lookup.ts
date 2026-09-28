@@ -3,6 +3,7 @@ import type {
   OntologyLookupInput,
   OntologyLookupIntent,
   OntologyLookupOutput,
+  DataMode,
   ResourceRef,
   ScopeRef,
   SourceRef,
@@ -24,6 +25,8 @@ export interface OntologyLookupHandlerConfig {
   readonly lookup: OntologyLookupService
   /** The control/semantic store this lookup read from; never fabricated by the handler. */
   readonly sourceRef: SourceRef
+  /** Deployment-declared mode for the pinned published corpus (for example, a synthetic demo corpus). */
+  readonly dataMode?: DataMode
 }
 
 const INTENTS: readonly OntologyLookupIntent[] = ['definitions', 'resolve', 'relations', 'rules', 'facts']
@@ -171,6 +174,7 @@ export class OntologyLookupHandler implements ToolHandler {
       payload: output,
       status: truncated ? 'partial' : output.items.length === 0 ? 'empty' : 'ok',
       ...(validity === undefined ? {} : { validity }),
+      ...(this.#config.dataMode === undefined ? {} : { dataMode: this.#config.dataMode }),
       coverage,
       sources: [
         {

@@ -44,6 +44,39 @@ function context(): ToolContext {
 }
 
 describe('WorkflowDispatchWorker', () => {
+  it('re-mints dispatch store contexts instead of reusing an expired bootstrap deadline', async () => {
+    let clock = Date.parse('2026-09-29T00:00:00.000Z')
+    const operationDeadlines: string[] = []
+    const dispatch: WorkflowDispatchPort = {
+      enqueue: vi.fn(),
+      reconcileOpenRuns: vi.fn(async (ctx) => { operationDeadlines.push(ctx.deadline); return 0 }),
+      get: vi.fn(),
+      claimNext: vi.fn(async (_input, ctx) => { operationDeadlines.push(ctx.deadline); return undefined }),
+      renew: vi.fn(),
+      complete: vi.fn(),
+      fail: vi.fn(),
+      cancel: vi.fn(),
+      cancelRun: vi.fn(),
+    }
+    const worker = new WorkflowDispatchWorker({
+      dispatch,
+      controller: { drivePersistedRun: vi.fn(), abortActiveWork: vi.fn() } as unknown as WorkflowController,
+      dispatchContext: context(),
+      dispatchContextFactory: () => ({
+        ...context(),
+        deadline: new Date(clock + 5 * 60_000).toISOString(),
+      }),
+      contextForRun: async () => context(),
+    })
+
+    await worker.tick()
+    clock += 6 * 60_000
+    await worker.tick()
+
+    expect(operationDeadlines).toHaveLength(4)
+    expect(Date.parse(operationDeadlines[2] ?? '')).toBeGreaterThan(Date.parse(operationDeadlines[0] ?? '') + 5 * 60_000)
+  })
+
   it('renews long controller work and completes with the latest durable fence', async () => {
     const finished = deferred<{ runId: string; state: 'published' }>()
     const initial = lease()

@@ -34,7 +34,7 @@ export interface CoreApiDependencies {
   readonly examples: LoadedCoreExamples
   readonly profileRefsByScenario?: Readonly<Record<string, ProfileRef>>
   readonly profileSpecsByScenario?: Readonly<Record<string, ProfileSpec>>
-  readonly modelsEnabled: boolean
+  readonly modelCapabilities?: { readonly generation: boolean; readonly decision: boolean }
   readonly availableTaskIds?: readonly string[]
   readonly availableTasksByScenario?: Readonly<Record<string, readonly string[]>>
   readonly readScenarioProfile?: (scenarioId: string) => Promise<{
@@ -147,7 +147,7 @@ export function createCoreApi(dependencies: CoreApiDependencies): FastifyInstanc
         classification: dependencies.examples.classification,
         scenarios,
         operatorEnabled: dependencies.allowLocalOperator ?? false,
-        models: dependencies.modelsEnabled ? 'requested_but_not_connected' : 'disabled',
+        models: dependencies.modelCapabilities ?? { generation: false, decision: false },
       },
     })
   })
@@ -171,6 +171,8 @@ export async function startCoreApi(): Promise<void> {
       examples,
       allowLocalOperator: process.env['CORE_ENABLE_OPERATOR_ROUTES'] === 'true',
       modelsEnabled: process.env['CORE_ENABLE_MODELS'] === 'true',
+      jevEnabled: process.env['CORE_ENABLE_JEV'] === 'true',
+      modelEnvironment: process.env,
     })
     app = createCoreApi({ ...composition.dependencies, logger: true })
     await app.listen({ host: '127.0.0.1', port: readPort(process.env['CORE_API_PORT']) })
