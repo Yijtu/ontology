@@ -2,7 +2,7 @@
 
 本轮基线：`main@51c8cb4`；实施分支：`feat/main-core-product-20260928`。本文件记录根代理的独立复核，不代替实施 SPEC 的最终验收矩阵。
 
-最新已推送检查点为 `6a20318`：模型端口工厂和抽取计费边界；`5a0fb80` 是可用工作台、导入/审核/事实查询/来源 UI 和实际配置版本接线，`d122a34` 是不可变支撑读取。正常原始导入至事实答案、浏览器配置激活和同回答/证据的进程重启读取已独立通过。正常规则回答、模型宿主规划与完整矩阵继续实现；下面的模块测试不代表整个产品已交付。
+最新代码检查点为 `f1e362d`：Planner 的 JEV 实际状态归档与失败分类；`444bdb5` 是真实 PostgreSQL 支撑定位和来源 UI，`b4c9164` 是启动器模型角色隔离，`6a20318` 是模型端口工厂和抽取计费边界。`5a0fb80` 已交付可用工作台、导入/审核/事实查询/来源 UI 和配置版本接线。正常原始导入至事实答案、浏览器配置激活和同回答/证据的进程重启读取已独立通过。正常规则回答、模型宿主规划与完整矩阵继续实现；下面的模块测试不代表整个产品已交付。
 
 ## 已独立验证的检查点
 
@@ -97,6 +97,6 @@ pnpm exec vitest run tests/integration/incremental-materialization-postgres.spec
 
 ## 最终交付仍需执行
 
-真实 HTTP/UI 从原始资料导入开始的完整链、两行业和异构 mapping、配置实际发布/生效、单次/小计划/有界 loop、取消/澄清/重启、正文与来源、修改/撤回后的当前与历史行为。最后执行适用 lint/typecheck/contracts/boundaries、完整 Vitest、web build 和全部浏览器 E2E，并在实施 SPEC 填入实际证据与未验证项。
+原始 JSON 到已发布属性事实回答、两个行业的 HTTP 链、浏览器配置生效和同历史回答重启读取已通过上述检查。剩余产品门槛包括普通资料的模型抽取、正常规则回答及其完整来源、真实宿主中的单次/小计划/有界 loop、取消/澄清、修改和撤回后的当前/历史规则行为。最后执行适用 lint/typecheck/contracts/boundaries、完整 Vitest、web build 和全部浏览器 E2E，并在实施 SPEC 填入实际证据与未验证项。
 
-启动脚本的纯配置测试和真实 prepare 已有证据；`core-main.ts` 已调用真实 composition，首条字段事实查询与两行业正常 HTTP 已通过独立验证。完整 launcher、浏览器操作、规则回答及恢复仍待验收。owner 报告完整 platform/Web/acceptance TypeScript 通过，根代理尚需在最终代码冻结后复核完整检查。真实外部模型质量、客户数据质量和真实设备均没有据此验收。
+启动脚本的纯配置测试、真实 prepare、实际 subprocess launcher 与浏览器事实操作已有证据；`core-main.ts` 已调用真实 composition。规则回答和可安全恢复的运行阶段仍需验收。根代理已在先前冻结批次复核 platform/Web/acceptance TypeScript；后续模型宿主改动需在冻结后重新检查。真实外部模型质量、客户数据质量和真实设备均没有据此验收。

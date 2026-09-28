@@ -245,3 +245,18 @@ C1 对应 A12 的模块和 publication 测试、A13 的幂等 run id / CAS 测�
 - 根代理独立 `tests/unit/core-example-assets.spec.ts` 5/5：按canonical schema校验definition/manifest/mapping digest；真实LocalDocumentExtractionService+parseNativeRecord+ExtractionPipeline native input 生成待审核候选，未seed候选及其下游状态；准确验证 5999 min < 100 h 与 6000 min = 100 h。
 - `decision-state-reference-postgres.spec.ts` 真实 PostgreSQL 1文件/3项通过，覆盖完整ResourceRef/run/profile绑定、同内容幂等、冲突、RLS、取消后授权撤销和 SQL `{}` null-trap拒绝。测试fixture数据库由独立临时命名卷和显式teardown管理。
 - 资产与授权存储均是独立模块门槛；默认 host 尚未挂载行业配置/运行mapping、未证明API/UI导入到正式问答，也未开始真实模型/规则回答验收，A02—A05/A10/A15仍未完成。
+
+### C3/C4 可用事实产品链与模型边界 checkpoint（2026-09-29）
+
+以下记录更新上面的历史进度；各阶段记录中的“尚未实现”仅描述当时检查点。
+
+- `84d210b`、`2e3e767`、`2cc32c9`、`5a0fb80` 已接入正常 Core host、持久调度及可用浏览器。原始 JSON 经真实 parser、候选、pending/match 身份、审核发布、ontology 查询、硬核验和正式正文；没有 seed 候选、事实或答案。两个行业的正常 HTTP 链已通过。浏览器实际验证了 T-04 回答“否”和来源展开。
+- 浏览器为同一个工业 `1.0.1` profile 读取已有 active revision 后成功 CAS 激活，revision 1→2；刷新仍读取新版本。场景切换会更新工作台行业与导入来源，并清空旧草稿。A02 的该实际组合已有证据，其他 runtime/backend 组合不自动算可用。
+- 实际 launcher 在独立临时库运行 28 项迁移，API/Web 及同源 metadata 可用。重启保留同一数据库和 objects 后，同 run 的 PublishedAnswer JSON 完全一致，同 evidence 仍 verifiable/integrity=true。临时服务、环境文件、对象、命名容器和卷均显式回收；既有 3000/5173/54329 环境未改动。
+- `d122a34`、`444bdb5` 的正式支撑 reader 从 append-only materialization slices 读取已保存工件；多实体需要精确 payload 定位，缺源证据或非 evidence 来源显式不完整。根代理独立真实 PostgreSQL 两文件 9/9、reader/producer/UI/architecture 四文件 34/34。正常宿主尚缺 per-instance rule evidence producer 和规则问答接线，A06—A10 的完整规则链仍未通过。
+- `6a20318`、`b4c9164`、`f1e362d` 已交付模型工厂、adapter 唯一计量、独立模型开关及 Planner 实际状态归档端口。根代理独立模型工厂/抽取三文件 20/20、启动器 Node 6/6、Planner/问题改写两文件 18/18。受控 HTTP 和模块检查不等于公司模型/JEV 已在默认宿主完成规划或外部模型质量验收。
+- 冻结批次的 unit/contracts/UI/architecture 全检查：127 文件、1,429 项通过，exit 0。该次不包含 PostgreSQL、integration、load、acceptance、browser projects，且早于后续模型 host 改动；不记作最终全矩阵通过。
+
+当前 JSON 导入更新文档、候选和已发布语义事实；部署中的 DuckDB 业务快照仍从原始资产建立，不随导入自动更新。实际客户数据库接入与 Text2SQL 须声明独立来源、物理映射和更新机制，不能把该静态快照当成最新导入数据。
+
+最终仍需补齐 A11 的实际模型宿主/小计划/loop、正常规则计算与溯源、完整生命周期和撤回链，以及 C5 最终回归。详细命令与分阶段限制见[独立验证记录](../platform/docs/main-core-independent-review-2026-09-28.md)。
