@@ -828,7 +828,7 @@ export async function startAcceptanceEnvironment(): Promise<AcceptanceEnvironmen
   })
   const app = createApiServer({
     authenticate,
-    runs: { service: runService, progress },
+    runs: { service: runService, progress, submissionMode: 'records-only' },
     jobs: { service: jobService },
     workbench: { profiles: profileResolver, sources: sourceRegistry, components },
     decisions: { service: identityService, candidates: candidateStore, documents: parseStore },

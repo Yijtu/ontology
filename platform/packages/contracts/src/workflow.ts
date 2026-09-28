@@ -19,6 +19,7 @@ import type {
   ToolGateway,
 } from './ports'
 import type { ToolContext } from './trusted'
+import type { WorkflowDispatchFence } from './workflow-dispatch'
 import type {
   ClaimExplanation,
   DraftClaim,
@@ -206,6 +207,8 @@ export interface DraftWriterResult {
  * autonomous Agent loop (SPEC §4.2).
  */
 export interface DraftWriterPort {
+  /** Set to idempotent only when repeating the exact same request cannot repeat external effects. */
+  readonly recoverySafety?: 'idempotent' | 'non_replayable'
   writeDraft(request: DraftWriterRequest, ctx: ToolContext): Promise<DraftWriterResult>
 }
 
@@ -267,6 +270,8 @@ export interface PublicationGrant {
   readonly evidenceManifestHash: Sha256Digest
   readonly scenarioManifestHash: Sha256Digest
   readonly expectedRunRevision: RevisionString
+  /** The unexpired durable worker lease that is atomically checked with answer insertion. */
+  readonly workflowDispatchFence?: WorkflowDispatchFence
   readonly issuedBy: 'workflow-controller'
   readonly issuedAt: Rfc3339UtcTimestamp
 }
@@ -337,6 +342,7 @@ export interface RecordAnswerInput {
   readonly answer: PublishedAnswer
   readonly expectedRunState: RunState
   readonly expectedRunRevision: RevisionString
+  readonly workflowDispatchFence?: WorkflowDispatchFence
 }
 
 export type AnswerStoreErrorCode =

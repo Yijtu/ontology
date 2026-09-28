@@ -238,7 +238,14 @@ export class AnswerPublicationService implements AnswerPublisherPort {
     // that lands between the check above and the write still cannot persist an answer.
     try {
       return await this.#answers.record(
-        { answer, expectedRunState: 'verifying', expectedRunRevision: grant.expectedRunRevision },
+        {
+          answer,
+          expectedRunState: 'verifying',
+          expectedRunRevision: grant.expectedRunRevision,
+          ...(grant.workflowDispatchFence === undefined
+            ? {}
+            : { workflowDispatchFence: grant.workflowDispatchFence }),
+        },
         ctx,
       )
     } catch (error) {

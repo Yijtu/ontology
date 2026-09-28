@@ -26,5 +26,6 @@ describe('PostgresWorkflowDispatchStore request boundary', () => {
       expectedRevision: '2',
       failureCode: 'Provider error includes details',
     }, CONTEXT)).rejects.toMatchObject({ code: 'INVALID_ARGUMENT' })
+    await expect(STORE.cancelRun('not-a-uuid', CONTEXT)).rejects.toMatchObject({ code: 'INVALID_ARGUMENT' })
   })
 })

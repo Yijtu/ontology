@@ -91,6 +91,96 @@ function fieldReferenceAt(payload: unknown, pointer: string): string | undefined
   return typeof row.semanticFieldRef === 'string' ? row.semanticFieldRef : typeof row.name === 'string' ? row.name : undefined
 }
 
+function factValueLocation(pointer: string): number | undefined {
+  const parts = pointer.split('/').slice(1).map((part) => part.replaceAll('~1', '/').replaceAll('~0', '~'))
+  if (
+    (parts.length !== 4 && !(parts.length === 5 && parts[4] === 'amount')) ||
+    parts[0] !== 'items' || parts[2] !== 'payload' || parts[3] !== 'value'
+  ) return undefined
+  return indexOf(parts[1])
+}
+
+function isVersionRef(value: unknown): value is { readonly id: string; readonly version: string; readonly digest: string } {
+  if (typeof value !== 'object' || value === null || Array.isArray(value)) return false
+  const ref = value as Record<string, unknown>
+  return typeof ref.id === 'string' && ref.id.length > 0 &&
+    typeof ref.version === 'string' && /^\d+\.\d+\.\d+$/u.test(ref.version) &&
+    typeof ref.digest === 'string' && /^sha256:[0-9a-f]{64}$/u.test(ref.digest)
+}
+
+function sameVersionRef(
+  left: unknown,
+  right: unknown,
+): boolean {
+  return isVersionRef(left) && isVersionRef(right) &&
+    left.id === right.id && left.version === right.version && left.digest === right.digest
+}
+
+function isResourceRef(value: unknown): boolean {
+  if (typeof value !== 'object' || value === null || Array.isArray(value)) return false
+  const ref = value as Record<string, unknown>
+  return typeof ref.id === 'string' &&
+    /^[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/iu.test(ref.id) &&
+    typeof ref.version === 'string' && /^\d+\.\d+\.\d+$/u.test(ref.version) &&
+    typeof ref.digest === 'string' && /^sha256:[0-9a-f]{64}$/u.test(ref.digest) &&
+    typeof ref.kind === 'string'
+}
+
+/**
+ * Published ontology facts have a typed record shape rather than a SQL table. Accept only
+ * the exact field pointers emitted by the published-facts reader and verify the row carries
+ * an immutable fact ref, exact schema pin, parent statement and original support refs.
+ */
+function publishedFactFieldBindingMatches(
+  payload: unknown,
+  binding: ResultFieldBinding,
+  predicate: string,
+): boolean {
+  const rowIndex = factValueLocation(binding.valuePointer)
+  if (rowIndex === undefined) return false
+  const base = `/items/${String(rowIndex)}`
+  if (
+    binding.fieldRefPointer !== `${base}/payload/attributeId` ||
+    binding.subjectPointer !== `${base}/payload/subjectEntityId` ||
+    binding.timePointer !== undefined ||
+    (binding.unitPointer !== undefined && binding.unitPointer !== `${base}/payload/unitCode`)
+  ) return false
+
+  const itemResult = resolveJsonPointer(payload, base)
+  if (!itemResult.found || typeof itemResult.value !== 'object' || itemResult.value === null || Array.isArray(itemResult.value)) return false
+  const item = itemResult.value as Record<string, unknown>
+  if (item['kind'] !== 'fact' || !isVersionRef(item['ref'])) return false
+  const concept = item['conceptRef']
+  if (typeof concept !== 'object' || concept === null || Array.isArray(concept)) return false
+  const conceptRef = concept as Record<string, unknown>
+  const recordResult = resolveJsonPointer(payload, `${base}/payload`)
+  if (!recordResult.found || typeof recordResult.value !== 'object' || recordResult.value === null || Array.isArray(recordResult.value)) return false
+  const record = recordResult.value as Record<string, unknown>
+  const valueResult = resolveJsonPointer(payload, binding.valuePointer)
+  const subjectResult = resolveJsonPointer(payload, binding.subjectPointer)
+  const fieldResult = resolveJsonPointer(payload, binding.fieldRefPointer)
+  const schemaRef = record['schemaRef']
+  const resultDefinition = resolveJsonPointer(payload, '/definitionVersion')
+  const sourceRefs = record['sourceRefs']
+  const validity = record['validity']
+  return item['ref'].id === record['assertionId'] &&
+    conceptRef.conceptId === predicate && conceptRef.definitionVersion === (schemaRef as Record<string, unknown> | undefined)?.version &&
+    resultDefinition.found && sameVersionRef(resultDefinition.value, schemaRef) &&
+    typeof conceptRef.namespace === 'string' && conceptRef.namespace.length > 0 &&
+    isVersionRef(schemaRef) &&
+    typeof record['objectId'] === 'string' && record['objectId'].length > 0 &&
+    typeof record['attributeId'] === 'string' && record['attributeId'] === predicate &&
+    typeof record['subjectEntityId'] === 'string' && record['subjectEntityId'].length > 0 &&
+    typeof record['assertionId'] === 'string' && record['assertionId'].length > 0 &&
+    typeof record['logicalAssertionId'] === 'string' && record['logicalAssertionId'].length > 0 &&
+    typeof record['sourceStatementId'] === 'string' && record['sourceStatementId'].length > 0 &&
+    Array.isArray(sourceRefs) && sourceRefs.every(isResourceRef) &&
+    typeof validity === 'object' && validity !== null && !Array.isArray(validity) &&
+    typeof (validity as Record<string, unknown>)['validFrom'] === 'string' &&
+    valueResult.found && subjectResult.found && subjectResult.value === record['subjectEntityId'] &&
+    fieldResult.found && fieldResult.value === predicate
+}
+
 interface ResultFieldBinding {
   readonly valuePointer: string
   readonly fieldRefPointer?: string
@@ -104,6 +194,7 @@ export function fieldBindingMatches(
   binding: ResultFieldBinding,
   predicate: string,
 ): boolean {
+  if (publishedFactFieldBindingMatches(payload, binding, predicate)) return true
   if (binding.fieldRefPointer === undefined) return false
   const cell = queryCellLocation(binding.valuePointer)
   const field = fieldReferenceAt(payload, binding.fieldRefPointer)

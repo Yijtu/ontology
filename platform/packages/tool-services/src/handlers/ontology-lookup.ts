@@ -2,11 +2,13 @@ import type {
   OntologyConceptRef,
   OntologyLookupInput,
   OntologyLookupIntent,
+  OntologyLookupOutput,
   ResourceRef,
   ScopeRef,
   SourceRef,
   TimeContext,
   ToolCoverage,
+  ValidityInterval,
 } from '@ontology/contracts'
 import type { OntologyLookupService } from '@ontology/semantic-engine'
 import { ToolGatewayError } from '../errors'
@@ -119,6 +121,30 @@ function parseLookupInput(args: Readonly<Record<string, unknown>>): OntologyLook
   }
 }
 
+function commonFactValidity(items: OntologyLookupOutput['items']): ValidityInterval | undefined {
+  const intervals = items.filter((item) => item.kind === 'fact').map((item) => item.validity)
+  if (intervals.length === 0 || intervals.some((interval) => interval === undefined)) return undefined
+  const defined = intervals.filter((interval): interval is ValidityInterval => interval !== undefined)
+  let validFrom = defined[0]?.validFrom
+  let validTo: string | undefined
+  for (const interval of defined) {
+    const fromMs = Date.parse(interval.validFrom)
+    const toMs = interval.validTo === undefined ? undefined : Date.parse(interval.validTo)
+    if (!Number.isFinite(fromMs) || (toMs !== undefined && !Number.isFinite(toMs))) {
+      throw new ToolGatewayError('OUTCOME_INVALID', 'a published fact carries invalid validity timestamps')
+    }
+    if (validFrom === undefined || fromMs > Date.parse(validFrom)) validFrom = interval.validFrom
+    if (interval.validTo !== undefined && (validTo === undefined || toMs !== undefined && toMs < Date.parse(validTo))) {
+      validTo = interval.validTo
+    }
+  }
+  if (validFrom === undefined) return undefined
+  if (validTo !== undefined && Date.parse(validFrom) >= Date.parse(validTo)) {
+    throw new ToolGatewayError('OUTCOME_INVALID', 'published fact rows do not share one valid-time interval')
+  }
+  return { validFrom, ...(validTo === undefined ? {} : { validTo }) }
+}
+
 export class OntologyLookupHandler implements ToolHandler {
   readonly toolId = 'ontology_lookup'
   readonly #config: OntologyLookupHandlerConfig
@@ -131,15 +157,20 @@ export class OntologyLookupHandler implements ToolHandler {
     const input = parseLookupInput(request.arguments)
     const page = await this.#config.lookup.lookup(input, request.ctx)
     const truncated = page.nextCursor !== null
+    const output = input.intent === 'facts' && truncated
+      ? { ...page.output, gaps: [...page.output.gaps, 'facts_uncovered:result_page_truncated'] }
+      : page.output
+    const validity = input.intent === 'facts' ? commonFactValidity(output.items) : undefined
     const coverage: ToolCoverage = {
-      returned: page.output.items.length,
+      returned: output.items.length,
       truncated,
       ...(page.nextCursor === null ? {} : { cursor: page.nextCursor }),
       completeness: page.completeness,
     }
     return {
-      payload: page.output,
-      status: truncated ? 'partial' : page.output.items.length === 0 ? 'empty' : 'ok',
+      payload: output,
+      status: truncated ? 'partial' : output.items.length === 0 ? 'empty' : 'ok',
+      ...(validity === undefined ? {} : { validity }),
       coverage,
       sources: [
         {

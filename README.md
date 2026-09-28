@@ -2,7 +2,7 @@
 
 一个可以挂载行业语义、Agent runtime 和数据后端的业务问答框架。它把客户资料变成可审核的实体、属性、关系与规则，再通过受限工具查询数据、执行可表示的规则，并发布经过核验的回答及其来源。
 
-当前开发入口是 `platform/`。本轮重点是从 `main@51c8cb4` 补齐通用产品链，实施分支为 `feat/main-core-product-20260928`。**默认可运行宿主和两个行业的完整 HTTP/UI 流程仍在接线与验收，不能把模块测试通过理解为完整产品已经交付。** 逐项证据见[独立验证记录](platform/docs/main-core-independent-review-2026-09-28.md)。
+当前开发入口是 `platform/`。本轮重点是从 `main@51c8cb4` 补齐通用产品链，实施分支为 `feat/main-core-product-20260928`。**首条真实 HTTP 流程已独立通过：原始资料导入、解析抽取、身份确认、审核发布、字段事实查询、硬核验和正式答案。完整 UI、规则回答、自然语言规划和重启等验收仍在进行。** 逐项证据见[独立验证记录](platform/docs/main-core-independent-review-2026-09-28.md)。
 
 ## 输入和输出
 
@@ -87,11 +87,64 @@ pnpm exec tsx scripts/prepare-core-db.ts
 pnpm exec node scripts/dev-core.mjs
 ```
 
-**当前默认 API 入口仍待接线验收。** 缺少 `apps/api/src/core-main.ts` 时，launcher 会报明确缺入口错误，不会伪报就绪。这段命令是本地部署的准备入口；不是当前产品已经能完整操作的承诺。
+`core-main.ts` 已接入真实 PostgreSQL、DuckDB、文档解析、候选/身份/发布服务和持久 workflow worker。完整 launcher 与浏览器使用流程仍在验收；下文的字段查询 API 是目前已经实际走通的入口。
 
 prepare 显式运行迁移，验证非 superuser、`NOBYPASSRLS` 的 `ontology_app`，并写入忽略提交的 `.env.core.local`。API 启动不会自动迁移；业务数据库与控制数据库也不是同一项配置。详细重启、端口、模型开关和故障处理见[启动说明](platform/docs/core-local-startup-2026-09-28.md)。
 
-模型默认关闭。只有明确设置 `CORE_ENABLE_MODELS=true` 并提供 profile 所需的公司模型/JEV 服务配置时，才允许外部模型调用。密钥留在 API 进程，不传给 Vite。没有配置的模型能力必须在结果中显示缺失或明确 fallback。
+模型默认关闭。当前 Core 宿主支持强标识 JSON 原始记录和注册的字段事实任务；普通自然语言问题返回 `CAPABILITY_NOT_CONFIGURED`，不会默认回答一个无关任务。`CORE_ENABLE_MODELS=true` 当前仅表示请求启用，尚未完成公司模型/JEV 在此宿主的实际接线。已有模型适配器的受控测试不代表宿主已接通真实模型。密钥留在 API 进程，不传给 Vite。
+
+## 已验证的 API 使用流程
+
+管理操作需要启动 API 时显式开启本机 operator 模式：
+
+```powershell
+$env:CORE_ENABLE_OPERATOR_ROUTES = 'true'
+pnpm exec node scripts/dev-core.mjs
+```
+
+这只适用于 loopback 本机演示。默认关闭该开关时，业务用户只能读取和查询。它不代表生产 SSO、多人权限管理或远程部署已经交付。
+
+1. `GET /api/v1/core/deployment` 查看已挂载场景、profileRef、definitionRef、来源和可执行任务。首版任务形如 `facts:inspection_due` 或 `facts:operating_hours`；字段来自行业定义。
+2. `POST /api/v1/core/imports` 提交 `scenarioId`、声明中的 `sourceId`、UTF-8 `content`，并带 `Idempotency-Key`。目前导入支持每段一个强标识 JSON 记录，大小上限 1 MiB。返回 jobId 后，通过 `GET /api/v1/jobs/{jobId}` 等待 `awaiting_review`。
+3. `GET /api/v1/candidates?jobId={jobId}&kind=entity` 与 `GET /api/v1/candidates/{candidateId}` 查看实际候选与原始标识。
+4. 先执行身份裁决，再审核候选。新实体的 `create_pending` 仅返回待确认的 entityId；还需要后续 `match` 裁决确认该候选与实体的关联。已有实体应核对强标识与范围后匹配，不能因名称相同而自动合并。
+5. `POST /api/v1/candidates/{candidateId}/reviews` 审核通过后，调用 `POST /api/v1/semantic-publications`，提交 approvedCandidateRefs 与挂载的 schemaRef。未确认身份或未审核的候选不能发布。
+6. `POST /api/v1/runs` 创建正式字段查询；轮询 `GET /api/v1/runs/{runId}/answer`。运行中返回 202；正式正文发布后返回 200。没有足够证据时不能把空稿当普通答案发布。
+
+所有写入使用相应的 `If-Match` revision，创建类操作使用 `Idempotency-Key`。不要机械复用示例 revision：身份裁决、候选审核和 publication 有各自的版本，需读取最新返回值。
+
+示例原始输入可使用 `deploy/core/examples/transport-facility/records/registry-a.txt`：
+
+```json
+{
+  "scenarioId": "transport-facility-inspection",
+  "sourceId": "registry-a",
+  "content": "原始文件的完整 UTF-8 内容"
+}
+```
+
+例如 T-04 的实际身份操作为：先以 `If-Match: 0` 提交 `{"kind":"create_pending","justification":"已核对合成资料的原始标识"}`；取返回的 targetEntityId，再以 `If-Match: 1` 提交以下关联确认：
+
+```json
+{
+  "kind": "match",
+  "targetEntityId": "上一步返回的 entityId",
+  "strongIdentity": { "kind": "native_id", "value": "T-04" }
+}
+```
+
+完成审核、发布后，字段查询的请求为：
+
+```json
+{
+  "profileRef": { "id": "synthetic-transport-facility-demo", "version": "1.0.0" },
+  "question": "facts:inspection_due",
+  "context": { "timeZone": "UTC" },
+  "preferences": { "route": "template", "allowWeb": false }
+}
+```
+
+这项任务列出该 profile 范围内已发布的对应属性事实，不是自然语言规则推理。独立 HTTP 验收从原始 T-04 资料得到 `inspection_due=false` 的 V2 正文断言及 evidence 引用，并显示 `semanticReview: {status: "not_run", reason: "disabled"}`。可复制的完整请求顺序见[真实 HTTP 验收](platform/tests/integration/core-local-host-postgres.spec.ts)；测试没有预置候选、身份、事实或答案。
 
 正常停止 launcher 用 **Ctrl+C**；停止 PostgreSQL 并保留数据：
 
@@ -132,4 +185,4 @@ pnpm run build:web
 
 `typecheck` 同时覆盖后端、Web 和 acceptance 项目。真实数据库/worker/HTTP 验收与受控模型单测分别记录；聚焦检查点存在重叠，不能相加成一次全量通过。真实付费模型质量、客户数据质量、任意历史重建和生产 SSO 不因本地测试而自动通过。
 
-截至当前检查点，完整 TypeScript 检查通过；全 unit/contracts/UI 项目为 1,381 项中 1,380 项通过，支撑来源链回归正在修复。默认启动、正常原始导入至正式回答、两个行业替换、修改/撤回与重启等，仍以本轮最终验收为交付门槛。LOCAL 与 GitHub Issue 的对应关系以 [manifest](.autoresearch/issues/manifest.json) 为准。
+截至首条 HTTP 检查点，完整 TypeScript 检查通过；原始导入到正式事实回答已有独立 PostgreSQL/HTTP 通过记录，四种物理 mapping 的真实 DuckDB 查询也通过。早期全 unit/contracts/UI 检查有一项旧支撑来源回归；新的安全模块已通过聚焦检查，正式归档 reader 和旧 PG 来源正例仍待接线。全部浏览器、规则回答、模型规划、修改/撤回与重启等，仍以本轮最终验收为门槛，不以聚焦检查点代替全量通过。LOCAL 与 GitHub Issue 的对应关系以 [manifest](.autoresearch/issues/manifest.json) 为准。

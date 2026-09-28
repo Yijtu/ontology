@@ -124,7 +124,9 @@ function columnExpression(alias: string, field: FieldMapping): CompiledExpressio
 function projectionExpression(alias: string, field: FieldMapping): CompiledExpression {
   const column = columnExpression(alias, field)
   if (field.valueMap !== undefined && field.valueMap.length > 0) {
-    return { kind: 'mapped', operand: column, map: field.valueMap, fallback: 'unknown' }
+    // An absent physical code is unknown, never a canonical false/string. Unknown non-null
+    // codes also remain SQL NULL so a boolean cast cannot turn them into a business value.
+    return { kind: 'mapped', operand: column, map: field.valueMap, fallback: null }
   }
   if (field.unitFactor !== undefined && field.unitFactor !== 1) {
     return { kind: 'scaled', operand: column, factor: field.unitFactor }

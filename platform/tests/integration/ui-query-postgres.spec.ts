@@ -304,7 +304,7 @@ beforeAll(async () => {
 
   app = createApiServer({
     authenticate: testAuthenticator,
-    runs: { service: runService, progress },
+    runs: { service: runService, progress, submissionMode: 'records-only' },
     answers: { reader },
   })
 }, 300_000)

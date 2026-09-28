@@ -96,7 +96,8 @@ function renderExpression(state: RenderState, expression: CompiledExpression): s
             `WHEN ${operand} = ${bindParameter(state, entry.physical)} THEN ${bindParameter(state, entry.canonical)}`,
         )
         .join(' ')
-      return `CASE ${branches} ELSE ${bindParameter(state, expression.fallback)} END`
+      const fallback = expression.fallback === null ? 'NULL' : bindParameter(state, expression.fallback)
+      return `CASE WHEN ${operand} IS NULL THEN NULL ${branches} ELSE ${fallback} END`
     }
     case 'aggregate': {
       const fn = AGGREGATE_FUNCTIONS[expression.fn]

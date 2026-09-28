@@ -38,6 +38,15 @@ interface DispatchRow extends QueryResultRow {
   updated_at: Date | string
 }
 
+interface RecoverableRunRow extends QueryResultRow {
+  run_id: string
+  state: string
+  revision: string
+  clarification_id: string | null
+  resumed_checkpoint_id: string | null
+  has_dispatch_history: boolean
+}
+
 interface TrustedScope {
   readonly tenantId: Uuid
   readonly spaceId: Uuid
@@ -90,6 +99,10 @@ function assertUuid(value: string, label: string): asserts value is Uuid {
 function canonicalUuid(value: string, label: string): Uuid {
   assertUuid(value, label)
   return value.toLowerCase()
+}
+
+function isUuid(value: string | null): value is string {
+  return value !== null && UUID_PATTERN.test(value)
 }
 
 function assertRevision(value: string, label: string, minimum = 0n): bigint {
@@ -278,6 +291,74 @@ export class PostgresWorkflowDispatchStore implements WorkflowDispatchPort {
     })
   }
 
+  async reconcileOpenRuns(ctx: ToolContext): Promise<number> {
+    const trusted = scopeOf(ctx)
+    return this.#db.withIdentityScope(trusted, async (client) => {
+      const recoverable = await client.query<RecoverableRunRow>(
+        `SELECT run.run_id, run.state, run.revision::text AS revision,
+                clarification.clarification_id::text AS clarification_id,
+                resumed.checkpoint_id AS resumed_checkpoint_id,
+                EXISTS (
+                  SELECT 1 FROM agent_platform.workflow_dispatches AS history
+                   WHERE history.tenant_id = run.tenant_id AND history.space_id = run.space_id
+                     AND history.run_id = run.run_id
+                ) AS has_dispatch_history
+           FROM agent_platform.runs AS run
+           LEFT JOIN LATERAL (
+             SELECT response.clarification_id
+               FROM agent_platform.run_clarification_responses AS response
+              WHERE response.tenant_id = run.tenant_id AND response.space_id = run.space_id
+                AND response.run_id = run.run_id AND response.revision = run.revision
+              ORDER BY response.responded_at DESC, response.clarification_id
+              LIMIT 1
+           ) AS clarification ON true
+           LEFT JOIN LATERAL (
+             SELECT event.data->>'resumedFrom' AS checkpoint_id
+               FROM agent_platform.run_events AS event
+              WHERE event.tenant_id = run.tenant_id AND event.space_id = run.space_id
+                AND event.run_id = run.run_id AND event.data->>'state' = 'collecting'
+                AND event.data ? 'resumedFrom'
+              ORDER BY event.sequence DESC
+              LIMIT 1
+           ) AS resumed ON true
+          WHERE run.tenant_id = $1::uuid AND run.space_id = $2::uuid
+            AND run.state IN ('created', 'preflight', 'collecting', 'drafting', 'verifying')
+            AND run.updated_at <= clock_timestamp() - interval '5 seconds'
+            AND NOT EXISTS (
+              SELECT 1 FROM agent_platform.workflow_dispatches AS active
+               WHERE active.tenant_id = run.tenant_id AND active.space_id = run.space_id
+                 AND active.run_id = run.run_id AND active.state IN ('pending', 'leased')
+            )
+          ORDER BY run.updated_at, run.run_id
+          FOR UPDATE OF run SKIP LOCKED
+          LIMIT 100`,
+        [trusted.tenantId, trusted.spaceId],
+      )
+      let insertedCount = 0
+      for (const row of recoverable.rows) {
+        const runId = canonicalUuid(row.run_id, 'runId')
+        const logicalActionId =
+          row.state === 'collecting' && row.clarification_id !== null
+            ? `clarification-response:${row.clarification_id}:${row.revision}`
+            : row.state === 'collecting' && isUuid(row.resumed_checkpoint_id)
+              ? `resume:${row.resumed_checkpoint_id}:${row.revision}`
+              : row.has_dispatch_history
+                ? `recovery:${runId}:${row.revision}`
+                : 'initial-drive'
+        const payload: WorkflowDispatchPayload = { runId }
+        const inserted = await client.query(
+          `INSERT INTO agent_platform.workflow_dispatches
+             (tenant_id, space_id, run_id, action_kind, logical_action_id, payload, payload_digest)
+           VALUES ($1::uuid, $2::uuid, $3::uuid, 'drive_run', $4, $5::jsonb, $6)
+           ON CONFLICT (tenant_id, space_id, run_id, action_kind, logical_action_id) DO NOTHING`,
+          [trusted.tenantId, trusted.spaceId, runId, logicalActionId, JSON.stringify(payload), workflowDispatchPayloadDigest(runId)],
+        )
+        insertedCount += inserted.rowCount ?? 0
+      }
+      return insertedCount
+    })
+  }
+
   async get(dispatchId: Uuid, ctx: ToolContext): Promise<WorkflowDispatchRecord | undefined> {
     const trusted = scopeOf(ctx)
     assertUuid(dispatchId, 'dispatchId')
@@ -422,6 +503,22 @@ export class PostgresWorkflowDispatchStore implements WorkflowDispatchPort {
       const row = result.rows[0]
       if (row !== undefined) return toRecord(row)
       return this.#raiseMutationMiss(client, trusted, request.dispatchId, request.expectedRevision)
+    })
+  }
+
+  async cancelRun(runId: Uuid, ctx: ToolContext): Promise<number> {
+    const trusted = scopeOf(ctx)
+    assertUuid(runId, 'runId')
+    return this.#db.withIdentityScope(trusted, async (client) => {
+      const result = await client.query(
+        `UPDATE agent_platform.workflow_dispatches
+         SET state = 'cancelled', lease_owner_id = NULL, lease_expires_at = NULL,
+             revision = revision + 1, updated_at = clock_timestamp()
+         WHERE tenant_id = $1::uuid AND space_id = $2::uuid AND run_id = $3::uuid
+           AND state IN ('pending', 'leased')`,
+        [trusted.tenantId, trusted.spaceId, runId],
+      )
+      return result.rowCount ?? 0
     })
   }
 

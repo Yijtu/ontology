@@ -208,7 +208,7 @@ beforeAll(async () => {
 
   api = createApiServer({
     authenticate: testAuthenticator,
-    runs: { service: appComposition.service },
+    runs: { service: appComposition.service, submissionMode: 'records-only' },
     workbench: {
       profiles: profiles.resolver,
       sources: sources.registry,

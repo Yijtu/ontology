@@ -2,6 +2,7 @@ import { describe, expect, it } from 'vitest'
 import type { SemanticQueryPlan } from '@ontology/contracts'
 import {
   compileSemanticQuery,
+  defineSemanticMapping,
   isSemanticMappingError,
   renderCompiledQuery,
   type CompilationBudget,
@@ -64,8 +65,8 @@ describe('semantic query compilation', () => {
     expect(renderedB.sql).toContain('"public"."energy_readings_b"')
     expect(renderedB.sql).toContain('"quality_label"')
     // Values are bound, and the encodings differ per mapping.
-    expect(renderedA.parameters).toEqual([1, 'good', 0, 'suspect', 'unknown', 10, 1])
-    expect(renderedB.parameters).toEqual(['OK', 'good', 'BAD', 'suspect', 'unknown', 10, 'OK'])
+    expect(renderedA.parameters).toEqual([1, 'good', 0, 'suspect', 10, 1])
+    expect(renderedB.parameters).toEqual(['OK', 'good', 'BAD', 'suspect', 10, 'OK'])
   })
 
   it('refuses a crafted concept id instead of letting it become an identifier', () => {
@@ -217,6 +218,45 @@ describe('semantic query compilation', () => {
     expect(duckdb.sql).toContain('?')
     expect(duckdb.sql).toContain('"energy_readings_c"')
     expect(duckdb.sql).not.toContain('"main"')
+  })
+
+  it('preserves missing and unrecognised mapped values as unknown SQL NULL', () => {
+    const mapping = defineSemanticMapping('null-preserving-map', '1.0.0', {
+      dialect: 'duckdb',
+      objects: [{
+        conceptId: 'mapped_object',
+        sourceObjectRef: { sourceRef: { namespace: 'synthetic', sourceId: 'flags' }, objectPath: 'demo.flags' },
+        schema: 'demo',
+        relation: 'flags',
+        relationKind: 'table',
+        estimatedRows: 3,
+        fields: [{
+          fieldRef: 'enabled',
+          column: 'enabled_flag',
+          valueType: 'boolean',
+          valueMap: [
+            { physical: 0, canonical: false },
+            { physical: 1, canonical: true },
+          ],
+        }],
+      }],
+      links: [],
+    })
+    const plan: SemanticQueryPlan = {
+      mode: 'semantic',
+      concepts: ['mapped_object'],
+      fields: ['enabled'],
+      links: [],
+      filters: [],
+      orderBy: [],
+      limit: 10,
+      mappingVersion: mapping.mappingRef,
+    }
+    const rendered = renderCompiledQuery(compileSemanticQuery(plan, mapping, { budget: COMPILE_BUDGET }))
+    expect(rendered.sql).toContain('CASE WHEN "t0"."enabled_flag" IS NULL THEN NULL')
+    expect(rendered.sql).toContain('ELSE NULL END')
+    expect(rendered.sql).not.toContain('unknown')
+    expect(rendered.parameters).toEqual([0, false, 1, true])
   })
 
   it('is a deterministic pure function that needs no planner or model', () => {

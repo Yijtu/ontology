@@ -83,10 +83,14 @@ class ReadView implements PublishedSemanticReadView {
   }
 
   async latestReadRevision(_scope: ScopeRef, _ctx: ToolContext): Promise<string> {
+    void _scope
+    void _ctx
     return '1'
   }
 
   async getPublication(_scope: ScopeRef, publicationId: string, _ctx: ToolContext): Promise<{ readonly schemaRef: VersionRef } | undefined> {
+    void _scope
+    void _ctx
     return this.#publicationIds.has(publicationId) ? { schemaRef: { ...schemaRef } } : undefined
   }
 
@@ -95,6 +99,8 @@ class ReadView implements PublishedSemanticReadView {
     filter: { readonly afterStatementId?: string; readonly limit?: number },
     _ctx: ToolContext,
   ): Promise<PublishedStatement[]> {
+    void _scope
+    void _ctx
     return this.#statements
       .filter((row) => filter.afterStatementId === undefined || row.statementId > filter.afterStatementId)
       .sort((left, right) => left.statementId.localeCompare(right.statementId))
@@ -106,6 +112,8 @@ class ReadView implements PublishedSemanticReadView {
     filter: { readonly afterRule?: { readonly ruleId: string; readonly version: string }; readonly limit?: number },
     _ctx: ToolContext,
   ): Promise<PublishedRuleVersion[]> {
+    void _scope
+    void _ctx
     return this.#rules
       .filter((row) => filter.afterRule === undefined || row.ruleId > filter.afterRule.ruleId ||
         (row.ruleId === filter.afterRule.ruleId && BigInt(row.version) > BigInt(filter.afterRule.version)))
@@ -123,6 +131,8 @@ class ReadView implements PublishedSemanticReadView {
 function identityStore(entitiesByCandidate: ReadonlyMap<string, string>) {
   return {
     async latestReadRevision(_scope: ScopeRef, _ctx: ToolContext): Promise<string> {
+      void _scope
+      void _ctx
       return '1'
     },
     async readPublishedBindings(
@@ -130,6 +140,8 @@ function identityStore(entitiesByCandidate: ReadonlyMap<string, string>) {
       candidateIds: readonly string[],
       _ctx: ToolContext,
     ): Promise<IdentityPublishedBindingSnapshot> {
+      void _scope
+      void _ctx
       return {
         readRevision: '1',
         complete: true,

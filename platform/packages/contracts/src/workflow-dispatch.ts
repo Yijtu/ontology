@@ -105,6 +105,8 @@ export class WorkflowDispatchError extends Error {
  */
 export interface WorkflowDispatchPort {
   enqueue(input: NewWorkflowDispatch, ctx: ToolContext): Promise<WorkflowDispatchRecord>
+  /** Recreate a missing logical drive for an old open run after the run/dispatch commit gap. */
+  reconcileOpenRuns(ctx: ToolContext): Promise<number>
   get(dispatchId: Uuid, ctx: ToolContext): Promise<WorkflowDispatchRecord | undefined>
   claimNext(
     request: WorkflowDispatchClaimRequest,
@@ -117,4 +119,6 @@ export interface WorkflowDispatchPort {
     request: WorkflowDispatchCancelRequest,
     ctx: ToolContext,
   ): Promise<WorkflowDispatchRecord>
+  /** Revoke every not-yet-terminal action for a run after RunService has authorized cancel. */
+  cancelRun(runId: Uuid, ctx: ToolContext): Promise<number>
 }

@@ -34,6 +34,15 @@ interface RunStateRow extends QueryResultRow {
   revision: string
 }
 
+interface DispatchFenceRow extends QueryResultRow {
+  run_id: string
+  state: string
+  lease_owner_id: string | null
+  attempt: string
+  revision: string
+  lease_active: boolean
+}
+
 const ANSWER_COLUMNS =
   'answer_id, run_id, draft_id, verification_id, content_hash, evidence_manifest_hash, scenario_manifest_hash, publication_kind, as_of, limitations, body, semantic_review, (body IS NULL) AS body_missing, published_at'
 
@@ -111,9 +120,11 @@ function samePublication(left: PublishedAnswer, right: PublishedAnswer): boolean
  */
 export class PostgresAnswerStore implements AnswerStorePort {
   readonly #database: ControlPostgresDatabase
+  readonly #requireWorkflowDispatchFence: boolean
 
-  constructor(database: ControlPostgresDatabase) {
+  constructor(database: ControlPostgresDatabase, options: { readonly requireWorkflowDispatchFence?: boolean } = {}) {
     this.#database = database
+    this.#requireWorkflowDispatchFence = options.requireWorkflowDispatchFence ?? false
   }
 
   async record(input: RecordAnswerInput, ctx: ToolContext): Promise<PublishedAnswer> {
@@ -146,6 +157,42 @@ export class PostgresAnswerStore implements AnswerStorePort {
           'RUN_NOT_PUBLISHABLE',
           `run ${input.answer.runId} is ${current.state} at revision ${current.revision} and is not publishable`,
         )
+      }
+
+      const fence = input.workflowDispatchFence
+      if (fence === undefined && this.#requireWorkflowDispatchFence) {
+        throw new AnswerStoreError(
+          'RUN_NOT_PUBLISHABLE',
+          'publication requires the active durable workflow dispatch lease',
+        )
+      }
+      if (fence !== undefined) {
+        const dispatch = await client.query<DispatchFenceRow>(
+          `SELECT dispatch.run_id, dispatch.state, dispatch.lease_owner_id,
+                  dispatch.attempt::text AS attempt, dispatch.revision::text AS revision,
+                  dispatch.lease_expires_at > clock_timestamp() AS lease_active
+             FROM agent_platform.workflow_dispatches AS dispatch
+            WHERE dispatch.tenant_id = current_setting('app.tenant_id')::uuid
+              AND dispatch.space_id = current_setting('app.space_id')::uuid
+              AND dispatch.dispatch_id = $1::uuid
+            FOR UPDATE`,
+          [fence.dispatchId],
+        )
+        const lease = dispatch.rows[0]
+        if (
+          lease === undefined ||
+          lease.run_id !== input.answer.runId ||
+          lease.state !== 'leased' ||
+          lease.lease_owner_id !== fence.ownerId ||
+          lease.attempt !== fence.attempt ||
+          lease.revision !== fence.expectedRevision ||
+          !lease.lease_active
+        ) {
+          throw new AnswerStoreError(
+            'RUN_NOT_PUBLISHABLE',
+            'the workflow dispatch lease is no longer active for this publication',
+          )
+        }
       }
 
       try {
