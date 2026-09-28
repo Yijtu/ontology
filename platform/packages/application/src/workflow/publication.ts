@@ -224,6 +224,7 @@ export class AnswerPublicationService implements AnswerPublisherPort {
       publicationKind,
       ...(publicationKind === 'history_limited' ? { asOf: validity.asOf } : {}),
       limitations,
+      ...(verification.semanticReview === undefined ? {} : { semanticReview: verification.semanticReview }),
       body: {
         schemaVersion: draft.schemaVersion ?? 'answer-draft@1',
         blocks: structuredClone(draft.blocks),

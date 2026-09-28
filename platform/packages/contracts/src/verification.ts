@@ -167,6 +167,17 @@ export interface ClaimExplanation {
   readonly evidenceRef?: ResourceRef
 }
 
+/** Status of the optional semantic decision pass; a deterministic fallback never claims it ran. */
+export type SemanticReviewNotRunReason =
+  | 'disabled'
+  | 'no_claims'
+  | 'not_configured'
+  | 'provider_fallback'
+
+export type SemanticReviewDisposition =
+  | { readonly status: 'completed' }
+  | { readonly status: 'not_run'; readonly reason: SemanticReviewNotRunReason }
+
 /** Whether the policy requires, permits or forbids the JEV semantic review. */
 export type SemanticReviewMode = 'required' | 'optional' | 'disabled'
 

@@ -1,8 +1,8 @@
 export { DraftVerificationService } from './service'
 export type {
   DraftVerificationDependencies,
+  DecisionStateRefProvider,
   VerificationArtifactStore,
-  VerificationBudgetBinding,
 } from './service'
 export { DraftVerificationError, isDraftVerificationError } from './errors'
 export type { DraftVerificationErrorCode } from './errors'

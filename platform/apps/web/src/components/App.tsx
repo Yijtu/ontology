@@ -1,6 +1,6 @@
-import { useState } from 'react'
+import { useCallback, useState } from 'react'
 import type { ReactNode } from 'react'
-import type { ProfileRef } from '@ontology/contracts'
+import type { ProfileRef, ResourceRef } from '@ontology/contracts'
 import type { WorkbenchClient } from '../api/client'
 import { CandidateReviewPanel } from './CandidateReviewPanel'
 import { EvidencePanel } from './EvidencePanel'
@@ -62,6 +62,13 @@ export function App({
 }: AppProps) {
   const viewport = useViewport()
   const [view, setView] = useState<AppView>(initialView)
+  const [evidenceId, setEvidenceId] = useState(initialEvidenceId)
+  const [sourceReference, setSourceReference] = useState<ResourceRef | undefined>()
+  const openSourceReference = useCallback((reference: ResourceRef) => {
+    setSourceReference(reference)
+    setEvidenceId(reference.kind === 'evidence' ? reference.id : undefined)
+    setView('evidence')
+  }, [])
   const contribution = scenarioViews.find((entry) => entry.view === view)
   const tabs = [...CORE_TABS, ...scenarioViews.map(({ view: extraView, label }) => ({ view: extraView, label }))]
 
@@ -91,6 +98,7 @@ export function App({
           client={client}
           profileRef={profileRef}
           timeZone={timeZone}
+          onEvidenceReference={openSourceReference}
           {...(queryContextFields === undefined ? {} : { contextFields: queryContextFields })}
           {...(boundRunId === undefined ? {} : { initialRunId: boundRunId })}
         />
@@ -102,7 +110,8 @@ export function App({
       {view === 'evidence' ? (
         <EvidencePanel
           client={client}
-          {...(initialEvidenceId === undefined ? {} : { initialEvidenceId })}
+          {...(evidenceId === undefined ? {} : { initialEvidenceId: evidenceId })}
+          {...(sourceReference === undefined ? {} : { initialReference: sourceReference })}
           {...(initialObjectId === undefined ? {} : { initialObjectId })}
         />
       ) : null}

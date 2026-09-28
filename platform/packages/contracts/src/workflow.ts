@@ -22,6 +22,7 @@ import type { ToolContext } from './trusted'
 import type {
   ClaimExplanation,
   DraftClaim,
+  SemanticReviewDisposition,
   VerifiedAssertion,
   VerificationFinding,
   VerificationFindingAxis,
@@ -226,10 +227,14 @@ export interface VerificationResult {
   readonly findings?: readonly VerificationFinding[]
   /** Restricted-template explanations of the findings, never model/JEV prose. */
   readonly explanations?: readonly ClaimExplanation[]
+  /** Explicitly states when the optional semantic decision step did not run. */
+  readonly semanticReview?: SemanticReviewDisposition
 }
 
 export interface VerifierRequest {
   readonly runId: Uuid
+  /** The original user question the bounded semantic review must see. */
+  readonly question?: string
   readonly draft: AnswerDraft
   readonly inputManifest: WorkflowInputManifest
   /** Trusted controller-supplied limitation codes for a deterministic limited fallback only. */
@@ -301,6 +306,8 @@ export interface PublishedAnswer {
   readonly asOf?: Rfc3339UtcTimestamp
   /** Explicit gaps/limitations the verified content carries; never hidden by rendering. */
   readonly limitations: readonly string[]
+  /** The semantic axis state, kept separate from the verified business body. */
+  readonly semanticReview?: SemanticReviewDisposition
   /** Absent only for legacy metadata-only rows; readers must display that body is unavailable. */
   readonly body?: PublishedAnswerBody
   readonly bodyUnavailableReason?: 'legacy_metadata_only'

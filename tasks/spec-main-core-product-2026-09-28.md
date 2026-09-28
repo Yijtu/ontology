@@ -231,3 +231,10 @@ C1 对应 A12 的模块和 publication 测试、A13 的幂等 run id / CAS 测�
 - `PublishedFactsReferenceProvider` 已接入 `OntologyLookupService` 的 facts intent，数据来源是同一 scope/definition pin 的 PublishedSemanticSource；仅返回身份确认、有效时间命中且保留原 statement/assertion/source/schema 的属性事实，分页 cursor 绑定完整 scope 和语义/身份 revision vector。
 - provider 对显式历史 `asOf` 返回 uncovered，不拿 latest head 冒充历史。撤回 tombstone 不返回旧值；默认查询以固定 current validAt 过滤未来/过期事实；任一页 revision 改变或来源不完整均报告 uncovered。
 - 根代理独立执行 published-facts provider 单元/PG验证，分别覆盖大页分页、1001事实、revision变化、身份不完整、撤回与当前valid-time。验证结果仅是查询桥模块边界，A10 正常 HTTP/浏览器回答链还未验收。
+
+### C3 受控语义核验与C4正文/配置UI模块 checkpoint（2026-09-28）
+
+- JEV actual-state composition 从 local immutable blob 读取有界 JSON 前先按 runId/profile hash/full ResourceRef 查独立授权登记；state artifact 注册在单独 migration 056 表，不改变原 evidence manifest。Verifier 用实际问题、typed claims/assertions 与已硬读 evidence 内容建 state；一次 JEV attempt 由 adapter 唯一计量，fallback 与未运行状态显式回传。
+- 根代理独立 verifier 33 项、JEV actual-state+blob 30 项通过；JEV 外部服务/付费真实网关未调用或验收。
+- 已核验正文叶组件：Root 独立 UI 9 项通过；Workbench 配置新版本发布→预检→CAS 激活组件 Root 独立 17 项通过。根代理独立复跑相关聚焦合计 7 文件 / 93 项通过，覆盖 C2 查询、核验与 UI 组件边界。
+- 这些是组件级验证，不代表默认 App 已提供完整 `baseProfileSpec`/来源导入，也不代表正常浏览器 POST→持久 dispatch→Controller→真实 query→hard verification→answer/source 的 A10 全链通过；core-main host 和浏览器闭环继续实现。

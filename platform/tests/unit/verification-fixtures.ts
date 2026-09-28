@@ -1,5 +1,5 @@
 import { randomUUID } from 'node:crypto'
-import { BudgetService, InMemoryBudgetLedgerStore, sha256DigestOf } from '@ontology/core'
+import { sha256DigestOf } from '@ontology/core'
 import { answerDraftContentHash, inputManifestDigest } from '@ontology/application'
 import type { VerificationArtifactStore } from '@ontology/application'
 import {
@@ -24,13 +24,11 @@ import {
   type WorkflowInputManifest,
 } from '@ontology/contracts'
 import { semanticOptionSetHash } from '@ontology/application'
-import { RecordingControlRepository } from './component-registry-fixtures'
 import { SCOPE_A, fixedClock, toolContext } from './profile-resolver-fixtures'
 
 export { SCOPE_A, fixedClock, toolContext }
 export const NOW = '2026-09-21T00:00:00Z'
 export const RUN_ID = '33333333-3333-4333-8333-333333333333'
-export const LEDGER_ID = '88888888-8888-4888-8888-888888888888'
 export const EVIDENCE_ID = 'e1111111-1111-4111-8111-111111111111'
 export const BLOB_ID = 'b1111111-1111-4111-8111-111111111111'
 
@@ -348,30 +346,6 @@ export class FallbackDecision implements DecisionPort {
       },
     })
   }
-}
-
-export interface BudgetHarness {
-  readonly service: BudgetService
-  readonly store: InMemoryBudgetLedgerStore
-  readonly ledgerId: Uuid
-}
-
-export function buildBudget(): BudgetHarness {
-  const store = new InMemoryBudgetLedgerStore()
-  const service = new BudgetService({
-    store,
-    control: new RecordingControlRepository(),
-    now: fixedClock(),
-    newId: () => randomUUID(),
-  })
-  return { service, store, ledgerId: LEDGER_ID }
-}
-
-export async function openRunLedger(harness: BudgetHarness, ctx: ToolContext): Promise<void> {
-  await harness.service.openLedger(
-    { ledgerId: harness.ledgerId, kind: 'run', runId: RUN_ID },
-    ctx,
-  )
 }
 
 export function modelRef(): { modelId: string; version: string } {

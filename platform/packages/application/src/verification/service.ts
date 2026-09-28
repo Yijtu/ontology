@@ -3,8 +3,6 @@ import type {
   AnswerVerifierPort,
   BlobGetAuthorizedRequest,
   BlobGetAuthorizedResponse,
-  BudgetLedgerPort,
-  BudgetReservationRecord,
   DecisionPort,
   DraftClaim,
   VerifiedAssertion,
@@ -14,6 +12,7 @@ import type {
   ResourceRef,
   ScopeRef,
   Sha256Digest,
+  SemanticReviewDisposition,
   ToolContext,
   Uuid,
   VerificationFinding,
@@ -23,7 +22,7 @@ import type {
   WorkflowInputManifest,
 } from '@ontology/contracts'
 import { answerDraftContentHash } from '../workflow/canonical'
-import { buildSemanticQuestion, interpretSemanticResult } from './decision-review'
+import { buildSemanticDecisionState, buildSemanticQuestion, interpretSemanticResult } from './decision-review'
 import { DraftVerificationError } from './errors'
 import { checkClaims, sortFindings } from './hard-checks'
 import type { ResolvedEvidence } from './hard-checks'
@@ -43,13 +42,19 @@ export interface VerificationArtifactStore {
 }
 
 /**
- * The run's single shared budget ledger (ADR-14). The verifier only ever reserves against the
- * ledger id it is given; it has no `openLedger` capability, so a repair can never reset the
- * budget it draws from.
+ * Host-owned writer for the exact semantic-review state. The implementation archives a
+ * canonical immutable artifact and registers its complete ref against this run/profile
+ * before returning. The verifier never derives a ResourceRef from a draft hash.
  */
-export interface VerificationBudgetBinding {
-  readonly ledger: BudgetLedgerPort
-  readonly ledgerId: Uuid
+export interface DecisionStateRefProvider {
+  archive(
+    input: {
+      readonly runId: Uuid
+      readonly resolvedProfileHash: Sha256Digest
+      readonly state: unknown
+    },
+    ctx: ToolContext,
+  ): Promise<ResourceRef>
 }
 
 export interface DraftVerificationDependencies {
@@ -58,14 +63,11 @@ export interface DraftVerificationDependencies {
   readonly policy: VerificationPolicy
   readonly decision?: DecisionPort
   readonly modelRef?: ModelRef
-  readonly budget?: VerificationBudgetBinding
+  readonly decisionStateRefProvider?: DecisionStateRefProvider
   readonly templates?: RestrictedExplanationTemplates
   readonly now?: () => string
   readonly newId?: () => Uuid
 }
-
-/** A flat, conservative token estimate for one semantic review pass. */
-const SEMANTIC_REVIEW_TOKEN_ESTIMATE = 64
 
 const VERIFIED_LIMITATION_CODES = new Set<string>([
   'limited_factual_result',
@@ -122,7 +124,7 @@ export class DraftVerificationService implements AnswerVerifierPort {
   readonly #policy: VerificationPolicy
   readonly #decision: DecisionPort | undefined
   readonly #modelRef: ModelRef | undefined
-  readonly #budget: VerificationBudgetBinding | undefined
+  readonly #decisionStateRefProvider: DecisionStateRefProvider | undefined
   readonly #templates: RestrictedExplanationTemplates
   readonly #now: () => string
   readonly #newId: () => Uuid
@@ -133,7 +135,7 @@ export class DraftVerificationService implements AnswerVerifierPort {
     this.#policy = dependencies.policy
     this.#decision = dependencies.decision
     this.#modelRef = dependencies.modelRef
-    this.#budget = dependencies.budget
+    this.#decisionStateRefProvider = dependencies.decisionStateRefProvider
     this.#templates = dependencies.templates ?? new RestrictedExplanationTemplates()
     this.#now = dependencies.now ?? (() => new Date().toISOString())
     this.#newId = dependencies.newId ?? (() => globalThis.crypto.randomUUID())
@@ -200,6 +202,7 @@ export class DraftVerificationService implements AnswerVerifierPort {
     let hardFindings: readonly VerificationFinding[] = []
     let supportedClaimIds: Uuid[] = []
     let supportedAssertionIds: Uuid[] = []
+    let resolvedEvidence: ReadonlyMap<string, ResolvedEvidence> = new Map()
     if (claims.length + assertions.length === 0) {
       findings.push({ code: 'missing_claims', axis: 'hard', field: 'claims' })
     } else if (claims.length + assertions.length > this.#policy.maxClaims) {
@@ -211,23 +214,32 @@ export class DraftVerificationService implements AnswerVerifierPort {
         actual: String(claims.length + assertions.length),
       })
     } else {
-      const resolved = await this.#loadEvidence(claims, assertions, request.inputManifest, scopeRef, ctx)
+      resolvedEvidence = await this.#loadEvidence(claims, assertions, request.inputManifest, scopeRef, ctx)
       if (claims.length > 0) {
-        const outcome = checkClaims(claims, resolved, now, draft.schemaVersion === 'answer-draft@2')
+        const outcome = checkClaims(claims, resolvedEvidence, now, draft.schemaVersion === 'answer-draft@2')
         hardFindings = outcome.findings
         supportedClaimIds = [...outcome.supportedClaimIds]
         findings.push(...hardFindings)
       }
-      const assertionOutcome = checkVerifiedAssertions(assertions, resolved, ctx, now, draft.schemaVersion === 'answer-draft@2')
+      const assertionOutcome = checkVerifiedAssertions(assertions, resolvedEvidence, ctx, now, draft.schemaVersion === 'answer-draft@2')
       supportedAssertionIds = [...assertionOutcome.supportedAssertionIds]
       findings.push(...assertionOutcome.findings)
     }
 
-    const semantic = claims.length === 0 ? [] : await this.#reviewSemantics(claims, draft.contentHash, ctx)
-    findings.push(...semantic)
+    const semantic = await this.#reviewSemantics({
+      runId: request.runId,
+      question: request.question,
+      draftHash: draft.contentHash,
+      inputManifest: request.inputManifest,
+      claims,
+      assertions,
+      evidence: resolvedEvidence,
+      ctx,
+    })
+    findings.push(...semantic.findings)
 
     if (draft.schemaVersion === 'answer-draft@2') {
-      const supportedCodes = new Set(findings.map((finding) => finding.code))
+      const supportedCodes = new Set<string>(findings.map((finding) => finding.code))
       const trustedCodes = new Set(request.trustedLimitations ?? [])
       const missingEvidenceIds = new Set(findings
         .filter((finding) => finding.code === 'evidence_not_found')
@@ -247,8 +259,9 @@ export class DraftVerificationService implements AnswerVerifierPort {
     const policyFailed = sorted.some((finding) => finding.axis === 'policy')
     const semanticFailed = sorted.some((finding) => finding.axis === 'semantic')
     const semanticBlocks = this.#policy.semanticReview === 'required'
+    const clarificationRequired = sorted.some((finding) => finding.code === 'semantic_unavailable')
     const verdict: VerificationResult['verdict'] =
-      hardFailed || policyFailed || (semanticBlocks && semanticFailed) ? 'fail' : 'pass'
+      hardFailed || policyFailed || clarificationRequired || (semanticBlocks && semanticFailed) ? 'fail' : 'pass'
 
     const semanticFailedClaimIds = new Set(
       sorted
@@ -281,6 +294,7 @@ export class DraftVerificationService implements AnswerVerifierPort {
       missingEvidence,
       findings: sorted,
       explanations,
+      semanticReview: semantic.disposition,
     }
   }
 
@@ -345,102 +359,90 @@ export class DraftVerificationService implements AnswerVerifierPort {
     }
   }
 
-  async #reviewSemantics(
-    claims: readonly DraftClaim[],
-    draftHash: Sha256Digest,
-    ctx: ToolContext,
-  ): Promise<readonly VerificationFinding[]> {
-    if (this.#policy.semanticReview === 'disabled') return []
-    if (this.#decision === undefined || this.#modelRef === undefined || claims.length === 0) {
-      return this.#unavailableFindings()
+  async #reviewSemantics(input: {
+    readonly runId: Uuid
+    readonly question: string | undefined
+    readonly draftHash: Sha256Digest
+    readonly inputManifest: WorkflowInputManifest
+    readonly claims: readonly DraftClaim[]
+    readonly assertions: readonly VerifiedAssertion[]
+    readonly evidence: ReadonlyMap<string, ResolvedEvidence>
+    readonly ctx: ToolContext
+  }): Promise<{ readonly findings: readonly VerificationFinding[]; readonly disposition: SemanticReviewDisposition }> {
+    if (this.#policy.semanticReview === 'disabled') {
+      return { findings: [], disposition: { status: 'not_run', reason: 'disabled' } }
+    }
+    if (input.claims.length === 0) {
+      return { findings: [], disposition: { status: 'not_run', reason: 'no_claims' } }
+    }
+    if (
+      this.#decision === undefined ||
+      this.#modelRef === undefined ||
+      this.#decisionStateRefProvider === undefined ||
+      input.question === undefined ||
+      input.question.trim().length === 0
+    ) {
+      return this.#notRun('not_configured', [])
     }
 
-    const reservation = await this.#reserve(draftHash, ctx)
-    if (this.#budget !== undefined && reservation === undefined) {
-      return this.#unavailableFindings()
-    }
-
-    const startedAt = Date.now()
-    const findings: VerificationFinding[] = []
-    let unavailable = false
-    try {
-      for (const claim of claims) {
-        // The port returns one result per call, so each claim gets exactly one fixed-shape
-        // question; no question is silently dropped to fit a batch.
-        const question = buildSemanticQuestion(claim, this.#policy, this.#newId)
-        const result = await this.#decision.decide(
-          {
-            stateRef: {
-              id: draftHash,
-              version: this.#policy.policyVersion,
-              digest: draftHash,
-              kind: 'artifact',
-            },
-            questions: [question],
-            modelRef: this.#modelRef,
-          },
-          ctx,
-        )
-        const outcome = interpretSemanticResult(result, claim.claimId)
-        if (outcome.kind === 'finding') findings.push(outcome.finding)
-        if (outcome.kind === 'unavailable') unavailable = true
-      }
-      await this.#settle(reservation, 'completed', startedAt, ctx)
-    } catch {
-      await this.#settle(reservation, 'failed', startedAt, ctx)
-      return [...findings, ...this.#unavailableFindings()]
-    }
-    return unavailable ? [...findings, ...this.#unavailableFindings()] : findings
-  }
-
-  #unavailableFindings(): readonly VerificationFinding[] {
-    if (this.#policy.onJevUnavailable === 'clarify') {
-      return [{ code: 'semantic_unavailable', axis: 'semantic' }]
-    }
-    return []
-  }
-
-  async #reserve(
-    draftHash: string,
-    ctx: ToolContext,
-  ): Promise<BudgetReservationRecord | undefined> {
-    if (this.#budget === undefined) return undefined
-    const outcome = await this.#budget.ledger.reserve(
-      {
-        ledgerId: this.#budget.ledgerId,
-        idempotencyKey: `verify-semantic:${draftHash}`,
-        modelTokens: SEMANTIC_REVIEW_TOKEN_ESTIMATE,
-        requiresIntent: false,
-      },
-      ctx,
+    const state = buildSemanticDecisionState({
+      runId: input.runId,
+      resolvedProfileHash: input.ctx.resolvedProfileHash,
+      question: input.question,
+      draftHash: input.draftHash,
+      inputManifest: input.inputManifest,
+      claims: input.claims,
+      assertions: input.assertions,
+      evidence: input.evidence,
+    })
+    const stateRef = await this.#decisionStateRefProvider.archive(
+      { runId: input.runId, resolvedProfileHash: input.ctx.resolvedProfileHash, state },
+      input.ctx,
     )
-    return outcome.granted ? outcome.reservation : undefined
+    if (!isSemanticStateRef(stateRef)) {
+      throw new DraftVerificationError('INVALID_DRAFT', 'the semantic state provider returned an invalid ref')
+    }
+
+    const findings: VerificationFinding[] = []
+    for (const claim of input.claims) {
+      // Each claim gets its own fixed-shape JEV request, while every request names the
+      // same immutable, host-authorized state snapshot for this exact draft.
+      const question = buildSemanticQuestion(claim, this.#policy, this.#newId)
+      const result = await this.#decision.decide(
+        { stateRef, questions: [question], modelRef: this.#modelRef },
+        input.ctx,
+      )
+      const outcome = interpretSemanticResult(result, claim.claimId)
+      if (outcome.kind === 'finding') findings.push(outcome.finding)
+      if (outcome.kind === 'unavailable') return this.#notRun('provider_fallback', findings)
+    }
+    return { findings, disposition: { status: 'completed' } }
   }
 
-  async #settle(
-    reservation: BudgetReservationRecord | undefined,
-    status: 'completed' | 'failed',
-    startedAt: number,
-    ctx: ToolContext,
-  ): Promise<void> {
-    if (this.#budget === undefined || reservation === undefined) return
-    await this.#budget.ledger
-      .settle(
-        {
-          ledgerId: this.#budget.ledgerId,
-          reservationId: reservation.reservationId,
-          status,
-          usage: {
-            durationMs: Date.now() - startedAt,
-            modelTokens: SEMANTIC_REVIEW_TOKEN_ESTIMATE,
-            calls: 0,
-          },
-          evidenceRefs: [],
-        },
-        ctx,
-      )
-      .catch(() => undefined)
+  #notRun(
+    reason: 'not_configured' | 'provider_fallback',
+    findings: readonly VerificationFinding[],
+  ): { readonly findings: readonly VerificationFinding[]; readonly disposition: SemanticReviewDisposition } {
+    return {
+      findings: this.#policy.onJevUnavailable === 'clarify'
+        ? [...findings, { code: 'semantic_unavailable', axis: 'semantic' }]
+        : findings,
+      disposition: { status: 'not_run', reason },
+    }
   }
+}
+
+function isSemanticStateRef(ref: ResourceRef): boolean {
+  return (
+    typeof ref === 'object' &&
+    ref !== null &&
+    typeof ref.id === 'string' &&
+    /^[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/iu.test(ref.id) &&
+    typeof ref.version === 'string' &&
+    ref.version.length > 0 &&
+    /^sha256:[0-9a-f]{64}$/u.test(ref.digest) &&
+    ref.kind === 'artifact'
+  )
 }
 
 function scopeOf(ctx: ToolContext): ScopeRef {

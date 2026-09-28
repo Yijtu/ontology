@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useReducer, useRef, useState } from 'react'
-import type { ProfileRef, RunRoutePreference } from '@ontology/contracts'
+import type { ProfileRef, ResourceRef, RunRoutePreference } from '@ontology/contracts'
 import { ApiError } from '../api/errors'
 import type { QueryRunView, RunEventStream, WorkbenchClient } from '../api/client'
 import {
@@ -11,6 +11,7 @@ import {
 import type { WorkbenchError } from '../state/workbench'
 import { StatePanel } from './StatePanel'
 import { useViewport } from './useViewport'
+import { PublishedAnswerBody } from './PublishedAnswerBody'
 
 /**
  * The business query surface (US-019/020/021). It lets a user ask within the resolved
@@ -28,6 +29,8 @@ export interface QueryPanelProps {
   readonly contextFields?: readonly QueryContextField[]
   /** Deep-linked run id (`?run=<id>`) so a state can be reproduced in a browser. */
   readonly initialRunId?: string
+  /** Opens a source reference through the host's existing evidence/history surface. */
+  readonly onEvidenceReference?: (ref: ResourceRef) => void
 }
 
 export type QueryContextField =
@@ -194,7 +197,13 @@ function OutcomePanel({ state }: { readonly state: QueryState }) {
   )
 }
 
-function AnswerPanel({ state }: { readonly state: QueryState }) {
+function AnswerPanel({
+  state,
+  onEvidenceReference,
+}: {
+  readonly state: QueryState
+  readonly onEvidenceReference?: (ref: ResourceRef) => void
+}) {
   const answer = state.answer
   if (state.answerState === 'in_progress') {
     return (
@@ -222,9 +231,25 @@ function AnswerPanel({ state }: { readonly state: QueryState }) {
       </section>
     )
   }
+  const semanticReviewText = answer.semanticReview?.status === 'completed'
+    ? '语义核验已完成。'
+    : answer.semanticReview?.status === 'not_run'
+      ? `语义核验未运行（${answer.semanticReview.reason}）；答案仅表示硬核验通过的内容。`
+      : '该答案没有记录语义核验状态；不能推断语义核验已经完成。'
   return (
     <section className="query__answer" data-testid="query-answer" data-answer-state="published">
-      <h3>已核验答案（按内容哈希绑定）</h3>
+      <PublishedAnswerBody
+        answer={answer}
+        {...(onEvidenceReference === undefined ? {} : { onEvidenceReference })}
+      />
+      <p
+        data-testid="answer-semantic-review"
+        data-state={answer.semanticReview?.status ?? 'unknown'}
+      >
+        {semanticReviewText}
+      </p>
+      <details className="query__answer-audit" data-testid="answer-audit">
+        <summary>答案审计信息</summary>
       <dl>
         <dt>答案 ID</dt>
         <dd data-testid="answer-id">{answer.answerId}</dd>
@@ -241,18 +266,12 @@ function AnswerPanel({ state }: { readonly state: QueryState }) {
           </>
         )}
       </dl>
-      {answer.limitations.length === 0 ? null : (
-        <ul className="query__limitations" data-testid="answer-limitations">
-          {answer.limitations.map((limitation) => (
-            <li key={limitation}>{limitation}</li>
-          ))}
-        </ul>
-      )}
+      </details>
     </section>
   )
 }
 
-export function QueryPanel({ client, profileRef, timeZone, contextFields = [], initialRunId }: QueryPanelProps) {
+export function QueryPanel({ client, profileRef, timeZone, contextFields = [], initialRunId, onEvidenceReference }: QueryPanelProps) {
   const viewport = useViewport()
   const [state, dispatch] = useReducer(queryReducer, undefined, initialQueryState)
   const [question, setQuestion] = useState('')
@@ -569,7 +588,7 @@ export function QueryPanel({ client, profileRef, timeZone, contextFields = [], i
               )}
 
               <OutcomePanel state={state} />
-              <AnswerPanel state={state} />
+              <AnswerPanel state={state} {...(onEvidenceReference === undefined ? {} : { onEvidenceReference })} />
             </section>
           )}
           </div>

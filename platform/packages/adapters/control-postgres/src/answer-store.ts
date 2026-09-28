@@ -4,6 +4,7 @@ import type {
   PublicationKind,
   PublishedAnswer,
   RecordAnswerInput,
+  SemanticReviewDisposition,
   RunState,
   ToolContext,
   Uuid,
@@ -23,6 +24,7 @@ interface AnswerRow extends QueryResultRow {
   as_of: Date | null
   limitations: string[]
   body: unknown | null
+  semantic_review: SemanticReviewDisposition | null
   body_missing: boolean
   published_at: Date
 }
@@ -33,7 +35,7 @@ interface RunStateRow extends QueryResultRow {
 }
 
 const ANSWER_COLUMNS =
-  'answer_id, run_id, draft_id, verification_id, content_hash, evidence_manifest_hash, scenario_manifest_hash, publication_kind, as_of, limitations, body, (body IS NULL) AS body_missing, published_at'
+  'answer_id, run_id, draft_id, verification_id, content_hash, evidence_manifest_hash, scenario_manifest_hash, publication_kind, as_of, limitations, body, semantic_review, (body IS NULL) AS body_missing, published_at'
 
 function scopeOf(ctx: ToolContext): { tenantId: string; spaceId: string } {
   if (!isToolContext(ctx)) {
@@ -73,6 +75,7 @@ function toAnswer(row: AnswerRow): PublishedAnswer {
     publicationKind: row.publication_kind,
     ...(row.as_of === null ? {} : { asOf: row.as_of.toISOString() }),
     limitations: row.limitations,
+    ...(row.semantic_review === null ? {} : { semanticReview: row.semantic_review }),
     ...(row.body_missing ? { bodyUnavailableReason: 'legacy_metadata_only' as const } : { body: body as NonNullable<PublishedAnswer['body']> }),
     publishedAt: row.published_at.toISOString(),
   }
@@ -91,7 +94,8 @@ function samePublication(left: PublishedAnswer, right: PublishedAnswer): boolean
   return left.runId === right.runId && left.draftId === right.draftId && left.verificationId === right.verificationId &&
     left.contentHash === right.contentHash && left.evidenceManifestHash === right.evidenceManifestHash &&
     left.scenarioManifestHash === right.scenarioManifestHash && left.publicationKind === right.publicationKind &&
-    sameAsOf && canonical(left.limitations) === canonical(right.limitations) && canonical(left.body) === canonical(right.body)
+    sameAsOf && canonical(left.limitations) === canonical(right.limitations) && canonical(left.body) === canonical(right.body) &&
+    canonical(left.semanticReview) === canonical(right.semanticReview)
 }
 
 /**
@@ -149,11 +153,11 @@ export class PostgresAnswerStore implements AnswerStorePort {
           `INSERT INTO agent_platform.answer_publications
              (tenant_id, space_id, run_id, answer_id, draft_id, verification_id, content_hash,
               evidence_manifest_hash, scenario_manifest_hash, publication_kind, as_of, limitations,
-              body, published_at)
+              body, semantic_review, published_at)
            VALUES (
              current_setting('app.tenant_id')::uuid,
              current_setting('app.space_id')::uuid,
-             $1, $2, $3, $4, $5, $6, $7, $8, $9::timestamptz, $10::jsonb, $11::jsonb, $12::timestamptz
+             $1, $2, $3, $4, $5, $6, $7, $8, $9::timestamptz, $10::jsonb, $11::jsonb, $12::jsonb, $13::timestamptz
            )
            ON CONFLICT (tenant_id, space_id, run_id) DO NOTHING`,
           [
@@ -168,6 +172,7 @@ export class PostgresAnswerStore implements AnswerStorePort {
             input.answer.asOf ?? null,
             JSON.stringify(input.answer.limitations),
             JSON.stringify(input.answer.body),
+            input.answer.semanticReview === undefined ? null : JSON.stringify(input.answer.semanticReview),
             input.answer.publishedAt,
           ],
         )

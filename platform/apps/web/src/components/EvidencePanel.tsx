@@ -4,6 +4,7 @@ import type {
   EvidenceDependencyDirection,
   HistoricalAssertionView,
   ProvenanceEvidenceView,
+  ResourceRef,
   SourceReReadability,
 } from '@ontology/contracts'
 import { ApiError } from '../api/errors'
@@ -27,6 +28,8 @@ export interface EvidencePanelProps {
   readonly client: WorkbenchClient
   /** Deep-linked evidence id (`?evidence=<id>`). */
   readonly initialEvidenceId?: string
+  /** Exact source ref selected from a verified answer body. */
+  readonly initialReference?: ResourceRef
   /** Deep-linked object id for the history view (`?object=<id>`). */
   readonly initialObjectId?: string
 }
@@ -315,10 +318,10 @@ function AssertionRow({ assertion }: { readonly assertion: HistoricalAssertionVi
   )
 }
 
-export function EvidencePanel({ client, initialEvidenceId, initialObjectId }: EvidencePanelProps) {
+export function EvidencePanel({ client, initialEvidenceId, initialObjectId, initialReference }: EvidencePanelProps) {
   const viewport = useViewport()
   const [state, dispatch] = useReducer(evidenceReducer, undefined, initialEvidenceState)
-  const [evidenceInput, setEvidenceInput] = useState(initialEvidenceId ?? '')
+  const [evidenceInput, setEvidenceInput] = useState(initialEvidenceId ?? (initialReference?.kind === 'evidence' ? initialReference.id : ''))
   const [asOfInput, setAsOfInput] = useState('')
   const [validAtInput, setValidAtInput] = useState('')
   const [objectInput, setObjectInput] = useState(initialObjectId ?? '')
@@ -388,9 +391,10 @@ export function EvidencePanel({ client, initialEvidenceId, initialObjectId }: Ev
     [client],
   )
 
+  const selectedEvidenceId = initialEvidenceId ?? (initialReference?.kind === 'evidence' ? initialReference.id : undefined)
   useEffect(() => {
-    if (initialEvidenceId !== undefined) void loadEvidence(initialEvidenceId, '', '')
-  }, [initialEvidenceId, loadEvidence])
+    if (selectedEvidenceId !== undefined) void loadEvidence(selectedEvidenceId, '', '')
+  }, [selectedEvidenceId, loadEvidence])
 
   useEffect(() => {
     if (initialObjectId !== undefined) void loadHistory(initialObjectId, '', '')
@@ -398,8 +402,8 @@ export function EvidencePanel({ client, initialEvidenceId, initialObjectId }: Ev
 
   useEffect(() => {
     // With nothing deep-linked there is no request yet: an explicit empty/awaiting-input state.
-    if (initialEvidenceId === undefined && initialObjectId === undefined) dispatch({ type: 'awaitInput' })
-  }, [initialEvidenceId, initialObjectId])
+    if (selectedEvidenceId === undefined && initialObjectId === undefined) dispatch({ type: 'awaitInput' })
+  }, [selectedEvidenceId, initialObjectId])
 
   const phase = state.phase
   const evidence = state.evidence
@@ -419,6 +423,19 @@ export function EvidencePanel({ client, initialEvidenceId, initialObjectId }: Ev
           依据变化会清除旧比较结果。
         </p>
       </header>
+
+      {initialReference === undefined ? null : (
+        <aside className="evidence__selected-ref" data-testid="selected-source-reference" data-kind={initialReference.kind}>
+          <h3>答案来源引用</h3>
+          <p><code>{initialReference.kind}:{initialReference.id}@{initialReference.version}</code></p>
+          <p><code>{initialReference.digest}</code></p>
+          {initialReference.kind === 'evidence' ? null : (
+            <p data-testid="source-reference-viewer-unavailable">
+              此引用已从答案精确保留；当前证据查看器仅展开已归档的 evidence 记录。
+            </p>
+          )}
+        </aside>
+      )}
 
       {phase === 'loading' || phase === 'not_configured' || phase === 'failure' || phase === 'permission_denied' ? (
         <StatePanel phase={phase} {...(state.error === undefined ? {} : { error: state.error })} />

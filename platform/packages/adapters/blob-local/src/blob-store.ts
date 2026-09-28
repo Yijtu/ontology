@@ -32,6 +32,9 @@ export interface BlobStageResult {
   readonly byteSize: number
 }
 
+/** Authorized metadata only. This response makes no claim that the stored object bytes were read or verified. */
+export type AuthorizedBlobMetadata = Omit<BlobGetAuthorizedResponse, 'integrityVerified'>
+
 /**
  * Adapter-level extension of the canonical `BlobPutImmutableRequest`. The port
  * shape cannot carry the purpose or the owning run, but an immutable reference
@@ -186,6 +189,24 @@ export class LocalImmutableBlobStore implements BlobPort {
       mediaType: view.blob.mediaType,
       byteSize: view.blob.byteSize,
       integrityVerified: true,
+    }
+  }
+
+  /**
+   * Authorize an immutable reference and return its stored size before reading content.
+   * This deliberately does not touch object bytes or claim integrity verification; callers
+   * use it only for a pre-read size check, then read through `readAuthorized` and verify bytes.
+   */
+  async getAuthorizedMetadata(
+    request: BlobGetAuthorizedRequest,
+    ctx: ToolContext,
+  ): Promise<AuthorizedBlobMetadata> {
+    const view = await this.#authorize(request, ctx)
+    return {
+      blobRef: request.blobRef,
+      contentDigest: view.blob.contentDigest,
+      mediaType: view.blob.mediaType,
+      byteSize: view.blob.byteSize,
     }
   }
 

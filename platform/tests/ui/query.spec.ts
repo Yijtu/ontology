@@ -4,7 +4,7 @@ import { act, createElement } from 'react'
 import { createRoot } from 'react-dom/client'
 import type { Root } from 'react-dom/client'
 import { afterEach, describe, expect, it } from 'vitest'
-import type { ErrorCode, PublishedAnswer, RuntimeEvent } from '@ontology/contracts'
+import type { ErrorCode, PublishedAnswer, ResourceRef, RuntimeEvent } from '@ontology/contracts'
 import { QueryPanel } from '@ontology/app-web'
 import { WorkbenchClient } from '@ontology/app-web/client'
 import type { RunEvent, RunEventHandlers, RunEventStreamFactory } from '@ontology/app-web/client'
@@ -46,6 +46,7 @@ class FakeStream {
 async function renderQuery(
   client: WorkbenchClient,
   initialRunId?: string,
+  onEvidenceReference?: (ref: ResourceRef) => void,
 ): Promise<HTMLElement> {
   const container = document.createElement('div')
   document.body.appendChild(container)
@@ -56,6 +57,7 @@ async function renderQuery(
         client,
         profileRef: PROFILE,
         timeZone: 'Asia/Shanghai',
+        ...(onEvidenceReference === undefined ? {} : { onEvidenceReference }),
         ...(initialRunId === undefined ? {} : { initialRunId }),
       }),
     )
@@ -449,10 +451,55 @@ describe('cancel and the five observable outcomes', () => {
   it('shows the limited answer with its limitations', async () => {
     const built = await harness()
     const runId = await seedRun(built)
-    built.seedAnswer(runId, publishedAnswer(runId, { publicationKind: 'history_limited', limitations: ['历史时点'] }))
+    built.seedAnswer(runId, publishedAnswer(runId, {
+      publicationKind: 'history_limited',
+      asOf: '2026-09-20T00:00:00Z',
+      limitations: ['incomplete-evidence'],
+    }))
     const container = await renderQuery(built.client, runId)
     await waitFor(() => container.querySelector('[data-testid="outcome-limited"]') !== null, 'limited outcome')
-    expect(container.querySelector('[data-testid="answer-limitations"]')?.textContent).toContain('历史时点')
+    expect(container.querySelector('[data-testid="published-answer-limitations"]')?.textContent).toContain('证据不完整')
+    expect(container.querySelector('[data-testid="published-answer-as-of"]')?.textContent).toContain('2026-09-20T00:00:00Z')
+  })
+
+  it('renders a typed published body and passes the full evidence ref to the host', async () => {
+    const built = await harness()
+    const runId = await seedRun(built)
+    const evidenceRef: ResourceRef = {
+      id: randomUUID(),
+      version: '1.0.0',
+      digest: `sha256:${'d'.repeat(64)}`,
+      kind: 'evidence',
+    }
+    const assertionId = randomUUID()
+    built.seedAnswer(runId, publishedAnswer(runId, {
+      body: {
+        schemaVersion: 'answer-draft@2',
+        blocks: [{ kind: 'assertion', assertionId }],
+        claims: [],
+        assertions: [{
+          assertionId,
+          subject: 'facility-T-01',
+          predicate: 'inspection_due',
+          kind: 'boolean',
+          value: false,
+          references: [{
+            evidenceRef,
+            resultDigest: evidenceRef.digest,
+            valuePointer: '/table/rows/0/columns/0',
+            subjectPointer: '/table/rows/0/columns/1',
+            fieldRefPointer: '/table/columns/0/fieldRef',
+          }],
+        }],
+      },
+    }))
+    const opened: ResourceRef[] = []
+    const container = await renderQuery(built.client, runId, (ref) => opened.push(ref))
+
+    await waitFor(() => container.querySelector('[data-testid="published-answer-boolean"]') !== null, 'typed published answer body')
+    expect(container.querySelector('[data-testid="published-answer-boolean"]')?.textContent).toBe('否')
+    await click(container.querySelector('[data-testid="published-answer-evidence-reference"]') as Element)
+    expect(opened).toEqual([evidenceRef])
   })
 
   it('shows a distinct panel for a gap, a conflict and a tool failure', async () => {
