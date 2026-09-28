@@ -191,4 +191,22 @@ README 描述产品形态、组件装配、输入输出、首个示例、第二�
 
 ## 11. 本轮完成记录
 
-实施中填写最终提交、移植清单、实际命令/结果、A01—A16状态、已知限制与外部条件。当前尚未开始实现，不将计划当完成事实。
+### C0/C1 checkpoint（2026-09-28）
+
+- 移植决策清单：[porting ledger](porting-ledger-main-core-product-2026-09-28.md)，提交 `cb29b0a`。
+- C1 提交：`ac88da6`（答案正文/typed assertions、workflow/verification PostgreSQL store、CAS、canonical run id 与精确核验）。
+- 独立验收金标：[acceptance-main-core-product-2026-09-28.md](acceptance-main-core-product-2026-09-28.md)，内容按原始数据起步、区分规则适用性与业务命题，并覆盖正文注入、例外、时态、隔离、分页与并发恢复。C1 不把金标中尚未执行的产品链标完成。
+
+| 验证命令 | 结果 |
+| --- | --- |
+| `pnpm --filter @ontology/contracts run check:contracts` | 通过；DecisionResult Noul `probability` 字段已纳入 canonical schema 与生成类型 |
+| `pnpm run typecheck` | 通过，包含 API/Web/acceptance TS project |
+| `pnpm run lint` | 通过 |
+| `pnpm exec vitest run tests/unit/draft-verification.spec.ts tests/unit/answer-publication.spec.ts tests/unit/workflow-controller.spec.ts tests/unit/answer-api.spec.ts tests/unit/feedback.spec.ts --maxWorkers=2` | 5 文件 / 60 项通过 |
+| `pnpm exec vitest run tests/integration/workflow-store-postgres.spec.ts tests/integration/answer-publication-postgres.spec.ts tests/integration/ui-query-postgres.spec.ts --maxWorkers=1` | 3 文件 / 12 项通过；临时 PostgreSQL 使用命名卷并由测试显式回收 |
+
+C1 确认了 V2 body blocks 只能引用通过硬核验的 claim/assertion，正文、claims、assertions 与 limitation codes 绑定内容 hash；自由 prose 或伪装成 limitation 的业务断言不能通过。十进制字符串按严格 lexical 和精确比较，predicate/column、subject、time 绑定均独立核验。PostgreSQL answer row 持久化正文，旧 metadata-only 行明确返回 `legacy_metadata_only`；workflow state 和 input manifest 使用 revision CAS，verification/manifest 不可变冲突会拒绝；Controller 使用 RunService 返回的 canonical run id 重绑可信 ToolContext。
+
+C1 对应 A12 的模块和 publication 测试、A13 的幂等 run id / CAS 测试、A14 的正文持久化和 legacy 缺正文标记已有实现及测试。尚未完成的限制：持久 HTTP dispatch/lease/崩溃恢复、真正独立进程重启与端到端 UI 恢复留在 C3—C5；因此 A13/A14 尚不能标作产品级全量通过。A01—A11、A15—A16 仍按最终真实 HTTP/PG/browser 链验收，不从 C1 单测推断。
+
+之后每批继续追加提交、命令结果、数字和限制；仅在所有适用 A01—A16 门槛实际验收后更新最终完成状态。
