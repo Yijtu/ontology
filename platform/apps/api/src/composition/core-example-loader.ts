@@ -1,6 +1,6 @@
 import { readFileSync, realpathSync, statSync } from 'node:fs'
 import { dirname, isAbsolute, relative, resolve, sep } from 'node:path'
-import { fileURLToPath } from 'node:url'
+import { fileURLToPath, URL } from 'node:url'
 import Ajv2020 from 'ajv/dist/2020.js'
 import addFormats from 'ajv-formats'
 import type {
@@ -52,7 +52,9 @@ import type {
 } from '@ontology/semantic-engine'
 import { mappingTemplatesOf } from '@ontology/application'
 
-const DEFAULT_INDEX_PATH = fileURLToPath(new URL('../../../../deploy/core/examples/index.json', import.meta.url))
+function defaultIndexPath(): string {
+  return fileURLToPath(new URL('../../../../deploy/core/examples/index.json', import.meta.url))
+}
 const INDEX_SCHEMA_VERSION = 'core-synthetic-industry-examples@1'
 const INDEX_CLASSIFICATION = 'public_synthetic_demo_not_an_industry_standard'
 const MAX_ASSET_BYTES = 8 * 1024 * 1024
@@ -897,7 +899,7 @@ function sourceKey(sourceRef: SourceRef): string {
 /** Load and validate the configured synthetic example declarations without seeding or executing anything. */
 export function loadCoreExamples(options: LoadCoreExamplesOptions): LoadedCoreExamples {
   const targetScopeRef = parseScopeRef(options.targetScopeRef, 'targetScopeRef')
-  const indexPath = resolve(options.indexPath ?? DEFAULT_INDEX_PATH)
+  const indexPath = resolve(options.indexPath ?? defaultIndexPath())
   let resolvedIndexPath: string
   try {
     resolvedIndexPath = realpathSync(indexPath)

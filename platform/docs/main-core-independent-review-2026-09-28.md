@@ -2,7 +2,7 @@
 
 本轮基线：`main@51c8cb4`；实施分支：`feat/main-core-product-20260928`。本文件记录根代理的独立复核，不代替实施 SPEC 的最终验收矩阵。
 
-截至本检查点，远端最新提交为 `2e7a044`，新增详细 README、行业原始资产与状态引用存储测试；上一实现批次 `5e6744d` 包括本体属性投影/物化、事实查询桥、实际语义核验状态、持久正文及工作台发布交互。C3 的默认宿主、完整恢复接线，C4 的两行业正常导入至问答与完整页面仍在实现。不得将下面的模块测试写成产品已交付。
+已推送的后端检查点为 `84d210b`：正常 HTTP 原始导入、身份裁决、审核发布、字段事实查询、核验正文及持久 dispatch 已形成两行业纵向链。此前 `2e7a044`、`f1cb7ed` 包含详细 README、行业原始资产和 loader。完整浏览器操作、规则回答、模型规划与恢复仍在实现；下面的模块测试不代表整个产品已交付。
 
 ## 已独立验证的检查点
 
@@ -38,6 +38,11 @@
 | 真实业务数据快照与 SQL NULL | snapshot 1 文件 / 4 项通过，7.53s；相关 mapping 3 文件 / 26 项通过，13.06s | 真实 DuckDB/DataQueryHandler，四 mapping、运输独立来源、6000/5999 分钟边界及缺失值；修复 schema 初始化和 unknown→BOOLEAN 转换。没有预置语义中间态 |
 | 首条正常 HTTP 纵向链 | 独立首跑 1 文件 / 2 项通过，17.53s | 命名卷真实 PG、应用角色、真实 HTTP listen；raw import→parser/worker→native candidate→create_pending+match→approve→publish→真实 fact lookup→V2 false 断言→hard verifier→严格 lease-fenced AnswerStore。另一项拒绝未知自然语言任务 |
 | 两行业 HTTP 与 dispatch 再复核 | 2 文件 / 12 项通过，32.06s，exit 0 | HTTP 3 项含运输两来源和工业 canonical 100 h；dispatch PG 9 项。原始资料经同一正常 API 链，不 seed candidate/identity/statement/answer。尚非完整规则推理、浏览器或实机/真实模型验收 |
+| 新部署 UI 与可信 ProfileSpec 初次独立检查 | 4 文件 / 6 项通过，4.60s；正常 HTTP 1 文件 / 3 项通过，27.57s | 场景描述、导入表单与工作台挂载的聚焦验证；没有覆盖真实默认首页所需的所有后端 route |
+| UI 加入后的完整 unit/architecture 检查 | 122 文件中 116 通过、6 失败；1,348 项通过，74.49s，exit 1 | 六个 UI suite 在导入阶段被 loader 的 Node 默认路径初始化阻断，不能记为全量通过 |
+| loader 导入回归修复独立复核 | 原六个 UI suite + loader + jsdom 导入回归，共 8 文件 / 64 项通过，29.85s，exit 0 | 默认路径改为调用时解析，并使用 node:url.URL；保留原 UI 测试与全部断言，Node 默认资产加载继续通过 |
+| 新 UI 阶段 lint/typecheck | 完整 ESLint 和 platform/Web/acceptance 三个 TypeScript 项目通过 | 后续生产路由、模型与来源改动完成后仍须按受影响范围复核 |
+| 实际 subprocess launcher 与浏览器初查 | 临时库首跑 28 migrations；修复 Vite root/proxy 后 API/Web 就绪，metadata 经同源代理返回 200 | 原实现 API 健康但 Web readiness 超时；已分配并修复配置。浏览器正常导入 T-04 → worker 待审 → pending+match → approve → publish 通过。默认 Workbench 缺 route 返回 404，QueryPanel 缺 scope projection 返回 CAPABILITY_NOT_CONFIGURED，继续修复，未标浏览器闭环完成 |
 
 上表是不同时间的聚焦检查点，存在覆盖重叠；不相加为一次全量通过数量。实际 prepare 检查只覆盖当时已有迁移至 `053`，不包含后来新增的 `054`/`055`/`056`。本次生成的临时 env、验证脚本、容器和卷已回收。已有 3000/5173/54329 环境未改动。
 
@@ -78,7 +83,7 @@ pnpm exec vitest run tests/integration/incremental-materialization-postgres.spec
 | 分页事实的 coverage 未进入归档 payload | 201 条事实、200 条一页时保留完整性与 continuation；阻止部分列表被无条件核验为完整答案 | Core tool contract/handler/draft 待修复 |
 | 支撑来源查询仍沿用旧 scalar/global 链 | 核对实例/属性 child 到原 statement/evidence 的映射；修复真实正例，旧夹具按合法 scope 重建，不削弱来源断言 | Core provenance + 独立读审 |
 
-本表表示问题与方案已确认，不表示最终代码或验收已通过。源/存储、物化 owner、调度 owner 分工明确；只有 Core 统一 Git 提交。
+本表表示问题与方案已确认，不表示最终代码或验收已通过。源/存储、物化 owner、调度 owner 分工明确；根代理负责独立复核和统一 Git 提交。
 
 ## 最终交付仍需执行
 
