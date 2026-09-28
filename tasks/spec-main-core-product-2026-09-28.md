@@ -225,3 +225,9 @@ C1 对应 A12 的模块和 publication 测试、A13 的幂等 run id / CAS 测�
 - 验证命令：`pnpm exec vitest run tests/unit/incremental-materialization.spec.ts tests/unit/rule-published-instances.spec.ts tests/unit/materialization-outbox-consumer.spec.ts tests/unit/published-semantic-source.spec.ts tests/unit/rule-conclusion.spec.ts tests/unit/semantic-publication.spec.ts --maxWorkers=1`，6 文件 / 57 项通过。
 - 根代理独立真实 PostgreSQL 验收：materialization-worker、incremental-materialization、publication-fence、identity-decisions 4 文件 / 14 项通过，覆盖 1001 个属性、例外 false/true/缺失、同实体替代 OR 支撑、逐条撤回、稳定分页、身份 split 与物化 fence/outbox 的事务原子性。
 - 单测/PG结论只标 C2 模块门槛。原始输入经过真实抽取/身份审核发布再经普通 HTTP/四工具形成可读答案的完整链尚未验收；A04—A10 与跨两场景 A15/A16 不据此标完成。
+
+### C3 已发布事实工具读取桥 checkpoint（2026-09-28）
+
+- `PublishedFactsReferenceProvider` 已接入 `OntologyLookupService` 的 facts intent，数据来源是同一 scope/definition pin 的 PublishedSemanticSource；仅返回身份确认、有效时间命中且保留原 statement/assertion/source/schema 的属性事实，分页 cursor 绑定完整 scope 和语义/身份 revision vector。
+- provider 对显式历史 `asOf` 返回 uncovered，不拿 latest head 冒充历史。撤回 tombstone 不返回旧值；默认查询以固定 current validAt 过滤未来/过期事实；任一页 revision 改变或来源不完整均报告 uncovered。
+- 根代理独立执行 published-facts provider 单元/PG验证，分别覆盖大页分页、1001事实、revision变化、身份不完整、撤回与当前valid-time。验证结果仅是查询桥模块边界，A10 正常 HTTP/浏览器回答链还未验收。
