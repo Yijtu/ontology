@@ -1,5 +1,6 @@
 import { useEffect, useReducer, useState } from 'react'
 import type {
+  ActiveProfileRecord,
   ComponentVersionRecord,
   DeploymentEnvironment,
   LogicalRole,
@@ -202,6 +203,7 @@ export function Workbench({
 }: WorkbenchProps) {
   const viewport = useViewport()
   const [state, dispatch] = useReducer(workbenchReducer, undefined, initialWorkbenchState)
+  const [currentBaseProfileSpec, setCurrentBaseProfileSpec] = useState(baseProfileSpec)
   const [selection, setSelection] = useState<CompositionSelection>(() => initialSelection(baseProfileSpec))
   const [targetProfileRef, setTargetProfileRef] = useState(profileRef)
   const [preflightProfileRef, setPreflightProfileRef] = useState<ProfileRef>()
@@ -224,8 +226,13 @@ export function Workbench({
     const load = async () => {
       dispatch({ type: 'loadStarted' })
       try {
-        const [components, sources] = await Promise.all([client.listComponents(), client.listSources()])
+        const [components, sources, active] = await Promise.all([
+          client.listComponents(),
+          client.listSources(),
+          client.getActiveProfile(profileRef.id),
+        ])
         if (!cancelled) dispatch({ type: 'loaded', components, sources })
+        if (!cancelled && active !== undefined) dispatch({ type: 'activeLoaded', active })
       } catch (error) {
         if (!cancelled) dispatch(failureEvent(error))
       }
@@ -234,7 +241,7 @@ export function Workbench({
     return () => {
       cancelled = true
     }
-  }, [client])
+  }, [client, profileRef.id])
 
   useEffect(() => {
     if (state.components.length === 0) return
@@ -253,12 +260,23 @@ export function Workbench({
   }, [state.components, baseProfileSpec])
 
   useEffect(() => {
+    setCurrentBaseProfileSpec(baseProfileSpec)
+  }, [baseProfileSpec])
+
+  useEffect(() => {
     setTargetProfileRef(profileRef)
     setPreflightProfileRef(undefined)
   }, [profileRef.id, profileRef.version])
 
   const targetPreflight = sameProfileRef(preflightProfileRef, targetProfileRef) ? state.preflight : undefined
   const resolved = resolvedOf(targetPreflight)
+
+  const refreshActiveProfile = async (): Promise<ActiveProfileRecord | undefined> => {
+    setPreflightProfileRef(undefined)
+    const active = await client.getActiveProfile(profileRef.id)
+    if (active !== undefined) dispatch({ type: 'activeLoaded', active })
+    return active
+  }
 
   useEffect(() => {
     if (boundRunId === undefined) return
@@ -311,6 +329,18 @@ export function Workbench({
     } catch (error) {
       if (error instanceof ApiError && error.conflict) {
         dispatch({ type: 'conflict', error: toWorkbenchError(error) })
+        setPublicationFeedback({
+          kind: 'error',
+          message: 'active revision 已变化；正在刷新当前 CAS 修订。请在刷新后重新预检再激活。',
+        })
+        try {
+          await refreshActiveProfile()
+        } catch (refreshError) {
+          setPublicationFeedback({
+            kind: 'error',
+            message: `版本冲突后无法读取新的 active revision：${toWorkbenchError(refreshError).message}`,
+          })
+        }
         return
       }
       dispatch(failureEvent(error))
@@ -322,12 +352,12 @@ export function Workbench({
     const requestedRef: ProfileRef = { id: profileRef.id, version }
     setPendingProfileRef(requestedRef)
     setPublicationFeedback(undefined)
-    if (baseProfileSpec === undefined) return
+    if (currentBaseProfileSpec === undefined) return
     if (!isSemver(version)) {
       setPublicationFeedback({ kind: 'error', message: '请输入有效的 SemVer 版本，例如 1.2.3。' })
       return
     }
-    const resolvedSelection = profileSpecForSelection(baseProfileSpec, state.components, selection)
+    const resolvedSelection = profileSpecForSelection(currentBaseProfileSpec, state.components, selection)
     if ('error' in resolvedSelection) {
       setPublicationFeedback({ kind: 'error', message: resolvedSelection.error })
       return
@@ -362,6 +392,7 @@ export function Workbench({
         snapshotHash: resolved.snapshotHash,
         expectedRevision: state.active?.revision ?? null,
       })
+      setCurrentBaseProfileSpec(published.spec)
       dispatch({ type: 'activated', active })
       setPendingProfileRef(undefined)
       setNewVersion('')
@@ -380,6 +411,25 @@ export function Workbench({
     } catch (error) {
       if (error instanceof ApiError && error.conflict) {
         dispatch({ type: 'conflict', error: toWorkbenchError(error) })
+        setPublicationFeedback({
+          kind: 'error',
+          message: 'active revision 已变化；正在刷新当前 CAS 修订。请在刷新后重新预检再激活。',
+        })
+        try {
+          const active = await refreshActiveProfile()
+          setPublicationFeedback({
+            kind: 'error',
+            message: active === undefined
+              ? 'active profile 已变化且当前没有可用 revision。请重新读取配置后再试。'
+              : `active profile 已更新为 ${active.profileRef.id}@${active.profileRef.version}（修订 ${active.revision}）；请重新预检后再激活。`,
+          })
+        } catch (refreshError) {
+          setPublicationFeedback({
+            kind: 'error',
+            message: `版本冲突后无法读取新的 active revision：${toWorkbenchError(refreshError).message}`,
+          })
+        }
+        return
       }
       setPublicationFeedback({ kind: 'error', message: toWorkbenchError(error).message })
     } finally {
@@ -442,7 +492,7 @@ export function Workbench({
             <p data-testid="profile-ref">
               {targetProfileRef.id}@{targetProfileRef.version}
             </p>
-            {baseProfileSpec === undefined ? null : (
+            {currentBaseProfileSpec === undefined ? null : (
               <p>组件选择只修改待发布的新版本；当前基础配置保持不变。</p>
             )}
             <div className="profile-actions__buttons">
@@ -485,7 +535,7 @@ export function Workbench({
                 版本冲突（{state.conflict.code}）：{state.conflict.message}
               </p>
             )}
-            {baseProfileSpec === undefined ? null : (
+            {currentBaseProfileSpec === undefined ? null : (
               <section data-testid="profile-publish">
                 <h4>发布新配置版本</h4>
                 <label>

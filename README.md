@@ -2,7 +2,7 @@
 
 一个可以挂载行业语义、Agent runtime 和数据后端的业务问答框架。它把客户资料变成可审核的实体、属性、关系与规则，再通过受限工具查询数据、执行可表示的规则，并发布经过核验的回答及其来源。
 
-当前开发入口是 `platform/`。本轮重点是从 `main@51c8cb4` 补齐通用产品链，实施分支为 `feat/main-core-product-20260928`。**首条真实 HTTP 流程已独立通过：原始资料导入、解析抽取、身份确认、审核发布、字段事实查询、硬核验和正式答案。完整 UI、规则回答、自然语言规划和重启等验收仍在进行。** 逐项证据见[独立验证记录](platform/docs/main-core-independent-review-2026-09-28.md)。
+当前开发入口是 `platform/`。本轮重点是从 `main@51c8cb4` 补齐通用产品链，实施分支为 `feat/main-core-product-20260928`。**现在可以从浏览器完成原始 JSON 导入、原文对照、身份确认、审核发布、字段事实查询、正式正文和证据展开；新版 profile 的发布、预检、激活和刷新也已验证。进程重启后，同一个历史回答与证据仍可读取。** 自然语言规划、正常规则回答和模型接线继续验收，逐项证据见[独立验证记录](platform/docs/main-core-independent-review-2026-09-28.md)。
 
 ## 输入和输出
 
@@ -22,13 +22,13 @@
 
 | 功能 | 实现内容 | 使用边界 |
 | --- | --- | --- |
-| 组件与 profile | 版本化行业、runtime、backend、transport、model 绑定；发布、preflight、activate | 工作台交互已测试；默认宿主的部署元数据和实际挂载仍待完整验收 |
+| 组件与 profile | 版本化行业、runtime、backend、transport、model 绑定；发布、preflight、activate | 浏览器实际激活新版本并刷新读取已通过；当前本机宿主启用 Template/DuckDB/已发布事实读取，不代表所有适配器可直接切换 |
 | 来源与物理映射 | 来源注册/探测、对象和字段映射、受限语义查询编译 | 控制数据与客户业务数据库分开；不假定 DataOS 已提供本体能力 |
 | 文档与抽取 | 原文/解析 span 归档；强标识记录的原生抽取；GenerationPort 产候选；Schema 与来源校验 | 模型未配置时不能假装抽取普通自然语言规则成功；模型质量需另行验证 |
 | 消歧与发布 | 强标识/候选召回、match/new/reject/clarify/split、revision CAS、cannot-link | 相同名称不自动合并；正式查询只读已确认、已发布的数据 |
 | 本体与规则 | 属性子投影、按实体实例化的有界规则、显式例外、类型/单位/结论校验 | 缺失、冲突、规则不适用与业务 false 分开表达；不支持的表达式须显式拒绝 |
 | 物化与撤回 | 支撑依赖、当前投影、身份 split fence、outbox 消费、有效时间切片 | 独立来源按 OR 保留支撑；当前 dirty/fence 不冒充有效结果，缺历史快照不以当前头补历史 |
-| 事实查询 | `ontology_lookup` 读取已发布属性事实，保留原 statement、schema、单位和来源 | 有界分页、cursor 与 revision；本轮正在补齐分页完整性进入答案核验的保护 |
+| 事实查询 | `ontology_lookup` 读取已发布属性事实，保留原 statement、schema、单位和来源 | 注册字段任务已走通；分页不完整进入核验保护，不将部分列表无条件当成完整答案 |
 | 运行调度 | 持久 dispatch、claim/续租、attempt/revision fence、取消与受控恢复 | 调用后崩溃不代表普遍 exactly-once；不能安全恢复的阶段应明确失败 |
 | 模型决策 | JEV System One 的实际状态、typed 概率判断、每次调用共享预算；generation 独立端口 | 概率不是正确率；本轮测试使用受控 HTTP，没有据此验证真实模型质量 |
 | 正文与溯源 | hash 绑定的数值/布尔/字符串/引文/规则断言、硬核验、正文持久化与来源交互 | 无语义核验时显式展示 `not_run`；旧 metadata-only 答案明确正文不可用 |
@@ -68,7 +68,7 @@ Controller 拥有运行状态、收证循环、取消和共享预算。Template/
 | 交通设施巡检 | 设施、行政区域；需巡检且明确不豁免时应用 R-T | T-01 双独立来源；T-03/T-05 缺豁免，T-06 缺前提；来源撤回后的替代支撑 |
 | 工业资产维护 | 资产、车间；运行达到 100 h 且明确不豁免时应用 R-I | 100 h 边界；另一来源使用 `asset_key`、分钟和 0/1 豁免标记；6000 min = 100 h，5999 min 低于阈值 |
 
-它们是公开合成演示资料和本地假设，**不代表正式行业标准或真实监管政策**。示例单测已经通过真实文档解析器和原生抽取管线产生待审候选，并通过受控 generation 响应产生规则候选。实际宿主挂载、身份审核、发布、物理查询转换及最终答案仍须完整验收。资产格式和证据见[示例说明](platform/docs/core-synthetic-industry-example-assets-2026-09-28.md)。
+它们是公开合成演示资料和本地假设，**不代表正式行业标准或真实监管政策**。两个行业的正常 HTTP 原始导入至事实答案已通过；四种物理 mapping 的真实 DuckDB 转换也有独立验证。政策规则抽取目前使用受控 generation 响应验收，正常宿主规则回答仍未完成。资产格式和证据见[示例说明](platform/docs/core-synthetic-industry-example-assets-2026-09-28.md)。
 
 ## 本地准备与启动
 
@@ -94,6 +94,17 @@ prepare 显式运行迁移，验证非 superuser、`NOBYPASSRLS` 的 `ontology_a
 模型默认关闭。当前 Core 宿主支持强标识 JSON 原始记录和注册的字段事实任务；普通自然语言问题返回 `CAPABILITY_NOT_CONFIGURED`，不会默认回答一个无关任务。`CORE_ENABLE_MODELS=true` 当前仅表示请求启用，尚未完成公司模型/JEV 在此宿主的实际接线。已有模型适配器的受控测试不代表宿主已接通真实模型。密钥留在 API 进程，不传给 Vite。
 
 ## 已验证的 API 使用流程
+
+浏览器入口为 `http://127.0.0.1:5174/`。默认读取 API 的部署元数据，不需要手工拼 profile 参数。只读模式默认进入业务问答；管理操作需要下面的本机 operator 开关。
+
+1. 选择顶部场景。工作台中的行业组件、查询任务和导入来源会随场景切换，旧导入草稿会清空。
+2. 在「配置工作台」填写新 SemVer，例如 `1.0.1`，点击「发布、预检并激活」。页面读取真实 active revision 后执行 CAS；发生并发冲突需刷新状态并重新预检。
+3. 在「导入任务」选择声明中的来源，粘贴示例原始 JSON 对象，点击「导入并解析」。原始示例文件位于 `platform/deploy/core/examples/`；多条对象用空行分隔。
+4. 在「候选审核」选择候选，打开原文对照。新实体先「新建待确认」，再核对返回的目标实体 ID 并「匹配已有实体」，完成关联确认；然后批准并发布。
+5. 在「业务问答」选择已注册读取任务，例如 `facts:inspection_due`。当前只读取已发布属性事实；普通自然语言、自由生成和业务规则推理尚未在默认宿主启用。
+6. 正式回答出现后点击「打开来源」，查看真实归档证据及版本。`semanticReview: not_run/disabled` 表示只完成硬核验，不代表真实模型语义评估已通过。
+
+当前 JSON 导入进入文档、候选和已发布语义事实链；它不会自动更新演示 DuckDB 的物理业务表。业务表快照来自部署声明中的原始资产。接入客户业务数据库和启用 Text2SQL 时，仍需明确该数据库的来源、映射及更新机制。
 
 管理操作需要启动 API 时显式开启本机 operator 模式：
 
@@ -185,4 +196,4 @@ pnpm run build:web
 
 `typecheck` 同时覆盖后端、Web 和 acceptance 项目。真实数据库/worker/HTTP 验收与受控模型单测分别记录；聚焦检查点存在重叠，不能相加成一次全量通过。真实付费模型质量、客户数据质量、任意历史重建和生产 SSO 不因本地测试而自动通过。
 
-截至首条 HTTP 检查点，完整 TypeScript 检查通过；原始导入到正式事实回答已有独立 PostgreSQL/HTTP 通过记录，四种物理 mapping 的真实 DuckDB 查询也通过。早期全 unit/contracts/UI 检查有一项旧支撑来源回归；新的安全模块已通过聚焦检查，正式归档 reader 和旧 PG 来源正例仍待接线。全部浏览器、规则回答、模型规划、修改/撤回与重启等，仍以本轮最终验收为门槛，不以聚焦检查点代替全量通过。LOCAL 与 GitHub Issue 的对应关系以 [manifest](.autoresearch/issues/manifest.json) 为准。
+最新独立检查包括正常 HTTP 的新版本激活、metadata 刷新、旧回答和证据重启读取，以及浏览器原始导入到正式事实正文/来源的链路。正式不可变支撑 reader 已接入，并通过 35 项单元/架构检查；旧 PostgreSQL 来源正例、正常规则回答和模型规划仍在完成。全量 TypeScript/Vitest/浏览器矩阵以最终代码冻结后的检查为准，不以聚焦结果替代全量通过。LOCAL 与 GitHub Issue 的对应关系以 [manifest](.autoresearch/issues/manifest.json) 为准。

@@ -42,6 +42,7 @@ import {
   OutboxDispatcher,
   ProfileResolver,
   RestrictedLimitedAnswerComposer,
+  SourceRegistry,
   RunPhaseDriver,
   RunService,
   WorkflowController,
@@ -98,6 +99,10 @@ import { DataQueryHandler, OntologyLookupHandler, canonicalJson } from '@ontolog
 import type { ToolSchemaValidator } from '@ontology/tool-services'
 import { controlRecordSequence, JobWorkerLoop, MaterializationOutboxConsumer, TopicOutboxConsumerRouter, WorkflowDispatchWorker, createIngestionHandlerRegistry } from '@ontology/app-worker'
 import { PublishedFactsDraftWriter } from './published-facts-draft'
+import { createStaticProbeAdapterResolver, createPostgresSourceStore } from './source-registry'
+import { createEnvSecretResolver } from './secret-resolver'
+import { createPostgresProvenanceRead } from './provenance-read'
+import { RunProgressService } from '../http/run-progress'
 import type { CoreExampleScenario, LoadedCoreExamples } from './core-example-loader'
 import type { RequestAuthenticator } from '../http/shared'
 
@@ -194,9 +199,11 @@ async function registerProfiles(
   scenarios: readonly CoreExampleScenario[],
   scopeRef: ScopeRef,
   profileContext: ToolContext,
+  profileSpecsByScenario: Readonly<Record<string, ProfileSpec>>,
 ): Promise<void> {
   for (const scenario of scenarios) {
-    const spec = profileSpecFor(scenario, DATA_DUCKDB_ADAPTER_REF)
+    const spec = profileSpecsByScenario[scenario.scenarioId]
+    if (spec === undefined) throw new Error(`Core profile spec is missing for ${scenario.scenarioId}`)
     await resolver.publish({ scopeRef, profileRef: scenario.profileRef, spec, environment: 'local_dev' }, profileContext)
     const preflight = await resolver.preflight({ scopeRef, profileRef: scenario.profileRef }, profileContext)
     if (preflight.status !== 'resolved' || preflight.resolvedProfile === undefined) {
@@ -212,8 +219,6 @@ async function registerProfiles(
         snapshotHash: preflight.resolvedProfile.snapshotHash,
         expectedRevision: null,
       }, profileContext)
-    } else if (current.profileRef.version !== scenario.profileRef.version || current.snapshotHash !== preflight.resolvedProfile.snapshotHash) {
-      throw new Error(`Core profile ${scenario.profileRef.id} is active at a different immutable version; explicit activation is required`)
     }
   }
 }
@@ -486,17 +491,28 @@ function workerContext(
 
 class CoreFactsPlanResolver implements TemplatePlanResolver {
   readonly #runs: RunService
+  readonly #profiles: ProfileResolver
   readonly #scenarios: readonly CoreExampleScenario[]
 
-  constructor(runs: RunService, scenarios: readonly CoreExampleScenario[]) {
+  constructor(runs: RunService, profiles: ProfileResolver, scenarios: readonly CoreExampleScenario[]) {
     this.#runs = runs
+    this.#profiles = profiles
     this.#scenarios = scenarios
   }
 
   async resolve(_planRef: ResourceRef | undefined, ctx: ToolContext) {
     const run = await this.#runs.getRun(ctx.runId, ctx)
-    const scenario = this.#scenarios.find((candidate) => sameProfile(candidate.profileRef, run.profileRef))
-    if (scenario === undefined) throw new CoreCapabilityError('the run profile is not mounted by this Core deployment')
+    const { scenario, resolved } = await resolveScenarioProfile(
+      this.#profiles,
+      this.#scenarios,
+      run.profileRef,
+      { tenantId: ctx.principal.tenantId, spaceId: ctx.allowedResources.spaceId },
+      ctx,
+      run.resolvedProfileHash,
+    )
+    if (!resolved.toolBindings.some((binding) => binding.toolId === 'ontology_lookup' && binding.enabled)) {
+      throw new CoreCapabilityError('this profile does not enable ontology_lookup for facts tasks')
+    }
     const attributeId = attributeTask(run.question, scenario)
     if (attributeId === undefined) throw new CoreCapabilityError('only a registered facts:<attributeId> query is supported by this runtime profile')
     const plan = factsPlan(scenario, { tenantId: ctx.principal.tenantId, spaceId: ctx.allowedResources.spaceId }, attributeId)
@@ -655,8 +671,33 @@ function componentRegistrationInput(record: ComponentVersionRecord, now: string)
   }
 }
 
-function sameProfile(left: ProfileRef, right: ProfileRef): boolean {
-  return left.id === right.id && left.version === right.version
+function sameVersionRef(left: VersionRef, right: VersionRef): boolean {
+  return left.id === right.id && left.version === right.version && left.digest === right.digest
+}
+
+function scenarioForIndustryRef(
+  scenarios: readonly CoreExampleScenario[],
+  industryRef: VersionRef,
+): CoreExampleScenario | undefined {
+  return scenarios.find((scenario) => sameVersionRef(
+    industryRef,
+    componentRef('industry_pack', scenario.industryManifest.namespace, scenario.industryManifest),
+  ))
+}
+
+async function resolveScenarioProfile(
+  profiles: ProfileResolver,
+  scenarios: readonly CoreExampleScenario[],
+  profileRef: ProfileRef,
+  scopeRef: ScopeRef,
+  ctx: ToolContext,
+  resolvedProfileHash?: string,
+) {
+  const snapshotHash = resolvedProfileHash ?? (await profiles.bindRunProfile(profileRef, scopeRef, ctx)).resolvedProfileHash
+  const resolvedRecord = await profiles.getResolvedProfile({ scopeRef, profileRef, snapshotHash }, ctx)
+  const scenario = scenarioForIndustryRef(scenarios, resolvedRecord.resolved.industryRef)
+  if (scenario === undefined) throw new CoreCapabilityError('the profile pins an industry package not mounted by this Core deployment')
+  return { scenario, resolved: resolvedRecord.resolved }
 }
 
 function attributeTask(question: string, scenario: CoreExampleScenario): string | undefined {
@@ -1037,10 +1078,36 @@ export async function createCoreLocalComposition(options: CoreLocalCompositionOp
       industry: industrySource,
       validator: profileValidatorImpl,
     })
+    const sources = new SourceRegistry({
+      control,
+      store: createPostgresSourceStore(database),
+      secrets: createEnvSecretResolver(),
+      adapters: createStaticProbeAdapterResolver([]),
+    })
 
     const componentRecords = scenarioComponentRecords(options.examples.scenarios, new Date().toISOString())
+    const bootstrapProfileSpecsByScenario = Object.fromEntries(options.examples.scenarios.map((scenario) => [
+      scenario.scenarioId,
+      profileSpecFor(scenario, DATA_DUCKDB_ADAPTER_REF),
+    ]))
     await registerComponents(componentStore, componentRecords, scopeRef, profileContext)
-    await registerProfiles(profileResolver, options.examples.scenarios, scopeRef, profileContext)
+    await registerProfiles(profileResolver, options.examples.scenarios, scopeRef, profileContext, bootstrapProfileSpecsByScenario)
+
+    const profileRefsByScenario: Record<string, ProfileRef> = {}
+    const profileSpecsByScenario: Record<string, ProfileSpec> = {}
+    const availableTasksByScenario: Record<string, readonly string[]> = {}
+    for (const mountedScenario of options.examples.scenarios) {
+      const active = await profileResolver.getActiveProfile(scopeRef, mountedScenario.profileRef.id, profileContext)
+      const activeProfileRef = active?.profileRef ?? mountedScenario.profileRef
+      const record = await profileResolver.getProfileVersion({ scopeRef, profileRef: activeProfileRef }, profileContext)
+      const selectedScenario = scenarioForIndustryRef(options.examples.scenarios, record.spec.industryRef)
+      if (selectedScenario === undefined) {
+        throw new CoreCapabilityError(`active profile ${activeProfileRef.id}@${activeProfileRef.version} pins an unmounted industry package`)
+      }
+      profileRefsByScenario[mountedScenario.scenarioId] = activeProfileRef
+      profileSpecsByScenario[mountedScenario.scenarioId] = record.spec
+      availableTasksByScenario[mountedScenario.scenarioId] = schemasByScenario([selectedScenario])[selectedScenario.scenarioId] ?? []
+    }
     for (const scenario of options.examples.scenarios) {
       const published = await semanticDefinitions.publish(scenario.definitionDraft, profileContext)
       if (published.ref.digest !== scenario.definitionRef.digest) {
@@ -1087,18 +1154,26 @@ export async function createCoreLocalComposition(options: CoreLocalCompositionOp
       handlers: [lookupHandler, dataQueryHandler, documentSearchHandler],
     })
 
+    const runProfileBinder = {
+      bindProfileForRun: (profileRef: ProfileRef, trustedScope: ScopeRef, ctx: ToolContext) =>
+        profileResolver.bindRunProfile(profileRef, trustedScope, ctx),
+    } satisfies RunProfileBinder
+    const runProgress = new RunProgressService({
+      profiles: profileStore,
+      binder: runProfileBinder,
+      manifests: workflowStore,
+      budget,
+    })
     const runs = new RunService({
       store: runStore,
       control,
-      profiles: {
-        bindProfileForRun: (profileRef, trustedScope, ctx) => profileResolver.bindRunProfile(profileRef, trustedScope, ctx),
-      } satisfies RunProfileBinder,
+      profiles: runProfileBinder,
     })
     const phase = new RunPhaseDriver({ store: runStore, control })
     const dispatchFences = new Map<Uuid, WorkflowDispatchFence>()
     const runtimeRecord = componentRecords.find((record) => record.manifest.kind === 'runtime' && record.manifest.id === 'runtime-template')
     if (runtimeRecord === undefined) throw new Error('Core template runtime component is not registered')
-    const runtime = new TemplateRuntimeAdapter({ manifest: runtimeRecord.manifest, plans: new CoreFactsPlanResolver(runs, options.examples.scenarios) })
+    const runtime = new TemplateRuntimeAdapter({ manifest: runtimeRecord.manifest, plans: new CoreFactsPlanResolver(runs, profileResolver, options.examples.scenarios) })
     const controllerDependencies = {
       runs,
       phase,
@@ -1161,8 +1236,14 @@ export async function createCoreLocalComposition(options: CoreLocalCompositionOp
       dispatchContext: workerDispatchContext,
       contextForRun: async (runId) => {
         const run = await runs.getRun(runId, workerDispatchContext)
-        const scenario = options.examples.scenarios.find((entry) => sameProfile(entry.profileRef, run.profileRef))
-        if (scenario === undefined) throw new CoreCapabilityError('the persisted run profile is not mounted by this host')
+        const { scenario } = await resolveScenarioProfile(
+          profileResolver,
+          options.examples.scenarios,
+          run.profileRef,
+          scopeRef,
+          workerDispatchContext,
+          run.resolvedProfileHash,
+        )
         return workerContext(scopeRef, sourceRefsOf(scenario), runId, run.resolvedProfileHash)
       },
       onFenceChange(runId, fence) {
@@ -1213,6 +1294,7 @@ export async function createCoreLocalComposition(options: CoreLocalCompositionOp
       new UnsupportedOutboxConsumer(),
     )
     const dispatcher = new OutboxDispatcher({ store: jobStore, consumer: outboxConsumer })
+    const provenanceRead = createPostgresProvenanceRead({ database, blobStore })
     const jobContext = workerContext(scopeRef, allSourceRefs, WORKER_RUN_ID, sha256DigestOf('core-ingestion-worker'))
     jobLoop = new JobWorkerLoop({
       worker: jobWorker,
@@ -1228,11 +1310,42 @@ export async function createCoreLocalComposition(options: CoreLocalCompositionOp
     dispatchAbort = new AbortController()
     dispatchWorkerPromise = workflowDispatchWorker.run(dispatchAbort.signal)
 
-    const runValidation = async (submission: { readonly profileRef: ProfileRef; readonly question: string }) => {
-      const scenario = options.examples.scenarios.find((entry) => sameProfile(entry.profileRef, submission.profileRef))
-      if (scenario === undefined) throw new CoreCapabilityError('the selected profile is not mounted by this deployment')
+    const runValidation = async (
+      submission: { readonly profileRef: ProfileRef; readonly question: string; readonly scopeRef: ScopeRef },
+      ctx: ToolContext,
+    ) => {
+      const { scenario, resolved } = await resolveScenarioProfile(
+        profileResolver,
+        options.examples.scenarios,
+        submission.profileRef,
+        submission.scopeRef,
+        ctx,
+      )
+      if (!resolved.toolBindings.some((binding) => binding.toolId === 'ontology_lookup' && binding.enabled)) {
+        throw new CoreCapabilityError('this profile does not enable ontology_lookup for facts tasks')
+      }
       if (attributeTask(submission.question, scenario) === undefined) {
         throw new CoreCapabilityError(`use one of the registered tasks: ${schemasByScenario(options.examples.scenarios)[scenario.scenarioId]?.join(', ') ?? ''}`)
+      }
+    }
+
+    const readScenarioProfile = async (scenarioId: string) => {
+      const mountedScenario = options.examples.scenarios.find((scenario) => scenario.scenarioId === scenarioId)
+      if (mountedScenario === undefined) return undefined
+      const active = await profileResolver.getActiveProfile(scopeRef, mountedScenario.profileRef.id, profileContext)
+      const profileRef = active?.profileRef ?? mountedScenario.profileRef
+      const record = await profileResolver.getProfileVersion({ scopeRef, profileRef }, profileContext)
+      const selectedScenario = scenarioForIndustryRef(options.examples.scenarios, record.spec.industryRef)
+      if (selectedScenario === undefined) {
+        throw new CoreCapabilityError(`active profile ${profileRef.id}@${profileRef.version} pins an unmounted industry package`)
+      }
+      return {
+        profileRef,
+        baseProfileSpec: record.spec,
+        environment: record.environment,
+        availableTasks: schemasByScenario([selectedScenario])[selectedScenario.scenarioId] ?? [],
+        definitionRef: selectedScenario.definitionRef,
+        namespace: selectedScenario.namespace,
       }
     }
 
@@ -1248,23 +1361,30 @@ export async function createCoreLocalComposition(options: CoreLocalCompositionOp
       database,
       scopeRef,
       examples: options.examples,
+      readScenarioProfile,
+      profileRefsByScenario,
+      profileSpecsByScenario,
       modelsEnabled: options.modelsEnabled ?? false,
-      availableTasksByScenario: schemasByScenario(options.examples.scenarios),
+      availableTasksByScenario,
       allowLocalOperator: options.allowLocalOperator ?? false,
       api: {
         runs: {
           service: runs,
+          progress: runProgress,
           submissionMode: 'durable',
-          validateSubmission: (input) => runValidation(input),
+          validateSubmission: (input, ctx) => runValidation(input, ctx),
           dispatch: {
             enqueue: async (runId, logicalActionId, ctx) => dispatchStore.enqueue({ runId, logicalActionId }, ctx),
             cancelRun: (runId, ctx) => workflowDispatchWorker.cancelRun(runId, ctx),
           },
         },
         jobs: { service: jobService },
+        workbench: { profiles: profileResolver, sources, components: componentStore },
         decisions: { service: identityService, candidates: candidateStore, documents: parseStore },
         publications: { service: semanticPublication },
         answers: { reader: controller },
+        evidence: { service: provenanceRead.provenance },
+        history: { service: provenanceRead.history },
       },
       registerRoutes: (api, authenticate) => registerCoreImportRoute({
         app: api,

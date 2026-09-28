@@ -27,6 +27,9 @@ let composition: CoreLocalComposition | undefined
 let api: ReturnType<typeof createCoreApi> | undefined
 let baseUrl = ''
 const workerErrors: Error[] = []
+let persistedAnswerRunId: string | undefined
+let persistedAnswerPayload: string | undefined
+let persistedEvidenceId: string | undefined
 
 async function startIsolatedDatabase(): Promise<void> {
   container = await startPostgresContainer()
@@ -113,11 +116,88 @@ describe('the mounted local Core host through normal HTTP', () => {
     const health = await request('/healthz')
     expect(health.status).toBe(200)
 
+    const componentList = await request('/api/v1/components')
+    expect(componentList.status).toBe(200)
+    expect(((await componentList.json() as { data: { components: unknown[] } }).data.components).length).toBeGreaterThan(0)
+    const sourceList = await request('/api/v1/sources')
+    expect(sourceList.status).toBe(200)
+    expect((await sourceList.json() as { data: { sources: unknown[] } }).data.sources).toEqual([])
+
     const deploymentResponse = await request('/api/v1/core/deployment')
     expect(deploymentResponse.status).toBe(200)
-    const deployment = await deploymentResponse.json() as { data: { scenarios: { scenarioId: string; availableTasks: string[] }[] } }
+    const deployment = await deploymentResponse.json() as {
+      data: {
+        scenarios: {
+          scenarioId: string
+          availableTasks: string[]
+          profileRef: { id: string; version: string }
+          namespace: string
+          environment: string
+          baseProfileSpec?: {
+            industryRef: { id: string }
+            mappingRefs: { id: string; sourceObjectRef: { objectPath: string } }[]
+            backendBindings: Record<string, unknown>
+          }
+        }[]
+      }
+    }
     const scenario = deployment.data.scenarios.find((entry) => entry.scenarioId === 'transport-facility-inspection')
     expect(scenario?.availableTasks).toContain('facts:inspection_due')
+    expect(scenario?.environment).toBe('local_dev')
+    expect(scenario?.baseProfileSpec?.industryRef.id).toBe('synthetic-transport-facility')
+    expect(scenario?.baseProfileSpec?.mappingRefs[0]?.sourceObjectRef.objectPath).toBe('demo.registry_a_facilities')
+    if (scenario?.baseProfileSpec === undefined) throw new Error('Core deployment did not expose the registered base profile spec')
+    const activeProfileResponse = await request(`/api/v1/profiles/${encodeURIComponent(scenario.profileRef.id)}/active`)
+    expect(activeProfileResponse.status).toBe(200)
+    const initialActive = await activeProfileResponse.json() as { data: { active: { profileRef: { version: string }; revision: string } } }
+    expect(initialActive.data.active.profileRef.version).toBe('1.0.0')
+
+    const initialScope = await request(`/api/v1/runs/scope?profileId=${encodeURIComponent(scenario.profileRef.id)}&version=${encodeURIComponent(scenario.profileRef.version)}`)
+    expect(initialScope.status).toBe(200)
+    expect((await initialScope.json() as { data: { toolIds: string[] } }).data.toolIds).toContain('ontology_lookup')
+
+    const nextProfileRef = { id: scenario.profileRef.id, version: '1.0.1' }
+    const profilePublish = await request('/api/v1/profiles', {
+      method: 'POST',
+      headers: { 'content-type': 'application/json', 'idempotency-key': 'core-profile-publish-transport-v101' },
+      body: JSON.stringify({ profileRef: nextProfileRef, spec: scenario.baseProfileSpec, environment: scenario.environment }),
+    })
+    expect(profilePublish.status).toBe(201)
+    const nextPreflight = await request(`/api/v1/profiles/${encodeURIComponent(nextProfileRef.id)}/preflight`, {
+      method: 'POST',
+      headers: { 'content-type': 'application/json' },
+      body: JSON.stringify({ version: nextProfileRef.version }),
+    })
+    expect(nextPreflight.status).toBe(200)
+    const preflightResult = await nextPreflight.json() as { data: { status: string; resolvedProfile?: { snapshotHash: string } } }
+    expect(preflightResult.data.status).toBe('resolved')
+    const snapshotHash = preflightResult.data.resolvedProfile?.snapshotHash
+    if (snapshotHash === undefined) throw new Error('new profile preflight did not resolve a snapshot')
+    if (admin === undefined) throw new Error('isolated PostgreSQL admin client is unavailable')
+    const activeRevisionRows = await admin.query<{ revision: string }>(
+      'SELECT revision::text AS revision FROM agent_platform.active_profiles WHERE tenant_id = $1 AND space_id = $2 AND profile_id = $3',
+      [scopeRef.tenantId, scopeRef.spaceId, nextProfileRef.id],
+    )
+    const activeRevision = activeRevisionRows.rows[0]?.revision
+    if (activeRevision === undefined) throw new Error('Core bootstrap did not activate the base profile')
+    const activated = await request(`/api/v1/profiles/${encodeURIComponent(nextProfileRef.id)}/activate`, {
+      method: 'POST',
+      headers: { 'content-type': 'application/json', 'if-match': activeRevision },
+      body: JSON.stringify({ version: nextProfileRef.version, snapshotHash }),
+    })
+    expect(activated.status).toBe(200)
+    const activatedProfile = await activated.json() as { data: { profileRef: { version: string }; revision: string } }
+    expect(activatedProfile.data.profileRef.version).toBe('1.0.1')
+    const refreshedActive = await request(`/api/v1/profiles/${encodeURIComponent(nextProfileRef.id)}/active`)
+    expect((await refreshedActive.json() as { data: { active: { profileRef: { version: string } } } }).data.active.profileRef.version).toBe('1.0.1')
+    const refreshedDeployment = await request('/api/v1/core/deployment').then((response) => response.json()) as {
+      data: { scenarios: { scenarioId: string; profileRef: { version: string }; availableTasks: string[] }[] }
+    }
+    const refreshedScenario = refreshedDeployment.data.scenarios.find((entry) => entry.scenarioId === scenario.scenarioId)
+    expect(refreshedScenario?.profileRef.version).toBe('1.0.1')
+    expect(refreshedScenario?.availableTasks).toContain('facts:inspection_due')
+    const upgradedScope = await request(`/api/v1/runs/scope?profileId=${encodeURIComponent(nextProfileRef.id)}&version=${encodeURIComponent(nextProfileRef.version)}`)
+    expect(upgradedScope.status).toBe(200)
 
     const transport = loadCoreExamples({ targetScopeRef: scopeRef }).scenarios.find((entry) => entry.scenarioId === 'transport-facility-inspection')
     if (transport === undefined) throw new Error('transport synthetic scenario was not mounted')
@@ -188,7 +268,7 @@ describe('the mounted local Core host through normal HTTP', () => {
       method: 'POST',
       headers: { 'content-type': 'application/json', 'idempotency-key': 'core-transport-facts-t04' },
       body: JSON.stringify({
-        profileRef: transport.profileRef,
+        profileRef: nextProfileRef,
         question: 'facts:inspection_due',
         context: { timeZone: 'UTC' },
         preferences: { route: 'template', allowWeb: false },
@@ -197,11 +277,21 @@ describe('the mounted local Core host through normal HTTP', () => {
     expect(runResponse.status).toBe(202)
     const runBody = await runResponse.json() as { data: { runId: string } }
     const answerResponse = await waitForAnswer(runBody.data.runId)
-    const answer = answerResponse['data'] as { body?: { assertions: { predicate: string; value: unknown; references: { evidenceRef: { id: string } }[] }[] }; semanticReview?: { status: string; reason?: string } }
+    persistedAnswerRunId = runBody.data.runId
+    persistedAnswerPayload = JSON.stringify(answerResponse['data'])
+    const answer = answerResponse['data'] as { body?: { assertions: { predicate: string; value: unknown; subject?: string; references: { evidenceRef: { id: string } }[] }[] }; semanticReview?: { status: string; reason?: string } }
     expect(answer.body?.assertions).toContainEqual(expect.objectContaining({ predicate: 'inspection_due', value: false }))
     const assertion = answer.body?.assertions.find((entry) => entry.predicate === 'inspection_due')
     expect(assertion?.references[0]?.evidenceRef.id).toMatch(/^[0-9a-f-]{36}$/iu)
     expect(answer.semanticReview).toEqual({ status: 'not_run', reason: 'disabled' })
+    if (assertion === undefined || assertion.references[0] === undefined) throw new Error('verified inspection fact has no evidence reference')
+    persistedEvidenceId = assertion.references[0].evidenceRef.id
+    const evidenceResponse = await request(`/api/v1/evidence/${encodeURIComponent(assertion.references[0].evidenceRef.id)}`)
+    expect(evidenceResponse.status).toBe(200)
+    if (assertion.subject !== undefined) {
+      const historyResponse = await request(`/api/v1/objects/${encodeURIComponent(assertion.subject)}/history`)
+      expect(historyResponse.status).toBe(200)
+    }
   }, 120_000)
 
   it('does not create or dispatch an unregistered natural-language task', async () => {
@@ -293,4 +383,54 @@ describe('the mounted local Core host through normal HTTP', () => {
     expect(answer.body?.claims).toContainEqual(expect.objectContaining({ predicate: 'operating_hours', value: { value: '100', unit: 'h' } }))
     expect(answer.body?.claims[0]?.references[0]?.evidenceRef.id).toMatch(/^[0-9a-f-]{36}$/iu)
   }, 120_000)
+
+  it('keeps the active profile version and its published answer available after a host restart', async () => {
+    await api?.close()
+    api = undefined
+    await composition?.close()
+    composition = undefined
+
+    composition = await createCoreLocalComposition({
+      databaseUrl: appUrl,
+      objectDirectory,
+      scopeRef,
+      examples: loadCoreExamples({ targetScopeRef: scopeRef }),
+      allowLocalOperator: true,
+    })
+    api = createCoreApi(composition.dependencies)
+    const address = await api.listen({ host: '127.0.0.1', port: 0 })
+    baseUrl = address.replace(/\/$/u, '')
+
+    const deployment = await request('/api/v1/core/deployment').then((response) => response.json()) as {
+      data: { scenarios: { scenarioId: string; profileRef: { id: string; version: string } }[] }
+    }
+    const scenario = deployment.data.scenarios.find((entry) => entry.scenarioId === 'transport-facility-inspection')
+    expect(scenario?.profileRef.version).toBe('1.0.1')
+    if (persistedAnswerRunId === undefined || persistedAnswerPayload === undefined || persistedEvidenceId === undefined) {
+      throw new Error('the first transport run was not retained for restart verification')
+    }
+    const previousAnswer = await request(`/api/v1/runs/${encodeURIComponent(persistedAnswerRunId)}/answer`)
+    expect(previousAnswer.status).toBe(200)
+    expect(JSON.stringify((await previousAnswer.json() as { data: unknown }).data)).toBe(persistedAnswerPayload)
+    const previousEvidence = await request(`/api/v1/evidence/${encodeURIComponent(persistedEvidenceId)}`)
+    expect(previousEvidence.status).toBe(200)
+    const scopeResponse = await request(`/api/v1/runs/scope?profileId=${encodeURIComponent(scenario?.profileRef.id ?? '')}&version=1.0.1`)
+    expect(scopeResponse.status).toBe(200)
+
+    const runResponse = await request('/api/v1/runs', {
+      method: 'POST',
+      headers: { 'content-type': 'application/json', 'idempotency-key': 'core-transport-restart-facts-v101' },
+      body: JSON.stringify({
+        profileRef: scenario?.profileRef,
+        question: 'facts:inspection_due',
+        context: { timeZone: 'UTC' },
+        preferences: { route: 'template', allowWeb: false },
+      }),
+    })
+    expect(runResponse.status).toBe(202)
+    const run = await runResponse.json() as { data: { runId: string } }
+    const answer = await waitForAnswer(run.data.runId)
+    expect(((answer['data'] as { body?: { assertions: { predicate: string; value: unknown }[] } }).body?.assertions ?? []))
+      .toContainEqual(expect.objectContaining({ predicate: 'inspection_due', value: false }))
+  }, 180_000)
 })

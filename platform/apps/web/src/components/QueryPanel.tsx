@@ -25,6 +25,9 @@ export interface QueryPanelProps {
   readonly client: WorkbenchClient
   readonly profileRef: ProfileRef
   readonly timeZone: string
+  /** Deployment-owned safe task IDs offered as shortcuts; arbitrary queries remain possible. */
+  readonly availableTasks?: readonly string[]
+  readonly modelStatus?: 'disabled' | 'requested_but_not_connected'
   /** Deployment-owned context fields; the shared query view has no industry fields. */
   readonly contextFields?: readonly QueryContextField[]
   /** Deep-linked run id (`?run=<id>`) so a state can be reproduced in a browser. */
@@ -271,7 +274,7 @@ function AnswerPanel({
   )
 }
 
-export function QueryPanel({ client, profileRef, timeZone, contextFields = [], initialRunId, onEvidenceReference }: QueryPanelProps) {
+export function QueryPanel({ client, profileRef, timeZone, availableTasks = [], modelStatus, contextFields = [], initialRunId, onEvidenceReference }: QueryPanelProps) {
   const viewport = useViewport()
   const [state, dispatch] = useReducer(queryReducer, undefined, initialQueryState)
   const [question, setQuestion] = useState('')
@@ -437,6 +440,17 @@ export function QueryPanel({ client, profileRef, timeZone, contextFields = [], i
         <p className="panel__hint">
           在场景允许范围内提问；只展示可审计进度与已验证数据，未核验草稿不会作为答案发送。
         </p>
+        {availableTasks.length === 0 ? null : (
+          <p className="panel__hint" data-testid="query-capability-note">
+            当前仅开放已注册属性事实读取任务；
+            {modelStatus === 'requested_but_not_connected'
+              ? '外部模型虽被请求但尚未接入。'
+              : modelStatus === 'disabled'
+                ? '生成模型未配置。'
+                : '未提供生成模型状态。'}
+            任意自然语言分析、规则推理和自由生成暂不可用。
+          </p>
+        )}
       </header>
 
       {phase === 'loading' || phase === 'not_configured' || phase === 'failure' || phase === 'permission_denied' ? (
@@ -458,6 +472,20 @@ export function QueryPanel({ client, profileRef, timeZone, contextFields = [], i
             }}
           >
             <h3>提问</h3>
+            {availableTasks.length === 0 ? null : (
+              <label className="query__field">
+                <span>已注册读取任务</span>
+                <select
+                  name="registeredTask"
+                  data-testid="query-registered-task"
+                  value={availableTasks.includes(question) ? question : ''}
+                  onChange={(event) => setQuestion(event.target.value)}
+                >
+                  <option value="">选择一个任务以填入问题</option>
+                  {availableTasks.map((task) => <option key={task} value={task}>{task}</option>)}
+                </select>
+              </label>
+            )}
             <label className="query__field">
               <span>问题</span>
               <textarea

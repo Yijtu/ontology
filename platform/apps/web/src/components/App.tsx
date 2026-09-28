@@ -1,8 +1,9 @@
-import { useCallback, useState } from 'react'
+import { useCallback, useEffect, useState } from 'react'
 import type { ReactNode } from 'react'
 import type { ProfileRef, ResourceRef } from '@ontology/contracts'
-import type { WorkbenchClient } from '../api/client'
+import type { CoreDeploymentScenario, WorkbenchClient } from '../api/client'
 import { CandidateReviewPanel } from './CandidateReviewPanel'
+import { CoreImportPanel } from './CoreImportPanel'
 import { EvidencePanel } from './EvidencePanel'
 import { JobProgressPanel } from './JobProgressPanel'
 import { QueryPanel } from './QueryPanel'
@@ -28,6 +29,10 @@ export interface AppViewContribution {
 export interface AppProps {
   readonly client: WorkbenchClient
   readonly profileRef: ProfileRef
+  readonly deploymentScenarios?: readonly CoreDeploymentScenario[]
+  readonly deploymentClassification?: string
+  readonly deploymentModels?: 'disabled' | 'requested_but_not_connected'
+  readonly deploymentOperatorEnabled?: boolean
   readonly timeZone: string
   readonly queryContextFields?: readonly QueryContextField[]
   readonly scenarioViews?: readonly AppViewContribution[]
@@ -46,10 +51,15 @@ const CORE_TABS: readonly { readonly view: CoreAppView; readonly label: string }
   { view: 'review', label: '候选审核' },
   { view: 'evidence', label: '证据与历史' },
 ]
+const EMPTY_DEPLOYMENT_SCENARIOS: readonly CoreDeploymentScenario[] = []
 
 export function App({
   client,
   profileRef,
+  deploymentScenarios,
+  deploymentClassification,
+  deploymentModels,
+  deploymentOperatorEnabled,
   timeZone,
   queryContextFields,
   scenarioViews = [],
@@ -60,10 +70,23 @@ export function App({
   initialEvidenceId,
   initialObjectId,
 }: AppProps) {
+  const scenarioOptions = deploymentScenarios ?? EMPTY_DEPLOYMENT_SCENARIOS
   const viewport = useViewport()
   const [view, setView] = useState<AppView>(initialView)
+  const [activeJobId, setActiveJobId] = useState(initialJobId)
+  const [activeProfileRef, setActiveProfileRef] = useState(profileRef)
+  const [selectedScenarioId, setSelectedScenarioId] = useState(() => scenarioOptions.find((scenario) =>
+    scenario.profileRef.id === profileRef.id && scenario.profileRef.version === profileRef.version,
+  )?.scenarioId ?? '')
   const [evidenceId, setEvidenceId] = useState(initialEvidenceId)
   const [sourceReference, setSourceReference] = useState<ResourceRef | undefined>()
+  useEffect(() => {
+    setActiveProfileRef(profileRef)
+    const matching = scenarioOptions.find((scenario) =>
+      scenario.profileRef.id === profileRef.id && scenario.profileRef.version === profileRef.version,
+    )
+    setSelectedScenarioId(matching?.scenarioId ?? '')
+  }, [profileRef.id, profileRef.version, scenarioOptions])
   const openSourceReference = useCallback((reference: ResourceRef) => {
     setSourceReference(reference)
     setEvidenceId(reference.kind === 'evidence' ? reference.id : undefined)
@@ -71,9 +94,41 @@ export function App({
   }, [])
   const contribution = scenarioViews.find((entry) => entry.view === view)
   const tabs = [...CORE_TABS, ...scenarioViews.map(({ view: extraView, label }) => ({ view: extraView, label }))]
+  const activeScenario = scenarioOptions.find((scenario) => scenario.scenarioId === selectedScenarioId)
+  const availableTasks = activeScenario?.availableTasks ?? []
 
   return (
     <div className="app" data-viewport={viewport} data-view={view}>
+      {scenarioOptions.length === 0 ? null : (
+        <section className="app__deployment" data-testid="core-deployment-picker">
+          <label>
+            场景
+            <select
+              data-testid="core-scenario-select"
+              value={selectedScenarioId}
+              onChange={(event) => {
+                const scenario = scenarioOptions.find((entry) => entry.scenarioId === event.target.value)
+                if (scenario !== undefined) {
+                  setSelectedScenarioId(scenario.scenarioId)
+                  setActiveProfileRef(scenario.profileRef)
+                }
+              }}
+            >
+              {scenarioOptions.map((scenario) => (
+                <option key={scenario.scenarioId} value={scenario.scenarioId}>{scenario.label}</option>
+              ))}
+            </select>
+          </label>
+          <span data-testid="core-deployment-classification">
+            {deploymentClassification === 'public_synthetic_demo_not_an_industry_standard'
+              ? '合成演示数据（非行业标准）'
+              : deploymentClassification ?? '部署场景'}
+          </span>
+          <span data-testid="core-deployment-mode">
+            {deploymentOperatorEnabled === true ? '本地操作员模式' : '只读业务模式'}
+          </span>
+        </section>
+      )}
       <nav className="app__tabs" aria-label="主导航">
         {tabs.map((tab) => (
           <button
@@ -91,19 +146,46 @@ export function App({
       </nav>
 
       {view === 'workbench' ? (
-        <Workbench client={client} profileRef={profileRef} {...(boundRunId === undefined ? {} : { boundRunId })} />
+        <Workbench
+          key={activeScenario?.scenarioId ?? `${activeProfileRef.id}@${activeProfileRef.version}`}
+          client={client}
+          profileRef={activeProfileRef}
+          {...(activeScenario?.baseProfileSpec === undefined ? {} : { baseProfileSpec: activeScenario.baseProfileSpec })}
+          {...(activeScenario === undefined ? {} : { environment: activeScenario.environment })}
+          onProfileActivated={setActiveProfileRef}
+          {...(boundRunId === undefined ? {} : { boundRunId })}
+        />
       ) : null}
       {view === 'query' ? (
         <QueryPanel
           client={client}
-          profileRef={profileRef}
+          key={`${activeProfileRef.id}@${activeProfileRef.version}`}
+          profileRef={activeProfileRef}
           timeZone={timeZone}
+          availableTasks={availableTasks}
+          {...(deploymentModels === undefined ? {} : { modelStatus: deploymentModels })}
           onEvidenceReference={openSourceReference}
           {...(queryContextFields === undefined ? {} : { contextFields: queryContextFields })}
           {...(boundRunId === undefined ? {} : { initialRunId: boundRunId })}
         />
       ) : null}
-      {view === 'jobs' ? <JobProgressPanel client={client} {...(initialJobId === undefined ? {} : { initialJobId })} /> : null}
+      {view === 'jobs' ? (
+        <>
+          <CoreImportPanel
+            key={activeScenario?.scenarioId ?? 'no-selected-core-scenario'}
+            client={client}
+            scenarios={scenarioOptions}
+            operatorEnabled={deploymentOperatorEnabled === true}
+            {...(activeScenario === undefined ? {} : { initialScenarioId: activeScenario.scenarioId })}
+            onImported={setActiveJobId}
+          />
+          <JobProgressPanel
+            key={activeJobId ?? 'no-job-selected'}
+            client={client}
+            {...(activeJobId === undefined ? {} : { initialJobId: activeJobId })}
+          />
+        </>
+      ) : null}
       {view === 'review' ? (
         <CandidateReviewPanel client={client} {...(initialCandidateId === undefined ? {} : { initialCandidateId })} />
       ) : null}

@@ -3,7 +3,7 @@ import {
   isLoopbackAddress,
   resolveLocalDevPrincipal,
 } from '@ontology/adapter-control-postgres'
-import type { ScopeRef } from '@ontology/contracts'
+import type { DeploymentEnvironment, ProfileRef, ProfileSpec, ScopeRef, VersionRef } from '@ontology/contracts'
 import { createApiServer } from './http/app'
 import type { ApiServerOptions } from './http/app'
 import type { RequestAuthenticator } from './http/shared'
@@ -32,9 +32,19 @@ export interface CoreApiDependencies {
   readonly database: { queryUnscoped(statement: string): Promise<unknown> }
   readonly scopeRef: ScopeRef
   readonly examples: LoadedCoreExamples
+  readonly profileRefsByScenario?: Readonly<Record<string, ProfileRef>>
+  readonly profileSpecsByScenario?: Readonly<Record<string, ProfileSpec>>
   readonly modelsEnabled: boolean
   readonly availableTaskIds?: readonly string[]
   readonly availableTasksByScenario?: Readonly<Record<string, readonly string[]>>
+  readonly readScenarioProfile?: (scenarioId: string) => Promise<{
+    readonly profileRef: ProfileRef
+    readonly baseProfileSpec: ProfileSpec
+    readonly environment: DeploymentEnvironment
+    readonly availableTasks: readonly string[]
+    readonly definitionRef: VersionRef
+    readonly namespace: string
+  } | undefined>
   readonly api?: Omit<ApiServerOptions, 'authenticate' | 'logger'>
   readonly allowLocalOperator?: boolean
   readonly registerRoutes?: (
@@ -115,19 +125,28 @@ export function createCoreApi(dependencies: CoreApiDependencies): FastifyInstanc
     if (authenticated === undefined) {
       return reply.status(401).send({ error: { code: 'UNAUTHENTICATED', message: 'loopback development authentication is required', retryable: false } })
     }
+    const scenarios = await Promise.all(dependencies.examples.scenarios.map(async (scenario) => {
+      const current = await dependencies.readScenarioProfile?.(scenario.scenarioId)
+      const profileRef = current?.profileRef ?? dependencies.profileRefsByScenario?.[scenario.scenarioId] ?? scenario.profileRef
+      const baseProfileSpec = current?.baseProfileSpec ?? dependencies.profileSpecsByScenario?.[scenario.scenarioId]
+      return {
+        scenarioId: scenario.scenarioId,
+        label: scenario.label,
+        profileRef,
+        environment: current?.environment ?? 'local_dev',
+        namespace: current?.namespace ?? scenario.namespace,
+        definitionRef: current?.definitionRef ?? scenario.definitionRef,
+        ...(baseProfileSpec === undefined ? {} : { baseProfileSpec }),
+        availableTasks: current?.availableTasks ?? dependencies.availableTasksByScenario?.[scenario.scenarioId] ?? dependencies.availableTaskIds ?? [],
+        mappingRefs: scenario.physicalMappings.map((mapping) => mapping.ref),
+        rawSourceRefs: scenario.rawSources.map((source) => source.sourceRef),
+      }
+    }))
     return reply.status(200).send({
       data: {
         classification: dependencies.examples.classification,
-        scenarios: dependencies.examples.scenarios.map((scenario) => ({
-          scenarioId: scenario.scenarioId,
-          label: scenario.label,
-          profileRef: scenario.profileRef,
-          namespace: scenario.namespace,
-          definitionRef: scenario.definitionRef,
-          availableTasks: dependencies.availableTasksByScenario?.[scenario.scenarioId] ?? dependencies.availableTaskIds ?? [],
-          mappingRefs: scenario.physicalMappings.map((mapping) => mapping.ref),
-          rawSourceRefs: scenario.rawSources.map((source) => source.sourceRef),
-        })),
+        scenarios,
+        operatorEnabled: dependencies.allowLocalOperator ?? false,
         models: dependencies.modelsEnabled ? 'requested_but_not_connected' : 'disabled',
       },
     })

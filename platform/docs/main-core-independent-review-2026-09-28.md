@@ -46,6 +46,9 @@
 | 正式不可变支撑 reader 独立检查（09-29） | 5 文件 / 35 项通过，4.44s，exit 0 | reader 5 + producer/consumer 22 + architecture 8；真实工件定位、完整证据引用、授权元数据先查、1 MiB 上限与精确 UTC 区间。PG 正例与正常 rule producer 仍待完成 |
 | 配置与页面路由的正常 HTTP 检查（09-29） | 1 文件 / 4 项通过，24.08s；UI 4 文件 / 6 项通过，4.95s | Workbench 路由、scope projection、新版激活后立即 metadata 刷新、两个行业的事实链与新版本重启查询。之后加入的同旧 run/body/evidence 重启比较还需独立复跑 |
 | 修复后浏览器工作台初查（09-29） | 默认 Workbench、行业组件同步、导入草稿切换清理、原文对照与身份操作可用 | 真实页面发布新配置仍因未读取已有 active revision 而 CAS 冲突，已分配修复；UI 热更新期间不把中途重载算完整闭环通过 |
+| 冻结后的配置/宿主/UI 独立复核（09-29） | 增强 HTTP 1 文件 / 4 项通过，28.92s；UI 5 文件 / 13 项通过，20.75s；18 文件对应 TypeScript/TSX ESLint 通过 | active GET、真实 CAS、metadata 即时更新、重启后同旧 run 的完整回答 JSON 与证据比较；两个行业同链。Web build 通过，缺失 ActiveProfileRecord type import 已补后独立复核 |
+| 实际浏览器与 subprocess 历史读取（09-29） | 全程实际页面：原始 T-04 导入 → 原文对照 → pending/match → approve/publish → facts 查询 → published 正文“否” → 打开证据 | 工业同一个 1.0.1 配置由失败重试后成功 CAS（revision 1→2），刷新仍为新版本。进程 restart 后同 run 的 PublishedAnswer JSON 完全一致；同证据 verifiable/integrity=true，浏览器深链旧 run 仍显示原正文与引用。全部为合成资料、模型关闭 |
+| 模型工厂和抽取预算独立检查（09-29） | 3 文件 / 20 项通过，3.94s；7 个 owner TypeScript 文件 ESLint 通过 | 受控 loopback HTTP、每 provider attempt 唯一计量、重试/未知用量/取消、原生输入和缺模型前置拒绝。默认宿主、planner/verifier 接线与外部模型质量未据此完成 |
 
 上表是不同时间的聚焦检查点，存在覆盖重叠；不相加为一次全量通过数量。实际 prepare 检查只覆盖当时已有迁移至 `053`，不包含后来新增的 `054`/`055`/`056`。本次生成的临时 env、验证脚本、容器和卷已回收。已有 3000/5173/54329 环境未改动。
 
