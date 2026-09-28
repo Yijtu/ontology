@@ -286,6 +286,7 @@ function statementFor(publicationId: Uuid): PublishedStatement {
     statementId: randomUUID(),
     propositionKey: PREDICATE,
     kind: 'entity',
+    objectId: PREDICATE,
     subjectEntityId: 'entity.battery',
     predicate: PREDICATE,
     value: { value: true },
@@ -375,6 +376,7 @@ async function publishBundle(
     outbox: message,
     outboxJobId: jobId,
   }
+  env.identity.bindStatements(statements)
   await env.publication.publish(scope.scopeRef, input, scope.ctx)
   return publicationId
 }
@@ -387,7 +389,7 @@ export async function projectionFence(env: LoadEnvironment): Promise<FaultCaseRe
   await publishBundle(env, scope, jobId, [battery], [ruleVersionFor(seedPublication)], 'fence-seed')
 
   const materializer = new IncrementalMaterializer({
-    publishedSource: new PublishedSemanticSource(env.publication),
+    publishedSource: new PublishedSemanticSource(env.publication, { identity: env.identity }),
     materialization: env.materialization,
   })
   const readRequest = {
