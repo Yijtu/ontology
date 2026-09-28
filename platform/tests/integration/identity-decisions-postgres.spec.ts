@@ -16,6 +16,7 @@ import { IdentityDecisionService } from '@ontology/semantic-engine'
 import { createApiServer } from '@ontology/app-api'
 import type { AuthenticatedRequest } from '@ontology/app-api'
 import type {
+  AppendIdentityDecisionInput,
   EntityCandidate,
   IndustrySchema,
   OutboxMessageRecord,
@@ -45,6 +46,7 @@ function decisionSchema(ref: VersionRef): IndustrySchema {
         attributes: [
           { attributeId: 'device_native_id', valueType: 'string', minCardinality: 1, maxCardinality: 1, identityKey: true },
           { attributeId: 'device_name', valueType: 'string', minCardinality: 0, maxCardinality: 1, identityKey: false },
+          { attributeId: 'site', valueType: 'string', minCardinality: 1, maxCardinality: 1, identityKey: false },
         ],
       },
       {
@@ -54,6 +56,7 @@ function decisionSchema(ref: VersionRef): IndustrySchema {
         attributes: [
           { attributeId: 'sensor_native_id', valueType: 'string', minCardinality: 1, maxCardinality: 1, identityKey: true },
           { attributeId: 'sensor_name', valueType: 'string', minCardinality: 0, maxCardinality: 1, identityKey: false },
+          { attributeId: 'site', valueType: 'string', minCardinality: 1, maxCardinality: 1, identityKey: false },
         ],
       },
     ],
@@ -128,13 +131,19 @@ async function seedParse(admin: Client): Promise<Uuid> {
 }
 
 function candidateFor(objectId: string, identityScopeId: string, attributeId: string, value: string): EntityCandidate {
+  const nativeAttributeId = objectId === 'device' ? 'device_native_id' : 'sensor_native_id'
+  const nativeId = objectId === 'device' ? 'DEV-1' : 'SNS-1'
   return {
     ...entityCandidate({
       candidateId: randomUUID(),
       jobId,
       objectId,
       identityScopeId,
-      attributes: [{ attributeId, value }],
+      attributes: [
+        { attributeId: nativeAttributeId, value: nativeId },
+        { attributeId, value },
+        { attributeId: 'site', value: 'site-a' },
+      ],
       idempotencyKey: `sha256:${randomUUID().replaceAll('-', '').padEnd(64, '0').slice(0, 64)}`,
       inputVersion: {
         definitionRef: IDENTITY_DEFINITION_REF,
@@ -202,6 +211,142 @@ afterAll(async () => {
 })
 
 describe('identity decisions against real PostgreSQL', () => {
+  it('pins batch identity bindings, advances the scope head for match/cannot-link/split, and rolls back failed writes', async () => {
+    const anchor = await seedCandidate('device', 'device_identity', 'device_name')
+    const created = await postDecision(anchor.candidateId, { kind: 'create_pending' }, '0')
+    const entityId = (created.json() as { data: { targetEntityId: string } }).data.targetEntityId
+    expect(await decisionStore.latestReadRevision(scope.scopeRef, ctx)).toBe('1')
+
+    const matched = await postDecision(
+      anchor.candidateId,
+      {
+        kind: 'match',
+        targetEntityId: entityId,
+        strongIdentity: { kind: 'native_id', attributeId: 'device_native_id', value: 'DEV-1' },
+      },
+      '1',
+    )
+    expect(matched.statusCode).toBe(200)
+    expect(await decisionStore.latestReadRevision(scope.scopeRef, ctx)).toBe('2')
+    const assignmentSnapshot = await decisionStore.readPublishedBindings(scope.scopeRef, [anchor.candidateId], ctx)
+    expect(assignmentSnapshot).toMatchObject({ readRevision: '2', complete: true })
+    expect(assignmentSnapshot.bindings[0]?.openAssertions.map((assertion) => assertion.entityId)).toEqual([entityId])
+
+    const targetBeforeRollback = await decisionStore.getEntity(scope.scopeRef, entityId, ctx)
+    if (targetBeforeRollback === undefined) throw new Error('expected target entity')
+    const failedSplit: AppendIdentityDecisionInput = {
+      expectedRevision: '2',
+      expectedTargetEntityRevision: targetBeforeRollback.revision,
+      draft: {
+        decisionId: randomUUID(),
+        candidateId: anchor.candidateId,
+        objectId: 'device',
+        identityScopeId: 'device_identity',
+        kind: 'split',
+        targetEntityId: entityId,
+        evidenceRefs: [],
+        recordedAt: '2026-09-22T00:00:01Z',
+        actor: 'identity-reviewer',
+      },
+      closeAssertions: [{ assertionId: randomUUID(), validTo: '2026-09-22T00:00:01Z' }],
+    }
+    await expect(decisionStore.appendDecision(scope.scopeRef, failedSplit, ctx)).rejects.toMatchObject({
+      code: 'DECISION_STORE_FAILED',
+    })
+    expect(await decisionStore.latestReadRevision(scope.scopeRef, ctx)).toBe('2')
+    expect((await decisionStore.getEntity(scope.scopeRef, entityId, ctx))?.revision).toBe(targetBeforeRollback.revision)
+    expect(await decisionStore.latestRevision(scope.scopeRef, anchor.candidateId, ctx)).toBe('2')
+
+    const cannotLink = await seedCandidate('device', 'device_identity', 'device_name')
+    const rejected = await postDecision(cannotLink.candidateId, { kind: 'reject', targetEntityId: entityId }, '0')
+    expect(rejected.statusCode).toBe(200)
+    expect(await decisionStore.latestReadRevision(scope.scopeRef, ctx)).toBe('3')
+    expect((await decisionStore.getEntity(scope.scopeRef, entityId, ctx))?.revision).toBe('3')
+    const negativeSnapshot = await decisionStore.readPublishedBindings(scope.scopeRef, [cannotLink.candidateId], ctx)
+    expect(negativeSnapshot.bindings[0]?.cannotLinkEntityIds).toEqual([entityId])
+
+    const split = await service.decide(
+      {
+        candidateId: anchor.candidateId,
+        kind: 'split',
+        expectedRevision: '2',
+        targetEntityId: entityId,
+        justification: 'separate this source from the reviewed cluster',
+      },
+      ctx,
+    )
+    expect(split.kind).toBe('split')
+    expect(await decisionStore.latestReadRevision(scope.scopeRef, ctx)).toBe('4')
+    expect((await decisionStore.getEntity(scope.scopeRef, entityId, ctx))?.revision).toBe('4')
+    const splitSnapshot = await decisionStore.readPublishedBindings(scope.scopeRef, [anchor.candidateId], ctx)
+    expect(splitSnapshot.readRevision).toBe('4')
+    expect(splitSnapshot.bindings[0]?.openAssertions).toEqual([])
+
+    const crossTenantScope = { ...scope.scopeRef, tenantId: randomUUID() }
+    await expect(decisionStore.latestReadRevision(crossTenantScope, ctx)).rejects.toMatchObject({ code: 'SCOPE_MISMATCH' })
+    await expect(decisionStore.readPublishedBindings(crossTenantScope, [anchor.candidateId], ctx)).rejects.toMatchObject({ code: 'SCOPE_MISMATCH' })
+  })
+
+  it('serializes concurrent matches against one target cluster revision', async () => {
+    const readRevisionBefore = await decisionStore.latestReadRevision(scope.scopeRef, ctx)
+    const anchor = await seedCandidate('device', 'device_identity', 'device_name')
+    const created = await postDecision(anchor.candidateId, { kind: 'create_pending' }, '0')
+    const entityId = (created.json() as { data: { targetEntityId: string } }).data.targetEntityId
+    const matched = await postDecision(
+      anchor.candidateId,
+      {
+        kind: 'match',
+        targetEntityId: entityId,
+        strongIdentity: { kind: 'native_id', attributeId: 'device_native_id', value: 'DEV-1' },
+      },
+      '1',
+    )
+    expect(matched.statusCode).toBe(200)
+    const target = await decisionStore.getEntity(scope.scopeRef, entityId, ctx)
+    if (target === undefined) throw new Error('expected target entity')
+
+    const first = await seedCandidate('device', 'device_identity', 'device_name')
+    const second = await seedCandidate('device', 'device_identity', 'device_name')
+    const matchingWrite = (candidate: EntityCandidate): AppendIdentityDecisionInput => {
+      const decisionId = randomUUID()
+      return {
+        expectedRevision: '0',
+        expectedTargetEntityRevision: target.revision,
+        draft: {
+          decisionId,
+          candidateId: candidate.candidateId,
+          objectId: 'device',
+          identityScopeId: 'device_identity',
+          kind: 'match',
+          targetEntityId: entityId,
+          strongIdentity: { kind: 'native_id', attributeId: 'device_native_id', value: 'DEV-1' },
+          evidenceRefs: [],
+          recordedAt: '2026-09-22T00:00:02Z',
+          actor: 'identity-reviewer',
+        },
+        openAssertion: {
+          assertionId: randomUUID(),
+          candidateId: candidate.candidateId,
+          entityId,
+          objectId: 'device',
+          identityScopeId: 'device_identity',
+          decisionId,
+          validFrom: '2026-09-22T00:00:02Z',
+          recordedAt: '2026-09-22T00:00:02Z',
+        },
+      }
+    }
+    const results = await Promise.allSettled([
+      decisionStore.appendDecision(scope.scopeRef, matchingWrite(first), ctx),
+      decisionStore.appendDecision(scope.scopeRef, matchingWrite(second), ctx),
+    ])
+    expect(results.filter((result) => result.status === 'fulfilled')).toHaveLength(1)
+    const rejected = results.find((result) => result.status === 'rejected')
+    expect(rejected?.status === 'rejected' ? rejected.reason : undefined).toMatchObject({ code: 'REVISION_CONFLICT' })
+    expect(await decisionStore.latestReadRevision(scope.scopeRef, ctx)).toBe(String(BigInt(readRevisionBefore) + 3n))
+    expect((await decisionStore.getEntity(scope.scopeRef, entityId, ctx))?.revision).toBe('3')
+  })
+
   it('lists candidates and rejects a decision without If-Match with 428', async () => {
     const listed = await app.inject({
       method: 'GET',
@@ -257,7 +402,7 @@ describe('identity decisions against real PostgreSQL', () => {
 
     const matched = await postDecision(
       candidate.candidateId,
-      { kind: 'match', targetEntityId: entityId, strongIdentity: { kind: 'native_id', value: 'DEV-1' } },
+      { kind: 'match', targetEntityId: entityId, strongIdentity: { kind: 'native_id', attributeId: 'device_native_id', value: 'DEV-1' } },
       '1',
     )
     expect(matched.statusCode).toBe(200)
@@ -287,7 +432,7 @@ describe('identity decisions against real PostgreSQL', () => {
 
     const deviceInto = await postDecision(
       deviceCandidate.candidateId,
-      { kind: 'match', targetEntityId: sensorEntityId, strongIdentity: { kind: 'native_id', value: 'DEV-1' } },
+      { kind: 'match', targetEntityId: sensorEntityId, strongIdentity: { kind: 'native_id', attributeId: 'device_native_id', value: 'DEV-1' } },
       '0',
     )
     expect(deviceInto.statusCode).toBe(409)
@@ -304,7 +449,7 @@ describe('identity decisions against real PostgreSQL', () => {
 
     const blocked = await postDecision(
       candidate.candidateId,
-      { kind: 'match', targetEntityId: entityId, strongIdentity: { kind: 'native_id', value: 'DEV-1' } },
+      { kind: 'match', targetEntityId: entityId, strongIdentity: { kind: 'native_id', attributeId: 'device_native_id', value: 'DEV-1' } },
       '2',
     )
     expect(blocked.statusCode).toBe(409)
@@ -317,7 +462,7 @@ describe('identity decisions against real PostgreSQL', () => {
     const entityId = (created.json() as { data: { targetEntityId: string } }).data.targetEntityId
     const matched = await postDecision(
       candidate.candidateId,
-      { kind: 'match', targetEntityId: entityId, strongIdentity: { kind: 'native_id', value: 'DEV-1' } },
+        { kind: 'match', targetEntityId: entityId, strongIdentity: { kind: 'native_id', attributeId: 'device_native_id', value: 'DEV-1' } },
       '1',
     )
     expect(matched.statusCode).toBe(200)
@@ -344,8 +489,9 @@ describe('identity decisions against real PostgreSQL', () => {
 
     const pending = await harness.adminClient.query<{ payload: Record<string, unknown>; state: string }>(
       `SELECT payload, state FROM agent_platform.job_outbox
-        WHERE tenant_id = $1 AND space_id = $2 AND topic = 'identity.decision.split'`,
-      [scope.tenantId, scope.spaceId],
+        WHERE tenant_id = $1 AND space_id = $2 AND topic = 'identity.decision.split'
+          AND payload->>'decisionId' = $3`,
+      [scope.tenantId, scope.spaceId, split.decisionId],
     )
     expect(pending.rows).toHaveLength(1)
     expect(pending.rows[0]?.state).toBe('pending')
@@ -364,8 +510,9 @@ describe('identity decisions against real PostgreSQL', () => {
 
     const dispatched = await harness.adminClient.query<{ state: string }>(
       `SELECT state FROM agent_platform.job_outbox
-        WHERE tenant_id = $1 AND space_id = $2 AND topic = 'identity.decision.split'`,
-      [scope.tenantId, scope.spaceId],
+        WHERE tenant_id = $1 AND space_id = $2 AND topic = 'identity.decision.split'
+          AND payload->>'decisionId' = $3`,
+      [scope.tenantId, scope.spaceId, split.decisionId],
     )
     expect(dispatched.rows[0]?.state).toBe('dispatched')
   })

@@ -53,6 +53,10 @@ export interface IdentityEntityRecord {
   readonly entityId: string
   readonly objectId: string
   readonly identityScopeId: string
+  /** Exact values for every identity-scope dimension declared by the pinned definition. */
+  readonly scopeDimensions: Readonly<Record<string, string>>
+  /** Source candidate that created this pending entity, used only to confirm its own identity. */
+  readonly createdFromCandidateId?: Uuid
   readonly displayName?: string
   readonly state: IdentityEntityState
   readonly revision: RevisionString
@@ -61,13 +65,17 @@ export interface IdentityEntityRecord {
 }
 
 /**
- * The strong identity a `match` may rely on. A `native_id` is a deterministic source
- * identifier; a `confirmed_alias` is an alias a human already confirmed. Either one is
- * sufficient authority to merge without a free-text justification.
+ * A reviewer-confirmed identity value attached to a `match`. A native ID is checked
+ * against the pinned candidate identity attributes; a confirmed alias must occur in the
+ * candidate and already be recorded by a reviewer on the target cluster. Supplying this
+ * shape is never an automatic match request: the service validates both source and target
+ * evidence before it can authorize the merge.
  */
 export interface IdentityStrongIdentity {
   readonly kind: 'native_id' | 'confirmed_alias'
   readonly value: string
+  /** Optional only when the pinned schema identifies one unambiguous matching attribute. */
+  readonly attributeId?: string
 }
 
 /**
@@ -172,6 +180,20 @@ export interface IdentityAssertionFilter {
   readonly openOnly?: boolean
 }
 
+export interface IdentityPublishedBinding {
+  readonly candidateId: Uuid
+  readonly openAssertions: readonly IdentityAssertionRecord[]
+  readonly cannotLinkEntityIds: readonly string[]
+}
+
+/** A bounded identity binding page pinned to one scope read-head revision. */
+export interface IdentityPublishedBindingSnapshot {
+  readonly readRevision: RevisionString
+  readonly bindings: readonly IdentityPublishedBinding[]
+  /** False when the requested candidate set exceeded the store's page cap. */
+  readonly complete: boolean
+}
+
 export interface IdentityDecisionCloseAssertion {
   readonly assertionId: Uuid
   readonly validTo: Rfc3339UtcTimestamp
@@ -186,6 +208,8 @@ export interface IdentityDecisionCloseAssertion {
 export interface AppendIdentityDecisionInput {
   /** The revision the caller last read; `0` means "no decision yet". */
   readonly expectedRevision: RevisionString
+  /** Target entity/cluster head the caller read; required for match, split and cannot-link writes. */
+  readonly expectedTargetEntityRevision?: RevisionString
   readonly draft: IdentityDecisionDraft
   /** Insert or advance the entity (used by `create_pending`). */
   readonly entity?: IdentityEntityRecord
@@ -221,6 +245,14 @@ export interface IdentityDecisionStore {
   ): Promise<IdentityEntityRecord[]>
   /** The current decision head revision for a candidate; `0` when there is none. */
   latestRevision(scopeRef: ScopeRef, candidateId: Uuid, ctx: ToolContext): Promise<RevisionString>
+  /** Monotonic scope read head; advances with each committed identity decision transaction. */
+  latestReadRevision(scopeRef: ScopeRef, ctx: ToolContext): Promise<RevisionString>
+  /** Batch read current open assignments and hard negative links at one pinned revision. */
+  readPublishedBindings(
+    scopeRef: ScopeRef,
+    candidateIds: readonly Uuid[],
+    ctx: ToolContext,
+  ): Promise<IdentityPublishedBindingSnapshot>
   appendDecision(
     scopeRef: ScopeRef,
     input: AppendIdentityDecisionInput,
@@ -244,6 +276,13 @@ export interface IdentityDecisionStore {
     candidateId: Uuid,
     ctx: ToolContext,
   ): Promise<IdentityLinkConstraintRecord[]>
+  /** True only when a prior reviewer match recorded this exact identity on an open target assertion. */
+  hasReviewedIdentity(
+    scopeRef: ScopeRef,
+    entityId: string,
+    identity: IdentityStrongIdentity,
+    ctx: ToolContext,
+  ): Promise<boolean>
 }
 
 export type IdentityDecisionStoreErrorCode =
