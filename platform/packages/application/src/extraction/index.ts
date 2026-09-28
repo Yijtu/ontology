@@ -57,7 +57,7 @@ export {
 } from './schema-validation'
 
 export { ExtractionPipeline, EXTRACTION_RESPONSE_SCHEMA_REF } from './extraction-service'
-export type { ExtractionPipelineDependencies } from './extraction-service'
+export type { ExtractionGenerationExecution, ExtractionPipelineDependencies } from './extraction-service'
 
 export { InMemoryCandidateStore } from './in-memory-store'
 export { InMemoryIndustrySchemaSource } from './in-memory-schema-source'
