@@ -668,8 +668,16 @@ export class WorkflowController {
     const fresh = await this.#deps.phase.requireRun(runId, ctx)
     if (fresh.state !== 'drafting') return this.#view(runId, ctx)
     const verifying = await this.#advance(fresh, 'verifying', {}, ctx)
+    const trustedLimitations = [
+      'limited_factual_result',
+      ...(lastFailure?.verification.failedChecks ?? ['verification_never_passed']),
+      ...(lastFailure?.verification.missingEvidence ?? []).map((id) => `missing_evidence:${id}`),
+      ...((limited.draft.claims?.length ?? 0) + (limited.draft.assertions?.length ?? 0) === 0
+        ? ['no_supported_statements']
+        : []),
+    ]
     const verification = await this.#deps.verifier.verify(
-      { runId, draft: limited.draft, inputManifest },
+      { runId, draft: limited.draft, inputManifest, trustedLimitations },
       ctx,
     )
     await this.#deps.verifications.record({ runId, verification }, ctx)

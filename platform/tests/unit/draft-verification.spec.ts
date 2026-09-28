@@ -64,11 +64,13 @@ async function registerResult(input: {
   readonly artifacts: InMemoryVerificationArtifacts
   readonly payload?: unknown
   readonly validTo?: string
+  readonly validFrom?: string
 }) {
   const payloadRef = input.artifacts.put(BLOB_ID, input.payload ?? RESULT_PAYLOAD)
   const envelope = buildEvidence({
     payloadRef,
     resultDigest: payloadRef.digest,
+    ...(input.validFrom === undefined ? {} : { validFrom: input.validFrom }),
     ...(input.validTo === undefined ? {} : { validTo: input.validTo }),
   })
   const record = await input.evidence.record(
@@ -201,6 +203,24 @@ describe('V2 verified answer body and exact field binding', () => {
     expect(result.supportedClaimIds).toEqual([claim.claimId])
   })
 
+  it('treats evidence validFrom as a half-open boundary for query-time claims', async () => {
+    const outcomes: string[] = []
+    for (const asOf of ['2026-09-20T23:59:59Z', '2026-09-21T00:00:00Z', '2026-09-21T00:00:01Z']) {
+      const ctx = ownerContext()
+      const evidence = new InMemoryVerificationEvidence()
+      const artifacts = new InMemoryVerificationArtifacts()
+      const payload = { ...RESULT_PAYLOAD, time: asOf }
+      const { ref, resultDigest } = await registerResult({ evidence, artifacts, payload, validFrom: '2026-09-21T00:00:00Z' })
+      const claim = buildClaim({ evidenceRef: ref, resultDigest, asOf })
+      const manifest = buildInputManifest([ref])
+      const draft = buildDraft({ evidenceManifestHash: manifest.digest, claims: [claim] })
+      const { service } = buildService({ evidence, artifacts, policy: verificationPolicy({ semanticReview: 'disabled' }) })
+      const result = await service.verify({ runId: RUN_ID, draft, inputManifest: manifest }, ctx)
+      outcomes.push(result.failedChecks.includes('source_not_yet_valid') ? 'before' : result.verdict)
+    }
+    expect(outcomes).toEqual(['before', 'pass', 'pass'])
+  })
+
   it('compares decimal strings exactly rather than through Number coercion', async () => {
     const ctx = ownerContext()
     const evidence = new InMemoryVerificationEvidence()
@@ -317,6 +337,56 @@ describe('V2 verified answer body and exact field binding', () => {
     expect(result.supportedAssertionIds).toEqual([])
   })
 
+  it('applies the same half-open validFrom boundary to typed boolean assertions', async () => {
+    const outcomes: string[] = []
+    for (const asOf of ['2026-09-20T23:59:59Z', '2026-09-21T00:00:00Z', '2026-09-21T00:00:01Z']) {
+      const ctx = ownerContext()
+      const evidence = new InMemoryVerificationEvidence()
+      const artifacts = new InMemoryVerificationArtifacts()
+      const payload = {
+        resultKind: 'table',
+        table: {
+          columns: [
+            { name: 'inspection_due', type: 'boolean', semanticFieldRef: 'inspection_due' },
+            { name: 'facility_id', type: 'string', semanticFieldRef: 'facility_id' },
+            { name: 'observed_at', type: 'timestamp', semanticFieldRef: 'observed_at' },
+          ],
+          rows: [[true, 'T-01', asOf]],
+        },
+      }
+      const { ref, resultDigest } = await registerResult({ evidence, artifacts, payload, validFrom: '2026-09-21T00:00:00Z' })
+      const assertionId = 'aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaa12'
+      const assertion: VerifiedAssertion = {
+        assertionId,
+        kind: 'boolean',
+        subject: 'T-01',
+        predicate: 'inspection_due',
+        asOf,
+        value: true,
+        references: [{
+          evidenceRef: ref,
+          resultDigest,
+          valuePointer: '/table/rows/0/0',
+          subjectPointer: '/table/rows/0/1',
+          timePointer: '/table/rows/0/2',
+          fieldRefPointer: '/table/columns/0',
+        }],
+      }
+      const manifest = buildInputManifest([ref])
+      const draft = buildDraft({
+        evidenceManifestHash: manifest.digest,
+        claims: [],
+        assertions: [assertion],
+        schemaVersion: 'answer-draft@2',
+        blocks: [{ kind: 'assertion', assertionId }],
+      })
+      const { service } = buildService({ evidence, artifacts, policy: verificationPolicy({ semanticReview: 'disabled' }) })
+      const result = await service.verify({ runId: RUN_ID, draft, inputManifest: manifest }, ctx)
+      outcomes.push(result.failedChecks.includes('source_not_yet_valid') ? 'before' : result.verdict)
+    }
+    expect(outcomes).toEqual(['before', 'pass', 'pass'])
+  })
+
   it('requires a source time pointer when a claim states an as-of time', async () => {
     const ctx = ownerContext()
     const evidence = new InMemoryVerificationEvidence()
@@ -355,6 +425,35 @@ describe('V2 verified answer body and exact field binding', () => {
 
     expect(result.verdict).toBe('fail')
     expect(result.failedChecks).toContain('time_mismatch')
+  })
+
+  it('rejects V1 typed assertions because the legacy hash did not bind them', async () => {
+    const ctx = ownerContext()
+    const evidence = new InMemoryVerificationEvidence()
+    const artifacts = new InMemoryVerificationArtifacts()
+    const { ref, resultDigest } = await registerResult({ evidence, artifacts })
+    const assertionId = 'aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaa11'
+    const assertion: VerifiedAssertion = {
+      assertionId,
+      kind: 'string',
+      subject: RESULT_PAYLOAD.subject,
+      predicate: 'facility_id',
+      value: RESULT_PAYLOAD.subject,
+      references: [{
+        evidenceRef: ref,
+        resultDigest,
+        valuePointer: '/subject',
+        subjectPointer: '/subject',
+      }],
+    }
+    const manifest = buildInputManifest([ref])
+    const draft = buildDraft({ evidenceManifestHash: manifest.digest, claims: [], assertions: [assertion] })
+    const { service } = buildService({ evidence, artifacts, policy: verificationPolicy({ semanticReview: 'disabled' }) })
+
+    const result = await service.verify({ runId: RUN_ID, draft, inputManifest: manifest }, ctx)
+
+    expect(result.verdict).toBe('fail')
+    expect(result.failedChecks).toContain('draft_hash_mismatch')
   })
 })
 

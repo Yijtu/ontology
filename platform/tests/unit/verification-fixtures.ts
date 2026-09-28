@@ -135,6 +135,7 @@ export function buildEvidence(input: {
   readonly payloadRef: ResourceRef
   readonly resultDigest: Sha256Digest
   readonly observedAt?: string
+  readonly validFrom?: string
   readonly validTo?: string
 }): EvidenceEnvelope {
   const body = {
@@ -143,9 +144,9 @@ export function buildEvidence(input: {
     scopeRef: SCOPE_A,
     producedBy: { componentRef: { id: 'tool-gateway', version: '1.0.0', digest: sha256DigestOf('gateway') }, runId: RUN_ID },
     observedAt: input.observedAt ?? NOW,
-    ...(input.validTo === undefined
+    ...(input.validTo === undefined && input.validFrom === undefined
       ? {}
-      : { validity: { validFrom: '2026-09-01T00:00:00Z', validTo: input.validTo } }),
+      : { validity: { validFrom: input.validFrom ?? '2026-09-01T00:00:00Z', ...(input.validTo === undefined ? {} : { validTo: input.validTo }) } }),
     sourceSnapshots: [
       {
         sourceRef: { namespace: 'ha-anker', sourceId: 'warehouse' },

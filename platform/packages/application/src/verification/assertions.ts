@@ -1,7 +1,7 @@
-import type { ResourceRef, ToolContext, Uuid, VerifiedAssertion, VerificationFinding } from '@ontology/contracts'
+import type { ResourceRef, Rfc3339UtcTimestamp, ToolContext, Uuid, VerifiedAssertion, VerificationFinding } from '@ontology/contracts'
 import { sha256DigestOf } from '@ontology/core'
 import type { ResolvedEvidence } from './hard-checks'
-import { fieldBindingMatches } from './hard-checks'
+import { fieldBindingMatches, sourceValidityFinding } from './hard-checks'
 
 export interface AssertionCheckOutcome {
   readonly findings: readonly VerificationFinding[]
@@ -72,6 +72,7 @@ export function checkVerifiedAssertions(
   assertions: readonly VerifiedAssertion[],
   resolved: ReadonlyMap<string, ResolvedEvidence>,
   ctx: ToolContext,
+  now: Rfc3339UtcTimestamp,
   requireFieldBinding = false,
 ): AssertionCheckOutcome {
   void ctx
@@ -109,6 +110,16 @@ export function checkVerifiedAssertions(
         assertionFindings.push(finding(assertion, reference))
         continue
       }
+      if (assertion.asOf !== undefined && reference.timePointer === undefined) {
+        assertionFindings.push({ ...finding(assertion, reference), code: 'time_mismatch' })
+      } else if (assertion.asOf !== undefined && reference.timePointer !== undefined && valueAt(located.payload, reference.timePointer) !== assertion.asOf) {
+        assertionFindings.push({ ...finding(assertion, reference), code: 'time_mismatch', pointer: reference.timePointer })
+      }
+      const validityFinding = sourceValidityFinding(located.record, assertion.asOf ?? now, {
+        assertionId: assertion.assertionId,
+        evidenceRef: reference.evidenceRef,
+      })
+      if (validityFinding !== undefined) assertionFindings.push(validityFinding)
       if (assertion.kind === 'document_quote') {
         const quoteDigest = sha256DigestOf(assertion.quote)
         const document = reference.documentPointer === undefined ? undefined : valueAt(located.payload, reference.documentPointer)

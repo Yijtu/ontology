@@ -232,6 +232,8 @@ export interface VerifierRequest {
   readonly runId: Uuid
   readonly draft: AnswerDraft
   readonly inputManifest: WorkflowInputManifest
+  /** Trusted controller-supplied limitation codes for a deterministic limited fallback only. */
+  readonly trustedLimitations?: readonly string[]
 }
 
 /**

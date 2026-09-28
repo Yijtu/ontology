@@ -85,6 +85,7 @@ const VERIFIED_LIMITATION_CODES = new Set<string>([
   'subject_mismatch',
   'predicate_mismatch',
   'time_mismatch',
+  'source_not_yet_valid',
   'stale_source',
   'semantic_unsupported',
   'semantic_insufficient',
@@ -147,6 +148,12 @@ export class DraftVerificationService implements AnswerVerifierPort {
 
     const findings: VerificationFinding[] = []
 
+    // V1 did not hash typed assertions. Preserve old assertion-free drafts, but never
+    // verify or publish a newly attached unbound V1 assertion under the legacy hash.
+    if (draft.schemaVersion !== 'answer-draft@2' && assertions.length > 0) {
+      findings.push({ code: 'draft_hash_mismatch', axis: 'hard', field: 'assertions' })
+    }
+
     // V2 answer blocks are only references to deterministically rendered typed content. Any
     // prose, hidden text field, unknown ID, or extra block property would be visible content
     // that was not checked against evidence.
@@ -154,11 +161,6 @@ export class DraftVerificationService implements AnswerVerifierPort {
       const claimIds = new Set(claims.map((claim) => claim.claimId))
       const assertionIds = new Set(assertions.map((assertion) => assertion.assertionId))
       if (draft.blocks.length === 0) findings.push({ code: 'visible_statement_unbound', axis: 'hard', field: 'blocks' })
-      for (const [index, limitation] of draft.limitations.entries()) {
-        if (!verifiedLimitationCode(limitation)) {
-          findings.push({ code: 'unverified_limitation', axis: 'hard', field: 'limitations', pointer: `/limitations/${String(index)}` })
-        }
-      }
       for (const [index, block] of draft.blocks.entries()) {
         if (typeof block !== 'object' || block === null || Array.isArray(block)) {
           findings.push({ code: 'visible_statement_unbound', axis: 'hard', field: 'blocks', pointer: `/blocks/${String(index)}` })
@@ -216,13 +218,29 @@ export class DraftVerificationService implements AnswerVerifierPort {
         supportedClaimIds = [...outcome.supportedClaimIds]
         findings.push(...hardFindings)
       }
-      const assertionOutcome = checkVerifiedAssertions(assertions, resolved, ctx, draft.schemaVersion === 'answer-draft@2')
+      const assertionOutcome = checkVerifiedAssertions(assertions, resolved, ctx, now, draft.schemaVersion === 'answer-draft@2')
       supportedAssertionIds = [...assertionOutcome.supportedAssertionIds]
       findings.push(...assertionOutcome.findings)
     }
 
     const semantic = claims.length === 0 ? [] : await this.#reviewSemantics(claims, draft.contentHash, ctx)
     findings.push(...semantic)
+
+    if (draft.schemaVersion === 'answer-draft@2') {
+      const supportedCodes = new Set(findings.map((finding) => finding.code))
+      const trustedCodes = new Set(request.trustedLimitations ?? [])
+      const missingEvidenceIds = new Set(findings
+        .filter((finding) => finding.code === 'evidence_not_found')
+        .map((finding) => finding.evidenceRef?.id)
+        .filter((id): id is Uuid => id !== undefined))
+      for (const [index, limitation] of draft.limitations.entries()) {
+        const match = typeof limitation === 'string' ? /^missing_evidence:([0-9a-f-]{36})$/iu.exec(limitation) : null
+        const hasEvidenceGap = match?.[1] !== undefined && missingEvidenceIds.has(match[1])
+        if (!verifiedLimitationCode(limitation) || (!supportedCodes.has(limitation) && !trustedCodes.has(limitation) && !hasEvidenceGap)) {
+          findings.push({ code: 'unverified_limitation', axis: 'hard', field: 'limitations', pointer: `/limitations/${String(index)}` })
+        }
+      }
+    }
 
     const sorted = sortFindings(findings)
     const hardFailed = sorted.some((finding) => finding.axis === 'hard')

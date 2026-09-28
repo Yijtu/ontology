@@ -104,6 +104,9 @@ export class AnswerPublicationService implements AnswerPublisherPort {
         'the publication grant does not match the draft being published',
       )
     }
+    if (draft.schemaVersion !== 'answer-draft@2' && (draft.assertions?.length ?? 0) > 0) {
+      throw new PublicationRejectedError('draft_hash_mismatch', 'legacy answer drafts cannot carry unhashed typed assertions')
+    }
     const recomputed = answerDraftContentHash(
       draft.runId,
       draft.blocks,

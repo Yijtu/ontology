@@ -48,6 +48,7 @@ import type {
   RunManifest,
   ToolContext,
   VerificationResult,
+  VerifiedAssertion,
   WorkflowInputManifest,
 } from '@ontology/contracts'
 
@@ -345,6 +346,28 @@ describe('post-verification invalidation blocks publication', () => {
         {
           grant: harness.grant,
           draft: { ...harness.draft, blocks: [{ kind: 'summary', text: 'Changed after verify.' }] },
+          verification: harness.verification,
+        },
+        OWNER,
+      ),
+    ).rejects.toMatchObject({ reason: 'draft_hash_mismatch' })
+  })
+
+  it('does not let a post-verification V1 assertion ride the legacy body hash', async () => {
+    const harness = await buildPublicationHarness()
+    const assertion: VerifiedAssertion = {
+      assertionId: randomUUID(),
+      kind: 'boolean',
+      subject: 'T-01',
+      predicate: 'inspection_due',
+      value: false,
+      references: [],
+    }
+    await expect(
+      harness.publisher.publish(
+        {
+          grant: harness.grant,
+          draft: { ...harness.draft, assertions: [assertion] },
           verification: harness.verification,
         },
         OWNER,

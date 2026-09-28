@@ -114,6 +114,35 @@ export function fieldBindingMatches(
     (binding.timePointer === undefined || sameRow(binding.valuePointer, binding.timePointer))
 }
 
+export function sourceValidityFinding(
+  record: EvidenceRecord,
+  asOf: Rfc3339UtcTimestamp,
+  input: { readonly claimId?: Uuid; readonly assertionId?: Uuid; readonly evidenceRef: ResourceRef },
+): VerificationFinding | undefined {
+  const validity = record.envelope.validity
+  if (validity === undefined) return undefined
+  const asOfMs = Date.parse(asOf)
+  const validFromMs = Date.parse(validity.validFrom)
+  const ids = {
+    ...(input.claimId === undefined ? {} : { claimId: input.claimId }),
+    ...(input.assertionId === undefined ? {} : { assertionId: input.assertionId }),
+  }
+  if (!Number.isFinite(asOfMs) || !Number.isFinite(validFromMs)) {
+    return { code: 'time_mismatch', axis: 'hard', ...ids, evidenceRef: input.evidenceRef, expected: 'RFC3339 validity point' }
+  }
+  if (asOfMs < validFromMs) {
+    return { code: 'source_not_yet_valid', axis: 'hard', ...ids, evidenceRef: input.evidenceRef, expected: validity.validFrom, actual: asOf }
+  }
+  const validTo = validity.validTo
+  if (validTo !== undefined) {
+    const validToMs = Date.parse(validTo)
+    if (!Number.isFinite(validToMs) || asOfMs >= validToMs) {
+      return { code: 'stale_source', axis: 'hard', ...ids, evidenceRef: input.evidenceRef, expected: validTo, actual: asOf }
+    }
+  }
+  return undefined
+}
+
 export function checkClaims(
   claims: readonly DraftClaim[],
   resolved: ReadonlyMap<string, ResolvedEvidence>,
@@ -281,16 +310,11 @@ export function checkClaims(
         }
       }
 
-      const validTo = evidence.record.envelope.validity?.validTo
-      if (validTo !== undefined && Date.parse(now) >= Date.parse(validTo)) {
-        claimFindings.push({
-          code: 'stale_source',
-          axis: 'hard',
-          claimId: claim.claimId,
-          evidenceRef: binding.evidenceRef,
-          expected: validTo,
-        })
-      }
+      const validityFinding = sourceValidityFinding(evidence.record, claim.time.asOf ?? now, {
+        claimId: claim.claimId,
+        evidenceRef: binding.evidenceRef,
+      })
+      if (validityFinding !== undefined) claimFindings.push(validityFinding)
     }
 
     if (claimFindings.length === 0) {

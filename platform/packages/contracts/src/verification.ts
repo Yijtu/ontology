@@ -79,6 +79,7 @@ export interface AssertionEvidenceBinding {
   readonly resultDigest: Sha256Digest
   readonly valuePointer: string
   readonly subjectPointer: string
+  readonly timePointer?: string
   /** Pointer to the result column descriptor that owns valuePointer. */
   readonly fieldRefPointer?: string
   readonly documentPointer?: string
@@ -93,6 +94,7 @@ interface TypedAssertionBase {
   readonly assertionId: Uuid
   readonly subject: string
   readonly predicate: string
+  readonly asOf?: Rfc3339UtcTimestamp
   readonly references: readonly AssertionEvidenceBinding[]
 }
 
@@ -123,6 +125,7 @@ export type VerificationFindingCode =
   | 'subject_mismatch'
   | 'predicate_mismatch'
   | 'time_mismatch'
+  | 'source_not_yet_valid'
   | 'stale_source'
   | 'semantic_unsupported'
   | 'semantic_insufficient'

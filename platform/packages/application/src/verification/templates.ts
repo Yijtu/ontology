@@ -55,6 +55,8 @@ const TEMPLATES: Readonly<Record<VerificationFindingCode, Template>> = Object.fr
     `${locate(finding)} declares time ${finding.actual ?? '(none)'} but the bound result holds ${finding.expected ?? '(none)'}`,
   stale_source: (finding) =>
     `${locate(finding)} cites a source whose validity expired at ${finding.expected ?? 'its validity end'}`,
+  source_not_yet_valid: (finding) =>
+    `${locate(finding)} cites a source whose validity starts at ${finding.expected ?? 'a later time'}`,
   semantic_unsupported: (finding) =>
     `${locate(finding)} was judged unsupported by the policy semantic review`,
   semantic_insufficient: (finding) =>
