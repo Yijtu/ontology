@@ -284,6 +284,11 @@ export function QueryPanel({ client, profileRef, timeZone, availableTasks = [], 
   const [allowWeb, setAllowWeb] = useState(false)
   const [clarificationInput, setClarificationInput] = useState('')
   const streamRef = useRef<RunEventStream | undefined>(undefined)
+  const factExample = availableTasks
+    .filter((task) => task.startsWith('facts:'))
+    .slice(0, 3)
+    .map((task) => task.slice('facts:'.length))
+    .join(',')
 
   const closeStream = useCallback(() => {
     streamRef.current?.close()
@@ -444,6 +449,7 @@ export function QueryPanel({ client, profileRef, timeZone, availableTasks = [], 
         {availableTasks.length === 0 ? null : (
           <p className="panel__hint" data-testid="query-capability-note">
             当前仅开放已注册属性事实读取任务；任意自然语言规划、规则推理和自由生成暂不可用。
+            {factExample.length === 0 ? '' : `格式为 facts:<属性ID>，最多可用逗号组合3个属性，例如 facts:${factExample}。`}
             {modelCapabilities === undefined ? '模型配置状态未知。' : (
               `Company生成${modelCapabilities.generation ? '已配置' : '未启用'}；JEV决策${modelCapabilities.decision ? '已配置' : '未启用'}。`
             )}
@@ -490,6 +496,7 @@ export function QueryPanel({ client, profileRef, timeZone, availableTasks = [], 
                 name="question"
                 data-testid="query-question"
                 value={question}
+                placeholder={factExample.length === 0 ? '' : `facts:${factExample}`}
                 onChange={(event) => setQuestion(event.target.value)}
               />
             </label>

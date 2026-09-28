@@ -3,7 +3,7 @@ import {
   isLoopbackAddress,
   resolveLocalDevPrincipal,
 } from '@ontology/adapter-control-postgres'
-import type { DeploymentEnvironment, ProfileRef, ProfileSpec, ScopeRef, VersionRef } from '@ontology/contracts'
+import type { DeploymentEnvironment, MappingRef, ProfileRef, ProfileSpec, ScopeRef, SourceRef, VersionRef } from '@ontology/contracts'
 import { createApiServer } from './http/app'
 import type { ApiServerOptions } from './http/app'
 import type { RequestAuthenticator } from './http/shared'
@@ -44,6 +44,10 @@ export interface CoreApiDependencies {
     readonly availableTasks: readonly string[]
     readonly definitionRef: VersionRef
     readonly namespace: string
+    readonly label: string
+    readonly sourceScenarioId: string
+    readonly mappingRefs: readonly MappingRef[]
+    readonly rawSourceRefs: readonly SourceRef[]
   } | undefined>
   readonly api?: Omit<ApiServerOptions, 'authenticate' | 'logger'>
   readonly allowLocalOperator?: boolean
@@ -131,15 +135,16 @@ export function createCoreApi(dependencies: CoreApiDependencies): FastifyInstanc
       const baseProfileSpec = current?.baseProfileSpec ?? dependencies.profileSpecsByScenario?.[scenario.scenarioId]
       return {
         scenarioId: scenario.scenarioId,
-        label: scenario.label,
+        label: current?.label ?? scenario.label,
+        sourceScenarioId: current?.sourceScenarioId ?? scenario.scenarioId,
         profileRef,
         environment: current?.environment ?? 'local_dev',
         namespace: current?.namespace ?? scenario.namespace,
         definitionRef: current?.definitionRef ?? scenario.definitionRef,
         ...(baseProfileSpec === undefined ? {} : { baseProfileSpec }),
         availableTasks: current?.availableTasks ?? dependencies.availableTasksByScenario?.[scenario.scenarioId] ?? dependencies.availableTaskIds ?? [],
-        mappingRefs: scenario.physicalMappings.map((mapping) => mapping.ref),
-        rawSourceRefs: scenario.rawSources.map((source) => source.sourceRef),
+        mappingRefs: current?.mappingRefs ?? scenario.physicalMappings.map((mapping) => mapping.ref),
+        rawSourceRefs: current?.rawSourceRefs ?? scenario.rawSources.map((source) => source.sourceRef),
       }
     }))
     return reply.status(200).send({

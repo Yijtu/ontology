@@ -12,7 +12,8 @@ reactEnvironment.IS_REACT_ACT_ENVIRONMENT = true
 
 const digest = `sha256:${'b'.repeat(64)}`
 const scenarios: readonly CoreDeploymentScenario[] = [{
-  scenarioId: 'industrial-maintenance',
+  scenarioId: 'transport-profile-slot',
+  sourceScenarioId: 'industrial-maintenance',
   label: '工业资产维护（合成演示）',
   profileRef: { id: 'industrial-profile', version: '1.0.0' },
   environment: 'local_dev',
@@ -60,7 +61,7 @@ describe('Core raw import form', () => {
       root.render(createElement(CoreImportPanel, {
         client,
         scenarios,
-        initialScenarioId: 'industrial-maintenance',
+        initialScenarioId: 'transport-profile-slot',
         operatorEnabled: true,
         onImported: (jobId: string) => { importedJobId = jobId },
       }))

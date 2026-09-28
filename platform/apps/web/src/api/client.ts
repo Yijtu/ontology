@@ -183,6 +183,8 @@ export interface ComponentFilter {
 
 export interface CoreDeploymentScenario {
   readonly scenarioId: string
+  /** The mounted source-pack id selected by this profile's current industry pin. */
+  readonly sourceScenarioId?: string
   readonly label: string
   readonly profileRef: ProfileRef
   readonly environment: DeploymentEnvironment
@@ -302,6 +304,7 @@ function parseCoreDeployment(value: unknown): CoreDeploymentInfo {
   const scenarios: CoreDeploymentScenario[] = value['scenarios'].map((candidate, index) => {
     if (!isRecord(candidate) ||
       typeof candidate['scenarioId'] !== 'string' || candidate['scenarioId'].length === 0 ||
+      (candidate['sourceScenarioId'] !== undefined && (typeof candidate['sourceScenarioId'] !== 'string' || candidate['sourceScenarioId'].length === 0)) ||
       typeof candidate['label'] !== 'string' || candidate['label'].length === 0 ||
       typeof candidate['namespace'] !== 'string' || candidate['namespace'].length === 0 ||
       !isProfileRef(candidate['profileRef']) || !isDeploymentEnvironment(candidate['environment']) ||
@@ -313,6 +316,7 @@ function parseCoreDeployment(value: unknown): CoreDeploymentInfo {
     }
     return {
       scenarioId: candidate['scenarioId'],
+      ...(typeof candidate['sourceScenarioId'] === 'string' ? { sourceScenarioId: candidate['sourceScenarioId'] } : {}),
       label: candidate['label'],
       profileRef: candidate['profileRef'],
       environment: candidate['environment'],

@@ -30,6 +30,9 @@ const workerErrors: Error[] = []
 let persistedAnswerRunId: string | undefined
 let persistedAnswerPayload: string | undefined
 let persistedEvidenceId: string | undefined
+let persistedCrossIndustryRunId: string | undefined
+let persistedCrossIndustryAnswerPayload: string | undefined
+let persistedCrossIndustryEvidenceIds: readonly string[] | undefined
 
 async function startIsolatedDatabase(): Promise<void> {
   container = await startPostgresContainer()
@@ -316,19 +319,44 @@ describe('the mounted local Core host through normal HTTP', () => {
     }
   }, 120_000)
 
-  it('does not create or dispatch an unregistered natural-language task', async () => {
-    const response = await request('/api/v1/runs', {
-      method: 'POST',
-      headers: { 'content-type': 'application/json', 'idempotency-key': 'core-unknown-question' },
-      body: JSON.stringify({
-        profileRef: { id: 'synthetic-transport-facility-demo', version: '1.0.0' },
-        question: 'Which facilities should be inspected?',
-        context: { timeZone: 'UTC' },
-        preferences: { route: 'template', allowWeb: false },
-      }),
-    })
-    expect(response.status).toBe(409)
-    expect((await response.json() as { error: { code: string } }).error.code).toBe('CAPABILITY_NOT_CONFIGURED')
+  it('returns structured errors for unknown, duplicate, and over-bound facts requests without creating runs', async () => {
+    if (admin === undefined) throw new Error('isolated PostgreSQL admin client is unavailable')
+    const before = await admin.query<{ runs: string; dispatches: string }>(
+      `SELECT
+         (SELECT count(*)::text FROM agent_platform.runs WHERE tenant_id = $1 AND space_id = $2) AS runs,
+         (SELECT count(*)::text FROM agent_platform.workflow_dispatches WHERE tenant_id = $1 AND space_id = $2) AS dispatches`,
+      [scopeRef.tenantId, scopeRef.spaceId],
+    )
+    const invalidRequests = [
+      { id: 'natural-language', question: 'Which facilities should be inspected?', code: 'INVALID_QUESTION' },
+      { id: 'unknown-property', question: 'facts:not_registered', code: 'UNKNOWN_PROPERTY' },
+      { id: 'duplicate-property', question: 'facts:inspection_due,inspection_due', code: 'DUPLICATE_PROPERTY' },
+      { id: 'too-many-properties', question: 'facts:inspection_due,inspection_exempt,inspection_required,facility_id', code: 'TOO_MANY_PROPERTIES' },
+    ] as const
+    for (const invalid of invalidRequests) {
+      const response = await request('/api/v1/runs', {
+        method: 'POST',
+        headers: { 'content-type': 'application/json', 'idempotency-key': `core-invalid-${invalid.id}` },
+        body: JSON.stringify({
+          profileRef: { id: 'synthetic-transport-facility-demo', version: '1.0.0' },
+          question: invalid.question,
+          context: { timeZone: 'UTC' },
+          preferences: { route: 'template', allowWeb: false },
+        }),
+      })
+      expect(response.status).toBe(422)
+      const body = await response.json() as { error: { code: string; message: string }; traceId: string }
+      expect(body.error.code).toBe(invalid.code)
+      expect(body.error.message.length).toBeGreaterThan(0)
+      expect(body.traceId.length).toBeGreaterThan(0)
+    }
+    const after = await admin.query<{ runs: string; dispatches: string }>(
+      `SELECT
+         (SELECT count(*)::text FROM agent_platform.runs WHERE tenant_id = $1 AND space_id = $2) AS runs,
+         (SELECT count(*)::text FROM agent_platform.workflow_dispatches WHERE tenant_id = $1 AND space_id = $2) AS dispatches`,
+      [scopeRef.tenantId, scopeRef.spaceId],
+    )
+    expect(after.rows[0]).toEqual(before.rows[0])
   })
 
   it('reuses the same HTTP ingestion and verified facts workflow for the industrial scenario', async () => {
@@ -406,6 +434,105 @@ describe('the mounted local Core host through normal HTTP', () => {
     expect(answer.body?.claims[0]?.references[0]?.evidenceRef.id).toMatch(/^[0-9a-f-]{36}$/iu)
   }, 120_000)
 
+  it('uses actual industry pins and import sources when a profile id is reused for another mounted industry', async () => {
+    const before = await request('/api/v1/core/deployment').then((response) => response.json()) as {
+      data: { scenarios: { scenarioId: string; sourceScenarioId: string; profileRef: { id: string; version: string }; namespace: string; definitionRef: { id: string; version: string; digest: string }; availableTasks: string[]; mappingRefs: { id: string; version: string; digest: string }[]; rawSourceRefs: { namespace: string; sourceId: string }[]; baseProfileSpec?: Record<string, unknown> }[] }
+    }
+    const transportSlot = before.data.scenarios.find((entry) => entry.scenarioId === 'transport-facility-inspection')
+    const industrialScenario = before.data.scenarios.find((entry) => entry.scenarioId === 'industrial-asset-maintenance')
+    if (transportSlot?.baseProfileSpec === undefined || industrialScenario?.baseProfileSpec === undefined) {
+      throw new Error('the mounted transport and industrial profile specs are required')
+    }
+    const crossIndustryProfile = { id: transportSlot.profileRef.id, version: '1.0.2' }
+    const publish = await request('/api/v1/profiles', {
+      method: 'POST',
+      headers: { 'content-type': 'application/json', 'idempotency-key': 'core-cross-industry-profile-v102' },
+      body: JSON.stringify({ profileRef: crossIndustryProfile, spec: industrialScenario.baseProfileSpec, environment: 'local_dev' }),
+    })
+    expect(publish.status).toBe(201)
+    const preflight = await request(`/api/v1/profiles/${encodeURIComponent(crossIndustryProfile.id)}/preflight`, {
+      method: 'POST',
+      headers: { 'content-type': 'application/json' },
+      body: JSON.stringify({ version: crossIndustryProfile.version }),
+    })
+    expect(preflight.status).toBe(200)
+    const preflightData = await preflight.json() as { data: { status: string; resolvedProfile?: { snapshotHash: string } } }
+    expect(preflightData.data.status).toBe('resolved')
+    const snapshotHash = preflightData.data.resolvedProfile?.snapshotHash
+    if (snapshotHash === undefined) throw new Error('the cross-industry profile did not resolve')
+    const activeResponse = await request(`/api/v1/profiles/${encodeURIComponent(crossIndustryProfile.id)}/active`)
+    const active = await activeResponse.json() as { data: { active?: { revision: string } } }
+    if (active.data.active === undefined) throw new Error('the reused profile id has no current active revision')
+    const activated = await request(`/api/v1/profiles/${encodeURIComponent(crossIndustryProfile.id)}/activate`, {
+      method: 'POST',
+      headers: { 'content-type': 'application/json', 'if-match': active.data.active.revision },
+      body: JSON.stringify({ version: crossIndustryProfile.version, snapshotHash }),
+    })
+    expect(activated.status).toBe(200)
+
+    const deployment = await request('/api/v1/core/deployment').then((response) => response.json()) as {
+      data: { scenarios: { scenarioId: string; sourceScenarioId: string; profileRef: { id: string; version: string }; namespace: string; definitionRef: { id: string; version: string; digest: string }; availableTasks: string[]; mappingRefs: { id: string; version: string; digest: string }[]; rawSourceRefs: { namespace: string; sourceId: string }[] }[] }
+    }
+    const selected = deployment.data.scenarios.find((entry) => entry.scenarioId === transportSlot.scenarioId)
+    expect(selected?.profileRef).toEqual(crossIndustryProfile)
+    expect(selected?.sourceScenarioId).toBe(industrialScenario.sourceScenarioId)
+    expect(selected?.namespace).toBe(industrialScenario.namespace)
+    expect(selected?.definitionRef).toEqual(industrialScenario.definitionRef)
+    expect(selected?.mappingRefs).toEqual(industrialScenario.mappingRefs)
+    expect(selected?.rawSourceRefs).toEqual(industrialScenario.rawSourceRefs)
+    expect(selected?.availableTasks).toContain('facts:operating_hours')
+    expect(selected?.availableTasks).not.toContain('facts:inspection_due')
+
+    const industrial = loadCoreExamples({ targetScopeRef: scopeRef }).scenarios.find((entry) => entry.scenarioId === industrialScenario.sourceScenarioId)
+    const source = industrial?.rawSources.find((entry) => entry.sourceRef.sourceId === 'asset-hours-canonical')
+    if (source === undefined) throw new Error('the selected industrial source is not mounted')
+    const imported = await request('/api/v1/core/imports', {
+      method: 'POST',
+      headers: { 'content-type': 'application/json', 'idempotency-key': 'core-cross-industry-import' },
+      body: JSON.stringify({
+        scenarioId: selected?.sourceScenarioId,
+        sourceId: source.sourceRef.sourceId,
+        content: await readFile(source.path, 'utf8'),
+      }),
+    })
+    expect(imported.status).toBe(202)
+    const importedData = await imported.json() as { data: { jobId: string; scenarioId: string; sourceRef: { namespace: string; sourceId: string } } }
+    expect(importedData.data.scenarioId).toBe(industrialScenario.sourceScenarioId)
+    expect(importedData.data.sourceRef).toEqual(source.sourceRef)
+    expect((await waitForJob(importedData.data.jobId))['stage']).toBe('awaiting_review')
+
+    const createdRun = await request('/api/v1/runs', {
+      method: 'POST',
+      headers: { 'content-type': 'application/json', 'idempotency-key': 'core-cross-industry-three-facts' },
+      body: JSON.stringify({
+        profileRef: crossIndustryProfile,
+        question: 'facts:operating_hours,maintenance_exempt,asset_id',
+        context: { timeZone: 'UTC' },
+        preferences: { route: 'template', allowWeb: false },
+      }),
+    })
+    expect(createdRun.status).toBe(202)
+    const createdData = await createdRun.json() as { data: { runId: string } }
+    const answerResponse = await waitForAnswer(createdData.data.runId)
+    persistedCrossIndustryRunId = createdData.data.runId
+    persistedCrossIndustryAnswerPayload = JSON.stringify(answerResponse['data'])
+    const answer = answerResponse['data'] as {
+      body?: {
+        claims: { predicate: string; value: { value: string | number; unit: string }; references: { evidenceRef: { id: string } }[] }[]
+        assertions: { predicate: string; value: unknown; references: { evidenceRef: { id: string } }[] }[]
+      }
+    }
+    expect(answer.body?.claims).toContainEqual(expect.objectContaining({ predicate: 'operating_hours', value: { value: '100', unit: 'h' } }))
+    expect(answer.body?.assertions).toContainEqual(expect.objectContaining({ predicate: 'maintenance_exempt', value: false }))
+    expect(answer.body?.assertions).toContainEqual(expect.objectContaining({ predicate: 'asset_id', value: 'I-04' }))
+    const citedEvidence = new Set([
+      ...(answer.body?.claims ?? []).flatMap((claim) => claim.references.map((reference) => reference.evidenceRef.id)),
+      ...(answer.body?.assertions ?? []).flatMap((assertion) => assertion.references.map((reference) => reference.evidenceRef.id)),
+    ])
+    expect(citedEvidence.size).toBe(3)
+    persistedCrossIndustryEvidenceIds = [...citedEvidence]
+  }, 180_000)
+
   it('keeps the active profile version and its published answer available after a host restart', async () => {
     await api?.close()
     api = undefined
@@ -427,7 +554,7 @@ describe('the mounted local Core host through normal HTTP', () => {
       data: { scenarios: { scenarioId: string; profileRef: { id: string; version: string } }[] }
     }
     const scenario = deployment.data.scenarios.find((entry) => entry.scenarioId === 'transport-facility-inspection')
-    expect(scenario?.profileRef.version).toBe('1.0.1')
+    expect(scenario?.profileRef.version).toBe('1.0.2')
     if (persistedAnswerRunId === undefined || persistedAnswerPayload === undefined || persistedEvidenceId === undefined) {
       throw new Error('the first transport run was not retained for restart verification')
     }
@@ -436,15 +563,30 @@ describe('the mounted local Core host through normal HTTP', () => {
     expect(JSON.stringify((await previousAnswer.json() as { data: unknown }).data)).toBe(persistedAnswerPayload)
     const previousEvidence = await request(`/api/v1/evidence/${encodeURIComponent(persistedEvidenceId)}`)
     expect(previousEvidence.status).toBe(200)
-    const scopeResponse = await request(`/api/v1/runs/scope?profileId=${encodeURIComponent(scenario?.profileRef.id ?? '')}&version=1.0.1`)
+    if (
+      persistedCrossIndustryRunId === undefined ||
+      persistedCrossIndustryAnswerPayload === undefined ||
+      persistedCrossIndustryEvidenceIds === undefined
+    ) throw new Error('the three-property industrial answer was not retained for restart verification')
+    const previousCrossIndustryAnswer = await request(`/api/v1/runs/${encodeURIComponent(persistedCrossIndustryRunId)}/answer`)
+    expect(previousCrossIndustryAnswer.status).toBe(200)
+    expect(JSON.stringify((await previousCrossIndustryAnswer.json() as { data: unknown }).data)).toBe(persistedCrossIndustryAnswerPayload)
+    for (const evidenceId of persistedCrossIndustryEvidenceIds) {
+      const evidence = await request(`/api/v1/evidence/${encodeURIComponent(evidenceId)}`)
+      expect(evidence.status).toBe(200)
+      const evidenceBody = await evidence.json() as { data: { outcome: string; integrityVerified: boolean } }
+      expect(evidenceBody.data.outcome).toBe('verifiable')
+      expect(evidenceBody.data.integrityVerified).toBe(true)
+    }
+    const scopeResponse = await request(`/api/v1/runs/scope?profileId=${encodeURIComponent(scenario?.profileRef.id ?? '')}&version=1.0.2`)
     expect(scopeResponse.status).toBe(200)
 
     const runResponse = await request('/api/v1/runs', {
       method: 'POST',
-      headers: { 'content-type': 'application/json', 'idempotency-key': 'core-transport-restart-facts-v101' },
+      headers: { 'content-type': 'application/json', 'idempotency-key': 'core-transport-restart-facts-v102' },
       body: JSON.stringify({
         profileRef: scenario?.profileRef,
-        question: 'facts:inspection_due',
+        question: 'facts:operating_hours',
         context: { timeZone: 'UTC' },
         preferences: { route: 'template', allowWeb: false },
       }),
@@ -452,7 +594,7 @@ describe('the mounted local Core host through normal HTTP', () => {
     expect(runResponse.status).toBe(202)
     const run = await runResponse.json() as { data: { runId: string } }
     const answer = await waitForAnswer(run.data.runId)
-    expect(((answer['data'] as { body?: { assertions: { predicate: string; value: unknown }[] } }).body?.assertions ?? []))
-      .toContainEqual(expect.objectContaining({ predicate: 'inspection_due', value: false }))
+    expect(((answer['data'] as { body?: { claims: { predicate: string; value: { value: string | number; unit: string } }[] } }).body?.claims ?? []))
+      .toContainEqual(expect.objectContaining({ predicate: 'operating_hours', value: { value: '100', unit: 'h' } }))
   }, 180_000)
 })

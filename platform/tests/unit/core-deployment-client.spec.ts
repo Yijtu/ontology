@@ -16,6 +16,7 @@ describe('Core deployment metadata client', () => {
           models: { generation: false, decision: false },
           scenarios: [{
             scenarioId: 'transport-facility-inspection',
+            sourceScenarioId: 'industrial-asset-maintenance',
             label: '交通设施巡检（合成演示）',
             profileRef: { id: 'synthetic-transport-facility-demo', version: '1.0.0' },
             environment: 'local_dev',
@@ -47,6 +48,7 @@ describe('Core deployment metadata client', () => {
     expect(requested).toBe('http://core.test/api/v1/core/deployment')
     expect(deployment.scenarios[0]?.availableTasks).toEqual(['facts:inspection_due'])
     expect(deployment.scenarios[0]?.profileRef.id).toBe('synthetic-transport-facility-demo')
+    expect(deployment.scenarios[0]?.sourceScenarioId).toBe('industrial-asset-maintenance')
     expect(deployment.scenarios[0]?.baseProfileSpec?.mappingRefs[0]?.sourceObjectRef.objectPath).toBe('records')
   })
 

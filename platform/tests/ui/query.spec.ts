@@ -47,6 +47,7 @@ async function renderQuery(
   client: WorkbenchClient,
   initialRunId?: string,
   onEvidenceReference?: (ref: ResourceRef) => void,
+  availableTasks: readonly string[] = [],
 ): Promise<HTMLElement> {
   const container = document.createElement('div')
   document.body.appendChild(container)
@@ -57,6 +58,7 @@ async function renderQuery(
         client,
         profileRef: PROFILE,
         timeZone: 'Asia/Shanghai',
+        availableTasks,
         ...(onEvidenceReference === undefined ? {} : { onEvidenceReference }),
         ...(initialRunId === undefined ? {} : { initialRunId }),
       }),
@@ -296,6 +298,31 @@ describe('business query UI states (real API fixture over HTTP)', () => {
 })
 
 describe('ask within the resolved scenario scope', () => {
+  it('supports a bounded multi-attribute facts request in the normal question field', async () => {
+    const stream = new FakeStream()
+    const built = await harness({ streamFactory: stream.factory })
+    const tasks = ['facts:inspection_due', 'facts:inspection_exempt', 'facts:facility_id']
+    const container = await renderQuery(built.client, undefined, undefined, tasks)
+    await waitFor(() => container.querySelector('[data-testid="query-ask"]') !== null, 'ask form')
+
+    expect(container.querySelector('[data-testid="query-capability-note"]')?.textContent)
+      .toContain('最多可用逗号组合3个属性')
+    const question = container.querySelector<HTMLTextAreaElement>('[data-testid="query-question"]')
+    const ask = container.querySelector('[data-testid="query-ask"]')
+    if (question === null || ask === null) throw new Error('the facts query fields are missing')
+    const requestedQuestion = 'facts:inspection_due,inspection_exempt,facility_id'
+    await type(question, requestedQuestion)
+    await click(ask)
+    await waitFor(() => stream.opened.length > 0, 'the multi-attribute run stream')
+
+    const eventUrl = stream.opened[0]?.url
+    if (eventUrl === undefined) throw new Error('the run event stream URL was not recorded')
+    const runId = /\/api\/v1\/runs\/([^/]+)\/events/u.exec(new URL(eventUrl).pathname)?.[1]
+    if (runId === undefined) throw new Error('the event stream did not identify its run')
+    const run = await built.runService.getRun(runId, built.ctx)
+    expect(run.question).toBe(requestedQuestion)
+  })
+
   it('offers only the enabled tools and disables web when the profile does not allow it', async () => {
     const stream = new FakeStream()
     const built = await harness({ streamFactory: stream.factory })

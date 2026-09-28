@@ -61,7 +61,7 @@ export function CoreImportPanel({ client, scenarios, initialScenarioId, operator
           setBusy(true)
           setNotice(undefined)
           setFailure(undefined)
-          void client.createCoreImport({ scenarioId: scenario.scenarioId, sourceId: source.sourceId, content })
+          void client.createCoreImport({ scenarioId: scenario.sourceScenarioId ?? scenario.scenarioId, sourceId: source.sourceId, content })
             .then((result) => {
               setNotice(`已创建解析任务 ${result.jobId}（${result.stage}）。`)
               setContent('')

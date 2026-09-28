@@ -270,3 +270,11 @@ C1 对应 A12 的模块和 publication 测试、A13 的幂等 run id / CAS 测�
 - 时钟反例初版固定在未来，不能证明过期上下文。修正为 bootstrap 实时时钟偏移 -6 分钟、导入前偏移归零并持续推进，确认旧 deadline 已过、新 deadline 有效且 PG `next_attempt_at` 已到期，再通过实际模型任务。未放宽等待或业务候选断言。
 
 本批说明见[模型宿主 checkpoint](../platform/docs/core-model-host-integration-2026-09-29.md)。下一批接口与依赖已记录为[规划/运行时接线方案](../platform/docs/core-planning-runtime-wiring-2026-09-29.md)：包括 Planner fatal 传播与可信 scope、不可变计划/澄清恢复、所选 runtime 的唯一 loop 与无进展停止、逐阶段模型取消与唯一计量、typed query/document writer、文档索引和结构化来源独立挂载。该文档是待实现方案，不把 A11 或 C5 标完成。
+
+### C3/C4 多属性 facts 正常宿主 checkpoint（2026-09-29）
+
+- 正常 `/runs` 以同一 builder 校验及执行 `facts:a,b,c`，绑定实际 run profile/hash、选定定义和 resolved mapping refs；最多三个唯一注册属性。重复、未知、超量或不支持的问题在创建 run/dispatch 前返回结构化422，保留原单属性入口。
+- Profile ID 与行业包独立。真实 PG 用例把交通 profile 新版本挂载为工业包，并通过正常发布/预检/激活；页面 metadata、定义、映射和原始来源按实际行业投影。客户端按 `sourceScenarioId` 导入该行业资料，查询继续使用原 profile ID。
+- 同 run 的三属性正文与三份独立证据在 API composition 重启后完全一致，各 evidence 仍 verifiable/integrityVerified=true。该链模型关闭，经实际 source import、身份确认、审核/发布、ontology tool、typed writer 与硬核验，不 seed 最终答案。
+- 根代理独立 PG/HTTP 5/5，26.61s；UI/client/architecture 四文件28/28，13.64s；九代码/测试文件 ESLint、Web build通过。详情见[多属性 facts checkpoint](../platform/docs/core-multi-attribute-facts-2026-09-29.md)。此批不等于任意自然语言规划或动态 loop 已完成。
+- 计划引用改为完整运行绑定后，旧未完成 template checkpoint 可能不匹配。当前 resolver 检查完整 planRef，不能重建成另一引用并继续执行；已发布历史答案可读，旧未完成任务明确失败。真实计划归档与兼容迁移仍在下一批。

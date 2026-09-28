@@ -28,7 +28,7 @@ import {
 } from '@ontology/adapter-control-postgres'
 import { DocumentSpanReader, LocalDocumentExtractionService, PostgresDocumentParseStore } from '@ontology/adapter-extraction-document'
 import { Bm25DocumentSearchService, PostgresKeywordIndexStore, createBm25DocumentSearchToolHandler } from '@ontology/adapter-search-bm25'
-import { TemplateRuntimeAdapter } from '@ontology/adapter-runtime-template'
+import { TemplateRuntimeAdapter, TemplateRuntimeError } from '@ontology/adapter-runtime-template'
 import type { TemplatePlanResolver } from '@ontology/adapter-runtime-template'
 import {
   AnswerPublicationService,
@@ -103,6 +103,7 @@ import { DataQueryHandler, OntologyLookupHandler, canonicalJson } from '@ontolog
 import type { ToolSchemaValidator } from '@ontology/tool-services'
 import { controlRecordSequence, JobWorkerLoop, MaterializationOutboxConsumer, TopicOutboxConsumerRouter, WorkflowDispatchWorker, createIngestionHandlerRegistry } from '@ontology/app-worker'
 import { PublishedFactsDraftWriter } from './published-facts-draft'
+import { CoreFactsPlanError, createCoreFactsPlan } from './core-facts-plan'
 import { createStaticProbeAdapterResolver, createPostgresSourceStore } from './source-registry'
 import { createEnvSecretResolver } from './secret-resolver'
 import { createPostgresProvenanceRead } from './provenance-read'
@@ -509,9 +510,9 @@ class CoreFactsPlanResolver implements TemplatePlanResolver {
     this.#scenarios = scenarios
   }
 
-  async resolve(_planRef: ResourceRef | undefined, ctx: ToolContext) {
+  async resolve(planRef: ResourceRef | undefined, ctx: ToolContext) {
     const run = await this.#runs.getRun(ctx.runId, ctx)
-    const { scenario, resolved } = await resolveScenarioProfile(
+    const { scenario, resolved, snapshotHash } = await resolveScenarioProfile(
       this.#profiles,
       this.#scenarios,
       run.profileRef,
@@ -522,9 +523,18 @@ class CoreFactsPlanResolver implements TemplatePlanResolver {
     if (!resolved.toolBindings.some((binding) => binding.toolId === 'ontology_lookup' && binding.enabled)) {
       throw new CoreCapabilityError('this profile does not enable ontology_lookup for facts tasks')
     }
-    const attributeId = attributeTask(run.question, scenario)
-    if (attributeId === undefined) throw new CoreCapabilityError('only a registered facts:<attributeId> query is supported by this runtime profile')
-    const plan = factsPlan(scenario, { tenantId: ctx.principal.tenantId, spaceId: ctx.allowedResources.spaceId }, attributeId)
+    const plan = createCoreFactsPlan({
+      scenario,
+      runProfileRef: run.profileRef,
+      resolvedProfileHash: snapshotHash,
+      mappingRefs: resolved.mappingRefs,
+      definitionRef: scenario.definitionRef,
+      scopeRef: { tenantId: ctx.principal.tenantId, spaceId: ctx.allowedResources.spaceId },
+      question: run.questionRewrite?.rewrittenQuestion ?? run.question,
+    })
+    if (planRef !== undefined && !sameResourceRef(planRef, plan.planRef)) {
+      throw new TemplateRuntimeError('INVALID_PLAN', 'the checkpoint plan does not match this run’s immutable profile and facts request')
+    }
     return { planRef: plan.planRef, spec: plan }
   }
 }
@@ -542,6 +552,26 @@ export class CoreCapabilityError extends Error {
   constructor(message: string) {
     super(message)
     this.name = 'CoreCapabilityError'
+  }
+}
+
+class CoreFactsRequestError extends Error {
+  readonly code: string
+  readonly httpStatus = 422
+
+  constructor(error: CoreFactsPlanError) {
+    super(error.message)
+    this.name = 'CoreFactsRequestError'
+    this.code = error.code
+  }
+}
+
+function validateCoreFactsRequest(input: Parameters<typeof createCoreFactsPlan>[0]): void {
+  try {
+    createCoreFactsPlan(input)
+  } catch (error) {
+    if (error instanceof CoreFactsPlanError) throw new CoreFactsRequestError(error)
+    throw error
   }
 }
 
@@ -706,48 +736,7 @@ async function resolveScenarioProfile(
   const resolvedRecord = await profiles.getResolvedProfile({ scopeRef, profileRef, snapshotHash }, ctx)
   const scenario = scenarioForIndustryRef(scenarios, resolvedRecord.resolved.industryRef)
   if (scenario === undefined) throw new CoreCapabilityError('the profile pins an industry package not mounted by this Core deployment')
-  return { scenario, resolved: resolvedRecord.resolved }
-}
-
-function attributeTask(question: string, scenario: CoreExampleScenario): string | undefined {
-  const match = /^facts:([a-z][a-z0-9_-]{0,63})$/u.exec(question.trim())
-  const attributeId = match?.[1]
-  if (attributeId === undefined) return undefined
-  return scenario.industrySchema.objects.some((object) =>
-    object.attributes.some((attribute) => attribute.attributeId === attributeId),
-  ) ? attributeId : undefined
-}
-
-function factsPlan(scenario: CoreExampleScenario, scopeRef: ScopeRef, attributeId: string) {
-  const planRef: ResourceRef = {
-    id: stableUuid(`core-published-facts-plan:${scenario.scenarioId}:${attributeId}`),
-    version: COMPONENT_VERSION,
-    digest: sha256DigestOf(canonicalJson({ scenarioId: scenario.scenarioId, profileRef: scenario.profileRef, attributeId })),
-    kind: 'plan',
-  }
-  return {
-    planRef,
-    steps: [{
-      stepId: 'published-attribute-facts',
-      toolId: 'ontology_lookup' as const,
-      readOnly: true,
-      args: [
-        { name: 'scopeRef', required: true, source: { kind: 'literal' as const, value: scopeRef } },
-        { name: 'intent', required: true, source: { kind: 'literal' as const, value: 'facts' } },
-        {
-          name: 'concepts',
-          required: true,
-          source: {
-            kind: 'literal' as const,
-            value: [{ namespace: scenario.namespace, conceptId: attributeId, definitionVersion: scenario.definitionRef.version }],
-          },
-        },
-        { name: 'limit', required: true, source: { kind: 'literal' as const, value: 100 } },
-      ],
-      dependsOn: [],
-      failureBehaviour: 'abort' as const,
-    }],
-  }
+  return { scenario, resolved: resolvedRecord.resolved, snapshotHash: resolvedRecord.snapshotHash }
 }
 
 export interface CoreLocalCompositionOptions {
@@ -1422,7 +1411,7 @@ export async function createCoreLocalComposition(options: CoreLocalCompositionOp
       submission: { readonly profileRef: ProfileRef; readonly question: string; readonly scopeRef: ScopeRef },
       ctx: ToolContext,
     ) => {
-      const { scenario, resolved } = await resolveScenarioProfile(
+      const { scenario, resolved, snapshotHash } = await resolveScenarioProfile(
         profileResolver,
         options.examples.scenarios,
         submission.profileRef,
@@ -1432,9 +1421,15 @@ export async function createCoreLocalComposition(options: CoreLocalCompositionOp
       if (!resolved.toolBindings.some((binding) => binding.toolId === 'ontology_lookup' && binding.enabled)) {
         throw new CoreCapabilityError('this profile does not enable ontology_lookup for facts tasks')
       }
-      if (attributeTask(submission.question, scenario) === undefined) {
-        throw new CoreCapabilityError(`use one of the registered tasks: ${schemasByScenario(options.examples.scenarios)[scenario.scenarioId]?.join(', ') ?? ''}`)
-      }
+      validateCoreFactsRequest({
+        scenario,
+        runProfileRef: submission.profileRef,
+        resolvedProfileHash: snapshotHash,
+        mappingRefs: resolved.mappingRefs,
+        definitionRef: scenario.definitionRef,
+        scopeRef: submission.scopeRef,
+        question: submission.question,
+      })
     }
 
     const readScenarioProfile = async (scenarioId: string) => {
@@ -1454,6 +1449,10 @@ export async function createCoreLocalComposition(options: CoreLocalCompositionOp
         availableTasks: schemasByScenario([selectedScenario])[selectedScenario.scenarioId] ?? [],
         definitionRef: selectedScenario.definitionRef,
         namespace: selectedScenario.namespace,
+        label: selectedScenario.label,
+        sourceScenarioId: selectedScenario.scenarioId,
+        mappingRefs: record.spec.mappingRefs,
+        rawSourceRefs: selectedScenario.rawSources.map((source) => source.sourceRef),
       }
     }
 

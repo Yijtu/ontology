@@ -2,7 +2,7 @@
 
 本轮基线：`main@51c8cb4`；实施分支：`feat/main-core-product-20260928`。本文件记录根代理的独立复核，不代替实施 SPEC 的最终验收矩阵。
 
-已提交代码检查点包括 `ebac92b` 的实际 run 绑定 facts 计划、`f1e362d` 的 Planner JEV 实际状态边界、`444bdb5` 的真实 PostgreSQL 支撑定位、`6a20318` 的模型工厂，以及 `5a0fb80` 的可用浏览器产品链。本次新增公司模型普通文本抽取与任务生命周期冻结批次，已由根代理复核通过，见下表及[模型宿主说明](core-model-host-integration-2026-09-29.md)。正常规则回答、模型宿主规划与完整矩阵继续实现；下面的模块测试不代表整个产品已交付。
+已提交代码检查点包括 `8c5aefe` 的公司模型普通文本抽取与任务生命周期、`ebac92b` 的实际 run 绑定 facts 计划、`f1e362d` 的 Planner JEV 实际状态边界及 `5a0fb80` 的可用浏览器产品链。多属性 facts 正常宿主批次也已由根代理复核，见下表和[多属性说明](core-multi-attribute-facts-2026-09-29.md)。正常规则回答、模型宿主规划与完整矩阵继续实现；下面的模块测试不代表整个产品已交付。
 
 ## 已独立验证的检查点
 
@@ -56,6 +56,7 @@
 | 实际运行绑定的 facts 小计划（09-29） | 一文件 / 6 项通过，2.59s；两 owner 文件 ESLint 通过 | 精确 profile/hash/definition/实际 mapping pins；行业与 profile ID 可不同、空映射和 Unicode 属性允许。最多三项；纯 builder，不代表宿主已执行多属性任务 |
 | 公司模型与生命周期冻结批次（09-29） | 真实 PostgreSQL/HTTP 两文件 / 5 项通过，38.50s；unit/UI/architecture 九文件 / 75 项通过，14.34s | 原始普通文本经受控 Company HTTP 产有效候选并读回来源；同 job 的唯一结算为 39 tokens。旧 bootstrap 截止时间实际已过、每次读取推进的时钟下仍可执行新任务；迟到取消结果不发布，模型归档前核验 run/tenant/space。两行业 native 事实链继续通过 |
 | 上述冻结批次类型、lint 与 Web 构建 | platform/Web/acceptance 三项目 typecheck 通过；26 个代码/测试文件 ESLint 通过；Web build 57 modules，1.02s | 仅表示该检查点可构建。后续规则 producer、规划/loop 或 writer 接线需要重新检查受影响范围；本次未运行全量 integration/load/acceptance/browser matrix |
+| 正常多属性 facts 与跨行业 profile（09-29） | 真实 PG/HTTP 一文件 / 5 项通过，26.61s；UI/client/architecture 四文件 / 28 项通过，13.64s；九 owner 文件 ESLint 通过；Web build 57 modules，926ms | 交通 profile ID 挂载工业包，metadata、源导入目标和实际定义/映射一致；同 run 三字段正文和三份证据在重启后逐项相同、verifiable/integrity=true；重复/超量/未知字段和不支持问题在创建 run/dispatch 前返回422。旧未完成 checkpoint 的 planRef 不匹配时明确失败，不假装恢复兼容 |
 
 上表是不同时间的聚焦检查点，存在覆盖重叠；不相加为一次全量通过数量。实际 prepare 检查只覆盖当时已有迁移至 `053`，不包含后来新增的 `054`/`055`/`056`。本次生成的临时 env、验证脚本、容器和卷已回收。已有 3000/5173/54329 环境未改动。
 
