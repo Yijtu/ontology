@@ -43,6 +43,9 @@
 | loader 导入回归修复独立复核 | 原六个 UI suite + loader + jsdom 导入回归，共 8 文件 / 64 项通过，29.85s，exit 0 | 默认路径改为调用时解析，并使用 node:url.URL；保留原 UI 测试与全部断言，Node 默认资产加载继续通过 |
 | 新 UI 阶段 lint/typecheck | 完整 ESLint 和 platform/Web/acceptance 三个 TypeScript 项目通过 | 后续生产路由、模型与来源改动完成后仍须按受影响范围复核 |
 | 实际 subprocess launcher 与浏览器初查 | 临时库首跑 28 migrations；修复 Vite root/proxy 后 API/Web 就绪，metadata 经同源代理返回 200 | 原实现 API 健康但 Web readiness 超时；已分配并修复配置。浏览器正常导入 T-04 → worker 待审 → pending+match → approve → publish 通过。默认 Workbench 缺 route 返回 404，QueryPanel 缺 scope projection 返回 CAPABILITY_NOT_CONFIGURED，继续修复，未标浏览器闭环完成 |
+| 正式不可变支撑 reader 独立检查（09-29） | 5 文件 / 35 项通过，4.44s，exit 0 | reader 5 + producer/consumer 22 + architecture 8；真实工件定位、完整证据引用、授权元数据先查、1 MiB 上限与精确 UTC 区间。PG 正例与正常 rule producer 仍待完成 |
+| 配置与页面路由的正常 HTTP 检查（09-29） | 1 文件 / 4 项通过，24.08s；UI 4 文件 / 6 项通过，4.95s | Workbench 路由、scope projection、新版激活后立即 metadata 刷新、两个行业的事实链与新版本重启查询。之后加入的同旧 run/body/evidence 重启比较还需独立复跑 |
+| 修复后浏览器工作台初查（09-29） | 默认 Workbench、行业组件同步、导入草稿切换清理、原文对照与身份操作可用 | 真实页面发布新配置仍因未读取已有 active revision 而 CAS 冲突，已分配修复；UI 热更新期间不把中途重载算完整闭环通过 |
 
 上表是不同时间的聚焦检查点，存在覆盖重叠；不相加为一次全量通过数量。实际 prepare 检查只覆盖当时已有迁移至 `053`，不包含后来新增的 `054`/`055`/`056`。本次生成的临时 env、验证脚本、容器和卷已回收。已有 3000/5173/54329 环境未改动。
 
