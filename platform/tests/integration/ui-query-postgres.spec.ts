@@ -416,6 +416,7 @@ describe('business query UI routes against real PostgreSQL', () => {
       scenarioManifestHash: `sha256:${'c'.repeat(64)}`,
       publicationKind: 'verified',
       limitations: [],
+      body: { schemaVersion: 'answer-draft@1', blocks: [{ kind: 'text', text: 'A verified result.' }], claims: [], assertions: [] },
       publishedAt: FIXED_NOW,
     }
     await answerStore.record(

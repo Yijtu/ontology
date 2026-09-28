@@ -1,6 +1,7 @@
 import type {
   DraftClaim,
   EvidenceRecord,
+  ResourceRef,
   Rfc3339UtcTimestamp,
   Uuid,
   VerificationFinding,
@@ -29,10 +30,95 @@ export interface HardCheckOutcome {
   readonly supportedClaimIds: readonly Uuid[]
 }
 
+/** Canonical exact decimal form. It never rounds through IEEE-754. */
+function canonicalDecimal(value: string): string | undefined {
+  if (value.length === 0 || value.length > 64) return undefined
+  const match = /^(-?)(0|[1-9]\d*)(?:\.(\d+))?$/u.exec(value)
+  if (match === null) return undefined
+  const fraction = match[3] ?? ''
+  const allDigits = `${match[2]}${fraction}`.replace(/^0+/u, '')
+  if (allDigits === '') return '0'
+  const significant = allDigits.replace(/0+$/u, '')
+  const trailingZeros = allDigits.length - significant.length
+  const scale = fraction.length - trailingZeros
+  return `${match[1] === '-' ? '-' : ''}${significant}e${String(-scale)}`
+}
+
+function numericText(value: unknown): string | undefined {
+  if (typeof value === 'string') return canonicalDecimal(value)
+  if (typeof value === 'number' && Number.isFinite(value)) return canonicalDecimal(String(value))
+  return undefined
+}
+
+function sameNumericValue(observed: unknown, claimed: number | string): boolean {
+  const actual = numericText(observed)
+  const expected = numericText(claimed)
+  return actual !== undefined && expected !== undefined && actual === expected
+}
+
+function sameResourceRef(left: ResourceRef, right: ResourceRef): boolean {
+  return left.id === right.id && left.version === right.version && left.digest === right.digest && left.kind === right.kind
+}
+
+interface QueryCellLocation { readonly row: number; readonly column: number }
+
+function indexOf(pointerPart: string | undefined): number | undefined {
+  if (pointerPart === undefined || !/^(0|[1-9]\d*)$/u.test(pointerPart)) return undefined
+  const value = Number(pointerPart)
+  return Number.isSafeInteger(value) ? value : undefined
+}
+
+function queryCellLocation(pointer: string): QueryCellLocation | undefined {
+  const parts = pointer.split('/').slice(1).map((part) => part.replaceAll('~1', '/').replaceAll('~0', '~'))
+  if (parts.length !== 4 || parts[0] !== 'table' || parts[1] !== 'rows') return undefined
+  const row = indexOf(parts[2])
+  const column = indexOf(parts[3])
+  return row === undefined || column === undefined ? undefined : { row, column }
+}
+
+function sameRow(left: string, right: string): boolean {
+  const leftCell = queryCellLocation(left)
+  const rightCell = queryCellLocation(right)
+  return leftCell !== undefined && rightCell !== undefined && leftCell.row === rightCell.row
+}
+
+function fieldReferenceAt(payload: unknown, pointer: string): string | undefined {
+  const location = pointer.split('/').slice(1).map((part) => part.replaceAll('~1', '/').replaceAll('~0', '~'))
+  if (location.length !== 3 || location[0] !== 'table' || location[1] !== 'columns' || indexOf(location[2]) === undefined) return undefined
+  const column = resolveJsonPointer(payload, pointer)
+  if (!column.found || typeof column.value !== 'object' || column.value === null || Array.isArray(column.value)) return undefined
+  const row = column.value as Record<string, unknown>
+  return typeof row.semanticFieldRef === 'string' ? row.semanticFieldRef : typeof row.name === 'string' ? row.name : undefined
+}
+
+interface ResultFieldBinding {
+  readonly valuePointer: string
+  readonly fieldRefPointer?: string
+  readonly unitPointer?: string
+  readonly subjectPointer: string
+  readonly timePointer?: string
+}
+
+export function fieldBindingMatches(
+  payload: unknown,
+  binding: ResultFieldBinding,
+  predicate: string,
+): boolean {
+  if (binding.fieldRefPointer === undefined) return false
+  const cell = queryCellLocation(binding.valuePointer)
+  const field = fieldReferenceAt(payload, binding.fieldRefPointer)
+  const columnPointer = `/table/columns/${String(cell?.column ?? -1)}`
+  return cell !== undefined && field === predicate && binding.fieldRefPointer === columnPointer &&
+    (binding.unitPointer === undefined || binding.unitPointer === `${columnPointer}/unit`) &&
+    sameRow(binding.valuePointer, binding.subjectPointer) &&
+    (binding.timePointer === undefined || sameRow(binding.valuePointer, binding.timePointer))
+}
+
 export function checkClaims(
   claims: readonly DraftClaim[],
   resolved: ReadonlyMap<string, ResolvedEvidence>,
   now: Rfc3339UtcTimestamp,
+  requireFieldBinding = false,
 ): HardCheckOutcome {
   const findings: VerificationFinding[] = []
   const supportedClaimIds: Uuid[] = []
@@ -47,6 +133,15 @@ export function checkClaims(
       if (evidence === undefined) {
         claimFindings.push({
           code: 'evidence_not_found',
+          axis: 'hard',
+          claimId: claim.claimId,
+          evidenceRef: binding.evidenceRef,
+        })
+        continue
+      }
+      if (!sameResourceRef(evidence.record.evidenceRef, binding.evidenceRef)) {
+        claimFindings.push({
+          code: 'evidence_reference_mismatch',
           axis: 'hard',
           claimId: claim.claimId,
           evidenceRef: binding.evidenceRef,
@@ -74,8 +169,19 @@ export function checkClaims(
       }
 
       const payload = evidence.payload
+      if (requireFieldBinding && !fieldBindingMatches(payload, binding, claim.predicate)) {
+        claimFindings.push({
+          code: 'predicate_mismatch',
+          axis: 'hard',
+          claimId: claim.claimId,
+          field: 'predicate',
+          evidenceRef: binding.evidenceRef,
+          pointer: binding.fieldRefPointer ?? binding.valuePointer,
+          expected: claim.predicate,
+        })
+      }
       const value = resolveJsonPointer(payload, binding.valuePointer)
-      if (!value.found || typeof value.value !== 'number') {
+      if (!value.found || numericText(value.value) === undefined) {
         claimFindings.push({
           code: 'number_mismatch',
           axis: 'hard',
@@ -86,7 +192,7 @@ export function checkClaims(
           expected: 'absent',
           actual: String(claim.value.value),
         })
-      } else if (value.value !== claim.value.value) {
+      } else if (!sameNumericValue(value.value, claim.value.value)) {
         claimFindings.push({
           code: 'number_mismatch',
           axis: 'hard',
@@ -149,7 +255,17 @@ export function checkClaims(
         })
       }
 
-      if (binding.timePointer !== undefined && claim.time.asOf !== undefined) {
+      if (claim.time.asOf !== undefined && binding.timePointer === undefined) {
+        claimFindings.push({
+          code: 'time_mismatch',
+          axis: 'hard',
+          claimId: claim.claimId,
+          field: 'time',
+          evidenceRef: binding.evidenceRef,
+          expected: 'a bound source time pointer',
+          actual: claim.time.asOf,
+        })
+      } else if (binding.timePointer !== undefined && claim.time.asOf !== undefined) {
         const time = resolveJsonPointer(payload, binding.timePointer)
         if (!time.found || time.value !== claim.time.asOf) {
           claimFindings.push({

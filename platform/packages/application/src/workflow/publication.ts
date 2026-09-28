@@ -109,6 +109,8 @@ export class AnswerPublicationService implements AnswerPublisherPort {
       draft.blocks,
       draft.evidenceManifestHash,
       draft.claims ?? [],
+      draft.assertions ?? [],
+      ...(draft.schemaVersion === 'answer-draft@2' ? [{ schemaVersion: 'answer-draft@2' as const, limitations: draft.limitations }] : []),
     )
     if (recomputed !== draft.contentHash) {
       throw new PublicationRejectedError(
@@ -205,12 +207,9 @@ export class AnswerPublicationService implements AnswerPublisherPort {
       )
     }
 
-    const limitations = [
-      ...draft.limitations,
-      ...(publicationKind === 'history_limited'
-        ? [`history_limited_as_of:${validity.asOf ?? ''}`, ...validity.details]
-        : []),
-    ]
+    // The publication metadata carries an explicit history `asOf`; changing the verified
+    // limitations here would create a body that no longer matches the draft hash.
+    const limitations = [...draft.limitations]
     const answer: PublishedAnswer = {
       answerId: this.#newId(),
       runId: grant.runId,
@@ -222,6 +221,12 @@ export class AnswerPublicationService implements AnswerPublisherPort {
       publicationKind,
       ...(publicationKind === 'history_limited' ? { asOf: validity.asOf } : {}),
       limitations,
+      body: {
+        schemaVersion: draft.schemaVersion ?? 'answer-draft@1',
+        blocks: structuredClone(draft.blocks),
+        claims: structuredClone(draft.claims ?? []),
+        assertions: structuredClone(draft.assertions ?? []),
+      },
       publishedAt: this.#now(),
     }
 

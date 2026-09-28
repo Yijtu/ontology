@@ -26,6 +26,14 @@ function clone<T>(value: T): T {
   return structuredClone(value)
 }
 
+function canonical(value: unknown): string {
+  if (Array.isArray(value)) return `[${value.map(canonical).join(',')}]`
+  if (typeof value === 'object' && value !== null) {
+    return `{${Object.entries(value).sort(([left], [right]) => left.localeCompare(right)).map(([key, part]) => `${JSON.stringify(key)}:${canonical(part)}`).join(',')}}`
+  }
+  return JSON.stringify(value) ?? 'undefined'
+}
+
 /**
  * Reference answer store for unit tests and local composition. It mirrors the real adapter's
  * atomicity contract: the run state and revision are re-read in the same call as the insert,
@@ -41,10 +49,16 @@ export class InMemoryAnswerStore implements AnswerStorePort {
   }
 
   async record(input: RecordAnswerInput, ctx: ToolContext): Promise<PublishedAnswer> {
+    if (input.answer.body === undefined) throw new AnswerStoreError('ANSWER_BODY_REQUIRED', 'new answer publications must persist the verified body')
     const scopeRef = scopeOf(ctx)
     const key = `${scopeRef.tenantId}\u0000${scopeRef.spaceId}\u0000${input.answer.runId}`
     const existing = this.#answers.get(key)
-    if (existing !== undefined) return clone(existing)
+    if (existing !== undefined) {
+      if (existing.contentHash !== input.answer.contentHash || existing.draftId !== input.answer.draftId || canonical(existing.body) !== canonical(input.answer.body)) {
+        throw new AnswerStoreError('ANSWER_IDEMPOTENCY_CONFLICT', `run ${input.answer.runId} already has a different immutable answer`)
+      }
+      return clone(existing)
+    }
 
     const run = await this.#runs.getRun(scopeRef, input.answer.runId, ctx)
     if (run === undefined) {

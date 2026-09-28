@@ -5,6 +5,7 @@ import { DraftVerificationService } from '@ontology/application'
 import type {
   DecisionPort,
   EvidenceStorePort,
+  VerifiedAssertion,
   VerificationPolicy,
 } from '@ontology/contracts'
 import { sha256DigestOf } from '@ontology/core'
@@ -147,6 +148,214 @@ describe('structured claim binding (D7.4, US-021)', () => {
       expect(explanation?.templateId).toContain(injection.code)
     })
   }
+})
+
+describe('V2 verified answer body and exact field binding', () => {
+  const queryPayload = {
+    resultKind: 'table',
+    table: {
+      columns: [
+        { name: 'operating_hours', type: 'decimal', unit: 'h', semanticFieldRef: 'operating_hours' },
+        { name: 'asset_id', type: 'string', semanticFieldRef: 'asset_id' },
+        { name: 'observed_at', type: 'timestamp', semanticFieldRef: 'observed_at' },
+      ],
+      rows: [['100.000000000000000001', 'I-04', RESULT_PAYLOAD.time]],
+    },
+  }
+
+  it('verifies a high precision decimal string and rejects unsupported visible prose even with a fresh hash', async () => {
+    const ctx = ownerContext()
+    const evidence = new InMemoryVerificationEvidence()
+    const artifacts = new InMemoryVerificationArtifacts()
+    const { ref, resultDigest } = await registerResult({ evidence, artifacts, payload: queryPayload })
+    const claim = buildClaim({
+      evidenceRef: ref,
+      resultDigest,
+      predicate: 'operating_hours',
+      subject: 'I-04',
+      value: '100.000000000000000001',
+      unit: 'h',
+      valuePointer: '/table/rows/0/0',
+      unitPointer: '/table/columns/0/unit',
+      subjectPointer: '/table/rows/0/1',
+      fieldRefPointer: '/table/columns/0',
+      timePointer: '/table/rows/0/2',
+    })
+    const manifest = buildInputManifest([ref])
+    const draft = buildDraft({
+      evidenceManifestHash: manifest.digest,
+      claims: [claim],
+      schemaVersion: 'answer-draft@2',
+      blocks: [{ kind: 'claim', claimId: claim.claimId, text: 'I-04 has 1000 h.' }],
+    })
+    const { service } = buildService({
+      evidence,
+      artifacts,
+      policy: verificationPolicy({ semanticReview: 'disabled' }),
+    })
+
+    const result = await service.verify({ runId: RUN_ID, draft, inputManifest: manifest }, ctx)
+
+    expect(result.verdict).toBe('fail')
+    expect(result.failedChecks).toEqual(['visible_statement_unbound'])
+    expect(result.supportedClaimIds).toEqual([claim.claimId])
+  })
+
+  it('compares decimal strings exactly rather than through Number coercion', async () => {
+    const ctx = ownerContext()
+    const evidence = new InMemoryVerificationEvidence()
+    const artifacts = new InMemoryVerificationArtifacts()
+    const { ref, resultDigest } = await registerResult({ evidence, artifacts, payload: queryPayload })
+    const claim = buildClaim({
+      evidenceRef: ref,
+      resultDigest,
+      predicate: 'operating_hours',
+      subject: 'I-04',
+      value: '100.000000000000000002',
+      unit: 'h',
+      valuePointer: '/table/rows/0/0',
+      unitPointer: '/table/columns/0/unit',
+      subjectPointer: '/table/rows/0/1',
+      fieldRefPointer: '/table/columns/0',
+      timePointer: '/table/rows/0/2',
+    })
+    const manifest = buildInputManifest([ref])
+    const draft = buildDraft({
+      evidenceManifestHash: manifest.digest,
+      claims: [claim],
+      schemaVersion: 'answer-draft@2',
+      blocks: [{ kind: 'claim', claimId: claim.claimId }],
+    })
+    const { service } = buildService({ evidence, artifacts, policy: verificationPolicy({ semanticReview: 'disabled' }) })
+
+    const result = await service.verify({ runId: RUN_ID, draft, inputManifest: manifest }, ctx)
+
+    expect(result.verdict).toBe('fail')
+    expect(result.failedChecks).toContain('number_mismatch')
+  })
+
+  it('rejects a business assertion hidden in a V2 limitations string', async () => {
+    const ctx = ownerContext()
+    const evidence = new InMemoryVerificationEvidence()
+    const artifacts = new InMemoryVerificationArtifacts()
+    const { ref, resultDigest } = await registerResult({ evidence, artifacts, payload: queryPayload })
+    const claim = buildClaim({
+      evidenceRef: ref,
+      resultDigest,
+      predicate: 'operating_hours',
+      subject: 'I-04',
+      value: '100.000000000000000001',
+      unit: 'h',
+      valuePointer: '/table/rows/0/0',
+      unitPointer: '/table/columns/0/unit',
+      subjectPointer: '/table/rows/0/1',
+      fieldRefPointer: '/table/columns/0',
+      timePointer: '/table/rows/0/2',
+    })
+    const manifest = buildInputManifest([ref])
+    const draft = buildDraft({
+      evidenceManifestHash: manifest.digest,
+      claims: [claim],
+      schemaVersion: 'answer-draft@2',
+      blocks: [{ kind: 'claim', claimId: claim.claimId }],
+      limitations: ['I-04 does not need maintenance.'],
+    })
+    const { service } = buildService({ evidence, artifacts, policy: verificationPolicy({ semanticReview: 'disabled' }) })
+
+    const result = await service.verify({ runId: RUN_ID, draft, inputManifest: manifest }, ctx)
+
+    expect(result.verdict).toBe('fail')
+    expect(result.failedChecks).toEqual(['unverified_limitation'])
+    expect(result.supportedClaimIds).toEqual([claim.claimId])
+  })
+
+  it('rejects a predicate pointer to a different field even when both boolean values match', async () => {
+    const ctx = ownerContext()
+    const evidence = new InMemoryVerificationEvidence()
+    const artifacts = new InMemoryVerificationArtifacts()
+    const payload = {
+      resultKind: 'table',
+      table: {
+        columns: [
+          { name: 'inspection_due', type: 'boolean', semanticFieldRef: 'inspection_due' },
+          { name: 'inspection_exempt', type: 'boolean', semanticFieldRef: 'inspection_exempt' },
+          { name: 'facility_id', type: 'string', semanticFieldRef: 'facility_id' },
+        ],
+        rows: [[true, true, 'T-02']],
+      },
+    }
+    const { ref, resultDigest } = await registerResult({ evidence, artifacts, payload })
+    const assertionId = 'aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaa10'
+    const assertion: VerifiedAssertion = {
+      assertionId,
+      kind: 'boolean',
+      subject: 'T-02',
+      predicate: 'inspection_due',
+      value: true,
+      references: [{
+        evidenceRef: ref,
+        resultDigest,
+        valuePointer: '/table/rows/0/0',
+        subjectPointer: '/table/rows/0/2',
+        fieldRefPointer: '/table/columns/1',
+      }],
+    }
+    const manifest = buildInputManifest([ref])
+    const draft = buildDraft({
+      evidenceManifestHash: manifest.digest,
+      claims: [],
+      assertions: [assertion],
+      schemaVersion: 'answer-draft@2',
+      blocks: [{ kind: 'assertion', assertionId }],
+    })
+    const { service } = buildService({ evidence, artifacts, policy: verificationPolicy({ semanticReview: 'disabled' }) })
+
+    const result = await service.verify({ runId: RUN_ID, draft, inputManifest: manifest }, ctx)
+
+    expect(result.verdict).toBe('fail')
+    expect(result.failedChecks).toContain('predicate_mismatch')
+    expect(result.supportedAssertionIds).toEqual([])
+  })
+
+  it('requires a source time pointer when a claim states an as-of time', async () => {
+    const ctx = ownerContext()
+    const evidence = new InMemoryVerificationEvidence()
+    const artifacts = new InMemoryVerificationArtifacts()
+    const { ref, resultDigest } = await registerResult({ evidence, artifacts, payload: queryPayload })
+    const claim = buildClaim({
+      evidenceRef: ref,
+      resultDigest,
+      predicate: 'operating_hours',
+      subject: 'I-04',
+      value: '100.000000000000000001',
+      unit: 'h',
+      valuePointer: '/table/rows/0/0',
+      unitPointer: '/table/columns/0/unit',
+      subjectPointer: '/table/rows/0/1',
+      fieldRefPointer: '/table/columns/0',
+      references: [{
+        evidenceRef: ref,
+        resultDigest,
+        valuePointer: '/table/rows/0/0',
+        unitPointer: '/table/columns/0/unit',
+        subjectPointer: '/table/rows/0/1',
+        fieldRefPointer: '/table/columns/0',
+      }],
+    })
+    const manifest = buildInputManifest([ref])
+    const draft = buildDraft({
+      evidenceManifestHash: manifest.digest,
+      claims: [claim],
+      schemaVersion: 'answer-draft@2',
+      blocks: [{ kind: 'claim', claimId: claim.claimId }],
+    })
+    const { service } = buildService({ evidence, artifacts, policy: verificationPolicy({ semanticReview: 'disabled' }) })
+
+    const result = await service.verify({ runId: RUN_ID, draft, inputManifest: manifest }, ctx)
+
+    expect(result.verdict).toBe('fail')
+    expect(result.failedChecks).toContain('time_mismatch')
+  })
 })
 
 describe('hard failure outranks a high probabilistic score (D7.4)', () => {

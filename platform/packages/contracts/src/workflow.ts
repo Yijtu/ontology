@@ -22,6 +22,7 @@ import type { ToolContext } from './trusted'
 import type {
   ClaimExplanation,
   DraftClaim,
+  VerifiedAssertion,
   VerificationFinding,
   VerificationFindingAxis,
 } from './verification'
@@ -88,6 +89,8 @@ export interface WorkflowInputManifest {
 /** Mutable, persisted workflow coordination counters (never a second event ledger). */
 export interface WorkflowRunState {
   readonly runId: Uuid
+  /** Monotonic CAS token for updates to the mutable controller state. */
+  readonly revision: RevisionString
   readonly draftAttempts: number
   readonly recheckCount: number
   readonly staleEntryIds: readonly Uuid[]
@@ -106,6 +109,8 @@ export interface WorkflowRunState {
 export interface AnswerDraft {
   readonly draftId: Uuid
   readonly runId: Uuid
+  /** V2 hashes bind assertions and limitations as well as blocks and numeric claims. */
+  readonly schemaVersion?: 'answer-draft@2'
   readonly blocks: readonly unknown[]
   /**
    * The structured, result-bound claims of the draft (D7.4). A draft written by the
@@ -113,6 +118,7 @@ export interface AnswerDraft {
    * revision of any claim produces a new draft hash and invalidates an older verdict.
    */
   readonly claims?: readonly DraftClaim[]
+  readonly assertions?: readonly VerifiedAssertion[]
   readonly evidenceManifestHash: Sha256Digest
   readonly contentHash: Sha256Digest
   readonly limitations: readonly string[]
@@ -213,6 +219,7 @@ export interface VerificationResult {
   readonly verifiedAt: Rfc3339UtcTimestamp
   /** Claim ids that passed every hard check (D7.4 `supportedClaims`). */
   readonly supportedClaimIds?: readonly Uuid[]
+  readonly supportedAssertionIds?: readonly Uuid[]
   /** Evidence ids a claim referenced but the verifier could not resolve. */
   readonly missingEvidence?: readonly Uuid[]
   /** Located hard/semantic/policy findings; empty on a clean pass. */
@@ -265,6 +272,14 @@ export interface PublicationGrant {
  */
 export type PublicationKind = 'verified' | 'history_limited'
 
+/** Immutable, verified body stored with a newly published answer. */
+export interface PublishedAnswerBody {
+  readonly schemaVersion: 'answer-draft@1' | 'answer-draft@2'
+  readonly blocks: readonly unknown[]
+  readonly claims: readonly DraftClaim[]
+  readonly assertions: readonly VerifiedAssertion[]
+}
+
 /**
  * The final answer version. Its id binds the exact `draftHash`, `evidenceManifestHash`,
  * `verificationId` and scenario manifest the controller published, so a mismatched binding
@@ -284,6 +299,9 @@ export interface PublishedAnswer {
   readonly asOf?: Rfc3339UtcTimestamp
   /** Explicit gaps/limitations the verified content carries; never hidden by rendering. */
   readonly limitations: readonly string[]
+  /** Absent only for legacy metadata-only rows; readers must display that body is unavailable. */
+  readonly body?: PublishedAnswerBody
+  readonly bodyUnavailableReason?: 'legacy_metadata_only'
   readonly publishedAt: Rfc3339UtcTimestamp
 }
 
@@ -315,6 +333,8 @@ export interface RecordAnswerInput {
 export type AnswerStoreErrorCode =
   | 'SCOPE_MISMATCH'
   | 'RUN_NOT_PUBLISHABLE'
+  | 'ANSWER_BODY_REQUIRED'
+  | 'ANSWER_IDEMPOTENCY_CONFLICT'
   | 'ANSWER_PERSIST_FAILED'
 
 export class AnswerStoreError extends Error {
@@ -475,7 +495,7 @@ export interface WorkflowManifestStore {
   getRunManifest(runId: Uuid, ctx: ToolContext): Promise<RunManifest | undefined>
   saveInputManifest(manifest: WorkflowInputManifest, ctx: ToolContext): Promise<WorkflowInputManifest>
   getInputManifest(manifestId: Uuid, ctx: ToolContext): Promise<WorkflowInputManifest | undefined>
-  saveRunState(state: WorkflowRunState, ctx: ToolContext): Promise<WorkflowRunState>
+  saveRunState(state: WorkflowRunState, expectedRevision: RevisionString, ctx: ToolContext): Promise<WorkflowRunState>
   getRunState(runId: Uuid, ctx: ToolContext): Promise<WorkflowRunState | undefined>
 }
 

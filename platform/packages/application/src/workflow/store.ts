@@ -53,8 +53,20 @@ export class InMemoryWorkflowStore implements WorkflowManifestStore {
     manifest: WorkflowInputManifest,
     ctx: ToolContext,
   ): Promise<WorkflowInputManifest> {
-    this.#inputManifests.set(`${scopePrefix(ctx)}${manifest.manifestId}`, clone(manifest))
-    return clone(manifest)
+    const key = `${scopePrefix(ctx)}${manifest.manifestId}`
+    const existing = this.#inputManifests.get(key)
+    if (existing === undefined) {
+      if (manifest.revision !== '1') throw new WorkflowControllerError('VERSION_CONFLICT', 'input manifest must start at revision 1')
+      this.#inputManifests.set(key, clone(manifest))
+      return clone(manifest)
+    }
+    const nextRevision = (BigInt(existing.revision) + 1n).toString()
+    if (manifest.revision === nextRevision && manifest.runId === existing.runId) {
+      this.#inputManifests.set(key, clone(manifest))
+      return clone(manifest)
+    }
+    if (manifest.revision === existing.revision && JSON.stringify(manifest) === JSON.stringify(existing)) return clone(existing)
+    throw new WorkflowControllerError('VERSION_CONFLICT', `input manifest ${manifest.manifestId} revision changed`)
   }
 
   async getInputManifest(manifestId: Uuid, ctx: ToolContext): Promise<WorkflowInputManifest | undefined> {
@@ -62,8 +74,15 @@ export class InMemoryWorkflowStore implements WorkflowManifestStore {
     return found === undefined ? undefined : clone(found)
   }
 
-  async saveRunState(state: WorkflowRunState, ctx: ToolContext): Promise<WorkflowRunState> {
-    this.#runStates.set(`${scopePrefix(ctx)}${state.runId}`, clone(state))
+  async saveRunState(state: WorkflowRunState, expectedRevision: string, ctx: ToolContext): Promise<WorkflowRunState> {
+    const key = `${scopePrefix(ctx)}${state.runId}`
+    const existing = this.#runStates.get(key)
+    const actualRevision = existing?.revision ?? '0'
+    if (actualRevision !== expectedRevision || state.revision !== (BigInt(expectedRevision) + 1n).toString()) {
+      if (existing !== undefined && existing.revision === state.revision && JSON.stringify(existing) === JSON.stringify(state)) return clone(existing)
+      throw new WorkflowControllerError('VERSION_CONFLICT', `workflow state ${state.runId} revision changed`)
+    }
+    this.#runStates.set(key, clone(state))
     return clone(state)
   }
 

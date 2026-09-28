@@ -45,7 +45,7 @@ export function verificationPolicy(overrides?: Partial<VerificationPolicy>): Ver
 /** One archived tool result payload with the fields a claim binds to. */
 export interface ResultPayload {
   readonly subject: string
-  readonly value: number
+  readonly value: number | string
   readonly unit: string
   readonly time: string
 }
@@ -169,7 +169,8 @@ export function buildEvidence(input: {
 export function buildClaim(overrides?: {
   readonly claimId?: Uuid
   readonly subject?: string
-  readonly value?: number
+  readonly predicate?: string
+  readonly value?: number | string
   readonly unit?: string
   readonly asOf?: string
   readonly evidenceRef?: ResourceRef
@@ -177,6 +178,7 @@ export function buildClaim(overrides?: {
   readonly valuePointer?: string
   readonly unitPointer?: string
   readonly subjectPointer?: string
+  readonly fieldRefPointer?: string
   readonly timePointer?: string
   readonly references?: DraftClaim['references']
 }): DraftClaim {
@@ -185,7 +187,7 @@ export function buildClaim(overrides?: {
   return {
     claimId: overrides?.claimId ?? randomUUID(),
     subject: overrides?.subject ?? RESULT_PAYLOAD.subject,
-    predicate: 'forecast_energy',
+    predicate: overrides?.predicate ?? 'forecast_energy',
     value: { value: overrides?.value ?? RESULT_PAYLOAD.value, unit: overrides?.unit ?? RESULT_PAYLOAD.unit },
     time: { asOf: overrides?.asOf ?? RESULT_PAYLOAD.time },
     kind: 'observation',
@@ -198,6 +200,7 @@ export function buildClaim(overrides?: {
           valuePointer: overrides?.valuePointer ?? '/value',
           unitPointer: overrides?.unitPointer ?? '/unit',
           subjectPointer: overrides?.subjectPointer ?? '/subject',
+          ...(overrides?.fieldRefPointer === undefined ? {} : { fieldRefPointer: overrides.fieldRefPointer }),
           timePointer: overrides?.timePointer ?? '/time',
         },
       ],
@@ -209,16 +212,30 @@ export function buildDraft(input: {
   readonly claims: readonly DraftClaim[]
   readonly draftId?: Uuid
   readonly blocks?: readonly unknown[]
+  readonly schemaVersion?: AnswerDraft['schemaVersion']
+  readonly assertions?: AnswerDraft['assertions']
+  readonly limitations?: readonly string[]
 }): AnswerDraft {
   const blocks = input.blocks ?? [{ kind: 'summary' }]
+  const limitations = input.limitations ?? []
+  const assertions = input.assertions ?? []
   return {
     draftId: input.draftId ?? randomUUID(),
     runId: RUN_ID,
+    ...(input.schemaVersion === undefined ? {} : { schemaVersion: input.schemaVersion }),
     blocks,
     claims: input.claims,
+    ...(input.assertions === undefined ? {} : { assertions }),
     evidenceManifestHash: input.evidenceManifestHash,
-    contentHash: answerDraftContentHash(RUN_ID, blocks, input.evidenceManifestHash, input.claims),
-    limitations: [],
+    contentHash: answerDraftContentHash(
+      RUN_ID,
+      blocks,
+      input.evidenceManifestHash,
+      input.claims,
+      assertions,
+      ...(input.schemaVersion === 'answer-draft@2' ? [{ schemaVersion: 'answer-draft@2' as const, limitations }] : []),
+    ),
+    limitations,
     producedInPhase: 'drafting',
     createdAt: NOW,
   }

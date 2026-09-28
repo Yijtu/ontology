@@ -24,7 +24,7 @@ import type {
   WorkflowInputManifest,
   WorkflowRunState,
 } from '@ontology/contracts'
-import { DEFAULT_WORKFLOW_LIMITS, DRAFT_WRITER_REQUEST_VERSION } from '@ontology/contracts'
+import { createToolContext, DEFAULT_WORKFLOW_LIMITS, DRAFT_WRITER_REQUEST_VERSION, isToolContext } from '@ontology/contracts'
 import { inputManifestDigest, scenarioManifestHash } from './canonical'
 import { sha256DigestOf } from '../profiles/canonical'
 import { PublicationRejectedError, WorkflowControllerError } from './errors'
@@ -83,7 +83,7 @@ export class WorkflowController {
 
   /** Create a run, open its one ledger/manifest and drive it to a stable phase. */
   async startRun(input: StartWorkflowInput, ctx: ToolContext): Promise<WorkflowView> {
-    await this.#deps.runs.createRun(
+    const created = await this.#deps.runs.createRun(
       {
         runId: input.runId,
         profileRef: input.profileRef,
@@ -95,23 +95,25 @@ export class WorkflowController {
       ctx,
     )
 
-    const existing = await this.#deps.manifests.getRunManifest(input.runId, ctx)
+    const runId = created.runId
+    const runContext = contextForCanonicalRun(ctx, runId)
+    const existing = await this.#deps.manifests.getRunManifest(runId, runContext)
     if (existing !== undefined) {
       // Idempotent re-entry: the manifest is immutable, so a second call never re-opens
       // the run or resets its budget.
-      return this.#view(input.runId, ctx)
+      return this.#view(runId, runContext)
     }
 
-    const run = await this.#deps.phase.requireRun(input.runId, ctx)
-    const inputManifest = await this.#createInputManifest(run, ctx)
+    const run = await this.#deps.phase.requireRun(runId, runContext)
+    const inputManifest = await this.#createInputManifest(run, runContext)
     const ledger = await this.#deps.budget.openLedger(
       {
         ledgerId: this.#newId(),
         kind: 'run',
-        runId: input.runId,
+        runId,
         ...(input.budgetOverrides === undefined ? {} : { overrideLimits: input.budgetOverrides }),
       },
-      ctx,
+      runContext,
     )
     const manifest = await this.#deps.manifests.saveRunManifest(
       {
@@ -126,9 +128,9 @@ export class WorkflowController {
         inputManifestId: inputManifest.manifestId,
         createdAt: this.#now(),
       },
-      ctx,
+      runContext,
     )
-    return this.#drive(manifest.runId, ctx)
+    return this.#drive(manifest.runId, runContext)
   }
 
   /**
@@ -152,12 +154,11 @@ export class WorkflowController {
     const inputManifest = await this.#requireInputManifest(manifest.inputManifestId, ctx)
     const validity = await this.#deps.validity.validate(inputManifest.entries, ctx)
     const state = await this.#requireRunState(run.runId, ctx)
-    await this.#deps.manifests.saveRunState(
+    await this.#saveRunState(
       {
         ...state,
         recheckCount: state.recheckCount + 1,
         staleEntryIds: validity.staleEntries.map((entry) => entry.entryId),
-        updatedAt: this.#now(),
       },
       ctx,
     )
@@ -456,8 +457,8 @@ export class WorkflowController {
         return this.#limitedFallback(runId, lastFailure, 'draft repair budget exhausted', ctx)
       }
       const attempt = state.draftAttempts + 1
-      await this.#deps.manifests.saveRunState(
-        { ...state, draftAttempts: attempt, updatedAt: this.#now() },
+      await this.#saveRunState(
+        { ...state, draftAttempts: attempt },
         ctx,
       )
 
@@ -641,8 +642,8 @@ export class WorkflowController {
       await this.#advance(run, 'blocked', { cancelReason: reason }, ctx)
       return this.#view(runId, ctx)
     }
-    await this.#deps.manifests.saveRunState(
-      { ...state, limitedResultAttempted: true, updatedAt: this.#now() },
+    await this.#saveRunState(
+      { ...state, limitedResultAttempted: true },
       ctx,
     )
 
@@ -850,8 +851,8 @@ export class WorkflowController {
   async #markUsageUnknown(runId: Uuid, ctx: ToolContext): Promise<void> {
     const state = await this.#requireRunState(runId, ctx)
     if (state.usageUnknown) return
-    await this.#deps.manifests.saveRunState(
-      { ...state, usageUnknown: true, updatedAt: this.#now() },
+    await this.#saveRunState(
+      { ...state, usageUnknown: true },
       ctx,
     )
   }
@@ -880,6 +881,7 @@ export class WorkflowController {
     if (state !== undefined) return state
     return {
       runId,
+      revision: '0',
       draftAttempts: 0,
       recheckCount: 0,
       staleEntryIds: [],
@@ -887,6 +889,16 @@ export class WorkflowController {
       limitedResultAttempted: false,
       updatedAt: this.#now(),
     }
+  }
+
+  async #saveRunState(state: WorkflowRunState, ctx: ToolContext): Promise<WorkflowRunState> {
+    const expectedRevision = state.revision
+    const revision = (BigInt(expectedRevision) + 1n).toString()
+    return this.#deps.manifests.saveRunState(
+      { ...state, revision, updatedAt: this.#now() },
+      expectedRevision,
+      ctx,
+    )
   }
 
   async #view(runId: Uuid, ctx: ToolContext): Promise<WorkflowView> {
@@ -920,6 +932,13 @@ export class WorkflowController {
       ...(answer === undefined ? {} : { answer }),
     }
   }
+}
+
+function contextForCanonicalRun(ctx: ToolContext, runId: Uuid): ToolContext {
+  if (!isToolContext(ctx)) {
+    throw new WorkflowControllerError('SCOPE_MISMATCH', 'a host-minted trusted tool context is required')
+  }
+  return createToolContext({ ...ctx, runId })
 }
 
 function toConfirmedContext(run: RunRecord): ConfirmedContext {

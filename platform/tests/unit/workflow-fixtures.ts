@@ -218,6 +218,7 @@ export class RecordingRuntimeSelector implements RuntimeSelectorPort {
 /** Returns a fixed restricted closure built from the host-injected gateway and ports. */
 export class StaticCapabilityFactory implements RuntimeCapabilityFactoryPort {
   readonly calls: Uuid[] = []
+  readonly contextRunIds: Uuid[] = []
   readonly #gateway: ToolGateway
   readonly #generation: GenerationPort
   readonly #decision: DecisionPort
@@ -235,8 +236,9 @@ export class StaticCapabilityFactory implements RuntimeCapabilityFactoryPort {
     this.#decision = input.decision ?? forbiddenDecision
   }
 
-  forRun(context: { readonly runId: Uuid }): Promise<RuntimeCapabilitySet> {
+  forRun(context: { readonly runId: Uuid }, ctx: ToolContext): Promise<RuntimeCapabilitySet> {
     this.calls.push(context.runId)
+    this.contextRunIds.push(ctx.runId)
     return Promise.resolve({
       gateway: this.#gateway,
       generation: this.#generation,

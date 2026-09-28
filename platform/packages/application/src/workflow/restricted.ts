@@ -187,6 +187,17 @@ export class RestrictedAnswerPublisher implements AnswerPublisherPort {
         'the publication grant does not match the draft being published',
       )
     }
+    const recomputed = answerDraftContentHash(
+      draft.runId,
+      draft.blocks,
+      draft.evidenceManifestHash,
+      draft.claims ?? [],
+      draft.assertions ?? [],
+      ...(draft.schemaVersion === 'answer-draft@2' ? [{ schemaVersion: 'answer-draft@2' as const, limitations: draft.limitations }] : []),
+    )
+    if (recomputed !== draft.contentHash) {
+      throw new PublicationRejectedError('draft_hash_mismatch', 'draft body changed after verification')
+    }
     if (
       grant.verificationId !== verification.verificationId ||
       grant.evidenceManifestHash !== verification.evidenceManifestHash ||
@@ -240,6 +251,12 @@ export class RestrictedAnswerPublisher implements AnswerPublisherPort {
       scenarioManifestHash: grant.scenarioManifestHash,
       publicationKind: 'verified',
       limitations: [...draft.limitations],
+      body: {
+        schemaVersion: draft.schemaVersion ?? 'answer-draft@1',
+        blocks: structuredClone(draft.blocks),
+        claims: structuredClone(draft.claims ?? []),
+        assertions: structuredClone(draft.assertions ?? []),
+      },
       publishedAt: this.#now(),
     }
     this.#answers.set(`${scopeOf(ctx)}\u0000${grant.runId}`, answer)

@@ -99,6 +99,24 @@ describe('WorkflowController phase transitions', () => {
     expect(harness.selector.selected).toHaveLength(1)
     expect(harness.runtime.startCalls).toHaveLength(1)
   })
+
+  it('uses the existing canonical run id and trusted context on an idempotent retry', async () => {
+    const harness = buildWorkflowHarness({ runtime: new ScriptedRuntime({ scripts: [completedScript()] }) })
+    const original = startInput()
+    await harness.service.createRun(original, OWNER)
+    const temporaryRunId = 'bbbbbbbb-bbbb-4bbb-8bbb-bbbbbbbbbbbb'
+
+    const view = await harness.controller.startRun(
+      startInput({ runId: temporaryRunId }),
+      ownerContext(temporaryRunId),
+    )
+
+    expect(view.runId).toBe(RUN_A)
+    expect(view.state).toBe('published')
+    expect(harness.capabilities.calls).toEqual([RUN_A])
+    expect(harness.capabilities.contextRunIds).toEqual([RUN_A])
+    expect(harness.budget.openLedgerCalls).toHaveLength(1)
+  })
 })
 
 describe('clarification resume re-verification', () => {
