@@ -2,7 +2,7 @@
 
 本轮基线：`main@51c8cb4`；实施分支：`feat/main-core-product-20260928`。本文件记录根代理的独立复核，不代替实施 SPEC 的最终验收矩阵。
 
-截至本检查点，最新已提交并推送实现为 `5e6744d`，包括本体属性投影/物化、事实查询桥、实际语义核验状态、持久正文及工作台发布交互。C3 的默认可运行宿主、完整恢复接线，C4 的两行业正常导入至问答与完整页面仍在实现。不得将下面的模块测试写成产品已交付。
+截至本检查点，远端最新提交为 `2e7a044`，新增详细 README、行业原始资产与状态引用存储测试；上一实现批次 `5e6744d` 包括本体属性投影/物化、事实查询桥、实际语义核验状态、持久正文及工作台发布交互。C3 的默认宿主、完整恢复接线，C4 的两行业正常导入至问答与完整页面仍在实现。不得将下面的模块测试写成产品已交付。
 
 ## 已独立验证的检查点
 
@@ -30,6 +30,10 @@
 | 严格已发布事实绑定、默认事实正文与行业原始资产 | 3 文件 / 11 项通过，2.51s，exit 0 | strict fact 字段 4、draft 2、assets 5；真实本地 parser/native ExtractionPipeline 产待审候选，政策为受控模型响应；mapping/schema/摘要及 6000/5999 分钟阈值检查，未宣称实际数据适配器转换或正常发布已通过 |
 | 新模块加入后的全 unit/contracts/UI 项目 | 115 文件中 114 通过；1,381 项中 1,380 通过，45.08s，exit 1 | 唯一失败为 semantic-provenance 的实际支撑来源正例，已分配修复；不是全量回归通过。单独 architecture 1 文件 / 8 项通过；全 lint 发现同一 source 单测的 8 个未使用参数，待修复 |
 | 056 实际 PostgreSQL 状态引用授权 | 1 文件 / 3 项通过，10.40s，exit 0 | 非 superuser/NOBYPASSRLS 的应用角色、RunService 正常创建 run、scope/run/profile/fullRef、幂等/冲突、取消后拒绝、无 scope 看不到行、`{}` 触发 SQLSTATE 23514；没有模型调用或预置答案 |
+| 修订后的支撑来源模块 | 单元与架构 2 文件 / 16 项通过；根 evidenceRef/payloadRef 接口修订后单元 8 项通过 | reader 必须提供不可变、唯一实例与真实 premise group；缺 reader、模糊、未知或冲突不再用当前 publication 头补来源。模块 reader 为夹具，正式 reader 尚未接入 |
+| 支撑来源原有 PostgreSQL/HTTP 正例回归 | 2 文件 / 8 项中 4 通过、4 失败，24.45s，exit 1 | 默认 composition 尚未注入 immutable reader，premiseGroups 为空、原分页/truncation 正例失败。保留正例，须补真实归档 reader 与完整性状态；未标最终来源链完成 |
+| 行业 loader 直接调用 | 两行业各 3 raw sources、2 physical mappings 成功读取 | 首次调用发现 policy 被错误要求属于 rawSources，已修正独立 policy 字段；只验证加载，未 seed、未执行数据库 mapping、未启动完整宿主 |
+| 行业 loader 完整边界模块复核 | loader + assets 2 文件 / 7 项通过，3.20s，exit 0；两个 loader 文件 ESLint 通过 | 默认 index、trusted scope 重绑定、exact refs/mapping 与路径越界；owner 全平台 TypeScript 通过。完整启动/注册/数据查询不属于 loader 的完成范围 |
 
 上表是不同时间的聚焦检查点，存在覆盖重叠；不相加为一次全量通过数量。实际 prepare 检查只覆盖当时已有迁移至 `053`，不包含后来新增的 `054`/`055`/`056`。本次生成的临时 env、验证脚本、容器和卷已回收。已有 3000/5173/54329 环境未改动。
 
@@ -76,4 +80,4 @@ pnpm exec vitest run tests/integration/incremental-materialization-postgres.spec
 
 真实 HTTP/UI 从原始资料导入开始的完整链、两行业和异构 mapping、配置实际发布/生效、单次/小计划/有界 loop、取消/澄清/重启、正文与来源、修改/撤回后的当前与历史行为。最后执行适用 lint/typecheck/contracts/boundaries、完整 Vitest、web build 和全部浏览器 E2E，并在实施 SPEC 填入实际证据与未验证项。
 
-启动脚本的纯配置测试和真实 prepare 已有证据；`core-main.ts` 与 API/Worker/Web readiness 尚未验证。真实外部模型质量、客户数据质量和真实设备均没有据此验收。
+启动脚本的纯配置测试和真实 prepare 已有证据；`core-main.ts` 已出现数据库 health 和行业 metadata 入口，但正式 run/worker 仍在接线，完整 API/Worker/Web readiness 尚未验证。旧完整 TypeScript 通过记录早于新 loader；loader owner 的全平台检查已通过，不能据此标整个新宿主与最终 Web/acceptance 组合已验收。真实外部模型质量、客户数据质量和真实设备均没有据此验收。
