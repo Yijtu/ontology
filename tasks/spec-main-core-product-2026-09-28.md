@@ -210,3 +210,11 @@ C1 确认了 V2 body blocks 只能引用通过硬核验的 claim/assertion，正
 C1 对应 A12 的模块和 publication 测试、A13 的幂等 run id / CAS 测试、A14 的正文持久化和 legacy 缺正文标记已有实现及测试。尚未完成的限制：持久 HTTP dispatch/lease/崩溃恢复、真正独立进程重启与端到端 UI 恢复留在 C3—C5；因此 A13/A14 尚不能标作产品级全量通过。A01—A11、A15—A16 仍按最终真实 HTTP/PG/browser 链验收，不从 C1 单测推断。
 
 之后每批继续追加提交、命令结果、数字和限制；仅在所有适用 A01—A16 门槛实际验收后更新最终完成状态。
+
+### C2/C3 持久读/调度与本地启动基础设施 checkpoint（2026-09-28）
+
+- 提交 `4e9a0fb` 增加 identity scope read revision、PostgreSQL durable workflow dispatch（migration 054）、隔离 Core 本地启动配置/launcher（仅配置检查与显式 prepare）、公共导出及独立验收记录。
+- 身份决策与真实 PostgreSQL store：`tests/unit/identity-decisions.spec.ts` + `tests/integration/identity-decisions-postgres.spec.ts`，2 文件 / 23 项通过；覆盖scope revision、实体 CAS、并发 match、事务回滚和 RLS。
+- Dispatch store：`pnpm exec vitest run tests/unit/workflow-dispatch.spec.ts tests/integration/workflow-dispatch-postgres.spec.ts --maxWorkers=1`，2 文件 / 6 项通过（含真实 PG 4 项）；覆盖幂等动作、两个 claimant、lease expiry/reclaim、stale owner/attempt fence、取消、payload digest、RLS、预算账本不变。独立 dispatch 记录见 [workflow-dispatch-2026-09-28.md](../platform/docs/workflow-dispatch-2026-09-28.md)。
+- 启动配置：`tests/unit/core-local-startup.spec.ts` 3/3；`node --test tests/unit/core-local-dev.test.mjs` 4/4；Node syntax、scoped ESLint 和 `docker compose ... config --quiet` 通过。prepare 实际执行于独立命名卷/临时端口的 `ontology_core`，首跑应用 25 migrations、二跑 0 applied / 25 current；`ontology_app` 为非 superuser 且 NOBYPASSRLS，无scope读取返回0行。测试临时脚本、`.env.core.local`、容器和卷已显式清理。证据与命令边界见 [main-core-independent-review-2026-09-28.md](../platform/docs/main-core-independent-review-2026-09-28.md)。
+- 以上只验收身份读端口、调度存储和 prepare/launcher 本身。`core-main.ts`、HTTP 接收后持久 enqueue/崩溃恢复、host/controller lease fencing 与实际发布事务、API/Web readiness 未完成；不得据此标 A01、A13 或 C3 产品链完成。prepare 检查时的迁移只到 053，不代表后来 054/055 已对同一临时数据库验证。
