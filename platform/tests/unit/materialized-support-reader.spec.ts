@@ -310,6 +310,23 @@ describe('MaterializedRuleSupportReader', () => {
   })
 
   it('compares mixed-precision UTC boundaries as instants and keeps the end half-open', async () => {
+    const roundedData = fixture()
+    const roundedEvidence = resource('12121212-1212-4212-8212-121212121212')
+    await roundedData.apply([statement({
+      subject: 'entity-a',
+      statementId: 'parent-rounded-time',
+      sourceRefs: [roundedEvidence],
+      validFrom: '2026-09-21T00:00:00.000Z',
+      validTo: '2026-09-22T00:00:00.000Z',
+    })], '8')
+    const rounded = await supportReader(roundedData).readCandidates(
+      SCOPE,
+      evidenceRequest(roundedData.ruleRef, VALID_FROM, '8'),
+      CTX,
+    )
+    expect(rounded.complete).toBe(true)
+    expect(rounded.candidates[0]?.validAt).toBe('2026-09-21T00:00:00.000Z')
+
     const data = fixture()
     const sourceEvidence = resource('77777777-7777-4777-8777-777777777777')
     await data.apply([statement({ subject: 'entity-a', statementId: 'parent-time', sourceRefs: [sourceEvidence] })], '8')

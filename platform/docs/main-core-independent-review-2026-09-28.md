@@ -2,7 +2,7 @@
 
 本轮基线：`main@51c8cb4`；实施分支：`feat/main-core-product-20260928`。本文件记录根代理的独立复核，不代替实施 SPEC 的最终验收矩阵。
 
-已推送的后端检查点为 `84d210b`：正常 HTTP 原始导入、身份裁决、审核发布、字段事实查询、核验正文及持久 dispatch 已形成两行业纵向链。此前 `2e7a044`、`f1cb7ed` 包含详细 README、行业原始资产和 loader。完整浏览器操作、规则回答、模型规划与恢复仍在实现；下面的模块测试不代表整个产品已交付。
+最新已推送检查点为 `6a20318`：模型端口工厂和抽取计费边界；`5a0fb80` 是可用工作台、导入/审核/事实查询/来源 UI 和实际配置版本接线，`d122a34` 是不可变支撑读取。正常原始导入至事实答案、浏览器配置激活和同回答/证据的进程重启读取已独立通过。正常规则回答、模型宿主规划与完整矩阵继续实现；下面的模块测试不代表整个产品已交付。
 
 ## 已独立验证的检查点
 
@@ -49,6 +49,10 @@
 | 冻结后的配置/宿主/UI 独立复核（09-29） | 增强 HTTP 1 文件 / 4 项通过，28.92s；UI 5 文件 / 13 项通过，20.75s；18 文件对应 TypeScript/TSX ESLint 通过 | active GET、真实 CAS、metadata 即时更新、重启后同旧 run 的完整回答 JSON 与证据比较；两个行业同链。Web build 通过，缺失 ActiveProfileRecord type import 已补后独立复核 |
 | 实际浏览器与 subprocess 历史读取（09-29） | 全程实际页面：原始 T-04 导入 → 原文对照 → pending/match → approve/publish → facts 查询 → published 正文“否” → 打开证据 | 工业同一个 1.0.1 配置由失败重试后成功 CAS（revision 1→2），刷新仍为新版本。进程 restart 后同 run 的 PublishedAnswer JSON 完全一致；同证据 verifiable/integrity=true，浏览器深链旧 run 仍显示原正文与引用。全部为合成资料、模型关闭 |
 | 模型工厂和抽取预算独立检查（09-29） | 3 文件 / 20 项通过，3.94s；7 个 owner TypeScript 文件 ESLint 通过 | 受控 loopback HTTP、每 provider attempt 唯一计量、重试/未知用量/取消、原生输入和缺模型前置拒绝。默认宿主、planner/verifier 接线与外部模型质量未据此完成 |
+| 已提交批次后的完整 unit/contracts/UI/architecture（09-29） | 127 文件 / 1,429 项全部通过，95.43s，exit 0 | 原有六个 UI 导入失败和支撑单元正例已恢复，新增配置、模型计量和来源检查纳入。本次不包含 PostgreSQL/integration/load/acceptance/browser projects，后续模型接线变更仍须复核 |
+| 正式支撑 PostgreSQL/HTTP 与来源 UI 正例恢复（09-29） | 两 PG 文件 / 9 项通过，25.89s；reader/producer/UI/architecture 四文件 / 34 项通过，20.60s；9 个代码/测试文件 ESLint 通过 | 实际 PublishedSemanticSource、IncrementalMaterializer 写不可变切片再归档；多实体歧义/精确 payload 定位、撤回后旧序列支撑、OR、关系排除、分页和隔离全部保留。UTC 等价序列化不改写工件/hash；UI 支撑覆盖独立显示，归档可复核不再称原来源可重读 |
+| Planner JEV 实际状态边界（09-29） | planner 与 question-rewriting 两文件 / 18 项通过，2.74s；三 owner TypeScript 文件 ESLint 通过 | 状态先归档/授权，不向官方 port 发送问题 hash；缺能力不调用 decision，取消/预算/归档 fatal 传播、可恢复失败显式标记。host/planner 正常模型执行仍另行验收 |
+| 启动器模型角色独立隔离（09-29） | Node 6 项通过，syntax 与两 owner 文件 ESLint 通过 | Company-only/JEV-only、默认全关和 Vite 配置过滤；没有据此声称实际外网模型接通 |
 
 上表是不同时间的聚焦检查点，存在覆盖重叠；不相加为一次全量通过数量。实际 prepare 检查只覆盖当时已有迁移至 `053`，不包含后来新增的 `054`/`055`/`056`。本次生成的临时 env、验证脚本、容器和卷已回收。已有 3000/5173/54329 环境未改动。
 

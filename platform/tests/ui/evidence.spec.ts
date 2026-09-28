@@ -16,7 +16,7 @@ import {
   SECRET_SENTINEL,
   createProvenanceHost,
 } from './provenance-fixtures'
-import type { ProvenanceHost } from './provenance-fixtures'
+import type { ProvenanceFixtureOptions, ProvenanceHost } from './provenance-fixtures'
 import { startHarness } from './workbench-fixtures'
 import type { Harness } from './workbench-fixtures'
 
@@ -94,8 +94,8 @@ function jsonResponse(status: number, body: unknown): Response {
   })
 }
 
-async function provenanceHarness(): Promise<{ built: Harness; host: ProvenanceHost }> {
-  const host = createProvenanceHost()
+async function provenanceHarness(options: ProvenanceFixtureOptions = {}): Promise<{ built: Harness; host: ProvenanceHost }> {
+  const host = createProvenanceHost(options)
   const built = await startHarness({ provenance: { evidence: host.evidence, history: host.history } })
   openHarnesses.push(built)
   return { built, host }
@@ -182,9 +182,10 @@ describe('expand a conclusion to its real basis', () => {
     expect(rereadability.some((text) => text?.includes('原来源可重读'))).toBe(true)
     expect(rereadability.some((text) => text?.includes('仅归档快照'))).toBe(true)
     expect(container.querySelector('[data-testid="archived-result"]')?.getAttribute('data-verified')).toBe('true')
-    expect(container.querySelector('[data-testid="original-source-rereadable"]')?.getAttribute('data-rereadable')).toBe(
-      'true',
-    )
+    const sourceSummary = container.querySelector('[data-testid="original-source-rereadable"]')
+    expect(sourceSummary?.getAttribute('data-rereadable')).toBe('true')
+    expect(sourceSummary?.textContent).toContain('所有已列来源证据均可复核（含归档快照）')
+    expect(sourceSummary?.textContent).not.toContain('原来源整体可重读')
 
     // The UI renders only the real server fields: a fabricated chain-of-thought, a resolved
     // secret and another tenant's text that the (misbehaving) fixture attached are never shown.
@@ -194,6 +195,37 @@ describe('expand a conclusion to its real basis', () => {
     expect(html).not.toContain(OTHER_TENANT_TEXT)
     expect(container.querySelector('[data-testid="model-reasoning"]')).toBeNull()
     expect(container.querySelector('[data-testid="chain-of-thought"]')).toBeNull()
+  })
+
+  it('shows unresolved rule-support coverage separately from a verifiable evidence artifact', async () => {
+    const { built } = await provenanceHarness({
+      evidenceSupportResolution: {
+        state: 'ambiguous',
+        complete: false,
+        reason: 'two entity instances match this rule and time',
+      },
+      graphSupportResolution: {
+        state: 'unknown',
+        complete: false,
+        reason: 'the immutable child support slice is unavailable',
+      },
+    })
+    const container = await renderEvidence(built.client, EVIDENCE_ID)
+    await waitFor(() => container.querySelector('[data-testid="evidence-basis"]') !== null, 'basis')
+
+    expect(container.querySelector('[data-testid="basis-outcome"]')?.textContent).toBe('verifiable')
+    const status = container.querySelector('[data-testid="support-resolution"]')
+    expect(status?.getAttribute('data-state')).toBe('ambiguous')
+    expect(status?.getAttribute('data-complete')).toBe('false')
+    expect(container.querySelector('[data-testid="support-resolution-reason"]')?.textContent)
+      .toContain('two entity instances')
+
+    await click(container.querySelector('[data-testid="load-graph"]') as Element)
+    await waitFor(() => container.querySelector('[data-testid="graph-support-coverage"]') !== null, 'graph support coverage')
+    expect(container.querySelector('[data-testid="graph-support-coverage"]')?.getAttribute('data-complete')).toBe('false')
+    expect(container.querySelector('[data-testid="graph-support-completeness"]')?.textContent)
+      .toContain('不能据此判断不存在其他依据')
+    expect(container.querySelector('[data-testid="graph-support-resolution"]')?.getAttribute('data-state')).toBe('unknown')
   })
 
   it('marks the view as an explicit historical replay when asOf/validAt are set', async () => {

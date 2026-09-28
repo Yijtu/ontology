@@ -10,6 +10,7 @@ import type {
 } from '@ontology/contracts'
 import type { PublishedSemanticReadView } from '../materialization'
 import type { RuleEvaluator } from '../rules'
+import { sameUtcInstant } from './instant'
 
 /**
  * One premise group from an immutable, instance-qualified rule support record.
@@ -217,7 +218,7 @@ export class SupportEvidenceDependencySource {
     const exactCandidates = read.candidates.filter((candidate) =>
       sameScope(candidate.scopeRef, scopeRef) &&
       sameVersion(candidate.ruleRef, ruleRef) &&
-      candidate.validAt === validAt &&
+      sameUtcInstant(candidate.validAt, validAt) &&
       candidate.asOfRecordedSeq === envelope.recordedSeq,
     )
     if (exactCandidates.length === 0) {

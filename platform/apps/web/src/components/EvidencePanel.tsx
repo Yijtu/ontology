@@ -2,6 +2,7 @@ import { useCallback, useEffect, useReducer, useState } from 'react'
 import type {
   DependencyGraphView,
   EvidenceDependencyDirection,
+  EvidenceDependencySupportState,
   HistoricalAssertionView,
   ProvenanceEvidenceView,
   ResourceRef,
@@ -38,6 +39,17 @@ const REREADABILITY_LABEL: Readonly<Record<SourceReReadability, string>> = {
   re_readable: '原来源可重读',
   archived_snapshot_only: '仅归档快照（原来源不保证可重读）',
   unverifiable: '不可验证（原来源与归档均不可用）',
+}
+
+const SUPPORT_STATE_LABEL: Readonly<Record<EvidenceDependencySupportState, string>> = {
+  not_rule: '直接证据，不适用规则支撑',
+  resolved: '支撑来源已解析',
+  not_applicable: '规则不适用，未提供正向支撑',
+  unknown: '支撑状态未知',
+  conflict: '支撑状态冲突',
+  ambiguous: '匹配到多个规则实例，无法唯一定位',
+  unavailable: '不可变支撑记录不可用',
+  incomplete: '支撑记录不完整',
 }
 
 function toError(error: unknown): WorkbenchError {
@@ -129,6 +141,20 @@ function BasisPanel({ evidence }: { readonly evidence: ProvenanceEvidenceView })
         </ul>
       )}
 
+      <section className="evidence__support" data-testid="support-resolution"
+        data-state={evidence.supportResolution?.state ?? 'unknown'}
+        data-complete={evidence.supportResolution?.complete ?? false}>
+        <h4>规则支撑完整性</h4>
+        <p data-testid="support-resolution-state">
+          {evidence.supportResolution === undefined
+            ? '服务端未报告规则支撑完整性'
+            : `${SUPPORT_STATE_LABEL[evidence.supportResolution.state]}（${evidence.supportResolution.complete ? '完整' : '不完整'}）`}
+        </p>
+        {evidence.supportResolution?.reason === undefined ? null : (
+          <p data-testid="support-resolution-reason">{evidence.supportResolution.reason}</p>
+        )}
+      </section>
+
       <h4>前提组（AND of OR）</h4>
       {evidence.premiseGroups.length === 0 ? (
         <p data-testid="premise-none">无规则前提组。</p>
@@ -182,7 +208,7 @@ function BasisPanel({ evidence }: { readonly evidence: ProvenanceEvidenceView })
         </ul>
       )}
       <p data-testid="original-source-rereadable" data-rereadable={evidence.originalSourceReReadable}>
-        原来源整体可重读：{evidence.originalSourceReReadable ? '是' : '否'}
+        所有已列来源证据均可复核（含归档快照）：{evidence.originalSourceReReadable ? '是' : '否'}
       </p>
       {evidence.archivedResult === undefined ? null : (
         <p data-testid="archived-result" data-verified={evidence.archivedResult.verified}>
@@ -267,6 +293,29 @@ function GraphPanel({
               遍历已覆盖请求深度与页大小，未截断。
             </p>
           )}
+
+          <section className="evidence__support-coverage" data-testid="graph-support-coverage"
+            data-complete={graph.coverage.support?.complete ?? false}>
+            <h4>规则支撑覆盖</h4>
+            <p data-testid="graph-support-completeness">
+              {graph.coverage.support === undefined
+                ? '服务端未报告规则支撑完整性'
+                : graph.coverage.support.complete
+                  ? '已访问节点的规则支撑来源均已完整解析。'
+                  : '部分节点的规则支撑未知或不完整，不能据此判断不存在其他依据。'}
+            </p>
+            {graph.coverage.support === undefined ? null : (
+              <ul data-testid="graph-support-resolutions">
+                {graph.coverage.support.resolutions.map((entry) => (
+                  <li key={entry.evidenceId} data-testid="graph-support-resolution"
+                    data-state={entry.resolution.state} data-complete={entry.resolution.complete}>
+                    {entry.evidenceId}：{SUPPORT_STATE_LABEL[entry.resolution.state]}
+                    {entry.resolution.reason === undefined ? '' : `（${entry.resolution.reason}）`}
+                  </li>
+                ))}
+              </ul>
+            )}
+          </section>
 
           <ul className="evidence__nodes" data-testid="graph-nodes" data-count={graph.nodes.length}>
             {graph.nodes.map((node) => (

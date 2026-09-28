@@ -16,12 +16,12 @@ import type {
   PublishedRuleSupportReader,
 } from './support-dependency-source'
 import { sha256DigestOf } from '../definitions/canonical'
+import { compareUtcInstants, sameUtcInstant } from './instant'
 
 const MAX_SUPPORT_SLICES = 10_000
 const MAX_SUPPORT_EVIDENCE_REFS = 256
 const SUPPORT_EVIDENCE_READ_CONCURRENCY = 4
 const MAX_SUPPORT_PAYLOAD_BYTES = 1_048_576
-const UTC_INSTANT = /^(\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2})(?:\.(\d{1,9}))?Z$/
 
 /** Minimal authorized byte-read capability for an immutable payload pointer. */
 export interface RuleSupportPayloadReader {
@@ -130,23 +130,9 @@ function sameResourceRef(left: ResourceRef, right: ResourceRef): boolean {
 }
 
 function covers(slice: ProjectionSlice, validAt: string): boolean {
-  const from = compareUtcInstant(slice.validity.validFrom, validAt)
-  const beforeTo = slice.validity.validTo === undefined ? -1 : compareUtcInstant(validAt, slice.validity.validTo)
+  const from = compareUtcInstants(slice.validity.validFrom, validAt)
+  const beforeTo = slice.validity.validTo === undefined ? -1 : compareUtcInstants(validAt, slice.validity.validTo)
   return from !== undefined && from <= 0 && (slice.validity.validTo === undefined || (beforeTo !== undefined && beforeTo < 0))
-}
-
-/** Compare canonical UTC instants while preserving RFC3339 sub-millisecond precision. */
-function compareUtcInstant(left: string, right: string): number | undefined {
-  const leftMatch = UTC_INSTANT.exec(left)
-  const rightMatch = UTC_INSTANT.exec(right)
-  if (leftMatch === null || rightMatch === null) return undefined
-  const leftBase = leftMatch[1]
-  const rightBase = rightMatch[1]
-  if (leftBase === undefined || rightBase === undefined) return undefined
-  if (leftBase !== rightBase) return leftBase < rightBase ? -1 : 1
-  const leftFraction = (leftMatch[2] ?? '').padEnd(9, '0')
-  const rightFraction = (rightMatch[2] ?? '').padEnd(9, '0')
-  return leftFraction < rightFraction ? -1 : leftFraction > rightFraction ? 1 : 0
 }
 
 function exactCandidate(
@@ -156,7 +142,7 @@ function exactCandidate(
 ): boolean {
   return sameScope(artifact.scopeRef, scopeRef) &&
     sameVersion(artifact.ruleRef, request.ruleRef) &&
-    artifact.validAt === request.validAt &&
+    artifact.validAt !== undefined && sameUtcInstant(artifact.validAt, request.validAt) &&
     artifact.asOfRecordedSeq === request.asOfRecordedSeq
 }
 
