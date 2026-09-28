@@ -96,7 +96,9 @@ export function isJevAdapterError(value: unknown): value is JevAdapterError {
 /** Map an HTTP status from the JEV API onto the canonical error taxonomy (C6.2). */
 export function jevErrorForHttpStatus(status: number, detail: string): JevAdapterError {
   const message = detail.length === 0 ? `JEV responded with HTTP ${status}` : detail
-  if (status === 429) return new JevAdapterError('RATE_LIMITED', message)
+  if (status === 429 || status === 529) {
+    return new JevAdapterError('RATE_LIMITED', message, { remoteStateUnknown: true })
+  }
   if (status === 503) return new JevAdapterError('MODEL_UNAVAILABLE', message)
   if (status === 504) {
     return new JevAdapterError('DEADLINE_EXCEEDED', message, { remoteStateUnknown: true })

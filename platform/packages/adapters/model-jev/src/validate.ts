@@ -2,18 +2,17 @@ import type {
   DecisionQuestion,
   DecisionResult,
   DecisionScore,
-  ProbabilityDistribution,
 } from '@ontology/contracts'
 import { EMPTY_OPTION_SET_HASH, PROBABILITY_SUM_EPSILON } from './constants'
 import { JevAdapterError } from './errors'
-import type { JevWireDistribution, JevWireResponse, JevWireResult, JevWireScore } from './vendor/jev-wire'
+import type { JevWireAnswer, JevWireBinding, JevWireResponse } from './vendor/jev-wire'
+
+const SCORE_MEAN_EPSILON = 1e-3
 
 /**
- * Strict validation of a decoded JEV response against the questions that were asked
- * (SPEC C2). Every failure is an explicit typed error: an out-of-range or non-normalised
- * probability, a missing option, an option outside the question's set, an unknown
- * question type and a malformed response are all rejected — never silently accepted or
- * default-filled.
+ * Validate a System One response against the exact request plan. System One's option sets,
+ * question ids, score levels and definition versions are mapped back to the local platform
+ * contract; the vendor is never trusted to return our hashes or versions.
  */
 export type JevValidationOutcome =
   | {
@@ -24,298 +23,227 @@ export type JevValidationOutcome =
   | { readonly kind: 'error'; readonly error: JevAdapterError }
 
 export function validateJevResponse(
-  questions: readonly DecisionQuestion[],
+  bindings: readonly JevWireBinding[],
   response: JevWireResponse,
-  redact: (text: string) => string,
 ): JevValidationOutcome {
-  const byQuestionId = new Map<string, JevWireResult>()
-  for (const result of response.results) {
-    if (byQuestionId.has(result.question_id)) {
-      return fail(`the JEV response answered question ${redact(result.question_id)} more than once`)
+  const expected = new Set(bindings.map((binding) => binding.wireQuestionId))
+  for (const wireQuestionId of Object.keys(response.answers)) {
+    if (!expected.has(wireQuestionId)) {
+      return fail('the JEV response returned an unasked question id')
     }
-    byQuestionId.set(result.question_id, result)
   }
 
-  const known = new Set(questions.map((question) => question.questionId))
-  for (const result of response.results) {
-    if (!known.has(result.question_id)) {
-      return fail(`the JEV response returned an unasked question ${redact(result.question_id)}`)
+  const byQuestion = new Map<string, DecisionResult>()
+  const scoreGroups = new Map<string, { readonly question: Extract<DecisionQuestion, { type: 'score' }>; scores: DecisionScore[] }>()
+  for (const binding of bindings) {
+    const answer = response.answers[binding.wireQuestionId]
+    if (answer === undefined) {
+      return fail(`the JEV response did not answer question ${binding.question.questionId}`)
     }
+    const validated = validateAnswer(binding, answer)
+    if ('error' in validated) return { kind: 'error', error: validated.error }
+    if (validated.questionType !== 'score') {
+      byQuestion.set(binding.question.questionId, validated.result)
+      continue
+    }
+    if (binding.question.type !== 'score') return fail('a non-score request produced an expanded score answer')
+    const group = scoreGroups.get(binding.question.questionId) ?? { question: binding.question, scores: [] }
+    scoreGroups.set(binding.question.questionId, group)
+    group.scores.push(validated.score)
   }
 
   const results: DecisionResult[] = []
-  for (const question of questions) {
-    const result = byQuestionId.get(question.questionId)
-    if (result === undefined) {
-      return fail(`the JEV response did not answer question ${question.questionId}`)
+  const questionIds = new Set(bindings.map((binding) => binding.question.questionId))
+  for (const questionId of questionIds) {
+    const result = byQuestion.get(questionId)
+    if (result !== undefined) {
+      results.push(result)
+      continue
     }
-    const validated = validateResult(question, result, redact)
-    if ('error' in validated) return { kind: 'error', error: validated.error }
-    results.push(validated.result)
+    const group = scoreGroups.get(questionId)
+    if (group === undefined || group.scores.length !== group.question.options.length) {
+      return fail(`the JEV response did not complete score question ${questionId}`)
+    }
+    const expectedIds = new Set(group.question.options.map((option) => option.optionId))
+    if (
+      group.scores.length !== expectedIds.size ||
+      group.scores.some((score) => !expectedIds.has(score.optionId))
+    ) {
+      return fail(`the JEV response repeated or changed a candidate for question ${questionId}`)
+    }
+    results.push({
+      questionId,
+      questionType: 'score',
+      definitionVersion: group.question.definitionVersion,
+      optionSetHash: group.question.optionSetHash,
+      scores: group.scores,
+    })
   }
-
-  return { kind: 'ok', results, modelVersion: response.model_version }
+  return { kind: 'ok', results, modelVersion: response.model }
 }
 
-function validateResult(
-  question: DecisionQuestion,
-  result: JevWireResult,
-  redact: (text: string) => string,
-): { readonly result: DecisionResult } | { readonly error: JevAdapterError } {
-  const label = `question ${question.questionId}`
-  if (!isQuestionType(result.question_type)) {
-    return { error: invalidSchema(`${label} reported an unknown question type ${redact(result.question_type)}`) }
-  }
-  if (result.question_type !== question.type) {
-    return {
-      error: invalidSchema(
-        `${label} was asked as ${question.type} but answered as ${result.question_type}`,
-      ),
-    }
-  }
-  if (result.definition_version !== question.definitionVersion) {
-    return {
-      error: invalidSchema(
-        `${label} answered definition version ${redact(result.definition_version)} instead of ${question.definitionVersion}`,
-      ),
-    }
-  }
-
+function validateAnswer(
+  binding: JevWireBinding,
+  answer: JevWireAnswer,
+): ValidatedWireResult | { readonly error: JevAdapterError } {
+  const question = binding.question
   switch (question.type) {
     case 'choice':
-      return validateChoice(question, result, label, redact)
+      if (answer.type !== 'choice') return { error: invalidSchema(`question ${question.questionId} was not answered as choice`) }
+      return validateChoice(question, answer)
     case 'score':
-      return validateScore(question, result, label, redact)
+      if (answer.type !== 'score') return { error: invalidSchema(`question ${question.questionId} was not answered as score`) }
+      return validateScore(question, binding, answer)
     case 'noul':
-      return validateNoul(question, result, label)
+      if (answer.type !== 'noul') return { error: invalidSchema(`question ${question.questionId} was not answered as noul`) }
+      return validateNoul(question, answer.noul)
   }
 }
+
+type ValidatedWireResult =
+  | { readonly questionType: 'choice'; readonly result: DecisionResult }
+  | { readonly questionType: 'score'; readonly score: DecisionScore }
+  | { readonly questionType: 'noul'; readonly result: DecisionResult }
 
 function validateChoice(
   question: Extract<DecisionQuestion, { type: 'choice' }>,
-  result: JevWireResult,
-  label: string,
-  redact: (text: string) => string,
-): { readonly result: DecisionResult } | { readonly error: JevAdapterError } {
-  if (result.option_set_hash !== question.optionSetHash) {
-    return { error: invalidSchema(`${label} answered a different option set hash`) }
+  answer: Extract<JevWireAnswer, { type: 'choice' }>,
+): ValidatedWireResult | { readonly error: JevAdapterError } {
+  const probabilities = readProbabilityEntries(
+    question.options.map((option) => option.optionId),
+    answer.probabilities,
+    `question ${question.questionId}`,
+  )
+  if ('error' in probabilities) return probabilities
+  const selected = question.options.find((option) => option.optionId === answer.choice)
+  if (selected === undefined) {
+    return { error: invalidSchema(`question ${question.questionId} selected an unknown option`) }
   }
-  if (result.scores !== undefined) {
-    return { error: invalidSchema(`${label} is a choice question and must not carry scores`) }
+  const selectedProbability = answer.probabilities[selected.optionId]
+  const highest = Math.max(...probabilities.values.map((entry) => entry.probability))
+  if (selectedProbability !== highest) {
+    return { error: invalidSchema(`question ${question.questionId} choice was not the highest-probability option`) }
   }
-  if (result.distribution === undefined) {
-    return { error: invalidSchema(`${label} did not carry a probability distribution`) }
+  if (!isProbability(answer.confidence)) {
+    return { error: invalidSchema(`question ${question.questionId} confidence is outside [0, 1]`) }
   }
-  const distribution = normaliseDistribution(question, result.distribution, label, redact)
-  if ('error' in distribution) return distribution
-
-  let selectedOptionId: string | undefined
-  if (result.selected_option_id !== undefined) {
-    if (!question.options.some((option) => option.optionId === result.selected_option_id)) {
-      return {
-        error: invalidSchema(
-          `${label} selected option ${redact(result.selected_option_id)} outside the question option set`,
-        ),
-      }
-    }
-    selectedOptionId = result.selected_option_id
-  }
-  const confidence = readConfidence(result.confidence, `${label} confidence`)
-  if (confidence !== undefined && 'error' in confidence) return { error: confidence.error }
-
   return {
+    questionType: 'choice',
     result: {
-      questionId: question.questionId,
-      questionType: 'choice',
-      definitionVersion: question.definitionVersion,
-      optionSetHash: question.optionSetHash,
-      ...(selectedOptionId === undefined ? {} : { selectedOptionId }),
-      distribution: distribution.distribution,
-      ...(confidence === undefined || 'error' in confidence
-        ? {}
-        : { confidence: confidence.value }),
+        questionId: question.questionId,
+        questionType: 'choice',
+        definitionVersion: question.definitionVersion,
+        optionSetHash: question.optionSetHash,
+        selectedOptionId: selected.optionId,
+        distribution: { optionSetHash: question.optionSetHash, entries: probabilities.values },
+        confidence: answer.confidence,
     },
   }
 }
 
 function validateScore(
   question: Extract<DecisionQuestion, { type: 'score' }>,
-  result: JevWireResult,
-  label: string,
-  redact: (text: string) => string,
-): { readonly result: DecisionResult } | { readonly error: JevAdapterError } {
-  if (result.option_set_hash !== question.optionSetHash) {
-    return { error: invalidSchema(`${label} answered a different option set hash`) }
+  binding: JevWireBinding,
+  answer: Extract<JevWireAnswer, { type: 'score' }>,
+): ValidatedWireResult | { readonly error: JevAdapterError } {
+  const optionId = binding.scoreOptionId
+  const criteria = binding.scoreCriteria
+  if (optionId === undefined || criteria.length < 2 || criteria.length > 10) {
+    return { error: invalidSchema(`question ${question.questionId} has an invalid score expansion`) }
   }
-  if (result.distribution !== undefined) {
-    return { error: invalidSchema(`${label} is a score question and must not carry a distribution`) }
+  const levelIds = criteria.map((_criterion, index) => String(index))
+  const probabilities = readProbabilityEntries(levelIds, answer.probabilities, `question ${question.questionId}`)
+  if ('error' in probabilities) return probabilities
+  const expectedLegend = new Map(criteria.map((criterion, index) => [String(index), criterion]))
+  if (Object.keys(answer.legend).length !== expectedLegend.size) {
+    return { error: invalidSchema(`question ${question.questionId} returned an incomplete score legend`) }
   }
-  if (result.scores === undefined) {
-    return { error: invalidSchema(`${label} did not carry scores`) }
+  for (const [levelId, description] of expectedLegend) {
+    if (answer.legend[levelId] !== description) {
+      return {
+        error: invalidSchema(
+          `question ${question.questionId} returned a different score legend at level ${levelId}`,
+        ),
+      }
+    }
   }
-  const scores = normaliseScores(question, result.scores, label, redact)
-  if ('error' in scores) return scores
-
-  const confidence = readConfidence(result.confidence, `${label} confidence`)
-  if (confidence !== undefined && 'error' in confidence) return { error: confidence.error }
-
+  if (!Number.isFinite(answer.score) || answer.score < 0 || answer.score > criteria.length - 1) {
+    return { error: invalidSchema(`question ${question.questionId} score is outside its ordered rubric`) }
+  }
+  const expectedMean = probabilities.values.reduce(
+    (sum, entry) => sum + Number(entry.optionId) * entry.probability,
+    0,
+  )
+  if (Math.abs(answer.score - expectedMean) > SCORE_MEAN_EPSILON) {
+    return { error: invalidSchema(`question ${question.questionId} score did not match its probability-weighted levels`) }
+  }
+  if (!isProbability(answer.confidence)) {
+    return { error: invalidSchema(`question ${question.questionId} confidence is outside [0, 1]`) }
+  }
+  const mappedScore = question.scale.min +
+    (answer.score / (criteria.length - 1)) * (question.scale.max - question.scale.min)
   return {
-    result: {
-      questionId: question.questionId,
-      questionType: 'score',
-      definitionVersion: question.definitionVersion,
-      optionSetHash: question.optionSetHash,
-      scores: scores.scores,
-      ...(confidence === undefined || 'error' in confidence
-        ? {}
-        : { confidence: confidence.value }),
-    },
+    questionType: 'score',
+    score: { optionId, score: mappedScore, confidence: answer.confidence },
   }
 }
 
 function validateNoul(
   question: Extract<DecisionQuestion, { type: 'noul' }>,
-  result: JevWireResult,
-  label: string,
-): { readonly result: DecisionResult } | { readonly error: JevAdapterError } {
-  if (result.distribution !== undefined || result.scores !== undefined) {
-    return { error: invalidSchema(`${label} is a noul question and has no option set or scores`) }
+  noul: number,
+): ValidatedWireResult | { readonly error: JevAdapterError } {
+  if (!isProbability(noul)) {
+    return { error: invalidSchema(`question ${question.questionId} noul likelihood is outside [0, 1]`) }
   }
-  if (result.selected_option_id !== undefined) {
-    return { error: invalidSchema(`${label} is a noul question and must not select an option`) }
-  }
-  const confidence = readConfidence(result.confidence, `${label} confidence`)
-  if (confidence !== undefined && 'error' in confidence) return { error: confidence.error }
   return {
+    questionType: 'noul',
     result: {
-      questionId: question.questionId,
-      questionType: 'noul',
-      definitionVersion: question.definitionVersion,
-      optionSetHash: EMPTY_OPTION_SET_HASH,
-      ...(confidence === undefined || 'error' in confidence
-        ? {}
-        : { confidence: confidence.value }),
+        questionId: question.questionId,
+        questionType: 'noul',
+        definitionVersion: question.definitionVersion,
+        optionSetHash: EMPTY_OPTION_SET_HASH,
+        probability: noul,
     },
   }
 }
 
-function normaliseDistribution(
-  question: Extract<DecisionQuestion, { type: 'choice' }>,
-  distribution: JevWireDistribution,
+function readProbabilityEntries(
+  expectedIds: readonly string[],
+  values: Readonly<Record<string, number>>,
   label: string,
-  redact: (text: string) => string,
-): { readonly distribution: ProbabilityDistribution } | { readonly error: JevAdapterError } {
-  if (distribution.option_set_hash !== question.optionSetHash) {
-    return { error: invalidSchema(`${label} distribution carries a different option set hash`) }
+): { readonly values: { readonly optionId: string; readonly probability: number }[] } | { readonly error: JevAdapterError } {
+  const keys = Object.keys(values)
+  if (keys.length !== expectedIds.length) {
+    return { error: invalidSchema(`${label} probability map had the wrong number of options`) }
   }
-  const entries = new Map<string, number>()
-  for (const entry of distribution.entries) {
-    if (entries.has(entry.option_id)) {
-      return { error: invalidSchema(`${label} distribution repeats option ${redact(entry.option_id)}`) }
+  const expected = new Set(expectedIds)
+  const entries: { optionId: string; probability: number }[] = []
+  for (const key of keys) {
+    if (!expected.has(key)) {
+      return { error: invalidSchema(`${label} returned an unknown probability option`) }
     }
-    if (entry.probability < 0 || entry.probability > 1) {
-      return {
-        error: invalidSchema(
-          `${label} probability for ${redact(entry.option_id)} is outside [0, 1]`,
-        ),
-      }
+    const probability = values[key]
+    if (probability === undefined || !isProbability(probability)) {
+      return { error: invalidSchema(`${label} probability is outside [0, 1]`) }
     }
-    entries.set(entry.option_id, entry.probability)
   }
-
-  const normalised: { optionId: string; probability: number }[] = []
   let sum = 0
-  for (const option of question.options) {
-    const probability = entries.get(option.optionId)
+  for (const id of expectedIds) {
+    const probability = values[id]
     if (probability === undefined) {
-      return { error: invalidSchema(`${label} distribution is missing option ${option.optionId}`) }
+      return { error: invalidSchema(`${label} probability map is missing a requested option`) }
     }
-    entries.delete(option.optionId)
     sum += probability
-    normalised.push({ optionId: option.optionId, probability })
-  }
-  if (entries.size > 0) {
-    const extra = entries.keys().next().value
-    return {
-      error: invalidSchema(
-        `${label} distribution contains option ${redact(extra ?? '')} outside the question option set`,
-      ),
-    }
+    entries.push({ optionId: id, probability })
   }
   if (Math.abs(sum - 1) > PROBABILITY_SUM_EPSILON) {
-    return {
-      error: invalidSchema(`${label} probabilities are not normalised (sum=${String(sum)})`),
-    }
+    return { error: invalidSchema(`${label} probabilities are not normalised (sum=${String(sum)})`) }
   }
-  return {
-    distribution: { optionSetHash: question.optionSetHash, entries: normalised },
-  }
+  return { values: entries }
 }
 
-function normaliseScores(
-  question: Extract<DecisionQuestion, { type: 'score' }>,
-  scores: readonly JevWireScore[],
-  label: string,
-  redact: (text: string) => string,
-): { readonly scores: DecisionScore[] } | { readonly error: JevAdapterError } {
-  const byOption = new Map<string, JevWireScore>()
-  for (const score of scores) {
-    if (byOption.has(score.option_id)) {
-      return { error: invalidSchema(`${label} scores repeat option ${redact(score.option_id)}`) }
-    }
-    if (score.score < question.scale.min || score.score > question.scale.max) {
-      return {
-        error: invalidSchema(
-          `${label} score for ${redact(score.option_id)} is outside [${String(question.scale.min)}, ${String(question.scale.max)}]`,
-        ),
-      }
-    }
-    byOption.set(score.option_id, score)
-  }
-
-  const normalised: DecisionScore[] = []
-  for (const option of question.options) {
-    const score = byOption.get(option.optionId)
-    if (score === undefined) {
-      return { error: invalidSchema(`${label} scores are missing option ${option.optionId}`) }
-    }
-    byOption.delete(option.optionId)
-    const confidence = readConfidence(score.confidence, `${label} score confidence`)
-    if (confidence !== undefined && 'error' in confidence) return { error: confidence.error }
-    normalised.push({
-      optionId: option.optionId,
-      score: score.score,
-      ...(confidence === undefined || 'error' in confidence
-        ? {}
-        : { confidence: confidence.value }),
-    })
-  }
-  if (byOption.size > 0) {
-    const extra = byOption.keys().next().value
-    return {
-      error: invalidSchema(
-        `${label} scores contain option ${redact(extra ?? '')} outside the question option set`,
-      ),
-    }
-  }
-  return { scores: normalised }
-}
-
-type ConfidenceRead =
-  | { readonly value: number }
-  | { readonly error: JevAdapterError }
-  | undefined
-
-function readConfidence(value: number | undefined, label: string): ConfidenceRead {
-  if (value === undefined) return undefined
-  if (value < 0 || value > 1) {
-    return { error: invalidSchema(`${label} is outside [0, 1]`) }
-  }
-  return { value }
-}
-
-function isQuestionType(value: string): value is 'choice' | 'score' | 'noul' {
-  return value === 'choice' || value === 'score' || value === 'noul'
+function isProbability(value: number): boolean {
+  return Number.isFinite(value) && value >= 0 && value <= 1
 }
 
 function fail(message: string): JevValidationOutcome {

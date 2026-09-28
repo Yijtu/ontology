@@ -6,8 +6,8 @@ import type {
   ModelRef,
   ResourceRef,
   SecretResolver,
-  Semver,
   Sha256Digest,
+  Semver,
   ToolContext,
   Uuid,
 } from '@ontology/contracts'
@@ -37,6 +37,8 @@ export interface DecisionEvidenceResult {
   readonly probabilities?: readonly { readonly optionId: string; readonly probability: number }[]
   readonly scores?: readonly { readonly optionId: string; readonly score: number; readonly confidence?: number }[]
   readonly confidence?: number
+  /** System One Noul P(yes); deliberately distinct from confidence. */
+  readonly probability?: number
 }
 
 /**
@@ -106,11 +108,21 @@ export interface JevModelBinding {
 export interface JevAdapterConfig {
   /** Base URL of the JEV API, e.g. `http://127.0.0.1:0`. */
   readonly baseUrl: string
-  /** Decide path; defaults to `/v1/decide`. */
+  /** Optional endpoint override; defaults to the official `/v1/systemone`. */
   readonly endpoint?: string
   /** Opaque server-side reference; resolved per call through the injected resolver. */
   readonly secretRef: string
   readonly models: Readonly<Record<string, JevModelBinding>>
+  /**
+   * Host-authorized resolver for the immutable state referenced by each DecisionRequest.
+   * Without it, the official System One call stops with an explicit typed capability error;
+   * the adapter never sends a reference in place of actual state.
+   */
+  readonly stateResolver?: JevActualStateResolver
+  /** Maximum canonical UTF-8 state size sent to TypeSafe. Defaults to 65536 bytes. */
+  readonly maxStateBytes?: number
+  /** Maximum JSON values (including containers) in the resolved state. Defaults to 1000. */
+  readonly maxStateRecords?: number
   /** Profile-declared fallback used when JEV is unavailable or confidence is too low. */
   readonly fallbackPolicy: JevFallbackPolicy
   readonly secrets: SecretResolver
@@ -120,9 +132,9 @@ export interface JevAdapterConfig {
   readonly evidence: DecisionEvidenceRecorder
   /** Required when the fallback policy is `generative_classification`. */
   readonly generativeClassification?: GenerativeClassificationFallback
-  /** Degrade when a result's confidence is below this value. Undefined disables the check. */
+  /** Degrade when choice/score confidence is below this value. Noul P(yes) is not confidence. */
   readonly minConfidence?: number
-  /** Token allowance reserved before a decision call. Defaults to 1024. */
+  /** Token allowance reserved before a decision call. Defaults to 256. */
   readonly estimatedTokens?: number
   readonly log?: JevAdapterLogger
   /** Total attempts per decide call, including the first. Defaults to 3 (1 + 2). */
@@ -136,6 +148,64 @@ export interface JevAdapterConfig {
   /** Id source, injected so a call's reservation keys are reproducible in tests. */
   readonly newId?: () => string
   readonly fetchImpl?: typeof fetch
+}
+
+export type JevActualState =
+  | null
+  | boolean
+  | number
+  | string
+  | readonly JevActualState[]
+  | { readonly [key: string]: JevActualState }
+
+export interface JevActualStateResolutionInput {
+  readonly stateRef: ResourceRef
+  readonly maxBytes: number
+  readonly maxRecords: number
+  readonly signal?: AbortSignal
+}
+
+export interface JevActualStateResolution {
+  /** Actual question context, candidates, confirmed semantics and relevant evidence. */
+  readonly state: JevActualState
+  /** Must name exactly the immutable snapshot requested by stateRef. */
+  readonly resolvedRef: ResourceRef
+  /** False/partial states are never sent to the provider. */
+  readonly complete: true
+}
+
+export interface JevActualStateResolver {
+  /**
+   * Resolve through host-owned authorization using the supplied trusted ToolContext.
+   * The adapter additionally verifies snapshot identity, JSON shape, size and digest.
+   */
+  resolve(
+    input: JevActualStateResolutionInput,
+    ctx: ToolContext,
+  ): Promise<JevActualStateResolution>
+}
+
+export type JevStateResolutionErrorCode =
+  | 'NOT_CONFIGURED'
+  | 'NOT_FOUND'
+  | 'SCOPE_MISMATCH'
+  | 'VERSION_MISMATCH'
+  | 'DIGEST_MISMATCH'
+  | 'INCOMPLETE'
+  | 'TOO_LARGE'
+  | 'INVALID_STATE'
+  | 'UNAVAILABLE'
+  | 'CANCELLED'
+
+/** Fixed, typed state-resolution failure; messages must never contain resolved state. */
+export class JevStateResolutionError extends Error {
+  readonly code: JevStateResolutionErrorCode
+
+  constructor(code: JevStateResolutionErrorCode) {
+    super(`JEV state resolution failed: ${code.toLowerCase()}`)
+    this.name = 'JevStateResolutionError'
+    this.code = code
+  }
 }
 
 /** Measured usage of a decision call. `usageUnknown` marks a partial report. */

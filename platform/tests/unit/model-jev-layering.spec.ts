@@ -73,6 +73,7 @@ describe('model-jev adapter layering (SPEC §2, §4.2, ADR-09)', () => {
       baseUrl: 'http://127.0.0.1:1',
       secretRef: 'ref',
       models: {},
+      stateResolver: { resolve: () => Promise.reject(new Error('unused')) },
       fallbackPolicy: 'clarify',
       secrets: { resolve: () => Promise.reject(new Error('unused')) },
       budget: {
