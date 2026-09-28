@@ -14,15 +14,33 @@ const VITE_CLI = resolve(PLATFORM_ROOT, 'apps', 'web', 'node_modules', 'vite', '
 const API_READY_TIMEOUT_MS = 45_000
 const WEB_READY_TIMEOUT_MS = 30_000
 const READINESS_POLL_MS = 400
-const EXTERNAL_MODEL_ENV = [
+const COMPANY_MODEL_ENV = [
+  'CORE_COMPANY_MODEL_BASE_URL',
+  'CORE_COMPANY_MODEL_ENDPOINT',
+  'CORE_COMPANY_MODEL_SECRET_REF',
+  'CORE_COMPANY_MODEL_PLATFORM_ID',
+  'CORE_COMPANY_MODEL_VENDOR_MODEL',
+  'CORE_COMPANY_MODEL_PROTOCOL',
+  'CORE_COMPANY_MODEL_API_KEY',
   'ONTOLOGY_COMPANY_MODEL_BASE_URL',
   'ONTOLOGY_COMPANY_MODEL_ENDPOINT',
   'ONTOLOGY_COMPANY_MODEL_API_KEY',
   'ONTOLOGY_COMPANY_MODEL_VENDOR_MODELS',
+]
+const JEV_MODEL_ENV = [
+  'CORE_JEV_BASE_URL',
+  'CORE_JEV_ENDPOINT',
+  'CORE_JEV_SECRET_REF',
+  'CORE_JEV_PLATFORM_MODEL_ID',
+  'CORE_JEV_VENDOR_MODEL',
+  'CORE_JEV_FALLBACK_POLICY',
+  'CORE_JEV_MIN_CONFIDENCE',
+  'CORE_JEV_API_KEY',
   'ONTOLOGY_JEV_BASE_URL',
   'ONTOLOGY_JEV_ENDPOINT',
   'ONTOLOGY_JEV_API_KEY',
 ]
+const ALL_MODEL_ENV = [...new Set([...COMPANY_MODEL_ENV, ...JEV_MODEL_ENV])]
 const PRIVATE_ENV = [
   'CORE_CONTROL_DATABASE_URL',
   'CORE_POSTGRES_PASSWORD',
@@ -98,19 +116,32 @@ export function resolveCoreDevEnvironment(
 
   const tenantId = readUuid(env['CORE_TENANT_ID'], '11111111-1111-4111-8111-111111111111', 'CORE_TENANT_ID')
   const spaceId = readUuid(env['CORE_SPACE_ID'], 'aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa', 'CORE_SPACE_ID')
-  const modelsEnabled = env['CORE_ENABLE_MODELS'] === 'true'
+  const companyModelsEnabled = readFeatureFlag(env['CORE_ENABLE_MODELS'], 'CORE_ENABLE_MODELS')
+  const jevEnabled = readFeatureFlag(env['CORE_ENABLE_JEV'], 'CORE_ENABLE_JEV')
 
   const apiEnvironment = { ...env }
   for (const name of PRIVATE_ENV) delete apiEnvironment[name]
   for (const name of Object.keys(apiEnvironment)) {
     if (name.startsWith('VITE_')) delete apiEnvironment[name]
   }
-  if (!modelsEnabled) {
-    for (const name of EXTERNAL_MODEL_ENV) delete apiEnvironment[name]
-    for (const name of Object.keys(apiEnvironment)) {
-      if (/(?:API_KEY|SECRET|TOKEN|PASSWORD)$/iu.test(name) && name !== 'CORE_DATABASE_URL') {
-        delete apiEnvironment[name]
-      }
+  for (const name of ALL_MODEL_ENV) delete apiEnvironment[name]
+  if (companyModelsEnabled) {
+    for (const name of COMPANY_MODEL_ENV) {
+      if (env[name] !== undefined) apiEnvironment[name] = env[name]
+    }
+  }
+  if (jevEnabled) {
+    for (const name of JEV_MODEL_ENV) {
+      if (env[name] !== undefined) apiEnvironment[name] = env[name]
+    }
+  }
+  const allowedSecretEnv = new Set([
+    ...(companyModelsEnabled ? [secretEnvName(env['CORE_COMPANY_MODEL_SECRET_REF'])] : []),
+    ...(jevEnabled ? [secretEnvName(env['CORE_JEV_SECRET_REF'])] : []),
+  ].filter((name) => name !== undefined))
+  for (const name of Object.keys(apiEnvironment)) {
+    if (/(?:API_KEY|SECRET|TOKEN|PASSWORD)$/iu.test(name) && name !== 'CORE_DATABASE_URL' && !allowedSecretEnv.has(name)) {
+      delete apiEnvironment[name]
     }
   }
   Object.assign(apiEnvironment, {
@@ -119,7 +150,8 @@ export function resolveCoreDevEnvironment(
     CORE_PG_PORT: String(pgPort),
     CORE_TENANT_ID: tenantId,
     CORE_SPACE_ID: spaceId,
-    CORE_ENABLE_MODELS: modelsEnabled ? 'true' : 'false',
+    CORE_ENABLE_MODELS: companyModelsEnabled ? 'true' : 'false',
+    CORE_ENABLE_JEV: jevEnabled ? 'true' : 'false',
   })
 
   const webEnvironment = { ...apiEnvironment }
@@ -127,7 +159,9 @@ export function resolveCoreDevEnvironment(
     if (name.startsWith('VITE_')) delete webEnvironment[name]
   }
   for (const name of PRIVATE_ENV) delete webEnvironment[name]
-  for (const name of EXTERNAL_MODEL_ENV) delete webEnvironment[name]
+  for (const name of ALL_MODEL_ENV) delete webEnvironment[name]
+  delete webEnvironment['CORE_ENABLE_MODELS']
+  delete webEnvironment['CORE_ENABLE_JEV']
   for (const name of Object.keys(webEnvironment)) {
     if (/(?:API_KEY|SECRET|TOKEN|PASSWORD)$/iu.test(name)) delete webEnvironment[name]
   }
@@ -333,6 +367,19 @@ function required(env, name) {
   const value = env[name]
   if (typeof value !== 'string' || value.length === 0) throw new Error(`${name} is required`)
   return value
+}
+
+function readFeatureFlag(value, name) {
+  if (value === undefined || value === '') return false
+  if (value === 'true') return true
+  if (value === 'false') return false
+  throw new Error(`${name} must be exactly true or false`)
+}
+
+function secretEnvName(secretRef) {
+  if (typeof secretRef !== 'string' || secretRef.trim().length === 0) return undefined
+  const match = /^(?:(?:env:|env:\/\/|secret:\/\/env\/))?([A-Za-z_][A-Za-z0-9_]*)$/u.exec(secretRef.trim())
+  return match?.[1]
 }
 
 function readPort(value, fallback, name) {
