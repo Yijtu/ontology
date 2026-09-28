@@ -843,7 +843,9 @@ export class RuleEvaluator {
     for (const rule of orderedRules) {
       const outcome = evaluateRule(rule, state)
       const applicability = applicabilityFor(rule, outcome, input, inputDigest)
-      if (applicability !== undefined) applicabilities.push(applicability)
+      if (applicability !== undefined && rule.publishedInstance?.emitApplicabilityArtifact !== false) {
+        applicabilities.push(applicability)
+      }
       for (const leaf of outcome.leafNodes) state.leaves.set(leaf.nodeId, leaf)
       for (const group of outcome.groupNodes) state.groups.set(group.nodeId, group)
       state.rules.set(`rule:${rule.ruleId}`, {
@@ -887,7 +889,12 @@ export class RuleEvaluator {
         : []
       const conclusion: RuleConclusionResult = {
         propositionKey,
-        qualifiedPropositionKey: conclusionQualifiedKey(predicate, input.request, input.definitionRef),
+        qualifiedPropositionKey: conclusionQualifiedKey(
+          predicate,
+          input.request,
+          input.definitionRef,
+          propositionKey,
+        ),
         predicate,
         domainStatus: statusOf(combined.state),
         satisfiedBy,

@@ -6,6 +6,7 @@ import {
   ControlPostgresDatabase,
   PostgresCandidateStore,
   PostgresIdentityDecisionStore,
+  PostgresMaterializationStore,
   PostgresJobStore,
   runControlMigrations,
 } from '@ontology/adapter-control-postgres'
@@ -257,6 +258,60 @@ describe('identity decisions against real PostgreSQL', () => {
     expect((await decisionStore.getEntity(scope.scopeRef, entityId, ctx))?.revision).toBe(targetBeforeRollback.revision)
     expect(await decisionStore.latestRevision(scope.scopeRef, anchor.candidateId, ctx)).toBe('2')
 
+    let faultNextCommit = true
+    const faultingStore = new PostgresIdentityDecisionStore(database, {
+      faultInjection: {
+        beforeCommit: () => {
+          if (!faultNextCommit) return
+          faultNextCommit = false
+          throw new Error('injected split transaction failure')
+        },
+      },
+    })
+    const faultingService = new IdentityDecisionService({
+      store: faultingStore,
+      candidates: candidateStore,
+      schemaSource: new InMemoryIndustrySchemaSource([
+        { ref: IDENTITY_DEFINITION_REF, schema: decisionSchema(IDENTITY_DEFINITION_REF) },
+      ]),
+      scoreThreshold: 0.8,
+      now: () => '2026-09-22T00:00:01Z',
+      newId: () => randomUUID(),
+    })
+    const fenceCountBeforeRollback = await harness.adminClient.query<{ count: string }>(
+      `SELECT count(*)::text AS count FROM agent_platform.materialization_fences
+        WHERE tenant_id = $1 AND space_id = $2 AND state = 'open'`,
+      [scope.tenantId, scope.spaceId],
+    )
+    const outboxCountBeforeRollback = await harness.adminClient.query<{ count: string }>(
+      `SELECT count(*)::text AS count FROM agent_platform.job_outbox
+        WHERE tenant_id = $1 AND space_id = $2 AND topic = 'identity.decision.split'`,
+      [scope.tenantId, scope.spaceId],
+    )
+    await expect(faultingService.decide({
+      candidateId: anchor.candidateId,
+      kind: 'split',
+      expectedRevision: '2',
+      targetEntityId: entityId,
+      justification: 'rollback must include its fence and outbox',
+    }, ctx)).rejects.toThrow('injected split transaction failure')
+    expect(await decisionStore.latestReadRevision(scope.scopeRef, ctx)).toBe('2')
+    expect(await decisionStore.latestRevision(scope.scopeRef, anchor.candidateId, ctx)).toBe('2')
+    expect((await decisionStore.getEntity(scope.scopeRef, entityId, ctx))?.revision).toBe(targetBeforeRollback.revision)
+    expect(await decisionStore.listAssertions(scope.scopeRef, { candidateId: anchor.candidateId, openOnly: true }, ctx)).toHaveLength(1)
+    const fenceCountAfterRollback = await harness.adminClient.query<{ count: string }>(
+      `SELECT count(*)::text AS count FROM agent_platform.materialization_fences
+        WHERE tenant_id = $1 AND space_id = $2 AND state = 'open'`,
+      [scope.tenantId, scope.spaceId],
+    )
+    const outboxCountAfterRollback = await harness.adminClient.query<{ count: string }>(
+      `SELECT count(*)::text AS count FROM agent_platform.job_outbox
+        WHERE tenant_id = $1 AND space_id = $2 AND topic = 'identity.decision.split'`,
+      [scope.tenantId, scope.spaceId],
+    )
+    expect(fenceCountAfterRollback.rows[0]?.count).toBe(fenceCountBeforeRollback.rows[0]?.count)
+    expect(outboxCountAfterRollback.rows[0]?.count).toBe(outboxCountBeforeRollback.rows[0]?.count)
+
     const cannotLink = await seedCandidate('device', 'device_identity', 'device_name')
     const rejected = await postDecision(cannotLink.candidateId, { kind: 'reject', targetEntityId: entityId }, '0')
     expect(rejected.statusCode).toBe(200)
@@ -496,6 +551,10 @@ describe('identity decisions against real PostgreSQL', () => {
     expect(pending.rows).toHaveLength(1)
     expect(pending.rows[0]?.state).toBe('pending')
     expect(pending.rows[0]?.payload['entityId']).toBe(entityId)
+    const materializationFenceId = pending.rows[0]?.payload['materializationFenceId']
+    expect(typeof materializationFenceId).toBe('string')
+    const openFences = await new PostgresMaterializationStore(database).listOpenFences(scope.scopeRef, ctx)
+    expect(openFences.some((fence) => fence.fenceId === materializationFenceId && fence.propositionKeys.length === 0)).toBe(true)
 
     const consumed: OutboxMessageRecord[] = []
     const consumer: OutboxConsumer = {

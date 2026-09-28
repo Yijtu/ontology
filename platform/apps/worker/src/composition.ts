@@ -16,10 +16,12 @@ import type { MaterializationFaultInjection } from '@ontology/semantic-engine'
 import type {
   BudgetLedgerPort,
   DocumentParserPort,
+  IdentityDecisionStore,
   JobStore,
   PipelineStage,
   ScopeRef,
   ToolContext,
+  VersionRef,
 } from '@ontology/contracts'
 import {
   controlRecordSequence,
@@ -31,6 +33,10 @@ import type { SimulationRunGuard } from './simulation-stage'
 export interface MaterializationWorkerOptions {
   /** The published read view (the real `PostgresSemanticPublicationStore` in production). */
   readonly publications: MaterializationPublicationView
+  /** The adjudicated identity reader; published entity attributes are never trusted without it. */
+  readonly identity: Pick<IdentityDecisionStore, 'latestReadRevision' | 'readPublishedBindings'>
+  /** Optional run/profile schema pin. Multi-version scopes are incomplete without this pin. */
+  readonly definitionRef?: VersionRef
   /** Above this many affected rules a change is conservatively deferred with a dirty scope. */
   readonly maxFanout?: number
   /** Test-only seam: run before the projection commit so a fault can leave the fence open. */
@@ -100,7 +106,10 @@ export function createPostgresJobWorker(
   if (materialization !== undefined) {
     const materializationStore = new PostgresMaterializationStore(database)
     materializer = new IncrementalMaterializer({
-      publishedSource: new PublishedSemanticSource(materialization.publications),
+      publishedSource: new PublishedSemanticSource(materialization.publications, {
+        identity: materialization.identity,
+        ...(materialization.definitionRef === undefined ? {} : { definitionRef: materialization.definitionRef }),
+      }),
       materialization: materializationStore,
       ...(materialization.maxFanout === undefined ? {} : { maxFanout: materialization.maxFanout }),
       ...(materialization.faultInjection === undefined

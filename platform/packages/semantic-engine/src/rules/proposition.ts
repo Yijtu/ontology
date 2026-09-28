@@ -10,6 +10,8 @@ import { unitOf } from './values'
  */
 export interface PropositionQualifiers {
   readonly predicate: string
+  /** Stable rule/entity-qualified conclusion identity, when the caller already has one. */
+  readonly propositionKey?: string
   readonly subject?: string
   readonly objectId?: string
   readonly schemaRef?: VersionRef
@@ -21,6 +23,7 @@ export interface PropositionQualifiers {
 
 export function qualifiedPropositionKey(qualifiers: PropositionQualifiers): Sha256Digest {
   return sha256DigestOf({
+    propositionKey: qualifiers.propositionKey ?? null,
     subject: qualifiers.subject ?? null,
     predicate: qualifiers.predicate,
     objectId: qualifiers.objectId ?? null,
@@ -53,9 +56,11 @@ export function conclusionQualifiedKey(
   predicate: string,
   request: ControlReadProjectionRequest,
   schemaRef?: VersionRef,
+  propositionKey?: string,
 ): Sha256Digest {
   return qualifiedPropositionKey({
     predicate,
+    ...(propositionKey === undefined ? {} : { propositionKey }),
     ...(schemaRef === undefined ? {} : { schemaRef }),
     ...(request.validAt === undefined ? {} : { validFrom: request.validAt }),
     scopeRef: request.scopeRef,

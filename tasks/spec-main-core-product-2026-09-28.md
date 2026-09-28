@@ -218,3 +218,10 @@ C1 对应 A12 的模块和 publication 测试、A13 的幂等 run id / CAS 测�
 - Dispatch store：`pnpm exec vitest run tests/unit/workflow-dispatch.spec.ts tests/integration/workflow-dispatch-postgres.spec.ts --maxWorkers=1`，2 文件 / 6 项通过（含真实 PG 4 项）；覆盖幂等动作、两个 claimant、lease expiry/reclaim、stale owner/attempt fence、取消、payload digest、RLS、预算账本不变。独立 dispatch 记录见 [workflow-dispatch-2026-09-28.md](../platform/docs/workflow-dispatch-2026-09-28.md)。
 - 启动配置：`tests/unit/core-local-startup.spec.ts` 3/3；`node --test tests/unit/core-local-dev.test.mjs` 4/4；Node syntax、scoped ESLint 和 `docker compose ... config --quiet` 通过。prepare 实际执行于独立命名卷/临时端口的 `ontology_core`，首跑应用 25 migrations、二跑 0 applied / 25 current；`ontology_app` 为非 superuser 且 NOBYPASSRLS，无scope读取返回0行。测试临时脚本、`.env.core.local`、容器和卷已显式清理。证据与命令边界见 [main-core-independent-review-2026-09-28.md](../platform/docs/main-core-independent-review-2026-09-28.md)。
 - 以上只验收身份读端口、调度存储和 prepare/launcher 本身。`core-main.ts`、HTTP 接收后持久 enqueue/崩溃恢复、host/controller lease fencing 与实际发布事务、API/Web readiness 未完成；不得据此标 A01、A13 或 C3 产品链完成。prepare 检查时的迁移只到 053，不代表后来 054/055 已对同一临时数据库验证。
+
+### C2 发布事实、实体规则与增量物化 checkpoint（2026-09-28）
+
+- 已完成并暂存：已发布的 attribute array 投影为保留 parent statement/schema/entity/精确单位/有效时间/source refs 的属性事实；同规则按实体隔离实例；例外四态与 business proposition status 分离，例外不适用不会输出业务 false；显式审核 consequence binding 绑定定义的同对象属性和类型/单位；撤回按 parent statement 扩展到所有属性 child dependencies；OR 支撑按实体聚合，分页和不完整来源显式保留。
+- 验证命令：`pnpm exec vitest run tests/unit/incremental-materialization.spec.ts tests/unit/rule-published-instances.spec.ts tests/unit/materialization-outbox-consumer.spec.ts tests/unit/published-semantic-source.spec.ts tests/unit/rule-conclusion.spec.ts tests/unit/semantic-publication.spec.ts --maxWorkers=1`，6 文件 / 57 项通过。
+- 根代理独立真实 PostgreSQL 验收：materialization-worker、incremental-materialization、publication-fence、identity-decisions 4 文件 / 14 项通过，覆盖 1001 个属性、例外 false/true/缺失、同实体替代 OR 支撑、逐条撤回、稳定分页、身份 split 与物化 fence/outbox 的事务原子性。
+- 单测/PG结论只标 C2 模块门槛。原始输入经过真实抽取/身份审核发布再经普通 HTTP/四工具形成可读答案的完整链尚未验收；A04—A10 与跨两场景 A15/A16 不据此标完成。

@@ -19,6 +19,7 @@ import type {
 } from '@ontology/contracts'
 import type { QueryResultRow } from 'pg'
 import { ControlPostgresDatabase } from './database'
+import { MATERIALIZED_PROJECTION_REF } from './materialization-store'
 
 interface ScopedQuery {
   query<Row extends QueryResultRow>(
@@ -167,6 +168,11 @@ async function readScopeRevision(query: ScopedQuery): Promise<RevisionString> {
   return result.rows[0]?.revision ?? '0'
 }
 
+export interface PostgresIdentityDecisionStoreOptions {
+  /** Test-only fault seam runs after split fence/outbox/decision/read-head writes, before commit. */
+  readonly faultInjection?: { readonly beforeCommit?: () => void }
+}
+
 /**
  * PostgreSQL-backed identity decision store (migration 032). It connects as the non-owner
  * application role, so RLS is a real second line of defence behind the explicit
@@ -179,9 +185,11 @@ async function readScopeRevision(query: ScopedQuery): Promise<RevisionString> {
  */
 export class PostgresIdentityDecisionStore implements IdentityDecisionStore {
   readonly #database: ControlPostgresDatabase
+  readonly #faultInjection: PostgresIdentityDecisionStoreOptions['faultInjection']
 
-  constructor(database: ControlPostgresDatabase) {
+  constructor(database: ControlPostgresDatabase, options: PostgresIdentityDecisionStoreOptions = {}) {
     this.#database = database
+    this.#faultInjection = options.faultInjection
   }
 
   async getEntity(
@@ -520,6 +528,46 @@ export class PostgresIdentityDecisionStore implements IdentityDecisionStore {
           )
         }
         invalidationOutboxId = event.eventId
+        // An identity split changes the current source binding immediately. Open the
+        // scope-wide fence in this same transaction so readers cannot serve a projection
+        // that still contains the old identity between the split commit and outbox delivery.
+        await query.query(
+          `INSERT INTO agent_platform.projection_state
+             (tenant_id, space_id, projection_ref, generation, watermark_kind, watermark_value, dirty, updated_at)
+           VALUES (
+             current_setting('app.tenant_id')::uuid,
+             current_setting('app.space_id')::uuid,
+             $1, 0, 'sequence', '0', false, $2::timestamptz)
+           ON CONFLICT (tenant_id, space_id, projection_ref) DO NOTHING`,
+          [MATERIALIZED_PROJECTION_REF, event.recordedAt],
+        )
+        const projection = await query.query<{ generation: string }>(
+          `SELECT generation::text AS generation FROM agent_platform.projection_state
+            WHERE tenant_id = current_setting('app.tenant_id')::uuid
+              AND space_id = current_setting('app.space_id')::uuid
+              AND projection_ref = $1
+            FOR UPDATE`,
+          [MATERIALIZED_PROJECTION_REF],
+        )
+        const generation = projection.rows[0]?.generation
+        if (generation === undefined) {
+          throw new IdentityDecisionStoreError('DECISION_STORE_FAILED', 'projection state was not visible while opening identity fence')
+        }
+        await query.query(
+          `INSERT INTO agent_platform.materialization_fences
+             (tenant_id, space_id, projection_ref, fence_id, generation, reason, proposition_keys, state, opened_at)
+           VALUES (
+             current_setting('app.tenant_id')::uuid,
+             current_setting('app.space_id')::uuid,
+             $1, $2, $3::bigint, $4, '[]'::jsonb, 'open', $5::timestamptz)`,
+          [
+            MATERIALIZED_PROJECTION_REF,
+            event.materializationFenceId,
+            generation,
+            `identity split ${event.decisionId}: ${event.reason}`,
+            event.recordedAt,
+          ],
+        )
         await query.query(
           `INSERT INTO agent_platform.job_outbox
              (tenant_id, space_id, outbox_id, job_id, topic, payload, idempotency_key, state,
@@ -591,6 +639,7 @@ export class PostgresIdentityDecisionStore implements IdentityDecisionStore {
          ON CONFLICT (tenant_id, space_id) DO UPDATE
            SET revision = agent_platform.identity_scope_read_heads.revision + 1`,
       )
+      this.#faultInjection?.beforeCommit?.()
       return toDecision(row)
     })
   }

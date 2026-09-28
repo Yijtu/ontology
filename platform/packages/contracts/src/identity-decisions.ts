@@ -157,6 +157,8 @@ export interface IdentityLinkConstraintRecord {
 export interface IdentityInvalidationEvent {
   readonly eventId: Uuid
   readonly topic: 'identity.decision.split'
+  /** Pre-opened scope fence written atomically with this event and the split decision. */
+  readonly materializationFenceId: Uuid
   readonly decisionId: Uuid
   readonly entityId: string
   readonly objectId: string

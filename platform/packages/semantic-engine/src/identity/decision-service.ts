@@ -551,6 +551,7 @@ export class IdentityDecisionService {
     const invalidation: IdentityInvalidationEvent = {
       eventId: this.#newId(),
       topic: 'identity.decision.split',
+      materializationFenceId: this.#newId(),
       decisionId: base.decisionId,
       entityId: targetEntityId,
       objectId: target.objectId,

@@ -163,6 +163,34 @@ describe('published rule instances', () => {
     expect(result.conclusions.every((entry) => entry.value !== false)).toBe(true)
   })
 
+  it('indexes facts by exact entity/object/schema before compiling 1001 instances', () => {
+    const rule = publishedRule()
+    const subjects = Array.from({ length: 1_001 }, (_, index) => ({
+      subjectEntityId: `facility-T-${String(index).padStart(4, '0')}`,
+      objectId: 'facility',
+    }))
+    const facts = projected(subjects.map((subject, index) =>
+      statement(
+        `00000000-0000-4000-8000-${String(index + 1).padStart(12, '0')}`,
+        subject.subjectEntityId,
+        [{ attributeId: 'in_service', value: true }],
+      ),
+    ))
+    const compilation = compilePublishedRuleInstances([rule], facts, {
+      scopeRef,
+      definitionRef,
+      subjects,
+    })
+
+    expect(compilation.instances).toHaveLength(1_001)
+    const assertionBySubject = new Map(facts.map((fact) => [fact.subject, fact.assertionId]))
+    for (const instance of compilation.instances) {
+      const expected = assertionBySubject.get(instance.subjectEntityId)
+      const actual = instance.supportRule.premiseGroups.flatMap((group) => group.alternatives.map((alternative) => alternative.assertionId))
+      expect(actual).toEqual(expected === undefined ? [] : [expected])
+    }
+  })
+
   it('keeps the published rule version and stable subject-qualified applicability key', () => {
     const rule = publishedRule()
     const facts = projected([statement('00000000-0000-4000-8000-000000000211', 'facility-T-11', [{ attributeId: 'in_service', value: true }])])

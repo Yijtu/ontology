@@ -120,6 +120,8 @@ export interface PublishedRuleInstanceMetadata {
   readonly subjectEntityId: string
   readonly propositionKey: string
   readonly predicate: string
+  /** Set false for reviewed business-consequence clones; the applicability rule still runs. */
+  readonly emitApplicabilityArtifact?: boolean
   readonly conditionGroupIds: readonly string[]
   readonly exceptions: readonly {
     readonly exceptionId: string

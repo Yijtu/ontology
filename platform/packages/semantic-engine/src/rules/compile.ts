@@ -28,6 +28,10 @@ export interface PublishedRuleCompilerOptions {
   readonly completeRangeAttributeIds?: readonly string[]
 }
 
+type PredicateFacts = ReadonlyMap<string, readonly RuleFact[]>
+
+const NO_FACTS: PredicateFacts = new Map()
+
 /**
  * Legacy compiler retained for callers that need the original one-rule interface. New published
  * reads should use compilePublishedRuleInstances, which binds facts to one entity and preserves
@@ -62,7 +66,7 @@ export function supportRuleFromPublishedRule(
     subjectId === undefined
       ? []
       : relevantFacts.filter((fact) => fact.subject === subjectId && (fact.objectId === undefined || fact.objectId === rule.objectId))
-  const groups = compileNode(rule.expression, scopedFacts, rule.ruleId, false, new Set())
+  const groups = compileNode(rule.expression, predicateFactsOf(scopedFacts), rule.ruleId, false, new Set())
   return {
     ruleRef: legacyRuleRef(rule),
     ruleId: rule.ruleId,
@@ -85,6 +89,18 @@ export function compilePublishedRuleInstances(
   const issues: RuleCapabilityIssue[] = []
   const subjects = dedupeSubjects(options.subjects)
   const completeRangeAttributeIds = new Set(options.completeRangeAttributeIds ?? [])
+  const factsByInstance = new Map<string, Map<string, RuleFact[]>>()
+  for (const fact of facts) {
+    const instanceKey = factInstanceKey(fact.subject, fact.objectId, fact.schemaRef)
+    let byPredicate = factsByInstance.get(instanceKey)
+    if (byPredicate === undefined) {
+      byPredicate = new Map()
+      factsByInstance.set(instanceKey, byPredicate)
+    }
+    const predicateFacts = byPredicate.get(fact.predicate)
+    if (predicateFacts === undefined) byPredicate.set(fact.predicate, [fact])
+    else predicateFacts.push(fact)
+  }
 
   for (const rule of [...rules].sort((left, right) =>
     `${left.ruleId}@${left.version}:${left.ruleVersionId}`.localeCompare(`${right.ruleId}@${right.version}:${right.ruleVersionId}`),
@@ -109,9 +125,9 @@ export function compilePublishedRuleInstances(
     const applicableSubjects = subjects.filter((subject) => subject.objectId === rule.objectId)
     if (applicableSubjects.length === 0) {
       try {
-        compileNode(rule.expression, [], rule.ruleId, true, completeRangeAttributeIds)
+        compileNode(rule.expression, NO_FACTS, rule.ruleId, true, completeRangeAttributeIds)
         for (const exception of rule.exceptions) {
-          const groups = compileNode(exception.condition, [], `${rule.ruleId}:exception:${exception.exceptionId}`, true, completeRangeAttributeIds)
+          const groups = compileNode(exception.condition, NO_FACTS, `${rule.ruleId}:exception:${exception.exceptionId}`, true, completeRangeAttributeIds)
           if (groups.length !== 1 || groups[0]?.polarity === 'negative') {
             throw new RuleEvaluationError(
               'UNSUPPORTED_NEGATION',
@@ -135,12 +151,9 @@ export function compilePublishedRuleInstances(
       continue
     }
     for (const subject of applicableSubjects) {
-      const scopedFacts = facts.filter(
-        (fact) =>
-          fact.subject === subject.subjectEntityId &&
-          fact.objectId === subject.objectId &&
-          sameVersion(fact.schemaRef, options.definitionRef),
-      )
+      const scopedFacts = factsByInstance.get(
+        factInstanceKey(subject.subjectEntityId, subject.objectId, options.definitionRef),
+      ) ?? NO_FACTS
       const instanceIdentity = {
         tenantId: options.scopeRef.tenantId,
         spaceId: options.scopeRef.spaceId,
@@ -261,10 +274,6 @@ function dedupeSubjects(subjects: readonly PublishedRuleSubject[]): PublishedRul
   )
 }
 
-function sameVersion(left: VersionRef | undefined, right: VersionRef): boolean {
-  return left !== undefined && left.id === right.id && left.version === right.version && left.digest === right.digest
-}
-
 function publishedRuleRef(rule: PublishedRuleVersion): VersionRef {
   return { id: rule.ruleVersionId, version: semverRevision(rule.version), digest: sha256DigestOf(rule) }
 }
@@ -308,9 +317,28 @@ function expressionAttributeIds(expression: RuleExpressionNode): Set<string> {
   return attributes
 }
 
-function alternativesFor(attributeId: string, facts: readonly RuleFact[]): RulePremiseAlternative[] {
-  const alternatives = facts
-    .filter((fact) => fact.predicate === attributeId)
+function factInstanceKey(subjectId: string, objectId: string | undefined, schemaRef: VersionRef | undefined): string {
+  return JSON.stringify([
+    subjectId,
+    objectId ?? null,
+    schemaRef?.id ?? null,
+    schemaRef?.version ?? null,
+    schemaRef?.digest ?? null,
+  ])
+}
+
+function predicateFactsOf(facts: readonly RuleFact[]): PredicateFacts {
+  const byPredicate = new Map<string, RuleFact[]>()
+  for (const fact of facts) {
+    const bucket = byPredicate.get(fact.predicate)
+    if (bucket === undefined) byPredicate.set(fact.predicate, [fact])
+    else bucket.push(fact)
+  }
+  return byPredicate
+}
+
+function alternativesFor(attributeId: string, facts: PredicateFacts): RulePremiseAlternative[] {
+  const alternatives = (facts.get(attributeId) ?? [])
     .map((fact) => ({ alternativeId: fact.assertionId, assertionId: fact.assertionId }))
   if (alternatives.length > 0) return alternatives
   const placeholder = `unmatched:${attributeId}`
@@ -320,7 +348,7 @@ function alternativesFor(attributeId: string, facts: readonly RuleFact[]): RuleP
 function leafGroup(
   attributeId: string,
   filter: SemanticFilter,
-  facts: readonly RuleFact[],
+  facts: PredicateFacts,
   groupId: string,
   unitCode?: string,
 ): RulePremiseGroup {
@@ -334,7 +362,7 @@ function leafGroup(
 
 function compileNode(
   node: RuleExpressionNode,
-  facts: readonly RuleFact[],
+  facts: PredicateFacts,
   prefix: string,
   allowExplicitNot: boolean,
   completeRangeAttributeIds: ReadonlySet<string>,

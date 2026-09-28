@@ -32,6 +32,7 @@ import {
 } from '../unit/publication-fixtures'
 import { createJobScope, startJobDatabase } from './job-postgres-harness'
 import type { JobDbHarness } from './job-postgres-harness'
+import { FixturePublishedIdentityReader } from './published-identity-reader'
 
 const DIGEST = `sha256:${'a'.repeat(64)}`
 const VALIDITY = { validFrom: '2026-09-21T00:00:00Z', validTo: '2026-09-22T00:00:00Z' }
@@ -53,6 +54,7 @@ interface Setup {
   readonly scopeRef: ScopeRef
   readonly ctx: ToolContext
   readonly publication: PostgresSemanticPublicationStore
+  readonly identity: FixturePublishedIdentityReader
   readonly composition: ReturnType<typeof createPostgresJobWorker>
   readonly candidates: InMemoryCandidateStore
   readonly service: SemanticPublicationService
@@ -66,6 +68,7 @@ async function setup(prefix: string): Promise<Setup> {
     'platform-admin',
   ])
   const publication = new PostgresSemanticPublicationStore(database)
+  const identity = new FixturePublishedIdentityReader()
   const candidates = new InMemoryCandidateStore()
   const budget = new BudgetService({
     store: new PostgresBudgetLedgerStore(database),
@@ -105,12 +108,12 @@ async function setup(prefix: string): Promise<Setup> {
     handlers: { get: () => undefined },
     budget,
     outboxConsumer: { consume: async () => undefined },
-    materialization: { publications: publication },
+    materialization: { publications: publication, identity },
     now,
     newId: () => randomUUID(),
     maxPoolSize: 4,
   })
-  return { scopeRef: scope.scopeRef, ctx, publication, composition, candidates, service }
+  return { scopeRef: scope.scopeRef, ctx, publication, identity, composition, candidates, service }
 }
 
 /**
@@ -124,9 +127,10 @@ async function publishBaselineFact(s: Setup): Promise<void> {
     statementId: randomUUID(),
     propositionKey: FACT_PREDICATE,
     kind: 'entity',
+    objectId: 'device',
     subjectEntityId: 'entity.battery',
-    predicate: FACT_PREDICATE,
-    value: { value: true },
+    predicate: 'device',
+    value: { attributes: [{ attributeId: FACT_PREDICATE, value: true }] },
     validFrom: VALIDITY.validFrom,
     validTo: VALIDITY.validTo,
     recordedAt: PUBLISHED_AT,
@@ -145,12 +149,13 @@ async function publishBaselineFact(s: Setup): Promise<void> {
     createdAt: PUBLISHED_AT,
   }
   const expectedRevision = await s.publication.latestPublicationRevision(s.scopeRef, s.ctx)
+  s.identity.bindStatements([statement])
   await s.publication.publish(s.scopeRef, {
     expectedRevision,
     publication: {
       publicationId,
       versionRef: { id: publicationId, version: '1.0.0', digest: DIGEST },
-      schemaRef: { id: 'home-energy.core', version: '1.0.0', digest: DIGEST },
+      schemaRef: PUBLICATION_DEFINITION_REF,
       approvedCandidateRefs: [],
       statements: [statement],
       ruleVersions: [],
@@ -176,7 +181,7 @@ async function publishRuleViaService(s: Setup): Promise<Uuid> {
         candidateId,
         idempotencyKey: digestKey(),
         ruleId: 'rule.battery-absent',
-        objectId: NEW_PREDICATE,
+        objectId: 'device',
         expression: {
           op: 'compare',
           attributeId: FACT_PREDICATE,
@@ -184,6 +189,7 @@ async function publishRuleViaService(s: Setup): Promise<Uuid> {
           value: true,
           spans: [],
         },
+        conclusion: { predicate: NEW_PREDICATE, value: true },
       }),
     ],
     s.ctx,
@@ -231,7 +237,7 @@ describe('publication transaction opens the invalidation fence (LOCAL-070)', () 
     const readRequest = {
       scopeRef: s.scopeRef,
       projectionRef: PROJECTION_REF,
-      asOfRecordedSeq: '999',
+      asOfRecordedSeq: '1',
       validAt: '2026-09-21T12:00:00Z',
     }
 
@@ -268,15 +274,13 @@ describe('publication transaction opens the invalidation fence (LOCAL-070)', () 
     expect(dispatchError).toBeInstanceOf(Error)
     expect((dispatchError as Error).message).toBe('simulated crash before the outbox mark')
     expect(['fenced', 'materialized', 'on_demand']).toContain(concurrent.status)
-    const concurrentConclusion = concurrent.conclusions.find(
-      (entry) => entry.propositionKey === NEW_PREDICATE,
-    )
+    const concurrentConclusion = concurrent.conclusions.find((entry) => entry.predicate === NEW_PREDICATE)
     if (concurrentConclusion !== undefined) expect(concurrentConclusion.value).toBe(true)
 
     // The advance committed before the crash, so the new conclusion is served and the fence closed.
     const advanced = await materializer.read(readRequest, s.ctx)
     expect(advanced.status).toBe('materialized')
-    expect(advanced.conclusions.find((entry) => entry.propositionKey === NEW_PREDICATE)?.value).toBe(true)
+    expect(advanced.conclusions.find((entry) => entry.predicate === NEW_PREDICATE)?.value).toBe(true)
     const generationAfterCrash = advanced.generation
 
     // The request is re-delivered after the crash. The consumer must not advance the same change
@@ -285,7 +289,7 @@ describe('publication transaction opens the invalidation fence (LOCAL-070)', () 
     await faultingDispatcher.dispatchOnce(s.scopeRef, s.ctx)
     const afterRetry = await materializer.read(readRequest, s.ctx)
     expect(afterRetry.generation).toBe(generationAfterCrash)
-    expect(afterRetry.conclusions.find((entry) => entry.propositionKey === NEW_PREDICATE)?.value).toBe(true)
+    expect(afterRetry.conclusions.find((entry) => entry.predicate === NEW_PREDICATE)?.value).toBe(true)
     const fenceStore = new PostgresMaterializationStore(database)
     expect(await fenceStore.listOpenFences(s.scopeRef, s.ctx)).toHaveLength(0)
 

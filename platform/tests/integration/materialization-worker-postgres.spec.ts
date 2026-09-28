@@ -10,7 +10,7 @@ import {
 import { OutboxDispatcher } from '@ontology/application'
 import { BudgetService } from '@ontology/core'
 import { createPostgresJobWorker } from '@ontology/app-worker'
-import { sha256DigestOf } from '@ontology/semantic-engine'
+import { PublishedSemanticSource, sha256DigestOf } from '@ontology/semantic-engine'
 import type {
   NewOutboxMessage,
   PublishedRuleVersion,
@@ -24,6 +24,7 @@ import type {
 import { toolContext } from '../unit/component-registry-fixtures'
 import { createJobScope, startJobDatabase } from './job-postgres-harness'
 import type { JobDbHarness } from './job-postgres-harness'
+import { FixturePublishedIdentityReader } from './published-identity-reader'
 
 const DIGEST = `sha256:${'a'.repeat(64)}`
 const VALIDITY = { validFrom: '2026-09-21T00:00:00Z', validTo: '2026-09-22T00:00:00Z' }
@@ -45,6 +46,7 @@ function statementFor(publicationId: Uuid): PublishedStatement {
     statementId: randomUUID(),
     propositionKey: PREDICATE,
     kind: 'entity',
+    objectId: PREDICATE,
     subjectEntityId: 'entity.battery',
     predicate: PREDICATE,
     value: { value: true },
@@ -69,9 +71,34 @@ function ruleVersionFor(publicationId: Uuid): PublishedRuleVersion {
     impact: 'low',
     expression: { op: 'compare', attributeId: PREDICATE, operator: 'eq', value: true, spans: [] },
     exceptions: [],
+    conclusion: { predicate: PREDICATE, value: true },
     recordedAt: PUBLISHED_AT,
     sourceCandidateId: randomUUID(),
     publicationId,
+  }
+}
+
+function attributeStatementFor(
+  publicationId: Uuid,
+  subjectEntityId: string,
+  attributes: readonly { readonly attributeId: string; readonly value: unknown }[],
+): PublishedStatement {
+  return {
+    statementId: randomUUID(),
+    propositionKey: `${subjectEntityId}.attributes`,
+    kind: 'entity',
+    objectId: 'device',
+    subjectEntityId,
+    predicate: 'device',
+    value: { attributes },
+    validFrom: VALIDITY.validFrom,
+    validTo: VALIDITY.validTo,
+    recordedAt: PUBLISHED_AT,
+    sourceCandidateId: randomUUID(),
+    sourceRefs: sourceRefs(),
+    publicationId,
+    version: '1',
+    status: 'active',
   }
 }
 
@@ -80,6 +107,7 @@ interface Setup {
   readonly ctx: ToolContext
   readonly jobId: Uuid
   readonly publication: PostgresSemanticPublicationStore
+  readonly identity: FixturePublishedIdentityReader
   readonly composition: ReturnType<typeof createPostgresJobWorker>
 }
 
@@ -87,6 +115,7 @@ async function setup(prefix: string): Promise<Setup> {
   const scope = await createJobScope(harness.adminClient, prefix)
   const ctx = toolContext(scope.tenantId, scope.spaceId, ['semantic-publisher', 'platform-admin'])
   const publication = new PostgresSemanticPublicationStore(database)
+  const identity = new FixturePublishedIdentityReader()
   const budget = new BudgetService({
     store: new PostgresBudgetLedgerStore(database),
     control: new ControlPostgresRepository(database),
@@ -116,12 +145,12 @@ async function setup(prefix: string): Promise<Setup> {
     handlers: { get: () => undefined },
     budget,
     outboxConsumer: { consume: async () => undefined },
-    materialization: { publications: publication },
+    materialization: { publications: publication, identity },
     now,
     newId: () => randomUUID(),
     maxPoolSize: 2,
   })
-  return { scopeRef: scope.scopeRef, ctx, jobId, publication, composition }
+  return { scopeRef: scope.scopeRef, ctx, jobId, publication, identity, composition }
 }
 
 async function publishBundle(
@@ -163,6 +192,7 @@ async function publishBundle(
     outbox: message,
     outboxJobId: setupValue.jobId,
   }
+  setupValue.identity.bindStatements(statements)
   await setupValue.publication.publish(setupValue.scopeRef, input, setupValue.ctx)
   return publicationId
 }
@@ -192,7 +222,7 @@ describe('IncrementalMaterializer wired into the worker against real PostgreSQL 
     const readRequest = {
       scopeRef: s.scopeRef,
       projectionRef: PROJECTION_REF,
-      asOfRecordedSeq: '9',
+      asOfRecordedSeq: '2',
       validAt: '2026-09-21T12:00:00Z',
     }
 
@@ -206,7 +236,7 @@ describe('IncrementalMaterializer wired into the worker against real PostgreSQL 
     await s.composition.dispatcher.dispatchOnce(s.scopeRef, s.ctx)
     const materialized = await materializer.read(readRequest, s.ctx)
     expect(materialized.status).toBe('materialized')
-    expect(materialized.conclusions.find((entry) => entry.propositionKey === PREDICATE)?.value).toBe(true)
+    expect(materialized.conclusions.find((entry) => entry.predicate === PREDICATE)?.value).toBe(true)
 
     // A retraction opens the fence again; a read during the in-flight recompute is not stale.
     await s.publication.reviseStatement(
@@ -236,21 +266,148 @@ describe('IncrementalMaterializer wired into the worker against real PostgreSQL 
       s.ctx,
     )
     await s.composition.dispatcher.dispatchOnce(s.scopeRef, s.ctx)
-    const retractFenced = await materializer.read(readRequest, s.ctx)
+    const retractRequest = { ...readRequest, asOfRecordedSeq: '3' }
+    const retractFenced = await materializer.read(retractRequest, s.ctx)
     expect(retractFenced.status).toBe('fenced')
     expect(retractFenced.conclusions).toHaveLength(0)
 
     await s.composition.dispatcher.dispatchOnce(s.scopeRef, s.ctx)
-    const retracted = await materializer.read(readRequest, s.ctx)
-    const conclusion = retracted.conclusions.find((entry) => entry.propositionKey === PREDICATE)
+    const retracted = await materializer.read(retractRequest, s.ctx)
+    const conclusion = retracted.conclusions.find((entry) => entry.predicate === PREDICATE)
     expect(conclusion?.domainStatus).toBe('unknown')
     expect(conclusion?.value).toBeUndefined()
 
     // History is preserved: the pre-retraction recorded version still resolves the old value.
-    const historical = await materializer.read({ ...readRequest, asOfRecordedSeq: '1' }, s.ctx)
-    expect(historical.conclusions.find((entry) => entry.propositionKey === PREDICATE)?.value).toBe(true)
+    const historical = await materializer.read({ ...readRequest, asOfRecordedSeq: '2' }, s.ctx)
+    expect(historical.conclusions.find((entry) => entry.predicate === PREDICATE)?.value).toBe(true)
 
     await s.composition.close()
+  })
+
+  it('projects 1001 attributes, preserves OR support after a parent retract, and applies an exception without business false', async () => {
+    const s = await setup('materialization-attribute-retract')
+    const materializer = s.composition.materializer
+    if (materializer === undefined) throw new Error('the worker composition did not build the materializer')
+    try {
+      const seedPublication = randomUUID()
+      const subjectEntityId = 'entity.device-attribute-scale'
+      const auxiliary = Array.from({ length: 1_001 }, (_, index) => ({
+        attributeId: `auxiliary_${String(index).padStart(4, '0')}`,
+        value: `value-${String(index)}`,
+      }))
+      const large = attributeStatementFor(seedPublication, subjectEntityId, [
+        { attributeId: 'in_service', value: true },
+        ...auxiliary,
+      ])
+      const alternate = attributeStatementFor(seedPublication, subjectEntityId, [
+        { attributeId: 'in_service', value: true },
+        { attributeId: 'retired', value: false },
+      ])
+      const rule: PublishedRuleVersion = {
+        ruleVersionId: randomUUID(),
+        ruleId: 'rule.device.maintenance',
+        version: '1',
+        objectId: 'device',
+        severity: 'soft',
+        impact: 'low',
+        expression: { op: 'compare', attributeId: 'in_service', operator: 'eq', value: true, spans: [] },
+        exceptions: [{
+          exceptionId: 'already-retired',
+          condition: { op: 'compare', attributeId: 'retired', operator: 'eq', value: true, spans: [] },
+          spans: [],
+        }],
+        conclusion: { predicate: 'device.needs_maintenance', value: true },
+        recordedAt: PUBLISHED_AT,
+        sourceCandidateId: randomUUID(),
+        publicationId: seedPublication,
+      }
+      await publishBundle(s, [large, alternate], [rule], 'attribute-retract-seed', 'semantic.publication.published')
+      const publishedSnapshot = await new PublishedSemanticSource(s.publication, { identity: s.identity }).load(s.scopeRef, s.ctx)
+      expect(publishedSnapshot.complete).toBe(true)
+      expect(publishedSnapshot.facts.filter((fact) => fact.sourceStatementId === large.statementId)).toHaveLength(1_002)
+      expect(publishedSnapshot.entityBindings.some((binding) =>
+        binding.entityId === subjectEntityId && binding.sourceStatementId === large.statementId && binding.predicate === 'auxiliary_1000',
+      )).toBe(true)
+      while (await s.composition.dispatcher.dispatchOnce(s.scopeRef, s.ctx) > 0) { /* drain publication and advances */ }
+
+      const request = {
+        scopeRef: s.scopeRef,
+        projectionRef: PROJECTION_REF,
+        asOfRecordedSeq: '3',
+        validAt: '2026-09-21T12:00:00Z',
+      }
+      const baseline = await materializer.read(request, s.ctx)
+      const baselineConclusion = baseline.conclusions.find((entry) => entry.predicate === 'device.needs_maintenance')
+      expect(baseline.status).toBe('materialized')
+      expect(baselineConclusion?.value).toBe(true)
+      expect(baselineConclusion?.satisfiedBy.find((entry) => entry.alternativeIds.length > 0)?.alternativeIds).toHaveLength(2)
+      expect(baselineConclusion?.ruleArtifacts?.[0]?.applicability.exceptionStates[0]?.state).toBe('false')
+      expect(baselineConclusion?.ruleArtifacts).toHaveLength(1)
+      expect(baselineConclusion?.ruleArtifacts?.[0]?.subjectEntityId).toBe(subjectEntityId)
+
+      await s.publication.reviseStatement(
+        s.scopeRef,
+        {
+          expectedRevision: '1',
+          revisionId: randomUUID(),
+          statementId: large.statementId,
+          kind: 'retraction',
+          reason: 'remove the high-cardinality parent statement',
+          recordedAt: '2026-09-21T07:00:00Z',
+          actor: s.ctx.principal.subjectId,
+          outbox: {
+            outboxId: randomUUID(),
+            topic: 'semantic.statement.retracted',
+            payload: { statementId: large.statementId, revisionId: randomUUID(), kind: 'retraction' },
+            idempotencyKey: `retract-large-${large.statementId}`,
+            availableAt: '2026-09-21T07:00:00Z',
+            createdAt: '2026-09-21T07:00:00Z',
+          },
+        },
+        s.ctx,
+      )
+      await s.composition.dispatcher.dispatchOnce(s.scopeRef, s.ctx)
+      const firstRetractionRequest = { ...request, asOfRecordedSeq: '4' }
+      expect((await materializer.read(firstRetractionRequest, s.ctx)).status).toBe('fenced')
+      await s.composition.dispatcher.dispatchOnce(s.scopeRef, s.ctx)
+      const afterLargeRetraction = await materializer.read(firstRetractionRequest, s.ctx)
+      const stillSupported = afterLargeRetraction.conclusions.find((entry) => entry.predicate === 'device.needs_maintenance')
+      expect(stillSupported?.value).toBe(true)
+      expect(stillSupported?.satisfiedBy.find((entry) => entry.alternativeIds.length > 0)?.alternativeIds).toHaveLength(1)
+      expect(stillSupported?.ruleArtifacts?.[0]?.applicability.exceptionStates[0]?.state).toBe('false')
+      expect(stillSupported?.ruleArtifacts).toHaveLength(1)
+
+      await s.publication.reviseStatement(
+        s.scopeRef,
+        {
+          expectedRevision: '1',
+          revisionId: randomUUID(),
+          statementId: alternate.statementId,
+          kind: 'retraction',
+          reason: 'remove the last OR support',
+          recordedAt: '2026-09-21T08:00:00Z',
+          actor: s.ctx.principal.subjectId,
+          outbox: {
+            outboxId: randomUUID(),
+            topic: 'semantic.statement.retracted',
+            payload: { statementId: alternate.statementId, revisionId: randomUUID(), kind: 'retraction' },
+            idempotencyKey: `retract-alternate-${alternate.statementId}`,
+            availableAt: '2026-09-21T08:00:00Z',
+            createdAt: '2026-09-21T08:00:00Z',
+          },
+        },
+        s.ctx,
+      )
+      await s.composition.dispatcher.dispatchOnce(s.scopeRef, s.ctx)
+      await s.composition.dispatcher.dispatchOnce(s.scopeRef, s.ctx)
+      const afterLastRetraction = await materializer.read({ ...request, asOfRecordedSeq: '5' }, s.ctx)
+      const unsupported = afterLastRetraction.conclusions.find((entry) => entry.predicate === 'device.needs_maintenance')
+      expect(unsupported?.domainStatus).toBe('unknown')
+      expect(unsupported?.value).toBeUndefined()
+      expect(unsupported?.value).not.toBe(false)
+    } finally {
+      await s.composition.close()
+    }
   })
 
   it('does not double-advance a change when the outbox is re-delivered after a crash reclaim', async () => {
@@ -269,7 +426,7 @@ describe('IncrementalMaterializer wired into the worker against real PostgreSQL 
     const readRequest = {
       scopeRef: s.scopeRef,
       projectionRef: PROJECTION_REF,
-      asOfRecordedSeq: '9',
+      asOfRecordedSeq: '2',
       validAt: '2026-09-21T12:00:00Z',
     }
     await s.composition.dispatcher.dispatchOnce(s.scopeRef, s.ctx)
@@ -305,7 +462,8 @@ describe('IncrementalMaterializer wired into the worker against real PostgreSQL 
       s.ctx,
     )
     await s.composition.dispatcher.dispatchOnce(s.scopeRef, s.ctx)
-    const fenced = await materializer.read(readRequest, s.ctx)
+    const correctionRequest = { ...readRequest, asOfRecordedSeq: '3' }
+    const fenced = await materializer.read(correctionRequest, s.ctx)
     expect(fenced.status).toBe('fenced')
 
     // The advance commits, then the process "crashes" before the outbox mark, so the request is
@@ -316,12 +474,12 @@ describe('IncrementalMaterializer wired into the worker against real PostgreSQL 
     await expect(faultingDispatcher.dispatchOnce(s.scopeRef, s.ctx)).rejects.toThrow(
       'simulated crash before the outbox mark',
     )
-    const afterCrash = await materializer.read(readRequest, s.ctx)
+    const afterCrash = await materializer.read(correctionRequest, s.ctx)
     const generationAfterCrash = afterCrash.generation
 
     faultingStore.failNextMark = false
     await faultingDispatcher.dispatchOnce(s.scopeRef, s.ctx)
-    const afterRetry = await materializer.read(readRequest, s.ctx)
+    const afterRetry = await materializer.read(correctionRequest, s.ctx)
     expect(afterRetry.generation).toBe(generationAfterCrash)
 
     await s.composition.close()

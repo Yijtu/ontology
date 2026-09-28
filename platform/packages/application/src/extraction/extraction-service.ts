@@ -580,6 +580,7 @@ export class ExtractionPipeline {
         ruleId: entry.draft.ruleId,
         expression: result.expression,
         exceptions: result.exceptions,
+        conclusion: entry.draft.conclusion ?? null,
       })
       candidates.push({
         kind: 'rule',
@@ -592,6 +593,7 @@ export class ExtractionPipeline {
         reviewRequirement,
         expression: result.expression,
         exceptions: result.exceptions,
+        ...(entry.draft.conclusion === undefined ? {} : { conclusion: entry.draft.conclusion }),
         conflicts: [],
         sourceSpans: [...ruleSpans, ...exceptionSpans],
         deterministic: false,

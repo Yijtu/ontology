@@ -6,6 +6,7 @@ import type {
   NewOutboxMessage,
   OutboxMessageRecord,
   PublishedStatement,
+  PublishedRuleVersion,
   RevisionString,
   Rfc3339UtcTimestamp,
   ScopeRef,
@@ -25,14 +26,18 @@ export const PUBLICATION_PUBLISHED_TOPIC = 'semantic.publication.published'
 /** A statement correction or retraction (LOCAL-031). */
 export const STATEMENT_CORRECTED_TOPIC = 'semantic.statement.corrected'
 export const STATEMENT_RETRACTED_TOPIC = 'semantic.statement.retracted'
+/** The identity decision outbox event emitted atomically with a candidate split. */
+export const IDENTITY_SPLIT_TOPIC = 'identity.decision.split'
 
 const REQUEST_TOPIC = MATERIALIZATION_REQUESTED_TOPIC
 const DEFAULT_PAGE_SIZE = 1_000
+const MAX_PUBLICATION_SCAN = 100_000
 
 export type MaterializationOutboxErrorCode =
   | 'INVALID_MESSAGE'
   | 'PUBLICATION_NOT_VISIBLE'
   | 'STATEMENT_NOT_VISIBLE'
+  | 'PUBLICATION_SCAN_LIMIT'
 
 /** A malformed or unresolvable materialisation outbox message. Never swallowed into a no-op. */
 export class MaterializationOutboxError extends Error {
@@ -297,6 +302,23 @@ function validityOf(statement: PublishedStatement): ValidityInterval {
   }
 }
 
+function compareRulePosition(
+  left: Pick<PublishedRuleVersion, 'ruleId' | 'version'>,
+  right: Pick<PublishedRuleVersion, 'ruleId' | 'version'>,
+): number {
+  if (left.ruleId !== right.ruleId) return left.ruleId < right.ruleId ? -1 : 1
+  let leftVersion: bigint
+  let rightVersion: bigint
+  try {
+    if (!/^(?:0|[1-9]\d*)$/.test(left.version) || !/^(?:0|[1-9]\d*)$/.test(right.version)) throw new Error('noncanonical revision')
+    leftVersion = BigInt(left.version)
+    rightVersion = BigInt(right.version)
+  } catch (error) {
+    throw new MaterializationOutboxError('INVALID_MESSAGE', 'published rule revisions must be canonical non-negative integers', { cause: error })
+  }
+  return leftVersion < rightVersion ? -1 : leftVersion > rightVersion ? 1 : 0
+}
+
 /**
  * The semantic-materialisation outbox consumer (LOCAL-069, SPEC D5/D5.1/D6, ADR-13).
  *
@@ -317,6 +339,7 @@ export class MaterializationOutboxConsumer implements OutboxConsumer {
     PUBLICATION_PUBLISHED_TOPIC,
     STATEMENT_CORRECTED_TOPIC,
     STATEMENT_RETRACTED_TOPIC,
+    IDENTITY_SPLIT_TOPIC,
   ]
 
   readonly #materializer: IncrementalMaterializer
@@ -335,6 +358,9 @@ export class MaterializationOutboxConsumer implements OutboxConsumer {
     this.#outbox = dependencies.outbox
     this.#materialization = dependencies.materialization
     this.#pageSize = dependencies.pageSize ?? DEFAULT_PAGE_SIZE
+    if (!Number.isSafeInteger(this.#pageSize) || this.#pageSize < 1 || this.#pageSize > DEFAULT_PAGE_SIZE) {
+      throw new MaterializationOutboxError('INVALID_MESSAGE', `pageSize must be between 1 and ${String(DEFAULT_PAGE_SIZE)}`)
+    }
     this.#now = dependencies.now ?? (() => new Date().toISOString())
     this.#newId = dependencies.newId ?? (() => globalThis.crypto.randomUUID())
   }
@@ -350,6 +376,9 @@ export class MaterializationOutboxConsumer implements OutboxConsumer {
       case STATEMENT_CORRECTED_TOPIC:
       case STATEMENT_RETRACTED_TOPIC:
         await this.#requestForStatementRevision(message, ctx, message.topic)
+        return
+      case IDENTITY_SPLIT_TOPIC:
+        await this.#requestForIdentitySplit(message, ctx)
         return
       default:
         // Another consumer owns this topic; the router never routes it here.
@@ -387,11 +416,7 @@ export class MaterializationOutboxConsumer implements OutboxConsumer {
       )
     }
     const fences = parseFenceBindings(message.payload)
-    const statements = await this.#publications.listStatements(
-      scopeRef,
-      { publicationId, limit: this.#pageSize },
-      ctx,
-    )
+    const statements = await this.#listPublicationStatements(scopeRef, publicationId, ctx)
     for (const statement of statements) {
       await this.#openAndEnqueue(
         scopeRef,
@@ -414,11 +439,7 @@ export class MaterializationOutboxConsumer implements OutboxConsumer {
         fences.get(statement.statementId),
       )
     }
-    const rules = await this.#publications.listRuleVersions(
-      scopeRef,
-      { publicationId, limit: this.#pageSize },
-      ctx,
-    )
+    const rules = await this.#listPublicationRules(scopeRef, publicationId, ctx)
     for (const rule of rules) {
       await this.#openAndEnqueue(
         scopeRef,
@@ -437,6 +458,120 @@ export class MaterializationOutboxConsumer implements OutboxConsumer {
         fences.get(rule.ruleVersionId),
       )
     }
+  }
+
+  async #listPublicationStatements(
+    scopeRef: ScopeRef,
+    publicationId: Uuid,
+    ctx: ToolContext,
+  ): Promise<PublishedStatement[]> {
+    const records: PublishedStatement[] = []
+    const seen = new Set<string>()
+    let afterStatementId: Uuid | undefined
+    while (true) {
+      const page = await this.#publications.listStatements(scopeRef, {
+        publicationId,
+        limit: this.#pageSize,
+        ...(afterStatementId === undefined ? {} : { afterStatementId }),
+      }, ctx)
+      if (page.length > this.#pageSize || records.length + page.length > MAX_PUBLICATION_SCAN) {
+        throw new MaterializationOutboxError(
+          'PUBLICATION_SCAN_LIMIT',
+          `publication ${publicationId} exceeds the bounded ${String(MAX_PUBLICATION_SCAN)}-record materialization scan`,
+        )
+      }
+      let previous = afterStatementId
+      for (const statement of page) {
+        if (previous !== undefined && statement.statementId <= previous) {
+          throw new MaterializationOutboxError('INVALID_MESSAGE', 'published statement page cursor repeated or moved backwards')
+        }
+        if (seen.has(statement.statementId)) {
+          throw new MaterializationOutboxError('INVALID_MESSAGE', `published statement ${statement.statementId} repeated across pages`)
+        }
+        seen.add(statement.statementId)
+        records.push(statement)
+        previous = statement.statementId
+      }
+      if (page.length < this.#pageSize) return records
+      const last = page.at(-1)?.statementId
+      if (last === undefined || last === afterStatementId) {
+        throw new MaterializationOutboxError('INVALID_MESSAGE', 'published statement page did not advance its keyset cursor')
+      }
+      afterStatementId = last
+    }
+  }
+
+  async #listPublicationRules(
+    scopeRef: ScopeRef,
+    publicationId: Uuid,
+    ctx: ToolContext,
+  ): Promise<PublishedRuleVersion[]> {
+    const records: PublishedRuleVersion[] = []
+    const seen = new Set<string>()
+    let afterRule: { ruleId: string; version: RevisionString } | undefined
+    while (true) {
+      const page = await this.#publications.listRuleVersions(scopeRef, {
+        publicationId,
+        limit: this.#pageSize,
+        ...(afterRule === undefined ? {} : { afterRule }),
+      }, ctx)
+      if (page.length > this.#pageSize || records.length + page.length > MAX_PUBLICATION_SCAN) {
+        throw new MaterializationOutboxError(
+          'PUBLICATION_SCAN_LIMIT',
+          `publication ${publicationId} exceeds the bounded ${String(MAX_PUBLICATION_SCAN)}-rule materialization scan`,
+        )
+      }
+      let previous = afterRule
+      for (const rule of page) {
+        if (previous !== undefined && compareRulePosition(rule, previous) <= 0) {
+          throw new MaterializationOutboxError('INVALID_MESSAGE', 'published rule page cursor repeated or moved backwards')
+        }
+        const key = `${rule.ruleId}\u0000${rule.version}`
+        if (seen.has(key)) throw new MaterializationOutboxError('INVALID_MESSAGE', `published rule ${key} repeated across pages`)
+        seen.add(key)
+        records.push(rule)
+        previous = rule
+      }
+      if (page.length < this.#pageSize) return records
+      const last = page.at(-1)
+      if (last === undefined || (afterRule !== undefined && compareRulePosition(last, afterRule) <= 0)) {
+        throw new MaterializationOutboxError('INVALID_MESSAGE', 'published rule page did not advance its keyset cursor')
+      }
+      afterRule = { ruleId: last.ruleId, version: last.version }
+    }
+  }
+
+  async #requestForIdentitySplit(message: OutboxMessageRecord, ctx: ToolContext): Promise<void> {
+    const scopeRef = scopeOf(ctx)
+    const payload = asRecord(message.payload)
+    if (payload === undefined) throw new MaterializationOutboxError('INVALID_MESSAGE', 'identity split event must be an object')
+    const eventId = requiredString(payload, 'eventId')
+    const changeId = eventId
+    const entityId = requiredString(payload, 'entityId')
+    const objectId = requiredString(payload, 'objectId')
+    requiredString(payload, 'decisionId')
+    requiredString(payload, 'identityScopeId')
+    const separatedCandidateIds = parseUuidArray(payload['separatedCandidateIds'])
+    const reason = requiredString(payload, 'reason')
+    const preOpenedFenceId = requiredString(payload, 'materializationFenceId')
+    await this.#openAndEnqueue(
+      scopeRef,
+      changeId,
+      message.jobId,
+      (recordedSeq, recordedAt) => ({
+        changeId,
+        scopeRef,
+        recordedSeq,
+        recordedAt,
+        kind: 'identity_changed',
+        entityId,
+        objectId,
+        separatedCandidateIds,
+        reason,
+      }),
+      ctx,
+      preOpenedFenceId,
+    )
   }
 
   async #requestForStatementRevision(

@@ -93,6 +93,7 @@ interface RuleRow extends QueryResultRow {
   impact: 'high' | 'low'
   expression: PublishedRuleVersion['expression']
   exceptions: PublishedRuleVersion['exceptions']
+  conclusion: NonNullable<PublishedRuleVersion['conclusion']> | null
   valid_from: Date | null
   valid_to: Date | null
   recorded_at: Date
@@ -119,7 +120,7 @@ const STATEMENT_COLUMNS = `statement_id, proposition_key, kind, object_id, relat
   predicate, value, unit_code, valid_from, valid_to, recorded_at, source_candidate_id, source_refs,
   publication_id, version, status`
 const RULE_COLUMNS = `rule_version_id, rule_id, version, object_id, severity, impact, expression,
-  exceptions, valid_from, valid_to, recorded_at, source_candidate_id, publication_id`
+  exceptions, conclusion, valid_from, valid_to, recorded_at, source_candidate_id, publication_id`
 const REVISION_COLUMNS = `revision_id, statement_id, version, kind, reason, corrected_value, valid_from,
   valid_to, recorded_at, actor, supersedes_version, invalidation_outbox_id`
 const REVIEW_COLUMNS = `review_id, candidate_id, revision, decision, reason, evidence_refs, recorded_at,
@@ -171,6 +172,7 @@ function toRuleVersion(row: RuleRow): PublishedRuleVersion {
     impact: row.impact,
     expression: row.expression,
     exceptions: row.exceptions,
+    ...(row.conclusion === null ? {} : { conclusion: row.conclusion }),
     ...(row.valid_from === null ? {} : { validFrom: row.valid_from.toISOString() }),
     ...(row.valid_to === null ? {} : { validTo: row.valid_to.toISOString() }),
     recordedAt: row.recorded_at.toISOString(),
@@ -353,6 +355,22 @@ export class PostgresSemanticPublicationStore implements SemanticPublicationStor
     })
   }
 
+  async latestReadRevision(scopeRef: ScopeRef, ctx: ToolContext): Promise<RevisionString> {
+    return this.#withScope(scopeRef, ctx, async (query) => {
+      const result = await query.query<{ revision: string }>(
+        `SELECT (
+           COALESCE((SELECT revision FROM agent_platform.semantic_publication_heads
+              WHERE tenant_id = current_setting('app.tenant_id')::uuid
+                AND space_id = current_setting('app.space_id')::uuid), 0)
+           + COALESCE((SELECT SUM(version) FROM agent_platform.statement_revisions
+              WHERE tenant_id = current_setting('app.tenant_id')::uuid
+                AND space_id = current_setting('app.space_id')::uuid), 0)
+         )::text AS revision`,
+      )
+      return result.rows[0]?.revision ?? '0'
+    })
+  }
+
   async publish(
     scopeRef: ScopeRef,
     input: PublishSemanticPublicationInput,
@@ -520,13 +538,13 @@ export class PostgresSemanticPublicationStore implements SemanticPublicationStor
         await query.query(
           `INSERT INTO agent_platform.published_rule_versions
              (tenant_id, space_id, rule_version_id, rule_id, version, object_id, severity, impact,
-              expression, exceptions, valid_from, valid_to, recorded_at, source_candidate_id,
+              expression, exceptions, conclusion, valid_from, valid_to, recorded_at, source_candidate_id,
               publication_id)
            VALUES (
              current_setting('app.tenant_id')::uuid,
              current_setting('app.space_id')::uuid,
-             $1, $2, $3::bigint, $4, $5, $6, $7::jsonb, $8::jsonb, $9::timestamptz, $10::timestamptz,
-             $11::timestamptz, $12, $13)`,
+             $1, $2, $3::bigint, $4, $5, $6, $7::jsonb, $8::jsonb, $9::jsonb,
+             $10::timestamptz, $11::timestamptz, $12::timestamptz, $13, $14)`,
           [
             rule.ruleVersionId,
             rule.ruleId,
@@ -536,6 +554,7 @@ export class PostgresSemanticPublicationStore implements SemanticPublicationStor
             rule.impact,
             JSON.stringify(rule.expression),
             JSON.stringify(rule.exceptions),
+            rule.conclusion === undefined ? null : JSON.stringify(rule.conclusion),
             rule.validFrom ?? null,
             rule.validTo ?? null,
             rule.recordedAt,
@@ -664,6 +683,10 @@ export class PostgresSemanticPublicationStore implements SemanticPublicationStor
         values.push(filter.status)
         clauses.push(`status = $${String(values.length)}`)
       }
+      if (filter.afterStatementId !== undefined) {
+        values.push(filter.afterStatementId)
+        clauses.push(`statement_id > $${String(values.length)}`)
+      }
       values.push(filter.limit ?? 1_000)
       const result = await query.query<StatementRow>(
         `SELECT ${STATEMENT_COLUMNS} FROM agent_platform.published_statements
@@ -698,6 +721,13 @@ export class PostgresSemanticPublicationStore implements SemanticPublicationStor
       if (filter.publicationId !== undefined) {
         values.push(filter.publicationId)
         clauses.push(`publication_id = $${String(values.length)}`)
+      }
+      if (filter.afterRule !== undefined) {
+        values.push(filter.afterRule.ruleId)
+        const ruleIdParameter = `$${String(values.length)}`
+        values.push(filter.afterRule.version)
+        const versionParameter = `$${String(values.length)}::bigint`
+        clauses.push(`(rule_id > ${ruleIdParameter} OR (rule_id = ${ruleIdParameter} AND version > ${versionParameter}))`)
       }
       values.push(filter.limit ?? 1_000)
       const result = await query.query<RuleRow>(

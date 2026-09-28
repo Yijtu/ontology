@@ -14,6 +14,7 @@ import type {
   RuleUnhandledCandidate,
   Uuid,
 } from '@ontology/contracts'
+import { validateRuleConclusionBinding } from '@ontology/core'
 
 /**
  * Deterministic candidate validation against the published industry schema (SPEC D4.3,
@@ -356,6 +357,12 @@ export function validateRule(candidate: RuleCandidate, schema: IndustrySchema): 
   candidate.exceptions.forEach((exception, index) => {
     validateRuleExpression(out, schema, object, exception.condition, `exceptions[${String(index)}].condition`)
   })
+  if (candidate.conclusion !== undefined) {
+    const consequence = validateRuleConclusionBinding(candidate.conclusion, candidate.objectId, schema)
+    if (consequence.reason !== undefined) {
+      issue(out, 'INVALID_RULE_CONCLUSION', consequence.reason, 'conclusion')
+    }
+  }
   for (const conflict of candidate.conflicts) {
     issue(
       out,
