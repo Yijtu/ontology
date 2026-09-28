@@ -1,0 +1,56 @@
+{
+  "mappingRef": {
+    "id": "synthetic-transport-field-review-b",
+    "version": "1.0.0",
+    "digest": "sha256:b0926fe8e0b7bab63860d0e53061d10d71ac780f37889d4ed163f71b8e037252"
+  },
+  "dialect": "duckdb",
+  "objects": [
+    {
+      "conceptId": "transport_facility",
+      "sourceObjectRef": {
+        "sourceRef": { "namespace": "synthetic-transport-demo", "sourceId": "field-review-b" },
+        "objectPath": "demo.field_review_b_facilities"
+      },
+      "schema": "demo",
+      "relation": "field_review_b_facilities",
+      "relationKind": "table",
+      "estimatedRows": 1,
+      "fields": [
+        { "fieldRef": "facility_id", "column": "facility_id", "valueType": "string", "identityKey": true },
+        { "fieldRef": "network_code", "column": "network_code", "valueType": "string", "identityKey": false },
+        { "fieldRef": "facility_district_code", "column": "facility_district_code", "valueType": "enum", "identityKey": false },
+        { "fieldRef": "inspection_due", "column": "inspection_due", "valueType": "boolean", "identityKey": false },
+        { "fieldRef": "inspection_exempt", "column": "inspection_exempt", "valueType": "boolean", "identityKey": false }
+      ]
+    },
+    {
+      "conceptId": "transport_district",
+      "sourceObjectRef": {
+        "sourceRef": { "namespace": "synthetic-transport-demo", "sourceId": "district-directory" },
+        "objectPath": "demo.district_directory"
+      },
+      "schema": "demo",
+      "relation": "district_directory",
+      "relationKind": "table",
+      "estimatedRows": 2,
+      "fields": [
+        { "fieldRef": "district_code", "column": "district_code", "valueType": "string", "identityKey": true },
+        { "fieldRef": "district_network_code", "column": "district_network_code", "valueType": "string", "identityKey": false },
+        { "fieldRef": "district_name", "column": "district_name", "valueType": "string", "identityKey": false }
+      ]
+    }
+  ],
+  "links": [
+    {
+      "linkId": "facility_located_in_district",
+      "fromConceptId": "transport_facility",
+      "toConceptId": "transport_district",
+      "fromColumn": "facility_district_code",
+      "toColumn": "district_code",
+      "joinKind": "inner",
+      "cardinality": { "min": 1, "max": 1 },
+      "scope": { "maxFanout": 1 }
+    }
+  ]
+}

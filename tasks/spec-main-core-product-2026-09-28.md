@@ -238,3 +238,10 @@ C1 对应 A12 的模块和 publication 测试、A13 的幂等 run id / CAS 测�
 - 根代理独立 verifier 33 项、JEV actual-state+blob 30 项通过；JEV 外部服务/付费真实网关未调用或验收。
 - 已核验正文叶组件：Root 独立 UI 9 项通过；Workbench 配置新版本发布→预检→CAS 激活组件 Root 独立 17 项通过。根代理独立复跑相关聚焦合计 7 文件 / 93 项通过，覆盖 C2 查询、核验与 UI 组件边界。
 - 这些是组件级验证，不代表默认 App 已提供完整 `baseProfileSpec`/来源导入，也不代表正常浏览器 POST→持久 dispatch→Controller→真实 query→hard verification→answer/source 的 A10 全链通过；core-main host 和浏览器闭环继续实现。
+
+### C4 合成行业输入资产与 C3 状态引用存储 checkpoint（2026-09-28）
+
+- 两套公开合成配置/原始输入和异构 mapping 已固定在 `platform/deploy/core/examples/`：交通设施两独立来源、工业资产小时 canonical 与累计分钟布局；只含定义草稿、policy、raw 文档、SourceRef 和 Mapping，不含候选、发布事实、身份、物化、验证或答案。
+- 根代理独立 `tests/unit/core-example-assets.spec.ts` 5/5：按canonical schema校验definition/manifest/mapping digest；真实LocalDocumentExtractionService+parseNativeRecord+ExtractionPipeline native input 生成待审核候选，未seed候选及其下游状态；准确验证 5999 min < 100 h 与 6000 min = 100 h。
+- `decision-state-reference-postgres.spec.ts` 真实 PostgreSQL 1文件/3项通过，覆盖完整ResourceRef/run/profile绑定、同内容幂等、冲突、RLS、取消后授权撤销和 SQL `{}` null-trap拒绝。测试fixture数据库由独立临时命名卷和显式teardown管理。
+- 资产与授权存储均是独立模块门槛；默认 host 尚未挂载行业配置/运行mapping、未证明API/UI导入到正式问答，也未开始真实模型/规则回答验收，A02—A05/A10/A15仍未完成。

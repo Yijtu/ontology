@@ -1,0 +1,177 @@
+{
+  "scopeRef": {
+    "tenantId": "11111111-1111-4111-8111-111111111111",
+    "spaceId": "aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa"
+  },
+  "definitionId": "synthetic_transport_facility_core",
+  "version": "1.0.0",
+  "namespace": "synthetic-transport-facility",
+  "layer": "industry_core",
+  "standardProvenance": [
+    {
+      "standardRef": {
+        "id": "synthetic-transport-demo-assumption",
+        "version": "1.0.0",
+        "digest": "sha256:1111111111111111111111111111111111111111111111111111111111111111"
+      },
+      "provenanceKind": "synthetic_assumption",
+      "clauseRef": "demo-only"
+    }
+  ],
+  "objects": [
+    {
+      "kind": "object",
+      "id": "transport_facility",
+      "namespace": "synthetic-transport-facility",
+      "displayName": "Synthetic Transport Facility",
+      "identityScopeId": "transport_facility_identity",
+      "standardProvenance": [
+        {
+          "standardRef": {
+            "id": "synthetic-transport-demo-assumption",
+            "version": "1.0.0",
+            "digest": "sha256:1111111111111111111111111111111111111111111111111111111111111111"
+          },
+          "provenanceKind": "synthetic_assumption",
+          "clauseRef": "demo-only"
+        }
+      ]
+    },
+    {
+      "kind": "object",
+      "id": "transport_district",
+      "namespace": "synthetic-transport-facility",
+      "displayName": "Synthetic Transport District",
+      "identityScopeId": "transport_district_identity",
+      "standardProvenance": [
+        {
+          "standardRef": {
+            "id": "synthetic-transport-demo-assumption",
+            "version": "1.0.0",
+            "digest": "sha256:1111111111111111111111111111111111111111111111111111111111111111"
+          },
+          "provenanceKind": "synthetic_assumption",
+          "clauseRef": "demo-only"
+        }
+      ]
+    }
+  ],
+  "attributes": [
+    {
+      "kind": "attribute",
+      "id": "facility_id",
+      "namespace": "synthetic-transport-facility",
+      "objectId": "transport_facility",
+      "valueType": "string",
+      "cardinality": { "min": 1, "max": 1 },
+      "identityKey": true,
+      "standardProvenance": [{ "standardRef": { "id": "synthetic-transport-demo-assumption", "version": "1.0.0", "digest": "sha256:1111111111111111111111111111111111111111111111111111111111111111" }, "provenanceKind": "synthetic_assumption", "clauseRef": "demo-only" }]
+    },
+    {
+      "kind": "attribute",
+      "id": "network_code",
+      "namespace": "synthetic-transport-facility",
+      "objectId": "transport_facility",
+      "valueType": "string",
+      "cardinality": { "min": 1, "max": 1 },
+      "standardProvenance": [{ "standardRef": { "id": "synthetic-transport-demo-assumption", "version": "1.0.0", "digest": "sha256:1111111111111111111111111111111111111111111111111111111111111111" }, "provenanceKind": "synthetic_assumption", "clauseRef": "demo-only" }]
+    },
+    {
+      "kind": "attribute",
+      "id": "facility_district_code",
+      "namespace": "synthetic-transport-facility",
+      "objectId": "transport_facility",
+      "valueType": "enum",
+      "cardinality": { "min": 1, "max": 1 },
+      "enumValues": ["north", "south"],
+      "standardProvenance": [{ "standardRef": { "id": "synthetic-transport-demo-assumption", "version": "1.0.0", "digest": "sha256:1111111111111111111111111111111111111111111111111111111111111111" }, "provenanceKind": "synthetic_assumption", "clauseRef": "demo-only" }]
+    },
+    {
+      "kind": "attribute",
+      "id": "inspection_due",
+      "namespace": "synthetic-transport-facility",
+      "objectId": "transport_facility",
+      "valueType": "boolean",
+      "cardinality": { "min": 0, "max": 1 },
+      "standardProvenance": [{ "standardRef": { "id": "synthetic-transport-demo-assumption", "version": "1.0.0", "digest": "sha256:1111111111111111111111111111111111111111111111111111111111111111" }, "provenanceKind": "synthetic_assumption", "clauseRef": "demo-only" }]
+    },
+    {
+      "kind": "attribute",
+      "id": "inspection_exempt",
+      "namespace": "synthetic-transport-facility",
+      "objectId": "transport_facility",
+      "valueType": "boolean",
+      "cardinality": { "min": 0, "max": 1 },
+      "standardProvenance": [{ "standardRef": { "id": "synthetic-transport-demo-assumption", "version": "1.0.0", "digest": "sha256:1111111111111111111111111111111111111111111111111111111111111111" }, "provenanceKind": "synthetic_assumption", "clauseRef": "demo-only" }]
+    },
+    {
+      "kind": "attribute",
+      "id": "inspection_required",
+      "namespace": "synthetic-transport-facility",
+      "objectId": "transport_facility",
+      "valueType": "boolean",
+      "cardinality": { "min": 0, "max": 1 },
+      "standardProvenance": [{ "standardRef": { "id": "synthetic-transport-demo-assumption", "version": "1.0.0", "digest": "sha256:1111111111111111111111111111111111111111111111111111111111111111" }, "provenanceKind": "synthetic_assumption", "clauseRef": "demo-only" }]
+    },
+    {
+      "kind": "attribute",
+      "id": "district_code",
+      "namespace": "synthetic-transport-facility",
+      "objectId": "transport_district",
+      "valueType": "string",
+      "cardinality": { "min": 1, "max": 1 },
+      "identityKey": true,
+      "standardProvenance": [{ "standardRef": { "id": "synthetic-transport-demo-assumption", "version": "1.0.0", "digest": "sha256:1111111111111111111111111111111111111111111111111111111111111111" }, "provenanceKind": "synthetic_assumption", "clauseRef": "demo-only" }]
+    },
+    {
+      "kind": "attribute",
+      "id": "district_network_code",
+      "namespace": "synthetic-transport-facility",
+      "objectId": "transport_district",
+      "valueType": "string",
+      "cardinality": { "min": 1, "max": 1 },
+      "standardProvenance": [{ "standardRef": { "id": "synthetic-transport-demo-assumption", "version": "1.0.0", "digest": "sha256:1111111111111111111111111111111111111111111111111111111111111111" }, "provenanceKind": "synthetic_assumption", "clauseRef": "demo-only" }]
+    },
+    {
+      "kind": "attribute",
+      "id": "district_name",
+      "namespace": "synthetic-transport-facility",
+      "objectId": "transport_district",
+      "valueType": "string",
+      "cardinality": { "min": 1, "max": 1 },
+      "standardProvenance": [{ "standardRef": { "id": "synthetic-transport-demo-assumption", "version": "1.0.0", "digest": "sha256:1111111111111111111111111111111111111111111111111111111111111111" }, "provenanceKind": "synthetic_assumption", "clauseRef": "demo-only" }]
+    }
+  ],
+  "relations": [
+    {
+      "kind": "relation",
+      "id": "facility_located_in_district",
+      "namespace": "synthetic-transport-facility",
+      "fromObjectId": "transport_facility",
+      "toObjectId": "transport_district",
+      "cardinality": { "min": 1, "max": 1 },
+      "standardProvenance": [{ "standardRef": { "id": "synthetic-transport-demo-assumption", "version": "1.0.0", "digest": "sha256:1111111111111111111111111111111111111111111111111111111111111111" }, "provenanceKind": "synthetic_assumption", "clauseRef": "demo-only" }]
+    }
+  ],
+  "identityScopes": [
+    {
+      "kind": "identity_scope",
+      "id": "transport_facility_identity",
+      "namespace": "synthetic-transport-facility",
+      "objectId": "transport_facility",
+      "scopeDimensions": ["network_code"],
+      "identityAttributeIds": ["facility_id"],
+      "standardProvenance": [{ "standardRef": { "id": "synthetic-transport-demo-assumption", "version": "1.0.0", "digest": "sha256:1111111111111111111111111111111111111111111111111111111111111111" }, "provenanceKind": "synthetic_assumption", "clauseRef": "demo-only" }]
+    },
+    {
+      "kind": "identity_scope",
+      "id": "transport_district_identity",
+      "namespace": "synthetic-transport-facility",
+      "objectId": "transport_district",
+      "scopeDimensions": ["district_network_code"],
+      "identityAttributeIds": ["district_code"],
+      "standardProvenance": [{ "standardRef": { "id": "synthetic-transport-demo-assumption", "version": "1.0.0", "digest": "sha256:1111111111111111111111111111111111111111111111111111111111111111" }, "provenanceKind": "synthetic_assumption", "clauseRef": "demo-only" }]
+    }
+  ],
+  "ruleConstraints": []
+}

@@ -1,0 +1,44 @@
+{
+  "namespace": "synthetic-industrial-maintenance",
+  "maturity": "preview",
+  "standardProvenance": [
+    {
+      "standardRef": {
+        "id": "synthetic-industrial-demo-assumption",
+        "version": "1.0.0",
+        "digest": "sha256:2222222222222222222222222222222222222222222222222222222222222222"
+      },
+      "provenanceKind": "synthetic_assumption",
+      "clauseRef": "demo-only"
+    }
+  ],
+  "definitionsRef": {
+    "id": "synthetic_industrial_asset_maintenance_core",
+    "version": "1.0.0",
+    "digest": "sha256:6caf55cb639f25a694bbc1e7d3fa665de5f13c5599d3d035ed3b5ed0ed5e47cb"
+  },
+  "identityPolicyRef": {
+    "id": "synthetic_industrial_asset_maintenance_core",
+    "version": "1.0.0",
+    "digest": "sha256:6caf55cb639f25a694bbc1e7d3fa665de5f13c5599d3d035ed3b5ed0ed5e47cb"
+  },
+  "rulePolicyRef": {
+    "id": "synthetic-industrial-maintenance-rules",
+    "version": "1.0.0",
+    "digest": "sha256:b8e50bb72f9715f11b50ba88fc87a7be908cf89d41e25dbeb0b49934f72892b0"
+  },
+  "queryTemplatesRef": {
+    "id": "synthetic-industrial-maintenance-query-fields",
+    "version": "1.0.0",
+    "digest": "sha256:e959415da00935f677fa3488380b8d8ab6a951ea96034a2c57af00f6c2fcd8fa"
+  },
+  "requiredCapabilities": [
+    { "name": "structured_query", "versionRange": { "min": "1.0.0" } },
+    { "name": "document_search", "versionRange": { "min": "1.0.0" } }
+  ],
+  "testSuiteRef": {
+    "id": "synthetic-industrial-maintenance-golden-cases",
+    "version": "1.0.0",
+    "digest": "sha256:1c34ac6341ec04383d6e20aef8c7ccd405986651998041539ef2e20e5ccb7fac"
+  }
+}

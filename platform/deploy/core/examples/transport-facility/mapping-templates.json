@@ -1,0 +1,23 @@
+[
+  {
+    "conceptId": "transport_district",
+    "namespace": "synthetic-transport-facility",
+    "fields": [
+      { "fieldRef": "district_code", "valueType": "string", "identityKey": true },
+      { "fieldRef": "district_name", "valueType": "string", "identityKey": false },
+      { "fieldRef": "district_network_code", "valueType": "string", "identityKey": false }
+    ]
+  },
+  {
+    "conceptId": "transport_facility",
+    "namespace": "synthetic-transport-facility",
+    "fields": [
+      { "fieldRef": "facility_district_code", "valueType": "enum", "identityKey": false },
+      { "fieldRef": "facility_id", "valueType": "string", "identityKey": true },
+      { "fieldRef": "inspection_due", "valueType": "boolean", "identityKey": false },
+      { "fieldRef": "inspection_exempt", "valueType": "boolean", "identityKey": false },
+      { "fieldRef": "inspection_required", "valueType": "boolean", "identityKey": false },
+      { "fieldRef": "network_code", "valueType": "string", "identityKey": false }
+    ]
+  }
+]

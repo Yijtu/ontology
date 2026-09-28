@@ -1,0 +1,158 @@
+{
+  "scopeRef": {
+    "tenantId": "11111111-1111-4111-8111-111111111111",
+    "spaceId": "aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa"
+  },
+  "definitionId": "synthetic_industrial_asset_maintenance_core",
+  "version": "1.0.0",
+  "namespace": "synthetic-industrial-maintenance",
+  "layer": "industry_core",
+  "standardProvenance": [
+    {
+      "standardRef": {
+        "id": "synthetic-industrial-demo-assumption",
+        "version": "1.0.0",
+        "digest": "sha256:2222222222222222222222222222222222222222222222222222222222222222"
+      },
+      "provenanceKind": "synthetic_assumption",
+      "clauseRef": "demo-only"
+    }
+  ],
+  "objects": [
+    {
+      "kind": "object",
+      "id": "industrial_asset",
+      "namespace": "synthetic-industrial-maintenance",
+      "displayName": "Synthetic Industrial Asset",
+      "identityScopeId": "industrial_asset_identity",
+      "standardProvenance": [{ "standardRef": { "id": "synthetic-industrial-demo-assumption", "version": "1.0.0", "digest": "sha256:2222222222222222222222222222222222222222222222222222222222222222" }, "provenanceKind": "synthetic_assumption", "clauseRef": "demo-only" }]
+    },
+    {
+      "kind": "object",
+      "id": "workshop",
+      "namespace": "synthetic-industrial-maintenance",
+      "displayName": "Synthetic Workshop",
+      "identityScopeId": "workshop_identity",
+      "standardProvenance": [{ "standardRef": { "id": "synthetic-industrial-demo-assumption", "version": "1.0.0", "digest": "sha256:2222222222222222222222222222222222222222222222222222222222222222" }, "provenanceKind": "synthetic_assumption", "clauseRef": "demo-only" }]
+    }
+  ],
+  "attributes": [
+    {
+      "kind": "attribute",
+      "id": "asset_id",
+      "namespace": "synthetic-industrial-maintenance",
+      "objectId": "industrial_asset",
+      "valueType": "string",
+      "cardinality": { "min": 1, "max": 1 },
+      "identityKey": true,
+      "standardProvenance": [{ "standardRef": { "id": "synthetic-industrial-demo-assumption", "version": "1.0.0", "digest": "sha256:2222222222222222222222222222222222222222222222222222222222222222" }, "provenanceKind": "synthetic_assumption", "clauseRef": "demo-only" }]
+    },
+    {
+      "kind": "attribute",
+      "id": "asset_network_code",
+      "namespace": "synthetic-industrial-maintenance",
+      "objectId": "industrial_asset",
+      "valueType": "string",
+      "cardinality": { "min": 1, "max": 1 },
+      "standardProvenance": [{ "standardRef": { "id": "synthetic-industrial-demo-assumption", "version": "1.0.0", "digest": "sha256:2222222222222222222222222222222222222222222222222222222222222222" }, "provenanceKind": "synthetic_assumption", "clauseRef": "demo-only" }]
+    },
+    {
+      "kind": "attribute",
+      "id": "asset_workshop_code",
+      "namespace": "synthetic-industrial-maintenance",
+      "objectId": "industrial_asset",
+      "valueType": "enum",
+      "cardinality": { "min": 1, "max": 1 },
+      "enumValues": ["WS-A", "WS-B"],
+      "standardProvenance": [{ "standardRef": { "id": "synthetic-industrial-demo-assumption", "version": "1.0.0", "digest": "sha256:2222222222222222222222222222222222222222222222222222222222222222" }, "provenanceKind": "synthetic_assumption", "clauseRef": "demo-only" }]
+    },
+    {
+      "kind": "attribute",
+      "id": "operating_hours",
+      "namespace": "synthetic-industrial-maintenance",
+      "objectId": "industrial_asset",
+      "valueType": "quantity",
+      "cardinality": { "min": 0, "max": 1 },
+      "unit": { "unitCode": "h", "dimension": "time" },
+      "standardProvenance": [{ "standardRef": { "id": "synthetic-industrial-demo-assumption", "version": "1.0.0", "digest": "sha256:2222222222222222222222222222222222222222222222222222222222222222" }, "provenanceKind": "synthetic_assumption", "clauseRef": "demo-only" }]
+    },
+    {
+      "kind": "attribute",
+      "id": "maintenance_exempt",
+      "namespace": "synthetic-industrial-maintenance",
+      "objectId": "industrial_asset",
+      "valueType": "boolean",
+      "cardinality": { "min": 0, "max": 1 },
+      "standardProvenance": [{ "standardRef": { "id": "synthetic-industrial-demo-assumption", "version": "1.0.0", "digest": "sha256:2222222222222222222222222222222222222222222222222222222222222222" }, "provenanceKind": "synthetic_assumption", "clauseRef": "demo-only" }]
+    },
+    {
+      "kind": "attribute",
+      "id": "maintenance_required",
+      "namespace": "synthetic-industrial-maintenance",
+      "objectId": "industrial_asset",
+      "valueType": "boolean",
+      "cardinality": { "min": 0, "max": 1 },
+      "standardProvenance": [{ "standardRef": { "id": "synthetic-industrial-demo-assumption", "version": "1.0.0", "digest": "sha256:2222222222222222222222222222222222222222222222222222222222222222" }, "provenanceKind": "synthetic_assumption", "clauseRef": "demo-only" }]
+    },
+    {
+      "kind": "attribute",
+      "id": "workshop_code",
+      "namespace": "synthetic-industrial-maintenance",
+      "objectId": "workshop",
+      "valueType": "string",
+      "cardinality": { "min": 1, "max": 1 },
+      "identityKey": true,
+      "standardProvenance": [{ "standardRef": { "id": "synthetic-industrial-demo-assumption", "version": "1.0.0", "digest": "sha256:2222222222222222222222222222222222222222222222222222222222222222" }, "provenanceKind": "synthetic_assumption", "clauseRef": "demo-only" }]
+    },
+    {
+      "kind": "attribute",
+      "id": "workshop_network_code",
+      "namespace": "synthetic-industrial-maintenance",
+      "objectId": "workshop",
+      "valueType": "string",
+      "cardinality": { "min": 1, "max": 1 },
+      "standardProvenance": [{ "standardRef": { "id": "synthetic-industrial-demo-assumption", "version": "1.0.0", "digest": "sha256:2222222222222222222222222222222222222222222222222222222222222222" }, "provenanceKind": "synthetic_assumption", "clauseRef": "demo-only" }]
+    },
+    {
+      "kind": "attribute",
+      "id": "workshop_name",
+      "namespace": "synthetic-industrial-maintenance",
+      "objectId": "workshop",
+      "valueType": "string",
+      "cardinality": { "min": 1, "max": 1 },
+      "standardProvenance": [{ "standardRef": { "id": "synthetic-industrial-demo-assumption", "version": "1.0.0", "digest": "sha256:2222222222222222222222222222222222222222222222222222222222222222" }, "provenanceKind": "synthetic_assumption", "clauseRef": "demo-only" }]
+    }
+  ],
+  "relations": [
+    {
+      "kind": "relation",
+      "id": "asset_installed_in_workshop",
+      "namespace": "synthetic-industrial-maintenance",
+      "fromObjectId": "industrial_asset",
+      "toObjectId": "workshop",
+      "cardinality": { "min": 1, "max": 1 },
+      "standardProvenance": [{ "standardRef": { "id": "synthetic-industrial-demo-assumption", "version": "1.0.0", "digest": "sha256:2222222222222222222222222222222222222222222222222222222222222222" }, "provenanceKind": "synthetic_assumption", "clauseRef": "demo-only" }]
+    }
+  ],
+  "identityScopes": [
+    {
+      "kind": "identity_scope",
+      "id": "industrial_asset_identity",
+      "namespace": "synthetic-industrial-maintenance",
+      "objectId": "industrial_asset",
+      "scopeDimensions": ["asset_network_code"],
+      "identityAttributeIds": ["asset_id"],
+      "standardProvenance": [{ "standardRef": { "id": "synthetic-industrial-demo-assumption", "version": "1.0.0", "digest": "sha256:2222222222222222222222222222222222222222222222222222222222222222" }, "provenanceKind": "synthetic_assumption", "clauseRef": "demo-only" }]
+    },
+    {
+      "kind": "identity_scope",
+      "id": "workshop_identity",
+      "namespace": "synthetic-industrial-maintenance",
+      "objectId": "workshop",
+      "scopeDimensions": ["workshop_network_code"],
+      "identityAttributeIds": ["workshop_code"],
+      "standardProvenance": [{ "standardRef": { "id": "synthetic-industrial-demo-assumption", "version": "1.0.0", "digest": "sha256:2222222222222222222222222222222222222222222222222222222222222222" }, "provenanceKind": "synthetic_assumption", "clauseRef": "demo-only" }]
+    }
+  ],
+  "ruleConstraints": []
+}

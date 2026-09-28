@@ -1,0 +1,60 @@
+{
+  "asset_key": "I-01",
+  "network_key": "demo-plant",
+  "workshop_code": "WS-A",
+  "accumulated_minutes": 7200,
+  "waiver_flag": 0,
+  "source_record_id": "minutes-ledger-001"
+}
+
+{
+  "asset_key": "I-02",
+  "network_key": "demo-plant",
+  "workshop_code": "WS-A",
+  "accumulated_minutes": 7200,
+  "waiver_flag": 1,
+  "source_record_id": "minutes-ledger-002"
+}
+
+{
+  "asset_key": "I-03",
+  "network_key": "demo-plant",
+  "workshop_code": "WS-A",
+  "accumulated_minutes": 5400,
+  "waiver_flag": 0,
+  "source_record_id": "minutes-ledger-003"
+}
+
+{
+  "asset_key": "I-04",
+  "network_key": "demo-plant",
+  "workshop_code": "WS-B",
+  "accumulated_minutes": 6000,
+  "waiver_flag": 0,
+  "source_record_id": "minutes-ledger-004"
+}
+
+{
+  "asset_key": "I-05",
+  "network_key": "demo-plant",
+  "workshop_code": "WS-B",
+  "waiver_flag": 0,
+  "source_record_id": "minutes-ledger-005"
+}
+
+{
+  "asset_key": "I-06",
+  "network_key": "demo-plant",
+  "workshop_code": "WS-B",
+  "accumulated_minutes": 7200,
+  "source_record_id": "minutes-ledger-006"
+}
+
+{
+  "asset_key": "I-CAL-5999",
+  "network_key": "demo-plant",
+  "workshop_code": "WS-B",
+  "accumulated_minutes": 5999,
+  "waiver_flag": 0,
+  "source_record_id": "minutes-threshold-calibration-only"
+}
