@@ -52,5 +52,21 @@ Dependencies: #173, #178
 
 ## 完成记录
 
-- 当前：未开工；验证未运行。GitHub Issue：[#179](https://github.com/Yijtu/ontology/issues/179)；文档提交不代表功能完成。
-- 实现后记录：提交/PR、适用命令结果、满足的验收、未验证/外部条件、迁移配置与兼容影响。
+- 当前：已实现，验证已运行。GitHub Issue：[#179](https://github.com/Yijtu/ontology/issues/179)。
+- 分支：`feat/v03-007-schema-extraction`（合入基线 `feat/v03-assistants-core`）。
+- 满足的验收：
+  - A.US-004.AC-01／A-T004-01／A.FR-7／P.US-008.AC-01／P.FR-12：`buildSchemaContext` 把固定对象/属性类型、cardinality、单位、enum、关系端点、identityScope、已发布 ruleConstraints 与冻结规则语法/上限和 exact-decimal 规则，序列化为 canonical `extraction-schema-context@1` 工件并注入 system 消息；`ExtractionInputVersion.promptVersion/schemaDigest` 随候选记录。受控公司 HTTP 服务断言实际收到该内容（`tests/unit/extraction-adapter-accounting.spec.ts`）。
+  - A.US-004.AC-02／P.US-008.AC-02：`CandidateAttributeValue` 保留 `value`（quantity 为 exact `DecimalString`）＋`raw`＋`decimal`＋`unitCode`；校验拒绝非规范十进制（`INVALID_DECIMAL`），数量不先经有损 `Number`。
+  - P.US-008.AC-03：未知字段（`UNKNOWN_ATTRIBUTE`）与命名但未识别的关系端点（`UNRESOLVED_ENDPOINT`）进入 `pending_review`，不自动发布；伪造的越界引用仍为硬 `DANGLING_REFERENCE`。
+  - V03-006 NEW_WORK：新增结构化 `parsed → extracted` 处理器与 `ParsedStageDispatcher`，消费 `StructuredExtractionRef.parseId`＋`document_structured_records`，按 locator 从不可变原文回读单元格并批量写入带 `StructuredCandidateSourceSpan` 的候选；结构化 job 继续复用确定性 `extracted → validated → awaiting_review` 链。
+- 验证命令与结果（`platform/`）：
+  - `pnpm run typecheck` → 0
+  - `pnpm run lint` → 0
+  - `pnpm run boundaries` → 8 passed
+  - `pnpm exec vitest run tests/unit` → 113 files / 1301 tests passed
+  - `pnpm exec vitest run tests/integration/structured-extraction-postgres.spec.ts` → 1 passed（真实 PostgreSQL＋blob，含 exact decimal、structured locator、job 到 `awaiting_review`）
+  - `tests/integration/{extraction-postgres,structured-ingestion-postgres,ingestion-pipeline-postgres}` → 17 passed
+  - `tests/integration/{identity-recall,identity-decisions,rule-extraction,semantic-publications,publication-fence}-postgres` → 27 passed
+- 迁移与兼容：新增 `migrations/control/060_structured_extraction_candidates.sql`，仅解除 `extraction_candidates.parse_id` 对文本 `document_parse_runs` 的单列 FK 并加索引，使结构化 parse id 可落库；job FK、idempotency 唯一约束与 RLS 不变，parse 绑定仍由 `input_version.parseId`＋locator span 显式表达（详见迁移注释）。
+- 范围说明：为使 `CandidateSourceSpan` 判别联合通过类型检查，同步了 `apps/api/src/http/decisions.ts` 的只读候选来源读取（新增 `structured` 状态分支）；未改动 `apps/web`。
+- 未验证/外部条件：未调用真实模型；真实模型抽取质量按 SPEC §7.3 单独评测，本卡不声明。

@@ -29,7 +29,7 @@ import type {
   Uuid,
   VersionRef,
 } from '@ontology/contracts'
-import { SemanticPublicationStoreError } from '@ontology/contracts'
+import { SemanticPublicationStoreError, candidateSourceRef } from '@ontology/contracts'
 import { validateRuleConclusionBinding } from '@ontology/core'
 import { sha256DigestOf } from '../definitions/canonical'
 import { SemanticPublicationError } from './errors'
@@ -575,12 +575,9 @@ export class SemanticPublicationService {
       value: { attributes },
       recordedAt,
       sourceCandidateId: candidate.candidateId,
-      sourceRefs: candidate.sourceSpans.map((span) => ({
-        id: span.chunkId,
-        version: candidate.inputVersion.parserVersion,
-        digest: span.quoteDigest,
-        kind: 'chunk',
-      })),
+      sourceRefs: candidate.sourceSpans.map((span) =>
+        candidateSourceRef(span, candidate.inputVersion.parserVersion),
+      ),
       publicationId,
       version: '1',
       status: 'active',
@@ -607,12 +604,9 @@ export class SemanticPublicationService {
       value: { from: candidate.from, to: candidate.to },
       recordedAt,
       sourceCandidateId: candidate.candidateId,
-      sourceRefs: candidate.sourceSpans.map((span) => ({
-        id: span.chunkId,
-        version: candidate.inputVersion.parserVersion,
-        digest: span.quoteDigest,
-        kind: 'chunk',
-      })),
+      sourceRefs: candidate.sourceSpans.map((span) =>
+        candidateSourceRef(span, candidate.inputVersion.parserVersion),
+      ),
       publicationId,
       version: '1',
       status: 'active',

@@ -29,9 +29,11 @@ export {
 } from './structured-parse-stage-handler'
 export type { StructuredDocumentParseStageHandlerDependencies } from './structured-parse-stage-handler'
 export {
+  decodeStructuredExtractionRef,
   decodeStructuredIngestionRef,
   encodeStructuredExtractionRef,
   encodeStructuredIngestionRef,
+  isStructuredExtractionRef,
   isStructuredIngestionRef,
 } from './structured-ingestion-ref'
 export type {

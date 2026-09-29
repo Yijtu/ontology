@@ -13,10 +13,12 @@ import type {
   JobStageHandlerRegistry,
   JobStageOutcome,
 } from '../jobs/types'
+import { decodeStructuredExtractionRef, isStructuredExtractionRef } from '../jobs/structured-ingestion-ref'
 import { ExtractionError } from './errors'
 import { decodeExtractionJobRef } from './job-ref'
 import type { ExtractionPipeline } from './extraction-service'
 import type { ExtractionInput } from './types'
+import type { StructuredExtractionService } from './structured-extraction-service'
 
 function scopeOf(ctx: ToolContext): ScopeRef {
   return { tenantId: ctx.principal.tenantId, spaceId: ctx.allowedResources.spaceId }
@@ -31,6 +33,30 @@ async function buildInput(
   const documentRef = job.documentRef
   if (documentRef === undefined) {
     throw new JobStageFailure('INVALID_ARGUMENT', 'an extraction job requires a documentRef', false)
+  }
+  if (isStructuredExtractionRef(documentRef)) {
+    // A structured job reuses the deterministic validation/ review stages: they only need the
+    // pinned definition version and parse identity, not text chunks.
+    let structured
+    try {
+      structured = decodeStructuredExtractionRef(documentRef)
+    } catch (error) {
+      throw new JobStageFailure('INVALID_ARGUMENT', 'the structured extraction reference is malformed', false, {
+        cause: error,
+      })
+    }
+    return {
+      jobId: job.jobId,
+      parseId: structured.parseId,
+      parserVersion: structured.parserVersion,
+      pipelineVersion: job.pipelineVersion,
+      definitionRef: structured.definitionRef,
+      ...(structured.documentVersionRef === undefined
+        ? {}
+        : { documentVersionRef: structured.documentVersionRef }),
+      chunks: [],
+      truncatedChunkIds: [],
+    }
   }
   let ref
   try {
@@ -79,6 +105,10 @@ function stageFailureOf(error: ExtractionError): JobStageFailure {
       return new JobStageFailure('INVALID_ARGUMENT', 'the extraction job reference is invalid', false, { cause: error })
     case 'NO_CHUNKS':
       return new JobStageFailure('INSUFFICIENT_DATA', 'the parse has no extractable chunks', false, { cause: error })
+    case 'ORIGINAL_UNREADABLE':
+      return new JobStageFailure('SOURCE_UNAVAILABLE', 'the immutable original could not be read', true, { cause: error })
+    case 'STRUCTURED_PARSE_REJECTED':
+      return new JobStageFailure('INVALID_SCHEMA', 'the structured original was rejected on re-parse', false, { cause: error })
     case 'INVALID_MODEL_OUTPUT':
       return new JobStageFailure('INVALID_SCHEMA', 'the extraction model returned invalid structured output', false, { cause: error })
     case 'GENERATION_FAILED':
@@ -159,6 +189,98 @@ export class ExtractionStageHandler implements JobStageHandler {
   }
 }
 
+export interface StructuredExtractionStageHandlerDependencies {
+  readonly extraction: StructuredExtractionService
+  readonly now?: () => string
+  readonly newId?: () => string
+}
+
+/**
+ * `parsed → extracted` for a structured ingestion job. It consumes the durable
+ * `StructuredExtractionRef` (parse id + reconciled `document_structured_records`) and
+ * batch-inserts candidates whose source spans carry the exact structured locator. It owns no
+ * persistence: the worker commits the checkpoint, counts and outbox message in one transaction.
+ */
+export class StructuredExtractionStageHandler implements JobStageHandler {
+  readonly stage = 'parsed' as const
+  readonly #extraction: StructuredExtractionService
+  readonly #now: () => string
+  readonly #newId: () => string
+
+  constructor(dependencies: StructuredExtractionStageHandlerDependencies) {
+    this.#extraction = dependencies.extraction
+    this.#now = dependencies.now ?? (() => new Date().toISOString())
+    this.#newId = dependencies.newId ?? (() => globalThis.crypto.randomUUID())
+  }
+
+  async run(context: JobStageContext): Promise<JobStageOutcome> {
+    const documentRef = context.job.documentRef
+    if (documentRef === undefined) {
+      throw new JobStageFailure('INVALID_ARGUMENT', 'a structured extraction job requires a documentRef', false)
+    }
+    let ref
+    try {
+      ref = decodeStructuredExtractionRef(documentRef)
+    } catch (error) {
+      throw new JobStageFailure('INVALID_ARGUMENT', 'the structured extraction reference is malformed', false, {
+        cause: error,
+      })
+    }
+    let result
+    try {
+      result = await this.#extraction.extract(ref, {
+        jobId: context.job.jobId,
+        ledgerId: context.ledgerId,
+        pipelineVersion: context.job.pipelineVersion,
+        ctx: context.ctx,
+        signal: context.signal,
+      })
+    } catch (error) {
+      if (error instanceof ExtractionError) throw stageFailureOf(error)
+      throw error
+    }
+    const now = this.#now()
+    return {
+      nextStage: 'extracted',
+      counts: result.counts,
+      outbox: {
+        outboxId: this.#newId(),
+        topic: 'extraction.candidates.produced',
+        payload: {
+          jobId: context.job.jobId,
+          candidateCount: result.candidateIds.length,
+          modelCalls: 0,
+          deterministicCandidates: result.candidateIds.length,
+        },
+        idempotencyKey: `extraction-candidates-produced:${context.job.jobId}`,
+        availableAt: now,
+        createdAt: now,
+      },
+    }
+  }
+}
+
+/**
+ * Routes the `parsed` stage by the job's opaque input reference: a `structured_extraction`
+ * reference runs the structured handler, everything else keeps the text/PDF chunks path.
+ */
+export class ParsedStageDispatcher implements JobStageHandler {
+  readonly stage = 'parsed' as const
+  readonly #text: JobStageHandler
+  readonly #structured: JobStageHandler
+
+  constructor(text: JobStageHandler, structured: JobStageHandler) {
+    this.#text = text
+    this.#structured = structured
+  }
+
+  run(context: JobStageContext): Promise<JobStageOutcome> {
+    return isStructuredExtractionRef(context.job.documentRef)
+      ? this.#structured.run(context)
+      : this.#text.run(context)
+  }
+}
+
 /**
  * `extracted → validated`: run the deterministic schema/span validation and move every
  * candidate to `pending_review` or `failed`. It re-decodes the job reference but never
@@ -185,12 +307,30 @@ export class CandidateValidationStageHandler implements JobStageHandler {
   }
 }
 
+export interface ExtractionHandlerRegistryOptions {
+  /**
+   * The structured `parsed → extracted` handler. When present, the `parsed` stage routes by
+   * the job's input reference kind so a structured ingestion job runs it instead of the
+   * text/PDF chunk handler.
+   */
+  readonly structured?: JobStageHandler
+}
+
 /** Build a stage registry from the extraction handlers so the worker can claim them. */
 export function createExtractionHandlerRegistry(
   handlers: readonly JobStageHandler[],
+  options: ExtractionHandlerRegistryOptions = {},
 ): JobStageHandlerRegistry {
   const byStage = new Map<PipelineStage, JobStageHandler>()
   for (const handler of handlers) byStage.set(handler.stage, handler)
+  const structured = options.structured
+  if (structured !== undefined) {
+    const text = byStage.get('parsed')
+    if (text === undefined) {
+      throw new Error('a structured extraction handler requires a text `parsed` handler')
+    }
+    byStage.set('parsed', new ParsedStageDispatcher(text, structured))
+  }
   return { get: (stage) => byStage.get(stage) }
 }
 

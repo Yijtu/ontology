@@ -4,7 +4,10 @@ import type {
   IndustryIdentityScopeSchema,
   IndustryObjectSchema,
   IndustryRelationSchema,
+  IndustryRuleConstraintSchema,
+  IndustryRuleExpression,
   IndustrySchema,
+  RuleExpression,
   SemanticDefinitionVersion,
 } from '@ontology/contracts'
 
@@ -31,6 +34,43 @@ function toAttributeSchema(attribute: AttributeDefinition): IndustryAttributeSch
     ...(attribute.referencesObjectId === undefined
       ? {}
       : { referencesObjectId: attribute.referencesObjectId }),
+  }
+}
+
+function toRuleExpression(expression: RuleExpression): IndustryRuleExpression {
+  switch (expression.op) {
+    case 'all':
+      return { op: 'all', operands: expression.operands.map(toRuleExpression) }
+    case 'any':
+      return { op: 'any', operands: expression.operands.map(toRuleExpression) }
+    case 'not':
+      return { op: 'not', operand: toRuleExpression(expression.operand) }
+    case 'compare':
+      return {
+        op: 'compare',
+        attributeId: expression.attributeId,
+        operator: expression.operator,
+        value: expression.value,
+      }
+    case 'range':
+      return {
+        op: 'range',
+        attributeId: expression.attributeId,
+        ...(expression.min === undefined ? {} : { min: expression.min }),
+        ...(expression.max === undefined ? {} : { max: expression.max }),
+        ...(expression.unit === undefined ? {} : { unitCode: expression.unit.unitCode }),
+      }
+    case 'relation':
+      return { op: 'relation', relationId: expression.relationId }
+  }
+}
+
+function toRuleConstraintSchema(rule: SemanticDefinitionVersion['ruleConstraints'][number]): IndustryRuleConstraintSchema {
+  return {
+    ruleId: rule.id,
+    objectId: rule.objectId,
+    severity: rule.severity,
+    expression: toRuleExpression(rule.expression),
   }
 }
 
@@ -65,5 +105,6 @@ export function projectIndustrySchema(version: SemanticDefinitionVersion): Indus
     objects,
     relations,
     identityScopes,
+    ruleConstraints: version.ruleConstraints.map(toRuleConstraintSchema),
   }
 }

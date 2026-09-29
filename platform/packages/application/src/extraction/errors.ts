@@ -17,6 +17,8 @@ export type ExtractionErrorCode =
   | 'INVALID_MODEL_OUTPUT'
   | 'BUDGET_REFUSED'
   | 'CANCELLED'
+  | 'ORIGINAL_UNREADABLE'
+  | 'STRUCTURED_PARSE_REJECTED'
 
 export class ExtractionError extends Error {
   readonly code: ExtractionErrorCode

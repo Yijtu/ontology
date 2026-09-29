@@ -1,5 +1,6 @@
 import { randomUUID } from 'node:crypto'
 import type {
+  CandidateSourceSpan,
   CandidateStateTransition,
   CandidateStore,
   DocumentChunkRecord,
@@ -11,6 +12,7 @@ import type {
   IndustrySchema,
   RecordDocumentParseResult,
   ScopeRef,
+  TextCandidateSourceSpan,
   ToolContext,
   Uuid,
   VersionRef,
@@ -18,6 +20,11 @@ import type {
 import { CandidateStoreError } from '@ontology/contracts'
 import type { GenerationPort } from '@ontology/contracts'
 import { sha256DigestOf } from '@ontology/application'
+
+/** Narrow a candidate source span to its text/PDF chunk form, or `undefined` for a row span. */
+export function textSpan(span: CandidateSourceSpan | undefined): TextCandidateSourceSpan | undefined {
+  return span !== undefined && span.kind !== 'structured' ? span : undefined
+}
 
 export const PARSE_ID = '99999999-9999-4999-8999-999999999999'
 export const JOB_ID = '88888888-8888-4888-8888-888888888888'

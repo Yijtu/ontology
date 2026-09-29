@@ -148,6 +148,9 @@ export class StructuredDocumentParseStageHandler implements JobStageHandler {
         parserVersion: result.parse.parserVersion,
         definitionRef: ref.definitionRef,
         format: result.parse.format,
+        originalRef: result.parse.originalRef,
+        originalMediaType: result.parse.originalMediaType,
+        options: ref.options,
         ...(ref.documentVersionRef === undefined ? {} : { documentVersionRef: ref.documentVersionRef }),
       }),
     }

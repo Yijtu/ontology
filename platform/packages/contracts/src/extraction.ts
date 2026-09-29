@@ -1,4 +1,5 @@
 import type {
+  DecimalString,
   DocumentSpan,
   GenerationUsage,
   ResourceRef,
@@ -10,6 +11,7 @@ import type {
   VersionRef,
 } from './generated/contracts'
 import type { DocumentChunkRecord } from './document-parse'
+import type { SourceLocator } from './structured-parse'
 import type { ToolContext } from './trusted'
 import type {
   RuleConflict,
@@ -58,12 +60,14 @@ export type CandidateIssueCode =
   | 'UNKNOWN_ATTRIBUTE'
   | 'ATTRIBUTE_NOT_ON_OBJECT'
   | 'TYPE_MISMATCH'
+  | 'INVALID_DECIMAL'
   | 'ENUM_VALUE_INVALID'
   | 'UNIT_MISMATCH'
   | 'CARDINALITY_VIOLATION'
   | 'MISSING_IDENTITY_ATTRIBUTE'
   | 'UNKNOWN_RELATION'
   | 'DANGLING_REFERENCE'
+  | 'UNRESOLVED_ENDPOINT'
   | 'ENDPOINT_TYPE_MISMATCH'
   | 'SPAN_NOT_RESOLVED'
   | 'TRUNCATED_CHUNK'
@@ -79,10 +83,25 @@ export interface CandidateIssue {
   readonly field?: string
 }
 
-/** One attribute value on an entity candidate. `unitCode` is required for a quantity. */
+/**
+ * One attribute value on an entity candidate. `unitCode` is required for a quantity.
+ *
+ * Both the canonical value and, when the source carried one, the raw lexical token are
+ * preserved (SPEC v0.3 A §5.3, P.US-008.AC-02). A quantity is never first coerced to a
+ * lossy JavaScript `Number`: the canonical value is the exact `DecimalString` and `raw`
+ * keeps the verbatim source token, so a precision-preserving reader can round-trip it.
+ */
 export interface CandidateAttributeValue {
   readonly attributeId: string
+  /**
+   * The canonical value. For a quantity this is the exact decimal string (`DecimalString`);
+   * a finite `number` is only accepted for legacy historical records, never for new input.
+   */
   readonly value: string | number | boolean
+  /** The verbatim source token the value was derived from, when the source supplied one. */
+  readonly raw?: string
+  /** Present for an exactly parsed quantity; never produced through a lossy `Number`. */
+  readonly decimal?: DecimalString
   readonly unitCode?: string
 }
 
@@ -91,8 +110,13 @@ export interface CandidateAttributeValue {
  * id, keeps the chunk's locator/digests verbatim and never re-parses or rewrites the
  * original. `precision` stays `approximate` for an OCR span, so an approximate locator can
  * never be presented as exact in-page evidence (D3.2).
+ *
+ * `kind` is optional and defaults to a text/PDF chunk span; a structured row span carries
+ * `kind: 'structured'` instead, so the two families are never confused when a locator is
+ * read back (SPEC v0.3 A §5.2).
  */
-export interface CandidateSourceSpan {
+export interface TextCandidateSourceSpan {
+  readonly kind?: 'text'
   readonly parseId: Uuid
   readonly chunkId: Uuid
   readonly locator: DocumentSpan['locator']
@@ -100,6 +124,33 @@ export interface CandidateSourceSpan {
   readonly precision: DocumentChunkRecord['precision']
   readonly quoteDigest: Sha256Digest
   readonly textDigest: Sha256Digest
+}
+
+/**
+ * The provenance of a candidate derived from one reconciled structured row (V03-006). It
+ * carries the durable record identity and the exact `SourceLocator` (JSON pointer / table
+ * cell / table row) rather than a text chunk, so a reviewer can resolve the original cell.
+ */
+export interface StructuredCandidateSourceSpan {
+  readonly kind: 'structured'
+  readonly parseId: Uuid
+  readonly recordId: Uuid
+  readonly sourceRowKey: string
+  readonly locator: SourceLocator
+  readonly rowDigest: Sha256Digest
+}
+
+export type CandidateSourceSpan = TextCandidateSourceSpan | StructuredCandidateSourceSpan
+
+/**
+ * Reduce a candidate source span to the immutable artifact reference it is grounded in.
+ * A text/PDF span points at its chunk; a structured span points at the located original
+ * record. Centralising this keeps publication, recall and identity evidence consistent.
+ */
+export function candidateSourceRef(span: CandidateSourceSpan, parserVersion: Semver): ResourceRef {
+  return span.kind === 'structured'
+    ? { id: span.recordId, version: parserVersion, digest: span.rowDigest, kind: 'chunk' }
+    : { id: span.chunkId, version: parserVersion, digest: span.quoteDigest, kind: 'chunk' }
 }
 
 /**
@@ -111,6 +162,13 @@ export interface CandidateEndpoint {
   readonly objectId: string
   readonly candidateId?: Uuid
   readonly nativeId?: string
+  /**
+   * Why the endpoint could not be resolved to a produced entity or a strong native id.
+   * `dangling_index` is a fabricated reference (a hard failure); `missing_reference` means
+   * the entity was named but not identified, so it stays in review instead of being dropped
+   * and is never published (P.US-008.AC-03).
+   */
+  readonly unresolvedReason?: 'dangling_index' | 'missing_reference'
 }
 
 /**
@@ -124,6 +182,10 @@ export interface ExtractionInputVersion {
   readonly parserVersion: Semver
   readonly pipelineVersion: Semver
   readonly documentVersionRef?: ResourceRef
+  /** The fixed prompt/schema-context template version the request was built from (A §5.3). */
+  readonly promptVersion?: string
+  /** The canonical schema-context digest injected into the model request (A §5.3). */
+  readonly schemaDigest?: Sha256Digest
 }
 
 interface CandidateCommon {
@@ -323,12 +385,65 @@ export interface IndustryIdentityScopeSchema {
   readonly identityAttributeIds: readonly string[]
 }
 
+/**
+ * The frozen rule grammar the extractor may represent (SPEC v0.3 A §5.3, EX-4.1/§5.2).
+ * It is a fixed, declarative description of the supported subset: typed all/any/not,
+ * explicit comparisons, numeric ranges, one relation premise and no cyclic rules. The
+ * schema context injected into the model request states it so the model never proposes an
+ * unsupported form only to have it rejected after the fact.
+ */
+export interface IndustryRuleGrammar {
+  /** The declared comparison operators the semantic engine can publish and evaluate. */
+  readonly comparisonOperators: readonly string[]
+  /** The expression operators a rule may use. */
+  readonly operators: readonly string[]
+  /** Maximum relation navigation depth across rule premises. */
+  readonly maxRelationDepth: number
+  /** Whether a rule may reference another rule (cycles are never allowed). */
+  readonly allowsRuleReferences: boolean
+  /** Maximum number of linked rule levels in a dependency chain. */
+  readonly maxRuleDependencyLevels: number
+}
+
+/** A published rule constraint projected for the extraction contract. */
+export interface IndustryRuleConstraintSchema {
+  readonly ruleId: string
+  readonly objectId: string
+  readonly severity: 'hard' | 'soft'
+  readonly expression: IndustryRuleExpression
+}
+
+export type IndustryRuleExpression =
+  | { readonly op: 'all'; readonly operands: readonly IndustryRuleExpression[] }
+  | { readonly op: 'any'; readonly operands: readonly IndustryRuleExpression[] }
+  | { readonly op: 'not'; readonly operand: IndustryRuleExpression }
+  | {
+      readonly op: 'compare'
+      readonly attributeId: string
+      readonly operator: string
+      readonly value: string | number | boolean
+    }
+  | {
+      readonly op: 'range'
+      readonly attributeId: string
+      readonly min?: number
+      readonly max?: number
+      readonly unitCode?: string
+    }
+  | { readonly op: 'relation'; readonly relationId: string }
+
 export interface IndustrySchema {
   readonly namespace: string
   readonly definitionRef: VersionRef
   readonly objects: readonly IndustryObjectSchema[]
   readonly relations: readonly IndustryRelationSchema[]
   readonly identityScopes: readonly IndustryIdentityScopeSchema[]
+  /**
+   * The rule constraints declared by the published definition version. Optional so a
+   * reader that predates rule projection still validates; the extractor injects them when
+   * present (A §5.3).
+   */
+  readonly ruleConstraints?: readonly IndustryRuleConstraintSchema[]
 }
 
 /**

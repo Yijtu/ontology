@@ -25,12 +25,15 @@ import type {
   RuleCandidate,
   RuleUnhandledCandidate,
   ScopeRef,
+  TextCandidateSourceSpan,
   ToolContext,
   ToolUsage,
   Uuid,
   VersionRef,
 } from '@ontology/contracts'
 import { candidateIdFor, canonicalJson, sha256DigestOf } from './canonical'
+import { buildSchemaContext } from './schema-context'
+import type { SchemaContext } from './schema-context'
 import { ExtractionError, isExtractionError } from './errors'
 import type { DraftCandidates, DraftEntity, DraftRelation, DraftRelationEndpoint } from './model-output'
 import { parseModelCandidates } from './model-output'
@@ -130,7 +133,7 @@ function throwIfAborted(signal: AbortSignal): void {
   }
 }
 
-function inputVersionOf(input: ExtractionInput): ExtractionInputVersion {
+function inputVersionOf(input: ExtractionInput, schemaContext: SchemaContext): ExtractionInputVersion {
   return {
     definitionRef: input.definitionRef,
     parseId: input.parseId,
@@ -139,11 +142,14 @@ function inputVersionOf(input: ExtractionInput): ExtractionInputVersion {
     ...(input.documentVersionRef === undefined
       ? {}
       : { documentVersionRef: input.documentVersionRef }),
+    promptVersion: schemaContext.promptVersion,
+    schemaDigest: schemaContext.digest,
   }
 }
 
-function spanOf(chunk: DocumentChunkRecord, parseId: Uuid): CandidateSourceSpan {
+function spanOf(chunk: DocumentChunkRecord, parseId: Uuid): TextCandidateSourceSpan {
   return {
+    kind: 'text',
     parseId,
     chunkId: chunk.chunkId,
     locator: chunk.locator,
@@ -172,7 +178,7 @@ function extractionIdempotencyKey(payload: unknown): string {
   return sha256DigestOf(canonicalJson(payload))
 }
 
-function ruleSpanOf(chunk: DocumentChunkRecord, parseId: Uuid): CandidateSourceSpan {
+function ruleSpanOf(chunk: DocumentChunkRecord, parseId: Uuid): TextCandidateSourceSpan {
   return spanOf(chunk, parseId)
 }
 
@@ -239,9 +245,10 @@ export class ExtractionPipeline {
   async extract(input: ExtractionInput, run: ExtractionRunContext): Promise<ExtractionResult> {
     const scopeRef = scopeOf(run.ctx)
     const schema = await this.#requireSchema(scopeRef, input.definitionRef, run.ctx)
+    const schemaContext = buildSchemaContext(schema)
     const truncated = new Set(input.truncatedChunkIds)
     const recordedAt = this.#now()
-    const inputVersion = inputVersionOf(input)
+    const inputVersion = inputVersionOf(input, schemaContext)
     const records: CandidateRecord[] = []
     const pendingRules: PendingRule[] = []
     const pendingExceptions: PendingException[] = []
@@ -275,7 +282,7 @@ export class ExtractionPipeline {
         continue
       }
 
-      const model = await this.#runModel(chunk, input, run)
+      const model = await this.#runModel(chunk, input, schemaContext, run)
       modelCalls += 1
       const entityIds: Uuid[] = []
       for (const draftEntity of model.draft.entities) {
@@ -374,9 +381,11 @@ export class ExtractionPipeline {
       } else {
         discovered = validateRuleUnhandled(candidate)
       }
-      const truncation = candidate.sourceSpans
-        .filter((span) => truncated.has(span.chunkId))
-        .map((span) => truncatedChunkIssue(span.chunkId))
+      const truncation = candidate.sourceSpans.flatMap((span) =>
+        span.kind !== 'structured' && truncated.has(span.chunkId)
+          ? [truncatedChunkIssue(span.chunkId)]
+          : [],
+      )
       const issues = dedupeIssues([...candidate.issues, ...discovered, ...truncation])
       const hard = issues.some(isHardIssue)
       const state: CandidateState = hard ? 'failed' : 'pending_review'
@@ -497,16 +506,18 @@ export class ExtractionPipeline {
     const resolve = (endpoint: DraftRelationEndpoint): CandidateEndpoint => {
       if (endpoint.entityIndex !== undefined) {
         const candidateId = args.entityIds[endpoint.entityIndex]
-        // An out-of-range index is a fake reference: keep the endpoint unresolved so the
-        // validation stage records an explicit DANGLING_REFERENCE instead of dropping it.
+        // An out-of-range index is a fake, fabricated reference: keep the endpoint unresolved
+        // with `dangling_index` so validation records a hard DANGLING_REFERENCE, not a drop.
         return candidateId === undefined
-          ? { objectId: endpoint.objectId }
+          ? { objectId: endpoint.objectId, unresolvedReason: 'dangling_index' }
           : { objectId: endpoint.objectId, candidateId }
       }
       if (endpoint.nativeId !== undefined && endpoint.nativeId.length > 0) {
         return { objectId: endpoint.objectId, nativeId: endpoint.nativeId }
       }
-      return { objectId: endpoint.objectId }
+      // The entity was named but not identified: keep the endpoint with `missing_reference`
+      // so it stays in review instead of being dropped or auto-published (P.US-008.AC-03).
+      return { objectId: endpoint.objectId, unresolvedReason: 'missing_reference' }
     }
     const from = resolve(args.draftRelation.from)
     const to = resolve(args.draftRelation.to)
@@ -704,6 +715,7 @@ export class ExtractionPipeline {
   async #runModel(
     chunk: DocumentChunkRecord,
     input: ExtractionInput,
+    schemaContext: SchemaContext,
     run: ExtractionRunContext,
   ): Promise<{ draft: DraftCandidates; usage: GenerationUsage; evidenceRefs: readonly ResourceRef[] }> {
     const evidenceRefs = [evidenceRefOf(chunk, input.parserVersion)]
@@ -749,6 +761,10 @@ export class ExtractionPipeline {
       role: 'extractor',
       messages: [
         { role: 'system', content: EXTRACTION_SYSTEM_PROMPT },
+        {
+          role: 'system',
+          content: `${schemaContext.promptVersion} schemaDigest=${schemaContext.digest}\n${schemaContext.content}`,
+        },
         { role: 'user', content: chunk.text },
       ],
       evidenceRefs,

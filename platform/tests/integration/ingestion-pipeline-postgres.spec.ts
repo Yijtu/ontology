@@ -502,7 +502,7 @@ describe('received → parsed truncation lineage with the real parser', () => {
     expect(candidates.length).toBeGreaterThan(0)
     const truncated = new Set(truncatedChunkIds)
     const fromTruncated = candidates.filter((candidate) =>
-      candidate.sourceSpans.some((span) => truncated.has(span.chunkId)),
+      candidate.sourceSpans.some((span) => span.kind !== 'structured' && truncated.has(span.chunkId)),
     )
     expect(fromTruncated.length).toBeGreaterThan(0)
     expect(fromTruncated.every((candidate) => candidate.state === 'pending_review')).toBe(true)

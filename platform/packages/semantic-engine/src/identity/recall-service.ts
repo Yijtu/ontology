@@ -1,4 +1,4 @@
-import { isToolContext } from '@ontology/contracts'
+import { candidateSourceRef, isToolContext } from '@ontology/contracts'
 import type {
   BudgetSettlementStatus,
   CompletenessStatus,
@@ -66,12 +66,9 @@ function clampLimit(limit: number | undefined): number {
 
 /** The exact source chunks a mention was extracted from; the evidence a comparison is grounded in. */
 function evidenceRefsOf(candidate: EntityCandidate): ResourceRef[] {
-  return candidate.sourceSpans.map((span) => ({
-    id: span.chunkId,
-    version: candidate.inputVersion.parserVersion,
-    digest: span.quoteDigest,
-    kind: 'chunk',
-  }))
+  return candidate.sourceSpans.map((span) =>
+    candidateSourceRef(span, candidate.inputVersion.parserVersion),
+  )
 }
 
 function mergeEvidence(...groups: readonly (readonly ResourceRef[])[]): ResourceRef[] {

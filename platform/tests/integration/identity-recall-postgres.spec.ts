@@ -49,7 +49,7 @@ import type {
   IdentityIndexProfile,
   SemanticMapping,
 } from '@ontology/semantic-engine'
-import { buildIndustrySchema } from '../unit/extraction-fixtures'
+import { buildIndustrySchema, textSpan } from '../unit/extraction-fixtures'
 import { IDENTITY_DEFINITION_REF } from '../unit/identity-fixtures'
 import { createJobScope, startJobDatabase } from './job-postgres-harness'
 import type { JobDbHarness, JobTestScope } from './job-postgres-harness'
@@ -444,7 +444,7 @@ afterAll(async () => {
 describe('entity candidate recall against real PostgreSQL, BM25 and the extraction store', () => {
   it('recalls a real candidate from the seeded identity index and round-trips the stored mention', async () => {
     const stored = await candidateStore.getCandidate(scope.scopeRef, mention.candidateId, ctx)
-    expect(stored?.sourceSpans[0]?.chunkId).toBe(mention.sourceSpans[0]?.chunkId)
+    expect(textSpan(stored?.sourceSpans[0])?.chunkId).toBe(textSpan(mention.sourceSpans[0])?.chunkId)
 
     const result = await recall.recall(
       {

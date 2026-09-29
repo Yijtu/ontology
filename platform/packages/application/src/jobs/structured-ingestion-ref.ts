@@ -40,6 +40,12 @@ export interface StructuredExtractionRef {
   readonly parserVersion: Semver
   readonly definitionRef: VersionRef
   readonly format: StructuredFormat
+  /** The immutable original the parse was produced from, so the extraction stage can re-read it. */
+  readonly originalRef: ResourceRef
+  /** The stored original's media type; the parser needs it to select the format decoder. */
+  readonly originalMediaType: string
+  /** The caller's explicit selection (delimiter/quote/sheet/header/range/cap mode). */
+  readonly options: StructuredSelectionOptions
   readonly documentVersionRef?: ResourceRef
 }
 
@@ -190,6 +196,61 @@ export function encodeStructuredIngestionRef(ref: StructuredIngestionRef): strin
 /** Encode the durable structured extraction reference the parsed stage writes. */
 export function encodeStructuredExtractionRef(ref: StructuredExtractionRef): string {
   return JSON.stringify(ref)
+}
+
+/** Cheap, total guard: routes a `parsed` stage claim to the structured extraction handler. */
+export function isStructuredExtractionRef(documentRef: string | undefined): boolean {
+  if (documentRef === undefined) return false
+  try {
+    const parsed: unknown = JSON.parse(documentRef)
+    return isRecord(parsed) && parsed['kind'] === 'structured_extraction'
+  } catch {
+    return false
+  }
+}
+
+/** Decode and validate the durable structured extraction reference at the `parsed` stage. */
+export function decodeStructuredExtractionRef(documentRef: string): StructuredExtractionRef {
+  let parsed: unknown
+  try {
+    parsed = JSON.parse(documentRef)
+  } catch (error) {
+    throw new JobStageFailure('INVALID_ARGUMENT', 'the structured extraction reference is not valid JSON', false, {
+      cause: error,
+    })
+  }
+  if (!isRecord(parsed)) {
+    throw new JobStageFailure('INVALID_ARGUMENT', 'the structured extraction reference must be a JSON object', false)
+  }
+  if (parsed['kind'] !== 'structured_extraction') {
+    throw new JobStageFailure(
+      'INVALID_ARGUMENT',
+      'the structured extraction reference kind must be structured_extraction',
+      false,
+    )
+  }
+  const format = parsed['format']
+  if (!isStructuredFormat(format)) {
+    throw new JobStageFailure('INVALID_ARGUMENT', 'structured extraction format must be text, json, csv or xlsx', false)
+  }
+  const parserVersion = requireString(parsed['parserVersion'], 'parserVersion')
+  if (tryParseSemver(parserVersion) === undefined) {
+    throw new JobStageFailure('INVALID_ARGUMENT', 'structured extraction parserVersion must be a semver string', false)
+  }
+  const documentVersionRef = parsed['documentVersionRef']
+  return {
+    kind: 'structured_extraction',
+    parseId: requireString(parsed['parseId'], 'parseId'),
+    parserVersion,
+    definitionRef: requireVersionRef(parsed['definitionRef'], 'definitionRef'),
+    format,
+    originalRef: requireResourceRef(parsed['originalRef'], 'originalRef'),
+    originalMediaType: requireString(parsed['originalMediaType'], 'originalMediaType'),
+    options: decodeSelection(parsed['options']),
+    ...(documentVersionRef === undefined
+      ? {}
+      : { documentVersionRef: requireResourceRef(documentVersionRef, 'documentVersionRef') }),
+  }
 }
 
 /**
