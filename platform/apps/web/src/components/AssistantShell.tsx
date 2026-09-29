@@ -1,4 +1,5 @@
 import { useMemo, useState } from 'react'
+import type { ReactNode } from 'react'
 import type { ProjectRevisionRef, ResourceRef, VersionRef } from '@ontology/contracts'
 import type {
   FrontendScenarioModule,
@@ -40,8 +41,11 @@ export interface AssistantModuleDeclarations {
 
 export interface AssistantShellProps {
   readonly registry: ScenarioModuleRegistry
-  readonly declarations: AssistantModuleDeclarations
-  readonly projectRevisionRef: ProjectRevisionRef
+  /** Scenario declarations per assistant; omitted means the assistant mounts no module. */
+  readonly declarations?: AssistantModuleDeclarations
+  readonly projectRevisionRef?: ProjectRevisionRef
+  /** A generic public home per assistant (for example the ontology workspace panel). */
+  readonly homeByAssistant?: Partial<Record<AssistantId, ReactNode>>
   readonly grantedCapabilities: readonly string[]
   readonly allowedModuleRefs?: readonly VersionRef[]
   readonly readOnly?: boolean
@@ -85,7 +89,7 @@ interface ModuleSurfaceProps {
   readonly module: FrontendScenarioModule
   readonly view: ScenarioModuleView
   readonly readOnly: boolean
-  readonly projectRevisionRef: ProjectRevisionRef
+  readonly projectRevisionRef?: ProjectRevisionRef
   readonly drafts: ScenarioDraftStore
   readonly verifiedResult?: ScenarioVerifiedResult
   readonly onProposeChange: (change: ScenarioFieldChange) => void
@@ -138,7 +142,7 @@ function ModuleSurface({
         </p>
       ) : null}
 
-      {ParameterPanel === undefined || readOnly || firstTask === undefined ? null : (
+      {ParameterPanel === undefined || readOnly || firstTask === undefined || projectRevisionRef === undefined ? null : (
         <div data-testid={`scenario-parameter-${module.ref.id}`}>
           <ParameterPanel
             moduleRef={module.ref}
@@ -164,7 +168,7 @@ function ModuleSurface({
           </div>
         )}
       >
-        {ResultRenderer === undefined || verifiedResult === undefined ? (
+        {ResultRenderer === undefined || verifiedResult === undefined || projectRevisionRef === undefined ? (
           <GenericVerifiedResult result={verifiedResult} />
         ) : (
           <div data-testid={`scenario-result-${module.ref.id}`}>
@@ -243,10 +247,13 @@ function noop(): void {
   return undefined
 }
 
+const EMPTY_DECLARATIONS: AssistantModuleDeclarations = { ontology: [], business: [] }
+
 export function AssistantShell({
   registry,
-  declarations,
+  declarations = EMPTY_DECLARATIONS,
   projectRevisionRef,
+  homeByAssistant,
   grantedCapabilities,
   allowedModuleRefs,
   readOnly,
@@ -326,6 +333,8 @@ export function AssistantShell({
       </header>
 
       <section className="assistant-shell__body" data-testid={`assistant-panel-${activeAssistant}`}>
+        {homeByAssistant?.[activeAssistant] ?? null}
+
         {activeMounts.length === 0 ? (
           <p className="assistant-shell__empty" data-testid="scenario-empty">
             当前助手尚未声明任何场景模块。
@@ -361,7 +370,7 @@ export function AssistantShell({
                 module={activeMounted.module}
                 view={activeMounted.view}
                 readOnly={activeMounted.readOnly}
-                projectRevisionRef={projectRevisionRef}
+                {...(projectRevisionRef === undefined ? {} : { projectRevisionRef })}
                 drafts={draftStore}
                 {...(verifiedResult === undefined ? {} : { verifiedResult })}
                 onProposeChange={proposeChange}
