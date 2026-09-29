@@ -32,6 +32,8 @@ import { registerRuleActionCandidateRoutes } from './rule-action-candidates'
 import type { RuleActionCandidateRouteDependencies } from './rule-action-candidates'
 import { registerInstanceReviewRoutes } from './instances'
 import type { InstanceReviewRouteDependencies } from './instances'
+import { registerSyntheticValidationRoutes } from './synthetic-validation'
+import type { SyntheticValidationRouteDependencies } from './synthetic-validation'
 import { installErrorHandler } from './shared'
 import type { RequestAuthenticator } from './shared'
 
@@ -78,6 +80,8 @@ export interface ApiServerOptions {
   readonly ruleActionCandidates?: Omit<RuleActionCandidateRouteDependencies, 'authenticate'>
   /** Register the public instance review surface (`/projects/:id/instance-records`). */
   readonly instanceReviews?: Omit<InstanceReviewRouteDependencies, 'authenticate'>
+  /** Register the synthetic sandbox / industry validation surface (`/industry-workspaces/:id/validations`). */
+  readonly syntheticValidation?: Omit<SyntheticValidationRouteDependencies, 'authenticate'>
   readonly logger?: boolean
 }
 
@@ -148,6 +152,12 @@ export function createApiServer(options: ApiServerOptions): FastifyInstance {
   if (options.instanceReviews !== undefined) {
     registerInstanceReviewRoutes(app, {
       ...options.instanceReviews,
+      authenticate: options.authenticate,
+    })
+  }
+  if (options.syntheticValidation !== undefined) {
+    registerSyntheticValidationRoutes(app, {
+      ...options.syntheticValidation,
       authenticate: options.authenticate,
     })
   }
