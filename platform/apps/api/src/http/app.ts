@@ -22,6 +22,8 @@ import { registerAnswerRoutes } from './answers'
 import type { AnswerRouteDependencies } from './answers'
 import { registerFeedbackRoutes } from './feedback'
 import type { FeedbackRouteDependencies } from './feedback'
+import { registerIndustryWorkspaceRoutes } from './industry-workspaces'
+import type { IndustryWorkspaceRouteDependencies } from './industry-workspaces'
 import { installErrorHandler } from './shared'
 import type { RequestAuthenticator } from './shared'
 
@@ -58,6 +60,8 @@ export interface ApiServerOptions {
   readonly answers?: Omit<AnswerRouteDependencies, 'authenticate'>
   /** Register the append-only feedback surface (`POST/GET /runs/{id}/feedback`). */
   readonly feedback?: Omit<FeedbackRouteDependencies, 'authenticate'>
+  /** Register the industry-workspace draft management surface (`/industry-workspaces`). */
+  readonly industryWorkspaces?: Omit<IndustryWorkspaceRouteDependencies, 'authenticate'>
   readonly logger?: boolean
 }
 
@@ -100,6 +104,12 @@ export function createApiServer(options: ApiServerOptions): FastifyInstance {
   }
   if (options.feedback !== undefined) {
     registerFeedbackRoutes(app, { ...options.feedback, authenticate: options.authenticate })
+  }
+  if (options.industryWorkspaces !== undefined) {
+    registerIndustryWorkspaceRoutes(app, {
+      ...options.industryWorkspaces,
+      authenticate: options.authenticate,
+    })
   }
   return app
 }

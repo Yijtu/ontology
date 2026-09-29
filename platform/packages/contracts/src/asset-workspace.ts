@@ -89,6 +89,30 @@ function isIndustryWorkspaceState(value: unknown): value is IndustryWorkspaceSta
   return value === 'draft' || value === 'review' || value === 'published' || value === 'archived'
 }
 
+/**
+ * Runtime guard for the editable workspace boundary. The JSON Schema remains the
+ * canonical declaration; this covers the fields an edit may change so a malformed
+ * boundary is rejected before any SQL runs.
+ */
+export function assertIndustryWorkspaceBoundaryShape(
+  value: unknown,
+): asserts value is IndustryWorkspaceBoundary {
+  if (!isIndustryWorkspaceBoundary(value)) throw invalidWorkspace('boundary is malformed')
+}
+
+/**
+ * Validate a workspace-metadata patch. A patch that sets `displayName` must keep it a
+ * non-empty string and any `boundary` must pass the boundary guard; the store applies each
+ * set field and leaves an omitted one unchanged.
+ */
+export function assertIndustryWorkspacePatchShape(value: unknown): asserts value is IndustryWorkspacePatch {
+  if (!isRecord(value)) throw invalidWorkspace('workspacePatch must be an object')
+  if (value.displayName !== undefined && !isNonEmptyString(value.displayName)) {
+    throw invalidWorkspace('workspacePatch.displayName must be a non-empty string')
+  }
+  if (value.boundary !== undefined) assertIndustryWorkspaceBoundaryShape(value.boundary)
+}
+
 function isAssetDraftCandidateRef(value: unknown): value is AssetDraftCandidateRef {
   if (!isRecord(value)) return false
   return (
@@ -169,6 +193,17 @@ export interface CreateIndustryWorkspaceInput {
 }
 
 /**
+ * The mutable workspace metadata an append may update in the same compare-and-swap.
+ * `displayName` and `boundary` are the only editable workspace fields (SPEC v0.3a §8.1
+ * PATCH semantics); `state` is never set through a draft append, so a model or an
+ * ordinary project user cannot publish a definition by editing the workspace.
+ */
+export interface IndustryWorkspacePatch {
+  readonly displayName?: string
+  readonly boundary?: IndustryWorkspaceBoundary
+}
+
+/**
  * One compare-and-swap draft append. `expectedRevision` is the head the caller
  * last read; a mismatch is a VERSION_CONFLICT and never overwrites the winner.
  */
@@ -181,6 +216,11 @@ export interface AppendAssetDraftInput {
   readonly recordedAt: Rfc3339UtcTimestamp
   readonly outbox: NewOutboxMessage
   readonly outboxJobId: Uuid
+  /**
+   * Optional workspace-metadata edit committed atomically with the draft append.
+   * Absent means the workspace row keeps its current display name and boundary.
+   */
+  readonly workspacePatch?: IndustryWorkspacePatch
 }
 
 export interface IndustryWorkspaceWriteResult {
