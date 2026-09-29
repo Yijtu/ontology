@@ -78,6 +78,19 @@ import type {
   StatementRevisionRecord,
   StatementRevisionRequest,
 } from './review'
+import {
+  isAssetDraftVersion,
+  isIndustryWorkspace,
+  isIndustryWorkspaceWriteView,
+} from './workspaces'
+import type {
+  AppendIndustryWorkspaceDraftRequest,
+  CreateIndustryWorkspaceRequest,
+  EditIndustryWorkspaceRequest,
+  IndustryWorkspaceListFilter,
+  IndustryWorkspaceWriteView,
+} from './workspaces'
+import type { AssetDraftVersion, IndustryWorkspace } from '@ontology/contracts'
 
 export { ApiError } from './errors'
 export {
@@ -561,6 +574,117 @@ export class WorkbenchClient {
       body: { failedStage: request.failedStage, expectedRevision: request.expectedRevision },
       ifMatch: request.expectedRevision,
       idempotencyKey: this.#newId(),
+    })
+  }
+
+  /** `GET /industry-workspaces`: the workspace list visible in the trusted scope. */
+  listIndustryWorkspaces(filter: IndustryWorkspaceListFilter = {}): Promise<IndustryWorkspace[]> {
+    const query = new URLSearchParams()
+    if (filter.state !== undefined) query.set('state', filter.state)
+    if (filter.limit !== undefined) query.set('pageSize', String(filter.limit))
+    const suffix = query.toString().length > 0 ? `?${query.toString()}` : ''
+    const path = `/api/v1/industry-workspaces${suffix}`
+    return this.#request<unknown>('GET', path).then((data) => {
+      if (
+        !isRecord(data) ||
+        !Array.isArray(data['workspaces']) ||
+        !data['workspaces'].every(isIndustryWorkspace)
+      ) {
+        throw malformedResponse(path, 'the industry workspace list was not recognised')
+      }
+      return data['workspaces']
+    })
+  }
+
+  getIndustryWorkspace(workspaceId: string): Promise<IndustryWorkspace> {
+    const path = `/api/v1/industry-workspaces/${encodeURIComponent(workspaceId)}`
+    return this.#request<unknown>('GET', path).then((data) => {
+      if (!isRecord(data) || !isIndustryWorkspace(data['workspace'])) {
+        throw malformedResponse(path, 'the industry workspace was not recognised')
+      }
+      return data['workspace']
+    })
+  }
+
+  /** `POST /industry-workspaces`: create the workspace head plus its first immutable draft. */
+  createIndustryWorkspace(request: CreateIndustryWorkspaceRequest): Promise<IndustryWorkspaceWriteView> {
+    const path = '/api/v1/industry-workspaces'
+    return this.#request<unknown>('POST', path, {
+      body: request,
+      idempotencyKey: this.#newId(),
+    }).then((data) => {
+      if (!isIndustryWorkspaceWriteView(data)) {
+        throw malformedResponse(path, 'the created industry workspace was not recognised')
+      }
+      return data
+    })
+  }
+
+  /** `PATCH /industry-workspaces/:id`: edit the name/boundary via If-Match CAS. */
+  editIndustryWorkspace(
+    workspaceId: string,
+    request: EditIndustryWorkspaceRequest,
+  ): Promise<IndustryWorkspaceWriteView> {
+    const path = `/api/v1/industry-workspaces/${encodeURIComponent(workspaceId)}`
+    return this.#request<unknown>('PATCH', path, {
+      body: {
+        reason: request.reason,
+        ...(request.displayName === undefined ? {} : { displayName: request.displayName }),
+        ...(request.boundary === undefined ? {} : { boundary: request.boundary }),
+      },
+      ifMatch: request.expectedRevision,
+      idempotencyKey: this.#newId(),
+    }).then((data) => {
+      if (!isIndustryWorkspaceWriteView(data)) {
+        throw malformedResponse(path, 'the edited industry workspace was not recognised')
+      }
+      return data
+    })
+  }
+
+  /** `POST /industry-workspaces/:id/draft-operations`: append a draft with a new source set. */
+  appendIndustryWorkspaceDraft(
+    workspaceId: string,
+    request: AppendIndustryWorkspaceDraftRequest,
+  ): Promise<IndustryWorkspaceWriteView> {
+    const path = `/api/v1/industry-workspaces/${encodeURIComponent(workspaceId)}/draft-operations`
+    return this.#request<unknown>('POST', path, {
+      body: {
+        operation: 'edit',
+        reason: request.reason,
+        documentSetRef: request.documentSetRef,
+      },
+      ifMatch: request.expectedRevision,
+      idempotencyKey: this.#newId(),
+    }).then((data) => {
+      if (!isIndustryWorkspaceWriteView(data)) {
+        throw malformedResponse(path, 'the appended industry workspace draft was not recognised')
+      }
+      return data
+    })
+  }
+
+  listIndustryWorkspaceDrafts(workspaceId: string): Promise<AssetDraftVersion[]> {
+    const path = `/api/v1/industry-workspaces/${encodeURIComponent(workspaceId)}/drafts`
+    return this.#request<unknown>('GET', path).then((data) => {
+      if (
+        !isRecord(data) ||
+        !Array.isArray(data['drafts']) ||
+        !data['drafts'].every(isAssetDraftVersion)
+      ) {
+        throw malformedResponse(path, 'the industry workspace drafts were not recognised')
+      }
+      return data['drafts']
+    })
+  }
+
+  getIndustryWorkspaceDraft(workspaceId: string, revision: string): Promise<AssetDraftVersion> {
+    const path = `/api/v1/industry-workspaces/${encodeURIComponent(workspaceId)}/drafts/${encodeURIComponent(revision)}`
+    return this.#request<unknown>('GET', path).then((data) => {
+      if (!isRecord(data) || !isAssetDraftVersion(data['draft'])) {
+        throw malformedResponse(path, 'the industry workspace draft was not recognised')
+      }
+      return data['draft']
     })
   }
 

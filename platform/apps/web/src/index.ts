@@ -170,6 +170,24 @@ export type {
 } from './components/AssistantShell'
 export { ScenarioErrorBoundary } from './components/ScenarioErrorBoundary'
 export type { ScenarioErrorBoundaryProps } from './components/ScenarioErrorBoundary'
+export { OntologyWorkspacePanel, EMPTY_CREATE_FIELDS, boundaryOf, validateCreateFields } from './components/OntologyWorkspacePanel'
+export type { OntologyWorkspacePanelProps, WorkspaceCreateFields } from './components/OntologyWorkspacePanel'
+export { WorkspaceSourcesPanel } from './components/WorkspaceSourcesPanel'
+export type {
+  SupportedSourceType,
+  WorkspaceSource,
+  WorkspaceSourcesPanelProps,
+} from './components/WorkspaceSourcesPanel'
+export { webWorkspaceIdentity } from './workspace-identity'
+export type { WorkspaceIdentity } from './workspace-identity'
+export type {
+  AppendIndustryWorkspaceDraftRequest,
+  AssetDraftRef,
+  CreateIndustryWorkspaceRequest,
+  EditIndustryWorkspaceRequest,
+  IndustryWorkspaceListFilter,
+  IndustryWorkspaceWriteView,
+} from './api/workspaces'
 export { ScenarioModuleRegistry, isLegalUiCapabilityMetadata } from './mount/registry'
 export type { MountContext, ScenarioMount } from './mount/registry'
 export type {
