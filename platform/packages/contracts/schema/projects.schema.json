@@ -1,0 +1,412 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://ontology.local/schema/projects.schema.json",
+  "title": "ProjectContracts",
+  "$comment": "SPEC v0.3a asset-data-ui §3.2/§3.3: customer project revisions, the immutable approved-input artifact, and the independent readiness projections. The canonical hash body (ProjectRevisionBody, ApprovedInputSnapshot) never contains its own ref/digest or a readiness receipt; the read envelopes (ProjectRevision, ApprovedInputSnapshotEnvelope) add those outside the hashed content so a hash can never depend on its own digest.",
+  "$defs": {
+    "ProjectRevisionRef": {
+      "title": "ProjectRevisionRef",
+      "description": "Exact reference to one immutable project revision. `digest` is computed over ProjectRevisionBody and pins the revision so a reader can detect drift instead of trusting a mutable head.",
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["projectId", "revision", "digest"],
+      "properties": {
+        "projectId": {
+          "$ref": "./common.schema.json#/$defs/Uuid"
+        },
+        "revision": {
+          "$ref": "./common.schema.json#/$defs/RevisionString"
+        },
+        "digest": {
+          "$ref": "./common.schema.json#/$defs/Sha256Digest"
+        }
+      }
+    },
+    "ProjectRevisionBody": {
+      "title": "ProjectRevisionBody",
+      "description": "Canonical hash body of a project revision. It fixes the industry/definition/mapping/profile/document/input pins, the semantic publication refs, the source visibility epoch and the change reason. It deliberately excludes the outer `ref` and any readiness receipt: those are added by ProjectRevision after this body is serialized and hashed.",
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "schemaVersion",
+        "projectId",
+        "revision",
+        "industryPackRef",
+        "definitionRef",
+        "mappingRefs",
+        "profileRef",
+        "documentSetRef",
+        "semanticPublicationRefs",
+        "sourceVisibilityEpoch",
+        "changeReason"
+      ],
+      "properties": {
+        "schemaVersion": {
+          "const": "project-revision@1"
+        },
+        "projectId": {
+          "$ref": "./common.schema.json#/$defs/Uuid"
+        },
+        "revision": {
+          "$ref": "./common.schema.json#/$defs/RevisionString"
+        },
+        "industryPackRef": {
+          "$ref": "./common.schema.json#/$defs/VersionRef"
+        },
+        "definitionRef": {
+          "$ref": "./common.schema.json#/$defs/VersionRef"
+        },
+        "mappingRefs": {
+          "type": "array",
+          "items": {
+            "$ref": "./industry.schema.json#/$defs/MappingRef"
+          },
+          "minItems": 1
+        },
+        "profileRef": {
+          "$ref": "./industry.schema.json#/$defs/ResolvedProfileRef"
+        },
+        "documentSetRef": {
+          "$ref": "./common.schema.json#/$defs/ResourceRef"
+        },
+        "approvedInputRef": {
+          "$ref": "./common.schema.json#/$defs/ResourceRef"
+        },
+        "datasetSnapshotRef": {
+          "$ref": "./common.schema.json#/$defs/ResourceRef"
+        },
+        "documentIndexRef": {
+          "$ref": "./common.schema.json#/$defs/ResourceRef"
+        },
+        "semanticPublicationRefs": {
+          "type": "array",
+          "items": {
+            "$ref": "./common.schema.json#/$defs/VersionRef"
+          }
+        },
+        "sourceVisibilityEpoch": {
+          "$ref": "./common.schema.json#/$defs/RevisionString"
+        },
+        "changeReason": {
+          "$ref": "./common.schema.json#/$defs/NonEmptyString"
+        }
+      }
+    },
+    "ProjectRevision": {
+      "title": "ProjectRevision",
+      "description": "Read envelope of a project revision. It repeats the body pins inline and adds `ref`, whose digest is computed over ProjectRevisionBody. Readiness is projected separately; it is never back-filled into this immutable revision.",
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "ref",
+        "industryPackRef",
+        "definitionRef",
+        "mappingRefs",
+        "profileRef",
+        "documentSetRef",
+        "semanticPublicationRefs",
+        "sourceVisibilityEpoch",
+        "changeReason"
+      ],
+      "properties": {
+        "ref": {
+          "$ref": "#/$defs/ProjectRevisionRef"
+        },
+        "industryPackRef": {
+          "$ref": "./common.schema.json#/$defs/VersionRef"
+        },
+        "definitionRef": {
+          "$ref": "./common.schema.json#/$defs/VersionRef"
+        },
+        "mappingRefs": {
+          "type": "array",
+          "items": {
+            "$ref": "./industry.schema.json#/$defs/MappingRef"
+          },
+          "minItems": 1
+        },
+        "profileRef": {
+          "$ref": "./industry.schema.json#/$defs/ResolvedProfileRef"
+        },
+        "documentSetRef": {
+          "$ref": "./common.schema.json#/$defs/ResourceRef"
+        },
+        "approvedInputRef": {
+          "$ref": "./common.schema.json#/$defs/ResourceRef"
+        },
+        "datasetSnapshotRef": {
+          "$ref": "./common.schema.json#/$defs/ResourceRef"
+        },
+        "documentIndexRef": {
+          "$ref": "./common.schema.json#/$defs/ResourceRef"
+        },
+        "semanticPublicationRefs": {
+          "type": "array",
+          "items": {
+            "$ref": "./common.schema.json#/$defs/VersionRef"
+          }
+        },
+        "sourceVisibilityEpoch": {
+          "$ref": "./common.schema.json#/$defs/RevisionString"
+        },
+        "changeReason": {
+          "$ref": "./common.schema.json#/$defs/NonEmptyString"
+        }
+      }
+    },
+    "ProjectInputCounts": {
+      "title": "ProjectInputCounts",
+      "description": "Record reconciliation for one approved-input snapshot. Every record is accounted for exactly once: total = confirmed + approved + excluded + pending + failed is not asserted here, but the counters are reported separately so a partial input is never presented as complete.",
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["total", "confirmed", "approved", "excluded", "pending", "failed"],
+      "properties": {
+        "total": {
+          "type": "integer",
+          "minimum": 0
+        },
+        "confirmed": {
+          "type": "integer",
+          "minimum": 0
+        },
+        "approved": {
+          "type": "integer",
+          "minimum": 0
+        },
+        "excluded": {
+          "type": "integer",
+          "minimum": 0
+        },
+        "pending": {
+          "type": "integer",
+          "minimum": 0
+        },
+        "failed": {
+          "type": "integer",
+          "minimum": 0
+        }
+      }
+    },
+    "ProjectInputRecordPage": {
+      "title": "ProjectInputRecordPage",
+      "description": "One bounded page of an approved-input snapshot. The ref points at the archived page artifact; first/last record ids let a reader prove stable order and detect a gap.",
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["ref", "rowCount", "firstRecordId", "lastRecordId"],
+      "properties": {
+        "ref": {
+          "$ref": "./common.schema.json#/$defs/ResourceRef"
+        },
+        "rowCount": {
+          "type": "integer",
+          "minimum": 0
+        },
+        "firstRecordId": {
+          "$ref": "./common.schema.json#/$defs/Uuid"
+        },
+        "lastRecordId": {
+          "$ref": "./common.schema.json#/$defs/Uuid"
+        }
+      }
+    },
+    "ProjectInputExcludedRecord": {
+      "title": "ProjectInputExcludedRecord",
+      "description": "A record explicitly excluded from the approved input, with the reason and actor so an exclusion can never be a silent omission.",
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["recordId", "reason", "actor"],
+      "properties": {
+        "recordId": {
+          "$ref": "./common.schema.json#/$defs/Uuid"
+        },
+        "reason": {
+          "$ref": "./common.schema.json#/$defs/NonEmptyString"
+        },
+        "actor": {
+          "$ref": "./common.schema.json#/$defs/NonEmptyString"
+        }
+      }
+    },
+    "ApprovedInputSnapshot": {
+      "title": "ApprovedInputSnapshot",
+      "description": "Immutable approved-input artifact body (SPEC v0.3a §3.2). It fixes the input revision, asset pins, paged records, reconciliation counts, exclusions and coverage, but it never contains the final ProjectRevisionRef or its own digest. The freezing order is: records+confirmation manifests, then this body, then inputSnapshotRef, then the project revision digest.",
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "schemaVersion",
+        "projectId",
+        "inputRevision",
+        "definitionRef",
+        "mappingRefs",
+        "recordPages",
+        "counts",
+        "excluded",
+        "coverage",
+        "confirmationManifestRef"
+      ],
+      "properties": {
+        "schemaVersion": {
+          "const": "project-input-snapshot@1"
+        },
+        "projectId": {
+          "$ref": "./common.schema.json#/$defs/Uuid"
+        },
+        "inputRevision": {
+          "$ref": "./common.schema.json#/$defs/RevisionString"
+        },
+        "definitionRef": {
+          "$ref": "./common.schema.json#/$defs/VersionRef"
+        },
+        "mappingRefs": {
+          "type": "array",
+          "items": {
+            "$ref": "./industry.schema.json#/$defs/MappingRef"
+          }
+        },
+        "recordPages": {
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/ProjectInputRecordPage"
+          }
+        },
+        "counts": {
+          "$ref": "#/$defs/ProjectInputCounts"
+        },
+        "excluded": {
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/ProjectInputExcludedRecord"
+          }
+        },
+        "coverage": {
+          "$ref": "./common.schema.json#/$defs/CompletenessStatus"
+        },
+        "confirmationManifestRef": {
+          "$ref": "./common.schema.json#/$defs/ResourceRef"
+        }
+      }
+    },
+    "ApprovedInputSnapshotEnvelope": {
+      "title": "ApprovedInputSnapshotEnvelope",
+      "description": "Read envelope for an approved-input snapshot. `projectRevisionRef` and `inputSnapshotRef` live here, outside the hashed ApprovedInputSnapshot body, so the artifact digest can be computed before the project revision that references it exists.",
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["projectRevisionRef", "inputSnapshotRef", "snapshot"],
+      "properties": {
+        "projectRevisionRef": {
+          "$ref": "#/$defs/ProjectRevisionRef"
+        },
+        "inputSnapshotRef": {
+          "$ref": "./common.schema.json#/$defs/ResourceRef"
+        },
+        "snapshot": {
+          "$ref": "#/$defs/ApprovedInputSnapshot"
+        }
+      }
+    },
+    "ProjectReadinessKind": {
+      "title": "ProjectReadinessKind",
+      "description": "The three independent project projections. A task only waits on the projections its binding requires: a compute task is not blocked by an unrelated document index.",
+      "type": "string",
+      "enum": ["published_semantics", "dataset", "document_index"]
+    },
+    "ProjectReadinessState": {
+      "title": "ProjectReadinessState",
+      "description": "State of one readiness projection. `ready` is only set by a CAS activation after the target digest and coverage were verified; the fallback is never a startup snapshot.",
+      "type": "string",
+      "enum": ["pending", "building", "ready", "failed", "revoked"]
+    },
+    "ReadinessError": {
+      "title": "ReadinessError",
+      "description": "A classified, retryable-or-not failure on a readiness projection. The message is user-facing copy; the code is the machine contract.",
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["code", "retryable", "message"],
+      "properties": {
+        "code": {
+          "$ref": "./common.schema.json#/$defs/NonEmptyString"
+        },
+        "retryable": {
+          "type": "boolean"
+        },
+        "message": {
+          "$ref": "./common.schema.json#/$defs/NonEmptyString"
+        }
+      }
+    },
+    "ReadinessTargetRef": {
+      "title": "ReadinessTargetRef",
+      "description": "The projected target: a ResourceRef for a built dataset/index snapshot, or a VersionRef for a published semantic revision.",
+      "oneOf": [
+        {
+          "$ref": "./common.schema.json#/$defs/ResourceRef"
+        },
+        {
+          "$ref": "./common.schema.json#/$defs/VersionRef"
+        }
+      ]
+    },
+    "ReadinessProjection": {
+      "title": "ReadinessProjection",
+      "description": "Per-kind readiness of one project revision (SPEC v0.3a §3.2). It is a projection, not part of the project revision digest: `fenceRevision` and `targetDigest` make it safe to CAS-activate after a background build, and a revoked source can never be re-activated by a late build.",
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "projectRevisionRef",
+        "kind",
+        "targetRef",
+        "state",
+        "completeness",
+        "expectedCount",
+        "processedCount",
+        "failedCount",
+        "targetDigest",
+        "fenceRevision"
+      ],
+      "properties": {
+        "projectRevisionRef": {
+          "$ref": "#/$defs/ProjectRevisionRef"
+        },
+        "kind": {
+          "$ref": "#/$defs/ProjectReadinessKind"
+        },
+        "targetRef": {
+          "$ref": "#/$defs/ReadinessTargetRef"
+        },
+        "state": {
+          "$ref": "#/$defs/ProjectReadinessState"
+        },
+        "completeness": {
+          "$ref": "./common.schema.json#/$defs/CompletenessStatus"
+        },
+        "expectedCount": {
+          "type": "integer",
+          "minimum": 0
+        },
+        "processedCount": {
+          "type": "integer",
+          "minimum": 0
+        },
+        "failedCount": {
+          "type": "integer",
+          "minimum": 0
+        },
+        "targetDigest": {
+          "$ref": "./common.schema.json#/$defs/Sha256Digest"
+        },
+        "receiptRef": {
+          "$ref": "./common.schema.json#/$defs/ResourceRef"
+        },
+        "fenceRevision": {
+          "$ref": "./common.schema.json#/$defs/RevisionString"
+        },
+        "jobId": {
+          "$ref": "./common.schema.json#/$defs/Uuid"
+        },
+        "error": {
+          "$ref": "#/$defs/ReadinessError"
+        }
+      }
+    }
+  }
+}
