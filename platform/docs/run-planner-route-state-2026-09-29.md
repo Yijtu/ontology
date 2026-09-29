@@ -1,0 +1,11 @@
+# RunPlanner route state for JEV
+
+JEV is consulted only for a genuine `routeAmbiguous` request. Fixed plans, concrete ambiguity, supplied candidate plans and ordinary complex questions keep their existing zero-JEV routing paths.
+
+When route JEV is enabled, `RunPlannerDependencies.decisionStateRefProvider` reuses the application `DecisionStateRefProvider` archive port. The host must canonicalize and store the exact supplied state as an immutable artifact, register the full artifact reference for the same `runId` and `resolvedProfileHash`, and return only after both persistence and registration succeed. The planner validates the returned artifact ref before passing it to `DecisionPort`; it never substitutes a question hash, claim ID or synthetic route ID.
+
+The planner archives a bounded state containing the effective question, confirmed context, ambiguity signal, the fixed `small_plan`/`clarify` candidates with their allowed tool IDs, the bounded confirmed `SchemaVocabulary`, and complete mapping/definition/vocabulary source refs. It enforces a 64 KiB UTF-8 bound, 1,000 JSON values and 64 schema refs. If the archive capability is absent, schema vocabulary is unavailable, or the state exceeds a bound, the planner returns clarification with an explicit `jev_*` fallback and does not call JEV. Invalid returned refs and archive failures are fatal.
+
+A returned `DecisionResult.fallback` stays visible as `jev_provider_fallback:<kind>` and routes to clarification. Thrown `MODEL_UNAVAILABLE`, `RATE_LIMITED` and `INSUFFICIENT_DATA` failures produce an explicit clarification fallback. Abort errors and all other codes—including `DEADLINE_EXCEEDED`, `BUDGET_EXHAUSTED`, `EVIDENCE_PERSIST_FAILED`, invalid responses and unclassified errors—propagate to the controller. The planner owns no budget ledger; its `DecisionPort` adapter accounts each provider attempt on the controller's existing run ledger.
+
+Run `pnpm exec vitest run tests/unit/workflow-planning.spec.ts tests/unit/few-shot-examples.spec.ts` from `platform/` for the focused planner tests. They use a recording state-ref provider and decision doubles, not an external model. Real provider quality and network behavior are not claimed by these tests.
