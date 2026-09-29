@@ -274,3 +274,33 @@ export class FiniteGrammarRuleSupportValidator implements RuleSupportValidator {
 export function validateRuleSupport(input: RuleSupportValidationInput): RuleSupportReport {
   return new FiniteGrammarRuleSupportValidator().validate(input)
 }
+
+/**
+ * One lowered leaf of the finite subset: the conjunction of leaves is the rule's `all`
+ * condition, with `any` already collapsed to its equivalent-source representative. Exported so
+ * the synthetic validation evaluator judges cases with the SAME lowering the support checker
+ * and the evaluator use, instead of a second, looser reading.
+ */
+export interface LoweredConditionLeaf {
+  readonly attributeId: string
+  readonly operator: string
+  readonly values: readonly (string | number | boolean)[]
+  readonly unitCode?: string
+  readonly negative: boolean
+}
+
+export interface LoweredCondition {
+  readonly leaves: readonly LoweredConditionLeaf[]
+  readonly findings: readonly RuleSupportFinding[]
+}
+
+/**
+ * Lower a frozen `RuleExpressionNode` into the flat conjunction the finite subset represents.
+ * A form outside the subset yields findings and the leaves collected so far; the node is never
+ * edited into a looser one.
+ */
+export function lowerConditionLeaves(condition: RuleExpressionNode): LoweredCondition {
+  const findings: RuleSupportFinding[] = []
+  const lowered = lower(condition, 'condition', findings)
+  return { leaves: lowered ?? [], findings }
+}
