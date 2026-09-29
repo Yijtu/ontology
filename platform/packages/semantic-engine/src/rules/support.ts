@@ -5,31 +5,35 @@ import type {
   RuleSupportValidationInput,
   RuleSupportValidator,
 } from '@ontology/contracts'
+import type { FiniteConditionPlan } from './boolean'
 
 /**
  * Deterministic finite-grammar support checker (SPEC v0.3a execution-evidence §4.1, §5.2,
- * issue V03-010 / #184).
+ * issue V03-010 / #184; EX-4.1 different-condition OR, issue V03-026 / #188).
  *
  * It consumes the FROZEN `RuleExpressionNode` grammar and reports whether a proposed
  * condition/exception set is representable by the executable subset the publish stage and the
- * evaluator already enforce (`rules/compile.ts`). It never edits, drops or weakens a node: an
- * out-of-subset form is recorded verbatim as a `not_yet_executable` finding so the candidate
- * can be saved and reviewed, but it can never be enabled. The rule, SQL, compute and writer
- * stages all consume the same `rule-expression@1` grammar.
+ * evaluator already enforce (`rules/compile.ts`, `rules/boolean.ts`). It never edits, drops or
+ * weakens a node: an out-of-subset form is recorded verbatim as a `not_yet_executable` finding
+ * so the candidate can be saved and reviewed, but it can never be enabled.
  *
  * The subset mirrors the evaluator exactly:
  *  - `compare` / `range` over one declared attribute;
  *  - finite `all` (AND);
- *  - `any` only when every branch is the SAME observed condition (an equivalent-source OR);
- *    genuinely different conditions are `DIFFERENT_CONDITION_OR`;
- *  - `not` over one observed comparison/range;
+ *  - finite `any` (a genuine different-condition OR, e.g. `operating_hours >= 100 h OR
+ *    alarm = true`); every branch keeps its own AST, state and sources and is never lowered
+ *    into a same-filter source group;
+ *  - `not` over one observed comparison/range leaf;
  *  - no `relation` premise yet (one-hop relation navigation is a later capability).
  * Declared rule dependencies must be acyclic and at most three levels deep.
  */
 
 const MAX_DEPENDENCY_DEPTH = 3
+const MAX_CONDITION_DEPTH = 8
+const MAX_OR_BRANCHES = 16
+const MAX_EXCEPTIONS = 4
 
-interface LeafGroup {
+export interface LoweredConditionLeaf {
   readonly attributeId: string
   readonly operator: string
   readonly values: readonly (string | number | boolean)[]
@@ -37,16 +41,11 @@ interface LeafGroup {
   readonly negative: boolean
 }
 
-function signature(group: LeafGroup): string {
-  return JSON.stringify({
-    attributeId: group.attributeId,
-    operator: group.operator,
-    values: group.values,
-    unitCode: group.unitCode ?? null,
-  })
-}
-
-function rangeGroup(node: Extract<RuleExpressionNode, { op: 'range' }>, path: string, findings: RuleSupportFinding[]): LeafGroup[] | undefined {
+function rangeLeaf(
+  node: Extract<RuleExpressionNode, { op: 'range' }>,
+  path: string,
+  findings: RuleSupportFinding[],
+): LoweredConditionLeaf | undefined {
   if (node.min === undefined && node.max === undefined) {
     findings.push({
       code: 'UNSUPPORTED_RANGE',
@@ -56,47 +55,34 @@ function rangeGroup(node: Extract<RuleExpressionNode, { op: 'range' }>, path: st
     })
     return undefined
   }
+  const unit = node.unitCode === undefined ? {} : { unitCode: node.unitCode }
   if (node.min !== undefined && node.max !== undefined) {
-    return [
-      {
-        attributeId: node.attributeId,
-        operator: 'between',
-        values: [node.min, node.max],
-        ...(node.unitCode === undefined ? {} : { unitCode: node.unitCode }),
-        negative: false,
-      },
-    ]
+    return { attributeId: node.attributeId, operator: 'between', values: [node.min, node.max], ...unit, negative: false }
   }
   if (node.min !== undefined) {
-    return [
-      {
-        attributeId: node.attributeId,
-        operator: 'gte',
-        values: [node.min],
-        ...(node.unitCode === undefined ? {} : { unitCode: node.unitCode }),
-        negative: false,
-      },
-    ]
+    return { attributeId: node.attributeId, operator: 'gte', values: [node.min], ...unit, negative: false }
   }
   if (node.max === undefined) return undefined
-  return [
-    {
-      attributeId: node.attributeId,
-      operator: 'lte',
-      values: [node.max],
-      ...(node.unitCode === undefined ? {} : { unitCode: node.unitCode }),
-      negative: false,
-    },
-  ]
+  return { attributeId: node.attributeId, operator: 'lte', values: [node.max], ...unit, negative: false }
 }
 
-function lower(
+function lowerPlan(
   node: RuleExpressionNode,
   path: string,
   findings: RuleSupportFinding[],
-): LeafGroup[] | undefined {
+  depth: number,
+): FiniteConditionPlan<LoweredConditionLeaf> | undefined {
+  if (depth > MAX_CONDITION_DEPTH) {
+    findings.push({
+      code: 'UNSUPPORTED_QUANTIFIER',
+      message: `the condition nests deeper than the supported maximum of ${String(MAX_CONDITION_DEPTH)}`,
+      path,
+      rawForm: node,
+    })
+    return undefined
+  }
   switch (node.op) {
-    case 'compare':
+    case 'compare': {
       if (node.attributeId.length === 0) {
         findings.push({
           code: 'UNRESOLVED_REFERENCE',
@@ -106,76 +92,69 @@ function lower(
         })
         return undefined
       }
-      return [
-        {
+      return {
+        kind: 'leaf',
+        leaf: {
           attributeId: node.attributeId,
           operator: node.operator,
           values: [node.value],
           ...(node.unitCode === undefined ? {} : { unitCode: node.unitCode }),
           negative: false,
         },
-      ]
-    case 'range':
-      return rangeGroup(node, path, findings)
-    case 'all': {
-      const groups: LeafGroup[] = []
-      for (const [index, operand] of node.operands.entries()) {
-        const lowered = lower(operand, `${path}.operands[${String(index)}]`, findings)
-        if (lowered === undefined) return undefined
-        groups.push(...lowered)
       }
-      return groups
+    }
+    case 'range': {
+      const leaf = rangeLeaf(node, path, findings)
+      return leaf === undefined ? undefined : { kind: 'leaf', leaf }
+    }
+    case 'all': {
+      if (node.operands.length === 0) {
+        findings.push({ code: 'MALFORMED_EXPRESSION', message: 'an AND has no operand', path, rawForm: node })
+        return undefined
+      }
+      const children: FiniteConditionPlan<LoweredConditionLeaf>[] = []
+      for (const [index, operand] of node.operands.entries()) {
+        const child = lowerPlan(operand, `${path}.operands[${String(index)}]`, findings, depth + 1)
+        if (child === undefined) return undefined
+        children.push(child)
+      }
+      return { kind: 'all', children }
     }
     case 'any': {
-      const branches: LeafGroup[] = []
-      for (const [index, operand] of node.operands.entries()) {
-        const lowered = lower(operand, `${path}.operands[${String(index)}]`, findings)
-        if (lowered === undefined) return undefined
-        const first = lowered[0]
-        if (lowered.length !== 1 || first === undefined || first.negative) {
-          findings.push({
-            code: 'DIFFERENT_CONDITION_OR',
-            message: 'a branch of OR is not one observed condition and cannot form an equivalent-source group',
-            path: `${path}.operands[${String(index)}]`,
-            rawForm: operand,
-          })
-          return undefined
-        }
-        branches.push(first)
-      }
-      const head = branches[0]
-      if (head === undefined) {
+      if (node.operands.length === 0) {
         findings.push({ code: 'MALFORMED_EXPRESSION', message: 'an OR has no branch', path, rawForm: node })
         return undefined
       }
-      const expected = signature(head)
-      for (const [index, branch] of branches.entries()) {
-        if (signature(branch) !== expected) {
-          findings.push({
-            code: 'DIFFERENT_CONDITION_OR',
-            message: 'branches of OR express different conditions; the finite subset cannot merge them',
-            path: `${path}.operands[${String(index)}]`,
-            rawForm: node,
-          })
-          return undefined
-        }
-      }
-      return [head]
-    }
-    case 'not': {
-      const lowered = lower(node.operand, `${path}.operand`, findings)
-      if (lowered === undefined) return undefined
-      const single = lowered[0]
-      if (lowered.length !== 1 || single === undefined || single.negative) {
+      if (node.operands.length > MAX_OR_BRANCHES) {
         findings.push({
-          code: 'UNSUPPORTED_NEGATION',
-          message: 'negation must cover exactly one observed comparison or range',
+          code: 'UNSUPPORTED_QUANTIFIER',
+          message: `an OR has ${String(node.operands.length)} branches, more than the supported maximum of ${String(MAX_OR_BRANCHES)}`,
           path,
           rawForm: node,
         })
         return undefined
       }
-      return [{ ...single, negative: true }]
+      const children: FiniteConditionPlan<LoweredConditionLeaf>[] = []
+      for (const [index, operand] of node.operands.entries()) {
+        const child = lowerPlan(operand, `${path}.operands[${String(index)}]`, findings, depth + 1)
+        if (child === undefined) return undefined
+        children.push(child)
+      }
+      return { kind: 'any', children }
+    }
+    case 'not': {
+      const operand = lowerPlan(node.operand, `${path}.operand`, findings, depth + 1)
+      if (operand === undefined) return undefined
+      if (operand.kind !== 'leaf' || operand.leaf.negative) {
+        findings.push({
+          code: 'UNSUPPORTED_NEGATION',
+          message: 'negation must cover exactly one observed comparison or range leaf',
+          path,
+          rawForm: node,
+        })
+        return undefined
+      }
+      return { kind: 'leaf', leaf: { ...operand.leaf, negative: true } }
     }
     case 'relation':
       findings.push({
@@ -242,15 +221,22 @@ function checkDependencies(input: RuleSupportValidationInput, findings: RuleSupp
 export class FiniteGrammarRuleSupportValidator implements RuleSupportValidator {
   validate(input: RuleSupportValidationInput): RuleSupportReport {
     const findings: RuleSupportFinding[] = []
-    lower(input.condition, 'condition', findings)
+    lowerPlan(input.condition, 'condition', findings, 0)
+    if (input.exceptions.length > MAX_EXCEPTIONS) {
+      findings.push({
+        code: 'UNSUPPORTED_EXCEPTION',
+        message: `a rule attaches ${String(input.exceptions.length)} exceptions, more than the supported maximum of ${String(MAX_EXCEPTIONS)}`,
+        path: 'exceptions',
+        rawForm: input.exceptions,
+      })
+    }
     for (const [index, exception] of input.exceptions.entries()) {
-      const lowered = lower(exception.condition, `exceptions[${String(index)}].condition`, findings)
-      if (lowered === undefined) continue
-      const single = lowered[0]
-      if (lowered.length !== 1 || single === undefined || single.negative) {
+      const plan = lowerPlan(exception.condition, `exceptions[${String(index)}].condition`, findings, 0)
+      if (plan === undefined) continue
+      if (plan.kind === 'leaf' && plan.leaf.negative) {
         findings.push({
           code: 'UNSUPPORTED_EXCEPTION',
-          message: `exception ${exception.exceptionId} must be one explicit comparison, range or same-condition OR`,
+          message: `exception ${exception.exceptionId} must be one explicit comparison, range, same-condition or different-condition any`,
           path: `exceptions[${String(index)}]`,
           rawForm: exception,
         })
@@ -276,31 +262,57 @@ export function validateRuleSupport(input: RuleSupportValidationInput): RuleSupp
 }
 
 /**
- * One lowered leaf of the finite subset: the conjunction of leaves is the rule's `all`
- * condition, with `any` already collapsed to its equivalent-source representative. Exported so
- * the synthetic validation evaluator judges cases with the SAME lowering the support checker
- * and the evaluator use, instead of a second, looser reading.
+ * The lowered finite condition: either a single leaf or a finite `all`/`any` tree. The support
+ * checker, the synthetic evaluator and the published compiler all consume this lowering.
  */
-export interface LoweredConditionLeaf {
-  readonly attributeId: string
-  readonly operator: string
-  readonly values: readonly (string | number | boolean)[]
-  readonly unitCode?: string
-  readonly negative: boolean
-}
+export type LoweredConditionPlan = FiniteConditionPlan<LoweredConditionLeaf>
 
 export interface LoweredCondition {
   readonly leaves: readonly LoweredConditionLeaf[]
   readonly findings: readonly RuleSupportFinding[]
 }
 
+/** Lower a frozen `RuleExpressionNode` into the supported finite condition tree. */
+export function lowerConditionPlan(condition: RuleExpressionNode): {
+  readonly plan: LoweredConditionPlan | undefined
+  readonly findings: readonly RuleSupportFinding[]
+} {
+  const findings: RuleSupportFinding[] = []
+  const plan = lowerPlan(condition, 'condition', findings, 0)
+  return { plan, findings }
+}
+
+function flattenConjunction(plan: LoweredConditionPlan): LoweredConditionLeaf[] | undefined {
+  if (plan.kind === 'leaf') return [plan.leaf]
+  if (plan.kind !== 'all') return undefined
+  const leaves: LoweredConditionLeaf[] = []
+  for (const child of plan.children) {
+    const flattened = flattenConjunction(child)
+    if (flattened === undefined) return undefined
+    leaves.push(...flattened)
+  }
+  return leaves
+}
+
 /**
- * Lower a frozen `RuleExpressionNode` into the flat conjunction the finite subset represents.
- * A form outside the subset yields findings and the leaves collected so far; the node is never
- * edited into a looser one.
+ * Legacy flat lowering: the conjunction of leaves, with an `any` collapsed only when it is a
+ * same-condition equivalent-source group. A genuine different-condition OR cannot be expressed
+ * as a flat conjunction and yields a `DIFFERENT_CONDITION_OR` finding; callers that must honour
+ * the full finite boolean subset use `lowerConditionPlan` instead.
  */
 export function lowerConditionLeaves(condition: RuleExpressionNode): LoweredCondition {
   const findings: RuleSupportFinding[] = []
-  const lowered = lower(condition, 'condition', findings)
-  return { leaves: lowered ?? [], findings }
+  const plan = lowerPlan(condition, 'condition', findings, 0)
+  if (plan === undefined) return { leaves: [], findings }
+  const leaves = flattenConjunction(plan)
+  if (leaves === undefined) {
+    findings.push({
+      code: 'DIFFERENT_CONDITION_OR',
+      message: 'a different-condition OR cannot be flattened into a conjunction of observed leaves',
+      path: 'condition',
+      rawForm: condition,
+    })
+    return { leaves: [], findings }
+  }
+  return { leaves, findings }
 }

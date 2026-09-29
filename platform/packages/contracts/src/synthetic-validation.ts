@@ -19,6 +19,7 @@ import type {
   RuleSupportState,
 } from './rule-action-candidates'
 import type { RuleConditionState, RuleExceptionNode, RuleExpressionNode } from './rule-extraction'
+import type { FiniteRuleConditionEvaluation } from './rule-boolean'
 import type { DefinitionRevisionStrategy, DefinitionValidationReport } from './definition-editing'
 
 /**
@@ -388,18 +389,18 @@ export interface DefinitionPublicationValidationPort {
 /**
  * The finite-grammar case evaluator. The semantic engine implements it with the same frozen
  * subset the publish stage and the evaluator enforce, so a synthetic case is judged by the
- * same compiler rather than a second, looser implementation.
+ * same compiler rather than a second, looser implementation. Applicability, the business
+ * proposition, source conflicts and truncation are reported as separate axes.
  */
-export interface SyntheticRuleEvaluation {
-  readonly conditionState: RuleConditionState
-  readonly exceptionStates: readonly { readonly exceptionId: string; readonly state: RuleConditionState }[]
-}
+export type SyntheticRuleEvaluation = FiniteRuleConditionEvaluation
 
 export interface SyntheticCaseEvaluator {
   evaluateRule(input: {
     readonly condition: RuleExpressionNode
     readonly exceptions: readonly RuleExceptionNode[]
     readonly fields: readonly SyntheticCaseField[]
+    /** Set when the caller knows the sample fields were cut off; then a verdict stays unknown. */
+    readonly truncated?: boolean
   }): SyntheticRuleEvaluation
 }
 

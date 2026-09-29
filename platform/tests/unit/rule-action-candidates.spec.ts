@@ -243,10 +243,11 @@ describe('finite-grammar rule support validator', () => {
     expect(report.condition).toEqual(SAME_OR)
   })
 
-  it('marks a genuinely different-condition OR not executable without editing it', () => {
+  it('accepts a genuinely different-condition OR and preserves it verbatim', () => {
     const report = validator.validate({ ruleId: 'r2', condition: DIFFERENT_OR, exceptions: [] })
-    expect(report.executable).toBe(false)
-    expect(report.findings.some((finding) => finding.code === 'DIFFERENT_CONDITION_OR')).toBe(true)
+    expect(report.executable).toBe(true)
+    expect(report.supportState).toBe('executable')
+    expect(report.findings).toEqual([])
     expect(report.condition).toEqual(DIFFERENT_OR)
   })
 
@@ -358,13 +359,13 @@ describe('rule/action candidate service', () => {
     const h = harness()
     const saved = await h.service.saveRuleCandidate(
       WORKSPACE_ID,
-      { ...ruleProposal({ condition: DIFFERENT_OR }), expectedRevision: '1', idempotencyKey: `save-${randomUUID()}` },
+      { ...ruleProposal({ condition: RELATION }), expectedRevision: '1', idempotencyKey: `save-${randomUUID()}` },
       'editor-1',
       EDITOR,
     )
     expect(saved.kind).toBe('rule')
     expect(saved.payload.kind === 'rule' ? saved.payload.support.executable : true).toBe(false)
-    expect(saved.payload.kind === 'rule' ? saved.payload.condition : undefined).toEqual(DIFFERENT_OR)
+    expect(saved.payload.kind === 'rule' ? saved.payload.condition : undefined).toEqual(RELATION)
 
     await expect(
       h.service.enableRuleCandidate(WORKSPACE_ID, { candidateId: saved.candidateId, expectedRevision: '1' }, EDITOR),
@@ -372,7 +373,25 @@ describe('rule/action candidate service', () => {
 
     const after = await h.service.getCandidate(saved.candidateId, EDITOR)
     expect(after?.lifecycle).toBe('draft')
-    expect(after?.payload.kind === 'rule' ? after.payload.condition : undefined).toEqual(DIFFERENT_OR)
+    expect(after?.payload.kind === 'rule' ? after.payload.condition : undefined).toEqual(RELATION)
+  })
+
+  it('saves and enables a genuine different-condition OR candidate', async () => {
+    const h = harness()
+    const saved = await h.service.saveRuleCandidate(
+      WORKSPACE_ID,
+      { ...ruleProposal({ condition: DIFFERENT_OR }), expectedRevision: '1', idempotencyKey: `save-${randomUUID()}` },
+      'editor-1',
+      EDITOR,
+    )
+    expect(saved.payload.kind === 'rule' ? saved.payload.support.executable : false).toBe(true)
+    expect(saved.payload.kind === 'rule' ? saved.payload.condition : undefined).toEqual(DIFFERENT_OR)
+    const enabled = await h.service.enableRuleCandidate(
+      WORKSPACE_ID,
+      { candidateId: saved.candidateId, expectedRevision: '1' },
+      EDITOR,
+    )
+    expect(enabled.candidate.lifecycle).toBe('enabled')
   })
 
   it('enables an executable rule candidate', async () => {
