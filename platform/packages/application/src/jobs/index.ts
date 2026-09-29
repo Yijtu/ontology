@@ -23,6 +23,22 @@ export {
   encodeDocumentIngestionRef,
 } from './document-ingestion-ref'
 export type { DocumentIngestionRef } from './document-ingestion-ref'
+export {
+  StructuredDocumentParseStageHandler,
+  countsFromReconciliation,
+} from './structured-parse-stage-handler'
+export type { StructuredDocumentParseStageHandlerDependencies } from './structured-parse-stage-handler'
+export {
+  decodeStructuredIngestionRef,
+  encodeStructuredExtractionRef,
+  encodeStructuredIngestionRef,
+  isStructuredIngestionRef,
+} from './structured-ingestion-ref'
+export type {
+  StructuredExtractionRef,
+  StructuredIngestionRef,
+  StructuredSelectionOptions,
+} from './structured-ingestion-ref'
 export type {
   CreateJobInput,
   CreateJobResult,
