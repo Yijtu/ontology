@@ -9,6 +9,8 @@
 - [PRD v0.2](tasks/prd-industry-semantic-agent-v0.2.md)规定产品范围；[SPEC 主文](tasks/spec-industry-semantic-agent-v0.2.md)及分册规定实现契约；[Issue manifest](.autoresearch/issues/manifest.json)记录任务依赖与真实 GitHub 编号映射。`LOCAL-xxx` 不自动等于 GitHub `#xxx`。
 - 用当前代码、验收证据与任务记录核对实际状态。文档中的“尚未实现”等历史描述不代表实时进度；记录不一致时标出差异，不能据此重复实现或虚报完成。
 - 本项目独立建设，历史演示原型不构成代码、接口、数据迁移、页面或测试兼容要求；不以旧实现输出作为正确性依据。DataOS 仅视为数据中台，未验证能力不得成为实现前提。
+- 分支和工作区用途见[分支管理](docs/branch-management.md)。以 `git branch --show-current` 为准，不从目录名推断分支；功能分支 upstream 必须指向同名远端分支。
+- 通用 Core 改动与场景实现分开提交；未完成的 Core 研发分支不自动整枝合入业务 POC。清理分支前检查提交归属和工作区状态，独有历史先保留归档引用。
 
 ## 架构边界
 

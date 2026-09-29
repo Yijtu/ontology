@@ -8,6 +8,8 @@
 
 本说明介绍 main 主线的通用 Core，核对日期为 2026-09-29。功能来自已验证的 Core 开发分支；未完成的规划器和规则来源桥保留在独立研发分支，没有混入这次主线合并。Anker 家庭能源演示是另一个场景，不是这里默认启动的产品。
 
+当前分支 `feat/electrical-costing-poc` 正在准备首个电气桥架造价 POC，[实施方案](docs/poc/electrical-costing/first-poc-plan-2026-09-29.md)说明范围、依赖与验收，目前尚未实现报价功能。主线、Anker 场景与后续 Core 研发分别在哪个分支、如何同步和清理，见[分支与工作区管理](docs/branch-management.md)。
+
 ## 从哪里开始读
 
 - [先看现在能做什么](#现在能做什么)
