@@ -32,6 +32,7 @@ export {
 export { PostgresAssetWorkspaceStore } from './asset-workspace-store'
 export { PostgresAssetCandidateStore } from './asset-candidate-store'
 export { PostgresProjectStore } from './project-store'
+export { PostgresInstanceReviewStore } from './instance-review-store'
 export { ControlPostgresRepository } from './repository'
 export type {
   ControlOperationContext,

@@ -91,6 +91,22 @@ import type {
   IndustryWorkspaceWriteView,
 } from './workspaces'
 import type { AssetDraftVersion, IndustryWorkspace } from '@ontology/contracts'
+import {
+  isInstanceConfirmationEvent,
+  isInstanceConfirmationOutcome,
+  isInstanceRecordView,
+} from './instances'
+import type {
+  ConfirmInstanceFieldsRequest,
+  CreateInstanceRecordRequest,
+  EditInstanceFieldRequest,
+  InstanceConfirmationEvent,
+  InstanceConfirmationOutcomeView,
+  InstanceIdentityDecisionRequest,
+  InstanceRecordFilter,
+  InstanceRevisionRequest,
+} from './instances'
+import type { InstanceRecordView } from '@ontology/contracts'
 
 export { ApiError } from './errors'
 export {
@@ -688,8 +704,142 @@ export class WorkbenchClient {
     })
   }
 
-  listCandidates(filter: CandidateFilter = {}): Promise<CandidateSummary[]> {
+  private instanceRecordPath(projectId: string, recordId: string, suffix = ''): string {
+    return `/api/v1/projects/${encodeURIComponent(projectId)}/instance-records/${encodeURIComponent(recordId)}${suffix}`
+  }
+
+  private readInstanceRecord(path: string, data: unknown): InstanceRecordView {
+    if (!isRecord(data) || !isInstanceRecordView(data['record'])) {
+      throw malformedResponse(path, 'the instance record was not recognised')
+    }
+    return data['record']
+  }
+
+  /** `GET /projects/:id/instance-records`: the instance records visible in the trusted scope. */
+  listInstanceRecords(projectId: string, filter: InstanceRecordFilter = {}): Promise<InstanceRecordView[]> {
     const query = new URLSearchParams()
+    if (filter.status !== undefined) query.set('status', filter.status)
+    if (filter.publicationState !== undefined) query.set('publicationState', filter.publicationState)
+    const suffix = query.toString().length > 0 ? `?${query.toString()}` : ''
+    const path = `/api/v1/projects/${encodeURIComponent(projectId)}/instance-records${suffix}`
+    return this.#request<unknown>('GET', path).then((data) => {
+      if (!isRecord(data) || !Array.isArray(data['records']) || !data['records'].every(isInstanceRecordView)) {
+        throw malformedResponse(path, 'the instance record list was not recognised')
+      }
+      return data['records']
+    })
+  }
+
+  getInstanceRecord(projectId: string, recordId: string): Promise<InstanceRecordView> {
+    const path = this.instanceRecordPath(projectId, recordId)
+    return this.#request<unknown>('GET', path).then((data) => this.readInstanceRecord(path, data))
+  }
+
+  listInstanceConfirmations(projectId: string, recordId: string): Promise<InstanceConfirmationEvent[]> {
+    const path = this.instanceRecordPath(projectId, recordId, '/confirmations')
+    return this.#request<unknown>('GET', path).then((data) => {
+      if (
+        !isRecord(data) ||
+        !Array.isArray(data['confirmations']) ||
+        !data['confirmations'].every(isInstanceConfirmationEvent)
+      ) {
+        throw malformedResponse(path, 'the instance confirmation history was not recognised')
+      }
+      return data['confirmations']
+    })
+  }
+
+  createInstanceRecord(
+    projectId: string,
+    request: CreateInstanceRecordRequest,
+  ): Promise<InstanceRecordView> {
+    const path = `/api/v1/projects/${encodeURIComponent(projectId)}/instance-records`
+    return this.#request<unknown>('POST', path, {
+      body: request,
+      idempotencyKey: this.#newId(),
+    }).then((data) => this.readInstanceRecord(path, data))
+  }
+
+  editInstanceField(
+    projectId: string,
+    recordId: string,
+    request: EditInstanceFieldRequest,
+  ): Promise<InstanceRecordView> {
+    const path = this.instanceRecordPath(projectId, recordId, '/field-edits')
+    return this.#request<unknown>('POST', path, {
+      body: {
+        fieldId: request.fieldId,
+        ...(request.rawValue === undefined ? {} : { rawValue: request.rawValue }),
+        ...(request.normalizedValue === undefined ? {} : { normalizedValue: request.normalizedValue }),
+        reason: request.reason,
+      },
+      ifMatch: request.expectedRevision,
+      idempotencyKey: this.#newId(),
+    }).then((data) => this.readInstanceRecord(path, data))
+  }
+
+  confirmInstanceFields(
+    projectId: string,
+    recordId: string,
+    request: ConfirmInstanceFieldsRequest,
+  ): Promise<InstanceConfirmationOutcomeView> {
+    const path = this.instanceRecordPath(projectId, recordId, '/field-confirmations')
+    return this.#request<unknown>('POST', path, {
+      body: { decisions: request.decisions },
+      ifMatch: request.expectedRevision,
+      idempotencyKey: this.#newId(),
+    }).then((data) => {
+      if (!isInstanceConfirmationOutcome(data)) {
+        throw malformedResponse(path, 'the field confirmation outcome was not recognised')
+      }
+      return data
+    })
+  }
+
+  adjudicateInstanceIdentity(
+    projectId: string,
+    recordId: string,
+    request: InstanceIdentityDecisionRequest,
+  ): Promise<InstanceRecordView> {
+    const path = this.instanceRecordPath(projectId, recordId, '/identity-decisions')
+    return this.#request<unknown>('POST', path, {
+      body: {
+        kind: request.kind,
+        ...(request.targetEntityId === undefined ? {} : { targetEntityId: request.targetEntityId }),
+        reason: request.reason,
+      },
+      ifMatch: request.expectedRevision,
+      idempotencyKey: this.#newId(),
+    }).then((data) => this.readInstanceRecord(path, data))
+  }
+
+  approveInstanceRecord(
+    projectId: string,
+    recordId: string,
+    request: InstanceRevisionRequest,
+  ): Promise<InstanceRecordView> {
+    const path = this.instanceRecordPath(projectId, recordId, '/approve')
+    return this.#request<unknown>('POST', path, {
+      body: {},
+      ifMatch: request.expectedRevision,
+      idempotencyKey: this.#newId(),
+    }).then((data) => this.readInstanceRecord(path, data))
+  }
+
+  publishInstanceRecord(
+    projectId: string,
+    recordId: string,
+    request: InstanceRevisionRequest,
+  ): Promise<InstanceRecordView> {
+    const path = this.instanceRecordPath(projectId, recordId, '/publish')
+    return this.#request<unknown>('POST', path, {
+      body: {},
+      ifMatch: request.expectedRevision,
+      idempotencyKey: this.#newId(),
+    }).then((data) => this.readInstanceRecord(path, data))
+  }
+
+  listCandidates(filter: CandidateFilter = {}): Promise<CandidateSummary[]> {    const query = new URLSearchParams()
     if (filter.jobId !== undefined) query.set('jobId', filter.jobId)
     if (filter.state !== undefined) query.set('state', filter.state)
     if (filter.kind !== undefined) query.set('kind', filter.kind)

@@ -202,3 +202,23 @@ export type {
   ScenarioVerifiedResult,
 } from './mount/contract'
 export { createScenarioRegistry, registerBuiltInScenarioModules } from './scenarios/composition'
+export { InstanceReviewPanel } from './components/InstanceReviewPanel'
+export type { InstanceReviewPanelProps } from './components/InstanceReviewPanel'
+export {
+  isInstanceConfirmationEvent,
+  isInstanceConfirmationOutcome,
+  isInstanceRecordView,
+} from './api/instances'
+export type {
+  ConfirmInstanceFieldsRequest,
+  CreateInstanceFieldInput,
+  CreateInstanceRecordRequest,
+  CreateInstanceRelationInput,
+  EditInstanceFieldRequest,
+  InstanceConfirmationEvent,
+  InstanceConfirmationOutcomeView,
+  InstanceFieldDecisionInput,
+  InstanceIdentityDecisionRequest,
+  InstanceRecordFilter,
+  InstanceRevisionRequest,
+} from './api/instances'
