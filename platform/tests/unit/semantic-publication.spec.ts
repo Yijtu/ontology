@@ -71,13 +71,17 @@ async function createEntity(candidateId: string): Promise<string> {
 }
 
 async function matchEntity(candidateId: string, entityId: string, expectedRevision = '0'): Promise<void> {
+  const candidate = await candidates.getCandidate(scopeRef, candidateId, ctx)
+  if (candidate?.kind !== 'entity') throw new Error(`entity candidate ${candidateId} was not stored`)
+  const nativeId = candidate.nativeId ?? candidate.attributes.find((attribute) => attribute.attributeId === 'device_native_id')?.value
+  if (typeof nativeId !== 'string') throw new Error(`entity candidate ${candidateId} has no native ID`)
   await identityService.decide(
     {
       candidateId,
       kind: 'match',
       expectedRevision,
       targetEntityId: entityId,
-      strongIdentity: { kind: 'native_id', value: `N-${candidateId}` },
+      strongIdentity: { kind: 'native_id', attributeId: 'device_native_id', value: nativeId },
     },
     ctx,
   )
@@ -118,7 +122,13 @@ describe('semantic publication service (in-memory)', () => {
   it('publishes only approved candidates and keeps the candidate and published read views separate', async () => {
     const first = await seedApprovedEntity()
     const secondCandidate = randomUUID()
-    await insert(entityFor({ candidateId: secondCandidate, idempotencyKey: idempotencyKey() }))
+    const firstCandidate = await candidates.getCandidate(scopeRef, first.candidateId, ctx)
+    if (firstCandidate?.kind !== 'entity') throw new Error('seed candidate disappeared')
+    await insert(entityFor({
+      candidateId: secondCandidate,
+      idempotencyKey: idempotencyKey(),
+      attributes: [...firstCandidate.attributes],
+    }))
     await matchEntity(secondCandidate, first.entityId)
     await approve(secondCandidate)
 
@@ -147,6 +157,35 @@ describe('semantic publication service (in-memory)', () => {
     await expect(publish([{ candidateId: unapproved, kind: 'entity' }], 'pub-unapproved')).rejects.toMatchObject({
       code: 'CANDIDATE_NOT_APPROVED',
     })
+  })
+
+  it('persists an explicitly reviewed schema-typed business conclusion and rejects an invalid binding', async () => {
+    const candidateId = randomUUID()
+    await insert(ruleFor({
+      candidateId,
+      idempotencyKey: idempotencyKey(),
+      conclusion: { predicate: 'device_name', value: 'Charger One' },
+    }))
+    await service.reviewCandidate(
+      { candidateId, decision: 'approve', reason: 'reviewed conclusion', expectedRevision: '0' },
+      ctx,
+    )
+    const publication = await publish([{ candidateId, kind: 'rule' }], 'pub-conclusion')
+    expect(publication.ruleVersions[0]?.conclusion).toEqual({ predicate: 'device_name', value: 'Charger One' })
+    expect((await service.listRuleVersions({}, ctx))[0]?.conclusion).toEqual({ predicate: 'device_name', value: 'Charger One' })
+
+    const invalidId = randomUUID()
+    await insert(ruleFor({
+      candidateId: invalidId,
+      idempotencyKey: idempotencyKey(),
+      conclusion: { predicate: 'device_name', value: true },
+    }))
+    await service.reviewCandidate(
+      { candidateId: invalidId, decision: 'approve', reason: 'reviewed candidate', expectedRevision: '0' },
+      ctx,
+    )
+    await expect(publish([{ candidateId: invalidId, kind: 'rule' }], 'pub-bad-conclusion'))
+      .rejects.toMatchObject({ code: 'CANDIDATE_FAILED' })
   })
 
   it('refuses a failed, rejected, unrepresentable or conflicted candidate with a specific reason', async () => {
@@ -398,14 +437,22 @@ describe('semantic publication service (in-memory)', () => {
       entityFor({
         candidateId: first,
         idempotencyKey: idempotencyKey(),
-        attributes: [{ attributeId: 'device_name', value: 'Charger One' }],
+        attributes: [
+          { attributeId: 'device_native_id', value: 'DEV-ONE' },
+          { attributeId: 'device_name', value: 'Charger One' },
+          { attributeId: 'site', value: 'site-a' },
+        ],
       }),
     )
     await insert(
       entityFor({
         candidateId: second,
         idempotencyKey: idempotencyKey(),
-        attributes: [{ attributeId: 'device_name', value: 'Charger One' }],
+        attributes: [
+          { attributeId: 'device_native_id', value: 'DEV-ONE' },
+          { attributeId: 'device_name', value: 'Charger One' },
+          { attributeId: 'site', value: 'site-a' },
+        ],
       }),
     )
     const entityId = await createEntity(first)

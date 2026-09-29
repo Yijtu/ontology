@@ -287,6 +287,30 @@ describe('LOCAL-050 quality / load / fault harness', () => {
     expect(verification.falsePass.denominator).toBeGreaterThan(0)
     expect(verification.falsePass.numerator).toBe(0)
     expect(verification.falseReject.numerator).toBe(0)
+    const semanticUnsupported = verification.cases.find((entry) => entry.caseId === 'semantic-unsupported-fails')
+    expect(semanticUnsupported).toMatchObject({
+      expectedVerdict: 'fail',
+      observedVerdict: 'fail',
+      failedChecks: ['semantic_unsupported'],
+      semanticReview: { status: 'completed' },
+    })
+    expect(verification.semanticProbe.decisionCalls).toBe(1)
+    const archivedState = verification.semanticProbe.archivedState
+    expect(archivedState).toMatchObject({
+      question: 'Does the published observation support this claim about site-load-a?',
+      claims: [{
+        subject: 'site-load-a',
+        predicate: 'forecast_energy',
+        value: { value: 12.5, unit: 'kWh' },
+        evidenceRefIds: [expect.any(String)],
+      }],
+      evidence: [{
+        availability: 'readable',
+        payload: { subject: 'site-load-a', value: 12.5, unit: 'kWh', time: '2026-09-20T00:00:00Z' },
+      }],
+      evidenceCoverageComplete: true,
+    })
+    expect(archivedState?.claims[0]?.evidenceRefIds).toEqual(archivedState?.evidence.map((entry) => entry.refId))
     process.stdout.write(
       `[load-harness] verification false-pass ${String(verification.falsePass.numerator)}/${String(verification.falsePass.denominator)} ` +
         `false-reject ${String(verification.falseReject.numerator)}/${String(verification.falseReject.denominator)}\n`,

@@ -1,3 +1,5 @@
+import type { ErrorCode } from '@ontology/contracts'
+
 /**
  * Classified extraction-pipeline failures (SPEC D4/C6.2, AGENTS §错误保留分类).
  *
@@ -10,6 +12,7 @@ export type ExtractionErrorCode =
   | 'SCHEMA_NOT_FOUND'
   | 'INVALID_JOB_REF'
   | 'NO_CHUNKS'
+  | 'MODEL_NOT_CONFIGURED'
   | 'GENERATION_FAILED'
   | 'INVALID_MODEL_OUTPUT'
   | 'BUDGET_REFUSED'
@@ -17,12 +20,21 @@ export type ExtractionErrorCode =
 
 export class ExtractionError extends Error {
   readonly code: ExtractionErrorCode
+  readonly platformCode?: ErrorCode
+  readonly retryable?: boolean
 
-  constructor(code: ExtractionErrorCode, message: string, options?: ErrorOptions) {
+  constructor(code: ExtractionErrorCode, message: string, options?: ExtractionErrorOptions) {
     super(message, options?.cause === undefined ? undefined : { cause: options.cause })
     this.name = 'ExtractionError'
     this.code = code
+    if (options?.platformCode !== undefined) this.platformCode = options.platformCode
+    if (options?.retryable !== undefined) this.retryable = options.retryable
   }
+}
+
+export interface ExtractionErrorOptions extends ErrorOptions {
+  readonly platformCode?: ErrorCode
+  readonly retryable?: boolean
 }
 
 export function isExtractionError(value: unknown): value is ExtractionError {

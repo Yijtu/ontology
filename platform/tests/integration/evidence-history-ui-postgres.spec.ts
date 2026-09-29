@@ -11,19 +11,23 @@ import {
 import {
   ControlPostgresDatabase,
   PostgresEvidenceStore,
+  PostgresMaterializationStore,
   PostgresSemanticPublicationStore,
 } from '@ontology/adapter-control-postgres'
-import { createApiServer } from '@ontology/app-api'
+import { createApiServer, createPostgresProvenanceRead } from '@ontology/app-api'
 import type { AuthenticatedRequest } from '@ontology/app-api'
 import { ProvenanceReadService } from '@ontology/provenance'
-import { HistoryReadService, SupportEvidenceDependencySource, sha256DigestOf } from '@ontology/semantic-engine'
+import { HistoryReadService, IncrementalMaterializer, PublishedSemanticSource, sha256DigestOf } from '@ontology/semantic-engine'
 import type {
   EvidenceEnvelope,
   EvidenceKind,
+  MaterializationChange,
   PublishedRuleVersion,
   PublishedStatement,
   PublishSemanticPublicationInput,
   ResourceRef,
+  RevisionString,
+  RuleComputationArtifact,
   SourceSnapshot,
   ToolContext,
   Uuid,
@@ -32,6 +36,7 @@ import type {
 import { toolContext } from '../unit/component-registry-fixtures'
 import { createJobScope, startJobDatabase } from './job-postgres-harness'
 import type { JobDbHarness, JobTestScope } from './job-postgres-harness'
+import { FixturePublishedIdentityReader } from './published-identity-reader'
 
 /**
  * The UI's provenance/history contract against a real PostgreSQL container and the real
@@ -50,6 +55,9 @@ let scope: JobTestScope
 let ctx: ToolContext
 let database: ControlPostgresDatabase
 let publication: PostgresSemanticPublicationStore
+let materializationStore: PostgresMaterializationStore
+let materializer: IncrementalMaterializer
+let identity: FixturePublishedIdentityReader
 let evidence: PostgresEvidenceStore
 let blobStore: LocalImmutableBlobStore
 let objectStore: FileSystemObjectStore
@@ -58,17 +66,18 @@ let provenance: ProvenanceReadService
 let history: HistoryReadService
 let tempDir: string
 let jobId: Uuid
+const evidenceRefs = new Map<Uuid, ResourceRef>()
 
 function bytes(text: string): Uint8Array {
   return new TextEncoder().encode(text)
 }
 
-function evidenceSource(id: Uuid): ResourceRef {
-  return { id, version: '1.0.0', digest: DIGEST, kind: 'evidence' }
+function sameInstant(left: string, right: string): boolean {
+  return Number.isFinite(Date.parse(left)) && Date.parse(left) === Date.parse(right)
 }
 
-function ruleRef(ruleId: string): VersionRef {
-  return { id: ruleId, version: '1', digest: DIGEST }
+function evidenceSource(id: Uuid): ResourceRef {
+  return evidenceRefs.get(id) ?? { id, version: '1.0.0', digest: DIGEST, kind: 'evidence' }
 }
 
 async function archive(content: string, mediaType = 'text/plain'): Promise<ResourceRef> {
@@ -113,7 +122,8 @@ async function recordEvidence(input: {
     dataMode: 'observed',
     ...(input.payloadRef === undefined ? {} : { payloadRef: input.payloadRef }),
   }
-  await evidence.record(scope.scopeRef, envelope, ctx)
+  const stored = await evidence.record(scope.scopeRef, envelope, ctx)
+  evidenceRefs.set(input.evidenceId, stored.evidenceRef)
 }
 
 function immutableSnapshot(): SourceSnapshot {
@@ -145,12 +155,16 @@ function statement(
   }
 }
 
-function ruleVersion(ruleId: string, attributeId: string): Omit<PublishedRuleVersion, 'publicationId'> {
+function ruleVersion(
+  ruleId: string,
+  attributeId: string,
+  objectId = 'device.battery',
+): Omit<PublishedRuleVersion, 'publicationId'> {
   return {
     ruleVersionId: randomUUID(),
     ruleId,
     version: '1',
-    objectId: `${attributeId}.conclusion`,
+    objectId,
     severity: 'soft',
     impact: 'low',
     expression: { op: 'compare', attributeId, operator: 'eq', value: true, spans: [] },
@@ -164,8 +178,11 @@ async function publishBundle(
   statements: readonly Omit<PublishedStatement, 'publicationId'>[],
   ruleVersions: readonly Omit<PublishedRuleVersion, 'publicationId'>[],
   key: string,
-): Promise<void> {
+): Promise<RevisionString> {
   const publicationId = randomUUID()
+  const publishedStatements = statements.map((entry) => ({ ...entry, publicationId }))
+  const publishedRules = ruleVersions.map((rule) => ({ ...rule, publicationId }))
+  identity.bindStatements(publishedStatements)
   const input: PublishSemanticPublicationInput = {
     expectedRevision: await publication.latestPublicationRevision(scope.scopeRef, ctx),
     publication: {
@@ -173,8 +190,8 @@ async function publishBundle(
       versionRef: { id: publicationId, version: '1.0.0', digest: DIGEST },
       schemaRef: { id: 'home-energy.core', version: '1.0.0', digest: DIGEST },
       approvedCandidateRefs: [],
-      statements: statements.map((entry) => ({ ...entry, publicationId })),
-      ruleVersions: ruleVersions.map((entry) => ({ ...entry, publicationId })),
+      statements: publishedStatements,
+      ruleVersions: publishedRules,
       outboxId: randomUUID(),
       publishedAt: '2026-09-21T00:00:00Z',
       actor: ctx.principal.subjectId,
@@ -193,6 +210,55 @@ async function publishBundle(
     outboxJobId: jobId,
   }
   await publication.publish(scope.scopeRef, input, ctx)
+  const recordedSeq = await publication.latestReadRevision(scope.scopeRef, ctx)
+  if (publishedRules.length > 0) {
+    const publishedRule = publishedRules[0]
+    if (publishedRule === undefined) throw new Error('rule publication returned no rule version')
+    const change: MaterializationChange = {
+      changeId: randomUUID(),
+      scopeRef: scope.scopeRef,
+      recordedSeq,
+      recordedAt: publishedRule.recordedAt,
+      kind: 'rule_changed',
+      ruleId: publishedRule.ruleId,
+      propositionKey: publishedRule.objectId,
+    }
+    const advance = await materializer.applyChange(change, ctx)
+    if (advance.recomputedRuleIds.length === 0 || advance.appendedSlices === 0) {
+      throw new Error(`materialization produced no rule support for publication ${publicationId}`)
+    }
+  }
+  return recordedSeq
+}
+
+async function publishedRuleRef(ruleId: string): Promise<VersionRef> {
+  const versions = await publication.listRuleVersions(scope.scopeRef, {}, ctx)
+  const rule = versions.find((candidate) => candidate.ruleId === ruleId)
+  if (rule === undefined) throw new Error(`published rule ${ruleId} was not found`)
+  return { id: rule.ruleVersionId, version: `${rule.version}.0.0`, digest: sha256DigestOf(rule) }
+}
+
+async function materializedArtifact(
+  ruleRefValue: VersionRef,
+  subjectEntityId: string,
+  recordedSeq: RevisionString,
+  validAt: string = VALIDITY.validFrom,
+): Promise<RuleComputationArtifact> {
+  const slices = await materializationStore.readSlices(scope.scopeRef, {
+    validAt,
+    asOfRecordedSeq: recordedSeq,
+    limit: 10_000,
+  }, ctx)
+  const artifact = slices.flatMap((slice) => slice.conclusion.ruleArtifacts ?? []).find((candidate) =>
+    candidate.subjectEntityId === subjectEntityId &&
+    candidate.ruleRef.id === ruleRefValue.id &&
+    candidate.ruleRef.version === ruleRefValue.version &&
+    candidate.ruleRef.digest === ruleRefValue.digest &&
+    sameInstant(candidate.validAt ?? '', validAt) &&
+    candidate.asOfRecordedSeq === recordedSeq,
+  )
+  if (artifact === undefined) throw new Error(`no materialized support artifact for ${ruleRefValue.id} and ${subjectEntityId}`)
+  return artifact
 }
 
 function testAuthenticator(request: {
@@ -226,22 +292,24 @@ beforeAll(async () => {
     RUN_ID,
   )
   database = new ControlPostgresDatabase({ connectionString: harness.appUrl, maxPoolSize: 6 })
-  publication = new PostgresSemanticPublicationStore(database)
-  evidence = new PostgresEvidenceStore(database)
 
   tempDir = await mkdtemp(join(tmpdir(), 'ontology-evidence-ui-'))
   objectStore = new FileSystemObjectStore(tempDir)
   await objectStore.init()
   registry = new PostgresArtifactRegistry({ connectionString: harness.appUrl, maxPoolSize: 4 })
   blobStore = new LocalImmutableBlobStore({ objectStore, registry })
+  const provenanceComposition = createPostgresProvenanceRead({ database, blobStore })
+  publication = provenanceComposition.publication
+  evidence = provenanceComposition.evidence
+  provenance = provenanceComposition.provenance
+  history = provenanceComposition.history
 
-  provenance = new ProvenanceReadService({
-    evidence,
-    blobs: blobStore,
-    dependencies: new SupportEvidenceDependencySource({ published: publication }),
-    reader: blobStore,
+  identity = new FixturePublishedIdentityReader()
+  materializationStore = new PostgresMaterializationStore(database)
+  materializer = new IncrementalMaterializer({
+    publishedSource: new PublishedSemanticSource(publication, { identity }),
+    materialization: materializationStore,
   })
-  history = new HistoryReadService({ store: publication })
 
   jobId = randomUUID()
   await harness.adminClient.query(
@@ -274,16 +342,47 @@ describe('the evidence/history HTTP routes the UI calls, against real PostgreSQL
     const factB = randomUUID()
     const relation = randomUUID()
     const ruleEvidence = randomUUID()
-    const rule = ruleRef('rule.ui-ready')
+    const ruleId = 'rule.ui-ready'
     const archivedSnapshot = await archive('meter snapshot')
     await recordEvidence({ evidenceId: factA, kind: 'observation', sourceSnapshots: [immutableSnapshot()], recordedSeq: '1' })
     await recordEvidence({ evidenceId: factB, kind: 'observation', sourceSnapshots: [immutableSnapshot()], recordedSeq: '1' })
     await recordEvidence({ evidenceId: relation, kind: 'observation', sourceSnapshots: [immutableSnapshot()], recordedSeq: '1' })
+    const recordedSeq = await publishBundle(
+      [
+        statement({
+          statementId: randomUUID(),
+          subjectEntityId: 'entity.battery',
+          predicate: 'device',
+          value: { attributes: [{ attributeId: 'device.battery_present', value: true }] },
+          sourceRefs: [evidenceSource(factA)],
+        }),
+        statement({
+          statementId: randomUUID(),
+          subjectEntityId: 'entity.battery',
+          predicate: 'device',
+          value: { attributes: [{ attributeId: 'device.battery_present', value: true }] },
+          sourceRefs: [evidenceSource(factB)],
+        }),
+        statement({
+          statementId: randomUUID(),
+          kind: 'relation',
+          relationId: 'device.located_in',
+          predicate: 'device.located_in',
+          value: { value: 'room.one' },
+          sourceRefs: [evidenceSource(relation)],
+        }),
+      ],
+      [ruleVersion(ruleId, 'device.battery_present')],
+      'ui-support',
+    )
+    const rule = await publishedRuleRef(ruleId)
+    const payloadRef = await archive(JSON.stringify(await materializedArtifact(rule, 'entity.battery', recordedSeq)), 'application/json')
     await recordEvidence({
       evidenceId: ruleEvidence,
       kind: 'rule_derivation',
       ruleRef: rule,
-      recordedSeq: '1',
+      recordedSeq,
+      payloadRef,
       sourceSnapshots: [
         {
           sourceRef: { namespace: 'document', sourceId: 'battery-manual.pdf' },
@@ -295,22 +394,6 @@ describe('the evidence/history HTTP routes the UI calls, against real PostgreSQL
         },
       ],
     })
-    await publishBundle(
-      [
-        statement({ statementId: randomUUID(), sourceRefs: [evidenceSource(factA)] }),
-        statement({ statementId: randomUUID(), sourceRefs: [evidenceSource(factB)] }),
-        statement({
-          statementId: randomUUID(),
-          kind: 'relation',
-          relationId: 'device.located_in',
-          predicate: 'device.located_in',
-          value: { value: 'room.one' },
-          sourceRefs: [evidenceSource(relation)],
-        }),
-      ],
-      [ruleVersion(rule.id, 'device.battery_present')],
-      'ui-support',
-    )
 
     const app = createApiServer({
       authenticate: testAuthenticator,
@@ -401,7 +484,14 @@ describe('the evidence/history HTTP routes the UI calls, against real PostgreSQL
   it('replays immutable history versions and retains the prior basis after a retraction', async () => {
     const statementId = randomUUID()
     await publishBundle(
-      [statement({ statementId, objectId: 'device.ui-history', sourceRefs: [evidenceSource(randomUUID())] })],
+      [statement({
+        statementId,
+        subjectEntityId: 'entity.ui-history',
+        objectId: 'device.ui-history',
+        predicate: 'device.ui-history',
+        value: { attributes: [{ attributeId: 'device.ui-history.present', value: true }] },
+        sourceRefs: [evidenceSource(randomUUID())],
+      })],
       [],
       'ui-history',
     )

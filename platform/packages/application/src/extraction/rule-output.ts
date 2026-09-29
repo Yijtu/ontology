@@ -59,6 +59,7 @@ function parseRule(entry: unknown, index: number): DraftRule {
     impact: requireImpact(entry['impact'], `${at}.impact`),
     expression: entry['expression'],
     exceptions: rawExceptions,
+    ...(entry['conclusion'] === undefined ? {} : { conclusion: entry['conclusion'] }),
   }
 }
 

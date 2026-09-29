@@ -3,7 +3,7 @@ import { describe, expect, it } from 'vitest'
 import { InMemoryCandidateStore, InMemoryIndustrySchemaSource } from '@ontology/application'
 import { IdentityDecisionService, InMemoryIdentityDecisionStore } from '@ontology/semantic-engine'
 import type { IdentityDecisionRequest } from '@ontology/semantic-engine'
-import type { EntityCandidate, IndustrySchema, ScopeRef, VersionRef } from '@ontology/contracts'
+import type { AppendIdentityDecisionInput, EntityCandidate, IndustrySchema, ScopeRef, VersionRef } from '@ontology/contracts'
 import { entityCandidate, IDENTITY_DEFINITION_REF } from './identity-fixtures'
 import { toolContext } from './component-registry-fixtures'
 
@@ -31,6 +31,7 @@ function decisionSchema(ref: VersionRef): IndustrySchema {
         attributes: [
           { attributeId: 'device_native_id', valueType: 'string', minCardinality: 1, maxCardinality: 1, identityKey: true },
           { attributeId: 'device_name', valueType: 'string', minCardinality: 0, maxCardinality: 1, identityKey: false },
+          { attributeId: 'site', valueType: 'string', minCardinality: 1, maxCardinality: 1, identityKey: false },
         ],
       },
       {
@@ -40,6 +41,7 @@ function decisionSchema(ref: VersionRef): IndustrySchema {
         attributes: [
           { attributeId: 'sensor_native_id', valueType: 'string', minCardinality: 1, maxCardinality: 1, identityKey: true },
           { attributeId: 'sensor_name', valueType: 'string', minCardinality: 0, maxCardinality: 1, identityKey: false },
+          { attributeId: 'site', valueType: 'string', minCardinality: 1, maxCardinality: 1, identityKey: false },
         ],
       },
     ],
@@ -73,13 +75,15 @@ async function harness(): Promise<Harness> {
 }
 
 function deviceCandidate(overrides: Partial<EntityCandidate> = {}): EntityCandidate {
+  const base = entityCandidate({
+    candidateId: randomUUID(),
+    jobId: JOB_ID,
+    idempotencyKey: `sha256:${randomUUID().replaceAll('-', '').padEnd(64, '0').slice(0, 64)}`,
+  })
   return {
-    ...entityCandidate({
-      candidateId: randomUUID(),
-      jobId: JOB_ID,
-      idempotencyKey: `sha256:${randomUUID().replaceAll('-', '').padEnd(64, '0').slice(0, 64)}`,
-    }),
+    ...base,
     ...overrides,
+    attributes: overrides.attributes ?? [...base.attributes, { attributeId: 'site', value: 'site-a' }],
   }
 }
 
@@ -88,7 +92,11 @@ function sensorCandidate(): EntityCandidate {
     ...deviceCandidate(),
     objectId: 'sensor',
     identityScopeId: 'sensor_identity',
-    attributes: [{ attributeId: 'sensor_name', value: 'Shared Name' }],
+    attributes: [
+      { attributeId: 'sensor_native_id', value: 'SNS-1' },
+      { attributeId: 'sensor_name', value: 'Shared Name' },
+      { attributeId: 'site', value: 'site-a' },
+    ],
   }
 }
 
@@ -131,7 +139,7 @@ describe('IdentityDecisionService unit behaviour', () => {
       kind: 'match',
       expectedRevision: '1',
       targetEntityId: entityId,
-      strongIdentity: { kind: 'native_id', value: 'DEV-1' },
+      strongIdentity: { kind: 'native_id', attributeId: 'device_native_id', value: 'DEV-1' },
     })
     expect(matched.kind).toBe('match')
     expect(matched.revision).toBe('2')
@@ -183,6 +191,136 @@ describe('IdentityDecisionService unit behaviour', () => {
         },
       }),
     ).rejects.toMatchObject({ code: 'IDENTITY_EVIDENCE_REQUIRED' })
+  })
+
+  it('does not auto-promote an unreviewed native id and rejects forged identity evidence', async () => {
+    const { service, candidates } = await harness()
+    const candidate = deviceCandidate({ nativeId: 'UNREVIEWED-1' })
+    await seed(candidates, candidate)
+    const created = await decide(service, candidate, { kind: 'create_pending' })
+    const entityId = created.targetEntityId
+    if (entityId === undefined) throw new Error('expected a created entity')
+
+    await expect(
+      decide(service, candidate, { kind: 'match', expectedRevision: '1', targetEntityId: entityId }),
+    ).rejects.toMatchObject({ code: 'IDENTITY_EVIDENCE_REQUIRED' })
+
+    await expect(
+      decide(service, candidate, {
+        kind: 'match',
+        expectedRevision: '1',
+        targetEntityId: entityId,
+        strongIdentity: { kind: 'native_id', attributeId: 'device_native_id', value: 'FORGED-1' },
+      }),
+    ).rejects.toMatchObject({ code: 'IDENTITY_EVIDENCE_INVALID' })
+  })
+
+  it('requires a matching reviewed target identity before using a native id across candidates', async () => {
+    const { service, candidates, store } = await harness()
+    const anchor = deviceCandidate()
+    await seed(candidates, anchor)
+    const created = await decide(service, anchor, { kind: 'create_pending' })
+    const entityId = created.targetEntityId
+    if (entityId === undefined) throw new Error('expected a created entity')
+    await decide(service, anchor, {
+      kind: 'match',
+      expectedRevision: '1',
+      targetEntityId: entityId,
+      strongIdentity: { kind: 'native_id', attributeId: 'device_native_id', value: 'DEV-1' },
+    })
+
+    const incoming = deviceCandidate({
+      nativeId: 'DEV-2',
+      attributes: [
+        { attributeId: 'device_native_id', value: 'DEV-2' },
+        { attributeId: 'device_name', value: 'Charger Two' },
+        { attributeId: 'site', value: 'site-a' },
+      ],
+    })
+    await seed(candidates, incoming)
+    await expect(
+      decide(service, incoming, { kind: 'match', expectedRevision: '0', targetEntityId: entityId }),
+    ).rejects.toMatchObject({ code: 'IDENTITY_EVIDENCE_REQUIRED' })
+
+    await expect(
+      decide(service, incoming, {
+        kind: 'match',
+        expectedRevision: '0',
+        targetEntityId: entityId,
+        strongIdentity: { kind: 'native_id', attributeId: 'device_native_id', value: 'DEV-2' },
+      }),
+    ).rejects.toMatchObject({ code: 'IDENTITY_EVIDENCE_REQUIRED' })
+
+    const manualMatch = await decide(service, incoming, {
+      kind: 'match',
+      expectedRevision: '0',
+      targetEntityId: entityId,
+      justification: 'The reviewer independently verified this source against the cluster record.',
+    })
+    expect(manualMatch.kind).toBe('match')
+
+    const verifiedIncoming = deviceCandidate({ nativeId: 'DEV-1' })
+    await seed(candidates, verifiedIncoming)
+    const matched = await decide(service, verifiedIncoming, {
+      kind: 'match',
+      expectedRevision: '0',
+      targetEntityId: entityId,
+      strongIdentity: { kind: 'native_id', attributeId: 'device_native_id', value: 'DEV-1' },
+    })
+    expect(matched.kind).toBe('match')
+    expect(await store.latestRevision(SCOPE, verifiedIncoming.candidateId, CTX)).toBe('1')
+  })
+
+  it('requires equal definition-scoped identity dimensions even for a manual match', async () => {
+    const { service, candidates } = await harness()
+    const first = deviceCandidate()
+    await seed(candidates, first)
+    const created = await decide(service, first, { kind: 'create_pending' })
+    const entityId = created.targetEntityId
+    if (entityId === undefined) throw new Error('expected a created entity')
+
+    const otherSite = deviceCandidate({
+      attributes: [
+        { attributeId: 'device_native_id', value: 'DEV-2' },
+        { attributeId: 'device_name', value: 'Charger Two' },
+        { attributeId: 'site', value: 'site-b' },
+      ],
+    })
+    await seed(candidates, otherSite)
+    await expect(
+      decide(service, otherSite, {
+        kind: 'match',
+        expectedRevision: '0',
+        targetEntityId: entityId,
+        justification: 'same display name is insufficient',
+      }),
+    ).rejects.toMatchObject({ code: 'IDENTITY_SCOPE_MISMATCH' })
+
+    const missingSite = deviceCandidate({
+      attributes: [
+        { attributeId: 'device_native_id', value: 'DEV-3' },
+        { attributeId: 'device_name', value: 'Unscoped One' },
+      ],
+    })
+    await seed(candidates, missingSite)
+    const unscopedCreated = await decide(service, missingSite, { kind: 'create_pending' })
+    const unscopedEntityId = unscopedCreated.targetEntityId
+    if (unscopedEntityId === undefined) throw new Error('expected an unscoped pending entity')
+    const anotherUnscoped = deviceCandidate({
+      attributes: [
+        { attributeId: 'device_native_id', value: 'DEV-4' },
+        { attributeId: 'device_name', value: 'Unscoped Two' },
+      ],
+    })
+    await seed(candidates, anotherUnscoped)
+    await expect(
+      decide(service, anotherUnscoped, {
+        kind: 'match',
+        expectedRevision: '0',
+        targetEntityId: unscopedEntityId,
+        justification: 'dimensionless records cannot be safely combined',
+      }),
+    ).rejects.toMatchObject({ code: 'IDENTITY_SCOPE_MISMATCH' })
   })
 
   it('refuses a below-threshold score as support', async () => {
@@ -244,7 +382,7 @@ describe('IdentityDecisionService unit behaviour', () => {
         kind: 'match',
         expectedRevision: '2',
         targetEntityId: entityId,
-        strongIdentity: { kind: 'native_id', value: 'DEV-1' },
+        strongIdentity: { kind: 'native_id', attributeId: 'device_native_id', value: 'DEV-1' },
       }),
     ).rejects.toMatchObject({ code: 'IDENTITY_CONFLICT', httpStatus: 409 })
   })
@@ -264,7 +402,7 @@ describe('IdentityDecisionService unit behaviour', () => {
         kind: 'match',
         expectedRevision: '0',
         targetEntityId: deviceEntityId,
-        strongIdentity: { kind: 'native_id', value: 'SNS-1' },
+        strongIdentity: { kind: 'native_id', attributeId: 'sensor_native_id', value: 'SNS-1' },
       }),
     ).rejects.toMatchObject({ code: 'IDENTITY_SCOPE_MISMATCH', httpStatus: 409 })
   })
@@ -280,7 +418,7 @@ describe('IdentityDecisionService unit behaviour', () => {
       kind: 'match',
       expectedRevision: '1',
       targetEntityId: entityId,
-      strongIdentity: { kind: 'native_id', value: 'DEV-1' },
+      strongIdentity: { kind: 'native_id', attributeId: 'device_native_id', value: 'DEV-1' },
     })
     expect(await store.listAssertions(SCOPE, { entityId, openOnly: true }, CTX)).toHaveLength(1)
 
@@ -319,5 +457,121 @@ describe('IdentityDecisionService unit behaviour', () => {
     expect(failure?.status === 'rejected' ? failure.reason : undefined).toMatchObject({
       code: 'VERSION_CONFLICT',
     })
+  })
+
+  it('increments the scope read revision only for committed writes and pins batch bindings', async () => {
+    const { service, candidates, store } = await harness()
+    const candidate = deviceCandidate()
+    await seed(candidates, candidate)
+    expect(await store.latestReadRevision(SCOPE, CTX)).toBe('0')
+
+    const created = await decide(service, candidate, { kind: 'create_pending' })
+    const entityId = created.targetEntityId
+    if (entityId === undefined) throw new Error('expected a created entity')
+    expect(await store.latestReadRevision(SCOPE, CTX)).toBe('1')
+    expect(await store.getEntity(SCOPE, entityId, CTX)).toMatchObject({
+      scopeDimensions: { site: 'site-a' },
+      createdFromCandidateId: candidate.candidateId,
+      state: 'pending',
+      revision: '1',
+    })
+
+    const failedWrite: AppendIdentityDecisionInput = {
+      expectedRevision: '1',
+      expectedTargetEntityRevision: '1',
+      draft: {
+        decisionId: randomUUID(),
+        candidateId: candidate.candidateId,
+        objectId: 'device',
+        identityScopeId: 'device_identity',
+        kind: 'split',
+        targetEntityId: entityId,
+        evidenceRefs: [],
+        recordedAt: '2026-09-22T00:00:01Z',
+        actor: 'reviewer',
+      },
+      closeAssertions: [
+        { assertionId: randomUUID(), validTo: '2026-09-22T00:00:01Z' },
+      ],
+    }
+    await expect(store.appendDecision(SCOPE, failedWrite, CTX)).rejects.toMatchObject({ code: 'DECISION_STORE_FAILED' })
+    expect(await store.latestReadRevision(SCOPE, CTX)).toBe('1')
+    expect((await store.getEntity(SCOPE, entityId, CTX))?.revision).toBe('1')
+    expect(await store.latestRevision(SCOPE, candidate.candidateId, CTX)).toBe('1')
+
+    const matched = await decide(service, candidate, {
+      kind: 'match',
+      expectedRevision: '1',
+      targetEntityId: entityId,
+      strongIdentity: { kind: 'native_id', attributeId: 'device_native_id', value: 'DEV-1' },
+    })
+    expect(matched.revision).toBe('2')
+    expect(await store.latestReadRevision(SCOPE, CTX)).toBe('2')
+    const binding = await store.readPublishedBindings(SCOPE, [candidate.candidateId], CTX)
+    expect(binding).toMatchObject({ readRevision: '2', complete: true })
+    expect(binding.bindings[0]?.openAssertions.map((assertion) => assertion.entityId)).toEqual([entityId])
+    const overCap = await store.readPublishedBindings(SCOPE, Array.from({ length: 1_001 }, () => randomUUID()), CTX)
+    expect(overCap.complete).toBe(false)
+    expect(overCap.bindings).toHaveLength(1_000)
+
+    await expect(store.latestReadRevision({ ...SCOPE, tenantId: '22222222-3333-4444-8555-666666666666' }, CTX)).rejects.toMatchObject({ code: 'SCOPE_MISMATCH' })
+  })
+
+  it('serializes concurrent cluster mutations against the target entity revision', async () => {
+    const { service, candidates, store } = await harness()
+    const anchor = deviceCandidate()
+    await seed(candidates, anchor)
+    const created = await decide(service, anchor, { kind: 'create_pending' })
+    const entityId = created.targetEntityId
+    if (entityId === undefined) throw new Error('expected a created entity')
+    await decide(service, anchor, {
+      kind: 'match',
+      expectedRevision: '1',
+      targetEntityId: entityId,
+      strongIdentity: { kind: 'native_id', attributeId: 'device_native_id', value: 'DEV-1' },
+    })
+    const target = await store.getEntity(SCOPE, entityId, CTX)
+    if (target === undefined) throw new Error('expected a confirmed target entity')
+    const first = deviceCandidate()
+    const second = deviceCandidate()
+    await seed(candidates, first)
+    await seed(candidates, second)
+
+    const appendMatch = (candidate: EntityCandidate): AppendIdentityDecisionInput => {
+      const decisionId = randomUUID()
+      return {
+        expectedRevision: '0',
+        expectedTargetEntityRevision: target.revision,
+        draft: {
+          decisionId,
+          candidateId: candidate.candidateId,
+          objectId: 'device',
+          identityScopeId: 'device_identity',
+          kind: 'match',
+          targetEntityId: entityId,
+          strongIdentity: { kind: 'native_id', attributeId: 'device_native_id', value: 'DEV-1' },
+          evidenceRefs: [],
+          recordedAt: '2026-09-22T00:00:02Z',
+          actor: 'reviewer',
+        },
+        openAssertion: {
+          assertionId: randomUUID(),
+          candidateId: candidate.candidateId,
+          entityId,
+          objectId: 'device',
+          identityScopeId: 'device_identity',
+          decisionId,
+          validFrom: '2026-09-22T00:00:02Z',
+          recordedAt: '2026-09-22T00:00:02Z',
+        },
+      }
+    }
+    const results = await Promise.allSettled([
+      store.appendDecision(SCOPE, appendMatch(first), CTX),
+      store.appendDecision(SCOPE, appendMatch(second), CTX),
+    ])
+    expect(results.filter((result) => result.status === 'fulfilled')).toHaveLength(1)
+    expect(results.filter((result) => result.status === 'rejected')).toHaveLength(1)
+    expect(await store.latestReadRevision(SCOPE, CTX)).toBe('3')
   })
 })

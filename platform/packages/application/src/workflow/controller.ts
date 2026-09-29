@@ -24,7 +24,7 @@ import type {
   WorkflowInputManifest,
   WorkflowRunState,
 } from '@ontology/contracts'
-import { DEFAULT_WORKFLOW_LIMITS, DRAFT_WRITER_REQUEST_VERSION } from '@ontology/contracts'
+import { createToolContext, DEFAULT_WORKFLOW_LIMITS, DRAFT_WRITER_REQUEST_VERSION, isToolContext } from '@ontology/contracts'
 import { inputManifestDigest, scenarioManifestHash } from './canonical'
 import { sha256DigestOf } from '../profiles/canonical'
 import { PublicationRejectedError, WorkflowControllerError } from './errors'
@@ -83,7 +83,7 @@ export class WorkflowController {
 
   /** Create a run, open its one ledger/manifest and drive it to a stable phase. */
   async startRun(input: StartWorkflowInput, ctx: ToolContext): Promise<WorkflowView> {
-    await this.#deps.runs.createRun(
+    const created = await this.#deps.runs.createRun(
       {
         runId: input.runId,
         profileRef: input.profileRef,
@@ -95,40 +95,74 @@ export class WorkflowController {
       ctx,
     )
 
-    const existing = await this.#deps.manifests.getRunManifest(input.runId, ctx)
-    if (existing !== undefined) {
-      // Idempotent re-entry: the manifest is immutable, so a second call never re-opens
-      // the run or resets its budget.
-      return this.#view(input.runId, ctx)
+    const runId = created.runId
+    const runContext = contextForCanonicalRun(ctx, runId)
+    const run = await this.#deps.phase.requireRun(runId, runContext)
+    const hadManifest = await this.#deps.manifests.getRunManifest(runId, runContext)
+    if (hadManifest !== undefined) {
+      const recoveryResult = await this.#recoverPersistedRun(run, runContext)
+      if (recoveryResult !== undefined) return recoveryResult
     }
+    const manifest = await this.#ensureRunManifest(run, runContext, input.budgetOverrides)
+    return this.#drive(manifest.runId, runContext)
+  }
 
-    const run = await this.#deps.phase.requireRun(input.runId, ctx)
-    const inputManifest = await this.#createInputManifest(run, ctx)
-    const ledger = await this.#deps.budget.openLedger(
-      {
-        ledgerId: this.#newId(),
-        kind: 'run',
-        runId: input.runId,
-        ...(input.budgetOverrides === undefined ? {} : { overrideLimits: input.budgetOverrides }),
-      },
-      ctx,
-    )
-    const manifest = await this.#deps.manifests.saveRunManifest(
-      {
-        runId: run.runId,
-        resolvedProfileRef: {
-          id: run.profileRef.id,
-          version: run.profileRef.version,
-          snapshotHash: run.resolvedProfileHash,
-        },
-        runtimeRef: run.runtimeRef,
-        budgetLedgerId: ledger.ledgerId,
-        inputManifestId: inputManifest.manifestId,
-        createdAt: this.#now(),
-      },
-      ctx,
-    )
-    return this.#drive(manifest.runId, ctx)
+  /** Recover a run accepted by RunService and persisted in the durable dispatch queue. */
+  async drivePersistedRun(
+    runId: Uuid,
+    ctx: ToolContext,
+    recoveredAttempt = false,
+    logicalActionId = 'initial-drive',
+  ): Promise<WorkflowView> {
+    const runContext = contextForCanonicalRun(ctx, runId)
+    const run = await this.#deps.phase.requireRun(runId, runContext)
+    const manifest = await this.#ensureRunManifest(run, runContext)
+    let resumedLogicalAction = false
+    if (run.state === 'collecting') {
+      const clarificationId = clarificationIdFromAction(logicalActionId)
+      if (clarificationId !== undefined) {
+        const response = await this.#deps.phase.findClarificationResponse(runId, clarificationId, runContext)
+        const checkpoint = await this.#deps.phase.latestCheckpoint(runId, runContext)
+        if (response === undefined) return this.#failUnsafeRecovery(run, 'recovery_clarification_response_missing', runContext)
+        if (checkpoint === undefined) return this.#failUnsafeRecovery(run, 'recovery_checkpoint_missing', runContext)
+        await this.#resumeCollection(runId, clarificationId, response.typedResponse, runContext, checkpoint.checkpointId)
+        resumedLogicalAction = true
+      } else {
+        const checkpointId = resumeCheckpointIdFromAction(logicalActionId)
+        if (checkpointId !== undefined) {
+          const checkpoint = await this.#deps.phase.checkpointRef(runId, checkpointId, runContext)
+          if (checkpoint === undefined) return this.#failUnsafeRecovery(run, 'recovery_checkpoint_missing', runContext)
+          await this.#resumeCollection(runId, undefined, undefined, runContext, checkpoint.checkpointId)
+          resumedLogicalAction = true
+        }
+      }
+    }
+    if (resumedLogicalAction) return this.#drive(manifest.runId, runContext)
+    if (recoveredAttempt) {
+      const current = await this.#deps.phase.requireRun(runId, runContext)
+      const recoveryResult = await this.#recoverPersistedRun(current, runContext)
+      if (recoveryResult !== undefined) return recoveryResult
+    }
+    return this.#drive(manifest.runId, runContext)
+  }
+
+  /** Abort in-flight runtime/tool work after its durable lease is lost, without changing run state. */
+  abortActiveWork(runId: Uuid, reason: string): void {
+    const active = this.#active.get(runId)
+    if (active === undefined) return
+    active.controller.abort(new Error(reason))
+    void active.adapter.cancel(runId, reason).catch(() => undefined)
+  }
+
+  /** Persist a controlled terminal state when a durable worker fails outside RuntimeEvent delivery. */
+  async failPersistedRun(runId: Uuid, reason: string, ctx: ToolContext): Promise<WorkflowView> {
+    const runContext = contextForCanonicalRun(ctx, runId)
+    const run = await this.#deps.phase.requireRun(runId, runContext)
+    if (run.state === 'published' || run.state === 'failed' || run.state === 'cancelled') {
+      return this.#view(runId, runContext)
+    }
+    const safeReason = /^[A-Za-z0-9_.-]{1,64}$/u.test(reason) ? reason : 'workflow_execution_failed'
+    return this.#failUnsafeRecovery(run, safeReason, runContext)
   }
 
   /**
@@ -152,12 +186,11 @@ export class WorkflowController {
     const inputManifest = await this.#requireInputManifest(manifest.inputManifestId, ctx)
     const validity = await this.#deps.validity.validate(inputManifest.entries, ctx)
     const state = await this.#requireRunState(run.runId, ctx)
-    await this.#deps.manifests.saveRunState(
+    await this.#saveRunState(
       {
         ...state,
         recheckCount: state.recheckCount + 1,
         staleEntryIds: validity.staleEntries.map((entry) => entry.entryId),
-        updatedAt: this.#now(),
       },
       ctx,
     )
@@ -379,17 +412,24 @@ export class WorkflowController {
 
   async #resumeCollection(
     runId: Uuid,
-    clarificationId: Uuid,
-    typedResponse: Readonly<Record<string, unknown>>,
+    clarificationId: Uuid | undefined,
+    typedResponse: Readonly<Record<string, unknown>> | undefined,
     ctx: ToolContext,
+    checkpointId?: Uuid,
   ): Promise<void> {
     const manifest = await this.#requireRunManifest(runId, ctx)
     const run = await this.#deps.phase.requireRun(runId, ctx)
     const adapter = await this.#selectRuntime(runId, ctx, run)
-    const checkpoint = await this.#deps.phase.latestCheckpoint(runId, ctx)
+    const checkpoint = checkpointId === undefined
+      ? await this.#deps.phase.latestCheckpoint(runId, ctx)
+      : await this.#deps.phase.checkpointRef(runId, checkpointId, ctx)
     if (checkpoint === undefined) {
       // Nothing to resume from: collect from the start on the same budget/manifest.
       await this.#collect(runId, ctx)
+      const afterFreshCollection = await this.#deps.phase.requireRun(runId, ctx)
+      if (afterFreshCollection.state === 'collecting') {
+        await this.#failUnsafeRecovery(afterFreshCollection, 'runtime_collection_incomplete', ctx)
+      }
       return
     }
     const loop = new AbortController()
@@ -398,11 +438,15 @@ export class WorkflowController {
       const input: ResumeInput = {
         runId,
         checkpointRef: checkpoint,
-        clarificationResponse: {
-          clarificationId,
-          typedResponse,
-          expectedRevision: run.revision,
-        },
+        ...(clarificationId === undefined || typedResponse === undefined
+          ? {}
+          : {
+              clarificationResponse: {
+                clarificationId,
+                typedResponse,
+                expectedRevision: run.revision,
+              },
+            }),
         remainingBudget: await this.#remaining(manifest.budgetLedgerId, ctx),
       }
       const deps = await this.#runtimeDependencies(manifest, ctx, loop.signal)
@@ -412,6 +456,10 @@ export class WorkflowController {
       }
     } finally {
       this.#active.delete(runId)
+    }
+    const afterResume = await this.#deps.phase.requireRun(runId, ctx)
+    if (afterResume.state === 'collecting') {
+      await this.#failUnsafeRecovery(afterResume, 'runtime_resume_incomplete', ctx)
     }
   }
 
@@ -456,8 +504,8 @@ export class WorkflowController {
         return this.#limitedFallback(runId, lastFailure, 'draft repair budget exhausted', ctx)
       }
       const attempt = state.draftAttempts + 1
-      await this.#deps.manifests.saveRunState(
-        { ...state, draftAttempts: attempt, updatedAt: this.#now() },
+      await this.#saveRunState(
+        { ...state, draftAttempts: attempt },
         ctx,
       )
 
@@ -538,7 +586,7 @@ export class WorkflowController {
       const verifying = await this.#advance(fresh, 'verifying', {}, ctx)
 
       const verification = await this.#deps.verifier.verify(
-        { runId, draft: written.draft, inputManifest },
+        { runId, question: verifying.question, draft: written.draft, inputManifest },
         ctx,
       )
       await this.#deps.verifications.record({ runId, verification }, ctx)
@@ -570,6 +618,7 @@ export class WorkflowController {
   ): Promise<WorkflowView> {
     const manifest = await this.#requireRunManifest(runId, ctx)
     const inputManifest = await this.#requireInputManifest(manifest.inputManifestId, ctx)
+    const workflowDispatchFence = await this.#deps.publicationFence?.(runId, ctx)
     const grant: PublicationGrant = {
       grantId: this.#newId(),
       runId,
@@ -579,6 +628,7 @@ export class WorkflowController {
       evidenceManifestHash: verification.evidenceManifestHash,
       scenarioManifestHash: scenarioManifestHash(manifest, inputManifest),
       expectedRunRevision,
+      ...(workflowDispatchFence === undefined ? {} : { workflowDispatchFence }),
       issuedBy: 'workflow-controller',
       issuedAt: this.#now(),
     }
@@ -641,8 +691,8 @@ export class WorkflowController {
       await this.#advance(run, 'blocked', { cancelReason: reason }, ctx)
       return this.#view(runId, ctx)
     }
-    await this.#deps.manifests.saveRunState(
-      { ...state, limitedResultAttempted: true, updatedAt: this.#now() },
+    await this.#saveRunState(
+      { ...state, limitedResultAttempted: true },
       ctx,
     )
 
@@ -667,8 +717,16 @@ export class WorkflowController {
     const fresh = await this.#deps.phase.requireRun(runId, ctx)
     if (fresh.state !== 'drafting') return this.#view(runId, ctx)
     const verifying = await this.#advance(fresh, 'verifying', {}, ctx)
+    const trustedLimitations = [
+      'limited_factual_result',
+      ...(lastFailure?.verification.failedChecks ?? ['verification_never_passed']),
+      ...(lastFailure?.verification.missingEvidence ?? []).map((id) => `missing_evidence:${id}`),
+      ...((limited.draft.claims?.length ?? 0) + (limited.draft.assertions?.length ?? 0) === 0
+        ? ['no_supported_statements']
+        : []),
+    ]
     const verification = await this.#deps.verifier.verify(
-      { runId, draft: limited.draft, inputManifest },
+      { runId, question: run.question, draft: limited.draft, inputManifest, trustedLimitations },
       ctx,
     )
     await this.#deps.verifications.record({ runId, verification }, ctx)
@@ -734,6 +792,7 @@ export class WorkflowController {
         resolvedProfileRef: manifest.resolvedProfileRef,
         runtimeRef: manifest.runtimeRef,
         budgetLedgerId: manifest.budgetLedgerId,
+        signal,
       },
       ctx,
     )
@@ -785,32 +844,103 @@ export class WorkflowController {
   }
 
   async #createInputManifest(run: RunRecord, ctx: ToolContext): Promise<WorkflowInputManifest> {
+    const recordedAt = run.createdAt
     const entries: WorkflowInputEntry[] = [
       {
-        entryId: this.#newId(),
+        entryId: stableUuid('question-entry', run.runId),
         kind: 'confirmed_context',
         label: `question:${run.runId}`,
         addedInPhase: 'preflight',
-        recordedAt: this.#now(),
-        readAt: this.#now(),
+        recordedAt,
+        readAt: recordedAt,
       },
       {
-        entryId: this.#newId(),
+        entryId: stableUuid('site-entry', run.runId),
         kind: 'confirmed_context',
         label: `site:${run.context.siteRef ?? 'unspecified'}`,
         addedInPhase: 'preflight',
-        recordedAt: this.#now(),
-        readAt: this.#now(),
+        recordedAt,
+        readAt: recordedAt,
       },
     ]
     const manifest: WorkflowInputManifest = {
-      manifestId: this.#newId(),
+      manifestId: stableUuid('input-manifest', run.runId),
       runId: run.runId,
       revision: '1',
       entries,
       digest: inputManifestDigest(run.runId, entries),
     }
     return this.#deps.manifests.saveInputManifest(manifest, ctx)
+  }
+
+  async #ensureRunManifest(
+    run: RunRecord,
+    ctx: ToolContext,
+    budgetOverrides?: StartWorkflowInput['budgetOverrides'],
+  ): Promise<RunManifest> {
+    const existing = await this.#deps.manifests.getRunManifest(run.runId, ctx)
+    if (existing !== undefined) return existing
+
+    const inputManifest = await this.#createInputManifest(run, ctx)
+    const ledger = await this.#deps.budget.openLedger(
+      {
+        ledgerId: stableUuid('run-budget-ledger', run.runId),
+        kind: 'run',
+        runId: run.runId,
+        ...(budgetOverrides === undefined ? {} : { overrideLimits: budgetOverrides }),
+      },
+      ctx,
+    )
+    return this.#deps.manifests.saveRunManifest(
+      {
+        runId: run.runId,
+        resolvedProfileRef: {
+          id: run.profileRef.id,
+          version: run.profileRef.version,
+          snapshotHash: run.resolvedProfileHash,
+        },
+        runtimeRef: run.runtimeRef,
+        budgetLedgerId: ledger.ledgerId,
+        inputManifestId: inputManifest.manifestId,
+        createdAt: run.createdAt,
+      },
+      ctx,
+    )
+  }
+
+  /**
+   * A reclaimed dispatch is not permission to repeat an uncertain external operation.
+   * Resume collection only from a durable runtime checkpoint; if the lost process had
+   * started a non-idempotent model/verifier step without a saved receipt, end in a visible
+   * controlled failure instead of silently starting it again.
+   */
+  async #recoverPersistedRun(run: RunRecord, ctx: ToolContext): Promise<WorkflowView | undefined> {
+    if (run.state === 'preflight' && this.#deps.rewriter !== undefined && run.questionRewrite === undefined) {
+      return this.#failUnsafeRecovery(run, 'recovery_rewriter_receipt_missing', ctx)
+    }
+    if (run.state === 'collecting') {
+      const checkpoint = await this.#deps.phase.latestCheckpoint(run.runId, ctx)
+      if (checkpoint === undefined) {
+        return this.#failUnsafeRecovery(run, 'recovery_checkpoint_missing', ctx)
+      }
+      await this.#resumeCollection(run.runId, undefined, undefined, ctx)
+      return undefined
+    }
+    if (run.state === 'drafting') {
+      const state = await this.#requireRunState(run.runId, ctx)
+      if (state.draftAttempts > 0 && this.#deps.draftWriter.recoverySafety !== 'idempotent') {
+        return this.#failUnsafeRecovery(run, 'recovery_draft_receipt_missing', ctx)
+      }
+    }
+    if (run.state === 'verifying') {
+      return this.#failUnsafeRecovery(run, 'recovery_verification_draft_missing', ctx)
+    }
+    return undefined
+  }
+
+  async #failUnsafeRecovery(run: RunRecord, reason: string, ctx: ToolContext): Promise<WorkflowView> {
+    await this.#advance(run, 'failed', { cancelReason: reason }, ctx)
+    return this.#view(run.runId, ctx)
   }
 
   async #appendEntries(
@@ -850,8 +980,8 @@ export class WorkflowController {
   async #markUsageUnknown(runId: Uuid, ctx: ToolContext): Promise<void> {
     const state = await this.#requireRunState(runId, ctx)
     if (state.usageUnknown) return
-    await this.#deps.manifests.saveRunState(
-      { ...state, usageUnknown: true, updatedAt: this.#now() },
+    await this.#saveRunState(
+      { ...state, usageUnknown: true },
       ctx,
     )
   }
@@ -880,6 +1010,7 @@ export class WorkflowController {
     if (state !== undefined) return state
     return {
       runId,
+      revision: '0',
       draftAttempts: 0,
       recheckCount: 0,
       staleEntryIds: [],
@@ -887,6 +1018,16 @@ export class WorkflowController {
       limitedResultAttempted: false,
       updatedAt: this.#now(),
     }
+  }
+
+  async #saveRunState(state: WorkflowRunState, ctx: ToolContext): Promise<WorkflowRunState> {
+    const expectedRevision = state.revision
+    const revision = (BigInt(expectedRevision) + 1n).toString()
+    return this.#deps.manifests.saveRunState(
+      { ...state, revision, updatedAt: this.#now() },
+      expectedRevision,
+      ctx,
+    )
   }
 
   async #view(runId: Uuid, ctx: ToolContext): Promise<WorkflowView> {
@@ -920,6 +1061,32 @@ export class WorkflowController {
       ...(answer === undefined ? {} : { answer }),
     }
   }
+}
+
+function contextForCanonicalRun(ctx: ToolContext, runId: Uuid): ToolContext {
+  if (!isToolContext(ctx)) {
+    throw new WorkflowControllerError('SCOPE_MISMATCH', 'a host-minted trusted tool context is required')
+  }
+  return createToolContext({ ...ctx, runId })
+}
+
+function stableUuid(namespace: string, runId: Uuid): Uuid {
+  const digest = sha256DigestOf(`${namespace}:${runId}`).slice('sha256:'.length, 'sha256:'.length + 32)
+  const chars = [...digest]
+  chars[12] = '5'
+  chars[16] = ((Number.parseInt(chars[16] ?? '0', 16) & 0x3) | 0x8).toString(16)
+  const hex = chars.join('')
+  return `${hex.slice(0, 8)}-${hex.slice(8, 12)}-${hex.slice(12, 16)}-${hex.slice(16, 20)}-${hex.slice(20)}`
+}
+
+function clarificationIdFromAction(logicalActionId: string): Uuid | undefined {
+  const match = /^clarification-response:([0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}):(0|[1-9]\d*)$/iu.exec(logicalActionId)
+  return match?.[1] as Uuid | undefined
+}
+
+function resumeCheckpointIdFromAction(logicalActionId: string): Uuid | undefined {
+  const match = /^resume:([0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}):(0|[1-9]\d*)$/iu.exec(logicalActionId)
+  return match?.[1] as Uuid | undefined
 }
 
 function toConfirmedContext(run: RunRecord): ConfirmedContext {

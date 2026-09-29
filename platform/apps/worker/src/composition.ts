@@ -16,10 +16,12 @@ import type { MaterializationFaultInjection } from '@ontology/semantic-engine'
 import type {
   BudgetLedgerPort,
   DocumentParserPort,
+  IdentityDecisionStore,
   JobStore,
   PipelineStage,
   ScopeRef,
   ToolContext,
+  VersionRef,
 } from '@ontology/contracts'
 import {
   controlRecordSequence,
@@ -31,6 +33,10 @@ import type { SimulationRunGuard } from './simulation-stage'
 export interface MaterializationWorkerOptions {
   /** The published read view (the real `PostgresSemanticPublicationStore` in production). */
   readonly publications: MaterializationPublicationView
+  /** The adjudicated identity reader; published entity attributes are never trusted without it. */
+  readonly identity: Pick<IdentityDecisionStore, 'latestReadRevision' | 'readPublishedBindings'>
+  /** Optional run/profile schema pin. Multi-version scopes are incomplete without this pin. */
+  readonly definitionRef?: VersionRef
   /** Above this many affected rules a change is conservatively deferred with a dirty scope. */
   readonly maxFanout?: number
   /** Test-only seam: run before the projection commit so a fault can leave the fence open. */
@@ -100,7 +106,10 @@ export function createPostgresJobWorker(
   if (materialization !== undefined) {
     const materializationStore = new PostgresMaterializationStore(database)
     materializer = new IncrementalMaterializer({
-      publishedSource: new PublishedSemanticSource(materialization.publications),
+      publishedSource: new PublishedSemanticSource(materialization.publications, {
+        identity: materialization.identity,
+        ...(materialization.definitionRef === undefined ? {} : { definitionRef: materialization.definitionRef }),
+      }),
       materialization: materializationStore,
       ...(materialization.maxFanout === undefined ? {} : { maxFanout: materialization.maxFanout }),
       ...(materialization.faultInjection === undefined
@@ -249,22 +258,23 @@ export class JobWorkerLoop {
     this.#onError = options.onError ?? (() => undefined)
   }
 
-  async tick(): Promise<{ processed: number; dispatched: number }> {
+  async tick(signal?: AbortSignal): Promise<{ processed: number; dispatched: number }> {
     let processed = 0
     let dispatched = 0
     const scopes = await this.#scopes()
     for (const scope of scopes) {
-      processed += await this.#worker.runUntilIdle(scope.scopeRef, scope.ctx)
-      dispatched += await this.#dispatcher.dispatchOnce(scope.scopeRef, scope.ctx)
+      if (signalAborted(signal)) break
+      processed += await this.#worker.runUntilIdle(scope.scopeRef, scope.ctx, 100, signal)
+      if (!signalAborted(signal)) dispatched += await this.#dispatcher.dispatchOnce(scope.scopeRef, scope.ctx)
     }
     return { processed, dispatched }
   }
 
-  async start(): Promise<void> {
+  async start(signal?: AbortSignal): Promise<void> {
     this.#stopped = false
-    for (let iteration = 0; iteration < this.#maxIterations && !this.#stopped; iteration += 1) {
+    for (let iteration = 0; iteration < this.#maxIterations && !this.#stopped && !signalAborted(signal); iteration += 1) {
       try {
-        await this.tick()
+        await this.tick(signal)
       } catch (error) {
         this.#onError(error)
       }
@@ -276,4 +286,8 @@ export class JobWorkerLoop {
   stop(): void {
     this.#stopped = true
   }
+}
+
+function signalAborted(signal: AbortSignal | undefined): boolean {
+  return signal?.aborted ?? false
 }

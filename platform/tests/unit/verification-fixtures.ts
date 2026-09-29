@@ -1,5 +1,5 @@
 import { randomUUID } from 'node:crypto'
-import { BudgetService, InMemoryBudgetLedgerStore, sha256DigestOf } from '@ontology/core'
+import { sha256DigestOf } from '@ontology/core'
 import { answerDraftContentHash, inputManifestDigest } from '@ontology/application'
 import type { VerificationArtifactStore } from '@ontology/application'
 import {
@@ -24,13 +24,11 @@ import {
   type WorkflowInputManifest,
 } from '@ontology/contracts'
 import { semanticOptionSetHash } from '@ontology/application'
-import { RecordingControlRepository } from './component-registry-fixtures'
 import { SCOPE_A, fixedClock, toolContext } from './profile-resolver-fixtures'
 
 export { SCOPE_A, fixedClock, toolContext }
 export const NOW = '2026-09-21T00:00:00Z'
 export const RUN_ID = '33333333-3333-4333-8333-333333333333'
-export const LEDGER_ID = '88888888-8888-4888-8888-888888888888'
 export const EVIDENCE_ID = 'e1111111-1111-4111-8111-111111111111'
 export const BLOB_ID = 'b1111111-1111-4111-8111-111111111111'
 
@@ -45,7 +43,7 @@ export function verificationPolicy(overrides?: Partial<VerificationPolicy>): Ver
 /** One archived tool result payload with the fields a claim binds to. */
 export interface ResultPayload {
   readonly subject: string
-  readonly value: number
+  readonly value: number | string
   readonly unit: string
   readonly time: string
 }
@@ -135,6 +133,7 @@ export function buildEvidence(input: {
   readonly payloadRef: ResourceRef
   readonly resultDigest: Sha256Digest
   readonly observedAt?: string
+  readonly validFrom?: string
   readonly validTo?: string
 }): EvidenceEnvelope {
   const body = {
@@ -143,9 +142,9 @@ export function buildEvidence(input: {
     scopeRef: SCOPE_A,
     producedBy: { componentRef: { id: 'tool-gateway', version: '1.0.0', digest: sha256DigestOf('gateway') }, runId: RUN_ID },
     observedAt: input.observedAt ?? NOW,
-    ...(input.validTo === undefined
+    ...(input.validTo === undefined && input.validFrom === undefined
       ? {}
-      : { validity: { validFrom: '2026-09-01T00:00:00Z', validTo: input.validTo } }),
+      : { validity: { validFrom: input.validFrom ?? '2026-09-01T00:00:00Z', ...(input.validTo === undefined ? {} : { validTo: input.validTo }) } }),
     sourceSnapshots: [
       {
         sourceRef: { namespace: 'ha-anker', sourceId: 'warehouse' },
@@ -169,7 +168,8 @@ export function buildEvidence(input: {
 export function buildClaim(overrides?: {
   readonly claimId?: Uuid
   readonly subject?: string
-  readonly value?: number
+  readonly predicate?: string
+  readonly value?: number | string
   readonly unit?: string
   readonly asOf?: string
   readonly evidenceRef?: ResourceRef
@@ -177,6 +177,7 @@ export function buildClaim(overrides?: {
   readonly valuePointer?: string
   readonly unitPointer?: string
   readonly subjectPointer?: string
+  readonly fieldRefPointer?: string
   readonly timePointer?: string
   readonly references?: DraftClaim['references']
 }): DraftClaim {
@@ -185,7 +186,7 @@ export function buildClaim(overrides?: {
   return {
     claimId: overrides?.claimId ?? randomUUID(),
     subject: overrides?.subject ?? RESULT_PAYLOAD.subject,
-    predicate: 'forecast_energy',
+    predicate: overrides?.predicate ?? 'forecast_energy',
     value: { value: overrides?.value ?? RESULT_PAYLOAD.value, unit: overrides?.unit ?? RESULT_PAYLOAD.unit },
     time: { asOf: overrides?.asOf ?? RESULT_PAYLOAD.time },
     kind: 'observation',
@@ -198,6 +199,7 @@ export function buildClaim(overrides?: {
           valuePointer: overrides?.valuePointer ?? '/value',
           unitPointer: overrides?.unitPointer ?? '/unit',
           subjectPointer: overrides?.subjectPointer ?? '/subject',
+          ...(overrides?.fieldRefPointer === undefined ? {} : { fieldRefPointer: overrides.fieldRefPointer }),
           timePointer: overrides?.timePointer ?? '/time',
         },
       ],
@@ -209,16 +211,30 @@ export function buildDraft(input: {
   readonly claims: readonly DraftClaim[]
   readonly draftId?: Uuid
   readonly blocks?: readonly unknown[]
+  readonly schemaVersion?: AnswerDraft['schemaVersion']
+  readonly assertions?: AnswerDraft['assertions']
+  readonly limitations?: readonly string[]
 }): AnswerDraft {
   const blocks = input.blocks ?? [{ kind: 'summary' }]
+  const limitations = input.limitations ?? []
+  const assertions = input.assertions ?? []
   return {
     draftId: input.draftId ?? randomUUID(),
     runId: RUN_ID,
+    ...(input.schemaVersion === undefined ? {} : { schemaVersion: input.schemaVersion }),
     blocks,
     claims: input.claims,
+    ...(input.assertions === undefined ? {} : { assertions }),
     evidenceManifestHash: input.evidenceManifestHash,
-    contentHash: answerDraftContentHash(RUN_ID, blocks, input.evidenceManifestHash, input.claims),
-    limitations: [],
+    contentHash: answerDraftContentHash(
+      RUN_ID,
+      blocks,
+      input.evidenceManifestHash,
+      input.claims,
+      assertions,
+      ...(input.schemaVersion === 'answer-draft@2' ? [{ schemaVersion: 'answer-draft@2' as const, limitations }] : []),
+    ),
+    limitations,
     producedInPhase: 'drafting',
     createdAt: NOW,
   }
@@ -330,30 +346,6 @@ export class FallbackDecision implements DecisionPort {
       },
     })
   }
-}
-
-export interface BudgetHarness {
-  readonly service: BudgetService
-  readonly store: InMemoryBudgetLedgerStore
-  readonly ledgerId: Uuid
-}
-
-export function buildBudget(): BudgetHarness {
-  const store = new InMemoryBudgetLedgerStore()
-  const service = new BudgetService({
-    store,
-    control: new RecordingControlRepository(),
-    now: fixedClock(),
-    newId: () => randomUUID(),
-  })
-  return { service, store, ledgerId: LEDGER_ID }
-}
-
-export async function openRunLedger(harness: BudgetHarness, ctx: ToolContext): Promise<void> {
-  await harness.service.openLedger(
-    { ledgerId: harness.ledgerId, kind: 'run', runId: RUN_ID },
-    ctx,
-  )
 }
 
 export function modelRef(): { modelId: string; version: string } {

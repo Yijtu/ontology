@@ -10,6 +10,7 @@ import type {
   ProfileRef,
   PublishedAnswer,
   RevisionString,
+  ToolContext,
   RunPreferences,
   RunState,
   RuntimeSelectorPort,
@@ -19,6 +20,7 @@ import type {
   VerificationStorePort,
   WorkflowLimits,
   WorkflowManifestStore,
+  WorkflowDispatchFence,
 } from '@ontology/contracts'
 import type { RuntimeCapabilityFactoryPort } from '@ontology/contracts'
 import type { RunService } from '../runs'
@@ -49,6 +51,12 @@ export interface WorkflowControllerDependencies {
   readonly verifications: VerificationStorePort
   readonly publisher: AnswerPublisherPort
   readonly validity: InputValidityPort
+  /**
+   * Current durable worker lease used to fence publication. The host refreshes this value
+   * as the dispatch lease is renewed; the answer store re-checks it in the publication
+   * transaction. User-driven in-process callers may omit it.
+   */
+  readonly publicationFence?: (runId: Uuid, ctx: ToolContext) => Promise<WorkflowDispatchFence | undefined>
   /**
    * The bounded question-rewriting pre-step (LOCAL-074/LOCAL-080). When present the
    * controller runs it once during preflight, before it selects a runtime or starts

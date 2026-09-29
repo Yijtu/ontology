@@ -1,0 +1,23 @@
+[
+  {
+    "conceptId": "industrial_asset",
+    "namespace": "synthetic-industrial-maintenance",
+    "fields": [
+      { "fieldRef": "asset_id", "valueType": "string", "identityKey": true },
+      { "fieldRef": "asset_network_code", "valueType": "string", "identityKey": false },
+      { "fieldRef": "asset_workshop_code", "valueType": "enum", "identityKey": false },
+      { "fieldRef": "maintenance_exempt", "valueType": "boolean", "identityKey": false },
+      { "fieldRef": "maintenance_required", "valueType": "boolean", "identityKey": false },
+      { "fieldRef": "operating_hours", "valueType": "quantity", "unitCode": "h", "identityKey": false }
+    ]
+  },
+  {
+    "conceptId": "workshop",
+    "namespace": "synthetic-industrial-maintenance",
+    "fields": [
+      { "fieldRef": "workshop_code", "valueType": "string", "identityKey": true },
+      { "fieldRef": "workshop_name", "valueType": "string", "identityKey": false },
+      { "fieldRef": "workshop_network_code", "valueType": "string", "identityKey": false }
+    ]
+  }
+]

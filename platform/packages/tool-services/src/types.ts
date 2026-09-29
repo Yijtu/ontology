@@ -18,6 +18,7 @@ import type {
   ToolId,
   ToolUsage,
   ToolWarning,
+  ValidityInterval,
   Uuid,
   VersionRef,
 } from '@ontology/contracts'
@@ -106,6 +107,8 @@ export interface ToolExecutionOutcome {
   readonly usage?: Partial<ToolUsage>
   readonly dataMode?: DataMode
   readonly evidenceKind?: EvidenceKind
+  /** Valid-time window shared by every business fact in this result, when the source provides one. */
+  readonly validity?: ValidityInterval
 }
 
 /**

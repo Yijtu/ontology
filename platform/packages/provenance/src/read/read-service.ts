@@ -3,8 +3,12 @@ import type {
   BlobPort,
   DependencyGraphView,
   DependencyNodeView,
+  DependencySupportCoverage,
+  DependencySupportResolutionEntry,
   DependencyTraversalRequest,
   EvidenceDependencyEdge,
+  EvidenceDependencyReadResult,
+  EvidenceDependencySupportReadStatus,
   EvidenceExportArtifact,
   EvidenceExportView,
   EvidenceReadQuery,
@@ -12,12 +16,12 @@ import type {
   EvidenceStorePort,
   ProvenanceEvidenceView,
   ProvenancePremiseGroupView,
+  ProvenanceSupportResolution,
   ProvenanceSourceView,
   ResourceRef,
   ScopeRef,
   SourceReReadability,
   ToolContext,
-  ToolCoverage,
   Uuid,
 } from '@ontology/contracts'
 import type { AuthorizedArtifactReader } from '../provenance-service'
@@ -39,6 +43,12 @@ export interface EvidenceDependencySource {
     evidence: EvidenceRecord,
     ctx: ToolContext,
   ): Promise<readonly EvidenceDependencyEdge[]>
+  /** Optional completeness-aware method; legacy edge-only sources remain usable but unknown. */
+  dependenciesWithResolutionOf?(
+    scopeRef: ScopeRef,
+    evidence: EvidenceRecord,
+    ctx: ToolContext,
+  ): Promise<EvidenceDependencyReadResult>
 }
 
 export interface ProvenanceReadServiceDependencies {
@@ -148,7 +158,8 @@ export class ProvenanceReadService {
       )
     }
 
-    const edges = await this.#dependencies.dependenciesOf(scopeRef, record, ctx)
+    const dependencyRead = await this.#readDependencies(scopeRef, record, ctx)
+    const edges = dependencyRead.edges
     const { sources, artifactFailed } = await this.#resolveSources(scopeRef, record, ctx)
     const archivedResult = await this.#verifyArtifact(scopeRef, record.envelope.payloadRef, ctx)
     const integrityVerified =
@@ -173,6 +184,7 @@ export class ProvenanceReadService {
       resultDigest: record.envelope.resultDigest,
       integrityVerified,
       ruleRefs: ruleRef === undefined ? [] : [ruleRef],
+      supportResolution: dependencyRead.supportResolution,
       premiseGroups: groupPremises(edges),
       sources,
       ...(archivedResult === undefined ? {} : { archivedResult }),
@@ -215,6 +227,16 @@ export class ProvenanceReadService {
 
     const nodes: DependencyNodeView[] = []
     const edges: EvidenceDependencyEdge[] = []
+    const supportEntries: DependencySupportResolutionEntry[] = [...(reverse?.supportResolutions ?? [])]
+    if (decoded !== undefined && !inbound) {
+      // The cursor stores traversal position, not prior support proofs. Stay conservative on
+      // later pages instead of allowing a page-local complete result to hide an earlier gap.
+      supportEntries.push(supportEntry(root.evidenceRef.id, {
+        state: 'unknown',
+        complete: false,
+        reason: 'continuation cursor does not carry earlier support-resolution results',
+      }))
+    }
     let truncated = false
 
     while (queue.length > 0) {
@@ -227,6 +249,11 @@ export class ProvenanceReadService {
       const record = await this.#evidence.get(scopeRef, current.evidenceId, ctx)
       if (record === undefined) {
         nodes.push({ evidenceId: current.evidenceId, depth: current.depth, outcome: 'unverifiable' })
+        supportEntries.push(supportEntry(current.evidenceId, {
+          state: 'unavailable',
+          complete: false,
+          reason: 'the evidence record for this graph node is unavailable',
+        }))
         continue
       }
       nodes.push({
@@ -235,10 +262,15 @@ export class ProvenanceReadService {
         outcome: 'verifiable',
         kind: record.envelope.kind,
       })
+      let discovered: readonly EvidenceDependencyEdge[]
+      if (inbound) {
+        discovered = reverse?.index.get(current.evidenceId) ?? []
+      } else {
+        const dependencyRead = await this.#readDependencies(scopeRef, record, ctx)
+        discovered = dependencyRead.edges
+        supportEntries.push(supportEntry(current.evidenceId, dependencyRead.supportResolution))
+      }
       if (current.depth >= maxDepth) continue
-      const discovered = inbound
-        ? (reverse?.get(current.evidenceId) ?? [])
-        : await this.#dependencies.dependenciesOf(scopeRef, record, ctx)
       for (const edge of discovered) {
         edges.push(edge)
         const next = inbound ? edge.fromEvidenceId : edge.toEvidenceId
@@ -251,10 +283,11 @@ export class ProvenanceReadService {
     const nextCursor = truncated
       ? encodeCursor({ queue, visited: [...visited] } satisfies DependencyCursorPayload)
       : undefined
-    const coverage: ToolCoverage = {
+    const coverage: DependencyGraphView['coverage'] = {
       returned: nodes.length,
       ...(nextCursor === undefined ? {} : { cursor: nextCursor }),
       truncated,
+      support: supportCoverageOf(supportEntries),
     }
     return {
       rootEvidenceId: root.evidenceRef.id,
@@ -313,6 +346,37 @@ export class ProvenanceReadService {
       )
     }
     return record
+  }
+
+  async #readDependencies(
+    scopeRef: ScopeRef,
+    record: EvidenceRecord,
+    ctx: ToolContext,
+  ): Promise<{ readonly edges: readonly EvidenceDependencyEdge[]; readonly supportResolution: ProvenanceSupportResolution }> {
+    const detailedReader = this.#dependencies.dependenciesWithResolutionOf
+    if (detailedReader !== undefined) {
+      const result = await detailedReader.call(this.#dependencies, scopeRef, record, ctx)
+      return {
+        edges: result.edges,
+        supportResolution: normalizedSupportResolution(result.supportResolution),
+      }
+    }
+
+    const edges = await this.#dependencies.dependenciesOf(scopeRef, record, ctx)
+    if (record.envelope.producedBy.ruleRef === undefined) {
+      return {
+        edges,
+        supportResolution: { state: 'not_rule', complete: true },
+      }
+    }
+    return {
+      edges,
+      supportResolution: {
+        state: 'unknown',
+        complete: false,
+        reason: 'the dependency source does not report whether rule-support resolution was complete',
+      },
+    }
   }
 
   async #resolveSources(
@@ -402,20 +466,34 @@ export class ProvenanceReadService {
     scopeRef: ScopeRef,
     root: EvidenceRecord,
     ctx: ToolContext,
-  ): Promise<Map<Uuid, EvidenceDependencyEdge[]>> {
+  ): Promise<{
+    readonly index: Map<Uuid, EvidenceDependencyEdge[]>
+    readonly supportResolutions: readonly DependencySupportResolutionEntry[]
+  }> {
     const index = new Map<Uuid, EvidenceDependencyEdge[]>()
+    const supportResolutions: DependencySupportResolutionEntry[] = []
     const runId = root.envelope.producedBy.runId
-    if (runId === undefined) return index
+    if (runId === undefined) {
+      return {
+        index,
+        supportResolutions: [supportEntry(root.evidenceRef.id, {
+          state: 'unavailable',
+          complete: false,
+          reason: 'inbound traversal cannot enumerate candidate evidence without a run id',
+        })],
+      }
+    }
     const runEvidence = await this.#evidence.listByRun(scopeRef, runId, ctx)
     for (const candidate of runEvidence) {
-      const edges = await this.#dependencies.dependenciesOf(scopeRef, candidate, ctx)
-      for (const edge of edges) {
+      const dependencyRead = await this.#readDependencies(scopeRef, candidate, ctx)
+      supportResolutions.push(supportEntry(candidate.evidenceRef.id, dependencyRead.supportResolution))
+      for (const edge of dependencyRead.edges) {
         const bucket = index.get(edge.toEvidenceId)
         if (bucket === undefined) index.set(edge.toEvidenceId, [edge])
         else bucket.push(edge)
       }
     }
-    return index
+    return { index, supportResolutions }
   }
 
   #failureReason(
@@ -457,4 +535,36 @@ function dedupeEdges(edges: readonly EvidenceDependencyEdge[]): EvidenceDependen
       left.toEvidenceId.localeCompare(right.toEvidenceId) ||
       left.relation.localeCompare(right.relation),
   )
+}
+
+function normalizedSupportResolution(
+  status: EvidenceDependencySupportReadStatus,
+): ProvenanceSupportResolution {
+  const knownComplete = status.state === 'not_rule' || status.state === 'resolved' || status.state === 'not_applicable'
+  return {
+    state: status.state,
+    complete: knownComplete && status.complete !== false,
+    ...(status.reason === undefined ? {} : { reason: status.reason }),
+  }
+}
+
+function supportEntry(evidenceId: Uuid, resolution: ProvenanceSupportResolution): DependencySupportResolutionEntry {
+  return { evidenceId, resolution }
+}
+
+function supportCoverageOf(entries: readonly DependencySupportResolutionEntry[]): DependencySupportCoverage {
+  const byEvidence = new Map<Uuid, ProvenanceSupportResolution>()
+  for (const entry of entries) {
+    const previous = byEvidence.get(entry.evidenceId)
+    if (previous === undefined || (previous.complete && !entry.resolution.complete)) {
+      byEvidence.set(entry.evidenceId, entry.resolution)
+    }
+  }
+  const resolutions = [...byEvidence.entries()]
+    .map(([evidenceId, resolution]) => ({ evidenceId, resolution }))
+    .sort((left, right) => left.evidenceId.localeCompare(right.evidenceId))
+  return {
+    complete: resolutions.every((entry) => entry.resolution.complete),
+    resolutions,
+  }
 }

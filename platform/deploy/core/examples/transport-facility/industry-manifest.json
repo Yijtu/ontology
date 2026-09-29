@@ -1,0 +1,44 @@
+{
+  "namespace": "synthetic-transport-facility",
+  "maturity": "preview",
+  "standardProvenance": [
+    {
+      "standardRef": {
+        "id": "synthetic-transport-demo-assumption",
+        "version": "1.0.0",
+        "digest": "sha256:1111111111111111111111111111111111111111111111111111111111111111"
+      },
+      "provenanceKind": "synthetic_assumption",
+      "clauseRef": "demo-only"
+    }
+  ],
+  "definitionsRef": {
+    "id": "synthetic_transport_facility_core",
+    "version": "1.0.0",
+    "digest": "sha256:2393da598c2b2ea8f810a0d700f630d3a7dd3acb45adff27b92b7f72fd1b944c"
+  },
+  "identityPolicyRef": {
+    "id": "synthetic_transport_facility_core",
+    "version": "1.0.0",
+    "digest": "sha256:2393da598c2b2ea8f810a0d700f630d3a7dd3acb45adff27b92b7f72fd1b944c"
+  },
+  "rulePolicyRef": {
+    "id": "synthetic-transport-rules",
+    "version": "1.0.0",
+    "digest": "sha256:816cbdc7b13a4c87eda44b38ec7eeb552ba63ce826a11c257227c9fb8a798ddc"
+  },
+  "queryTemplatesRef": {
+    "id": "synthetic-transport-query-fields",
+    "version": "1.0.0",
+    "digest": "sha256:5a7aca98aff1b8f5e7b984918c869ea71bf82399f69264d91458bc07aea10c92"
+  },
+  "requiredCapabilities": [
+    { "name": "structured_query", "versionRange": { "min": "1.0.0" } },
+    { "name": "document_search", "versionRange": { "min": "1.0.0" } }
+  ],
+  "testSuiteRef": {
+    "id": "synthetic-transport-golden-cases",
+    "version": "1.0.0",
+    "digest": "sha256:97c6a167a276e3c1d7e6c87cdd75c13d11cab704b9ba9391c3b846085ce34f02"
+  }
+}

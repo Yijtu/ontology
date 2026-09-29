@@ -400,6 +400,22 @@ export function registerWorkbenchRoutes(
     },
   )
 
+  app.get<{ Params: { profileId: string } }>(
+    '/api/v1/profiles/:profileId/active',
+    async (request, reply) => {
+      const traceId = readTraceId(request)
+      const auth = authenticateRequest(dependencies.authenticate, request, reply)
+      if (auth === undefined) return reply
+      const scopeRef = scopeRefFor(auth)
+      const ctx = contextFor(auth, traceId)
+      requireRole(ctx, PROFILE_EDITOR_ROLES, 'reading the active profile revision')
+      const profileId = requireNonEmptyString(request.params.profileId, 'profileId')
+      const active = await dependencies.profiles.getActiveProfile(scopeRef, profileId, ctx)
+      reply.status(200).send({ data: { active: active ?? null }, meta: { traceId } })
+      return reply
+    },
+  )
+
   app.get('/api/v1/sources', async (request, reply) => {
     const traceId = readTraceId(request)
     const auth = authenticateRequest(dependencies.authenticate, request, reply)

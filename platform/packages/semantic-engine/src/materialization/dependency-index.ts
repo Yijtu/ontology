@@ -15,6 +15,12 @@ import type { RuleFact, SupportRule } from '../rules'
 export interface DependencyEntityBinding {
   readonly entityId: string
   readonly logicalAssertionId: string
+  /** Parent published statement whose revision/retraction invalidates this attribute child. */
+  readonly sourceStatementId?: string
+  /** Source candidate that supplied the parent statement, used by identity split changes. */
+  readonly sourceCandidateId?: string
+  /** The projected attribute predicate; dependency-only bindings may have no RuleFact row. */
+  readonly predicate?: string
 }
 
 export interface DependencyIndexInput {
@@ -28,6 +34,14 @@ function addTo<K>(map: Map<K, Set<string>>, key: K, value: string): void {
   const bucket = map.get(key)
   if (bucket === undefined) map.set(key, new Set([value]))
   else bucket.add(value)
+}
+
+function entityPredicateKey(entityId: string, predicate: string): string {
+  return `${entityId}\u0000${predicate}`
+}
+
+function entityCandidateKey(entityId: string, candidateId: string): string {
+  return `${entityId}\u0000${candidateId}`
 }
 
 function closure(seeds: ReadonlySet<string>, edges: ReadonlyMap<string, ReadonlySet<string>>): string[] {
@@ -47,9 +61,15 @@ function closure(seeds: ReadonlySet<string>, edges: ReadonlyMap<string, Readonly
 
 export class MaterializationDependencyIndex {
   readonly #rulesByPredicate: ReadonlyMap<string, ReadonlySet<string>>
+  readonly #legacyRulesByPredicate: ReadonlyMap<string, ReadonlySet<string>>
+  readonly #rulesByEntityPredicate: ReadonlyMap<string, ReadonlySet<string>>
   readonly #rulesByLogical: ReadonlyMap<string, ReadonlySet<string>>
   readonly #rulesByConclusion: ReadonlyMap<string, ReadonlySet<string>>
   readonly #rulesByEntity: ReadonlyMap<string, ReadonlySet<string>>
+  readonly #rulesByEntityObject: ReadonlyMap<string, ReadonlySet<string>>
+  readonly #rulesBySourceStatement: ReadonlyMap<string, ReadonlySet<string>>
+  readonly #rulesBySourceCandidate: ReadonlyMap<string, Set<string>>
+  readonly #rulesByPublishedRule: ReadonlyMap<string, ReadonlySet<string>>
   /** A rule's prerequisites: the rules whose conclusions its alternatives reference. */
   readonly #ruleDependencies: ReadonlyMap<string, ReadonlySet<string>>
   /** A rule's dependents: the rules that reference the conclusion it derives. */
@@ -58,11 +78,22 @@ export class MaterializationDependencyIndex {
 
   private constructor(input: DependencyIndexInput) {
     const factsById = new Map<string, RuleFact>()
+    const factsByLogicalId = new Map<string, RuleFact[]>()
     for (const fact of input.facts) if (!factsById.has(fact.assertionId)) factsById.set(fact.assertionId, fact)
+    for (const fact of input.facts) {
+      const bucket = factsByLogicalId.get(fact.logicalAssertionId)
+      if (bucket === undefined) factsByLogicalId.set(fact.logicalAssertionId, [fact])
+      else bucket.push(fact)
+    }
 
     const rulesByPredicate = new Map<string, Set<string>>()
+    const legacyRulesByPredicate = new Map<string, Set<string>>()
+    const rulesByEntityPredicate = new Map<string, Set<string>>()
+    const rulesByEntity = new Map<string, Set<string>>()
+    const rulesByEntityObject = new Map<string, Set<string>>()
     const rulesByLogical = new Map<string, Set<string>>()
     const rulesByConclusion = new Map<string, Set<string>>()
+    const rulesByPublishedRule = new Map<string, Set<string>>()
     const ruleDependencies = new Map<string, Set<string>>()
     const ruleDependents = new Map<string, Set<string>>()
     const conclusionByRule = new Map<string, string>()
@@ -70,8 +101,23 @@ export class MaterializationDependencyIndex {
     for (const rule of input.rules) {
       conclusionByRule.set(rule.ruleId, rule.conclusion.propositionKey)
       addTo(rulesByConclusion, rule.conclusion.propositionKey, rule.ruleId)
+      const publishedInstance = rule.publishedInstance
+      if (publishedInstance !== undefined) {
+        addTo(rulesByPublishedRule, `${publishedInstance.ruleId}\u0000${publishedInstance.objectId}`, rule.ruleId)
+        addTo(rulesByEntity, publishedInstance.subjectEntityId, rule.ruleId)
+        addTo(rulesByEntityObject, JSON.stringify([publishedInstance.subjectEntityId, publishedInstance.objectId]), rule.ruleId)
+      }
       for (const group of rule.premiseGroups) {
         addTo(rulesByPredicate, group.filter.fieldRef, rule.ruleId)
+        if (publishedInstance === undefined) {
+          addTo(legacyRulesByPredicate, group.filter.fieldRef, rule.ruleId)
+        } else {
+          addTo(
+            rulesByEntityPredicate,
+            entityPredicateKey(publishedInstance.subjectEntityId, group.filter.fieldRef),
+            rule.ruleId,
+          )
+        }
         for (const alternative of group.alternatives) {
           if (alternative.assertionId !== undefined) {
             const fact = factsById.get(alternative.assertionId)
@@ -104,23 +150,83 @@ export class MaterializationDependencyIndex {
       dependencyRuleIds.set(ruleId, owners)
     }
 
-    const rulesByEntity = new Map<string, Set<string>>()
+    const rulesBySourceStatement = new Map<string, Set<string>>()
+    const rulesBySourceCandidate = new Map<string, Set<string>>()
     for (const binding of input.entityBindings ?? []) {
       for (const ruleId of rulesByLogical.get(binding.logicalAssertionId) ?? []) {
         addTo(rulesByEntity, binding.entityId, ruleId)
       }
-      for (const fact of input.facts) {
-        if (fact.logicalAssertionId !== binding.logicalAssertionId) continue
-        for (const ruleId of rulesByPredicate.get(fact.predicate) ?? []) {
+      const facts = factsByLogicalId.get(binding.logicalAssertionId) ?? []
+      for (const fact of facts) {
+        const entityRules = rulesByEntityPredicate.get(entityPredicateKey(binding.entityId, fact.predicate)) ?? []
+        for (const ruleId of entityRules) addTo(rulesByEntity, binding.entityId, ruleId)
+        for (const ruleId of legacyRulesByPredicate.get(fact.predicate) ?? []) {
           addTo(rulesByEntity, binding.entityId, ruleId)
         }
+      }
+      if (binding.predicate !== undefined) {
+        for (const ruleId of rulesByEntityPredicate.get(entityPredicateKey(binding.entityId, binding.predicate)) ?? []) {
+          addTo(rulesByEntity, binding.entityId, ruleId)
+        }
+        for (const ruleId of legacyRulesByPredicate.get(binding.predicate) ?? []) addTo(rulesByEntity, binding.entityId, ruleId)
+      }
+      if (binding.sourceStatementId !== undefined) {
+        const statementId = binding.sourceStatementId
+        for (const fact of facts) {
+          for (const ruleId of rulesByEntityPredicate.get(entityPredicateKey(binding.entityId, fact.predicate)) ?? []) {
+            addTo(rulesBySourceStatement, statementId, ruleId)
+          }
+          for (const ruleId of legacyRulesByPredicate.get(fact.predicate) ?? []) addTo(rulesBySourceStatement, statementId, ruleId)
+        }
+        if (binding.predicate !== undefined) {
+          for (const ruleId of rulesByEntityPredicate.get(entityPredicateKey(binding.entityId, binding.predicate)) ?? []) {
+            addTo(rulesBySourceStatement, statementId, ruleId)
+          }
+          for (const ruleId of legacyRulesByPredicate.get(binding.predicate) ?? []) addTo(rulesBySourceStatement, statementId, ruleId)
+        }
+      }
+      if (binding.sourceCandidateId !== undefined) {
+        const candidateId = entityCandidateKey(binding.entityId, binding.sourceCandidateId)
+        for (const fact of facts) {
+          for (const ruleId of rulesByEntityPredicate.get(entityPredicateKey(binding.entityId, fact.predicate)) ?? []) {
+            addTo(rulesBySourceCandidate, candidateId, ruleId)
+          }
+          for (const ruleId of legacyRulesByPredicate.get(fact.predicate) ?? []) addTo(rulesBySourceCandidate, candidateId, ruleId)
+        }
+        if (binding.predicate !== undefined) {
+          for (const ruleId of rulesByEntityPredicate.get(entityPredicateKey(binding.entityId, binding.predicate)) ?? []) {
+            addTo(rulesBySourceCandidate, candidateId, ruleId)
+          }
+          for (const ruleId of legacyRulesByPredicate.get(binding.predicate) ?? []) addTo(rulesBySourceCandidate, candidateId, ruleId)
+        }
+      }
+    }
+    // Facts retain their source statement alias even for callers that omit the optional
+    // dependency-only bindings. This is the fast path for statementId -> attribute children.
+    for (const fact of input.facts) {
+      const parentId = fact.sourceStatementId
+      if (parentId === undefined) continue
+      for (const ruleId of rulesByLogical.get(fact.logicalAssertionId) ?? []) {
+        addTo(rulesBySourceStatement, parentId, ruleId)
+      }
+      for (const ruleId of rulesByEntityPredicate.get(entityPredicateKey(fact.subject, fact.predicate)) ?? []) {
+        addTo(rulesBySourceStatement, parentId, ruleId)
+      }
+      for (const ruleId of legacyRulesByPredicate.get(fact.predicate) ?? []) {
+        addTo(rulesBySourceStatement, parentId, ruleId)
       }
     }
 
     this.#rulesByPredicate = rulesByPredicate
+    this.#legacyRulesByPredicate = legacyRulesByPredicate
+    this.#rulesByEntityPredicate = rulesByEntityPredicate
     this.#rulesByLogical = rulesByLogical
     this.#rulesByConclusion = rulesByConclusion
     this.#rulesByEntity = rulesByEntity
+    this.#rulesByEntityObject = rulesByEntityObject
+    this.#rulesBySourceStatement = rulesBySourceStatement
+    this.#rulesBySourceCandidate = rulesBySourceCandidate
+    this.#rulesByPublishedRule = rulesByPublishedRule
     this.#ruleDependencies = dependencyRuleIds
     this.#ruleDependents = ruleDependents
     this.#conclusionByRule = conclusionByRule
@@ -137,19 +243,35 @@ export class MaterializationDependencyIndex {
       case 'assertion_published':
       case 'assertion_corrected':
       case 'assertion_retracted':
-        for (const ruleId of this.#rulesByPredicate.get(change.predicate) ?? []) seeds.add(ruleId)
+        if (change.subjectEntityId === undefined) {
+          for (const ruleId of this.#rulesByPredicate.get(change.predicate) ?? []) seeds.add(ruleId)
+        } else {
+          for (const ruleId of this.#rulesByEntityPredicate.get(entityPredicateKey(change.subjectEntityId, change.predicate)) ?? []) seeds.add(ruleId)
+          for (const ruleId of this.#legacyRulesByPredicate.get(change.predicate) ?? []) seeds.add(ruleId)
+        }
         for (const ruleId of this.#rulesByLogical.get(change.logicalAssertionId) ?? []) seeds.add(ruleId)
+        for (const ruleId of this.#rulesBySourceStatement.get(change.logicalAssertionId) ?? []) seeds.add(ruleId)
         break
       case 'rule_changed':
-        seeds.add(change.ruleId)
+        for (const ruleId of this.#rulesByPublishedRule.get(`${change.ruleId}\u0000${change.propositionKey}`) ?? []) seeds.add(ruleId)
+        // Preserve the legacy non-published helper semantics used by direct evaluator fixtures.
+        if (seeds.size === 0 && this.#conclusionByRule.has(change.ruleId)) seeds.add(change.ruleId)
         for (const ruleId of this.#rulesByConclusion.get(change.propositionKey) ?? []) seeds.add(ruleId)
         break
       case 'identity_changed':
-        for (const ruleId of this.#rulesByEntity.get(change.entityId) ?? []) seeds.add(ruleId)
+        for (const ruleId of (change.objectId === undefined
+          ? this.#rulesByEntity.get(change.entityId)
+          : this.#rulesByEntityObject.get(JSON.stringify([change.entityId, change.objectId]))) ?? []) seeds.add(ruleId)
+        for (const candidateId of change.separatedCandidateIds) {
+          for (const ruleId of this.#rulesBySourceCandidate.get(entityCandidateKey(change.entityId, candidateId)) ?? []) seeds.add(ruleId)
+        }
         break
       case 'validity_expired':
-        for (const ruleId of this.#rulesByPredicate.get(change.predicate) ?? []) seeds.add(ruleId)
         for (const ruleId of this.#rulesByLogical.get(change.logicalAssertionId) ?? []) seeds.add(ruleId)
+        for (const ruleId of this.#rulesBySourceStatement.get(change.logicalAssertionId) ?? []) seeds.add(ruleId)
+        if (seeds.size === 0) {
+          for (const ruleId of this.#rulesByPredicate.get(change.predicate) ?? []) seeds.add(ruleId)
+        }
         break
     }
     return closure(seeds, this.#ruleDependents)

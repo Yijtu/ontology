@@ -48,6 +48,7 @@ import type {
   RunManifest,
   ToolContext,
   VerificationResult,
+  VerifiedAssertion,
   WorkflowInputManifest,
 } from '@ontology/contracts'
 
@@ -186,6 +187,7 @@ describe('answer publication gate: hash binding and atomicity', () => {
     expect(answer.scenarioManifestHash).toBe(harness.grant.scenarioManifestHash)
     expect(answer.verificationId).toBe(harness.verification.verificationId)
     expect(answer.publicationKind).toBe('verified')
+    expect(answer.body).toEqual({ schemaVersion: 'answer-draft@1', blocks: harness.draft.blocks, claims: [], assertions: [] })
     // The answer is idempotent per run.
     const again = await harness.publisher.publish(
       { grant: harness.grant, draft: harness.draft, verification: harness.verification },
@@ -333,7 +335,44 @@ describe('post-verification invalidation blocks publication', () => {
     )
     expect(answer.publicationKind).toBe('history_limited')
     expect(answer.asOf).toBe('2026-09-20T00:00:00Z')
-    expect(answer.limitations).toContain('history_limited_as_of:2026-09-20T00:00:00Z')
+    expect(answer.limitations).toEqual(harness.draft.limitations)
+    expect(answer.body?.blocks).toEqual(harness.draft.blocks)
+  })
+
+  it('refuses body changes after the passing verification even when ids and grant remain unchanged', async () => {
+    const harness = await buildPublicationHarness()
+    await expect(
+      harness.publisher.publish(
+        {
+          grant: harness.grant,
+          draft: { ...harness.draft, blocks: [{ kind: 'summary', text: 'Changed after verify.' }] },
+          verification: harness.verification,
+        },
+        OWNER,
+      ),
+    ).rejects.toMatchObject({ reason: 'draft_hash_mismatch' })
+  })
+
+  it('does not let a post-verification V1 assertion ride the legacy body hash', async () => {
+    const harness = await buildPublicationHarness()
+    const assertion: VerifiedAssertion = {
+      assertionId: randomUUID(),
+      kind: 'boolean',
+      subject: 'T-01',
+      predicate: 'inspection_due',
+      value: false,
+      references: [],
+    }
+    await expect(
+      harness.publisher.publish(
+        {
+          grant: harness.grant,
+          draft: { ...harness.draft, assertions: [assertion] },
+          verification: harness.verification,
+        },
+        OWNER,
+      ),
+    ).rejects.toMatchObject({ reason: 'draft_hash_mismatch' })
   })
 })
 

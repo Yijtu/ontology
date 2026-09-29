@@ -14,12 +14,14 @@ import type {
   ObjectHistoryView,
   PreflightResult,
   ProfileRef,
+  ProfileSpec,
   ProvenanceEvidenceView,
   PublishedAnswer,
-  ProfileSpec,
   ProfileVersionRecord,
   RevisionString,
   Sha256Digest,
+  SourceRef,
+  SourceObjectRef,
   SourceBindingRecord,
   SourceKind,
   SourceProbeJobRecord,
@@ -179,6 +181,41 @@ export interface ComponentFilter {
   readonly lifecycleState?: ModuleLifecycleState
 }
 
+export interface CoreDeploymentScenario {
+  readonly scenarioId: string
+  /** The mounted source-pack id selected by this profile's current industry pin. */
+  readonly sourceScenarioId?: string
+  readonly label: string
+  readonly profileRef: ProfileRef
+  readonly environment: DeploymentEnvironment
+  readonly baseProfileSpec?: ProfileSpec
+  readonly namespace: string
+  readonly definitionRef: VersionRef
+  readonly availableTasks: readonly string[]
+  readonly mappingRefs: readonly VersionRef[]
+  readonly rawSourceRefs: readonly SourceRef[]
+}
+
+export interface CoreDeploymentInfo {
+  readonly classification: string
+  readonly scenarios: readonly CoreDeploymentScenario[]
+  readonly operatorEnabled: boolean
+  readonly models: { readonly generation: boolean; readonly decision: boolean }
+}
+
+export interface CoreImportRequest {
+  readonly scenarioId: string
+  readonly sourceId: string
+  readonly content: string
+}
+
+export interface CoreImportResult {
+  readonly jobId: string
+  readonly stage: string
+  readonly scenarioId: string
+  readonly sourceRef: SourceRef
+}
+
 interface RequestOptions {
   readonly body?: unknown
   readonly idempotencyKey?: string
@@ -195,6 +232,108 @@ function defaultId(): string {
 
 function isRecord(value: unknown): value is Record<string, unknown> {
   return typeof value === 'object' && value !== null && !Array.isArray(value)
+}
+
+function isProfileRef(value: unknown): value is ProfileRef {
+  return isRecord(value) && typeof value['id'] === 'string' && typeof value['version'] === 'string'
+}
+
+function isVersionRef(value: unknown): value is VersionRef {
+  return isRecord(value) && typeof value['id'] === 'string' && typeof value['version'] === 'string' && typeof value['digest'] === 'string'
+}
+
+function isSourceRef(value: unknown): value is SourceRef {
+  return isRecord(value) && typeof value['namespace'] === 'string' && typeof value['sourceId'] === 'string'
+}
+
+function isSourceObjectRef(value: unknown): value is SourceObjectRef {
+  return isRecord(value) && isSourceRef(value['sourceRef']) && typeof value['objectPath'] === 'string'
+}
+
+function isMappingRef(value: unknown): value is MappingRef {
+  return isVersionRef(value) && isRecord(value) &&
+    (value['role'] === 'telemetry' || value['role'] === 'catalog' || value['role'] === 'documents') &&
+    isSourceObjectRef(value['sourceObjectRef'])
+}
+
+function isBackendBinding(value: unknown): boolean {
+  return isRecord(value) &&
+    (value['role'] === 'telemetry' || value['role'] === 'catalog' || value['role'] === 'documents') &&
+    isVersionRef(value['adapterRef']) &&
+    (value['mappingRef'] === undefined || typeof value['mappingRef'] === 'string') &&
+    (value['capabilityNames'] === undefined || (Array.isArray(value['capabilityNames']) && value['capabilityNames'].every((name) => typeof name === 'string')))
+}
+
+function isModelBinding(value: unknown): boolean {
+  return isRecord(value) &&
+    (value['role'] === 'generation' || value['role'] === 'decision') &&
+    isVersionRef(value['modelRef']) && typeof value['enabled'] === 'boolean' &&
+    (value['fallbackPolicy'] === 'deterministic' || value['fallbackPolicy'] === 'generative_classification' ||
+      value['fallbackPolicy'] === 'clarify' || value['fallbackPolicy'] === 'reject')
+}
+
+function isToolBinding(value: unknown): boolean {
+  return isRecord(value) && typeof value['toolId'] === 'string' && typeof value['enabled'] === 'boolean' &&
+    (value['policyRef'] === undefined || typeof value['policyRef'] === 'string') &&
+    (value['maxCallsPerRun'] === undefined || (Number.isSafeInteger(value['maxCallsPerRun']) && Number(value['maxCallsPerRun']) > 0))
+}
+
+function isProfileSpec(value: unknown): value is ProfileSpec {
+  return isRecord(value) && isVersionRef(value['industryRef']) &&
+    Array.isArray(value['mappingRefs']) && value['mappingRefs'].every(isMappingRef) &&
+    isVersionRef(value['runtimeRef']) && isRecord(value['backendBindings']) &&
+    Object.values(value['backendBindings']).every(isBackendBinding) && isRecord(value['modelBindings']) &&
+    Object.values(value['modelBindings']).every(isModelBinding) && Array.isArray(value['toolBindings']) &&
+    value['toolBindings'].every(isToolBinding) && Array.isArray(value['computeBindings']) &&
+    value['computeBindings'].every((binding) => isRecord(binding) && binding['readOnly'] === true &&
+      typeof binding['enabled'] === 'boolean' && isVersionRef(binding['handlerRef']) &&
+      isVersionRef(binding['inputSchemaRef']) && isVersionRef(binding['outputSchemaRef'])) && isVersionRef(value['policyRef'])
+}
+
+function isDeploymentEnvironment(value: unknown): value is DeploymentEnvironment {
+  return value === 'local_dev' || value === 'ci' || value === 'staging' || value === 'production'
+}
+
+function parseCoreDeployment(value: unknown): CoreDeploymentInfo {
+  if (!isRecord(value) || typeof value['classification'] !== 'string' || typeof value['operatorEnabled'] !== 'boolean' || !Array.isArray(value['scenarios'])) {
+    throw malformedResponse('/api/v1/core/deployment', 'the deployment response is missing its scenario list')
+  }
+  if (!isRecord(value['models']) || typeof value['models']['generation'] !== 'boolean' || typeof value['models']['decision'] !== 'boolean') {
+    throw malformedResponse('/api/v1/core/deployment', 'the deployment response has an unknown model status')
+  }
+  const scenarios: CoreDeploymentScenario[] = value['scenarios'].map((candidate, index) => {
+    if (!isRecord(candidate) ||
+      typeof candidate['scenarioId'] !== 'string' || candidate['scenarioId'].length === 0 ||
+      (candidate['sourceScenarioId'] !== undefined && (typeof candidate['sourceScenarioId'] !== 'string' || candidate['sourceScenarioId'].length === 0)) ||
+      typeof candidate['label'] !== 'string' || candidate['label'].length === 0 ||
+      typeof candidate['namespace'] !== 'string' || candidate['namespace'].length === 0 ||
+      !isProfileRef(candidate['profileRef']) || !isDeploymentEnvironment(candidate['environment']) ||
+      (candidate['baseProfileSpec'] !== undefined && !isProfileSpec(candidate['baseProfileSpec'])) || !isVersionRef(candidate['definitionRef']) ||
+      !Array.isArray(candidate['availableTasks']) || !candidate['availableTasks'].every((task) => typeof task === 'string') ||
+      !Array.isArray(candidate['mappingRefs']) || !candidate['mappingRefs'].every(isVersionRef) ||
+      !Array.isArray(candidate['rawSourceRefs']) || !candidate['rawSourceRefs'].every(isSourceRef)) {
+      throw malformedResponse('/api/v1/core/deployment', `scenario ${index} has an invalid shape`)
+    }
+    return {
+      scenarioId: candidate['scenarioId'],
+      ...(typeof candidate['sourceScenarioId'] === 'string' ? { sourceScenarioId: candidate['sourceScenarioId'] } : {}),
+      label: candidate['label'],
+      profileRef: candidate['profileRef'],
+      environment: candidate['environment'],
+      namespace: candidate['namespace'],
+      definitionRef: candidate['definitionRef'],
+      availableTasks: candidate['availableTasks'],
+      mappingRefs: candidate['mappingRefs'],
+      rawSourceRefs: candidate['rawSourceRefs'],
+      ...(candidate['baseProfileSpec'] === undefined ? {} : { baseProfileSpec: candidate['baseProfileSpec'] }),
+    }
+  })
+  return {
+    classification: value['classification'],
+    scenarios,
+    operatorEnabled: value['operatorEnabled'],
+    models: { generation: value['models']['generation'], decision: value['models']['decision'] },
+  }
 }
 
 function dataOf<T>(body: unknown, path: string): T {
@@ -238,6 +377,17 @@ export class WorkbenchClient {
     this.#eventStream = options.eventStreamFactory ?? defaultRunEventStreamFactory
   }
 
+  getCoreDeployment(): Promise<CoreDeploymentInfo> {
+    return this.#request<unknown>('GET', '/api/v1/core/deployment').then(parseCoreDeployment)
+  }
+
+  createCoreImport(request: CoreImportRequest): Promise<CoreImportResult> {
+    return this.#request<CoreImportResult>('POST', '/api/v1/core/imports', {
+      body: request,
+      idempotencyKey: this.#newId(),
+    })
+  }
+
   listComponents(filter: ComponentFilter = {}): Promise<ComponentVersionRecord[]> {
     const query = new URLSearchParams()
     if (filter.kind !== undefined) query.set('kind', filter.kind)
@@ -261,6 +411,13 @@ export class WorkbenchClient {
       `/api/v1/profiles/${encodeURIComponent(profileRef.id)}/preflight`,
       { body: { version: profileRef.version } },
     )
+  }
+
+  getActiveProfile(profileId: string): Promise<ActiveProfileRecord | undefined> {
+    return this.#request<{ readonly active: ActiveProfileRecord | null }>(
+      'GET',
+      `/api/v1/profiles/${encodeURIComponent(profileId)}/active`,
+    ).then((data) => data.active ?? undefined)
   }
 
   activateProfile(request: ActivateProfileRequest): Promise<ActiveProfileRecord> {

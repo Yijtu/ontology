@@ -14,6 +14,7 @@ import type {
   ToolContext,
   ToolUsage,
 } from '@ontology/contracts'
+import { resolveJevActualState, type ValidatedJevActualState } from './actual-state'
 import { DEFAULT_ESTIMATED_TOKENS, DEFAULT_MAX_ATTEMPTS, DEFAULT_RETRY_BASE_DELAY_MS } from './constants'
 import { JevAdapterError, jevErrorForHttpStatus, type JevAdapterErrorCode } from './errors'
 import { degradeToClarification, degradeToDeterministic, degradeToGenerativeClassification } from './fallback'
@@ -27,8 +28,14 @@ import type {
   JevModelBinding,
   JevUsage,
 } from './types'
-import { decodeJevWireResponse, type JevWireResponse } from './vendor/jev-wire'
+import {
+  buildJevWireRequest,
+  decodeJevWireResponse,
+  type JevWirePlan,
+  type JevWireResponse,
+} from './vendor/jev-wire'
 import { validateJevResponse } from './validate'
+import { JevStateResolutionError } from './types'
 
 /**
  * JEV decision adapter (SPEC C2, ADR-09).
@@ -36,9 +43,9 @@ import { validateJevResponse } from './validate'
  * It implements `DecisionPort` — a port distinct from `GenerationPort` — and answers
  * fixed choice/score/noul questions. It never emits generated text, code, explanation or
  * SQL, never accepts messages/tool schemas and never calls a tool. A calibrated result
- * preserves the option set, the probability distribution, `confidence` (when the provider
- * supports it) and the definition version; every probability is range- and
- * normalisation-checked.
+ * preserves the option set, choice probability distributions, choice/score confidence,
+ * System One Noul's separate probability-of-yes value and local definition versions;
+ * every probability is range- and normalisation-checked.
  *
  * When JEV is unavailable or a result's confidence is too low the profile's fallback
  * policy is applied explicitly: a typed clarification, a deterministic fallback or a
@@ -98,6 +105,35 @@ export class JevDecisionAdapter implements DecisionPort {
       throw new JevAdapterError('INVALID_ARGUMENT', 'a host-minted trusted tool context is required')
     }
 
+    const binding = this.#config.models[request.modelRef.modelId]
+    if (binding === undefined) {
+      throw new JevAdapterError(
+        'INVALID_ARGUMENT',
+        `no JEV model binding is configured for ${request.modelRef.modelId}`,
+      )
+    }
+
+    let state: ValidatedJevActualState
+    try {
+      state = await this.#resolveState(request, ctx)
+    } catch (error) {
+      if (
+        this.#isCancelled() ||
+        (error instanceof JevStateResolutionError && error.code === 'CANCELLED')
+      ) {
+        throw this.#cancelledError()
+      }
+      throw stateResolutionFailure(error)
+    }
+
+    let plan: JevWirePlan
+    try {
+      plan = buildJevWireRequest(binding.vendorModel, state.state, request.questions)
+    } catch (error) {
+      if (error instanceof JevAdapterError) throw error
+      throw new JevAdapterError('INVALID_ARGUMENT', 'the System One request could not be built', { cause: error })
+    }
+
     let secret: SecretValue
     try {
       secret = await this.#config.secrets.resolve(this.#config.secretRef, ctx)
@@ -108,23 +144,15 @@ export class JevDecisionAdapter implements DecisionPort {
     }
     const redact = (text: string): string => secret.redact(text)
 
-    const binding = this.#config.models[request.modelRef.modelId]
-    if (binding === undefined) {
-      throw new JevAdapterError(
-        'INVALID_ARGUMENT',
-        `no JEV model binding is configured for ${request.modelRef.modelId}`,
-      )
-    }
-
-    const outcome = await this.#attempt(request, ctx, binding, secret, redact)
+    const outcome = await this.#attempt(request, plan, ctx, secret, redact)
     if (outcome.kind === 'calibrated') return outcome.results
     return this.#degrade(request, ctx, binding, redact, outcome.failure, outcome.modelVersion)
   }
 
   async #attempt(
     request: DecisionRequest,
+    plan: JevWirePlan,
     ctx: ToolContext,
-    binding: JevModelBinding,
     secret: SecretValue,
     redact: (text: string) => string,
   ): Promise<AttemptOutcome> {
@@ -175,39 +203,38 @@ export class JevDecisionAdapter implements DecisionPort {
 
         try {
           const http = await this.#client.send({
-            vendorModel: binding.vendorModel,
-            stateRef: request.stateRef,
-            questions: request.questions,
+            body: plan.request,
             apiKey: secret.reveal(),
             signal: controller.signal,
           })
 
           if (http.status >= 400) {
             // A clean HTTP refusal means the provider did not run the model.
-            failure = jevErrorForHttpStatus(http.status, redact(http.errorDetail ?? ''))
+            failure = jevErrorForHttpStatus(http.status, '')
             if (http.retryAfterMs !== undefined) failure = withRetryAfter(failure, http.retryAfterMs)
           } else {
             const decoded = decodeJevWireResponse(http.body)
             if (decoded.kind === 'malformed') {
+              lastModelVersion = decoded.model
+              usage = decoded.usage === undefined ? undefined : usageFromWire(decoded.usage)
               failure = new JevAdapterError('INVALID_SCHEMA', redact(decoded.detail), {
                 remoteStateUnknown: true,
               })
-              billingUnknown = true
+              billingUnknown = usage === undefined || usage.usageUnknown === true
             } else {
-              lastModelVersion = decoded.response.model_version
-              const validated = validateJevResponse(request.questions, decoded.response, redact)
+              lastModelVersion = decoded.response.model
+              usage = usageOf(decoded.response)
+              const validated = validateJevResponse(plan.bindings, decoded.response)
               if (validated.kind === 'error') {
                 failure = validated.error
-                billingUnknown = true
+                billingUnknown = usage.usageUnknown === true
               } else {
                 const low = this.#lowConfidence(validated.results)
                 if (low === undefined) {
                   calibrated = validated.results
-                  usage = usageOf(decoded.response)
                 } else {
                   failure = low
-                  usage = usageOf(decoded.response)
-                  billingUnknown = true
+                  billingUnknown = usage.usageUnknown === true
                 }
               }
             }
@@ -430,10 +457,16 @@ export class JevDecisionAdapter implements DecisionPort {
     const threshold = this.#config.minConfidence
     if (threshold === undefined) return undefined
     for (const result of results) {
-      if (result.confidence !== undefined && result.confidence < threshold) {
+      const confidences = [
+        ...(result.questionType === 'noul' ? [] : result.confidence === undefined ? [] : [result.confidence]),
+        ...(result.questionType === 'score'
+          ? (result.scores ?? []).flatMap((score) => score.confidence === undefined ? [] : [score.confidence])
+          : []),
+      ]
+      if (confidences.some((confidence) => confidence < threshold)) {
         return new JevAdapterError(
           'INSUFFICIENT_DATA',
-          `decision confidence ${String(result.confidence)} for question ${result.questionId} is below the minimum ${String(threshold)}`,
+          `decision confidence for question ${result.questionId} is below the configured minimum ${String(threshold)}`,
         )
       }
     }
@@ -518,6 +551,45 @@ export class JevDecisionAdapter implements DecisionPort {
     })
   }
 
+  async #resolveState(
+    request: DecisionRequest,
+    ctx: ToolContext,
+  ): Promise<ValidatedJevActualState> {
+    const startedMs = Date.now()
+    const deadlineMs = Date.parse(ctx.deadline)
+    if (signalWasAborted(this.#config.signal)) throw new JevStateResolutionError('CANCELLED')
+    if (startedMs >= deadlineMs) throw new JevStateResolutionError('CANCELLED')
+    const controller = new AbortController()
+    const onExternalAbort = (): void => controller.abort(new DOMException('cancelled', 'AbortError'))
+    this.#config.signal?.addEventListener('abort', onExternalAbort, { once: true })
+    if (signalWasAborted(this.#config.signal)) onExternalAbort()
+    const timeoutMs = this.#config.requestTimeoutMs
+    const cappedMs = timeoutMs === undefined ? deadlineMs : Math.min(deadlineMs, startedMs + timeoutMs)
+    const timer = setTimeout(
+      () => controller.abort(new DOMException('state resolution timeout', 'TimeoutError')),
+      Math.max(0, cappedMs - Date.now()),
+    )
+    let onAbort: (() => void) | undefined
+    try {
+      const aborted = new Promise<never>((_resolve, reject) => {
+        onAbort = (): void => reject(new JevStateResolutionError('CANCELLED'))
+        controller.signal.addEventListener('abort', onAbort, { once: true })
+      })
+      return await Promise.race([
+        resolveJevActualState(this.#config.stateResolver, request.stateRef, ctx, {
+          ...(this.#config.maxStateBytes === undefined ? {} : { maxBytes: this.#config.maxStateBytes }),
+          ...(this.#config.maxStateRecords === undefined ? {} : { maxRecords: this.#config.maxStateRecords }),
+          signal: controller.signal,
+        }),
+        aborted,
+      ])
+    } finally {
+      clearTimeout(timer)
+      this.#config.signal?.removeEventListener('abort', onExternalAbort)
+      if (onAbort !== undefined) controller.signal.removeEventListener('abort', onAbort)
+    }
+  }
+
   #isCancelled(): boolean {
     return this.#config.signal?.aborted === true
   }
@@ -578,6 +650,7 @@ function toEvidenceResult(result: DecisionResult, question: DecisionQuestion): D
           })),
         }),
     ...(result.confidence === undefined ? {} : { confidence: result.confidence }),
+    ...(result.probability === undefined ? {} : { probability: result.probability }),
   }
 }
 
@@ -600,15 +673,45 @@ function withRetryAfter(error: JevAdapterError, retryAfterMs: number): JevAdapte
   })
 }
 
-function usageOf(response: JevWireResponse): JevUsage | undefined {
-  const usage = response.usage
-  if (usage === undefined) return undefined
-  const partial = usage.input_tokens === undefined || usage.output_tokens === undefined
+function usageOf(response: JevWireResponse): JevUsage {
+  return usageFromWire(response.usage)
+}
+
+function usageFromWire(usage: JevWireResponse['usage']): JevUsage {
   return {
-    inputTokens: usage.input_tokens ?? 0,
-    outputTokens: usage.output_tokens ?? 0,
-    ...(partial ? { usageUnknown: true } : {}),
+    inputTokens: usage.input_tokens,
+    outputTokens: usage.output_tokens,
   }
+}
+
+function stateResolutionFailure(error: unknown): JevAdapterError {
+  if (!(error instanceof JevStateResolutionError)) {
+    return new JevAdapterError('MODEL_UNAVAILABLE', 'the authorized decision state could not be resolved')
+  }
+  switch (error.code) {
+    case 'NOT_CONFIGURED':
+      return new JevAdapterError('CAPABILITY_NOT_CONFIGURED', 'the authorized decision state resolver is not configured')
+    case 'NOT_FOUND':
+    case 'UNAVAILABLE':
+      return new JevAdapterError('MODEL_UNAVAILABLE', 'the authorized decision state could not be resolved')
+    case 'SCOPE_MISMATCH':
+      return new JevAdapterError('FORBIDDEN', 'the decision state is outside the authorized tool context')
+    case 'VERSION_MISMATCH':
+    case 'DIGEST_MISMATCH':
+      return new JevAdapterError('INVALID_SCHEMA', 'the resolved decision state did not match its immutable reference')
+    case 'INCOMPLETE':
+      return new JevAdapterError('INVALID_SCHEMA', 'the resolved decision state was incomplete')
+    case 'TOO_LARGE':
+      return new JevAdapterError('INVALID_SCHEMA', 'the resolved decision state exceeded its configured bounds')
+    case 'INVALID_STATE':
+      return new JevAdapterError('INVALID_SCHEMA', 'the resolved decision state was not valid JSON')
+    case 'CANCELLED':
+      return new JevAdapterError('DEADLINE_EXCEEDED', 'the decision state resolution was cancelled')
+  }
+}
+
+function signalWasAborted(signal: AbortSignal | undefined): boolean {
+  return signal?.aborted ?? false
 }
 
 function settlementUsage(usage: JevUsage | undefined, durationMs: number): ToolUsage {

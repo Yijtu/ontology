@@ -3,6 +3,7 @@ import { describe, expect, it } from 'vitest'
 import {
   HistoryReadService,
   InMemorySemanticPublicationStore,
+  projectPublishedAttributeFacts,
   SupportEvidenceDependencySource,
 } from '@ontology/semantic-engine'
 import type {
@@ -23,12 +24,52 @@ const TENANT = '11111111-1111-4111-8111-111111111111'
 const SPACE = 'aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa'
 const RUN_ID = '33333333-3333-4333-8333-333333333333'
 const DIGEST = `sha256:${'a'.repeat(64)}`
+const DEFINITION: VersionRef = { id: 'home-energy.core', version: '1.0.0', digest: DIGEST }
+const RULE_REF: VersionRef = { id: 'published-rule-version', version: '1.0.0', digest: DIGEST }
 const SCOPE: ScopeRef = { tenantId: TENANT, spaceId: SPACE }
 const CTX: ToolContext = toolContext(TENANT, SPACE, ['scoped-reader'], 'reader', RUN_ID)
 const VALIDITY = { validFrom: '2026-09-21T00:00:00Z', validTo: '2026-09-22T00:00:00Z' }
+type SupportReader = NonNullable<ConstructorParameters<typeof SupportEvidenceDependencySource>[0]['supportReader']>
+type SupportInstance = Awaited<ReturnType<SupportReader['readCandidates']>>['candidates'][number]
+type SupportRequest = Parameters<SupportReader['readCandidates']>[1]
 
 function evidenceRef(id: Uuid): PublishedStatement['sourceRefs'][number] {
   return { id, version: '1.0.0', digest: DIGEST, kind: 'evidence' }
+}
+
+function immutableSupportInstance(overrides: Partial<SupportInstance> = {}): SupportInstance {
+  return {
+    scopeRef: SCOPE,
+    definitionRef: DEFINITION,
+    ruleRef: RULE_REF,
+    instanceKey: 'rule-instance:entity-a',
+    objectId: 'device.battery',
+    subjectEntityId: 'entity-a',
+    validAt: '2026-09-21T06:00:00Z',
+    asOfRecordedSeq: '1',
+    applicability: { state: 'applicable', positiveSupport: true },
+    complete: true,
+    premiseGroups: [{
+      groupId: 'condition:device.battery_present',
+      facts: [{
+        kind: 'entity_attribute',
+        assertionId: 'parent-statement-id#device.battery_present',
+        logicalAssertionId: 'parent-statement-id#device.battery_present',
+        sourceStatementId: 'parent-statement-id',
+        subjectEntityId: 'entity-a',
+        objectId: 'device.battery',
+        schemaRef: DEFINITION,
+        sourceRefs: [evidenceRef(randomUUID())],
+      }],
+    }],
+    ...overrides,
+  }
+}
+
+function supportReader(candidates: readonly SupportInstance[], complete = true): SupportReader {
+  return {
+    readCandidates: async () => ({ complete, candidates }),
+  }
 }
 
 async function publish(
@@ -108,7 +149,11 @@ function ruleVersion(
   }
 }
 
-function evidenceRecord(evidenceId: Uuid, ruleRef: VersionRef | undefined): EvidenceRecord {
+function evidenceRecord(
+  evidenceId: Uuid,
+  ruleRef: VersionRef | undefined,
+  includeRecordedSeq = true,
+): EvidenceRecord {
   const envelope: EvidenceEnvelope = {
     evidenceId,
     kind: 'rule_derivation',
@@ -119,7 +164,7 @@ function evidenceRecord(evidenceId: Uuid, ruleRef: VersionRef | undefined): Evid
       ...(ruleRef === undefined ? {} : { ruleRef }),
     },
     observedAt: '2026-09-21T06:00:00Z',
-    recordedSeq: '1',
+    ...(includeRecordedSeq ? { recordedSeq: '1' } : {}),
     sourceSnapshots: [],
     resultDigest: DIGEST,
     integrity: { algorithm: 'sha256', digest: DIGEST },
@@ -136,45 +181,284 @@ function evidenceRecord(evidenceId: Uuid, ruleRef: VersionRef | undefined): Evid
 }
 
 describe('SupportEvidenceDependencySource', () => {
-  it('returns the real support-DAG premises and never a relation assertion', async () => {
+  it('resolves one immutable rule instance and follows an attribute child to its parent evidence', async () => {
     const store = new InMemorySemanticPublicationStore()
     const factEvidence = randomUUID()
-    const relationEvidence = randomUUID()
+    const secondFactEvidence = randomUUID()
+    const parentStatementId = randomUUID()
+    const secondParentStatementId = randomUUID()
+    const publishedFacts = [
+      statement({
+        statementId: parentStatementId,
+        subjectEntityId: 'entity-a',
+        predicate: 'device.battery',
+        value: { attributes: [{ attributeId: 'device.battery_present', value: true }] },
+        sourceRefs: [evidenceRef(factEvidence)],
+      }),
+      statement({
+        statementId: secondParentStatementId,
+        subjectEntityId: 'entity-a',
+        predicate: 'device.battery',
+        value: { attributes: [{ attributeId: 'device.battery_present', value: true }] },
+        sourceRefs: [evidenceRef(secondFactEvidence)],
+      }),
+    ]
     await publish(
       store,
-      [
-        statement({ statementId: randomUUID(), sourceRefs: [evidenceRef(factEvidence)] }),
-        statement({
-          statementId: randomUUID(),
-          kind: 'relation',
-          relationId: 'device.located_in',
-          predicate: 'device.located_in',
-          value: { value: 'room.one' },
-          sourceRefs: [evidenceRef(relationEvidence)],
-        }),
-      ],
-      [ruleVersion({ ruleId: 'rule.battery-ready' })],
+      publishedFacts,
+      [],
     )
 
-    const source = new SupportEvidenceDependencySource({ published: store })
+    const projectedFacts = projectPublishedAttributeFacts(publishedFacts.map((fact) => ({ ...fact, publicationId: randomUUID() })), {
+      schemaRef: DEFINITION,
+    }).facts
+    const parentFacts = projectedFacts.map((fact) => {
+      if (fact.sourceStatementId === undefined || fact.objectId === undefined || fact.schemaRef === undefined) {
+        throw new Error('fixture must preserve the published parent, object, and definition refs')
+      }
+      return {
+        kind: 'entity_attribute' as const,
+        assertionId: fact.assertionId,
+        logicalAssertionId: fact.logicalAssertionId,
+        sourceStatementId: fact.sourceStatementId,
+        subjectEntityId: fact.subject,
+        objectId: fact.objectId,
+        schemaRef: fact.schemaRef,
+        sourceRefs: fact.sourceRefs ?? [],
+      }
+    })
+    const support = immutableSupportInstance({
+      premiseGroups: [{
+        groupId: 'condition:device.battery_present',
+        facts: parentFacts,
+      }],
+    })
+    const payloadRef = { id: randomUUID(), version: '1.0.0', digest: DIGEST, kind: 'artifact' } as const
+    let receivedRequest: SupportRequest | undefined
+    const source = new SupportEvidenceDependencySource({
+      published: store,
+      supportReader: {
+        readCandidates: async (_scope, request) => {
+          receivedRequest = request
+          return { complete: true, candidates: [support] }
+        },
+      },
+    })
     const evidenceId = randomUUID()
+    const baseEvidence = evidenceRecord(evidenceId, RULE_REF)
+    const evidence: EvidenceRecord = {
+      ...baseEvidence,
+      envelope: { ...baseEvidence.envelope, payloadRef },
+    }
     const edges = await source.dependenciesOf(
       SCOPE,
-      evidenceRecord(evidenceId, { id: 'rule.battery-ready', version: '1', digest: DIGEST }),
+      evidence,
       CTX,
     )
 
-    expect(edges).toHaveLength(1)
-    const edge = edges[0]
-    expect(edge).toMatchObject({
-      fromEvidenceId: evidenceId,
-      toEvidenceId: factEvidence,
-      relation: 'derives_from',
-      origin: 'support',
+    expect(edges).toHaveLength(2)
+    expect(edges).toEqual(expect.arrayContaining([
+      expect.objectContaining({
+        fromEvidenceId: evidenceId,
+        toEvidenceId: factEvidence,
+        relation: 'derives_from',
+        origin: 'support',
+        premiseGroup: 'condition:device.battery_present',
+      }),
+      expect.objectContaining({
+        fromEvidenceId: evidenceId,
+        toEvidenceId: secondFactEvidence,
+        relation: 'derives_from',
+        origin: 'support',
+        premiseGroup: 'condition:device.battery_present',
+      }),
+    ]))
+    expect(receivedRequest).toEqual({
+      ruleRef: RULE_REF,
+      validAt: '2026-09-21T06:00:00Z',
+      asOfRecordedSeq: '1',
+      evidenceRef: evidence.evidenceRef,
+      payloadRef,
     })
-    expect(edge?.premiseGroup).toContain('device.battery_present')
-    // The relation assertion is a different graph and must never appear as an evidence dependency.
-    expect(edges.map((candidate) => candidate.toEvidenceId)).not.toContain(relationEvidence)
+    const detailed = await source.dependenciesWithResolutionOf(
+      SCOPE,
+      evidence,
+      CTX,
+    )
+    expect(detailed.supportResolution).toMatchObject({
+      state: 'resolved',
+      instanceKey: 'rule-instance:entity-a',
+      objectId: 'device.battery',
+      subjectEntityId: 'entity-a',
+    })
+    if (detailed.supportResolution.state !== 'resolved') throw new Error('expected unique immutable support')
+    expect(detailed.supportResolution.premiseGroups[0]?.facts.map((fact) => [fact.assertionId, fact.sourceStatementId]))
+      .toEqual(parentFacts.map((fact) => [fact.assertionId, fact.sourceStatementId]))
+  })
+
+  it('does not use the current published heads as a fallback when no immutable reader exists', async () => {
+    const store = new InMemorySemanticPublicationStore()
+    const factEvidence = randomUUID()
+    await publish(
+      store,
+      [statement({ statementId: randomUUID(), sourceRefs: [evidenceRef(factEvidence)] })],
+      [ruleVersion({ ruleId: RULE_REF.id, objectId: 'device.battery' })],
+    )
+    const record = evidenceRecord(randomUUID(), RULE_REF)
+    const parentEvidence = randomUUID()
+    const withLineage: EvidenceRecord = {
+      ...record,
+      envelope: {
+        ...record.envelope,
+        dependencies: [{
+          evidenceRef: { id: parentEvidence, version: '1.0.0', digest: DIGEST, kind: 'evidence' },
+          relation: 'same_source',
+          direction: 'outbound',
+        }],
+      },
+    }
+    const source = new SupportEvidenceDependencySource({ published: store })
+
+    const result = await source.dependenciesWithResolutionOf(SCOPE, withLineage, CTX)
+    expect(result.edges).toHaveLength(1)
+    expect(result.edges[0]).toMatchObject({ toEvidenceId: parentEvidence, origin: 'lineage' })
+    expect(result.supportResolution).toMatchObject({ state: 'unavailable' })
+  })
+
+  it('fails closed when two entity instances match the same root rule and bitemporal point', async () => {
+    const source = new SupportEvidenceDependencySource({
+      published: new InMemorySemanticPublicationStore(),
+      supportReader: supportReader([
+        immutableSupportInstance(),
+        immutableSupportInstance({
+          instanceKey: 'rule-instance:entity-b',
+          subjectEntityId: 'entity-b',
+          premiseGroups: [{
+            groupId: 'condition:device.battery_present',
+            facts: [{
+              kind: 'entity_attribute',
+              assertionId: 'statement-b#device.battery_present',
+              logicalAssertionId: 'statement-b#device.battery_present',
+              sourceStatementId: 'statement-b',
+              subjectEntityId: 'entity-b',
+              objectId: 'device.battery',
+              schemaRef: DEFINITION,
+              sourceRefs: [evidenceRef(randomUUID())],
+            }],
+          }],
+        }),
+      ]),
+    })
+
+    const result = await source.dependenciesWithResolutionOf(SCOPE, evidenceRecord(randomUUID(), RULE_REF), CTX)
+    expect(result.edges).toEqual([])
+    expect(result.supportResolution).toMatchObject({ state: 'ambiguous' })
+  })
+
+  it('rejects incomplete, cross-scope, and non-applicable support results', async () => {
+    const evidence = evidenceRecord(randomUUID(), RULE_REF)
+    const incompleteReader = new SupportEvidenceDependencySource({
+      published: new InMemorySemanticPublicationStore(),
+      supportReader: supportReader([immutableSupportInstance()], false),
+    })
+    const incomplete = await incompleteReader.dependenciesWithResolutionOf(SCOPE, evidence, CTX)
+    expect(incomplete.edges).toEqual([])
+    expect(incomplete.supportResolution).toMatchObject({ state: 'incomplete' })
+
+    const wrongScopeReader = new SupportEvidenceDependencySource({
+      published: new InMemorySemanticPublicationStore(),
+      supportReader: supportReader([immutableSupportInstance({ scopeRef: { ...SCOPE, tenantId: randomUUID() } })]),
+    })
+    const wrongScope = await wrongScopeReader.dependenciesWithResolutionOf(SCOPE, evidence, CTX)
+    expect(wrongScope.edges).toEqual([])
+    expect(wrongScope.supportResolution).toMatchObject({ state: 'unavailable' })
+
+    const nonApplicableReader = new SupportEvidenceDependencySource({
+      published: new InMemorySemanticPublicationStore(),
+      supportReader: supportReader([immutableSupportInstance({
+        applicability: { state: 'not_applicable', positiveSupport: false },
+      })]),
+    })
+    const nonApplicable = await nonApplicableReader.dependenciesWithResolutionOf(SCOPE, evidence, CTX)
+    expect(nonApplicable.edges).toEqual([])
+    expect(nonApplicable.supportResolution).toMatchObject({ state: 'not_applicable' })
+
+    for (const state of ['unknown', 'conflict'] as const) {
+      const unresolvedReader = new SupportEvidenceDependencySource({
+        published: new InMemorySemanticPublicationStore(),
+        supportReader: supportReader([immutableSupportInstance({
+          applicability: { state, positiveSupport: false },
+        })]),
+      })
+      const unresolved = await unresolvedReader.dependenciesWithResolutionOf(SCOPE, evidence, CTX)
+      expect(unresolved.edges).toEqual([])
+      expect(unresolved.supportResolution).toMatchObject({ state })
+    }
+
+    const inconsistentReader = new SupportEvidenceDependencySource({
+      published: new InMemorySemanticPublicationStore(),
+      supportReader: supportReader([immutableSupportInstance({
+        applicability: { state: 'applicable', positiveSupport: false },
+      })]),
+    })
+    const inconsistent = await inconsistentReader.dependenciesWithResolutionOf(SCOPE, evidence, CTX)
+    expect(inconsistent.edges).toEqual([])
+    expect(inconsistent.supportResolution).toMatchObject({ state: 'incomplete' })
+
+    const wrongTimeReader = new SupportEvidenceDependencySource({
+      published: new InMemorySemanticPublicationStore(),
+      supportReader: supportReader([immutableSupportInstance({ validAt: '2026-09-21T07:00:00Z' })]),
+    })
+    const wrongTime = await wrongTimeReader.dependenciesWithResolutionOf(SCOPE, evidence, CTX)
+    expect(wrongTime.edges).toEqual([])
+    expect(wrongTime.supportResolution).toMatchObject({ state: 'unavailable' })
+
+    let reads = 0
+    const unpinnedReader = new SupportEvidenceDependencySource({
+      published: new InMemorySemanticPublicationStore(),
+      supportReader: {
+        readCandidates: async () => {
+          reads += 1
+          return { complete: true, candidates: [immutableSupportInstance()] }
+        },
+      },
+    })
+    const unpinned = await unpinnedReader.dependenciesWithResolutionOf(
+      SCOPE,
+      evidenceRecord(randomUUID(), RULE_REF, false),
+      CTX,
+    )
+    expect(unpinned.edges).toEqual([])
+    expect(unpinned.supportResolution).toMatchObject({ state: 'unavailable' })
+    expect(reads).toBe(0)
+  })
+
+  it('does not emit evidence edges from relation premise records', async () => {
+    const relationEvidence = randomUUID()
+    const support = immutableSupportInstance({
+      premiseGroups: [{
+        groupId: 'relation:device.located_in',
+        facts: [{
+          kind: 'relation',
+          assertionId: 'relation-statement',
+          logicalAssertionId: 'relation-statement',
+          sourceStatementId: 'relation-statement',
+          subjectEntityId: 'entity-a',
+          objectId: 'device.battery',
+          schemaRef: DEFINITION,
+          sourceRefs: [evidenceRef(relationEvidence)],
+        }],
+      }],
+    })
+    const source = new SupportEvidenceDependencySource({
+      published: new InMemorySemanticPublicationStore(),
+      supportReader: supportReader([support]),
+    })
+
+    const result = await source.dependenciesWithResolutionOf(SCOPE, evidenceRecord(randomUUID(), RULE_REF), CTX)
+    expect(result.edges).toEqual([])
+    expect(result.supportResolution).toMatchObject({ state: 'incomplete' })
+    expect(result.edges.map((edge) => edge.toEvidenceId)).not.toContain(relationEvidence)
   })
 
   it('returns only recorded lineage when the evidence has no rule', async () => {

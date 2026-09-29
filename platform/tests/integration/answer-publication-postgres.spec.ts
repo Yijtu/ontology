@@ -501,6 +501,9 @@ describe('answer publication against a real containerised PostgreSQL', () => {
     const view = await controller.startRun(startInput(RUN_PUBLISH), ctx)
     expect(view.state).toBe('published')
     expect(view.answer?.publicationKind).toBe('verified')
+    expect(view.answer?.body?.schemaVersion).toBe('answer-draft@1')
+    expect(view.answer?.body?.blocks).toHaveLength(1)
+    expect(view.answer?.body?.blocks[0]).toMatchObject({ kind: 'summary', question: 'compare tomorrow backup strategies' })
     expect(await controller.getAnswer(RUN_PUBLISH, ctx)).toBeDefined()
 
     const row = await answerRow(RUN_PUBLISH)
@@ -511,6 +514,7 @@ describe('answer publication against a real containerised PostgreSQL', () => {
     expect(row?.['verification_id']).toBe(view.answer?.verificationId)
     expect(row?.['publication_kind']).toBe('verified')
     expect(row?.['as_of']).toBeNull()
+    expect(row?.['body']).toEqual(view.answer?.body)
 
     const events = await runEventTypes(RUN_PUBLISH)
     expect(events[events.length - 1]).toBe('answer.published')

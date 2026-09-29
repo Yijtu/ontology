@@ -736,7 +736,7 @@ export async function startHarness(options: HarnessOptions = {}): Promise<Harnes
   const app = createApiServer({
     authenticate:
       options.fixedPrincipal === true ? loopbackTestAuthenticator : headerAuthenticator,
-    runs: { service: runService, progress },
+    runs: { service: runService, progress, submissionMode: 'records-only' },
     workbench: { profiles: resolver, sources: registry, components },
     answers: { reader: new HarnessAnswerReader(runService, answers) },
     ...(options.provenance === undefined

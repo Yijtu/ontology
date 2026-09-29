@@ -48,6 +48,7 @@ function clone<T>(value: T): T {
 
 interface ScopeState {
   publicationHead: number
+  readRevision: bigint
   readonly publications: Map<Uuid, SemanticPublicationVersion>
   readonly idempotency: Map<string, { readonly digest: string; readonly publicationId: Uuid }>
   readonly reviewHeads: Map<Uuid, number>
@@ -63,6 +64,7 @@ interface ScopeState {
 function emptyState(): ScopeState {
   return {
     publicationHead: 0,
+    readRevision: 0n,
     publications: new Map(),
     idempotency: new Map(),
     reviewHeads: new Map(),
@@ -209,6 +211,11 @@ export class InMemorySemanticPublicationStore implements SemanticPublicationStor
     return String(this.#state(scopeRef).publicationHead)
   }
 
+  async latestReadRevision(scopeRef: ScopeRef, ctx: ToolContext): Promise<RevisionString> {
+    resolveScope(scopeRef, ctx)
+    return this.#state(scopeRef).readRevision.toString()
+  }
+
   async publish(
     scopeRef: ScopeRef,
     input: PublishSemanticPublicationInput,
@@ -268,6 +275,7 @@ export class InMemorySemanticPublicationStore implements SemanticPublicationStor
       publicationId: publication.publicationId,
     })
     state.publicationHead = revisionNumber
+    state.readRevision += 1n
     state.outbox.push(clone(input.outbox))
     await this.#openFences(scopeRef, input.materializationFences ?? [], ctx)
     return { publication: clone(publication), created: true }
@@ -323,6 +331,9 @@ export class InMemorySemanticPublicationStore implements SemanticPublicationStor
       records = records.filter((record) => record.publicationId === filter.publicationId)
     }
     if (filter.status !== undefined) records = records.filter((record) => record.status === filter.status)
+    if (filter.afterStatementId !== undefined) {
+      records = records.filter((record) => record.statementId > (filter.afterStatementId ?? ''))
+    }
     records.sort((left, right) => (left.statementId < right.statementId ? -1 : 1))
     return records.slice(0, filter.limit ?? records.length).map(clone)
   }
@@ -341,6 +352,18 @@ export class InMemorySemanticPublicationStore implements SemanticPublicationStor
     if (filter.publicationId !== undefined) {
       records = records.filter((record) => record.publicationId === filter.publicationId)
     }
+    const afterRule = filter.afterRule
+    if (afterRule !== undefined) {
+      const afterVersion = BigInt(afterRule.version)
+      records = records.filter((record) => record.ruleId > afterRule.ruleId ||
+        (record.ruleId === afterRule.ruleId && BigInt(record.version) > afterVersion))
+    }
+    records.sort((left, right) => {
+      if (left.ruleId !== right.ruleId) return left.ruleId < right.ruleId ? -1 : 1
+      const leftVersion = BigInt(left.version)
+      const rightVersion = BigInt(right.version)
+      return leftVersion < rightVersion ? -1 : leftVersion > rightVersion ? 1 : 0
+    })
     return records.slice(0, filter.limit ?? records.length).map(clone)
   }
 
@@ -390,6 +413,7 @@ export class InMemorySemanticPublicationStore implements SemanticPublicationStor
       ...(input.validFrom === undefined ? {} : { validFrom: input.validFrom }),
       ...(input.validTo === undefined ? {} : { validTo: input.validTo }),
     })
+    state.readRevision += 1n
     state.outbox.push(clone(input.outbox))
     await this.#openFences(scopeRef, input.materializationFences ?? [], ctx)
     return clone(record)

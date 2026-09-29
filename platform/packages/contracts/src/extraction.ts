@@ -68,6 +68,7 @@ export type CandidateIssueCode =
   | 'SPAN_NOT_RESOLVED'
   | 'TRUNCATED_CHUNK'
   | 'RULE_UNSUPPORTED_EXPRESSION'
+  | 'INVALID_RULE_CONCLUSION'
   | 'RULE_UNRESOLVED_REFERENCE'
   | 'CONFLICTING_RULE'
 
@@ -175,6 +176,8 @@ export interface RuleCandidate extends CandidateCommon {
   readonly reviewRequirement: RuleReviewRequirement
   readonly expression: RuleExpressionNode
   readonly exceptions: readonly RuleExceptionNode[]
+  /** Raw model proposal; validated against the pinned definition before a rule can publish it. */
+  readonly conclusion?: unknown
   /** Contradictory rules on the same scope, surfaced explicitly and never auto-resolved. */
   readonly conflicts: readonly RuleConflict[]
 }

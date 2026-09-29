@@ -13,9 +13,13 @@ export { PostgresFeedbackStore } from './feedback-store'
 export { PostgresBudgetLedgerStore } from './budget-ledger-store'
 export { PostgresEvidenceStore } from './evidence-store'
 export { PostgresAnswerStore } from './answer-store'
+export { PostgresDecisionStateReferenceStore } from './decision-state-store'
+export { PostgresWorkflowStore } from './workflow-store'
+export { PostgresWorkflowDispatchStore } from './workflow-dispatch-store'
 export { PostgresJobStore } from './job-store'
 export { PostgresCandidateStore } from './candidate-store'
 export { PostgresIdentityDecisionStore } from './identity-decision-store'
+export type { PostgresIdentityDecisionStoreOptions } from './identity-decision-store'
 export { PostgresSemanticPublicationStore } from './semantic-publication-store'
 export type {
   PostgresSemanticPublicationStoreOptions,

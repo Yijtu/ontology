@@ -1,7 +1,7 @@
 import { randomUUID } from 'node:crypto'
 import { answerDraftContentHash, inputManifestDigest } from '@ontology/application'
 import { DraftVerificationService } from '@ontology/application'
-import type { VerificationArtifactStore } from '@ontology/application'
+import type { DecisionStateRefProvider, VerificationArtifactStore } from '@ontology/application'
 import { sha256DigestOf } from '@ontology/core'
 import type {
   AnswerDraft,
@@ -13,6 +13,7 @@ import type {
   EvidenceStorePort,
   ImmutableArtifactWriter,
   ResourceRef,
+  SemanticReviewDisposition,
   ScopeRef,
   ToolContext,
   VerificationPolicy,
@@ -206,7 +207,28 @@ export interface VerificationQualityRun {
     readonly expectedVerdict: 'pass' | 'fail'
     readonly observedVerdict: 'pass' | 'fail'
     readonly failedChecks: readonly string[]
+    readonly semanticReview: SemanticReviewDisposition | undefined
   }[]
+  /** Read-back audit of the state the unsupported decision actually received. */
+  readonly semanticProbe: {
+    readonly decisionCalls: number
+    readonly archivedState?: {
+      readonly question?: unknown
+      readonly claims: readonly {
+        readonly claimId?: unknown
+        readonly subject?: unknown
+        readonly predicate?: unknown
+        readonly value?: unknown
+        readonly evidenceRefIds: readonly string[]
+      }[]
+      readonly evidence: readonly {
+        readonly refId?: unknown
+        readonly availability?: unknown
+        readonly payload?: unknown
+      }[]
+      readonly evidenceCoverageComplete?: unknown
+    }
+  }
 }
 
 export async function runVerificationQuality(
@@ -216,6 +238,21 @@ export async function runVerificationQuality(
   const now = dependencies.now()
   const runId = ctx.runId
   const policy = dependencies.policy ?? DEFAULT_VERIFICATION_POLICY
+  const semanticQuestion = 'Does the published observation support this claim about site-load-a?'
+
+  const decisionStateRefProvider: DecisionStateRefProvider = {
+    archive: async (input, archiveCtx) => {
+      const stored = await writer.putBytes(
+        {
+          scopeRef,
+          content: new TextEncoder().encode(JSON.stringify(input.state)),
+          mediaType: 'application/json',
+        },
+        archiveCtx,
+      )
+      return stored.blobRef
+    },
+  }
 
   const register = async (validTo?: string): Promise<RegisteredResult> => {
     const bytes = new TextEncoder().encode(JSON.stringify(PAYLOAD))
@@ -236,12 +273,15 @@ export async function runVerificationQuality(
     return { ref: record.evidenceRef, resultDigest }
   }
 
+  const supportedDecision = new ControlledSemanticDecision('supported')
+  const unsupportedDecision = new ControlledSemanticDecision('unsupported')
   const service = new DraftVerificationService({
     evidence,
     artifacts,
     policy,
     modelRef: { modelId: 'controlled-verification-double', version: '1.0.0' },
-    decision: new ControlledSemanticDecision('supported'),
+    decision: supportedDecision,
+    decisionStateRefProvider,
     now: () => now,
   })
   const unsupportedService = new DraftVerificationService({
@@ -249,7 +289,8 @@ export async function runVerificationQuality(
     artifacts,
     policy,
     modelRef: { modelId: 'controlled-verification-double', version: '1.0.0' },
-    decision: new ControlledSemanticDecision('unsupported'),
+    decision: unsupportedDecision,
+    decisionStateRefProvider,
     now: () => now,
   })
 
@@ -259,8 +300,9 @@ export async function runVerificationQuality(
     expectedVerdict: 'pass' | 'fail',
     observedVerdict: 'pass' | 'fail',
     failedChecks: readonly string[],
+    semanticReview: SemanticReviewDisposition | undefined,
   ): void => {
-    results.push({ caseId, expectedVerdict, observedVerdict, failedChecks })
+    results.push({ caseId, expectedVerdict, observedVerdict, failedChecks, semanticReview })
   }
 
   const runCase = async (
@@ -270,8 +312,11 @@ export async function runVerificationQuality(
     draft: AnswerDraft,
     manifest: WorkflowInputManifest,
   ): Promise<void> => {
-    const verdict = await verifier.verify({ runId, draft, inputManifest: manifest }, ctx)
-    record(caseId, expectedVerdict, verdict.verdict, verdict.failedChecks)
+    const verdict = await verifier.verify(
+      { runId, question: semanticQuestion, draft, inputManifest: manifest },
+      ctx,
+    )
+    record(caseId, expectedVerdict, verdict.verdict, verdict.failedChecks, verdict.semanticReview)
   }
 
   const correct = await register()
@@ -343,13 +388,70 @@ export async function runVerificationQuality(
 
   const semantic = await register()
   const semanticManifest = manifestFor(runId, [semantic.ref], now)
+  const semanticClaim = claimFor(semantic)
+  const semanticDraft = draftFor({ runId, manifestDigest: semanticManifest.digest, claims: [semanticClaim] })
   await runCase(
     'semantic-unsupported-fails',
     'fail',
     unsupportedService,
-    draftFor({ runId, manifestDigest: semanticManifest.digest, claims: [claimFor(semantic)] }),
+    semanticDraft,
     semanticManifest,
   )
+
+  const unsupportedRequest = unsupportedDecision.calls[0]
+  const archivedSemanticState = unsupportedRequest === undefined
+    ? undefined
+    : JSON.parse(
+        new TextDecoder().decode(
+          await artifacts.readAuthorized({ scopeRef, blobRef: unsupportedRequest.stateRef }, ctx),
+        ),
+      ) as Record<string, unknown>
+  const stateClaims = Array.isArray(archivedSemanticState?.['claims'])
+    ? archivedSemanticState['claims'] as Record<string, unknown>[]
+    : []
+  const stateEvidence = Array.isArray(archivedSemanticState?.['evidence'])
+    ? archivedSemanticState['evidence'] as Record<string, unknown>[]
+    : []
+  const semanticProbe: VerificationQualityRun['semanticProbe'] = {
+    decisionCalls: unsupportedDecision.calls.length,
+    ...(archivedSemanticState === undefined ? {} : {
+      archivedState: {
+        question: archivedSemanticState['question'],
+        claims: stateClaims.map((claim) => {
+          const references = Array.isArray(claim['references'])
+            ? claim['references'] as Record<string, unknown>[]
+            : []
+          return {
+            claimId: claim['claimId'],
+            subject: claim['subject'],
+            predicate: claim['predicate'],
+            value: claim['value'],
+            evidenceRefIds: references.flatMap((reference) => {
+              const evidenceRef = reference['evidenceRef']
+              if (typeof evidenceRef !== 'object' || evidenceRef === null || !('id' in evidenceRef)) return []
+              const id = (evidenceRef as { readonly id?: unknown }).id
+              return typeof id === 'string' ? [id] : []
+            }),
+          }
+        }),
+        evidence: stateEvidence.map((entry) => {
+          const ref = entry['ref']
+          return {
+            refId: typeof ref === 'object' && ref !== null && 'id' in ref
+              ? (ref as { readonly id?: unknown }).id
+              : undefined,
+            availability: entry['availability'],
+            payload: entry['payload'],
+          }
+        }),
+        evidenceCoverageComplete:
+          typeof archivedSemanticState['evidenceCoverage'] === 'object' &&
+          archivedSemanticState['evidenceCoverage'] !== null
+            ? (archivedSemanticState['evidenceCoverage'] as Record<string, unknown>)['complete']
+            : undefined,
+      },
+    }),
+  }
 
   const shouldFail = results.filter((entry) => entry.expectedVerdict === 'fail')
   const shouldPass = results.filter((entry) => entry.expectedVerdict === 'pass')
@@ -359,5 +461,6 @@ export async function runVerificationQuality(
     falsePass: rate(falsePasses, shouldFail.length),
     falseReject: rate(falseRejects, shouldPass.length),
     cases: results,
+    semanticProbe,
   }
 }

@@ -1,11 +1,12 @@
 import type { LocalImmutableBlobStore } from '@ontology/adapter-blob-local'
 import {
   PostgresEvidenceStore,
+  PostgresMaterializationStore,
   PostgresSemanticPublicationStore,
 } from '@ontology/adapter-control-postgres'
 import type { ControlPostgresDatabase } from '@ontology/adapter-control-postgres'
 import { ProvenanceReadService } from '@ontology/provenance'
-import { HistoryReadService, SupportEvidenceDependencySource } from '@ontology/semantic-engine'
+import { HistoryReadService, MaterializedRuleSupportReader, SupportEvidenceDependencySource } from '@ontology/semantic-engine'
 
 /**
  * Composition root for the on-demand provenance/history read side (SPEC C6, US-017/US-022).
@@ -34,7 +35,14 @@ export function createPostgresProvenanceRead(
 ): ProvenanceReadComposition {
   const evidence = new PostgresEvidenceStore(options.database)
   const publication = new PostgresSemanticPublicationStore(options.database)
-  const dependencies = new SupportEvidenceDependencySource({ published: publication })
+  const materialization = new PostgresMaterializationStore(options.database)
+  const supportReader = new MaterializedRuleSupportReader({
+    materialization,
+    evidence,
+    payloadMetadataReader: options.blobStore,
+    payloadReader: options.blobStore,
+  })
+  const dependencies = new SupportEvidenceDependencySource({ published: publication, supportReader })
   const provenance = new ProvenanceReadService({
     evidence,
     blobs: options.blobStore,

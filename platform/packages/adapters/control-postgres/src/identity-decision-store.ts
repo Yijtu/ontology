@@ -9,6 +9,7 @@ import type {
   IdentityEntityRecord,
   IdentityEntityState,
   IdentityLinkConstraintRecord,
+  IdentityPublishedBindingSnapshot,
   IdentityScoreEvidence,
   IdentityStrongIdentity,
   RevisionString,
@@ -18,6 +19,7 @@ import type {
 } from '@ontology/contracts'
 import type { QueryResultRow } from 'pg'
 import { ControlPostgresDatabase } from './database'
+import { MATERIALIZED_PROJECTION_REF } from './materialization-store'
 
 interface ScopedQuery {
   query<Row extends QueryResultRow>(
@@ -30,6 +32,8 @@ interface EntityRow extends QueryResultRow {
   entity_id: string
   object_id: string
   identity_scope_id: string
+  scope_dimensions: Record<string, string>
+  created_from_candidate_id: string | null
   display_name: string | null
   state: IdentityEntityState
   revision: string
@@ -84,6 +88,8 @@ function toEntity(row: EntityRow): IdentityEntityRecord {
     entityId: row.entity_id,
     objectId: row.object_id,
     identityScopeId: row.identity_scope_id,
+    scopeDimensions: row.scope_dimensions,
+    ...(row.created_from_candidate_id === null ? {} : { createdFromCandidateId: row.created_from_candidate_id }),
     ...(row.display_name === null ? {} : { displayName: row.display_name }),
     state: row.state,
     revision: row.revision,
@@ -144,12 +150,28 @@ function toConstraint(row: ConstraintRow): IdentityLinkConstraintRecord {
   }
 }
 
-const ENTITY_COLUMNS = 'entity_id, object_id, identity_scope_id, display_name, state, revision, recorded_at, updated_at'
+const ENTITY_COLUMNS = `entity_id, object_id, identity_scope_id, scope_dimensions, created_from_candidate_id,
+  display_name, state, revision, recorded_at, updated_at`
 const DECISION_COLUMNS = `decision_id, candidate_id, object_id, identity_scope_id, kind, revision,
   target_entity_id, separated_candidate_ids, evidence_refs, justification, strong_identity,
   score_evidence, valid_from, valid_to, recorded_at, actor, supersedes_revision, invalidation_outbox_id`
 const ASSERTION_COLUMNS = `assertion_id, candidate_id, entity_id, object_id, identity_scope_id, decision_id,
   valid_from, valid_to, recorded_at`
+const MAX_BINDING_CANDIDATES = 1_000
+
+async function readScopeRevision(query: ScopedQuery): Promise<RevisionString> {
+  const result = await query.query<{ revision: string }>(
+    `SELECT revision::text AS revision FROM agent_platform.identity_scope_read_heads
+      WHERE tenant_id = current_setting('app.tenant_id')::uuid
+        AND space_id = current_setting('app.space_id')::uuid`,
+  )
+  return result.rows[0]?.revision ?? '0'
+}
+
+export interface PostgresIdentityDecisionStoreOptions {
+  /** Test-only fault seam runs after split fence/outbox/decision/read-head writes, before commit. */
+  readonly faultInjection?: { readonly beforeCommit?: () => void }
+}
 
 /**
  * PostgreSQL-backed identity decision store (migration 032). It connects as the non-owner
@@ -163,9 +185,11 @@ const ASSERTION_COLUMNS = `assertion_id, candidate_id, entity_id, object_id, ide
  */
 export class PostgresIdentityDecisionStore implements IdentityDecisionStore {
   readonly #database: ControlPostgresDatabase
+  readonly #faultInjection: PostgresIdentityDecisionStoreOptions['faultInjection']
 
-  constructor(database: ControlPostgresDatabase) {
+  constructor(database: ControlPostgresDatabase, options: PostgresIdentityDecisionStoreOptions = {}) {
     this.#database = database
+    this.#faultInjection = options.faultInjection
   }
 
   async getEntity(
@@ -230,6 +254,66 @@ export class PostgresIdentityDecisionStore implements IdentityDecisionStore {
     })
   }
 
+  async latestReadRevision(scopeRef: ScopeRef, ctx: ToolContext): Promise<RevisionString> {
+    return this.#withScope(scopeRef, ctx, readScopeRevision)
+  }
+
+  async readPublishedBindings(
+    scopeRef: ScopeRef,
+    candidateIds: readonly Uuid[],
+    ctx: ToolContext,
+  ): Promise<IdentityPublishedBindingSnapshot> {
+    return this.#withScope(scopeRef, ctx, async (query) => {
+      const before = await readScopeRevision(query)
+      const boundedIds = [...new Set(candidateIds)].slice(0, MAX_BINDING_CANDIDATES)
+      const rowsByCandidate = new Map(
+        boundedIds.map((candidateId) => [
+          candidateId,
+          { candidateId, openAssertions: [] as IdentityAssertionRecord[], cannotLinkEntityIds: new Set<string>() },
+        ]),
+      )
+
+      if (boundedIds.length > 0) {
+        const assertions = await query.query<AssertionRow>(
+          `SELECT ${ASSERTION_COLUMNS} FROM agent_platform.identity_assertions
+            WHERE tenant_id = current_setting('app.tenant_id')::uuid
+              AND space_id = current_setting('app.space_id')::uuid
+              AND candidate_id = ANY($1::uuid[])
+              AND valid_to IS NULL
+            ORDER BY candidate_id, recorded_at, assertion_id`,
+          [boundedIds],
+        )
+        for (const row of assertions.rows) rowsByCandidate.get(row.candidate_id)?.openAssertions.push(toAssertion(row))
+
+        const constraints = await query.query<{ candidate_id: string; entity_id: string }>(
+          `SELECT candidate_id, entity_id FROM agent_platform.identity_link_constraints
+            WHERE tenant_id = current_setting('app.tenant_id')::uuid
+              AND space_id = current_setting('app.space_id')::uuid
+              AND candidate_id = ANY($1::uuid[])
+            ORDER BY candidate_id, entity_id`,
+          [boundedIds],
+        )
+        for (const row of constraints.rows) rowsByCandidate.get(row.candidate_id)?.cannotLinkEntityIds.add(row.entity_id)
+      }
+
+      const after = await readScopeRevision(query)
+      if (before !== after) return { readRevision: after, bindings: [], complete: false }
+      const bindings = boundedIds.map((candidateId) => {
+        const row = rowsByCandidate.get(candidateId)
+        return {
+          candidateId,
+          openAssertions: row?.openAssertions ?? [],
+          cannotLinkEntityIds: [...(row?.cannotLinkEntityIds ?? new Set<string>())].sort(),
+        }
+      })
+      return {
+        readRevision: before,
+        bindings,
+        complete: new Set(candidateIds).size <= MAX_BINDING_CANDIDATES,
+      }
+    })
+  }
+
   async appendDecision(
     scopeRef: ScopeRef,
     input: AppendIdentityDecisionInput,
@@ -264,36 +348,110 @@ export class PostgresIdentityDecisionStore implements IdentityDecisionStore {
           `candidate ${draft.candidateId} is at revision ${head.revision}, not ${input.expectedRevision}`,
         )
       }
-      const revisionNumber = Number(head.revision) + 1
+      const revisionNumber = BigInt(head.revision) + 1n
       const revision = String(revisionNumber)
 
-      if (input.entity !== undefined) {
-        await query.query(
-          `INSERT INTO agent_platform.identity_entities
-             (tenant_id, space_id, entity_id, object_id, identity_scope_id, display_name, state,
-              revision, recorded_at, updated_at)
-           VALUES (
-             current_setting('app.tenant_id')::uuid,
-             current_setting('app.space_id')::uuid,
-             $1, $2, $3, $4, $5, 1, $6::timestamptz, $7::timestamptz)
-           ON CONFLICT (tenant_id, space_id, entity_id) DO UPDATE
-             SET display_name = EXCLUDED.display_name,
-                 state = EXCLUDED.state,
-                 revision = agent_platform.identity_entities.revision + 1,
-                 updated_at = EXCLUDED.updated_at`,
-          [
-            input.entity.entityId,
-            input.entity.objectId,
-            input.entity.identityScopeId,
-            input.entity.displayName ?? null,
-            input.entity.state,
-            input.entity.recordedAt,
-            input.entity.updatedAt,
-          ],
+      const changesCluster =
+        input.openAssertion !== undefined ||
+        (input.closeAssertions?.length ?? 0) > 0 ||
+        input.linkConstraint !== undefined
+      if (changesCluster && (input.expectedTargetEntityRevision === undefined || draft.targetEntityId === undefined)) {
+        throw new IdentityDecisionStoreError(
+          'DECISION_STORE_FAILED',
+          'a match, split or cannot-link write requires the target entity revision it read',
         )
+      }
+      if (input.expectedTargetEntityRevision !== undefined) {
+        if (draft.targetEntityId === undefined) {
+          throw new IdentityDecisionStoreError('DECISION_STORE_FAILED', 'target entity revision was supplied without a target entity')
+        }
+        const target = await query.query<{ revision: string }>(
+          `SELECT revision::text AS revision FROM agent_platform.identity_entities
+            WHERE tenant_id = current_setting('app.tenant_id')::uuid
+              AND space_id = current_setting('app.space_id')::uuid
+              AND entity_id = $1
+            FOR UPDATE`,
+          [draft.targetEntityId],
+        )
+        const targetHead = target.rows[0]?.revision
+        if (targetHead === undefined) {
+          throw new IdentityDecisionStoreError('ENTITY_NOT_FOUND', `target entity ${draft.targetEntityId} is not visible`)
+        }
+        if (targetHead !== input.expectedTargetEntityRevision) {
+          throw new IdentityDecisionStoreError(
+            'REVISION_CONFLICT',
+            `target entity ${draft.targetEntityId} is at revision ${targetHead}, not ${input.expectedTargetEntityRevision}`,
+          )
+        }
+      }
+
+      if (input.entity !== undefined) {
+        if (input.expectedTargetEntityRevision !== undefined) {
+          if (input.entity.entityId !== draft.targetEntityId) {
+            throw new IdentityDecisionStoreError('DECISION_STORE_FAILED', 'entity update does not match the revision-checked target')
+          }
+          const updated = await query.query(
+            `UPDATE agent_platform.identity_entities
+                SET display_name = $1,
+                    state = $2,
+                    revision = revision + 1,
+                    updated_at = $3::timestamptz
+              WHERE tenant_id = current_setting('app.tenant_id')::uuid
+                AND space_id = current_setting('app.space_id')::uuid
+                AND entity_id = $4
+                AND revision = $5::bigint`,
+            [
+              input.entity.displayName ?? null,
+              input.entity.state,
+              input.entity.updatedAt,
+              input.entity.entityId,
+              input.expectedTargetEntityRevision,
+            ],
+          )
+          if (updated.rowCount !== 1) {
+            throw new IdentityDecisionStoreError('REVISION_CONFLICT', `target entity ${input.entity.entityId} changed before update`)
+          }
+        } else {
+          await query.query(
+            `INSERT INTO agent_platform.identity_entities
+               (tenant_id, space_id, entity_id, object_id, identity_scope_id, scope_dimensions,
+                created_from_candidate_id, display_name, state, revision, recorded_at, updated_at)
+             VALUES (
+               current_setting('app.tenant_id')::uuid,
+               current_setting('app.space_id')::uuid,
+               $1, $2, $3, $4::jsonb, $5, $6, $7, 1, $8::timestamptz, $9::timestamptz)`,
+            [
+              input.entity.entityId,
+              input.entity.objectId,
+              input.entity.identityScopeId,
+              JSON.stringify(input.entity.scopeDimensions),
+              input.entity.createdFromCandidateId ?? null,
+              input.entity.displayName ?? null,
+              input.entity.state,
+              input.entity.recordedAt,
+              input.entity.updatedAt,
+            ],
+          )
+        }
+      } else if (input.expectedTargetEntityRevision !== undefined) {
+        const updated = await query.query(
+          `UPDATE agent_platform.identity_entities
+              SET revision = revision + 1, updated_at = $1::timestamptz
+            WHERE tenant_id = current_setting('app.tenant_id')::uuid
+              AND space_id = current_setting('app.space_id')::uuid
+              AND entity_id = $2
+              AND revision = $3::bigint`,
+          [draft.recordedAt, draft.targetEntityId, input.expectedTargetEntityRevision],
+        )
+        if (updated.rowCount !== 1) {
+          throw new IdentityDecisionStoreError('REVISION_CONFLICT', `target entity ${draft.targetEntityId} changed before update`)
+        }
       }
       if (input.openAssertion !== undefined) {
         const assertion = input.openAssertion
+        if (assertion.entityId !== draft.targetEntityId || assertion.candidateId !== draft.candidateId) {
+          throw new IdentityDecisionStoreError('DECISION_STORE_FAILED', 'opened assertion does not match the reviewed target and candidate')
+        }
         await query.query(
           `INSERT INTO agent_platform.identity_assertions
              (tenant_id, space_id, assertion_id, candidate_id, entity_id, object_id,
@@ -316,14 +474,18 @@ export class PostgresIdentityDecisionStore implements IdentityDecisionStore {
         )
       }
       for (const close of input.closeAssertions ?? []) {
+        if (draft.targetEntityId === undefined) {
+          throw new IdentityDecisionStoreError('DECISION_STORE_FAILED', 'closed assertions need a target entity')
+        }
         const updated = await query.query(
           `UPDATE agent_platform.identity_assertions
               SET valid_to = $1::timestamptz
             WHERE tenant_id = current_setting('app.tenant_id')::uuid
               AND space_id = current_setting('app.space_id')::uuid
               AND assertion_id = $2
+              AND entity_id = $3
               AND valid_to IS NULL`,
-          [close.validTo, close.assertionId],
+          [close.validTo, close.assertionId, draft.targetEntityId],
         )
         if (updated.rowCount === 0) {
           throw new IdentityDecisionStoreError(
@@ -334,6 +496,9 @@ export class PostgresIdentityDecisionStore implements IdentityDecisionStore {
       }
       if (input.linkConstraint !== undefined) {
         const constraint = input.linkConstraint
+        if (constraint.entityId !== draft.targetEntityId || constraint.candidateId !== draft.candidateId) {
+          throw new IdentityDecisionStoreError('DECISION_STORE_FAILED', 'cannot-link does not match the reviewed target and candidate')
+        }
         await query.query(
           `INSERT INTO agent_platform.identity_link_constraints
              (tenant_id, space_id, constraint_id, candidate_id, entity_id, kind, decision_id, recorded_at)
@@ -363,6 +528,46 @@ export class PostgresIdentityDecisionStore implements IdentityDecisionStore {
           )
         }
         invalidationOutboxId = event.eventId
+        // An identity split changes the current source binding immediately. Open the
+        // scope-wide fence in this same transaction so readers cannot serve a projection
+        // that still contains the old identity between the split commit and outbox delivery.
+        await query.query(
+          `INSERT INTO agent_platform.projection_state
+             (tenant_id, space_id, projection_ref, generation, watermark_kind, watermark_value, dirty, updated_at)
+           VALUES (
+             current_setting('app.tenant_id')::uuid,
+             current_setting('app.space_id')::uuid,
+             $1, 0, 'sequence', '0', false, $2::timestamptz)
+           ON CONFLICT (tenant_id, space_id, projection_ref) DO NOTHING`,
+          [MATERIALIZED_PROJECTION_REF, event.recordedAt],
+        )
+        const projection = await query.query<{ generation: string }>(
+          `SELECT generation::text AS generation FROM agent_platform.projection_state
+            WHERE tenant_id = current_setting('app.tenant_id')::uuid
+              AND space_id = current_setting('app.space_id')::uuid
+              AND projection_ref = $1
+            FOR UPDATE`,
+          [MATERIALIZED_PROJECTION_REF],
+        )
+        const generation = projection.rows[0]?.generation
+        if (generation === undefined) {
+          throw new IdentityDecisionStoreError('DECISION_STORE_FAILED', 'projection state was not visible while opening identity fence')
+        }
+        await query.query(
+          `INSERT INTO agent_platform.materialization_fences
+             (tenant_id, space_id, projection_ref, fence_id, generation, reason, proposition_keys, state, opened_at)
+           VALUES (
+             current_setting('app.tenant_id')::uuid,
+             current_setting('app.space_id')::uuid,
+             $1, $2, $3::bigint, $4, '[]'::jsonb, 'open', $5::timestamptz)`,
+          [
+            MATERIALIZED_PROJECTION_REF,
+            event.materializationFenceId,
+            generation,
+            `identity split ${event.decisionId}: ${event.reason}`,
+            event.recordedAt,
+          ],
+        )
         await query.query(
           `INSERT INTO agent_platform.job_outbox
              (tenant_id, space_id, outbox_id, job_id, topic, payload, idempotency_key, state,
@@ -412,7 +617,7 @@ export class PostgresIdentityDecisionStore implements IdentityDecisionStore {
           draft.validTo ?? null,
           draft.recordedAt,
           draft.actor,
-          revisionNumber === 1 ? null : head.revision,
+          revisionNumber === 1n ? null : head.revision,
           invalidationOutboxId ?? null,
         ],
       )
@@ -425,9 +630,16 @@ export class PostgresIdentityDecisionStore implements IdentityDecisionStore {
             SET revision = $1
           WHERE tenant_id = current_setting('app.tenant_id')::uuid
             AND space_id = current_setting('app.space_id')::uuid
-            AND candidate_id = $2`,
-        [revisionNumber, draft.candidateId],
+          AND candidate_id = $2`,
+        [revision, draft.candidateId],
       )
+      await query.query(
+        `INSERT INTO agent_platform.identity_scope_read_heads (tenant_id, space_id, revision)
+         VALUES (current_setting('app.tenant_id')::uuid, current_setting('app.space_id')::uuid, 1)
+         ON CONFLICT (tenant_id, space_id) DO UPDATE
+           SET revision = agent_platform.identity_scope_read_heads.revision + 1`,
+      )
+      this.#faultInjection?.beforeCommit?.()
       return toDecision(row)
     })
   }
@@ -517,6 +729,37 @@ export class PostgresIdentityDecisionStore implements IdentityDecisionStore {
         [candidateId],
       )
       return result.rows.map(toConstraint)
+    })
+  }
+
+  async hasReviewedIdentity(
+    scopeRef: ScopeRef,
+    entityId: string,
+    identity: IdentityStrongIdentity,
+    ctx: ToolContext,
+  ): Promise<boolean> {
+    return this.#withScope(scopeRef, ctx, async (query) => {
+      const result = await query.query<{ matched: boolean }>(
+        `SELECT EXISTS (
+           SELECT 1
+             FROM agent_platform.identity_assertions AS a
+             JOIN agent_platform.identity_decisions AS d
+               ON d.tenant_id = a.tenant_id
+              AND d.space_id = a.space_id
+              AND d.decision_id = a.decision_id
+            WHERE a.tenant_id = current_setting('app.tenant_id')::uuid
+              AND a.space_id = current_setting('app.space_id')::uuid
+              AND a.entity_id = $1
+              AND a.valid_to IS NULL
+              AND d.kind = 'match'
+              AND d.target_entity_id = a.entity_id
+              AND d.strong_identity->>'kind' = $2
+              AND d.strong_identity->>'value' = $3
+              AND d.strong_identity->>'attributeId' IS NOT DISTINCT FROM $4
+         ) AS matched`,
+        [entityId, identity.kind, identity.value, identity.attributeId ?? null],
+      )
+      return result.rows[0]?.matched ?? false
     })
   }
 

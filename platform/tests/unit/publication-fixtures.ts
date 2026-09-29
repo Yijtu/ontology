@@ -28,6 +28,9 @@ export function publicationSchema(ref: VersionRef): IndustrySchema {
         attributes: [
           { attributeId: 'device_native_id', valueType: 'string', minCardinality: 1, maxCardinality: 1, identityKey: true },
           { attributeId: 'device_name', valueType: 'string', minCardinality: 0, maxCardinality: 1, identityKey: false },
+          { attributeId: 'site', valueType: 'string', minCardinality: 1, maxCardinality: 1, identityKey: false },
+          { attributeId: 'device.battery_present', valueType: 'boolean', minCardinality: 0, maxCardinality: 1, identityKey: false },
+          { attributeId: 'device.battery_absent', valueType: 'boolean', minCardinality: 0, maxCardinality: 1, identityKey: false },
         ],
       },
     ],
@@ -67,6 +70,7 @@ export function entityFor(
     attributes: [
       { attributeId: 'device_native_id', value: `DEV-${candidateId.slice(0, 4)}` },
       { attributeId: 'device_name', value: 'Charger One' },
+      { attributeId: 'site', value: 'site-a' },
     ],
     sourceSpans: [publicationSpan(candidateId)],
     deterministic: false,

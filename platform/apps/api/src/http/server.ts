@@ -1,7 +1,7 @@
 import type { FastifyInstance, FastifyRequest } from 'fastify'
 import { RunServiceError, parseCreateRunRequest } from '@ontology/application'
 import type { RunService } from '@ontology/application'
-import type { CreateRunResponse, RevisionString } from '@ontology/contracts'
+import type { CreateRunContext, CreateRunResponse, ProfileRef, RevisionString, ScopeRef, ToolContext } from '@ontology/contracts'
 import { createRequestToolContext } from './context'
 import { formatSseFrame, SSE_HEADERS } from './sse'
 import type { RunProgressReader } from './run-progress'
@@ -32,13 +32,32 @@ export interface RunApiOptions {
    * of inventing one.
    */
   readonly progress?: RunProgressReader
+  /** Durable controller dispatch; a 202 is sent only after this write succeeds. */
+  readonly dispatch?: RunDispatchHooks
+  /** Optional host-owned route/task match. It runs before a durable run is created. */
+  readonly validateSubmission?: (input: {
+    readonly profileRef: ProfileRef
+    readonly question: string
+    readonly context: CreateRunContext
+    readonly scopeRef: ScopeRef
+  }, ctx: ToolContext) => Promise<void>
+  /** Explicit compatibility mode for tests/legacy records-only hosts. */
+  readonly submissionMode?: 'durable' | 'records-only'
   readonly logger?: boolean
+}
+
+export interface RunDispatchHooks {
+  enqueue(runId: string, logicalActionId: string, ctx: ToolContext): Promise<unknown>
+  cancelRun(runId: string, ctx: ToolContext): Promise<void>
 }
 
 export interface RunRouteDependencies {
   readonly service: RunService
   readonly authenticate: RequestAuthenticator
   readonly progress?: RunProgressReader
+  readonly dispatch?: RunDispatchHooks
+  readonly validateSubmission?: RunApiOptions['validateSubmission']
+  readonly submissionMode?: 'durable' | 'records-only'
 }
 
 function readIfMatch(request: FastifyRequest): RevisionString | undefined {
@@ -102,11 +121,28 @@ export function registerRunRoutes(app: FastifyInstance, dependencies: RunRouteDe
     if (idempotencyKey === undefined) {
       throw new RunServiceError('INVALID_ARGUMENT', 'the Idempotency-Key header is required')
     }
+    if (dependencies.dispatch === undefined && dependencies.submissionMode !== 'records-only') {
+      throw new CapabilityNotConfiguredError('durable workflow dispatch is required to accept a run')
+    }
     const fields = parseCreateRunRequest(request.body)
     const runId = globalThis.crypto.randomUUID()
+    await dependencies.validateSubmission?.(
+      {
+        profileRef: fields.profileRef,
+        question: fields.question,
+        context: fields.context,
+        scopeRef: { tenantId: auth.principal.tenantId, spaceId: auth.spaceId },
+      },
+      contextFor(auth, traceId, runId),
+    )
     const result = await dependencies.service.createRun(
       { runId, ...fields, idempotencyKey },
       contextFor(auth, traceId, runId),
+    )
+    await dependencies.dispatch?.enqueue(
+      result.runId,
+      'initial-drive',
+      contextFor(auth, traceId, result.runId, result.resolvedProfileHash),
     )
     const data: CreateRunResponse = {
       runId: result.runId,
@@ -176,10 +212,18 @@ export function registerRunRoutes(app: FastifyInstance, dependencies: RunRouteDe
       if (!isRecord(typedResponse)) {
         throw new RunServiceError('INVALID_ARGUMENT', 'typedResponse must be a JSON object')
       }
+      if (dependencies.dispatch === undefined && dependencies.submissionMode !== 'records-only') {
+        throw new CapabilityNotConfiguredError('durable workflow dispatch is required to accept a clarification response')
+      }
       const expectedRevision = resolveExpectedRevision(readIfMatch(request), body['expectedRevision'])
       const view = await dependencies.service.respondToClarification(
         { runId, clarificationId, typedResponse, expectedRevision },
         contextFor(auth, traceId, runId),
+      )
+      await dependencies.dispatch?.enqueue(
+        runId,
+        `clarification-response:${clarificationId}:${view.revision}`,
+        contextFor(auth, traceId, runId, view.resolvedProfileHash),
       )
       reply.status(200).send({
         data: { runId: view.runId, state: 'continued', revision: view.revision },
@@ -199,11 +243,15 @@ export function registerRunRoutes(app: FastifyInstance, dependencies: RunRouteDe
       throw new RunServiceError('INVALID_ARGUMENT', 'the request body must be a JSON object')
     }
     const reason = requireNonEmptyString(body['reason'], 'reason')
+    if (dependencies.submissionMode !== 'records-only' && (dependencies.dispatch === undefined || dependencies.dispatch.cancelRun === undefined)) {
+      throw new CapabilityNotConfiguredError('durable dispatch cancellation is required for a product run host')
+    }
     const expectedRevision = resolveExpectedRevision(readIfMatch(request), body['expectedRevision'])
     const view = await dependencies.service.cancelRun(
       { runId, reason, expectedRevision },
       contextFor(auth, traceId, runId),
     )
+    await dependencies.dispatch?.cancelRun(runId, contextFor(auth, traceId, runId, view.resolvedProfileHash))
     reply.status(200).send({
       data: { runId: view.runId, state: view.state, revision: view.revision },
       meta: { traceId, revision: view.revision },
@@ -224,10 +272,18 @@ export function registerRunRoutes(app: FastifyInstance, dependencies: RunRouteDe
     const runtimeKind = requireNonEmptyString(body['runtimeKind'], 'runtimeKind')
     const runtimeVersion = requireNonEmptyString(body['runtimeVersion'], 'runtimeVersion')
     const stateDigest = requireNonEmptyString(body['stateDigest'], 'stateDigest')
+    if (dependencies.dispatch === undefined && dependencies.submissionMode !== 'records-only') {
+      throw new CapabilityNotConfiguredError('durable workflow dispatch is required to accept a resumed run')
+    }
     const expectedRevision = resolveExpectedRevision(readIfMatch(request), body['expectedRevision'])
     const view = await dependencies.service.resumeRun(
       { runId, checkpointId, runtimeKind, runtimeVersion, stateDigest, expectedRevision },
       contextFor(auth, traceId, runId),
+    )
+    await dependencies.dispatch?.enqueue(
+      runId,
+      `resume:${checkpointId}:${view.revision}`,
+      contextFor(auth, traceId, runId, view.resolvedProfileHash),
     )
     reply.status(200).send({
       data: { runId: view.runId, state: view.state, revision: view.revision },

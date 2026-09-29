@@ -1,0 +1,13 @@
+{
+  "workshop_code": "WS-A",
+  "workshop_network_code": "demo-plant",
+  "workshop_name": "Assembly synthetic workshop",
+  "source_record_id": "workshop-directory-a"
+}
+
+{
+  "workshop_code": "WS-B",
+  "workshop_network_code": "demo-plant",
+  "workshop_name": "Processing synthetic workshop",
+  "source_record_id": "workshop-directory-b"
+}

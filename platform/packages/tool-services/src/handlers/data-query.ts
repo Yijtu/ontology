@@ -4,6 +4,7 @@ import type {
   ComputeOperationHandler,
   ConsistencyLevel,
   DataQueryOutput,
+  DataMode,
   DirectSqlQueryPlan,
   FieldError,
   ImmutableArtifactWriter,
@@ -92,6 +93,8 @@ export interface DataQueryHandlerConfig {
   readonly consistency?: ConsistencyLevel
   /** Source a catalog describe is attributed to when it returns no resources. */
   readonly catalogSourceRef?: SourceRef
+  /** Deployment-declared mode for the backend snapshot read by this handler. */
+  readonly dataMode?: DataMode
   /** Absent means `data_query.kind=compute` is explicitly not configured for this deployment. */
   readonly compute?: DataQueryComputeConfig
 }
@@ -238,6 +241,7 @@ function observationFromSnapshot(snapshot: SourceSnapshot): ToolSourceObservatio
 function tableOutcome(
   response: StructuredQueryExecuteResponse,
   warnings: readonly ToolWarning[],
+  dataMode?: DataMode,
 ): ToolExecutionOutcome {
   const status: ToolExecutionOutcome['status'] = response.coverage.truncated
     ? 'partial'
@@ -254,6 +258,7 @@ function tableOutcome(
     coverage: response.coverage,
     sources: [observationFromSnapshot(response.snapshot)],
     usage: { rows: response.coverage.returned },
+    ...(dataMode === undefined ? {} : { dataMode }),
     ...(warnings.length === 0 ? {} : { warnings: [...warnings] }),
   }
 }
@@ -449,7 +454,7 @@ export class DataQueryHandler implements ToolHandler {
       ...(cursor === undefined ? {} : { cursor }),
     }
     const response = await this.#executeQuery(executeRequest, request)
-    return tableOutcome(response, warnings)
+    return tableOutcome(response, warnings, this.#config.dataMode)
   }
 
   /**

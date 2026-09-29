@@ -1,0 +1,13 @@
+{
+  "district_code": "north",
+  "district_network_code": "demo-network",
+  "district_name": "North synthetic district",
+  "source_record_id": "district-directory-north"
+}
+
+{
+  "district_code": "south",
+  "district_network_code": "demo-network",
+  "district_name": "South synthetic district",
+  "source_record_id": "district-directory-south"
+}

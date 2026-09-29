@@ -1,0 +1,23 @@
+name: ontology-core-local
+
+services:
+  postgres:
+    image: postgres:17
+    environment:
+      POSTGRES_DB: ontology_core
+      POSTGRES_USER: postgres
+      POSTGRES_PASSWORD: ${CORE_POSTGRES_PASSWORD:?Set CORE_POSTGRES_PASSWORD in the shell}
+    ports:
+      - "127.0.0.1:${CORE_PG_PORT:-54330}:5432"
+    volumes:
+      - core_pg_data:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U postgres -d ontology_core"]
+      interval: 2s
+      timeout: 2s
+      retries: 30
+      start_period: 5s
+    restart: unless-stopped
+
+volumes:
+  core_pg_data:

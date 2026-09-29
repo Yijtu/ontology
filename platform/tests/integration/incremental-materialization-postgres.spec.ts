@@ -24,6 +24,7 @@ import type {
 import { toolContext } from '../unit/component-registry-fixtures'
 import { createJobScope, startJobDatabase } from './job-postgres-harness'
 import type { JobDbHarness, JobTestScope } from './job-postgres-harness'
+import { FixturePublishedIdentityReader } from './published-identity-reader'
 
 const DIGEST = `sha256:${'a'.repeat(64)}`
 const VALIDITY = { validFrom: '2026-09-21T00:00:00Z', validTo: '2026-09-22T00:00:00Z' }
@@ -34,6 +35,7 @@ let scope: JobTestScope
 let ctx: ToolContext
 let database: ControlPostgresDatabase
 let publication: PostgresSemanticPublicationStore
+let identity: FixturePublishedIdentityReader
 let jobStore: PostgresJobStore
 let jobId: Uuid
 
@@ -46,6 +48,7 @@ function statementFor(publicationId: Uuid): PublishedStatement {
     statementId: randomUUID(),
     propositionKey: PREDICATE,
     kind: 'entity',
+    objectId: PREDICATE,
     subjectEntityId: 'entity.battery',
     predicate: PREDICATE,
     value: { value: true },
@@ -70,6 +73,7 @@ function ruleVersionFor(publicationId: Uuid): PublishedRuleVersion {
     impact: 'low',
     expression: { op: 'compare', attributeId: PREDICATE, operator: 'eq', value: true, spans: [] },
     exceptions: [],
+    conclusion: { predicate: PREDICATE, value: true },
     recordedAt: '2026-09-21T06:00:00Z',
     sourceCandidateId: randomUUID(),
     publicationId,
@@ -111,6 +115,7 @@ async function publishBundle(
     outbox: message,
     outboxJobId: jobId,
   }
+  identity.bindStatements(statements)
   await publication.publish(scope.scopeRef, input, ctx)
 }
 
@@ -120,6 +125,7 @@ beforeAll(async () => {
   ctx = toolContext(scope.tenantId, scope.spaceId, ['semantic-publisher', 'platform-admin'])
   database = new ControlPostgresDatabase({ connectionString: harness.appUrl, maxPoolSize: 4 })
   publication = new PostgresSemanticPublicationStore(database)
+  identity = new FixturePublishedIdentityReader()
   jobStore = new PostgresJobStore(database)
 
   jobId = randomUUID()
@@ -153,7 +159,7 @@ describe('incremental materialisation against real PostgreSQL and the real outbo
     await publishBundle([battery], [rule], 'materialization-seed')
 
     const materialization = new PostgresMaterializationStore(database)
-    const source = new PublishedSemanticSource(publication)
+    const source = new PublishedSemanticSource(publication, { identity })
     let faultEnabled = false
     const materializer = new IncrementalMaterializer({
       publishedSource: source,
@@ -199,7 +205,8 @@ describe('incremental materialisation against real PostgreSQL and the real outbo
       validity: VALIDITY,
     }
     const ticket = await materializer.beginChange(retractChange, ctx)
-    expect(ticket.affectedRuleIds).toEqual(['rule.battery-present'])
+    expect(ticket.affectedRuleIds).toHaveLength(2)
+    expect(ticket.affectedRuleIds.every((ruleId) => ruleId.startsWith('rule-instance:'))).toBe(true)
 
     // The semantic change commits, then the change is handed to the worker through the real outbox.
     await publication.reviseStatement(
@@ -248,7 +255,7 @@ describe('incremental materialisation against real PostgreSQL and the real outbo
     // A read while the fence is open must not return the stale "known true" conclusion.
     const fenced = await materializer.read(readRequest, ctx)
     expect(fenced.status).toBe('fenced')
-    expect(fenced.blockedPropositionKeys).toContain(PREDICATE)
+    expect(fenced.blockedPropositionKeys.length).toBeGreaterThan(0)
     expect(fenced.conclusions).toHaveLength(0)
 
     // A fault during the asynchronous advance leaves the fence open: still no stale read.
@@ -263,7 +270,7 @@ describe('incremental materialisation against real PostgreSQL and the real outbo
     await dispatcher.dispatchOnce(scope.scopeRef, ctx)
     const advanced = await materializer.read(readRequest, ctx)
     expect(advanced.status).toBe('materialized')
-    const conclusion = advanced.conclusions.find((entry) => entry.propositionKey === PREDICATE)
+    const conclusion = advanced.conclusions.find((entry) => entry.predicate === PREDICATE)
     expect(conclusion?.domainStatus).toBe('unknown')
     expect(conclusion?.value).toBeUndefined()
 

@@ -99,6 +99,50 @@ describe('WorkflowController phase transitions', () => {
     expect(harness.selector.selected).toHaveLength(1)
     expect(harness.runtime.startCalls).toHaveLength(1)
   })
+
+  it('recovers the same controller run and ledger after a crash immediately after manifest commit', async () => {
+    const harness = buildWorkflowHarness({ runtime: new ScriptedRuntime({ scripts: [completedScript()] }) })
+    const saveRunManifest = harness.workflowStore.saveRunManifest.bind(harness.workflowStore)
+    let crashOnce = true
+    harness.workflowStore.saveRunManifest = async (manifest, ctx) => {
+      const persisted = await saveRunManifest(manifest, ctx)
+      if (crashOnce) {
+        crashOnce = false
+        throw new Error('simulated process loss after durable manifest commit')
+      }
+      return persisted
+    }
+
+    await expect(harness.controller.startRun(startInput(), OWNER))
+      .rejects.toThrow('simulated process loss after durable manifest commit')
+    const saved = await harness.workflowStore.getRunManifest(RUN_A, OWNER)
+    expect(saved).toBeDefined()
+    expect(harness.budget.openLedgerCalls).toHaveLength(1)
+
+    const recovered = await harness.controller.startRun(startInput(), OWNER)
+    expect(recovered.state).toBe('published')
+    expect(recovered.budgetLedgerId).toBe(saved?.budgetLedgerId)
+    expect(harness.budget.openLedgerCalls).toHaveLength(1)
+    expect(harness.runtime.startCalls).toEqual([RUN_A])
+  })
+
+  it('uses the existing canonical run id and trusted context on an idempotent retry', async () => {
+    const harness = buildWorkflowHarness({ runtime: new ScriptedRuntime({ scripts: [completedScript()] }) })
+    const original = startInput()
+    await harness.service.createRun(original, OWNER)
+    const temporaryRunId = 'bbbbbbbb-bbbb-4bbb-8bbb-bbbbbbbbbbbb'
+
+    const view = await harness.controller.startRun(
+      startInput({ runId: temporaryRunId }),
+      ownerContext(temporaryRunId),
+    )
+
+    expect(view.runId).toBe(RUN_A)
+    expect(view.state).toBe('published')
+    expect(harness.capabilities.calls).toEqual([RUN_A])
+    expect(harness.capabilities.contextRunIds).toEqual([RUN_A])
+    expect(harness.budget.openLedgerCalls).toHaveLength(1)
+  })
 })
 
 describe('clarification resume re-verification', () => {
@@ -160,6 +204,72 @@ describe('clarification resume re-verification', () => {
     // The input manifest is append-only: the clarification round added evidence without
     // resetting the manifest.
     expect(Number(published.inputManifestRevision)).toBeGreaterThan(1)
+  })
+
+  it('recovers a committed clarification response through its durable logical action', async () => {
+    const clarificationId = randomUUID()
+    const runtime = new ScriptedRuntime({
+      saveCheckpoint: true,
+      scripts: [
+        [planEvent(RUN_A), evidenceEvent(RUN_A, [evidenceRef('before-clarification')]), clarificationEvent(RUN_A, clarificationId)],
+        [collectionCompleteEvent(RUN_A, 1)],
+      ],
+    })
+    const harness = buildWorkflowHarness({ runtime })
+    const waiting = await harness.controller.startRun(startInput(), OWNER)
+    expect(waiting.state).toBe('awaiting_input')
+    const continued = await harness.service.respondToClarification(
+      {
+        runId: RUN_A,
+        clarificationId,
+        typedResponse: { exception: 'confirmed_false' },
+        expectedRevision: waiting.revision,
+      },
+      OWNER,
+    )
+
+    const recovered = await harness.controller.drivePersistedRun(
+      RUN_A,
+      OWNER,
+      false,
+      `clarification-response:${clarificationId}:${continued.revision}`,
+    )
+    expect(recovered.state).toBe('published')
+    expect(runtime.startCalls).toEqual([RUN_A])
+    expect(runtime.resumeCalls).toEqual([RUN_A])
+    await expect(harness.store.findClarificationResponse(SCOPE_A, RUN_A, clarificationId, OWNER))
+      .resolves.toMatchObject({ typedResponse: { exception: 'confirmed_false' } })
+    expect(harness.budget.openLedgerCalls).toHaveLength(1)
+  })
+
+  it('fails a lost collecting action without a checkpoint instead of replaying runtime calls', async () => {
+    const clarificationId = randomUUID()
+    const runtime = new ScriptedRuntime({
+      scripts: [[planEvent(RUN_A), clarificationEvent(RUN_A, clarificationId)], [collectionCompleteEvent(RUN_A)]],
+    })
+    const harness = buildWorkflowHarness({ runtime })
+    const waiting = await harness.controller.startRun(startInput(), OWNER)
+    expect(waiting.state).toBe('awaiting_input')
+    const continued = await harness.service.respondToClarification(
+      {
+        runId: RUN_A,
+        clarificationId,
+        typedResponse: { exception: 'confirmed_false' },
+        expectedRevision: waiting.revision,
+      },
+      OWNER,
+    )
+
+    const recovered = await harness.controller.drivePersistedRun(
+      RUN_A,
+      OWNER,
+      false,
+      `clarification-response:${clarificationId}:${continued.revision}`,
+    )
+    expect(recovered.state).toBe('failed')
+    expect(recovered.cancelReason).toBe('recovery_checkpoint_missing')
+    expect(runtime.startCalls).toEqual([RUN_A])
+    expect(runtime.resumeCalls).toHaveLength(0)
   })
 
   it('rejects stale referenced data and forces re-collection on the same budget/manifest', async () => {
@@ -241,6 +351,7 @@ describe('cancellation is terminal', () => {
       { runId: RUN_A, reason: 'stop', expectedRevision: before.revision },
       OWNER,
     )
+    expect(harness.capabilities.executionSignals[0]?.aborted).toBe(true)
     runtime.release()
     await running
 

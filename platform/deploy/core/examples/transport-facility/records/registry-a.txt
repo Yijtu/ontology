@@ -1,0 +1,50 @@
+{
+  "facility_id": "T-01",
+  "network_code": "demo-network",
+  "facility_district_code": "north",
+  "inspection_due": true,
+  "inspection_exempt": false,
+  "source_record_id": "registry-a-001"
+}
+
+{
+  "facility_id": "T-02",
+  "network_code": "demo-network",
+  "facility_district_code": "north",
+  "inspection_due": true,
+  "inspection_exempt": true,
+  "source_record_id": "registry-a-002"
+}
+
+{
+  "facility_id": "T-03",
+  "network_code": "demo-network",
+  "facility_district_code": "north",
+  "inspection_due": true,
+  "source_record_id": "registry-a-003"
+}
+
+{
+  "facility_id": "T-04",
+  "network_code": "demo-network",
+  "facility_district_code": "south",
+  "inspection_due": false,
+  "inspection_exempt": false,
+  "source_record_id": "registry-a-004"
+}
+
+{
+  "facility_id": "T-05",
+  "network_code": "demo-network",
+  "facility_district_code": "north",
+  "inspection_due": true,
+  "source_record_id": "registry-a-005"
+}
+
+{
+  "facility_id": "T-06",
+  "network_code": "demo-network",
+  "facility_district_code": "north",
+  "inspection_exempt": false,
+  "source_record_id": "registry-a-006"
+}

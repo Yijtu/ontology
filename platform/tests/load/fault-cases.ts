@@ -274,7 +274,9 @@ export async function workerInterruptionLeaseReclaim(env: LoadEnvironment): Prom
 // ---------------------------------------------------------------------------
 
 const PROJECTION_REF: VersionRef = { id: 'projection.materialized', version: '1.0.0', digest: DIGEST }
+const DEFINITION_REF: VersionRef = { id: 'home-energy.core', version: '1.0.0', digest: DIGEST }
 const PREDICATE = 'device.battery_present'
+const OBJECT_ID = 'device'
 const VALIDITY = { validFrom: '2026-09-21T00:00:00Z', validTo: '2026-09-22T00:00:00Z' }
 
 function sourceRefs(): ResourceRef[] {
@@ -286,9 +288,10 @@ function statementFor(publicationId: Uuid): PublishedStatement {
     statementId: randomUUID(),
     propositionKey: PREDICATE,
     kind: 'entity',
+    objectId: OBJECT_ID,
     subjectEntityId: 'entity.battery',
     predicate: PREDICATE,
-    value: { value: true },
+    value: { attributes: [{ attributeId: PREDICATE, value: true }] },
     validFrom: VALIDITY.validFrom,
     validTo: VALIDITY.validTo,
     recordedAt: '2026-09-21T06:00:00Z',
@@ -305,11 +308,12 @@ function ruleVersionFor(publicationId: Uuid): PublishedRuleVersion {
     ruleVersionId: randomUUID(),
     ruleId: 'rule.battery-present',
     version: '1',
-    objectId: PREDICATE,
+    objectId: OBJECT_ID,
     severity: 'soft',
     impact: 'low',
     expression: { op: 'compare', attributeId: PREDICATE, operator: 'eq', value: true, spans: [] },
     exceptions: [],
+    conclusion: { predicate: PREDICATE, value: true },
     recordedAt: '2026-09-21T06:00:00Z',
     sourceCandidateId: randomUUID(),
     publicationId,
@@ -361,7 +365,7 @@ async function publishBundle(
     publication: {
       publicationId,
       versionRef: { id: publicationId, version: '1.0.0', digest: DIGEST },
-      schemaRef: { id: 'home-energy.core', version: '1.0.0', digest: DIGEST },
+      schemaRef: DEFINITION_REF,
       approvedCandidateRefs: [],
       statements: statements.map((statement) => ({ ...statement, publicationId })),
       ruleVersions: ruleVersions.map((rule) => ({ ...rule, publicationId })),
@@ -375,6 +379,7 @@ async function publishBundle(
     outbox: message,
     outboxJobId: jobId,
   }
+  env.identity.bindStatements(statements)
   await env.publication.publish(scope.scopeRef, input, scope.ctx)
   return publicationId
 }
@@ -387,15 +392,19 @@ export async function projectionFence(env: LoadEnvironment): Promise<FaultCaseRe
   await publishBundle(env, scope, jobId, [battery], [ruleVersionFor(seedPublication)], 'fence-seed')
 
   const materializer = new IncrementalMaterializer({
-    publishedSource: new PublishedSemanticSource(env.publication),
+    publishedSource: new PublishedSemanticSource(env.publication, {
+      identity: env.identity,
+      definitionRef: DEFINITION_REF,
+    }),
     materialization: env.materialization,
   })
-  const readRequest = {
+  const baselineRequest = {
     scopeRef: scope.scopeRef,
     projectionRef: PROJECTION_REF,
-    asOfRecordedSeq: '9',
+    asOfRecordedSeq: '1',
     validAt: '2026-09-21T12:00:00Z',
   }
+  const readRequest = { ...baselineRequest, asOfRecordedSeq: '2' }
   const seedChange: MaterializationChange = {
     changeId: randomUUID(),
     scopeRef: scope.scopeRef,
@@ -404,10 +413,12 @@ export async function projectionFence(env: LoadEnvironment): Promise<FaultCaseRe
     kind: 'assertion_published',
     logicalAssertionId: battery.statementId,
     predicate: PREDICATE,
+    subjectEntityId: 'entity.battery',
     validity: VALIDITY,
   }
   await materializer.applyChange(seedChange, scope.ctx)
-  const baseline = await materializer.read(readRequest, scope.ctx)
+  const baseline = await materializer.read(baselineRequest, scope.ctx)
+  const baselineConclusion = baseline.conclusions.find((entry) => entry.predicate === PREDICATE)
 
   const retractChange: MaterializationChange = {
     changeId: randomUUID(),
@@ -417,6 +428,7 @@ export async function projectionFence(env: LoadEnvironment): Promise<FaultCaseRe
     kind: 'assertion_retracted',
     logicalAssertionId: battery.statementId,
     predicate: PREDICATE,
+    subjectEntityId: 'entity.battery',
     validity: VALIDITY,
   }
   const ticket = await materializer.beginChange(retractChange, scope.ctx)
@@ -450,21 +462,27 @@ export async function projectionFence(env: LoadEnvironment): Promise<FaultCaseRe
   )
   await materializer.advance(ticket, scope.ctx)
   const advanced = await materializer.read(readRequest, scope.ctx)
-  const conclusion = advanced.conclusions.find((entry) => entry.propositionKey === PREDICATE)
+  const conclusion = advanced.conclusions.find((entry) => entry.predicate === PREDICATE)
 
-  const observed = `baseline=${baseline.status} affectedRules=${ticket.affectedRuleIds.join(',')} fenced=${fenced.status} blocked=${fenced.blockedPropositionKeys.join(',')} advanced=${advanced.status} conclusion=${conclusion?.domainStatus ?? 'missing'}`
+  const issueCodes = (result: typeof baseline): string => result.issues?.map((issue) => issue.code).join(',') ?? ''
+  const observed = `baseline=${baseline.status} baselineConclusion=${baselineConclusion?.domainStatus ?? 'missing'} affectedRules=${ticket.affectedRuleIds.length} fenced=${fenced.status} blocked=${fenced.blockedPropositionKeys.length} advanced=${advanced.status} conclusion=${conclusion?.domainStatus ?? 'missing'} baselineIssues=${issueCodes(baseline)} baselineReason=${baseline.reason ?? ''} advancedIssues=${issueCodes(advanced)} advancedReason=${advanced.reason ?? ''}`
   const description = 'a retraction opens the fence before the worker recomputes; a read during the window is withheld'
-  const expected = 'baseline materialized, fenced read returns no stale conclusion, advanced read resolves unknown'
+  const expected = 'the pinned business conclusion starts known true, is withheld during the fence, then resolves unknown after retraction'
   const passed =
     baseline.status === 'materialized' &&
-    ticket.affectedRuleIds.includes('rule.battery-present') &&
+    baselineConclusion?.domainStatus === 'known' &&
+    baselineConclusion.value === true &&
+    ticket.affectedRuleIds.length === 2 &&
+    ticket.affectedRuleIds.every((ruleId) => ruleId.startsWith('rule-instance:')) &&
     fenced.status === 'fenced' &&
     fenced.conclusions.length === 0 &&
-    fenced.blockedPropositionKeys.includes(PREDICATE) &&
+    baselineConclusion !== undefined &&
+    fenced.blockedPropositionKeys.includes(baselineConclusion.propositionKey) &&
     advanced.status === 'materialized' &&
-    conclusion?.domainStatus === 'unknown'
+    conclusion?.domainStatus === 'unknown' &&
+    conclusion.value === undefined
   if (passed) return ok('projection-fence', description, expected, observed, 'the fence withheld the stale value')
-  return failed('projection-fence', description, expected, observed, 'a stale conclusion was served during the fence window')
+  return failed('projection-fence', description, expected, observed, 'the business conclusion or its fence/recompute invariant was not preserved')
 }
 
 // ---------------------------------------------------------------------------

@@ -7,6 +7,7 @@ import type {
   HistoricalAssertionView,
   ObjectHistoryView,
   ProvenanceEvidenceView,
+  ProvenanceSupportResolution,
   ResourceRef,
   VersionRef,
 } from '@ontology/contracts'
@@ -58,7 +59,7 @@ function payloadRef(): ResourceRef {
   return { id: '00000000-0000-4000-8000-0000000000p1', version: '1.0.0', digest: DIGEST, kind: 'evidence' }
 }
 
-function knownEvidence(): ProvenanceEvidenceView {
+function knownEvidence(supportResolution: ProvenanceSupportResolution): ProvenanceEvidenceView {
   return {
     evidenceId: EVIDENCE_ID,
     outcome: 'verifiable',
@@ -76,6 +77,7 @@ function knownEvidence(): ProvenanceEvidenceView {
     resultDigest: DIGEST,
     integrityVerified: true,
     ruleRefs: [ruleRef()],
+    supportResolution,
     premiseGroups: [
       { groupId: 'g1', alternativeEvidenceIds: [PREMISE_A, PREMISE_B] },
       { groupId: 'g2', alternativeEvidenceIds: [PREMISE_C] },
@@ -129,6 +131,7 @@ function dependencyPage(
   direction: DependencyGraphView['direction'],
   cursor: string | undefined,
   depth: number,
+  supportResolution: ProvenanceSupportResolution,
 ): DependencyGraphView {
   const root = {
     evidenceId: EVIDENCE_ID,
@@ -159,6 +162,10 @@ function dependencyPage(
       knownTotal: nodes.length,
       ...(complete ? {} : { cursor: GRAPH_CURSOR }),
       truncated: !complete,
+      support: {
+        complete: supportResolution.complete,
+        resolutions: [{ evidenceId: EVIDENCE_ID, resolution: supportResolution }],
+      },
     },
   }
 }
@@ -201,8 +208,15 @@ export interface ProvenanceHost {
   resetHistory(): void
 }
 
-export function createProvenanceHost(): ProvenanceHost {
+export interface ProvenanceFixtureOptions {
+  readonly evidenceSupportResolution?: ProvenanceSupportResolution
+  readonly graphSupportResolution?: ProvenanceSupportResolution
+}
+
+export function createProvenanceHost(options: ProvenanceFixtureOptions = {}): ProvenanceHost {
   let advanced = false
+  const evidenceSupportResolution = options.evidenceSupportResolution ?? { state: 'resolved', complete: true }
+  const graphSupportResolution = options.graphSupportResolution ?? evidenceSupportResolution
 
   const evidence: EvidenceReadSurface = {
     getEvidence(evidenceId: string): Promise<ProvenanceEvidenceView> {
@@ -216,7 +230,7 @@ export function createProvenanceHost(): ProvenanceHost {
           new ProvenanceReadError('EVIDENCE_NOT_FOUND', `no authorized evidence ${evidenceId} in the requested scope`),
         )
       }
-      const view = knownEvidence()
+      const view = knownEvidence(evidenceSupportResolution)
       // Extra, non-contract fields a misbehaving backend might attach. The UI must ignore them.
       return Promise.resolve({
         ...view,
@@ -232,10 +246,10 @@ export function createProvenanceHost(): ProvenanceHost {
           new ProvenanceReadError('EVIDENCE_NOT_FOUND', `no authorized evidence ${evidenceId} in the requested scope`),
         )
       }
-      return Promise.resolve(dependencyPage(traversal.direction, traversal.cursor, traversal.depth))
+      return Promise.resolve(dependencyPage(traversal.direction, traversal.cursor, traversal.depth, graphSupportResolution))
     },
     exportEvidence(): Promise<EvidenceExportView> {
-      return Promise.resolve({ view: knownEvidence(), artifacts: [] })
+      return Promise.resolve({ view: knownEvidence(evidenceSupportResolution), artifacts: [] })
     },
   }
 

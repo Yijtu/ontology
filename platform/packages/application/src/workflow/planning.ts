@@ -4,6 +4,7 @@ import type {
   ComparisonOperator,
   ConfirmedContext,
   DecisionPort,
+  DecisionResult,
   ExecutablePlan,
   ExecutablePlanStep,
   GenerationMessage,
@@ -13,6 +14,7 @@ import type {
   OrderBy,
   RouteDecision,
   RouteSignals,
+  ResourceRef,
   RunPreferences,
   ScalarValue,
   SchemaVocabulary,
@@ -29,6 +31,7 @@ import type {
 import { canonicalJson, sha256DigestOf } from '../profiles/canonical'
 import { WorkflowControllerError } from './errors'
 import type { QuestionRewriter } from './question-rewriting'
+import type { DecisionStateRefProvider } from '../verification/service'
 import { renderFewShotExamplesData } from '../examples/few-shot-retriever'
 import type { FewShotExampleProvider } from '../examples/few-shot-retriever'
 import { renderVocabularyBlock, vocabularyEvidenceRef } from './vocabulary'
@@ -79,6 +82,11 @@ export interface RunPlannerDependencies {
   /** ADR-09: used only for genuine route ambiguity, never for a specified path. */
   readonly decision?: DecisionPort
   readonly decisionModelRef?: ModelRef
+  /**
+   * Host-owned immutable archive that registers the exact run/profile authorization before
+   * returning its artifact ref. The planner never substitutes a digest or derives the ref.
+   */
+  readonly decisionStateRefProvider?: DecisionStateRefProvider
   /** ADR-09: at most one proposal call for an ordinary complex question. */
   readonly generation?: GenerationPort
   readonly planModelRef?: ModelRef
@@ -98,6 +106,22 @@ export interface RunPlannerDependencies {
 }
 
 const ROUTE_CHOICE_HASH = 'route-choice-v1'
+const MAX_ROUTE_STATE_BYTES = 65_536
+const MAX_ROUTE_STATE_RECORDS = 1_000
+const MAX_ROUTE_STATE_REFS = 64
+
+const RECOVERABLE_ROUTE_DECISION_CODES: ReadonlySet<string> = new Set([
+  'MODEL_UNAVAILABLE',
+  'RATE_LIMITED',
+  'INSUFFICIENT_DATA',
+])
+
+interface RouteDecisionStateInput {
+  readonly request: PlanRequest
+  readonly ctx: ToolContext
+  readonly question: ChoiceQuestion
+  readonly vocabulary: SchemaVocabulary
+}
 
 /** The application-side bound; the same small caps the engine defaults to. */
 const DEFAULT_VOCABULARY_LIMITS = { maxConcepts: 8, maxFields: 32 } as const
@@ -222,6 +246,36 @@ export class RunPlanner {
         fallback: 'jev_unavailable',
       }
     }
+    const stateRefProvider = this.#deps.decisionStateRefProvider
+    if (stateRefProvider === undefined) {
+      return {
+        ...this.#clarify(request, 'the route is ambiguous and no authorized decision-state archive is configured'),
+        fallback: 'jev_state_not_configured',
+      }
+    }
+    if (ctx.runId !== request.runId) {
+      throw new WorkflowControllerError('SCOPE_MISMATCH', 'the route request does not match the trusted run context')
+    }
+
+    const vocabulary = await this.#buildVocabulary(request, ctx)
+    if (vocabulary.gaps.length > 0 || vocabulary.concepts.length === 0) {
+      return {
+        ...this.#clarify(request, 'the route is ambiguous and confirmed schema vocabulary is unavailable'),
+        fallback: 'jev_schema_unavailable',
+      }
+    }
+    if (
+      (request.mappingRefs?.length ?? 0) +
+        (request.definitionRefs?.length ?? 0) +
+        vocabulary.sources.length >
+      MAX_ROUTE_STATE_REFS
+    ) {
+      return {
+        ...this.#clarify(request, 'the route is ambiguous and its confirmed schema references exceed the decision-state bound'),
+        fallback: 'jev_state_too_large',
+      }
+    }
+
     const question: ChoiceQuestion = {
       questionId: this.#newId(),
       type: 'choice',
@@ -233,30 +287,59 @@ export class RunPlanner {
       optionSetHash: sha256DigestOf(ROUTE_CHOICE_HASH),
       definitionVersion: '1.0.0',
     }
+    const state = routeDecisionStateOf({ request, ctx, question, vocabulary })
+    if (!withinRouteStateBounds(state)) {
+      return {
+        ...this.#clarify(request, 'the route is ambiguous and its actual decision state exceeds the configured bound'),
+        fallback: 'jev_state_too_large',
+      }
+    }
+    const stateRef = await stateRefProvider.archive(
+      { runId: request.runId, resolvedProfileHash: ctx.resolvedProfileHash, state },
+      ctx,
+    )
+    if (!isRouteDecisionStateRef(stateRef)) {
+      throw new WorkflowControllerError('INVALID_SCHEMA', 'the route-state provider returned an invalid immutable artifact reference')
+    }
+
+    let result: DecisionResult
     try {
-      const result = await decision.decide(
+      result = await decision.decide(
         {
-          stateRef: {
-            id: `route:${request.runId}`,
-            version: '1.0.0',
-            digest: sha256DigestOf(canonicalJson({ question: request.question })),
-            kind: 'plan',
-          },
+          stateRef,
           questions: [question],
           modelRef,
         },
         ctx,
       )
-      if (result.selectedOptionId === 'small_plan') {
-        return this.#smallPlanRoute(request, ctx, 'the decision selected one small plan')
+    } catch (error) {
+      if (isRecoverableRouteDecisionFailure(error)) {
+        return {
+          ...this.#clarify(request, 'the decision provider was unavailable, so the route stays ambiguous'),
+          fallback: `jev_failed:${routeDecisionErrorCode(error) ?? 'provider_unavailable'}`,
+        }
       }
-      return this.#clarify(request, 'the decision selected clarification')
-    } catch {
+      throw error
+    }
+    if (
+      result.questionId !== question.questionId ||
+      result.questionType !== question.type ||
+      result.definitionVersion !== question.definitionVersion ||
+      result.optionSetHash !== question.optionSetHash
+    ) {
+      throw new WorkflowControllerError('INVALID_SCHEMA', 'the route decision did not match its question contract')
+    }
+    if (result.fallback !== undefined) {
       return {
-        ...this.#clarify(request, 'the decision port failed and the route stays ambiguous'),
-        fallback: 'jev_failed',
+        ...this.#clarify(request, 'the decision provider returned an explicit fallback, so the route stays ambiguous'),
+        fallback: `jev_provider_fallback:${result.fallback.fallback}`,
       }
     }
+    if (result.selectedOptionId === 'small_plan') {
+      return this.#smallPlanRoute(request, ctx, 'the decision selected one small plan')
+    }
+    if (result.selectedOptionId === 'clarify') return this.#clarify(request, 'the decision selected clarification')
+    throw new WorkflowControllerError('INVALID_SCHEMA', 'the route decision selected an option outside the declared route set')
   }
 
   /** Resolve the bounded vocabulary for this question from the run's confirmed sources. */
@@ -393,6 +476,110 @@ export class RunPlanner {
       },
     }
   }
+}
+
+function routeDecisionStateOf(input: RouteDecisionStateInput): Readonly<Record<string, unknown>> {
+  const { request, ctx, question, vocabulary } = input
+  return {
+    kind: 'core_run_route_decision',
+    version: '1.0.0',
+    runId: request.runId,
+    resolvedProfileHash: ctx.resolvedProfileHash,
+    question: request.question,
+    context: request.context,
+    routeSignals: {
+      routeAmbiguous: request.signals?.routeAmbiguous === true,
+      ...(request.signals?.ambiguityReason === undefined
+        ? {}
+        : { ambiguityReason: request.signals.ambiguityReason }),
+    },
+    decisionQuestion: {
+      questionId: question.questionId,
+      type: question.type,
+      prompt: question.prompt,
+      optionSetHash: question.optionSetHash,
+      definitionVersion: question.definitionVersion,
+      options: question.options,
+    },
+    candidateRoutes: [
+      {
+        optionId: 'small_plan',
+        description: 'Proceed with one bounded plan based on the confirmed schema.',
+        toolIds: ['data_query', 'ontology_lookup'],
+      },
+      {
+        optionId: 'clarify',
+        description: 'Ask the user to resolve the route ambiguity before collecting evidence.',
+        toolIds: [],
+      },
+    ],
+    confirmedSchema: {
+      vocabularyRef: vocabulary.vocabularyRef,
+      concepts: vocabulary.concepts,
+      links: vocabulary.links,
+      sources: vocabulary.sources,
+      truncated: vocabulary.truncated,
+      omittedConceptCount: vocabulary.omittedConceptCount,
+      omittedFieldCount: vocabulary.omittedFieldCount,
+      mappingRefs: request.mappingRefs ?? [],
+      definitionRefs: request.definitionRefs ?? [],
+    },
+  }
+}
+
+function withinRouteStateBounds(state: Readonly<Record<string, unknown>>): boolean {
+  const encoder = new TextEncoder()
+  const pending: unknown[] = [state]
+  let recordCount = 0
+  let rawTextBytes = 0
+  while (pending.length > 0) {
+    const value = pending.pop()
+    recordCount += 1
+    if (recordCount > MAX_ROUTE_STATE_RECORDS) return false
+    if (Array.isArray(value)) {
+      if (recordCount + value.length > MAX_ROUTE_STATE_RECORDS) return false
+      for (const entry of value) pending.push(entry)
+    } else if (isRecord(value)) {
+      const keys = Object.keys(value)
+      if (recordCount + keys.length > MAX_ROUTE_STATE_RECORDS) return false
+      for (const key of keys) {
+        rawTextBytes += encoder.encode(key).byteLength
+        if (rawTextBytes > MAX_ROUTE_STATE_BYTES) return false
+        pending.push(value[key])
+      }
+    } else if (typeof value === 'string') {
+      rawTextBytes += encoder.encode(value).byteLength
+      if (rawTextBytes > MAX_ROUTE_STATE_BYTES) return false
+    }
+  }
+  return encoder.encode(canonicalJson(state)).byteLength <= MAX_ROUTE_STATE_BYTES
+}
+
+function isRouteDecisionStateRef(ref: ResourceRef): boolean {
+  return (
+    ref.kind === 'artifact' &&
+    /^[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/iu.test(ref.id) &&
+    ref.version.trim().length > 0 &&
+    /^sha256:[0-9a-f]{64}$/u.test(ref.digest)
+  )
+}
+
+function routeDecisionErrorCode(error: unknown): string | undefined {
+  if (!isRecord(error)) return undefined
+  const code = error['code']
+  return typeof code === 'string' ? code : undefined
+}
+
+function isAbortLike(error: unknown): boolean {
+  if (error instanceof Error && error.name === 'AbortError') return true
+  if (!isRecord(error)) return false
+  return error['name'] === 'AbortError' || error['code'] === 'ABORT_ERR'
+}
+
+function isRecoverableRouteDecisionFailure(error: unknown): boolean {
+  if (isAbortLike(error)) return false
+  const code = routeDecisionErrorCode(error)
+  return code !== undefined && RECOVERABLE_ROUTE_DECISION_CODES.has(code)
 }
 
 /**

@@ -1,5 +1,4 @@
-import type { DecisionQuestion, ResourceRef } from '@ontology/contracts'
-import { buildJevWireRequest } from './vendor/jev-wire'
+import type { JevWireRequest } from './vendor/jev-wire'
 
 /**
  * Transport for the JEV decision API. It owns the HTTP/JSON protocol only: it builds the
@@ -9,9 +8,7 @@ import { buildJevWireRequest } from './vendor/jev-wire'
  */
 
 export interface JevHttpRequest {
-  readonly vendorModel: string
-  readonly stateRef: ResourceRef
-  readonly questions: readonly DecisionQuestion[]
+  readonly body: JevWireRequest
   /** Resolved credential. Revealed only here, only for the Authorization header. */
   readonly apiKey: string
   readonly signal: AbortSignal
@@ -22,7 +19,6 @@ export interface JevHttpResponse {
   readonly retryAfterMs?: number
   /** Parsed JSON body on a 2xx response; `undefined` when the body was absent or invalid. */
   readonly body?: unknown
-  readonly errorDetail?: string
 }
 
 export interface JevHttpClientConfig {
@@ -31,7 +27,7 @@ export interface JevHttpClientConfig {
   readonly fetchImpl?: typeof fetch
 }
 
-const DEFAULT_ENDPOINT = '/v1/decide'
+const DEFAULT_ENDPOINT = '/v1/systemone'
 
 export class JevHttpClient {
   readonly #url: string
@@ -44,7 +40,6 @@ export class JevHttpClient {
   }
 
   async send(request: JevHttpRequest): Promise<JevHttpResponse> {
-    const body = buildJevWireRequest(request.vendorModel, request.stateRef, request.questions)
     const response = await this.#fetch(this.#url, {
       method: 'POST',
       headers: {
@@ -52,37 +47,26 @@ export class JevHttpClient {
         accept: 'application/json',
         authorization: `Bearer ${request.apiKey}`,
       },
-      body: JSON.stringify(body),
+      body: JSON.stringify(request.body),
       signal: request.signal,
     })
 
     const retryAfterMs = parseRetryAfter(response.headers.get('retry-after'))
     if (!response.ok) {
-      const errorDetail = await safeText(response)
+      await discardBody(response)
       return {
         status: response.status,
         ...(retryAfterMs === undefined ? {} : { retryAfterMs }),
-        ...(errorDetail === undefined ? {} : { errorDetail }),
       }
     }
 
     const text = await safeText(response)
-    if (text === undefined) {
-      return {
-        status: response.status,
-        ...(retryAfterMs === undefined ? {} : { retryAfterMs }),
-        errorDetail: 'the response body was empty',
-      }
-    }
+    if (text === undefined) return { status: response.status, ...(retryAfterMs === undefined ? {} : { retryAfterMs }) }
     let parsed: unknown
     try {
       parsed = JSON.parse(text)
     } catch {
-      return {
-        status: response.status,
-        ...(retryAfterMs === undefined ? {} : { retryAfterMs }),
-        errorDetail: 'the response body was not valid JSON',
-      }
+      return { status: response.status, ...(retryAfterMs === undefined ? {} : { retryAfterMs }) }
     }
     return {
       status: response.status,
@@ -106,5 +90,13 @@ async function safeText(response: Response): Promise<string | undefined> {
     return text.length === 0 ? undefined : text
   } catch {
     return undefined
+  }
+}
+
+async function discardBody(response: Response): Promise<void> {
+  try {
+    await response.body?.cancel()
+  } catch {
+    // The status and Retry-After headers are enough to classify a rejected request.
   }
 }

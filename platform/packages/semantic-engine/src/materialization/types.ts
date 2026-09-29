@@ -2,6 +2,8 @@ import type {
   MaterializationChange,
   MaterializationStore,
   MaterializedConclusion,
+  RuleComputationArtifact,
+  IdentityPublishedBinding,
   RevisionString,
   ScopeRef,
   Uuid,
@@ -9,8 +11,9 @@ import type {
   Rfc3339UtcTimestamp,
   ToolContext,
 } from '@ontology/contracts'
-import type { RuleEvaluator, RuleFact, SupportRule } from '../rules'
+import type { RuleCapabilityIssue, RuleEvaluator, RuleFact, SupportRule } from '../rules'
 import type { DependencyEntityBinding } from './dependency-index'
+import type { AttributeProjectionIssue } from '../rules'
 
 /**
  * Incremental materialisation service (SPEC D5/D5.1, ADR-13, US-016/US-017, FR-18/19/20).
@@ -24,6 +27,16 @@ export interface PublishedSemanticData {
   readonly facts: readonly RuleFact[]
   readonly rules: readonly SupportRule[]
   readonly entityBindings: readonly DependencyEntityBinding[]
+  readonly definitionRef?: VersionRef
+  readonly readRevision?: { readonly semantic: RevisionString; readonly identity: RevisionString }
+  /** True only when facts/rules are versioned well enough to replay arbitrary recorded-time reads. */
+  readonly historicalAsOfSupported?: boolean
+  readonly identityBindings?: readonly IdentityPublishedBinding[]
+  /** True only when the source completed its configured record cap under a stable revision vector. */
+  readonly complete?: boolean
+  readonly ruleIssues?: readonly RuleCapabilityIssue[]
+  readonly attributeIssues?: readonly AttributeProjectionIssue[]
+  readonly issues?: readonly { readonly code: string; readonly message: string; readonly subjectEntityId?: string; readonly statementId?: string }[]
 }
 
 /**
@@ -89,13 +102,15 @@ export interface MaterializationReadRequest {
  * `materialized`/`on_demand` carry a current answer; `fenced`/`dirty` mean the affected
  * propositions are withheld rather than served stale (D5.1).
  */
-export type MaterializationReadStatus = 'materialized' | 'on_demand' | 'fenced' | 'dirty'
+export type MaterializationReadStatus = 'materialized' | 'on_demand' | 'fenced' | 'dirty' | 'history_unavailable'
 
 export interface MaterializationReadResult {
   readonly status: MaterializationReadStatus
   readonly scopeRef: ScopeRef
   readonly generation: RevisionString
   readonly conclusions: readonly MaterializedConclusion[]
+  readonly ruleArtifacts?: readonly RuleComputationArtifact[]
+  readonly issues?: PublishedSemanticData['issues']
   readonly blockedPropositionKeys: readonly string[]
   readonly reason?: string
 }

@@ -13,6 +13,7 @@ import type {
   ModelRef,
   NoulQuestion,
   ResourceRef,
+  ResourceKind,
   ScoreQuestion,
   SecretResolver,
   ToolContext,
@@ -25,10 +26,13 @@ import type {
   GenerativeClassificationFallback,
   GenerativeClassificationOutput,
   JevAdapterConfig,
+  JevActualState,
+  JevActualStateResolver,
   JevAdapterLogRecord,
   JevAdapterLogger,
   JevFallbackPolicy,
 } from '@ontology/adapter-model-jev'
+import { jevActualStateDigest } from '@ontology/adapter-model-jev'
 import { RecordingControlRepository, DIGEST_A, RESERVATION_ID, RUN_A, SPACE_A, TENANT_A } from './component-registry-fixtures'
 
 /**
@@ -44,6 +48,33 @@ export const OPTION_SET_HASH = `sha256:${'a'.repeat(64)}`
 export const OTHER_OPTION_SET_HASH = `sha256:${'b'.repeat(64)}`
 export const RUBRIC_DIGEST = `sha256:${'c'.repeat(64)}`
 
+export function actualDecisionState(): JevActualState {
+  return {
+    question: 'Which strategy should be used?',
+    candidates: [
+      { id: 'self_consumption', label: 'Self consumption', route: 'use-local-generation' },
+      { id: 'reserve_first', label: 'Reserve first', route: 'preserve-storage-reserve' },
+    ],
+    confirmedSemantics: { priority: 'site resilience', siteId: 'site-test-01' },
+    evidence: [
+      { ref: 'evidence-test-01', excerpt: 'Local generation should serve current site demand when available.' },
+      { ref: 'evidence-test-02', excerpt: 'Keep enough stored energy for the configured backup period.' },
+    ],
+    rubric: { reference: 'home-energy.strategy-rubric@1.0.0', levels: '0 to 10, higher is better' },
+  }
+}
+
+export function actualStateResolver(state: JevActualState = actualDecisionState()): JevActualStateResolver {
+  return {
+    resolve: (input, ctx) => {
+      if (!ctx.allowedResources.resourceKinds.includes(input.stateRef.kind)) {
+        return Promise.reject(new Error('state scope mismatch'))
+      }
+      return Promise.resolve({ state, resolvedRef: input.stateRef, complete: true })
+    },
+  }
+}
+
 export const CHOICE_QUESTION_ID = '0f1a2b4c-5d6e-4f70-8a9b-0c1d2e3f4a5b'
 export const SCORE_QUESTION_ID = '1f1a2b4c-5d6e-4f70-8a9b-0c1d2e3f4a5b'
 export const NOUL_QUESTION_ID = '2f1a2b4c-5d6e-4f70-8a9b-0c1d2e3f4a5b'
@@ -52,6 +83,8 @@ export interface RecordedJevRequest {
   readonly vendorModel: string
   readonly authorization: string | undefined
   readonly body: Record<string, unknown>
+  readonly method: string
+  readonly path: string | undefined
 }
 
 export interface JevServer {
@@ -62,12 +95,10 @@ export interface JevServer {
 }
 
 interface WireQuestion {
-  readonly question_id: string
+  readonly id: string
   readonly type: string
-  readonly definition_version: string
-  readonly option_set_hash?: string
-  readonly options?: readonly { readonly option_id: string; readonly label: string }[]
-  readonly scale?: { readonly min: number; readonly max: number }
+  readonly instructions: unknown
+  readonly criteria: unknown
 }
 
 export async function startJevServer(): Promise<JevServer> {
@@ -87,10 +118,19 @@ export async function startJevServer(): Promise<JevServer> {
   async function handle(request: IncomingMessage, response: ServerResponse): Promise<void> {
     const body = await readJson(request)
     const vendorModel = String(body['model'] ?? '')
-    requests.push({ vendorModel, authorization: request.headers.authorization, body })
+    requests.push({
+      vendorModel,
+      authorization: request.headers.authorization,
+      body,
+      method: request.method ?? '',
+      path: request.url,
+    })
     response.on('close', () => {
       if (!response.writableEnded) abortedResponses.push(1)
     })
+    if (request.method !== 'POST' || request.url !== '/v1/systemone') {
+      return json(response, 404, { error: 'System One requires POST /v1/systemone' })
+    }
     respond(vendorModel, body, response, requests)
   }
 
@@ -101,9 +141,7 @@ export async function startJevServer(): Promise<JevServer> {
     close: () =>
       new Promise<void>((resolve) => {
         for (const socket of sockets) socket.destroy()
-        server.close(() => {
-          resolve()
-        })
+        server.close(() => resolve())
       }),
   }
 }
@@ -128,132 +166,55 @@ function json(response: ServerResponse, status: number, body: unknown, headers?:
 
 function asQuestions(body: Record<string, unknown>): WireQuestion[] {
   const raw = body['questions']
-  if (!Array.isArray(raw)) return []
-  const out: WireQuestion[] = []
-  for (const item of raw) {
-    if (typeof item !== 'object' || item === null) continue
-    const record = item as Record<string, unknown>
-    const questionId = record['question_id']
-    const type = record['type']
-    const definitionVersion = record['definition_version']
-    if (typeof questionId !== 'string' || typeof type !== 'string' || typeof definitionVersion !== 'string') {
-      continue
-    }
-    const optionsRaw = record['options']
-    const options = Array.isArray(optionsRaw)
-      ? optionsRaw.flatMap((option) => {
-          if (typeof option !== 'object' || option === null) return []
-          const optionRecord = option as Record<string, unknown>
-          const id = optionRecord['option_id']
-          const label = optionRecord['label']
-          return typeof id === 'string' && typeof label === 'string' ? [{ option_id: id, label }] : []
-        })
-      : undefined
-    const optionSetHash = record['option_set_hash']
-    const scaleRaw = record['scale']
-    const scale =
-      typeof scaleRaw === 'object' && scaleRaw !== null
-        ? (scaleRaw as Record<string, unknown>)
-        : undefined
-    const min = scale?.['min']
-    const max = scale?.['max']
-    out.push({
-      question_id: questionId,
-      type,
-      definition_version: definitionVersion,
-      ...(typeof optionSetHash === 'string' ? { option_set_hash: optionSetHash } : {}),
-      ...(options === undefined ? {} : { options }),
-      ...(typeof min === 'number' && typeof max === 'number' ? { scale: { min, max } } : {}),
-    })
-  }
-  return out
+  if (!isRecord(raw)) return []
+  return Object.entries(raw).flatMap(([id, value]) => {
+    if (!isRecord(value) || typeof value['type'] !== 'string') return []
+    return [{ id, type: value['type'], instructions: value['instructions'], criteria: value['criteria'] }]
+  })
 }
 
-interface WireDistribution {
-  readonly option_set_hash: string
-  readonly entries: readonly { readonly option_id: string; readonly probability: number }[]
-}
-
-interface WireResult {
-  readonly question_id: string
-  readonly question_type: string
-  readonly definition_version: string
-  readonly option_set_hash: string
-  readonly selected_option_id?: string
-  readonly distribution?: WireDistribution
-  readonly scores?: readonly { readonly option_id: string; readonly score: number; readonly confidence?: number }[]
-  readonly confidence?: number
-}
-
-function distributionFor(question: WireQuestion): WireDistribution {
-  const options = question.options ?? []
-  const optionSetHash = question.option_set_hash ?? OPTION_SET_HASH
-  const rest = Math.max(1, options.length - 1)
-  return {
-    option_set_hash: optionSetHash,
-    entries: options.map((option, index) => ({
-      option_id: option.option_id,
-      probability: index === 0 ? 0.7 : 0.3 / rest,
-    })),
-  }
-}
-
-function choiceResult(question: WireQuestion): WireResult {
-  const first = question.options?.[0]
-  return {
-    question_id: question.question_id,
-    question_type: 'choice',
-    definition_version: question.definition_version,
-    option_set_hash: question.option_set_hash ?? OPTION_SET_HASH,
-    ...(first === undefined ? {} : { selected_option_id: first.option_id }),
-    distribution: distributionFor(question),
-    confidence: 0.7,
-  }
-}
-
-function scoreResult(question: WireQuestion): WireResult {
-  const min = question.scale?.min ?? 0
-  const max = question.scale?.max ?? 1
-  const span = max - min
-  return {
-    question_id: question.question_id,
-    question_type: 'score',
-    definition_version: question.definition_version,
-    option_set_hash: question.option_set_hash ?? OPTION_SET_HASH,
-    scores: (question.options ?? []).map((option, index) => ({
-      option_id: option.option_id,
-      score: min + span * (index === 0 ? 1 : 0.5),
-      confidence: 0.8,
-    })),
-    confidence: 0.8,
-  }
-}
-
-function noulResult(question: WireQuestion): WireResult {
-  return {
-    question_id: question.question_id,
-    question_type: 'noul',
-    definition_version: question.definition_version,
-    option_set_hash: OPTION_SET_HASH,
-    confidence: 0.9,
-  }
-}
-
-function normalResult(question: WireQuestion): WireResult {
+function normalAnswer(question: WireQuestion): Record<string, unknown> {
   switch (question.type) {
-    case 'choice':
-      return choiceResult(question)
-    case 'score':
-      return scoreResult(question)
+    case 'choice': {
+      const criteria = isRecord(question.criteria) ? question.criteria : {}
+      const options = Object.keys(criteria)
+      const first = options[0]
+      const remainder = options.slice(1)
+      const probabilities: Record<string, number> = {}
+      for (const [index, option] of options.entries()) {
+        probabilities[option] = index === 0 ? 0.7 : 0.3 / Math.max(1, remainder.length)
+      }
+      return { type: 'choice', choice: first ?? '', probabilities, confidence: 0.7 }
+    }
+    case 'score': {
+      const criteria = Array.isArray(question.criteria) ? question.criteria.filter((item): item is string => typeof item === 'string') : []
+      const instructions = isRecord(question.instructions) ? question.instructions : {}
+      const candidate = isRecord(instructions['candidate']) ? instructions['candidate'] : {}
+      const optionId = candidate['id']
+      const target = optionId === 'self_consumption' ? criteria.length - 1 : (criteria.length - 1) / 2
+      const lower = Math.floor(target)
+      const upper = Math.ceil(target)
+      const probabilities = Object.fromEntries(criteria.map((_criterion, index) => [
+        String(index), index === lower && index === upper ? 1 : index === lower ? upper - target : index === upper ? target - lower : 0,
+      ]))
+      const score = Object.entries(probabilities).reduce((total, [index, probability]) => total + Number(index) * Number(probability), 0)
+      return {
+        type: 'score',
+        score,
+        legend: Object.fromEntries(criteria.map((criterion, index) => [String(index), criterion])),
+        probabilities,
+        confidence: 0.8,
+      }
+    }
     default:
-      return noulResult(question)
+      return { type: 'noul', noul: 0.9 }
   }
 }
 
-function okResponse(results: readonly WireResult[], usage?: Record<string, number>): Record<string, unknown> {
+function okResponse(answers: Record<string, unknown>, usage?: Record<string, number>): Record<string, unknown> {
   return {
-    model_version: 'jev-2026-09',
-    results,
+    model: 'jev-1.13.0',
+    answers,
     usage: usage ?? { input_tokens: 20, output_tokens: 5 },
   }
 }
@@ -266,193 +227,111 @@ function respond(
 ): void {
   const questions = asQuestions(body)
   const first = questions[0]
-  const all = questions.map(normalResult)
+  const allAnswers = Object.fromEntries(questions.map((question) => [question.id, normalAnswer(question)]))
+  const firstAnswer = first === undefined ? undefined : normalAnswer(first)
+  const sendAnswers = (answers: Record<string, unknown>, usage?: Record<string, number>): void => {
+    json(response, 200, okResponse(answers, usage))
+  }
+  const error = (status: number, message: string, headers?: Record<string, string>): void => {
+    json(response, status, { error: message }, headers)
+  }
 
   switch (fixture) {
     case 'choice':
     case 'score':
     case 'noul':
-      if (first === undefined) return json(response, 400, { error: 'no question' })
-      return json(response, 200, okResponse([normalResult(first)]))
     case 'mixed':
-      return json(response, 200, okResponse(all))
+      if (first === undefined || firstAnswer === undefined) return error(422, 'no question')
+      return sendAnswers(fixture === 'score' || fixture === 'mixed' ? allAnswers : { [first.id]: firstAnswer })
     case 'out_of_range': {
-      if (first === undefined) return json(response, 400, { error: 'no question' })
-      const result = choiceResult(first)
-      return json(
-        response,
-        200,
-        okResponse([
-          {
-            ...result,
-            distribution: {
-              option_set_hash: result.option_set_hash,
-              entries: (result.distribution?.entries ?? []).map((entry, index) => ({
-                option_id: entry.option_id,
-                probability: index === 0 ? 1.5 : entry.probability,
-              })),
-            },
-          },
-        ]),
-      )
+      if (first === undefined || firstAnswer === undefined || !isRecord(firstAnswer['probabilities'])) return error(422, 'no question')
+      const probabilities = { ...firstAnswer['probabilities'] }
+      const firstOption = Object.keys(probabilities)[0]
+      if (firstOption !== undefined) probabilities[firstOption] = 1.5
+      return sendAnswers({ [first.id]: { ...firstAnswer, probabilities } })
     }
     case 'non_normalised': {
-      if (first === undefined) return json(response, 400, { error: 'no question' })
-      const result = choiceResult(first)
-      return json(
-        response,
-        200,
-        okResponse([
-          {
-            ...result,
-            distribution: {
-              option_set_hash: result.option_set_hash,
-              entries: (result.distribution?.entries ?? []).map((entry, index) => ({
-                option_id: entry.option_id,
-                probability: index === 0 ? 0.5 : 0.1,
-              })),
-            },
-          },
-        ]),
-      )
+      if (first === undefined || firstAnswer === undefined || !isRecord(firstAnswer['probabilities'])) return error(422, 'no question')
+      const probabilities = Object.fromEntries(Object.keys(firstAnswer['probabilities']).map((key, index) => [key, index === 0 ? 0.5 : 0.1]))
+      return sendAnswers({ [first.id]: { ...firstAnswer, probabilities } })
     }
     case 'missing_option': {
-      if (first === undefined) return json(response, 400, { error: 'no question' })
-      const result = choiceResult(first)
-      const entries = (result.distribution?.entries ?? []).slice(0, 1)
-      return json(
-        response,
-        200,
-        okResponse([
-          {
-            ...result,
-            distribution: { option_set_hash: result.option_set_hash, entries },
-          },
-        ]),
-      )
+      if (first === undefined || firstAnswer === undefined || !isRecord(firstAnswer['probabilities'])) return error(422, 'no question')
+      const probabilities = { ...firstAnswer['probabilities'] }
+      delete probabilities[Object.keys(probabilities).at(-1) ?? '']
+      return sendAnswers({ [first.id]: { ...firstAnswer, probabilities } })
     }
     case 'mismatched_option': {
-      if (first === undefined) return json(response, 400, { error: 'no question' })
-      const result = choiceResult(first)
-      const entries = [
-        ...(result.distribution?.entries ?? []).slice(1),
-        { option_id: 'not-in-the-question', probability: 0.7 },
-      ]
-      return json(
-        response,
-        200,
-        okResponse([
-          {
-            ...result,
-            distribution: { option_set_hash: result.option_set_hash, entries },
-          },
-        ]),
-      )
+      if (first === undefined || firstAnswer === undefined || !isRecord(firstAnswer['probabilities'])) return error(422, 'no question')
+      const probabilities = { ...firstAnswer['probabilities'] }
+      delete probabilities[Object.keys(probabilities)[0] ?? '']
+      probabilities['not-in-the-question'] = 0.7
+      return sendAnswers({ [first.id]: { ...firstAnswer, probabilities } })
     }
-    case 'unknown_question_type': {
-      if (first === undefined) return json(response, 400, { error: 'no question' })
-      return json(response, 200, okResponse([{ ...normalResult(first), question_type: 'ranking' }]))
-    }
-    case 'wrong_definition_version': {
-      if (first === undefined) return json(response, 400, { error: 'no question' })
-      return json(
-        response,
-        200,
-        okResponse([{ ...normalResult(first), definition_version: '9.9.9' }]),
-      )
-    }
-    case 'score_out_of_scale': {
-      if (first === undefined) return json(response, 400, { error: 'no question' })
-      const result = scoreResult(first)
-      const scores = (result.scores ?? []).map((score) => ({ ...score, score: (first.scale?.max ?? 1) + 5 }))
-      return json(response, 200, okResponse([{ ...result, scores }]))
-    }
-    case 'noul_with_options': {
-      if (first === undefined) return json(response, 400, { error: 'no question' })
-      const result = noulResult(first)
-      return json(
-        response,
-        200,
-        okResponse([
-          {
-            ...result,
-            distribution: { option_set_hash: OPTION_SET_HASH, entries: [{ option_id: 'x', probability: 1 }] },
-          },
-        ]),
-      )
-    }
+    case 'unknown_choice':
+      if (first === undefined || firstAnswer === undefined) return error(422, 'no question')
+      return sendAnswers({ [first.id]: { ...firstAnswer, choice: 'not-in-the-question' } })
+    case 'unknown_question_type':
+      if (first === undefined || firstAnswer === undefined) return error(422, 'no question')
+      return sendAnswers({ [first.id]: { ...firstAnswer, type: 'ranking' } })
+    case 'wrong_definition_version':
+      if (first === undefined || firstAnswer === undefined) return error(422, 'no question')
+      return sendAnswers({ [first.id]: { ...firstAnswer, definition_version: '9.9.9' } })
+    case 'score_out_of_scale':
+      if (first === undefined || firstAnswer === undefined) return error(422, 'no question')
+      return sendAnswers({ [first.id]: { ...firstAnswer, score: 99 } })
+    case 'score_mean_mismatch':
+      if (first === undefined || firstAnswer === undefined) return error(422, 'no question')
+      return sendAnswers({ [first.id]: { ...firstAnswer, score: 0.2 } })
+    case 'noul_with_options':
+      if (first === undefined || firstAnswer === undefined) return error(422, 'no question')
+      return sendAnswers({ [first.id]: { ...firstAnswer, confidence: 0.9 } })
     case 'missing_question':
-      return json(response, 200, okResponse([]))
-    case 'extra_question': {
-      if (first === undefined) return json(response, 400, { error: 'no question' })
-      return json(
-        response,
-        200,
-        okResponse([
-          normalResult(first),
-          {
-            question_id: '3f1a2b4c-5d6e-4f70-8a9b-0c1d2e3f4a5b',
-            question_type: 'noul',
-            definition_version: '1.0.0',
-            option_set_hash: OPTION_SET_HASH,
-            confidence: 0.5,
-          },
-        ]),
-      )
-    }
-    case 'low_confidence': {
-      if (first === undefined) return json(response, 400, { error: 'no question' })
-      return json(response, 200, okResponse([{ ...normalResult(first), confidence: 0.2 }]))
-    }
-    case 'partial_usage': {
-      if (first === undefined) return json(response, 400, { error: 'no question' })
-      return json(response, 200, okResponse([normalResult(first)], { input_tokens: 11 }))
-    }
-    case 'no_usage': {
-      if (first === undefined) return json(response, 400, { error: 'no question' })
-      return json(response, 200, { model_version: 'jev-2026-09', results: [normalResult(first)] })
-    }
+      return sendAnswers({})
+    case 'extra_question':
+      if (first === undefined || firstAnswer === undefined) return error(422, 'no question')
+      return sendAnswers({ [first.id]: firstAnswer, unasked: { type: 'noul', noul: 0.5 } })
+    case 'low_confidence':
+      if (first === undefined || firstAnswer === undefined) return error(422, 'no question')
+      return sendAnswers({ [first.id]: { ...firstAnswer, confidence: 0.2 } })
+    case 'partial_usage':
+      if (first === undefined || firstAnswer === undefined) return error(422, 'no question')
+      return sendAnswers({ [first.id]: firstAnswer }, { input_tokens: 11 })
+    case 'no_usage':
+      if (first === undefined || firstAnswer === undefined) return error(422, 'no question')
+      return json(response, 200, { model: 'jev-1.13.0', answers: { [first.id]: firstAnswer } })
     case 'malformed_json':
       response.writeHead(200, { 'content-type': 'application/json' })
-      response.end('{"model_version": "jev-2026-09", "results": [')
+      response.end('{"model":"jev-1.13.0","answers":{')
       return
     case 'not_json':
       response.writeHead(200, { 'content-type': 'application/json' })
       response.end('def choose(): pass')
       return
     case 'leak_error':
-      response.writeHead(401, { 'content-type': 'application/json' })
-      response.end(JSON.stringify({ error: `invalid credential ${TEST_SECRET}` }))
-      return
+      return error(401, `invalid credential ${TEST_SECRET}`)
+    case 'http_401':
+      return error(401, 'invalid API key')
+    case 'http_422':
+      return error(422, 'request validation failed')
     case 'http_429':
-      response.writeHead(429, { 'content-type': 'application/json', 'retry-after': '2' })
-      response.end(JSON.stringify({ error: 'rate limited' }))
-      return
+      return error(429, 'rate limited', { 'retry-after': '2' })
+    case 'http_529':
+      return error(529, 'provider overloaded', { 'retry-after': '0' })
     case 'http_503':
-      response.writeHead(503, { 'content-type': 'application/json' })
-      response.end(JSON.stringify({ error: 'JEV overloaded' }))
-      return
+      return error(503, 'JEV unavailable')
     case 'http_504':
-      response.writeHead(504, { 'content-type': 'application/json' })
-      response.end(JSON.stringify({ error: 'gateway timeout' }))
-      return
+      return error(504, 'gateway timeout')
     case 'http_500':
-      response.writeHead(500, { 'content-type': 'application/json' })
-      response.end(JSON.stringify({ error: 'internal provider error' }))
-      return
+      return error(500, 'internal provider error')
     case 'http_403':
-      response.writeHead(403, { 'content-type': 'application/json' })
-      response.end(JSON.stringify({ error: 'forbidden' }))
-      return
-    case 'flaky_503': {
-      const attempts = requests.filter((request) => request.vendorModel === 'flaky_503').length
-      if (attempts <= 1) {
-        response.writeHead(503, { 'content-type': 'application/json' })
-        response.end(JSON.stringify({ error: 'JEV overloaded' }))
-        return
-      }
-      if (first === undefined) return json(response, 400, { error: 'no question' })
-      return json(response, 200, okResponse([normalResult(first)]))
+      return error(403, 'forbidden')
+    case 'flaky_503':
+    case 'flaky_529': {
+      const status = fixture === 'flaky_529' ? 529 : 503
+      const attempts = requests.filter((request) => request.vendorModel === fixture).length
+      if (attempts <= 1) return error(status, 'JEV temporarily unavailable')
+      return sendAnswers(allAnswers)
     }
     case 'drop':
       response.socket?.destroy()
@@ -461,9 +340,12 @@ function respond(
       response.writeHead(200, { 'content-type': 'application/json' })
       return
     default:
-      response.writeHead(500, { 'content-type': 'application/json' })
-      response.end(JSON.stringify({ error: `unknown fixture ${fixture}` }))
+      return error(500, `unknown fixture ${fixture}`)
   }
+}
+
+function isRecord(value: unknown): value is Record<string, unknown> {
+  return typeof value === 'object' && value !== null && !Array.isArray(value)
 }
 
 /** Server-side resolver double. Returns a real `SecretValue`, so redaction is exercised. */
@@ -549,7 +431,10 @@ export function remainingOf(harness: BudgetHarness): Promise<BudgetLedgerSnapsho
   return harness.budget.remaining(harness.ledgerId, harness.ctx)
 }
 
-export function modelContext(deadline = new Date(Date.now() + 60_000).toISOString()): ToolContext {
+export function modelContext(
+  deadline = new Date(Date.now() + 60_000).toISOString(),
+  resourceKinds: readonly ResourceKind[] = ['run'],
+): ToolContext {
   return createToolContext({
     principal: {
       tenantId: TENANT_A,
@@ -571,7 +456,7 @@ export function modelContext(deadline = new Date(Date.now() + 60_000).toISOStrin
     allowedResources: {
       tenantId: TENANT_A,
       spaceId: SPACE_A,
-      resourceKinds: [],
+      resourceKinds: [...resourceKinds],
       sourceRefs: [],
       collectionRefs: [],
       domains: [],
@@ -582,7 +467,7 @@ export function modelContext(deadline = new Date(Date.now() + 60_000).toISOStrin
 }
 
 export function stateRef(): ResourceRef {
-  return { id: RUN_A, version: '1.0.0', digest: DIGEST_A, kind: 'run' }
+  return { id: RUN_A, version: '1.0.0', digest: jevActualStateDigest(actualDecisionState()), kind: 'run' }
 }
 
 export function choiceQuestion(overrides: Partial<ChoiceQuestion> = {}): ChoiceQuestion {
@@ -650,6 +535,10 @@ export interface AdapterOptions {
   readonly retryBaseDelayMs?: number
   readonly estimatedTokens?: number
   readonly endpoint?: string
+  readonly stateResolver?: JevActualStateResolver
+  readonly noStateResolver?: boolean
+  readonly maxStateBytes?: number
+  readonly maxStateRecords?: number
 }
 
 export function makeAdapter(options: AdapterOptions): JevDecisionAdapter {
@@ -657,6 +546,11 @@ export function makeAdapter(options: AdapterOptions): JevDecisionAdapter {
     baseUrl: options.server.baseUrl,
     secretRef: SECRET_REF,
     models: { [PLATFORM_MODEL_ID]: { vendorModel: options.fixture } },
+    ...(options.noStateResolver === true
+      ? {}
+      : { stateResolver: options.stateResolver ?? actualStateResolver() }),
+    ...(options.maxStateBytes === undefined ? {} : { maxStateBytes: options.maxStateBytes }),
+    ...(options.maxStateRecords === undefined ? {} : { maxStateRecords: options.maxStateRecords }),
     fallbackPolicy: options.fallbackPolicy ?? 'clarify',
     secrets: staticSecretResolver(),
     budget: options.harness.budget,

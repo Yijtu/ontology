@@ -12,6 +12,8 @@ export { JobProgressPanel } from './components/JobProgressPanel'
 export type { JobProgressPanelProps } from './components/JobProgressPanel'
 export { CandidateReviewPanel } from './components/CandidateReviewPanel'
 export type { CandidateReviewPanelProps } from './components/CandidateReviewPanel'
+export { CoreImportPanel } from './components/CoreImportPanel'
+export type { CoreImportPanelProps } from './components/CoreImportPanel'
 export { QueryPanel } from './components/QueryPanel'
 export type { QueryContextField, QueryPanelProps } from './components/QueryPanel'
 export { EvidencePanel } from './components/EvidencePanel'
@@ -112,6 +114,10 @@ export type {
   CandidateSpanSource,
   CandidateSummary,
   ComponentFilter,
+  CoreImportRequest,
+  CoreImportResult,
+  CoreDeploymentInfo,
+  CoreDeploymentScenario,
   CreateIngestionRequest,
   CreateJobResponse,
   CreateRunRequest,

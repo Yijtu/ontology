@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useReducer, useRef, useState } from 'react'
-import type { ProfileRef, RunRoutePreference } from '@ontology/contracts'
+import type { ProfileRef, ResourceRef, RunRoutePreference } from '@ontology/contracts'
 import { ApiError } from '../api/errors'
 import type { QueryRunView, RunEventStream, WorkbenchClient } from '../api/client'
 import {
@@ -11,6 +11,8 @@ import {
 import type { WorkbenchError } from '../state/workbench'
 import { StatePanel } from './StatePanel'
 import { useViewport } from './useViewport'
+import { PublishedAnswerBody } from './PublishedAnswerBody'
+import type { CoreDeploymentInfo } from '../api/client'
 
 /**
  * The business query surface (US-019/020/021). It lets a user ask within the resolved
@@ -24,10 +26,15 @@ export interface QueryPanelProps {
   readonly client: WorkbenchClient
   readonly profileRef: ProfileRef
   readonly timeZone: string
+  /** Deployment-owned safe task IDs offered as shortcuts; arbitrary queries remain possible. */
+  readonly availableTasks?: readonly string[]
+  readonly modelCapabilities?: CoreDeploymentInfo['models']
   /** Deployment-owned context fields; the shared query view has no industry fields. */
   readonly contextFields?: readonly QueryContextField[]
   /** Deep-linked run id (`?run=<id>`) so a state can be reproduced in a browser. */
   readonly initialRunId?: string
+  /** Opens a source reference through the host's existing evidence/history surface. */
+  readonly onEvidenceReference?: (ref: ResourceRef) => void
 }
 
 export type QueryContextField =
@@ -194,7 +201,13 @@ function OutcomePanel({ state }: { readonly state: QueryState }) {
   )
 }
 
-function AnswerPanel({ state }: { readonly state: QueryState }) {
+function AnswerPanel({
+  state,
+  onEvidenceReference,
+}: {
+  readonly state: QueryState
+  readonly onEvidenceReference?: (ref: ResourceRef) => void
+}) {
   const answer = state.answer
   if (state.answerState === 'in_progress') {
     return (
@@ -222,9 +235,25 @@ function AnswerPanel({ state }: { readonly state: QueryState }) {
       </section>
     )
   }
+  const semanticReviewText = answer.semanticReview?.status === 'completed'
+    ? '语义核验已完成。'
+    : answer.semanticReview?.status === 'not_run'
+      ? `语义核验未运行（${answer.semanticReview.reason}）；答案仅表示硬核验通过的内容。`
+      : '该答案没有记录语义核验状态；不能推断语义核验已经完成。'
   return (
     <section className="query__answer" data-testid="query-answer" data-answer-state="published">
-      <h3>已核验答案（按内容哈希绑定）</h3>
+      <PublishedAnswerBody
+        answer={answer}
+        {...(onEvidenceReference === undefined ? {} : { onEvidenceReference })}
+      />
+      <p
+        data-testid="answer-semantic-review"
+        data-state={answer.semanticReview?.status ?? 'unknown'}
+      >
+        {semanticReviewText}
+      </p>
+      <details className="query__answer-audit" data-testid="answer-audit">
+        <summary>答案审计信息</summary>
       <dl>
         <dt>答案 ID</dt>
         <dd data-testid="answer-id">{answer.answerId}</dd>
@@ -241,18 +270,12 @@ function AnswerPanel({ state }: { readonly state: QueryState }) {
           </>
         )}
       </dl>
-      {answer.limitations.length === 0 ? null : (
-        <ul className="query__limitations" data-testid="answer-limitations">
-          {answer.limitations.map((limitation) => (
-            <li key={limitation}>{limitation}</li>
-          ))}
-        </ul>
-      )}
+      </details>
     </section>
   )
 }
 
-export function QueryPanel({ client, profileRef, timeZone, contextFields = [], initialRunId }: QueryPanelProps) {
+export function QueryPanel({ client, profileRef, timeZone, availableTasks = [], modelCapabilities, contextFields = [], initialRunId, onEvidenceReference }: QueryPanelProps) {
   const viewport = useViewport()
   const [state, dispatch] = useReducer(queryReducer, undefined, initialQueryState)
   const [question, setQuestion] = useState('')
@@ -261,6 +284,11 @@ export function QueryPanel({ client, profileRef, timeZone, contextFields = [], i
   const [allowWeb, setAllowWeb] = useState(false)
   const [clarificationInput, setClarificationInput] = useState('')
   const streamRef = useRef<RunEventStream | undefined>(undefined)
+  const factExample = availableTasks
+    .filter((task) => task.startsWith('facts:'))
+    .slice(0, 3)
+    .map((task) => task.slice('facts:'.length))
+    .join(',')
 
   const closeStream = useCallback(() => {
     streamRef.current?.close()
@@ -418,6 +446,15 @@ export function QueryPanel({ client, profileRef, timeZone, contextFields = [], i
         <p className="panel__hint">
           在场景允许范围内提问；只展示可审计进度与已验证数据，未核验草稿不会作为答案发送。
         </p>
+        {availableTasks.length === 0 ? null : (
+          <p className="panel__hint" data-testid="query-capability-note">
+            当前仅开放已注册属性事实读取任务；任意自然语言规划、规则推理和自由生成暂不可用。
+            {factExample.length === 0 ? '' : `格式为 facts:<属性ID>，最多可用逗号组合3个属性，例如 facts:${factExample}。`}
+            {modelCapabilities === undefined ? '模型配置状态未知。' : (
+              `Company生成${modelCapabilities.generation ? '已配置' : '未启用'}；JEV决策${modelCapabilities.decision ? '已配置' : '未启用'}。`
+            )}
+          </p>
+        )}
       </header>
 
       {phase === 'loading' || phase === 'not_configured' || phase === 'failure' || phase === 'permission_denied' ? (
@@ -439,12 +476,27 @@ export function QueryPanel({ client, profileRef, timeZone, contextFields = [], i
             }}
           >
             <h3>提问</h3>
+            {availableTasks.length === 0 ? null : (
+              <label className="query__field">
+                <span>已注册读取任务</span>
+                <select
+                  name="registeredTask"
+                  data-testid="query-registered-task"
+                  value={availableTasks.includes(question) ? question : ''}
+                  onChange={(event) => setQuestion(event.target.value)}
+                >
+                  <option value="">选择一个任务以填入问题</option>
+                  {availableTasks.map((task) => <option key={task} value={task}>{task}</option>)}
+                </select>
+              </label>
+            )}
             <label className="query__field">
               <span>问题</span>
               <textarea
                 name="question"
                 data-testid="query-question"
                 value={question}
+                placeholder={factExample.length === 0 ? '' : `facts:${factExample}`}
                 onChange={(event) => setQuestion(event.target.value)}
               />
             </label>
@@ -569,7 +621,7 @@ export function QueryPanel({ client, profileRef, timeZone, contextFields = [], i
               )}
 
               <OutcomePanel state={state} />
-              <AnswerPanel state={state} />
+              <AnswerPanel state={state} {...(onEvidenceReference === undefined ? {} : { onEvidenceReference })} />
             </section>
           )}
           </div>

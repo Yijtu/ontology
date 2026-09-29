@@ -304,7 +304,7 @@ beforeAll(async () => {
 
   app = createApiServer({
     authenticate: testAuthenticator,
-    runs: { service: runService, progress },
+    runs: { service: runService, progress, submissionMode: 'records-only' },
     answers: { reader },
   })
 }, 300_000)
@@ -416,6 +416,7 @@ describe('business query UI routes against real PostgreSQL', () => {
       scenarioManifestHash: `sha256:${'c'.repeat(64)}`,
       publicationKind: 'verified',
       limitations: [],
+      body: { schemaVersion: 'answer-draft@1', blocks: [{ kind: 'text', text: 'A verified result.' }], claims: [], assertions: [] },
       publishedAt: FIXED_NOW,
     }
     await answerStore.record(

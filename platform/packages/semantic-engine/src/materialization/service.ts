@@ -12,10 +12,12 @@ import type {
   ValidityInterval,
   VersionRef,
 } from '@ontology/contracts'
-import type { RuleConclusionResult, RuleFact, SupportRule } from '../rules'
+import type { RuleApplicabilityResult, RuleConclusionResult, RuleFact, SupportRule } from '../rules'
 import { RuleEvaluator, conclusionQualifiedKey } from '../rules'
 import { MaterializationDependencyIndex } from './dependency-index'
 import { MaterializationError } from './errors'
+import { ruleComputationArtifactsOf } from './artifacts'
+import type { RuleComputationArtifact } from '@ontology/contracts'
 import type {
   MaterializationAdvanceResult,
   MaterializationPublishedSource,
@@ -158,11 +160,16 @@ function subIntervalsFor(
   }
   const only = sorted[0]
   if (sorted.length === 1 && only !== undefined) windows.push({ validFrom: only })
+  const last = sorted.at(-1)
+  if (sorted.length > 1 && last !== undefined) windows.push({ validFrom: last })
   if (changeWindow === undefined) return windows
   return windows.filter((window) => intersects(window, changeWindow))
 }
 
-function materializedConclusionOf(conclusion: RuleConclusionResult): MaterializedConclusion {
+function materializedConclusionOf(
+  conclusion: RuleConclusionResult,
+  ruleArtifacts: readonly RuleComputationArtifact[] = [],
+): MaterializedConclusion {
   return {
     propositionKey: conclusion.propositionKey,
     qualifiedPropositionKey: conclusion.qualifiedPropositionKey,
@@ -181,6 +188,85 @@ function materializedConclusionOf(conclusion: RuleConclusionResult): Materialize
       digest: ref.digest,
     })),
     supportNodeId: conclusion.supportNodeId,
+    ...(ruleArtifacts.length === 0 ? {} : { ruleArtifacts: [...ruleArtifacts] }),
+  }
+}
+
+interface MaterializationEvaluation {
+  readonly conclusions: readonly MaterializedConclusion[]
+  readonly applicabilities: readonly RuleApplicabilityResult[]
+  readonly ruleArtifacts: readonly RuleComputationArtifact[]
+}
+
+function artifactsForProposition(
+  propositionKey: string,
+  rules: readonly SupportRule[],
+  artifacts: readonly RuleComputationArtifact[],
+): RuleComputationArtifact[] {
+  const instanceKeys = new Set(
+    rules
+      .filter((rule) => rule.conclusion.propositionKey === propositionKey)
+      .flatMap((rule) => rule.publishedInstance === undefined ? [] : [rule.publishedInstance.instanceKey]),
+  )
+  return artifacts.filter((artifact) => instanceKeys.has(artifact.instanceKey))
+}
+
+function dedupeArtifacts(artifacts: readonly RuleComputationArtifact[]): RuleComputationArtifact[] {
+  const byInstance = new Map<string, RuleComputationArtifact>()
+  for (const artifact of artifacts) byInstance.set(artifact.instanceKey, artifact)
+  return [...byInstance.values()].sort((left, right) => left.instanceKey.localeCompare(right.instanceKey))
+}
+
+function isIncompletePublishedRead(error: unknown): boolean {
+  if (typeof error !== 'object' || error === null || !('code' in error)) return false
+  return error.code === 'INCOMPLETE_PUBLISHED_READ'
+}
+
+function incompleteReason(published: PublishedSemanticData): string {
+  const issues = issuesOf(published).map((issue) => `${issue.code}: ${issue.message}`)
+  return issues.length === 0
+    ? 'the published semantic source did not complete its stable read'
+    : `the published semantic source is incomplete: ${issues.join('; ')}`
+}
+
+function issuesOf(published: PublishedSemanticData): NonNullable<MaterializationReadResult['issues']> {
+  return [
+    ...(published.issues ?? []),
+    ...(published.ruleIssues ?? []).map((issue) => ({
+      code: issue.code,
+      message: issue.message,
+      ...(issue.subjectEntityId === undefined ? {} : { subjectEntityId: issue.subjectEntityId }),
+    })),
+    ...(published.attributeIssues ?? []).map((issue) => ({
+      code: issue.code,
+      message: issue.attributeId === undefined ? issue.message : `${issue.attributeId}: ${issue.message}`,
+      statementId: issue.statementId,
+    })),
+  ]
+}
+
+function knownPropositions(published: PublishedSemanticData): string[] {
+  return [...new Set(published.rules.map((rule) => rule.conclusion.propositionKey))].sort()
+}
+
+function incompleteReadResult(
+  scopeRef: ScopeRef,
+  generation: RevisionString,
+  published: PublishedSemanticData | undefined,
+  propositionKeys: readonly string[] | undefined,
+  status: 'dirty' | 'fenced' | 'history_unavailable',
+  reason: string,
+): MaterializationReadResult {
+  return {
+    status,
+    scopeRef,
+    generation,
+    conclusions: [],
+    blockedPropositionKeys: propositionKeys === undefined
+      ? (published === undefined ? [] : knownPropositions(published))
+      : [...new Set(propositionKeys)].sort(),
+    reason,
+    ...(published === undefined ? {} : { issues: issuesOf(published) }),
   }
 }
 
@@ -223,6 +309,31 @@ export class IncrementalMaterializer {
     const scopeRef = scopeOf(ctx)
     assertScope(change.scopeRef, scopeRef)
     const published = await this.#publishedSource.load(scopeRef, ctx)
+    if (published.complete === false) {
+      const reason = incompleteReason(published)
+      const fence = await this.#materialization.openFence(
+        scopeRef,
+        {
+          fenceId: this.#newId(),
+          reason: `incomplete published snapshot for change ${change.changeId}: ${reason}`,
+          propositionKeys: [],
+          openedAt: change.recordedAt,
+        },
+        ctx,
+      )
+      await this.#materialization.markDirty(
+        scopeRef,
+        { reason, recordedSeq: change.recordedSeq, markedAt: change.recordedAt },
+        ctx,
+      )
+      return {
+        change,
+        fenceId: fence.fenceId,
+        affectedRuleIds: [],
+        affectedPropositionKeys: [],
+        deferred: true,
+      }
+    }
     const index = MaterializationDependencyIndex.build(published)
     const affectedRuleIds = index.affectedRuleIds(change)
     const affectedPropositionKeys = index.affectedPropositionKeys(affectedRuleIds)
@@ -272,6 +383,12 @@ export class IncrementalMaterializer {
     this.#faultInjection?.beforeCommit?.()
 
     const published = await this.#publishedSource.load(scopeRef, ctx)
+    if (published.complete === false) {
+      throw new MaterializationError(
+        'MATERIALIZATION_FAILED',
+        `refusing to commit a projection from an incomplete published snapshot: ${incompleteReason(published)}`,
+      )
+    }
     const index = MaterializationDependencyIndex.build(published)
     const affectedRuleIds =
       ticket.affectedRuleIds.length > 0 ? ticket.affectedRuleIds : index.affectedRuleIds(ticket.change)
@@ -294,6 +411,8 @@ export class IncrementalMaterializer {
           published.facts,
           evaluationRules,
           propositionKey,
+          published.definitionRef,
+          published.complete,
         )
         if (conclusion === undefined) continue
         slices.push({
@@ -356,11 +475,9 @@ export class IncrementalMaterializer {
   async read(request: MaterializationReadRequest, ctx: ToolContext): Promise<MaterializationReadResult> {
     const scopeRef = scopeOf(ctx)
     assertScope(request.scopeRef, scopeRef)
+    const hasRequestedPropositions = (request.propositionKeys?.length ?? 0) > 0
     const state = await this.#materialization.getProjectionState(scopeRef, ctx)
     const generation = state?.generation ?? '0'
-    const dirty = state?.dirty === true
-    const fences = await this.#materialization.listOpenFences(scopeRef, ctx)
-    const coversAll = fences.some((fence) => fence.propositionKeys.length === 0)
 
     if (request.validAt === undefined || request.asOfRecordedSeq === undefined) {
       return this.readOnDemand(request, ctx)
@@ -369,34 +486,27 @@ export class IncrementalMaterializer {
     const slices = await this.#materialization.readSlices(
       scopeRef,
       {
-        ...(request.propositionKeys === undefined ? {} : { propositionKeys: request.propositionKeys }),
+        ...(!hasRequestedPropositions ? {} : { propositionKeys: request.propositionKeys ?? [] }),
         validAt: request.validAt,
         asOfRecordedSeq: request.asOfRecordedSeq,
       },
       ctx,
     )
-    const materialisedPropositions = [...new Set(slices.map((slice) => slice.propositionKey))].sort()
-    const published = await this.#publishedSource.load(scopeRef, ctx)
-    const allPropositions = [...new Set(published.rules.map((rule) => rule.conclusion.propositionKey))]
-    const propositions =
-      request.propositionKeys ??
-      [...new Set([...materialisedPropositions, ...allPropositions])].sort()
-
     const conclusions: MaterializedConclusion[] = []
-    const blockedPropositionKeys: string[] = []
-    let usedOnDemand = false
-
-    for (const proposition of propositions) {
-      const blocked =
-        dirty || coversAll || fences.some((fence) => fence.propositionKeys.includes(proposition))
-      if (blocked) {
-        blockedPropositionKeys.push(proposition)
-        continue
-      }
-      const slice = bestSlice(slices, proposition, request.validAt, request.asOfRecordedSeq)
+    const materialisedPropositions = new Set<string>()
+    const missingPropositionKeys: string[] = []
+    const recordedViewPersisted =
+      state?.watermark.kind === 'sequence' &&
+      compareRevision(state.watermark.value, request.asOfRecordedSeq) >= 0
+    for (const proposition of (hasRequestedPropositions ? request.propositionKeys : undefined) ??
+      [...new Set(slices.map((slice) => slice.propositionKey))].sort()) {
+      const slice = recordedViewPersisted
+        ? bestSlice(slices, proposition, request.validAt, request.asOfRecordedSeq)
+        : undefined
       if (slice !== undefined) {
         // The stored slice is keyed at its interval start; re-key it for the exact requested
-        // view so a materialised read and an on-demand read of the same view are identical.
+        // view so a materialised read and an on-demand read of the same view are identical. The
+        // proposition key carries published rule/entity/schema identity for scoped instances.
         conclusions.push({
           ...slice.conclusion,
           qualifiedPropositionKey: conclusionQualifiedKey(slice.predicate, {
@@ -404,43 +514,245 @@ export class IncrementalMaterializer {
             projectionRef: request.projectionRef,
             validAt: request.validAt,
             asOfRecordedSeq: request.asOfRecordedSeq,
-          }),
+          }, slice.conclusion.ruleArtifacts?.[0]?.definitionRef, proposition),
         })
+        materialisedPropositions.add(proposition)
         continue
       }
-      const fallback = this.#evaluatePropositions(published, scopeRef, request, [proposition])
-      for (const conclusion of fallback) conclusions.push(conclusion)
-      usedOnDemand = true
+      missingPropositionKeys.push(proposition)
+    }
+    conclusions.sort((left, right) => left.propositionKey.localeCompare(right.propositionKey))
+    let storedRuleArtifacts = dedupeArtifacts(conclusions.flatMap((conclusion) => conclusion.ruleArtifacts ?? []))
+
+    // Historical projection slices are immutable recorded-time evidence. Return them even while
+    // the latest source snapshot is incomplete, the scope is dirty, or a newer change is fenced;
+    // those conditions only block propositions for which no qualifying historical slice exists.
+    let latestState = state
+    let fences = await this.#materialization.listOpenFences(scopeRef, ctx)
+    if (!hasRequestedPropositions && slices.length === 0) {
+      latestState = await this.#materialization.getProjectionState(scopeRef, ctx)
+      fences = await this.#materialization.listOpenFences(scopeRef, ctx)
+      const scopeFence = fences.some((fence) => fence.propositionKeys.length === 0)
+      if (latestState?.dirty === true || scopeFence) {
+        return {
+          status: latestState?.dirty === true ? 'dirty' : 'fenced',
+          scopeRef,
+          generation: latestState?.generation ?? generation,
+          conclusions: [],
+          blockedPropositionKeys: [],
+          reason: latestState?.dirty === true
+            ? 'the projection is dirty and no historical slice is available for this scope read'
+            : 'a scope-wide recomputation fence is open and no historical slice is available for this scope read',
+        }
+      }
+    }
+    if (missingPropositionKeys.length === 0 && hasRequestedPropositions) {
+      return {
+        status: 'materialized',
+        scopeRef,
+        generation,
+        conclusions,
+        blockedPropositionKeys: [],
+        ...(storedRuleArtifacts.length === 0 ? {} : { ruleArtifacts: storedRuleArtifacts }),
+      }
     }
 
-    if (dirty || coversAll) {
+    latestState = await this.#materialization.getProjectionState(scopeRef, ctx)
+    fences = await this.#materialization.listOpenFences(scopeRef, ctx)
+    const coversAll = fences.some((fence) => fence.propositionKeys.length === 0)
+    const dirty = latestState?.dirty === true
+    const fenceBlocked = missingPropositionKeys.filter((proposition) =>
+      coversAll || fences.some((fence) => fence.propositionKeys.includes(proposition)),
+    )
+    if (missingPropositionKeys.length > 0 && (dirty || fenceBlocked.length > 0)) {
       return {
         status: dirty ? 'dirty' : 'fenced',
         scopeRef,
         generation,
         conclusions,
-        blockedPropositionKeys,
+        blockedPropositionKeys: missingPropositionKeys,
         reason: dirty
-          ? 'the projection is dirty after a large fan-out'
-          : 'a scope-wide recomputation fence is open',
+          ? 'the projection is dirty; missing historical slices remain blocked'
+          : 'an open recomputation fence covers a requested proposition without a historical slice',
+        ...(storedRuleArtifacts.length === 0 ? {} : { ruleArtifacts: storedRuleArtifacts }),
       }
     }
-    if (blockedPropositionKeys.length > 0) {
+
+    let published: PublishedSemanticData
+    try {
+      published = await this.#publishedSource.load(scopeRef, ctx)
+    } catch (error) {
+      if (!isIncompletePublishedRead(error)) throw error
+      const currentState = await this.#materialization.getProjectionState(scopeRef, ctx)
+      const currentFences = await this.#materialization.listOpenFences(scopeRef, ctx)
+      if (currentState?.dirty === true || currentFences.length > 0) {
+        return {
+          status: currentState?.dirty === true ? 'dirty' : 'fenced',
+          scopeRef,
+          generation: currentState?.generation ?? generation,
+          conclusions,
+          blockedPropositionKeys: missingPropositionKeys,
+          reason: 'a dirty scope or open fence blocks historical fallback while the source snapshot is incomplete',
+          ...(storedRuleArtifacts.length === 0 ? {} : { ruleArtifacts: storedRuleArtifacts }),
+        }
+      }
       return {
-        status: 'fenced',
+        status: 'history_unavailable',
         scopeRef,
         generation,
         conclusions,
-        blockedPropositionKeys,
-        reason: 'a recomputation fence is open for the requested proposition',
+        blockedPropositionKeys: missingPropositionKeys,
+        reason: error instanceof Error ? error.message : 'the current source cannot reconstruct the requested historical slice',
+        ...(storedRuleArtifacts.length === 0 ? {} : { ruleArtifacts: storedRuleArtifacts }),
+      }
+    }
+    const propositions = (hasRequestedPropositions ? request.propositionKeys : undefined) ?? [...new Set([
+      ...slices.map((slice) => slice.propositionKey),
+      ...published.rules.map((rule) => rule.conclusion.propositionKey),
+    ])].sort()
+    let newlyMissing = propositions.filter((proposition) => !materialisedPropositions.has(proposition))
+    if (newlyMissing.length === 0 && hasRequestedPropositions) {
+      return {
+        status: 'materialized',
+        scopeRef,
+        generation,
+        conclusions,
+        blockedPropositionKeys: [],
+        ...(storedRuleArtifacts.length === 0 ? {} : { ruleArtifacts: storedRuleArtifacts }),
+        issues: issuesOf(published),
+      }
+    }
+    latestState = await this.#materialization.getProjectionState(scopeRef, ctx)
+    fences = await this.#materialization.listOpenFences(scopeRef, ctx)
+    const fencedMissing = newlyMissing.filter((proposition) =>
+      latestState?.dirty === true ||
+      fences.some((fence) => fence.propositionKeys.length === 0 || fence.propositionKeys.includes(proposition)),
+    )
+    if (fencedMissing.length > 0) {
+      return {
+        status: latestState?.dirty === true ? 'dirty' : 'fenced',
+        scopeRef,
+        generation: latestState?.generation ?? generation,
+        conclusions,
+        blockedPropositionKeys: fencedMissing,
+        reason: 'a recomputation fence covers a requested proposition without a historical slice',
+        ...(storedRuleArtifacts.length === 0 ? {} : { ruleArtifacts: storedRuleArtifacts }),
+        issues: issuesOf(published),
+      }
+    }
+    const persistedThroughAsOf =
+      latestState?.watermark.kind === 'sequence' &&
+      compareRevision(latestState.watermark.value, request.asOfRecordedSeq) >= 0
+    if (newlyMissing.length > 0 && persistedThroughAsOf) {
+      // The first slice read may have raced a commit that atomically closed its fence. Re-read
+      // after observing the new watermark so a completed projection is not misreported as an
+      // unavailable history snapshot.
+      const committedSlices = await this.#materialization.readSlices(scopeRef, {
+        propositionKeys: newlyMissing,
+        validAt: request.validAt,
+        asOfRecordedSeq: request.asOfRecordedSeq,
+      }, ctx)
+      const stillMissing: string[] = []
+      for (const proposition of newlyMissing) {
+        const slice = bestSlice(committedSlices, proposition, request.validAt, request.asOfRecordedSeq)
+        if (slice === undefined) {
+          stillMissing.push(proposition)
+          continue
+        }
+        conclusions.push({
+          ...slice.conclusion,
+          qualifiedPropositionKey: conclusionQualifiedKey(slice.predicate, {
+            scopeRef,
+            projectionRef: request.projectionRef,
+            validAt: request.validAt,
+            asOfRecordedSeq: request.asOfRecordedSeq,
+          }, slice.conclusion.ruleArtifacts?.[0]?.definitionRef, proposition),
+        })
+        materialisedPropositions.add(proposition)
+      }
+      newlyMissing = stillMissing
+      conclusions.sort((left, right) => left.propositionKey.localeCompare(right.propositionKey))
+      storedRuleArtifacts = dedupeArtifacts(conclusions.flatMap((conclusion) => conclusion.ruleArtifacts ?? []))
+    }
+    if (published.complete === false) {
+      return {
+        status: 'history_unavailable',
+        scopeRef,
+        generation,
+        conclusions,
+        blockedPropositionKeys: newlyMissing,
+        reason: `historical slices are missing and ${incompleteReason(published)}`,
+        issues: issuesOf(published),
+        ...(storedRuleArtifacts.length === 0 ? {} : { ruleArtifacts: storedRuleArtifacts }),
+      }
+    }
+    if (
+      !hasRequestedPropositions &&
+      slices.length === 0 &&
+      published.historicalAsOfSupported === false
+    ) {
+      return {
+        status: 'history_unavailable',
+        scopeRef,
+        generation,
+        conclusions,
+        blockedPropositionKeys: [],
+        reason: 'the published source exposes only current heads and no historical projection slice exists for this asOf view',
+        issues: issuesOf(published),
+      }
+    }
+    if (newlyMissing.length === 0) {
+      return {
+        status: 'materialized',
+        scopeRef,
+        generation,
+        conclusions,
+        blockedPropositionKeys: [],
+        ...(storedRuleArtifacts.length === 0 ? {} : { ruleArtifacts: storedRuleArtifacts }),
+        issues: issuesOf(published),
+      }
+    }
+    if (published.historicalAsOfSupported === false) {
+      return {
+        status: 'history_unavailable',
+        scopeRef,
+        generation,
+        conclusions,
+        blockedPropositionKeys: newlyMissing,
+        reason: 'the published source exposes only current heads and cannot reconstruct this asOf view',
+        issues: issuesOf(published),
+        ...(storedRuleArtifacts.length === 0 ? {} : { ruleArtifacts: storedRuleArtifacts }),
+      }
+    }
+    const evaluation = this.#evaluatePropositions(published, scopeRef, request, newlyMissing)
+    conclusions.push(...evaluation.conclusions)
+    conclusions.sort((left, right) => left.propositionKey.localeCompare(right.propositionKey))
+    if (newlyMissing.length > evaluation.conclusions.length) {
+      return {
+        status: 'history_unavailable',
+        scopeRef,
+        generation,
+        conclusions,
+        blockedPropositionKeys: newlyMissing.filter((proposition) =>
+          !evaluation.conclusions.some((entry) => entry.propositionKey === proposition),
+        ),
+        reason: 'the requested historical projection slice is absent and no complete historical source result was produced',
+        ...(dedupeArtifacts([...storedRuleArtifacts, ...evaluation.ruleArtifacts]).length === 0
+          ? {}
+          : { ruleArtifacts: dedupeArtifacts([...storedRuleArtifacts, ...evaluation.ruleArtifacts]) }),
+        issues: issuesOf(published),
       }
     }
     return {
-      status: usedOnDemand ? 'on_demand' : 'materialized',
+      status: 'on_demand',
       scopeRef,
       generation,
       conclusions,
-      blockedPropositionKeys,
+      blockedPropositionKeys: [],
+      ...(dedupeArtifacts([...storedRuleArtifacts, ...evaluation.ruleArtifacts]).length === 0
+        ? {}
+        : { ruleArtifacts: dedupeArtifacts([...storedRuleArtifacts, ...evaluation.ruleArtifacts]) }),
+      issues: issuesOf(published),
     }
   }
 
@@ -448,14 +760,66 @@ export class IncrementalMaterializer {
   async readOnDemand(request: MaterializationReadRequest, ctx: ToolContext): Promise<MaterializationReadResult> {
     const scopeRef = scopeOf(ctx)
     assertScope(request.scopeRef, scopeRef)
-    const published = await this.#publishedSource.load(scopeRef, ctx)
-    const conclusions = this.#evaluatePropositions(published, scopeRef, request, request.propositionKeys)
     const state = await this.#materialization.getProjectionState(scopeRef, ctx)
+    const generation = state?.generation ?? '0'
+    const fences = await this.#materialization.listOpenFences(scopeRef, ctx)
+    if (state?.dirty === true || fences.length > 0) {
+      return incompleteReadResult(
+        scopeRef,
+        generation,
+        undefined,
+        request.propositionKeys,
+        state?.dirty === true ? 'dirty' : 'fenced',
+        'the projection is dirty or an invalidation fence is open; on-demand answers are withheld',
+      )
+    }
+    let published: PublishedSemanticData
+    try {
+      published = await this.#publishedSource.load(scopeRef, ctx)
+    } catch (error) {
+      if (!isIncompletePublishedRead(error)) throw error
+      return incompleteReadResult(
+        scopeRef,
+        generation,
+        undefined,
+        request.propositionKeys,
+        'dirty',
+        error instanceof Error ? error.message : 'the published semantic read was incomplete',
+      )
+    }
+    if (published.complete === false) {
+      return incompleteReadResult(scopeRef, generation, published, request.propositionKeys, 'dirty', incompleteReason(published))
+    }
+    if (request.asOfRecordedSeq !== undefined && published.historicalAsOfSupported === false) {
+      return incompleteReadResult(
+        scopeRef,
+        generation,
+        published,
+        request.propositionKeys,
+        'history_unavailable',
+        'the published source exposes only current heads; historical on-demand recomputation is unavailable',
+      )
+    }
+    const evaluation = this.#evaluatePropositions(published, scopeRef, request, request.propositionKeys)
+    const fencesAfter = await this.#materialization.listOpenFences(scopeRef, ctx)
+    const stateAfter = await this.#materialization.getProjectionState(scopeRef, ctx)
+    if (fencesAfter.length > 0 || stateAfter?.dirty === true) {
+      return incompleteReadResult(
+        scopeRef,
+        stateAfter?.generation ?? generation,
+        published,
+        request.propositionKeys,
+        stateAfter?.dirty === true ? 'dirty' : 'fenced',
+        'a projection invalidation fence opened during the read',
+      )
+    }
     return {
       status: 'on_demand',
       scopeRef,
-      generation: state?.generation ?? '0',
-      conclusions,
+      generation: stateAfter?.generation ?? generation,
+      conclusions: [...evaluation.conclusions],
+      ...(evaluation.ruleArtifacts.length === 0 ? {} : { ruleArtifacts: [...evaluation.ruleArtifacts] }),
+      issues: issuesOf(published),
       blockedPropositionKeys: [],
     }
   }
@@ -467,6 +831,8 @@ export class IncrementalMaterializer {
     facts: readonly RuleFact[],
     rules: readonly SupportRule[],
     propositionKey: string,
+    definitionRef: VersionRef | undefined,
+    complete: boolean | undefined,
   ): MaterializedConclusion | undefined {
     const request: ControlReadProjectionRequest = {
       scopeRef,
@@ -474,9 +840,18 @@ export class IncrementalMaterializer {
       validAt: window.validFrom,
       asOfRecordedSeq: change.recordedSeq,
     }
-    const result = this.#evaluator.evaluate({ scopeRef, request, facts, rules })
+    const result = this.#evaluator.evaluate({
+      scopeRef,
+      request,
+      facts,
+      rules,
+      ...(definitionRef === undefined ? {} : { definitionRef }),
+      ...(complete === undefined ? {} : { complete }),
+    })
     const conclusion = result.conclusions.find((entry) => entry.propositionKey === propositionKey)
-    return conclusion === undefined ? undefined : materializedConclusionOf(conclusion)
+    if (conclusion === undefined) return undefined
+    const artifacts = ruleComputationArtifactsOf(result.applicabilities, rules)
+    return materializedConclusionOf(conclusion, artifactsForProposition(propositionKey, rules, artifacts))
   }
 
   #evaluatePropositions(
@@ -484,7 +859,7 @@ export class IncrementalMaterializer {
     scopeRef: ScopeRef,
     request: MaterializationReadRequest,
     propositionKeys: readonly string[] | undefined,
-  ): MaterializedConclusion[] {
+  ): MaterializationEvaluation {
     const evaluationRequest: ControlReadProjectionRequest = {
       scopeRef,
       projectionRef: request.projectionRef,
@@ -496,10 +871,29 @@ export class IncrementalMaterializer {
       request: evaluationRequest,
       facts: published.facts,
       rules: published.rules,
+      ...(published.definitionRef === undefined ? {} : { definitionRef: published.definitionRef }),
+      ...(published.complete === undefined ? {} : { complete: published.complete }),
     })
-    const conclusions = result.conclusions.map(materializedConclusionOf)
-    if (propositionKeys === undefined) return conclusions
-    return conclusions.filter((conclusion) => propositionKeys.includes(conclusion.propositionKey))
+    const ruleArtifacts = ruleComputationArtifactsOf(result.applicabilities, published.rules)
+    const conclusions = result.conclusions.map((conclusion) =>
+      materializedConclusionOf(
+        conclusion,
+        artifactsForProposition(conclusion.propositionKey, published.rules, ruleArtifacts),
+      ),
+    )
+    const filteredConclusions = propositionKeys === undefined
+      ? conclusions
+      : conclusions.filter((conclusion) => propositionKeys.includes(conclusion.propositionKey))
+    const applicabilities = propositionKeys === undefined
+      ? result.applicabilities
+      : result.applicabilities.filter((entry) => propositionKeys.includes(entry.propositionKey))
+    const selectedInstanceKeys = new Set(
+      published.rules
+        .filter((rule) => propositionKeys === undefined || propositionKeys.includes(rule.conclusion.propositionKey))
+        .flatMap((rule) => rule.publishedInstance === undefined ? [] : [rule.publishedInstance.instanceKey]),
+    )
+    const filteredArtifacts = ruleArtifacts.filter((artifact) => selectedInstanceKeys.has(artifact.instanceKey))
+    return { conclusions: filteredConclusions, applicabilities, ruleArtifacts: filteredArtifacts }
   }
 
   async #closeFenceIfOpen(scopeRef: ScopeRef, fenceId: Uuid, ctx: ToolContext): Promise<void> {

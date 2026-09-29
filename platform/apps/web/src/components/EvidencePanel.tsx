@@ -2,8 +2,10 @@ import { useCallback, useEffect, useReducer, useState } from 'react'
 import type {
   DependencyGraphView,
   EvidenceDependencyDirection,
+  EvidenceDependencySupportState,
   HistoricalAssertionView,
   ProvenanceEvidenceView,
+  ResourceRef,
   SourceReReadability,
 } from '@ontology/contracts'
 import { ApiError } from '../api/errors'
@@ -27,6 +29,8 @@ export interface EvidencePanelProps {
   readonly client: WorkbenchClient
   /** Deep-linked evidence id (`?evidence=<id>`). */
   readonly initialEvidenceId?: string
+  /** Exact source ref selected from a verified answer body. */
+  readonly initialReference?: ResourceRef
   /** Deep-linked object id for the history view (`?object=<id>`). */
   readonly initialObjectId?: string
 }
@@ -35,6 +39,17 @@ const REREADABILITY_LABEL: Readonly<Record<SourceReReadability, string>> = {
   re_readable: '原来源可重读',
   archived_snapshot_only: '仅归档快照（原来源不保证可重读）',
   unverifiable: '不可验证（原来源与归档均不可用）',
+}
+
+const SUPPORT_STATE_LABEL: Readonly<Record<EvidenceDependencySupportState, string>> = {
+  not_rule: '直接证据，不适用规则支撑',
+  resolved: '支撑来源已解析',
+  not_applicable: '规则不适用，未提供正向支撑',
+  unknown: '支撑状态未知',
+  conflict: '支撑状态冲突',
+  ambiguous: '匹配到多个规则实例，无法唯一定位',
+  unavailable: '不可变支撑记录不可用',
+  incomplete: '支撑记录不完整',
 }
 
 function toError(error: unknown): WorkbenchError {
@@ -126,6 +141,20 @@ function BasisPanel({ evidence }: { readonly evidence: ProvenanceEvidenceView })
         </ul>
       )}
 
+      <section className="evidence__support" data-testid="support-resolution"
+        data-state={evidence.supportResolution?.state ?? 'unknown'}
+        data-complete={evidence.supportResolution?.complete ?? false}>
+        <h4>规则支撑完整性</h4>
+        <p data-testid="support-resolution-state">
+          {evidence.supportResolution === undefined
+            ? '服务端未报告规则支撑完整性'
+            : `${SUPPORT_STATE_LABEL[evidence.supportResolution.state]}（${evidence.supportResolution.complete ? '完整' : '不完整'}）`}
+        </p>
+        {evidence.supportResolution?.reason === undefined ? null : (
+          <p data-testid="support-resolution-reason">{evidence.supportResolution.reason}</p>
+        )}
+      </section>
+
       <h4>前提组（AND of OR）</h4>
       {evidence.premiseGroups.length === 0 ? (
         <p data-testid="premise-none">无规则前提组。</p>
@@ -179,7 +208,7 @@ function BasisPanel({ evidence }: { readonly evidence: ProvenanceEvidenceView })
         </ul>
       )}
       <p data-testid="original-source-rereadable" data-rereadable={evidence.originalSourceReReadable}>
-        原来源整体可重读：{evidence.originalSourceReReadable ? '是' : '否'}
+        所有已列来源证据均可复核（含归档快照）：{evidence.originalSourceReReadable ? '是' : '否'}
       </p>
       {evidence.archivedResult === undefined ? null : (
         <p data-testid="archived-result" data-verified={evidence.archivedResult.verified}>
@@ -265,6 +294,29 @@ function GraphPanel({
             </p>
           )}
 
+          <section className="evidence__support-coverage" data-testid="graph-support-coverage"
+            data-complete={graph.coverage.support?.complete ?? false}>
+            <h4>规则支撑覆盖</h4>
+            <p data-testid="graph-support-completeness">
+              {graph.coverage.support === undefined
+                ? '服务端未报告规则支撑完整性'
+                : graph.coverage.support.complete
+                  ? '已访问节点的规则支撑来源均已完整解析。'
+                  : '部分节点的规则支撑未知或不完整，不能据此判断不存在其他依据。'}
+            </p>
+            {graph.coverage.support === undefined ? null : (
+              <ul data-testid="graph-support-resolutions">
+                {graph.coverage.support.resolutions.map((entry) => (
+                  <li key={entry.evidenceId} data-testid="graph-support-resolution"
+                    data-state={entry.resolution.state} data-complete={entry.resolution.complete}>
+                    {entry.evidenceId}：{SUPPORT_STATE_LABEL[entry.resolution.state]}
+                    {entry.resolution.reason === undefined ? '' : `（${entry.resolution.reason}）`}
+                  </li>
+                ))}
+              </ul>
+            )}
+          </section>
+
           <ul className="evidence__nodes" data-testid="graph-nodes" data-count={graph.nodes.length}>
             {graph.nodes.map((node) => (
               <li key={node.evidenceId} data-testid="graph-node" data-outcome={node.outcome} data-depth={node.depth}>
@@ -315,10 +367,10 @@ function AssertionRow({ assertion }: { readonly assertion: HistoricalAssertionVi
   )
 }
 
-export function EvidencePanel({ client, initialEvidenceId, initialObjectId }: EvidencePanelProps) {
+export function EvidencePanel({ client, initialEvidenceId, initialObjectId, initialReference }: EvidencePanelProps) {
   const viewport = useViewport()
   const [state, dispatch] = useReducer(evidenceReducer, undefined, initialEvidenceState)
-  const [evidenceInput, setEvidenceInput] = useState(initialEvidenceId ?? '')
+  const [evidenceInput, setEvidenceInput] = useState(initialEvidenceId ?? (initialReference?.kind === 'evidence' ? initialReference.id : ''))
   const [asOfInput, setAsOfInput] = useState('')
   const [validAtInput, setValidAtInput] = useState('')
   const [objectInput, setObjectInput] = useState(initialObjectId ?? '')
@@ -388,9 +440,10 @@ export function EvidencePanel({ client, initialEvidenceId, initialObjectId }: Ev
     [client],
   )
 
+  const selectedEvidenceId = initialEvidenceId ?? (initialReference?.kind === 'evidence' ? initialReference.id : undefined)
   useEffect(() => {
-    if (initialEvidenceId !== undefined) void loadEvidence(initialEvidenceId, '', '')
-  }, [initialEvidenceId, loadEvidence])
+    if (selectedEvidenceId !== undefined) void loadEvidence(selectedEvidenceId, '', '')
+  }, [selectedEvidenceId, loadEvidence])
 
   useEffect(() => {
     if (initialObjectId !== undefined) void loadHistory(initialObjectId, '', '')
@@ -398,8 +451,8 @@ export function EvidencePanel({ client, initialEvidenceId, initialObjectId }: Ev
 
   useEffect(() => {
     // With nothing deep-linked there is no request yet: an explicit empty/awaiting-input state.
-    if (initialEvidenceId === undefined && initialObjectId === undefined) dispatch({ type: 'awaitInput' })
-  }, [initialEvidenceId, initialObjectId])
+    if (selectedEvidenceId === undefined && initialObjectId === undefined) dispatch({ type: 'awaitInput' })
+  }, [selectedEvidenceId, initialObjectId])
 
   const phase = state.phase
   const evidence = state.evidence
@@ -419,6 +472,19 @@ export function EvidencePanel({ client, initialEvidenceId, initialObjectId }: Ev
           依据变化会清除旧比较结果。
         </p>
       </header>
+
+      {initialReference === undefined ? null : (
+        <aside className="evidence__selected-ref" data-testid="selected-source-reference" data-kind={initialReference.kind}>
+          <h3>答案来源引用</h3>
+          <p><code>{initialReference.kind}:{initialReference.id}@{initialReference.version}</code></p>
+          <p><code>{initialReference.digest}</code></p>
+          {initialReference.kind === 'evidence' ? null : (
+            <p data-testid="source-reference-viewer-unavailable">
+              此引用已从答案精确保留；当前证据查看器仅展开已归档的 evidence 记录。
+            </p>
+          )}
+        </aside>
+      )}
 
       {phase === 'loading' || phase === 'not_configured' || phase === 'failure' || phase === 'permission_denied' ? (
         <StatePanel phase={phase} {...(state.error === undefined ? {} : { error: state.error })} />

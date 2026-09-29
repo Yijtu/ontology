@@ -29,8 +29,12 @@ export class RestrictedLimitedAnswerComposer implements LimitedAnswerPort {
   compose(request: LimitedAnswerRequest, ctx: ToolContext): Promise<LimitedAnswerResult> {
     void ctx
     const supported = new Set(request.failedVerification?.supportedClaimIds ?? [])
+    const supportedAssertions = new Set(request.failedVerification?.supportedAssertionIds ?? [])
     const supportedClaims = (request.previousDraft?.claims ?? []).filter((claim) =>
       supported.has(claim.claimId),
+    )
+    const supportedAssertionValues = (request.previousDraft?.assertions ?? []).filter((assertion) =>
+      supportedAssertions.has(assertion.assertionId),
     )
 
     const gaps = [
@@ -39,31 +43,32 @@ export class RestrictedLimitedAnswerComposer implements LimitedAnswerPort {
         ...(request.failedVerification?.missingEvidence ?? []).map(
           (id) => `missing_evidence:${id}`,
         ),
-        ...(supportedClaims.length === 0 ? ['no_supported_claims'] : []),
+        ...(supportedClaims.length + supportedAssertionValues.length === 0 ? ['no_supported_statements'] : []),
       ]),
     ].sort()
 
+    const schemaVersion: 'answer-draft@2' | undefined = request.previousDraft?.schemaVersion === 'answer-draft@2' ? 'answer-draft@2' : undefined
     const blocks: readonly unknown[] = [
-      {
-        kind: 'limited_result',
-        question: request.question,
-        supportedClaimIds: supportedClaims.map((claim) => claim.claimId),
-        gaps,
-      },
+      ...supportedClaims.map((claim) => ({ kind: 'claim', claimId: claim.claimId })),
+      ...supportedAssertionValues.map((assertion) => ({ kind: 'assertion', assertionId: assertion.assertionId })),
     ]
     const evidenceManifestHash = request.inputManifest.digest
     const limitations = ['limited_factual_result', ...gaps]
     const draft: AnswerDraft = {
       draftId: this.#newId(),
       runId: request.runId,
+      ...(schemaVersion === undefined ? {} : { schemaVersion }),
       blocks,
       claims: supportedClaims,
+      assertions: supportedAssertionValues,
       evidenceManifestHash,
       contentHash: answerDraftContentHash(
         request.runId,
         blocks,
         evidenceManifestHash,
         supportedClaims,
+        supportedAssertionValues,
+        ...(schemaVersion === undefined ? [] : [{ schemaVersion, limitations }]),
       ),
       limitations,
       producedInPhase: 'drafting',
