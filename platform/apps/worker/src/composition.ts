@@ -1,7 +1,15 @@
-import { DocumentParseStageHandler, JobWorker, OutboxDispatcher } from '@ontology/application'
+import {
+  DocumentParseStageHandler,
+  JobWorker,
+  OutboxDispatcher,
+  StructuredDocumentParseStageHandler,
+  isStructuredIngestionRef,
+} from '@ontology/application'
 import type {
+  JobStageContext,
   JobStageHandler,
   JobStageHandlerRegistry,
+  JobStageOutcome,
   OutboxConsumer,
   RunService,
 } from '@ontology/application'
@@ -20,6 +28,7 @@ import type {
   JobStore,
   PipelineStage,
   ScopeRef,
+  StructuredIngestionPort,
   ToolContext,
   VersionRef,
 } from '@ontology/contracts'
@@ -179,23 +188,56 @@ export class TopicOutboxConsumerRouter implements OutboxConsumer {
 }
 
 export interface IngestionHandlerRegistryOptions {
-  /** The real document parser (LOCAL-023) that backs the `received → parsed` stage. */
+  /** The real document parser (LOCAL-023) that backs the text/PDF `received → parsed` stage. */
   readonly parser: DocumentParserPort
+  /**
+   * The structured ingestion port (V03-005 parser + row reconciliation). When present, a
+   * `structured_ingestion` document reference runs it instead of the text/PDF parser.
+   */
+  readonly structured?: StructuredIngestionPort
   /** The `parsed → extracted → validated` handlers owned by the extraction pipeline. */
   readonly downstream: readonly JobStageHandler[]
 }
 
 /**
- * Wire the real `received → parsed` stage (the document parser) together with the downstream
- * extraction stages into one worker registry, so a `POST /ingestions` job runs end to end
- * inside the worker. The composition root supplies the concrete parser; the handler itself
- * depends only on the `DocumentParserPort` contract.
+ * Route a `received` claim by the job's opaque input reference kind. A reference that names a
+ * structured ingestion runs the structured stage; everything else keeps the historical
+ * text/PDF path, so the existing ingestion jobs are unchanged.
+ */
+class ReceivedStageDispatcher implements JobStageHandler {
+  readonly stage = 'received' as const
+  readonly #text: JobStageHandler
+  readonly #structured: JobStageHandler
+
+  constructor(text: JobStageHandler, structured: JobStageHandler) {
+    this.#text = text
+    this.#structured = structured
+  }
+
+  run(context: JobStageContext): Promise<JobStageOutcome> {
+    return isStructuredIngestionRef(context.job.documentRef)
+      ? this.#structured.run(context)
+      : this.#text.run(context)
+  }
+}
+
+/**
+ * Wire the real `received → parsed` stage together with the downstream extraction stages into
+ * one worker registry, so a `POST /ingestions` job runs end to end inside the worker. The
+ * composition root supplies the concrete parsers; the handlers themselves depend only on the
+ * `DocumentParserPort`/`StructuredIngestionPort` contracts.
  */
 export function createIngestionHandlerRegistry(
   options: IngestionHandlerRegistryOptions,
 ): JobStageHandlerRegistry {
   const byStage = new Map<PipelineStage, JobStageHandler>()
-  byStage.set('received', new DocumentParseStageHandler({ parser: options.parser }))
+  const text = new DocumentParseStageHandler({ parser: options.parser })
+  byStage.set(
+    'received',
+    options.structured === undefined
+      ? text
+      : new ReceivedStageDispatcher(text, new StructuredDocumentParseStageHandler({ ingestion: options.structured })),
+  )
   for (const handler of options.downstream) byStage.set(handler.stage, handler)
   return { get: (stage) => byStage.get(stage) }
 }

@@ -27,7 +27,13 @@ import {
   PostgresWorkflowDispatchStore,
   PostgresWorkflowStore,
 } from '@ontology/adapter-control-postgres'
-import { DocumentSpanReader, LocalDocumentExtractionService, PostgresDocumentParseStore } from '@ontology/adapter-extraction-document'
+import {
+  DocumentSpanReader,
+  LocalDocumentExtractionService,
+  LocalStructuredIngestionService,
+  PostgresDocumentParseStore,
+  PostgresStructuredIngestionStore,
+} from '@ontology/adapter-extraction-document'
 import { Bm25DocumentSearchService, PostgresKeywordIndexStore, createBm25DocumentSearchToolHandler } from '@ontology/adapter-search-bm25'
 import { TemplateRuntimeAdapter, TemplateRuntimeError } from '@ontology/adapter-runtime-template'
 import type { TemplatePlanResolver } from '@ontology/adapter-runtime-template'
@@ -1099,6 +1105,12 @@ export async function createCoreLocalComposition(options: CoreLocalCompositionOp
       applicationName: 'ontology-core-local-document-parser',
     })
     cleanup.unshift(() => parseStore.close())
+    const structuredStore = new PostgresStructuredIngestionStore({
+      connectionString: options.databaseUrl,
+      maxPoolSize: 4,
+      applicationName: 'ontology-core-local-structured-ingestion',
+    })
+    cleanup.unshift(() => structuredStore.close())
     const keywordIndexStore = new PostgresKeywordIndexStore({
       connectionString: options.databaseUrl,
       maxPoolSize: 8,
@@ -1394,6 +1406,7 @@ export async function createCoreLocalComposition(options: CoreLocalCompositionOp
     })
     const handlers = createIngestionHandlerRegistry({
       parser,
+      structured: new LocalStructuredIngestionService({ blobs: blobStore, store: structuredStore }),
       downstream: [
         new ExtractionStageHandler({ pipeline, parseStore }),
         new CandidateValidationStageHandler({ pipeline, parseStore }),

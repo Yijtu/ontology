@@ -52,6 +52,17 @@ export {
   StructuredDocumentParser,
 } from './structured'
 
+export {
+  LocalStructuredIngestionService,
+  reconcileStructuredResult,
+} from './structured/ingest-service'
+export type { LocalStructuredIngestionDependencies } from './structured/ingest-service'
+export { PostgresStructuredIngestionStore } from './structured/ingest-postgres-store'
+export type { PostgresStructuredIngestionStoreConfig } from './structured/ingest-postgres-store'
+export { InMemoryStructuredIngestionStore } from './structured/ingest-memory-store'
+export { StructuredIngestionError } from './structured/ingest-errors'
+export type { StructuredIngestionErrorCode } from './structured/ingest-errors'
+
 export type {
   DocumentArtifactPublishRequest,
   DocumentArtifactStageRequest,
