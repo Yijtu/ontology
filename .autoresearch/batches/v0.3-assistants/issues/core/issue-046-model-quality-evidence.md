@@ -1,8 +1,8 @@
 # V03-046：固定建模/提参评测集与真实模型就绪报告
 
-阶段 A · infra · P1 · 状态 planned · GitHub 编号未分配
+阶段 A · infra · P1 · 状态 planned · GitHub [#210](https://github.com/Yijtu/ontology/issues/210)
 
-执行工作线：feat/core-planning-provenance；目标：main。本地卡不是远程 #46，本批尚未开始实现。
+执行工作线：feat/core-planning-provenance；目标：main。本批尚未开始实现；V03 是规划 ID，GitHub 编号见上述链接与 manifest。
 
 ## 目标与范围
 
@@ -11,6 +11,8 @@
 - 报告阈值、规模/成本与限制不夸大泛化，日志和fixture不含密钥/客户原始资料；实际调用条件与结果分别记录。
 
 ## 依赖与进入条件
+
+Dependencies: #179, #181, #186, #191, #196, #207
 
 依赖：[V03-007](issue-007-schema-extraction.md)、[V03-008](issue-008-tbox-candidates.md)、[V03-014](issue-014-synthetic-validation.md)、[V03-019](issue-019-document-index.md)、[V03-024](issue-024-nl-plan-receipts.md)、[V03-036](issue-036-typed-draft-writer.md)。
 开工先核对 V03-001 的能力/旧任务/WIP记录，复用已完成实现，只补本卡缺口。完成能力按独立审查合入 main，保留场景边界。
@@ -44,5 +46,5 @@
 
 ## 完成记录
 
-- 当前：未开工；验证未运行；无提交/PR/远程 Issue 编号。
+- 当前：未开工；验证未运行。GitHub Issue：[#210](https://github.com/Yijtu/ontology/issues/210)；文档提交不代表功能完成。
 - 实现后记录：提交/PR、适用命令结果、满足的验收、未验证/外部条件、迁移配置与兼容影响。

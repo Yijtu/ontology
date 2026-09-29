@@ -1,8 +1,8 @@
 # V03-045：实现通用双助手整栈浏览器 E2E 与关键反例
 
-阶段 A · infra · P0 · 状态 planned · GitHub 编号未分配
+阶段 A · infra · P0 · 状态 planned · GitHub [#217](https://github.com/Yijtu/ontology/issues/217)
 
-执行工作线：feat/core-planning-provenance；目标：main。本地卡不是远程 #45，本批尚未开始实现。
+执行工作线：feat/core-planning-provenance；目标：main。本批尚未开始实现；V03 是规划 ID，GitHub 编号见上述链接与 manifest。
 
 ## 目标与范围
 
@@ -11,6 +11,8 @@
 - 至少1001行、后页证据、错值/假引用/缺能力/cancel/重启/撤回/跨项目关键反例通过，CI重复且只清自建资源。
 
 ## 依赖与进入条件
+
+Dependencies: #169, #173, #174, #177, #175, #178, #179, #181, #183, #184, #180, #185, #182, #186, #187, #189, #190, #192, #191, #193, #202, #176, #194, #196, #199, #188, #195, #197, #200, #201, #203, #204, #205, #206, #207, #208, #209, #211, #212, #214, #216, #215, #213
 
 依赖：[V03-001](issue-001-baseline-wip-audit.md)、[V03-002](issue-002-public-contracts.md)、[V03-003](issue-003-control-stores.md)、[V03-004](issue-004-workspace-api.md)、[V03-005](issue-005-structured-parser.md)、[V03-006](issue-006-ingestion-coverage.md)、[V03-007](issue-007-schema-extraction.md)、[V03-008](issue-008-tbox-candidates.md)、[V03-009](issue-009-definition-edit-validation.md)、[V03-010](issue-010-rule-action-candidates.md)、[V03-011](issue-011-workspace-source-ui.md)、[V03-012](issue-012-definition-editor-ui.md)、[V03-013](issue-013-instance-review-ui.md)、[V03-014](issue-014-synthetic-validation.md)、[V03-015](issue-015-dynamic-pack-publish.md)、[V03-016](issue-016-project-bindings.md)、[V03-017](issue-017-project-mapping.md)、[V03-018](issue-018-query-projection.md)、[V03-019](issue-019-document-index.md)、[V03-020](issue-020-project-data-ui.md)、[V03-021](issue-021-package-publish-ui.md)、[V03-022](issue-022-frontend-mount.md)、[V03-023](issue-023-task-input-artifacts.md)、[V03-024](issue-024-nl-plan-receipts.md)、[V03-025](issue-025-semantic-sql-query.md)、[V03-026](issue-026-finite-rule-boolean.md)、[V03-027](issue-027-relation-navigation.md)、[V03-028](issue-028-incremental-rule-state.md)、[V03-029](issue-029-rule-source-provenance.md)、[V03-031](issue-031-compute-execution.md)、[V03-032](issue-032-answer-v3-artifacts.md)、[V03-033](issue-033-quantity-table-verifier.md)、[V03-034](issue-034-typed-evidence-verifier.md)、[V03-035](issue-035-publication-validity.md)、[V03-036](issue-036-typed-draft-writer.md)、[V03-037](issue-037-template-host.md)、[V03-038](issue-038-pi-host-loop.md)、[V03-039](issue-039-run-lifecycle.md)、[V03-040](issue-040-business-results-ui.md)、[V03-041](issue-041-history-json-export.md)、[V03-042](issue-042-public-ui-states.md)、[V03-043](issue-043-industry-backend-conformance.md)、[V03-044](issue-044-runtime-transport-conformance.md)。
 开工先核对 V03-001 的能力/旧任务/WIP记录，复用已完成实现，只补本卡缺口。完成能力按独立审查合入 main，保留场景边界。
@@ -76,5 +78,5 @@
 
 ## 完成记录
 
-- 当前：未开工；验证未运行；无提交/PR/远程 Issue 编号。
+- 当前：未开工；验证未运行。GitHub Issue：[#217](https://github.com/Yijtu/ontology/issues/217)；文档提交不代表功能完成。
 - 实现后记录：提交/PR、适用命令结果、满足的验收、未验证/外部条件、迁移配置与兼容影响。

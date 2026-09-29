@@ -1,8 +1,8 @@
 # V03-049：确认权威报价函数、价格版本与复用权限
 
-阶段 B · discovery · P0 · 状态 planned · GitHub 编号未分配
+阶段 B · discovery · P0 · 状态 planned · GitHub [#171](https://github.com/Yijtu/ontology/issues/171)
 
-执行工作线：feat/electrical-costing-poc；目标：feat/electrical-costing-poc。本地卡不是远程 #49，本批尚未开始实现。
+执行工作线：feat/electrical-costing-poc；目标：feat/electrical-costing-poc。本批尚未开始实现；V03 是规划 ID，GitHub 编号见上述链接与 manifest。
 
 ## 目标与范围
 
@@ -12,6 +12,8 @@
 - 本卡可在内部端口契约与真实资源缺项清单完整后完成盘点；实际接口/许可/权威版本的未确认状态不随本卡done变ready，真实适配由070完成。
 
 ## 依赖与进入条件
+
+Dependencies: None
 
 依赖：无代码依赖。
 本卡可在 A 期间收集资料；范围/权威版本/样本未确认时保留缺项、确认者和状态，不能把假设当已签核。
@@ -47,5 +49,5 @@
 
 ## 完成记录
 
-- 当前：未开工；验证未运行；无提交/PR/远程 Issue 编号。
+- 当前：未开工；验证未运行。GitHub Issue：[#171](https://github.com/Yijtu/ontology/issues/171)；文档提交不代表功能完成。
 - 实现后记录：提交/PR、适用命令结果、满足的验收、未验证/外部条件、迁移配置与兼容影响。

@@ -1,8 +1,8 @@
-# v0.3 双助手：本地 Issue 批次
+# v0.3 双助手：GitHub Issue 批次
 
-日期 2026-09-29。已生成 72 张本地任务：A 通用 Core 47 张，B 造价 MVP 25 张。所有任务 planned，未开始实现，未创建 GitHub Issues，未启动 loop-it。
+日期 2026-09-29。已创建 72 个 GitHub Issues：A 通用 Core 47 项，B 造价 MVP 25 项。全部保持 planned／open，未开始实现，未启动 loop-it。
 
-采用用户未另选时的推荐位置：独立本地批次。旧 .autoresearch/issues 与已有 loop 执行记录保留。V03 本地编号与 GitHub 数字无对应关系，后续发布时记录真实远程编号。
+任务按用户要求发布到 [Yijtu/ontology 本批 Issues](https://github.com/Yijtu/ontology/issues?q=is%3Aissue+is%3Aopen+label%3A%22batch%3Av0.3-assistants%22)。本目录保留对应卡和真实编号映射；旧 .autoresearch/issues 与已有 loop 执行记录保留。V03 ID 与 GitHub 数字不能直接互换，使用 manifest 中的映射。
 
 ## 从哪里开始
 
@@ -18,6 +18,88 @@ flowchart LR
     B --> I[合成整栈验证]
     I --> R[真实报价比对与业务签核]
 ~~~
+
+## GitHub 入口与编号
+
+
+开发入口 [#169](https://github.com/Yijtu/ontology/issues/169)；A 验收并合入 main 门槛 [#218](https://github.com/Yijtu/ontology/issues/218)；B 同步门槛 [#219](https://github.com/Yijtu/ontology/issues/219)。真实 adapter [#227](https://github.com/Yijtu/ontology/issues/227) → 实际样本与业务验收 [#239](https://github.com/Yijtu/ontology/issues/239) → MVP 收尾 [#240](https://github.com/Yijtu/ontology/issues/240)。
+
+只处理标签 batch:v0.3-assistants 和 manifest.github_allowlist 内的任务。下面依赖是实际 GitHub 编号；不要按 V03 的数字访问远程 Issue。
+
+| V03 ID | GitHub Issue | 阶段 | 依赖 |
+| --- | --- | --- | --- |
+| V03-001 | [#169](https://github.com/Yijtu/ontology/issues/169) | A | 无 |
+| V03-002 | [#173](https://github.com/Yijtu/ontology/issues/173) | A | #169 |
+| V03-003 | [#174](https://github.com/Yijtu/ontology/issues/174) | A | #173 |
+| V03-004 | [#177](https://github.com/Yijtu/ontology/issues/177) | A | #174 |
+| V03-005 | [#175](https://github.com/Yijtu/ontology/issues/175) | A | #173 |
+| V03-006 | [#178](https://github.com/Yijtu/ontology/issues/178) | A | #174、#175 |
+| V03-007 | [#179](https://github.com/Yijtu/ontology/issues/179) | A | #173、#178 |
+| V03-008 | [#181](https://github.com/Yijtu/ontology/issues/181) | A | #177、#178、#179 |
+| V03-009 | [#183](https://github.com/Yijtu/ontology/issues/183) | A | #181 |
+| V03-010 | [#184](https://github.com/Yijtu/ontology/issues/184) | A | #183 |
+| V03-011 | [#180](https://github.com/Yijtu/ontology/issues/180) | A | #177、#178、#176 |
+| V03-012 | [#185](https://github.com/Yijtu/ontology/issues/185) | A | #183、#184、#180 |
+| V03-013 | [#182](https://github.com/Yijtu/ontology/issues/182) | A | #179、#180 |
+| V03-014 | [#186](https://github.com/Yijtu/ontology/issues/186) | A | #183、#184、#182 |
+| V03-015 | [#187](https://github.com/Yijtu/ontology/issues/187) | A | #174、#184、#186 |
+| V03-016 | [#189](https://github.com/Yijtu/ontology/issues/189) | A | #174、#187 |
+| V03-017 | [#190](https://github.com/Yijtu/ontology/issues/190) | A | #175、#178、#189 |
+| V03-018 | [#192](https://github.com/Yijtu/ontology/issues/192) | A | #189、#190 |
+| V03-019 | [#191](https://github.com/Yijtu/ontology/issues/191) | A | #178、#189 |
+| V03-020 | [#193](https://github.com/Yijtu/ontology/issues/193) | A | #189、#190、#192、#191、#176 |
+| V03-021 | [#202](https://github.com/Yijtu/ontology/issues/202) | A | #185、#182、#186、#187、#189、#176、#188、#201 |
+| V03-022 | [#176](https://github.com/Yijtu/ontology/issues/176) | A | #173 |
+| V03-023 | [#194](https://github.com/Yijtu/ontology/issues/194) | A | #173、#184、#189、#192 |
+| V03-024 | [#196](https://github.com/Yijtu/ontology/issues/196) | A | #179、#187、#194 |
+| V03-025 | [#199](https://github.com/Yijtu/ontology/issues/199) | A | #192、#194、#196 |
+| V03-026 | [#188](https://github.com/Yijtu/ontology/issues/188) | A | #173、#184、#186 |
+| V03-027 | [#195](https://github.com/Yijtu/ontology/issues/195) | A | #188、#192 |
+| V03-028 | [#197](https://github.com/Yijtu/ontology/issues/197) | A | #188、#195 |
+| V03-029 | [#200](https://github.com/Yijtu/ontology/issues/200) | A | #197、#178、#187 |
+| V03-030 | [#198](https://github.com/Yijtu/ontology/issues/198) | A | #173、#194 |
+| V03-031 | [#201](https://github.com/Yijtu/ontology/issues/201) | A | #194、#198 |
+| V03-032 | [#203](https://github.com/Yijtu/ontology/issues/203) | A | #173、#174、#194、#201 |
+| V03-033 | [#204](https://github.com/Yijtu/ontology/issues/204) | A | #203、#199、#201、#198 |
+| V03-034 | [#205](https://github.com/Yijtu/ontology/issues/205) | A | #199、#200、#191、#203、#198 |
+| V03-035 | [#206](https://github.com/Yijtu/ontology/issues/206) | A | #204、#205、#197、#198 |
+| V03-036 | [#207](https://github.com/Yijtu/ontology/issues/207) | A | #204、#205、#206 |
+| V03-037 | [#208](https://github.com/Yijtu/ontology/issues/208) | A | #196、#199、#200、#201、#207 |
+| V03-038 | [#209](https://github.com/Yijtu/ontology/issues/209) | A | #196、#199、#200、#201、#207 |
+| V03-039 | [#211](https://github.com/Yijtu/ontology/issues/211) | A | #208、#209、#206 |
+| V03-040 | [#212](https://github.com/Yijtu/ontology/issues/212) | A | #193、#203、#207、#208、#209、#211 |
+| V03-041 | [#214](https://github.com/Yijtu/ontology/issues/214) | A | #203、#206、#211、#212 |
+| V03-042 | [#216](https://github.com/Yijtu/ontology/issues/216) | A | #185、#182、#193、#202、#212、#214 |
+| V03-043 | [#215](https://github.com/Yijtu/ontology/issues/215) | A | #192、#199、#195、#197、#212 |
+| V03-044 | [#213](https://github.com/Yijtu/ontology/issues/213) | A | #208、#209、#211、#201 |
+| V03-045 | [#217](https://github.com/Yijtu/ontology/issues/217) | A | #169、#173、#174、#177、#175、#178、#179、#181、#183、#184、#180、#185、#182、#186、#187、#189、#190、#192、#191、#193、#202、#176、#194、#196、#199、#188、#195、#197、#200、#201、#203、#204、#205、#206、#207、#208、#209、#211、#212、#214、#216、#215、#213 |
+| V03-046 | [#210](https://github.com/Yijtu/ontology/issues/210) | A | #179、#181、#186、#191、#196、#207 |
+| V03-047 | [#218](https://github.com/Yijtu/ontology/issues/218) | A | #217、#210 |
+| V03-048 | [#170](https://github.com/Yijtu/ontology/issues/170) | B | 无 |
+| V03-049 | [#171](https://github.com/Yijtu/ontology/issues/171) | B | 无 |
+| V03-050 | [#172](https://github.com/Yijtu/ontology/issues/172) | B | 无 |
+| V03-051 | [#219](https://github.com/Yijtu/ontology/issues/219) | B | #218 |
+| V03-052 | [#220](https://github.com/Yijtu/ontology/issues/220) | B | #219、#170 |
+| V03-053 | [#221](https://github.com/Yijtu/ontology/issues/221) | B | #219、#171、#220 |
+| V03-054 | [#223](https://github.com/Yijtu/ontology/issues/223) | B | #219、#171、#220、#221 |
+| V03-055 | [#222](https://github.com/Yijtu/ontology/issues/222) | B | #219、#220 |
+| V03-056 | [#224](https://github.com/Yijtu/ontology/issues/224) | B | #222 |
+| V03-057 | [#225](https://github.com/Yijtu/ontology/issues/225) | B | #221、#224 |
+| V03-058 | [#228](https://github.com/Yijtu/ontology/issues/228) | B | #220、#223、#222、#225 |
+| V03-059 | [#230](https://github.com/Yijtu/ontology/issues/230) | B | #228 |
+| V03-060 | [#226](https://github.com/Yijtu/ontology/issues/226) | B | #219、#222、#224 |
+| V03-061 | [#229](https://github.com/Yijtu/ontology/issues/229) | B | #221、#225、#226 |
+| V03-062 | [#231](https://github.com/Yijtu/ontology/issues/231) | B | #228、#230、#226、#229 |
+| V03-063 | [#233](https://github.com/Yijtu/ontology/issues/233) | B | #230、#231 |
+| V03-064 | [#234](https://github.com/Yijtu/ontology/issues/234) | B | #230、#231 |
+| V03-065 | [#232](https://github.com/Yijtu/ontology/issues/232) | B | #172、#230 |
+| V03-066 | [#235](https://github.com/Yijtu/ontology/issues/235) | B | #231、#232 |
+| V03-067 | [#236](https://github.com/Yijtu/ontology/issues/236) | B | #228、#231、#232 |
+| V03-068 | [#237](https://github.com/Yijtu/ontology/issues/237) | B | #222、#228、#232 |
+| V03-069 | [#238](https://github.com/Yijtu/ontology/issues/238) | B | #220、#221、#223、#222、#224、#225、#228、#230、#226、#229、#231、#233、#234、#232、#235、#236、#237 |
+| V03-070 | [#227](https://github.com/Yijtu/ontology/issues/227) | B | #171、#223 |
+| V03-071 | [#239](https://github.com/Yijtu/ontology/issues/239) | B | #171、#172、#238、#227 |
+| V03-072 | [#240](https://github.com/Yijtu/ontology/issues/240) | B | #238、#239 |
 
 ## 文档与执行规则
 

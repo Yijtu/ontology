@@ -1,8 +1,8 @@
 # V03-020：实现项目、资料映射与就绪状态公共前端
 
-阶段 A · frontend · P1 · 状态 planned · GitHub 编号未分配
+阶段 A · frontend · P1 · 状态 planned · GitHub [#193](https://github.com/Yijtu/ontology/issues/193)
 
-执行工作线：feat/core-planning-provenance；目标：main。本地卡不是远程 #20，本批尚未开始实现。
+执行工作线：feat/core-planning-provenance；目标：main。本批尚未开始实现；V03 是规划 ID，GitHub 编号见上述链接与 manifest。
 
 ## 目标与范围
 
@@ -12,6 +12,8 @@
 - 提供按行业Schema人工新增业务记录与补参表单，回读manual-entry来源/审批/修订；输入非原文件时仍有可核验真实来源。
 
 ## 依赖与进入条件
+
+Dependencies: #189, #190, #192, #191, #176
 
 依赖：[V03-016](issue-016-project-bindings.md)、[V03-017](issue-017-project-mapping.md)、[V03-018](issue-018-query-projection.md)、[V03-019](issue-019-document-index.md)、[V03-022](issue-022-frontend-mount.md)。
 开工先核对 V03-001 的能力/旧任务/WIP记录，复用已完成实现，只补本卡缺口。完成能力按独立审查合入 main，保留场景边界。
@@ -58,5 +60,5 @@
 
 ## 完成记录
 
-- 当前：未开工；验证未运行；无提交/PR/远程 Issue 编号。
+- 当前：未开工；验证未运行。GitHub Issue：[#193](https://github.com/Yijtu/ontology/issues/193)；文档提交不代表功能完成。
 - 实现后记录：提交/PR、适用命令结果、满足的验收、未验证/外部条件、迁移配置与兼容影响。

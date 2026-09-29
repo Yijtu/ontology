@@ -3,12 +3,12 @@
   "batch_id": "v0.3-assistants",
   "status": "planned_not_run",
   "source_sha256": {
-    "tasks/prd-generic-assistants-core-v0.3.md": "fdb4d8606c35088d4818865e7bf5ae7f232715f9e95d76bec424d7f3aa93b610",
+    "tasks/prd-generic-assistants-core-v0.3.md": "ac0c9780fde1889f67f86c62e66a5f6d5f4ba011b97d260f0ca6b8804fd3bb4c",
     "tasks/prd-ontology-and-business-assistants-v0.3.md": "fc671e1bbc20da6072c7359851b17d338c255b4b350c284d6f2f5029b8abd782",
     "tasks/spec-generic-assistants-core-v0.3.md": "5ee27d94884ddcb12b1d5b0e7fb777eb9569c530c13ece5bdb77ddc39aace57c",
     "tasks/spec-v0.3a/asset-data-ui.md": "6ce26b2e9ad41aa50ebc719fcf7d2c6cd2d126cec82b1e146a080a6f080ba667",
     "tasks/spec-v0.3a/execution-evidence.md": "064f795ecfeaaa31db0ef47378e4acb2ed36f20a14a121b7a182c0c66500305c",
-    "tasks/spec-electrical-costing-mvp-v0.3.md": "61af447fb01105c403b0b6bc4c7a9eda662a7e6d660f2c4d3b31e6806032156a"
+    "tasks/spec-electrical-costing-mvp-v0.3.md": "34d81c5e341167096414d5211b26614b88c5e5f09fa20368e9573e852d552609"
   },
   "counts": {
     "stories": 40,
@@ -6898,5 +6898,6 @@
         "B"
       ]
     }
-  ]
+  ],
+  "source_hash_normalization": "utf8-without-bom-lf"
 }

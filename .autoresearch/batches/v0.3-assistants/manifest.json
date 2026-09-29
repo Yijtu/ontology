@@ -1,9 +1,9 @@
 {
   "schema_version": 1,
-  "kind": "local-issue-batch",
+  "kind": "github-issue-batch",
   "batch_id": "v0.3-assistants",
   "created_at": "2026-09-29",
-  "platform": "local",
+  "platform": "github",
   "status": "planned",
   "implementation_started": false,
   "github_repository": "Yijtu/ontology",
@@ -33,12 +33,12 @@
     "tasks/spec-electrical-costing-mvp-v0.3.md"
   ],
   "input_sha256": {
-    "tasks/prd-generic-assistants-core-v0.3.md": "fdb4d8606c35088d4818865e7bf5ae7f232715f9e95d76bec424d7f3aa93b610",
+    "tasks/prd-generic-assistants-core-v0.3.md": "ac0c9780fde1889f67f86c62e66a5f6d5f4ba011b97d260f0ca6b8804fd3bb4c",
     "tasks/prd-ontology-and-business-assistants-v0.3.md": "fc671e1bbc20da6072c7359851b17d338c255b4b350c284d6f2f5029b8abd782",
     "tasks/spec-generic-assistants-core-v0.3.md": "5ee27d94884ddcb12b1d5b0e7fb777eb9569c530c13ece5bdb77ddc39aace57c",
     "tasks/spec-v0.3a/asset-data-ui.md": "6ce26b2e9ad41aa50ebc719fcf7d2c6cd2d126cec82b1e146a080a6f080ba667",
     "tasks/spec-v0.3a/execution-evidence.md": "064f795ecfeaaa31db0ef47378e4acb2ed36f20a14a121b7a182c0c66500305c",
-    "tasks/spec-electrical-costing-mvp-v0.3.md": "61af447fb01105c403b0b6bc4c7a9eda662a7e6d660f2c4d3b31e6806032156a"
+    "tasks/spec-electrical-costing-mvp-v0.3.md": "34d81c5e341167096414d5211b26614b88c5e5f09fa20368e9573e852d552609"
   },
   "preserved_legacy_sha256": {
     ".autoresearch/issues/manifest.json": "7119ed8574287ae9e2d65b3c9cbe1a8a3c8f9c42687a6f3f5b1e8f9e94e4b804"
@@ -236,8 +236,8 @@
       "dependency_readiness": "ready_to_audit",
       "external_readiness": "see_card",
       "implementation_started": false,
-      "github_issue_number": null,
-      "github_url": null,
+      "github_issue_number": 169,
+      "github_url": "https://github.com/Yijtu/ontology/issues/169",
       "file": ".autoresearch/batches/v0.3-assistants/issues/core/issue-001-baseline-wip-audit.md",
       "depends_on": [],
       "declared_story_refs": [
@@ -255,7 +255,16 @@
       "merge_target": "main",
       "working_line": "feat/core-planning-provenance",
       "verification_state": "not_run",
-      "evidence": []
+      "evidence": [],
+      "remote_state": "open",
+      "remote_labels": [
+        "batch:v0.3-assistants",
+        "phase:core",
+        "high",
+        "infra"
+      ],
+      "github_dependencies": [],
+      "published_body_sha256": "172c427d02b877d0942a91a4ef74d4eb7ff4adef9797511a164b4e54722f4d99"
     },
     {
       "local_id": "V03-002",
@@ -268,8 +277,8 @@
       "dependency_readiness": "waiting_dependencies",
       "external_readiness": "see_card",
       "implementation_started": false,
-      "github_issue_number": null,
-      "github_url": null,
+      "github_issue_number": 173,
+      "github_url": "https://github.com/Yijtu/ontology/issues/173",
       "file": ".autoresearch/batches/v0.3-assistants/issues/core/issue-002-public-contracts.md",
       "depends_on": [
         "V03-001"
@@ -291,7 +300,18 @@
       "merge_target": "main",
       "working_line": "feat/core-planning-provenance",
       "verification_state": "not_run",
-      "evidence": []
+      "evidence": [],
+      "remote_state": "open",
+      "remote_labels": [
+        "batch:v0.3-assistants",
+        "phase:core",
+        "high",
+        "backend"
+      ],
+      "github_dependencies": [
+        169
+      ],
+      "published_body_sha256": "3040ec1c61629074aab32beb2baf0b615917ae9b9b1b8d8a90207cbc98df0d80"
     },
     {
       "local_id": "V03-003",
@@ -304,8 +324,8 @@
       "dependency_readiness": "waiting_dependencies",
       "external_readiness": "see_card",
       "implementation_started": false,
-      "github_issue_number": null,
-      "github_url": null,
+      "github_issue_number": 174,
+      "github_url": "https://github.com/Yijtu/ontology/issues/174",
       "file": ".autoresearch/batches/v0.3-assistants/issues/core/issue-003-control-stores.md",
       "depends_on": [
         "V03-002"
@@ -326,7 +346,18 @@
       "merge_target": "main",
       "working_line": "feat/core-planning-provenance",
       "verification_state": "not_run",
-      "evidence": []
+      "evidence": [],
+      "remote_state": "open",
+      "remote_labels": [
+        "batch:v0.3-assistants",
+        "phase:core",
+        "medium",
+        "backend"
+      ],
+      "github_dependencies": [
+        173
+      ],
+      "published_body_sha256": "cf317d2f03a164e3173fdc6474a97f0d8d9ef0c85f88515b07e28cff1366c169"
     },
     {
       "local_id": "V03-004",
@@ -339,8 +370,8 @@
       "dependency_readiness": "waiting_dependencies",
       "external_readiness": "see_card",
       "implementation_started": false,
-      "github_issue_number": null,
-      "github_url": null,
+      "github_issue_number": 177,
+      "github_url": "https://github.com/Yijtu/ontology/issues/177",
       "file": ".autoresearch/batches/v0.3-assistants/issues/core/issue-004-workspace-api.md",
       "depends_on": [
         "V03-003"
@@ -362,7 +393,18 @@
       "merge_target": "main",
       "working_line": "feat/core-planning-provenance",
       "verification_state": "not_run",
-      "evidence": []
+      "evidence": [],
+      "remote_state": "open",
+      "remote_labels": [
+        "batch:v0.3-assistants",
+        "phase:core",
+        "medium",
+        "backend"
+      ],
+      "github_dependencies": [
+        174
+      ],
+      "published_body_sha256": "6e59e323ee463b75d1c7b9caf6a65ef7b1b61deaa2e705b41764af0513867263"
     },
     {
       "local_id": "V03-005",
@@ -375,8 +417,8 @@
       "dependency_readiness": "waiting_dependencies",
       "external_readiness": "see_card",
       "implementation_started": false,
-      "github_issue_number": null,
-      "github_url": null,
+      "github_issue_number": 175,
+      "github_url": "https://github.com/Yijtu/ontology/issues/175",
       "file": ".autoresearch/batches/v0.3-assistants/issues/core/issue-005-structured-parser.md",
       "depends_on": [
         "V03-002"
@@ -400,7 +442,18 @@
       "merge_target": "main",
       "working_line": "feat/core-planning-provenance",
       "verification_state": "not_run",
-      "evidence": []
+      "evidence": [],
+      "remote_state": "open",
+      "remote_labels": [
+        "batch:v0.3-assistants",
+        "phase:core",
+        "medium",
+        "backend"
+      ],
+      "github_dependencies": [
+        173
+      ],
+      "published_body_sha256": "4e2c31fb02ea6ec2152bbfe2e07b3df96f0b1870c21b59a4f26115d08dd512cf"
     },
     {
       "local_id": "V03-006",
@@ -413,8 +466,8 @@
       "dependency_readiness": "waiting_dependencies",
       "external_readiness": "see_card",
       "implementation_started": false,
-      "github_issue_number": null,
-      "github_url": null,
+      "github_issue_number": 178,
+      "github_url": "https://github.com/Yijtu/ontology/issues/178",
       "file": ".autoresearch/batches/v0.3-assistants/issues/core/issue-006-ingestion-coverage.md",
       "depends_on": [
         "V03-003",
@@ -443,7 +496,19 @@
       "merge_target": "main",
       "working_line": "feat/core-planning-provenance",
       "verification_state": "not_run",
-      "evidence": []
+      "evidence": [],
+      "remote_state": "open",
+      "remote_labels": [
+        "batch:v0.3-assistants",
+        "phase:core",
+        "medium",
+        "backend"
+      ],
+      "github_dependencies": [
+        174,
+        175
+      ],
+      "published_body_sha256": "61143da5ec6dc088fb3d9a9e050c3691250c9af3b534e29d4469005c73fc5266"
     },
     {
       "local_id": "V03-007",
@@ -456,8 +521,8 @@
       "dependency_readiness": "waiting_dependencies",
       "external_readiness": "see_card",
       "implementation_started": false,
-      "github_issue_number": null,
-      "github_url": null,
+      "github_issue_number": 179,
+      "github_url": "https://github.com/Yijtu/ontology/issues/179",
       "file": ".autoresearch/batches/v0.3-assistants/issues/core/issue-007-schema-extraction.md",
       "depends_on": [
         "V03-002",
@@ -481,7 +546,19 @@
       "merge_target": "main",
       "working_line": "feat/core-planning-provenance",
       "verification_state": "not_run",
-      "evidence": []
+      "evidence": [],
+      "remote_state": "open",
+      "remote_labels": [
+        "batch:v0.3-assistants",
+        "phase:core",
+        "medium",
+        "backend"
+      ],
+      "github_dependencies": [
+        173,
+        178
+      ],
+      "published_body_sha256": "14313e8896e285c383732ceea515b16c7b23f877f1592731f9b9dba8cd35c5ef"
     },
     {
       "local_id": "V03-008",
@@ -494,8 +571,8 @@
       "dependency_readiness": "waiting_dependencies",
       "external_readiness": "see_card",
       "implementation_started": false,
-      "github_issue_number": null,
-      "github_url": null,
+      "github_issue_number": 181,
+      "github_url": "https://github.com/Yijtu/ontology/issues/181",
       "file": ".autoresearch/batches/v0.3-assistants/issues/core/issue-008-tbox-candidates.md",
       "depends_on": [
         "V03-004",
@@ -521,7 +598,20 @@
       "merge_target": "main",
       "working_line": "feat/core-planning-provenance",
       "verification_state": "not_run",
-      "evidence": []
+      "evidence": [],
+      "remote_state": "open",
+      "remote_labels": [
+        "batch:v0.3-assistants",
+        "phase:core",
+        "medium",
+        "backend"
+      ],
+      "github_dependencies": [
+        177,
+        178,
+        179
+      ],
+      "published_body_sha256": "df917fb1687e3da4c0002005a809ab8ff05c3ede754b96bdd9ec65a1f5ce02a4"
     },
     {
       "local_id": "V03-009",
@@ -534,8 +624,8 @@
       "dependency_readiness": "waiting_dependencies",
       "external_readiness": "see_card",
       "implementation_started": false,
-      "github_issue_number": null,
-      "github_url": null,
+      "github_issue_number": 183,
+      "github_url": "https://github.com/Yijtu/ontology/issues/183",
       "file": ".autoresearch/batches/v0.3-assistants/issues/core/issue-009-definition-edit-validation.md",
       "depends_on": [
         "V03-008"
@@ -559,7 +649,18 @@
       "merge_target": "main",
       "working_line": "feat/core-planning-provenance",
       "verification_state": "not_run",
-      "evidence": []
+      "evidence": [],
+      "remote_state": "open",
+      "remote_labels": [
+        "batch:v0.3-assistants",
+        "phase:core",
+        "medium",
+        "backend"
+      ],
+      "github_dependencies": [
+        181
+      ],
+      "published_body_sha256": "0adf7ffd327f63b29ab1c7f4d3310a00a92df56d6e16242d4eddc04737633a21"
     },
     {
       "local_id": "V03-010",
@@ -572,8 +673,8 @@
       "dependency_readiness": "waiting_dependencies",
       "external_readiness": "see_card",
       "implementation_started": false,
-      "github_issue_number": null,
-      "github_url": null,
+      "github_issue_number": 184,
+      "github_url": "https://github.com/Yijtu/ontology/issues/184",
       "file": ".autoresearch/batches/v0.3-assistants/issues/core/issue-010-rule-action-candidates.md",
       "depends_on": [
         "V03-009"
@@ -602,7 +703,18 @@
       "merge_target": "main",
       "working_line": "feat/core-planning-provenance",
       "verification_state": "not_run",
-      "evidence": []
+      "evidence": [],
+      "remote_state": "open",
+      "remote_labels": [
+        "batch:v0.3-assistants",
+        "phase:core",
+        "medium",
+        "backend"
+      ],
+      "github_dependencies": [
+        183
+      ],
+      "published_body_sha256": "46ad4bebd02b79fa6da8a8cf8f53c8663cf228ce900dbb17c5dbcae5104cef66"
     },
     {
       "local_id": "V03-011",
@@ -615,8 +727,8 @@
       "dependency_readiness": "waiting_dependencies",
       "external_readiness": "see_card",
       "implementation_started": false,
-      "github_issue_number": null,
-      "github_url": null,
+      "github_issue_number": 180,
+      "github_url": "https://github.com/Yijtu/ontology/issues/180",
       "file": ".autoresearch/batches/v0.3-assistants/issues/core/issue-011-workspace-source-ui.md",
       "depends_on": [
         "V03-004",
@@ -643,7 +755,20 @@
       "merge_target": "main",
       "working_line": "feat/core-planning-provenance",
       "verification_state": "not_run",
-      "evidence": []
+      "evidence": [],
+      "remote_state": "open",
+      "remote_labels": [
+        "batch:v0.3-assistants",
+        "phase:core",
+        "medium",
+        "frontend"
+      ],
+      "github_dependencies": [
+        177,
+        178,
+        176
+      ],
+      "published_body_sha256": "aad0f263e6c10741920878f6dc89cef47cb1f4afc20dd9a53b61eb2d812aa069"
     },
     {
       "local_id": "V03-012",
@@ -656,8 +781,8 @@
       "dependency_readiness": "waiting_dependencies",
       "external_readiness": "see_card",
       "implementation_started": false,
-      "github_issue_number": null,
-      "github_url": null,
+      "github_issue_number": 185,
+      "github_url": "https://github.com/Yijtu/ontology/issues/185",
       "file": ".autoresearch/batches/v0.3-assistants/issues/core/issue-012-definition-editor-ui.md",
       "depends_on": [
         "V03-009",
@@ -687,7 +812,20 @@
       "merge_target": "main",
       "working_line": "feat/core-planning-provenance",
       "verification_state": "not_run",
-      "evidence": []
+      "evidence": [],
+      "remote_state": "open",
+      "remote_labels": [
+        "batch:v0.3-assistants",
+        "phase:core",
+        "medium",
+        "frontend"
+      ],
+      "github_dependencies": [
+        183,
+        184,
+        180
+      ],
+      "published_body_sha256": "fc92ef36ed830a05e2b21cd133a6b73a3b361dc9b8c0c213ec87e344c7de643c"
     },
     {
       "local_id": "V03-013",
@@ -700,8 +838,8 @@
       "dependency_readiness": "waiting_dependencies",
       "external_readiness": "see_card",
       "implementation_started": false,
-      "github_issue_number": null,
-      "github_url": null,
+      "github_issue_number": 182,
+      "github_url": "https://github.com/Yijtu/ontology/issues/182",
       "file": ".autoresearch/batches/v0.3-assistants/issues/core/issue-013-instance-review-ui.md",
       "depends_on": [
         "V03-007",
@@ -732,7 +870,19 @@
       "merge_target": "main",
       "working_line": "feat/core-planning-provenance",
       "verification_state": "not_run",
-      "evidence": []
+      "evidence": [],
+      "remote_state": "open",
+      "remote_labels": [
+        "batch:v0.3-assistants",
+        "phase:core",
+        "medium",
+        "fullstack"
+      ],
+      "github_dependencies": [
+        179,
+        180
+      ],
+      "published_body_sha256": "1d3f2b25d11df15cd619ad35fc3654cdaa642a0c956551a02d089ed269d75ab7"
     },
     {
       "local_id": "V03-014",
@@ -745,8 +895,8 @@
       "dependency_readiness": "waiting_dependencies",
       "external_readiness": "see_card",
       "implementation_started": false,
-      "github_issue_number": null,
-      "github_url": null,
+      "github_issue_number": 186,
+      "github_url": "https://github.com/Yijtu/ontology/issues/186",
       "file": ".autoresearch/batches/v0.3-assistants/issues/core/issue-014-synthetic-validation.md",
       "depends_on": [
         "V03-009",
@@ -777,7 +927,20 @@
       "merge_target": "main",
       "working_line": "feat/core-planning-provenance",
       "verification_state": "not_run",
-      "evidence": []
+      "evidence": [],
+      "remote_state": "open",
+      "remote_labels": [
+        "batch:v0.3-assistants",
+        "phase:core",
+        "medium",
+        "backend"
+      ],
+      "github_dependencies": [
+        183,
+        184,
+        182
+      ],
+      "published_body_sha256": "9c7bafd446e7eb2cd84a18f64b0c05e3845ad531b1b17ba16fb801b60792ce95"
     },
     {
       "local_id": "V03-015",
@@ -790,8 +953,8 @@
       "dependency_readiness": "waiting_dependencies",
       "external_readiness": "see_card",
       "implementation_started": false,
-      "github_issue_number": null,
-      "github_url": null,
+      "github_issue_number": 187,
+      "github_url": "https://github.com/Yijtu/ontology/issues/187",
       "file": ".autoresearch/batches/v0.3-assistants/issues/core/issue-015-dynamic-pack-publish.md",
       "depends_on": [
         "V03-003",
@@ -821,7 +984,20 @@
       "merge_target": "main",
       "working_line": "feat/core-planning-provenance",
       "verification_state": "not_run",
-      "evidence": []
+      "evidence": [],
+      "remote_state": "open",
+      "remote_labels": [
+        "batch:v0.3-assistants",
+        "phase:core",
+        "high",
+        "backend"
+      ],
+      "github_dependencies": [
+        174,
+        184,
+        186
+      ],
+      "published_body_sha256": "df28fc4742fd4bae8284d7db235ee4c45cbf7ab11b2b51e06eab5b8bad4d57ac"
     },
     {
       "local_id": "V03-016",
@@ -834,8 +1010,8 @@
       "dependency_readiness": "waiting_dependencies",
       "external_readiness": "see_card",
       "implementation_started": false,
-      "github_issue_number": null,
-      "github_url": null,
+      "github_issue_number": 189,
+      "github_url": "https://github.com/Yijtu/ontology/issues/189",
       "file": ".autoresearch/batches/v0.3-assistants/issues/core/issue-016-project-bindings.md",
       "depends_on": [
         "V03-003",
@@ -860,7 +1036,19 @@
       "merge_target": "main",
       "working_line": "feat/core-planning-provenance",
       "verification_state": "not_run",
-      "evidence": []
+      "evidence": [],
+      "remote_state": "open",
+      "remote_labels": [
+        "batch:v0.3-assistants",
+        "phase:core",
+        "medium",
+        "backend"
+      ],
+      "github_dependencies": [
+        174,
+        187
+      ],
+      "published_body_sha256": "5755ab21be2403b6c9e1ddc3fb39d6e66900faf29311f7d32b59392c0863aa42"
     },
     {
       "local_id": "V03-017",
@@ -873,8 +1061,8 @@
       "dependency_readiness": "waiting_dependencies",
       "external_readiness": "see_card",
       "implementation_started": false,
-      "github_issue_number": null,
-      "github_url": null,
+      "github_issue_number": 190,
+      "github_url": "https://github.com/Yijtu/ontology/issues/190",
       "file": ".autoresearch/batches/v0.3-assistants/issues/core/issue-017-project-mapping.md",
       "depends_on": [
         "V03-005",
@@ -899,7 +1087,20 @@
       "merge_target": "main",
       "working_line": "feat/core-planning-provenance",
       "verification_state": "not_run",
-      "evidence": []
+      "evidence": [],
+      "remote_state": "open",
+      "remote_labels": [
+        "batch:v0.3-assistants",
+        "phase:core",
+        "medium",
+        "backend"
+      ],
+      "github_dependencies": [
+        175,
+        178,
+        189
+      ],
+      "published_body_sha256": "8a41ea52b4c67891da810c15f9ef0c58302cba29cf02420b6a43e5cb140f7ed2"
     },
     {
       "local_id": "V03-018",
@@ -912,8 +1113,8 @@
       "dependency_readiness": "waiting_dependencies",
       "external_readiness": "see_card",
       "implementation_started": false,
-      "github_issue_number": null,
-      "github_url": null,
+      "github_issue_number": 192,
+      "github_url": "https://github.com/Yijtu/ontology/issues/192",
       "file": ".autoresearch/batches/v0.3-assistants/issues/core/issue-018-query-projection.md",
       "depends_on": [
         "V03-016",
@@ -938,7 +1139,19 @@
       "merge_target": "main",
       "working_line": "feat/core-planning-provenance",
       "verification_state": "not_run",
-      "evidence": []
+      "evidence": [],
+      "remote_state": "open",
+      "remote_labels": [
+        "batch:v0.3-assistants",
+        "phase:core",
+        "high",
+        "backend"
+      ],
+      "github_dependencies": [
+        189,
+        190
+      ],
+      "published_body_sha256": "045a2ba313c8080cc3eae8b8c3b2dd526aa832b2da3713e095e2205901d59295"
     },
     {
       "local_id": "V03-019",
@@ -951,8 +1164,8 @@
       "dependency_readiness": "waiting_dependencies",
       "external_readiness": "see_card",
       "implementation_started": false,
-      "github_issue_number": null,
-      "github_url": null,
+      "github_issue_number": 191,
+      "github_url": "https://github.com/Yijtu/ontology/issues/191",
       "file": ".autoresearch/batches/v0.3-assistants/issues/core/issue-019-document-index.md",
       "depends_on": [
         "V03-006",
@@ -972,7 +1185,19 @@
       "merge_target": "main",
       "working_line": "feat/core-planning-provenance",
       "verification_state": "not_run",
-      "evidence": []
+      "evidence": [],
+      "remote_state": "open",
+      "remote_labels": [
+        "batch:v0.3-assistants",
+        "phase:core",
+        "medium",
+        "backend"
+      ],
+      "github_dependencies": [
+        178,
+        189
+      ],
+      "published_body_sha256": "f3e06fed9a8f53f52bcb0261d89ef3b1881ba1e303191309b7fd1d6f9f87cac1"
     },
     {
       "local_id": "V03-020",
@@ -985,8 +1210,8 @@
       "dependency_readiness": "waiting_dependencies",
       "external_readiness": "see_card",
       "implementation_started": false,
-      "github_issue_number": null,
-      "github_url": null,
+      "github_issue_number": 193,
+      "github_url": "https://github.com/Yijtu/ontology/issues/193",
       "file": ".autoresearch/batches/v0.3-assistants/issues/core/issue-020-project-data-ui.md",
       "depends_on": [
         "V03-016",
@@ -1021,7 +1246,22 @@
       "merge_target": "main",
       "working_line": "feat/core-planning-provenance",
       "verification_state": "not_run",
-      "evidence": []
+      "evidence": [],
+      "remote_state": "open",
+      "remote_labels": [
+        "batch:v0.3-assistants",
+        "phase:core",
+        "medium",
+        "frontend"
+      ],
+      "github_dependencies": [
+        189,
+        190,
+        192,
+        191,
+        176
+      ],
+      "published_body_sha256": "ea20c12d4ca1ce14bb2d4b9e62e341d99c06956689b0bc9289cc56853446a001"
     },
     {
       "local_id": "V03-021",
@@ -1034,8 +1274,8 @@
       "dependency_readiness": "waiting_dependencies",
       "external_readiness": "see_card",
       "implementation_started": false,
-      "github_issue_number": null,
-      "github_url": null,
+      "github_issue_number": 202,
+      "github_url": "https://github.com/Yijtu/ontology/issues/202",
       "file": ".autoresearch/batches/v0.3-assistants/issues/core/issue-021-package-publish-ui.md",
       "depends_on": [
         "V03-012",
@@ -1070,7 +1310,25 @@
       "merge_target": "main",
       "working_line": "feat/core-planning-provenance",
       "verification_state": "not_run",
-      "evidence": []
+      "evidence": [],
+      "remote_state": "open",
+      "remote_labels": [
+        "batch:v0.3-assistants",
+        "phase:core",
+        "medium",
+        "frontend"
+      ],
+      "github_dependencies": [
+        185,
+        182,
+        186,
+        187,
+        189,
+        176,
+        188,
+        201
+      ],
+      "published_body_sha256": "bd79af0b78a33a0f2d8febfbc8a40c8fc9c8df2d0cb1746a3ff7eace30c78b21"
     },
     {
       "local_id": "V03-022",
@@ -1083,8 +1341,8 @@
       "dependency_readiness": "waiting_dependencies",
       "external_readiness": "see_card",
       "implementation_started": false,
-      "github_issue_number": null,
-      "github_url": null,
+      "github_issue_number": 176,
+      "github_url": "https://github.com/Yijtu/ontology/issues/176",
       "file": ".autoresearch/batches/v0.3-assistants/issues/core/issue-022-frontend-mount.md",
       "depends_on": [
         "V03-002"
@@ -1109,7 +1367,18 @@
       "merge_target": "main",
       "working_line": "feat/core-planning-provenance",
       "verification_state": "not_run",
-      "evidence": []
+      "evidence": [],
+      "remote_state": "open",
+      "remote_labels": [
+        "batch:v0.3-assistants",
+        "phase:core",
+        "medium",
+        "frontend"
+      ],
+      "github_dependencies": [
+        173
+      ],
+      "published_body_sha256": "d8c429df93c43715557c418e3c619548adccfc51c6f6e1a276dc5ed8ffac0833"
     },
     {
       "local_id": "V03-023",
@@ -1122,8 +1391,8 @@
       "dependency_readiness": "waiting_dependencies",
       "external_readiness": "see_card",
       "implementation_started": false,
-      "github_issue_number": null,
-      "github_url": null,
+      "github_issue_number": 194,
+      "github_url": "https://github.com/Yijtu/ontology/issues/194",
       "file": ".autoresearch/batches/v0.3-assistants/issues/core/issue-023-task-input-artifacts.md",
       "depends_on": [
         "V03-002",
@@ -1162,7 +1431,21 @@
       "merge_target": "main",
       "working_line": "feat/core-planning-provenance",
       "verification_state": "not_run",
-      "evidence": []
+      "evidence": [],
+      "remote_state": "open",
+      "remote_labels": [
+        "batch:v0.3-assistants",
+        "phase:core",
+        "medium",
+        "backend"
+      ],
+      "github_dependencies": [
+        173,
+        184,
+        189,
+        192
+      ],
+      "published_body_sha256": "eb971cee1beb81a09b9501823a2838878f167a2c73a1f68afc492f201278aac4"
     },
     {
       "local_id": "V03-024",
@@ -1175,8 +1458,8 @@
       "dependency_readiness": "waiting_dependencies",
       "external_readiness": "see_card",
       "implementation_started": false,
-      "github_issue_number": null,
-      "github_url": null,
+      "github_issue_number": 196,
+      "github_url": "https://github.com/Yijtu/ontology/issues/196",
       "file": ".autoresearch/batches/v0.3-assistants/issues/core/issue-024-nl-plan-receipts.md",
       "depends_on": [
         "V03-007",
@@ -1203,7 +1486,20 @@
       "merge_target": "main",
       "working_line": "feat/core-planning-provenance",
       "verification_state": "not_run",
-      "evidence": []
+      "evidence": [],
+      "remote_state": "open",
+      "remote_labels": [
+        "batch:v0.3-assistants",
+        "phase:core",
+        "high",
+        "backend"
+      ],
+      "github_dependencies": [
+        179,
+        187,
+        194
+      ],
+      "published_body_sha256": "35a7b72e629ca2a7f68e1964bfe14abf2208c53a6770dd1aae972c5cdfe1cdd3"
     },
     {
       "local_id": "V03-025",
@@ -1216,8 +1512,8 @@
       "dependency_readiness": "waiting_dependencies",
       "external_readiness": "see_card",
       "implementation_started": false,
-      "github_issue_number": null,
-      "github_url": null,
+      "github_issue_number": 199,
+      "github_url": "https://github.com/Yijtu/ontology/issues/199",
       "file": ".autoresearch/batches/v0.3-assistants/issues/core/issue-025-semantic-sql-query.md",
       "depends_on": [
         "V03-018",
@@ -1241,7 +1537,20 @@
       "merge_target": "main",
       "working_line": "feat/core-planning-provenance",
       "verification_state": "not_run",
-      "evidence": []
+      "evidence": [],
+      "remote_state": "open",
+      "remote_labels": [
+        "batch:v0.3-assistants",
+        "phase:core",
+        "medium",
+        "backend"
+      ],
+      "github_dependencies": [
+        192,
+        194,
+        196
+      ],
+      "published_body_sha256": "0c031e45ad95312df61231c72339393e7288499304c1398557e2882ae9785285"
     },
     {
       "local_id": "V03-026",
@@ -1254,8 +1563,8 @@
       "dependency_readiness": "waiting_dependencies",
       "external_readiness": "see_card",
       "implementation_started": false,
-      "github_issue_number": null,
-      "github_url": null,
+      "github_issue_number": 188,
+      "github_url": "https://github.com/Yijtu/ontology/issues/188",
       "file": ".autoresearch/batches/v0.3-assistants/issues/core/issue-026-finite-rule-boolean.md",
       "depends_on": [
         "V03-002",
@@ -1284,7 +1593,20 @@
       "merge_target": "main",
       "working_line": "feat/core-planning-provenance",
       "verification_state": "not_run",
-      "evidence": []
+      "evidence": [],
+      "remote_state": "open",
+      "remote_labels": [
+        "batch:v0.3-assistants",
+        "phase:core",
+        "medium",
+        "backend"
+      ],
+      "github_dependencies": [
+        173,
+        184,
+        186
+      ],
+      "published_body_sha256": "5c0b3905c0ca46f5e0ba33e234b3038ac36b441708c48516d902cadbab647fea"
     },
     {
       "local_id": "V03-027",
@@ -1297,8 +1619,8 @@
       "dependency_readiness": "waiting_dependencies",
       "external_readiness": "see_card",
       "implementation_started": false,
-      "github_issue_number": null,
-      "github_url": null,
+      "github_issue_number": 195,
+      "github_url": "https://github.com/Yijtu/ontology/issues/195",
       "file": ".autoresearch/batches/v0.3-assistants/issues/core/issue-027-relation-navigation.md",
       "depends_on": [
         "V03-026",
@@ -1321,7 +1643,19 @@
       "merge_target": "main",
       "working_line": "feat/core-planning-provenance",
       "verification_state": "not_run",
-      "evidence": []
+      "evidence": [],
+      "remote_state": "open",
+      "remote_labels": [
+        "batch:v0.3-assistants",
+        "phase:core",
+        "medium",
+        "backend"
+      ],
+      "github_dependencies": [
+        188,
+        192
+      ],
+      "published_body_sha256": "e4e82c1cd78ed1c85c9112d60e582cb9534de6bab53c0cc9d47b90dae4aa715b"
     },
     {
       "local_id": "V03-028",
@@ -1334,8 +1668,8 @@
       "dependency_readiness": "waiting_dependencies",
       "external_readiness": "see_card",
       "implementation_started": false,
-      "github_issue_number": null,
-      "github_url": null,
+      "github_issue_number": 197,
+      "github_url": "https://github.com/Yijtu/ontology/issues/197",
       "file": ".autoresearch/batches/v0.3-assistants/issues/core/issue-028-incremental-rule-state.md",
       "depends_on": [
         "V03-026",
@@ -1360,7 +1694,19 @@
       "merge_target": "main",
       "working_line": "feat/core-planning-provenance",
       "verification_state": "not_run",
-      "evidence": []
+      "evidence": [],
+      "remote_state": "open",
+      "remote_labels": [
+        "batch:v0.3-assistants",
+        "phase:core",
+        "medium",
+        "backend"
+      ],
+      "github_dependencies": [
+        188,
+        195
+      ],
+      "published_body_sha256": "9c3bc4e63703b0ccd3adc3784106cdb541b76db67363a9374bab417bc27de0b2"
     },
     {
       "local_id": "V03-029",
@@ -1373,8 +1719,8 @@
       "dependency_readiness": "waiting_dependencies",
       "external_readiness": "see_card",
       "implementation_started": false,
-      "github_issue_number": null,
-      "github_url": null,
+      "github_issue_number": 200,
+      "github_url": "https://github.com/Yijtu/ontology/issues/200",
       "file": ".autoresearch/batches/v0.3-assistants/issues/core/issue-029-rule-source-provenance.md",
       "depends_on": [
         "V03-028",
@@ -1400,7 +1746,20 @@
       "merge_target": "main",
       "working_line": "feat/core-planning-provenance",
       "verification_state": "not_run",
-      "evidence": []
+      "evidence": [],
+      "remote_state": "open",
+      "remote_labels": [
+        "batch:v0.3-assistants",
+        "phase:core",
+        "medium",
+        "backend"
+      ],
+      "github_dependencies": [
+        197,
+        178,
+        187
+      ],
+      "published_body_sha256": "d46100e7e58c816f5a582625c9d818c1eef12554f03fd09258072ac597604cd4"
     },
     {
       "local_id": "V03-030",
@@ -1413,8 +1772,8 @@
       "dependency_readiness": "waiting_dependencies",
       "external_readiness": "see_card",
       "implementation_started": false,
-      "github_issue_number": null,
-      "github_url": null,
+      "github_issue_number": 198,
+      "github_url": "https://github.com/Yijtu/ontology/issues/198",
       "file": ".autoresearch/batches/v0.3-assistants/issues/core/issue-030-task-validation-policies.md",
       "depends_on": [
         "V03-002",
@@ -1440,7 +1799,19 @@
       "merge_target": "main",
       "working_line": "feat/core-planning-provenance",
       "verification_state": "not_run",
-      "evidence": []
+      "evidence": [],
+      "remote_state": "open",
+      "remote_labels": [
+        "batch:v0.3-assistants",
+        "phase:core",
+        "high",
+        "backend"
+      ],
+      "github_dependencies": [
+        173,
+        194
+      ],
+      "published_body_sha256": "6d0f092463321aaf47af919b69569416da7b55864d253be5e95a8644cdf13ba3"
     },
     {
       "local_id": "V03-031",
@@ -1453,8 +1824,8 @@
       "dependency_readiness": "waiting_dependencies",
       "external_readiness": "see_card",
       "implementation_started": false,
-      "github_issue_number": null,
-      "github_url": null,
+      "github_issue_number": 201,
+      "github_url": "https://github.com/Yijtu/ontology/issues/201",
       "file": ".autoresearch/batches/v0.3-assistants/issues/core/issue-031-compute-execution.md",
       "depends_on": [
         "V03-023",
@@ -1481,7 +1852,19 @@
       "merge_target": "main",
       "working_line": "feat/core-planning-provenance",
       "verification_state": "not_run",
-      "evidence": []
+      "evidence": [],
+      "remote_state": "open",
+      "remote_labels": [
+        "batch:v0.3-assistants",
+        "phase:core",
+        "high",
+        "backend"
+      ],
+      "github_dependencies": [
+        194,
+        198
+      ],
+      "published_body_sha256": "824d6a4f1342eeafe91500b0e8e32999645059e74be68f53c9c2b52bde6536f5"
     },
     {
       "local_id": "V03-032",
@@ -1494,8 +1877,8 @@
       "dependency_readiness": "waiting_dependencies",
       "external_readiness": "see_card",
       "implementation_started": false,
-      "github_issue_number": null,
-      "github_url": null,
+      "github_issue_number": 203,
+      "github_url": "https://github.com/Yijtu/ontology/issues/203",
       "file": ".autoresearch/batches/v0.3-assistants/issues/core/issue-032-answer-v3-artifacts.md",
       "depends_on": [
         "V03-002",
@@ -1520,7 +1903,21 @@
       "merge_target": "main",
       "working_line": "feat/core-planning-provenance",
       "verification_state": "not_run",
-      "evidence": []
+      "evidence": [],
+      "remote_state": "open",
+      "remote_labels": [
+        "batch:v0.3-assistants",
+        "phase:core",
+        "medium",
+        "backend"
+      ],
+      "github_dependencies": [
+        173,
+        174,
+        194,
+        201
+      ],
+      "published_body_sha256": "cad051e9ba39de20c922372695cfdb4f13d4bbd52494a0cbfc1f9124c8a91648"
     },
     {
       "local_id": "V03-033",
@@ -1533,8 +1930,8 @@
       "dependency_readiness": "waiting_dependencies",
       "external_readiness": "see_card",
       "implementation_started": false,
-      "github_issue_number": null,
-      "github_url": null,
+      "github_issue_number": 204,
+      "github_url": "https://github.com/Yijtu/ontology/issues/204",
       "file": ".autoresearch/batches/v0.3-assistants/issues/core/issue-033-quantity-table-verifier.md",
       "depends_on": [
         "V03-032",
@@ -1562,7 +1959,21 @@
       "merge_target": "main",
       "working_line": "feat/core-planning-provenance",
       "verification_state": "not_run",
-      "evidence": []
+      "evidence": [],
+      "remote_state": "open",
+      "remote_labels": [
+        "batch:v0.3-assistants",
+        "phase:core",
+        "high",
+        "backend"
+      ],
+      "github_dependencies": [
+        203,
+        199,
+        201,
+        198
+      ],
+      "published_body_sha256": "8c4260b05dc5b12857139675b1a3c103d742d9b269239e966e45ebc046d5fa43"
     },
     {
       "local_id": "V03-034",
@@ -1575,8 +1986,8 @@
       "dependency_readiness": "waiting_dependencies",
       "external_readiness": "see_card",
       "implementation_started": false,
-      "github_issue_number": null,
-      "github_url": null,
+      "github_issue_number": 205,
+      "github_url": "https://github.com/Yijtu/ontology/issues/205",
       "file": ".autoresearch/batches/v0.3-assistants/issues/core/issue-034-typed-evidence-verifier.md",
       "depends_on": [
         "V03-025",
@@ -1607,7 +2018,22 @@
       "merge_target": "main",
       "working_line": "feat/core-planning-provenance",
       "verification_state": "not_run",
-      "evidence": []
+      "evidence": [],
+      "remote_state": "open",
+      "remote_labels": [
+        "batch:v0.3-assistants",
+        "phase:core",
+        "high",
+        "backend"
+      ],
+      "github_dependencies": [
+        199,
+        200,
+        191,
+        203,
+        198
+      ],
+      "published_body_sha256": "2f2c060c7aa86f2ebcdbb02f1265f71e8ccfbf1124fc8a14828c78bb08fe0dbb"
     },
     {
       "local_id": "V03-035",
@@ -1620,8 +2046,8 @@
       "dependency_readiness": "waiting_dependencies",
       "external_readiness": "see_card",
       "implementation_started": false,
-      "github_issue_number": null,
-      "github_url": null,
+      "github_issue_number": 206,
+      "github_url": "https://github.com/Yijtu/ontology/issues/206",
       "file": ".autoresearch/batches/v0.3-assistants/issues/core/issue-035-publication-validity.md",
       "depends_on": [
         "V03-033",
@@ -1652,7 +2078,21 @@
       "merge_target": "main",
       "working_line": "feat/core-planning-provenance",
       "verification_state": "not_run",
-      "evidence": []
+      "evidence": [],
+      "remote_state": "open",
+      "remote_labels": [
+        "batch:v0.3-assistants",
+        "phase:core",
+        "high",
+        "backend"
+      ],
+      "github_dependencies": [
+        204,
+        205,
+        197,
+        198
+      ],
+      "published_body_sha256": "f1d878cf4be82ba572b7609c7e113979e94a9bdc14c5132ec31ed11f5696d10c"
     },
     {
       "local_id": "V03-036",
@@ -1665,8 +2105,8 @@
       "dependency_readiness": "waiting_dependencies",
       "external_readiness": "see_card",
       "implementation_started": false,
-      "github_issue_number": null,
-      "github_url": null,
+      "github_issue_number": 207,
+      "github_url": "https://github.com/Yijtu/ontology/issues/207",
       "file": ".autoresearch/batches/v0.3-assistants/issues/core/issue-036-typed-draft-writer.md",
       "depends_on": [
         "V03-033",
@@ -1691,7 +2131,20 @@
       "merge_target": "main",
       "working_line": "feat/core-planning-provenance",
       "verification_state": "not_run",
-      "evidence": []
+      "evidence": [],
+      "remote_state": "open",
+      "remote_labels": [
+        "batch:v0.3-assistants",
+        "phase:core",
+        "high",
+        "backend"
+      ],
+      "github_dependencies": [
+        204,
+        205,
+        206
+      ],
+      "published_body_sha256": "8854e792e85067daf1d36727333ef148fac371504acdad52f4810e8e468ac9a0"
     },
     {
       "local_id": "V03-037",
@@ -1704,8 +2157,8 @@
       "dependency_readiness": "waiting_dependencies",
       "external_readiness": "see_card",
       "implementation_started": false,
-      "github_issue_number": null,
-      "github_url": null,
+      "github_issue_number": 208,
+      "github_url": "https://github.com/Yijtu/ontology/issues/208",
       "file": ".autoresearch/batches/v0.3-assistants/issues/core/issue-037-template-host.md",
       "depends_on": [
         "V03-024",
@@ -1732,7 +2185,22 @@
       "merge_target": "main",
       "working_line": "feat/core-planning-provenance",
       "verification_state": "not_run",
-      "evidence": []
+      "evidence": [],
+      "remote_state": "open",
+      "remote_labels": [
+        "batch:v0.3-assistants",
+        "phase:core",
+        "high",
+        "backend"
+      ],
+      "github_dependencies": [
+        196,
+        199,
+        200,
+        201,
+        207
+      ],
+      "published_body_sha256": "237edd3da3ee8551a5e7e8e410f7c06a80af7f1087a0a02ad0f4434662f60ca7"
     },
     {
       "local_id": "V03-038",
@@ -1745,8 +2213,8 @@
       "dependency_readiness": "waiting_dependencies",
       "external_readiness": "see_card",
       "implementation_started": false,
-      "github_issue_number": null,
-      "github_url": null,
+      "github_issue_number": 209,
+      "github_url": "https://github.com/Yijtu/ontology/issues/209",
       "file": ".autoresearch/batches/v0.3-assistants/issues/core/issue-038-pi-host-loop.md",
       "depends_on": [
         "V03-024",
@@ -1772,7 +2240,22 @@
       "merge_target": "main",
       "working_line": "feat/core-planning-provenance",
       "verification_state": "not_run",
-      "evidence": []
+      "evidence": [],
+      "remote_state": "open",
+      "remote_labels": [
+        "batch:v0.3-assistants",
+        "phase:core",
+        "high",
+        "backend"
+      ],
+      "github_dependencies": [
+        196,
+        199,
+        200,
+        201,
+        207
+      ],
+      "published_body_sha256": "bf49a1dbdb92d4ac43136cbf099bc1c602ad30203924ce11dfa95200fe7309d0"
     },
     {
       "local_id": "V03-039",
@@ -1785,8 +2268,8 @@
       "dependency_readiness": "waiting_dependencies",
       "external_readiness": "see_card",
       "implementation_started": false,
-      "github_issue_number": null,
-      "github_url": null,
+      "github_issue_number": 211,
+      "github_url": "https://github.com/Yijtu/ontology/issues/211",
       "file": ".autoresearch/batches/v0.3-assistants/issues/core/issue-039-run-lifecycle.md",
       "depends_on": [
         "V03-037",
@@ -1813,7 +2296,20 @@
       "merge_target": "main",
       "working_line": "feat/core-planning-provenance",
       "verification_state": "not_run",
-      "evidence": []
+      "evidence": [],
+      "remote_state": "open",
+      "remote_labels": [
+        "batch:v0.3-assistants",
+        "phase:core",
+        "high",
+        "backend"
+      ],
+      "github_dependencies": [
+        208,
+        209,
+        206
+      ],
+      "published_body_sha256": "256458620eb3b3bb2d6d6b63e250d604cd8fed0ac93a33c7a7116eb4aac4063d"
     },
     {
       "local_id": "V03-040",
@@ -1826,8 +2322,8 @@
       "dependency_readiness": "waiting_dependencies",
       "external_readiness": "see_card",
       "implementation_started": false,
-      "github_issue_number": null,
-      "github_url": null,
+      "github_issue_number": 212,
+      "github_url": "https://github.com/Yijtu/ontology/issues/212",
       "file": ".autoresearch/batches/v0.3-assistants/issues/core/issue-040-business-results-ui.md",
       "depends_on": [
         "V03-020",
@@ -1864,7 +2360,23 @@
       "merge_target": "main",
       "working_line": "feat/core-planning-provenance",
       "verification_state": "not_run",
-      "evidence": []
+      "evidence": [],
+      "remote_state": "open",
+      "remote_labels": [
+        "batch:v0.3-assistants",
+        "phase:core",
+        "medium",
+        "frontend"
+      ],
+      "github_dependencies": [
+        193,
+        203,
+        207,
+        208,
+        209,
+        211
+      ],
+      "published_body_sha256": "156706bd7bef3b2d56989539bd582fae0f7c91e3acd29154c64cb16daffb5e3c"
     },
     {
       "local_id": "V03-041",
@@ -1877,8 +2389,8 @@
       "dependency_readiness": "waiting_dependencies",
       "external_readiness": "see_card",
       "implementation_started": false,
-      "github_issue_number": null,
-      "github_url": null,
+      "github_issue_number": 214,
+      "github_url": "https://github.com/Yijtu/ontology/issues/214",
       "file": ".autoresearch/batches/v0.3-assistants/issues/core/issue-041-history-json-export.md",
       "depends_on": [
         "V03-032",
@@ -1911,7 +2423,21 @@
       "merge_target": "main",
       "working_line": "feat/core-planning-provenance",
       "verification_state": "not_run",
-      "evidence": []
+      "evidence": [],
+      "remote_state": "open",
+      "remote_labels": [
+        "batch:v0.3-assistants",
+        "phase:core",
+        "medium",
+        "fullstack"
+      ],
+      "github_dependencies": [
+        203,
+        206,
+        211,
+        212
+      ],
+      "published_body_sha256": "6362aa8ea05a75ee2ebc089a4bdee2deeb64cb8cf3cc6886c1a9210beb67f75c"
     },
     {
       "local_id": "V03-042",
@@ -1924,8 +2450,8 @@
       "dependency_readiness": "waiting_dependencies",
       "external_readiness": "see_card",
       "implementation_started": false,
-      "github_issue_number": null,
-      "github_url": null,
+      "github_issue_number": 216,
+      "github_url": "https://github.com/Yijtu/ontology/issues/216",
       "file": ".autoresearch/batches/v0.3-assistants/issues/core/issue-042-public-ui-states.md",
       "depends_on": [
         "V03-012",
@@ -1955,7 +2481,23 @@
       "merge_target": "main",
       "working_line": "feat/core-planning-provenance",
       "verification_state": "not_run",
-      "evidence": []
+      "evidence": [],
+      "remote_state": "open",
+      "remote_labels": [
+        "batch:v0.3-assistants",
+        "phase:core",
+        "medium",
+        "frontend"
+      ],
+      "github_dependencies": [
+        185,
+        182,
+        193,
+        202,
+        212,
+        214
+      ],
+      "published_body_sha256": "5e04f44af0c34912d7acca1b091e04340d28dde8ad7598fe7c4bc770e47f0988"
     },
     {
       "local_id": "V03-043",
@@ -1968,8 +2510,8 @@
       "dependency_readiness": "waiting_dependencies",
       "external_readiness": "see_card",
       "implementation_started": false,
-      "github_issue_number": null,
-      "github_url": null,
+      "github_issue_number": 215,
+      "github_url": "https://github.com/Yijtu/ontology/issues/215",
       "file": ".autoresearch/batches/v0.3-assistants/issues/core/issue-043-industry-backend-conformance.md",
       "depends_on": [
         "V03-018",
@@ -1998,7 +2540,22 @@
       "merge_target": "main",
       "working_line": "feat/core-planning-provenance",
       "verification_state": "not_run",
-      "evidence": []
+      "evidence": [],
+      "remote_state": "open",
+      "remote_labels": [
+        "batch:v0.3-assistants",
+        "phase:core",
+        "medium",
+        "infra"
+      ],
+      "github_dependencies": [
+        192,
+        199,
+        195,
+        197,
+        212
+      ],
+      "published_body_sha256": "0df726c66e31eebc2ee1429b2df8268650b5d3f6aa822658887909450ee32423"
     },
     {
       "local_id": "V03-044",
@@ -2011,8 +2568,8 @@
       "dependency_readiness": "waiting_dependencies",
       "external_readiness": "see_card",
       "implementation_started": false,
-      "github_issue_number": null,
-      "github_url": null,
+      "github_issue_number": 213,
+      "github_url": "https://github.com/Yijtu/ontology/issues/213",
       "file": ".autoresearch/batches/v0.3-assistants/issues/core/issue-044-runtime-transport-conformance.md",
       "depends_on": [
         "V03-037",
@@ -2036,7 +2593,21 @@
       "merge_target": "main",
       "working_line": "feat/core-planning-provenance",
       "verification_state": "not_run",
-      "evidence": []
+      "evidence": [],
+      "remote_state": "open",
+      "remote_labels": [
+        "batch:v0.3-assistants",
+        "phase:core",
+        "medium",
+        "infra"
+      ],
+      "github_dependencies": [
+        208,
+        209,
+        211,
+        201
+      ],
+      "published_body_sha256": "9c65c7af2a5eb2276a76027b7503a51bead9075ed550e563c1adb9b314565859"
     },
     {
       "local_id": "V03-045",
@@ -2049,8 +2620,8 @@
       "dependency_readiness": "waiting_dependencies",
       "external_readiness": "see_card",
       "implementation_started": false,
-      "github_issue_number": null,
-      "github_url": null,
+      "github_issue_number": 217,
+      "github_url": "https://github.com/Yijtu/ontology/issues/217",
       "file": ".autoresearch/batches/v0.3-assistants/issues/core/issue-045-generic-browser-e2e.md",
       "depends_on": [
         "V03-001",
@@ -2139,7 +2710,60 @@
       "merge_target": "main",
       "working_line": "feat/core-planning-provenance",
       "verification_state": "not_run",
-      "evidence": []
+      "evidence": [],
+      "remote_state": "open",
+      "remote_labels": [
+        "batch:v0.3-assistants",
+        "phase:core",
+        "high",
+        "infra"
+      ],
+      "github_dependencies": [
+        169,
+        173,
+        174,
+        177,
+        175,
+        178,
+        179,
+        181,
+        183,
+        184,
+        180,
+        185,
+        182,
+        186,
+        187,
+        189,
+        190,
+        192,
+        191,
+        193,
+        202,
+        176,
+        194,
+        196,
+        199,
+        188,
+        195,
+        197,
+        200,
+        201,
+        203,
+        204,
+        205,
+        206,
+        207,
+        208,
+        209,
+        211,
+        212,
+        214,
+        216,
+        215,
+        213
+      ],
+      "published_body_sha256": "44c5409a328ba1230577203d85b5c3c7a0f3b4fca251bc39f97346a52c54e9a8"
     },
     {
       "local_id": "V03-046",
@@ -2152,8 +2776,8 @@
       "dependency_readiness": "waiting_dependencies",
       "external_readiness": "see_card",
       "implementation_started": false,
-      "github_issue_number": null,
-      "github_url": null,
+      "github_issue_number": 210,
+      "github_url": "https://github.com/Yijtu/ontology/issues/210",
       "file": ".autoresearch/batches/v0.3-assistants/issues/core/issue-046-model-quality-evidence.md",
       "depends_on": [
         "V03-007",
@@ -2177,7 +2801,23 @@
       "merge_target": "main",
       "working_line": "feat/core-planning-provenance",
       "verification_state": "not_run",
-      "evidence": []
+      "evidence": [],
+      "remote_state": "open",
+      "remote_labels": [
+        "batch:v0.3-assistants",
+        "phase:core",
+        "medium",
+        "infra"
+      ],
+      "github_dependencies": [
+        179,
+        181,
+        186,
+        191,
+        196,
+        207
+      ],
+      "published_body_sha256": "0006fa5f818ec6378a62c097e5f8fce540b580411b7f87092aaeb51121442f92"
     },
     {
       "local_id": "V03-047",
@@ -2190,8 +2830,8 @@
       "dependency_readiness": "waiting_dependencies",
       "external_readiness": "see_card",
       "implementation_started": false,
-      "github_issue_number": null,
-      "github_url": null,
+      "github_issue_number": 218,
+      "github_url": "https://github.com/Yijtu/ontology/issues/218",
       "file": ".autoresearch/batches/v0.3-assistants/issues/core/issue-047-main-release-gate.md",
       "depends_on": [
         "V03-045",
@@ -2210,7 +2850,19 @@
       "merge_target": "main",
       "working_line": "feat/core-planning-provenance",
       "verification_state": "not_run",
-      "evidence": []
+      "evidence": [],
+      "remote_state": "open",
+      "remote_labels": [
+        "batch:v0.3-assistants",
+        "phase:core",
+        "high",
+        "infra"
+      ],
+      "github_dependencies": [
+        217,
+        210
+      ],
+      "published_body_sha256": "7ecccfafc300da01c2c17c4fc6f809ac92eba17a437d3e6053da8a1606bee9b6"
     },
     {
       "local_id": "V03-048",
@@ -2223,8 +2875,8 @@
       "dependency_readiness": "ready_to_discover",
       "external_readiness": "unconfirmed",
       "implementation_started": false,
-      "github_issue_number": null,
-      "github_url": null,
+      "github_issue_number": 170,
+      "github_url": "https://github.com/Yijtu/ontology/issues/170",
       "file": ".autoresearch/batches/v0.3-assistants/issues/costing/issue-048-scope-discovery.md",
       "depends_on": [],
       "declared_story_refs": [
@@ -2245,7 +2897,17 @@
       "merge_target": "feat/electrical-costing-poc",
       "working_line": "feat/electrical-costing-poc",
       "verification_state": "not_run",
-      "evidence": []
+      "evidence": [],
+      "remote_state": "open",
+      "remote_labels": [
+        "batch:v0.3-assistants",
+        "phase:costing",
+        "high",
+        "documentation",
+        "external-condition"
+      ],
+      "github_dependencies": [],
+      "published_body_sha256": "79e9151261c79b40f9e7e8e4ef1d5024b3423db33a8bbc4fdae005c344d5ffbf"
     },
     {
       "local_id": "V03-049",
@@ -2258,8 +2920,8 @@
       "dependency_readiness": "ready_to_discover",
       "external_readiness": "unconfirmed",
       "implementation_started": false,
-      "github_issue_number": null,
-      "github_url": null,
+      "github_issue_number": 171,
+      "github_url": "https://github.com/Yijtu/ontology/issues/171",
       "file": ".autoresearch/batches/v0.3-assistants/issues/costing/issue-049-authority-discovery.md",
       "depends_on": [],
       "declared_story_refs": [
@@ -2279,7 +2941,17 @@
       "merge_target": "feat/electrical-costing-poc",
       "working_line": "feat/electrical-costing-poc",
       "verification_state": "not_run",
-      "evidence": []
+      "evidence": [],
+      "remote_state": "open",
+      "remote_labels": [
+        "batch:v0.3-assistants",
+        "phase:costing",
+        "high",
+        "documentation",
+        "external-condition"
+      ],
+      "github_dependencies": [],
+      "published_body_sha256": "d9776114cd7f306cff681c0b82a9fe153d9520863ce71251adb8ff533769a374"
     },
     {
       "local_id": "V03-050",
@@ -2292,8 +2964,8 @@
       "dependency_readiness": "ready_to_discover",
       "external_readiness": "unconfirmed",
       "implementation_started": false,
-      "github_issue_number": null,
-      "github_url": null,
+      "github_issue_number": 172,
+      "github_url": "https://github.com/Yijtu/ontology/issues/172",
       "file": ".autoresearch/batches/v0.3-assistants/issues/costing/issue-050-gold-acceptance-discovery.md",
       "depends_on": [],
       "declared_story_refs": [
@@ -2313,7 +2985,17 @@
       "merge_target": "feat/electrical-costing-poc",
       "working_line": "feat/electrical-costing-poc",
       "verification_state": "not_run",
-      "evidence": []
+      "evidence": [],
+      "remote_state": "open",
+      "remote_labels": [
+        "batch:v0.3-assistants",
+        "phase:costing",
+        "high",
+        "documentation",
+        "external-condition"
+      ],
+      "github_dependencies": [],
+      "published_body_sha256": "1925ca39b30e225aa5c60528ae741ef5b4b2590781544173ef17d78108045c44"
     },
     {
       "local_id": "V03-051",
@@ -2326,8 +3008,8 @@
       "dependency_readiness": "waiting_dependencies",
       "external_readiness": "see_card",
       "implementation_started": false,
-      "github_issue_number": null,
-      "github_url": null,
+      "github_issue_number": 219,
+      "github_url": "https://github.com/Yijtu/ontology/issues/219",
       "file": ".autoresearch/batches/v0.3-assistants/issues/costing/issue-051-accepted-main-sync.md",
       "depends_on": [
         "V03-047"
@@ -2346,7 +3028,18 @@
       "merge_target": "feat/electrical-costing-poc",
       "working_line": "feat/electrical-costing-poc",
       "verification_state": "not_run",
-      "evidence": []
+      "evidence": [],
+      "remote_state": "open",
+      "remote_labels": [
+        "batch:v0.3-assistants",
+        "phase:costing",
+        "high",
+        "infra"
+      ],
+      "github_dependencies": [
+        218
+      ],
+      "published_body_sha256": "1da31d382519774bfa8e1c11e5764298d1c3d8a0ca723a04f646e9c3a2f69128"
     },
     {
       "local_id": "V03-052",
@@ -2359,8 +3052,8 @@
       "dependency_readiness": "waiting_dependencies",
       "external_readiness": "see_card",
       "implementation_started": false,
-      "github_issue_number": null,
-      "github_url": null,
+      "github_issue_number": 220,
+      "github_url": "https://github.com/Yijtu/ontology/issues/220",
       "file": ".autoresearch/batches/v0.3-assistants/issues/costing/issue-052-industry-package.md",
       "depends_on": [
         "V03-051",
@@ -2409,7 +3102,19 @@
       "merge_target": "feat/electrical-costing-poc",
       "working_line": "feat/electrical-costing-poc",
       "verification_state": "not_run",
-      "evidence": []
+      "evidence": [],
+      "remote_state": "open",
+      "remote_labels": [
+        "batch:v0.3-assistants",
+        "phase:costing",
+        "medium",
+        "enhancement"
+      ],
+      "github_dependencies": [
+        219,
+        170
+      ],
+      "published_body_sha256": "0272c30ed7c58ccd9cbb94d0dd30c0d2f5d5fcd94fcbf4ea711831284f9992eb"
     },
     {
       "local_id": "V03-053",
@@ -2422,8 +3127,8 @@
       "dependency_readiness": "waiting_dependencies",
       "external_readiness": "see_card",
       "implementation_started": false,
-      "github_issue_number": null,
-      "github_url": null,
+      "github_issue_number": 221,
+      "github_url": "https://github.com/Yijtu/ontology/issues/221",
       "file": ".autoresearch/batches/v0.3-assistants/issues/costing/issue-053-price-snapshots.md",
       "depends_on": [
         "V03-051",
@@ -2450,7 +3155,20 @@
       "merge_target": "feat/electrical-costing-poc",
       "working_line": "feat/electrical-costing-poc",
       "verification_state": "not_run",
-      "evidence": []
+      "evidence": [],
+      "remote_state": "open",
+      "remote_labels": [
+        "batch:v0.3-assistants",
+        "phase:costing",
+        "medium",
+        "backend"
+      ],
+      "github_dependencies": [
+        219,
+        171,
+        220
+      ],
+      "published_body_sha256": "0fae7c69a766d6def05a5f301ed4c527a6da3e33b7f96add08076cc3c5ee2c58"
     },
     {
       "local_id": "V03-054",
@@ -2463,8 +3181,8 @@
       "dependency_readiness": "waiting_dependencies",
       "external_readiness": "see_card",
       "implementation_started": false,
-      "github_issue_number": null,
-      "github_url": null,
+      "github_issue_number": 223,
+      "github_url": "https://github.com/Yijtu/ontology/issues/223",
       "file": ".autoresearch/batches/v0.3-assistants/issues/costing/issue-054-customer-quotation-adapter.md",
       "depends_on": [
         "V03-051",
@@ -2495,7 +3213,21 @@
       "merge_target": "feat/electrical-costing-poc",
       "working_line": "feat/electrical-costing-poc",
       "verification_state": "not_run",
-      "evidence": []
+      "evidence": [],
+      "remote_state": "open",
+      "remote_labels": [
+        "batch:v0.3-assistants",
+        "phase:costing",
+        "medium",
+        "backend"
+      ],
+      "github_dependencies": [
+        219,
+        171,
+        220,
+        221
+      ],
+      "published_body_sha256": "7d8dcc0f5b4c66d111b7cd204acf6e8abb24896441f588353bd0681eb082df6f"
     },
     {
       "local_id": "V03-055",
@@ -2508,8 +3240,8 @@
       "dependency_readiness": "waiting_dependencies",
       "external_readiness": "see_card",
       "implementation_started": false,
-      "github_issue_number": null,
-      "github_url": null,
+      "github_issue_number": 222,
+      "github_url": "https://github.com/Yijtu/ontology/issues/222",
       "file": ".autoresearch/batches/v0.3-assistants/issues/costing/issue-055-quote-input-snapshots.md",
       "depends_on": [
         "V03-051",
@@ -2545,7 +3277,19 @@
       "merge_target": "feat/electrical-costing-poc",
       "working_line": "feat/electrical-costing-poc",
       "verification_state": "not_run",
-      "evidence": []
+      "evidence": [],
+      "remote_state": "open",
+      "remote_labels": [
+        "batch:v0.3-assistants",
+        "phase:costing",
+        "medium",
+        "backend"
+      ],
+      "github_dependencies": [
+        219,
+        220
+      ],
+      "published_body_sha256": "d891730fd0171bb4f9380be55218fcdb12a583c9fa8aa275924850bfa143bdd5"
     },
     {
       "local_id": "V03-056",
@@ -2558,8 +3302,8 @@
       "dependency_readiness": "waiting_dependencies",
       "external_readiness": "see_card",
       "implementation_started": false,
-      "github_issue_number": null,
-      "github_url": null,
+      "github_issue_number": 224,
+      "github_url": "https://github.com/Yijtu/ontology/issues/224",
       "file": ".autoresearch/batches/v0.3-assistants/issues/costing/issue-056-specification-confirmation.md",
       "depends_on": [
         "V03-055"
@@ -2587,7 +3331,18 @@
       "merge_target": "feat/electrical-costing-poc",
       "working_line": "feat/electrical-costing-poc",
       "verification_state": "not_run",
-      "evidence": []
+      "evidence": [],
+      "remote_state": "open",
+      "remote_labels": [
+        "batch:v0.3-assistants",
+        "phase:costing",
+        "medium",
+        "backend"
+      ],
+      "github_dependencies": [
+        222
+      ],
+      "published_body_sha256": "8bd680be7761b56b75c871954642efbacd65a0f68ba7f29623ca79b57c349ba6"
     },
     {
       "local_id": "V03-057",
@@ -2600,8 +3355,8 @@
       "dependency_readiness": "waiting_dependencies",
       "external_readiness": "see_card",
       "implementation_started": false,
-      "github_issue_number": null,
-      "github_url": null,
+      "github_issue_number": 225,
+      "github_url": "https://github.com/Yijtu/ontology/issues/225",
       "file": ".autoresearch/batches/v0.3-assistants/issues/costing/issue-057-pricing-context.md",
       "depends_on": [
         "V03-053",
@@ -2631,7 +3386,19 @@
       "merge_target": "feat/electrical-costing-poc",
       "working_line": "feat/electrical-costing-poc",
       "verification_state": "not_run",
-      "evidence": []
+      "evidence": [],
+      "remote_state": "open",
+      "remote_labels": [
+        "batch:v0.3-assistants",
+        "phase:costing",
+        "medium",
+        "backend"
+      ],
+      "github_dependencies": [
+        221,
+        224
+      ],
+      "published_body_sha256": "176c1fa54f438c38c4cb47e2d49109ece079c50197f3983f3ae3d0468640ac4f"
     },
     {
       "local_id": "V03-058",
@@ -2644,8 +3411,8 @@
       "dependency_readiness": "waiting_dependencies",
       "external_readiness": "see_card",
       "implementation_started": false,
-      "github_issue_number": null,
-      "github_url": null,
+      "github_issue_number": 228,
+      "github_url": "https://github.com/Yijtu/ontology/issues/228",
       "file": ".autoresearch/batches/v0.3-assistants/issues/costing/issue-058-quote-task-operation.md",
       "depends_on": [
         "V03-052",
@@ -2680,7 +3447,21 @@
       "merge_target": "feat/electrical-costing-poc",
       "working_line": "feat/electrical-costing-poc",
       "verification_state": "not_run",
-      "evidence": []
+      "evidence": [],
+      "remote_state": "open",
+      "remote_labels": [
+        "batch:v0.3-assistants",
+        "phase:costing",
+        "high",
+        "backend"
+      ],
+      "github_dependencies": [
+        220,
+        223,
+        222,
+        225
+      ],
+      "published_body_sha256": "07007325a4597c2c3bb7256073e4e04369eb8010332759d1a9bf5ac857f9d179"
     },
     {
       "local_id": "V03-059",
@@ -2693,8 +3474,8 @@
       "dependency_readiness": "waiting_dependencies",
       "external_readiness": "see_card",
       "implementation_started": false,
-      "github_issue_number": null,
-      "github_url": null,
+      "github_issue_number": 230,
+      "github_url": "https://github.com/Yijtu/ontology/issues/230",
       "file": ".autoresearch/batches/v0.3-assistants/issues/costing/issue-059-quote-policy-evidence.md",
       "depends_on": [
         "V03-058"
@@ -2728,7 +3509,18 @@
       "merge_target": "feat/electrical-costing-poc",
       "working_line": "feat/electrical-costing-poc",
       "verification_state": "not_run",
-      "evidence": []
+      "evidence": [],
+      "remote_state": "open",
+      "remote_labels": [
+        "batch:v0.3-assistants",
+        "phase:costing",
+        "high",
+        "backend"
+      ],
+      "github_dependencies": [
+        228
+      ],
+      "published_body_sha256": "7721c32d232b680e0b7b559f8fee73ed95b598620d7d34d38ffe7be49d3380ad"
     },
     {
       "local_id": "V03-060",
@@ -2741,8 +3533,8 @@
       "dependency_readiness": "waiting_dependencies",
       "external_readiness": "see_card",
       "implementation_started": false,
-      "github_issue_number": null,
-      "github_url": null,
+      "github_issue_number": 226,
+      "github_url": "https://github.com/Yijtu/ontology/issues/226",
       "file": ".autoresearch/batches/v0.3-assistants/issues/costing/issue-060-costing-input-ui.md",
       "depends_on": [
         "V03-051",
@@ -2781,7 +3573,20 @@
       "merge_target": "feat/electrical-costing-poc",
       "working_line": "feat/electrical-costing-poc",
       "verification_state": "not_run",
-      "evidence": []
+      "evidence": [],
+      "remote_state": "open",
+      "remote_labels": [
+        "batch:v0.3-assistants",
+        "phase:costing",
+        "medium",
+        "frontend"
+      ],
+      "github_dependencies": [
+        219,
+        222,
+        224
+      ],
+      "published_body_sha256": "fad9e8926bd037c9656e98e5667f7d47dede161d426e09c0fb81da429da74b5d"
     },
     {
       "local_id": "V03-061",
@@ -2794,8 +3599,8 @@
       "dependency_readiness": "waiting_dependencies",
       "external_readiness": "see_card",
       "implementation_started": false,
-      "github_issue_number": null,
-      "github_url": null,
+      "github_issue_number": 229,
+      "github_url": "https://github.com/Yijtu/ontology/issues/229",
       "file": ".autoresearch/batches/v0.3-assistants/issues/costing/issue-061-pricing-ui.md",
       "depends_on": [
         "V03-053",
@@ -2822,7 +3627,20 @@
       "merge_target": "feat/electrical-costing-poc",
       "working_line": "feat/electrical-costing-poc",
       "verification_state": "not_run",
-      "evidence": []
+      "evidence": [],
+      "remote_state": "open",
+      "remote_labels": [
+        "batch:v0.3-assistants",
+        "phase:costing",
+        "medium",
+        "frontend"
+      ],
+      "github_dependencies": [
+        221,
+        225,
+        226
+      ],
+      "published_body_sha256": "ed1b1859ee537fc90d51f63e08c1738b484b2d7bd873a1174958894fb5da5806"
     },
     {
       "local_id": "V03-062",
@@ -2835,8 +3653,8 @@
       "dependency_readiness": "waiting_dependencies",
       "external_readiness": "see_card",
       "implementation_started": false,
-      "github_issue_number": null,
-      "github_url": null,
+      "github_issue_number": 231,
+      "github_url": "https://github.com/Yijtu/ontology/issues/231",
       "file": ".autoresearch/batches/v0.3-assistants/issues/costing/issue-062-quotation-workbench.md",
       "depends_on": [
         "V03-058",
@@ -2864,7 +3682,21 @@
       "merge_target": "feat/electrical-costing-poc",
       "working_line": "feat/electrical-costing-poc",
       "verification_state": "not_run",
-      "evidence": []
+      "evidence": [],
+      "remote_state": "open",
+      "remote_labels": [
+        "batch:v0.3-assistants",
+        "phase:costing",
+        "medium",
+        "frontend"
+      ],
+      "github_dependencies": [
+        228,
+        230,
+        226,
+        229
+      ],
+      "published_body_sha256": "86d2db702dc430a8ef99d33654276af3aa38b3e61d6410bf1739af9adf5c7fa5"
     },
     {
       "local_id": "V03-063",
@@ -2877,8 +3709,8 @@
       "dependency_readiness": "waiting_dependencies",
       "external_readiness": "see_card",
       "implementation_started": false,
-      "github_issue_number": null,
-      "github_url": null,
+      "github_issue_number": 233,
+      "github_url": "https://github.com/Yijtu/ontology/issues/233",
       "file": ".autoresearch/batches/v0.3-assistants/issues/costing/issue-063-quotation-provenance-ui.md",
       "depends_on": [
         "V03-059",
@@ -2904,7 +3736,19 @@
       "merge_target": "feat/electrical-costing-poc",
       "working_line": "feat/electrical-costing-poc",
       "verification_state": "not_run",
-      "evidence": []
+      "evidence": [],
+      "remote_state": "open",
+      "remote_labels": [
+        "batch:v0.3-assistants",
+        "phase:costing",
+        "medium",
+        "frontend"
+      ],
+      "github_dependencies": [
+        230,
+        231
+      ],
+      "published_body_sha256": "5456ea18b577fb3c7d0208b606ce0f623079e5b9b93c6a8367b81716cf2a5e9f"
     },
     {
       "local_id": "V03-064",
@@ -2917,8 +3761,8 @@
       "dependency_readiness": "waiting_dependencies",
       "external_readiness": "see_card",
       "implementation_started": false,
-      "github_issue_number": null,
-      "github_url": null,
+      "github_issue_number": 234,
+      "github_url": "https://github.com/Yijtu/ontology/issues/234",
       "file": ".autoresearch/batches/v0.3-assistants/issues/costing/issue-064-quotation-export.md",
       "depends_on": [
         "V03-059",
@@ -2941,7 +3785,19 @@
       "merge_target": "feat/electrical-costing-poc",
       "working_line": "feat/electrical-costing-poc",
       "verification_state": "not_run",
-      "evidence": []
+      "evidence": [],
+      "remote_state": "open",
+      "remote_labels": [
+        "batch:v0.3-assistants",
+        "phase:costing",
+        "medium",
+        "fullstack"
+      ],
+      "github_dependencies": [
+        230,
+        231
+      ],
+      "published_body_sha256": "1caa77dff34eb20d9d0fe91610c5090b6dbd98f6d6b4e3193a3406a8bfde612a"
     },
     {
       "local_id": "V03-065",
@@ -2954,8 +3810,8 @@
       "dependency_readiness": "waiting_dependencies",
       "external_readiness": "see_card",
       "implementation_started": false,
-      "github_issue_number": null,
-      "github_url": null,
+      "github_issue_number": 232,
+      "github_url": "https://github.com/Yijtu/ontology/issues/232",
       "file": ".autoresearch/batches/v0.3-assistants/issues/costing/issue-065-comparison-review-service.md",
       "depends_on": [
         "V03-050",
@@ -2981,7 +3837,19 @@
       "merge_target": "feat/electrical-costing-poc",
       "working_line": "feat/electrical-costing-poc",
       "verification_state": "not_run",
-      "evidence": []
+      "evidence": [],
+      "remote_state": "open",
+      "remote_labels": [
+        "batch:v0.3-assistants",
+        "phase:costing",
+        "medium",
+        "backend"
+      ],
+      "github_dependencies": [
+        172,
+        230
+      ],
+      "published_body_sha256": "496292ebeba207bc12c6f79f30b7424f224cfa6e6a81d8955faf942e5e0cfc3d"
     },
     {
       "local_id": "V03-066",
@@ -2994,8 +3862,8 @@
       "dependency_readiness": "waiting_dependencies",
       "external_readiness": "see_card",
       "implementation_started": false,
-      "github_issue_number": null,
-      "github_url": null,
+      "github_issue_number": 235,
+      "github_url": "https://github.com/Yijtu/ontology/issues/235",
       "file": ".autoresearch/batches/v0.3-assistants/issues/costing/issue-066-comparison-review-ui.md",
       "depends_on": [
         "V03-062",
@@ -3022,7 +3890,19 @@
       "merge_target": "feat/electrical-costing-poc",
       "working_line": "feat/electrical-costing-poc",
       "verification_state": "not_run",
-      "evidence": []
+      "evidence": [],
+      "remote_state": "open",
+      "remote_labels": [
+        "batch:v0.3-assistants",
+        "phase:costing",
+        "medium",
+        "frontend"
+      ],
+      "github_dependencies": [
+        231,
+        232
+      ],
+      "published_body_sha256": "274eb8e7d84b99d74c23b38db0c8a97f4c71882bd2fecdb1c80205ce3cc1815d"
     },
     {
       "local_id": "V03-067",
@@ -3035,8 +3915,8 @@
       "dependency_readiness": "waiting_dependencies",
       "external_readiness": "see_card",
       "implementation_started": false,
-      "github_issue_number": null,
-      "github_url": null,
+      "github_issue_number": 236,
+      "github_url": "https://github.com/Yijtu/ontology/issues/236",
       "file": ".autoresearch/batches/v0.3-assistants/issues/costing/issue-067-requote-lifecycle.md",
       "depends_on": [
         "V03-058",
@@ -3067,7 +3947,20 @@
       "merge_target": "feat/electrical-costing-poc",
       "working_line": "feat/electrical-costing-poc",
       "verification_state": "not_run",
-      "evidence": []
+      "evidence": [],
+      "remote_state": "open",
+      "remote_labels": [
+        "batch:v0.3-assistants",
+        "phase:costing",
+        "medium",
+        "fullstack"
+      ],
+      "github_dependencies": [
+        228,
+        231,
+        232
+      ],
+      "published_body_sha256": "01394badaab005b772d844905b8a631dcf8f013128ea574e0afa4e060739c3a8"
     },
     {
       "local_id": "V03-068",
@@ -3080,8 +3973,8 @@
       "dependency_readiness": "waiting_dependencies",
       "external_readiness": "see_card",
       "implementation_started": false,
-      "github_issue_number": null,
-      "github_url": null,
+      "github_issue_number": 237,
+      "github_url": "https://github.com/Yijtu/ontology/issues/237",
       "file": ".autoresearch/batches/v0.3-assistants/issues/costing/issue-068-client-mapping-conformance.md",
       "depends_on": [
         "V03-055",
@@ -3105,7 +3998,20 @@
       "merge_target": "feat/electrical-costing-poc",
       "working_line": "feat/electrical-costing-poc",
       "verification_state": "not_run",
-      "evidence": []
+      "evidence": [],
+      "remote_state": "open",
+      "remote_labels": [
+        "batch:v0.3-assistants",
+        "phase:costing",
+        "medium",
+        "infra"
+      ],
+      "github_dependencies": [
+        222,
+        228,
+        232
+      ],
+      "published_body_sha256": "3ddc0038b7be26c8b6a608efcae55caf94cc5a15f47297f9a69274d4d4b11145"
     },
     {
       "local_id": "V03-069",
@@ -3118,8 +4024,8 @@
       "dependency_readiness": "waiting_dependencies",
       "external_readiness": "see_card",
       "implementation_started": false,
-      "github_issue_number": null,
-      "github_url": null,
+      "github_issue_number": 238,
+      "github_url": "https://github.com/Yijtu/ontology/issues/238",
       "file": ".autoresearch/batches/v0.3-assistants/issues/costing/issue-069-costing-browser-e2e.md",
       "depends_on": [
         "V03-052",
@@ -3179,7 +4085,34 @@
       "merge_target": "feat/electrical-costing-poc",
       "working_line": "feat/electrical-costing-poc",
       "verification_state": "not_run",
-      "evidence": []
+      "evidence": [],
+      "remote_state": "open",
+      "remote_labels": [
+        "batch:v0.3-assistants",
+        "phase:costing",
+        "high",
+        "infra"
+      ],
+      "github_dependencies": [
+        220,
+        221,
+        223,
+        222,
+        224,
+        225,
+        228,
+        230,
+        226,
+        229,
+        231,
+        233,
+        234,
+        232,
+        235,
+        236,
+        237
+      ],
+      "published_body_sha256": "d00cda9a7ffab2710bd9ce629c9d1e225ca61f9a4ddbccf630b61c6fef16e49f"
     },
     {
       "local_id": "V03-070",
@@ -3192,8 +4125,8 @@
       "dependency_readiness": "waiting_dependencies",
       "external_readiness": "unconfirmed",
       "implementation_started": false,
-      "github_issue_number": null,
-      "github_url": null,
+      "github_issue_number": 227,
+      "github_url": "https://github.com/Yijtu/ontology/issues/227",
       "file": ".autoresearch/batches/v0.3-assistants/issues/costing/issue-070-real-customer-adapter.md",
       "depends_on": [
         "V03-049",
@@ -3220,7 +4153,20 @@
       "merge_target": "feat/electrical-costing-poc",
       "working_line": "feat/electrical-costing-poc",
       "verification_state": "not_run",
-      "evidence": []
+      "evidence": [],
+      "remote_state": "open",
+      "remote_labels": [
+        "batch:v0.3-assistants",
+        "phase:costing",
+        "high",
+        "backend",
+        "external-condition"
+      ],
+      "github_dependencies": [
+        171,
+        223
+      ],
+      "published_body_sha256": "34c4262b2eff3536fd89a14cea6e0d166caae6d3e320d318dd6b5239aa081861"
     },
     {
       "local_id": "V03-071",
@@ -3233,8 +4179,8 @@
       "dependency_readiness": "waiting_dependencies",
       "external_readiness": "unconfirmed",
       "implementation_started": false,
-      "github_issue_number": null,
-      "github_url": null,
+      "github_issue_number": 239,
+      "github_url": "https://github.com/Yijtu/ontology/issues/239",
       "file": ".autoresearch/batches/v0.3-assistants/issues/costing/issue-071-real-customer-acceptance.md",
       "depends_on": [
         "V03-049",
@@ -3265,7 +4211,22 @@
       "merge_target": "feat/electrical-costing-poc",
       "working_line": "feat/electrical-costing-poc",
       "verification_state": "not_run",
-      "evidence": []
+      "evidence": [],
+      "remote_state": "open",
+      "remote_labels": [
+        "batch:v0.3-assistants",
+        "phase:costing",
+        "high",
+        "infra",
+        "external-condition"
+      ],
+      "github_dependencies": [
+        171,
+        172,
+        238,
+        227
+      ],
+      "published_body_sha256": "8d32b5c73582319a483c16e46503557985e41899c9c73af18801233872a07f5f"
     },
     {
       "local_id": "V03-072",
@@ -3278,8 +4239,8 @@
       "dependency_readiness": "waiting_dependencies",
       "external_readiness": "unconfirmed",
       "implementation_started": false,
-      "github_issue_number": null,
-      "github_url": null,
+      "github_issue_number": 240,
+      "github_url": "https://github.com/Yijtu/ontology/issues/240",
       "file": ".autoresearch/batches/v0.3-assistants/issues/costing/issue-072-costing-mvp-closeout.md",
       "depends_on": [
         "V03-069",
@@ -3301,7 +4262,129 @@
       "merge_target": "feat/electrical-costing-poc",
       "working_line": "feat/electrical-costing-poc",
       "verification_state": "not_run",
-      "evidence": []
+      "evidence": [],
+      "remote_state": "open",
+      "remote_labels": [
+        "batch:v0.3-assistants",
+        "phase:costing",
+        "high",
+        "infra",
+        "external-condition"
+      ],
+      "github_dependencies": [
+        238,
+        239
+      ],
+      "published_body_sha256": "ac7ed5d2b17d9f60fb0e48fdc2344f88258cc9ab3845b632ff443e8c9f63af23"
     }
-  ]
+  ],
+  "publication": {
+    "status": "created",
+    "repository": "Yijtu/ontology",
+    "verification": {
+      "status": "passed",
+      "remote_issue_count": 72,
+      "phase_counts": { "A": 47, "B": 25 },
+      "dependency_edges": 252,
+      "portable_remote_body_links": 388,
+      "local_links_checked": 1843,
+      "source_hashes_match": true,
+      "legacy_preserved": true,
+      "product_tests_run": false
+    },
+    "label": "batch:v0.3-assistants",
+    "document_branch": "feat/electrical-costing-poc",
+    "spec_commit": "cb3131d63e51922f4c4ab235396de051c5987c36",
+    "created_count": 72,
+    "started_at": "2026-09-29T09:56:02.053Z",
+    "dependencies_format": "Dependencies: #number",
+    "implementation_started": false,
+    "completed_at": "2026-09-29T10:00:53.518Z",
+    "spec_input_sha256": {
+      "tasks/prd-generic-assistants-core-v0.3.md": "fdb4d8606c35088d4818865e7bf5ae7f232715f9e95d76bec424d7f3aa93b610",
+      "tasks/prd-ontology-and-business-assistants-v0.3.md": "fc671e1bbc20da6072c7359851b17d338c255b4b350c284d6f2f5029b8abd782",
+      "tasks/spec-generic-assistants-core-v0.3.md": "5ee27d94884ddcb12b1d5b0e7fb777eb9569c530c13ece5bdb77ddc39aace57c",
+      "tasks/spec-v0.3a/asset-data-ui.md": "6ce26b2e9ad41aa50ebc719fcf7d2c6cd2d126cec82b1e146a080a6f080ba667",
+      "tasks/spec-v0.3a/execution-evidence.md": "064f795ecfeaaa31db0ef47378e4acb2ed36f20a14a121b7a182c0c66500305c",
+      "tasks/spec-electrical-costing-mvp-v0.3.md": "61af447fb01105c403b0b6bc4c7a9eda662a7e6d660f2c4d3b31e6806032156a"
+    },
+    "documents_url": "https://github.com/Yijtu/ontology/blob/feat/electrical-costing-poc/.autoresearch/batches/v0.3-assistants/INDEX.md",
+    "handoff_url": "https://github.com/Yijtu/ontology/blob/feat/electrical-costing-poc/.autoresearch/batches/v0.3-assistants/handoff.md",
+    "issue_query_url": "https://github.com/Yijtu/ontology/issues?q=is%3Aissue+is%3Aopen+label%3A%22batch%3Av0.3-assistants%22"
+  },
+  "github_allowlist": [
+    169,
+    173,
+    174,
+    177,
+    175,
+    178,
+    179,
+    181,
+    183,
+    184,
+    180,
+    185,
+    182,
+    186,
+    187,
+    189,
+    190,
+    192,
+    191,
+    193,
+    202,
+    176,
+    194,
+    196,
+    199,
+    188,
+    195,
+    197,
+    200,
+    198,
+    201,
+    203,
+    204,
+    205,
+    206,
+    207,
+    208,
+    209,
+    211,
+    212,
+    214,
+    216,
+    215,
+    213,
+    217,
+    210,
+    218,
+    170,
+    171,
+    172,
+    219,
+    220,
+    221,
+    223,
+    222,
+    224,
+    225,
+    228,
+    230,
+    226,
+    229,
+    231,
+    233,
+    234,
+    232,
+    235,
+    236,
+    237,
+    238,
+    227,
+    239,
+    240
+  ],
+  "source_hash_normalization": "utf8-without-bom-lf"
 }

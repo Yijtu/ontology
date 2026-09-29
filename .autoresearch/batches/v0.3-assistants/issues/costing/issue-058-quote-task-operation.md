@@ -1,8 +1,8 @@
 # V03-058：将 costing.quote 接入公共 task、compute 与正常报价入口
 
-阶段 B · backend · P0 · 状态 planned · GitHub 编号未分配
+阶段 B · backend · P0 · 状态 planned · GitHub [#228](https://github.com/Yijtu/ontology/issues/228)
 
-执行工作线：feat/electrical-costing-poc；目标：feat/electrical-costing-poc。本地卡不是远程 #58，本批尚未开始实现。
+执行工作线：feat/electrical-costing-poc；目标：feat/electrical-costing-poc。本批尚未开始实现；V03 是规划 ID，GitHub 编号见上述链接与 manifest。
 
 ## 目标与范围
 
@@ -12,6 +12,8 @@
 - binding声明必需领域策略，V03-059尚未装配/通过时正式报价保持未就绪；本卡不提前冒称已完成专属核验。
 
 ## 依赖与进入条件
+
+Dependencies: #220, #223, #222, #225
 
 依赖：[V03-052](issue-052-industry-package.md)、[V03-054](issue-054-customer-quotation-adapter.md)、[V03-055](issue-055-quote-input-snapshots.md)、[V03-057](issue-057-pricing-context.md)。
 必须包含 V03-047 已验收的 main，并完成 V03-051 兼容门槛。发现通用缺口先回 main，再同步；不在场景维持另一份 Core。
@@ -57,5 +59,5 @@
 
 ## 完成记录
 
-- 当前：未开工；验证未运行；无提交/PR/远程 Issue 编号。
+- 当前：未开工；验证未运行。GitHub Issue：[#228](https://github.com/Yijtu/ontology/issues/228)；文档提交不代表功能完成。
 - 实现后记录：提交/PR、适用命令结果、满足的验收、未验证/外部条件、迁移配置与兼容影响。

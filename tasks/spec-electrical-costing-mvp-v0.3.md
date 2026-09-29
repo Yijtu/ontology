@@ -557,7 +557,7 @@ B新增正常装配的 tests/e2e/costing.browser.e2e.ts 及相应集成／契约
 
 ### 10.3 任务与正式依赖
 
-本批实际本地任务见[v0.3 任务索引](../.autoresearch/batches/v0.3-assistants/INDEX.md)及 manifest；V03 编号不等于 GitHub Issue 数字。A 为 V03-001～047，以下 25 项 B 任务为 V03-048～072。状态均为 planned，当前只生成规划。
+本批 GitHub Issues 及对应 V03 文件见[v0.3 任务索引](../.autoresearch/batches/v0.3-assistants/INDEX.md)及 manifest；V03 编号不等于 GitHub Issue 数字。A 为 V03-001～047，以下 25 项 B 任务为 V03-048～072。状态均为 planned，已创建 GitHub Issues，尚未开始实现。
 
 V03-048～050 可先完成内部验证范围／端口契约／独立样例与外部资料盘点；盘点完成不改变真实范围、函数、价源、配对 gold 的 external_unconfirmed 状态。V03-051 必须取得 A 已验收 main 基线。后续 B 代码全部依赖此门槛。
 

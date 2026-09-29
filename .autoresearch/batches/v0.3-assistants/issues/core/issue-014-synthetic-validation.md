@@ -1,8 +1,8 @@
 # V03-014：建立隔离合成实例与行业验证服务
 
-阶段 A · backend · P1 · 状态 planned · GitHub 编号未分配
+阶段 A · backend · P1 · 状态 planned · GitHub [#186](https://github.com/Yijtu/ontology/issues/186)
 
-执行工作线：feat/core-planning-provenance；目标：main。本地卡不是远程 #14，本批尚未开始实现。
+执行工作线：feat/core-planning-provenance；目标：main。本批尚未开始实现；V03 是规划 ID，GitHub 编号见上述链接与 manifest。
 
 ## 目标与范围
 
@@ -12,6 +12,8 @@
 - 合成实例/示例函数不进入真实项目事实，不把验证通过称行业标准或客户报价。
 
 ## 依赖与进入条件
+
+Dependencies: #183, #184, #182
 
 依赖：[V03-009](issue-009-definition-edit-validation.md)、[V03-010](issue-010-rule-action-candidates.md)、[V03-013](issue-013-instance-review-ui.md)。
 开工先核对 V03-001 的能力/旧任务/WIP记录，复用已完成实现，只补本卡缺口。完成能力按独立审查合入 main，保留场景边界。
@@ -55,5 +57,5 @@
 
 ## 完成记录
 
-- 当前：未开工；验证未运行；无提交/PR/远程 Issue 编号。
+- 当前：未开工；验证未运行。GitHub Issue：[#186](https://github.com/Yijtu/ontology/issues/186)；文档提交不代表功能完成。
 - 实现后记录：提交/PR、适用命令结果、满足的验收、未验证/外部条件、迁移配置与兼容影响。

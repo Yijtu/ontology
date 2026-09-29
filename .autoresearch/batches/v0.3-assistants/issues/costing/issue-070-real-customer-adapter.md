@@ -1,8 +1,8 @@
 # V03-070：实现并核对已授权的真实客户报价适配器
 
-阶段 B · backend · P0 · 状态 planned · GitHub 编号未分配
+阶段 B · backend · P0 · 状态 planned · GitHub [#227](https://github.com/Yijtu/ontology/issues/227)
 
-执行工作线：feat/electrical-costing-poc；目标：feat/electrical-costing-poc。本地卡不是远程 #70，本批尚未开始实现。
+执行工作线：feat/electrical-costing-poc；目标：feat/electrical-costing-poc。本批尚未开始实现；V03 是规划 ID，GitHub 编号见上述链接与 manifest。
 
 ## 目标与范围
 
@@ -12,6 +12,8 @@
 - 客户资源或许可缺失时保持external_unconfirmed、未完成；内部合成E2E不依赖本卡，正式业务验收071必须依赖本卡。
 
 ## 依赖与进入条件
+
+Dependencies: #171, #223
 
 依赖：[V03-049](issue-049-authority-discovery.md)、[V03-054](issue-054-customer-quotation-adapter.md)。
 必须包含 V03-047 已验收的 main，并完成 V03-051 兼容门槛。发现通用缺口先回 main，再同步；不在场景维持另一份 Core。
@@ -52,5 +54,5 @@
 
 ## 完成记录
 
-- 当前：未开工；验证未运行；无提交/PR/远程 Issue 编号。
+- 当前：未开工；验证未运行。GitHub Issue：[#227](https://github.com/Yijtu/ontology/issues/227)；文档提交不代表功能完成。
 - 实现后记录：提交/PR、适用命令结果、满足的验收、未验证/外部条件、迁移配置与兼容影响。

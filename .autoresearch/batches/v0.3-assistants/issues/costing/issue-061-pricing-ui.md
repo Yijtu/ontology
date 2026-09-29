@@ -1,8 +1,8 @@
 # V03-061：实现价源、计价口径与缺价修复专业界面
 
-阶段 B · frontend · P1 · 状态 planned · GitHub 编号未分配
+阶段 B · frontend · P1 · 状态 planned · GitHub [#229](https://github.com/Yijtu/ontology/issues/229)
 
-执行工作线：feat/electrical-costing-poc；目标：feat/electrical-costing-poc。本地卡不是远程 #61，本批尚未开始实现。
+执行工作线：feat/electrical-costing-poc；目标：feat/electrical-costing-poc。本批尚未开始实现；V03 是规划 ID，GitHub 编号见上述链接与 manifest。
 
 ## 目标与范围
 
@@ -11,6 +11,8 @@
 - 经济参数变更先展示diff，旧报价维持原refs/状态；不会自动用联网/RAG价格替代权威价。
 
 ## 依赖与进入条件
+
+Dependencies: #221, #225, #226
 
 依赖：[V03-053](issue-053-price-snapshots.md)、[V03-057](issue-057-pricing-context.md)、[V03-060](issue-060-costing-input-ui.md)。
 必须包含 V03-047 已验收的 main，并完成 V03-051 兼容门槛。发现通用缺口先回 main，再同步；不在场景维持另一份 Core。
@@ -50,5 +52,5 @@
 
 ## 完成记录
 
-- 当前：未开工；验证未运行；无提交/PR/远程 Issue 编号。
+- 当前：未开工；验证未运行。GitHub Issue：[#229](https://github.com/Yijtu/ontology/issues/229)；文档提交不代表功能完成。
 - 实现后记录：提交/PR、适用命令结果、满足的验收、未验证/外部条件、迁移配置与兼容影响。

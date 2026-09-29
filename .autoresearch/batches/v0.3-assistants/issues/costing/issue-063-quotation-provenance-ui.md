@@ -1,8 +1,8 @@
 # V03-063：实现金额、规格、价格规则与函数版本的逐项溯源
 
-阶段 B · frontend · P1 · 状态 planned · GitHub 编号未分配
+阶段 B · frontend · P1 · 状态 planned · GitHub [#233](https://github.com/Yijtu/ontology/issues/233)
 
-执行工作线：feat/electrical-costing-poc；目标：feat/electrical-costing-poc。本地卡不是远程 #63，本批尚未开始实现。
+执行工作线：feat/electrical-costing-poc；目标：feat/electrical-costing-poc。本批尚未开始实现；V03 是规划 ID，GitHub 编号见上述链接与 manifest。
 
 ## 目标与范围
 
@@ -11,6 +11,8 @@
 - 同文本换来源、错行/错版本或被撤回依赖的负例在UI与API均不绕过gate；证据面板复用公共组件，专业业务解释由场景挂载。
 
 ## 依赖与进入条件
+
+Dependencies: #230, #231
 
 依赖：[V03-059](issue-059-quote-policy-evidence.md)、[V03-062](issue-062-quotation-workbench.md)。
 必须包含 V03-047 已验收的 main，并完成 V03-051 兼容门槛。发现通用缺口先回 main，再同步；不在场景维持另一份 Core。
@@ -51,5 +53,5 @@
 
 ## 完成记录
 
-- 当前：未开工；验证未运行；无提交/PR/远程 Issue 编号。
+- 当前：未开工；验证未运行。GitHub Issue：[#233](https://github.com/Yijtu/ontology/issues/233)；文档提交不代表功能完成。
 - 实现后记录：提交/PR、适用命令结果、满足的验收、未验证/外部条件、迁移配置与兼容影响。

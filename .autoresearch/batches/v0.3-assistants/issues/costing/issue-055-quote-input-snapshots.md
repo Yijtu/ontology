@@ -1,8 +1,8 @@
 # V03-055：实现桥架清单映射与不可变报价输入
 
-阶段 B · backend · P1 · 状态 planned · GitHub 编号未分配
+阶段 B · backend · P1 · 状态 planned · GitHub [#222](https://github.com/Yijtu/ontology/issues/222)
 
-执行工作线：feat/electrical-costing-poc；目标：feat/electrical-costing-poc。本地卡不是远程 #55，本批尚未开始实现。
+执行工作线：feat/electrical-costing-poc；目标：feat/electrical-costing-poc。本批尚未开始实现；V03 是规划 ID，GitHub 编号见上述链接与 manifest。
 
 ## 目标与范围
 
@@ -11,6 +11,8 @@
 - 每阶段对账expected/included/excluded/blocked行，排除须确认理由；修订生成新snapshot，旧输入不回填最新价格/规则。
 
 ## 依赖与进入条件
+
+Dependencies: #219, #220
 
 依赖：[V03-051](issue-051-accepted-main-sync.md)、[V03-052](issue-052-industry-package.md)。
 必须包含 V03-047 已验收的 main，并完成 V03-051 兼容门槛。发现通用缺口先回 main，再同步；不在场景维持另一份 Core。
@@ -58,5 +60,5 @@
 
 ## 完成记录
 
-- 当前：未开工；验证未运行；无提交/PR/远程 Issue 编号。
+- 当前：未开工；验证未运行。GitHub Issue：[#222](https://github.com/Yijtu/ontology/issues/222)；文档提交不代表功能完成。
 - 实现后记录：提交/PR、适用命令结果、满足的验收、未验证/外部条件、迁移配置与兼容影响。

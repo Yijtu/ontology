@@ -1,8 +1,8 @@
 # V03-023：实现版本化任务绑定、输入快照与策略预检
 
-阶段 A · backend · P1 · 状态 planned · GitHub 编号未分配
+阶段 A · backend · P1 · 状态 planned · GitHub [#194](https://github.com/Yijtu/ontology/issues/194)
 
-执行工作线：feat/core-planning-provenance；目标：main。本地卡不是远程 #23，本批尚未开始实现。
+执行工作线：feat/core-planning-provenance；目标：main。本批尚未开始实现；V03 是规划 ID，GitHub 编号见上述链接与 manifest。
 
 ## 目标与范围
 
@@ -12,6 +12,8 @@
 - 普通approved-input与造价等受信派生task-input均验证project/base input/Schema/依赖/确认 pins；工件body不反指包含自己的项目或run manifest digest。
 
 ## 依赖与进入条件
+
+Dependencies: #173, #184, #189, #192
 
 依赖：[V03-002](issue-002-public-contracts.md)、[V03-010](issue-010-rule-action-candidates.md)、[V03-016](issue-016-project-bindings.md)、[V03-018](issue-018-query-projection.md)。
 开工先核对 V03-001 的能力/旧任务/WIP记录，复用已完成实现，只补本卡缺口。完成能力按独立审查合入 main，保留场景边界。
@@ -63,5 +65,5 @@
 
 ## 完成记录
 
-- 当前：未开工；验证未运行；无提交/PR/远程 Issue 编号。
+- 当前：未开工；验证未运行。GitHub Issue：[#194](https://github.com/Yijtu/ontology/issues/194)；文档提交不代表功能完成。
 - 实现后记录：提交/PR、适用命令结果、满足的验收、未验证/外部条件、迁移配置与兼容影响。

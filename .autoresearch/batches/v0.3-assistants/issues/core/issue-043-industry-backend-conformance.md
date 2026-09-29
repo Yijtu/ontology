@@ -1,8 +1,8 @@
 # V03-043：验证两行业、两 mapping 与两业务 SQL 后端
 
-阶段 A · infra · P1 · 状态 planned · GitHub 编号未分配
+阶段 A · infra · P1 · 状态 planned · GitHub [#215](https://github.com/Yijtu/ontology/issues/215)
 
-执行工作线：feat/core-planning-provenance；目标：main。本地卡不是远程 #43，本批尚未开始实现。
+执行工作线：feat/core-planning-provenance；目标：main。本批尚未开始实现；V03 是规划 ID，GitHub 编号见上述链接与 manifest。
 
 ## 目标与范围
 
@@ -11,6 +11,8 @@
 - 字段/阈值/客户列不进入Core/publicUI，架构规则覆盖合法装配和负向跨包/SDK渗漏。
 
 ## 依赖与进入条件
+
+Dependencies: #192, #199, #195, #197, #212
 
 依赖：[V03-018](issue-018-query-projection.md)、[V03-025](issue-025-semantic-sql-query.md)、[V03-027](issue-027-relation-navigation.md)、[V03-028](issue-028-incremental-rule-state.md)、[V03-040](issue-040-business-results-ui.md)。
 开工先核对 V03-001 的能力/旧任务/WIP记录，复用已完成实现，只补本卡缺口。完成能力按独立审查合入 main，保留场景边界。
@@ -53,5 +55,5 @@
 
 ## 完成记录
 
-- 当前：未开工；验证未运行；无提交/PR/远程 Issue 编号。
+- 当前：未开工；验证未运行。GitHub Issue：[#215](https://github.com/Yijtu/ontology/issues/215)；文档提交不代表功能完成。
 - 实现后记录：提交/PR、适用命令结果、满足的验收、未验证/外部条件、迁移配置与兼容影响。

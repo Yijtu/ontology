@@ -1,8 +1,8 @@
 # V03-060：挂载桥架资料、清单与专业参数确认页面
 
-阶段 B · frontend · P1 · 状态 planned · GitHub 编号未分配
+阶段 B · frontend · P1 · 状态 planned · GitHub [#226](https://github.com/Yijtu/ontology/issues/226)
 
-执行工作线：feat/electrical-costing-poc；目标：feat/electrical-costing-poc。本地卡不是远程 #60，本批尚未开始实现。
+执行工作线：feat/electrical-costing-poc；目标：feat/electrical-costing-poc。本批尚未开始实现；V03 是规划 ID，GitHub 编号见上述链接与 manifest。
 
 ## 目标与范围
 
@@ -11,6 +11,8 @@
 - 长表/窄屏/键盘/空态/错误态可用，刷新保留project/revision；公共助手内不新增行业名if或硬编码桥架列。
 
 ## 依赖与进入条件
+
+Dependencies: #219, #222, #224
 
 依赖：[V03-051](issue-051-accepted-main-sync.md)、[V03-055](issue-055-quote-input-snapshots.md)、[V03-056](issue-056-specification-confirmation.md)。
 必须包含 V03-047 已验收的 main，并完成 V03-051 兼容门槛。发现通用缺口先回 main，再同步；不在场景维持另一份 Core。
@@ -61,5 +63,5 @@
 
 ## 完成记录
 
-- 当前：未开工；验证未运行；无提交/PR/远程 Issue 编号。
+- 当前：未开工；验证未运行。GitHub Issue：[#226](https://github.com/Yijtu/ontology/issues/226)；文档提交不代表功能完成。
 - 实现后记录：提交/PR、适用命令结果、满足的验收、未验证/外部条件、迁移配置与兼容影响。

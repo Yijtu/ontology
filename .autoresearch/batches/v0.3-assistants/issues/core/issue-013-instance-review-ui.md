@@ -1,8 +1,8 @@
 # V03-013：补齐公共实例身份裁决与关键字段确认流程
 
-阶段 A · fullstack · P1 · 状态 planned · GitHub 编号未分配
+阶段 A · fullstack · P1 · 状态 planned · GitHub [#182](https://github.com/Yijtu/ontology/issues/182)
 
-执行工作线：feat/core-planning-provenance；目标：main。本地卡不是远程 #13，本批尚未开始实现。
+执行工作线：feat/core-planning-provenance；目标：main。本批尚未开始实现；V03 是规划 ID，GitHub 编号见上述链接与 manifest。
 
 ## 目标与范围
 
@@ -12,6 +12,8 @@
 - 本卡先验收工作区/可信scope内候选身份与字段确认；新客户项目级正常流程由017/020/045接入，不反向依赖016造成隐含循环。
 
 ## 依赖与进入条件
+
+Dependencies: #179, #180
 
 依赖：[V03-007](issue-007-schema-extraction.md)、[V03-011](issue-011-workspace-source-ui.md)。
 开工先核对 V03-001 的能力/旧任务/WIP记录，复用已完成实现，只补本卡缺口。完成能力按独立审查合入 main，保留场景边界。
@@ -60,5 +62,5 @@
 
 ## 完成记录
 
-- 当前：未开工；验证未运行；无提交/PR/远程 Issue 编号。
+- 当前：未开工；验证未运行。GitHub Issue：[#182](https://github.com/Yijtu/ontology/issues/182)；文档提交不代表功能完成。
 - 实现后记录：提交/PR、适用命令结果、满足的验收、未验证/外部条件、迁移配置与兼容影响。

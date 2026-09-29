@@ -1,8 +1,8 @@
 # V03-065：实现配对比较、业务签核与行业反馈提案服务
 
-阶段 B · backend · P1 · 状态 planned · GitHub 编号未分配
+阶段 B · backend · P1 · 状态 planned · GitHub [#232](https://github.com/Yijtu/ontology/issues/232)
 
-执行工作线：feat/electrical-costing-poc；目标：feat/electrical-costing-poc。本地卡不是远程 #65，本批尚未开始实现。
+执行工作线：feat/electrical-costing-poc；目标：feat/electrical-costing-poc。本批尚未开始实现；V03 是规划 ID，GitHub 编号见上述链接与 manifest。
 
 ## 目标与范围
 
@@ -12,6 +12,8 @@
 - 服务开发用独立synthetic GoldCase与显式synthetic比较策略验证；实际客户阈值/样本未确认时拒绝business_accepted，而不是把050盘点完成当真实就绪。
 
 ## 依赖与进入条件
+
+Dependencies: #172, #230
 
 依赖：[V03-050](issue-050-gold-acceptance-discovery.md)、[V03-059](issue-059-quote-policy-evidence.md)。
 必须包含 V03-047 已验收的 main，并完成 V03-051 兼容门槛。发现通用缺口先回 main，再同步；不在场景维持另一份 Core。
@@ -50,5 +52,5 @@
 
 ## 完成记录
 
-- 当前：未开工；验证未运行；无提交/PR/远程 Issue 编号。
+- 当前：未开工；验证未运行。GitHub Issue：[#232](https://github.com/Yijtu/ontology/issues/232)；文档提交不代表功能完成。
 - 实现后记录：提交/PR、适用命令结果、满足的验收、未验证/外部条件、迁移配置与兼容影响。

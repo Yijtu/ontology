@@ -1,8 +1,8 @@
 # V03-054：实现可替换报价端口与两种合成适配的契约套件
 
-阶段 B · backend · P1 · 状态 planned · GitHub 编号未分配
+阶段 B · backend · P1 · 状态 planned · GitHub [#223](https://github.com/Yijtu/ontology/issues/223)
 
-执行工作线：feat/electrical-costing-poc；目标：feat/electrical-costing-poc。本地卡不是远程 #54，本批尚未开始实现。
+执行工作线：feat/electrical-costing-poc；目标：feat/electrical-costing-poc。本批尚未开始实现；V03 是规划 ID，GitHub 编号见上述链接与 manifest。
 
 ## 目标与范围
 
@@ -12,6 +12,8 @@
 - 本卡交付内部机制不含真实客户adapter实现；真实协议/许可/权威价回执由V03-070完成，缺真实配置时正式任务保持未就绪。
 
 ## 依赖与进入条件
+
+Dependencies: #219, #171, #220, #221
 
 依赖：[V03-051](issue-051-accepted-main-sync.md)、[V03-049](issue-049-authority-discovery.md)、[V03-052](issue-052-industry-package.md)、[V03-053](issue-053-price-snapshots.md)。
 必须包含 V03-047 已验收的 main，并完成 V03-051 兼容门槛。发现通用缺口先回 main，再同步；不在场景维持另一份 Core。
@@ -55,5 +57,5 @@
 
 ## 完成记录
 
-- 当前：未开工；验证未运行；无提交/PR/远程 Issue 编号。
+- 当前：未开工；验证未运行。GitHub Issue：[#223](https://github.com/Yijtu/ontology/issues/223)；文档提交不代表功能完成。
 - 实现后记录：提交/PR、适用命令结果、满足的验收、未验证/外部条件、迁移配置与兼容影响。

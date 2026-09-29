@@ -1,8 +1,8 @@
 # V03-056：实现规格、数量、单位与必需字段确认校验
 
-阶段 B · backend · P1 · 状态 planned · GitHub 编号未分配
+阶段 B · backend · P1 · 状态 planned · GitHub [#224](https://github.com/Yijtu/ontology/issues/224)
 
-执行工作线：feat/electrical-costing-poc；目标：feat/electrical-costing-poc。本地卡不是远程 #56，本批尚未开始实现。
+执行工作线：feat/electrical-costing-poc；目标：feat/electrical-costing-poc。本批尚未开始实现；V03 是规划 ID，GitHub 编号见上述链接与 manifest。
 
 ## 目标与范围
 
@@ -11,6 +11,8 @@
 - 复核后的字段修改走A CAS及新项目revision，不默填数量、规格或价格；同run澄清不覆盖报价经济参数。
 
 ## 依赖与进入条件
+
+Dependencies: #222
 
 依赖：[V03-055](issue-055-quote-input-snapshots.md)。
 必须包含 V03-047 已验收的 main，并完成 V03-051 兼容门槛。发现通用缺口先回 main，再同步；不在场景维持另一份 Core。
@@ -52,5 +54,5 @@
 
 ## 完成记录
 
-- 当前：未开工；验证未运行；无提交/PR/远程 Issue 编号。
+- 当前：未开工；验证未运行。GitHub Issue：[#224](https://github.com/Yijtu/ontology/issues/224)；文档提交不代表功能完成。
 - 实现后记录：提交/PR、适用命令结果、满足的验收、未验证/外部条件、迁移配置与兼容影响。

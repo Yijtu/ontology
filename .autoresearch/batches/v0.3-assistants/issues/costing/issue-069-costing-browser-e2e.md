@@ -1,8 +1,8 @@
 # V03-069：完成造价双助手正常入口的合成整栈浏览器 E2E
 
-阶段 B · infra · P0 · 状态 planned · GitHub 编号未分配
+阶段 B · infra · P0 · 状态 planned · GitHub [#238](https://github.com/Yijtu/ontology/issues/238)
 
-执行工作线：feat/electrical-costing-poc；目标：feat/electrical-costing-poc。本地卡不是远程 #69，本批尚未开始实现。
+执行工作线：feat/electrical-costing-poc；目标：feat/electrical-costing-poc。本批尚未开始实现；V03 是规划 ID，GitHub 编号见上述链接与 manifest。
 
 ## 目标与范围
 
@@ -11,6 +11,8 @@
 - 缺价/篡改/错行/错money/required policy fail/撤回/跨客户/取消负例不会正式发布；构建Web后实际Vitest+chromium执行，资源清理可重复。
 
 ## 依赖与进入条件
+
+Dependencies: #220, #221, #223, #222, #224, #225, #228, #230, #226, #229, #231, #233, #234, #232, #235, #236, #237
 
 依赖：[V03-052](issue-052-industry-package.md)、[V03-053](issue-053-price-snapshots.md)、[V03-054](issue-054-customer-quotation-adapter.md)、[V03-055](issue-055-quote-input-snapshots.md)、[V03-056](issue-056-specification-confirmation.md)、[V03-057](issue-057-pricing-context.md)、[V03-058](issue-058-quote-task-operation.md)、[V03-059](issue-059-quote-policy-evidence.md)、[V03-060](issue-060-costing-input-ui.md)、[V03-061](issue-061-pricing-ui.md)、[V03-062](issue-062-quotation-workbench.md)、[V03-063](issue-063-quotation-provenance-ui.md)、[V03-064](issue-064-quotation-export.md)、[V03-065](issue-065-comparison-review-service.md)、[V03-066](issue-066-comparison-review-ui.md)、[V03-067](issue-067-requote-lifecycle.md)、[V03-068](issue-068-client-mapping-conformance.md)。
 必须包含 V03-047 已验收的 main，并完成 V03-051 兼容门槛。发现通用缺口先回 main，再同步；不在场景维持另一份 Core。
@@ -69,5 +71,5 @@
 
 ## 完成记录
 
-- 当前：未开工；验证未运行；无提交/PR/远程 Issue 编号。
+- 当前：未开工；验证未运行。GitHub Issue：[#238](https://github.com/Yijtu/ontology/issues/238)；文档提交不代表功能完成。
 - 实现后记录：提交/PR、适用命令结果、满足的验收、未验证/外部条件、迁移配置与兼容影响。

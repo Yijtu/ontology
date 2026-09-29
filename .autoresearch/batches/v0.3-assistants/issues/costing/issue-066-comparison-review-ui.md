@@ -1,8 +1,8 @@
 # V03-066：实现人工差异、接受退回与资产反馈专业界面
 
-阶段 B · frontend · P1 · 状态 planned · GitHub 编号未分配
+阶段 B · frontend · P1 · 状态 planned · GitHub [#235](https://github.com/Yijtu/ontology/issues/235)
 
-执行工作线：feat/electrical-costing-poc；目标：feat/electrical-costing-poc。本地卡不是远程 #66，本批尚未开始实现。
+执行工作线：feat/electrical-costing-poc；目标：feat/electrical-costing-poc。本批尚未开始实现；V03 是规划 ID，GitHub 编号见上述链接与 manifest。
 
 ## 目标与范围
 
@@ -11,6 +11,8 @@
 - 将合理业务反馈提交行业修改提案并显示来源，旧包/报价保持不变；专业审核入口不侵入公共UI行业判断。
 
 ## 依赖与进入条件
+
+Dependencies: #231, #232
 
 依赖：[V03-062](issue-062-quotation-workbench.md)、[V03-065](issue-065-comparison-review-service.md)。
 必须包含 V03-047 已验收的 main，并完成 V03-051 兼容门槛。发现通用缺口先回 main，再同步；不在场景维持另一份 Core。
@@ -51,5 +53,5 @@
 
 ## 完成记录
 
-- 当前：未开工；验证未运行；无提交/PR/远程 Issue 编号。
+- 当前：未开工；验证未运行。GitHub Issue：[#235](https://github.com/Yijtu/ontology/issues/235)；文档提交不代表功能完成。
 - 实现后记录：提交/PR、适用命令结果、满足的验收、未验证/外部条件、迁移配置与兼容影响。
