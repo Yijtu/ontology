@@ -1,0 +1,412 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://ontology.local/schema/tasks.schema.json",
+  "title": "TaskContracts",
+  "$comment": "SPEC v0.3a execution-evidence §EX-2: the published task binding, the fixed run execution request/binding and capability status. These carry semantic declarations, complete refs, schema digests and capability requirements only. No endpoint, credential, script or industry implementation type appears here; the executable operation/policy/plan bindings are resolved by trusted composition.",
+  "$defs": {
+    "TaskKind": {
+      "title": "TaskKind",
+      "description": "The bounded set of published task kinds. Model proposals may only select one of these; there is no open-ended tool or script kind.",
+      "type": "string",
+      "enum": [
+        "published_facts",
+        "relations",
+        "rule_judgement",
+        "structured_query",
+        "document_qa",
+        "compute"
+      ]
+    },
+    "TaskValidationPolicyStage": {
+      "title": "TaskValidationPolicyStage",
+      "description": "Input policies run before a compute/answer step; result policies run before the typed writer.",
+      "type": "string",
+      "enum": ["input", "result"]
+    },
+    "TaskValidationPolicyBinding": {
+      "title": "TaskValidationPolicyBinding",
+      "description": "Declares one required or optional registered validation policy for a task kind (SPEC v0.3a §EX-6.1). The registry digest pins the trusted implementation; a declared-but-unbound policy leaves the task not ready rather than silently skipped.",
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["policyRef", "stage", "required", "registryDigest", "reportSchemaRef"],
+      "properties": {
+        "policyRef": {
+          "$ref": "./common.schema.json#/$defs/VersionRef"
+        },
+        "stage": {
+          "$ref": "#/$defs/TaskValidationPolicyStage"
+        },
+        "required": {
+          "type": "boolean"
+        },
+        "registryDigest": {
+          "$ref": "./common.schema.json#/$defs/Sha256Digest"
+        },
+        "reportSchemaRef": {
+          "$ref": "./common.schema.json#/$defs/VersionRef"
+        }
+      }
+    },
+    "PublishedTaskBindingIdentity": {
+      "title": "PublishedTaskBindingIdentity",
+      "description": "The id/version identity of a task binding. It is used inside PublishedTaskBindingBody, which excludes the full VersionRef (and therefore its digest) so the body digest can be computed without a self-reference.",
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["id", "version"],
+      "properties": {
+        "id": {
+          "$ref": "./common.schema.json#/$defs/NonEmptyString"
+        },
+        "version": {
+          "$ref": "./common.schema.json#/$defs/Semver"
+        }
+      }
+    },
+    "PublishedTaskBindingBody": {
+      "title": "PublishedTaskBindingBody",
+      "description": "Canonical hash body of a published task binding (SPEC v0.3a §EX-2.1). It fixes the id/version identity, action declaration, kind, parameter schema digest, required capabilities/readiness, result schema and optional operation/policy/plan pins — but not its own taskBindingRef. The envelope PublishedTaskBinding adds that ref after this body is hashed.",
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "schemaVersion",
+        "taskBindingIdentity",
+        "actionDefinitionRef",
+        "kind",
+        "parameterSchema",
+        "parameterSchemaDigest",
+        "requiredCapabilities",
+        "requiredReadiness",
+        "resultSchemaRef"
+      ],
+      "properties": {
+        "schemaVersion": {
+          "const": "published-task-binding@1"
+        },
+        "taskBindingIdentity": {
+          "$ref": "#/$defs/PublishedTaskBindingIdentity"
+        },
+        "actionDefinitionRef": {
+          "$ref": "./common.schema.json#/$defs/VersionRef"
+        },
+        "kind": {
+          "$ref": "#/$defs/TaskKind"
+        },
+        "parameterSchema": {
+          "description": "JSON Schema for the task parameters. Arbitrary JSON by design; a run still validates concrete parameters against it.",
+          "type": "object"
+        },
+        "parameterSchemaDigest": {
+          "$ref": "./common.schema.json#/$defs/Sha256Digest"
+        },
+        "requiredCapabilities": {
+          "type": "array",
+          "items": {
+            "$ref": "./common.schema.json#/$defs/NonEmptyString"
+          },
+          "uniqueItems": true
+        },
+        "requiredReadiness": {
+          "type": "array",
+          "items": {
+            "$ref": "./projects.schema.json#/$defs/ProjectReadinessKind"
+          },
+          "uniqueItems": true
+        },
+        "resultSchemaRef": {
+          "$ref": "./common.schema.json#/$defs/VersionRef"
+        },
+        "operationRef": {
+          "$ref": "./operations.schema.json#/$defs/OperationRef"
+        },
+        "registeredOperationDigest": {
+          "$ref": "./common.schema.json#/$defs/Sha256Digest"
+        },
+        "validationPolicies": {
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/TaskValidationPolicyBinding"
+          }
+        },
+        "fixedPlanRef": {
+          "$ref": "./common.schema.json#/$defs/ResourceRef"
+        }
+      }
+    },
+    "PublishedTaskBinding": {
+      "title": "PublishedTaskBinding",
+      "description": "Flat read envelope of a published task binding. It repeats the body declarations and adds the complete taskBindingRef; API consumers use `binding.validationPolicies` as shown in the spec.",
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "schemaVersion",
+        "taskBindingRef",
+        "actionDefinitionRef",
+        "kind",
+        "parameterSchema",
+        "parameterSchemaDigest",
+        "requiredCapabilities",
+        "requiredReadiness",
+        "resultSchemaRef"
+      ],
+      "properties": {
+        "schemaVersion": {
+          "const": "published-task-binding@1"
+        },
+        "taskBindingRef": {
+          "$ref": "./common.schema.json#/$defs/VersionRef"
+        },
+        "actionDefinitionRef": {
+          "$ref": "./common.schema.json#/$defs/VersionRef"
+        },
+        "kind": {
+          "$ref": "#/$defs/TaskKind"
+        },
+        "parameterSchema": {
+          "description": "JSON Schema for the task parameters. Arbitrary JSON by design; a run still validates concrete parameters against it.",
+          "type": "object"
+        },
+        "parameterSchemaDigest": {
+          "$ref": "./common.schema.json#/$defs/Sha256Digest"
+        },
+        "requiredCapabilities": {
+          "type": "array",
+          "items": {
+            "$ref": "./common.schema.json#/$defs/NonEmptyString"
+          },
+          "uniqueItems": true
+        },
+        "requiredReadiness": {
+          "type": "array",
+          "items": {
+            "$ref": "./projects.schema.json#/$defs/ProjectReadinessKind"
+          },
+          "uniqueItems": true
+        },
+        "resultSchemaRef": {
+          "$ref": "./common.schema.json#/$defs/VersionRef"
+        },
+        "operationRef": {
+          "$ref": "./operations.schema.json#/$defs/OperationRef"
+        },
+        "registeredOperationDigest": {
+          "$ref": "./common.schema.json#/$defs/Sha256Digest"
+        },
+        "validationPolicies": {
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/TaskValidationPolicyBinding"
+          }
+        },
+        "fixedPlanRef": {
+          "$ref": "./common.schema.json#/$defs/ResourceRef"
+        }
+      }
+    },
+    "RunExecutionQuestionRequest": {
+      "title": "RunExecutionQuestionRequest",
+      "description": "A question-mode execution request: the server resolves the allowed published task within the pinned project revision and approved input.",
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["mode", "projectRevisionRef", "inputSnapshotRef", "inputSnapshotDigest"],
+      "properties": {
+        "mode": {
+          "const": "question"
+        },
+        "projectRevisionRef": {
+          "$ref": "./projects.schema.json#/$defs/ProjectRevisionRef"
+        },
+        "inputSnapshotRef": {
+          "$ref": "./common.schema.json#/$defs/ResourceRef"
+        },
+        "inputSnapshotDigest": {
+          "$ref": "./common.schema.json#/$defs/Sha256Digest"
+        }
+      }
+    },
+    "RunExecutionTaskRequest": {
+      "title": "RunExecutionTaskRequest",
+      "description": "A task-mode execution request: an explicitly bound published task with parameters. The parameters are re-validated server-side against the binding's parameter schema.",
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "mode",
+        "projectRevisionRef",
+        "inputSnapshotRef",
+        "inputSnapshotDigest",
+        "taskBindingRef",
+        "parameters"
+      ],
+      "properties": {
+        "mode": {
+          "const": "task"
+        },
+        "projectRevisionRef": {
+          "$ref": "./projects.schema.json#/$defs/ProjectRevisionRef"
+        },
+        "inputSnapshotRef": {
+          "$ref": "./common.schema.json#/$defs/ResourceRef"
+        },
+        "inputSnapshotDigest": {
+          "$ref": "./common.schema.json#/$defs/Sha256Digest"
+        },
+        "taskBindingRef": {
+          "$ref": "./common.schema.json#/$defs/VersionRef"
+        },
+        "parameters": {
+          "type": "object"
+        }
+      }
+    },
+    "RunExecutionRequest": {
+      "title": "RunExecutionRequest",
+      "description": "The optional `task` field added to the existing POST /runs request. The two modes are discriminated by `mode`; `question` keeps the existing behaviour and `task` uses a fixed binding and an explicit plan.",
+      "oneOf": [
+        {
+          "$ref": "#/$defs/RunExecutionQuestionRequest"
+        },
+        {
+          "$ref": "#/$defs/RunExecutionTaskRequest"
+        }
+      ]
+    },
+    "EffectiveTime": {
+      "title": "EffectiveTime",
+      "description": "The business-valid instant and the recorded-log sequence a run is pinned to. Both are needed so a resume never mixes a newer attribute with an older exemption.",
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["validAt", "asOfRecordedSeq"],
+      "properties": {
+        "validAt": {
+          "$ref": "./common.schema.json#/$defs/Rfc3339UtcTimestamp"
+        },
+        "asOfRecordedSeq": {
+          "$ref": "./common.schema.json#/$defs/RevisionString"
+        }
+      }
+    },
+    "RunExecutionBinding": {
+      "title": "RunExecutionBinding",
+      "description": "The immutable execution binding the server creates for a run (SPEC v0.3a §EX-2.1). It pins the request, resolved profile, runtime, allowed task bindings, the input manifest digest at creation, effective limits and effective time. It is archived and referenced by RunManifest.executionBindingRef; later evidence appends to the manifest without rewriting this binding.",
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "schemaVersion",
+        "runId",
+        "request",
+        "resolvedProfileRef",
+        "runtimeRef",
+        "allowedTaskBindingRefs",
+        "inputManifestDigestAtCreation",
+        "effectiveLimitsRef",
+        "effectiveTime"
+      ],
+      "properties": {
+        "schemaVersion": {
+          "const": "run-execution-binding@1"
+        },
+        "runId": {
+          "$ref": "./common.schema.json#/$defs/Uuid"
+        },
+        "request": {
+          "$ref": "#/$defs/RunExecutionRequest"
+        },
+        "resolvedProfileRef": {
+          "$ref": "./industry.schema.json#/$defs/ResolvedProfileRef"
+        },
+        "runtimeRef": {
+          "$ref": "./common.schema.json#/$defs/VersionRef"
+        },
+        "allowedTaskBindingRefs": {
+          "type": "array",
+          "items": {
+            "$ref": "./common.schema.json#/$defs/VersionRef"
+          }
+        },
+        "inputManifestDigestAtCreation": {
+          "$ref": "./common.schema.json#/$defs/Sha256Digest"
+        },
+        "effectiveLimitsRef": {
+          "$ref": "./common.schema.json#/$defs/VersionRef"
+        },
+        "effectiveTime": {
+          "$ref": "#/$defs/EffectiveTime"
+        }
+      }
+    },
+    "TaskCapabilityState": {
+      "title": "TaskCapabilityState",
+      "description": "Whether a declared task can actually execute. `not_ready` means the semantics are published but a required projection/capability is missing; `unavailable` means no implementation is bound.",
+      "type": "string",
+      "enum": ["available", "not_ready", "unavailable"]
+    },
+    "CapabilityBlocker": {
+      "title": "CapabilityBlocker",
+      "description": "One actionable reason a task is not available. `code` is the machine contract (registered error catalogue); `message` is user-facing copy. No secrets or another project's data appear here.",
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["code", "message", "retryable"],
+      "properties": {
+        "code": {
+          "$ref": "./common.schema.json#/$defs/NonEmptyString"
+        },
+        "message": {
+          "$ref": "./common.schema.json#/$defs/NonEmptyString"
+        },
+        "retryable": {
+          "type": "boolean"
+        },
+        "capabilityName": {
+          "$ref": "./common.schema.json#/$defs/NonEmptyString"
+        },
+        "readinessKind": {
+          "$ref": "./projects.schema.json#/$defs/ProjectReadinessKind"
+        }
+      }
+    },
+    "TaskCapabilityStatus": {
+      "title": "TaskCapabilityStatus",
+      "description": "Capability/readiness status of one published task binding for a project revision. It reports the declared requirements and the concrete blockers so a UI can show what to fix instead of a bare failure.",
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "schemaVersion",
+        "taskBindingRef",
+        "state",
+        "requiredCapabilities",
+        "requiredReadiness",
+        "blockers"
+      ],
+      "properties": {
+        "schemaVersion": {
+          "const": "task-capability-status@1"
+        },
+        "taskBindingRef": {
+          "$ref": "./common.schema.json#/$defs/VersionRef"
+        },
+        "state": {
+          "$ref": "#/$defs/TaskCapabilityState"
+        },
+        "requiredCapabilities": {
+          "type": "array",
+          "items": {
+            "$ref": "./common.schema.json#/$defs/NonEmptyString"
+          },
+          "uniqueItems": true
+        },
+        "requiredReadiness": {
+          "type": "array",
+          "items": {
+            "$ref": "./projects.schema.json#/$defs/ProjectReadinessKind"
+          },
+          "uniqueItems": true
+        },
+        "blockers": {
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/CapabilityBlocker"
+          }
+        }
+      }
+    }
+  }
+}

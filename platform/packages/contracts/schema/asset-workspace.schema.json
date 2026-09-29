@@ -1,0 +1,152 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://ontology.local/schema/asset-workspace.schema.json",
+  "title": "AssetWorkspaceContracts",
+  "$comment": "SPEC v0.3a asset-data-ui §3.1: industry workspace, boundary, draft and candidate shapes. These are data-only: no framework, database, HTTP or industry implementation types are referenced. A workspace owns a business boundary and an append-only draft head; published versions and candidates are pinned by ref/digest, never mutated in place.",
+  "$defs": {
+    "IndustryWorkspaceState": {
+      "title": "IndustryWorkspaceState",
+      "description": "Draft lifecycle. `published` and `archived` are terminal for the current head; editing appends a new draft revision.",
+      "type": "string",
+      "enum": ["draft", "review", "published", "archived"]
+    },
+    "IndustryWorkspaceApplicability": {
+      "title": "IndustryWorkspaceApplicability",
+      "description": "Declared applicability window of an industry workspace. `region` names a business region, not a physical location; the window is informational and every resolved run still pins exact revisions.",
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "region": {
+          "$ref": "./common.schema.json#/$defs/NonEmptyString"
+        },
+        "validFrom": {
+          "$ref": "./common.schema.json#/$defs/Rfc3339UtcTimestamp"
+        },
+        "validTo": {
+          "$ref": "./common.schema.json#/$defs/Rfc3339UtcTimestamp"
+        }
+      }
+    },
+    "IndustryWorkspaceBoundary": {
+      "title": "IndustryWorkspaceBoundary",
+      "description": "The business boundary the workspace models: goals it targets, what is in scope and what is explicitly excluded, plus applicability. Excluded entries are kept so the boundary stays falsifiable instead of silently shrinking.",
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["goals", "included", "excluded", "applicability"],
+      "properties": {
+        "goals": {
+          "type": "array",
+          "items": {
+            "$ref": "./common.schema.json#/$defs/NonEmptyString"
+          }
+        },
+        "included": {
+          "type": "array",
+          "items": {
+            "$ref": "./common.schema.json#/$defs/NonEmptyString"
+          }
+        },
+        "excluded": {
+          "type": "array",
+          "items": {
+            "$ref": "./common.schema.json#/$defs/NonEmptyString"
+          }
+        },
+        "applicability": {
+          "$ref": "#/$defs/IndustryWorkspaceApplicability"
+        }
+      }
+    },
+    "IndustryWorkspace": {
+      "title": "IndustryWorkspace",
+      "description": "An industry workspace read shape. `headRevision` is the mutable draft head; the latest published pack is pinned separately, so a newer package never rewrites an existing workspace or project.",
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "workspaceId",
+        "namespace",
+        "displayName",
+        "boundary",
+        "headRevision",
+        "state"
+      ],
+      "properties": {
+        "workspaceId": {
+          "$ref": "./common.schema.json#/$defs/Uuid"
+        },
+        "namespace": {
+          "$ref": "./common.schema.json#/$defs/Namespace"
+        },
+        "displayName": {
+          "$ref": "./common.schema.json#/$defs/NonEmptyString"
+        },
+        "boundary": {
+          "$ref": "#/$defs/IndustryWorkspaceBoundary"
+        },
+        "headRevision": {
+          "$ref": "./common.schema.json#/$defs/RevisionString"
+        },
+        "latestPublishedPackRef": {
+          "$ref": "./common.schema.json#/$defs/VersionRef"
+        },
+        "state": {
+          "$ref": "#/$defs/IndustryWorkspaceState"
+        }
+      }
+    },
+    "AssetDraftCandidateRef": {
+      "title": "AssetDraftCandidateRef",
+      "description": "A logical definition id pinned to one immutable candidate version. A content-changing edit appends a new candidate id; the digest lets a reader detect a candidate that was replaced instead of edited.",
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["logicalId", "candidateId", "digest"],
+      "properties": {
+        "logicalId": {
+          "$ref": "./common.schema.json#/$defs/NonEmptyString"
+        },
+        "candidateId": {
+          "$ref": "./common.schema.json#/$defs/Uuid"
+        },
+        "digest": {
+          "$ref": "./common.schema.json#/$defs/Sha256Digest"
+        }
+      }
+    },
+    "AssetDraftVersion": {
+      "title": "AssetDraftVersion",
+      "description": "One append-only draft revision of an industry workspace. `documentSetRef` fixes the sources the draft was generated from; candidate refs point at immutable candidate versions, never at mutable payloads.",
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["workspaceId", "revision", "digest", "documentSetRef", "candidateRefs"],
+      "properties": {
+        "workspaceId": {
+          "$ref": "./common.schema.json#/$defs/Uuid"
+        },
+        "revision": {
+          "$ref": "./common.schema.json#/$defs/RevisionString"
+        },
+        "digest": {
+          "$ref": "./common.schema.json#/$defs/Sha256Digest"
+        },
+        "basePackRef": {
+          "$ref": "./common.schema.json#/$defs/VersionRef"
+        },
+        "documentSetRef": {
+          "$ref": "./common.schema.json#/$defs/ResourceRef"
+        },
+        "candidateRefs": {
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/AssetDraftCandidateRef"
+          }
+        },
+        "syntheticExampleSetRef": {
+          "$ref": "./common.schema.json#/$defs/ResourceRef"
+        },
+        "validationRef": {
+          "$ref": "./common.schema.json#/$defs/ResourceRef"
+        }
+      }
+    }
+  }
+}

@@ -1,0 +1,52 @@
+# V03-025：装配项目语义与 SQL 查询正常工具路径
+
+阶段 A · backend · P1 · 状态 planned · GitHub [#199](https://github.com/Yijtu/ontology/issues/199)
+
+执行工作线：feat/core-planning-provenance；目标：main。本批尚未开始实现；V03 是规划 ID，GitHub 编号见上述链接与 manifest。
+
+## 目标与范围
+
+- 固定项目 mapping 编译合法 semantic/direct SQL plan，经 data_query 查询实际批准快照。
+- 保留 AST/参数化/白名单/只读角色，单位规范与结果 pointers/evidence 完整，unsupported/snapshot 缺失明确返回。
+- 两业务后端相同语义结果可独立核对，startup fixture、越权对象与错误修订不能作为 fallback。
+
+## 依赖与进入条件
+
+Dependencies: #192, #194, #196
+
+依赖：[V03-018](issue-018-query-projection.md)、[V03-023](issue-023-task-input-artifacts.md)、[V03-024](issue-024-nl-plan-receipts.md)。
+开工先核对 V03-001 的能力/旧任务/WIP记录，复用已完成实现，只补本卡缺口。完成能力按独立审查合入 main，保留场景边界。
+
+## 验收条件
+
+- [ ] 固定项目 mapping 编译合法 semantic/direct SQL plan，经 data_query 查询实际批准快照。
+- [ ] 保留 AST/参数化/白名单/只读角色，单位规范与结果 pointers/evidence 完整，unsupported/snapshot 缺失明确返回。
+- [ ] 两业务后端相同语义结果可独立核对，startup fixture、越权对象与错误修订不能作为 fallback。
+- [ ] 实际结果与证据写入完成记录；同步必要契约、使用说明和本批状态，不因源码存在或受控模型响应而虚报完成。
+
+## 需求与规格
+
+- [execution-evidence.md](../../../../../tasks/spec-v0.3a/execution-evidence.md)
+
+故事范围：A.US-006、A.US-007、A.US-011、A.US-015。逐项覆盖见[覆盖表](../../coverage.md)。
+
+- A.US-007.AC-03 → A-T007-03：参数修改先展示具体差异供确认；生成 SQL／查询计划受 mapping、只读白名单及 Schema 校验约束。
+- A.FR-11 → A-F11：系统必须按 mapping 查询本项目实际批准数据。
+- A.FR-14 → A-F14：系统必须报告关系导航与查询结果的完整性。
+
+## 验证方法
+
+- 在 platform/ 运行受影响行为测试、pnpm run typecheck；相应包的 lint 与 pnpm run boundaries 适用时必须通过。
+- 测试期望来自固定需求和独立样例，负例必须保持阻断；计划 ID 不是测试已通过。
+
+## 失败与边界
+
+- 保留已有 WIP、旧 Issue 和 loop 状态；不整枝合并未完成研发，不自动 stash/reset 或覆盖工作区。
+- 授权来自可信上下文，行业包、输入/结果 refs、缓存、任务及导出均保持客户/项目隔离。
+- 不跳过失败/未知/不完整、不静默删规则或漏行、不用模型概率代替硬核验。
+- 本卡不默认授权对外发送报价、调用未授权服务或复制客户资料；所需真实资源按进入条件取得。
+
+## 完成记录
+
+- 当前：未开工；验证未运行。GitHub Issue：[#199](https://github.com/Yijtu/ontology/issues/199)；文档提交不代表功能完成。
+- 实现后记录：提交/PR、适用命令结果、满足的验收、未验证/外部条件、迁移配置与兼容影响。

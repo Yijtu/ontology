@@ -293,6 +293,52 @@ export interface PublishedAnswerBody {
 }
 
 /**
+ * The canonical hash body of an `answer-draft@3` (SPEC v0.3a §EX-7.1).
+ *
+ * It binds the verified typed result manifest, the finalization receipt archived *before* the
+ * draft, the execution binding and the narrative blocks/claims/assertions/limitations. It
+ * deliberately contains no `contentHash`, no `verificationId` and no table/verification
+ * receipt: those are produced after this body is hashed and live only on the read envelope
+ * `PublishedAnswerV3Envelope`. Counting them back into the body would make the draft hash
+ * depend on the verification that itself references the draft hash. `answer-draft@1`/`@2`
+ * bodies remain valid and are read unchanged through `PublishedAnswerBody`.
+ */
+export interface AnswerDraftV3Body {
+  readonly schemaVersion: 'answer-draft@3'
+  readonly resultManifestRef: ResourceRef
+  readonly resultManifestDigest: Sha256Digest
+  readonly finalizationReceiptRef: ResourceRef
+  readonly finalizationReceiptDigest: Sha256Digest
+  readonly executionBindingRef: ResourceRef
+  readonly blocks: readonly unknown[]
+  readonly claims: readonly DraftClaim[]
+  readonly assertions: readonly VerifiedAssertion[]
+  readonly limitations: readonly string[]
+}
+
+/**
+ * Read envelope for an `answer-draft@3`. `contentHash` is the digest of `body`; the
+ * verification and table-verification receipts are attached here, outside the hashed body, so
+ * a receipt may reference the draft hash without the draft depending on the receipt. Like
+ * `currentValidity`, this envelope metadata is never written back into the body.
+ */
+export interface PublishedAnswerV3Envelope {
+  readonly answerId: Uuid
+  readonly runId: Uuid
+  readonly contentHash: Sha256Digest
+  readonly verificationId: Uuid
+  readonly body: AnswerDraftV3Body
+  /** Archived after the draft; kept out of the body to avoid a draft↔verification cycle. */
+  readonly verificationReceiptRef?: ResourceRef
+  readonly tableVerificationReceiptRef?: ResourceRef
+  /** Current-world validity is envelope metadata; it never changes the body or its hash. */
+  readonly currentValidity?: {
+    readonly state: 'current' | 'superseded' | 'withdrawn' | 'unverifiable'
+    readonly reason?: string
+  }
+}
+
+/**
  * The final answer version. Its id binds the exact `draftHash`, `evidenceManifestHash`,
  * `verificationId` and scenario manifest the controller published, so a mismatched binding
  * can be detected instead of trusted (SPEC §4.1, INV-09).
