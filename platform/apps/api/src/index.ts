@@ -118,6 +118,8 @@ export type {
 } from './http/run-progress'
 export { registerJobRoutes } from './http/jobs'
 export type { JobApiOptions, JobRouteDependencies } from './http/jobs'
+export { registerAssetCandidateRoutes } from './http/asset-candidates'
+export type { AssetCandidateRouteDependencies } from './http/asset-candidates'
 export { registerWorkbenchRoutes } from './http/workbench'
 export type { WorkbenchApiOptions, WorkbenchRouteDependencies } from './http/workbench'
 export { registerDecisionRoutes } from './http/decisions'

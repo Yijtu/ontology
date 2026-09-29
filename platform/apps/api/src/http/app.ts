@@ -24,6 +24,8 @@ import { registerFeedbackRoutes } from './feedback'
 import type { FeedbackRouteDependencies } from './feedback'
 import { registerIndustryWorkspaceRoutes } from './industry-workspaces'
 import type { IndustryWorkspaceRouteDependencies } from './industry-workspaces'
+import { registerAssetCandidateRoutes } from './asset-candidates'
+import type { AssetCandidateRouteDependencies } from './asset-candidates'
 import { installErrorHandler } from './shared'
 import type { RequestAuthenticator } from './shared'
 
@@ -62,6 +64,8 @@ export interface ApiServerOptions {
   readonly feedback?: Omit<FeedbackRouteDependencies, 'authenticate'>
   /** Register the industry-workspace draft management surface (`/industry-workspaces`). */
   readonly industryWorkspaces?: Omit<IndustryWorkspaceRouteDependencies, 'authenticate'>
+  /** Register the definition-candidate generation surface (`/industry-workspaces/:id/generations`). */
+  readonly assetCandidates?: Omit<AssetCandidateRouteDependencies, 'authenticate'>
   readonly logger?: boolean
 }
 
@@ -108,6 +112,12 @@ export function createApiServer(options: ApiServerOptions): FastifyInstance {
   if (options.industryWorkspaces !== undefined) {
     registerIndustryWorkspaceRoutes(app, {
       ...options.industryWorkspaces,
+      authenticate: options.authenticate,
+    })
+  }
+  if (options.assetCandidates !== undefined) {
+    registerAssetCandidateRoutes(app, {
+      ...options.assetCandidates,
       authenticate: options.authenticate,
     })
   }

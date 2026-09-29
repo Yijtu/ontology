@@ -14,3 +14,4 @@ export type {
   IndustryWorkspaceEditView,
   IndustryWorkspaceServiceDependencies,
 } from './industry-workspace-service'
+export * from './definition-candidates'

@@ -30,6 +30,7 @@ export {
   MATERIALIZED_PROJECTION_REF,
 } from './materialization-store'
 export { PostgresAssetWorkspaceStore } from './asset-workspace-store'
+export { PostgresAssetCandidateStore } from './asset-candidate-store'
 export { PostgresProjectStore } from './project-store'
 export { ControlPostgresRepository } from './repository'
 export type {
