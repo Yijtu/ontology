@@ -11,6 +11,7 @@ import {
   ControlPostgresDatabase,
   ControlPostgresRepository,
   PostgresAnswerStore,
+  PostgresAssetWorkspaceStore,
   PostgresBudgetLedgerStore,
   PostgresCandidateStore,
   PostgresComponentRegistryStore,
@@ -39,6 +40,9 @@ import {
   ExtractionStageHandler,
   InMemoryIndustryManifestSource,
   InMemoryIndustrySchemaSource,
+  IndustryWorkspaceService,
+  INDUSTRY_WORKSPACE_CREATED_TOPIC,
+  INDUSTRY_WORKSPACE_DRAFT_APPENDED_TOPIC,
   JobService,
   JobWorker,
   OutboxDispatcher,
@@ -64,6 +68,7 @@ import type {
   DocumentParserPort,
   GenerationPort,
   IndustryManifestSource,
+  IndustryWorkspaceStore,
   InputValidityPort,
   OperationRegistry,
   OutboxMessageRecord,
@@ -1018,6 +1023,44 @@ class UnsupportedOutboxConsumer implements OutboxConsumer {
   }
 }
 
+/**
+ * Acknowledge the industry-workspace lifecycle topics. The workspace write already committed
+ * the workspace row and the immutable draft revision in the same transaction as the outbox
+ * row, so the consumer only re-verifies that the referenced revision is durably visible
+ * before acking; it creates no state and never revives a workspace the source transaction
+ * did not commit.
+ */
+class IndustryWorkspaceOutboxConsumer implements OutboxConsumer {
+  readonly topics = [
+    INDUSTRY_WORKSPACE_CREATED_TOPIC,
+    INDUSTRY_WORKSPACE_DRAFT_APPENDED_TOPIC,
+  ] as const
+  readonly #store: IndustryWorkspaceStore
+  readonly #scopeRef: ScopeRef
+
+  constructor(store: IndustryWorkspaceStore, scopeRef: ScopeRef) {
+    this.#store = store
+    this.#scopeRef = scopeRef
+  }
+
+  async consume(message: OutboxMessageRecord, ctx: ToolContext): Promise<void> {
+    if (!isRecord(message.payload)) throw new Error('industry workspace outbox payload is malformed')
+    const workspaceId = message.payload['workspaceId']
+    const revision = message.payload['revision']
+    if (typeof workspaceId !== 'string' || typeof revision !== 'string') {
+      throw new Error('industry workspace outbox payload is malformed')
+    }
+    const workspace = await this.#store.getWorkspace(this.#scopeRef, workspaceId, ctx)
+    if (workspace === undefined) {
+      throw new Error('industry workspace outbox references an unknown workspace')
+    }
+    const draft = await this.#store.getDraft(this.#scopeRef, workspaceId, revision, ctx)
+    if (draft === undefined) {
+      throw new Error('industry workspace outbox references an unknown draft revision')
+    }
+  }
+}
+
 function sourceRefsOf(scenario: CoreExampleScenario): SourceRef[] {
   const refs = [
     ...scenario.rawSources.map((source) => source.sourceRef),
@@ -1072,6 +1115,7 @@ export async function createCoreLocalComposition(options: CoreLocalCompositionOp
     const profileStore = new PostgresProfileStore(database)
     const runStore = new PostgresRunStore(database)
     const jobStore = new PostgresJobStore(database)
+    const workspaceStore = new PostgresAssetWorkspaceStore(database)
     const candidateStore = new PostgresCandidateStore(database)
     const identityStore = new PostgresIdentityDecisionStore(database)
     const publicationStore = new PostgresSemanticPublicationStore(database)
@@ -1334,6 +1378,7 @@ export async function createCoreLocalComposition(options: CoreLocalCompositionOp
     })
 
     const jobService = new JobService({ store: jobStore })
+    const industryWorkspaceService = new IndustryWorkspaceService({ store: workspaceStore, jobs: jobStore })
     const parser: DocumentParserPort = new LocalDocumentExtractionService({ blobs: blobStore, store: parseStore })
     const pipeline = new ExtractionPipeline({
       schemaSource,
@@ -1384,7 +1429,11 @@ export async function createCoreLocalComposition(options: CoreLocalCompositionOp
       materialization: materializationStore,
     })
     const outboxConsumer = new TopicOutboxConsumerRouter(
-      [materializationConsumer, new CoreFactsOutboxFallback(candidateStore, scopeRef)],
+      [
+        materializationConsumer,
+        new CoreFactsOutboxFallback(candidateStore, scopeRef),
+        new IndustryWorkspaceOutboxConsumer(workspaceStore, scopeRef),
+      ],
       new UnsupportedOutboxConsumer(),
     )
     const dispatcher = new OutboxDispatcher({ store: jobStore, consumer: outboxConsumer })
@@ -1492,6 +1541,7 @@ export async function createCoreLocalComposition(options: CoreLocalCompositionOp
         workbench: { profiles: profileResolver, sources, components: componentStore },
         decisions: { service: identityService, candidates: candidateStore, documents: parseStore },
         publications: { service: semanticPublication },
+        industryWorkspaces: { service: industryWorkspaceService },
         answers: { reader: controller },
         evidence: { service: provenanceRead.provenance },
         history: { service: provenanceRead.history },

@@ -2,6 +2,7 @@ import type { QueryResultRow } from 'pg'
 import {
   IndustryWorkspaceStoreError,
   assertAssetDraftVersionShape,
+  assertIndustryWorkspacePatchShape,
   assertIndustryWorkspaceShape,
   isRevisionString,
   isToolContext,
@@ -260,7 +261,11 @@ export class PostgresAssetWorkspaceStore implements IndustryWorkspaceStore {
     if (input.draft.workspaceId !== workspaceId) {
       throw new IndustryWorkspaceStoreError('INVALID_DRAFT', 'the draft must belong to the appended workspace')
     }
+    if (input.workspacePatch !== undefined) {
+      assertIndustryWorkspacePatchShape(input.workspacePatch)
+    }
     const draft = input.draft
+    const patch = input.workspacePatch
 
     return this.#withScope(scopeRef, ctx, async (query) => {
       const locked = await query.query<WorkspaceRow>(
@@ -315,12 +320,21 @@ export class PostgresAssetWorkspaceStore implements IndustryWorkspaceStore {
       await this.#insertDraft(query, input.outboxJobId, draft, input)
       const advanced = await query.query<WorkspaceRow>(
         `UPDATE agent_platform.industry_workspaces
-            SET head_revision = $2::bigint, updated_at = $3::timestamptz
+            SET head_revision = $2::bigint,
+                display_name = COALESCE($4, display_name),
+                boundary = COALESCE($5::jsonb, boundary),
+                updated_at = $3::timestamptz
           WHERE tenant_id = current_setting('app.tenant_id')::uuid
             AND space_id = current_setting('app.space_id')::uuid
             AND workspace_id = $1::uuid
           RETURNING ${WORKSPACE_COLUMNS}`,
-        [workspaceId, nextRevision, input.recordedAt],
+        [
+          workspaceId,
+          nextRevision,
+          input.recordedAt,
+          patch?.displayName ?? null,
+          patch?.boundary === undefined ? null : JSON.stringify(patch.boundary),
+        ],
       )
       const updated = advanced.rows[0]
       if (updated === undefined) {
