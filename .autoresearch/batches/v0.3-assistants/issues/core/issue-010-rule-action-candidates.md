@@ -56,5 +56,11 @@ Dependencies: #183
 
 ## 完成记录
 
-- 当前：未开工；验证未运行。GitHub Issue：[#184](https://github.com/Yijtu/ontology/issues/184)；文档提交不代表功能完成。
-- 实现后记录：提交/PR、适用命令结果、满足的验收、未验证/外部条件、迁移配置与兼容影响。
+- 当前：已实现（分支 `feat/v03-010-rule-action-candidates`）；验证已运行。GitHub Issue：[#184](https://github.com/Yijtu/ontology/issues/184)；文档提交不代表功能完成。
+- 实现后记录：
+  - 契约：`contracts/src/rule-action-candidates.ts`（`RuleCandidateVersion`/`ActionDeclaration`/`RuleSupportReport`/`ActionCapabilityBinding`/`RuleActionCandidateStore`、`bindActionDeclaration`、`assessRuleSupport`）。语义引擎 `semantic-engine/src/rules/support.ts` 的 `FiniteGrammarRuleSupportValidator` 消费冻结的 `RuleExpressionNode` 有限语法，输出 `not_yet_executable` 且不删条件。应用层 `application/src/assets/rule-action-candidates/**`（服务、内存存储、模型输出解析，保留原条件/例外并拒绝脚本/URL 注入）。迁移 `064_asset_rule_action_candidates.sql`（append-only、RLS、lifecycle/kind 约束）。API 路由 `apps/api/src/http/rule-action-candidates.ts` 注册进 `createApiServer`。
+  - 验证命令与结果：`npx vitest run tests/unit/rule-action-candidates.spec.ts tests/integration/rule-action-candidates-postgres.spec.ts` → 22 passed；`npx vitest run --project unit` → 142 files / 1592 passed；`npx vitest run tests/architecture` → 8 passed；`npx tsc -p tsconfig.json`、`-p tsconfig.acceptance.json` 无错误；`npx eslint .` 无错误。
+  - 满足验收：规则候选展示条件/结论/例外/适用范围/来源/支持状态且可人工编辑（edit 追加新 revision）；unknown/conflict/explicit false 由 `assessRuleSupport` 分开表达；不同条件 OR、关系前提、递归/超深依赖保持 `not_yet_executable`；动作声明仅绑定已注册且授权、Schema digest 一致、只读的 operation，未绑定/不兼容保存为 not_executable 并给原因，脚本/URL/凭据在解析与绑定两处被拒绝；候选可保存但仅完整通过语义+能力校验才能 enable，从不删条件换通过。
+  - 未验证/外部条件：真实模型调用与真实行业动作注册未在本卡运行（合成样例/注册表替身）；`core-local-composition` 未挂载本路由（与 V03-008/009 现状一致），见 NEW_WORK。
+  - 迁移与兼容：新增 064，未改动 001..063；旧无 rule/action 的请求路径不变。
+

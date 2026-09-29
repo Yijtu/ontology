@@ -15,3 +15,4 @@ export type {
   IndustryWorkspaceServiceDependencies,
 } from './industry-workspace-service'
 export * from './definition-candidates'
+export * from './rule-action-candidates'
