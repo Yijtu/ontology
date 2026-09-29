@@ -96,6 +96,7 @@ export class SemanticPublicationService {
   readonly #candidates: SemanticPublicationServiceDependencies['candidates']
   readonly #schemaSource: SemanticPublicationServiceDependencies['schemaSource']
   readonly #identity: SemanticPublicationServiceDependencies['identity']
+  readonly #reviewableCandidates: SemanticPublicationServiceDependencies['reviewableCandidates']
   readonly #now: () => string
   readonly #newId: () => string
 
@@ -104,6 +105,7 @@ export class SemanticPublicationService {
     this.#candidates = dependencies.candidates
     this.#schemaSource = dependencies.schemaSource
     this.#identity = dependencies.identity
+    this.#reviewableCandidates = dependencies.reviewableCandidates
     this.#now = dependencies.now ?? (() => new Date().toISOString())
     this.#newId = dependencies.newId ?? (() => globalThis.crypto.randomUUID())
   }
@@ -118,10 +120,22 @@ export class SemanticPublicationService {
     if (!nonEmpty(request.reason)) {
       throw new SemanticPublicationError('INVALID_ARGUMENT', 'a review requires a reason')
     }
-    const candidate = await this.#requireCandidate(scopeRef, request.candidateId, ctx)
+    // A TBox candidate is reviewed through exactly this store/route; the reader only proves the
+    // candidate is visible (instance OR definition) in the scope. No second decision table.
+    if (this.#reviewableCandidates === undefined) {
+      await this.#requireCandidate(scopeRef, request.candidateId, ctx)
+    } else {
+      const view = await this.#reviewableCandidates.readCandidate(scopeRef, request.candidateId, ctx)
+      if (view === undefined) {
+        throw new SemanticPublicationError(
+          'CANDIDATE_NOT_FOUND',
+          `candidate ${request.candidateId} is not visible in this scope`,
+        )
+      }
+    }
     const draft: CandidateReviewDraft = {
       reviewId: this.#newId(),
-      candidateId: candidate.candidateId,
+      candidateId: request.candidateId,
       decision: request.decision,
       reason: request.reason,
       evidenceRefs: request.evidenceRefs ?? [],
@@ -173,6 +187,16 @@ export class SemanticPublicationService {
     let outboxJobId: Uuid | undefined
 
     for (const ref of request.approvedCandidateRefs) {
+      if (this.#reviewableCandidates !== undefined) {
+        const view = await this.#reviewableCandidates.readCandidate(scopeRef, ref.candidateId, ctx)
+        if (view !== undefined && view.domain === 'definition') {
+          throw new SemanticPublicationError(
+            'CANDIDATE_DOMAIN_UNPUBLISHABLE',
+            `candidate ${ref.candidateId} is a definition candidate and was not published as a fact or rule`,
+            { reasons: [{ candidateId: ref.candidateId, code: 'DEFINITION_DOMAIN', message: 'definition candidates publish through the definition publication flow' }] },
+          )
+        }
+      }
       const candidate = await this.#requireCandidate(scopeRef, ref.candidateId, ctx)
       if (candidate.kind !== ref.kind) {
         throw new SemanticPublicationError(

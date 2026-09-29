@@ -69,6 +69,8 @@ export type AssetCandidateIssueCode =
   | 'ENDPOINT_UNRESOLVED'
   | 'TERMINOLOGY_MISMATCH'
   | 'UNIT_CONFLICT'
+  | 'INVALID_CARDINALITY'
+  | 'INVALID_IDENTITY'
   | 'INVALID_MODEL_OUTPUT'
 
 export interface AssetCandidateIssue {
@@ -88,6 +90,8 @@ export interface DefinitionCandidateConflict {
     | 'endpoint_unresolved'
     | 'terminology_mismatch'
     | 'unit_conflict'
+    | 'cardinality_conflict'
+    | 'identity_conflict'
   readonly message: string
   readonly relatedLogicalIds: readonly string[]
 }

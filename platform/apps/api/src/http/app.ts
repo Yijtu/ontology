@@ -26,6 +26,8 @@ import { registerIndustryWorkspaceRoutes } from './industry-workspaces'
 import type { IndustryWorkspaceRouteDependencies } from './industry-workspaces'
 import { registerAssetCandidateRoutes } from './asset-candidates'
 import type { AssetCandidateRouteDependencies } from './asset-candidates'
+import { registerDefinitionEditingRoutes } from './definition-editing'
+import type { DefinitionEditingRouteDependencies } from './definition-editing'
 import { registerInstanceReviewRoutes } from './instances'
 import type { InstanceReviewRouteDependencies } from './instances'
 import { installErrorHandler } from './shared'
@@ -68,6 +70,8 @@ export interface ApiServerOptions {
   readonly industryWorkspaces?: Omit<IndustryWorkspaceRouteDependencies, 'authenticate'>
   /** Register the definition-candidate generation surface (`/industry-workspaces/:id/generations`). */
   readonly assetCandidates?: Omit<AssetCandidateRouteDependencies, 'authenticate'>
+  /** Register the definition editing/validation surface (`/industry-workspaces/:id/candidates/:id/edits`). */
+  readonly definitionEditing?: Omit<DefinitionEditingRouteDependencies, 'authenticate'>
   /** Register the public instance review surface (`/projects/:id/instance-records`). */
   readonly instanceReviews?: Omit<InstanceReviewRouteDependencies, 'authenticate'>
   readonly logger?: boolean
@@ -122,6 +126,12 @@ export function createApiServer(options: ApiServerOptions): FastifyInstance {
   if (options.assetCandidates !== undefined) {
     registerAssetCandidateRoutes(app, {
       ...options.assetCandidates,
+      authenticate: options.authenticate,
+    })
+  }
+  if (options.definitionEditing !== undefined) {
+    registerDefinitionEditingRoutes(app, {
+      ...options.definitionEditing,
       authenticate: options.authenticate,
     })
   }

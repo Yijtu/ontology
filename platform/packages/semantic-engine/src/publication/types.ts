@@ -2,6 +2,7 @@ import type {
   CandidateStore,
   IdentityDecisionStore,
   IndustrySchemaSource,
+  ReviewableCandidateReader,
   SemanticPublicationStore,
 } from '@ontology/contracts'
 
@@ -22,6 +23,13 @@ export interface SemanticPublicationServiceDependencies {
   readonly schemaSource: IndustrySchemaSource
   /** Entity identity decisions; a published fact binds to the entity a candidate was asserted to. */
   readonly identity: IdentityDecisionStore
+  /**
+   * Optional dispatch over the candidate families a review may address (V03-009). When
+   * provided, `reviewCandidate` verifies visibility through it (instance OR definition) and
+   * `publish` explicitly refuses a definition candidate; the review store is still the only
+   * decision truth. Omitted preserves the extraction-only behaviour.
+   */
+  readonly reviewableCandidates?: ReviewableCandidateReader
   readonly now?: () => string
   readonly newId?: () => string
 }

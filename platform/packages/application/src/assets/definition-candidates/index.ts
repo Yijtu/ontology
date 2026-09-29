@@ -23,3 +23,22 @@ export type {
   DefinitionGenerationInput,
   DefinitionGenerationView,
 } from './service'
+export { InMemoryDefinitionEditingStore } from './in-memory-editing-store'
+export { CompositeReviewableCandidateReader } from './reviewable-reader'
+export type { CompositeReviewableCandidateReaderDependencies } from './reviewable-reader'
+export {
+  DefinitionCandidateEditingService,
+  DEFINITION_EDIT_MODEL_REF,
+  DEFINITION_EDIT_POLICY_REF,
+  DEFINITION_EDIT_RESPONSE_SCHEMA_REF,
+} from './editing-service'
+export type { DefinitionCandidateEditingDependencies } from './editing-service'
+export {
+  computeAffectedDefinitions,
+  currentDefinitionProjection,
+  diffDefinitionProjection,
+  issuesForCandidate,
+  validateDefinitionProjection,
+  HARD_DEFINITION_ISSUES,
+} from './validation'
+export type { DefinitionValidationContext } from './validation'

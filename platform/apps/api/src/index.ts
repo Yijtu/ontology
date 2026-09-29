@@ -119,6 +119,8 @@ export type {
 export { registerJobRoutes } from './http/jobs'
 export type { JobApiOptions, JobRouteDependencies } from './http/jobs'
 export { registerAssetCandidateRoutes } from './http/asset-candidates'
+export { registerDefinitionEditingRoutes } from './http/definition-editing'
+export type { DefinitionEditingRouteDependencies } from './http/definition-editing'
 export type { AssetCandidateRouteDependencies } from './http/asset-candidates'
 export { registerWorkbenchRoutes } from './http/workbench'
 export type { WorkbenchApiOptions, WorkbenchRouteDependencies } from './http/workbench'
