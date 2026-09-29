@@ -46,6 +46,12 @@ export type { ExtractOptions } from './extract'
 
 export { sha256DigestOfBytes, sha256DigestOfText, deterministicUuid } from './hashing'
 
+export {
+  STRUCTURED_PARSER_ID,
+  STRUCTURED_PARSER_VERSION,
+  StructuredDocumentParser,
+} from './structured'
+
 export type {
   DocumentArtifactPublishRequest,
   DocumentArtifactStageRequest,
