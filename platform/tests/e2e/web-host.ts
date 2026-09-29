@@ -84,7 +84,9 @@ export async function startWebHost(apiOrigin: string): Promise<WebHost> {
       res.end()
       return
     }
-    void serveStatic(url, res)
+    // Serve by pathname only; the query carries the deployment/case hints and must not leak
+    // into the filesystem lookup (otherwise a second HTML entry falls back to index.html).
+    void serveStatic(requested.pathname, res)
   })
   await new Promise<void>((done) => server.listen(0, '127.0.0.1', done))
   const address = server.address()

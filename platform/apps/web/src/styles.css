@@ -952,3 +952,40 @@ button:disabled {
     margin-right: 0;
   }
 }
+
+/* Public dual-assistant shell (V03-022). */
+.assistant-shell {
+  max-width: 1100px;
+  margin: 0 auto;
+  padding: 24px;
+}
+
+.assistant-shell__assistants {
+  display: flex;
+  gap: 8px;
+}
+
+.assistant-shell__assistant[data-active='true'] {
+  border-color: var(--accent);
+  color: var(--accent);
+}
+
+.assistant-shell__module-tabs {
+  display: flex;
+  gap: 8px;
+  margin-bottom: 12px;
+}
+
+.assistant-shell__module,
+.assistant-shell__state,
+.assistant-shell__generic-result {
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  padding: 12px;
+  margin-bottom: 12px;
+  background: var(--surface);
+}
+
+.assistant-shell__readonly {
+  color: var(--warn);
+}
