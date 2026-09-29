@@ -161,3 +161,26 @@ export { initialReviewState, reviewReducer, selectionStillPresent } from './stat
 export type { ReviewError, ReviewEvent, ReviewPhase, ReviewState } from './state/review'
 export { NARROW_MAX_WIDTH, viewportOf } from './components/useViewport'
 export type { Viewport } from './components/useViewport'
+export { AssistantShell, ASSISTANT_DEFINITIONS } from './components/AssistantShell'
+export type {
+  AssistantDefinition,
+  AssistantId,
+  AssistantModuleDeclarations,
+  AssistantShellProps,
+} from './components/AssistantShell'
+export { ScenarioErrorBoundary } from './components/ScenarioErrorBoundary'
+export type { ScenarioErrorBoundaryProps } from './components/ScenarioErrorBoundary'
+export { ScenarioModuleRegistry, isLegalUiCapabilityMetadata } from './mount/registry'
+export type { MountContext, ScenarioMount } from './mount/registry'
+export type {
+  FrontendScenarioModule,
+  ScenarioDraftStore,
+  ScenarioExporter,
+  ScenarioFieldChange,
+  ScenarioModuleView,
+  ScenarioParameterProps,
+  ScenarioResultProps,
+  ScenarioTaskEntry,
+  ScenarioVerifiedResult,
+} from './mount/contract'
+export { createScenarioRegistry, registerBuiltInScenarioModules } from './scenarios/composition'
