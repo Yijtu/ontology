@@ -6,11 +6,11 @@
 
 - 先查看 `git status`，保留已有改动。只推进已授权的任务或批次；现有执行授权无需重复确认，本文件本身不启动开发循环或发布操作。
 - 开发入口为 `platform/`。先读当前任务卡及其依赖，再按需读下列规格，不必每次加载整个 backlog。
-- [PRD v0.2](tasks/prd-industry-semantic-agent-v0.2.md)规定产品范围；[SPEC 主文](tasks/spec-industry-semantic-agent-v0.2.md)及分册规定实现契约；[Issue manifest](.autoresearch/issues/manifest.json)记录任务依赖与真实 GitHub 编号映射。`LOCAL-xxx` 不自动等于 GitHub `#xxx`。
+- 现有实现契约见[v0.2 SPEC](tasks/spec-industry-semantic-agent-v0.2.md)及分册。双助手新增行为按[A 通用 SPEC](tasks/spec-generic-assistants-core-v0.3.md)及其两个分册、[B 造价 SPEC](tasks/spec-electrical-costing-mvp-v0.3.md)实施，对应[A PRD](tasks/prd-generic-assistants-core-v0.3.md)和[总体 PRD](tasks/prd-ontology-and-business-assistants-v0.3.md)。[v0.3 独立任务批次](.autoresearch/batches/v0.3-assistants/INDEX.md)与其 manifest 是本批依赖、就绪和编号的权威；[旧 manifest](.autoresearch/issues/manifest.json)保留旧执行记录，不能按旧队列自动执行本批。`V03-xxx`／`LOCAL-xxx` 均不自动等于 GitHub `#xxx`，规格和计划测试不代表已交付。
 - 用当前代码、验收证据与任务记录核对实际状态。文档中的“尚未实现”等历史描述不代表实时进度；记录不一致时标出差异，不能据此重复实现或虚报完成。
 - 本项目独立建设，历史演示原型不构成代码、接口、数据迁移、页面或测试兼容要求；不以旧实现输出作为正确性依据。DataOS 仅视为数据中台，未验证能力不得成为实现前提。
 - 分支和工作区用途见[分支管理](docs/branch-management.md)。以 `git branch --show-current` 为准，不从目录名推断分支；功能分支 upstream 必须指向同名远端分支。
-- 通用 Core 改动与场景实现分开提交；未完成的 Core 研发分支不自动整枝合入业务 POC。清理分支前检查提交归属和工作区状态，独有历史先保留归档引用。
+- 通用能力和公共前端先独立验收合入 main，场景分支同步已验收基线后开发专属资产、函数、适配器与页面；场景发现的通用缺口按同一路径回流。通用与场景改动分开任务／提交，未完成研发分支不自动整枝合入业务 POC。清理分支前检查提交归属和工作区状态，独有历史先保留归档引用。
 
 ## 架构边界
 
@@ -19,6 +19,7 @@
 - `contracts` 只定义公共数据、Schema、端口、版本和错误，不依赖具体框架、数据库、HTTP 或行业实现。边界数据通过运行时 Schema 校验，不能仅靠 TypeScript 类型断言。
 - `core`、`application` 和通用服务通过端口接收能力；SDK、数据库驱动和网络协议留在适配器。具体实现由装配入口注入，运行时通过工具 gateway 获取数据。
 - 行业声明包、客户扩展、物理数据映射、Agent runtime、数据后端、工具传输、模型与领域计算保持独立。新增行业或替换其中一个组件，不应要求改写通用核心。
+- 公共双助手、资料／审核／任务／结果／证据组件与场景专业 UI 分开；场景组合入口挂载专业表单和展示，不在公共前端按行业名称分支。声明式行业包不夹带 UI 代码。
 - 行业包只含语义和声明式约束，不嵌入密钥、连接地址、物理列名或任意脚本；能源公式和策略属于 `extensions/home-energy`，不进入 core。
 - 本地调用和 MCP 共用领域服务、授权、错误与证据契约，不复制两套业务实现。业务查询存储与控制/审核/证据存储分开。
 - 从包的公共入口导入，禁止跨包相对路径或深层私有实现导入；不能用动态加载、类型逃逸或修改检查器规避边界。

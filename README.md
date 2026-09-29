@@ -10,6 +10,8 @@
 
 当前分支 `feat/electrical-costing-poc` 正在准备首个电气桥架造价 POC，[实施方案](docs/poc/electrical-costing/first-poc-plan-2026-09-29.md)说明范围、依赖与验收，目前尚未实现报价功能。主线、Anker 场景与后续 Core 研发分别在哪个分支、如何同步和清理，见[分支与工作区管理](docs/branch-management.md)。
 
+2026-09-29 的最新产品规划分两步：[A 通用双助手 Core PRD](tasks/prd-generic-assistants-core-v0.3.md)先补建模、业务任务、查询／规则／检索、核验溯源与公共前端，独立验收后合入 main；[B AI 造价师 MVP PRD](tasks/prd-ontology-and-business-assistants-v0.3.md)在造价专属分支同步主线后，挂载桥架资产、客户报价函数和专业页面。规划已转成[A 技术规格](tasks/spec-generic-assistants-core-v0.3.md)、[B 技术规格](tasks/spec-electrical-costing-mvp-v0.3.md)和[独立任务批次](.autoresearch/batches/v0.3-assistants/INDEX.md)。本批尚未开始实现；下文仍介绍已经可用的 Core。
+
 ## 从哪里开始读
 
 - [先看现在能做什么](#现在能做什么)

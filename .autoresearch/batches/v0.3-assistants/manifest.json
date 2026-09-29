@@ -1,0 +1,3307 @@
+{
+  "schema_version": 1,
+  "kind": "local-issue-batch",
+  "batch_id": "v0.3-assistants",
+  "created_at": "2026-09-29",
+  "platform": "local",
+  "status": "planned",
+  "implementation_started": false,
+  "github_repository": "Yijtu/ontology",
+  "planning_validation": {
+    "status": "passed",
+    "local_issue_files": 72,
+    "acceptance_criteria_covered": 166,
+    "functional_requirements_covered": 57,
+    "markdown_files_checked": 81,
+    "local_links_checked": 1840,
+    "dependencies_acyclic": true,
+    "source_hashes_checked": true,
+    "legacy_manifest_preserved": true,
+    "product_tests_run": false
+  },
+  "project_root": "D:/work/ontology-core-main",
+  "requirements_namespace": {
+    "A": "generic-core-prd",
+    "P": "overall-product-prd"
+  },
+  "sources": [
+    "tasks/prd-generic-assistants-core-v0.3.md",
+    "tasks/prd-ontology-and-business-assistants-v0.3.md",
+    "tasks/spec-generic-assistants-core-v0.3.md",
+    "tasks/spec-v0.3a/asset-data-ui.md",
+    "tasks/spec-v0.3a/execution-evidence.md",
+    "tasks/spec-electrical-costing-mvp-v0.3.md"
+  ],
+  "input_sha256": {
+    "tasks/prd-generic-assistants-core-v0.3.md": "fdb4d8606c35088d4818865e7bf5ae7f232715f9e95d76bec424d7f3aa93b610",
+    "tasks/prd-ontology-and-business-assistants-v0.3.md": "fc671e1bbc20da6072c7359851b17d338c255b4b350c284d6f2f5029b8abd782",
+    "tasks/spec-generic-assistants-core-v0.3.md": "5ee27d94884ddcb12b1d5b0e7fb777eb9569c530c13ece5bdb77ddc39aace57c",
+    "tasks/spec-v0.3a/asset-data-ui.md": "6ce26b2e9ad41aa50ebc719fcf7d2c6cd2d126cec82b1e146a080a6f080ba667",
+    "tasks/spec-v0.3a/execution-evidence.md": "064f795ecfeaaa31db0ef47378e4acb2ed36f20a14a121b7a182c0c66500305c",
+    "tasks/spec-electrical-costing-mvp-v0.3.md": "61af447fb01105c403b0b6bc4c7a9eda662a7e6d660f2c4d3b31e6806032156a"
+  },
+  "preserved_legacy_sha256": {
+    ".autoresearch/issues/manifest.json": "7119ed8574287ae9e2d65b3c9cbe1a8a3c8f9c42687a6f3f5b1e8f9e94e4b804"
+  },
+  "baselines": {
+    "main": "19c411e8db444e289e8c3ec0395ae909f2534601",
+    "documentation": {
+      "branch": "feat/electrical-costing-poc",
+      "head": "b339b8f6a1167218becdd7b33d144c02660f43ce"
+    },
+    "coreWip": {
+      "branch": "feat/core-planning-provenance",
+      "head": "d17c7b520298703feb65f86761f34f1557927aca"
+    }
+  },
+  "phase_gates": {
+    "A_release": "V03-047",
+    "B_main_sync": "V03-051",
+    "B_internal_e2e": "V03-069",
+    "B_real_adapter": "V03-070",
+    "B_real_acceptance": "V03-071",
+    "B_release": "V03-072"
+  },
+  "topological_layers": [
+    [
+      "V03-001",
+      "V03-048",
+      "V03-049",
+      "V03-050"
+    ],
+    [
+      "V03-002"
+    ],
+    [
+      "V03-003",
+      "V03-005",
+      "V03-022"
+    ],
+    [
+      "V03-004",
+      "V03-006"
+    ],
+    [
+      "V03-007",
+      "V03-011"
+    ],
+    [
+      "V03-008",
+      "V03-013"
+    ],
+    [
+      "V03-009"
+    ],
+    [
+      "V03-010"
+    ],
+    [
+      "V03-012",
+      "V03-014"
+    ],
+    [
+      "V03-015",
+      "V03-026"
+    ],
+    [
+      "V03-016"
+    ],
+    [
+      "V03-017",
+      "V03-019"
+    ],
+    [
+      "V03-018"
+    ],
+    [
+      "V03-020",
+      "V03-023",
+      "V03-027"
+    ],
+    [
+      "V03-024",
+      "V03-028",
+      "V03-030"
+    ],
+    [
+      "V03-025",
+      "V03-029",
+      "V03-031"
+    ],
+    [
+      "V03-021",
+      "V03-032"
+    ],
+    [
+      "V03-033",
+      "V03-034"
+    ],
+    [
+      "V03-035"
+    ],
+    [
+      "V03-036"
+    ],
+    [
+      "V03-037",
+      "V03-038",
+      "V03-046"
+    ],
+    [
+      "V03-039"
+    ],
+    [
+      "V03-040",
+      "V03-044"
+    ],
+    [
+      "V03-041",
+      "V03-043"
+    ],
+    [
+      "V03-042"
+    ],
+    [
+      "V03-045"
+    ],
+    [
+      "V03-047"
+    ],
+    [
+      "V03-051"
+    ],
+    [
+      "V03-052"
+    ],
+    [
+      "V03-053",
+      "V03-055"
+    ],
+    [
+      "V03-054",
+      "V03-056"
+    ],
+    [
+      "V03-057",
+      "V03-060",
+      "V03-070"
+    ],
+    [
+      "V03-058",
+      "V03-061"
+    ],
+    [
+      "V03-059"
+    ],
+    [
+      "V03-062",
+      "V03-065"
+    ],
+    [
+      "V03-063",
+      "V03-064",
+      "V03-066",
+      "V03-067",
+      "V03-068"
+    ],
+    [
+      "V03-069"
+    ],
+    [
+      "V03-071"
+    ],
+    [
+      "V03-072"
+    ]
+  ],
+  "issue_count": 72,
+  "phase_counts": {
+    "A": 47,
+    "B": 25
+  },
+  "coverage_counts": {
+    "stories": 40,
+    "acceptance_criteria": 166,
+    "functional_requirements": 57
+  },
+  "issues": [
+    {
+      "local_id": "V03-001",
+      "number": 1,
+      "title": "核对主线、WIP 与旧任务，冻结本批实施基线",
+      "phase": "A",
+      "type": "infra",
+      "priority": "P0",
+      "status": "planned",
+      "dependency_readiness": "ready_to_audit",
+      "external_readiness": "see_card",
+      "implementation_started": false,
+      "github_issue_number": null,
+      "github_url": null,
+      "file": ".autoresearch/batches/v0.3-assistants/issues/core/issue-001-baseline-wip-audit.md",
+      "depends_on": [],
+      "declared_story_refs": [
+        "A.US-001",
+        "A.US-015",
+        "A.US-016"
+      ],
+      "requirement_refs": [
+        "A.US-016.AC-06"
+      ],
+      "spec_refs": [
+        "tasks/spec-generic-assistants-core-v0.3.md#3-版本数据与一致性",
+        "tasks/spec-generic-assistants-core-v0.3.md#8-任务阶段门槛与合入-main"
+      ],
+      "merge_target": "main",
+      "working_line": "feat/core-planning-provenance",
+      "verification_state": "not_run",
+      "evidence": []
+    },
+    {
+      "local_id": "V03-002",
+      "number": 2,
+      "title": "扩展公共 Schema、版本引用与挂载契约",
+      "phase": "A",
+      "type": "backend",
+      "priority": "P0",
+      "status": "planned",
+      "dependency_readiness": "waiting_dependencies",
+      "external_readiness": "see_card",
+      "implementation_started": false,
+      "github_issue_number": null,
+      "github_url": null,
+      "file": ".autoresearch/batches/v0.3-assistants/issues/core/issue-002-public-contracts.md",
+      "depends_on": [
+        "V03-001"
+      ],
+      "declared_story_refs": [
+        "A.US-001",
+        "A.US-003",
+        "A.US-005",
+        "A.US-006",
+        "A.US-010",
+        "A.US-015"
+      ],
+      "requirement_refs": [
+        "A.US-015.AC-04"
+      ],
+      "spec_refs": [
+        "tasks/spec-generic-assistants-core-v0.3.md#4-api动作与前端契约"
+      ],
+      "merge_target": "main",
+      "working_line": "feat/core-planning-provenance",
+      "verification_state": "not_run",
+      "evidence": []
+    },
+    {
+      "local_id": "V03-003",
+      "number": 3,
+      "title": "新增工作区与项目修订的持久端口和追加迁移",
+      "phase": "A",
+      "type": "backend",
+      "priority": "P1",
+      "status": "planned",
+      "dependency_readiness": "waiting_dependencies",
+      "external_readiness": "see_card",
+      "implementation_started": false,
+      "github_issue_number": null,
+      "github_url": null,
+      "file": ".autoresearch/batches/v0.3-assistants/issues/core/issue-003-control-stores.md",
+      "depends_on": [
+        "V03-002"
+      ],
+      "declared_story_refs": [
+        "A.US-003",
+        "A.US-004",
+        "A.US-005",
+        "A.US-006",
+        "A.US-014"
+      ],
+      "requirement_refs": [
+        "P.US-002.AC-02"
+      ],
+      "spec_refs": [
+        "tasks/spec-v0.3a/asset-data-ui.md"
+      ],
+      "merge_target": "main",
+      "working_line": "feat/core-planning-provenance",
+      "verification_state": "not_run",
+      "evidence": []
+    },
+    {
+      "local_id": "V03-004",
+      "number": 4,
+      "title": "实现行业工作区、草稿修订与管理 API",
+      "phase": "A",
+      "type": "backend",
+      "priority": "P1",
+      "status": "planned",
+      "dependency_readiness": "waiting_dependencies",
+      "external_readiness": "see_card",
+      "implementation_started": false,
+      "github_issue_number": null,
+      "github_url": null,
+      "file": ".autoresearch/batches/v0.3-assistants/issues/core/issue-004-workspace-api.md",
+      "depends_on": [
+        "V03-003"
+      ],
+      "declared_story_refs": [
+        "A.US-001",
+        "A.US-003"
+      ],
+      "requirement_refs": [
+        "A.US-003.AC-01",
+        "A.FR-3",
+        "P.US-002.AC-01",
+        "P.US-002.AC-02",
+        "P.FR-2"
+      ],
+      "spec_refs": [
+        "tasks/spec-v0.3a/asset-data-ui.md"
+      ],
+      "merge_target": "main",
+      "working_line": "feat/core-planning-provenance",
+      "verification_state": "not_run",
+      "evidence": []
+    },
+    {
+      "local_id": "V03-005",
+      "number": 5,
+      "title": "实现 CSV/XLSX 有界解析与单元格来源",
+      "phase": "A",
+      "type": "backend",
+      "priority": "P1",
+      "status": "planned",
+      "dependency_readiness": "waiting_dependencies",
+      "external_readiness": "see_card",
+      "implementation_started": false,
+      "github_issue_number": null,
+      "github_url": null,
+      "file": ".autoresearch/batches/v0.3-assistants/issues/core/issue-005-structured-parser.md",
+      "depends_on": [
+        "V03-002"
+      ],
+      "declared_story_refs": [
+        "A.US-002",
+        "A.US-004"
+      ],
+      "requirement_refs": [
+        "A.US-002.AC-01",
+        "A.US-002.AC-03",
+        "P.US-003.AC-01",
+        "P.US-003.AC-03",
+        "P.US-013.AC-01",
+        "P.US-013.AC-02",
+        "P.FR-3"
+      ],
+      "spec_refs": [
+        "tasks/spec-v0.3a/asset-data-ui.md"
+      ],
+      "merge_target": "main",
+      "working_line": "feat/core-planning-provenance",
+      "verification_state": "not_run",
+      "evidence": []
+    },
+    {
+      "local_id": "V03-006",
+      "number": 6,
+      "title": "接通解析 Job、行对账、重试与修订回读",
+      "phase": "A",
+      "type": "backend",
+      "priority": "P1",
+      "status": "planned",
+      "dependency_readiness": "waiting_dependencies",
+      "external_readiness": "see_card",
+      "implementation_started": false,
+      "github_issue_number": null,
+      "github_url": null,
+      "file": ".autoresearch/batches/v0.3-assistants/issues/core/issue-006-ingestion-coverage.md",
+      "depends_on": [
+        "V03-003",
+        "V03-005"
+      ],
+      "declared_story_refs": [
+        "A.US-002",
+        "A.US-006",
+        "A.US-014"
+      ],
+      "requirement_refs": [
+        "A.US-002.AC-02",
+        "A.US-002.AC-03",
+        "A.FR-3",
+        "P.US-003.AC-01",
+        "P.US-003.AC-02",
+        "P.US-003.AC-03",
+        "P.US-013.AC-03",
+        "P.US-013.AC-04",
+        "P.FR-3",
+        "P.FR-19"
+      ],
+      "spec_refs": [
+        "tasks/spec-v0.3a/asset-data-ui.md"
+      ],
+      "merge_target": "main",
+      "working_line": "feat/core-planning-provenance",
+      "verification_state": "not_run",
+      "evidence": []
+    },
+    {
+      "local_id": "V03-007",
+      "number": 7,
+      "title": "将固定行业 Schema 注入抽取并保留精确值",
+      "phase": "A",
+      "type": "backend",
+      "priority": "P1",
+      "status": "planned",
+      "dependency_readiness": "waiting_dependencies",
+      "external_readiness": "see_card",
+      "implementation_started": false,
+      "github_issue_number": null,
+      "github_url": null,
+      "file": ".autoresearch/batches/v0.3-assistants/issues/core/issue-007-schema-extraction.md",
+      "depends_on": [
+        "V03-002",
+        "V03-006"
+      ],
+      "declared_story_refs": [
+        "A.US-004"
+      ],
+      "requirement_refs": [
+        "A.US-004.AC-01",
+        "A.US-004.AC-02",
+        "A.FR-7",
+        "P.US-008.AC-01",
+        "P.US-008.AC-02",
+        "P.US-008.AC-03",
+        "P.FR-12"
+      ],
+      "spec_refs": [
+        "tasks/spec-v0.3a/asset-data-ui.md"
+      ],
+      "merge_target": "main",
+      "working_line": "feat/core-planning-provenance",
+      "verification_state": "not_run",
+      "evidence": []
+    },
+    {
+      "local_id": "V03-008",
+      "number": 8,
+      "title": "实现从资料生成本体定义候选的服务",
+      "phase": "A",
+      "type": "backend",
+      "priority": "P1",
+      "status": "planned",
+      "dependency_readiness": "waiting_dependencies",
+      "external_readiness": "see_card",
+      "implementation_started": false,
+      "github_issue_number": null,
+      "github_url": null,
+      "file": ".autoresearch/batches/v0.3-assistants/issues/core/issue-008-tbox-candidates.md",
+      "depends_on": [
+        "V03-004",
+        "V03-006",
+        "V03-007"
+      ],
+      "declared_story_refs": [
+        "A.US-003"
+      ],
+      "requirement_refs": [
+        "A.US-003.AC-01",
+        "A.FR-4",
+        "P.US-002.AC-03",
+        "P.US-004.AC-01",
+        "P.US-004.AC-02",
+        "P.US-004.AC-03",
+        "P.FR-4",
+        "P.FR-5"
+      ],
+      "spec_refs": [
+        "tasks/spec-v0.3a/asset-data-ui.md"
+      ],
+      "merge_target": "main",
+      "working_line": "feat/core-planning-provenance",
+      "verification_state": "not_run",
+      "evidence": []
+    },
+    {
+      "local_id": "V03-009",
+      "number": 9,
+      "title": "实现定义编辑、术语消歧与兼容性校验",
+      "phase": "A",
+      "type": "backend",
+      "priority": "P1",
+      "status": "planned",
+      "dependency_readiness": "waiting_dependencies",
+      "external_readiness": "see_card",
+      "implementation_started": false,
+      "github_issue_number": null,
+      "github_url": null,
+      "file": ".autoresearch/batches/v0.3-assistants/issues/core/issue-009-definition-edit-validation.md",
+      "depends_on": [
+        "V03-008"
+      ],
+      "declared_story_refs": [
+        "A.US-003",
+        "A.US-005"
+      ],
+      "requirement_refs": [
+        "A.US-003.AC-02",
+        "P.US-004.AC-03",
+        "P.US-005.AC-01",
+        "P.US-005.AC-02",
+        "P.US-005.AC-03",
+        "P.FR-6",
+        "P.FR-7"
+      ],
+      "spec_refs": [
+        "tasks/spec-v0.3a/asset-data-ui.md"
+      ],
+      "merge_target": "main",
+      "working_line": "feat/core-planning-provenance",
+      "verification_state": "not_run",
+      "evidence": []
+    },
+    {
+      "local_id": "V03-010",
+      "number": 10,
+      "title": "实现规则与动作候选、支持校验和能力绑定",
+      "phase": "A",
+      "type": "backend",
+      "priority": "P1",
+      "status": "planned",
+      "dependency_readiness": "waiting_dependencies",
+      "external_readiness": "see_card",
+      "implementation_started": false,
+      "github_issue_number": null,
+      "github_url": null,
+      "file": ".autoresearch/batches/v0.3-assistants/issues/core/issue-010-rule-action-candidates.md",
+      "depends_on": [
+        "V03-009"
+      ],
+      "declared_story_refs": [
+        "A.US-003",
+        "A.US-005",
+        "A.US-010"
+      ],
+      "requirement_refs": [
+        "A.US-003.AC-01",
+        "A.US-003.AC-03",
+        "A.FR-4",
+        "A.FR-5",
+        "P.US-006.AC-01",
+        "P.US-006.AC-03",
+        "P.US-007.AC-01",
+        "P.FR-8",
+        "P.FR-9",
+        "P.FR-10"
+      ],
+      "spec_refs": [
+        "tasks/spec-v0.3a/asset-data-ui.md",
+        "tasks/spec-v0.3a/execution-evidence.md"
+      ],
+      "merge_target": "main",
+      "working_line": "feat/core-planning-provenance",
+      "verification_state": "not_run",
+      "evidence": []
+    },
+    {
+      "local_id": "V03-011",
+      "number": 11,
+      "title": "实现本体工作区首页、创建与资料操作前端",
+      "phase": "A",
+      "type": "frontend",
+      "priority": "P1",
+      "status": "planned",
+      "dependency_readiness": "waiting_dependencies",
+      "external_readiness": "see_card",
+      "implementation_started": false,
+      "github_issue_number": null,
+      "github_url": null,
+      "file": ".autoresearch/batches/v0.3-assistants/issues/core/issue-011-workspace-source-ui.md",
+      "depends_on": [
+        "V03-004",
+        "V03-006",
+        "V03-022"
+      ],
+      "declared_story_refs": [
+        "A.US-001",
+        "A.US-002",
+        "A.US-003"
+      ],
+      "requirement_refs": [
+        "A.US-001.AC-01",
+        "A.FR-1",
+        "P.US-001.AC-02",
+        "P.US-002.AC-01",
+        "P.US-002.AC-02",
+        "P.US-003.AC-02",
+        "P.FR-2"
+      ],
+      "spec_refs": [
+        "tasks/spec-v0.3a/asset-data-ui.md"
+      ],
+      "merge_target": "main",
+      "working_line": "feat/core-planning-provenance",
+      "verification_state": "not_run",
+      "evidence": []
+    },
+    {
+      "local_id": "V03-012",
+      "number": 12,
+      "title": "实现定义、规则、动作编辑审核工作台",
+      "phase": "A",
+      "type": "frontend",
+      "priority": "P1",
+      "status": "planned",
+      "dependency_readiness": "waiting_dependencies",
+      "external_readiness": "see_card",
+      "implementation_started": false,
+      "github_issue_number": null,
+      "github_url": null,
+      "file": ".autoresearch/batches/v0.3-assistants/issues/core/issue-012-definition-editor-ui.md",
+      "depends_on": [
+        "V03-009",
+        "V03-010",
+        "V03-011"
+      ],
+      "declared_story_refs": [
+        "A.US-003"
+      ],
+      "requirement_refs": [
+        "A.US-003.AC-02",
+        "A.US-003.AC-04",
+        "P.US-004.AC-01",
+        "P.US-004.AC-04",
+        "P.US-005.AC-01",
+        "P.US-005.AC-04",
+        "P.US-006.AC-01",
+        "P.US-006.AC-04",
+        "P.US-007.AC-04",
+        "P.FR-4",
+        "P.FR-6",
+        "P.FR-8"
+      ],
+      "spec_refs": [
+        "tasks/spec-v0.3a/asset-data-ui.md"
+      ],
+      "merge_target": "main",
+      "working_line": "feat/core-planning-provenance",
+      "verification_state": "not_run",
+      "evidence": []
+    },
+    {
+      "local_id": "V03-013",
+      "number": 13,
+      "title": "补齐公共实例身份裁决与关键字段确认流程",
+      "phase": "A",
+      "type": "fullstack",
+      "priority": "P1",
+      "status": "planned",
+      "dependency_readiness": "waiting_dependencies",
+      "external_readiness": "see_card",
+      "implementation_started": false,
+      "github_issue_number": null,
+      "github_url": null,
+      "file": ".autoresearch/batches/v0.3-assistants/issues/core/issue-013-instance-review-ui.md",
+      "depends_on": [
+        "V03-007",
+        "V03-011"
+      ],
+      "declared_story_refs": [
+        "A.US-004"
+      ],
+      "requirement_refs": [
+        "A.US-004.AC-03",
+        "A.US-004.AC-04",
+        "A.FR-8",
+        "P.US-008.AC-03",
+        "P.US-008.AC-04",
+        "P.US-010.AC-01",
+        "P.US-010.AC-02",
+        "P.US-010.AC-03",
+        "P.US-010.AC-04",
+        "P.US-014.AC-01",
+        "P.US-014.AC-02",
+        "P.FR-5",
+        "P.FR-13",
+        "P.FR-20"
+      ],
+      "spec_refs": [
+        "tasks/spec-v0.3a/asset-data-ui.md"
+      ],
+      "merge_target": "main",
+      "working_line": "feat/core-planning-provenance",
+      "verification_state": "not_run",
+      "evidence": []
+    },
+    {
+      "local_id": "V03-014",
+      "number": 14,
+      "title": "建立隔离合成实例与行业验证服务",
+      "phase": "A",
+      "type": "backend",
+      "priority": "P1",
+      "status": "planned",
+      "dependency_readiness": "waiting_dependencies",
+      "external_readiness": "see_card",
+      "implementation_started": false,
+      "github_issue_number": null,
+      "github_url": null,
+      "file": ".autoresearch/batches/v0.3-assistants/issues/core/issue-014-synthetic-validation.md",
+      "depends_on": [
+        "V03-009",
+        "V03-010",
+        "V03-013"
+      ],
+      "declared_story_refs": [
+        "A.US-005",
+        "A.US-008",
+        "A.US-010",
+        "A.US-015"
+      ],
+      "requirement_refs": [
+        "A.US-005.AC-01",
+        "A.US-005.AC-02",
+        "A.FR-9",
+        "P.US-009.AC-01",
+        "P.US-009.AC-02",
+        "P.US-009.AC-03",
+        "P.FR-5",
+        "P.FR-7",
+        "P.FR-16"
+      ],
+      "spec_refs": [
+        "tasks/spec-v0.3a/asset-data-ui.md",
+        "tasks/acceptance-main-core-product-2026-09-28.md"
+      ],
+      "merge_target": "main",
+      "working_line": "feat/core-planning-provenance",
+      "verification_state": "not_run",
+      "evidence": []
+    },
+    {
+      "local_id": "V03-015",
+      "number": 15,
+      "title": "接通行业包发布、动态目录与不可变导出",
+      "phase": "A",
+      "type": "backend",
+      "priority": "P0",
+      "status": "planned",
+      "dependency_readiness": "waiting_dependencies",
+      "external_readiness": "see_card",
+      "implementation_started": false,
+      "github_issue_number": null,
+      "github_url": null,
+      "file": ".autoresearch/batches/v0.3-assistants/issues/core/issue-015-dynamic-pack-publish.md",
+      "depends_on": [
+        "V03-003",
+        "V03-010",
+        "V03-014"
+      ],
+      "declared_story_refs": [
+        "A.US-005"
+      ],
+      "requirement_refs": [
+        "A.US-005.AC-01",
+        "A.US-005.AC-03",
+        "A.FR-10",
+        "P.US-005.AC-03",
+        "P.US-006.AC-03",
+        "P.US-011.AC-01",
+        "P.US-011.AC-02",
+        "P.US-011.AC-03",
+        "P.US-023.AC-04",
+        "P.FR-14",
+        "P.FR-15",
+        "P.FR-17"
+      ],
+      "spec_refs": [
+        "tasks/spec-v0.3a/asset-data-ui.md"
+      ],
+      "merge_target": "main",
+      "working_line": "feat/core-planning-provenance",
+      "verification_state": "not_run",
+      "evidence": []
+    },
+    {
+      "local_id": "V03-016",
+      "number": 16,
+      "title": "实现客户项目、版本挂载与修订服务",
+      "phase": "A",
+      "type": "backend",
+      "priority": "P1",
+      "status": "planned",
+      "dependency_readiness": "waiting_dependencies",
+      "external_readiness": "see_card",
+      "implementation_started": false,
+      "github_issue_number": null,
+      "github_url": null,
+      "file": ".autoresearch/batches/v0.3-assistants/issues/core/issue-016-project-bindings.md",
+      "depends_on": [
+        "V03-003",
+        "V03-015"
+      ],
+      "declared_story_refs": [
+        "A.US-006",
+        "A.US-014"
+      ],
+      "requirement_refs": [
+        "A.US-006.AC-01",
+        "A.US-014.AC-01",
+        "P.US-012.AC-01",
+        "P.US-012.AC-03",
+        "P.US-021.AC-01",
+        "P.FR-16",
+        "P.FR-17"
+      ],
+      "spec_refs": [
+        "tasks/spec-v0.3a/asset-data-ui.md"
+      ],
+      "merge_target": "main",
+      "working_line": "feat/core-planning-provenance",
+      "verification_state": "not_run",
+      "evidence": []
+    },
+    {
+      "local_id": "V03-017",
+      "number": 17,
+      "title": "实现列映射确认、单位规范与项目记录绑定",
+      "phase": "A",
+      "type": "backend",
+      "priority": "P1",
+      "status": "planned",
+      "dependency_readiness": "waiting_dependencies",
+      "external_readiness": "see_card",
+      "implementation_started": false,
+      "github_issue_number": null,
+      "github_url": null,
+      "file": ".autoresearch/batches/v0.3-assistants/issues/core/issue-017-project-mapping.md",
+      "depends_on": [
+        "V03-005",
+        "V03-006",
+        "V03-016"
+      ],
+      "declared_story_refs": [
+        "A.US-002",
+        "A.US-006"
+      ],
+      "requirement_refs": [
+        "A.US-002.AC-01",
+        "A.US-004.AC-02",
+        "A.US-006.AC-03",
+        "A.FR-11",
+        "P.US-008.AC-02",
+        "P.US-013.AC-01"
+      ],
+      "spec_refs": [
+        "tasks/spec-v0.3a/asset-data-ui.md"
+      ],
+      "merge_target": "main",
+      "working_line": "feat/core-planning-provenance",
+      "verification_state": "not_run",
+      "evidence": []
+    },
+    {
+      "local_id": "V03-018",
+      "number": 18,
+      "title": "将批准项目数据物化到可查询固定快照",
+      "phase": "A",
+      "type": "backend",
+      "priority": "P0",
+      "status": "planned",
+      "dependency_readiness": "waiting_dependencies",
+      "external_readiness": "see_card",
+      "implementation_started": false,
+      "github_issue_number": null,
+      "github_url": null,
+      "file": ".autoresearch/batches/v0.3-assistants/issues/core/issue-018-query-projection.md",
+      "depends_on": [
+        "V03-016",
+        "V03-017"
+      ],
+      "declared_story_refs": [
+        "A.US-006",
+        "A.US-015"
+      ],
+      "requirement_refs": [
+        "A.US-006.AC-01",
+        "A.US-006.AC-02",
+        "A.US-006.AC-03",
+        "A.FR-11",
+        "P.US-013.AC-04",
+        "P.FR-16",
+        "P.FR-18"
+      ],
+      "spec_refs": [
+        "tasks/spec-v0.3a/asset-data-ui.md"
+      ],
+      "merge_target": "main",
+      "working_line": "feat/core-planning-provenance",
+      "verification_state": "not_run",
+      "evidence": []
+    },
+    {
+      "local_id": "V03-019",
+      "number": 19,
+      "title": "实现项目文档 BM25 索引与修订撤回可见性",
+      "phase": "A",
+      "type": "backend",
+      "priority": "P1",
+      "status": "planned",
+      "dependency_readiness": "waiting_dependencies",
+      "external_readiness": "see_card",
+      "implementation_started": false,
+      "github_issue_number": null,
+      "github_url": null,
+      "file": ".autoresearch/batches/v0.3-assistants/issues/core/issue-019-document-index.md",
+      "depends_on": [
+        "V03-006",
+        "V03-016"
+      ],
+      "declared_story_refs": [
+        "A.US-012"
+      ],
+      "requirement_refs": [
+        "A.US-012.AC-01",
+        "A.US-012.AC-03",
+        "A.FR-16"
+      ],
+      "spec_refs": [
+        "tasks/spec-v0.3a/asset-data-ui.md"
+      ],
+      "merge_target": "main",
+      "working_line": "feat/core-planning-provenance",
+      "verification_state": "not_run",
+      "evidence": []
+    },
+    {
+      "local_id": "V03-020",
+      "number": 20,
+      "title": "实现项目、资料映射与就绪状态公共前端",
+      "phase": "A",
+      "type": "frontend",
+      "priority": "P1",
+      "status": "planned",
+      "dependency_readiness": "waiting_dependencies",
+      "external_readiness": "see_card",
+      "implementation_started": false,
+      "github_issue_number": null,
+      "github_url": null,
+      "file": ".autoresearch/batches/v0.3-assistants/issues/core/issue-020-project-data-ui.md",
+      "depends_on": [
+        "V03-016",
+        "V03-017",
+        "V03-018",
+        "V03-019",
+        "V03-022"
+      ],
+      "declared_story_refs": [
+        "A.US-001",
+        "A.US-002",
+        "A.US-006",
+        "A.US-012"
+      ],
+      "requirement_refs": [
+        "A.US-001.AC-01",
+        "A.US-002.AC-01",
+        "A.US-002.AC-02",
+        "A.US-002.AC-04",
+        "A.US-006.AC-04",
+        "A.FR-1",
+        "P.US-001.AC-02",
+        "P.US-012.AC-01",
+        "P.US-012.AC-03",
+        "P.US-012.AC-04",
+        "P.US-013.AC-05",
+        "P.FR-15"
+      ],
+      "spec_refs": [
+        "tasks/spec-v0.3a/asset-data-ui.md"
+      ],
+      "merge_target": "main",
+      "working_line": "feat/core-planning-provenance",
+      "verification_state": "not_run",
+      "evidence": []
+    },
+    {
+      "local_id": "V03-021",
+      "number": 21,
+      "title": "实现包验证发布、导出与项目挂载前端",
+      "phase": "A",
+      "type": "frontend",
+      "priority": "P1",
+      "status": "planned",
+      "dependency_readiness": "waiting_dependencies",
+      "external_readiness": "see_card",
+      "implementation_started": false,
+      "github_issue_number": null,
+      "github_url": null,
+      "file": ".autoresearch/batches/v0.3-assistants/issues/core/issue-021-package-publish-ui.md",
+      "depends_on": [
+        "V03-012",
+        "V03-013",
+        "V03-014",
+        "V03-015",
+        "V03-016",
+        "V03-022",
+        "V03-026",
+        "V03-031"
+      ],
+      "declared_story_refs": [
+        "A.US-005",
+        "A.US-016"
+      ],
+      "requirement_refs": [
+        "A.US-003.AC-04",
+        "A.US-005.AC-02",
+        "A.US-005.AC-03",
+        "A.US-005.AC-04",
+        "A.FR-10",
+        "P.US-007.AC-04",
+        "P.US-009.AC-01",
+        "P.US-009.AC-02",
+        "P.US-009.AC-04",
+        "P.US-011.AC-03",
+        "P.US-011.AC-04"
+      ],
+      "spec_refs": [
+        "tasks/spec-v0.3a/asset-data-ui.md"
+      ],
+      "merge_target": "main",
+      "working_line": "feat/core-planning-provenance",
+      "verification_state": "not_run",
+      "evidence": []
+    },
+    {
+      "local_id": "V03-022",
+      "number": 22,
+      "title": "实现公共双助手骨架与场景视图挂载端口",
+      "phase": "A",
+      "type": "frontend",
+      "priority": "P1",
+      "status": "planned",
+      "dependency_readiness": "waiting_dependencies",
+      "external_readiness": "see_card",
+      "implementation_started": false,
+      "github_issue_number": null,
+      "github_url": null,
+      "file": ".autoresearch/batches/v0.3-assistants/issues/core/issue-022-frontend-mount.md",
+      "depends_on": [
+        "V03-002"
+      ],
+      "declared_story_refs": [
+        "A.US-001",
+        "A.US-015"
+      ],
+      "requirement_refs": [
+        "A.US-001.AC-01",
+        "A.US-001.AC-02",
+        "A.US-015.AC-04",
+        "A.FR-1",
+        "A.FR-2",
+        "P.US-001.AC-01",
+        "P.FR-1",
+        "P.FR-35"
+      ],
+      "spec_refs": [
+        "tasks/spec-v0.3a/asset-data-ui.md"
+      ],
+      "merge_target": "main",
+      "working_line": "feat/core-planning-provenance",
+      "verification_state": "not_run",
+      "evidence": []
+    },
+    {
+      "local_id": "V03-023",
+      "number": 23,
+      "title": "实现版本化任务绑定、输入快照与策略预检",
+      "phase": "A",
+      "type": "backend",
+      "priority": "P1",
+      "status": "planned",
+      "dependency_readiness": "waiting_dependencies",
+      "external_readiness": "see_card",
+      "implementation_started": false,
+      "github_issue_number": null,
+      "github_url": null,
+      "file": ".autoresearch/batches/v0.3-assistants/issues/core/issue-023-task-input-artifacts.md",
+      "depends_on": [
+        "V03-002",
+        "V03-010",
+        "V03-016",
+        "V03-018"
+      ],
+      "declared_story_refs": [
+        "A.US-007",
+        "A.US-010",
+        "A.US-013"
+      ],
+      "requirement_refs": [
+        "A.US-003.AC-03",
+        "A.US-007.AC-03",
+        "A.US-010.AC-01",
+        "A.US-014.AC-01",
+        "A.FR-6",
+        "P.US-007.AC-01",
+        "P.US-007.AC-02",
+        "P.US-007.AC-03",
+        "P.US-012.AC-02",
+        "P.US-015.AC-03",
+        "P.US-017.AC-01",
+        "P.US-023.AC-03",
+        "P.FR-10",
+        "P.FR-11",
+        "P.FR-15",
+        "P.FR-18",
+        "P.FR-23",
+        "P.FR-24"
+      ],
+      "spec_refs": [
+        "tasks/spec-v0.3a/execution-evidence.md"
+      ],
+      "merge_target": "main",
+      "working_line": "feat/core-planning-provenance",
+      "verification_state": "not_run",
+      "evidence": []
+    },
+    {
+      "local_id": "V03-024",
+      "number": 24,
+      "title": "补齐 NL 路由、澄清与固定规划回执",
+      "phase": "A",
+      "type": "backend",
+      "priority": "P0",
+      "status": "planned",
+      "dependency_readiness": "waiting_dependencies",
+      "external_readiness": "see_card",
+      "implementation_started": false,
+      "github_issue_number": null,
+      "github_url": null,
+      "file": ".autoresearch/batches/v0.3-assistants/issues/core/issue-024-nl-plan-receipts.md",
+      "depends_on": [
+        "V03-007",
+        "V03-015",
+        "V03-023"
+      ],
+      "declared_story_refs": [
+        "A.US-007",
+        "A.US-013"
+      ],
+      "requirement_refs": [
+        "A.US-007.AC-01",
+        "A.US-007.AC-02",
+        "A.US-007.AC-03",
+        "A.US-013.AC-03",
+        "A.FR-12",
+        "P.US-015.AC-01",
+        "P.US-015.AC-02",
+        "P.FR-22"
+      ],
+      "spec_refs": [
+        "tasks/spec-v0.3a/execution-evidence.md"
+      ],
+      "merge_target": "main",
+      "working_line": "feat/core-planning-provenance",
+      "verification_state": "not_run",
+      "evidence": []
+    },
+    {
+      "local_id": "V03-025",
+      "number": 25,
+      "title": "装配项目语义与 SQL 查询正常工具路径",
+      "phase": "A",
+      "type": "backend",
+      "priority": "P1",
+      "status": "planned",
+      "dependency_readiness": "waiting_dependencies",
+      "external_readiness": "see_card",
+      "implementation_started": false,
+      "github_issue_number": null,
+      "github_url": null,
+      "file": ".autoresearch/batches/v0.3-assistants/issues/core/issue-025-semantic-sql-query.md",
+      "depends_on": [
+        "V03-018",
+        "V03-023",
+        "V03-024"
+      ],
+      "declared_story_refs": [
+        "A.US-006",
+        "A.US-007",
+        "A.US-011",
+        "A.US-015"
+      ],
+      "requirement_refs": [
+        "A.US-007.AC-03",
+        "A.FR-11",
+        "A.FR-14"
+      ],
+      "spec_refs": [
+        "tasks/spec-v0.3a/execution-evidence.md"
+      ],
+      "merge_target": "main",
+      "working_line": "feat/core-planning-provenance",
+      "verification_state": "not_run",
+      "evidence": []
+    },
+    {
+      "local_id": "V03-026",
+      "number": 26,
+      "title": "实现有限不同条件 OR、AND 与例外规则契约",
+      "phase": "A",
+      "type": "backend",
+      "priority": "P1",
+      "status": "planned",
+      "dependency_readiness": "waiting_dependencies",
+      "external_readiness": "see_card",
+      "implementation_started": false,
+      "github_issue_number": null,
+      "github_url": null,
+      "file": ".autoresearch/batches/v0.3-assistants/issues/core/issue-026-finite-rule-boolean.md",
+      "depends_on": [
+        "V03-002",
+        "V03-010",
+        "V03-014"
+      ],
+      "declared_story_refs": [
+        "A.US-008",
+        "A.US-009"
+      ],
+      "requirement_refs": [
+        "A.US-003.AC-02",
+        "A.US-005.AC-02",
+        "A.US-008.AC-01",
+        "A.US-008.AC-03",
+        "A.FR-5",
+        "A.FR-13",
+        "P.US-006.AC-02",
+        "P.US-006.AC-03",
+        "P.US-009.AC-02",
+        "P.FR-9"
+      ],
+      "spec_refs": [
+        "tasks/spec-v0.3a/execution-evidence.md"
+      ],
+      "merge_target": "main",
+      "working_line": "feat/core-planning-provenance",
+      "verification_state": "not_run",
+      "evidence": []
+    },
+    {
+      "local_id": "V03-027",
+      "number": 27,
+      "title": "提取通用关系导航并支持一跳关系前提",
+      "phase": "A",
+      "type": "backend",
+      "priority": "P1",
+      "status": "planned",
+      "dependency_readiness": "waiting_dependencies",
+      "external_readiness": "see_card",
+      "implementation_started": false,
+      "github_issue_number": null,
+      "github_url": null,
+      "file": ".autoresearch/batches/v0.3-assistants/issues/core/issue-027-relation-navigation.md",
+      "depends_on": [
+        "V03-026",
+        "V03-018"
+      ],
+      "declared_story_refs": [
+        "A.US-008",
+        "A.US-015"
+      ],
+      "requirement_refs": [
+        "A.US-008.AC-01",
+        "A.US-008.AC-02",
+        "A.FR-14",
+        "P.US-006.AC-02",
+        "P.FR-9"
+      ],
+      "spec_refs": [
+        "tasks/spec-v0.3a/execution-evidence.md"
+      ],
+      "merge_target": "main",
+      "working_line": "feat/core-planning-provenance",
+      "verification_state": "not_run",
+      "evidence": []
+    },
+    {
+      "local_id": "V03-028",
+      "number": 28,
+      "title": "补齐三层无环规则依赖、增量物化与时态回读",
+      "phase": "A",
+      "type": "backend",
+      "priority": "P1",
+      "status": "planned",
+      "dependency_readiness": "waiting_dependencies",
+      "external_readiness": "see_card",
+      "implementation_started": false,
+      "github_issue_number": null,
+      "github_url": null,
+      "file": ".autoresearch/batches/v0.3-assistants/issues/core/issue-028-incremental-rule-state.md",
+      "depends_on": [
+        "V03-026",
+        "V03-027"
+      ],
+      "declared_story_refs": [
+        "A.US-008",
+        "A.US-009",
+        "A.US-014"
+      ],
+      "requirement_refs": [
+        "A.US-008.AC-01",
+        "A.US-008.AC-03",
+        "A.US-009.AC-03",
+        "A.FR-13",
+        "P.US-006.AC-02",
+        "P.FR-9"
+      ],
+      "spec_refs": [
+        "tasks/spec-v0.3a/execution-evidence.md"
+      ],
+      "merge_target": "main",
+      "working_line": "feat/core-planning-provenance",
+      "verification_state": "not_run",
+      "evidence": []
+    },
+    {
+      "local_id": "V03-029",
+      "number": 29,
+      "title": "贯通规则结论、前提与规范原文 span 的证据链",
+      "phase": "A",
+      "type": "backend",
+      "priority": "P1",
+      "status": "planned",
+      "dependency_readiness": "waiting_dependencies",
+      "external_readiness": "see_card",
+      "implementation_started": false,
+      "github_issue_number": null,
+      "github_url": null,
+      "file": ".autoresearch/batches/v0.3-assistants/issues/core/issue-029-rule-source-provenance.md",
+      "depends_on": [
+        "V03-028",
+        "V03-006",
+        "V03-015"
+      ],
+      "declared_story_refs": [
+        "A.US-009",
+        "A.US-011",
+        "A.US-012"
+      ],
+      "requirement_refs": [
+        "A.US-009.AC-01",
+        "A.US-009.AC-02",
+        "A.FR-15",
+        "P.US-020.AC-01",
+        "P.US-020.AC-02",
+        "P.FR-29"
+      ],
+      "spec_refs": [
+        "tasks/spec-v0.3a/execution-evidence.md"
+      ],
+      "merge_target": "main",
+      "working_line": "feat/core-planning-provenance",
+      "verification_state": "not_run",
+      "evidence": []
+    },
+    {
+      "local_id": "V03-030",
+      "number": 30,
+      "title": "实现注册任务策略、核验报告与无环最终关联",
+      "phase": "A",
+      "type": "backend",
+      "priority": "P0",
+      "status": "planned",
+      "dependency_readiness": "waiting_dependencies",
+      "external_readiness": "see_card",
+      "implementation_started": false,
+      "github_issue_number": null,
+      "github_url": null,
+      "file": ".autoresearch/batches/v0.3-assistants/issues/core/issue-030-task-validation-policies.md",
+      "depends_on": [
+        "V03-002",
+        "V03-023"
+      ],
+      "declared_story_refs": [
+        "A.US-010",
+        "A.US-011",
+        "A.US-013"
+      ],
+      "requirement_refs": [
+        "A.US-003.AC-03",
+        "A.US-010.AC-01",
+        "A.US-010.AC-03",
+        "A.FR-6",
+        "P.US-007.AC-03",
+        "P.FR-11",
+        "P.FR-27"
+      ],
+      "spec_refs": [
+        "tasks/spec-v0.3a/execution-evidence.md#ex-61-注册任务校验策略"
+      ],
+      "merge_target": "main",
+      "working_line": "feat/core-planning-provenance",
+      "verification_state": "not_run",
+      "evidence": []
+    },
+    {
+      "local_id": "V03-031",
+      "number": 31,
+      "title": "装配注册 Compute、实现版本与不可变结果工件",
+      "phase": "A",
+      "type": "backend",
+      "priority": "P0",
+      "status": "planned",
+      "dependency_readiness": "waiting_dependencies",
+      "external_readiness": "see_card",
+      "implementation_started": false,
+      "github_issue_number": null,
+      "github_url": null,
+      "file": ".autoresearch/batches/v0.3-assistants/issues/core/issue-031-compute-execution.md",
+      "depends_on": [
+        "V03-023",
+        "V03-030"
+      ],
+      "declared_story_refs": [
+        "A.US-010",
+        "A.US-011"
+      ],
+      "requirement_refs": [
+        "A.US-005.AC-02",
+        "A.US-010.AC-01",
+        "A.US-010.AC-02",
+        "A.US-010.AC-03",
+        "A.FR-6",
+        "P.US-007.AC-02",
+        "P.US-009.AC-02",
+        "P.US-017.AC-02",
+        "P.FR-11"
+      ],
+      "spec_refs": [
+        "tasks/spec-v0.3a/execution-evidence.md"
+      ],
+      "merge_target": "main",
+      "working_line": "feat/core-planning-provenance",
+      "verification_state": "not_run",
+      "evidence": []
+    },
+    {
+      "local_id": "V03-032",
+      "number": 32,
+      "title": "新增 answer@3、表工件 manifest 与分页读取契约",
+      "phase": "A",
+      "type": "backend",
+      "priority": "P1",
+      "status": "planned",
+      "dependency_readiness": "waiting_dependencies",
+      "external_readiness": "see_card",
+      "implementation_started": false,
+      "github_issue_number": null,
+      "github_url": null,
+      "file": ".autoresearch/batches/v0.3-assistants/issues/core/issue-032-answer-v3-artifacts.md",
+      "depends_on": [
+        "V03-002",
+        "V03-003",
+        "V03-023",
+        "V03-031"
+      ],
+      "declared_story_refs": [
+        "A.US-011",
+        "A.US-014"
+      ],
+      "requirement_refs": [
+        "A.US-010.AC-02",
+        "A.US-011.AC-01",
+        "A.FR-14",
+        "P.US-018.AC-01",
+        "P.FR-26"
+      ],
+      "spec_refs": [
+        "tasks/spec-v0.3a/execution-evidence.md"
+      ],
+      "merge_target": "main",
+      "working_line": "feat/core-planning-provenance",
+      "verification_state": "not_run",
+      "evidence": []
+    },
+    {
+      "local_id": "V03-033",
+      "number": 33,
+      "title": "实现数值、货币与分批全表绑定硬核验",
+      "phase": "A",
+      "type": "backend",
+      "priority": "P0",
+      "status": "planned",
+      "dependency_readiness": "waiting_dependencies",
+      "external_readiness": "see_card",
+      "implementation_started": false,
+      "github_issue_number": null,
+      "github_url": null,
+      "file": ".autoresearch/batches/v0.3-assistants/issues/core/issue-033-quantity-table-verifier.md",
+      "depends_on": [
+        "V03-032",
+        "V03-025",
+        "V03-031",
+        "V03-030"
+      ],
+      "declared_story_refs": [
+        "A.US-010",
+        "A.US-011",
+        "A.US-016"
+      ],
+      "requirement_refs": [
+        "A.US-011.AC-01",
+        "A.US-011.AC-02",
+        "A.FR-17",
+        "P.US-018.AC-01",
+        "P.US-018.AC-02",
+        "P.FR-26",
+        "P.FR-27"
+      ],
+      "spec_refs": [
+        "tasks/spec-v0.3a/execution-evidence.md"
+      ],
+      "merge_target": "main",
+      "working_line": "feat/core-planning-provenance",
+      "verification_state": "not_run",
+      "evidence": []
+    },
+    {
+      "local_id": "V03-034",
+      "number": 34,
+      "title": "核验规则、关系、查询与原文引用的 typed 断言",
+      "phase": "A",
+      "type": "backend",
+      "priority": "P0",
+      "status": "planned",
+      "dependency_readiness": "waiting_dependencies",
+      "external_readiness": "see_card",
+      "implementation_started": false,
+      "github_issue_number": null,
+      "github_url": null,
+      "file": ".autoresearch/batches/v0.3-assistants/issues/core/issue-034-typed-evidence-verifier.md",
+      "depends_on": [
+        "V03-025",
+        "V03-029",
+        "V03-019",
+        "V03-032",
+        "V03-030"
+      ],
+      "declared_story_refs": [
+        "A.US-008",
+        "A.US-009",
+        "A.US-011",
+        "A.US-012"
+      ],
+      "requirement_refs": [
+        "A.US-008.AC-03",
+        "A.US-011.AC-01",
+        "A.US-011.AC-02",
+        "A.US-012.AC-02",
+        "A.FR-13",
+        "A.FR-17",
+        "P.US-020.AC-03",
+        "P.FR-27"
+      ],
+      "spec_refs": [
+        "tasks/spec-v0.3a/execution-evidence.md"
+      ],
+      "merge_target": "main",
+      "working_line": "feat/core-planning-provenance",
+      "verification_state": "not_run",
+      "evidence": []
+    },
+    {
+      "local_id": "V03-035",
+      "number": 35,
+      "title": "扩展全部证据的发布有效性与事务 fence",
+      "phase": "A",
+      "type": "backend",
+      "priority": "P0",
+      "status": "planned",
+      "dependency_readiness": "waiting_dependencies",
+      "external_readiness": "see_card",
+      "implementation_started": false,
+      "github_issue_number": null,
+      "github_url": null,
+      "file": ".autoresearch/batches/v0.3-assistants/issues/core/issue-035-publication-validity.md",
+      "depends_on": [
+        "V03-033",
+        "V03-034",
+        "V03-028",
+        "V03-030"
+      ],
+      "declared_story_refs": [
+        "A.US-009",
+        "A.US-011",
+        "A.US-013",
+        "A.US-014"
+      ],
+      "requirement_refs": [
+        "A.US-009.AC-03",
+        "A.US-011.AC-03",
+        "A.US-012.AC-03",
+        "A.FR-16",
+        "A.FR-18",
+        "A.FR-20",
+        "P.US-018.AC-01",
+        "P.US-018.AC-03",
+        "P.FR-27"
+      ],
+      "spec_refs": [
+        "tasks/spec-v0.3a/execution-evidence.md"
+      ],
+      "merge_target": "main",
+      "working_line": "feat/core-planning-provenance",
+      "verification_state": "not_run",
+      "evidence": []
+    },
+    {
+      "local_id": "V03-036",
+      "number": 36,
+      "title": "完成跨结果类型的最终草稿与有界修复",
+      "phase": "A",
+      "type": "backend",
+      "priority": "P0",
+      "status": "planned",
+      "dependency_readiness": "waiting_dependencies",
+      "external_readiness": "see_card",
+      "implementation_started": false,
+      "github_issue_number": null,
+      "github_url": null,
+      "file": ".autoresearch/batches/v0.3-assistants/issues/core/issue-036-typed-draft-writer.md",
+      "depends_on": [
+        "V03-033",
+        "V03-034",
+        "V03-035"
+      ],
+      "declared_story_refs": [
+        "A.US-007",
+        "A.US-011",
+        "A.US-012",
+        "A.US-013"
+      ],
+      "requirement_refs": [
+        "A.US-011.AC-01",
+        "A.US-011.AC-03",
+        "A.US-012.AC-02",
+        "A.FR-18"
+      ],
+      "spec_refs": [
+        "tasks/spec-v0.3a/execution-evidence.md"
+      ],
+      "merge_target": "main",
+      "working_line": "feat/core-planning-provenance",
+      "verification_state": "not_run",
+      "evidence": []
+    },
+    {
+      "local_id": "V03-037",
+      "number": 37,
+      "title": "接通 Template 的正常 NL/固定任务运行链",
+      "phase": "A",
+      "type": "backend",
+      "priority": "P0",
+      "status": "planned",
+      "dependency_readiness": "waiting_dependencies",
+      "external_readiness": "see_card",
+      "implementation_started": false,
+      "github_issue_number": null,
+      "github_url": null,
+      "file": ".autoresearch/batches/v0.3-assistants/issues/core/issue-037-template-host.md",
+      "depends_on": [
+        "V03-024",
+        "V03-025",
+        "V03-029",
+        "V03-031",
+        "V03-036"
+      ],
+      "declared_story_refs": [
+        "A.US-007",
+        "A.US-010",
+        "A.US-011",
+        "A.US-013"
+      ],
+      "requirement_refs": [
+        "A.US-007.AC-01",
+        "A.US-013.AC-01",
+        "A.US-013.AC-03",
+        "A.FR-12"
+      ],
+      "spec_refs": [
+        "tasks/spec-v0.3a/execution-evidence.md"
+      ],
+      "merge_target": "main",
+      "working_line": "feat/core-planning-provenance",
+      "verification_state": "not_run",
+      "evidence": []
+    },
+    {
+      "local_id": "V03-038",
+      "number": 38,
+      "title": "在 Core 正常入口装配 Pi 有界补证运行时",
+      "phase": "A",
+      "type": "backend",
+      "priority": "P0",
+      "status": "planned",
+      "dependency_readiness": "waiting_dependencies",
+      "external_readiness": "see_card",
+      "implementation_started": false,
+      "github_issue_number": null,
+      "github_url": null,
+      "file": ".autoresearch/batches/v0.3-assistants/issues/core/issue-038-pi-host-loop.md",
+      "depends_on": [
+        "V03-024",
+        "V03-025",
+        "V03-029",
+        "V03-031",
+        "V03-036"
+      ],
+      "declared_story_refs": [
+        "A.US-007",
+        "A.US-013",
+        "A.US-015"
+      ],
+      "requirement_refs": [
+        "A.US-007.AC-01",
+        "A.US-013.AC-01",
+        "A.US-013.AC-03",
+        "A.FR-12"
+      ],
+      "spec_refs": [
+        "tasks/spec-v0.3a/execution-evidence.md"
+      ],
+      "merge_target": "main",
+      "working_line": "feat/core-planning-provenance",
+      "verification_state": "not_run",
+      "evidence": []
+    },
+    {
+      "local_id": "V03-039",
+      "number": 39,
+      "title": "完善计划/循环的预算取消、澄清与检查点恢复",
+      "phase": "A",
+      "type": "backend",
+      "priority": "P0",
+      "status": "planned",
+      "dependency_readiness": "waiting_dependencies",
+      "external_readiness": "see_card",
+      "implementation_started": false,
+      "github_issue_number": null,
+      "github_url": null,
+      "file": ".autoresearch/batches/v0.3-assistants/issues/core/issue-039-run-lifecycle.md",
+      "depends_on": [
+        "V03-037",
+        "V03-038",
+        "V03-035"
+      ],
+      "declared_story_refs": [
+        "A.US-013",
+        "A.US-014"
+      ],
+      "requirement_refs": [
+        "A.US-013.AC-02",
+        "A.US-013.AC-04",
+        "A.US-014.AC-02",
+        "A.US-015.AC-03",
+        "A.FR-19",
+        "A.FR-20",
+        "P.US-021.AC-02",
+        "P.FR-31"
+      ],
+      "spec_refs": [
+        "tasks/spec-v0.3a/execution-evidence.md"
+      ],
+      "merge_target": "main",
+      "working_line": "feat/core-planning-provenance",
+      "verification_state": "not_run",
+      "evidence": []
+    },
+    {
+      "local_id": "V03-040",
+      "number": 40,
+      "title": "实现业务任务、typed 结果与来源公共工作台",
+      "phase": "A",
+      "type": "frontend",
+      "priority": "P1",
+      "status": "planned",
+      "dependency_readiness": "waiting_dependencies",
+      "external_readiness": "see_card",
+      "implementation_started": false,
+      "github_issue_number": null,
+      "github_url": null,
+      "file": ".autoresearch/batches/v0.3-assistants/issues/core/issue-040-business-results-ui.md",
+      "depends_on": [
+        "V03-020",
+        "V03-032",
+        "V03-036",
+        "V03-037",
+        "V03-038",
+        "V03-039"
+      ],
+      "declared_story_refs": [
+        "A.US-001",
+        "A.US-007",
+        "A.US-008",
+        "A.US-009",
+        "A.US-010",
+        "A.US-011",
+        "A.US-012",
+        "A.US-013"
+      ],
+      "requirement_refs": [
+        "A.US-001.AC-01",
+        "A.US-007.AC-04",
+        "A.US-008.AC-04",
+        "A.US-011.AC-04",
+        "A.US-012.AC-04",
+        "A.US-013.AC-04",
+        "P.US-006.AC-04",
+        "P.FR-1"
+      ],
+      "spec_refs": [
+        "tasks/spec-v0.3a/asset-data-ui.md",
+        "tasks/spec-v0.3a/execution-evidence.md"
+      ],
+      "merge_target": "main",
+      "working_line": "feat/core-planning-provenance",
+      "verification_state": "not_run",
+      "evidence": []
+    },
+    {
+      "local_id": "V03-041",
+      "number": 41,
+      "title": "完成结果修订历史与已核验 JSON 导出",
+      "phase": "A",
+      "type": "fullstack",
+      "priority": "P1",
+      "status": "planned",
+      "dependency_readiness": "waiting_dependencies",
+      "external_readiness": "see_card",
+      "implementation_started": false,
+      "github_issue_number": null,
+      "github_url": null,
+      "file": ".autoresearch/batches/v0.3-assistants/issues/core/issue-041-history-json-export.md",
+      "depends_on": [
+        "V03-032",
+        "V03-035",
+        "V03-039",
+        "V03-040"
+      ],
+      "declared_story_refs": [
+        "A.US-014"
+      ],
+      "requirement_refs": [
+        "A.US-009.AC-04",
+        "A.US-010.AC-04",
+        "A.US-014.AC-01",
+        "A.US-014.AC-02",
+        "A.US-014.AC-03",
+        "A.US-014.AC-04",
+        "A.FR-21",
+        "A.FR-22",
+        "P.US-021.AC-01",
+        "P.US-021.AC-03",
+        "P.US-022.AC-01",
+        "P.FR-30",
+        "P.FR-32"
+      ],
+      "spec_refs": [
+        "tasks/spec-v0.3a/asset-data-ui.md",
+        "tasks/spec-v0.3a/execution-evidence.md"
+      ],
+      "merge_target": "main",
+      "working_line": "feat/core-planning-provenance",
+      "verification_state": "not_run",
+      "evidence": []
+    },
+    {
+      "local_id": "V03-042",
+      "number": 42,
+      "title": "补齐公共助手的权限、未就绪与错误恢复状态",
+      "phase": "A",
+      "type": "frontend",
+      "priority": "P1",
+      "status": "planned",
+      "dependency_readiness": "waiting_dependencies",
+      "external_readiness": "see_card",
+      "implementation_started": false,
+      "github_issue_number": null,
+      "github_url": null,
+      "file": ".autoresearch/batches/v0.3-assistants/issues/core/issue-042-public-ui-states.md",
+      "depends_on": [
+        "V03-012",
+        "V03-013",
+        "V03-020",
+        "V03-021",
+        "V03-040",
+        "V03-041"
+      ],
+      "declared_story_refs": [
+        "A.US-001",
+        "A.US-002",
+        "A.US-003",
+        "A.US-005",
+        "A.US-006",
+        "A.US-013",
+        "A.US-014"
+      ],
+      "requirement_refs": [
+        "A.US-001.AC-03",
+        "A.US-014.AC-04",
+        "P.US-001.AC-03"
+      ],
+      "spec_refs": [
+        "tasks/spec-v0.3a/asset-data-ui.md"
+      ],
+      "merge_target": "main",
+      "working_line": "feat/core-planning-provenance",
+      "verification_state": "not_run",
+      "evidence": []
+    },
+    {
+      "local_id": "V03-043",
+      "number": 43,
+      "title": "验证两行业、两 mapping 与两业务 SQL 后端",
+      "phase": "A",
+      "type": "infra",
+      "priority": "P1",
+      "status": "planned",
+      "dependency_readiness": "waiting_dependencies",
+      "external_readiness": "see_card",
+      "implementation_started": false,
+      "github_issue_number": null,
+      "github_url": null,
+      "file": ".autoresearch/batches/v0.3-assistants/issues/core/issue-043-industry-backend-conformance.md",
+      "depends_on": [
+        "V03-018",
+        "V03-025",
+        "V03-027",
+        "V03-028",
+        "V03-040"
+      ],
+      "declared_story_refs": [
+        "A.US-015"
+      ],
+      "requirement_refs": [
+        "A.US-001.AC-02",
+        "A.US-006.AC-03",
+        "A.US-006.AC-04",
+        "A.US-015.AC-01",
+        "A.US-015.AC-02",
+        "A.US-015.AC-03",
+        "A.US-015.AC-04",
+        "A.FR-2",
+        "P.US-023.AC-01"
+      ],
+      "spec_refs": [
+        "tasks/spec-generic-assistants-core-v0.3.md#7-验收矩阵"
+      ],
+      "merge_target": "main",
+      "working_line": "feat/core-planning-provenance",
+      "verification_state": "not_run",
+      "evidence": []
+    },
+    {
+      "local_id": "V03-044",
+      "number": 44,
+      "title": "验证两 runtime 与本地/真实 MCP 替换",
+      "phase": "A",
+      "type": "infra",
+      "priority": "P1",
+      "status": "planned",
+      "dependency_readiness": "waiting_dependencies",
+      "external_readiness": "see_card",
+      "implementation_started": false,
+      "github_issue_number": null,
+      "github_url": null,
+      "file": ".autoresearch/batches/v0.3-assistants/issues/core/issue-044-runtime-transport-conformance.md",
+      "depends_on": [
+        "V03-037",
+        "V03-038",
+        "V03-039",
+        "V03-031"
+      ],
+      "declared_story_refs": [
+        "A.US-015",
+        "A.US-013"
+      ],
+      "requirement_refs": [
+        "A.US-015.AC-02",
+        "A.US-015.AC-03",
+        "A.US-015.AC-04",
+        "P.US-023.AC-03"
+      ],
+      "spec_refs": [
+        "tasks/spec-generic-assistants-core-v0.3.md#7-验收矩阵"
+      ],
+      "merge_target": "main",
+      "working_line": "feat/core-planning-provenance",
+      "verification_state": "not_run",
+      "evidence": []
+    },
+    {
+      "local_id": "V03-045",
+      "number": 45,
+      "title": "实现通用双助手整栈浏览器 E2E 与关键反例",
+      "phase": "A",
+      "type": "infra",
+      "priority": "P0",
+      "status": "planned",
+      "dependency_readiness": "waiting_dependencies",
+      "external_readiness": "see_card",
+      "implementation_started": false,
+      "github_issue_number": null,
+      "github_url": null,
+      "file": ".autoresearch/batches/v0.3-assistants/issues/core/issue-045-generic-browser-e2e.md",
+      "depends_on": [
+        "V03-001",
+        "V03-002",
+        "V03-003",
+        "V03-004",
+        "V03-005",
+        "V03-006",
+        "V03-007",
+        "V03-008",
+        "V03-009",
+        "V03-010",
+        "V03-011",
+        "V03-012",
+        "V03-013",
+        "V03-014",
+        "V03-015",
+        "V03-016",
+        "V03-017",
+        "V03-018",
+        "V03-019",
+        "V03-020",
+        "V03-021",
+        "V03-022",
+        "V03-023",
+        "V03-024",
+        "V03-025",
+        "V03-026",
+        "V03-027",
+        "V03-028",
+        "V03-029",
+        "V03-031",
+        "V03-032",
+        "V03-033",
+        "V03-034",
+        "V03-035",
+        "V03-036",
+        "V03-037",
+        "V03-038",
+        "V03-039",
+        "V03-040",
+        "V03-041",
+        "V03-042",
+        "V03-043",
+        "V03-044"
+      ],
+      "declared_story_refs": [
+        "A.US-016"
+      ],
+      "requirement_refs": [
+        "A.US-001.AC-04",
+        "A.US-002.AC-04",
+        "A.US-003.AC-04",
+        "A.US-004.AC-04",
+        "A.US-005.AC-02",
+        "A.US-005.AC-04",
+        "A.US-006.AC-04",
+        "A.US-007.AC-04",
+        "A.US-008.AC-04",
+        "A.US-009.AC-04",
+        "A.US-010.AC-04",
+        "A.US-011.AC-04",
+        "A.US-012.AC-04",
+        "A.US-013.AC-04",
+        "A.US-014.AC-04",
+        "A.US-016.AC-01",
+        "A.US-016.AC-02",
+        "A.US-016.AC-03",
+        "A.US-016.AC-04",
+        "P.US-001.AC-04",
+        "P.US-002.AC-04",
+        "P.US-003.AC-04",
+        "P.US-004.AC-04",
+        "P.US-005.AC-04",
+        "P.US-006.AC-04",
+        "P.US-007.AC-04",
+        "P.US-008.AC-04",
+        "P.US-009.AC-02",
+        "P.US-009.AC-04",
+        "P.US-010.AC-04",
+        "P.US-011.AC-04"
+      ],
+      "spec_refs": [
+        "tasks/spec-generic-assistants-core-v0.3.md#7-验收矩阵"
+      ],
+      "merge_target": "main",
+      "working_line": "feat/core-planning-provenance",
+      "verification_state": "not_run",
+      "evidence": []
+    },
+    {
+      "local_id": "V03-046",
+      "number": 46,
+      "title": "固定建模/提参评测集与真实模型就绪报告",
+      "phase": "A",
+      "type": "infra",
+      "priority": "P1",
+      "status": "planned",
+      "dependency_readiness": "waiting_dependencies",
+      "external_readiness": "see_card",
+      "implementation_started": false,
+      "github_issue_number": null,
+      "github_url": null,
+      "file": ".autoresearch/batches/v0.3-assistants/issues/core/issue-046-model-quality-evidence.md",
+      "depends_on": [
+        "V03-007",
+        "V03-008",
+        "V03-014",
+        "V03-019",
+        "V03-024",
+        "V03-036"
+      ],
+      "declared_story_refs": [
+        "A.US-003",
+        "A.US-004",
+        "A.US-016"
+      ],
+      "requirement_refs": [
+        "A.US-016.AC-05"
+      ],
+      "spec_refs": [
+        "tasks/spec-generic-assistants-core-v0.3.md#7-验收矩阵"
+      ],
+      "merge_target": "main",
+      "working_line": "feat/core-planning-provenance",
+      "verification_state": "not_run",
+      "evidence": []
+    },
+    {
+      "local_id": "V03-047",
+      "number": 47,
+      "title": "完成通用独立审查、README 与 main 基线交付",
+      "phase": "A",
+      "type": "infra",
+      "priority": "P0",
+      "status": "planned",
+      "dependency_readiness": "waiting_dependencies",
+      "external_readiness": "see_card",
+      "implementation_started": false,
+      "github_issue_number": null,
+      "github_url": null,
+      "file": ".autoresearch/batches/v0.3-assistants/issues/core/issue-047-main-release-gate.md",
+      "depends_on": [
+        "V03-045",
+        "V03-046"
+      ],
+      "declared_story_refs": [
+        "A.US-016"
+      ],
+      "requirement_refs": [
+        "A.US-016.AC-06",
+        "P.US-024.AC-01"
+      ],
+      "spec_refs": [
+        "tasks/spec-generic-assistants-core-v0.3.md#8-任务阶段门槛与合入-main"
+      ],
+      "merge_target": "main",
+      "working_line": "feat/core-planning-provenance",
+      "verification_state": "not_run",
+      "evidence": []
+    },
+    {
+      "local_id": "V03-048",
+      "number": 48,
+      "title": "确认桥架报价的输入、品类、费用与图纸覆盖",
+      "phase": "B",
+      "type": "discovery",
+      "priority": "P0",
+      "status": "planned",
+      "dependency_readiness": "ready_to_discover",
+      "external_readiness": "unconfirmed",
+      "implementation_started": false,
+      "github_issue_number": null,
+      "github_url": null,
+      "file": ".autoresearch/batches/v0.3-assistants/issues/costing/issue-048-scope-discovery.md",
+      "depends_on": [],
+      "declared_story_refs": [
+        "P.US-012",
+        "P.US-013",
+        "P.US-014",
+        "P.US-016",
+        "P.US-019",
+        "P.US-024"
+      ],
+      "requirement_refs": [
+        "P.US-016.AC-01"
+      ],
+      "spec_refs": [
+        "tasks/spec-electrical-costing-mvp-v0.3.md#14-已决定与尚待客户确认",
+        "tasks/spec-electrical-costing-mvp-v0.3.md#11-外部依赖图纸与未验证风险"
+      ],
+      "merge_target": "feat/electrical-costing-poc",
+      "working_line": "feat/electrical-costing-poc",
+      "verification_state": "not_run",
+      "evidence": []
+    },
+    {
+      "local_id": "V03-049",
+      "number": 49,
+      "title": "确认权威报价函数、价格版本与复用权限",
+      "phase": "B",
+      "type": "discovery",
+      "priority": "P0",
+      "status": "planned",
+      "dependency_readiness": "ready_to_discover",
+      "external_readiness": "unconfirmed",
+      "implementation_started": false,
+      "github_issue_number": null,
+      "github_url": null,
+      "file": ".autoresearch/batches/v0.3-assistants/issues/costing/issue-049-authority-discovery.md",
+      "depends_on": [],
+      "declared_story_refs": [
+        "P.US-007",
+        "P.US-016",
+        "P.US-017",
+        "P.US-023",
+        "P.US-024"
+      ],
+      "requirement_refs": [
+        "P.US-017.AC-03"
+      ],
+      "spec_refs": [
+        "tasks/spec-electrical-costing-mvp-v0.3.md#51-可替换客户报价端口",
+        "tasks/spec-electrical-costing-mvp-v0.3.md#11-外部依赖图纸与未验证风险"
+      ],
+      "merge_target": "feat/electrical-costing-poc",
+      "working_line": "feat/electrical-costing-poc",
+      "verification_state": "not_run",
+      "evidence": []
+    },
+    {
+      "local_id": "V03-050",
+      "number": 50,
+      "title": "取得配对人工报价、比较口径与授权验收人",
+      "phase": "B",
+      "type": "discovery",
+      "priority": "P0",
+      "status": "planned",
+      "dependency_readiness": "ready_to_discover",
+      "external_readiness": "unconfirmed",
+      "implementation_started": false,
+      "github_issue_number": null,
+      "github_url": null,
+      "file": ".autoresearch/batches/v0.3-assistants/issues/costing/issue-050-gold-acceptance-discovery.md",
+      "depends_on": [],
+      "declared_story_refs": [
+        "P.US-004",
+        "P.US-008",
+        "P.US-018",
+        "P.US-022",
+        "P.US-024"
+      ],
+      "requirement_refs": [
+        "P.US-022.AC-03",
+        "P.FR-33"
+      ],
+      "spec_refs": [
+        "tasks/spec-electrical-costing-mvp-v0.3.md#73-四层验收与-goldcase"
+      ],
+      "merge_target": "feat/electrical-costing-poc",
+      "working_line": "feat/electrical-costing-poc",
+      "verification_state": "not_run",
+      "evidence": []
+    },
+    {
+      "local_id": "V03-051",
+      "number": 51,
+      "title": "同步已验收 main 并完成造价分支兼容门槛",
+      "phase": "B",
+      "type": "infra",
+      "priority": "P0",
+      "status": "planned",
+      "dependency_readiness": "waiting_dependencies",
+      "external_readiness": "see_card",
+      "implementation_started": false,
+      "github_issue_number": null,
+      "github_url": null,
+      "file": ".autoresearch/batches/v0.3-assistants/issues/costing/issue-051-accepted-main-sync.md",
+      "depends_on": [
+        "V03-047"
+      ],
+      "declared_story_refs": [
+        "P.US-023",
+        "P.US-024"
+      ],
+      "requirement_refs": [
+        "P.US-024.AC-01"
+      ],
+      "spec_refs": [
+        "tasks/spec-generic-assistants-core-v0.3.md#8-任务阶段门槛与合入-main",
+        "tasks/spec-electrical-costing-mvp-v0.3.md#12-ab-是实施门槛"
+      ],
+      "merge_target": "feat/electrical-costing-poc",
+      "working_line": "feat/electrical-costing-poc",
+      "verification_state": "not_run",
+      "evidence": []
+    },
+    {
+      "local_id": "V03-052",
+      "number": 52,
+      "title": "通过本体助手生成审核桥架行业包与动作声明",
+      "phase": "B",
+      "type": "domain",
+      "priority": "P1",
+      "status": "planned",
+      "dependency_readiness": "waiting_dependencies",
+      "external_readiness": "see_card",
+      "implementation_started": false,
+      "github_issue_number": null,
+      "github_url": null,
+      "file": ".autoresearch/batches/v0.3-assistants/issues/costing/issue-052-industry-package.md",
+      "depends_on": [
+        "V03-051",
+        "V03-048"
+      ],
+      "declared_story_refs": [
+        "P.US-001",
+        "P.US-002",
+        "P.US-004",
+        "P.US-005",
+        "P.US-006",
+        "P.US-007",
+        "P.US-009",
+        "P.US-010",
+        "P.US-011",
+        "P.US-012",
+        "P.US-023"
+      ],
+      "requirement_refs": [
+        "P.US-001.AC-01",
+        "P.US-001.AC-02",
+        "P.US-002.AC-01",
+        "P.US-002.AC-03",
+        "P.US-004.AC-01",
+        "P.US-004.AC-02",
+        "P.US-005.AC-01",
+        "P.US-006.AC-01",
+        "P.US-007.AC-01",
+        "P.US-009.AC-01",
+        "P.US-009.AC-03",
+        "P.US-011.AC-01",
+        "P.US-011.AC-03",
+        "P.US-016.AC-02",
+        "P.US-023.AC-02",
+        "P.US-023.AC-04",
+        "P.FR-2",
+        "P.FR-4",
+        "P.FR-8",
+        "P.FR-10",
+        "P.FR-16",
+        "P.FR-17"
+      ],
+      "spec_refs": [
+        "tasks/spec-electrical-costing-mvp-v0.3.md#3-桥架资产与确认输入"
+      ],
+      "merge_target": "feat/electrical-costing-poc",
+      "working_line": "feat/electrical-costing-poc",
+      "verification_state": "not_run",
+      "evidence": []
+    },
+    {
+      "local_id": "V03-053",
+      "number": 53,
+      "title": "实现版本化价表、授权补价与项目采用接口",
+      "phase": "B",
+      "type": "backend",
+      "priority": "P1",
+      "status": "planned",
+      "dependency_readiness": "waiting_dependencies",
+      "external_readiness": "see_card",
+      "implementation_started": false,
+      "github_issue_number": null,
+      "github_url": null,
+      "file": ".autoresearch/batches/v0.3-assistants/issues/costing/issue-053-price-snapshots.md",
+      "depends_on": [
+        "V03-051",
+        "V03-049",
+        "V03-052"
+      ],
+      "declared_story_refs": [
+        "P.US-016",
+        "P.US-020",
+        "P.US-021"
+      ],
+      "requirement_refs": [
+        "P.US-009.AC-02",
+        "P.US-016.AC-01",
+        "P.US-016.AC-02",
+        "P.US-016.AC-03",
+        "P.FR-24"
+      ],
+      "spec_refs": [
+        "tasks/spec-electrical-costing-mvp-v0.3.md#42-精确数值与价格",
+        "tasks/spec-electrical-costing-mvp-v0.3.md#52-缺价补录的实际路径",
+        "tasks/spec-electrical-costing-mvp-v0.3.md#6-api存储与隔离"
+      ],
+      "merge_target": "feat/electrical-costing-poc",
+      "working_line": "feat/electrical-costing-poc",
+      "verification_state": "not_run",
+      "evidence": []
+    },
+    {
+      "local_id": "V03-054",
+      "number": 54,
+      "title": "实现可替换报价端口与两种合成适配的契约套件",
+      "phase": "B",
+      "type": "backend",
+      "priority": "P1",
+      "status": "planned",
+      "dependency_readiness": "waiting_dependencies",
+      "external_readiness": "see_card",
+      "implementation_started": false,
+      "github_issue_number": null,
+      "github_url": null,
+      "file": ".autoresearch/batches/v0.3-assistants/issues/costing/issue-054-customer-quotation-adapter.md",
+      "depends_on": [
+        "V03-051",
+        "V03-049",
+        "V03-052",
+        "V03-053"
+      ],
+      "declared_story_refs": [
+        "P.US-007",
+        "P.US-017",
+        "P.US-023"
+      ],
+      "requirement_refs": [
+        "P.US-007.AC-02",
+        "P.US-017.AC-02",
+        "P.US-017.AC-03",
+        "P.US-017.AC-04",
+        "P.US-021.AC-02",
+        "P.US-023.AC-03",
+        "P.FR-11",
+        "P.FR-24",
+        "P.FR-25",
+        "P.FR-31"
+      ],
+      "spec_refs": [
+        "tasks/spec-electrical-costing-mvp-v0.3.md#51-可替换客户报价端口"
+      ],
+      "merge_target": "feat/electrical-costing-poc",
+      "working_line": "feat/electrical-costing-poc",
+      "verification_state": "not_run",
+      "evidence": []
+    },
+    {
+      "local_id": "V03-055",
+      "number": 55,
+      "title": "实现桥架清单映射与不可变报价输入",
+      "phase": "B",
+      "type": "backend",
+      "priority": "P1",
+      "status": "planned",
+      "dependency_readiness": "waiting_dependencies",
+      "external_readiness": "see_card",
+      "implementation_started": false,
+      "github_issue_number": null,
+      "github_url": null,
+      "file": ".autoresearch/batches/v0.3-assistants/issues/costing/issue-055-quote-input-snapshots.md",
+      "depends_on": [
+        "V03-051",
+        "V03-052"
+      ],
+      "declared_story_refs": [
+        "P.US-008",
+        "P.US-010",
+        "P.US-012",
+        "P.US-013",
+        "P.US-017"
+      ],
+      "requirement_refs": [
+        "P.US-008.AC-01",
+        "P.US-008.AC-02",
+        "P.US-010.AC-03",
+        "P.US-012.AC-01",
+        "P.US-013.AC-01",
+        "P.US-013.AC-03",
+        "P.US-013.AC-04",
+        "P.US-014.AC-01",
+        "P.US-017.AC-01",
+        "P.US-023.AC-02",
+        "P.FR-18",
+        "P.FR-19",
+        "P.FR-24"
+      ],
+      "spec_refs": [
+        "tasks/spec-electrical-costing-mvp-v0.3.md#32-精确字段与确认",
+        "tasks/spec-electrical-costing-mvp-v0.3.md#33-输入覆盖与排除",
+        "tasks/spec-electrical-costing-mvp-v0.3.md#44-输入函数绑定与-compute-parameters"
+      ],
+      "merge_target": "feat/electrical-costing-poc",
+      "working_line": "feat/electrical-costing-poc",
+      "verification_state": "not_run",
+      "evidence": []
+    },
+    {
+      "local_id": "V03-056",
+      "number": 56,
+      "title": "实现规格、数量、单位与必需字段确认校验",
+      "phase": "B",
+      "type": "backend",
+      "priority": "P1",
+      "status": "planned",
+      "dependency_readiness": "waiting_dependencies",
+      "external_readiness": "see_card",
+      "implementation_started": false,
+      "github_issue_number": null,
+      "github_url": null,
+      "file": ".autoresearch/batches/v0.3-assistants/issues/costing/issue-056-specification-confirmation.md",
+      "depends_on": [
+        "V03-055"
+      ],
+      "declared_story_refs": [
+        "P.US-013",
+        "P.US-014",
+        "P.US-015",
+        "P.US-016"
+      ],
+      "requirement_refs": [
+        "P.US-014.AC-01",
+        "P.US-014.AC-02",
+        "P.US-014.AC-03",
+        "P.US-015.AC-03",
+        "P.US-016.AC-04",
+        "P.FR-20",
+        "P.FR-21",
+        "P.FR-23"
+      ],
+      "spec_refs": [
+        "tasks/spec-electrical-costing-mvp-v0.3.md#32-精确字段与确认",
+        "tasks/spec-electrical-costing-mvp-v0.3.md#43-税费范围与舍入"
+      ],
+      "merge_target": "feat/electrical-costing-poc",
+      "working_line": "feat/electrical-costing-poc",
+      "verification_state": "not_run",
+      "evidence": []
+    },
+    {
+      "local_id": "V03-057",
+      "number": 57,
+      "title": "实现费用范围、税费、舍入与计价就绪策略",
+      "phase": "B",
+      "type": "backend",
+      "priority": "P1",
+      "status": "planned",
+      "dependency_readiness": "waiting_dependencies",
+      "external_readiness": "see_card",
+      "implementation_started": false,
+      "github_issue_number": null,
+      "github_url": null,
+      "file": ".autoresearch/batches/v0.3-assistants/issues/costing/issue-057-pricing-context.md",
+      "depends_on": [
+        "V03-053",
+        "V03-056"
+      ],
+      "declared_story_refs": [
+        "P.US-014",
+        "P.US-016",
+        "P.US-017"
+      ],
+      "requirement_refs": [
+        "P.US-012.AC-02",
+        "P.US-014.AC-03",
+        "P.US-016.AC-01",
+        "P.US-016.AC-02",
+        "P.US-016.AC-04",
+        "P.US-017.AC-01",
+        "P.US-017.AC-04",
+        "P.FR-15",
+        "P.FR-21",
+        "P.FR-24"
+      ],
+      "spec_refs": [
+        "tasks/spec-electrical-costing-mvp-v0.3.md#43-税费范围与舍入",
+        "tasks/spec-electrical-costing-mvp-v0.3.md#53-运行状态与正式结果"
+      ],
+      "merge_target": "feat/electrical-costing-poc",
+      "working_line": "feat/electrical-costing-poc",
+      "verification_state": "not_run",
+      "evidence": []
+    },
+    {
+      "local_id": "V03-058",
+      "number": 58,
+      "title": "将 costing.quote 接入公共 task、compute 与正常报价入口",
+      "phase": "B",
+      "type": "backend",
+      "priority": "P0",
+      "status": "planned",
+      "dependency_readiness": "waiting_dependencies",
+      "external_readiness": "see_card",
+      "implementation_started": false,
+      "github_issue_number": null,
+      "github_url": null,
+      "file": ".autoresearch/batches/v0.3-assistants/issues/costing/issue-058-quote-task-operation.md",
+      "depends_on": [
+        "V03-052",
+        "V03-054",
+        "V03-055",
+        "V03-057"
+      ],
+      "declared_story_refs": [
+        "P.US-015",
+        "P.US-017",
+        "P.US-018",
+        "P.US-021",
+        "P.US-024"
+      ],
+      "requirement_refs": [
+        "P.US-001.AC-02",
+        "P.US-007.AC-02",
+        "P.US-012.AC-02",
+        "P.US-015.AC-01",
+        "P.US-015.AC-02",
+        "P.US-017.AC-02",
+        "P.US-017.AC-03",
+        "P.FR-11",
+        "P.FR-18",
+        "P.FR-22",
+        "P.FR-25"
+      ],
+      "spec_refs": [
+        "tasks/spec-electrical-costing-mvp-v0.3.md#44-输入函数绑定与-compute-parameters",
+        "tasks/spec-electrical-costing-mvp-v0.3.md#5-客户函数价格修复与任务执行"
+      ],
+      "merge_target": "feat/electrical-costing-poc",
+      "working_line": "feat/electrical-costing-poc",
+      "verification_state": "not_run",
+      "evidence": []
+    },
+    {
+      "local_id": "V03-059",
+      "number": 59,
+      "title": "实现报价输入结果策略、金额证据与完整发布门槛",
+      "phase": "B",
+      "type": "backend",
+      "priority": "P0",
+      "status": "planned",
+      "dependency_readiness": "waiting_dependencies",
+      "external_readiness": "see_card",
+      "implementation_started": false,
+      "github_issue_number": null,
+      "github_url": null,
+      "file": ".autoresearch/batches/v0.3-assistants/issues/costing/issue-059-quote-policy-evidence.md",
+      "depends_on": [
+        "V03-058"
+      ],
+      "declared_story_refs": [
+        "P.US-016",
+        "P.US-017",
+        "P.US-018",
+        "P.US-019",
+        "P.US-020",
+        "P.US-024"
+      ],
+      "requirement_refs": [
+        "P.US-009.AC-02",
+        "P.US-014.AC-03",
+        "P.US-017.AC-04",
+        "P.US-018.AC-01",
+        "P.US-018.AC-02",
+        "P.US-018.AC-03",
+        "P.US-018.AC-04",
+        "P.US-019.AC-02",
+        "P.US-020.AC-01",
+        "P.FR-21",
+        "P.FR-26",
+        "P.FR-27"
+      ],
+      "spec_refs": [
+        "tasks/spec-electrical-costing-mvp-v0.3.md#7-证据数字核验与业务验收",
+        "tasks/spec-v0.3a/execution-evidence.md#ex-61-注册任务校验策略"
+      ],
+      "merge_target": "feat/electrical-costing-poc",
+      "working_line": "feat/electrical-costing-poc",
+      "verification_state": "not_run",
+      "evidence": []
+    },
+    {
+      "local_id": "V03-060",
+      "number": 60,
+      "title": "挂载桥架资料、清单与专业参数确认页面",
+      "phase": "B",
+      "type": "frontend",
+      "priority": "P1",
+      "status": "planned",
+      "dependency_readiness": "waiting_dependencies",
+      "external_readiness": "see_card",
+      "implementation_started": false,
+      "github_issue_number": null,
+      "github_url": null,
+      "file": ".autoresearch/batches/v0.3-assistants/issues/costing/issue-060-costing-input-ui.md",
+      "depends_on": [
+        "V03-051",
+        "V03-055",
+        "V03-056"
+      ],
+      "declared_story_refs": [
+        "P.US-001",
+        "P.US-012",
+        "P.US-013",
+        "P.US-014",
+        "P.US-019"
+      ],
+      "requirement_refs": [
+        "P.US-001.AC-01",
+        "P.US-001.AC-02",
+        "P.US-012.AC-04",
+        "P.US-013.AC-01",
+        "P.US-013.AC-02",
+        "P.US-013.AC-05",
+        "P.US-014.AC-01",
+        "P.US-014.AC-02",
+        "P.US-014.AC-04",
+        "P.US-015.AC-01",
+        "P.US-015.AC-04",
+        "P.FR-1",
+        "P.FR-19",
+        "P.FR-20",
+        "P.FR-22",
+        "P.FR-35"
+      ],
+      "spec_refs": [
+        "tasks/spec-electrical-costing-mvp-v0.3.md#81-frontendscenariomodule",
+        "tasks/spec-electrical-costing-mvp-v0.3.md#82-报价工作台"
+      ],
+      "merge_target": "feat/electrical-costing-poc",
+      "working_line": "feat/electrical-costing-poc",
+      "verification_state": "not_run",
+      "evidence": []
+    },
+    {
+      "local_id": "V03-061",
+      "number": 61,
+      "title": "实现价源、计价口径与缺价修复专业界面",
+      "phase": "B",
+      "type": "frontend",
+      "priority": "P1",
+      "status": "planned",
+      "dependency_readiness": "waiting_dependencies",
+      "external_readiness": "see_card",
+      "implementation_started": false,
+      "github_issue_number": null,
+      "github_url": null,
+      "file": ".autoresearch/batches/v0.3-assistants/issues/costing/issue-061-pricing-ui.md",
+      "depends_on": [
+        "V03-053",
+        "V03-057",
+        "V03-060"
+      ],
+      "declared_story_refs": [
+        "P.US-014",
+        "P.US-016",
+        "P.US-019",
+        "P.US-021"
+      ],
+      "requirement_refs": [
+        "P.US-015.AC-03",
+        "P.US-016.AC-01",
+        "P.US-016.AC-03",
+        "P.US-016.AC-05",
+        "P.FR-23"
+      ],
+      "spec_refs": [
+        "tasks/spec-electrical-costing-mvp-v0.3.md#52-缺价补录的实际路径",
+        "tasks/spec-electrical-costing-mvp-v0.3.md#82-报价工作台"
+      ],
+      "merge_target": "feat/electrical-costing-poc",
+      "working_line": "feat/electrical-costing-poc",
+      "verification_state": "not_run",
+      "evidence": []
+    },
+    {
+      "local_id": "V03-062",
+      "number": 62,
+      "title": "实现已核验逐项报价、费用范围与业务状态工作台",
+      "phase": "B",
+      "type": "frontend",
+      "priority": "P1",
+      "status": "planned",
+      "dependency_readiness": "waiting_dependencies",
+      "external_readiness": "see_card",
+      "implementation_started": false,
+      "github_issue_number": null,
+      "github_url": null,
+      "file": ".autoresearch/batches/v0.3-assistants/issues/costing/issue-062-quotation-workbench.md",
+      "depends_on": [
+        "V03-058",
+        "V03-059",
+        "V03-060",
+        "V03-061"
+      ],
+      "declared_story_refs": [
+        "P.US-019",
+        "P.US-021",
+        "P.US-024"
+      ],
+      "requirement_refs": [
+        "P.US-018.AC-04",
+        "P.US-019.AC-01",
+        "P.US-019.AC-02",
+        "P.US-019.AC-03",
+        "P.US-019.AC-04",
+        "P.FR-28",
+        "P.FR-35"
+      ],
+      "spec_refs": [
+        "tasks/spec-electrical-costing-mvp-v0.3.md#82-报价工作台"
+      ],
+      "merge_target": "feat/electrical-costing-poc",
+      "working_line": "feat/electrical-costing-poc",
+      "verification_state": "not_run",
+      "evidence": []
+    },
+    {
+      "local_id": "V03-063",
+      "number": 63,
+      "title": "实现金额、规格、价格规则与函数版本的逐项溯源",
+      "phase": "B",
+      "type": "frontend",
+      "priority": "P1",
+      "status": "planned",
+      "dependency_readiness": "waiting_dependencies",
+      "external_readiness": "see_card",
+      "implementation_started": false,
+      "github_issue_number": null,
+      "github_url": null,
+      "file": ".autoresearch/batches/v0.3-assistants/issues/costing/issue-063-quotation-provenance-ui.md",
+      "depends_on": [
+        "V03-059",
+        "V03-062"
+      ],
+      "declared_story_refs": [
+        "P.US-018",
+        "P.US-020",
+        "P.US-024"
+      ],
+      "requirement_refs": [
+        "P.US-020.AC-01",
+        "P.US-020.AC-02",
+        "P.US-020.AC-03",
+        "P.US-020.AC-04",
+        "P.FR-29"
+      ],
+      "spec_refs": [
+        "tasks/spec-electrical-costing-mvp-v0.3.md#71-字段绑定",
+        "tasks/spec-electrical-costing-mvp-v0.3.md#72-计算证据与发布有效性",
+        "tasks/spec-electrical-costing-mvp-v0.3.md#82-报价工作台"
+      ],
+      "merge_target": "feat/electrical-costing-poc",
+      "working_line": "feat/electrical-costing-poc",
+      "verification_state": "not_run",
+      "evidence": []
+    },
+    {
+      "local_id": "V03-064",
+      "number": 64,
+      "title": "实现与已核验版本一致的 XLSX 和 JSON 报价导出",
+      "phase": "B",
+      "type": "fullstack",
+      "priority": "P1",
+      "status": "planned",
+      "dependency_readiness": "waiting_dependencies",
+      "external_readiness": "see_card",
+      "implementation_started": false,
+      "github_issue_number": null,
+      "github_url": null,
+      "file": ".autoresearch/batches/v0.3-assistants/issues/costing/issue-064-quotation-export.md",
+      "depends_on": [
+        "V03-059",
+        "V03-062"
+      ],
+      "declared_story_refs": [
+        "P.US-019",
+        "P.US-022",
+        "P.US-024"
+      ],
+      "requirement_refs": [
+        "P.US-019.AC-03",
+        "P.US-022.AC-01",
+        "P.US-022.AC-04",
+        "P.FR-32"
+      ],
+      "spec_refs": [
+        "tasks/spec-electrical-costing-mvp-v0.3.md#83-xlsx-与-json"
+      ],
+      "merge_target": "feat/electrical-costing-poc",
+      "working_line": "feat/electrical-costing-poc",
+      "verification_state": "not_run",
+      "evidence": []
+    },
+    {
+      "local_id": "V03-065",
+      "number": 65,
+      "title": "实现配对比较、业务签核与行业反馈提案服务",
+      "phase": "B",
+      "type": "backend",
+      "priority": "P1",
+      "status": "planned",
+      "dependency_readiness": "waiting_dependencies",
+      "external_readiness": "see_card",
+      "implementation_started": false,
+      "github_issue_number": null,
+      "github_url": null,
+      "file": ".autoresearch/batches/v0.3-assistants/issues/costing/issue-065-comparison-review-service.md",
+      "depends_on": [
+        "V03-050",
+        "V03-059"
+      ],
+      "declared_story_refs": [
+        "P.US-005",
+        "P.US-011",
+        "P.US-021",
+        "P.US-022",
+        "P.US-023"
+      ],
+      "requirement_refs": [
+        "P.US-022.AC-02",
+        "P.US-022.AC-03",
+        "P.FR-33",
+        "P.FR-34"
+      ],
+      "spec_refs": [
+        "tasks/spec-electrical-costing-mvp-v0.3.md#73-四层验收与-goldcase",
+        "tasks/spec-electrical-costing-mvp-v0.3.md#6-api存储与隔离"
+      ],
+      "merge_target": "feat/electrical-costing-poc",
+      "working_line": "feat/electrical-costing-poc",
+      "verification_state": "not_run",
+      "evidence": []
+    },
+    {
+      "local_id": "V03-066",
+      "number": 66,
+      "title": "实现人工差异、接受退回与资产反馈专业界面",
+      "phase": "B",
+      "type": "frontend",
+      "priority": "P1",
+      "status": "planned",
+      "dependency_readiness": "waiting_dependencies",
+      "external_readiness": "see_card",
+      "implementation_started": false,
+      "github_issue_number": null,
+      "github_url": null,
+      "file": ".autoresearch/batches/v0.3-assistants/issues/costing/issue-066-comparison-review-ui.md",
+      "depends_on": [
+        "V03-062",
+        "V03-065"
+      ],
+      "declared_story_refs": [
+        "P.US-019",
+        "P.US-022",
+        "P.US-023",
+        "P.US-024"
+      ],
+      "requirement_refs": [
+        "P.US-019.AC-03",
+        "P.US-022.AC-03",
+        "P.US-022.AC-04",
+        "P.FR-33",
+        "P.FR-34",
+        "P.FR-35"
+      ],
+      "spec_refs": [
+        "tasks/spec-electrical-costing-mvp-v0.3.md#73-四层验收与-goldcase",
+        "tasks/spec-electrical-costing-mvp-v0.3.md#82-报价工作台"
+      ],
+      "merge_target": "feat/electrical-costing-poc",
+      "working_line": "feat/electrical-costing-poc",
+      "verification_state": "not_run",
+      "evidence": []
+    },
+    {
+      "local_id": "V03-067",
+      "number": 67,
+      "title": "完成重报价、版本差异、取消与 unknown 恢复闭环",
+      "phase": "B",
+      "type": "fullstack",
+      "priority": "P1",
+      "status": "planned",
+      "dependency_readiness": "waiting_dependencies",
+      "external_readiness": "see_card",
+      "implementation_started": false,
+      "github_issue_number": null,
+      "github_url": null,
+      "file": ".autoresearch/batches/v0.3-assistants/issues/costing/issue-067-requote-lifecycle.md",
+      "depends_on": [
+        "V03-058",
+        "V03-062",
+        "V03-065"
+      ],
+      "declared_story_refs": [
+        "P.US-015",
+        "P.US-017",
+        "P.US-021",
+        "P.US-022",
+        "P.US-024"
+      ],
+      "requirement_refs": [
+        "P.US-015.AC-03",
+        "P.US-021.AC-01",
+        "P.US-021.AC-02",
+        "P.US-021.AC-03",
+        "P.US-021.AC-04",
+        "P.FR-23",
+        "P.FR-30",
+        "P.FR-31"
+      ],
+      "spec_refs": [
+        "tasks/spec-electrical-costing-mvp-v0.3.md#51-可替换客户报价端口",
+        "tasks/spec-electrical-costing-mvp-v0.3.md#9-错误恢复与资源限制"
+      ],
+      "merge_target": "feat/electrical-costing-poc",
+      "working_line": "feat/electrical-costing-poc",
+      "verification_state": "not_run",
+      "evidence": []
+    },
+    {
+      "local_id": "V03-068",
+      "number": 68,
+      "title": "验证两个客户结构映射与独立报价对照测试",
+      "phase": "B",
+      "type": "infra",
+      "priority": "P1",
+      "status": "planned",
+      "dependency_readiness": "waiting_dependencies",
+      "external_readiness": "see_card",
+      "implementation_started": false,
+      "github_issue_number": null,
+      "github_url": null,
+      "file": ".autoresearch/batches/v0.3-assistants/issues/costing/issue-068-client-mapping-conformance.md",
+      "depends_on": [
+        "V03-055",
+        "V03-058",
+        "V03-065"
+      ],
+      "declared_story_refs": [
+        "P.US-013",
+        "P.US-017",
+        "P.US-023",
+        "P.US-024"
+      ],
+      "requirement_refs": [
+        "P.US-023.AC-02",
+        "P.US-023.AC-04",
+        "P.FR-16"
+      ],
+      "spec_refs": [
+        "tasks/spec-electrical-costing-mvp-v0.3.md#101-可实施测试矩阵"
+      ],
+      "merge_target": "feat/electrical-costing-poc",
+      "working_line": "feat/electrical-costing-poc",
+      "verification_state": "not_run",
+      "evidence": []
+    },
+    {
+      "local_id": "V03-069",
+      "number": 69,
+      "title": "完成造价双助手正常入口的合成整栈浏览器 E2E",
+      "phase": "B",
+      "type": "infra",
+      "priority": "P0",
+      "status": "planned",
+      "dependency_readiness": "waiting_dependencies",
+      "external_readiness": "see_card",
+      "implementation_started": false,
+      "github_issue_number": null,
+      "github_url": null,
+      "file": ".autoresearch/batches/v0.3-assistants/issues/costing/issue-069-costing-browser-e2e.md",
+      "depends_on": [
+        "V03-052",
+        "V03-053",
+        "V03-054",
+        "V03-055",
+        "V03-056",
+        "V03-057",
+        "V03-058",
+        "V03-059",
+        "V03-060",
+        "V03-061",
+        "V03-062",
+        "V03-063",
+        "V03-064",
+        "V03-065",
+        "V03-066",
+        "V03-067",
+        "V03-068"
+      ],
+      "declared_story_refs": [
+        "P.US-001",
+        "P.US-004",
+        "P.US-006",
+        "P.US-008",
+        "P.US-024"
+      ],
+      "requirement_refs": [
+        "P.US-001.AC-04",
+        "P.US-002.AC-04",
+        "P.US-003.AC-04",
+        "P.US-004.AC-04",
+        "P.US-006.AC-04",
+        "P.US-008.AC-04",
+        "P.US-009.AC-02",
+        "P.US-009.AC-04",
+        "P.US-010.AC-04",
+        "P.US-011.AC-04",
+        "P.US-012.AC-04",
+        "P.US-013.AC-05",
+        "P.US-014.AC-04",
+        "P.US-015.AC-04",
+        "P.US-016.AC-05",
+        "P.US-019.AC-04",
+        "P.US-020.AC-04",
+        "P.US-021.AC-04",
+        "P.US-022.AC-04",
+        "P.US-024.AC-02",
+        "P.US-024.AC-03",
+        "P.US-024.AC-04",
+        "P.US-024.AC-05",
+        "P.US-024.AC-06"
+      ],
+      "spec_refs": [
+        "tasks/spec-electrical-costing-mvp-v0.3.md#102-实际测试入口与交付证据"
+      ],
+      "merge_target": "feat/electrical-costing-poc",
+      "working_line": "feat/electrical-costing-poc",
+      "verification_state": "not_run",
+      "evidence": []
+    },
+    {
+      "local_id": "V03-070",
+      "number": 70,
+      "title": "实现并核对已授权的真实客户报价适配器",
+      "phase": "B",
+      "type": "backend",
+      "priority": "P0",
+      "status": "planned",
+      "dependency_readiness": "waiting_dependencies",
+      "external_readiness": "unconfirmed",
+      "implementation_started": false,
+      "github_issue_number": null,
+      "github_url": null,
+      "file": ".autoresearch/batches/v0.3-assistants/issues/costing/issue-070-real-customer-adapter.md",
+      "depends_on": [
+        "V03-049",
+        "V03-054"
+      ],
+      "declared_story_refs": [
+        "P.US-007",
+        "P.US-016",
+        "P.US-017",
+        "P.US-023",
+        "P.US-024"
+      ],
+      "requirement_refs": [
+        "P.US-017.AC-03",
+        "P.US-023.AC-03",
+        "P.FR-11",
+        "P.FR-24",
+        "P.FR-25"
+      ],
+      "spec_refs": [
+        "tasks/spec-electrical-costing-mvp-v0.3.md#51-可替换客户报价端口",
+        "tasks/spec-electrical-costing-mvp-v0.3.md#11-外部依赖图纸与未验证风险"
+      ],
+      "merge_target": "feat/electrical-costing-poc",
+      "working_line": "feat/electrical-costing-poc",
+      "verification_state": "not_run",
+      "evidence": []
+    },
+    {
+      "local_id": "V03-071",
+      "number": 71,
+      "title": "完成真实模型、权威函数与保留样本的业务验收",
+      "phase": "B",
+      "type": "validation",
+      "priority": "P0",
+      "status": "planned",
+      "dependency_readiness": "waiting_dependencies",
+      "external_readiness": "unconfirmed",
+      "implementation_started": false,
+      "github_issue_number": null,
+      "github_url": null,
+      "file": ".autoresearch/batches/v0.3-assistants/issues/costing/issue-071-real-customer-acceptance.md",
+      "depends_on": [
+        "V03-049",
+        "V03-050",
+        "V03-069",
+        "V03-070"
+      ],
+      "declared_story_refs": [
+        "P.US-004",
+        "P.US-006",
+        "P.US-008",
+        "P.US-016",
+        "P.US-017",
+        "P.US-018",
+        "P.US-022",
+        "P.US-024"
+      ],
+      "requirement_refs": [
+        "P.US-022.AC-02",
+        "P.US-022.AC-03",
+        "P.US-024.AC-06",
+        "P.FR-33"
+      ],
+      "spec_refs": [
+        "tasks/spec-electrical-costing-mvp-v0.3.md#73-四层验收与-goldcase",
+        "tasks/spec-electrical-costing-mvp-v0.3.md#11-外部依赖图纸与未验证风险"
+      ],
+      "merge_target": "feat/electrical-costing-poc",
+      "working_line": "feat/electrical-costing-poc",
+      "verification_state": "not_run",
+      "evidence": []
+    },
+    {
+      "local_id": "V03-072",
+      "number": 72,
+      "title": "完成造价 MVP 使用文档、交接与最终交付门槛",
+      "phase": "B",
+      "type": "infra",
+      "priority": "P0",
+      "status": "planned",
+      "dependency_readiness": "waiting_dependencies",
+      "external_readiness": "unconfirmed",
+      "implementation_started": false,
+      "github_issue_number": null,
+      "github_url": null,
+      "file": ".autoresearch/batches/v0.3-assistants/issues/costing/issue-072-costing-mvp-closeout.md",
+      "depends_on": [
+        "V03-069",
+        "V03-071"
+      ],
+      "declared_story_refs": [
+        "P.US-019",
+        "P.US-022",
+        "P.US-023",
+        "P.US-024"
+      ],
+      "requirement_refs": [
+        "P.US-024.AC-06"
+      ],
+      "spec_refs": [
+        "tasks/spec-electrical-costing-mvp-v0.3.md#10-验收映射与任务候选",
+        "tasks/spec-electrical-costing-mvp-v0.3.md#12-当前代码参照与文档交付"
+      ],
+      "merge_target": "feat/electrical-costing-poc",
+      "working_line": "feat/electrical-costing-poc",
+      "verification_state": "not_run",
+      "evidence": []
+    }
+  ]
+}
