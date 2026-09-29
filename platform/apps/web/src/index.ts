@@ -172,6 +172,38 @@ export { ScenarioErrorBoundary } from './components/ScenarioErrorBoundary'
 export type { ScenarioErrorBoundaryProps } from './components/ScenarioErrorBoundary'
 export { OntologyWorkspacePanel, EMPTY_CREATE_FIELDS, boundaryOf, validateCreateFields } from './components/OntologyWorkspacePanel'
 export type { OntologyWorkspacePanelProps, WorkspaceCreateFields } from './components/OntologyWorkspacePanel'
+export {
+  DefinitionWorkbenchPanel,
+  buildEditedPayload,
+  candidateDetailLabel,
+  candidateSourceLabel,
+  editFieldsOf,
+  isCandidateStale,
+  parseJsonText,
+} from './components/DefinitionWorkbenchPanel'
+export type {
+  DefinitionEditFields,
+  DefinitionWorkbenchPanelProps,
+  JsonParseResult,
+} from './components/DefinitionWorkbenchPanel'
+export { definitionGuard } from './api/definitions'
+export type {
+  ActionCandidateDraft,
+  CandidateLifecycleView,
+  DefinitionCandidateFilter,
+  EditActionCandidateRequest,
+  EditDefinitionCandidateRequest,
+  EditRuleCandidateRequest,
+  EnableRuleActionCandidateRequest,
+  KeepDefinitionsSeparateRequest,
+  MergeDefinitionCandidatesRequest,
+  RecordUnsupportedRuleRequest,
+  RejectDefinitionCandidateRequest,
+  RuleActionCandidateFilter,
+  RuleActionCandidateView,
+  RuleCandidateDraft,
+  ValidateDefinitionsRequest,
+} from './api/definitions'
 export { WorkspaceSourcesPanel } from './components/WorkspaceSourcesPanel'
 export type {
   SupportedSourceType,

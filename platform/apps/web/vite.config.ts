@@ -33,6 +33,7 @@ export function createWebViteConfig(environment: Readonly<Record<string, string 
         scenarioMountHarness: resolve(webRoot, 'scenario-mount-harness.html'),
         workspaceHarness: resolve(webRoot, 'workspace-harness.html'),
         instanceReviewHarness: resolve(webRoot, 'instance-review-harness.html'),
+        definitionWorkbenchHarness: resolve(webRoot, 'definition-workbench-harness.html'),
       },
     },
   },
