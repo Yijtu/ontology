@@ -29,6 +29,8 @@ export {
   PostgresMaterializationStore,
   MATERIALIZED_PROJECTION_REF,
 } from './materialization-store'
+export { PostgresAssetWorkspaceStore } from './asset-workspace-store'
+export { PostgresProjectStore } from './project-store'
 export { ControlPostgresRepository } from './repository'
 export type {
   ControlOperationContext,
