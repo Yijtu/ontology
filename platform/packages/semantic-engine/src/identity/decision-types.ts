@@ -41,7 +41,7 @@ export interface IdentityDecisionRequest {
   readonly evidenceRefs?: readonly ResourceRef[]
   /** A human justification; with a strong identity it authorises a merge. */
   readonly justification?: string
-  /** A native id or confirmed alias; authorises a merge without a free-text reason. */
+  /** A reviewer-confirmed native id/alias; it must match the candidate and a reviewed target-cluster identity. */
   readonly strongIdentity?: IdentityStrongIdentity
   /** A model/JEV similarity score. Supporting evidence only, never an authority to merge. */
   readonly scoreEvidence?: IdentityScoreEvidence
@@ -98,6 +98,7 @@ export type IdentityDecisionErrorCode =
   | 'IDENTITY_CONFLICT'
   | 'IDENTITY_SCOPE_MISMATCH'
   | 'IDENTITY_EVIDENCE_REQUIRED'
+  | 'IDENTITY_EVIDENCE_INVALID'
   | 'IDENTITY_SCORE_BELOW_THRESHOLD'
 
 const PLATFORM_CODE: Readonly<Record<IdentityDecisionErrorCode, ErrorCode>> = {
@@ -111,6 +112,7 @@ const PLATFORM_CODE: Readonly<Record<IdentityDecisionErrorCode, ErrorCode>> = {
   IDENTITY_CONFLICT: 'DATA_CONFLICT',
   IDENTITY_SCOPE_MISMATCH: 'DATA_CONFLICT',
   IDENTITY_EVIDENCE_REQUIRED: 'INSUFFICIENT_DATA',
+  IDENTITY_EVIDENCE_INVALID: 'INSUFFICIENT_DATA',
   IDENTITY_SCORE_BELOW_THRESHOLD: 'INSUFFICIENT_DATA',
 }
 
@@ -129,6 +131,7 @@ const HTTP_STATUS: Readonly<Record<IdentityDecisionErrorCode, number>> = {
   IDENTITY_CONFLICT: 409,
   IDENTITY_SCOPE_MISMATCH: 409,
   IDENTITY_EVIDENCE_REQUIRED: 422,
+  IDENTITY_EVIDENCE_INVALID: 422,
   IDENTITY_SCORE_BELOW_THRESHOLD: 422,
 }
 
@@ -154,6 +157,9 @@ export function isIdentityDecisionError(value: unknown): value is IdentityDecisi
 export interface ResolvedIdentityTarget {
   readonly objectId: string
   readonly identityScopeId: string
+  readonly identityAttributeIds: readonly string[]
+  readonly scopeDimensionIds: readonly string[]
+  readonly scopeDimensions: Readonly<Record<string, string>>
   readonly candidate: EntityCandidate
 }
 

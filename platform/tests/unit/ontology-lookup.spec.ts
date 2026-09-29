@@ -186,4 +186,52 @@ describe('ontology_lookup local semantic reads', () => {
     )
     expect(validation.valid).toBe(true)
   })
+
+  it('embeds a facts-page truncation gap so a typed answer cannot imply complete coverage', async () => {
+    const ctx = toolContext()
+    const definitionVersion = { id: 'synthetic-definitions', version: '1.0.0', digest: `sha256:${'a'.repeat(64)}` }
+    const lookup = {
+      lookup: async () => ({
+        output: {
+          items: [{
+            kind: 'fact',
+            ref: { id: 'statement-1#inspection_due@1', version: '1.0.0', digest: `sha256:${'b'.repeat(64)}` },
+            conceptRef: { namespace: 'synthetic-transport', conceptId: 'inspection_due', definitionVersion: '1.0.0' },
+            payload: { subjectEntityId: 'T-01', objectId: 'facility', attributeId: 'inspection_due', value: true },
+          }],
+          gaps: [],
+          definitionVersion,
+          autoPublished: false as const,
+        },
+        nextCursor: 'page-2',
+        completeness: 'partial' as const,
+      }),
+    } as unknown as OntologyLookupService
+    const handler = new OntologyLookupHandler({
+      lookup,
+      sourceRef: { namespace: 'platform', sourceId: 'published-semantics' },
+      dataMode: 'synthetic',
+    })
+    const request: ToolExecutionRequest = {
+      callId: '11111111-2222-4333-8444-555555555555',
+      toolId: 'ontology_lookup',
+      arguments: {
+        scopeRef: { tenantId: ctx.principal.tenantId, spaceId: ctx.allowedResources.spaceId },
+        intent: 'facts',
+        concepts: [{ namespace: 'synthetic-transport', conceptId: 'inspection_due' }],
+        limit: 1,
+      },
+      resultLimits: { maxRows: 500, maxBytes: 262_144, maxDurationMs: 30_000 },
+      deadline: ctx.deadline,
+      traceId: ctx.traceId,
+      ctx,
+      signal: new AbortController().signal,
+    }
+
+    const outcome = await handler.execute(request)
+    const result = outcome.payload as { readonly gaps: readonly string[] }
+    expect(outcome.status).toBe('partial')
+    expect(outcome.dataMode).toBe('synthetic')
+    expect(result.gaps).toContain('facts_uncovered:result_page_truncated')
+  })
 })

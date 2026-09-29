@@ -1,4 +1,4 @@
-import type { DocumentSpan, Sha256Digest, Uuid } from './generated/contracts'
+import type { DecimalQuantity, DocumentSpan, ResourceRef, RevisionString, ScopeRef, Sha256Digest, Uuid, VersionRef } from './generated/contracts'
 import type { SpanPrecision } from './document-parse'
 
 /**
@@ -17,6 +17,61 @@ import type { SpanPrecision } from './document-parse'
  */
 
 export type RuleComparisonOperator = 'eq' | 'ne' | 'lt' | 'lte' | 'gt' | 'gte'
+
+/** An explicitly reviewed business conclusion attached to one published rule. */
+export interface RuleConclusionBinding {
+  /** The exact attribute/predicate declared on the rule's scoped object. */
+  readonly predicate: string
+  readonly value: DecimalQuantity | string | boolean
+}
+
+export type RuleApplicabilityState = 'applicable' | 'not_applicable' | 'unknown' | 'conflict'
+export type RuleConditionState = 'true' | 'false' | 'unknown' | 'conflict'
+
+export interface RuleComputationFactRef {
+  readonly assertionId: string
+  readonly logicalAssertionId: string
+  readonly recordedSeq: RevisionString
+  readonly digest: Sha256Digest
+  readonly sourceStatementId?: string
+  readonly sourceRefs?: readonly ResourceRef[]
+}
+
+/** The durable typed result of computing one published rule against one entity. */
+export interface RuleComputationArtifact {
+  readonly schemaVersion: 'rule-computation-artifact@1'
+  readonly scopeRef: ScopeRef
+  readonly definitionRef: VersionRef
+  readonly ruleRef: VersionRef
+  readonly ruleId: string
+  readonly ruleVersionId: Uuid
+  /** The source store's raw immutable revision (not the serialized SemVer ref). */
+  readonly publishedRevision: RevisionString
+  readonly instanceKey: string
+  readonly objectId: string
+  readonly subjectEntityId: string
+  readonly predicate: string
+  readonly validAt?: string
+  readonly asOfRecordedSeq?: RevisionString
+  readonly applicability: {
+    readonly state: RuleApplicabilityState
+    readonly conditionState: RuleConditionState
+    readonly exceptionStates: readonly {
+      readonly exceptionId: string
+      readonly state: RuleConditionState
+      readonly factRefs: readonly RuleComputationFactRef[]
+    }[]
+    readonly positiveSupport: boolean
+  }
+  readonly factRefs: readonly RuleComputationFactRef[]
+  readonly sourceStatementIds: readonly string[]
+  /** Present only for a consequence that was explicitly reviewed against this definition. */
+  readonly businessConclusion?: RuleConclusionBinding
+  readonly inputDigest: Sha256Digest
+  readonly computationDigest: Sha256Digest
+  readonly sourceSpans: readonly RuleProvenanceSpan[]
+  readonly complete: boolean
+}
 
 /**
  * The provenance of one AST element. It keeps the parse/chunk identity and the locator the
@@ -139,4 +194,6 @@ export interface DraftRule {
   readonly impact: RuleImpact
   readonly expression: unknown
   readonly exceptions: readonly unknown[]
+  /** Optional proposed consequence; it remains untrusted until schema validation and review. */
+  readonly conclusion?: unknown
 }

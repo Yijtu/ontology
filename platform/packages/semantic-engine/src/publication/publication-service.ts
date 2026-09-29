@@ -30,6 +30,7 @@ import type {
   VersionRef,
 } from '@ontology/contracts'
 import { SemanticPublicationStoreError } from '@ontology/contracts'
+import { validateRuleConclusionBinding } from '@ontology/core'
 import { sha256DigestOf } from '../definitions/canonical'
 import { SemanticPublicationError } from './errors'
 import type { PublicationRejectionReason } from './errors'
@@ -161,7 +162,7 @@ export class SemanticPublicationService {
     if (request.approvedCandidateRefs.length === 0) {
       throw new SemanticPublicationError('INVALID_ARGUMENT', 'a publication needs at least one approved candidate')
     }
-    await this.#requireSchema(scopeRef, request.schemaRef, ctx)
+    const schema = await this.#requireSchema(scopeRef, request.schemaRef, ctx)
 
     const publicationId = this.#newId()
     const publishedAt = this.#now()
@@ -204,7 +205,22 @@ export class SemanticPublicationService {
             },
           )
         }
-        ruleVersions.push(this.#ruleVersionOf(candidate, publicationId, publishedAt))
+        const conclusion = candidate.conclusion === undefined
+          ? undefined
+          : validateRuleConclusionBinding(candidate.conclusion, candidate.objectId, schema)
+        if (conclusion?.reason !== undefined) {
+          throw new SemanticPublicationError(
+            'CANDIDATE_FAILED',
+            `rule candidate ${candidate.candidateId} has an invalid business conclusion binding`,
+            { reasons: [{ candidateId: candidate.candidateId, code: 'INVALID_RULE_CONCLUSION', message: conclusion.reason }] },
+          )
+        }
+        ruleVersions.push(this.#ruleVersionOf(
+          candidate,
+          publicationId,
+          publishedAt,
+          conclusion?.binding,
+        ))
       } else {
         throw new SemanticPublicationError(
           'CANDIDATE_UNREPRESENTABLE',
@@ -607,6 +623,7 @@ export class SemanticPublicationService {
     candidate: CandidateRecord & { readonly kind: 'rule' },
     publicationId: Uuid,
     recordedAt: string,
+    conclusion?: PublishedRuleVersion['conclusion'],
   ): PublishedRuleVersion {
     return {
       ruleVersionId: candidate.candidateId,
@@ -617,6 +634,7 @@ export class SemanticPublicationService {
       impact: candidate.impact,
       expression: candidate.expression,
       exceptions: candidate.exceptions,
+      ...(conclusion === undefined ? {} : { conclusion }),
       recordedAt,
       sourceCandidateId: candidate.candidateId,
       publicationId,

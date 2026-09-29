@@ -427,6 +427,14 @@ export class DuckDbQueryAdapter implements SourceProbeAdapter {
       }
     }
     const target = quoteRelation(relation.relation)
+    const relationParts = relation.relation.split('.')
+    if (relationParts.length > 2 || relationParts.some((part) => part.length === 0)) {
+      throw new DuckDbAdapterError('INVALID_ARGUMENT', `registered relation "${relation.relation}" has an invalid schema-qualified name`)
+    }
+    const schema = relationParts.length === 2 ? relationParts[0] : undefined
+    if (schema !== undefined) {
+      await this.#engine.runTrusted(`CREATE SCHEMA IF NOT EXISTS ${quoteIdentifier(schema)}`)
+    }
     const definitions = relation.columns
       .map((column) => `${quoteIdentifier(column.name)} ${this.#physicalType(relation, column)}`)
       .join(', ')

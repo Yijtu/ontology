@@ -26,6 +26,7 @@ import type { ToolContext } from '@ontology/contracts'
 import { startPostgresContainer } from '../integration/postgres-container'
 import type { PostgresContainer } from '../integration/postgres-container'
 import { toolContext } from '../unit/component-registry-fixtures'
+import { FixturePublishedIdentityReader } from '../integration/published-identity-reader'
 
 /**
  * One real environment for the whole load/fault harness: a throwaway PostgreSQL container on a
@@ -56,6 +57,7 @@ export interface LoadEnvironment {
   readonly runStore: PostgresRunStore
   readonly answerStore: PostgresAnswerStore
   readonly publication: PostgresSemanticPublicationStore
+  readonly identity: FixturePublishedIdentityReader
   readonly materialization: PostgresMaterializationStore
   readonly ctx: ToolContext
   readonly cancelCtx: ToolContext
@@ -132,6 +134,7 @@ export async function startLoadEnvironment(): Promise<LoadEnvironment> {
   const runStore = new PostgresRunStore(database)
   const answerStore = new PostgresAnswerStore(database)
   const publication = new PostgresSemanticPublicationStore(database)
+  const identity = new FixturePublishedIdentityReader()
   const materialization = new PostgresMaterializationStore(database)
 
   const ctx = toolContext(LOAD_TENANT, LOAD_SPACE, ['business-user', 'data-editor', 'platform-admin'], 'load-owner')
@@ -156,6 +159,7 @@ export async function startLoadEnvironment(): Promise<LoadEnvironment> {
     runStore,
     answerStore,
     publication,
+    identity,
     materialization,
     ctx,
     cancelCtx,

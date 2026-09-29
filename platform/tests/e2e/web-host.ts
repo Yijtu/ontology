@@ -70,6 +70,20 @@ export async function startWebHost(apiOrigin: string): Promise<WebHost> {
       req.pipe(proxy)
       return
     }
+    // This loopback harness uses the legacy workbench fixture API, which has no Core
+    // deployment-metadata endpoint. Bind that test deployment explicitly so the product
+    // app can default to the scenario metadata supplied by a real Core host.
+    const requested = new URL(url, 'http://127.0.0.1')
+    if (!requested.searchParams.has('profileId') && !requested.searchParams.has('profileVersion')) {
+      requested.searchParams.set('profileId', 'home-energy-demo')
+      requested.searchParams.set('profileVersion', '1.0.0')
+      res.writeHead(302, {
+        location: `${requested.pathname}${requested.search}`,
+        'cache-control': 'no-store',
+      })
+      res.end()
+      return
+    }
     void serveStatic(url, res)
   })
   await new Promise<void>((done) => server.listen(0, '127.0.0.1', done))

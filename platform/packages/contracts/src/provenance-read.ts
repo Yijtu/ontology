@@ -79,6 +79,57 @@ export interface EvidenceDependencyEdge {
   readonly premiseGroup?: string
 }
 
+/**
+ * Whether rule-support edges were resolved for one evidence record. This is deliberately
+ * separate from `ProvenanceReadOutcome`, which only describes evidence/artifact integrity.
+ */
+export type EvidenceDependencySupportState =
+  | 'not_rule'
+  | 'resolved'
+  | 'not_applicable'
+  | 'unknown'
+  | 'conflict'
+  | 'ambiguous'
+  | 'unavailable'
+  | 'incomplete'
+
+/** Source-side result. `complete` is optional for structural compatibility with older readers. */
+export interface EvidenceDependencySupportReadStatus {
+  readonly state: EvidenceDependencySupportState
+  readonly complete?: boolean
+  readonly reason?: string
+}
+
+/** Detailed dependency result optionally supplied by a capable dependency source. */
+export interface EvidenceDependencyReadResult {
+  readonly edges: readonly EvidenceDependencyEdge[]
+  readonly supportResolution: EvidenceDependencySupportReadStatus
+}
+
+/** Normalized status returned by the provenance service; completeness is always explicit. */
+export interface ProvenanceSupportResolution {
+  readonly state: EvidenceDependencySupportState
+  readonly complete: boolean
+  readonly reason?: string
+}
+
+/** Support-resolution coverage for one evidence node in a dependency traversal. */
+export interface DependencySupportResolutionEntry {
+  readonly evidenceId: Uuid
+  readonly resolution: ProvenanceSupportResolution
+}
+
+/** Aggregate support coverage, independent of node/page truncation. */
+export interface DependencySupportCoverage {
+  readonly complete: boolean
+  readonly resolutions: readonly DependencySupportResolutionEntry[]
+}
+
+/** `ToolCoverage` plus explicit rule-support resolution coverage. */
+export interface DependencyGraphCoverage extends ToolCoverage {
+  readonly support?: DependencySupportCoverage
+}
+
 /** One AND premise group of a rule justification, resolved to the evidence that satisfies it. */
 export interface ProvenancePremiseGroupView {
   readonly groupId: string
@@ -101,6 +152,8 @@ export interface ProvenanceEvidenceView {
   readonly integrityVerified: boolean
   /** The rule(s) this evidence was derived from; empty for a direct observation. */
   readonly ruleRefs: readonly VersionRef[]
+  /** Whether rule-support edges were proven; independent of evidence/artifact `outcome`. */
+  readonly supportResolution?: ProvenanceSupportResolution
   /** The AND premise groups of the real support DAG, resolved to supporting evidence ids. */
   readonly premiseGroups: readonly ProvenancePremiseGroupView[]
   readonly sources: readonly ProvenanceSourceView[]
@@ -143,7 +196,7 @@ export interface DependencyGraphView {
   readonly depth: number
   readonly nodes: readonly DependencyNodeView[]
   readonly edges: readonly EvidenceDependencyEdge[]
-  readonly coverage: ToolCoverage
+  readonly coverage: DependencyGraphCoverage
 }
 
 /** One bounded historical-assertion page (C6 `GET /objects/{id}/history`). */

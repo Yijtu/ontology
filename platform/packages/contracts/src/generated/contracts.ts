@@ -2219,7 +2219,7 @@ export interface DecisionFallback {
   originalFailure: PlatformError
 }
 /**
- * Preserves the option set, probability distribution, confidence (when supported) and definition version. It can never carry generated code or free-form explanation; scores across different question types or option sets are not directly rankable.
+ * Preserves the option set, probability distribution, confidence (when supported), the official Noul probability of yes (when applicable), and definition version. Noul probability is distinct from confidence. It can never carry generated code or free-form explanation; scores across different question types or option sets are not directly rankable.
  *
  * This interface was referenced by `OntologyContracts`'s JSON-Schema
  * via the `definition` "DecisionResult".
@@ -2233,6 +2233,10 @@ export interface DecisionResult {
   distribution?: ProbabilityDistribution
   scores?: DecisionScore[]
   confidence?: number
+  /**
+   * For questionType=noul only, the official P(yes). It is not confidence and must not be compared to minConfidence thresholds.
+   */
+  probability?: number
   fallback?: DecisionFallback
 }
 /**

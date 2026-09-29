@@ -251,7 +251,7 @@ afterAll(async () => {
 })
 
 function api(): ReturnType<typeof createRunApi> {
-  sharedApp ??= createRunApi({ service: composition.service, authenticate: testAuthenticator })
+  sharedApp ??= createRunApi({ service: composition.service, authenticate: testAuthenticator, submissionMode: 'records-only' })
   return sharedApp
 }
 

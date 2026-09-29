@@ -104,11 +104,16 @@ export class AnswerPublicationService implements AnswerPublisherPort {
         'the publication grant does not match the draft being published',
       )
     }
+    if (draft.schemaVersion !== 'answer-draft@2' && (draft.assertions?.length ?? 0) > 0) {
+      throw new PublicationRejectedError('draft_hash_mismatch', 'legacy answer drafts cannot carry unhashed typed assertions')
+    }
     const recomputed = answerDraftContentHash(
       draft.runId,
       draft.blocks,
       draft.evidenceManifestHash,
       draft.claims ?? [],
+      draft.assertions ?? [],
+      ...(draft.schemaVersion === 'answer-draft@2' ? [{ schemaVersion: 'answer-draft@2' as const, limitations: draft.limitations }] : []),
     )
     if (recomputed !== draft.contentHash) {
       throw new PublicationRejectedError(
@@ -205,12 +210,9 @@ export class AnswerPublicationService implements AnswerPublisherPort {
       )
     }
 
-    const limitations = [
-      ...draft.limitations,
-      ...(publicationKind === 'history_limited'
-        ? [`history_limited_as_of:${validity.asOf ?? ''}`, ...validity.details]
-        : []),
-    ]
+    // The publication metadata carries an explicit history `asOf`; changing the verified
+    // limitations here would create a body that no longer matches the draft hash.
+    const limitations = [...draft.limitations]
     const answer: PublishedAnswer = {
       answerId: this.#newId(),
       runId: grant.runId,
@@ -222,6 +224,13 @@ export class AnswerPublicationService implements AnswerPublisherPort {
       publicationKind,
       ...(publicationKind === 'history_limited' ? { asOf: validity.asOf } : {}),
       limitations,
+      ...(verification.semanticReview === undefined ? {} : { semanticReview: verification.semanticReview }),
+      body: {
+        schemaVersion: draft.schemaVersion ?? 'answer-draft@1',
+        blocks: structuredClone(draft.blocks),
+        claims: structuredClone(draft.claims ?? []),
+        assertions: structuredClone(draft.assertions ?? []),
+      },
       publishedAt: this.#now(),
     }
 
@@ -229,7 +238,14 @@ export class AnswerPublicationService implements AnswerPublisherPort {
     // that lands between the check above and the write still cannot persist an answer.
     try {
       return await this.#answers.record(
-        { answer, expectedRunState: 'verifying', expectedRunRevision: grant.expectedRunRevision },
+        {
+          answer,
+          expectedRunState: 'verifying',
+          expectedRunRevision: grant.expectedRunRevision,
+          ...(grant.workflowDispatchFence === undefined
+            ? {}
+            : { workflowDispatchFence: grant.workflowDispatchFence }),
+        },
         ctx,
       )
     } catch (error) {

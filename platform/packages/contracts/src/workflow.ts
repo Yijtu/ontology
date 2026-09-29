@@ -19,9 +19,12 @@ import type {
   ToolGateway,
 } from './ports'
 import type { ToolContext } from './trusted'
+import type { WorkflowDispatchFence } from './workflow-dispatch'
 import type {
   ClaimExplanation,
   DraftClaim,
+  SemanticReviewDisposition,
+  VerifiedAssertion,
   VerificationFinding,
   VerificationFindingAxis,
 } from './verification'
@@ -88,6 +91,8 @@ export interface WorkflowInputManifest {
 /** Mutable, persisted workflow coordination counters (never a second event ledger). */
 export interface WorkflowRunState {
   readonly runId: Uuid
+  /** Monotonic CAS token for updates to the mutable controller state. */
+  readonly revision: RevisionString
   readonly draftAttempts: number
   readonly recheckCount: number
   readonly staleEntryIds: readonly Uuid[]
@@ -106,6 +111,8 @@ export interface WorkflowRunState {
 export interface AnswerDraft {
   readonly draftId: Uuid
   readonly runId: Uuid
+  /** V2 hashes bind assertions and limitations as well as blocks and numeric claims. */
+  readonly schemaVersion?: 'answer-draft@2'
   readonly blocks: readonly unknown[]
   /**
    * The structured, result-bound claims of the draft (D7.4). A draft written by the
@@ -113,6 +120,7 @@ export interface AnswerDraft {
    * revision of any claim produces a new draft hash and invalidates an older verdict.
    */
   readonly claims?: readonly DraftClaim[]
+  readonly assertions?: readonly VerifiedAssertion[]
   readonly evidenceManifestHash: Sha256Digest
   readonly contentHash: Sha256Digest
   readonly limitations: readonly string[]
@@ -199,6 +207,8 @@ export interface DraftWriterResult {
  * autonomous Agent loop (SPEC §4.2).
  */
 export interface DraftWriterPort {
+  /** Set to idempotent only when repeating the exact same request cannot repeat external effects. */
+  readonly recoverySafety?: 'idempotent' | 'non_replayable'
   writeDraft(request: DraftWriterRequest, ctx: ToolContext): Promise<DraftWriterResult>
 }
 
@@ -213,18 +223,25 @@ export interface VerificationResult {
   readonly verifiedAt: Rfc3339UtcTimestamp
   /** Claim ids that passed every hard check (D7.4 `supportedClaims`). */
   readonly supportedClaimIds?: readonly Uuid[]
+  readonly supportedAssertionIds?: readonly Uuid[]
   /** Evidence ids a claim referenced but the verifier could not resolve. */
   readonly missingEvidence?: readonly Uuid[]
   /** Located hard/semantic/policy findings; empty on a clean pass. */
   readonly findings?: readonly VerificationFinding[]
   /** Restricted-template explanations of the findings, never model/JEV prose. */
   readonly explanations?: readonly ClaimExplanation[]
+  /** Explicitly states when the optional semantic decision step did not run. */
+  readonly semanticReview?: SemanticReviewDisposition
 }
 
 export interface VerifierRequest {
   readonly runId: Uuid
+  /** The original user question the bounded semantic review must see. */
+  readonly question?: string
   readonly draft: AnswerDraft
   readonly inputManifest: WorkflowInputManifest
+  /** Trusted controller-supplied limitation codes for a deterministic limited fallback only. */
+  readonly trustedLimitations?: readonly string[]
 }
 
 /**
@@ -253,6 +270,8 @@ export interface PublicationGrant {
   readonly evidenceManifestHash: Sha256Digest
   readonly scenarioManifestHash: Sha256Digest
   readonly expectedRunRevision: RevisionString
+  /** The unexpired durable worker lease that is atomically checked with answer insertion. */
+  readonly workflowDispatchFence?: WorkflowDispatchFence
   readonly issuedBy: 'workflow-controller'
   readonly issuedAt: Rfc3339UtcTimestamp
 }
@@ -264,6 +283,14 @@ export interface PublicationGrant {
  * marker is part of the answer, so an older result is never presented as current.
  */
 export type PublicationKind = 'verified' | 'history_limited'
+
+/** Immutable, verified body stored with a newly published answer. */
+export interface PublishedAnswerBody {
+  readonly schemaVersion: 'answer-draft@1' | 'answer-draft@2'
+  readonly blocks: readonly unknown[]
+  readonly claims: readonly DraftClaim[]
+  readonly assertions: readonly VerifiedAssertion[]
+}
 
 /**
  * The final answer version. Its id binds the exact `draftHash`, `evidenceManifestHash`,
@@ -284,6 +311,11 @@ export interface PublishedAnswer {
   readonly asOf?: Rfc3339UtcTimestamp
   /** Explicit gaps/limitations the verified content carries; never hidden by rendering. */
   readonly limitations: readonly string[]
+  /** The semantic axis state, kept separate from the verified business body. */
+  readonly semanticReview?: SemanticReviewDisposition
+  /** Absent only for legacy metadata-only rows; readers must display that body is unavailable. */
+  readonly body?: PublishedAnswerBody
+  readonly bodyUnavailableReason?: 'legacy_metadata_only'
   readonly publishedAt: Rfc3339UtcTimestamp
 }
 
@@ -310,11 +342,14 @@ export interface RecordAnswerInput {
   readonly answer: PublishedAnswer
   readonly expectedRunState: RunState
   readonly expectedRunRevision: RevisionString
+  readonly workflowDispatchFence?: WorkflowDispatchFence
 }
 
 export type AnswerStoreErrorCode =
   | 'SCOPE_MISMATCH'
   | 'RUN_NOT_PUBLISHABLE'
+  | 'ANSWER_BODY_REQUIRED'
+  | 'ANSWER_IDEMPOTENCY_CONFLICT'
   | 'ANSWER_PERSIST_FAILED'
 
 export class AnswerStoreError extends Error {
@@ -447,6 +482,8 @@ export interface RuntimeCapabilityContext {
   readonly resolvedProfileRef: ResolvedProfileRef
   readonly runtimeRef: VersionRef
   readonly budgetLedgerId: Uuid
+  /** The controller's real collection signal; optional only for source compatibility with older hosts. */
+  readonly signal?: AbortSignal
 }
 
 /**
@@ -475,7 +512,7 @@ export interface WorkflowManifestStore {
   getRunManifest(runId: Uuid, ctx: ToolContext): Promise<RunManifest | undefined>
   saveInputManifest(manifest: WorkflowInputManifest, ctx: ToolContext): Promise<WorkflowInputManifest>
   getInputManifest(manifestId: Uuid, ctx: ToolContext): Promise<WorkflowInputManifest | undefined>
-  saveRunState(state: WorkflowRunState, ctx: ToolContext): Promise<WorkflowRunState>
+  saveRunState(state: WorkflowRunState, expectedRevision: RevisionString, ctx: ToolContext): Promise<WorkflowRunState>
   getRunState(runId: Uuid, ctx: ToolContext): Promise<WorkflowRunState | undefined>
 }
 

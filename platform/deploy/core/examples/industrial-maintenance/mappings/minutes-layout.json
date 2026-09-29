@@ -1,0 +1,56 @@
+{
+  "mappingRef": {
+    "id": "synthetic-industrial-accumulated-minutes",
+    "version": "1.0.0",
+    "digest": "sha256:645b80a717d7c75ade1cb13abf7d89f479bd8b4fdefa6d8560347305f91e4f62"
+  },
+  "dialect": "duckdb",
+  "objects": [
+    {
+      "conceptId": "industrial_asset",
+      "sourceObjectRef": {
+        "sourceRef": { "namespace": "synthetic-industrial-demo", "sourceId": "asset-minutes-layout" },
+        "objectPath": "demo.asset_minutes_layout"
+      },
+      "schema": "demo",
+      "relation": "asset_minutes_layout",
+      "relationKind": "table",
+      "estimatedRows": 7,
+      "fields": [
+        { "fieldRef": "asset_id", "column": "asset_key", "valueType": "string", "identityKey": true },
+        { "fieldRef": "asset_network_code", "column": "network_key", "valueType": "string", "identityKey": false },
+        { "fieldRef": "asset_workshop_code", "column": "workshop_code", "valueType": "enum", "identityKey": false },
+        { "fieldRef": "operating_hours", "column": "accumulated_minutes", "valueType": "quantity", "unit": { "unitCode": "h", "dimension": "time" }, "unitFactor": 60, "identityKey": false },
+        { "fieldRef": "maintenance_exempt", "column": "waiver_flag", "valueType": "boolean", "valueMap": [{ "physical": 0, "canonical": false }, { "physical": 1, "canonical": true }], "identityKey": false }
+      ]
+    },
+    {
+      "conceptId": "workshop",
+      "sourceObjectRef": {
+        "sourceRef": { "namespace": "synthetic-industrial-demo", "sourceId": "workshop-directory" },
+        "objectPath": "demo.workshop_directory"
+      },
+      "schema": "demo",
+      "relation": "workshop_directory",
+      "relationKind": "table",
+      "estimatedRows": 2,
+      "fields": [
+        { "fieldRef": "workshop_code", "column": "workshop_code", "valueType": "string", "identityKey": true },
+        { "fieldRef": "workshop_network_code", "column": "workshop_network_code", "valueType": "string", "identityKey": false },
+        { "fieldRef": "workshop_name", "column": "workshop_name", "valueType": "string", "identityKey": false }
+      ]
+    }
+  ],
+  "links": [
+    {
+      "linkId": "asset_installed_in_workshop",
+      "fromConceptId": "industrial_asset",
+      "toConceptId": "workshop",
+      "fromColumn": "workshop_code",
+      "toColumn": "workshop_code",
+      "joinKind": "inner",
+      "cardinality": { "min": 1, "max": 1 },
+      "scope": { "maxFanout": 1 }
+    }
+  ]
+}

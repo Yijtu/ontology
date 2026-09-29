@@ -370,7 +370,7 @@ describe('invalidation fence', () => {
     const fixture = fixtureOf('or_alternative_support')
     const ctx = ctxOf(fixture)
     let faultEnabled = false
-    const { materializer } = harness(dataOf(fixture), {
+    const { materializer } = harness({ ...dataOf(fixture), historicalAsOfSupported: false }, {
       faultInjection: {
         beforeCommit: () => {
           if (faultEnabled) throw new Error('injected materialisation fault')
@@ -395,6 +395,10 @@ describe('invalidation fence', () => {
     }
 
     const ticket = await materializer.beginChange(assertionChange(fixture, retract), ctx)
+
+    const preRetraction = await materializer.read({ ...currentRequest, asOfRecordedSeq: '2' }, ctx)
+    expect(preRetraction.status).toBe('materialized')
+    expect(valueAt(preRetraction, 'device.battery_present')).toBe(true)
 
     const fenced = await materializer.read(currentRequest, ctx)
     expect(fenced.status).toBe('fenced')
@@ -675,6 +679,255 @@ describe('change-driven affected evaluation', () => {
 // ---------------------------------------------------------------------------------------------
 // Determinism and on-demand/materialised agreement.
 // ---------------------------------------------------------------------------------------------
+
+describe('published dependency aliases', () => {
+  it('fans a parent statement change only to that entity, while a logical rule change reaches all instances', async () => {
+    const scopeRef: ScopeRef = {
+      tenantId: '11111111-2222-4333-8444-555555555555',
+      spaceId: '99999999-8888-4777-8666-555555555555',
+    }
+    const changeBase = { scopeRef, recordedAt: '2026-09-21T01:00:00Z' } as const
+    const definitionRef = versionRef('schema.facility')
+    const instance = (subjectEntityId: string, instanceKey: string, assertionId: string): SupportRule => ({
+      ruleRef: versionRef('rule-version.maintenance'),
+      ruleId: instanceKey,
+      premiseGroups: [{
+        groupId: `${instanceKey}:in-service`,
+        filter: { fieldRef: 'in_service', op: 'eq', values: [true] },
+        alternatives: [{ alternativeId: assertionId, assertionId }],
+      }],
+      conclusion: { propositionKey: `rule-applicability:${subjectEntityId}`, predicate: 'rule.applicability', value: true },
+      publishedInstance: {
+        ruleId: 'rule.facility.maintenance',
+        ruleVersionId: 'rule-version.maintenance',
+        publishedRevision: '1',
+        ruleRef: versionRef('rule-version.maintenance'),
+        scopeRef,
+        definitionRef,
+        instanceKey,
+        objectId: 'facility',
+        subjectEntityId,
+        propositionKey: `rule-applicability:${subjectEntityId}`,
+        predicate: 'rule.applicability',
+        conditionGroupIds: [`${instanceKey}:in-service`],
+        exceptions: [],
+        sourceSpans: [],
+      },
+    })
+    const sourceFact = (assertionId: string, logicalAssertionId: string, subject: string, parentId: string): RuleFact => ({
+      assertionId,
+      logicalAssertionId,
+      recordedSeq: '1',
+      op: 'assert',
+      subject,
+      predicate: 'in_service',
+      value: true,
+      sourceStatementId: parentId,
+      objectId: 'facility',
+      attributeId: 'in_service',
+      schemaRef: definitionRef,
+      validity: DAY,
+      sourceRef: { namespace: 'published-statement', sourceId: parentId },
+    })
+    const rules = [
+      instance('facility-T-01', 'published-instance:T-01', 'attribute:T-01'),
+      instance('facility-T-02', 'published-instance:T-02', 'attribute:T-02'),
+    ]
+    const facts = [
+      sourceFact('attribute:T-01', 'child:T-01', 'facility-T-01', 'statement:T-01'),
+      sourceFact('attribute:T-02', 'child:T-02', 'facility-T-02', 'statement:T-02'),
+    ]
+    const index = MaterializationDependencyIndex.build({
+      facts,
+      rules,
+      entityBindings: [
+        { entityId: 'facility-T-01', logicalAssertionId: 'child:T-01', sourceStatementId: 'statement:T-01', sourceCandidateId: 'candidate:T-01', predicate: 'in_service' },
+        { entityId: 'facility-T-02', logicalAssertionId: 'child:T-02', sourceStatementId: 'statement:T-02', sourceCandidateId: 'candidate:T-02', predicate: 'in_service' },
+      ],
+    })
+    const parentChange: MaterializationChange = {
+      ...changeBase,
+      changeId: randomUUID(),
+      recordedSeq: '2',
+      kind: 'assertion_retracted',
+      logicalAssertionId: 'statement:T-01',
+      predicate: 'facility',
+      subjectEntityId: 'facility-T-01',
+      validity: DAY,
+    }
+    expect(index.affectedRuleIds(parentChange)).toEqual(['published-instance:T-01'])
+
+    const identityChange: MaterializationChange = {
+      ...changeBase,
+      changeId: randomUUID(),
+      recordedSeq: '2',
+      kind: 'identity_changed',
+      entityId: 'facility-T-01',
+      separatedCandidateIds: ['candidate:T-01'],
+      reason: 'split',
+    }
+    expect(index.affectedRuleIds(identityChange)).toEqual(['published-instance:T-01'])
+
+    const ruleChange: MaterializationChange = {
+      ...changeBase,
+      changeId: randomUUID(),
+      recordedSeq: '2',
+      kind: 'rule_changed',
+      ruleId: 'rule.facility.maintenance',
+      propositionKey: 'facility',
+    }
+    expect(index.affectedRuleIds(ruleChange)).toEqual(['published-instance:T-01', 'published-instance:T-02'])
+
+    const publishedData: PublishedSemanticData = {
+      facts,
+      rules,
+      definitionRef,
+      complete: true,
+      entityBindings: [
+        { entityId: 'facility-T-01', logicalAssertionId: 'child:T-01', sourceStatementId: 'statement:T-01', sourceCandidateId: 'candidate:T-01', predicate: 'in_service' },
+        { entityId: 'facility-T-02', logicalAssertionId: 'child:T-02', sourceStatementId: 'statement:T-02', sourceCandidateId: 'candidate:T-02', predicate: 'in_service' },
+      ],
+    }
+    const { materializer } = harness(publishedData)
+    const ctx = toolContext(scopeRef.tenantId, scopeRef.spaceId, ['platform-admin'])
+    const firstAdvance = await materializer.applyChange({
+      ...changeBase,
+      changeId: randomUUID(),
+      recordedSeq: '2',
+      kind: 'assertion_published',
+      logicalAssertionId: 'child:T-01',
+      predicate: 'in_service',
+      subjectEntityId: 'facility-T-01',
+      validity: DAY,
+    }, ctx)
+    expect(firstAdvance.recomputedRuleIds).toEqual(['published-instance:T-01'])
+    await materializer.applyChange({
+      ...changeBase,
+      changeId: randomUUID(),
+      recordedSeq: '3',
+      kind: 'assertion_published',
+      logicalAssertionId: 'child:T-02',
+      predicate: 'in_service',
+      subjectEntityId: 'facility-T-02',
+      validity: DAY,
+    }, ctx)
+    const propositionKeys = rules.map((rule) => rule.conclusion.propositionKey)
+    const request: MaterializationReadRequest = {
+      scopeRef,
+      projectionRef: versionRef('projection.semantic'),
+      propositionKeys,
+      asOfRecordedSeq: '3',
+      validAt: '2026-09-21T12:00:00Z',
+    }
+    const stored = await materializer.read(request, ctx)
+    const onDemand = await materializer.readOnDemand(request, ctx)
+    const storedKeys = stored.conclusions.map((entry) => entry.qualifiedPropositionKey).sort()
+    const onDemandKeys = onDemand.conclusions.map((entry) => entry.qualifiedPropositionKey).sort()
+    expect(storedKeys).toEqual(onDemandKeys)
+    expect(new Set(storedKeys).size).toBe(2)
+  })
+
+  it('does not report an empty historical success before an open scope fence or without a stored snapshot', async () => {
+    const fixture = fixtureOf('and_prerequisites')
+    const ctx = ctxOf(fixture)
+    const data: PublishedSemanticData = {
+      facts: [],
+      rules: [],
+      entityBindings: [],
+      complete: true,
+      historicalAsOfSupported: false,
+    }
+    const { store, materializer } = harness(data)
+    const fenceId = randomUUID()
+    await store.openFence(
+      fixture.scopeRef,
+      { fenceId, reason: 'scope-wide publication in progress', propositionKeys: [], openedAt: '2026-09-21T01:00:00Z' },
+      ctx,
+    )
+    const request: MaterializationReadRequest = {
+      scopeRef: fixture.scopeRef,
+      projectionRef: versionRef('projection.semantic'),
+      asOfRecordedSeq: '1',
+      validAt: '2026-09-21T12:00:00Z',
+    }
+    for (const emptyRequest of [request, { ...request, propositionKeys: [] }]) {
+      const fenced = await materializer.read(emptyRequest, ctx)
+      expect(fenced.status).toBe('fenced')
+      expect(fenced.conclusions).toEqual([])
+    }
+
+    await store.closeFence(fixture.scopeRef, fenceId, '2026-09-21T01:01:00Z', ctx)
+    for (const emptyRequest of [request, { ...request, propositionKeys: [] }]) {
+      const unavailable = await materializer.read(emptyRequest, ctx)
+      expect(unavailable.status).toBe('history_unavailable')
+      expect(unavailable.conclusions).toEqual([])
+    }
+  })
+})
+
+describe('bitemporal projection: open valid-time tail', () => {
+  it('materialises a new open-ended interval beginning at the latest validity boundary', async () => {
+    const fixture = fixtureOf('and_prerequisites')
+    const ctx = ctxOf(fixture)
+    const scopeRef = fixture.scopeRef
+    const boundary = '2026-09-22T00:00:00Z'
+    const facts: RuleFact[] = [
+      {
+        ...fact('f-before-boundary', 'la-before-boundary', 'p.active', false),
+        validity: { validFrom: '2026-09-21T00:00:00Z', validTo: boundary },
+      },
+      {
+        ...fact('f-after-boundary', 'la-after-boundary', 'p.active', true),
+        recordedSeq: '2',
+        validity: { validFrom: boundary },
+      },
+    ]
+    const baseRule = singlePremiseRule('r-interval-tail', 'p.active', 'c.interval-tail', 'f-before-boundary')
+    const baseGroup = baseRule.premiseGroups[0]
+    if (baseGroup === undefined) throw new Error('the interval rule is missing its premise group')
+    const rule: SupportRule = {
+      ...baseRule,
+      premiseGroups: [{
+        ...baseGroup,
+        alternatives: [
+          { alternativeId: 'before-boundary', assertionId: 'f-before-boundary' },
+          { alternativeId: 'after-boundary', assertionId: 'f-after-boundary' },
+        ],
+      }],
+    }
+    const { materializer } = harness({ facts, rules: [rule], entityBindings: [] })
+    await materializer.applyChange({
+      changeId: randomUUID(),
+      scopeRef,
+      recordedSeq: '1',
+      recordedAt: '2026-09-21T00:00:00Z',
+      kind: 'assertion_published',
+      logicalAssertionId: 'la-before-boundary',
+      predicate: 'p.active',
+      validity: { validFrom: '2026-09-21T00:00:00Z', validTo: boundary },
+    }, ctx)
+    await materializer.applyChange({
+      changeId: randomUUID(),
+      scopeRef,
+      recordedSeq: '2',
+      recordedAt: boundary,
+      kind: 'assertion_published',
+      logicalAssertionId: 'la-after-boundary',
+      predicate: 'p.active',
+      validity: { validFrom: boundary },
+    }, ctx)
+
+    const afterBoundary = await materializer.read({
+      scopeRef,
+      projectionRef: versionRef('projection.semantic'),
+      propositionKeys: ['c.interval-tail'],
+      asOfRecordedSeq: '2',
+      validAt: '2026-09-22T12:00:00Z',
+    }, ctx)
+    expect(afterBoundary.status).toBe('materialized')
+    expect(valueAt(afterBoundary, 'c.interval-tail')).toBe(true)
+  })
+})
 
 describe('determinism', () => {
   it('produces identical projections for identical inputs and matches on-demand evaluation', async () => {

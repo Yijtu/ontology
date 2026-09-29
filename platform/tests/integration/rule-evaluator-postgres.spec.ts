@@ -5,9 +5,10 @@ import {
   PostgresSemanticPublicationStore,
 } from '@ontology/adapter-control-postgres'
 import {
+  compilePublishedRuleInstances,
+  projectPublishedAttributeFacts,
   RuleEvaluationError,
   RuleEvaluator,
-  ruleFactsFromStatements,
   sha256DigestOf,
   supportRuleFromPublishedRule,
 } from '@ontology/semantic-engine'
@@ -20,12 +21,15 @@ import type {
   ResourceRef,
   ToolContext,
   Uuid,
+  VersionRef,
 } from '@ontology/contracts'
 import { toolContext } from '../unit/component-registry-fixtures'
 import { createJobScope, startJobDatabase } from './job-postgres-harness'
 import type { JobDbHarness, JobTestScope } from './job-postgres-harness'
 
 const DIGEST = `sha256:${'a'.repeat(64)}`
+const SCHEMA_REF: VersionRef = { id: 'home-energy.core', version: '1.0.0', digest: DIGEST }
+const DEVICE_SUBJECT = { subjectEntityId: 'device-1', objectId: 'device' } as const
 const VALIDITY = { validFrom: '2026-09-21T00:00:00Z', validTo: '2026-09-22T00:00:00Z' }
 
 let harness: JobDbHarness
@@ -40,8 +44,8 @@ function sourceRefs(): ResourceRef[] {
 }
 
 function statementFor(
-  predicate: string,
-  value: Record<string, unknown>,
+  attributeId: string,
+  value: unknown,
   publicationId: Uuid,
   options: { readonly unitCode?: string; readonly validity?: { validFrom: string; validTo?: string } } = {},
 ): PublishedStatement {
@@ -49,12 +53,18 @@ function statementFor(
   const validity = options.validity ?? VALIDITY
   return {
     statementId,
-    propositionKey: predicate,
+    propositionKey: `${DEVICE_SUBJECT.subjectEntityId}.attributes`,
     kind: 'entity',
-    subjectEntityId: `subject.${predicate}`,
-    predicate,
-    value,
-    ...(options.unitCode === undefined ? {} : { unitCode: options.unitCode }),
+    objectId: DEVICE_SUBJECT.objectId,
+    subjectEntityId: DEVICE_SUBJECT.subjectEntityId,
+    predicate: DEVICE_SUBJECT.objectId,
+    value: {
+      attributes: [{
+        attributeId,
+        value,
+        ...(options.unitCode === undefined ? {} : { unitCode: options.unitCode }),
+      }],
+    },
     validFrom: validity.validFrom,
     ...(validity.validTo === undefined ? {} : { validTo: validity.validTo }),
     recordedAt: '2026-09-21T06:00:00Z',
@@ -109,7 +119,7 @@ async function publishBundle(
     publication: {
       publicationId,
       versionRef: { id: publicationId, version: '1.0.0', digest: DIGEST },
-      schemaRef: { id: 'home-energy.core', version: '1.0.0', digest: DIGEST },
+      schemaRef: SCHEMA_REF,
       approvedCandidateRefs: [],
       statements: withPublication,
       ruleVersions: rules,
@@ -128,12 +138,35 @@ async function publishBundle(
 
 async function loadFacts(): Promise<RuleFact[]> {
   const statements = await store.listStatements(scope.scopeRef, { limit: 1_000 }, ctx)
-  return ruleFactsFromStatements(statements)
+  return [...projectPublishedAttributeFacts(statements, { schemaRef: SCHEMA_REF }).facts]
 }
 
-async function loadRules(facts: readonly RuleFact[]): Promise<SupportRule[]> {
+async function loadRules(facts: readonly RuleFact[]) {
   const versions = await store.listRuleVersions(scope.scopeRef, { limit: 1_000 }, ctx)
-  return versions.map((version) => supportRuleFromPublishedRule(version, facts))
+  return compilePublishedRuleInstances(versions, facts, {
+    scopeRef: scope.scopeRef,
+    definitionRef: SCHEMA_REF,
+    subjects: [DEVICE_SUBJECT],
+  })
+}
+
+function publishedRules(compilation: Awaited<ReturnType<typeof loadRules>>): SupportRule[] {
+  return compilation.instances.map((instance) => instance.supportRule)
+}
+
+function applicabilityFor(
+  result: ReturnType<RuleEvaluator['evaluate']>,
+  ruleId: string,
+) {
+  const applicability = result.applicabilities.find((entry) =>
+    entry.ruleId === ruleId && entry.subjectEntityId === DEVICE_SUBJECT.subjectEntityId,
+  )
+  if (applicability === undefined) throw new Error(`no applicability result for ${ruleId}`)
+  return applicability
+}
+
+function attributeAssertionId(statementId: Uuid, attributeId: string): string {
+  return `${statementId}#${encodeURIComponent(attributeId)}@1`
 }
 
 beforeAll(async () => {
@@ -172,7 +205,7 @@ describe('rule evaluation against published facts and rules in real PostgreSQL',
   let firmwareStableId: Uuid
   let firmwareBetaId: Uuid
 
-  it('loads published facts and rule ASTs from the real store and evaluates AND/OR/unknown/conflict', async () => {
+  it('loads published entity attributes and rule ASTs from the real store and evaluates AND/OR/unknown/conflict', async () => {
     const seedPublication = randomUUID()
     const soc = statementFor(
       'battery.soc_pct',
@@ -180,11 +213,11 @@ describe('rule evaluation against published facts and rules in real PostgreSQL',
       seedPublication,
       { unitCode: 'pct', validity: { validFrom: '2026-09-21T00:00:00Z', validTo: '2026-09-21T12:00:00Z' } },
     )
-    const grid = statementFor('site.grid_connected', { value: true }, seedPublication)
-    const meter = statementFor('device.battery_present', { value: true }, seedPublication)
-    const nameplate = statementFor('device.battery_present', { value: true }, seedPublication)
-    const stable = statementFor('device.firmware_channel', { value: 'stable' }, seedPublication)
-    const beta = statementFor('device.firmware_channel', { value: 'beta' }, seedPublication)
+    const grid = statementFor('site.grid_connected', true, seedPublication)
+    const meter = statementFor('device.battery_present', true, seedPublication)
+    const nameplate = statementFor('device.battery_present', true, seedPublication)
+    const stable = statementFor('device.firmware_channel', 'stable', seedPublication)
+    const beta = statementFor('device.firmware_channel', 'beta', seedPublication)
     meterStatementId = meter.statementId
     nameplateStatementId = nameplate.statementId
     firmwareStableId = stable.statementId
@@ -192,11 +225,11 @@ describe('rule evaluation against published facts and rules in real PostgreSQL',
 
     const reserveReady = ruleVersionFor(
       'rule.reserve-ready',
-      'site.reserve_ready',
+      DEVICE_SUBJECT.objectId,
       {
         op: 'all',
         operands: [
-          { op: 'compare', attributeId: 'battery.soc_pct', operator: 'gte', value: '20.0', spans: [] },
+          { op: 'compare', attributeId: 'battery.soc_pct', operator: 'gte', value: '20.0', unitCode: 'pct', spans: [] },
           { op: 'compare', attributeId: 'site.grid_connected', operator: 'eq', value: true, spans: [] },
         ],
         spans: [],
@@ -205,27 +238,34 @@ describe('rule evaluation against published facts and rules in real PostgreSQL',
     )
     const batteryPresent = ruleVersionFor(
       'rule.battery-present',
-      'device.battery_present',
+      DEVICE_SUBJECT.objectId,
       { op: 'compare', attributeId: 'device.battery_present', operator: 'eq', value: true, spans: [] },
       seedPublication,
     )
     const firmwareChannel = ruleVersionFor(
       'rule.firmware-channel',
-      'device.firmware_channel',
+      DEVICE_SUBJECT.objectId,
       { op: 'compare', attributeId: 'device.firmware_channel', operator: 'ne', value: '', spans: [] },
+      seedPublication,
+    )
+    const missingFact = ruleVersionFor(
+      'rule.missing-fact',
+      DEVICE_SUBJECT.objectId,
+      { op: 'compare', attributeId: 'device.unreported_attribute', operator: 'eq', value: true, spans: [] },
       seedPublication,
     )
 
     await publishBundle(
       [soc, grid, meter, nameplate, stable, beta],
-      [reserveReady, batteryPresent, firmwareChannel],
+      [reserveReady, batteryPresent, firmwareChannel, missingFact],
       'rule-evaluator-seed',
     )
 
     const facts = await loadFacts()
     expect(facts).toHaveLength(6)
-    const rules = await loadRules(facts)
-    expect(rules).toHaveLength(3)
+    const compilation = await loadRules(facts)
+    expect(compilation.issues).toEqual([])
+    expect(compilation.instances).toHaveLength(4)
 
     const evaluator = new RuleEvaluator()
     const result = evaluator.evaluate({
@@ -235,27 +275,55 @@ describe('rule evaluation against published facts and rules in real PostgreSQL',
         projectionRef: { id: 'projection.semantic', version: '1.0.0', digest: DIGEST },
         validAt: '2026-09-21T06:00:00Z',
       },
+      definitionRef: SCHEMA_REF,
+      complete: true,
       facts,
-      rules,
+      rules: publishedRules(compilation),
     })
 
     const byKey = new Map(result.conclusions.map((conclusion) => [conclusion.propositionKey, conclusion]))
-    expect(byKey.get('site.reserve_ready')?.domainStatus).toBe('known')
-    expect(byKey.get('site.reserve_ready')?.value).toBe(true)
-    expect(byKey.get('site.reserve_ready')?.satisfiedBy).toHaveLength(2)
+    const reserveInstance = compilation.instances.find((instance) => instance.ruleId === 'rule.reserve-ready')
+    if (reserveInstance === undefined) throw new Error('reserve-ready rule did not compile')
+    expect(reserveInstance.supportRule.premiseGroups).toHaveLength(2)
+    const reserve = applicabilityFor(result, 'rule.reserve-ready')
+    expect(reserve.state).toBe('applicable')
+    expect(reserve.conditionState).toBe('true')
+    expect(byKey.get(reserve.propositionKey)?.domainStatus).toBe('known')
+    expect(byKey.get(reserve.propositionKey)?.value).toBe(true)
+    expect(byKey.get(reserve.propositionKey)?.satisfiedBy).toHaveLength(2)
 
-    expect(byKey.get('device.battery_present')?.domainStatus).toBe('known')
-    expect(byKey.get('device.battery_present')?.satisfiedBy).toEqual([
+    const batteryInstance = compilation.instances.find((instance) => instance.ruleId === 'rule.battery-present')
+    if (batteryInstance === undefined) throw new Error('battery-present rule did not compile')
+    const batteryGroupId = batteryInstance.supportRule.premiseGroups[0]?.groupId
+    if (batteryGroupId === undefined) throw new Error('battery-present rule has no premise group')
+    const battery = applicabilityFor(result, 'rule.battery-present')
+    expect(byKey.get(battery.propositionKey)?.domainStatus).toBe('known')
+    expect(byKey.get(battery.propositionKey)?.value).toBe(true)
+    expect(byKey.get(battery.propositionKey)?.satisfiedBy).toEqual([
       {
-        groupId: 'rule.battery-present:device.battery_present',
-        alternativeIds: [meterStatementId, nameplateStatementId].sort(),
+        groupId: batteryGroupId,
+        alternativeIds: [
+          attributeAssertionId(meterStatementId, 'device.battery_present'),
+          attributeAssertionId(nameplateStatementId, 'device.battery_present'),
+        ].sort(),
       },
     ])
 
-    expect(byKey.get('device.firmware_channel')?.domainStatus).toBe('conflict')
-    expect(byKey.get('device.firmware_channel')?.value).toBeUndefined()
+    const firmware = applicabilityFor(result, 'rule.firmware-channel')
+    expect(firmware.state).toBe('conflict')
+    expect(byKey.get(firmware.propositionKey)?.domainStatus).toBe('conflict')
+    expect(byKey.get(firmware.propositionKey)?.value).toBeUndefined()
     const conflict = result.conflicts.find((entry) => entry.propositionKey === 'device.firmware_channel')
-    expect(conflict?.assertionIds).toEqual([firmwareBetaId, firmwareStableId].sort())
+    expect(conflict?.assertionIds).toEqual([
+      attributeAssertionId(firmwareBetaId, 'device.firmware_channel'),
+      attributeAssertionId(firmwareStableId, 'device.firmware_channel'),
+    ].sort())
+
+    const unknown = applicabilityFor(result, 'rule.missing-fact')
+    expect(unknown.conditionState).toBe('unknown')
+    expect(unknown.state).toBe('unknown')
+    expect(byKey.get(unknown.propositionKey)?.domainStatus).toBe('unknown')
+    expect(byKey.get(unknown.propositionKey)?.value).toBeUndefined()
   })
 
   it('keeps the conclusion when one of two equivalent published sources is retracted', async () => {
@@ -284,7 +352,7 @@ describe('rule evaluation against published facts and rules in real PostgreSQL',
     )
 
     const facts = await loadFacts()
-    const rules = await loadRules(facts)
+    const compilation = await loadRules(facts)
     const result = new RuleEvaluator().evaluate({
       scopeRef: scope.scopeRef,
       request: {
@@ -292,28 +360,34 @@ describe('rule evaluation against published facts and rules in real PostgreSQL',
         projectionRef: { id: 'projection.semantic', version: '1.0.0', digest: DIGEST },
         validAt: '2026-09-21T06:00:00Z',
       },
+      definitionRef: SCHEMA_REF,
+      complete: true,
       facts,
-      rules,
+      rules: publishedRules(compilation),
     })
-    const battery = result.conclusions.find((conclusion) => conclusion.propositionKey === 'device.battery_present')
+    const batteryApplicability = applicabilityFor(result, 'rule.battery-present')
+    const battery = result.conclusions.find((conclusion) => conclusion.propositionKey === batteryApplicability.propositionKey)
     expect(battery?.domainStatus).toBe('known')
     expect(battery?.value).toBe(true)
     expect(battery?.satisfiedBy).toEqual([
-      { groupId: 'rule.battery-present:device.battery_present', alternativeIds: [meterStatementId] },
+      {
+        groupId: compilation.instances.find((instance) => instance.ruleId === 'rule.battery-present')?.supportRule.premiseGroups[0]?.groupId,
+        alternativeIds: [attributeAssertionId(meterStatementId, 'device.battery_present')],
+      },
     ])
   })
 
   it('is deterministic for the same published inputs', async () => {
     const facts = await loadFacts()
-    const rules = await loadRules(facts)
+    const compilation = await loadRules(facts)
     const request = {
       scopeRef: scope.scopeRef,
       projectionRef: { id: 'projection.semantic', version: '1.0.0', digest: DIGEST },
       validAt: '2026-09-21T06:00:00Z',
     }
     const evaluator = new RuleEvaluator()
-    const first = evaluator.evaluate({ scopeRef: scope.scopeRef, request, facts, rules })
-    const second = evaluator.evaluate({ scopeRef: scope.scopeRef, request, facts, rules })
+    const first = evaluator.evaluate({ scopeRef: scope.scopeRef, request, definitionRef: SCHEMA_REF, complete: true, facts, rules: publishedRules(compilation) })
+    const second = evaluator.evaluate({ scopeRef: scope.scopeRef, request, definitionRef: SCHEMA_REF, complete: true, facts, rules: publishedRules(compilation) })
     expect(first).toEqual(second)
     expect(first.inputDigest).toBe(second.inputDigest)
     expect(first.conclusions.some((conclusion) => conclusion.ruleRefs.length > 0)).toBe(true)

@@ -10,7 +10,7 @@ import type {
 } from './generated/contracts'
 import type { CandidateKind } from './extraction'
 import type { NewOutboxMessage } from './job-store'
-import type { RuleExceptionNode, RuleExpressionNode, RuleImpact } from './rule-extraction'
+import type { RuleConclusionBinding, RuleExceptionNode, RuleExpressionNode, RuleImpact } from './rule-extraction'
 import type { ToolContext } from './trusted'
 
 /**
@@ -134,6 +134,8 @@ export interface PublishedRuleVersion {
   readonly impact: RuleImpact
   readonly expression: RuleExpressionNode
   readonly exceptions: readonly RuleExceptionNode[]
+  /** Optional human-reviewed business consequence; absence means applicability only. */
+  readonly conclusion?: RuleConclusionBinding
   readonly validFrom?: Rfc3339UtcTimestamp
   readonly validTo?: Rfc3339UtcTimestamp
   readonly recordedAt: Rfc3339UtcTimestamp
@@ -270,6 +272,8 @@ export interface PublishedStatementFilter {
   readonly sourceCandidateId?: Uuid
   readonly publicationId?: Uuid
   readonly status?: PublishedStatementStatus
+  /** Exclusive keyset cursor over the stable statement_id ordering. */
+  readonly afterStatementId?: Uuid
   /** Bounded page size; a caller never reads an unbounded table. */
   readonly limit?: number
 }
@@ -278,6 +282,8 @@ export interface PublishedRuleFilter {
   readonly objectId?: string
   readonly sourceCandidateId?: Uuid
   readonly publicationId?: Uuid
+  /** Exclusive keyset cursor over stable (ruleId, numeric revision) ordering. */
+  readonly afterRule?: { readonly ruleId: string; readonly version: RevisionString }
   readonly limit?: number
 }
 
@@ -317,6 +323,8 @@ export interface SemanticPublicationStore {
 
   /** The scope publication head revision; `0` when nothing is published yet. */
   latestPublicationRevision(scopeRef: ScopeRef, ctx: ToolContext): Promise<RevisionString>
+  /** Monotonic token for all published-statement/rule read-view writes, including corrections and retractions. */
+  latestReadRevision(scopeRef: ScopeRef, ctx: ToolContext): Promise<RevisionString>
   publish(
     scopeRef: ScopeRef,
     input: PublishSemanticPublicationInput,

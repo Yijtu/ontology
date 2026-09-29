@@ -2,7 +2,7 @@ import type { DomainResultStatus, Sha256Digest } from '@ontology/contracts'
 import { sha256DigestOf } from '../definitions/canonical'
 import { RuleEvaluationError } from './errors'
 import { conclusionQualifiedKey, factQualifiedKey } from './proposition'
-import { assertSupportedFilter, filterMatches } from './values'
+import { assertSupportedFilter, evaluateFilter, isRuleDecimalValue } from './values'
 import type {
   RuleAssertionValue,
   RuleConclusionResult,
@@ -11,6 +11,9 @@ import type {
   RuleEvaluationResult,
   RuleFact,
   RuleFactRef,
+  RuleApplicabilityResult,
+  RuleConditionState,
+  RuleExceptionState,
   RulePremiseAlternative,
   RulePremiseGroup,
   RuleSatisfiedBy,
@@ -33,6 +36,8 @@ interface LogicalResolution {
   readonly reason: ResolutionReason
   readonly predicate: string
   readonly active?: RuleFact
+  /** A visible latest tombstone or out-of-range version that explains an unknown premise. */
+  readonly latest?: RuleFact
   /** The contradictory versions of one logical assertion, present only for `conflict`. */
   readonly conflicting?: readonly RuleFact[]
 }
@@ -44,11 +49,15 @@ interface RuleOutcome {
   readonly factRefs: readonly RuleFactRef[]
   readonly groupNodes: readonly SupportGroupNode[]
   readonly leafNodes: readonly SupportLeafNode[]
+  readonly groupStates: ReadonlyMap<string, Outcome>
+  readonly groupFactRefs: ReadonlyMap<string, readonly RuleFactRef[]>
+  readonly observedFactRefs: readonly RuleFactRef[]
 }
 
 interface EvaluationState {
   readonly activeByLogical: ReadonlyMap<string, LogicalResolution>
   readonly factsById: ReadonlyMap<string, RuleFact>
+  readonly conflictedAssertions: ReadonlySet<string>
   readonly derived: Map<string, readonly RuleOutcome[]>
   readonly leaves: Map<string, SupportLeafNode>
   readonly groups: Map<string, SupportGroupNode>
@@ -107,12 +116,13 @@ function resolveLogicalAssertions(
       resolved.set(logicalId, {
         reason: latest?.op === 'retract' ? 'retracted' : 'not_covered',
         predicate,
+        ...(latest === undefined ? {} : { latest }),
       })
       continue
     }
     const latest = latestFact(covering)
     if (latest === undefined || latest.op === 'retract') {
-      resolved.set(logicalId, { reason: 'retracted', predicate })
+      resolved.set(logicalId, { reason: 'retracted', predicate, ...(latest === undefined ? {} : { latest }) })
       continue
     }
     if (latest.op === 'correct') {
@@ -194,7 +204,12 @@ function factRefOf(fact: RuleFact): RuleFactRef {
       predicate: fact.predicate,
       value: fact.value ?? null,
       validity: fact.validity,
+      sourceStatementId: fact.sourceStatementId ?? null,
+      sourceRefs: fact.sourceRefs ?? [],
+      schemaRef: fact.schemaRef ?? null,
     }),
+    ...(fact.sourceStatementId === undefined ? {} : { sourceStatementId: fact.sourceStatementId }),
+    ...(fact.sourceRefs === undefined ? {} : { sourceRefs: fact.sourceRefs }),
   }
 }
 
@@ -211,11 +226,18 @@ function validateRule(rule: SupportRule): void {
     if (group.alternatives.length === 0) {
       throw new RuleEvaluationError('INVALID_RULE', `premise group ${group.groupId} has no alternative`)
     }
-    if ((group.polarity ?? 'positive') === 'negative' && group.completeRange !== true) {
+    if (
+      (group.polarity ?? 'positive') === 'negative' &&
+      group.completeRange !== true &&
+      group.explicitObservation !== true
+    ) {
       throw new RuleEvaluationError(
         'UNSUPPORTED_NEGATION',
-        `premise group ${group.groupId} negates a condition without declaring a complete range`,
+        `premise group ${group.groupId} negates a condition without an explicit observation or complete range`,
       )
+    }
+    if (group.unitCode !== undefined && group.unitCode.length === 0) {
+      throw new RuleEvaluationError('INVALID_RULE', `premise group ${group.groupId} has an empty unitCode`)
     }
     assertSupportedFilter(group.filter, `premise group ${group.groupId}`)
     const alternativeIds = new Set<string>()
@@ -310,14 +332,24 @@ function evaluateAlternative(
   alternative: RulePremiseAlternative,
   group: RulePremiseGroup,
   state: EvaluationState,
-): { outcome: Outcome; value?: RuleAssertionValue; leaf?: SupportLeafNode } {
+): { outcome: Outcome; value?: RuleAssertionValue; leaf?: SupportLeafNode; factRefs?: readonly RuleFactRef[] } {
   if (alternative.assertionId !== undefined) {
     const fact = state.factsById.get(alternative.assertionId)
-    if (fact === undefined) return { outcome: 'unknown' }
+    if (fact === undefined) {
+      if (
+        group.polarity === 'negative' &&
+        group.completeRange === true &&
+        alternative.assertionId.startsWith('unmatched:')
+      ) {
+        return { outcome: 'refuted' }
+      }
+      return { outcome: 'unknown' }
+    }
     const resolution = state.activeByLogical.get(fact.logicalAssertionId)
-    if (resolution?.reason === 'conflict') {
+    if (resolution?.reason === 'conflict' || state.conflictedAssertions.has(fact.assertionId)) {
       return {
         outcome: 'conflict',
+        factRefs: (resolution?.conflicting ?? [fact]).map(factRefOf),
         leaf: {
           kind: 'fact',
           nodeId: `fact:${fact.logicalAssertionId}`,
@@ -327,23 +359,35 @@ function evaluateAlternative(
       }
     }
     const active = resolution?.active
-    if (active === undefined) return { outcome: 'unknown' }
+    if (active === undefined) {
+      return resolution?.latest === undefined
+        ? { outcome: 'unknown' }
+        : { outcome: 'unknown', factRefs: [factRefOf(resolution.latest)] }
+    }
     const value = active.value
+    const factRefs = [factRefOf(active)]
+    if (value === undefined) return { outcome: 'unknown', factRefs, leaf: {
+      kind: 'fact',
+      nodeId: `fact:${active.logicalAssertionId}`,
+      label: active.logicalAssertionId,
+      state: 'unknown',
+    } }
+    const match = matchValue(group, value)
     const leaf: SupportLeafNode = {
       kind: 'fact',
       nodeId: `fact:${active.logicalAssertionId}`,
       label: active.logicalAssertionId,
-      state: value === undefined ? 'unknown' : filterMatches(group.filter, value) ? 'satisfied' : 'refuted',
-      ...(value === undefined ? {} : { value }),
+      state: match === undefined ? 'unknown' : match ? 'satisfied' : 'refuted',
+      value,
     }
-    if (value === undefined) return { outcome: 'unknown', leaf }
-    return { outcome: leaf.state, value, leaf }
+    return { outcome: leaf.state, value, leaf, factRefs }
   }
 
   const propositionKey = alternative.propositionKey
   if (propositionKey === undefined) return { outcome: 'unknown' }
   const results = state.derived.get(propositionKey) ?? []
   const combined = combineRuleOutcomes(results)
+  const factRefs = dedupeFactRefs(results.flatMap((result) => result.observedFactRefs))
   const leaf: SupportLeafNode = {
     kind: 'fact',
     nodeId: `derived:${propositionKey}`,
@@ -353,8 +397,16 @@ function evaluateAlternative(
   }
   if (combined.state === 'conflict') return { outcome: 'conflict', leaf }
   if (combined.state === 'unknown' || combined.value === undefined) return { outcome: 'unknown', leaf }
-  const outcome: Outcome = filterMatches(group.filter, combined.value) ? 'satisfied' : 'refuted'
-  return { outcome, value: combined.value, leaf }
+  const match = matchValue(group, combined.value)
+  const outcome: Outcome = match === undefined ? 'unknown' : match ? 'satisfied' : 'refuted'
+  return { outcome, value: combined.value, leaf, factRefs }
+}
+
+function matchValue(group: RulePremiseGroup, value: RuleAssertionValue): boolean | undefined {
+  if (group.unitCode !== undefined) {
+    if (!isRuleDecimalValue(value) || value.unit !== group.unitCode) return undefined
+  }
+  return evaluateFilter(group.filter, value)
 }
 
 function combineRuleOutcomes(results: readonly RuleOutcome[]): {
@@ -390,9 +442,11 @@ function evaluateGroup(
   satisfiedAlternativeIds: string[]
   groupNode: SupportGroupNode
   leaves: SupportLeafNode[]
+  factRefs: readonly RuleFactRef[]
 } {
   const polarity = group.polarity ?? 'positive'
   const leaves: SupportLeafNode[] = []
+  const factRefs: RuleFactRef[] = []
   const alternativeNodeIds: string[] = []
   const satisfiedAlternativeIds: string[] = []
   let anySatisfied = false
@@ -402,6 +456,7 @@ function evaluateGroup(
 
   for (const alternative of group.alternatives) {
     const evaluated = evaluateAlternative(alternative, group, state)
+    factRefs.push(...(evaluated.factRefs ?? []))
     if (evaluated.leaf !== undefined) leaves.push(evaluated.leaf)
     alternativeNodeIds.push(evaluated.leaf?.nodeId ?? `fact:${alternative.assertionId ?? alternative.alternativeId}`)
     if (evaluated.outcome === 'satisfied') {
@@ -419,10 +474,10 @@ function evaluateGroup(
     else if (anySatisfied) outcome = 'refuted'
     else if (allRefuted) outcome = 'satisfied'
     else outcome = 'unknown'
-  } else if (anySatisfied) {
-    outcome = 'satisfied'
   } else if (anyConflict) {
     outcome = 'conflict'
+  } else if (anySatisfied) {
+    outcome = 'satisfied'
   } else if (anyRefuted) {
     outcome = 'refuted'
   } else {
@@ -441,6 +496,7 @@ function evaluateGroup(
     satisfiedAlternativeIds: outcome === 'satisfied' ? satisfiedAlternativeIds.sort() : [],
     groupNode,
     leaves,
+    factRefs: dedupeFactRefs(factRefs),
   }
 }
 
@@ -449,6 +505,9 @@ function evaluateRule(rule: SupportRule, state: EvaluationState): RuleOutcome {
   const leaves: SupportLeafNode[] = []
   const satisfiedBy: RuleSatisfiedBy[] = []
   const factRefs: RuleFactRef[] = []
+  const observedFactRefs: RuleFactRef[] = []
+  const groupStates = new Map<string, Outcome>()
+  const groupFactRefs = new Map<string, readonly RuleFactRef[]>()
   let anyConflict = false
   let anyRefuted = false
   let anyUnknown = false
@@ -457,6 +516,9 @@ function evaluateRule(rule: SupportRule, state: EvaluationState): RuleOutcome {
     const evaluated = evaluateGroup(rule, group, state)
     groupNodes.push(evaluated.groupNode)
     leaves.push(...evaluated.leaves)
+    groupStates.set(group.groupId, evaluated.state)
+    groupFactRefs.set(group.groupId, evaluated.factRefs)
+    observedFactRefs.push(...evaluated.factRefs)
     if (evaluated.state === 'conflict') anyConflict = true
     else if (evaluated.state === 'refuted') anyRefuted = true
     else if (evaluated.state === 'unknown') anyUnknown = true
@@ -488,6 +550,9 @@ function evaluateRule(rule: SupportRule, state: EvaluationState): RuleOutcome {
     factRefs: dedupeFactRefs(factRefs),
     groupNodes,
     leafNodes: dedupeLeaves(leaves),
+    groupStates,
+    groupFactRefs,
+    observedFactRefs: dedupeFactRefs(observedFactRefs),
   }
   if (outcome === 'satisfied') {
     const declared = rule.conclusion.value
@@ -601,8 +666,126 @@ function canonicalInput(input: RuleEvaluationInput): unknown {
     scopeRef: input.scopeRef,
     request: input.request,
     definitionRef: input.definitionRef ?? null,
+    complete: input.complete ?? false,
     facts,
     rules,
+  }
+}
+
+function conditionStateOf(outcome: Outcome): RuleConditionState {
+  if (outcome === 'satisfied') return 'true'
+  if (outcome === 'refuted') return 'false'
+  return outcome
+}
+
+function andConditionStates(states: readonly RuleConditionState[]): RuleConditionState {
+  if (states.includes('false')) return 'false'
+  if (states.includes('conflict')) return 'conflict'
+  if (states.includes('unknown')) return 'unknown'
+  return 'true'
+}
+
+function negateConditionState(state: RuleConditionState): RuleConditionState {
+  if (state === 'true') return 'false'
+  if (state === 'false') return 'true'
+  return state
+}
+
+function applicabilityFor(
+  rule: SupportRule,
+  outcome: RuleOutcome,
+  input: RuleEvaluationInput,
+  inputDigest: Sha256Digest,
+): RuleApplicabilityResult | undefined {
+  const metadata = rule.publishedInstance
+  if (metadata === undefined) return undefined
+  if (
+    metadata.scopeRef.tenantId !== input.scopeRef.tenantId ||
+    metadata.scopeRef.spaceId !== input.scopeRef.spaceId
+  ) {
+    throw new RuleEvaluationError('SCOPE_MISMATCH', `published rule instance ${metadata.instanceKey} belongs to another scope`)
+  }
+  if (
+    input.definitionRef === undefined ||
+    input.definitionRef.id !== metadata.definitionRef.id ||
+    input.definitionRef.version !== metadata.definitionRef.version ||
+    input.definitionRef.digest !== metadata.definitionRef.digest
+  ) {
+    throw new RuleEvaluationError('INVALID_ARGUMENT', `published rule instance ${metadata.instanceKey} is not evaluated against its pinned definitionRef`)
+  }
+
+  const conditionState = andConditionStates(
+    metadata.conditionGroupIds.map((groupId) => conditionStateOf(outcome.groupStates.get(groupId) ?? 'unknown')),
+  )
+  const exceptionStates: RuleExceptionState[] = metadata.exceptions.map((exception) => {
+    const states = exception.groupIds.map((groupId) =>
+      negateConditionState(conditionStateOf(outcome.groupStates.get(groupId) ?? 'unknown')),
+    )
+    const state = andConditionStates(states)
+    const factRefs = dedupeFactRefs(exception.groupIds.flatMap((groupId) => outcome.groupFactRefs.get(groupId) ?? []))
+    return { exceptionId: exception.exceptionId, state, factRefs }
+  })
+  let state: RuleApplicabilityResult['state']
+  if (conditionState === 'false' || exceptionStates.some((exception) => exception.state === 'true')) {
+    state = 'not_applicable'
+  } else if (conditionState === 'conflict' || exceptionStates.some((exception) => exception.state === 'conflict')) {
+    state = 'conflict'
+  } else if (conditionState === 'unknown' || exceptionStates.some((exception) => exception.state === 'unknown')) {
+    state = 'unknown'
+  } else {
+    state = 'applicable'
+  }
+
+  const factRefs = dedupeFactRefs(outcome.observedFactRefs)
+  const sourceStatementIds = [...new Set(factRefs.map((ref) => ref.sourceStatementId).filter((id): id is string => id !== undefined))].sort()
+  const applicability = {
+    state,
+    conditionState,
+    exceptionStates,
+    positiveSupport: state === 'applicable',
+  }
+  return {
+    scopeRef: input.scopeRef,
+    definitionRef: metadata.definitionRef,
+    ruleRef: metadata.ruleRef,
+    ruleId: metadata.ruleId,
+    ruleVersionId: metadata.ruleVersionId,
+    publishedRevision: metadata.publishedRevision,
+    instanceKey: metadata.instanceKey,
+    objectId: metadata.objectId,
+    subjectEntityId: metadata.subjectEntityId,
+    propositionKey: metadata.propositionKey,
+    predicate: metadata.predicate,
+    ...(input.request.validAt === undefined ? {} : { validAt: input.request.validAt }),
+    ...(input.request.asOfRecordedSeq === undefined ? {} : { asOfRecordedSeq: input.request.asOfRecordedSeq }),
+    ...applicability,
+    factRefs,
+    sourceStatementIds,
+    inputDigest,
+    computationDigest: sha256DigestOf({
+      inputDigest,
+      ruleRef: metadata.ruleRef,
+      instanceKey: metadata.instanceKey,
+      validAt: input.request.validAt ?? null,
+      asOfRecordedSeq: input.request.asOfRecordedSeq ?? null,
+      applicability,
+      factRefs,
+    }),
+    sourceSpans: metadata.sourceSpans,
+    complete: input.complete ?? false,
+  }
+}
+
+function refutedPublishedOutcomeAsUnknown(outcome: RuleOutcome): RuleOutcome {
+  return {
+    state: 'unknown',
+    satisfiedBy: outcome.satisfiedBy,
+    factRefs: outcome.factRefs,
+    groupNodes: outcome.groupNodes,
+    leafNodes: outcome.leafNodes,
+    groupStates: outcome.groupStates,
+    groupFactRefs: outcome.groupFactRefs,
+    observedFactRefs: outcome.observedFactRefs,
   }
 }
 
@@ -641,10 +824,12 @@ export class RuleEvaluator {
     }
     const conflicts = detectConflicts(activeByLogical, input.scopeRef)
     const conflictedPredicates = new Set(conflicts.map((conflict) => conflict.propositionKey))
+    const conflictedAssertions = new Set(conflicts.flatMap((conflict) => conflict.assertionIds))
 
     const state: EvaluationState = {
       activeByLogical,
       factsById,
+      conflictedAssertions,
       derived: new Map(),
       leaves: new Map(),
       groups: new Map(),
@@ -653,21 +838,31 @@ export class RuleEvaluator {
     }
 
     const outcomesByConclusion = new Map<string, RuleOutcome[]>()
+    const inputDigest = sha256DigestOf(canonicalInput(input))
+    const applicabilities: RuleApplicabilityResult[] = []
     for (const rule of orderedRules) {
       const outcome = evaluateRule(rule, state)
+      const applicability = applicabilityFor(rule, outcome, input, inputDigest)
+      if (applicability !== undefined && rule.publishedInstance?.emitApplicabilityArtifact !== false) {
+        applicabilities.push(applicability)
+      }
       for (const leaf of outcome.leafNodes) state.leaves.set(leaf.nodeId, leaf)
       for (const group of outcome.groupNodes) state.groups.set(group.nodeId, group)
       state.rules.set(`rule:${rule.ruleId}`, {
         kind: 'rule',
         nodeId: `rule:${rule.ruleId}`,
-        ruleId: rule.ruleId,
+        ruleId: rule.publishedInstance?.ruleId ?? rule.ruleId,
         ruleRef: rule.ruleRef,
         state: outcome.state,
         groupNodeIds: outcome.groupNodes.map((group) => group.nodeId).sort(),
       })
+      const propositionOutcome =
+        rule.publishedInstance !== undefined && outcome.state === 'refuted'
+          ? refutedPublishedOutcomeAsUnknown(outcome)
+          : outcome
       const existing = outcomesByConclusion.get(rule.conclusion.propositionKey)
-      if (existing === undefined) outcomesByConclusion.set(rule.conclusion.propositionKey, [outcome])
-      else existing.push(outcome)
+      if (existing === undefined) outcomesByConclusion.set(rule.conclusion.propositionKey, [propositionOutcome])
+      else existing.push(propositionOutcome)
       state.derived.set(rule.conclusion.propositionKey, outcomesByConclusion.get(rule.conclusion.propositionKey) ?? [])
     }
 
@@ -694,7 +889,12 @@ export class RuleEvaluator {
         : []
       const conclusion: RuleConclusionResult = {
         propositionKey,
-        qualifiedPropositionKey: conclusionQualifiedKey(predicate, input.request),
+        qualifiedPropositionKey: conclusionQualifiedKey(
+          predicate,
+          input.request,
+          input.definitionRef,
+          propositionKey,
+        ),
         predicate,
         domainStatus: statusOf(combined.state),
         satisfiedBy,
@@ -721,10 +921,11 @@ export class RuleEvaluator {
       request: input.request,
       ...(input.definitionRef === undefined ? {} : { definitionRef: input.definitionRef }),
       conclusions,
+      applicabilities: applicabilities.sort((left, right) => left.instanceKey.localeCompare(right.instanceKey)),
       gaps,
       conflicts,
       supports,
-      inputDigest: sha256DigestOf(canonicalInput(input)),
+      inputDigest,
     }
   }
 }

@@ -1,15 +1,18 @@
 import type {
-  ControlReadProjectionRequest,
   DecimalQuantity,
+  ControlReadProjectionRequest,
   DomainResultStatus,
   RevisionString,
+  RuleProvenanceSpan,
   ScopeRef,
   SemanticFilter,
   Sha256Digest,
+  ResourceRef,
   SourceRef,
   ValidityInterval,
   VersionRef,
 } from '@ontology/contracts'
+import type { RuleEvaluationErrorCode } from './errors'
 
 /**
  * Declarative rule evaluation and compact support DAG (SPEC D5/D5.1, C3/C4, US-016, FR-18).
@@ -29,7 +32,9 @@ import type {
  * the Cartesian product of all source combinations (D5).
  */
 
-/** An exact decimal, categorical string or boolean assertion value. Floats are never exact. */
+/** An exact decimal quantity, categorical string or boolean assertion value. */
+export type RuleDecimalValue = DecimalQuantity
+
 export type RuleAssertionValue = DecimalQuantity | string | boolean
 
 /** One version of a logical assertion as published into the append-only event stream (D3.1). */
@@ -41,8 +46,16 @@ export interface RuleFact {
   readonly subject: string
   readonly predicate: string
   readonly value?: RuleAssertionValue
+  /** Parent immutable statement for attribute projections; outbox dependencies key the parent. */
+  readonly sourceStatementId?: string
+  /** Original published entity type and attribute identity, retained for scoped rule compilation. */
+  readonly objectId?: string
+  readonly attributeId?: string
+  /** Schema pin supplied by the publication reader that loaded this statement page. */
+  readonly schemaRef?: VersionRef
   readonly validity: ValidityInterval
   readonly sourceRef: SourceRef
+  readonly sourceRefs?: readonly ResourceRef[]
   readonly evidenceId?: string
 }
 
@@ -72,6 +85,10 @@ export interface RulePremiseGroup {
   readonly alternatives: readonly RulePremiseAlternative[]
   readonly polarity?: RuleGroupPolarity
   readonly completeRange?: boolean
+  /** A negative group over present, explicitly published observations is sound without range closure. */
+  readonly explicitObservation?: boolean
+  /** Expected quantity unit; incompatible observations remain unknown instead of comparing amounts. */
+  readonly unitCode?: string
 }
 
 /** The proposition a rule derives. The predicate defaults to the proposition key. */
@@ -87,6 +104,113 @@ export interface SupportRule {
   readonly ruleId: string
   readonly premiseGroups: readonly RulePremiseGroup[]
   readonly conclusion: RuleConclusionSpec
+  /** Published instances contribute positive support only; a refuted condition is not proposition=false. */
+  readonly publishedInstance?: PublishedRuleInstanceMetadata
+}
+
+export interface PublishedRuleInstanceMetadata {
+  readonly ruleId: string
+  readonly ruleVersionId: string
+  readonly publishedRevision: RevisionString
+  readonly ruleRef: VersionRef
+  readonly scopeRef: ScopeRef
+  readonly definitionRef: VersionRef
+  readonly instanceKey: string
+  readonly objectId: string
+  readonly subjectEntityId: string
+  readonly propositionKey: string
+  readonly predicate: string
+  /** Set false for reviewed business-consequence clones; the applicability rule still runs. */
+  readonly emitApplicabilityArtifact?: boolean
+  readonly conditionGroupIds: readonly string[]
+  readonly exceptions: readonly {
+    readonly exceptionId: string
+    readonly groupIds: readonly string[]
+  }[]
+  readonly sourceSpans: readonly RuleProvenanceSpan[]
+}
+
+export type RuleApplicabilityState = 'applicable' | 'not_applicable' | 'unknown' | 'conflict'
+export type RuleConditionState = 'true' | 'false' | 'unknown' | 'conflict'
+
+export interface RuleExceptionState {
+  readonly exceptionId: string
+  readonly state: RuleConditionState
+  readonly factRefs: readonly RuleFactRef[]
+}
+
+/** One published rule × subject result. It deliberately describes support, not business negation. */
+export interface RuleApplicabilityResult {
+  readonly scopeRef: ScopeRef
+  readonly definitionRef: VersionRef
+  readonly ruleRef: VersionRef
+  readonly ruleId: string
+  readonly ruleVersionId: string
+  readonly publishedRevision: RevisionString
+  readonly instanceKey: string
+  readonly objectId: string
+  readonly subjectEntityId: string
+  readonly propositionKey: string
+  readonly predicate: string
+  readonly validAt?: string
+  readonly asOfRecordedSeq?: RevisionString
+  readonly state: RuleApplicabilityState
+  readonly conditionState: RuleConditionState
+  readonly exceptionStates: readonly RuleExceptionState[]
+  readonly positiveSupport: boolean
+  readonly factRefs: readonly RuleFactRef[]
+  readonly sourceStatementIds: readonly string[]
+  readonly inputDigest: Sha256Digest
+  readonly computationDigest: Sha256Digest
+  readonly sourceSpans: readonly RuleProvenanceSpan[]
+  readonly complete: boolean
+}
+
+export interface RuleCapabilityIssue {
+  readonly ruleId: string
+  readonly ruleVersionId: string
+  readonly publishedRevision: RevisionString
+  readonly ruleRef?: VersionRef
+  readonly objectId: string
+  readonly subjectEntityId?: string
+  readonly code: RuleEvaluationErrorCode
+  readonly message: string
+  readonly sourceSpans: readonly RuleProvenanceSpan[]
+}
+
+export interface PublishedRuleSubject {
+  readonly subjectEntityId: string
+  readonly objectId: string
+}
+
+export interface CompiledPublishedRuleInstance {
+  readonly supportRule: SupportRule
+  readonly ruleRef: VersionRef
+  readonly ruleId: string
+  readonly ruleVersionId: string
+  readonly publishedRevision: RevisionString
+  readonly instanceKey: string
+  readonly objectId: string
+  readonly subjectEntityId: string
+  readonly propositionKey: string
+  readonly predicate: string
+}
+
+export interface PublishedRuleCompilation {
+  readonly instances: readonly CompiledPublishedRuleInstance[]
+  readonly issues: readonly RuleCapabilityIssue[]
+}
+
+export interface AttributeProjectionIssue {
+  readonly statementId: string
+  readonly attributeId?: string
+  readonly code: 'MALFORMED_ATTRIBUTES' | 'MALFORMED_ATTRIBUTE' | 'INVALID_VALUE' | 'DUPLICATE_ATTRIBUTE_ID'
+  readonly message: string
+}
+
+export interface PublishedAttributeProjection {
+  readonly facts: readonly RuleFact[]
+  readonly issues: readonly AttributeProjectionIssue[]
 }
 
 /** A pinned reference to the exact fact version that supported a conclusion. */
@@ -95,6 +219,8 @@ export interface RuleFactRef {
   readonly logicalAssertionId: string
   readonly recordedSeq: RevisionString
   readonly digest: Sha256Digest
+  readonly sourceStatementId?: string
+  readonly sourceRefs?: readonly ResourceRef[]
 }
 
 export type SupportNodeState = 'satisfied' | 'refuted' | 'unknown' | 'conflict'
@@ -179,6 +305,8 @@ export interface RuleEvaluationInput {
   readonly rules: readonly SupportRule[]
   /** The pinned definition version the facts and rules were published against. */
   readonly definitionRef?: VersionRef
+  /** False when an upstream page/cap stopped before the complete scope was loaded. */
+  readonly complete?: boolean
 }
 
 export interface RuleEvaluationResult {
@@ -186,6 +314,7 @@ export interface RuleEvaluationResult {
   readonly request: ControlReadProjectionRequest
   readonly definitionRef?: VersionRef
   readonly conclusions: readonly RuleConclusionResult[]
+  readonly applicabilities: readonly RuleApplicabilityResult[]
   readonly gaps: readonly string[]
   readonly conflicts: readonly RuleConflictResult[]
   readonly supports: SupportGraph

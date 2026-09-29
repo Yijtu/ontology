@@ -571,6 +571,7 @@ export class ToolGatewayService implements ToolGateway {
         runId: ctx.runId,
       },
       observedAt: now,
+      ...(result.validity === undefined ? {} : { validity: result.validity }),
       sourceSnapshots: [...snapshots],
       resultDigest,
       dependencies: [],

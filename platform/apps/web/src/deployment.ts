@@ -16,13 +16,10 @@ export interface WebDeployment {
   readonly scenarioViews: readonly AppViewContribution[]
 }
 
-/** Other deployments replace this assembly with their own profile and view contributions. */
+/** Explicit non-Core deployments may supply a profile through the URL. Core metadata is loaded from the API. */
 export function resolveWebDeployment(params: URLSearchParams): WebDeployment {
   const id = params.get('profileId')
   const version = params.get('profileVersion')
-  if (id === null && version === null) {
-    return { profileRef: DEMO_PROFILE, timeZone: 'Asia/Shanghai', queryContextFields: ENERGY_QUERY_FIELDS, scenarioViews: [HOME_ENERGY_VIEW] }
-  }
   if (id === null || id.trim() === '' || version === null || version.trim() === '') {
     throw new Error('profileId and profileVersion must be supplied together')
   }

@@ -132,13 +132,19 @@ async function createEntity(candidateId: string): Promise<string> {
 }
 
 async function matchEntity(candidateId: string, entityId: string, expectedRevision = '0'): Promise<void> {
+  const candidate = await candidateStore.getCandidate(scope.scopeRef, candidateId, ctx)
+  if (candidate?.kind !== 'entity') throw new Error(`expected entity candidate ${candidateId}`)
+  const nativeId = candidate.attributes.find((attribute) => attribute.attributeId === 'device_native_id')?.value
+  if (typeof nativeId !== 'string' || nativeId.length === 0) {
+    throw new Error(`candidate ${candidateId} has no device_native_id`)
+  }
   await identityService.decide(
     {
       candidateId,
       kind: 'match',
       expectedRevision,
       targetEntityId: entityId,
-      strongIdentity: { kind: 'native_id', value: `N-${candidateId}` },
+      strongIdentity: { kind: 'native_id', attributeId: 'device_native_id', value: nativeId },
     },
     ctx,
   )
@@ -474,10 +480,18 @@ describe('semantic publication against real PostgreSQL', () => {
     await insert(candidate)
     const entityId = await createEntity(candidateId)
     await matchEntity(candidateId, entityId, '1')
-    // A reject with a target records a cannot-link while the open assertion remains.
-    await identityService.decide(
+    // A merged candidate cannot be cannot-linked through the service. Keep that invariant
+    // explicit, then inject a stale legacy constraint to exercise the publication store's
+    // defensive check for inconsistent historical/race state.
+    await expect(identityService.decide(
       { candidateId, kind: 'reject', expectedRevision: '2', targetEntityId: entityId, justification: 'not the same device' },
       ctx,
+    )).rejects.toMatchObject({ code: 'IDENTITY_CONFLICT' })
+    await harness.adminClient.query(
+      `INSERT INTO agent_platform.identity_link_constraints (
+         tenant_id, space_id, constraint_id, candidate_id, entity_id, kind, decision_id, recorded_at)
+       VALUES ($1, $2, $3, $4, $5, 'cannot_link', $6, $7::timestamptz)`,
+      [scope.tenantId, scope.spaceId, randomUUID(), candidateId, entityId, randomUUID(), '2026-09-22T00:00:01Z'],
     )
     await reviewViaHttp(candidateId, 'approve', 'ok')
 
@@ -487,7 +501,11 @@ describe('semantic publication against real PostgreSQL', () => {
   })
 
   it('preserves history on a retraction, keeps a supported conclusion and emits the invalidation through the real outbox', async () => {
-    const attributes = [{ attributeId: 'device_name', value: 'Charger One' }]
+    const attributes = [
+      { attributeId: 'device_native_id', value: 'DEV-SHARED' },
+      { attributeId: 'device_name', value: 'Charger One' },
+      { attributeId: 'site', value: 'site-a' },
+    ]
     const first = await seedResolvedEntity(attributes)
     const secondCandidateId = randomUUID()
     await insert(candidateFor(secondCandidateId, attributes))

@@ -1,0 +1,3 @@
+# These deployment assets carry immutable content digests. Keep checkout bytes
+# stable on Windows and Linux rather than applying the user's autocrlf setting.
+platform/deploy/core/examples/** text eol=lf

@@ -1,169 +1,265 @@
 import type {
   EvidenceDependencyEdge,
   EvidenceRecord,
-  PublishedRuleVersion,
+  ResourceRef,
   RevisionString,
   ScopeRef,
   ToolContext,
   Uuid,
   VersionRef,
 } from '@ontology/contracts'
-import { RuleEvaluationError, RuleEvaluator } from '../rules'
-import type { RuleConclusionResult, RuleFact, SupportRule } from '../rules'
-import { ruleFactsFromStatements, supportRuleFromPublishedRule } from '../rules'
 import type { PublishedSemanticReadView } from '../materialization'
+import type { RuleEvaluator } from '../rules'
+import { sameUtcInstant } from './instant'
 
 /**
- * Evidence dependencies derived from the real compact support DAG (SPEC D5/D4, US-022,
- * FR-30).
+ * One premise group from an immutable, instance-qualified rule support record.
  *
- * An evidence item carries two kinds of real dependency:
- *
- *  - **lineage** — the evidence-to-evidence edges already recorded on its envelope; and
- *  - **support** — the premises of the compact rule support DAG (LOCAL-032) that produced a
- *    rule-derivation evidence, resolved to the evidence ids that published the supporting
- *    facts.
- *
- * The ontology *type* graph (objects and `RelationDefinition`s) is a different graph: a
- * type-level relation between concepts is not evidence that one conclusion rests on another.
- * This source never reads a `SemanticDefinitionVersion`, and the support DAG compiler rejects
- * a `relation` premise, so a schema relation can never surface as an evidence dependency
- * (SPEC D4, §9).
+ * The reader must return only alternatives that actually participated in the rule's positive
+ * support. Each fact is explicitly marked as an entity attribute so a relation assertion can
+ * never be mistaken for evidence of an attribute premise.
  */
-
-const PROJECTION_REF: VersionRef = {
-  id: 'projection.provenance',
-  version: '1.0.0',
-  digest: `sha256:${'0'.repeat(64)}`,
+export interface PublishedRuleSupportGroup {
+  readonly groupId: string
+  readonly facts: readonly {
+    readonly kind: 'entity_attribute' | 'relation'
+    readonly assertionId: string
+    readonly logicalAssertionId: string
+    readonly sourceStatementId: string
+    readonly subjectEntityId: string
+    readonly objectId: string
+    readonly schemaRef: VersionRef
+    readonly sourceRefs: readonly ResourceRef[]
+  }[]
 }
 
-const DEFAULT_PAGE_SIZE = 1_000
+/**
+ * Immutable support resolution for one published rule instance at one exact bitemporal point.
+ * The reader should be backed by persisted materialization/support data, never latest mutable
+ * publication heads. Multiple instances are returned as separate candidates so this class can
+ * fail closed when the root evidence does not identify which entity was evaluated.
+ */
+export interface PublishedRuleSupportInstance {
+  readonly scopeRef: ScopeRef
+  readonly definitionRef: VersionRef
+  readonly ruleRef: VersionRef
+  readonly instanceKey: string
+  readonly objectId: string
+  readonly subjectEntityId: string
+  readonly validAt: string
+  readonly asOfRecordedSeq: RevisionString
+  readonly applicability: {
+    readonly state: 'applicable' | 'not_applicable' | 'unknown' | 'conflict'
+    readonly positiveSupport: boolean
+  }
+  readonly complete: boolean
+  readonly premiseGroups: readonly PublishedRuleSupportGroup[]
+}
+
+export type PublishedRuleSupportResolution =
+  | {
+      readonly state: 'resolved'
+      readonly instanceKey: string
+      readonly objectId: string
+      readonly subjectEntityId: string
+      readonly premiseGroups: readonly PublishedRuleSupportGroup[]
+    }
+  | {
+      readonly state: 'ambiguous' | 'unavailable' | 'incomplete' | 'not_applicable' | 'unknown' | 'conflict'
+      readonly reason: string
+    }
+
+/** Optional read port for immutable, per-instance support records. */
+export interface PublishedRuleSupportReader {
+  readCandidates(
+    scopeRef: ScopeRef,
+    request: {
+      readonly ruleRef: VersionRef
+      readonly validAt: string
+      readonly asOfRecordedSeq: RevisionString
+      /** Exact root evidence identity, used to join an archived immutable derivation payload. */
+      readonly evidenceRef: ResourceRef
+      /** Optional immutable payload locator from that root envelope. */
+      readonly payloadRef?: ResourceRef
+    },
+    ctx: ToolContext,
+  ): Promise<{
+    /** False means the reader could not prove that every candidate was returned. */
+    readonly complete: boolean
+    readonly candidates: readonly PublishedRuleSupportInstance[]
+  }>
+}
 
 export interface SupportEvidenceDependencySourceDependencies {
-  /** The official published read view (LOCAL-031); never the candidate store. */
+  /** Retained for composition compatibility; mutable published heads are never used as support. */
   readonly published: PublishedSemanticReadView
+  readonly supportReader?: PublishedRuleSupportReader
+  /** Retained as an accepted legacy option; the evaluator is deliberately not used as a fallback. */
   readonly evaluator?: RuleEvaluator
+  /** Retained as an accepted legacy option; immutable support reads are bounded by the reader. */
   readonly pageSize?: number
 }
 
-function compareRevision(left: RevisionString, right: RevisionString): number {
-  const leftNumber = Number(left)
-  const rightNumber = Number(right)
-  if (Number.isFinite(leftNumber) && Number.isFinite(rightNumber)) return leftNumber - rightNumber
-  return left < right ? -1 : left > right ? 1 : 0
+function sameScope(left: ScopeRef, right: ScopeRef): boolean {
+  return left.tenantId === right.tenantId && left.spaceId === right.spaceId
 }
 
-function latestRules(
-  versions: readonly PublishedRuleVersion[],
-  facts: readonly RuleFact[],
-): SupportRule[] {
-  const latest = new Map<string, PublishedRuleVersion>()
-  for (const version of versions) {
-    const existing = latest.get(version.ruleId)
-    if (existing === undefined || compareRevision(version.version, existing.version) > 0) {
-      latest.set(version.ruleId, version)
-    }
-  }
-  const rules: SupportRule[] = []
-  for (const version of [...latest.values()].sort((left, right) => left.ruleId.localeCompare(right.ruleId))) {
-    try {
-      rules.push(supportRuleFromPublishedRule(version, facts))
-    } catch (error) {
-      // A rule outside the declarative subset (for example a `relation` premise) has no
-      // support DAG and therefore contributes no evidence dependency; it is skipped rather
-      // than weakening the traversal into a permissive one.
-      if (!(error instanceof RuleEvaluationError)) throw error
-    }
-  }
-  return rules
+function sameVersion(left: VersionRef, right: VersionRef): boolean {
+  return left.id === right.id && left.version === right.version && left.digest === right.digest
 }
 
+function evidenceIdsOf(refs: readonly ResourceRef[]): Uuid[] {
+  return [...new Set(refs
+    .filter((ref): ref is ResourceRef & { readonly kind: 'evidence' } => ref.kind === 'evidence')
+    .map((ref) => ref.id))]
+}
+
+function sameFactInstance(
+  fact: PublishedRuleSupportGroup['facts'][number],
+  instance: PublishedRuleSupportInstance,
+): boolean {
+  return fact.kind === 'entity_attribute' &&
+    fact.subjectEntityId === instance.subjectEntityId &&
+    fact.objectId === instance.objectId &&
+    sameVersion(fact.schemaRef, instance.definitionRef) &&
+    fact.assertionId.length > 0 &&
+    fact.logicalAssertionId.length > 0 &&
+    fact.sourceStatementId.length > 0
+}
+
+/**
+ * Evidence dependencies derived from immutable lineage and an optional exact rule support
+ * record (SPEC D5/D4, US-022, FR-30). Ontology type relations are not evidence dependencies.
+ */
 export class SupportEvidenceDependencySource {
-  readonly #published: PublishedSemanticReadView
-  readonly #evaluator: RuleEvaluator
-  readonly #pageSize: number
+  readonly #supportReader: PublishedRuleSupportReader | undefined
 
   constructor(dependencies: SupportEvidenceDependencySourceDependencies) {
-    this.#published = dependencies.published
-    this.#evaluator = dependencies.evaluator ?? new RuleEvaluator()
-    this.#pageSize = dependencies.pageSize ?? DEFAULT_PAGE_SIZE
+    // `published` is intentionally not retained. Recomputing against current publication rows
+    // can select a different entity instance or present-day fact version than the evidence saw.
+    this.#supportReader = dependencies.supportReader
   }
 
+  /**
+   * Return both immutable envelope lineage and the status of support resolution. Callers that
+   * need to report coverage should consume `supportResolution`; an empty support edge list by
+   * itself does not mean a complete support DAG was reconstructed.
+   */
+  async dependenciesWithResolutionOf(
+    scopeRef: ScopeRef,
+    evidence: EvidenceRecord,
+    ctx: ToolContext,
+  ): Promise<{
+    readonly edges: readonly EvidenceDependencyEdge[]
+    readonly supportResolution: PublishedRuleSupportResolution | { readonly state: 'not_rule' }
+  }> {
+    const envelope = evidence.envelope
+    const root = evidence.evidenceRef.id
+    const lineage = envelope.dependencies.map((dependency) => ({
+      fromEvidenceId: root,
+      toEvidenceId: dependency.evidenceRef.id,
+      relation: dependency.relation,
+      origin: 'lineage' as const,
+      ...(dependency.premiseGroup === undefined ? {} : { premiseGroup: dependency.premiseGroup }),
+    }))
+    const ruleRef = envelope.producedBy.ruleRef
+    if (ruleRef === undefined) return { edges: lineage, supportResolution: { state: 'not_rule' } }
+
+    const support = await this.#supportEdges(scopeRef, evidence, ctx)
+    return { edges: [...lineage, ...support.edges], supportResolution: support.resolution }
+  }
+
+  /** Compatibility method used by the provenance traversal port. */
   async dependenciesOf(
     scopeRef: ScopeRef,
     evidence: EvidenceRecord,
     ctx: ToolContext,
   ): Promise<readonly EvidenceDependencyEdge[]> {
-    const envelope = evidence.envelope
-    const root = evidence.evidenceRef.id
-    const edges: EvidenceDependencyEdge[] = envelope.dependencies.map((dependency) => ({
-      fromEvidenceId: root,
-      toEvidenceId: dependency.evidenceRef.id,
-      relation: dependency.relation,
-      origin: 'lineage',
-      ...(dependency.premiseGroup === undefined ? {} : { premiseGroup: dependency.premiseGroup }),
-    }))
-    const ruleRef = envelope.producedBy.ruleRef
-    if (ruleRef === undefined) return edges
-
-    const support = await this.#supportEdges(scopeRef, root, ruleRef, envelope.recordedSeq, envelope.validity?.validFrom ?? envelope.observedAt, ctx)
-    return [...edges, ...support]
+    const result = await this.dependenciesWithResolutionOf(scopeRef, evidence, ctx)
+    return result.edges
   }
 
   async #supportEdges(
     scopeRef: ScopeRef,
-    root: Uuid,
-    ruleRef: VersionRef,
-    recordedSeq: RevisionString | undefined,
-    validAt: string,
+    evidence: EvidenceRecord,
     ctx: ToolContext,
-  ): Promise<EvidenceDependencyEdge[]> {
-    const statements = await this.#published.listStatements(scopeRef, { limit: this.#pageSize }, ctx)
-    const facts = ruleFactsFromStatements(statements)
-    const versions = await this.#published.listRuleVersions(scopeRef, { limit: this.#pageSize }, ctx)
-    const rules = latestRules(versions, facts)
-    if (rules.length === 0) return []
-
-    let conclusions: readonly RuleConclusionResult[]
-    try {
-      const result = this.#evaluator.evaluate({
-        scopeRef,
-        request: {
-          scopeRef,
-          projectionRef: PROJECTION_REF,
-          ...(recordedSeq === undefined ? {} : { asOfRecordedSeq: recordedSeq }),
-          validAt,
-        },
-        facts,
-        rules,
-      })
-      conclusions = result.conclusions
-    } catch (error) {
-      if (!(error instanceof RuleEvaluationError)) throw error
-      return []
+  ): Promise<{
+    readonly edges: EvidenceDependencyEdge[]
+    readonly resolution: PublishedRuleSupportResolution
+  }> {
+    const envelope = evidence.envelope
+    const ruleRef = envelope.producedBy.ruleRef
+    if (ruleRef === undefined) return { edges: [], resolution: { state: 'unavailable', reason: 'evidence has no ruleRef' } }
+    if (!sameScope(scopeRef, envelope.scopeRef)) {
+      return { edges: [], resolution: { state: 'unavailable', reason: 'evidence scope does not match the requested scope' } }
+    }
+    if (envelope.recordedSeq === undefined) {
+      return { edges: [], resolution: { state: 'unavailable', reason: 'evidence has no immutable recorded sequence for support lookup' } }
+    }
+    if (this.#supportReader === undefined) {
+      return { edges: [], resolution: { state: 'unavailable', reason: 'immutable per-instance support reader is not configured' } }
     }
 
-    const target = conclusions.find((conclusion) =>
-      conclusion.ruleRefs.some((ref) => ref.id === ruleRef.id && ref.version === ruleRef.version),
+    const validAt = envelope.validity?.validFrom ?? envelope.observedAt
+    const read = await this.#supportReader.readCandidates(
+      scopeRef,
+      {
+        ruleRef,
+        validAt,
+        asOfRecordedSeq: envelope.recordedSeq,
+        evidenceRef: evidence.evidenceRef,
+        ...(envelope.payloadRef === undefined ? {} : { payloadRef: envelope.payloadRef }),
+      },
+      ctx,
     )
-    if (target === undefined) return []
-
-    const evidenceByStatement = new Map<string, readonly Uuid[]>()
-    for (const statement of statements) {
-      const ids = statement.sourceRefs.filter((ref) => ref.kind === 'evidence').map((ref) => ref.id)
-      if (ids.length > 0) evidenceByStatement.set(statement.statementId, ids)
+    if (!read.complete) {
+      return { edges: [], resolution: { state: 'incomplete', reason: 'immutable support lookup was not complete' } }
     }
-    const rule = rules.find((candidate) => candidate.ruleId === ruleRef.id)
+    const exactCandidates = read.candidates.filter((candidate) =>
+      sameScope(candidate.scopeRef, scopeRef) &&
+      sameVersion(candidate.ruleRef, ruleRef) &&
+      sameUtcInstant(candidate.validAt, validAt) &&
+      candidate.asOfRecordedSeq === envelope.recordedSeq,
+    )
+    if (exactCandidates.length === 0) {
+      return { edges: [], resolution: { state: 'unavailable', reason: 'no immutable support instance matches this rule and bitemporal point' } }
+    }
+    if (exactCandidates.length !== 1) {
+      return { edges: [], resolution: { state: 'ambiguous', reason: 'multiple entity instances match the evidence rule and bitemporal point' } }
+    }
+    const instance = exactCandidates[0]
+    if (instance === undefined || !instance.complete) {
+      return { edges: [], resolution: { state: 'incomplete', reason: 'the matching immutable support instance is incomplete' } }
+    }
+    if (instance.applicability.state === 'not_applicable') {
+      return { edges: [], resolution: { state: 'not_applicable', reason: 'the rule instance did not provide positive support' } }
+    }
+    if (instance.applicability.state === 'unknown' || instance.applicability.state === 'conflict') {
+      return { edges: [], resolution: { state: instance.applicability.state, reason: `the rule instance applicability is ${instance.applicability.state}` } }
+    }
+    if (!instance.applicability.positiveSupport) {
+      return { edges: [], resolution: { state: 'incomplete', reason: 'the rule instance is marked applicable without positive support' } }
+    }
+    if (instance.instanceKey.length === 0 || instance.objectId.length === 0 || instance.subjectEntityId.length === 0) {
+      return { edges: [], resolution: { state: 'incomplete', reason: 'the matching support instance lacks its entity-qualified identity' } }
+    }
 
+    const root = evidence.evidenceRef.id
     const edges: EvidenceDependencyEdge[] = []
-    for (const group of target.satisfiedBy) {
-      const premiseGroup = rule?.premiseGroups.find((candidate) => candidate.groupId === group.groupId)
-      for (const alternativeId of group.alternativeIds) {
-        const alternative = premiseGroup?.alternatives.find(
-          (candidate) => candidate.alternativeId === alternativeId,
-        )
-        const assertionId = alternative?.assertionId ?? alternativeId
-        for (const evidenceId of evidenceByStatement.get(assertionId) ?? []) {
+    const edgeKeys = new Set<string>()
+    for (const group of instance.premiseGroups) {
+      if (group.groupId.length === 0) {
+        return { edges: [], resolution: { state: 'incomplete', reason: 'a support premise group has no stable id' } }
+      }
+      for (const fact of group.facts) {
+        if (!sameFactInstance(fact, instance)) {
+          return { edges: [], resolution: { state: 'incomplete', reason: 'a premise fact does not match the resolved entity, object, or definition instance' } }
+        }
+        for (const evidenceId of evidenceIdsOf(fact.sourceRefs)) {
+          if (evidenceId === root) continue
+          const key = `${group.groupId}\u0000${evidenceId}`
+          if (edgeKeys.has(key)) continue
+          edgeKeys.add(key)
           edges.push({
             fromEvidenceId: root,
             toEvidenceId: evidenceId,
@@ -174,6 +270,15 @@ export class SupportEvidenceDependencySource {
         }
       }
     }
-    return edges
+    return {
+      edges,
+      resolution: {
+        state: 'resolved',
+        instanceKey: instance.instanceKey,
+        objectId: instance.objectId,
+        subjectEntityId: instance.subjectEntityId,
+        premiseGroups: instance.premiseGroups,
+      },
+    }
   }
 }

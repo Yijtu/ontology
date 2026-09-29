@@ -134,7 +134,7 @@ export class CountingDecision implements DecisionPort {
 
   decide(request: DecisionRequest): Promise<DecisionResult> {
     this.calls.push(request)
-    if (this.fail) return Promise.reject(new Error('the decision port is unavailable'))
+    if (this.fail) return Promise.reject(new RecoverableDecisionError())
     const question = request.questions[0]
     if (question === undefined) return Promise.reject(new Error('no question was supplied'))
     const optionSetHash =
@@ -146,6 +146,16 @@ export class CountingDecision implements DecisionPort {
       optionSetHash,
       selectedOptionId: this.selected,
     })
+  }
+}
+
+class RecoverableDecisionError extends Error {
+  readonly code = 'MODEL_UNAVAILABLE'
+  readonly retryable = true
+
+  constructor() {
+    super('the decision port is unavailable')
+    this.name = 'RecoverableDecisionError'
   }
 }
 

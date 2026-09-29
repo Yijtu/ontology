@@ -33,7 +33,13 @@ import type { RequestAuthenticator } from './shared'
 export interface ApiServerOptions {
   readonly authenticate: RequestAuthenticator
   /** Register the run surface (`POST /runs`, events, cancel, resume). */
-  readonly runs?: { readonly service: RunService; readonly progress?: RunProgressReader }
+  readonly runs?: {
+    readonly service: RunService
+    readonly progress?: RunProgressReader
+    readonly dispatch?: RunApiOptions['dispatch']
+    readonly validateSubmission?: RunApiOptions['validateSubmission']
+    readonly submissionMode?: RunApiOptions['submissionMode']
+  }
   /** Register the durable-job surface (`POST /ingestions`, `GET /jobs/{id}`, retry). */
   readonly jobs?: { readonly service: JobService }
   /** Register the configuration workbench surface (components/profiles/sources). */
@@ -63,6 +69,9 @@ export function createApiServer(options: ApiServerOptions): FastifyInstance {
       service: options.runs.service,
       authenticate: options.authenticate,
       ...(options.runs.progress === undefined ? {} : { progress: options.runs.progress }),
+      ...(options.runs.dispatch === undefined ? {} : { dispatch: options.runs.dispatch }),
+      ...(options.runs.validateSubmission === undefined ? {} : { validateSubmission: options.runs.validateSubmission }),
+      ...(options.runs.submissionMode === undefined ? {} : { submissionMode: options.runs.submissionMode }),
     })
   }
   if (options.jobs !== undefined) {
@@ -102,6 +111,9 @@ export function createRunApi(options: RunApiOptions): FastifyInstance {
     runs: {
       service: options.service,
       ...(options.progress === undefined ? {} : { progress: options.progress }),
+      ...(options.dispatch === undefined ? {} : { dispatch: options.dispatch }),
+      ...(options.validateSubmission === undefined ? {} : { validateSubmission: options.validateSubmission }),
+      ...(options.submissionMode === undefined ? {} : { submissionMode: options.submissionMode }),
     },
     ...(options.logger === undefined ? {} : { logger: options.logger }),
   })

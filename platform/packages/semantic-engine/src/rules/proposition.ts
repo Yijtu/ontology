@@ -1,4 +1,4 @@
-import type { ControlReadProjectionRequest, Sha256Digest, ScopeRef } from '@ontology/contracts'
+import type { ControlReadProjectionRequest, Sha256Digest, ScopeRef, VersionRef } from '@ontology/contracts'
 import { sha256DigestOf } from '../definitions/canonical'
 import type { RuleFact } from './types'
 import { unitOf } from './values'
@@ -10,7 +10,11 @@ import { unitOf } from './values'
  */
 export interface PropositionQualifiers {
   readonly predicate: string
+  /** Stable rule/entity-qualified conclusion identity, when the caller already has one. */
+  readonly propositionKey?: string
   readonly subject?: string
+  readonly objectId?: string
+  readonly schemaRef?: VersionRef
   readonly unitCode?: string
   readonly validFrom?: string
   readonly validTo?: string
@@ -19,8 +23,11 @@ export interface PropositionQualifiers {
 
 export function qualifiedPropositionKey(qualifiers: PropositionQualifiers): Sha256Digest {
   return sha256DigestOf({
+    propositionKey: qualifiers.propositionKey ?? null,
     subject: qualifiers.subject ?? null,
     predicate: qualifiers.predicate,
+    objectId: qualifiers.objectId ?? null,
+    schemaRef: qualifiers.schemaRef ?? null,
     unit: qualifiers.unitCode ?? null,
     validFrom: qualifiers.validFrom ?? null,
     validTo: qualifiers.validTo ?? null,
@@ -35,6 +42,8 @@ export function factQualifiedKey(fact: RuleFact, scopeRef: ScopeRef): Sha256Dige
   return qualifiedPropositionKey({
     predicate: fact.predicate,
     subject: fact.subject,
+    ...(fact.objectId === undefined ? {} : { objectId: fact.objectId }),
+    ...(fact.schemaRef === undefined ? {} : { schemaRef: fact.schemaRef }),
     ...(unitCode === undefined ? {} : { unitCode }),
     validFrom: fact.validity.validFrom,
     ...(fact.validity.validTo === undefined ? {} : { validTo: fact.validity.validTo }),
@@ -46,9 +55,13 @@ export function factQualifiedKey(fact: RuleFact, scopeRef: ScopeRef): Sha256Dige
 export function conclusionQualifiedKey(
   predicate: string,
   request: ControlReadProjectionRequest,
+  schemaRef?: VersionRef,
+  propositionKey?: string,
 ): Sha256Digest {
   return qualifiedPropositionKey({
     predicate,
+    ...(propositionKey === undefined ? {} : { propositionKey }),
+    ...(schemaRef === undefined ? {} : { schemaRef }),
     ...(request.validAt === undefined ? {} : { validFrom: request.validAt }),
     scopeRef: request.scopeRef,
   })

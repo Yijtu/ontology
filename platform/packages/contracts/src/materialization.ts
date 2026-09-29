@@ -12,6 +12,7 @@ import type {
   VersionRef,
 } from './generated/contracts'
 import type { ToolContext } from './trusted'
+import type { RuleComputationArtifact } from './rule-extraction'
 
 /**
  * Incremental materialisation, bitemporal projection and invalidation fence (SPEC D3.1/D5/D5.1,
@@ -68,6 +69,8 @@ export interface MaterializedConclusion {
   readonly ruleRefs: readonly VersionRef[]
   readonly factRefs: readonly MaterializedFactRef[]
   readonly supportNodeId: string
+  /** Typed rule computation results captured in the same immutable projection slice. */
+  readonly ruleArtifacts?: readonly RuleComputationArtifact[]
 }
 
 /** What caused an affected evaluation. Every kind is a distinct trigger class (D5.1). */

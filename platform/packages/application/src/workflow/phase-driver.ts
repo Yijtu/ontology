@@ -2,6 +2,7 @@ import { RunStoreError, isToolContext } from '@ontology/contracts'
 import type {
   ControlAppendEventRequest,
   ControlRepository,
+  ClarificationResponseRecord,
   RevisionString,
   RunRecord,
   RunState,
@@ -69,6 +70,31 @@ export class RunPhaseDriver {
     ctx: ToolContext,
   ): Promise<RuntimeCheckpointRef | undefined> {
     return this.#store.findLatestCheckpoint(scopeOf(ctx), runId, ctx)
+  }
+
+  async checkpointRef(
+    runId: Uuid,
+    checkpointId: Uuid,
+    ctx: ToolContext,
+  ): Promise<RuntimeCheckpointRef | undefined> {
+    const checkpoint = await this.#store.loadCheckpoint(scopeOf(ctx), runId, checkpointId, ctx)
+    if (checkpoint === undefined) return undefined
+    return {
+      checkpointId: checkpoint.checkpointId,
+      runId,
+      runtimeKind: checkpoint.runtimeKind,
+      runtimeVersion: checkpoint.runtimeVersion,
+      stateDigest: checkpoint.stateDigest,
+      createdAt: checkpoint.createdAt,
+    }
+  }
+
+  async findClarificationResponse(
+    runId: Uuid,
+    clarificationId: Uuid,
+    ctx: ToolContext,
+  ): Promise<ClarificationResponseRecord | undefined> {
+    return this.#store.findClarificationResponse(scopeOf(ctx), runId, clarificationId, ctx)
   }
 
   async transition(

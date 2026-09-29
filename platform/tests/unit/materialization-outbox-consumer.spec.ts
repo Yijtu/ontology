@@ -27,6 +27,7 @@ import type {
   Uuid,
 } from '@ontology/contracts'
 import { toolContext } from './component-registry-fixtures'
+import { FixturePublishedIdentityReader } from '../integration/published-identity-reader'
 
 const DIGEST = `sha256:${'a'.repeat(64)}`
 const VALIDITY = { validFrom: '2026-09-21T00:00:00Z', validTo: '2026-09-22T00:00:00Z' }
@@ -42,6 +43,7 @@ function statementFor(publicationId: Uuid, version: string, status: 'active' | '
     statementId: '11111111-1111-4111-8111-111111111111',
     propositionKey: PREDICATE,
     kind: 'entity',
+    objectId: PREDICATE,
     subjectEntityId: 'entity.battery',
     predicate: PREDICATE,
     value: { value: true },
@@ -69,6 +71,7 @@ function ruleVersionFor(publicationId: Uuid): PublishedRuleVersion {
     recordedAt: '2026-09-21T06:00:00Z',
     sourceCandidateId: randomUUID(),
     publicationId,
+    conclusion: { predicate: PREDICATE, value: true },
   }
 }
 
@@ -77,6 +80,7 @@ class FakePublicationView implements MaterializationPublicationView {
   #statements: PublishedStatement[]
   #rules: PublishedRuleVersion[]
   #publicationId: Uuid
+  #readRevision = 1
 
   constructor(publicationId: Uuid, statements: PublishedStatement[], rules: PublishedRuleVersion[]) {
     this.#publicationId = publicationId
@@ -86,16 +90,40 @@ class FakePublicationView implements MaterializationPublicationView {
 
   replaceStatements(statements: PublishedStatement[]): void {
     this.#statements = statements
+    this.#readRevision += 1
   }
 
-  async listStatements(_scopeRef: ScopeRef, filter: { publicationId?: Uuid }): Promise<PublishedStatement[]> {
-    return this.#statements.filter(
-      (statement) => filter.publicationId === undefined || statement.publicationId === filter.publicationId,
-    )
+  replaceRules(rules: PublishedRuleVersion[]): void {
+    this.#rules = rules
+    this.#readRevision += 1
   }
 
-  async listRuleVersions(_scopeRef: ScopeRef, filter: { publicationId?: Uuid }): Promise<PublishedRuleVersion[]> {
-    return this.#rules.filter((rule) => filter.publicationId === undefined || rule.publicationId === filter.publicationId)
+  async latestReadRevision(): Promise<string> {
+    return String(this.#readRevision)
+  }
+
+  async listStatements(
+    _scopeRef: ScopeRef,
+    filter: { publicationId?: Uuid; afterStatementId?: Uuid; limit?: number },
+  ): Promise<PublishedStatement[]> {
+    return this.#statements
+      .filter((statement) => filter.publicationId === undefined || statement.publicationId === filter.publicationId)
+      .filter((statement) => filter.afterStatementId === undefined || statement.statementId > filter.afterStatementId)
+      .sort((left, right) => left.statementId.localeCompare(right.statementId))
+      .slice(0, filter.limit ?? this.#statements.length)
+  }
+
+  async listRuleVersions(
+    _scopeRef: ScopeRef,
+    filter: { publicationId?: Uuid; afterRule?: { ruleId: string; version: string }; limit?: number },
+  ): Promise<PublishedRuleVersion[]> {
+    return this.#rules
+      .filter((rule) => filter.publicationId === undefined || rule.publicationId === filter.publicationId)
+      .filter((rule) => filter.afterRule === undefined ||
+        rule.ruleId > filter.afterRule.ruleId ||
+        (rule.ruleId === filter.afterRule.ruleId && BigInt(rule.version) > BigInt(filter.afterRule.version)))
+      .sort((left, right) => left.ruleId.localeCompare(right.ruleId) || Number(left.version) - Number(right.version))
+      .slice(0, filter.limit ?? this.#rules.length)
   }
 
   async getPublication(_scopeRef: ScopeRef, publicationId: Uuid): Promise<SemanticPublicationVersion | undefined> {
@@ -168,21 +196,20 @@ interface Harness {
   readonly publicationId: Uuid
 }
 
-function harness(): Harness {
+function harness(pageSize?: number): Harness {
   const scopeRef: ScopeRef = {
     tenantId: '44444444-4444-4444-8444-444444444444',
     spaceId: '55555555-5555-4555-8555-555555555555',
   }
   const ctx = toolContext(scopeRef.tenantId, scopeRef.spaceId, ['semantic-publisher', 'platform-admin'])
   const publicationId = randomUUID()
-  const view = new FakePublicationView(
-    publicationId,
-    [statementFor(publicationId, '1', 'active')],
-    [ruleVersionFor(publicationId)],
-  )
+  const statement = statementFor(publicationId, '1', 'active')
+  const identity = new FixturePublishedIdentityReader()
+  identity.bindStatements([statement])
+  const view = new FakePublicationView(publicationId, [statement], [ruleVersionFor(publicationId)])
   const store = new InMemoryMaterializationStore()
   const materializer = new IncrementalMaterializer({
-    publishedSource: new PublishedSemanticSource(view),
+    publishedSource: new PublishedSemanticSource(view, { identity }),
     materialization: store,
   })
   const outbox = new RecordingOutbox()
@@ -192,6 +219,7 @@ function harness(): Harness {
     sequence: new CountingSequence(),
     outbox,
     materialization: store,
+    ...(pageSize === undefined ? {} : { pageSize }),
   })
   return { store, materializer, view, outbox, consumer, ctx, scopeRef, publicationId }
 }
@@ -222,7 +250,7 @@ describe('materialization outbox consumer (LOCAL-069)', () => {
 
     const advanced = await h.materializer.read(request, h.ctx)
     expect(advanced.status).toBe('materialized')
-    const conclusion = advanced.conclusions.find((entry) => entry.propositionKey === PREDICATE)
+    const conclusion = advanced.conclusions.find((entry) => entry.predicate === PREDICATE)
     expect(conclusion?.value).toBe(true)
     expect(await h.store.listOpenFences(h.scopeRef, h.ctx)).toHaveLength(0)
   })
@@ -264,11 +292,66 @@ describe('materialization outbox consumer (LOCAL-069)', () => {
     for (const message of requests) await h.consumer.consume(message, h.ctx)
     expect(await h.store.listOpenFences(h.scopeRef, h.ctx)).toHaveLength(0)
     const advanced = await h.materializer.read(
-      { scopeRef: h.scopeRef, projectionRef: PROJECTION_REF, asOfRecordedSeq: '9', validAt: '2026-09-21T12:00:00Z' },
+      { scopeRef: h.scopeRef, projectionRef: PROJECTION_REF, asOfRecordedSeq: '2', validAt: '2026-09-21T12:00:00Z' },
       h.ctx,
     )
     expect(advanced.status).toBe('materialized')
-    expect(advanced.conclusions.find((entry) => entry.propositionKey === PREDICATE)?.value).toBe(true)
+    expect(advanced.conclusions.find((entry) => entry.predicate === PREDICATE)?.value).toBe(true)
+  })
+
+  it('walks every bounded statement and rule publication page without repeating a cursor', async () => {
+    const h = harness(1)
+    h.view.replaceStatements([
+      statementFor(h.publicationId, '1', 'active'),
+      { ...statementFor(h.publicationId, '1', 'active'), statementId: '11111111-1111-4111-8111-111111111112' },
+      { ...statementFor(h.publicationId, '1', 'active'), statementId: '11111111-1111-4111-8111-111111111113' },
+    ])
+    const originalRule = ruleVersionFor(h.publicationId)
+    // The keyset is ordered by logical rule id then numeric revision.
+    const additionalRules: PublishedRuleVersion[] = [
+      { ...originalRule, ruleVersionId: '22222222-2222-4222-8222-222222222223', ruleId: 'rule.battery-secondary', version: '1' },
+      { ...originalRule, ruleVersionId: '22222222-2222-4222-8222-222222222224', ruleId: 'rule.battery-secondary', version: '2' },
+    ]
+    h.view.replaceRules([originalRule, ...additionalRules])
+
+    await h.consumer.consume(messageOf(PUBLICATION_PUBLISHED_TOPIC, { publicationId: h.publicationId }), h.ctx)
+
+    const requests = h.outbox.messages.filter((message) => message.topic === MATERIALIZATION_REQUESTED_TOPIC)
+    expect(requests).toHaveLength(6)
+    const changes = requests.map((message) => (message.payload['change'] as { kind?: string }).kind)
+    expect(changes.filter((kind) => kind === 'assertion_published')).toHaveLength(3)
+    expect(changes.filter((kind) => kind === 'rule_changed')).toHaveLength(3)
+  })
+
+  it('routes an identity split through its transactionally pre-opened scope fence', async () => {
+    const h = harness()
+    const eventId = randomUUID()
+    const fenceId = randomUUID()
+    const candidateId = randomUUID()
+    await h.store.openFence(
+      h.scopeRef,
+      { fenceId, reason: 'identity split committed', propositionKeys: [], openedAt: '2026-09-21T06:00:00Z' },
+      h.ctx,
+    )
+
+    await h.consumer.consume(messageOf('identity.decision.split', {
+      eventId,
+      materializationFenceId: fenceId,
+      decisionId: randomUUID(),
+      entityId: 'entity.battery',
+      objectId: PREDICATE,
+      identityScopeId: 'device-inventory',
+      separatedCandidateIds: [candidateId],
+      reason: 'records describe distinct batteries',
+      recordedAt: '2026-09-21T06:00:00Z',
+      actor: 'reviewer',
+    }), h.ctx)
+
+    const request = h.outbox.messages[0]
+    expect(request?.topic).toBe(MATERIALIZATION_REQUESTED_TOPIC)
+    expect(request?.payload['fenceId']).toBe(fenceId)
+    expect((request?.payload['change'] as { kind?: string }).kind).toBe('identity_changed')
+    expect(await h.store.listOpenFences(h.scopeRef, h.ctx)).toHaveLength(1)
   })
 
   it('does not advance twice when the same request is re-delivered after a crash reclaim', async () => {
@@ -303,7 +386,7 @@ describe('materialization outbox consumer (LOCAL-069)', () => {
       validAt: '2026-09-21T12:00:00Z',
     }
     const baseline = await h.materializer.read({ ...request, asOfRecordedSeq: '2' }, h.ctx)
-    expect(baseline.conclusions.find((entry) => entry.propositionKey === PREDICATE)?.value).toBe(true)
+    expect(baseline.conclusions.find((entry) => entry.predicate === PREDICATE)?.value).toBe(true)
 
     h.view.replaceStatements([statementFor(h.publicationId, '2', 'retracted')])
     await h.consumer.consume(
@@ -324,12 +407,12 @@ describe('materialization outbox consumer (LOCAL-069)', () => {
     await h.consumer.consume(retractionRequest, h.ctx)
 
     const advanced = await h.materializer.read(request, h.ctx)
-    const conclusion = advanced.conclusions.find((entry) => entry.propositionKey === PREDICATE)
+    const conclusion = advanced.conclusions.find((entry) => entry.predicate === PREDICATE)
     expect(conclusion?.domainStatus).toBe('unknown')
     expect(conclusion?.value).toBeUndefined()
 
     // History is preserved: the pre-retraction recorded version still resolves the old value.
     const historical = await h.materializer.read({ ...request, asOfRecordedSeq: '1' }, h.ctx)
-    expect(historical.conclusions.find((entry) => entry.propositionKey === PREDICATE)?.value).toBe(true)
+    expect(historical.conclusions.find((entry) => entry.predicate === PREDICATE)?.value).toBe(true)
   })
 })

@@ -1,6 +1,9 @@
 import type { DecimalQuantity, ScalarValue, SemanticFilter } from '@ontology/contracts'
+import { canonicalDecimalString } from '@ontology/core'
 import { RuleEvaluationError } from './errors'
 import type { RuleAssertionValue } from './types'
+
+export { canonicalDecimalString }
 
 /**
  * Exact value and filter semantics for rule evaluation (SPEC D5/E4). Numeric comparison uses
@@ -15,9 +18,12 @@ interface NormalizedDecimal {
 }
 
 function normalizeDecimal(text: string): NormalizedDecimal {
-  const trimmed = text.trim()
-  const negative = trimmed.startsWith('-')
-  const unsigned = negative || trimmed.startsWith('+') ? trimmed.slice(1) : trimmed
+  const canonical = canonicalDecimalString(text)
+  if (canonical === undefined) {
+    throw new RuleEvaluationError('INVALID_ARGUMENT', `invalid exact decimal value: ${text}`)
+  }
+  const negative = canonical.startsWith('-')
+  const unsigned = negative ? canonical.slice(1) : canonical
   const dot = unsigned.indexOf('.')
   const rawInteger = dot === -1 ? unsigned : unsigned.slice(0, dot)
   const rawFraction = dot === -1 ? '' : unsigned.slice(dot + 1)
@@ -55,39 +61,51 @@ export function isDecimalQuantity(value: unknown): value is DecimalQuantity {
   return typeof candidate['amount'] === 'string' && typeof candidate['unit'] === 'string'
 }
 
+export function isRuleDecimalValue(value: unknown): value is DecimalQuantity {
+  if (typeof value !== 'object' || value === null || Array.isArray(value)) return false
+  const candidate = value as Record<string, unknown>
+  return (
+    typeof candidate['amount'] === 'string' &&
+    canonicalDecimalString(candidate['amount']) !== undefined &&
+    typeof candidate['unit'] === 'string'
+  )
+}
+
 /** The exact decimal amount of a quantity or number value, `undefined` for non-numerics. */
 export function decimalAmountOf(value: RuleAssertionValue | undefined): string | undefined {
   if (value === undefined) return undefined
-  if (isDecimalQuantity(value)) return value.amount
-  if (typeof value === 'number') return Number.isFinite(value) ? String(value) : undefined
+  if (isRuleDecimalValue(value)) return value.amount
   return undefined
 }
 
 /** The canonical unit qualifier of a value, `undefined` when the value carries no unit. */
 export function unitOf(value: RuleAssertionValue | undefined): string | undefined {
-  return isDecimalQuantity(value) ? value.unit : undefined
+  return isRuleDecimalValue(value) ? value.unit : undefined
 }
 
-function scalarEquals(value: RuleAssertionValue, scalar: ScalarValue): boolean {
+function scalarEquals(value: RuleAssertionValue, scalar: ScalarValue): boolean | undefined {
   if (scalar === null) return false
-  if (isDecimalQuantity(value)) {
-    if (typeof scalar === 'number') return compareDecimal(value.amount, String(scalar)) === 0
-    if (typeof scalar === 'string') return compareDecimal(value.amount, scalar) === 0
-    return false
+  if (isRuleDecimalValue(value)) {
+    if (typeof scalar !== 'number' && typeof scalar !== 'string') return false
+    const amount = canonicalDecimalString(typeof scalar === 'number' ? String(scalar) : scalar)
+    if (amount === undefined) return undefined
+    return compareDecimal(value.amount, amount) === 0
   }
-  if (typeof value === 'number') {
-    if (typeof scalar === 'number') return value === scalar
-    if (typeof scalar === 'string') return compareDecimal(String(value), scalar) === 0
-    return false
+  if ((typeof value === 'string' || typeof value === 'boolean') && typeof scalar === typeof value) {
+    return value === scalar
   }
-  return value === scalar
+  if (typeof scalar === 'number') return false
+  return false
 }
 
 function numericCompare(value: RuleAssertionValue, scalar: ScalarValue): number | undefined {
   const amount = decimalAmountOf(value)
   if (amount === undefined) return undefined
-  if (typeof scalar === 'number') return compareDecimal(amount, String(scalar))
-  if (typeof scalar === 'string') return compareDecimal(amount, scalar)
+  if (typeof scalar === 'number' || typeof scalar === 'string') {
+    const target = canonicalDecimalString(typeof scalar === 'number' ? String(scalar) : scalar)
+    if (target === undefined) return undefined
+    return compareDecimal(amount, target)
+  }
   return undefined
 }
 
@@ -130,7 +148,7 @@ export function assertSupportedFilter(filter: SemanticFilter, label: string): vo
  * Whether a present value matches the filter. A missing value never reaches this function: the
  * caller treats an absent observation as `unknown`, never as `false` (D5).
  */
-export function filterMatches(filter: SemanticFilter, value: RuleAssertionValue): boolean {
+export function evaluateFilter(filter: SemanticFilter, value: RuleAssertionValue): boolean | undefined {
   switch (filter.op) {
     case 'is_not_null':
       return true
@@ -140,29 +158,31 @@ export function filterMatches(filter: SemanticFilter, value: RuleAssertionValue)
     }
     case 'ne': {
       const target = filter.values[0]
-      return target === undefined ? false : !scalarEquals(value, target)
+      if (target === undefined) return false
+      const equal = scalarEquals(value, target)
+      return equal === undefined ? undefined : !equal
     }
     case 'in':
       return filter.values.some((scalar) => scalarEquals(value, scalar))
     case 'lt': {
       const target = filter.values[0]
       const comparison = target === undefined ? undefined : numericCompare(value, target)
-      return comparison === -1
+      return comparison === undefined ? undefined : comparison === -1
     }
     case 'lte': {
       const target = filter.values[0]
       const comparison = target === undefined ? undefined : numericCompare(value, target)
-      return comparison === -1 || comparison === 0
+      return comparison === undefined ? undefined : comparison === -1 || comparison === 0
     }
     case 'gt': {
       const target = filter.values[0]
       const comparison = target === undefined ? undefined : numericCompare(value, target)
-      return comparison === 1
+      return comparison === undefined ? undefined : comparison === 1
     }
     case 'gte': {
       const target = filter.values[0]
       const comparison = target === undefined ? undefined : numericCompare(value, target)
-      return comparison === 1 || comparison === 0
+      return comparison === undefined ? undefined : comparison === 1 || comparison === 0
     }
     case 'between': {
       const lower = filter.values[0]
@@ -170,11 +190,16 @@ export function filterMatches(filter: SemanticFilter, value: RuleAssertionValue)
       if (lower === undefined || upper === undefined) return false
       const low = numericCompare(value, lower)
       const high = numericCompare(value, upper)
-      return low !== undefined && high !== undefined && low >= 0 && high <= 0
+      return low === undefined || high === undefined ? undefined : low >= 0 && high <= 0
     }
     case 'is_null':
       return false
     default:
       return false
   }
+}
+
+/** Whether a present value satisfies a filter; incomparable values stay unknown. */
+export function filterMatches(filter: SemanticFilter, value: RuleAssertionValue): boolean {
+  return evaluateFilter(filter, value) === true
 }

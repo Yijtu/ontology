@@ -4574,7 +4574,7 @@ export const SCHEMA_DOCUMENTS: readonly JsonSchemaObject[] = [
       },
       "DecisionResult": {
         "title": "DecisionResult",
-        "description": "Preserves the option set, probability distribution, confidence (when supported) and definition version. It can never carry generated code or free-form explanation; scores across different question types or option sets are not directly rankable.",
+        "description": "Preserves the option set, probability distribution, confidence (when supported), the official Noul probability of yes (when applicable), and definition version. Noul probability is distinct from confidence. It can never carry generated code or free-form explanation; scores across different question types or option sets are not directly rankable.",
         "type": "object",
         "additionalProperties": false,
         "required": [
@@ -4612,6 +4612,12 @@ export const SCHEMA_DOCUMENTS: readonly JsonSchemaObject[] = [
             "type": "number",
             "minimum": 0,
             "maximum": 1
+          },
+          "probability": {
+            "type": "number",
+            "minimum": 0,
+            "maximum": 1,
+            "description": "For questionType=noul only, the official P(yes). It is not confidence and must not be compared to minConfidence thresholds."
           },
           "fallback": {
             "$ref": "#/$defs/DecisionFallback"

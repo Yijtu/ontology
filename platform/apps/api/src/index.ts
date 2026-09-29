@@ -54,6 +54,15 @@ export type {
   ToolGatewayComposition,
   ToolGatewayCompositionOptions,
 } from './composition/tool-gateway'
+export { CoreExampleLoaderError, loadCoreExamples } from './composition/core-example-loader'
+export type {
+  CoreExampleLoaderErrorCode,
+  CoreExamplePhysicalMapping,
+  CoreExampleScenario,
+  CoreExampleSourceFile,
+  LoadCoreExamplesOptions,
+  LoadedCoreExamples,
+} from './composition/core-example-loader'
 export {
   createEnergyComputeConfig,
   createScopedBlobReader,
@@ -92,8 +101,12 @@ export { createToolHandlerSet } from './composition/tool-handlers'
 export type { ToolHandlerSetOptions } from './composition/tool-handlers'
 export { createApiServer, createJobApi, createRunApi } from './http/app'
 export type { ApiServerOptions } from './http/app'
+export { createCoreLocalComposition, createDuckDbSnapshot } from './composition/core-local-composition'
+export type { CoreLocalComposition, CoreLocalCompositionOptions } from './composition/core-local-composition'
+export { createCoreApi, startCoreApi } from './core-main'
+export type { CoreApiDependencies } from './core-main'
 export { registerRunRoutes } from './http/server'
-export type { AuthenticatedRequest, RequestAuthenticator, RunApiOptions } from './http/server'
+export type { AuthenticatedRequest, RequestAuthenticator, RunApiOptions, RunDispatchHooks } from './http/server'
 export { RunProgressService } from './http/run-progress'
 export type {
   DegradationView,

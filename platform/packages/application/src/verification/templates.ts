@@ -21,6 +21,7 @@ type Template = (finding: VerificationFinding) => string
 function locate(finding: VerificationFinding): string {
   const parts: string[] = []
   if (finding.claimId !== undefined) parts.push(`claim ${finding.claimId}`)
+  if (finding.assertionId !== undefined) parts.push(`assertion ${finding.assertionId}`)
   if (finding.field !== undefined) parts.push(`field ${finding.field}`)
   if (finding.evidenceRef !== undefined) parts.push(`evidence ${finding.evidenceRef.id}`)
   if (finding.pointer !== undefined) parts.push(`at ${finding.pointer}`)
@@ -48,16 +49,25 @@ const TEMPLATES: Readonly<Record<VerificationFindingCode, Template>> = Object.fr
     `${locate(finding)} declares unit ${finding.actual ?? '(none)'} but the bound result holds ${finding.expected ?? '(none)'}`,
   subject_mismatch: (finding) =>
     `${locate(finding)} declares subject ${finding.actual ?? '(none)'} but the bound result holds ${finding.expected ?? '(none)'}`,
+  predicate_mismatch: (finding) =>
+    `${locate(finding)} does not match the semantic field selected in the bound result`,
   time_mismatch: (finding) =>
     `${locate(finding)} declares time ${finding.actual ?? '(none)'} but the bound result holds ${finding.expected ?? '(none)'}`,
   stale_source: (finding) =>
     `${locate(finding)} cites a source whose validity expired at ${finding.expected ?? 'its validity end'}`,
+  source_not_yet_valid: (finding) =>
+    `${locate(finding)} cites a source whose validity starts at ${finding.expected ?? 'a later time'}`,
   semantic_unsupported: (finding) =>
     `${locate(finding)} was judged unsupported by the policy semantic review`,
   semantic_insufficient: (finding) =>
     `${locate(finding)} has insufficient semantic support in the cited evidence`,
   semantic_unavailable: () =>
     'the policy semantic review was unavailable; only the hard checks are reported',
+  visible_statement_unbound: (finding) => `${locate(finding)} contains text outside the typed, result-bound answer blocks`,
+  assertion_mismatch: (finding) => `${locate(finding)} does not match its bound result`,
+  document_quote_mismatch: (finding) => `${locate(finding)} does not match the exact archived document span and digest`,
+  evidence_reference_mismatch: (finding) => `${locate(finding)} uses a different evidence version than the archived result`,
+  unverified_limitation: (finding) => `${locate(finding)} contains text that is not an approved limitation code`,
 })
 
 export class RestrictedExplanationTemplates {
@@ -70,6 +80,7 @@ export class RestrictedExplanationTemplates {
       templateId: `${RESTRICTED_TEMPLATE_VERSION}:${finding.code}`,
       message,
       ...(finding.claimId === undefined ? {} : { claimId: finding.claimId }),
+      ...(finding.assertionId === undefined ? {} : { assertionId: finding.assertionId }),
       ...(finding.field === undefined ? {} : { field: finding.field }),
       ...(finding.evidenceRef === undefined ? {} : { evidenceRef: finding.evidenceRef }),
     }

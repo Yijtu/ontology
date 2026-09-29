@@ -57,6 +57,8 @@ export interface OntologyFactQuery {
   readonly cursor?: string
   readonly limit: number
   readonly timeContext?: TimeContext
+  /** Valid-time-only filter; this is distinct from a recorded-time asOf snapshot. */
+  readonly validAt?: string
 }
 
 export interface OntologyFactPage {
@@ -64,6 +66,10 @@ export interface OntologyFactPage {
   readonly nextCursor: string | null
   /** True only when the provider actually searched the covered fact set. */
   readonly covered: boolean
+  /** The pinned schema used to interpret facts; a fact ref is never a schema ref. */
+  readonly definitionRef?: VersionRef
+  /** Reasons a provider could not cover the complete requested fact set. */
+  readonly issues?: readonly string[]
 }
 
 /**
@@ -148,20 +154,48 @@ export class OntologyLookupService {
   async lookup(input: OntologyLookupInput, ctx: ToolContext): Promise<OntologyLookupPage> {
     this.#assertScope(input.scopeRef, ctx)
     const limit = Math.min(Math.max(input.limit ?? this.#pageSize, 1), this.#maxPageSize)
-    const offset = decodeCursor(input.cursor)
     const concepts = input.concepts ?? []
     const entityRefs = input.entityRefs ?? []
+
+    if (input.intent === 'facts') {
+      const facts = await this.#factItems(
+        input.scopeRef,
+        concepts,
+        entityRefs,
+        input.timeContext,
+        input.cursor,
+        limit,
+        ctx,
+      )
+      const nextCursor = facts.nextCursor
+      const completeness: CompletenessStatus =
+        !facts.covered
+          ? 'unknown'
+          : nextCursor !== null
+            ? 'partial'
+            : facts.gaps.length > 0 && facts.items.length === 0
+              ? 'unknown'
+              : 'complete'
+      const definitionVersion = facts.primaryRef ?? (await this.#fallbackRef(input.scopeRef, concepts, ctx))
+      return {
+        output: {
+          items: facts.items,
+          gaps: facts.gaps,
+          definitionVersion,
+          autoPublished: false,
+        },
+        nextCursor,
+        completeness,
+      }
+    }
+
+    const offset = decodeCursor(input.cursor)
 
     const items: OntologyLookupItem[] = []
     const gaps: string[] = []
     let primaryRef: VersionRef | undefined
 
-    if (input.intent === 'facts') {
-      const facts = await this.#factItems(input.scopeRef, concepts, entityRefs, input.timeContext, ctx)
-      items.push(...facts.items)
-      gaps.push(...facts.gaps)
-      primaryRef = facts.primaryRef
-    } else if (input.intent === 'resolve') {
+    if (input.intent === 'resolve') {
       const resolved = await this.#resolveItems(input.scopeRef, concepts, ctx)
       items.push(...resolved.items)
       gaps.push(...resolved.gaps)
@@ -394,14 +428,24 @@ export class OntologyLookupService {
     concepts: readonly OntologyConceptRef[],
     entityRefs: readonly ResourceRef[],
     timeContext: TimeContext | undefined,
+    cursor: string | undefined,
+    limit: number,
     ctx: ToolContext,
-  ): Promise<{ items: OntologyLookupItem[]; gaps: string[]; primaryRef: VersionRef | undefined }> {
+  ): Promise<{
+    items: OntologyLookupItem[]
+    gaps: string[]
+    primaryRef: VersionRef | undefined
+    nextCursor: string | null
+    covered: boolean
+  }> {
     const provider = this.#facts
     if (provider === undefined) {
       return {
         items: [],
         gaps: ['facts_uncovered:no fact reference provider is configured'],
         primaryRef: undefined,
+        nextCursor: null,
+        covered: false,
       }
     }
     const page = await provider.listFacts(
@@ -409,11 +453,16 @@ export class OntologyLookupService {
         scopeRef,
         concepts,
         entityRefs,
-        limit: this.#maxPageSize,
+        limit,
+        ...(cursor === undefined ? {} : { cursor }),
+        ...(timeContext?.validAt === undefined ? {} : { validAt: timeContext.validAt }),
         ...(timeContext === undefined ? {} : { timeContext }),
       },
       ctx,
     )
+    const malformedPage =
+      page.facts.length > limit ||
+      (cursor !== undefined && page.nextCursor === cursor)
     const items: OntologyLookupItem[] = page.facts.map((fact) => ({
       kind: 'fact',
       ref: fact.factRef,
@@ -423,9 +472,16 @@ export class OntologyLookupService {
       ...(fact.payload === undefined ? {} : { payload: fact.payload }),
     }))
     const gaps: string[] = []
-    if (!page.covered) gaps.push('facts_uncovered:the provider did not search a complete fact set')
-    if (items.length === 0 && page.covered) gaps.push('facts_uncovered:no matching fact reference was found')
-    return { items, gaps, primaryRef: page.facts[0]?.factRef }
+    if (!page.covered || malformedPage) gaps.push('facts_uncovered:the provider did not complete a stable fact page')
+    for (const issue of page.issues ?? []) gaps.push(`facts_uncovered:${issue}`)
+    if (items.length === 0 && page.covered && !malformedPage) gaps.push('facts_uncovered:no matching fact reference was found')
+    return {
+      items: malformedPage ? [] : items,
+      gaps,
+      primaryRef: page.definitionRef ?? page.facts[0]?.factRef,
+      nextCursor: malformedPage ? null : page.nextCursor,
+      covered: page.covered && !malformedPage,
+    }
   }
 
   async #fallbackRef(

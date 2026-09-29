@@ -1,0 +1,51 @@
+{
+  "asset_id": "I-01",
+  "asset_network_code": "demo-plant",
+  "asset_workshop_code": "WS-A",
+  "operating_hours": 120,
+  "maintenance_exempt": false,
+  "source_record_id": "hours-ledger-001"
+}
+
+{
+  "asset_id": "I-02",
+  "asset_network_code": "demo-plant",
+  "asset_workshop_code": "WS-A",
+  "operating_hours": 120,
+  "maintenance_exempt": true,
+  "source_record_id": "hours-ledger-002"
+}
+
+{
+  "asset_id": "I-03",
+  "asset_network_code": "demo-plant",
+  "asset_workshop_code": "WS-A",
+  "operating_hours": 90,
+  "maintenance_exempt": false,
+  "source_record_id": "hours-ledger-003"
+}
+
+{
+  "asset_id": "I-04",
+  "asset_network_code": "demo-plant",
+  "asset_workshop_code": "WS-B",
+  "operating_hours": 100,
+  "maintenance_exempt": false,
+  "source_record_id": "hours-ledger-004"
+}
+
+{
+  "asset_id": "I-05",
+  "asset_network_code": "demo-plant",
+  "asset_workshop_code": "WS-B",
+  "maintenance_exempt": false,
+  "source_record_id": "hours-ledger-005"
+}
+
+{
+  "asset_id": "I-06",
+  "asset_network_code": "demo-plant",
+  "asset_workshop_code": "WS-B",
+  "operating_hours": 120,
+  "source_record_id": "hours-ledger-006"
+}

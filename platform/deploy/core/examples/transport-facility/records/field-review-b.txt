@@ -1,0 +1,9 @@
+{
+  "facility_id": "T-01",
+  "network_code": "demo-network",
+  "facility_district_code": "north",
+  "inspection_due": true,
+  "inspection_exempt": false,
+  "source_record_id": "field-review-b-2026-09-01",
+  "collection_batch": "independent-field-review-b"
+}

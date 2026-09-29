@@ -5,6 +5,7 @@ import type {
   Semver,
   Sha256Digest,
   Uuid,
+  VersionRef,
 } from './generated/contracts'
 
 /**
@@ -29,7 +30,8 @@ export type DraftClaimKind = 'observation' | 'prediction' | 'computation' | 'rul
  * the result, so a claim can never present a bare number the model transcribed by hand.
  */
 export interface BoundQuantity {
-  readonly value: number
+  /** Legacy bounded numeric drafts may contain a JSON number; new writers use exact decimal strings. */
+  readonly value: number | string
   readonly unit: string
 }
 
@@ -53,6 +55,8 @@ export interface ClaimResultBinding {
   readonly valuePointer: string
   readonly unitPointer: string
   readonly subjectPointer: string
+  /** Pointer to the result column descriptor that owns valuePointer. Required by answer-draft@2. */
+  readonly fieldRefPointer?: string
   readonly timePointer?: string
 }
 
@@ -69,6 +73,41 @@ export interface DraftClaim {
   readonly references: readonly ClaimResultBinding[]
 }
 
+/** Evidence pointers for typed non-numeric assertions. */
+export interface AssertionEvidenceBinding {
+  readonly evidenceRef: ResourceRef
+  readonly resultDigest: Sha256Digest
+  readonly valuePointer: string
+  readonly subjectPointer: string
+  readonly timePointer?: string
+  /** Pointer to the result column descriptor that owns valuePointer. */
+  readonly fieldRefPointer?: string
+  readonly documentPointer?: string
+  readonly locatorPointer?: string
+  readonly textDigestPointer?: string
+  readonly quoteDigestPointer?: string
+  readonly rulePointer?: string
+  readonly computationPointer?: string
+}
+
+interface TypedAssertionBase {
+  readonly assertionId: Uuid
+  readonly subject: string
+  readonly predicate: string
+  readonly asOf?: Rfc3339UtcTimestamp
+  readonly references: readonly AssertionEvidenceBinding[]
+}
+
+/** Non-numeric statements shown in the published answer; every statement is result-bound. */
+export type VerifiedAssertion =
+  | (TypedAssertionBase & { readonly kind: 'string' | 'enum'; readonly value: string })
+  | (TypedAssertionBase & { readonly kind: 'boolean'; readonly value: boolean })
+  | (TypedAssertionBase & { readonly kind: 'entity_ref'; readonly value: ResourceRef; readonly displayName?: string })
+  | (TypedAssertionBase & { readonly kind: 'relation_ref'; readonly value: { readonly type: string; readonly from: ResourceRef; readonly to: ResourceRef } })
+  | (TypedAssertionBase & { readonly kind: 'rule_judgement'; readonly value: 'true' | 'false' | 'unknown' | 'conflict'; readonly ruleRef: VersionRef; readonly premiseRefs: readonly ResourceRef[] })
+  | (TypedAssertionBase & { readonly kind: 'document_quote'; readonly quote: string; readonly documentRef: ResourceRef; readonly locator: { readonly kind: 'page' | 'offset' | 'approximate_locator'; readonly page?: number; readonly startOffset?: number; readonly endOffset?: number; readonly normalizationMapRef?: string }; readonly quoteDigest: Sha256Digest; readonly textDigest: Sha256Digest; readonly precision: 'exact' | 'approximate' })
+  | (TypedAssertionBase & { readonly kind: 'artifact_summary'; readonly artifactRef: ResourceRef; readonly summary: string })
+
 /** Which check produced a finding. Hard findings are programmatic and outrank any score. */
 export type VerificationFindingAxis = 'hard' | 'semantic' | 'policy'
 
@@ -84,11 +123,18 @@ export type VerificationFindingCode =
   | 'number_mismatch'
   | 'unit_mismatch'
   | 'subject_mismatch'
+  | 'predicate_mismatch'
   | 'time_mismatch'
+  | 'source_not_yet_valid'
   | 'stale_source'
   | 'semantic_unsupported'
   | 'semantic_insufficient'
   | 'semantic_unavailable'
+  | 'evidence_reference_mismatch'
+  | 'visible_statement_unbound'
+  | 'assertion_mismatch'
+  | 'document_quote_mismatch'
+  | 'unverified_limitation'
 
 /**
  * A located verification problem. `claimId`/`field`/`evidenceRef`/`pointer` identify exactly
@@ -98,6 +144,7 @@ export interface VerificationFinding {
   readonly code: VerificationFindingCode
   readonly axis: VerificationFindingAxis
   readonly claimId?: Uuid
+  readonly assertionId?: Uuid
   readonly field?: string
   readonly evidenceRef?: ResourceRef
   readonly pointer?: string
@@ -115,9 +162,21 @@ export interface ClaimExplanation {
   readonly templateId: NonEmptyString
   readonly message: string
   readonly claimId?: Uuid
+  readonly assertionId?: Uuid
   readonly field?: string
   readonly evidenceRef?: ResourceRef
 }
+
+/** Status of the optional semantic decision pass; a deterministic fallback never claims it ran. */
+export type SemanticReviewNotRunReason =
+  | 'disabled'
+  | 'no_claims'
+  | 'not_configured'
+  | 'provider_fallback'
+
+export type SemanticReviewDisposition =
+  | { readonly status: 'completed' }
+  | { readonly status: 'not_run'; readonly reason: SemanticReviewNotRunReason }
 
 /** Whether the policy requires, permits or forbids the JEV semantic review. */
 export type SemanticReviewMode = 'required' | 'optional' | 'disabled'

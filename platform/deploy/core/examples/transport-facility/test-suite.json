@@ -1,0 +1,21 @@
+{
+  "ref": {
+    "id": "synthetic-transport-golden-cases",
+    "version": "1.0.0",
+    "digest": "sha256:97c6a167a276e3c1d7e6c87cdd75c13d11cab704b9ba9391c3b846085ce34f02"
+  },
+  "cases": [
+    {
+      "caseId": "transport-north-facilities",
+      "question": "Which synthetic transport facilities are in the north district?",
+      "expectedCapabilities": ["structured_query"],
+      "expectedStatus": "resolved"
+    },
+    {
+      "caseId": "transport-inspection-rule",
+      "question": "Under synthetic rule R-T, which north facilities are known to require inspection?",
+      "expectedCapabilities": ["structured_query"],
+      "expectedStatus": "resolved"
+    }
+  ]
+}

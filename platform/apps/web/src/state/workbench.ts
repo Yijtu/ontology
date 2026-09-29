@@ -49,6 +49,7 @@ export type WorkbenchEvent =
   | { readonly type: 'failed'; readonly error: WorkbenchError }
   | { readonly type: 'busy' }
   | { readonly type: 'sourcesRefreshed'; readonly sources: readonly SourceBindingRecord[] }
+  | { readonly type: 'activeLoaded'; readonly active: ActiveProfileRecord }
   | { readonly type: 'preflightCompleted'; readonly result: PreflightResult }
   | { readonly type: 'notConfigured'; readonly error: WorkbenchError }
   | { readonly type: 'activated'; readonly active: ActiveProfileRecord }
@@ -75,6 +76,8 @@ export function workbenchReducer(state: WorkbenchState, event: WorkbenchEvent): 
     case 'sourcesRefreshed':
       // A probe changes a source's status, not the profile state; the phase is preserved.
       return { ...state, sources: event.sources, busy: false }
+    case 'activeLoaded':
+      return { ...state, active: event.active }
     case 'permissionDenied':
       return { ...state, phase: 'permission_denied', error: event.error, busy: false }
     case 'failed':

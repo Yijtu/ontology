@@ -2,7 +2,7 @@ import { randomUUID } from 'node:crypto'
 import { describe, expect, it } from 'vitest'
 import { InMemoryJobStore, JobService, JobStageFailure, JobWorker, OutboxDispatcher } from '@ontology/application'
 import { canAdvanceJobStage, isRunnableJobStage } from '@ontology/contracts'
-import type { JobView } from '@ontology/application'
+import type { JobStageOutcome, JobView } from '@ontology/application'
 import type { LogicalJobRecord } from '@ontology/contracts'
 import {
   EDITOR_A,
@@ -531,6 +531,87 @@ describe('retry idempotency and bounded progress', () => {
 })
 
 describe('stage failure classification', () => {
+  it('forwards the host shutdown signal into active job stage handlers', async () => {
+    const { store, budget, clock, service } = harness()
+    const input = newJobInput()
+    await service.createJob(input, EDITOR_A)
+    let markStarted: (() => void) | undefined
+    const started = new Promise<void>((resolve) => { markStarted = resolve })
+    let handlerSignal: AbortSignal | undefined
+    const registry = {
+      get: (stage: string) => stage === 'received'
+        ? {
+            stage: 'received' as const,
+            run: async (context: { readonly signal: AbortSignal }) => {
+              handlerSignal = context.signal
+              markStarted?.()
+              return await new Promise<never>((_resolve, reject) => {
+                context.signal.addEventListener('abort', () => {
+                  reject(new JobStageFailure('MODEL_UNAVAILABLE', 'the model call was cancelled', true))
+                }, { once: true })
+              })
+            },
+          }
+        : undefined,
+    }
+    const worker = new JobWorker({ store, handlers: registry, budget: budget.budget, now: clock.now, newId: () => randomUUID() })
+    const shutdown = new AbortController()
+    const running = worker.runOnce(SCOPE_A, EDITOR_A, shutdown.signal)
+
+    await started
+    shutdown.abort(new Error('host shutdown'))
+    const result = await running
+
+    expect(handlerSignal?.aborted).toBe(true)
+    expect(result.disposition).toBe('failed')
+    expect((await service.getJob(input.jobId, VIEWER_A)).lastError?.code).toBe('MODEL_UNAVAILABLE')
+  })
+
+  it('does not publish or advance a handler result that returns after cancellation', async () => {
+    const { store, budget, clock, service } = harness()
+    const input = newJobInput()
+    await service.createJob(input, EDITOR_A)
+    let markStarted: (() => void) | undefined
+    const started = new Promise<void>((resolve) => { markStarted = resolve })
+    let finishHandler: (() => void) | undefined
+    const lateOutcome = new Promise<JobStageOutcome>((resolve) => {
+      finishHandler = () => resolve({
+        nextStage: 'parsed',
+        counts: { total: 1, processed: 1, failed: 0, skipped: 0 },
+        publication: {
+          publicationKey: 'late-result',
+          versionRef: { id: 'late-result', version: '1.0.0', digest: `sha256:${'f'.repeat(64)}` },
+          outboxTopic: 'late.result',
+          outboxPayload: { candidateCount: 1 },
+        },
+      })
+    })
+    const registry = {
+      get: (stage: string) => stage === 'received'
+        ? {
+            stage: 'received' as const,
+            run: async () => {
+              markStarted?.()
+              return lateOutcome
+            },
+          }
+        : undefined,
+    }
+    const worker = new JobWorker({ store, handlers: registry, budget: budget.budget, now: clock.now, newId: () => randomUUID() })
+    const shutdown = new AbortController()
+    const running = worker.runOnce(SCOPE_A, EDITOR_A, shutdown.signal)
+    await started
+    shutdown.abort(new Error('host shutdown'))
+    finishHandler?.()
+    const result = await running
+
+    expect(result.disposition).toBe('failed')
+    const job = await service.getJob(input.jobId, VIEWER_A)
+    expect(job.stage).toBe('failed')
+    expect(job.publication).toBeUndefined()
+    expect(job.lastError?.code).toBe('DEADLINE_EXCEEDED')
+  })
+
   it('classifies an unexpected handler error without leaking its message', async () => {
     const { store, budget, clock, service } = harness()
     const input = newJobInput()

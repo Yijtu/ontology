@@ -202,6 +202,7 @@ class FaultyRegistry implements ArtifactRegistry {
 
 class FaultyObjectStore implements ImmutableObjectStore {
   failPublish = false
+  readCalls = 0
   readonly #inner: ImmutableObjectStore
 
   constructor(inner: ImmutableObjectStore) {
@@ -228,6 +229,7 @@ class FaultyObjectStore implements ImmutableObjectStore {
   }
 
   read(contentDigest: string): Promise<Uint8Array> {
+    this.readCalls += 1
     return this.#inner.read(contentDigest)
   }
 
@@ -338,6 +340,18 @@ describe('content-addressed blob lifecycle', () => {
       CONTEXT_A,
     )
     expect(new TextDecoder().decode(read)).toBe('the original document')
+  })
+
+  it('authorizes bounded metadata without reading blob bytes', async () => {
+    const harness = await createHarness()
+    const blobRef = await publishContent(harness, '{"question":"actual state"}', { purpose: 'artifact' })
+    const before = harness.objectStore.readCalls
+
+    const metadata = await harness.store.getAuthorizedMetadata({ scopeRef: SCOPE_A, blobRef }, CONTEXT_A)
+
+    expect(metadata).toMatchObject({ blobRef, mediaType: 'text/plain', byteSize: new TextEncoder().encode('{"question":"actual state"}').byteLength })
+    expect(metadata).not.toHaveProperty('integrityVerified')
+    expect(harness.objectStore.readCalls).toBe(before)
   })
 
   it('rejects a staged file whose bytes no longer match the declared digest', async () => {

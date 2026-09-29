@@ -50,6 +50,60 @@ function nonEmpty(value: string | undefined): value is string {
   return typeof value === 'string' && value.trim().length > 0
 }
 
+function scopeDimensionValues(
+  candidate: EntityCandidate,
+  identityScope: IndustryIdentityScopeSchema,
+): Readonly<Record<string, string>> {
+  const dimensions: Record<string, string> = {}
+  for (const dimension of identityScope.scopeDimensions) {
+    const matches = candidate.attributes.filter((attribute) => attribute.attributeId === dimension)
+    const value = matches[0]?.value
+    if (matches.length !== 1 || typeof value !== 'string' || !nonEmpty(value)) continue
+    dimensions[dimension] = value
+  }
+  return dimensions
+}
+
+function sameDimensions(
+  left: Readonly<Record<string, string>>,
+  right: Readonly<Record<string, string>>,
+): boolean {
+  const leftKeys = Object.keys(left).sort()
+  const rightKeys = Object.keys(right).sort()
+  return leftKeys.length === rightKeys.length &&
+    leftKeys.every((key, index) => key === rightKeys[index] && left[key] === right[key])
+}
+
+function requireCompatibleDimensions(
+  entity: IdentityEntityRecord,
+  target: ResolvedIdentityTarget,
+  candidateId: Uuid,
+  operation: string,
+): void {
+  if (!sameDimensions(entity.scopeDimensions, target.scopeDimensions)) {
+    throw new IdentityDecisionError(
+      'IDENTITY_SCOPE_MISMATCH',
+      `${operation} target ${entity.entityId} has different identity-scope dimension values`,
+    )
+  }
+  const complete = target.scopeDimensionIds.every(
+    (dimension) => target.scopeDimensions[dimension] !== undefined && entity.scopeDimensions[dimension] !== undefined,
+  )
+  if (!complete && entity.createdFromCandidateId !== candidateId) {
+    throw new IdentityDecisionError(
+      'IDENTITY_SCOPE_MISMATCH',
+      `${operation} cannot combine candidates while an identity-scope dimension is unknown`,
+    )
+  }
+}
+
+function nextRevision(revision: RevisionString): RevisionString {
+  if (!/^(?:0|[1-9]\d*)$/.test(revision)) {
+    throw new IdentityDecisionError('INVALID_ARGUMENT', `identity entity revision ${revision} is not a canonical integer`)
+  }
+  return String(BigInt(revision) + 1n)
+}
+
 /** The exact source chunks a mention came from, carried into the decision evidence. */
 function candidateEvidence(candidate: EntityCandidate): ResourceRef[] {
   return candidate.sourceSpans.map((span) => ({
@@ -218,7 +272,14 @@ export class IdentityDecisionService {
         `candidate declares identity scope ${candidate.identityScopeId} but the definition declares ${identityScope.identityScopeId}`,
       )
     }
-    return { objectId: candidate.objectId, identityScopeId: identityScope.identityScopeId, candidate }
+    return {
+      objectId: candidate.objectId,
+      identityScopeId: identityScope.identityScopeId,
+      identityAttributeIds: identityScope.identityAttributeIds,
+      scopeDimensionIds: identityScope.scopeDimensions,
+      scopeDimensions: scopeDimensionValues(candidate, identityScope),
+      candidate,
+    }
   }
 
   #identityScopeOf(schema: IndustrySchema, objectId: string): IndustryIdentityScopeSchema {
@@ -256,7 +317,7 @@ export class IdentityDecisionService {
       case 'clarify':
         return { draft: { ...base, kind: 'clarify' } }
       case 'reject':
-        return this.#planReject(request, base)
+        return this.#planReject(request, candidate, target, base, scopeRef, ctx)
       case 'split':
         return this.#planSplit(request, candidate, target, base, scopeRef, ctx)
     }
@@ -287,6 +348,10 @@ export class IdentityDecisionService {
         `entity ${targetEntityId} is a ${entity.objectId}/${entity.identityScopeId}, which cannot merge with ${target.objectId}/${target.identityScopeId}`,
       )
     }
+    requireCompatibleDimensions(entity, target, candidate.candidateId, 'match')
+    if (entity.state === 'retired') {
+      throw new IdentityDecisionError('IDENTITY_CONFLICT', `entity ${targetEntityId} is retired and cannot receive a merge`)
+    }
     // A hard negative link blocks the merge; it is never dropped to force a match.
     const constraints = await this.#deps.store.listLinkConstraints(scopeRef, candidate.candidateId, ctx)
     if (constraints.some((constraint) => constraint.entityId === targetEntityId)) {
@@ -301,6 +366,12 @@ export class IdentityDecisionService {
       { candidateId: candidate.candidateId, openOnly: true },
       ctx,
     )
+    if (open.some((assertion) => assertion.entityId === targetEntityId)) {
+      throw new IdentityDecisionError(
+        'IDENTITY_CONFLICT',
+        `candidate ${candidate.candidateId} is already asserted to entity ${targetEntityId}`,
+      )
+    }
     const conflicting = open.find((assertion) => assertion.entityId !== targetEntityId)
     if (conflicting !== undefined) {
       throw new IdentityDecisionError(
@@ -309,9 +380,28 @@ export class IdentityDecisionService {
       )
     }
 
-    const strongIdentity = request.strongIdentity ?? this.#nativeIdentityOf(candidate)
+    const strongIdentity =
+      request.strongIdentity === undefined
+        ? undefined
+        : this.#validateSourceIdentity(
+            candidate,
+            target.identityAttributeIds,
+            request.strongIdentity,
+            entity.createdFromCandidateId === candidate.candidateId,
+          )
     const justification = request.justification
     const score = request.scoreEvidence
+    if (strongIdentity !== undefined) {
+      if (
+        entity.createdFromCandidateId !== candidate.candidateId &&
+        !(await this.#hasReviewedIdentity(scopeRef, entity, strongIdentity, ctx))
+      ) {
+        throw new IdentityDecisionError(
+          'IDENTITY_EVIDENCE_REQUIRED',
+          'the target cluster has no previously reviewed matching identity; provide a human justification or match a confirmed identity',
+        )
+      }
+    }
     // A score is supporting evidence only: it can never authorise a merge by itself.
     if (strongIdentity === undefined && !nonEmpty(justification)) {
       if (score !== undefined && score.score < this.#scoreThreshold) {
@@ -326,6 +416,12 @@ export class IdentityDecisionService {
       )
     }
     const assertion = this.#openAssertion(candidate, targetEntityId, base)
+    const updatedEntity: IdentityEntityRecord = {
+      ...entity,
+      state: 'confirmed',
+      revision: nextRevision(entity.revision),
+      updatedAt: base.recordedAt,
+    }
     return {
       draft: {
         ...base,
@@ -334,6 +430,8 @@ export class IdentityDecisionService {
         ...(strongIdentity === undefined ? {} : { strongIdentity }),
         ...(score === undefined ? {} : { scoreEvidence: score }),
       },
+      entity: updatedEntity,
+      expectedTargetEntityRevision: entity.revision,
       openAssertion: assertion,
     }
   }
@@ -348,6 +446,8 @@ export class IdentityDecisionService {
       entityId,
       objectId: target.objectId,
       identityScopeId: target.identityScopeId,
+      scopeDimensions: target.scopeDimensions,
+      createdFromCandidateId: base.candidateId,
       state: 'pending',
       revision: '1',
       recordedAt: base.recordedAt,
@@ -364,13 +464,35 @@ export class IdentityDecisionService {
     }
   }
 
-  #planReject(
+  async #planReject(
     request: IdentityDecisionRequest,
+    candidate: EntityCandidate,
+    target: ResolvedIdentityTarget,
     base: Omit<IdentityDecisionDraft, 'kind'>,
-  ): Omit<AppendIdentityDecisionInput, 'expectedRevision'> {
+    scopeRef: ScopeRef,
+    ctx: ToolContext,
+  ): Promise<Omit<AppendIdentityDecisionInput, 'expectedRevision'>> {
     const targetEntityId = request.targetEntityId
     if (targetEntityId === undefined) {
       return { draft: { ...base, kind: 'reject' } }
+    }
+    const entity = await this.#deps.store.getEntity(scopeRef, targetEntityId, ctx)
+    if (entity === undefined) {
+      throw new IdentityDecisionError('ENTITY_NOT_FOUND', `entity ${targetEntityId} is not visible in this scope`)
+    }
+    if (entity.objectId !== target.objectId || entity.identityScopeId !== target.identityScopeId) {
+      throw new IdentityDecisionError(
+        'IDENTITY_SCOPE_MISMATCH',
+        `cannot-link target ${targetEntityId} is outside the candidate's object identity scope`,
+      )
+    }
+    requireCompatibleDimensions(entity, target, candidate.candidateId, 'cannot-link')
+    const open = await this.#deps.store.listAssertions(scopeRef, { candidateId: candidate.candidateId, openOnly: true }, ctx)
+    if (open.some((assertion) => assertion.entityId === targetEntityId)) {
+      throw new IdentityDecisionError(
+        'IDENTITY_CONFLICT',
+        `candidate ${candidate.candidateId} is already merged into ${targetEntityId}; split it before recording a cannot-link`,
+      )
     }
     const constraint: IdentityLinkConstraintRecord = {
       constraintId: this.#newId(),
@@ -382,6 +504,7 @@ export class IdentityDecisionService {
     }
     return {
       draft: { ...base, kind: 'reject', targetEntityId },
+      expectedTargetEntityRevision: entity.revision,
       linkConstraint: constraint,
     }
   }
@@ -402,24 +525,33 @@ export class IdentityDecisionService {
     if (entity === undefined) {
       throw new IdentityDecisionError('ENTITY_NOT_FOUND', `entity ${targetEntityId} is not visible in this scope`)
     }
+    if (entity.objectId !== target.objectId || entity.identityScopeId !== target.identityScopeId) {
+      throw new IdentityDecisionError('IDENTITY_SCOPE_MISMATCH', `split target ${targetEntityId} is outside the candidate's identity scope`)
+    }
+    requireCompatibleDimensions(entity, target, candidate.candidateId, 'split')
     const separatedCandidateIds = request.separatedCandidateIds ?? [candidate.candidateId]
     if (separatedCandidateIds.length === 0) {
       throw new IdentityDecisionError('INVALID_ARGUMENT', 'a split requires at least one source record to separate')
+    }
+    if (new Set(separatedCandidateIds).size !== separatedCandidateIds.length) {
+      throw new IdentityDecisionError('INVALID_ARGUMENT', 'a split cannot repeat a source candidate id')
     }
     const open = await this.#deps.store.listAssertions(scopeRef, { entityId: targetEntityId, openOnly: true }, ctx)
     const separated = new Set(separatedCandidateIds)
     const closeAssertions = open
       .filter((assertion) => separated.has(assertion.candidateId))
       .map((assertion) => ({ assertionId: assertion.assertionId, validTo: base.recordedAt }))
-    if (closeAssertions.length === 0) {
+    const foundCandidates = new Set(open.filter((assertion) => separated.has(assertion.candidateId)).map((assertion) => assertion.candidateId))
+    if (closeAssertions.length === 0 || foundCandidates.size !== separated.size) {
       throw new IdentityDecisionError(
         'IDENTITY_CONFLICT',
-        `none of the requested source records are currently asserted to entity ${targetEntityId}`,
+        `every requested source record must currently be asserted to entity ${targetEntityId}`,
       )
     }
     const invalidation: IdentityInvalidationEvent = {
       eventId: this.#newId(),
       topic: 'identity.decision.split',
+      materializationFenceId: this.#newId(),
       decisionId: base.decisionId,
       entityId: targetEntityId,
       objectId: target.objectId,
@@ -436,6 +568,7 @@ export class IdentityDecisionService {
         targetEntityId,
         separatedCandidateIds,
       },
+      expectedTargetEntityRevision: entity.revision,
       closeAssertions,
       invalidation,
       outboxJobId: candidate.jobId,
@@ -460,11 +593,80 @@ export class IdentityDecisionService {
     }
   }
 
-  #nativeIdentityOf(candidate: EntityCandidate): IdentityDecisionDraft['strongIdentity'] {
-    if (candidate.nativeId !== undefined && candidate.nativeId.length > 0) {
-      return { kind: 'native_id', value: candidate.nativeId }
+  #validateSourceIdentity(
+    candidate: EntityCandidate,
+    identityAttributeIds: readonly string[],
+    identity: NonNullable<IdentityDecisionRequest['strongIdentity']>,
+    allowSelfIdentityReview: boolean,
+  ): NonNullable<IdentityDecisionRequest['strongIdentity']> {
+    if (!nonEmpty(identity.value)) {
+      throw new IdentityDecisionError('IDENTITY_EVIDENCE_INVALID', 'a strong identity needs a non-empty exact value')
     }
-    return undefined
+    if (identity.kind === 'native_id') {
+      if (identityAttributeIds.length === 0) {
+        throw new IdentityDecisionError(
+          'IDENTITY_EVIDENCE_INVALID',
+          'native_id evidence is unavailable because the pinned identity scope declares no identity attributes',
+        )
+      }
+      if (identity.attributeId !== undefined) {
+        if (!identityAttributeIds.includes(identity.attributeId)) {
+          throw new IdentityDecisionError(
+            'IDENTITY_EVIDENCE_INVALID',
+            'native_id evidence must name an identity attribute from the candidate definition',
+          )
+        }
+        const matches = candidate.attributes.filter((attribute) => attribute.attributeId === identity.attributeId)
+        if (matches.length !== 1 || matches[0]?.value !== identity.value) {
+          throw new IdentityDecisionError(
+            'IDENTITY_EVIDENCE_INVALID',
+            'native_id evidence must exactly match the candidate value for the pinned identity attribute',
+          )
+        }
+        return identity
+      }
+
+      const matches = candidate.attributes.filter(
+        (attribute) => identityAttributeIds.includes(attribute.attributeId) && attribute.value === identity.value,
+      )
+      if (matches.length > 1) {
+        throw new IdentityDecisionError('IDENTITY_EVIDENCE_INVALID', 'native_id value matches multiple identity attributes')
+      }
+      if (matches.length === 1) {
+        const attributeId = matches[0]?.attributeId
+        if (attributeId === undefined) {
+          throw new IdentityDecisionError('IDENTITY_EVIDENCE_INVALID', 'native_id attribute could not be resolved')
+        }
+        return { ...identity, attributeId }
+      }
+      if (candidate.nativeId !== identity.value) {
+        if (allowSelfIdentityReview && identityAttributeIds.length === 1) {
+          const attributeId = identityAttributeIds[0]
+          if (attributeId !== undefined) return { ...identity, attributeId }
+        }
+        throw new IdentityDecisionError(
+          'IDENTITY_EVIDENCE_INVALID',
+          'native_id evidence must exactly match the candidate native ID or one pinned identity attribute',
+        )
+      }
+      return identity
+    }
+    if (!candidate.attributes.some((attribute) => attribute.value === identity.value)) {
+      throw new IdentityDecisionError(
+        'IDENTITY_EVIDENCE_INVALID',
+        'confirmed_alias evidence must match a value on the source candidate',
+      )
+    }
+    return identity
+  }
+
+  async #hasReviewedIdentity(
+    scopeRef: ScopeRef,
+    entity: IdentityEntityRecord,
+    identity: NonNullable<IdentityDecisionRequest['strongIdentity']>,
+    ctx: ToolContext,
+  ): Promise<boolean> {
+    return this.#deps.store.hasReviewedIdentity(scopeRef, entity.entityId, identity, ctx)
   }
 
   #toView(record: IdentityDecisionRecord, entity: IdentityEntityRecord | undefined): IdentityDecisionView {

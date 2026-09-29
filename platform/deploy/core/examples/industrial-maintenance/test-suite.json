@@ -1,0 +1,21 @@
+{
+  "ref": {
+    "id": "synthetic-industrial-maintenance-golden-cases",
+    "version": "1.0.0",
+    "digest": "sha256:1c34ac6341ec04383d6e20aef8c7ccd405986651998041539ef2e20e5ccb7fac"
+  },
+  "cases": [
+    {
+      "caseId": "industrial-assets-canonical-hours",
+      "question": "Which synthetic assets have known operating hours of at least 100 h and no declared maintenance exemption?",
+      "expectedCapabilities": ["structured_query"],
+      "expectedStatus": "resolved"
+    },
+    {
+      "caseId": "industrial-assets-minute-layout",
+      "question": "Does asset I-04 meet the synthetic R-I boundary when the source reports 6000 accumulated minutes?",
+      "expectedCapabilities": ["structured_query"],
+      "expectedStatus": "resolved"
+    }
+  ]
+}

@@ -7,6 +7,8 @@
  * `contracts`/`core`.
  */
 export { JevDecisionAdapter } from './adapter'
+export { jevActualStateDigest } from './actual-state'
+export { JevStateResolutionError } from './types'
 export {
   JevAdapterError,
   isJevAdapterError,
@@ -29,7 +31,12 @@ export type {
   JevAdapterConfig,
   JevAdapterLogRecord,
   JevAdapterLogger,
+  JevActualState,
+  JevActualStateResolution,
+  JevActualStateResolutionInput,
+  JevActualStateResolver,
   JevFallbackPolicy,
   JevModelBinding,
+  JevStateResolutionErrorCode,
   JevUsage,
 } from './types'

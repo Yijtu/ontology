@@ -170,10 +170,26 @@ describe('JEV decision adapter — shared budget integration', () => {
     const harness = await budgetHarness({ maxModelTokens: 1_000 })
     const adapter = makeAdapter({ server: api, fixture: 'partial_usage', harness })
 
-    await adapter.decide(decisionRequest([choiceQuestion()]), harness.ctx)
+    await expect(adapter.decide(decisionRequest([choiceQuestion()]), harness.ctx)).rejects.toMatchObject({
+      code: 'INVALID_SCHEMA',
+    })
 
     const reservations = await reservationsOf(harness)
     expect(reservations[0]?.status).toBe('usage_unknown')
     expect((await remainingOf(harness)).remaining.tokensRemaining).toBe(1_000 - 256)
+  })
+
+  it('records provider usage even when a response answer is malformed', async () => {
+    const api = await server()
+    const harness = await budgetHarness({ maxModelTokens: 1_000 })
+    const adapter = makeAdapter({ server: api, fixture: 'unknown_question_type', harness, maxAttempts: 1 })
+
+    await expect(adapter.decide(decisionRequest([choiceQuestion()]), harness.ctx)).rejects.toMatchObject({
+      code: 'INVALID_SCHEMA',
+    })
+
+    const reservations = await reservationsOf(harness)
+    expect(reservations[0]?.status).toBe('failed')
+    expect((await remainingOf(harness)).remaining.tokensRemaining).toBe(1_000 - 25)
   })
 })

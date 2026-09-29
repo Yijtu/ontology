@@ -1,0 +1,93 @@
+{
+  "schemaVersion": "core-synthetic-industry-examples@1",
+  "classification": "public_synthetic_demo_not_an_industry_standard",
+  "scenarios": [
+    {
+      "scenarioId": "transport-facility-inspection",
+      "label": "交通设施巡检（合成演示）",
+      "profileRef": { "id": "synthetic-transport-facility-demo", "version": "1.0.0" },
+      "namespace": "synthetic-transport-facility",
+      "industryManifest": "transport-facility/industry-manifest.json",
+      "definitionDraft": "transport-facility/definition-draft.json",
+      "mappingTemplates": "transport-facility/mapping-templates.json",
+      "testSuite": "transport-facility/test-suite.json",
+      "rawSources": [
+        {
+          "sourceRef": { "namespace": "synthetic-transport-demo", "sourceId": "registry-a" },
+          "path": "transport-facility/records/registry-a.txt",
+          "mediaType": "text/plain"
+        },
+        {
+          "sourceRef": { "namespace": "synthetic-transport-demo", "sourceId": "field-review-b" },
+          "path": "transport-facility/records/field-review-b.txt",
+          "mediaType": "text/plain"
+        },
+        {
+          "sourceRef": { "namespace": "synthetic-transport-demo", "sourceId": "district-directory" },
+          "path": "transport-facility/records/districts.txt",
+          "mediaType": "text/plain"
+        }
+      ],
+      "syntheticPolicy": {
+        "sourceRef": { "namespace": "synthetic-transport-demo", "sourceId": "rule-rt-policy" },
+        "path": "transport-facility/policy/rule-rt.txt",
+        "mediaType": "text/plain"
+      },
+      "physicalMappings": [
+        {
+          "mappingRef": { "id": "synthetic-transport-registry-a", "version": "1.0.0", "digest": "sha256:e3de5954eb6ed0fe56411e25146ec460a163d1f4ba54f71308df7efe5233530c" },
+          "path": "transport-facility/mappings/registry-a.json"
+        },
+        {
+          "mappingRef": { "id": "synthetic-transport-field-review-b", "version": "1.0.0", "digest": "sha256:b0926fe8e0b7bab63860d0e53061d10d71ac780f37889d4ed163f71b8e037252" },
+          "path": "transport-facility/mappings/field-review-b.json"
+        }
+      ],
+      "goldenEntityIds": ["T-01", "T-02", "T-03", "T-04", "T-05", "T-06"]
+    },
+    {
+      "scenarioId": "industrial-asset-maintenance",
+      "label": "工业资产维护（合成演示）",
+      "profileRef": { "id": "synthetic-industrial-maintenance-demo", "version": "1.0.0" },
+      "namespace": "synthetic-industrial-maintenance",
+      "industryManifest": "industrial-maintenance/industry-manifest.json",
+      "definitionDraft": "industrial-maintenance/definition-draft.json",
+      "mappingTemplates": "industrial-maintenance/mapping-templates.json",
+      "testSuite": "industrial-maintenance/test-suite.json",
+      "rawSources": [
+        {
+          "sourceRef": { "namespace": "synthetic-industrial-demo", "sourceId": "asset-hours-canonical" },
+          "path": "industrial-maintenance/records/canonical-layout.txt",
+          "mediaType": "text/plain"
+        },
+        {
+          "sourceRef": { "namespace": "synthetic-industrial-demo", "sourceId": "asset-minutes-layout" },
+          "path": "industrial-maintenance/records/minutes-layout.txt",
+          "mediaType": "text/plain"
+        },
+        {
+          "sourceRef": { "namespace": "synthetic-industrial-demo", "sourceId": "workshop-directory" },
+          "path": "industrial-maintenance/records/workshops.txt",
+          "mediaType": "text/plain"
+        }
+      ],
+      "syntheticPolicy": {
+        "sourceRef": { "namespace": "synthetic-industrial-demo", "sourceId": "rule-ri-policy" },
+        "path": "industrial-maintenance/policy/rule-ri.txt",
+        "mediaType": "text/plain"
+      },
+      "physicalMappings": [
+        {
+          "mappingRef": { "id": "synthetic-industrial-hours-canonical", "version": "1.0.0", "digest": "sha256:afa2ed7c10bfaa83e8402a6e2b43ac801bd5abf20ab0376310637f9c2d6da3b9" },
+          "path": "industrial-maintenance/mappings/canonical-layout.json"
+        },
+        {
+          "mappingRef": { "id": "synthetic-industrial-accumulated-minutes", "version": "1.0.0", "digest": "sha256:645b80a717d7c75ade1cb13abf7d89f479bd8b4fdefa6d8560347305f91e4f62" },
+          "path": "industrial-maintenance/mappings/minutes-layout.json"
+        }
+      ],
+      "goldenEntityIds": ["I-01", "I-02", "I-03", "I-04", "I-05", "I-06"],
+      "calibrationOnlyEntityIds": ["I-CAL-5999"]
+    }
+  ]
+}

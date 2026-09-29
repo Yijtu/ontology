@@ -10,12 +10,29 @@
 export { RuleEvaluator } from './evaluate'
 export { RuleEvaluationError, isRuleEvaluationError } from './errors'
 export type { RuleEvaluationErrorCode } from './errors'
-export { supportRuleFromPublishedRule } from './compile'
-export { ruleFactsFromStatements } from './from-published'
+export { compilePublishedRuleInstances, supportRuleFromPublishedRule } from './compile'
+export type { PublishedRuleCompilerOptions } from './compile'
+export { projectPublishedAttributeFacts, ruleFactsFromStatements } from './from-published'
+export type { PublishedAttributeProjectionOptions } from './from-published'
 export { conclusionQualifiedKey, factQualifiedKey, qualifiedPropositionKey } from './proposition'
 export type { PropositionQualifiers } from './proposition'
-export { assertSupportedFilter, compareDecimal, filterMatches, isDecimalQuantity } from './values'
+export {
+  assertSupportedFilter,
+  canonicalDecimalString,
+  compareDecimal,
+  evaluateFilter,
+  filterMatches,
+  isDecimalQuantity,
+  isRuleDecimalValue,
+} from './values'
 export type {
+  AttributeProjectionIssue,
+  CompiledPublishedRuleInstance,
+  PublishedAttributeProjection,
+  PublishedRuleCompilation,
+  PublishedRuleSubject,
+  RuleApplicabilityResult,
+  RuleApplicabilityState,
   RuleAssertionValue,
   RuleConclusionResult,
   RuleConclusionSpec,
@@ -24,9 +41,14 @@ export type {
   RuleEvaluationResult,
   RuleFact,
   RuleFactRef,
+  RuleCapabilityIssue,
+  RuleConditionState,
+  RuleDecimalValue,
+  RuleExceptionState,
   RuleGroupPolarity,
   RulePremiseAlternative,
   RulePremiseGroup,
+  PublishedRuleInstanceMetadata,
   RuleSatisfiedBy,
   SupportConclusionNode,
   SupportGraph,

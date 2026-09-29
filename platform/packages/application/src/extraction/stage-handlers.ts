@@ -1,5 +1,6 @@
 import type {
   DocumentParseStore,
+  ErrorCode,
   LogicalJobRecord,
   PipelineStage,
   ScopeRef,
@@ -12,6 +13,7 @@ import type {
   JobStageHandlerRegistry,
   JobStageOutcome,
 } from '../jobs/types'
+import { ExtractionError } from './errors'
 import { decodeExtractionJobRef } from './job-ref'
 import type { ExtractionPipeline } from './extraction-service'
 import type { ExtractionInput } from './types'
@@ -61,6 +63,47 @@ export interface ExtractionStageHandlerDependencies {
   readonly newId?: () => string
 }
 
+function stageFailureOf(error: ExtractionError): JobStageFailure {
+  switch (error.code) {
+    case 'MODEL_NOT_CONFIGURED':
+      return new JobStageFailure('CAPABILITY_NOT_CONFIGURED', 'the extraction model is not configured', false, { cause: error })
+    case 'BUDGET_REFUSED':
+      return new JobStageFailure('BUDGET_EXHAUSTED', 'the background budget refused extraction', false, { cause: error })
+    case 'CANCELLED':
+      return new JobStageFailure('DEADLINE_EXCEEDED', 'the extraction stage stopped before completion', false, { cause: error })
+    case 'SCOPE_MISMATCH':
+      return new JobStageFailure('FORBIDDEN', 'the extraction context is outside the job scope', false, { cause: error })
+    case 'SCHEMA_NOT_FOUND':
+      return new JobStageFailure('CAPABILITY_NOT_CONFIGURED', 'the extraction schema is not available', false, { cause: error })
+    case 'INVALID_JOB_REF':
+      return new JobStageFailure('INVALID_ARGUMENT', 'the extraction job reference is invalid', false, { cause: error })
+    case 'NO_CHUNKS':
+      return new JobStageFailure('INSUFFICIENT_DATA', 'the parse has no extractable chunks', false, { cause: error })
+    case 'INVALID_MODEL_OUTPUT':
+      return new JobStageFailure('INVALID_SCHEMA', 'the extraction model returned invalid structured output', false, { cause: error })
+    case 'GENERATION_FAILED':
+      if (error.platformCode !== undefined) {
+        const messages: Readonly<Partial<Record<ErrorCode, string>>> = {
+          BUDGET_EXHAUSTED: 'the background budget refused the extraction model call',
+          CAPABILITY_NOT_CONFIGURED: 'the extraction model capability is not configured',
+          DEADLINE_EXCEEDED: 'the extraction model call stopped before completion',
+          FORBIDDEN: 'the extraction model call was refused by its configured provider',
+          INVALID_ARGUMENT: 'the extraction model request was rejected',
+          INVALID_SCHEMA: 'the extraction model returned invalid structured output',
+          MODEL_UNAVAILABLE: 'the extraction model provider is unavailable',
+          RATE_LIMITED: 'the extraction model provider rate limited the request',
+        }
+        return new JobStageFailure(
+          error.platformCode,
+          messages[error.platformCode] ?? 'the extraction model call failed',
+          error.retryable ?? false,
+          { cause: error },
+        )
+      }
+      return new JobStageFailure('MODEL_UNAVAILABLE', 'the extraction model call failed', true, { cause: error })
+  }
+}
+
 /**
  * `parsed → extracted`: consume the traceable chunks of the job's parse and produce
  * append-only entity/relation candidates. The handler owns no persistence: the worker writes
@@ -82,11 +125,17 @@ export class ExtractionStageHandler implements JobStageHandler {
 
   async run(context: JobStageContext): Promise<JobStageOutcome> {
     const input = await buildInput(context.job, this.#parseStore, context.ctx, true)
-    const result = await this.#pipeline.extract(input, {
-      ledgerId: context.ledgerId,
-      ctx: context.ctx,
-      signal: context.signal,
-    })
+    let result
+    try {
+      result = await this.#pipeline.extract(input, {
+        ledgerId: context.ledgerId,
+        ctx: context.ctx,
+        signal: context.signal,
+      })
+    } catch (error) {
+      if (error instanceof ExtractionError) throw stageFailureOf(error)
+      throw error
+    }
     const now = this.#now()
     return {
       nextStage: 'extracted',
