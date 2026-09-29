@@ -248,6 +248,24 @@ describe('received → parsed for structured formats', () => {
     )
   })
 
+  it('reconciles JSON records with a json-pointer locator', async () => {
+    const harness = buildHarness()
+    const json = JSON.stringify({ records: [{ sku: 'A-1', qty: 10 }, { sku: 'A-2', qty: 20 }] })
+    const originalRef = await publishBytes(harness.blobs, new TextEncoder().encode(json), 'application/json')
+    const jobId = await createJob(harness.service, structuredRef(originalRef, 'json'))
+
+    await harness.worker.runOnce(SCOPE_A, EDITOR)
+    const job = await harness.service.getJob(jobId, EDITOR)
+    expect(job.counts).toEqual({ total: 2, processed: 2, failed: 0, skipped: 0 })
+
+    const parse = await harness.store.findParseByDigest(SCOPE_A, originalRef.digest, '1.0.0', EDITOR)
+    expect(parse?.format).toBe('json')
+    if (parse === undefined) return
+    const page = await harness.store.listRecords(SCOPE_A, parse.parseId, { limit: 10 }, EDITOR)
+    expect(page.records.map((entry) => entry.sourceRowKey)).toEqual(['json:/records/0', 'json:/records/1'])
+    expect(page.records[0]?.locator).toMatchObject({ kind: 'json_pointer', pointer: '/records/0' })
+  })
+
   it('records a truncated parse as partial and pages the captured rows', async () => {
     const harness = buildHarness()
     const rows = Array.from({ length: 8 }, (_value, index) => `R-${index + 1},${index + 1}`)
