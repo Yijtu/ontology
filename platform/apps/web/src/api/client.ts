@@ -159,6 +159,21 @@ import type {
   ProjectRevisionView,
 } from './projects'
 import type { ImportMappingVersion, MappingPreview, ProjectRecordVersion, ProjectRevision } from '@ontology/contracts'
+import {
+  isIndustryValidationReportView,
+  isPackCapabilityStatusView,
+  isPackExportBundleView,
+  isPublishedPackResult,
+  isSyntheticExampleSetView,
+} from './package-publication'
+import type {
+  IndustryValidationReportView,
+  PackExportBundleView,
+  PublishedPackResultView,
+  PublishPackRequest,
+  RunValidationRequest,
+  SyntheticExampleSetView,
+} from './package-publication'
 
 export { ApiError } from './errors'
 export {
@@ -1467,6 +1482,94 @@ export class WorkbenchClient {
       }
       return data
     })
+  }
+
+  /**
+   * `GET /industry-workspaces/:id/synthetic-example-sets`: the isolation-marked counter-example
+   * sets the sandbox holds. Every returned set keeps its `synthetic` marker; a set that lost it is
+   * an explicit malformed response rather than a silently trusted counter-example.
+   */
+  listSyntheticExampleSets(workspaceId: string): Promise<SyntheticExampleSetView[]> {
+    const path = `/api/v1/industry-workspaces/${encodeURIComponent(workspaceId)}/synthetic-example-sets`
+    return this.#request<unknown>('GET', path).then((data) => {
+      if (!isRecord(data) || !Array.isArray(data['exampleSets']) || !data['exampleSets'].every(isSyntheticExampleSetView)) {
+        throw malformedResponse(path, 'the synthetic example set list was not recognised')
+      }
+      return data['exampleSets']
+    })
+  }
+
+  /** `POST /industry-workspaces/:id/validations`: run the synthetic validation over a draft. */
+  createSyntheticValidation(
+    workspaceId: string,
+    request: RunValidationRequest,
+  ): Promise<IndustryValidationReportView> {
+    const path = `/api/v1/industry-workspaces/${encodeURIComponent(workspaceId)}/validations`
+    return this.#request<unknown>('POST', path, {
+      body: { exampleSetId: request.exampleSetId },
+      ...(request.expectedRevision === undefined ? {} : { ifMatch: request.expectedRevision }),
+      idempotencyKey: this.#newId(),
+    }).then((data) => this.readValidationReport(path, data))
+  }
+
+  /** `GET /industry-workspaces/:id/validations/:validationId`: one immutable report. */
+  getValidation(workspaceId: string, validationId: string): Promise<IndustryValidationReportView> {
+    const path = `/api/v1/industry-workspaces/${encodeURIComponent(workspaceId)}/validations/${encodeURIComponent(validationId)}`
+    return this.#request<unknown>('GET', path).then((data) => this.readValidationReport(path, data))
+  }
+
+  /**
+   * `POST /industry-workspaces/:id/publications`: publish an immutable pack from a reviewed draft.
+   * The server refuses a blocked semantic surface, and refuses a not-fully-executable deployment
+   * surface when `requireDeploymentExecutable` is set. The two surfaces come back independently.
+   */
+  publishPack(workspaceId: string, request: PublishPackRequest): Promise<PublishedPackResultView> {
+    const path = `/api/v1/industry-workspaces/${encodeURIComponent(workspaceId)}/publications`
+    return this.#request<unknown>('POST', path, {
+      body: {
+        packId: request.packId,
+        version: request.version,
+        validationId: request.validationId,
+        ...(request.requireDeploymentExecutable ? { requireDeploymentExecutable: true } : {}),
+      },
+      ifMatch: request.expectedRevision,
+      idempotencyKey: this.#newId(),
+    }).then((data) => {
+      if (!isRecord(data) || !isVersionRef(data['packRef']) || !isPackCapabilityStatusView(data['capabilityStatus'])) {
+        throw malformedResponse(path, 'the published pack result was not recognised')
+      }
+      const pack = data['pack']
+      if (!isRecord(pack) || typeof pack['revision'] !== 'string' || typeof pack['publishedAt'] !== 'string') {
+        throw malformedResponse(path, 'the published pack asset was not recognised')
+      }
+      const result: PublishedPackResultView = {
+        packRef: data['packRef'],
+        capabilities: data['capabilityStatus'],
+        revision: pack['revision'],
+        publishedAt: pack['publishedAt'],
+      }
+      if (!isPublishedPackResult(result)) throw malformedResponse(path, 'the published pack result was not recognised')
+      return result
+    })
+  }
+
+  /** `GET /industry-packs/:packId/export`: the declaration-only immutable export of one version. */
+  exportIndustryPack(packId: string, version: string): Promise<PackExportBundleView> {
+    const query = new URLSearchParams({ version })
+    const path = `/api/v1/industry-packs/${encodeURIComponent(packId)}/export?${query.toString()}`
+    return this.#request<unknown>('GET', path).then((data) => {
+      if (!isPackExportBundleView(data)) {
+        throw malformedResponse(path, 'the industry pack export bundle was not recognised')
+      }
+      return data
+    })
+  }
+
+  private readValidationReport(path: string, data: unknown): IndustryValidationReportView {
+    if (!isRecord(data) || !isIndustryValidationReportView(data['validation'])) {
+      throw malformedResponse(path, 'the industry validation report was not recognised')
+    }
+    return data['validation']
   }
 
   listProjectMappings(projectId: string): Promise<ImportMappingVersion[]> {

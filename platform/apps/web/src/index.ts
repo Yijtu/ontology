@@ -236,6 +236,40 @@ export type {
 export { createScenarioRegistry, registerBuiltInScenarioModules } from './scenarios/composition'
 export { InstanceReviewPanel } from './components/InstanceReviewPanel'
 export type { InstanceReviewPanelProps } from './components/InstanceReviewPanel'
+export {
+  PackagePublicationPanel,
+  coveredCaseKinds,
+  expectationSummary,
+  gateLabel,
+  publicationBlocked,
+} from './components/PackagePublicationPanel'
+export type { PackageMountBinding, PackagePublicationPanelProps } from './components/PackagePublicationPanel'
+export {
+  isIndustryValidationReportView,
+  isPackCapabilityStatusView,
+  isPackExportBundleView,
+  isPublishedPackResult,
+  isSyntheticExampleSetView,
+  isVersionRef as isPackageVersionRef,
+  SYNTHETIC_CASE_KINDS,
+  SYNTHETIC_CASE_KIND_LABELS,
+} from './api/package-publication'
+export type {
+  IndustryValidationGate,
+  IndustryValidationIssueView,
+  IndustryValidationReportView,
+  PackCapabilityStatusView,
+  PackExportBundleView,
+  PackVersionDiffView,
+  PublishedPackResultView,
+  PublishPackRequest,
+  RunValidationRequest,
+  SyntheticCaseKind,
+  SyntheticCaseView,
+  SyntheticExampleSetView,
+  SyntheticExpectationView,
+  ValidationSurfaceGateView,
+} from './api/package-publication'
 export { ProjectWorkspacePanel } from './components/ProjectWorkspacePanel'
 export type {
   ProjectBinding,

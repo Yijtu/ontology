@@ -315,7 +315,7 @@ class InMemoryProjectRecordStore implements ProjectRecordStore {
 }
 
 /** The in-memory ProjectStore from the V03-016 unit suite, kept scope/CAS-faithful. */
-class InMemoryProjectStore implements ProjectStore {
+export class InMemoryProjectStore implements ProjectStore {
   readonly #projects = new Map<string, ProjectRecord>()
   readonly #revisions = new Map<string, ProjectRevision[]>()
   readonly #createKeys = new Map<string, { digest: string; ref: string }>()
