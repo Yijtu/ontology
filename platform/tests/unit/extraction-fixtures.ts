@@ -209,6 +209,10 @@ export class StaticDocumentParseStore implements DocumentParseStore {
     return undefined
   }
 
+  async getParse(): Promise<DocumentParseRecord | undefined> {
+    return undefined
+  }
+
   async listChunks(): Promise<DocumentChunkRecord[]> {
     return this.#chunks.map((chunk) => ({ ...chunk }))
   }

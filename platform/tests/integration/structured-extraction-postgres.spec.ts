@@ -199,6 +199,7 @@ describe('structured parsed → extracted against a real PostgreSQL', () => {
     const unusedParseStore: DocumentParseStore = {
       recordParse: () => Promise.reject(new Error('the text parse store must not be used')),
       findParseByDigest: () => Promise.reject(new Error('the text parse store must not be used')),
+      getParse: () => Promise.reject(new Error('the text parse store must not be used')),
       listChunks: () => Promise.reject(new Error('the text parse store must not be used')),
       listChunksByScope: () => Promise.reject(new Error('the text parse store must not be used')),
       close: () => Promise.resolve(),

@@ -260,6 +260,7 @@ describe('index version binding', () => {
       listChunksByScope: async () => [],
       recordParse: async () => ({ created: false }),
       findParseByDigest: async () => undefined,
+      getParse: async () => undefined,
       close: async () => undefined,
     }
     const builder = new Bm25IndexBuilder({
@@ -509,6 +510,7 @@ describe('index build stage handler', () => {
         listChunksByScope: async () => [],
         recordParse: async () => ({ created: false }),
         findParseByDigest: async () => undefined,
+        getParse: async () => undefined,
         close: async () => undefined,
       },
       indexStore: store,

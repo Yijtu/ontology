@@ -36,6 +36,8 @@ import { registerSyntheticValidationRoutes } from './synthetic-validation'
 import type { SyntheticValidationRouteDependencies } from './synthetic-validation'
 import { registerProjectRoutes } from './projects'
 import type { ProjectRouteDependencies } from './projects'
+import { registerProjectDocumentRoutes } from './project-documents'
+import type { ProjectDocumentRouteDependencies } from './project-documents'
 import { installErrorHandler } from './shared'
 import type { RequestAuthenticator } from './shared'
 
@@ -86,6 +88,8 @@ export interface ApiServerOptions {
   readonly syntheticValidation?: Omit<SyntheticValidationRouteDependencies, 'authenticate'>
   /** Register the customer-project, pack-mounting and readiness surface (`/projects`). */
   readonly projects?: Omit<ProjectRouteDependencies, 'authenticate'>
+  /** Register the project document corpus and search surface (`/projects/:id/document-*`). */
+  readonly projectDocuments?: Omit<ProjectDocumentRouteDependencies, 'authenticate'>
   readonly logger?: boolean
 }
 
@@ -168,6 +172,12 @@ export function createApiServer(options: ApiServerOptions): FastifyInstance {
   if (options.projects !== undefined) {
     registerProjectRoutes(app, {
       ...options.projects,
+      authenticate: options.authenticate,
+    })
+  }
+  if (options.projectDocuments !== undefined) {
+    registerProjectDocumentRoutes(app, {
+      ...options.projectDocuments,
       authenticate: options.authenticate,
     })
   }

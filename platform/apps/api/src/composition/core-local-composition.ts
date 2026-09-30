@@ -25,6 +25,7 @@ import {
   PostgresJobStore,
   PostgresMaterializationStore,
   PostgresProfileStore,
+  PostgresProjectDocumentStore,
   PostgresProjectReadinessStore,
   PostgresProjectStore,
   PostgresPublishedPackAssetStore,
@@ -44,7 +45,7 @@ import {
   PostgresStructuredIngestionStore,
   StructuredDocumentParser,
 } from '@ontology/adapter-extraction-document'
-import { Bm25DocumentSearchService, PostgresKeywordIndexStore, createBm25DocumentSearchToolHandler } from '@ontology/adapter-search-bm25'
+import { Bm25DocumentSearchService, PostgresKeywordIndexStore, ProjectDocumentIndexService, createBm25DocumentSearchToolHandler } from '@ontology/adapter-search-bm25'
 import { TemplateRuntimeAdapter, TemplateRuntimeError } from '@ontology/adapter-runtime-template'
 import type { TemplatePlanResolver } from '@ontology/adapter-runtime-template'
 import {
@@ -1393,6 +1394,15 @@ export async function createCoreLocalComposition(options: CoreLocalCompositionOp
     cleanup.unshift(async () => duckDb.close())
     const documentSpanReader = new DocumentSpanReader({ blobs: blobStore, store: parseStore })
     const documentSearch = new Bm25DocumentSearchService({ indexStore: keywordIndexStore, spanReader: documentSpanReader })
+    const projectDocumentStore = new PostgresProjectDocumentStore(database)
+    const projectDocumentIndexService = new ProjectDocumentIndexService({
+      store: projectDocumentStore,
+      parseStore,
+      indexStore: keywordIndexStore,
+      spanReader: documentSpanReader,
+      projects: projectStore,
+      readiness: projectReadinessStore,
+    })
     const publishedSourceList = options.examples.scenarios.map((scenario) => new PublishedSemanticSource(
       publicationStore,
       { identity: identityStore, definitionRef: scenario.definitionRef },
@@ -1831,6 +1841,7 @@ export async function createCoreLocalComposition(options: CoreLocalCompositionOp
         ruleActionCandidates: { service: ruleActionCandidateService, bindingContext: actionBindingContext },
         instanceReviews: { service: instanceReviewService },
         projects: { service: projectService },
+        projectDocuments: { service: projectDocumentIndexService },
         syntheticValidation: {
           exampleService: syntheticExampleService,
           validationService: industryValidationService,
