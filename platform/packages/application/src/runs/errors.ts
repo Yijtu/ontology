@@ -18,6 +18,12 @@ export type RunServiceErrorCode =
   | 'CLARIFICATION_NOT_FOUND'
   | 'REVISION_REQUIRED'
   | 'STORAGE_FAILURE'
+  | 'PROJECT_NOT_FOUND'
+  | 'TASK_NOT_BOUND'
+  | 'TASK_NOT_READY'
+  | 'TASK_UNAVAILABLE'
+  | 'TASK_PARAMETER_INVALID'
+  | 'INPUT_SNAPSHOT_INVALID'
 
 const EXTRA_HTTP_STATUS: Readonly<Record<string, number>> = {
   SCOPE_MISMATCH: 403,
@@ -26,6 +32,12 @@ const EXTRA_HTTP_STATUS: Readonly<Record<string, number>> = {
   CLARIFICATION_NOT_FOUND: 404,
   REVISION_REQUIRED: 428,
   STORAGE_FAILURE: 500,
+  PROJECT_NOT_FOUND: 404,
+  TASK_NOT_BOUND: 409,
+  TASK_NOT_READY: 409,
+  TASK_UNAVAILABLE: 409,
+  TASK_PARAMETER_INVALID: 422,
+  INPUT_SNAPSHOT_INVALID: 409,
 }
 
 const CATALOGUE_HTTP_STATUS: Readonly<Record<string, number>> = Object.fromEntries(
@@ -43,6 +55,8 @@ export function httpStatusForRunError(code: RunServiceErrorCode): number {
 export interface RunServiceErrorOptions extends ErrorOptions {
   readonly missingCapabilities?: readonly MissingCapability[]
   readonly incompatibleReasons?: readonly string[]
+  /** Concrete, actionable reasons (e.g. task capability blockers) for an explicit failure. */
+  readonly reasons?: readonly string[]
 }
 
 /**
@@ -54,6 +68,7 @@ export class RunServiceError extends Error {
   readonly httpStatus: number
   readonly missingCapabilities: readonly MissingCapability[] | undefined
   readonly incompatibleReasons: readonly string[] | undefined
+  readonly reasons: readonly string[] | undefined
 
   constructor(code: RunServiceErrorCode, message: string, options?: RunServiceErrorOptions) {
     super(message, options?.cause === undefined ? undefined : { cause: options.cause })
@@ -62,6 +77,7 @@ export class RunServiceError extends Error {
     this.httpStatus = httpStatusForRunError(code)
     this.missingCapabilities = options?.missingCapabilities
     this.incompatibleReasons = options?.incompatibleReasons
+    this.reasons = options?.reasons
   }
 }
 

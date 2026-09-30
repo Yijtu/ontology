@@ -1,6 +1,7 @@
 import type {
   CreateRunContext,
   ProfileRef,
+  ResourceRef,
   RevisionString,
   Rfc3339UtcTimestamp,
   RunPreferences,
@@ -53,6 +54,12 @@ export interface NewRunRecord {
   readonly idempotencyKey: string
   readonly requestDigest: Sha256Digest
   readonly createdAt: Rfc3339UtcTimestamp
+  /**
+   * The archived run execution binding this run is pinned to (SPEC v0.3a §EX-2.1). It is set at
+   * creation when the request carried an optional `task` binding and is immutable: later
+   * evidence appends never rewrite the binding, and the body itself lives in the binding store.
+   */
+  readonly executionBindingRef?: ResourceRef
 }
 
 export interface RunRecord extends NewRunRecord {

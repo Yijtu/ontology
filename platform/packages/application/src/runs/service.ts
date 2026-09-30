@@ -4,6 +4,7 @@ import type {
   ControlAppendEventRequest,
   ControlRepository,
   QuestionRewrite,
+  ResourceRef,
   RevisionString,
   RunInsertResult,
   RunRecord,
@@ -27,6 +28,7 @@ import type {
   PublicRunEvent,
   RespondToClarificationInput,
   ResumeRunInput,
+  RunExecutionBinder,
   RunProfileBinder,
   RunProfileBinding,
   RunView,
@@ -43,6 +45,12 @@ export interface RunServiceDependencies {
   readonly control: ControlRepository
   /** Resolves and persists the manifest a run binds to; supplied by the composition root. */
   readonly profiles: RunProfileBinder
+  /**
+   * Resolves, validates and archives the optional execution binding (SPEC v0.3a §EX-2.1).
+   * Supplied by the composition root; when absent a request carrying `task` is rejected with
+   * `CAPABILITY_NOT_CONFIGURED` rather than silently running without a binding.
+   */
+  readonly execution?: RunExecutionBinder
   readonly now?: () => string
   readonly newId?: () => string
 }
@@ -118,6 +126,7 @@ function toView(run: RunRecord, checkpoint: RuntimeCheckpointRef | undefined): R
       ? {}
       : { pendingClarificationId: run.pendingClarificationId }),
     ...(run.questionRewrite === undefined ? {} : { questionRewrite: run.questionRewrite }),
+    ...(run.executionBindingRef === undefined ? {} : { executionBindingRef: run.executionBindingRef }),
     ...(checkpoint === undefined ? {} : { checkpoint }),
   }
 }
@@ -167,6 +176,7 @@ export class RunService {
   readonly #store: RunStore
   readonly #control: ControlRepository
   readonly #profiles: RunProfileBinder
+  readonly #execution: RunExecutionBinder | undefined
   readonly #now: () => string
   readonly #newId: () => string
 
@@ -174,6 +184,7 @@ export class RunService {
     this.#store = dependencies.store
     this.#control = dependencies.control
     this.#profiles = dependencies.profiles
+    this.#execution = dependencies.execution
     this.#now = dependencies.now ?? (() => new Date().toISOString())
     this.#newId = dependencies.newId ?? (() => globalThis.crypto.randomUUID())
   }
@@ -191,6 +202,7 @@ export class RunService {
       question: input.question,
       context: input.context,
       preferences: input.preferences,
+      ...(input.execution === undefined ? {} : { task: input.execution }),
     })
 
     const requestDigest = sha256DigestOf(
@@ -199,6 +211,7 @@ export class RunService {
         question: fields.question,
         context: fields.context,
         preferences: { route: fields.preferences.route, allowWeb: fields.preferences.allowWeb },
+        task: fields.execution ?? null,
       }),
     )
 
@@ -215,6 +228,9 @@ export class RunService {
         state: existing.state,
         revision: existing.revision,
         resolvedProfileHash: existing.resolvedProfileHash,
+        ...(existing.executionBindingRef === undefined
+          ? {}
+          : { executionBindingRef: existing.executionBindingRef }),
         reused: true,
       }
     }
@@ -224,6 +240,22 @@ export class RunService {
       binding = await this.#profiles.bindProfileForRun(fields.profileRef, scopeRef, ctx)
     } catch (error) {
       mapBinderError(error, `${fields.profileRef.id}@${fields.profileRef.version}`)
+    }
+
+    let executionBindingRef: ResourceRef | undefined
+    if (fields.execution !== undefined) {
+      if (this.#execution === undefined) {
+        throw new RunServiceError(
+          'CAPABILITY_NOT_CONFIGURED',
+          'this host cannot resolve a task/input execution binding',
+        )
+      }
+      const resolution = await this.#execution.bindExecution(
+        { runId: input.runId, request: fields.execution, profileBinding: binding },
+        scopeRef,
+        ctx,
+      )
+      executionBindingRef = resolution.executionBindingRef
     }
 
     const createdAt = this.#now()
@@ -243,6 +275,7 @@ export class RunService {
           idempotencyKey: input.idempotencyKey,
           requestDigest,
           createdAt,
+          ...(executionBindingRef === undefined ? {} : { executionBindingRef }),
         },
         ctx,
       )
@@ -264,6 +297,9 @@ export class RunService {
         state: inserted.run.state,
         revision: inserted.run.revision,
         resolvedProfileHash: inserted.run.resolvedProfileHash,
+        ...(inserted.run.executionBindingRef === undefined
+          ? {}
+          : { executionBindingRef: inserted.run.executionBindingRef }),
         reused: true,
       }
     }
@@ -284,6 +320,7 @@ export class RunService {
       state: run.state,
       revision: run.revision,
       resolvedProfileHash: run.resolvedProfileHash,
+      ...(run.executionBindingRef === undefined ? {} : { executionBindingRef: run.executionBindingRef }),
       reused: false,
     }
   }

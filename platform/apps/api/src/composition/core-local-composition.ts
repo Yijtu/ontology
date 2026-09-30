@@ -31,9 +31,12 @@ import {
   PostgresProjectRecordStore,
   PostgresProjectStore,
   PostgresPublishedPackAssetStore,
+  PostgresPublishedTaskBindingStore,
   PostgresRuleActionCandidateStore,
+  PostgresRunExecutionBindingStore,
   PostgresRunStore,
   PostgresSemanticDefinitionStore,
+  PostgresTaskInputSnapshotStore,
   PostgresSemanticPublicationStore,
   PostgresSyntheticExampleSetStore,
   PostgresWorkflowDispatchStore,
@@ -84,6 +87,7 @@ import {
   RestrictedLimitedAnswerComposer,
   RuleActionCandidateService,
   SourceRegistry,
+  RunExecutionPreflightService,
   RunPhaseDriver,
   RunService,
   StaticDefinitionTerminologySource,
@@ -101,7 +105,7 @@ import {
   parseModelCandidates,
   ReviewHandoffStageHandler,
 } from '@ontology/application'
-import type { ManifestValidator, MountedDefinitionTerminology, OutboxConsumer, ProfileSpecValidator, RunProfileBinder } from '@ontology/application'
+import type { ManifestValidator, MountedDefinitionTerminology, OutboxConsumer, ProfileSpecValidator, RunProfileBinder, TaskParameterValidator } from '@ontology/application'
 import type {
   ActionCapabilityBindingInput,
   CandidateStore,
@@ -124,6 +128,7 @@ import type {
   PublicationValidityReport,
   PublicationValidityRequest,
   QueryColumn,
+  ResolvedCapability,
   ResourceRef,
   RuntimeCapabilityFactoryPort,
   RuntimeCapabilitySet,
@@ -307,6 +312,44 @@ function operationRegistry(): OperationRegistry {
     registryVersion: COMPONENT_VERSION,
     registryDigest: sha256DigestOf('core-local-operations@1.0.0'),
     operations: [],
+  }
+}
+
+const CORE_EFFECTIVE_LIMITS_REF: VersionRef = {
+  id: 'core-local-effective-limits',
+  version: COMPONENT_VERSION,
+  digest: sha256DigestOf('core-local-effective-limits@1.0.0'),
+}
+
+/** Project the registered components' declared capabilities into the exact deployment capability set. */
+function resolvedCapabilitiesFrom(records: readonly ComponentVersionRecord[]): ResolvedCapability[] {
+  return records.flatMap((record) =>
+    record.manifest.provides.map((declared) => ({
+      name: declared.name,
+      version: declared.version,
+      limits: declared.limits,
+      consistency: declared.consistency,
+      cancellation: declared.cancellation,
+      pagination: declared.pagination,
+      supportedDataTypes: [...declared.supportedDataTypes],
+      sourceComponentRef: record.manifestRef,
+    })),
+  )
+}
+
+function taskParameterValidator(ajv: Ajv2020): TaskParameterValidator {
+  return {
+    validate(schema, value) {
+      const validate = ajv.compile(schema as SchemaObject)
+      return validate(value)
+        ? { valid: true, issues: [] }
+        : {
+            valid: false,
+            issues: (validate.errors ?? []).map(
+              (error) => `${error.instancePath === '' ? '$' : error.instancePath} ${error.message ?? 'is invalid'}`,
+            ),
+          }
+    },
   }
 }
 
@@ -1285,6 +1328,9 @@ export async function createCoreLocalComposition(options: CoreLocalCompositionOp
     const projectReadinessStore = new PostgresProjectReadinessStore(database)
     const projectMappingStore = new PostgresProjectMappingStore(database)
     const projectRecordStore = new PostgresProjectRecordStore(database)
+    const taskBindingStore = new PostgresPublishedTaskBindingStore(database)
+    const taskInputSnapshotStore = new PostgresTaskInputSnapshotStore(database)
+    const runExecutionBindingStore = new PostgresRunExecutionBindingStore(database)
     const identityStore = new PostgresIdentityDecisionStore(database)
     const publicationStore = new PostgresSemanticPublicationStore(database)
     const definitionStore = new PostgresSemanticDefinitionStore(database)
@@ -1452,10 +1498,23 @@ export async function createCoreLocalComposition(options: CoreLocalCompositionOp
       manifests: workflowStore,
       budget,
     })
+    const executionPreflight = new RunExecutionPreflightService({
+      projects: projectStore,
+      taskBindings: taskBindingStore,
+      inputSnapshots: taskInputSnapshotStore,
+      runExecutionBindings: runExecutionBindingStore,
+      readiness: projectReadinessStore,
+      operations: operationRegistry(),
+      availableCapabilities: resolvedCapabilitiesFrom(componentRecords),
+      supportedResultSchemaRefs: [],
+      effectiveLimitsRef: CORE_EFFECTIVE_LIMITS_REF,
+      parameters: taskParameterValidator(createAjv()),
+    })
     const runs = new RunService({
       store: runStore,
       control,
       profiles: runProfileBinder,
+      execution: executionPreflight,
     })
     const phase = new RunPhaseDriver({ store: runStore, control })
     const dispatchFences = new Map<Uuid, WorkflowDispatchFence>()
