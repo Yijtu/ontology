@@ -1,3 +1,4 @@
+import { MAX_RULE_DEPENDENCY_DEPTH } from '@ontology/contracts'
 import type {
   RuleExpressionNode,
   RuleRelationPremiseDeclaration,
@@ -32,7 +33,6 @@ import type { FiniteConditionPlan } from './boolean'
  * Declared rule dependencies must be acyclic and at most three levels deep.
  */
 
-const MAX_DEPENDENCY_DEPTH = 3
 const MAX_CONDITION_DEPTH = 8
 const MAX_OR_BRANCHES = 16
 const MAX_EXCEPTIONS = 4
@@ -262,10 +262,10 @@ function checkDependencies(input: RuleSupportValidationInput, findings: RuleSupp
         continue
       }
       maxDepth = Math.max(maxDepth, current.depth)
-      if (current.depth > MAX_DEPENDENCY_DEPTH) {
+      if (current.depth > MAX_RULE_DEPENDENCY_DEPTH) {
         findings.push({
           code: 'RULE_DEPENDENCY_DEPTH',
-          message: `rule dependency depth ${String(current.depth)} exceeds the supported maximum of ${String(MAX_DEPENDENCY_DEPTH)}`,
+          message: `rule dependency depth ${String(current.depth)} exceeds the supported maximum of ${String(MAX_RULE_DEPENDENCY_DEPTH)}`,
           path: 'ruleDependencies',
           rawForm: current.trail,
         })

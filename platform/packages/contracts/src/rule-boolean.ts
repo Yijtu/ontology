@@ -21,6 +21,19 @@ import type { RuleSupportFinding } from './rule-action-candidates'
  * A missing observation is `unknown`; it is never defaulted to `false`.
  */
 
+/**
+ * The executable finite rule-dependency graph may reference at most three upstream layers
+ * (SPEC v0.3a execution-evidence EX-4.1/EX-4.2, issue V03-028 / #197).
+ *
+ * The same bound is enforced in two places and they must agree: the candidate support validator
+ * records a deeper/cyclic declared graph as `not_yet_executable` (`RULE_DEPENDENCY_DEPTH` /
+ * `RULE_DEPENDENCY_CYCLE`), and the evaluator rejects an over-deep or cyclic `ruleRef` graph with
+ * a typed error instead of silently truncating a premise or recursing without a fixpoint. A chain
+ * counted here is the number of dependency *edges* between rules; a rule that consumes only facts
+ * has depth 0.
+ */
+export const MAX_RULE_DEPENDENCY_DEPTH = 3
+
 export type RuleBusinessPropositionState = 'true' | 'false' | 'unknown' | 'conflict'
 
 /** The state of one branch of the finite condition tree, keyed by its dotted path. */
