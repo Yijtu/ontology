@@ -161,3 +161,197 @@ export { initialReviewState, reviewReducer, selectionStillPresent } from './stat
 export type { ReviewError, ReviewEvent, ReviewPhase, ReviewState } from './state/review'
 export { NARROW_MAX_WIDTH, viewportOf } from './components/useViewport'
 export type { Viewport } from './components/useViewport'
+export { AssistantShell, ASSISTANT_DEFINITIONS } from './components/AssistantShell'
+export type {
+  AssistantDefinition,
+  AssistantId,
+  AssistantModuleDeclarations,
+  AssistantShellProps,
+} from './components/AssistantShell'
+export { ScenarioErrorBoundary } from './components/ScenarioErrorBoundary'
+export type { ScenarioErrorBoundaryProps } from './components/ScenarioErrorBoundary'
+export { OntologyWorkspacePanel, EMPTY_CREATE_FIELDS, boundaryOf, validateCreateFields } from './components/OntologyWorkspacePanel'
+export type { OntologyWorkspacePanelProps, WorkspaceCreateFields } from './components/OntologyWorkspacePanel'
+export {
+  DefinitionWorkbenchPanel,
+  buildEditedPayload,
+  candidateDetailLabel,
+  candidateSourceLabel,
+  editFieldsOf,
+  isCandidateStale,
+  parseJsonText,
+} from './components/DefinitionWorkbenchPanel'
+export type {
+  DefinitionEditFields,
+  DefinitionWorkbenchPanelProps,
+  JsonParseResult,
+} from './components/DefinitionWorkbenchPanel'
+export { definitionGuard } from './api/definitions'
+export type {
+  ActionCandidateDraft,
+  CandidateLifecycleView,
+  DefinitionCandidateFilter,
+  EditActionCandidateRequest,
+  EditDefinitionCandidateRequest,
+  EditRuleCandidateRequest,
+  EnableRuleActionCandidateRequest,
+  KeepDefinitionsSeparateRequest,
+  MergeDefinitionCandidatesRequest,
+  RecordUnsupportedRuleRequest,
+  RejectDefinitionCandidateRequest,
+  RuleActionCandidateFilter,
+  RuleActionCandidateView,
+  RuleCandidateDraft,
+  ValidateDefinitionsRequest,
+} from './api/definitions'
+export { WorkspaceSourcesPanel } from './components/WorkspaceSourcesPanel'
+export type {
+  SupportedSourceType,
+  WorkspaceSource,
+  WorkspaceSourcesPanelProps,
+} from './components/WorkspaceSourcesPanel'
+export { webWorkspaceIdentity } from './workspace-identity'
+export type { WorkspaceIdentity } from './workspace-identity'
+export type {
+  AppendIndustryWorkspaceDraftRequest,
+  AssetDraftRef,
+  CreateIndustryWorkspaceRequest,
+  EditIndustryWorkspaceRequest,
+  IndustryWorkspaceListFilter,
+  IndustryWorkspaceWriteView,
+} from './api/workspaces'
+export { ScenarioModuleRegistry, isLegalUiCapabilityMetadata } from './mount/registry'
+export type { MountContext, ScenarioMount } from './mount/registry'
+export type {
+  FrontendScenarioModule,
+  ScenarioDraftStore,
+  ScenarioExporter,
+  ScenarioFieldChange,
+  ScenarioModuleView,
+  ScenarioParameterProps,
+  ScenarioResultProps,
+  ScenarioTaskEntry,
+  ScenarioVerifiedResult,
+} from './mount/contract'
+export { createScenarioRegistry, registerBuiltInScenarioModules } from './scenarios/composition'
+export { InstanceReviewPanel } from './components/InstanceReviewPanel'
+export type { InstanceReviewPanelProps } from './components/InstanceReviewPanel'
+export {
+  PackagePublicationPanel,
+  coveredCaseKinds,
+  expectationSummary,
+  gateLabel,
+  publicationBlocked,
+} from './components/PackagePublicationPanel'
+export type { PackageMountBinding, PackagePublicationPanelProps } from './components/PackagePublicationPanel'
+export {
+  isIndustryValidationReportView,
+  isPackCapabilityStatusView,
+  isPackExportBundleView,
+  isPublishedPackResult,
+  isSyntheticExampleSetView,
+  isVersionRef as isPackageVersionRef,
+  SYNTHETIC_CASE_KINDS,
+  SYNTHETIC_CASE_KIND_LABELS,
+} from './api/package-publication'
+export type {
+  IndustryValidationGate,
+  IndustryValidationIssueView,
+  IndustryValidationReportView,
+  PackCapabilityStatusView,
+  PackExportBundleView,
+  PackVersionDiffView,
+  PublishedPackResultView,
+  PublishPackRequest,
+  RunValidationRequest,
+  SyntheticCaseKind,
+  SyntheticCaseView,
+  SyntheticExampleSetView,
+  SyntheticExpectationView,
+  ValidationSurfaceGateView,
+} from './api/package-publication'
+export { ProjectWorkspacePanel } from './components/ProjectWorkspacePanel'
+export type {
+  ProjectBinding,
+  ProjectSourceCandidate,
+  ProjectSourceColumn,
+  ProjectSourceField,
+  ProjectSourceObject,
+  ProjectWorkspacePanelProps,
+} from './components/ProjectWorkspacePanel'
+export {
+  isIndustryPackSummary,
+  isImportMappingVersion,
+  isMappingPreview,
+  isProjectDatasetStatus,
+  isProjectDocumentIndexStatus,
+  isProjectEvolutionView,
+  isProjectReadinessView,
+  isProjectRecord,
+  isProjectRecordPageView,
+  isProjectRecordVersion,
+  isProjectRevision,
+  isProjectRevisionView,
+  isReadinessProjection,
+} from './api/projects'
+export type {
+  ColumnMappingRequestView,
+  CreateProjectRequest,
+  IndustryPackSummary,
+  MountProjectPackRequest,
+  ProjectDatasetStatusView,
+  ProjectDocumentIndexState,
+  ProjectDocumentIndexStatusView,
+  ProjectEvolutionView,
+  ProjectReadinessView,
+  ProjectRecordPageView,
+  ProjectRevisionView,
+} from './api/projects'
+export {
+  isInstanceConfirmationEvent,
+  isInstanceConfirmationOutcome,
+  isInstanceRecordView,
+} from './api/instances'
+export type {
+  ConfirmInstanceFieldsRequest,
+  CreateInstanceFieldInput,
+  CreateInstanceRecordRequest,
+  CreateInstanceRelationInput,
+  EditInstanceFieldRequest,
+  InstanceConfirmationEvent,
+  InstanceConfirmationOutcomeView,
+  InstanceFieldDecisionInput,
+  InstanceIdentityDecisionRequest,
+  InstanceRecordFilter,
+  InstanceRevisionRequest,
+} from './api/instances'
+export {
+  createWorkbenchResultSource,
+  isColumnDescriptor,
+  isDigest as isResultDigest,
+  isResourceRef as isResultResourceRef,
+  isTablePageReadView,
+  isVerifiedResultView,
+  isVersionRef as isResultVersionRef,
+} from './api/results'
+export type {
+  ResultSource,
+  ResultSourceClient,
+  VerifiedResultLoad,
+  VerifiedResultView,
+  VerifiedTablePageView,
+  VerifiedTableSummary,
+} from './api/results'
+export { ResultWorkbenchPanel } from './components/ResultWorkbenchPanel'
+export type { ResultWorkbenchPanelProps, ResultWorkbenchTab } from './components/ResultWorkbenchPanel'
+export { BusinessWorkbenchPanel } from './components/BusinessWorkbenchPanel'
+export type {
+  BusinessUnavailableTask,
+  BusinessViewTask,
+  BusinessWorkbenchPanelProps,
+  ParameterChangePreview,
+} from './components/BusinessWorkbenchPanel'
+export { classifyPublicError, publicRecoveryLabel } from './state/public-errors'
+export type { PublicErrorFamily, PublicFailure, PublicRecovery } from './state/public-errors'
+export { PublicEmptyState, PublicStateNotice } from './components/PublicStateNotice'
+export type { PublicEmptyStateProps, PublicStateNoticeProps } from './components/PublicStateNotice'

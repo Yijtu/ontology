@@ -107,6 +107,13 @@ export interface ToolExecutionOutcome {
   readonly usage?: Partial<ToolUsage>
   readonly dataMode?: DataMode
   readonly evidenceKind?: EvidenceKind
+  /**
+   * Already-archived evidence this result depends on, beyond the gateway's own result envelope.
+   * The gateway re-checks every reference (scope, archived existence, exact id/version/digest)
+   * before adding it to the returned `ToolResult` lineage, so a handler cannot smuggle an
+   * unauthorized evidence id through an unverified string.
+   */
+  readonly supportEvidenceRefs?: readonly ResourceRef[]
   /** Valid-time window shared by every business fact in this result, when the source provides one. */
   readonly validity?: ValidityInterval
 }

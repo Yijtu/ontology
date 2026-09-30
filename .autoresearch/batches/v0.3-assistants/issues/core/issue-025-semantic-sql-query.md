@@ -1,0 +1,66 @@
+# V03-025：装配项目语义与 SQL 查询正常工具路径
+
+阶段 A · backend · P1 · 状态 implemented（待独立审查合入）· GitHub [#199](https://github.com/Yijtu/ontology/issues/199)
+
+执行工作线：feat/core-planning-provenance；目标：main。本批尚未开始实现；V03 是规划 ID，GitHub 编号见上述链接与 manifest。
+
+## 目标与范围
+
+- 固定项目 mapping 编译合法 semantic/direct SQL plan，经 data_query 查询实际批准快照。
+- 保留 AST/参数化/白名单/只读角色，单位规范与结果 pointers/evidence 完整，unsupported/snapshot 缺失明确返回。
+- 两业务后端相同语义结果可独立核对，startup fixture、越权对象与错误修订不能作为 fallback。
+
+## 依赖与进入条件
+
+Dependencies: #192, #194, #196
+
+依赖：[V03-018](issue-018-query-projection.md)、[V03-023](issue-023-task-input-artifacts.md)、[V03-024](issue-024-nl-plan-receipts.md)。
+开工先核对 V03-001 的能力/旧任务/WIP记录，复用已完成实现，只补本卡缺口。完成能力按独立审查合入 main，保留场景边界。
+
+## 验收条件
+
+- [ ] 固定项目 mapping 编译合法 semantic/direct SQL plan，经 data_query 查询实际批准快照。
+- [ ] 保留 AST/参数化/白名单/只读角色，单位规范与结果 pointers/evidence 完整，unsupported/snapshot 缺失明确返回。
+- [ ] 两业务后端相同语义结果可独立核对，startup fixture、越权对象与错误修订不能作为 fallback。
+- [ ] 实际结果与证据写入完成记录；同步必要契约、使用说明和本批状态，不因源码存在或受控模型响应而虚报完成。
+
+## 需求与规格
+
+- [execution-evidence.md](../../../../../tasks/spec-v0.3a/execution-evidence.md)
+
+故事范围：A.US-006、A.US-007、A.US-011、A.US-015。逐项覆盖见[覆盖表](../../coverage.md)。
+
+- A.US-007.AC-03 → A-T007-03：参数修改先展示具体差异供确认；生成 SQL／查询计划受 mapping、只读白名单及 Schema 校验约束。
+- A.FR-11 → A-F11：系统必须按 mapping 查询本项目实际批准数据。
+- A.FR-14 → A-F14：系统必须报告关系导航与查询结果的完整性。
+
+## 验证方法
+
+- 在 platform/ 运行受影响行为测试、pnpm run typecheck；相应包的 lint 与 pnpm run boundaries 适用时必须通过。
+- 测试期望来自固定需求和独立样例，负例必须保持阻断；计划 ID 不是测试已通过。
+
+## 失败与边界
+
+- 保留已有 WIP、旧 Issue 和 loop 状态；不整枝合并未完成研发，不自动 stash/reset 或覆盖工作区。
+- 授权来自可信上下文，行业包、输入/结果 refs、缓存、任务及导出均保持客户/项目隔离。
+- 不跳过失败/未知/不完整、不静默删规则或漏行、不用模型概率代替硬核验。
+- 本卡不默认授权对外发送报价、调用未授权服务或复制客户资料；所需真实资源按进入条件取得。
+
+## 完成记录
+
+- 提交：分支 `feat/v03-025-semantic-sql-query`，提交 `feat: project semantic and SQL query normal tool path (#199)`。GitHub Issue：[#199](https://github.com/Yijtu/ontology/issues/199)。
+- 变更：
+  - `packages/contracts/src/project-dataset.ts`：`ProjectDatasetColumn.dimension?`；新增 `ProjectSnapshotQueryPort`、`ProjectSnapshotQueryDescriptor`、`ProjectQueryDialect` 与固定 `projectDatasetSourceRef/ObjectRef`（namespace `project-dataset`）。
+  - `packages/semantic-engine/src/mapping/project-snapshot.ts`：由固定快照 descriptor 编译 `SemanticMapping`（canonical 属性 + 保留 `record_id`/`sources_json`），`projectSnapshotMappingRef` 由快照 ref + 列确定性推导。
+  - `packages/semantic-engine/src/project-query/`：`ProjectSemanticQueryService` 编译 → 渲染只读 SQL → 经注入 `ProjectSnapshotQueryPort` 执行，返回 typed rows + 每行 source locators + coverage/snapshots；`ProjectSemanticQueryError`。
+  - `packages/adapters/data-duckdb/src/project-dataset.ts`：快照表按声明类型物化（DECIMAL/BOOLEAN/TIMESTAMP），并实现 `StructuredQueryPort`（AST/对象白名单 + 只读事务；`describeSnapshot` 报告固定关系）。
+  - `packages/adapters/data-postgres/src/project-dataset.ts`：按快照建立 typed 只读 view，`readOnlyConnectionString` 独立只读角色，实现 `StructuredQueryPort`（`validateReadOnlySql` + `BEGIN TRANSACTION READ ONLY`）。
+  - `packages/application/.../project-materialization-service.ts`：列携带 `dimension`（单位/量纲口径）。
+- 验证命令与结果（均在 `platform/`）：
+  - `npx vitest run tests/unit/project-semantic-query.spec.ts`：8 项通过。
+  - `npx vitest run tests/integration/project-semantic-sql.spec.ts`：5 项通过（真实 DuckDB + 真实 PostgreSQL 容器；同语义结果一致、数值过滤、越权/foreign relation/重启拒绝、经 `data_query` gateway 正常工具路径）。
+  - `npx vitest run tests/unit/project-materialization.spec.ts`：5 项通过；`npx vitest run tests/integration/project-materialization-postgres.spec.ts`：6 项通过（未破坏 V03-018）。
+  - `npx vitest run --project unit`：159 文件 / 1755 项通过；`npx vitest run tests/composition`：8 文件 / 25 项通过；`npx vitest run tests/architecture`：8 项通过。
+  - `pnpm run typecheck`、`npx eslint .`：通过。
+- 未验证/外部条件：未接入真实项目 run admission（该接线属 V03-037/038）；Postgres 只读角色需部署提供独立 `readOnlyConnectionString`，未提供时回退到写库连接但仍在只读事务与 AST 白名单内执行。无迁移（未使用 `072_*.sql`）。
+- 兼容影响：`ProjectDatasetColumn` 新增可选 `dimension`，向后兼容；快照表/视图仅新增只读投影，不改变既有 V03-018 读路径。

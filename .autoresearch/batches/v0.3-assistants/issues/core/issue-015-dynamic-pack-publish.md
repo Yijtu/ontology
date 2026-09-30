@@ -1,0 +1,65 @@
+# V03-015：接通行业包发布、动态目录与不可变导出
+
+阶段 A · backend · P0 · 状态 planned · GitHub [#187](https://github.com/Yijtu/ontology/issues/187)
+
+执行工作线：feat/core-planning-provenance；目标：main。本批尚未开始实现；V03 是规划 ID，GitHub 编号见上述链接与 manifest。
+
+## 目标与范围
+
+- 从专家确认草稿发布 immutable 包，固定定义/术语/身份策略/规则/动作/能力和来源索引。
+- 复用 pack 导出校验并新增持久动态 catalogue；新包正常发布后即可查到并重新挂载，不靠重启静态注册。
+- 原子发布、版本重试、private 数据排除与 namespace 冲突验证；语义和执行 readiness 独立。
+
+## 依赖与进入条件
+
+Dependencies: #174, #184, #186
+
+依赖：[V03-003](issue-003-control-stores.md)、[V03-010](issue-010-rule-action-candidates.md)、[V03-014](issue-014-synthetic-validation.md)。
+开工先核对 V03-001 的能力/旧任务/WIP记录，复用已完成实现，只补本卡缺口。完成能力按独立审查合入 main，保留场景边界。
+
+## 验收条件
+
+- [ ] 从专家确认草稿发布 immutable 包，固定定义/术语/身份策略/规则/动作/能力和来源索引。
+- [ ] 复用 pack 导出校验并新增持久动态 catalogue；新包正常发布后即可查到并重新挂载，不靠重启静态注册。
+- [ ] 原子发布、版本重试、private 数据排除与 namespace 冲突验证；语义和执行 readiness 独立。
+- [ ] 实际结果与证据写入完成记录；同步必要契约、使用说明和本批状态，不因源码存在或受控模型响应而虚报完成。
+
+## 需求与规格
+
+- [asset-data-ui.md](../../../../../tasks/spec-v0.3a/asset-data-ui.md)
+
+故事范围：A.US-005。逐项覆盖见[覆盖表](../../coverage.md)。
+
+- A.US-005.AC-01 → A-T005-01：发布前校验定义、规则支持范围、动作契约及能力需求；语义已发布和部署可执行分别显示。
+- A.US-005.AC-03 → A-T005-03：不可变版本可导出和重新挂载，包含来源索引与差异；不含客户实例、真实价表或密钥。
+- A.FR-10 → A-F10：系统必须发布可重新挂载的不可变行业包。
+- P.US-005.AC-03 → P-T005-03：与已发布版本的差异可查看；破坏兼容性的修改需要明确修订策略。
+- P.US-006.AC-03 → P-T006-03：候选可保存，但只有完整通过语义与执行能力校验的规则能启用；不得删除条件换取通过。
+- P.US-011.AC-01 → P-T011-01：发布包含定义、术语、身份策略、规则声明、动作契约、能力要求和经确认的合成样例。
+- P.US-011.AC-02 → P-T011-02：版本不可变，能查看来源与差异；客户原文、真实价格、连接密钥和身份裁决不进入共享包。
+- P.US-011.AC-03 → P-T011-03：展示“语义已发布”和“当前部署可执行哪些动作”；包可导出并在授权工作区重新挂载。
+- P.US-023.AC-04 → P-T023-04：共享资产导出不含私有项目实例、价格和密钥；完成适用边界测试。
+- P.FR-14 → P-F14：系统必须发布不可变行业包版本。
+- P.FR-15 → P-F15：系统必须分别显示语义发布状态与部署执行能力。
+- P.FR-17 → P-F17：系统必须为客户项目绑定确定的行业资产版本。
+
+## 验证方法
+
+- 在 platform/ 运行受影响行为测试、pnpm run typecheck；相应包的 lint 与 pnpm run boundaries 适用时必须通过。
+- 测试期望来自固定需求和独立样例，负例必须保持阻断；计划 ID 不是测试已通过。
+
+## 失败与边界
+
+- 保留已有 WIP、旧 Issue 和 loop 状态；不整枝合并未完成研发，不自动 stash/reset 或覆盖工作区。
+- 授权来自可信上下文，行业包、输入/结果 refs、缓存、任务及导出均保持客户/项目隔离。
+- 不跳过失败/未知/不完整、不静默删规则或漏行、不用模型概率代替硬核验。
+- 本卡不默认授权对外发送报价、调用未授权服务或复制客户资料；所需真实资源按进入条件取得。
+
+## 完成记录
+
+- 当前：已实现（节点 node-015 / #187）。发布服务 `IndustryAssetPublicationService` 从已校验草稿事务发布不可变包；新增迁移 `066_published_pack_assets.sql`（含 `jobs.kind` 增补 `asset_publication`）；新增持久动态 catalogue／manifest source、导出 sourceIndex/actionDeclarations/capabilityStatus/versionDiff。
+- 验证：`tests/unit/asset-publication.spec.ts`（10）、`tests/integration/pack-publication-postgres.spec.ts`（7，真实 PG）通过；受影响单元 80、集成 20 通过；`pnpm run lint`、`pnpm run boundaries`（8）、`pnpm run typecheck` 通过。
+- 未验证/外部条件：apps/api composition 尚未装配发布路由（见节点 NEW_WORK）；真实模型建模质量不在本卡。不删旧测试。
+- 迁移与兼容：追加 066，未改 001..065；`IndustryPackExportBundle`/`PackAsset` 仅 additive 可选字段，旧消费方兼容。
+
+- 历史：未开工时记录（保留）：GitHub Issue：[#187](https://github.com/Yijtu/ontology/issues/187)；文档提交不代表功能完成。

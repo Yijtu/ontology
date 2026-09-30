@@ -14,6 +14,14 @@ export type {
   VocabularyLimits,
 } from './vocabulary'
 export { InMemorySemanticMappingRegistry, defineSemanticMapping, semanticMappingDigest } from './registry'
+export {
+  PROJECT_SNAPSHOT_RECORD_ID_FIELD,
+  PROJECT_SNAPSHOT_SOURCES_FIELD,
+  buildProjectSnapshotMapping,
+  projectSnapshotColumnType,
+  projectSnapshotMappingRef,
+} from './project-snapshot'
+export type { BuildProjectSnapshotMappingInput } from './project-snapshot'
 export { OntologyLookupService } from './lookup'
 export { PublishedFactsReferenceProvider } from './published-facts'
 export type { PublishedFactsReferenceProviderOptions } from './published-facts'

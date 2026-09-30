@@ -1,11 +1,15 @@
-import { AnswerStoreError, isToolContext } from '@ontology/contracts'
+import { AnswerStoreError, isAnswerDraftV3Body, isPublishedAnswerBody, isToolContext } from '@ontology/contracts'
 import type {
+  AnswerRevisionRecord,
   AnswerStorePort,
   PublicationKind,
   PublishedAnswer,
   RecordAnswerInput,
+  ResultHistoryPort,
+  RevisionString,
   SemanticReviewDisposition,
   RunState,
+  ScopeRef,
   ToolContext,
   Uuid,
 } from '@ontology/contracts'
@@ -43,8 +47,19 @@ interface DispatchFenceRow extends QueryResultRow {
   lease_active: boolean
 }
 
+interface EvidencePinRow extends QueryResultRow {
+  kind: string
+  result_digest: string
+  envelope_digest: string
+  revision: string
+}
+
 const ANSWER_COLUMNS =
   'answer_id, run_id, draft_id, verification_id, content_hash, evidence_manifest_hash, scenario_manifest_hash, publication_kind, as_of, limitations, body, semantic_review, (body IS NULL) AS body_missing, published_at'
+
+/** The same columns qualified for the history join, so `runs`/`answer_publications` never clash. */
+const HISTORY_ANSWER_COLUMNS =
+  'ap.answer_id, ap.run_id, ap.draft_id, ap.verification_id, ap.content_hash, ap.evidence_manifest_hash, ap.scenario_manifest_hash, ap.publication_kind, ap.as_of, ap.limitations, ap.body, ap.semantic_review, (ap.body IS NULL) AS body_missing, ap.published_at'
 
 function scopeOf(ctx: ToolContext): { tenantId: string; spaceId: string } {
   if (!isToolContext(ctx)) {
@@ -63,15 +78,15 @@ function toAnswer(row: AnswerRow): PublishedAnswer {
   if (row.body_missing && body !== null) {
     throw new AnswerStoreError('ANSWER_PERSIST_FAILED', `stored answer ${row.answer_id} has inconsistent body metadata`)
   }
-  if (!row.body_missing) {
-    if (typeof body !== 'object' || Array.isArray(body)) {
-      throw new AnswerStoreError('ANSWER_PERSIST_FAILED', `stored answer ${row.answer_id} has a malformed body`)
-    }
-    const value = body as Record<string, unknown>
-    if ((value.schemaVersion !== 'answer-draft@1' && value.schemaVersion !== 'answer-draft@2') ||
-        !Array.isArray(value.blocks) || !Array.isArray(value.claims) || !Array.isArray(value.assertions)) {
-      throw new AnswerStoreError('ANSWER_PERSIST_FAILED', `stored answer ${row.answer_id} has a malformed body`)
-    }
+  let bodyField: Pick<PublishedAnswer, 'body' | 'v3Body' | 'bodyUnavailableReason'>
+  if (row.body_missing) {
+    bodyField = { bodyUnavailableReason: 'legacy_metadata_only' }
+  } else if (isPublishedAnswerBody(body)) {
+    bodyField = { body }
+  } else if (isAnswerDraftV3Body(body)) {
+    bodyField = { v3Body: body }
+  } else {
+    throw new AnswerStoreError('ANSWER_PERSIST_FAILED', `stored answer ${row.answer_id} has a malformed body`)
   }
   return {
     answerId: row.answer_id,
@@ -85,7 +100,7 @@ function toAnswer(row: AnswerRow): PublishedAnswer {
     ...(row.as_of === null ? {} : { asOf: row.as_of.toISOString() }),
     limitations: row.limitations,
     ...(row.semantic_review === null ? {} : { semanticReview: row.semantic_review }),
-    ...(row.body_missing ? { bodyUnavailableReason: 'legacy_metadata_only' as const } : { body: body as NonNullable<PublishedAnswer['body']> }),
+    ...bodyField,
     publishedAt: row.published_at.toISOString(),
   }
 }
@@ -104,6 +119,7 @@ function samePublication(left: PublishedAnswer, right: PublishedAnswer): boolean
     left.contentHash === right.contentHash && left.evidenceManifestHash === right.evidenceManifestHash &&
     left.scenarioManifestHash === right.scenarioManifestHash && left.publicationKind === right.publicationKind &&
     sameAsOf && canonical(left.limitations) === canonical(right.limitations) && canonical(left.body) === canonical(right.body) &&
+    canonical(left.v3Body) === canonical(right.v3Body) &&
     canonical(left.semanticReview) === canonical(right.semanticReview)
 }
 
@@ -118,7 +134,12 @@ function samePublication(left: PublishedAnswer, right: PublishedAnswer): boolean
  * Every statement runs as the non-owner application role with the trusted scope set via
  * `SET LOCAL`, so RLS applies and a lookup in another tenant/space returns nothing.
  */
-export class PostgresAnswerStore implements AnswerStorePort {
+interface HistoryAnswerRow extends AnswerRow {
+  project_id: Uuid
+  project_revision: RevisionString
+}
+
+export class PostgresAnswerStore implements AnswerStorePort, ResultHistoryPort {
   readonly #database: ControlPostgresDatabase
   readonly #requireWorkflowDispatchFence: boolean
 
@@ -128,10 +149,9 @@ export class PostgresAnswerStore implements AnswerStorePort {
   }
 
   async record(input: RecordAnswerInput, ctx: ToolContext): Promise<PublishedAnswer> {
-    if (input.answer.body === undefined) throw new AnswerStoreError('ANSWER_BODY_REQUIRED', 'new answer publications must persist the verified body')
-    const body = input.answer.body
-    if ((body.schemaVersion !== 'answer-draft@1' && body.schemaVersion !== 'answer-draft@2') ||
-        !Array.isArray(body.blocks) || !Array.isArray(body.claims) || !Array.isArray(body.assertions)) {
+    const body = input.answer.body ?? input.answer.v3Body
+    if (body === undefined) throw new AnswerStoreError('ANSWER_BODY_REQUIRED', 'new answer publications must persist the verified body')
+    if (!isPublishedAnswerBody(body) && !isAnswerDraftV3Body(body)) {
       throw new AnswerStoreError('ANSWER_BODY_REQUIRED', 'new answer publications must contain a versioned body')
     }
     const scope = scopeOf(ctx)
@@ -195,6 +215,36 @@ export class PostgresAnswerStore implements AnswerStorePort {
         }
       }
 
+      // Publication transaction fence (SPEC v0.3a §EX-7.2): re-read every evidence dependency
+      // the verified draft rests on in the *same* transaction as the answer insert. A
+      // dependency retracted, edited or made unreadable between the validity check and this
+      // commit rejects the answer, so nothing partial is published. `FOR SHARE` blocks a
+      // concurrent retraction from committing underneath the write.
+      for (const pin of input.dependencyPins ?? []) {
+        const dependency = await client.query<EvidencePinRow>(
+          `SELECT kind, result_digest, envelope_digest, revision::text AS revision
+             FROM agent_platform.evidence_records
+            WHERE tenant_id = current_setting('app.tenant_id')::uuid
+              AND space_id = current_setting('app.space_id')::uuid
+              AND evidence_id = $1
+            FOR SHARE`,
+          [pin.evidenceRef.id],
+        )
+        const row = dependency.rows[0]
+        if (
+          row === undefined ||
+          row.kind !== pin.evidenceKind ||
+          row.result_digest !== pin.resultDigest ||
+          row.envelope_digest !== pin.envelopeDigest ||
+          row.revision !== pin.revision
+        ) {
+          throw new AnswerStoreError(
+            'RUN_NOT_PUBLISHABLE',
+            `a verified evidence dependency of run ${input.answer.runId} changed before publication committed`,
+          )
+        }
+      }
+
       try {
         await client.query(
           `INSERT INTO agent_platform.answer_publications
@@ -218,7 +268,7 @@ export class PostgresAnswerStore implements AnswerStorePort {
             input.answer.publicationKind,
             input.answer.asOf ?? null,
             JSON.stringify(input.answer.limitations),
-            JSON.stringify(input.answer.body),
+            JSON.stringify(body),
             input.answer.semanticReview === undefined ? null : JSON.stringify(input.answer.semanticReview),
             input.answer.publishedAt,
           ],
@@ -266,6 +316,71 @@ export class PostgresAnswerStore implements AnswerStorePort {
               AND space_id = current_setting('app.space_id')::uuid
               AND run_id = $1`,
           [runId],
+        )
+        const row = result.rows[0]
+        return row === undefined ? undefined : toAnswer(row)
+      },
+      { readOnly: true },
+    )
+  }
+
+  /**
+   * The immutable result history of one project (SPEC v0.3a §EX-8, issue V03-041 / #214).
+   *
+   * Every published answer is joined to the run's archived execution binding and grouped by the
+   * project revision it pinned. The project id is read from the binding, never from the caller,
+   * and RLS scopes the join to the trusted tenant/space, so a project in another scope returns
+   * nothing. Newest first; the caller labels the current fixed version apart from older history.
+   */
+  async listByProject(
+    scopeRef: ScopeRef,
+    projectId: Uuid,
+    ctx: ToolContext,
+  ): Promise<readonly AnswerRevisionRecord[]> {
+    const scope = scopeOf(ctx)
+    if (scope.tenantId !== scopeRef.tenantId || scope.spaceId !== scopeRef.spaceId) {
+      throw new AnswerStoreError('SCOPE_MISMATCH', 'request scope does not match the trusted principal scope')
+    }
+    return this.#database.withIdentityScope(
+      scope,
+      async (client) => {
+        const result = await client.query<HistoryAnswerRow>(
+          `SELECT ${HISTORY_ANSWER_COLUMNS},
+                  binding.binding->'request'->'projectRevisionRef'->>'projectId' AS project_id,
+                  binding.binding->'request'->'projectRevisionRef'->>'revision' AS project_revision
+             FROM agent_platform.answer_publications AS ap
+             JOIN agent_platform.run_execution_bindings AS binding
+               ON binding.tenant_id = ap.tenant_id
+              AND binding.space_id = ap.space_id
+              AND binding.run_id = ap.run_id
+            WHERE ap.tenant_id = current_setting('app.tenant_id')::uuid
+              AND ap.space_id = current_setting('app.space_id')::uuid
+              AND binding.binding->'request'->'projectRevisionRef'->>'projectId' = $1
+            ORDER BY ap.published_at DESC, ap.answer_id`,
+          [projectId],
+        )
+        return result.rows.map((row) => ({
+          answer: toAnswer(row),
+          projectId: row.project_id,
+          projectRevision: row.project_revision,
+        }))
+      },
+      { readOnly: true },
+    )
+  }
+
+  async findByAnswer(answerId: Uuid, ctx: ToolContext): Promise<PublishedAnswer | undefined> {
+    const scope = scopeOf(ctx)
+    return this.#database.withIdentityScope(
+      scope,
+      async (client) => {
+        const result = await client.query<AnswerRow>(
+          `SELECT ${ANSWER_COLUMNS}
+             FROM agent_platform.answer_publications
+            WHERE tenant_id = current_setting('app.tenant_id')::uuid
+              AND space_id = current_setting('app.space_id')::uuid
+              AND answer_id = $1`,
+          [answerId],
         )
         const row = result.rows[0]
         return row === undefined ? undefined : toAnswer(row)

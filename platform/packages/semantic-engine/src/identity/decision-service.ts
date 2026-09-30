@@ -16,7 +16,7 @@ import type {
   ToolContext,
   Uuid,
 } from '@ontology/contracts'
-import { IdentityDecisionStoreError } from '@ontology/contracts'
+import { IdentityDecisionStoreError, candidateSourceRef } from '@ontology/contracts'
 import { IdentityDecisionError } from './decision-types'
 import type {
   IdentityDecisionListFilter,
@@ -106,12 +106,9 @@ function nextRevision(revision: RevisionString): RevisionString {
 
 /** The exact source chunks a mention came from, carried into the decision evidence. */
 function candidateEvidence(candidate: EntityCandidate): ResourceRef[] {
-  return candidate.sourceSpans.map((span) => ({
-    id: span.chunkId,
-    version: candidate.inputVersion.parserVersion,
-    digest: span.quoteDigest,
-    kind: 'chunk',
-  }))
+  return candidate.sourceSpans.map((span) =>
+    candidateSourceRef(span, candidate.inputVersion.parserVersion),
+  )
 }
 
 function mergeEvidence(...groups: readonly (readonly ResourceRef[])[]): ResourceRef[] {

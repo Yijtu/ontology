@@ -1,6 +1,8 @@
 import { isToolContext } from '@ontology/contracts'
 import { AnswerStoreError } from '@ontology/contracts'
+import { isResourceRef } from '@ontology/contracts'
 import type {
+  AnswerDraft,
   AnswerPublisherPort,
   AnswerStorePort,
   PublishedAnswer,
@@ -10,6 +12,7 @@ import type {
   ResourceRef,
   RunStore,
   ScopeRef,
+  Sha256Digest,
   ToolContext,
   Uuid,
   VerificationStorePort,
@@ -104,8 +107,14 @@ export class AnswerPublicationService implements AnswerPublisherPort {
         'the publication grant does not match the draft being published',
       )
     }
-    if (draft.schemaVersion !== 'answer-draft@2' && (draft.assertions?.length ?? 0) > 0) {
+    const typedV2 = draft.schemaVersion === 'answer-draft@2'
+    const typedV3 = draft.schemaVersion === 'answer-draft@3'
+    if (!typedV2 && !typedV3 && (draft.assertions?.length ?? 0) > 0) {
       throw new PublicationRejectedError('draft_hash_mismatch', 'legacy answer drafts cannot carry unhashed typed assertions')
+    }
+    const v3Bindings = typedV3 ? v3BindingsOf(draft) : undefined
+    if (typedV3 && v3Bindings === undefined) {
+      throw new PublicationRejectedError('draft_hash_mismatch', 'an answer-draft@3 must pin its result manifest, finalization receipt and execution binding')
     }
     const recomputed = answerDraftContentHash(
       draft.runId,
@@ -113,7 +122,11 @@ export class AnswerPublicationService implements AnswerPublisherPort {
       draft.evidenceManifestHash,
       draft.claims ?? [],
       draft.assertions ?? [],
-      ...(draft.schemaVersion === 'answer-draft@2' ? [{ schemaVersion: 'answer-draft@2' as const, limitations: draft.limitations }] : []),
+      typedV2
+        ? { schemaVersion: 'answer-draft@2', limitations: draft.limitations }
+        : v3Bindings === undefined
+          ? undefined
+          : { schemaVersion: 'answer-draft@3', limitations: draft.limitations, ...v3Bindings },
     )
     if (recomputed !== draft.contentHash) {
       throw new PublicationRejectedError(
@@ -225,12 +238,25 @@ export class AnswerPublicationService implements AnswerPublisherPort {
       ...(publicationKind === 'history_limited' ? { asOf: validity.asOf } : {}),
       limitations,
       ...(verification.semanticReview === undefined ? {} : { semanticReview: verification.semanticReview }),
-      body: {
-        schemaVersion: draft.schemaVersion ?? 'answer-draft@1',
-        blocks: structuredClone(draft.blocks),
-        claims: structuredClone(draft.claims ?? []),
-        assertions: structuredClone(draft.assertions ?? []),
-      },
+      ...(typedV3 && v3Bindings !== undefined
+        ? {
+            v3Body: {
+              schemaVersion: 'answer-draft@3' as const,
+              ...v3Bindings,
+              blocks: structuredClone(draft.blocks),
+              claims: structuredClone(draft.claims ?? []),
+              assertions: structuredClone(draft.assertions ?? []),
+              limitations: [...draft.limitations],
+            },
+          }
+        : {
+            body: {
+              schemaVersion: draft.schemaVersion === 'answer-draft@2' ? 'answer-draft@2' as const : 'answer-draft@1' as const,
+              blocks: structuredClone(draft.blocks),
+              claims: structuredClone(draft.claims ?? []),
+              assertions: structuredClone(draft.assertions ?? []),
+            },
+          }),
       publishedAt: this.#now(),
     }
 
@@ -245,6 +271,9 @@ export class AnswerPublicationService implements AnswerPublisherPort {
           ...(grant.workflowDispatchFence === undefined
             ? {}
             : { workflowDispatchFence: grant.workflowDispatchFence }),
+          // Forward the exact dependency versions the validity check re-read so the store can
+          // re-check them inside the same transaction as the answer insert (transaction fence).
+          ...(validity.dependencies === undefined ? {} : { dependencyPins: validity.dependencies }),
         },
         ctx,
       )
@@ -264,6 +293,50 @@ export class AnswerPublicationService implements AnswerPublisherPort {
 
   findAnswer(runId: Uuid, ctx: ToolContext): Promise<PublishedAnswer | undefined> {
     return this.#answers.findByRun(runId, ctx)
+  }
+}
+
+/**
+ * Resolve the typed-manifest bindings of an `answer-draft@3`. Every ref/digest is mandatory:
+ * the publisher never writes a @3 answer whose body cannot be re-hashed to the exact typed
+ * result and finalization receipt it was verified against.
+ */
+function v3BindingsOf(draft: AnswerDraft): {
+  readonly resultManifestRef: ResourceRef
+  readonly resultManifestDigest: Sha256Digest
+  readonly finalizationReceiptRef: ResourceRef
+  readonly finalizationReceiptDigest: Sha256Digest
+  readonly executionBindingRef: ResourceRef
+} | undefined {
+  const resultManifestRef = draft.resultManifestRef
+  const resultManifestDigest = draft.resultManifestDigest
+  const finalizationReceiptRef = draft.finalizationReceiptRef
+  const finalizationReceiptDigest = draft.finalizationReceiptDigest
+  const executionBindingRef = draft.executionBindingRef
+  if (
+    resultManifestRef === undefined ||
+    resultManifestDigest === undefined ||
+    finalizationReceiptRef === undefined ||
+    finalizationReceiptDigest === undefined ||
+    executionBindingRef === undefined
+  ) {
+    return undefined
+  }
+  if (
+    !isResourceRef(resultManifestRef) ||
+    !isResourceRef(finalizationReceiptRef) ||
+    !isResourceRef(executionBindingRef) ||
+    !/^sha256:[0-9a-f]{64}$/u.test(resultManifestDigest) ||
+    !/^sha256:[0-9a-f]{64}$/u.test(finalizationReceiptDigest)
+  ) {
+    return undefined
+  }
+  return {
+    resultManifestRef,
+    resultManifestDigest,
+    finalizationReceiptRef,
+    finalizationReceiptDigest,
+    executionBindingRef,
   }
 }
 

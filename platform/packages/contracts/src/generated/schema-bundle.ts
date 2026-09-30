@@ -8,6 +8,178 @@ export const CONTRACT_VERSION = "0.2.0"
 export const SCHEMA_DOCUMENTS: readonly JsonSchemaObject[] = [
   {
     "$schema": "https://json-schema.org/draft/2020-12/schema",
+    "$id": "https://ontology.local/schema/asset-workspace.schema.json",
+    "title": "AssetWorkspaceContracts",
+    "$comment": "SPEC v0.3a asset-data-ui §3.1: industry workspace, boundary, draft and candidate shapes. These are data-only: no framework, database, HTTP or industry implementation types are referenced. A workspace owns a business boundary and an append-only draft head; published versions and candidates are pinned by ref/digest, never mutated in place.",
+    "$defs": {
+      "IndustryWorkspaceState": {
+        "title": "IndustryWorkspaceState",
+        "description": "Draft lifecycle. `published` and `archived` are terminal for the current head; editing appends a new draft revision.",
+        "type": "string",
+        "enum": [
+          "draft",
+          "review",
+          "published",
+          "archived"
+        ]
+      },
+      "IndustryWorkspaceApplicability": {
+        "title": "IndustryWorkspaceApplicability",
+        "description": "Declared applicability window of an industry workspace. `region` names a business region, not a physical location; the window is informational and every resolved run still pins exact revisions.",
+        "type": "object",
+        "additionalProperties": false,
+        "properties": {
+          "region": {
+            "$ref": "./common.schema.json#/$defs/NonEmptyString"
+          },
+          "validFrom": {
+            "$ref": "./common.schema.json#/$defs/Rfc3339UtcTimestamp"
+          },
+          "validTo": {
+            "$ref": "./common.schema.json#/$defs/Rfc3339UtcTimestamp"
+          }
+        }
+      },
+      "IndustryWorkspaceBoundary": {
+        "title": "IndustryWorkspaceBoundary",
+        "description": "The business boundary the workspace models: goals it targets, what is in scope and what is explicitly excluded, plus applicability. Excluded entries are kept so the boundary stays falsifiable instead of silently shrinking.",
+        "type": "object",
+        "additionalProperties": false,
+        "required": [
+          "goals",
+          "included",
+          "excluded",
+          "applicability"
+        ],
+        "properties": {
+          "goals": {
+            "type": "array",
+            "items": {
+              "$ref": "./common.schema.json#/$defs/NonEmptyString"
+            }
+          },
+          "included": {
+            "type": "array",
+            "items": {
+              "$ref": "./common.schema.json#/$defs/NonEmptyString"
+            }
+          },
+          "excluded": {
+            "type": "array",
+            "items": {
+              "$ref": "./common.schema.json#/$defs/NonEmptyString"
+            }
+          },
+          "applicability": {
+            "$ref": "#/$defs/IndustryWorkspaceApplicability"
+          }
+        }
+      },
+      "IndustryWorkspace": {
+        "title": "IndustryWorkspace",
+        "description": "An industry workspace read shape. `headRevision` is the mutable draft head; the latest published pack is pinned separately, so a newer package never rewrites an existing workspace or project.",
+        "type": "object",
+        "additionalProperties": false,
+        "required": [
+          "workspaceId",
+          "namespace",
+          "displayName",
+          "boundary",
+          "headRevision",
+          "state"
+        ],
+        "properties": {
+          "workspaceId": {
+            "$ref": "./common.schema.json#/$defs/Uuid"
+          },
+          "namespace": {
+            "$ref": "./common.schema.json#/$defs/Namespace"
+          },
+          "displayName": {
+            "$ref": "./common.schema.json#/$defs/NonEmptyString"
+          },
+          "boundary": {
+            "$ref": "#/$defs/IndustryWorkspaceBoundary"
+          },
+          "headRevision": {
+            "$ref": "./common.schema.json#/$defs/RevisionString"
+          },
+          "latestPublishedPackRef": {
+            "$ref": "./common.schema.json#/$defs/VersionRef"
+          },
+          "state": {
+            "$ref": "#/$defs/IndustryWorkspaceState"
+          }
+        }
+      },
+      "AssetDraftCandidateRef": {
+        "title": "AssetDraftCandidateRef",
+        "description": "A logical definition id pinned to one immutable candidate version. A content-changing edit appends a new candidate id; the digest lets a reader detect a candidate that was replaced instead of edited.",
+        "type": "object",
+        "additionalProperties": false,
+        "required": [
+          "logicalId",
+          "candidateId",
+          "digest"
+        ],
+        "properties": {
+          "logicalId": {
+            "$ref": "./common.schema.json#/$defs/NonEmptyString"
+          },
+          "candidateId": {
+            "$ref": "./common.schema.json#/$defs/Uuid"
+          },
+          "digest": {
+            "$ref": "./common.schema.json#/$defs/Sha256Digest"
+          }
+        }
+      },
+      "AssetDraftVersion": {
+        "title": "AssetDraftVersion",
+        "description": "One append-only draft revision of an industry workspace. `documentSetRef` fixes the sources the draft was generated from; candidate refs point at immutable candidate versions, never at mutable payloads.",
+        "type": "object",
+        "additionalProperties": false,
+        "required": [
+          "workspaceId",
+          "revision",
+          "digest",
+          "documentSetRef",
+          "candidateRefs"
+        ],
+        "properties": {
+          "workspaceId": {
+            "$ref": "./common.schema.json#/$defs/Uuid"
+          },
+          "revision": {
+            "$ref": "./common.schema.json#/$defs/RevisionString"
+          },
+          "digest": {
+            "$ref": "./common.schema.json#/$defs/Sha256Digest"
+          },
+          "basePackRef": {
+            "$ref": "./common.schema.json#/$defs/VersionRef"
+          },
+          "documentSetRef": {
+            "$ref": "./common.schema.json#/$defs/ResourceRef"
+          },
+          "candidateRefs": {
+            "type": "array",
+            "items": {
+              "$ref": "#/$defs/AssetDraftCandidateRef"
+            }
+          },
+          "syntheticExampleSetRef": {
+            "$ref": "./common.schema.json#/$defs/ResourceRef"
+          },
+          "validationRef": {
+            "$ref": "./common.schema.json#/$defs/ResourceRef"
+          }
+        }
+      }
+    }
+  },
+  {
+    "$schema": "https://json-schema.org/draft/2020-12/schema",
     "$id": "https://ontology.local/schema/common.schema.json",
     "title": "CommonContracts",
     "$comment": "Shared value objects for the whole platform. Time is RFC3339 UTC only; user/billing time zones live in separate IANA-name fields. Internal resource ids are UUIDs; source ids stay verbatim plus a namespace.",
@@ -4628,6 +4800,43 @@ export const SCHEMA_DOCUMENTS: readonly JsonSchemaObject[] = [
   },
   {
     "$schema": "https://json-schema.org/draft/2020-12/schema",
+    "$id": "https://ontology.local/schema/mount.schema.json",
+    "title": "MountContracts",
+    "$comment": "SPEC v0.3a asset-data-ui §9.3 and spec-generic §4.3: the data-only half of the public UI scenario mount contract. React ComponentType, props and bundle/module paths stay in apps/web; contracts only stores version refs and capability declarations. A module is registered by the trusted web composition, never loaded from an API, an industry pack or uploaded content.",
+    "$defs": {
+      "UiCapabilityMetadata": {
+        "title": "UiCapabilityMetadata",
+        "description": "Data-only deployment/industry declaration of a mountable scenario module: the registered module ref, the task bindings it offers and the capabilities it needs. It never contains React, HTML, JS paths or a remote dynamic import. An unregistered module renders the generic verified result instead of a professional view.",
+        "type": "object",
+        "additionalProperties": false,
+        "required": [
+          "moduleRef",
+          "taskBindingRefs",
+          "requiredCapabilities"
+        ],
+        "properties": {
+          "moduleRef": {
+            "$ref": "./common.schema.json#/$defs/VersionRef"
+          },
+          "taskBindingRefs": {
+            "type": "array",
+            "items": {
+              "$ref": "./common.schema.json#/$defs/VersionRef"
+            }
+          },
+          "requiredCapabilities": {
+            "type": "array",
+            "items": {
+              "$ref": "./common.schema.json#/$defs/NonEmptyString"
+            },
+            "uniqueItems": true
+          }
+        }
+      }
+    }
+  },
+  {
+    "$schema": "https://json-schema.org/draft/2020-12/schema",
     "$id": "https://ontology.local/schema/operations.schema.json",
     "title": "OperationContracts",
     "$comment": "ADR-11: domain computation is exposed through a versioned, pre-registered operation. The operation id is declared by the industry pack, the implementation is chosen by the composition root, and no request may carry code or a package path.",
@@ -4748,6 +4957,456 @@ export const SCHEMA_DOCUMENTS: readonly JsonSchemaObject[] = [
             "items": {
               "$ref": "#/$defs/RegisteredOperation"
             }
+          }
+        }
+      }
+    }
+  },
+  {
+    "$schema": "https://json-schema.org/draft/2020-12/schema",
+    "$id": "https://ontology.local/schema/projects.schema.json",
+    "title": "ProjectContracts",
+    "$comment": "SPEC v0.3a asset-data-ui §3.2/§3.3: customer project revisions, the immutable approved-input artifact, and the independent readiness projections. The canonical hash body (ProjectRevisionBody, ApprovedInputSnapshot) never contains its own ref/digest or a readiness receipt; the read envelopes (ProjectRevision, ApprovedInputSnapshotEnvelope) add those outside the hashed content so a hash can never depend on its own digest.",
+    "$defs": {
+      "ProjectRevisionRef": {
+        "title": "ProjectRevisionRef",
+        "description": "Exact reference to one immutable project revision. `digest` is computed over ProjectRevisionBody and pins the revision so a reader can detect drift instead of trusting a mutable head.",
+        "type": "object",
+        "additionalProperties": false,
+        "required": [
+          "projectId",
+          "revision",
+          "digest"
+        ],
+        "properties": {
+          "projectId": {
+            "$ref": "./common.schema.json#/$defs/Uuid"
+          },
+          "revision": {
+            "$ref": "./common.schema.json#/$defs/RevisionString"
+          },
+          "digest": {
+            "$ref": "./common.schema.json#/$defs/Sha256Digest"
+          }
+        }
+      },
+      "ProjectRevisionBody": {
+        "title": "ProjectRevisionBody",
+        "description": "Canonical hash body of a project revision. It fixes the industry/definition/mapping/profile/document/input pins, the semantic publication refs, the source visibility epoch and the change reason. It deliberately excludes the outer `ref` and any readiness receipt: those are added by ProjectRevision after this body is serialized and hashed.",
+        "type": "object",
+        "additionalProperties": false,
+        "required": [
+          "schemaVersion",
+          "projectId",
+          "revision",
+          "industryPackRef",
+          "definitionRef",
+          "mappingRefs",
+          "profileRef",
+          "documentSetRef",
+          "semanticPublicationRefs",
+          "sourceVisibilityEpoch",
+          "changeReason"
+        ],
+        "properties": {
+          "schemaVersion": {
+            "const": "project-revision@1"
+          },
+          "projectId": {
+            "$ref": "./common.schema.json#/$defs/Uuid"
+          },
+          "revision": {
+            "$ref": "./common.schema.json#/$defs/RevisionString"
+          },
+          "industryPackRef": {
+            "$ref": "./common.schema.json#/$defs/VersionRef"
+          },
+          "definitionRef": {
+            "$ref": "./common.schema.json#/$defs/VersionRef"
+          },
+          "mappingRefs": {
+            "type": "array",
+            "items": {
+              "$ref": "./industry.schema.json#/$defs/MappingRef"
+            },
+            "minItems": 1
+          },
+          "profileRef": {
+            "$ref": "./industry.schema.json#/$defs/ResolvedProfileRef"
+          },
+          "documentSetRef": {
+            "$ref": "./common.schema.json#/$defs/ResourceRef"
+          },
+          "approvedInputRef": {
+            "$ref": "./common.schema.json#/$defs/ResourceRef"
+          },
+          "datasetSnapshotRef": {
+            "$ref": "./common.schema.json#/$defs/ResourceRef"
+          },
+          "documentIndexRef": {
+            "$ref": "./common.schema.json#/$defs/ResourceRef"
+          },
+          "semanticPublicationRefs": {
+            "type": "array",
+            "items": {
+              "$ref": "./common.schema.json#/$defs/VersionRef"
+            }
+          },
+          "sourceVisibilityEpoch": {
+            "$ref": "./common.schema.json#/$defs/RevisionString"
+          },
+          "changeReason": {
+            "$ref": "./common.schema.json#/$defs/NonEmptyString"
+          }
+        }
+      },
+      "ProjectRevision": {
+        "title": "ProjectRevision",
+        "description": "Read envelope of a project revision. It repeats the body pins inline and adds `ref`, whose digest is computed over ProjectRevisionBody. Readiness is projected separately; it is never back-filled into this immutable revision.",
+        "type": "object",
+        "additionalProperties": false,
+        "required": [
+          "ref",
+          "industryPackRef",
+          "definitionRef",
+          "mappingRefs",
+          "profileRef",
+          "documentSetRef",
+          "semanticPublicationRefs",
+          "sourceVisibilityEpoch",
+          "changeReason"
+        ],
+        "properties": {
+          "ref": {
+            "$ref": "#/$defs/ProjectRevisionRef"
+          },
+          "industryPackRef": {
+            "$ref": "./common.schema.json#/$defs/VersionRef"
+          },
+          "definitionRef": {
+            "$ref": "./common.schema.json#/$defs/VersionRef"
+          },
+          "mappingRefs": {
+            "type": "array",
+            "items": {
+              "$ref": "./industry.schema.json#/$defs/MappingRef"
+            },
+            "minItems": 1
+          },
+          "profileRef": {
+            "$ref": "./industry.schema.json#/$defs/ResolvedProfileRef"
+          },
+          "documentSetRef": {
+            "$ref": "./common.schema.json#/$defs/ResourceRef"
+          },
+          "approvedInputRef": {
+            "$ref": "./common.schema.json#/$defs/ResourceRef"
+          },
+          "datasetSnapshotRef": {
+            "$ref": "./common.schema.json#/$defs/ResourceRef"
+          },
+          "documentIndexRef": {
+            "$ref": "./common.schema.json#/$defs/ResourceRef"
+          },
+          "semanticPublicationRefs": {
+            "type": "array",
+            "items": {
+              "$ref": "./common.schema.json#/$defs/VersionRef"
+            }
+          },
+          "sourceVisibilityEpoch": {
+            "$ref": "./common.schema.json#/$defs/RevisionString"
+          },
+          "changeReason": {
+            "$ref": "./common.schema.json#/$defs/NonEmptyString"
+          }
+        }
+      },
+      "ProjectInputCounts": {
+        "title": "ProjectInputCounts",
+        "description": "Record reconciliation for one approved-input snapshot. Every record is accounted for exactly once: total = confirmed + approved + excluded + pending + failed is not asserted here, but the counters are reported separately so a partial input is never presented as complete.",
+        "type": "object",
+        "additionalProperties": false,
+        "required": [
+          "total",
+          "confirmed",
+          "approved",
+          "excluded",
+          "pending",
+          "failed"
+        ],
+        "properties": {
+          "total": {
+            "type": "integer",
+            "minimum": 0
+          },
+          "confirmed": {
+            "type": "integer",
+            "minimum": 0
+          },
+          "approved": {
+            "type": "integer",
+            "minimum": 0
+          },
+          "excluded": {
+            "type": "integer",
+            "minimum": 0
+          },
+          "pending": {
+            "type": "integer",
+            "minimum": 0
+          },
+          "failed": {
+            "type": "integer",
+            "minimum": 0
+          }
+        }
+      },
+      "ProjectInputRecordPage": {
+        "title": "ProjectInputRecordPage",
+        "description": "One bounded page of an approved-input snapshot. The ref points at the archived page artifact; first/last record ids let a reader prove stable order and detect a gap.",
+        "type": "object",
+        "additionalProperties": false,
+        "required": [
+          "ref",
+          "rowCount",
+          "firstRecordId",
+          "lastRecordId"
+        ],
+        "properties": {
+          "ref": {
+            "$ref": "./common.schema.json#/$defs/ResourceRef"
+          },
+          "rowCount": {
+            "type": "integer",
+            "minimum": 0
+          },
+          "firstRecordId": {
+            "$ref": "./common.schema.json#/$defs/Uuid"
+          },
+          "lastRecordId": {
+            "$ref": "./common.schema.json#/$defs/Uuid"
+          }
+        }
+      },
+      "ProjectInputExcludedRecord": {
+        "title": "ProjectInputExcludedRecord",
+        "description": "A record explicitly excluded from the approved input, with the reason and actor so an exclusion can never be a silent omission.",
+        "type": "object",
+        "additionalProperties": false,
+        "required": [
+          "recordId",
+          "reason",
+          "actor"
+        ],
+        "properties": {
+          "recordId": {
+            "$ref": "./common.schema.json#/$defs/Uuid"
+          },
+          "reason": {
+            "$ref": "./common.schema.json#/$defs/NonEmptyString"
+          },
+          "actor": {
+            "$ref": "./common.schema.json#/$defs/NonEmptyString"
+          }
+        }
+      },
+      "ApprovedInputSnapshot": {
+        "title": "ApprovedInputSnapshot",
+        "description": "Immutable approved-input artifact body (SPEC v0.3a §3.2). It fixes the input revision, asset pins, paged records, reconciliation counts, exclusions and coverage, but it never contains the final ProjectRevisionRef or its own digest. The freezing order is: records+confirmation manifests, then this body, then inputSnapshotRef, then the project revision digest.",
+        "type": "object",
+        "additionalProperties": false,
+        "required": [
+          "schemaVersion",
+          "projectId",
+          "inputRevision",
+          "definitionRef",
+          "mappingRefs",
+          "recordPages",
+          "counts",
+          "excluded",
+          "coverage",
+          "confirmationManifestRef"
+        ],
+        "properties": {
+          "schemaVersion": {
+            "const": "project-input-snapshot@1"
+          },
+          "projectId": {
+            "$ref": "./common.schema.json#/$defs/Uuid"
+          },
+          "inputRevision": {
+            "$ref": "./common.schema.json#/$defs/RevisionString"
+          },
+          "definitionRef": {
+            "$ref": "./common.schema.json#/$defs/VersionRef"
+          },
+          "mappingRefs": {
+            "type": "array",
+            "items": {
+              "$ref": "./industry.schema.json#/$defs/MappingRef"
+            }
+          },
+          "recordPages": {
+            "type": "array",
+            "items": {
+              "$ref": "#/$defs/ProjectInputRecordPage"
+            }
+          },
+          "counts": {
+            "$ref": "#/$defs/ProjectInputCounts"
+          },
+          "excluded": {
+            "type": "array",
+            "items": {
+              "$ref": "#/$defs/ProjectInputExcludedRecord"
+            }
+          },
+          "coverage": {
+            "$ref": "./common.schema.json#/$defs/CompletenessStatus"
+          },
+          "confirmationManifestRef": {
+            "$ref": "./common.schema.json#/$defs/ResourceRef"
+          }
+        }
+      },
+      "ApprovedInputSnapshotEnvelope": {
+        "title": "ApprovedInputSnapshotEnvelope",
+        "description": "Read envelope for an approved-input snapshot. `projectRevisionRef` and `inputSnapshotRef` live here, outside the hashed ApprovedInputSnapshot body, so the artifact digest can be computed before the project revision that references it exists.",
+        "type": "object",
+        "additionalProperties": false,
+        "required": [
+          "projectRevisionRef",
+          "inputSnapshotRef",
+          "snapshot"
+        ],
+        "properties": {
+          "projectRevisionRef": {
+            "$ref": "#/$defs/ProjectRevisionRef"
+          },
+          "inputSnapshotRef": {
+            "$ref": "./common.schema.json#/$defs/ResourceRef"
+          },
+          "snapshot": {
+            "$ref": "#/$defs/ApprovedInputSnapshot"
+          }
+        }
+      },
+      "ProjectReadinessKind": {
+        "title": "ProjectReadinessKind",
+        "description": "The three independent project projections. A task only waits on the projections its binding requires: a compute task is not blocked by an unrelated document index.",
+        "type": "string",
+        "enum": [
+          "published_semantics",
+          "dataset",
+          "document_index"
+        ]
+      },
+      "ProjectReadinessState": {
+        "title": "ProjectReadinessState",
+        "description": "State of one readiness projection. `ready` is only set by a CAS activation after the target digest and coverage were verified; the fallback is never a startup snapshot.",
+        "type": "string",
+        "enum": [
+          "pending",
+          "building",
+          "ready",
+          "failed",
+          "revoked"
+        ]
+      },
+      "ReadinessError": {
+        "title": "ReadinessError",
+        "description": "A classified, retryable-or-not failure on a readiness projection. The message is user-facing copy; the code is the machine contract.",
+        "type": "object",
+        "additionalProperties": false,
+        "required": [
+          "code",
+          "retryable",
+          "message"
+        ],
+        "properties": {
+          "code": {
+            "$ref": "./common.schema.json#/$defs/NonEmptyString"
+          },
+          "retryable": {
+            "type": "boolean"
+          },
+          "message": {
+            "$ref": "./common.schema.json#/$defs/NonEmptyString"
+          }
+        }
+      },
+      "ReadinessTargetRef": {
+        "title": "ReadinessTargetRef",
+        "description": "The projected target: a ResourceRef for a built dataset/index snapshot, or a VersionRef for a published semantic revision.",
+        "oneOf": [
+          {
+            "$ref": "./common.schema.json#/$defs/ResourceRef"
+          },
+          {
+            "$ref": "./common.schema.json#/$defs/VersionRef"
+          }
+        ]
+      },
+      "ReadinessProjection": {
+        "title": "ReadinessProjection",
+        "description": "Per-kind readiness of one project revision (SPEC v0.3a §3.2). It is a projection, not part of the project revision digest: `fenceRevision` and `targetDigest` make it safe to CAS-activate after a background build, and a revoked source can never be re-activated by a late build.",
+        "type": "object",
+        "additionalProperties": false,
+        "required": [
+          "projectRevisionRef",
+          "kind",
+          "targetRef",
+          "state",
+          "completeness",
+          "expectedCount",
+          "processedCount",
+          "failedCount",
+          "targetDigest",
+          "fenceRevision"
+        ],
+        "properties": {
+          "projectRevisionRef": {
+            "$ref": "#/$defs/ProjectRevisionRef"
+          },
+          "kind": {
+            "$ref": "#/$defs/ProjectReadinessKind"
+          },
+          "targetRef": {
+            "$ref": "#/$defs/ReadinessTargetRef"
+          },
+          "state": {
+            "$ref": "#/$defs/ProjectReadinessState"
+          },
+          "completeness": {
+            "$ref": "./common.schema.json#/$defs/CompletenessStatus"
+          },
+          "expectedCount": {
+            "type": "integer",
+            "minimum": 0
+          },
+          "processedCount": {
+            "type": "integer",
+            "minimum": 0
+          },
+          "failedCount": {
+            "type": "integer",
+            "minimum": 0
+          },
+          "targetDigest": {
+            "$ref": "./common.schema.json#/$defs/Sha256Digest"
+          },
+          "receiptRef": {
+            "$ref": "./common.schema.json#/$defs/ResourceRef"
+          },
+          "fenceRevision": {
+            "$ref": "./common.schema.json#/$defs/RevisionString"
+          },
+          "jobId": {
+            "$ref": "./common.schema.json#/$defs/Uuid"
+          },
+          "error": {
+            "$ref": "#/$defs/ReadinessError"
           }
         }
       }
@@ -5511,6 +6170,641 @@ export const SCHEMA_DOCUMENTS: readonly JsonSchemaObject[] = [
   },
   {
     "$schema": "https://json-schema.org/draft/2020-12/schema",
+    "$id": "https://ontology.local/schema/tasks.schema.json",
+    "title": "TaskContracts",
+    "$comment": "SPEC v0.3a execution-evidence §EX-2: the published task binding, the fixed run execution request/binding and capability status. These carry semantic declarations, complete refs, schema digests and capability requirements only. No endpoint, credential, script or industry implementation type appears here; the executable operation/policy/plan bindings are resolved by trusted composition.",
+    "$defs": {
+      "TaskKind": {
+        "title": "TaskKind",
+        "description": "The bounded set of published task kinds. Model proposals may only select one of these; there is no open-ended tool or script kind.",
+        "type": "string",
+        "enum": [
+          "published_facts",
+          "relations",
+          "rule_judgement",
+          "structured_query",
+          "document_qa",
+          "compute"
+        ]
+      },
+      "TaskValidationPolicyStage": {
+        "title": "TaskValidationPolicyStage",
+        "description": "Input policies run before a compute/answer step; result policies run before the typed writer.",
+        "type": "string",
+        "enum": [
+          "input",
+          "result"
+        ]
+      },
+      "TaskValidationPolicyBinding": {
+        "title": "TaskValidationPolicyBinding",
+        "description": "Declares one required or optional registered validation policy for a task kind (SPEC v0.3a §EX-6.1). The registry digest pins the trusted implementation; a declared-but-unbound policy leaves the task not ready rather than silently skipped.",
+        "type": "object",
+        "additionalProperties": false,
+        "required": [
+          "policyRef",
+          "stage",
+          "required",
+          "registryDigest",
+          "reportSchemaRef"
+        ],
+        "properties": {
+          "policyRef": {
+            "$ref": "./common.schema.json#/$defs/VersionRef"
+          },
+          "stage": {
+            "$ref": "#/$defs/TaskValidationPolicyStage"
+          },
+          "required": {
+            "type": "boolean"
+          },
+          "registryDigest": {
+            "$ref": "./common.schema.json#/$defs/Sha256Digest"
+          },
+          "reportSchemaRef": {
+            "$ref": "./common.schema.json#/$defs/VersionRef"
+          }
+        }
+      },
+      "TaskValidationPolicyReportStatus": {
+        "title": "TaskValidationPolicyReportStatus",
+        "description": "The only admissible policy verdicts. `pass` is the sole value that lets a required policy satisfy a formal result; `fail`, `unknown` and `incomplete` stay blocking and are never coerced to success.",
+        "type": "string",
+        "enum": [
+          "pass",
+          "fail",
+          "unknown",
+          "incomplete"
+        ]
+      },
+      "TaskPolicyViolation": {
+        "title": "TaskPolicyViolation",
+        "description": "One located policy violation (SPEC v0.3a §EX-6.1). It references a row/column/pointer plus expected/actual strings computed by the policy handler, never free model prose.",
+        "type": "object",
+        "additionalProperties": false,
+        "required": [
+          "code"
+        ],
+        "properties": {
+          "code": {
+            "$ref": "./common.schema.json#/$defs/NonEmptyString"
+          },
+          "rowKey": {
+            "type": "string"
+          },
+          "columnRef": {
+            "type": "string"
+          },
+          "pointer": {
+            "type": "string"
+          },
+          "expected": {
+            "type": "string"
+          },
+          "actual": {
+            "type": "string"
+          }
+        }
+      },
+      "TaskValidationPolicyReport": {
+        "title": "TaskValidationPolicyReport",
+        "description": "Frozen task-policy-report@1 (SPEC v0.3a §EX-6.1). A registered validation policy reports on exactly one stage; a result report points at the one output artifact and typed result manifest it validated. The report carries no finalization-receipt field, so a receipt can reference the report without the report referencing the receipt (no digest cycle).",
+        "type": "object",
+        "additionalProperties": false,
+        "required": [
+          "schemaVersion",
+          "policyRef",
+          "registryDigest",
+          "reportSchemaRef",
+          "stage",
+          "executionBindingRef",
+          "inputSnapshotRef",
+          "inputSnapshotDigest",
+          "parametersRef",
+          "parametersDigest",
+          "status",
+          "coverage",
+          "violations",
+          "dependencyEvidenceRefs"
+        ],
+        "properties": {
+          "schemaVersion": {
+            "const": "task-policy-report@1"
+          },
+          "policyRef": {
+            "$ref": "./common.schema.json#/$defs/VersionRef"
+          },
+          "registryDigest": {
+            "$ref": "./common.schema.json#/$defs/Sha256Digest"
+          },
+          "reportSchemaRef": {
+            "$ref": "./common.schema.json#/$defs/VersionRef"
+          },
+          "stage": {
+            "$ref": "#/$defs/TaskValidationPolicyStage"
+          },
+          "executionBindingRef": {
+            "$ref": "./common.schema.json#/$defs/ResourceRef"
+          },
+          "inputSnapshotRef": {
+            "$ref": "./common.schema.json#/$defs/ResourceRef"
+          },
+          "inputSnapshotDigest": {
+            "$ref": "./common.schema.json#/$defs/Sha256Digest"
+          },
+          "parametersRef": {
+            "$ref": "./common.schema.json#/$defs/ResourceRef"
+          },
+          "parametersDigest": {
+            "$ref": "./common.schema.json#/$defs/Sha256Digest"
+          },
+          "outputArtifactRef": {
+            "$ref": "./common.schema.json#/$defs/ResourceRef"
+          },
+          "outputDigest": {
+            "$ref": "./common.schema.json#/$defs/Sha256Digest"
+          },
+          "typedResultManifestRef": {
+            "$ref": "./common.schema.json#/$defs/ResourceRef"
+          },
+          "status": {
+            "$ref": "#/$defs/TaskValidationPolicyReportStatus"
+          },
+          "coverage": {
+            "$ref": "./tools.schema.json#/$defs/ToolCoverage"
+          },
+          "violations": {
+            "type": "array",
+            "items": {
+              "$ref": "#/$defs/TaskPolicyViolation"
+            }
+          },
+          "dependencyEvidenceRefs": {
+            "type": "array",
+            "items": {
+              "$ref": "./common.schema.json#/$defs/ResourceRef"
+            }
+          }
+        }
+      },
+      "TaskFinalizationReceipt": {
+        "title": "TaskFinalizationReceipt",
+        "description": "Frozen task-finalization-receipt@1 (SPEC v0.3a §EX-6.1). The independent association of the required policy bindings, the archived policy reports and the exact result manifest/digests. The receipt references the reports and the result; the result manifest and reports never carry a receipt ref, so the artifact graph stays acyclic.",
+        "type": "object",
+        "additionalProperties": false,
+        "required": [
+          "schemaVersion",
+          "executionBindingRef",
+          "taskBindingRef",
+          "inputSnapshotRef",
+          "inputSnapshotDigest",
+          "parametersRef",
+          "parametersDigest",
+          "outputArtifactRefs",
+          "outputDigests",
+          "typedResultManifestRef",
+          "typedResultManifestDigest",
+          "requiredPolicyBindings",
+          "policyReportRefs"
+        ],
+        "properties": {
+          "schemaVersion": {
+            "const": "task-finalization-receipt@1"
+          },
+          "executionBindingRef": {
+            "$ref": "./common.schema.json#/$defs/ResourceRef"
+          },
+          "taskBindingRef": {
+            "$ref": "./common.schema.json#/$defs/VersionRef"
+          },
+          "inputSnapshotRef": {
+            "$ref": "./common.schema.json#/$defs/ResourceRef"
+          },
+          "inputSnapshotDigest": {
+            "$ref": "./common.schema.json#/$defs/Sha256Digest"
+          },
+          "parametersRef": {
+            "$ref": "./common.schema.json#/$defs/ResourceRef"
+          },
+          "parametersDigest": {
+            "$ref": "./common.schema.json#/$defs/Sha256Digest"
+          },
+          "outputArtifactRefs": {
+            "type": "array",
+            "items": {
+              "$ref": "./common.schema.json#/$defs/ResourceRef"
+            }
+          },
+          "outputDigests": {
+            "type": "array",
+            "items": {
+              "$ref": "./common.schema.json#/$defs/Sha256Digest"
+            }
+          },
+          "typedResultManifestRef": {
+            "$ref": "./common.schema.json#/$defs/ResourceRef"
+          },
+          "typedResultManifestDigest": {
+            "$ref": "./common.schema.json#/$defs/Sha256Digest"
+          },
+          "requiredPolicyBindings": {
+            "type": "array",
+            "items": {
+              "$ref": "#/$defs/TaskValidationPolicyBinding"
+            }
+          },
+          "policyReportRefs": {
+            "type": "array",
+            "items": {
+              "$ref": "./common.schema.json#/$defs/ResourceRef"
+            }
+          }
+        }
+      },
+      "PublishedTaskBindingIdentity": {
+        "title": "PublishedTaskBindingIdentity",
+        "description": "The id/version identity of a task binding. It is used inside PublishedTaskBindingBody, which excludes the full VersionRef (and therefore its digest) so the body digest can be computed without a self-reference.",
+        "type": "object",
+        "additionalProperties": false,
+        "required": [
+          "id",
+          "version"
+        ],
+        "properties": {
+          "id": {
+            "$ref": "./common.schema.json#/$defs/NonEmptyString"
+          },
+          "version": {
+            "$ref": "./common.schema.json#/$defs/Semver"
+          }
+        }
+      },
+      "PublishedTaskBindingBody": {
+        "title": "PublishedTaskBindingBody",
+        "description": "Canonical hash body of a published task binding (SPEC v0.3a §EX-2.1). It fixes the id/version identity, action declaration, kind, parameter schema digest, required capabilities/readiness, result schema and optional operation/policy/plan pins — but not its own taskBindingRef. The envelope PublishedTaskBinding adds that ref after this body is hashed.",
+        "type": "object",
+        "additionalProperties": false,
+        "required": [
+          "schemaVersion",
+          "taskBindingIdentity",
+          "actionDefinitionRef",
+          "kind",
+          "parameterSchema",
+          "parameterSchemaDigest",
+          "requiredCapabilities",
+          "requiredReadiness",
+          "resultSchemaRef"
+        ],
+        "properties": {
+          "schemaVersion": {
+            "const": "published-task-binding@1"
+          },
+          "taskBindingIdentity": {
+            "$ref": "#/$defs/PublishedTaskBindingIdentity"
+          },
+          "actionDefinitionRef": {
+            "$ref": "./common.schema.json#/$defs/VersionRef"
+          },
+          "kind": {
+            "$ref": "#/$defs/TaskKind"
+          },
+          "parameterSchema": {
+            "description": "JSON Schema for the task parameters. Arbitrary JSON by design; a run still validates concrete parameters against it.",
+            "type": "object"
+          },
+          "parameterSchemaDigest": {
+            "$ref": "./common.schema.json#/$defs/Sha256Digest"
+          },
+          "requiredCapabilities": {
+            "type": "array",
+            "items": {
+              "$ref": "./common.schema.json#/$defs/NonEmptyString"
+            },
+            "uniqueItems": true
+          },
+          "requiredReadiness": {
+            "type": "array",
+            "items": {
+              "$ref": "./projects.schema.json#/$defs/ProjectReadinessKind"
+            },
+            "uniqueItems": true
+          },
+          "resultSchemaRef": {
+            "$ref": "./common.schema.json#/$defs/VersionRef"
+          },
+          "operationRef": {
+            "$ref": "./operations.schema.json#/$defs/OperationRef"
+          },
+          "registeredOperationDigest": {
+            "$ref": "./common.schema.json#/$defs/Sha256Digest"
+          },
+          "validationPolicies": {
+            "type": "array",
+            "items": {
+              "$ref": "#/$defs/TaskValidationPolicyBinding"
+            }
+          },
+          "fixedPlanRef": {
+            "$ref": "./common.schema.json#/$defs/ResourceRef"
+          }
+        }
+      },
+      "PublishedTaskBinding": {
+        "title": "PublishedTaskBinding",
+        "description": "Flat read envelope of a published task binding. It repeats the body declarations and adds the complete taskBindingRef; API consumers use `binding.validationPolicies` as shown in the spec.",
+        "type": "object",
+        "additionalProperties": false,
+        "required": [
+          "schemaVersion",
+          "taskBindingRef",
+          "actionDefinitionRef",
+          "kind",
+          "parameterSchema",
+          "parameterSchemaDigest",
+          "requiredCapabilities",
+          "requiredReadiness",
+          "resultSchemaRef"
+        ],
+        "properties": {
+          "schemaVersion": {
+            "const": "published-task-binding@1"
+          },
+          "taskBindingRef": {
+            "$ref": "./common.schema.json#/$defs/VersionRef"
+          },
+          "actionDefinitionRef": {
+            "$ref": "./common.schema.json#/$defs/VersionRef"
+          },
+          "kind": {
+            "$ref": "#/$defs/TaskKind"
+          },
+          "parameterSchema": {
+            "description": "JSON Schema for the task parameters. Arbitrary JSON by design; a run still validates concrete parameters against it.",
+            "type": "object"
+          },
+          "parameterSchemaDigest": {
+            "$ref": "./common.schema.json#/$defs/Sha256Digest"
+          },
+          "requiredCapabilities": {
+            "type": "array",
+            "items": {
+              "$ref": "./common.schema.json#/$defs/NonEmptyString"
+            },
+            "uniqueItems": true
+          },
+          "requiredReadiness": {
+            "type": "array",
+            "items": {
+              "$ref": "./projects.schema.json#/$defs/ProjectReadinessKind"
+            },
+            "uniqueItems": true
+          },
+          "resultSchemaRef": {
+            "$ref": "./common.schema.json#/$defs/VersionRef"
+          },
+          "operationRef": {
+            "$ref": "./operations.schema.json#/$defs/OperationRef"
+          },
+          "registeredOperationDigest": {
+            "$ref": "./common.schema.json#/$defs/Sha256Digest"
+          },
+          "validationPolicies": {
+            "type": "array",
+            "items": {
+              "$ref": "#/$defs/TaskValidationPolicyBinding"
+            }
+          },
+          "fixedPlanRef": {
+            "$ref": "./common.schema.json#/$defs/ResourceRef"
+          }
+        }
+      },
+      "RunExecutionQuestionRequest": {
+        "title": "RunExecutionQuestionRequest",
+        "description": "A question-mode execution request: the server resolves the allowed published task within the pinned project revision and approved input.",
+        "type": "object",
+        "additionalProperties": false,
+        "required": [
+          "mode",
+          "projectRevisionRef",
+          "inputSnapshotRef",
+          "inputSnapshotDigest"
+        ],
+        "properties": {
+          "mode": {
+            "const": "question"
+          },
+          "projectRevisionRef": {
+            "$ref": "./projects.schema.json#/$defs/ProjectRevisionRef"
+          },
+          "inputSnapshotRef": {
+            "$ref": "./common.schema.json#/$defs/ResourceRef"
+          },
+          "inputSnapshotDigest": {
+            "$ref": "./common.schema.json#/$defs/Sha256Digest"
+          }
+        }
+      },
+      "RunExecutionTaskRequest": {
+        "title": "RunExecutionTaskRequest",
+        "description": "A task-mode execution request: an explicitly bound published task with parameters. The parameters are re-validated server-side against the binding's parameter schema.",
+        "type": "object",
+        "additionalProperties": false,
+        "required": [
+          "mode",
+          "projectRevisionRef",
+          "inputSnapshotRef",
+          "inputSnapshotDigest",
+          "taskBindingRef",
+          "parameters"
+        ],
+        "properties": {
+          "mode": {
+            "const": "task"
+          },
+          "projectRevisionRef": {
+            "$ref": "./projects.schema.json#/$defs/ProjectRevisionRef"
+          },
+          "inputSnapshotRef": {
+            "$ref": "./common.schema.json#/$defs/ResourceRef"
+          },
+          "inputSnapshotDigest": {
+            "$ref": "./common.schema.json#/$defs/Sha256Digest"
+          },
+          "taskBindingRef": {
+            "$ref": "./common.schema.json#/$defs/VersionRef"
+          },
+          "parameters": {
+            "type": "object"
+          }
+        }
+      },
+      "RunExecutionRequest": {
+        "title": "RunExecutionRequest",
+        "description": "The optional `task` field added to the existing POST /runs request. The two modes are discriminated by `mode`; `question` keeps the existing behaviour and `task` uses a fixed binding and an explicit plan.",
+        "oneOf": [
+          {
+            "$ref": "#/$defs/RunExecutionQuestionRequest"
+          },
+          {
+            "$ref": "#/$defs/RunExecutionTaskRequest"
+          }
+        ]
+      },
+      "EffectiveTime": {
+        "title": "EffectiveTime",
+        "description": "The business-valid instant and the recorded-log sequence a run is pinned to. Both are needed so a resume never mixes a newer attribute with an older exemption.",
+        "type": "object",
+        "additionalProperties": false,
+        "required": [
+          "validAt",
+          "asOfRecordedSeq"
+        ],
+        "properties": {
+          "validAt": {
+            "$ref": "./common.schema.json#/$defs/Rfc3339UtcTimestamp"
+          },
+          "asOfRecordedSeq": {
+            "$ref": "./common.schema.json#/$defs/RevisionString"
+          }
+        }
+      },
+      "RunExecutionBinding": {
+        "title": "RunExecutionBinding",
+        "description": "The immutable execution binding the server creates for a run (SPEC v0.3a §EX-2.1). It pins the request, resolved profile, runtime, allowed task bindings, the input manifest digest at creation, effective limits and effective time. It is archived and referenced by RunManifest.executionBindingRef; later evidence appends to the manifest without rewriting this binding.",
+        "type": "object",
+        "additionalProperties": false,
+        "required": [
+          "schemaVersion",
+          "runId",
+          "request",
+          "resolvedProfileRef",
+          "runtimeRef",
+          "allowedTaskBindingRefs",
+          "inputManifestDigestAtCreation",
+          "effectiveLimitsRef",
+          "effectiveTime"
+        ],
+        "properties": {
+          "schemaVersion": {
+            "const": "run-execution-binding@1"
+          },
+          "runId": {
+            "$ref": "./common.schema.json#/$defs/Uuid"
+          },
+          "request": {
+            "$ref": "#/$defs/RunExecutionRequest"
+          },
+          "resolvedProfileRef": {
+            "$ref": "./industry.schema.json#/$defs/ResolvedProfileRef"
+          },
+          "runtimeRef": {
+            "$ref": "./common.schema.json#/$defs/VersionRef"
+          },
+          "allowedTaskBindingRefs": {
+            "type": "array",
+            "items": {
+              "$ref": "./common.schema.json#/$defs/VersionRef"
+            }
+          },
+          "inputManifestDigestAtCreation": {
+            "$ref": "./common.schema.json#/$defs/Sha256Digest"
+          },
+          "effectiveLimitsRef": {
+            "$ref": "./common.schema.json#/$defs/VersionRef"
+          },
+          "effectiveTime": {
+            "$ref": "#/$defs/EffectiveTime"
+          }
+        }
+      },
+      "TaskCapabilityState": {
+        "title": "TaskCapabilityState",
+        "description": "Whether a declared task can actually execute. `not_ready` means the semantics are published but a required projection/capability is missing; `unavailable` means no implementation is bound.",
+        "type": "string",
+        "enum": [
+          "available",
+          "not_ready",
+          "unavailable"
+        ]
+      },
+      "CapabilityBlocker": {
+        "title": "CapabilityBlocker",
+        "description": "One actionable reason a task is not available. `code` is the machine contract (registered error catalogue); `message` is user-facing copy. No secrets or another project's data appear here.",
+        "type": "object",
+        "additionalProperties": false,
+        "required": [
+          "code",
+          "message",
+          "retryable"
+        ],
+        "properties": {
+          "code": {
+            "$ref": "./common.schema.json#/$defs/NonEmptyString"
+          },
+          "message": {
+            "$ref": "./common.schema.json#/$defs/NonEmptyString"
+          },
+          "retryable": {
+            "type": "boolean"
+          },
+          "capabilityName": {
+            "$ref": "./common.schema.json#/$defs/NonEmptyString"
+          },
+          "readinessKind": {
+            "$ref": "./projects.schema.json#/$defs/ProjectReadinessKind"
+          }
+        }
+      },
+      "TaskCapabilityStatus": {
+        "title": "TaskCapabilityStatus",
+        "description": "Capability/readiness status of one published task binding for a project revision. It reports the declared requirements and the concrete blockers so a UI can show what to fix instead of a bare failure.",
+        "type": "object",
+        "additionalProperties": false,
+        "required": [
+          "schemaVersion",
+          "taskBindingRef",
+          "state",
+          "requiredCapabilities",
+          "requiredReadiness",
+          "blockers"
+        ],
+        "properties": {
+          "schemaVersion": {
+            "const": "task-capability-status@1"
+          },
+          "taskBindingRef": {
+            "$ref": "./common.schema.json#/$defs/VersionRef"
+          },
+          "state": {
+            "$ref": "#/$defs/TaskCapabilityState"
+          },
+          "requiredCapabilities": {
+            "type": "array",
+            "items": {
+              "$ref": "./common.schema.json#/$defs/NonEmptyString"
+            },
+            "uniqueItems": true
+          },
+          "requiredReadiness": {
+            "type": "array",
+            "items": {
+              "$ref": "./projects.schema.json#/$defs/ProjectReadinessKind"
+            },
+            "uniqueItems": true
+          },
+          "blockers": {
+            "type": "array",
+            "items": {
+              "$ref": "#/$defs/CapabilityBlocker"
+            }
+          }
+        }
+      }
+    }
+  },
+  {
+    "$schema": "https://json-schema.org/draft/2020-12/schema",
     "$id": "https://ontology.local/schema/tools.schema.json",
     "title": "ToolContracts",
     "$comment": "ADR-04/C4: exactly four model-visible read-only data tools. verify_result and final_answer are controller services and are deliberately absent from the tool catalogue. The ToolContext is host-injected and is never reachable from a tool argument schema.",
@@ -5951,6 +7245,61 @@ export const SCHEMA_DOCUMENTS: readonly JsonSchemaObject[] = [
           "facts"
         ]
       },
+      "OntologyRuleJudgementRequest": {
+        "title": "OntologyRuleJudgementRequest",
+        "description": "A typed, bounded request to derive one rule judgement from an already-materialized computation artifact. It carries no SQL, endpoint or script; the host resolves the exact rule instance by its own execution binding.",
+        "type": "object",
+        "additionalProperties": false,
+        "required": [
+          "kind",
+          "ruleRef",
+          "definitionRef",
+          "objectId",
+          "subjectEntityId",
+          "validAt",
+          "asOfRecordedSeq"
+        ],
+        "properties": {
+          "kind": {
+            "type": "string",
+            "const": "rule_judgement"
+          },
+          "ruleRef": {
+            "$ref": "./common.schema.json#/$defs/VersionRef"
+          },
+          "definitionRef": {
+            "$ref": "./common.schema.json#/$defs/VersionRef"
+          },
+          "objectId": {
+            "$ref": "./common.schema.json#/$defs/NonEmptyString"
+          },
+          "subjectEntityId": {
+            "$ref": "./common.schema.json#/$defs/NonEmptyString"
+          },
+          "validAt": {
+            "$ref": "./common.schema.json#/$defs/Rfc3339UtcTimestamp"
+          },
+          "asOfRecordedSeq": {
+            "$ref": "./common.schema.json#/$defs/RevisionString"
+          },
+          "judgementAxis": {
+            "type": "string",
+            "enum": [
+              "applicability",
+              "business_proposition"
+            ]
+          }
+        }
+      },
+      "OntologyLookupRequest": {
+        "title": "OntologyLookupRequest",
+        "description": "The typed intent-specific request that accompanies an ontology_lookup intent. Only rule judgement is defined in this phase; the legacy intent-only path is unchanged.",
+        "oneOf": [
+          {
+            "$ref": "#/$defs/OntologyRuleJudgementRequest"
+          }
+        ]
+      },
       "OntologyConceptRef": {
         "title": "OntologyConceptRef",
         "type": "object",
@@ -5997,6 +7346,9 @@ export const SCHEMA_DOCUMENTS: readonly JsonSchemaObject[] = [
           },
           "intent": {
             "$ref": "#/$defs/OntologyLookupIntent"
+          },
+          "request": {
+            "$ref": "#/$defs/OntologyLookupRequest"
           },
           "timeContext": {
             "$ref": "#/$defs/TimeContext"

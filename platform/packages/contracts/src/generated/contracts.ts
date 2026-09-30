@@ -2,19 +2,24 @@
 /* Source of truth: packages/contracts/schema/  |  Regenerate: pnpm --filter @ontology/contracts run generate:contracts */
 
 /**
+ * Draft lifecycle. `published` and `archived` are terminal for the current head; editing appends a new draft revision.
+ *
+ * This interface was referenced by `OntologyContracts`'s JSON-Schema
+ * via the `definition` "IndustryWorkspaceState".
+ */
+export type IndustryWorkspaceState = 'draft' | 'review' | 'published' | 'archived'
+/**
+ * This interface was referenced by `OntologyContracts`'s JSON-Schema
+ * via the `definition` "NonEmptyString".
+ */
+export type NonEmptyString = string
+/**
  * RFC3339 instant normalized to UTC. Only the literal 'Z' offset is accepted; a separate IanaTimeZone field carries the user/billing zone.
  *
  * This interface was referenced by `OntologyContracts`'s JSON-Schema
  * via the `definition` "Rfc3339UtcTimestamp".
  */
 export type Rfc3339UtcTimestamp = string
-/**
- * IANA time zone name (e.g. Asia/Shanghai). Stored separately from instants so no local-offset arithmetic happens on the wire.
- *
- * This interface was referenced by `OntologyContracts`'s JSON-Schema
- * via the `definition` "IanaTimeZone".
- */
-export type IanaTimeZone = string
 /**
  * Canonical lowercase UUID identifying an internal platform resource.
  *
@@ -23,44 +28,6 @@ export type IanaTimeZone = string
  */
 export type Uuid = string
 /**
- * This interface was referenced by `OntologyContracts`'s JSON-Schema
- * via the `definition` "Semver".
- */
-export type Semver = string
-/**
- * Exact decimal rendered as a string. Exponent notation and JSON numbers are rejected so money and physical quantities never lose precision in billing paths.
- *
- * This interface was referenced by `OntologyContracts`'s JSON-Schema
- * via the `definition` "DecimalString".
- */
-export type DecimalString = string
-/**
- * ISO 4217 alphabetic currency code.
- *
- * This interface was referenced by `OntologyContracts`'s JSON-Schema
- * via the `definition` "CurrencyCode".
- */
-export type CurrencyCode = string
-/**
- * Canonical unit token (e.g. kWh, kW, Wh, W, %). A percent sign is also valid as a standalone token.
- *
- * This interface was referenced by `OntologyContracts`'s JSON-Schema
- * via the `definition` "UnitCode".
- */
-export type UnitCode = string
-/**
- * Content integrity digest. Algorithm is prefixed so the digest scheme can evolve without ambiguity.
- *
- * This interface was referenced by `OntologyContracts`'s JSON-Schema
- * via the `definition` "Sha256Digest".
- */
-export type Sha256Digest = string
-/**
- * This interface was referenced by `OntologyContracts`'s JSON-Schema
- * via the `definition` "NonEmptyString".
- */
-export type NonEmptyString = string
-/**
  * Lowercase dotted-free namespace owned by an industry pack or adapter.
  *
  * This interface was referenced by `OntologyContracts`'s JSON-Schema
@@ -68,12 +35,24 @@ export type NonEmptyString = string
  */
 export type Namespace = string
 /**
- * Opaque pagination cursor. Clients must echo it verbatim and never parse it.
+ * Monotonic revision rendered as a decimal string so large integers survive JavaScript number precision.
  *
  * This interface was referenced by `OntologyContracts`'s JSON-Schema
- * via the `definition` "OpaqueCursor".
+ * via the `definition` "RevisionString".
  */
-export type OpaqueCursor = string
+export type RevisionString = string
+/**
+ * This interface was referenced by `OntologyContracts`'s JSON-Schema
+ * via the `definition` "Semver".
+ */
+export type Semver = string
+/**
+ * Content integrity digest. Algorithm is prefixed so the digest scheme can evolve without ambiguity.
+ *
+ * This interface was referenced by `OntologyContracts`'s JSON-Schema
+ * via the `definition` "Sha256Digest".
+ */
+export type Sha256Digest = string
 /**
  * This interface was referenced by `OntologyContracts`'s JSON-Schema
  * via the `definition` "ResourceKind".
@@ -96,6 +75,41 @@ export type ResourceKind =
   | 'tool_result'
   | 'job'
   | 'source'
+/**
+ * IANA time zone name (e.g. Asia/Shanghai). Stored separately from instants so no local-offset arithmetic happens on the wire.
+ *
+ * This interface was referenced by `OntologyContracts`'s JSON-Schema
+ * via the `definition` "IanaTimeZone".
+ */
+export type IanaTimeZone = string
+/**
+ * Exact decimal rendered as a string. Exponent notation and JSON numbers are rejected so money and physical quantities never lose precision in billing paths.
+ *
+ * This interface was referenced by `OntologyContracts`'s JSON-Schema
+ * via the `definition` "DecimalString".
+ */
+export type DecimalString = string
+/**
+ * ISO 4217 alphabetic currency code.
+ *
+ * This interface was referenced by `OntologyContracts`'s JSON-Schema
+ * via the `definition` "CurrencyCode".
+ */
+export type CurrencyCode = string
+/**
+ * Canonical unit token (e.g. kWh, kW, Wh, W, %). A percent sign is also valid as a standalone token.
+ *
+ * This interface was referenced by `OntologyContracts`'s JSON-Schema
+ * via the `definition` "UnitCode".
+ */
+export type UnitCode = string
+/**
+ * Opaque pagination cursor. Clients must echo it verbatim and never parse it.
+ *
+ * This interface was referenced by `OntologyContracts`'s JSON-Schema
+ * via the `definition` "OpaqueCursor".
+ */
+export type OpaqueCursor = string
 /**
  * Snapshot consistency actually offered by a backend. repeatable_read is only valid inside the originating transaction; it must never be advertised as a permanently re-readable version.
  *
@@ -134,13 +148,6 @@ export type ByteSize = number
  * via the `definition` "DurationMs".
  */
 export type DurationMs = number
-/**
- * Monotonic revision rendered as a decimal string so large integers survive JavaScript number precision.
- *
- * This interface was referenced by `OntologyContracts`'s JSON-Schema
- * via the `definition` "RevisionString".
- */
-export type RevisionString = string
 /**
  * This interface was referenced by `OntologyContracts`'s JSON-Schema
  * via the `definition` "RunId".
@@ -525,6 +532,27 @@ export type DecisionQuestionType = 'choice' | 'score' | 'noul'
  */
 export type DecisionQuestion = ChoiceQuestion | ScoreQuestion | NoulQuestion
 /**
+ * The three independent project projections. A task only waits on the projections its binding requires: a compute task is not blocked by an unrelated document index.
+ *
+ * This interface was referenced by `OntologyContracts`'s JSON-Schema
+ * via the `definition` "ProjectReadinessKind".
+ */
+export type ProjectReadinessKind = 'published_semantics' | 'dataset' | 'document_index'
+/**
+ * State of one readiness projection. `ready` is only set by a CAS activation after the target digest and coverage were verified; the fallback is never a startup snapshot.
+ *
+ * This interface was referenced by `OntologyContracts`'s JSON-Schema
+ * via the `definition` "ProjectReadinessState".
+ */
+export type ProjectReadinessState = 'pending' | 'building' | 'ready' | 'failed' | 'revoked'
+/**
+ * The projected target: a ResourceRef for a built dataset/index snapshot, or a VersionRef for a published semantic revision.
+ *
+ * This interface was referenced by `OntologyContracts`'s JSON-Schema
+ * via the `definition` "ReadinessTargetRef".
+ */
+export type ReadinessTargetRef = ResourceRef | VersionRef
+/**
  * This interface was referenced by `OntologyContracts`'s JSON-Schema
  * via the `definition` "RuntimeEventType".
  */
@@ -565,6 +593,47 @@ export type PlanFailureBehaviour = 'abort' | 'continue'
  */
 export type PlanArgumentSource = PlanLiteralArgument | PlanPredecessorArgument
 /**
+ * The bounded set of published task kinds. Model proposals may only select one of these; there is no open-ended tool or script kind.
+ *
+ * This interface was referenced by `OntologyContracts`'s JSON-Schema
+ * via the `definition` "TaskKind".
+ */
+export type TaskKind =
+  | 'published_facts'
+  | 'relations'
+  | 'rule_judgement'
+  | 'structured_query'
+  | 'document_qa'
+  | 'compute'
+/**
+ * Input policies run before a compute/answer step; result policies run before the typed writer.
+ *
+ * This interface was referenced by `OntologyContracts`'s JSON-Schema
+ * via the `definition` "TaskValidationPolicyStage".
+ */
+export type TaskValidationPolicyStage = 'input' | 'result'
+/**
+ * The only admissible policy verdicts. `pass` is the sole value that lets a required policy satisfy a formal result; `fail`, `unknown` and `incomplete` stay blocking and are never coerced to success.
+ *
+ * This interface was referenced by `OntologyContracts`'s JSON-Schema
+ * via the `definition` "TaskValidationPolicyReportStatus".
+ */
+export type TaskValidationPolicyReportStatus = 'pass' | 'fail' | 'unknown' | 'incomplete'
+/**
+ * The optional `task` field added to the existing POST /runs request. The two modes are discriminated by `mode`; `question` keeps the existing behaviour and `task` uses a fixed binding and an explicit plan.
+ *
+ * This interface was referenced by `OntologyContracts`'s JSON-Schema
+ * via the `definition` "RunExecutionRequest".
+ */
+export type RunExecutionRequest = RunExecutionQuestionRequest | RunExecutionTaskRequest
+/**
+ * Whether a declared task can actually execute. `not_ready` means the semantics are published but a required projection/capability is missing; `unavailable` means no implementation is bound.
+ *
+ * This interface was referenced by `OntologyContracts`'s JSON-Schema
+ * via the `definition` "TaskCapabilityState".
+ */
+export type TaskCapabilityState = 'available' | 'not_ready' | 'unavailable'
+/**
  * Controller-owned services that are NOT model-selectable tools.
  *
  * This interface was referenced by `OntologyContracts`'s JSON-Schema
@@ -583,6 +652,13 @@ export type ToolResultStatus = 'ok' | 'partial' | 'empty' | 'error'
  * via the `definition` "OntologyLookupIntent".
  */
 export type OntologyLookupIntent = 'definitions' | 'resolve' | 'relations' | 'rules' | 'facts'
+/**
+ * The typed intent-specific request that accompanies an ontology_lookup intent. Only rule judgement is defined in this phase; the legacy intent-only path is unchanged.
+ *
+ * This interface was referenced by `OntologyContracts`'s JSON-Schema
+ * via the `definition` "OntologyLookupRequest".
+ */
+export type OntologyLookupRequest = OntologyRuleJudgementRequest
 /**
  * C4 discriminated union: describe | query(mode direct|semantic) | compute. Every branch has a complete schema.
  *
@@ -607,6 +683,94 @@ export interface OntologyContracts {
   contractVersion: '0.2.0'
 }
 /**
+ * Declared applicability window of an industry workspace. `region` names a business region, not a physical location; the window is informational and every resolved run still pins exact revisions.
+ *
+ * This interface was referenced by `OntologyContracts`'s JSON-Schema
+ * via the `definition` "IndustryWorkspaceApplicability".
+ */
+export interface IndustryWorkspaceApplicability {
+  region?: NonEmptyString
+  validFrom?: Rfc3339UtcTimestamp
+  validTo?: Rfc3339UtcTimestamp
+}
+/**
+ * The business boundary the workspace models: goals it targets, what is in scope and what is explicitly excluded, plus applicability. Excluded entries are kept so the boundary stays falsifiable instead of silently shrinking.
+ *
+ * This interface was referenced by `OntologyContracts`'s JSON-Schema
+ * via the `definition` "IndustryWorkspaceBoundary".
+ */
+export interface IndustryWorkspaceBoundary {
+  goals: NonEmptyString[]
+  included: NonEmptyString[]
+  excluded: NonEmptyString[]
+  applicability: IndustryWorkspaceApplicability
+}
+/**
+ * An industry workspace read shape. `headRevision` is the mutable draft head; the latest published pack is pinned separately, so a newer package never rewrites an existing workspace or project.
+ *
+ * This interface was referenced by `OntologyContracts`'s JSON-Schema
+ * via the `definition` "IndustryWorkspace".
+ */
+export interface IndustryWorkspace {
+  workspaceId: Uuid
+  namespace: Namespace
+  displayName: NonEmptyString
+  boundary: IndustryWorkspaceBoundary
+  headRevision: RevisionString
+  latestPublishedPackRef?: VersionRef
+  state: IndustryWorkspaceState
+}
+/**
+ * Reference to a published, immutable artifact (component, industry pack, policy, schema, operation).
+ *
+ * This interface was referenced by `OntologyContracts`'s JSON-Schema
+ * via the `definition` "VersionRef".
+ */
+export interface VersionRef {
+  id: NonEmptyString
+  version: Semver
+  digest: Sha256Digest
+}
+/**
+ * A logical definition id pinned to one immutable candidate version. A content-changing edit appends a new candidate id; the digest lets a reader detect a candidate that was replaced instead of edited.
+ *
+ * This interface was referenced by `OntologyContracts`'s JSON-Schema
+ * via the `definition` "AssetDraftCandidateRef".
+ */
+export interface AssetDraftCandidateRef {
+  logicalId: NonEmptyString
+  candidateId: Uuid
+  digest: Sha256Digest
+}
+/**
+ * One append-only draft revision of an industry workspace. `documentSetRef` fixes the sources the draft was generated from; candidate refs point at immutable candidate versions, never at mutable payloads.
+ *
+ * This interface was referenced by `OntologyContracts`'s JSON-Schema
+ * via the `definition` "AssetDraftVersion".
+ */
+export interface AssetDraftVersion {
+  workspaceId: Uuid
+  revision: RevisionString
+  digest: Sha256Digest
+  basePackRef?: VersionRef
+  documentSetRef: ResourceRef
+  candidateRefs: AssetDraftCandidateRef[]
+  syntheticExampleSetRef?: ResourceRef
+  validationRef?: ResourceRef
+}
+/**
+ * Reference to an internal platform resource. Internal resources use UUID ids; digests pin the exact immutable revision.
+ *
+ * This interface was referenced by `OntologyContracts`'s JSON-Schema
+ * via the `definition` "ResourceRef".
+ */
+export interface ResourceRef {
+  id: Uuid
+  version: Semver
+  digest: Sha256Digest
+  kind: ResourceKind
+}
+/**
  * Physical quantity with an exact decimal amount and a canonical unit. Never a JSON float.
  *
  * This interface was referenced by `OntologyContracts`'s JSON-Schema
@@ -625,29 +789,6 @@ export interface DecimalQuantity {
 export interface Money {
   amount: DecimalString
   currency: CurrencyCode
-}
-/**
- * Reference to a published, immutable artifact (component, industry pack, policy, schema, operation).
- *
- * This interface was referenced by `OntologyContracts`'s JSON-Schema
- * via the `definition` "VersionRef".
- */
-export interface VersionRef {
-  id: NonEmptyString
-  version: Semver
-  digest: Sha256Digest
-}
-/**
- * Reference to an internal platform resource. Internal resources use UUID ids; digests pin the exact immutable revision.
- *
- * This interface was referenced by `OntologyContracts`'s JSON-Schema
- * via the `definition` "ResourceRef".
- */
-export interface ResourceRef {
-  id: Uuid
-  version: Semver
-  digest: Sha256Digest
-  kind: ResourceKind
 }
 /**
  * Source-system identity: the native id is kept verbatim and disambiguated by namespace instead of being rewritten into a canonical id.
@@ -2240,6 +2381,17 @@ export interface DecisionResult {
   fallback?: DecisionFallback
 }
 /**
+ * Data-only deployment/industry declaration of a mountable scenario module: the registered module ref, the task bindings it offers and the capabilities it needs. It never contains React, HTML, JS paths or a remote dynamic import. An unregistered module renders the generic verified result instead of a professional view.
+ *
+ * This interface was referenced by `OntologyContracts`'s JSON-Schema
+ * via the `definition` "UiCapabilityMetadata".
+ */
+export interface UiCapabilityMetadata {
+  moduleRef: VersionRef
+  taskBindingRefs: VersionRef[]
+  requiredCapabilities: NonEmptyString[]
+}
+/**
  * The set of compute operations a deployment has registered. The registry is versioned and digested; adding an operation is a new registry version, never an in-place mutation.
  *
  * This interface was referenced by `OntologyContracts`'s JSON-Schema
@@ -2250,6 +2402,163 @@ export interface OperationRegistry {
   registryVersion: Semver
   registryDigest: Sha256Digest
   operations: RegisteredOperation[]
+}
+/**
+ * Exact reference to one immutable project revision. `digest` is computed over ProjectRevisionBody and pins the revision so a reader can detect drift instead of trusting a mutable head.
+ *
+ * This interface was referenced by `OntologyContracts`'s JSON-Schema
+ * via the `definition` "ProjectRevisionRef".
+ */
+export interface ProjectRevisionRef {
+  projectId: Uuid
+  revision: RevisionString
+  digest: Sha256Digest
+}
+/**
+ * Canonical hash body of a project revision. It fixes the industry/definition/mapping/profile/document/input pins, the semantic publication refs, the source visibility epoch and the change reason. It deliberately excludes the outer `ref` and any readiness receipt: those are added by ProjectRevision after this body is serialized and hashed.
+ *
+ * This interface was referenced by `OntologyContracts`'s JSON-Schema
+ * via the `definition` "ProjectRevisionBody".
+ */
+export interface ProjectRevisionBody {
+  schemaVersion: 'project-revision@1'
+  projectId: Uuid
+  revision: RevisionString
+  industryPackRef: VersionRef
+  definitionRef: VersionRef
+  /**
+   * @minItems 1
+   */
+  mappingRefs: MappingRef[]
+  profileRef: ResolvedProfileRef
+  documentSetRef: ResourceRef
+  approvedInputRef?: ResourceRef
+  datasetSnapshotRef?: ResourceRef
+  documentIndexRef?: ResourceRef
+  semanticPublicationRefs: VersionRef[]
+  sourceVisibilityEpoch: RevisionString
+  changeReason: NonEmptyString
+}
+/**
+ * Read envelope of a project revision. It repeats the body pins inline and adds `ref`, whose digest is computed over ProjectRevisionBody. Readiness is projected separately; it is never back-filled into this immutable revision.
+ *
+ * This interface was referenced by `OntologyContracts`'s JSON-Schema
+ * via the `definition` "ProjectRevision".
+ */
+export interface ProjectRevision {
+  ref: ProjectRevisionRef
+  industryPackRef: VersionRef
+  definitionRef: VersionRef
+  /**
+   * @minItems 1
+   */
+  mappingRefs: MappingRef[]
+  profileRef: ResolvedProfileRef
+  documentSetRef: ResourceRef
+  approvedInputRef?: ResourceRef
+  datasetSnapshotRef?: ResourceRef
+  documentIndexRef?: ResourceRef
+  semanticPublicationRefs: VersionRef[]
+  sourceVisibilityEpoch: RevisionString
+  changeReason: NonEmptyString
+}
+/**
+ * Record reconciliation for one approved-input snapshot. Every record is accounted for exactly once: total = confirmed + approved + excluded + pending + failed is not asserted here, but the counters are reported separately so a partial input is never presented as complete.
+ *
+ * This interface was referenced by `OntologyContracts`'s JSON-Schema
+ * via the `definition` "ProjectInputCounts".
+ */
+export interface ProjectInputCounts {
+  total: number
+  confirmed: number
+  approved: number
+  excluded: number
+  pending: number
+  failed: number
+}
+/**
+ * One bounded page of an approved-input snapshot. The ref points at the archived page artifact; first/last record ids let a reader prove stable order and detect a gap.
+ *
+ * This interface was referenced by `OntologyContracts`'s JSON-Schema
+ * via the `definition` "ProjectInputRecordPage".
+ */
+export interface ProjectInputRecordPage {
+  ref: ResourceRef
+  rowCount: number
+  firstRecordId: Uuid
+  lastRecordId: Uuid
+}
+/**
+ * A record explicitly excluded from the approved input, with the reason and actor so an exclusion can never be a silent omission.
+ *
+ * This interface was referenced by `OntologyContracts`'s JSON-Schema
+ * via the `definition` "ProjectInputExcludedRecord".
+ */
+export interface ProjectInputExcludedRecord {
+  recordId: Uuid
+  reason: NonEmptyString
+  actor: NonEmptyString
+}
+/**
+ * Immutable approved-input artifact body (SPEC v0.3a §3.2). It fixes the input revision, asset pins, paged records, reconciliation counts, exclusions and coverage, but it never contains the final ProjectRevisionRef or its own digest. The freezing order is: records+confirmation manifests, then this body, then inputSnapshotRef, then the project revision digest.
+ *
+ * This interface was referenced by `OntologyContracts`'s JSON-Schema
+ * via the `definition` "ApprovedInputSnapshot".
+ */
+export interface ApprovedInputSnapshot {
+  schemaVersion: 'project-input-snapshot@1'
+  projectId: Uuid
+  inputRevision: RevisionString
+  definitionRef: VersionRef
+  mappingRefs: MappingRef[]
+  recordPages: ProjectInputRecordPage[]
+  counts: ProjectInputCounts
+  excluded: ProjectInputExcludedRecord[]
+  coverage: CompletenessStatus
+  confirmationManifestRef: ResourceRef
+}
+/**
+ * Read envelope for an approved-input snapshot. `projectRevisionRef` and `inputSnapshotRef` live here, outside the hashed ApprovedInputSnapshot body, so the artifact digest can be computed before the project revision that references it exists.
+ *
+ * This interface was referenced by `OntologyContracts`'s JSON-Schema
+ * via the `definition` "ApprovedInputSnapshotEnvelope".
+ */
+export interface ApprovedInputSnapshotEnvelope {
+  projectRevisionRef: ProjectRevisionRef
+  inputSnapshotRef: ResourceRef
+  snapshot: ApprovedInputSnapshot
+}
+/**
+ * A classified, retryable-or-not failure on a readiness projection. The message is user-facing copy; the code is the machine contract.
+ *
+ * This interface was referenced by `OntologyContracts`'s JSON-Schema
+ * via the `definition` "ReadinessError".
+ */
+export interface ReadinessError {
+  code: NonEmptyString
+  retryable: boolean
+  message: NonEmptyString
+}
+/**
+ * Per-kind readiness of one project revision (SPEC v0.3a §3.2). It is a projection, not part of the project revision digest: `fenceRevision` and `targetDigest` make it safe to CAS-activate after a background build, and a revoked source can never be re-activated by a late build.
+ *
+ * This interface was referenced by `OntologyContracts`'s JSON-Schema
+ * via the `definition` "ReadinessProjection".
+ */
+export interface ReadinessProjection {
+  projectRevisionRef: ProjectRevisionRef
+  kind: ProjectReadinessKind
+  targetRef: ReadinessTargetRef
+  state: ProjectReadinessState
+  completeness: CompletenessStatus
+  expectedCount: number
+  processedCount: number
+  failedCount: number
+  targetDigest: Sha256Digest
+  receiptRef?: ResourceRef
+  fenceRevision: RevisionString
+  jobId?: Uuid
+  error?: ReadinessError
 }
 /**
  * Remaining run budget. One shared ledger for the whole run: replanning, repair, runtime turns and transport retries all draw from it and never reset it.
@@ -2530,6 +2839,223 @@ export interface RuntimeCancelReceipt {
   abandonedAttempts: AbandonedAttempt[]
 }
 /**
+ * Declares one required or optional registered validation policy for a task kind (SPEC v0.3a §EX-6.1). The registry digest pins the trusted implementation; a declared-but-unbound policy leaves the task not ready rather than silently skipped.
+ *
+ * This interface was referenced by `OntologyContracts`'s JSON-Schema
+ * via the `definition` "TaskValidationPolicyBinding".
+ */
+export interface TaskValidationPolicyBinding {
+  policyRef: VersionRef
+  stage: TaskValidationPolicyStage
+  required: boolean
+  registryDigest: Sha256Digest
+  reportSchemaRef: VersionRef
+}
+/**
+ * One located policy violation (SPEC v0.3a §EX-6.1). It references a row/column/pointer plus expected/actual strings computed by the policy handler, never free model prose.
+ *
+ * This interface was referenced by `OntologyContracts`'s JSON-Schema
+ * via the `definition` "TaskPolicyViolation".
+ */
+export interface TaskPolicyViolation {
+  code: NonEmptyString
+  rowKey?: string
+  columnRef?: string
+  pointer?: string
+  expected?: string
+  actual?: string
+}
+/**
+ * Frozen task-policy-report@1 (SPEC v0.3a §EX-6.1). A registered validation policy reports on exactly one stage; a result report points at the one output artifact and typed result manifest it validated. The report carries no finalization-receipt field, so a receipt can reference the report without the report referencing the receipt (no digest cycle).
+ *
+ * This interface was referenced by `OntologyContracts`'s JSON-Schema
+ * via the `definition` "TaskValidationPolicyReport".
+ */
+export interface TaskValidationPolicyReport {
+  schemaVersion: 'task-policy-report@1'
+  policyRef: VersionRef
+  registryDigest: Sha256Digest
+  reportSchemaRef: VersionRef
+  stage: TaskValidationPolicyStage
+  executionBindingRef: ResourceRef
+  inputSnapshotRef: ResourceRef
+  inputSnapshotDigest: Sha256Digest
+  parametersRef: ResourceRef
+  parametersDigest: Sha256Digest
+  outputArtifactRef?: ResourceRef
+  outputDigest?: Sha256Digest
+  typedResultManifestRef?: ResourceRef
+  status: TaskValidationPolicyReportStatus
+  coverage: ToolCoverage
+  violations: TaskPolicyViolation[]
+  dependencyEvidenceRefs: ResourceRef[]
+}
+/**
+ * Frozen task-finalization-receipt@1 (SPEC v0.3a §EX-6.1). The independent association of the required policy bindings, the archived policy reports and the exact result manifest/digests. The receipt references the reports and the result; the result manifest and reports never carry a receipt ref, so the artifact graph stays acyclic.
+ *
+ * This interface was referenced by `OntologyContracts`'s JSON-Schema
+ * via the `definition` "TaskFinalizationReceipt".
+ */
+export interface TaskFinalizationReceipt {
+  schemaVersion: 'task-finalization-receipt@1'
+  executionBindingRef: ResourceRef
+  taskBindingRef: VersionRef
+  inputSnapshotRef: ResourceRef
+  inputSnapshotDigest: Sha256Digest
+  parametersRef: ResourceRef
+  parametersDigest: Sha256Digest
+  outputArtifactRefs: ResourceRef[]
+  outputDigests: Sha256Digest[]
+  typedResultManifestRef: ResourceRef
+  typedResultManifestDigest: Sha256Digest
+  requiredPolicyBindings: TaskValidationPolicyBinding[]
+  policyReportRefs: ResourceRef[]
+}
+/**
+ * The id/version identity of a task binding. It is used inside PublishedTaskBindingBody, which excludes the full VersionRef (and therefore its digest) so the body digest can be computed without a self-reference.
+ *
+ * This interface was referenced by `OntologyContracts`'s JSON-Schema
+ * via the `definition` "PublishedTaskBindingIdentity".
+ */
+export interface PublishedTaskBindingIdentity {
+  id: NonEmptyString
+  version: Semver
+}
+/**
+ * Canonical hash body of a published task binding (SPEC v0.3a §EX-2.1). It fixes the id/version identity, action declaration, kind, parameter schema digest, required capabilities/readiness, result schema and optional operation/policy/plan pins — but not its own taskBindingRef. The envelope PublishedTaskBinding adds that ref after this body is hashed.
+ *
+ * This interface was referenced by `OntologyContracts`'s JSON-Schema
+ * via the `definition` "PublishedTaskBindingBody".
+ */
+export interface PublishedTaskBindingBody {
+  schemaVersion: 'published-task-binding@1'
+  taskBindingIdentity: PublishedTaskBindingIdentity
+  actionDefinitionRef: VersionRef
+  kind: TaskKind
+  /**
+   * JSON Schema for the task parameters. Arbitrary JSON by design; a run still validates concrete parameters against it.
+   */
+  parameterSchema: {
+    [k: string]: unknown | undefined
+  }
+  parameterSchemaDigest: Sha256Digest
+  requiredCapabilities: NonEmptyString[]
+  requiredReadiness: ProjectReadinessKind[]
+  resultSchemaRef: VersionRef
+  operationRef?: OperationRef
+  registeredOperationDigest?: Sha256Digest
+  validationPolicies?: TaskValidationPolicyBinding[]
+  fixedPlanRef?: ResourceRef
+}
+/**
+ * Flat read envelope of a published task binding. It repeats the body declarations and adds the complete taskBindingRef; API consumers use `binding.validationPolicies` as shown in the spec.
+ *
+ * This interface was referenced by `OntologyContracts`'s JSON-Schema
+ * via the `definition` "PublishedTaskBinding".
+ */
+export interface PublishedTaskBinding {
+  schemaVersion: 'published-task-binding@1'
+  taskBindingRef: VersionRef
+  actionDefinitionRef: VersionRef
+  kind: TaskKind
+  /**
+   * JSON Schema for the task parameters. Arbitrary JSON by design; a run still validates concrete parameters against it.
+   */
+  parameterSchema: {
+    [k: string]: unknown | undefined
+  }
+  parameterSchemaDigest: Sha256Digest
+  requiredCapabilities: NonEmptyString[]
+  requiredReadiness: ProjectReadinessKind[]
+  resultSchemaRef: VersionRef
+  operationRef?: OperationRef
+  registeredOperationDigest?: Sha256Digest
+  validationPolicies?: TaskValidationPolicyBinding[]
+  fixedPlanRef?: ResourceRef
+}
+/**
+ * A question-mode execution request: the server resolves the allowed published task within the pinned project revision and approved input.
+ *
+ * This interface was referenced by `OntologyContracts`'s JSON-Schema
+ * via the `definition` "RunExecutionQuestionRequest".
+ */
+export interface RunExecutionQuestionRequest {
+  mode: 'question'
+  projectRevisionRef: ProjectRevisionRef
+  inputSnapshotRef: ResourceRef
+  inputSnapshotDigest: Sha256Digest
+}
+/**
+ * A task-mode execution request: an explicitly bound published task with parameters. The parameters are re-validated server-side against the binding's parameter schema.
+ *
+ * This interface was referenced by `OntologyContracts`'s JSON-Schema
+ * via the `definition` "RunExecutionTaskRequest".
+ */
+export interface RunExecutionTaskRequest {
+  mode: 'task'
+  projectRevisionRef: ProjectRevisionRef
+  inputSnapshotRef: ResourceRef
+  inputSnapshotDigest: Sha256Digest
+  taskBindingRef: VersionRef
+  parameters: {
+    [k: string]: unknown | undefined
+  }
+}
+/**
+ * The business-valid instant and the recorded-log sequence a run is pinned to. Both are needed so a resume never mixes a newer attribute with an older exemption.
+ *
+ * This interface was referenced by `OntologyContracts`'s JSON-Schema
+ * via the `definition` "EffectiveTime".
+ */
+export interface EffectiveTime {
+  validAt: Rfc3339UtcTimestamp
+  asOfRecordedSeq: RevisionString
+}
+/**
+ * The immutable execution binding the server creates for a run (SPEC v0.3a §EX-2.1). It pins the request, resolved profile, runtime, allowed task bindings, the input manifest digest at creation, effective limits and effective time. It is archived and referenced by RunManifest.executionBindingRef; later evidence appends to the manifest without rewriting this binding.
+ *
+ * This interface was referenced by `OntologyContracts`'s JSON-Schema
+ * via the `definition` "RunExecutionBinding".
+ */
+export interface RunExecutionBinding {
+  schemaVersion: 'run-execution-binding@1'
+  runId: Uuid
+  request: RunExecutionRequest
+  resolvedProfileRef: ResolvedProfileRef
+  runtimeRef: VersionRef
+  allowedTaskBindingRefs: VersionRef[]
+  inputManifestDigestAtCreation: Sha256Digest
+  effectiveLimitsRef: VersionRef
+  effectiveTime: EffectiveTime
+}
+/**
+ * One actionable reason a task is not available. `code` is the machine contract (registered error catalogue); `message` is user-facing copy. No secrets or another project's data appear here.
+ *
+ * This interface was referenced by `OntologyContracts`'s JSON-Schema
+ * via the `definition` "CapabilityBlocker".
+ */
+export interface CapabilityBlocker {
+  code: NonEmptyString
+  message: NonEmptyString
+  retryable: boolean
+  capabilityName?: NonEmptyString
+  readinessKind?: ProjectReadinessKind
+}
+/**
+ * Capability/readiness status of one published task binding for a project revision. It reports the declared requirements and the concrete blockers so a UI can show what to fix instead of a bare failure.
+ *
+ * This interface was referenced by `OntologyContracts`'s JSON-Schema
+ * via the `definition` "TaskCapabilityStatus".
+ */
+export interface TaskCapabilityStatus {
+  schemaVersion: 'task-capability-status@1'
+  taskBindingRef: VersionRef
+  state: TaskCapabilityState
+  requiredCapabilities: NonEmptyString[]
+  requiredReadiness: ProjectReadinessKind[]
+  blockers: CapabilityBlocker[]
+}
+/**
  * This interface was referenced by `OntologyContracts`'s JSON-Schema
  * via the `definition` "ResultLimits".
  */
@@ -2682,6 +3208,22 @@ export interface TimeContext {
   timeZone: IanaTimeZone
 }
 /**
+ * A typed, bounded request to derive one rule judgement from an already-materialized computation artifact. It carries no SQL, endpoint or script; the host resolves the exact rule instance by its own execution binding.
+ *
+ * This interface was referenced by `OntologyContracts`'s JSON-Schema
+ * via the `definition` "OntologyRuleJudgementRequest".
+ */
+export interface OntologyRuleJudgementRequest {
+  kind: 'rule_judgement'
+  ruleRef: VersionRef
+  definitionRef: VersionRef
+  objectId: NonEmptyString
+  subjectEntityId: NonEmptyString
+  validAt: Rfc3339UtcTimestamp
+  asOfRecordedSeq: RevisionString
+  judgementAxis?: 'applicability' | 'business_proposition'
+}
+/**
  * This interface was referenced by `OntologyContracts`'s JSON-Schema
  * via the `definition` "OntologyConceptRef".
  */
@@ -2699,6 +3241,7 @@ export interface OntologyLookupInput {
   concepts?: OntologyConceptRef[]
   entityRefs?: ResourceRef[]
   intent: OntologyLookupIntent
+  request?: OntologyLookupRequest
   timeContext?: TimeContext
   cursor?: OpaqueCursor
   limit?: number

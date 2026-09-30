@@ -9,6 +9,18 @@ export { PostgresSemanticDefinitionStore } from './semantic-definition-store'
 export { PostgresProfileStore } from './profile-store'
 export { PostgresSourceStore } from './source-store'
 export { PostgresRunStore } from './run-store'
+export { PostgresPublishedTaskBindingStore } from './task-binding-store'
+export { PostgresTaskInputSnapshotStore } from './task-input-snapshot-store'
+export { PostgresRunExecutionBindingStore } from './run-execution-binding-store'
+export { PostgresTaskPolicyReportStore } from './task-policy-report-store'
+export { PostgresTaskFinalizationReceiptStore } from './task-finalization-receipt-store'
+export {
+  PostgresComputeInvocationStore,
+  PostgresComputeOutputBindingsStore,
+  PostgresComputeResultArtifactStore,
+} from './compute-execution-store'
+export { PostgresTableArtifactStore } from './table-artifact-store'
+export { PostgresTableVerificationStore } from './table-verification-store'
 export { PostgresFeedbackStore } from './feedback-store'
 export { PostgresBudgetLedgerStore } from './budget-ledger-store'
 export { PostgresEvidenceStore } from './evidence-store'
@@ -29,6 +41,21 @@ export {
   PostgresMaterializationStore,
   MATERIALIZED_PROJECTION_REF,
 } from './materialization-store'
+export { PostgresAssetWorkspaceStore } from './asset-workspace-store'
+export { PostgresAssetCandidateStore } from './asset-candidate-store'
+export { PostgresRuleActionCandidateStore } from './rule-action-candidate-store'
+export { PostgresDefinitionEditingStore } from './definition-editing-store'
+export { PostgresProjectStore } from './project-store'
+export { PostgresProjectReadinessStore } from './project-readiness-store'
+export { PostgresProjectDocumentStore } from './project-document-store'
+export { PostgresProjectMappingStore } from './project-mapping-store'
+export { PostgresProjectRecordStore } from './project-record-store'
+export { PostgresInstanceReviewStore } from './instance-review-store'
+export {
+  PostgresSyntheticExampleSetStore,
+  PostgresIndustryValidationReportStore,
+} from './synthetic-validation-store'
+export { PostgresPublishedPackAssetStore } from './pack-publication-store'
 export { ControlPostgresRepository } from './repository'
 export type {
   ControlOperationContext,

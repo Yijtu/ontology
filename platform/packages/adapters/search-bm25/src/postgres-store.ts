@@ -425,6 +425,31 @@ export class PostgresKeywordIndexStore implements KeywordIndexStore {
     )
   }
 
+  async reserveGeneration(
+    scopeRef: ScopeRef,
+    collectionRef: string,
+    ctx: ToolContext,
+  ): Promise<RevisionString> {
+    const scope = resolveTrustedScope(scopeRef, ctx)
+    return this.#withScope(scope, async (client) => {
+      const result = await client.query<{ counter: string }>(
+        `INSERT INTO agent_platform.keyword_index_generation_counters (
+           tenant_id, space_id, collection_ref, counter)
+         VALUES ($1, $2, $3, 1)
+         ON CONFLICT (tenant_id, space_id, collection_ref)
+         DO UPDATE SET counter = agent_platform.keyword_index_generation_counters.counter + 1,
+                       updated_at = now()
+         RETURNING counter::text AS counter`,
+        [scope.tenantId, scope.spaceId, collectionRef],
+      )
+      const row = result.rows[0]
+      if (row === undefined) {
+        fail('a keyword index generation counter could not be reserved')
+      }
+      return row.counter
+    })
+  }
+
   async activateGeneration(
     scopeRef: ScopeRef,
     collectionRef: string,

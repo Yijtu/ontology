@@ -1,0 +1,53 @@
+# V03-042：补齐公共助手的权限、未就绪与错误恢复状态
+
+阶段 A · frontend · P1 · 状态 planned · GitHub [#216](https://github.com/Yijtu/ontology/issues/216)
+
+执行工作线：feat/core-planning-provenance；目标：main。本批尚未开始实现；V03 是规划 ID，GitHub 编号见上述链接与 manifest。
+
+## 目标与范围
+
+- 统一展示模型/包/映射/query/index/动作缺能力及下一步，业务用户无需处理工具JSON/数据库配置。
+- 错误/部分成功/冲突/不完整/超预算/过期/取消各有定位及恢复入口，普通用户不能越权发布/撤回。
+- 浏览器验证键盘表单、长表、刷新、切换草稿和窄屏关键操作不被遮挡， HTTP500不让整页空白。
+
+## 依赖与进入条件
+
+Dependencies: #185, #182, #193, #202, #212, #214
+
+依赖：[V03-012](issue-012-definition-editor-ui.md)、[V03-013](issue-013-instance-review-ui.md)、[V03-020](issue-020-project-data-ui.md)、[V03-021](issue-021-package-publish-ui.md)、[V03-040](issue-040-business-results-ui.md)、[V03-041](issue-041-history-json-export.md)。
+开工先核对 V03-001 的能力/旧任务/WIP记录，复用已完成实现，只补本卡缺口。完成能力按独立审查合入 main，保留场景边界。
+
+## 验收条件
+
+- [ ] 统一展示模型/包/映射/query/index/动作缺能力及下一步，业务用户无需处理工具JSON/数据库配置。
+- [ ] 错误/部分成功/冲突/不完整/超预算/过期/取消各有定位及恢复入口，普通用户不能越权发布/撤回。
+- [ ] 浏览器验证键盘表单、长表、刷新、切换草稿和窄屏关键操作不被遮挡， HTTP500不让整页空白。
+- [ ] 实际结果与证据写入完成记录；同步必要契约、使用说明和本批状态，不因源码存在或受控模型响应而虚报完成。
+
+## 需求与规格
+
+- [asset-data-ui.md](../../../../../tasks/spec-v0.3a/asset-data-ui.md)
+
+故事范围：A.US-001、A.US-002、A.US-003、A.US-005、A.US-006、A.US-013、A.US-014。逐项覆盖见[覆盖表](../../coverage.md)。
+
+- A.US-001.AC-03 → A-T001-03：任务缺能力、服务失败或无权限时保留页面和草稿，展示中文原因与恢复入口。
+- A.US-014.AC-04 → A-T014-04：在浏览器核验差异、失败重试、重启、历史、导出与错误状态。
+- P.US-001.AC-03 → P-T001-03：空态写清所需资料和下一步；服务不可用时保留页面并给出可重试的中文说明。
+
+## 验证方法
+
+- 在 platform/ 运行受影响行为测试、pnpm run typecheck；相应包的 lint 与 pnpm run boundaries 适用时必须通过。
+- pnpm run build:web 后执行 pnpm run test:e2e；按 vitest.e2e.config.ts 编写 tests/e2e/**/*.e2e.ts，真实 chromium 验证。
+- 测试期望来自固定需求和独立样例，负例必须保持阻断；计划 ID 不是测试已通过。
+
+## 失败与边界
+
+- 保留已有 WIP、旧 Issue 和 loop 状态；不整枝合并未完成研发，不自动 stash/reset 或覆盖工作区。
+- 授权来自可信上下文，行业包、输入/结果 refs、缓存、任务及导出均保持客户/项目隔离。
+- 不跳过失败/未知/不完整、不静默删规则或漏行、不用模型概率代替硬核验。
+- 本卡不默认授权对外发送报价、调用未授权服务或复制客户资料；所需真实资源按进入条件取得。
+
+## 完成记录
+
+- 当前：未开工；验证未运行。GitHub Issue：[#216](https://github.com/Yijtu/ontology/issues/216)；文档提交不代表功能完成。
+- 实现后记录：提交/PR、适用命令结果、满足的验收、未验证/外部条件、迁移配置与兼容影响。

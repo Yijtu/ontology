@@ -91,6 +91,21 @@ export class InMemoryDocumentParseStore implements DocumentParseStore {
     return found
   }
 
+  async getParse(
+    scopeRef: ScopeRef,
+    parseId: Uuid,
+    ctx: ToolContext,
+  ): Promise<DocumentParseRecord | undefined> {
+    this.#assertOpen()
+    const scope = assertScope(scopeRef, ctx)
+    return [...this.#parses.values()].find(
+      (candidate) =>
+        candidate.parseId === parseId &&
+        candidate.scopeRef.tenantId === scope.tenantId &&
+        candidate.scopeRef.spaceId === scope.spaceId,
+    )
+  }
+
   async listChunks(
     scopeRef: ScopeRef,
     parseId: Uuid,

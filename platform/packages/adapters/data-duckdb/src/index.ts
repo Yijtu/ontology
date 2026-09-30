@@ -24,6 +24,7 @@ export {
   resultDigestOf,
 } from './normalise'
 export type { NormalisedResult } from './normalise'
+export { DUCKDB_PROJECT_DATASET_BACKEND, DuckDbProjectDatasetAdapter } from './project-dataset'
 export { validateSql } from './validator'
 export type { SandboxInput, SandboxValidation } from './validator'
 export { collectFacts, parseSql, splitStatements } from './ast'

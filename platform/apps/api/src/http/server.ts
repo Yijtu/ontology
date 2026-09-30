@@ -1,7 +1,7 @@
 import type { FastifyInstance, FastifyRequest } from 'fastify'
 import { RunServiceError, parseCreateRunRequest } from '@ontology/application'
 import type { RunService } from '@ontology/application'
-import type { CreateRunContext, CreateRunResponse, ProfileRef, RevisionString, ScopeRef, ToolContext } from '@ontology/contracts'
+import type { CreateRunContext, CreateRunResponse, ProfileRef, ResourceRef, RevisionString, RunExecutionRequest, ScopeRef, ToolContext } from '@ontology/contracts'
 import { createRequestToolContext } from './context'
 import { formatSseFrame, SSE_HEADERS } from './sse'
 import type { RunProgressReader } from './run-progress'
@@ -40,6 +40,8 @@ export interface RunApiOptions {
     readonly question: string
     readonly context: CreateRunContext
     readonly scopeRef: ScopeRef
+    /** The optional task execution request, so a fixed task path is not forced through the NL pre-checks. */
+    readonly task?: RunExecutionRequest
   }, ctx: ToolContext) => Promise<void>
   /** Explicit compatibility mode for tests/legacy records-only hosts. */
   readonly submissionMode?: 'durable' | 'records-only'
@@ -132,6 +134,7 @@ export function registerRunRoutes(app: FastifyInstance, dependencies: RunRouteDe
         question: fields.question,
         context: fields.context,
         scopeRef: { tenantId: auth.principal.tenantId, spaceId: auth.spaceId },
+        ...(fields.execution === undefined ? {} : { task: fields.execution }),
       },
       contextFor(auth, traceId, runId),
     )
@@ -144,11 +147,14 @@ export function registerRunRoutes(app: FastifyInstance, dependencies: RunRouteDe
       'initial-drive',
       contextFor(auth, traceId, result.runId, result.resolvedProfileHash),
     )
-    const data: CreateRunResponse = {
+    const data: CreateRunResponse & { executionBindingRef?: ResourceRef } = {
       runId: result.runId,
       state: result.state,
       eventsUrl: `/api/v1/runs/${result.runId}/events`,
       resolvedProfileHash: result.resolvedProfileHash,
+      ...(result.executionBindingRef === undefined
+        ? {}
+        : { executionBindingRef: result.executionBindingRef }),
     }
     reply.status(202).send({ data, meta: { traceId, revision: result.revision } })
     return reply

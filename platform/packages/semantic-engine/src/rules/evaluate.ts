@@ -1,5 +1,7 @@
+import { MAX_RULE_DEPENDENCY_DEPTH } from '@ontology/contracts'
 import type { DomainResultStatus, Sha256Digest } from '@ontology/contracts'
 import { sha256DigestOf } from '../definitions/canonical'
+import { evaluateFiniteCondition } from './boolean'
 import { RuleEvaluationError } from './errors'
 import { conclusionQualifiedKey, factQualifiedKey } from './proposition'
 import { assertSupportedFilter, evaluateFilter, isRuleDecimalValue } from './values'
@@ -12,6 +14,7 @@ import type {
   RuleFact,
   RuleFactRef,
   RuleApplicabilityResult,
+  RuleConditionPlan,
   RuleConditionState,
   RuleExceptionState,
   RulePremiseAlternative,
@@ -259,6 +262,38 @@ function validateRule(rule: SupportRule): void {
       }
     }
   }
+  assertValidCondition(rule, groupIds)
+}
+
+/** A condition tree must only reference declared groups and may not contain an empty AND/OR. */
+function assertValidCondition(rule: SupportRule, groupIds: ReadonlySet<string>): void {
+  const plan = rule.condition
+  if (plan === undefined) return
+  const visit = (node: RuleConditionPlan): void => {
+    switch (node.kind) {
+      case 'leaf':
+        if (!groupIds.has(node.leaf)) {
+          throw new RuleEvaluationError(
+            'INVALID_RULE',
+            `rule ${rule.ruleId} condition references unknown premise group ${node.leaf}`,
+          )
+        }
+        return
+      case 'all':
+        if (node.children.length === 0) {
+          throw new RuleEvaluationError('INVALID_RULE', `rule ${rule.ruleId} has an empty AND condition`)
+        }
+        for (const child of node.children) visit(child)
+        return
+      case 'any':
+        if (node.children.length === 0) {
+          throw new RuleEvaluationError('INVALID_RULE', `rule ${rule.ruleId} has an empty OR condition`)
+        }
+        for (const child of node.children) visit(child)
+        return
+    }
+  }
+  visit(plan)
 }
 
 /**
@@ -324,6 +359,26 @@ function topologicalOrder(rules: readonly SupportRule[]): SupportRule[] {
       'CYCLE_DETECTED',
       `rule dependency cycle among: ${cycle.join(', ')}`,
     )
+  }
+  // The finite ruleRef graph is bounded to MAX_RULE_DEPENDENCY_DEPTH edges. Because `ordered` is
+  // already topological, a single forward pass gives each rule's longest dependency chain: a rule
+  // that consumes only facts has depth 0 and every edge adds one level. An over-deep chain is a
+  // typed rejection, never a silent truncation or an unbounded fixpoint (SPEC §5.2/EX-4.1).
+  const depthByRule = new Map<string, number>()
+  for (const rule of ordered) {
+    let depth = 0
+    for (const dependency of dependencies.get(rule.ruleId) ?? []) {
+      depth = Math.max(depth, (depthByRule.get(dependency) ?? 0) + 1)
+    }
+    depthByRule.set(rule.ruleId, depth)
+  }
+  for (const [ruleId, depth] of depthByRule) {
+    if (depth > MAX_RULE_DEPENDENCY_DEPTH) {
+      throw new RuleEvaluationError(
+        'DEPENDENCY_DEPTH_EXCEEDED',
+        `rule ${ruleId} has a dependency chain of ${String(depth)} edges, more than the supported maximum of ${String(MAX_RULE_DEPENDENCY_DEPTH)}`,
+      )
+    }
   }
   return ordered
 }
@@ -500,17 +555,77 @@ function evaluateGroup(
   }
 }
 
+function andOutcomes(states: readonly Outcome[]): Outcome {
+  if (states.includes('conflict')) return 'conflict'
+  if (states.includes('refuted')) return 'refuted'
+  if (states.includes('unknown')) return 'unknown'
+  return 'satisfied'
+}
+
+function outcomeOfConditionState(state: RuleConditionState): Outcome {
+  if (state === 'true') return 'satisfied'
+  if (state === 'false') return 'refuted'
+  return state
+}
+
+/** Evaluate a finite condition tree whose leaves are premise groups. */
+function planOutcome(plan: RuleConditionPlan, groupStates: ReadonlyMap<string, Outcome>): Outcome {
+  return outcomeOfConditionState(
+    evaluateFiniteCondition(plan, (groupId) => conditionStateOf(groupStates.get(groupId) ?? 'unknown')),
+  )
+}
+
+/**
+ * The group ids a satisfied condition tree actually rests on. For an OR only the branches that
+ * came out satisfied are kept, so support never claims a branch that is refuted or unknown.
+ */
+function satisfiedGroupIdsOf(plan: RuleConditionPlan, groupStates: ReadonlyMap<string, Outcome>): string[] {
+  const result: string[] = []
+  const visit = (node: RuleConditionPlan): void => {
+    switch (node.kind) {
+      case 'leaf':
+        if ((groupStates.get(node.leaf) ?? 'unknown') === 'satisfied') result.push(node.leaf)
+        return
+      case 'all':
+        if (planOutcome(node, groupStates) === 'satisfied') for (const child of node.children) visit(child)
+        return
+      case 'any':
+        for (const child of node.children) {
+          if (planOutcome(child, groupStates) === 'satisfied') visit(child)
+        }
+        return
+    }
+  }
+  visit(plan)
+  return result
+}
+
+/** Every group id referenced by a condition tree. */
+function conditionGroupIds(plan: RuleConditionPlan): Set<string> {
+  const ids = new Set<string>()
+  const visit = (node: RuleConditionPlan): void => {
+    switch (node.kind) {
+      case 'leaf':
+        ids.add(node.leaf)
+        return
+      case 'all':
+      case 'any':
+        for (const child of node.children) visit(child)
+        return
+    }
+  }
+  visit(plan)
+  return ids
+}
+
 function evaluateRule(rule: SupportRule, state: EvaluationState): RuleOutcome {
   const groupNodes: SupportGroupNode[] = []
   const leaves: SupportLeafNode[] = []
-  const satisfiedBy: RuleSatisfiedBy[] = []
   const factRefs: RuleFactRef[] = []
   const observedFactRefs: RuleFactRef[] = []
   const groupStates = new Map<string, Outcome>()
   const groupFactRefs = new Map<string, readonly RuleFactRef[]>()
-  let anyConflict = false
-  let anyRefuted = false
-  let anyUnknown = false
+  const satisfiedAlternatives = new Map<string, readonly string[]>()
 
   for (const group of rule.premiseGroups) {
     const evaluated = evaluateGroup(rule, group, state)
@@ -518,35 +633,47 @@ function evaluateRule(rule: SupportRule, state: EvaluationState): RuleOutcome {
     leaves.push(...evaluated.leaves)
     groupStates.set(group.groupId, evaluated.state)
     groupFactRefs.set(group.groupId, evaluated.factRefs)
+    satisfiedAlternatives.set(group.groupId, evaluated.satisfiedAlternativeIds)
     observedFactRefs.push(...evaluated.factRefs)
-    if (evaluated.state === 'conflict') anyConflict = true
-    else if (evaluated.state === 'refuted') anyRefuted = true
-    else if (evaluated.state === 'unknown') anyUnknown = true
-    if (evaluated.state === 'satisfied') {
-      satisfiedBy.push({
-        groupId: group.groupId,
-        alternativeIds: evaluated.satisfiedAlternativeIds,
-      })
-      for (const alternative of group.alternatives) {
-        if (!evaluated.satisfiedAlternativeIds.includes(alternative.alternativeId)) continue
-        if (alternative.assertionId === undefined) continue
-        const fact = state.factsById.get(alternative.assertionId)
-        if (fact === undefined) continue
-        const active = state.activeByLogical.get(fact.logicalAssertionId)?.active
-        if (active !== undefined) factRefs.push(factRefOf(active))
-      }
+  }
+
+  // A rule is the AND of its condition tree and every premise group the tree does not reference
+  // (the explicit exceptions). `unknown`/`conflict` are never coerced to false.
+  const referenced = rule.condition === undefined ? undefined : conditionGroupIds(rule.condition)
+  const conditionOutcome: Outcome = rule.condition === undefined ? 'satisfied' : planOutcome(rule.condition, groupStates)
+  const otherGroups = rule.premiseGroups.filter((group) => referenced === undefined || !referenced.has(group.groupId))
+  const otherOutcomes = otherGroups.map((group) => groupStates.get(group.groupId) ?? 'unknown')
+  const outcome: Outcome = andOutcomes([conditionOutcome, ...otherOutcomes])
+
+  const satisfiedGroupIds =
+    outcome === 'satisfied'
+      ? [
+          ...(rule.condition === undefined ? [] : satisfiedGroupIdsOf(rule.condition, groupStates)),
+          ...otherGroups.filter((group) => groupStates.get(group.groupId) === 'satisfied').map((group) => group.groupId),
+        ]
+      : []
+  const uniqueSatisfiedGroupIds = [...new Set(satisfiedGroupIds)].sort()
+  const satisfiedBy: RuleSatisfiedBy[] = uniqueSatisfiedGroupIds.map((groupId) => ({
+    groupId,
+    alternativeIds: [...(satisfiedAlternatives.get(groupId) ?? [])].sort(),
+  }))
+  for (const groupId of uniqueSatisfiedGroupIds) {
+    const premise = rule.premiseGroups.find((group) => group.groupId === groupId)
+    if (premise === undefined) continue
+    const satisfied = satisfiedAlternatives.get(groupId) ?? []
+    for (const alternative of premise.alternatives) {
+      if (!satisfied.includes(alternative.alternativeId)) continue
+      if (alternative.assertionId === undefined) continue
+      const fact = state.factsById.get(alternative.assertionId)
+      if (fact === undefined) continue
+      const active = state.activeByLogical.get(fact.logicalAssertionId)?.active
+      if (active !== undefined) factRefs.push(factRefOf(active))
     }
   }
 
-  let outcome: Outcome
-  if (anyConflict) outcome = 'conflict'
-  else if (anyRefuted) outcome = 'refuted'
-  else if (anyUnknown) outcome = 'unknown'
-  else outcome = 'satisfied'
-
   const result: RuleOutcome = {
     state: outcome,
-    satisfiedBy: satisfiedBy.sort((left, right) => left.groupId.localeCompare(right.groupId)),
+    satisfiedBy,
     factRefs: dedupeFactRefs(factRefs),
     groupNodes,
     leafNodes: dedupeLeaves(leaves),
@@ -714,9 +841,14 @@ function applicabilityFor(
     throw new RuleEvaluationError('INVALID_ARGUMENT', `published rule instance ${metadata.instanceKey} is not evaluated against its pinned definitionRef`)
   }
 
-  const conditionState = andConditionStates(
-    metadata.conditionGroupIds.map((groupId) => conditionStateOf(outcome.groupStates.get(groupId) ?? 'unknown')),
-  )
+  const conditionState =
+    rule.condition === undefined
+      ? andConditionStates(
+          metadata.conditionGroupIds.map((groupId) => conditionStateOf(outcome.groupStates.get(groupId) ?? 'unknown')),
+        )
+      : evaluateFiniteCondition(rule.condition, (groupId) =>
+          conditionStateOf(outcome.groupStates.get(groupId) ?? 'unknown'),
+        )
   const exceptionStates: RuleExceptionState[] = metadata.exceptions.map((exception) => {
     const states = exception.groupIds.map((groupId) =>
       negateConditionState(conditionStateOf(outcome.groupStates.get(groupId) ?? 'unknown')),

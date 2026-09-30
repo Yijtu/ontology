@@ -88,6 +88,10 @@ export interface AssertionEvidenceBinding {
   readonly quoteDigestPointer?: string
   readonly rulePointer?: string
   readonly computationPointer?: string
+  /** Pointer to the exact relation edge/hop object the relation assertion is about. */
+  readonly relationPointer?: string
+  /** Pointer to the immutable document-version ref a citation was parsed from. */
+  readonly documentVersionPointer?: string
 }
 
 interface TypedAssertionBase {
@@ -103,9 +107,31 @@ export type VerifiedAssertion =
   | (TypedAssertionBase & { readonly kind: 'string' | 'enum'; readonly value: string })
   | (TypedAssertionBase & { readonly kind: 'boolean'; readonly value: boolean })
   | (TypedAssertionBase & { readonly kind: 'entity_ref'; readonly value: ResourceRef; readonly displayName?: string })
-  | (TypedAssertionBase & { readonly kind: 'relation_ref'; readonly value: { readonly type: string; readonly from: ResourceRef; readonly to: ResourceRef } })
-  | (TypedAssertionBase & { readonly kind: 'rule_judgement'; readonly value: 'true' | 'false' | 'unknown' | 'conflict'; readonly ruleRef: VersionRef; readonly premiseRefs: readonly ResourceRef[] })
-  | (TypedAssertionBase & { readonly kind: 'document_quote'; readonly quote: string; readonly documentRef: ResourceRef; readonly locator: { readonly kind: 'page' | 'offset' | 'approximate_locator'; readonly page?: number; readonly startOffset?: number; readonly endOffset?: number; readonly normalizationMapRef?: string }; readonly quoteDigest: Sha256Digest; readonly textDigest: Sha256Digest; readonly precision: 'exact' | 'approximate' })
+  | (TypedAssertionBase & {
+      readonly kind: 'relation_ref'
+      readonly value: { readonly type: string; readonly from: ResourceRef; readonly to: ResourceRef }
+      /** The pinned relation definition version the edge was published against. */
+      readonly definitionRef?: VersionRef
+      /** The exact published relation statement the edge came from. */
+      readonly statementId?: string
+      readonly statementVersion?: string
+    })
+  | (TypedAssertionBase & {
+      readonly kind: 'rule_judgement'
+      readonly value: 'true' | 'false' | 'unknown' | 'conflict'
+      readonly ruleRef: VersionRef
+      readonly premiseRefs: readonly ResourceRef[]
+      /**
+       * Which rule axis the verdict is about. `applicability` (the default for a legacy
+       * assertion) is whether the rule condition holds and no exception fired;
+       * `business_proposition` is the explicitly reviewed business conclusion and is only
+       * definite when the artifact carries one. A model boolean can never invent either.
+       */
+      readonly judgementAxis?: 'applicability' | 'business_proposition'
+      /** The exact computation digest the archived artifact must carry. */
+      readonly computationDigest?: Sha256Digest
+    })
+  | (TypedAssertionBase & { readonly kind: 'document_quote'; readonly quote: string; readonly documentRef: ResourceRef; readonly locator: { readonly kind: 'page' | 'offset' | 'approximate_locator'; readonly page?: number; readonly startOffset?: number; readonly endOffset?: number; readonly normalizationMapRef?: string }; readonly quoteDigest: Sha256Digest; readonly textDigest: Sha256Digest; readonly precision: 'exact' | 'approximate'; readonly documentVersionRef?: ResourceRef })
   | (TypedAssertionBase & { readonly kind: 'artifact_summary'; readonly artifactRef: ResourceRef; readonly summary: string })
 
 /** Which check produced a finding. Hard findings are programmatic and outrank any score. */
@@ -135,6 +161,12 @@ export type VerificationFindingCode =
   | 'assertion_mismatch'
   | 'document_quote_mismatch'
   | 'unverified_limitation'
+  | 'rule_judgement_mismatch'
+  | 'rule_premise_missing'
+  | 'relation_endpoint_mismatch'
+  | 'relation_version_mismatch'
+  | 'row_binding_mismatch'
+  | 'citation_locator_mismatch'
 
 /**
  * A located verification problem. `claimId`/`field`/`evidenceRef`/`pointer` identify exactly

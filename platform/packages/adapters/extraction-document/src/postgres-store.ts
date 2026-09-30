@@ -434,6 +434,27 @@ export class PostgresDocumentParseStore implements DocumentParseStore {
     )
   }
 
+  async getParse(
+    scopeRef: ScopeRef,
+    parseId: Uuid,
+    ctx: ToolContext,
+  ): Promise<DocumentParseRecord | undefined> {
+    const scope = scopeWith(scopeRef, ctx)
+    return this.#withScope(
+      scope,
+      async (client) => {
+        const result = await client.query<ParseRow>(
+          `${PARSE_SELECT}
+            WHERE tenant_id = $1 AND space_id = $2 AND parse_id = $3`,
+          [scope.tenantId, scope.spaceId, parseId],
+        )
+        const row = result.rows[0]
+        return row === undefined ? undefined : toParseRecord(row)
+      },
+      { readOnly: true },
+    )
+  }
+
   async listChunks(
     scopeRef: ScopeRef,
     parseId: Uuid,

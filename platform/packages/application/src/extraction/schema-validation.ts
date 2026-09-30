@@ -47,6 +47,13 @@ function issue(
   out.push(field === undefined ? { code, message } : { code, message, field })
 }
 
+/** The canonical exact-decimal grammar (contracts `DecimalString`); exponent notation is refused. */
+const DECIMAL_STRING = /^-?(?:0|[1-9]\d*)(?:\.\d+)?$/
+
+function isExactDecimal(value: string): boolean {
+  return value.length <= 64 && DECIMAL_STRING.test(value)
+}
+
 function valueTypeMatches(valueType: IndustryAttributeValueType, value: string | number | boolean): boolean {
   switch (valueType) {
     case 'string':
@@ -60,7 +67,10 @@ function valueTypeMatches(valueType: IndustryAttributeValueType, value: string |
     case 'number':
       return typeof value === 'number' && Number.isFinite(value)
     case 'quantity':
-      return typeof value === 'number' && Number.isFinite(value)
+      // A new quantity is the exact decimal string, so a value never passes through a lossy
+      // `Number`. A finite `number` is accepted only for a legacy historical candidate.
+      return (typeof value === 'string' && isExactDecimal(value)) ||
+        (typeof value === 'number' && Number.isFinite(value))
     case 'boolean':
       return typeof value === 'boolean'
   }
@@ -96,6 +106,28 @@ function validateAttributeValue(
       field,
     )
     return
+  }
+  if (attribute.valueType === 'quantity') {
+    // The declared decimal, when present, must itself be an exact canonical token; a value
+    // that claims a decimal but is not one is never silently rounded into shape.
+    if (value.decimal !== undefined && !isExactDecimal(value.decimal)) {
+      issue(
+        out,
+        'INVALID_DECIMAL',
+        `attribute ${value.attributeId} carries a decimal that is not an exact token`,
+        field,
+      )
+      return
+    }
+    if (typeof value.value === 'string' && !isExactDecimal(value.value)) {
+      issue(
+        out,
+        'INVALID_DECIMAL',
+        `attribute ${value.attributeId} expects an exact decimal string`,
+        field,
+      )
+      return
+    }
   }
   if (attribute.valueType === 'enum') {
     const allowed = attribute.enumValues ?? []
@@ -231,6 +263,17 @@ function validateEndpoint(
     return
   }
   if (endpoint.nativeId === undefined || endpoint.nativeId.length === 0) {
+    // A named entity that was not identified is pending confirmation (soft); a fabricated
+    // in-run reference is a hard dangling failure. The two are never collapsed.
+    if (endpoint.unresolvedReason === 'missing_reference') {
+      issue(
+        out,
+        'UNRESOLVED_ENDPOINT',
+        `relation ${relation.relationId} ${side} endpoint names an entity that was not identified`,
+        side,
+      )
+      return
+    }
     issue(
       out,
       'DANGLING_REFERENCE',
@@ -264,6 +307,11 @@ export function isHardIssue(candidateIssue: CandidateIssue): boolean {
   // the candidate must stay visible for a human decision, never be published.
   if (candidateIssue.code === 'RULE_UNSUPPORTED_EXPRESSION') return false
   if (candidateIssue.code === 'CONFLICTING_RULE') return false
+  // An unknown field and a named-but-unidentified relation endpoint are pending confirmation,
+  // not silent failures: they must stay visible for a human decision and are never published
+  // by the model (P.US-008.AC-03).
+  if (candidateIssue.code === 'UNKNOWN_ATTRIBUTE') return false
+  if (candidateIssue.code === 'UNRESOLVED_ENDPOINT') return false
   return true
 }
 

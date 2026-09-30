@@ -5,93 +5,172 @@ import addFormats from 'ajv-formats'
 import type { SchemaObject, ValidateFunction } from 'ajv'
 import type { FastifyInstance } from 'fastify'
 import { FileSystemObjectStore, LocalImmutableBlobStore, PostgresArtifactRegistry } from '@ontology/adapter-blob-local'
-import { DATA_DUCKDB_ADAPTER_REF, DuckDbQueryAdapter } from '@ontology/adapter-data-duckdb'
+import { DATA_DUCKDB_ADAPTER_REF, DuckDbProjectDatasetAdapter, DuckDbQueryAdapter } from '@ontology/adapter-data-duckdb'
 import type { RegisteredRelation } from '@ontology/adapter-data-duckdb'
 import {
   ControlPostgresDatabase,
   ControlPostgresRepository,
   PostgresAnswerStore,
+  PostgresAssetCandidateStore,
+  PostgresAssetWorkspaceStore,
   PostgresBudgetLedgerStore,
   PostgresCandidateStore,
   PostgresComponentRegistryStore,
   PostgresDecisionStateReferenceStore,
+  PostgresDefinitionEditingStore,
   PostgresEvidenceStore,
   PostgresIdentityDecisionStore,
+  PostgresIndustryValidationReportStore,
+  PostgresInstanceReviewStore,
   PostgresJobStore,
   PostgresMaterializationStore,
   PostgresProfileStore,
+  PostgresProjectDocumentStore,
+  PostgresProjectMappingStore,
+  PostgresProjectReadinessStore,
+  PostgresProjectRecordStore,
+  PostgresProjectStore,
+  PostgresPublishedPackAssetStore,
+  PostgresPublishedTaskBindingStore,
+  PostgresRuleActionCandidateStore,
+  PostgresRunExecutionBindingStore,
   PostgresRunStore,
   PostgresSemanticDefinitionStore,
+  PostgresTaskInputSnapshotStore,
   PostgresSemanticPublicationStore,
+  PostgresSyntheticExampleSetStore,
+  PostgresTableArtifactStore,
+  PostgresTableVerificationStore,
+  PostgresTaskFinalizationReceiptStore,
+  PostgresTaskPolicyReportStore,
   PostgresWorkflowDispatchStore,
   PostgresWorkflowStore,
 } from '@ontology/adapter-control-postgres'
-import { DocumentSpanReader, LocalDocumentExtractionService, PostgresDocumentParseStore } from '@ontology/adapter-extraction-document'
-import { Bm25DocumentSearchService, PostgresKeywordIndexStore, createBm25DocumentSearchToolHandler } from '@ontology/adapter-search-bm25'
-import { TemplateRuntimeAdapter, TemplateRuntimeError } from '@ontology/adapter-runtime-template'
-import type { TemplatePlanResolver } from '@ontology/adapter-runtime-template'
+import {
+  DocumentSpanReader,
+  LocalDocumentExtractionService,
+  LocalStructuredIngestionService,
+  PostgresDocumentParseStore,
+  PostgresStructuredIngestionStore,
+  StructuredDocumentParser,
+} from '@ontology/adapter-extraction-document'
+import { Bm25DocumentSearchService, PostgresKeywordIndexStore, ProjectDocumentIndexService } from '@ontology/adapter-search-bm25'
+import { PiRuntimeAdapter } from '@ontology/adapter-runtime-pi'
+import { TemplateRuntimeAdapter } from '@ontology/adapter-runtime-template'
 import {
   AnswerPublicationService,
   CandidateValidationStageHandler,
+  ComponentRegistry,
+  CompositeReviewableCandidateReader,
+  DefinitionCandidateEditingService,
+  DefinitionCandidateGenerationService,
   DraftVerificationService,
   ExtractionPipeline,
   EXTRACTION_RESPONSE_SCHEMA_REF,
   ExtractionStageHandler,
   InMemoryIndustryManifestSource,
   InMemoryIndustrySchemaSource,
+  IndustryAssetPublicationService,
+  IndustryPackExportService,
+  IndustryPackUpgradeService,
+  IndustryValidationService,
+  IndustryWorkspaceService,
+  INDUSTRY_WORKSPACE_CREATED_TOPIC,
+  INDUSTRY_WORKSPACE_DRAFT_APPENDED_TOPIC,
+  InstanceReviewService,
+  PACK_PUBLISHED_TOPIC,
   JobService,
   JobWorker,
   OutboxDispatcher,
+  PROJECT_CREATED_TOPIC,
+  PROJECT_REVISION_APPENDED_TOPIC,
+  ProjectDataMaterializationService,
+  ProjectMappingService,
+  ProjectService,
   ProfileResolver,
+  PublicationValidityEngine,
   RestrictedLimitedAnswerComposer,
+  ResultHistoryService,
+  RuleActionCandidateService,
+  RunTypedResultContextSource,
+  VerifiedResultExportService,
+  TableArtifactReadService,
+  VerifiedResultReadService,
+  defaultPublicationEvidenceValidators,
   SourceRegistry,
+  RunExecutionPreflightService,
   RunPhaseDriver,
   RunService,
+  StaticDefinitionTerminologySource,
+  StoreBackedIndustryManifestSource,
+  StoreBackedIndustryPackCatalogue,
+  StructuredExtractionService,
+  StructuredExtractionStageHandler,
+  SyntheticExampleService,
+  TBOX_RESPONSE_SCHEMA_REF,
+  TypedEvidenceDraftWriter,
   WorkflowController,
   createRunCheckpointPort,
   encodeDocumentIngestionRef,
   mapNativeEntities,
+  parseDefinitionCandidateOutput,
   parseModelCandidates,
   ReviewHandoffStageHandler,
 } from '@ontology/application'
-import type { OutboxConsumer, ProfileSpecValidator, RunProfileBinder } from '@ontology/application'
+import type { ManifestValidator, MountedDefinitionTerminology, OutboxConsumer, ProfileSpecValidator, PublicationEvidenceValidation, PublicationEvidenceValidationInput, PublicationEvidenceValidator, RunProfileBinder, TaskParameterValidator } from '@ontology/application'
 import type {
+  ActionCapabilityBindingInput,
   CandidateStore,
   ComponentKind,
   ComponentManifest,
   ComponentRegistrationRecordInput,
   ComponentVersionRecord,
+  ComputeBinding,
   DocumentParserPort,
   GenerationPort,
+  IdentityDecisionStore,
   IndustryManifestSource,
+  IndustrySchema,
+  IndustryWorkspaceStore,
   InputValidityPort,
+  ModelBinding,
   OperationRegistry,
   OutboxMessageRecord,
   ProfileRef,
   ProfileSpec,
+  ProjectStore,
   PublicationValidityPort,
   PublicationValidityReport,
   PublicationValidityRequest,
   QueryColumn,
+  RelationNavigationRequest,
+  ResolvedCapability,
   ResourceRef,
+  RunExecutionRequest,
+  RuntimeAdapter,
   RuntimeCapabilityFactoryPort,
   RuntimeCapabilitySet,
   RuntimeSelectorPort,
   ScalarValue,
   ScopeRef,
+  ScopedArtifactReader,
+  SemanticPublicationStore,
   SourceRef,
   SupportedDataType,
+  TableVerificationReceiptStore,
+  TaskPolicyReportStore,
   ToolContext,
   Uuid,
   VersionRef,
+  VerifiedTableManifestSource,
   WorkflowDispatchFence,
   RuntimeCapabilityContext,
 } from '@ontology/contracts'
-import { DEFAULT_VERIFICATION_POLICY, SCHEMA_DOCUMENTS, TOOL_CATALOGUE, createToolContext } from '@ontology/contracts'
+import { DEFAULT_VERIFICATION_POLICY, RelationNavigationError, SCHEMA_DOCUMENTS, TOOL_CATALOGUE, createToolContext, projectCollectionRef } from '@ontology/contracts'
 import { BudgetService, sha256DigestOf } from '@ontology/core'
 import { createRequestToolContext, createToolGatewayComposition, ForbiddenError, InvalidRequestFieldError } from '@ontology/app-api'
 import type { CoreApiDependencies } from '../core-main'
-import { IdentityDecisionService, IncrementalMaterializer, InMemorySemanticMappingRegistry, OntologyLookupService, PublishedFactsReferenceProvider, PublishedSemanticSource, SemanticDefinitionService, SemanticPublicationService } from '@ontology/semantic-engine'
+import { FiniteGrammarRuleSupportValidator, FiniteGrammarSyntheticEvaluator, IdentityDecisionService, IncrementalMaterializer, InMemorySemanticMappingRegistry, MaterializedRuleDerivationEvidenceProducer, OntologyLookupService, PublishedFactsReferenceProvider, PublishedRelationNavigator, PublishedSemanticSource, SemanticDefinitionService, SemanticPublicationService } from '@ontology/semantic-engine'
 import type {
   MaterializationPublishedSource,
   OntologyFactPage,
@@ -99,17 +178,25 @@ import type {
   OntologyFactReferenceProvider,
   PublishedSemanticData,
 } from '@ontology/semantic-engine'
-import { DataQueryHandler, OntologyLookupHandler, canonicalJson } from '@ontology/tool-services'
+import { DataQueryHandler, OntologyLookupHandler, canonicalJson, createExampleComputeHandlers, exampleRegisteredOperation } from '@ontology/tool-services'
 import type { ToolSchemaValidator } from '@ontology/tool-services'
 import { controlRecordSequence, JobWorkerLoop, MaterializationOutboxConsumer, TopicOutboxConsumerRouter, WorkflowDispatchWorker, createIngestionHandlerRegistry } from '@ontology/app-worker'
-import { PublishedFactsDraftWriter } from './published-facts-draft'
 import { CoreFactsPlanError, createCoreFactsPlan } from './core-facts-plan'
+import { mountCoreTaskBindings } from './core-task-bindings'
+import { createBlobArtifactWriter } from './tool-gateway'
+import { registerProjectImportRoute } from '../http/project-imports'
+import type { ProjectStructuredImportService } from '../http/project-imports'
 import { createStaticProbeAdapterResolver, createPostgresSourceStore } from './source-registry'
 import { createEnvSecretResolver } from './secret-resolver'
 import { createPostgresProvenanceRead } from './provenance-read'
 import { createCoreModelCapabilityFactory } from './core-model-capabilities'
+import { createCoreDocumentSearchHandler } from './core-document-search-handler'
+import { createCoreOntologyLookupHandler } from './core-rule-judgement-handler'
 import { createCoreModelEvidenceRecorders } from './model-evidence'
 import { createCoreDecisionStateRefProvider } from './decision-state-reference'
+import { PostgresCorePlanReceiptStore } from './core-plan-receipts'
+import { CoreTemplatePlanResolver } from './core-template-plan-resolver'
+import type { CoreModelComponentRefs } from './core-template-plan-resolver'
 import { createCoreJevActualStateResolver } from './jev-actual-state'
 import { RunProgressService } from '../http/run-progress'
 import type { CoreExampleScenario, LoadedCoreExamples } from './core-example-loader'
@@ -134,7 +221,36 @@ function stableUuid(seed: string): Uuid {
   return `${hex.slice(0, 8)}-${hex.slice(8, 12)}-${hex.slice(12, 16)}-${hex.slice(16, 20)}-${hex.slice(20)}`
 }
 
-function scenarioComponentRecords(scenarios: readonly CoreExampleScenario[], now: string): ComponentVersionRecord[] {
+function modelComponentRefsOf(
+  env: Readonly<Record<string, string | undefined>>,
+  capabilities: { readonly generationEnabled: boolean; readonly decisionEnabled: boolean },
+): CoreModelComponentRefs {
+  const generationId = env['CORE_COMPANY_MODEL_PLATFORM_ID']
+  const decisionId = env['CORE_JEV_PLATFORM_MODEL_ID']
+  return {
+    ...(capabilities.generationEnabled && generationId !== undefined
+      ? { generation: componentRef('generation', generationId, {
+          role: 'generation',
+          platformModelId: generationId,
+          vendorModel: env['CORE_COMPANY_MODEL_VENDOR_MODEL'],
+          protocol: env['CORE_COMPANY_MODEL_PROTOCOL'],
+        }) }
+      : {}),
+    ...(capabilities.decisionEnabled && decisionId !== undefined
+      ? { decision: componentRef('decision', decisionId, {
+          role: 'decision',
+          platformModelId: decisionId,
+          vendorModel: env['CORE_JEV_VENDOR_MODEL'],
+        }) }
+      : {}),
+  }
+}
+
+function scenarioComponentRecords(
+  scenarios: readonly CoreExampleScenario[],
+  now: string,
+  modelRefs: CoreModelComponentRefs = {},
+): ComponentVersionRecord[] {
   const records = new Map<string, ComponentVersionRecord>()
   const add = (record: ComponentVersionRecord): void => {
     records.set(`${record.manifest.kind}\u0000${record.manifest.id}\u0000${record.manifest.version}`, record)
@@ -157,6 +273,16 @@ function scenarioComponentRecords(scenarios: readonly CoreExampleScenario[], now
     entrypoint: '@ontology/adapter-runtime-template',
     now,
   }))
+  // The real Pi Agent Core runtime, registered alongside the Template executor so a profile
+  // can pin either. It declares the same `agent_runtime` capability; the resolved profile and
+  // the one gateway decide what it may actually do.
+  add(componentRecord({
+    kind: 'runtime',
+    ref: componentRef('runtime', 'runtime-pi', 'pi-runtime@1.0.0'),
+    capabilityNames: ['agent_runtime'],
+    entrypoint: '@ontology/adapter-runtime-pi',
+    now,
+  }))
   add(componentRecord({
     kind: 'data_backend',
     ref: DATA_DUCKDB_ADAPTER_REF,
@@ -171,6 +297,24 @@ function scenarioComponentRecords(scenarios: readonly CoreExampleScenario[], now
     entrypoint: '@ontology/adapter-search-bm25',
     now,
   }))
+  if (modelRefs.generation !== undefined) {
+    add(componentRecord({
+      kind: 'generation',
+      ref: modelRefs.generation,
+      capabilityNames: ['model.generation'],
+      entrypoint: '@ontology/adapter-model-company',
+      now,
+    }))
+  }
+  if (modelRefs.decision !== undefined) {
+    add(componentRecord({
+      kind: 'decision',
+      ref: modelRefs.decision,
+      capabilityNames: ['model.decision'],
+      entrypoint: '@ontology/adapter-model-jev',
+      now,
+    }))
+  }
   return [...records.values()]
 }
 
@@ -249,12 +393,90 @@ function disabledDecision() {
   }
 }
 
+/**
+ * The registered operations the Core host can execute (ADR-11, SPEC v0.3a §EX-6). The neutral,
+ * synthetic example operation is registered exactly like an industry operation: its whole record
+ * (handler/schema/limits pins) is what a compute task binding pins, and nothing in the generic
+ * Core branches on an industry name.
+ */
 function operationRegistry(): OperationRegistry {
+  const operations = [exampleRegisteredOperation()]
   return {
     namespace: 'core-local',
     registryVersion: COMPONENT_VERSION,
-    registryDigest: sha256DigestOf('core-local-operations@1.0.0'),
-    operations: [],
+    registryDigest: sha256DigestOf(canonicalJson(operations)),
+    operations,
+  }
+}
+
+/** The profile compute binding that enables the registered example operation for a run. */
+function exampleComputeBinding(): ComputeBinding {
+  const operation = exampleRegisteredOperation()
+  return {
+    operationRef: operation.operationRef,
+    handlerRef: operation.handlerRef,
+    inputSchemaRef: {
+      id: `${operation.operationRef.id}.input`,
+      version: COMPONENT_VERSION,
+      digest: operation.inputSchemaDigest,
+    },
+    outputSchemaRef: {
+      id: `${operation.operationRef.id}.output`,
+      version: COMPONENT_VERSION,
+      digest: operation.outputSchemaDigest,
+    },
+    readOnly: true,
+    enabled: true,
+    limits: operation.limits,
+  }
+}
+
+const CORE_EFFECTIVE_LIMITS_REF: VersionRef = {
+  id: 'core-local-effective-limits',
+  version: COMPONENT_VERSION,
+  digest: sha256DigestOf('core-local-effective-limits@1.0.0'),
+}
+
+/**
+ * The result format the Core host can render and finalize: a `typed-result-manifest@1`. A
+ * published task binding whose `resultSchemaRef` is not this registered format is reported as
+ * not available by preflight, so no run can claim a formal result the host cannot produce.
+ */
+export const CORE_TYPED_RESULT_SCHEMA_REF: VersionRef = {
+  id: 'typed-result-manifest',
+  version: '1.0.0',
+  digest: sha256DigestOf('typed-result-manifest@1'),
+}
+
+/** Project the registered components' declared capabilities into the exact deployment capability set. */
+function resolvedCapabilitiesFrom(records: readonly ComponentVersionRecord[]): ResolvedCapability[] {
+  return records.flatMap((record) =>
+    record.manifest.provides.map((declared) => ({
+      name: declared.name,
+      version: declared.version,
+      limits: declared.limits,
+      consistency: declared.consistency,
+      cancellation: declared.cancellation,
+      pagination: declared.pagination,
+      supportedDataTypes: [...declared.supportedDataTypes],
+      sourceComponentRef: record.manifestRef,
+    })),
+  )
+}
+
+function taskParameterValidator(ajv: Ajv2020): TaskParameterValidator {
+  return {
+    validate(schema, value) {
+      const validate = ajv.compile(schema as SchemaObject)
+      return validate(value)
+        ? { valid: true, issues: [] }
+        : {
+            valid: false,
+            issues: (validate.errors ?? []).map(
+              (error) => `${error.instancePath === '' ? '$' : error.instancePath} ${error.message ?? 'is invalid'}`,
+            ),
+          }
+    },
   }
 }
 
@@ -465,6 +687,7 @@ function workerContext(
   runId = WORKER_RUN_ID,
   resolvedProfileHash = sha256DigestOf('core-worker-profile'),
   clock: () => Date = () => new Date(),
+  collectionRefs: readonly string[] = [],
 ): ToolContext {
   const now = clock()
   const deadline = new Date(now.getTime() + 5 * 60_000)
@@ -491,52 +714,12 @@ function workerContext(
       spaceId: scopeRef.spaceId,
       resourceKinds: ['artifact', 'document', 'chunk', 'evidence', 'dataset', 'plan', 'job'],
       sourceRefs: sourceRefs.map((sourceRef) => ({ ...sourceRef })),
-      collectionRefs: [],
+      collectionRefs: [...collectionRefs],
       domains: [],
       maxRows: 1_000,
     },
     traceId: `core-worker:${randomUUID()}`,
   })
-}
-
-class CoreFactsPlanResolver implements TemplatePlanResolver {
-  readonly #runs: RunService
-  readonly #profiles: ProfileResolver
-  readonly #scenarios: readonly CoreExampleScenario[]
-
-  constructor(runs: RunService, profiles: ProfileResolver, scenarios: readonly CoreExampleScenario[]) {
-    this.#runs = runs
-    this.#profiles = profiles
-    this.#scenarios = scenarios
-  }
-
-  async resolve(planRef: ResourceRef | undefined, ctx: ToolContext) {
-    const run = await this.#runs.getRun(ctx.runId, ctx)
-    const { scenario, resolved, snapshotHash } = await resolveScenarioProfile(
-      this.#profiles,
-      this.#scenarios,
-      run.profileRef,
-      { tenantId: ctx.principal.tenantId, spaceId: ctx.allowedResources.spaceId },
-      ctx,
-      run.resolvedProfileHash,
-    )
-    if (!resolved.toolBindings.some((binding) => binding.toolId === 'ontology_lookup' && binding.enabled)) {
-      throw new CoreCapabilityError('this profile does not enable ontology_lookup for facts tasks')
-    }
-    const plan = createCoreFactsPlan({
-      scenario,
-      runProfileRef: run.profileRef,
-      resolvedProfileHash: snapshotHash,
-      mappingRefs: resolved.mappingRefs,
-      definitionRef: scenario.definitionRef,
-      scopeRef: { tenantId: ctx.principal.tenantId, spaceId: ctx.allowedResources.spaceId },
-      question: run.questionRewrite?.rewrittenQuestion ?? run.question,
-    })
-    if (planRef !== undefined && !sameResourceRef(planRef, plan.planRef)) {
-      throw new TemplateRuntimeError('INVALID_PLAN', 'the checkpoint plan does not match this run’s immutable profile and facts request')
-    }
-    return { planRef: plan.planRef, spec: plan }
-  }
 }
 
 const DISABLED_GENERATION: GenerationPort = {
@@ -594,6 +777,51 @@ function profileValidator(ajv: Ajv2020): ProfileSpecValidator {
           message: error.message ?? 'invalid',
         })),
       }
+}
+
+function manifestValidator(ajv: Ajv2020): ManifestValidator {
+  const validate = ajv.getSchema(`${CONTRACT_SCHEMA_BASE}/component.schema.json#/$defs/ComponentManifest`)
+  if (validate === undefined) throw new Error('the canonical ComponentManifest schema is unavailable')
+  return (manifest: unknown) => validate(manifest)
+    ? { valid: true, issues: [] }
+    : {
+        valid: false,
+        issues: (validate.errors ?? []).map((error) => ({
+          pointer: error.instancePath === '' ? '$' : error.instancePath,
+          message: error.message ?? 'invalid',
+        })),
+      }
+}
+
+function terminologyOf(schema: IndustrySchema): MountedDefinitionTerminology {
+  const attributes = schema.objects.flatMap((object) => object.attributes.map((attribute) => ({
+    logicalId: attribute.attributeId,
+    objectLogicalId: object.objectId,
+    valueType: attribute.valueType,
+    ...(attribute.unitCode === undefined ? {} : { unitCode: attribute.unitCode }),
+    ...(attribute.dimension === undefined ? {} : { dimension: attribute.dimension }),
+  })))
+  const displayNames: Record<string, string> = {}
+  for (const object of schema.objects) {
+    displayNames[object.objectId] = object.displayName
+    for (const attribute of object.attributes) displayNames[attribute.attributeId] = attribute.attributeId
+  }
+  for (const relation of schema.relations) displayNames[relation.relationId] = relation.relationId
+  return {
+    objectLogicalIds: schema.objects.map((object) => object.objectId),
+    attributeLogicalIds: attributes.map((attribute) => attribute.logicalId),
+    relationLogicalIds: schema.relations.map((relation) => relation.relationId),
+    attributes,
+    displayNames,
+  }
+}
+
+/** Project the mounted industry packs into the professional terminology a workspace may build on. */
+function terminologySourceFor(scenarios: readonly CoreExampleScenario[]): StaticDefinitionTerminologySource {
+  return new StaticDefinitionTerminologySource(scenarios.map((scenario) => ({
+    definitionRef: componentRef('industry_pack', scenario.industryManifest.namespace, scenario.industryManifest),
+    terminology: terminologyOf(scenario.industrySchema),
+  })))
 }
 
 function toolSchemaValidator(ajv: Ajv2020): ToolSchemaValidator {
@@ -679,12 +907,15 @@ function profileSpecFor(scenario: CoreExampleScenario, dataBackendRef: VersionRe
       },
     },
     modelBindings: {},
+    // The four public tools: published facts/rules read through ontology_lookup, structured
+    // query and registered compute through data_query, and document Q&A through
+    // document_search. `web_search` stays disabled unless a deployment explicitly enables it.
     toolBindings: TOOL_CATALOGUE.map((tool) => ({
       toolId: tool.toolId,
-      enabled: tool.toolId === 'ontology_lookup',
+      enabled: tool.toolId === 'ontology_lookup' || tool.toolId === 'data_query' || tool.toolId === 'document_search',
       ...(tool.toolId === 'ontology_lookup' ? { maxCallsPerRun: 4 } : {}),
     })),
-    computeBindings: [],
+    computeBindings: [exampleComputeBinding()],
     policyRef: CORE_POLICY_REF,
   }
 }
@@ -712,6 +943,18 @@ function componentRegistrationInput(record: ComponentVersionRecord, now: string)
 
 function sameVersionRef(left: VersionRef, right: VersionRef): boolean {
   return left.id === right.id && left.version === right.version && left.digest === right.digest
+}
+
+/** A full-reference key, so a runtime selector cannot match a same-id sibling of another version/digest. */
+function versionRefKey(ref: VersionRef): string {
+  return `${ref.id}@${ref.version}#${ref.digest}`
+}
+
+function profileModelBindingEnabled(
+  binding: ModelBinding | undefined,
+  availableRef: VersionRef | undefined,
+): boolean {
+  return binding?.enabled === true && availableRef !== undefined && sameVersionRef(binding.modelRef, availableRef)
 }
 
 function scenarioForIndustryRef(
@@ -869,6 +1112,86 @@ function registerCoreImportRoute(input: {
   })
 }
 
+function readRelationNavigationRequest(value: unknown): RelationNavigationRequest | undefined {
+  if (!isRecord(value)) return undefined
+  const startEntityId = value['startEntityId']
+  const validAt = value['validAt']
+  const rawRelationIds = value['relationIds']
+  const maxPaths = value['maxPaths']
+  if (typeof startEntityId !== 'string' || typeof validAt !== 'string' || !Array.isArray(rawRelationIds)) {
+    return undefined
+  }
+  const relationIds: string[] = []
+  for (const relationId of rawRelationIds) {
+    if (typeof relationId !== 'string') return undefined
+    relationIds.push(relationId)
+  }
+  return {
+    startEntityId,
+    relationIds,
+    validAt,
+    ...(typeof maxPaths === 'number' ? { maxPaths } : {}),
+  }
+}
+
+/**
+ * Read-only loopback route for bounded published-relation navigation (V03-027 / #195,
+ * A.US-008.AC-02, A.FR-14). It is not a model tool: the canonical catalogue is the closed set
+ * of four model tools, so navigation is exposed to the host as an explicit service surface
+ * instead of widening the model's tool authority. The route mints a trusted context from the
+ * server-side authentication result and reads only the caller's scope.
+ */
+function registerCoreRelationNavigationRoute(input: {
+  readonly app: FastifyInstance
+  readonly authenticate: RequestAuthenticator
+  readonly examples: LoadedCoreExamples
+  readonly publications: SemanticPublicationStore
+  readonly identity: IdentityDecisionStore
+}): void {
+  input.app.post('/api/v1/core/relations/navigate', async (request, reply) => {
+    const auth = input.authenticate(request)
+    if (auth === undefined) {
+      return reply.status(401).send({ error: { code: 'UNAUTHENTICATED', message: 'loopback development authentication is required', retryable: false } })
+    }
+    const navigation = readRelationNavigationRequest(request.body)
+    if (navigation === undefined) {
+      throw new InvalidRequestFieldError('startEntityId, validAt and a relationIds array of strings are required')
+    }
+    const scenarioId = isRecord(request.body) ? request.body['scenarioId'] : undefined
+    if (typeof scenarioId !== 'string') throw new InvalidRequestFieldError('scenarioId is required')
+    const scenario = input.examples.scenarios.find((entry) => entry.scenarioId === scenarioId)
+    if (scenario === undefined) throw new InvalidRequestFieldError('scenarioId is not mounted by this deployment')
+    const navigator = new PublishedRelationNavigator({
+      publications: input.publications,
+      identity: input.identity,
+      definitionRef: scenario.definitionRef,
+      allowedRelationIds: scenario.industrySchema.relations.map((relation) => relation.relationId),
+      relationTargets: new Map(
+        scenario.industrySchema.relations.map((relation) => [
+          relation.relationId,
+          { fromObjectId: relation.fromObjectId, toObjectId: relation.toObjectId },
+        ]),
+      ),
+    })
+    const ctx = createRequestToolContext({
+      principal: auth.principal,
+      spaceId: auth.spaceId,
+      traceId: request.id,
+      runId: globalThis.crypto.randomUUID(),
+    })
+    try {
+      const result = await navigator.navigate(navigation, ctx)
+      return reply.status(200).send({ data: result, meta: { traceId: request.id } })
+    } catch (error) {
+      if (error instanceof RelationNavigationError) {
+        if (error.code === 'FORBIDDEN') throw new ForbiddenError(error.message)
+        throw new InvalidRequestFieldError(error.message)
+      }
+      throw error
+    }
+  })
+}
+
 class CoreInputValidity implements InputValidityPort {
   readonly #evidence: PostgresEvidenceStore
   readonly #scopeRef: ScopeRef
@@ -891,102 +1214,112 @@ class CoreInputValidity implements InputValidityPort {
   }
 }
 
-class CorePublicationValidity implements PublicationValidityPort {
-  readonly #evidence: PostgresEvidenceStore
-  readonly #artifacts: LocalImmutableBlobStore
+/**
+ * `observation` publication validity for the Core path. A published-fact page is revalidated
+ * against the current published view; any other observation payload (a relation edge or table
+ * result) is left to the generic observation rule, so the gate no longer blindly rejects — or
+ * blindly accepts — a non-fact evidence shape as if it were a fact page.
+ */
+class CoreObservationPublicationValidator implements PublicationEvidenceValidator {
+  readonly evidenceKind = 'observation' as const
   readonly #facts: CorePublishedFactsProvider
   readonly #scopeRef: ScopeRef
+
+  constructor(input: { readonly facts: CorePublishedFactsProvider; readonly scopeRef: ScopeRef }) {
+    this.#facts = input.facts
+    this.#scopeRef = input.scopeRef
+  }
+
+  async validate({ record, payload, ctx }: PublicationEvidenceValidationInput): Promise<PublicationEvidenceValidation> {
+    if (!isRecord(payload) || !Array.isArray(payload['items'])) return { state: 'current' }
+    const items = payload['items']
+    const factItems = items.filter((item) => isRecord(item) && item['kind'] === 'fact')
+    if (factItems.length === 0 || factItems.length !== items.length) return { state: 'current' }
+    const first = factItems[0]
+    if (!isRecord(first) || !isRecord(first['conceptRef']) || typeof first['conceptRef']['namespace'] !== 'string') {
+      return { state: 'blocked', reasons: ['evidence_unverifiable'], details: ['fact evidence has no exact concept namespace'] }
+    }
+    const namespace = first['conceptRef']['namespace']
+    const concepts: { namespace: string; conceptId: string; definitionVersion?: string }[] = []
+    for (const item of factItems) {
+      if (!isRecord(item) || !isRecord(item['conceptRef']) || typeof item['conceptRef']['conceptId'] !== 'string' || item['conceptRef']['namespace'] !== namespace) {
+        return { state: 'blocked', reasons: ['evidence_unverifiable'], details: ['fact evidence mixed concept namespaces or lacked a typed concept reference'] }
+      }
+      const definitionVersion = item['conceptRef']['definitionVersion']
+      concepts.push({
+        namespace,
+        conceptId: item['conceptRef']['conceptId'],
+        ...(typeof definitionVersion === 'string' ? { definitionVersion } : {}),
+      })
+    }
+    let page: OntologyFactPage
+    try {
+      page = await this.#facts.listFacts({
+        scopeRef: this.#scopeRef,
+        concepts: [...new Map(concepts.map((concept) => [concept.conceptId, concept])).values()],
+        entityRefs: [],
+        limit: 10_000,
+        validAt: record.envelope.observedAt,
+      }, ctx)
+    } catch {
+      return { state: 'blocked', reasons: ['evidence_unverifiable'], details: ['published fact evidence could not be revalidated against its source'] }
+    }
+    if (!page.covered || page.nextCursor !== null) {
+      return { state: 'stale', details: ['published fact evidence no longer has a complete source view'] }
+    }
+    const current = page.facts.map((fact) => ({
+      kind: 'fact',
+      ref: fact.factRef,
+      conceptRef: fact.conceptRef,
+      ...(fact.label === undefined ? {} : { label: fact.label }),
+      ...(fact.validity === undefined ? {} : { validity: fact.validity }),
+      ...(fact.payload === undefined ? {} : { payload: fact.payload }),
+    })).sort((left, right) => left.ref.id.localeCompare(right.ref.id))
+    const previous = factItems.map((item) => item).sort((left, right) => {
+      const leftRef = isRecord(left) && isRecord(left['ref']) && typeof left['ref']['id'] === 'string' ? left['ref']['id'] : ''
+      const rightRef = isRecord(right) && isRecord(right['ref']) && typeof right['ref']['id'] === 'string' ? right['ref']['id'] : ''
+      return leftRef.localeCompare(rightRef)
+    })
+    if (canonicalJson(current) !== canonicalJson(previous)) {
+      return { state: 'stale', details: ['published facts changed after the evidence was collected'] }
+    }
+    return { state: 'current' }
+  }
+}
+
+/**
+ * Core publication validity: a per-evidence-kind engine (V03-035 / #206) that re-checks the
+ * revision, digest and current visibility of every dependency of the verified draft (facts,
+ * relation/table observations, rule derivations, computations, document spans and their
+ * transitive support), plus any formal-table verification receipts. Only the same verified
+ * version can publish; a later edit or retraction blocks, and a stale-but-intact support is
+ * published only with an explicit `asOf`.
+ */
+class CorePublicationValidity implements PublicationValidityPort {
+  readonly #engine: PublicationValidityEngine
 
   constructor(input: {
     readonly evidence: PostgresEvidenceStore
     readonly artifacts: LocalImmutableBlobStore
     readonly facts: CorePublishedFactsProvider
     readonly scopeRef: ScopeRef
+    readonly tables?: TableVerificationReceiptStore
+    readonly policies?: TaskPolicyReportStore
   }) {
-    this.#evidence = input.evidence
-    this.#artifacts = input.artifacts
-    this.#facts = input.facts
-    this.#scopeRef = input.scopeRef
+    this.#engine = new PublicationValidityEngine({
+      evidence: input.evidence,
+      artifacts: input.artifacts,
+      validators: [
+        ...defaultPublicationEvidenceValidators(),
+        new CoreObservationPublicationValidator({ facts: input.facts, scopeRef: input.scopeRef }),
+      ],
+      ...(input.tables === undefined ? {} : { tables: input.tables }),
+      ...(input.policies === undefined ? {} : { policies: input.policies }),
+    })
   }
 
-  async check(request: PublicationValidityRequest, ctx: ToolContext): Promise<PublicationValidityReport> {
-    const details: string[] = []
-    const blockedReasons: PublicationValidityReport['blockedReasons'][number][] = []
-    for (const evidenceRef of request.evidenceRefs) {
-      const record = await this.#evidence.get(this.#scopeRef, evidenceRef.id, ctx)
-      if (record === undefined || !sameResourceRef(record.evidenceRef, evidenceRef)) {
-        blockedReasons.push('evidence_retracted')
-        details.push(`evidence ${evidenceRef.id} is no longer visible`)
-        continue
-      }
-      const payloadRef = record.envelope.payloadRef
-      if (payloadRef === undefined) {
-        blockedReasons.push('evidence_unverifiable')
-        details.push(`evidence ${evidenceRef.id} has no immutable result payload`)
-        continue
-      }
-      try {
-        const authorized = await this.#artifacts.getAuthorized({ scopeRef: this.#scopeRef, blobRef: payloadRef }, ctx)
-        if (!authorized.integrityVerified) throw new Error('blob integrity was not verified')
-        const bytes = await this.#artifacts.readAuthorized({ scopeRef: this.#scopeRef, blobRef: payloadRef }, ctx)
-        const payload: unknown = JSON.parse(new TextDecoder('utf-8', { fatal: true }).decode(bytes))
-        if (!isRecord(payload) || !Array.isArray(payload['items'])) throw new Error('evidence payload is not an ontology lookup result')
-        const items = payload['items']
-        const factItems = items.filter((item) => isRecord(item) && item['kind'] === 'fact')
-        if (factItems.length !== items.length || factItems.length === 0) throw new Error('evidence does not contain only published facts')
-        const first = factItems[0]
-        if (!isRecord(first) || !isRecord(first['conceptRef']) || typeof first['conceptRef']['namespace'] !== 'string') {
-          throw new Error('fact evidence has no exact concept namespace')
-        }
-        const namespace = first['conceptRef']['namespace']
-        const concepts: { namespace: string; conceptId: string; definitionVersion?: string }[] = []
-        for (const item of factItems) {
-          if (!isRecord(item) || !isRecord(item['conceptRef']) || typeof item['conceptRef']['conceptId'] !== 'string' || item['conceptRef']['namespace'] !== namespace) {
-            throw new Error('fact evidence mixed concept namespaces or lacked a typed concept reference')
-          }
-          const definitionVersion = item['conceptRef']['definitionVersion']
-          concepts.push({
-            namespace,
-            conceptId: item['conceptRef']['conceptId'],
-            ...(typeof definitionVersion === 'string' ? { definitionVersion } : {}),
-          })
-        }
-        const page = await this.#facts.listFacts({
-          scopeRef: this.#scopeRef,
-          concepts: [...new Map(concepts.map((concept) => [concept.conceptId, concept])).values()],
-          entityRefs: [],
-          limit: 10_000,
-          validAt: record.envelope.observedAt,
-        }, ctx)
-        if (!page.covered || page.nextCursor !== null) {
-          blockedReasons.push('data_stale')
-          details.push(`published fact evidence ${evidenceRef.id} no longer has a complete source view`)
-          continue
-        }
-        const current = page.facts.map((fact) => ({
-          kind: 'fact',
-          ref: fact.factRef,
-          conceptRef: fact.conceptRef,
-          ...(fact.label === undefined ? {} : { label: fact.label }),
-          ...(fact.validity === undefined ? {} : { validity: fact.validity }),
-          ...(fact.payload === undefined ? {} : { payload: fact.payload }),
-        })).sort((left, right) => left.ref.id.localeCompare(right.ref.id))
-        const previous = factItems.map((item) => item).sort((left, right) => {
-          const leftRef = isRecord(left) && isRecord(left['ref']) && typeof left['ref']['id'] === 'string' ? left['ref']['id'] : ''
-          const rightRef = isRecord(right) && isRecord(right['ref']) && typeof right['ref']['id'] === 'string' ? right['ref']['id'] : ''
-          return leftRef.localeCompare(rightRef)
-        })
-        if (canonicalJson(current) !== canonicalJson(previous)) {
-          blockedReasons.push('data_stale')
-          details.push(`published facts changed after evidence ${evidenceRef.id} was collected`)
-        }
-      } catch {
-        blockedReasons.push('evidence_unverifiable')
-        details.push(`evidence ${evidenceRef.id} could not be revalidated against its source`)
-      }
-    }
-    const unique = [...new Set(blockedReasons)]
-    return { publishable: unique.length === 0, blockedReasons: unique, historyLimited: false, details }
+  check(request: PublicationValidityRequest, ctx: ToolContext): Promise<PublicationValidityReport> {
+    return this.#engine.check(request, ctx)
   }
 }
 
@@ -1015,6 +1348,103 @@ class UnsupportedOutboxConsumer implements OutboxConsumer {
   consume(message: OutboxMessageRecord, _ctx: ToolContext): Promise<void> {
     void _ctx
     return Promise.reject(new Error(`no Core outbox consumer is registered for ${message.topic}`))
+  }
+}
+
+/**
+ * Acknowledge the industry-workspace lifecycle topics. The workspace write already committed
+ * the workspace row and the immutable draft revision in the same transaction as the outbox
+ * row, so the consumer only re-verifies that the referenced revision is durably visible
+ * before acking; it creates no state and never revives a workspace the source transaction
+ * did not commit.
+ */
+class IndustryWorkspaceOutboxConsumer implements OutboxConsumer {
+  readonly topics = [
+    INDUSTRY_WORKSPACE_CREATED_TOPIC,
+    INDUSTRY_WORKSPACE_DRAFT_APPENDED_TOPIC,
+  ] as const
+  readonly #store: IndustryWorkspaceStore
+  readonly #scopeRef: ScopeRef
+
+  constructor(store: IndustryWorkspaceStore, scopeRef: ScopeRef) {
+    this.#store = store
+    this.#scopeRef = scopeRef
+  }
+
+  async consume(message: OutboxMessageRecord, ctx: ToolContext): Promise<void> {
+    if (!isRecord(message.payload)) throw new Error('industry workspace outbox payload is malformed')
+    const workspaceId = message.payload['workspaceId']
+    const revision = message.payload['revision']
+    if (typeof workspaceId !== 'string' || typeof revision !== 'string') {
+      throw new Error('industry workspace outbox payload is malformed')
+    }
+    const workspace = await this.#store.getWorkspace(this.#scopeRef, workspaceId, ctx)
+    if (workspace === undefined) {
+      throw new Error('industry workspace outbox references an unknown workspace')
+    }
+    const draft = await this.#store.getDraft(this.#scopeRef, workspaceId, revision, ctx)
+    if (draft === undefined) {
+      throw new Error('industry workspace outbox references an unknown draft revision')
+    }
+  }
+}
+
+/**
+ * Acknowledge the `asset.pack.published` lifecycle topic. The publication transaction already
+ * committed the immutable pack row, the definition version and the outbox row atomically, so the
+ * consumer only re-verifies that the referenced pack is durably visible before acking; it creates
+ * no state and never revives a publication the source transaction did not commit.
+ */
+class PackPublicationOutboxConsumer implements OutboxConsumer {
+  readonly topics = [PACK_PUBLISHED_TOPIC] as const
+  readonly #store: PostgresPublishedPackAssetStore
+  readonly #scopeRef: ScopeRef
+
+  constructor(store: PostgresPublishedPackAssetStore, scopeRef: ScopeRef) {
+    this.#store = store
+    this.#scopeRef = scopeRef
+  }
+
+  async consume(message: OutboxMessageRecord, ctx: ToolContext): Promise<void> {
+    if (!isRecord(message.payload)) throw new Error('asset pack publication outbox payload is malformed')
+    const packId = message.payload['packId']
+    const version = message.payload['version']
+    if (typeof packId !== 'string' || typeof version !== 'string') {
+      throw new Error('asset pack publication outbox payload is malformed')
+    }
+    const asset = await this.#store.findPack(this.#scopeRef, packId, version, ctx)
+    if (asset === undefined) {
+      throw new Error('asset pack publication outbox references an unknown published pack')
+    }
+  }
+}
+
+/**
+ * Acknowledge the `project.*` lifecycle topics. The project write already committed the project
+ * head and the immutable revision in the same transaction as the outbox row, so the consumer only
+ * re-verifies the referenced revision is durably visible before acking; it creates no state.
+ */
+class ProjectRevisionOutboxConsumer implements OutboxConsumer {
+  readonly topics = [PROJECT_CREATED_TOPIC, PROJECT_REVISION_APPENDED_TOPIC] as const
+  readonly #store: ProjectStore
+  readonly #scopeRef: ScopeRef
+
+  constructor(store: ProjectStore, scopeRef: ScopeRef) {
+    this.#store = store
+    this.#scopeRef = scopeRef
+  }
+
+  async consume(message: OutboxMessageRecord, ctx: ToolContext): Promise<void> {
+    if (!isRecord(message.payload)) throw new Error('project outbox payload is malformed')
+    const projectId = message.payload['projectId']
+    const revision = message.payload['revision']
+    if (typeof projectId !== 'string' || typeof revision !== 'string') {
+      throw new Error('project outbox payload is malformed')
+    }
+    const stored = await this.#store.getRevision(this.#scopeRef, projectId, revision, ctx)
+    if (stored === undefined) {
+      throw new Error('project outbox references an unknown project revision')
+    }
   }
 }
 
@@ -1056,6 +1486,12 @@ export async function createCoreLocalComposition(options: CoreLocalCompositionOp
       applicationName: 'ontology-core-local-document-parser',
     })
     cleanup.unshift(() => parseStore.close())
+    const structuredStore = new PostgresStructuredIngestionStore({
+      connectionString: options.databaseUrl,
+      maxPoolSize: 4,
+      applicationName: 'ontology-core-local-structured-ingestion',
+    })
+    cleanup.unshift(() => structuredStore.close())
     const keywordIndexStore = new PostgresKeywordIndexStore({
       connectionString: options.databaseUrl,
       maxPoolSize: 8,
@@ -1072,12 +1508,30 @@ export async function createCoreLocalComposition(options: CoreLocalCompositionOp
     const profileStore = new PostgresProfileStore(database)
     const runStore = new PostgresRunStore(database)
     const jobStore = new PostgresJobStore(database)
+    const workspaceStore = new PostgresAssetWorkspaceStore(database)
     const candidateStore = new PostgresCandidateStore(database)
+    const assetCandidateStore = new PostgresAssetCandidateStore(database)
+    const ruleActionCandidateStore = new PostgresRuleActionCandidateStore(database)
+    const definitionEditingStore = new PostgresDefinitionEditingStore(database)
+    const instanceReviewStore = new PostgresInstanceReviewStore(database)
+    const syntheticExampleSetStore = new PostgresSyntheticExampleSetStore(database)
+    const validationReportStore = new PostgresIndustryValidationReportStore(database)
+    const publishedPackStore = new PostgresPublishedPackAssetStore(database)
+    const projectStore = new PostgresProjectStore(database)
+    const projectReadinessStore = new PostgresProjectReadinessStore(database)
+    const projectMappingStore = new PostgresProjectMappingStore(database)
+    const projectRecordStore = new PostgresProjectRecordStore(database)
+    const taskBindingStore = new PostgresPublishedTaskBindingStore(database)
+    const taskInputSnapshotStore = new PostgresTaskInputSnapshotStore(database)
+    const runExecutionBindingStore = new PostgresRunExecutionBindingStore(database)
+    const taskFinalizationReceiptStore = new PostgresTaskFinalizationReceiptStore(database)
     const identityStore = new PostgresIdentityDecisionStore(database)
     const publicationStore = new PostgresSemanticPublicationStore(database)
     const definitionStore = new PostgresSemanticDefinitionStore(database)
     const workflowStore = new PostgresWorkflowStore(database)
+    const planReceiptStore = new PostgresCorePlanReceiptStore(database)
     const evidenceStore = new PostgresEvidenceStore(database)
+    const materializationStore = new PostgresMaterializationStore(database)
     const decisionStateReferences = new PostgresDecisionStateReferenceStore(database)
     const answerStore = new PostgresAnswerStore(database, { requireWorkflowDispatchFence: true })
     const dispatchStore = new PostgresWorkflowDispatchStore(database)
@@ -1102,15 +1556,23 @@ export async function createCoreLocalComposition(options: CoreLocalCompositionOp
     })
     const extractionSchemaValidator = {
       async validate(schemaRef: VersionRef, candidate: unknown) {
-        if (!sameVersionRef(schemaRef, EXTRACTION_RESPONSE_SCHEMA_REF)) {
-          return { valid: false, errors: ['unknown extraction response schema'] }
+        if (sameVersionRef(schemaRef, EXTRACTION_RESPONSE_SCHEMA_REF)) {
+          try {
+            parseModelCandidates(canonicalJson(candidate))
+            return { valid: true }
+          } catch {
+            return { valid: false, errors: ['extraction response did not match the registered candidate contract'] }
+          }
         }
-        try {
-          parseModelCandidates(canonicalJson(candidate))
-          return { valid: true }
-        } catch {
-          return { valid: false, errors: ['extraction response did not match the registered candidate contract'] }
+        if (sameVersionRef(schemaRef, TBOX_RESPONSE_SCHEMA_REF)) {
+          try {
+            parseDefinitionCandidateOutput(canonicalJson(candidate))
+            return { valid: true }
+          } catch {
+            return { valid: false, errors: ['definition candidate response did not match the registered generator contract'] }
+          }
         }
+        return { valid: false, errors: ['unknown model response schema'] }
       },
     }
     const modelCapabilities = createCoreModelCapabilityFactory({
@@ -1125,7 +1587,10 @@ export async function createCoreLocalComposition(options: CoreLocalCompositionOp
     const schemaSource = schemaSourceFor(options.examples.scenarios)
     const semanticDefinitions = new SemanticDefinitionService({ control, store: definitionStore })
     const profileValidatorImpl = profileValidator(createAjv())
-    const industrySource = industrySourceFor(options.examples.scenarios)
+    const industrySource = new StoreBackedIndustryManifestSource({
+      store: publishedPackStore,
+      fallback: industrySourceFor(options.examples.scenarios),
+    })
     const profileResolver = new ProfileResolver({
       control,
       store: profileStore,
@@ -1140,7 +1605,8 @@ export async function createCoreLocalComposition(options: CoreLocalCompositionOp
       adapters: createStaticProbeAdapterResolver([]),
     })
 
-    const componentRecords = scenarioComponentRecords(options.examples.scenarios, new Date().toISOString())
+    const coreModelRefs = modelComponentRefsOf(modelEnvironment, modelCapabilities)
+    const componentRecords = scenarioComponentRecords(options.examples.scenarios, new Date().toISOString(), coreModelRefs)
     const bootstrapProfileSpecsByScenario = Object.fromEntries(options.examples.scenarios.map((scenario) => [
       scenario.scenarioId,
       profileSpecFor(scenario, DATA_DUCKDB_ADAPTER_REF),
@@ -1169,6 +1635,10 @@ export async function createCoreLocalComposition(options: CoreLocalCompositionOp
         throw new Error(`published definition digest differs from mounted scenario ${scenario.scenarioId}`)
       }
     }
+    // Mount the runnable task bindings for every scenario (SPEC v0.3a §EX-2.1): structured
+    // query, document Q&A, rule judgement, registered compute and the legacy published-facts
+    // path. They are declarative records; a normal `POST /runs` task request selects one.
+    await mountCoreTaskBindings(taskBindingStore, options.examples.scenarios, scopeRef, profileContext)
 
     const mappings = new InMemorySemanticMappingRegistry(options.examples.scenarios.flatMap((scenario) =>
       scenario.physicalMappings.map((mapping) => mapping.mapping),
@@ -1177,6 +1647,15 @@ export async function createCoreLocalComposition(options: CoreLocalCompositionOp
     cleanup.unshift(async () => duckDb.close())
     const documentSpanReader = new DocumentSpanReader({ blobs: blobStore, store: parseStore })
     const documentSearch = new Bm25DocumentSearchService({ indexStore: keywordIndexStore, spanReader: documentSpanReader })
+    const projectDocumentStore = new PostgresProjectDocumentStore(database)
+    const projectDocumentIndexService = new ProjectDocumentIndexService({
+      store: projectDocumentStore,
+      parseStore,
+      indexStore: keywordIndexStore,
+      spanReader: documentSpanReader,
+      projects: projectStore,
+      readiness: projectReadinessStore,
+    })
     const publishedSourceList = options.examples.scenarios.map((scenario) => new PublishedSemanticSource(
       publicationStore,
       { identity: identityStore, definitionRef: scenario.definitionRef },
@@ -1193,6 +1672,39 @@ export async function createCoreLocalComposition(options: CoreLocalCompositionOp
     const facts = new CorePublishedFactsProvider(factsProviders)
     const lookup = new OntologyLookupService({ definitions: semanticDefinitions, mappings, facts, pageSize: 50, maxPageSize: 200 })
     const lookupHandler = new OntologyLookupHandler({ lookup, sourceRef: FACTS_SOURCE_REF, dataMode: 'synthetic' })
+    // The run-scoped rule-derivation evidence step (V03-028/029): the producer reads the exact
+    // append-only materialized instance, bridges its premise/policy spans and records the
+    // `rule_derivation` support payload under the run's own trusted context. It is reached only
+    // through the fixed `rule_judgement` plan's `ontology_lookup(intent=rules)` step.
+    const ruleDerivationProducer = new MaterializedRuleDerivationEvidenceProducer({
+      materialization: materializationStore,
+      evidence: evidenceStore,
+      artifacts: createBlobArtifactWriter(blobStore),
+      candidates: candidateStore,
+      documentParses: parseStore,
+      documentSpans: documentSpanReader,
+      componentRef: componentRef('compute_extension', 'core-rule-derivation-producer', 'rule-derivation-producer@1.0.0'),
+    })
+    const ontologyLookupHandler = createCoreOntologyLookupHandler({
+      lookup: lookupHandler,
+      producer: ruleDerivationProducer,
+      sourceRef: { namespace: 'ontology-core-local', sourceId: 'materialized-rule-derivation' },
+    })
+    // The registered-compute path (ADR-11, SPEC v0.3a §EX-6): the handler runs the registered
+    // neutral example operation through the same bounded helpers the gateway uses. A handler
+    // reaches only the fixed approved input refs through a scoped reader; the operation is
+    // selected by its registered ref, never by model input.
+    const computeArtifacts = createBlobArtifactWriter(blobStore)
+    const computeReader: ScopedArtifactReader = {
+      read: (request, ctx) => {
+        const target = request.approvedInputRefs[0]
+        if (target === undefined) throw new Error('the compute request carried no approved input reference')
+        return blobStore.readAuthorized(
+          { scopeRef: { tenantId: ctx.principal.tenantId, spaceId: ctx.allowedResources.spaceId }, blobRef: target },
+          ctx,
+        )
+      },
+    }
     const dataQueryHandler = new DataQueryHandler({
       query: duckDb,
       catalog: duckDb,
@@ -1200,14 +1712,25 @@ export async function createCoreLocalComposition(options: CoreLocalCompositionOp
       consistency: 'immutable',
       dataMode: 'synthetic',
       catalogSourceRef: { namespace: 'ontology-core-local', sourceId: 'duckdb-synthetic-snapshot' },
+      compute: {
+        registry: operationRegistry(),
+        handlers: createExampleComputeHandlers(),
+        artifacts: computeArtifacts,
+        reader: computeReader,
+        validator: toolSchemaValidator(createAjv()),
+      },
     })
-    const documentSearchHandler = createBm25DocumentSearchToolHandler({ service: documentSearch })
+    const documentSearchHandler = createCoreDocumentSearchHandler({
+      service: documentSearch,
+      spanReader: documentSpanReader,
+      dataMode: 'observed',
+    })
     const gatewayComposition = createToolGatewayComposition({
       database,
       blobStore,
       budget,
       validator: toolSchemaValidator(createAjv()),
-      handlers: [lookupHandler, dataQueryHandler, documentSearchHandler],
+      handlers: [ontologyLookupHandler, dataQueryHandler, documentSearchHandler],
     })
 
     const runProfileBinder = {
@@ -1220,16 +1743,83 @@ export async function createCoreLocalComposition(options: CoreLocalCompositionOp
       manifests: workflowStore,
       budget,
     })
+    const executionPreflight = new RunExecutionPreflightService({
+      projects: projectStore,
+      taskBindings: taskBindingStore,
+      inputSnapshots: taskInputSnapshotStore,
+      runExecutionBindings: runExecutionBindingStore,
+      readiness: projectReadinessStore,
+      operations: operationRegistry(),
+      availableCapabilities: resolvedCapabilitiesFrom(componentRecords),
+      supportedResultSchemaRefs: [CORE_TYPED_RESULT_SCHEMA_REF],
+      effectiveLimitsRef: CORE_EFFECTIVE_LIMITS_REF,
+      parameters: taskParameterValidator(createAjv()),
+    })
     const runs = new RunService({
       store: runStore,
       control,
       profiles: runProfileBinder,
+      execution: executionPreflight,
     })
     const phase = new RunPhaseDriver({ store: runStore, control })
     const dispatchFences = new Map<Uuid, WorkflowDispatchFence>()
-    const runtimeRecord = componentRecords.find((record) => record.manifest.kind === 'runtime' && record.manifest.id === 'runtime-template')
-    if (runtimeRecord === undefined) throw new Error('Core template runtime component is not registered')
-    const runtime = new TemplateRuntimeAdapter({ manifest: runtimeRecord.manifest, plans: new CoreFactsPlanResolver(runs, profileResolver, options.examples.scenarios) })
+    // Both real runtimes are assembled here at the normal Core entry: the deterministic
+    // Template executor (fixed/known-step paths) and the dynamic Pi runtime (bounded
+    // "query insufficient → supplement → complete" collection). A run selects exactly one
+    // by the runtime pinned in its resolved profile; the selector never chooses for it, and
+    // both adapters share the same gateway, resolved profile and single budget ledger.
+    const runtimeRecords = componentRecords.filter((record) => record.manifest.kind === 'runtime')
+    const templateRuntimeRecord = runtimeRecords.find((record) => record.manifest.id === 'runtime-template')
+    if (templateRuntimeRecord === undefined) throw new Error('Core template runtime component is not registered')
+    const piRuntimeRecord = runtimeRecords.find((record) => record.manifest.id === 'runtime-pi')
+    if (piRuntimeRecord === undefined) throw new Error('Core Pi runtime component is not registered')
+    const planResolver = new CoreTemplatePlanResolver({
+      runs,
+      profiles: profileResolver,
+      manifests: workflowStore,
+      receipts: planReceiptStore,
+      semanticDefinitions,
+      mappings,
+      scenarios: options.examples.scenarios,
+      scopeRef,
+      modelRefs: coreModelRefs,
+      taskBindings: taskBindingStore,
+      executionBindings: runExecutionBindingStore,
+      operations: operationRegistry(),
+      decisionStateRefProvider,
+      isRouteClarificationReceiptApproved: (input, ctx) => decisionStateReferences.isApproved(scopeRef, input, ctx),
+    })
+    const templateRuntime = new TemplateRuntimeAdapter({ manifest: templateRuntimeRecord.manifest, plans: planResolver })
+    // The Pi adapter is the same class the conformance suite exercises: it exposes only the
+    // canonical four model tools and every proposal is authorized and executed by the run's
+    // gateway. Its generation model reference matches the registered Core generation
+    // component, so a profile that binds generation drives the real model port; when no
+    // generation model is configured the capability factory still hands it the disabled
+    // port, and the run fails explicitly instead of fabricating an answer.
+    const piRuntime = new PiRuntimeAdapter({
+      manifest: piRuntimeRecord.manifest,
+      toolIds: TOOL_CATALOGUE.map((tool) => tool.toolId),
+      modelRef: {
+        modelId: coreModelRefs.generation?.id ?? 'model-not-configured',
+        version: COMPONENT_VERSION,
+        provider: 'ontology',
+      },
+      generationRole: 'planner',
+    })
+    const runtimeAdapterByRef = new Map<string, RuntimeAdapter>([
+      [versionRefKey(templateRuntimeRecord.manifestRef), templateRuntime],
+      [versionRefKey(piRuntimeRecord.manifestRef), piRuntime],
+    ])
+    const runAllowedCollectionRefs = async (runId: Uuid, ctx: ToolContext): Promise<readonly string[]> => {
+      const archived = await runExecutionBindingStore.getBindingByRun(scopeRef, runId, ctx)
+      const request = archived?.binding.request
+      if (request === undefined || request.mode !== 'task') return []
+      const binding = await taskBindingStore.getBinding(scopeRef, request.taskBindingRef, ctx)
+      // A document-QA run may search only its own pinned project's host-minted collection.
+      return binding?.kind === 'document_qa'
+        ? [projectCollectionRef(request.projectRevisionRef.projectId)]
+        : []
+    }
     const controllerDependencies = {
       runs,
       phase,
@@ -1237,10 +1827,11 @@ export async function createCoreLocalComposition(options: CoreLocalCompositionOp
       manifests: workflowStore,
       runtimes: {
         select: async (runtimeRef: VersionRef) => {
-          if (runtimeRef.id !== runtimeRecord.manifestRef.id || runtimeRef.version !== runtimeRecord.manifestRef.version || runtimeRef.digest !== runtimeRecord.manifestRef.digest) {
-            throw new CoreCapabilityError('this local deployment registers only runtime-template@1.0.0')
+          const adapter = runtimeAdapterByRef.get(versionRefKey(runtimeRef))
+          if (adapter === undefined) {
+            throw new CoreCapabilityError(`this local deployment does not register runtime ${runtimeRef.id}@${runtimeRef.version}`)
           }
-          return runtime
+          return adapter
         },
       } satisfies RuntimeSelectorPort,
       capabilities: {
@@ -1260,19 +1851,37 @@ export async function createCoreLocalComposition(options: CoreLocalCompositionOp
             resolvedProfile: resolved.resolved,
             operations: operationRegistry(),
           })
+          const generationBound = profileModelBindingEnabled(resolved.resolved.modelBindings['generation'], coreModelRefs.generation)
+          const decisionBound = profileModelBindingEnabled(resolved.resolved.modelBindings['decision'], coreModelRefs.decision)
           const modelExecution = modelCapabilities.forExecution({
             ledgerId: binding.budgetLedgerId,
             signal: binding.signal,
           })
           return {
             gateway,
-            generation: modelExecution.generation ?? DISABLED_GENERATION,
-            decision: modelExecution.decision ?? disabledDecision(),
+            generation: generationBound ? modelExecution.generation ?? DISABLED_GENERATION : DISABLED_GENERATION,
+            decision: decisionBound ? modelExecution.decision ?? disabledDecision() : disabledDecision(),
             checkpoints: createRunCheckpointPort(runStore),
           } satisfies RuntimeCapabilitySet
         },
       } satisfies RuntimeCapabilityFactoryPort,
-      draftWriter: new PublishedFactsDraftWriter({ evidence: evidenceStore, artifacts: blobStore }),
+      draftWriter: new TypedEvidenceDraftWriter({
+        evidence: evidenceStore,
+        artifacts: blobStore,
+        // A task-bound run resolves its archived typed result manifest and finalization receipt
+        // through the real execution/published-task bindings, so the production path emits an
+        // `answer-draft@3`; a legacy run without an execution binding stays on `@2`.
+        typedResult: new RunTypedResultContextSource({
+          runs: runStore,
+          executionBindings: runExecutionBindingStore,
+          taskBindings: taskBindingStore,
+          manifests: workflowStore,
+          evidence: evidenceStore,
+          artifacts: blobStore,
+          artifactWriter: gatewayComposition.artifacts,
+          receipts: taskFinalizationReceiptStore,
+        }),
+      }),
       limited: new RestrictedLimitedAnswerComposer(),
       verifier: new DraftVerificationService({
         evidence: evidenceStore,
@@ -1286,7 +1895,14 @@ export async function createCoreLocalComposition(options: CoreLocalCompositionOp
         answers: answerStore,
         verifications: workflowStore,
         manifests: workflowStore,
-        validity: new CorePublicationValidity({ evidence: evidenceStore, artifacts: blobStore, facts, scopeRef }),
+        validity: new CorePublicationValidity({
+          evidence: evidenceStore,
+          artifacts: blobStore,
+          facts,
+          scopeRef,
+          tables: new PostgresTableVerificationStore(database),
+          policies: new PostgresTaskPolicyReportStore(database),
+        }),
       }),
       validity: new CoreInputValidity(evidenceStore, scopeRef),
       publicationFence: async (runId: Uuid) => dispatchFences.get(runId),
@@ -1316,7 +1932,7 @@ export async function createCoreLocalComposition(options: CoreLocalCompositionOp
           runContext,
           run.resolvedProfileHash,
         )
-        return workerContext(scopeRef, sourceRefsOf(scenario), runId, run.resolvedProfileHash, hostClock)
+        return workerContext(scopeRef, sourceRefsOf(scenario), runId, run.resolvedProfileHash, hostClock, await runAllowedCollectionRefs(runId, runContext))
       },
       onFenceChange(runId, fence) {
         if (fence === undefined) {
@@ -1334,6 +1950,7 @@ export async function createCoreLocalComposition(options: CoreLocalCompositionOp
     })
 
     const jobService = new JobService({ store: jobStore })
+    const industryWorkspaceService = new IndustryWorkspaceService({ store: workspaceStore, jobs: jobStore })
     const parser: DocumentParserPort = new LocalDocumentExtractionService({ blobs: blobStore, store: parseStore })
     const pipeline = new ExtractionPipeline({
       schemaSource,
@@ -1347,8 +1964,23 @@ export async function createCoreLocalComposition(options: CoreLocalCompositionOp
       },
       outputLimit: { maxTokens: 2_048 },
     })
+    const structuredExtractionService = new StructuredExtractionService({
+      schemaSource,
+      candidates: candidateStore,
+      ingestion: structuredStore,
+      originals: {
+        read: (request, ctx) => {
+          const target = request.approvedInputRefs[0]
+          if (target === undefined) throw new Error('the structured extraction request carried no approved input reference')
+          return blobStore.readAuthorized({ scopeRef: { tenantId: ctx.principal.tenantId, spaceId: ctx.allowedResources.spaceId }, blobRef: target }, ctx)
+        },
+      } satisfies ScopedArtifactReader,
+      parser: new StructuredDocumentParser(),
+    })
     const handlers = createIngestionHandlerRegistry({
       parser,
+      structured: new LocalStructuredIngestionService({ blobs: blobStore, store: structuredStore }),
+      structuredExtraction: new StructuredExtractionStageHandler({ extraction: structuredExtractionService }),
       downstream: [
         new ExtractionStageHandler({ pipeline, parseStore }),
         new CandidateValidationStageHandler({ pipeline, parseStore }),
@@ -1374,7 +2006,6 @@ export async function createCoreLocalComposition(options: CoreLocalCompositionOp
         )
       },
     })
-    const materializationStore = new PostgresMaterializationStore(database)
     const materializer = new IncrementalMaterializer({ publishedSource: multiSchemaSource, materialization: materializationStore })
     const materializationConsumer = new MaterializationOutboxConsumer({
       materializer,
@@ -1384,7 +2015,13 @@ export async function createCoreLocalComposition(options: CoreLocalCompositionOp
       materialization: materializationStore,
     })
     const outboxConsumer = new TopicOutboxConsumerRouter(
-      [materializationConsumer, new CoreFactsOutboxFallback(candidateStore, scopeRef)],
+      [
+        materializationConsumer,
+        new CoreFactsOutboxFallback(candidateStore, scopeRef),
+        new IndustryWorkspaceOutboxConsumer(workspaceStore, scopeRef),
+        new PackPublicationOutboxConsumer(publishedPackStore, scopeRef),
+        new ProjectRevisionOutboxConsumer(projectStore, scopeRef),
+      ],
       new UnsupportedOutboxConsumer(),
     )
     const dispatcher = new OutboxDispatcher({ store: jobStore, consumer: outboxConsumer })
@@ -1408,9 +2045,14 @@ export async function createCoreLocalComposition(options: CoreLocalCompositionOp
     dispatchWorkerPromise = workflowDispatchWorker.run(dispatchAbort.signal)
 
     const runValidation = async (
-      submission: { readonly profileRef: ProfileRef; readonly question: string; readonly scopeRef: ScopeRef },
+      submission: { readonly profileRef: ProfileRef; readonly question: string; readonly scopeRef: ScopeRef; readonly task?: RunExecutionRequest },
       ctx: ToolContext,
     ) => {
+      // A fixed task run resolves its own deterministic plan and its own input/approved refs
+      // through the run execution binding; its capability/readiness preflight already ran in
+      // `RunExecutionPreflightService`, so it must not be forced through the ordinary NL
+      // generation/data_query admission. The legacy `facts:` path keeps its dedicated check.
+      if (submission.task !== undefined && submission.task.mode === 'task') return
       const { scenario, resolved, snapshotHash } = await resolveScenarioProfile(
         profileResolver,
         options.examples.scenarios,
@@ -1418,18 +2060,31 @@ export async function createCoreLocalComposition(options: CoreLocalCompositionOp
         submission.scopeRef,
         ctx,
       )
-      if (!resolved.toolBindings.some((binding) => binding.toolId === 'ontology_lookup' && binding.enabled)) {
-        throw new CoreCapabilityError('this profile does not enable ontology_lookup for facts tasks')
+      if (submission.question.trim().startsWith('facts:')) {
+        if (!resolved.toolBindings.some((binding) => binding.toolId === 'ontology_lookup' && binding.enabled)) {
+          throw new CoreCapabilityError('this profile does not enable ontology_lookup for registered facts tasks')
+        }
+        validateCoreFactsRequest({
+          scenario,
+          runProfileRef: submission.profileRef,
+          resolvedProfileHash: snapshotHash,
+          mappingRefs: resolved.mappingRefs,
+          definitionRef: scenario.definitionRef,
+          scopeRef: submission.scopeRef,
+          question: submission.question,
+        })
+        return
       }
-      validateCoreFactsRequest({
-        scenario,
-        runProfileRef: submission.profileRef,
-        resolvedProfileHash: snapshotHash,
-        mappingRefs: resolved.mappingRefs,
-        definitionRef: scenario.definitionRef,
-        scopeRef: submission.scopeRef,
-        question: submission.question,
-      })
+      if (!resolved.toolBindings.some((binding) => binding.toolId === 'data_query' && binding.enabled)) {
+        throw new CoreCapabilityError('ordinary natural-language queries require data_query to be enabled in the resolved profile')
+      }
+      if (!modelCapabilities.generationEnabled || !profileModelBindingEnabled(resolved.modelBindings['generation'], coreModelRefs.generation)) {
+        throw new CoreCapabilityError('ordinary natural-language queries require a configured generation model bound by the resolved profile')
+      }
+      const catalog = resolved.backendBindings['catalog']
+      if (catalog === undefined || !sameVersionRef(catalog.adapterRef, DATA_DUCKDB_ADAPTER_REF) || resolved.mappingRefs.length === 0) {
+        throw new CoreCapabilityError('ordinary semantic queries require the run profile’s mounted read-only catalog mapping')
+      }
     }
 
     const readScenarioProfile = async (scenarioId: string) => {
@@ -1442,6 +2097,8 @@ export async function createCoreLocalComposition(options: CoreLocalCompositionOp
       if (selectedScenario === undefined) {
         throw new CoreCapabilityError(`active profile ${profileRef.id}@${profileRef.version} pins an unmounted industry package`)
       }
+      const snapshotHash = active?.snapshotHash ?? (await profileResolver.bindRunProfile(profileRef, scopeRef, profileContext)).resolvedProfileHash
+      const resolvedRecord = await profileResolver.getResolvedProfile({ scopeRef, profileRef, snapshotHash }, profileContext)
       return {
         profileRef,
         baseProfileSpec: record.spec,
@@ -1453,17 +2110,217 @@ export async function createCoreLocalComposition(options: CoreLocalCompositionOp
         sourceScenarioId: selectedScenario.scenarioId,
         mappingRefs: record.spec.mappingRefs,
         rawSourceRefs: selectedScenario.rawSources.map((source) => source.sourceRef),
+        models: {
+          generation: profileModelBindingEnabled(resolvedRecord.resolved.modelBindings['generation'], coreModelRefs.generation),
+          decision: profileModelBindingEnabled(resolvedRecord.resolved.modelBindings['decision'], coreModelRefs.decision),
+        },
       }
     }
 
+    const reviewableCandidates = new CompositeReviewableCandidateReader({
+      definition: assetCandidateStore,
+      instance: candidateStore,
+    })
     const semanticPublication = new SemanticPublicationService({
       store: publicationStore,
       candidates: candidateStore,
       schemaSource,
       identity: identityStore,
+      reviewableCandidates,
     })
     const identityService = new IdentityDecisionService({ store: identityStore, candidates: candidateStore, schemaSource })
 
+    const terminology = terminologySourceFor(options.examples.scenarios)
+    const ruleSupport = new FiniteGrammarRuleSupportValidator()
+    const ruleActionCandidateService = new RuleActionCandidateService({
+      workspaces: workspaceStore,
+      candidates: ruleActionCandidateStore,
+      support: ruleSupport,
+    })
+    const definitionGenerationService = new DefinitionCandidateGenerationService({
+      workspaces: workspaceStore,
+      candidates: assetCandidateStore,
+      terminology,
+      generationForRun: async ({ ctx, signal }) => {
+        const ledger = await budget.openLedger({ ledgerId: ctx.runId, kind: 'background', runId: ctx.runId }, ctx)
+        return modelCapabilities.forExecution({ ledgerId: ledger.ledgerId, signal }).generation
+      },
+      modelRef: {
+        modelId: options.modelsEnabled === true ? modelEnvironment['CORE_COMPANY_MODEL_PLATFORM_ID'] ?? 'model-not-configured' : 'model-not-configured',
+        version: COMPONENT_VERSION,
+      },
+      outputLimit: { maxTokens: 2_048 },
+    })
+    const definitionEditingService = new DefinitionCandidateEditingService({
+      workspaces: workspaceStore,
+      candidates: assetCandidateStore,
+      terminology,
+      editing: definitionEditingStore,
+      publishedDefinitions: definitionStore,
+      newId: () => randomUUID(),
+    })
+    const instanceReviewService = new InstanceReviewService({ store: instanceReviewStore })
+    const syntheticExampleService = new SyntheticExampleService({
+      workspaces: workspaceStore,
+      sets: syntheticExampleSetStore,
+    })
+    const industryValidationService = new IndustryValidationService({
+      workspaces: workspaceStore,
+      exampleSets: syntheticExampleSetStore,
+      reports: validationReportStore,
+      definitions: definitionEditingService,
+      ruleActions: ruleActionCandidateStore,
+      support: ruleSupport,
+      evaluator: new FiniteGrammarSyntheticEvaluator(),
+    })
+    const industryAssetPublicationService = new IndustryAssetPublicationService({
+      workspaces: workspaceStore,
+      validations: validationReportStore,
+      definitionCandidates: assetCandidateStore,
+      ruleActions: ruleActionCandidateStore,
+      syntheticSets: syntheticExampleSetStore,
+      definitions: definitionStore,
+      store: publishedPackStore,
+    })
+    const packCatalogue = new StoreBackedIndustryPackCatalogue({ store: publishedPackStore })
+    const componentRegistry = new ComponentRegistry({
+      control,
+      store: componentStore,
+      artifacts: blobStore,
+      validator: manifestValidator(createAjv()),
+    })
+    const packExportService = new IndustryPackExportService({
+      catalogue: packCatalogue,
+      definitions: definitionStore,
+      published: publishedPackStore,
+    })
+    const packUpgradeService = new IndustryPackUpgradeService({
+      profiles: profileResolver,
+      profileStore,
+      registry: componentRegistry,
+      registryStore: componentStore,
+    })
+    const projectService = new ProjectService({
+      projects: projectStore,
+      readiness: projectReadinessStore,
+      jobs: jobStore,
+      catalogue: packCatalogue,
+    })
+    const scopedOriginals: ScopedArtifactReader = {
+      read: (request, ctx) => {
+        const target = request.approvedInputRefs[0]
+        if (target === undefined) throw new Error('the structured request carried no approved input reference')
+        return blobStore.readAuthorized({ scopeRef: { tenantId: ctx.principal.tenantId, spaceId: ctx.allowedResources.spaceId }, blobRef: target }, ctx)
+      },
+    }
+    const projectMappingService = new ProjectMappingService({
+      projects: projectStore,
+      revisions: projectStore,
+      mappings: projectMappingStore,
+      records: projectRecordStore,
+      ingestion: structuredStore,
+      schemaSource,
+      originals: scopedOriginals,
+      parser: new StructuredDocumentParser(),
+    })
+    // The project structured-parse import service (V03-005/V03-006): publish the approved bytes
+    // as an immutable original, then run the real structured parser and persist the reconciled
+    // rows. The returned parseId/originalRef/format feed the column-mapping route, so a project
+    // can map and bind on the real parse instead of a startup fixture.
+    const projectStructuredImportService: ProjectStructuredImportService = {
+      async importStructuredSource(projectId, input, ctx) {
+        await projectService.getProject(projectId, ctx)
+        const written = await createBlobArtifactWriter(blobStore).putBytes(
+          { scopeRef, content: input.content, mediaType: input.mediaType },
+          ctx,
+        )
+        const ingestion = new LocalStructuredIngestionService({ blobs: blobStore, store: structuredStore })
+        const parsed = await ingestion.parse({
+          scopeRef,
+          originalRef: written.blobRef,
+          options: {},
+          ...(input.sourceRef === undefined ? {} : { sourceRef: input.sourceRef }),
+        }, ctx)
+        return {
+          parseId: parsed.parse.parseId,
+          originalRef: written.blobRef,
+          originalMediaType: parsed.parse.originalMediaType,
+          format: parsed.parse.format,
+          status: parsed.parse.status,
+          counts: parsed.parse.counts,
+          coverage: parsed.parse.coverage,
+          reused: parsed.reused,
+        }
+      },
+    }
+    const projectDatasetAdapter = new DuckDbProjectDatasetAdapter()
+    cleanup.unshift(async () => projectDatasetAdapter.close())
+    const projectDatasetService = new ProjectDataMaterializationService({
+      projects: projectStore,
+      records: projectRecordStore,
+      mappings: projectMappingStore,
+      readiness: projectReadinessStore,
+      schemaSource,
+      writer: projectDatasetAdapter,
+      query: projectDatasetAdapter,
+    })
+    const actionBindingContext = (): ActionCapabilityBindingInput => ({
+      registry: operationRegistry(),
+      availableCapabilities: ['agent_runtime', 'structured_query', 'document_search', 'industry.semantics'],
+      recordedAt: hostClock().toISOString(),
+    })
+    const tableArtifactStore = new PostgresTableArtifactStore(database, {
+      writer: gatewayComposition.artifacts,
+      reader: {
+        read: (request, ctx) => {
+          const target = request.approvedInputRefs[0]
+          if (target === undefined) throw new Error('the table page read carried no approved input reference')
+          return blobStore.readAuthorized(
+            { scopeRef: { tenantId: ctx.principal.tenantId, spaceId: ctx.allowedResources.spaceId }, blobRef: target },
+            ctx,
+          )
+        },
+      },
+    })
+    const tableVerificationStore = new PostgresTableVerificationStore(database)
+    // A manifest is only served as *verified* when the table-verification receipt it names
+    // actually exists. Otherwise the reader refuses to render it as a formal table
+    // (TABLE_UNVERIFIED) instead of trusting the stored ref alone.
+    const verifiedTableManifests: VerifiedTableManifestSource = {
+      resolve: async (scopeRef, answerId, tableId, ctx) => {
+        const archived = await tableArtifactStore.resolve(scopeRef, answerId, tableId, ctx)
+        if (archived === undefined || archived.verificationReceiptRef === undefined) return archived
+        const receipt = await tableVerificationStore.getReceipt(scopeRef, archived.verificationReceiptRef, ctx)
+        return receipt === undefined ? { ref: archived.ref, manifest: archived.manifest } : archived
+      },
+    }
+    const tableArtifactReadService = new TableArtifactReadService({
+      manifests: verifiedTableManifests,
+      pages: tableArtifactStore,
+      progress: tableArtifactStore,
+    })
+    const verifiedResultReadService = new VerifiedResultReadService({
+      answers: answerStore,
+      results: {
+        getAuthorized: (request, ctx) => blobStore.getAuthorized(request, ctx),
+        readAuthorized: (request, ctx) => blobStore.readAuthorized(request, ctx),
+      },
+      tables: verifiedTableManifests,
+    })
+    // Verified JSON export (V03-041) reuses the same digest-verified read as the verified page,
+    // so an export can never reflect an unverified or swapped manifest.
+    const verifiedResultExportService = new VerifiedResultExportService({
+      reads: verifiedResultReadService,
+      answers: answerStore,
+      tables: verifiedTableManifests,
+    })
+    // Result revision history (V03-041): the run's own fixed version plus prior answers for the
+    // same project revision lineage, read from the append-only answer store.
+    const resultHistoryService = new ResultHistoryService({
+      answers: answerStore,
+      bindings: runExecutionBindingStore,
+      history: answerStore,
+    })
     const dependencies: CoreApiDependencies = {
       database,
       scopeRef,
@@ -1492,20 +2349,58 @@ export async function createCoreLocalComposition(options: CoreLocalCompositionOp
         workbench: { profiles: profileResolver, sources, components: componentStore },
         decisions: { service: identityService, candidates: candidateStore, documents: parseStore },
         publications: { service: semanticPublication },
-        answers: { reader: controller },
+        industryWorkspaces: { service: industryWorkspaceService },
+        answers: {
+          reader: controller,
+          result: verifiedResultReadService,
+          tables: tableArtifactReadService,
+          exporter: verifiedResultExportService,
+          history: resultHistoryService,
+        },
         evidence: { service: provenanceRead.provenance },
         history: { service: provenanceRead.history },
+        packs: {
+          catalogue: packCatalogue,
+          packExports: packExportService,
+          packUpgrades: packUpgradeService,
+          publication: industryAssetPublicationService,
+        },
+        assetCandidates: { generation: definitionGenerationService },
+        definitionEditing: { service: definitionEditingService },
+        ruleActionCandidates: { service: ruleActionCandidateService, bindingContext: actionBindingContext },
+        instanceReviews: { service: instanceReviewService },
+        projects: { service: projectService, mappings: projectMappingService, dataset: projectDatasetService },
+        projectDocuments: { service: projectDocumentIndexService },
+        syntheticValidation: {
+          exampleService: syntheticExampleService,
+          validationService: industryValidationService,
+          bindingContext: actionBindingContext,
+        },
       },
-      registerRoutes: (api, authenticate) => registerCoreImportRoute({
-        app: api,
-        authenticate,
-        scopeRef,
-        examples: options.examples,
-        service: jobService,
-        objectStore,
-        registry: artifactRegistry,
-        generationEnabled: modelCapabilities.generationEnabled,
-      }),
+      registerRoutes: (api, authenticate) => {
+        registerCoreImportRoute({
+          app: api,
+          authenticate,
+          scopeRef,
+          examples: options.examples,
+          service: jobService,
+          objectStore,
+          registry: artifactRegistry,
+          generationEnabled: modelCapabilities.generationEnabled,
+        })
+        registerCoreRelationNavigationRoute({
+          app: api,
+          authenticate,
+          examples: options.examples,
+          publications: publicationStore,
+          identity: identityStore,
+        })
+        registerProjectImportRoute(api, {
+          authenticate,
+          scopeRef,
+          service: projectStructuredImportService,
+        })
+      },
       ...(options.logger === undefined ? {} : { logger: options.logger }),
     }
 

@@ -43,18 +43,21 @@ function canonical(value: unknown): string {
 export class InMemoryAnswerStore implements AnswerStorePort {
   readonly #runs: RunStore
   readonly #answers = new Map<string, PublishedAnswer>()
+  readonly #answersById = new Map<string, PublishedAnswer>()
 
   constructor(runs: RunStore) {
     this.#runs = runs
   }
 
   async record(input: RecordAnswerInput, ctx: ToolContext): Promise<PublishedAnswer> {
-    if (input.answer.body === undefined) throw new AnswerStoreError('ANSWER_BODY_REQUIRED', 'new answer publications must persist the verified body')
+    if (input.answer.body === undefined && input.answer.v3Body === undefined) {
+      throw new AnswerStoreError('ANSWER_BODY_REQUIRED', 'new answer publications must persist the verified body')
+    }
     const scopeRef = scopeOf(ctx)
     const key = `${scopeRef.tenantId}\u0000${scopeRef.spaceId}\u0000${input.answer.runId}`
     const existing = this.#answers.get(key)
     if (existing !== undefined) {
-      if (existing.contentHash !== input.answer.contentHash || existing.draftId !== input.answer.draftId || canonical(existing.body) !== canonical(input.answer.body)) {
+      if (existing.contentHash !== input.answer.contentHash || existing.draftId !== input.answer.draftId || canonical(existing.body) !== canonical(input.answer.body) || canonical(existing.v3Body) !== canonical(input.answer.v3Body)) {
         throw new AnswerStoreError('ANSWER_IDEMPOTENCY_CONFLICT', `run ${input.answer.runId} already has a different immutable answer`)
       }
       return clone(existing)
@@ -71,12 +74,19 @@ export class InMemoryAnswerStore implements AnswerStorePort {
       )
     }
     this.#answers.set(key, clone(input.answer))
+    this.#answersById.set(`${scopeRef.tenantId}\u0000${scopeRef.spaceId}\u0000${input.answer.answerId}`, clone(input.answer))
     return clone(input.answer)
   }
 
   findByRun(runId: Uuid, ctx: ToolContext): Promise<PublishedAnswer | undefined> {
     const scopeRef = scopeOf(ctx)
     const found = this.#answers.get(`${scopeRef.tenantId}\u0000${scopeRef.spaceId}\u0000${runId}`)
+    return Promise.resolve(found === undefined ? undefined : clone(found))
+  }
+
+  findByAnswer(answerId: Uuid, ctx: ToolContext): Promise<PublishedAnswer | undefined> {
+    const scopeRef = scopeOf(ctx)
+    const found = this.#answersById.get(`${scopeRef.tenantId}\u0000${scopeRef.spaceId}\u0000${answerId}`)
     return Promise.resolve(found === undefined ? undefined : clone(found))
   }
 }

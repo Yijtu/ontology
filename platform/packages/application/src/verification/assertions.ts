@@ -1,7 +1,12 @@
 import type { ResourceRef, Rfc3339UtcTimestamp, ToolContext, Uuid, VerifiedAssertion, VerificationFinding } from '@ontology/contracts'
-import { sha256DigestOf } from '@ontology/core'
 import type { ResolvedEvidence } from './hard-checks'
-import { fieldBindingMatches, sourceValidityFinding } from './hard-checks'
+import { fieldBindingMatches, rowBindingFinding, sourceValidityFinding } from './hard-checks'
+import {
+  isFieldBoundAssertionKind,
+  verifyDocumentCitation,
+  verifyRelationEdge,
+  verifyRuleJudgement,
+} from './typed-checkers'
 
 export interface AssertionCheckOutcome {
   readonly findings: readonly VerificationFinding[]
@@ -30,18 +35,6 @@ function sameRef(value: unknown, expected: ResourceRef): boolean {
   return candidate.id === expected.id && candidate.version === expected.version && candidate.digest === expected.digest && candidate.kind === expected.kind
 }
 
-function canonical(value: unknown): string {
-  if (Array.isArray(value)) return `[${value.map(canonical).join(',')}]`
-  if (typeof value === 'object' && value !== null) {
-    return `{${Object.entries(value).sort(([left], [right]) => left.localeCompare(right)).map(([key, part]) => `${JSON.stringify(key)}:${canonical(part)}`).join(',')}}`
-  }
-  return JSON.stringify(value) ?? 'undefined'
-}
-
-function sameRecord(value: unknown, expected: Readonly<Record<string, unknown>>): boolean {
-  return typeof value === 'object' && value !== null && !Array.isArray(value) && canonical(value) === canonical(expected)
-}
-
 function valueMatches(assertion: VerifiedAssertion, payload: unknown, pointer: string): boolean {
   const actual = valueAt(payload, pointer)
   switch (assertion.kind) {
@@ -49,10 +42,12 @@ function valueMatches(assertion: VerifiedAssertion, payload: unknown, pointer: s
     case 'enum': return actual === assertion.value
     case 'boolean': return actual === assertion.value
     case 'entity_ref': return sameRef(actual, assertion.value)
-    case 'relation_ref': return sameRecord(actual, { type: assertion.value.type, from: assertion.value.from, to: assertion.value.to })
-    case 'document_quote': return actual === assertion.quote
+    // Relation endpoints and document citations are verified by their dedicated typed
+    // checkers below (a navigation hop or citation binding is not a single payload value).
+    case 'relation_ref': return true
+    case 'document_quote': return true
     case 'artifact_summary': return actual === assertion.summary
-    // C2 supplies the deterministic computation artifact contract before rule judgements can pass.
+    // Rule judgements are verified against the archived computation artifact before this point.
     case 'rule_judgement': return false
   }
 }
@@ -79,15 +74,21 @@ export function checkVerifiedAssertions(
   const findings: VerificationFinding[] = []
   const supportedAssertionIds: Uuid[] = []
   for (const assertion of assertions) {
+    if (assertion.kind === 'rule_judgement') {
+      const ruleFindings = verifyRuleJudgement(assertion, resolved, now)
+      if (ruleFindings.length === 0) supportedAssertionIds.push(assertion.assertionId)
+      findings.push(...ruleFindings)
+      continue
+    }
     const assertionFindings: VerificationFinding[] = []
     if (assertion.references.length === 0) assertionFindings.push(finding(assertion))
     for (const reference of assertion.references) {
-      if (assertion.kind === 'rule_judgement') {
-        assertionFindings.push(finding(assertion, reference))
+      const located = resolved.get(reference.evidenceRef.id)
+      if (located === undefined) {
+        assertionFindings.push({ ...finding(assertion, reference), code: 'evidence_not_found' })
         continue
       }
-      const located = resolved.get(reference.evidenceRef.id)
-      if (located === undefined || located.unreadable || located.payload === undefined) {
+      if (located.unreadable || located.payload === undefined) {
         assertionFindings.push({ ...finding(assertion, reference), code: 'result_unreadable' })
         continue
       }
@@ -99,8 +100,12 @@ export function checkVerifiedAssertions(
         assertionFindings.push({ ...finding(assertion, reference), code: 'result_digest_mismatch', expected: located.record.envelope.resultDigest, actual: reference.resultDigest })
         continue
       }
-      if (requireFieldBinding && assertion.kind !== 'document_quote' && assertion.kind !== 'artifact_summary' && !fieldBindingMatches(located.payload, reference, assertion.predicate)) {
-        assertionFindings.push({ ...finding(assertion, reference), code: 'predicate_mismatch' })
+      if (requireFieldBinding && isFieldBoundAssertionKind(assertion.kind)) {
+        if (!fieldBindingMatches(located.payload, reference, assertion.predicate)) {
+          assertionFindings.push({ ...finding(assertion, reference), code: 'predicate_mismatch' })
+        }
+        const rowFinding = rowBindingFinding(reference, { assertionId: assertion.assertionId, field: assertion.predicate })
+        if (rowFinding !== undefined) assertionFindings.push(rowFinding)
       }
       if (!valueMatches(assertion, located.payload, reference.valuePointer)) {
         assertionFindings.push(finding(assertion, reference, assertion.kind === 'document_quote' ? 'document_quote_mismatch' : 'assertion_mismatch'))
@@ -120,15 +125,11 @@ export function checkVerifiedAssertions(
         evidenceRef: reference.evidenceRef,
       })
       if (validityFinding !== undefined) assertionFindings.push(validityFinding)
+      if (assertion.kind === 'relation_ref') {
+        assertionFindings.push(...verifyRelationEdge(assertion, reference, located.payload))
+      }
       if (assertion.kind === 'document_quote') {
-        const quoteDigest = sha256DigestOf(assertion.quote)
-        const document = reference.documentPointer === undefined ? undefined : valueAt(located.payload, reference.documentPointer)
-        const locator = reference.locatorPointer === undefined ? undefined : valueAt(located.payload, reference.locatorPointer)
-        const textDigest = reference.textDigestPointer === undefined ? undefined : valueAt(located.payload, reference.textDigestPointer)
-        const storedQuoteDigest = reference.quoteDigestPointer === undefined ? undefined : valueAt(located.payload, reference.quoteDigestPointer)
-        if (assertion.precision !== 'exact' || quoteDigest !== assertion.quoteDigest || textDigest !== assertion.textDigest || storedQuoteDigest !== assertion.quoteDigest || reference.documentPointer === undefined || !sameRef(document, assertion.documentRef) || reference.locatorPointer === undefined || !sameRecord(locator, assertion.locator)) {
-          assertionFindings.push(finding(assertion, reference, 'document_quote_mismatch'))
-        }
+        assertionFindings.push(...verifyDocumentCitation(assertion, reference, located))
       }
       if (assertion.kind === 'artifact_summary') {
         const artifact = reference.documentPointer === undefined ? undefined : valueAt(located.payload, reference.documentPointer)

@@ -29,6 +29,7 @@ import {
   buildIndustrySchema,
   chunkOf,
   generationResponse,
+  textSpan,
 } from './extraction-fixtures'
 
 const EDITOR_CTX: ToolContext = toolContext(SCOPE_A.tenantId, SCOPE_A.spaceId, ['data-editor'], 'extraction-unit')
@@ -125,8 +126,8 @@ describe('extraction pipeline against the industry schema', () => {
       expect(candidate.state).toBe('pending_review')
       expect(candidate.sourceSpans).toHaveLength(1)
       expect(candidate.sourceSpans[0]?.parseId).toBe(PARSE_ID)
-      expect(candidate.sourceSpans[0]?.chunkId).toBe(chunks[0]?.chunkId)
-      expect(candidate.sourceSpans[0]?.quoteDigest).toBe(chunks[0]?.quoteDigest)
+      expect(textSpan(candidate.sourceSpans[0])?.chunkId).toBe(chunks[0]?.chunkId)
+      expect(textSpan(candidate.sourceSpans[0])?.quoteDigest).toBe(chunks[0]?.quoteDigest)
       expect(candidate.inputVersion.definitionRef.digest).toBe(DEFINITION_REF.digest)
       expect(candidate.inputVersion.pipelineVersion).toBe('1.0.0')
     }
@@ -173,7 +174,7 @@ describe('extraction pipeline against the industry schema', () => {
             objectId: 'device',
             attributes: [
               { attributeId: 'device_kind', value: 'charger' },
-              { attributeId: 'rated_power', value: '7.2', unitCode: 'kW' },
+              { attributeId: 'rated_power', value: 'not-a-number', unitCode: 'kW' },
             ],
           },
         ],
@@ -186,6 +187,102 @@ describe('extraction pipeline against the industry schema', () => {
     const stored = await h.candidates.listCandidates(SCOPE_A, { jobId: JOB_ID }, EDITOR_CTX)
     expect(stored[0]?.state).toBe('failed')
     expect(stored[0]?.issues.some((issue) => issue.code === 'TYPE_MISMATCH')).toBe(true)
+  })
+
+  it('preserves the raw and exact decimal of a quantity without a lossy Number', async () => {
+    const h = buildHarness()
+    await h.budget.budget.openLedger({ ledgerId: LEDGER_ID, kind: 'background' }, EDITOR_CTX)
+    const chunks = [chunkOf('the charger is rated 7.20 kW', 0)]
+    h.generation.enqueue(
+      generationResponse({
+        entities: [
+          {
+            objectId: 'device',
+            attributes: [
+              { attributeId: 'device_native_id', value: 'D-P' },
+              { attributeId: 'device_kind', value: 'charger' },
+              { attributeId: 'rated_power', value: '7.20', raw: '7.20', decimal: '7.20', unitCode: 'kW' },
+            ],
+          },
+        ],
+        relations: [],
+      }),
+    )
+    const input = inputOf(chunks)
+    await h.pipeline.extract(input, h.run)
+    await h.pipeline.validate(input, h.run)
+    const stored = await h.candidates.listCandidates(SCOPE_A, { jobId: JOB_ID }, EDITOR_CTX)
+    const entity = stored[0]
+    expect(entity?.state).toBe('pending_review')
+    if (entity?.kind !== 'entity') return
+    const power = entity.attributes.find((attribute) => attribute.attributeId === 'rated_power')
+    expect(power?.value).toBe('7.20')
+    expect(typeof power?.value).toBe('string')
+    expect(power?.raw).toBe('7.20')
+    expect(power?.decimal).toBe('7.20')
+    expect(power?.unitCode).toBe('kW')
+  })
+
+  it('sends an unknown field to pending review instead of failing or dropping it', async () => {
+    const h = buildHarness()
+    await h.budget.budget.openLedger({ ledgerId: LEDGER_ID, kind: 'background' }, EDITOR_CTX)
+    const chunks = [chunkOf('a charger with an extra field', 0)]
+    h.generation.enqueue(
+      generationResponse({
+        entities: [
+          {
+            objectId: 'device',
+            attributes: [
+              { attributeId: 'device_native_id', value: 'D-U' },
+              { attributeId: 'device_kind', value: 'charger' },
+              { attributeId: 'mystery_field', value: 'unknown' },
+            ],
+          },
+        ],
+        relations: [],
+      }),
+    )
+    const input = inputOf(chunks)
+    await h.pipeline.extract(input, h.run)
+    await h.pipeline.validate(input, h.run)
+    const stored = await h.candidates.listCandidates(SCOPE_A, { jobId: JOB_ID }, EDITOR_CTX)
+    const entity = stored[0]
+    expect(entity?.state).toBe('pending_review')
+    expect(entity?.issues.some((issue) => issue.code === 'UNKNOWN_ATTRIBUTE')).toBe(true)
+  })
+
+  it('keeps a named-but-unidentified relation endpoint in pending review, not a drop or a hard failure', async () => {
+    const h = buildHarness()
+    await h.budget.budget.openLedger({ ledgerId: LEDGER_ID, kind: 'background' }, EDITOR_CTX)
+    const chunks = [chunkOf('a meter monitors a charger whose identity is not confirmed', 0)]
+    h.generation.enqueue(
+      generationResponse({
+        entities: [
+          {
+            objectId: 'device',
+            attributes: [
+              { attributeId: 'device_native_id', value: 'D-R' },
+              { attributeId: 'device_kind', value: 'charger' },
+            ],
+          },
+          { objectId: 'meter', attributes: [{ attributeId: 'meter_native_id', value: 'M-R' }] },
+        ],
+        relations: [
+          {
+            relationId: 'meter_monitors_device',
+            from: { objectId: 'meter', entityIndex: 1 },
+            to: { objectId: 'device' },
+          },
+        ],
+      }),
+    )
+    const input = inputOf(chunks)
+    await h.pipeline.extract(input, h.run)
+    await h.pipeline.validate(input, h.run)
+    const stored = await h.candidates.listCandidates(SCOPE_A, { jobId: JOB_ID }, EDITOR_CTX)
+    const relation = stored.find((candidate) => candidate.kind === 'relation')
+    expect(relation?.state).toBe('pending_review')
+    expect(relation?.issues.some((issue) => issue.code === 'UNRESOLVED_ENDPOINT')).toBe(true)
   })
 
   it('fails a fake relation reference instead of accepting it', async () => {

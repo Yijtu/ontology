@@ -34,6 +34,7 @@ import {
   buildIndustrySchema,
   chunkOf,
   generationResponse,
+  textSpan,
 } from './extraction-fixtures'
 
 const EDITOR_CTX: ToolContext = toolContext(SCOPE_A.tenantId, SCOPE_A.spaceId, ['data-editor'], 'rule-unit')
@@ -174,7 +175,7 @@ describe('rule candidate extraction (SPEC D4.3/D5, US-013)', () => {
     expect(rule?.exceptions).toHaveLength(1)
     expect(rule?.exceptions[0]?.condition.op).toBe('compare')
     expect(rule?.exceptions[0]?.spans[0]?.chunkId).toBe(chunkB.chunkId)
-    expect(rule?.sourceSpans.map((span) => span.chunkId).sort()).toEqual(
+    expect(rule?.sourceSpans.map((span) => textSpan(span)?.chunkId).sort()).toEqual(
       [chunkA.chunkId, chunkB.chunkId].sort(),
     )
     expect(rule?.usage?.inputTokens).toBe(12)

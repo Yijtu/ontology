@@ -38,6 +38,7 @@ import {
   publishedVocabularyDefinition,
   vocabularyService,
 } from '../fixtures/schema-vocabulary'
+import { multiHopPlanJson } from '../unit/workflow-planning-fixtures'
 import { startPostgresContainer } from './postgres-container'
 import type { PostgresContainer } from './postgres-container'
 
@@ -138,7 +139,13 @@ class RecordingGeneration implements GenerationPort {
   readonly calls: GenerationRequest[] = []
   async *generate(request: GenerationRequest): AsyncIterable<GenerationEvent> {
     this.calls.push(request)
-    yield { type: 'completed', stopReason: 'stop', candidateOnly: true }
+    yield {
+      type: 'tool_call_delta',
+      callId: '33333333-3333-4333-8333-333333333334',
+      toolId: 'data_query',
+      argumentsDelta: multiHopPlanJson(),
+    }
+    yield { type: 'completed', stopReason: 'tool_calls', candidateOnly: true }
   }
 }
 

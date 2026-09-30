@@ -32,6 +32,8 @@ export interface DraftCandidates {
   readonly exceptions: readonly DraftRuleException[]
 }
 
+const DECIMAL_TOKEN = /^-?(?:0|[1-9]\d*)(?:\.\d+)?$/
+
 function isRecord(value: unknown): value is Record<string, unknown> {
   return typeof value === 'object' && value !== null && !Array.isArray(value)
 }
@@ -54,17 +56,29 @@ function parseAttribute(value: unknown, field: string): CandidateAttributeValue 
   if (!isRecord(value)) {
     throw new ExtractionError('INVALID_MODEL_OUTPUT', `model output ${field} must be an object`)
   }
-  const raw = value['value']
-  if (typeof raw !== 'string' && typeof raw !== 'number' && typeof raw !== 'boolean') {
+  const scalar = value['value']
+  if (typeof scalar !== 'string' && typeof scalar !== 'number' && typeof scalar !== 'boolean') {
     throw new ExtractionError('INVALID_MODEL_OUTPUT', `model output ${field}.value must be a scalar`)
   }
   const unitCode = value['unitCode']
   if (unitCode !== undefined && typeof unitCode !== 'string') {
     throw new ExtractionError('INVALID_MODEL_OUTPUT', `model output ${field}.unitCode must be a string`)
   }
+  // A quantity should arrive as an exact decimal string; the verbatim source token, when the
+  // model echoes it, is preserved alongside so an exact reader can round-trip it (A §5.3).
+  const raw = value['raw']
+  if (raw !== undefined && typeof raw !== 'string') {
+    throw new ExtractionError('INVALID_MODEL_OUTPUT', `model output ${field}.raw must be a string`)
+  }
+  const decimal = value['decimal']
+  if (decimal !== undefined && (typeof decimal !== 'string' || !DECIMAL_TOKEN.test(decimal))) {
+    throw new ExtractionError('INVALID_MODEL_OUTPUT', `model output ${field}.decimal must be an exact decimal string`)
+  }
   return {
     attributeId: requireString(value['attributeId'], `${field}.attributeId`),
-    value: raw,
+    value: scalar,
+    ...(raw === undefined ? {} : { raw }),
+    ...(decimal === undefined ? {} : { decimal }),
     ...(unitCode === undefined ? {} : { unitCode }),
   }
 }

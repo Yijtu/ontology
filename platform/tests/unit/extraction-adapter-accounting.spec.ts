@@ -296,6 +296,85 @@ describe('ExtractionPipeline adapter-owned attempt accounting', () => {
     expect(reservations[0]?.actual?.modelTokens).toBe(15)
   })
 
+  it('injects the fixed schema context (types, attributes, units, relations, rule grammar) into the actual request', async () => {
+    const server = await startCompanyServer('success')
+    servers.push(server)
+    const ctx = jobContext()
+    const budget = await jobBudget(ctx)
+    const evidence = recordingEvidence()
+    const pipeline = pipelineFor({ baseUrl: server.baseUrl, budget: budget.budget, generationEvidence: evidence.recorder })
+
+    await pipeline.extract(inputOf([chunkOf('unstructured extraction text', 0)]), {
+      ledgerId: JOB_ID,
+      ctx,
+      signal: new AbortController().signal,
+    })
+
+    expect(server.requests).toHaveLength(1)
+    const messages = server.requests[0]?.body['messages']
+    expect(Array.isArray(messages)).toBe(true)
+    const system = (Array.isArray(messages) ? messages : []).find(
+      (message) =>
+        isRecord(message) &&
+        message['role'] === 'system' &&
+        typeof message['content'] === 'string' &&
+        message['content'].includes('extraction-schema-context@1'),
+    )
+    const content = isRecord(system) && typeof system['content'] === 'string' ? system['content'] : ''
+    expect(content.length).toBeGreaterThan(0)
+    // The fixed property types, attributes, units, relations and rule grammar are all present
+    // in the request the controlled service actually received.
+    expect(content).toContain('schemaDigest=sha256:')
+    expect(content).toContain('rated_power')
+    expect(content).toContain('"valueType":"quantity"')
+    expect(content).toContain('"unitCode":"kW"')
+    expect(content).toContain('"enumValues":["charger","inverter"]')
+    expect(content).toContain('meter_monitors_device')
+    expect(content).toContain('"fromObjectId":"meter"')
+    expect(content).toContain('"ruleGrammar"')
+    expect(content).toContain('"comparisonOperators"')
+    expect(content).toContain('"decimal"')
+  })
+
+  it('records the prompt version and schema digest on every candidate input version', async () => {
+    const server = await startCompanyServer('success')
+    servers.push(server)
+    const ctx = jobContext()
+    const budget = await jobBudget(ctx)
+    const evidence = recordingEvidence()
+    const candidates = new InMemoryCandidateStore()
+    const factory = createCoreModelCapabilityFactory({
+      env: modelEnv(server.baseUrl),
+      secrets: staticSecretResolver(),
+      budget: budget.budget,
+      generationEvidence: evidence.recorder,
+      schemaValidator: acceptingValidator(),
+    })
+    const pipeline = new ExtractionPipeline({
+      schemaSource: new InMemoryIndustrySchemaSource([{ ref: DEFINITION_REF, schema: buildIndustrySchema() }]),
+      accountingOwner: 'adapter',
+      generationForRun: ({ ledgerId, signal }) =>
+        factory.forExecution({ ledgerId, signal }).generation,
+      candidates,
+      budget: budget.budget,
+      modelRef: { modelId: COMPANY_PLATFORM_MODEL, version: '1.0.0' },
+      outputLimit: { maxTokens: 512 },
+    })
+
+    await pipeline.extract(inputOf([chunkOf('unstructured extraction text', 0)]), {
+      ledgerId: JOB_ID,
+      ctx,
+      signal: new AbortController().signal,
+    })
+
+    const stored = await candidates.listCandidates(SCOPE_A, { jobId: JOB_ID }, ctx)
+    expect(stored.length).toBeGreaterThan(0)
+    for (const candidate of stored) {
+      expect(candidate.inputVersion.promptVersion).toBe('extraction-schema-context@1')
+      expect(candidate.inputVersion.schemaDigest).toMatch(/^sha256:[0-9a-f]{64}$/)
+    }
+  })
+
   it('creates one reservation per retry and never adds an aggregate pipeline settlement', async () => {
     const server = await startCompanyServer('retry-once')
     servers.push(server)

@@ -1,8 +1,14 @@
 import type {
   ActiveProfileRecord,
+  AssetCandidateBatch,
+  AssetCandidateVersion,
   CapabilityRequirement,
   ComponentKind,
   ComponentVersionRecord,
+  DefinitionCompatibilityReport,
+  DefinitionEditAdjudication,
+  DefinitionEditingResult,
+  DefinitionValidationReport,
   DependencyGraphView,
   DependencyTraversalRequest,
   DeploymentEnvironment,
@@ -18,13 +24,16 @@ import type {
   ProvenanceEvidenceView,
   PublishedAnswer,
   ProfileVersionRecord,
+  ResourceRef,
   RevisionString,
+  RuleActionCandidateVersion,
   Sha256Digest,
   SourceRef,
   SourceObjectRef,
   SourceBindingRecord,
   SourceKind,
   SourceProbeJobRecord,
+  UnsupportedDefinitionRule,
   VersionRef,
 } from '@ontology/contracts'
 import { ApiError, toApiFailure } from './errors'
@@ -45,6 +54,13 @@ import type {
 } from './energy'
 import { dependencyQuery, optionalTimeQuery } from './provenance'
 import type { DependencyPage, HistoryPage } from './provenance'
+import { isResultHistoryView, isTablePageReadView, isVerifiedResultExport, isVerifiedResultView } from './results'
+import type {
+  ResultHistoryView,
+  VerifiedResultExport,
+  VerifiedResultView,
+  VerifiedTablePageView,
+} from './results'
 import { defaultRunEventStreamFactory, isRunState } from './query'
 import type {
   CancelRunRequest,
@@ -78,6 +94,93 @@ import type {
   StatementRevisionRecord,
   StatementRevisionRequest,
 } from './review'
+import {
+  isAssetDraftVersion,
+  isIndustryWorkspace,
+  isIndustryWorkspaceWriteView,
+} from './workspaces'
+import type {
+  AppendIndustryWorkspaceDraftRequest,
+  CreateIndustryWorkspaceRequest,
+  EditIndustryWorkspaceRequest,
+  IndustryWorkspaceListFilter,
+  IndustryWorkspaceWriteView,
+} from './workspaces'
+import type { AssetDraftVersion, IndustryWorkspace } from '@ontology/contracts'
+import { definitionGuard } from './definitions'
+import type {
+  ActionCandidateDraft,
+  DefinitionCandidateFilter,
+  EditActionCandidateRequest,
+  EditDefinitionCandidateRequest,
+  EditRuleCandidateRequest,
+  EnableRuleActionCandidateRequest,
+  KeepDefinitionsSeparateRequest,
+  MergeDefinitionCandidatesRequest,
+  RecordUnsupportedRuleRequest,
+  RejectDefinitionCandidateRequest,
+  RuleActionCandidateFilter,
+  RuleActionCandidateView,
+  RuleCandidateDraft,
+  ValidateDefinitionsRequest,
+} from './definitions'
+import {
+  isInstanceConfirmationEvent,
+  isInstanceConfirmationOutcome,
+  isInstanceRecordView,
+} from './instances'
+import type {
+  ConfirmInstanceFieldsRequest,
+  CreateInstanceRecordRequest,
+  EditInstanceFieldRequest,
+  InstanceConfirmationEvent,
+  InstanceConfirmationOutcomeView,
+  InstanceIdentityDecisionRequest,
+  InstanceRecordFilter,
+  InstanceRevisionRequest,
+} from './instances'
+import type { InstanceRecordView, ProjectRecord, ProjectState } from '@ontology/contracts'
+import {
+  isIndustryPackSummary,
+  isImportMappingVersion,
+  isMappingPreview,
+  isProjectDatasetStatus,
+  isProjectDocumentIndexStatus,
+  isProjectEvolutionView,
+  isProjectReadinessView,
+  isProjectRecord,
+  isProjectRecordPageView,
+  isProjectRevision,
+  isProjectRevisionView,
+} from './projects'
+import type {
+  ColumnMappingRequestView,
+  CreateProjectRequest,
+  IndustryPackSummary,
+  MountProjectPackRequest,
+  ProjectDatasetStatusView,
+  ProjectDocumentIndexStatusView,
+  ProjectEvolutionView,
+  ProjectReadinessView,
+  ProjectRecordPageView,
+  ProjectRevisionView,
+} from './projects'
+import type { ImportMappingVersion, MappingPreview, ProjectRecordVersion, ProjectRevision } from '@ontology/contracts'
+import {
+  isIndustryValidationReportView,
+  isPackCapabilityStatusView,
+  isPackExportBundleView,
+  isPublishedPackResult,
+  isSyntheticExampleSetView,
+} from './package-publication'
+import type {
+  IndustryValidationReportView,
+  PackExportBundleView,
+  PublishedPackResultView,
+  PublishPackRequest,
+  RunValidationRequest,
+  SyntheticExampleSetView,
+} from './package-publication'
 
 export { ApiError } from './errors'
 export {
@@ -535,6 +638,72 @@ export class WorkbenchClient {
     return { kind: 'published', answer: dataOf<PublishedAnswer>(parsed, `/api/v1/runs/${runId}/answer`) }
   }
 
+  /**
+   * `GET /answers/{answerId}/result`: the verified typed-result projection of one published
+   * answer. It never returns raw compute JSON; a non-verified shape is a malformed response.
+   */
+  getVerifiedResult(answerId: string): Promise<VerifiedResultView> {
+    const path = `/api/v1/answers/${encodeURIComponent(answerId)}/result`
+    return this.#request<unknown>('GET', path).then((data) => {
+      if (!isVerifiedResultView(data)) {
+        throw malformedResponse(path, 'the verified result view was not recognised')
+      }
+      return data
+    })
+  }
+
+  /**
+   * `GET /answers/{answerId}/tables/{tableId}`: one page of one fixed verified table revision.
+   * The cursor binds the answer/table/digest/scope, so a rebuild cannot silently concatenate
+   * two revisions. An unverified table must never be rendered, so a missing receipt is a 4xx.
+   */
+  getAnswerTablePage(
+    answerId: string,
+    tableId: string,
+    cursor?: string,
+  ): Promise<VerifiedTablePageView> {
+    const query = new URLSearchParams()
+    if (cursor !== undefined) query.set('cursor', cursor)
+    const suffix = query.toString().length > 0 ? `?${query.toString()}` : ''
+    const path = `/api/v1/answers/${encodeURIComponent(answerId)}/tables/${encodeURIComponent(tableId)}${suffix}`
+    return this.#request<unknown>('GET', path).then((data) => {
+      if (!isTablePageReadView(data)) {
+        throw malformedResponse(path, 'the verified table page was not recognised')
+      }
+      return data
+    })
+  }
+
+  /**
+   * `GET /runs/{runId}/answer/history`: the immutable result revisions grouped by the run's
+   * project. Each entry is a published version; older ones are labelled `history` and the exact
+   * version this run published is `fixed_version`, so a readback is never confused with a recompute.
+   */
+  getResultHistory(runId: string): Promise<ResultHistoryView> {
+    const path = `/api/v1/runs/${encodeURIComponent(runId)}/answer/history`
+    return this.#request<unknown>('GET', path).then((data) => {
+      if (!isResultHistoryView(data)) {
+        throw malformedResponse(path, 'the result history view was not recognised')
+      }
+      return data
+    })
+  }
+
+  /**
+   * `GET /runs/{runId}/answer/export?format=json`: the structured JSON export of the exact
+   * verified version the run published. A format the core surface does not serve is refused by
+   * the server (the professional XLSX template is registered by the scenario).
+   */
+  exportVerifiedResult(runId: string): Promise<VerifiedResultExport> {
+    const path = `/api/v1/runs/${encodeURIComponent(runId)}/answer/export?format=json`
+    return this.#request<unknown>('GET', path).then((data) => {
+      if (!isVerifiedResultExport(data)) {
+        throw malformedResponse(path, 'the verified result export was not recognised')
+      }
+      return data
+    })
+  }
+
   /** Subscribe to the run's persisted public events. Unknown event names are dropped. */
   openRunEvents(
     runId: string,
@@ -564,8 +733,527 @@ export class WorkbenchClient {
     })
   }
 
-  listCandidates(filter: CandidateFilter = {}): Promise<CandidateSummary[]> {
+  /** `GET /industry-workspaces`: the workspace list visible in the trusted scope. */
+  listIndustryWorkspaces(filter: IndustryWorkspaceListFilter = {}): Promise<IndustryWorkspace[]> {
     const query = new URLSearchParams()
+    if (filter.state !== undefined) query.set('state', filter.state)
+    if (filter.limit !== undefined) query.set('pageSize', String(filter.limit))
+    const suffix = query.toString().length > 0 ? `?${query.toString()}` : ''
+    const path = `/api/v1/industry-workspaces${suffix}`
+    return this.#request<unknown>('GET', path).then((data) => {
+      if (
+        !isRecord(data) ||
+        !Array.isArray(data['workspaces']) ||
+        !data['workspaces'].every(isIndustryWorkspace)
+      ) {
+        throw malformedResponse(path, 'the industry workspace list was not recognised')
+      }
+      return data['workspaces']
+    })
+  }
+
+  getIndustryWorkspace(workspaceId: string): Promise<IndustryWorkspace> {
+    const path = `/api/v1/industry-workspaces/${encodeURIComponent(workspaceId)}`
+    return this.#request<unknown>('GET', path).then((data) => {
+      if (!isRecord(data) || !isIndustryWorkspace(data['workspace'])) {
+        throw malformedResponse(path, 'the industry workspace was not recognised')
+      }
+      return data['workspace']
+    })
+  }
+
+  /** `POST /industry-workspaces`: create the workspace head plus its first immutable draft. */
+  createIndustryWorkspace(request: CreateIndustryWorkspaceRequest): Promise<IndustryWorkspaceWriteView> {
+    const path = '/api/v1/industry-workspaces'
+    return this.#request<unknown>('POST', path, {
+      body: request,
+      idempotencyKey: this.#newId(),
+    }).then((data) => {
+      if (!isIndustryWorkspaceWriteView(data)) {
+        throw malformedResponse(path, 'the created industry workspace was not recognised')
+      }
+      return data
+    })
+  }
+
+  /** `PATCH /industry-workspaces/:id`: edit the name/boundary via If-Match CAS. */
+  editIndustryWorkspace(
+    workspaceId: string,
+    request: EditIndustryWorkspaceRequest,
+  ): Promise<IndustryWorkspaceWriteView> {
+    const path = `/api/v1/industry-workspaces/${encodeURIComponent(workspaceId)}`
+    return this.#request<unknown>('PATCH', path, {
+      body: {
+        reason: request.reason,
+        ...(request.displayName === undefined ? {} : { displayName: request.displayName }),
+        ...(request.boundary === undefined ? {} : { boundary: request.boundary }),
+      },
+      ifMatch: request.expectedRevision,
+      idempotencyKey: this.#newId(),
+    }).then((data) => {
+      if (!isIndustryWorkspaceWriteView(data)) {
+        throw malformedResponse(path, 'the edited industry workspace was not recognised')
+      }
+      return data
+    })
+  }
+
+  /** `POST /industry-workspaces/:id/draft-operations`: append a draft with a new source set. */
+  appendIndustryWorkspaceDraft(
+    workspaceId: string,
+    request: AppendIndustryWorkspaceDraftRequest,
+  ): Promise<IndustryWorkspaceWriteView> {
+    const path = `/api/v1/industry-workspaces/${encodeURIComponent(workspaceId)}/draft-operations`
+    return this.#request<unknown>('POST', path, {
+      body: {
+        operation: 'edit',
+        reason: request.reason,
+        documentSetRef: request.documentSetRef,
+      },
+      ifMatch: request.expectedRevision,
+      idempotencyKey: this.#newId(),
+    }).then((data) => {
+      if (!isIndustryWorkspaceWriteView(data)) {
+        throw malformedResponse(path, 'the appended industry workspace draft was not recognised')
+      }
+      return data
+    })
+  }
+
+  listIndustryWorkspaceDrafts(workspaceId: string): Promise<AssetDraftVersion[]> {
+    const path = `/api/v1/industry-workspaces/${encodeURIComponent(workspaceId)}/drafts`
+    return this.#request<unknown>('GET', path).then((data) => {
+      if (
+        !isRecord(data) ||
+        !Array.isArray(data['drafts']) ||
+        !data['drafts'].every(isAssetDraftVersion)
+      ) {
+        throw malformedResponse(path, 'the industry workspace drafts were not recognised')
+      }
+      return data['drafts']
+    })
+  }
+
+  getIndustryWorkspaceDraft(workspaceId: string, revision: string): Promise<AssetDraftVersion> {
+    const path = `/api/v1/industry-workspaces/${encodeURIComponent(workspaceId)}/drafts/${encodeURIComponent(revision)}`
+    return this.#request<unknown>('GET', path).then((data) => {
+      if (!isRecord(data) || !isAssetDraftVersion(data['draft'])) {
+        throw malformedResponse(path, 'the industry workspace draft was not recognised')
+      }
+      return data['draft']
+    })
+  }
+
+  /** `GET /industry-workspaces/:id/candidates`: the definition (TBox) candidates in scope. */
+  listDefinitionCandidates(
+    workspaceId: string,
+    filter: DefinitionCandidateFilter = {},
+  ): Promise<AssetCandidateVersion[]> {
+    const query = new URLSearchParams()
+    if (filter.kind !== undefined) query.set('kind', filter.kind)
+    if (filter.state !== undefined) query.set('state', filter.state)
+    if (filter.limit !== undefined) query.set('pageSize', String(filter.limit))
+    const suffix = query.toString().length > 0 ? `?${query.toString()}` : ''
+    const path = `/api/v1/industry-workspaces/${encodeURIComponent(workspaceId)}/candidates${suffix}`
+    return this.#request<unknown>('GET', path).then((data) => {
+      if (
+        !isRecord(data) ||
+        !Array.isArray(data['candidates']) ||
+        !data['candidates'].every(definitionGuard.assetCandidateVersion)
+      ) {
+        throw malformedResponse(path, 'the definition candidate list was not recognised')
+      }
+      return data['candidates']
+    })
+  }
+
+  /** `GET /industry-workspaces/:id/generations`: the immutable generation batches. */
+  listDefinitionGenerationBatches(workspaceId: string): Promise<AssetCandidateBatch[]> {
+    const path = `/api/v1/industry-workspaces/${encodeURIComponent(workspaceId)}/generations`
+    return this.#request<unknown>('GET', path).then((data) => {
+      if (
+        !isRecord(data) ||
+        !Array.isArray(data['batches']) ||
+        !data['batches'].every(definitionGuard.assetCandidateBatch)
+      ) {
+        throw malformedResponse(path, 'the definition generation batch list was not recognised')
+      }
+      return data['batches']
+    })
+  }
+
+  /** `GET /industry-workspaces/:id/definition-adjudications`: the human edit decisions. */
+  listDefinitionAdjudications(workspaceId: string): Promise<DefinitionEditAdjudication[]> {
+    const path = `/api/v1/industry-workspaces/${encodeURIComponent(workspaceId)}/definition-adjudications`
+    return this.#request<unknown>('GET', path).then((data) => {
+      if (
+        !isRecord(data) ||
+        !Array.isArray(data['adjudications']) ||
+        !data['adjudications'].every(definitionGuard.definitionEditAdjudication)
+      ) {
+        throw malformedResponse(path, 'the definition adjudication list was not recognised')
+      }
+      return data['adjudications']
+    })
+  }
+
+  /** `POST /industry-workspaces/:id/candidates/:candidateId/edits`: append a revised candidate. */
+  editDefinitionCandidate(
+    workspaceId: string,
+    candidateId: string,
+    request: EditDefinitionCandidateRequest,
+  ): Promise<DefinitionEditingResult> {
+    const path = `/api/v1/industry-workspaces/${encodeURIComponent(workspaceId)}/candidates/${encodeURIComponent(candidateId)}/edits`
+    return this.#request<unknown>('POST', path, {
+      body: { payload: request.payload, reason: request.reason },
+      ifMatch: request.expectedRevision,
+      idempotencyKey: this.#newId(),
+    }).then((data) => this.readDefinitionEditingResult(path, data))
+  }
+
+  /** `POST /industry-workspaces/:id/candidate-merges`: merge synonymous definitions. */
+  mergeDefinitionCandidates(
+    workspaceId: string,
+    request: MergeDefinitionCandidatesRequest,
+  ): Promise<DefinitionEditingResult> {
+    const path = `/api/v1/industry-workspaces/${encodeURIComponent(workspaceId)}/candidate-merges`
+    return this.#request<unknown>('POST', path, {
+      body: {
+        candidateIds: request.candidateIds,
+        mergedPayload: request.mergedPayload,
+        reason: request.reason,
+      },
+      ifMatch: request.expectedRevision,
+      idempotencyKey: this.#newId(),
+    }).then((data) => this.readDefinitionEditingResult(path, data))
+  }
+
+  /** `POST /industry-workspaces/:id/candidate-decisions/keep-separate`: keep same-name terms apart. */
+  keepDefinitionCandidatesSeparate(
+    workspaceId: string,
+    request: KeepDefinitionsSeparateRequest,
+  ): Promise<DefinitionEditingResult> {
+    const path = `/api/v1/industry-workspaces/${encodeURIComponent(workspaceId)}/candidate-decisions/keep-separate`
+    return this.#request<unknown>('POST', path, {
+      body: { candidateIds: request.candidateIds, reason: request.reason },
+      ifMatch: request.expectedRevision,
+      idempotencyKey: this.#newId(),
+    }).then((data) => this.readDefinitionEditingResult(path, data))
+  }
+
+  /** `POST /industry-workspaces/:id/candidates/:candidateId/rejections`: reject a candidate. */
+  rejectDefinitionCandidate(
+    workspaceId: string,
+    candidateId: string,
+    request: RejectDefinitionCandidateRequest,
+  ): Promise<DefinitionEditingResult> {
+    const path = `/api/v1/industry-workspaces/${encodeURIComponent(workspaceId)}/candidates/${encodeURIComponent(candidateId)}/rejections`
+    return this.#request<unknown>('POST', path, {
+      body: { reason: request.reason },
+      ifMatch: request.expectedRevision,
+      idempotencyKey: this.#newId(),
+    }).then((data) => this.readDefinitionEditingResult(path, data))
+  }
+
+  /** `POST /industry-workspaces/:id/definition-validations`: the publication validation report. */
+  validateDefinitions(
+    workspaceId: string,
+    request: ValidateDefinitionsRequest,
+  ): Promise<DefinitionValidationReport> {
+    const path = `/api/v1/industry-workspaces/${encodeURIComponent(workspaceId)}/definition-validations`
+    return this.#request<unknown>('POST', path, {
+      body: {
+        revision: request.revision,
+        ...(request.strategy === undefined ? {} : { strategy: request.strategy }),
+      },
+    }).then((data) => {
+      if (!isRecord(data) || !definitionGuard.definitionValidationReport(data['report'])) {
+        throw malformedResponse(path, 'the definition validation report was not recognised')
+      }
+      return data['report']
+    })
+  }
+
+  /** `GET /industry-workspaces/:id/definition-compatibility`: the diff against the published pack. */
+  getDefinitionCompatibility(
+    workspaceId: string,
+    revision: string,
+  ): Promise<DefinitionCompatibilityReport> {
+    const query = new URLSearchParams({ revision })
+    const path = `/api/v1/industry-workspaces/${encodeURIComponent(workspaceId)}/definition-compatibility?${query.toString()}`
+    return this.#request<unknown>('GET', path).then((data) => {
+      if (!isRecord(data) || !definitionGuard.definitionCompatibilityReport(data['report'])) {
+        throw malformedResponse(path, 'the definition compatibility report was not recognised')
+      }
+      return data['report']
+    })
+  }
+
+  /** `GET /industry-workspaces/:id/unsupported-rules`: rules preserved as non-executable. */
+  listUnsupportedRules(workspaceId: string): Promise<UnsupportedDefinitionRule[]> {
+    const path = `/api/v1/industry-workspaces/${encodeURIComponent(workspaceId)}/unsupported-rules`
+    return this.#request<unknown>('GET', path).then((data) => {
+      if (
+        !isRecord(data) ||
+        !Array.isArray(data['rules']) ||
+        !data['rules'].every(definitionGuard.unsupportedDefinitionRule)
+      ) {
+        throw malformedResponse(path, 'the unsupported rule list was not recognised')
+      }
+      return data['rules']
+    })
+  }
+
+  /** `POST /industry-workspaces/:id/unsupported-rules`: keep an unsupported rule non-executable. */
+  recordUnsupportedRule(
+    workspaceId: string,
+    request: RecordUnsupportedRuleRequest,
+  ): Promise<UnsupportedDefinitionRule> {
+    const path = `/api/v1/industry-workspaces/${encodeURIComponent(workspaceId)}/unsupported-rules`
+    return this.#request<unknown>('POST', path, {
+      body: {
+        ruleId: request.ruleId,
+        reason: request.reason,
+        rawForm: request.rawForm,
+        ...(request.sourceCandidateId === undefined ? {} : { sourceCandidateId: request.sourceCandidateId }),
+      },
+      idempotencyKey: this.#newId(),
+    }).then((data) => {
+      if (!isRecord(data) || !definitionGuard.unsupportedDefinitionRule(data['rule'])) {
+        throw malformedResponse(path, 'the recorded unsupported rule was not recognised')
+      }
+      return data['rule']
+    })
+  }
+
+  /** `GET /industry-workspaces/:id/rule-action-candidates`: rule/action candidates in scope. */
+  listRuleActionCandidates(
+    workspaceId: string,
+    filter: RuleActionCandidateFilter = {},
+  ): Promise<RuleActionCandidateVersion[]> {
+    const query = new URLSearchParams()
+    if (filter.kind !== undefined) query.set('kind', filter.kind)
+    if (filter.lifecycle !== undefined) query.set('lifecycle', filter.lifecycle)
+    if (filter.limit !== undefined) query.set('pageSize', String(filter.limit))
+    const suffix = query.toString().length > 0 ? `?${query.toString()}` : ''
+    const path = `/api/v1/industry-workspaces/${encodeURIComponent(workspaceId)}/rule-action-candidates${suffix}`
+    return this.#request<unknown>('GET', path).then((data) => {
+      if (
+        !isRecord(data) ||
+        !Array.isArray(data['candidates']) ||
+        !data['candidates'].every(definitionGuard.ruleActionCandidateVersion)
+      ) {
+        throw malformedResponse(path, 'the rule/action candidate list was not recognised')
+      }
+      return data['candidates']
+    })
+  }
+
+  /** `POST /industry-workspaces/:id/rule-action-candidates/:candidateId/edits`: revise a rule. */
+  editRuleCandidate(
+    workspaceId: string,
+    candidateId: string,
+    request: EditRuleCandidateRequest,
+  ): Promise<RuleActionCandidateVersion> {
+    const path = `/api/v1/industry-workspaces/${encodeURIComponent(workspaceId)}/rule-action-candidates/${encodeURIComponent(candidateId)}/edits`
+    return this.#request<unknown>('POST', path, {
+      body: {
+        rule: request.rule satisfies RuleCandidateDraft,
+        reason: request.reason,
+        sourceRefs: request.sourceRefs ?? [],
+      },
+      ifMatch: request.expectedRevision,
+      idempotencyKey: this.#newId(),
+    }).then((data) => this.readRuleActionCandidate(path, data))
+  }
+
+  /** `POST /industry-workspaces/:id/rule-action-candidates/:candidateId/edits`: revise an action. */
+  editActionCandidate(
+    workspaceId: string,
+    candidateId: string,
+    request: EditActionCandidateRequest,
+  ): Promise<RuleActionCandidateVersion> {
+    const path = `/api/v1/industry-workspaces/${encodeURIComponent(workspaceId)}/rule-action-candidates/${encodeURIComponent(candidateId)}/edits`
+    return this.#request<unknown>('POST', path, {
+      body: {
+        action: request.action satisfies ActionCandidateDraft,
+        reason: request.reason,
+        sourceRefs: request.sourceRefs ?? [],
+      },
+      ifMatch: request.expectedRevision,
+      idempotencyKey: this.#newId(),
+    }).then((data) => this.readRuleActionCandidate(path, data))
+  }
+
+  /** `POST /industry-workspaces/:id/rule-action-candidates/:candidateId/enable`: enable if executable. */
+  enableRuleActionCandidate(
+    workspaceId: string,
+    candidateId: string,
+    request: EnableRuleActionCandidateRequest,
+  ): Promise<RuleActionCandidateView> {
+    const path = `/api/v1/industry-workspaces/${encodeURIComponent(workspaceId)}/rule-action-candidates/${encodeURIComponent(candidateId)}/enable`
+    return this.#request<unknown>('POST', path, {
+      body: {},
+      ifMatch: request.expectedRevision,
+      idempotencyKey: this.#newId(),
+    }).then((data) => {
+      if (!definitionGuard.candidateLifecycleView(data)) {
+        throw malformedResponse(path, 'the rule/action lifecycle view was not recognised')
+      }
+      return data
+    })
+  }
+
+  private readDefinitionEditingResult(path: string, data: unknown): DefinitionEditingResult {
+    if (!definitionGuard.definitionEditingResult(data)) {
+      throw malformedResponse(path, 'the definition editing result was not recognised')
+    }
+    return data
+  }
+
+  private readRuleActionCandidate(path: string, data: unknown): RuleActionCandidateVersion {
+    if (!isRecord(data) || !definitionGuard.ruleActionCandidateVersion(data['candidate'])) {
+      throw malformedResponse(path, 'the rule/action candidate revision was not recognised')
+    }
+    return data['candidate']
+  }
+
+  private instanceRecordPath(projectId: string, recordId: string, suffix = ''): string {
+    return `/api/v1/projects/${encodeURIComponent(projectId)}/instance-records/${encodeURIComponent(recordId)}${suffix}`
+  }
+
+  private readInstanceRecord(path: string, data: unknown): InstanceRecordView {
+    if (!isRecord(data) || !isInstanceRecordView(data['record'])) {
+      throw malformedResponse(path, 'the instance record was not recognised')
+    }
+    return data['record']
+  }
+
+  /** `GET /projects/:id/instance-records`: the instance records visible in the trusted scope. */
+  listInstanceRecords(projectId: string, filter: InstanceRecordFilter = {}): Promise<InstanceRecordView[]> {
+    const query = new URLSearchParams()
+    if (filter.status !== undefined) query.set('status', filter.status)
+    if (filter.publicationState !== undefined) query.set('publicationState', filter.publicationState)
+    const suffix = query.toString().length > 0 ? `?${query.toString()}` : ''
+    const path = `/api/v1/projects/${encodeURIComponent(projectId)}/instance-records${suffix}`
+    return this.#request<unknown>('GET', path).then((data) => {
+      if (!isRecord(data) || !Array.isArray(data['records']) || !data['records'].every(isInstanceRecordView)) {
+        throw malformedResponse(path, 'the instance record list was not recognised')
+      }
+      return data['records']
+    })
+  }
+
+  getInstanceRecord(projectId: string, recordId: string): Promise<InstanceRecordView> {
+    const path = this.instanceRecordPath(projectId, recordId)
+    return this.#request<unknown>('GET', path).then((data) => this.readInstanceRecord(path, data))
+  }
+
+  listInstanceConfirmations(projectId: string, recordId: string): Promise<InstanceConfirmationEvent[]> {
+    const path = this.instanceRecordPath(projectId, recordId, '/confirmations')
+    return this.#request<unknown>('GET', path).then((data) => {
+      if (
+        !isRecord(data) ||
+        !Array.isArray(data['confirmations']) ||
+        !data['confirmations'].every(isInstanceConfirmationEvent)
+      ) {
+        throw malformedResponse(path, 'the instance confirmation history was not recognised')
+      }
+      return data['confirmations']
+    })
+  }
+
+  createInstanceRecord(
+    projectId: string,
+    request: CreateInstanceRecordRequest,
+  ): Promise<InstanceRecordView> {
+    const path = `/api/v1/projects/${encodeURIComponent(projectId)}/instance-records`
+    return this.#request<unknown>('POST', path, {
+      body: request,
+      idempotencyKey: this.#newId(),
+    }).then((data) => this.readInstanceRecord(path, data))
+  }
+
+  editInstanceField(
+    projectId: string,
+    recordId: string,
+    request: EditInstanceFieldRequest,
+  ): Promise<InstanceRecordView> {
+    const path = this.instanceRecordPath(projectId, recordId, '/field-edits')
+    return this.#request<unknown>('POST', path, {
+      body: {
+        fieldId: request.fieldId,
+        ...(request.rawValue === undefined ? {} : { rawValue: request.rawValue }),
+        ...(request.normalizedValue === undefined ? {} : { normalizedValue: request.normalizedValue }),
+        reason: request.reason,
+      },
+      ifMatch: request.expectedRevision,
+      idempotencyKey: this.#newId(),
+    }).then((data) => this.readInstanceRecord(path, data))
+  }
+
+  confirmInstanceFields(
+    projectId: string,
+    recordId: string,
+    request: ConfirmInstanceFieldsRequest,
+  ): Promise<InstanceConfirmationOutcomeView> {
+    const path = this.instanceRecordPath(projectId, recordId, '/field-confirmations')
+    return this.#request<unknown>('POST', path, {
+      body: { decisions: request.decisions },
+      ifMatch: request.expectedRevision,
+      idempotencyKey: this.#newId(),
+    }).then((data) => {
+      if (!isInstanceConfirmationOutcome(data)) {
+        throw malformedResponse(path, 'the field confirmation outcome was not recognised')
+      }
+      return data
+    })
+  }
+
+  adjudicateInstanceIdentity(
+    projectId: string,
+    recordId: string,
+    request: InstanceIdentityDecisionRequest,
+  ): Promise<InstanceRecordView> {
+    const path = this.instanceRecordPath(projectId, recordId, '/identity-decisions')
+    return this.#request<unknown>('POST', path, {
+      body: {
+        kind: request.kind,
+        ...(request.targetEntityId === undefined ? {} : { targetEntityId: request.targetEntityId }),
+        reason: request.reason,
+      },
+      ifMatch: request.expectedRevision,
+      idempotencyKey: this.#newId(),
+    }).then((data) => this.readInstanceRecord(path, data))
+  }
+
+  approveInstanceRecord(
+    projectId: string,
+    recordId: string,
+    request: InstanceRevisionRequest,
+  ): Promise<InstanceRecordView> {
+    const path = this.instanceRecordPath(projectId, recordId, '/approve')
+    return this.#request<unknown>('POST', path, {
+      body: {},
+      ifMatch: request.expectedRevision,
+      idempotencyKey: this.#newId(),
+    }).then((data) => this.readInstanceRecord(path, data))
+  }
+
+  publishInstanceRecord(
+    projectId: string,
+    recordId: string,
+    request: InstanceRevisionRequest,
+  ): Promise<InstanceRecordView> {
+    const path = this.instanceRecordPath(projectId, recordId, '/publish')
+    return this.#request<unknown>('POST', path, {
+      body: {},
+      ifMatch: request.expectedRevision,
+      idempotencyKey: this.#newId(),
+    }).then((data) => this.readInstanceRecord(path, data))
+  }
+
+  listCandidates(filter: CandidateFilter = {}): Promise<CandidateSummary[]> {    const query = new URLSearchParams()
     if (filter.jobId !== undefined) query.set('jobId', filter.jobId)
     if (filter.state !== undefined) query.set('state', filter.state)
     if (filter.kind !== undefined) query.set('kind', filter.kind)
@@ -760,6 +1448,334 @@ export class WorkbenchClient {
         return record
       },
     )
+  }
+
+  /** `GET /industry-packs`: the published pack versions a project can be created against. */
+  listIndustryPacks(): Promise<IndustryPackSummary[]> {
+    const path = '/api/v1/industry-packs'
+    return this.#request<unknown>('GET', path).then((data) => {
+      if (!isRecord(data) || !Array.isArray(data['packs']) || !data['packs'].every(isIndustryPackSummary)) {
+        throw malformedResponse(path, 'the industry pack list was not recognised')
+      }
+      return data['packs']
+    })
+  }
+
+  /** `GET /projects`: the customer projects visible in the trusted scope. */
+  listProjects(filter: { readonly state?: ProjectState; readonly limit?: number } = {}): Promise<ProjectRecord[]> {
+    const query = new URLSearchParams()
+    if (filter.state !== undefined) query.set('state', filter.state)
+    if (filter.limit !== undefined) query.set('pageSize', String(filter.limit))
+    const suffix = query.toString().length > 0 ? `?${query.toString()}` : ''
+    const path = `/api/v1/projects${suffix}`
+    return this.#request<unknown>('GET', path).then((data) => {
+      if (!isRecord(data) || !Array.isArray(data['projects']) || !data['projects'].every(isProjectRecord)) {
+        throw malformedResponse(path, 'the project list was not recognised')
+      }
+      return data['projects']
+    })
+  }
+
+  /** `POST /projects`: create a project against an exact published pack version. */
+  createProject(request: CreateProjectRequest): Promise<{ readonly project: ProjectRecord; readonly revision: ProjectRevision }> {
+    const path = '/api/v1/projects'
+    return this.#request<unknown>('POST', path, { body: request, idempotencyKey: this.#newId() }).then((data) => {
+      if (!isRecord(data) || !isProjectRecord(data['project']) || !isProjectRevision(data['revision'])) {
+        throw malformedResponse(path, 'the created project was not recognised')
+      }
+      return { project: data['project'], revision: data['revision'] }
+    })
+  }
+
+  getProject(projectId: string): Promise<ProjectRecord> {
+    const path = `/api/v1/projects/${encodeURIComponent(projectId)}`
+    return this.#request<unknown>('GET', path).then((data) => {
+      if (!isRecord(data) || !isProjectRecord(data['project'])) {
+        throw malformedResponse(path, 'the project was not recognised')
+      }
+      return data['project']
+    })
+  }
+
+  listProjectRevisions(projectId: string): Promise<ProjectRevision[]> {
+    const path = `/api/v1/projects/${encodeURIComponent(projectId)}/revisions`
+    return this.#request<unknown>('GET', path).then((data) => {
+      if (!isRecord(data) || !Array.isArray(data['revisions']) || !data['revisions'].every(isProjectRevision)) {
+        throw malformedResponse(path, 'the project revision list was not recognised')
+      }
+      return data['revisions']
+    })
+  }
+
+  getProjectRevisionView(projectId: string, revision: string): Promise<ProjectRevisionView> {
+    const path = `/api/v1/projects/${encodeURIComponent(projectId)}/revisions/${encodeURIComponent(revision)}`
+    return this.#request<unknown>('GET', path).then((data) => {
+      if (!isProjectRevisionView(data)) {
+        throw malformedResponse(path, 'the project revision view was not recognised')
+      }
+      return data
+    })
+  }
+
+  /** `GET /projects/:id/readiness`: semantic/query/index projections with fixable blockers. */
+  getProjectReadiness(
+    projectId: string,
+    revision?: string,
+    required?: readonly string[],
+  ): Promise<ProjectReadinessView> {
+    const query = new URLSearchParams()
+    if (revision !== undefined) query.set('revision', revision)
+    if (required !== undefined && required.length > 0) query.set('required', required.join(','))
+    const suffix = query.toString().length > 0 ? `?${query.toString()}` : ''
+    const path = `/api/v1/projects/${encodeURIComponent(projectId)}/readiness${suffix}`
+    return this.#request<unknown>('GET', path).then((data) => {
+      if (!isProjectReadinessView(data)) {
+        throw malformedResponse(path, 'the project readiness view was not recognised')
+      }
+      return data
+    })
+  }
+
+  /** `POST /projects/:id/pack-mounts`: mount an exact published pack version as a new revision. */
+  mountProjectPack(projectId: string, request: MountProjectPackRequest): Promise<ProjectEvolutionView> {
+    const path = `/api/v1/projects/${encodeURIComponent(projectId)}/pack-mounts`
+    return this.#request<unknown>('POST', path, {
+      body: {
+        industryPackRef: request.industryPackRef,
+        reason: request.reason,
+        ...(request.profileRef === undefined ? {} : { profileRef: request.profileRef }),
+        ...(request.mappingRefs === undefined ? {} : { mappingRefs: request.mappingRefs }),
+        ...(request.documentSetRef === undefined ? {} : { documentSetRef: request.documentSetRef }),
+      },
+      ifMatch: request.expectedRevision,
+      idempotencyKey: this.#newId(),
+    }).then((data) => {
+      if (!isProjectEvolutionView(data)) {
+        throw malformedResponse(path, 'the mounted project revision was not recognised')
+      }
+      return data
+    })
+  }
+
+  /**
+   * `GET /industry-workspaces/:id/synthetic-example-sets`: the isolation-marked counter-example
+   * sets the sandbox holds. Every returned set keeps its `synthetic` marker; a set that lost it is
+   * an explicit malformed response rather than a silently trusted counter-example.
+   */
+  listSyntheticExampleSets(workspaceId: string): Promise<SyntheticExampleSetView[]> {
+    const path = `/api/v1/industry-workspaces/${encodeURIComponent(workspaceId)}/synthetic-example-sets`
+    return this.#request<unknown>('GET', path).then((data) => {
+      if (!isRecord(data) || !Array.isArray(data['exampleSets']) || !data['exampleSets'].every(isSyntheticExampleSetView)) {
+        throw malformedResponse(path, 'the synthetic example set list was not recognised')
+      }
+      return data['exampleSets']
+    })
+  }
+
+  /** `POST /industry-workspaces/:id/validations`: run the synthetic validation over a draft. */
+  createSyntheticValidation(
+    workspaceId: string,
+    request: RunValidationRequest,
+  ): Promise<IndustryValidationReportView> {
+    const path = `/api/v1/industry-workspaces/${encodeURIComponent(workspaceId)}/validations`
+    return this.#request<unknown>('POST', path, {
+      body: { exampleSetId: request.exampleSetId },
+      ...(request.expectedRevision === undefined ? {} : { ifMatch: request.expectedRevision }),
+      idempotencyKey: this.#newId(),
+    }).then((data) => this.readValidationReport(path, data))
+  }
+
+  /** `GET /industry-workspaces/:id/validations/:validationId`: one immutable report. */
+  getValidation(workspaceId: string, validationId: string): Promise<IndustryValidationReportView> {
+    const path = `/api/v1/industry-workspaces/${encodeURIComponent(workspaceId)}/validations/${encodeURIComponent(validationId)}`
+    return this.#request<unknown>('GET', path).then((data) => this.readValidationReport(path, data))
+  }
+
+  /**
+   * `POST /industry-workspaces/:id/publications`: publish an immutable pack from a reviewed draft.
+   * The server refuses a blocked semantic surface, and refuses a not-fully-executable deployment
+   * surface when `requireDeploymentExecutable` is set. The two surfaces come back independently.
+   */
+  publishPack(workspaceId: string, request: PublishPackRequest): Promise<PublishedPackResultView> {
+    const path = `/api/v1/industry-workspaces/${encodeURIComponent(workspaceId)}/publications`
+    return this.#request<unknown>('POST', path, {
+      body: {
+        packId: request.packId,
+        version: request.version,
+        validationId: request.validationId,
+        ...(request.requireDeploymentExecutable ? { requireDeploymentExecutable: true } : {}),
+      },
+      ifMatch: request.expectedRevision,
+      idempotencyKey: this.#newId(),
+    }).then((data) => {
+      if (!isRecord(data) || !isVersionRef(data['packRef']) || !isPackCapabilityStatusView(data['capabilityStatus'])) {
+        throw malformedResponse(path, 'the published pack result was not recognised')
+      }
+      const pack = data['pack']
+      if (!isRecord(pack) || typeof pack['revision'] !== 'string' || typeof pack['publishedAt'] !== 'string') {
+        throw malformedResponse(path, 'the published pack asset was not recognised')
+      }
+      const result: PublishedPackResultView = {
+        packRef: data['packRef'],
+        capabilities: data['capabilityStatus'],
+        revision: pack['revision'],
+        publishedAt: pack['publishedAt'],
+      }
+      if (!isPublishedPackResult(result)) throw malformedResponse(path, 'the published pack result was not recognised')
+      return result
+    })
+  }
+
+  /** `GET /industry-packs/:packId/export`: the declaration-only immutable export of one version. */
+  exportIndustryPack(packId: string, version: string): Promise<PackExportBundleView> {
+    const query = new URLSearchParams({ version })
+    const path = `/api/v1/industry-packs/${encodeURIComponent(packId)}/export?${query.toString()}`
+    return this.#request<unknown>('GET', path).then((data) => {
+      if (!isPackExportBundleView(data)) {
+        throw malformedResponse(path, 'the industry pack export bundle was not recognised')
+      }
+      return data
+    })
+  }
+
+  private readValidationReport(path: string, data: unknown): IndustryValidationReportView {
+    if (!isRecord(data) || !isIndustryValidationReportView(data['validation'])) {
+      throw malformedResponse(path, 'the industry validation report was not recognised')
+    }
+    return data['validation']
+  }
+
+  listProjectMappings(projectId: string): Promise<ImportMappingVersion[]> {
+    const path = `/api/v1/projects/${encodeURIComponent(projectId)}/mappings`
+    return this.#request<unknown>('GET', path).then((data) => {
+      if (!isRecord(data) || !Array.isArray(data['mappings']) || !data['mappings'].every(isImportMappingVersion)) {
+        throw malformedResponse(path, 'the project mapping list was not recognised')
+      }
+      return data['mappings']
+    })
+  }
+
+  previewProjectMapping(projectId: string, request: ColumnMappingRequestView): Promise<MappingPreview> {
+    const path = `/api/v1/projects/${encodeURIComponent(projectId)}/mappings/preview`
+    return this.#request<unknown>('POST', path, { body: request }).then((data) => {
+      if (!isRecord(data) || !isMappingPreview(data['preview'])) {
+        throw malformedResponse(path, 'the mapping preview was not recognised')
+      }
+      return data['preview']
+    })
+  }
+
+  confirmProjectMapping(
+    projectId: string,
+    request: ColumnMappingRequestView,
+  ): Promise<{ readonly mapping: ImportMappingVersion; readonly preview: MappingPreview }> {
+    const path = `/api/v1/projects/${encodeURIComponent(projectId)}/mappings`
+    return this.#request<unknown>('POST', path, { body: request, idempotencyKey: this.#newId() }).then((data) => {
+      if (!isRecord(data) || !isImportMappingVersion(data['mapping']) || !isMappingPreview(data['preview'])) {
+        throw malformedResponse(path, 'the confirmed mapping was not recognised')
+      }
+      return { mapping: data['mapping'], preview: data['preview'] }
+    })
+  }
+
+  listProjectRecords(
+    projectId: string,
+    filter: { readonly objectId?: string; readonly status?: string; readonly cursor?: string; readonly limit?: number } = {},
+  ): Promise<ProjectRecordPageView> {
+    const query = new URLSearchParams()
+    if (filter.objectId !== undefined) query.set('objectId', filter.objectId)
+    if (filter.status !== undefined) query.set('status', filter.status)
+    if (filter.cursor !== undefined) query.set('cursor', filter.cursor)
+    if (filter.limit !== undefined) query.set('pageSize', String(filter.limit))
+    const suffix = query.toString().length > 0 ? `?${query.toString()}` : ''
+    const path = `/api/v1/projects/${encodeURIComponent(projectId)}/records${suffix}`
+    return this.#request<unknown>('GET', path).then((data) => {
+      if (!isProjectRecordPageView(data)) {
+        throw malformedResponse(path, 'the project record page was not recognised')
+      }
+      return {
+        records: data.records,
+        total: data.total,
+        ...(typeof data.nextCursor === 'string' ? { nextCursor: data.nextCursor } : {}),
+      }
+    })
+  }
+
+  /** `POST /projects/:id/records`: bind the confirmed mapping's parsed rows into project records. */
+  bindProjectRecords(
+    projectId: string,
+    request: { readonly parseId: string; readonly mappingId: string; readonly mappingVersion: string },
+  ): Promise<{ readonly records: readonly ProjectRecordVersion[]; readonly created: boolean }> {
+    const path = `/api/v1/projects/${encodeURIComponent(projectId)}/records`
+    return this.#request<unknown>('POST', path, { body: request, idempotencyKey: this.#newId() }).then((data) => {
+      if (!isRecord(data) || !Array.isArray(data['records']) || typeof data['created'] !== 'boolean') {
+        throw malformedResponse(path, 'the bound project records were not recognised')
+      }
+      return { records: data['records'], created: data['created'] }
+    })
+  }
+
+  getProjectDatasetStatus(projectId: string, objectId: string): Promise<ProjectDatasetStatusView> {
+    const query = new URLSearchParams({ objectId })
+    const path = `/api/v1/projects/${encodeURIComponent(projectId)}/dataset/status?${query.toString()}`
+    return this.#request<unknown>('GET', path).then((data) => {
+      if (!isRecord(data) || !isProjectDatasetStatus(data['status'])) {
+        throw malformedResponse(path, 'the project dataset status was not recognised')
+      }
+      return data['status']
+    })
+  }
+
+  materializeProjectDataset(
+    projectId: string,
+    request: { readonly objectId: string; readonly revision?: string; readonly allowPartial?: boolean },
+  ): Promise<ProjectDatasetStatusView> {
+    const path = `/api/v1/projects/${encodeURIComponent(projectId)}/dataset-snapshots`
+    return this.#request<unknown>('POST', path, { body: request, idempotencyKey: this.#newId() }).then((data) => {
+      if (!isRecord(data) || !isProjectDatasetStatus(data['status'])) {
+        throw malformedResponse(path, 'the materialised project dataset was not recognised')
+      }
+      return data['status']
+    })
+  }
+
+  getProjectDocumentIndex(projectId: string): Promise<ProjectDocumentIndexStatusView> {
+    const path = `/api/v1/projects/${encodeURIComponent(projectId)}/document-index`
+    return this.#request<unknown>('GET', path).then((data) => {
+      if (!isRecord(data) || !isProjectDocumentIndexStatus(data['status'])) {
+        throw malformedResponse(path, 'the project document index status was not recognised')
+      }
+      return data['status']
+    })
+  }
+
+  buildProjectDocumentIndex(projectId: string): Promise<ProjectDocumentIndexStatusView> {
+    const path = `/api/v1/projects/${encodeURIComponent(projectId)}/document-index`
+    return this.#request<unknown>('POST', path, { body: {}, idempotencyKey: this.#newId() }).then((data) => {
+      if (!isRecord(data) || !isProjectDocumentIndexStatus(data['status'])) {
+        throw malformedResponse(path, 'the built project document index was not recognised')
+      }
+      return data['status']
+    })
+  }
+
+  importProjectDocumentMembership(
+    projectId: string,
+    request: {
+      readonly documentId?: string
+      readonly documentRef: ResourceRef
+      readonly parseRef: ResourceRef
+      readonly parseId: string
+      readonly reason?: string
+    },
+  ): Promise<ProjectDocumentIndexStatusView> {
+    const path = `/api/v1/projects/${encodeURIComponent(projectId)}/document-memberships`
+    return this.#request<unknown>('POST', path, { body: request, idempotencyKey: this.#newId() }).then((data) => {
+      if (!isRecord(data) || !isProjectDocumentIndexStatus(data['status'])) {
+        throw malformedResponse(path, 'the imported project document was not recognised')
+      }
+      return data['status']
+    })
   }
 
   async #requestWithMeta<T>(path: string): Promise<{ data: T; nextCursor: string | undefined }> {

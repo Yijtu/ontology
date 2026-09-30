@@ -325,11 +325,28 @@ function injectionResult(question: string): FewShotRetrievalResult {
   }
 }
 
-const PLANNING_CTX = gatewayContext({ collectionRefs: [COLLECTION] })
+function planningContext() {
+  return gatewayContext({
+    collectionRefs: [COLLECTION],
+    deadline: new Date(Date.now() + 60_000).toISOString(),
+  })
+}
+
+function generationWithPlan(): CountingGeneration {
+  return new CountingGeneration().script([
+    {
+      type: 'tool_call_delta',
+      callId: '11111111-2222-4333-8444-555555555555',
+      toolId: 'data_query',
+      argumentsDelta: multiHopPlanJson(),
+    },
+    { type: 'completed', stopReason: 'tool_calls', candidateOnly: true },
+  ])
+}
 
 describe('few-shot injection into the generation request (LOCAL-076)', () => {
   it('injects examples as untrusted data without changing the catalogue, budget or role', async () => {
-    const generation = new CountingGeneration()
+    const generation = generationWithPlan()
     const planner = new RunPlanner({
       vocabulary: PLANNER_VOCABULARY,
       compiler: new CountingCompiler(),
@@ -343,13 +360,13 @@ describe('few-shot injection into the generation request (LOCAL-076)', () => {
 
     const routed = await planner.route(
       {
-        runId: PLANNING_CTX.runId,
+        runId: planningContext().runId,
         ...PLAN_SOURCES,
         question: 'which tariff applies tomorrow',
         context: { timeZone: 'Asia/Shanghai', siteRef: 'site-demo-a' },
         preferences: { route: 'auto', allowWeb: false },
       },
-      PLANNING_CTX,
+      planningContext(),
     )
 
     expect(routed.route).toBe('small_plan')
@@ -376,7 +393,7 @@ describe('few-shot injection into the generation request (LOCAL-076)', () => {
   })
 
   it('injects nothing when the example set is not configured', async () => {
-    const generation = new CountingGeneration()
+    const generation = generationWithPlan()
     const planner = new RunPlanner({
       vocabulary: PLANNER_VOCABULARY,
       compiler: new CountingCompiler(),
@@ -393,13 +410,13 @@ describe('few-shot injection into the generation request (LOCAL-076)', () => {
 
     await planner.route(
       {
-        runId: PLANNING_CTX.runId,
+        runId: planningContext().runId,
         ...PLAN_SOURCES,
         question: 'which tariff applies tomorrow',
         context: { timeZone: 'Asia/Shanghai', siteRef: 'site-demo-a' },
         preferences: { route: 'auto', allowWeb: false },
       },
-      PLANNING_CTX,
+      planningContext(),
     )
 
     // Base system instruction, injected schema vocabulary and the question; no example message.
@@ -408,15 +425,7 @@ describe('few-shot injection into the generation request (LOCAL-076)', () => {
 
   it('does not let an example bypass plan parsing, validation or the mapping compiler', async () => {
     const compiler = new CountingCompiler()
-    const generation = new CountingGeneration().script([
-      {
-        type: 'tool_call_delta',
-        callId: '11111111-2222-4333-8444-555555555555',
-        toolId: 'data_query',
-        argumentsDelta: multiHopPlanJson(),
-      },
-      { type: 'completed', stopReason: 'tool_calls', candidateOnly: true },
-    ])
+    const generation = generationWithPlan()
     const planner = new RunPlanner({
       vocabulary: PLANNER_VOCABULARY,
       compiler,
@@ -428,13 +437,13 @@ describe('few-shot injection into the generation request (LOCAL-076)', () => {
 
     const routed = await planner.route(
       {
-        runId: PLANNING_CTX.runId,
+        runId: planningContext().runId,
         ...PLAN_SOURCES,
         question: 'which meters consumed the most energy and which site do they belong to',
         context: { timeZone: 'Asia/Shanghai', siteRef: 'site-demo-a' },
         preferences: { route: 'auto', allowWeb: false },
       },
-      PLANNING_CTX,
+      planningContext(),
     )
 
     // The plan comes from the model proposal through the real compiler, not from the example.

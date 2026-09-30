@@ -14,6 +14,9 @@ export interface StatePanelProps {
   readonly error?: WorkbenchError
   /** A surface-specific title; the default is the workbench wording. */
   readonly title?: string
+  /** Offered only for a retryable `failure`; a permission or not-configured state never retries. */
+  readonly onRecover?: () => void
+  readonly recoverLabel?: string
   readonly children?: ReactNode
 }
 
@@ -22,9 +25,9 @@ export interface StatePanelProps {
  * `permission_denied` never suggests a retry; `failure` carries the classified code and the
  * server trace id so the operator can quote it.
  */
-export function StatePanel({ phase, error, title, children }: StatePanelProps) {
+export function StatePanel({ phase, error, title, onRecover, recoverLabel, children }: StatePanelProps) {
   return (
-    <section className="state-panel" data-state={phase} role="status" aria-live="polite">
+    <section className="state-panel" data-testid="state-panel" data-state={phase} role="status" aria-live="polite">
       <h2 className="state-panel__title">{title ?? TITLES[phase]}</h2>
       {error === undefined ? null : (
         <div className="state-panel__detail">
@@ -41,6 +44,11 @@ export function StatePanel({ phase, error, title, children }: StatePanelProps) {
             <p className="state-panel__trace">traceId：{error.traceId}</p>
           )}
         </div>
+      )}
+      {onRecover === undefined || phase !== 'failure' ? null : (
+        <button type="button" data-testid="state-panel-recover" onClick={onRecover}>
+          {recoverLabel ?? '重试'}
+        </button>
       )}
       {children}
     </section>

@@ -4,6 +4,7 @@ import type {
   LogicalRole,
   MappingRef,
   Namespace,
+  ResourceRef,
   Rfc3339UtcTimestamp,
   Semver,
   Sha256Digest,
@@ -14,6 +15,12 @@ import type {
 import type { ScopeRef } from './generated/contracts'
 import type { AttributeValueType, SemanticDefinitionRecord } from './semantic-definitions'
 import type { FewShotExampleSet } from './few-shot'
+import type {
+  PackActionDeclarationPin,
+  PackCapabilityStatus,
+  PackSourceIndex,
+  PackVersionDiff,
+} from './pack-publication'
 import type { ToolContext } from './trusted'
 
 /**
@@ -114,6 +121,17 @@ export interface PackAsset {
    * a customer instance. Absent means the pack configures no examples.
    */
   readonly exampleSet?: FewShotExampleSet
+  /**
+   * V03-015 additive pointers (SPEC v0.3a §6.1). They pin the authorized/redacted source index,
+   * the bounded rule and action declarations, the validation report and the confirmed synthetic
+   * example set the pack was published from. Each is a reference; the content stays in the
+   * control store and never inlines a customer payload, credential or physical address.
+   */
+  readonly sourceIndexRef?: ResourceRef
+  readonly ruleDeclarationsRef?: ResourceRef
+  readonly actionDeclarationsRef?: ResourceRef
+  readonly syntheticExampleRef?: ResourceRef
+  readonly validationRef?: ResourceRef
 }
 
 /**
@@ -182,6 +200,18 @@ export interface IndustryPackExportBundle {
    * of the deterministic content digest, so a changed example set produces a new export.
    */
   readonly exampleSet?: FewShotExampleSet
+  /**
+   * V03-015 additive export fields (SPEC v0.3a §6.1). When the pack was published dynamically they
+   * carry the authorized/redacted source index, the pinned action declarations, the two-surface
+   * capability state and the diff against the previous published version. All are declaration
+   * data: a customer instance, real price table, credential or identity decision never appears.
+   */
+  readonly sourceIndex?: PackSourceIndex
+  readonly actionDeclarations?: readonly PackActionDeclarationPin[]
+  readonly capabilityStatus?: PackCapabilityStatus
+  readonly versionDiff?: PackVersionDiff
+  readonly validationRef?: ResourceRef
+  readonly syntheticExampleRef?: ResourceRef
   readonly exportedAt: Rfc3339UtcTimestamp
   readonly contentDigest: Sha256Digest
 }

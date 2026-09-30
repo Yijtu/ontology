@@ -1,4 +1,5 @@
 import { defineConfig } from 'vite'
+import { resolve } from 'node:path'
 import { fileURLToPath } from 'node:url'
 
 const webRoot = fileURLToPath(new URL('.', import.meta.url))
@@ -26,6 +27,18 @@ export function createWebViteConfig(environment: Readonly<Record<string, string 
     outDir: 'dist',
     emptyOutDir: true,
     sourcemap: false,
+    rollupOptions: {
+      input: {
+        index: resolve(webRoot, 'index.html'),
+        scenarioMountHarness: resolve(webRoot, 'scenario-mount-harness.html'),
+        workspaceHarness: resolve(webRoot, 'workspace-harness.html'),
+        instanceReviewHarness: resolve(webRoot, 'instance-review-harness.html'),
+        definitionWorkbenchHarness: resolve(webRoot, 'definition-workbench-harness.html'),
+        projectHarness: resolve(webRoot, 'project-harness.html'),
+        packagePublishHarness: resolve(webRoot, 'package-publish-harness.html'),
+        businessResultsHarness: resolve(webRoot, 'business-results-harness.html'),
+      },
+    },
   },
   server: {
     port: portOf(environment['CORE_WEB_PORT'], 'CORE_WEB_PORT', 5_173),

@@ -81,7 +81,7 @@ async function waitForAnswer(runId: string): Promise<Record<string, unknown>> {
       const errorText = await response.text()
       const run = await request(`/api/v1/runs/${runId}`).then((result) => result.text())
       const events = await request(`/api/v1/runs/${runId}/events`).then((result) => result.text())
-      const causes = workerErrors.map((error) => `${error.name}: ${error.message}`).join('\n')
+      const causes = workerErrors.map((error) => error.stack ?? `${error.name}: ${error.message}`).join('\n')
       throw new Error(`answer route failed with ${String(response.status)}: ${errorText}; run=${run}; events=${events}; workerErrors=${causes}`)
     }
     await new Promise((resolve) => setTimeout(resolve, 100))
@@ -302,6 +302,18 @@ describe('the mounted local Core host through normal HTTP', () => {
     expect(runResponse.status).toBe(202)
     const runBody = await runResponse.json() as { data: { runId: string } }
     const answerResponse = await waitForAnswer(runBody.data.runId)
+    if (admin === undefined) throw new Error('isolated PostgreSQL admin client is unavailable')
+    const fixedReceipt = await admin.query<{ receipt_payload: { kind: string; route: { route: string }; steps?: unknown[] }; receipt_digest: string }>(
+      `SELECT receipt_payload, receipt_digest
+         FROM agent_platform.core_plan_receipts
+        WHERE tenant_id = $1 AND space_id = $2 AND run_id = $3`,
+      [scopeRef.tenantId, scopeRef.spaceId, runBody.data.runId],
+    )
+    expect(fixedReceipt.rows).toHaveLength(1)
+    expect(fixedReceipt.rows[0]?.receipt_payload.kind).toBe('plan')
+    expect(fixedReceipt.rows[0]?.receipt_payload.route.route).toBe('fixed_path')
+    expect(fixedReceipt.rows[0]?.receipt_payload.steps).toHaveLength(1)
+    expect(fixedReceipt.rows[0]?.receipt_digest).toMatch(/^sha256:[0-9a-f]{64}$/u)
     persistedAnswerRunId = runBody.data.runId
     persistedAnswerPayload = JSON.stringify(answerResponse['data'])
     const answer = answerResponse['data'] as { body?: { assertions: { predicate: string; value: unknown; subject?: string; references: { evidenceRef: { id: string } }[] }[] }; semanticReview?: { status: string; reason?: string } }
@@ -327,8 +339,20 @@ describe('the mounted local Core host through normal HTTP', () => {
          (SELECT count(*)::text FROM agent_platform.workflow_dispatches WHERE tenant_id = $1 AND space_id = $2) AS dispatches`,
       [scopeRef.tenantId, scopeRef.spaceId],
     )
+    const unsupportedNaturalLanguage = await request('/api/v1/runs', {
+      method: 'POST',
+      headers: { 'content-type': 'application/json', 'idempotency-key': 'core-model-disabled-natural-language' },
+      body: JSON.stringify({
+        profileRef: { id: 'synthetic-transport-facility-demo', version: '1.0.0' },
+        question: 'Which facilities should be inspected?',
+        context: { timeZone: 'UTC' },
+        preferences: { route: 'template', allowWeb: false },
+      }),
+    })
+    expect(unsupportedNaturalLanguage.status).toBe(409)
+    expect((await unsupportedNaturalLanguage.json() as { error: { code: string } }).error.code).toBe('CAPABILITY_NOT_CONFIGURED')
+
     const invalidRequests = [
-      { id: 'natural-language', question: 'Which facilities should be inspected?', code: 'INVALID_QUESTION' },
       { id: 'unknown-property', question: 'facts:not_registered', code: 'UNKNOWN_PROPERTY' },
       { id: 'duplicate-property', question: 'facts:inspection_due,inspection_due', code: 'DUPLICATE_PROPERTY' },
       { id: 'too-many-properties', question: 'facts:inspection_due,inspection_exempt,inspection_required,facility_id', code: 'TOO_MANY_PROPERTIES' },
@@ -514,6 +538,16 @@ describe('the mounted local Core host through normal HTTP', () => {
     expect(createdRun.status).toBe(202)
     const createdData = await createdRun.json() as { data: { runId: string } }
     const answerResponse = await waitForAnswer(createdData.data.runId)
+    if (admin === undefined) throw new Error('isolated PostgreSQL admin client is unavailable')
+    const crossReceipt = await admin.query<{ receipt_payload: { kind: string; route: { route: string }; steps?: unknown[] }; receipt_digest: string }>(
+      `SELECT receipt_payload, receipt_digest
+         FROM agent_platform.core_plan_receipts
+        WHERE tenant_id = $1 AND space_id = $2 AND run_id = $3`,
+      [scopeRef.tenantId, scopeRef.spaceId, createdData.data.runId],
+    )
+    expect(crossReceipt.rows).toHaveLength(1)
+    expect(crossReceipt.rows[0]?.receipt_payload.kind).toBe('plan')
+    expect(crossReceipt.rows[0]?.receipt_payload.steps).toHaveLength(3)
     persistedCrossIndustryRunId = createdData.data.runId
     persistedCrossIndustryAnswerPayload = JSON.stringify(answerResponse['data'])
     const answer = answerResponse['data'] as {

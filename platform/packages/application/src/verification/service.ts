@@ -1,5 +1,7 @@
 import { isToolContext } from '@ontology/contracts'
+import { isResourceRef } from '@ontology/contracts'
 import type {
+  AnswerDraft,
   AnswerVerifierPort,
   BlobGetAuthorizedRequest,
   BlobGetAuthorizedResponse,
@@ -97,6 +99,25 @@ const VERIFIED_LIMITATION_CODES = new Set<string>([
   'assertion_mismatch',
   'document_quote_mismatch',
   'unverified_limitation',
+  'rule_judgement_mismatch',
+  'rule_premise_missing',
+  'relation_endpoint_mismatch',
+  'relation_version_mismatch',
+  'row_binding_mismatch',
+  'citation_locator_mismatch',
+  'result_truncated',
+  'result_incomplete',
+  'compute_output_not_inline',
+  'money_requires_table_manifest',
+  'structured_query_incomplete',
+  'structured_query_no_subject',
+  'numeric_cell_no_unit',
+  'evidence_unsupported',
+  'evidence_unreadable',
+  'relation_endpoint_missing',
+  'rule_artifact_unsupported',
+  'rule_artifact_incomplete',
+  'citation_incomplete',
 ])
 
 function verifiedLimitationCode(value: unknown): value is string {
@@ -150,16 +171,20 @@ export class DraftVerificationService implements AnswerVerifierPort {
 
     const findings: VerificationFinding[] = []
 
+    const typedV2 = draft.schemaVersion === 'answer-draft@2'
+    const typedV3 = draft.schemaVersion === 'answer-draft@3'
+    const hasTypedAssertions = typedV2 || typedV3
+
     // V1 did not hash typed assertions. Preserve old assertion-free drafts, but never
     // verify or publish a newly attached unbound V1 assertion under the legacy hash.
-    if (draft.schemaVersion !== 'answer-draft@2' && assertions.length > 0) {
+    if (!hasTypedAssertions && assertions.length > 0) {
       findings.push({ code: 'draft_hash_mismatch', axis: 'hard', field: 'assertions' })
     }
 
-    // V2 answer blocks are only references to deterministically rendered typed content. Any
-    // prose, hidden text field, unknown ID, or extra block property would be visible content
-    // that was not checked against evidence.
-    if (draft.schemaVersion === 'answer-draft@2') {
+    // V2/V3 answer blocks are only references to deterministically rendered typed content.
+    // Any prose, hidden text field, unknown ID, or extra block property would be visible
+    // content that was not checked against evidence.
+    if (hasTypedAssertions) {
       const claimIds = new Set(claims.map((claim) => claim.claimId))
       const assertionIds = new Set(assertions.map((assertion) => assertion.assertionId))
       if (draft.blocks.length === 0) findings.push({ code: 'visible_statement_unbound', axis: 'hard', field: 'blocks' })
@@ -178,13 +203,24 @@ export class DraftVerificationService implements AnswerVerifierPort {
       }
     }
 
+    // A V3 draft must carry the typed-manifest bindings; a body that claims to be @3 but
+    // omits them can never be hashed or verified (and is therefore never publishable).
+    const v3Bindings = typedV3 ? v3BindingsOf(draft) : undefined
+    if (typedV3 && v3Bindings === undefined) {
+      findings.push({ code: 'draft_hash_mismatch', axis: 'hard', field: 'resultManifestRef' })
+    }
+
     const recomputed = answerDraftContentHash(
       request.runId,
       draft.blocks,
       draft.evidenceManifestHash,
       claims,
       assertions,
-      ...(draft.schemaVersion === 'answer-draft@2' ? [{ schemaVersion: 'answer-draft@2' as const, limitations: draft.limitations }] : []),
+      typedV2
+        ? { schemaVersion: 'answer-draft@2', limitations: draft.limitations }
+        : v3Bindings === undefined
+          ? undefined
+          : { schemaVersion: 'answer-draft@3', limitations: draft.limitations, ...v3Bindings },
     )
     if (recomputed !== draft.contentHash) {
       findings.push({ code: 'draft_hash_mismatch', axis: 'hard', field: 'contentHash' })
@@ -216,12 +252,12 @@ export class DraftVerificationService implements AnswerVerifierPort {
     } else {
       resolvedEvidence = await this.#loadEvidence(claims, assertions, request.inputManifest, scopeRef, ctx)
       if (claims.length > 0) {
-        const outcome = checkClaims(claims, resolvedEvidence, now, draft.schemaVersion === 'answer-draft@2')
+        const outcome = checkClaims(claims, resolvedEvidence, now, hasTypedAssertions)
         hardFindings = outcome.findings
         supportedClaimIds = [...outcome.supportedClaimIds]
         findings.push(...hardFindings)
       }
-      const assertionOutcome = checkVerifiedAssertions(assertions, resolvedEvidence, ctx, now, draft.schemaVersion === 'answer-draft@2')
+      const assertionOutcome = checkVerifiedAssertions(assertions, resolvedEvidence, ctx, now, hasTypedAssertions)
       supportedAssertionIds = [...assertionOutcome.supportedAssertionIds]
       findings.push(...assertionOutcome.findings)
     }
@@ -238,7 +274,7 @@ export class DraftVerificationService implements AnswerVerifierPort {
     })
     findings.push(...semantic.findings)
 
-    if (draft.schemaVersion === 'answer-draft@2') {
+    if (hasTypedAssertions) {
       const supportedCodes = new Set<string>(findings.map((finding) => finding.code))
       const trustedCodes = new Set(request.trustedLimitations ?? [])
       const missingEvidenceIds = new Set(findings
@@ -429,6 +465,51 @@ export class DraftVerificationService implements AnswerVerifierPort {
         : findings,
       disposition: { status: 'not_run', reason },
     }
+  }
+}
+
+/**
+ * Resolve the exact V3 typed-manifest bindings a draft carries. A @3 draft that omits any
+ * required ref/digest cannot be hashed and is therefore never verifiable/publishable; the
+ * function returns `undefined` so the caller records a located hard finding instead of
+ * silently hashing a partial body.
+ */
+function v3BindingsOf(draft: AnswerDraft): {
+  readonly resultManifestRef: ResourceRef
+  readonly resultManifestDigest: Sha256Digest
+  readonly finalizationReceiptRef: ResourceRef
+  readonly finalizationReceiptDigest: Sha256Digest
+  readonly executionBindingRef: ResourceRef
+} | undefined {
+  const resultManifestRef = draft.resultManifestRef
+  const resultManifestDigest = draft.resultManifestDigest
+  const finalizationReceiptRef = draft.finalizationReceiptRef
+  const finalizationReceiptDigest = draft.finalizationReceiptDigest
+  const executionBindingRef = draft.executionBindingRef
+  if (
+    resultManifestRef === undefined ||
+    resultManifestDigest === undefined ||
+    finalizationReceiptRef === undefined ||
+    finalizationReceiptDigest === undefined ||
+    executionBindingRef === undefined
+  ) {
+    return undefined
+  }
+  if (
+    !isResourceRef(resultManifestRef) ||
+    !isResourceRef(finalizationReceiptRef) ||
+    !isResourceRef(executionBindingRef) ||
+    !/^sha256:[0-9a-f]{64}$/u.test(resultManifestDigest) ||
+    !/^sha256:[0-9a-f]{64}$/u.test(finalizationReceiptDigest)
+  ) {
+    return undefined
+  }
+  return {
+    resultManifestRef,
+    resultManifestDigest,
+    finalizationReceiptRef,
+    finalizationReceiptDigest,
+    executionBindingRef,
   }
 }
 

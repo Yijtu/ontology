@@ -100,9 +100,16 @@ export type {
 export { createToolHandlerSet } from './composition/tool-handlers'
 export type { ToolHandlerSetOptions } from './composition/tool-handlers'
 export { createApiServer, createJobApi, createRunApi } from './http/app'
+export type { ProjectDocumentRouteDependencies, ProjectDocumentService } from './http/project-documents'
 export type { ApiServerOptions } from './http/app'
-export { createCoreLocalComposition, createDuckDbSnapshot } from './composition/core-local-composition'
+export { CORE_TYPED_RESULT_SCHEMA_REF, createCoreLocalComposition, createDuckDbSnapshot } from './composition/core-local-composition'
 export type { CoreLocalComposition, CoreLocalCompositionOptions } from './composition/core-local-composition'
+export {
+  CORE_MOUNTED_TASK_KINDS,
+  coreScenarioTaskBindings,
+  coreTaskBindingRef,
+  mountCoreTaskBindings,
+} from './composition/core-task-bindings'
 export { createCoreApi, startCoreApi } from './core-main'
 export type { CoreApiDependencies } from './core-main'
 export { registerRunRoutes } from './http/server'
@@ -118,6 +125,16 @@ export type {
 } from './http/run-progress'
 export { registerJobRoutes } from './http/jobs'
 export type { JobApiOptions, JobRouteDependencies } from './http/jobs'
+export { registerAssetCandidateRoutes } from './http/asset-candidates'
+export { registerDefinitionEditingRoutes } from './http/definition-editing'
+export type { DefinitionEditingRouteDependencies } from './http/definition-editing'
+export { registerRuleActionCandidateRoutes } from './http/rule-action-candidates'
+export type { RuleActionCandidateRouteDependencies } from './http/rule-action-candidates'
+export { registerSyntheticValidationRoutes } from './http/synthetic-validation'
+export type { SyntheticValidationRouteDependencies } from './http/synthetic-validation'
+export { registerProjectRoutes } from './http/projects'
+export type { ProjectRouteDependencies } from './http/projects'
+export type { AssetCandidateRouteDependencies } from './http/asset-candidates'
 export { registerWorkbenchRoutes } from './http/workbench'
 export type { WorkbenchApiOptions, WorkbenchRouteDependencies } from './http/workbench'
 export { registerDecisionRoutes } from './http/decisions'
@@ -142,7 +159,7 @@ export type { EvidenceReadSurface, EvidenceRouteDependencies } from './http/evid
 export { registerHistoryRoutes } from './http/history'
 export type { HistoryReadSurface, HistoryRouteDependencies } from './http/history'
 export { registerAnswerRoutes } from './http/answers'
-export type { AnswerReader, AnswerRouteDependencies } from './http/answers'
+export type { AnswerReader, AnswerResultReader, AnswerRouteDependencies, AnswerTableReader } from './http/answers'
 export { registerFeedbackRoutes } from './http/feedback'
 export type { FeedbackRouteDependencies, FeedbackWriter } from './http/feedback'
 export { registerSimulationRoutes } from './http/simulations'
