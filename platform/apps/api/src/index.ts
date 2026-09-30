@@ -100,6 +100,7 @@ export type {
 export { createToolHandlerSet } from './composition/tool-handlers'
 export type { ToolHandlerSetOptions } from './composition/tool-handlers'
 export { createApiServer, createJobApi, createRunApi } from './http/app'
+export type { ProjectDocumentRouteDependencies, ProjectDocumentService } from './http/project-documents'
 export type { ApiServerOptions } from './http/app'
 export { createCoreLocalComposition, createDuckDbSnapshot } from './composition/core-local-composition'
 export type { CoreLocalComposition, CoreLocalCompositionOptions } from './composition/core-local-composition'

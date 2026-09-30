@@ -189,6 +189,12 @@ export interface DocumentParseStore {
     parserVersion: Semver | undefined,
     ctx: ToolContext,
   ): Promise<DocumentParseRecord | undefined>
+  /**
+   * The parse run identified by `parseId`, or `undefined` when it is not visible
+   * in this scope. A project corpus resolves the exact parse a membership pinned
+   * rather than searching by digest, so it never picks up a different revision.
+   */
+  getParse(scopeRef: ScopeRef, parseId: Uuid, ctx: ToolContext): Promise<DocumentParseRecord | undefined>
   listChunks(scopeRef: ScopeRef, parseId: Uuid, ctx: ToolContext): Promise<DocumentChunkRecord[]>
   /** Bounded enumeration for an indexer; never an unbounded full-table read. */
   listChunksByScope(

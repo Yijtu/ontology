@@ -99,9 +99,10 @@ export class Bm25IndexBuilder {
       return { generation: existing, created: false, documentCount: documents.length }
     }
 
-    const generations = await this.#indexStore.listGenerations(scope, request.collectionRef, ctx)
-    const nextNumber =
-      generations.reduce((max, generation) => Math.max(max, Number(generation.generation)), 0) + 1
+    // The generation number comes from a scope+collection bigint counter, not
+    // `Number(max generation) + 1`: the old derivation raced between concurrent
+    // builds and lost precision once a collection passed 2^53 generations.
+    const generation = await this.#indexStore.reserveGeneration(scope, request.collectionRef, ctx)
     const totalLength = documents.reduce((sum, document) => sum + document.length, 0)
     const indexRef: VersionRef = {
       id: request.collectionRef,
@@ -112,7 +113,7 @@ export class Bm25IndexBuilder {
       scope,
       {
         collectionRef: request.collectionRef,
-        generation: String(nextNumber),
+        generation,
         indexDigest,
         indexRef,
         docCount: documents.length,
