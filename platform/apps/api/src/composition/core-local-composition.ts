@@ -51,8 +51,7 @@ import {
   StructuredDocumentParser,
 } from '@ontology/adapter-extraction-document'
 import { Bm25DocumentSearchService, PostgresKeywordIndexStore, ProjectDocumentIndexService, createBm25DocumentSearchToolHandler } from '@ontology/adapter-search-bm25'
-import { TemplateRuntimeAdapter, TemplateRuntimeError } from '@ontology/adapter-runtime-template'
-import type { TemplatePlanResolver } from '@ontology/adapter-runtime-template'
+import { TemplateRuntimeAdapter } from '@ontology/adapter-runtime-template'
 import {
   AnswerPublicationService,
   CandidateValidationStageHandler,
@@ -120,6 +119,7 @@ import type {
   IndustrySchema,
   IndustryWorkspaceStore,
   InputValidityPort,
+  ModelBinding,
   OperationRegistry,
   OutboxMessageRecord,
   ProfileRef,
@@ -170,6 +170,9 @@ import { createPostgresProvenanceRead } from './provenance-read'
 import { createCoreModelCapabilityFactory } from './core-model-capabilities'
 import { createCoreModelEvidenceRecorders } from './model-evidence'
 import { createCoreDecisionStateRefProvider } from './decision-state-reference'
+import { PostgresCorePlanReceiptStore } from './core-plan-receipts'
+import { CoreTemplatePlanResolver } from './core-template-plan-resolver'
+import type { CoreModelComponentRefs } from './core-template-plan-resolver'
 import { createCoreJevActualStateResolver } from './jev-actual-state'
 import { RunProgressService } from '../http/run-progress'
 import type { CoreExampleScenario, LoadedCoreExamples } from './core-example-loader'
@@ -194,7 +197,36 @@ function stableUuid(seed: string): Uuid {
   return `${hex.slice(0, 8)}-${hex.slice(8, 12)}-${hex.slice(12, 16)}-${hex.slice(16, 20)}-${hex.slice(20)}`
 }
 
-function scenarioComponentRecords(scenarios: readonly CoreExampleScenario[], now: string): ComponentVersionRecord[] {
+function modelComponentRefsOf(
+  env: Readonly<Record<string, string | undefined>>,
+  capabilities: { readonly generationEnabled: boolean; readonly decisionEnabled: boolean },
+): CoreModelComponentRefs {
+  const generationId = env['CORE_COMPANY_MODEL_PLATFORM_ID']
+  const decisionId = env['CORE_JEV_PLATFORM_MODEL_ID']
+  return {
+    ...(capabilities.generationEnabled && generationId !== undefined
+      ? { generation: componentRef('generation', generationId, {
+          role: 'generation',
+          platformModelId: generationId,
+          vendorModel: env['CORE_COMPANY_MODEL_VENDOR_MODEL'],
+          protocol: env['CORE_COMPANY_MODEL_PROTOCOL'],
+        }) }
+      : {}),
+    ...(capabilities.decisionEnabled && decisionId !== undefined
+      ? { decision: componentRef('decision', decisionId, {
+          role: 'decision',
+          platformModelId: decisionId,
+          vendorModel: env['CORE_JEV_VENDOR_MODEL'],
+        }) }
+      : {}),
+  }
+}
+
+function scenarioComponentRecords(
+  scenarios: readonly CoreExampleScenario[],
+  now: string,
+  modelRefs: CoreModelComponentRefs = {},
+): ComponentVersionRecord[] {
   const records = new Map<string, ComponentVersionRecord>()
   const add = (record: ComponentVersionRecord): void => {
     records.set(`${record.manifest.kind}\u0000${record.manifest.id}\u0000${record.manifest.version}`, record)
@@ -231,6 +263,24 @@ function scenarioComponentRecords(scenarios: readonly CoreExampleScenario[], now
     entrypoint: '@ontology/adapter-search-bm25',
     now,
   }))
+  if (modelRefs.generation !== undefined) {
+    add(componentRecord({
+      kind: 'generation',
+      ref: modelRefs.generation,
+      capabilityNames: ['model.generation'],
+      entrypoint: '@ontology/adapter-model-company',
+      now,
+    }))
+  }
+  if (modelRefs.decision !== undefined) {
+    add(componentRecord({
+      kind: 'decision',
+      ref: modelRefs.decision,
+      capabilityNames: ['model.decision'],
+      entrypoint: '@ontology/adapter-model-jev',
+      now,
+    }))
+  }
   return [...records.values()]
 }
 
@@ -597,46 +647,6 @@ function workerContext(
   })
 }
 
-class CoreFactsPlanResolver implements TemplatePlanResolver {
-  readonly #runs: RunService
-  readonly #profiles: ProfileResolver
-  readonly #scenarios: readonly CoreExampleScenario[]
-
-  constructor(runs: RunService, profiles: ProfileResolver, scenarios: readonly CoreExampleScenario[]) {
-    this.#runs = runs
-    this.#profiles = profiles
-    this.#scenarios = scenarios
-  }
-
-  async resolve(planRef: ResourceRef | undefined, ctx: ToolContext) {
-    const run = await this.#runs.getRun(ctx.runId, ctx)
-    const { scenario, resolved, snapshotHash } = await resolveScenarioProfile(
-      this.#profiles,
-      this.#scenarios,
-      run.profileRef,
-      { tenantId: ctx.principal.tenantId, spaceId: ctx.allowedResources.spaceId },
-      ctx,
-      run.resolvedProfileHash,
-    )
-    if (!resolved.toolBindings.some((binding) => binding.toolId === 'ontology_lookup' && binding.enabled)) {
-      throw new CoreCapabilityError('this profile does not enable ontology_lookup for facts tasks')
-    }
-    const plan = createCoreFactsPlan({
-      scenario,
-      runProfileRef: run.profileRef,
-      resolvedProfileHash: snapshotHash,
-      mappingRefs: resolved.mappingRefs,
-      definitionRef: scenario.definitionRef,
-      scopeRef: { tenantId: ctx.principal.tenantId, spaceId: ctx.allowedResources.spaceId },
-      question: run.questionRewrite?.rewrittenQuestion ?? run.question,
-    })
-    if (planRef !== undefined && !sameResourceRef(planRef, plan.planRef)) {
-      throw new TemplateRuntimeError('INVALID_PLAN', 'the checkpoint plan does not match this run’s immutable profile and facts request')
-    }
-    return { planRef: plan.planRef, spec: plan }
-  }
-}
-
 const DISABLED_GENERATION: GenerationPort = {
   async *generate() {
     throw new CoreCapabilityError('the generative extraction model is not configured')
@@ -855,6 +865,13 @@ function componentRegistrationInput(record: ComponentVersionRecord, now: string)
 
 function sameVersionRef(left: VersionRef, right: VersionRef): boolean {
   return left.id === right.id && left.version === right.version && left.digest === right.digest
+}
+
+function profileModelBindingEnabled(
+  binding: ModelBinding | undefined,
+  availableRef: VersionRef | undefined,
+): boolean {
+  return binding?.enabled === true && availableRef !== undefined && sameVersionRef(binding.modelRef, availableRef)
 }
 
 function scenarioForIndustryRef(
@@ -1418,6 +1435,7 @@ export async function createCoreLocalComposition(options: CoreLocalCompositionOp
     const publicationStore = new PostgresSemanticPublicationStore(database)
     const definitionStore = new PostgresSemanticDefinitionStore(database)
     const workflowStore = new PostgresWorkflowStore(database)
+    const planReceiptStore = new PostgresCorePlanReceiptStore(database)
     const evidenceStore = new PostgresEvidenceStore(database)
     const decisionStateReferences = new PostgresDecisionStateReferenceStore(database)
     const answerStore = new PostgresAnswerStore(database, { requireWorkflowDispatchFence: true })
@@ -1492,7 +1510,8 @@ export async function createCoreLocalComposition(options: CoreLocalCompositionOp
       adapters: createStaticProbeAdapterResolver([]),
     })
 
-    const componentRecords = scenarioComponentRecords(options.examples.scenarios, new Date().toISOString())
+    const coreModelRefs = modelComponentRefsOf(modelEnvironment, modelCapabilities)
+    const componentRecords = scenarioComponentRecords(options.examples.scenarios, new Date().toISOString(), coreModelRefs)
     const bootstrapProfileSpecsByScenario = Object.fromEntries(options.examples.scenarios.map((scenario) => [
       scenario.scenarioId,
       profileSpecFor(scenario, DATA_DUCKDB_ADAPTER_REF),
@@ -1603,7 +1622,20 @@ export async function createCoreLocalComposition(options: CoreLocalCompositionOp
     const dispatchFences = new Map<Uuid, WorkflowDispatchFence>()
     const runtimeRecord = componentRecords.find((record) => record.manifest.kind === 'runtime' && record.manifest.id === 'runtime-template')
     if (runtimeRecord === undefined) throw new Error('Core template runtime component is not registered')
-    const runtime = new TemplateRuntimeAdapter({ manifest: runtimeRecord.manifest, plans: new CoreFactsPlanResolver(runs, profileResolver, options.examples.scenarios) })
+    const planResolver = new CoreTemplatePlanResolver({
+      runs,
+      profiles: profileResolver,
+      manifests: workflowStore,
+      receipts: planReceiptStore,
+      semanticDefinitions,
+      mappings,
+      scenarios: options.examples.scenarios,
+      scopeRef,
+      modelRefs: coreModelRefs,
+      decisionStateRefProvider,
+      isRouteClarificationReceiptApproved: (input, ctx) => decisionStateReferences.isApproved(scopeRef, input, ctx),
+    })
+    const runtime = new TemplateRuntimeAdapter({ manifest: runtimeRecord.manifest, plans: planResolver })
     const controllerDependencies = {
       runs,
       phase,
@@ -1634,14 +1666,16 @@ export async function createCoreLocalComposition(options: CoreLocalCompositionOp
             resolvedProfile: resolved.resolved,
             operations: operationRegistry(),
           })
+          const generationBound = profileModelBindingEnabled(resolved.resolved.modelBindings['generation'], coreModelRefs.generation)
+          const decisionBound = profileModelBindingEnabled(resolved.resolved.modelBindings['decision'], coreModelRefs.decision)
           const modelExecution = modelCapabilities.forExecution({
             ledgerId: binding.budgetLedgerId,
             signal: binding.signal,
           })
           return {
             gateway,
-            generation: modelExecution.generation ?? DISABLED_GENERATION,
-            decision: modelExecution.decision ?? disabledDecision(),
+            generation: generationBound ? modelExecution.generation ?? DISABLED_GENERATION : DISABLED_GENERATION,
+            decision: decisionBound ? modelExecution.decision ?? disabledDecision() : disabledDecision(),
             checkpoints: createRunCheckpointPort(runStore),
           } satisfies RuntimeCapabilitySet
         },
@@ -1814,18 +1848,31 @@ export async function createCoreLocalComposition(options: CoreLocalCompositionOp
         submission.scopeRef,
         ctx,
       )
-      if (!resolved.toolBindings.some((binding) => binding.toolId === 'ontology_lookup' && binding.enabled)) {
-        throw new CoreCapabilityError('this profile does not enable ontology_lookup for facts tasks')
+      if (submission.question.trim().startsWith('facts:')) {
+        if (!resolved.toolBindings.some((binding) => binding.toolId === 'ontology_lookup' && binding.enabled)) {
+          throw new CoreCapabilityError('this profile does not enable ontology_lookup for registered facts tasks')
+        }
+        validateCoreFactsRequest({
+          scenario,
+          runProfileRef: submission.profileRef,
+          resolvedProfileHash: snapshotHash,
+          mappingRefs: resolved.mappingRefs,
+          definitionRef: scenario.definitionRef,
+          scopeRef: submission.scopeRef,
+          question: submission.question,
+        })
+        return
       }
-      validateCoreFactsRequest({
-        scenario,
-        runProfileRef: submission.profileRef,
-        resolvedProfileHash: snapshotHash,
-        mappingRefs: resolved.mappingRefs,
-        definitionRef: scenario.definitionRef,
-        scopeRef: submission.scopeRef,
-        question: submission.question,
-      })
+      if (!resolved.toolBindings.some((binding) => binding.toolId === 'data_query' && binding.enabled)) {
+        throw new CoreCapabilityError('ordinary natural-language queries require data_query to be enabled in the resolved profile')
+      }
+      if (!modelCapabilities.generationEnabled || !profileModelBindingEnabled(resolved.modelBindings['generation'], coreModelRefs.generation)) {
+        throw new CoreCapabilityError('ordinary natural-language queries require a configured generation model bound by the resolved profile')
+      }
+      const catalog = resolved.backendBindings['catalog']
+      if (catalog === undefined || !sameVersionRef(catalog.adapterRef, DATA_DUCKDB_ADAPTER_REF) || resolved.mappingRefs.length === 0) {
+        throw new CoreCapabilityError('ordinary semantic queries require the run profile’s mounted read-only catalog mapping')
+      }
     }
 
     const readScenarioProfile = async (scenarioId: string) => {
@@ -1838,6 +1885,8 @@ export async function createCoreLocalComposition(options: CoreLocalCompositionOp
       if (selectedScenario === undefined) {
         throw new CoreCapabilityError(`active profile ${profileRef.id}@${profileRef.version} pins an unmounted industry package`)
       }
+      const snapshotHash = active?.snapshotHash ?? (await profileResolver.bindRunProfile(profileRef, scopeRef, profileContext)).resolvedProfileHash
+      const resolvedRecord = await profileResolver.getResolvedProfile({ scopeRef, profileRef, snapshotHash }, profileContext)
       return {
         profileRef,
         baseProfileSpec: record.spec,
@@ -1849,6 +1898,10 @@ export async function createCoreLocalComposition(options: CoreLocalCompositionOp
         sourceScenarioId: selectedScenario.scenarioId,
         mappingRefs: record.spec.mappingRefs,
         rawSourceRefs: selectedScenario.rawSources.map((source) => source.sourceRef),
+        models: {
+          generation: profileModelBindingEnabled(resolvedRecord.resolved.modelBindings['generation'], coreModelRefs.generation),
+          decision: profileModelBindingEnabled(resolvedRecord.resolved.modelBindings['decision'], coreModelRefs.decision),
+        },
       }
     }
 

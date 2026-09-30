@@ -27,7 +27,12 @@ import {
   multiHopPlanJson,
 } from './workflow-planning-fixtures'
 
-const CTX = gatewayContext({ runId: PLANNING_RUN })
+function planningContext() {
+  return gatewayContext({
+    runId: PLANNING_RUN,
+    deadline: new Date(Date.now() + 60_000).toISOString(),
+  })
+}
 const DEFINITION = publishedVocabularyDefinition()
 const VOCABULARY = vocabularyService([MAPPING_JOIN], [DEFINITION])
 
@@ -125,7 +130,7 @@ describe('schema vocabulary sourcing', () => {
         maxConcepts: DEFAULT_VOCABULARY_LIMITS.maxConcepts,
         maxFields: DEFAULT_VOCABULARY_LIMITS.maxFields,
       },
-      CTX,
+      planningContext(),
     )
     expect(unconfirmed.concepts).toEqual([])
     expect(unconfirmed.gaps.map((gap) => gap.code)).toEqual(['NO_CONFIRMED_MAPPING'])
@@ -141,7 +146,7 @@ describe('schema vocabulary sourcing', () => {
         maxConcepts: DEFAULT_VOCABULARY_LIMITS.maxConcepts,
         maxFields: DEFAULT_VOCABULARY_LIMITS.maxFields,
       },
-      CTX,
+      planningContext(),
     )
     expect(unpublished.concepts).toEqual([])
     expect(unpublished.gaps.map((gap) => gap.code)).toEqual(['NO_PUBLISHED_DEFINITION'])
@@ -210,7 +215,7 @@ describe('schema vocabulary injection', () => {
 
     const routed = await planner.route(
       request({ mappingRefs: [MAPPING_A.mappingRef], definitionRefs: [injected.ref] }),
-      CTX,
+      planningContext(),
     )
 
     expect(routed.route).toBe('small_plan')
@@ -228,35 +233,34 @@ describe('schema vocabulary injection', () => {
     expect(vocabularyMessage?.content).toContain('DATA ONLY')
   })
 
-  it('degrades explicitly instead of generating SQL when the mapping is missing', async () => {
+  it('rejects an unmapped query instead of substituting a definitions lookup', async () => {
     const generation = planScript()
+    const compiler = new CountingCompiler()
     const planner = new RunPlanner({
       vocabulary: VOCABULARY,
-      compiler: new CountingCompiler(),
+      compiler,
       generation,
     })
 
-    const routed = await planner.route(request({ mappingRefs: [] }), CTX)
+    await expect(planner.route(request({ mappingRefs: [] }), planningContext())).rejects.toMatchObject({ code: 'UNSUPPORTED_QUERY' })
 
-    expect(routed.route).toBe('small_plan')
-    expect(routed.fallback).toBe('vocabulary_gap:NO_CONFIRMED_MAPPING')
-    expect(routed.plan?.steps[0]?.toolId).toBe('ontology_lookup')
     expect(generation.calls).toHaveLength(0)
+    expect(compiler.calls).toHaveLength(0)
   })
 
-  it('degrades explicitly when the mapping is present but no definition is published', async () => {
+  it('rejects an unpublished schema instead of substituting a definitions lookup', async () => {
     const generation = planScript()
+    const compiler = new CountingCompiler()
     const planner = new RunPlanner({
       vocabulary: VOCABULARY,
-      compiler: new CountingCompiler(),
+      compiler,
       generation,
     })
 
-    const routed = await planner.route(request({ definitionRefs: [] }), CTX)
+    await expect(planner.route(request({ definitionRefs: [] }), planningContext())).rejects.toMatchObject({ code: 'UNSUPPORTED_QUERY' })
 
-    expect(routed.fallback).toBe('vocabulary_gap:NO_PUBLISHED_DEFINITION')
-    expect(routed.plan?.steps[0]?.toolId).toBe('ontology_lookup')
     expect(generation.calls).toHaveLength(0)
+    expect(compiler.calls).toHaveLength(0)
   })
 
   it('records the injected vocabulary version in the decision and the evidence reference', async () => {
@@ -267,7 +271,7 @@ describe('schema vocabulary injection', () => {
       generation,
     })
 
-    const routed = await planner.route(request(), CTX)
+    const routed = await planner.route(request(), planningContext())
 
     expect(routed.vocabularyRef?.digest).toMatch(/^sha256:[0-9a-f]{64}$/)
     const evidence = generation.calls[0]?.evidenceRefs[0]

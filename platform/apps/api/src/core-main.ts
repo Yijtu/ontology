@@ -48,6 +48,7 @@ export interface CoreApiDependencies {
     readonly sourceScenarioId: string
     readonly mappingRefs: readonly MappingRef[]
     readonly rawSourceRefs: readonly SourceRef[]
+    readonly models: { readonly generation: boolean; readonly decision: boolean }
   } | undefined>
   readonly api?: Omit<ApiServerOptions, 'authenticate' | 'logger'>
   readonly allowLocalOperator?: boolean
@@ -145,6 +146,7 @@ export function createCoreApi(dependencies: CoreApiDependencies): FastifyInstanc
         availableTasks: current?.availableTasks ?? dependencies.availableTasksByScenario?.[scenario.scenarioId] ?? dependencies.availableTaskIds ?? [],
         mappingRefs: current?.mappingRefs ?? scenario.physicalMappings.map((mapping) => mapping.ref),
         rawSourceRefs: current?.rawSourceRefs ?? scenario.rawSources.map((source) => source.sourceRef),
+        models: current?.models ?? dependencies.modelCapabilities ?? { generation: false, decision: false },
       }
     }))
     return reply.status(200).send({

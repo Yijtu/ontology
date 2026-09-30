@@ -7,13 +7,16 @@ import type {
   DecisionResult,
   ExecutablePlan,
   ExecutablePlanStep,
+  GenerationEvent,
   GenerationMessage,
   GenerationPort,
   GenerationRequest,
   ModelRef,
   OrderBy,
+  PlatformError,
   RouteDecision,
   RouteSignals,
+  RevisionString,
   ResourceRef,
   RunPreferences,
   ScalarValue,
@@ -41,9 +44,10 @@ import { renderVocabularyBlock, vocabularyEvidenceRef } from './vocabulary'
  *
  * It resolves one of three routes *before* any collection starts:
  *
- * - a clearly specified path uses its published plan and never forces a JEV decision;
+ * - a clearly specified path uses its published plan and never invokes a model;
  * - a genuine ambiguity is clarified first;
- * - an ordinary complex question gets one executable small plan by default.
+ * - a supported ordinary complex question gets one bounded semantic plan; unsupported
+ *   questions fail visibly instead of being changed into a definitions lookup.
  *
  * A single-SQL multi-hop question is compiled once by the injected semantic compiler into
  * one bounded query — never a model round-trip per hop. The planner starts no competing
@@ -60,10 +64,18 @@ export interface PlanRequest {
   /** A semantic query plan already proposed for the question (at most one model call). */
   readonly candidatePlan?: SemanticQueryPlan
   readonly signals?: RouteSignals
+  /** Host-verified response to one prior route clarification receipt. */
+  readonly routeClarification?: {
+    readonly receiptRef: ResourceRef
+    readonly questionRef: VersionRef
+    readonly clarificationId: Uuid
+    readonly typedResponse: Readonly<Record<string, unknown>>
+    readonly expectedRevision: RevisionString
+  }
   /**
    * The exact confirmed-mapping / published-definition versions the run is bound to. They
    * are resolved into the bounded schema vocabulary injected into the generation request.
-   * Absent/empty refs produce an explicit degradation, never a loose empty schema.
+   * Absent/empty refs cannot produce a semantic plan.
    */
   readonly mappingRefs?: readonly VersionRef[]
   readonly definitionRefs?: readonly VersionRef[]
@@ -91,9 +103,9 @@ export interface RunPlannerDependencies {
   readonly generation?: GenerationPort
   readonly planModelRef?: ModelRef
   /**
-   * The bounded question-rewriting pre-step. When present it runs before any routing/SQL
-   * proposal; when absent the router behaves exactly as before. It reuses the injected
-   * `GenerationPort` and adds no model port and no public tool.
+   * The bounded question-rewriting pre-step. When present it runs before routing/SQL
+   * proposal for ordinary requests; fixed plans and deterministic ambiguities bypass it.
+   * It reuses the injected `GenerationPort` and adds no model port and no public tool.
    */
   readonly rewriter?: QuestionRewriter
   /**
@@ -109,11 +121,18 @@ const ROUTE_CHOICE_HASH = 'route-choice-v1'
 const MAX_ROUTE_STATE_BYTES = 65_536
 const MAX_ROUTE_STATE_RECORDS = 1_000
 const MAX_ROUTE_STATE_REFS = 64
+const MAX_GENERATION_EVENT_COUNT = 1_024
+const MAX_GENERATION_STREAM_BYTES = 131_072
+const MAX_PROPOSED_TOOL_JSON_BYTES = 65_536
 
 const RECOVERABLE_ROUTE_DECISION_CODES: ReadonlySet<string> = new Set([
   'MODEL_UNAVAILABLE',
   'RATE_LIMITED',
   'INSUFFICIENT_DATA',
+])
+const RECOVERABLE_GENERATION_CODES: ReadonlySet<string> = new Set([
+  'MODEL_UNAVAILABLE',
+  'RATE_LIMITED',
 ])
 
 interface RouteDecisionStateInput {
@@ -129,8 +148,7 @@ const DEFAULT_VOCABULARY_LIMITS = { maxConcepts: 8, maxFields: 32 } as const
 /** The outcome of one bounded generation attempt. */
 type CandidateProposal =
   | { readonly kind: 'proposed'; readonly plan: SemanticQueryPlan; readonly vocabularyRef: VersionRef }
-  | { readonly kind: 'degraded'; readonly reason: string }
-  | { readonly kind: 'unavailable' }
+  | { readonly kind: 'recoverable_failure'; readonly error: PlatformError }
 
 export class RunPlanner {
   readonly #deps: RunPlannerDependencies
@@ -144,15 +162,46 @@ export class RunPlanner {
   /**
    * Resolve the execution route for a run. It never executes a tool or a query.
    *
-   * When a rewrite step is configured it runs first, before any routing or SQL proposal:
-   * an ambiguity returns the existing `clarify` route without ever guessing a value, a
-   * failure is surfaced as an explicit classified error (the original is never passed
-   * through as a rewrite), and a successful rewrite replaces the question the router sees
-   * while its traceable record rides on the returned decision.
+   * For ordinary requests, a configured rewrite runs before routing or SQL proposal. A
+   * fixed plan and a deterministic ambiguity are handled first without model calls. Rewrite
+   * ambiguity clarifies, failure remains classified, and a successful rewrite is traceable
+   * on the returned decision. `signal` is the active run signal when the host can provide it.
    */
-  async route(request: PlanRequest, ctx: ToolContext): Promise<RouteDecision> {
+  async route(request: PlanRequest, ctx: ToolContext, signal?: AbortSignal): Promise<RouteDecision> {
+    throwIfPlanningStopped(ctx, signal)
+
+    const routeClarification = request.routeClarification
+    if (routeClarification !== undefined) {
+      if (ctx.runId !== request.runId) {
+        throw new WorkflowControllerError('SCOPE_MISMATCH', 'the route clarification does not match the trusted run context')
+      }
+      const routeClarificationState = routeClarificationStateOf(routeClarification)
+      if (
+        !isRouteClarificationReceiptRef(routeClarification.receiptRef) ||
+        !parseVersionRef(routeClarification.questionRef) ||
+        typeof routeClarification.clarificationId !== 'string' ||
+        routeClarification.clarificationId.trim().length === 0 ||
+        !isRecord(routeClarification.typedResponse) ||
+        typeof routeClarification.expectedRevision !== 'string' ||
+        routeClarification.expectedRevision.trim().length === 0 ||
+        !withinRouteStateBounds(routeClarificationState)
+      ) {
+        throw new WorkflowControllerError('INVALID_SCHEMA', 'the host-verified route clarification is invalid or exceeds its bound')
+      }
+    }
+
+    // A deterministic ambiguity needs no model, and a host-supplied fixed plan is already
+    // the selected answer path. Neither case should be rewritten or routed through a model.
+    if (
+      request.signals?.ambiguous === true ||
+      request.fixedPlan !== undefined ||
+      request.routeClarification !== undefined
+    ) {
+      return this.#routeEffective(request, ctx, signal)
+    }
+
     const rewriter = this.#deps.rewriter
-    if (rewriter === undefined) return this.#routeEffective(request, ctx)
+    if (rewriter === undefined) return this.#routeEffective(request, ctx, signal)
 
     const outcome = await rewriter.rewrite(
       {
@@ -163,6 +212,7 @@ export class RunPlanner {
       },
       ctx,
     )
+    throwIfPlanningStopped(ctx, signal)
     if (outcome.status === 'clarify') {
       return this.#clarify(request, outcome.reason)
     }
@@ -175,11 +225,13 @@ export class RunPlanner {
     const decision = await this.#routeEffective(
       { ...request, question: outcome.rewrite.rewrittenQuestion },
       ctx,
+      signal,
     )
     return { ...decision, rewrite: outcome.rewrite }
   }
 
-  async #routeEffective(request: PlanRequest, ctx: ToolContext): Promise<RouteDecision> {
+  async #routeEffective(request: PlanRequest, ctx: ToolContext, signal?: AbortSignal): Promise<RouteDecision> {
+    throwIfPlanningStopped(ctx, signal)
     const signals = request.signals ?? {}
 
     // A concrete ambiguity is clarified first. No JEV decision is forced here.
@@ -198,46 +250,43 @@ export class RunPlanner {
 
     // A multi-hop candidate compiles to one bounded query, not a call per hop.
     if (request.candidatePlan !== undefined) {
-      const plan = await this.#compileSingleQuery(request.runId, request.candidatePlan, ctx)
+      const plan = await this.#compileSingleQuery(request.runId, request.candidatePlan, ctx, signal)
       return { route: 'small_plan', reason: 'one executable small plan by default', plan }
     }
 
     // Only a genuine route ambiguity may consult the JEV decision port (D7.1).
     if (signals.routeAmbiguous === true) {
-      return this.#decideRoute(request, ctx)
+      return this.#decideRoute(request, ctx, signal)
     }
 
     // Ordinary complex question: at most one proposal, compiled once.
-    return this.#smallPlanRoute(request, ctx, 'one executable small plan by default')
+    return this.#smallPlanRoute(request, ctx, 'one executable small plan by default', signal)
   }
 
   /**
-   * Build one small plan from a single bounded generation proposal. The schema vocabulary
-   * is constructed first: when it is missing or empty the route degrades explicitly to a
-   * definition lookup instead of letting a loose empty schema silently produce SQL.
+   * Build one small plan from a single bounded generation proposal. Missing confirmed
+   * vocabulary is an unsupported query, never an invitation to substitute a different task.
    */
   async #smallPlanRoute(
     request: PlanRequest,
     ctx: ToolContext,
     reason: string,
+    signal?: AbortSignal,
   ): Promise<RouteDecision> {
-    const proposal = await this.#proposeCandidate(request, ctx)
+    const proposal = await this.#proposeCandidate(request, ctx, signal)
     if (proposal.kind === 'proposed') {
-      const plan = await this.#compileSingleQuery(request.runId, proposal.plan, ctx)
+      throwIfPlanningStopped(ctx, signal)
+      const plan = await this.#compileSingleQuery(request.runId, proposal.plan, ctx, signal)
       return { route: 'small_plan', reason, plan, vocabularyRef: proposal.vocabularyRef }
     }
-    if (proposal.kind === 'degraded') {
-      return {
-        route: 'small_plan',
-        reason: 'the semantic schema vocabulary is unavailable, so no SQL candidate is generated',
-        fallback: `vocabulary_gap:${proposal.reason}`,
-        plan: this.#defaultPlan(request),
-      }
+    return {
+      ...this.#clarify(request, 'the generation provider was unavailable, so the question needs clarification'),
+      fallback: `generation_failed:${proposal.error.code}`,
     }
-    return { route: 'small_plan', reason: 'bounded default plan', plan: this.#defaultPlan(request) }
   }
 
-  async #decideRoute(request: PlanRequest, ctx: ToolContext): Promise<RouteDecision> {
+  async #decideRoute(request: PlanRequest, ctx: ToolContext, signal?: AbortSignal): Promise<RouteDecision> {
+    throwIfPlanningStopped(ctx, signal)
     const decision = this.#deps.decision
     const modelRef = this.#deps.decisionModelRef
     if (decision === undefined || modelRef === undefined) {
@@ -258,6 +307,7 @@ export class RunPlanner {
     }
 
     const vocabulary = await this.#buildVocabulary(request, ctx)
+    throwIfPlanningStopped(ctx, signal)
     if (vocabulary.gaps.length > 0 || vocabulary.concepts.length === 0) {
       return {
         ...this.#clarify(request, 'the route is ambiguous and confirmed schema vocabulary is unavailable'),
@@ -294,10 +344,12 @@ export class RunPlanner {
         fallback: 'jev_state_too_large',
       }
     }
+    throwIfPlanningStopped(ctx, signal)
     const stateRef = await stateRefProvider.archive(
       { runId: request.runId, resolvedProfileHash: ctx.resolvedProfileHash, state },
       ctx,
     )
+    throwIfPlanningStopped(ctx, signal)
     if (!isRouteDecisionStateRef(stateRef)) {
       throw new WorkflowControllerError('INVALID_SCHEMA', 'the route-state provider returned an invalid immutable artifact reference')
     }
@@ -313,6 +365,7 @@ export class RunPlanner {
         ctx,
       )
     } catch (error) {
+      throwIfPlanningStopped(ctx, signal)
       if (isRecoverableRouteDecisionFailure(error)) {
         return {
           ...this.#clarify(request, 'the decision provider was unavailable, so the route stays ambiguous'),
@@ -321,6 +374,7 @@ export class RunPlanner {
       }
       throw error
     }
+    throwIfPlanningStopped(ctx, signal)
     if (
       result.questionId !== question.questionId ||
       result.questionType !== question.type ||
@@ -336,7 +390,7 @@ export class RunPlanner {
       }
     }
     if (result.selectedOptionId === 'small_plan') {
-      return this.#smallPlanRoute(request, ctx, 'the decision selected one small plan')
+      return this.#smallPlanRoute(request, ctx, 'the decision selected one small plan', signal)
     }
     if (result.selectedOptionId === 'clarify') return this.#clarify(request, 'the decision selected clarification')
     throw new WorkflowControllerError('INVALID_SCHEMA', 'the route decision selected an option outside the declared route set')
@@ -364,15 +418,23 @@ export class RunPlanner {
    * in the message stream: the tool catalogue, model ref and output limit stay fixed, so no
    * content in the vocabulary can widen authority (INV-07).
    */
-  async #proposeCandidate(request: PlanRequest, ctx: ToolContext): Promise<CandidateProposal> {
+  async #proposeCandidate(request: PlanRequest, ctx: ToolContext, signal?: AbortSignal): Promise<CandidateProposal> {
     const generation = this.#deps.generation
-    if (generation === undefined) return { kind: 'unavailable' }
+    if (generation === undefined) {
+      throw new WorkflowControllerError(
+        'CAPABILITY_NOT_CONFIGURED',
+        'the selected route requires a generation model, but none is configured',
+      )
+    }
+    throwIfPlanningStopped(ctx, signal)
     const vocabulary = await this.#buildVocabulary(request, ctx)
+    throwIfPlanningStopped(ctx, signal)
     if (vocabulary.gaps.length > 0 || vocabulary.concepts.length === 0) {
-      return {
-        kind: 'degraded',
-        reason: vocabulary.gaps[0]?.code ?? 'EMPTY_VOCABULARY',
-      }
+      const gap = vocabulary.gaps[0]?.code ?? 'EMPTY_VOCABULARY'
+      throw new WorkflowControllerError(
+        'UNSUPPORTED_QUERY',
+        `the selected mappings do not provide a complete semantic vocabulary (${gap})`,
+      )
     }
     const messages: GenerationMessage[] = [
       {
@@ -383,6 +445,13 @@ export class RunPlanner {
       { role: 'system', content: renderVocabularyBlock(vocabulary) },
       { role: 'user', content: request.question },
     ]
+    if (request.routeClarification !== undefined) {
+      const state = routeClarificationStateOf(request.routeClarification)
+      messages.push({
+        role: 'user',
+        content: `<route_clarification_response untrusted="true">\n${canonicalJson(state)}\n</route_clarification_response>`,
+      })
+    }
     const examples = this.#deps.examples
     if (examples !== undefined) {
       // Best-effort enrichment: examples are untrusted data appended as their own message.
@@ -401,19 +470,76 @@ export class RunPlanner {
       modelRef: this.#deps.planModelRef ?? { modelId: 'plan-proposer', version: '1.0.0' },
       outputLimit: { maxTokens: 1024 },
     }
+    throwIfPlanningStopped(ctx, signal)
     let json = ''
+    let proposalBytes = 0
+    let streamBytes = 0
+    let eventCount = 0
+    let callId: string | undefined
+    let completed = false
+    let recoverableFailure: PlatformError | undefined
     try {
       for await (const event of generation.generate(generationRequest, ctx)) {
-        if (event.type === 'tool_call_delta' && event.toolId === 'data_query') {
-          json += event.argumentsDelta
+        throwIfPlanningStopped(ctx, signal)
+        eventCount += 1
+        const eventBytes = boundedJsonByteLength(event, MAX_GENERATION_STREAM_BYTES - streamBytes)
+        if (eventCount > MAX_GENERATION_EVENT_COUNT || eventBytes > MAX_GENERATION_STREAM_BYTES - streamBytes) {
+          throw new WorkflowControllerError('INVALID_SCHEMA', 'the generation stream exceeded its bounded output limit')
         }
-        if (event.type === 'error') return { kind: 'unavailable' }
+        streamBytes += eventBytes
+        if (completed && event.type !== 'usage') {
+          throw new WorkflowControllerError('INVALID_SCHEMA', 'the generation stream emitted content after completion')
+        }
+        if (event.type === 'tool_call_delta') {
+          if (event.toolId !== 'data_query') {
+            throw new WorkflowControllerError('INVALID_SCHEMA', 'the planner received a tool call outside data_query')
+          }
+          if (callId !== undefined && callId !== event.callId) {
+            throw new WorkflowControllerError('INVALID_SCHEMA', 'the planner received more than one proposed tool call')
+          }
+          proposalBytes += utf8ByteLength(event.argumentsDelta)
+          if (proposalBytes > MAX_PROPOSED_TOOL_JSON_BYTES) {
+            throw new WorkflowControllerError('INVALID_SCHEMA', 'the proposed semantic query exceeded its byte limit')
+          }
+          callId = event.callId
+          json += event.argumentsDelta
+        } else if (event.type === 'completed') {
+          if (completed) {
+            throw new WorkflowControllerError('INVALID_SCHEMA', 'the generation stream completed more than once')
+          }
+          completed = true
+          if (event.stopReason !== 'tool_calls') {
+            throw new WorkflowControllerError('UNSUPPORTED_QUERY', 'the model did not return a semantic data_query proposal')
+          }
+        } else if (event.type === 'error') {
+          if (isRecoverableGenerationFailure(event.error)) {
+            recoverableFailure = event.error
+            break
+          }
+          throw new WorkflowControllerError(event.error.code, event.error.message)
+        }
       }
-    } catch {
-      return { kind: 'unavailable' }
+    } catch (error) {
+      throwIfPlanningStopped(ctx, signal)
+      if (isAbortLike(error)) throw error
+      if (isRecoverableGenerationFailure(error)) {
+        recoverableFailure = toPlatformError(error)
+      } else {
+        throw error
+      }
+    }
+    throwIfPlanningStopped(ctx, signal)
+    if (recoverableFailure !== undefined) return { kind: 'recoverable_failure', error: recoverableFailure }
+    if (!completed) {
+      throw new WorkflowControllerError('INVALID_SCHEMA', 'the generation stream ended without a completed event')
+    }
+    if (callId === undefined || json.trim().length === 0) {
+      throw new WorkflowControllerError('UNSUPPORTED_QUERY', 'the model did not return a semantic data_query proposal')
     }
     const plan = parseSemanticQueryPlan(json)
-    if (plan === undefined) return { kind: 'unavailable' }
+    if (plan === undefined) {
+      throw new WorkflowControllerError('UNSUPPORTED_QUERY', 'the model proposal is not a supported semantic query')
+    }
     return { kind: 'proposed', plan, vocabularyRef: vocabulary.vocabularyRef }
   }
 
@@ -421,8 +547,11 @@ export class RunPlanner {
     runId: Uuid,
     candidate: SemanticQueryPlan,
     ctx: ToolContext,
+    signal?: AbortSignal,
   ): Promise<ExecutablePlan> {
+    throwIfPlanningStopped(ctx, signal)
     const compiled = await this.#deps.compiler.compile(candidate, ctx)
+    throwIfPlanningStopped(ctx, signal)
     const step: ExecutablePlanStep = {
       stepId: 'q1',
       toolId: 'data_query',
@@ -431,17 +560,6 @@ export class RunPlanner {
       sourceVersion: compiled.mappingRef,
     }
     return this.#planOf(runId, [step], true)
-  }
-
-  /** A bounded fallback that resolves definitions without any model call. */
-  #defaultPlan(request: PlanRequest): ExecutablePlan {
-    const step: ExecutablePlanStep = {
-      stepId: 'lookup1',
-      toolId: 'ontology_lookup',
-      arguments: { intent: 'definitions' },
-      dependsOn: [],
-    }
-    return this.#planOf(request.runId, [step], false)
   }
 
   #planOf(
@@ -524,6 +642,21 @@ function routeDecisionStateOf(input: RouteDecisionStateInput): Readonly<Record<s
       mappingRefs: request.mappingRefs ?? [],
       definitionRefs: request.definitionRefs ?? [],
     },
+    ...(request.routeClarification === undefined
+      ? {}
+      : { routeClarification: routeClarificationStateOf(request.routeClarification) }),
+  }
+}
+
+function routeClarificationStateOf(
+  clarification: NonNullable<PlanRequest['routeClarification']>,
+): Readonly<Record<string, unknown>> {
+  return {
+    receiptRef: clarification.receiptRef,
+    questionRef: clarification.questionRef,
+    clarificationId: clarification.clarificationId,
+    typedResponse: clarification.typedResponse,
+    expectedRevision: clarification.expectedRevision,
   }
 }
 
@@ -564,6 +697,19 @@ function isRouteDecisionStateRef(ref: ResourceRef): boolean {
   )
 }
 
+function isRouteClarificationReceiptRef(ref: unknown): ref is ResourceRef {
+  if (!isRecord(ref)) return false
+  return (
+    ref.kind === 'artifact' &&
+    typeof ref.id === 'string' &&
+    ref.id.trim().length > 0 &&
+    typeof ref.version === 'string' &&
+    ref.version.trim().length > 0 &&
+    typeof ref.digest === 'string' &&
+    /^sha256:[0-9a-f]{64}$/u.test(ref.digest)
+  )
+}
+
 function routeDecisionErrorCode(error: unknown): string | undefined {
   if (!isRecord(error)) return undefined
   const code = error['code']
@@ -582,10 +728,98 @@ function isRecoverableRouteDecisionFailure(error: unknown): boolean {
   return code !== undefined && RECOVERABLE_ROUTE_DECISION_CODES.has(code)
 }
 
+type RecoverableGenerationCode = 'MODEL_UNAVAILABLE' | 'RATE_LIMITED'
+
+function recoverableGenerationCode(error: unknown): RecoverableGenerationCode | undefined {
+  if (isAbortLike(error)) return undefined
+  const code = routeDecisionErrorCode(error)
+  if (code === undefined || !RECOVERABLE_GENERATION_CODES.has(code)) return undefined
+  if (code !== 'MODEL_UNAVAILABLE' && code !== 'RATE_LIMITED') return undefined
+  if (isRecord(error) && error['retryable'] === false) return undefined
+  return code
+}
+
+function isRecoverableGenerationFailure(error: unknown): boolean {
+  return recoverableGenerationCode(error) !== undefined
+}
+
+function toPlatformError(error: unknown): PlatformError {
+  const code = recoverableGenerationCode(error)
+  if (code === undefined) throw error
+  const message = isRecord(error) && typeof error['message'] === 'string' && error['message'].length > 0
+    ? error['message']
+    : 'the generation provider was unavailable'
+  return { code, message, retryable: true }
+}
+
+function throwIfAborted(signal: AbortSignal | undefined): void {
+  if (signal?.aborted !== true) return
+  if (signal.reason instanceof Error) throw signal.reason
+  throw new DOMException('the planning operation was cancelled', 'AbortError')
+}
+
+function throwIfPlanningStopped(ctx: ToolContext, signal: AbortSignal | undefined): void {
+  throwIfAborted(signal)
+  const deadlineMs = Date.parse(ctx.deadline)
+  if (Number.isFinite(deadlineMs) && Date.now() >= deadlineMs) {
+    throw new WorkflowControllerError('DEADLINE_EXCEEDED', 'the planning deadline has passed')
+  }
+}
+
+/** Conservatively counts JSON payload bytes without stringifying an untrusted event. */
+function boundedJsonByteLength(value: GenerationEvent, limit: number): number {
+  const pending: unknown[] = [value]
+  let bytes = 0
+  let visited = 0
+  while (pending.length > 0) {
+    const current = pending.pop()
+    visited += 1
+    if (visited > MAX_GENERATION_EVENT_COUNT * 32) return limit + 1
+    if (current === null) {
+      bytes += 4
+    } else if (typeof current === 'string') {
+      bytes += utf8ByteLength(current) + 2
+    } else if (typeof current === 'number') {
+      bytes += Number.isFinite(current) ? String(current).length : 4
+    } else if (typeof current === 'boolean') {
+      bytes += current ? 4 : 5
+    } else if (Array.isArray(current)) {
+      if (pending.length + current.length > MAX_GENERATION_EVENT_COUNT * 32) return limit + 1
+      bytes += 2 + Math.max(0, current.length - 1)
+      for (const entry of current) pending.push(entry)
+    } else if (isRecord(current)) {
+      const entries = Object.entries(current)
+      if (pending.length + entries.length > MAX_GENERATION_EVENT_COUNT * 32) return limit + 1
+      bytes += 2 + Math.max(0, entries.length - 1)
+      for (const [key, entry] of entries) {
+        bytes += utf8ByteLength(key) + 3
+        pending.push(entry)
+      }
+    } else if (current !== undefined) {
+      return limit + 1
+    }
+    if (bytes > limit) return limit + 1
+  }
+  return bytes
+}
+
+function utf8ByteLength(value: string): number {
+  let bytes = 0
+  for (const character of value) {
+    const codePoint = character.codePointAt(0)
+    if (codePoint === undefined) continue
+    if (codePoint <= 0x7f) bytes += 1
+    else if (codePoint <= 0x7ff) bytes += 2
+    else if (codePoint <= 0xffff) bytes += 3
+    else bytes += 4
+  }
+  return bytes
+}
+
 /**
  * Parse a model-proposed semantic query plan. It validates the shape at runtime instead of
- * trusting the model: a malformed proposal yields `undefined`, so the caller falls back to
- * a bounded default plan rather than executing an unvalidated query.
+ * trusting the model: a malformed proposal yields `undefined`, so the caller can reject it
+ * rather than executing an unvalidated query or substituting an unrelated task.
  */
 export function parseSemanticQueryPlan(text: string): SemanticQueryPlan | undefined {
   let parsed: unknown

@@ -84,7 +84,13 @@ export function fixedPlan(): ExecutablePlan {
       {
         stepId: 'lookup1',
         toolId: 'ontology_lookup',
-        arguments: { intent: 'definitions' },
+        arguments: {
+          scopeRef: {
+            tenantId: '11111111-1111-4111-8111-111111111111',
+            spaceId: 'aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa',
+          },
+          intent: 'definitions',
+        },
         dependsOn: [],
       },
     ],

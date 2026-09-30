@@ -27,6 +27,8 @@ export type { CheckpointPayload, CheckpointStepOutput } from './checkpoint'
 export type {
   PublishedPlan,
   StepOutput,
+  TemplatePlanPreparation,
+  TemplatePlanPreparationRequest,
   TemplatePlanResolver,
   TemplateRuntimeConfig,
 } from './types'

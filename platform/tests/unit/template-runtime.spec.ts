@@ -1,7 +1,9 @@
 import { describe, expect, it } from 'vitest'
 import {
+  checkpointDigest,
   TemplateRuntimeAdapter,
   type PublishedPlan,
+  type TemplatePlanResolver,
 } from '@ontology/adapter-runtime-template'
 import type {
   PlanSpec,
@@ -69,6 +71,167 @@ function eventsOfType<T extends RuntimeEvent['type']>(
 }
 
 describe('TemplateRuntimeAdapter — plan execution (SPEC §4.2, D7)', () => {
+  it('prepares with the real runtime inputs, then checkpoints an immutable receipt before the first tool', async () => {
+    const receiptRef: ResourceRef = {
+      id: 'plan-template-prepared',
+      version: '1.0.0',
+      digest: sha256DigestOf('prepared-plan-receipt'),
+      kind: 'plan',
+    }
+    const spec: PlanSpec = {
+      planRef: receiptRef,
+      steps: [step({ stepId: 'facts', toolId: 'ontology_lookup' })],
+    }
+    const preparationRequests: Parameters<NonNullable<TemplatePlanResolver['prepare']>>[0][] = []
+    const resolver = {
+      async resolve() {
+        throw new Error('the prepared resolver must not use its legacy path')
+      },
+      async prepare(request: Parameters<NonNullable<TemplatePlanResolver['prepare']>>[0]) {
+        preparationRequests.push(request)
+        return { kind: 'plan' as const, published: publishedPlan(spec) }
+      },
+    }
+    const adapter = new TemplateRuntimeAdapter({ manifest: runtimeManifest(), plans: resolver })
+    const harness = buildDependencies()
+    let checkpointsAtToolStart = -1
+    harness.gateway.on('ontology_lookup', (call) => {
+      checkpointsAtToolStart = harness.checkpoints.saved.length
+      return okResult(call.callId, { items: [] })
+    })
+
+    const events = await collect(adapter.start(runtimeInput(), harness.dependencies))
+
+    expect(preparationRequests).toHaveLength(1)
+    expect(preparationRequests[0]?.mode).toBe('start')
+    expect(preparationRequests[0]?.input).toEqual(runtimeInput())
+    expect(preparationRequests[0]?.dependencies.signal).toBe(harness.dependencies.signal)
+    expect(preparationRequests[0]?.dependencies.budget).toBe(harness.dependencies.budget)
+    expect(checkpointsAtToolStart).toBe(1)
+    expect(eventsOfType(events, 'checkpoint_ready').length).toBeGreaterThanOrEqual(2)
+    expect(events.findIndex((event) => event.type === 'checkpoint_ready'))
+      .toBeLessThan(events.findIndex((event) => event.type === 'step_started'))
+    expect(eventsOfType(events, 'collection_complete')).toHaveLength(1)
+  })
+
+  it('persists route clarification before exposing it and resumes from the full prior receipt', async () => {
+    const clarificationReceipt: ResourceRef = {
+      id: 'plan-route-clarification',
+      version: '1.0.0',
+      digest: sha256DigestOf('route-clarification-receipt'),
+      kind: 'plan',
+    }
+    const executableReceipt: ResourceRef = {
+      id: 'plan-route-resolved',
+      version: '1.0.0',
+      digest: sha256DigestOf('route-resolved-receipt'),
+      kind: 'plan',
+    }
+    const clarificationId = '44444444-4444-4444-8444-444444444444'
+    const questionRef = { id: 'route-question', version: '1.0.0', digest: sha256DigestOf('route question') }
+    const requests: Parameters<NonNullable<TemplatePlanResolver['prepare']>>[0][] = []
+    const spec: PlanSpec = {
+      planRef: executableReceipt,
+      steps: [step({ stepId: 'facts', toolId: 'ontology_lookup' })],
+    }
+    const resolver = {
+      async resolve() {
+        throw new Error('the prepared resolver must not use its legacy path')
+      },
+      async prepare(request: Parameters<NonNullable<TemplatePlanResolver['prepare']>>[0]) {
+        requests.push(request)
+        if (request.mode === 'start') {
+          return {
+            kind: 'clarification' as const,
+            receiptRef: clarificationReceipt,
+            clarificationId,
+            clarification: { questionRef, questionType: 'choice' as const, prompt: 'Choose a route' },
+          }
+        }
+        return {
+          kind: 'plan' as const,
+          sourceReceiptRef: clarificationReceipt,
+          published: publishedPlan(spec),
+        }
+      },
+    }
+    const adapter = new TemplateRuntimeAdapter({ manifest: runtimeManifest(), plans: resolver })
+    const harness = buildDependencies()
+    harness.gateway.on('ontology_lookup', (call) => okResult(call.callId, { items: [] }))
+
+    const clarificationEvents = await collect(adapter.start(runtimeInput(), harness.dependencies))
+    const savedCheckpoint = eventsOfType(clarificationEvents, 'checkpoint_ready')[0]?.checkpointRef
+    expect(savedCheckpoint).toBeDefined()
+    expect(clarificationEvents.findIndex((event) => event.type === 'checkpoint_ready'))
+      .toBeLessThan(clarificationEvents.findIndex((event) => event.type === 'clarification_requested'))
+    expect(harness.gateway.calls).toHaveLength(0)
+
+    const response = {
+      clarificationId,
+      typedResponse: { answer: 'the asset facts route' },
+      expectedRevision: '4',
+    }
+    if (savedCheckpoint === undefined) throw new Error('the route clarification was exposed without a checkpoint')
+    const resumed = await collect(adapter.resume(
+      resumeInput(savedCheckpoint, { clarificationResponse: response }),
+      harness.dependencies,
+    ))
+
+    expect(requests.map((request) => request.mode)).toEqual(['start', 'resume'])
+    expect(requests[1]?.planRef).toEqual(clarificationReceipt)
+    expect(requests[1]?.input).toMatchObject({ clarificationResponse: response })
+    expect(harness.gateway.calls).toHaveLength(1)
+    expect(eventsOfType(resumed, 'collection_complete')).toHaveLength(1)
+  })
+
+  it('rejects a prepared plan when its resolver does not attest the exact checkpoint receipt', async () => {
+    const expected: ResourceRef = {
+      id: 'plan-expected-receipt',
+      version: '1.0.0',
+      digest: sha256DigestOf('expected-receipt'),
+      kind: 'plan',
+    }
+    const wrong: ResourceRef = {
+      id: 'plan-other-receipt',
+      version: '1.0.0',
+      digest: sha256DigestOf('other-receipt'),
+      kind: 'plan',
+    }
+    const spec: PlanSpec = { planRef: expected, steps: [step({ stepId: 'facts', toolId: 'ontology_lookup' })] }
+    const resolver = {
+      async resolve() {
+        return publishedPlan(spec)
+      },
+      async prepare() {
+        return { kind: 'plan' as const, sourceReceiptRef: wrong, published: publishedPlan(spec) }
+      },
+    }
+    const adapter = new TemplateRuntimeAdapter({ manifest: runtimeManifest(), plans: resolver })
+    const harness = buildDependencies()
+    const checkpointPayload = {
+      schemaVersion: 1 as const,
+      runtimeKind: 'runtime-template',
+      runtimeVersion: '1.0.0',
+      planRef: expected,
+      completedStepIds: [],
+      stepOutputs: [],
+      evidenceRefs: [],
+    }
+    const checkpointRef = {
+      checkpointId: '55555555-5555-4555-8555-555555555555',
+      runId: RUN_ID,
+      runtimeKind: 'runtime-template',
+      runtimeVersion: '1.0.0',
+      stateDigest: checkpointDigest(checkpointPayload),
+      createdAt: '2026-09-29T00:00:00Z',
+    }
+    await harness.checkpoints.save(RUN_ID, checkpointRef, new TextEncoder().encode(JSON.stringify(checkpointPayload)))
+
+    await expect(collect(adapter.resume(resumeInput(checkpointRef), harness.dependencies)))
+      .rejects.toMatchObject({ code: 'INVALID_PLAN' })
+    expect(harness.gateway.calls).toHaveLength(0)
+  })
+
   it('runs steps in dependency order and binds arguments from actual predecessor outputs', async () => {
     const spec = planSpec([
       step({ stepId: 'lookup', toolId: 'ontology_lookup' }),
