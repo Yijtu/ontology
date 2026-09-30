@@ -4,6 +4,22 @@ export type {
   DecisionStateRefProvider,
   VerificationArtifactStore,
 } from './service'
+export {
+  PublicationValidityEngine,
+  computationValidator,
+  defaultPublicationEvidenceValidators,
+  documentSpanValidator,
+  observationValidator,
+  passThroughValidator,
+  ruleDerivationValidator,
+  webPageValidator,
+} from './publication-validity'
+export type {
+  PublicationEvidenceValidation,
+  PublicationEvidenceValidationInput,
+  PublicationEvidenceValidator,
+  PublicationValidityEngineDependencies,
+} from './publication-validity'
 export { DraftVerificationError, isDraftVerificationError } from './errors'
 export type { DraftVerificationErrorCode } from './errors'
 export {

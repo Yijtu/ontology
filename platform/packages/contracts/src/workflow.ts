@@ -1,5 +1,6 @@
 import type {
   BudgetRemaining,
+  EvidenceKind,
   NonEmptyString,
   ResourceRef,
   ResolvedProfileRef,
@@ -389,6 +390,13 @@ export interface RecordAnswerInput {
   readonly expectedRunState: RunState
   readonly expectedRunRevision: RevisionString
   readonly workflowDispatchFence?: WorkflowDispatchFence
+  /**
+   * The exact evidence versions the verified draft depended on. When present, the store
+   * re-reads each dependency row inside the same transaction as the answer insert, so a
+   * dependency that was retracted or edited between the validity check and the commit
+   * (the publication transaction fence) rejects the answer and nothing partial is written.
+   */
+  readonly dependencyPins?: readonly PublicationDependencyPin[]
 }
 
 export type AnswerStoreErrorCode =
@@ -420,6 +428,58 @@ export type PublicationBlockReason =
   | 'evidence_retracted'
   | 'evidence_unverifiable'
   | 'data_stale'
+  /** A dependency was edited after verification; its verified version no longer holds. */
+  | 'dependency_edited'
+  /** A formal table in the verified result has no earned full-table verification receipt. */
+  | 'table_verification_missing'
+  /** A registered validation-policy report is missing, failed, or bound to another revision. */
+  | 'policy_report_missing'
+
+/**
+ * One exact evidence version the verified draft depended on, pinned to the revision and
+ * digests it was verified against. It spans every evidence kind (observation, document span,
+ * rule derivation, computation, identity decision, model output, web page). A later edit to
+ * the archived version, or a retraction of it, makes the pin fail so only the same verified
+ * version can be published.
+ */
+export interface PublicationDependencyPin {
+  readonly evidenceRef: ResourceRef
+  readonly evidenceKind: EvidenceKind
+  readonly resultDigest: Sha256Digest
+  readonly envelopeDigest: Sha256Digest
+  readonly revision: RevisionString
+}
+
+/**
+ * One formal table of the verified result that must carry an earned full-table verification
+ * receipt before publication (SPEC v0.3a §EX-7.1). The receipt is bound to the draft hash and
+ * the exact result manifest digest, so a partial/truncated/tampered table can never publish.
+ */
+export interface PublicationTableVerificationRequirement {
+  readonly draftHash: Sha256Digest
+  readonly resultManifestRef: ResourceRef
+  readonly resultManifestDigest: Sha256Digest
+  readonly tableId: NonEmptyString
+  /** The archived `table-verification-receipt@1` the result must carry for this table. */
+  readonly receiptRef: ResourceRef
+}
+
+/**
+ * One registered task-validation-policy report the verified result depends on (SPEC v0.3a
+ * §EX-6.1). Publication re-reads the archived report and proves it is the same policy,
+ * registry revision and execution it was verified against, and that it passed; a
+ * `fail`/`unknown`/`incomplete` policy report or a missing one blocks publication.
+ */
+export interface PublicationPolicyReportRequirement {
+  readonly policyRef: VersionRef
+  readonly registryDigest: Sha256Digest
+  readonly executionBindingRef: ResourceRef
+  readonly inputSnapshotRef: ResourceRef
+  readonly inputSnapshotDigest: Sha256Digest
+  readonly parametersRef: ResourceRef
+  readonly parametersDigest: Sha256Digest
+  readonly reportRef: ResourceRef
+}
 
 /**
  * The post-verification validity check (D7.4: 发布前复核权限/当前有效性/fence). The evidence
@@ -433,13 +493,24 @@ export interface PublicationValidityRequest {
   readonly evidenceManifestHash: Sha256Digest
   readonly evidenceRefs: readonly ResourceRef[]
   readonly verifiedAt: Rfc3339UtcTimestamp
+  /**
+   * The exact versions the draft was verified against, when known. A request that names them
+   * gets a revision/digest re-check (later edits block as `dependency_edited`); a request that
+   * omits them still re-reads the referenced evidence for permission/visibility.
+   */
+  readonly dependencies?: readonly PublicationDependencyPin[]
+  /** Formal tables that must carry an earned full-table verification receipt. */
+  readonly tableVerifications?: readonly PublicationTableVerificationRequirement[]
+  /** Registered validation-policy reports the result must still be supported by. */
+  readonly policyReports?: readonly PublicationPolicyReportRequirement[]
 }
 
 /**
  * The result of the validity check. `historyLimited` is set only when the support still
  * exists but the world moved on, so the caller may publish the older result **explicitly
- * marked** with `asOf`. A retracted basis, a revoked permission or a cancelled run sets
- * `historyLimited` to `false`: those can never be published, not even historically.
+ * marked** with `asOf`. A retracted basis, a revoked permission, an edited dependency or a
+ * cancelled run sets `historyLimited` to `false`: those can never be published, not even
+ * historically.
  */
 export interface PublicationValidityReport {
   readonly publishable: boolean
@@ -447,6 +518,11 @@ export interface PublicationValidityReport {
   readonly historyLimited: boolean
   readonly asOf?: Rfc3339UtcTimestamp
   readonly details: readonly string[]
+  /**
+   * The exact pins the check actually re-read. A publisher forwards them to the answer store
+   * so the same dependency versions are re-checked inside the publication transaction fence.
+   */
+  readonly dependencies?: readonly PublicationDependencyPin[]
 }
 
 export interface PublicationValidityPort {

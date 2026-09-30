@@ -39,6 +39,8 @@ import {
   PostgresTaskInputSnapshotStore,
   PostgresSemanticPublicationStore,
   PostgresSyntheticExampleSetStore,
+  PostgresTableVerificationStore,
+  PostgresTaskPolicyReportStore,
   PostgresWorkflowDispatchStore,
   PostgresWorkflowStore,
 } from '@ontology/adapter-control-postgres'
@@ -83,8 +85,10 @@ import {
   ProjectMappingService,
   ProjectService,
   ProfileResolver,
+  PublicationValidityEngine,
   RestrictedLimitedAnswerComposer,
   RuleActionCandidateService,
+  defaultPublicationEvidenceValidators,
   SourceRegistry,
   RunExecutionPreflightService,
   RunPhaseDriver,
@@ -104,7 +108,7 @@ import {
   parseModelCandidates,
   ReviewHandoffStageHandler,
 } from '@ontology/application'
-import type { ManifestValidator, MountedDefinitionTerminology, OutboxConsumer, ProfileSpecValidator, RunProfileBinder, TaskParameterValidator } from '@ontology/application'
+import type { ManifestValidator, MountedDefinitionTerminology, OutboxConsumer, ProfileSpecValidator, PublicationEvidenceValidation, PublicationEvidenceValidationInput, PublicationEvidenceValidator, RunProfileBinder, TaskParameterValidator } from '@ontology/application'
 import type {
   ActionCapabilityBindingInput,
   CandidateStore,
@@ -141,6 +145,8 @@ import type {
   SemanticPublicationStore,
   SourceRef,
   SupportedDataType,
+  TableVerificationReceiptStore,
+  TaskPolicyReportStore,
   ToolContext,
   Uuid,
   VersionRef,
@@ -1131,102 +1137,112 @@ class CoreInputValidity implements InputValidityPort {
   }
 }
 
-class CorePublicationValidity implements PublicationValidityPort {
-  readonly #evidence: PostgresEvidenceStore
-  readonly #artifacts: LocalImmutableBlobStore
+/**
+ * `observation` publication validity for the Core path. A published-fact page is revalidated
+ * against the current published view; any other observation payload (a relation edge or table
+ * result) is left to the generic observation rule, so the gate no longer blindly rejects — or
+ * blindly accepts — a non-fact evidence shape as if it were a fact page.
+ */
+class CoreObservationPublicationValidator implements PublicationEvidenceValidator {
+  readonly evidenceKind = 'observation' as const
   readonly #facts: CorePublishedFactsProvider
   readonly #scopeRef: ScopeRef
+
+  constructor(input: { readonly facts: CorePublishedFactsProvider; readonly scopeRef: ScopeRef }) {
+    this.#facts = input.facts
+    this.#scopeRef = input.scopeRef
+  }
+
+  async validate({ record, payload, ctx }: PublicationEvidenceValidationInput): Promise<PublicationEvidenceValidation> {
+    if (!isRecord(payload) || !Array.isArray(payload['items'])) return { state: 'current' }
+    const items = payload['items']
+    const factItems = items.filter((item) => isRecord(item) && item['kind'] === 'fact')
+    if (factItems.length === 0 || factItems.length !== items.length) return { state: 'current' }
+    const first = factItems[0]
+    if (!isRecord(first) || !isRecord(first['conceptRef']) || typeof first['conceptRef']['namespace'] !== 'string') {
+      return { state: 'blocked', reasons: ['evidence_unverifiable'], details: ['fact evidence has no exact concept namespace'] }
+    }
+    const namespace = first['conceptRef']['namespace']
+    const concepts: { namespace: string; conceptId: string; definitionVersion?: string }[] = []
+    for (const item of factItems) {
+      if (!isRecord(item) || !isRecord(item['conceptRef']) || typeof item['conceptRef']['conceptId'] !== 'string' || item['conceptRef']['namespace'] !== namespace) {
+        return { state: 'blocked', reasons: ['evidence_unverifiable'], details: ['fact evidence mixed concept namespaces or lacked a typed concept reference'] }
+      }
+      const definitionVersion = item['conceptRef']['definitionVersion']
+      concepts.push({
+        namespace,
+        conceptId: item['conceptRef']['conceptId'],
+        ...(typeof definitionVersion === 'string' ? { definitionVersion } : {}),
+      })
+    }
+    let page: OntologyFactPage
+    try {
+      page = await this.#facts.listFacts({
+        scopeRef: this.#scopeRef,
+        concepts: [...new Map(concepts.map((concept) => [concept.conceptId, concept])).values()],
+        entityRefs: [],
+        limit: 10_000,
+        validAt: record.envelope.observedAt,
+      }, ctx)
+    } catch {
+      return { state: 'blocked', reasons: ['evidence_unverifiable'], details: ['published fact evidence could not be revalidated against its source'] }
+    }
+    if (!page.covered || page.nextCursor !== null) {
+      return { state: 'stale', details: ['published fact evidence no longer has a complete source view'] }
+    }
+    const current = page.facts.map((fact) => ({
+      kind: 'fact',
+      ref: fact.factRef,
+      conceptRef: fact.conceptRef,
+      ...(fact.label === undefined ? {} : { label: fact.label }),
+      ...(fact.validity === undefined ? {} : { validity: fact.validity }),
+      ...(fact.payload === undefined ? {} : { payload: fact.payload }),
+    })).sort((left, right) => left.ref.id.localeCompare(right.ref.id))
+    const previous = factItems.map((item) => item).sort((left, right) => {
+      const leftRef = isRecord(left) && isRecord(left['ref']) && typeof left['ref']['id'] === 'string' ? left['ref']['id'] : ''
+      const rightRef = isRecord(right) && isRecord(right['ref']) && typeof right['ref']['id'] === 'string' ? right['ref']['id'] : ''
+      return leftRef.localeCompare(rightRef)
+    })
+    if (canonicalJson(current) !== canonicalJson(previous)) {
+      return { state: 'stale', details: ['published facts changed after the evidence was collected'] }
+    }
+    return { state: 'current' }
+  }
+}
+
+/**
+ * Core publication validity: a per-evidence-kind engine (V03-035 / #206) that re-checks the
+ * revision, digest and current visibility of every dependency of the verified draft (facts,
+ * relation/table observations, rule derivations, computations, document spans and their
+ * transitive support), plus any formal-table verification receipts. Only the same verified
+ * version can publish; a later edit or retraction blocks, and a stale-but-intact support is
+ * published only with an explicit `asOf`.
+ */
+class CorePublicationValidity implements PublicationValidityPort {
+  readonly #engine: PublicationValidityEngine
 
   constructor(input: {
     readonly evidence: PostgresEvidenceStore
     readonly artifacts: LocalImmutableBlobStore
     readonly facts: CorePublishedFactsProvider
     readonly scopeRef: ScopeRef
+    readonly tables?: TableVerificationReceiptStore
+    readonly policies?: TaskPolicyReportStore
   }) {
-    this.#evidence = input.evidence
-    this.#artifacts = input.artifacts
-    this.#facts = input.facts
-    this.#scopeRef = input.scopeRef
+    this.#engine = new PublicationValidityEngine({
+      evidence: input.evidence,
+      artifacts: input.artifacts,
+      validators: [
+        ...defaultPublicationEvidenceValidators(),
+        new CoreObservationPublicationValidator({ facts: input.facts, scopeRef: input.scopeRef }),
+      ],
+      ...(input.tables === undefined ? {} : { tables: input.tables }),
+      ...(input.policies === undefined ? {} : { policies: input.policies }),
+    })
   }
 
-  async check(request: PublicationValidityRequest, ctx: ToolContext): Promise<PublicationValidityReport> {
-    const details: string[] = []
-    const blockedReasons: PublicationValidityReport['blockedReasons'][number][] = []
-    for (const evidenceRef of request.evidenceRefs) {
-      const record = await this.#evidence.get(this.#scopeRef, evidenceRef.id, ctx)
-      if (record === undefined || !sameResourceRef(record.evidenceRef, evidenceRef)) {
-        blockedReasons.push('evidence_retracted')
-        details.push(`evidence ${evidenceRef.id} is no longer visible`)
-        continue
-      }
-      const payloadRef = record.envelope.payloadRef
-      if (payloadRef === undefined) {
-        blockedReasons.push('evidence_unverifiable')
-        details.push(`evidence ${evidenceRef.id} has no immutable result payload`)
-        continue
-      }
-      try {
-        const authorized = await this.#artifacts.getAuthorized({ scopeRef: this.#scopeRef, blobRef: payloadRef }, ctx)
-        if (!authorized.integrityVerified) throw new Error('blob integrity was not verified')
-        const bytes = await this.#artifacts.readAuthorized({ scopeRef: this.#scopeRef, blobRef: payloadRef }, ctx)
-        const payload: unknown = JSON.parse(new TextDecoder('utf-8', { fatal: true }).decode(bytes))
-        if (!isRecord(payload) || !Array.isArray(payload['items'])) throw new Error('evidence payload is not an ontology lookup result')
-        const items = payload['items']
-        const factItems = items.filter((item) => isRecord(item) && item['kind'] === 'fact')
-        if (factItems.length !== items.length || factItems.length === 0) throw new Error('evidence does not contain only published facts')
-        const first = factItems[0]
-        if (!isRecord(first) || !isRecord(first['conceptRef']) || typeof first['conceptRef']['namespace'] !== 'string') {
-          throw new Error('fact evidence has no exact concept namespace')
-        }
-        const namespace = first['conceptRef']['namespace']
-        const concepts: { namespace: string; conceptId: string; definitionVersion?: string }[] = []
-        for (const item of factItems) {
-          if (!isRecord(item) || !isRecord(item['conceptRef']) || typeof item['conceptRef']['conceptId'] !== 'string' || item['conceptRef']['namespace'] !== namespace) {
-            throw new Error('fact evidence mixed concept namespaces or lacked a typed concept reference')
-          }
-          const definitionVersion = item['conceptRef']['definitionVersion']
-          concepts.push({
-            namespace,
-            conceptId: item['conceptRef']['conceptId'],
-            ...(typeof definitionVersion === 'string' ? { definitionVersion } : {}),
-          })
-        }
-        const page = await this.#facts.listFacts({
-          scopeRef: this.#scopeRef,
-          concepts: [...new Map(concepts.map((concept) => [concept.conceptId, concept])).values()],
-          entityRefs: [],
-          limit: 10_000,
-          validAt: record.envelope.observedAt,
-        }, ctx)
-        if (!page.covered || page.nextCursor !== null) {
-          blockedReasons.push('data_stale')
-          details.push(`published fact evidence ${evidenceRef.id} no longer has a complete source view`)
-          continue
-        }
-        const current = page.facts.map((fact) => ({
-          kind: 'fact',
-          ref: fact.factRef,
-          conceptRef: fact.conceptRef,
-          ...(fact.label === undefined ? {} : { label: fact.label }),
-          ...(fact.validity === undefined ? {} : { validity: fact.validity }),
-          ...(fact.payload === undefined ? {} : { payload: fact.payload }),
-        })).sort((left, right) => left.ref.id.localeCompare(right.ref.id))
-        const previous = factItems.map((item) => item).sort((left, right) => {
-          const leftRef = isRecord(left) && isRecord(left['ref']) && typeof left['ref']['id'] === 'string' ? left['ref']['id'] : ''
-          const rightRef = isRecord(right) && isRecord(right['ref']) && typeof right['ref']['id'] === 'string' ? right['ref']['id'] : ''
-          return leftRef.localeCompare(rightRef)
-        })
-        if (canonicalJson(current) !== canonicalJson(previous)) {
-          blockedReasons.push('data_stale')
-          details.push(`published facts changed after evidence ${evidenceRef.id} was collected`)
-        }
-      } catch {
-        blockedReasons.push('evidence_unverifiable')
-        details.push(`evidence ${evidenceRef.id} could not be revalidated against its source`)
-      }
-    }
-    const unique = [...new Set(blockedReasons)]
-    return { publishable: unique.length === 0, blockedReasons: unique, historyLimited: false, details }
+  check(request: PublicationValidityRequest, ctx: ToolContext): Promise<PublicationValidityReport> {
+    return this.#engine.check(request, ctx)
   }
 }
 
@@ -1694,7 +1710,14 @@ export async function createCoreLocalComposition(options: CoreLocalCompositionOp
         answers: answerStore,
         verifications: workflowStore,
         manifests: workflowStore,
-        validity: new CorePublicationValidity({ evidence: evidenceStore, artifacts: blobStore, facts, scopeRef }),
+        validity: new CorePublicationValidity({
+          evidence: evidenceStore,
+          artifacts: blobStore,
+          facts,
+          scopeRef,
+          tables: new PostgresTableVerificationStore(database),
+          policies: new PostgresTaskPolicyReportStore(database),
+        }),
       }),
       validity: new CoreInputValidity(evidenceStore, scopeRef),
       publicationFence: async (runId: Uuid) => dispatchFences.get(runId),

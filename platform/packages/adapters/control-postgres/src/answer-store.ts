@@ -43,6 +43,13 @@ interface DispatchFenceRow extends QueryResultRow {
   lease_active: boolean
 }
 
+interface EvidencePinRow extends QueryResultRow {
+  kind: string
+  result_digest: string
+  envelope_digest: string
+  revision: string
+}
+
 const ANSWER_COLUMNS =
   'answer_id, run_id, draft_id, verification_id, content_hash, evidence_manifest_hash, scenario_manifest_hash, publication_kind, as_of, limitations, body, semantic_review, (body IS NULL) AS body_missing, published_at'
 
@@ -191,6 +198,36 @@ export class PostgresAnswerStore implements AnswerStorePort {
           throw new AnswerStoreError(
             'RUN_NOT_PUBLISHABLE',
             'the workflow dispatch lease is no longer active for this publication',
+          )
+        }
+      }
+
+      // Publication transaction fence (SPEC v0.3a §EX-7.2): re-read every evidence dependency
+      // the verified draft rests on in the *same* transaction as the answer insert. A
+      // dependency retracted, edited or made unreadable between the validity check and this
+      // commit rejects the answer, so nothing partial is published. `FOR SHARE` blocks a
+      // concurrent retraction from committing underneath the write.
+      for (const pin of input.dependencyPins ?? []) {
+        const dependency = await client.query<EvidencePinRow>(
+          `SELECT kind, result_digest, envelope_digest, revision::text AS revision
+             FROM agent_platform.evidence_records
+            WHERE tenant_id = current_setting('app.tenant_id')::uuid
+              AND space_id = current_setting('app.space_id')::uuid
+              AND evidence_id = $1
+            FOR SHARE`,
+          [pin.evidenceRef.id],
+        )
+        const row = dependency.rows[0]
+        if (
+          row === undefined ||
+          row.kind !== pin.evidenceKind ||
+          row.result_digest !== pin.resultDigest ||
+          row.envelope_digest !== pin.envelopeDigest ||
+          row.revision !== pin.revision
+        ) {
+          throw new AnswerStoreError(
+            'RUN_NOT_PUBLISHABLE',
+            `a verified evidence dependency of run ${input.answer.runId} changed before publication committed`,
           )
         }
       }

@@ -245,6 +245,9 @@ export class AnswerPublicationService implements AnswerPublisherPort {
           ...(grant.workflowDispatchFence === undefined
             ? {}
             : { workflowDispatchFence: grant.workflowDispatchFence }),
+          // Forward the exact dependency versions the validity check re-read so the store can
+          // re-check them inside the same transaction as the answer insert (transaction fence).
+          ...(validity.dependencies === undefined ? {} : { dependencyPins: validity.dependencies }),
         },
         ctx,
       )
