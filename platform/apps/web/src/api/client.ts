@@ -54,6 +54,8 @@ import type {
 } from './energy'
 import { dependencyQuery, optionalTimeQuery } from './provenance'
 import type { DependencyPage, HistoryPage } from './provenance'
+import { isTablePageReadView, isVerifiedResultView } from './results'
+import type { VerifiedResultView, VerifiedTablePageView } from './results'
 import { defaultRunEventStreamFactory, isRunState } from './query'
 import type {
   CancelRunRequest,
@@ -629,6 +631,42 @@ export class WorkbenchClient {
       throw new ApiError(response.status, toApiFailure(response.status, parsed))
     }
     return { kind: 'published', answer: dataOf<PublishedAnswer>(parsed, `/api/v1/runs/${runId}/answer`) }
+  }
+
+  /**
+   * `GET /answers/{answerId}/result`: the verified typed-result projection of one published
+   * answer. It never returns raw compute JSON; a non-verified shape is a malformed response.
+   */
+  getVerifiedResult(answerId: string): Promise<VerifiedResultView> {
+    const path = `/api/v1/answers/${encodeURIComponent(answerId)}/result`
+    return this.#request<unknown>('GET', path).then((data) => {
+      if (!isVerifiedResultView(data)) {
+        throw malformedResponse(path, 'the verified result view was not recognised')
+      }
+      return data
+    })
+  }
+
+  /**
+   * `GET /answers/{answerId}/tables/{tableId}`: one page of one fixed verified table revision.
+   * The cursor binds the answer/table/digest/scope, so a rebuild cannot silently concatenate
+   * two revisions. An unverified table must never be rendered, so a missing receipt is a 4xx.
+   */
+  getAnswerTablePage(
+    answerId: string,
+    tableId: string,
+    cursor?: string,
+  ): Promise<VerifiedTablePageView> {
+    const query = new URLSearchParams()
+    if (cursor !== undefined) query.set('cursor', cursor)
+    const suffix = query.toString().length > 0 ? `?${query.toString()}` : ''
+    const path = `/api/v1/answers/${encodeURIComponent(answerId)}/tables/${encodeURIComponent(tableId)}${suffix}`
+    return this.#request<unknown>('GET', path).then((data) => {
+      if (!isTablePageReadView(data)) {
+        throw malformedResponse(path, 'the verified table page was not recognised')
+      }
+      return data
+    })
   }
 
   /** Subscribe to the run's persisted public events. Unknown event names are dropped. */

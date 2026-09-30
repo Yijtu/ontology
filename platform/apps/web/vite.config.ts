@@ -23,6 +23,13 @@ export function createWebViteConfig(environment: Readonly<Record<string, string 
  */
   return defineConfig({
   root: webRoot,
+  resolve: {
+    // The shared contracts barrel re-exports a node-only digest helper; the browser bundle must
+    // keep it resolvable without externalising `node:crypto`. See src/shims/node-crypto.ts.
+    alias: {
+      'node:crypto': resolve(webRoot, 'src/shims/node-crypto.ts'),
+    },
+  },
   build: {
     outDir: 'dist',
     emptyOutDir: true,
@@ -36,6 +43,7 @@ export function createWebViteConfig(environment: Readonly<Record<string, string 
         definitionWorkbenchHarness: resolve(webRoot, 'definition-workbench-harness.html'),
         projectHarness: resolve(webRoot, 'project-harness.html'),
         packagePublishHarness: resolve(webRoot, 'package-publish-harness.html'),
+        businessResultsHarness: resolve(webRoot, 'business-results-harness.html'),
       },
     },
   },

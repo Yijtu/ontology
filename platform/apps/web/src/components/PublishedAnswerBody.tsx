@@ -18,7 +18,7 @@ export interface PublishedAnswerBodyProps {
 }
 
 interface AnswerBodyShape {
-  readonly schemaVersion: 'answer-draft@1' | 'answer-draft@2'
+  readonly schemaVersion: 'answer-draft@1' | 'answer-draft@2' | 'answer-draft@3'
   readonly blocks: readonly unknown[]
   readonly claims: readonly unknown[]
   readonly assertions: readonly unknown[]
@@ -202,7 +202,7 @@ function isVerifiedAssertion(value: unknown): value is VerifiedAssertion {
 function bodyShape(value: unknown): AnswerBodyShape | undefined {
   if (!isRecord(value)) return undefined
   if (
-    (value['schemaVersion'] !== 'answer-draft@1' && value['schemaVersion'] !== 'answer-draft@2') ||
+    (value['schemaVersion'] !== 'answer-draft@1' && value['schemaVersion'] !== 'answer-draft@2' && value['schemaVersion'] !== 'answer-draft@3') ||
     !Array.isArray(value['blocks']) ||
     !Array.isArray(value['claims']) ||
     !Array.isArray(value['assertions'])
@@ -229,7 +229,7 @@ function answerBlock(value: unknown, schemaVersion: AnswerBodyShape['schemaVersi
     return { kind: 'claim', claimId: value['claimId'] }
   }
   if (
-    schemaVersion === 'answer-draft@2' &&
+    schemaVersion !== 'answer-draft@1' &&
     value['kind'] === 'assertion' &&
     typeof value['assertionId'] === 'string' &&
     exactKeys(value, ['kind', 'assertionId'])
@@ -554,7 +554,7 @@ function safeTechnicalValue(value: unknown): string {
 }
 
 export function PublishedAnswerBody({ answer, resolveLabel, onEvidenceReference }: PublishedAnswerBodyProps) {
-  const body = bodyShape(answer.body)
+  const body = bodyShape(answer.v3Body ?? answer.body)
   const content = body === undefined ? undefined : collectContent(body)
   const isHistoryLimited = answer.publicationKind === 'history_limited'
   const isVerified = answer.publicationKind === 'verified'

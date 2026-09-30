@@ -325,3 +325,29 @@ export type {
   InstanceRecordFilter,
   InstanceRevisionRequest,
 } from './api/instances'
+export {
+  createWorkbenchResultSource,
+  isColumnDescriptor,
+  isDigest as isResultDigest,
+  isResourceRef as isResultResourceRef,
+  isTablePageReadView,
+  isVerifiedResultView,
+  isVersionRef as isResultVersionRef,
+} from './api/results'
+export type {
+  ResultSource,
+  ResultSourceClient,
+  VerifiedResultLoad,
+  VerifiedResultView,
+  VerifiedTablePageView,
+  VerifiedTableSummary,
+} from './api/results'
+export { ResultWorkbenchPanel } from './components/ResultWorkbenchPanel'
+export type { ResultWorkbenchPanelProps, ResultWorkbenchTab } from './components/ResultWorkbenchPanel'
+export { BusinessWorkbenchPanel } from './components/BusinessWorkbenchPanel'
+export type {
+  BusinessUnavailableTask,
+  BusinessViewTask,
+  BusinessWorkbenchPanelProps,
+  ParameterChangePreview,
+} from './components/BusinessWorkbenchPanel'
