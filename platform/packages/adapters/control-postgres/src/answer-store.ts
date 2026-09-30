@@ -135,8 +135,8 @@ function samePublication(left: PublishedAnswer, right: PublishedAnswer): boolean
  * `SET LOCAL`, so RLS applies and a lookup in another tenant/space returns nothing.
  */
 interface HistoryAnswerRow extends AnswerRow {
-  project_id: string
-  project_revision: string
+  project_id: Uuid
+  project_revision: RevisionString
 }
 
 export class PostgresAnswerStore implements AnswerStorePort, ResultHistoryPort {
@@ -361,8 +361,8 @@ export class PostgresAnswerStore implements AnswerStorePort, ResultHistoryPort {
         )
         return result.rows.map((row) => ({
           answer: toAnswer(row),
-          projectId: row.project_id as Uuid,
-          projectRevision: row.project_revision as RevisionString,
+          projectId: row.project_id,
+          projectRevision: row.project_revision,
         }))
       },
       { readOnly: true },
