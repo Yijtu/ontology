@@ -66,3 +66,26 @@ export type {
   ToolSchemaValidator,
   ToolSourceObservation,
 } from './types'
+export {
+  ComputeExecutionError,
+  EXAMPLE_ALGORITHM_REF,
+  EXAMPLE_INPUT_SCHEMA_VERSION,
+  EXAMPLE_OPERATION_LIMITS,
+  EXAMPLE_OPERATION_REF,
+  EXAMPLE_RESULT_MEDIA_TYPE,
+  RegisteredComputeExecutionService,
+  SyntheticActionTrial,
+  computeLogicalKeyDigest,
+  createExampleComputeHandlers,
+  exampleOperationRegistry,
+  exampleRegisteredOperation,
+  isComputeExecutionError,
+  registeredOperationDigest,
+} from './compute'
+export type {
+  ComputeExecutionErrorCode,
+  ComputeExecutionInput,
+  ComputeExecutionResult,
+  RegisteredComputeExecutionDependencies,
+  SyntheticActionTrialDependencies,
+} from './compute'
