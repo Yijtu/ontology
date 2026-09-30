@@ -54,6 +54,7 @@ import {
   StructuredDocumentParser,
 } from '@ontology/adapter-extraction-document'
 import { Bm25DocumentSearchService, PostgresKeywordIndexStore, ProjectDocumentIndexService, createBm25DocumentSearchToolHandler } from '@ontology/adapter-search-bm25'
+import { PiRuntimeAdapter } from '@ontology/adapter-runtime-pi'
 import { TemplateRuntimeAdapter } from '@ontology/adapter-runtime-template'
 import {
   AnswerPublicationService,
@@ -139,6 +140,7 @@ import type {
   RelationNavigationRequest,
   ResolvedCapability,
   ResourceRef,
+  RuntimeAdapter,
   RuntimeCapabilityFactoryPort,
   RuntimeCapabilitySet,
   RuntimeSelectorPort,
@@ -255,6 +257,16 @@ function scenarioComponentRecords(
     ref: componentRef('runtime', 'runtime-template', 'template-runtime@1.0.0'),
     capabilityNames: ['agent_runtime'],
     entrypoint: '@ontology/adapter-runtime-template',
+    now,
+  }))
+  // The real Pi Agent Core runtime, registered alongside the Template executor so a profile
+  // can pin either. It declares the same `agent_runtime` capability; the resolved profile and
+  // the one gateway decide what it may actually do.
+  add(componentRecord({
+    kind: 'runtime',
+    ref: componentRef('runtime', 'runtime-pi', 'pi-runtime@1.0.0'),
+    capabilityNames: ['agent_runtime'],
+    entrypoint: '@ontology/adapter-runtime-pi',
     now,
   }))
   add(componentRecord({
@@ -884,6 +896,11 @@ function componentRegistrationInput(record: ComponentVersionRecord, now: string)
 
 function sameVersionRef(left: VersionRef, right: VersionRef): boolean {
   return left.id === right.id && left.version === right.version && left.digest === right.digest
+}
+
+/** A full-reference key, so a runtime selector cannot match a same-id sibling of another version/digest. */
+function versionRefKey(ref: VersionRef): string {
+  return `${ref.id}@${ref.version}#${ref.digest}`
 }
 
 function profileModelBindingEnabled(
@@ -1650,8 +1667,16 @@ export async function createCoreLocalComposition(options: CoreLocalCompositionOp
     })
     const phase = new RunPhaseDriver({ store: runStore, control })
     const dispatchFences = new Map<Uuid, WorkflowDispatchFence>()
-    const runtimeRecord = componentRecords.find((record) => record.manifest.kind === 'runtime' && record.manifest.id === 'runtime-template')
-    if (runtimeRecord === undefined) throw new Error('Core template runtime component is not registered')
+    // Both real runtimes are assembled here at the normal Core entry: the deterministic
+    // Template executor (fixed/known-step paths) and the dynamic Pi runtime (bounded
+    // "query insufficient → supplement → complete" collection). A run selects exactly one
+    // by the runtime pinned in its resolved profile; the selector never chooses for it, and
+    // both adapters share the same gateway, resolved profile and single budget ledger.
+    const runtimeRecords = componentRecords.filter((record) => record.manifest.kind === 'runtime')
+    const templateRuntimeRecord = runtimeRecords.find((record) => record.manifest.id === 'runtime-template')
+    if (templateRuntimeRecord === undefined) throw new Error('Core template runtime component is not registered')
+    const piRuntimeRecord = runtimeRecords.find((record) => record.manifest.id === 'runtime-pi')
+    if (piRuntimeRecord === undefined) throw new Error('Core Pi runtime component is not registered')
     const planResolver = new CoreTemplatePlanResolver({
       runs,
       profiles: profileResolver,
@@ -1665,7 +1690,27 @@ export async function createCoreLocalComposition(options: CoreLocalCompositionOp
       decisionStateRefProvider,
       isRouteClarificationReceiptApproved: (input, ctx) => decisionStateReferences.isApproved(scopeRef, input, ctx),
     })
-    const runtime = new TemplateRuntimeAdapter({ manifest: runtimeRecord.manifest, plans: planResolver })
+    const templateRuntime = new TemplateRuntimeAdapter({ manifest: templateRuntimeRecord.manifest, plans: planResolver })
+    // The Pi adapter is the same class the conformance suite exercises: it exposes only the
+    // canonical four model tools and every proposal is authorized and executed by the run's
+    // gateway. Its generation model reference matches the registered Core generation
+    // component, so a profile that binds generation drives the real model port; when no
+    // generation model is configured the capability factory still hands it the disabled
+    // port, and the run fails explicitly instead of fabricating an answer.
+    const piRuntime = new PiRuntimeAdapter({
+      manifest: piRuntimeRecord.manifest,
+      toolIds: TOOL_CATALOGUE.map((tool) => tool.toolId),
+      modelRef: {
+        modelId: coreModelRefs.generation?.id ?? 'model-not-configured',
+        version: COMPONENT_VERSION,
+        provider: 'ontology',
+      },
+      generationRole: 'planner',
+    })
+    const runtimeAdapterByRef = new Map<string, RuntimeAdapter>([
+      [versionRefKey(templateRuntimeRecord.manifestRef), templateRuntime],
+      [versionRefKey(piRuntimeRecord.manifestRef), piRuntime],
+    ])
     const controllerDependencies = {
       runs,
       phase,
@@ -1673,10 +1718,11 @@ export async function createCoreLocalComposition(options: CoreLocalCompositionOp
       manifests: workflowStore,
       runtimes: {
         select: async (runtimeRef: VersionRef) => {
-          if (runtimeRef.id !== runtimeRecord.manifestRef.id || runtimeRef.version !== runtimeRecord.manifestRef.version || runtimeRef.digest !== runtimeRecord.manifestRef.digest) {
-            throw new CoreCapabilityError('this local deployment registers only runtime-template@1.0.0')
+          const adapter = runtimeAdapterByRef.get(versionRefKey(runtimeRef))
+          if (adapter === undefined) {
+            throw new CoreCapabilityError(`this local deployment does not register runtime ${runtimeRef.id}@${runtimeRef.version}`)
           }
-          return runtime
+          return adapter
         },
       } satisfies RuntimeSelectorPort,
       capabilities: {
