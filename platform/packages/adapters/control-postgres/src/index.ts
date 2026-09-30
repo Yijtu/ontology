@@ -35,6 +35,8 @@ export { PostgresRuleActionCandidateStore } from './rule-action-candidate-store'
 export { PostgresDefinitionEditingStore } from './definition-editing-store'
 export { PostgresProjectStore } from './project-store'
 export { PostgresProjectReadinessStore } from './project-readiness-store'
+export { PostgresProjectMappingStore } from './project-mapping-store'
+export { PostgresProjectRecordStore } from './project-record-store'
 export { PostgresInstanceReviewStore } from './instance-review-store'
 export {
   PostgresSyntheticExampleSetStore,

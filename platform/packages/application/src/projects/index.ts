@@ -17,3 +17,9 @@ export type {
   RecordProjectReadinessInput,
 } from './project-service'
 export { InMemoryProjectReadinessStore } from './in-memory-readiness-store'
+export { ProjectMappingService } from './project-mapping-service'
+export type {
+  ConfirmMappingResult,
+  ProjectMappingServiceDependencies,
+} from './project-mapping-service'
+export { applyExactFactor, isDecimalString } from './decimal'

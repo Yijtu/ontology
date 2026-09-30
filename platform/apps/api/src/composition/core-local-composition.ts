@@ -25,7 +25,9 @@ import {
   PostgresJobStore,
   PostgresMaterializationStore,
   PostgresProfileStore,
+  PostgresProjectMappingStore,
   PostgresProjectReadinessStore,
+  PostgresProjectRecordStore,
   PostgresProjectStore,
   PostgresPublishedPackAssetStore,
   PostgresRuleActionCandidateStore,
@@ -74,6 +76,7 @@ import {
   OutboxDispatcher,
   PROJECT_CREATED_TOPIC,
   PROJECT_REVISION_APPENDED_TOPIC,
+  ProjectMappingService,
   ProjectService,
   ProfileResolver,
   RestrictedLimitedAnswerComposer,
@@ -1278,6 +1281,8 @@ export async function createCoreLocalComposition(options: CoreLocalCompositionOp
     const publishedPackStore = new PostgresPublishedPackAssetStore(database)
     const projectStore = new PostgresProjectStore(database)
     const projectReadinessStore = new PostgresProjectReadinessStore(database)
+    const projectMappingStore = new PostgresProjectMappingStore(database)
+    const projectRecordStore = new PostgresProjectRecordStore(database)
     const identityStore = new PostgresIdentityDecisionStore(database)
     const publicationStore = new PostgresSemanticPublicationStore(database)
     const definitionStore = new PostgresSemanticDefinitionStore(database)
@@ -1783,6 +1788,23 @@ export async function createCoreLocalComposition(options: CoreLocalCompositionOp
       jobs: jobStore,
       catalogue: packCatalogue,
     })
+    const scopedOriginals: ScopedArtifactReader = {
+      read: (request, ctx) => {
+        const target = request.approvedInputRefs[0]
+        if (target === undefined) throw new Error('the structured request carried no approved input reference')
+        return blobStore.readAuthorized({ scopeRef: { tenantId: ctx.principal.tenantId, spaceId: ctx.allowedResources.spaceId }, blobRef: target }, ctx)
+      },
+    }
+    const projectMappingService = new ProjectMappingService({
+      projects: projectStore,
+      revisions: projectStore,
+      mappings: projectMappingStore,
+      records: projectRecordStore,
+      ingestion: structuredStore,
+      schemaSource,
+      originals: scopedOriginals,
+      parser: new StructuredDocumentParser(),
+    })
     const actionBindingContext = (): ActionCapabilityBindingInput => ({
       registry: operationRegistry(),
       availableCapabilities: ['agent_runtime', 'structured_query', 'document_search', 'industry.semantics'],
@@ -1830,7 +1852,7 @@ export async function createCoreLocalComposition(options: CoreLocalCompositionOp
         definitionEditing: { service: definitionEditingService },
         ruleActionCandidates: { service: ruleActionCandidateService, bindingContext: actionBindingContext },
         instanceReviews: { service: instanceReviewService },
-        projects: { service: projectService },
+        projects: { service: projectService, mappings: projectMappingService },
         syntheticValidation: {
           exampleService: syntheticExampleService,
           validationService: industryValidationService,
