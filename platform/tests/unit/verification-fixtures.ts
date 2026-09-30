@@ -135,10 +135,11 @@ export function buildEvidence(input: {
   readonly observedAt?: string
   readonly validFrom?: string
   readonly validTo?: string
+  readonly kind?: EvidenceEnvelope['kind']
 }): EvidenceEnvelope {
   const body = {
     evidenceId: input.evidenceId ?? EVIDENCE_ID,
-    kind: 'observation' as const,
+    kind: input.kind ?? ('observation' as const),
     scopeRef: SCOPE_A,
     producedBy: { componentRef: { id: 'tool-gateway', version: '1.0.0', digest: sha256DigestOf('gateway') }, runId: RUN_ID },
     observedAt: input.observedAt ?? NOW,

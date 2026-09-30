@@ -97,6 +97,12 @@ const VERIFIED_LIMITATION_CODES = new Set<string>([
   'assertion_mismatch',
   'document_quote_mismatch',
   'unverified_limitation',
+  'rule_judgement_mismatch',
+  'rule_premise_missing',
+  'relation_endpoint_mismatch',
+  'relation_version_mismatch',
+  'row_binding_mismatch',
+  'citation_locator_mismatch',
 ])
 
 function verifiedLimitationCode(value: unknown): value is string {

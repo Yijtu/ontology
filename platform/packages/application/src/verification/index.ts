@@ -11,8 +11,16 @@ export {
   RESTRICTED_TEMPLATE_VERSION,
 } from './templates'
 export { checkClaims, sortFindings } from './hard-checks'
-export { fieldBindingMatches, sourceValidityFinding } from './hard-checks'
+export { fieldBindingMatches, rowBindingFinding, sourceValidityFinding } from './hard-checks'
 export type { HardCheckOutcome, ResolvedEvidence } from './hard-checks'
+export {
+  isFieldBoundAssertionKind,
+  verifyDocumentCitation,
+  verifyRelationEdge,
+  verifyRuleJudgement,
+  sameResourceRef as sameAssertionResourceRef,
+  sameVersionRef as sameAssertionVersionRef,
+} from './typed-checkers'
 export {
   SEMANTIC_SUPPORTED,
   SEMANTIC_UNSUPPORTED,
