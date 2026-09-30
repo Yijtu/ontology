@@ -37,6 +37,7 @@ export {
   PostgresSyntheticExampleSetStore,
   PostgresIndustryValidationReportStore,
 } from './synthetic-validation-store'
+export { PostgresPublishedPackAssetStore } from './pack-publication-store'
 export { ControlPostgresRepository } from './repository'
 export type {
   ControlOperationContext,

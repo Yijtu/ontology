@@ -6,6 +6,8 @@ import type {
   MappingTemplateField,
   PackAsset,
   PackIdentityPolicy,
+  PublishedPackAsset,
+  PublishedPackAssetStore,
   ScopeRef,
   SemanticDefinitionRecord,
   SemanticDefinitionStore,
@@ -27,6 +29,12 @@ export interface IndustryPackExportDependencies {
   readonly catalogue: IndustryPackCatalogue
   /** Published definition versions; the export is rebuilt from these, never from a prototype. */
   readonly definitions: SemanticDefinitionStore
+  /**
+   * V03-015: the persistent published-pack store. When supplied, a dynamically published pack
+   * exports its authorized/redacted source index, pinned action declarations, two-surface
+   * capability state and version diff alongside the declaration (SPEC §6.1).
+   */
+  readonly published?: PublishedPackAssetStore
   readonly now?: () => string
 }
 
@@ -84,10 +92,31 @@ export function identityPolicyOf(
   }
 }
 
+function publishedExtrasOf(
+  asset: PackAsset,
+  published: PublishedPackAsset | undefined,
+): Partial<IndustryPackExportBundle> {
+  const validationRef = published?.validationRef ?? asset.validationRef
+  const syntheticExampleRef = published?.packAsset.syntheticExampleRef ?? asset.syntheticExampleRef
+  return {
+    ...(published === undefined
+      ? {}
+      : {
+          sourceIndex: published.sourceIndex,
+          actionDeclarations: published.capabilities.actions,
+          capabilityStatus: published.capabilities,
+          versionDiff: published.diff,
+        }),
+    ...(validationRef === undefined ? {} : { validationRef }),
+    ...(syntheticExampleRef === undefined ? {} : { syntheticExampleRef }),
+  }
+}
+
 function buildExportBundle(
   asset: PackAsset,
   definitions: SemanticDefinitionRecord | undefined,
   exportedAt: string,
+  published: PublishedPackAsset | undefined,
 ): IndustryPackExportBundle {
   const manifest = asset.manifest
   const maturityLabel = packMaturityLabelOf(manifest.maturity)
@@ -105,6 +134,7 @@ function buildExportBundle(
     standardProvenance: manifest.standardProvenance,
     testSuite: asset.testSuite,
     ...(asset.exampleSet === undefined ? {} : { exampleSet: asset.exampleSet }),
+    ...publishedExtrasOf(asset, published),
   }
   return { ...content, exportedAt, contentDigest: sha256DigestOf(canonicalJson(content)) }
 }
@@ -120,11 +150,13 @@ function buildExportBundle(
 export class IndustryPackExportService {
   readonly #catalogue: IndustryPackCatalogue
   readonly #definitions: SemanticDefinitionStore
+  readonly #published: PublishedPackAssetStore | undefined
   readonly #now: () => string
 
   constructor(dependencies: IndustryPackExportDependencies) {
     this.#catalogue = dependencies.catalogue
     this.#definitions = dependencies.definitions
+    this.#published = dependencies.published
     this.#now = dependencies.now ?? (() => new Date().toISOString())
   }
 
@@ -146,7 +178,11 @@ export class IndustryPackExportService {
     }
 
     const definitions = await this.#loadDefinitions(asset, input.scopeRef, ctx)
-    const bundle = buildExportBundle(asset, definitions, this.#now())
+    const published =
+      this.#published === undefined
+        ? undefined
+        : await this.#published.findPack(input.scopeRef, input.packId, input.version, ctx)
+    const bundle = buildExportBundle(asset, definitions, this.#now(), published)
     const violations = findPackExportViolations(bundle)
     if (violations.length > 0) {
       throw new IndustryPackError(

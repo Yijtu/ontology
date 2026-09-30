@@ -57,5 +57,9 @@ Dependencies: #174, #184, #186
 
 ## 完成记录
 
-- 当前：未开工；验证未运行。GitHub Issue：[#187](https://github.com/Yijtu/ontology/issues/187)；文档提交不代表功能完成。
-- 实现后记录：提交/PR、适用命令结果、满足的验收、未验证/外部条件、迁移配置与兼容影响。
+- 当前：已实现（节点 node-015 / #187）。发布服务 `IndustryAssetPublicationService` 从已校验草稿事务发布不可变包；新增迁移 `066_published_pack_assets.sql`（含 `jobs.kind` 增补 `asset_publication`）；新增持久动态 catalogue／manifest source、导出 sourceIndex/actionDeclarations/capabilityStatus/versionDiff。
+- 验证：`tests/unit/asset-publication.spec.ts`（10）、`tests/integration/pack-publication-postgres.spec.ts`（7，真实 PG）通过；受影响单元 80、集成 20 通过；`pnpm run lint`、`pnpm run boundaries`（8）、`pnpm run typecheck` 通过。
+- 未验证/外部条件：apps/api composition 尚未装配发布路由（见节点 NEW_WORK）；真实模型建模质量不在本卡。不删旧测试。
+- 迁移与兼容：追加 066，未改 001..065；`IndustryPackExportBundle`/`PackAsset` 仅 additive 可选字段，旧消费方兼容。
+
+- 历史：未开工时记录（保留）：GitHub Issue：[#187](https://github.com/Yijtu/ontology/issues/187)；文档提交不代表功能完成。

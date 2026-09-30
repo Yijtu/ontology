@@ -12,6 +12,14 @@ export { findPackExportViolations } from './violations'
 export type { PackExportViolation, PackExportViolationCode } from './violations'
 export { InMemoryIndustryPackCatalogue, summarizePackCatalogEntry } from './catalogue'
 export {
+  StoreBackedIndustryPackCatalogue,
+  StoreBackedIndustryManifestSource,
+} from './dynamic-catalogue'
+export type {
+  StoreBackedIndustryPackCatalogueDependencies,
+  StoreBackedIndustryManifestSourceDependencies,
+} from './dynamic-catalogue'
+export {
   IndustryPackExportService,
   PACK_EXPORT_VERSION,
   identityPolicyOf,

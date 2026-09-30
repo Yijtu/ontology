@@ -1,0 +1,418 @@
+import type { QueryResultRow } from 'pg'
+import {
+  PublishedPackAssetStoreError,
+  assertPublishedPackAssetShape,
+  isToolContext,
+} from '@ontology/contracts'
+import type {
+  CommitApprovedPackInput,
+  CommitApprovedPackResult,
+  NewOutboxMessage,
+  PublishedPackAsset,
+  PublishedPackAssetFilter,
+  PublishedPackAssetStore,
+  ScopeRef,
+  SemanticDefinitionAudit,
+  SemanticDefinitionRecord,
+  ToolContext,
+  VersionRef,
+} from '@ontology/contracts'
+import type { ControlPostgresDatabase } from './database'
+
+interface ScopedQuery {
+  query<Row extends QueryResultRow>(
+    text: string,
+    values?: readonly unknown[],
+  ): Promise<{ rows: Row[]; rowCount: number }>
+}
+
+interface AssetRow extends QueryResultRow {
+  content_digest: string
+  request_digest: string
+  asset: PublishedPackAsset
+}
+
+interface DigestRow extends QueryResultRow {
+  digest: string
+}
+
+const ASSET_COLUMNS = 'content_digest, request_digest, asset'
+
+function toAsset(row: AssetRow): PublishedPackAsset {
+  assertPublishedPackAssetShape(row.asset)
+  return row.asset
+}
+
+/**
+ * Real PostgreSQL implementation of the published-pack store and dynamic catalogue source
+ * (SPEC v0.3a §4.2/§6.1, migration 066).
+ *
+ * `commitApprovedPack` is the single publication transaction: it locks the workspace head, fixes
+ * the definition version and its audit event, writes the immutable pack asset, advances the
+ * workspace publish pointer and enqueues the outbox message. Replaying the same idempotency key
+ * returns the stored asset; the same key with a different request is an `IDEMPOTENCY_CONFLICT`. A
+ * pack id/version or a namespace/version published with a different digest is refused.
+ */
+export class PostgresPublishedPackAssetStore implements PublishedPackAssetStore {
+  readonly #database: ControlPostgresDatabase
+
+  constructor(database: ControlPostgresDatabase) {
+    this.#database = database
+  }
+
+  async commitApprovedPack(
+    scopeRef: ScopeRef,
+    input: CommitApprovedPackInput,
+    ctx: ToolContext,
+  ): Promise<CommitApprovedPackResult> {
+    const pack = input.pack
+    return this.#withScope(scopeRef, ctx, async (query) => {
+      const replay = await this.#byIdempotencyKey(query, input.idempotencyKey)
+      if (replay !== undefined) {
+        if (replay.request_digest !== input.requestDigest) {
+          throw new PublishedPackAssetStoreError(
+            'IDEMPOTENCY_CONFLICT',
+            'the idempotency key was already used with a different publication request',
+          )
+        }
+        return { asset: toAsset(replay), created: false }
+      }
+
+      const locked = await query.query<{ head_revision: string }>(
+        `SELECT head_revision FROM agent_platform.industry_workspaces
+           WHERE tenant_id = current_setting('app.tenant_id')::uuid
+             AND space_id = current_setting('app.space_id')::uuid
+             AND workspace_id = $1::uuid
+           FOR UPDATE`,
+        [pack.workspaceId],
+      )
+      const workspaceRow = locked.rows[0]
+      if (workspaceRow === undefined) {
+        throw new PublishedPackAssetStoreError(
+          'WORKSPACE_NOT_FOUND',
+          `workspace ${pack.workspaceId} is not visible in the requested scope`,
+        )
+      }
+      if (workspaceRow.head_revision !== input.expectedRevision) {
+        throw new PublishedPackAssetStoreError(
+          'VERSION_CONFLICT',
+          `workspace head is ${workspaceRow.head_revision}, not the expected ${input.expectedRevision}`,
+        )
+      }
+
+      const existingPack = await this.#byPackIdVersion(query, pack.packRef.id, pack.packRef.version)
+      if (existingPack !== undefined) {
+        if (existingPack.content_digest === pack.contentDigest) return { asset: toAsset(existingPack), created: false }
+        throw new PublishedPackAssetStoreError(
+          'PACK_VERSION_EXISTS',
+          `pack ${pack.packRef.id}@${pack.packRef.version} is already published with a different digest`,
+        )
+      }
+      const namespacePeer = await this.#byNamespaceVersion(query, pack.namespace, pack.packRef.version)
+      if (namespacePeer !== undefined) {
+        if (namespacePeer.content_digest === pack.contentDigest) return { asset: toAsset(namespacePeer), created: false }
+        throw new PublishedPackAssetStoreError(
+          'NAMESPACE_CONFLICT',
+          `namespace ${pack.namespace} already publishes version ${pack.packRef.version} with a different digest`,
+        )
+      }
+
+      const revision = (BigInt(workspaceRow.head_revision) + 1n).toString()
+      await this.#insertDefinition(query, input.definition)
+      await this.#insertDefinitionEvent(query, input.definition, input.definitionAudit)
+      const asset: PublishedPackAsset = { ...pack, revision, publishedAt: input.recordedAt }
+      assertPublishedPackAssetShape(asset)
+      await this.#insertAsset(query, asset, input)
+      await query.query(
+        `UPDATE agent_platform.industry_workspaces
+            SET head_revision = $2::bigint, latest_pack_ref = $3::jsonb, state = 'published', updated_at = $4::timestamptz
+          WHERE tenant_id = current_setting('app.tenant_id')::uuid
+            AND space_id = current_setting('app.space_id')::uuid
+            AND workspace_id = $1::uuid`,
+        [pack.workspaceId, revision, JSON.stringify(asset.packRef), input.recordedAt],
+      )
+      await this.#insertJob(query, asset, input)
+      await this.#insertOutbox(query, input.outboxJobId, input.outbox)
+      return { asset, created: true }
+    })
+  }
+
+  async findPack(
+    scopeRef: ScopeRef,
+    packId: string,
+    version: string,
+    ctx: ToolContext,
+  ): Promise<PublishedPackAsset | undefined> {
+    return this.#withScope(scopeRef, ctx, async (query) => {
+      const row = await this.#byPackIdVersion(query, packId, version)
+      return row === undefined ? undefined : toAsset(row)
+    })
+  }
+
+  async findByRef(scopeRef: ScopeRef, ref: VersionRef, ctx: ToolContext): Promise<PublishedPackAsset | undefined> {
+    return this.#withScope(scopeRef, ctx, async (query) => {
+      const result = await query.query<AssetRow>(
+        `SELECT ${ASSET_COLUMNS} FROM agent_platform.published_pack_assets
+           WHERE tenant_id = current_setting('app.tenant_id')::uuid
+             AND space_id = current_setting('app.space_id')::uuid
+             AND pack_id = $1 AND version = $2 AND content_digest = $3`,
+        [ref.id, ref.version, ref.digest],
+      )
+      const row = result.rows[0]
+      return row === undefined ? undefined : toAsset(row)
+    })
+  }
+
+  async listPacks(
+    scopeRef: ScopeRef,
+    filter: PublishedPackAssetFilter,
+    ctx: ToolContext,
+  ): Promise<PublishedPackAsset[]> {
+    const limit = normalizeLimit(filter.limit)
+    return this.#withScope(scopeRef, ctx, async (query) => {
+      const result = await query.query<AssetRow>(
+        `SELECT ${ASSET_COLUMNS} FROM agent_platform.published_pack_assets
+           WHERE tenant_id = current_setting('app.tenant_id')::uuid
+             AND space_id = current_setting('app.space_id')::uuid
+             AND ($1::text IS NULL OR namespace = $1)
+           ORDER BY published_at, pack_id, version
+           LIMIT $2`,
+        [filter.namespace ?? null, limit],
+      )
+      return result.rows.map(toAsset)
+    })
+  }
+
+  async findByIdempotencyKey(
+    scopeRef: ScopeRef,
+    key: string,
+    ctx: ToolContext,
+  ): Promise<PublishedPackAsset | undefined> {
+    return this.#withScope(scopeRef, ctx, async (query) => {
+      const row = await this.#byIdempotencyKey(query, key)
+      return row === undefined ? undefined : toAsset(row)
+    })
+  }
+
+  async #insertDefinition(query: ScopedQuery, definition: SemanticDefinitionRecord): Promise<void> {
+    const inserted = await query.query(
+      `INSERT INTO agent_platform.semantic_definition_versions
+         (tenant_id, space_id, namespace, definition_id, version, digest, layer, definition, published_at)
+       VALUES (
+         current_setting('app.tenant_id')::uuid,
+         current_setting('app.space_id')::uuid,
+         $1, $2, $3, $4, $5, $6::jsonb, $7::timestamptz)
+       ON CONFLICT DO NOTHING
+       RETURNING digest`,
+      [
+        definition.namespace,
+        definition.ref.id,
+        definition.ref.version,
+        definition.ref.digest,
+        definition.layer,
+        JSON.stringify(definition),
+        definition.publishedAt,
+      ],
+    )
+    if (inserted.rowCount > 0) return
+    const existing = await query.query<DigestRow>(
+      `SELECT digest FROM agent_platform.semantic_definition_versions
+         WHERE tenant_id = current_setting('app.tenant_id')::uuid
+           AND space_id = current_setting('app.space_id')::uuid
+           AND namespace = $1 AND definition_id = $2 AND version = $3`,
+      [definition.namespace, definition.ref.id, definition.ref.version],
+    )
+    if (existing.rows[0]?.digest !== definition.ref.digest) {
+      throw new PublishedPackAssetStoreError(
+        'DEFINITION_VERSION_EXISTS',
+        `definition ${definition.ref.id}@${definition.ref.version} is already published with a different digest`,
+      )
+    }
+  }
+
+  async #insertDefinitionEvent(
+    query: ScopedQuery,
+    definition: SemanticDefinitionRecord,
+    audit: SemanticDefinitionAudit,
+  ): Promise<void> {
+    await query.query(
+      `INSERT INTO agent_platform.semantic_definition_events
+         (tenant_id, space_id, namespace, definition_id, version, seq, digest, payload_digest,
+          idempotency_key, actor, occurred_at)
+       VALUES (
+         current_setting('app.tenant_id')::uuid,
+         current_setting('app.space_id')::uuid,
+         $1, $2, $3,
+         (SELECT coalesce(max(seq), 0) + 1
+            FROM agent_platform.semantic_definition_events
+           WHERE tenant_id = current_setting('app.tenant_id')::uuid
+             AND space_id = current_setting('app.space_id')::uuid
+             AND namespace = $1 AND definition_id = $2 AND version = $3),
+         $4, $5, $6, $7, $8::timestamptz)
+       ON CONFLICT DO NOTHING`,
+      [
+        definition.namespace,
+        definition.ref.id,
+        definition.ref.version,
+        audit.digest,
+        audit.payloadDigest,
+        audit.idempotencyKey,
+        audit.actor,
+        audit.occurredAt,
+      ],
+    )
+  }
+
+  async #insertAsset(
+    query: ScopedQuery,
+    asset: PublishedPackAsset,
+    input: CommitApprovedPackInput,
+  ): Promise<void> {
+    await query.query(
+      `INSERT INTO agent_platform.published_pack_assets
+         (tenant_id, space_id, pack_id, version, namespace, maturity, definition_id, definition_version,
+          definition_digest, content_digest, revision, origin_workspace_id, asset, idempotency_key,
+          request_digest, actor, trace_id, published_at)
+       VALUES (
+         current_setting('app.tenant_id')::uuid,
+         current_setting('app.space_id')::uuid,
+         $1, $2, $3, $4, $5, $6, $7, $8, $9::bigint, $10::uuid, $11::jsonb, $12, $13, $14,
+         current_setting('app.trace_id', true), $15::timestamptz)
+       ON CONFLICT DO NOTHING`,
+      [
+        asset.packRef.id,
+        asset.packRef.version,
+        asset.namespace,
+        asset.maturity,
+        asset.definitionRef.id,
+        asset.definitionRef.version,
+        asset.definitionRef.digest,
+        asset.contentDigest,
+        asset.revision,
+        asset.workspaceId,
+        JSON.stringify(asset),
+        input.idempotencyKey,
+        input.requestDigest,
+        input.actor,
+        input.recordedAt,
+      ],
+    )
+  }
+
+  async #insertJob(query: ScopedQuery, asset: PublishedPackAsset, input: CommitApprovedPackInput): Promise<void> {
+    await query.query(
+      `INSERT INTO agent_platform.jobs
+         (tenant_id, space_id, job_id, kind, source_ref, dataset_ref, pipeline_version, stage,
+          idempotency_key, input_digest, revision, attempt_count, abandoned_attempt_count, counts,
+          next_attempt_at, created_at, created_by, updated_at)
+       VALUES (
+         current_setting('app.tenant_id')::uuid,
+         current_setting('app.space_id')::uuid,
+         $1::uuid, 'asset_publication', $2, $2, 'pack-publication@1.0.0', 'published',
+         $3, $4, 1, 0, 0, '{}'::jsonb, $5::timestamptz, $5::timestamptz, $6, $5::timestamptz)
+       ON CONFLICT DO NOTHING`,
+      [
+        input.outboxJobId,
+        asset.packRef.id,
+        input.outbox.idempotencyKey,
+        asset.contentDigest,
+        input.recordedAt,
+        input.actor,
+      ],
+    )
+  }
+
+  async #insertOutbox(query: ScopedQuery, jobId: string, outbox: NewOutboxMessage): Promise<void> {
+    await query.query(
+      `INSERT INTO agent_platform.job_outbox
+         (tenant_id, space_id, outbox_id, job_id, topic, payload, idempotency_key, state, attempts,
+          available_at, created_at)
+       VALUES (
+         current_setting('app.tenant_id')::uuid,
+         current_setting('app.space_id')::uuid,
+         $1::uuid, $2::uuid, $3, $4::jsonb, $5, 'pending', 0, $6::timestamptz, $7::timestamptz)
+       ON CONFLICT (tenant_id, space_id, idempotency_key) DO NOTHING`,
+      [
+        outbox.outboxId,
+        jobId,
+        outbox.topic,
+        JSON.stringify(outbox.payload),
+        outbox.idempotencyKey,
+        outbox.availableAt,
+        outbox.createdAt,
+      ],
+    )
+  }
+
+  async #byIdempotencyKey(query: ScopedQuery, key: string): Promise<AssetRow | undefined> {
+    const result = await query.query<AssetRow>(
+      `SELECT ${ASSET_COLUMNS} FROM agent_platform.published_pack_assets
+         WHERE tenant_id = current_setting('app.tenant_id')::uuid
+           AND space_id = current_setting('app.space_id')::uuid
+           AND idempotency_key = $1`,
+      [key],
+    )
+    return result.rows[0]
+  }
+
+  async #byPackIdVersion(query: ScopedQuery, packId: string, version: string): Promise<AssetRow | undefined> {
+    const result = await query.query<AssetRow>(
+      `SELECT ${ASSET_COLUMNS} FROM agent_platform.published_pack_assets
+         WHERE tenant_id = current_setting('app.tenant_id')::uuid
+           AND space_id = current_setting('app.space_id')::uuid
+           AND pack_id = $1 AND version = $2`,
+      [packId, version],
+    )
+    return result.rows[0]
+  }
+
+  async #byNamespaceVersion(query: ScopedQuery, namespace: string, version: string): Promise<AssetRow | undefined> {
+    const result = await query.query<AssetRow>(
+      `SELECT ${ASSET_COLUMNS} FROM agent_platform.published_pack_assets
+         WHERE tenant_id = current_setting('app.tenant_id')::uuid
+           AND space_id = current_setting('app.space_id')::uuid
+           AND namespace = $1 AND version = $2`,
+      [namespace, version],
+    )
+    return result.rows[0]
+  }
+
+  async #withScope<T>(
+    scopeRef: ScopeRef,
+    ctx: ToolContext,
+    run: (query: ScopedQuery) => Promise<T>,
+  ): Promise<T> {
+    if (!isToolContext(ctx)) {
+      throw new PublishedPackAssetStoreError('SCOPE_MISMATCH', 'a host-minted trusted tool context is required')
+    }
+    if (ctx.allowedResources.tenantId !== ctx.principal.tenantId) {
+      throw new PublishedPackAssetStoreError('SCOPE_MISMATCH', 'trusted context carries inconsistent tenant scope')
+    }
+    if (scopeRef.tenantId !== ctx.principal.tenantId || scopeRef.spaceId !== ctx.allowedResources.spaceId) {
+      throw new PublishedPackAssetStoreError(
+        'SCOPE_MISMATCH',
+        'request scope does not match the trusted principal scope',
+      )
+    }
+    return this.#database.withIdentityScope(
+      { tenantId: scopeRef.tenantId, spaceId: scopeRef.spaceId },
+      async (client) => {
+        await client.query("SELECT set_config('app.trace_id', $1, true)", [ctx.traceId])
+        return run({
+          query: async <Row extends QueryResultRow>(text: string, values?: readonly unknown[]) => {
+            const result = await client.query<Row>(text, values === undefined ? undefined : [...values])
+            return { rows: result.rows, rowCount: result.rowCount ?? 0 }
+          },
+        })
+      },
+    )
+  }
+}
+
+function normalizeLimit(limit: number | undefined): number {
+  if (limit === undefined) return 100
+  if (!Number.isInteger(limit) || limit <= 0) {
+    throw new PublishedPackAssetStoreError('INVALID_ASSET', 'list limit must be a positive integer')
+  }
+  return Math.min(limit, 250)
+}
