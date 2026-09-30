@@ -13,6 +13,7 @@ import type {
 } from './generated/contracts'
 import type { ToolContext } from './trusted'
 import { isRecord, isResourceRef, isSha256Digest, isUuid, isVersionRef } from './asset-workspace'
+import { assertTaskValidationPolicyBindingShape } from './task-validation'
 
 /**
  * Versioned task-execution ports and runtime guards (SPEC v0.3a execution-evidence §EX-2,
@@ -97,8 +98,13 @@ export function assertPublishedTaskBindingShape(value: unknown): asserts value i
   if (value['registeredOperationDigest'] !== undefined && !isSha256Digest(value['registeredOperationDigest'])) {
     throw invalidTask('registeredOperationDigest is malformed')
   }
-  if (value['validationPolicies'] !== undefined && !Array.isArray(value['validationPolicies'])) {
-    throw invalidTask('validationPolicies must be an array')
+  if (value['validationPolicies'] !== undefined) {
+    if (!Array.isArray(value['validationPolicies'])) {
+      throw invalidTask('validationPolicies must be an array')
+    }
+    for (const policy of value['validationPolicies']) {
+      assertTaskValidationPolicyBindingShape(policy)
+    }
   }
   if (value['fixedPlanRef'] !== undefined && !isResourceRef(value['fixedPlanRef'])) {
     throw invalidTask('fixedPlanRef is malformed')

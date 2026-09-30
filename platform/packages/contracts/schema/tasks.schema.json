@@ -47,6 +47,194 @@
         }
       }
     },
+    "TaskValidationPolicyReportStatus": {
+      "title": "TaskValidationPolicyReportStatus",
+      "description": "The only admissible policy verdicts. `pass` is the sole value that lets a required policy satisfy a formal result; `fail`, `unknown` and `incomplete` stay blocking and are never coerced to success.",
+      "type": "string",
+      "enum": ["pass", "fail", "unknown", "incomplete"]
+    },
+    "TaskPolicyViolation": {
+      "title": "TaskPolicyViolation",
+      "description": "One located policy violation (SPEC v0.3a §EX-6.1). It references a row/column/pointer plus expected/actual strings computed by the policy handler, never free model prose.",
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["code"],
+      "properties": {
+        "code": {
+          "$ref": "./common.schema.json#/$defs/NonEmptyString"
+        },
+        "rowKey": {
+          "type": "string"
+        },
+        "columnRef": {
+          "type": "string"
+        },
+        "pointer": {
+          "type": "string"
+        },
+        "expected": {
+          "type": "string"
+        },
+        "actual": {
+          "type": "string"
+        }
+      }
+    },
+    "TaskValidationPolicyReport": {
+      "title": "TaskValidationPolicyReport",
+      "description": "Frozen task-policy-report@1 (SPEC v0.3a §EX-6.1). A registered validation policy reports on exactly one stage; a result report points at the one output artifact and typed result manifest it validated. The report carries no finalization-receipt field, so a receipt can reference the report without the report referencing the receipt (no digest cycle).",
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "schemaVersion",
+        "policyRef",
+        "registryDigest",
+        "reportSchemaRef",
+        "stage",
+        "executionBindingRef",
+        "inputSnapshotRef",
+        "inputSnapshotDigest",
+        "parametersRef",
+        "parametersDigest",
+        "status",
+        "coverage",
+        "violations",
+        "dependencyEvidenceRefs"
+      ],
+      "properties": {
+        "schemaVersion": {
+          "const": "task-policy-report@1"
+        },
+        "policyRef": {
+          "$ref": "./common.schema.json#/$defs/VersionRef"
+        },
+        "registryDigest": {
+          "$ref": "./common.schema.json#/$defs/Sha256Digest"
+        },
+        "reportSchemaRef": {
+          "$ref": "./common.schema.json#/$defs/VersionRef"
+        },
+        "stage": {
+          "$ref": "#/$defs/TaskValidationPolicyStage"
+        },
+        "executionBindingRef": {
+          "$ref": "./common.schema.json#/$defs/ResourceRef"
+        },
+        "inputSnapshotRef": {
+          "$ref": "./common.schema.json#/$defs/ResourceRef"
+        },
+        "inputSnapshotDigest": {
+          "$ref": "./common.schema.json#/$defs/Sha256Digest"
+        },
+        "parametersRef": {
+          "$ref": "./common.schema.json#/$defs/ResourceRef"
+        },
+        "parametersDigest": {
+          "$ref": "./common.schema.json#/$defs/Sha256Digest"
+        },
+        "outputArtifactRef": {
+          "$ref": "./common.schema.json#/$defs/ResourceRef"
+        },
+        "outputDigest": {
+          "$ref": "./common.schema.json#/$defs/Sha256Digest"
+        },
+        "typedResultManifestRef": {
+          "$ref": "./common.schema.json#/$defs/ResourceRef"
+        },
+        "status": {
+          "$ref": "#/$defs/TaskValidationPolicyReportStatus"
+        },
+        "coverage": {
+          "$ref": "./tools.schema.json#/$defs/ToolCoverage"
+        },
+        "violations": {
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/TaskPolicyViolation"
+          }
+        },
+        "dependencyEvidenceRefs": {
+          "type": "array",
+          "items": {
+            "$ref": "./common.schema.json#/$defs/ResourceRef"
+          }
+        }
+      }
+    },
+    "TaskFinalizationReceipt": {
+      "title": "TaskFinalizationReceipt",
+      "description": "Frozen task-finalization-receipt@1 (SPEC v0.3a §EX-6.1). The independent association of the required policy bindings, the archived policy reports and the exact result manifest/digests. The receipt references the reports and the result; the result manifest and reports never carry a receipt ref, so the artifact graph stays acyclic.",
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "schemaVersion",
+        "executionBindingRef",
+        "taskBindingRef",
+        "inputSnapshotRef",
+        "inputSnapshotDigest",
+        "parametersRef",
+        "parametersDigest",
+        "outputArtifactRefs",
+        "outputDigests",
+        "typedResultManifestRef",
+        "typedResultManifestDigest",
+        "requiredPolicyBindings",
+        "policyReportRefs"
+      ],
+      "properties": {
+        "schemaVersion": {
+          "const": "task-finalization-receipt@1"
+        },
+        "executionBindingRef": {
+          "$ref": "./common.schema.json#/$defs/ResourceRef"
+        },
+        "taskBindingRef": {
+          "$ref": "./common.schema.json#/$defs/VersionRef"
+        },
+        "inputSnapshotRef": {
+          "$ref": "./common.schema.json#/$defs/ResourceRef"
+        },
+        "inputSnapshotDigest": {
+          "$ref": "./common.schema.json#/$defs/Sha256Digest"
+        },
+        "parametersRef": {
+          "$ref": "./common.schema.json#/$defs/ResourceRef"
+        },
+        "parametersDigest": {
+          "$ref": "./common.schema.json#/$defs/Sha256Digest"
+        },
+        "outputArtifactRefs": {
+          "type": "array",
+          "items": {
+            "$ref": "./common.schema.json#/$defs/ResourceRef"
+          }
+        },
+        "outputDigests": {
+          "type": "array",
+          "items": {
+            "$ref": "./common.schema.json#/$defs/Sha256Digest"
+          }
+        },
+        "typedResultManifestRef": {
+          "$ref": "./common.schema.json#/$defs/ResourceRef"
+        },
+        "typedResultManifestDigest": {
+          "$ref": "./common.schema.json#/$defs/Sha256Digest"
+        },
+        "requiredPolicyBindings": {
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/TaskValidationPolicyBinding"
+          }
+        },
+        "policyReportRefs": {
+          "type": "array",
+          "items": {
+            "$ref": "./common.schema.json#/$defs/ResourceRef"
+          }
+        }
+      }
+    },
     "PublishedTaskBindingIdentity": {
       "title": "PublishedTaskBindingIdentity",
       "description": "The id/version identity of a task binding. It is used inside PublishedTaskBindingBody, which excludes the full VersionRef (and therefore its digest) so the body digest can be computed without a self-reference.",
