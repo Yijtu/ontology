@@ -1,9 +1,13 @@
 import type {
+  DocumentSpan,
   EvidenceDependencyEdge,
   EvidenceRecord,
   ResourceRef,
   RevisionString,
   ScopeRef,
+  Semver,
+  Sha256Digest,
+  SpanPrecision,
   ToolContext,
   Uuid,
   VersionRef,
@@ -11,6 +15,36 @@ import type {
 import type { PublishedSemanticReadView } from '../materialization'
 import type { RuleEvaluator } from '../rules'
 import { sameUtcInstant } from './instant'
+
+/**
+ * Whether one support axis of a rule derivation was fully resolved. Fact premises and the
+ * reviewed specification text are reported separately: a complete fact support graph never
+ * implies the original policy text was located, and a missing policy span never silently
+ * degrades the fact-premise graph into a false "no support" answer.
+ */
+export interface RuleSupportAxisCoverage {
+  readonly complete: boolean
+  readonly reason?: string
+}
+
+/**
+ * One resolved specification (policy) source span of a published rule. It carries the exact
+ * parse/chunk identity, locator, span kind, precision and quote digest of the AST provenance
+ * span plus the real immutable document refs and the archived `document_span` evidence that the
+ * producer verified against them.
+ */
+export interface PublishedRulePolicySpan {
+  readonly parseId: Uuid
+  readonly chunkId: Uuid
+  readonly locator: DocumentSpan['locator']
+  readonly spanKind: DocumentSpan['spanKind']
+  readonly precision: SpanPrecision
+  readonly quoteDigest: Sha256Digest
+  readonly documentRef: ResourceRef
+  readonly documentVersionRef: ResourceRef
+  readonly parserVersion: Semver
+  readonly evidenceRef: ResourceRef
+}
 
 /**
  * One premise group from an immutable, instance-qualified rule support record.
@@ -52,8 +86,16 @@ export interface PublishedRuleSupportInstance {
     readonly state: 'applicable' | 'not_applicable' | 'unknown' | 'conflict'
     readonly positiveSupport: boolean
   }
+  /** Fact-premise completeness. Specification text has its own coverage below. */
   readonly complete: boolean
   readonly premiseGroups: readonly PublishedRuleSupportGroup[]
+  /** Converted, verified specification spans of this rule instance; absent on older readers. */
+  readonly policySpans?: readonly PublishedRulePolicySpan[]
+  /** Per-axis coverage: fact premises and the reviewed specification text are independent. */
+  readonly coverage?: {
+    readonly facts: RuleSupportAxisCoverage
+    readonly policy: RuleSupportAxisCoverage
+  }
 }
 
 export type PublishedRuleSupportResolution =
@@ -63,6 +105,9 @@ export type PublishedRuleSupportResolution =
       readonly objectId: string
       readonly subjectEntityId: string
       readonly premiseGroups: readonly PublishedRuleSupportGroup[]
+      /** Specification-text coverage, separate from the fact-premise resolution above. */
+      readonly policy: RuleSupportAxisCoverage
+      readonly policySpans: readonly PublishedRulePolicySpan[]
     }
   | {
       readonly state: 'ambiguous' | 'unavailable' | 'incomplete' | 'not_applicable' | 'unknown' | 'conflict'
@@ -270,6 +315,11 @@ export class SupportEvidenceDependencySource {
         }
       }
     }
+    const policySpans = instance.policySpans ?? []
+    const policy = instance.coverage?.policy ?? {
+      complete: false,
+      reason: 'the support reader did not report specification-text coverage',
+    }
     return {
       edges,
       resolution: {
@@ -278,6 +328,8 @@ export class SupportEvidenceDependencySource {
         objectId: instance.objectId,
         subjectEntityId: instance.subjectEntityId,
         premiseGroups: instance.premiseGroups,
+        policy,
+        policySpans,
       },
     }
   }

@@ -1,6 +1,7 @@
 import type {
   ConsistencyLevel,
   DataMode,
+  DocumentSpan,
   EvidenceDependencyDirection,
   EvidenceDependencyRelation,
   EvidenceKind,
@@ -11,6 +12,7 @@ import type {
   Rfc3339UtcTimestamp,
   SchemaVersion,
   ScopeRef,
+  Semver,
   Sha256Digest,
   SourceRef,
   SourceWatermark,
@@ -19,6 +21,7 @@ import type {
   VersionRef,
 } from './generated/contracts'
 import type { PublishedStatementStatus } from './semantic-publication'
+import type { SpanPrecision } from './document-parse'
 
 /**
  * On-demand provenance, history and controlled-detail read contracts (SPEC C3.1/C6, D3/D5,
@@ -93,11 +96,42 @@ export type EvidenceDependencySupportState =
   | 'unavailable'
   | 'incomplete'
 
+/**
+ * Whether one support axis of a rule derivation was fully resolved. Fact premises and the
+ * reviewed specification text are reported on separate axes: a complete fact graph never
+ * implies the original policy text was located.
+ */
+export interface ProvenanceSupportAxisCoverage {
+  readonly complete: boolean
+  readonly reason?: string
+}
+
+/**
+ * One resolved specification (policy) source span of a rule's reviewed text. It carries the
+ * exact parse/chunk identity, locator, span kind, precision and quote digest plus the real
+ * immutable document refs and the archived `document_span` evidence that proves them.
+ */
+export interface ProvenanceSpecificationSpanView {
+  readonly parseId: Uuid
+  readonly chunkId: Uuid
+  readonly locator: DocumentSpan['locator']
+  readonly spanKind: DocumentSpan['spanKind']
+  readonly precision: SpanPrecision
+  readonly quoteDigest: Sha256Digest
+  readonly documentRef: ResourceRef
+  readonly documentVersionRef: ResourceRef
+  readonly parserVersion: Semver
+  readonly evidenceRef: ResourceRef
+}
+
 /** Source-side result. `complete` is optional for structural compatibility with older readers. */
 export interface EvidenceDependencySupportReadStatus {
   readonly state: EvidenceDependencySupportState
   readonly complete?: boolean
   readonly reason?: string
+  /** Specification-text coverage, independent of the fact-premise resolution. */
+  readonly policy?: ProvenanceSupportAxisCoverage
+  readonly policySpans?: readonly ProvenanceSpecificationSpanView[]
 }
 
 /** Detailed dependency result optionally supplied by a capable dependency source. */
@@ -154,6 +188,13 @@ export interface ProvenanceEvidenceView {
   readonly ruleRefs: readonly VersionRef[]
   /** Whether rule-support edges were proven; independent of evidence/artifact `outcome`. */
   readonly supportResolution?: ProvenanceSupportResolution
+  /** Fact-premise axis coverage; separate from the reviewed specification text below. */
+  readonly factSupport?: ProvenanceSupportAxisCoverage
+  /** Reviewed specification-text coverage and the located spans, kept apart from fact support. */
+  readonly specification?: {
+    readonly coverage: ProvenanceSupportAxisCoverage
+    readonly spans: readonly ProvenanceSpecificationSpanView[]
+  }
   /** The AND premise groups of the real support DAG, resolved to supporting evidence ids. */
   readonly premiseGroups: readonly ProvenancePremiseGroupView[]
   readonly sources: readonly ProvenanceSourceView[]

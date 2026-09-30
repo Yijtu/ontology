@@ -6,15 +6,26 @@ import type {
   ProjectionSlice,
   ResourceRef,
   RuleComputationArtifact,
+  RuleComputationFactRef,
+  RuleProvenanceSpan,
   ScopeRef,
+  TextCandidateSourceSpan,
   ToolContext,
   VersionRef,
 } from '@ontology/contracts'
 import type {
+  PublishedRulePolicySpan,
   PublishedRuleSupportGroup,
   PublishedRuleSupportInstance,
   PublishedRuleSupportReader,
+  RuleSupportAxisCoverage,
 } from './support-dependency-source'
+import type {
+  RuleDerivationSourceEvidenceMapping,
+  RulePolicySourceEvidenceMapping,
+  RulePolicySpanArchiveBinding,
+  RuleSourceSpanArchiveBinding,
+} from './support-payload'
 import { sha256DigestOf } from '../definitions/canonical'
 import { compareUtcInstants, sameUtcInstant } from './instant'
 
@@ -22,6 +33,8 @@ const MAX_SUPPORT_SLICES = 10_000
 const MAX_SUPPORT_EVIDENCE_REFS = 256
 const SUPPORT_EVIDENCE_READ_CONCURRENCY = 4
 const MAX_SUPPORT_PAYLOAD_BYTES = 1_048_576
+const MAX_SOURCE_BINDING_BYTES = 64 * 1024
+const MAX_ARCHIVED_SOURCE_SPAN_BYTES = 128 * 1024
 
 /** Minimal authorized byte-read capability for an immutable payload pointer. */
 export interface RuleSupportPayloadReader {
@@ -81,18 +94,45 @@ function isResourceRef(value: unknown): value is ResourceRef {
   ].includes(String(value['kind']))
 }
 
+function isLocator(value: unknown): value is TextCandidateSourceSpan['locator'] {
+  if (!isRecord(value) || !['page', 'offset', 'approximate_locator'].includes(String(value['kind']))) return false
+  if (value['page'] !== undefined && (!Number.isSafeInteger(value['page']) || Number(value['page']) < 1)) return false
+  if (value['startOffset'] !== undefined && (!Number.isSafeInteger(value['startOffset']) || Number(value['startOffset']) < 0)) return false
+  if (value['endOffset'] !== undefined && (!Number.isSafeInteger(value['endOffset']) || Number(value['endOffset']) < 0)) return false
+  return value['normalizationMapRef'] === undefined || isString(value['normalizationMapRef'])
+}
+
+function isTextCandidateSourceSpan(value: unknown): value is TextCandidateSourceSpan {
+  if (!isRecord(value) || !isString(value['parseId']) || !isString(value['chunkId']) ||
+      !isString(value['quoteDigest']) || !isString(value['textDigest']) ||
+      (value['kind'] !== undefined && value['kind'] !== 'text') ||
+      (value['precision'] !== 'exact' && value['precision'] !== 'approximate') ||
+      !['verbatim', 'normalized', 'approximate'].includes(String(value['spanKind'])) ||
+      !isLocator(value['locator'])) return false
+  return true
+}
+
+function isRuleProvenanceSpan(value: unknown): value is RuleProvenanceSpan {
+  if (!isRecord(value) || !isString(value['parseId']) || !isString(value['chunkId']) ||
+      !isString(value['quoteDigest']) ||
+      (value['precision'] !== 'exact' && value['precision'] !== 'approximate') ||
+      !['verbatim', 'normalized', 'approximate'].includes(String(value['spanKind'])) ||
+      !isLocator(value['locator'])) return false
+  return true
+}
+
 function isConditionState(value: unknown): value is 'true' | 'false' | 'unknown' | 'conflict' {
   return value === 'true' || value === 'false' || value === 'unknown' || value === 'conflict'
 }
 
-function isRuleComputationArtifact(value: unknown): value is RuleComputationArtifact {
+export function isRuleComputationArtifact(value: unknown): value is RuleComputationArtifact {
   if (!isRecord(value) || value['schemaVersion'] !== 'rule-computation-artifact@1') return false
   if (!isScopeRef(value['scopeRef']) || !isVersionRef(value['definitionRef']) || !isVersionRef(value['ruleRef'])) return false
   if (!isString(value['ruleId']) || !isString(value['ruleVersionId']) || !isString(value['publishedRevision'])) return false
   if (!isString(value['instanceKey']) || !isString(value['objectId']) || !isString(value['subjectEntityId']) || !isString(value['predicate'])) return false
   if (!isString(value['validAt']) || !isString(value['asOfRecordedSeq'])) return false
   if (typeof value['complete'] !== 'boolean' || !Array.isArray(value['sourceStatementIds']) || !Array.isArray(value['sourceSpans'])) return false
-  if (!value['sourceStatementIds'].every(isString) || !Array.isArray(value['factRefs'])) return false
+  if (!value['sourceStatementIds'].every(isString) || !value['sourceSpans'].every(isRuleProvenanceSpan) || !Array.isArray(value['factRefs'])) return false
   if (!isRecord(value['applicability'])) return false
   const applicability = value['applicability']
   if (
@@ -129,10 +169,46 @@ function sameResourceRef(left: ResourceRef, right: ResourceRef): boolean {
   return left.id === right.id && left.version === right.version && left.digest === right.digest && left.kind === right.kind
 }
 
+function sourceMappingKey(groupId: string, assertionId: string, sourceRef: ResourceRef): string {
+  return JSON.stringify([groupId, assertionId, sourceRef.id, sourceRef.version, sourceRef.digest, sourceRef.kind])
+}
+
+function policySpanKey(span: Pick<RuleProvenanceSpan, 'parseId' | 'chunkId' | 'quoteDigest'>): string {
+  return JSON.stringify([span.parseId, span.chunkId, span.quoteDigest])
+}
+
 function covers(slice: ProjectionSlice, validAt: string): boolean {
   const from = compareUtcInstants(slice.validity.validFrom, validAt)
   const beforeTo = slice.validity.validTo === undefined ? -1 : compareUtcInstants(validAt, slice.validity.validTo)
   return from !== undefined && from <= 0 && (slice.validity.validTo === undefined || (beforeTo !== undefined && beforeTo < 0))
+}
+
+function recordedSeqRank(seq: string): bigint | undefined {
+  return /^[0-9]+$/.test(seq) ? BigInt(seq) : undefined
+}
+
+/**
+ * Keep only the latest append-only slice per (proposition, validity interval). The store returns
+ * every slice at or before `asOfRecordedSeq`; a corrected or retracted interval therefore has
+ * several, and only the newest one speaks for it.
+ */
+function latestSlicesAtPoint(slices: readonly ProjectionSlice[]): ProjectionSlice[] {
+  const latest = new Map<string, ProjectionSlice>()
+  for (const slice of slices) {
+    const key = JSON.stringify([slice.conclusion.propositionKey, slice.validity.validFrom, slice.validity.validTo ?? null])
+    const existing = latest.get(key)
+    if (existing === undefined) {
+      latest.set(key, slice)
+      continue
+    }
+    const rank = recordedSeqRank(slice.recordedSeq)
+    const existingRank = recordedSeqRank(existing.recordedSeq)
+    const newer = rank === undefined || existingRank === undefined
+      ? slice.recordedSeq > existing.recordedSeq
+      : rank > existingRank
+    if (newer) latest.set(key, slice)
+  }
+  return [...latest.values()]
 }
 
 function exactCandidate(
@@ -146,7 +222,7 @@ function exactCandidate(
     artifact.asOfRecordedSeq === request.asOfRecordedSeq
 }
 
-function digestIsSelfConsistent(artifact: RuleComputationArtifact): boolean {
+export function digestIsSelfConsistent(artifact: RuleComputationArtifact): boolean {
   return sha256DigestOf({
     inputDigest: artifact.inputDigest,
     ruleRef: artifact.ruleRef,
@@ -159,16 +235,13 @@ function digestIsSelfConsistent(artifact: RuleComputationArtifact): boolean {
 }
 
 function proofFactsOf(
-  refs: RuleComputationArtifact['factRefs'],
+  refs: readonly RuleComputationFactRef[],
   artifact: RuleComputationArtifact,
 ): PublishedRuleSupportGroup['facts'][number][] | undefined {
   const facts: PublishedRuleSupportGroup['facts'][number][] = []
   for (const ref of refs) {
     if (ref.sourceStatementId === undefined || ref.sourceStatementId.length === 0) return undefined
     const sourceRefs = [...(ref.sourceRefs ?? [])]
-    // The dependency graph is evidence-to-evidence. A raw document/chunk reference is real
-    // provenance, but this graph contract cannot traverse it, so do not call that DAG complete.
-    if (sourceRefs.length === 0 || sourceRefs.some((sourceRef) => sourceRef.kind !== 'evidence')) return undefined
     facts.push({
       kind: 'entity_attribute',
       assertionId: ref.assertionId,
@@ -183,13 +256,19 @@ function proofFactsOf(
   return facts
 }
 
-function premiseGroupsOf(
+export interface MaterializedRuleSupportFactGroup {
+  readonly groupId: string
+  readonly factRefs: readonly RuleComputationFactRef[]
+}
+
+/** Recover exact satisfied alternatives from a persisted projection slice, without recompilation. */
+export function materializedRuleSupportFactGroupsOf(
   slice: ProjectionSlice,
   artifact: RuleComputationArtifact,
-): readonly PublishedRuleSupportGroup[] | undefined {
+): readonly MaterializedRuleSupportFactGroup[] | undefined {
   if (artifact.applicability.state !== 'applicable' || !artifact.applicability.positiveSupport) return []
   const byAssertionId = new Map(artifact.factRefs.map((fact) => [fact.assertionId, fact]))
-  const groups: PublishedRuleSupportGroup[] = []
+  const groups: MaterializedRuleSupportFactGroup[] = []
   const exceptionPrefix = `${artifact.instanceKey}:exception:`
   for (const group of slice.conclusion.satisfiedBy) {
     let refs: RuleComputationArtifact['factRefs']
@@ -209,11 +288,25 @@ function premiseGroupsOf(
       // binding in this artifact contract, so it cannot be reconstructed safely here.
       return undefined
     }
-    const facts = proofFactsOf(refs, artifact)
+    if (refs.some((ref) => ref.sourceStatementId === undefined || ref.sourceStatementId.length === 0)) return undefined
+    groups.push({ groupId: group.groupId, factRefs: refs })
+  }
+  return groups.length === 0 ? undefined : groups
+}
+
+function premiseGroupsOf(
+  slice: ProjectionSlice,
+  artifact: RuleComputationArtifact,
+): readonly PublishedRuleSupportGroup[] | undefined {
+  const factGroups = materializedRuleSupportFactGroupsOf(slice, artifact)
+  if (factGroups === undefined) return undefined
+  const groups: PublishedRuleSupportGroup[] = []
+  for (const group of factGroups) {
+    const facts = proofFactsOf(group.factRefs, artifact)
     if (facts === undefined) return undefined
     groups.push({ groupId: group.groupId, facts })
   }
-  return groups.length === 0 ? undefined : groups
+  return groups
 }
 
 function supportInstanceOf(slice: ProjectionSlice, artifact: RuleComputationArtifact): PublishedRuleSupportInstance | undefined {
@@ -246,10 +339,85 @@ function parseJson(text: string): unknown {
   }
 }
 
+interface ParsedRuleSupportPayload {
+  readonly artifact: RuleComputationArtifact
+  readonly sourceEvidenceMappings: readonly RuleDerivationSourceEvidenceMapping[]
+  readonly policySourceEvidenceMappings: readonly RulePolicySourceEvidenceMapping[]
+}
+
+function isSourceEvidenceMapping(value: unknown): value is RuleDerivationSourceEvidenceMapping {
+  if (!isRecord(value) || !isString(value['premiseGroup']) || !isString(value['assertionId']) ||
+      !isString(value['logicalAssertionId']) || !isString(value['sourceStatementId']) ||
+      !isResourceRef(value['sourceRef']) || value['sourceRef'].kind !== 'chunk' ||
+      !isResourceRef(value['documentVersionRef']) || value['documentVersionRef'].kind !== 'document' ||
+      !isResourceRef(value['documentRef']) || value['documentRef'].kind !== 'document' ||
+      value['documentVersionRef'].digest !== value['documentRef'].digest || !isString(value['parserVersion']) ||
+      !isResourceRef(value['evidenceRef']) || value['evidenceRef'].kind !== 'evidence' ||
+      !isTextCandidateSourceSpan(value['sourceSpan'])) return false
+  const span = value['sourceSpan']
+  return span['chunkId'] === value['sourceRef'].id && span['quoteDigest'] === value['sourceRef'].digest &&
+    span['textDigest'] === value['sourceRef'].digest
+}
+
+function isRuleSourceSpanArchiveBinding(value: unknown): value is RuleSourceSpanArchiveBinding {
+  if (!isRecord(value) || value['schemaVersion'] !== 'rule-source-span-binding@1' ||
+      !isString(value['premiseGroup']) || !isString(value['assertionId']) ||
+      !isString(value['logicalAssertionId']) || !isString(value['sourceStatementId']) ||
+      !isResourceRef(value['sourceRef']) || value['sourceRef'].kind !== 'chunk' ||
+      !isResourceRef(value['documentVersionRef']) || value['documentVersionRef'].kind !== 'document' ||
+      !isResourceRef(value['documentRef']) || value['documentRef'].kind !== 'document' ||
+      value['documentVersionRef'].digest !== value['documentRef'].digest ||
+      !isString(value['parserVersion']) || !isTextCandidateSourceSpan(value['sourceSpan']) ||
+      !isResourceRef(value['textArtifactRef']) || value['textArtifactRef'].kind !== 'artifact') return false
+  const span = value['sourceSpan']
+  return span['chunkId'] === value['sourceRef'].id && span['quoteDigest'] === value['sourceRef'].digest &&
+    span['textDigest'] === value['sourceRef'].digest
+}
+
+function isPolicySourceEvidenceMapping(value: unknown): value is RulePolicySourceEvidenceMapping {
+  if (!isRecord(value) || !isRuleProvenanceSpan(value['span']) ||
+      !isResourceRef(value['documentVersionRef']) || value['documentVersionRef'].kind !== 'document' ||
+      !isResourceRef(value['documentRef']) || value['documentRef'].kind !== 'document' ||
+      value['documentVersionRef'].digest !== value['documentRef'].digest || !isString(value['parserVersion']) ||
+      !isResourceRef(value['textArtifactRef']) || value['textArtifactRef'].kind !== 'artifact' ||
+      !isResourceRef(value['evidenceRef']) || value['evidenceRef'].kind !== 'evidence') return false
+  return true
+}
+
+function isRulePolicySpanArchiveBinding(value: unknown): value is RulePolicySpanArchiveBinding {
+  if (!isRecord(value) || value['schemaVersion'] !== 'rule-policy-span-binding@1' ||
+      !isRuleProvenanceSpan(value['span']) ||
+      !isResourceRef(value['documentVersionRef']) || value['documentVersionRef'].kind !== 'document' ||
+      !isResourceRef(value['documentRef']) || value['documentRef'].kind !== 'document' ||
+      value['documentVersionRef'].digest !== value['documentRef'].digest ||
+      !isString(value['parserVersion']) ||
+      !isResourceRef(value['textArtifactRef']) || value['textArtifactRef'].kind !== 'artifact') return false
+  return true
+}
+
+function parseRuleSupportPayload(value: unknown): ParsedRuleSupportPayload | undefined | 'invalid' {
+  if (isRuleComputationArtifact(value)) {
+    return { artifact: value, sourceEvidenceMappings: [], policySourceEvidenceMappings: [] }
+  }
+  if (!isRecord(value) || value['schemaVersion'] !== 'rule-derivation-support-payload@1') return undefined
+  if (!isRuleComputationArtifact(value['artifact']) || !digestIsSelfConsistent(value['artifact']) ||
+      !Array.isArray(value['sourceEvidenceMappings']) || !value['sourceEvidenceMappings'].every(isSourceEvidenceMapping)) return 'invalid'
+  const policyMappings = value['policySourceEvidenceMappings']
+  if (policyMappings !== undefined && (!Array.isArray(policyMappings) || !policyMappings.every(isPolicySourceEvidenceMapping))) {
+    return 'invalid'
+  }
+  return {
+    artifact: value['artifact'],
+    sourceEvidenceMappings: value['sourceEvidenceMappings'],
+    policySourceEvidenceMappings: policyMappings ?? [],
+  }
+}
+
 /**
  * Resolve support from append-only materialized slices. The reader never reloads published
- * heads or recompiles a rule. An archived RuleComputationArtifact payload can identify one
- * entity instance; without it, more than one exact bitemporal instance remains ambiguous.
+ * heads or recompiles a rule. An archived support payload can identify one exact entity
+ * instance and add verified raw-source and specification-span evidence mappings; without it,
+ * more than one exact bitemporal instance remains ambiguous and raw/policy refs stay incomplete.
  */
 export class MaterializedRuleSupportReader implements PublishedRuleSupportReader {
   readonly #materialization: Pick<MaterializationStore, 'readSlices'>
@@ -281,7 +449,10 @@ export class MaterializedRuleSupportReader implements PublishedRuleSupportReader
 
     let complete = true
     const candidatesByIdentity = new Map<string, CandidateWithArtifact>()
-    for (const slice of slices) {
+    // A corrected or retracted interval accrues more than one append-only slice. Only the latest
+    // slice at or before the requested recorded sequence may speak for that interval; an older
+    // slice is history, not an incomplete candidate set.
+    for (const slice of latestSlicesAtPoint(slices)) {
       if (!sameScope(slice.scopeRef, scopeRef)) {
         complete = false
         continue
@@ -318,21 +489,257 @@ export class MaterializedRuleSupportReader implements PublishedRuleSupportReader
     }
 
     let candidates = [...candidatesByIdentity.values()]
+    let payloadMappingsApplied = false
     if (request.payloadRef !== undefined) {
-      const payloadArtifact = await this.#readPayloadArtifact(scopeRef, request.payloadRef, ctx)
-      if (payloadArtifact === 'invalid') return { complete: false, candidates: [] }
-      if (payloadArtifact !== undefined && payloadArtifact !== 'oversized') {
+      const payload = await this.#readPayloadArtifact(scopeRef, request.payloadRef, ctx)
+      if (payload === 'invalid') return { complete: false, candidates: [] }
+      if (payload !== undefined && payload !== 'oversized') {
+        const payloadArtifact = payload.artifact
         if (!exactCandidate(payloadArtifact, scopeRef, request)) return { complete: false, candidates: [] }
         const matching = candidates.filter((candidate) =>
           candidate.instance.instanceKey === payloadArtifact.instanceKey &&
           sha256DigestOf(candidate.artifact) === sha256DigestOf(payloadArtifact),
         )
         if (matching.length !== 1) return { complete: false, candidates: [] }
-        candidates = matching
+        const selected = matching[0]
+        if (selected === undefined) return { complete: false, candidates: [] }
+        candidates = [await this.#applyPayloadMappings(
+          scopeRef, selected, payload.sourceEvidenceMappings, payload.policySourceEvidenceMappings, ctx,
+        )]
+        payloadMappingsApplied = true
       }
+    }
+    // A generic or oversized payload is not an instance locator. Keep exact evidence-only
+    // candidates, but raw chunk/document and specification refs without producer mappings stay
+    // incomplete on their own axes.
+    if (!payloadMappingsApplied && candidates.length > 0) {
+      candidates = await Promise.all(candidates.map((candidate) =>
+        this.#applyPayloadMappings(scopeRef, candidate, [], [], ctx)))
     }
     if (complete && !(await this.#allEvidenceEnvelopesExist(scopeRef, candidates, ctx))) complete = false
     return { complete, candidates: complete ? candidates.map((candidate) => candidate.instance) : [] }
+  }
+
+  async #applyPayloadMappings(
+    scopeRef: ScopeRef,
+    candidate: CandidateWithArtifact,
+    sourceMappings: readonly RuleDerivationSourceEvidenceMapping[],
+    policyMappings: readonly RulePolicySourceEvidenceMapping[],
+    ctx: ToolContext,
+  ): Promise<CandidateWithArtifact> {
+    const facts = await this.#mapSourceEvidenceMappings(scopeRef, candidate, sourceMappings, ctx)
+    const policy = await this.#mapPolicyEvidenceMappings(scopeRef, facts.artifact, policyMappings, ctx)
+    return {
+      ...facts,
+      instance: {
+        ...facts.instance,
+        policySpans: policy.spans,
+        coverage: {
+          facts: { complete: facts.instance.complete },
+          policy: policy.coverage,
+        },
+      },
+    }
+  }
+
+  async #mapSourceEvidenceMappings(
+    scopeRef: ScopeRef,
+    candidate: CandidateWithArtifact,
+    mappings: readonly RuleDerivationSourceEvidenceMapping[],
+    ctx: ToolContext,
+  ): Promise<CandidateWithArtifact> {
+    const mappingBuckets = new Map<string, RuleDerivationSourceEvidenceMapping[]>()
+    for (const mapping of mappings) {
+      const key = sourceMappingKey(mapping.premiseGroup, mapping.assertionId, mapping.sourceRef)
+      const bucket = mappingBuckets.get(key)
+      if (bucket === undefined) mappingBuckets.set(key, [mapping])
+      else bucket.push(mapping)
+    }
+    const usedMappings = new Set<RuleDerivationSourceEvidenceMapping>()
+    let complete = candidate.instance.complete
+    const premiseGroups: PublishedRuleSupportGroup[] = []
+    for (const group of candidate.instance.premiseGroups) {
+      const facts: PublishedRuleSupportGroup['facts'][number][] = []
+      for (const fact of group.facts) {
+        const sourceRefs: ResourceRef[] = []
+        for (const sourceRef of fact.sourceRefs) {
+          if (sourceRef.kind === 'evidence') {
+            sourceRefs.push(sourceRef)
+            continue
+          }
+          const matches = mappingBuckets.get(sourceMappingKey(group.groupId, fact.assertionId, sourceRef)) ?? []
+          const mapping = matches[0]
+          if (matches.length !== 1 || mapping === undefined ||
+               mapping.logicalAssertionId !== fact.logicalAssertionId ||
+               mapping.sourceStatementId !== fact.sourceStatementId ||
+               mapping.sourceRef.kind !== 'chunk' || mapping.documentVersionRef.kind !== 'document' ||
+               mapping.documentRef.kind !== 'document' || mapping.documentVersionRef.digest !== mapping.documentRef.digest ||
+               mapping.evidenceRef.kind !== 'evidence' ||
+               mapping.parserVersion !== sourceRef.version ||
+               mapping.sourceSpan.chunkId !== sourceRef.id ||
+               mapping.sourceSpan.quoteDigest !== sourceRef.digest ||
+               mapping.sourceSpan.textDigest !== sourceRef.digest ||
+               !(await this.#rawSourceEvidenceMatches(scopeRef, mapping, ctx))) {
+            complete = false
+            sourceRefs.push(sourceRef)
+            continue
+          }
+          usedMappings.add(mapping)
+          sourceRefs.push(mapping.evidenceRef)
+        }
+        facts.push({ ...fact, sourceRefs })
+      }
+      premiseGroups.push({ groupId: group.groupId, facts })
+    }
+    if (usedMappings.size !== mappings.length) complete = false
+    return {
+      ...candidate,
+      instance: { ...candidate.instance, complete, premiseGroups },
+    }
+  }
+
+  async #mapPolicyEvidenceMappings(
+    scopeRef: ScopeRef,
+    artifact: RuleComputationArtifact,
+    mappings: readonly RulePolicySourceEvidenceMapping[],
+    ctx: ToolContext,
+  ): Promise<{ readonly spans: readonly PublishedRulePolicySpan[]; readonly coverage: RuleSupportAxisCoverage }> {
+    const spans = artifact.sourceSpans
+    if (spans.length === 0) {
+      return { spans: [], coverage: { complete: false, reason: 'the rule artifact retains no specification source span to locate' } }
+    }
+    const byKey = new Map<string, RulePolicySourceEvidenceMapping>()
+    for (const mapping of mappings) byKey.set(policySpanKey(mapping.span), mapping)
+    const resolved: PublishedRulePolicySpan[] = []
+    const usedKeys = new Set<string>()
+    const reasons: string[] = []
+    for (const span of spans) {
+      const key = policySpanKey(span)
+      const mapping = byKey.get(key)
+      if (mapping === undefined) {
+        reasons.push(`specification span ${span.chunkId} has no archived evidence mapping`)
+        continue
+      }
+      if (mapping.span.parseId !== span.parseId || mapping.span.chunkId !== span.chunkId ||
+          mapping.span.quoteDigest !== span.quoteDigest ||
+          mapping.span.spanKind !== span.spanKind || mapping.span.precision !== span.precision ||
+          sha256DigestOf(mapping.span.locator) !== sha256DigestOf(span.locator) ||
+          mapping.documentVersionRef.kind !== 'document' || mapping.documentRef.kind !== 'document' ||
+          mapping.documentVersionRef.digest !== mapping.documentRef.digest ||
+          mapping.evidenceRef.kind !== 'evidence' || mapping.textArtifactRef.kind !== 'artifact' ||
+          !(await this.#policyEvidenceMatches(scopeRef, mapping, ctx))) {
+        reasons.push(`specification span ${span.chunkId} did not verify against its archived evidence`)
+        continue
+      }
+      usedKeys.add(key)
+      resolved.push({
+        parseId: span.parseId,
+        chunkId: span.chunkId,
+        locator: span.locator,
+        spanKind: span.spanKind,
+        precision: span.precision,
+        quoteDigest: span.quoteDigest,
+        documentRef: mapping.documentRef,
+        documentVersionRef: mapping.documentVersionRef,
+        parserVersion: mapping.parserVersion,
+        evidenceRef: mapping.evidenceRef,
+      })
+    }
+    if (usedKeys.size !== mappings.length) reasons.push('unused specification evidence mapping')
+    return {
+      spans: resolved,
+      coverage: reasons.length === 0 ? { complete: true } : { complete: false, reason: [...new Set(reasons)].sort().join('; ') },
+    }
+  }
+
+  async #rawSourceEvidenceMatches(
+    scopeRef: ScopeRef,
+    mapping: RuleDerivationSourceEvidenceMapping,
+    ctx: ToolContext,
+  ): Promise<boolean> {
+    try {
+      const record = await this.#evidence.get(scopeRef, mapping.evidenceRef.id, ctx)
+      if (record === undefined || !sameResourceRef(record.evidenceRef, mapping.evidenceRef) ||
+          !sameScope(record.envelope.scopeRef, scopeRef) || record.envelope.kind !== 'document_span' ||
+          record.envelope.resultDigest !== mapping.sourceRef.digest) return false
+      const bindingRef = record.envelope.payloadRef
+      const sourceSnapshots = record.envelope.sourceSnapshots.filter((snapshot) =>
+        snapshot.resultDigest === mapping.sourceRef.digest && snapshot.archivedResultRef?.kind === 'artifact',
+      )
+      if (bindingRef === undefined || bindingRef.kind !== 'artifact' || sourceSnapshots.length !== 1) return false
+      const snapshot = sourceSnapshots[0]
+      const textRef = snapshot?.archivedResultRef
+      if (snapshot === undefined || textRef === undefined || textRef.kind !== 'artifact') return false
+      const bindingBytes = await this.#readBoundedArtifact(scopeRef, bindingRef, MAX_SOURCE_BINDING_BYTES, ctx)
+      const textBytes = await this.#readBoundedArtifact(scopeRef, textRef, MAX_ARCHIVED_SOURCE_SPAN_BYTES, ctx)
+      if (bindingBytes === undefined || textBytes === undefined ||
+          `sha256:${createHash('sha256').update(textBytes).digest('hex')}` !== mapping.sourceRef.digest) return false
+      const parsedBinding = parseJson(new TextDecoder('utf-8', { fatal: true }).decode(bindingBytes))
+      if (!isRuleSourceSpanArchiveBinding(parsedBinding)) return false
+      return sameResourceRef(parsedBinding.sourceRef, mapping.sourceRef) &&
+        sameResourceRef(parsedBinding.documentVersionRef, mapping.documentVersionRef) &&
+        sameResourceRef(parsedBinding.documentRef, mapping.documentRef) &&
+        parsedBinding.parserVersion === mapping.parserVersion &&
+        parsedBinding.premiseGroup === mapping.premiseGroup &&
+        parsedBinding.assertionId === mapping.assertionId &&
+        parsedBinding.logicalAssertionId === mapping.logicalAssertionId &&
+        parsedBinding.sourceStatementId === mapping.sourceStatementId &&
+        sha256DigestOf(parsedBinding.sourceSpan) === sha256DigestOf(mapping.sourceSpan) &&
+        sameResourceRef(parsedBinding.textArtifactRef, textRef)
+    } catch {
+      return false
+    }
+  }
+
+  async #policyEvidenceMatches(
+    scopeRef: ScopeRef,
+    mapping: RulePolicySourceEvidenceMapping,
+    ctx: ToolContext,
+  ): Promise<boolean> {
+    try {
+      const record = await this.#evidence.get(scopeRef, mapping.evidenceRef.id, ctx)
+      if (record === undefined || !sameResourceRef(record.evidenceRef, mapping.evidenceRef) ||
+          !sameScope(record.envelope.scopeRef, scopeRef) || record.envelope.kind !== 'document_span' ||
+          record.envelope.resultDigest !== mapping.span.quoteDigest) return false
+      const bindingRef = record.envelope.payloadRef
+      const sourceSnapshots = record.envelope.sourceSnapshots.filter((snapshot) =>
+        snapshot.resultDigest === mapping.span.quoteDigest && snapshot.archivedResultRef?.kind === 'artifact',
+      )
+      if (bindingRef === undefined || bindingRef.kind !== 'artifact' || sourceSnapshots.length !== 1) return false
+      const snapshot = sourceSnapshots[0]
+      const textRef = snapshot?.archivedResultRef
+      if (snapshot === undefined || textRef === undefined || textRef.kind !== 'artifact') return false
+      const bindingBytes = await this.#readBoundedArtifact(scopeRef, bindingRef, MAX_SOURCE_BINDING_BYTES, ctx)
+      const textBytes = await this.#readBoundedArtifact(scopeRef, textRef, MAX_ARCHIVED_SOURCE_SPAN_BYTES, ctx)
+      if (bindingBytes === undefined || textBytes === undefined ||
+          `sha256:${createHash('sha256').update(textBytes).digest('hex')}` !== mapping.span.quoteDigest) return false
+      const parsedBinding = parseJson(new TextDecoder('utf-8', { fatal: true }).decode(bindingBytes))
+      if (!isRulePolicySpanArchiveBinding(parsedBinding)) return false
+      return sha256DigestOf(parsedBinding.span) === sha256DigestOf(mapping.span) &&
+        sameResourceRef(parsedBinding.documentVersionRef, mapping.documentVersionRef) &&
+        sameResourceRef(parsedBinding.documentRef, mapping.documentRef) &&
+        parsedBinding.parserVersion === mapping.parserVersion &&
+        sameResourceRef(parsedBinding.textArtifactRef, textRef)
+    } catch {
+      return false
+    }
+  }
+
+  async #readBoundedArtifact(
+    scopeRef: ScopeRef,
+    blobRef: ResourceRef,
+    maxBytes: number,
+    ctx: ToolContext,
+  ): Promise<Uint8Array | undefined> {
+    if (this.#payloadReader === undefined || this.#payloadMetadataReader === undefined) return undefined
+    const request: BlobGetAuthorizedRequest = { scopeRef, blobRef }
+    const metadata = await this.#payloadMetadataReader.getAuthorizedMetadata(request, ctx)
+    if (!sameResourceRef(metadata.blobRef, blobRef) || metadata.contentDigest !== blobRef.digest ||
+        !Number.isSafeInteger(metadata.byteSize) || metadata.byteSize < 1 || metadata.byteSize > maxBytes) return undefined
+    const bytes = await this.#payloadReader.readAuthorized(request, ctx)
+    if (bytes.byteLength !== metadata.byteSize || bytes.byteLength > maxBytes ||
+        `sha256:${createHash('sha256').update(bytes).digest('hex')}` !== blobRef.digest) return undefined
+    return bytes
   }
 
   async #allEvidenceEnvelopesExist(
@@ -371,7 +778,7 @@ export class MaterializedRuleSupportReader implements PublishedRuleSupportReader
     scopeRef: ScopeRef,
     payloadRef: ResourceRef,
     ctx: ToolContext,
-  ): Promise<RuleComputationArtifact | undefined | 'invalid' | 'oversized'> {
+  ): Promise<ParsedRuleSupportPayload | undefined | 'invalid' | 'oversized'> {
     if (this.#payloadReader === undefined || this.#payloadMetadataReader === undefined) return 'invalid'
     const request: BlobGetAuthorizedRequest = { scopeRef, blobRef: payloadRef }
     try {
@@ -388,9 +795,7 @@ export class MaterializedRuleSupportReader implements PublishedRuleSupportReader
       const decoded = new TextDecoder('utf-8', { fatal: true }).decode(bytes)
       const parsed = parseJson(decoded)
       if (parsed === undefined) return 'invalid'
-      if (!isRecord(parsed) || parsed['schemaVersion'] !== 'rule-computation-artifact@1') return undefined
-      if (!isRuleComputationArtifact(parsed) || !digestIsSelfConsistent(parsed)) return 'invalid'
-      return parsed
+      return parseRuleSupportPayload(parsed)
     } catch {
       return 'invalid'
     }

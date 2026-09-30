@@ -8,18 +8,39 @@
  */
 export { SupportEvidenceDependencySource } from './support-dependency-source'
 export type {
+  PublishedRulePolicySpan,
   PublishedRuleSupportGroup,
   PublishedRuleSupportInstance,
   PublishedRuleSupportReader,
   PublishedRuleSupportResolution,
+  RuleSupportAxisCoverage,
   SupportEvidenceDependencySourceDependencies,
 } from './support-dependency-source'
-export { MaterializedRuleSupportReader } from './materialized-support-reader'
+export {
+  MaterializedRuleSupportReader,
+  digestIsSelfConsistent,
+  isRuleComputationArtifact,
+  materializedRuleSupportFactGroupsOf,
+} from './materialized-support-reader'
 export type {
+  MaterializedRuleSupportFactGroup,
   MaterializedRuleSupportReaderDependencies,
   RuleSupportPayloadMetadataReader,
   RuleSupportPayloadReader,
 } from './materialized-support-reader'
+export { MaterializedRuleDerivationEvidenceProducer, RuleDerivationEvidenceProducerError } from './rule-derivation-producer'
+export type {
+  MaterializedRuleDerivationEvidenceProducerDependencies,
+  RecordMaterializedRuleDerivationEvidenceInput,
+  RuleDerivationEvidenceProducerErrorCode,
+} from './rule-derivation-producer'
+export type {
+  RuleDerivationSourceEvidenceMapping,
+  RuleDerivationSupportPayload,
+  RulePolicySourceEvidenceMapping,
+  RulePolicySpanArchiveBinding,
+  RuleSourceSpanArchiveBinding,
+} from './support-payload'
 export { HistoryReadService } from './history-service'
 export type { HistoryReadServiceDependencies, ObjectHistoryReadView } from './history-service'
 export { HistoryReadError, isHistoryReadError } from './errors'
