@@ -43,6 +43,7 @@ function canonical(value: unknown): string {
 export class InMemoryAnswerStore implements AnswerStorePort {
   readonly #runs: RunStore
   readonly #answers = new Map<string, PublishedAnswer>()
+  readonly #answersById = new Map<string, PublishedAnswer>()
 
   constructor(runs: RunStore) {
     this.#runs = runs
@@ -73,12 +74,19 @@ export class InMemoryAnswerStore implements AnswerStorePort {
       )
     }
     this.#answers.set(key, clone(input.answer))
+    this.#answersById.set(`${scopeRef.tenantId}\u0000${scopeRef.spaceId}\u0000${input.answer.answerId}`, clone(input.answer))
     return clone(input.answer)
   }
 
   findByRun(runId: Uuid, ctx: ToolContext): Promise<PublishedAnswer | undefined> {
     const scopeRef = scopeOf(ctx)
     const found = this.#answers.get(`${scopeRef.tenantId}\u0000${scopeRef.spaceId}\u0000${runId}`)
+    return Promise.resolve(found === undefined ? undefined : clone(found))
+  }
+
+  findByAnswer(answerId: Uuid, ctx: ToolContext): Promise<PublishedAnswer | undefined> {
+    const scopeRef = scopeOf(ctx)
+    const found = this.#answersById.get(`${scopeRef.tenantId}\u0000${scopeRef.spaceId}\u0000${answerId}`)
     return Promise.resolve(found === undefined ? undefined : clone(found))
   }
 }

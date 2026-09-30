@@ -39,6 +39,7 @@ import {
   PostgresTaskInputSnapshotStore,
   PostgresSemanticPublicationStore,
   PostgresSyntheticExampleSetStore,
+  PostgresTableArtifactStore,
   PostgresTableVerificationStore,
   PostgresTaskFinalizationReceiptStore,
   PostgresTaskPolicyReportStore,
@@ -91,6 +92,8 @@ import {
   RestrictedLimitedAnswerComposer,
   RuleActionCandidateService,
   RunTypedResultContextSource,
+  TableArtifactReadService,
+  VerifiedResultReadService,
   defaultPublicationEvidenceValidators,
   SourceRegistry,
   RunExecutionPreflightService,
@@ -155,6 +158,7 @@ import type {
   ToolContext,
   Uuid,
   VersionRef,
+  VerifiedTableManifestSource,
   WorkflowDispatchFence,
   RuntimeCapabilityContext,
 } from '@ontology/contracts'
@@ -2126,6 +2130,44 @@ export async function createCoreLocalComposition(options: CoreLocalCompositionOp
       availableCapabilities: ['agent_runtime', 'structured_query', 'document_search', 'industry.semantics'],
       recordedAt: hostClock().toISOString(),
     })
+    const tableArtifactStore = new PostgresTableArtifactStore(database, {
+      writer: gatewayComposition.artifacts,
+      reader: {
+        read: (request, ctx) => {
+          const target = request.approvedInputRefs[0]
+          if (target === undefined) throw new Error('the table page read carried no approved input reference')
+          return blobStore.readAuthorized(
+            { scopeRef: { tenantId: ctx.principal.tenantId, spaceId: ctx.allowedResources.spaceId }, blobRef: target },
+            ctx,
+          )
+        },
+      },
+    })
+    const tableVerificationStore = new PostgresTableVerificationStore(database)
+    // A manifest is only served as *verified* when the table-verification receipt it names
+    // actually exists. Otherwise the reader refuses to render it as a formal table
+    // (TABLE_UNVERIFIED) instead of trusting the stored ref alone.
+    const verifiedTableManifests: VerifiedTableManifestSource = {
+      resolve: async (scopeRef, answerId, tableId, ctx) => {
+        const archived = await tableArtifactStore.resolve(scopeRef, answerId, tableId, ctx)
+        if (archived === undefined || archived.verificationReceiptRef === undefined) return archived
+        const receipt = await tableVerificationStore.getReceipt(scopeRef, archived.verificationReceiptRef, ctx)
+        return receipt === undefined ? { ref: archived.ref, manifest: archived.manifest } : archived
+      },
+    }
+    const tableArtifactReadService = new TableArtifactReadService({
+      manifests: verifiedTableManifests,
+      pages: tableArtifactStore,
+      progress: tableArtifactStore,
+    })
+    const verifiedResultReadService = new VerifiedResultReadService({
+      answers: answerStore,
+      results: {
+        getAuthorized: (request, ctx) => blobStore.getAuthorized(request, ctx),
+        readAuthorized: (request, ctx) => blobStore.readAuthorized(request, ctx),
+      },
+      tables: verifiedTableManifests,
+    })
     const dependencies: CoreApiDependencies = {
       database,
       scopeRef,
@@ -2155,7 +2197,7 @@ export async function createCoreLocalComposition(options: CoreLocalCompositionOp
         decisions: { service: identityService, candidates: candidateStore, documents: parseStore },
         publications: { service: semanticPublication },
         industryWorkspaces: { service: industryWorkspaceService },
-        answers: { reader: controller },
+        answers: { reader: controller, result: verifiedResultReadService, tables: tableArtifactReadService },
         evidence: { service: provenanceRead.provenance },
         history: { service: provenanceRead.history },
         packs: {

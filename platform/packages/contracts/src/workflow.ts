@@ -483,6 +483,12 @@ export class AnswerStoreError extends Error {
 export interface AnswerStorePort {
   record(input: RecordAnswerInput, ctx: ToolContext): Promise<PublishedAnswer>
   findByRun(runId: Uuid, ctx: ToolContext): Promise<PublishedAnswer | undefined>
+  /**
+   * The published answer addressed by its immutable `answerId`, scoped to the caller's
+   * tenant/space. The typed-result read surface addresses an answer by id, not by run, and
+   * must never look a row up outside the trusted scope.
+   */
+  findByAnswer(answerId: Uuid, ctx: ToolContext): Promise<PublishedAnswer | undefined>
 }
 
 /** Why a post-verification publication check refused or downgraded a publication. */

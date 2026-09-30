@@ -153,7 +153,7 @@ export type { EvidenceReadSurface, EvidenceRouteDependencies } from './http/evid
 export { registerHistoryRoutes } from './http/history'
 export type { HistoryReadSurface, HistoryRouteDependencies } from './http/history'
 export { registerAnswerRoutes } from './http/answers'
-export type { AnswerReader, AnswerRouteDependencies } from './http/answers'
+export type { AnswerReader, AnswerResultReader, AnswerRouteDependencies, AnswerTableReader } from './http/answers'
 export { registerFeedbackRoutes } from './http/feedback'
 export type { FeedbackRouteDependencies, FeedbackWriter } from './http/feedback'
 export { registerSimulationRoutes } from './http/simulations'

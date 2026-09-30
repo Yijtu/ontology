@@ -1,5 +1,13 @@
 export { TableArtifactReadService } from './table-artifact-read-service'
 export type { TableArtifactReadServiceDependencies } from './table-artifact-read-service'
+export { VerifiedResultReadError, VerifiedResultReadService } from './verified-result-read-service'
+export type {
+  PublishedAnswerReadPort,
+  VerifiedResultReadErrorCode,
+  VerifiedResultReadServiceDependencies,
+  VerifiedResultView,
+  VerifiedTableSummary,
+} from './verified-result-read-service'
 export { InMemoryTableArtifactStore } from './in-memory-table-artifact-store'
 export { TableHardVerificationService } from './table-hard-verification-service'
 export type { TableHardVerificationDependencies } from './table-hard-verification-service'

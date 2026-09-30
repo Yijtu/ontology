@@ -310,4 +310,24 @@ export class PostgresAnswerStore implements AnswerStorePort {
       { readOnly: true },
     )
   }
+
+  async findByAnswer(answerId: Uuid, ctx: ToolContext): Promise<PublishedAnswer | undefined> {
+    const scope = scopeOf(ctx)
+    return this.#database.withIdentityScope(
+      scope,
+      async (client) => {
+        const result = await client.query<AnswerRow>(
+          `SELECT ${ANSWER_COLUMNS}
+             FROM agent_platform.answer_publications
+            WHERE tenant_id = current_setting('app.tenant_id')::uuid
+              AND space_id = current_setting('app.space_id')::uuid
+              AND answer_id = $1`,
+          [answerId],
+        )
+        const row = result.rows[0]
+        return row === undefined ? undefined : toAnswer(row)
+      },
+      { readOnly: true },
+    )
+  }
 }
