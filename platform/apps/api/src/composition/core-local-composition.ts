@@ -5,7 +5,7 @@ import addFormats from 'ajv-formats'
 import type { SchemaObject, ValidateFunction } from 'ajv'
 import type { FastifyInstance } from 'fastify'
 import { FileSystemObjectStore, LocalImmutableBlobStore, PostgresArtifactRegistry } from '@ontology/adapter-blob-local'
-import { DATA_DUCKDB_ADAPTER_REF, DuckDbQueryAdapter } from '@ontology/adapter-data-duckdb'
+import { DATA_DUCKDB_ADAPTER_REF, DuckDbProjectDatasetAdapter, DuckDbQueryAdapter } from '@ontology/adapter-data-duckdb'
 import type { RegisteredRelation } from '@ontology/adapter-data-duckdb'
 import {
   ControlPostgresDatabase,
@@ -77,6 +77,7 @@ import {
   OutboxDispatcher,
   PROJECT_CREATED_TOPIC,
   PROJECT_REVISION_APPENDED_TOPIC,
+  ProjectDataMaterializationService,
   ProjectMappingService,
   ProjectService,
   ProfileResolver,
@@ -1815,6 +1816,17 @@ export async function createCoreLocalComposition(options: CoreLocalCompositionOp
       originals: scopedOriginals,
       parser: new StructuredDocumentParser(),
     })
+    const projectDatasetAdapter = new DuckDbProjectDatasetAdapter()
+    cleanup.unshift(async () => projectDatasetAdapter.close())
+    const projectDatasetService = new ProjectDataMaterializationService({
+      projects: projectStore,
+      records: projectRecordStore,
+      mappings: projectMappingStore,
+      readiness: projectReadinessStore,
+      schemaSource,
+      writer: projectDatasetAdapter,
+      query: projectDatasetAdapter,
+    })
     const actionBindingContext = (): ActionCapabilityBindingInput => ({
       registry: operationRegistry(),
       availableCapabilities: ['agent_runtime', 'structured_query', 'document_search', 'industry.semantics'],
@@ -1862,7 +1874,7 @@ export async function createCoreLocalComposition(options: CoreLocalCompositionOp
         definitionEditing: { service: definitionEditingService },
         ruleActionCandidates: { service: ruleActionCandidateService, bindingContext: actionBindingContext },
         instanceReviews: { service: instanceReviewService },
-        projects: { service: projectService, mappings: projectMappingService },
+        projects: { service: projectService, mappings: projectMappingService, dataset: projectDatasetService },
         projectDocuments: { service: projectDocumentIndexService },
         syntheticValidation: {
           exampleService: syntheticExampleService,

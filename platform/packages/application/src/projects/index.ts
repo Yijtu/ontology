@@ -17,6 +17,13 @@ export type {
   RecordProjectReadinessInput,
 } from './project-service'
 export { InMemoryProjectReadinessStore } from './in-memory-readiness-store'
+export { ProjectDataMaterializationService } from './project-materialization-service'
+export type {
+  MaterializeProjectDatasetInput,
+  ProjectDataMaterializationDependencies,
+  ProjectDatasetQueryInput,
+  ProjectDatasetStatus,
+} from './project-materialization-service'
 export { ProjectMappingService } from './project-mapping-service'
 export type {
   ConfirmMappingResult,

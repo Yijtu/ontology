@@ -34,6 +34,7 @@ import { ProjectError } from '@ontology/application'
 import type {
   CreateProjectInput,
   MountPackVersionInput,
+  ProjectDataMaterializationService,
   ProjectMappingService,
   ProjectService,
 } from '@ontology/application'
@@ -69,8 +70,12 @@ export interface ProjectRouteDependencies {
   readonly service: ProjectService
   /** Column-mapping confirmation, unit normalisation and record binding (V03-017). */
   readonly mappings?: ProjectMappingService
+  /** Approved-data materialisation and fixed-snapshot reads (V03-018). */
+  readonly dataset?: ProjectDataMaterializationService
   readonly authenticate: RequestAuthenticator
 }
+
+const DATASET_FIELDS = ['objectId', 'revision', 'allowPartial'] as const
 
 const MAPPING_FORMATS: readonly StructuredFormat[] = ['text', 'json', 'csv', 'xlsx']
 const DELIMITERS: readonly CsvDelimiter[] = [',', ';', '\t', '|']
@@ -737,6 +742,99 @@ export function registerProjectRoutes(
           data: { records: page.records, total: page.total, nextCursor: page.nextCursor ?? null },
           meta: { traceId },
         })
+        return reply
+      },
+    )
+  }
+
+  const dataset = dependencies.dataset
+  if (dataset !== undefined) {
+    app.post<{ Params: { projectId: string } }>(
+      '/api/v1/projects/:projectId/dataset-snapshots',
+      async (request, reply) => {
+        const traceId = readTraceId(request)
+        const auth = authenticateRequest(dependencies.authenticate, request, reply)
+        if (auth === undefined) return reply
+        const body = request.body
+        if (!isRecord(body)) throw new InvalidRequestFieldError('the request body must be a JSON object')
+        rejectUnknownFields(body, DATASET_FIELDS)
+        const objectId = body['objectId']
+        if (typeof objectId !== 'string' || objectId.trim().length === 0) {
+          throw new InvalidRequestFieldError('objectId must be a non-empty string')
+        }
+        const revision = body['revision']
+        if (revision !== undefined && !isRevisionString(revision)) {
+          throw new InvalidRequestFieldError('revision must be a decimal revision string')
+        }
+        const allowPartial = body['allowPartial']
+        if (allowPartial !== undefined && typeof allowPartial !== 'boolean') {
+          throw new InvalidRequestFieldError('allowPartial must be a boolean')
+        }
+        const projectId = request.params.projectId
+        const status = await dataset.materialize(
+          projectId,
+          {
+            objectId,
+            ...(typeof revision === 'string' ? { revision } : {}),
+            ...(allowPartial === true ? { allowPartial: true } : {}),
+          },
+          contextFor(auth, traceId, projectId),
+        )
+        reply.status(201).send({
+          data: { status },
+          meta: { traceId, revision: status.projectRevisionRef.revision },
+        })
+        return reply
+      },
+    )
+
+    app.get<{ Params: { projectId: string } }>(
+      '/api/v1/projects/:projectId/dataset',
+      async (request, reply) => {
+        const traceId = readTraceId(request)
+        const auth = authenticateRequest(dependencies.authenticate, request, reply)
+        if (auth === undefined) return reply
+        const projectId = request.params.projectId
+        const revision = readQueryString(request, 'revision')
+        if (revision !== undefined && !isRevisionString(revision)) {
+          throw new InvalidRequestFieldError('revision must be a decimal revision string')
+        }
+        const objectId = readQueryString(request, 'objectId')
+        const cursor = readQueryString(request, 'cursor')
+        const limit = readPageSize(request)
+        const result = await dataset.queryActive(
+          {
+            projectId,
+            ...(revision === undefined ? {} : { revision }),
+            ...(objectId === undefined ? {} : { objectId }),
+            ...(limit === undefined ? {} : { limit }),
+            ...(cursor === undefined ? {} : { cursor }),
+          },
+          contextFor(auth, traceId, projectId),
+        )
+        reply.status(200).send({
+          data: {
+            snapshotRef: result.snapshotRef,
+            columns: result.columns,
+            rows: result.rows,
+            coverage: result.coverage,
+          },
+          meta: { traceId },
+        })
+        return reply
+      },
+    )
+
+    app.get<{ Params: { projectId: string } }>(
+      '/api/v1/projects/:projectId/dataset/status',
+      async (request, reply) => {
+        const traceId = readTraceId(request)
+        const auth = authenticateRequest(dependencies.authenticate, request, reply)
+        if (auth === undefined) return reply
+        const projectId = request.params.projectId
+        const objectId = readQueryString(request, 'objectId') ?? ''
+        const status = await dataset.getStatus(projectId, objectId, contextFor(auth, traceId, projectId))
+        reply.status(200).send({ data: { status }, meta: { traceId } })
         return reply
       },
     )
