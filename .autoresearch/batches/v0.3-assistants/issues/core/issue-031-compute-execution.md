@@ -56,5 +56,9 @@ Dependencies: #194, #198
 
 ## 完成记录
 
-- 当前：未开工；验证未运行。GitHub Issue：[#201](https://github.com/Yijtu/ontology/issues/201)；文档提交不代表功能完成。
-- 实现后记录：提交/PR、适用命令结果、满足的验收、未验证/外部条件、迁移配置与兼容影响。
+- 当前：实现完成，验证已运行（分支 feat/v03-031-compute-execution）。GitHub Issue：[#201](https://github.com/Yijtu/ontology/issues/201)。
+- 实现：新增 `contracts/src/compute-execution.ts`（`ComputeInvocationRecord`/`ComputeResultArtifact`/`ComputeOutputBindings` 及存储端口与运行时守卫）；`migrations/control/075_compute_execution.sql`（invocations/output_bindings/result_artifacts，RLS+scope 隔离、logical_key 唯一键幂等）；control-postgres 三个存储；tool-services `compute/`（`RegisteredComputeExecutionService` 幂等执行、block/重试、逐字段 unit/currency 绑定；中性示例操作 `example.compute.aggregate`；`SyntheticActionTrial` 接通 014 sandbox `ActionTrialPort`）。
+- 满足验收：任务/注册操作→scoped reader/受限 limits/可信 ctx/AbortSignal→领域输出→原始 output bindings→wrapper→invocation 完成；缺输入/未绑定/契约不符/函数故障显式阻断且可重试；同逻辑键重试读回同一结果（handler 不重复执行）；货币与单位分开保存。
+- 验证命令（platform/）：`pnpm run typecheck`、`pnpm run lint`、`pnpm run boundaries`、`pnpm --filter @ontology/contracts run check:contracts` 均通过；`vitest run tests/unit/compute-execution.spec.ts`（9 passed）、`tests/integration/compute-execution-postgres.spec.ts`（4 passed，真实 PG）、composition-chain 及相关单测（7 files / 66 tests passed）。
+- 未验证/边界：032 起才构建 typed manifest / 发布门（本卡只产出 output bindings）；未接入 apps/api 运行期装配；EX-9 的 `COMPUTE_*` 线级错误码登记留待统一错误目录变更；未调用真实外部模型/客户服务。
+- 兼容影响：仅追加表/契约/服务，未改旧行为；迁移号 075（074 已为并行节点保留）。

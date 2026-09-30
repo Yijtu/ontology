@@ -14,6 +14,11 @@ export { PostgresTaskInputSnapshotStore } from './task-input-snapshot-store'
 export { PostgresRunExecutionBindingStore } from './run-execution-binding-store'
 export { PostgresTaskPolicyReportStore } from './task-policy-report-store'
 export { PostgresTaskFinalizationReceiptStore } from './task-finalization-receipt-store'
+export {
+  PostgresComputeInvocationStore,
+  PostgresComputeOutputBindingsStore,
+  PostgresComputeResultArtifactStore,
+} from './compute-execution-store'
 export { PostgresFeedbackStore } from './feedback-store'
 export { PostgresBudgetLedgerStore } from './budget-ledger-store'
 export { PostgresEvidenceStore } from './evidence-store'
