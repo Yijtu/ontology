@@ -154,7 +154,7 @@ beforeAll(async () => {
 
   artifacts = new MemoryArtifacts()
   const bytes = new TextEncoder().encode(
-    JSON.stringify({ rows: [{ id: 'r1', amount: '10.5', unit: 'kWh', currency: 'CNY' }] }),
+    JSON.stringify({ rows: [{ id: 'r1', amount: '10.5', unit: 'each', currency: 'CNY' }] }),
   )
   const digest = digestOfBytes(bytes)
   artifacts.blobs.set(digest, bytes)
@@ -189,7 +189,7 @@ describe('registered compute execution over real PostgreSQL', () => {
     expect(artifact?.artifact.invocationId).toBe(result.invocation.invocationId)
     const bindings = await bindingsStore.getBindings(scopeRefOf(scope), result.artifact.outputBindingsRef, ctx)
     expect(bindings?.bindings.fields.some((field) => field.currency === 'CNY')).toBe(true)
-    expect(bindings?.bindings.fields.some((field) => field.unit === 'kWh')).toBe(true)
+    expect(bindings?.bindings.fields.some((field) => field.unit === 'each')).toBe(true)
 
     const hidden = await resultsStore.getArtifact(scopeRefOf(otherScope), resultRef, ctxFor(otherScope))
     expect(hidden).toBeUndefined()

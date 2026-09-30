@@ -47,8 +47,12 @@ export const DATASET_REF: ResourceRef = {
   kind: 'dataset',
 }
 
-const NOW = '2026-09-21T00:00:00Z'
-const DEADLINE = '2026-09-21T00:10:00Z'
+// The default trusted context is built relative to the current clock at module load, not from a
+// fixed past instant, so the deadline stays valid for the whole test run (AGENTS.md: contextual
+// test time must be relative to the current moment, never a module-load fixed offset).
+const NOW_MS = Date.now()
+const NOW = new Date(NOW_MS).toISOString()
+const DEADLINE = new Date(NOW_MS + 10 * 60 * 1000).toISOString()
 
 /** A trusted context whose allowlist is wide enough for the four tools. */
 export function gatewayContext(overrides?: {

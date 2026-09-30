@@ -223,8 +223,8 @@ function inputBody(): Uint8Array {
   return new TextEncoder().encode(
     JSON.stringify({
       rows: [
-        { id: 'r1', amount: '10.5', unit: 'kWh', currency: 'CNY' },
-        { id: 'r2', amount: '4', unit: 'kWh', currency: 'CNY' },
+        { id: 'r1', amount: '10.5', unit: 'each', currency: 'CNY' },
+        { id: 'r2', amount: '4', unit: 'each', currency: 'CNY' },
       ],
     }),
   )
@@ -332,10 +332,10 @@ describe('registered compute execution', () => {
     expect(result.artifact.invocationId).toBe(result.invocation.invocationId)
 
     const fieldByName = new Map(result.bindings.fields.map((field) => [field.rowKey, field]))
-    expect(fieldByName.get('total_energy_kwh')?.unit).toBe('kWh')
-    expect(fieldByName.get('total_energy_kwh')?.currency).toBeUndefined()
-    expect(fieldByName.get('total_cost_cny')?.currency).toBe('CNY')
-    expect(fieldByName.get('total_cost_cny')?.unit).toBeUndefined()
+    expect(fieldByName.get('total_quantity')?.unit).toBe('each')
+    expect(fieldByName.get('total_quantity')?.currency).toBeUndefined()
+    expect(fieldByName.get('total_cost')?.currency).toBe('CNY')
+    expect(fieldByName.get('total_cost')?.unit).toBeUndefined()
     expect(fieldByName.get('record_count')?.status).toBe('known')
 
     // The handler received only the fixed input refs and bounded execution context.
@@ -494,7 +494,7 @@ function syntheticTrialInput(executable: boolean): ActionTrialInput {
     binding,
     caseId: 'case-1',
     caseKind: 'missing_parameter',
-    fields: [{ fieldId: 'amount', value: '10.5', unitCode: 'kWh' }],
+    fields: [{ fieldId: 'amount', value: '10.5', unitCode: 'each' }],
   }
 }
 

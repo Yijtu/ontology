@@ -20,13 +20,17 @@ import { ComputeExecutionError } from './errors'
 /**
  * A neutral, synthetic example compute operation for the generic Core (issue V03-031, SPEC
  * v0.3a §EX-6). It is deliberately not an industry formula: it aggregates an approved immutable
- * input artifact into one quantity (kWh) and one money total (CNY), keeping unit and currency
- * separate, plus a record count. The example is what the acceptance test runs through the
- * normal registry→handler→scoped reader→artifact path; the deployment registers it exactly like
- * a real industry operation, so nothing in the generic Core branches on an industry name.
+ * input artifact into one quantity (under a neutral, non-industry unit token) and one money
+ * total, keeping unit and currency separate, plus a record count. The example is what the
+ * acceptance test runs through the normal registry→handler→scoped reader→artifact path; the
+ * deployment registers it exactly like a real industry operation, so nothing in the generic
+ * Core branches on an industry name.
  */
 
 const EXAMPLE_SOURCE_REF: SourceRef = { namespace: 'example', sourceId: 'compute' }
+
+/** A neutral, non-industry unit token for the aggregated quantity; the example asserts no physical dimension. */
+const QUANTITY_UNIT = 'each'
 
 export const EXAMPLE_INPUT_SCHEMA_VERSION = 'example-compute-input@1'
 
@@ -160,7 +164,7 @@ interface Aggregation {
  * fabricated total for a value it could not compute.
  */
 function aggregate(rows: readonly ExampleRow[]): Aggregation {
-  let energy = 0n
+  let quantity = 0n
   let cost = 0n
   for (const row of rows) {
     const parsed = parseDecimal(row.amount)
@@ -172,14 +176,14 @@ function aggregate(rows: readonly ExampleRow[]): Aggregation {
         returned: 0,
       }
     }
-    if (row.unit === 'kWh') energy += parsed
+    if (row.unit === QUANTITY_UNIT) quantity += parsed
     if (row.currency === 'CNY') cost += parsed
   }
   return {
     metrics: {
       record_count: rows.length,
-      total_energy_kwh: { amount: formatDecimal(energy), unit: 'kWh' },
-      total_cost_cny: { amount: formatDecimal(cost), currency: 'CNY' },
+      total_quantity: { amount: formatDecimal(quantity), unit: QUANTITY_UNIT },
+      total_cost: { amount: formatDecimal(cost), currency: 'CNY' },
     },
     domainStatus: 'known',
     completeness: 'complete',
