@@ -329,6 +329,7 @@ export class IndustryValidationService {
           condition: payload.condition,
           exceptions: payload.exceptions,
           fields: item.fields,
+          ...(item.relations === undefined ? {} : { relations: item.relations }),
         })
         const matched = evaluated.conditionState === expectation.expected
         expectationResults.push(expectationResult(expectation, expectation.expected, evaluated.conditionState, matched))

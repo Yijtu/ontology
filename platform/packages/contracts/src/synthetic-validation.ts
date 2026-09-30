@@ -15,6 +15,7 @@ import type {
   ActionCapabilityFinding,
   ActionCapabilityStatus,
   ActionDeclaration,
+  RuleRelationPremiseDeclaration,
   RuleSupportFinding,
   RuleSupportState,
 } from './rule-action-candidates'
@@ -399,6 +400,19 @@ export interface SyntheticCaseEvaluator {
     readonly condition: RuleExpressionNode
     readonly exceptions: readonly RuleExceptionNode[]
     readonly fields: readonly SyntheticCaseField[]
+    /**
+     * The confirmed relation edges of the sample, used by a one-hop `relation` premise. A
+     * relation that is absent is `unknown` unless the caller can attest the relation read was
+     * complete (`relationReadComplete`), in which case it is an explicit `false`.
+     */
+    readonly relations?: readonly SyntheticCaseRelation[]
+    /**
+     * The declared one-hop relation premises of the pinned definition. The evaluator uses the
+     * SAME lowering as the support validator, so a relation node is executable only here too.
+     */
+    readonly relationPremises?: readonly RuleRelationPremiseDeclaration[]
+    /** True only when the caller knows the sample's relation set was read completely. */
+    readonly relationReadComplete?: boolean
     /** Set when the caller knows the sample fields were cut off; then a verdict stays unknown. */
     readonly truncated?: boolean
   }): SyntheticRuleEvaluation

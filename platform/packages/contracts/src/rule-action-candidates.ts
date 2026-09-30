@@ -104,6 +104,33 @@ export interface RuleSupportReport {
   readonly dependencyDepth: number
 }
 
+/**
+ * One declared relation premise available to a rule against the pinned definition
+ * (SPEC v0.3a execution-evidence EX-4.1 `relation_exists`, EX-4.3; issue V03-027 / #195).
+ *
+ * A relation premise is only executable when it is the declared, ONE-HOP, positive published
+ * relation from the current subject to the schema-declared target object. A deeper chain, a
+ * cyclic relation, or a nested relation/rule reference is out of the executable subset and is
+ * reported as `RELATION_PREMISE_UNSUPPORTED` rather than being loosened into a field lookup.
+ */
+export interface RuleRelationPremiseDeclaration {
+  readonly relationId: string
+  readonly fromObjectId: string
+  /** The target object the relation binds; its confirmed endpoints are the target entity. */
+  readonly toObjectId: string
+  /** The pinned definition version the relation was declared in. */
+  readonly definitionRef: VersionRef
+  /** Relation navigation depth of the premise; the executable subset is exactly one hop. */
+  readonly depth: number
+  /**
+   * The target-entity condition the premise binds (`compare`/`range`/finite `all`, no nested
+   * relation or rule reference). Absent means the premise only witnesses the relation edge.
+   */
+  readonly targetCondition?: RuleExpressionNode
+  /** True when the relation would expand a cycle; then it is never executable. */
+  readonly cyclic?: boolean
+}
+
 export interface RuleSupportValidationInput {
   readonly ruleId: string
   readonly condition: RuleExpressionNode
@@ -112,6 +139,12 @@ export interface RuleSupportValidationInput {
   readonly ruleDependencies?: readonly string[]
   /** The dependency graph used for cycle/depth checks (`ruleId` → upstream rule ids). */
   readonly dependencyLookup?: ReadonlyMap<string, readonly string[]>
+  /**
+   * The declared one-hop relation premises available in the pinned definition. A relation node
+   * with no matching declaration (or a declaration that is deeper/cyclic/nested) stays
+   * `RELATION_PREMISE_UNSUPPORTED`; only an exact one-hop declaration is executable.
+   */
+  readonly relationPremises?: readonly RuleRelationPremiseDeclaration[]
 }
 
 /**

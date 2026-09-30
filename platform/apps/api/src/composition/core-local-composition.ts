@@ -115,6 +115,7 @@ import type {
   ComponentVersionRecord,
   DocumentParserPort,
   GenerationPort,
+  IdentityDecisionStore,
   IndustryManifestSource,
   IndustrySchema,
   IndustryWorkspaceStore,
@@ -128,6 +129,7 @@ import type {
   PublicationValidityReport,
   PublicationValidityRequest,
   QueryColumn,
+  RelationNavigationRequest,
   ResolvedCapability,
   ResourceRef,
   RuntimeCapabilityFactoryPort,
@@ -136,6 +138,7 @@ import type {
   ScalarValue,
   ScopeRef,
   ScopedArtifactReader,
+  SemanticPublicationStore,
   SourceRef,
   SupportedDataType,
   ToolContext,
@@ -144,11 +147,11 @@ import type {
   WorkflowDispatchFence,
   RuntimeCapabilityContext,
 } from '@ontology/contracts'
-import { DEFAULT_VERIFICATION_POLICY, SCHEMA_DOCUMENTS, TOOL_CATALOGUE, createToolContext } from '@ontology/contracts'
+import { DEFAULT_VERIFICATION_POLICY, RelationNavigationError, SCHEMA_DOCUMENTS, TOOL_CATALOGUE, createToolContext } from '@ontology/contracts'
 import { BudgetService, sha256DigestOf } from '@ontology/core'
 import { createRequestToolContext, createToolGatewayComposition, ForbiddenError, InvalidRequestFieldError } from '@ontology/app-api'
 import type { CoreApiDependencies } from '../core-main'
-import { FiniteGrammarRuleSupportValidator, FiniteGrammarSyntheticEvaluator, IdentityDecisionService, IncrementalMaterializer, InMemorySemanticMappingRegistry, OntologyLookupService, PublishedFactsReferenceProvider, PublishedSemanticSource, SemanticDefinitionService, SemanticPublicationService } from '@ontology/semantic-engine'
+import { FiniteGrammarRuleSupportValidator, FiniteGrammarSyntheticEvaluator, IdentityDecisionService, IncrementalMaterializer, InMemorySemanticMappingRegistry, OntologyLookupService, PublishedFactsReferenceProvider, PublishedRelationNavigator, PublishedSemanticSource, SemanticDefinitionService, SemanticPublicationService } from '@ontology/semantic-engine'
 import type {
   MaterializationPublishedSource,
   OntologyFactPage,
@@ -1006,6 +1009,86 @@ function registerCoreImportRoute(input: {
       data: { jobId: created.jobId, stage: created.stage, scenarioId, sourceRef: source.sourceRef },
       meta: { traceId: request.id, revision: created.revision },
     })
+  })
+}
+
+function readRelationNavigationRequest(value: unknown): RelationNavigationRequest | undefined {
+  if (!isRecord(value)) return undefined
+  const startEntityId = value['startEntityId']
+  const validAt = value['validAt']
+  const rawRelationIds = value['relationIds']
+  const maxPaths = value['maxPaths']
+  if (typeof startEntityId !== 'string' || typeof validAt !== 'string' || !Array.isArray(rawRelationIds)) {
+    return undefined
+  }
+  const relationIds: string[] = []
+  for (const relationId of rawRelationIds) {
+    if (typeof relationId !== 'string') return undefined
+    relationIds.push(relationId)
+  }
+  return {
+    startEntityId,
+    relationIds,
+    validAt,
+    ...(typeof maxPaths === 'number' ? { maxPaths } : {}),
+  }
+}
+
+/**
+ * Read-only loopback route for bounded published-relation navigation (V03-027 / #195,
+ * A.US-008.AC-02, A.FR-14). It is not a model tool: the canonical catalogue is the closed set
+ * of four model tools, so navigation is exposed to the host as an explicit service surface
+ * instead of widening the model's tool authority. The route mints a trusted context from the
+ * server-side authentication result and reads only the caller's scope.
+ */
+function registerCoreRelationNavigationRoute(input: {
+  readonly app: FastifyInstance
+  readonly authenticate: RequestAuthenticator
+  readonly examples: LoadedCoreExamples
+  readonly publications: SemanticPublicationStore
+  readonly identity: IdentityDecisionStore
+}): void {
+  input.app.post('/api/v1/core/relations/navigate', async (request, reply) => {
+    const auth = input.authenticate(request)
+    if (auth === undefined) {
+      return reply.status(401).send({ error: { code: 'UNAUTHENTICATED', message: 'loopback development authentication is required', retryable: false } })
+    }
+    const navigation = readRelationNavigationRequest(request.body)
+    if (navigation === undefined) {
+      throw new InvalidRequestFieldError('startEntityId, validAt and a relationIds array of strings are required')
+    }
+    const scenarioId = isRecord(request.body) ? request.body['scenarioId'] : undefined
+    if (typeof scenarioId !== 'string') throw new InvalidRequestFieldError('scenarioId is required')
+    const scenario = input.examples.scenarios.find((entry) => entry.scenarioId === scenarioId)
+    if (scenario === undefined) throw new InvalidRequestFieldError('scenarioId is not mounted by this deployment')
+    const navigator = new PublishedRelationNavigator({
+      publications: input.publications,
+      identity: input.identity,
+      definitionRef: scenario.definitionRef,
+      allowedRelationIds: scenario.industrySchema.relations.map((relation) => relation.relationId),
+      relationTargets: new Map(
+        scenario.industrySchema.relations.map((relation) => [
+          relation.relationId,
+          { fromObjectId: relation.fromObjectId, toObjectId: relation.toObjectId },
+        ]),
+      ),
+    })
+    const ctx = createRequestToolContext({
+      principal: auth.principal,
+      spaceId: auth.spaceId,
+      traceId: request.id,
+      runId: globalThis.crypto.randomUUID(),
+    })
+    try {
+      const result = await navigator.navigate(navigation, ctx)
+      return reply.status(200).send({ data: result, meta: { traceId: request.id } })
+    } catch (error) {
+      if (error instanceof RelationNavigationError) {
+        if (error.code === 'FORBIDDEN') throw new ForbiddenError(error.message)
+        throw new InvalidRequestFieldError(error.message)
+      }
+      throw error
+    }
   })
 }
 
@@ -1941,16 +2024,25 @@ export async function createCoreLocalComposition(options: CoreLocalCompositionOp
           bindingContext: actionBindingContext,
         },
       },
-      registerRoutes: (api, authenticate) => registerCoreImportRoute({
-        app: api,
-        authenticate,
-        scopeRef,
-        examples: options.examples,
-        service: jobService,
-        objectStore,
-        registry: artifactRegistry,
-        generationEnabled: modelCapabilities.generationEnabled,
-      }),
+      registerRoutes: (api, authenticate) => {
+        registerCoreImportRoute({
+          app: api,
+          authenticate,
+          scopeRef,
+          examples: options.examples,
+          service: jobService,
+          objectStore,
+          registry: artifactRegistry,
+          generationEnabled: modelCapabilities.generationEnabled,
+        })
+        registerCoreRelationNavigationRoute({
+          app: api,
+          authenticate,
+          examples: options.examples,
+          publications: publicationStore,
+          identity: identityStore,
+        })
+      },
       ...(options.logger === undefined ? {} : { logger: options.logger }),
     }
 

@@ -1,10 +1,12 @@
 import type {
   FiniteRuleConditionEvaluation,
   RuleConditionState,
+  RuleRelationPremiseDeclaration,
   RuleSourceConflict,
   SemanticFilter,
   SyntheticCaseEvaluator,
   SyntheticCaseField,
+  SyntheticCaseRelation,
 } from '@ontology/contracts'
 import { assessRuleSupport } from '@ontology/contracts'
 import { canonicalDecimalString } from '@ontology/core'
@@ -89,7 +91,43 @@ function leafConflict(leaf: LoweredConditionLeaf, grouped: ReadonlyMap<string, S
   }
 }
 
-function evaluateLeaf(leaf: LoweredConditionLeaf, grouped: ReadonlyMap<string, SyntheticCaseField[]>): RuleConditionState {
+function groupedRelations(relations: readonly SyntheticCaseRelation[]): Map<string, SyntheticCaseRelation[]> {
+  const grouped = new Map<string, SyntheticCaseRelation[]>()
+  for (const relation of relations) {
+    const bucket = grouped.get(relation.relationId)
+    if (bucket === undefined) grouped.set(relation.relationId, [relation])
+    else bucket.push(relation)
+  }
+  return grouped
+}
+
+/**
+ * Evaluate a one-hop relation premise. At least one confirmed, endpoint-resolved published
+ * relation makes the premise true; an unresolved/absent relation is `unknown` unless the
+ * caller attests the relation read was complete, in which case absence is an explicit `false`.
+ * Merely declaring a relation is never treated as a field value.
+ */
+function evaluateRelation(
+  relationId: string,
+  relations: ReadonlyMap<string, SyntheticCaseRelation[]>,
+  complete: boolean,
+): RuleConditionState {
+  const matches = relations.get(relationId) ?? []
+  if (matches.length === 0) return complete ? 'false' : 'unknown'
+  if (matches.some((relation) => relation.endpointResolved)) return 'true'
+  return 'unknown'
+}
+
+function evaluateLeaf(
+  leaf: LoweredConditionLeaf,
+  grouped: ReadonlyMap<string, SyntheticCaseField[]>,
+  relations: ReadonlyMap<string, SyntheticCaseRelation[]>,
+  relationReadComplete: boolean,
+): RuleConditionState {
+  if (leaf.relationId !== undefined) {
+    const state = evaluateRelation(leaf.relationId, relations, relationReadComplete)
+    return leaf.negative ? negate(state) : state
+  }
   const candidates = grouped.get(leaf.attributeId) ?? []
   const present = candidates.filter((field) => field.value !== null)
   if (present.length === 0) return 'unknown'
@@ -122,18 +160,28 @@ export class FiniteGrammarSyntheticEvaluator implements SyntheticCaseEvaluator {
     readonly condition: Parameters<SyntheticCaseEvaluator['evaluateRule']>[0]['condition']
     readonly exceptions: Parameters<SyntheticCaseEvaluator['evaluateRule']>[0]['exceptions']
     readonly fields: readonly SyntheticCaseField[]
+    readonly relations?: readonly SyntheticCaseRelation[]
+    readonly relationPremises?: readonly RuleRelationPremiseDeclaration[]
+    readonly relationReadComplete?: boolean
     readonly truncated?: boolean
   }): FiniteRuleConditionEvaluation {
     const grouped = groupedFields(input.fields)
-    const condition = lowerConditionPlan(input.condition)
+    const relations = groupedRelations(input.relations ?? [])
+    const relationReadComplete = input.relationReadComplete === true
+    const relationPremises = input.relationPremises ?? []
+    const condition = lowerConditionPlan(input.condition, relationPremises)
     const rawConditionState =
-      condition.plan === undefined ? 'unknown' : evaluateFiniteCondition(condition.plan, (leaf) => evaluateLeaf(leaf, grouped))
+      condition.plan === undefined
+        ? 'unknown'
+        : evaluateFiniteCondition(condition.plan, (leaf) => evaluateLeaf(leaf, grouped, relations, relationReadComplete))
     // A truncated read may be missing observations, so it can never yield a determinate verdict;
     // an explicit conflict is a definite disagreement and is preserved.
     const truncated = input.truncated === true
     const conditionState: RuleConditionState = truncated && rawConditionState !== 'conflict' ? 'unknown' : rawConditionState
     const branchStates =
-      condition.plan === undefined ? [] : collectConditionBranches(condition.plan, (leaf) => evaluateLeaf(leaf, grouped))
+      condition.plan === undefined
+        ? []
+        : collectConditionBranches(condition.plan, (leaf) => evaluateLeaf(leaf, grouped, relations, relationReadComplete))
 
     const sourceConflicts: RuleSourceConflict[] = []
     if (condition.plan !== undefined) collectConflicts(condition.plan, grouped, sourceConflicts)
@@ -141,10 +189,12 @@ export class FiniteGrammarSyntheticEvaluator implements SyntheticCaseEvaluator {
     const findings = [...condition.findings]
     const exceptionStates: { exceptionId: string; state: RuleConditionState }[] = []
     for (const exception of input.exceptions) {
-      const lowered = lowerConditionPlan(exception.condition)
+      const lowered = lowerConditionPlan(exception.condition, relationPremises)
       findings.push(...lowered.findings)
       const state =
-        lowered.plan === undefined ? 'unknown' : evaluateFiniteCondition(lowered.plan, (leaf) => evaluateLeaf(leaf, grouped))
+        lowered.plan === undefined
+          ? 'unknown'
+          : evaluateFiniteCondition(lowered.plan, (leaf) => evaluateLeaf(leaf, grouped, relations, relationReadComplete))
       exceptionStates.push({ exceptionId: exception.exceptionId, state })
     }
 
