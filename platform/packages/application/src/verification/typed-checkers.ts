@@ -104,6 +104,39 @@ function asRuleComputationArtifact(value: unknown): Record<string, unknown> | un
   return undefined
 }
 
+type RuleConditionState = 'true' | 'false' | 'unknown' | 'conflict'
+type RuleApplicabilityState = 'applicable' | 'not_applicable' | 'unknown' | 'conflict'
+
+function isConditionState(value: unknown): value is RuleConditionState {
+  return value === 'true' || value === 'false' || value === 'unknown' || value === 'conflict'
+}
+
+/**
+ * Independently recompute the aggregate applicability from the archived condition state and
+ * the attached exception states (SPEC EX-4.1 four-state truth table). The archive's own
+ * `applicability.state` is never trusted on its own: an exception that fired (or conflicts)
+ * must make the rule not-applicable (or conflicting), and a definite applicability may not
+ * rest on an unknown exception.
+ */
+function recomputeApplicabilityState(artifact: Record<string, unknown>): RuleApplicabilityState | undefined {
+  const applicability = artifact['applicability']
+  if (!isRecord(applicability)) return undefined
+  const conditionState = applicability['conditionState']
+  if (!isConditionState(conditionState)) return undefined
+  const exceptionStates = applicability['exceptionStates']
+  if (!Array.isArray(exceptionStates)) return undefined
+  const states: RuleConditionState[] = []
+  for (const exception of exceptionStates) {
+    if (!isRecord(exception) || !isConditionState(exception['state'])) return undefined
+    states.push(exception['state'])
+  }
+  if (conditionState === 'conflict' || states.includes('conflict')) return 'conflict'
+  if (states.includes('true')) return 'not_applicable'
+  if (conditionState === 'false') return 'not_applicable'
+  if (conditionState === 'unknown' || states.includes('unknown')) return 'unknown'
+  return 'applicable'
+}
+
 function applicabilityVerdict(artifact: Record<string, unknown>): RuleVerdict | undefined {
   const applicability = artifact['applicability']
   if (!isRecord(applicability)) return undefined
@@ -216,6 +249,17 @@ export function verifyRuleJudgement(
         field: 'subject',
         expected: artifactSubject,
         actual: assertion.subject,
+      }))
+      continue
+    }
+    const recomputedState = recomputeApplicabilityState(artifact)
+    const applicability = artifact['applicability']
+    const archivedState = isRecord(applicability) ? applicability['state'] : undefined
+    if (recomputedState === undefined || recomputedState !== archivedState) {
+      findings.push(finding(assertion, reference, 'rule_judgement_mismatch', {
+        field: 'applicability',
+        expected: recomputedState ?? 'computable condition/exception states',
+        actual: typeof archivedState === 'string' ? archivedState : 'absent',
       }))
       continue
     }

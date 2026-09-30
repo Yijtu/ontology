@@ -224,6 +224,28 @@ describe('typed evidence verifier verifies rule judgements from the archived com
     expect(result.failedChecks).toContain('rule_premise_missing')
   })
 
+  it('blocks an applicability verdict that contradicts a fired exception', async () => {
+    const h = harness()
+    const inconsistent = ruleArtifact({
+      applicability: {
+        state: 'applicable',
+        conditionState: 'true',
+        exceptionStates: [{ exceptionId: 'exc-1', state: 'true', factRefs: [] }],
+        positiveSupport: true,
+      },
+    })
+    const rule = await h.put('rule_derivation', ruleSupportPayload(inconsistent))
+    const manifest = h.manifest()
+    const result = await h.service().verify({
+      runId: RUN_ID,
+      draft: assertionDraft(manifest.digest, [ruleAssertion(rule)]),
+      inputManifest: manifest,
+    }, ownerContext())
+
+    expect(result.verdict).toBe('fail')
+    expect(result.failedChecks).toContain('rule_judgement_mismatch')
+  })
+
   it('blocks a judgement whose artifact is a different rule version', async () => {
     const h = harness()
     const other = ruleArtifact({ ruleRef: { id: 'rule.other', version: '1.0.0', digest: sha256DigestOf('rule-other') } })
