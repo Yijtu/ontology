@@ -236,6 +236,43 @@ export type {
 export { createScenarioRegistry, registerBuiltInScenarioModules } from './scenarios/composition'
 export { InstanceReviewPanel } from './components/InstanceReviewPanel'
 export type { InstanceReviewPanelProps } from './components/InstanceReviewPanel'
+export { ProjectWorkspacePanel } from './components/ProjectWorkspacePanel'
+export type {
+  ProjectBinding,
+  ProjectSourceCandidate,
+  ProjectSourceColumn,
+  ProjectSourceField,
+  ProjectSourceObject,
+  ProjectWorkspacePanelProps,
+} from './components/ProjectWorkspacePanel'
+export {
+  isIndustryPackSummary,
+  isImportMappingVersion,
+  isMappingPreview,
+  isProjectDatasetStatus,
+  isProjectDocumentIndexStatus,
+  isProjectEvolutionView,
+  isProjectReadinessView,
+  isProjectRecord,
+  isProjectRecordPageView,
+  isProjectRecordVersion,
+  isProjectRevision,
+  isProjectRevisionView,
+  isReadinessProjection,
+} from './api/projects'
+export type {
+  ColumnMappingRequestView,
+  CreateProjectRequest,
+  IndustryPackSummary,
+  MountProjectPackRequest,
+  ProjectDatasetStatusView,
+  ProjectDocumentIndexState,
+  ProjectDocumentIndexStatusView,
+  ProjectEvolutionView,
+  ProjectReadinessView,
+  ProjectRecordPageView,
+  ProjectRevisionView,
+} from './api/projects'
 export {
   isInstanceConfirmationEvent,
   isInstanceConfirmationOutcome,

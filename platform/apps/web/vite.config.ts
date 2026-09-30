@@ -34,6 +34,7 @@ export function createWebViteConfig(environment: Readonly<Record<string, string 
         workspaceHarness: resolve(webRoot, 'workspace-harness.html'),
         instanceReviewHarness: resolve(webRoot, 'instance-review-harness.html'),
         definitionWorkbenchHarness: resolve(webRoot, 'definition-workbench-harness.html'),
+        projectHarness: resolve(webRoot, 'project-harness.html'),
       },
     },
   },

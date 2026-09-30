@@ -24,6 +24,7 @@ import type {
   ProvenanceEvidenceView,
   PublishedAnswer,
   ProfileVersionRecord,
+  ResourceRef,
   RevisionString,
   RuleActionCandidateVersion,
   Sha256Digest,
@@ -131,7 +132,33 @@ import type {
   InstanceRecordFilter,
   InstanceRevisionRequest,
 } from './instances'
-import type { InstanceRecordView } from '@ontology/contracts'
+import type { InstanceRecordView, ProjectRecord, ProjectState } from '@ontology/contracts'
+import {
+  isIndustryPackSummary,
+  isImportMappingVersion,
+  isMappingPreview,
+  isProjectDatasetStatus,
+  isProjectDocumentIndexStatus,
+  isProjectEvolutionView,
+  isProjectReadinessView,
+  isProjectRecord,
+  isProjectRecordPageView,
+  isProjectRevision,
+  isProjectRevisionView,
+} from './projects'
+import type {
+  ColumnMappingRequestView,
+  CreateProjectRequest,
+  IndustryPackSummary,
+  MountProjectPackRequest,
+  ProjectDatasetStatusView,
+  ProjectDocumentIndexStatusView,
+  ProjectEvolutionView,
+  ProjectReadinessView,
+  ProjectRecordPageView,
+  ProjectRevisionView,
+} from './projects'
+import type { ImportMappingVersion, MappingPreview, ProjectRecordVersion, ProjectRevision } from '@ontology/contracts'
 
 export { ApiError } from './errors'
 export {
@@ -1333,6 +1360,246 @@ export class WorkbenchClient {
         return record
       },
     )
+  }
+
+  /** `GET /industry-packs`: the published pack versions a project can be created against. */
+  listIndustryPacks(): Promise<IndustryPackSummary[]> {
+    const path = '/api/v1/industry-packs'
+    return this.#request<unknown>('GET', path).then((data) => {
+      if (!isRecord(data) || !Array.isArray(data['packs']) || !data['packs'].every(isIndustryPackSummary)) {
+        throw malformedResponse(path, 'the industry pack list was not recognised')
+      }
+      return data['packs']
+    })
+  }
+
+  /** `GET /projects`: the customer projects visible in the trusted scope. */
+  listProjects(filter: { readonly state?: ProjectState; readonly limit?: number } = {}): Promise<ProjectRecord[]> {
+    const query = new URLSearchParams()
+    if (filter.state !== undefined) query.set('state', filter.state)
+    if (filter.limit !== undefined) query.set('pageSize', String(filter.limit))
+    const suffix = query.toString().length > 0 ? `?${query.toString()}` : ''
+    const path = `/api/v1/projects${suffix}`
+    return this.#request<unknown>('GET', path).then((data) => {
+      if (!isRecord(data) || !Array.isArray(data['projects']) || !data['projects'].every(isProjectRecord)) {
+        throw malformedResponse(path, 'the project list was not recognised')
+      }
+      return data['projects']
+    })
+  }
+
+  /** `POST /projects`: create a project against an exact published pack version. */
+  createProject(request: CreateProjectRequest): Promise<{ readonly project: ProjectRecord; readonly revision: ProjectRevision }> {
+    const path = '/api/v1/projects'
+    return this.#request<unknown>('POST', path, { body: request, idempotencyKey: this.#newId() }).then((data) => {
+      if (!isRecord(data) || !isProjectRecord(data['project']) || !isProjectRevision(data['revision'])) {
+        throw malformedResponse(path, 'the created project was not recognised')
+      }
+      return { project: data['project'], revision: data['revision'] }
+    })
+  }
+
+  getProject(projectId: string): Promise<ProjectRecord> {
+    const path = `/api/v1/projects/${encodeURIComponent(projectId)}`
+    return this.#request<unknown>('GET', path).then((data) => {
+      if (!isRecord(data) || !isProjectRecord(data['project'])) {
+        throw malformedResponse(path, 'the project was not recognised')
+      }
+      return data['project']
+    })
+  }
+
+  listProjectRevisions(projectId: string): Promise<ProjectRevision[]> {
+    const path = `/api/v1/projects/${encodeURIComponent(projectId)}/revisions`
+    return this.#request<unknown>('GET', path).then((data) => {
+      if (!isRecord(data) || !Array.isArray(data['revisions']) || !data['revisions'].every(isProjectRevision)) {
+        throw malformedResponse(path, 'the project revision list was not recognised')
+      }
+      return data['revisions']
+    })
+  }
+
+  getProjectRevisionView(projectId: string, revision: string): Promise<ProjectRevisionView> {
+    const path = `/api/v1/projects/${encodeURIComponent(projectId)}/revisions/${encodeURIComponent(revision)}`
+    return this.#request<unknown>('GET', path).then((data) => {
+      if (!isProjectRevisionView(data)) {
+        throw malformedResponse(path, 'the project revision view was not recognised')
+      }
+      return data
+    })
+  }
+
+  /** `GET /projects/:id/readiness`: semantic/query/index projections with fixable blockers. */
+  getProjectReadiness(
+    projectId: string,
+    revision?: string,
+    required?: readonly string[],
+  ): Promise<ProjectReadinessView> {
+    const query = new URLSearchParams()
+    if (revision !== undefined) query.set('revision', revision)
+    if (required !== undefined && required.length > 0) query.set('required', required.join(','))
+    const suffix = query.toString().length > 0 ? `?${query.toString()}` : ''
+    const path = `/api/v1/projects/${encodeURIComponent(projectId)}/readiness${suffix}`
+    return this.#request<unknown>('GET', path).then((data) => {
+      if (!isProjectReadinessView(data)) {
+        throw malformedResponse(path, 'the project readiness view was not recognised')
+      }
+      return data
+    })
+  }
+
+  /** `POST /projects/:id/pack-mounts`: mount an exact published pack version as a new revision. */
+  mountProjectPack(projectId: string, request: MountProjectPackRequest): Promise<ProjectEvolutionView> {
+    const path = `/api/v1/projects/${encodeURIComponent(projectId)}/pack-mounts`
+    return this.#request<unknown>('POST', path, {
+      body: {
+        industryPackRef: request.industryPackRef,
+        reason: request.reason,
+        ...(request.profileRef === undefined ? {} : { profileRef: request.profileRef }),
+        ...(request.mappingRefs === undefined ? {} : { mappingRefs: request.mappingRefs }),
+        ...(request.documentSetRef === undefined ? {} : { documentSetRef: request.documentSetRef }),
+      },
+      ifMatch: request.expectedRevision,
+      idempotencyKey: this.#newId(),
+    }).then((data) => {
+      if (!isProjectEvolutionView(data)) {
+        throw malformedResponse(path, 'the mounted project revision was not recognised')
+      }
+      return data
+    })
+  }
+
+  listProjectMappings(projectId: string): Promise<ImportMappingVersion[]> {
+    const path = `/api/v1/projects/${encodeURIComponent(projectId)}/mappings`
+    return this.#request<unknown>('GET', path).then((data) => {
+      if (!isRecord(data) || !Array.isArray(data['mappings']) || !data['mappings'].every(isImportMappingVersion)) {
+        throw malformedResponse(path, 'the project mapping list was not recognised')
+      }
+      return data['mappings']
+    })
+  }
+
+  previewProjectMapping(projectId: string, request: ColumnMappingRequestView): Promise<MappingPreview> {
+    const path = `/api/v1/projects/${encodeURIComponent(projectId)}/mappings/preview`
+    return this.#request<unknown>('POST', path, { body: request }).then((data) => {
+      if (!isRecord(data) || !isMappingPreview(data['preview'])) {
+        throw malformedResponse(path, 'the mapping preview was not recognised')
+      }
+      return data['preview']
+    })
+  }
+
+  confirmProjectMapping(
+    projectId: string,
+    request: ColumnMappingRequestView,
+  ): Promise<{ readonly mapping: ImportMappingVersion; readonly preview: MappingPreview }> {
+    const path = `/api/v1/projects/${encodeURIComponent(projectId)}/mappings`
+    return this.#request<unknown>('POST', path, { body: request, idempotencyKey: this.#newId() }).then((data) => {
+      if (!isRecord(data) || !isImportMappingVersion(data['mapping']) || !isMappingPreview(data['preview'])) {
+        throw malformedResponse(path, 'the confirmed mapping was not recognised')
+      }
+      return { mapping: data['mapping'], preview: data['preview'] }
+    })
+  }
+
+  listProjectRecords(
+    projectId: string,
+    filter: { readonly objectId?: string; readonly status?: string; readonly cursor?: string; readonly limit?: number } = {},
+  ): Promise<ProjectRecordPageView> {
+    const query = new URLSearchParams()
+    if (filter.objectId !== undefined) query.set('objectId', filter.objectId)
+    if (filter.status !== undefined) query.set('status', filter.status)
+    if (filter.cursor !== undefined) query.set('cursor', filter.cursor)
+    if (filter.limit !== undefined) query.set('pageSize', String(filter.limit))
+    const suffix = query.toString().length > 0 ? `?${query.toString()}` : ''
+    const path = `/api/v1/projects/${encodeURIComponent(projectId)}/records${suffix}`
+    return this.#request<unknown>('GET', path).then((data) => {
+      if (!isProjectRecordPageView(data)) {
+        throw malformedResponse(path, 'the project record page was not recognised')
+      }
+      return {
+        records: data.records,
+        total: data.total,
+        ...(typeof data.nextCursor === 'string' ? { nextCursor: data.nextCursor } : {}),
+      }
+    })
+  }
+
+  /** `POST /projects/:id/records`: bind the confirmed mapping's parsed rows into project records. */
+  bindProjectRecords(
+    projectId: string,
+    request: { readonly parseId: string; readonly mappingId: string; readonly mappingVersion: string },
+  ): Promise<{ readonly records: readonly ProjectRecordVersion[]; readonly created: boolean }> {
+    const path = `/api/v1/projects/${encodeURIComponent(projectId)}/records`
+    return this.#request<unknown>('POST', path, { body: request, idempotencyKey: this.#newId() }).then((data) => {
+      if (!isRecord(data) || !Array.isArray(data['records']) || typeof data['created'] !== 'boolean') {
+        throw malformedResponse(path, 'the bound project records were not recognised')
+      }
+      return { records: data['records'], created: data['created'] }
+    })
+  }
+
+  getProjectDatasetStatus(projectId: string, objectId: string): Promise<ProjectDatasetStatusView> {
+    const query = new URLSearchParams({ objectId })
+    const path = `/api/v1/projects/${encodeURIComponent(projectId)}/dataset/status?${query.toString()}`
+    return this.#request<unknown>('GET', path).then((data) => {
+      if (!isRecord(data) || !isProjectDatasetStatus(data['status'])) {
+        throw malformedResponse(path, 'the project dataset status was not recognised')
+      }
+      return data['status']
+    })
+  }
+
+  materializeProjectDataset(
+    projectId: string,
+    request: { readonly objectId: string; readonly revision?: string; readonly allowPartial?: boolean },
+  ): Promise<ProjectDatasetStatusView> {
+    const path = `/api/v1/projects/${encodeURIComponent(projectId)}/dataset-snapshots`
+    return this.#request<unknown>('POST', path, { body: request, idempotencyKey: this.#newId() }).then((data) => {
+      if (!isRecord(data) || !isProjectDatasetStatus(data['status'])) {
+        throw malformedResponse(path, 'the materialised project dataset was not recognised')
+      }
+      return data['status']
+    })
+  }
+
+  getProjectDocumentIndex(projectId: string): Promise<ProjectDocumentIndexStatusView> {
+    const path = `/api/v1/projects/${encodeURIComponent(projectId)}/document-index`
+    return this.#request<unknown>('GET', path).then((data) => {
+      if (!isRecord(data) || !isProjectDocumentIndexStatus(data['status'])) {
+        throw malformedResponse(path, 'the project document index status was not recognised')
+      }
+      return data['status']
+    })
+  }
+
+  buildProjectDocumentIndex(projectId: string): Promise<ProjectDocumentIndexStatusView> {
+    const path = `/api/v1/projects/${encodeURIComponent(projectId)}/document-index`
+    return this.#request<unknown>('POST', path, { body: {}, idempotencyKey: this.#newId() }).then((data) => {
+      if (!isRecord(data) || !isProjectDocumentIndexStatus(data['status'])) {
+        throw malformedResponse(path, 'the built project document index was not recognised')
+      }
+      return data['status']
+    })
+  }
+
+  importProjectDocumentMembership(
+    projectId: string,
+    request: {
+      readonly documentId?: string
+      readonly documentRef: ResourceRef
+      readonly parseRef: ResourceRef
+      readonly parseId: string
+      readonly reason?: string
+    },
+  ): Promise<ProjectDocumentIndexStatusView> {
+    const path = `/api/v1/projects/${encodeURIComponent(projectId)}/document-memberships`
+    return this.#request<unknown>('POST', path, { body: request, idempotencyKey: this.#newId() }).then((data) => {
+      if (!isRecord(data) || !isProjectDocumentIndexStatus(data['status'])) {
+        throw malformedResponse(path, 'the imported project document was not recognised')
+      }
+      return data['status']
+    })
   }
 
   async #requestWithMeta<T>(path: string): Promise<{ data: T; nextCursor: string | undefined }> {
