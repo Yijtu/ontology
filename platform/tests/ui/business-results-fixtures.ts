@@ -254,6 +254,102 @@ function buildAnswer(runId: string): PublishedAnswer {
   }
 }
 
+/** The synthetic project the fixture's result history belongs to (V03-041 / #214). */
+export const BUSINESS_PROJECT_ID = '90000000-0000-4000-8000-0000000000b1'
+const OLDER_RUN_ID = '00000000-0000-4000-8000-0000000000a1'
+const OLDER_ANSWER_ID = '40000000-0000-4000-8000-0000000000a1'
+const OLDER_CONTENT_HASH = sha256OfCanonical({ body: OLDER_ANSWER_ID })
+
+function historyView(currentRunId: string): Record<string, unknown> {
+  return {
+    schemaVersion: 'result-history@1',
+    logicalKey: BUSINESS_PROJECT_ID,
+    projectId: BUSINESS_PROJECT_ID,
+    projectRevision: '7',
+    currentAnswerId: ANSWER_ID,
+    entries: [
+      {
+        answerId: ANSWER_ID,
+        runId: currentRunId,
+        revisionIndex: 1,
+        contentHash: sha256OfCanonical({ body: ANSWER_ID }),
+        evidenceManifestHash: sha256OfCanonical({ evidenceManifest: ANSWER_ID }),
+        scenarioManifestHash: sha256OfCanonical({ scenarioManifest: ANSWER_ID }),
+        publicationKind: 'verified',
+        publishedAt: '2026-09-21T00:00:00Z',
+        resultManifestRef: MANIFEST_REF,
+        resultManifestDigest: MANIFEST_REF.digest,
+        readKind: 'fixed_version',
+        label: '固定版本回读：本次运行发布的精确已核验版本',
+      },
+      {
+        answerId: OLDER_ANSWER_ID,
+        runId: OLDER_RUN_ID,
+        revisionIndex: 2,
+        contentHash: OLDER_CONTENT_HASH,
+        evidenceManifestHash: sha256OfCanonical({ evidenceManifest: OLDER_ANSWER_ID }),
+        scenarioManifestHash: sha256OfCanonical({ scenarioManifest: OLDER_ANSWER_ID }),
+        publicationKind: 'verified',
+        publishedAt: '2026-09-20T00:00:00Z',
+        readKind: 'history',
+        label: '历史回读：旧修订的归档结果（不是重算）',
+      },
+    ],
+  }
+}
+
+function exportView(currentRunId: string): Record<string, unknown> {
+  const evidence = evidenceRef(1)
+  return {
+    schemaVersion: 'verified-result-export@1',
+    exportedAt: '2026-09-30T00:00:00Z',
+    status: {
+      publicationKind: 'verified',
+      domainStatus: 'known',
+      dataMode: 'observed',
+      currentValidity: { state: 'current' },
+      coverage: { returned: 4, truncated: false },
+      limitations: [],
+    },
+    versions: {
+      answerId: ANSWER_ID,
+      runId: currentRunId,
+      contentHash: sha256OfCanonical({ body: ANSWER_ID }),
+      verificationId: '30000000-0000-4000-8000-0000000000a0',
+      resultManifestRef: MANIFEST_REF,
+      resultManifestDigest: MANIFEST_REF.digest,
+      executionBindingRef: {
+        id: '90000000-0000-4000-8000-000000000090',
+        version: '1.0.0',
+        digest: sha256OfCanonical({ execution: ANSWER_ID }),
+        kind: 'artifact',
+      },
+      finalizationReceiptRef: {
+        id: '80000000-0000-4000-8000-000000000080',
+        version: '1.0.0',
+        digest: sha256OfCanonical({ finalization: ANSWER_ID }),
+        kind: 'verification',
+      },
+      finalizationReceiptDigest: sha256OfCanonical({ finalization: ANSWER_ID }),
+    },
+    tables: [
+      {
+        tableId: VERIFIED_TABLE_ID,
+        totalRows: 4,
+        columns: COLUMNS,
+        complete: true,
+        manifestRef: MANIFEST_REF,
+        manifestDigest: MANIFEST_REF.digest,
+        pageRefs: PAGE_REFS,
+        verificationReceiptRef: RECEIPT_REF,
+      },
+    ],
+    sourceIndex: [
+      { evidenceId: evidence.id, evidenceRef: evidence, resultDigest: sha256OfCanonical({ result: 1 }), boundBy: ['claim'] },
+    ],
+  }
+}
+
 export interface BusinessResultsHarness {
   readonly harness: Harness
   readonly answerId: string
@@ -400,6 +496,30 @@ export async function startBusinessResultsHarness(
           }
           throw error
         }
+      },
+    )
+
+    app.get<{ Params: { runId: string } }>('/api/v1/runs/:runId/answer/history', async (request, reply) => {
+      reply.status(200).send({ data: historyView(request.params.runId), meta: { traceId: 'fixture' } })
+      return reply
+    })
+
+    app.get<{ Params: { runId: string }; Querystring: { format?: string } }>(
+      '/api/v1/runs/:runId/answer/export',
+      async (request, reply) => {
+        const format = request.query.format ?? 'json'
+        if (format !== 'json') {
+          reply.status(422).send({
+            error: { code: 'EXPORT_FORMAT_UNSUPPORTED', message: `unsupported format ${format}`, retryable: false },
+            traceId: 'fixture',
+          })
+          return reply
+        }
+        reply
+          .header('content-type', 'application/json; charset=utf-8')
+          .status(200)
+          .send({ data: exportView(request.params.runId), meta: { traceId: 'fixture' } })
+        return reply
       },
     )
   }

@@ -54,8 +54,13 @@ import type {
 } from './energy'
 import { dependencyQuery, optionalTimeQuery } from './provenance'
 import type { DependencyPage, HistoryPage } from './provenance'
-import { isTablePageReadView, isVerifiedResultView } from './results'
-import type { VerifiedResultView, VerifiedTablePageView } from './results'
+import { isResultHistoryView, isTablePageReadView, isVerifiedResultExport, isVerifiedResultView } from './results'
+import type {
+  ResultHistoryView,
+  VerifiedResultExport,
+  VerifiedResultView,
+  VerifiedTablePageView,
+} from './results'
 import { defaultRunEventStreamFactory, isRunState } from './query'
 import type {
   CancelRunRequest,
@@ -664,6 +669,36 @@ export class WorkbenchClient {
     return this.#request<unknown>('GET', path).then((data) => {
       if (!isTablePageReadView(data)) {
         throw malformedResponse(path, 'the verified table page was not recognised')
+      }
+      return data
+    })
+  }
+
+  /**
+   * `GET /runs/{runId}/answer/history`: the immutable result revisions grouped by the run's
+   * project. Each entry is a published version; older ones are labelled `history` and the exact
+   * version this run published is `fixed_version`, so a readback is never confused with a recompute.
+   */
+  getResultHistory(runId: string): Promise<ResultHistoryView> {
+    const path = `/api/v1/runs/${encodeURIComponent(runId)}/answer/history`
+    return this.#request<unknown>('GET', path).then((data) => {
+      if (!isResultHistoryView(data)) {
+        throw malformedResponse(path, 'the result history view was not recognised')
+      }
+      return data
+    })
+  }
+
+  /**
+   * `GET /runs/{runId}/answer/export?format=json`: the structured JSON export of the exact
+   * verified version the run published. A format the core surface does not serve is refused by
+   * the server (the professional XLSX template is registered by the scenario).
+   */
+  exportVerifiedResult(runId: string): Promise<VerifiedResultExport> {
+    const path = `/api/v1/runs/${encodeURIComponent(runId)}/answer/export?format=json`
+    return this.#request<unknown>('GET', path).then((data) => {
+      if (!isVerifiedResultExport(data)) {
+        throw malformedResponse(path, 'the verified result export was not recognised')
       }
       return data
     })

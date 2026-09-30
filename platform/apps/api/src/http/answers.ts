@@ -1,12 +1,14 @@
 import type { FastifyInstance } from 'fastify'
 import type {
   PublishedAnswer,
+  ResultHistoryView,
   RevisionString,
   RunState,
   TableArtifactReadErrorCode,
   TablePageReadRequest,
   TablePageReadView,
   ToolContext,
+  VerifiedResultExport,
 } from '@ontology/contracts'
 import { isTableArtifactReadError } from '@ontology/contracts'
 import type { VerifiedResultView } from '@ontology/application'
@@ -36,11 +38,38 @@ export interface AnswerTableReader {
   readPage(request: TablePageReadRequest, ctx: ToolContext): Promise<TablePageReadView>
 }
 
+/** The structured JSON export surface (satisfied by `VerifiedResultExportService`). */
+export interface AnswerExportReader {
+  exportByRun(runId: string, ctx: ToolContext): Promise<VerifiedResultExport>
+}
+
+/** The result revision history surface (satisfied by `ResultHistoryService`). */
+export interface AnswerHistoryReader {
+  getHistory(runId: string, ctx: ToolContext): Promise<ResultHistoryView>
+}
+
 export interface AnswerRouteDependencies {
   readonly reader?: AnswerReader
   readonly result?: AnswerResultReader
   readonly tables?: AnswerTableReader
+  readonly exporter?: AnswerExportReader
+  readonly history?: AnswerHistoryReader
   readonly authenticate: RequestAuthenticator
+}
+
+/**
+ * A caller requested an export format this deployment does not serve. JSON is the only format
+ * this node provides; a professional XLSX template is registered by the scenario (B's node), so
+ * an unsupported format is refused explicitly rather than silently returning JSON.
+ */
+class ExportFormatUnsupportedError extends Error {
+  readonly code = 'EXPORT_FORMAT_UNSUPPORTED'
+  readonly httpStatus = 422
+
+  constructor(format: string) {
+    super(`export format ${format} is not supported; only json is provided by the core surface`)
+    this.name = 'ExportFormatUnsupportedError'
+  }
 }
 
 const TERMINAL_WITHOUT_ANSWER: ReadonlySet<RunState> = new Set<RunState>([
@@ -188,6 +217,44 @@ export function registerAnswerRoutes(
           }
           throw error
         }
+      },
+    )
+  }
+
+  const exporter = dependencies.exporter
+  if (exporter !== undefined) {
+    app.get<{ Params: { runId: string }; Querystring: { format?: string } }>(
+      '/api/v1/runs/:runId/answer/export',
+      async (request, reply) => {
+        const traceId = readTraceId(request)
+        const auth = authenticateRequest(dependencies.authenticate, request, reply)
+        if (auth === undefined) return reply
+        const runId = request.params.runId
+        const format = readQueryString(request, 'format') ?? 'json'
+        if (format !== 'json') throw new ExportFormatUnsupportedError(format)
+        const exported = await exporter.exportByRun(runId, contextFor(auth, traceId, runId))
+        reply
+          .header('content-type', 'application/json; charset=utf-8')
+          .header('content-disposition', `attachment; filename="verified-result-${runId}.json"`)
+          .status(200)
+          .send({ data: exported, meta: { traceId } })
+        return reply
+      },
+    )
+  }
+
+  const history = dependencies.history
+  if (history !== undefined) {
+    app.get<{ Params: { runId: string } }>(
+      '/api/v1/runs/:runId/answer/history',
+      async (request, reply) => {
+        const traceId = readTraceId(request)
+        const auth = authenticateRequest(dependencies.authenticate, request, reply)
+        if (auth === undefined) return reply
+        const runId = request.params.runId
+        const view = await history.getHistory(runId, contextFor(auth, traceId, runId))
+        reply.status(200).send({ data: view, meta: { traceId } })
+        return reply
       },
     )
   }

@@ -60,5 +60,11 @@ Dependencies: #203, #206, #211, #212
 
 ## 完成记录
 
-- 当前：未开工；验证未运行。GitHub Issue：[#214](https://github.com/Yijtu/ontology/issues/214)；文档提交不代表功能完成。
-- 实现后记录：提交/PR、适用命令结果、满足的验收、未验证/外部条件、迁移配置与兼容影响。
+- 当前：已实现并验证（分支 `feat/v03-041-history-json-export`）。GitHub Issue：[#214](https://github.com/Yijtu/ontology/issues/214)。
+- 实现：
+  - `GET /api/v1/runs/{runId}/answer/history`：按运行归档执行绑定解析到项目修订，列出该项目不可变结果历史（新→旧），每条标 `fixed_version`（本次运行发布的精确版本回读）或 `history`（旧修订回读，不是重算）；无项目绑定时退回该运行自身单版本并显式标注。发布响应丢失可用同一逻辑键（runId）读回同一版本。
+  - `GET /api/v1/runs/{runId}/answer/export?format=json`：只读取与已核验页面相同的、按 digest 校验的 `answer-draft@3` + `typed-result-manifest@1`，返回 `verified-result-export@1`（status、versions、tables 含核验回执与页 refs、去重来源索引）；权限与已核验页面一致；非 `json` 格式明确拒绝 `EXPORT_FORMAT_UNSUPPORTED`（XLSX 由 B 挂载）。后续编辑需新核验，导出固定到精确已核验版本。
+  - 契约新增手写运行期守卫 `result-export.ts`/`result-history.ts`；控制库适配器新增 `PostgresAnswerStore.listByProject`（join `run_execution_bindings`，RLS/scope 校验）；Web `ResultWorkbenchPanel` 新增“历史版本”页签与“导出 JSON”。
+- 迁移：无（复用既有 `answer_publications`、`run_execution_bindings`）。
+- 验证：`pnpm run typecheck`、`pnpm run lint`、`pnpm run boundaries`、`pnpm run build:web` 通过；聚焦单测 5、契约 3、真实 PG 集成 4、浏览器 E2E 4 均通过；`pnpm run test` 全量 286 文件 / 2508 用例通过。
+- 未验证/外部条件：专业 XLSX 模板导出为 B 节点，不在本卡；未验证项以计划 ID 或受控模型响应替代。

@@ -1,6 +1,12 @@
 import { useCallback, useEffect, useRef, useState } from 'react'
 import type { ProvenanceEvidenceView, PublishedAnswer, ResourceRef } from '@ontology/contracts'
-import type { ResultSource, VerifiedResultLoad, VerifiedTablePageView } from '../api/results'
+import type {
+  ResultHistoryView,
+  ResultSource,
+  VerifiedResultExport,
+  VerifiedResultLoad,
+  VerifiedTablePageView,
+} from '../api/results'
 import { PublishedAnswerBody } from './PublishedAnswerBody'
 import type { PublishedAnswerLabelKind } from './PublishedAnswerBody'
 
@@ -20,7 +26,7 @@ import type { PublishedAnswerLabelKind } from './PublishedAnswerBody'
  * mounted for any scenario without an industry-name branch.
  */
 
-export type ResultWorkbenchTab = 'body' | 'tables' | 'evidence'
+export type ResultWorkbenchTab = 'body' | 'tables' | 'evidence' | 'history'
 
 export interface ResultWorkbenchPanelProps {
   readonly source: ResultSource
@@ -40,6 +46,7 @@ const TAB_LABELS: Readonly<Record<ResultWorkbenchTab, string>> = {
   body: '正文',
   tables: '结果表',
   evidence: '依据',
+  history: '历史版本',
 }
 
 const VALIDITY_LABELS: Readonly<Record<string, string>> = {
@@ -204,6 +211,44 @@ function EvidenceView({
   )
 }
 
+function HistoryView({
+  state,
+}: {
+  readonly state: { readonly view?: ResultHistoryView; readonly loading: boolean; readonly error?: string }
+}) {
+  if (state.loading) return <p data-testid="history-loading">正在读取结果修订历史…</p>
+  if (state.error !== undefined) {
+    return (
+      <p data-testid="history-error" role="alert">
+        读取结果修订历史失败：{state.error}
+      </p>
+    )
+  }
+  if (state.view === undefined) return null
+  return (
+    <section className="result-workbench__history" data-testid="result-history" data-logical-key={state.view.logicalKey}>
+      <p data-testid="history-current" data-answer-id={state.view.currentAnswerId}>
+        当前版本：{state.view.currentAnswerId}
+        {state.view.projectRevision === undefined ? '' : ` · 项目修订 ${state.view.projectRevision}`}
+      </p>
+      <ul>
+        {state.view.entries.map((entry) => (
+          <li
+            key={entry.answerId}
+            data-testid="history-revision"
+            data-read-kind={entry.readKind}
+            data-answer-id={entry.answerId}
+            data-run-id={entry.runId}
+            data-content-hash={entry.contentHash}
+          >
+            #{entry.revisionIndex} · {entry.label} · {entry.publicationKind} · {entry.contentHash}
+          </li>
+        ))}
+      </ul>
+    </section>
+  )
+}
+
 export function ResultWorkbenchPanel({
   source,
   runId,
@@ -218,6 +263,8 @@ export function ResultWorkbenchPanel({
   const [tableState, setTableState] = useState<{ page?: VerifiedTablePageView; loading: boolean; error?: string; blocked?: string }>({ loading: false })
   const [evidenceRef, setEvidenceRef] = useState<ResourceRef | undefined>()
   const [evidenceState, setEvidenceState] = useState<{ view?: ProvenanceEvidenceView; loading: boolean; error?: string }>({ loading: false })
+  const [historyState, setHistoryState] = useState<{ view?: ResultHistoryView; loading: boolean; error?: string }>({ loading: false })
+  const [exportState, setExportState] = useState<{ data?: VerifiedResultExport; loading: boolean; error?: string }>({ loading: false })
   const autoLoadedFor = useRef<string | undefined>(undefined)
 
   useEffect(() => {
@@ -287,11 +334,37 @@ export function ResultWorkbenchPanel({
     [source],
   )
 
+  const loadHistory = useCallback(async () => {
+    if (historyState.view !== undefined || historyState.loading) return
+    setHistoryState({ loading: true })
+    try {
+      const view = await source.loadHistory(runId)
+      setHistoryState({ loading: false, view })
+    } catch (error) {
+      setHistoryState({ loading: false, error: errorMessage(error) })
+    }
+  }, [source, runId, historyState.view, historyState.loading])
+
+  const requestExport = useCallback(async () => {
+    setExportState({ loading: true })
+    try {
+      const data = await source.requestExport(runId)
+      setExportState({ loading: false, data })
+    } catch (error) {
+      setExportState({ loading: false, error: errorMessage(error) })
+    }
+  }, [source, runId])
+
   const openEvidence = onOpenEvidence
   const handleEvidence = (ref: ResourceRef) => {
     void selectEvidence(ref)
     openEvidence?.(ref)
   }
+
+  const exportHref =
+    exportState.data === undefined
+      ? undefined
+      : `data:application/json;charset=utf-8,${encodeURIComponent(JSON.stringify(exportState.data))}`
 
   return (
     <section className="result-workbench" data-testid="result-workbench" data-run-id={runId}>
@@ -330,6 +403,35 @@ export function ResultWorkbenchPanel({
               覆盖：返回 {verified.view.coverage.returned} 条{verified.view.coverage.truncated ? '（已截断，非完整）' : ''}
             </p>
             <p data-testid="result-content-hash">{verified.view.contentHash}</p>
+            <div className="result-workbench__export">
+              <button
+                type="button"
+                data-testid="result-export"
+                disabled={exportState.loading}
+                onClick={() => void requestExport()}
+              >
+                导出 JSON
+              </button>
+              {exportState.error === undefined ? null : (
+                <span data-testid="result-export-error" role="alert">
+                  导出失败：{exportState.error}
+                </span>
+              )}
+              {exportState.data === undefined ? null : (
+                <span
+                  data-testid="result-export-view"
+                  data-content-hash={exportState.data.versions.contentHash}
+                  data-answer-id={exportState.data.versions.answerId}
+                >
+                  export@{exportState.data.schemaVersion} · {exportState.data.versions.contentHash}
+                  {exportHref === undefined ? null : (
+                    <a data-testid="result-export-download" download={`verified-result-${runId}.json`} href={exportHref}>
+                      下载
+                    </a>
+                  )}
+                </span>
+              )}
+            </div>
             {verified.view.limitations.length === 0 ? null : (
               <ul data-testid="result-limitations">
                 {verified.view.limitations.map((limitation) => (
@@ -340,14 +442,17 @@ export function ResultWorkbenchPanel({
           </header>
 
           <nav className="result-workbench__tabs" aria-label="结果视图">
-            {(['body', 'tables', 'evidence'] as const).map((entry) => (
+            {(['body', 'tables', 'evidence', 'history'] as const).map((entry) => (
               <button
                 key={entry}
                 type="button"
                 data-testid={`result-tab-${entry}`}
                 data-active={tab === entry}
                 aria-current={tab === entry ? 'page' : undefined}
-                onClick={() => setTab(entry)}
+                onClick={() => {
+                  setTab(entry)
+                  if (entry === 'history') void loadHistory()
+                }}
               >
                 {TAB_LABELS[entry]}
               </button>
@@ -416,6 +521,12 @@ export function ResultWorkbenchPanel({
                 </p>
               ) : null}
               <EvidenceView {...evidenceState} />
+            </div>
+          ) : null}
+
+          {tab === 'history' ? (
+            <div data-testid="result-history-tab">
+              <HistoryView state={historyState} />
             </div>
           ) : null}
         </>

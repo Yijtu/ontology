@@ -8,6 +8,17 @@ export type {
   VerifiedResultView,
   VerifiedTableSummary,
 } from './verified-result-read-service'
+export { VerifiedResultExportError, VerifiedResultExportService } from './verified-result-export-service'
+export type {
+  PublishedAnswerRunPort,
+  VerifiedResultExportDependencies,
+} from './verified-result-export-service'
+export { ResultHistoryError, ResultHistoryService } from './result-history-service'
+export type {
+  ResultHistoryBindingPort,
+  ResultHistoryDependencies,
+  ResultHistoryErrorCode,
+} from './result-history-service'
 export { InMemoryTableArtifactStore } from './in-memory-table-artifact-store'
 export { TableHardVerificationService } from './table-hard-verification-service'
 export type { TableHardVerificationDependencies } from './table-hard-verification-service'

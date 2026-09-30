@@ -77,6 +77,72 @@ export interface VerifiedTablePageView {
   readonly complete: boolean
 }
 
+/**
+ * The result revision history of one logical key (a project, or a single run) — the local,
+ * data-only projection of the server's `result-history@1`. Each entry is an immutable
+ * published version; `readKind` labels a fixed-version readback apart from an older history
+ * read, and the hashes let a reader confirm an older revision was not rewritten.
+ */
+export interface ResultRevisionSummary {
+  readonly answerId: string
+  readonly runId: string
+  readonly revisionIndex: number
+  readonly contentHash: Sha256Digest
+  readonly evidenceManifestHash: Sha256Digest
+  readonly scenarioManifestHash: Sha256Digest
+  readonly publicationKind: 'verified' | 'history_limited'
+  readonly publishedAt: string
+  readonly resultManifestRef?: ResourceRef
+  readonly resultManifestDigest?: Sha256Digest
+  readonly readKind: 'fixed_version' | 'history'
+  readonly label: string
+}
+
+export interface ResultHistoryView {
+  readonly schemaVersion: 'result-history@1'
+  readonly logicalKey: string
+  readonly projectId?: string
+  readonly projectRevision?: string
+  readonly currentAnswerId: string
+  readonly entries: readonly ResultRevisionSummary[]
+}
+
+/**
+ * The structured JSON export of one verified result version. The browser does not re-render it
+ * field by field; it validates the version identity at the wire boundary and offers the exact
+ * content the server produced as a download.
+ */
+export interface VerifiedResultExport {
+  readonly schemaVersion: 'verified-result-export@1'
+  readonly exportedAt: string
+  readonly status: {
+    readonly publicationKind: 'verified' | 'history_limited'
+    readonly domainStatus: string
+    readonly dataMode: string
+    readonly coverage: ToolCoverage
+    readonly limitations: readonly string[]
+  }
+  readonly versions: {
+    readonly answerId: string
+    readonly runId: string
+    readonly contentHash: Sha256Digest
+    readonly verificationId: string
+    readonly resultManifestRef: ResourceRef
+    readonly resultManifestDigest: Sha256Digest
+  }
+  readonly tables: readonly {
+    readonly tableId: string
+    readonly totalRows: number
+    readonly complete: boolean
+  }[]
+  readonly sourceIndex: readonly {
+    readonly evidenceId: string
+    readonly evidenceRef: ResourceRef
+    readonly resultDigest: Sha256Digest
+    readonly boundBy: readonly ('claim' | 'assertion')[]
+  }[]
+}
+
 /** The discriminated load of the result for one run. `blocked` is a verified refusal, not a failure. */
 export type VerifiedResultLoad =
   | { readonly kind: 'verified'; readonly answer: PublishedAnswer; readonly view: VerifiedResultView }
@@ -89,6 +155,8 @@ export interface ResultSource {
   loadResult(runId: string): Promise<VerifiedResultLoad>
   loadTablePage(answerId: string, tableId: string, cursor?: string): Promise<VerifiedTablePageView>
   loadEvidence(ref: ResourceRef): Promise<ProvenanceEvidenceView>
+  loadHistory(runId: string): Promise<ResultHistoryView>
+  requestExport(runId: string): Promise<VerifiedResultExport>
 }
 
 /** The structural client the result source needs; `WorkbenchClient` satisfies it. */
@@ -97,6 +165,8 @@ export interface ResultSourceClient {
   getVerifiedResult(answerId: string): Promise<VerifiedResultView>
   getAnswerTablePage(answerId: string, tableId: string, cursor?: string): Promise<VerifiedTablePageView>
   getEvidence(evidenceId: string): Promise<ProvenanceEvidenceView>
+  getResultHistory(runId: string): Promise<ResultHistoryView>
+  exportVerifiedResult(runId: string): Promise<VerifiedResultExport>
 }
 
 const SHA256 = /^sha256:[0-9a-f]{64}$/u
@@ -239,6 +309,55 @@ export function isVerifiedResultView(value: unknown): value is VerifiedResultVie
   )
 }
 
+function isRevisionSummary(value: unknown): value is ResultRevisionSummary {
+  return (
+    isRecord(value) &&
+    isNonEmptyString(value['answerId']) &&
+    isNonEmptyString(value['runId']) &&
+    typeof value['revisionIndex'] === 'number' &&
+    isDigest(value['contentHash']) &&
+    isDigest(value['evidenceManifestHash']) &&
+    isDigest(value['scenarioManifestHash']) &&
+    (value['publicationKind'] === 'verified' || value['publicationKind'] === 'history_limited') &&
+    typeof value['publishedAt'] === 'string' &&
+    (value['resultManifestRef'] === undefined || isResourceRef(value['resultManifestRef'])) &&
+    (value['resultManifestDigest'] === undefined || isDigest(value['resultManifestDigest'])) &&
+    (value['readKind'] === 'fixed_version' || value['readKind'] === 'history') &&
+    typeof value['label'] === 'string'
+  )
+}
+
+/** Validate the server-provided result history at the wire boundary. */
+export function isResultHistoryView(value: unknown): value is ResultHistoryView {
+  return (
+    isRecord(value) &&
+    value['schemaVersion'] === 'result-history@1' &&
+    isNonEmptyString(value['logicalKey']) &&
+    isNonEmptyString(value['currentAnswerId']) &&
+    Array.isArray(value['entries']) &&
+    value['entries'].every(isRevisionSummary)
+  )
+}
+
+/** Validate the server-provided structured export at the wire boundary. */
+export function isVerifiedResultExport(value: unknown): value is VerifiedResultExport {
+  if (!isRecord(value) || value['schemaVersion'] !== 'verified-result-export@1') return false
+  const versions = value['versions']
+  const status = value['status']
+  return (
+    isRecord(status) &&
+    (status['publicationKind'] === 'verified' || status['publicationKind'] === 'history_limited') &&
+    isRecord(versions) &&
+    isNonEmptyString(versions['answerId']) &&
+    isNonEmptyString(versions['runId']) &&
+    isDigest(versions['contentHash']) &&
+    isResourceRef(versions['resultManifestRef']) &&
+    isDigest(versions['resultManifestDigest']) &&
+    Array.isArray(value['tables']) &&
+    Array.isArray(value['sourceIndex'])
+  )
+}
+
 export { isTablePageReadView, isColumnDescriptor, isResourceRef, isVersionRef, isDigest }
 
 /** Bind the verified-result source to the HTTP client. */
@@ -253,5 +372,7 @@ export function createWorkbenchResultSource(client: ResultSourceClient): ResultS
     },
     loadTablePage: (answerId, tableId, cursor) => client.getAnswerTablePage(answerId, tableId, cursor),
     loadEvidence: (ref) => client.getEvidence(ref.id),
+    loadHistory: (runId) => client.getResultHistory(runId),
+    requestExport: (runId) => client.exportVerifiedResult(runId),
   }
 }

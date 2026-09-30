@@ -1,11 +1,15 @@
 import { AnswerStoreError, isAnswerDraftV3Body, isPublishedAnswerBody, isToolContext } from '@ontology/contracts'
 import type {
+  AnswerRevisionRecord,
   AnswerStorePort,
   PublicationKind,
   PublishedAnswer,
   RecordAnswerInput,
+  ResultHistoryPort,
+  RevisionString,
   SemanticReviewDisposition,
   RunState,
+  ScopeRef,
   ToolContext,
   Uuid,
 } from '@ontology/contracts'
@@ -52,6 +56,10 @@ interface EvidencePinRow extends QueryResultRow {
 
 const ANSWER_COLUMNS =
   'answer_id, run_id, draft_id, verification_id, content_hash, evidence_manifest_hash, scenario_manifest_hash, publication_kind, as_of, limitations, body, semantic_review, (body IS NULL) AS body_missing, published_at'
+
+/** The same columns qualified for the history join, so `runs`/`answer_publications` never clash. */
+const HISTORY_ANSWER_COLUMNS =
+  'ap.answer_id, ap.run_id, ap.draft_id, ap.verification_id, ap.content_hash, ap.evidence_manifest_hash, ap.scenario_manifest_hash, ap.publication_kind, ap.as_of, ap.limitations, ap.body, ap.semantic_review, (ap.body IS NULL) AS body_missing, ap.published_at'
 
 function scopeOf(ctx: ToolContext): { tenantId: string; spaceId: string } {
   if (!isToolContext(ctx)) {
@@ -126,7 +134,12 @@ function samePublication(left: PublishedAnswer, right: PublishedAnswer): boolean
  * Every statement runs as the non-owner application role with the trusted scope set via
  * `SET LOCAL`, so RLS applies and a lookup in another tenant/space returns nothing.
  */
-export class PostgresAnswerStore implements AnswerStorePort {
+interface HistoryAnswerRow extends AnswerRow {
+  project_id: string
+  project_revision: string
+}
+
+export class PostgresAnswerStore implements AnswerStorePort, ResultHistoryPort {
   readonly #database: ControlPostgresDatabase
   readonly #requireWorkflowDispatchFence: boolean
 
@@ -306,6 +319,51 @@ export class PostgresAnswerStore implements AnswerStorePort {
         )
         const row = result.rows[0]
         return row === undefined ? undefined : toAnswer(row)
+      },
+      { readOnly: true },
+    )
+  }
+
+  /**
+   * The immutable result history of one project (SPEC v0.3a §EX-8, issue V03-041 / #214).
+   *
+   * Every published answer is joined to the run's archived execution binding and grouped by the
+   * project revision it pinned. The project id is read from the binding, never from the caller,
+   * and RLS scopes the join to the trusted tenant/space, so a project in another scope returns
+   * nothing. Newest first; the caller labels the current fixed version apart from older history.
+   */
+  async listByProject(
+    scopeRef: ScopeRef,
+    projectId: Uuid,
+    ctx: ToolContext,
+  ): Promise<readonly AnswerRevisionRecord[]> {
+    const scope = scopeOf(ctx)
+    if (scope.tenantId !== scopeRef.tenantId || scope.spaceId !== scopeRef.spaceId) {
+      throw new AnswerStoreError('SCOPE_MISMATCH', 'request scope does not match the trusted principal scope')
+    }
+    return this.#database.withIdentityScope(
+      scope,
+      async (client) => {
+        const result = await client.query<HistoryAnswerRow>(
+          `SELECT ${HISTORY_ANSWER_COLUMNS},
+                  binding.binding->'request'->'projectRevisionRef'->>'projectId' AS project_id,
+                  binding.binding->'request'->'projectRevisionRef'->>'revision' AS project_revision
+             FROM agent_platform.answer_publications AS ap
+             JOIN agent_platform.run_execution_bindings AS binding
+               ON binding.tenant_id = ap.tenant_id
+              AND binding.space_id = ap.space_id
+              AND binding.run_id = ap.run_id
+            WHERE ap.tenant_id = current_setting('app.tenant_id')::uuid
+              AND ap.space_id = current_setting('app.space_id')::uuid
+              AND binding.binding->'request'->'projectRevisionRef'->>'projectId' = $1
+            ORDER BY ap.published_at DESC, ap.answer_id`,
+          [projectId],
+        )
+        return result.rows.map((row) => ({
+          answer: toAnswer(row),
+          projectId: row.project_id as Uuid,
+          projectRevision: row.project_revision as RevisionString,
+        }))
       },
       { readOnly: true },
     )

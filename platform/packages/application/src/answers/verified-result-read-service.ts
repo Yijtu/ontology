@@ -127,7 +127,15 @@ export class VerifiedResultReadService {
     this.#tables = dependencies.tables
   }
 
-  async getResult(answerId: string, ctx: ToolContext): Promise<VerifiedResultView> {
+  /**
+   * The exact published answer and its digest-verified typed result manifest. The scope and
+   * manifest-digest checks live in one place so every reader (the page projection and the JSON
+   * export) is derived from the same verified artifact and never from a second representation.
+   */
+  async getVerifiedAnswer(
+    answerId: string,
+    ctx: ToolContext,
+  ): Promise<{ readonly answer: PublishedAnswer; readonly manifest: TypedResultManifest }> {
     const scopeRef = scopeRefOf(ctx)
     const answer = await this.#answers.findByAnswer(answerId, ctx)
     if (answer === undefined) {
@@ -148,7 +156,20 @@ export class VerifiedResultReadService {
         `the typed result manifest of answer ${answerId} does not match the digest the answer pins`,
       )
     }
-    const tables = await this.#summarizeTables(scopeRef, answerId, manifest, ctx)
+    return { answer, manifest }
+  }
+
+  async getResult(answerId: string, ctx: ToolContext): Promise<VerifiedResultView> {
+    const scopeRef = scopeRefOf(ctx)
+    const { answer, manifest } = await this.getVerifiedAnswer(answerId, ctx)
+    const body = answer.v3Body
+    if (body === undefined) {
+      throw new VerifiedResultReadError(
+        'RESULT_NOT_AVAILABLE',
+        `answer ${answer.answerId} has no typed-result (@3) body and cannot be projected`,
+      )
+    }
+    const tables = await this.#summarizeTables(scopeRef, answer.answerId, manifest, ctx)
     return {
       answerId: answer.answerId,
       runId: answer.runId,

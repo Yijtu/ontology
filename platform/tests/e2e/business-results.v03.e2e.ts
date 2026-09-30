@@ -100,6 +100,41 @@ describe('business workbench, typed results and provenance in a real browser', (
     }
   })
 
+  it('renders the result revision history and exports the exact verified version as JSON', async () => {
+    const context = await browser.newContext({ viewport: { width: 1280, height: 1000 } })
+    const page = await context.newPage()
+    try {
+      await openWorkbench(page)
+      await page.click('[data-testid="task-entry"]')
+      await page.click('[data-testid="business-run"]')
+      await page.waitForSelector('[data-testid="result-workbench"]')
+
+      // History: newer (fixed_version) and older (history) revisions are labelled apart.
+      await page.click('[data-testid="result-tab-history"]')
+      await page.waitForSelector('[data-testid="history-revision"]')
+      expect(await page.locator('[data-testid="history-revision"]').count()).toBe(2)
+      const readKinds = await page.locator('[data-testid="history-revision"]').evaluateAll((nodes) =>
+        nodes.map((node) => node.getAttribute('data-read-kind')),
+      )
+      expect(readKinds).toEqual(['fixed_version', 'history'])
+
+      // Export: the structured JSON reflects the same content hash the page shows.
+      const pageHash = await page.textContent('[data-testid="result-content-hash"]')
+      await page.click('[data-testid="result-export"]')
+      await page.waitForSelector('[data-testid="result-export-view"]')
+      expect(await page.getAttribute('[data-testid="result-export-view"]', 'data-content-hash')).toBe(pageHash)
+      expect(await page.locator('[data-testid="result-export-download"]').count()).toBe(1)
+
+      await capture(page, 'business-results-history-export')
+      await record('business-results-history-export', [
+        'history=fixed_version+history',
+        'export=same-content-hash',
+      ])
+    } finally {
+      await context.close()
+    }
+  })
+
   it('refuses a table that has no full-table verification receipt at the server', async () => {
     const context = await browser.newContext({ viewport: { width: 1100, height: 900 } })
     const page = await context.newPage()
