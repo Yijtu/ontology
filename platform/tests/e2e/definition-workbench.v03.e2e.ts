@@ -63,10 +63,16 @@ describe('definition workbench in a real browser', () => {
       const object = candidate(page, harness.candidateIds.object)
       expect(await object.locator('[data-testid="definition-candidate-source"]').textContent()).toContain('1 项')
 
+      // A genuine different-condition OR is now executable (#188), so the supported fixture
+      // exercises that path while the relation premise stays outside the finite subset.
+      const supported = page.locator(`[data-testid="rule-action-candidate"][data-candidate-id="${harness.ruleCandidateIds.supported}"]`)
+      expect(await supported.getAttribute('data-support')).toBe('executable')
+      expect(await supported.locator('[data-testid="rule-condition"]').textContent()).toContain('operating_hours')
+
       const rule = page.locator(`[data-testid="rule-action-candidate"][data-candidate-id="${harness.ruleCandidateIds.unsupported}"]`)
       expect(await rule.getAttribute('data-support')).toBe('not_yet_executable')
       expect(await rule.locator('[data-testid="rule-support"]').textContent()).toContain('暂不可执行')
-      expect(await rule.locator('[data-testid="rule-condition"]').textContent()).toContain('any')
+      expect(await rule.locator('[data-testid="rule-condition"]').textContent()).toContain('relation')
 
       const action = page.locator(`[data-testid="rule-action-candidate"][data-candidate-id="${harness.actionCandidateIds.notExecutable}"]`)
       expect(await action.getAttribute('data-binding')).toBe('not_executable')
@@ -81,7 +87,8 @@ describe('definition workbench in a real browser', () => {
         'attributeUnit=t',
         'pendingConfirmation=1',
         'candidateStale=true',
-        'ruleSupport=not_yet_executable',
+        'supportedRuleSupport=executable',
+        'unsupportedRuleSupport=not_yet_executable',
         'actionBinding=not_executable',
       ])
     } finally {

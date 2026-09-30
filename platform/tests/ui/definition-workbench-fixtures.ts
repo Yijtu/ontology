@@ -72,14 +72,16 @@ function compare(
   return { op: 'compare', attributeId, operator, value, spans: [] }
 }
 
-const SAME_OR: RuleExpressionNode = {
-  op: 'any',
-  operands: [compare('status', 'on'), compare('status', 'on')],
-  spans: [],
-}
+/** A genuine different-condition finite OR; executable since V03-026 / #188. */
 const DIFFERENT_OR: RuleExpressionNode = {
   op: 'any',
   operands: [compare('operating_hours', 100, 'gte'), compare('alarm', true)],
+  spans: [],
+}
+/** A one-hop relation premise, still outside the first executable subset (EX-4.1). */
+const RELATION_PREMISE: RuleExpressionNode = {
+  op: 'relation',
+  relationId: 'meter_of',
   spans: [],
 }
 
@@ -378,12 +380,12 @@ export async function startDefinitionWorkbenchHarness(): Promise<DefinitionWorkb
   const supportedRule = await ruleActionService.saveRuleCandidate(
     workspaceId,
     {
-      displayName: '运行状态规则',
-      businessMeaning: '运行状态满足时成立',
+      displayName: '运行时长或告警规则',
+      businessMeaning: '不同条件的有限或：运行时长达标或触发告警',
       suggestedReason: '资料',
-      ruleId: 'rule.status_ok',
+      ruleId: 'rule.operating_or_alarm',
       applicability: { objectId: 'device' },
-      condition: SAME_OR,
+      condition: DIFFERENT_OR,
       exceptions: [] as readonly RuleExceptionNode[],
       ruleDependencies: [],
       sourceRefs: [resourceRef()],
@@ -396,12 +398,12 @@ export async function startDefinitionWorkbenchHarness(): Promise<DefinitionWorkb
   const unsupportedRule = await ruleActionService.saveRuleCandidate(
     workspaceId,
     {
-      displayName: '多条件或规则',
-      businessMeaning: '不同条件的或关系',
+      displayName: '关系前提规则',
+      businessMeaning: '以一跳已发布关系为前提，超出首批可执行子集',
       suggestedReason: '资料',
-      ruleId: 'rule.multi_or',
+      ruleId: 'rule.relation_premise',
       applicability: { objectId: 'device' },
-      condition: DIFFERENT_OR,
+      condition: RELATION_PREMISE,
       exceptions: [],
       ruleDependencies: [],
       sourceRefs: [resourceRef()],
