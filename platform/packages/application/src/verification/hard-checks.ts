@@ -206,6 +206,64 @@ export function fieldBindingMatches(
     (binding.timePointer === undefined || sameRow(binding.valuePointer, binding.timePointer))
 }
 
+/**
+ * The dedicated row/column binding check for a table-cell assertion. `fieldBindingMatches`
+ * returns a single boolean; this locates exactly which pointer escaped the row so the finding
+ * names the wrong row or column instead of a generic predicate mismatch. It applies only to
+ * real table cells; the published-facts shape is checked by `fieldBindingMatches`.
+ */
+export function rowBindingFinding(
+  binding: ResultFieldBinding,
+  input: { readonly claimId?: Uuid; readonly assertionId?: Uuid; readonly field?: string },
+): VerificationFinding | undefined {
+  const cell = queryCellLocation(binding.valuePointer)
+  if (cell === undefined) return undefined
+  const ids = {
+    ...(input.claimId === undefined ? {} : { claimId: input.claimId }),
+    ...(input.assertionId === undefined ? {} : { assertionId: input.assertionId }),
+    ...(input.field === undefined ? {} : { field: input.field }),
+  }
+  const subjectCell = queryCellLocation(binding.subjectPointer)
+  if (subjectCell === undefined || subjectCell.row !== cell.row) {
+    return {
+      code: 'row_binding_mismatch',
+      axis: 'hard',
+      ...ids,
+      pointer: binding.subjectPointer,
+      expected: `row ${String(cell.row)}`,
+      actual: subjectCell === undefined ? 'non-cell pointer' : `row ${String(subjectCell.row)}`,
+    }
+  }
+  if (binding.timePointer !== undefined) {
+    const timeCell = queryCellLocation(binding.timePointer)
+    if (timeCell === undefined || timeCell.row !== cell.row) {
+      return {
+        code: 'row_binding_mismatch',
+        axis: 'hard',
+        ...ids,
+        pointer: binding.timePointer,
+        expected: `row ${String(cell.row)}`,
+        actual: timeCell === undefined ? 'non-cell pointer' : `row ${String(timeCell.row)}`,
+      }
+    }
+  }
+  if (binding.fieldRefPointer !== undefined) {
+    const parts = binding.fieldRefPointer.split('/').slice(1).map((part) => part.replaceAll('~1', '/').replaceAll('~0', '~'))
+    const column = parts.length === 3 && parts[0] === 'table' && parts[1] === 'columns' ? indexOf(parts[2]) : undefined
+    if (column !== undefined && column !== cell.column) {
+      return {
+        code: 'row_binding_mismatch',
+        axis: 'hard',
+        ...ids,
+        pointer: binding.fieldRefPointer,
+        expected: `column ${String(cell.column)}`,
+        actual: `column ${String(column)}`,
+      }
+    }
+  }
+  return undefined
+}
+
 export function sourceValidityFinding(
   record: EvidenceRecord,
   asOf: Rfc3339UtcTimestamp,
