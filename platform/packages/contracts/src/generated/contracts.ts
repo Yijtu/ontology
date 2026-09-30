@@ -613,6 +613,13 @@ export type TaskKind =
  */
 export type TaskValidationPolicyStage = 'input' | 'result'
 /**
+ * The only admissible policy verdicts. `pass` is the sole value that lets a required policy satisfy a formal result; `fail`, `unknown` and `incomplete` stay blocking and are never coerced to success.
+ *
+ * This interface was referenced by `OntologyContracts`'s JSON-Schema
+ * via the `definition` "TaskValidationPolicyReportStatus".
+ */
+export type TaskValidationPolicyReportStatus = 'pass' | 'fail' | 'unknown' | 'incomplete'
+/**
  * The optional `task` field added to the existing POST /runs request. The two modes are discriminated by `mode`; `question` keeps the existing behaviour and `task` uses a fixed binding and an explicit plan.
  *
  * This interface was referenced by `OntologyContracts`'s JSON-Schema
@@ -2836,6 +2843,66 @@ export interface TaskValidationPolicyBinding {
   required: boolean
   registryDigest: Sha256Digest
   reportSchemaRef: VersionRef
+}
+/**
+ * One located policy violation (SPEC v0.3a §EX-6.1). It references a row/column/pointer plus expected/actual strings computed by the policy handler, never free model prose.
+ *
+ * This interface was referenced by `OntologyContracts`'s JSON-Schema
+ * via the `definition` "TaskPolicyViolation".
+ */
+export interface TaskPolicyViolation {
+  code: NonEmptyString
+  rowKey?: string
+  columnRef?: string
+  pointer?: string
+  expected?: string
+  actual?: string
+}
+/**
+ * Frozen task-policy-report@1 (SPEC v0.3a §EX-6.1). A registered validation policy reports on exactly one stage; a result report points at the one output artifact and typed result manifest it validated. The report carries no finalization-receipt field, so a receipt can reference the report without the report referencing the receipt (no digest cycle).
+ *
+ * This interface was referenced by `OntologyContracts`'s JSON-Schema
+ * via the `definition` "TaskValidationPolicyReport".
+ */
+export interface TaskValidationPolicyReport {
+  schemaVersion: 'task-policy-report@1'
+  policyRef: VersionRef
+  registryDigest: Sha256Digest
+  reportSchemaRef: VersionRef
+  stage: TaskValidationPolicyStage
+  executionBindingRef: ResourceRef
+  inputSnapshotRef: ResourceRef
+  inputSnapshotDigest: Sha256Digest
+  parametersRef: ResourceRef
+  parametersDigest: Sha256Digest
+  outputArtifactRef?: ResourceRef
+  outputDigest?: Sha256Digest
+  typedResultManifestRef?: ResourceRef
+  status: TaskValidationPolicyReportStatus
+  coverage: ToolCoverage
+  violations: TaskPolicyViolation[]
+  dependencyEvidenceRefs: ResourceRef[]
+}
+/**
+ * Frozen task-finalization-receipt@1 (SPEC v0.3a §EX-6.1). The independent association of the required policy bindings, the archived policy reports and the exact result manifest/digests. The receipt references the reports and the result; the result manifest and reports never carry a receipt ref, so the artifact graph stays acyclic.
+ *
+ * This interface was referenced by `OntologyContracts`'s JSON-Schema
+ * via the `definition` "TaskFinalizationReceipt".
+ */
+export interface TaskFinalizationReceipt {
+  schemaVersion: 'task-finalization-receipt@1'
+  executionBindingRef: ResourceRef
+  taskBindingRef: VersionRef
+  inputSnapshotRef: ResourceRef
+  inputSnapshotDigest: Sha256Digest
+  parametersRef: ResourceRef
+  parametersDigest: Sha256Digest
+  outputArtifactRefs: ResourceRef[]
+  outputDigests: Sha256Digest[]
+  typedResultManifestRef: ResourceRef
+  typedResultManifestDigest: Sha256Digest
+  requiredPolicyBindings: TaskValidationPolicyBinding[]
+  policyReportRefs: ResourceRef[]
 }
 /**
  * The id/version identity of a task binding. It is used inside PublishedTaskBindingBody, which excludes the full VersionRef (and therefore its digest) so the body digest can be computed without a self-reference.
