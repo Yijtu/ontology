@@ -231,6 +231,52 @@ function readDocumentQaParameters(
   return { query, ...(typeof limit === 'number' ? { limit } : {}) }
 }
 
+interface RuleJudgementTaskParameters {
+  readonly ruleRef: VersionRef
+  readonly objectId: string
+  readonly subjectEntityId: string
+  readonly validAt: string
+  readonly asOfRecordedSeq: string
+  readonly judgementAxis?: 'applicability' | 'business_proposition'
+}
+
+function readVersionRef(value: unknown): VersionRef | undefined {
+  if (typeof value !== 'object' || value === null || Array.isArray(value)) return undefined
+  const record = value as Record<string, unknown>
+  const id = record['id']
+  const version = record['version']
+  const digest = record['digest']
+  if (typeof id !== 'string' || id.length === 0) return undefined
+  if (typeof version !== 'string' || !/^\d+\.\d+\.\d+$/u.test(version)) return undefined
+  if (typeof digest !== 'string' || !/^sha256:[0-9a-f]{64}$/u.test(digest)) return undefined
+  return { id, version, digest }
+}
+
+function readRuleJudgementParameters(
+  value: Readonly<Record<string, unknown>>,
+): RuleJudgementTaskParameters | undefined {
+  const ruleRef = readVersionRef(value['ruleRef'])
+  const objectId = value['objectId']
+  const subjectEntityId = value['subjectEntityId']
+  const validAt = value['validAt']
+  const asOfRecordedSeq = value['asOfRecordedSeq']
+  const axis = value['judgementAxis']
+  if (ruleRef === undefined) return undefined
+  if (typeof objectId !== 'string' || objectId.length === 0) return undefined
+  if (typeof subjectEntityId !== 'string' || subjectEntityId.length === 0) return undefined
+  if (typeof validAt !== 'string' || validAt.length === 0) return undefined
+  if (typeof asOfRecordedSeq !== 'string' || asOfRecordedSeq.length === 0) return undefined
+  if (axis !== undefined && axis !== 'applicability' && axis !== 'business_proposition') return undefined
+  return {
+    ruleRef,
+    objectId,
+    subjectEntityId,
+    validAt,
+    asOfRecordedSeq,
+    ...(axis === undefined ? {} : { judgementAxis: axis }),
+  }
+}
+
 function planStepsOf(decision: RouteDecision, resolvedToolIds: ReadonlySet<string>): readonly PlanStep[] {
   const plan = decision.plan
   if (decision.route === 'clarify' || plan === undefined) {
@@ -666,10 +712,7 @@ export class CoreTemplatePlanResolver implements TemplatePlanResolver {
       case 'document_qa':
         return this.#documentQaPlan(loaded, execution.request.parameters)
       case 'rule_judgement':
-        throw new WorkflowControllerError(
-          'CAPABILITY_NOT_CONFIGURED',
-          'rule judgement tasks require the materialised rule-derivation producer, which this deployment does not mount',
-        )
+        return this.#ruleJudgementPlan(loaded, execution.request.parameters)
       case 'relations':
         throw new WorkflowControllerError(
           'CAPABILITY_NOT_CONFIGURED',
@@ -772,6 +815,50 @@ export class CoreTemplatePlanResolver implements TemplatePlanResolver {
       dependsOn: [],
     }
     return singleStepPlan(loaded.run.runId, `document_qa:${sha256DigestOf(parsed.query)}`, step)
+  }
+
+  /**
+   * The deterministic plan for a `rule_judgement` task (SPEC v0.3a §EX-3.1): a single
+   * `ontology_lookup(intent=rules, request=…)` step whose typed request names the exact
+   * already-materialized rule instance. The definition pin comes from the mounted scenario,
+   * never from the request body, and the bitemporal point is the run's own approved parameter.
+   * The producer is a run-scoped evidence step: the tool result carries the derived
+   * `rule_derivation` evidence the typed verifier and publication gate consume.
+   */
+  #ruleJudgementPlan(loaded: LoadedRunInputs, parameters: Readonly<Record<string, unknown>>): ExecutablePlan {
+    if (!loaded.resolved.toolBindings.some((binding) => binding.toolId === 'ontology_lookup' && binding.enabled)) {
+      throw new WorkflowControllerError('CAPABILITY_NOT_CONFIGURED', 'the resolved profile does not enable ontology_lookup for a rule judgement task')
+    }
+    const parsed = readRuleJudgementParameters(parameters)
+    if (parsed === undefined) {
+      throw new WorkflowControllerError('INVALID_ARGUMENT', 'a rule judgement task requires ruleRef, objectId, subjectEntityId, validAt and asOfRecordedSeq')
+    }
+    const execution = loaded.execution
+    if (execution === undefined || execution.request.mode !== 'task') {
+      throw new WorkflowControllerError('INVALID_SCHEMA', 'a rule judgement task requires a task-mode execution binding')
+    }
+    const step: ExecutablePlanStep = {
+      stepId: 'q1',
+      toolId: 'ontology_lookup',
+      arguments: {
+        scopeRef: { tenantId: loaded.scopeRef.tenantId, spaceId: loaded.scopeRef.spaceId },
+        intent: 'rules',
+        request: {
+          kind: 'rule_judgement',
+          ruleRef: parsed.ruleRef,
+          definitionRef: loaded.scenario.definitionRef,
+          objectId: parsed.objectId,
+          subjectEntityId: parsed.subjectEntityId,
+          validAt: parsed.validAt,
+          asOfRecordedSeq: parsed.asOfRecordedSeq,
+          ...(parsed.judgementAxis === undefined ? {} : { judgementAxis: parsed.judgementAxis }),
+        },
+        limit: 1,
+      },
+      dependsOn: [],
+      sourceVersion: parsed.ruleRef,
+    }
+    return singleStepPlan(loaded.run.runId, `rule_judgement:${parsed.subjectEntityId}:${sha256DigestOf(canonicalJson(parsed.ruleRef))}`, step)
   }
 
   #fixedFactsPlan(loaded: LoadedRunInputs): ExecutablePlan | undefined {

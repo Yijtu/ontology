@@ -409,7 +409,12 @@ export class MaterializedRuleDerivationEvidenceProducer {
       recordedSeq: artifactRecordedSeq,
       validity: selected.slice.validity,
       sourceSnapshots: [...input.sourceSnapshots],
-      resultDigest: selected.artifact.computationDigest,
+      // The evidence envelope's `resultDigest` is the content digest of the archived support
+      // payload it pins. That keeps the envelope byte-exact re-verifiable by the publication
+      // gate (which re-reads and re-hashes the payload), while the rule computation digest stays
+      // inside the archived artifact for the typed verifier to recompute. It never substitutes a
+      // mutable publication head.
+      resultDigest: payloadRef.digest,
       // Support edges (fact and specification) are derived from the exact materialized support
       // DAG and the archived payload on read. The envelope payload pins the selected instance.
       dependencies: [],

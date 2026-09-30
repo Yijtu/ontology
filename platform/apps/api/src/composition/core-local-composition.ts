@@ -170,7 +170,7 @@ import { DEFAULT_VERIFICATION_POLICY, RelationNavigationError, SCHEMA_DOCUMENTS,
 import { BudgetService, sha256DigestOf } from '@ontology/core'
 import { createRequestToolContext, createToolGatewayComposition, ForbiddenError, InvalidRequestFieldError } from '@ontology/app-api'
 import type { CoreApiDependencies } from '../core-main'
-import { FiniteGrammarRuleSupportValidator, FiniteGrammarSyntheticEvaluator, IdentityDecisionService, IncrementalMaterializer, InMemorySemanticMappingRegistry, OntologyLookupService, PublishedFactsReferenceProvider, PublishedRelationNavigator, PublishedSemanticSource, SemanticDefinitionService, SemanticPublicationService } from '@ontology/semantic-engine'
+import { FiniteGrammarRuleSupportValidator, FiniteGrammarSyntheticEvaluator, IdentityDecisionService, IncrementalMaterializer, InMemorySemanticMappingRegistry, MaterializedRuleDerivationEvidenceProducer, OntologyLookupService, PublishedFactsReferenceProvider, PublishedRelationNavigator, PublishedSemanticSource, SemanticDefinitionService, SemanticPublicationService } from '@ontology/semantic-engine'
 import type {
   MaterializationPublishedSource,
   OntologyFactPage,
@@ -191,6 +191,7 @@ import { createEnvSecretResolver } from './secret-resolver'
 import { createPostgresProvenanceRead } from './provenance-read'
 import { createCoreModelCapabilityFactory } from './core-model-capabilities'
 import { createCoreDocumentSearchHandler } from './core-document-search-handler'
+import { createCoreOntologyLookupHandler } from './core-rule-judgement-handler'
 import { createCoreModelEvidenceRecorders } from './model-evidence'
 import { createCoreDecisionStateRefProvider } from './decision-state-reference'
 import { PostgresCorePlanReceiptStore } from './core-plan-receipts'
@@ -1530,6 +1531,7 @@ export async function createCoreLocalComposition(options: CoreLocalCompositionOp
     const workflowStore = new PostgresWorkflowStore(database)
     const planReceiptStore = new PostgresCorePlanReceiptStore(database)
     const evidenceStore = new PostgresEvidenceStore(database)
+    const materializationStore = new PostgresMaterializationStore(database)
     const decisionStateReferences = new PostgresDecisionStateReferenceStore(database)
     const answerStore = new PostgresAnswerStore(database, { requireWorkflowDispatchFence: true })
     const dispatchStore = new PostgresWorkflowDispatchStore(database)
@@ -1670,6 +1672,24 @@ export async function createCoreLocalComposition(options: CoreLocalCompositionOp
     const facts = new CorePublishedFactsProvider(factsProviders)
     const lookup = new OntologyLookupService({ definitions: semanticDefinitions, mappings, facts, pageSize: 50, maxPageSize: 200 })
     const lookupHandler = new OntologyLookupHandler({ lookup, sourceRef: FACTS_SOURCE_REF, dataMode: 'synthetic' })
+    // The run-scoped rule-derivation evidence step (V03-028/029): the producer reads the exact
+    // append-only materialized instance, bridges its premise/policy spans and records the
+    // `rule_derivation` support payload under the run's own trusted context. It is reached only
+    // through the fixed `rule_judgement` plan's `ontology_lookup(intent=rules)` step.
+    const ruleDerivationProducer = new MaterializedRuleDerivationEvidenceProducer({
+      materialization: materializationStore,
+      evidence: evidenceStore,
+      artifacts: createBlobArtifactWriter(blobStore),
+      candidates: candidateStore,
+      documentParses: parseStore,
+      documentSpans: documentSpanReader,
+      componentRef: componentRef('compute_extension', 'core-rule-derivation-producer', 'rule-derivation-producer@1.0.0'),
+    })
+    const ontologyLookupHandler = createCoreOntologyLookupHandler({
+      lookup: lookupHandler,
+      producer: ruleDerivationProducer,
+      sourceRef: { namespace: 'ontology-core-local', sourceId: 'materialized-rule-derivation' },
+    })
     // The registered-compute path (ADR-11, SPEC v0.3a §EX-6): the handler runs the registered
     // neutral example operation through the same bounded helpers the gateway uses. A handler
     // reaches only the fixed approved input refs through a scoped reader; the operation is
@@ -1710,7 +1730,7 @@ export async function createCoreLocalComposition(options: CoreLocalCompositionOp
       blobStore,
       budget,
       validator: toolSchemaValidator(createAjv()),
-      handlers: [lookupHandler, dataQueryHandler, documentSearchHandler],
+      handlers: [ontologyLookupHandler, dataQueryHandler, documentSearchHandler],
     })
 
     const runProfileBinder = {
@@ -1986,7 +2006,6 @@ export async function createCoreLocalComposition(options: CoreLocalCompositionOp
         )
       },
     })
-    const materializationStore = new PostgresMaterializationStore(database)
     const materializer = new IncrementalMaterializer({ publishedSource: multiSchemaSource, materialization: materializationStore })
     const materializationConsumer = new MaterializationOutboxConsumer({
       materializer,

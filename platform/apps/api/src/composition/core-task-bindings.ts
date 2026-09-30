@@ -31,6 +31,7 @@ import { CORE_TYPED_RESULT_SCHEMA_REF } from './core-local-composition'
  */
 
 const BINDING_VERSION = '1.0.0'
+const CONTRACT_SCHEMA_BASE = 'https://ontology.local/schema'
 const CORE_TASK_ID = (kind: TaskKind): string => `core.task.${kind}`
 
 function parameterSchemaOf(kind: TaskKind): Readonly<Record<string, unknown>> {
@@ -38,6 +39,23 @@ function parameterSchemaOf(kind: TaskKind): Readonly<Record<string, unknown>> {
     case 'published_facts':
       return { type: 'object', additionalProperties: false, properties: {} }
     case 'rule_judgement':
+      // A rule judgement names the exact already-materialized instance it must derive: the
+      // reviewed rule version, the mounted definition, the subject/object identity and the
+      // bitemporal point. Nothing here is model-authored at run time — the fixed plan copies
+      // these host-approved parameters into the typed lookup request.
+      return {
+        type: 'object',
+        additionalProperties: false,
+        properties: {
+          ruleRef: { $ref: `${CONTRACT_SCHEMA_BASE}/common.schema.json#/$defs/VersionRef` },
+          objectId: { type: 'string', minLength: 1 },
+          subjectEntityId: { type: 'string', minLength: 1 },
+          validAt: { $ref: `${CONTRACT_SCHEMA_BASE}/common.schema.json#/$defs/Rfc3339UtcTimestamp` },
+          asOfRecordedSeq: { type: 'string', minLength: 1 },
+          judgementAxis: { type: 'string', enum: ['applicability', 'business_proposition'] },
+        },
+        required: ['ruleRef', 'objectId', 'subjectEntityId', 'validAt', 'asOfRecordedSeq'],
+      }
     case 'relations':
       return {
         type: 'object',

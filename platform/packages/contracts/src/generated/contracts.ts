@@ -653,6 +653,13 @@ export type ToolResultStatus = 'ok' | 'partial' | 'empty' | 'error'
  */
 export type OntologyLookupIntent = 'definitions' | 'resolve' | 'relations' | 'rules' | 'facts'
 /**
+ * The typed intent-specific request that accompanies an ontology_lookup intent. Only rule judgement is defined in this phase; the legacy intent-only path is unchanged.
+ *
+ * This interface was referenced by `OntologyContracts`'s JSON-Schema
+ * via the `definition` "OntologyLookupRequest".
+ */
+export type OntologyLookupRequest = OntologyRuleJudgementRequest
+/**
  * C4 discriminated union: describe | query(mode direct|semantic) | compute. Every branch has a complete schema.
  *
  * This interface was referenced by `OntologyContracts`'s JSON-Schema
@@ -3201,6 +3208,22 @@ export interface TimeContext {
   timeZone: IanaTimeZone
 }
 /**
+ * A typed, bounded request to derive one rule judgement from an already-materialized computation artifact. It carries no SQL, endpoint or script; the host resolves the exact rule instance by its own execution binding.
+ *
+ * This interface was referenced by `OntologyContracts`'s JSON-Schema
+ * via the `definition` "OntologyRuleJudgementRequest".
+ */
+export interface OntologyRuleJudgementRequest {
+  kind: 'rule_judgement'
+  ruleRef: VersionRef
+  definitionRef: VersionRef
+  objectId: NonEmptyString
+  subjectEntityId: NonEmptyString
+  validAt: Rfc3339UtcTimestamp
+  asOfRecordedSeq: RevisionString
+  judgementAxis?: 'applicability' | 'business_proposition'
+}
+/**
  * This interface was referenced by `OntologyContracts`'s JSON-Schema
  * via the `definition` "OntologyConceptRef".
  */
@@ -3218,6 +3241,7 @@ export interface OntologyLookupInput {
   concepts?: OntologyConceptRef[]
   entityRefs?: ResourceRef[]
   intent: OntologyLookupIntent
+  request?: OntologyLookupRequest
   timeContext?: TimeContext
   cursor?: OpaqueCursor
   limit?: number

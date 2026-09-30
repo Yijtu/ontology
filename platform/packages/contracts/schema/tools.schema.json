@@ -386,6 +386,58 @@
       "type": "string",
       "enum": ["definitions", "resolve", "relations", "rules", "facts"]
     },
+    "OntologyRuleJudgementRequest": {
+      "title": "OntologyRuleJudgementRequest",
+      "description": "A typed, bounded request to derive one rule judgement from an already-materialized computation artifact. It carries no SQL, endpoint or script; the host resolves the exact rule instance by its own execution binding.",
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "kind",
+        "ruleRef",
+        "definitionRef",
+        "objectId",
+        "subjectEntityId",
+        "validAt",
+        "asOfRecordedSeq"
+      ],
+      "properties": {
+        "kind": {
+          "type": "string",
+          "const": "rule_judgement"
+        },
+        "ruleRef": {
+          "$ref": "./common.schema.json#/$defs/VersionRef"
+        },
+        "definitionRef": {
+          "$ref": "./common.schema.json#/$defs/VersionRef"
+        },
+        "objectId": {
+          "$ref": "./common.schema.json#/$defs/NonEmptyString"
+        },
+        "subjectEntityId": {
+          "$ref": "./common.schema.json#/$defs/NonEmptyString"
+        },
+        "validAt": {
+          "$ref": "./common.schema.json#/$defs/Rfc3339UtcTimestamp"
+        },
+        "asOfRecordedSeq": {
+          "$ref": "./common.schema.json#/$defs/RevisionString"
+        },
+        "judgementAxis": {
+          "type": "string",
+          "enum": ["applicability", "business_proposition"]
+        }
+      }
+    },
+    "OntologyLookupRequest": {
+      "title": "OntologyLookupRequest",
+      "description": "The typed intent-specific request that accompanies an ontology_lookup intent. Only rule judgement is defined in this phase; the legacy intent-only path is unchanged.",
+      "oneOf": [
+        {
+          "$ref": "#/$defs/OntologyRuleJudgementRequest"
+        }
+      ]
+    },
     "OntologyConceptRef": {
       "title": "OntologyConceptRef",
       "type": "object",
@@ -426,6 +478,9 @@
         },
         "intent": {
           "$ref": "#/$defs/OntologyLookupIntent"
+        },
+        "request": {
+          "$ref": "#/$defs/OntologyLookupRequest"
         },
         "timeContext": {
           "$ref": "#/$defs/TimeContext"

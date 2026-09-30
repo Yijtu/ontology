@@ -46,6 +46,9 @@ import type { RunToolBinding, ToolExecutionOutcome, ToolHandler, ToolSchemaValid
 /** Model-visible inline payload cap; larger results are reachable only through `dataRef`. */
 export const INLINE_RESULT_BYTES = 32_768
 
+/** Bound on handler-declared support evidence refs, so lineage cannot fan out unboundedly. */
+const MAX_SUPPORT_EVIDENCE_REFS = 64
+
 const GATEWAY_VERSION = '1.0.0'
 
 const EVIDENCE_KIND_BY_TOOL: Readonly<Record<string, EvidenceKind>> = {
@@ -466,6 +469,17 @@ export class ToolGatewayService implements ToolGateway {
       )
     }
 
+    // A handler may declare already-archived evidence it derived from. Every reference is
+    // re-checked before it joins the result lineage; an unauthorized or missing one fails the
+    // call rather than being carried as an unverified id.
+    const supportLineage = await this.#validateSupportRefs(scopeRef, result.supportEvidenceRefs, ctx)
+    const lineageRefs: ResourceRef[] = [evidenceRef]
+    for (const support of supportLineage) {
+      if (!lineageRefs.some((existing) => existing.id === support.id && existing.version === support.version && existing.digest === support.digest)) {
+        lineageRefs.push(support)
+      }
+    }
+
     const durationMs = Date.now() - startedAt
     const usage: ToolUsage = {
       durationMs,
@@ -473,7 +487,7 @@ export class ToolGatewayService implements ToolGateway {
       bytes: payloadBytes.byteLength,
       calls: 1,
     }
-    // 7. settle with the persisted evidence reference.
+    // 7. settle with the persisted evidence references.
     try {
       await this.#deps.budget.settle(
         {
@@ -481,7 +495,7 @@ export class ToolGatewayService implements ToolGateway {
           reservationId: reservation.reservationId,
           status: 'completed',
           usage,
-          evidenceRefs: [evidenceRef],
+          evidenceRefs: lineageRefs,
         },
         ctx,
       )
@@ -496,7 +510,7 @@ export class ToolGatewayService implements ToolGateway {
       dataRef: artifactRef,
       ...(inline === undefined ? {} : { inlineData: inline }),
       schemaRef: toolSchemaRef(definition),
-      evidenceRefs: [evidenceRef],
+      evidenceRefs: lineageRefs,
       sourceSnapshots: snapshots,
       coverage: result.coverage,
       usage,
@@ -594,6 +608,46 @@ export class ToolGatewayService implements ToolGateway {
       )
     }
     return handler
+  }
+
+  /**
+   * Validate handler-declared support evidence: each ref must be a complete evidence reference
+   * whose exact archived record exists in the trusted scope. The check is bounded and never
+   * trusts a bare id; a missing or mismatched ref is an explicit failure, not a dropped edge.
+   */
+  async #validateSupportRefs(
+    scopeRef: ScopeRef,
+    refs: readonly ResourceRef[] | undefined,
+    ctx: ToolContext,
+  ): Promise<ResourceRef[]> {
+    if (refs === undefined || refs.length === 0) return []
+    if (refs.length > MAX_SUPPORT_EVIDENCE_REFS) {
+      throw new ToolGatewayError(
+        'OUTCOME_INVALID',
+        `a tool result declares ${String(refs.length)} support evidence refs, exceeding the ${String(MAX_SUPPORT_EVIDENCE_REFS)} bound`,
+      )
+    }
+    const unique = new Map<string, ResourceRef>()
+    for (const ref of refs) {
+      if (ref.kind !== 'evidence' || typeof ref.id !== 'string' || ref.id.length === 0 ||
+          typeof ref.version !== 'string' || !/^sha256:[0-9a-f]{64}$/u.test(ref.digest)) {
+        throw new ToolGatewayError('OUTCOME_INVALID', 'a support evidence reference is not a complete evidence ResourceRef')
+      }
+      unique.set(ref.id, ref)
+    }
+    const validated: ResourceRef[] = []
+    for (const ref of unique.values()) {
+      const record = await this.#deps.evidence.get(scopeRef, ref.id, ctx)
+      if (record === undefined || record.evidenceRef.id !== ref.id || record.evidenceRef.version !== ref.version ||
+          record.evidenceRef.digest !== ref.digest || record.evidenceRef.kind !== 'evidence') {
+        throw new ToolGatewayError(
+          'OUTCOME_INVALID',
+          `support evidence ${ref.id} is not the exact archived envelope in this scope`,
+        )
+      }
+      validated.push(ref)
+    }
+    return validated
   }
 
   #scopeOf(ctx: ToolContext): ScopeRef {
