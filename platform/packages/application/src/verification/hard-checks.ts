@@ -31,7 +31,7 @@ export interface HardCheckOutcome {
 }
 
 /** Canonical exact decimal form. It never rounds through IEEE-754. */
-function canonicalDecimal(value: string): string | undefined {
+export function canonicalDecimal(value: string): string | undefined {
   if (value.length === 0 || value.length > 64) return undefined
   const match = /^(-?)(0|[1-9]\d*)(?:\.(\d+))?$/u.exec(value)
   if (match === null) return undefined
@@ -44,7 +44,8 @@ function canonicalDecimal(value: string): string | undefined {
   return `${match[1] === '-' ? '-' : ''}${significant}e${String(-scale)}`
 }
 
-function numericText(value: unknown): string | undefined {
+/** Canonicalize a JSON string/number as an exact decimal; numbers never regain lost digits. */
+export function numericText(value: unknown): string | undefined {
   if (typeof value === 'string') return canonicalDecimal(value)
   if (typeof value === 'number' && Number.isFinite(value)) return canonicalDecimal(String(value))
   return undefined

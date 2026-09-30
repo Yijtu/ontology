@@ -5,6 +5,7 @@ import type {
   NonEmptyString,
   OpaqueCursor,
   ResourceRef,
+  Rfc3339UtcTimestamp,
   ScopeRef,
   Sha256Digest,
   TaskKind,
@@ -171,6 +172,13 @@ export interface TableCellBinding {
  */
 export interface TableArtifactRow {
   readonly rowKey: NonEmptyString
+  /**
+   * The declared row identity (subject). The hard table verifier requires it so a value
+   * can never be paired with another row's subject, and so two rows can never share the
+   * same subject (the "first subject for every row" pattern). Optional for pages archived
+   * before issue V03-033; a formal table without it fails verification.
+   */
+  readonly subject?: NonEmptyString
   readonly cells: Readonly<Record<NonEmptyString, unknown>>
   readonly bindings: readonly TableCellBinding[]
 }
@@ -229,6 +237,208 @@ export interface TableVerificationReceipt {
   readonly expectedCells: number
   readonly checksDigest: Sha256Digest
   readonly policyVersion: NonEmptyString
+}
+
+/* ----------------------------------------------------------------------------------------- */
+/* Batched full-table hard verification (SPEC v0.3a execution-evidence §EX-7.1, issue V03-033) */
+/* ----------------------------------------------------------------------------------------- */
+
+export const TABLE_HARD_VERIFICATION_REPORT_SCHEMA_VERSION = 'table-hard-verification-report@1'
+export const TABLE_VERIFICATION_PROGRESS_SCHEMA_VERSION = 'table-verification-progress@1'
+export const TABLE_HARD_VERIFICATION_POLICY_VERSION = 'table-hard-verification@1'
+
+/** The batch/limit policy the verifier binds to; a caller can never loosen it at request time. */
+export interface TableHardVerificationPolicy {
+  readonly policyVersion: NonEmptyString
+  /** Maximum rows checked per batch; batches share the run budget/deadline. */
+  readonly maxRowsPerBatch: number
+  readonly maxRows: number
+  readonly maxCells: number
+  readonly maxColumns: number
+}
+
+export const DEFAULT_TABLE_HARD_VERIFICATION_POLICY: TableHardVerificationPolicy = {
+  policyVersion: TABLE_HARD_VERIFICATION_POLICY_VERSION,
+  maxRowsPerBatch: MAX_TABLE_PAGE_ROWS,
+  maxRows: MAX_TABLE_RESULT_ROWS,
+  maxCells: MAX_TABLE_RESULT_ROWS * MAX_TABLE_COLUMNS,
+  maxColumns: MAX_TABLE_COLUMNS,
+}
+
+/**
+ * Every located failure the batched table hard verifier can report. Codes name the exact
+ * axis that failed (value, unit, currency, row identity, page digest, completeness, …) so a
+ * wrong amount, a swapped row, a tampered manifest or a truncated page is never folded into
+ * a generic "verification failed".
+ */
+export type TableHardCheckCode =
+  | 'manifest_incomplete'
+  | 'coverage_truncated'
+  | 'manifest_digest_mismatch'
+  | 'no_pages'
+  | 'page_sequence_mismatch'
+  | 'page_not_found'
+  | 'page_descriptor_mismatch'
+  | 'page_digest_mismatch'
+  | 'page_coverage_mismatch'
+  | 'column_mapping_mismatch'
+  | 'row_count_mismatch'
+  | 'cell_count_mismatch'
+  | 'row_key_out_of_order'
+  | 'duplicate_row_key'
+  | 'row_identity_missing'
+  | 'duplicate_row_identity'
+  | 'column_unbound'
+  | 'column_duplicate_binding'
+  | 'row_binding_mismatch'
+  | 'evidence_not_found'
+  | 'evidence_unreadable'
+  | 'result_digest_mismatch'
+  | 'value_pointer_missing'
+  | 'value_mismatch'
+  | 'precision_unsupported'
+  | 'unit_pointer_missing'
+  | 'unit_mismatch'
+  | 'currency_pointer_missing'
+  | 'currency_mismatch'
+  | 'subject_pointer_missing'
+  | 'subject_mismatch'
+  | 'cross_row_binding'
+  | 'time_pointer_missing'
+  | 'time_mismatch'
+  | 'rule_binding_missing'
+  | 'rule_judgement_mismatch'
+  | 'citation_pointer_missing'
+  | 'citation_mismatch'
+  | 'row_limit_exceeded'
+  | 'cell_limit_exceeded'
+  | 'batch_deadline_exceeded'
+
+/** One located full-table verification failure. */
+export interface TableHardVerificationFinding {
+  readonly code: TableHardCheckCode
+  readonly tableId: NonEmptyString
+  readonly pageIndex?: number
+  readonly rowKey?: string
+  readonly columnRef?: string
+  readonly pointer?: string
+  readonly expected?: string
+  readonly actual?: string
+}
+
+/** The hard-verification report for one table. Only a `pass` report yields a receipt. */
+export interface TableHardVerificationReport {
+  readonly schemaVersion: 'table-hard-verification-report@1'
+  readonly resultManifestRef: ResourceRef
+  readonly resultManifestDigest: Sha256Digest
+  readonly draftHash: Sha256Digest
+  readonly tableId: NonEmptyString
+  readonly status: 'pass' | 'fail' | 'incomplete'
+  readonly checkedRows: number
+  readonly checkedCells: number
+  readonly expectedRows: number
+  readonly expectedCells: number
+  readonly pageDigests: readonly Sha256Digest[]
+  readonly checksDigest: Sha256Digest
+  readonly policyVersion: NonEmptyString
+  readonly findings: readonly TableHardVerificationFinding[]
+}
+
+/** One completed batch of a batched full-table verification, recorded for recovery. */
+export interface TableVerificationBatchRecord {
+  readonly batchIndex: number
+  readonly firstPageIndex: number
+  readonly lastPageIndex: number
+  readonly rowCount: number
+  readonly cellCount: number
+  readonly firstRowKey: NonEmptyString
+  readonly lastRowKey: NonEmptyString
+}
+
+/**
+ * The persisted, manifest-digest-bound recovery progress for one table. A verification that
+ * runs out of budget/deadline records how far it got so a later attempt resumes without
+ * skipping the rows already checked, and without weakening the remaining checks.
+ */
+export interface TableVerificationProgress {
+  readonly schemaVersion: 'table-verification-progress@1'
+  readonly resultManifestRef: ResourceRef
+  readonly resultManifestDigest: Sha256Digest
+  readonly tableId: NonEmptyString
+  readonly totalRows: number
+  readonly checkedRows: number
+  readonly checkedCells: number
+  /** The page the next batch starts at. */
+  readonly nextPageIndex: number
+  /** How many rows of `nextPageIndex` were already checked; 0 at a page boundary. */
+  readonly nextRowInPage: number
+  /** The row identities already bound, so a resumed run still proves global uniqueness. */
+  readonly boundSubjects: readonly NonEmptyString[]
+  readonly batches: readonly TableVerificationBatchRecord[]
+  readonly checksDigest: Sha256Digest
+  readonly updatedAt: Rfc3339UtcTimestamp
+}
+
+/** One archived `table-verification-receipt@1` and the ref it is addressed by. */
+export interface ArchivedTableVerificationReceipt {
+  readonly ref: ResourceRef
+  readonly receipt: TableVerificationReceipt
+}
+
+/** A request to hard-verify every row of one table of one fixed typed result revision. */
+export interface TableHardVerificationRequest {
+  readonly resultManifestRef: ResourceRef
+  readonly resultManifestDigest: Sha256Digest
+  readonly draftHash: Sha256Digest
+  readonly tableId: NonEmptyString
+  /** The manifest body the caller read; its recomputed digest must equal the declared digest. */
+  readonly manifest: TableArtifactManifest
+  /** When true, resume from the persisted progress bound to this exact manifest digest. */
+  readonly resume?: boolean
+}
+
+/** The outcome: a `pass` archives a receipt; a `fail`/`incomplete` blocks publication. */
+export type TableHardVerificationOutcome =
+  | {
+      readonly status: 'pass'
+      readonly report: TableHardVerificationReport
+      readonly receipt: ArchivedTableVerificationReceipt
+    }
+  | {
+      readonly status: 'fail' | 'incomplete'
+      readonly report: TableHardVerificationReport
+    }
+
+/** Immutable persistence for table-verification receipts (idempotent per exact ref digest). */
+export interface TableVerificationReceiptStore {
+  putReceipt(
+    scopeRef: ScopeRef,
+    receiptRef: ResourceRef,
+    receipt: TableVerificationReceipt,
+    ctx: ToolContext,
+  ): Promise<void>
+  getReceipt(
+    scopeRef: ScopeRef,
+    receiptRef: ResourceRef,
+    ctx: ToolContext,
+  ): Promise<ArchivedTableVerificationReceipt | undefined>
+}
+
+/** Persistence for the batched recovery progress, keyed by the fixed manifest ref + table. */
+export interface TableVerificationProgressStore {
+  getProgress(
+    scopeRef: ScopeRef,
+    manifestRef: ResourceRef,
+    tableId: NonEmptyString,
+    ctx: ToolContext,
+  ): Promise<TableVerificationProgress | undefined>
+  saveProgress(
+    scopeRef: ScopeRef,
+    manifestRef: ResourceRef,
+    tableId: NonEmptyString,
+    progress: TableVerificationProgress,
+    ctx: ToolContext,
+  ): Promise<void>
 }
 
 /**
@@ -440,6 +650,25 @@ export function tablePageCoverageDigest(body: TableArtifactPageBody): Sha256Dige
   })
 }
 
+/**
+ * The content digest of a table manifest. A verified manifest ref must carry this digest, so
+ * a manifest whose descriptor/pages/bindings were tampered with no longer matches its ref and
+ * the hard verifier refuses it before reading a single page.
+ */
+export function tableManifestContentDigest(manifest: TableArtifactManifest): Sha256Digest {
+  return sha256OfCanonical({
+    schemaVersion: manifest.schemaVersion,
+    tableId: manifest.tableId,
+    outputSchemaRef: manifest.outputSchemaRef,
+    columns: manifest.columns,
+    totalRows: manifest.totalRows,
+    rowKeyOrder: manifest.rowKeyOrder,
+    pages: manifest.pages,
+    coverage: manifest.coverage,
+    complete: manifest.complete,
+  })
+}
+
 /** The digest of one cursor's binding; the progress ledger records which digests were served. */
 export function tableReadCursorDigest(cursor: TableReadCursor): Sha256Digest {
   return sha256OfCanonical(cursor)
@@ -622,6 +851,7 @@ export function isTableCellBinding(value: unknown): value is TableCellBinding {
 function isTableArtifactRow(value: unknown): value is TableArtifactRow {
   if (!isRecord(value)) return false
   if (!isNonEmptyString(value['rowKey'])) return false
+  if (!isOptionalNonEmptyString(value['subject'])) return false
   if (!isRecord(value['cells'])) return false
   if (!Array.isArray(value['bindings']) || !value['bindings'].every(isTableCellBinding)) return false
   return true
@@ -701,6 +931,139 @@ export function assertTableArtifactPageBodyShape(value: unknown): asserts value 
 export function assertTableVerificationReceiptShape(value: unknown): asserts value is TableVerificationReceipt {
   if (!isTableVerificationReceipt(value)) {
     throw invalidTypedResult('table verification receipt does not match table-verification-receipt@1')
+  }
+}
+
+const TABLE_HARD_CHECK_CODES: readonly TableHardCheckCode[] = [
+  'manifest_incomplete',
+  'coverage_truncated',
+  'manifest_digest_mismatch',
+  'no_pages',
+  'page_sequence_mismatch',
+  'page_not_found',
+  'page_descriptor_mismatch',
+  'page_digest_mismatch',
+  'page_coverage_mismatch',
+  'column_mapping_mismatch',
+  'row_count_mismatch',
+  'cell_count_mismatch',
+  'row_key_out_of_order',
+  'duplicate_row_key',
+  'row_identity_missing',
+  'duplicate_row_identity',
+  'column_unbound',
+  'column_duplicate_binding',
+  'row_binding_mismatch',
+  'evidence_not_found',
+  'evidence_unreadable',
+  'result_digest_mismatch',
+  'value_pointer_missing',
+  'value_mismatch',
+  'precision_unsupported',
+  'unit_pointer_missing',
+  'unit_mismatch',
+  'currency_pointer_missing',
+  'currency_mismatch',
+  'subject_pointer_missing',
+  'subject_mismatch',
+  'cross_row_binding',
+  'time_pointer_missing',
+  'time_mismatch',
+  'rule_binding_missing',
+  'rule_judgement_mismatch',
+  'citation_pointer_missing',
+  'citation_mismatch',
+  'row_limit_exceeded',
+  'cell_limit_exceeded',
+  'batch_deadline_exceeded',
+]
+
+function isTableHardCheckCode(value: unknown): value is TableHardCheckCode {
+  return typeof value === 'string' && (TABLE_HARD_CHECK_CODES as readonly string[]).includes(value)
+}
+
+function isTableHardVerificationFinding(value: unknown): value is TableHardVerificationFinding {
+  if (!isRecord(value)) return false
+  if (!isTableHardCheckCode(value['code'])) return false
+  if (!isNonEmptyString(value['tableId'])) return false
+  if (value['pageIndex'] !== undefined && !isNonNegativeInteger(value['pageIndex'])) return false
+  if (!isOptionalNonEmptyString(value['rowKey'])) return false
+  if (!isOptionalNonEmptyString(value['columnRef'])) return false
+  if (!isOptionalNonEmptyString(value['pointer'])) return false
+  if (value['expected'] !== undefined && typeof value['expected'] !== 'string') return false
+  if (value['actual'] !== undefined && typeof value['actual'] !== 'string') return false
+  return true
+}
+
+export function isTableHardVerificationReport(value: unknown): value is TableHardVerificationReport {
+  if (!isRecord(value)) return false
+  if (value['schemaVersion'] !== TABLE_HARD_VERIFICATION_REPORT_SCHEMA_VERSION) return false
+  if (!isResourceRef(value['resultManifestRef'])) return false
+  if (!isSha256Digest(value['resultManifestDigest'])) return false
+  if (!isSha256Digest(value['draftHash'])) return false
+  if (!isNonEmptyString(value['tableId'])) return false
+  if (value['status'] !== 'pass' && value['status'] !== 'fail' && value['status'] !== 'incomplete') return false
+  if (!isNonNegativeInteger(value['checkedRows'])) return false
+  if (!isNonNegativeInteger(value['checkedCells'])) return false
+  if (!isNonNegativeInteger(value['expectedRows'])) return false
+  if (!isNonNegativeInteger(value['expectedCells'])) return false
+  if (!Array.isArray(value['pageDigests']) || !value['pageDigests'].every(isSha256Digest)) return false
+  if (!isSha256Digest(value['checksDigest'])) return false
+  if (!isNonEmptyString(value['policyVersion'])) return false
+  if (!Array.isArray(value['findings']) || !value['findings'].every(isTableHardVerificationFinding)) return false
+  return true
+}
+
+export function isTableVerificationProgress(value: unknown): value is TableVerificationProgress {
+  if (!isRecord(value)) return false
+  if (value['schemaVersion'] !== TABLE_VERIFICATION_PROGRESS_SCHEMA_VERSION) return false
+  if (!isResourceRef(value['resultManifestRef'])) return false
+  if (!isSha256Digest(value['resultManifestDigest'])) return false
+  if (!isNonEmptyString(value['tableId'])) return false
+  if (!isNonNegativeInteger(value['totalRows'])) return false
+  if (!isNonNegativeInteger(value['checkedRows'])) return false
+  if (!isNonNegativeInteger(value['checkedCells'])) return false
+  if (!isNonNegativeInteger(value['nextPageIndex'])) return false
+  if (!isNonNegativeInteger(value['nextRowInPage'])) return false
+  if (!isNonEmptyStringArray(value['boundSubjects'])) return false
+  if (!Array.isArray(value['batches'])) return false
+  if (!isSha256Digest(value['checksDigest'])) return false
+  if (typeof value['updatedAt'] !== 'string') return false
+  return true
+}
+
+export function isTableHardVerificationRequest(value: unknown): value is TableHardVerificationRequest {
+  if (!isRecord(value)) return false
+  if (!isResourceRef(value['resultManifestRef'])) return false
+  if (!isSha256Digest(value['resultManifestDigest'])) return false
+  if (!isSha256Digest(value['draftHash'])) return false
+  if (!isNonEmptyString(value['tableId'])) return false
+  if (!isTableArtifactManifest(value['manifest'])) return false
+  if (value['resume'] !== undefined && typeof value['resume'] !== 'boolean') return false
+  return true
+}
+
+export function assertTableHardVerificationReportShape(
+  value: unknown,
+): asserts value is TableHardVerificationReport {
+  if (!isTableHardVerificationReport(value)) {
+    throw invalidTypedResult('table hard verification report does not match table-hard-verification-report@1')
+  }
+}
+
+export function assertTableVerificationProgressShape(
+  value: unknown,
+): asserts value is TableVerificationProgress {
+  if (!isTableVerificationProgress(value)) {
+    throw invalidTypedResult('table verification progress does not match table-verification-progress@1')
+  }
+}
+
+export function assertTableHardVerificationRequestShape(
+  value: unknown,
+): asserts value is TableHardVerificationRequest {
+  if (!isTableHardVerificationRequest(value)) {
+    throw invalidTypedResult('table hard verification request is malformed')
   }
 }
 

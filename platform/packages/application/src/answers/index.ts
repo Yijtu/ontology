@@ -1,3 +1,6 @@
 export { TableArtifactReadService } from './table-artifact-read-service'
 export type { TableArtifactReadServiceDependencies } from './table-artifact-read-service'
 export { InMemoryTableArtifactStore } from './in-memory-table-artifact-store'
+export { TableHardVerificationService } from './table-hard-verification-service'
+export type { TableHardVerificationDependencies } from './table-hard-verification-service'
+export { InMemoryTableVerificationStore } from './in-memory-table-verification-store'
