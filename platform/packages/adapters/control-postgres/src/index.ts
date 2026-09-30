@@ -19,6 +19,7 @@ export {
   PostgresComputeOutputBindingsStore,
   PostgresComputeResultArtifactStore,
 } from './compute-execution-store'
+export { PostgresTableArtifactStore } from './table-artifact-store'
 export { PostgresFeedbackStore } from './feedback-store'
 export { PostgresBudgetLedgerStore } from './budget-ledger-store'
 export { PostgresEvidenceStore } from './evidence-store'
