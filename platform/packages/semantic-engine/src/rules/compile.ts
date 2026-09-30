@@ -13,11 +13,17 @@ import type {
   PublishedRuleCompilation,
   PublishedRuleSubject,
   RuleCapabilityIssue,
+  RuleConditionPlan,
   RuleFact,
   RulePremiseAlternative,
   RulePremiseGroup,
   SupportRule,
 } from './types'
+
+interface CompiledCondition {
+  readonly groups: RulePremiseGroup[]
+  readonly plan: RuleConditionPlan
+}
 
 export interface PublishedRuleCompilerOptions {
   readonly scopeRef: ScopeRef
@@ -66,11 +72,12 @@ export function supportRuleFromPublishedRule(
     subjectId === undefined
       ? []
       : relevantFacts.filter((fact) => fact.subject === subjectId && (fact.objectId === undefined || fact.objectId === rule.objectId))
-  const groups = compileNode(rule.expression, predicateFactsOf(scopedFacts), rule.ruleId, false, new Set())
+  const compiled = compileNode(rule.expression, predicateFactsOf(scopedFacts), rule.ruleId, false, new Set())
   return {
     ruleRef: legacyRuleRef(rule),
     ruleId: rule.ruleId,
-    premiseGroups: groups,
+    premiseGroups: compiled.groups,
+    condition: compiled.plan,
     conclusion: { propositionKey: rule.objectId, predicate: rule.objectId, value: true },
   }
 }
@@ -127,8 +134,8 @@ export function compilePublishedRuleInstances(
       try {
         compileNode(rule.expression, NO_FACTS, rule.ruleId, true, completeRangeAttributeIds)
         for (const exception of rule.exceptions) {
-          const groups = compileNode(exception.condition, NO_FACTS, `${rule.ruleId}:exception:${exception.exceptionId}`, true, completeRangeAttributeIds)
-          if (groups.length !== 1 || groups[0]?.polarity === 'negative') {
+          const compiled = compileNode(exception.condition, NO_FACTS, `${rule.ruleId}:exception:${exception.exceptionId}`, true, completeRangeAttributeIds)
+          if (compiled.groups.length !== 1 || compiled.groups[0]?.polarity === 'negative') {
             throw new RuleEvaluationError(
               'UNSUPPORTED_NEGATION',
               `exception ${exception.exceptionId} must be one explicit comparison, range or same-condition any`,
@@ -166,24 +173,26 @@ export function compilePublishedRuleInstances(
       const applicabilityKey = `rule-applicability:${sha256DigestOf(instanceIdentity)}`
       const sourceSpans = spansOf(rule.expression, rule.exceptions.map((exception) => exception.condition))
       try {
-        const conditionGroups = compileNode(
+        const compiledCondition = compileNode(
           rule.expression,
           scopedFacts,
           instanceKey,
           true,
           completeRangeAttributeIds,
         )
+        const conditionGroups = compiledCondition.groups
         const conditionGroupIds = conditionGroups.map((group) => group.groupId)
         const premiseGroups: RulePremiseGroup[] = [...conditionGroups]
         const exceptions: { exceptionId: string; groupIds: string[] }[] = []
         for (const exception of [...rule.exceptions].sort((left, right) => left.exceptionId.localeCompare(right.exceptionId))) {
-          const exceptionGroups = compileNode(
+          const compiledException = compileNode(
             exception.condition,
             scopedFacts,
             `${instanceKey}:exception:${exception.exceptionId}`,
             true,
             completeRangeAttributeIds,
           )
+          const exceptionGroups = compiledException.groups
           if (exceptionGroups.length !== 1 || exceptionGroups[0]?.polarity === 'negative') {
             throw new RuleEvaluationError(
               'UNSUPPORTED_NEGATION',
@@ -226,6 +235,7 @@ export function compilePublishedRuleInstances(
           ruleRef,
           ruleId: instanceKey,
           premiseGroups,
+          condition: compiledCondition.plan,
           conclusion: { propositionKey: applicabilityKey, predicate: 'rule.applicability', value: true },
           publishedInstance: metadata,
         }
@@ -366,18 +376,18 @@ function compileNode(
   prefix: string,
   allowExplicitNot: boolean,
   completeRangeAttributeIds: ReadonlySet<string>,
-): RulePremiseGroup[] {
+): CompiledCondition {
   switch (node.op) {
-    case 'compare':
-      return [
-        leafGroup(
-          node.attributeId,
-          { fieldRef: node.attributeId, op: node.operator, values: [node.value] },
-          facts,
-          `${prefix}:${node.attributeId}`,
-          node.unitCode,
-        ),
-      ]
+    case 'compare': {
+      const group = leafGroup(
+        node.attributeId,
+        { fieldRef: node.attributeId, op: node.operator, values: [node.value] },
+        facts,
+        `${prefix}:${node.attributeId}`,
+        node.unitCode,
+      )
+      return { groups: [group], plan: { kind: 'leaf', leaf: group.groupId } }
+    }
     case 'range': {
       const fieldRef = node.attributeId
       let filter: SemanticFilter
@@ -390,49 +400,28 @@ function compileNode(
       } else {
         throw new RuleEvaluationError('UNSUPPORTED_FILTER', `range of ${fieldRef} declares neither a minimum nor a maximum`)
       }
-      return [leafGroup(fieldRef, filter, facts, `${prefix}:${fieldRef}`, node.unitCode)]
+      const group = leafGroup(fieldRef, filter, facts, `${prefix}:${fieldRef}`, node.unitCode)
+      return { groups: [group], plan: { kind: 'leaf', leaf: group.groupId } }
     }
-    case 'all':
-      return node.operands.flatMap((operand, index) =>
+    case 'all': {
+      const children = node.operands.map((operand, index) =>
         compileNode(operand, facts, `${prefix}.${String(index)}`, allowExplicitNot, completeRangeAttributeIds),
       )
+      return {
+        groups: children.flatMap((child) => child.groups),
+        plan: { kind: 'all', children: children.map((child) => child.plan) },
+      }
+    }
     case 'any': {
-      const lowered = node.operands.map((operand, index) =>
+      // A genuine different-condition OR: every branch keeps its own groups and sub-plan. Two
+      // different conditions are never merged into one same-filter equivalent-source group.
+      const children = node.operands.map((operand, index) =>
         compileNode(operand, facts, `${prefix}.${String(index)}`, allowExplicitNot, completeRangeAttributeIds),
       )
-      const single = lowered.map((groups) => {
-        const first = groups[0]
-        if (first === undefined || groups.length !== 1 || first.polarity === 'negative') {
-          throw new RuleEvaluationError(
-            'UNSUPPORTED_FILTER',
-            `any operand of ${prefix} is not a single positive comparison and cannot be merged into one OR group`,
-          )
-        }
-        return first
-      })
-      const [head, ...rest] = single
-      if (head === undefined) throw new RuleEvaluationError('UNSUPPORTED_FILTER', `any of ${prefix} has no operand`)
-      const signature = JSON.stringify({ filter: head.filter, unitCode: head.unitCode ?? null })
-      for (const group of rest) {
-        if (JSON.stringify({ filter: group.filter, unitCode: group.unitCode ?? null }) !== signature) {
-          throw new RuleEvaluationError(
-            'UNSUPPORTED_FILTER',
-            `any of ${prefix} mixes conditions that one equivalent-source OR group cannot express`,
-          )
-        }
+      return {
+        groups: children.flatMap((child) => child.groups),
+        plan: { kind: 'any', children: children.map((child) => child.plan) },
       }
-      const alternatives = new Map<string, RulePremiseAlternative>()
-      for (const group of single) {
-        for (const alternative of group.alternatives) alternatives.set(alternative.alternativeId, alternative)
-      }
-      return [
-        {
-          groupId: `${prefix}:any`,
-          filter: head.filter,
-          ...(head.unitCode === undefined ? {} : { unitCode: head.unitCode }),
-          alternatives: [...alternatives.values()].sort((left, right) => left.alternativeId.localeCompare(right.alternativeId)),
-        },
-      ]
     }
     case 'not': {
       if (!allowExplicitNot) {
@@ -441,24 +430,23 @@ function compileNode(
           `rule ${prefix} uses an explicit negation the compatibility compiler cannot represent`,
         )
       }
-      const operandGroups = compileNode(node.operand, facts, `${prefix}:not`, false, completeRangeAttributeIds)
-      const group = operandGroups[0]
-      if (operandGroups.length !== 1 || group === undefined || group.polarity === 'negative') {
+      const operand = compileNode(node.operand, facts, `${prefix}:not`, false, completeRangeAttributeIds)
+      const group = operand.groups[0]
+      if (operand.groups.length !== 1 || group === undefined || group.polarity === 'negative') {
         throw new RuleEvaluationError(
           'UNSUPPORTED_NEGATION',
           `not at ${prefix} must cover one observed comparison, range or same-condition any`,
         )
       }
       const completeRange = completeRangeAttributeIds.has(group.filter.fieldRef)
-      return [
-        {
-          ...group,
-          groupId: `${prefix}:not`,
-          polarity: 'negative',
-          explicitObservation: true,
-          ...(completeRange ? { completeRange: true } : {}),
-        },
-      ]
+      const negative: RulePremiseGroup = {
+        ...group,
+        groupId: `${prefix}:not`,
+        polarity: 'negative',
+        explicitObservation: true,
+        ...(completeRange ? { completeRange: true } : {}),
+      }
+      return { groups: [negative], plan: { kind: 'leaf', leaf: negative.groupId } }
     }
     case 'relation':
       throw new RuleEvaluationError(

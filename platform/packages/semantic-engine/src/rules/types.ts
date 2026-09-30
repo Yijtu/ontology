@@ -12,6 +12,7 @@ import type {
   ValidityInterval,
   VersionRef,
 } from '@ontology/contracts'
+import type { FiniteConditionPlan } from './boolean'
 import type { RuleEvaluationErrorCode } from './errors'
 
 /**
@@ -91,6 +92,14 @@ export interface RulePremiseGroup {
   readonly unitCode?: string
 }
 
+/**
+ * The rule's boolean condition as a finite tree over premise-group ids. When absent, the rule is
+ * the AND of every premise group (backward compatible). An `any` node is a genuine
+ * different-condition OR: each branch is its own condition and its own group, never a same-filter
+ * alternative set (SPEC v0.3a EX-4.1/EX-4.2).
+ */
+export type RuleConditionPlan = FiniteConditionPlan<string>
+
 /** The proposition a rule derives. The predicate defaults to the proposition key. */
 export interface RuleConclusionSpec {
   readonly propositionKey: string
@@ -103,6 +112,8 @@ export interface SupportRule {
   readonly ruleRef: VersionRef
   readonly ruleId: string
   readonly premiseGroups: readonly RulePremiseGroup[]
+  /** Finite boolean tree over group ids; absent means the AND of all premise groups. */
+  readonly condition?: RuleConditionPlan
   readonly conclusion: RuleConclusionSpec
   /** Published instances contribute positive support only; a refuted condition is not proposition=false. */
   readonly publishedInstance?: PublishedRuleInstanceMetadata

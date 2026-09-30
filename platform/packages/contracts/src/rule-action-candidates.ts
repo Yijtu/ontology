@@ -156,7 +156,9 @@ export function assessRuleSupport(
   conditionState: RuleConditionState,
   exceptionStates: readonly { readonly exceptionId: string; readonly state: RuleConditionState }[],
 ): RuleCandidateAssessment {
-  const worstException = worstConditionState(exceptionStates.map((entry) => entry.state))
+  // No exception is the neutral element: it can never make a satisfied condition inapplicable.
+  const worstException =
+    exceptionStates.length === 0 ? 'false' : worstConditionState(exceptionStates.map((entry) => entry.state))
   const hasConflict = conditionState === 'conflict' || worstException === 'conflict'
   const hasUnknown = conditionState === 'unknown' || worstException === 'unknown'
   if (hasConflict) {
