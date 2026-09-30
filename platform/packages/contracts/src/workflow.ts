@@ -21,6 +21,7 @@ import type {
 } from './ports'
 import type { ToolContext } from './trusted'
 import type { WorkflowDispatchFence } from './workflow-dispatch'
+import { isRecord, isResourceRef, isSha256Digest } from './asset-workspace'
 import type {
   ClaimExplanation,
   DraftClaim,
@@ -112,8 +113,13 @@ export interface WorkflowRunState {
 export interface AnswerDraft {
   readonly draftId: Uuid
   readonly runId: Uuid
-  /** V2 hashes bind assertions and limitations as well as blocks and numeric claims. */
-  readonly schemaVersion?: 'answer-draft@2'
+  /**
+   * V2 hashes bind assertions and limitations as well as blocks and numeric claims. V3
+   * additionally binds the archived typed result manifest and the pre-draft finalization
+   * receipt, so a published @3 body can never be detached from the exact typed result and
+   * evidence it was verified against.
+   */
+  readonly schemaVersion?: 'answer-draft@2' | 'answer-draft@3'
   readonly blocks: readonly unknown[]
   /**
    * The structured, result-bound claims of the draft (D7.4). A draft written by the
@@ -127,6 +133,17 @@ export interface AnswerDraft {
   readonly limitations: readonly string[]
   readonly producedInPhase: RunState
   readonly createdAt: Rfc3339UtcTimestamp
+  /**
+   * The V3 typed-manifest bindings. They are present exactly when `schemaVersion` is
+   * `answer-draft@3` (and absent for the legacy `@1`/`@2` drafts). They are part of the V3
+   * content hash, so a later edit to the referenced manifest/receipt or the body requires a
+   * new draft hash and therefore a fresh verification.
+   */
+  readonly resultManifestRef?: ResourceRef
+  readonly resultManifestDigest?: Sha256Digest
+  readonly finalizationReceiptRef?: ResourceRef
+  readonly finalizationReceiptDigest?: Sha256Digest
+  readonly executionBindingRef?: ResourceRef
 }
 
 /**
@@ -200,6 +217,14 @@ export interface DraftWriterResult {
   readonly usage?: ToolUsage
   /** Persisted artifact refs for the draft, when the writer archived it. */
   readonly evidenceRefs?: readonly ResourceRef[]
+  /**
+   * Trusted limitation codes the writer declares on the draft (for example a truncated result
+   * that was deliberately not rendered as complete). The controller forwards them to the
+   * verifier as `trustedLimitations`, so only codes the host actually produced are accepted;
+   * a model or request can never inject an arbitrary limitation. They must match
+   * `draft.limitations`.
+   */
+  readonly limitations?: readonly string[]
 }
 
 /**
@@ -294,6 +319,39 @@ export interface PublishedAnswerBody {
 }
 
 /**
+ * Runtime guard for the legacy `answer-draft@1`/`@2` published body. The body is archived
+ * bytes (JSONB round-trips through storage), so a reader validates the shape instead of
+ * trusting a TypeScript assertion.
+ */
+export function isPublishedAnswerBody(value: unknown): value is PublishedAnswerBody {
+  if (!isRecord(value)) return false
+  if (value['schemaVersion'] !== 'answer-draft@1' && value['schemaVersion'] !== 'answer-draft@2') return false
+  return Array.isArray(value['blocks']) && Array.isArray(value['claims']) && Array.isArray(value['assertions'])
+}
+
+/**
+ * Runtime guard for the `answer-draft@3` body. It pins the typed result manifest and the
+ * pre-draft finalization receipt by full ref and digest, and requires the narrative blocks,
+ * claims, assertions and limitations to be present.
+ */
+export function isAnswerDraftV3Body(value: unknown): value is AnswerDraftV3Body {
+  if (!isRecord(value)) return false
+  if (value['schemaVersion'] !== 'answer-draft@3') return false
+  if (!isResourceRef(value['resultManifestRef'])) return false
+  if (!isSha256Digest(value['resultManifestDigest'])) return false
+  if (!isResourceRef(value['finalizationReceiptRef'])) return false
+  if (!isSha256Digest(value['finalizationReceiptDigest'])) return false
+  if (!isResourceRef(value['executionBindingRef'])) return false
+  if (!Array.isArray(value['blocks'])) return false
+  if (!Array.isArray(value['claims'])) return false
+  if (!Array.isArray(value['assertions'])) return false
+  if (!Array.isArray(value['limitations']) || !value['limitations'].every((entry) => typeof entry === 'string')) {
+    return false
+  }
+  return true
+}
+
+/**
  * The canonical hash body of an `answer-draft@3` (SPEC v0.3a §EX-7.1).
  *
  * It binds the verified typed result manifest, the finalization receipt archived *before* the
@@ -362,6 +420,12 @@ export interface PublishedAnswer {
   readonly semanticReview?: SemanticReviewDisposition
   /** Absent only for legacy metadata-only rows; readers must display that body is unavailable. */
   readonly body?: PublishedAnswerBody
+  /**
+   * The verified `answer-draft@3` body. A @3 publication carries this instead of the legacy
+   * `body`; both are never set on one answer. It is the exact body the content hash was
+   * computed from, so reading it back returns the same verified version.
+   */
+  readonly v3Body?: AnswerDraftV3Body
   readonly bodyUnavailableReason?: 'legacy_metadata_only'
   readonly publishedAt: Rfc3339UtcTimestamp
 }

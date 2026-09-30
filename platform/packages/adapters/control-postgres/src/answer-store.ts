@@ -1,4 +1,4 @@
-import { AnswerStoreError, isToolContext } from '@ontology/contracts'
+import { AnswerStoreError, isAnswerDraftV3Body, isPublishedAnswerBody, isToolContext } from '@ontology/contracts'
 import type {
   AnswerStorePort,
   PublicationKind,
@@ -70,15 +70,15 @@ function toAnswer(row: AnswerRow): PublishedAnswer {
   if (row.body_missing && body !== null) {
     throw new AnswerStoreError('ANSWER_PERSIST_FAILED', `stored answer ${row.answer_id} has inconsistent body metadata`)
   }
-  if (!row.body_missing) {
-    if (typeof body !== 'object' || Array.isArray(body)) {
-      throw new AnswerStoreError('ANSWER_PERSIST_FAILED', `stored answer ${row.answer_id} has a malformed body`)
-    }
-    const value = body as Record<string, unknown>
-    if ((value.schemaVersion !== 'answer-draft@1' && value.schemaVersion !== 'answer-draft@2') ||
-        !Array.isArray(value.blocks) || !Array.isArray(value.claims) || !Array.isArray(value.assertions)) {
-      throw new AnswerStoreError('ANSWER_PERSIST_FAILED', `stored answer ${row.answer_id} has a malformed body`)
-    }
+  let bodyField: Pick<PublishedAnswer, 'body' | 'v3Body' | 'bodyUnavailableReason'>
+  if (row.body_missing) {
+    bodyField = { bodyUnavailableReason: 'legacy_metadata_only' }
+  } else if (isPublishedAnswerBody(body)) {
+    bodyField = { body }
+  } else if (isAnswerDraftV3Body(body)) {
+    bodyField = { v3Body: body }
+  } else {
+    throw new AnswerStoreError('ANSWER_PERSIST_FAILED', `stored answer ${row.answer_id} has a malformed body`)
   }
   return {
     answerId: row.answer_id,
@@ -92,7 +92,7 @@ function toAnswer(row: AnswerRow): PublishedAnswer {
     ...(row.as_of === null ? {} : { asOf: row.as_of.toISOString() }),
     limitations: row.limitations,
     ...(row.semantic_review === null ? {} : { semanticReview: row.semantic_review }),
-    ...(row.body_missing ? { bodyUnavailableReason: 'legacy_metadata_only' as const } : { body: body as NonNullable<PublishedAnswer['body']> }),
+    ...bodyField,
     publishedAt: row.published_at.toISOString(),
   }
 }
@@ -111,6 +111,7 @@ function samePublication(left: PublishedAnswer, right: PublishedAnswer): boolean
     left.contentHash === right.contentHash && left.evidenceManifestHash === right.evidenceManifestHash &&
     left.scenarioManifestHash === right.scenarioManifestHash && left.publicationKind === right.publicationKind &&
     sameAsOf && canonical(left.limitations) === canonical(right.limitations) && canonical(left.body) === canonical(right.body) &&
+    canonical(left.v3Body) === canonical(right.v3Body) &&
     canonical(left.semanticReview) === canonical(right.semanticReview)
 }
 
@@ -135,10 +136,9 @@ export class PostgresAnswerStore implements AnswerStorePort {
   }
 
   async record(input: RecordAnswerInput, ctx: ToolContext): Promise<PublishedAnswer> {
-    if (input.answer.body === undefined) throw new AnswerStoreError('ANSWER_BODY_REQUIRED', 'new answer publications must persist the verified body')
-    const body = input.answer.body
-    if ((body.schemaVersion !== 'answer-draft@1' && body.schemaVersion !== 'answer-draft@2') ||
-        !Array.isArray(body.blocks) || !Array.isArray(body.claims) || !Array.isArray(body.assertions)) {
+    const body = input.answer.body ?? input.answer.v3Body
+    if (body === undefined) throw new AnswerStoreError('ANSWER_BODY_REQUIRED', 'new answer publications must persist the verified body')
+    if (!isPublishedAnswerBody(body) && !isAnswerDraftV3Body(body)) {
       throw new AnswerStoreError('ANSWER_BODY_REQUIRED', 'new answer publications must contain a versioned body')
     }
     const scope = scopeOf(ctx)
@@ -255,7 +255,7 @@ export class PostgresAnswerStore implements AnswerStorePort {
             input.answer.publicationKind,
             input.answer.asOf ?? null,
             JSON.stringify(input.answer.limitations),
-            JSON.stringify(input.answer.body),
+            JSON.stringify(body),
             input.answer.semanticReview === undefined ? null : JSON.stringify(input.answer.semanticReview),
             input.answer.publishedAt,
           ],

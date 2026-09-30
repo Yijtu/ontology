@@ -100,6 +100,7 @@ import {
   StructuredExtractionStageHandler,
   SyntheticExampleService,
   TBOX_RESPONSE_SCHEMA_REF,
+  TypedEvidenceDraftWriter,
   WorkflowController,
   createRunCheckpointPort,
   encodeDocumentIngestionRef,
@@ -168,7 +169,6 @@ import type {
 import { DataQueryHandler, OntologyLookupHandler, canonicalJson } from '@ontology/tool-services'
 import type { ToolSchemaValidator } from '@ontology/tool-services'
 import { controlRecordSequence, JobWorkerLoop, MaterializationOutboxConsumer, TopicOutboxConsumerRouter, WorkflowDispatchWorker, createIngestionHandlerRegistry } from '@ontology/app-worker'
-import { PublishedFactsDraftWriter } from './published-facts-draft'
 import { CoreFactsPlanError, createCoreFactsPlan } from './core-facts-plan'
 import { createStaticProbeAdapterResolver, createPostgresSourceStore } from './source-registry'
 import { createEnvSecretResolver } from './secret-resolver'
@@ -1696,7 +1696,7 @@ export async function createCoreLocalComposition(options: CoreLocalCompositionOp
           } satisfies RuntimeCapabilitySet
         },
       } satisfies RuntimeCapabilityFactoryPort,
-      draftWriter: new PublishedFactsDraftWriter({ evidence: evidenceStore, artifacts: blobStore }),
+      draftWriter: new TypedEvidenceDraftWriter({ evidence: evidenceStore, artifacts: blobStore }),
       limited: new RestrictedLimitedAnswerComposer(),
       verifier: new DraftVerificationService({
         evidence: evidenceStore,

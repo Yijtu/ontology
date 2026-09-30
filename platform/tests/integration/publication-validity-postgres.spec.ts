@@ -24,6 +24,7 @@ import {
 import { sha256DigestOf } from '@ontology/core'
 import { AnswerStoreError } from '@ontology/contracts'
 import type {
+  AnswerDraftV3Body,
   EvidenceEnvelope,
   PublishedAnswer,
   PublicationDependencyPin,
@@ -303,5 +304,55 @@ describe('publication validity against a real containerised PostgreSQL', () => {
     expect(thrown).toBeInstanceOf(AnswerStoreError)
     expect((thrown as AnswerStoreError).code).toBe('RUN_NOT_PUBLISHABLE')
     expect(await answerRowCount(runId)).toBe(0)
+  })
+
+  it('round-trips an answer-draft@3 body unchanged through the real answer store', async () => {
+    const ctx = ownerContext()
+    const runId = randomUUID()
+    await seedRun(runId)
+
+    const artifact = (seed: string): ResourceRef => ({
+      id: randomUUID(),
+      version: '1.0.0',
+      digest: sha256DigestOf(seed),
+      kind: 'artifact',
+    })
+    const resultManifestRef = artifact('manifest')
+    const finalizationReceiptRef = artifact('receipt')
+    const executionBindingRef = artifact('binding')
+    const v3Body: AnswerDraftV3Body = {
+      schemaVersion: 'answer-draft@3',
+      resultManifestRef,
+      resultManifestDigest: resultManifestRef.digest,
+      finalizationReceiptRef,
+      finalizationReceiptDigest: finalizationReceiptRef.digest,
+      executionBindingRef,
+      blocks: [{ kind: 'claim', claimId: randomUUID() }],
+      claims: [],
+      assertions: [],
+      limitations: ['result_truncated'],
+    }
+    const { body: _legacyBody, ...base } = answerFor(runId, undefined)
+    void _legacyBody
+    const answer: PublishedAnswer = {
+      ...base,
+      contentHash: sha256DigestOf(`content:v3:${runId}`),
+      limitations: [...v3Body.limitations],
+      v3Body,
+    }
+
+    const first = await answerStore.record({ answer, expectedRunState: 'verifying', expectedRunRevision: '7' }, ctx)
+    const reread = await answerStore.findByRun(runId, ctx)
+    expect(first.v3Body).toEqual(v3Body)
+    expect(first.body).toBeUndefined()
+    expect(reread?.contentHash).toBe(answer.contentHash)
+    expect(reread?.draftId).toBe(answer.draftId)
+    expect(reread?.v3Body).toEqual(v3Body)
+
+    const row = await adminClient.query<{ body: { schemaVersion: string } }>(
+      `SELECT body FROM agent_platform.answer_publications WHERE tenant_id = $1 AND space_id = $2 AND run_id = $3`,
+      [TENANT_A, SPACE_A, runId],
+    )
+    expect(row.rows[0]?.body.schemaVersion).toBe('answer-draft@3')
   })
 })

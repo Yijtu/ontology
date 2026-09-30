@@ -586,7 +586,15 @@ export class WorkflowController {
       const verifying = await this.#advance(fresh, 'verifying', {}, ctx)
 
       const verification = await this.#deps.verifier.verify(
-        { runId, question: verifying.question, draft: written.draft, inputManifest },
+        {
+          runId,
+          question: verifying.question,
+          draft: written.draft,
+          inputManifest,
+          ...(written.limitations === undefined || written.limitations.length === 0
+            ? {}
+            : { trustedLimitations: written.limitations }),
+        },
         ctx,
       )
       await this.#deps.verifications.record({ runId, verification }, ctx)

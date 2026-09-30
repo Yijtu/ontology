@@ -49,12 +49,14 @@ export class InMemoryAnswerStore implements AnswerStorePort {
   }
 
   async record(input: RecordAnswerInput, ctx: ToolContext): Promise<PublishedAnswer> {
-    if (input.answer.body === undefined) throw new AnswerStoreError('ANSWER_BODY_REQUIRED', 'new answer publications must persist the verified body')
+    if (input.answer.body === undefined && input.answer.v3Body === undefined) {
+      throw new AnswerStoreError('ANSWER_BODY_REQUIRED', 'new answer publications must persist the verified body')
+    }
     const scopeRef = scopeOf(ctx)
     const key = `${scopeRef.tenantId}\u0000${scopeRef.spaceId}\u0000${input.answer.runId}`
     const existing = this.#answers.get(key)
     if (existing !== undefined) {
-      if (existing.contentHash !== input.answer.contentHash || existing.draftId !== input.answer.draftId || canonical(existing.body) !== canonical(input.answer.body)) {
+      if (existing.contentHash !== input.answer.contentHash || existing.draftId !== input.answer.draftId || canonical(existing.body) !== canonical(input.answer.body) || canonical(existing.v3Body) !== canonical(input.answer.v3Body)) {
         throw new AnswerStoreError('ANSWER_IDEMPOTENCY_CONFLICT', `run ${input.answer.runId} already has a different immutable answer`)
       }
       return clone(existing)
