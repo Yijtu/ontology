@@ -1,3 +1,4 @@
+import { MAX_RULE_DEPENDENCY_DEPTH } from '@ontology/contracts'
 import type { DomainResultStatus, Sha256Digest } from '@ontology/contracts'
 import { sha256DigestOf } from '../definitions/canonical'
 import { evaluateFiniteCondition } from './boolean'
@@ -358,6 +359,26 @@ function topologicalOrder(rules: readonly SupportRule[]): SupportRule[] {
       'CYCLE_DETECTED',
       `rule dependency cycle among: ${cycle.join(', ')}`,
     )
+  }
+  // The finite ruleRef graph is bounded to MAX_RULE_DEPENDENCY_DEPTH edges. Because `ordered` is
+  // already topological, a single forward pass gives each rule's longest dependency chain: a rule
+  // that consumes only facts has depth 0 and every edge adds one level. An over-deep chain is a
+  // typed rejection, never a silent truncation or an unbounded fixpoint (SPEC §5.2/EX-4.1).
+  const depthByRule = new Map<string, number>()
+  for (const rule of ordered) {
+    let depth = 0
+    for (const dependency of dependencies.get(rule.ruleId) ?? []) {
+      depth = Math.max(depth, (depthByRule.get(dependency) ?? 0) + 1)
+    }
+    depthByRule.set(rule.ruleId, depth)
+  }
+  for (const [ruleId, depth] of depthByRule) {
+    if (depth > MAX_RULE_DEPENDENCY_DEPTH) {
+      throw new RuleEvaluationError(
+        'DEPENDENCY_DEPTH_EXCEEDED',
+        `rule ${ruleId} has a dependency chain of ${String(depth)} edges, more than the supported maximum of ${String(MAX_RULE_DEPENDENCY_DEPTH)}`,
+      )
+    }
   }
   return ordered
 }
