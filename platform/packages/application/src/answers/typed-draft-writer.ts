@@ -615,6 +615,89 @@ function renderTable(
 /* The writer                                                                                 */
 /* ----------------------------------------------------------------------------------------- */
 
+/* ----------------------------------------------------------------------------------------- */
+/* Registered compute metrics                                                                 */
+/* ----------------------------------------------------------------------------------------- */
+
+function escapePointerToken(token: string): string {
+  return token.replaceAll('~', '~0').replaceAll('/', '~1')
+}
+
+/**
+ * Project a registered compute result into typed quantity/money claims (SPEC v0.3a §EX-6,
+ * §EX-7.1). A registered operation emits `DataQueryOutput(resultKind=computation)` whose
+ * `computation.metrics` carry the computed aggregates; each metric object that separates its
+ * unit (`unit`) or currency (`currency`) from its exact `amount` becomes one row-bound claim.
+ *
+ * The projection is deliberately conservative: a bare scalar metric with no unit axis (for
+ * example a record count) is *not* turned into a quantity claim, because the verifier requires
+ * every decision claim to bind its unit to the archived result. Such a metric is declared as a
+ * known limitation instead, so an answer is never silently padded or silently empty.
+ */
+function renderComputeMetrics(
+  payload: Record<string, unknown>,
+  evidenceRef: ResourceRef,
+  resultDigest: Sha256Digest,
+  runId: Uuid,
+): Rendered {
+  const rendered = emptyRendered()
+  const computation = payload['computation']
+  if (!isRecord(computation)) {
+    rendered.limitations.push('compute_output_not_inline')
+    return rendered
+  }
+  const metrics = computation['metrics']
+  if (!isRecord(metrics) || Object.keys(metrics).length === 0) {
+    rendered.limitations.push('compute_output_not_inline')
+    return rendered
+  }
+  const operationRef = computation['operationRef']
+  const operationId = isRecord(operationRef) && isNonEmptyString(operationRef['id']) ? operationRef['id'] : undefined
+  if (operationId === undefined) {
+    rendered.limitations.push('compute_output_not_inline')
+    return rendered
+  }
+  const subjectPointer = '/computation/operationRef/id'
+  for (const [key, value] of Object.entries(metrics)) {
+    if (!isRecord(value)) {
+      // A bare scalar (e.g. a record count) has no unit/currency axis to bind.
+      rendered.limitations.push('numeric_cell_no_unit')
+      continue
+    }
+    const amount = value['amount']
+    if (typeof amount !== 'string' && typeof amount !== 'number') {
+      rendered.limitations.push('numeric_cell_no_unit')
+      continue
+    }
+    const unit = isNonEmptyString(value['unit']) ? value['unit'] : undefined
+    const currency = isNonEmptyString(value['currency']) ? value['currency'] : undefined
+    if (unit === undefined && currency === undefined) {
+      rendered.limitations.push('numeric_cell_no_unit')
+      continue
+    }
+    const metricPointer = `/computation/metrics/${escapePointerToken(key)}`
+    const unitAxis = unit !== undefined ? 'unit' : 'currency'
+    const claimId = stableUuid(`compute:${runId}:${evidenceRef.id}:${key}`)
+    rendered.claims.push({
+      claimId,
+      subject: operationId,
+      predicate: key,
+      value: { value: amount, unit: unit ?? currency ?? '' },
+      time: {},
+      kind: 'computation',
+      references: [{
+        evidenceRef,
+        resultDigest,
+        valuePointer: `${metricPointer}/amount`,
+        unitPointer: `${metricPointer}/${unitAxis}`,
+        subjectPointer,
+        fieldRefPointer: metricPointer,
+      }],
+    })
+  }
+  return rendered
+}
+
 function merge(into: Rendered, from: Rendered): void {
   into.claims.push(...from.claims)
   into.assertions.push(...from.assertions)
@@ -776,7 +859,11 @@ export class TypedEvidenceDraftWriter implements DraftWriterPort {
       case 'document_span':
         return renderCitation(payload, evidenceRef, resultDigest, runId)
       case 'computation':
-        return renderTable(payload, evidenceRef, resultDigest, runId, 'computation')
+        // A presentable compute result renders as a table; the registered operation path emits
+        // only `computation.metrics`, which is projected into row-bound quantity/money claims.
+        return isRecord(payload['table'])
+          ? renderTable(payload, evidenceRef, resultDigest, runId, 'computation')
+          : renderComputeMetrics(payload, evidenceRef, resultDigest, runId)
       default: {
         const rendered = emptyRendered()
         rendered.limitations.push('evidence_unsupported')

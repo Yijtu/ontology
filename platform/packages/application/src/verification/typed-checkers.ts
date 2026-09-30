@@ -6,6 +6,7 @@ import type {
   VersionRef,
 } from '@ontology/contracts'
 import { sha256DigestOf } from '@ontology/core'
+import { canonicalJson } from '../profiles/canonical'
 import type { ResolvedEvidence } from './hard-checks'
 import { sourceValidityFinding } from './hard-checks'
 import { resolveJsonPointer } from './pointers'
@@ -74,7 +75,10 @@ export function sameResourceRef(left: unknown, right: ResourceRef): boolean {
 }
 
 function sameRecord(left: unknown, right: unknown): boolean {
-  return JSON.stringify(left) === JSON.stringify(right)
+  // The archived payload is stored as canonical (key-sorted) JSON, so two structurally equal
+  // locator objects can serialise with different key order. Compare canonically so the citation
+  // check is about the locator's content, not the order the bytes happened to be written in.
+  return canonicalJson(left) === canonicalJson(right)
 }
 
 function finding(

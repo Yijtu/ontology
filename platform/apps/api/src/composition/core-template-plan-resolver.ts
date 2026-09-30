@@ -24,6 +24,7 @@ import type {
   WorkflowInputManifest,
 } from '@ontology/contracts'
 import { findRegisteredOperation } from '@ontology/contracts'
+import { projectCollectionRef } from '@ontology/contracts'
 import { registeredOperationDigest } from '@ontology/tool-services'
 import { sha256DigestOf } from '@ontology/core'
 import {
@@ -751,11 +752,21 @@ export class CoreTemplatePlanResolver implements TemplatePlanResolver {
     if (parsed === undefined) {
       throw new WorkflowControllerError('INVALID_ARGUMENT', 'a document Q&A task requires a query string')
     }
+    const execution = loaded.execution
+    if (execution === undefined || execution.request.mode !== 'task') {
+      throw new WorkflowControllerError('INVALID_SCHEMA', 'a document Q&A task requires a task-mode execution binding')
+    }
+    // A document-QA run searches only the pinned project's own document collection; the
+    // collection ref is host-minted from the trusted execution binding, never from a request
+    // body or a model choice.
+    const collectionRef = projectCollectionRef(execution.request.projectRevisionRef.projectId)
     const step: ExecutablePlanStep = {
       stepId: 'q1',
       toolId: 'document_search',
       arguments: {
         query: parsed.query,
+        allowedCollectionRefs: [collectionRef],
+        mode: 'keyword',
         ...(parsed.limit === undefined ? {} : { limit: parsed.limit }),
       },
       dependsOn: [],

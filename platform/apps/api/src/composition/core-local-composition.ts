@@ -54,7 +54,7 @@ import {
   PostgresStructuredIngestionStore,
   StructuredDocumentParser,
 } from '@ontology/adapter-extraction-document'
-import { Bm25DocumentSearchService, PostgresKeywordIndexStore, ProjectDocumentIndexService, createBm25DocumentSearchToolHandler } from '@ontology/adapter-search-bm25'
+import { Bm25DocumentSearchService, PostgresKeywordIndexStore, ProjectDocumentIndexService } from '@ontology/adapter-search-bm25'
 import { PiRuntimeAdapter } from '@ontology/adapter-runtime-pi'
 import { TemplateRuntimeAdapter } from '@ontology/adapter-runtime-template'
 import {
@@ -166,7 +166,7 @@ import type {
   WorkflowDispatchFence,
   RuntimeCapabilityContext,
 } from '@ontology/contracts'
-import { DEFAULT_VERIFICATION_POLICY, RelationNavigationError, SCHEMA_DOCUMENTS, TOOL_CATALOGUE, createToolContext } from '@ontology/contracts'
+import { DEFAULT_VERIFICATION_POLICY, RelationNavigationError, SCHEMA_DOCUMENTS, TOOL_CATALOGUE, createToolContext, projectCollectionRef } from '@ontology/contracts'
 import { BudgetService, sha256DigestOf } from '@ontology/core'
 import { createRequestToolContext, createToolGatewayComposition, ForbiddenError, InvalidRequestFieldError } from '@ontology/app-api'
 import type { CoreApiDependencies } from '../core-main'
@@ -190,6 +190,7 @@ import { createStaticProbeAdapterResolver, createPostgresSourceStore } from './s
 import { createEnvSecretResolver } from './secret-resolver'
 import { createPostgresProvenanceRead } from './provenance-read'
 import { createCoreModelCapabilityFactory } from './core-model-capabilities'
+import { createCoreDocumentSearchHandler } from './core-document-search-handler'
 import { createCoreModelEvidenceRecorders } from './model-evidence'
 import { createCoreDecisionStateRefProvider } from './decision-state-reference'
 import { PostgresCorePlanReceiptStore } from './core-plan-receipts'
@@ -685,6 +686,7 @@ function workerContext(
   runId = WORKER_RUN_ID,
   resolvedProfileHash = sha256DigestOf('core-worker-profile'),
   clock: () => Date = () => new Date(),
+  collectionRefs: readonly string[] = [],
 ): ToolContext {
   const now = clock()
   const deadline = new Date(now.getTime() + 5 * 60_000)
@@ -711,7 +713,7 @@ function workerContext(
       spaceId: scopeRef.spaceId,
       resourceKinds: ['artifact', 'document', 'chunk', 'evidence', 'dataset', 'plan', 'job'],
       sourceRefs: sourceRefs.map((sourceRef) => ({ ...sourceRef })),
-      collectionRefs: [],
+      collectionRefs: [...collectionRefs],
       domains: [],
       maxRows: 1_000,
     },
@@ -1698,7 +1700,11 @@ export async function createCoreLocalComposition(options: CoreLocalCompositionOp
         validator: toolSchemaValidator(createAjv()),
       },
     })
-    const documentSearchHandler = createBm25DocumentSearchToolHandler({ service: documentSearch })
+    const documentSearchHandler = createCoreDocumentSearchHandler({
+      service: documentSearch,
+      spanReader: documentSpanReader,
+      dataMode: 'observed',
+    })
     const gatewayComposition = createToolGatewayComposition({
       database,
       blobStore,
@@ -1784,6 +1790,16 @@ export async function createCoreLocalComposition(options: CoreLocalCompositionOp
       [versionRefKey(templateRuntimeRecord.manifestRef), templateRuntime],
       [versionRefKey(piRuntimeRecord.manifestRef), piRuntime],
     ])
+    const runAllowedCollectionRefs = async (runId: Uuid, ctx: ToolContext): Promise<readonly string[]> => {
+      const archived = await runExecutionBindingStore.getBindingByRun(scopeRef, runId, ctx)
+      const request = archived?.binding.request
+      if (request === undefined || request.mode !== 'task') return []
+      const binding = await taskBindingStore.getBinding(scopeRef, request.taskBindingRef, ctx)
+      // A document-QA run may search only its own pinned project's host-minted collection.
+      return binding?.kind === 'document_qa'
+        ? [projectCollectionRef(request.projectRevisionRef.projectId)]
+        : []
+    }
     const controllerDependencies = {
       runs,
       phase,
@@ -1896,7 +1912,7 @@ export async function createCoreLocalComposition(options: CoreLocalCompositionOp
           runContext,
           run.resolvedProfileHash,
         )
-        return workerContext(scopeRef, sourceRefsOf(scenario), runId, run.resolvedProfileHash, hostClock)
+        return workerContext(scopeRef, sourceRefsOf(scenario), runId, run.resolvedProfileHash, hostClock, await runAllowedCollectionRefs(runId, runContext))
       },
       onFenceChange(runId, fence) {
         if (fence === undefined) {

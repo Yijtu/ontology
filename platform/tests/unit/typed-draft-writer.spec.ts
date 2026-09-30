@@ -209,6 +209,22 @@ const COMPUTE_PAYLOAD = {
   },
 }
 
+/** The exact shape a registered operation emits: `computation.metrics` with no inline table. */
+const REGISTERED_COMPUTE_PAYLOAD = {
+  resultKind: 'computation',
+  computation: {
+    operationRef: { id: 'example.compute.aggregate', version: '1' },
+    resultRef: { id: randomUUID(), version: '1.0.0', digest: DIGEST, kind: 'artifact' },
+    algorithmVersion: { id: 'example.aggregate', version: '1.0.0', digest: DIGEST },
+    metrics: {
+      record_count: 2,
+      total_quantity: { amount: '12.5', unit: 'each' },
+      total_cost: { amount: '3.5', currency: 'CNY' },
+    },
+    domainStatus: 'known',
+  },
+}
+
 describe('typed draft writer renders every result family into verifiable typed statements', () => {
   it('renders published facts as a quantity claim and a boolean assertion', async () => {
     const h = harness()
@@ -270,6 +286,47 @@ describe('typed draft writer renders every result family into verifiable typed s
     expect(result.draft.claims?.[0]).toMatchObject({ predicate: 'demand', value: { value: 3.5, unit: 'kWh' } })
     const verification = await h.verifier().verify({ runId: RUN_ID, draft: result.draft, inputManifest: manifest }, ownerContext())
     expect(verification.verdict).toBe('pass')
+  })
+
+  it('projects a registered operation\'s computation.metrics into unit- and currency-bound claims', async () => {
+    const h = harness()
+    await h.put('computation', REGISTERED_COMPUTE_PAYLOAD)
+    const manifest = h.manifest()
+    const result = await h.writer().writeDraft(request(manifest), ownerContext())
+    expect(result.draft.claims).toHaveLength(2)
+    const byPredicate = new Map(result.draft.claims?.map((claim) => [claim.predicate, claim]))
+    expect(byPredicate.get('total_quantity')).toMatchObject({
+      subject: 'example.compute.aggregate',
+      value: { value: '12.5', unit: 'each' },
+      kind: 'computation',
+    })
+    expect(byPredicate.get('total_cost')).toMatchObject({ value: { value: '3.5', unit: 'CNY' } })
+    // A bare scalar metric with no unit axis is declared, never fabricated into a quantity.
+    expect(result.draft.limitations).toContain('numeric_cell_no_unit')
+    const verification = await h.verifier().verify(
+      {
+        runId: RUN_ID,
+        draft: result.draft,
+        inputManifest: manifest,
+        ...(result.limitations === undefined ? {} : { trustedLimitations: result.limitations }),
+      },
+      ownerContext(),
+    )
+    expect(verification.verdict).toBe('pass')
+  })
+
+  it('refuses a compute result whose only metric has no unit instead of inventing a quantity', async () => {
+    const h = harness()
+    await h.put('computation', {
+      resultKind: 'computation',
+      computation: {
+        operationRef: { id: 'example.compute.aggregate', version: '1' },
+        metrics: { record_count: 3 },
+        domainStatus: 'known',
+      },
+    })
+    const manifest = h.manifest()
+    await expect(h.writer().writeDraft(request(manifest), ownerContext())).rejects.toMatchObject({ code: 'INSUFFICIENT_DATA' })
   })
 })
 
