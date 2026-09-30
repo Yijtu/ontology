@@ -17,3 +17,9 @@ export type {
   TypedResultContext,
   TypedResultContextSource,
 } from './typed-draft-writer'
+export {
+  RunTypedResultContextSource,
+  buildTypedResultManifest,
+  summarizeTypedResultEvidence,
+} from './typed-result-context-source'
+export type { TypedResultContextSourceDependencies } from './typed-result-context-source'

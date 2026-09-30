@@ -438,7 +438,7 @@ describe('run-bound Template plan preparation and immutable receipt recovery', (
     })
     expect(response.status).toBe(200)
     const terminal = await waitForRunState(created.data.runId, ['failed', 'published', 'blocked'])
-    expect(terminal['state']).toBe('failed')
+    expect(terminal['state']).toBe('published')
     if (modelRequests.length !== 2) {
       const events = await request(`/api/v1/runs/${encodeURIComponent(created.data.runId)}/events`).then((result) => result.text())
       const errors = workerErrors.map((error) => error.stack ?? error.message).join('\n')
@@ -467,8 +467,23 @@ describe('run-bound Template plan preparation and immutable receipt recovery', (
 
     const runEvents = await request(`/api/v1/runs/${encodeURIComponent(created.data.runId)}/events`).then((response) => response.text())
     expect(runEvents).toContain('data_query')
+    // The previously-failing WIP chain (route clarification -> bounded compiled query) now ends
+    // in a visible, verified answer drawn from the real data_query evidence — no manual controller
+    // start and no silent downgrade to a definitions lookup.
     const answer = await request(`/api/v1/runs/${encodeURIComponent(created.data.runId)}/answer`)
-    expect(answer.status).toBe(404)
+    expect(answer.status).toBe(200)
+    const answerData = (await answer.json() as {
+      data: { body?: { claims?: { references: { evidenceRef: { id: string } }[] }[]; assertions?: { references: { evidenceRef: { id: string } }[] }[] } }
+    }).data
+    const statements = [
+      ...(answerData.body?.claims ?? []),
+      ...(answerData.body?.assertions ?? []),
+    ]
+    expect(statements.length).toBeGreaterThan(0)
+    expect(statements.every((statement) => statement.references.length > 0)).toBe(true)
+    const citedEvidenceId = statements[0]?.references[0]?.evidenceRef.id
+    if (citedEvidenceId === undefined) throw new Error('the compiled-query answer has no evidence reference')
+    expect((await request(`/api/v1/evidence/${encodeURIComponent(citedEvidenceId)}`)).status).toBe(200)
 
     const runManifest = await admin.query<{ ledger_id: string }>(
       `SELECT manifest->>'budgetLedgerId' AS ledger_id
@@ -514,7 +529,7 @@ describe('run-bound Template plan preparation and immutable receipt recovery', (
     })
     expect(ordinaryRun.status).toBe(202)
     const ordinaryRunData = await ordinaryRun.json() as { data: { runId: string } }
-    expect((await waitForRunState(ordinaryRunData.data.runId, ['failed', 'published', 'blocked']))['state']).toBe('failed')
+    expect((await waitForRunState(ordinaryRunData.data.runId, ['failed', 'published', 'blocked']))['state']).toBe('published')
     expect(modelRequests.map((entry) => entry.path)).toEqual([
       '/v1/systemone',
       '/v1/chat/completions',

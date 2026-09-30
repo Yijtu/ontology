@@ -40,6 +40,7 @@ import {
   PostgresSemanticPublicationStore,
   PostgresSyntheticExampleSetStore,
   PostgresTableVerificationStore,
+  PostgresTaskFinalizationReceiptStore,
   PostgresTaskPolicyReportStore,
   PostgresWorkflowDispatchStore,
   PostgresWorkflowStore,
@@ -88,6 +89,7 @@ import {
   PublicationValidityEngine,
   RestrictedLimitedAnswerComposer,
   RuleActionCandidateService,
+  RunTypedResultContextSource,
   defaultPublicationEvidenceValidators,
   SourceRegistry,
   RunExecutionPreflightService,
@@ -378,6 +380,17 @@ const CORE_EFFECTIVE_LIMITS_REF: VersionRef = {
   id: 'core-local-effective-limits',
   version: COMPONENT_VERSION,
   digest: sha256DigestOf('core-local-effective-limits@1.0.0'),
+}
+
+/**
+ * The result format the Core host can render and finalize: a `typed-result-manifest@1`. A
+ * published task binding whose `resultSchemaRef` is not this registered format is reported as
+ * not available by preflight, so no run can claim a formal result the host cannot produce.
+ */
+export const CORE_TYPED_RESULT_SCHEMA_REF: VersionRef = {
+  id: 'typed-result-manifest',
+  version: '1.0.0',
+  digest: sha256DigestOf('typed-result-manifest@1'),
 }
 
 /** Project the registered components' declared capabilities into the exact deployment capability set. */
@@ -1447,6 +1460,7 @@ export async function createCoreLocalComposition(options: CoreLocalCompositionOp
     const taskBindingStore = new PostgresPublishedTaskBindingStore(database)
     const taskInputSnapshotStore = new PostgresTaskInputSnapshotStore(database)
     const runExecutionBindingStore = new PostgresRunExecutionBindingStore(database)
+    const taskFinalizationReceiptStore = new PostgresTaskFinalizationReceiptStore(database)
     const identityStore = new PostgresIdentityDecisionStore(database)
     const publicationStore = new PostgresSemanticPublicationStore(database)
     const definitionStore = new PostgresSemanticDefinitionStore(database)
@@ -1624,7 +1638,7 @@ export async function createCoreLocalComposition(options: CoreLocalCompositionOp
       readiness: projectReadinessStore,
       operations: operationRegistry(),
       availableCapabilities: resolvedCapabilitiesFrom(componentRecords),
-      supportedResultSchemaRefs: [],
+      supportedResultSchemaRefs: [CORE_TYPED_RESULT_SCHEMA_REF],
       effectiveLimitsRef: CORE_EFFECTIVE_LIMITS_REF,
       parameters: taskParameterValidator(createAjv()),
     })
@@ -1696,7 +1710,23 @@ export async function createCoreLocalComposition(options: CoreLocalCompositionOp
           } satisfies RuntimeCapabilitySet
         },
       } satisfies RuntimeCapabilityFactoryPort,
-      draftWriter: new TypedEvidenceDraftWriter({ evidence: evidenceStore, artifacts: blobStore }),
+      draftWriter: new TypedEvidenceDraftWriter({
+        evidence: evidenceStore,
+        artifacts: blobStore,
+        // A task-bound run resolves its archived typed result manifest and finalization receipt
+        // through the real execution/published-task bindings, so the production path emits an
+        // `answer-draft@3`; a legacy run without an execution binding stays on `@2`.
+        typedResult: new RunTypedResultContextSource({
+          runs: runStore,
+          executionBindings: runExecutionBindingStore,
+          taskBindings: taskBindingStore,
+          manifests: workflowStore,
+          evidence: evidenceStore,
+          artifacts: blobStore,
+          artifactWriter: gatewayComposition.artifacts,
+          receipts: taskFinalizationReceiptStore,
+        }),
+      }),
       limited: new RestrictedLimitedAnswerComposer(),
       verifier: new DraftVerificationService({
         evidence: evidenceStore,
