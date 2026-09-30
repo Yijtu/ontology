@@ -1,5 +1,6 @@
 import type {
   RuleExpressionNode,
+  RuleRelationPremiseDeclaration,
   RuleSupportFinding,
   RuleSupportReport,
   RuleSupportValidationInput,
@@ -24,7 +25,10 @@ import type { FiniteConditionPlan } from './boolean'
  *    alarm = true`); every branch keeps its own AST, state and sources and is never lowered
  *    into a same-filter source group;
  *  - `not` over one observed comparison/range leaf;
- *  - no `relation` premise yet (one-hop relation navigation is a later capability).
+ *  - at most one POSITIVE, ONE-HOP `relation` premise whose relation is declared in the pinned
+ *    definition (`RuleRelationPremiseDeclaration`). A relation with no executable declaration,
+ *    a deeper/cyclic relation, a relation inside `not` or a second relation premise stays
+ *    `RELATION_PREMISE_UNSUPPORTED` and is never loosened into a field lookup.
  * Declared rule dependencies must be acyclic and at most three levels deep.
  */
 
@@ -39,6 +43,43 @@ export interface LoweredConditionLeaf {
   readonly values: readonly (string | number | boolean)[]
   readonly unitCode?: string
   readonly negative: boolean
+  /**
+   * Set when this leaf is a one-hop relation premise rather than an attribute observation.
+   * `attributeId` carries the relation id and `operator` is `exists`; the evaluator resolves
+   * it through confirmed published relations, never through a field value.
+   */
+  readonly relationId?: string
+}
+
+/**
+ * Mutable state threaded through one lowering pass: the declared one-hop relation premises of
+ * the pinned definition plus the relation nodes actually seen. It is what enforces the
+ * "at most one relation premise" rule after the whole condition and its exceptions are walked.
+ */
+interface RelationLoweringState {
+  readonly declarations: ReadonlyMap<string, RuleRelationPremiseDeclaration>
+  relationCount: number
+}
+
+function containsRelationNode(node: RuleExpressionNode): boolean {
+  switch (node.op) {
+    case 'relation':
+      return true
+    case 'all':
+    case 'any':
+      return node.operands.some(containsRelationNode)
+    case 'not':
+      return containsRelationNode(node.operand)
+    default:
+      return false
+  }
+}
+
+function relationPremiseIsOneHop(declaration: RuleRelationPremiseDeclaration): boolean {
+  if (declaration.cyclic === true) return false
+  if (declaration.depth !== 1) return false
+  if (declaration.targetCondition !== undefined && containsRelationNode(declaration.targetCondition)) return false
+  return true
 }
 
 function rangeLeaf(
@@ -71,6 +112,7 @@ function lowerPlan(
   path: string,
   findings: RuleSupportFinding[],
   depth: number,
+  relations: RelationLoweringState,
 ): FiniteConditionPlan<LoweredConditionLeaf> | undefined {
   if (depth > MAX_CONDITION_DEPTH) {
     findings.push({
@@ -114,7 +156,7 @@ function lowerPlan(
       }
       const children: FiniteConditionPlan<LoweredConditionLeaf>[] = []
       for (const [index, operand] of node.operands.entries()) {
-        const child = lowerPlan(operand, `${path}.operands[${String(index)}]`, findings, depth + 1)
+        const child = lowerPlan(operand, `${path}.operands[${String(index)}]`, findings, depth + 1, relations)
         if (child === undefined) return undefined
         children.push(child)
       }
@@ -136,16 +178,16 @@ function lowerPlan(
       }
       const children: FiniteConditionPlan<LoweredConditionLeaf>[] = []
       for (const [index, operand] of node.operands.entries()) {
-        const child = lowerPlan(operand, `${path}.operands[${String(index)}]`, findings, depth + 1)
+        const child = lowerPlan(operand, `${path}.operands[${String(index)}]`, findings, depth + 1, relations)
         if (child === undefined) return undefined
         children.push(child)
       }
       return { kind: 'any', children }
     }
     case 'not': {
-      const operand = lowerPlan(node.operand, `${path}.operand`, findings, depth + 1)
+      const operand = lowerPlan(node.operand, `${path}.operand`, findings, depth + 1, relations)
       if (operand === undefined) return undefined
-      if (operand.kind !== 'leaf' || operand.leaf.negative) {
+      if (operand.kind !== 'leaf' || operand.leaf.negative || operand.leaf.relationId !== undefined) {
         findings.push({
           code: 'UNSUPPORTED_NEGATION',
           message: 'negation must cover exactly one observed comparison or range leaf',
@@ -156,14 +198,38 @@ function lowerPlan(
       }
       return { kind: 'leaf', leaf: { ...operand.leaf, negative: true } }
     }
-    case 'relation':
-      findings.push({
-        code: 'RELATION_PREMISE_UNSUPPORTED',
-        message: `relation premise ${node.relationId} is not part of the first executable subset`,
-        path,
-        rawForm: node,
-      })
-      return undefined
+    case 'relation': {
+      const declaration = relations.declarations.get(node.relationId)
+      if (declaration === undefined) {
+        findings.push({
+          code: 'RELATION_PREMISE_UNSUPPORTED',
+          message: `relation premise ${node.relationId} has no executable one-hop declaration in the pinned definition`,
+          path,
+          rawForm: node,
+        })
+        return undefined
+      }
+      if (!relationPremiseIsOneHop(declaration)) {
+        findings.push({
+          code: 'RELATION_PREMISE_UNSUPPORTED',
+          message: `relation premise ${node.relationId} is not an acyclic one-hop relation and cannot be executed`,
+          path,
+          rawForm: node,
+        })
+        return undefined
+      }
+      relations.relationCount += 1
+      return {
+        kind: 'leaf',
+        leaf: {
+          attributeId: node.relationId,
+          operator: 'exists',
+          values: [],
+          negative: false,
+          relationId: node.relationId,
+        },
+      }
+    }
     default:
       findings.push({
         code: 'MALFORMED_EXPRESSION',
@@ -221,7 +287,11 @@ function checkDependencies(input: RuleSupportValidationInput, findings: RuleSupp
 export class FiniteGrammarRuleSupportValidator implements RuleSupportValidator {
   validate(input: RuleSupportValidationInput): RuleSupportReport {
     const findings: RuleSupportFinding[] = []
-    lowerPlan(input.condition, 'condition', findings, 0)
+    const relations: RelationLoweringState = {
+      declarations: new Map((input.relationPremises ?? []).map((declaration) => [declaration.relationId, declaration])),
+      relationCount: 0,
+    }
+    lowerPlan(input.condition, 'condition', findings, 0, relations)
     if (input.exceptions.length > MAX_EXCEPTIONS) {
       findings.push({
         code: 'UNSUPPORTED_EXCEPTION',
@@ -231,9 +301,10 @@ export class FiniteGrammarRuleSupportValidator implements RuleSupportValidator {
       })
     }
     for (const [index, exception] of input.exceptions.entries()) {
-      const plan = lowerPlan(exception.condition, `exceptions[${String(index)}].condition`, findings, 0)
+      const plan = lowerPlan(exception.condition, `exceptions[${String(index)}].condition`, findings, 0, relations)
       if (plan === undefined) continue
-      if (plan.kind === 'leaf' && plan.leaf.negative) {
+      // An exception is a negated condition; a relation premise may never be negated (SPEC §5.2).
+      if (plan.kind === 'leaf' && (plan.leaf.negative || plan.leaf.relationId !== undefined)) {
         findings.push({
           code: 'UNSUPPORTED_EXCEPTION',
           message: `exception ${exception.exceptionId} must be one explicit comparison, range, same-condition or different-condition any`,
@@ -241,6 +312,14 @@ export class FiniteGrammarRuleSupportValidator implements RuleSupportValidator {
           rawForm: exception,
         })
       }
+    }
+    if (relations.relationCount > 1) {
+      findings.push({
+        code: 'RELATION_PREMISE_UNSUPPORTED',
+        message: `a rule declares ${String(relations.relationCount)} relation premises; at most one one-hop relation premise is executable`,
+        path: 'condition',
+        rawForm: input.condition,
+      })
     }
     const dependencyDepth = checkDependencies(input, findings)
     const executable = findings.length === 0
@@ -272,13 +351,24 @@ export interface LoweredCondition {
   readonly findings: readonly RuleSupportFinding[]
 }
 
-/** Lower a frozen `RuleExpressionNode` into the supported finite condition tree. */
-export function lowerConditionPlan(condition: RuleExpressionNode): {
+/**
+ * Lower a frozen `RuleExpressionNode` into the supported finite condition tree. The optional
+ * declared one-hop relation premises mirror the support validator, so the evaluator and the
+ * validator agree on exactly which relation node is executable.
+ */
+export function lowerConditionPlan(
+  condition: RuleExpressionNode,
+  relationPremises: readonly RuleRelationPremiseDeclaration[] = [],
+): {
   readonly plan: LoweredConditionPlan | undefined
   readonly findings: readonly RuleSupportFinding[]
 } {
   const findings: RuleSupportFinding[] = []
-  const plan = lowerPlan(condition, 'condition', findings, 0)
+  const relations: RelationLoweringState = {
+    declarations: new Map(relationPremises.map((declaration) => [declaration.relationId, declaration])),
+    relationCount: 0,
+  }
+  const plan = lowerPlan(condition, 'condition', findings, 0, relations)
   return { plan, findings }
 }
 
@@ -302,7 +392,8 @@ function flattenConjunction(plan: LoweredConditionPlan): LoweredConditionLeaf[] 
  */
 export function lowerConditionLeaves(condition: RuleExpressionNode): LoweredCondition {
   const findings: RuleSupportFinding[] = []
-  const plan = lowerPlan(condition, 'condition', findings, 0)
+  const relations: RelationLoweringState = { declarations: new Map(), relationCount: 0 }
+  const plan = lowerPlan(condition, 'condition', findings, 0, relations)
   if (plan === undefined) return { leaves: [], findings }
   const leaves = flattenConjunction(plan)
   if (leaves === undefined) {
