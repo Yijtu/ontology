@@ -19,10 +19,10 @@ Dependencies: #196, #199, #200, #201, #207
 
 ## 验收条件
 
-- [ ] 真实 Pi 适配器注册到 Core profile/runtime factory，工具只经过同gateway，共享绑定和预算。
-- [ ] 测试查询不足→受限补查→已核验最终结果；无新证据、工具不支持或循环cap正确停止。
-- [ ] SDK stream/final不能发布，parallel/late calls/abort都受Controller管理，不加另一循环所有者或行业逻辑。
-- [ ] 实际结果与证据写入完成记录；同步必要契约、使用说明和本批状态，不因源码存在或受控模型响应而虚报完成。
+- [x] 真实 Pi 适配器注册到 Core profile/runtime factory，工具只经过同gateway，共享绑定和预算。
+- [x] 测试查询不足→受限补查→已核验最终结果；无新证据、工具不支持或循环cap正确停止。
+- [x] SDK stream/final不能发布，parallel/late calls/abort都受Controller管理，不加另一循环所有者或行业逻辑。
+- [x] 实际结果与证据写入完成记录；同步必要契约、使用说明和本批状态，不因源码存在或受控模型响应而虚报完成。
 
 ## 需求与规格
 
@@ -49,5 +49,11 @@ Dependencies: #196, #199, #200, #201, #207
 
 ## 完成记录
 
-- 当前：未开工；验证未运行。GitHub Issue：[#209](https://github.com/Yijtu/ontology/issues/209)；文档提交不代表功能完成。
-- 实现后记录：提交/PR、适用命令结果、满足的验收、未验证/外部条件、迁移配置与兼容影响。
+- 分支 `feat/v03-038-pi-host-loop`；提交 `feat: assemble Pi bounded evidence runtime at the normal entry (#209)`。
+- 改动：`apps/api/src/composition/core-local-composition.ts` 在正常入口注册 `runtime-pi` 组件并装配真实 `PiRuntimeAdapter`（`@ontology/adapter-runtime-pi`），`RuntimeSelectorPort` 按 profile 固定的完整 ref（id+version+digest）在 Template／Pi 两个真实适配器间分派；两者共用同一 `RuntimeCapabilityFactoryPort`（generation 与 JEV 是两个独立端口）和同一 run 账本／输入 manifest，未新增循环所有者或行业逻辑。新增 `tests/integration/core-pi-host-postgres.spec.ts`。
+- 验收：正常 HTTP `POST /api/v1/runs`（真实 Postgres + 真实 durable worker + 真实 gateway）分派 Pi profile，受控模型服务器只给出工具提案（受控模型响应，非真实付费调用）。固定路径：第 1 轮 `ontology_lookup(intent=definitions)`（查询不足，非事实页）→ 第 2 轮补查 `ontology_lookup(intent=facts, inspection_due)`（已发布事实）→ 完成；控制器 typed draft→verify→publish 同一已核验版本，回答断言 `inspection_due=false` 且带证据 ref。断言：`runtime-pi`、`runtime-template` 均已注册；run_events 含 `answer.published`；run state=`published`；同一 run 仅 1 个 ledger（补查／模型／草稿修复不重置预算）；2 条 `observation` 证据；`modelRequestCount>=3`（≥3 次模型调用）。JEV 关闭仍可分派，generation／JEV 分端口。
+- 负例／停止：Pi 适配器单测（`tests/unit/pi-runtime.spec.ts`）已覆盖无剩余预算、超期、host abort、未授权工具不进入 gateway、gateway 拒绝不被覆盖、无发布路径；`tests/integration/workflow-controller-postgres.spec.ts` 覆盖每 run 唯一 runtime 选择与唯一 ledger。本卡未新增第二循环所有者。
+- 命令与结果（`platform/`）：`pnpm run typecheck` 通过；`pnpm run lint` 通过；`pnpm run boundaries` 8 passed；`vitest run tests/unit tests/composition` 147 files / 1602 tests passed；`npx vitest run tests/integration/core-pi-host-postgres.spec.ts` 1 passed；`core-local-host-postgres.spec.ts` 5 passed；`core-model-host-postgres.spec.ts` 1 passed；`core-composition-chain-postgres.spec.ts` passed。容器使用命名卷并显式回收（`startPostgresContainer`），未使用 `--rm`。
+- 迁移：无需新迁移（复用既有 run／budget／evidence／checkpoint 存储），未占用 `079_*.sql`。兼容影响：Core 组件注册表新增一个 `runtime-pi` 运行时条目，旧 Template profile 行为不变。
+- 未验证／外部条件：真实付费模型调用、真实 MCP transport 与浏览器 E2E 不在本卡（分别属 V03-044/V03-045）；受控模型响应已明确标注，不记为真实模型验收。已知与本卡无关的既有失败：`tests/integration/core-template-plan-receipts-postgres.spec.ts` 一个用例在基线（未含本卡改动）即失败（`expected 'published' to be 'failed'`），已核对非本卡引入。
+- GitHub Issue：[#209](https://github.com/Yijtu/ontology/issues/209)。
