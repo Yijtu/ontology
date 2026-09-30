@@ -5,6 +5,9 @@ import { ApiError } from '../api/errors'
 import type { WorkspaceIdentity } from '../workspace-identity'
 import { webWorkspaceIdentity } from '../workspace-identity'
 import { StatePanel } from './StatePanel'
+import { PublicEmptyState, PublicStateNotice } from './PublicStateNotice'
+import { classifyPublicError } from '../state/public-errors'
+import type { PublicFailure } from '../state/public-errors'
 import type { WorkbenchError, WorkbenchPhase } from '../state/workbench'
 import { WorkspaceSourcesPanel } from './WorkspaceSourcesPanel'
 
@@ -85,6 +88,9 @@ function toError(error: unknown): WorkbenchError {
     return {
       code: error.code,
       message: error.message,
+      status: error.status,
+      retryable: error.retryable,
+      missingCapabilities: error.missingCapabilities,
       ...(error.traceId === undefined ? {} : { traceId: error.traceId }),
       ...(error.reasons.length === 0 ? {} : { reasons: error.reasons }),
     }
@@ -92,6 +98,7 @@ function toError(error: unknown): WorkbenchError {
   return {
     code: 'NETWORK_ERROR',
     message: error instanceof Error ? error.message : '请求无法完成。',
+    retryable: true,
   }
 }
 
@@ -134,7 +141,7 @@ export function OntologyWorkspacePanel({
   const [drafts, setDrafts] = useState<readonly AssetDraftVersion[]>([])
   const [fields, setFields] = useState<WorkspaceCreateFields>(EMPTY_CREATE_FIELDS)
   const [fieldErrors, setFieldErrors] = useState<Readonly<Record<string, string>>>({})
-  const [createFailure, setCreateFailure] = useState<string | undefined>(undefined)
+  const [createFailure, setCreateFailure] = useState<PublicFailure | undefined>(undefined)
   const [busy, setBusy] = useState(false)
   const [editFailure, setEditFailure] = useState<WorkbenchError | undefined>(undefined)
   const [editFields, setEditFields] = useState<WorkspaceCreateFields>(EMPTY_CREATE_FIELDS)
@@ -208,7 +215,7 @@ export function OntologyWorkspacePanel({
     const errors = validateCreateFields(fields)
     setFieldErrors(errors)
     if (Object.keys(errors).length > 0) {
-      setCreateFailure('请先修正标记的必填项。')
+      setCreateFailure(classifyPublicError({ code: 'INVALID_ARGUMENT', message: '请先修正标记的必填项。' }))
       return
     }
     setBusy(true)
@@ -230,7 +237,7 @@ export function OntologyWorkspacePanel({
       selectWorkspace(view.workspace.workspaceId)
       setPhase('ready')
     } catch (caught) {
-      setCreateFailure(toError(caught).message)
+      setCreateFailure(classifyPublicError(toError(caught)))
     } finally {
       setBusy(false)
     }
@@ -298,11 +305,17 @@ export function OntologyWorkspacePanel({
           phase={phase}
           {...(error === undefined ? {} : { error })}
           {...(phase === 'loading' ? { title: '正在加载本体工作区…' } : {})}
+          {...(phase === 'failure' ? { onRecover: () => void loadList() } : {})}
         />
       ) : null}
 
       {phase === 'empty' ? (
-        <p data-testid="workspace-empty">尚无本体工作区。填写下方表单创建第一个工作区。</p>
+        <PublicEmptyState
+          testId="workspace-empty"
+          title="尚无本体工作区"
+          requirement="业务范围说明，以及要纳入的资料来源。"
+          nextStep="填写下方表单的显示名、命名空间与目标，创建第一个工作区。"
+        />
       ) : null}
 
       {phase === 'ready' ? (
@@ -427,9 +440,11 @@ export function OntologyWorkspacePanel({
             {busy ? '保存中…' : '创建工作区'}
           </button>
           {createFailure === undefined ? null : (
-            <p role="alert" data-testid="workspace-create-failure">
-              {createFailure}
-            </p>
+            <PublicStateNotice
+              testId="workspace-create-failure"
+              failure={createFailure}
+              onRecover={() => void create()}
+            />
           )}
         </form>
       )}
@@ -491,9 +506,11 @@ export function OntologyWorkspacePanel({
                     {busy ? '保存中…' : '保存新草稿修订'}
                   </button>
                   {editFailure === undefined ? null : (
-                    <p role="alert" data-testid="workspace-edit-failure" data-code={editFailure.code}>
-                      {editFailure.code}: {editFailure.message}
-                    </p>
+                    <PublicStateNotice
+                      testId="workspace-edit-failure"
+                      failure={classifyPublicError(editFailure)}
+                      onRecover={() => void loadDrafts(selected.workspaceId)}
+                    />
                   )}
                 </form>
               ) : null}

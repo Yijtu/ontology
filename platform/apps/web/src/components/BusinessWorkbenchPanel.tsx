@@ -9,6 +9,8 @@ import { ScenarioModuleRegistry } from '../mount/registry'
 import { initialQueryState, queryReducer } from '../state/query'
 import type { QueryOutcome } from '../state/query'
 import type { WorkbenchError } from '../state/workbench'
+import { classifyPublicError } from '../state/public-errors'
+import { PublicStateNotice } from './PublicStateNotice'
 import { ResultWorkbenchPanel } from './ResultWorkbenchPanel'
 
 /**
@@ -64,11 +66,14 @@ function toWorkbenchError(error: unknown): WorkbenchError {
     return {
       code: error.code,
       message: error.message,
+      status: error.status,
+      retryable: error.retryable,
+      missingCapabilities: error.missingCapabilities,
       ...(error.traceId === undefined ? {} : { traceId: error.traceId }),
       ...(error.reasons.length === 0 ? {} : { reasons: error.reasons }),
     }
   }
-  return { code: 'NETWORK_ERROR', message: error instanceof Error ? error.message : '请求失败' }
+  return { code: 'NETWORK_ERROR', message: error instanceof Error ? error.message : '请求失败', retryable: true }
 }
 
 const OUTCOME_LABELS: Readonly<Record<QueryOutcome, string>> = {
@@ -234,23 +239,21 @@ export function BusinessWorkbenchPanel({
     [client, closeStream, loadAnswer, refreshRun],
   )
 
-  useEffect(() => {
-    let cancelled = false
-    const load = async () => {
-      dispatch({ type: 'scopeLoadStarted' })
-      try {
-        const scope = await client.getRunScope(profileRef)
-        if (!cancelled) dispatch({ type: 'scopeLoaded', scope })
-      } catch (error) {
-        if (!cancelled) dispatch({ type: 'failed', error: toWorkbenchError(error) })
-      }
+  const reloadScope = useCallback(async () => {
+    dispatch({ type: 'scopeLoadStarted' })
+    try {
+      dispatch({ type: 'scopeLoaded', scope: await client.getRunScope(profileRef) })
+    } catch (error) {
+      dispatch({ type: 'failed', error: toWorkbenchError(error) })
     }
-    void load()
+  }, [client, profileRef])
+
+  useEffect(() => {
+    void reloadScope()
     return () => {
-      cancelled = true
       closeStream()
     }
-  }, [client, profileRef, closeStream])
+  }, [reloadScope, closeStream])
 
   useEffect(() => {
     if (initialRunId === undefined) return
@@ -472,16 +475,18 @@ export function BusinessWorkbenchPanel({
         </p>
       )}
 
-      {state.phase === 'loading' || state.phase === 'not_configured' || state.phase === 'failure' || state.phase === 'permission_denied' ? (
-        <p data-testid="business-state" data-phase={state.phase} role="alert">
-          {state.phase === 'permission_denied' ? '权限不足，无法执行该任务。' : state.phase === 'not_configured' ? '缺少所需能力，任务暂不可用。' : '加载或执行失败。'}
+      {state.phase === 'loading' ? (
+        <p data-testid="business-state" data-phase={state.phase} role="status">
+          正在加载可用任务…
         </p>
       ) : null}
-      {state.error === undefined ? null : (
-        <p data-testid="business-error-code" data-code={state.error.code}>
-          {state.error.message}
-        </p>
-      )}
+      {state.error !== undefined && (state.phase === 'failure' || state.phase === 'not_configured' || state.phase === 'permission_denied') ? (
+        <PublicStateNotice
+          testId="business-state"
+          failure={classifyPublicError(state.error)}
+          {...(state.phase === 'failure' ? { onRecover: () => void reloadScope() } : {})}
+        />
+      ) : null}
 
       {run === undefined ? null : (
         <section className="business-workbench__run" data-testid="business-run-panel" data-state={run.state}>

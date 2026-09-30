@@ -19,6 +19,8 @@ import type {
 import type { WorkbenchClient } from '../api/client'
 import { ApiError } from '../api/errors'
 import { StatePanel } from './StatePanel'
+import { PublicEmptyState, PublicStateNotice } from './PublicStateNotice'
+import { classifyPublicError } from '../state/public-errors'
 import type { WorkbenchError, WorkbenchPhase } from '../state/workbench'
 import type {
   ColumnMappingRequestView,
@@ -101,11 +103,14 @@ function toError(error: unknown): WorkbenchError {
     return {
       code: error.code,
       message: error.message,
+      status: error.status,
+      retryable: error.retryable,
+      missingCapabilities: error.missingCapabilities,
       ...(error.traceId === undefined ? {} : { traceId: error.traceId }),
       ...(error.reasons.length === 0 ? {} : { reasons: error.reasons }),
     }
   }
-  return { code: 'NETWORK_ERROR', message: error instanceof Error ? error.message : '请求无法完成。' }
+  return { code: 'NETWORK_ERROR', message: error instanceof Error ? error.message : '请求无法完成。', retryable: true }
 }
 
 function phaseFor(error: unknown): WorkbenchPhase {
@@ -494,10 +499,18 @@ export function ProjectWorkspacePanel({
           phase={phase}
           {...(error === undefined ? {} : { error })}
           {...(phase === 'loading' ? { title: '正在加载项目…' } : {})}
+          {...(phase === 'failure' ? { onRecover: () => void loadList() } : {})}
         />
       ) : null}
 
-      {phase === 'empty' ? <p data-testid="project-empty">尚无客户项目。填写下方表单创建第一个项目。</p> : null}
+      {phase === 'empty' ? (
+        <PublicEmptyState
+          testId="project-empty"
+          title="尚无客户项目"
+          requirement="一份已发布的行业包版本，以及要导入的项目资料。"
+          nextStep="在下方填写项目名称并选择已发布行业包，创建第一个项目。"
+        />
+      ) : null}
 
       {phase === 'ready' ? (
         <div className="project-workspace__list" data-testid="project-list">
@@ -567,9 +580,11 @@ export function ProjectWorkspacePanel({
             {busy ? '保存中…' : '创建项目'}
           </button>
           {createFailure === undefined ? null : (
-            <p role="alert" data-testid="project-create-failure" data-code={createFailure.code}>
-              {createFailure.code}：{createFailure.message}
-            </p>
+            <PublicStateNotice
+              testId="project-create-failure"
+              failure={classifyPublicError(createFailure)}
+              onRecover={() => void create()}
+            />
           )}
         </form>
       )}
@@ -658,7 +673,12 @@ export function ProjectWorkspacePanel({
           <section className="project-workspace__sources" data-testid="project-sources">
             <h4>资料导入</h4>
             {sources.length === 0 ? (
-              <p data-testid="sources-empty">暂无已解析的可导入资料。</p>
+              <PublicEmptyState
+                testId="sources-empty"
+                title="暂无可导入资料"
+                requirement="已上传并解析完成的 CSV／JSON／XLSX 等结构化资料。"
+                nextStep="先在上游完成资料上传与解析，再回到本页导入项目。"
+              />
             ) : (
               <ul>
                 {sources.map((candidate) => (
@@ -816,9 +836,11 @@ export function ProjectWorkspacePanel({
             )}
 
             {previewError === undefined ? null : (
-              <p role="alert" data-testid="mapping-failure" data-code={previewError.code}>
-                {previewError.code}：{previewError.message}
-              </p>
+              <PublicStateNotice
+                testId="mapping-failure"
+                failure={classifyPublicError(previewError)}
+                onRecover={() => void previewMapping()}
+              />
             )}
 
             {preview === undefined ? null : (
@@ -929,9 +951,13 @@ export function ProjectWorkspacePanel({
           </section>
 
           {actionError === undefined ? null : (
-            <p role="alert" data-testid="project-action-error" data-code={actionError.code}>
-              {actionError.code}：{actionError.message}
-            </p>
+            <PublicStateNotice
+              testId="project-action-error"
+              failure={classifyPublicError(actionError)}
+              onRecover={() => {
+                if (selectedId !== undefined) void loadProjectData(selectedId)
+              }}
+            />
           )}
         </div>
       )}

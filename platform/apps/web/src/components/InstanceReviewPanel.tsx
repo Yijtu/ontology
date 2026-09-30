@@ -8,6 +8,8 @@ import type { WorkbenchClient } from '../api/client'
 import type { InstanceConfirmationOutcomeView } from '../api/instances'
 import { ApiError } from '../api/errors'
 import { StatePanel } from './StatePanel'
+import { PublicStateNotice } from './PublicStateNotice'
+import { classifyPublicError } from '../state/public-errors'
 import type { WorkbenchError, WorkbenchPhase } from '../state/workbench'
 
 /**
@@ -32,6 +34,9 @@ function toError(error: unknown): WorkbenchError {
     return {
       code: error.code,
       message: error.message,
+      status: error.status,
+      retryable: error.retryable,
+      missingCapabilities: error.missingCapabilities,
       ...(error.traceId === undefined ? {} : { traceId: error.traceId }),
       ...(error.reasons.length === 0 ? {} : { reasons: error.reasons }),
     }
@@ -39,6 +44,7 @@ function toError(error: unknown): WorkbenchError {
   return {
     code: 'NETWORK_ERROR',
     message: error instanceof Error ? error.message : '请求无法完成。',
+    retryable: true,
   }
 }
 
@@ -202,6 +208,7 @@ export function InstanceReviewPanel({ client, projectId, readOnly = false }: Ins
           phase={phase}
           {...(error === undefined ? {} : { error })}
           {...(phase === 'loading' ? { title: '正在加载实例记录…' } : {})}
+          {...(phase === 'failure' ? { onRecover: () => void loadList() } : {})}
         />
       ) : null}
 
@@ -465,9 +472,11 @@ export function InstanceReviewPanel({ client, projectId, readOnly = false }: Ins
           )}
 
           {failure === undefined ? null : (
-            <p role="alert" data-testid="instance-action-failure" data-code={failure.code}>
-              {failure.code}: {failure.message}
-            </p>
+            <PublicStateNotice
+              testId="instance-action-failure"
+              failure={classifyPublicError(failure)}
+              onRecover={() => void loadList()}
+            />
           )}
         </div>
       )}

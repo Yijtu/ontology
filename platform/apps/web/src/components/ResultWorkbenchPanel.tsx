@@ -7,6 +7,9 @@ import type {
   VerifiedResultLoad,
   VerifiedTablePageView,
 } from '../api/results'
+import { classifyPublicError } from '../state/public-errors'
+import type { PublicFailure } from '../state/public-errors'
+import { PublicStateNotice } from './PublicStateNotice'
 import { PublishedAnswerBody } from './PublishedAnswerBody'
 import type { PublishedAnswerLabelKind } from './PublishedAnswerBody'
 
@@ -40,7 +43,7 @@ export interface ResultWorkbenchPanelProps {
 type LoadState =
   | { readonly status: 'loading' }
   | { readonly status: 'ready'; readonly load: VerifiedResultLoad }
-  | { readonly status: 'error'; readonly message: string }
+  | { readonly status: 'error'; readonly failure: PublicFailure }
 
 const TAB_LABELS: Readonly<Record<ResultWorkbenchTab, string>> = {
   body: '正文',
@@ -265,6 +268,7 @@ export function ResultWorkbenchPanel({
   const [evidenceState, setEvidenceState] = useState<{ view?: ProvenanceEvidenceView; loading: boolean; error?: string }>({ loading: false })
   const [historyState, setHistoryState] = useState<{ view?: ResultHistoryView; loading: boolean; error?: string }>({ loading: false })
   const [exportState, setExportState] = useState<{ data?: VerifiedResultExport; loading: boolean; error?: string }>({ loading: false })
+  const [reloadNonce, setReloadNonce] = useState(0)
   const autoLoadedFor = useRef<string | undefined>(undefined)
 
   useEffect(() => {
@@ -276,12 +280,12 @@ export function ResultWorkbenchPanel({
         if (!cancelled) setLoad({ status: 'ready', load: result })
       })
       .catch((error: unknown) => {
-        if (!cancelled) setLoad({ status: 'error', message: errorMessage(error) })
+        if (!cancelled) setLoad({ status: 'error', failure: classifyPublicError(error) })
       })
     return () => {
       cancelled = true
     }
-  }, [source, runId])
+  }, [source, runId, reloadNonce])
 
   const verified = load.status === 'ready' ? resultOf(load.load) : undefined
   const answerId = verified?.answer.answerId
@@ -370,9 +374,11 @@ export function ResultWorkbenchPanel({
     <section className="result-workbench" data-testid="result-workbench" data-run-id={runId}>
       {load.status === 'loading' ? <p data-testid="result-loading">正在读取已核验结果…</p> : null}
       {load.status === 'error' ? (
-        <p data-testid="result-error" role="alert">
-          读取已核验结果失败：{load.message}
-        </p>
+        <PublicStateNotice
+          testId="result-error"
+          failure={load.failure}
+          onRecover={() => setReloadNonce((previous) => previous + 1)}
+        />
       ) : null}
       {load.status === 'ready' && load.load.kind === 'in_progress' ? (
         <p data-testid="result-in-progress">运行尚未结束（{load.load.state}）：没有可展示的已核验结果。</p>

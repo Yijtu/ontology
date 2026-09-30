@@ -3,6 +3,9 @@ import type { IndustryWorkspace, PipelineStage, ResourceRef } from '@ontology/co
 import type { WorkbenchClient } from '../api/client'
 import type { JobView } from '../api/review'
 import { ApiError } from '../api/errors'
+import { PublicEmptyState, PublicStateNotice } from './PublicStateNotice'
+import { classifyPublicError } from '../state/public-errors'
+import type { PublicFailure } from '../state/public-errors'
 import type { WorkspaceIdentity } from '../workspace-identity'
 
 /**
@@ -119,7 +122,7 @@ export function WorkspaceSourcesPanel({
   const [chosenName, setChosenName] = useState('')
   const [chosenType, setChosenType] = useState<SupportedSourceType>('text')
   const [busy, setBusy] = useState(false)
-  const [failure, setFailure] = useState<string | undefined>(undefined)
+  const [failure, setFailure] = useState<PublicFailure | undefined>(undefined)
   const [notice, setNotice] = useState<string | undefined>(undefined)
 
   const reloadJob = async (jobId: string): Promise<void> => {
@@ -141,7 +144,7 @@ export function WorkspaceSourcesPanel({
     event.preventDefault()
     if (busy) return
     if (chosenName.trim().length === 0) {
-      setFailure('请先选择文件或填写资料名称。')
+      setFailure(classifyPublicError({ code: 'INVALID_ARGUMENT', message: '请先选择文件或填写资料名称。' }))
       return
     }
     setBusy(true)
@@ -180,7 +183,7 @@ export function WorkspaceSourcesPanel({
         await onRegisterSourceSet(documentSetRef, `register source ${chosenName} revision ${revision}`)
       }
     } catch (error) {
-      setFailure(errorMessage(error))
+      setFailure(classifyPublicError(error))
     } finally {
       setBusy(false)
     }
@@ -219,7 +222,7 @@ export function WorkspaceSourcesPanel({
               setChosenType(detectType(file.name))
               void file.text().then(
                 (text) => setPastedText(text),
-                () => setFailure('无法读取所选文件内容。'),
+                () => setFailure(classifyPublicError({ code: 'UNSUPPORTED_MEDIA_TYPE', message: '无法读取所选文件内容。' })),
               )
             }}
           />
@@ -272,13 +275,20 @@ export function WorkspaceSourcesPanel({
         </p>
       )}
       {failure === undefined ? null : (
-        <p role="alert" data-testid="source-error">
-          {failure}
-        </p>
+        <PublicStateNotice
+          testId="source-error"
+          failure={failure}
+          onRecover={() => void submit({ preventDefault: () => undefined })}
+        />
       )}
 
       {sources.length === 0 ? (
-        <p data-testid="workspace-sources-empty">尚无资料。</p>
+        <PublicEmptyState
+          testId="workspace-sources-empty"
+          title="尚无资料"
+          requirement="至少一份可解析的文本、JSON、CSV 或 XLSX 资料。"
+          nextStep="在上方选择文件或粘贴文本，点击“导入并解析”。"
+        />
       ) : (
         <table className="workspace-sources__table" data-testid="workspace-source-list">
           <thead>

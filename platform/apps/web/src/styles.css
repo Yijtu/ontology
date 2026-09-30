@@ -989,3 +989,65 @@ button:disabled {
 .assistant-shell__readonly {
   color: var(--warn);
 }
+
+.public-state {
+  margin-top: 12px;
+  background: var(--surface);
+  border: 1px solid var(--line);
+  border-left: 4px solid var(--warn);
+  border-radius: 10px;
+  padding: 12px 16px;
+}
+
+.public-state[data-family="permission"] {
+  border-left-color: var(--warn);
+}
+
+.public-state[data-family="server"],
+.public-state[data-family="network"],
+.public-state[data-family="not_ready"] {
+  border-left-color: var(--danger);
+}
+
+.public-state__title {
+  margin: 0 0 6px;
+  font-size: 15px;
+}
+
+.public-state__reason {
+  margin: 0 0 6px;
+}
+
+.public-state__capabilities,
+.public-state__detail {
+  margin: 6px 0;
+  padding-left: 18px;
+}
+
+.public-state__code,
+.public-state__trace {
+  margin: 4px 0;
+  color: var(--muted);
+  font-size: 12px;
+}
+
+.public-state [data-testid="public-state-recover"] {
+  margin-top: 8px;
+}
+
+.public-empty {
+  margin-top: 12px;
+  background: var(--surface);
+  border: 1px dashed var(--line);
+  border-radius: 10px;
+  padding: 12px 16px;
+}
+
+.public-empty__title {
+  margin: 0 0 6px;
+  font-size: 15px;
+}
+
+.public-empty p {
+  margin: 4px 0;
+}

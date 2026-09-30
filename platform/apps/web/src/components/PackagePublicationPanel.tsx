@@ -14,6 +14,8 @@ import {
   type ValidationSurfaceGateView,
 } from '../api/package-publication'
 import { StatePanel } from './StatePanel'
+import { PublicStateNotice } from './PublicStateNotice'
+import { classifyPublicError } from '../state/public-errors'
 import type { WorkbenchError, WorkbenchPhase } from '../state/workbench'
 
 /**
@@ -99,11 +101,14 @@ function toError(error: unknown): WorkbenchError {
     return {
       code: error.code,
       message: error.message,
+      status: error.status,
+      retryable: error.retryable,
+      missingCapabilities: error.missingCapabilities,
       ...(error.traceId === undefined ? {} : { traceId: error.traceId }),
       ...(error.reasons.length === 0 ? {} : { reasons: error.reasons }),
     }
   }
-  return { code: 'NETWORK_ERROR', message: error instanceof Error ? error.message : '请求无法完成。' }
+  return { code: 'NETWORK_ERROR', message: error instanceof Error ? error.message : '请求无法完成。', retryable: true }
 }
 
 function phaseFor(error: unknown): WorkbenchPhase {
@@ -338,14 +343,16 @@ export function PackagePublicationPanel({
           phase={phase}
           {...(error === undefined ? {} : { error })}
           {...(phase === 'loading' ? { title: '正在加载包发布工作台…' } : {})}
+          {...(phase === 'failure' ? { onRecover: () => void load() } : {})}
         />
       ) : null}
 
       {actionError === undefined ? null : (
-        <p role="alert" data-testid="package-action-failure" data-code={actionError.code}>
-          {actionError.code}: {actionError.message}
-          {actionError.reasons === undefined ? '' : `（${actionError.reasons.join('；')}）`}
-        </p>
+        <PublicStateNotice
+          testId="package-action-failure"
+          failure={classifyPublicError(actionError)}
+          onRecover={() => void load()}
+        />
       )}
 
       {phase === 'ready' ? (

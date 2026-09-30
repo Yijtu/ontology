@@ -294,6 +294,45 @@ describe('project workspace panel', () => {
     }
   })
 
+  it('keeps a retry entry on a failed list load and re-reads the projects after recovery', async () => {
+    let attempts = 0
+    const client = new WorkbenchClient({
+      baseUrl: 'http://api.test',
+      fetchImpl: (input, init) => {
+        const url = new URL(String(input), 'http://api.test')
+        const method = (init?.method ?? 'GET').toUpperCase()
+        if (method === 'GET' && url.pathname === '/api/v1/projects') {
+          attempts += 1
+          if (attempts === 1) {
+            return Promise.resolve(
+              jsonResponse({ error: { code: 'INTERNAL_ERROR', message: 'boom', retryable: true } }, 500),
+            )
+          }
+          return Promise.resolve(jsonResponse({ data: { projects: [PROJECT] } }))
+        }
+        return Promise.resolve(jsonResponse({ data: {} }, 404))
+      },
+    })
+    const { container, root } = await render(
+      createElement(ProjectWorkspacePanel, { client, projectBinding: BINDING, packs: PACKS, sources: [SOURCE] }),
+    )
+    try {
+      await flush()
+      expect(container.querySelector('[data-testid="state-panel"][data-state="failure"]')).not.toBeNull()
+      const recover = container.querySelector<HTMLButtonElement>('[data-testid="state-panel-recover"]')
+      expect(recover).not.toBeNull()
+      await act(async () => {
+        recover?.click()
+        await Promise.resolve()
+      })
+      await flush()
+      expect(container.querySelector('[data-testid="project-list-item"]')).not.toBeNull()
+    } finally {
+      await act(async () => root.unmount())
+      container.remove()
+    }
+  })
+
   it('hides create and mapping actions for a readonly principal but keeps the project list', async () => {
     const client = clientForFixture()
     const { container, root } = await render(
