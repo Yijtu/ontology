@@ -25,6 +25,8 @@ import {
   PostgresJobStore,
   PostgresMaterializationStore,
   PostgresProfileStore,
+  PostgresProjectReadinessStore,
+  PostgresProjectStore,
   PostgresPublishedPackAssetStore,
   PostgresRuleActionCandidateStore,
   PostgresRunStore,
@@ -70,6 +72,9 @@ import {
   JobService,
   JobWorker,
   OutboxDispatcher,
+  PROJECT_CREATED_TOPIC,
+  PROJECT_REVISION_APPENDED_TOPIC,
+  ProjectService,
   ProfileResolver,
   RestrictedLimitedAnswerComposer,
   RuleActionCandidateService,
@@ -109,6 +114,7 @@ import type {
   OutboxMessageRecord,
   ProfileRef,
   ProfileSpec,
+  ProjectStore,
   PublicationValidityPort,
   PublicationValidityReport,
   PublicationValidityRequest,
@@ -1172,6 +1178,35 @@ class PackPublicationOutboxConsumer implements OutboxConsumer {
   }
 }
 
+/**
+ * Acknowledge the `project.*` lifecycle topics. The project write already committed the project
+ * head and the immutable revision in the same transaction as the outbox row, so the consumer only
+ * re-verifies the referenced revision is durably visible before acking; it creates no state.
+ */
+class ProjectRevisionOutboxConsumer implements OutboxConsumer {
+  readonly topics = [PROJECT_CREATED_TOPIC, PROJECT_REVISION_APPENDED_TOPIC] as const
+  readonly #store: ProjectStore
+  readonly #scopeRef: ScopeRef
+
+  constructor(store: ProjectStore, scopeRef: ScopeRef) {
+    this.#store = store
+    this.#scopeRef = scopeRef
+  }
+
+  async consume(message: OutboxMessageRecord, ctx: ToolContext): Promise<void> {
+    if (!isRecord(message.payload)) throw new Error('project outbox payload is malformed')
+    const projectId = message.payload['projectId']
+    const revision = message.payload['revision']
+    if (typeof projectId !== 'string' || typeof revision !== 'string') {
+      throw new Error('project outbox payload is malformed')
+    }
+    const stored = await this.#store.getRevision(this.#scopeRef, projectId, revision, ctx)
+    if (stored === undefined) {
+      throw new Error('project outbox references an unknown project revision')
+    }
+  }
+}
+
 function sourceRefsOf(scenario: CoreExampleScenario): SourceRef[] {
   const refs = [
     ...scenario.rawSources.map((source) => source.sourceRef),
@@ -1241,6 +1276,8 @@ export async function createCoreLocalComposition(options: CoreLocalCompositionOp
     const syntheticExampleSetStore = new PostgresSyntheticExampleSetStore(database)
     const validationReportStore = new PostgresIndustryValidationReportStore(database)
     const publishedPackStore = new PostgresPublishedPackAssetStore(database)
+    const projectStore = new PostgresProjectStore(database)
+    const projectReadinessStore = new PostgresProjectReadinessStore(database)
     const identityStore = new PostgresIdentityDecisionStore(database)
     const publicationStore = new PostgresSemanticPublicationStore(database)
     const definitionStore = new PostgresSemanticDefinitionStore(database)
@@ -1584,6 +1621,7 @@ export async function createCoreLocalComposition(options: CoreLocalCompositionOp
         new CoreFactsOutboxFallback(candidateStore, scopeRef),
         new IndustryWorkspaceOutboxConsumer(workspaceStore, scopeRef),
         new PackPublicationOutboxConsumer(publishedPackStore, scopeRef),
+        new ProjectRevisionOutboxConsumer(projectStore, scopeRef),
       ],
       new UnsupportedOutboxConsumer(),
     )
@@ -1739,6 +1777,12 @@ export async function createCoreLocalComposition(options: CoreLocalCompositionOp
       registry: componentRegistry,
       registryStore: componentStore,
     })
+    const projectService = new ProjectService({
+      projects: projectStore,
+      readiness: projectReadinessStore,
+      jobs: jobStore,
+      catalogue: packCatalogue,
+    })
     const actionBindingContext = (): ActionCapabilityBindingInput => ({
       registry: operationRegistry(),
       availableCapabilities: ['agent_runtime', 'structured_query', 'document_search', 'industry.semantics'],
@@ -1786,6 +1830,7 @@ export async function createCoreLocalComposition(options: CoreLocalCompositionOp
         definitionEditing: { service: definitionEditingService },
         ruleActionCandidates: { service: ruleActionCandidateService, bindingContext: actionBindingContext },
         instanceReviews: { service: instanceReviewService },
+        projects: { service: projectService },
         syntheticValidation: {
           exampleService: syntheticExampleService,
           validationService: industryValidationService,

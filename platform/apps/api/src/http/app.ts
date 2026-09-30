@@ -34,6 +34,8 @@ import { registerInstanceReviewRoutes } from './instances'
 import type { InstanceReviewRouteDependencies } from './instances'
 import { registerSyntheticValidationRoutes } from './synthetic-validation'
 import type { SyntheticValidationRouteDependencies } from './synthetic-validation'
+import { registerProjectRoutes } from './projects'
+import type { ProjectRouteDependencies } from './projects'
 import { installErrorHandler } from './shared'
 import type { RequestAuthenticator } from './shared'
 
@@ -82,6 +84,8 @@ export interface ApiServerOptions {
   readonly instanceReviews?: Omit<InstanceReviewRouteDependencies, 'authenticate'>
   /** Register the synthetic sandbox / industry validation surface (`/industry-workspaces/:id/validations`). */
   readonly syntheticValidation?: Omit<SyntheticValidationRouteDependencies, 'authenticate'>
+  /** Register the customer-project, pack-mounting and readiness surface (`/projects`). */
+  readonly projects?: Omit<ProjectRouteDependencies, 'authenticate'>
   readonly logger?: boolean
 }
 
@@ -158,6 +162,12 @@ export function createApiServer(options: ApiServerOptions): FastifyInstance {
   if (options.syntheticValidation !== undefined) {
     registerSyntheticValidationRoutes(app, {
       ...options.syntheticValidation,
+      authenticate: options.authenticate,
+    })
+  }
+  if (options.projects !== undefined) {
+    registerProjectRoutes(app, {
+      ...options.projects,
       authenticate: options.authenticate,
     })
   }

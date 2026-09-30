@@ -125,6 +125,8 @@ export { registerRuleActionCandidateRoutes } from './http/rule-action-candidates
 export type { RuleActionCandidateRouteDependencies } from './http/rule-action-candidates'
 export { registerSyntheticValidationRoutes } from './http/synthetic-validation'
 export type { SyntheticValidationRouteDependencies } from './http/synthetic-validation'
+export { registerProjectRoutes } from './http/projects'
+export type { ProjectRouteDependencies } from './http/projects'
 export type { AssetCandidateRouteDependencies } from './http/asset-candidates'
 export { registerWorkbenchRoutes } from './http/workbench'
 export type { WorkbenchApiOptions, WorkbenchRouteDependencies } from './http/workbench'

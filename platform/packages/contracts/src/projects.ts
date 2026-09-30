@@ -1,9 +1,15 @@
 import type {
+  CompletenessStatus,
   MappingRef,
   NonEmptyString,
+  ProjectReadinessKind,
+  ProjectReadinessState,
   ProjectRevision,
   ProjectRevisionBody,
   ProjectRevisionRef,
+  ReadinessError,
+  ReadinessProjection,
+  ReadinessTargetRef,
   ResolvedProfileRef,
   Rfc3339UtcTimestamp,
   ResourceRef,
@@ -294,4 +300,144 @@ export interface ProjectStore {
     recordId: Uuid,
     ctx: ToolContext,
   ): Promise<FieldConfirmationEventRecord[]>
+}
+
+export const PROJECT_READINESS_KINDS: readonly ProjectReadinessKind[] = [
+  'published_semantics',
+  'dataset',
+  'document_index',
+]
+
+export const PROJECT_READINESS_STATES: readonly ProjectReadinessState[] = [
+  'pending',
+  'building',
+  'ready',
+  'failed',
+  'revoked',
+]
+
+const COMPLETENESS_STATES: readonly CompletenessStatus[] = ['complete', 'partial', 'truncated', 'unknown']
+
+function isReadinessTargetRef(value: unknown): value is ReadinessTargetRef {
+  return isResourceRef(value) || isVersionRef(value)
+}
+
+function isReadinessError(value: unknown): value is ReadinessError {
+  if (!isRecord(value)) return false
+  return (
+    isNonEmptyString(value.code) &&
+    typeof value.retryable === 'boolean' &&
+    isNonEmptyString(value.message)
+  )
+}
+
+/**
+ * Validate one readiness projection before the store persists it. The projection is a
+ * separate CAS-activatable record, so a malformed target/state must be refused at the
+ * boundary rather than trusted by a later reader (AGENTS: boundary data is validated at runtime).
+ */
+export function assertReadinessProjectionShape(value: unknown): asserts value is ReadinessProjection {
+  if (!isRecord(value)) throw invalidReadiness('readiness projection must be an object')
+  if (!isProjectRevisionRef(value.projectRevisionRef)) {
+    throw invalidReadiness('projectRevisionRef is malformed')
+  }
+  if (!PROJECT_READINESS_KINDS.includes(value.kind as ProjectReadinessKind)) {
+    throw invalidReadiness('readiness kind is not one of published_semantics/dataset/document_index')
+  }
+  if (!isReadinessTargetRef(value.targetRef)) {
+    throw invalidReadiness('targetRef must be a ResourceRef or a VersionRef')
+  }
+  if (!PROJECT_READINESS_STATES.includes(value.state as ProjectReadinessState)) {
+    throw invalidReadiness('readiness state is not pending/building/ready/failed/revoked')
+  }
+  if (!COMPLETENESS_STATES.includes(value.completeness as CompletenessStatus)) {
+    throw invalidReadiness('completeness is not complete/partial/truncated/unknown')
+  }
+  for (const field of ['expectedCount', 'processedCount', 'failedCount'] as const) {
+    const count = value[field]
+    if (typeof count !== 'number' || !Number.isInteger(count) || count < 0) {
+      throw invalidReadiness(`${field} must be a non-negative integer`)
+    }
+  }
+  if (!isSha256Digest(value.targetDigest)) throw invalidReadiness('targetDigest must be a sha256 digest')
+  if (!isRevisionString(value.fenceRevision)) throw invalidReadiness('fenceRevision must be a decimal string')
+  if (value.receiptRef !== undefined && !isResourceRef(value.receiptRef)) {
+    throw invalidReadiness('receiptRef is malformed')
+  }
+  if (value.jobId !== undefined && !isUuid(value.jobId)) throw invalidReadiness('jobId must be a uuid')
+  if (value.error !== undefined && !isReadinessError(value.error)) throw invalidReadiness('error is malformed')
+}
+
+/** Everything the store needs to CAS-upsert one readiness projection. */
+export interface UpsertProjectReadinessInput {
+  readonly projectRevisionRef: ProjectRevisionRef
+  readonly kind: ProjectReadinessKind
+  readonly targetRef: ReadinessTargetRef
+  readonly state: ProjectReadinessState
+  readonly completeness: CompletenessStatus
+  readonly expectedCount: number
+  readonly processedCount: number
+  readonly failedCount: number
+  readonly targetDigest: Sha256Digest
+  readonly receiptRef?: ResourceRef
+  readonly fenceRevision: RevisionString
+  readonly jobId?: Uuid
+  readonly error?: ReadinessError
+  readonly idempotencyKey: string
+  readonly requestDigest: Sha256Digest
+  readonly actor: string
+  readonly recordedAt: Rfc3339UtcTimestamp
+}
+
+export interface ProjectReadinessUpsertResult {
+  readonly projection: ReadinessProjection
+  /** False when the call replayed an idempotent write or lost to a newer fence. */
+  readonly created: boolean
+}
+
+export type ProjectReadinessStoreErrorCode =
+  | 'SCOPE_MISMATCH'
+  | 'IDEMPOTENCY_CONFLICT'
+  | 'FENCE_STALE'
+  | 'INVALID_PROJECTION'
+
+export class ProjectReadinessStoreError extends Error {
+  readonly code: ProjectReadinessStoreErrorCode
+
+  constructor(code: ProjectReadinessStoreErrorCode, message: string, options?: ErrorOptions) {
+    super(message, options)
+    this.name = 'ProjectReadinessStoreError'
+    this.code = code
+  }
+}
+
+/**
+ * Control persistence for the independent per-revision readiness projections (SPEC v0.3a §3.2/§4.1).
+ *
+ * A projection is not part of the project revision digest. `upsertProjection` is a
+ * fence-revision compare-and-swap: a late build whose `fenceRevision` is older than the stored
+ * one is refused (`FENCE_STALE`), so a build that finished after a source was revoked can never
+ * reactivate the old target. The target digest is what a reader re-checks before trusting `ready`.
+ */
+export interface ProjectReadinessStore {
+  upsertProjection(
+    scopeRef: ScopeRef,
+    input: UpsertProjectReadinessInput,
+    ctx: ToolContext,
+  ): Promise<ProjectReadinessUpsertResult>
+  getProjection(
+    scopeRef: ScopeRef,
+    projectRevisionRef: ProjectRevisionRef,
+    kind: ProjectReadinessKind,
+    ctx: ToolContext,
+  ): Promise<ReadinessProjection | undefined>
+  listProjections(
+    scopeRef: ScopeRef,
+    projectRevisionRef: ProjectRevisionRef,
+    ctx: ToolContext,
+  ): Promise<ReadinessProjection[]>
+}
+
+function invalidReadiness(message: string): ProjectReadinessStoreError {
+  return new ProjectReadinessStoreError('INVALID_PROJECTION', message)
 }
