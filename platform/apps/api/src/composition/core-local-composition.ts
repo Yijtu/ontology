@@ -11,19 +11,26 @@ import {
   ControlPostgresDatabase,
   ControlPostgresRepository,
   PostgresAnswerStore,
+  PostgresAssetCandidateStore,
   PostgresAssetWorkspaceStore,
   PostgresBudgetLedgerStore,
   PostgresCandidateStore,
   PostgresComponentRegistryStore,
   PostgresDecisionStateReferenceStore,
+  PostgresDefinitionEditingStore,
   PostgresEvidenceStore,
   PostgresIdentityDecisionStore,
+  PostgresIndustryValidationReportStore,
+  PostgresInstanceReviewStore,
   PostgresJobStore,
   PostgresMaterializationStore,
   PostgresProfileStore,
+  PostgresPublishedPackAssetStore,
+  PostgresRuleActionCandidateStore,
   PostgresRunStore,
   PostgresSemanticDefinitionStore,
   PostgresSemanticPublicationStore,
+  PostgresSyntheticExampleSetStore,
   PostgresWorkflowDispatchStore,
   PostgresWorkflowStore,
 } from '@ontology/adapter-control-postgres'
@@ -33,6 +40,7 @@ import {
   LocalStructuredIngestionService,
   PostgresDocumentParseStore,
   PostgresStructuredIngestionStore,
+  StructuredDocumentParser,
 } from '@ontology/adapter-extraction-document'
 import { Bm25DocumentSearchService, PostgresKeywordIndexStore, createBm25DocumentSearchToolHandler } from '@ontology/adapter-search-bm25'
 import { TemplateRuntimeAdapter, TemplateRuntimeError } from '@ontology/adapter-runtime-template'
@@ -40,32 +48,52 @@ import type { TemplatePlanResolver } from '@ontology/adapter-runtime-template'
 import {
   AnswerPublicationService,
   CandidateValidationStageHandler,
+  ComponentRegistry,
+  CompositeReviewableCandidateReader,
+  DefinitionCandidateEditingService,
+  DefinitionCandidateGenerationService,
   DraftVerificationService,
   ExtractionPipeline,
   EXTRACTION_RESPONSE_SCHEMA_REF,
   ExtractionStageHandler,
   InMemoryIndustryManifestSource,
   InMemoryIndustrySchemaSource,
+  IndustryAssetPublicationService,
+  IndustryPackExportService,
+  IndustryPackUpgradeService,
+  IndustryValidationService,
   IndustryWorkspaceService,
   INDUSTRY_WORKSPACE_CREATED_TOPIC,
   INDUSTRY_WORKSPACE_DRAFT_APPENDED_TOPIC,
+  InstanceReviewService,
+  PACK_PUBLISHED_TOPIC,
   JobService,
   JobWorker,
   OutboxDispatcher,
   ProfileResolver,
   RestrictedLimitedAnswerComposer,
+  RuleActionCandidateService,
   SourceRegistry,
   RunPhaseDriver,
   RunService,
+  StaticDefinitionTerminologySource,
+  StoreBackedIndustryManifestSource,
+  StoreBackedIndustryPackCatalogue,
+  StructuredExtractionService,
+  StructuredExtractionStageHandler,
+  SyntheticExampleService,
+  TBOX_RESPONSE_SCHEMA_REF,
   WorkflowController,
   createRunCheckpointPort,
   encodeDocumentIngestionRef,
   mapNativeEntities,
+  parseDefinitionCandidateOutput,
   parseModelCandidates,
   ReviewHandoffStageHandler,
 } from '@ontology/application'
-import type { OutboxConsumer, ProfileSpecValidator, RunProfileBinder } from '@ontology/application'
+import type { ManifestValidator, MountedDefinitionTerminology, OutboxConsumer, ProfileSpecValidator, RunProfileBinder } from '@ontology/application'
 import type {
+  ActionCapabilityBindingInput,
   CandidateStore,
   ComponentKind,
   ComponentManifest,
@@ -74,6 +102,7 @@ import type {
   DocumentParserPort,
   GenerationPort,
   IndustryManifestSource,
+  IndustrySchema,
   IndustryWorkspaceStore,
   InputValidityPort,
   OperationRegistry,
@@ -90,6 +119,7 @@ import type {
   RuntimeSelectorPort,
   ScalarValue,
   ScopeRef,
+  ScopedArtifactReader,
   SourceRef,
   SupportedDataType,
   ToolContext,
@@ -102,7 +132,7 @@ import { DEFAULT_VERIFICATION_POLICY, SCHEMA_DOCUMENTS, TOOL_CATALOGUE, createTo
 import { BudgetService, sha256DigestOf } from '@ontology/core'
 import { createRequestToolContext, createToolGatewayComposition, ForbiddenError, InvalidRequestFieldError } from '@ontology/app-api'
 import type { CoreApiDependencies } from '../core-main'
-import { IdentityDecisionService, IncrementalMaterializer, InMemorySemanticMappingRegistry, OntologyLookupService, PublishedFactsReferenceProvider, PublishedSemanticSource, SemanticDefinitionService, SemanticPublicationService } from '@ontology/semantic-engine'
+import { FiniteGrammarRuleSupportValidator, FiniteGrammarSyntheticEvaluator, IdentityDecisionService, IncrementalMaterializer, InMemorySemanticMappingRegistry, OntologyLookupService, PublishedFactsReferenceProvider, PublishedSemanticSource, SemanticDefinitionService, SemanticPublicationService } from '@ontology/semantic-engine'
 import type {
   MaterializationPublishedSource,
   OntologyFactPage,
@@ -607,6 +637,51 @@ function profileValidator(ajv: Ajv2020): ProfileSpecValidator {
       }
 }
 
+function manifestValidator(ajv: Ajv2020): ManifestValidator {
+  const validate = ajv.getSchema(`${CONTRACT_SCHEMA_BASE}/component.schema.json#/$defs/ComponentManifest`)
+  if (validate === undefined) throw new Error('the canonical ComponentManifest schema is unavailable')
+  return (manifest: unknown) => validate(manifest)
+    ? { valid: true, issues: [] }
+    : {
+        valid: false,
+        issues: (validate.errors ?? []).map((error) => ({
+          pointer: error.instancePath === '' ? '$' : error.instancePath,
+          message: error.message ?? 'invalid',
+        })),
+      }
+}
+
+function terminologyOf(schema: IndustrySchema): MountedDefinitionTerminology {
+  const attributes = schema.objects.flatMap((object) => object.attributes.map((attribute) => ({
+    logicalId: attribute.attributeId,
+    objectLogicalId: object.objectId,
+    valueType: attribute.valueType,
+    ...(attribute.unitCode === undefined ? {} : { unitCode: attribute.unitCode }),
+    ...(attribute.dimension === undefined ? {} : { dimension: attribute.dimension }),
+  })))
+  const displayNames: Record<string, string> = {}
+  for (const object of schema.objects) {
+    displayNames[object.objectId] = object.displayName
+    for (const attribute of object.attributes) displayNames[attribute.attributeId] = attribute.attributeId
+  }
+  for (const relation of schema.relations) displayNames[relation.relationId] = relation.relationId
+  return {
+    objectLogicalIds: schema.objects.map((object) => object.objectId),
+    attributeLogicalIds: attributes.map((attribute) => attribute.logicalId),
+    relationLogicalIds: schema.relations.map((relation) => relation.relationId),
+    attributes,
+    displayNames,
+  }
+}
+
+/** Project the mounted industry packs into the professional terminology a workspace may build on. */
+function terminologySourceFor(scenarios: readonly CoreExampleScenario[]): StaticDefinitionTerminologySource {
+  return new StaticDefinitionTerminologySource(scenarios.map((scenario) => ({
+    definitionRef: componentRef('industry_pack', scenario.industryManifest.namespace, scenario.industryManifest),
+    terminology: terminologyOf(scenario.industrySchema),
+  })))
+}
+
 function toolSchemaValidator(ajv: Ajv2020): ToolSchemaValidator {
   const byRef = new Map<string, ValidateFunction>()
   return {
@@ -1067,6 +1142,36 @@ class IndustryWorkspaceOutboxConsumer implements OutboxConsumer {
   }
 }
 
+/**
+ * Acknowledge the `asset.pack.published` lifecycle topic. The publication transaction already
+ * committed the immutable pack row, the definition version and the outbox row atomically, so the
+ * consumer only re-verifies that the referenced pack is durably visible before acking; it creates
+ * no state and never revives a publication the source transaction did not commit.
+ */
+class PackPublicationOutboxConsumer implements OutboxConsumer {
+  readonly topics = [PACK_PUBLISHED_TOPIC] as const
+  readonly #store: PostgresPublishedPackAssetStore
+  readonly #scopeRef: ScopeRef
+
+  constructor(store: PostgresPublishedPackAssetStore, scopeRef: ScopeRef) {
+    this.#store = store
+    this.#scopeRef = scopeRef
+  }
+
+  async consume(message: OutboxMessageRecord, ctx: ToolContext): Promise<void> {
+    if (!isRecord(message.payload)) throw new Error('asset pack publication outbox payload is malformed')
+    const packId = message.payload['packId']
+    const version = message.payload['version']
+    if (typeof packId !== 'string' || typeof version !== 'string') {
+      throw new Error('asset pack publication outbox payload is malformed')
+    }
+    const asset = await this.#store.findPack(this.#scopeRef, packId, version, ctx)
+    if (asset === undefined) {
+      throw new Error('asset pack publication outbox references an unknown published pack')
+    }
+  }
+}
+
 function sourceRefsOf(scenario: CoreExampleScenario): SourceRef[] {
   const refs = [
     ...scenario.rawSources.map((source) => source.sourceRef),
@@ -1129,6 +1234,13 @@ export async function createCoreLocalComposition(options: CoreLocalCompositionOp
     const jobStore = new PostgresJobStore(database)
     const workspaceStore = new PostgresAssetWorkspaceStore(database)
     const candidateStore = new PostgresCandidateStore(database)
+    const assetCandidateStore = new PostgresAssetCandidateStore(database)
+    const ruleActionCandidateStore = new PostgresRuleActionCandidateStore(database)
+    const definitionEditingStore = new PostgresDefinitionEditingStore(database)
+    const instanceReviewStore = new PostgresInstanceReviewStore(database)
+    const syntheticExampleSetStore = new PostgresSyntheticExampleSetStore(database)
+    const validationReportStore = new PostgresIndustryValidationReportStore(database)
+    const publishedPackStore = new PostgresPublishedPackAssetStore(database)
     const identityStore = new PostgresIdentityDecisionStore(database)
     const publicationStore = new PostgresSemanticPublicationStore(database)
     const definitionStore = new PostgresSemanticDefinitionStore(database)
@@ -1158,15 +1270,23 @@ export async function createCoreLocalComposition(options: CoreLocalCompositionOp
     })
     const extractionSchemaValidator = {
       async validate(schemaRef: VersionRef, candidate: unknown) {
-        if (!sameVersionRef(schemaRef, EXTRACTION_RESPONSE_SCHEMA_REF)) {
-          return { valid: false, errors: ['unknown extraction response schema'] }
+        if (sameVersionRef(schemaRef, EXTRACTION_RESPONSE_SCHEMA_REF)) {
+          try {
+            parseModelCandidates(canonicalJson(candidate))
+            return { valid: true }
+          } catch {
+            return { valid: false, errors: ['extraction response did not match the registered candidate contract'] }
+          }
         }
-        try {
-          parseModelCandidates(canonicalJson(candidate))
-          return { valid: true }
-        } catch {
-          return { valid: false, errors: ['extraction response did not match the registered candidate contract'] }
+        if (sameVersionRef(schemaRef, TBOX_RESPONSE_SCHEMA_REF)) {
+          try {
+            parseDefinitionCandidateOutput(canonicalJson(candidate))
+            return { valid: true }
+          } catch {
+            return { valid: false, errors: ['definition candidate response did not match the registered generator contract'] }
+          }
         }
+        return { valid: false, errors: ['unknown model response schema'] }
       },
     }
     const modelCapabilities = createCoreModelCapabilityFactory({
@@ -1181,7 +1301,10 @@ export async function createCoreLocalComposition(options: CoreLocalCompositionOp
     const schemaSource = schemaSourceFor(options.examples.scenarios)
     const semanticDefinitions = new SemanticDefinitionService({ control, store: definitionStore })
     const profileValidatorImpl = profileValidator(createAjv())
-    const industrySource = industrySourceFor(options.examples.scenarios)
+    const industrySource = new StoreBackedIndustryManifestSource({
+      store: publishedPackStore,
+      fallback: industrySourceFor(options.examples.scenarios),
+    })
     const profileResolver = new ProfileResolver({
       control,
       store: profileStore,
@@ -1404,9 +1527,23 @@ export async function createCoreLocalComposition(options: CoreLocalCompositionOp
       },
       outputLimit: { maxTokens: 2_048 },
     })
+    const structuredExtractionService = new StructuredExtractionService({
+      schemaSource,
+      candidates: candidateStore,
+      ingestion: structuredStore,
+      originals: {
+        read: (request, ctx) => {
+          const target = request.approvedInputRefs[0]
+          if (target === undefined) throw new Error('the structured extraction request carried no approved input reference')
+          return blobStore.readAuthorized({ scopeRef: { tenantId: ctx.principal.tenantId, spaceId: ctx.allowedResources.spaceId }, blobRef: target }, ctx)
+        },
+      } satisfies ScopedArtifactReader,
+      parser: new StructuredDocumentParser(),
+    })
     const handlers = createIngestionHandlerRegistry({
       parser,
       structured: new LocalStructuredIngestionService({ blobs: blobStore, store: structuredStore }),
+      structuredExtraction: new StructuredExtractionStageHandler({ extraction: structuredExtractionService }),
       downstream: [
         new ExtractionStageHandler({ pipeline, parseStore }),
         new CandidateValidationStageHandler({ pipeline, parseStore }),
@@ -1446,6 +1583,7 @@ export async function createCoreLocalComposition(options: CoreLocalCompositionOp
         materializationConsumer,
         new CoreFactsOutboxFallback(candidateStore, scopeRef),
         new IndustryWorkspaceOutboxConsumer(workspaceStore, scopeRef),
+        new PackPublicationOutboxConsumer(publishedPackStore, scopeRef),
       ],
       new UnsupportedOutboxConsumer(),
     )
@@ -1518,14 +1656,94 @@ export async function createCoreLocalComposition(options: CoreLocalCompositionOp
       }
     }
 
+    const reviewableCandidates = new CompositeReviewableCandidateReader({
+      definition: assetCandidateStore,
+      instance: candidateStore,
+    })
     const semanticPublication = new SemanticPublicationService({
       store: publicationStore,
       candidates: candidateStore,
       schemaSource,
       identity: identityStore,
+      reviewableCandidates,
     })
     const identityService = new IdentityDecisionService({ store: identityStore, candidates: candidateStore, schemaSource })
 
+    const terminology = terminologySourceFor(options.examples.scenarios)
+    const ruleSupport = new FiniteGrammarRuleSupportValidator()
+    const ruleActionCandidateService = new RuleActionCandidateService({
+      workspaces: workspaceStore,
+      candidates: ruleActionCandidateStore,
+      support: ruleSupport,
+    })
+    const definitionGenerationService = new DefinitionCandidateGenerationService({
+      workspaces: workspaceStore,
+      candidates: assetCandidateStore,
+      terminology,
+      generationForRun: async ({ ctx, signal }) => {
+        const ledger = await budget.openLedger({ ledgerId: ctx.runId, kind: 'background', runId: ctx.runId }, ctx)
+        return modelCapabilities.forExecution({ ledgerId: ledger.ledgerId, signal }).generation
+      },
+      modelRef: {
+        modelId: options.modelsEnabled === true ? modelEnvironment['CORE_COMPANY_MODEL_PLATFORM_ID'] ?? 'model-not-configured' : 'model-not-configured',
+        version: COMPONENT_VERSION,
+      },
+      outputLimit: { maxTokens: 2_048 },
+    })
+    const definitionEditingService = new DefinitionCandidateEditingService({
+      workspaces: workspaceStore,
+      candidates: assetCandidateStore,
+      terminology,
+      editing: definitionEditingStore,
+      publishedDefinitions: definitionStore,
+      newId: () => randomUUID(),
+    })
+    const instanceReviewService = new InstanceReviewService({ store: instanceReviewStore })
+    const syntheticExampleService = new SyntheticExampleService({
+      workspaces: workspaceStore,
+      sets: syntheticExampleSetStore,
+    })
+    const industryValidationService = new IndustryValidationService({
+      workspaces: workspaceStore,
+      exampleSets: syntheticExampleSetStore,
+      reports: validationReportStore,
+      definitions: definitionEditingService,
+      ruleActions: ruleActionCandidateStore,
+      support: ruleSupport,
+      evaluator: new FiniteGrammarSyntheticEvaluator(),
+    })
+    const industryAssetPublicationService = new IndustryAssetPublicationService({
+      workspaces: workspaceStore,
+      validations: validationReportStore,
+      definitionCandidates: assetCandidateStore,
+      ruleActions: ruleActionCandidateStore,
+      syntheticSets: syntheticExampleSetStore,
+      definitions: definitionStore,
+      store: publishedPackStore,
+    })
+    const packCatalogue = new StoreBackedIndustryPackCatalogue({ store: publishedPackStore })
+    const componentRegistry = new ComponentRegistry({
+      control,
+      store: componentStore,
+      artifacts: blobStore,
+      validator: manifestValidator(createAjv()),
+    })
+    const packExportService = new IndustryPackExportService({
+      catalogue: packCatalogue,
+      definitions: definitionStore,
+      published: publishedPackStore,
+    })
+    const packUpgradeService = new IndustryPackUpgradeService({
+      profiles: profileResolver,
+      profileStore,
+      registry: componentRegistry,
+      registryStore: componentStore,
+    })
+    const actionBindingContext = (): ActionCapabilityBindingInput => ({
+      registry: operationRegistry(),
+      availableCapabilities: ['agent_runtime', 'structured_query', 'document_search', 'industry.semantics'],
+      recordedAt: hostClock().toISOString(),
+    })
     const dependencies: CoreApiDependencies = {
       database,
       scopeRef,
@@ -1558,6 +1776,21 @@ export async function createCoreLocalComposition(options: CoreLocalCompositionOp
         answers: { reader: controller },
         evidence: { service: provenanceRead.provenance },
         history: { service: provenanceRead.history },
+        packs: {
+          catalogue: packCatalogue,
+          packExports: packExportService,
+          packUpgrades: packUpgradeService,
+          publication: industryAssetPublicationService,
+        },
+        assetCandidates: { generation: definitionGenerationService },
+        definitionEditing: { service: definitionEditingService },
+        ruleActionCandidates: { service: ruleActionCandidateService, bindingContext: actionBindingContext },
+        instanceReviews: { service: instanceReviewService },
+        syntheticValidation: {
+          exampleService: syntheticExampleService,
+          validationService: industryValidationService,
+          bindingContext: actionBindingContext,
+        },
       },
       registerRoutes: (api, authenticate) => registerCoreImportRoute({
         app: api,

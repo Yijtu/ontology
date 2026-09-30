@@ -2,6 +2,7 @@ import {
   DocumentParseStageHandler,
   JobWorker,
   OutboxDispatcher,
+  ParsedStageDispatcher,
   StructuredDocumentParseStageHandler,
   isStructuredIngestionRef,
 } from '@ontology/application'
@@ -195,6 +196,12 @@ export interface IngestionHandlerRegistryOptions {
    * `structured_ingestion` document reference runs it instead of the text/PDF parser.
    */
   readonly structured?: StructuredIngestionPort
+  /**
+   * The structured `parsed → extracted` handler (V03-007). When present, the `parsed` stage
+   * routes a `structured_extraction` document reference to it instead of the text/PDF chunk
+   * handler, so a structured ingestion job runs end to end inside the worker.
+   */
+  readonly structuredExtraction?: JobStageHandler
   /** The `parsed → extracted → validated` handlers owned by the extraction pipeline. */
   readonly downstream: readonly JobStageHandler[]
 }
@@ -239,6 +246,13 @@ export function createIngestionHandlerRegistry(
       : new ReceivedStageDispatcher(text, new StructuredDocumentParseStageHandler({ ingestion: options.structured })),
   )
   for (const handler of options.downstream) byStage.set(handler.stage, handler)
+  if (options.structuredExtraction !== undefined) {
+    const text = byStage.get('parsed')
+    if (text === undefined) {
+      throw new Error('a structured extraction handler requires a text `parsed` downstream handler')
+    }
+    byStage.set('parsed', new ParsedStageDispatcher(text, options.structuredExtraction))
+  }
   return { get: (stage) => byStage.get(stage) }
 }
 

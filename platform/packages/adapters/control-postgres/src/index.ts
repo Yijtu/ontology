@@ -31,6 +31,8 @@ export {
 } from './materialization-store'
 export { PostgresAssetWorkspaceStore } from './asset-workspace-store'
 export { PostgresAssetCandidateStore } from './asset-candidate-store'
+export { PostgresRuleActionCandidateStore } from './rule-action-candidate-store'
+export { PostgresDefinitionEditingStore } from './definition-editing-store'
 export { PostgresProjectStore } from './project-store'
 export { PostgresInstanceReviewStore } from './instance-review-store'
 export {

@@ -89,8 +89,14 @@ export interface DefinitionCandidateGenerationDependencies {
   readonly workspaces: IndustryWorkspaceStore
   readonly candidates: AssetCandidateStore
   readonly terminology: DefinitionTerminologySource
-  /** Resolves the model port bound to the host's budget ledger and cancellation signal. */
-  readonly generationForRun: (execution: DefinitionGenerationExecution) => GenerationPort | undefined
+  /**
+   * Resolves the model port bound to the host's budget ledger and cancellation signal. The
+   * host may open the ledger lazily, so the callback may return the port directly or a promise
+   * of it; both a synchronous local stub and an async production wiring are accepted.
+   */
+  readonly generationForRun: (
+    execution: DefinitionGenerationExecution,
+  ) => GenerationPort | undefined | Promise<GenerationPort | undefined>
   readonly modelRef: ModelRef
   readonly outputLimit: GenerationOutputLimit
   readonly responseSchemaRef?: VersionRef
@@ -252,7 +258,9 @@ export class DefinitionCandidateGenerationService {
   readonly #workspaces: IndustryWorkspaceStore
   readonly #candidates: AssetCandidateStore
   readonly #terminology: DefinitionTerminologySource
-  readonly #generationForRun: (execution: DefinitionGenerationExecution) => GenerationPort | undefined
+  readonly #generationForRun: (
+    execution: DefinitionGenerationExecution,
+  ) => GenerationPort | undefined | Promise<GenerationPort | undefined>
   readonly #modelRef: ModelRef
   readonly #outputLimit: GenerationOutputLimit
   readonly #responseSchemaRef: VersionRef
@@ -677,7 +685,7 @@ export class DefinitionCandidateGenerationService {
     terminology: MountedDefinitionTerminology,
     boundary: IndustryWorkspaceBoundary,
   ): Promise<readonly DraftDefinitionCandidate[]> {
-    const generation = this.#generationForRun(execution)
+    const generation = await this.#generationForRun(execution)
     if (generation === undefined) {
       throw new DefinitionCandidateError(
         'MODEL_NOT_CONFIGURED',
@@ -688,6 +696,7 @@ export class DefinitionCandidateGenerationService {
     let text = ''
     let reportedError = false
     let retryable = true
+    let failureDetail = ''
     try {
       for await (const event of generation.generate(request, execution.ctx)) {
         throwIfAborted(execution.signal)
@@ -700,10 +709,12 @@ export class DefinitionCandidateGenerationService {
             break
           case 'tool_call_delta':
             reportedError = true
+            failureDetail = 'the model proposed a tool call'
             break
           case 'error':
             reportedError = true
             retryable = event.error.retryable
+            failureDetail = `${event.error.code}: ${event.error.message}`
             break
         }
       }
@@ -716,9 +727,11 @@ export class DefinitionCandidateGenerationService {
       })
     }
     if (reportedError) {
-      throw new DefinitionCandidateError('GENERATION_FAILED', 'the model stream reported an error or a tool call', {
-        retryable,
-      })
+      throw new DefinitionCandidateError(
+        'GENERATION_FAILED',
+        failureDetail.length === 0 ? 'the model stream reported an error' : `the model stream failed: ${failureDetail}`,
+        { retryable },
+      )
     }
     return parseDefinitionCandidateOutput(text).candidates
   }
