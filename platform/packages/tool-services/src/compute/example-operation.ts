@@ -34,7 +34,8 @@ const QUANTITY_UNIT = 'each'
 
 export const EXAMPLE_INPUT_SCHEMA_VERSION = 'example-compute-input@1'
 
-export const EXAMPLE_OPERATION_REF: OperationRef = { id: 'example.compute.aggregate', version: '1.0.0' }
+// The canonical OperationVersion is the monotonic digits after '@' (e.g. `plan@1`), not a semver.
+export const EXAMPLE_OPERATION_REF: OperationRef = { id: 'example.compute.aggregate', version: '1' }
 
 export const EXAMPLE_ALGORITHM_REF: VersionRef = {
   id: 'example.aggregate',

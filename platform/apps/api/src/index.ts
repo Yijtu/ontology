@@ -104,6 +104,12 @@ export type { ProjectDocumentRouteDependencies, ProjectDocumentService } from '.
 export type { ApiServerOptions } from './http/app'
 export { CORE_TYPED_RESULT_SCHEMA_REF, createCoreLocalComposition, createDuckDbSnapshot } from './composition/core-local-composition'
 export type { CoreLocalComposition, CoreLocalCompositionOptions } from './composition/core-local-composition'
+export {
+  CORE_MOUNTED_TASK_KINDS,
+  coreScenarioTaskBindings,
+  coreTaskBindingRef,
+  mountCoreTaskBindings,
+} from './composition/core-task-bindings'
 export { createCoreApi, startCoreApi } from './core-main'
 export type { CoreApiDependencies } from './core-main'
 export { registerRunRoutes } from './http/server'

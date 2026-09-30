@@ -90,8 +90,10 @@ import {
   ProfileResolver,
   PublicationValidityEngine,
   RestrictedLimitedAnswerComposer,
+  ResultHistoryService,
   RuleActionCandidateService,
   RunTypedResultContextSource,
+  VerifiedResultExportService,
   TableArtifactReadService,
   VerifiedResultReadService,
   defaultPublicationEvidenceValidators,
@@ -123,6 +125,7 @@ import type {
   ComponentManifest,
   ComponentRegistrationRecordInput,
   ComponentVersionRecord,
+  ComputeBinding,
   DocumentParserPort,
   GenerationPort,
   IdentityDecisionStore,
@@ -143,6 +146,7 @@ import type {
   RelationNavigationRequest,
   ResolvedCapability,
   ResourceRef,
+  RunExecutionRequest,
   RuntimeAdapter,
   RuntimeCapabilityFactoryPort,
   RuntimeCapabilitySet,
@@ -174,10 +178,14 @@ import type {
   OntologyFactReferenceProvider,
   PublishedSemanticData,
 } from '@ontology/semantic-engine'
-import { DataQueryHandler, OntologyLookupHandler, canonicalJson } from '@ontology/tool-services'
+import { DataQueryHandler, OntologyLookupHandler, canonicalJson, createExampleComputeHandlers, exampleRegisteredOperation } from '@ontology/tool-services'
 import type { ToolSchemaValidator } from '@ontology/tool-services'
 import { controlRecordSequence, JobWorkerLoop, MaterializationOutboxConsumer, TopicOutboxConsumerRouter, WorkflowDispatchWorker, createIngestionHandlerRegistry } from '@ontology/app-worker'
 import { CoreFactsPlanError, createCoreFactsPlan } from './core-facts-plan'
+import { mountCoreTaskBindings } from './core-task-bindings'
+import { createBlobArtifactWriter } from './tool-gateway'
+import { registerProjectImportRoute } from '../http/project-imports'
+import type { ProjectStructuredImportService } from '../http/project-imports'
 import { createStaticProbeAdapterResolver, createPostgresSourceStore } from './source-registry'
 import { createEnvSecretResolver } from './secret-resolver'
 import { createPostgresProvenanceRead } from './provenance-read'
@@ -383,12 +391,41 @@ function disabledDecision() {
   }
 }
 
+/**
+ * The registered operations the Core host can execute (ADR-11, SPEC v0.3a §EX-6). The neutral,
+ * synthetic example operation is registered exactly like an industry operation: its whole record
+ * (handler/schema/limits pins) is what a compute task binding pins, and nothing in the generic
+ * Core branches on an industry name.
+ */
 function operationRegistry(): OperationRegistry {
+  const operations = [exampleRegisteredOperation()]
   return {
     namespace: 'core-local',
     registryVersion: COMPONENT_VERSION,
-    registryDigest: sha256DigestOf('core-local-operations@1.0.0'),
-    operations: [],
+    registryDigest: sha256DigestOf(canonicalJson(operations)),
+    operations,
+  }
+}
+
+/** The profile compute binding that enables the registered example operation for a run. */
+function exampleComputeBinding(): ComputeBinding {
+  const operation = exampleRegisteredOperation()
+  return {
+    operationRef: operation.operationRef,
+    handlerRef: operation.handlerRef,
+    inputSchemaRef: {
+      id: `${operation.operationRef.id}.input`,
+      version: COMPONENT_VERSION,
+      digest: operation.inputSchemaDigest,
+    },
+    outputSchemaRef: {
+      id: `${operation.operationRef.id}.output`,
+      version: COMPONENT_VERSION,
+      digest: operation.outputSchemaDigest,
+    },
+    readOnly: true,
+    enabled: true,
+    limits: operation.limits,
   }
 }
 
@@ -867,12 +904,15 @@ function profileSpecFor(scenario: CoreExampleScenario, dataBackendRef: VersionRe
       },
     },
     modelBindings: {},
+    // The four public tools: published facts/rules read through ontology_lookup, structured
+    // query and registered compute through data_query, and document Q&A through
+    // document_search. `web_search` stays disabled unless a deployment explicitly enables it.
     toolBindings: TOOL_CATALOGUE.map((tool) => ({
       toolId: tool.toolId,
-      enabled: tool.toolId === 'ontology_lookup',
+      enabled: tool.toolId === 'ontology_lookup' || tool.toolId === 'data_query' || tool.toolId === 'document_search',
       ...(tool.toolId === 'ontology_lookup' ? { maxCallsPerRun: 4 } : {}),
     })),
-    computeBindings: [],
+    computeBindings: [exampleComputeBinding()],
     policyRef: CORE_POLICY_REF,
   }
 }
@@ -1591,6 +1631,10 @@ export async function createCoreLocalComposition(options: CoreLocalCompositionOp
         throw new Error(`published definition digest differs from mounted scenario ${scenario.scenarioId}`)
       }
     }
+    // Mount the runnable task bindings for every scenario (SPEC v0.3a §EX-2.1): structured
+    // query, document Q&A, rule judgement, registered compute and the legacy published-facts
+    // path. They are declarative records; a normal `POST /runs` task request selects one.
+    await mountCoreTaskBindings(taskBindingStore, options.examples.scenarios, scopeRef, profileContext)
 
     const mappings = new InMemorySemanticMappingRegistry(options.examples.scenarios.flatMap((scenario) =>
       scenario.physicalMappings.map((mapping) => mapping.mapping),
@@ -1624,6 +1668,21 @@ export async function createCoreLocalComposition(options: CoreLocalCompositionOp
     const facts = new CorePublishedFactsProvider(factsProviders)
     const lookup = new OntologyLookupService({ definitions: semanticDefinitions, mappings, facts, pageSize: 50, maxPageSize: 200 })
     const lookupHandler = new OntologyLookupHandler({ lookup, sourceRef: FACTS_SOURCE_REF, dataMode: 'synthetic' })
+    // The registered-compute path (ADR-11, SPEC v0.3a §EX-6): the handler runs the registered
+    // neutral example operation through the same bounded helpers the gateway uses. A handler
+    // reaches only the fixed approved input refs through a scoped reader; the operation is
+    // selected by its registered ref, never by model input.
+    const computeArtifacts = createBlobArtifactWriter(blobStore)
+    const computeReader: ScopedArtifactReader = {
+      read: (request, ctx) => {
+        const target = request.approvedInputRefs[0]
+        if (target === undefined) throw new Error('the compute request carried no approved input reference')
+        return blobStore.readAuthorized(
+          { scopeRef: { tenantId: ctx.principal.tenantId, spaceId: ctx.allowedResources.spaceId }, blobRef: target },
+          ctx,
+        )
+      },
+    }
     const dataQueryHandler = new DataQueryHandler({
       query: duckDb,
       catalog: duckDb,
@@ -1631,6 +1690,13 @@ export async function createCoreLocalComposition(options: CoreLocalCompositionOp
       consistency: 'immutable',
       dataMode: 'synthetic',
       catalogSourceRef: { namespace: 'ontology-core-local', sourceId: 'duckdb-synthetic-snapshot' },
+      compute: {
+        registry: operationRegistry(),
+        handlers: createExampleComputeHandlers(),
+        artifacts: computeArtifacts,
+        reader: computeReader,
+        validator: toolSchemaValidator(createAjv()),
+      },
     })
     const documentSearchHandler = createBm25DocumentSearchToolHandler({ service: documentSearch })
     const gatewayComposition = createToolGatewayComposition({
@@ -1691,6 +1757,9 @@ export async function createCoreLocalComposition(options: CoreLocalCompositionOp
       scenarios: options.examples.scenarios,
       scopeRef,
       modelRefs: coreModelRefs,
+      taskBindings: taskBindingStore,
+      executionBindings: runExecutionBindingStore,
+      operations: operationRegistry(),
       decisionStateRefProvider,
       isRouteClarificationReceiptApproved: (input, ctx) => decisionStateReferences.isApproved(scopeRef, input, ctx),
     })
@@ -1941,9 +2010,14 @@ export async function createCoreLocalComposition(options: CoreLocalCompositionOp
     dispatchWorkerPromise = workflowDispatchWorker.run(dispatchAbort.signal)
 
     const runValidation = async (
-      submission: { readonly profileRef: ProfileRef; readonly question: string; readonly scopeRef: ScopeRef },
+      submission: { readonly profileRef: ProfileRef; readonly question: string; readonly scopeRef: ScopeRef; readonly task?: RunExecutionRequest },
       ctx: ToolContext,
     ) => {
+      // A fixed task run resolves its own deterministic plan and its own input/approved refs
+      // through the run execution binding; its capability/readiness preflight already ran in
+      // `RunExecutionPreflightService`, so it must not be forced through the ordinary NL
+      // generation/data_query admission. The legacy `facts:` path keeps its dedicated check.
+      if (submission.task !== undefined && submission.task.mode === 'task') return
       const { scenario, resolved, snapshotHash } = await resolveScenarioProfile(
         profileResolver,
         options.examples.scenarios,
@@ -2114,6 +2188,36 @@ export async function createCoreLocalComposition(options: CoreLocalCompositionOp
       originals: scopedOriginals,
       parser: new StructuredDocumentParser(),
     })
+    // The project structured-parse import service (V03-005/V03-006): publish the approved bytes
+    // as an immutable original, then run the real structured parser and persist the reconciled
+    // rows. The returned parseId/originalRef/format feed the column-mapping route, so a project
+    // can map and bind on the real parse instead of a startup fixture.
+    const projectStructuredImportService: ProjectStructuredImportService = {
+      async importStructuredSource(projectId, input, ctx) {
+        await projectService.getProject(projectId, ctx)
+        const written = await createBlobArtifactWriter(blobStore).putBytes(
+          { scopeRef, content: input.content, mediaType: input.mediaType },
+          ctx,
+        )
+        const ingestion = new LocalStructuredIngestionService({ blobs: blobStore, store: structuredStore })
+        const parsed = await ingestion.parse({
+          scopeRef,
+          originalRef: written.blobRef,
+          options: {},
+          ...(input.sourceRef === undefined ? {} : { sourceRef: input.sourceRef }),
+        }, ctx)
+        return {
+          parseId: parsed.parse.parseId,
+          originalRef: written.blobRef,
+          originalMediaType: parsed.parse.originalMediaType,
+          format: parsed.parse.format,
+          status: parsed.parse.status,
+          counts: parsed.parse.counts,
+          coverage: parsed.parse.coverage,
+          reused: parsed.reused,
+        }
+      },
+    }
     const projectDatasetAdapter = new DuckDbProjectDatasetAdapter()
     cleanup.unshift(async () => projectDatasetAdapter.close())
     const projectDatasetService = new ProjectDataMaterializationService({
@@ -2168,6 +2272,20 @@ export async function createCoreLocalComposition(options: CoreLocalCompositionOp
       },
       tables: verifiedTableManifests,
     })
+    // Verified JSON export (V03-041) reuses the same digest-verified read as the verified page,
+    // so an export can never reflect an unverified or swapped manifest.
+    const verifiedResultExportService = new VerifiedResultExportService({
+      reads: verifiedResultReadService,
+      answers: answerStore,
+      tables: verifiedTableManifests,
+    })
+    // Result revision history (V03-041): the run's own fixed version plus prior answers for the
+    // same project revision lineage, read from the append-only answer store.
+    const resultHistoryService = new ResultHistoryService({
+      answers: answerStore,
+      bindings: runExecutionBindingStore,
+      history: answerStore,
+    })
     const dependencies: CoreApiDependencies = {
       database,
       scopeRef,
@@ -2197,7 +2315,13 @@ export async function createCoreLocalComposition(options: CoreLocalCompositionOp
         decisions: { service: identityService, candidates: candidateStore, documents: parseStore },
         publications: { service: semanticPublication },
         industryWorkspaces: { service: industryWorkspaceService },
-        answers: { reader: controller, result: verifiedResultReadService, tables: tableArtifactReadService },
+        answers: {
+          reader: controller,
+          result: verifiedResultReadService,
+          tables: tableArtifactReadService,
+          exporter: verifiedResultExportService,
+          history: resultHistoryService,
+        },
         evidence: { service: provenanceRead.provenance },
         history: { service: provenanceRead.history },
         packs: {
@@ -2235,6 +2359,11 @@ export async function createCoreLocalComposition(options: CoreLocalCompositionOp
           examples: options.examples,
           publications: publicationStore,
           identity: identityStore,
+        })
+        registerProjectImportRoute(api, {
+          authenticate,
+          scopeRef,
+          service: projectStructuredImportService,
         })
       },
       ...(options.logger === undefined ? {} : { logger: options.logger }),

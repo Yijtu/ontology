@@ -3,20 +3,28 @@ import type { DecisionStateRefProvider, ProfileResolver, RunService } from '@ont
 import type {
   ConfirmedContext,
   ExecutablePlan,
+  ExecutablePlanStep,
   ModelRef,
+  OperationRegistry,
   PlanSpec,
   PlanStep,
   ProfileRef,
+  PublishedTaskBinding,
   ResourceRef,
   RouteDecision,
   RouteSignals,
+  RunExecutionBinding,
+  RunExecutionBindingStore,
   ScopeRef,
   SemanticQueryPlan,
+  TaskBindingStore,
   ToolContext,
   VersionRef,
   WorkflowManifestStore,
   WorkflowInputManifest,
 } from '@ontology/contracts'
+import { findRegisteredOperation } from '@ontology/contracts'
+import { registeredOperationDigest } from '@ontology/tool-services'
 import { sha256DigestOf } from '@ontology/core'
 import {
   InMemorySemanticMappingRegistry,
@@ -53,6 +61,12 @@ export interface CoreTemplatePlanResolverOptions {
   readonly scenarios: readonly CoreExampleScenario[]
   readonly scopeRef: ScopeRef
   readonly modelRefs: CoreModelComponentRefs
+  /** Published task bindings a task-mode run pins and must resolve deterministically. */
+  readonly taskBindings: TaskBindingStore
+  /** Archived run execution bindings, so a task run's fixed plan is derived from its own pin. */
+  readonly executionBindings: RunExecutionBindingStore
+  /** The deployment's registered operations (compute task planning and its contract pin). */
+  readonly operations: OperationRegistry
   readonly decisionStateRefProvider: DecisionStateRefProvider
   readonly isRouteClarificationReceiptApproved: (
     input: { readonly runId: string; readonly resolvedProfileHash: string; readonly stateRef: ResourceRef },
@@ -70,6 +84,10 @@ interface LoadedRunInputs {
   readonly question: string
   readonly routeSignals: RouteSignals
   readonly basePins: CorePlanReceiptPins
+  /** The archived execution binding when this is a task-mode run; absent for the legacy path. */
+  readonly execution?: RunExecutionBinding
+  /** The published task binding the execution request selected; present only for task mode. */
+  readonly taskBinding?: PublishedTaskBinding
 }
 
 function sameVersionRef(left: VersionRef, right: VersionRef): boolean {
@@ -174,6 +192,44 @@ function executableFactsPlan(spec: PlanSpec): ExecutablePlan {
   }
 }
 
+/** Build a one-step deterministic plan whose ref digest covers the run and the exact step. */
+function singleStepPlan(runId: string, label: string, step: ExecutablePlanStep): ExecutablePlan {
+  return {
+    planRef: {
+      id: `plan:${runId}:${label}`,
+      version: '1.0.0',
+      digest: sha256DigestOf(canonicalJson({ runId, label, step })),
+      kind: 'plan',
+    },
+    steps: [step],
+    singleQuery: true,
+  }
+}
+
+function readStructuredQueryParameters(
+  value: Readonly<Record<string, unknown>>,
+): { readonly objectId: string; readonly fields: readonly string[]; readonly limit?: number } | undefined {
+  const objectId = value['objectId']
+  const fields = value['fields']
+  const limit = value['limit']
+  if (typeof objectId !== 'string' || objectId.length === 0) return undefined
+  if (!Array.isArray(fields) || !fields.every((entry): entry is string => typeof entry === 'string' && entry.length > 0)) {
+    return undefined
+  }
+  if (limit !== undefined && (typeof limit !== 'number' || !Number.isInteger(limit) || limit < 1)) return undefined
+  return { objectId, fields: [...fields], ...(typeof limit === 'number' ? { limit } : {}) }
+}
+
+function readDocumentQaParameters(
+  value: Readonly<Record<string, unknown>>,
+): { readonly query: string; readonly limit?: number } | undefined {
+  const query = value['query']
+  const limit = value['limit']
+  if (typeof query !== 'string' || query.trim().length === 0) return undefined
+  if (limit !== undefined && (typeof limit !== 'number' || !Number.isInteger(limit) || limit < 1)) return undefined
+  return { query, ...(typeof limit === 'number' ? { limit } : {}) }
+}
+
 function planStepsOf(decision: RouteDecision, resolvedToolIds: ReadonlySet<string>): readonly PlanStep[] {
   const plan = decision.plan
   if (decision.route === 'clarify' || plan === undefined) {
@@ -234,6 +290,9 @@ export class CoreTemplatePlanResolver implements TemplatePlanResolver {
   readonly #scenarios: readonly CoreExampleScenario[]
   readonly #scopeRef: ScopeRef
   readonly #modelRefs: CoreModelComponentRefs
+  readonly #taskBindings: TaskBindingStore
+  readonly #executionBindings: RunExecutionBindingStore
+  readonly #operations: OperationRegistry
   readonly #decisionStateRefProvider: DecisionStateRefProvider
   readonly #isRouteClarificationReceiptApproved: CoreTemplatePlanResolverOptions['isRouteClarificationReceiptApproved']
   readonly #now: () => string
@@ -248,6 +307,9 @@ export class CoreTemplatePlanResolver implements TemplatePlanResolver {
     this.#scenarios = options.scenarios
     this.#scopeRef = options.scopeRef
     this.#modelRefs = options.modelRefs
+    this.#taskBindings = options.taskBindings
+    this.#executionBindings = options.executionBindings
+    this.#operations = options.operations
     this.#decisionStateRefProvider = options.decisionStateRefProvider
     this.#isRouteClarificationReceiptApproved = options.isRouteClarificationReceiptApproved
     this.#now = options.now ?? (() => new Date().toISOString())
@@ -365,6 +427,7 @@ export class CoreTemplatePlanResolver implements TemplatePlanResolver {
       toolBindingsDigest: sha256DigestOf(canonicalJson(resolvedRecord.resolved.toolBindings)),
       routeSignalsDigest: sha256DigestOf(canonicalJson(routeSignals)),
     }
+    const taskContext = await this.#loadTaskContext(run, ctx)
     return {
       run,
       scopeRef: this.#scopeRef,
@@ -374,7 +437,33 @@ export class CoreTemplatePlanResolver implements TemplatePlanResolver {
       question,
       routeSignals,
       basePins,
+      ...taskContext,
     }
+  }
+
+  /**
+   * Resolve the archived execution binding a task-mode run pinned, plus the published task
+   * binding it selected. The plan for such a run is derived from these exact records, never
+   * from the request body. A run without an execution binding (the legacy question path) has
+   * no task context and keeps the existing routing behaviour.
+   */
+  async #loadTaskContext(
+    run: Awaited<ReturnType<RunService['getRun']>>,
+    ctx: ToolContext,
+  ): Promise<{ readonly execution?: RunExecutionBinding; readonly taskBinding?: PublishedTaskBinding }> {
+    const executionBindingRef = run.executionBindingRef
+    if (executionBindingRef === undefined) return {}
+    const archived = await this.#executionBindings.getBindingByRef(this.#scopeRef, executionBindingRef, ctx)
+    if (archived === undefined) {
+      throw new WorkflowControllerError('INVALID_ARGUMENT', 'the run execution binding is not archived in this scope')
+    }
+    const execution = archived.binding
+    if (execution.request.mode !== 'task') return { execution }
+    const taskBinding = await this.#taskBindings.getBinding(this.#scopeRef, execution.request.taskBindingRef, ctx)
+    if (taskBinding === undefined) {
+      throw new WorkflowControllerError('CAPABILITY_NOT_CONFIGURED', 'the run pins a published task binding this deployment does not mount')
+    }
+    return { execution, taskBinding }
   }
 
   #assertInputMatchesRun(request: TemplatePlanPreparationRequest, loaded: LoadedRunInputs): void {
@@ -400,7 +489,7 @@ export class CoreTemplatePlanResolver implements TemplatePlanResolver {
     const existing = await this.#receipts.findByRequest(this.#scopeRef, pins, requestDigest, request.dependencies.ctx)
     if (existing !== undefined) return planPreparation(existing, sourceReceiptRef)
 
-    const fixedPlan = this.#fixedFactsPlan(loaded)
+    const fixedPlan = this.#fixedTaskPlan(loaded) ?? this.#fixedFactsPlan(loaded)
     const generationBound = modelBindingMatches(loaded.resolved, this.#modelRefs, 'generation')
     const decisionBound = modelBindingMatches(loaded.resolved, this.#modelRefs, 'decision')
     const generationModelRef = generationBound ? modelRefOf(loaded.resolved, 'generation') : undefined
@@ -549,6 +638,129 @@ export class CoreTemplatePlanResolver implements TemplatePlanResolver {
       createdAt: this.#now(),
     }, request.dependencies.ctx)
     return planPreparation(saved, sourceReceiptRef)
+  }
+
+  /**
+   * The deterministic fixed plan for a task-mode run (SPEC v0.3a §EX-2.1: "task mode uses the
+   * explicitly bound deterministic plan"). The kind-to-tool mapping follows §EX-3.1; the plan
+   * carries only typed arguments derived from the run's own approved input and parameters, so
+   * a task never needs a model round-trip and never reads its plan from the request body.
+   * A legacy question-mode run has no execution binding and falls through to the existing
+   * question routing.
+   */
+  #fixedTaskPlan(loaded: LoadedRunInputs): ExecutablePlan | undefined {
+    const execution = loaded.execution
+    if (execution === undefined || execution.request.mode !== 'task') return undefined
+    const binding = loaded.taskBinding
+    if (binding === undefined) {
+      throw new WorkflowControllerError('CAPABILITY_NOT_CONFIGURED', 'the run pins a task binding that is not archived')
+    }
+    switch (binding.kind) {
+      case 'published_facts':
+        return this.#fixedFactsPlan(loaded)
+      case 'compute':
+        return this.#computePlan(loaded, binding)
+      case 'structured_query':
+        return this.#structuredQueryPlan(loaded, execution.request.parameters)
+      case 'document_qa':
+        return this.#documentQaPlan(loaded, execution.request.parameters)
+      case 'rule_judgement':
+        throw new WorkflowControllerError(
+          'CAPABILITY_NOT_CONFIGURED',
+          'rule judgement tasks require the materialised rule-derivation producer, which this deployment does not mount',
+        )
+      case 'relations':
+        throw new WorkflowControllerError(
+          'CAPABILITY_NOT_CONFIGURED',
+          'relation navigation tasks require the run-scoped published-relation navigator, which is not a model tool on this host',
+        )
+      default: {
+        const exhaustive: never = binding.kind
+        throw new WorkflowControllerError('INVALID_SCHEMA', `unhandled task kind ${String(exhaustive)}`)
+      }
+    }
+  }
+
+  #computePlan(loaded: LoadedRunInputs, binding: PublishedTaskBinding): ExecutablePlan {
+    if (binding.operationRef === undefined) {
+      throw new WorkflowControllerError('INVALID_SCHEMA', 'a compute task binding must pin a registered operation')
+    }
+    const operation = findRegisteredOperation(this.#operations, binding.operationRef)
+    if (operation === undefined) {
+      throw new WorkflowControllerError('CAPABILITY_NOT_CONFIGURED', `operation ${binding.operationRef.id}@${binding.operationRef.version} is not registered in this deployment`)
+    }
+    if (binding.registeredOperationDigest !== undefined && registeredOperationDigest(operation) !== binding.registeredOperationDigest) {
+      throw new WorkflowControllerError('INVALID_SCHEMA', 'the registered operation record does not match the task binding pin')
+    }
+    const execution = loaded.execution
+    if (execution === undefined || execution.request.mode !== 'task') {
+      throw new WorkflowControllerError('INVALID_SCHEMA', 'a compute task requires a task-mode execution binding')
+    }
+    const step: ExecutablePlanStep = {
+      stepId: 'q1',
+      toolId: 'data_query',
+      arguments: {
+        kind: 'compute',
+        operationRef: operation.operationRef,
+        inputSchemaDigest: operation.inputSchemaDigest,
+        parameters: execution.request.parameters,
+        inputRefs: [execution.request.inputSnapshotRef],
+      },
+      dependsOn: [],
+    }
+    return singleStepPlan(loaded.run.runId, `compute:${binding.taskBindingRef.id}`, step)
+  }
+
+  #structuredQueryPlan(loaded: LoadedRunInputs, parameters: Readonly<Record<string, unknown>>): ExecutablePlan {
+    if (!loaded.resolved.toolBindings.some((binding) => binding.toolId === 'data_query' && binding.enabled)) {
+      throw new WorkflowControllerError('CAPABILITY_NOT_CONFIGURED', 'the resolved profile does not enable data_query for a structured query task')
+    }
+    const parsed = readStructuredQueryParameters(parameters)
+    if (parsed === undefined) {
+      throw new WorkflowControllerError('INVALID_ARGUMENT', 'a structured query task requires objectId and a fields array')
+    }
+    const mapping = loaded.resolved.mappingRefs[0]
+    if (mapping === undefined) {
+      throw new WorkflowControllerError('CAPABILITY_NOT_CONFIGURED', 'the resolved profile mounts no mapping for a structured query task')
+    }
+    const queryPlan: SemanticQueryPlan = {
+      mode: 'semantic',
+      concepts: [parsed.objectId],
+      fields: [...parsed.fields],
+      links: [],
+      filters: [],
+      orderBy: [],
+      limit: parsed.limit ?? 100,
+      mappingVersion: { id: mapping.id, version: mapping.version, digest: mapping.digest },
+    }
+    const step: ExecutablePlanStep = {
+      stepId: 'q1',
+      toolId: 'data_query',
+      arguments: { kind: 'query', mode: 'semantic', queryPlan },
+      dependsOn: [],
+      sourceVersion: { id: mapping.id, version: mapping.version, digest: mapping.digest },
+    }
+    return singleStepPlan(loaded.run.runId, `structured_query:${parsed.objectId}`, step)
+  }
+
+  #documentQaPlan(loaded: LoadedRunInputs, parameters: Readonly<Record<string, unknown>>): ExecutablePlan {
+    if (!loaded.resolved.toolBindings.some((binding) => binding.toolId === 'document_search' && binding.enabled)) {
+      throw new WorkflowControllerError('CAPABILITY_NOT_CONFIGURED', 'the resolved profile does not enable document_search for a document Q&A task')
+    }
+    const parsed = readDocumentQaParameters(parameters)
+    if (parsed === undefined) {
+      throw new WorkflowControllerError('INVALID_ARGUMENT', 'a document Q&A task requires a query string')
+    }
+    const step: ExecutablePlanStep = {
+      stepId: 'q1',
+      toolId: 'document_search',
+      arguments: {
+        query: parsed.query,
+        ...(parsed.limit === undefined ? {} : { limit: parsed.limit }),
+      },
+      dependsOn: [],
+    }
+    return singleStepPlan(loaded.run.runId, `document_qa:${sha256DigestOf(parsed.query)}`, step)
   }
 
   #fixedFactsPlan(loaded: LoadedRunInputs): ExecutablePlan | undefined {
