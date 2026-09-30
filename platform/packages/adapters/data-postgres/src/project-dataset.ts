@@ -1,9 +1,19 @@
 import { Pool } from 'pg'
 import type { PoolClient, QueryResultRow } from 'pg'
 import { sha256DigestOf } from '@ontology/core'
-import { stableJson } from './canonical'
-import { ProjectDatasetError, isToolContext } from '@ontology/contracts'
+import { columnTypeFromOid, normalizeCell, stableJson } from './canonical'
+import {
+  ProjectDatasetError,
+  projectDatasetSourceObjectRef,
+  projectDatasetSourceRef,
+  isToolContext,
+} from '@ontology/contracts'
 import type {
+  AttributeValueType,
+  CancelRequest,
+  CancelResponse,
+  ColumnType,
+  PlatformError,
   ProjectDatasetCell,
   ProjectDatasetColumn,
   ProjectDatasetFieldSource,
@@ -11,14 +21,26 @@ import type {
   ProjectDatasetQueryRequest,
   ProjectDatasetQueryResult,
   ProjectDatasetReadRow,
+  ProjectDatasetRef,
   ProjectDatasetRow,
   ProjectDatasetStageInput,
   ProjectDatasetStageResult,
   ProjectDatasetWriterPort,
+  ProjectSnapshotQueryDescriptor,
+  ProjectSnapshotQueryPort,
+  QueryColumn,
   ScopeRef,
+  SourceSnapshot,
+  StructuredQueryExecuteRequest,
+  StructuredQueryExecuteResponse,
+  StructuredQueryValidateRequest,
+  StructuredQueryValidateResponse,
   ToolContext,
   ToolCoverage,
 } from '@ontology/contracts'
+import { validateReadOnlySql } from './sql-validator'
+import { PostgresQueryError } from './errors'
+import type { BusinessObjectMapping, MappedColumn } from './mapping'
 
 export const POSTGRES_PROJECT_DATASET_BACKEND = '@ontology/adapter-data-postgres:project-dataset'
 
@@ -26,6 +48,7 @@ const DEFAULT_SCHEMA = 'ontology_project_dataset'
 const DEFAULT_PAGE_LIMIT = 250
 const MAX_PAGE_LIMIT = 1_000
 const INSERT_BATCH = 500
+const DEFAULT_QUERY_TIMEOUT_MS = 30_000
 
 const IDENTIFIER = /^[A-Za-z_][A-Za-z0-9_]*$/
 
@@ -34,9 +57,16 @@ const ROW_TABLE = 'project_dataset_rows'
 
 export interface PostgresProjectDatasetConfig {
   readonly connectionString: string
+  /**
+   * A separate connection string for an independent read-only role used by the query path.
+   * When omitted the writer pool is reused, but the query always runs inside a read-only
+   * transaction and the AST/object whitelist still applies.
+   */
+  readonly readOnlyConnectionString?: string
   /** A dedicated schema in an independent business database; never the control schema. */
   readonly schema?: string
   readonly maxPoolSize?: number
+  readonly maxQueryPoolSize?: number
   readonly applicationName?: string
 }
 
@@ -78,6 +108,10 @@ function assertTrusted(ctx: ToolContext): void {
   }
 }
 
+function scopeKeyOf(scopeRef: ScopeRef): string {
+  return `${scopeRef.tenantId}\u0000${scopeRef.spaceId}`
+}
+
 function canonicalDigestOf(columns: readonly ProjectDatasetColumn[], rows: readonly ProjectDatasetRow[]): string {
   return sha256DigestOf(
     stableJson({
@@ -86,6 +120,55 @@ function canonicalDigestOf(columns: readonly ProjectDatasetColumn[], rows: reado
       rows: rows.map((row) => ({ recordId: row.recordId, values: row.values })),
     }),
   )
+}
+
+/** The canonical column type one project attribute is queried as. */
+function canonicalColumnTypeOfProject(valueType: AttributeValueType): ColumnType {
+  switch (valueType) {
+    case 'number':
+    case 'quantity':
+      return 'decimal'
+    case 'boolean':
+      return 'boolean'
+    case 'timestamp':
+      return 'timestamp'
+    case 'string':
+    case 'enum':
+    case 'reference':
+      return 'string'
+  }
+}
+
+/** The exact PostgreSQL type the read-only view casts a canonical cell to. */
+function postgresTypeOfProject(valueType: AttributeValueType): string {
+  switch (canonicalColumnTypeOfProject(valueType)) {
+    case 'decimal':
+      return 'numeric'
+    case 'boolean':
+      return 'boolean'
+    case 'timestamp':
+      return 'timestamptz'
+    default:
+      return 'text'
+  }
+}
+
+function queryViewName(snapshotId: string): string {
+  return `dsq_${snapshotId.replace(/[^a-zA-Z0-9_]/g, '_')}`
+}
+
+/** A single-quoted literal for an identifier already validated by the IDENTIFIER regex. */
+function quoteLiteral(value: string): string {
+  return `'${value.replace(/'/g, "''")}'`
+}
+
+interface StagedQuery {
+  readonly scopeKey: string
+  readonly snapshotId: string
+  readonly objectId: string
+  readonly version: string
+  readonly view: string
+  readonly columns: readonly ProjectDatasetColumn[]
 }
 
 interface RowRow extends QueryResultRow {
@@ -112,10 +195,16 @@ interface MetaRow extends QueryResultRow {
  * rows. A read of a pinned ref whose rows are absent reports `SNAPSHOT_UNAVAILABLE`; the query
  * never falls back to another snapshot.
  */
-export class PostgresProjectDatasetAdapter implements ProjectDatasetWriterPort, ProjectDatasetQueryPort {
+export class PostgresProjectDatasetAdapter
+  implements ProjectDatasetWriterPort, ProjectDatasetQueryPort, ProjectSnapshotQueryPort
+{
   readonly backend = POSTGRES_PROJECT_DATASET_BACKEND
   readonly #pool: Pool
+  /** Independent read-only role for the query path; defaults to the writer pool when unset. */
+  readonly #queryPool: Pool
+  readonly #ownsQueryPool: boolean
   readonly #schema: string
+  readonly #staged = new Map<string, StagedQuery>()
 
   constructor(config: PostgresProjectDatasetConfig) {
     this.#schema = config.schema ?? DEFAULT_SCHEMA
@@ -127,9 +216,18 @@ export class PostgresProjectDatasetAdapter implements ProjectDatasetWriterPort, 
       max: config.maxPoolSize ?? 4,
       application_name: config.applicationName ?? 'ontology-project-dataset',
     })
+    this.#ownsQueryPool = config.readOnlyConnectionString !== undefined
+    this.#queryPool = this.#ownsQueryPool
+      ? new Pool({
+          connectionString: config.readOnlyConnectionString,
+          max: config.maxQueryPoolSize ?? 4,
+          application_name: `${config.applicationName ?? 'ontology-project-dataset'}-readonly`,
+        })
+      : this.#pool
   }
 
   async close(): Promise<void> {
+    if (this.#ownsQueryPool) await this.#queryPool.end().catch(() => undefined)
     await this.#pool.end()
   }
 
@@ -192,6 +290,33 @@ export class PostgresProjectDatasetAdapter implements ProjectDatasetWriterPort, 
         throw new ProjectDatasetError('MATERIALIZATION_MISMATCH', 'the staged PostgreSQL rows did not match the canonical dataset digest')
       }
       await client.query('COMMIT')
+
+      // Expose the fixed rows as a typed, read-only projection: `values` are canonical cells,
+      // so a quantity becomes a real `numeric` and a boolean a real `boolean`. The view is
+      // pinned to this snapshot id and is the only relation the query path can address.
+      const view = queryViewName(snapshotId)
+      const projections = [
+        `record_id::text AS ${quoteIdentifier('record_id')}`,
+        `object_id AS ${quoteIdentifier('object_id')}`,
+        ...body.columns.map(
+          (column) =>
+            `(values -> ${quoteLiteral(column.name)} ->> 'value')::${postgresTypeOfProject(column.valueType)} AS ${quoteIdentifier(column.name)}`,
+        ),
+        `sources::text AS ${quoteIdentifier('sources_json')}`,
+      ].join(', ')
+      await client.query(
+        `CREATE OR REPLACE VIEW ${this.#table(view)} AS
+           SELECT ${projections} FROM ${this.#table(ROW_TABLE)}
+          WHERE snapshot_id = ${quoteLiteral(snapshotId)}::uuid`,
+      )
+      this.#staged.set(snapshotId, {
+        scopeKey: scopeKeyOf(scopeRef),
+        snapshotId,
+        objectId: body.objectId,
+        version: snapshotRef.version,
+        view,
+        columns: body.columns,
+      })
       return {
         snapshotRef,
         rowCount: persisted.length,
@@ -210,6 +335,10 @@ export class PostgresProjectDatasetAdapter implements ProjectDatasetWriterPort, 
 
   async discardSnapshot(scopeRef: ScopeRef, snapshotRef: { readonly id: string }, ctx: ToolContext): Promise<void> {
     assertTrusted(ctx)
+    this.#staged.delete(snapshotRef.id)
+    await this.#pool
+      .query(`DROP VIEW IF EXISTS ${this.#table(queryViewName(snapshotRef.id))}`)
+      .catch(() => undefined)
     await this.#deleteSnapshot(snapshotRef.id)
     void scopeRef
   }
@@ -259,6 +388,172 @@ export class PostgresProjectDatasetAdapter implements ProjectDatasetWriterPort, 
       ...(nextCursor === null ? {} : { cursor: nextCursor }),
     }
     return { snapshotRef: request.snapshotRef, columns: record.columns, rows, coverage }
+  }
+
+  /**
+   * Report the fixed physical relation a snapshot was materialised as. `undefined` when the
+   * snapshot is not staged in this backend (a restart, another scope, or a never-written ref),
+   * so a caller reports `SNAPSHOT_UNAVAILABLE` instead of reading another dataset.
+   */
+  async describeSnapshot(
+    scopeRef: ScopeRef,
+    snapshotRef: ProjectDatasetRef,
+    ctx: ToolContext,
+  ): Promise<ProjectSnapshotQueryDescriptor | undefined> {
+    assertTrusted(ctx)
+    const staged = this.#staged.get(snapshotRef.id)
+    if (staged === undefined || staged.scopeKey !== scopeKeyOf(scopeRef)) return undefined
+    return {
+      snapshotRef,
+      objectId: staged.objectId,
+      dialect: 'postgres',
+      schema: this.#schema,
+      relation: staged.view,
+      relationKind: 'view',
+      sourceObjectRef: projectDatasetSourceObjectRef(staged.snapshotId, staged.objectId),
+      columns: staged.columns,
+    }
+  }
+
+  /** The AST/object whitelist for the query path is exactly the staged snapshot views. */
+  #allowlist(): readonly BusinessObjectMapping[] {
+    return [...this.#staged.values()].map((staged) => ({
+      objectRef: projectDatasetSourceObjectRef(staged.snapshotId, staged.objectId),
+      schema: this.#schema,
+      relation: staged.view,
+      relationKind: 'view' as const,
+      columns: staged.columns.map(
+        (column): MappedColumn => ({
+          name: column.name,
+          type: canonicalColumnTypeOfProject(column.valueType),
+          ...(column.canonicalUnitCode === undefined ? {} : { unit: column.canonicalUnitCode }),
+        }),
+      ),
+    }))
+  }
+
+  async validate(
+    request: StructuredQueryValidateRequest,
+    ctx: ToolContext,
+  ): Promise<StructuredQueryValidateResponse> {
+    assertTrusted(ctx)
+    const plan = request.plan
+    if (plan.mode !== 'direct') {
+      return this.#rejected('UNSUPPORTED_QUERY', 'only direct SQL plans are validated by this adapter')
+    }
+    const validation = validateReadOnlySql({
+      sql: plan.sql,
+      parameters: plan.parameters,
+      allowlist: this.#allowlist(),
+      declaredObjects: plan.referencedObjects,
+      authorizedSourceRefs: ctx.allowedResources.sourceRefs,
+    })
+    if (!validation.valid) {
+      return {
+        valid: false,
+        warnings: [...validation.warnings],
+        rejectedReason: { code: validation.code, message: validation.reason, retryable: false },
+      }
+    }
+    return {
+      valid: true,
+      normalizedPlan: { ...plan, referencedObjects: [...validation.referencedObjects] },
+      warnings: [...validation.warnings],
+    }
+  }
+
+  async execute(
+    request: StructuredQueryExecuteRequest,
+    ctx: ToolContext,
+  ): Promise<StructuredQueryExecuteResponse> {
+    assertTrusted(ctx)
+    const plan = request.plan
+    if (plan.mode !== 'direct') {
+      throw new PostgresQueryError('UNSUPPORTED_QUERY', 'only direct SQL plans are executed by this adapter')
+    }
+    const validation = validateReadOnlySql({
+      sql: plan.sql,
+      parameters: plan.parameters,
+      allowlist: this.#allowlist(),
+      declaredObjects: plan.referencedObjects,
+      authorizedSourceRefs: ctx.allowedResources.sourceRefs,
+    })
+    if (!validation.valid) {
+      throw new PostgresQueryError(validation.code, validation.reason)
+    }
+    const maxRows = Math.max(1, Math.min(request.limits.maxRows, ctx.allowedResources.maxRows))
+    const deadlineRemaining = Date.parse(ctx.deadline) - Date.now()
+    const timeoutMs = Math.max(
+      1,
+      Math.min(request.limits.maxDurationMs, deadlineRemaining, DEFAULT_QUERY_TIMEOUT_MS),
+    )
+    const raw = await this.#runReadOnly(validation.executableSql, plan.parameters, maxRows, timeoutMs)
+    const truncated = raw.rows.length > maxRows
+    const kept = truncated ? raw.rows.slice(0, maxRows) : raw.rows
+    const rows: unknown[][] = kept.map((row) => row.map((value) => normalizeCell(value)))
+    const columns: QueryColumn[] = raw.fields.map((field) => ({
+      name: field.name,
+      type: columnTypeFromOid(field.dataTypeID),
+    }))
+    const snapshotId =
+      validation.referencedObjects[0]?.sourceRef.sourceId ?? plan.referencedObjects[0]?.sourceRef.sourceId
+    const staged = snapshotId === undefined ? undefined : this.#staged.get(snapshotId)
+    if (staged === undefined) {
+      throw new PostgresQueryError('SNAPSHOT_UNAVAILABLE', 'the pinned dataset snapshot is not materialised in this backend')
+    }
+    const coverage: ToolCoverage = {
+      returned: rows.length,
+      truncated,
+      completeness: truncated ? 'truncated' : 'complete',
+    }
+    const snapshot: SourceSnapshot = {
+      sourceRef: projectDatasetSourceRef(staged.snapshotId),
+      schemaVersion: staged.version,
+      readAt: new Date().toISOString(),
+      consistency: 'immutable',
+      resultDigest: sha256DigestOf(stableJson({ columns, rows })),
+    }
+    return { snapshot, columns, rows, nextCursor: null, coverage }
+  }
+
+  async cancel(request: CancelRequest, ctx: ToolContext): Promise<CancelResponse> {
+    assertTrusted(ctx)
+    return { targetRef: request.targetRef, state: 'already_terminal', acceptedAt: new Date().toISOString() }
+  }
+
+  async #runReadOnly(
+    sql: string,
+    parameters: readonly (string | number | boolean | null)[],
+    maxRows: number,
+    timeoutMs: number,
+  ): Promise<{
+    readonly rows: unknown[][]
+    readonly fields: readonly { readonly name: string; readonly dataTypeID: number }[]
+  }> {
+    const client = await this.#queryPool.connect()
+    try {
+      await client.query('BEGIN TRANSACTION READ ONLY')
+      await client.query(`SET LOCAL statement_timeout = ${String(Math.floor(timeoutMs))}`)
+      const wrapped = `SELECT * FROM (${sql}) AS "ontology_page" LIMIT ${String(maxRows + 1)}`
+      const result = await client.query<unknown[]>({ text: wrapped, values: [...parameters], rowMode: 'array' })
+      await client.query('COMMIT')
+      return {
+        rows: result.rows as unknown[][],
+        fields: result.fields.map((field) => ({ name: field.name, dataTypeID: field.dataTypeID })),
+      }
+    } catch (error) {
+      await client.query('ROLLBACK').catch(() => undefined)
+      if (error instanceof PostgresQueryError) throw error
+      throw new PostgresQueryError('INTERNAL_ERROR', error instanceof Error ? error.message : 'the query failed', {
+        cause: error,
+      })
+    } finally {
+      client.release()
+    }
+  }
+
+  #rejected(code: PlatformError['code'], message: string): StructuredQueryValidateResponse {
+    return { valid: false, warnings: [], rejectedReason: { code, message, retryable: false } }
   }
 
   async #ensureSchema(): Promise<void> {

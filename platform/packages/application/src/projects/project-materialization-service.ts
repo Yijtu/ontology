@@ -150,6 +150,7 @@ function columnsOf(object: IndustryObjectSchema): ProjectDatasetColumn[] {
       name: attribute.attributeId,
       valueType: attribute.valueType as AttributeValueType,
       ...(attribute.unitCode === undefined ? {} : { canonicalUnitCode: attribute.unitCode }),
+      ...(attribute.dimension === undefined ? {} : { dimension: attribute.dimension }),
     }))
     .sort((left, right) => (left.name < right.name ? -1 : left.name > right.name ? 1 : 0))
 }

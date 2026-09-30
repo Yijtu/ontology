@@ -5,11 +5,14 @@ import type {
   RevisionString,
   ScopeRef,
   Sha256Digest,
+  SourceObjectRef,
+  SourceRef,
   ToolCoverage,
   UnitCode,
   Uuid,
   VersionRef,
 } from './generated/contracts'
+import type { StructuredQueryPort } from './ports'
 import type { AttributeValueType } from './semantic-definitions'
 import type { SourceLocator } from './structured-parse'
 import type { ToolContext } from './trusted'
@@ -42,6 +45,8 @@ export interface ProjectDatasetColumn {
   readonly valueType: AttributeValueType
   /** The canonical unit this column is normalised to; present only for a quantity. */
   readonly canonicalUnitCode?: UnitCode
+  /** The measured dimension the canonical unit belongs to; present only for a quantity. */
+  readonly dimension?: string
 }
 
 /** One canonical cell. The value is always the exact, already-normalised representation. */
@@ -181,6 +186,61 @@ export interface ProjectDatasetQueryPort {
   ): Promise<ProjectDatasetQueryResult>
 }
 
+/** The two real business SQL dialects a project snapshot can be queried through. */
+export type ProjectQueryDialect = 'postgres' | 'duckdb'
+
+/**
+ * The physical, read-only relation one fixed snapshot is queryable through. A semantic SQL
+ * compiler resolves the object's canonical attribute ids to `columns` here; the relation is
+ * created only from the snapshot's canonical rows and is addressed only by the pinned
+ * snapshot ref, never by a mutable "latest" dataset.
+ */
+export interface ProjectSnapshotQueryDescriptor {
+  readonly snapshotRef: ProjectDatasetRef
+  readonly objectId: string
+  readonly dialect: ProjectQueryDialect
+  readonly schema: string
+  readonly relation: string
+  readonly relationKind: 'table' | 'view'
+  /** The fixed source object the generated SQL is bound to and must declare. */
+  readonly sourceObjectRef: SourceObjectRef
+  readonly columns: readonly ProjectDatasetColumn[]
+}
+
+/**
+ * A `StructuredQueryPort` that reads one project's fixed dataset snapshots (V03-018) through
+ * generated, read-only, whitelisted, Schema-validated SQL. `describeSnapshot` reports the
+ * exact physical relation a snapshot was materialised as, so the semantic compiler can build
+ * a mapping for it without ever guessing a table or falling back to the startup demo data.
+ */
+export interface ProjectSnapshotQueryPort extends StructuredQueryPort {
+  /** Resolve the physical query relation for a materialised snapshot, or `undefined`. */
+  describeSnapshot(
+    scopeRef: ScopeRef,
+    snapshotRef: ProjectDatasetRef,
+    ctx: ToolContext,
+  ): Promise<ProjectSnapshotQueryDescriptor | undefined>
+}
+
+/** The namespace every project dataset snapshot source ref is minted under. */
+export const PROJECT_DATASET_SOURCE_NAMESPACE = 'project-dataset'
+
+/** The fixed `SourceObjectRef` a project snapshot's rows are read as (object = dataset row set). */
+export function projectDatasetSourceObjectRef(
+  snapshotId: string,
+  objectId: string,
+): SourceObjectRef {
+  return {
+    sourceRef: projectDatasetSourceRef(snapshotId),
+    objectPath: objectId,
+  }
+}
+
+/** The fixed `SourceRef` one snapshot is authorized as; there is no mutable override. */
+export function projectDatasetSourceRef(snapshotId: string): SourceRef {
+  return { namespace: PROJECT_DATASET_SOURCE_NAMESPACE, sourceId: snapshotId }
+}
+
 export type ProjectDatasetErrorCode =
   | 'SCOPE_MISMATCH'
   | 'FORBIDDEN'
@@ -245,6 +305,7 @@ function isDatasetColumn(value: unknown): value is ProjectDatasetColumn {
   if (!isNonEmptyString(value['name'])) return false
   if (!PROJECT_DATASET_KINDS.includes(value['valueType'] as AttributeValueType)) return false
   if (value['canonicalUnitCode'] !== undefined && !isNonEmptyString(value['canonicalUnitCode'])) return false
+  if (value['dimension'] !== undefined && !isNonEmptyString(value['dimension'])) return false
   return true
 }
 
