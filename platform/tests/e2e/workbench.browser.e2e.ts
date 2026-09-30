@@ -82,10 +82,27 @@ describe('workbench in a real browser', () => {
     )
     expect(gridColumns.trim().split(/\s+/).length).toBe(1)
 
-    // The happy path already activated revision 1, so an activation from a fresh page that
-    // does not know the revision must surface a conflict instead of overwriting.
+    // Stale expectation: this case used to assume a fresh page "does not know the revision"
+    // and therefore activating must conflict. The workbench now loads the active revision on
+    // mount (`Workbench` -> getActiveProfile), so a normal activation reads the current CAS
+    // token and succeeds; it is idempotent against the revision it just observed, not a
+    // VERSION_CONFLICT. The narrow layout still activates within the single-column body.
     await page.click('[data-testid="preflight"]')
     await page.waitForSelector('[data-testid="preflight-status"][data-status="resolved"]')
+    await page.click('[data-testid="activate"]')
+    await page.waitForSelector('[data-testid="active-revision"]')
+    expect(await page.locator('[data-testid="conflict"]').count()).toBe(0)
+
+    // A real conflict path is still covered. Another operator advances the active revision
+    // after this page read its token, so the page's If-Match is now stale. The next in-page
+    // activation must surface the conflict surface (VERSION_CONFLICT) instead of overwriting.
+    const current = await harness.client.getActiveProfile(PROFILE.id)
+    if (current === undefined) throw new Error('the workbench should have an active revision')
+    await harness.client.activateProfile({
+      profileRef: current.profileRef,
+      snapshotHash: current.snapshotHash,
+      expectedRevision: current.revision,
+    })
     await page.click('[data-testid="activate"]')
     await page.waitForSelector('[data-testid="conflict"]')
     expect(await page.getAttribute('[data-testid="conflict"]', 'data-code')).toBe('VERSION_CONFLICT')
@@ -94,6 +111,8 @@ describe('workbench in a real browser', () => {
     await record('narrow-conflict', [
       `viewport=390x844`,
       `gridTemplateColumns=${gridColumns}`,
+      'activation=current-cas-succeeds',
+      'concurrentRevision=stale-if-match',
       `conflictCode=VERSION_CONFLICT`,
     ])
     await context.close()
