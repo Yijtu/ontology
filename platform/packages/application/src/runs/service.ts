@@ -660,8 +660,14 @@ export class RunService {
         patch.pendingClarificationId = null
         patch.cancelledAt = this.#now()
         if (event.type === 'cancelled') patch.cancelReason = event.reason
-      } else if (projection.pendingClarificationId !== undefined) {
-        patch.pendingClarificationId = projection.pendingClarificationId
+      } else {
+        // Persist the canonical bounded stop reason for a terminal runtime failure
+        // (BUDGET_EXHAUSTED/DEADLINE_EXCEEDED/NO_PROGRESS/...) so the reason survives a
+        // restart and is reported by `GET /runs/{id}`, not only in the event stream.
+        if (projection.stopReason !== undefined) patch.cancelReason = projection.stopReason
+        if (projection.pendingClarificationId !== undefined) {
+          patch.pendingClarificationId = projection.pendingClarificationId
+        }
       }
       updated = await this.#setState(scopeRef, run, projection.nextState, patch, ctx)
     }

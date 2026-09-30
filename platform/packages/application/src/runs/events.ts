@@ -57,6 +57,12 @@ export interface RuntimeEventProjection {
   readonly publicEvent: PublicEventDraft | undefined
   /** Set when the event carries a clarification the run now waits on. */
   readonly pendingClarificationId: string | undefined
+  /**
+   * The canonical bounded stop reason to persist with a terminal transition
+   * (BUDGET_EXHAUSTED/DEADLINE_EXCEEDED/NO_PROGRESS/...). It is stored on the run record so
+   * `GET /runs/{id}` reports why a run stopped; it never carries provider prose.
+   */
+  readonly stopReason?: string
 }
 
 function planSummaryData(event: Extract<RuntimeEvent, { type: 'plan_proposed' }>): Record<string, unknown> {
@@ -131,6 +137,7 @@ export function projectRuntimeEvent(event: RuntimeEvent): RuntimeEventProjection
         nextState: 'failed',
         publicEvent: { type: 'run.failed', data: { error: event.error } },
         pendingClarificationId: undefined,
+        stopReason: event.error.code,
       }
   }
 }

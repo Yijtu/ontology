@@ -439,3 +439,55 @@ describe('WorkflowController against a real containerised PostgreSQL + tool gate
     expect([...new Set(selector.selected)]).toHaveLength(2)
   })
 })
+
+describe('run lifecycle stops and durable checkpoints on real PostgreSQL', () => {
+  it('persists BUDGET_EXHAUSTED and never publishes when the shared tool budget is spent', async () => {
+    const runId = randomUUID()
+    const ctx = templateContext({ runId })
+    const view = await controller.startRun(
+      {
+        runId,
+        profileRef: TEMPLATE_PROFILE,
+        question: 'compare tomorrow backup strategies',
+        context: { timeZone: 'Asia/Shanghai', siteRef: 'site-demo-a' },
+        preferences: { route: 'auto', allowWeb: false },
+        idempotencyKey: `workflow-budget-${runId}`,
+        // One tool call is admitted; the second required plan step is denied on the one
+        // shared ledger, so the run stops with a classified, persisted reason.
+        budgetOverrides: { maxToolCalls: 1 },
+      },
+      ctx,
+    )
+
+    expect(view.state).toBe('failed')
+    expect(view.cancelReason).toBe('BUDGET_EXHAUSTED')
+    expect(await controller.getAnswer(runId, ctx)).toBeUndefined()
+
+    const events = await runEventTypes(runId)
+    expect(events).toContain('run.failed')
+    expect(events).not.toContain('answer.published')
+
+    const persisted = await adminClient.query<{ cancel_reason: string | null }>(
+      `SELECT cancel_reason FROM agent_platform.runs
+        WHERE tenant_id = $1 AND space_id = $2 AND run_id = $3`,
+      [TENANT_ID, SPACE_ID, runId],
+    )
+    expect(persisted.rows[0]?.cancel_reason).toBe('BUDGET_EXHAUSTED')
+  })
+
+  it('persists a durable runtime checkpoint a fresh store can reload after a restart', async () => {
+    const ctx = templateContext({ runId: TEMPLATE_RUN })
+    const handle = await store.findLatestCheckpoint(SCOPE, TEMPLATE_RUN, ctx)
+    expect(handle).toBeDefined()
+    if (handle === undefined) throw new Error('the template run wrote no durable checkpoint')
+
+    // A brand-new store over the same control database models a restarted worker process.
+    const restartedStore = new PostgresRunStore(controlDatabase)
+    const reloaded = await restartedStore.findLatestCheckpoint(SCOPE, TEMPLATE_RUN, ctx)
+    expect(reloaded).toEqual(handle)
+    const record = await restartedStore.loadCheckpoint(SCOPE, TEMPLATE_RUN, handle.checkpointId, ctx)
+    expect(record).toBeDefined()
+    expect(record?.stateDigest).toBe(handle.stateDigest)
+    expect(record?.payload.byteLength).toBeGreaterThan(0)
+  })
+})

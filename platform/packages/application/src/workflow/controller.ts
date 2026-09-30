@@ -70,6 +70,7 @@ export class WorkflowController {
   readonly #now: () => string
   readonly #newId: () => string
   readonly #maxDraftAttempts: number
+  readonly #maxCollectionRounds: number
   readonly #selectedRuntimes = new Map<Uuid, RuntimeAdapter>()
   readonly #active = new Map<Uuid, ActiveLoop>()
 
@@ -79,6 +80,8 @@ export class WorkflowController {
     this.#newId = dependencies.newId ?? (() => globalThis.crypto.randomUUID())
     this.#maxDraftAttempts =
       dependencies.limits?.maxDraftAttempts ?? DEFAULT_WORKFLOW_LIMITS.maxDraftAttempts
+    this.#maxCollectionRounds =
+      dependencies.limits?.maxCollectionRounds ?? DEFAULT_WORKFLOW_LIMITS.maxCollectionRounds
   }
 
   /** Create a run, open its one ledger/manifest and drive it to a stable phase. */
@@ -265,9 +268,9 @@ export class WorkflowController {
         }
         case 'collecting':
           collectionRounds += 1
-          if (collectionRounds > this.#maxDraftAttempts + 2) {
+          if (collectionRounds > this.#maxCollectionRounds) {
             // A runtime that keeps returning without a terminal event must not be allowed
-            // to start an unbounded number of loops: block the run instead.
+            // to start an unbounded number of loops: stop the run with a persisted reason.
             await this.#advance(run, 'blocked', { cancelReason: 'NO_PROGRESS' }, ctx)
             return this.#view(runId, ctx)
           }
@@ -432,6 +435,17 @@ export class WorkflowController {
       }
       return
     }
+    // A checkpoint is only ever restored by the exact runtime kind/version the run is locked
+    // to (SPEC §4.3). A mismatched handle is refused explicitly with a persisted
+    // `CHECKPOINT_INCOMPATIBLE`; the controller never silently switches version by
+    // falling back to a fresh collection on another runtime.
+    if (
+      checkpoint.runtimeKind !== run.runtimeRef.id ||
+      checkpoint.runtimeVersion !== run.runtimeRef.version
+    ) {
+      await this.#failUnsafeRecovery(run, 'CHECKPOINT_INCOMPATIBLE', ctx)
+      return
+    }
     const loop = new AbortController()
     this.#active.set(runId, { adapter, controller: loop })
     try {
@@ -454,6 +468,18 @@ export class WorkflowController {
         const stop = await this.#applyRuntimeEvent(runId, event, ctx)
         if (stop) break
       }
+    } catch (error) {
+      // The runtime refuses a blob it cannot restore (digest/shape/SDK mismatch) with a
+      // classified `CHECKPOINT_INCOMPATIBLE`. Persist that reason rather than letting an
+      // unsafe recovery surface as an unclassified worker failure.
+      if (isCheckpointIncompatible(error)) {
+        const current = await this.#deps.phase.requireRun(runId, ctx)
+        if (current.state === 'collecting') {
+          await this.#failUnsafeRecovery(current, 'CHECKPOINT_INCOMPATIBLE', ctx)
+        }
+        return
+      }
+      throw error
     } finally {
       this.#active.delete(runId)
     }
@@ -1085,6 +1111,19 @@ function stableUuid(namespace: string, runId: Uuid): Uuid {
   chars[16] = ((Number.parseInt(chars[16] ?? '0', 16) & 0x3) | 0x8).toString(16)
   const hex = chars.join('')
   return `${hex.slice(0, 8)}-${hex.slice(8, 12)}-${hex.slice(12, 16)}-${hex.slice(16, 20)}-${hex.slice(20)}`
+}
+
+/**
+ * Duck-type the classified refusal a runtime raises for a blob it cannot restore. The
+ * controller must not import an adapter error class (SPEC §2 boundary), so it only reads the
+ * canonical `code` the runtime already carries.
+ */
+function isCheckpointIncompatible(error: unknown): boolean {
+  return (
+    typeof error === 'object' &&
+    error !== null &&
+    (error as { readonly code?: unknown }).code === 'CHECKPOINT_INCOMPATIBLE'
+  )
 }
 
 function clarificationIdFromAction(logicalActionId: string): Uuid | undefined {

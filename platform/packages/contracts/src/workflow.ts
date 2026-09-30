@@ -706,8 +706,18 @@ export interface WorkflowManifestStore {
 export interface WorkflowLimits {
   /** Maximum draft attempts (initial draft plus bounded repairs). */
   readonly maxDraftAttempts: number
+  /**
+   * Maximum times the controller may re-enter the collection loop before it stops with a
+   * persisted `NO_PROGRESS`. This is the outer safety bound for a runtime that keeps
+   * returning without a terminal event; the runtime still owns its own bounded
+   * round/budget/deadline stop. It never resets the shared ledger.
+   */
+  readonly maxCollectionRounds: number
 }
 
 export const DEFAULT_WORKFLOW_LIMITS: WorkflowLimits = {
   maxDraftAttempts: 2,
+  // SPEC §EX-10 caps the Pi loop at 6 rounds; the controller admits a small margin so a
+  // legitimate clarification/re-collection cycle does not collide with the hard stop.
+  maxCollectionRounds: 8,
 }
