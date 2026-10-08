@@ -481,7 +481,13 @@ describe('definition candidate editing and disambiguation', () => {
     published.add(
       publishedVersion([{ id: 'device_serial', objectId: 'device', valueType: 'string' }]),
     )
-    const h = buildHarness({ published, basePackRef: BASE_PACK_REF })
+    // A pinned draft must explicitly register the predecessor terminology used by this fixture.
+    const terminology = new StaticDefinitionTerminologySource([{ definitionRef: BASE_PACK_REF, terminology: {
+      objectLogicalIds: ['device'], attributeLogicalIds: ['device_serial'], relationLogicalIds: [],
+      attributes: [{ logicalId: 'device_serial', objectLogicalId: 'device', valueType: 'string' }],
+      displayNames: { device: 'Device' },
+    } }])
+    const h = buildHarness({ published, basePackRef: BASE_PACK_REF, terminology })
     await seedCandidate(h.candidates, objectPayload('device', ['device_serial']))
     await seedCandidate(h.candidates, attributePayload('device_serial', 'device', { valueType: 'number', minCardinality: 1, maxCardinality: 1 }))
 
