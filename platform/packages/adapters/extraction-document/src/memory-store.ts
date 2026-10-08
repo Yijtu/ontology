@@ -143,6 +143,28 @@ export class InMemoryDocumentParseStore implements DocumentParseStore {
     return out
   }
 
+  async listChunkPage(scopeRef: ScopeRef, parseId: Uuid,
+    page: { readonly limit: number; readonly cursor?: string }, ctx: ToolContext): Promise<{
+      readonly chunks: readonly DocumentChunkRecord[]; readonly nextCursor?: string
+    }> {
+    this.#assertOpen()
+    assertScope(scopeRef, ctx)
+    const after = page.cursor === undefined ? -1 : Number(page.cursor)
+    if (!Number.isSafeInteger(page.limit) || page.limit < 1 || page.limit > 64
+      || !Number.isSafeInteger(after) || after < -1
+      || (page.cursor !== undefined && String(after) !== page.cursor)) {
+      throw new DocumentExtractionError('INVALID_REQUEST', 'invalid bounded chunk page')
+    }
+    const parse = await this.getParse(scopeRef, parseId, ctx)
+    if (parse === undefined) return { chunks: [] }
+    const candidates = (this.#chunks.get(parseId) ?? []).filter((chunk) => chunk.ordinal > after)
+      .sort((left, right) => left.ordinal - right.ordinal)
+    const chunks = candidates.slice(0, page.limit)
+    const last = chunks[chunks.length - 1]
+    return { chunks, ...(candidates.length > page.limit && last !== undefined
+      ? { nextCursor: String(last.ordinal) } : {}) }
+  }
+
   async close(): Promise<void> {
     this.#closed = true
     this.#parses.clear()
