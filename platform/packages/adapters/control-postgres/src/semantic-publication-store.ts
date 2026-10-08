@@ -53,6 +53,7 @@ interface ReviewRow extends QueryResultRow {
   recorded_at: Date
   actor: string
   supersedes_revision: string | null
+  content_digest: string | null
 }
 
 interface PublicationRow extends QueryResultRow {
@@ -124,7 +125,7 @@ const RULE_COLUMNS = `rule_version_id, rule_id, version, object_id, severity, im
 const REVISION_COLUMNS = `revision_id, statement_id, version, kind, reason, corrected_value, valid_from,
   valid_to, recorded_at, actor, supersedes_version, invalidation_outbox_id`
 const REVIEW_COLUMNS = `review_id, candidate_id, revision, decision, reason, evidence_refs, recorded_at,
-  actor, supersedes_revision`
+  actor, supersedes_revision, content_digest`
 
 function toReview(row: ReviewRow): CandidateReviewRecord {
   return {
@@ -136,6 +137,7 @@ function toReview(row: ReviewRow): CandidateReviewRecord {
     evidenceRefs: row.evidence_refs,
     recordedAt: row.recorded_at.toISOString(),
     actor: row.actor,
+    ...(row.content_digest == null ? {} : { contentDigest: row.content_digest }),
     ...(row.supersedes_revision === null ? {} : { supersedesRevision: row.supersedes_revision }),
   }
 }
@@ -273,11 +275,11 @@ export class PostgresSemanticPublicationStore implements SemanticPublicationStor
       const inserted = await query.query<ReviewRow>(
         `INSERT INTO agent_platform.semantic_candidate_reviews
            (tenant_id, space_id, review_id, candidate_id, revision, decision, reason, evidence_refs,
-            recorded_at, actor, supersedes_revision)
+            recorded_at, actor, supersedes_revision, content_digest)
          VALUES (
            current_setting('app.tenant_id')::uuid,
            current_setting('app.space_id')::uuid,
-           $1, $2, $3, $4, $5, $6::jsonb, $7::timestamptz, $8, $9)
+           $1, $2, $3, $4, $5, $6::jsonb, $7::timestamptz, $8, $9, $10)
          RETURNING ${REVIEW_COLUMNS}`,
         [
           draft.reviewId,
@@ -289,6 +291,7 @@ export class PostgresSemanticPublicationStore implements SemanticPublicationStor
           draft.recordedAt,
           draft.actor,
           revisionNumber === 1 ? null : head.revision,
+          draft.contentDigest ?? null,
         ],
       )
       const row = inserted.rows[0]

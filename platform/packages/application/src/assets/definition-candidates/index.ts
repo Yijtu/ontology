@@ -42,3 +42,4 @@ export {
   HARD_DEFINITION_ISSUES,
 } from './validation'
 export type { DefinitionValidationContext } from './validation'
+export { definitionRevisionStrategyProblem } from './validation'

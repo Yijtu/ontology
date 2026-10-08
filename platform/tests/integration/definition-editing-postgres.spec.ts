@@ -370,6 +370,7 @@ describe('definition editing (real PostgreSQL)', () => {
       body: { decision: 'approve', reason: 'looks correct' },
     })
     expect(review.statusCode).toBe(200)
+    expect((review.json() as { data: { contentDigest?: string } }).data.contentDigest).toBe(original.contentDigest)
     const reviews = await get(`/api/v1/candidates/${original.candidateId}/reviews`)
     expect((reviews.json() as { data: { reviews: unknown[] } }).data.reviews).toHaveLength(1)
 

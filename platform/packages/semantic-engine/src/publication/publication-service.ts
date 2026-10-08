@@ -122,6 +122,7 @@ export class SemanticPublicationService {
     }
     // A TBox candidate is reviewed through exactly this store/route; the reader only proves the
     // candidate is visible (instance OR definition) in the scope. No second decision table.
+    let contentDigest: CandidateReviewRecord['contentDigest']
     if (this.#reviewableCandidates === undefined) {
       await this.#requireCandidate(scopeRef, request.candidateId, ctx)
     } else {
@@ -132,6 +133,7 @@ export class SemanticPublicationService {
           `candidate ${request.candidateId} is not visible in this scope`,
         )
       }
+      contentDigest = view.contentDigest
     }
     const draft: CandidateReviewDraft = {
       reviewId: this.#newId(),
@@ -141,6 +143,7 @@ export class SemanticPublicationService {
       evidenceRefs: request.evidenceRefs ?? [],
       recordedAt: this.#now(),
       actor: ctx.principal.subjectId,
+      ...(contentDigest === undefined ? {} : { contentDigest }),
     }
     const input: AppendCandidateReviewInput = { expectedRevision: request.expectedRevision, draft }
     return this.#mapStoreError(() => this.#store.appendReview(scopeRef, input, ctx))

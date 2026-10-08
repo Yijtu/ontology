@@ -5,6 +5,7 @@ import type {
   IndustryPackUpgradeService,
 } from '@ontology/application'
 import { summarizePackCatalogEntry } from '@ontology/application'
+import { isDefinitionRevisionStrategy } from '@ontology/contracts'
 import type {
   ComponentKey,
   ComponentKind,
@@ -303,9 +304,14 @@ export function registerPackRoutes(
 
         const body = request.body
         if (!isRecord(body)) throw new InvalidRequestFieldError('the request body must be a JSON object')
+        const strategy = body['strategy']
+        if (strategy !== undefined && !isDefinitionRevisionStrategy(strategy)) {
+          throw new InvalidRequestFieldError('strategy must carry a supported revision decision, reason and optional predecessor reference')
+        }
         const asset = await publication.publish(
           request.params.workspaceId,
           {
+            ...(strategy === undefined ? {} : { strategy }),
             packId: requireNonEmptyString(body['packId'], 'packId'),
             version: requireNonEmptyString(body['version'], 'version'),
             validationId: requireNonEmptyString(body['validationId'], 'validationId'),

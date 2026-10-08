@@ -32,6 +32,7 @@ import {
   RuleActionCandidateService,
   SyntheticExampleService,
   IndustryValidationService,
+  industryValidationDigest,
 } from '@ontology/application'
 import type { ActionTrialInput, ActionTrialReceipt, DefinitionPublicationValidationPort } from '@ontology/contracts'
 import { FiniteGrammarRuleSupportValidator, FiniteGrammarSyntheticEvaluator } from '@ontology/semantic-engine'
@@ -143,13 +144,15 @@ function definitionReport(workspaceId: Uuid, publishable: boolean): DefinitionVa
 
 class StubDefinitionValidation implements DefinitionPublicationValidationPort {
   #publishable = true
+  readonly calls: Parameters<DefinitionPublicationValidationPort['validateForPublication']>[0][] = []
 
   setPublishable(value: boolean): void {
     this.#publishable = value
   }
 
-  async validateForPublication(input: { readonly workspaceId: Uuid }, _ctx: ToolContext): Promise<DefinitionValidationReport> {
+  async validateForPublication(input: Parameters<DefinitionPublicationValidationPort['validateForPublication']>[0], _ctx: ToolContext): Promise<DefinitionValidationReport> {
     void _ctx
+    this.calls.push(input)
     return definitionReport(input.workspaceId, this.#publishable)
   }
 }
@@ -462,6 +465,21 @@ describe('isolated synthetic example sets', () => {
 })
 
 describe('industry validation service', () => {
+  it('passes the revision strategy to definition validation and pins it in the report digest', async () => {
+    const h = harness()
+    await seedRule(h, POWER_RANGE)
+    await seedAction(h, actionDeclaration())
+    const set = await generateSet(h)
+    const strategy = { kind: 'new_version' as const, reason: 'explicit change' }
+    const input = { exampleSetId: set.exampleSetId, expectedRevision: '1', idempotencyKey: `val-${randomUUID()}`, strategy }
+    const report = await h.validationService.validate(WORKSPACE_ID, input, 'editor', EDITOR)
+    expect(h.definitions.calls.at(-1)?.strategy).toEqual(strategy)
+    expect(report.strategy).toEqual(strategy)
+    expect(report.contentDigest).toBe(industryValidationDigest(report))
+    expect(industryValidationDigest({ ...report, strategy: { ...strategy, reason: 'different decision' } })).not.toBe(report.contentDigest)
+    await expect(h.validationService.validate(WORKSPACE_ID, { ...input, strategy: { ...strategy, reason: 'changed' } }, 'editor', EDITOR))
+      .rejects.toMatchObject({ code: 'IDEMPOTENCY_CONFLICT' })
+  })
   it('validates rules/actions against independent samples and reports the two surfaces separately', async () => {
     const h = harness()
     await seedRule(h, POWER_RANGE)

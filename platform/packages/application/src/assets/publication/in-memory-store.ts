@@ -33,6 +33,7 @@ function resolveScope(scopeRef: ScopeRef, ctx: ToolContext): void {
 }
 
 export interface InMemoryPublishedPackAssetStoreDependencies {
+  readonly publicationGuard?: (scopeRef: ScopeRef, input: CommitApprovedPackInput, ctx: ToolContext) => Promise<void>
   /**
    * Called after a successful commit with the workspace head the publication advanced to. The
    * PostgreSQL store advances the workspace in the same transaction; an in-memory harness uses
@@ -97,6 +98,11 @@ export class InMemoryPublishedPackAssetStore implements PublishedPackAssetStore 
       return { asset: structuredClone(stored), created: false }
     }
 
+    if (this.#dependencies.publicationGuard !== undefined) {
+      await this.#dependencies.publicationGuard(scopeRef, input, ctx)
+    } else if (input.definition.objects.length + input.definition.attributes.length + input.definition.relations.length > 0) {
+      throw new PublishedPackAssetStoreError('VERSION_CONFLICT', 'a content-pinned publication guard is required')
+    }
     const packId = input.pack.packRef.id
     const version = input.pack.packRef.version
     const packs = this.#scope(scopeRef)

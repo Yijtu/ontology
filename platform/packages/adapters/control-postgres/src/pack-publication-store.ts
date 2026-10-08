@@ -99,6 +99,7 @@ export class PostgresPublishedPackAssetStore implements PublishedPackAssetStore 
           `workspace head is ${workspaceRow.head_revision}, not the expected ${input.expectedRevision}`,
         )
       }
+      await this.#guardPublicationPins(query, input)
 
       const existingPack = await this.#byPackIdVersion(query, pack.packRef.id, pack.packRef.version)
       if (existingPack !== undefined) {
@@ -192,6 +193,62 @@ export class PostgresPublishedPackAssetStore implements PublishedPackAssetStore 
       const row = await this.#byIdempotencyKey(query, key)
       return row === undefined ? undefined : toAsset(row)
     })
+  }
+
+  async #guardPublicationPins(query: ScopedQuery, input: CommitApprovedPackInput): Promise<void> {
+    const rows = await query.query<{ candidate_id: string; content_digest: string; state: string; pending_confirmation: boolean;
+      review_revision: string | null; decision: string | null; reviewed_digest: string | null }>(
+      `SELECT c.candidate_id, c.content_digest, c.state, c.pending_confirmation,
+              h.revision::text AS review_revision, r.decision, r.content_digest AS reviewed_digest
+         FROM agent_platform.asset_candidate_versions c
+         LEFT JOIN agent_platform.candidate_review_heads h
+           ON h.tenant_id = c.tenant_id AND h.space_id = c.space_id AND h.candidate_id = c.candidate_id
+         LEFT JOIN agent_platform.semantic_candidate_reviews r
+           ON r.tenant_id = h.tenant_id AND r.space_id = h.space_id AND r.candidate_id = h.candidate_id AND r.revision = h.revision
+        WHERE c.tenant_id = current_setting('app.tenant_id')::uuid AND c.space_id = current_setting('app.space_id')::uuid
+          AND c.workspace_id = $1::uuid AND c.state <> 'rejected'
+          AND NOT EXISTS (SELECT 1 FROM agent_platform.asset_candidate_versions replacement
+            WHERE replacement.tenant_id = c.tenant_id AND replacement.space_id = c.space_id
+              AND replacement.workspace_id = c.workspace_id AND replacement.replaces_candidate_id = c.candidate_id)`,
+      [input.pack.workspaceId],
+    )
+    const pins = input.approvalPins ?? []
+    const persistedPins = input.pack.approvalPins ?? []
+    if (persistedPins.length !== pins.length || pins.some((pin) => !persistedPins.some((stored) => stored.candidateId === pin.candidateId &&
+        stored.contentDigest === pin.contentDigest && stored.reviewRevision === pin.reviewRevision))) {
+      throw new PublishedPackAssetStoreError('VERSION_CONFLICT', 'the immutable pack must retain its exact approval pins')
+    }
+    if (pins.length !== rows.rows.length || pins.length !== new Set(pins.map((pin) => pin.candidateId)).size ||
+        (input.definition.objects.length + input.definition.attributes.length + input.definition.relations.length !== pins.length) ||
+        rows.rows.some((row) => !pins.some((pin) => pin.candidateId === row.candidate_id && pin.contentDigest === row.content_digest &&
+          pin.reviewRevision === row.review_revision && row.decision === 'approve' && row.reviewed_digest === row.content_digest &&
+          row.state !== 'failed' && row.state !== 'pending_confirmation' && !row.pending_confirmation))) {
+      throw new PublishedPackAssetStoreError('VERSION_CONFLICT', 'definition approval or current candidate pins changed before publication')
+    }
+    const actions = await query.query<{ candidate_id: string; content_digest: string; enabled_at: Date }>(
+      `SELECT candidate_id, content_digest, enabled_at FROM (
+         SELECT DISTINCT ON (c.logical_id) c.logical_id, c.candidate_id, c.content_digest, c.lifecycle, c.enabled_at
+         FROM agent_platform.asset_rule_action_candidates c
+         WHERE c.tenant_id = current_setting('app.tenant_id')::uuid AND c.space_id = current_setting('app.space_id')::uuid
+           AND c.workspace_id = $1::uuid AND NOT EXISTS (
+             SELECT 1 FROM agent_platform.asset_rule_action_candidates replacement
+             WHERE replacement.tenant_id = c.tenant_id AND replacement.space_id = c.space_id
+               AND replacement.workspace_id = c.workspace_id AND replacement.replaces_candidate_id = c.candidate_id)
+         ORDER BY c.logical_id, c.recorded_at DESC, c.candidate_id DESC
+       ) current_candidates WHERE lifecycle = 'enabled' AND enabled_at IS NOT NULL`,
+      [input.pack.workspaceId],
+    )
+    const actionPins = input.ruleActionPins ?? []
+    const persistedActions = input.pack.ruleActionPins ?? []
+    if (persistedActions.length !== actionPins.length || actionPins.some((pin) => !persistedActions.some((stored) => stored.candidateId === pin.candidateId &&
+        stored.contentDigest === pin.contentDigest && stored.enabledAt === pin.enabledAt))) {
+      throw new PublishedPackAssetStoreError('VERSION_CONFLICT', 'the immutable pack must retain its exact enablement pins')
+    }
+    if (actionPins.length !== actions.rows.length || actionPins.length !== new Set(actionPins.map((pin) => pin.candidateId)).size ||
+        actions.rows.some((row) => !actionPins.some((pin) => pin.candidateId === row.candidate_id && pin.contentDigest === row.content_digest &&
+          Date.parse(pin.enabledAt) === row.enabled_at.getTime()))) {
+      throw new PublishedPackAssetStoreError('VERSION_CONFLICT', 'enabled rule/action pins changed before publication')
+    }
   }
 
   async #insertDefinition(query: ScopedQuery, definition: SemanticDefinitionRecord): Promise<void> {

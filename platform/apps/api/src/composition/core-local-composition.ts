@@ -2152,6 +2152,9 @@ export async function createCoreLocalComposition(options: CoreLocalCompositionOp
       outputLimit: { maxTokens: 2_048 },
     })
     const definitionEditingService = new DefinitionCandidateEditingService({
+      publishedPacks: publishedPackStore,
+      reviewableCandidates,
+      reviews: publicationStore,
       workspaces: workspaceStore,
       candidates: assetCandidateStore,
       terminology,
@@ -2174,6 +2177,8 @@ export async function createCoreLocalComposition(options: CoreLocalCompositionOp
       evaluator: new FiniteGrammarSyntheticEvaluator(),
     })
     const industryAssetPublicationService = new IndustryAssetPublicationService({
+      reviewableCandidates,
+      reviews: publicationStore,
       workspaces: workspaceStore,
       validations: validationReportStore,
       definitionCandidates: assetCandidateStore,

@@ -1,7 +1,6 @@
 import {
   IndustryAssetPublicationError,
   PublishedPackAssetStoreError,
-  definitionRecordOf,
   findIndustryPackViolations,
 } from '@ontology/contracts'
 import type {
@@ -15,7 +14,6 @@ import type {
   PublishIndustryPackInput,
   ResourceRef,
   RuleActionCandidateStore,
-  RuleActionCandidateVersion,
   ScopeRef,
   SemanticDefinitionAudit,
   SemanticDefinitionRecord,
@@ -24,10 +22,18 @@ import type {
   ToolContext,
   Uuid,
   VersionRef,
+  ReviewableCandidateReader,
+  IndustryWorkspace,
+  IndustryPackCatalogue,
 } from '@ontology/contracts'
 import { canonicalJson, sha256DigestOf } from '../../profiles/canonical'
 import { currentDefinitionProjection } from '../definition-candidates/validation'
 import { assemblePack } from './pack-assembly'
+import { DefinitionPredecessorError, resolveDefinitionPredecessor } from './definition-predecessor'
+import type { DefinitionPredecessor } from './definition-predecessor'
+import { currentRuleActionProjection, definitionApprovalPins, industryValidationDigest, ruleActionPublicationPins } from './publication-pins'
+import type { CandidateApprovalReader } from './publication-pins'
+import { definitionRevisionStrategyProblem, diffDefinitionProjection } from '../definition-candidates/validation'
 
 /**
  * Industry asset publication (SPEC v0.3a §3.1/§4.2/§6.1, V03-015 / #187; A.US-005,
@@ -55,6 +61,9 @@ const CANDIDATE_PAGE = 250
 export const PACK_PUBLISHED_TOPIC = 'asset.pack.published'
 
 export interface IndustryAssetPublicationDependencies {
+  readonly baseCatalogue?: IndustryPackCatalogue
+  readonly reviewableCandidates?: ReviewableCandidateReader
+  readonly reviews?: CandidateApprovalReader
   readonly workspaces: IndustryWorkspaceStore
   readonly validations: IndustryValidationReportStore
   readonly definitionCandidates: AssetCandidateStore
@@ -117,16 +126,6 @@ function publicationAudit(
     occurredAt,
     actor,
   }
-}
-
-function currentActionCandidates(candidates: readonly RuleActionCandidateVersion[]): RuleActionCandidateVersion[] {
-  const latest = new Map<string, RuleActionCandidateVersion>()
-  for (const candidate of candidates) {
-    if (candidate.lifecycle === 'rejected') continue
-    const existing = latest.get(candidate.logicalId)
-    if (existing === undefined || existing.recordedAt <= candidate.recordedAt) latest.set(candidate.logicalId, candidate)
-  }
-  return [...latest.values()].sort((left, right) => left.logicalId.localeCompare(right.logicalId))
 }
 
 export class IndustryAssetPublicationService {
@@ -194,18 +193,57 @@ export class IndustryAssetPublicationService {
       )
     }
 
-    const candidates = await this.#deps.definitionCandidates.listCandidates(scopeRef, workspaceId, {}, ctx)
+    const candidates = await this.#deps.definitionCandidates.listCandidates(scopeRef, workspaceId, { limit: CANDIDATE_PAGE }, ctx)
+    if (candidates.length === CANDIDATE_PAGE) throw new IndustryAssetPublicationError('VALIDATION_BLOCKED', 'candidate page is incomplete')
     const projection = currentDefinitionProjection(candidates)
+    const approvals = await definitionApprovalPins(projection, scopeRef, ctx, this.#deps.reviewableCandidates, this.#deps.reviews)
+    if (approvals.blockers.length > 0) throw new IndustryAssetPublicationError('VALIDATION_BLOCKED', 'the current definition projection is not approved', { reasons: approvals.blockers.map((finding) => finding.message) })
+    if (report.definition?.approvalPins === undefined || report.ruleActionPins === undefined ||
+        canonicalJson(report.definition.approvalPins) !== canonicalJson(approvals.pins) ||
+        report.contentDigest !== industryValidationDigest(report) ||
+        canonicalJson(input.strategy) !== canonicalJson(report.strategy)) {
+      throw new IndustryAssetPublicationError('VALIDATION_STALE', 'validation must pin the current approvals, full evidence and revision strategy')
+    }
+    if (!report.definition.publishable || report.definition.blockers.length > 0) {
+      throw new IndustryAssetPublicationError('VALIDATION_BLOCKED', 'definition validation still has publication blockers')
+    }
     if (projection.length === 0) {
       throw new IndustryAssetPublicationError('DRAFT_NOT_FOUND', `workspace ${workspaceId} has no definition candidate to publish`)
     }
 
-    const ruleActionCandidates = currentActionCandidates(
-      await this.#deps.ruleActions.list(scopeRef, workspaceId, { limit: CANDIDATE_PAGE }, ctx),
-    )
+    const ruleActionRows = await this.#deps.ruleActions.list(scopeRef, workspaceId, { limit: CANDIDATE_PAGE }, ctx)
+    if (ruleActionRows.length === CANDIDATE_PAGE) throw new IndustryAssetPublicationError('VALIDATION_BLOCKED', 'rule/action candidate page is incomplete')
+    const ruleActionCandidates = currentRuleActionProjection(ruleActionRows).filter((candidate) => candidate.lifecycle === 'enabled' && candidate.enabledAt !== undefined)
+    const ruleActionPins = ruleActionPublicationPins(ruleActionCandidates)
+    if (canonicalJson(ruleActionPins) !== canonicalJson(report.ruleActionPins)) {
+      throw new IndustryAssetPublicationError('VALIDATION_STALE', 'validation no longer pins the enabled rule/action revisions')
+    }
+    if (ruleActionCandidates.some((candidate) => {
+      const result = candidate.kind === 'rule' ? report.rules.find((entry) => entry.candidateId === candidate.candidateId)
+        : report.actions.find((entry) => entry.candidateId === candidate.candidateId)
+      return result?.semanticPublished !== true
+    })) throw new IndustryAssetPublicationError('VALIDATION_STALE', 'every enabled rule/action must have a semantic validation result for its pinned revision')
 
     const syntheticExampleRef = await this.#syntheticRef(report, scopeRef, workspaceId, ctx)
-    const previous = await this.#previousPublished(scopeRef, workspace.namespace, input.packId, input.version, ctx)
+    const previous = await this.#previousPublished(scopeRef, workspace, ctx)
+    const compatibility = diffDefinitionProjection(projection, previous?.definition, {
+      workspaceId, revision: expected, ...(previous === undefined ? {} : { publishedRef: previous.definition.ref }),
+      ...(report.strategy === undefined ? {} : { strategy: report.strategy }),
+    })
+    if (canonicalJson(compatibility) !== canonicalJson(report.definition.compatibility)) {
+      throw new IndustryAssetPublicationError('VALIDATION_STALE', 'the complete semantic diff changed after validation')
+    }
+    const strategy = report.strategy
+    if ((compatibility.requiresRevisionStrategy && strategy === undefined) || definitionRevisionStrategyProblem(strategy, previous?.definition.ref) !== undefined) {
+      throw new IndustryAssetPublicationError('VALIDATION_BLOCKED', 'a breaking publication requires a valid revision strategy')
+    }
+    if (strategy !== undefined && previous !== undefined &&
+        ((strategy.kind === 'new_version' && input.version === previous.packRef.version) ||
+         (strategy.kind === 'keep_independent' && `${workspace.namespace}.${input.packId}` === previous.packRef.id) ||
+         (strategy.kind === 'retire_previous' && canonicalJson(strategy.supersedesRef) !== canonicalJson(previous.definition.ref)) ||
+         (strategy.supersedesRef !== undefined && canonicalJson(strategy.supersedesRef) !== canonicalJson(previous.definition.ref)))) {
+      throw new IndustryAssetPublicationError('VALIDATION_BLOCKED', 'revision strategy does not match the predecessor or the new publication identity')
+    }
     const publishedAt = this.#now()
 
     const { definition, asset } = assemblePack({
@@ -257,6 +295,8 @@ export class IndustryAssetPublicationService {
         scopeRef,
         {
           expectedRevision: expected,
+          approvalPins: approvals.pins,
+          ruleActionPins,
           definition,
           definitionAudit: publicationAudit(
             definition,
@@ -317,28 +357,17 @@ export class IndustryAssetPublicationService {
     return { id: set.exampleSetId, version: '1.0.0', digest: set.contentDigest, kind: 'dataset' }
   }
 
-  async #previousPublished(
-    scopeRef: ScopeRef,
-    namespace: string,
-    packId: string,
-    version: string,
-    ctx: ToolContext,
-  ): Promise<{ readonly definition: SemanticDefinitionRecord; readonly asset: PublishedPackAsset } | undefined> {
-    const published = await this.#deps.store.listPacks(scopeRef, { namespace, limit: DEFAULT_PAGE }, ctx)
-    const candidates = published
-      .filter((asset) => !(asset.packRef.id === packId && asset.packRef.version === version))
-      .sort((left, right) => (left.publishedAt < right.publishedAt ? 1 : left.publishedAt > right.publishedAt ? -1 : 0))
-    const prior = candidates[0]
-    if (prior === undefined) return undefined
-    const definitionVersion = await this.#deps.definitions.findVersion(
-      namespace,
-      prior.definitionRef.id,
-      prior.definitionRef.version,
-      scopeRef,
-      ctx,
-    )
-    if (definitionVersion === undefined) return undefined
-    return { definition: definitionRecordOf(definitionVersion), asset: prior }
+  async #previousPublished(scopeRef: ScopeRef, workspace: IndustryWorkspace, ctx: ToolContext): Promise<DefinitionPredecessor | undefined> {
+    const drafts = workspace.latestPublishedPackRef === undefined
+      ? await this.#deps.workspaces.listDrafts(scopeRef, workspace.workspaceId, ctx) : []
+    const draft = drafts.find((entry) => entry.revision === workspace.headRevision) ?? drafts.at(-1)
+    try {
+      return await resolveDefinitionPredecessor({ definitions: this.#deps.definitions, publishedPacks: this.#deps.store,
+        ...(this.#deps.baseCatalogue === undefined ? {} : { baseCatalogue: this.#deps.baseCatalogue }) }, workspace, draft, scopeRef, ctx)
+    } catch (error) {
+      if (error instanceof DefinitionPredecessorError) throw new IndustryAssetPublicationError('VALIDATION_STALE', error.message, { cause: error })
+      throw error
+    }
   }
 
   async #guardExisting(

@@ -3,6 +3,16 @@ import { createApiServer } from '@ontology/app-api'
 import type { AuthenticatedRequest } from '@ontology/app-api'
 import {
   InMemoryAssetCandidateStore,
+  InMemoryCandidateStore,
+  CompositeReviewableCandidateReader,
+  createPackPublicationGuard,
+  definitionApprovalPins,
+  currentDefinitionProjection,
+  diffDefinitionProjection,
+  industryValidationDigest,
+  currentRuleActionProjection,
+  ruleActionPublicationPins,
+  resolveDefinitionPredecessor,
   InMemoryIndustryValidationReportStore,
   InMemoryJobStore,
   InMemoryProjectReadinessStore,
@@ -19,7 +29,7 @@ import {
   IndustryValidationService,
 } from '@ontology/application'
 import type { IndustryPackUpgradeService } from '@ontology/application'
-import { InMemorySemanticDefinitionStore } from '@ontology/semantic-engine'
+import { InMemorySemanticDefinitionStore, InMemorySemanticPublicationStore } from '@ontology/semantic-engine'
 import { FiniteGrammarRuleSupportValidator, FiniteGrammarSyntheticEvaluator } from '@ontology/semantic-engine'
 import type {
   ActionDeclaration,
@@ -34,6 +44,8 @@ import type {
   ToolContext,
   Uuid,
   VersionRef,
+  IndustryWorkspace,
+  ScopeRef,
 } from '@ontology/contracts'
 import { WorkbenchClient } from '@ontology/app-web/client'
 import {
@@ -147,7 +159,8 @@ function actionCandidate(workspaceId: string): RuleActionCandidateVersion {
     payload: { kind: 'action', declaration: unboundDeclaration() },
     sourceRefs: [resourceRef()],
     sourceSpans: [],
-    lifecycle: 'draft',
+    lifecycle: 'enabled',
+    enabledAt: '2026-09-30T00:00:04Z',
     contentDigest: DIGEST,
     idempotencyKey: hex(randomUUID().replaceAll('-', '')),
     actor: 'e2e-owner',
@@ -314,15 +327,47 @@ export interface PackagePublishHarness {
   readonly close: () => Promise<void>
 }
 
+class PublicationWorkspaceStore extends InMemoryIndustryWorkspaceStore {
+  readonly publishedHeads = new Map<string, { revision: string; packRef: VersionRef }>()
+  override async getWorkspace(scope: ScopeRef, workspaceId: Uuid, ctx: ToolContext): Promise<IndustryWorkspace | undefined> {
+    const workspace = await super.getWorkspace(scope, workspaceId, ctx)
+    const head = this.publishedHeads.get(workspaceId)
+    return workspace === undefined || head === undefined ? workspace : { ...workspace, headRevision: head.revision, latestPublishedPackRef: head.packRef, state: 'published' }
+  }
+}
+
 export async function startPackagePublishHarness(): Promise<PackagePublishHarness> {
-  const workspaceStore = new InMemoryIndustryWorkspaceStore()
+  const workspaceStore = new PublicationWorkspaceStore()
   const jobStore = new InMemoryJobStore()
   const candidateStore = new InMemoryAssetCandidateStore()
   const ruleActionStore = new InMemoryRuleActionCandidateStore()
   const exampleSets = new InMemorySyntheticExampleSetStore()
   const reports = new InMemoryIndustryValidationReportStore()
   const definitions = new InMemorySemanticDefinitionStore()
-  const published = new InMemoryPublishedPackAssetStore({ definitions })
+  const reviews = new InMemorySemanticPublicationStore()
+  const reviewableCandidates = new CompositeReviewableCandidateReader({ definition: candidateStore, instance: new InMemoryCandidateStore() })
+  const callbacks: { refreshSemanticOnly?: () => Promise<void> } = {}
+  const published = new InMemoryPublishedPackAssetStore({ definitions,
+    publicationGuard: createPackPublicationGuard({ workspaces: workspaceStore, definitionCandidates: candidateStore, ruleActions: ruleActionStore, reviews, reviewableCandidates }),
+    onPublished: async (_scope, workspaceId, revision, packRef) => {
+      workspaceStore.publishedHeads.set(workspaceId, { revision, packRef })
+      await callbacks.refreshSemanticOnly?.()
+    },
+  })
+  const pinnedDefinition = async (workspaceId: Uuid): Promise<DefinitionValidationReport> => {
+    const ctx = workspaceTrustedContext(WORKSPACE_SCOPE_ALL_ROLES().split(','), 'e2e-owner')
+    const workspace = await workspaceStore.getWorkspace(WORKSPACE_SCOPE, workspaceId, ctx)
+    if (workspace === undefined) throw new Error('workspace not found')
+    const projection = currentDefinitionProjection(await candidateStore.listCandidates(WORKSPACE_SCOPE, workspaceId, { limit: 250 }, ctx))
+    const approved = await definitionApprovalPins(projection, WORKSPACE_SCOPE, ctx, reviewableCandidates, reviews)
+    const draft = (await workspaceStore.listDrafts(WORKSPACE_SCOPE, workspaceId, ctx)).at(-1)
+    const prior = await resolveDefinitionPredecessor({ definitions, publishedPacks: published }, workspace, draft, WORKSPACE_SCOPE, ctx)
+    const previous = prior?.definition
+    return { ...definitionValidationReport(workspaceId), revision: workspace.headRevision,
+      checkedCandidateIds: projection.map((candidate) => candidate.candidateId), approvalPins: approved.pins,
+      blockers: approved.blockers, publishable: approved.blockers.length === 0,
+      compatibility: diffDefinitionProjection(projection, previous, { workspaceId, revision: workspace.headRevision, ...(previous === undefined ? {} : { publishedRef: previous.ref }) }) }
+  }
 
   const workspaceService = new IndustryWorkspaceService({
     store: workspaceStore,
@@ -340,7 +385,7 @@ export async function startPackagePublishHarness(): Promise<PackagePublishHarnes
     workspaces: workspaceStore,
     exampleSets,
     reports,
-    definitions: { validateForPublication: async (input) => definitionValidationReport(input.workspaceId) },
+    definitions: { validateForPublication: async (input) => pinnedDefinition(input.workspaceId) },
     ruleActions: ruleActionStore,
     support: new FiniteGrammarRuleSupportValidator(),
     evaluator: new FiniteGrammarSyntheticEvaluator(),
@@ -348,6 +393,7 @@ export async function startPackagePublishHarness(): Promise<PackagePublishHarnes
     newId: () => randomUUID(),
   })
   const publication = new IndustryAssetPublicationService({
+    reviews, reviewableCandidates,
     workspaces: workspaceStore,
     validations: reports,
     definitionCandidates: candidateStore,
@@ -455,6 +501,8 @@ export async function startPackagePublishHarness(): Promise<PackagePublishHarnes
   ]
   const batch = candidateBatch(batchId, workspaceId, revision, draftDigest, candidates.length)
   await candidateStore.insertBatch(WORKSPACE_SCOPE, batch, candidates, ctx)
+  for (const candidate of candidates) await reviews.appendReview(WORKSPACE_SCOPE, { expectedRevision: '0', draft: { reviewId: randomUUID(), candidateId: candidate.candidateId,
+    contentDigest: candidate.contentDigest, decision: 'approve', reason: 'expert reviewed declaration', evidenceRefs: [], recordedAt: '2026-09-30T00:00:00Z', actor: 'expert' } }, ctx)
 
   await ruleActionStore.insert(WORKSPACE_SCOPE, actionCandidate(workspaceId), ctx)
 
@@ -466,7 +514,7 @@ export async function startPackagePublishHarness(): Promise<PackagePublishHarnes
     deploymentPassed: true,
     actionExecutable: true,
   })
-  const semanticOnly = validationReport(workspaceId, set.exampleSetId, {
+  let semanticOnly = validationReport(workspaceId, set.exampleSetId, {
     semanticPassed: true,
     deploymentPassed: false,
     actionExecutable: false,
@@ -478,9 +526,20 @@ export async function startPackagePublishHarness(): Promise<PackagePublishHarnes
     actionExecutable: false,
     missingCapabilities: ['pricing.compute'],
   })
-  await reports.insert(WORKSPACE_SCOPE, stable, ctx)
-  await reports.insert(WORKSPACE_SCOPE, semanticOnly, ctx)
-  await reports.insert(WORKSPACE_SCOPE, blocked, ctx)
+  const pinReport = async (report: IndustryValidationReport): Promise<IndustryValidationReport> => {
+    const current = currentRuleActionProjection(await ruleActionStore.list(WORKSPACE_SCOPE, workspaceId, {}, ctx))
+    const definition = await pinnedDefinition(workspaceId)
+    const pinned = { ...report, revision: definition.revision, definition, ruleActionPins: ruleActionPublicationPins(current),
+      actions: report.actions.map((result) => ({ ...result, candidateId: current.find((candidate) => candidate.logicalId === result.actionId)?.candidateId ?? result.candidateId })) }
+    return reports.insert(WORKSPACE_SCOPE, { ...pinned, contentDigest: industryValidationDigest(pinned) }, ctx)
+  }
+  await pinReport(stable)
+  semanticOnly = await pinReport(semanticOnly)
+  await pinReport(blocked)
+  callbacks.refreshSemanticOnly = async () => {
+    semanticOnly = await pinReport(validationReport(workspaceId, set.exampleSetId, { semanticPassed: true, deploymentPassed: false,
+      actionExecutable: false, missingCapabilities: ['pricing.compute'] }))
+  }
 
   const app = createApiServer({
     authenticate: packagePublishAuthenticator,
@@ -502,7 +561,7 @@ export async function startPackagePublishHarness(): Promise<PackagePublishHarnes
     workspaceId,
     exampleSetId: set.exampleSetId,
     stableValidationId: stable.validationId,
-    semanticOnlyValidationId: semanticOnly.validationId,
+    get semanticOnlyValidationId() { return semanticOnly.validationId },
     blockedValidationId: blocked.validationId,
     close: async () => {
       await app.close()
