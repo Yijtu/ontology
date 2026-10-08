@@ -1,4 +1,5 @@
 import { createElement } from 'react'
+import type { Root } from 'react-dom/client'
 import { createRoot } from 'react-dom/client'
 import { WorkbenchClient } from './api/client'
 import type { CoreDeploymentInfo } from './api/client'
@@ -6,6 +7,7 @@ import { App } from './components/App'
 import type { AppView, AppViewContribution } from './components/App'
 import { resolveWebDeployment } from './deployment'
 import type { WebDeployment } from './deployment'
+import { Button, Panel, StateFeedback } from './components/ui'
 import './styles.css'
 
 const baseUrl = import.meta.env.VITE_API_BASE_URL ?? ''
@@ -21,7 +23,7 @@ function initialView(params: URLSearchParams, scenarioViews: readonly AppViewCon
   return fallback
 }
 
-function mountApp(container: HTMLElement, input: {
+function mountApp(root: Root, input: {
   readonly deployment: WebDeployment
   readonly coreDeployment?: CoreDeploymentInfo
 }): void {
@@ -31,7 +33,6 @@ function mountApp(container: HTMLElement, input: {
   const candidateId = params.get('candidate') ?? undefined
   const evidenceId = params.get('evidence') ?? undefined
   const objectId = params.get('object') ?? undefined
-  const root = createRoot(container)
   root.render(
     createElement(App, {
       client,
@@ -58,34 +59,40 @@ function mountApp(container: HTMLElement, input: {
 async function startWeb(): Promise<void> {
   const container = document.getElementById('root')
   if (container === null) return
-  const params = new URLSearchParams(window.location.search)
-  const hasExplicitProfile = params.has('profileId') || params.has('profileVersion')
-  try {
-    if (hasExplicitProfile) {
-      const deployment = resolveWebDeployment(params)
-      mountApp(container, { deployment })
-      return
-    }
+  const root = createRoot(container)
+  async function attempt(): Promise<void> {
+    root.render(createElement('main', { className: 'app app--startup' }, createElement(Panel, { title: '本体工作台', children: createElement(StateFeedback, { tone: 'loading', title: '正在打开工作空间', description: '读取部署场景与访问能力，请稍候。' }) })))
+    const params = new URLSearchParams(window.location.search)
+    const hasExplicitProfile = params.has('profileId') || params.has('profileVersion')
+    try {
+      if (hasExplicitProfile && !params.has('scenarioId')) {
+        const deployment = resolveWebDeployment(params)
+        mountApp(root, { deployment })
+        return
+      }
 
-    const coreDeployment = await client.getCoreDeployment()
-    const requestedScenario = params.get('scenarioId')
-    const scenario = coreDeployment.scenarios.find((entry) => entry.scenarioId === requestedScenario) ?? coreDeployment.scenarios[0]
-    if (scenario === undefined) throw new Error('Core deployment contains no selectable scenarios')
-    const deployment: WebDeployment = {
-      profileRef: scenario.profileRef,
-      timeZone: params.get('timeZone') ?? Intl.DateTimeFormat().resolvedOptions().timeZone,
-      queryContextFields: [],
-      scenarioViews: [],
+      const coreDeployment = await client.getCoreDeployment()
+      const requestedScenario = params.get('scenarioId')
+      const scenario = coreDeployment.scenarios.find((entry) => entry.scenarioId === requestedScenario) ?? coreDeployment.scenarios[0]
+      if (scenario === undefined) throw new Error('Core deployment contains no selectable scenarios')
+      const deployment: WebDeployment = {
+        profileRef: hasExplicitProfile ? resolveWebDeployment(params).profileRef : scenario.profileRef,
+        timeZone: params.get('timeZone') ?? Intl.DateTimeFormat().resolvedOptions().timeZone,
+        queryContextFields: [],
+        scenarioViews: [],
+      }
+      mountApp(root, { deployment, coreDeployment })
+    } catch (error) {
+      const message = error instanceof Error ? error.message : 'unknown startup error'
+      root.render(createElement('main', { className: 'app app--startup' }, createElement(Panel, { title: '本体工作台', children:
+        createElement(StateFeedback, { tone: 'error', title: '工作空间暂不可用', description: '当前部署信息未能读取。确认服务可用后，重新打开工作空间。',
+          action: createElement(Button, { variant: 'primary', onClick: () => { void attempt() } }, '重新连接'),
+          children: createElement('details', null, createElement('summary', null, '查看技术详情'), createElement('p', null, message)),
+        }),
+      })))
     }
-    mountApp(container, { deployment, coreDeployment })
-  } catch (error) {
-    const message = error instanceof Error ? error.message : 'unknown startup error'
-    createRoot(container).render(createElement('main', { className: 'app app--startup-error', role: 'alert' },
-      createElement('h1', null, 'Core 部署暂不可用'),
-      createElement('p', null, '无法读取当前 API 的场景配置。请确认本地 Core API 已就绪，或提供完整的 profileId/profileVersion。'),
-      createElement('small', null, message),
-    ))
   }
+  await attempt()
 }
 
 void startWeb()

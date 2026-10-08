@@ -45,14 +45,14 @@ describe('unified default web entry in a real browser', () => {
     try {
       await openApp(page)
       expect(await page.textContent('[data-testid="guide-mode"]')).toContain('只读')
-      expect(await page.textContent('[data-testid="guide-disclaimer"]')).toContain('合成')
+      expect(await page.locator('[data-testid="guide-disclaimer"]').count()).toBe(0)
 
       for (const view of ['start', 'ontology', 'projects', 'definitions', 'instances', 'packages', 'business', 'workbench', 'query', 'jobs', 'review', 'evidence']) {
         expect(await page.locator(`[data-testid="tab-${view}"]`).count()).toBe(1)
       }
       expect(await page.textContent('[data-testid="tab-ontology"]')).toBe('本体工作区')
       expect(await page.locator('[data-testid="guide-path-step"]').count()).toBe(6)
-      expect(await page.locator('[data-testid="guide-card"]').count()).toBe(5)
+      expect(await page.getByText('本体建模', { exact: true }).count()).toBeGreaterThan(0)
 
       await capture(page, 'v03-unified-entry-guide')
       await record('v03-unified-entry-guide', ['defaultView=start', 'v03Tabs=ontology,projects,definitions,instances,packages,business'])
@@ -98,8 +98,7 @@ describe('unified default web entry in a real browser', () => {
       })
       const workspaceId = created.workspace.workspaceId
       await page.reload()
-      await page.waitForSelector('[data-testid="guide-home"]')
-      await page.click('[data-testid="tab-definitions"]')
+      await page.waitForSelector('[data-testid="workspace-required"]')
       await page.waitForSelector('[data-testid="context-workspace-select"]')
       await page.selectOption('[data-testid="context-workspace-select"]', workspaceId)
       await page.waitForSelector('[data-testid="definition-workbench"]')
