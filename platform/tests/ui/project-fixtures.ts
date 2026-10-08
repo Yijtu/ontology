@@ -1,4 +1,5 @@
 import { createHash, randomUUID } from 'node:crypto'
+import { controlledPublishedDatasetSource } from '../fixtures/controlled-published-dataset'
 import { createApiServer } from '@ontology/app-api'
 import type { AuthenticatedRequest, ProjectDocumentService } from '@ontology/app-api'
 import {
@@ -31,6 +32,7 @@ import type {
   NewProjectRecordVersion,
   PackAsset,
   ProjectDatasetQueryPort,
+  ProjectDatasetActivationReceipt,
   ProjectDatasetQueryRequest,
   ProjectDatasetQueryResult,
   ProjectDatasetRef,
@@ -485,10 +487,15 @@ interface StoredSnapshot {
 
 class InMemoryDatasetWriter implements ProjectDatasetWriterPort {
   readonly backend = 'memory'
+  readonly activations = new Map<string, ProjectDatasetActivationReceipt>()
   readonly #snapshots = new Map<string, StoredSnapshot>()
 
   snapshot(digest: string): StoredSnapshot | undefined {
     return this.#snapshots.get(digest)
+  }
+
+  async recordActivation(_scope: ScopeRef, receipt: ProjectDatasetActivationReceipt): Promise<void> {
+    if (!this.activations.has(receipt.snapshotRef.digest)) this.activations.set(receipt.snapshotRef.digest, receipt)
   }
 
   async stageSnapshot(
@@ -516,6 +523,8 @@ class InMemoryDatasetQuery implements ProjectDatasetQueryPort {
   constructor(writer: InMemoryDatasetWriter) {
     this.#writer = writer
   }
+
+  async getActivation(_scope: ScopeRef, ref: ProjectDatasetRef): Promise<ProjectDatasetActivationReceipt | undefined> { return this.#writer.activations.get(ref.digest) }
 
   async querySnapshot(
     _scopeRef: ScopeRef,
@@ -748,8 +757,7 @@ export async function startProjectHarness(): Promise<ProjectHarness> {
   const datasetWriter = new InMemoryDatasetWriter()
   const dataset = new ProjectDataMaterializationService({
     projects,
-    records,
-    mappings,
+    publishedSource: controlledPublishedDatasetSource(records, mappings),
     readiness,
     schemaSource,
     writer: datasetWriter,

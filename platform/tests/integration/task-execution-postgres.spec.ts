@@ -282,6 +282,8 @@ beforeAll(async () => {
     availableCapabilities: [capability('structured_query')],
     supportedResultSchemaRefs: [RESULT_SCHEMA_REF],
     effectiveLimitsRef: EFFECTIVE_LIMITS_REF,
+    // This suite exercises control archival; real business resolution is covered by Core task tests.
+    projectQuerySnapshot: async () => ({ ...approvedInputRef, kind: 'dataset' }),
     parameters: {
       validate: (schema, value) => {
         const required = Array.isArray((schema as { required?: unknown }).required)
@@ -362,6 +364,7 @@ describe('run execution binding preflight over real PostgreSQL', () => {
     const archived = await runBindingStore.getBindingByRun(scopeRefOf(scope), RUN_ID, ctxFor(scope))
     expect(archived?.ref.digest).toBe(resolution.executionBindingRef.digest)
     expect(archived?.binding.request.mode).toBe('task')
+    expect(archived?.binding.projectDatasetSnapshotRef).toEqual({ ...approvedInputRef, kind: 'dataset' })
     expect(archived?.binding.effectiveTime.asOfRecordedSeq).toBe('4')
     expect(archived?.binding.allowedTaskBindingRefs).toEqual([binding().taskBindingRef])
 

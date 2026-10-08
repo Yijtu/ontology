@@ -4,6 +4,8 @@ export type {
   ProjectSemanticQueryErrorOptions,
 } from './errors'
 export { ProjectSemanticQueryService } from './service'
+export { PublishedProjectDatasetSource } from './published-dataset'
+export type { PublishedProjectDatasetSourceOptions } from './published-dataset'
 export type {
   ProjectSemanticQueryRequest,
   ProjectSemanticQueryServiceDependencies,

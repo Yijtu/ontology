@@ -1,6 +1,10 @@
 import { exampleComputeArtifact } from './example-compute-artifact'
 import { createHash, randomUUID } from 'node:crypto'
 import { readFile } from 'node:fs/promises'
+import { join } from 'node:path'
+import { PostgresProjectDatasetAdapter } from '@ontology/adapter-data-postgres'
+import type { PostgresProjectDatasetConfig } from '@ontology/adapter-data-postgres'
+import { createCoreProjectQueryWorkflow } from './core-project-query-handler'
 import Ajv2020 from 'ajv/dist/2020.js'
 import addFormats from 'ajv-formats'
 import type { SchemaObject, ValidateFunction } from 'ajv'
@@ -174,7 +178,7 @@ import { DEFAULT_VERIFICATION_POLICY, RelationNavigationError, SCHEMA_DOCUMENTS,
 import { BudgetService, sha256DigestOf } from '@ontology/core'
 import { createRequestToolContext, createToolGatewayComposition, ForbiddenError, InvalidRequestFieldError } from '@ontology/app-api'
 import type { CoreApiDependencies } from '../core-main'
-import { FiniteGrammarRuleSupportValidator, FiniteGrammarSyntheticEvaluator, IdentityDecisionService, IncrementalMaterializer, InMemorySemanticMappingRegistry, MaterializedRuleDerivationEvidenceProducer, OntologyLookupService, PublishedFactsReferenceProvider, PublishedRelationNavigator, PublishedSemanticSource, SemanticDefinitionService, SemanticPublicationService } from '@ontology/semantic-engine'
+import { FiniteGrammarRuleSupportValidator, FiniteGrammarSyntheticEvaluator, IdentityDecisionService, IncrementalMaterializer, InMemorySemanticMappingRegistry, MaterializedRuleDerivationEvidenceProducer, OntologyLookupService, PublishedFactsReferenceProvider, PublishedRelationNavigator, PublishedSemanticSource, PublishedProjectDatasetSource, SemanticDefinitionService, SemanticPublicationService } from '@ontology/semantic-engine'
 import type {
   MaterializationPublishedSource,
   OntologyFactPage,
@@ -980,6 +984,8 @@ async function resolveScenarioProfile(
 export interface CoreLocalCompositionOptions {
   readonly databaseUrl: string
   readonly objectDirectory: string
+  /** Explicit independent business database writer/query credentials; omitted uses rebuildable DuckDB. */
+  readonly projectDataset?: PostgresProjectDatasetConfig
   readonly scopeRef: ScopeRef
   readonly examples: LoadedCoreExamples
   readonly allowLocalOperator?: boolean
@@ -1515,6 +1521,7 @@ export async function createCoreLocalComposition(options: CoreLocalCompositionOp
     const projectStore = new PostgresProjectStore(database)
     const projectReadinessStore = new PostgresProjectReadinessStore(database)
     const projectMappingStore = new PostgresProjectMappingStore(database)
+    const projectDocumentStore = new PostgresProjectDocumentStore(database)
     const projectRecordStore = new PostgresProjectRecordStore(database)
     const taskBindingStore = new PostgresPublishedTaskBindingStore(database)
     const taskInputSnapshotStore = new PostgresTaskInputSnapshotStore(database)
@@ -1581,6 +1588,26 @@ export async function createCoreLocalComposition(options: CoreLocalCompositionOp
     })
     const schemaSource = schemaSourceFor(options.examples.scenarios)
     const semanticDefinitions = new SemanticDefinitionService({ control, store: definitionStore })
+    const projectDatasetAdapter = options.projectDataset === undefined
+      ? new DuckDbProjectDatasetAdapter({ instancePath: join(options.objectDirectory, 'project-dataset.duckdb') })
+      : new PostgresProjectDatasetAdapter(options.projectDataset)
+    cleanup.unshift(async () => { await projectDatasetAdapter.close() })
+    const publishedProjectDatasetSource = new PublishedProjectDatasetSource({ publications: publicationStore, identity: identityStore,
+      records: projectRecordStore, mappings: projectMappingStore, projectDocuments: projectDocumentStore,
+      definition: async (scope, ref, ctx) => (await definitionStore.listVersions(scope, {}, ctx)).find((version) => sameVersionRef(version.ref, ref)),
+    })
+    const projectDatasetService = new ProjectDataMaterializationService({
+      projects: projectStore,
+      publishedSource: publishedProjectDatasetSource,
+      readiness: projectReadinessStore,
+      schemaSource,
+      writer: projectDatasetAdapter,
+      query: projectDatasetAdapter,
+    })
+    const projectQuery = createCoreProjectQueryWorkflow({ query: projectDatasetAdapter, publishedSource: publishedProjectDatasetSource,
+      projects: projectStore, readiness: projectReadinessStore, executionBindings: runExecutionBindingStore, taskBindings: taskBindingStore,
+      definition: async (scope, ref, ctx) => (await definitionStore.listVersions(scope, {}, ctx)).find((version) => sameVersionRef(version.ref, ref)),
+    })
     const profileValidatorImpl = profileValidator(createAjv())
     const industrySource = new StoreBackedIndustryManifestSource({
       store: publishedPackStore,
@@ -1642,7 +1669,6 @@ export async function createCoreLocalComposition(options: CoreLocalCompositionOp
     cleanup.unshift(async () => duckDb.close())
     const documentSpanReader = new DocumentSpanReader({ blobs: blobStore, store: parseStore })
     const documentSearch = new Bm25DocumentSearchService({ indexStore: keywordIndexStore, spanReader: documentSpanReader })
-    const projectDocumentStore = new PostgresProjectDocumentStore(database)
     const projectDocumentIndexService = new ProjectDocumentIndexService({
       store: projectDocumentStore,
       parseStore,
@@ -1725,7 +1751,7 @@ export async function createCoreLocalComposition(options: CoreLocalCompositionOp
       blobStore,
       budget,
       validator: toolSchemaValidator(createAjv()),
-      handlers: [ontologyLookupHandler, dataQueryHandler, documentSearchHandler],
+      handlers: [ontologyLookupHandler, projectQuery.handler(dataQueryHandler), documentSearchHandler],
     })
 
     const runProfileBinder = {
@@ -1749,6 +1775,7 @@ export async function createCoreLocalComposition(options: CoreLocalCompositionOp
       supportedResultSchemaRefs: [CORE_TYPED_RESULT_SCHEMA_REF],
       effectiveLimitsRef: CORE_EFFECTIVE_LIMITS_REF,
       parameters: taskParameterValidator(createAjv()),
+      projectQuerySnapshot: projectQuery.resolveForCreation,
     })
     const runs = new RunService({
       store: runStore,
@@ -1782,6 +1809,7 @@ export async function createCoreLocalComposition(options: CoreLocalCompositionOp
       executionBindings: runExecutionBindingStore,
       operations: operationRegistry(),
       decisionStateRefProvider,
+      projectQueryDescriptor: projectQuery.resolveExecution,
       isRouteClarificationReceiptApproved: (input, ctx) => decisionStateReferences.isApproved(scopeRef, input, ctx),
     })
     const templateRuntime = new TemplateRuntimeAdapter({ manifest: templateRuntimeRecord.manifest, plans: planResolver })
@@ -1927,7 +1955,10 @@ export async function createCoreLocalComposition(options: CoreLocalCompositionOp
           runContext,
           run.resolvedProfileHash,
         )
-        return workerContext(scopeRef, sourceRefsOf(scenario), runId, run.resolvedProfileHash, hostClock, await runAllowedCollectionRefs(runId, runContext))
+        const archived = await runExecutionBindingStore.getBindingByRun(scopeRef, runId, runContext)
+        const snapshotRef = archived?.binding.projectDatasetSnapshotRef
+        const sources = snapshotRef === undefined ? sourceRefsOf(scenario) : [projectQuery.sourceRef(snapshotRef.id)]
+        return workerContext(scopeRef, sources, runId, run.resolvedProfileHash, hostClock, await runAllowedCollectionRefs(runId, runContext))
       },
       onFenceChange(runId, fence) {
         if (fence === undefined) {
@@ -2258,17 +2289,6 @@ export async function createCoreLocalComposition(options: CoreLocalCompositionOp
         }
       },
     }
-    const projectDatasetAdapter = new DuckDbProjectDatasetAdapter()
-    cleanup.unshift(async () => projectDatasetAdapter.close())
-    const projectDatasetService = new ProjectDataMaterializationService({
-      projects: projectStore,
-      records: projectRecordStore,
-      mappings: projectMappingStore,
-      readiness: projectReadinessStore,
-      schemaSource,
-      writer: projectDatasetAdapter,
-      query: projectDatasetAdapter,
-    })
     const actionBindingContext = (): ActionCapabilityBindingInput => ({
       registry: operationRegistry(),
       availableCapabilities: ['agent_runtime', 'structured_query', 'document_search', 'industry.semantics'],

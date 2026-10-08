@@ -180,6 +180,11 @@ export async function startCoreApi(): Promise<void> {
       modelsEnabled: process.env['CORE_ENABLE_MODELS'] === 'true',
       jevEnabled: process.env['CORE_ENABLE_JEV'] === 'true',
       modelEnvironment: process.env,
+      ...(process.env['PROJECT_BUSINESS_DATABASE_URL'] === undefined ? {} : { projectDataset: {
+        connectionString: requiredEnv('PROJECT_BUSINESS_DATABASE_URL'),
+        ...(process.env['PROJECT_BUSINESS_READONLY_DATABASE_URL'] === undefined ? {} : { readOnlyConnectionString: requiredEnv('PROJECT_BUSINESS_READONLY_DATABASE_URL') }),
+        ...(process.env['PROJECT_BUSINESS_SCHEMA'] === undefined ? {} : { schema: requiredEnv('PROJECT_BUSINESS_SCHEMA') }),
+      } }),
     })
     app = createCoreApi({ ...composition.dependencies, logger: true })
     await app.listen({ host: '127.0.0.1', port: readPort(process.env['CORE_API_PORT']) })

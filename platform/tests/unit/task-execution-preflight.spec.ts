@@ -264,7 +264,7 @@ interface Harness {
   readonly taskBindings: FakeTaskBindingStore
 }
 
-function harness(overrides: Partial<RunExecutionPreflightDependencies> = {}): Harness {
+function harness(overrides: Partial<RunExecutionPreflightDependencies> = {}, withSnapshotResolver = true): Harness {
   const taskBindings = new FakeTaskBindingStore()
   taskBindings.add(binding())
   const runBindings = new FakeRunExecutionBindingStore()
@@ -279,6 +279,7 @@ function harness(overrides: Partial<RunExecutionPreflightDependencies> = {}): Ha
     availableCapabilities: [capability('structured_query')],
     supportedResultSchemaRefs: [RESULT_SCHEMA_REF],
     effectiveLimitsRef: EFFECTIVE_LIMITS_REF,
+    ...(withSnapshotResolver ? { projectQuerySnapshot: async () => ({ ...APPROVED_INPUT_REF, kind: 'dataset' as const }) } : {}),
     parameters: {
       validate: (schema, value) => {
         const required = Array.isArray((schema as { required?: unknown }).required)
@@ -387,6 +388,7 @@ describe('RunExecutionPreflightService.resolve', () => {
     expect(resolution.capability?.state).toBe('available')
     expect(resolution.binding.runId).toBe(RUN_ID)
     expect(resolution.binding.allowedTaskBindingRefs).toEqual([binding().taskBindingRef])
+    expect(resolution.binding.projectDatasetSnapshotRef).toEqual({ ...APPROVED_INPUT_REF, kind: 'dataset' })
     expect(resolution.binding.effectiveTime.asOfRecordedSeq).toBe('7')
     expect(resolution.executionBindingRef.id).toBe(RUN_ID)
     expect(runBindings.archived).toHaveLength(1)
@@ -514,6 +516,20 @@ describe('RunExecutionPreflightService.resolve', () => {
     expect(resolution.binding.allowedTaskBindingRefs).toEqual([])
     expect(runBindings.archived).toHaveLength(1)
   })
+  it('refuses a structured task when its official snapshot resolver is absent', async () => {
+    const { service, runBindings } = harness({}, false)
+    await expect(service.bindExecution(binderInput(taskRequest()), SCOPE_A, OWNER_A)).rejects.toMatchObject({ code: 'TASK_NOT_READY' })
+    expect(runBindings.archived).toEqual([])
+  })
+
+  it('refuses a structured task whose definition digest differs despite matching id/version', async () => {
+    const taskBindings = new FakeTaskBindingStore()
+    taskBindings.add(binding({ actionDefinitionRef: { ...binding().actionDefinitionRef, digest: DIGEST_B } }))
+    const { service, runBindings } = harness({ taskBindings })
+    await expect(service.bindExecution(binderInput(taskRequest()), SCOPE_A, OWNER_A)).rejects.toMatchObject({ code: 'TASK_NOT_READY' })
+    expect(runBindings.archived).toEqual([])
+  })
+
 })
 
 function readinessProjection(state: ReadinessProjection['state']): ReadinessProjection {

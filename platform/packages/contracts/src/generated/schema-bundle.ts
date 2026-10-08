@@ -7523,6 +7523,9 @@ export const SCHEMA_DOCUMENTS: readonly JsonSchemaObject[] = [
           },
           "effectiveTime": {
             "$ref": "#/$defs/EffectiveTime"
+          },
+          "projectDatasetSnapshotRef": {
+            "$ref": "./common.schema.json#/$defs/ResourceRef"
           }
         }
       },

@@ -1,460 +1,238 @@
 import { randomUUID } from 'node:crypto'
+import { mkdtemp, rm } from 'node:fs/promises'
+import { tmpdir } from 'node:os'
+import { join } from 'node:path'
 import { afterAll, beforeAll, describe, expect, it } from 'vitest'
-import {
-  ControlPostgresDatabase,
-  PostgresProjectMappingStore,
-  PostgresProjectReadinessStore,
-  PostgresProjectRecordStore,
-  PostgresProjectStore,
-} from '@ontology/adapter-control-postgres'
+import { FileSystemObjectStore, LocalImmutableBlobStore, PostgresArtifactRegistry } from '@ontology/adapter-blob-local'
+import { ControlPostgresDatabase } from '@ontology/adapter-control-postgres'
 import { DuckDbProjectDatasetAdapter } from '@ontology/adapter-data-duckdb'
 import { PostgresProjectDatasetAdapter } from '@ontology/adapter-data-postgres'
-import { PostgresStructuredIngestionStore, StructuredDocumentParser } from '@ontology/adapter-extraction-document'
-import {
-  InMemoryIndustrySchemaSource,
-  ProjectDataMaterializationService,
-  ProjectMappingService,
-} from '@ontology/application'
-import type { ProjectMappingServiceDependencies } from '@ontology/application'
-import type {
-  ColumnMappingEntry,
-  ColumnMappingRequest,
-  ImportMappingVersion,
-  IndustrySchema,
-  NewProjectRecordVersion,
-  ResourceRef,
-  ScopeRef,
-  StructuredParseRecord,
-  StructuredRecordEntry,
-  ToolContext,
-} from '@ontology/contracts'
+import { PostgresStructuredIngestionStore } from '@ontology/adapter-extraction-document'
+import { ProjectDataMaterializationService } from '@ontology/application'
+import type { ProjectDatasetQueryPort, ProjectDatasetWriterPort, SemanticDefinitionVersion } from '@ontology/contracts'
+import { definitionVersionDigest, ProjectSemanticQueryService, projectSnapshotMappingRef } from '@ontology/semantic-engine'
+import { createToolContext, projectDatasetSourceRef } from '@ontology/contracts'
 import { toolContext } from '../unit/component-registry-fixtures'
+import { relationDefinition } from '../unit/rule-relation-fixtures'
 import { createJobScope, startJobDatabase } from './job-postgres-harness'
-import type { JobDbHarness, JobTestScope } from './job-postgres-harness'
-
-const RECORDED_AT = '2026-09-30T00:00:00Z'
-const RUN_ID = '99999999-9999-4999-8999-999999999999'
-const PROJECT_A = '11111111-1111-4111-8111-111111111111'
-const PROJECT_B = '22222222-2222-4222-8222-222222222222'
-const PROJECT_C = '33333333-3333-4333-8333-333333333333'
-const PARSE_ID = '55555555-5555-4555-8555-555555555555'
-const BIG_PARSE_ID = '66666666-6666-4666-8666-666666666666'
-const RECORD_A = '33333333-3333-4333-8333-333333333333'
-const RECORD_B = '44444444-4444-4444-8444-444444444444'
-const DEFINITION_REF = { id: 'meter-definition', version: '1.0.0', digest: `sha256:${'e'.repeat(64)}` } as const
-const ORIGINAL_REF: ResourceRef = { id: '22222222-2222-4222-8222-222222222222', version: '1.0.0', digest: `sha256:${'b'.repeat(64)}`, kind: 'artifact' }
-const BIG_ORIGINAL_REF: ResourceRef = { id: 'abababab-abab-4bab-8bab-abababababab', version: '1.0.0', digest: `sha256:${'1'.repeat(64)}`, kind: 'artifact' }
-const CSV = 'device_id,value_wh,value_kwh\nd1,1005,1.005\nd2,2500,2.5\n'
-const MEDIA = 'text/csv'
-const BIG_ROW_COUNT = 1001
-const BIG_CSV = [
-  'device_id,value_wh,value_kwh',
-  ...Array.from({ length: BIG_ROW_COUNT }, (_unused, index) => {
-    const device = `bulk-${String(index).padStart(4, '0')}`
-    const wh = String(1000 + index)
-    return `${device},${wh},${(1000 + index) / 1000}`
-  }),
-].join('\n').concat('\n')
-
-function sha(seed: string): string {
-  return `sha256:${seed.repeat(64).slice(0, 64)}`
-}
-
-const parsedSource = new StructuredDocumentParser().parse(new TextEncoder().encode(CSV), { mediaType: MEDIA, headerRow: 1 })
-const table = parsedSource.tables[0]
-if (table === undefined) throw new Error('the CSV fixture did not parse')
-const sheetKey = table.sheetId ?? table.sheetName ?? 'sheet'
-const columnDigests = table.columns.map((column) => column.headerDigest)
-const rowKeys = table.rows.map((row) => `csv:${sheetKey}:row:${row.row}`)
-
-function schemaFor(): IndustrySchema {
-  return {
-    namespace: 'demo',
-    definitionRef: DEFINITION_REF,
-    objects: [
-      {
-        objectId: 'Meter',
-        displayName: 'Meter',
-        identityScopeId: 'meter-scope',
-        attributes: [
-          { attributeId: 'deviceId', valueType: 'string', minCardinality: 1, maxCardinality: 1, identityKey: true },
-          { attributeId: 'meterValue', valueType: 'quantity', minCardinality: 1, maxCardinality: 1, identityKey: false, unitCode: 'Wh', dimension: 'energy' },
-        ],
-      },
-    ],
-    relations: [],
-    identityScopes: [
-      { identityScopeId: 'meter-scope', objectId: 'Meter', scopeDimensions: ['site'], identityAttributeIds: ['deviceId'] },
-    ],
-  }
-}
-
-function revisionBody(projectId: string, revisionNumber: string): Record<string, unknown> {
-  return {
-    schemaVersion: 'project-revision@1',
-    projectId,
-    revision: revisionNumber,
-    industryPackRef: { id: 'demo-pack', version: '1.0.0', digest: sha('a') },
-    definitionRef: DEFINITION_REF,
-    mappingRefs: [
-      { id: 'seed-mapping', version: '1.0.0', digest: sha('c'), role: 'catalog', sourceObjectRef: { sourceRef: { namespace: 'test', sourceId: 'src' }, objectPath: 'Meter' } },
-    ],
-    profileRef: { id: 'profile-1', version: '1.0.0', snapshotHash: sha('f') },
-    documentSetRef: { id: randomUUID(), version: '1.0.0', digest: sha('d'), kind: 'artifact' },
-    semanticPublicationRefs: [DEFINITION_REF],
-    sourceVisibilityEpoch: '1',
-    changeReason: 'seed',
-  }
-}
-
-function mappingRequest(idColumn: number, valueColumn: number, valueHeader: string, sourceUnit: string, conversion?: { numerator: string; denominator: string }): ColumnMappingRequest {
-  const entries: ColumnMappingEntry[] = [
-    { fieldRef: 'deviceId', header: 'device_id', headerDigest: columnDigests[0] ?? sha('9'), columnIndex: idColumn },
-    {
-      fieldRef: 'meterValue',
-      header: valueHeader,
-      headerDigest: columnDigests[valueColumn] ?? sha('9'),
-      columnIndex: valueColumn,
-      sourceUnitCode: sourceUnit,
-      canonicalUnitCode: 'Wh',
-      ...(conversion === undefined ? {} : { unitConversion: { fromUnitCode: sourceUnit, toUnitCode: 'Wh', numerator: conversion.numerator, denominator: conversion.denominator } }),
-    },
-  ]
-  return {
-    format: 'csv',
-    parseId: PARSE_ID,
-    originalRef: ORIGINAL_REF,
-    originalMediaType: MEDIA,
-    options: { headerRow: 1 },
-    objectId: 'Meter',
-    entries,
-  }
-}
+import type { JobDbHarness } from './job-postgres-harness'
+import { seedIdentityProject } from './instance-identity-fixtures'
+import { projectQueryPublicationFixture } from './project-query-publication-fixtures'
 
 let harness: JobDbHarness
-let database: ControlPostgresDatabase
-let scope: JobTestScope
-let otherScope: JobTestScope
-let projectStore: PostgresProjectStore
-let readinessStore: PostgresProjectReadinessStore
-let mappingStore: PostgresProjectMappingStore
-let recordStore: PostgresProjectRecordStore
-let structuredStore: PostgresStructuredIngestionStore
-let mappingService: ProjectMappingService
-let duckAdapter: DuckDbProjectDatasetAdapter
-let datasetService: ProjectDataMaterializationService
-
-const editorCtx = (target: ScopeRef): ToolContext => toolContext(target.tenantId, target.spaceId, ['platform-admin', 'operator'], 'editor-1', RUN_ID)
-
-async function seedProject(projectId: string, target: ScopeRef): Promise<void> {
-  await harness.adminClient.query(
-    `INSERT INTO agent_platform.projects
-       (tenant_id, space_id, project_id, title, head_revision, state,
-        create_idempotency_key, create_request_digest, created_by, created_at, updated_at)
-     VALUES ($1, $2, $3, 'Meter project', 1, 'draft', $4, $5, 'editor-1', now(), now())`,
-    [target.tenantId, target.spaceId, projectId, `project-seed-${projectId}`, sha('2')],
-  )
-  await harness.adminClient.query(
-    `INSERT INTO agent_platform.project_revisions
-       (tenant_id, space_id, project_id, revision, digest, body, source_visibility_epoch, change_reason,
-        idempotency_key, request_digest, actor, recorded_at)
-     VALUES ($1, $2, $3, 1, $4, $5::jsonb, 1, 'seed', $6, $7, 'editor-1', $8::timestamptz)`,
-    [target.tenantId, target.spaceId, projectId, sha('1'), JSON.stringify(revisionBody(projectId, '1')), `revision-seed-${projectId}`, sha('3'), RECORDED_AT],
-  )
-}
-
+let db: ControlPostgresDatabase
+let structured: PostgresStructuredIngestionStore
+let registry: PostgresArtifactRegistry
+let blobs: LocalImmutableBlobStore
+let directory = ''
 beforeAll(async () => {
   harness = await startJobDatabase()
-  scope = await createJobScope(harness.adminClient, 'project-materialization')
-  otherScope = await createJobScope(harness.adminClient, 'project-materialization-other')
-  database = new ControlPostgresDatabase({ connectionString: harness.appUrl, maxPoolSize: 8 })
-  projectStore = new PostgresProjectStore(database)
-  readinessStore = new PostgresProjectReadinessStore(database)
-  mappingStore = new PostgresProjectMappingStore(database)
-  recordStore = new PostgresProjectRecordStore(database)
-  structuredStore = new PostgresStructuredIngestionStore({ connectionString: harness.appUrl, maxPoolSize: 4, applicationName: 'project-materialization-test' })
-
-  await seedProject(PROJECT_A, scope.scopeRef)
-  await seedProject(PROJECT_B, scope.scopeRef)
-  await seedProject(PROJECT_C, scope.scopeRef)
-
-  const parseRecord: StructuredParseRecord = {
-    parseId: PARSE_ID,
-    scopeRef: scope.scopeRef,
-    format: 'csv',
-    originalMediaType: MEDIA,
-    originalRef: ORIGINAL_REF,
-    parserId: 'ontology.structured-parser',
-    parserVersion: '1.0.0',
-    status: 'complete',
-    coverage: { status: 'complete', completeness: 'complete', totalUnits: 2, parsedUnits: 2, skippedUnits: 0, skippedReasons: [], notes: [] },
-    counts: { total: 2, succeeded: 2, pending: 0, failed: 0, skipped: 0 },
-    sheets: [],
-    diagnostics: [],
-    createdAt: RECORDED_AT,
-  }
-  const entries: StructuredRecordEntry[] = [
-    { recordId: RECORD_A, sourceRowKey: rowKeys[0] ?? '', recordIndex: 1, row: 2, state: 'parsed', locator: { kind: 'table_row', format: 'csv', recordIndex: 1, row: 2, columnFrom: 1, columnTo: 3, normalizationMapRef: 'map' }, rowDigest: sha('c'), columnCount: 3 },
-    { recordId: RECORD_B, sourceRowKey: rowKeys[1] ?? '', recordIndex: 2, row: 3, state: 'parsed', locator: { kind: 'table_row', format: 'csv', recordIndex: 2, row: 3, columnFrom: 1, columnTo: 3, normalizationMapRef: 'map' }, rowDigest: sha('d'), columnCount: 3 },
-  ]
-  await structuredStore.recordParse(parseRecord, entries, editorCtx(scope.scopeRef))
-
-  const bigParsed = new StructuredDocumentParser().parse(new TextEncoder().encode(BIG_CSV), { mediaType: MEDIA, headerRow: 1 })
-  const bigTable = bigParsed.tables[0]
-  if (bigTable === undefined) throw new Error('the bulk CSV fixture did not parse')
-  const bigSheetKey = bigTable.sheetId ?? bigTable.sheetName ?? 'sheet'
-  const bigParseRecord: StructuredParseRecord = {
-    ...parseRecord,
-    parseId: BIG_PARSE_ID,
-    originalRef: BIG_ORIGINAL_REF,
-    coverage: { status: 'complete', completeness: 'complete', totalUnits: BIG_ROW_COUNT, parsedUnits: BIG_ROW_COUNT, skippedUnits: 0, skippedReasons: [], notes: [] },
-    counts: { total: BIG_ROW_COUNT, succeeded: BIG_ROW_COUNT, pending: 0, failed: 0, skipped: 0 },
-  }
-  const bigEntries: StructuredRecordEntry[] = bigTable.rows.map((row, index) => ({
-    recordId: `c${String(index).padStart(7, '0')}-0000-4000-8000-000000000000`,
-    sourceRowKey: `csv:${bigSheetKey}:row:${row.row}`,
-    recordIndex: row.recordIndex,
-    row: row.row,
-    state: 'parsed',
-    locator: { kind: 'table_row', format: 'csv', recordIndex: row.recordIndex, row: row.row, columnFrom: 1, columnTo: 3, normalizationMapRef: 'map' },
-    rowDigest: sha('c'),
-    columnCount: 3,
-  }))
-  await structuredStore.recordParse(bigParseRecord, bigEntries, editorCtx(scope.scopeRef))
-
-  const dependencies: ProjectMappingServiceDependencies = {
-    projects: projectStore,
-    revisions: projectStore,
-    mappings: mappingStore,
-    records: recordStore,
-    ingestion: structuredStore,
-    schemaSource: new InMemoryIndustrySchemaSource([{ ref: DEFINITION_REF, schema: schemaFor() }]),
-    originals: {
-      read: async (request) =>
-        new TextEncoder().encode(
-          request.approvedInputRefs[0]?.id === BIG_ORIGINAL_REF.id ? BIG_CSV : CSV,
-        ),
-    },
-    parser: new StructuredDocumentParser(),
-  }
-  mappingService = new ProjectMappingService(dependencies)
-  duckAdapter = new DuckDbProjectDatasetAdapter()
-  datasetService = new ProjectDataMaterializationService({
-    projects: projectStore,
-    records: recordStore,
-    mappings: mappingStore,
-    readiness: readinessStore,
-    schemaSource: new InMemoryIndustrySchemaSource([{ ref: DEFINITION_REF, schema: schemaFor() }]),
-    writer: duckAdapter,
-    query: duckAdapter,
-  })
+  db = new ControlPostgresDatabase({ connectionString: harness.appUrl, maxPoolSize: 8 })
+  structured = new PostgresStructuredIngestionStore({ connectionString: harness.appUrl, maxPoolSize: 2 })
+  registry = new PostgresArtifactRegistry({ connectionString: harness.appUrl, maxPoolSize: 2 })
+  directory = await mkdtemp(join(tmpdir(), 'published-project-dataset-'))
+  const objects = new FileSystemObjectStore(directory)
+  await objects.init()
+  blobs = new LocalImmutableBlobStore({ objectStore: objects, registry })
 }, 300_000)
-
 afterAll(async () => {
-  duckAdapter?.close()
-  await structuredStore?.close().catch(() => undefined)
-  await database?.close().catch(() => undefined)
+  await structured?.close()
+  await registry?.close()
+  await db?.close()
+  if (directory !== '') await rm(directory, { recursive: true, force: true })
   await harness?.stop()
 })
 
-async function bind(projectId: string, request: ColumnMappingRequest, tag: string): Promise<{ mapping: ImportMappingVersion; records: readonly { recordId: string; fields: readonly { fieldId: string; normalized: unknown }[] }[] }> {
-  const ctx = editorCtx(scope.scopeRef)
-  const confirmed = await mappingService.confirmMapping(projectId, request, `map-${tag}-${projectId}`, 'editor-1', ctx)
-  const bound = await mappingService.bindRecords(projectId, { parseId: request.parseId, mappingId: confirmed.mapping.mappingId, mappingVersion: confirmed.mapping.version }, `bind-${tag}-${projectId}`, 'editor-1', ctx)
-  return { mapping: confirmed.mapping, records: bound.records }
+async function fixture(label: string, csv = 'device,power,on,reading,label\nM-1,12.000000000000001,true,9007199254740993,9007199254740993\nM-2,-0.000000000000001,false,-9007199254740994,000123\n', fieldIds: readonly string[] = ['meter_id', 'power', 'active', 'reading', 'label'], units: Parameters<ReturnType<typeof projectQueryPublicationFixture>['importCsv']>[3] = { power: 'kW' }) {
+  const scoped = await createJobScope(harness.adminClient, label)
+  const scope = scoped.scopeRef
+  const ctx = toolContext(scope.tenantId, scope.spaceId, ['platform-admin', 'operator', 'profile-editor', 'semantic-reviewer', 'semantic-publisher'])
+  const projectId = randomUUID()
+  const base = relationDefinition(scope)
+  const extended = { ...base, attributes: [...base.attributes,
+    { namespace: base.namespace, standardProvenance: [], kind: 'attribute' as const, id: 'reading', objectId: 'meter', valueType: 'number' as const, cardinality: { min: 1, max: 1 } },
+    { namespace: base.namespace, standardProvenance: [], kind: 'attribute' as const, id: 'label', objectId: 'meter', valueType: 'string' as const, cardinality: { min: 1, max: 1 } },
+  ] }
+  const definition: SemanticDefinitionVersion = { ...extended, ref: { ...base.ref, digest: definitionVersionDigest(extended) } }
+  await seedIdentityProject(harness.adminClient, scope, projectId, definition.ref)
+  const publication = projectQueryPublicationFixture({ db, blobs, structured, scope, ctx, projectId, definition })
+  const source = await publication.importCsv('meter', csv, fieldIds, units)
+  return { ...publication, source, scope, ctx, projectId, definition }
+}
+type Fixture = Awaited<ReturnType<typeof fixture>>
+function service(p: Fixture, backend: ProjectDatasetQueryPort & ProjectDatasetWriterPort) {
+  return new ProjectDataMaterializationService({ projects: p.projects, publishedSource: p.publishedSource, readiness: p.readiness, schemaSource: p.schemas, writer: backend, query: backend })
 }
 
-describe('project dataset materialisation (real control PostgreSQL + DuckDB business backend)', () => {
-  it('materialises two client mappings of the same data into semantically identical canonical snapshots', async () => {
-    const boundA = await bind(PROJECT_A, mappingRequest(0, 1, 'value_wh', 'Wh'), 'a')
-    const boundB = await bind(PROJECT_B, mappingRequest(0, 2, 'value_kwh', 'kWh', { numerator: '1000', denominator: '1' }), 'b')
-
-    const valuesA = boundA.records.map((record) => record.fields.find((field) => field.fieldId === 'meterValue')?.normalized)
-    const valuesB = boundB.records.map((record) => record.fields.find((field) => field.fieldId === 'meterValue')?.normalized)
-    expect(valuesA).toEqual(valuesB)
-    expect(valuesA).toEqual([
-      { kind: 'quantity', value: '1005', unitCode: 'Wh' },
-      { kind: 'quantity', value: '2500', unitCode: 'Wh' },
-    ])
-
-    const ctx = editorCtx(scope.scopeRef)
-    const statusA = await datasetService.materialize(PROJECT_A, { objectId: 'Meter' }, ctx)
-    const statusB = await datasetService.materialize(PROJECT_B, { objectId: 'Meter' }, ctx)
-    expect(statusA.state).toBe('ready')
-    expect(statusB.state).toBe('ready')
-    expect(statusA.coverage).toMatchObject({ expectedCount: 2, processedCount: 2, completeness: 'complete' })
-    // Same business data via different client column names/units => the same canonical digest.
-    expect(statusB.snapshotRef?.digest).toBe(statusA.snapshotRef?.digest)
-
-    const readA = await datasetService.queryActive({ projectId: PROJECT_A }, ctx)
-    const readB = await datasetService.queryActive({ projectId: PROJECT_B }, ctx)
-    expect(readA.rows.map((row) => row.values['meterValue'])).toEqual(readB.rows.map((row) => row.values['meterValue']))
-
-    // Each row's source locates the actual physical cell it was read from.
-    const sourceA = readA.rows.find((row) => row.recordId === RECORD_A)?.sources.find((source) => source.fieldId === 'meterValue')
-    const sourceB = readB.rows.find((row) => row.recordId === RECORD_A)?.sources.find((source) => source.fieldId === 'meterValue')
-    expect(sourceA).toMatchObject({ documentRef: ORIGINAL_REF, parseId: PARSE_ID })
-    expect(sourceB).toMatchObject({ documentRef: ORIGINAL_REF, parseId: PARSE_ID })
-    expect(sourceA?.locator).toMatchObject({ kind: 'table_cell', column: 2, row: 2 })
-    expect(sourceB?.locator).toMatchObject({ kind: 'table_cell', column: 3, row: 2 })
-  }, 60_000)
-
-  it('reports SNAPSHOT_UNAVAILABLE for an unactivated snapshot, a restarted backend, and another scope', async () => {
-    const ctx = editorCtx(scope.scopeRef)
-    const status = await datasetService.materialize(PROJECT_A, { objectId: 'Meter' }, ctx)
-    const foreign = { ...status.snapshotRef!, id: '99999999-9999-4999-8999-999999999999' }
-    await expect(
-      datasetService.query({ projectRevisionRef: status.projectRevisionRef, snapshotRef: foreign }, ctx),
-    ).rejects.toMatchObject({ code: 'SNAPSHOT_UNAVAILABLE', httpStatus: 409 })
-
-    // A fresh in-process backend (a restart) has lost the staged snapshot: readiness is `ready`
-    // but the pinned data is gone, so the reader must not fall back to any other dataset.
-    const restarted = new DuckDbProjectDatasetAdapter()
-    const restartedService = new ProjectDataMaterializationService({
-      projects: projectStore,
-      records: recordStore,
-      mappings: mappingStore,
-      readiness: readinessStore,
-      schemaSource: new InMemoryIndustrySchemaSource([{ ref: DEFINITION_REF, schema: schemaFor() }]),
-      writer: restarted,
-      query: restarted,
-    })
+describe('official published facts → fixed project dataset (real control PG and business backends)', () => {
+  it('keeps field-confirmed/staged records out of the dataset until human identity, review and publication complete', async () => {
+    const p = await fixture('query-official')
+    const backend = new DuckDbProjectDatasetAdapter()
     try {
-      await expect(restartedService.queryActive({ projectId: PROJECT_A }, ctx)).rejects.toMatchObject({ code: 'SNAPSHOT_UNAVAILABLE' })
-    } finally {
-      restarted.close()
-    }
-
-    await expect(datasetService.queryActive({ projectId: PROJECT_A }, editorCtx(otherScope.scopeRef))).rejects.toMatchObject({
-      code: 'PROJECT_NOT_FOUND',
-    })
-  }, 60_000)
-
-  it('blocks an unconfirmed record until a partial snapshot is explicitly allowed', async () => {
-    const ctx = editorCtx(scope.scopeRef)
-    const pending: NewProjectRecordVersion = {
-      schemaVersion: 'project-record@1',
-      projectId: PROJECT_A,
-      recordId: 'aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa',
-      mappingId: (await mappingService.listMappings(PROJECT_A, ctx))[0]!.mappingId,
-      mappingVersion: '1.0.0',
-      objectId: 'Meter',
-      sourceRowKey: 'csv:sheet:row:99',
-      sourceDigest: sha('9'),
-      contentDigest: sha('8'),
-      fields: [
-        { fieldId: 'deviceId', raw: 'd9', normalized: { kind: 'scalar', value: 'd9' }, status: 'confirmed', locator: { kind: 'table_cell', format: 'csv', recordIndex: 9, row: 99, column: 1, normalizationMapRef: 'map' } },
-        { fieldId: 'meterValue', raw: '10', normalized: { kind: 'scalar', value: '10' }, status: 'pending', reason: 'MISSING_UNIT', locator: { kind: 'table_cell', format: 'csv', recordIndex: 9, row: 99, column: 2, normalizationMapRef: 'map' } },
-      ],
-      status: 'pending',
-      actor: 'editor-1',
-      recordedAt: RECORDED_AT,
-    }
-    await recordStore.appendRecords(scope.scopeRef, PROJECT_A, [pending], { idempotencyKey: `pending-${PROJECT_A}`, requestDigest: sha('7') }, ctx)
-    await expect(datasetService.materialize(PROJECT_A, { objectId: 'Meter' }, ctx)).rejects.toMatchObject({ code: 'INPUT_NOT_READY' })
-  }, 60_000)
-
-  it('freezes a fixed revision and keeps the historical snapshot readable after an incremental change', async () => {
-    const ctx = editorCtx(scope.scopeRef)
-    const before = await datasetService.materialize(PROJECT_B, { objectId: 'Meter' }, ctx)
-    const beforeRead = await datasetService.query({ projectRevisionRef: before.projectRevisionRef, snapshotRef: before.snapshotRef! }, ctx)
-    const original = beforeRead.rows.find((row) => row.recordId === RECORD_A)?.values['meterValue']
-    expect(original).toEqual({ kind: 'quantity', value: '1005', unitCode: 'Wh' })
-
-    const base = (await recordStore.listRecords(scope.scopeRef, PROJECT_B, { objectId: 'Meter', limit: 1 }, ctx)).records[0]!
-    const corrected: NewProjectRecordVersion = {
-      ...base,
-      contentDigest: sha('5'),
-      fields: base.fields.map((field) => field.fieldId === 'meterValue'
-        ? { ...field, raw: '9999', normalized: { kind: 'quantity' as const, value: '9999', unitCode: 'Wh' } }
-        : field),
-    }
-    await recordStore.appendRecords(scope.scopeRef, PROJECT_B, [corrected], { idempotencyKey: `correct-${PROJECT_B}`, requestDigest: sha('6') }, ctx)
-
-    await harness.adminClient.query(
-      `INSERT INTO agent_platform.project_revisions
-         (tenant_id, space_id, project_id, revision, digest, body, source_visibility_epoch, change_reason,
-          idempotency_key, request_digest, actor, recorded_at)
-       VALUES ($1, $2, $3, 2, $4, $5::jsonb, 1, 'field corrected', $6, $7, 'editor-1', $8::timestamptz)`,
-      [scope.tenantId, scope.spaceId, PROJECT_B, sha('4'), JSON.stringify(revisionBody(PROJECT_B, '2')), `revision-2-${PROJECT_B}`, sha('5'), RECORDED_AT],
-    )
-    await harness.adminClient.query(
-      `UPDATE agent_platform.projects SET head_revision = 2, updated_at = now() WHERE tenant_id = $1 AND space_id = $2 AND project_id = $3`,
-      [scope.tenantId, scope.spaceId, PROJECT_B],
-    )
-
-    const after = await datasetService.materialize(PROJECT_B, { objectId: 'Meter' }, ctx)
-    expect(after.projectRevisionRef.revision).toBe('2')
-    const afterRead = await datasetService.query({ projectRevisionRef: after.projectRevisionRef, snapshotRef: after.snapshotRef! }, ctx)
-    expect(afterRead.rows.find((row) => row.recordId === RECORD_A)?.values['meterValue']).toEqual({ kind: 'quantity', value: '9999', unitCode: 'Wh' })
-
-    // The earlier revision's pinned snapshot is still readable and still shows the old value.
-    const historical = await datasetService.query({ projectRevisionRef: before.projectRevisionRef, snapshotRef: before.snapshotRef! }, ctx)
-    expect(historical.rows.find((row) => row.recordId === RECORD_A)?.values['meterValue']).toEqual(original)
-    expect(after.snapshotRef?.id).not.toBe(before.snapshotRef?.id)
-  }, 60_000)
-
-  it('materialises 1001 approved rows with bounded paging under one fixed revision', async () => {
-    const ctx = editorCtx(scope.scopeRef)
-    const parsed = new StructuredDocumentParser().parse(new TextEncoder().encode(BIG_CSV), { mediaType: MEDIA, headerRow: 1 })
-    const parsedTable = parsed.tables[0]
-    if (parsedTable === undefined) throw new Error('the bulk CSV fixture did not parse')
-    const digests = parsedTable.columns.map((column) => column.headerDigest)
-    const request: ColumnMappingRequest = {
-      format: 'csv',
-      parseId: BIG_PARSE_ID,
-      originalRef: BIG_ORIGINAL_REF,
-      originalMediaType: MEDIA,
-      options: { headerRow: 1 },
-      objectId: 'Meter',
-      entries: [
-        { fieldRef: 'deviceId', header: 'device_id', headerDigest: digests[0] ?? sha('9'), columnIndex: 0 },
-        { fieldRef: 'meterValue', header: 'value_wh', headerDigest: digests[1] ?? sha('9'), columnIndex: 1, sourceUnitCode: 'Wh', canonicalUnitCode: 'Wh' },
-      ],
-    }
-    await bind(PROJECT_C, request, 'c')
-    const status = await datasetService.materialize(PROJECT_C, { objectId: 'Meter' }, ctx)
-    expect(status.coverage).toMatchObject({ expectedCount: BIG_ROW_COUNT, processedCount: BIG_ROW_COUNT, completeness: 'complete' })
-
-    let cursor: string | undefined
-    let total = 0
-    for (;;) {
-      const page = await datasetService.queryActive(
-        { projectId: PROJECT_C, limit: 250, ...(cursor === undefined ? {} : { cursor }) },
-        ctx,
-      )
-      total += page.rows.length
-      expect(page.coverage.truncated).toBe(total < BIG_ROW_COUNT)
-      cursor = page.coverage.cursor
-      if (cursor === undefined) break
-    }
-    expect(total).toBe(BIG_ROW_COUNT)
+      const materializer = service(p, backend)
+      await expect(materializer.materialize(p.projectId, { objectId: 'meter' }, p.ctx)).rejects.toMatchObject({ code: 'INPUT_NOT_READY' })
+      await p.approveAndPublish(p.source)
+      const status = await materializer.materialize(p.projectId, { objectId: 'meter' }, p.ctx)
+      const result = await materializer.query({ projectRevisionRef: status.projectRevisionRef, snapshotRef: status.snapshotRef! }, p.ctx)
+      expect(result.rows).toHaveLength(2)
+      expect(result.rows.map((row) => row.values['reading']?.value).sort()).toEqual(['-9007199254740994', '9007199254740993'])
+      expect(result.rows.find((row) => row.values['meter_id']?.value === 'M-1')?.values['power']).toEqual({ kind: 'quantity', value: '12.000000000000001', unitCode: 'kW' })
+      const descriptor = await backend.describeSnapshot(p.scope, status.snapshotRef!, p.ctx)
+      expect(descriptor?.metadata?.body).toMatchObject({ projectRevisionRef: status.projectRevisionRef, definitionRef: p.definition.ref, factRecordedPoint: { semantic: expect.any(String), identity: expect.any(String) }, sourceDigest: expect.stringMatching(/^sha256:/) })
+      const cell = result.rows.find((row) => row.values['meter_id']?.value === 'M-1')?.sources.find((source) => source.fieldId === 'power')
+      expect(cell).toMatchObject({ parseId: p.source.mapping.parseId, documentRef: p.source.mapping.originalRef, locator: { kind: 'table_cell', row: 2, column: 2 }, factSource: { projectRevisionRef: status.projectRevisionRef, mappingRef: p.source.mapping.ref }, statementVersion: '1' })
+      const replay = await materializer.materialize(p.projectId, { objectId: 'meter' }, p.ctx)
+      expect(replay.snapshotRef).toEqual(status.snapshotRef)
+    } finally { backend.close() }
   }, 120_000)
 
-  it('materialises the same dataset through the PostgreSQL business backend', async () => {
-    const ctx = editorCtx(scope.scopeRef)
-    const pgAdapter = new PostgresProjectDatasetAdapter({
-      connectionString: harness.adminUrl,
-      schema: 'project_dataset_business_test',
-      applicationName: 'project-materialization-pg-test',
-    })
+  it('uses scoped project identity and refuses foreign, missing and changed-version snapshots', async () => {
+    const p = await fixture('query-scope')
+    await p.approveAndPublish(p.source)
+    const backend = new DuckDbProjectDatasetAdapter()
     try {
-      const pgService = new ProjectDataMaterializationService({
-        projects: projectStore,
-        records: recordStore,
-        mappings: mappingStore,
-        readiness: readinessStore,
-        schemaSource: new InMemoryIndustrySchemaSource([{ ref: DEFINITION_REF, schema: schemaFor() }]),
-        writer: pgAdapter,
-        query: pgAdapter,
-      })
-      const status = await pgService.materialize(PROJECT_B, { objectId: 'Meter', revision: '2' }, ctx)
-      const read = await pgService.query({ projectRevisionRef: status.projectRevisionRef, snapshotRef: status.snapshotRef! }, ctx)
-      expect(read.rows.length).toBeGreaterThanOrEqual(2)
-      const source = read.rows.find((row) => row.recordId === RECORD_A)?.sources[0]
-      expect(source).toMatchObject({ documentRef: ORIGINAL_REF, parseId: PARSE_ID })
-    } finally {
-      await pgAdapter.close()
+      const materializer = service(p, backend)
+      const status = await materializer.materialize(p.projectId, { objectId: 'meter' }, p.ctx)
+      await expect(materializer.query({ projectRevisionRef: status.projectRevisionRef, snapshotRef: { ...status.snapshotRef!, id: randomUUID() } }, p.ctx)).rejects.toMatchObject({ code: 'SNAPSHOT_UNAVAILABLE' })
+      expect(await backend.describeSnapshot(p.scope, { ...status.snapshotRef!, version: '99.0.0' }, p.ctx)).toBeUndefined()
+      const other = await createJobScope(harness.adminClient, 'query-foreign')
+      const foreign = toolContext(other.tenantId, other.spaceId, ['operator'])
+      await expect(backend.describeSnapshot(p.scope, status.snapshotRef!, foreign)).rejects.toMatchObject({ code: 'SCOPE_MISMATCH' })
+      expect(await backend.describeSnapshot(other.scopeRef, status.snapshotRef!, foreign)).toBeUndefined()
+      await expect(materializer.queryActive({ projectId: randomUUID() }, p.ctx)).rejects.toMatchObject({ code: 'PROJECT_NOT_FOUND' })
+    } finally { backend.close() }
+  }, 120_000)
+
+  it('keeps history fixed after a new real input is published, and never substitutes the latest snapshot', async () => {
+    const p = await fixture('query-history')
+    await p.approveAndPublish(p.source)
+    const backend = new DuckDbProjectDatasetAdapter()
+    try {
+      const materializer = service(p, backend)
+      const old = await materializer.materialize(p.projectId, { objectId: 'meter' }, p.ctx)
+      const original = await materializer.query({ projectRevisionRef: old.projectRevisionRef, snapshotRef: old.snapshotRef! }, p.ctx)
+      const changed = await p.importCsv('meter', 'device,power,on,reading,label\nM-3,99.000000000000001,true,9007199254740995,000789\n', ['meter_id', 'power', 'active', 'reading', 'label'], { power: 'kW' })
+      await p.approveAndPublish(changed)
+      const current = await materializer.materialize(p.projectId, { objectId: 'meter' }, p.ctx)
+      expect(current.snapshotRef).not.toEqual(old.snapshotRef)
+      expect((await materializer.queryActive({ projectId: p.projectId }, p.ctx)).rows[0]?.values['reading']?.value).toBe('9007199254740995')
+      expect((await materializer.query({ projectRevisionRef: old.projectRevisionRef, snapshotRef: old.snapshotRef! }, p.ctx)).rows).toEqual(original.rows)
+    } finally { backend.close() }
+  }, 120_000)
+
+  it('reads the same ready historical PG and DuckDB snapshots after restart', async () => {
+    const p = await fixture('query-restart')
+    await p.approveAndPublish(p.source)
+    const path = join(directory, `${randomUUID()}.duckdb`)
+    let canonicalRows: Awaited<ReturnType<ProjectDatasetQueryPort['querySnapshot']>>['rows'] | undefined
+    for (const kind of ['duckdb', 'postgres'] as const) {
+      const options = { connectionString: harness.adminUrl, schema: `business_${randomUUID().replaceAll('-', '')}` }
+      const first = kind === 'duckdb' ? new DuckDbProjectDatasetAdapter({ instancePath: path }) : new PostgresProjectDatasetAdapter(options)
+      const status = await service(p, first).materialize(p.projectId, { objectId: 'meter' }, p.ctx)
+      const before = await first.querySnapshot(p.scope, { snapshotRef: status.snapshotRef! }, p.ctx)
+      if (canonicalRows === undefined) canonicalRows = before.rows
+      else expect(before.rows).toEqual(canonicalRows)
+      await first.close()
+      const restarted = kind === 'duckdb' ? new DuckDbProjectDatasetAdapter({ instancePath: path }) : new PostgresProjectDatasetAdapter(options)
+      try {
+        expect((await restarted.describeSnapshot(p.scope, status.snapshotRef!, p.ctx))?.metadata?.snapshotRef).toEqual(status.snapshotRef)
+        expect((await service(p, restarted).query({ projectRevisionRef: status.projectRevisionRef, snapshotRef: status.snapshotRef! }, p.ctx)).rows).toEqual(before.rows)
+      } finally { await restarted.close() }
     }
-  }, 60_000)
+  }, 120_000)
+
+  it('refuses withdrawn sources and a mutated definition when building a new projection', async () => {
+    const p = await fixture('query-withdrawn')
+    await p.approveAndPublish(p.source)
+    const backend = new DuckDbProjectDatasetAdapter()
+    try {
+      const materializer = service(p, backend)
+      const pinned = await materializer.materialize(p.projectId, { objectId: 'meter' }, p.ctx)
+      await p.documents.reviseDocument(p.scope, p.projectId, { documentId: p.source.documentId, op: 'retract', reason: 'human withdrew source', actor: p.ctx.principal.subjectId, recordedAt: new Date().toISOString() }, p.ctx)
+      await expect(materializer.materialize(p.projectId, { objectId: 'meter' }, p.ctx)).rejects.toMatchObject({ code: 'INPUT_NOT_READY' })
+      expect((await materializer.query({ projectRevisionRef: pinned.projectRevisionRef, snapshotRef: pinned.snapshotRef! }, p.ctx)).rows).toHaveLength(2)
+      const revision = await p.projects.getRevision(p.scope, p.projectId, pinned.projectRevisionRef.revision, p.ctx)
+      if (revision === undefined) throw new Error('missing pinned revision')
+      p.replaceReadDefinition({ ...p.definition, attributes: [...p.definition.attributes, { ...p.definition.attributes[0]!, id: 'tampered_attribute' }] })
+      await expect(p.publishedSource.read(p.scope, revision, 'meter', p.ctx)).rejects.toMatchObject({ code: 'INPUT_NOT_READY' })
+    } finally { backend.close() }
+  }, 120_000)
+  it('materializes and pages 1001 actually mapped, human-approved and published rows on both business backends', async () => {
+    const csv = ['device,power,on,reading,label', ...Array.from({ length: 1001 }, (_unused, index) =>
+      `bulk-${String(index).padStart(4, '0')},12.000000000000001,true,${index % 2 === 0 ? '9007199254740993' : '-9007199254740994'},000123`)].join('\n') + '\n'
+    const p = await fixture('query-official-1001', csv)
+    expect(p.source.records).toHaveLength(1001)
+    expect(p.source.entities).toHaveLength(1001)
+    await p.approveAndPublish(p.source)
+    expect(await p.publications.latestPublicationRevision(p.scope, p.ctx)).toBe('6')
+    const business = new PostgresProjectDatasetAdapter({ connectionString: harness.adminUrl, schema: `bulk_business_${randomUUID().replaceAll('-', '')}` })
+    const duck = new DuckDbProjectDatasetAdapter()
+    let canonicalRows: Awaited<ReturnType<ProjectDatasetQueryPort['querySnapshot']>>['rows'] | undefined
+    try {
+      for (const backend of [duck, business]) {
+        const materializer = service(p, backend)
+        const status = await materializer.materialize(p.projectId, { objectId: 'meter' }, p.ctx)
+        expect(status.coverage).toMatchObject({ expectedCount: 1001, processedCount: 1001, completeness: 'complete' })
+        const rows = []
+        let cursor: string | undefined
+        do {
+          const page = await materializer.query({ projectRevisionRef: status.projectRevisionRef, snapshotRef: status.snapshotRef!, limit: 250, ...(cursor === undefined ? {} : { cursor }) }, p.ctx)
+          rows.push(...page.rows)
+          expect(page.rows.length).toBeLessThanOrEqual(250)
+          expect(page.coverage.truncated).toBe(rows.length < 1001)
+          cursor = page.coverage.cursor
+        } while (cursor !== undefined)
+        expect(rows).toHaveLength(1001)
+        expect(new Set(rows.map((row) => row.recordId)).size).toBe(1001)
+        const last = rows.find((row) => row.values['meter_id']?.value === 'bulk-1000')
+        expect(last?.values['reading']).toEqual({ kind: 'scalar', value: '9007199254740993' })
+        expect(last?.values['label']).toEqual({ kind: 'scalar', value: '000123' })
+        expect(last?.values['power']).toEqual({ kind: 'quantity', value: '12.000000000000001', unitCode: 'kW' })
+        expect(last?.sources.find((source) => source.fieldId === 'power')).toMatchObject({ statementVersion: '1', locator: { kind: 'table_cell', row: 1002, column: 2 }, factSource: { projectRevisionRef: status.projectRevisionRef, recordId: last?.recordId } })
+        if (canonicalRows === undefined) canonicalRows = rows
+        else expect(rows).toEqual(canonicalRows)
+      }
+    } finally { duck.close(); await business.close() }
+  }, 300_000)
+
+  it('projects two actual client column/unit mappings to equal semantics with distinct exact cell origins', async () => {
+    const a = await fixture('query-client-watts', 'device_label,watts,on,reading,label\nM-1,12000.000000000001,true,9007199254740993,000123\n', ['meter_id', 'power', 'active', 'reading', 'label'], { power: { source: 'W', canonical: 'kW', numerator: '1', denominator: '1000' } })
+    const b = await fixture('query-client-kilowatts', 'kilowatts,code,enabled,number,text\n12.000000000000001,M-1,true,9007199254740993,000123\n', ['power', 'meter_id', 'active', 'reading', 'label'], { power: 'kW' })
+    await a.approveAndPublish(a.source)
+    await b.approveAndPublish(b.source)
+    const backendA = new DuckDbProjectDatasetAdapter()
+    const backendB = new PostgresProjectDatasetAdapter({ connectionString: harness.adminUrl, schema: `client_business_${randomUUID().replaceAll('-', '')}` })
+    try {
+      const statusA = await service(a, backendA).materialize(a.projectId, { objectId: 'meter' }, a.ctx)
+      const statusB = await service(b, backendB).materialize(b.projectId, { objectId: 'meter' }, b.ctx)
+      const rowsA = await service(a, backendA).query({ projectRevisionRef: statusA.projectRevisionRef, snapshotRef: statusA.snapshotRef! }, a.ctx)
+      const rowsB = await service(b, backendB).query({ projectRevisionRef: statusB.projectRevisionRef, snapshotRef: statusB.snapshotRef! }, b.ctx)
+      expect(rowsA.columns).toEqual(rowsB.columns)
+      expect(rowsA.rows.map((row) => row.values)).toEqual(rowsB.rows.map((row) => row.values))
+      expect(rowsA.rows[0]?.values['power']).toEqual({ kind: 'quantity', value: '12.000000000000001', unitCode: 'kW' })
+      expect(statusA.snapshotRef).not.toEqual(statusB.snapshotRef)
+      const originA = rowsA.rows[0]?.sources.find((source) => source.fieldId === 'power')
+      const originB = rowsB.rows[0]?.sources.find((source) => source.fieldId === 'power')
+      expect(originA?.locator).toMatchObject({ kind: 'table_cell', row: 2, column: 2 })
+      expect(originB?.locator).toMatchObject({ kind: 'table_cell', row: 2, column: 1 })
+      expect(originA?.documentRef).not.toEqual(originB?.documentRef)
+      expect(originA?.factSource?.mappingRef).toEqual(a.source.mapping.ref)
+      expect(originB?.factSource?.mappingRef).toEqual(b.source.mapping.ref)
+      const queries = []
+      for (const [client, backend, status] of [[a, backendA, statusA], [b, backendB, statusB]] as const) {
+        const ctx = createToolContext({ ...client.ctx, deadline: new Date(Date.now() + 60_000).toISOString(), allowedResources: { ...client.ctx.allowedResources, sourceRefs: [projectDatasetSourceRef(status.snapshotRef!.id)] } })
+        const descriptor = await backend.describeSnapshot(client.scope, status.snapshotRef!, ctx)
+        if (descriptor === undefined) throw new Error('the client snapshot descriptor is missing')
+        queries.push(await new ProjectSemanticQueryService({ query: backend }).execute({ descriptor,
+          plan: { mode: 'semantic', concepts: ['meter'], fields: ['meter_id', 'power'], links: [], filters: [{ fieldRef: 'power', op: 'gte', values: ['12.000000000000001'] }],
+            orderBy: [{ fieldRef: 'meter_id', direction: 'asc' }], limit: 100, mappingVersion: projectSnapshotMappingRef({ descriptor }) },
+          limits: { maxRows: 100, maxBytes: 1_048_576, maxDurationMs: 30_000 } }, ctx))
+      }
+      expect(queries[0]?.rows.map((row) => row.values)).toEqual([['M-1', '12.000000000000001']])
+      expect(queries[1]?.rows.map((row) => row.values)).toEqual(queries[0]?.rows.map((row) => row.values))
+      expect(queries.every((query) => query.columns[1]?.unit === 'kW')).toBe(true)
+
+    } finally { backendA.close(); await backendB.close() }
+  }, 120_000)
+
 })

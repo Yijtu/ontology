@@ -290,6 +290,9 @@ function aggregateProjection(
     )
   }
   const isCounting = kind === 'count' || kind === 'count_distinct'
+  if (field.exactDecimal === true && kind === 'avg') {
+    throw new SemanticMappingError('UNSUPPORTED_AGGREGATION', 'exact project decimal averages require a declared rounding contract')
+  }
   if (!isCounting && field.valueMap !== undefined && field.valueMap.length > 0) {
     throw new SemanticMappingError(
       'UNSUPPORTED_AGGREGATION',
@@ -305,6 +308,7 @@ function aggregateProjection(
     fieldRef: field.fieldRef,
     expression,
     columnType: isCounting ? 'integer' : canonicalColumnTypeOf(field.valueType),
+    ...(field.exactDecimal === true && !isCounting ? { exactDecimal: true } : {}),
   }
 }
 
@@ -313,6 +317,7 @@ function plainProjection(alias: string, field: FieldMapping): CompiledProjection
     fieldRef: field.fieldRef,
     expression: projectionExpression(alias, field),
     columnType: canonicalColumnTypeOf(field.valueType),
+    ...(field.exactDecimal === true ? { exactDecimal: true } : {}),
     ...(field.unit === undefined ? {} : { unit: field.unit.unitCode }),
   }
 }
