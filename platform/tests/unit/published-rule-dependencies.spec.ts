@@ -77,6 +77,29 @@ describe('fixed published rule dependency compilation (#262)', () => {
     expect(evaluate([scoped, mid], [fact('A-01', 'hours_due', true, { projectId })], projectId).state('second')).toBe('applicable')
   })
 
+  it('keeps the own project subject in both foreign-subject orders and excludes tagged facts from legacy scope', () => {
+    const foreignProject = '22222222-2222-4222-8222-222222222222'
+    const own = { subjectEntityId: 'same-id', objectId: 'asset', projectId }, foreign = { ...own, projectId: foreignProject }
+    const published = rule('service', 'hours_due', 'stage_one', [], { projectId })
+    const ownedFact = fact('same-id', 'hours_due', true, { projectId })
+    const foreignFact = fact('same-id', 'hours_due', false, { projectId: foreignProject, logicalAssertionId: ownedFact.logicalAssertionId, recordedSeq: '2' })
+    const facts = [ownedFact, foreignFact]
+    for (const subjects of [[own, foreign], [foreign, own]]) {
+      const compiled = compilePublishedRuleInstances([published], facts, { scopeRef, definitionRef, projectId, subjects })
+      expect(compiled.issues).toEqual([])
+      expect(compiled.instances).toHaveLength(1)
+      const result = new RuleEvaluator().evaluate({ scopeRef, definitionRef, facts, rules: [...compiled.instances.map((item) => item.supportRule), ...compiled.dependencyRules], request: { scopeRef, projectionRef: definitionRef } })
+      expect(result.applicabilities[0]?.state).toBe('applicable')
+    }
+    const global = rule('legacy-service', 'hours_due', 'stage_one')
+    expect(evaluate([global], [fact('A-01', 'hours_due', true, { projectId })]).state('legacy-service')).toBe('unknown')
+    const duplicated = { ...foreignFact, assertionId: ownedFact.assertionId }
+    for (const data of [[ownedFact, duplicated], [duplicated, ownedFact]]) {
+      const compiled = compilePublishedRuleInstances([published], [ownedFact], { scopeRef, definitionRef, projectId, subjects: [own] })
+      expect(() => new RuleEvaluator().evaluate({ scopeRef, definitionRef, facts: data, rules: compiled.instances.map((item) => item.supportRule), request: { scopeRef, projectionRef: definitionRef } })).toThrow(expect.objectContaining({ code: 'INVALID_ARGUMENT' }))
+    }
+  })
+
   it('makes replacement dependencies unknown and indexes the disappeared pin for invalidation', () => {
     const leaf = rule('service', 'hours_due', 'stage_one'), mid = rule('second', 'stage_one', 'ready', [leaf])
     const facts = [fact('A-01', 'hours_due')], baseline = evaluate([leaf, mid], facts)

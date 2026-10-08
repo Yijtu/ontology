@@ -5,6 +5,7 @@ import type {
   ReviewableCandidateReader,
   SemanticPublicationStore,
   InstanceReviewStore,
+  ProjectStore,
 } from '@ontology/contracts'
 
 /**
@@ -16,6 +17,8 @@ import type {
  * evaluates rules and never imports an adapter or driver.
  */
 export interface SemanticPublicationServiceDependencies {
+  /** Mandatory for a stored rule with projectId; the request never supplies project authority. */
+  readonly projects?: Pick<ProjectStore, 'getProject' | 'getRevision'>
   /** Atomic candidate-review, publication and statement-revision persistence. */
   readonly store: SemanticPublicationStore
   /** The extraction candidates being published; a candidate is loaded, never trusted from the body. */

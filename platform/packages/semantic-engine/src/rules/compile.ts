@@ -123,7 +123,7 @@ export function compilePublishedRuleInstances(
   const instances: CompiledPublishedRuleInstance[] = []
   const issues: RuleCapabilityIssue[] = []
   const dependencyRules: SupportRule[] = []
-  const subjects = dedupeSubjects(options.subjects)
+  const subjects = dedupeSubjects(options.subjects.filter((subject) => subject.projectId === options.projectId))
   const dependencyLookups = new Map<string, Map<string, readonly string[]>>()
   for (const rule of rules) {
     if (rule.projectId !== options.projectId) continue
@@ -135,7 +135,7 @@ export function compilePublishedRuleInstances(
   const factsByInstance = new Map<string, Map<string, RuleFact[]>>()
   const relationFactsByInstance = new Map<string, Map<string, RuleFact[]>>()
   for (const fact of facts) {
-    if (options.projectId !== undefined && fact.projectId !== options.projectId) continue
+    if (fact.projectId !== options.projectId) continue
     const instanceKey = factInstanceKey(fact.subject, fact.objectId, fact.schemaRef)
     const index = fact.relation === undefined ? factsByInstance : relationFactsByInstance
     let byPredicate = index.get(instanceKey)
@@ -360,7 +360,7 @@ export function compilePublishedRuleInstances(
 
 function dedupeSubjects(subjects: readonly PublishedRuleSubject[]): PublishedRuleSubject[] {
   const byKey = new Map<string, PublishedRuleSubject>()
-  for (const subject of subjects) byKey.set(`${subject.objectId}\u0000${subject.subjectEntityId}`, subject)
+  for (const subject of subjects) byKey.set(`${subject.projectId ?? ''}\u0000${subject.objectId}\u0000${subject.subjectEntityId}`, subject)
   return [...byKey.values()].sort((left, right) =>
     left.objectId.localeCompare(right.objectId) || left.subjectEntityId.localeCompare(right.subjectEntityId),
   )

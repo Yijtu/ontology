@@ -71,6 +71,10 @@ interface EvaluationState {
 
 const REFUTED_VALUE = false
 
+function logicalKey(fact: RuleFact): string {
+  return fact.projectId === undefined ? fact.logicalAssertionId : JSON.stringify([fact.projectId, fact.logicalAssertionId])
+}
+
 function covers(fact: RuleFact, validAt: string | undefined): boolean {
   if (validAt === undefined) return true
   if (fact.validity.validFrom > validAt) return false
@@ -98,8 +102,9 @@ function resolveLogicalAssertions(
 ): Map<string, LogicalResolution> {
   const byLogical = new Map<string, RuleFact[]>()
   for (const fact of facts) {
-    const bucket = byLogical.get(fact.logicalAssertionId)
-    if (bucket === undefined) byLogical.set(fact.logicalAssertionId, [fact])
+    const key = logicalKey(fact)
+    const bucket = byLogical.get(key)
+    if (bucket === undefined) byLogical.set(key, [fact])
     else bucket.push(fact)
   }
   const asOf = asOfRecordedSeq === undefined ? undefined : Number(asOfRecordedSeq)
@@ -211,6 +216,7 @@ function factRefOf(fact: RuleFact): RuleFactRef {
       sourceStatementId: fact.sourceStatementId ?? null,
       sourceRefs: fact.sourceRefs ?? [],
       schemaRef: fact.schemaRef ?? null,
+      ...(fact.projectId === undefined ? {} : { projectId: fact.projectId }),
       ...(fact.relation === undefined ? {} : { relation: fact.relation }),
     }),
     ...(fact.sourceStatementId === undefined ? {} : { sourceStatementId: fact.sourceStatementId }),
@@ -421,14 +427,14 @@ function evaluateAlternative(
       }
       return { outcome: 'unknown' }
     }
-    const resolution = state.activeByLogical.get(fact.logicalAssertionId)
+    const resolution = state.activeByLogical.get(logicalKey(fact))
     if (resolution?.reason === 'conflict' || state.conflictedAssertions.has(fact.assertionId)) {
       return {
         outcome: 'conflict',
         factRefs: (resolution?.conflicting ?? [fact]).map(factRefOf),
         leaf: {
           kind: 'fact',
-          nodeId: `fact:${fact.logicalAssertionId}`,
+          nodeId: `fact:${logicalKey(fact)}`,
           label: fact.logicalAssertionId,
           state: 'conflict',
         },
@@ -444,14 +450,14 @@ function evaluateAlternative(
     const factRefs = [factRefOf(active)]
     if (value === undefined) return { outcome: 'unknown', factRefs, leaf: {
       kind: 'fact',
-      nodeId: `fact:${active.logicalAssertionId}`,
+      nodeId: `fact:${logicalKey(active)}`,
       label: active.logicalAssertionId,
       state: 'unknown',
     } }
     const match = matchValue(group, value)
     const leaf: SupportLeafNode = {
       kind: 'fact',
-      nodeId: `fact:${active.logicalAssertionId}`,
+      nodeId: `fact:${logicalKey(active)}`,
       label: active.logicalAssertionId,
       state: match === undefined ? 'unknown' : match ? 'satisfied' : 'refuted',
       value,
@@ -540,7 +546,7 @@ function evaluateGroup(
     const branchResults = relation.branches.map((branch) => {
       const edge = evaluateAlternative(branch.edge, group, state)
       const originalEdge = branch.edge.assertionId === undefined ? undefined : state.factsById.get(branch.edge.assertionId)
-      const activeEdge = originalEdge === undefined ? undefined : state.activeByLogical.get(originalEdge.logicalAssertionId)?.active
+      const activeEdge = originalEdge === undefined ? undefined : state.activeByLogical.get(logicalKey(originalEdge))?.active
       const replaced = activeEdge !== undefined && originalEdge !== undefined &&
         (activeEdge.subject !== originalEdge.subject || activeEdge.objectId !== originalEdge.objectId || activeEdge.relation?.targetEntityId !== originalEdge.relation?.targetEntityId)
       const targetCondition = branch.targetKey === undefined ? undefined : conditions.get(branch.targetKey)
@@ -1058,6 +1064,8 @@ export class RuleEvaluator {
     )
     const factsById = new Map<string, RuleFact>()
     for (const fact of input.facts) {
+      const existing = factsById.get(fact.assertionId)
+      if (existing !== undefined && existing.projectId !== fact.projectId) throw new RuleEvaluationError('INVALID_ARGUMENT', `assertionId ${fact.assertionId} is ambiguous across project scopes`)
       if (!factsById.has(fact.assertionId)) factsById.set(fact.assertionId, fact)
     }
     const conflicts = detectConflicts(activeByLogical, input.scopeRef)
@@ -1240,7 +1248,7 @@ function buildGaps(
   }
   const referencedLogical = new Set<string>()
   for (const fact of input.facts) {
-    if (referencedAssertions.has(fact.assertionId)) referencedLogical.add(fact.logicalAssertionId)
+    if (referencedAssertions.has(fact.assertionId)) referencedLogical.add(logicalKey(fact))
   }
   for (const [logicalId, resolution] of activeByLogical) {
     if (

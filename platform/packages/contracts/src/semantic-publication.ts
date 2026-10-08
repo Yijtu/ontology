@@ -172,6 +172,7 @@ export interface PublishedRuleDeclarationReader {
 
 /** A published semantic version: the facts, the rules and the outbox event, one transaction. */
 export interface SemanticPublicationVersion {
+  readonly ruleProjectPins?: readonly PublicationRuleProjectPin[]
   readonly publicationId: Uuid
   readonly versionRef: VersionRef
   readonly revision: RevisionString
@@ -188,6 +189,15 @@ export interface SemanticPublicationVersion {
 export interface PublicationIdentityBinding {
   readonly candidateId: Uuid
   readonly entityId: string
+}
+
+/** Server-loaded project authority for a tagged extracted rule, rechecked at commit. */
+export interface PublicationRuleProjectPin {
+  readonly candidateId: Uuid
+  readonly candidateDigest: Sha256Digest
+  readonly reviewRevision: RevisionString
+  readonly projectRevisionRef: ProjectRevisionRef
+  readonly definitionRef: VersionRef
 }
 
 /**
@@ -216,6 +226,7 @@ export interface PublicationMaterializationFence {
  * check (SPEC D5/D6/§8).
  */
 export interface PublishSemanticPublicationInput {
+  readonly ruleProjectPins?: readonly PublicationRuleProjectPin[]
   readonly projectFactFences?: readonly ProjectFactPublicationFence[]
   readonly expectedRevision: RevisionString
   /** The publication content, before the store assigns its revision. */
