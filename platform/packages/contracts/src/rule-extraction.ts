@@ -1,6 +1,7 @@
 import type { DecimalQuantity, DocumentSpan, ResourceRef, RevisionString, ScopeRef, Sha256Digest, Uuid, VersionRef } from './generated/contracts'
 import type { SpanPrecision } from './document-parse'
 import type { ExactScalarDecimal } from './materialization'
+import type { RuleDependencyReference } from './rule-action-candidates'
 
 /**
  * Bounded rule AST and rule-candidate contracts (SPEC D4.3/D5, US-013/US-015, FR-14/FR-15).
@@ -40,6 +41,9 @@ export interface RuleComputationFactRef {
 
 /** The durable typed result of computing one published rule against one entity. */
 export interface RuleComputationArtifact {
+  readonly publishedPackRef?: VersionRef
+  readonly dependencyRefs?: readonly RuleDependencyReference[]
+  readonly projectId?: string
   readonly schemaVersion: 'rule-computation-artifact@1'
   readonly scopeRef: ScopeRef
   readonly definitionRef: VersionRef
@@ -199,4 +203,6 @@ export interface DraftRule {
   readonly exceptions: readonly unknown[]
   /** Optional proposed consequence; it remains untrusted until schema validation and review. */
   readonly conclusion?: unknown
+  readonly ruleDependencies?: readonly string[]
+  readonly dependencyRefs?: readonly RuleDependencyReference[]
 }

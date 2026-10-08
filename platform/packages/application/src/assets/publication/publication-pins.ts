@@ -3,6 +3,7 @@ import type {
   IndustryValidationReport, ReviewableCandidateReader, RuleActionCandidateVersion,
   RuleActionPublicationPin, ScopeRef, SemanticPublicationStore, ToolContext,
   AssetCandidateStore, RuleActionCandidateStore, IndustryWorkspaceStore, CommitApprovedPackInput,
+  PublishedRuleDeclaration,
 } from '@ontology/contracts'
 import { PublishedPackAssetStoreError } from '@ontology/contracts'
 import { canonicalJson, sha256DigestOf } from '../../profiles/canonical'
@@ -56,6 +57,33 @@ export function ruleActionPublicationPins(candidates: readonly RuleActionCandida
     : [])
 }
 
+export async function ruleApprovalPins(candidates: readonly RuleActionCandidateVersion[], scope: ScopeRef, ctx: ToolContext,
+  reader: ReviewableCandidateReader | undefined, reviews: CandidateApprovalReader | undefined): Promise<DefinitionApprovalPin[]> {
+  const pins: DefinitionApprovalPin[] = []
+  for (const candidate of candidates.filter((row) => row.kind === 'rule')) {
+    const view = await reader?.readCandidate(scope, candidate.candidateId, ctx)
+    const revision = await reviews?.latestReviewRevision(scope, candidate.candidateId, ctx)
+    const review = revision === undefined ? undefined : await reviews?.getReview(scope, candidate.candidateId, revision, ctx)
+    if (candidate.lifecycle !== 'enabled' || candidate.enabledAt === undefined || view?.domain !== 'definition' || view.kind !== 'rule' ||
+      view.state !== 'enabled' || view.contentDigest !== candidate.contentDigest || review?.decision !== 'approve' || review.contentDigest !== candidate.contentDigest) {
+      throw new PublishedPackAssetStoreError('VERSION_CONFLICT', `enabled rule ${candidate.logicalId} needs its current content-pinned ledger approval`)
+    }
+    pins.push({ candidateId: candidate.candidateId, contentDigest: candidate.contentDigest, reviewRevision: review.revision })
+  }
+  return pins.sort((a, b) => a.candidateId.localeCompare(b.candidateId))
+}
+
+export function publishedRuleDeclarationsOf(candidates: readonly RuleActionCandidateVersion[], pins: readonly DefinitionApprovalPin[]): PublishedRuleDeclaration[] {
+  return candidates.flatMap((candidate): PublishedRuleDeclaration[] => {
+    if (candidate.kind !== 'rule' || candidate.payload.kind !== 'rule' || candidate.lifecycle !== 'enabled') return []
+    const pin = pins.find((item) => item.candidateId === candidate.candidateId && item.contentDigest === candidate.contentDigest)
+    if (candidate.enabledAt === undefined || pin === undefined) throw new PublishedPackAssetStoreError('VERSION_CONFLICT', 'published rule snapshot requires an exact reviewed enabled candidate')
+    return [{ candidateId: candidate.candidateId, contentDigest: candidate.contentDigest, enabledAt: candidate.enabledAt, reviewRevision: pin.reviewRevision,
+      payload: candidate.payload, sourceRefs: candidate.sourceRefs, sourceSpans: candidate.sourceSpans,
+      ...(candidate.generationCallRef === undefined ? {} : { generationCallRef: candidate.generationCallRef }) }]
+  }).sort((a, b) => a.candidateId.localeCompare(b.candidateId))
+}
+
 /** Bind the full validation, including definition diff, strategy and candidate pins, into its evidence digest. */
 export function industryValidationDigest(report: Omit<IndustryValidationReport, 'contentDigest'> & { readonly contentDigest?: string }): string {
   const { validationId, idempotencyKey, actor, recordedAt, contentDigest, ...evidence } = report
@@ -76,11 +104,14 @@ export function createPackPublicationGuard(deps: {
     const definitions = await deps.definitionCandidates.listCandidates(scope, input.pack.workspaceId, { limit: 250 }, ctx)
     const actions = await deps.ruleActions.list(scope, input.pack.workspaceId, { limit: 250 }, ctx)
     const approved = await definitionApprovalPins(currentDefinitionProjection(definitions), scope, ctx, deps.reviewableCandidates, deps.reviews)
+    const rulePins = await ruleApprovalPins(currentRuleActionProjection(actions).filter((candidate) => candidate.lifecycle === 'enabled'), scope, ctx, deps.reviewableCandidates, deps.reviews)
     if (workspace?.headRevision !== input.expectedRevision || definitions.length === 250 || actions.length === 250 ||
         canonicalJson(input.pack.approvalPins ?? []) !== canonicalJson(input.approvalPins ?? []) ||
         canonicalJson(input.pack.ruleActionPins ?? []) !== canonicalJson(input.ruleActionPins ?? []) ||
         approved.blockers.length > 0 || canonicalJson(approved.pins) !== canonicalJson(input.approvalPins ?? []) ||
-        canonicalJson(ruleActionPublicationPins(currentRuleActionProjection(actions))) !== canonicalJson(input.ruleActionPins ?? [])) {
+        canonicalJson(ruleActionPublicationPins(currentRuleActionProjection(actions))) !== canonicalJson(input.ruleActionPins ?? []) ||
+        canonicalJson(publishedRuleDeclarationsOf(currentRuleActionProjection(actions), rulePins)) !== canonicalJson(input.pack.ruleDeclarations ?? []) ||
+        canonicalJson(rulePins) !== canonicalJson(input.ruleReviewPins ?? []) || canonicalJson(input.pack.ruleReviewPins ?? []) !== canonicalJson(rulePins)) {
       throw new PublishedPackAssetStoreError('VERSION_CONFLICT', 'publication pins changed before commit')
     }
   }

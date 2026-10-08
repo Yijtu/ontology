@@ -138,6 +138,7 @@ export interface RuleSupportValidationInput {
   readonly exceptions: readonly RuleExceptionNode[]
   /** Declared one-way upstream rule ids this rule consumes. */
   readonly ruleDependencies?: readonly string[]
+  readonly dependencyRefs?: readonly RuleDependencyCandidateReference[]
   /** The dependency graph used for cycle/depth checks (`ruleId` → upstream rule ids). */
   readonly dependencyLookup?: ReadonlyMap<string, readonly string[]>
   /**
@@ -225,7 +226,65 @@ export interface RuleCandidatePayload {
   readonly exceptions: readonly RuleExceptionNode[]
   readonly conclusion?: RuleConclusionBinding
   readonly ruleDependencies: readonly string[]
+  readonly dependencyRefs?: readonly RuleDependencyCandidateReference[]
   readonly support: RuleSupportReport
+}
+
+/** A reviewed upstream business consequence. It always binds the current subject, never a type label. */
+export interface RuleDependencyCandidateReference {
+  readonly publishedPackRef?: VersionRef
+  readonly ruleId: string
+  readonly ruleRef: VersionRef
+  readonly scopeRef?: ScopeRef
+  readonly definitionRef?: VersionRef
+  readonly objectId: string
+  readonly predicate: string
+  readonly projectId?: Uuid
+}
+export interface RuleDependencyReference extends RuleDependencyCandidateReference {
+  readonly scopeRef: ScopeRef
+  readonly definitionRef: VersionRef
+}
+
+/** Reject malformed/unbounded pins before persistence, publication or compilation. */
+export function assertRuleDependencyCandidateShape(dependencies: unknown, refs: unknown): asserts refs is readonly RuleDependencyCandidateReference[] {
+  if (!Array.isArray(dependencies) || dependencies.length > 16 || dependencies.some((id) => !isNonEmptyString(id)) || new Set(dependencies).size !== dependencies.length) {
+    throw invalid('ruleDependencies must contain at most 16 distinct rule ids')
+  }
+  if (!Array.isArray(refs) || refs.length !== dependencies.length) throw invalid('every declared rule dependency requires one fixed reference')
+  const seen = new Set<string>()
+  for (const ref of refs) {
+    if (!isRecord(ref) || !isNonEmptyString(ref['ruleId']) || !dependencies.includes(ref['ruleId']) || seen.has(ref['ruleId']) ||
+      !isNonEmptyString(ref['objectId']) || !isNonEmptyString(ref['predicate']) || ref['scopeRef'] !== undefined && (!isRecord(ref['scopeRef']) ||
+      !isUuid(ref['scopeRef']['tenantId']) || !isUuid(ref['scopeRef']['spaceId'])) ||
+      ref['projectId'] !== undefined && !isUuid(ref['projectId'])) throw invalid('rule dependency has an invalid identity or scope')
+    if (Object.keys(ref).some((key) => !['ruleId', 'ruleRef', 'scopeRef', 'definitionRef', 'objectId', 'predicate', 'projectId', 'publishedPackRef'].includes(key))) throw invalid('rule dependency contains unknown fields')
+    assertVersionRef(ref['ruleRef'], 'dependency.ruleRef')
+    if (ref['definitionRef'] !== undefined) assertVersionRef(ref['definitionRef'], 'dependency.definitionRef')
+    if (ref['publishedPackRef'] !== undefined) assertVersionRef(ref['publishedPackRef'], 'dependency.publishedPackRef')
+    for (const pin of [ref['ruleRef'], ref['definitionRef'], ref['publishedPackRef']].filter((pin) => pin !== undefined)) {
+      if (!isRecord(pin) || typeof pin['version'] !== 'string' || !/^(?:0|[1-9]\d*)\.(?:0|[1-9]\d*)\.(?:0|[1-9]\d*)(?:-[0-9A-Za-z.-]+)?(?:\+[0-9A-Za-z.-]+)?$/.test(pin['version']) ||
+        Object.keys(pin).some((key) => !['id', 'version', 'digest'].includes(key))) throw invalid('dependency pins must be exact version references')
+    }
+    seen.add(ref['ruleId'])
+  }
+}
+
+export function assertRuleDependencyShape(dependencies: unknown, refs: unknown): asserts refs is readonly RuleDependencyReference[] {
+  assertRuleDependencyCandidateShape(dependencies, refs)
+  if (refs.some((ref) => ref.scopeRef === undefined || ref.definitionRef === undefined)) throw invalid('published dependencies need exact scope and definition pins')
+}
+
+/** Complete immutable rule body frozen by the existing pack publication transaction. */
+export interface PublishedRuleDeclaration {
+  readonly candidateId: Uuid
+  readonly contentDigest: Sha256Digest
+  readonly enabledAt: Rfc3339UtcTimestamp
+  readonly reviewRevision: string
+  readonly payload: RuleCandidatePayload
+  readonly sourceRefs: readonly ResourceRef[]
+  readonly sourceSpans: readonly CandidateSourceSpan[]
+  readonly generationCallRef?: ResourceRef
 }
 
 export type RuleActionCandidateKind = 'rule' | 'action'
