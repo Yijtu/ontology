@@ -22,6 +22,7 @@ import type {
 import type { QueryResultRow } from 'pg'
 import { ControlPostgresDatabase } from './database'
 import { MATERIALIZED_PROJECTION_REF } from './materialization-store'
+import { assertProjectFactPublicationFences } from './project-fact-publication-fence'
 
 interface ScopedQuery {
   query<Row extends QueryResultRow>(
@@ -380,6 +381,12 @@ export class PostgresSemanticPublicationStore implements SemanticPublicationStor
     ctx: ToolContext,
   ): Promise<PublicationPublishResult> {
     return this.#withScope(scopeRef, ctx, async (query) => {
+      // Replay first; a committed receipt remains readable after later source withdrawal.
+      const prior = await query.query<ReplayRow>(
+        `SELECT revision::text AS revision,payload,request_digest FROM agent_platform.semantic_publications
+         WHERE tenant_id=current_setting('app.tenant_id')::uuid AND space_id=current_setting('app.space_id')::uuid AND idempotency_key=$1`, [input.idempotencyKey],
+      )
+      if (prior.rows[0] === undefined) await assertProjectFactPublicationFences(query, input)
       await query.query(
         `INSERT INTO agent_platform.semantic_publication_heads (tenant_id, space_id, revision)
          VALUES (current_setting('app.tenant_id')::uuid, current_setting('app.space_id')::uuid, 0)

@@ -1,4 +1,4 @@
-import { CandidateStoreError, isToolContext } from '@ontology/contracts'
+import { CandidateStoreError, assertProjectFactInputShape, isToolContext } from '@ontology/contracts'
 import type {
   CandidateInsertResult,
   CandidateIssue,
@@ -105,6 +105,7 @@ function toCandidateRecord(row: CandidateRow): CandidateRecord {
       conflicts: Array.isArray(row.payload['conflicts'])
         ? (row.payload['conflicts'] as RuleCandidate['conflicts'])
         : [],
+      ...(row.payload['conclusion'] === undefined ? {} : { conclusion: row.payload['conclusion'] }),
     }
     return rule
   }
@@ -142,6 +143,7 @@ function payloadOf(candidate: CandidateRecord): Record<string, unknown> {
       expression: candidate.expression,
       exceptions: candidate.exceptions,
       conflicts: candidate.conflicts,
+      ...(candidate.conclusion === undefined ? {} : { conclusion: candidate.conclusion }),
     }
   }
   return {
@@ -170,6 +172,9 @@ export class PostgresCandidateStore implements CandidateStore {
     candidates: readonly CandidateRecord[],
     ctx: ToolContext,
   ): Promise<CandidateInsertResult> {
+    for (const candidate of candidates) {
+      if (candidate.inputVersion.projectFact !== undefined) assertProjectFactInputShape(candidate.inputVersion.projectFact)
+    }
     return this.#withScope(scopeRef, ctx, async (query) => {
       const candidateIds: Uuid[] = []
       let inserted = 0

@@ -479,7 +479,7 @@ export class ProjectMappingService {
     if (mapping === undefined) {
       throw new ProjectError('MAPPING_NOT_FOUND', `mapping ${request.mappingId}@${request.mappingVersion} is not visible for this project`)
     }
-    if (mapping.definitionRef.digest !== revision.definitionRef.digest) {
+    if (mapping.definitionRef.id !== revision.definitionRef.id || mapping.definitionRef.version !== revision.definitionRef.version || mapping.definitionRef.digest !== revision.definitionRef.digest) {
       throw new ProjectError(
         'VERSION_CONFLICT',
         'the mapping was confirmed against a different definition version than the project head pins',
@@ -633,7 +633,7 @@ export class ProjectMappingService {
       : fields.some((field) => field.status === 'pending')
         ? 'pending'
         : 'confirmed'
-    const contentDigest = sha256DigestOf(canonicalJson({ objectId: object.objectId, fields }))
+    const contentDigest = sha256DigestOf(canonicalJson({ objectId: object.objectId, fields, mappingRef: args.mapping.ref, sourceDigest: args.sourceDigest, sourceRowKey: args.sourceRowKey }))
     return {
       schemaVersion: 'project-record@1',
       projectId: args.projectId,

@@ -30,3 +30,5 @@ export type {
   ProjectMappingServiceDependencies,
 } from './project-mapping-service'
 export { applyExactFactor, isDecimalString } from './decimal'
+export { ProjectFactMaterializationService, PROJECT_FACT_BATCH_LIMIT } from './project-fact-materialization-service'
+export type { ProjectFactMaterializationDependencies } from './project-fact-materialization-service'

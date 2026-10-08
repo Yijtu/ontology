@@ -13,6 +13,7 @@ import type {
 import type { DocumentChunkRecord } from './document-parse'
 import type { SourceLocator } from './structured-parse'
 import type { ToolContext } from './trusted'
+import type { ProjectFactInput } from './project-mapping'
 import type {
   RuleConflict,
   RuleExceptionNode,
@@ -100,7 +101,7 @@ export interface CandidateAttributeValue {
   readonly value: string | number | boolean
   /** The verbatim source token the value was derived from, when the source supplied one. */
   readonly raw?: string
-  /** Present for an exactly parsed quantity; never produced through a lossy `Number`. */
+  /** Exact numeric lexical value; unitless mapped numbers and quantities never pass through Number. */
   readonly decimal?: DecimalString
   readonly unitCode?: string
 }
@@ -177,6 +178,7 @@ export interface CandidateEndpoint {
  * the document version. A later definition publication never rewrites this binding.
  */
 export interface ExtractionInputVersion {
+  readonly projectFact?: ProjectFactInput
   readonly definitionRef: VersionRef
   readonly parseId: Uuid
   readonly parserVersion: Semver

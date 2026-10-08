@@ -1,4 +1,4 @@
-import type { IdentityPublishedBindingSnapshot, SemanticDefinitionVersion, PublishedStatement, ResourceRef, SourceRef, VersionRef } from '@ontology/contracts'
+import type { IdentityPublishedBindingSnapshot, ScopeRef, SemanticDefinitionVersion, PublishedStatement, ResourceRef, SourceRef, VersionRef } from '@ontology/contracts'
 import type {
   AttributeProjectionIssue,
   PublishedAttributeProjection,
@@ -6,10 +6,14 @@ import type {
   RuleFact,
 } from './types'
 import { canonicalDecimalString } from './values'
+import { definitionVersionDigest } from '../definitions/validate'
 
 export interface PublishedAttributeProjectionOptions {
   /** The schema pinned by the publication page; statements currently do not repeat this field. */
   readonly schemaRef: VersionRef
+  /** Exact definition and trusted read scope are required for mapped scalar typing. */
+  readonly definition?: SemanticDefinitionVersion
+  readonly scopeRef?: ScopeRef
 }
 
 function recordOf(value: unknown): Record<string, unknown> | undefined {
@@ -90,9 +94,16 @@ function factId(statementId: string, attributeId: string, version: string, occur
 function projectFacts(
   statements: readonly PublishedStatement[],
   schemaRef?: VersionRef,
+  options?: Partial<PublishedAttributeProjectionOptions>,
 ): PublishedAttributeProjection {
   const facts: RuleFact[] = []
   const issues: AttributeProjectionIssue[] = []
+  const definition = options?.definition
+  const scope = options?.scopeRef
+  const exactDefinition = definition !== undefined && schemaRef !== undefined && scope !== undefined &&
+    definition.scopeRef.tenantId === scope.tenantId && definition.scopeRef.spaceId === scope.spaceId &&
+    definition.ref.id === schemaRef.id && definition.ref.version === schemaRef.version && definition.ref.digest === schemaRef.digest && definitionVersionDigest(definition) === schemaRef.digest
+    ? definition : undefined
 
   for (const statement of statements) {
     const valueRecord = recordOf(statement.value)
@@ -125,7 +136,23 @@ function projectFacts(
           })
         }
 
-        const converted = exactValueOf(entry?.['value'], entry?.['unitCode'])
+        let converted: { value?: RuleAssertionValue; issue?: string }
+        const mapped = recordOf(valueRecord?.['provenance'])?.['sources'] !== undefined
+        if (mapped) {
+          const attribute = exactDefinition?.attributes.find((item) => item.objectId === statement.objectId && item.id === attributeId)
+          const value = entry?.['value']
+          const unit = entry?.['unitCode']
+          if (attribute === undefined) converted = { issue: 'mapped scalar requires its exact scoped definition/attribute pin' }
+          else if (attribute.valueType === 'quantity') {
+            converted = typeof value !== 'string' || unit !== attribute.unit?.unitCode ? { issue: 'mapped quantity disagrees with the fixed canonical unit/type' } : exactValueOf(value, unit)
+          }
+          else if (attribute.valueType === 'number') {
+            const amount = typeof value === 'string' && /^-?(?:0|[1-9]\d*)(?:\.\d+)?$/.test(value) ? canonicalDecimalString(value) : undefined
+            converted = amount === undefined || unit !== undefined ? { issue: 'mapped number requires an exact unitless lexical decimal' } : { value: { kind: 'scalar_decimal', amount } }
+          } else if (unit !== undefined || attribute.valueType === 'boolean' && typeof value !== 'boolean' || ['string', 'timestamp', 'enum', 'reference'].includes(attribute.valueType) && typeof value !== 'string') {
+            converted = { issue: 'mapped scalar value disagrees with the fixed definition type' }
+          } else converted = exactValueOf(value, undefined)
+        } else converted = exactValueOf(entry?.['value'], entry?.['unitCode'])
         if (converted.issue !== undefined) {
           issues.push({
             statementId: statement.statementId,
@@ -214,7 +241,7 @@ export function projectPublishedAttributeFacts(
   statements: readonly PublishedStatement[],
   options: PublishedAttributeProjectionOptions,
 ): PublishedAttributeProjection {
-  return projectFacts(statements, options.schemaRef)
+  return projectFacts(statements, options.schemaRef, options)
 }
 
 /** Compatibility name for callers that only need facts; diagnostics are available above. */
@@ -222,7 +249,7 @@ export function ruleFactsFromStatements(
   statements: readonly PublishedStatement[],
   options?: Partial<PublishedAttributeProjectionOptions>,
 ): RuleFact[] {
-  return [...projectFacts(statements, options?.schemaRef).facts]
+  return [...projectFacts(statements, options?.schemaRef, options).facts]
 }
 
 /** Resolve real published candidate endpoints against the scoped, confirmed identity snapshot. */

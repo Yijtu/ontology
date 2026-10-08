@@ -104,11 +104,15 @@ export class InstanceIdentityWorkflow {
         evidenceRefs: candidate.evidenceRefs,
         ...(candidate.score === undefined ? {} : { score: candidate.score }),
       })),
-      fields: stored.candidate.attributes.map((attribute) => ({
-        fieldId: attribute.attributeId, rawValue: attribute.raw ?? (typeof attribute.value === 'boolean' ? attribute.value : String(attribute.value)),
-        normalizedValue: attribute.unitCode === undefined ? { kind: 'scalar', value: attribute.value } : { kind: 'quantity', value: attribute.decimal ?? String(attribute.value), unitCode: attribute.unitCode },
-        source: { documentRef: stored.membership.documentRef, parseId: span.parseId, chunkId: span.kind === 'structured' ? span.recordId : span.chunkId, locator: locatorOf(span), textDigest: span.kind === 'structured' ? span.rowDigest : span.textDigest, quoteDigest: span.kind === 'structured' ? span.rowDigest : span.quoteDigest },
-      })),
+      fields: stored.candidate.attributes.map((attribute, index) => {
+        const fieldSpan = stored.candidate.inputVersion.projectFact === undefined ? span : stored.candidate.sourceSpans[index]
+        if (fieldSpan === undefined) throw conflict('mapped field has no exact stored cell provenance')
+        return {
+          fieldId: attribute.attributeId, rawValue: attribute.raw ?? (typeof attribute.value === 'boolean' ? attribute.value : String(attribute.value)),
+          normalizedValue: attribute.unitCode === undefined ? { kind: 'scalar', value: attribute.value } : { kind: 'quantity', value: attribute.decimal ?? String(attribute.value), unitCode: attribute.unitCode },
+          source: { documentRef: stored.membership.documentRef, parseId: fieldSpan.parseId, chunkId: fieldSpan.kind === 'structured' ? fieldSpan.recordId : fieldSpan.chunkId, locator: locatorOf(fieldSpan), textDigest: fieldSpan.kind === 'structured' ? fieldSpan.rowDigest : fieldSpan.textDigest, quoteDigest: fieldSpan.kind === 'structured' ? fieldSpan.rowDigest : fieldSpan.quoteDigest },
+        }
+      }),
       relations: input.relations, sourceRef: stored.membership.documentRef,
       actor: ctx.principal.subjectId, idempotencyKey: input.idempotencyKey,
     }, ctx)

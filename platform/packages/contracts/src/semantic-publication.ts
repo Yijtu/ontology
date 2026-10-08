@@ -12,6 +12,7 @@ import type { CandidateKind } from './extraction'
 import type { NewOutboxMessage } from './job-store'
 import type { RuleConclusionBinding, RuleExceptionNode, RuleExpressionNode, RuleImpact } from './rule-extraction'
 import type { ToolContext } from './trusted'
+import type { ProjectFactPublicationFence } from './project-mapping'
 
 /**
  * Semantic publication and candidate review (SPEC D4.6/D5/D6, C6, US-011/US-012/US-015,
@@ -191,6 +192,7 @@ export interface PublicationMaterializationFence {
  * check (SPEC D5/D6/§8).
  */
 export interface PublishSemanticPublicationInput {
+  readonly projectFactFences?: readonly ProjectFactPublicationFence[]
   readonly expectedRevision: RevisionString
   /** The publication content, before the store assigns its revision. */
   readonly publication: Omit<SemanticPublicationVersion, 'revision'>

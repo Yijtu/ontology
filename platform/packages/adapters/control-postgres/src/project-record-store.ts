@@ -63,6 +63,10 @@ export class PostgresProjectRecordStore implements ProjectRecordStore {
       }
     }
     return this.#withScope(scopeRef, ctx, async (query) => {
+      // Serialize append-only record heads with project/identity/publication fences.
+      await query.query(`SELECT project_id FROM agent_platform.projects
+        WHERE tenant_id=current_setting('app.tenant_id')::uuid AND space_id=current_setting('app.space_id')::uuid
+          AND project_id=$1::uuid FOR UPDATE`, [projectId])
       const results: ProjectRecordVersion[] = []
       let created = false
       for (const record of records) {
