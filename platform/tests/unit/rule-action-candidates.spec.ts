@@ -1,3 +1,5 @@
+import { relationDefinition, relationCondition } from './rule-relation-fixtures'
+import type { RuleActionCandidateServiceDependencies } from '@ontology/application'
 import { randomUUID } from 'node:crypto'
 import { describe, expect, it } from 'vitest'
 import type {
@@ -26,6 +28,7 @@ import {
   InMemoryRuleActionCandidateStore,
   RuleActionCandidateService,
   parseRuleActionCandidateOutput,
+  parseRuleExpression,
 } from '@ontology/application'
 import { FiniteGrammarRuleSupportValidator } from '@ontology/semantic-engine'
 import { toolContext } from './component-registry-fixtures'
@@ -103,7 +106,7 @@ class FixtureWorkspaceStore implements IndustryWorkspaceStore {
   }
 }
 
-function harness() {
+function harness(readRelationDefinition?: RuleActionCandidateServiceDependencies['readRelationDefinition']) {
   const workspaces = new FixtureWorkspaceStore()
   const workspace: IndustryWorkspace = {
     workspaceId: WORKSPACE_ID,
@@ -121,6 +124,7 @@ function harness() {
     workspaces,
     candidates,
     support: new FiniteGrammarRuleSupportValidator(),
+    ...(readRelationDefinition === undefined ? {} : { readRelationDefinition }),
     now: () => '2026-09-29T00:00:00Z',
   })
   return { service, workspaces, candidates }
@@ -550,5 +554,23 @@ describe('rule/action candidate service', () => {
     await expect(h.service.saveRuleCandidate(WORKSPACE_ID, proposal, 'other', OTHER)).rejects.toMatchObject({
       code: 'WORKSPACE_NOT_FOUND',
     })
+  })
+})
+
+describe('rule-scoped relation candidate authority (#253)', () => {
+  it('preserves parsed target conditions, uses only the trusted definition, and rechecks ownership when enabled', async () => {
+    let pinned = relationDefinition(SCOPE)
+    const h = harness(async () => pinned)
+    const parsed = parseRuleExpression(JSON.parse(JSON.stringify(relationCondition)), 'condition')
+    expect(parsed).toEqual(relationCondition)
+    const proposal = { ...ruleProposal({ condition: parsed }), applicability: { objectId: 'site' }, expectedRevision: '1', idempotencyKey: 'relation-candidate-pinned' }
+    const saved = await h.service.saveRuleCandidate(WORKSPACE_ID, proposal, 'editor-1', EDITOR)
+    expect(saved.payload.support.executable).toBe(true)
+    expect(saved.payload.condition).toEqual(relationCondition)
+    pinned = { ...pinned, relations: [] }
+    await expect(h.service.enableRuleCandidate(WORKSPACE_ID, { candidateId: saved.candidateId, expectedRevision: '1' }, EDITOR)).rejects.toMatchObject({ code: 'SUPPORT_VALIDATION_BLOCKED' })
+    const untrusted = harness()
+    const blocked = await untrusted.service.saveRuleCandidate(WORKSPACE_ID, proposal, 'editor-1', EDITOR)
+    expect(blocked.payload.support.executable).toBe(false)
   })
 })

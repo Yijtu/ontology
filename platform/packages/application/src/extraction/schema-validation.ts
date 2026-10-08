@@ -380,8 +380,16 @@ function validateRuleExpression(
       return
     }
     case 'relation': {
-      if (relationById(schema, expression.relationId) === undefined) {
+      const relation = relationById(schema, expression.relationId)
+      if (relation === undefined) {
         issue(out, 'UNKNOWN_RELATION', `rule relation ${expression.relationId} is not declared`, field)
+        return
+      }
+      if (relation.fromObjectId !== object.objectId) issue(out, 'ATTRIBUTE_NOT_ON_OBJECT', `relation ${expression.relationId} is not declared from ${object.objectId}`, field)
+      if (expression.targetCondition !== undefined) {
+        const target = objectById(schema, relation.toObjectId)
+        if (target === undefined) issue(out, 'UNKNOWN_OBJECT', `relation target ${relation.toObjectId} is not declared`, field)
+        else validateRuleExpression(out, schema, target, expression.targetCondition, `${field}.targetCondition`)
       }
       return
     }

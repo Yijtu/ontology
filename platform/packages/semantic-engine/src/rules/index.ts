@@ -65,3 +65,6 @@ export type {
   SupportRule,
   SupportRuleNode,
 } from './types'
+
+export { projectPublishedRelationFacts } from './from-published'
+export type { RuleRelationReadCompleteness } from './types'

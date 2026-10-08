@@ -84,6 +84,8 @@ export interface SyntheticCaseRelation {
   readonly relationId: string
   readonly targetObjectRef: string
   readonly endpointResolved: boolean
+  /** Observations belonging to this resolved target, never the current subject. */
+  readonly targetFields?: readonly SyntheticCaseField[]
 }
 
 /** One synthetic case: a deliberately isolated counterexample, never a business instance. */
@@ -573,6 +575,10 @@ function isCaseField(value: unknown): value is SyntheticCaseField {
 function isCase(value: unknown): value is SyntheticCase {
   if (!isRecord(value) || !isNonEmptyString(value['caseId']) || !isSyntheticCaseKind(value['caseKind'])) return false
   if (!isNonEmptyString(value['objectTypeRef'])) return false
+  if (value['relations'] !== undefined && (!Array.isArray(value['relations']) || !value['relations'].every((relation: unknown) =>
+    isRecord(relation) && isNonEmptyString(relation['relationId']) && isNonEmptyString(relation['targetObjectRef']) &&
+    typeof relation['endpointResolved'] === 'boolean' && (relation['targetFields'] === undefined ||
+      (Array.isArray(relation['targetFields']) && relation['targetFields'].every(isCaseField)))))) return false
   if (!Array.isArray(value['fields']) || !value['fields'].every(isCaseField)) return false
   return true
 }

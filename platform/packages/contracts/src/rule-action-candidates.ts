@@ -20,6 +20,7 @@ import type {
 } from './rule-extraction'
 import { findEmbeddedSecretViolations, findIndustryPackViolations } from './industry-packs'
 import { findRegisteredOperation } from './operations'
+import type { SemanticDefinitionVersion } from './semantic-definitions'
 import type { ToolContext } from './trusted'
 
 /**
@@ -123,7 +124,7 @@ export interface RuleRelationPremiseDeclaration {
   /** Relation navigation depth of the premise; the executable subset is exactly one hop. */
   readonly depth: number
   /**
-   * The target-entity condition the premise binds (`compare`/`range`/finite `all`, no nested
+   * The target-entity condition the premise binds (`compare`/`range`/finite `all`/`any`, no nested
    * relation or rule reference). Absent means the premise only witnesses the relation edge.
    */
   readonly targetCondition?: RuleExpressionNode
@@ -673,4 +674,26 @@ export function assertRuleActionCandidateShape(
   if (!isDigest(value['idempotencyKey'])) throw invalid('idempotencyKey must be a sha256 digest')
   if (!isNonEmptyString(value['actor'])) throw invalid('actor must be a non-empty string')
   if (!isNonEmptyString(value['recordedAt'])) throw invalid('recordedAt must be a timestamp')
+}
+
+/** Derive relation authority from the pinned definition and preserve the reviewed rule's target filter. */
+export function relationPremisesFromDefinition(definition: SemanticDefinitionVersion, condition?: RuleExpressionNode): readonly RuleRelationPremiseDeclaration[] {
+  const conditions = new Map<string, RuleExpressionNode>()
+  const visit = (node: RuleExpressionNode): void => {
+    if (node.op === 'relation' && node.targetCondition !== undefined) conditions.set(node.relationId, node.targetCondition)
+    else if (node.op === 'all' || node.op === 'any') node.operands.forEach(visit)
+    else if (node.op === 'not') visit(node.operand)
+  }
+  if (condition !== undefined) visit(condition)
+  const ownsAttributes = (node: RuleExpressionNode, targetObjectId: string): boolean => {
+    if (node.op === 'compare' || node.op === 'range') return definition.attributes.some((attribute) => attribute.id === node.attributeId && attribute.objectId === targetObjectId)
+    if (node.op === 'all' || node.op === 'any') return node.operands.length > 0 && node.operands.every((child) => ownsAttributes(child, targetObjectId))
+    return false
+  }
+  return definition.relations.flatMap((relation): RuleRelationPremiseDeclaration[] => {
+    const targetCondition = conditions.get(relation.id)
+    if (targetCondition !== undefined && !ownsAttributes(targetCondition, relation.toObjectId)) return []
+    return [{ relationId: relation.id, fromObjectId: relation.fromObjectId, toObjectId: relation.toObjectId,
+      definitionRef: definition.ref, depth: 1, ...(targetCondition === undefined ? {} : { targetCondition }) }]
+  })
 }

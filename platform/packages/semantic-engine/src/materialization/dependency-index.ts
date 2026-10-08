@@ -118,6 +118,23 @@ export class MaterializationDependencyIndex {
             rule.ruleId,
           )
         }
+        const relationConditions = new Map(group.relation?.targetConditions.map((target) => [target.targetKey, target]) ?? [])
+        const relationTargets = new Map(group.relation?.targetGroups.map((target) => [target.groupId, target]) ?? [])
+        for (const branch of group.relation?.branches ?? []) {
+          const edge = branch.edge.assertionId === undefined ? undefined : factsById.get(branch.edge.assertionId)
+          const targetId = edge?.relation?.targetEntityId
+          if (targetId !== undefined) {
+            addTo(rulesByEntity, targetId, rule.ruleId)
+            if (edge?.relation !== undefined) addTo(rulesByEntityObject, JSON.stringify([targetId, edge.relation.targetObjectId]), rule.ruleId)
+            const targetCondition = branch.targetKey === undefined ? undefined : relationConditions.get(branch.targetKey)
+            for (const groupId of targetCondition?.groupIds ?? []) {
+              const targetGroup = relationTargets.get(groupId)
+              if (targetGroup === undefined) continue
+              addTo(rulesByEntityPredicate, entityPredicateKey(targetId, targetGroup.filter.fieldRef), rule.ruleId)
+              addTo(rulesByPredicate, targetGroup.filter.fieldRef, rule.ruleId)
+            }
+          }
+        }
         for (const alternative of group.alternatives) {
           if (alternative.assertionId !== undefined) {
             const fact = factsById.get(alternative.assertionId)

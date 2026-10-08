@@ -1,5 +1,6 @@
 import type {
   PublishedRuleFilter,
+  SemanticDefinitionVersion,
   PublishedRuleVersion,
   PublishedStatement,
   PublishedStatementFilter,
@@ -14,6 +15,7 @@ import { sha256DigestOf } from '../definitions/canonical'
 import {
   compilePublishedRuleInstances,
   projectPublishedAttributeFacts,
+  projectPublishedRelationFacts,
 } from '../rules'
 import type { DependencyEntityBinding } from './dependency-index'
 import type { SupportRule } from '../rules'
@@ -50,6 +52,8 @@ export interface PublishedSemanticReadView {
 export interface PublishedSemanticSourceOptions extends PublishedPageLimits {
   /** The run/profile pin. A multi-schema scope must provide an exact definition version. */
   readonly definitionRef?: VersionRef
+  /** Exact immutable schema supplying executable relation declarations. */
+  readonly definition?: SemanticDefinitionVersion
   /** Required by the production worker; omission is retained for bounded unit fixtures. */
   readonly identity?: Pick<IdentityDecisionStore, 'latestReadRevision' | 'readPublishedBindings'>
   readonly completeRangeAttributeIds?: readonly string[]
@@ -110,13 +114,15 @@ export class PublishedSemanticSource implements MaterializationPublishedSource {
   readonly #readView: PublishedSemanticReadView
   readonly #identity: Pick<IdentityDecisionStore, 'latestReadRevision' | 'readPublishedBindings'> | undefined
   readonly #definitionRef: VersionRef | undefined
+  readonly #definition: SemanticDefinitionVersion | undefined
   readonly #pageLimits: PublishedPageLimits
   readonly #completeRangeAttributeIds: readonly string[]
 
   constructor(readView: PublishedSemanticReadView, options: PublishedSemanticSourceOptions = {}) {
     this.#readView = readView
     this.#identity = options.identity
-    this.#definitionRef = options.definitionRef
+    this.#definition = options.definition
+    this.#definitionRef = options.definitionRef ?? options.definition?.ref
     this.#pageLimits = {
       pageSize: options.pageSize ?? DEFAULT_PAGE_SIZE,
       maxRecords: options.maxRecords ?? DEFAULT_MAX_RECORDS,
@@ -250,9 +256,14 @@ export class PublishedSemanticSource implements MaterializationPublishedSource {
           if (existing === undefined || compareRevision(rule.version, existing.version) > 0) latestRules.set(key, rule)
         }
         const currentRules = [...latestRules.values()]
-        const compiled = compilePublishedRuleInstances(currentRules, projection.facts, {
+        const definition = this.#definition !== undefined && this.#definition.scopeRef.tenantId === scopeRef.tenantId && this.#definition.scopeRef.spaceId === scopeRef.spaceId && sameVersion(this.#definition.ref, definitionRef) ? this.#definition : undefined
+        const relationProjection = definition === undefined ? { facts: [], issues: [] } : projectPublishedRelationFacts(scopedStatements, { definition, bindings: identityBindings.bindings })
+        issues.push(...relationProjection.issues)
+        const facts = [...projection.facts, ...relationProjection.facts]
+        const compiled = compilePublishedRuleInstances(currentRules, facts, {
           scopeRef,
           definitionRef,
+          ...(definition === undefined ? {} : { definition }),
           subjects,
           completeRangeAttributeIds: this.#completeRangeAttributeIds,
         })
@@ -260,7 +271,15 @@ export class PublishedSemanticSource implements MaterializationPublishedSource {
         // even when current identity verification excluded those facts from computation. It
         // lets a later identity split/review or parent-statement revision invalidate old rules.
         const sourceStatementById = new Map(allEntityStatements.map((statement) => [statement.statementId, statement]))
+        const publishedEntityByCandidate = new Map(allEntityStatements.map((statement) => [statement.sourceCandidateId, statement]))
+        const relationEndpointBindings: DependencyEntityBinding[] = scopedStatements.filter((statement) => statement.kind === 'relation').flatMap((statement) =>
+          [statement.value['from'], statement.value['to']].flatMap((endpoint) => {
+            if (typeof endpoint !== 'object' || endpoint === null || !('candidateId' in endpoint) || typeof endpoint.candidateId !== 'string') return []
+            const entity = publishedEntityByCandidate.get(endpoint.candidateId)
+            return entity === undefined ? [] : [{ entityId: entity.subjectEntityId, logicalAssertionId: statement.statementId, sourceStatementId: statement.statementId, sourceCandidateId: endpoint.candidateId, predicate: statement.predicate }]
+          }))
         const entityBindings: DependencyEntityBinding[] = [
+          ...relationEndpointBindings,
           ...allEntityStatements.map((statement) => ({
             entityId: statement.subjectEntityId,
             logicalAssertionId: statement.statementId,
@@ -306,13 +325,13 @@ export class PublishedSemanticSource implements MaterializationPublishedSource {
           return [instance.supportRule, consequenceRule]
         })
         return {
-          facts: [...projection.facts],
+          facts,
           rules: computationRules,
           entityBindings,
           identityBindings: [...identityBindings.bindings],
           definitionRef,
           historicalAsOfSupported: false,
-          complete: identityBindings.complete && unconfirmedIdentityCount === 0 && dependencyProjection.issues.length === 0 &&
+          complete: relationProjection.issues.length === 0 && identityBindings.complete && unconfirmedIdentityCount === 0 && dependencyProjection.issues.length === 0 &&
             !issues.some((issue) => issue.code === 'PUBLISHED_RULE_CONCLUSION_INVALID') &&
             !issues.some((issue) => issue.code === 'PUBLICATION_NOT_FOUND'),
           ruleIssues: compiled.issues,
@@ -333,7 +352,13 @@ export class PublishedSemanticSource implements MaterializationPublishedSource {
     readonly complete: boolean
     readonly issue?: NonNullable<PublishedSemanticData['issues']>[number]
   }> {
-    const candidateIds = unique(statements.filter((statement) => statement.kind === 'entity').map((statement) => statement.sourceCandidateId))
+    const candidateIds = unique(statements.flatMap((statement) => {
+      if (statement.kind === 'entity') return [statement.sourceCandidateId]
+      return [statement.value['from'], statement.value['to']].flatMap((endpoint) => {
+        if (typeof endpoint !== 'object' || endpoint === null || !('candidateId' in endpoint) || typeof endpoint.candidateId !== 'string') return []
+        return [endpoint.candidateId]
+      })
+    }))
     if (candidateIds.length === 0) return { bindings: [], complete: true }
     const identity = this.#identity
     if (identity === undefined) {

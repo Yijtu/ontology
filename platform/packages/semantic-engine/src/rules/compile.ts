@@ -4,8 +4,11 @@ import type {
   RuleProvenanceSpan,
   ScopeRef,
   SemanticFilter,
+  SemanticDefinitionVersion,
   VersionRef,
 } from '@ontology/contracts'
+import { relationPremisesFromDefinition } from '@ontology/contracts'
+import { validateRuleSupport } from './support'
 import { sha256DigestOf } from '../definitions/canonical'
 import { RuleEvaluationError } from './errors'
 import type {
@@ -17,6 +20,7 @@ import type {
   RuleFact,
   RulePremiseAlternative,
   RulePremiseGroup,
+  RuleRelationReadCompleteness,
   SupportRule,
 } from './types'
 
@@ -32,9 +36,23 @@ export interface PublishedRuleCompilerOptions {
   readonly subjects: readonly PublishedRuleSubject[]
   /** Quantity unit completeness comes from the pinned schema, never guessed by the compiler. */
   readonly completeRangeAttributeIds?: readonly string[]
+  /** Immutable authoritative definition, whose ref must exactly match definitionRef. */
+  readonly definition?: SemanticDefinitionVersion
+  /** Complete closed-world relation coverage is an explicit proof, never inferred from pagination. */
+  readonly relationCompleteness?: readonly RuleRelationReadCompleteness[]
 }
 
 type PredicateFacts = ReadonlyMap<string, readonly RuleFact[]>
+
+interface RelationCompilationContext {
+  readonly subject: PublishedRuleSubject
+  readonly attributeFactsByInstance: ReadonlyMap<string, PredicateFacts>
+  readonly relationFactsByInstance: ReadonlyMap<string, PredicateFacts>
+  readonly declarations: ReturnType<typeof relationPremisesFromDefinition>
+  readonly definitionRef: VersionRef
+  readonly scopeRef: ScopeRef
+  readonly completeness: readonly RuleRelationReadCompleteness[]
+}
 
 const NO_FACTS: PredicateFacts = new Map()
 
@@ -97,12 +115,14 @@ export function compilePublishedRuleInstances(
   const subjects = dedupeSubjects(options.subjects)
   const completeRangeAttributeIds = new Set(options.completeRangeAttributeIds ?? [])
   const factsByInstance = new Map<string, Map<string, RuleFact[]>>()
+  const relationFactsByInstance = new Map<string, Map<string, RuleFact[]>>()
   for (const fact of facts) {
     const instanceKey = factInstanceKey(fact.subject, fact.objectId, fact.schemaRef)
-    let byPredicate = factsByInstance.get(instanceKey)
+    const index = fact.relation === undefined ? factsByInstance : relationFactsByInstance
+    let byPredicate = index.get(instanceKey)
     if (byPredicate === undefined) {
       byPredicate = new Map()
-      factsByInstance.set(instanceKey, byPredicate)
+      index.set(instanceKey, byPredicate)
     }
     const predicateFacts = byPredicate.get(fact.predicate)
     if (predicateFacts === undefined) byPredicate.set(fact.predicate, [fact])
@@ -129,10 +149,22 @@ export function compilePublishedRuleInstances(
       })
       continue
     }
+    const declarations = options.definition !== undefined &&
+      options.definition.scopeRef.tenantId === options.scopeRef.tenantId && options.definition.scopeRef.spaceId === options.scopeRef.spaceId &&
+      factInstanceKey('', '', options.definition.ref) === factInstanceKey('', '', options.definitionRef)
+      ? relationPremisesFromDefinition(options.definition, rule.expression).filter((declaration) => declaration.fromObjectId === rule.objectId) : []
+    const support = validateRuleSupport({ ruleId: rule.ruleId, condition: rule.expression, exceptions: rule.exceptions, relationPremises: declarations })
+    if (!support.executable) {
+      issues.push({ ruleId: rule.ruleId, ruleVersionId: rule.ruleVersionId, publishedRevision: rule.version, ruleRef, objectId: rule.objectId, code: support.findings.some((finding) => finding.code === 'UNSUPPORTED_NEGATION' || finding.code === 'UNSUPPORTED_EXCEPTION') ? 'UNSUPPORTED_NEGATION' : 'UNSUPPORTED_FILTER', message: support.findings.map((finding) => finding.message).join('; '), sourceSpans })
+      continue
+    }
     const applicableSubjects = subjects.filter((subject) => subject.objectId === rule.objectId)
     if (applicableSubjects.length === 0) {
       try {
-        compileNode(rule.expression, NO_FACTS, rule.ruleId, true, completeRangeAttributeIds)
+        compileNode(rule.expression, NO_FACTS, rule.ruleId, true, completeRangeAttributeIds, {
+          subject: { subjectEntityId: '', objectId: rule.objectId }, attributeFactsByInstance: factsByInstance, relationFactsByInstance,
+          declarations, definitionRef: options.definitionRef, scopeRef: options.scopeRef, completeness: [],
+        })
         for (const exception of rule.exceptions) {
           const compiled = compileNode(exception.condition, NO_FACTS, `${rule.ruleId}:exception:${exception.exceptionId}`, true, completeRangeAttributeIds)
           if (compiled.groups.length !== 1 || compiled.groups[0]?.polarity === 'negative') {
@@ -179,6 +211,7 @@ export function compilePublishedRuleInstances(
           instanceKey,
           true,
           completeRangeAttributeIds,
+          { subject, attributeFactsByInstance: factsByInstance, relationFactsByInstance, declarations, definitionRef: options.definitionRef, scopeRef: options.scopeRef, completeness: options.relationCompleteness ?? [] },
         )
         const conditionGroups = compiledCondition.groups
         const conditionGroupIds = conditionGroups.map((group) => group.groupId)
@@ -376,6 +409,7 @@ function compileNode(
   prefix: string,
   allowExplicitNot: boolean,
   completeRangeAttributeIds: ReadonlySet<string>,
+  relationContext?: RelationCompilationContext,
 ): CompiledCondition {
   switch (node.op) {
     case 'compare': {
@@ -405,7 +439,7 @@ function compileNode(
     }
     case 'all': {
       const children = node.operands.map((operand, index) =>
-        compileNode(operand, facts, `${prefix}.${String(index)}`, allowExplicitNot, completeRangeAttributeIds),
+        compileNode(operand, facts, `${prefix}.${String(index)}`, allowExplicitNot, completeRangeAttributeIds, relationContext),
       )
       return {
         groups: children.flatMap((child) => child.groups),
@@ -416,7 +450,7 @@ function compileNode(
       // A genuine different-condition OR: every branch keeps its own groups and sub-plan. Two
       // different conditions are never merged into one same-filter equivalent-source group.
       const children = node.operands.map((operand, index) =>
-        compileNode(operand, facts, `${prefix}.${String(index)}`, allowExplicitNot, completeRangeAttributeIds),
+        compileNode(operand, facts, `${prefix}.${String(index)}`, allowExplicitNot, completeRangeAttributeIds, relationContext),
       )
       return {
         groups: children.flatMap((child) => child.groups),
@@ -448,11 +482,46 @@ function compileNode(
       }
       return { groups: [negative], plan: { kind: 'leaf', leaf: negative.groupId } }
     }
-    case 'relation':
-      throw new RuleEvaluationError(
-        'UNSUPPORTED_FILTER',
-        `rule ${prefix} uses a relation premise the declarative subset cannot represent`,
-      )
+    case 'relation': {
+      const declaration = relationContext?.declarations.find((entry) => entry.relationId === node.relationId)
+      if (declaration === undefined || relationContext === undefined) {
+        throw new RuleEvaluationError('UNSUPPORTED_FILTER', `relation ${node.relationId} needs the pinned definition and scoped published edges`)
+      }
+      const edges = relationContext.relationFactsByInstance.get(factInstanceKey(relationContext.subject.subjectEntityId, declaration.fromObjectId, relationContext.definitionRef))?.get(node.relationId) ?? []
+      const targets = new Map<string, CompiledCondition>()
+      const branches = edges.filter((fact) =>
+        fact.relation?.relationId === node.relationId && fact.subject === relationContext.subject.subjectEntityId &&
+        fact.objectId === declaration.fromObjectId && fact.relation.targetObjectId === declaration.toObjectId &&
+        factInstanceKey('', '', fact.schemaRef) === factInstanceKey('', '', relationContext.definitionRef),
+      ).map((edge) => {
+        const targetFacts = edge.relation?.targetEntityId === undefined ? NO_FACTS : relationContext.attributeFactsByInstance.get(factInstanceKey(edge.relation.targetEntityId, declaration.toObjectId, relationContext.definitionRef)) ?? NO_FACTS
+        const targetId = edge.relation?.targetEntityId ?? `unresolved:${edge.assertionId}`
+        let target = targets.get(targetId)
+        if (target === undefined && declaration.targetCondition !== undefined) {
+          target = compileNode(declaration.targetCondition, targetFacts, `${prefix}:target:${targetId}`, false, completeRangeAttributeIds)
+          targets.set(targetId, target)
+        }
+        return {
+          edge: { alternativeId: edge.assertionId, assertionId: edge.assertionId },
+          endpointResolved: edge.relation?.endpointResolved === true,
+          ...(target === undefined ? {} : { targetKey: targetId }),
+        }
+      })
+      const targetGroups = [...targets.values()].flatMap((target) => target.groups)
+      const targetConditions = [...targets].map(([targetKey, target]) => ({ targetKey, groupIds: target.groups.map((group) => group.groupId), condition: target.plan }))
+      const alternatives = [...branches.map((branch) => branch.edge), ...targetGroups.flatMap((group) => group.alternatives)]
+      const proof = relationContext.completeness.find((entry) =>
+        entry.scopeRef.tenantId === relationContext.scopeRef.tenantId && entry.scopeRef.spaceId === relationContext.scopeRef.spaceId &&
+        entry.subjectEntityId === relationContext.subject.subjectEntityId && entry.relationId === node.relationId &&
+        factInstanceKey('', '', entry.definitionRef) === factInstanceKey('', '', relationContext.definitionRef))
+      const group: RulePremiseGroup = {
+        groupId: `${prefix}:relation:${node.relationId}`,
+        filter: { fieldRef: node.relationId, op: 'eq', values: [true] },
+        alternatives: alternatives.length === 0 ? [{ alternativeId: `unmatched:relation:${node.relationId}`, assertionId: `unmatched:relation:${node.relationId}` }] : [...new Map(alternatives.map((alternative) => [alternative.alternativeId, alternative])).values()],
+        relation: { relationId: node.relationId, ...(proof === undefined ? {} : { completeness: { validAt: proof.validAt, asOfRecordedSeq: proof.asOfRecordedSeq } }), targetGroups, targetConditions, branches },
+      }
+      return { groups: [group], plan: { kind: 'leaf', leaf: group.groupId } }
+    }
     default:
       throw new RuleEvaluationError('UNSUPPORTED_FILTER', `rule ${prefix} uses an unknown expression node`)
   }
@@ -475,7 +544,9 @@ function spansOf(
         break
       case 'compare':
       case 'range':
+        break
       case 'relation':
+        if (node.targetCondition !== undefined) visit(node.targetCondition)
         break
       default:
         break

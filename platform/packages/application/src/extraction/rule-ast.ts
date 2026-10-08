@@ -217,9 +217,11 @@ function translateNode(
       if (typeof relationId !== 'string' || relationId.length === 0) {
         return unhandled('MALFORMED_EXPRESSION', 'a relation expression needs a relation id')
       }
+      const target = value['targetCondition'] === undefined ? undefined : translateNode(value['targetCondition'], spans, cyclicRuleIds)
+      if (target?.kind === 'unhandled') return target
       return {
         kind: 'ok',
-        expression: { op: 'relation', relationId, spans: [...spans] },
+        expression: { op: 'relation', relationId, ...(target === undefined ? {} : { targetCondition: target.expression }), spans: [...spans] },
         exceptions: [],
       }
     }
