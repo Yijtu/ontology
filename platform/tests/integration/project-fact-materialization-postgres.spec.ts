@@ -392,11 +392,14 @@ describe('confirmed structured records → official facts (real PostgreSQL)', ()
         expect(confused.issues.some((issue) => issue.attributeId === 'reading' && issue.code === 'INVALID_VALUE')).toBe(true)
       }
       for (const value of [
-        { kind: 'wrong_tag', amount: '1' }, { kind: 'scalar_decimal', amount: true },
+        { kind: 'wrong_tag', amount: '1' }, { kind: 'wrong_tag', amount: '1', unit: 'kW' }, { kind: 'scalar_decimal', amount: true },
         { kind: 'scalar_decimal', amount: '1e5' }, { kind: 'scalar_decimal', amount: '9'.repeat(65) },
         { kind: 'scalar_decimal', amount: '1', extra: true }, { kind: 'scalar_decimal', amount: '1', unit: 'kW' },
       ]) {
         await expect(harness.adminClient.query(`UPDATE agent_platform.published_rule_versions SET conclusion=$1::jsonb WHERE tenant_id=$2::uuid AND rule_version_id=$3::uuid`, [JSON.stringify({ predicate: 'reading', value }), p.scope.tenantId, rule.candidateId])).rejects.toMatchObject({ code: '23514' })
+      }
+      for (const conclusion of [{ value: { kind: 'scalar_decimal', amount: '1' } }, { predicate: 'reading' }]) {
+        await expect(harness.adminClient.query(`UPDATE agent_platform.published_rule_versions SET conclusion=$1::jsonb WHERE tenant_id=$2::uuid AND rule_version_id=$3::uuid`, [JSON.stringify(conclusion), p.scope.tenantId, rule.candidateId])).rejects.toMatchObject({ code: '23514' })
       }
       // Roll back low-level legacy-shape probes; the actual reviewed consequence is retained.
       await harness.adminClient.query('BEGIN')

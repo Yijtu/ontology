@@ -46,6 +46,7 @@ function operationOf(statement: PublishedStatement): RuleFact['op'] {
 
 function exactValueOf(value: unknown, unitCode: unknown): { value?: RuleAssertionValue; issue?: string } {
   const nested = recordOf(value)
+  if (nested !== undefined && Object.keys(nested).some((key) => key !== 'amount' && key !== 'unit')) return { issue: 'physical quantities may contain only amount and unit' }
   if (nested !== undefined && typeof nested['amount'] === 'string') {
     const amount = canonicalDecimalString(nested['amount'])
     const unit = unitCodeOf(nested['unit'])

@@ -3,7 +3,7 @@ import { assertProjectFactInputShape, createToolContext } from '@ontology/contra
 import type { ProjectFactInput } from '@ontology/contracts'
 import { InMemoryCandidateStore, ProjectFactMaterializationService } from '@ontology/application'
 import { toolContext } from './component-registry-fixtures'
-import { evaluateFilter, isRuleScalarDecimalValue } from '@ontology/semantic-engine'
+import { evaluateFilter, isDecimalQuantity, isRuleDecimalValue, isRuleScalarDecimalValue } from '@ontology/semantic-engine'
 
 const id = '11111111-1111-4111-8111-111111111111'
 const digest = `sha256:${'a'.repeat(64)}`
@@ -49,6 +49,10 @@ describe('mapped fact boundary', () => {
     expect(isRuleScalarDecimalValue({ kind: 'scalar_decimal', amount: '1e4' })).toBe(false)
     expect(isRuleScalarDecimalValue({ kind: 'scalar_decimal', amount: '1', unit: 'kW' })).toBe(false)
     expect(isRuleScalarDecimalValue({ kind: 'scalar_decimal', amount: '1', extra: true })).toBe(false)
+    expect(isRuleDecimalValue({ kind: 'wrong_tag', amount: '1', unit: 'kW' })).toBe(false)
+    expect(isRuleDecimalValue({ kind: 'scalar_decimal', amount: '1', unit: 'kW' })).toBe(false)
+    expect(isDecimalQuantity({ kind: 'wrong_tag', amount: '1', unit: 'kW' })).toBe(false)
+    expect(isRuleDecimalValue({ amount: '1', unit: 'kW', extra: true })).toBe(false)
     expect(isRuleScalarDecimalValue({ kind: 'scalar_decimal', amount: true })).toBe(false)
     expect(evaluateFilter({ fieldRef: 'reading', op: 'gt', values: ['9007199254740992'] }, { kind: 'scalar_decimal', amount: '9007199254740993' })).toBe(true)
     expect(evaluateFilter({ fieldRef: 'label', op: 'gt', values: ['9007199254740992'] }, '9007199254740993')).toBeUndefined()

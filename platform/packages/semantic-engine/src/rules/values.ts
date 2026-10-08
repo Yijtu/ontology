@@ -56,14 +56,13 @@ export function compareDecimal(left: string, right: string): -1 | 0 | 1 {
 }
 
 export function isDecimalQuantity(value: unknown): value is DecimalQuantity {
-  if (typeof value !== 'object' || value === null) return false
-  const candidate = value as Record<string, unknown>
-  return typeof candidate['amount'] === 'string' && typeof candidate['unit'] === 'string'
+  return isRuleDecimalValue(value)
 }
 
 export function isRuleDecimalValue(value: unknown): value is DecimalQuantity {
   if (typeof value !== 'object' || value === null || Array.isArray(value)) return false
-  if ('kind' in value && value.kind === 'scalar_decimal') return false
+  const keys = Object.keys(value)
+  if (keys.length !== 2 || keys.some((key) => key !== 'amount' && key !== 'unit')) return false
   const candidate = value as Record<string, unknown>
   return (
     typeof candidate['amount'] === 'string' &&
