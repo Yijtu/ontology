@@ -1051,3 +1051,125 @@ button:disabled {
 .public-empty p {
   margin: 4px 0;
 }
+
+.app__context {
+  max-width: 1100px;
+  margin: 0 auto;
+  padding: 12px 24px 0;
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 12px;
+  color: var(--muted);
+  font-size: 13px;
+}
+
+.app__context label {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+
+.app__context [data-testid="context-workspace-failure"],
+.app__context [data-testid="context-project-failure"] {
+  color: var(--warn);
+}
+
+.app__guide {
+  max-width: 1100px;
+  margin: 0 auto;
+  padding: 24px;
+}
+
+.app__guide-header h1 {
+  margin: 0 0 4px;
+  font-size: 22px;
+}
+
+.app__guide-hint {
+  margin: 0;
+  color: var(--muted);
+  font-size: 13px;
+}
+
+.app__guide-context {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 16px 32px;
+  margin: 16px 0;
+  background: var(--surface);
+  border: 1px solid var(--line);
+  border-radius: 10px;
+  padding: 12px 16px;
+}
+
+.app__guide-context dt {
+  color: var(--muted);
+  font-size: 12px;
+}
+
+.app__guide-context dd {
+  margin: 2px 0 0;
+  font-weight: 600;
+}
+
+.app__guide-disclaimer {
+  margin: 0 0 16px;
+  border-left: 4px solid var(--warn);
+  background: var(--surface);
+  border-radius: 6px;
+  padding: 10px 14px;
+  color: var(--muted);
+  font-size: 13px;
+}
+
+.app__guide-path,
+.app__guide-cards {
+  margin-top: 16px;
+  background: var(--surface);
+  border: 1px solid var(--line);
+  border-radius: 10px;
+  padding: 16px;
+}
+
+.app__guide-path h2,
+.app__guide-cards h2 {
+  margin: 0 0 12px;
+  font-size: 16px;
+}
+
+.app__guide-path ol {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(240px, 1fr));
+  gap: 12px;
+  margin: 0;
+  padding-left: 20px;
+}
+
+.app__guide-path li > span {
+  display: block;
+  margin-top: 4px;
+  color: var(--muted);
+  font-size: 12px;
+}
+
+.app__guide-cards ul {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(220px, 1fr));
+  gap: 12px;
+  margin: 0;
+  padding: 0;
+  list-style: none;
+}
+
+.app__guide-cards li {
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  padding: 12px;
+}
+
+.app__guide-cards p {
+  margin: 6px 0 0;
+  color: var(--muted);
+  font-size: 12px;
+}
