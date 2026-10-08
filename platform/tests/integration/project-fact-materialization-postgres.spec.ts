@@ -4,21 +4,23 @@ import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { afterAll, beforeAll, describe, expect, it, vi } from 'vitest'
 import { FileSystemObjectStore, LocalImmutableBlobStore, PostgresArtifactRegistry } from '@ontology/adapter-blob-local'
-import { LocalStructuredIngestionService, PostgresStructuredIngestionStore, StructuredDocumentParser } from '@ontology/adapter-extraction-document'
+import { DocumentSpanReader, LocalDocumentExtractionService, LocalStructuredIngestionService, PostgresDocumentParseStore, PostgresStructuredIngestionStore, StructuredDocumentParser, StructuredPremiseSourceReader } from '@ontology/adapter-extraction-document'
 import {
   ControlPostgresDatabase, PostgresCandidateStore, PostgresIdentityDecisionStore,
   PostgresInstanceReviewStore, PostgresJobStore, PostgresProjectDocumentStore,
   PostgresProjectMappingStore, PostgresProjectReadinessStore, PostgresProjectRecordStore,
   PostgresProjectStore, PostgresSemanticPublicationStore,
+  PostgresMaterializationStore, PostgresEvidenceStore,
 } from '@ontology/adapter-control-postgres'
-import { InMemoryIndustrySchemaSource, InstanceReviewService, JobService, ProjectMappingService, ProjectService, encodeStructuredExtractionRef } from '@ontology/application'
-import { createProjectFactWorkflow, createInstanceIdentityWorkflow } from '@ontology/app-api'
+import { DraftVerificationService, TypedEvidenceDraftWriter, InMemoryIndustrySchemaSource, InstanceReviewService, JobService, ProjectMappingService, ProjectService, encodeStructuredExtractionRef } from '@ontology/application'
+import { createBlobArtifactWriter, createProjectFactWorkflow, createInstanceIdentityWorkflow } from '@ontology/app-api'
 import {
   IdentityDecisionService, InMemoryIdentityIndexReader, PublishedSemanticSource,
   PublishedFactsReferenceProvider, OntologyLookupService, SemanticDefinitionService,
   SemanticPublicationService,
   InMemorySemanticDefinitionStore, RuleEvaluator,
   definitionVersionDigest, projectIndustrySchema, projectPublishedAttributeFacts, sha256DigestOf,
+  ArchivedRulePremiseReplayVerifier, IncrementalMaterializer, MaterializedRuleDerivationEvidenceProducer,
 } from '@ontology/semantic-engine'
 import type { EntityCandidate, ColumnMappingEntry, ResourceRef, RuleCandidate, StructuredParseOptions, ToolContext } from '@ontology/contracts'
 import { createJobScope, startJobDatabase } from './job-postgres-harness'
@@ -28,6 +30,8 @@ import { toolContext } from '../unit/component-registry-fixtures'
 import { RecordingControlRepository } from '../unit/semantic-definition-fixtures'
 import { relationDefinition, targetCondition } from '../unit/rule-relation-fixtures'
 import { buildXlsx, numberCellXml, rowXml, sharedStringCell, worksheetOf } from '../fixtures/structured/xlsx'
+import { buildInputManifest, RUN_ID, verificationPolicy } from '../unit/verification-fixtures'
+import { isRecord } from '@ontology/contracts'
 
 vi.setConfig({ testTimeout: 120_000 })
 let harness: JobDbHarness
@@ -45,6 +49,7 @@ let structured: PostgresStructuredIngestionStore
 let registry: PostgresArtifactRegistry
 let blobs: LocalImmutableBlobStore
 let objectDir = ''
+let documentParses: PostgresDocumentParseStore
 
 beforeAll(async () => {
   harness = await startJobDatabase()
@@ -60,6 +65,7 @@ beforeAll(async () => {
   jobs = new PostgresJobStore(db)
   structured = new PostgresStructuredIngestionStore({ connectionString: harness.appUrl, maxPoolSize: 2 })
   registry = new PostgresArtifactRegistry({ connectionString: harness.appUrl, maxPoolSize: 2 })
+  documentParses = new PostgresDocumentParseStore({ connectionString: harness.appUrl, maxPoolSize: 2 })
   objectDir = await mkdtemp(join(tmpdir(), 'project-facts-'))
   const objects = new FileSystemObjectStore(objectDir)
   await objects.init()
@@ -68,6 +74,7 @@ beforeAll(async () => {
 
 afterAll(async () => {
   await structured?.close()
+  await documentParses?.close()
   await registry?.close()
   await db?.close()
   if (objectDir !== '') await rm(objectDir, { recursive: true, force: true })
@@ -165,7 +172,130 @@ async function publish(p: Fixture, selected: readonly { candidateId: string; kin
   return p.workflow.publication.publish({ approvedCandidateRefs: selected, schemaRef: p.definition.ref, expectedRevision: await publicationStore.latestPublicationRevision(p.scope.scopeRef, p.ctx), idempotencyKey: key }, p.ctx)
 }
 
+async function prepareOneHopPremiseReplay(label: string) {
+  const p = await setup(label), a = await imported(p, 'csv'), b = await imported(p, 'xlsx'), s = await imported(p, 'csv', 'site')
+  await mount(p, [a, b, s])
+  const ca = await stage(p, a), cb = await stage(p, b), cs = await stage(p, s)
+  const identity = await confirmed(p, ca, a.documentId)
+  await confirmed(p, cb, b.documentId, identity.identity.matchedEntityId)
+  await confirmed(p, cs, s.documentId)
+  const edge = await p.workflow.materialization.stageRelation(p.projectId, { relationId: 'meter_of', fromCandidateId: cs.candidateId, toCandidateId: ca.candidateId }, p.ctx)
+  await p.workflow.publication.reviewCandidate({ candidateId: edge.candidateId, decision: 'approve', expectedRevision: '0', reason: 'human confirmed the exact typed edge' }, p.ctx)
+  const policyBytes = new TextEncoder().encode('A site is ready when meter_of has a confirmed meter endpoint with active=true AND (power between 10 and 20 kW OR alarm=true).')
+  const staged = await blobs.stage(policyBytes, { scopeRef: p.scope.scopeRef }, p.ctx)
+  const policy = await blobs.publish({ scopeRef: p.scope.scopeRef, contentDigest: staged.contentDigest, byteSize: staged.byteSize, mediaType: 'text/plain', purpose: 'document' }, p.ctx)
+  const parsed = await new LocalDocumentExtractionService({ blobs, store: documentParses }).parse({ scopeRef: p.scope.scopeRef, originalRef: policy.blobRef, documentVersionRef: policy.blobRef }, p.ctx)
+  const chunk = parsed.chunks[0]
+  if (chunk === undefined) throw new Error('missing real rule policy source')
+  const policySpan = { parseId: parsed.parseId, chunkId: chunk.chunkId, locator: chunk.locator, spanKind: chunk.spanKind, precision: chunk.precision, quoteDigest: chunk.quoteDigest }
+  const job = await new JobService({ store: jobs }).createJob({ jobId: randomUUID(), kind: 'ingestion', sourceRef: policy.blobRef.id, documentRef: policy.blobRef.id, pipelineVersion: '1.0.0', idempotencyKey: `policy-${randomUUID()}` }, p.ctx)
+  const condition: RuleCandidate['expression'] = { op: 'relation', relationId: 'meter_of', targetCondition, spans: [policySpan] }
+  const rule: RuleCandidate = { candidateId: randomUUID(), kind: 'rule', ruleId: 'actual-site-ready', objectId: 'site', projectId: p.projectId, jobId: job.jobId,
+    sourceSpans: [{ ...policySpan, textDigest: chunk.textDigest }], deterministic: true, state: 'pending_review', issues: [],
+    inputVersion: { definitionRef: p.definition.ref, parseId: parsed.parseId, parserVersion: parsed.parserVersion, pipelineVersion: '1.0.0', documentVersionRef: policy.blobRef },
+    expression: condition, exceptions: [], conflicts: [], severity: 'soft', impact: 'low', reviewRequirement: 'required', idempotencyKey: sha256DigestOf({ projectId: p.projectId, condition }), recordedAt: new Date().toISOString() }
+  await candidates.insertCandidates(p.scope.scopeRef, [rule], p.ctx)
+  await p.workflow.publication.reviewCandidate({ candidateId: rule.candidateId, expectedRevision: '0', decision: 'approve', reason: 'human reviewed complete one-hop AND/OR declaration against original policy' }, p.ctx)
+  await publish(p, [ca, cb, cs, edge, rule])
+  const source = new PublishedSemanticSource(publicationStore, { definition: p.definition, identity: identities, projectId: p.projectId })
+  const materialization = new PostgresMaterializationStore(db), evidence = new PostgresEvidenceStore(db)
+  await new IncrementalMaterializer({ publishedSource: source, materialization }).applyChange({ changeId: randomUUID(), scopeRef: p.scope.scopeRef, recordedSeq: '1', recordedAt: new Date().toISOString(), kind: 'assertion_published',
+    logicalAssertionId: edge.candidateId, predicate: 'meter_of', validity: { validFrom: '2026-10-01T00:00:00Z', validTo: '2027-01-01T00:00:00Z' } }, p.ctx)
+  const slices = await materialization.readSlices(p.scope.scopeRef, { validAt: '2026-10-08T00:00:00Z', asOfRecordedSeq: '1', limit: 100 }, p.ctx)
+  const artifact = slices.flatMap((slice) => slice.conclusion.ruleArtifacts ?? []).find((row) => row.ruleId === rule.ruleId && row.applicability.state === 'applicable')
+  if (artifact?.validAt === undefined || artifact.asOfRecordedSeq === undefined) throw new Error('missing actual one-hop computation')
+  expect(artifact.factRefs.map((fact) => fact.sourceStatementId)).toEqual(expect.arrayContaining([edge.candidateId, ca.candidateId, cb.candidateId]))
+  const documentSpans = new DocumentSpanReader({ blobs, store: documentParses })
+  const structuredSources = new StructuredPremiseSourceReader({ artifacts: blobs, mappings, ingestion: structured })
+  const deps = { materialization, evidence, artifacts: blobs, candidates, identity: identities, projects, projectDocuments: documents, records, documentParses, documentSpans, structuredSources, publications: publicationStore }
+  const producer = new MaterializedRuleDerivationEvidenceProducer({ ...deps, artifacts: createBlobArtifactWriter(blobs), componentRef: { id: 'mapped-premise-reader', version: '1.0.0', digest: sha256DigestOf('mapped-premise-reader') } })
+  const record = await producer.record({ scopeRef: p.scope.scopeRef, ruleRef: artifact.ruleRef, definitionRef: p.definition.ref, subjectEntityId: artifact.subjectEntityId, objectId: 'site', validAt: artifact.validAt,
+    asOfRecordedSeq: artifact.asOfRecordedSeq, observedAt: new Date().toISOString(), sourceSnapshots: [], dataMode: 'synthetic' }, p.ctx)
+  if (record.envelope.payloadRef === undefined) throw new Error('missing premise archive')
+  const payload: unknown = JSON.parse(new TextDecoder().decode(await blobs.readAuthorized({ scopeRef: p.scope.scopeRef, blobRef: record.envelope.payloadRef }, p.ctx)))
+  if (!isRecord(payload) || !Array.isArray(payload['sourceEvidenceMappings'])) throw new Error('missing exact cell evidence')
+  expect(payload['sourceEvidenceMappings'].some((mapping: unknown) => isRecord(mapping) && isRecord(mapping['sourceSpan']) && isRecord(mapping['sourceSpan']['locator']) && mapping['sourceSpan']['locator']['kind'] === 'table_cell'), JSON.stringify(record.envelope.limitations)).toBe(true)
+  return { p, a, b, s, ca, cb, cs, edge, rule, artifact, payload, record, deps, structuredSources }
+}
+
 describe('confirmed structured records → official facts (real PostgreSQL)', () => {
+  it('blocks a real mapped record head change during source read while retaining its original historical proof (#264)', async () => {
+    const { p, cb, artifact, payload, deps, structuredSources } = await prepareOneHopPremiseReplay('mapped-record-head-race')
+    const source = cb.inputVersion.projectFact?.sources[0]
+    if (source === undefined) throw new Error('missing original record source')
+    const original = await records.getRecord(p.scope.scopeRef, p.projectId, source.recordId, p.ctx)
+    if (original === undefined) throw new Error('missing actual original record')
+    let changed = false
+    const replay = new ArchivedRulePremiseReplayVerifier({ ...deps, structuredSources: { read: async (candidate, span, ctx) => {
+      const read = await structuredSources.read(candidate, span, ctx)
+      if (!changed) {
+        changed = true
+        const fields = original.fields.map((field, index) => index === 0 ? { ...field, status: 'pending' as const } : field)
+        const contentDigest = sha256DigestOf({ objectId: original.objectId, fields, mappingRef: source.mappingRef, sourceDigest: original.sourceDigest, sourceRowKey: original.sourceRowKey })
+        const { revision: omitted, ...body } = original
+        void omitted
+        await records.appendRecords(p.scope.scopeRef, p.projectId, [{ ...body, fields, contentDigest, status: 'pending' }],
+          { idempotencyKey: `head-race-${randomUUID()}`, requestDigest: contentDigest }, p.ctx)
+      }
+      return read
+    } } })
+    expect(await replay.verify({ artifact, payload }, p.ctx)).toBe(false)
+    expect(changed).toBe(true)
+    expect((await records.getRecord(p.scope.scopeRef, p.projectId, source.recordId, p.ctx))?.revision).toBe('2')
+    expect(await new ArchivedRulePremiseReplayVerifier({ ...deps, readMode: 'published_snapshot' }).verify({ artifact, payload }, p.ctx)).toBe(true)
+  })
+
+  it('blocks a real membership/visibility withdrawal during source read while preserving archived original cells (#264)', async () => {
+    const { p, a, artifact, payload, deps, structuredSources } = await prepareOneHopPremiseReplay('mapped-visibility-race')
+    let changed = false
+    const replay = new ArchivedRulePremiseReplayVerifier({ ...deps, structuredSources: { read: async (candidate, span, ctx) => {
+      const read = await structuredSources.read(candidate, span, ctx)
+      if (!changed) {
+        changed = true
+        await documents.reviseDocument(p.scope.scopeRef, p.projectId, { documentId: a.documentId, op: 'retract', reason: 'source membership withdrawn during original cell read',
+          actor: p.ctx.principal.subjectId, recordedAt: new Date().toISOString() }, p.ctx)
+      }
+      return read
+    } } })
+    expect(await replay.verify({ artifact, payload }, p.ctx)).toBe(false)
+    expect(changed).toBe(true)
+    expect((await documents.getMembership(p.scope.scopeRef, p.projectId, a.documentId, p.ctx))?.state).toBe('retracted')
+    expect(await new ArchivedRulePremiseReplayVerifier({ ...deps, readMode: 'published_snapshot' }).verify({ artifact, payload }, p.ctx)).toBe(true)
+  })
+
+  it('independently verifies a published one-hop edge AND typed target with CSV/XLSX alternatives and original cell/row readback (#264)', async () => {
+    const { p, ca, artifact, payload, record, deps, structuredSources } = await prepareOneHopPremiseReplay('mapped-premise-replay')
+    const { evidence } = deps
+    const replay = new ArchivedRulePremiseReplayVerifier(deps)
+    expect(await replay.verify({ artifact, payload }, p.ctx)).toBe(true)
+    await p.projectService.appendRevision(p.projectId, { expectedRevision: '2', reason: 'later compatible input/profile revision retains definition and mappings' }, `compatible-${randomUUID()}`, p.ctx.principal.subjectId, p.ctx)
+    expect(await replay.verify({ artifact, payload }, p.ctx)).toBe(true)
+    const manifest = buildInputManifest([record.evidenceRef])
+    const result = await new TypedEvidenceDraftWriter({ evidence, artifacts: blobs }).writeDraft({ runId: RUN_ID, inputManifest: manifest, question: 'Is this site ready?', deficits: [], attempt: 1,
+      remainingBudget: { deadline: '2030-01-01T00:00:00Z', toolCallsRemaining: 100, repairAttemptsRemaining: 4, parallelToolLimit: 4, tokensRemaining: 1000 } }, p.ctx)
+    const verified = await new DraftVerificationService({ evidence, artifacts: blobs, policy: verificationPolicy({ semanticReview: 'disabled' }), rulePremises: replay, now: () => artifact.validAt ?? '' })
+      .verify({ runId: RUN_ID, draft: result.draft, inputManifest: manifest }, p.ctx)
+    expect(verified.verdict, JSON.stringify(verified.failedChecks)).toBe('pass')
+    const wrongRow = structuredClone(payload)
+    if (!Array.isArray(wrongRow['sourceEvidenceMappings']) || !isRecord(wrongRow['sourceEvidenceMappings'][0]) || !isRecord(wrongRow['sourceEvidenceMappings'][0]['sourceSpan'])) throw new Error('missing mapped span')
+    wrongRow['sourceEvidenceMappings'][0]['sourceSpan']['rowDigest'] = sha256DigestOf('wrong source row')
+    expect(await replay.verify({ artifact, payload: wrongRow }, p.ctx)).toBe(false)
+    const missingEdge = { ...artifact, premiseInput: artifact.premiseInput === undefined ? undefined : { ...artifact.premiseInput, facts: artifact.premiseInput.facts.filter((fact) => fact.relation === undefined) } }
+    expect(await replay.verify({ artifact: missingEdge, payload }, p.ctx)).toBe(false)
+    let withdrew = false
+    const race = new ArchivedRulePremiseReplayVerifier({ ...deps, structuredSources: { read: async (candidate, span, ctx) => {
+      const read = await structuredSources.read(candidate, span, ctx)
+      if (!withdrew) { withdrew = true; await p.workflow.publication.reviseStatement({ statementId: ca.candidateId, kind: 'retraction', reason: 'withdraw during independent premise source read', expectedRevision: '1', idempotencyKey: `premise-race-${randomUUID()}` }, p.ctx) }
+      return read
+    } } })
+    expect(await race.verify({ artifact, payload }, p.ctx)).toBe(false)
+    expect(withdrew).toBe(true)
+    expect(await new ArchivedRulePremiseReplayVerifier({ ...deps, readMode: 'published_snapshot' }).verify({ artifact, payload }, p.ctx)).toBe(true)
+    const historical = await new DraftVerificationService({ evidence, artifacts: blobs, policy: verificationPolicy({ semanticReview: 'disabled' }),
+      rulePremises: new ArchivedRulePremiseReplayVerifier({ ...deps, readMode: 'published_snapshot' }), now: () => '2028-01-01T00:00:00Z' })
+      .verify({ runId: RUN_ID, draft: result.draft, inputManifest: manifest }, p.ctx)
+    expect(historical.verdict, JSON.stringify(historical.failedChecks)).toBe('pass')
+  })
   it('requires stored project authority for tagged rules and rejects a project revision race at commit', async () => {
     class MovingProjectStore extends PostgresSemanticPublicationStore {
       beforeCommit: (() => Promise<void>) | undefined

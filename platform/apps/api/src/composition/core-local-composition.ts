@@ -60,6 +60,7 @@ import {
   PostgresDocumentParseStore,
   PostgresStructuredIngestionStore,
   StructuredDocumentParser,
+  StructuredPremiseSourceReader,
 } from '@ontology/adapter-extraction-document'
 import { Bm25DocumentSearchService, PostgresKeywordIndexStore, ProjectDocumentIndexService } from '@ontology/adapter-search-bm25'
 import { PiRuntimeAdapter } from '@ontology/adapter-runtime-pi'
@@ -105,6 +106,7 @@ import {
   TableArtifactReadService,
   VerifiedResultReadService,
   defaultPublicationEvidenceValidators,
+  ruleDerivationValidator,
   SourceRegistry,
   RunExecutionPreflightService,
   RunPhaseDriver,
@@ -178,7 +180,7 @@ import { DEFAULT_VERIFICATION_POLICY, RelationNavigationError, SCHEMA_DOCUMENTS,
 import { BudgetService, sha256DigestOf } from '@ontology/core'
 import { createRequestToolContext, createToolGatewayComposition, ForbiddenError, InvalidRequestFieldError } from '@ontology/app-api'
 import type { CoreApiDependencies } from '../core-main'
-import { FiniteGrammarRuleSupportValidator, FiniteGrammarSyntheticEvaluator, IdentityDecisionService, IncrementalMaterializer, InMemorySemanticMappingRegistry, MaterializedRuleDerivationEvidenceProducer, OntologyLookupService, PublishedFactsReferenceProvider, PublishedRelationNavigator, PublishedSemanticSource, PublishedProjectDatasetSource, SemanticDefinitionService, SemanticPublicationService } from '@ontology/semantic-engine'
+import { ArchivedRulePremiseReplayVerifier, FiniteGrammarRuleSupportValidator, FiniteGrammarSyntheticEvaluator, IdentityDecisionService, IncrementalMaterializer, InMemorySemanticMappingRegistry, MaterializedRuleDerivationEvidenceProducer, OntologyLookupService, PublishedFactsReferenceProvider, PublishedRelationNavigator, PublishedSemanticSource, PublishedProjectDatasetSource, SemanticDefinitionService, SemanticPublicationService } from '@ontology/semantic-engine'
 import type {
   MaterializationPublishedSource,
   OntologyFactPage,
@@ -669,6 +671,7 @@ class CoreMultiSchemaPublishedSource implements MaterializationPublishedSource {
     const issues = parts.flatMap((part) => part.issues ?? [])
     if (!sameRevision) issues.push({ code: 'READ_REVISION_CHANGED', message: 'scenario snapshots did not share one semantic and identity revision vector' })
     return {
+      partitions: parts,
       facts: parts.flatMap((part) => part.facts),
       rules: parts.flatMap((part) => part.rules),
       entityBindings: parts.flatMap((part) => part.entityBindings),
@@ -1306,6 +1309,7 @@ class CorePublicationValidity implements PublicationValidityPort {
     readonly scopeRef: ScopeRef
     readonly tables?: TableVerificationReceiptStore
     readonly policies?: TaskPolicyReportStore
+    readonly rulePremises?: import('@ontology/contracts').RulePremiseReplayPort
   }) {
     this.#engine = new PublicationValidityEngine({
       evidence: input.evidence,
@@ -1313,6 +1317,7 @@ class CorePublicationValidity implements PublicationValidityPort {
       validators: [
         ...defaultPublicationEvidenceValidators(),
         new CoreObservationPublicationValidator({ facts: input.facts, scopeRef: input.scopeRef }),
+        ruleDerivationValidator(input.rulePremises),
       ],
       ...(input.tables === undefined ? {} : { tables: input.tables }),
       ...(input.policies === undefined ? {} : { policies: input.policies }),
@@ -1677,10 +1682,11 @@ export async function createCoreLocalComposition(options: CoreLocalCompositionOp
       projects: projectStore,
       readiness: projectReadinessStore,
     })
-    const publishedSourceList = options.examples.scenarios.map((scenario) => new PublishedSemanticSource(
-      publicationStore,
-      { identity: identityStore, definitionRef: scenario.definitionRef },
-    ))
+    const publishedSourceList = await Promise.all(options.examples.scenarios.map(async (scenario) => {
+      const definition = await semanticDefinitions.getVersion({ scopeRef, namespace: scenario.namespace, definitionId: scenario.definitionRef.id, version: scenario.definitionRef.version }, profileContext)
+      if (!sameVersionRef(definition.ref, scenario.definitionRef)) throw new Error('the mounted source definition differs from the actual published version')
+      return new PublishedSemanticSource(publicationStore, { identity: identityStore, definition })
+    }))
     const multiSchemaSource = new CoreMultiSchemaPublishedSource(publishedSourceList)
     const factsProviders = options.examples.scenarios.map((scenario, index) => ({
       namespace: scenario.namespace,
@@ -1697,6 +1703,10 @@ export async function createCoreLocalComposition(options: CoreLocalCompositionOp
     // append-only materialized instance, bridges its premise/policy spans and records the
     // `rule_derivation` support payload under the run's own trusted context. It is reached only
     // through the fixed `rule_judgement` plan's `ontology_lookup(intent=rules)` step.
+    const structuredPremiseSources = new StructuredPremiseSourceReader({ artifacts: blobStore, mappings: projectMappingStore, ingestion: structuredStore })
+    const rulePremiseVerifier = new ArchivedRulePremiseReplayVerifier({ materialization: materializationStore, publications: publicationStore, evidence: evidenceStore, artifacts: blobStore,
+      projects: projectStore, projectDocuments: projectDocumentStore, records: projectRecordStore,
+      candidates: candidateStore, identity: identityStore, documentParses: parseStore, documentSpans: documentSpanReader, structuredSources: structuredPremiseSources })
     const ruleDerivationProducer = new MaterializedRuleDerivationEvidenceProducer({
       materialization: materializationStore,
       evidence: evidenceStore,
@@ -1704,6 +1714,7 @@ export async function createCoreLocalComposition(options: CoreLocalCompositionOp
       candidates: candidateStore,
       documentParses: parseStore,
       documentSpans: documentSpanReader,
+      structuredSources: structuredPremiseSources,
       componentRef: componentRef('compute_extension', 'core-rule-derivation-producer', 'rule-derivation-producer@1.0.0'),
     })
     const ontologyLookupHandler = createCoreOntologyLookupHandler({
@@ -1909,6 +1920,7 @@ export async function createCoreLocalComposition(options: CoreLocalCompositionOp
       verifier: new DraftVerificationService({
         evidence: evidenceStore,
         artifacts: blobStore,
+        rulePremises: rulePremiseVerifier,
         decisionStateRefProvider,
         policy: { ...DEFAULT_VERIFICATION_POLICY, semanticReview: 'disabled' },
       }),
@@ -1919,6 +1931,7 @@ export async function createCoreLocalComposition(options: CoreLocalCompositionOp
         verifications: workflowStore,
         manifests: workflowStore,
         validity: new CorePublicationValidity({
+          rulePremises: rulePremiseVerifier,
           evidence: evidenceStore,
           artifacts: blobStore,
           facts,

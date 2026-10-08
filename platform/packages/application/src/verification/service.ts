@@ -22,6 +22,7 @@ import type {
   VerificationResult,
   VerifierRequest,
   WorkflowInputManifest,
+  RulePremiseReplayPort,
 } from '@ontology/contracts'
 import { answerDraftContentHash } from '../workflow/canonical'
 import { buildSemanticDecisionState, buildSemanticQuestion, interpretSemanticResult } from './decision-review'
@@ -30,6 +31,7 @@ import { checkClaims, sortFindings } from './hard-checks'
 import type { ResolvedEvidence } from './hard-checks'
 import { checkVerifiedAssertions } from './assertions'
 import { RestrictedExplanationTemplates } from './templates'
+import { rulePremiseHasSourceLimitation } from '../answers/rule-premise-bindings'
 
 /**
  * The narrow authorized byte-read capability the verifier needs. `blob-local` implements it
@@ -60,6 +62,7 @@ export interface DecisionStateRefProvider {
 }
 
 export interface DraftVerificationDependencies {
+  readonly rulePremises?: RulePremiseReplayPort
   readonly evidence: EvidenceStorePort
   readonly artifacts: VerificationArtifactStore
   readonly policy: VerificationPolicy
@@ -140,6 +143,7 @@ function verifiedLimitationCode(value: unknown): value is string {
  * no answer id, publication or stream.
  */
 export class DraftVerificationService implements AnswerVerifierPort {
+  readonly #rulePremises: RulePremiseReplayPort | undefined
   readonly #evidence: EvidenceStorePort
   readonly #artifacts: VerificationArtifactStore
   readonly #policy: VerificationPolicy
@@ -151,6 +155,7 @@ export class DraftVerificationService implements AnswerVerifierPort {
   readonly #newId: () => Uuid
 
   constructor(dependencies: DraftVerificationDependencies) {
+    this.#rulePremises = dependencies.rulePremises
     this.#evidence = dependencies.evidence
     this.#artifacts = dependencies.artifacts
     this.#policy = dependencies.policy
@@ -239,6 +244,7 @@ export class DraftVerificationService implements AnswerVerifierPort {
     let supportedClaimIds: Uuid[] = []
     let supportedAssertionIds: Uuid[] = []
     let resolvedEvidence: ReadonlyMap<string, ResolvedEvidence> = new Map()
+    let limitedRuleSourceVerified = false
     if (claims.length + assertions.length === 0) {
       findings.push({ code: 'missing_claims', axis: 'hard', field: 'claims' })
     } else if (claims.length + assertions.length > this.#policy.maxClaims) {
@@ -257,7 +263,25 @@ export class DraftVerificationService implements AnswerVerifierPort {
         supportedClaimIds = [...outcome.supportedClaimIds]
         findings.push(...hardFindings)
       }
-      const assertionOutcome = checkVerifiedAssertions(assertions, resolvedEvidence, ctx, now, hasTypedAssertions)
+      const replayedRules = new Set<string>()
+      const attemptedRules = new Set<string>()
+      for (const assertion of assertions) if (assertion.kind === 'rule_judgement') {
+        for (const reference of assertion.references) {
+          if (attemptedRules.has(reference.evidenceRef.id)) continue
+          attemptedRules.add(reference.evidenceRef.id)
+          const located = resolvedEvidence.get(reference.evidenceRef.id)
+          if (located?.payload === undefined || located.unreadable || this.#rulePremises === undefined) continue
+          const payload = located.payload
+          const artifact = typeof payload === 'object' && payload !== null && 'artifact' in payload ? payload.artifact : payload
+          try {
+            if (await this.#rulePremises.verify({ artifact, payload }, ctx)) {
+              replayedRules.add(reference.evidenceRef.id)
+              limitedRuleSourceVerified ||= rulePremiseHasSourceLimitation(payload)
+            }
+          } catch { /* An unavailable premise/source cannot establish a rule. */ }
+        }
+      }
+      const assertionOutcome = checkVerifiedAssertions(assertions, resolvedEvidence, ctx, now, hasTypedAssertions, replayedRules)
       supportedAssertionIds = [...assertionOutcome.supportedAssertionIds]
       findings.push(...assertionOutcome.findings)
     }
@@ -277,6 +301,7 @@ export class DraftVerificationService implements AnswerVerifierPort {
     if (hasTypedAssertions) {
       const supportedCodes = new Set<string>(findings.map((finding) => finding.code))
       const trustedCodes = new Set(request.trustedLimitations ?? [])
+      if (limitedRuleSourceVerified) trustedCodes.add('limited_factual_result')
       const missingEvidenceIds = new Set(findings
         .filter((finding) => finding.code === 'evidence_not_found')
         .map((finding) => finding.evidenceRef?.id)
@@ -371,6 +396,18 @@ export class DraftVerificationService implements AnswerVerifierPort {
       const record = await this.#evidence.get(scopeRef, ref.id, ctx)
       if (record === undefined) continue
       resolved.set(ref.id, await this.#readEvidence(scopeRef, record, ctx))
+    }
+    // Only a manifest-authorized rule archive can introduce premise reads. Model-authored
+    // premiseRefs alone never expand authority; the checker requires the exact archive set.
+    for (const located of [...resolved.values()]) {
+      if (located.unreadable || located.record.envelope.kind !== 'rule_derivation' || typeof located.payload !== 'object' || located.payload === null || !('premiseRefs' in located.payload)) continue
+      const refs = located.payload.premiseRefs
+      if (!Array.isArray(refs) || refs.length > 256 || !refs.every(isResourceRef)) continue
+      for (const ref of refs) {
+        if (ref.kind !== 'evidence' || resolved.has(ref.id)) continue
+        const record = await this.#evidence.get(scopeRef, ref.id, ctx)
+        if (record !== undefined) resolved.set(ref.id, await this.#readEvidence(scopeRef, record, ctx))
+      }
     }
     return resolved
   }

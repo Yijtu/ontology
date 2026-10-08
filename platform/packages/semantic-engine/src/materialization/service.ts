@@ -411,17 +411,23 @@ export class IncrementalMaterializer {
 
     const slices: ProjectionSlice[] = []
     for (const propositionKey of affectedPropositionKeys) {
-      const windows = subIntervalsFor(propositionKey, published.facts, published.rules, ticket.change)
+      const owners = published.partitions?.filter((part) => part.rules.some((rule) => rule.conclusion.propositionKey === propositionKey)) ?? []
+      if (owners.length > 1) throw new MaterializationError('MATERIALIZATION_FAILED', 'a proposition has ambiguous definition partition authority')
+      if (published.partitions !== undefined && owners.length === 0) throw new MaterializationError('MATERIALIZATION_FAILED', 'the affected proposition lost its definition partition; retain the invalidation fence')
+      const partition = owners[0] ?? published
+      const partitionRuleIds = new Set(partition.rules.map((rule) => rule.ruleId))
+      const windows = subIntervalsFor(propositionKey, partition.facts, partition.rules, ticket.change)
       for (const window of windows) {
         const conclusion = this.#evaluateConclusion(
           scopeRef,
           ticket.change,
           window,
-          published.facts,
-          evaluationRules,
+          partition.facts,
+          evaluationRules.filter((rule) => partitionRuleIds.has(rule.ruleId)),
           propositionKey,
-          published.definitionRef,
-          published.complete,
+          partition.definitionRef,
+          partition.complete,
+          partition.premiseInput,
         )
         if (conclusion === undefined) continue
         slices.push({
@@ -842,6 +848,7 @@ export class IncrementalMaterializer {
     propositionKey: string,
     definitionRef: VersionRef | undefined,
     complete: boolean | undefined,
+    premiseInput: PublishedSemanticData['premiseInput'],
   ): MaterializedConclusion | undefined {
     const request: ControlReadProjectionRequest = {
       scopeRef,
@@ -859,7 +866,9 @@ export class IncrementalMaterializer {
     })
     const conclusion = result.conclusions.find((entry) => entry.propositionKey === propositionKey)
     if (conclusion === undefined) return undefined
-    const artifacts = ruleComputationArtifactsOf(result.applicabilities, rules)
+    const artifacts = ruleComputationArtifactsOf(result.applicabilities, rules).map((artifact) => ({ ...artifact,
+      ...(premiseInput === undefined ? {} : { premiseInput: { ...premiseInput, request, evaluatedRuleIds: rules.map((rule) => rule.ruleId), complete: complete !== false } }),
+    }))
     return materializedConclusionOf(conclusion, artifactsForProposition(propositionKey, rules, artifacts))
   }
 
@@ -869,6 +878,10 @@ export class IncrementalMaterializer {
     request: MaterializationReadRequest,
     propositionKeys: readonly string[] | undefined,
   ): MaterializationEvaluation {
+    if (published.partitions !== undefined) {
+      const parts = published.partitions.map((part) => this.#evaluatePropositions(part, scopeRef, request, propositionKeys))
+      return { conclusions: parts.flatMap((part) => part.conclusions), applicabilities: parts.flatMap((part) => part.applicabilities), ruleArtifacts: parts.flatMap((part) => part.ruleArtifacts) }
+    }
     const evaluationRequest: ControlReadProjectionRequest = {
       scopeRef,
       projectionRef: request.projectionRef,
@@ -883,7 +896,9 @@ export class IncrementalMaterializer {
       ...(published.definitionRef === undefined ? {} : { definitionRef: published.definitionRef }),
       ...(published.complete === undefined ? {} : { complete: published.complete }),
     })
-    const ruleArtifacts = ruleComputationArtifactsOf(result.applicabilities, published.rules)
+    const ruleArtifacts = ruleComputationArtifactsOf(result.applicabilities, published.rules).map((artifact) => ({ ...artifact,
+      ...(published.premiseInput === undefined ? {} : { premiseInput: { ...published.premiseInput, request: evaluationRequest, evaluatedRuleIds: published.rules.map((rule) => rule.ruleId), complete: published.complete !== false } }),
+    }))
     const conclusions = result.conclusions.map((conclusion) =>
       materializedConclusionOf(
         conclusion,

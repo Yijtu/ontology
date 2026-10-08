@@ -25,6 +25,8 @@ export {
 export type { NormalizedTextArtifact } from './normalized-artifact'
 
 export { DocumentSpanReader } from './span-reader'
+export { StructuredPremiseSourceReader } from './structured/premise-source'
+export type { StructuredPremiseSourceReaderDependencies } from './structured/premise-source'
 export type { DocumentSpanReaderDependencies } from './span-reader'
 
 export { InMemoryDocumentParseStore } from './memory-store'

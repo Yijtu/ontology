@@ -1,4 +1,4 @@
-import { isToolContext } from '@ontology/contracts'
+import { isToolContext, isResourceRef } from '@ontology/contracts'
 import { sha256DigestOf } from '@ontology/core'
 import type {
   EvidenceKind,
@@ -17,6 +17,7 @@ import type {
   TaskPolicyReportStore,
   ToolContext,
   VersionRef,
+  RulePremiseReplayPort,
 } from '@ontology/contracts'
 import type { VerificationArtifactStore } from './service'
 
@@ -157,13 +158,18 @@ export function documentSpanValidator(): PublicationEvidenceValidator {
  * premise evidence the computation rested on is revalidated by the engine. A model boolean is
  * never consulted here.
  */
-export function ruleDerivationValidator(): PublicationEvidenceValidator {
+export function ruleDerivationValidator(replay?: RulePremiseReplayPort): PublicationEvidenceValidator {
   return {
     evidenceKind: 'rule_derivation',
-    validate({ payload }) {
-      if (!isRecord(payload)) return CURRENT
+    async validate({ payload, ctx }) {
+      if (!isRecord(payload)) return replay === undefined ? CURRENT : { state: 'blocked', reasons: ['evidence_unverifiable'] }
       const inner = payload['artifact']
       const artifact: Record<string, unknown> = isRecord(inner) ? inner : payload
+      if (replay !== undefined) {
+        let verified = false
+        try { verified = await replay.verify({ artifact, payload }, ctx) } catch { /* Missing sources and current withdrawals block publication. */ }
+        if (!verified) return { state: 'blocked', reasons: ['evidence_unverifiable'], details: ['actual archived rule premises no longer pass independent verification'] }
+      }
       if (artifact['complete'] === false) {
         return { state: 'blocked', reasons: ['evidence_unverifiable'], details: ['the rule computation is marked incomplete'] }
       }
@@ -460,10 +466,19 @@ export class PublicationValidityEngine {
       if (!authorized.integrityVerified) return { record, unreadable: true }
       const bytes = await this.#artifacts.readAuthorized({ scopeRef, blobRef: payloadRef }, ctx)
       const text = new TextDecoder('utf-8', { fatal: true }).decode(bytes)
-      if (sha256DigestOf(text) !== record.envelope.resultDigest) {
-        return { record, unreadable: true }
-      }
       const payload: unknown = JSON.parse(text)
+      if (sha256DigestOf(text) !== record.envelope.resultDigest) {
+        // A rule span archives its immutable locator binding separately from the exact source
+        // bytes. Validate both digests rather than treating the binding JSON as the quoted text.
+        if (record.envelope.kind !== 'document_span' || sha256DigestOf(text) !== payloadRef.digest || !isRecord(payload) ||
+          !['rule-source-span-binding@1', 'rule-policy-span-binding@1'].includes(String(payload['schemaVersion'])) || !isResourceRef(payload['textArtifactRef'])) return { record, unreadable: true }
+        const sourceRef = payload['textArtifactRef']
+        const sourceMetadata = await this.#artifacts.getAuthorized({ scopeRef, blobRef: sourceRef }, ctx)
+        if (!sourceMetadata.integrityVerified) return { record, unreadable: true }
+        const sourceBytes = await this.#artifacts.readAuthorized({ scopeRef, blobRef: sourceRef }, ctx)
+        const sourceText = new TextDecoder('utf-8', { fatal: true }).decode(sourceBytes)
+        if (sourceBytes.byteLength > 128 * 1024 || sha256DigestOf(sourceText) !== sourceRef.digest || sourceRef.digest !== record.envelope.resultDigest) return { record, unreadable: true }
+      }
       return { record, payload, unreadable: false }
     } catch {
       return { record, unreadable: true }
