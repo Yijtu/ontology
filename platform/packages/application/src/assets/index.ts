@@ -17,3 +17,4 @@ export type {
 export * from './definition-candidates'
 export * from './rule-action-candidates'
 export * from './publication'
+export * from './source-grounding'

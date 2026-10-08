@@ -75,3 +75,4 @@ export type {
   OcrTextProvider,
   StructuralLine,
 } from './types'
+export * from './source-grounding'
