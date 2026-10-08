@@ -19,7 +19,7 @@ function assertScope(scope: ScopeRef, ctx: ToolContext): void {
   }
 }
 function sameRef(left: ResourceRef, right: ResourceRef): boolean {
-  return left.id === right.id && left.version === right.version && left.digest === right.digest
+  return left.id === right.id && left.version === right.version && left.digest === right.digest && left.kind === right.kind
 }
 
 async function readBlob(blobs: DocumentArtifactStore, scope: ScopeRef, ref: ResourceRef,
@@ -50,6 +50,9 @@ export class ArtifactGroundingDocumentSetReader implements GroundingDocumentSetR
   async read(scope: ScopeRef, ref: ResourceRef, ctx: ToolContext, budget: SourceGroundingBudgetPort): Promise<GroundingDocumentSet> {
     assertScope(scope, ctx)
     budget.check()
+    if (ref.kind !== 'artifact') {
+      throw new SourceGroundingError('SOURCE_MISMATCH', 'an approved document set must be a host-published artifact')
+    }
     const metadata = await this.blobs.getAuthorized({ scopeRef: scope, blobRef: ref }, ctx)
     if (metadata.mediaType !== GROUNDING_DOCUMENT_SET_MEDIA_TYPE) {
       throw new SourceGroundingError('UNSUPPORTED_MEDIA_TYPE', 'the workspace document set has no approved grounding manifest')

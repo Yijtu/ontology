@@ -12,7 +12,7 @@ export interface SourceGroundingDependencies {
 }
 
 function sameRef(left: ResourceRef, right: ResourceRef): boolean {
-  return left.id === right.id && left.version === right.version && left.digest === right.digest
+  return left.id === right.id && left.version === right.version && left.digest === right.digest && left.kind === right.kind
 }
 
 export function createSourceGroundingService(dependencies: SourceGroundingDependencies): SourceGroundingPort {

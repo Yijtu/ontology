@@ -50,6 +50,8 @@ export interface GroundedTable {
   readonly sheetName?: string
   readonly columns: readonly StructuredColumn[]
   readonly headerRow: number
+  /** Only real data rows have candidate spans. A header-only table supplies context,
+   * but downstream suggestions must remain ungrounded/pending confirmation. */
   readonly rows: readonly {
     readonly cells: readonly StructuredCell[]
     readonly sourceSpan: CandidateSourceSpan

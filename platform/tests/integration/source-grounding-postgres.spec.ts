@@ -117,6 +117,8 @@ describe('source grounding through persisted originals and PostgreSQL RLS', () =
     await expect(h.service.read({ workspaceId: h.workspaceId, sourceRefs: [sourceRef] }, other.ctx, budget())).rejects.toMatchObject({ code: 'NOT_APPROVED' })
     const wrong = await h.service.read({ workspaceId: h.workspaceId, sourceRefs: [{ ...sourceRef, digest: `sha256:${'f'.repeat(64)}` }] }, ctx, budget())
     expect(wrong.sources[0]?.reasons).toEqual(['SOURCE_MISMATCH'])
+    const wrongKind = await h.service.read({ workspaceId: h.workspaceId, sourceRefs: [{ ...sourceRef, kind: 'artifact' }] }, ctx, budget())
+    expect(wrongKind.sources[0]?.reasons).toEqual(['SOURCE_MISMATCH'])
     const revoked = await publishGroundingDocumentSet(blobs, { schemaVersion: '1.0.0', scopeRef: scope.scopeRef,
       workspaceId: h.workspaceId, sources: [{ ...approval, state: 'retracted' }] }, ctx)
     await h.editor.draftOperation(h.workspaceId, { operation: 'edit', expectedRevision: '1',

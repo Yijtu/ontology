@@ -83,6 +83,7 @@ export class DocumentSpanReader implements DocumentSpanReaderPort {
     if (record.scopeRef.tenantId !== scope.tenantId || record.scopeRef.spaceId !== scope.spaceId
       || record.originalRef.id !== request.documentRef.id
       || record.originalRef.version !== request.documentRef.version
+      || record.originalRef.kind !== request.documentRef.kind
       || record.originalRef.digest !== request.documentRef.digest) {
       throw new DocumentExtractionError('SCOPE_MISMATCH', 'the pinned parse does not match the authorized original')
     }

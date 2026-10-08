@@ -1,7 +1,7 @@
 import { randomUUID } from 'node:crypto'
 import { readFileSync } from 'node:fs'
 import { describe, expect, it } from 'vitest'
-import { ArtifactGroundingDocumentSetReader, InMemoryDocumentParseStore, InMemoryStructuredIngestionStore,
+import { ArtifactGroundingDocumentSetReader, GROUNDING_DOCUMENT_SET_MEDIA_TYPE, InMemoryDocumentParseStore, InMemoryStructuredIngestionStore,
   LocalDocumentExtractionService, LocalStructuredIngestionService, ParsedSourceGroundingReader,
   publishGroundingDocumentSet, sha256DigestOfText } from '@ontology/adapter-extraction-document'
 import { createSourceGroundingService, SourceGroundingBudget } from '@ontology/application'
@@ -138,6 +138,7 @@ describe('approved original source grounding', () => {
     await expect(h.service.read(request, createTestToolContext(randomUUID(), randomUUID()), budget())).rejects.toMatchObject({ code: 'NOT_APPROVED' })
     expect((await h.read([{ ...sourceRef, digest }])).sources[0]?.reasons).toEqual(['SOURCE_MISMATCH'])
     expect((await h.read([{ ...sourceRef, version: '2.0.0' }])).sources[0]?.reasons).toEqual(['SOURCE_MISMATCH'])
+    expect((await h.read([{ ...sourceRef, kind: 'artifact' }])).sources[0]?.reasons).toEqual(['SOURCE_MISMATCH'])
     expect((await h.read([{ ...sourceRef, id: randomUUID() }])).sources[0]?.reasons).toEqual(['NOT_APPROVED'])
     h.draft.documentSetRef = await publishGroundingDocumentSet(h.blobs, { schemaVersion: '1.0.0', scopeRef: scope,
       workspaceId: h.workspace.workspaceId, sources: [{ ...approval, state: 'retracted' }] }, ctx)
@@ -194,10 +195,15 @@ describe('approved original source grounding', () => {
     const pinnedSet = h.draft.documentSetRef
     h.draft.documentSetRef = { ...pinnedSet, version: '2.0.0' }
     expect((await h.read([sourceRef])).sources[0]?.reasons).toEqual(['SOURCE_MISMATCH'])
+    h.draft.documentSetRef = { ...pinnedSet, kind: 'document' }
+    expect((await h.read([sourceRef])).sources[0]?.reasons).toEqual(['SOURCE_MISMATCH'])
     h.draft.documentSetRef = { ...pinnedSet, digest }
     const mismatched = await h.read([sourceRef])
     expect(mismatched.sources[0]?.status).toBe('failed')
     expect(mismatched.sources[0]?.contents).toEqual([])
+    h.draft.documentSetRef = await h.original(new TextEncoder().encode(JSON.stringify({ schemaVersion: '1.0.0',
+      workspaceId: h.workspace.workspaceId, scopeRef: scope, sources: [] })), GROUNDING_DOCUMENT_SET_MEDIA_TYPE)
+    expect((await h.read([sourceRef])).sources[0]?.reasons).toEqual(['SOURCE_MISMATCH'])
   })
 
   it('fences retraction during reads, corrupt quote digests and unsupported table formats', async () => {
