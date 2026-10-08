@@ -22,6 +22,7 @@ import type {
   ActionCapabilityBindingInput,
   DefinitionCompatibilityReport,
   DefinitionValidationReport,
+  DefinitionPublicationValidationPort,
   ResourceRef,
   RuleActionCandidateQuery,
   RuleActionCandidateStore,
@@ -216,7 +217,7 @@ function rowToCandidate(row: CandidateRow): RuleActionCandidateVersion {
 }
 
 class StubDefinitionValidation {
-  async validateForPublication(input: { readonly workspaceId: Uuid }, _ctx: ToolContext): Promise<DefinitionValidationReport> {
+  async validateForPublication(input: Parameters<DefinitionPublicationValidationPort['validateForPublication']>[0], _ctx: ToolContext): Promise<DefinitionValidationReport> {
     void _ctx
     const compatibility: DefinitionCompatibilityReport = {
       workspaceId: input.workspaceId,
@@ -225,6 +226,7 @@ class StubDefinitionValidation {
       changes: [],
       breakingChanges: [],
       requiresRevisionStrategy: false,
+      ...(input.strategy === undefined ? {} : { strategy: input.strategy }),
     }
     return {
       workspaceId: input.workspaceId,
@@ -504,15 +506,18 @@ describe('synthetic validation (real PostgreSQL)', () => {
     expect(generated.data.exampleSet.sourceKind).toBe('synthetic')
     expect(generated.data.exampleSet.isolationLabel).toBe('synthetic test')
 
+    const strategy = { kind: 'new_version', reason: 'expert chose a new immutable version' }
     const validate = await post(`/api/v1/industry-workspaces/${workspaceId}/validations`, {
       ifMatch: '1',
-      body: { exampleSetId },
+      body: { exampleSetId, strategy },
     })
     expect(validate.statusCode).toBe(201)
     const body = validate.json() as {
       data: { validation: { validationId: string; publishable: boolean; gate: string; semanticPublished: { passed: boolean; blockers: unknown[] }; deploymentExecutable: { passed: boolean; blockers: unknown[] }; realFactsWritten: boolean; businessApproval: string; issues: unknown[] } }
     }
     expect(body.data.validation.publishable).toBe(true)
+    expect((validate.json() as { data: { validation: { strategy: unknown; definition: { compatibility: { strategy: unknown } } } } }).data.validation.strategy).toEqual(strategy)
+    expect((validate.json() as { data: { validation: { definition: { compatibility: { strategy: unknown } } } } }).data.validation.definition.compatibility.strategy).toEqual(strategy)
     expect(body.data.validation.semanticPublished.passed).toBe(true)
     expect(body.data.validation.deploymentExecutable.passed).toBe(true)
     expect(body.data.validation.realFactsWritten).toBe(false)
@@ -543,6 +548,12 @@ describe('synthetic validation (real PostgreSQL)', () => {
       [exampleSetId],
     )
     expect(stored.rows[0]).toEqual({ source_kind: 'synthetic', data_mode: 'synthetic', isolation_label: 'synthetic test' })
+  })
+
+  it.each([null, { kind: 'unknown', reason: 'bad' }, { kind: 'new_version', reason: '' }, { kind: 'new_version', reason: ' ' }, { kind: 'retire_previous', reason: 'retire', supersedesRef: { id: 'old' } }])('rejects a malformed revision strategy at the validation route: %j', async (strategy) => {
+    const response = await post(`/api/v1/industry-workspaces/${randomUUID()}/validations`, { ifMatch: '1', body: { exampleSetId: randomUUID(), strategy } })
+    expect(response.statusCode).toBe(400)
+    expect((response.json() as { error: { message: string } }).error.message).toContain('strategy')
   })
 
   it('blocks an invalid expectation and reports the failure through the gate', async () => {

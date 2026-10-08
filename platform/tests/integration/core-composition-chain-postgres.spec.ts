@@ -9,9 +9,12 @@ import { fileURLToPath } from 'node:url'
 import { Client } from 'pg'
 import { afterAll, beforeAll, describe, expect, it } from 'vitest'
 import { runControlMigrations } from '@ontology/adapter-control-postgres'
+import { FileSystemObjectStore, LocalImmutableBlobStore, PostgresArtifactRegistry } from '@ontology/adapter-blob-local'
+import { LocalDocumentExtractionService, PostgresDocumentParseStore, publishGroundingDocumentSet } from '@ontology/adapter-extraction-document'
 import { createCoreApi, createCoreLocalComposition, loadCoreExamples } from '@ontology/app-api'
 import type { CoreLocalComposition } from '@ontology/app-api'
-import type { ScopeRef } from '@ontology/contracts'
+import type { ResourceRef, ScopeRef } from '@ontology/contracts'
+import { toolContext } from '../unit/component-registry-fixtures'
 import { startPostgresContainer } from './postgres-container'
 import type { PostgresContainer } from './postgres-container'
 
@@ -39,6 +42,7 @@ const generatedDefinition = {
       displayName: 'Asset',
       businessMeaning: 'A maintained physical asset',
       suggestedReason: 'named in the source',
+      sourceIndex: 0,
       identityAttributeIds: ['asset_code'],
     },
   ],
@@ -48,6 +52,7 @@ const generatedDefinition = {
       displayName: 'Asset code',
       businessMeaning: 'The stable code that identifies an asset',
       suggestedReason: 'named in the source',
+      sourceIndex: 0,
       objectLogicalId: 'asset',
       valueType: 'string',
       minCardinality: 1,
@@ -58,6 +63,7 @@ const generatedDefinition = {
       displayName: 'Inspection due',
       businessMeaning: 'Whether the next scheduled inspection is due',
       suggestedReason: 'named in the source',
+      sourceIndex: 0,
       objectLogicalId: 'asset',
       valueType: 'boolean',
       minCardinality: 0,
@@ -143,6 +149,27 @@ async function failureDetail(response: Response): Promise<string> {
   return await response.text()
 }
 
+async function groundedSource(workspaceId: string): Promise<{ sourceRef: ResourceRef; documentSetRef: ResourceRef }> {
+  const registry = new PostgresArtifactRegistry({ connectionString: appUrl, maxPoolSize: 2 })
+  const documents = new PostgresDocumentParseStore({ connectionString: appUrl, maxPoolSize: 2 })
+  try {
+    const objectStore = new FileSystemObjectStore(objectDirectory)
+    await objectStore.init()
+    const blobs = new LocalImmutableBlobStore({ objectStore, registry })
+    const ctx = toolContext(scope.tenantId, scope.spaceId, ['platform-admin', 'data-editor'], 'grounding-reviewer')
+    const bytes = new TextEncoder().encode('An Asset is a maintained physical asset. Its stable asset_code identifies it. The boolean inspection_due records whether its next scheduled inspection is due.')
+    const staged = await blobs.stage(bytes, { scopeRef: scope }, ctx)
+    const sourceRef = (await blobs.publish({ scopeRef: scope, ...staged, mediaType: 'text/plain', purpose: 'document' }, ctx)).blobRef
+    const parse = await new LocalDocumentExtractionService({ blobs, store: documents }).parse({ scopeRef: scope, originalRef: sourceRef }, ctx)
+    const documentSetRef = await publishGroundingDocumentSet(blobs, { schemaVersion: '1.0.0', workspaceId, scopeRef: scope,
+      sources: [{ sourceRef, state: 'approved', kind: 'document', parserVersion: parse.parserVersion, parseId: parse.parseId }] }, ctx)
+    return { sourceRef, documentSetRef }
+  } finally {
+    await documents.close()
+    await registry.close()
+  }
+}
+
 async function startCompositionFor(scopeRef: ScopeRef): Promise<{ composition: CoreLocalComposition; api: ReturnType<typeof createCoreApi>; baseUrl: string }> {
   const built = await createCoreLocalComposition({
     databaseUrl: appUrl,
@@ -170,6 +197,7 @@ async function startCompositionFor(scopeRef: ScopeRef): Promise<{ composition: C
 let modelServerBaseUrl = ''
 let publishedPackRef: { id: string; version: string; digest: string } | undefined
 let workspaceId = ''
+let chainExampleSetId = ''
 
 beforeAll(async () => {
   await startIsolatedDatabase()
@@ -206,11 +234,19 @@ describe('the default Core host composition chain (real PostgreSQL)', () => {
     })
     if (create.status !== 201) throw new Error(`workspace create failed: ${await failureDetail(create)}`)
     workspaceId = (await jsonBody(create) as { data: { workspace: { workspaceId: string } } }).data.workspace.workspaceId
+    const { sourceRef, documentSetRef } = await groundedSource(workspaceId)
+    const groundedDraft = await request(baseUrl, `/api/v1/industry-workspaces/${workspaceId}/draft-operations`, {
+      method: 'POST', headers: { 'content-type': 'application/json', 'if-match': '1', 'idempotency-key': 'chain-approved-source' },
+      body: JSON.stringify({ operation: 'edit', reason: 'attach the approved parsed source', documentSetRef }),
+    })
+    if (groundedDraft.status !== 200) throw new Error(`source attachment failed: ${await failureDetail(groundedDraft)}`)
+    const workspaceRevision = (await jsonBody(groundedDraft) as { data: { workspace: { headRevision: string } } }).data.workspace.headRevision
+    expect(workspaceRevision).toBe('2')
 
     const generation = await request(baseUrl, `/api/v1/industry-workspaces/${workspaceId}/generations`, {
       method: 'POST',
-      headers: { 'content-type': 'application/json', 'if-match': '1', 'idempotency-key': 'chain-generation' },
-      body: JSON.stringify({ kinds: ['object', 'attribute'], generationPolicyRef: POLICY_REF }),
+      headers: { 'content-type': 'application/json', 'if-match': workspaceRevision, 'idempotency-key': 'chain-generation' },
+      body: JSON.stringify({ kinds: ['object', 'attribute'], generationPolicyRef: POLICY_REF, sourceRefs: [sourceRef] }),
     })
     if (generation.status !== 201) throw new Error(`generation failed: ${await failureDetail(generation)}`)
     const generated = await jsonBody(generation) as { data: { candidates: { candidateId: string; kind: string; payload: Record<string, unknown> }[] } }
@@ -226,7 +262,7 @@ describe('the default Core host composition chain (real PostgreSQL)', () => {
     const editBody = { payload: editedPayload, reason: 'clarify the business meaning' }
     const edit = await request(baseUrl, `/api/v1/industry-workspaces/${workspaceId}/candidates/${attributeCandidate.candidateId}/edits`, {
       method: 'POST',
-      headers: { 'content-type': 'application/json', 'if-match': '1', 'idempotency-key': 'chain-edit' },
+      headers: { 'content-type': 'application/json', 'if-match': workspaceRevision, 'idempotency-key': 'chain-edit' },
       body: JSON.stringify(editBody),
     })
     if (edit.status !== 200) throw new Error(`edit failed: ${await failureDetail(edit)}`)
@@ -236,7 +272,7 @@ describe('the default Core host composition chain (real PostgreSQL)', () => {
     // Replaying the same Idempotency-Key never appends a second adjudication revision.
     const editReplay = await request(baseUrl, `/api/v1/industry-workspaces/${workspaceId}/candidates/${attributeCandidate.candidateId}/edits`, {
       method: 'POST',
-      headers: { 'content-type': 'application/json', 'if-match': '1', 'idempotency-key': 'chain-edit' },
+      headers: { 'content-type': 'application/json', 'if-match': workspaceRevision, 'idempotency-key': 'chain-edit' },
       body: JSON.stringify(editBody),
     })
     if (editReplay.status !== 200) throw new Error(`edit replay failed: ${await failureDetail(editReplay)}`)
@@ -251,10 +287,30 @@ describe('the default Core host composition chain (real PostgreSQL)', () => {
       body: JSON.stringify({ decision: 'approve', reason: 'operator reviewed the generated attribute' }),
     })
     if (review.status !== 200) throw new Error(`review failed: ${await failureDetail(review)}`)
+    const oldReview = await jsonBody(review) as { data: { contentDigest?: string; candidateId: string; decision: string } }
+    expect(oldReview.data.candidateId).toBe(attributeCandidate.candidateId)
+    expect(oldReview.data.contentDigest).toBeDefined()
+    if (editedRevision === undefined) throw new Error('the edited current candidate revision is missing')
+    const currentCandidateIds = [
+      ...generated.data.candidates.filter((candidate) => candidate.candidateId !== attributeCandidate.candidateId).map((candidate) => candidate.candidateId),
+      editedRevision.candidateId,
+    ]
+    for (const candidateId of currentCandidateIds) {
+      const approval = await request(baseUrl, `/api/v1/candidates/${candidateId}/reviews`, {
+        method: 'POST',
+        headers: { 'content-type': 'application/json', 'if-match': '0' },
+        body: JSON.stringify({ decision: 'approve', reason: 'operator reviewed this current declaration revision' }),
+      })
+      if (approval.status !== 200) throw new Error(`current revision approval failed: ${await failureDetail(approval)}`)
+      expect((await jsonBody(approval) as { data: { contentDigest?: string } }).data.contentDigest).toBeDefined()
+    }
+    const reviewHistory = await request(baseUrl, `/api/v1/candidates/${attributeCandidate.candidateId}/reviews`)
+    expect((await jsonBody(reviewHistory) as { data: { reviews: { candidateId: string; decision: string }[] } }).data.reviews)
+      .toEqual(expect.arrayContaining([expect.objectContaining({ candidateId: attributeCandidate.candidateId, decision: 'approve' })]))
 
     const rule = await request(baseUrl, `/api/v1/industry-workspaces/${workspaceId}/rule-action-candidates/ingest`, {
       method: 'POST',
-      headers: { 'content-type': 'application/json', 'if-match': '1', 'idempotency-key': 'chain-rule' },
+      headers: { 'content-type': 'application/json', 'if-match': workspaceRevision, 'idempotency-key': 'chain-rule' },
       body: JSON.stringify({
         rules: [{
           kind: 'rule',
@@ -274,14 +330,14 @@ describe('the default Core host composition chain (real PostgreSQL)', () => {
     if (ruleCandidateId === undefined) throw new Error('the ingested rule candidate id is missing')
     const enableRule = await request(baseUrl, `/api/v1/industry-workspaces/${workspaceId}/rule-action-candidates/${ruleCandidateId}/enable`, {
       method: 'POST',
-      headers: { 'if-match': '1' },
+      headers: { 'if-match': workspaceRevision },
     })
     if (enableRule.status !== 200) throw new Error(`rule enable failed: ${await failureDetail(enableRule)}`)
     expect((await jsonBody(enableRule) as { data: { created: boolean; candidate: { lifecycle: string } } }).data.candidate.lifecycle).toBe('enabled')
 
     const exampleSet = await request(baseUrl, `/api/v1/industry-workspaces/${workspaceId}/synthetic-example-sets`, {
       method: 'POST',
-      headers: { 'content-type': 'application/json', 'if-match': '1', 'idempotency-key': 'chain-example-set' },
+      headers: { 'content-type': 'application/json', 'if-match': workspaceRevision, 'idempotency-key': 'chain-example-set' },
       body: JSON.stringify({
         caseKinds: ['contradiction'],
         cases: [{
@@ -305,15 +361,16 @@ describe('the default Core host composition chain (real PostgreSQL)', () => {
     })
     if (exampleSet.status !== 201) throw new Error(`synthetic example set failed: ${await failureDetail(exampleSet)}`)
     const exampleSetId = (await jsonBody(exampleSet) as { data: { exampleSet: { exampleSetId: string } } }).data.exampleSet.exampleSetId
+    chainExampleSetId = exampleSetId
 
     const validation = await request(baseUrl, `/api/v1/industry-workspaces/${workspaceId}/validations`, {
       method: 'POST',
-      headers: { 'content-type': 'application/json', 'if-match': '1', 'idempotency-key': 'chain-validation' },
+      headers: { 'content-type': 'application/json', 'if-match': workspaceRevision, 'idempotency-key': 'chain-validation' },
       body: JSON.stringify({ exampleSetId }),
     })
     if (validation.status !== 201) throw new Error(`validation failed: ${await failureDetail(validation)}`)
     const report = (await jsonBody(validation) as { data: { validation: { validationId: string; publishable: boolean; semanticPublished: { passed: boolean }; deploymentExecutable: { passed: boolean } } } }).data.validation
-    expect(report.semanticPublished.passed).toBe(true)
+    expect(report.semanticPublished.passed, JSON.stringify(report)).toBe(true)
     expect(report.deploymentExecutable.passed).toBe(true)
     expect(report.publishable).toBe(true)
 
@@ -327,7 +384,7 @@ describe('the default Core host composition chain (real PostgreSQL)', () => {
 
     const publish = await request(baseUrl, `/api/v1/industry-workspaces/${workspaceId}/publications`, {
       method: 'POST',
-      headers: { 'content-type': 'application/json', 'if-match': '1', 'idempotency-key': 'chain-publish' },
+      headers: { 'content-type': 'application/json', 'if-match': workspaceRevision, 'idempotency-key': 'chain-publish' },
       body: JSON.stringify({ packId: 'chain-pack', version: '1.0.0', validationId: report.validationId }),
     })
     if (publish.status !== 201) throw new Error(`publish failed: ${await failureDetail(publish)}`)
@@ -354,6 +411,61 @@ describe('the default Core host composition chain (real PostgreSQL)', () => {
     expect(foreignCatalogue.status).toBe(200)
     const foreignPacks = (await jsonBody(foreignCatalogue) as { data: { packs: unknown[] } }).data.packs
     expect(foreignPacks).toHaveLength(0)
+  }, 240_000)
+
+  it('carries a breaking-change strategy through the ordinary validation/publication HTTP routes and preserves v1', async () => {
+    const firstRef = publishedPackRef
+    if (firstRef === undefined) throw new Error('the initial publication is missing')
+    const workspace = await request(baseUrl, `/api/v1/industry-workspaces/${workspaceId}`)
+    const revision = (await jsonBody(workspace) as { data: { workspace: { headRevision: string } } }).data.workspace.headRevision
+    const candidates = await request(baseUrl, `/api/v1/industry-workspaces/${workspaceId}/candidates`)
+    const code = (await jsonBody(candidates) as { data: { candidates: { candidateId: string; payload: Record<string, unknown> }[] } }).data.candidates.find((candidate) => candidate.payload['logicalId'] === 'asset_code')
+    if (code === undefined) throw new Error('the current code declaration is missing')
+    const edit = await request(baseUrl, `/api/v1/industry-workspaces/${workspaceId}/candidates/${code.candidateId}/edits`, {
+      method: 'POST', headers: { 'content-type': 'application/json', 'if-match': revision, 'idempotency-key': 'chain-breaking-edit' },
+      body: JSON.stringify({ payload: { ...code.payload, valueType: 'number' }, reason: 'code semantics are now numeric' }),
+    })
+    if (edit.status !== 200) throw new Error(`breaking edit failed: ${await failureDetail(edit)}`)
+    const replacement = (await jsonBody(edit) as { data: { candidates: { candidateId: string }[] } }).data.candidates[0]
+    if (replacement === undefined) throw new Error('the replacement is missing')
+    const approval = await request(baseUrl, `/api/v1/candidates/${replacement.candidateId}/reviews`, {
+      method: 'POST', headers: { 'content-type': 'application/json', 'if-match': '0' },
+      body: JSON.stringify({ decision: 'approve', reason: 'reviewed numeric code definition' }),
+    })
+    expect(approval.status).toBe(200)
+    const blocked = await request(baseUrl, `/api/v1/industry-workspaces/${workspaceId}/validations`, {
+      method: 'POST', headers: { 'content-type': 'application/json', 'if-match': revision, 'idempotency-key': 'chain-breaking-no-strategy' },
+      body: JSON.stringify({ exampleSetId: chainExampleSetId }),
+    })
+    expect(blocked.status).toBe(201)
+    const blockedReport = (await jsonBody(blocked) as { data: { validation: { semanticPublished: { passed: boolean }; definition: { blockers: { code: string }[] } } } }).data.validation
+    expect(blockedReport.semanticPublished.passed).toBe(false)
+    expect(blockedReport.definition.blockers.map((finding) => finding.code)).toContain('REVISION_STRATEGY_REQUIRED')
+    const invalid = await request(baseUrl, `/api/v1/industry-workspaces/${workspaceId}/publications`, {
+      method: 'POST', headers: { 'content-type': 'application/json', 'if-match': revision, 'idempotency-key': 'chain-invalid-strategy' },
+      body: JSON.stringify({ packId: 'chain-pack', version: '2.0.0', validationId: randomUUID(), strategy: { kind: 'invented', reason: 'bad' } }),
+    })
+    expect(invalid.status).toBe(400)
+    const strategy = { kind: 'new_version', reason: 'explicitly publish numeric code semantics as v2' }
+    const validated = await request(baseUrl, `/api/v1/industry-workspaces/${workspaceId}/validations`, {
+      method: 'POST', headers: { 'content-type': 'application/json', 'if-match': revision, 'idempotency-key': 'chain-breaking-with-strategy' },
+      body: JSON.stringify({ exampleSetId: chainExampleSetId, strategy }),
+    })
+    expect(validated.status).toBe(201)
+    const report = (await jsonBody(validated) as { data: { validation: { validationId: string; strategy: unknown; semanticPublished: { passed: boolean } } } }).data.validation
+    expect(report.semanticPublished.passed).toBe(true)
+    expect(report.strategy).toEqual(strategy)
+    const publication = await request(baseUrl, `/api/v1/industry-workspaces/${workspaceId}/publications`, {
+      method: 'POST', headers: { 'content-type': 'application/json', 'if-match': revision, 'idempotency-key': 'chain-breaking-publish' },
+      body: JSON.stringify({ packId: 'chain-pack', version: '2.0.0', validationId: report.validationId, strategy }),
+    })
+    if (publication.status !== 201) throw new Error(`breaking publication failed: ${await failureDetail(publication)}`)
+    const asset = (await jsonBody(publication) as { data: { packRef: { id: string; version: string; digest: string }; pack: { strategy: unknown; diff: { breakingChanges: { change: string }[] } } } }).data
+    expect(asset.pack.strategy).toEqual(strategy)
+    expect(asset.pack.diff.breakingChanges.map((change) => change.change)).toContain('VALUE_TYPE_CHANGED')
+    publishedPackRef = asset.packRef
+    const catalogue = await request(baseUrl, '/api/v1/industry-packs')
+    expect((await jsonBody(catalogue) as { data: { packs: { packRef: unknown }[] } }).data.packs.map((pack) => pack.packRef)).toContainEqual(firstRef)
   }, 240_000)
 
   it('reads the published pack back through a fresh host over the same database after a restart', async () => {

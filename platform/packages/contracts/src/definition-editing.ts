@@ -396,7 +396,7 @@ export function isDefinitionRevisionStrategy(value: unknown): value is Definitio
   if (!isRecord(value)) return false
   const kind = value['kind']
   if (kind !== 'new_version' && kind !== 'keep_independent' && kind !== 'retire_previous') return false
-  if (!nonEmpty(value['reason'])) return false
+  if (!nonEmpty(value['reason']) || value['reason'].trim().length === 0) return false
   return value['supersedesRef'] === undefined || isVersionRef(value['supersedesRef'])
 }
 

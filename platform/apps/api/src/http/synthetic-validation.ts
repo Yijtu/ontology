@@ -3,6 +3,7 @@ import {
   isResourceRef,
   isSyntheticCaseKind,
   isVersionRef,
+  isDefinitionRevisionStrategy,
   SyntheticValidationError,
 } from '@ontology/contracts'
 import type {
@@ -329,7 +330,12 @@ export function registerSyntheticValidationRoutes(
       const workspaceId = request.params.workspaceId
       const ctx = contextFor(auth, traceId, workspaceId)
       const bindingContext = dependencies.bindingContext?.(ctx)
+      const strategy = body['strategy']
+      if (strategy !== undefined && !isDefinitionRevisionStrategy(strategy)) {
+        throw new InvalidRequestFieldError('strategy must carry a supported revision decision, reason and optional predecessor reference')
+      }
       const input: RunIndustryValidationInput = {
+        ...(strategy === undefined ? {} : { strategy }),
         exampleSetId: readNonEmpty(body, 'exampleSetId'),
         ...(body['draftRef'] === undefined ? {} : { draftRef: parseVersionRef(body['draftRef'], 'draftRef') }),
         ...(body['definitionRef'] === undefined
