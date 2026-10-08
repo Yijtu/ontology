@@ -12,6 +12,7 @@ import type {
   IndustryWorkspaceStore,
   IndustryWorkspaceWriteResult,
   ModelRef,
+  ResourceRef,
   RevisionString,
   ScopeRef,
   ToolContext,
@@ -20,6 +21,7 @@ import type {
 } from '@ontology/contracts'
 import {
   DefinitionCandidateGenerationService,
+  createSourceGroundingService,
   ExtractionPipeline,
   InMemoryAssetCandidateStore,
   InMemoryCandidateStore,
@@ -30,10 +32,11 @@ import {
   sha256DigestOf,
 } from '@ontology/application'
 import type { ExtractionInput, ExtractionRunContext } from '@ontology/application'
+import { ArtifactGroundingDocumentSetReader, InMemoryDocumentParseStore, InMemoryStructuredIngestionStore, LocalDocumentExtractionService, ParsedSourceGroundingReader, publishGroundingDocumentSet } from '@ontology/adapter-extraction-document'
+import { InMemoryArtifactStore } from '../../fixtures/documents/test-doubles'
 import { BudgetService, InMemoryBudgetLedgerStore } from '@ontology/core'
 import { RecordingControlRepository, toolContext } from '../../unit/component-registry-fixtures'
 import {
-  EVAL_SOURCE_REF,
   MODELLING_PARAMETER_EVAL_SET,
   evalSetProjection,
 } from './fixed-set'
@@ -80,12 +83,12 @@ function fixedWorkspace(): IndustryWorkspace {
   }
 }
 
-function fixedDraft(): AssetDraftVersion {
+function fixedDraft(documentSetRef: ResourceRef): AssetDraftVersion {
   return {
     workspaceId: WORKSPACE_ID,
     revision: '1',
     digest: `sha256:${'d'.repeat(64)}`,
-    documentSetRef: EVAL_SOURCE_REF,
+    documentSetRef,
     candidateRefs: [],
   }
 }
@@ -139,17 +142,10 @@ class FixedWorkspaceStore implements IndustryWorkspaceStore {
     throw new Error('the evaluation harness never lists workspaces')
   }
 
-  async getDraft(
-    _scopeRef: ScopeRef,
-    _workspaceId: Uuid,
-    _revision: RevisionString,
-    _ctx: ToolContext,
-  ): Promise<AssetDraftVersion | undefined> {
-    void _scopeRef
-    void _workspaceId
-    void _revision
+  async getDraft(scope: ScopeRef, workspaceId: Uuid, revision: RevisionString, _ctx: ToolContext): Promise<AssetDraftVersion | undefined> {
     void _ctx
-    throw new Error('the evaluation harness never resolves a draft by revision')
+    if (scope.tenantId !== TENANT || scope.spaceId !== SPACE) return undefined
+    return this.#drafts.find((draft) => draft.workspaceId === workspaceId && draft.revision === revision)
   }
 
   async appendDraft(
@@ -237,15 +233,26 @@ function payloadConflicts(candidate: AssetCandidateVersion): string[] {
 }
 
 async function evaluateModellingCase(entry: ModellingEvalCase): Promise<CaseEvaluation> {
-  const ctx = toolContext(TENANT, SPACE, ['profile-editor'], 'modelling-eval')
+  const ctx = toolContext(TENANT, SPACE, ['profile-editor', 'data-editor'], 'modelling-eval')
+  const blobs = new InMemoryArtifactStore()
+  const documents = new InMemoryDocumentParseStore()
+  const tables = new InMemoryStructuredIngestionStore()
+  const staged = await blobs.stage(new TextEncoder().encode(entry.sourceText), { scopeRef: SCOPE }, ctx)
+  const sourceRef = (await blobs.publish({ scopeRef: SCOPE, ...staged, mediaType: 'text/plain', purpose: 'document' }, ctx)).blobRef
+  const parse = await new LocalDocumentExtractionService({ blobs, store: documents }).parse({ scopeRef: SCOPE, originalRef: sourceRef }, ctx)
+  const documentSetRef = await publishGroundingDocumentSet(blobs, { schemaVersion: '1.0.0', scopeRef: SCOPE, workspaceId: WORKSPACE_ID,
+    sources: [{ sourceRef, state: 'approved', kind: 'document', parserVersion: parse.parserVersion, parseId: parse.parseId }] }, ctx)
+  const workspaces = new FixedWorkspaceStore(fixedWorkspace(), [fixedDraft(documentSetRef)])
   const service = new DefinitionCandidateGenerationService({
-    workspaces: new FixedWorkspaceStore(fixedWorkspace(), [fixedDraft()]),
+    workspaces,
+    sourceGrounding: createSourceGroundingService({ workspaces, documentSets: new ArtifactGroundingDocumentSetReader(blobs),
+      reader: new ParsedSourceGroundingReader({ blobs, documents, tables }) }),
     candidates: new InMemoryAssetCandidateStore(),
     terminology: new StaticDefinitionTerminologySource([], entry.terminology),
     generationForRun: () => new FixedGenerationPort(entry.controlledModelOutput),
     modelRef: MODEL_REF,
     responseSchemaRef: TBOX_RESPONSE_SCHEMA_REF,
-    outputLimit: { maxTokens: 1_024 },
+    outputLimit: { maxTokens: 16_384 },
     now: () => FIXED_NOW,
     newId: () => randomUUID(),
   })
@@ -253,7 +260,7 @@ async function evaluateModellingCase(entry: ModellingEvalCase): Promise<CaseEval
     {
       workspaceId: WORKSPACE_ID,
       expectedRevision: '1',
-      sourceRefs: [EVAL_SOURCE_REF],
+      sourceRefs: [sourceRef],
       kinds: entry.allowedKinds,
       generationPolicyRef: POLICY_REF,
       idempotencyKey: `modelling-eval-${entry.caseId}`,

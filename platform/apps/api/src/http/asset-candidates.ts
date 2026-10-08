@@ -1,5 +1,5 @@
-import type { FastifyInstance, FastifyRequest } from 'fastify'
-import { isResourceRef, isVersionRef } from '@ontology/contracts'
+import type { FastifyInstance, FastifyReply, FastifyRequest } from 'fastify'
+import { isResourceRef, isSha256Digest, isVersionRef } from '@ontology/contracts'
 import type {
   AssetCandidateState,
   DefinitionCandidateKind,
@@ -67,14 +67,14 @@ function readIfMatch(request: FastifyRequest): RevisionString | undefined {
 }
 
 function parseVersionRef(value: unknown, field: string): VersionRef {
-  if (!isVersionRef(value)) {
+  if (!isVersionRef(value) || Object.keys(value).some((key) => !['id', 'version', 'digest'].includes(key))) {
     throw new InvalidRequestFieldError(`${field} must carry id/version/digest strings`)
   }
   return value
 }
 
 function parseResourceRef(value: unknown, field: string): ResourceRef {
-  if (!isResourceRef(value)) {
+  if (!isResourceRef(value) || Object.keys(value).some((key) => !['id', 'version', 'digest', 'kind'].includes(key))) {
     throw new InvalidRequestFieldError(`${field} must carry a uuid id, version, sha256 digest and kind`)
   }
   return value
@@ -111,6 +111,18 @@ function readPageSize(request: FastifyRequest): number {
   return Math.min(raw, MAX_PAGE_SIZE)
 }
 
+async function withRequestSignal<T>(request: FastifyRequest, reply: FastifyReply,
+  operation: (signal: AbortSignal) => Promise<T>): Promise<T> {
+  const controller = new AbortController()
+  const abort = () => { controller.abort() }
+  const close = () => { if (!reply.raw.writableEnded) controller.abort() }
+  request.raw.once('aborted', abort)
+  reply.raw.once('close', close)
+  if (request.raw.aborted) controller.abort()
+  try { return await operation(controller.signal) }
+  finally { request.raw.off('aborted', abort); reply.raw.off('close', close) }
+}
+
 /**
  * The definition-candidate generation surface (SPEC v0.3a §8.1).
  *
@@ -142,7 +154,8 @@ export function registerAssetCandidateRoutes(
       if (!isRecord(body)) {
         throw new InvalidRequestFieldError('the request body must be a JSON object')
       }
-      rejectUnknownFields(body, ['kinds', 'generationPolicyRef', 'documentSetRef', 'sourceRefs'])
+      rejectUnknownFields(body, ['kinds', 'generationPolicyRef', 'documentSetRef', 'sourceRefs', 'candidateLimit', 'competencyQuestionRef'])
+      if (body['candidateLimit'] !== undefined && (!Number.isSafeInteger(body['candidateLimit']) || Number(body['candidateLimit']) < 1 || Number(body['candidateLimit']) > 500)) throw new InvalidRequestFieldError('candidateLimit must be within 1..500')
       const input: DefinitionGenerationInput = {
         workspaceId,
         expectedRevision: readIfMatch(request),
@@ -152,13 +165,15 @@ export function registerAssetCandidateRoutes(
           ? {}
           : { documentSetRef: parseResourceRef(body['documentSetRef'], 'documentSetRef') }),
         sourceRefs: parseSourceRefs(body['sourceRefs']),
+        ...(body['candidateLimit'] === undefined ? {} : { candidateLimit: Number(body['candidateLimit']) }),
+        ...(body['competencyQuestionRef'] === undefined ? {} : { competencyQuestionRef: parseVersionRef(body['competencyQuestionRef'], 'competencyQuestionRef') }),
         idempotencyKey: requireIdempotencyKey(request),
       }
-      const result = await dependencies.generation.generate(
+      const result = await withRequestSignal(request, reply, (signal) => dependencies.generation.generate(
         input,
         auth.principal.subjectId,
-        contextFor(auth, traceId, workspaceId),
-      )
+        contextFor(auth, traceId, workspaceId), signal,
+      ))
       reply.status(201).send({
         data: { batch: result.batch, candidates: result.candidates, created: result.created },
         meta: { traceId, revision: result.batch.inputDraftRef.revision },
@@ -166,6 +181,44 @@ export function registerAssetCandidateRoutes(
       return reply
     },
   )
+
+  app.post<{ Params: { workspaceId: string } }>('/api/v1/industry-workspaces/:workspaceId/source-grounding', async (request, reply) => {
+    const traceId = readTraceId(request)
+    const auth = authenticateRequest(dependencies.authenticate, request, reply)
+    if (auth === undefined) return reply
+    const body = request.body
+    if (!isRecord(body)) throw new InvalidRequestFieldError('the request body must be a JSON object')
+    rejectUnknownFields(body, ['sourceRefs'])
+    const sourceRefs = parseSourceRefs(body['sourceRefs'])
+    const expectedRevision = readIfMatch(request)
+    const result = await withRequestSignal(request, reply, (signal) => dependencies.generation.readSources({ workspaceId: request.params.workspaceId,
+      sourceRefs, ...(expectedRevision === undefined ? {} : { expectedRevision }) }, contextFor(auth, traceId, request.params.workspaceId), signal))
+    reply.status(200).send({ data: result, meta: { traceId, revision: result.workspaceRevision } })
+    return reply
+  })
+
+  app.post<{ Params: { workspaceId: string; candidateId: string } }>(
+    '/api/v1/industry-workspaces/:workspaceId/candidates/:candidateId/source-confirmations',
+    async (request, reply) => {
+      const traceId = readTraceId(request)
+      const auth = authenticateRequest(dependencies.authenticate, request, reply)
+      if (auth === undefined) return reply
+      const body = request.body
+      if (!isRecord(body)) throw new InvalidRequestFieldError('the request body must be a JSON object')
+      rejectUnknownFields(body, ['contentDigest', 'sourceRef', 'fragmentIndex', 'reason'])
+      if (!isSha256Digest(body['contentDigest']) || !Number.isSafeInteger(body['fragmentIndex'])
+        || Number(body['fragmentIndex']) < 0 || Number(body['fragmentIndex']) > 63 || typeof body['reason'] !== 'string') {
+        throw new InvalidRequestFieldError('confirmation requires contentDigest, fragmentIndex within 0..63 and reason')
+      }
+      const contentDigest = body['contentDigest']
+      const reason = body['reason']
+      const result = await withRequestSignal(request, reply, (signal) => dependencies.generation.confirmSource({ workspaceId: request.params.workspaceId,
+        candidateId: request.params.candidateId, contentDigest, sourceRef: parseResourceRef(body['sourceRef'], 'sourceRef'),
+        fragmentIndex: Number(body['fragmentIndex']), reason, expectedRevision: readIfMatch(request),
+        idempotencyKey: requireIdempotencyKey(request) }, auth.principal.subjectId, contextFor(auth, traceId, request.params.workspaceId), signal))
+      reply.status(201).send({ data: result, meta: { traceId, revision: result.batch.inputDraftRef.revision } })
+      return reply
+    })
 
   app.get<{ Params: { workspaceId: string } }>(
     '/api/v1/industry-workspaces/:workspaceId/candidates',

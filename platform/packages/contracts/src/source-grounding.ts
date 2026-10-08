@@ -1,6 +1,7 @@
+import type { DefinitionCandidateInputDraftRef } from './asset-candidates'
 import type { DocumentChunkRecord } from './document-parse'
 import type { CandidateSourceSpan } from './extraction'
-import type { ResourceRef, ScopeRef, Semver, Uuid } from './generated/contracts'
+import type { ResourceRef, RevisionString, ScopeRef, Semver, Uuid } from './generated/contracts'
 import type { StructuredCell, StructuredColumn, StructuredParseOptions } from './structured-parse'
 import type { ToolContext } from './trusted'
 import { isRecord, isResourceRef, isUuid } from './asset-workspace'
@@ -87,14 +88,33 @@ export interface SourceGroundingBudgetPort {
   usage(): SourceGroundingUsage
 }
 
+export interface GroundedSourceFragment {
+  readonly sourceIndex: number
+  readonly fragmentIndex: number
+  readonly sourceRef: ResourceRef
+  readonly sourceSpan: CandidateSourceSpan
+  readonly content: Omit<GroundedText, 'sourceSpan'> | {
+    readonly kind: 'table'; readonly format: 'csv' | 'xlsx'; readonly columns: readonly StructuredColumn[];
+    readonly headerRow: number; readonly cells: readonly StructuredCell[]
+  }
+}
+
+export interface SourceGroundingReadResult {
+  readonly documentSetRef: ResourceRef
+  readonly sources: readonly GroundedSource[]
+  readonly coverage: 'complete' | 'partial' | 'failed'
+  readonly usage: SourceGroundingUsage
+}
+
+export interface WorkspaceSourceGroundingView extends SourceGroundingReadResult {
+  readonly workspaceRevision: RevisionString
+  readonly inputDraftRef: DefinitionCandidateInputDraftRef
+  readonly fragments: readonly GroundedSourceFragment[]
+}
+
 export interface SourceGroundingPort {
-  read(request: { readonly workspaceId: Uuid; readonly sourceRefs: readonly ResourceRef[] },
-    ctx: ToolContext, budget: SourceGroundingBudgetPort): Promise<{
-      readonly documentSetRef: ResourceRef
-      readonly sources: readonly GroundedSource[]
-      readonly coverage: 'complete' | 'partial' | 'failed'
-      readonly usage: SourceGroundingUsage
-    }>
+  read(request: { readonly workspaceId: Uuid; readonly sourceRefs: readonly ResourceRef[]; readonly inputDraftRef?: DefinitionCandidateInputDraftRef },
+    ctx: ToolContext, budget: SourceGroundingBudgetPort): Promise<SourceGroundingReadResult>
 }
 
 export interface GroundingDocumentSetReaderPort {

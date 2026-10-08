@@ -16,6 +16,7 @@ export interface DraftDefinitionCandidate {
   readonly businessMeaning: string
   readonly suggestedReason: string
   readonly sourceIndex?: number
+  readonly fragmentIndex?: number
   readonly identityAttributeIds?: readonly string[]
   readonly objectLogicalId?: string
   readonly valueType?: IndustryAttributeValueType
@@ -48,7 +49,7 @@ function isRecord(value: unknown): value is Record<string, unknown> {
 }
 
 function requireString(value: unknown, field: string): string {
-  if (typeof value !== 'string' || value.trim().length === 0) {
+  if (typeof value !== 'string' || value.trim().length === 0 || value.length > 4096) {
     throw new DefinitionCandidateError(
       'INVALID_MODEL_OUTPUT',
       `model output field "${field}" must be a non-empty string`,
@@ -81,7 +82,7 @@ function optionalStringArray(value: unknown, field: string): readonly string[] |
 
 function optionalSourceIndex(value: unknown, field: string): number | undefined {
   if (value === undefined) return undefined
-  if (typeof value !== 'number' || !Number.isInteger(value) || value < 0) {
+  if (typeof value !== 'number' || !Number.isSafeInteger(value) || value < 0) {
     throw new DefinitionCandidateError(
       'INVALID_MODEL_OUTPUT',
       `model output field "${field}" must be a non-negative integer source index`,
@@ -93,7 +94,7 @@ function optionalSourceIndex(value: unknown, field: string): number | undefined 
 function optionalCardinality(value: unknown, field: string): number | 'unbounded' | undefined {
   if (value === undefined) return undefined
   if (value === 'unbounded') return 'unbounded'
-  if (typeof value !== 'number' || !Number.isInteger(value) || value < 0) {
+  if (typeof value !== 'number' || !Number.isSafeInteger(value) || value < 0) {
     throw new DefinitionCandidateError(
       'INVALID_MODEL_OUTPUT',
       `model output field "${field}" must be a non-negative integer or "unbounded"`,
@@ -104,7 +105,7 @@ function optionalCardinality(value: unknown, field: string): number | 'unbounded
 
 function optionalCount(value: unknown, field: string): number | undefined {
   if (value === undefined) return undefined
-  if (typeof value !== 'number' || !Number.isInteger(value) || value < 0) {
+  if (typeof value !== 'number' || !Number.isSafeInteger(value) || value < 0) {
     throw new DefinitionCandidateError(
       'INVALID_MODEL_OUTPUT',
       `model output field "${field}" must be a non-negative integer`,
@@ -126,21 +127,30 @@ function commonOf(entry: Record<string, unknown>, field: string): {
   readonly businessMeaning: string
   readonly suggestedReason: string
   readonly sourceIndex?: number
+  readonly fragmentIndex?: number
 } {
   const sourceIndex = optionalSourceIndex(entry['sourceIndex'], `${field}.sourceIndex`)
+  const fragmentIndex = optionalSourceIndex(entry['fragmentIndex'], `${field}.fragmentIndex`)
   return {
     logicalId: requireString(entry['logicalId'], `${field}.logicalId`),
     displayName: requireString(entry['displayName'], `${field}.displayName`),
     businessMeaning: requireString(entry['businessMeaning'], `${field}.businessMeaning`),
     suggestedReason: requireString(entry['suggestedReason'], `${field}.suggestedReason`),
     ...(sourceIndex === undefined ? {} : { sourceIndex }),
+    ...(fragmentIndex === undefined ? {} : { fragmentIndex }),
   }
+}
+
+function rejectFields(entry: Record<string, unknown>, allowed: readonly string[], field: string): void {
+  const common = ['logicalId', 'displayName', 'businessMeaning', 'suggestedReason', 'sourceIndex', 'fragmentIndex']
+  if (Object.keys(entry).some((key) => !common.includes(key) && !allowed.includes(key))) throw new DefinitionCandidateError('INVALID_MODEL_OUTPUT', `model output ${field} contains undeclared fields`)
 }
 
 function parseObject(entry: unknown, field: string): DraftDefinitionCandidate {
   if (!isRecord(entry)) {
     throw new DefinitionCandidateError('INVALID_MODEL_OUTPUT', `model output ${field} must be an object`)
   }
+  rejectFields(entry, ['identityAttributeIds'], field)
   const identity = optionalStringArray(entry['identityAttributeIds'], `${field}.identityAttributeIds`)
   return {
     kind: 'object',
@@ -153,11 +163,12 @@ function parseAttribute(entry: unknown, field: string): DraftDefinitionCandidate
   if (!isRecord(entry)) {
     throw new DefinitionCandidateError('INVALID_MODEL_OUTPUT', `model output ${field} must be an object`)
   }
+  rejectFields(entry, ['objectLogicalId', 'valueType', 'unitCode', 'dimension', 'enumValues', 'referencesObjectLogicalId', 'minCardinality', 'maxCardinality'], field)
   const valueType = requireString(entry['valueType'], `${field}.valueType`)
   if (!(VALUE_TYPES as readonly string[]).includes(valueType)) {
     throw new DefinitionCandidateError(
       'INVALID_MODEL_OUTPUT',
-      `model output ${field}.valueType "${valueType}" is not a declared attribute value type`,
+      `model output ${field}.valueType is not a declared attribute value type`,
     )
   }
   const unitCode = optionalString(entry['unitCode'], `${field}.unitCode`)
@@ -187,6 +198,7 @@ function parseRelation(entry: unknown, field: string): DraftDefinitionCandidate 
   if (!isRecord(entry)) {
     throw new DefinitionCandidateError('INVALID_MODEL_OUTPUT', `model output ${field} must be an object`)
   }
+  rejectFields(entry, ['fromObjectLogicalId', 'toObjectLogicalId', 'minCardinality', 'maxCardinality'], field)
   const minCardinality = optionalCount(entry['minCardinality'], `${field}.minCardinality`)
   const maxCardinality = optionalCardinality(entry['maxCardinality'], `${field}.maxCardinality`)
   return {
@@ -220,10 +232,12 @@ export function parseDefinitionCandidateOutput(text: string): DraftDefinitionCan
       'the definition generation response must be a JSON object',
     )
   }
+  if (Object.keys(parsed).some((key) => !['objects', 'attributes', 'relations'].includes(key))) throw new DefinitionCandidateError('INVALID_MODEL_OUTPUT', 'model output contains undeclared top-level fields')
   const objects = parsed['objects'] === undefined ? [] : requireArray(parsed['objects'], 'objects')
   const attributes = parsed['attributes'] === undefined ? [] : requireArray(parsed['attributes'], 'attributes')
   const relations = parsed['relations'] === undefined ? [] : requireArray(parsed['relations'], 'relations')
 
+  if (objects.length + attributes.length + relations.length > 500) throw new DefinitionCandidateError('INVALID_MODEL_OUTPUT', 'candidate arrays exceed the bounded 500 limit')
   return {
     candidates: [
       ...objects.map((entry, index) => parseObject(entry, `objects[${String(index)}]`)),

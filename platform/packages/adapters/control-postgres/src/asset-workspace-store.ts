@@ -233,6 +233,17 @@ export class PostgresAssetWorkspaceStore implements IndustryWorkspaceStore {
     })
   }
 
+  async getLatestDraft(scopeRef: ScopeRef, workspaceId: Uuid, ctx: ToolContext): Promise<AssetDraftVersion | undefined> {
+    return this.#withScope(scopeRef, ctx, async (query) => {
+      const result = await query.query<DraftRow>(
+        `SELECT body, request_digest FROM agent_platform.asset_draft_versions
+          WHERE tenant_id = current_setting('app.tenant_id')::uuid
+            AND space_id = current_setting('app.space_id')::uuid AND workspace_id = $1::uuid
+          ORDER BY revision DESC LIMIT 1`, [workspaceId])
+      return result.rows[0]?.body
+    })
+  }
+
   async listDrafts(
     scopeRef: ScopeRef,
     workspaceId: Uuid,

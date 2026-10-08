@@ -159,6 +159,7 @@ function definition(
     businessMeaning: `the ${logicalId} concept declared by the source`,
     suggestedReason: 'named in the fixed source text',
     sourceIndex: 0,
+    fragmentIndex: 0,
     ...extra,
   }
 }
