@@ -406,6 +406,7 @@ export class DefinitionCandidateGenerationService {
     const modelHistory = await this.#candidates.listCandidates(scopeRef, input.workspaceId, { limit: 2001 }, ctx)
     if (modelHistory.length > 2000) throw new DefinitionCandidateError('VALIDATION_BLOCKED', 'generation rebase history exceeds its explicit 2000-version bound')
     const currentDraftCandidates = candidateHeads(modelHistory)
+    const modelCandidatePins = currentDraftCandidates.map(assetCandidateCommitPin).sort((left, right) => left.candidateId.localeCompare(right.candidateId))
     if (currentDraftCandidates.length > 500) throw new DefinitionCandidateError('VALIDATION_BLOCKED', 'model context exceeds its explicit 500-current-candidate bound')
 
     let draftsOut: readonly DraftDefinitionCandidate[]
@@ -448,6 +449,8 @@ export class DefinitionCandidateGenerationService {
     if (currentWorkspace?.headRevision !== expectedRevision || currentWorkspace.state === 'archived') throw new DefinitionCandidateError('VERSION_CONFLICT', 'workspace moved during generation')
     const history = await this.#candidates.listCandidates(scopeRef, input.workspaceId, { limit: 2001 }, ctx)
     if (history.length > 2000) throw new DefinitionCandidateError('VALIDATION_BLOCKED', 'generation rebase history exceeds its explicit 2000-version bound')
+    const postModelPins = candidateHeads(history).map(assetCandidateCommitPin).sort((left, right) => left.candidateId.localeCompare(right.candidateId))
+    if (canonicalJson(postModelPins) !== canonicalJson(modelCandidatePins)) throw new DefinitionCandidateError('VERSION_CONFLICT', 'candidate projection changed during model execution; regenerate against the current revisions')
     const proposed = this.#buildCandidates({
       input,
       draft,
@@ -476,7 +479,7 @@ export class DefinitionCandidateGenerationService {
       reusedCandidateIds: rebased.reused.map((candidate) => candidate.candidateId),
     })
     const guard: AssetCandidateInsertGuard = { expectedWorkspaceRevision: expectedRevision,
-      currentCandidatePins: candidateHeads(history).map(assetCandidateCommitPin) }
+      currentCandidatePins: modelCandidatePins }
     let inserted
     try { inserted = await this.#candidates.insertBatch(scopeRef, batch, rebased.appended, ctx, guard) }
     catch (error) {

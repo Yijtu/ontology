@@ -537,6 +537,46 @@ describe('grounding confirmation and generation commit fences over PostgreSQL HT
     } finally { generation.beforeCompletion = undefined }
   }, 60_000)
 
+  it('rejects an actual same-state validation writer DURING the model stream before the post-model read', async () => {
+    const workspaceId = await createWorkspace()
+    generation.enqueue(PAYLOAD)
+    const first = (await generate(workspaceId)).json() as { data: { candidates: import('@ontology/contracts').AssetCandidateVersion[] } }
+    const candidate = first.data.candidates[0]
+    if (candidate === undefined) throw new Error('expected candidate')
+    const ctx = toolContext(scope.tenantId, scope.spaceId, ['profile-editor'], 'editor-1')
+    generation.enqueue(PAYLOAD)
+    generation.beforeCompletion = async () => {
+      await candidateStore.transitionCandidate(scope.scopeRef, candidate.candidateId, { state: candidate.state,
+        issues: [{ code: 'UNIT_CONFLICT', message: 'changed while the model was running' }], transitionedAt: new Date().toISOString() }, ctx)
+    }
+    try { expect((await generate(workspaceId)).statusCode).toBe(409) }
+    finally { generation.beforeCompletion = undefined }
+    expect(await candidateStore.listBatches(scope.scopeRef, workspaceId, 10, ctx)).toHaveLength(1)
+    expect((await candidateStore.getCandidate(scope.scopeRef, candidate.candidateId, ctx))?.issues).toMatchObject([{ code: 'UNIT_CONFLICT' }])
+  })
+
+  it('rejects an outer model result when a real second generation replaces heads before its post-model read', async () => {
+    const workspaceId = await createWorkspace()
+    generation.enqueue(PAYLOAD)
+    const first = (await generate(workspaceId)).json() as { data: { candidates: import('@ontology/contracts').AssetCandidateVersion[] } }
+    generation.enqueue(PAYLOAD)
+    generation.enqueue(PAYLOAD)
+    let concurrent: import('@ontology/contracts').AssetCandidateVersion[] = []
+    generation.beforeCompletion = async () => {
+      generation.beforeCompletion = undefined
+      const nested = await generate(workspaceId)
+      expect(nested.statusCode).toBe(201)
+      concurrent = (nested.json() as { data: { candidates: import('@ontology/contracts').AssetCandidateVersion[] } }).data.candidates
+    }
+    try { expect((await generate(workspaceId)).statusCode).toBe(409) }
+    finally { generation.beforeCompletion = undefined }
+    expect(concurrent.every((candidate) => first.data.candidates.some((old) => old.candidateId === candidate.replacesCandidateId))).toBe(true)
+    const ctx = toolContext(scope.tenantId, scope.spaceId, ['profile-editor'], 'editor-1')
+    expect(await candidateStore.listBatches(scope.scopeRef, workspaceId, 10, ctx)).toHaveLength(2)
+    const stored = await candidateStore.listCandidates(scope.scopeRef, workspaceId, { limit: 100 }, ctx)
+    expect(stored.filter((candidate) => candidate.batchId === concurrent[0]?.batchId).map((candidate) => candidate.candidateId).sort()).toEqual(concurrent.map((candidate) => candidate.candidateId).sort())
+  })
+
   it('fences changed validation outcomes between rebase read and commit even when candidate digest/state are unchanged', async () => {
     const workspaceId = await createWorkspace()
     generation.enqueue(PAYLOAD)
