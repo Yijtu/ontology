@@ -14,6 +14,7 @@ import type { DocumentChunkRecord } from './document-parse'
 import type { SourceLocator } from './structured-parse'
 import type { ToolContext } from './trusted'
 import type { ProjectFactInput } from './project-mapping'
+import type { RuleDependencyReference } from './rule-action-candidates'
 import type {
   RuleConflict,
   RuleExceptionNode,
@@ -242,6 +243,9 @@ export interface RuleCandidate extends CandidateCommon {
   readonly exceptions: readonly RuleExceptionNode[]
   /** Raw model proposal; validated against the pinned definition before a rule can publish it. */
   readonly conclusion?: unknown
+  readonly ruleDependencies?: readonly string[]
+  readonly dependencyRefs?: readonly RuleDependencyReference[]
+  readonly projectId?: Uuid
   /** Contradictory rules on the same scope, surfaced explicitly and never auto-resolved. */
   readonly conflicts: readonly RuleConflict[]
 }

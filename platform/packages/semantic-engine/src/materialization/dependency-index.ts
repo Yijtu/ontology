@@ -106,6 +106,10 @@ export class MaterializationDependencyIndex {
         addTo(rulesByPublishedRule, `${publishedInstance.ruleId}\u0000${publishedInstance.objectId}`, rule.ruleId)
         addTo(rulesByEntity, publishedInstance.subjectEntityId, rule.ruleId)
         addTo(rulesByEntityObject, JSON.stringify([publishedInstance.subjectEntityId, publishedInstance.objectId]), rule.ruleId)
+        // Keep the invalidation alias even when the pinned upstream version has disappeared.
+        for (const dependency of publishedInstance.dependencyRefs ?? []) {
+          addTo(rulesByPublishedRule, `${dependency.ruleId}\u0000${dependency.objectId}`, rule.ruleId)
+        }
       }
       for (const group of rule.premiseGroups) {
         addTo(rulesByPredicate, group.filter.fieldRef, rule.ruleId)
@@ -300,7 +304,19 @@ export class MaterializationDependencyIndex {
    * still far smaller than the whole library: unrelated rules are never evaluated.
    */
   evaluationRuleIds(affectedRuleIds: readonly string[]): readonly string[] {
-    return closure(new Set(affectedRuleIds), this.#ruleDependencies)
+    const needed = new Set(affectedRuleIds)
+    // A shared proposition is the OR of all its independent derivations. Recompute siblings and
+    // their ancestors as well, even when the changed source only seeded one producer.
+    let previousSize = -1
+    while (needed.size !== previousSize) {
+      previousSize = needed.size
+      for (const id of closure(needed, this.#ruleDependencies)) needed.add(id)
+      for (const id of [...needed]) {
+        const proposition = this.#conclusionByRule.get(id)
+        if (proposition !== undefined) for (const owner of this.#rulesByConclusion.get(proposition) ?? []) needed.add(owner)
+      }
+    }
+    return [...needed].sort()
   }
 
   /** The distinct conclusion propositions the affected rules derive. */

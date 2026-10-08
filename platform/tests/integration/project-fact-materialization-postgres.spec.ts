@@ -16,6 +16,7 @@ import { createProjectFactWorkflow, createInstanceIdentityWorkflow } from '@onto
 import {
   IdentityDecisionService, InMemoryIdentityIndexReader, PublishedSemanticSource,
   PublishedFactsReferenceProvider, OntologyLookupService, SemanticDefinitionService,
+  SemanticPublicationService,
   InMemorySemanticDefinitionStore, RuleEvaluator,
   definitionVersionDigest, projectIndustrySchema, projectPublishedAttributeFacts, sha256DigestOf,
 } from '@ontology/semantic-engine'
@@ -165,6 +166,31 @@ async function publish(p: Fixture, selected: readonly { candidateId: string; kin
 }
 
 describe('confirmed structured records → official facts (real PostgreSQL)', () => {
+  it('requires stored project authority for tagged rules and rejects a project revision race at commit', async () => {
+    class MovingProjectStore extends PostgresSemanticPublicationStore {
+      beforeCommit: (() => Promise<void>) | undefined
+      override async publish(...args: Parameters<PostgresSemanticPublicationStore['publish']>) {
+        await this.beforeCommit?.()
+        return super.publish(...args)
+      }
+    }
+    const moving = new MovingProjectStore(db)
+    const p = await setup('tagged-rule-project-race', moving)
+    const a = await imported(p, 'csv'); await mount(p, [a]); const c = await stage(p, a); await confirmed(p, c, a.documentId)
+    const rule: RuleCandidate = { candidateId: randomUUID(), kind: 'rule', ruleId: 'scoped-rule', objectId: 'meter', projectId: p.projectId, jobId: c.jobId,
+      sourceSpans: c.sourceSpans, deterministic: true, state: 'pending_review', issues: [], inputVersion: { definitionRef: c.inputVersion.definitionRef, parseId: c.inputVersion.parseId, parserVersion: c.inputVersion.parserVersion, pipelineVersion: c.inputVersion.pipelineVersion },
+      expression: { op: 'compare', attributeId: 'active', operator: 'eq', value: true, spans: [] }, exceptions: [], conflicts: [], severity: 'soft', impact: 'low', reviewRequirement: 'required', idempotencyKey: sha256DigestOf({ projectId: p.projectId, source: c.candidateId, rule: 'scoped-rule' }), recordedAt: new Date().toISOString() }
+    await candidates.insertCandidates(p.scope.scopeRef, [rule], p.ctx)
+    await p.workflow.publication.reviewCandidate({ candidateId: rule.candidateId, decision: 'approve', expectedRevision: '0', reason: 'human approved the exact tagged rule source and project' }, p.ctx)
+    const request = { schemaRef: p.definition.ref, approvedCandidateRefs: [{ kind: 'rule' as const, candidateId: rule.candidateId }], expectedRevision: '0', idempotencyKey: `tag-rule-${randomUUID()}` }
+    const unqualified = new SemanticPublicationService({ store: moving, candidates, schemaSource: p.schemas, identity: identities })
+    await expect(unqualified.publish(request, p.ctx)).rejects.toMatchObject({ code: 'CANDIDATE_NOT_APPROVED' })
+    moving.beforeCommit = async () => { await p.projectService.appendRevision(p.projectId, { expectedRevision: '2', reason: 'human changed the project while rule publication was prepared' }, `project-race-${randomUUID()}`, p.ctx.principal.subjectId, p.ctx) }
+    await expect(p.workflow.publication.publish(request, p.ctx)).rejects.toMatchObject({ code: 'IDENTITY_CONSTRAINT_BLOCKED' })
+    expect(await publicationStore.listRuleVersions(p.scope.scopeRef, {}, p.ctx)).toEqual([])
+    expect(await publicationStore.latestPublicationRevision(p.scope.scopeRef, p.ctx)).toBe('0')
+  }, 120_000)
+
   it('publishes CSV/XLSX equivalent decimals with distinct cells, reads official lookup/rules and retains alternate support', async () => {
     const p = await setup('fact-equivalent')
     const a = await imported(p, 'csv')
@@ -184,7 +210,7 @@ describe('confirmed structured records → official facts (real PostgreSQL)', ()
     await expect(p.workflow.materialization.stageRelation(otherProjectId, { relationId: 'meter_of', fromCandidateId: cs.candidateId, toCandidateId: ca.candidateId }, p.ctx)).rejects.toMatchObject({ code: 'INVALID_ARGUMENT' })
     await p.workflow.publication.reviewCandidate({ candidateId: relation.candidateId, decision: 'approve', expectedRevision: '0', reason: 'human confirmed these source endpoints' }, p.ctx)
     const rule: RuleCandidate = {
-      candidateId: randomUUID(), kind: 'rule', ruleId: 'meter-ready', objectId: 'meter',
+      candidateId: randomUUID(), kind: 'rule', ruleId: 'meter-ready', objectId: 'meter', projectId: p.projectId,
       jobId: ca.jobId, sourceSpans: ca.sourceSpans, deterministic: true, state: 'pending_review', issues: [],
       inputVersion: { definitionRef: ca.inputVersion.definitionRef, parseId: ca.inputVersion.parseId, parserVersion: ca.inputVersion.parserVersion, pipelineVersion: ca.inputVersion.pipelineVersion },
       expression: targetCondition, exceptions: [], conflicts: [], severity: 'soft', impact: 'low', reviewRequirement: 'required',
@@ -195,6 +221,9 @@ describe('confirmed structured records → official facts (real PostgreSQL)', ()
     expect(await publicationStore.listStatements(p.scope.scopeRef, {}, p.ctx)).toEqual([])
     const key = 'equivalent-official-publication'
     const pub = await publish(p, [ca, cb, cs, relation, rule], key)
+    expect(pub.ruleProjectPins).toEqual([expect.objectContaining({ candidateId: rule.candidateId, candidateDigest: rule.idempotencyKey, projectRevisionRef: expect.objectContaining({ projectId: p.projectId, revision: '2' }) })])
+    expect((await candidates.getCandidate(p.scope.scopeRef, rule.candidateId, p.ctx))).toMatchObject({ projectId: p.projectId })
+    expect((await publicationStore.listRuleVersions(p.scope.scopeRef, {}, p.ctx))[0]?.projectId).toBe(p.projectId)
     const replay = await publish(p, [ca, cb, cs, relation, rule], key)
     expect(replay.publicationId).toBe(pub.publicationId)
     const sa = pub.statements.find((statement) => statement.statementId === ca.candidateId), sb = pub.statements.find((statement) => statement.statementId === cb.candidateId)
@@ -202,7 +231,7 @@ describe('confirmed structured records → official facts (real PostgreSQL)', ()
     expect(sa?.sourceRefs).not.toEqual(sb?.sourceRefs)
     expect(sa?.value['provenance']).toMatchObject({ sources: [{ sourceDigest: ca.sourceSpans[0]?.kind === 'structured' ? ca.sourceSpans[0].rowDigest : '' }], sourceSpans: expect.arrayContaining([expect.objectContaining({ locator: expect.objectContaining({ column: 2 }) })]) })
     expect(sa).toMatchObject({ validFrom: '2026-10-01T00:00:00Z', validTo: '2027-01-01T00:00:00Z' })
-    const source = new PublishedSemanticSource(publicationStore, { definition: p.definition, identity: identities })
+    const source = new PublishedSemanticSource(publicationStore, { definition: p.definition, identity: identities, projectId: p.projectId })
     const data = await source.load(p.scope.scopeRef, p.ctx)
     expect(await p.workflow.publication.listRuleVersions({}, p.ctx)).toHaveLength(1)
     const result = new RuleEvaluator().evaluate({ scopeRef: p.scope.scopeRef, definitionRef: p.definition.ref, facts: data.facts, rules: data.rules, request: { scopeRef: p.scope.scopeRef, projectionRef: p.definition.ref, validAt: '2026-10-08T00:00:00Z' } })
@@ -360,7 +389,7 @@ describe('confirmed structured records → official facts (real PostgreSQL)', ()
       const a = await imported(p, 'csv', 'meter', '12000', { headerRow: 1 }, false, amount)
       await mount(p, [a]); const c = await stage(p, a); await confirmed(p, c, a.documentId)
       const rule: RuleCandidate = {
-        candidateId: randomUUID(), kind: 'rule', ruleId: 'number-boundary', objectId: 'meter', jobId: c.jobId,
+        candidateId: randomUUID(), kind: 'rule', ruleId: 'number-boundary', objectId: 'meter', jobId: c.jobId, projectId: p.projectId,
         sourceSpans: c.sourceSpans, deterministic: true, state: 'pending_review', issues: [],
         inputVersion: { definitionRef: c.inputVersion.definitionRef, parseId: c.inputVersion.parseId, parserVersion: c.inputVersion.parserVersion, pipelineVersion: c.inputVersion.pipelineVersion },
         expression: { op: 'compare', attributeId: 'reading', operator, value: boundary, spans: [] }, conclusion: { predicate: 'reading', value: { kind: 'scalar_decimal', amount } }, exceptions: [], conflicts: [], severity: 'soft', impact: 'low', reviewRequirement: 'required',
@@ -369,8 +398,9 @@ describe('confirmed structured records → official facts (real PostgreSQL)', ()
       await candidates.insertCandidates(p.scope.scopeRef, [rule], p.ctx)
       await p.workflow.publication.reviewCandidate({ candidateId: rule.candidateId, expectedRevision: '0', decision: 'approve', reason: 'human verified exact numeric boundary rule' }, p.ctx)
       const pub = await publish(p, [c, rule])
+      expect(pub.ruleProjectPins?.[0]?.projectRevisionRef.projectId).toBe(p.projectId)
       expect((await p.workflow.publication.listRuleVersions({}, p.ctx))[0]?.conclusion).toEqual({ predicate: 'reading', value: { kind: 'scalar_decimal', amount } })
-      const source = new PublishedSemanticSource(publicationStore, { definition: p.definition, identity: identities })
+      const source = new PublishedSemanticSource(publicationStore, { definition: p.definition, identity: identities, projectId: p.projectId })
       const data = await source.load(p.scope.scopeRef, p.ctx)
       expect(data.facts.find((fact) => fact.predicate === 'reading')?.value).toEqual({ kind: 'scalar_decimal', amount })
       expect(data.facts.find((fact) => fact.predicate === 'label')?.value).toBe(amount)

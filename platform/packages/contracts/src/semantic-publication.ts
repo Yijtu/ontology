@@ -7,12 +7,14 @@ import type {
   Sha256Digest,
   Uuid,
   VersionRef,
+  ProjectRevisionRef,
 } from './generated/contracts'
 import type { CandidateKind } from './extraction'
 import type { NewOutboxMessage } from './job-store'
 import type { RuleConclusionBinding, RuleExceptionNode, RuleExpressionNode, RuleImpact } from './rule-extraction'
 import type { ToolContext } from './trusted'
 import type { ProjectFactPublicationFence } from './project-mapping'
+import type { RuleDependencyReference } from './rule-action-candidates'
 
 /**
  * Semantic publication and candidate review (SPEC D4.6/D5/D6, C6, US-011/US-012/US-015,
@@ -139,6 +141,9 @@ export interface PublishedRuleVersion {
   readonly exceptions: readonly RuleExceptionNode[]
   /** Optional human-reviewed business consequence; absence means applicability only. */
   readonly conclusion?: RuleConclusionBinding
+  readonly ruleDependencies?: readonly string[]
+  readonly dependencyRefs?: readonly RuleDependencyReference[]
+  readonly projectId?: Uuid
   readonly validFrom?: Rfc3339UtcTimestamp
   readonly validTo?: Rfc3339UtcTimestamp
   readonly recordedAt: Rfc3339UtcTimestamp
@@ -146,8 +151,28 @@ export interface PublishedRuleVersion {
   readonly publicationId: Uuid
 }
 
+/** A published pack rule retains its real origin; it is never a fabricated extraction publication. */
+export interface PublishedPackRuleVersion extends Omit<PublishedRuleVersion, 'publicationId'> {
+  readonly publishedPackRef: VersionRef
+  readonly ruleRef: VersionRef
+}
+export type PublishedExecutableRule = PublishedRuleVersion | PublishedPackRuleVersion
+
+export interface PublishedRuleDeclarationRequest {
+  /** Host-selected from an authorized immutable historical binding; never an HTTP request flag. */
+  readonly readMode?: 'current' | 'published_snapshot'
+  readonly projectRevisionRef?: ProjectRevisionRef
+  readonly packRef: VersionRef
+  readonly definitionRef: VersionRef
+  readonly projectId?: Uuid
+}
+export interface PublishedRuleDeclarationReader {
+  read(scopeRef: ScopeRef, request: PublishedRuleDeclarationRequest, ctx: ToolContext): Promise<readonly PublishedPackRuleVersion[]>
+}
+
 /** A published semantic version: the facts, the rules and the outbox event, one transaction. */
 export interface SemanticPublicationVersion {
+  readonly ruleProjectPins?: readonly PublicationRuleProjectPin[]
   readonly publicationId: Uuid
   readonly versionRef: VersionRef
   readonly revision: RevisionString
@@ -164,6 +189,15 @@ export interface SemanticPublicationVersion {
 export interface PublicationIdentityBinding {
   readonly candidateId: Uuid
   readonly entityId: string
+}
+
+/** Server-loaded project authority for a tagged extracted rule, rechecked at commit. */
+export interface PublicationRuleProjectPin {
+  readonly candidateId: Uuid
+  readonly candidateDigest: Sha256Digest
+  readonly reviewRevision: RevisionString
+  readonly projectRevisionRef: ProjectRevisionRef
+  readonly definitionRef: VersionRef
 }
 
 /**
@@ -192,6 +226,7 @@ export interface PublicationMaterializationFence {
  * check (SPEC D5/D6/§8).
  */
 export interface PublishSemanticPublicationInput {
+  readonly ruleProjectPins?: readonly PublicationRuleProjectPin[]
   readonly projectFactFences?: readonly ProjectFactPublicationFence[]
   readonly expectedRevision: RevisionString
   /** The publication content, before the store assigns its revision. */

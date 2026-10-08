@@ -361,6 +361,11 @@ describe('the default Core host composition chain (real PostgreSQL)', () => {
     })
     if (enableRule.status !== 200) throw new Error(`rule enable failed: ${await failureDetail(enableRule)}`)
     expect((await jsonBody(enableRule) as { data: { created: boolean; candidate: { lifecycle: string } } }).data.candidate.lifecycle).toBe('enabled')
+    const ruleReview = await request(baseUrl, `/api/v1/candidates/${ruleCandidateId}/reviews`, {
+      method: 'POST', headers: { 'content-type': 'application/json', 'if-match': '0' },
+      body: JSON.stringify({ decision: 'approve', reason: 'approve the enabled rule and its exact content' }),
+    })
+    expect(ruleReview.status).toBe(200)
 
     const exampleSet = await request(baseUrl, `/api/v1/industry-workspaces/${workspaceId}/synthetic-example-sets`, {
       method: 'POST',

@@ -17,6 +17,7 @@ export function createProjectFactWorkflow(options: ProjectFactWorkflowOptions) {
     publication: new SemanticPublicationService({
       ...options.publication, candidates: options.materialization.candidates,
       schemaSource: options.materialization.schemaSource, instanceRecords: options.instanceRecords,
+      projects: options.materialization.projects,
     }),
   }
 }

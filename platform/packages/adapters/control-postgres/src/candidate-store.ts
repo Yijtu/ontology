@@ -1,4 +1,4 @@
-import { CandidateStoreError, assertProjectFactInputShape, isToolContext } from '@ontology/contracts'
+import { CandidateStoreError, assertProjectFactInputShape, assertRuleDependencyShape, isToolContext } from '@ontology/contracts'
 import type {
   CandidateInsertResult,
   CandidateIssue,
@@ -90,6 +90,8 @@ function toCandidateRecord(row: CandidateRow): CandidateRecord {
   if (row.kind === 'relation') return relation
 
   if (row.kind === 'rule') {
+    const dependencyRefs = row.payload['dependencyRefs'] ?? []
+    assertRuleDependencyShape(row.payload['ruleDependencies'] ?? [], dependencyRefs)
     const rule: RuleCandidate = {
       ...common,
       kind: 'rule',
@@ -106,6 +108,9 @@ function toCandidateRecord(row: CandidateRow): CandidateRecord {
         ? (row.payload['conflicts'] as RuleCandidate['conflicts'])
         : [],
       ...(row.payload['conclusion'] === undefined ? {} : { conclusion: row.payload['conclusion'] }),
+      ...(row.payload['ruleDependencies'] === undefined ? {} : { ruleDependencies: row.payload['ruleDependencies'] as readonly string[] }),
+      ...(row.payload['dependencyRefs'] === undefined ? {} : { dependencyRefs }),
+      ...(typeof row.payload['projectId'] !== 'string' ? {} : { projectId: row.payload['projectId'] }),
     }
     return rule
   }
@@ -134,6 +139,7 @@ function payloadOf(candidate: CandidateRecord): Record<string, unknown> {
     return { relationId: candidate.relationId, from: candidate.from, to: candidate.to }
   }
   if (candidate.kind === 'rule') {
+    assertRuleDependencyShape(candidate.ruleDependencies ?? [], candidate.dependencyRefs ?? [])
     return {
       ruleId: candidate.ruleId,
       objectId: candidate.objectId,
@@ -144,6 +150,9 @@ function payloadOf(candidate: CandidateRecord): Record<string, unknown> {
       exceptions: candidate.exceptions,
       conflicts: candidate.conflicts,
       ...(candidate.conclusion === undefined ? {} : { conclusion: candidate.conclusion }),
+      ...(candidate.ruleDependencies === undefined ? {} : { ruleDependencies: candidate.ruleDependencies }),
+      ...(candidate.dependencyRefs === undefined ? {} : { dependencyRefs: candidate.dependencyRefs }),
+      ...(candidate.projectId === undefined ? {} : { projectId: candidate.projectId }),
     }
   }
   return {

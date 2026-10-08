@@ -70,3 +70,5 @@ export type {
 
 export { projectPublishedRelationFacts } from './from-published'
 export type { RuleRelationReadCompleteness } from './types'
+export { publishedRuleRef, publishedRuleConsequenceKey, publishedRuleDependencyRef } from './dependencies'
+export { publishedStatementProjectId } from './from-published'

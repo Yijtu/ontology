@@ -620,6 +620,8 @@ export class ExtractionPipeline {
         expression: result.expression,
         exceptions: result.exceptions,
         conclusion: entry.draft.conclusion ?? null,
+        ruleDependencies: entry.draft.ruleDependencies ?? [],
+        dependencyRefs: entry.draft.dependencyRefs ?? [],
       })
       candidates.push({
         kind: 'rule',
@@ -633,6 +635,8 @@ export class ExtractionPipeline {
         expression: result.expression,
         exceptions: result.exceptions,
         ...(entry.draft.conclusion === undefined ? {} : { conclusion: entry.draft.conclusion }),
+        ...(entry.draft.ruleDependencies === undefined ? {} : { ruleDependencies: entry.draft.ruleDependencies }),
+        ...(entry.draft.dependencyRefs === undefined ? {} : { dependencyRefs: entry.draft.dependencyRefs }),
         conflicts: [],
         sourceSpans: [...ruleSpans, ...exceptionSpans],
         deterministic: false,

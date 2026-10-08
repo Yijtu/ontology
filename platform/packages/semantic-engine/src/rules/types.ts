@@ -12,6 +12,7 @@ import type {
   SourceRef,
   ValidityInterval,
   VersionRef,
+  RuleDependencyReference,
 } from '@ontology/contracts'
 import type { FiniteConditionPlan } from './boolean'
 import type { RuleEvaluationErrorCode } from './errors'
@@ -44,6 +45,7 @@ export type RuleAssertionValue = DecimalQuantity | RuleScalarDecimalValue | stri
 
 /** One version of a logical assertion as published into the append-only event stream (D3.1). */
 export interface RuleFact {
+  readonly projectId?: string
   readonly assertionId: string
   /** Explicit relation edge metadata; these facts are never attribute observations. */
   readonly relation?: { readonly relationId: string; readonly targetEntityId?: string; readonly targetObjectId: string; readonly endpointResolved: boolean }
@@ -148,6 +150,11 @@ export interface SupportRule {
 }
 
 export interface PublishedRuleInstanceMetadata {
+  readonly validFrom?: string
+  readonly validTo?: string
+  readonly publishedPackRef?: VersionRef
+  readonly dependencyRefs?: readonly RuleDependencyReference[]
+  readonly projectId?: string
   readonly ruleId: string
   readonly ruleVersionId: string
   readonly publishedRevision: RevisionString
@@ -180,6 +187,9 @@ export interface RuleExceptionState {
 
 /** One published rule × subject result. It deliberately describes support, not business negation. */
 export interface RuleApplicabilityResult {
+  readonly publishedPackRef?: VersionRef
+  readonly dependencyRefs?: readonly RuleDependencyReference[]
+  readonly projectId?: string
   readonly scopeRef: ScopeRef
   readonly definitionRef: VersionRef
   readonly ruleRef: VersionRef
@@ -218,6 +228,7 @@ export interface RuleCapabilityIssue {
 }
 
 export interface PublishedRuleSubject {
+  readonly projectId?: string
   readonly subjectEntityId: string
   readonly objectId: string
 }
@@ -237,6 +248,8 @@ export interface CompiledPublishedRuleInstance {
 
 export interface PublishedRuleCompilation {
   readonly instances: readonly CompiledPublishedRuleInstance[]
+  /** Pinned, per-rule consequences consumed by dependencies; aggregate business outputs remain separate. */
+  readonly dependencyRules: readonly SupportRule[]
   readonly issues: readonly RuleCapabilityIssue[]
 }
 
@@ -266,6 +279,8 @@ export type SupportNodeState = 'satisfied' | 'refuted' | 'unknown' | 'conflict'
 
 /** A shared leaf: one fact version, or one derived proposition, referenced by alternatives. */
 export interface SupportLeafNode {
+  /** Derived leaves link to the shared upstream conclusion in the source DAG. */
+  readonly upstreamConclusionNodeId?: string
   readonly kind: 'fact'
   readonly nodeId: string
   /** `assertionId` for an explicit fact, `propositionKey` for a derived one. */

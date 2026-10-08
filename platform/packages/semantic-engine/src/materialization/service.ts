@@ -132,11 +132,24 @@ function subIntervalsFor(
   change: MaterializationChange,
 ): readonly ValidityWindow[] {
   const predicates = new Set<string>()
-  for (const rule of rules) {
-    if (rule.conclusion.propositionKey !== propositionKey) continue
-    for (const group of rule.premiseGroups) predicates.add(group.filter.fieldRef)
+  const boundariesForRule = new Set<string>()
+  const visited = new Set<string>()
+  const pending = [propositionKey]
+  while (pending.length > 0) {
+    const key = pending.pop()
+    if (key === undefined || visited.has(key)) continue
+    visited.add(key)
+    for (const rule of rules) {
+      if (rule.conclusion.propositionKey !== key) continue
+      if (rule.publishedInstance?.validFrom !== undefined) boundariesForRule.add(rule.publishedInstance.validFrom)
+      if (rule.publishedInstance?.validTo !== undefined) boundariesForRule.add(rule.publishedInstance.validTo)
+      for (const group of rule.premiseGroups) {
+        predicates.add(group.filter.fieldRef)
+        for (const alternative of group.alternatives) if (alternative.propositionKey !== undefined) pending.push(alternative.propositionKey)
+      }
+    }
   }
-  const boundaries = new Set<string>()
+  const boundaries = new Set<string>(boundariesForRule)
   for (const fact of facts) {
     if (!predicates.has(fact.predicate)) continue
     // Only facts visible at the change's recorded version shape this view's intervals, so a
@@ -390,13 +403,9 @@ export class IncrementalMaterializer {
       )
     }
     const index = MaterializationDependencyIndex.build(published)
-    const affectedRuleIds =
-      ticket.affectedRuleIds.length > 0 ? ticket.affectedRuleIds : index.affectedRuleIds(ticket.change)
+    const affectedRuleIds = [...new Set([...ticket.affectedRuleIds, ...index.affectedRuleIds(ticket.change)])]
     const evaluationRuleIds = index.evaluationRuleIds(affectedRuleIds)
-    const affectedPropositionKeys =
-      ticket.affectedPropositionKeys.length > 0
-        ? ticket.affectedPropositionKeys
-        : index.affectedPropositionKeys(affectedRuleIds)
+    const affectedPropositionKeys = [...new Set([...ticket.affectedPropositionKeys, ...index.affectedPropositionKeys(affectedRuleIds)])]
     const evaluationRules = published.rules.filter((rule) => evaluationRuleIds.includes(rule.ruleId))
     const generation = nextGeneration(existing?.generation ?? '0')
 

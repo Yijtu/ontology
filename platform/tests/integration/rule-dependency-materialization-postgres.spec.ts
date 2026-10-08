@@ -1,7 +1,8 @@
 import { randomUUID } from 'node:crypto'
+import { Client } from 'pg'
 import { afterAll, beforeAll, describe, expect, it } from 'vitest'
 import { ControlPostgresDatabase, PostgresMaterializationStore } from '@ontology/adapter-control-postgres'
-import { IncrementalMaterializer } from '@ontology/semantic-engine'
+import { IncrementalMaterializer, RuleEvaluator, publishedRuleDependencyRef } from '@ontology/semantic-engine'
 import type {
   MaterializationPublishedSource,
   MaterializationReadRequest,
@@ -14,16 +15,17 @@ import type { MaterializationChange, ScopeRef, ToolContext, VersionRef } from '@
 import { toolContext } from '../unit/component-registry-fixtures'
 import { createJobScope, startJobDatabase } from './job-postgres-harness'
 import type { JobDbHarness, JobTestScope } from './job-postgres-harness'
+import { publishedRuleChainHarness } from './published-rule-chain-harness'
+import { INDUSTRIAL_RULES } from '../fixtures/competency-questions/assets'
 
 /**
  * Real-PostgreSQL acceptance for the three-layer acyclic rule-dependency graph, its incremental
  * materialisation and temporal read-back (issue V03-028 / #197, A.US-009.AC-03).
  *
  * The fence/CAS lifecycle, the append-only slice store, the watermark and the historical read all
- * run against the real `PostgresMaterializationStore` and migration 038. The published semantic
- * input is a test `MaterializationPublishedSource` (the documented seam for unit-style fixtures)
- * because a published rule cannot yet express a `rule_result` premise in the frozen AST; the
- * persistence, scope isolation and bitemporal behaviour under test are not mocked.
+ * run against the real `PostgresMaterializationStore` and migrations 038/080. The direct-rule
+ * fixture remains a store regression. The #262 acceptance below uses original source parses,
+ * actual candidates, ledger review, enablement, publication, compilation and evaluation.
  */
 
 const VALIDITY = { validFrom: '2026-09-21T00:00:00Z', validTo: '2026-09-22T00:00:00Z' }
@@ -135,6 +137,118 @@ beforeAll(async () => {
 afterAll(async () => {
   await database?.close().catch(() => undefined)
   await harness?.stop()
+})
+
+describe('actual published pack rule chain (#262)', () => {
+  it('persists extracted dependency pins through migration 080 and evaluates the stored three-layer chain', async () => {
+    const s = await createJobScope(harness.adminClient, 'extracted-published-chain')
+    const context = toolContext(s.tenantId, s.spaceId, ['platform-admin', 'profile-editor', 'data-editor', 'semantic-reviewer', 'semantic-publisher'])
+    const p = await publishedRuleChainHarness(database, harness.appUrl, s, context)
+    try {
+      const first = await p.importSupport('A-01', 120)
+      const leaf = await p.publishExtractedRule(INDUSTRIAL_RULES[0])
+      const mid = await p.publishExtractedRule(INDUSTRIAL_RULES[1], [publishedRuleDependencyRef(leaf, s.scopeRef, p.definition.ref)])
+      const top = await p.publishExtractedRule(INDUSTRIAL_RULES[2], [publishedRuleDependencyRef(mid, s.scopeRef, p.definition.ref)])
+      const reread = await p.publication.listRuleVersions(s.scopeRef, { sourceCandidateId: top.sourceCandidateId }, context)
+      expect(reread[0]?.ruleDependencies).toEqual(['extracted-layer-two'])
+      expect(reread[0]?.dependencyRefs).toEqual(top.dependencyRefs)
+      const data = await p.source.load(s.scopeRef, context)
+      expect(data.ruleIssues).toEqual([])
+      const result = new RuleEvaluator().evaluate({ scopeRef: s.scopeRef, definitionRef: p.definition.ref, facts: data.facts, rules: data.rules, request: { scopeRef: s.scopeRef, projectionRef: PROJECTION_REF, validAt: new Date(Date.now() + 1_000).toISOString() } })
+      expect(result.applicabilities.find((row) => row.ruleId === 'extracted-layer-three' && row.subjectEntityId === first.entityId)?.state).toBe('applicable')
+    } finally { await p.close() }
+  }, 180_000)
+
+  it('rejects a real rule approval revocation at the publication commit fence', async () => {
+    const s = await createJobScope(harness.adminClient, 'rule-publication-race')
+    const context = toolContext(s.tenantId, s.spaceId, ['platform-admin', 'profile-editor', 'data-editor', 'semantic-reviewer', 'semantic-publisher'])
+    await expect(publishedRuleChainHarness(database, harness.appUrl, s, context, async (input, reviews) => {
+      const pin = input.ruleReviewPins?.[0]; if (pin === undefined) throw new Error('missing actual rule review pin')
+      await reviews.appendReview(s.scopeRef, { expectedRevision: pin.reviewRevision, draft: { candidateId: pin.candidateId, reviewId: randomUUID(), decision: 'reject', contentDigest: pin.contentDigest, reason: 'human approval revoked after publication preparation', evidenceRefs: [], actor: context.principal.subjectId, recordedAt: new Date().toISOString() } }, context)
+    })).rejects.toMatchObject({ code: 'VERSION_CONFLICT' })
+    const counts = await harness.adminClient.query<{ packs: string; definitions: string; publication_events: string }>(`SELECT
+      (SELECT count(*) FROM agent_platform.published_pack_assets WHERE tenant_id=$1 AND space_id=$2)::text AS packs,
+      (SELECT count(*) FROM agent_platform.semantic_definition_versions WHERE tenant_id=$1 AND space_id=$2)::text AS definitions,
+      (SELECT count(*) FROM agent_platform.job_outbox WHERE tenant_id=$1 AND space_id=$2 AND topic='asset.pack.published')::text AS publication_events`, [s.tenantId, s.spaceId])
+    expect(counts.rows[0]).toEqual({ packs: '0', definitions: '0', publication_events: '0' })
+  }, 180_000)
+
+  it('produces three layers from reviewed enabled published declarations, keeps alternative sources and recorded history', async () => {
+    const projectScope = await createJobScope(harness.adminClient, 'published-chain')
+    const context = toolContext(projectScope.tenantId, projectScope.spaceId, ['platform-admin', 'profile-editor', 'data-editor', 'semantic-reviewer', 'semantic-publisher'])
+    const p = await publishedRuleChainHarness(database, harness.appUrl, projectScope, context)
+    try {
+      const first = await p.importSupport('A-01', 120), second = await p.importSupport('A-01', 120, false, first.entityId)
+      const other = await p.importSupport('A-02', 30)
+      const validAt = new Date(Date.now() + 1_000).toISOString()
+      const validity = { validFrom: new Date(Date.now() - 60_000).toISOString(), validTo: new Date(Date.now() + 60_000).toISOString() }
+      const published = await p.source.load(projectScope.scopeRef, context)
+      expect(published.ruleIssues).toEqual([])
+      const actual = new RuleEvaluator().evaluate({ scopeRef: projectScope.scopeRef, definitionRef: p.definition.ref, facts: published.facts, rules: published.rules, request: { scopeRef: projectScope.scopeRef, projectionRef: PROJECTION_REF, validAt } })
+      const top = actual.applicabilities.find((row) => row.ruleId === 'layer-three' && row.subjectEntityId === first.entityId)
+      expect(top).toMatchObject({ conditionState: p.goldExpected.conditionState, state: p.goldExpected.applicability, positiveSupport: true, publishedPackRef: p.asset.packRef })
+      expect(top?.sourceStatementIds).toEqual(expect.arrayContaining([first.candidate.candidateId, second.candidate.candidateId]))
+      expect(top?.sourceStatementIds).not.toContain(other.candidate.candidateId)
+      expect(actual.applicabilities.find((row) => row.ruleId === 'layer-three' && row.subjectEntityId === other.entityId)?.state).toBe('unknown')
+      expect(actual.supports.nodes.some((node) => node.kind === 'fact' && node.upstreamConclusionNodeId?.startsWith('conclusion:rule-consequence:'))).toBe(true)
+      expect(p.asset.ruleDeclarations).toHaveLength(3)
+      const materializer = new IncrementalMaterializer({ publishedSource: p.source, materialization: new PostgresMaterializationStore(database) })
+      const change = (seq: string, id: string): MaterializationChange => ({ changeId: randomUUID(), scopeRef: projectScope.scopeRef, recordedSeq: seq, recordedAt: new Date().toISOString(), kind: seq === '1' ? 'assertion_published' : 'assertion_retracted', logicalAssertionId: id, predicate: 'hours', subjectEntityId: first.entityId, validity })
+      await materializer.applyChange(change('1', first.candidate.candidateId), context)
+      const ready = published.rules.find((row) => row.publishedInstance?.ruleId === 'layer-three' && row.publishedInstance.subjectEntityId === first.entityId && row.conclusion.propositionKey.startsWith('business-conclusion:'))?.conclusion.propositionKey
+      if (ready === undefined) throw new Error('missing actual business output')
+      const request = { scopeRef: projectScope.scopeRef, projectionRef: PROJECTION_REF, validAt, asOfRecordedSeq: '1', propositionKeys: [ready] }
+      expect(statusOf(await materializer.read(request, context), ready)).toBe('known')
+      await p.publisher.reviseStatement({ statementId: first.candidate.candidateId, kind: 'retraction', reason: 'first independent source withdrawn', expectedRevision: '1', idempotencyKey: `withdraw-${randomUUID()}` }, context)
+      const surviving = await p.source.load(projectScope.scopeRef, context)
+      const remaining = new RuleEvaluator().evaluate({ scopeRef: projectScope.scopeRef, definitionRef: p.definition.ref, facts: surviving.facts, rules: surviving.rules, request: { scopeRef: projectScope.scopeRef, projectionRef: PROJECTION_REF, validAt } })
+      expect(remaining.applicabilities.find((row) => row.ruleId === 'layer-three' && row.subjectEntityId === first.entityId)?.state).toBe('applicable')
+      await materializer.applyChange(change('2', first.candidate.candidateId), context)
+      const retained = await materializer.read({ ...request, asOfRecordedSeq: '2' }, context)
+      expect(statusOf(retained, ready), JSON.stringify(retained.conclusions)).toBe('known')
+      await p.publisher.reviseStatement({ statementId: second.candidate.candidateId, kind: 'retraction', reason: 'last independent source withdrawn', expectedRevision: '1', idempotencyKey: `withdraw-${randomUUID()}` }, context)
+      await materializer.applyChange(change('3', second.candidate.candidateId), context)
+      expect(statusOf(await materializer.read({ ...request, asOfRecordedSeq: '3' }, context), ready)).toBe('unknown')
+      expect(statusOf(await materializer.read(request, context), ready)).toBe('known')
+      expect((await p.packReader.read(projectScope.scopeRef, p.request, context)).map((rule) => rule.ruleId).sort()).toEqual(['layer-three', 'layer-two', 'service'])
+    } finally { await p.close() }
+  }, 180_000)
+
+  it('keeps published P1 after an unreviewed V2 proposal, blocks explicit P1 revocation and preserves frozen evidence', async () => {
+    const projectScope = await createJobScope(harness.adminClient, 'published-chain-version')
+    const context = toolContext(projectScope.tenantId, projectScope.spaceId, ['platform-admin', 'profile-editor', 'data-editor', 'semantic-reviewer', 'semantic-publisher'])
+    const p = await publishedRuleChainHarness(database, harness.appUrl, projectScope, context)
+    try {
+      const first = await p.importSupport('A-01', 120)
+      const service = p.saved.get('service'); if (service === undefined || service.payload.conclusion === undefined) throw new Error('missing reviewed service rule')
+      await p.rules.editRuleCandidate(p.asset.workspaceId, { candidateId: service.candidateId, expectedRevision: '2', reason: 'unreviewed future proposal', idempotencyKey: `edit-${randomUUID()}`, displayName: 'future service', businessMeaning: 'future service', suggestedReason: 'proposal', ruleId: 'service', applicability: service.payload.applicability,
+        condition: { op: 'range', attributeId: 'hours', min: 999, unitCode: 'h', spans: service.payload.condition.spans }, exceptions: service.payload.exceptions, conclusion: service.payload.conclusion, ruleDependencies: [], sourceRefs: service.sourceRefs, sourceSpans: service.sourceSpans }, context.principal.subjectId, context)
+      await p.approve(service.candidateId, '1')
+      const data = await p.source.load(projectScope.scopeRef, context)
+      const result = new RuleEvaluator().evaluate({ scopeRef: projectScope.scopeRef, definitionRef: p.definition.ref, facts: data.facts, rules: data.rules, request: { scopeRef: projectScope.scopeRef, projectionRef: PROJECTION_REF, validAt: new Date(Date.now() + 1_000).toISOString() } })
+      expect(result.applicabilities.find((row) => row.ruleId === 'layer-three' && row.subjectEntityId === first.entityId)?.state).toBe('applicable')
+      const blocker = new Client({ connectionString: harness.adminUrl }), writer = new Client({ connectionString: harness.adminUrl })
+      await blocker.connect(); await writer.connect()
+      try {
+        await blocker.query('BEGIN')
+        await blocker.query('SELECT 1 FROM agent_platform.industry_workspaces WHERE tenant_id=$1 AND space_id=$2 AND workspace_id=$3 FOR UPDATE', [projectScope.tenantId, projectScope.spaceId, p.asset.workspaceId])
+        await writer.query("SET lock_timeout = '100ms'")
+        await expect(writer.query(`INSERT INTO agent_platform.semantic_candidate_reviews
+          (tenant_id,space_id,review_id,candidate_id,revision,decision,reason,evidence_refs,recorded_at,actor,content_digest)
+          VALUES ($1,$2,$3,$4,3,'reject','explicit publication race','[]'::jsonb,now(),'reviewer',$5)`,
+        [projectScope.tenantId, projectScope.spaceId, randomUUID(), service.candidateId, service.contentDigest])).rejects.toMatchObject({ code: '55P03' })
+      } finally { await blocker.query('ROLLBACK'); await blocker.end(); await writer.end() }
+      await p.publication.appendReview(projectScope.scopeRef, { expectedRevision: '2', draft: { candidateId: service.candidateId, reviewId: randomUUID(), decision: 'reject', contentDigest: service.contentDigest, reason: 'explicitly revoke published P1 content', evidenceRefs: [], actor: context.principal.subjectId, recordedAt: new Date().toISOString() } }, context)
+      expect((await p.source.load(projectScope.scopeRef, context)).complete).toBe(false)
+      const historical = await p.packReader.read(projectScope.scopeRef, { ...p.request, readMode: 'published_snapshot' }, context)
+      expect(historical.find((row) => row.ruleId === 'service')?.expression).toEqual(service.payload.condition)
+      expect(historical.every((row) => row.publishedPackRef.digest === p.asset.packRef.digest)).toBe(true)
+      await p.instances.insertCandidates(projectScope.scopeRef, [{ ...first.candidate, candidateId: service.candidateId, idempotencyKey: `sha256:${'f'.repeat(64)}` }], context)
+      await expect(p.reader.readCandidate(projectScope.scopeRef, service.candidateId, context)).rejects.toMatchObject({ code: 'AMBIGUOUS_CANDIDATE' })
+      await expect(p.publisher.reviewCandidate({ candidateId: service.candidateId, decision: 'approve', reason: 'must not select a colliding review domain', expectedRevision: '3' }, context)).rejects.toMatchObject({ code: 'CANDIDATE_DOMAIN_UNPUBLISHABLE' })
+      expect(await p.publication.latestReviewRevision(projectScope.scopeRef, service.candidateId, context)).toBe('3')
+    } finally { await p.close() }
+  }, 180_000)
 })
 
 describe('three-layer derived rule state against real PostgreSQL (V03-028)', () => {

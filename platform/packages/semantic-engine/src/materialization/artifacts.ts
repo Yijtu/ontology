@@ -54,6 +54,9 @@ export function ruleComputationArtifactOf(
     computationDigest: result.computationDigest,
     sourceSpans: result.sourceSpans.map((span) => ({ ...span })),
     complete: result.complete,
+    ...(result.publishedPackRef === undefined ? {} : { publishedPackRef: result.publishedPackRef }),
+    ...(result.dependencyRefs === undefined ? {} : { dependencyRefs: result.dependencyRefs }),
+    ...(result.projectId === undefined ? {} : { projectId: result.projectId }),
   }
 }
 

@@ -252,7 +252,8 @@ describe('PublishedSemanticSource', () => {
     })
     const businessConclusion = evaluated.conclusions.find((entry) => entry.predicate === 'inspection_due')
 
-    expect(data.rules).toHaveLength(2)
+    expect(data.rules).toHaveLength(3)
+    expect(data.rules.filter((rule) => rule.conclusion.propositionKey.startsWith('rule-consequence:'))).toHaveLength(1)
     expect(evaluated.applicabilities).toHaveLength(1)
     expect(evaluated.applicabilities[0]?.state).toBe('not_applicable')
     expect(businessConclusion?.domainStatus).toBe('unknown')
