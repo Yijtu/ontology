@@ -12,12 +12,13 @@ import type {
   VersionRef,
 } from './generated/contracts'
 import type { PackAsset, PackMaturityLabel } from './pack-assets'
-import type { ActionCapabilityStatus } from './rule-action-candidates'
+import type { ActionCapabilityStatus, PublishedRuleDeclaration } from './rule-action-candidates'
 import type { SemanticDefinitionAudit, SemanticDefinitionRecord } from './semantic-definitions'
 import type { NewOutboxMessage } from './job-store'
 import type { ToolContext } from './trusted'
 import type { DefinitionApprovalPin, DefinitionRevisionStrategy } from './definition-editing'
 import type { RuleActionPublicationPin } from './synthetic-validation'
+import { assertRuleDependencyCandidateShape } from './rule-action-candidates'
 
 /**
  * Immutable industry-pack publication and the persistent dynamic catalogue (SPEC v0.3a
@@ -133,6 +134,8 @@ export interface PackVersionDiff {
  * catalogue reports and never carry customer data.
  */
 export interface PublishedPackAsset {
+  readonly ruleDeclarations?: readonly PublishedRuleDeclaration[]
+  readonly ruleReviewPins?: readonly DefinitionApprovalPin[]
   readonly strategy?: DefinitionRevisionStrategy
   readonly approvalPins?: readonly DefinitionApprovalPin[]
   readonly ruleActionPins?: readonly RuleActionPublicationPin[]
@@ -174,6 +177,7 @@ export interface PublishedPackAssetFilter {
  * committed pack lose its definition version or its workspace pointer (SPEC §4.2 point 4).
  */
 export interface CommitApprovedPackInput {
+  readonly ruleReviewPins?: readonly DefinitionApprovalPin[]
   readonly approvalPins?: readonly DefinitionApprovalPin[]
   readonly ruleActionPins?: readonly RuleActionPublicationPin[]
   /** The workspace publication head the caller read; `0` means "first publication". */
@@ -383,6 +387,18 @@ export function assertPublishedPackAssetShape(value: unknown): asserts value is 
   if (approvals !== undefined && (!Array.isArray(approvals) || !approvals.every((pin: unknown) => isRecord(pin) &&
       isUuid(pin['candidateId']) && isDigest(pin['contentDigest']) && isRevisionStringValue(pin['reviewRevision']) && pin['reviewRevision'] !== '0'))) {
     throw invalid('approvalPins must contain candidate/content/review revision pins')
+  }
+  const ruleReviews = value['ruleReviewPins']
+  if (ruleReviews !== undefined && (!Array.isArray(ruleReviews) || !ruleReviews.every((pin: unknown) => isRecord(pin) && isUuid(pin['candidateId']) && isDigest(pin['contentDigest']) && isRevisionStringValue(pin['reviewRevision']) && pin['reviewRevision'] !== '0'))) throw invalid('ruleReviewPins must retain exact ledger revisions')
+  const declarations = value['ruleDeclarations']
+  if (declarations !== undefined) {
+    if (!Array.isArray(declarations) || declarations.length > 250) throw invalid('ruleDeclarations must be a bounded immutable array')
+    for (const declaration of declarations) {
+      if (!isRecord(declaration) || !isUuid(declaration['candidateId']) || !isDigest(declaration['contentDigest']) || !isRevisionStringValue(declaration['reviewRevision']) || declaration['reviewRevision'] === '0' ||
+        typeof declaration['enabledAt'] !== 'string' || !Number.isFinite(Date.parse(declaration['enabledAt'])) || !Array.isArray(declaration['sourceRefs']) || !Array.isArray(declaration['sourceSpans']) ||
+        !isRecord(declaration['payload']) || declaration['payload']['kind'] !== 'rule') throw invalid('a published rule requires a complete reviewed declaration')
+      assertRuleDependencyCandidateShape(declaration['payload']['ruleDependencies'], declaration['payload']['dependencyRefs'] ?? [])
+    }
   }
   const enabled = value['ruleActionPins']
   if (enabled !== undefined && (!Array.isArray(enabled) || !enabled.every((pin: unknown) => isRecord(pin) &&

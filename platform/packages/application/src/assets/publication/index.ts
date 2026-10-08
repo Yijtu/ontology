@@ -32,3 +32,7 @@ export { resolveDefinitionPredecessor, DefinitionPredecessorError } from './defi
 export type { DefinitionPredecessor } from './definition-predecessor'
 export { resolvePinnedDefinition } from './definition-predecessor'
 export type { PinnedDefinitionDependencies } from './definition-predecessor'
+export { PublishedPackRuleDeclarationReader } from './published-rule-reader'
+export type { PublishedPackRuleReaderDependencies } from './published-rule-reader'
+export { ruleApprovalPins } from './publication-pins'
+export { publishedPackContentDigest } from './pack-assembly'

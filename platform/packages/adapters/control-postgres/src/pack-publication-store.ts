@@ -225,9 +225,9 @@ export class PostgresPublishedPackAssetStore implements PublishedPackAssetStore 
           row.state !== 'failed' && row.state !== 'pending_confirmation' && !row.pending_confirmation))) {
       throw new PublishedPackAssetStoreError('VERSION_CONFLICT', 'definition approval or current candidate pins changed before publication')
     }
-    const actions = await query.query<{ candidate_id: string; content_digest: string; enabled_at: Date }>(
-      `SELECT candidate_id, content_digest, enabled_at FROM (
-         SELECT DISTINCT ON (c.logical_id) c.logical_id, c.candidate_id, c.content_digest, c.lifecycle, c.enabled_at
+    const actions = await query.query<{ candidate_id: string; content_digest: string; enabled_at: Date; kind: string }>(
+      `SELECT candidate_id, content_digest, enabled_at, kind FROM (
+         SELECT DISTINCT ON (c.logical_id) c.logical_id, c.candidate_id, c.content_digest, c.lifecycle, c.enabled_at, c.kind
          FROM agent_platform.asset_rule_action_candidates c
          WHERE c.tenant_id = current_setting('app.tenant_id')::uuid AND c.space_id = current_setting('app.space_id')::uuid
            AND c.workspace_id = $1::uuid AND NOT EXISTS (
@@ -248,6 +248,30 @@ export class PostgresPublishedPackAssetStore implements PublishedPackAssetStore 
         actions.rows.some((row) => !actionPins.some((pin) => pin.candidateId === row.candidate_id && pin.contentDigest === row.content_digest &&
           Date.parse(pin.enabledAt) === row.enabled_at.getTime()))) {
       throw new PublishedPackAssetStoreError('VERSION_CONFLICT', 'enabled rule/action pins changed before publication')
+    }
+    const declarations = input.pack.ruleDeclarations ?? []
+    const rulePins = input.ruleReviewPins ?? []
+    const persistedRulePins = input.pack.ruleReviewPins ?? []
+    if (declarations.length !== actions.rows.filter((row) => row.kind === 'rule').length || rulePins.length !== declarations.length || persistedRulePins.length !== rulePins.length ||
+      new Set(declarations.map((row) => row.candidateId)).size !== declarations.length || rulePins.some((pin) => !persistedRulePins.some((stored) =>
+        stored.candidateId === pin.candidateId && stored.contentDigest === pin.contentDigest && stored.reviewRevision === pin.reviewRevision))) {
+      throw new PublishedPackAssetStoreError('VERSION_CONFLICT', 'published rule bodies must retain all current reviewed enablement pins')
+    }
+    for (const declaration of declarations) {
+      const pin = rulePins.find((row) => row.candidateId === declaration.candidateId && row.contentDigest === declaration.contentDigest && row.reviewRevision === declaration.reviewRevision)
+      const valid = pin === undefined ? undefined : await query.query<{ candidate_id: string }>(
+        `SELECT c.candidate_id FROM agent_platform.asset_rule_action_candidates c
+         JOIN agent_platform.candidate_review_heads h ON h.tenant_id=c.tenant_id AND h.space_id=c.space_id AND h.candidate_id=c.candidate_id
+         JOIN agent_platform.semantic_candidate_reviews r ON r.tenant_id=h.tenant_id AND r.space_id=h.space_id AND r.candidate_id=h.candidate_id AND r.revision=h.revision
+         WHERE c.tenant_id=current_setting('app.tenant_id')::uuid AND c.space_id=current_setting('app.space_id')::uuid
+           AND c.candidate_id=$1::uuid AND c.kind='rule' AND c.lifecycle='enabled' AND c.content_digest=$2
+           AND c.enabled_at=$3::timestamptz AND h.revision=$4::bigint AND r.decision='approve' AND r.content_digest=c.content_digest
+           AND c.payload=$5::jsonb AND c.source_refs=$6::jsonb AND c.source_spans=$7::jsonb
+           AND c.generation_call_ref IS NOT DISTINCT FROM $8::jsonb`,
+        [declaration.candidateId, declaration.contentDigest, declaration.enabledAt, declaration.reviewRevision, JSON.stringify(declaration.payload),
+          JSON.stringify(declaration.sourceRefs), JSON.stringify(declaration.sourceSpans), declaration.generationCallRef === undefined ? null : JSON.stringify(declaration.generationCallRef)],
+      )
+      if (valid?.rows.length !== 1) throw new PublishedPackAssetStoreError('VERSION_CONFLICT', 'rule approval, provenance or complete body changed before publication')
     }
   }
 

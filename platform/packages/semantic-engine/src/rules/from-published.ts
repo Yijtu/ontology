@@ -7,8 +7,10 @@ import type {
 } from './types'
 import { canonicalDecimalString } from './values'
 import { definitionVersionDigest } from '../definitions/validate'
+import { assertProjectFactInputShape } from '@ontology/contracts'
 
 export interface PublishedAttributeProjectionOptions {
+  readonly projectId?: string
   /** The schema pinned by the publication page; statements currently do not repeat this field. */
   readonly schemaRef: VersionRef
   /** Exact definition and trusted read scope are required for mapped scalar typing. */
@@ -19,6 +21,15 @@ export interface PublishedAttributeProjectionOptions {
 function recordOf(value: unknown): Record<string, unknown> | undefined {
   if (typeof value !== 'object' || value === null || Array.isArray(value)) return undefined
   return value as Record<string, unknown>
+}
+
+/** The original mapped project pin is the authority; a request cannot relabel a published fact. */
+export function publishedStatementProjectId(statement: PublishedStatement): string | undefined {
+  const provenance = recordOf(statement.value['provenance'])
+  if (provenance?.['sources'] === undefined) return undefined
+  try { assertProjectFactInputShape(provenance) } catch { return undefined }
+  const id = provenance.sources[0]?.projectRevisionRef.projectId
+  return id !== undefined && provenance.sources.every((source) => source.projectRevisionRef.projectId === id) ? id : undefined
 }
 
 function unitCodeOf(value: unknown): string | undefined {
@@ -108,6 +119,8 @@ function projectFacts(
 
   for (const statement of statements) {
     const valueRecord = recordOf(statement.value)
+    const projectId = publishedStatementProjectId(statement)
+    if (options?.projectId !== undefined && projectId !== options.projectId) continue
     const rawAttributes = valueRecord?.['attributes']
     if (Array.isArray(rawAttributes)) {
       const parsed = rawAttributes.map((entry, index) => ({ entry: recordOf(entry), index }))
@@ -172,6 +185,7 @@ function projectFacts(
           recordedSeq: statement.version,
           op: operationOf(statement),
           subject,
+          ...(projectId === undefined ? {} : { projectId }),
           predicate: attributeId,
           ...(converted.value === undefined ? {} : { value: converted.value }),
           sourceStatementId: statement.statementId,
@@ -214,6 +228,7 @@ function projectFacts(
       recordedSeq: statement.version,
       op: operationOf(statement),
       subject: statement.subjectEntityId ?? statement.objectId ?? statement.relationId ?? '',
+      ...(projectId === undefined ? {} : { projectId }),
       predicate: statement.predicate,
       ...(scalar.value === undefined ? {} : { value: scalar.value }),
       sourceStatementId: statement.statementId,
@@ -273,6 +288,7 @@ export function projectPublishedRelationFacts(statements: readonly PublishedStat
   }
   for (const statement of statements) {
     if (statement.kind !== 'relation') continue
+    const projectId = publishedStatementProjectId(statement)
     const declaration = statement.relationId === undefined ? undefined : declarations.get(statement.relationId)
     const from = recordOf(statement.value['from'])
     const to = recordOf(statement.value['to'])
@@ -291,6 +307,7 @@ export function projectPublishedRelationFacts(statements: readonly PublishedStat
       assertionId: `${statement.statementId}@${statement.version}`,
       logicalAssertionId: statement.statementId, recordedSeq: statement.version, op: operationOf(statement),
       subject, objectId: declaration.fromObjectId, predicate: declaration.id, value: true,
+      ...(projectId === undefined ? {} : { projectId }),
       relation: { relationId: declaration.id, targetObjectId: declaration.toObjectId, endpointResolved: target !== undefined,
         ...(target === undefined ? {} : { targetEntityId: target }) },
       schemaRef: options.definition.ref, sourceStatementId: statement.statementId,

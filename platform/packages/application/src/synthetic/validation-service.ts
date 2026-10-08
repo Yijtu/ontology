@@ -208,6 +208,8 @@ export class IndustryValidationService {
         condition: payload.condition,
         exceptions: payload.exceptions,
         ruleDependencies: payload.ruleDependencies,
+        dependencyRefs: payload.dependencyRefs ?? [],
+        dependencyLookup: new Map(ruleCandidates.map((row) => [row.payload.ruleId, row.payload.ruleDependencies])),
         relationPremises: (pinnedRelationDefinition === undefined ? [] : relationPremisesFromDefinition(pinnedRelationDefinition, payload.condition)).filter((premise) => premise.fromObjectId === payload.applicability.objectId),
       })
       if (!support.executable) {

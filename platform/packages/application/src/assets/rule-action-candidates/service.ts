@@ -27,6 +27,7 @@ import type {
   Sha256Digest,
   ToolContext,
   Uuid,
+  RuleDependencyCandidateReference,
 } from '@ontology/contracts'
 import { candidateIdFor, canonicalJson, sha256DigestOf } from '../../extraction/canonical'
 import { RuleActionCandidateError } from './errors'
@@ -37,6 +38,7 @@ const EDITOR_ROLES: readonly string[] = ['profile-editor', 'platform-admin']
 const DEFAULT_PAGE = 100
 
 export interface RuleCandidateProposal {
+  readonly dependencyRefs?: readonly RuleDependencyCandidateReference[]
   readonly displayName: string
   readonly businessMeaning: string
   readonly suggestedReason: string
@@ -241,6 +243,7 @@ export class RuleActionCandidateService {
               exceptions: draft.exceptions,
               ...(draft.conclusion === undefined ? {} : { conclusion: draft.conclusion }),
               ruleDependencies: draft.ruleDependencies,
+              ...(draft.dependencyRefs === undefined ? {} : { dependencyRefs: draft.dependencyRefs }),
               sourceRefs,
             },
             candidateKey,
@@ -377,12 +380,13 @@ export class RuleActionCandidateService {
 
   /* ----------------------------------------------------------------------------------- */
 
-  #supportReport(payload: { applicability: RuleApplicability; ruleId: string; condition: RuleExpressionNode; exceptions: readonly RuleExceptionNode[]; ruleDependencies: readonly string[] }, definition: SemanticDefinitionVersion | undefined): RuleSupportReport {
+  #supportReport(payload: { applicability: RuleApplicability; ruleId: string; condition: RuleExpressionNode; exceptions: readonly RuleExceptionNode[]; ruleDependencies: readonly string[]; dependencyRefs?: readonly RuleDependencyCandidateReference[] }, definition: SemanticDefinitionVersion | undefined): RuleSupportReport {
     return this.#support.validate({
       ruleId: payload.ruleId,
       condition: payload.condition,
       exceptions: payload.exceptions,
       ruleDependencies: payload.ruleDependencies,
+      dependencyRefs: payload.dependencyRefs ?? [],
       relationPremises: (definition === undefined ? [] : relationPremisesFromDefinition(definition, payload.condition)).filter((premise) => premise.fromObjectId === payload.applicability.objectId),
     })
   }
@@ -402,6 +406,7 @@ export class RuleActionCandidateService {
       condition: proposal.condition,
       exceptions: proposal.exceptions,
       ruleDependencies,
+      dependencyRefs: proposal.dependencyRefs ?? [],
       relationPremises: (definition === undefined ? [] : relationPremisesFromDefinition(definition, proposal.condition)).filter((premise) => premise.fromObjectId === proposal.applicability.objectId),
     })
     const version: RuleCandidateVersion = {
@@ -421,6 +426,7 @@ export class RuleActionCandidateService {
         exceptions: proposal.exceptions,
         ...(proposal.conclusion === undefined ? {} : { conclusion: proposal.conclusion }),
         ruleDependencies,
+        ...(proposal.dependencyRefs === undefined ? {} : { dependencyRefs: proposal.dependencyRefs }),
         support,
       },
       sourceRefs: proposal.sourceRefs,
@@ -439,6 +445,7 @@ export class RuleActionCandidateService {
           exceptions: proposal.exceptions,
           ...(proposal.conclusion === undefined ? {} : { conclusion: proposal.conclusion }),
           ruleDependencies,
+          ...(proposal.dependencyRefs === undefined ? {} : { dependencyRefs: proposal.dependencyRefs }),
           support,
         },
         sourceRefs: proposal.sourceRefs,

@@ -1,4 +1,4 @@
-import { candidateSourceRef } from '@ontology/contracts'
+import { candidateSourceRef, isToolContext, ReviewableCandidateReadError } from '@ontology/contracts'
 import type {
   AssetCandidateStore,
   CandidateStore,
@@ -7,11 +7,13 @@ import type {
   ScopeRef,
   ToolContext,
   Uuid,
+  RuleActionCandidateStore,
 } from '@ontology/contracts'
 
 export interface CompositeReviewableCandidateReaderDependencies {
-  readonly definition: AssetCandidateStore
-  readonly instance: CandidateStore
+  readonly ruleActions?: Pick<RuleActionCandidateStore, 'get'>
+  readonly definition: Pick<AssetCandidateStore, 'getCandidate'>
+  readonly instance: Pick<CandidateStore, 'getCandidate'>
 }
 
 /**
@@ -22,12 +24,14 @@ export interface CompositeReviewableCandidateReaderDependencies {
  * still owns the decision, so there is no second approve truth.
  */
 export class CompositeReviewableCandidateReader implements ReviewableCandidateReader {
-  readonly #definition: AssetCandidateStore
-  readonly #instance: CandidateStore
+  readonly #definition: CompositeReviewableCandidateReaderDependencies['definition']
+  readonly #instance: CompositeReviewableCandidateReaderDependencies['instance']
+  readonly #ruleActions: CompositeReviewableCandidateReaderDependencies['ruleActions']
 
   constructor(dependencies: CompositeReviewableCandidateReaderDependencies) {
     this.#definition = dependencies.definition
     this.#instance = dependencies.instance
+    this.#ruleActions = dependencies.ruleActions
   }
 
   async readCandidate(
@@ -35,7 +39,9 @@ export class CompositeReviewableCandidateReader implements ReviewableCandidateRe
     candidateId: Uuid,
     ctx: ToolContext,
   ): Promise<ReviewableCandidateView | undefined> {
-    const definition = await this.#definition.getCandidate(scopeRef, candidateId, ctx)
+    if (!isToolContext(ctx) || ctx.principal.tenantId !== scopeRef.tenantId || ctx.allowedResources.tenantId !== scopeRef.tenantId || ctx.allowedResources.spaceId !== scopeRef.spaceId) throw new ReviewableCandidateReadError('SCOPE_MISMATCH', 'candidate review requires the trusted scope')
+    const [definition, ruleAction, instance] = await Promise.all([this.#definition.getCandidate(scopeRef, candidateId, ctx), this.#ruleActions?.get(scopeRef, candidateId, ctx), this.#instance.getCandidate(scopeRef, candidateId, ctx)])
+    if ([definition, ruleAction, instance].filter((row) => row !== undefined).length > 1) throw new ReviewableCandidateReadError('AMBIGUOUS_CANDIDATE', 'candidate id belongs to multiple review domains; approval cannot choose one implicitly')
     if (definition !== undefined) {
       return {
         candidateId: definition.candidateId,
@@ -46,7 +52,8 @@ export class CompositeReviewableCandidateReader implements ReviewableCandidateRe
         sourceRefs: definition.sourceRefs,
       }
     }
-    const instance = await this.#instance.getCandidate(scopeRef, candidateId, ctx)
+    if (ruleAction !== undefined) return { candidateId: ruleAction.candidateId, domain: 'definition', kind: ruleAction.kind, state: ruleAction.lifecycle,
+      contentDigest: ruleAction.contentDigest, sourceRefs: ruleAction.sourceRefs }
     if (instance !== undefined) {
       return {
         candidateId: instance.candidateId,

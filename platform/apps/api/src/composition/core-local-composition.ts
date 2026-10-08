@@ -2143,6 +2143,7 @@ export async function createCoreLocalComposition(options: CoreLocalCompositionOp
     const reviewableCandidates = new CompositeReviewableCandidateReader({
       definition: assetCandidateStore,
       instance: candidateStore,
+      ruleActions: ruleActionCandidateStore,
     })
     const semanticPublication = new SemanticPublicationService({
       store: publicationStore,
@@ -2150,6 +2151,7 @@ export async function createCoreLocalComposition(options: CoreLocalCompositionOp
       schemaSource,
       identity: identityStore,
       reviewableCandidates,
+      projects: projectStore,
     })
     const identityService = new IdentityDecisionService({ store: identityStore, candidates: candidateStore, schemaSource })
 

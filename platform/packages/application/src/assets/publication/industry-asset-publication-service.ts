@@ -31,7 +31,7 @@ import { currentDefinitionProjection } from '../definition-candidates/validation
 import { assemblePack } from './pack-assembly'
 import { DefinitionPredecessorError, resolveDefinitionPredecessor } from './definition-predecessor'
 import type { DefinitionPredecessor } from './definition-predecessor'
-import { currentRuleActionProjection, definitionApprovalPins, industryValidationDigest, ruleActionPublicationPins } from './publication-pins'
+import { currentRuleActionProjection, definitionApprovalPins, industryValidationDigest, ruleActionPublicationPins, ruleApprovalPins } from './publication-pins'
 import type { CandidateApprovalReader } from './publication-pins'
 import { definitionRevisionStrategyProblem, diffDefinitionProjection } from '../definition-candidates/validation'
 
@@ -215,6 +215,7 @@ export class IndustryAssetPublicationService {
     if (ruleActionRows.length === CANDIDATE_PAGE) throw new IndustryAssetPublicationError('VALIDATION_BLOCKED', 'rule/action candidate page is incomplete')
     const ruleActionCandidates = currentRuleActionProjection(ruleActionRows).filter((candidate) => candidate.lifecycle === 'enabled' && candidate.enabledAt !== undefined)
     const ruleActionPins = ruleActionPublicationPins(ruleActionCandidates)
+    const ruleReviewPins = await ruleApprovalPins(ruleActionCandidates, scopeRef, ctx, this.#deps.reviewableCandidates, this.#deps.reviews)
     if (canonicalJson(ruleActionPins) !== canonicalJson(report.ruleActionPins)) {
       throw new IndustryAssetPublicationError('VALIDATION_STALE', 'validation no longer pins the enabled rule/action revisions')
     }
@@ -254,6 +255,7 @@ export class IndustryAssetPublicationService {
       definitionId: `${workspace.namespace}.${input.packId}`,
       projection,
       ruleActions: ruleActionCandidates,
+      ruleReviewPins,
       report,
       ...(syntheticExampleRef === undefined ? {} : { syntheticExampleRef }),
       ...(previous === undefined ? {} : { previous }),
@@ -297,6 +299,7 @@ export class IndustryAssetPublicationService {
           expectedRevision: expected,
           approvalPins: approvals.pins,
           ruleActionPins,
+          ruleReviewPins,
           definition,
           definitionAudit: publicationAudit(
             definition,

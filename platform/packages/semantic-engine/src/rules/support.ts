@@ -1,4 +1,4 @@
-import { MAX_RULE_DEPENDENCY_DEPTH } from '@ontology/contracts'
+import { MAX_RULE_DEPENDENCY_DEPTH, assertRuleDependencyCandidateShape } from '@ontology/contracts'
 import type {
   RuleExpressionNode,
   RuleRelationPremiseDeclaration,
@@ -253,6 +253,15 @@ function lowerPlan(
 
 function checkDependencies(input: RuleSupportValidationInput, findings: RuleSupportFinding[]): number {
   const dependencies = input.ruleDependencies ?? []
+  if (dependencies.length > 16) {
+    findings.push({ code: 'UNSUPPORTED_QUANTIFIER', message: 'at most 16 fixed upstream dependencies are executable', path: 'ruleDependencies' })
+    return 0
+  }
+  if (input.dependencyRefs !== undefined) {
+    try { assertRuleDependencyCandidateShape(dependencies, input.dependencyRefs) } catch (error) {
+      findings.push({ code: 'UNRESOLVED_REFERENCE', message: error instanceof Error ? error.message : 'invalid fixed dependency pins', path: 'ruleDependencies' })
+    }
+  }
   const lookup = input.dependencyLookup
   let maxDepth = 0
   for (const dependency of dependencies) {

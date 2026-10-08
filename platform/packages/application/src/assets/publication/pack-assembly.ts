@@ -1,6 +1,5 @@
 import {
   isActionCandidateVersion,
-  isRuleCandidateVersion,
   packMaturityLabelOf,
 } from '@ontology/contracts'
 import type {
@@ -39,9 +38,11 @@ import type {
   StandardProvenance,
   UnitRef,
   VersionRef,
+  DefinitionApprovalPin,
 } from '@ontology/contracts'
 import { canonicalJson, sha256DigestOf } from '../../profiles/canonical'
 import { diffDefinitionProjection } from '../definition-candidates/validation'
+import { publishedRuleDeclarationsOf } from './publication-pins'
 
 /**
  * Pure assembly of an immutable industry pack from a human-reviewed draft and its validation
@@ -65,6 +66,15 @@ export const DEFAULT_PACK_CAPABILITY = 'semantic_read'
 
 export function contentDigestOf(value: unknown): Sha256Digest {
   return sha256DigestOf(canonicalJson(value))
+}
+
+/** Recompute the immutable publication pin using the same complete semantics as assembly. */
+export function publishedPackContentDigest(asset: PublishedPackAsset | PublishedPackAssetDraft): Sha256Digest {
+  const action = asset.packAsset.actionDeclarationsRef
+  return contentDigestOf({ namespace: asset.namespace, maturity: asset.maturity, manifest: asset.manifest, definitionRef: asset.definitionRef,
+    sourceIndexDigest: asset.sourceIndex.digest, capabilities: asset.capabilities, validationId: asset.validationRef.id, validationDigest: asset.validationRef.digest,
+    strategy: asset.strategy, approvalPins: asset.approvalPins, ruleActionPins: asset.ruleActionPins, ruleReviewPins: asset.ruleReviewPins ?? [],
+    actionDeclarationsRef: action === undefined ? undefined : { id: action.id, version: asset.packRef.version, digest: action.digest } })
 }
 
 function artifactRef(id: string, version: Semver, digest: Sha256Digest): VersionRef {
@@ -454,6 +464,7 @@ export function buildVersionDiff(args: {
 /* ----------------------------------------------------------------------------------------- */
 
 export interface AssemblePackArgs {
+  readonly ruleReviewPins?: readonly DefinitionApprovalPin[]
   readonly workspace: IndustryWorkspace
   readonly scopeRef: ScopeRef
   readonly packId: string
@@ -519,15 +530,7 @@ export function assemblePack(args: AssemblePackArgs): AssembledPack {
     args.version,
     contentDigestOf(definition.identityScopes),
   )
-  const ruleDeclarations = args.ruleActions
-    .filter(isRuleCandidateVersion)
-    .map((candidate) => ({
-      ruleId: candidate.payload.ruleId,
-      supportState: candidate.payload.support.supportState,
-      condition: candidate.payload.condition,
-      exceptions: candidate.payload.exceptions,
-    }))
-    .sort((left, right) => (left.ruleId < right.ruleId ? -1 : left.ruleId > right.ruleId ? 1 : 0))
+  const ruleDeclarations = publishedRuleDeclarationsOf(args.ruleActions, args.ruleReviewPins ?? [])
   const rulePolicyRef = artifactRef(`${namespace}.rules`, args.version, contentDigestOf(ruleDeclarations))
   const queryTemplatesRef = artifactRef(
     `${namespace}.query-templates`,
@@ -567,6 +570,7 @@ export function assemblePack(args: AssemblePackArgs): AssembledPack {
     strategy: args.report.strategy,
     approvalPins: args.report.definition?.approvalPins,
     ruleActionPins: args.report.ruleActionPins,
+    ruleReviewPins: args.ruleReviewPins ?? [],
     actionDeclarationsRef,
   })
   const packRef = artifactRef(`${namespace}.${args.packId}`, args.version, contentDigest)
@@ -607,6 +611,8 @@ export function assemblePack(args: AssemblePackArgs): AssembledPack {
     ...(args.report.strategy === undefined ? {} : { strategy: args.report.strategy }),
     ...(args.report.definition?.approvalPins === undefined ? {} : { approvalPins: args.report.definition.approvalPins }),
     ...(args.report.ruleActionPins === undefined ? {} : { ruleActionPins: args.report.ruleActionPins }),
+    ruleDeclarations,
+    ruleReviewPins: args.ruleReviewPins ?? [],
     packRef,
     workspaceId: args.workspace.workspaceId,
     namespace,
