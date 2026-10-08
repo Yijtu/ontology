@@ -48,6 +48,8 @@ import {
   PostgresWorkflowStore,
 } from '@ontology/adapter-control-postgres'
 import {
+  ArtifactGroundingDocumentSetReader,
+  ParsedSourceGroundingReader,
   DocumentSpanReader,
   LocalDocumentExtractionService,
   LocalStructuredIngestionService,
@@ -103,6 +105,7 @@ import {
   RunExecutionPreflightService,
   RunPhaseDriver,
   RunService,
+  createSourceGroundingService,
   createDynamicDefinitionTerminologySource,
   StoreBackedIndustryManifestSource,
   StoreBackedIndustryPackCatalogue,
@@ -2132,18 +2135,21 @@ export async function createCoreLocalComposition(options: CoreLocalCompositionOp
       support: ruleSupport,
     })
     const definitionGenerationService = new DefinitionCandidateGenerationService({
+      sourceGrounding: createSourceGroundingService({ workspaces: workspaceStore,
+        documentSets: new ArtifactGroundingDocumentSetReader(blobStore),
+        reader: new ParsedSourceGroundingReader({ blobs: blobStore, documents: parseStore, tables: structuredStore }) }),
       workspaces: workspaceStore,
       candidates: assetCandidateStore,
       terminology,
       generationForRun: async ({ ctx, signal }) => {
-        const ledger = await budget.openLedger({ ledgerId: ctx.runId, kind: 'background', runId: ctx.runId }, ctx)
+        const ledger = await budget.openLedger({ ledgerId: randomUUID(), kind: 'background', runId: ctx.runId }, ctx)
         return modelCapabilities.forExecution({ ledgerId: ledger.ledgerId, signal }).generation
       },
       modelRef: {
         modelId: options.modelsEnabled === true ? modelEnvironment['CORE_COMPANY_MODEL_PLATFORM_ID'] ?? 'model-not-configured' : 'model-not-configured',
         version: COMPONENT_VERSION,
       },
-      outputLimit: { maxTokens: 2_048 },
+      outputLimit: { maxTokens: 16_384 },
     })
     const definitionEditingService = new DefinitionCandidateEditingService({
       publishedPacks: publishedPackStore,

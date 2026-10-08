@@ -26,6 +26,7 @@ function harness() {
     getWorkspace: async (requested: typeof scope) => requested.tenantId === scope.tenantId && requested.spaceId === scope.spaceId
       ? { ...workspace } : undefined,
     getDraft: async () => ({ ...draft }),
+    listDrafts: async () => [{ ...draft }],
   }
   const reader = new ParsedSourceGroundingReader({ blobs, documents, tables })
   const documentSets = new ArtifactGroundingDocumentSetReader(blobs)

@@ -1,10 +1,11 @@
 import { SourceGroundingError, assertGroundingDocumentSet, isResourceRef, isToolContext, isUuid } from '@ontology/contracts'
+import { readLatestWorkspaceDraft } from '../workspace-draft'
 import type { GroundedSource, GroundedSourceContent, GroundingDocumentSetReaderPort,
   IndustryWorkspaceStore, ResourceRef, ScopeRef, SourceGroundingBudgetPort, SourceGroundingPort,
   SourceGroundingReaderPort, SourceGroundingReason, ToolContext } from '@ontology/contracts'
 
 export interface SourceGroundingDependencies {
-  readonly workspaces: Pick<IndustryWorkspaceStore, 'getWorkspace' | 'getDraft'>
+  readonly workspaces: Pick<IndustryWorkspaceStore, 'getWorkspace' | 'getDraft' | 'listDrafts' | 'getLatestDraft'>
   readonly documentSets: GroundingDocumentSetReaderPort
   readonly reader: SourceGroundingReaderPort
   readonly pageSize?: number
@@ -48,7 +49,14 @@ export class SourceGroundingService implements SourceGroundingPort {
     if (workspace === undefined || workspace.state === 'archived') {
       throw new SourceGroundingError('NOT_APPROVED', 'workspace is not visible or active')
     }
-    const draft = await this.dependencies.workspaces.getDraft(scope, workspace.workspaceId, workspace.headRevision, ctx)
+    const latest = await readLatestWorkspaceDraft(this.dependencies.workspaces, scope, workspace.workspaceId, ctx)
+    const draft = request.inputDraftRef === undefined ? latest
+      : await this.dependencies.workspaces.getDraft(scope, workspace.workspaceId, request.inputDraftRef.revision, ctx)
+    if (request.inputDraftRef !== undefined && (draft?.digest !== request.inputDraftRef.digest || draft?.revision !== request.inputDraftRef.revision
+      || request.inputDraftRef.workspaceId !== workspace.workspaceId || latest?.revision !== draft?.revision)) {
+      throw new SourceGroundingError('DOCUMENT_SET_CHANGED', 'the requested input draft is not the current pinned corpus')
+    }
+    if (draft !== undefined && BigInt(draft.revision) > BigInt(workspace.headRevision)) throw new SourceGroundingError('DOCUMENT_SET_CHANGED', 'draft lies beyond the current workspace head')
     if (draft === undefined) throw new SourceGroundingError('NOT_APPROVED', 'workspace has no pinned document set')
     const documentSetRef = draft.documentSetRef
     const failed = (reason: SourceGroundingReason): GroundedSource[] => request.sourceRefs.map((sourceRef) => ({

@@ -1,4 +1,5 @@
 import {
+  assetCandidateCommitPin,
   AssetCandidateStoreError,
   assertAssetCandidateBatchShape,
   assertAssetCandidateVersionShape,
@@ -6,6 +7,7 @@ import {
 } from '@ontology/contracts'
 import type {
   AssetCandidateBatch,
+  AssetCandidateInsertGuard,
   AssetCandidateInsertResult,
   AssetCandidateQuery,
   AssetCandidateStateTransition,
@@ -15,6 +17,8 @@ import type {
   ToolContext,
   Uuid,
 } from '@ontology/contracts'
+
+import { canonicalJson } from '../../extraction/canonical'
 
 interface StoredBatch {
   readonly batch: AssetCandidateBatch
@@ -83,6 +87,7 @@ export class InMemoryAssetCandidateStore implements AssetCandidateStore {
     batch: AssetCandidateBatch,
     candidates: readonly AssetCandidateVersion[],
     ctx: ToolContext,
+    guard?: AssetCandidateInsertGuard,
   ): Promise<AssetCandidateInsertResult> {
     resolveScope(scopeRef, ctx)
     assertAssetCandidateBatchShape(batch)
@@ -103,6 +108,16 @@ export class InMemoryAssetCandidateStore implements AssetCandidateStore {
       }
       return { batch: clone(stored.batch), candidates: this.#candidatesOfBatch(scopeRef, prior.batchId), created: false }
     }
+    if (guard !== undefined) {
+      const history = [...this.#candidateStore(scopeRef).values()].filter((candidate) => candidate.workspaceId === batch.workspaceId)
+      const replaced = new Set(history.flatMap((candidate) => candidate.replacesCandidateId === undefined ? [] : [candidate.replacesCandidateId]))
+      const heads = history.filter((candidate) => !replaced.has(candidate.candidateId))
+      if (heads.length !== guard.currentCandidatePins.length || heads.some((candidate) => !guard.currentCandidatePins.some((pin) =>
+        canonicalJson(pin) === canonicalJson(assetCandidateCommitPin(candidate))))) {
+        throw new AssetCandidateStoreError('VERSION_CONFLICT', 'candidate projection moved before generation commit')
+      }
+      if ((batch.reusedCandidateIds ?? []).some((id) =>  !heads.some((candidate) => candidate.candidateId === id && canonicalJson(candidate.inputDraftRef) === canonicalJson(batch.inputDraftRef)))) throw new AssetCandidateStoreError('INVALID_BATCH', 'reused candidate is not a scoped current workspace version')
+    } else if ((batch.reusedCandidateIds?.length ?? 0) > 0) throw new AssetCandidateStoreError('INVALID_BATCH', 'reuse requires a projection guard')
     if (this.#batchStore(scopeRef).has(batch.batchId)) {
       throw new AssetCandidateStoreError('STORE_FAILED', `batch ${batch.batchId} already exists`)
     }

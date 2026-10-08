@@ -7,6 +7,7 @@ import {
 } from '@ontology/contracts'
 import type {
   AssetCandidateBatch,
+  AssetCandidateInsertGuard,
   AssetCandidateInsertResult,
   AssetCandidateQuery,
   AssetCandidateStateTransition,
@@ -26,6 +27,7 @@ interface ScopedQuery {
 }
 
 interface BatchRow extends QueryResultRow {
+  reused_candidate_ids: readonly Uuid[]
   batch_id: string
   workspace_id: string
   input_draft_ref: AssetCandidateBatch['inputDraftRef']
@@ -65,7 +67,7 @@ interface CandidateRow extends QueryResultRow {
 
 const BATCH_COLUMNS = `batch_id, workspace_id, input_draft_ref, model_ref, response_schema_ref,
   schema_digest, document_set_ref, generation_policy_ref, state, counts, error, idempotency_key,
-  request_digest, created_by, recorded_at`
+  request_digest, created_by, recorded_at, reused_candidate_ids`
 
 const CANDIDATE_COLUMNS = `candidate_id, batch_id, workspace_id, logical_id, kind, payload,
   input_draft_ref, source_refs, source_spans, state, issues, pending_confirmation,
@@ -74,6 +76,7 @@ const CANDIDATE_COLUMNS = `candidate_id, batch_id, workspace_id, logical_id, kin
 function toBatch(row: BatchRow): AssetCandidateBatch {
   return {
     batchId: row.batch_id,
+    reusedCandidateIds: row.reused_candidate_ids,
     workspaceId: row.workspace_id,
     domain: 'definition',
     inputDraftRef: row.input_draft_ref,
@@ -137,6 +140,7 @@ export class PostgresAssetCandidateStore implements AssetCandidateStore {
     batch: AssetCandidateBatch,
     candidates: readonly AssetCandidateVersion[],
     ctx: ToolContext,
+    guard?: AssetCandidateInsertGuard,
   ): Promise<AssetCandidateInsertResult> {
     assertAssetCandidateBatchShape(batch)
     for (const candidate of candidates) assertAssetCandidateVersionShape(candidate)
@@ -154,15 +158,43 @@ export class PostgresAssetCandidateStore implements AssetCandidateStore {
         return { batch: toBatch(prior), candidates: stored, created: false }
       }
 
+      if (guard !== undefined) {
+        const workspace = await query.query<{ head_revision: string; state: string }>(
+          `SELECT head_revision, state FROM agent_platform.industry_workspaces
+            WHERE tenant_id = current_setting('app.tenant_id')::uuid AND space_id = current_setting('app.space_id')::uuid
+              AND workspace_id = $1 FOR UPDATE`, [batch.workspaceId])
+        if (workspace.rows[0]?.head_revision !== guard.expectedWorkspaceRevision || workspace.rows[0].state === 'archived') {
+          throw new AssetCandidateStoreError('VERSION_CONFLICT', 'workspace moved before candidate insertion')
+        }
+        const heads = await query.query<{ candidate_id: string; pin_matches: boolean; draft_matches: boolean }>(
+          `SELECT c.candidate_id, c.input_draft_ref = $3::jsonb AS draft_matches,
+            jsonb_build_object('candidateId', c.candidate_id, 'contentDigest', c.content_digest, 'state', c.state,
+              'inputDraftRef', c.input_draft_ref, 'sourceRefs', c.source_refs, 'sourceSpans', c.source_spans,
+              'issues', c.issues, 'pendingConfirmation', c.pending_confirmation)
+              = ANY(ARRAY(SELECT value FROM jsonb_array_elements($2::jsonb))) AS pin_matches FROM agent_platform.asset_candidate_versions c
+            WHERE c.tenant_id = current_setting('app.tenant_id')::uuid AND c.space_id = current_setting('app.space_id')::uuid
+              AND c.workspace_id = $1 AND NOT EXISTS (SELECT 1 FROM agent_platform.asset_candidate_versions next
+                WHERE next.tenant_id = c.tenant_id AND next.space_id = c.space_id AND next.workspace_id = c.workspace_id
+                  AND next.replaces_candidate_id = c.candidate_id)`, [batch.workspaceId, JSON.stringify(guard.currentCandidatePins), JSON.stringify(batch.inputDraftRef)])
+        if (heads.rows.length !== guard.currentCandidatePins.length || heads.rows.some((row) => !row.pin_matches)) {
+          throw new AssetCandidateStoreError('VERSION_CONFLICT', 'candidate projection moved before generation commit')
+        }
+        if ((batch.reusedCandidateIds ?? []).some((id) => !heads.rows.some((row) => row.candidate_id === id && row.draft_matches))) {
+          throw new AssetCandidateStoreError('INVALID_BATCH', 'reused candidate must be a current exact scoped workspace version')
+        }
+      } else if ((batch.reusedCandidateIds?.length ?? 0) > 0) {
+        throw new AssetCandidateStoreError('INVALID_BATCH', 'candidate reuse requires a transactional projection guard')
+      }
+
       const inserted = await query.query<{ batch_id: string }>(
         `INSERT INTO agent_platform.asset_candidate_batches (
            tenant_id, space_id, batch_id, workspace_id, input_draft_ref, model_ref,
            response_schema_ref, schema_digest, document_set_ref, generation_policy_ref, state,
-           counts, error, idempotency_key, request_digest, created_by, recorded_at)
+           counts, error, idempotency_key, request_digest, created_by, recorded_at, reused_candidate_ids)
          VALUES (
            current_setting('app.tenant_id')::uuid, current_setting('app.space_id')::uuid,
            $1, $2, $3::jsonb, $4::jsonb, $5::jsonb, $6, $7::jsonb, $8::jsonb, $9, $10::jsonb,
-           $11::jsonb, $12, $13, $14, $15::timestamptz)
+           $11::jsonb, $12, $13, $14, $15::timestamptz, $16::jsonb)
          ON CONFLICT (tenant_id, space_id, idempotency_key) DO NOTHING
          RETURNING batch_id`,
         [
@@ -181,6 +213,7 @@ export class PostgresAssetCandidateStore implements AssetCandidateStore {
           batch.requestDigest,
           batch.createdBy,
           batch.recordedAt,
+          JSON.stringify(batch.reusedCandidateIds ?? []),
         ],
       )
       if (inserted.rows[0] === undefined) {
