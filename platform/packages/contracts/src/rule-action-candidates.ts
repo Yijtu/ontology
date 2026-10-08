@@ -23,6 +23,7 @@ import { findRegisteredOperation } from './operations'
 import type { SemanticDefinitionVersion } from './semantic-definitions'
 import type { ToolContext } from './trusted'
 import type { RuleActionGenerationContext } from './rule-action-generation'
+import { isResourceRef as isGeneratedSourceRef } from './asset-workspace'
 
 /**
  * Rule and action candidates with finite-grammar support validation and capability binding
@@ -741,7 +742,10 @@ export function assertRuleActionCandidateShape(
   if (context !== undefined) {
     if (!isRecord(context) || !isUuid(context['batchId']) || !isDigest(context['contextDigest']) || !isRecord(context['inputDraftRef']) ||
       !Array.isArray(context['issues']) || context['issues'].length > 256 || context['issues'].some((entry: unknown) => !isRecord(entry) || !['SOURCE_UNRESOLVED','SOURCE_INCOMPLETE','TERM_UNRESOLVED','DEPENDENCY_UNRESOLVED'].includes(String(entry['code'])) || !isNonEmptyString(entry['path']) || !isNonEmptyString(entry['message'])) ||
-      !Array.isArray(context['sourceSelections']) || context['sourceSelections'].length > 128 || context['sourceSelections'].some((entry: unknown) => !isRecord(entry) || !isNonEmptyString(entry['path']) || !Number.isSafeInteger(entry['sourceIndex']) || !Number.isSafeInteger(entry['fragmentIndex']))) throw invalid('generation context requires bounded provenance and issue pins')
+      !Array.isArray(context['sourceSelections']) || context['sourceSelections'].length > 128 || context['sourceSelections'].some((entry: unknown) => !isRecord(entry) || !isNonEmptyString(entry['path']) || !Number.isSafeInteger(entry['sourceIndex']) || !Number.isSafeInteger(entry['fragmentIndex'])) ||
+      !Array.isArray(context['inputSourceRefs']) || context['inputSourceRefs'].length > 64 || !context['inputSourceRefs'].every(isGeneratedSourceRef) ||
+      !Array.isArray(context['sourceBindings']) || context['sourceBindings'].length > 128 || context['sourceBindings'].some((entry: unknown) => !isRecord(entry) || !isNonEmptyString(entry['path']) || !isGeneratedSourceRef(entry['sourceRef']) || !isRecord(entry['sourceSpan']) || !isUuid(entry['sourceSpan']['parseId']) ||
+        (entry['sourceSpan']['kind'] === 'structured' ? !isUuid(entry['sourceSpan']['recordId']) || !isDigest(entry['sourceSpan']['rowDigest']) : !isUuid(entry['sourceSpan']['chunkId']) || !isDigest(entry['sourceSpan']['quoteDigest'])))) throw invalid('generation context requires bounded provenance and issue pins')
   }
 }
 

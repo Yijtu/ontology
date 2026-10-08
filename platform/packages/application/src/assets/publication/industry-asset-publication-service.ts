@@ -28,6 +28,7 @@ import type {
 } from '@ontology/contracts'
 import { canonicalJson, sha256DigestOf } from '../../profiles/canonical'
 import { currentDefinitionProjection } from '../definition-candidates/validation'
+import { readLatestWorkspaceDraft } from '../workspace-draft'
 import { assemblePack } from './pack-assembly'
 import { DefinitionPredecessorError, resolveDefinitionPredecessor } from './definition-predecessor'
 import type { DefinitionPredecessor } from './definition-predecessor'
@@ -214,8 +215,10 @@ export class IndustryAssetPublicationService {
     const ruleActionRows = await this.#deps.ruleActions.list(scopeRef, workspaceId, { limit: CANDIDATE_PAGE }, ctx)
     if (ruleActionRows.length === CANDIDATE_PAGE) throw new IndustryAssetPublicationError('VALIDATION_BLOCKED', 'rule/action candidate page is incomplete')
     const ruleActionCandidates = currentRuleActionProjection(ruleActionRows).filter((candidate) => candidate.lifecycle === 'enabled' && candidate.enabledAt !== undefined)
+    const currentDraft = await readLatestWorkspaceDraft(this.#deps.workspaces, scopeRef, workspaceId, ctx)
     if (ruleActionCandidates.some((candidate) => candidate.generationContext !== undefined &&
-      (candidate.generationContext.issues.length > 0 || candidate.sourceSpans.length === 0))) {
+      (candidate.generationContext.issues.length > 0 || candidate.sourceSpans.length === 0 || currentDraft === undefined ||
+        candidate.generationContext.inputDraftRef.workspaceId !== workspaceId || candidate.generationContext.inputDraftRef.revision !== currentDraft.revision || candidate.generationContext.inputDraftRef.digest !== currentDraft.digest))) {
       throw new IndustryAssetPublicationError('VALIDATION_BLOCKED', 'generated rules/actions require complete source confirmation')
     }
     const ruleActionPins = ruleActionPublicationPins(ruleActionCandidates)

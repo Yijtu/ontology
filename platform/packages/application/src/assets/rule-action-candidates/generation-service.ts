@@ -120,7 +120,7 @@ export class RuleActionCandidateGenerationService {
     const bindingContext = this.dependencies.bindingContext?.(ctx)
     const sourceBase = original.payload.kind === 'action' ? { ...original, payload: { kind: 'action' as const, declaration: original.payload.declaration,
       ...(bindingContext === undefined ? {} : { binding: bindActionDeclaration(original.payload.declaration, bindingContext) }) } } : original
-    const rebound = groundCandidate(sourceBase, proposal, groundingFragments(read.sources), terms, selected, guard.ruleActionPins, { batchId, contextDigest, inputDraftRef: guard.inputDraftRef }, false)
+    const rebound = groundCandidate(sourceBase, proposal, groundingFragments(read.sources), terms, selected, guard.ruleActionPins, { batchId, contextDigest, inputDraftRef: guard.inputDraftRef }, input.sourceRefs, false)
     if ((rebound.generationContext?.issues.length ?? 0) > 0) throw new RuleActionCandidateError('VALIDATION_BLOCKED', 'source selections or current terms do not cover every saved clause', { reasons: rebound.generationContext?.issues.map((problem) => `${problem.path}: ${problem.message}`) ?? [] })
     const { generationCallRef, enabledAt, ...base } = rebound; void generationCallRef; void enabledAt
     const candidate: RuleActionCandidateVersion = { ...base, candidateId, lifecycle: 'draft', replacesCandidateId: original.candidateId,
@@ -180,7 +180,8 @@ export class RuleActionCandidateGenerationService {
     const sources = groundingContext(grounding)
     const context = { promptVersion: RULE_ACTION_PROMPT_VERSION, schemaRef: RULE_ACTION_RESPONSE_SCHEMA_REF,
       generationPolicyRef: input.generationPolicyRef, boundary: workspace.boundary, terms, selectedTerms: semanticDraftContext(selectedTerms),
-      currentRules: currentRules.map((row) => ({ logicalId: row.logicalId, kind: row.kind, payload: row.payload, sourceRefs: row.sourceRefs })), operations, sources }
+      currentRules: currentRules.map((row) => ({ logicalId: row.logicalId, kind: row.kind,
+        ruleRef: { id: row.candidateId, version: '1.0.0', digest: row.contentDigest }, payload: row.payload, sourceRefs: row.sourceRefs })), operations, sources }
     const contextDigest = sha256DigestOf(canonicalJson(context))
     const batchId = candidateIdFor(sha256DigestOf(canonicalJson({ scope, key, requestDigest })))
     const recordedAt = (this.dependencies.now ?? (() => new Date().toISOString()))()
@@ -194,7 +195,8 @@ export class RuleActionCandidateGenerationService {
       check(signal)
       if (error instanceof RuleActionCandidateError && error.code === 'MODEL_NOT_CONFIGURED') throw error
       const batch: RuleActionGenerationBatch = { ...baseBatch, state: 'failed', candidateIds: [], counts: { total: 0, produced: 0, pendingConfirmation: 0, pendingReview: 0, failed: 0 },
-        error: { code: error instanceof RuleActionCandidateError ? error.code : 'GENERATION_FAILED', message: 'The bounded rule/action generation failed; no partial candidates were saved.', retryable: true } }
+        error: { code: error instanceof RuleActionCandidateError ? error.code : 'GENERATION_FAILED', message:
+          error instanceof RuleActionCandidateError && (error.code === 'INVALID_MODEL_OUTPUT' || error.code === 'ARBITRARY_EXECUTABLE_REJECTED') ? error.message.slice(0, 512) : 'The bounded rule/action generation failed; no partial candidates were saved.', retryable: true } }
       return this.#commit(scope, batch, [], guard, ctx)
     }
     const parsed = parseRuleActionCandidateOutput(raw)
@@ -205,7 +207,7 @@ export class RuleActionCandidateGenerationService {
     const candidates = versions.map((candidate, index) => {
       const proposal = parsed.candidates[index]
       if (proposal === undefined) throw new RuleActionCandidateError('INVALID_MODEL_OUTPUT', 'candidate parsing order changed')
-      return groundCandidate(candidate, proposal, fragments, terms, selectedTerms, currentRules, { batchId, contextDigest, inputDraftRef: guard.inputDraftRef }, grounding.coverage !== 'complete')
+      return groundCandidate(candidate, proposal, fragments, terms, selectedTerms, currentRules, { batchId, contextDigest, inputDraftRef: guard.inputDraftRef }, input.sourceRefs, grounding.coverage !== 'complete')
     })
     check(signal)
     const pending = candidates.filter((candidate) => (candidate.generationContext?.issues.length ?? 0) > 0).length
@@ -261,7 +263,9 @@ export class RuleActionCandidateGenerationService {
     }
     const ids = all.map((candidate) => `${candidate.kind}:${candidate.kind === 'rule' ? candidate.ruleId : candidate.actionId}`)
     if (new Set(ids).size !== ids.length) throw new RuleActionCandidateError('INVALID_MODEL_OUTPUT', 'model repeated candidate identities')
-    return canonicalJson({ rules, actions })
+    const rawOutput = canonicalJson({ rules, actions })
+    if (new TextEncoder().encode(rawOutput).byteLength > 1024 * 1024) throw new RuleActionCandidateError('INVALID_MODEL_OUTPUT', 'combined rule/action response exceeds its 1 MiB parsing bound')
+    return rawOutput
   }
 }
 
@@ -278,14 +282,18 @@ async function readGrounding(port: SourceGroundingPort, request: Parameters<Sour
 function groundCandidate(candidate: RuleActionCandidateVersion, proposal: DraftRuleActionCandidate,
   fragments: readonly DefinitionGroundingFragment[], terms: MountedDefinitionTerminology | undefined,
   selected: readonly AssetCandidateVersion[], currentRules: readonly RuleActionCandidateVersion[], context: Pick<RuleActionGenerationBatch, 'batchId' | 'contextDigest' | 'inputDraftRef'>,
-  incomplete: boolean): RuleActionCandidateVersion {
+  inputSourceRefs: readonly ResourceRef[], incomplete: boolean): RuleActionCandidateVersion {
   const issues: RuleActionGenerationIssue[] = []
   const spans: CandidateSourceSpan[] = [], refs: ResourceRef[] = []
+  const sourceBindings: { path: string; sourceRef: ResourceRef; sourceSpan: CandidateSourceSpan }[] = []
   const locations = new Map(proposal.sourceSelections.map((selection) => [selection.path, selection]))
   const locate = (path: string): readonly RuleProvenanceSpan[] => {
     const selection = locations.get(path)
     const fragment = selectedGrounding(fragments, selection?.sourceIndex, selection?.fragmentIndex)
     if (fragment === undefined) { issues.push(issue('SOURCE_UNRESOLVED', path, 'Select a real approved source fragment.')); return [] }
+    sourceBindings.push({ path, sourceRef: fragment.sourceRef, sourceSpan: fragment.sourceSpan })
+    if (candidate.kind === 'rule' && fragment.sourceSpan.kind === 'structured') issues.push(issue('SOURCE_UNRESOLVED', path,
+      'The actual table locator is retained, but structured rule-clause provenance is not yet executable; select supported text evidence.'))
     if (!spans.some((span) => canonicalJson(span) === canonicalJson(fragment.sourceSpan))) spans.push(fragment.sourceSpan)
     if (!refs.some((ref) => sameResourcePin(ref, fragment.sourceRef))) refs.push(fragment.sourceRef)
     return fragment.sourceSpan.kind === 'structured' ? [] : [fragment.sourceSpan]
@@ -337,7 +345,7 @@ function groundCandidate(candidate: RuleActionCandidateVersion, proposal: DraftR
     locate('declaration')
     payload.declaration.preconditions.forEach((_, index) => locate(`declaration.preconditions[${String(index)}]`))
   }
-  const generationContext = { ...context, issues, sourceSelections: proposal.sourceSelections }
+  const generationContext = { ...context, inputSourceRefs, sourceBindings, issues, sourceSelections: proposal.sourceSelections }
   const contentDigest = sha256DigestOf(canonicalJson({ workspaceId: candidate.workspaceId, kind: candidate.kind,
     logicalId: candidate.logicalId, displayName: candidate.displayName, businessMeaning: candidate.businessMeaning,
     suggestedReason: candidate.suggestedReason, payload, sourceRefs: refs, sourceSpans: spans, generationContext }))

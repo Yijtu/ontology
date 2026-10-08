@@ -2,6 +2,7 @@ import type { AssetCandidateBatch, AssetCandidateCommitPin, DefinitionCandidateI
 import type { RuleActionCandidateVersion } from './rule-action-candidates'
 import type { ResourceRef, RevisionString, ScopeRef, Sha256Digest, Uuid, VersionRef } from './generated/contracts'
 import type { ToolContext } from './trusted'
+import type { CandidateSourceSpan } from './extraction'
 import { assertAssetCandidateBatchShape } from './asset-candidates'
 import { isResourceRef, isSha256Digest, isUuid } from './asset-workspace'
 
@@ -34,6 +35,9 @@ export interface RuleActionGenerationIssue {
 }
 
 export interface RuleActionGenerationContext {
+  /** Actual ordered corpus and resolved clause pins, independent of compacted candidate refs. */
+  readonly inputSourceRefs: readonly ResourceRef[]
+  readonly sourceBindings: readonly { readonly path: string; readonly sourceRef: ResourceRef; readonly sourceSpan: CandidateSourceSpan }[]
   readonly batchId: Uuid
   readonly inputDraftRef: DefinitionCandidateInputDraftRef
   readonly contextDigest: Sha256Digest
