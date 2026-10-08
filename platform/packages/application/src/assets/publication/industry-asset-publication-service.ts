@@ -214,6 +214,10 @@ export class IndustryAssetPublicationService {
     const ruleActionRows = await this.#deps.ruleActions.list(scopeRef, workspaceId, { limit: CANDIDATE_PAGE }, ctx)
     if (ruleActionRows.length === CANDIDATE_PAGE) throw new IndustryAssetPublicationError('VALIDATION_BLOCKED', 'rule/action candidate page is incomplete')
     const ruleActionCandidates = currentRuleActionProjection(ruleActionRows).filter((candidate) => candidate.lifecycle === 'enabled' && candidate.enabledAt !== undefined)
+    if (ruleActionCandidates.some((candidate) => candidate.generationContext !== undefined &&
+      (candidate.generationContext.issues.length > 0 || candidate.sourceSpans.length === 0))) {
+      throw new IndustryAssetPublicationError('VALIDATION_BLOCKED', 'generated rules/actions require complete source confirmation')
+    }
     const ruleActionPins = ruleActionPublicationPins(ruleActionCandidates)
     const ruleReviewPins = await ruleApprovalPins(ruleActionCandidates, scopeRef, ctx, this.#deps.reviewableCandidates, this.#deps.reviews)
     if (canonicalJson(ruleActionPins) !== canonicalJson(report.ruleActionPins)) {

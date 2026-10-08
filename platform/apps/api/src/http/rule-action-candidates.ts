@@ -1,4 +1,4 @@
-import type { FastifyInstance, FastifyRequest } from 'fastify'
+import type { FastifyInstance, FastifyReply, FastifyRequest } from 'fastify'
 import { isResourceRef, isRuleActionCandidateKind } from '@ontology/contracts'
 import type {
   ActionCapabilityBindingInput,
@@ -7,9 +7,10 @@ import type {
   RuleActionCandidateKind,
   RuleActionCandidateLifecycle,
   ToolContext,
+  RuleActionSourceSelection,
 } from '@ontology/contracts'
-import type { RuleActionCandidateService } from '@ontology/application'
-import { parseRuleActionCandidateOutput } from '@ontology/application'
+import type { RuleActionCandidateService, RuleActionCandidateGenerationService } from '@ontology/application'
+import { parseRuleActionCandidateOutput, RuleActionCandidateError } from '@ontology/application'
 import { createRequestToolContext } from './context'
 import {
   authenticateRequest,
@@ -28,6 +29,7 @@ const MAX_PAGE_SIZE = 250
 const LIFECYCLES: readonly RuleActionCandidateLifecycle[] = ['draft', 'enabled', 'rejected']
 
 export interface RuleActionCandidateRouteDependencies {
+  readonly generation?: RuleActionCandidateGenerationService
   readonly service: RuleActionCandidateService
   readonly authenticate: RequestAuthenticator
   /**
@@ -89,6 +91,15 @@ function parseSourceRefs(value: unknown): readonly ResourceRef[] {
  * normalize both to the one JSON body the parser consumes. Human and model input therefore go
  * through exactly the same validation and support checks.
  */
+function parseSourceSelections(value: unknown): RuleActionSourceSelection[] {
+  if (!Array.isArray(value) || value.length > 128) throw new InvalidRequestFieldError('sourceSelections must be a bounded array')
+  return value.map((selection) => {
+    if (!isRecord(selection) || typeof selection['path'] !== 'string' || typeof selection['sourceIndex'] !== 'number' || typeof selection['fragmentIndex'] !== 'number') throw new InvalidRequestFieldError('source selection requires path/sourceIndex/fragmentIndex')
+    rejectUnknownFields(selection, ['path','sourceIndex','fragmentIndex'])
+    return { path: selection['path'], sourceIndex: selection['sourceIndex'], fragmentIndex: selection['fragmentIndex'] }
+  })
+}
+
 function readRawOutput(body: Record<string, unknown>): string {
   const raw = body['rawOutput']
   if (raw !== undefined) {
@@ -136,6 +147,33 @@ export function registerRuleActionCandidateRoutes(
   const contextFor = (auth: AuthenticatedRequest, traceId: string, resourceId: string): ToolContext =>
     createRequestToolContext({ principal: auth.principal, spaceId: auth.spaceId, traceId, runId: resourceId })
 
+  app.post<{ Params: { workspaceId: string } }>('/api/v1/industry-workspaces/:workspaceId/rule-action-generations', async (request, reply) => {
+    const traceId = readTraceId(request)
+    const auth = authenticateRequest(dependencies.authenticate, request, reply)
+    if (auth === undefined) return reply
+    const generator = dependencies.generation
+    if (generator === undefined) throw new RuleActionCandidateError('MODEL_NOT_CONFIGURED', 'rule/action model generation is not configured')
+    const body = request.body
+    if (!isRecord(body)) throw new InvalidRequestFieldError('generation body must be an object')
+    rejectUnknownFields(body, ['sourceRefs','kinds','selectedDefinitionCandidateIds','generationPolicyRef','candidateLimit'])
+    const kinds = body['kinds']
+    if (!Array.isArray(kinds) || !kinds.every(isRuleActionCandidateKind)) throw new InvalidRequestFieldError('kinds must contain rule/action')
+    const selected = body['selectedDefinitionCandidateIds']
+    if (selected !== undefined && (!Array.isArray(selected) || !selected.every((id) => typeof id === 'string'))) throw new InvalidRequestFieldError('selectedDefinitionCandidateIds must be ids')
+    const policy = body['generationPolicyRef']
+    if (!isRecord(policy) || typeof policy['id'] !== 'string' || typeof policy['version'] !== 'string' || typeof policy['digest'] !== 'string') throw new InvalidRequestFieldError('generationPolicyRef must be an exact version reference')
+    const limit = body['candidateLimit']
+    if (limit !== undefined && typeof limit !== 'number') throw new InvalidRequestFieldError('candidateLimit must be numeric')
+    const policyRef = { id: policy['id'], version: policy['version'], digest: policy['digest'] }
+    const result = await withGenerationSignal(request, reply, (signal) => generator.generate({ workspaceId: request.params.workspaceId,
+      expectedRevision: readIfMatch(request), sourceRefs: parseSourceRefs(body['sourceRefs']), kinds,
+      generationPolicyRef: policyRef,
+      ...(selected === undefined ? {} : { selectedDefinitionCandidateIds: selected }), ...(limit === undefined ? {} : { candidateLimit: limit }),
+      idempotencyKey: requireIdempotencyKey(request) }, auth.principal.subjectId, contextFor(auth, traceId, request.params.workspaceId), signal))
+    reply.status(result.created ? 201 : 200).send({ data: result, meta: { traceId } })
+    return reply
+  })
+
   app.post<{ Params: { workspaceId: string } }>(
     '/api/v1/industry-workspaces/:workspaceId/rule-action-candidates/ingest',
     async (request, reply) => {
@@ -164,6 +202,21 @@ export function registerRuleActionCandidateRoutes(
       return reply
     },
   )
+
+  app.post<{ Params: { workspaceId: string; candidateId: string } }>('/api/v1/industry-workspaces/:workspaceId/rule-action-candidates/:candidateId/source-confirmations', async (request, reply) => {
+    const traceId = readTraceId(request), auth = authenticateRequest(dependencies.authenticate, request, reply)
+    if (auth === undefined) return reply
+    const generator = dependencies.generation
+    if (generator === undefined) throw new RuleActionCandidateError('MODEL_NOT_CONFIGURED', 'rule/action source confirmation is not configured')
+    const body = request.body
+    if (!isRecord(body)) throw new InvalidRequestFieldError('confirmation body must be an object')
+    rejectUnknownFields(body, ['contentDigest','sourceRefs','sourceSelections','reason'])
+    const result = await withGenerationSignal(request, reply, (signal) => generator.confirmSources({ workspaceId: request.params.workspaceId, candidateId: request.params.candidateId,
+      contentDigest: readNonEmpty(body, 'contentDigest'), sourceRefs: parseSourceRefs(body['sourceRefs']), sourceSelections: parseSourceSelections(body['sourceSelections']),
+      reason: readNonEmpty(body, 'reason'), expectedRevision: readIfMatch(request), idempotencyKey: requireIdempotencyKey(request) }, auth.principal.subjectId,
+      contextFor(auth, traceId, request.params.workspaceId), signal))
+    reply.status(result.created ? 201 : 200).send({ data: result, meta: { traceId } }); return reply
+  })
 
   app.get<{ Params: { workspaceId: string } }>(
     '/api/v1/industry-workspaces/:workspaceId/rule-action-candidates',
@@ -286,4 +339,14 @@ export function registerRuleActionCandidateRoutes(
       return reply
     },
   )
+}
+
+async function withGenerationSignal<T>(request: FastifyRequest, reply: FastifyReply, operation: (signal: AbortSignal) => Promise<T>): Promise<T> {
+  const controller = new AbortController()
+  const abort = () => { controller.abort() }
+  const close = () => { if (!reply.raw.writableEnded) controller.abort() }
+  request.raw.once('aborted', abort); reply.raw.once('close', close)
+  if (request.raw.aborted) controller.abort()
+  try { return await operation(controller.signal) }
+  finally { request.raw.off('aborted', abort); reply.raw.off('close', close) }
 }

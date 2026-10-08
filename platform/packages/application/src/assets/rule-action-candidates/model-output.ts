@@ -14,6 +14,7 @@ import type {
   RuleExpressionNode,
   VersionRef,
   RuleDependencyCandidateReference,
+  RuleActionSourceSelection,
 } from '@ontology/contracts'
 import { RuleActionCandidateError } from './errors'
 
@@ -28,6 +29,7 @@ import { RuleActionCandidateError } from './errors'
  */
 
 export interface DraftRuleCandidate {
+  readonly sourceSelections: readonly RuleActionSourceSelection[]
   readonly dependencyRefs?: readonly RuleDependencyCandidateReference[]
   readonly kind: 'rule'
   readonly ruleId: string
@@ -44,6 +46,7 @@ export interface DraftRuleCandidate {
 }
 
 export interface DraftActionCandidate {
+  readonly sourceSelections: readonly RuleActionSourceSelection[]
   readonly kind: 'action'
   readonly actionId: string
   readonly displayName: string
@@ -221,7 +224,12 @@ function parseConclusion(value: unknown, field: string): RuleConclusionBinding |
   if (value === undefined) return undefined
   if (!isRecord(value)) throw invalid(`model output field "${field}" must be an object`)
   const raw = value['value']
+  const decimal = /^-?(?:0|[1-9]\d*)(?:\.\d+)?$/
+  if (isRecord(raw) && raw['kind'] === 'scalar_decimal' && typeof raw['amount'] === 'string' && decimal.test(raw['amount']) && Object.keys(raw).length === 2) {
+    return { predicate: requireString(value['predicate'], `${field}.predicate`), value: { kind: 'scalar_decimal', amount: raw['amount'] } }
+  }
   if (isRecord(raw) && typeof raw['amount'] === 'string' && typeof raw['unit'] === 'string') {
+    if (!decimal.test(raw['amount']) || raw['unit'].length === 0) throw invalid('conclusion quantity requires an exact decimal and declared unit')
     return {
       predicate: requireString(value['predicate'], `${field}.predicate`),
       value: { amount: raw['amount'], unit: raw['unit'] },
@@ -243,6 +251,7 @@ function parseRuleCandidate(entry: Record<string, unknown>, field: string): Draf
   const sourceIndex = optionalSourceIndex(entry['sourceIndex'], `${field}.sourceIndex`)
   const applicabilityNote = optionalString(entry['applicabilityNote'], `${field}.applicabilityNote`)
   return {
+    sourceSelections: parseSourceSelections(entry['sourceSelections'], field),
     kind: 'rule',
     ruleId: requireString(entry['ruleId'], `${field}.ruleId`),
     displayName: requireString(entry['displayName'], `${field}.displayName`),
@@ -304,6 +313,7 @@ function parseActionCandidate(entry: Record<string, unknown>, field: string): Dr
       : { suggestedOperationRef: parseOperationRef(suggestedOperationRef, `${field}.suggestedOperationRef`) }),
   }
   return {
+    sourceSelections: parseSourceSelections(entry['sourceSelections'], field),
     kind: 'action',
     actionId,
     displayName: declaration.displayName,
@@ -312,6 +322,22 @@ function parseActionCandidate(entry: Record<string, unknown>, field: string): Dr
     declaration,
     ...(sourceIndex === undefined ? {} : { sourceIndex }),
   }
+}
+
+function parseSourceSelections(value: unknown, field: string): readonly RuleActionSourceSelection[] {
+  if (value === undefined) return []
+  if (!Array.isArray(value) || value.length > 128) throw invalid(`${field}.sourceSelections must be bounded to 128 locations`)
+  const paths = new Set<string>()
+  return value.map((entry) => {
+    if (!isRecord(entry)) throw invalid(`${field}.sourceSelections requires location objects`)
+    const path = requireString(entry['path'], `${field}.sourceSelections.path`)
+    if (path.length > 256 || paths.has(path)) throw invalid('source selection paths must be distinct and bounded')
+    paths.add(path)
+    const sourceIndex = optionalSourceIndex(entry['sourceIndex'], field)
+    const fragmentIndex = optionalSourceIndex(entry['fragmentIndex'], field)
+    if (sourceIndex === undefined || fragmentIndex === undefined || sourceIndex > 63 || fragmentIndex > 63) throw invalid('source selection indices must be within 0..63')
+    return { path, sourceIndex, fragmentIndex }
+  })
 }
 
 function requireArray(value: unknown, field: string): readonly unknown[] {

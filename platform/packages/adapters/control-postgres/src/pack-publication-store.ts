@@ -225,9 +225,10 @@ export class PostgresPublishedPackAssetStore implements PublishedPackAssetStore 
           row.state !== 'failed' && row.state !== 'pending_confirmation' && !row.pending_confirmation))) {
       throw new PublishedPackAssetStoreError('VERSION_CONFLICT', 'definition approval or current candidate pins changed before publication')
     }
-    const actions = await query.query<{ candidate_id: string; content_digest: string; enabled_at: Date; kind: string }>(
-      `SELECT candidate_id, content_digest, enabled_at, kind FROM (
-         SELECT DISTINCT ON (c.logical_id) c.logical_id, c.candidate_id, c.content_digest, c.lifecycle, c.enabled_at, c.kind
+    const actions = await query.query<{ candidate_id: string; content_digest: string; enabled_at: Date; kind: string; grounded: boolean }>(
+      `SELECT candidate_id, content_digest, enabled_at, kind,
+         (generation_context IS NULL OR (jsonb_array_length(generation_context->'issues')=0 AND jsonb_array_length(source_spans)>0)) AS grounded FROM (
+         SELECT DISTINCT ON (c.logical_id) c.logical_id, c.candidate_id, c.content_digest, c.lifecycle, c.enabled_at, c.kind, c.generation_context, c.source_spans
          FROM agent_platform.asset_rule_action_candidates c
          WHERE c.tenant_id = current_setting('app.tenant_id')::uuid AND c.space_id = current_setting('app.space_id')::uuid
            AND c.workspace_id = $1::uuid AND NOT EXISTS (
@@ -239,6 +240,7 @@ export class PostgresPublishedPackAssetStore implements PublishedPackAssetStore 
       [input.pack.workspaceId],
     )
     const actionPins = input.ruleActionPins ?? []
+    if (actions.rows.some((row) => row.grounded !== true)) throw new PublishedPackAssetStoreError('VERSION_CONFLICT', 'generated rule/action sources are not confirmed at publication commit')
     const persistedActions = input.pack.ruleActionPins ?? []
     if (persistedActions.length !== actionPins.length || actionPins.some((pin) => !persistedActions.some((stored) => stored.candidateId === pin.candidateId &&
         stored.contentDigest === pin.contentDigest && stored.enabledAt === pin.enabledAt))) {
@@ -267,9 +269,12 @@ export class PostgresPublishedPackAssetStore implements PublishedPackAssetStore 
            AND c.candidate_id=$1::uuid AND c.kind='rule' AND c.lifecycle='enabled' AND c.content_digest=$2
            AND c.enabled_at=$3::timestamptz AND h.revision=$4::bigint AND r.decision='approve' AND r.content_digest=c.content_digest
            AND c.payload=$5::jsonb AND c.source_refs=$6::jsonb AND c.source_spans=$7::jsonb
-           AND c.generation_call_ref IS NOT DISTINCT FROM $8::jsonb`,
+           AND c.generation_call_ref IS NOT DISTINCT FROM $8::jsonb
+           AND c.generation_context IS NOT DISTINCT FROM $9::jsonb
+           AND (c.generation_context IS NULL OR (jsonb_array_length(c.generation_context->'issues')=0 AND jsonb_array_length(c.source_spans)>0))`,
         [declaration.candidateId, declaration.contentDigest, declaration.enabledAt, declaration.reviewRevision, JSON.stringify(declaration.payload),
-          JSON.stringify(declaration.sourceRefs), JSON.stringify(declaration.sourceSpans), declaration.generationCallRef === undefined ? null : JSON.stringify(declaration.generationCallRef)],
+          JSON.stringify(declaration.sourceRefs), JSON.stringify(declaration.sourceSpans), declaration.generationCallRef === undefined ? null : JSON.stringify(declaration.generationCallRef),
+          declaration.generationContext === undefined ? null : JSON.stringify(declaration.generationContext)],
       )
       if (valid?.rows.length !== 1) throw new PublishedPackAssetStoreError('VERSION_CONFLICT', 'rule approval, provenance or complete body changed before publication')
     }

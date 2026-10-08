@@ -80,6 +80,7 @@ export function publishedRuleDeclarationsOf(candidates: readonly RuleActionCandi
     if (candidate.enabledAt === undefined || pin === undefined) throw new PublishedPackAssetStoreError('VERSION_CONFLICT', 'published rule snapshot requires an exact reviewed enabled candidate')
     return [{ candidateId: candidate.candidateId, contentDigest: candidate.contentDigest, enabledAt: candidate.enabledAt, reviewRevision: pin.reviewRevision,
       payload: candidate.payload, sourceRefs: candidate.sourceRefs, sourceSpans: candidate.sourceSpans,
+      ...(candidate.generationContext === undefined ? {} : { generationContext: candidate.generationContext }),
       ...(candidate.generationCallRef === undefined ? {} : { generationCallRef: candidate.generationCallRef }) }]
   }).sort((a, b) => a.candidateId.localeCompare(b.candidateId))
 }
