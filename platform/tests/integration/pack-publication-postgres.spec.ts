@@ -9,6 +9,7 @@ import {
   PostgresAssetCandidateStore,
   PostgresSemanticPublicationStore,
   PostgresRuleActionCandidateStore,
+  PostgresAssetWorkspaceStore,
   runControlMigrations,
 } from '@ontology/adapter-control-postgres'
 import {
@@ -17,6 +18,7 @@ import {
   StoreBackedIndustryPackCatalogue,
   assemblePack,
   ruleActionPublicationPins,
+  resolveDefinitionPredecessor,
 } from '@ontology/application'
 import type {
   IndustryValidationReport,
@@ -141,9 +143,9 @@ function committedInput(packId: string, version: string, seed: string, expectedR
   }
 }
 
-async function publicationCandidateFixture() {
+async function publicationCandidateFixture(namespace?: string) {
   const workspaceId = randomUUID()
-  const workspace = { ...workspaceFixture(), workspaceId, namespace: `pin-${workspaceId}` }
+  const workspace = { ...workspaceFixture(), workspaceId, namespace: namespace ?? `pin-${workspaceId}` }
   await adminClient.query(`INSERT INTO agent_platform.industry_workspaces
     (tenant_id, space_id, workspace_id, namespace, display_name, boundary, head_revision, state,
      create_idempotency_key, create_request_digest, created_by, created_at, updated_at)
@@ -169,13 +171,14 @@ async function publicationCandidateFixture() {
     return reviews.appendReview(SCOPE, { expectedRevision, draft: { reviewId: randomUUID(), candidateId: candidate.candidateId, decision,
       ...(contentDigest === undefined ? {} : { contentDigest }), reason: 'reviewed fixture', evidenceRefs: [], actor: 'reviewer', recordedAt: new Date().toISOString() } }, EDITOR)
   }
-  const input = (ruleActions: readonly RuleActionCandidateVersion[] = []) => {
-    const base = committedInput(`pack-${workspaceId}`, '1.0.0', 'a', '1')
-    const { definition, asset } = assemblePack({ workspace, scopeRef: SCOPE, packId: `pack-${workspaceId}`, version: '1.0.0', definitionId: `${workspace.namespace}.definitions`,
+  const input = (ruleActions: readonly RuleActionCandidateVersion[] = [], version = '1.0.0') => {
+    const base = committedInput(`pack-${workspaceId}`, version, 'a', '1')
+    const { definition, asset } = assemblePack({ workspace, scopeRef: SCOPE, packId: `pack-${workspaceId}`, version, definitionId: `${workspace.namespace}.definitions`,
       projection: [candidate], ruleActions, report: { ...reportFixture('a'), workspaceId }, publishedAt: new Date().toISOString(), idempotencyKey: base.idempotencyKey, actor: 'editor' })
     const approvalPins = [{ candidateId: candidate.candidateId, contentDigest: candidate.contentDigest, reviewRevision: '1' }]
     const ruleActionPins = ruleActionPublicationPins(ruleActions)
-    return { ...base, definition, pack: { ...asset, approvalPins, ruleActionPins }, approvalPins, ruleActionPins }
+    return { ...base, definition, pack: { ...asset, approvalPins, ruleActionPins }, approvalPins, ruleActionPins,
+      outbox: { ...base.outbox, payload: { packRef: asset.packRef }, idempotencyKey: `pack-publish:${asset.namespace}:${asset.packRef.id}:${asset.packRef.version}` } }
   }
   return { candidate, workspace, reviews, candidates, decide, input, insert }
 }
@@ -323,6 +326,21 @@ describe('industry pack publication against real PostgreSQL', () => {
 })
 
 describe('publication ledger and candidate pins against real PostgreSQL', () => {
+  it('resolves an exact workspace predecessor when another workspace has a newer pack in the same namespace', async () => {
+    const own = await publicationCandidateFixture()
+    await own.decide('approve')
+    const first = await store.commitApprovedPack(SCOPE, own.input(), EDITOR)
+    const peer = await publicationCandidateFixture(own.workspace.namespace)
+    await peer.decide('approve')
+    await store.commitApprovedPack(SCOPE, peer.input([], '2.0.0'), EDITOR)
+    const workspace = await new PostgresAssetWorkspaceStore(controlDatabase).getWorkspace(SCOPE, own.workspace.workspaceId, EDITOR)
+    if (workspace === undefined) throw new Error('workspace missing')
+    const prior = await resolveDefinitionPredecessor({ publishedPacks: store, definitions: new PostgresSemanticDefinitionStore(controlDatabase) }, workspace, undefined, SCOPE, EDITOR)
+    expect(prior?.packRef).toEqual(first.asset.packRef)
+    expect(prior?.definition.ref).toEqual(first.asset.definitionRef)
+    expect(prior?.asset?.workspaceId).toBe(own.workspace.workspaceId)
+  })
+
   it('fails closed without a digest-pinned approve and preserves legacy review history', async () => {
     const h = await publicationCandidateFixture()
     await expect(store.commitApprovedPack(SCOPE, h.input(), EDITOR)).rejects.toMatchObject({ code: 'VERSION_CONFLICT' })

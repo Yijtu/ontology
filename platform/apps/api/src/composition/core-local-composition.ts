@@ -2152,6 +2152,7 @@ export async function createCoreLocalComposition(options: CoreLocalCompositionOp
       outputLimit: { maxTokens: 2_048 },
     })
     const definitionEditingService = new DefinitionCandidateEditingService({
+      publishedPacks: publishedPackStore,
       reviewableCandidates,
       reviews: publicationStore,
       workspaces: workspaceStore,

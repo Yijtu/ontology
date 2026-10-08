@@ -1,7 +1,6 @@
 import {
   IndustryAssetPublicationError,
   PublishedPackAssetStoreError,
-  definitionRecordOf,
   findIndustryPackViolations,
 } from '@ontology/contracts'
 import type {
@@ -24,10 +23,14 @@ import type {
   Uuid,
   VersionRef,
   ReviewableCandidateReader,
+  IndustryWorkspace,
+  IndustryPackCatalogue,
 } from '@ontology/contracts'
 import { canonicalJson, sha256DigestOf } from '../../profiles/canonical'
 import { currentDefinitionProjection } from '../definition-candidates/validation'
 import { assemblePack } from './pack-assembly'
+import { DefinitionPredecessorError, resolveDefinitionPredecessor } from './definition-predecessor'
+import type { DefinitionPredecessor } from './definition-predecessor'
 import { currentRuleActionProjection, definitionApprovalPins, industryValidationDigest, ruleActionPublicationPins } from './publication-pins'
 import type { CandidateApprovalReader } from './publication-pins'
 import { definitionRevisionStrategyProblem, diffDefinitionProjection } from '../definition-candidates/validation'
@@ -58,6 +61,7 @@ const CANDIDATE_PAGE = 250
 export const PACK_PUBLISHED_TOPIC = 'asset.pack.published'
 
 export interface IndustryAssetPublicationDependencies {
+  readonly baseCatalogue?: IndustryPackCatalogue
   readonly reviewableCandidates?: ReviewableCandidateReader
   readonly reviews?: CandidateApprovalReader
   readonly workspaces: IndustryWorkspaceStore
@@ -221,7 +225,7 @@ export class IndustryAssetPublicationService {
     })) throw new IndustryAssetPublicationError('VALIDATION_STALE', 'every enabled rule/action must have a semantic validation result for its pinned revision')
 
     const syntheticExampleRef = await this.#syntheticRef(report, scopeRef, workspaceId, ctx)
-    const previous = await this.#previousPublished(scopeRef, workspace.namespace, input.packId, input.version, ctx)
+    const previous = await this.#previousPublished(scopeRef, workspace, ctx)
     const compatibility = diffDefinitionProjection(projection, previous?.definition, {
       workspaceId, revision: expected, ...(previous === undefined ? {} : { publishedRef: previous.definition.ref }),
       ...(report.strategy === undefined ? {} : { strategy: report.strategy }),
@@ -234,8 +238,8 @@ export class IndustryAssetPublicationService {
       throw new IndustryAssetPublicationError('VALIDATION_BLOCKED', 'a breaking publication requires a valid revision strategy')
     }
     if (strategy !== undefined && previous !== undefined &&
-        ((strategy.kind === 'new_version' && input.version === previous.asset.packRef.version) ||
-         (strategy.kind === 'keep_independent' && `${workspace.namespace}.${input.packId}` === previous.asset.packRef.id) ||
+        ((strategy.kind === 'new_version' && input.version === previous.packRef.version) ||
+         (strategy.kind === 'keep_independent' && `${workspace.namespace}.${input.packId}` === previous.packRef.id) ||
          (strategy.kind === 'retire_previous' && canonicalJson(strategy.supersedesRef) !== canonicalJson(previous.definition.ref)) ||
          (strategy.supersedesRef !== undefined && canonicalJson(strategy.supersedesRef) !== canonicalJson(previous.definition.ref)))) {
       throw new IndustryAssetPublicationError('VALIDATION_BLOCKED', 'revision strategy does not match the predecessor or the new publication identity')
@@ -353,28 +357,17 @@ export class IndustryAssetPublicationService {
     return { id: set.exampleSetId, version: '1.0.0', digest: set.contentDigest, kind: 'dataset' }
   }
 
-  async #previousPublished(
-    scopeRef: ScopeRef,
-    namespace: string,
-    packId: string,
-    version: string,
-    ctx: ToolContext,
-  ): Promise<{ readonly definition: SemanticDefinitionRecord; readonly asset: PublishedPackAsset } | undefined> {
-    const published = await this.#deps.store.listPacks(scopeRef, { namespace, limit: DEFAULT_PAGE }, ctx)
-    const candidates = published
-      .filter((asset) => !(asset.packRef.id === packId && asset.packRef.version === version))
-      .sort((left, right) => (left.publishedAt < right.publishedAt ? 1 : left.publishedAt > right.publishedAt ? -1 : 0))
-    const prior = candidates[0]
-    if (prior === undefined) return undefined
-    const definitionVersion = await this.#deps.definitions.findVersion(
-      namespace,
-      prior.definitionRef.id,
-      prior.definitionRef.version,
-      scopeRef,
-      ctx,
-    )
-    if (definitionVersion === undefined) throw new IndustryAssetPublicationError('VALIDATION_STALE', 'the predecessor definition is unavailable for the semantic diff')
-    return { definition: definitionRecordOf(definitionVersion), asset: prior }
+  async #previousPublished(scopeRef: ScopeRef, workspace: IndustryWorkspace, ctx: ToolContext): Promise<DefinitionPredecessor | undefined> {
+    const drafts = workspace.latestPublishedPackRef === undefined
+      ? await this.#deps.workspaces.listDrafts(scopeRef, workspace.workspaceId, ctx) : []
+    const draft = drafts.find((entry) => entry.revision === workspace.headRevision) ?? drafts.at(-1)
+    try {
+      return await resolveDefinitionPredecessor({ definitions: this.#deps.definitions, publishedPacks: this.#deps.store,
+        ...(this.#deps.baseCatalogue === undefined ? {} : { baseCatalogue: this.#deps.baseCatalogue }) }, workspace, draft, scopeRef, ctx)
+    } catch (error) {
+      if (error instanceof DefinitionPredecessorError) throw new IndustryAssetPublicationError('VALIDATION_STALE', error.message, { cause: error })
+      throw error
+    }
   }
 
   async #guardExisting(

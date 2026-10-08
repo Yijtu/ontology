@@ -1,6 +1,5 @@
 import {
   assertDefinitionCandidatePayloadShape,
-  isVersionRef,
 } from '@ontology/contracts'
 import type {
   AssetCandidateBatch,
@@ -41,9 +40,12 @@ import type {
   VersionRef,
   CandidateSourceSpan,
   ReviewableCandidateReader,
+  IndustryPackCatalogue,
+  PublishedPackAssetStore,
 } from '@ontology/contracts'
 import { definitionApprovalPins } from '../publication/publication-pins'
 import type { CandidateApprovalReader } from '../publication/publication-pins'
+import { DefinitionPredecessorError, resolveDefinitionPredecessor } from '../publication/definition-predecessor'
 import { candidateIdFor, canonicalJson, sha256DigestOf } from '../../extraction/canonical'
 import { DefinitionCandidateError } from './errors'
 import { EMPTY_TERMINOLOGY } from './terminology'
@@ -84,6 +86,8 @@ export const DEFINITION_EDIT_POLICY_REF: VersionRef = {
 }
 
 export interface DefinitionCandidateEditingDependencies {
+  readonly publishedPacks?: Pick<PublishedPackAssetStore, 'findByRef'>
+  readonly baseCatalogue?: IndustryPackCatalogue
   readonly reviewableCandidates?: ReviewableCandidateReader
   readonly reviews?: CandidateApprovalReader
   readonly workspaces: IndustryWorkspaceStore
@@ -199,6 +203,7 @@ export class DefinitionCandidateEditingService {
   readonly #terminology: DefinitionTerminologySource
   readonly #editing: DefinitionEditingStore
   readonly #publishedDefinitions: PublishedDefinitionVersionReader | undefined
+  readonly #predecessorDependencies: Pick<DefinitionCandidateEditingDependencies, 'publishedPacks' | 'baseCatalogue' | 'publishedDefinitions'>
   readonly #now: () => string
   readonly #newId: () => string
 
@@ -210,6 +215,7 @@ export class DefinitionCandidateEditingService {
     this.#terminology = dependencies.terminology
     this.#editing = dependencies.editing
     this.#publishedDefinitions = dependencies.publishedDefinitions
+    this.#predecessorDependencies = dependencies
     this.#now = dependencies.now ?? (() => new Date().toISOString())
     this.#newId = dependencies.newId ?? (() => globalThis.crypto.randomUUID())
   }
@@ -809,18 +815,14 @@ export class DefinitionCandidateEditingService {
     draft: AssetDraftVersion,
     ctx: ToolContext,
   ): Promise<{ ref?: VersionRef; version?: SemanticDefinitionVersion } | undefined> {
-    const basePackRef = workspace.latestPublishedPackRef ?? draft.basePackRef
-    if (basePackRef === undefined || this.#publishedDefinitions === undefined) return undefined
-    if (!isVersionRef(basePackRef)) return undefined
-    const version = await this.#publishedDefinitions.findVersion(
-      workspace.namespace,
-      basePackRef.id,
-      basePackRef.version,
-      scopeOf(ctx),
-      ctx,
-    )
-    if (version === undefined) return undefined
-    return { ref: version.ref, version }
+    try {
+      const prior = await resolveDefinitionPredecessor({ ...this.#predecessorDependencies,
+        ...(this.#publishedDefinitions === undefined ? {} : { definitions: this.#publishedDefinitions }) }, workspace, draft, scopeOf(ctx), ctx)
+      return prior === undefined ? undefined : { ref: prior.definition.ref, version: prior.definition }
+    } catch (error) {
+      if (error instanceof DefinitionPredecessorError) throw new DefinitionCandidateError('VERSION_CONFLICT', error.message, { cause: error })
+      throw error
+    }
   }
 
   #adjudication(args: {

@@ -425,14 +425,14 @@ function compareCapabilities(previous: PackCapabilityStatus | undefined, next: P
 export function buildVersionDiff(args: {
   readonly fromPackRef?: VersionRef
   readonly toPackRef: VersionRef
-  readonly from?: { readonly definition: SemanticDefinitionRecord; readonly asset: PublishedPackAsset }
+  readonly from?: { readonly definition: SemanticDefinitionRecord; readonly asset?: PublishedPackAsset }
   readonly toDefinition: SemanticDefinitionRecord
   readonly toCapabilities: PackCapabilityStatus
 }): PackVersionDiff {
   const changes: PackVersionChange[] = [
     ...compareRecords(args.from?.definition, args.toDefinition, 'definition'),
-    ...compareActions(args.from?.asset.capabilities.actions, args.toCapabilities.actions),
-    ...compareCapabilities(args.from?.asset.capabilities, args.toCapabilities),
+    ...compareActions(args.from?.asset?.capabilities.actions, args.toCapabilities.actions),
+    ...compareCapabilities(args.from?.asset?.capabilities, args.toCapabilities),
   ]
   changes.sort((left, right) => {
     const leftKey = `${left.scope}\u0000${left.logicalId}\u0000${left.change}`
@@ -463,7 +463,7 @@ export interface AssemblePackArgs {
   readonly ruleActions: readonly RuleActionCandidateVersion[]
   readonly report: IndustryValidationReport
   readonly syntheticExampleRef?: ResourceRef
-  readonly previous?: { readonly definition: SemanticDefinitionRecord; readonly asset: PublishedPackAsset }
+  readonly previous?: { readonly definition: SemanticDefinitionRecord; readonly asset?: PublishedPackAsset; readonly packRef?: VersionRef }
   readonly publishedAt: string
   readonly idempotencyKey: string
   readonly actor: string
@@ -491,7 +491,7 @@ export function assemblePack(args: AssemblePackArgs): AssembledPack {
   const standardProvenance: StandardProvenance[] = [
     { standardRef: provenanceRef, provenanceKind: 'synthetic_assumption' },
   ]
-  const previousRef = args.previous?.asset.packRef
+  const previousRef = args.previous?.packRef ?? args.previous?.asset?.packRef
   const definition = buildDefinitionRecord({
     workspace: args.workspace,
     scopeRef: args.scopeRef,
@@ -576,7 +576,7 @@ export function assemblePack(args: AssemblePackArgs): AssembledPack {
     toPackRef: packRef,
     ...(args.previous === undefined
       ? {}
-      : { from: { definition: args.previous.definition, asset: args.previous.asset } }),
+      : { from: { definition: args.previous.definition, ...(args.previous.asset === undefined ? {} : { asset: args.previous.asset }) } }),
     toDefinition: definition,
     toCapabilities: capabilities,
   })

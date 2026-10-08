@@ -1,10 +1,11 @@
 import { randomUUID } from 'node:crypto'
-import { describe, expect, it } from 'vitest'
+import { describe, expect, it, vi } from 'vitest'
 import type {
   ActionDeclaration,
   AppendAssetDraftInput,
   AssetCandidateBatch,
   AssetCandidateVersion,
+  AssetDraftVersion,
   DefinitionCandidatePayload,
   IndustryValidationReport,
   IndustryValidationReportStore,
@@ -19,6 +20,7 @@ import type {
   ToolContext,
   Uuid,
   VersionRef,
+  IndustryPackCatalogue,
 } from '@ontology/contracts'
 import { findIndustryPackViolations, findEmbeddedSecretViolations } from '@ontology/contracts'
 import {
@@ -40,6 +42,7 @@ import {
   StoreBackedIndustryPackCatalogue,
   buildVersionDiff,
   buildDefinitionRecord,
+  resolveDefinitionPredecessor,
 } from '@ontology/application'
 import { InMemorySemanticDefinitionStore, InMemorySemanticPublicationStore } from '@ontology/semantic-engine'
 import { toolContext } from './component-registry-fixtures'
@@ -110,9 +113,13 @@ class FixtureValidationReportStore implements IndustryValidationReportStore {
 
 class FixtureWorkspaceStore implements IndustryWorkspaceStore {
   readonly #workspaces = new Map<string, IndustryWorkspace>()
+  readonly #drafts = new Map<string, AssetDraftVersion>()
 
   seed(workspace: IndustryWorkspace): void {
     this.#workspaces.set(workspace.workspaceId, workspace)
+  }
+  seedDraft(draft: AssetDraftVersion): void {
+    this.#drafts.set(draft.workspaceId, draft)
   }
 
   advanceHead(workspaceId: Uuid, revision: RevisionString, packRef: VersionRef): void {
@@ -137,8 +144,10 @@ class FixtureWorkspaceStore implements IndustryWorkspaceStore {
     return undefined
   }
 
-  async listDrafts(): Promise<never[]> {
-    return []
+  async listDrafts(_scope: ScopeRef, workspaceId: Uuid): Promise<AssetDraftVersion[]> {
+    void _scope
+    const draft = this.#drafts.get(workspaceId)
+    return draft === undefined ? [] : [draft]
   }
 
   async appendDraft(_s: ScopeRef, _w: Uuid, _i: AppendAssetDraftInput, _c: ToolContext): Promise<never> {
@@ -312,7 +321,7 @@ interface Harness {
   readonly ruleActions: InMemoryRuleActionCandidateStore
 }
 
-function harness(): Harness {
+function harness(baseCatalogue?: IndustryPackCatalogue): Harness {
   let tick = 0
   const now = (): string => {
     tick += 1
@@ -336,6 +345,7 @@ function harness(): Harness {
   const reports = new FixtureValidationReportStore()
 
   const service = new IndustryAssetPublicationService({
+    ...(baseCatalogue === undefined ? {} : { baseCatalogue }),
     workspaces,
     reviews, reviewableCandidates,
     validations: reports,
@@ -416,8 +426,12 @@ function harness(): Harness {
   const seedReport = async (report: IndustryValidationReport): Promise<void> => {
     const projection = currentDefinitionProjection(await definitionCandidates.listCandidates(SCOPE, WORKSPACE_ID, {}, EDITOR))
     const approvals = await definitionApprovalPins(projection, SCOPE, EDITOR, reviewableCandidates, reviews)
-    const prior = (await published.listPacks(SCOPE, { namespace: 'demo-industry' }, EDITOR)).at(-1)
-    const previous = prior === undefined ? undefined : await definitions.findVersion('demo-industry', prior.definitionRef.id, prior.definitionRef.version, SCOPE, EDITOR)
+    const workspace = await workspaces.getWorkspace(SCOPE, WORKSPACE_ID)
+    if (workspace === undefined) throw new Error('fixture workspace is missing')
+    const draft = (await workspaces.listDrafts(SCOPE, WORKSPACE_ID)).at(-1)
+    const prior = await resolveDefinitionPredecessor({ definitions, publishedPacks: published,
+      ...(baseCatalogue === undefined ? {} : { baseCatalogue }) }, workspace, draft, SCOPE, EDITOR)
+    const previous = prior?.definition
     const actionIds = new Map((await ruleActions.list(SCOPE, WORKSPACE_ID, {}, EDITOR)).filter((candidate) => candidate.payload.kind === 'action').map((candidate) => [candidate.logicalId, candidate.candidateId]))
     const pinned: IndustryValidationReport = { ...report,
       actions: report.actions.map((result) => ({ ...result, candidateId: actionIds.get(result.actionId) ?? result.candidateId })),
@@ -463,6 +477,76 @@ function publishFixture(h: Harness, report: IndustryValidationReport, overrides:
 }
 
 describe('content-pinned publication approvals', () => {
+  it('uses the workspace predecessor even when a namespace peer is newer and the list page omits its own version', async () => {
+    const own = harness()
+    const first = await publishFixture(own, await seedAll(own))
+    const peer = harness()
+    const peerAsset = await publishFixture(peer, await seedAll(peer), { packId: 'peer-pack', version: '2.0.0' })
+    const report = validationReport({ revision: '2' })
+    await own.seedReport(report)
+    const list = vi.spyOn(own.published, 'listPacks').mockResolvedValue([peerAsset])
+    const find = vi.spyOn(own.published, 'findByRef')
+    try {
+      const next = await publishFixture(own, report, { version: '3.0.0' })
+      expect(next.diff.fromPackRef).toEqual(first.packRef)
+      expect(find).toHaveBeenCalledWith(SCOPE, first.packRef, EDITOR)
+      expect(next.diff.breakingChanges).toEqual([])
+    } finally {
+      list.mockRestore()
+      find.mockRestore()
+    }
+  })
+
+  it('rejects a workspace pointer with the wrong digest instead of choosing a namespace fallback', async () => {
+    const h = harness()
+    const first = await publishFixture(h, await seedAll(h))
+    const report = validationReport({ revision: '2' })
+    await h.seedReport(report)
+    const workspace = (await h.workspaces.getWorkspace(SCOPE, WORKSPACE_ID))!
+    h.workspaces.seed({ ...workspace, latestPublishedPackRef: { ...first.packRef, digest: digest('b') } })
+    await expect(publishFixture(h, report, { version: '2.0.0' })).rejects.toMatchObject({ code: 'VALIDATION_STALE' })
+  })
+
+  it('publishes against its exact current pointer after the predecessor falls outside a 100-version catalogue page', async () => {
+    const h = harness()
+    let current = await publishFixture(h, await seedAll(h))
+    for (let version = 2; version <= 101; version += 1) {
+      const report = validationReport({ revision: String(version) })
+      await h.seedReport(report)
+      current = await publishFixture(h, report, { version: `${String(version)}.0.0` })
+    }
+    const page = await h.published.listPacks(SCOPE, { namespace: 'demo-industry', limit: 100 }, EDITOR)
+    expect(page.map((asset) => asset.packRef)).not.toContainEqual(current.packRef)
+    const report = validationReport({ revision: '102' })
+    await h.seedReport(report)
+    const next = await publishFixture(h, report, { version: '102.0.0' })
+    expect(next.diff.fromPackRef).toEqual(current.packRef)
+  })
+
+  it.each(['definition', 'catalogue'] as const)('resolves an exact static %s base pin for initial publication', async (kind) => {
+    const source = harness()
+    const sourceAsset = await publishFixture(source, await seedAll(source))
+    const version = await source.definitions.findVersion('demo-industry', sourceAsset.definitionRef.id, sourceAsset.definitionRef.version, SCOPE, EDITOR)
+    if (version === undefined) throw new Error('base definition missing')
+    const baseCatalogue: IndustryPackCatalogue = { listEntries: async () => [{ kind: 'registered_pack', asset: sourceAsset.packAsset }],
+      findPack: async () => sourceAsset.packAsset }
+    const h = harness(kind === 'catalogue' ? baseCatalogue : undefined)
+    h.seedWorkspace()
+    await h.seedDefinitionCandidates()
+    await h.seedAction()
+    await h.definitions.insertVersion(SCOPE, version, { digest: version.ref.digest, payloadDigest: DIGEST,
+      idempotencyKey: `base-${randomUUID()}`, actor: 'seed', occurredAt: h.clock.now() }, EDITOR)
+    const basePackRef = kind === 'catalogue' ? sourceAsset.packRef : version.ref
+    h.workspaces.seedDraft({ workspaceId: WORKSPACE_ID, revision: '1', digest: DIGEST, documentSetRef: resourceRef(), candidateRefs: [], basePackRef })
+    const report = validationReport()
+    await h.seedReport(report)
+    const next = await publishFixture(h, report, { version: '2.0.0' })
+    expect(next.diff.fromPackRef).toEqual(basePackRef)
+    expect(next.diff.breakingChanges).toEqual([])
+    const definition = await h.definitions.findVersion('demo-industry', next.definitionRef.id, next.definitionRef.version, SCOPE, EDITOR)
+    expect(definition?.baseRef).toEqual(basePackRef)
+  })
+
   it.each(['failed', 'pending_confirmation', 'rejected'] as const)('refuses an approved candidate in %s state', async (state) => {
     const h = harness()
     const report = await seedAll(h)

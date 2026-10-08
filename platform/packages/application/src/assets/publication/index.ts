@@ -28,3 +28,5 @@ export type { InMemoryPublishedPackAssetStoreDependencies } from './in-memory-st
 export { definitionApprovalPins, currentRuleActionProjection, ruleActionPublicationPins, industryValidationDigest } from './publication-pins'
 export type { CandidateApprovalReader } from './publication-pins'
 export { createPackPublicationGuard } from './publication-pins'
+export { resolveDefinitionPredecessor, DefinitionPredecessorError } from './definition-predecessor'
+export type { DefinitionPredecessor } from './definition-predecessor'

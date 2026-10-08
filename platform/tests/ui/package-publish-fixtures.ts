@@ -12,6 +12,7 @@ import {
   industryValidationDigest,
   currentRuleActionProjection,
   ruleActionPublicationPins,
+  resolveDefinitionPredecessor,
   InMemoryIndustryValidationReportStore,
   InMemoryJobStore,
   InMemoryProjectReadinessStore,
@@ -359,8 +360,9 @@ export async function startPackagePublishHarness(): Promise<PackagePublishHarnes
     if (workspace === undefined) throw new Error('workspace not found')
     const projection = currentDefinitionProjection(await candidateStore.listCandidates(WORKSPACE_SCOPE, workspaceId, { limit: 250 }, ctx))
     const approved = await definitionApprovalPins(projection, WORKSPACE_SCOPE, ctx, reviewableCandidates, reviews)
-    const prior = (await published.listPacks(WORKSPACE_SCOPE, { namespace: workspace.namespace }, ctx)).at(-1)
-    const previous = prior === undefined ? undefined : await definitions.findVersion(workspace.namespace, prior.definitionRef.id, prior.definitionRef.version, WORKSPACE_SCOPE, ctx)
+    const draft = (await workspaceStore.listDrafts(WORKSPACE_SCOPE, workspaceId, ctx)).at(-1)
+    const prior = await resolveDefinitionPredecessor({ definitions, publishedPacks: published }, workspace, draft, WORKSPACE_SCOPE, ctx)
+    const previous = prior?.definition
     return { ...definitionValidationReport(workspaceId), revision: workspace.headRevision,
       checkedCandidateIds: projection.map((candidate) => candidate.candidateId), approvalPins: approved.pins,
       blockers: approved.blockers, publishable: approved.blockers.length === 0,
