@@ -74,7 +74,8 @@ export function isRuleDecimalValue(value: unknown): value is DecimalQuantity {
 
 export function isRuleScalarDecimalValue(value: unknown): value is RuleScalarDecimalValue {
   if (typeof value !== 'object' || value === null || Array.isArray(value)) return false
-  return 'kind' in value && value.kind === 'scalar_decimal' && 'amount' in value && !('unit' in value) &&
+  const keys = Object.keys(value)
+  return keys.length === 2 && keys.every((key) => key === 'kind' || key === 'amount') && 'kind' in value && value.kind === 'scalar_decimal' && 'amount' in value &&
     typeof value.amount === 'string' && value.amount.length <= 64 && /^-?(?:0|[1-9]\d*)(?:\.\d+)?$/.test(value.amount) && canonicalDecimalString(value.amount) !== undefined
 }
 

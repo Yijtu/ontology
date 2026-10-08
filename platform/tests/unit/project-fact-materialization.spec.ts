@@ -48,6 +48,7 @@ describe('mapped fact boundary', () => {
     expect(isRuleScalarDecimalValue({ kind: 'scalar_decimal', amount: '9007199254740993' })).toBe(true)
     expect(isRuleScalarDecimalValue({ kind: 'scalar_decimal', amount: '1e4' })).toBe(false)
     expect(isRuleScalarDecimalValue({ kind: 'scalar_decimal', amount: '1', unit: 'kW' })).toBe(false)
+    expect(isRuleScalarDecimalValue({ kind: 'scalar_decimal', amount: '1', extra: true })).toBe(false)
     expect(isRuleScalarDecimalValue({ kind: 'scalar_decimal', amount: true })).toBe(false)
     expect(evaluateFilter({ fieldRef: 'reading', op: 'gt', values: ['9007199254740992'] }, { kind: 'scalar_decimal', amount: '9007199254740993' })).toBe(true)
     expect(evaluateFilter({ fieldRef: 'label', op: 'gt', values: ['9007199254740992'] }, '9007199254740993')).toBeUndefined()
