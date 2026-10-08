@@ -68,6 +68,10 @@ export type {
 } from './types'
 export {
   ComputeExecutionError,
+  assertComputeHandlerArtifact,
+  computeBuildArtifactDigest,
+  createArtifactComputeHandlers,
+  verifyComputeBuildArtifact,
   EXAMPLE_ALGORITHM_REF,
   EXAMPLE_INPUT_SCHEMA_VERSION,
   EXAMPLE_OPERATION_LIMITS,
@@ -83,6 +87,9 @@ export {
   registeredOperationDigest,
 } from './compute'
 export type {
+  ArtifactComputeHandlerOptions,
+  ExampleComputeArtifactOptions,
+  ComputeBuildArtifactManifest,
   ComputeExecutionErrorCode,
   ComputeExecutionInput,
   ComputeExecutionResult,

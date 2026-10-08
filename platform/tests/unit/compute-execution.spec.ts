@@ -1,5 +1,11 @@
+import { exampleComputeArtifact } from '../helpers/example-compute-artifact'
 import { createHash, randomUUID } from 'node:crypto'
-import { describe, expect, it } from 'vitest'
+import { mkdtemp, readFile, mkdir, writeFile, rm } from 'node:fs/promises'
+import { tmpdir } from 'node:os'
+import { join } from 'node:path'
+import { fileURLToPath, pathToFileURL } from 'node:url'
+import { afterAll, describe, expect, it } from 'vitest'
+import { buildComputeArtifact } from '../../scripts/build-compute-artifact.mjs'
 import { createToolContext } from '@ontology/contracts'
 import type {
   ActionCapabilityBinding,
@@ -28,6 +34,10 @@ import type {
 } from '@ontology/contracts'
 import {
   ComputeExecutionError,
+  computeBuildArtifactDigest,
+  createScopedArtifactReader,
+  createArtifactComputeHandlers,
+  verifyComputeBuildArtifact,
   RegisteredComputeExecutionService,
   computeLogicalKeyDigest,
   createExampleComputeHandlers,
@@ -36,7 +46,7 @@ import {
   registeredOperationDigest,
   SyntheticActionTrial,
 } from '@ontology/tool-services'
-import type { RegisteredComputeExecutionDependencies, ToolSchemaValidator } from '@ontology/tool-services'
+import type { ArtifactComputeHandlerOptions, ComputeBuildArtifactManifest, RegisteredComputeExecutionDependencies, ToolSchemaValidator } from '@ontology/tool-services'
 import { sha256DigestOf } from '@ontology/core'
 
 const TENANT = '11111111-1111-4111-8111-111111111111'
@@ -249,9 +259,9 @@ function buildHarness(options?: {
   const bindings = new MemoryBindingsStore()
   const results = new MemoryResultStore()
   const executions = { count: 0, requests: [] as ComputeOperationRequest[] }
-  const baseHandlers = options?.handlers ?? createExampleComputeHandlers()
+  const baseHandlers = options?.handlers ?? createExampleComputeHandlers(exampleComputeArtifact)
   const handlers: ComputeOperationHandler[] = baseHandlers.map((handler) => ({
-    operationRef: handler.operationRef,
+    ...handler,
     async execute(request: ComputeOperationRequest) {
       executions.count += 1
       executions.requests.push(request)
@@ -259,7 +269,7 @@ function buildHarness(options?: {
     },
   }))
   const deps: RegisteredComputeExecutionDependencies = {
-    operations: options?.registry ?? exampleOperationRegistry(),
+    operations: options?.registry ?? exampleOperationRegistry(exampleComputeArtifact),
     handlers,
     artifacts,
     reader: new MemoryReader(artifacts),
@@ -286,7 +296,7 @@ function buildHarness(options?: {
 }
 
 function executionInput(harness: Harness, overrides: Partial<Parameters<RegisteredComputeExecutionService['execute']>[0]> = {}) {
-  const operation = exampleRegisteredOperation()
+  const operation = exampleRegisteredOperation(exampleComputeArtifact)
   const parameters = {}
   return {
     taskBindingRef: { id: 'task.example.aggregate', version: '1.0.0', digest: sha256DigestOf('task.example.aggregate@1.0.0') },
@@ -391,10 +401,10 @@ describe('registered compute execution', () => {
 
   it('records a failure attempt and allows a bounded retry of the same logical action', async () => {
     let failFirst = true
-    const [example] = createExampleComputeHandlers()
+    const [example] = createExampleComputeHandlers(exampleComputeArtifact)
     if (example === undefined) throw new Error('the example handler is missing')
     const flaky: ComputeOperationHandler = {
-      operationRef: exampleRegisteredOperation().operationRef,
+      ...example,
       async execute(request: ComputeOperationRequest) {
         if (failFirst) {
           failFirst = false
@@ -457,7 +467,7 @@ describe('registered compute execution', () => {
 })
 
 function syntheticTrialInput(executable: boolean): ActionTrialInput {
-  const operation = exampleRegisteredOperation()
+  const operation = exampleRegisteredOperation(exampleComputeArtifact)
   const declaration: ActionDeclaration = {
     actionId: 'action.example.aggregate',
     displayName: 'Aggregate example records',
@@ -503,7 +513,7 @@ describe('synthetic action trial connected to a registered compute action', () =
     const harness = buildHarness()
     const trial = new SyntheticActionTrial({
       execution: harness.service,
-      operations: exampleOperationRegistry(),
+      operations: exampleOperationRegistry(exampleComputeArtifact),
       artifacts: harness.artifacts,
       now: () => NOW,
     })
@@ -516,7 +526,7 @@ describe('synthetic action trial connected to a registered compute action', () =
     const harness = buildHarness()
     const trial = new SyntheticActionTrial({
       execution: harness.service,
-      operations: exampleOperationRegistry(),
+      operations: exampleOperationRegistry(exampleComputeArtifact),
       artifacts: harness.artifacts,
       now: () => NOW,
     })
@@ -532,5 +542,208 @@ describe('compute execution error surface', () => {
     expect(new ComputeExecutionError('COMPUTE_FUNCTION_FAILED', 'x').retryable).toBe(true)
     expect(new ComputeExecutionError('COMPUTE_EXECUTION_IN_PROGRESS', 'x').retryable).toBe(true)
     expect(new ComputeExecutionError('COMPUTE_FUNCTION_UNBOUND', 'x').platformCode).toBe('CAPABILITY_NOT_CONFIGURED')
+  })
+})
+
+const fixtureRoots: string[] = []
+afterAll(async () => {
+  for (const root of fixtureRoots) await rm(root, { recursive: true, force: true })
+})
+
+async function buildArtifactFixture(change?: 'handler' | 'dependency') {
+  const root = await mkdtemp(join(tmpdir(), 'ontology-compute-artifact-'))
+  fixtureRoots.push(root)
+  const directory = 'packages/tool-services/src/compute'
+  await mkdir(join(root, directory), { recursive: true })
+  for (const name of ['example-handler.ts', 'example-aggregation.ts', 'errors.ts']) {
+    let source = await readFile(new URL(`../../packages/tool-services/src/compute/${name}`, import.meta.url), 'utf8')
+    if (change === 'handler' && name === 'example-handler.ts') source = source.replace('returned: aggregation.returned', 'returned: aggregation.returned + 1')
+    if (change === 'dependency' && name === 'example-aggregation.ts') source = source.replace('quantity += parsed', 'quantity += parsed * 2n')
+    await writeFile(join(root, directory, name), source)
+  }
+  const built = await buildComputeArtifact({ root, entryPoint: `${directory}/example-handler.ts`, allowedSourceRoots: [directory] })
+  const modulePath = join(root, 'handler.mjs')
+  await writeFile(modulePath, built.content)
+  // This import is confined to generated test fixtures. Production uses the finite static import.
+  const module: { readonly createHandlers: ArtifactComputeHandlerOptions['factory'] } = await import(pathToFileURL(modulePath).href)
+  const handlers = createArtifactComputeHandlers({ manifest: built.manifest, readArtifact: () => built.content, factory: module.createHandlers })
+  const original = exampleRegisteredOperation(exampleComputeArtifact)
+  const operation = { ...original, handlerDigest: built.manifest.handlerDigest, handlerRef: { ...original.handlerRef, digest: built.manifest.handlerDigest } }
+  const registry: OperationRegistry = { ...exampleOperationRegistry(exampleComputeArtifact), registryVersion: '2.0.0', registryDigest: sha256DigestOf(canonicalOf([operation])), operations: [operation] }
+  return { ...built, root, handlers, operation, registry }
+}
+
+describe('compute build artifact pinning', () => {
+  it('reproduces the checked-in artifact in another directory and includes the controlled dependency closure', async () => {
+    const fixture = await buildArtifactFixture()
+    expect(fixture.manifest.handlerDigest).toBe(exampleRegisteredOperation(exampleComputeArtifact).handlerDigest)
+    const platformRoot = fileURLToPath(new URL('../../', import.meta.url))
+    const rebuilt = await buildComputeArtifact({
+      root: platformRoot,
+      entryPoint: 'packages/tool-services/src/compute/example-handler.ts',
+      allowedSourceRoots: ['packages/tool-services/src/compute'],
+    })
+    expect(rebuilt.content).toEqual(fixture.content)
+    for (const entry of fixture.manifest.dependencies) {
+      const source = await readFile(join(fixture.root, entry.sourceId), 'utf8')
+      await writeFile(join(fixture.root, entry.sourceId), source.replace(/\r?\n/gu, '\r\n'))
+    }
+    const crlfBuild = await buildComputeArtifact({
+      root: fixture.root,
+      entryPoint: 'packages/tool-services/src/compute/example-handler.ts',
+      allowedSourceRoots: ['packages/tool-services/src/compute'],
+    })
+    expect(crlfBuild.content).toEqual(rebuilt.content)
+    expect(crlfBuild.manifest).toEqual(rebuilt.manifest)
+    expect(fixture.manifest.dependencies.map((entry) => entry.sourceId)).toContain('packages/tool-services/src/compute/example-aggregation.ts')
+    expect(verifyComputeBuildArtifact(fixture.manifest, fixture.content)).toEqual(fixture.manifest)
+  })
+
+  it.each(['handler', 'dependency'] as const)('changes the actual %s without changing version labels and refuses the old binding', async (change) => {
+    const fixture = await buildArtifactFixture(change)
+    const original = exampleRegisteredOperation(exampleComputeArtifact)
+    expect(fixture.operation.operationRef).toEqual(original.operationRef)
+    expect(fixture.operation.handlerRef.version).toBe(original.handlerRef.version)
+    expect(fixture.manifest.handlerDigest).not.toBe(original.handlerDigest)
+    const harness = buildHarness({ handlers: fixture.handlers, registry: fixture.registry })
+    await expect(harness.service.execute(executionInput(harness), ctxFor())).rejects.toMatchObject({ code: 'COMPUTE_CONTRACT_MISMATCH' })
+    expect(harness.executions.count).toBe(0)
+    expect(harness.invocations.slots.size).toBe(0)
+
+    const result = await harness.service.execute(executionInput(harness, { registeredOperationDigest: registeredOperationDigest(fixture.operation) }), ctxFor())
+    expect(result.artifact.registeredOperationDigest).toBe(registeredOperationDigest(fixture.operation))
+    expect(result.invocation.registeredOperationDigest).toBe(result.artifact.registeredOperationDigest)
+    expect(result.artifact.algorithmVersion.digest).toBe(fixture.manifest.handlerDigest)
+    expect(result.artifact.coverage.returned).toBe(change === 'handler' ? 3 : 2)
+    if (change === 'dependency') expect(result.payload?.computation?.metrics?.['total_quantity']).toEqual({ amount: '29', unit: 'each' })
+  })
+
+  it('rejects new executable code under the old registry, missing artifacts, and inconsistent manifests', async () => {
+    const fixture = await buildArtifactFixture('dependency')
+    const harness = buildHarness({ handlers: fixture.handlers })
+    await expect(harness.service.execute(executionInput(harness), ctxFor())).rejects.toMatchObject({ code: 'COMPUTE_CONTRACT_MISMATCH' })
+    expect(harness.executions.count).toBe(0)
+    const factory: ArtifactComputeHandlerOptions['factory'] = () => { throw new Error('must not mint a handler') }
+    expect(() => createArtifactComputeHandlers({ manifest: fixture.manifest, readArtifact: () => { throw new Error('missing file') }, factory })).toThrowError(/unavailable/u)
+    expect(() => createArtifactComputeHandlers({ manifest: undefined, readArtifact: () => fixture.content, factory })).toThrowError(/manifest/u)
+    expect(() => verifyComputeBuildArtifact(fixture.manifest, new Uint8Array([1]))).toThrowError(/pinned manifest/u)
+    expect(() => verifyComputeBuildArtifact({ ...fixture.manifest, handlerDigest: DIGEST }, fixture.content)).toThrowError(/pinned manifest/u)
+    const unpinned = buildHarness({ handlers: fixture.handlers.map((handler) => ({ operationRef: handler.operationRef, execute: handler.execute })) })
+    await expect(unpinned.service.execute(executionInput(unpinned), ctxFor())).rejects.toMatchObject({ code: 'COMPUTE_CONTRACT_MISMATCH' })
+    expect(unpinned.executions.count).toBe(0)
+  })
+
+  it('preserves classified input errors across the compiled artifact boundary', async () => {
+    const harness = buildHarness()
+    harness.artifacts.blobs.set(harness.inputRef.digest, new TextEncoder().encode('{'))
+    await expect(harness.service.execute(executionInput(harness), ctxFor())).rejects.toMatchObject({ code: 'COMPUTE_INPUT_MISSING', retryable: false })
+    expect([...harness.invocations.slots.values()][0]?.record.state).toBe('failed')
+  })
+
+  it('rechecks the artifact on invocation and on completed read-back', async () => {
+    const fixture = await buildArtifactFixture()
+    let bytes: Uint8Array = fixture.content
+    const factory: ArtifactComputeHandlerOptions['factory'] = () => fixture.handlers
+    const handlers = createArtifactComputeHandlers({ manifest: fixture.manifest, readArtifact: () => bytes, factory })
+    const harness = buildHarness({ handlers })
+    const input = executionInput(harness)
+    await harness.service.execute(input, ctxFor())
+    bytes = new Uint8Array([1])
+    await expect(harness.service.execute(input, ctxFor())).rejects.toMatchObject({ code: 'COMPUTE_CONTRACT_MISMATCH' })
+    expect(harness.executions.count).toBe(1)
+  })
+
+  it('snapshots the manifest so caller mutation cannot replace an existing artifact pin', async () => {
+    const fixture = await buildArtifactFixture()
+    const changed = await buildArtifactFixture('dependency')
+    const manifest = { ...fixture.manifest }
+    let bytes: Uint8Array = fixture.content
+    const handlers = createArtifactComputeHandlers({ manifest, readArtifact: () => bytes, factory: () => fixture.handlers })
+    const harness = buildHarness({ handlers })
+    Object.assign(manifest, changed.manifest)
+    bytes = changed.content
+    await expect(harness.service.execute(executionInput(harness), ctxFor())).rejects.toMatchObject({ code: 'COMPUTE_CONTRACT_MISMATCH' })
+    expect(harness.executions.count).toBe(0)
+  })
+
+  it('keeps pre-start cancellation terminal and keeps invocation scope separate', async () => {
+    const harness = buildHarness()
+    const controller = new AbortController()
+    controller.abort()
+    await expect(harness.service.execute(executionInput(harness, { signal: controller.signal }), ctxFor())).rejects.toMatchObject({ code: 'COMPUTE_FUNCTION_FAILED', platformCode: 'DEADLINE_EXCEEDED' })
+    expect(harness.executions.count).toBe(0)
+    const recorded = [...harness.invocations.slots.values()][0]?.record
+    expect(recorded?.state).toBe('cancelled')
+    expect(harness.results.entries.size).toBe(0)
+    await expect(harness.service.execute(executionInput(harness), ctxFor(TENANT, 'other-space'))).resolves.toMatchObject({ reused: false })
+    expect(harness.invocations.slots.size).toBe(2)
+  })
+
+  it('refuses same-id inputs with a different version, digest or kind', async () => {
+    const harness = buildHarness()
+    const reader = createScopedArtifactReader(new MemoryReader(harness.artifacts), [harness.inputRef])
+    for (const changed of [{ digest: DIGEST }, { version: '2' }, { kind: 'document' as const }]) {
+      await expect(reader.read({ approvedInputRefs: [{ ...harness.inputRef, ...changed }] }, ctxFor())).rejects.toMatchObject({ code: 'RESOURCE_NOT_ALLOWED' })
+    }
+    await expect(reader.read({ approvedInputRefs: [harness.inputRef] }, ctxFor())).resolves.toEqual(inputBody())
+  })
+
+  it('does not complete a cancelled invocation when a non-cooperative artifact handler returns late', async () => {
+    const harness = buildHarness()
+    let release: (() => void) | undefined
+    const blocked = new Promise<void>((resolve) => { release = resolve })
+    const original = harness.artifacts.putBytes.bind(harness.artifacts)
+    let started: (() => void) | undefined
+    const arrived = new Promise<void>((resolve) => { started = resolve })
+    harness.artifacts.putBytes = async (request) => {
+      started?.()
+      await blocked
+      return original(request)
+    }
+    const controller = new AbortController()
+    const pending = harness.service.execute(executionInput(harness, { signal: controller.signal }), ctxFor())
+    const rejected = expect(pending).rejects.toMatchObject({ code: 'COMPUTE_FUNCTION_FAILED', platformCode: 'DEADLINE_EXCEEDED' })
+    await arrived
+    controller.abort()
+    await rejected
+    release?.()
+    await blocked
+    await new Promise<void>((resolve) => { setTimeout(resolve, 0) })
+    expect([...harness.invocations.slots.values()][0]?.record.state).toBe('cancelled')
+    expect(harness.results.entries.size).toBe(0)
+    expect(harness.bindings.entries.size).toBe(0)
+  })
+
+  it('rejects corrupt archived handler/operation pins before replay', async () => {
+    const harness = buildHarness()
+    const input = executionInput(harness)
+    const result = await harness.service.execute(input, ctxFor())
+    if (result.invocation.resultRef === undefined) throw new Error('missing result ref')
+    harness.results.entries.set(result.invocation.resultRef.id, { ...result.artifact, registeredOperationDigest: DIGEST })
+    await expect(harness.service.execute(input, ctxFor())).rejects.toMatchObject({ code: 'COMPUTE_CONTRACT_MISMATCH' })
+    expect(harness.executions.count).toBe(1)
+  })
+
+  it('fails the build on uncontrolled runtime imports', async () => {
+    const fixture = await buildArtifactFixture()
+    const entryPoint = 'packages/tool-services/src/compute/example-handler.ts'
+    await writeFile(join(fixture.root, entryPoint), "import { readFileSync } from 'node:fs'; export const bad = readFileSync('secret')")
+    await expect(buildComputeArtifact({ root: fixture.root, entryPoint, allowedSourceRoots: ['packages/tool-services/src/compute'] })).rejects.toThrowError(/outside the controlled source closure/u)
+  })
+
+  it('rejects mismatched handlerRef and handlerDigest even when both have valid digest syntax', async () => {
+    const operation = { ...exampleRegisteredOperation(exampleComputeArtifact), handlerRef: { ...exampleRegisteredOperation(exampleComputeArtifact).handlerRef, digest: DIGEST } }
+    const harness = buildHarness({ registry: { ...exampleOperationRegistry(exampleComputeArtifact), operations: [operation] } })
+    await expect(harness.service.execute(executionInput(harness, { registeredOperationDigest: registeredOperationDigest(operation) }), ctxFor())).rejects.toMatchObject({ code: 'COMPUTE_CONTRACT_MISMATCH' })
+    expect(harness.executions.count).toBe(0)
+  })
+
+  it('rejects duplicate or unsafe dependency paths in a recomputed manifest', async () => {
+    const fixture = await buildArtifactFixture()
+    const { handlerDigest, ...body } = fixture.manifest
+    expect(computeBuildArtifactDigest(body)).toBe(handlerDigest)
+    const altered = { ...body, dependencies: [{ sourceId: '../secret', digest: DIGEST }] }
+    const manifest: ComputeBuildArtifactManifest = { ...altered, handlerDigest: computeBuildArtifactDigest(altered) }
+    expect(() => verifyComputeBuildArtifact(manifest, fixture.content)).toThrowError(/manifest/u)
   })
 })

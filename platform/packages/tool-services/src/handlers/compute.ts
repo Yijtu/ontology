@@ -12,6 +12,7 @@ import { computeOperationKey } from '@ontology/contracts'
 import { ToolGatewayError } from '../errors'
 import { isRecord } from '../envelope'
 import type { ToolExecutionOutcome } from '../types'
+import { raceWithAbort } from '../cancellation'
 
 /**
  * `data_query.kind=compute` dispatch (ADR-11, C3/C4).
@@ -119,11 +120,12 @@ export function createScopedArtifactReader(
   inner: ScopedArtifactReader,
   approved: readonly ResourceRef[],
 ): ScopedArtifactReader {
-  const allowed = new Set(approved.map((ref) => ref.id))
+  const key = (ref: ResourceRef): string => JSON.stringify([ref.kind, ref.id, ref.version, ref.digest])
+  const allowed = new Set(approved.map(key))
   return {
     async read(request: ScopedArtifactReaderRequest, ctx: ToolContext): Promise<Uint8Array> {
       for (const ref of request.approvedInputRefs) {
-        if (!allowed.has(ref.id)) {
+        if (!allowed.has(key(ref))) {
           throw new ToolGatewayError(
             'RESOURCE_NOT_ALLOWED',
             `the compute handler tried to read ${ref.id}, which is not an approved input`,
@@ -179,7 +181,7 @@ export async function runComputeWithBudget(
         )
       }, effectiveMs)
     })
-    return await Promise.race([work({ signal: controller.signal }), timeout])
+    return await raceWithAbort(Promise.race([work({ signal: controller.signal }), timeout]), outerSignal, 'the compute operation was cancelled')
   } finally {
     if (timer !== undefined) clearTimeout(timer)
     outerSignal.removeEventListener('abort', forwardAbort)

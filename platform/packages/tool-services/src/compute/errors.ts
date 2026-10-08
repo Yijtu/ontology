@@ -55,5 +55,12 @@ export class ComputeExecutionError extends Error {
 }
 
 export function isComputeExecutionError(value: unknown): value is ComputeExecutionError {
-  return value instanceof ComputeExecutionError
+  if (value instanceof ComputeExecutionError) return true
+  // A closed compute bundle contains its own class identity. Accept only the same classified
+  // error shape so bundling does not turn an explicit input block into a retryable generic failure.
+  if (!(value instanceof Error) || value.name !== 'ComputeExecutionError' ||
+    !('code' in value) || typeof value.code !== 'string' || !Object.hasOwn(DESCRIPTORS, value.code)) return false
+  const descriptor = Object.entries(DESCRIPTORS).find(([code]) => code === value.code)?.[1]
+  return descriptor !== undefined && 'platformCode' in value && value.platformCode === descriptor.platformCode &&
+    'retryable' in value && typeof value.retryable === 'boolean'
 }

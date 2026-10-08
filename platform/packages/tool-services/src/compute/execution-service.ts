@@ -1,5 +1,5 @@
 import { sha256DigestOf } from '@ontology/core'
-import { findRegisteredOperation, isToolContext } from '@ontology/contracts'
+import { computeOperationKey, findRegisteredOperation, isToolContext } from '@ontology/contracts'
 import type {
   CapabilityLimits,
   ComputationData,
@@ -38,7 +38,8 @@ import {
 } from '../handlers/compute'
 import type { SchemaValidationIssue, ToolSchemaValidator } from '../types'
 import { canonicalJson, snapshotFrom } from '../types'
-import { ComputeExecutionError } from './errors'
+import { ComputeExecutionError, isComputeExecutionError } from './errors'
+import { assertComputeHandlerArtifact } from './build-artifact'
 
 /**
  * Registered compute execution (SPEC v0.3a §EX-6, §5.1 step 3-4, issue V03-031).
@@ -197,6 +198,10 @@ export class RegisteredComputeExecutionService {
         `no handler is registered for operation ${input.operationRef.id}@${input.operationRef.version}`,
       )
     }
+    assertComputeHandlerArtifact(handler, operation.handlerDigest)
+    if (operation.handlerRef.digest !== operation.handlerDigest) {
+      throw new ComputeExecutionError('COMPUTE_CONTRACT_MISMATCH', 'the registered handler reference and digest disagree')
+    }
     assertNoComputeBypass(input.parameters, input.inputRefs)
 
     const logicalKeyDigest = computeLogicalKeyDigest(scopeRef, input)
@@ -255,11 +260,11 @@ export class RegisteredComputeExecutionService {
         recordedAt: this.#now(),
       }
       await this.#invocations.fail(scopeRef, logicalKeyDigest, attempt, ctx)
-      if (error instanceof ComputeExecutionError) throw error
+      if (isComputeExecutionError(error)) throw error
       throw new ComputeExecutionError(
         'COMPUTE_FUNCTION_FAILED',
         `the registered compute operation ${input.operationRef.id}@${input.operationRef.version} failed: ${attempt.message}`,
-        { cause: error, retryable: operation.readOnly },
+        { cause: error, retryable: operation.readOnly, ...(cancelled ? { platformCode: 'DEADLINE_EXCEEDED' } : {}) },
       )
     }
 
@@ -351,6 +356,15 @@ export class RegisteredComputeExecutionService {
         'COMPUTE_CONTRACT_MISMATCH',
         'the completed invocation output bindings are not archived in this scope',
       )
+    }
+    if (archived.artifact.registeredOperationDigest !== record.registeredOperationDigest ||
+      computeOperationKey(archived.artifact.operationRef) !== computeOperationKey(record.operationRef) ||
+      archived.artifact.invocationId !== record.invocationId ||
+      archived.artifact.logicalKeyDigest !== record.logicalKeyDigest ||
+      sha256DigestOf(canonicalJson(archived.artifact)) !== record.resultDigest ||
+      record.resultRef.digest !== record.resultDigest ||
+      sha256DigestOf(canonicalJson(bindings.bindings)) !== archived.artifact.outputBindingsRef.digest) {
+      throw new ComputeExecutionError('COMPUTE_CONTRACT_MISMATCH', 'the archived compute result does not match its invocation pins')
     }
     return { invocation: record, artifact: archived.artifact, bindings: bindings.bindings, reused: true }
   }

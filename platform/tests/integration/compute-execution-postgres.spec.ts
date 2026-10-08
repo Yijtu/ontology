@@ -1,3 +1,4 @@
+import { exampleComputeArtifact } from '../helpers/example-compute-artifact'
 import { createHash, randomUUID } from 'node:crypto'
 import { afterAll, beforeAll, describe, expect, it } from 'vitest'
 import {
@@ -114,7 +115,7 @@ function scopeRefOf(target: JobTestScope) {
 }
 
 function executionInput() {
-  const operation = exampleRegisteredOperation()
+  const operation = exampleRegisteredOperation(exampleComputeArtifact)
   const parameters = {}
   return {
     taskBindingRef: { id: 'task.example.aggregate', version: '1.0.0', digest: DIGEST },
@@ -161,8 +162,8 @@ beforeAll(async () => {
   inputRef = { id: randomUUID(), version: '1.0.0', digest, kind: 'artifact' }
 
   service = new RegisteredComputeExecutionService({
-    operations: exampleOperationRegistry(),
-    handlers: createExampleComputeHandlers(),
+    operations: exampleOperationRegistry(exampleComputeArtifact),
+    handlers: createExampleComputeHandlers(exampleComputeArtifact),
     artifacts,
     reader: new MemoryReader(artifacts),
     validator: VALIDATOR,
@@ -182,11 +183,16 @@ describe('registered compute execution over real PostgreSQL', () => {
     const ctx = ctxFor(scope)
     const result = await service.execute(executionInput(), ctx)
     expect(result.invocation.state).toBe('completed')
+    const operation = exampleRegisteredOperation(exampleComputeArtifact)
+    expect(result.invocation.registeredOperationDigest).toBe(registeredOperationDigest(operation))
+    expect(result.artifact.registeredOperationDigest).toBe(result.invocation.registeredOperationDigest)
+    expect(result.artifact.algorithmVersion.digest).toBe(operation.handlerDigest)
 
     const resultRef = result.invocation.resultRef
     if (resultRef === undefined) throw new Error('the completed invocation has no result ref')
     const artifact = await resultsStore.getArtifact(scopeRefOf(scope), resultRef, ctx)
     expect(artifact?.artifact.invocationId).toBe(result.invocation.invocationId)
+    expect(artifact?.artifact.algorithmVersion.digest).toBe(operation.handlerDigest)
     const bindings = await bindingsStore.getBindings(scopeRefOf(scope), result.artifact.outputBindingsRef, ctx)
     expect(bindings?.bindings.fields.some((field) => field.currency === 'CNY')).toBe(true)
     expect(bindings?.bindings.fields.some((field) => field.unit === 'each')).toBe(true)
@@ -266,5 +272,62 @@ describe('registered compute execution over real PostgreSQL', () => {
       bindingsStore.putBindings(scopeRefOf(scope), result.artifact.outputBindingsRef, conflicting, ctx),
     )
     expect(error.code).toBe('UNIQUE_VIOLATION')
+  })
+
+  it('refuses an unavailable build artifact before creating an invocation, including replay', async () => {
+    let available = true
+    const pinned = createExampleComputeHandlers({
+      readArtifact: () => {
+        if (!available) throw new Error('the deployment artifact is missing')
+        return exampleComputeArtifact.readArtifact()
+      },
+    })
+    const local = new RegisteredComputeExecutionService({
+      operations: exampleOperationRegistry(exampleComputeArtifact), handlers: pinned, artifacts, reader: new MemoryReader(artifacts),
+      validator: VALIDATOR, invocations, outputBindings: bindingsStore, resultArtifacts: resultsStore,
+    })
+    const input = { ...executionInput(), taskBindingRef: { id: 'task.example.artifact-integrity', version: '1.0.0', digest: DIGEST } }
+    const ctx = ctxFor(scope)
+    const first = await local.execute(input, ctx)
+    expect(first.artifact.algorithmVersion.digest).toBe(pinned[0]?.artifact?.handlerDigest)
+    available = false
+    await expect(local.execute(input, ctx)).rejects.toMatchObject({ code: 'COMPUTE_CONTRACT_MISMATCH' })
+    const fresh = { ...input, taskBindingRef: { ...input.taskBindingRef, id: 'task.example.artifact-missing' } }
+    await expect(local.execute(fresh, ctx)).rejects.toMatchObject({ code: 'COMPUTE_CONTRACT_MISMATCH' })
+    expect(await invocations.get(scopeRefOf(scope), computeLogicalKeyDigest(scopeRefOf(scope), fresh), ctx)).toBeUndefined()
+  })
+
+  it('records cancellation in PostgreSQL and refuses a late artifact completion', async () => {
+    let release: (() => void) | undefined
+    const blocked = new Promise<void>((resolve) => { release = resolve })
+    let started: (() => void) | undefined
+    const arrived = new Promise<void>((resolve) => { started = resolve })
+    const lateArtifacts: ImmutableArtifactWriter = {
+      async putBytes(request) {
+        started?.()
+        await blocked
+        return artifacts.putBytes(request)
+      },
+    }
+    const local = new RegisteredComputeExecutionService({
+      operations: exampleOperationRegistry(exampleComputeArtifact), handlers: createExampleComputeHandlers(exampleComputeArtifact), artifacts: lateArtifacts,
+      reader: new MemoryReader(artifacts), validator: VALIDATOR, invocations,
+      outputBindings: bindingsStore, resultArtifacts: resultsStore,
+    })
+    const controller = new AbortController()
+    const input = { ...executionInput(), taskBindingRef: { id: 'task.example.cancelled', version: '1.0.0', digest: DIGEST }, signal: controller.signal }
+    const ctx = ctxFor(scope)
+    const pending = local.execute(input, ctx)
+    const rejected = expect(pending).rejects.toMatchObject({ code: 'COMPUTE_FUNCTION_FAILED', platformCode: 'DEADLINE_EXCEEDED' })
+    await arrived
+    controller.abort()
+    await rejected
+    release?.()
+    await blocked
+    await new Promise<void>((resolve) => { setTimeout(resolve, 0) })
+    const record = await invocations.get(scopeRefOf(scope), computeLogicalKeyDigest(scopeRefOf(scope), input), ctx)
+    expect(record?.state).toBe('cancelled')
+    expect(record?.resultRef).toBeUndefined()
+    expect(record?.attempts[0]?.code).toBe('DEADLINE_EXCEEDED')
   })
 })
