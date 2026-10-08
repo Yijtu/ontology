@@ -29,6 +29,7 @@ export {
   filterMatches,
   isDecimalQuantity,
   isRuleDecimalValue,
+  isRuleScalarDecimalValue,
 } from './values'
 export type {
   AttributeProjectionIssue,
@@ -39,6 +40,7 @@ export type {
   RuleApplicabilityResult,
   RuleApplicabilityState,
   RuleAssertionValue,
+  RuleScalarDecimalValue,
   RuleConclusionResult,
   RuleConclusionSpec,
   RuleConflictResult,

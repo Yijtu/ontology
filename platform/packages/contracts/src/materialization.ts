@@ -1,5 +1,6 @@
 import type {
   DecimalQuantity,
+  DecimalString,
   DomainResultStatus,
   ProjectionState,
   Rfc3339UtcTimestamp,
@@ -38,7 +39,12 @@ import type { RuleComputationArtifact } from './rule-extraction'
  */
 
 /** An exact decimal, categorical string or boolean materialised value. Floats are never exact. */
-export type MaterializedValue = DecimalQuantity | string | boolean
+export interface ExactScalarDecimal {
+  readonly kind: 'scalar_decimal'
+  readonly amount: DecimalString
+}
+
+export type MaterializedValue = DecimalQuantity | ExactScalarDecimal | string | boolean
 
 /** A pinned reference to the exact fact version that supported a materialised conclusion. */
 export interface MaterializedFactRef {

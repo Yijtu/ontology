@@ -54,7 +54,7 @@ function isExactDecimal(value: string): boolean {
   return value.length <= 64 && DECIMAL_STRING.test(value)
 }
 
-function valueTypeMatches(valueType: IndustryAttributeValueType, value: string | number | boolean): boolean {
+function valueTypeMatches(valueType: IndustryAttributeValueType, value: string | number | boolean, mappedExactNumber = false): boolean {
   switch (valueType) {
     case 'string':
       return typeof value === 'string'
@@ -65,7 +65,8 @@ function valueTypeMatches(valueType: IndustryAttributeValueType, value: string |
     case 'enum':
       return typeof value === 'string'
     case 'number':
-      return typeof value === 'number' && Number.isFinite(value)
+      return (typeof value === 'number' && Number.isFinite(value)) ||
+        (mappedExactNumber && typeof value === 'string' && isExactDecimal(value))
     case 'quantity':
       // A new quantity is the exact decimal string, so a value never passes through a lossy
       // `Number`. A finite `number` is accepted only for a legacy historical candidate.
@@ -83,6 +84,7 @@ function validateAttributeValue(
   object: IndustryObjectSchema,
   value: CandidateAttributeValue,
   field: string,
+  mappedExactNumber = false,
 ): void {
   const attribute = attributeById(object, value.attributeId)
   if (attribute === undefined) {
@@ -98,7 +100,7 @@ function validateAttributeValue(
     }
     return
   }
-  if (!valueTypeMatches(attribute.valueType, value.value)) {
+  if (!valueTypeMatches(attribute.valueType, value.value, mappedExactNumber)) {
     issue(
       out,
       'TYPE_MISMATCH',
@@ -220,7 +222,7 @@ export function validateEntity(entity: EntityCandidate, schema: IndustrySchema):
     return out
   }
   entity.attributes.forEach((value, index) => {
-    validateAttributeValue(out, schema, object, value, `attributes[${String(index)}]`)
+    validateAttributeValue(out, schema, object, value, `attributes[${String(index)}]`, entity.inputVersion.projectFact !== undefined)
   })
   validateCardinality(out, object, entity.attributes)
   validateIdentity(out, schema, entity)

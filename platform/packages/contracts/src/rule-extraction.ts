@@ -1,5 +1,6 @@
 import type { DecimalQuantity, DocumentSpan, ResourceRef, RevisionString, ScopeRef, Sha256Digest, Uuid, VersionRef } from './generated/contracts'
 import type { SpanPrecision } from './document-parse'
+import type { ExactScalarDecimal } from './materialization'
 
 /**
  * Bounded rule AST and rule-candidate contracts (SPEC D4.3/D5, US-013/US-015, FR-14/FR-15).
@@ -22,7 +23,7 @@ export type RuleComparisonOperator = 'eq' | 'ne' | 'lt' | 'lte' | 'gt' | 'gte'
 export interface RuleConclusionBinding {
   /** The exact attribute/predicate declared on the rule's scoped object. */
   readonly predicate: string
-  readonly value: DecimalQuantity | string | boolean
+  readonly value: DecimalQuantity | ExactScalarDecimal | string | boolean
 }
 
 export type RuleApplicabilityState = 'applicable' | 'not_applicable' | 'unknown' | 'conflict'

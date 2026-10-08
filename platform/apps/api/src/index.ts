@@ -186,3 +186,5 @@ export { createInstanceIdentityWorkflow, InstanceIdentityWorkflow } from './comp
 export type { InstanceIdentityWorkflowOptions, InstanceIdentityCreateInput } from './composition/instance-identity'
 export { registerInstanceReviewRoutes } from './http/instances'
 export type { InstanceReviewRouteDependencies } from './http/instances'
+export { createProjectFactWorkflow } from './composition/project-facts'
+export type { ProjectFactWorkflowOptions } from './composition/project-facts'

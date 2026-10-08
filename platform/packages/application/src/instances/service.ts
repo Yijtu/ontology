@@ -374,7 +374,7 @@ export class InstanceReviewService {
         fields.push({
           ...field,
           status,
-          actor: record.actor,
+          actor: ctx.principal.subjectId,
           confirmedAt: recordedAt,
           ...(decision.reason === undefined ? {} : { reason: decision.reason }),
           confirmationRevision: nextRevision(field.confirmationRevision),
@@ -387,7 +387,7 @@ export class InstanceReviewService {
       fields.push({
         ...field,
         status,
-        actor: record.actor,
+        actor: ctx.principal.subjectId,
         ...(decision.reason === undefined ? {} : { reason: decision.reason }),
         confirmationRevision: nextRevision(field.confirmationRevision),
       })
@@ -699,7 +699,7 @@ export class InstanceReviewService {
         status,
         ...(reason === undefined ? {} : { reason }),
         sourceRef: field?.source.documentRef ?? record.sourceRef,
-        actor: record.actor,
+        actor: ctx.principal.subjectId,
         recordedAt,
         idempotencyKey: `${input.idempotencyKey}:event:${fieldId ?? field?.fieldId ?? ''}`,
       },

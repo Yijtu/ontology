@@ -1,5 +1,6 @@
 import type {
   DecimalQuantity,
+  ExactScalarDecimal,
   ControlReadProjectionRequest,
   DomainResultStatus,
   RevisionString,
@@ -36,7 +37,10 @@ import type { RuleEvaluationErrorCode } from './errors'
 /** An exact decimal quantity, categorical string or boolean assertion value. */
 export type RuleDecimalValue = DecimalQuantity
 
-export type RuleAssertionValue = DecimalQuantity | string | boolean
+/** A definition-declared unitless number, kept exact without inventing a physical unit. */
+export type RuleScalarDecimalValue = ExactScalarDecimal
+
+export type RuleAssertionValue = DecimalQuantity | RuleScalarDecimalValue | string | boolean
 
 /** One version of a logical assertion as published into the append-only event stream (D3.1). */
 export interface RuleFact {

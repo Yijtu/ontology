@@ -16,6 +16,8 @@ import {
   compilePublishedRuleInstances,
   projectPublishedAttributeFacts,
   projectPublishedRelationFacts,
+  isRuleDecimalValue,
+  isRuleScalarDecimalValue,
 } from '../rules'
 import type { DependencyEntityBinding } from './dependency-index'
 import type { SupportRule } from '../rules'
@@ -101,8 +103,7 @@ function hasValidStoredConclusion(rule: PublishedRuleVersion): boolean {
   if (binding === undefined) return true
   if (typeof binding.predicate !== 'string' || binding.predicate.length === 0) return false
   if (typeof binding.value === 'string' || typeof binding.value === 'boolean') return true
-  return typeof binding.value === 'object' && binding.value !== null &&
-    typeof binding.value.amount === 'string' && typeof binding.value.unit === 'string'
+  return isRuleDecimalValue(binding.value) || isRuleScalarDecimalValue(binding.value)
 }
 
 /**
@@ -232,8 +233,10 @@ export class PublishedSemanticSource implements MaterializationPublishedSource {
         const allEntityStatements = scopedStatements.filter((statement): statement is PublishedStatement & { readonly objectId: string; readonly subjectEntityId: string } =>
           statement.kind === 'entity' && statement.objectId !== undefined && statement.subjectEntityId !== undefined,
         )
-        const projection = projectPublishedAttributeFacts(validEntityStatements, { schemaRef: definitionRef })
-        const dependencyProjection = projectPublishedAttributeFacts(allEntityStatements, { schemaRef: definitionRef })
+        const definition = this.#definition !== undefined && this.#definition.scopeRef.tenantId === scopeRef.tenantId && this.#definition.scopeRef.spaceId === scopeRef.spaceId && sameVersion(this.#definition.ref, definitionRef) ? this.#definition : undefined
+        const projectionOptions = { schemaRef: definitionRef, scopeRef, ...(definition === undefined ? {} : { definition }) }
+        const projection = projectPublishedAttributeFacts(validEntityStatements, projectionOptions)
+        const dependencyProjection = projectPublishedAttributeFacts(allEntityStatements, projectionOptions)
         for (const issue of dependencyProjection.issues) issues.push({
           code: issue.code,
           message: issue.message,
@@ -256,7 +259,6 @@ export class PublishedSemanticSource implements MaterializationPublishedSource {
           if (existing === undefined || compareRevision(rule.version, existing.version) > 0) latestRules.set(key, rule)
         }
         const currentRules = [...latestRules.values()]
-        const definition = this.#definition !== undefined && this.#definition.scopeRef.tenantId === scopeRef.tenantId && this.#definition.scopeRef.spaceId === scopeRef.spaceId && sameVersion(this.#definition.ref, definitionRef) ? this.#definition : undefined
         const relationProjection = definition === undefined ? { facts: [], issues: [] } : projectPublishedRelationFacts(scopedStatements, { definition, bindings: identityBindings.bindings })
         issues.push(...relationProjection.issues)
         const facts = [...projection.facts, ...relationProjection.facts]

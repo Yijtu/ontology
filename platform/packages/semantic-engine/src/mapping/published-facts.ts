@@ -9,6 +9,7 @@ import { isToolContext } from '@ontology/contracts'
 import { sha256DigestOf } from '../definitions/canonical'
 import type { MaterializationPublishedSource, PublishedSemanticData } from '../materialization/types'
 import type { RuleFact } from '../rules'
+import { isRuleDecimalValue } from '../rules'
 import type { OntologyFactPage, OntologyFactQuery, OntologyFactReference, OntologyFactReferenceProvider } from './lookup'
 import { SemanticMappingError } from './errors'
 
@@ -162,7 +163,7 @@ function sourceFactReference(
       attributeId,
       predicate: fact.predicate,
       value: fact.value,
-      ...(typeof fact.value === 'object' ? { unitCode: fact.value.unit } : {}),
+      ...(isRuleDecimalValue(fact.value) ? { unitCode: fact.value.unit } : {}),
       schemaRef: fact.schemaRef,
       validity: { ...fact.validity },
       recordedSeq: fact.recordedSeq,

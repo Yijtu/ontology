@@ -10,11 +10,12 @@ import type {
   UnitCode,
   Uuid,
   VersionRef,
+  ProjectRevisionRef,
 } from './generated/contracts'
 import type { AttributeValueType } from './semantic-definitions'
 import type { SourceLocator, StructuredFormat, StructuredParseOptions } from './structured-parse'
 import type { ToolContext } from './trusted'
-import { isRecord, isResourceRef, isSha256Digest, isUuid, isVersionRef } from './asset-workspace'
+import { isRecord, isResourceRef, isRevisionString, isSha256Digest, isUuid, isVersionRef } from './asset-workspace'
 
 /**
  * Column-mapping confirmation, unit normalisation and project-record binding
@@ -33,6 +34,63 @@ import { isRecord, isResourceRef, isSha256Digest, isUuid, isVersionRef } from '.
 
 export const IMPORT_MAPPING_SCHEMA_VERSION = 'import-mapping@1'
 export const PROJECT_RECORD_SCHEMA_VERSION = 'project-record@1'
+
+/** Stored provenance, minted by the mapping bridge; requests supply selectors only. */
+export interface ProjectFactSourcePin {
+  readonly projectRevisionRef: ProjectRevisionRef
+  readonly definitionRef: VersionRef
+  readonly mappingRef: MappingRef
+  readonly recordId: Uuid
+  readonly recordRevision: RevisionString
+  readonly contentDigest: Sha256Digest
+  readonly sourceDigest: Sha256Digest
+  readonly sourceRecordedAt: Rfc3339UtcTimestamp
+  readonly documentId: Uuid
+  readonly parseId: Uuid
+  readonly membershipRevision: RevisionString
+  readonly visibilityEpoch: RevisionString
+  /** Entity candidate whose fields and human identity are authoritative. */
+  readonly entityCandidateId: Uuid
+}
+
+export interface ProjectFactInput {
+  readonly sources: readonly ProjectFactSourcePin[]
+  readonly validFrom?: Rfc3339UtcTimestamp
+  readonly validTo?: Rfc3339UtcTimestamp
+}
+
+export interface StageProjectFactsRequest {
+  readonly documentId: Uuid
+  readonly recordRefs: readonly { readonly recordId: Uuid; readonly revision: RevisionString }[]
+  readonly validFrom?: Rfc3339UtcTimestamp
+  readonly validTo?: Rfc3339UtcTimestamp
+}
+
+export interface ProjectFactPublicationFence {
+  readonly candidateId: Uuid
+  readonly candidateDigest: Sha256Digest
+  readonly source: ProjectFactSourcePin
+  readonly instanceRevision: RevisionString
+  readonly entityId: string
+}
+
+/** Runtime validation at the candidate/publication boundary, including finite source fanout. */
+export function assertProjectFactInputShape(value: unknown): asserts value is ProjectFactInput {
+  if (!isRecord(value) || !Array.isArray(value['sources']) || value['sources'].length < 1 || value['sources'].length > 2) {
+    throw invalidMapping('mapped fact requires one or two stored source pins')
+  }
+  for (const source of value['sources']) {
+    if (!isRecord(source) || !isRecord(source['projectRevisionRef']) || !isUuid(source['projectRevisionRef']['projectId']) || !isRevisionString(source['projectRevisionRef']['revision']) || !isSha256Digest(source['projectRevisionRef']['digest']) ||
+      !isVersionRef(source['definitionRef']) || !isRecord(source['mappingRef']) || source['mappingRef']['role'] !== 'catalog' || !isRecord(source['mappingRef']['sourceObjectRef']) || !isVersionRef(source['mappingRef']) || !isUuid(source['recordId']) || !isRevisionString(source['recordRevision']) || !isSha256Digest(source['contentDigest']) || !isSha256Digest(source['sourceDigest']) ||
+      !isUuid(source['documentId']) || !isUuid(source['parseId']) || !isUuid(source['entityCandidateId']) || !isRevisionString(source['membershipRevision']) || !isRevisionString(source['visibilityEpoch']) ||
+      typeof source['sourceRecordedAt'] !== 'string' || Number.isNaN(Date.parse(source['sourceRecordedAt']))) throw invalidMapping('mapped fact source pin is malformed')
+  }
+  for (const field of ['validFrom', 'validTo']) {
+    const timestamp = value[field]
+    if (timestamp !== undefined && (typeof timestamp !== 'string' || !/^\d{4}-\d\d-\d\dT\d\d:\d\d:\d\d(?:\.\d+)?Z$/.test(timestamp) || Number.isNaN(Date.parse(timestamp)))) throw invalidMapping('mapped fact valid time is malformed')
+  }
+  if (typeof value['validFrom'] === 'string' && typeof value['validTo'] === 'string' && Date.parse(value['validTo']) <= Date.parse(value['validFrom'])) throw invalidMapping('mapped fact interval must be nonempty')
+}
 
 /**
  * One declared exact conversion from a source unit to the canonical unit, expressed as a
