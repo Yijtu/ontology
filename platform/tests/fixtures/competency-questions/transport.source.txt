@@ -1,0 +1,10 @@
+Synthetic transport example; not an industry standard.
+F-01 facility_code=F-01; length=12.5 m; condition=bad; closed=false; located_in=D-01.
+F-02 facility_code=F-02; length=5.0 m; condition=good; closed=false.
+D-01 district_code=D-01; watch=true.
+Alternative survey of F-01 reports condition=good.
+For the exception case F-01 closed=true.
+Wrong-unit source for F-01 reports length=12.5 h.
+Inspection rule: condition=bad triggers needs_inspection=true, unless closed=true.
+District rule: a resolved located_in edge AND target watch=true triggers needs_inspection=true.
+A withdrawal removes only its named support; remaining support still applies.

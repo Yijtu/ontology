@@ -1,0 +1,891 @@
+{
+  "definitions": [
+    {
+      "draft": {
+        "scopeRef": {
+          "tenantId": "11111111-1111-4111-8111-111111111111",
+          "spaceId": "aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa"
+        },
+        "namespace": "cq-industrial-synthetic",
+        "definitionId": "cq.industrial.definition",
+        "version": "1.0.0",
+        "layer": "industry_core",
+        "standardProvenance": [
+          {
+            "standardRef": {
+              "id": "cq.industrial.source",
+              "version": "1.0.0",
+              "digest": "sha256:3f3eb751e3d27b03636bb2b7fd27c1736aa50605fafc6beec826b51a840a7ff2"
+            },
+            "provenanceKind": "synthetic_assumption"
+          }
+        ],
+        "objects": [
+          {
+            "kind": "object",
+            "id": "asset",
+            "namespace": "cq-industrial-synthetic",
+            "displayName": "asset",
+            "identityScopeId": "asset.identity",
+            "standardProvenance": [
+              {
+                "standardRef": {
+                  "id": "cq.industrial.source",
+                  "version": "1.0.0",
+                  "digest": "sha256:3f3eb751e3d27b03636bb2b7fd27c1736aa50605fafc6beec826b51a840a7ff2"
+                },
+                "provenanceKind": "synthetic_assumption"
+              }
+            ]
+          },
+          {
+            "kind": "object",
+            "id": "workshop",
+            "namespace": "cq-industrial-synthetic",
+            "displayName": "workshop",
+            "identityScopeId": "workshop.identity",
+            "standardProvenance": [
+              {
+                "standardRef": {
+                  "id": "cq.industrial.source",
+                  "version": "1.0.0",
+                  "digest": "sha256:3f3eb751e3d27b03636bb2b7fd27c1736aa50605fafc6beec826b51a840a7ff2"
+                },
+                "provenanceKind": "synthetic_assumption"
+              }
+            ]
+          }
+        ],
+        "attributes": [
+          {
+            "kind": "attribute",
+            "id": "asset_code",
+            "namespace": "cq-industrial-synthetic",
+            "objectId": "asset",
+            "valueType": "string",
+            "cardinality": {
+              "min": 1,
+              "max": 1
+            },
+            "identityKey": true,
+            "standardProvenance": [
+              {
+                "standardRef": {
+                  "id": "cq.industrial.source",
+                  "version": "1.0.0",
+                  "digest": "sha256:3f3eb751e3d27b03636bb2b7fd27c1736aa50605fafc6beec826b51a840a7ff2"
+                },
+                "provenanceKind": "synthetic_assumption"
+              }
+            ]
+          },
+          {
+            "kind": "attribute",
+            "id": "hours",
+            "namespace": "cq-industrial-synthetic",
+            "objectId": "asset",
+            "valueType": "quantity",
+            "cardinality": {
+              "min": 0,
+              "max": 1
+            },
+            "unit": {
+              "unitCode": "h",
+              "dimension": "time"
+            },
+            "standardProvenance": [
+              {
+                "standardRef": {
+                  "id": "cq.industrial.source",
+                  "version": "1.0.0",
+                  "digest": "sha256:3f3eb751e3d27b03636bb2b7fd27c1736aa50605fafc6beec826b51a840a7ff2"
+                },
+                "provenanceKind": "synthetic_assumption"
+              }
+            ]
+          },
+          {
+            "kind": "attribute",
+            "id": "exempt",
+            "namespace": "cq-industrial-synthetic",
+            "objectId": "asset",
+            "valueType": "boolean",
+            "cardinality": {
+              "min": 0,
+              "max": 1
+            },
+            "standardProvenance": [
+              {
+                "standardRef": {
+                  "id": "cq.industrial.source",
+                  "version": "1.0.0",
+                  "digest": "sha256:3f3eb751e3d27b03636bb2b7fd27c1736aa50605fafc6beec826b51a840a7ff2"
+                },
+                "provenanceKind": "synthetic_assumption"
+              }
+            ]
+          },
+          {
+            "kind": "attribute",
+            "id": "alarm",
+            "namespace": "cq-industrial-synthetic",
+            "objectId": "asset",
+            "valueType": "boolean",
+            "cardinality": {
+              "min": 0,
+              "max": 1
+            },
+            "standardProvenance": [
+              {
+                "standardRef": {
+                  "id": "cq.industrial.source",
+                  "version": "1.0.0",
+                  "digest": "sha256:3f3eb751e3d27b03636bb2b7fd27c1736aa50605fafc6beec826b51a840a7ff2"
+                },
+                "provenanceKind": "synthetic_assumption"
+              }
+            ]
+          },
+          {
+            "kind": "attribute",
+            "id": "stage_one",
+            "namespace": "cq-industrial-synthetic",
+            "objectId": "asset",
+            "valueType": "boolean",
+            "cardinality": {
+              "min": 0,
+              "max": 1
+            },
+            "standardProvenance": [
+              {
+                "standardRef": {
+                  "id": "cq.industrial.source",
+                  "version": "1.0.0",
+                  "digest": "sha256:3f3eb751e3d27b03636bb2b7fd27c1736aa50605fafc6beec826b51a840a7ff2"
+                },
+                "provenanceKind": "synthetic_assumption"
+              }
+            ]
+          },
+          {
+            "kind": "attribute",
+            "id": "stage_two",
+            "namespace": "cq-industrial-synthetic",
+            "objectId": "asset",
+            "valueType": "boolean",
+            "cardinality": {
+              "min": 0,
+              "max": 1
+            },
+            "standardProvenance": [
+              {
+                "standardRef": {
+                  "id": "cq.industrial.source",
+                  "version": "1.0.0",
+                  "digest": "sha256:3f3eb751e3d27b03636bb2b7fd27c1736aa50605fafc6beec826b51a840a7ff2"
+                },
+                "provenanceKind": "synthetic_assumption"
+              }
+            ]
+          },
+          {
+            "kind": "attribute",
+            "id": "ready",
+            "namespace": "cq-industrial-synthetic",
+            "objectId": "asset",
+            "valueType": "boolean",
+            "cardinality": {
+              "min": 0,
+              "max": 1
+            },
+            "standardProvenance": [
+              {
+                "standardRef": {
+                  "id": "cq.industrial.source",
+                  "version": "1.0.0",
+                  "digest": "sha256:3f3eb751e3d27b03636bb2b7fd27c1736aa50605fafc6beec826b51a840a7ff2"
+                },
+                "provenanceKind": "synthetic_assumption"
+              }
+            ]
+          },
+          {
+            "kind": "attribute",
+            "id": "shop_code",
+            "namespace": "cq-industrial-synthetic",
+            "objectId": "workshop",
+            "valueType": "string",
+            "cardinality": {
+              "min": 1,
+              "max": 1
+            },
+            "identityKey": true,
+            "standardProvenance": [
+              {
+                "standardRef": {
+                  "id": "cq.industrial.source",
+                  "version": "1.0.0",
+                  "digest": "sha256:3f3eb751e3d27b03636bb2b7fd27c1736aa50605fafc6beec826b51a840a7ff2"
+                },
+                "provenanceKind": "synthetic_assumption"
+              }
+            ]
+          },
+          {
+            "kind": "attribute",
+            "id": "staffed",
+            "namespace": "cq-industrial-synthetic",
+            "objectId": "workshop",
+            "valueType": "boolean",
+            "cardinality": {
+              "min": 0,
+              "max": 1
+            },
+            "standardProvenance": [
+              {
+                "standardRef": {
+                  "id": "cq.industrial.source",
+                  "version": "1.0.0",
+                  "digest": "sha256:3f3eb751e3d27b03636bb2b7fd27c1736aa50605fafc6beec826b51a840a7ff2"
+                },
+                "provenanceKind": "synthetic_assumption"
+              }
+            ]
+          }
+        ],
+        "relations": [
+          {
+            "kind": "relation",
+            "id": "in_workshop",
+            "namespace": "cq-industrial-synthetic",
+            "fromObjectId": "asset",
+            "toObjectId": "workshop",
+            "cardinality": {
+              "min": 0,
+              "max": 1
+            },
+            "standardProvenance": [
+              {
+                "standardRef": {
+                  "id": "cq.industrial.source",
+                  "version": "1.0.0",
+                  "digest": "sha256:3f3eb751e3d27b03636bb2b7fd27c1736aa50605fafc6beec826b51a840a7ff2"
+                },
+                "provenanceKind": "synthetic_assumption"
+              }
+            ]
+          }
+        ],
+        "identityScopes": [
+          {
+            "kind": "identity_scope",
+            "id": "asset.identity",
+            "namespace": "cq-industrial-synthetic",
+            "objectId": "asset",
+            "scopeDimensions": [
+              "project"
+            ],
+            "identityAttributeIds": [
+              "asset_code"
+            ],
+            "standardProvenance": [
+              {
+                "standardRef": {
+                  "id": "cq.industrial.source",
+                  "version": "1.0.0",
+                  "digest": "sha256:3f3eb751e3d27b03636bb2b7fd27c1736aa50605fafc6beec826b51a840a7ff2"
+                },
+                "provenanceKind": "synthetic_assumption"
+              }
+            ]
+          },
+          {
+            "kind": "identity_scope",
+            "id": "workshop.identity",
+            "namespace": "cq-industrial-synthetic",
+            "objectId": "workshop",
+            "scopeDimensions": [
+              "project"
+            ],
+            "identityAttributeIds": [
+              "shop_code"
+            ],
+            "standardProvenance": [
+              {
+                "standardRef": {
+                  "id": "cq.industrial.source",
+                  "version": "1.0.0",
+                  "digest": "sha256:3f3eb751e3d27b03636bb2b7fd27c1736aa50605fafc6beec826b51a840a7ff2"
+                },
+                "provenanceKind": "synthetic_assumption"
+              }
+            ]
+          }
+        ],
+        "ruleConstraints": []
+      },
+      "ref": {
+        "id": "cq.industrial.definition",
+        "version": "1.0.0",
+        "digest": "sha256:0ded79d1c8e5b003f8c5e460d77dccf3e9260dd8782cc25d198bc57fd24eb937"
+      }
+    },
+    {
+      "draft": {
+        "scopeRef": {
+          "tenantId": "11111111-1111-4111-8111-111111111111",
+          "spaceId": "aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa"
+        },
+        "namespace": "cq-industrial-synthetic",
+        "definitionId": "cq.industrial.definition",
+        "version": "2.0.0",
+        "layer": "industry_core",
+        "standardProvenance": [
+          {
+            "standardRef": {
+              "id": "cq.industrial.source",
+              "version": "1.0.0",
+              "digest": "sha256:3f3eb751e3d27b03636bb2b7fd27c1736aa50605fafc6beec826b51a840a7ff2"
+            },
+            "provenanceKind": "synthetic_assumption"
+          }
+        ],
+        "objects": [
+          {
+            "kind": "object",
+            "id": "asset",
+            "namespace": "cq-industrial-synthetic",
+            "displayName": "asset",
+            "identityScopeId": "asset.identity",
+            "standardProvenance": [
+              {
+                "standardRef": {
+                  "id": "cq.industrial.source",
+                  "version": "1.0.0",
+                  "digest": "sha256:3f3eb751e3d27b03636bb2b7fd27c1736aa50605fafc6beec826b51a840a7ff2"
+                },
+                "provenanceKind": "synthetic_assumption"
+              }
+            ]
+          },
+          {
+            "kind": "object",
+            "id": "workshop",
+            "namespace": "cq-industrial-synthetic",
+            "displayName": "workshop",
+            "identityScopeId": "workshop.identity",
+            "standardProvenance": [
+              {
+                "standardRef": {
+                  "id": "cq.industrial.source",
+                  "version": "1.0.0",
+                  "digest": "sha256:3f3eb751e3d27b03636bb2b7fd27c1736aa50605fafc6beec826b51a840a7ff2"
+                },
+                "provenanceKind": "synthetic_assumption"
+              }
+            ]
+          }
+        ],
+        "attributes": [
+          {
+            "kind": "attribute",
+            "id": "asset_code",
+            "namespace": "cq-industrial-synthetic",
+            "objectId": "asset",
+            "valueType": "string",
+            "cardinality": {
+              "min": 1,
+              "max": 1
+            },
+            "identityKey": true,
+            "standardProvenance": [
+              {
+                "standardRef": {
+                  "id": "cq.industrial.source",
+                  "version": "1.0.0",
+                  "digest": "sha256:3f3eb751e3d27b03636bb2b7fd27c1736aa50605fafc6beec826b51a840a7ff2"
+                },
+                "provenanceKind": "synthetic_assumption"
+              }
+            ]
+          },
+          {
+            "kind": "attribute",
+            "id": "hours",
+            "namespace": "cq-industrial-synthetic",
+            "objectId": "asset",
+            "valueType": "quantity",
+            "cardinality": {
+              "min": 0,
+              "max": 1
+            },
+            "unit": {
+              "unitCode": "h",
+              "dimension": "time"
+            },
+            "standardProvenance": [
+              {
+                "standardRef": {
+                  "id": "cq.industrial.source",
+                  "version": "1.0.0",
+                  "digest": "sha256:3f3eb751e3d27b03636bb2b7fd27c1736aa50605fafc6beec826b51a840a7ff2"
+                },
+                "provenanceKind": "synthetic_assumption"
+              }
+            ]
+          },
+          {
+            "kind": "attribute",
+            "id": "exempt",
+            "namespace": "cq-industrial-synthetic",
+            "objectId": "asset",
+            "valueType": "boolean",
+            "cardinality": {
+              "min": 0,
+              "max": 1
+            },
+            "standardProvenance": [
+              {
+                "standardRef": {
+                  "id": "cq.industrial.source",
+                  "version": "1.0.0",
+                  "digest": "sha256:3f3eb751e3d27b03636bb2b7fd27c1736aa50605fafc6beec826b51a840a7ff2"
+                },
+                "provenanceKind": "synthetic_assumption"
+              }
+            ]
+          },
+          {
+            "kind": "attribute",
+            "id": "alarm",
+            "namespace": "cq-industrial-synthetic",
+            "objectId": "asset",
+            "valueType": "boolean",
+            "cardinality": {
+              "min": 0,
+              "max": 1
+            },
+            "standardProvenance": [
+              {
+                "standardRef": {
+                  "id": "cq.industrial.source",
+                  "version": "1.0.0",
+                  "digest": "sha256:3f3eb751e3d27b03636bb2b7fd27c1736aa50605fafc6beec826b51a840a7ff2"
+                },
+                "provenanceKind": "synthetic_assumption"
+              }
+            ]
+          },
+          {
+            "kind": "attribute",
+            "id": "stage_one",
+            "namespace": "cq-industrial-synthetic",
+            "objectId": "asset",
+            "valueType": "boolean",
+            "cardinality": {
+              "min": 0,
+              "max": 1
+            },
+            "standardProvenance": [
+              {
+                "standardRef": {
+                  "id": "cq.industrial.source",
+                  "version": "1.0.0",
+                  "digest": "sha256:3f3eb751e3d27b03636bb2b7fd27c1736aa50605fafc6beec826b51a840a7ff2"
+                },
+                "provenanceKind": "synthetic_assumption"
+              }
+            ]
+          },
+          {
+            "kind": "attribute",
+            "id": "stage_two",
+            "namespace": "cq-industrial-synthetic",
+            "objectId": "asset",
+            "valueType": "boolean",
+            "cardinality": {
+              "min": 0,
+              "max": 1
+            },
+            "standardProvenance": [
+              {
+                "standardRef": {
+                  "id": "cq.industrial.source",
+                  "version": "1.0.0",
+                  "digest": "sha256:3f3eb751e3d27b03636bb2b7fd27c1736aa50605fafc6beec826b51a840a7ff2"
+                },
+                "provenanceKind": "synthetic_assumption"
+              }
+            ]
+          },
+          {
+            "kind": "attribute",
+            "id": "ready",
+            "namespace": "cq-industrial-synthetic",
+            "objectId": "asset",
+            "valueType": "boolean",
+            "cardinality": {
+              "min": 0,
+              "max": 1
+            },
+            "standardProvenance": [
+              {
+                "standardRef": {
+                  "id": "cq.industrial.source",
+                  "version": "1.0.0",
+                  "digest": "sha256:3f3eb751e3d27b03636bb2b7fd27c1736aa50605fafc6beec826b51a840a7ff2"
+                },
+                "provenanceKind": "synthetic_assumption"
+              }
+            ]
+          },
+          {
+            "kind": "attribute",
+            "id": "shop_code",
+            "namespace": "cq-industrial-synthetic",
+            "objectId": "workshop",
+            "valueType": "string",
+            "cardinality": {
+              "min": 1,
+              "max": 1
+            },
+            "identityKey": true,
+            "standardProvenance": [
+              {
+                "standardRef": {
+                  "id": "cq.industrial.source",
+                  "version": "1.0.0",
+                  "digest": "sha256:3f3eb751e3d27b03636bb2b7fd27c1736aa50605fafc6beec826b51a840a7ff2"
+                },
+                "provenanceKind": "synthetic_assumption"
+              }
+            ]
+          },
+          {
+            "kind": "attribute",
+            "id": "staffed",
+            "namespace": "cq-industrial-synthetic",
+            "objectId": "workshop",
+            "valueType": "boolean",
+            "cardinality": {
+              "min": 0,
+              "max": 1
+            },
+            "standardProvenance": [
+              {
+                "standardRef": {
+                  "id": "cq.industrial.source",
+                  "version": "1.0.0",
+                  "digest": "sha256:3f3eb751e3d27b03636bb2b7fd27c1736aa50605fafc6beec826b51a840a7ff2"
+                },
+                "provenanceKind": "synthetic_assumption"
+              }
+            ]
+          },
+          {
+            "kind": "attribute",
+            "id": "inspection_due",
+            "namespace": "cq-industrial-synthetic",
+            "objectId": "asset",
+            "valueType": "boolean",
+            "cardinality": {
+              "min": 0,
+              "max": 1
+            },
+            "standardProvenance": [
+              {
+                "standardRef": {
+                  "id": "cq.industrial.source",
+                  "version": "1.0.0",
+                  "digest": "sha256:3f3eb751e3d27b03636bb2b7fd27c1736aa50605fafc6beec826b51a840a7ff2"
+                },
+                "provenanceKind": "synthetic_assumption"
+              }
+            ]
+          }
+        ],
+        "relations": [
+          {
+            "kind": "relation",
+            "id": "in_workshop",
+            "namespace": "cq-industrial-synthetic",
+            "fromObjectId": "asset",
+            "toObjectId": "workshop",
+            "cardinality": {
+              "min": 0,
+              "max": 1
+            },
+            "standardProvenance": [
+              {
+                "standardRef": {
+                  "id": "cq.industrial.source",
+                  "version": "1.0.0",
+                  "digest": "sha256:3f3eb751e3d27b03636bb2b7fd27c1736aa50605fafc6beec826b51a840a7ff2"
+                },
+                "provenanceKind": "synthetic_assumption"
+              }
+            ]
+          }
+        ],
+        "identityScopes": [
+          {
+            "kind": "identity_scope",
+            "id": "asset.identity",
+            "namespace": "cq-industrial-synthetic",
+            "objectId": "asset",
+            "scopeDimensions": [
+              "project"
+            ],
+            "identityAttributeIds": [
+              "asset_code"
+            ],
+            "standardProvenance": [
+              {
+                "standardRef": {
+                  "id": "cq.industrial.source",
+                  "version": "1.0.0",
+                  "digest": "sha256:3f3eb751e3d27b03636bb2b7fd27c1736aa50605fafc6beec826b51a840a7ff2"
+                },
+                "provenanceKind": "synthetic_assumption"
+              }
+            ]
+          },
+          {
+            "kind": "identity_scope",
+            "id": "workshop.identity",
+            "namespace": "cq-industrial-synthetic",
+            "objectId": "workshop",
+            "scopeDimensions": [
+              "project"
+            ],
+            "identityAttributeIds": [
+              "shop_code"
+            ],
+            "standardProvenance": [
+              {
+                "standardRef": {
+                  "id": "cq.industrial.source",
+                  "version": "1.0.0",
+                  "digest": "sha256:3f3eb751e3d27b03636bb2b7fd27c1736aa50605fafc6beec826b51a840a7ff2"
+                },
+                "provenanceKind": "synthetic_assumption"
+              }
+            ]
+          }
+        ],
+        "ruleConstraints": []
+      },
+      "ref": {
+        "id": "cq.industrial.definition",
+        "version": "2.0.0",
+        "digest": "sha256:1027362dabc83dc228818acc4700d65e684494505a8bc842b58466d44ff58070"
+      }
+    }
+  ],
+  "rules": [
+    {
+      "ref": {
+        "id": "cq.industrial.rule.service",
+        "version": "1.0.0",
+        "digest": "sha256:64e42386a57a7d00f777548bda8ccd88b842a3928bf8f1508781abf210187878"
+      },
+      "declaration": {
+        "ruleId": "service",
+        "objectId": "asset",
+        "condition": {
+          "op": "range",
+          "attributeId": "hours",
+          "min": 100,
+          "unitCode": "h",
+          "spans": []
+        },
+        "exceptions": [
+          {
+            "exceptionId": "exempt",
+            "condition": {
+              "op": "compare",
+              "attributeId": "exempt",
+              "operator": "eq",
+              "value": true,
+              "spans": []
+            },
+            "spans": []
+          }
+        ],
+        "ruleDependencies": [],
+        "conclusion": {
+          "predicate": "stage_one",
+          "value": true
+        }
+      },
+      "source": {
+        "sourceRef": {
+          "id": "cq.industrial.source",
+          "version": "1.0.0",
+          "digest": "sha256:3f3eb751e3d27b03636bb2b7fd27c1736aa50605fafc6beec826b51a840a7ff2"
+        },
+        "offsetUnit": "utf8_byte",
+        "startOffset": 244,
+        "endOffset": 315,
+        "quoteDigest": "sha256:b469c19c6c0b09016225d42faa78d82a6295c5f6e08ad329549f776ac128ee3e"
+      }
+    },
+    {
+      "ref": {
+        "id": "cq.industrial.rule.layer-two",
+        "version": "1.0.0",
+        "digest": "sha256:e94c2af5da592a7bd8a09eeb2b52f82296bb761c711a13444d998b75e0c930ef"
+      },
+      "declaration": {
+        "ruleId": "layer-two",
+        "objectId": "asset",
+        "condition": {
+          "op": "compare",
+          "attributeId": "stage_one",
+          "operator": "eq",
+          "value": true,
+          "spans": []
+        },
+        "exceptions": [],
+        "ruleDependencies": [
+          "service"
+        ],
+        "conclusion": {
+          "predicate": "stage_two",
+          "value": true
+        }
+      },
+      "source": {
+        "sourceRef": {
+          "id": "cq.industrial.source",
+          "version": "1.0.0",
+          "digest": "sha256:3f3eb751e3d27b03636bb2b7fd27c1736aa50605fafc6beec826b51a840a7ff2"
+        },
+        "offsetUnit": "utf8_byte",
+        "startOffset": 316,
+        "endOffset": 391,
+        "quoteDigest": "sha256:2d073b6c865de95e75d07d82c87492813269de7bf58a6a87950aebce1e0e255f"
+      }
+    },
+    {
+      "ref": {
+        "id": "cq.industrial.rule.layer-three",
+        "version": "1.0.0",
+        "digest": "sha256:bee2e5aeb3fd47f9556993825d60ba8b4a920a39ec53927032bcb587be37f442"
+      },
+      "declaration": {
+        "ruleId": "layer-three",
+        "objectId": "asset",
+        "condition": {
+          "op": "compare",
+          "attributeId": "stage_two",
+          "operator": "eq",
+          "value": true,
+          "spans": []
+        },
+        "exceptions": [],
+        "ruleDependencies": [
+          "layer-two"
+        ],
+        "conclusion": {
+          "predicate": "ready",
+          "value": true
+        }
+      },
+      "source": {
+        "sourceRef": {
+          "id": "cq.industrial.source",
+          "version": "1.0.0",
+          "digest": "sha256:3f3eb751e3d27b03636bb2b7fd27c1736aa50605fafc6beec826b51a840a7ff2"
+        },
+        "offsetUnit": "utf8_byte",
+        "startOffset": 392,
+        "endOffset": 462,
+        "quoteDigest": "sha256:e5e6300fc7ac76c34d53251355fe05237f01e0572bf6ec10f734cb51b057bed7"
+      }
+    },
+    {
+      "ref": {
+        "id": "cq.industrial.rule.alarm",
+        "version": "1.0.0",
+        "digest": "sha256:39eec34fa355cea8d3e90a19e0cd656df322bd57235c6f503eaa08fc550714f5"
+      },
+      "declaration": {
+        "ruleId": "alarm",
+        "objectId": "asset",
+        "condition": {
+          "op": "compare",
+          "attributeId": "alarm",
+          "operator": "eq",
+          "value": true,
+          "spans": []
+        },
+        "exceptions": [],
+        "ruleDependencies": [],
+        "conclusion": {
+          "predicate": "stage_one",
+          "value": true
+        }
+      },
+      "source": {
+        "sourceRef": {
+          "id": "cq.industrial.source",
+          "version": "1.0.0",
+          "digest": "sha256:3f3eb751e3d27b03636bb2b7fd27c1736aa50605fafc6beec826b51a840a7ff2"
+        },
+        "offsetUnit": "utf8_byte",
+        "startOffset": 463,
+        "endOffset": 531,
+        "quoteDigest": "sha256:ca4d82106434ebf5d2e96e64368bedee887281a23141cfb0164d6fb2a0012d37"
+      }
+    },
+    {
+      "ref": {
+        "id": "cq.industrial.rule.service-any",
+        "version": "1.0.0",
+        "digest": "sha256:3ba52a7adeab5cfafa0a6015359a760f8d9fae404d13598c60644b4533d6a1f3"
+      },
+      "declaration": {
+        "ruleId": "service-any",
+        "objectId": "asset",
+        "condition": {
+          "op": "any",
+          "operands": [
+            {
+              "op": "range",
+              "attributeId": "hours",
+              "min": 100,
+              "unitCode": "h",
+              "spans": []
+            },
+            {
+              "op": "compare",
+              "attributeId": "alarm",
+              "operator": "eq",
+              "value": true,
+              "spans": []
+            }
+          ],
+          "spans": []
+        },
+        "exceptions": [],
+        "ruleDependencies": [],
+        "conclusion": {
+          "predicate": "stage_one",
+          "value": true
+        }
+      },
+      "source": {
+        "sourceRef": {
+          "id": "cq.industrial.source",
+          "version": "1.0.0",
+          "digest": "sha256:3f3eb751e3d27b03636bb2b7fd27c1736aa50605fafc6beec826b51a840a7ff2"
+        },
+        "offsetUnit": "utf8_byte",
+        "startOffset": 532,
+        "endOffset": 590,
+        "quoteDigest": "sha256:04818f47e23e2060bc802183553b5a9636053fe976898a8b24e3d31125f1d2bc"
+      }
+    }
+  ]
+}

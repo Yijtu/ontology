@@ -571,6 +571,814 @@ export const SCHEMA_DOCUMENTS: readonly JsonSchemaObject[] = [
   },
   {
     "$schema": "https://json-schema.org/draft/2020-12/schema",
+    "$id": "https://ontology.local/schema/competency-questions.schema.json",
+    "title": "CompetencyQuestionDeclarations",
+    "$comment": "GAP006: independent synthetic gold declarations, never execution receipts or customer acceptance. Canonical refs/scalars/time are reused. The registered GAP016 runner owns actual results.",
+    "$ref": "#/$defs/CompetencyQuestionSet",
+    "$defs": {
+      "CompetencyGoldValue": {
+        "oneOf": [
+          {
+            "type": "string",
+            "maxLength": 4096
+          },
+          {
+            "type": "boolean"
+          },
+          {
+            "$ref": "./common.schema.json#/$defs/DecimalQuantity"
+          }
+        ],
+        "title": "CompetencyGoldValue"
+      },
+      "CompetencySourceLocation": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": [
+          "sourceRef",
+          "startOffset",
+          "endOffset",
+          "quoteDigest",
+          "offsetUnit"
+        ],
+        "properties": {
+          "sourceRef": {
+            "$ref": "./common.schema.json#/$defs/VersionRef"
+          },
+          "startOffset": {
+            "type": "integer",
+            "minimum": 0
+          },
+          "endOffset": {
+            "type": "integer",
+            "minimum": 1
+          },
+          "quoteDigest": {
+            "$ref": "./common.schema.json#/$defs/Sha256Digest"
+          },
+          "offsetUnit": {
+            "const": "utf8_byte",
+            "description": "Offsets address exact original UTF-8 bytes, never UTF-16 positions or silently normalized text."
+          }
+        },
+        "title": "CompetencySourceLocation"
+      },
+      "CompetencyObservation": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": [
+          "factId",
+          "entityId",
+          "objectId",
+          "attributeId",
+          "value",
+          "recordedSeq",
+          "status",
+          "source"
+        ],
+        "properties": {
+          "factId": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 4096,
+            "pattern": "\\S"
+          },
+          "entityId": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 4096,
+            "pattern": "\\S"
+          },
+          "objectId": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 4096,
+            "pattern": "\\S"
+          },
+          "attributeId": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 4096,
+            "pattern": "\\S"
+          },
+          "value": {
+            "$ref": "#/$defs/CompetencyGoldValue"
+          },
+          "recordedSeq": {
+            "$ref": "./common.schema.json#/$defs/RevisionString"
+          },
+          "status": {
+            "enum": [
+              "active",
+              "retracted"
+            ]
+          },
+          "source": {
+            "$ref": "#/$defs/CompetencySourceLocation"
+          }
+        },
+        "title": "CompetencyObservation"
+      },
+      "CompetencyRelationInput": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": [
+          "factId",
+          "relationId",
+          "fromEntityId",
+          "toEntityId",
+          "endpointsResolved",
+          "recordedSeq",
+          "status",
+          "source"
+        ],
+        "properties": {
+          "factId": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 4096,
+            "pattern": "\\S"
+          },
+          "relationId": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 4096,
+            "pattern": "\\S"
+          },
+          "fromEntityId": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 4096,
+            "pattern": "\\S"
+          },
+          "toEntityId": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 4096,
+            "pattern": "\\S"
+          },
+          "endpointsResolved": {
+            "type": "boolean"
+          },
+          "recordedSeq": {
+            "$ref": "./common.schema.json#/$defs/RevisionString"
+          },
+          "status": {
+            "enum": [
+              "active",
+              "retracted"
+            ]
+          },
+          "source": {
+            "$ref": "#/$defs/CompetencySourceLocation"
+          }
+        },
+        "title": "CompetencyRelationInput"
+      },
+      "CompetencySyntheticInput": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": [
+          "dataMode",
+          "scopeRef",
+          "projectId",
+          "validAt",
+          "asOfRecordedSeq",
+          "observations",
+          "relations"
+        ],
+        "properties": {
+          "dataMode": {
+            "const": "synthetic"
+          },
+          "scopeRef": {
+            "$ref": "./common.schema.json#/$defs/ScopeRef"
+          },
+          "projectId": {
+            "$ref": "./common.schema.json#/$defs/Uuid"
+          },
+          "validAt": {
+            "$ref": "./common.schema.json#/$defs/Rfc3339UtcTimestamp"
+          },
+          "asOfRecordedSeq": {
+            "$ref": "./common.schema.json#/$defs/RevisionString"
+          },
+          "observations": {
+            "type": "array",
+            "items": {
+              "$ref": "#/$defs/CompetencyObservation"
+            },
+            "minItems": 0,
+            "maxItems": 256
+          },
+          "relations": {
+            "type": "array",
+            "items": {
+              "$ref": "#/$defs/CompetencyRelationInput"
+            },
+            "minItems": 0,
+            "maxItems": 256
+          }
+        },
+        "title": "CompetencySyntheticInput"
+      },
+      "CompetencyQuestionIntent": {
+        "title": "CompetencyQuestionIntent",
+        "oneOf": [
+          {
+            "type": "object",
+            "additionalProperties": false,
+            "required": [
+              "kind",
+              "projectId",
+              "objectId",
+              "subjectEntityId",
+              "attributeId"
+            ],
+            "properties": {
+              "kind": {
+                "const": "attribute"
+              },
+              "projectId": {
+                "$ref": "./common.schema.json#/$defs/Uuid"
+              },
+              "objectId": {
+                "type": "string",
+                "minLength": 1,
+                "maxLength": 256,
+                "pattern": "\\S"
+              },
+              "subjectEntityId": {
+                "type": "string",
+                "minLength": 1,
+                "maxLength": 256,
+                "pattern": "\\S"
+              },
+              "attributeId": {
+                "type": "string",
+                "minLength": 1,
+                "maxLength": 256,
+                "pattern": "\\S"
+              }
+            }
+          },
+          {
+            "type": "object",
+            "additionalProperties": false,
+            "required": [
+              "kind",
+              "projectId",
+              "objectId",
+              "attributeId"
+            ],
+            "properties": {
+              "kind": {
+                "const": "quantity_sum"
+              },
+              "projectId": {
+                "$ref": "./common.schema.json#/$defs/Uuid"
+              },
+              "objectId": {
+                "type": "string",
+                "minLength": 1,
+                "maxLength": 256,
+                "pattern": "\\S"
+              },
+              "attributeId": {
+                "type": "string",
+                "minLength": 1,
+                "maxLength": 256,
+                "pattern": "\\S"
+              }
+            }
+          },
+          {
+            "type": "object",
+            "additionalProperties": false,
+            "required": [
+              "kind",
+              "projectId",
+              "objectId",
+              "subjectEntityId",
+              "ruleId"
+            ],
+            "properties": {
+              "kind": {
+                "const": "rule"
+              },
+              "projectId": {
+                "$ref": "./common.schema.json#/$defs/Uuid"
+              },
+              "objectId": {
+                "type": "string",
+                "minLength": 1,
+                "maxLength": 256,
+                "pattern": "\\S"
+              },
+              "subjectEntityId": {
+                "type": "string",
+                "minLength": 1,
+                "maxLength": 256,
+                "pattern": "\\S"
+              },
+              "ruleId": {
+                "type": "string",
+                "minLength": 1,
+                "maxLength": 256,
+                "pattern": "\\S"
+              }
+            }
+          },
+          {
+            "type": "object",
+            "additionalProperties": false,
+            "required": [
+              "kind",
+              "projectId",
+              "objectId",
+              "subjectEntityId",
+              "relationId"
+            ],
+            "properties": {
+              "kind": {
+                "const": "relation"
+              },
+              "projectId": {
+                "$ref": "./common.schema.json#/$defs/Uuid"
+              },
+              "objectId": {
+                "type": "string",
+                "minLength": 1,
+                "maxLength": 256,
+                "pattern": "\\S"
+              },
+              "subjectEntityId": {
+                "type": "string",
+                "minLength": 1,
+                "maxLength": 256,
+                "pattern": "\\S"
+              },
+              "relationId": {
+                "type": "string",
+                "minLength": 1,
+                "maxLength": 256,
+                "pattern": "\\S"
+              }
+            }
+          }
+        ]
+      },
+      "CompetencyRuleExpectation": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": [
+          "kind",
+          "conditionState",
+          "applicability",
+          "propositionState"
+        ],
+        "properties": {
+          "kind": {
+            "const": "rule"
+          },
+          "conditionState": {
+            "enum": [
+              "true",
+              "false",
+              "unknown",
+              "conflict"
+            ]
+          },
+          "applicability": {
+            "enum": [
+              "applicable",
+              "not_applicable",
+              "unknown",
+              "conflict"
+            ]
+          },
+          "propositionState": {
+            "enum": [
+              "true",
+              "false",
+              "unknown",
+              "conflict"
+            ]
+          }
+        },
+        "title": "CompetencyRuleExpectation"
+      },
+      "CompetencyExpectation": {
+        "oneOf": [
+          {
+            "type": "object",
+            "additionalProperties": false,
+            "required": [
+              "kind",
+              "value"
+            ],
+            "properties": {
+              "kind": {
+                "const": "value"
+              },
+              "value": {
+                "$ref": "#/$defs/CompetencyGoldValue"
+              }
+            }
+          },
+          {
+            "$ref": "#/$defs/CompetencyRuleExpectation"
+          },
+          {
+            "type": "object",
+            "additionalProperties": false,
+            "required": [
+              "kind",
+              "reason"
+            ],
+            "properties": {
+              "kind": {
+                "const": "unknown"
+              },
+              "reason": {
+                "type": "string",
+                "minLength": 1,
+                "maxLength": 4096,
+                "pattern": "\\S"
+              }
+            }
+          },
+          {
+            "type": "object",
+            "additionalProperties": false,
+            "required": [
+              "kind",
+              "reason"
+            ],
+            "properties": {
+              "kind": {
+                "const": "refusal"
+              },
+              "reason": {
+                "enum": [
+                  "cross_project",
+                  "definition_version_mismatch",
+                  "unit_mismatch",
+                  "unsupported_capability"
+                ]
+              }
+            }
+          }
+        ],
+        "title": "CompetencyExpectation"
+      },
+      "CompetencyQuestion": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": [
+          "questionId",
+          "question",
+          "taskKind",
+          "definitionRef",
+          "ruleRefs",
+          "input",
+          "intent",
+          "requiredCapabilities",
+          "requiredSources",
+          "expected",
+          "goldOrigin",
+          "derivation",
+          "specRefs"
+        ],
+        "properties": {
+          "questionId": {
+            "type": "string",
+            "pattern": "^[a-z0-9][a-z0-9-]{1,63}$"
+          },
+          "question": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 4096,
+            "pattern": "\\S"
+          },
+          "taskKind": {
+            "$ref": "./tasks.schema.json#/$defs/TaskKind"
+          },
+          "definitionRef": {
+            "$ref": "./common.schema.json#/$defs/VersionRef"
+          },
+          "ruleRefs": {
+            "type": "array",
+            "items": {
+              "$ref": "./common.schema.json#/$defs/VersionRef"
+            },
+            "minItems": 0,
+            "maxItems": 32
+          },
+          "input": {
+            "$ref": "#/$defs/CompetencySyntheticInput"
+          },
+          "intent": {
+            "$ref": "#/$defs/CompetencyQuestionIntent"
+          },
+          "requiredCapabilities": {
+            "type": "array",
+            "items": {
+              "type": "string",
+              "minLength": 1,
+              "maxLength": 4096,
+              "pattern": "\\S"
+            },
+            "minItems": 1,
+            "maxItems": 16
+          },
+          "requiredSources": {
+            "type": "array",
+            "items": {
+              "$ref": "#/$defs/CompetencySourceLocation"
+            },
+            "minItems": 1,
+            "maxItems": 64
+          },
+          "expected": {
+            "$ref": "#/$defs/CompetencyExpectation"
+          },
+          "goldOrigin": {
+            "const": "authored_oracle"
+          },
+          "derivation": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 4096,
+            "pattern": "\\S"
+          },
+          "specRefs": {
+            "type": "array",
+            "items": {
+              "type": "string",
+              "pattern": "^tasks/[^\\\\]+#[^\\\\]+$"
+            },
+            "minItems": 1,
+            "maxItems": 12
+          }
+        },
+        "title": "CompetencyQuestion",
+        "allOf": [
+          {
+            "if": {
+              "properties": {
+                "intent": {
+                  "type": "object",
+                  "required": [
+                    "kind"
+                  ],
+                  "properties": {
+                    "kind": {
+                      "const": "attribute"
+                    }
+                  }
+                }
+              }
+            },
+            "then": {
+              "properties": {
+                "taskKind": {
+                  "const": "published_facts"
+                }
+              }
+            }
+          },
+          {
+            "if": {
+              "properties": {
+                "intent": {
+                  "type": "object",
+                  "required": [
+                    "kind"
+                  ],
+                  "properties": {
+                    "kind": {
+                      "const": "quantity_sum"
+                    }
+                  }
+                }
+              }
+            },
+            "then": {
+              "properties": {
+                "taskKind": {
+                  "const": "structured_query"
+                }
+              }
+            }
+          },
+          {
+            "if": {
+              "properties": {
+                "intent": {
+                  "type": "object",
+                  "required": [
+                    "kind"
+                  ],
+                  "properties": {
+                    "kind": {
+                      "const": "rule"
+                    }
+                  }
+                }
+              }
+            },
+            "then": {
+              "properties": {
+                "taskKind": {
+                  "const": "rule_judgement"
+                }
+              }
+            }
+          },
+          {
+            "if": {
+              "properties": {
+                "intent": {
+                  "type": "object",
+                  "required": [
+                    "kind"
+                  ],
+                  "properties": {
+                    "kind": {
+                      "const": "relation"
+                    }
+                  }
+                }
+              }
+            },
+            "then": {
+              "properties": {
+                "taskKind": {
+                  "const": "relations"
+                }
+              }
+            }
+          }
+        ]
+      },
+      "CompetencyExternalGold": {
+        "oneOf": [
+          {
+            "type": "object",
+            "additionalProperties": false,
+            "required": [
+              "status",
+              "acceptance",
+              "missingResources"
+            ],
+            "properties": {
+              "status": {
+                "const": "missing_resources"
+              },
+              "acceptance": {
+                "const": "unverified"
+              },
+              "missingResources": {
+                "type": "array",
+                "items": {
+                  "enum": [
+                    "authorised_quote_inputs",
+                    "human_quote_gold",
+                    "customer_compute_binding"
+                  ]
+                },
+                "minItems": 1,
+                "maxItems": 3
+              }
+            }
+          },
+          {
+            "type": "object",
+            "additionalProperties": false,
+            "required": [
+              "status",
+              "acceptance",
+              "quoteGoldRef",
+              "humanReviewRef"
+            ],
+            "properties": {
+              "status": {
+                "const": "available"
+              },
+              "acceptance": {
+                "const": "unverified"
+              },
+              "quoteGoldRef": {
+                "$ref": "./common.schema.json#/$defs/ResourceRef"
+              },
+              "humanReviewRef": {
+                "$ref": "./common.schema.json#/$defs/ResourceRef"
+              }
+            }
+          }
+        ],
+        "title": "CompetencyExternalGold"
+      },
+      "CompetencyQuestionSetBody": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": [
+          "schemaVersion",
+          "classification",
+          "execution",
+          "industryId",
+          "definitionRefs",
+          "ruleRefs",
+          "sourceRefs",
+          "allowedCapabilities",
+          "questions",
+          "externalGold"
+        ],
+        "properties": {
+          "schemaVersion": {
+            "const": "competency-questions@1"
+          },
+          "classification": {
+            "const": "synthetic_demo_not_an_industry_standard"
+          },
+          "execution": {
+            "const": "not_run"
+          },
+          "industryId": {
+            "type": "string",
+            "pattern": "^[a-z][a-z0-9-]{1,63}$"
+          },
+          "definitionRefs": {
+            "type": "array",
+            "items": {
+              "$ref": "./common.schema.json#/$defs/VersionRef"
+            },
+            "minItems": 1,
+            "maxItems": 16
+          },
+          "ruleRefs": {
+            "type": "array",
+            "items": {
+              "$ref": "./common.schema.json#/$defs/VersionRef"
+            },
+            "minItems": 0,
+            "maxItems": 32
+          },
+          "sourceRefs": {
+            "type": "array",
+            "items": {
+              "$ref": "./common.schema.json#/$defs/VersionRef"
+            },
+            "minItems": 1,
+            "maxItems": 32
+          },
+          "allowedCapabilities": {
+            "type": "array",
+            "items": {
+              "type": "string",
+              "minLength": 1,
+              "maxLength": 4096,
+              "pattern": "\\S"
+            },
+            "minItems": 1,
+            "maxItems": 16
+          },
+          "questions": {
+            "type": "array",
+            "items": {
+              "$ref": "#/$defs/CompetencyQuestion"
+            },
+            "minItems": 1,
+            "maxItems": 128
+          },
+          "externalGold": {
+            "$ref": "#/$defs/CompetencyExternalGold"
+          }
+        },
+        "title": "CompetencyQuestionSetBody"
+      },
+      "CompetencyQuestionSet": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": [
+          "ref",
+          "body"
+        ],
+        "properties": {
+          "ref": {
+            "$ref": "./common.schema.json#/$defs/VersionRef"
+          },
+          "body": {
+            "$ref": "#/$defs/CompetencyQuestionSetBody"
+          }
+        },
+        "title": "CompetencyQuestionSet"
+      }
+    }
+  },
+  {
+    "$schema": "https://json-schema.org/draft/2020-12/schema",
     "$id": "https://ontology.local/schema/component.schema.json",
     "title": "ComponentContracts",
     "$comment": "C1 component registration and capability declarations. Manifests describe what a component provides/requires; they never carry credentials or physical addresses.",

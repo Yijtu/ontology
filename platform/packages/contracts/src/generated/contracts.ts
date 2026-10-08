@@ -155,6 +155,102 @@ export type DurationMs = number
 export type RunId = string
 /**
  * This interface was referenced by `OntologyContracts`'s JSON-Schema
+ * via the `definition` "CompetencyGoldValue".
+ */
+export type CompetencyGoldValue = string | boolean | DecimalQuantity
+/**
+ * This interface was referenced by `OntologyContracts`'s JSON-Schema
+ * via the `definition` "CompetencyQuestionIntent".
+ */
+export type CompetencyQuestionIntent =
+  | {
+      kind: 'attribute'
+      projectId: Uuid
+      objectId: string
+      subjectEntityId: string
+      attributeId: string
+    }
+  | {
+      kind: 'quantity_sum'
+      projectId: Uuid
+      objectId: string
+      attributeId: string
+    }
+  | {
+      kind: 'rule'
+      projectId: Uuid
+      objectId: string
+      subjectEntityId: string
+      ruleId: string
+    }
+  | {
+      kind: 'relation'
+      projectId: Uuid
+      objectId: string
+      subjectEntityId: string
+      relationId: string
+    }
+/**
+ * This interface was referenced by `OntologyContracts`'s JSON-Schema
+ * via the `definition` "CompetencyExpectation".
+ */
+export type CompetencyExpectation =
+  | {
+      kind: 'value'
+      value: CompetencyGoldValue
+    }
+  | CompetencyRuleExpectation
+  | {
+      kind: 'unknown'
+      reason: string
+    }
+  | {
+      kind: 'refusal'
+      reason:
+        'cross_project' | 'definition_version_mismatch' | 'unit_mismatch' | 'unsupported_capability'
+    }
+/**
+ * This interface was referenced by `OntologyContracts`'s JSON-Schema
+ * via the `definition` "CompetencyQuestion".
+ */
+export type CompetencyQuestion = CompetencyQuestion1
+/**
+ * The bounded set of published task kinds. Model proposals may only select one of these; there is no open-ended tool or script kind.
+ *
+ * This interface was referenced by `OntologyContracts`'s JSON-Schema
+ * via the `definition` "TaskKind".
+ */
+export type TaskKind =
+  | 'published_facts'
+  | 'relations'
+  | 'rule_judgement'
+  | 'structured_query'
+  | 'document_qa'
+  | 'compute'
+/**
+ * This interface was referenced by `OntologyContracts`'s JSON-Schema
+ * via the `definition` "CompetencyExternalGold".
+ */
+export type CompetencyExternalGold =
+  | {
+      status: 'missing_resources'
+      acceptance: 'unverified'
+      /**
+       * @minItems 1
+       * @maxItems 3
+       */
+      missingResources: (
+        'authorised_quote_inputs' | 'human_quote_gold' | 'customer_compute_binding'
+      )[]
+    }
+  | {
+      status: 'available'
+      acceptance: 'unverified'
+      quoteGoldRef: ResourceRef
+      humanReviewRef: ResourceRef
+    }
+/**
+ * This interface was referenced by `OntologyContracts`'s JSON-Schema
  * via the `definition` "ComponentKind".
  */
 export type ComponentKind =
@@ -593,19 +689,6 @@ export type PlanFailureBehaviour = 'abort' | 'continue'
  */
 export type PlanArgumentSource = PlanLiteralArgument | PlanPredecessorArgument
 /**
- * The bounded set of published task kinds. Model proposals may only select one of these; there is no open-ended tool or script kind.
- *
- * This interface was referenced by `OntologyContracts`'s JSON-Schema
- * via the `definition` "TaskKind".
- */
-export type TaskKind =
-  | 'published_facts'
-  | 'relations'
-  | 'rule_judgement'
-  | 'structured_query'
-  | 'document_qa'
-  | 'compute'
-/**
  * Input policies run before a compute/answer step; result policies run before the typed writer.
  *
  * This interface was referenced by `OntologyContracts`'s JSON-Schema
@@ -857,6 +940,154 @@ export interface Integrity {
   algorithm: 'sha256'
   digest: Sha256Digest
   verifiedAt?: Rfc3339UtcTimestamp
+}
+/**
+ * This interface was referenced by `OntologyContracts`'s JSON-Schema
+ * via the `definition` "CompetencySourceLocation".
+ */
+export interface CompetencySourceLocation {
+  sourceRef: VersionRef
+  startOffset: number
+  endOffset: number
+  quoteDigest: Sha256Digest
+  /**
+   * Offsets address exact original UTF-8 bytes, never UTF-16 positions or silently normalized text.
+   */
+  offsetUnit: 'utf8_byte'
+}
+/**
+ * This interface was referenced by `OntologyContracts`'s JSON-Schema
+ * via the `definition` "CompetencyObservation".
+ */
+export interface CompetencyObservation {
+  factId: string
+  entityId: string
+  objectId: string
+  attributeId: string
+  value: CompetencyGoldValue
+  recordedSeq: RevisionString
+  status: 'active' | 'retracted'
+  source: CompetencySourceLocation
+}
+/**
+ * This interface was referenced by `OntologyContracts`'s JSON-Schema
+ * via the `definition` "CompetencyRelationInput".
+ */
+export interface CompetencyRelationInput {
+  factId: string
+  relationId: string
+  fromEntityId: string
+  toEntityId: string
+  endpointsResolved: boolean
+  recordedSeq: RevisionString
+  status: 'active' | 'retracted'
+  source: CompetencySourceLocation
+}
+/**
+ * This interface was referenced by `OntologyContracts`'s JSON-Schema
+ * via the `definition` "CompetencySyntheticInput".
+ */
+export interface CompetencySyntheticInput {
+  dataMode: 'synthetic'
+  scopeRef: ScopeRef
+  projectId: Uuid
+  validAt: Rfc3339UtcTimestamp
+  asOfRecordedSeq: RevisionString
+  /**
+   * @minItems 0
+   * @maxItems 256
+   */
+  observations: CompetencyObservation[]
+  /**
+   * @minItems 0
+   * @maxItems 256
+   */
+  relations: CompetencyRelationInput[]
+}
+/**
+ * This interface was referenced by `OntologyContracts`'s JSON-Schema
+ * via the `definition` "CompetencyRuleExpectation".
+ */
+export interface CompetencyRuleExpectation {
+  kind: 'rule'
+  conditionState: 'true' | 'false' | 'unknown' | 'conflict'
+  applicability: 'applicable' | 'not_applicable' | 'unknown' | 'conflict'
+  propositionState: 'true' | 'false' | 'unknown' | 'conflict'
+}
+export interface CompetencyQuestion1 {
+  questionId: string
+  question: string
+  taskKind: TaskKind
+  definitionRef: VersionRef
+  /**
+   * @minItems 0
+   * @maxItems 32
+   */
+  ruleRefs: VersionRef[]
+  input: CompetencySyntheticInput
+  intent: CompetencyQuestionIntent
+  /**
+   * @minItems 1
+   * @maxItems 16
+   */
+  requiredCapabilities: string[]
+  /**
+   * @minItems 1
+   * @maxItems 64
+   */
+  requiredSources: CompetencySourceLocation[]
+  expected: CompetencyExpectation
+  goldOrigin: 'authored_oracle'
+  derivation: string
+  /**
+   * @minItems 1
+   * @maxItems 12
+   */
+  specRefs: string[]
+}
+/**
+ * This interface was referenced by `OntologyContracts`'s JSON-Schema
+ * via the `definition` "CompetencyQuestionSetBody".
+ */
+export interface CompetencyQuestionSetBody {
+  schemaVersion: 'competency-questions@1'
+  classification: 'synthetic_demo_not_an_industry_standard'
+  execution: 'not_run'
+  industryId: string
+  /**
+   * @minItems 1
+   * @maxItems 16
+   */
+  definitionRefs: VersionRef[]
+  /**
+   * @minItems 0
+   * @maxItems 32
+   */
+  ruleRefs: VersionRef[]
+  /**
+   * @minItems 1
+   * @maxItems 32
+   */
+  sourceRefs: VersionRef[]
+  /**
+   * @minItems 1
+   * @maxItems 16
+   */
+  allowedCapabilities: string[]
+  /**
+   * @minItems 1
+   * @maxItems 128
+   */
+  questions: CompetencyQuestion[]
+  externalGold: CompetencyExternalGold
+}
+/**
+ * This interface was referenced by `OntologyContracts`'s JSON-Schema
+ * via the `definition` "CompetencyQuestionSet".
+ */
+export interface CompetencyQuestionSet {
+  ref: VersionRef
+  body: CompetencyQuestionSetBody
 }
 /**
  * Half-open version contract range [min, max). Used for preflight resolution; required capabilities are never silently dropped by intersection.

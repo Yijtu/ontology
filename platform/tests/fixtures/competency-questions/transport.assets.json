@@ -1,0 +1,385 @@
+{
+  "definitions": [
+    {
+      "draft": {
+        "scopeRef": {
+          "tenantId": "11111111-1111-4111-8111-111111111111",
+          "spaceId": "aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa"
+        },
+        "namespace": "cq-transport-synthetic",
+        "definitionId": "cq.transport.definition",
+        "version": "1.0.0",
+        "layer": "industry_core",
+        "standardProvenance": [
+          {
+            "standardRef": {
+              "id": "cq.transport.source",
+              "version": "1.0.0",
+              "digest": "sha256:0fa4b942c039c2afd5338cb2229262c2c036b5ba1af252a2d5c14a201f8baa37"
+            },
+            "provenanceKind": "synthetic_assumption"
+          }
+        ],
+        "objects": [
+          {
+            "kind": "object",
+            "id": "facility",
+            "namespace": "cq-transport-synthetic",
+            "displayName": "facility",
+            "identityScopeId": "facility.identity",
+            "standardProvenance": [
+              {
+                "standardRef": {
+                  "id": "cq.transport.source",
+                  "version": "1.0.0",
+                  "digest": "sha256:0fa4b942c039c2afd5338cb2229262c2c036b5ba1af252a2d5c14a201f8baa37"
+                },
+                "provenanceKind": "synthetic_assumption"
+              }
+            ]
+          },
+          {
+            "kind": "object",
+            "id": "district",
+            "namespace": "cq-transport-synthetic",
+            "displayName": "district",
+            "identityScopeId": "district.identity",
+            "standardProvenance": [
+              {
+                "standardRef": {
+                  "id": "cq.transport.source",
+                  "version": "1.0.0",
+                  "digest": "sha256:0fa4b942c039c2afd5338cb2229262c2c036b5ba1af252a2d5c14a201f8baa37"
+                },
+                "provenanceKind": "synthetic_assumption"
+              }
+            ]
+          }
+        ],
+        "attributes": [
+          {
+            "kind": "attribute",
+            "id": "facility_code",
+            "namespace": "cq-transport-synthetic",
+            "objectId": "facility",
+            "valueType": "string",
+            "cardinality": {
+              "min": 1,
+              "max": 1
+            },
+            "identityKey": true,
+            "standardProvenance": [
+              {
+                "standardRef": {
+                  "id": "cq.transport.source",
+                  "version": "1.0.0",
+                  "digest": "sha256:0fa4b942c039c2afd5338cb2229262c2c036b5ba1af252a2d5c14a201f8baa37"
+                },
+                "provenanceKind": "synthetic_assumption"
+              }
+            ]
+          },
+          {
+            "kind": "attribute",
+            "id": "length",
+            "namespace": "cq-transport-synthetic",
+            "objectId": "facility",
+            "valueType": "quantity",
+            "cardinality": {
+              "min": 0,
+              "max": 1
+            },
+            "unit": {
+              "unitCode": "m",
+              "dimension": "length"
+            },
+            "standardProvenance": [
+              {
+                "standardRef": {
+                  "id": "cq.transport.source",
+                  "version": "1.0.0",
+                  "digest": "sha256:0fa4b942c039c2afd5338cb2229262c2c036b5ba1af252a2d5c14a201f8baa37"
+                },
+                "provenanceKind": "synthetic_assumption"
+              }
+            ]
+          },
+          {
+            "kind": "attribute",
+            "id": "condition",
+            "namespace": "cq-transport-synthetic",
+            "objectId": "facility",
+            "valueType": "enum",
+            "cardinality": {
+              "min": 0,
+              "max": 1
+            },
+            "enumValues": [
+              "good",
+              "bad"
+            ],
+            "standardProvenance": [
+              {
+                "standardRef": {
+                  "id": "cq.transport.source",
+                  "version": "1.0.0",
+                  "digest": "sha256:0fa4b942c039c2afd5338cb2229262c2c036b5ba1af252a2d5c14a201f8baa37"
+                },
+                "provenanceKind": "synthetic_assumption"
+              }
+            ]
+          },
+          {
+            "kind": "attribute",
+            "id": "closed",
+            "namespace": "cq-transport-synthetic",
+            "objectId": "facility",
+            "valueType": "boolean",
+            "cardinality": {
+              "min": 0,
+              "max": 1
+            },
+            "standardProvenance": [
+              {
+                "standardRef": {
+                  "id": "cq.transport.source",
+                  "version": "1.0.0",
+                  "digest": "sha256:0fa4b942c039c2afd5338cb2229262c2c036b5ba1af252a2d5c14a201f8baa37"
+                },
+                "provenanceKind": "synthetic_assumption"
+              }
+            ]
+          },
+          {
+            "kind": "attribute",
+            "id": "needs_inspection",
+            "namespace": "cq-transport-synthetic",
+            "objectId": "facility",
+            "valueType": "boolean",
+            "cardinality": {
+              "min": 0,
+              "max": 1
+            },
+            "standardProvenance": [
+              {
+                "standardRef": {
+                  "id": "cq.transport.source",
+                  "version": "1.0.0",
+                  "digest": "sha256:0fa4b942c039c2afd5338cb2229262c2c036b5ba1af252a2d5c14a201f8baa37"
+                },
+                "provenanceKind": "synthetic_assumption"
+              }
+            ]
+          },
+          {
+            "kind": "attribute",
+            "id": "district_code",
+            "namespace": "cq-transport-synthetic",
+            "objectId": "district",
+            "valueType": "string",
+            "cardinality": {
+              "min": 1,
+              "max": 1
+            },
+            "identityKey": true,
+            "standardProvenance": [
+              {
+                "standardRef": {
+                  "id": "cq.transport.source",
+                  "version": "1.0.0",
+                  "digest": "sha256:0fa4b942c039c2afd5338cb2229262c2c036b5ba1af252a2d5c14a201f8baa37"
+                },
+                "provenanceKind": "synthetic_assumption"
+              }
+            ]
+          },
+          {
+            "kind": "attribute",
+            "id": "watch",
+            "namespace": "cq-transport-synthetic",
+            "objectId": "district",
+            "valueType": "boolean",
+            "cardinality": {
+              "min": 0,
+              "max": 1
+            },
+            "standardProvenance": [
+              {
+                "standardRef": {
+                  "id": "cq.transport.source",
+                  "version": "1.0.0",
+                  "digest": "sha256:0fa4b942c039c2afd5338cb2229262c2c036b5ba1af252a2d5c14a201f8baa37"
+                },
+                "provenanceKind": "synthetic_assumption"
+              }
+            ]
+          }
+        ],
+        "relations": [
+          {
+            "kind": "relation",
+            "id": "located_in",
+            "namespace": "cq-transport-synthetic",
+            "fromObjectId": "facility",
+            "toObjectId": "district",
+            "cardinality": {
+              "min": 0,
+              "max": 1
+            },
+            "standardProvenance": [
+              {
+                "standardRef": {
+                  "id": "cq.transport.source",
+                  "version": "1.0.0",
+                  "digest": "sha256:0fa4b942c039c2afd5338cb2229262c2c036b5ba1af252a2d5c14a201f8baa37"
+                },
+                "provenanceKind": "synthetic_assumption"
+              }
+            ]
+          }
+        ],
+        "identityScopes": [
+          {
+            "kind": "identity_scope",
+            "id": "facility.identity",
+            "namespace": "cq-transport-synthetic",
+            "objectId": "facility",
+            "scopeDimensions": [
+              "project"
+            ],
+            "identityAttributeIds": [
+              "facility_code"
+            ],
+            "standardProvenance": [
+              {
+                "standardRef": {
+                  "id": "cq.transport.source",
+                  "version": "1.0.0",
+                  "digest": "sha256:0fa4b942c039c2afd5338cb2229262c2c036b5ba1af252a2d5c14a201f8baa37"
+                },
+                "provenanceKind": "synthetic_assumption"
+              }
+            ]
+          },
+          {
+            "kind": "identity_scope",
+            "id": "district.identity",
+            "namespace": "cq-transport-synthetic",
+            "objectId": "district",
+            "scopeDimensions": [
+              "project"
+            ],
+            "identityAttributeIds": [
+              "district_code"
+            ],
+            "standardProvenance": [
+              {
+                "standardRef": {
+                  "id": "cq.transport.source",
+                  "version": "1.0.0",
+                  "digest": "sha256:0fa4b942c039c2afd5338cb2229262c2c036b5ba1af252a2d5c14a201f8baa37"
+                },
+                "provenanceKind": "synthetic_assumption"
+              }
+            ]
+          }
+        ],
+        "ruleConstraints": []
+      },
+      "ref": {
+        "id": "cq.transport.definition",
+        "version": "1.0.0",
+        "digest": "sha256:f3c53c29d2c47ca81ab4393123576b33e4dc839c4c88617e9a4e7136dcb4bfc5"
+      }
+    }
+  ],
+  "rules": [
+    {
+      "ref": {
+        "id": "cq.transport.rule.inspection",
+        "version": "1.0.0",
+        "digest": "sha256:f610b7b144445b2745427d459083b7ac955d56ff21d2d5ee065a026f0fc2ca4e"
+      },
+      "declaration": {
+        "ruleId": "inspection",
+        "objectId": "facility",
+        "condition": {
+          "op": "compare",
+          "attributeId": "condition",
+          "operator": "eq",
+          "value": "bad",
+          "spans": []
+        },
+        "exceptions": [
+          {
+            "exceptionId": "closed",
+            "condition": {
+              "op": "compare",
+              "attributeId": "closed",
+              "operator": "eq",
+              "value": true,
+              "spans": []
+            },
+            "spans": []
+          }
+        ],
+        "ruleDependencies": [],
+        "conclusion": {
+          "predicate": "needs_inspection",
+          "value": true
+        }
+      },
+      "source": {
+        "sourceRef": {
+          "id": "cq.transport.source",
+          "version": "1.0.0",
+          "digest": "sha256:0fa4b942c039c2afd5338cb2229262c2c036b5ba1af252a2d5c14a201f8baa37"
+        },
+        "offsetUnit": "utf8_byte",
+        "startOffset": 389,
+        "endOffset": 471,
+        "quoteDigest": "sha256:853e1f29a8f45bf45383dfd60b09ff573050318cbeea3f10da6707afa66564d2"
+      }
+    },
+    {
+      "ref": {
+        "id": "cq.transport.rule.district-watch",
+        "version": "1.0.0",
+        "digest": "sha256:e28d618a14ab6018abf16b555d184386b8f83e17bcdb548c5c1310bc6117ebdb"
+      },
+      "declaration": {
+        "ruleId": "district-watch",
+        "objectId": "facility",
+        "condition": {
+          "op": "relation",
+          "relationId": "located_in",
+          "targetCondition": {
+            "op": "compare",
+            "attributeId": "watch",
+            "operator": "eq",
+            "value": true,
+            "spans": []
+          },
+          "spans": []
+        },
+        "exceptions": [],
+        "ruleDependencies": [],
+        "conclusion": {
+          "predicate": "needs_inspection",
+          "value": true
+        }
+      },
+      "source": {
+        "sourceRef": {
+          "id": "cq.transport.source",
+          "version": "1.0.0",
+          "digest": "sha256:0fa4b942c039c2afd5338cb2229262c2c036b5ba1af252a2d5c14a201f8baa37"
+        },
+        "offsetUnit": "utf8_byte",
+        "startOffset": 472,
+        "endOffset": 567,
+        "quoteDigest": "sha256:360ed7fd027fd1576254551e93bdb6d74d66ecee7884cfd08eacaafab6f79832"
+      }
+    }
+  ]
+}
