@@ -13,7 +13,7 @@ import { FileSystemObjectStore, LocalImmutableBlobStore, PostgresArtifactRegistr
 import { LocalDocumentExtractionService, PostgresDocumentParseStore, publishGroundingDocumentSet } from '@ontology/adapter-extraction-document'
 import { createCoreApi, createCoreLocalComposition, loadCoreExamples } from '@ontology/app-api'
 import type { CoreLocalComposition } from '@ontology/app-api'
-import type { ResourceRef, ScopeRef } from '@ontology/contracts'
+import type { ResourceRef, ScopeRef, VersionRef, AssetCandidateVersion, SemanticDefinitionRecord } from '@ontology/contracts'
 import { toolContext } from '../unit/component-registry-fixtures'
 import { startPostgresContainer } from './postgres-container'
 import type { PostgresContainer } from './postgres-container'
@@ -72,6 +72,7 @@ const generatedDefinition = {
   ],
   relations: [],
 }
+let controlledDefinition: unknown = generatedDefinition
 
 let container: PostgresContainer | undefined
 let admin: Client | undefined
@@ -94,7 +95,7 @@ async function startControlledModelServer(): Promise<string> {
     for await (const chunk of request) chunks.push(chunk as Buffer)
     modelRequests.push(Buffer.concat(chunks).toString('utf8'))
     response.writeHead(200, { 'content-type': 'text/event-stream', 'cache-control': 'no-cache' })
-    const content = JSON.stringify(generatedDefinition)
+    const content = JSON.stringify(controlledDefinition)
     const frames = [
       { id: 'chatcmpl-chain', object: 'chat.completion.chunk', created: 1, model: 'synthetic-vendor-extractor', choices: [{ index: 0, delta: { content }, finish_reason: null }], usage: null },
       { id: 'chatcmpl-chain', object: 'chat.completion.chunk', created: 1, model: 'synthetic-vendor-extractor', choices: [{ index: 0, delta: {}, finish_reason: 'stop' }], usage: null },
@@ -198,6 +199,32 @@ let modelServerBaseUrl = ''
 let publishedPackRef: { id: string; version: string; digest: string } | undefined
 let workspaceId = ''
 let chainExampleSetId = ''
+
+async function mountedWorkspace(basePackRef: VersionRef, target = baseUrl, ground = true) {
+  const create = await request(target, '/api/v1/industry-workspaces', {
+    method: 'POST', headers: { 'content-type': 'application/json', 'idempotency-key': randomUUID() },
+    body: JSON.stringify({ namespace: `reuse-${randomUUID()}`, displayName: 'Incremental workspace B',
+      boundary: { goals: ['extend assets'], included: ['registry'], excluded: ['pricing'], applicability: {} },
+      documentSetRef: { id: randomUUID(), version: '1.0.0', digest: DIGEST, kind: 'artifact' } }),
+  })
+  if (create.status !== 201) throw new Error(`mounted workspace create failed: ${await failureDetail(create)}`)
+  const workspaceId = (await jsonBody(create) as { data: { workspace: { workspaceId: string } } }).data.workspace.workspaceId
+  const grounded = ground ? await groundedSource(workspaceId) : undefined
+  const edit = await request(target, `/api/v1/industry-workspaces/${workspaceId}/draft-operations`, {
+    method: 'POST', headers: { 'content-type': 'application/json', 'if-match': '1', 'idempotency-key': randomUUID() },
+    body: JSON.stringify({ operation: 'edit', reason: 'mount the exact reusable package', basePackRef,
+      ...(grounded === undefined ? {} : { documentSetRef: grounded.documentSetRef }) }),
+  })
+  if (edit.status !== 200) throw new Error(`mount base pin failed: ${await failureDetail(edit)}`)
+  return { workspaceId, sourceRefs: grounded === undefined ? [] : [grounded.sourceRef] }
+}
+
+function generateMounted(workspace: { workspaceId: string; sourceRefs: ResourceRef[] }, target = baseUrl) {
+  return request(target, `/api/v1/industry-workspaces/${workspace.workspaceId}/generations`, {
+    method: 'POST', headers: { 'content-type': 'application/json', 'if-match': '2', 'idempotency-key': randomUUID() },
+    body: JSON.stringify({ kinds: ['object', 'attribute', 'relation'], generationPolicyRef: POLICY_REF, sourceRefs: workspace.sourceRefs }),
+  })
+}
 
 beforeAll(async () => {
   await startIsolatedDatabase()
@@ -412,6 +439,89 @@ describe('the default Core host composition chain (real PostgreSQL)', () => {
     const foreignPacks = (await jsonBody(foreignCatalogue) as { data: { packs: unknown[] } }).data.packs
     expect(foreignPacks).toHaveLength(0)
   }, 240_000)
+
+  it('loads newly published package A in workspace B, persists incremental references and explains conflicts', async () => {
+    const pin = publishedPackRef
+    if (pin === undefined || admin === undefined) throw new Error('the initial publication is missing')
+    const workspaceB = await mountedWorkspace(pin)
+    const object = { displayName: 'Asset', businessMeaning: 'a product in a financial catalogue', suggestedReason: 'source', sourceIndex: 0, identityAttributeIds: [] }
+    controlledDefinition = {
+      objects: [{ ...object, logicalId: 'asset', displayName: 'Renamed Asset', businessMeaning: 'a maintained physical asset', identityAttributeIds: ['asset_code'] },
+        { ...object, logicalId: 'catalog_product' }],
+      attributes: [
+        { logicalId: 'condition', displayName: 'Condition', businessMeaning: 'condition of the maintained asset', suggestedReason: 'source', sourceIndex: 0, objectLogicalId: 'asset', valueType: 'boolean' },
+        { logicalId: 'inspection_due', displayName: 'Inspection due', businessMeaning: 'a model type conflict', suggestedReason: 'source', sourceIndex: 0, objectLogicalId: 'asset', valueType: 'string' },
+      ],
+      relations: [{ logicalId: 'product_requires_asset', displayName: 'Requires asset', businessMeaning: 'product requires maintained asset', suggestedReason: 'source', sourceIndex: 0,
+        fromObjectLogicalId: 'catalog_product', toObjectLogicalId: 'asset' }],
+    }
+    try {
+      const before = modelRequests.length
+      const response = await generateMounted(workspaceB)
+      if (response.status !== 201) throw new Error(`incremental generation failed: ${await failureDetail(response)}`)
+      const view = (await jsonBody(response) as { data: { candidates: AssetCandidateVersion[] } }).data
+      expect(view.candidates).toHaveLength(5)
+      const canonical = view.candidates.find((candidate) => candidate.logicalId === 'asset')
+      expect(canonical?.payload.displayName).toBe('Asset')
+      expect(canonical?.payload.conflicts).toContainEqual({ kind: 'terminology_mismatch',
+        message: 'the mounted asset names "asset" as "Asset", not "Renamed Asset"', relatedLogicalIds: ['asset'] })
+      expect(view.candidates.find((candidate) => candidate.logicalId === 'catalog_product')?.payload.displayName).toBe('Asset')
+      const condition = view.candidates.find((candidate) => candidate.logicalId === 'condition')
+      expect(condition?.payload).toMatchObject({ objectLogicalId: 'asset' })
+      expect(condition?.issues.some((issue) => issue.code === 'ENDPOINT_UNRESOLVED')).toBe(false)
+      expect(view.candidates.find((candidate) => candidate.logicalId === 'inspection_due')?.payload.conflicts).toContainEqual({
+        kind: 'terminology_mismatch', message: 'mounted attribute type is boolean', relatedLogicalIds: ['inspection_due'] })
+      expect(view.candidates.find((candidate) => candidate.kind === 'relation')?.issues.some((issue) => issue.code === 'ENDPOINT_UNRESOLVED')).toBe(false)
+      expect(modelRequests.length).toBe(before + 1)
+      const definition = await admin.query<{ definition: SemanticDefinitionRecord }>(
+        'SELECT definition FROM agent_platform.semantic_definition_versions WHERE tenant_id=$1 AND space_id=$2 AND namespace=$3 AND version=$4',
+        [scope.tenantId, scope.spaceId, 'chain-acceptance', pin.version])
+      const requestText = modelRequests.at(-1) ?? ''
+      const record = definition.rows[0]?.definition
+      if (record === undefined) throw new Error('the persisted definition is missing')
+      expect(requestText).toContain(pin.digest)
+      expect(requestText).toContain(record.ref.digest)
+      expect(requestText).toContain('identityScopes')
+      expect(requestText).toContain('standardProvenance')
+      const persisted = await request(baseUrl, `/api/v1/industry-workspaces/${workspaceB.workspaceId}/candidates`)
+      expect((await jsonBody(persisted) as { data: { candidates: AssetCandidateVersion[] } }).data.candidates).toEqual(view.candidates)
+      const draft = await admin.query<{ base_pack_ref: VersionRef }>(
+        "SELECT body->'basePackRef' AS base_pack_ref FROM agent_platform.asset_draft_versions WHERE tenant_id=$1 AND space_id=$2 AND workspace_id=$3 AND revision=2",
+        [scope.tenantId, scope.spaceId, workspaceB.workspaceId])
+      expect(draft.rows[0]?.base_pack_ref).toEqual(pin)
+    } finally {
+      controlledDefinition = generatedDefinition
+    }
+  })
+
+  it('preserves the persisted static profile pin and its identity/unit declarations through the default host', async () => {
+    const spec = Object.values(composition?.dependencies.profileSpecsByScenario ?? {})[0]
+    if (spec === undefined) throw new Error('the mounted static profile is missing')
+    const workspace = await mountedWorkspace(spec.industryRef)
+    const response = await generateMounted(workspace)
+    if (response.status !== 201) throw new Error(`static mounted generation failed: ${await failureDetail(response)}`)
+    expect(modelRequests.at(-1)).toContain(spec.industryRef.digest)
+    expect(modelRequests.at(-1)).toContain('identityScopes')
+    expect(modelRequests.at(-1)).toContain('unitCode')
+    expect(modelRequests.at(-1)).toContain('standardProvenance')
+  })
+
+  it('rejects a wrong digest or another tenant’s private base before calling the model', async () => {
+    const pin = publishedPackRef
+    if (pin === undefined) throw new Error('the initial publication is missing')
+    for (const attempt of [
+      { ref: { ...pin, digest: DIGEST }, target: baseUrl, status: 409 },
+      { ref: pin, target: otherBaseUrl, status: 409 },
+    ]) {
+      const workspace = await mountedWorkspace(attempt.ref, attempt.target, false)
+      const before = modelRequests.length
+      const response = await generateMounted(workspace, attempt.target)
+      expect(response.status).toBe(attempt.status)
+      expect(modelRequests.length).toBe(before)
+      const batches = await request(attempt.target, `/api/v1/industry-workspaces/${workspace.workspaceId}/generations`)
+      expect((await jsonBody(batches) as { data: { batches: unknown[] } }).data.batches).toHaveLength(0)
+    }
+  })
 
   it('carries a breaking-change strategy through the ordinary validation/publication HTTP routes and preserves v1', async () => {
     const firstRef = publishedPackRef

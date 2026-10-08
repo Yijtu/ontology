@@ -43,3 +43,5 @@ export {
 } from './validation'
 export type { DefinitionValidationContext } from './validation'
 export { definitionRevisionStrategyProblem } from './validation'
+export { DynamicDefinitionTerminologySource, createDynamicDefinitionTerminologySource } from './dynamic-terminology'
+export type { DynamicDefinitionTerminologyDependencies } from './dynamic-terminology'

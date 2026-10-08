@@ -34,7 +34,7 @@ import { EMPTY_TERMINOLOGY } from './terminology'
 import type { DefinitionTerminologySource, MountedDefinitionTerminology } from './terminology'
 
 /** The fixed prompt/schema-context template version recorded with every generation call (A §5.3). */
-export const TBOX_PROMPT_VERSION = 'ontology.tbox-generation@1'
+export const TBOX_PROMPT_VERSION = 'ontology.tbox-generation@2'
 
 /**
  * The published response schema the TBox modelling role answers with. It is deliberately a
@@ -747,6 +747,8 @@ export class DefinitionCandidateGenerationService {
       objects: [...terminology.objectLogicalIds].sort(),
       attributes: [...terminology.attributeLogicalIds].sort(),
       relations: [...terminology.relationLogicalIds].sort(),
+      ...(terminology.packRef === undefined ? {} : { packRef: terminology.packRef }),
+      ...(terminology.definition === undefined ? {} : { definition: terminology.definition }),
     })
     const sources = input.sourceRefs.map((source, index) => `${String(index)}: ${source.id}@${source.version}`)
     const system = [
