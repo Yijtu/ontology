@@ -330,4 +330,128 @@ describe('registered compute execution over real PostgreSQL', () => {
     expect(record?.resultRef).toBeUndefined()
     expect(record?.attempts[0]?.code).toBe('DEADLINE_EXCEEDED')
   })
+
+  it('does not commit a completed invocation when cancelled during PostgreSQL binding archival', async () => {
+    let release: (() => void) | undefined
+    const blocked = new Promise<void>((resolve) => { release = resolve })
+    let started: (() => void) | undefined
+    const arrived = new Promise<void>((resolve) => { started = resolve })
+    const local = new RegisteredComputeExecutionService({
+      operations: exampleOperationRegistry(exampleComputeArtifact), handlers: createExampleComputeHandlers(exampleComputeArtifact),
+      artifacts, reader: new MemoryReader(artifacts), validator: VALIDATOR, invocations, resultArtifacts: resultsStore,
+      outputBindings: {
+        async putBindings(scopeRef, ref, bindings, ctx) {
+          started?.()
+          await blocked
+          return bindingsStore.putBindings(scopeRef, ref, bindings, ctx)
+        },
+        getBindings: bindingsStore.getBindings.bind(bindingsStore),
+      },
+    })
+    const controller = new AbortController()
+    const input = { ...executionInput(), taskBindingRef: { id: 'task.example.cancelled-archival', version: '1.0.0', digest: DIGEST }, signal: controller.signal }
+    const ctx = ctxFor(scope)
+    const pending = local.execute(input, ctx)
+    const rejected = expect(pending).rejects.toMatchObject({ code: 'COMPUTE_FUNCTION_FAILED', platformCode: 'DEADLINE_EXCEEDED' })
+    await arrived
+    controller.abort()
+    release?.()
+    await rejected
+    const record = await invocations.get(scopeRefOf(scope), computeLogicalKeyDigest(scopeRefOf(scope), input), ctx)
+    expect(record?.state).toBe('cancelled')
+    expect(record?.resultRef).toBeUndefined()
+    expect(record?.attempts[0]?.code).toBe('DEADLINE_EXCEEDED')
+  })
+
+  it.each(['before_commit', 'after_commit'] as const)('rejects the response cancelled during terminal %s persistence without rewriting committed history', async (phase) => {
+    let release: (() => void) | undefined
+    const blocked = new Promise<void>((resolve) => { release = resolve })
+    let started: (() => void) | undefined
+    const arrived = new Promise<void>((resolve) => { started = resolve })
+    let receivedSignal: AbortSignal | undefined
+    let terminalResult: { readonly resultRef: ResourceRef; readonly resultDigest: Sha256Digest } | undefined
+    class DelayedCompletionStore extends PostgresComputeInvocationStore {
+      override async complete(...args: Parameters<PostgresComputeInvocationStore['complete']>): Promise<ComputeInvocationRecord> {
+        receivedSignal = args[4]
+        terminalResult = args[2]
+        if (phase === 'before_commit') { started?.(); await blocked }
+        const committed = await super.complete(...args)
+        if (phase === 'after_commit') { started?.(); await blocked }
+        return committed
+      }
+    }
+    const local = new RegisteredComputeExecutionService({
+      operations: exampleOperationRegistry(exampleComputeArtifact), handlers: createExampleComputeHandlers(exampleComputeArtifact),
+      artifacts, reader: new MemoryReader(artifacts), validator: VALIDATOR,
+      invocations: new DelayedCompletionStore(database), outputBindings: bindingsStore, resultArtifacts: resultsStore,
+    })
+    const controller = new AbortController()
+    const input = { ...executionInput(), taskBindingRef: { id: `task.example.terminal-${phase}`, version: '1.0.0', digest: DIGEST }, signal: controller.signal }
+    const ctx = ctxFor(scope)
+    const pending = local.execute(input, ctx)
+    const rejected = expect(pending).rejects.toMatchObject({ platformCode: 'DEADLINE_EXCEEDED' })
+    await arrived
+    expect(receivedSignal).toBe(controller.signal)
+    controller.abort()
+    release?.()
+    await rejected
+    const key = computeLogicalKeyDigest(scopeRefOf(scope), input)
+    const record = await invocations.get(scopeRefOf(scope), key, ctx)
+    if (phase === 'before_commit') {
+      expect(record?.state).toBe('cancelled')
+      expect(record?.resultRef).toBeUndefined()
+      if (terminalResult === undefined) throw new Error('terminal persistence was not reached')
+      const error = await expectStorageError(invocations.complete(scopeRefOf(scope), key, terminalResult, ctx))
+      expect(error.code).toBe('INVALID_OPERATION')
+      expect((await invocations.get(scopeRefOf(scope), key, ctx))?.state).toBe('cancelled')
+    } else {
+      expect(record?.state).toBe('completed')
+      expect(record?.resultRef).toEqual(terminalResult?.resultRef)
+      expect(record?.attempts).toHaveLength(0)
+      const kept = await invocations.fail(scopeRefOf(scope), key, { attempt: 1, state: 'cancelled', code: 'DEADLINE_EXCEEDED', message: 'late cleanup', retryable: false, recordedAt: NOW }, ctx)
+      expect(kept).toEqual(record)
+    }
+  })
+
+  it('rolls back a real terminal UPDATE when cancellation arrives while its transaction is blocked', async () => {
+    const lockKey = 1_000_000 + Number.parseInt(randomUUID().replaceAll('-', '').slice(0, 6), 16)
+    const suffix = randomUUID().replaceAll('-', '')
+    const functionName = `compute_cancel_${suffix}`
+    const triggerName = `compute_cancel_${suffix}`
+    await harness.adminClient.query(`CREATE FUNCTION agent_platform.${functionName}() RETURNS trigger LANGUAGE plpgsql AS $$
+      BEGIN PERFORM pg_advisory_xact_lock(${String(lockKey)}); RETURN NEW; END $$`)
+    await harness.adminClient.query(`CREATE TRIGGER ${triggerName} BEFORE UPDATE ON agent_platform.compute_invocations
+      FOR EACH ROW WHEN (NEW.state = 'completed') EXECUTE FUNCTION agent_platform.${functionName}()`)
+    await harness.adminClient.query('SELECT pg_advisory_lock($1)', [lockKey])
+    const controller = new AbortController()
+    const input = { ...executionInput(), taskBindingRef: { id: 'task.example.cancel-transaction', version: '1.0.0', digest: DIGEST }, signal: controller.signal }
+    const ctx = ctxFor(scope)
+    const pending = service.execute(input, ctx)
+    const rejected = expect(pending).rejects.toMatchObject({ platformCode: 'DEADLINE_EXCEEDED' })
+    try {
+      let blocked = false
+      for (let attempt = 0; attempt < 100; attempt += 1) {
+        const waiting = await harness.adminClient.query<{ waiting: boolean }>(`SELECT EXISTS(
+          SELECT 1 FROM pg_stat_activity WHERE datname = current_database() AND wait_event_type = 'Lock'
+            AND application_name = 'ontology-control-postgres' AND query LIKE '%UPDATE agent_platform.compute_invocations%'
+        ) AS waiting`)
+        if (waiting.rows[0]?.waiting === true) { blocked = true; break }
+        await new Promise<void>((resolve) => { setTimeout(resolve, 20) })
+      }
+      expect(blocked).toBe(true)
+      controller.abort()
+      await harness.adminClient.query('SELECT pg_advisory_unlock($1)', [lockKey])
+      await rejected
+      const record = await invocations.get(scopeRefOf(scope), computeLogicalKeyDigest(scopeRefOf(scope), input), ctx)
+      expect(record?.state).toBe('cancelled')
+      expect(record?.resultRef).toBeUndefined()
+      expect(record?.resultDigest).toBeUndefined()
+      expect(record?.attempts[0]?.code).toBe('DEADLINE_EXCEEDED')
+    } finally {
+      controller.abort()
+      await harness.adminClient.query('SELECT pg_advisory_unlock($1)', [lockKey])
+      await harness.adminClient.query(`DROP TRIGGER ${triggerName} ON agent_platform.compute_invocations`)
+      await harness.adminClient.query(`DROP FUNCTION agent_platform.${functionName}()`)
+    }
+  })
 })

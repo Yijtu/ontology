@@ -37,6 +37,13 @@ The service checks stored wrapper/bindings hashes and the invocation's registere
 returning a completed result. Handler metadata/manifest snapshots are frozen; changing supplied
 manifest data after factory creation cannot replace the execution pin.
 
+The shared execution signal is checked across handler, archive and replay phases and is passed to
+terminal persistence. Cancellation before terminal commit rolls back that transition; a late complete
+cannot resurrect a cancelled invocation. If commit already won the race, its completed record remains
+immutable historical evidence, while the cancelled request still receives no successful compute
+response or answer. The service does not reset the signal/deadline/budget or rewrite a committed
+completion as a cancellation.
+
 The existing non-task gateway dispatch keeps its existing registration behavior. Broader host
 registration and gateway integration belongs to GAP-019; it should use this same trusted static
 artifact/manifest/reader seam rather than manufacture label digests.

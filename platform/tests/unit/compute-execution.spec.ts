@@ -170,7 +170,10 @@ class MemoryInvocationStore implements ComputeInvocationStore {
     scope: ScopeRef,
     digest: string,
     result: { readonly resultRef: ResourceRef; readonly resultDigest: Sha256Digest },
+    _ctx?: ToolContext,
+    signal?: AbortSignal,
   ): Promise<ComputeInvocationRecord> {
+    signal?.throwIfAborted()
     const slot = this.slots.get(this.#key(scope, digest))
     if (slot === undefined) throw new Error('no invocation')
     slot.record = {
@@ -712,6 +715,120 @@ describe('compute build artifact pinning', () => {
     expect([...harness.invocations.slots.values()][0]?.record.state).toBe('cancelled')
     expect(harness.results.entries.size).toBe(0)
     expect(harness.bindings.entries.size).toBe(0)
+  })
+
+  it.each(['bindings', 'artifact'] as const)('does not complete or return a result cancelled while %s persistence is pending', async (phase) => {
+    const harness = buildHarness()
+    let release: (() => void) | undefined
+    const blocked = new Promise<void>((resolve) => { release = resolve })
+    let started: (() => void) | undefined
+    const arrived = new Promise<void>((resolve) => { started = resolve })
+    if (phase === 'bindings') {
+      const original = harness.bindings.putBindings.bind(harness.bindings)
+      harness.bindings.putBindings = async (scope, ref, bindings) => {
+        started?.()
+        await blocked
+        return original(scope, ref, bindings)
+      }
+    } else {
+      const original = harness.results.putArtifact.bind(harness.results)
+      harness.results.putArtifact = async (scope, ref, artifact) => {
+        started?.()
+        await blocked
+        return original(scope, ref, artifact)
+      }
+    }
+    const controller = new AbortController()
+    const pending = harness.service.execute(executionInput(harness, { signal: controller.signal }), ctxFor())
+    const rejected = expect(pending).rejects.toMatchObject({ code: 'COMPUTE_FUNCTION_FAILED', platformCode: 'DEADLINE_EXCEEDED' })
+    await arrived
+    controller.abort()
+    release?.()
+    await rejected
+    const recorded = [...harness.invocations.slots.values()][0]?.record
+    expect(recorded?.state).toBe('cancelled')
+    expect(recorded?.resultRef).toBeUndefined()
+    expect(harness.results.entries.size).toBe(phase === 'bindings' ? 0 : 1)
+  })
+
+  it('refuses a cancelled replay while preserving the prior completed invocation', async () => {
+    const harness = buildHarness()
+    const input = executionInput(harness)
+    const first = await harness.service.execute(input, ctxFor())
+    const controller = new AbortController()
+    controller.abort()
+    await expect(harness.service.execute({ ...input, signal: controller.signal }, ctxFor())).rejects.toMatchObject({
+      code: 'COMPUTE_FUNCTION_FAILED', platformCode: 'DEADLINE_EXCEEDED', retryable: false,
+    })
+    expect(harness.executions.count).toBe(1)
+    expect([...harness.invocations.slots.values()][0]?.record.state).toBe('completed')
+    expect(first.invocation.resultRef).toBeDefined()
+  })
+
+  it.each(['prepare', 'claim'] as const)('keeps cancellation through delayed invocation %s without starting the handler', async (phase) => {
+    const harness = buildHarness()
+    let release: (() => void) | undefined
+    const blocked = new Promise<void>((resolve) => { release = resolve })
+    let started: (() => void) | undefined
+    const arrived = new Promise<void>((resolve) => { started = resolve })
+    if (phase === 'prepare') {
+      const original = harness.invocations.createIfAbsent.bind(harness.invocations)
+      harness.invocations.createIfAbsent = async (scope, record) => {
+        started?.()
+        await blocked
+        return original(scope, record)
+      }
+    } else {
+      const original = harness.invocations.claim.bind(harness.invocations)
+      harness.invocations.claim = async (scope, digest, owner, expires) => {
+        started?.()
+        await blocked
+        return original(scope, digest, owner, expires)
+      }
+    }
+    const controller = new AbortController()
+    const pending = harness.service.execute(executionInput(harness, { signal: controller.signal }), ctxFor())
+    const rejected = expect(pending).rejects.toMatchObject({ platformCode: 'DEADLINE_EXCEEDED' })
+    await arrived
+    controller.abort()
+    release?.()
+    await rejected
+    expect(harness.executions.count).toBe(0)
+    expect([...harness.invocations.slots.values()][0]?.record.state).toBe('cancelled')
+  })
+
+  it.each(['artifact', 'bindings'] as const)('refuses cancellation during delayed %s replay reads', async (phase) => {
+    const harness = buildHarness()
+    const input = executionInput(harness)
+    await harness.service.execute(input, ctxFor())
+    let release: (() => void) | undefined
+    const blocked = new Promise<void>((resolve) => { release = resolve })
+    let started: (() => void) | undefined
+    const arrived = new Promise<void>((resolve) => { started = resolve })
+    if (phase === 'artifact') {
+      const original = harness.results.getArtifact.bind(harness.results)
+      harness.results.getArtifact = async (scope, ref) => {
+        started?.()
+        await blocked
+        return original(scope, ref)
+      }
+    } else {
+      const original = harness.bindings.getBindings.bind(harness.bindings)
+      harness.bindings.getBindings = async (scope, ref) => {
+        started?.()
+        await blocked
+        return original(scope, ref)
+      }
+    }
+    const controller = new AbortController()
+    const pending = harness.service.execute({ ...input, signal: controller.signal }, ctxFor())
+    const rejected = expect(pending).rejects.toMatchObject({ platformCode: 'DEADLINE_EXCEEDED' })
+    await arrived
+    controller.abort()
+    release?.()
+    await rejected
+    expect(harness.executions.count).toBe(1)
+    expect([...harness.invocations.slots.values()][0]?.record.state).toBe('completed')
   })
 
   it('rejects corrupt archived handler/operation pins before replay', async () => {
