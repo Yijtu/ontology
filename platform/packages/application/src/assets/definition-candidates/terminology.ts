@@ -1,9 +1,11 @@
 import type {
   IndustryAttributeValueType,
+  SemanticDefinitionRecord,
   ScopeRef,
   ToolContext,
   VersionRef,
 } from '@ontology/contracts'
+import { DefinitionCandidateError } from './errors'
 
 /**
  * The professional terminology a workspace may build on: the object/attribute/relation logical
@@ -30,6 +32,9 @@ export interface MountedDefinitionTerminology {
   readonly attributes: readonly MountedAttributeTerm[]
   /** Display name per known logical id (object/attribute/relation), when the asset declares one. */
   readonly displayNames: Readonly<Record<string, string>>
+  /** Exact published declarations, including identity, units and versioned provenance. */
+  readonly definition?: SemanticDefinitionRecord
+  readonly packRef?: VersionRef
 }
 
 export const EMPTY_TERMINOLOGY: MountedDefinitionTerminology = {
@@ -42,8 +47,8 @@ export const EMPTY_TERMINOLOGY: MountedDefinitionTerminology = {
 
 /**
  * Resolves the mounted terminology for a workspace's pinned base pack/definition. Returning
- * `undefined` (or `EMPTY_TERMINOLOGY`) means nothing is mounted yet, which enables the
- * bootstrap modelling path from SPEC §5.3 (no published package required).
+ * `undefined` (or `EMPTY_TERMINOLOGY`) is permitted only without a pin, for bootstrap modelling
+ * from SPEC §5.3. A supplied pin that cannot be read must fail explicitly.
  */
 export interface DefinitionTerminologySource {
   getTerminology(
@@ -58,14 +63,14 @@ export interface DefinitionTerminologySource {
  * package. It never invents terms.
  */
 export class StaticDefinitionTerminologySource implements DefinitionTerminologySource {
-  readonly #byDigest = new Map<string, MountedDefinitionTerminology>()
+  readonly #byRef = new Map<string, MountedDefinitionTerminology>()
   readonly #fallback: MountedDefinitionTerminology | undefined
 
   constructor(
     entries: readonly { readonly definitionRef: VersionRef; readonly terminology: MountedDefinitionTerminology }[] = [],
     fallback?: MountedDefinitionTerminology,
   ) {
-    for (const entry of entries) this.#byDigest.set(entry.definitionRef.digest, entry.terminology)
+    for (const entry of entries) this.#byRef.set(terminologyRefKey(entry.definitionRef), structuredClone(entry.terminology))
     this.#fallback = fallback
   }
 
@@ -77,6 +82,14 @@ export class StaticDefinitionTerminologySource implements DefinitionTerminologyS
     void _scopeRef
     void _ctx
     if (definitionRef === undefined) return this.#fallback
-    return this.#byDigest.get(definitionRef.digest) ?? this.#fallback
+    const terminology = this.#byRef.get(terminologyRefKey(definitionRef))
+    if (terminology === undefined) {
+      throw new DefinitionCandidateError('SCHEMA_NOT_FOUND', 'the exact mounted terminology pin is unavailable')
+    }
+    return structuredClone(terminology)
   }
+}
+
+function terminologyRefKey(ref: VersionRef): string {
+  return JSON.stringify([ref.id, ref.version, ref.digest])
 }

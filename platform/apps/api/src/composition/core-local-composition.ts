@@ -70,6 +70,7 @@ import {
   EXTRACTION_RESPONSE_SCHEMA_REF,
   ExtractionStageHandler,
   InMemoryIndustryManifestSource,
+  InMemoryIndustryPackCatalogue,
   InMemoryIndustrySchemaSource,
   IndustryAssetPublicationService,
   IndustryPackExportService,
@@ -102,7 +103,7 @@ import {
   RunExecutionPreflightService,
   RunPhaseDriver,
   RunService,
-  StaticDefinitionTerminologySource,
+  createDynamicDefinitionTerminologySource,
   StoreBackedIndustryManifestSource,
   StoreBackedIndustryPackCatalogue,
   StructuredExtractionService,
@@ -118,7 +119,7 @@ import {
   parseModelCandidates,
   ReviewHandoffStageHandler,
 } from '@ontology/application'
-import type { ManifestValidator, MountedDefinitionTerminology, OutboxConsumer, ProfileSpecValidator, PublicationEvidenceValidation, PublicationEvidenceValidationInput, PublicationEvidenceValidator, RunProfileBinder, TaskParameterValidator } from '@ontology/application'
+import type { DefinitionTerminologySource, ManifestValidator, OutboxConsumer, ProfileSpecValidator, PublicationEvidenceValidation, PublicationEvidenceValidationInput, PublicationEvidenceValidator, RunProfileBinder, TaskParameterValidator } from '@ontology/application'
 import type {
   ActionCapabilityBindingInput,
   CandidateStore,
@@ -131,7 +132,6 @@ import type {
   GenerationPort,
   IdentityDecisionStore,
   IndustryManifestSource,
-  IndustrySchema,
   IndustryWorkspaceStore,
   InputValidityPort,
   ModelBinding,
@@ -794,35 +794,26 @@ function manifestValidator(ajv: Ajv2020): ManifestValidator {
       }
 }
 
-function terminologyOf(schema: IndustrySchema): MountedDefinitionTerminology {
-  const attributes = schema.objects.flatMap((object) => object.attributes.map((attribute) => ({
-    logicalId: attribute.attributeId,
-    objectLogicalId: object.objectId,
-    valueType: attribute.valueType,
-    ...(attribute.unitCode === undefined ? {} : { unitCode: attribute.unitCode }),
-    ...(attribute.dimension === undefined ? {} : { dimension: attribute.dimension }),
-  })))
-  const displayNames: Record<string, string> = {}
-  for (const object of schema.objects) {
-    displayNames[object.objectId] = object.displayName
-    for (const attribute of object.attributes) displayNames[attribute.attributeId] = attribute.attributeId
-  }
-  for (const relation of schema.relations) displayNames[relation.relationId] = relation.relationId
-  return {
-    objectLogicalIds: schema.objects.map((object) => object.objectId),
-    attributeLogicalIds: attributes.map((attribute) => attribute.logicalId),
-    relationLogicalIds: schema.relations.map((relation) => relation.relationId),
-    attributes,
-    displayNames,
-  }
-}
-
 /** Project the mounted industry packs into the professional terminology a workspace may build on. */
-function terminologySourceFor(scenarios: readonly CoreExampleScenario[]): StaticDefinitionTerminologySource {
-  return new StaticDefinitionTerminologySource(scenarios.map((scenario) => ({
-    definitionRef: componentRef('industry_pack', scenario.industryManifest.namespace, scenario.industryManifest),
-    terminology: terminologyOf(scenario.industrySchema),
-  })))
+function terminologySourceFor(
+  scenarios: readonly CoreExampleScenario[],
+  publishedPacks: PostgresPublishedPackAssetStore,
+  definitions: PostgresSemanticDefinitionStore,
+  registry: PostgresComponentRegistryStore,
+): DefinitionTerminologySource {
+  const staticCatalogue = new InMemoryIndustryPackCatalogue()
+  for (const scenario of scenarios) staticCatalogue.registerPack({
+    // Preserve the same pin registered into the component registry and mounted profiles.
+    ref: componentRef('industry_pack', scenario.industryManifest.namespace, scenario.industryManifest),
+    manifest: scenario.industryManifest,
+    testSuite: scenario.testSuite,
+  })
+  return createDynamicDefinitionTerminologySource({
+    catalogue: new StoreBackedIndustryPackCatalogue({ store: publishedPacks, fallback: staticCatalogue }),
+    definitions,
+    registry,
+    publishedPacks,
+  })
 }
 
 function toolSchemaValidator(ajv: Ajv2020): ToolSchemaValidator {
@@ -2131,7 +2122,7 @@ export async function createCoreLocalComposition(options: CoreLocalCompositionOp
     })
     const identityService = new IdentityDecisionService({ store: identityStore, candidates: candidateStore, schemaSource })
 
-    const terminology = terminologySourceFor(options.examples.scenarios)
+    const terminology = terminologySourceFor(options.examples.scenarios, publishedPackStore, definitionStore, componentStore)
     const ruleSupport = new FiniteGrammarRuleSupportValidator()
     const ruleActionCandidateService = new RuleActionCandidateService({
       workspaces: workspaceStore,
