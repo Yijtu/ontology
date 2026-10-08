@@ -21,7 +21,7 @@ import type {
   ToolContext,
   Uuid,
 } from '@ontology/contracts'
-import { assertIdentityProjectFence } from './identity-project-fence'
+import { assertIdentityProjectFence, assertPublishedInstanceBinding } from './identity-project-fence'
 import { ControlPostgresDatabase } from './database'
 
 interface ScopedQuery {
@@ -210,6 +210,7 @@ export class PostgresInstanceReviewStore implements InstanceReviewStore {
           throw error
         }
       }
+      if (input.publicationState === 'approved' || input.publicationState === 'published') await assertPublishedInstanceBinding(query, projectId, input)
       const replay = await this.#recordByIdempotencyKey(query, input.idempotencyKey)
       if (replay !== undefined) {
         if (replay.project_id !== projectId || replay.record_id !== input.recordId || digestOf(replay.body.identity.binding ?? null) !== digestOf(input.identityBinding ?? null)) {

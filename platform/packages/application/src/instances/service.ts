@@ -537,7 +537,7 @@ export class InstanceReviewService {
         adjudications,
         fields: record.fields,
         relations: record.relations,
-        publicationState: record.publicationState,
+        publicationState: 'draft',
         ...(record.publishedRevision === undefined ? {} : { publishedRevision: record.publishedRevision }),
         sourceRef: record.sourceRef,
         actor: record.actor,

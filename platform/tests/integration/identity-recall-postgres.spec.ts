@@ -736,6 +736,42 @@ describe('production instance recall → human binding → semantic publication'
     await workflow.validatePublication(scope.scopeRef, workflowProject, workflowRecord.recordId, ctx)
   })
 
+  it('refuses approval/publication when a semantic split commits after prevalidation but before the instance revision', async () => {
+    const records = new PostgresInstanceReviewStore(controlDatabase)
+    const service = new InstanceReviewService({ store: records })
+    const confirmed = await service.confirmFields(scope.scopeRef, workflowProject, workflowRecord.recordId, {
+      expectedRevision: workflowRecord.recordRevision,
+      decisions: workflowRecord.fields.map((field) => ({ fieldId: field.fieldId, decision: 'confirm' })),
+      idempotencyKey: 'binding-race-fields',
+    }, ctx)
+    workflowRecord = confirmed.record
+    const binding = workflowRecord.identity.binding
+    if (binding === undefined) throw new Error('expected the trusted instance binding')
+    const projectFence = { projectRevisionRef: binding.projectRevisionRef, definitionRef: binding.definitionRef, documentId: binding.documentId, parseId: workflowCandidate.inputVersion.parseId, membershipRevision: binding.membershipRevision, visibilityEpoch: binding.visibilityEpoch }
+    const authority = new IdentityDecisionService({ store: identityStore, candidates: candidateStore, schemaSource: new InMemoryIndustrySchemaSource([{ ref: WORKFLOW_REF, schema: buildIndustrySchema(WORKFLOW_REF) }]) })
+    const decide = async (kind: 'match' | 'split') => authority.decide({
+      candidateId: workflowCandidate.candidateId, projectId: workflowProject, projectFence, kind, targetEntityId: 'E-B',
+      expectedRevision: await identityStore.latestRevision(scope.scopeRef, workflowCandidate.candidateId, ctx),
+      justification: `reviewer ${kind} for binding race proof`,
+    }, ctx)
+
+    await workflow.validatePublication(scope.scopeRef, workflowProject, workflowRecord.recordId, ctx)
+    await decide('split')
+    await expect(service.approve(scope.scopeRef, workflowProject, workflowRecord.recordId, { expectedRevision: workflowRecord.recordRevision, idempotencyKey: 'binding-race-approve-refused' }, ctx)).rejects.toMatchObject({ code: 'IDENTITY_CONFLICT' })
+    expect(await records.getRecord(scope.scopeRef, workflowProject, workflowRecord.recordId, ctx)).toMatchObject({ recordRevision: workflowRecord.recordRevision, publicationState: 'draft' })
+
+    await decide('match')
+    await workflow.validatePublication(scope.scopeRef, workflowProject, workflowRecord.recordId, ctx)
+    workflowRecord = await service.approve(scope.scopeRef, workflowProject, workflowRecord.recordId, { expectedRevision: workflowRecord.recordRevision, idempotencyKey: 'binding-race-approve-current' }, ctx)
+    await workflow.validatePublication(scope.scopeRef, workflowProject, workflowRecord.recordId, ctx)
+    await decide('split')
+    await expect(service.publish(scope.scopeRef, workflowProject, workflowRecord.recordId, { expectedRevision: workflowRecord.recordRevision, idempotencyKey: 'binding-race-publish-refused' }, ctx)).rejects.toMatchObject({ code: 'IDENTITY_CONFLICT' })
+    const retained = await records.getRecord(scope.scopeRef, workflowProject, workflowRecord.recordId, ctx)
+    expect(retained).toMatchObject({ recordRevision: workflowRecord.recordRevision, publicationState: 'approved' })
+    expect(retained?.publishedRevision).toBeUndefined()
+    await decide('match')
+  })
+
   it('publishes the stored candidate under its human binding, reads official facts, and retracts without erasing history', async () => {
     await publicationService.reviewCandidate({ candidateId: workflowCandidate.candidateId, decision: 'approve', expectedRevision: '0', reason: 'reviewed stored fields' }, ctx)
     const publication = await publicationService.publish({ schemaRef: WORKFLOW_REF, approvedCandidateRefs: [{ candidateId: workflowCandidate.candidateId, kind: 'entity' }], expectedRevision: '0', idempotencyKey: 'workflow-publish-001' }, ctx)
@@ -749,6 +785,7 @@ describe('production instance recall → human binding → semantic publication'
     expect(historical).toHaveLength(official.length)
     const split = await workflow.adjudicateIdentity(scope.scopeRef, workflowProject, workflowRecord.recordId, { expectedRevision: workflowRecord.recordRevision, kind: 'split', targetEntityId: 'E-B', reason: 'reviewer reversed identity', idempotencyKey: 'human-split-001' }, ctx)
     expect(split.identity.state).toBe('split')
+    expect(split.publicationState).toBe('draft')
     await expect(workflow.validatePublication(scope.scopeRef, workflowProject, split.recordId, ctx)).rejects.toMatchObject({ code: 'PUBLICATION_BLOCKED' })
   })
 
@@ -772,6 +809,7 @@ describe('production instance recall → human binding → semantic publication'
     expect(await identityStore.latestRevision(scope.scopeRef, pending.candidateId, ctx)).toBe('0')
     expect(await identityStore.listEntities(scope.scopeRef, { limit: 100 }, ctx)).toHaveLength(before.length)
   })
+
 
   it('atomically refuses a decision racing a project evolution or a real document withdrawal', async () => {
     const projectId = randomUUID()
