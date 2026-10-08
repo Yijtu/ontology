@@ -115,6 +115,9 @@ function renderExpression(state: RenderState, expression: CompiledExpression): s
 
 function renderProjection(state: RenderState, projection: CompiledProjection): string {
   const expression = renderExpression(state, projection.expression)
+  // Project columns already have a verified exact physical DECIMAL type. Recasting to the
+  // legacy mapping's fixed scale would silently round newly published business values.
+  if (projection.columnType === 'decimal' && projection.exactDecimal === true) return `${expression} AS ${quoteIdentifier(projection.fieldRef)}`
   const cast = CANONICAL_CAST[state.dialect][projection.columnType]
   return `CAST(${expression} AS ${cast}) AS ${quoteIdentifier(projection.fieldRef)}`
 }

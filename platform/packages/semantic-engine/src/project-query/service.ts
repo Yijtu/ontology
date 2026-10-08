@@ -13,6 +13,7 @@ import type {
   ToolCoverage,
   VersionRef,
 } from '@ontology/contracts'
+import { assertProjectDatasetFieldSourcesShape } from '@ontology/contracts'
 import { compileSemanticQuery } from '../mapping/compile'
 import { renderCompiledQuery } from '../mapping/render'
 import type { SemanticMapping } from '../mapping/types'
@@ -61,6 +62,7 @@ export interface ProjectSemanticQueryRequest {
   readonly descriptor: ProjectSnapshotQueryDescriptor
   readonly plan: SemanticQueryPlan
   readonly limits: QueryLimits
+  readonly cursor?: string
 }
 
 export interface ProjectSemanticQueryServiceDependencies {
@@ -74,12 +76,13 @@ export interface ProjectSemanticQueryServiceDependencies {
 const DEFAULT_MAX_JOIN_FANOUT = 100
 
 function parseSources(value: unknown): readonly ProjectDatasetFieldSource[] {
-  if (typeof value !== 'string' || value.length === 0) return []
+  if (typeof value !== 'string' || value.length === 0) throw new ProjectSemanticQueryError('SNAPSHOT_UNAVAILABLE', 'the fixed project row has no field provenance')
   try {
     const parsed: unknown = JSON.parse(value)
-    return Array.isArray(parsed) ? (parsed as ProjectDatasetFieldSource[]) : []
-  } catch {
-    return []
+    assertProjectDatasetFieldSourcesShape(parsed)
+    return parsed
+  } catch (error) {
+    throw new ProjectSemanticQueryError('SNAPSHOT_UNAVAILABLE', 'the fixed project row provenance is malformed', { cause: error })
   }
 }
 
@@ -128,7 +131,8 @@ export class ProjectSemanticQueryService {
           PROJECT_SNAPSHOT_RECORD_ID_FIELD,
           PROJECT_SNAPSHOT_SOURCES_FIELD,
         ])]
-    const plan: SemanticQueryPlan = { ...request.plan, fields: projectedFields }
+    const plan: SemanticQueryPlan = { ...request.plan, fields: projectedFields,
+      orderBy: !aggregate && request.plan.orderBy.length === 0 ? [{ fieldRef: PROJECT_SNAPSHOT_RECORD_ID_FIELD, direction: 'asc' }] : request.plan.orderBy }
 
     let sql: string
     let parameters: readonly (string | number | boolean | null)[]
@@ -178,6 +182,7 @@ export class ProjectSemanticQueryService {
         plan: checkedPlan,
         limits: request.limits,
         snapshotRequest: { consistency: 'immutable' },
+        ...(request.cursor === undefined ? {} : { cursor: request.cursor }),
       },
       ctx,
     )

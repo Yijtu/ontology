@@ -4,16 +4,24 @@ import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { fileURLToPath } from 'node:url'
 import { Client } from 'pg'
+import { FileSystemObjectStore, LocalImmutableBlobStore, PostgresArtifactRegistry } from '@ontology/adapter-blob-local'
+import { PostgresStructuredIngestionStore } from '@ontology/adapter-extraction-document'
+import { PostgresProjectDatasetAdapter } from '@ontology/adapter-data-postgres'
+import { projectSnapshotMappingRef } from '@ontology/semantic-engine'
+import type { DataQueryOutput } from '@ontology/contracts'
+import { projectQueryPublicationFixture } from './project-query-publication-fixtures'
 import { afterAll, beforeAll, describe, expect, it } from 'vitest'
 import {
   ControlPostgresDatabase,
-  PostgresProjectReadinessStore,
+  PostgresRunExecutionBindingStore,
+  PostgresPublishedTaskBindingStore,
   runControlMigrations,
 } from '@ontology/adapter-control-postgres'
 import {
   CORE_TYPED_RESULT_SCHEMA_REF,
   coreScenarioTaskBindings,
   createCoreApi,
+  createCoreProjectQueryWorkflow,
   createCoreLocalComposition,
   loadCoreExamples,
 } from '@ontology/app-api'
@@ -37,8 +45,8 @@ import type { PostgresContainer } from './postgres-container'
  * The default `createCoreLocalComposition` host mounts runnable task bindings per scenario. This
  * drives the structured-query task through the *normal* HTTP surface: a task-mode `POST /runs`
  * selects the mounted `structured_query` binding, the Template runtime prepares its deterministic
- * semantic plan, the shared gateway compiles and runs it against the host's materialised startup
- * snapshot, the typed writer emits an `answer-draft@3`, the publication gate publishes the same
+ * semantic plan, the shared gateway compiles and runs it against the project's official published
+ * fact snapshot, the typed writer emits an `answer-draft@3`, the publication gate publishes the same
  * verified version, and the answer is read back through `/answers/{id}/result`, the revision
  * history and the verified JSON export. Nothing about the plan, evidence or answer is pre-seeded.
  */
@@ -71,7 +79,7 @@ function revisionBody(definitionRef: { id: string; version: string; digest: stri
     revision: '1',
     industryPackRef: { id: 'taskbind-pack', version: '1.0.0', digest: DIGEST },
     definitionRef,
-    mappingRefs: [mappingRef()],
+    mappingRefs: [mappingRef(), { ...definitionRef, role: 'catalog', sourceObjectRef: { sourceRef: { namespace: 'taskbind', sourceId: 'identity' }, objectPath: 'identity_index' } }],
     profileRef: { id: 'taskbind-profile', version: '1.0.0', snapshotHash: DIGEST },
     documentSetRef: DOCUMENT_SET_REF,
     approvedInputRef: APPROVED_INPUT_REF,
@@ -88,6 +96,7 @@ function projectRevisionRef(body: ProjectRevisionBody): ProjectRevisionRef {
 let container: PostgresContainer | undefined
 let admin: Client | undefined
 let appUrl = ''
+let businessUrl = ''
 let scopeRef: ScopeRef
 let objectDirectory = ''
 let composition: CoreLocalComposition | undefined
@@ -100,7 +109,7 @@ function trustedContext(scope: ScopeRef): ToolContext {
     principal: {
       tenantId: scope.tenantId,
       subjectId: 'taskbind-author',
-      roles: ['platform-admin', 'operator', 'data-editor'],
+      roles: ['platform-admin', 'operator', 'profile-editor', 'data-editor', 'semantic-reviewer', 'semantic-publisher'],
       scopes: [],
       authEpoch: 1,
     },
@@ -146,6 +155,11 @@ async function startIsolatedDatabase(): Promise<void> {
   appDatabase.username = 'ontology_app'
   appDatabase.password = APP_PASSWORD
   appUrl = appDatabase.toString()
+  await admin.query('CREATE DATABASE project_query_business')
+  const businessDatabase = new URL(container.adminUrl)
+  businessDatabase.pathname = '/project_query_business'
+  businessUrl = businessDatabase.toString()
+
 }
 
 async function seedProject(body: ProjectRevisionBody): Promise<void> {
@@ -174,36 +188,6 @@ async function seedProject(body: ProjectRevisionBody): Promise<void> {
   )
 }
 
-/** Record the dataset readiness projection the structured-query binding requires. */
-async function seedDatasetReadiness(ref: ProjectRevisionRef): Promise<void> {
-  const database = new ControlPostgresDatabase({ connectionString: appUrl, maxPoolSize: 4 })
-  try {
-    const store = new PostgresProjectReadinessStore(database)
-    await store.upsertProjection(
-      scopeRef,
-      {
-        projectRevisionRef: ref,
-        kind: 'dataset',
-        targetRef: APPROVED_INPUT_REF,
-        state: 'ready',
-        completeness: 'complete',
-        expectedCount: 0,
-        processedCount: 0,
-        failedCount: 0,
-        targetDigest: DIGEST,
-        fenceRevision: '1',
-        idempotencyKey: `readiness-${PROJECT_ID}`,
-        requestDigest: DIGEST,
-        actor: 'tester',
-        recordedAt: '2026-09-30T00:00:00Z',
-      },
-      trustedContext(scopeRef),
-    )
-  } finally {
-    await database.close().catch(() => undefined)
-  }
-}
-
 function request(path: string, init?: RequestInit): Promise<Response> {
   return fetch(`${baseUrl}${path}`, { ...init, signal: AbortSignal.timeout(30_000) })
 }
@@ -228,6 +212,12 @@ async function waitForAnswer(runId: string): Promise<Record<string, unknown>> {
 
 let structuredBinding: { taskBindingRef: { id: string; version: string; digest: string } }
 let projectRevisionRefValue: ProjectRevisionRef
+let publishedFixture: ReturnType<typeof projectQueryPublicationFixture>
+let queryDatabase: ControlPostgresDatabase
+let queryRegistry: PostgresArtifactRegistry
+let structuredStore: PostgresStructuredIngestionStore
+let originalAnswer: Record<string, unknown>
+let originalRunId = ''
 
 beforeAll(async () => {
   await startIsolatedDatabase()
@@ -252,10 +242,10 @@ beforeAll(async () => {
   const body = revisionBody(scenario.definitionRef)
   projectRevisionRefValue = projectRevisionRef(body)
   await seedProject(body)
-  await seedDatasetReadiness(projectRevisionRefValue)
 
   composition = await createCoreLocalComposition({
     databaseUrl: appUrl,
+    projectDataset: { connectionString: businessUrl, schema: 'business_dataset' },
     objectDirectory,
     scopeRef,
     examples: loadCoreExamples({ targetScopeRef: scopeRef }),
@@ -265,11 +255,28 @@ beforeAll(async () => {
   api = createCoreApi(composition.dependencies)
   const address = await api.listen({ host: '127.0.0.1', port: 0 })
   baseUrl = address.replace(/\/$/u, '')
+  queryDatabase = new ControlPostgresDatabase({ connectionString: appUrl, maxPoolSize: 4 })
+  queryRegistry = new PostgresArtifactRegistry({ connectionString: appUrl, maxPoolSize: 2 })
+  structuredStore = new PostgresStructuredIngestionStore({ connectionString: appUrl, maxPoolSize: 2 })
+  const objects = new FileSystemObjectStore(objectDirectory)
+  await objects.init()
+  const blobs = new LocalImmutableBlobStore({ objectStore: objects, registry: queryRegistry })
+  publishedFixture = projectQueryPublicationFixture({ db: queryDatabase, blobs, structured: structuredStore, scope: scopeRef, ctx: trustedContext(scopeRef), projectId: PROJECT_ID,
+    definition: { ...scenario.definitionDraft, ref: scenario.definitionRef, publishedAt: new Date().toISOString() } })
+  const source = await publishedFixture.importCsv(OBJECT_ID, 'code,network,district,due\nP-101,private-network,north,true\nP-102,private-network,south,false\n', ['facility_id', 'network_code', 'facility_district_code', 'inspection_due'])
+  await publishedFixture.approveAndPublish(source)
+  const projected = await request(`/api/v1/projects/${PROJECT_ID}/dataset-snapshots`, { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ objectId: OBJECT_ID }) })
+  if (projected.status !== 201) throw new Error(`official dataset creation failed: ${await projected.text()}`)
+  projectRevisionRefValue = ((await jsonBody(projected)).data['status'] as { projectRevisionRef: ProjectRevisionRef }).projectRevisionRef
+
 }, 240_000)
 
 afterAll(async () => {
   await api?.close().catch(() => undefined)
   await composition?.close().catch(() => undefined)
+  await structuredStore?.close()
+  await queryRegistry?.close()
+  await queryDatabase?.close()
   await admin?.end().catch(() => undefined)
   if (objectDirectory !== '') await rm(objectDirectory, { recursive: true, force: true }).catch(() => undefined)
   await container?.stop()
@@ -305,6 +312,10 @@ describe('mounted Core structured-query task binding through the normal HTTP hos
     if (typeof runId !== 'string') throw new Error('task run admission returned no run id')
 
     const answer = await waitForAnswer(runId)
+    originalAnswer = answer
+    originalRunId = runId
+    const assertions = (answer['v3Body'] as { assertions: { subject: string; predicate: string; value: unknown }[] }).assertions
+    expect(assertions.filter((assertion) => assertion.predicate === 'inspection_due').map((assertion) => [assertion.subject, assertion.value]).sort()).toEqual([['P-101', true], ['P-102', false]])
     const v3Body = answer['v3Body'] as {
       schemaVersion: string
       resultManifestRef: ResourceRef
@@ -315,6 +326,8 @@ describe('mounted Core structured-query task binding through the normal HTTP hos
       blocks: unknown[]
     }
     expect(v3Body.schemaVersion).toBe('answer-draft@3')
+    const controlTables = await admin?.query<{ count: string }>("SELECT count(*)::text FROM information_schema.tables WHERE table_name IN ('project_dataset_snapshots','project_dataset_rows')")
+    expect(controlTables?.rows[0]?.count).toBe('0')
     expect(v3Body.resultManifestRef.digest).toBe(v3Body.resultManifestDigest)
     expect(v3Body.finalizationReceiptRef.digest).toBe(v3Body.finalizationReceiptDigest)
     expect(v3Body.executionBindingRef.kind).toBe('plan')
@@ -381,4 +394,59 @@ describe('mounted Core structured-query task binding through the normal HTTP hos
     if (preview.status !== 200) throw new Error(`mapping preview failed: ${await preview.text()}`)
     expect((await jsonBody(preview)).data['preview']).toBeDefined()
   }, 120_000)
+  it('changes the normal task result for new published input while the old run keeps its fixed history after restart', async () => {
+    const source = await publishedFixture.importCsv(OBJECT_ID, 'code,network,district,due\nP-103,private-network,north,false\n', ['facility_id', 'network_code', 'facility_district_code', 'inspection_due'])
+    await publishedFixture.approveAndPublish(source)
+    const projected = await request(`/api/v1/projects/${PROJECT_ID}/dataset-snapshots`, { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ objectId: OBJECT_ID }) })
+    if (projected.status !== 201) throw new Error(`new official dataset creation failed: ${await projected.text()}`)
+    const currentRevision = ((await jsonBody(projected)).data['status'] as { projectRevisionRef: ProjectRevisionRef }).projectRevisionRef
+    const deployment = await jsonBody(await request('/api/v1/core/deployment'))
+    const scenarios = deployment.data['scenarios'] as { scenarioId: string; profileRef: { id: string; version: string } }[]
+    const profile = scenarios.find((entry) => entry.scenarioId === SCENARIO_ID)?.profileRef
+    const response = await request('/api/v1/runs', { method: 'POST', headers: { 'content-type': 'application/json', 'idempotency-key': `taskbind-new-${PROJECT_ID}` }, body: JSON.stringify({
+      profileRef: profile, question: 'query the new published input', context: { timeZone: 'UTC' }, preferences: { route: 'template', allowWeb: false },
+      task: { mode: 'task', projectRevisionRef: currentRevision, inputSnapshotRef: APPROVED_INPUT_REF, inputSnapshotDigest: APPROVED_INPUT_REF.digest,
+        taskBindingRef: structuredBinding.taskBindingRef, parameters: { objectId: OBJECT_ID, fields: [...FIELDS], limit: 10 } },
+    }) })
+    if (response.status !== 202) throw new Error(`new query run admission failed: ${await response.text()}`)
+    const runId = (await jsonBody(response)).data['runId']
+    if (typeof runId !== 'string') throw new Error('missing new run')
+    const answer = await waitForAnswer(runId)
+    const assertions = (answer['v3Body'] as { assertions: { subject: string; predicate: string; value: unknown }[] }).assertions
+    expect(assertions.filter((assertion) => assertion.predicate === 'inspection_due').map((assertion) => [assertion.subject, assertion.value])).toEqual([['P-103', false]])
+    await api?.close()
+    await composition?.close()
+    composition = await createCoreLocalComposition({ databaseUrl: appUrl, projectDataset: { connectionString: businessUrl, schema: 'business_dataset' }, objectDirectory, scopeRef, examples: loadCoreExamples({ targetScopeRef: scopeRef }), allowLocalOperator: true })
+    api = createCoreApi(composition.dependencies)
+    baseUrl = (await api.listen({ host: '127.0.0.1', port: 0 })).replace(/\/$/u, '')
+    const historical = await jsonBody(await request(`/api/v1/runs/${originalRunId}/answer`))
+    expect(historical.data['contentHash']).toBe(originalAnswer['contentHash'])
+    expect(historical.data['v3Body']).toEqual(originalAnswer['v3Body'])
+    // Resume the old tool from its actual archived binding. Its ready historical descriptor
+    // must survive the new head and backend restart without resolving the current snapshot.
+    const executions = new PostgresRunExecutionBindingStore(queryDatabase)
+    const oldBinding = await executions.getBindingByRun(scopeRef, originalRunId, trustedContext(scopeRef))
+    const oldRef = oldBinding?.binding.projectDatasetSnapshotRef
+    if (oldBinding === undefined || oldRef === undefined) throw new Error('the original query snapshot was not archived')
+    const oldCtx = createToolContext({ ...trustedContext(scopeRef), runId: originalRunId, allowedResources: { ...trustedContext(scopeRef).allowedResources, sourceRefs: [{ namespace: 'project-dataset', sourceId: oldRef.id }] } })
+    const backend = new PostgresProjectDatasetAdapter({ connectionString: businessUrl, schema: 'business_dataset' })
+    try {
+      const workflow = createCoreProjectQueryWorkflow({ query: backend, publishedSource: publishedFixture.publishedSource,
+        projects: publishedFixture.projects, readiness: publishedFixture.readiness, executionBindings: executions,
+        taskBindings: new PostgresPublishedTaskBindingStore(queryDatabase), definition: async () => publishedFixture.definition })
+      const descriptor = await workflow.resolveExecution(oldBinding.binding, OBJECT_ID, oldCtx)
+      expect(descriptor.snapshotRef).toEqual(oldRef)
+      const outcome = await workflow.handler({ toolId: 'data_query', execute: async () => { throw new Error('the old project query attempted startup fallback') } }).execute({
+        callId: randomUUID(), toolId: 'data_query', ctx: oldCtx, deadline: oldCtx.deadline, traceId: oldCtx.traceId,
+        signal: new AbortController().signal, resultLimits: { maxRows: 1000, maxBytes: 1_048_576, maxDurationMs: 30_000 },
+        arguments: { kind: 'query', mode: 'semantic', queryPlan: { mode: 'semantic', concepts: [OBJECT_ID], fields: [...FIELDS, 'record_id', 'sources_json'],
+          links: [], filters: [], orderBy: [{ fieldRef: 'record_id', direction: 'asc' }], limit: 10, mappingVersion: projectSnapshotMappingRef({ descriptor }) } },
+      })
+      expect((outcome.payload as DataQueryOutput).table?.rows.map((row) => [row[0], row[1]]).sort()).toEqual([['P-101', true], ['P-102', false]])
+      expect((outcome.payload as DataQueryOutput).table?.rows.every((row) => String(row[3]).includes(projectRevisionRefValue.digest))).toBe(true)
+      await expect(workflow.resolveForCreation(scopeRef, (await publishedFixture.projects.getRevision(scopeRef, PROJECT_ID, projectRevisionRefValue.revision, oldCtx))!, { objectId: OBJECT_ID }, oldCtx)).rejects.toMatchObject({ code: 'SNAPSHOT_UNAVAILABLE' })
+    } finally { await backend.close() }
+
+  }, 180_000)
+
 })

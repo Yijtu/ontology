@@ -7,6 +7,8 @@ import {
   projectDatasetSourceObjectRef,
   projectDatasetSourceRef,
   isToolContext,
+  assertProjectDatasetSnapshotShape,
+  assertProjectDatasetMetadataShape,
 } from '@ontology/contracts'
 import type {
   AttributeValueType,
@@ -25,6 +27,7 @@ import type {
   ProjectDatasetRow,
   ProjectDatasetStageInput,
   ProjectDatasetStageResult,
+  ProjectDatasetSnapshotMetadata,
   ProjectDatasetWriterPort,
   ProjectSnapshotQueryDescriptor,
   ProjectSnapshotQueryPort,
@@ -81,13 +84,13 @@ function quoteIdentifier(name: string): string {
   return `"${name}"`
 }
 
-function decodeCursor(cursor: string | undefined): number {
+function decodeCursor(cursor: string | undefined, pin: string): number {
   if (cursor === undefined || cursor.length === 0) return 0
   try {
     const parsed: unknown = JSON.parse(Buffer.from(cursor, 'base64url').toString('utf8'))
     if (isRecord(parsed)) {
       const offset = parsed['o']
-      if (typeof offset === 'number' && Number.isInteger(offset) && offset >= 0) return offset
+      if (typeof offset === 'number' && Number.isInteger(offset) && offset >= 0 && parsed['p'] === pin) return offset
     }
   } catch {
     throw new ProjectDatasetError('INVALID_ARGUMENT', 'the dataset cursor is malformed')
@@ -95,8 +98,8 @@ function decodeCursor(cursor: string | undefined): number {
   throw new ProjectDatasetError('INVALID_ARGUMENT', 'the dataset cursor is malformed')
 }
 
-function encodeCursor(offset: number): string {
-  return Buffer.from(JSON.stringify({ o: offset }), 'utf8').toString('base64url')
+function encodeCursor(offset: number, pin: string): string {
+  return Buffer.from(JSON.stringify({ o: offset, p: pin }), 'utf8').toString('base64url')
 }
 
 function assertTrusted(ctx: ToolContext): void {
@@ -106,6 +109,11 @@ function assertTrusted(ctx: ToolContext): void {
   if (ctx.allowedResources.tenantId !== ctx.principal.tenantId) {
     throw new ProjectDatasetError('SCOPE_MISMATCH', 'trusted context carries inconsistent scope')
   }
+}
+
+function assertScope(scopeRef: ScopeRef, ctx: ToolContext): void {
+  assertTrusted(ctx)
+  if (scopeRef.tenantId !== ctx.principal.tenantId || scopeRef.spaceId !== ctx.allowedResources.spaceId) throw new ProjectDatasetError('SCOPE_MISMATCH', 'the dataset scope does not match the trusted principal')
 }
 
 function scopeKeyOf(scopeRef: ScopeRef): string {
@@ -169,6 +177,14 @@ interface StagedQuery {
   readonly version: string
   readonly view: string
   readonly columns: readonly ProjectDatasetColumn[]
+  readonly metadata: ProjectDatasetSnapshotMetadata
+}
+
+interface ActiveProjectQuery {
+  readonly runId: string
+  readonly scopeKey: string
+  pid: number | undefined
+  cancelled: boolean
 }
 
 interface RowRow extends QueryResultRow {
@@ -183,6 +199,7 @@ interface MetaRow extends QueryResultRow {
   columns: ProjectDatasetColumn[]
   canonical_digest: string
   row_count: string
+  metadata: ProjectDatasetSnapshotMetadata | null
 }
 
 /**
@@ -205,15 +222,18 @@ export class PostgresProjectDatasetAdapter
   readonly #ownsQueryPool: boolean
   readonly #schema: string
   readonly #staged = new Map<string, StagedQuery>()
+  readonly #active = new Map<string, ActiveProjectQuery>()
 
   constructor(config: PostgresProjectDatasetConfig) {
     this.#schema = config.schema ?? DEFAULT_SCHEMA
-    if (!IDENTIFIER.test(this.#schema)) {
+    if (!IDENTIFIER.test(this.#schema) || /^(?:public|control|ontology_control|agent_platform)$/i.test(this.#schema)) {
       throw new ProjectDatasetError('INVALID_ARGUMENT', `invalid business schema "${this.#schema}"`)
     }
     this.#pool = new Pool({
       connectionString: config.connectionString,
       max: config.maxPoolSize ?? 4,
+      statement_timeout: DEFAULT_QUERY_TIMEOUT_MS,
+      connectionTimeoutMillis: DEFAULT_QUERY_TIMEOUT_MS,
       application_name: config.applicationName ?? 'ontology-project-dataset',
     })
     this.#ownsQueryPool = config.readOnlyConnectionString !== undefined
@@ -236,18 +256,22 @@ export class PostgresProjectDatasetAdapter
     input: ProjectDatasetStageInput,
     ctx: ToolContext,
   ): Promise<ProjectDatasetStageResult> {
-    assertTrusted(ctx)
-    void scopeRef
+    assertScope(scopeRef, ctx)
+    assertProjectDatasetSnapshotShape({ ref: input.snapshotRef, body: input.body })
+    if (input.body.backend !== this.backend) throw new ProjectDatasetError('INVALID_ARGUMENT', 'the snapshot declares a different business backend')
     await this.#ensureSchema()
     const { body, snapshotRef } = input
     const snapshotId = snapshotRef.id
+    const { rows: _rows, ...snapshotBody } = body
+    void _rows
+    const metadata: ProjectDatasetSnapshotMetadata = { scopeRef, snapshotRef, body: snapshotBody, rowContentDigest: sha256DigestOf(stableJson(body.rows)) }
     const client = await this.#pool.connect()
     try {
       await client.query('BEGIN')
-      await client.query(
+      const inserted = await client.query(
         `INSERT INTO ${this.#table(SNAPSHOT_TABLE)}
-           (snapshot_id, project_id, object_id, project_revision, backend, columns, row_count, schema_digest, canonical_digest, recorded_at)
-         VALUES ($1::uuid, $2::uuid, $3, $4::bigint, $5, $6::jsonb, $7::bigint, $8, $9, $10::timestamptz)
+           (snapshot_id, project_id, object_id, project_revision, backend, columns, row_count, schema_digest, canonical_digest, recorded_at, metadata)
+         VALUES ($1::uuid, $2::uuid, $3, $4::bigint, $5, $6::jsonb, $7::bigint, $8, $9, $10::timestamptz, $11::jsonb)
          ON CONFLICT (snapshot_id) DO NOTHING`,
         [
           snapshotId,
@@ -260,8 +284,15 @@ export class PostgresProjectDatasetAdapter
           input.schemaDigest,
           input.canonicalDigest,
           body.recordedAt,
+          JSON.stringify(metadata),
         ],
       )
+      const existing = await client.query<MetaRow>(`SELECT metadata, canonical_digest FROM ${this.#table(SNAPSHOT_TABLE)} WHERE snapshot_id = $1::uuid FOR UPDATE`, [snapshotId])
+      const stored = existing.rows[0]
+      if (stored?.metadata === null || stored?.metadata === undefined ||
+        stableJson({ ...stored.metadata, body: { ...stored.metadata.body, recordedAt: '' } }) !== stableJson({ ...metadata, body: { ...metadata.body, recordedAt: '' } }) || stored.canonical_digest !== input.canonicalDigest) {
+        throw new ProjectDatasetError('IDEMPOTENCY_CONFLICT', 'the snapshot identity already carries different content or scope')
+      }
       for (let start = 0; start < body.rows.length; start += INSERT_BATCH) {
         const batch = body.rows.slice(start, start + INSERT_BATCH)
         const valuesSql = batch
@@ -284,13 +315,10 @@ export class PostgresProjectDatasetAdapter
       }
       const persisted = await this.#readRows(client, snapshotId, body.columns)
       const storedDigest = canonicalDigestOf(body.columns, persisted)
-      if (storedDigest !== input.canonicalDigest || persisted.length !== body.rows.length) {
+      if (storedDigest !== input.canonicalDigest || persisted.length !== body.rows.length || sha256DigestOf(stableJson(persisted)) !== metadata.rowContentDigest) {
         await client.query('ROLLBACK')
-        await this.#deleteSnapshot(snapshotId)
         throw new ProjectDatasetError('MATERIALIZATION_MISMATCH', 'the staged PostgreSQL rows did not match the canonical dataset digest')
       }
-      await client.query('COMMIT')
-
       // Expose the fixed rows as a typed, read-only projection: `values` are canonical cells,
       // so a quantity becomes a real `numeric` and a boolean a real `boolean`. The view is
       // pinned to this snapshot id and is the only relation the query path can address.
@@ -309,6 +337,7 @@ export class PostgresProjectDatasetAdapter
            SELECT ${projections} FROM ${this.#table(ROW_TABLE)}
           WHERE snapshot_id = ${quoteLiteral(snapshotId)}::uuid`,
       )
+      await client.query('COMMIT')
       this.#staged.set(snapshotId, {
         scopeKey: scopeKeyOf(scopeRef),
         snapshotId,
@@ -316,13 +345,14 @@ export class PostgresProjectDatasetAdapter
         version: snapshotRef.version,
         view,
         columns: body.columns,
+        metadata: stored.metadata,
       })
       return {
         snapshotRef,
         rowCount: persisted.length,
         schemaDigest: input.schemaDigest,
         canonicalDigest: storedDigest,
-        created: true,
+        created: inserted.rowCount === 1,
       }
     } catch (error) {
       await client.query('ROLLBACK').catch(() => undefined)
@@ -334,13 +364,12 @@ export class PostgresProjectDatasetAdapter
   }
 
   async discardSnapshot(scopeRef: ScopeRef, snapshotRef: { readonly id: string }, ctx: ToolContext): Promise<void> {
-    assertTrusted(ctx)
+    assertScope(scopeRef, ctx)
+    const staged = await this.#restore(scopeRef, snapshotRef.id)
+    if (staged === undefined) return
     this.#staged.delete(snapshotRef.id)
-    await this.#pool
-      .query(`DROP VIEW IF EXISTS ${this.#table(queryViewName(snapshotRef.id))}`)
-      .catch(() => undefined)
+    await this.#pool.query(`DROP VIEW IF EXISTS ${this.#table(queryViewName(snapshotRef.id))}`)
     await this.#deleteSnapshot(snapshotRef.id)
-    void scopeRef
   }
 
   async querySnapshot(
@@ -348,18 +377,15 @@ export class PostgresProjectDatasetAdapter
     request: ProjectDatasetQueryRequest,
     ctx: ToolContext,
   ): Promise<ProjectDatasetQueryResult> {
-    assertTrusted(ctx)
-    void scopeRef
-    const meta = await this.#pool.query<MetaRow>(
-      `SELECT columns, canonical_digest, row_count::text AS row_count FROM ${this.#table(SNAPSHOT_TABLE)} WHERE snapshot_id = $1::uuid`,
-      [request.snapshotRef.id],
-    )
-    const record = meta.rows[0]
-    if (record === undefined || record.canonical_digest !== request.snapshotRef.digest) {
-      throw new ProjectDatasetError('SNAPSHOT_UNAVAILABLE', 'the pinned dataset snapshot is not materialised in this PostgreSQL backend')
+    assertScope(scopeRef, ctx)
+    const staged = await this.#restore(scopeRef, request.snapshotRef.id)
+    if (staged === undefined || stableJson(staged.metadata.snapshotRef) !== stableJson(request.snapshotRef)) {
+      throw new ProjectDatasetError('SNAPSHOT_UNAVAILABLE', 'the exact scoped dataset snapshot is unavailable')
     }
+    if (request.objectId !== undefined && request.objectId !== staged.objectId) throw new ProjectDatasetError('SNAPSHOT_UNAVAILABLE', 'the snapshot belongs to a different project object')
     const limit = Math.max(1, Math.min(request.limit ?? DEFAULT_PAGE_LIMIT, MAX_PAGE_LIMIT))
-    const offset = decodeCursor(request.cursor)
+    const cursorPin = sha256DigestOf(stableJson({ scopeRef, snapshotRef: request.snapshotRef, objectId: request.objectId ?? null }))
+    const offset = decodeCursor(request.cursor, cursorPin)
     const objectFilter = request.objectId === undefined ? '' : ' AND object_id = $3'
     const parameters: unknown[] = [request.snapshotRef.id, limit + 1]
     if (request.objectId !== undefined) parameters.push(request.objectId)
@@ -380,14 +406,14 @@ export class PostgresProjectDatasetAdapter
       values: row.values,
       sources: row.sources,
     }))
-    const nextCursor = truncated ? encodeCursor(offset + kept.length) : null
+    const nextCursor = truncated ? encodeCursor(offset + kept.length, cursorPin) : null
     const coverage: ToolCoverage = {
       returned: rows.length,
       truncated,
       completeness: 'complete',
       ...(nextCursor === null ? {} : { cursor: nextCursor }),
     }
-    return { snapshotRef: request.snapshotRef, columns: record.columns, rows, coverage }
+    return { snapshotRef: request.snapshotRef, columns: staged.columns, rows, coverage }
   }
 
   /**
@@ -400,9 +426,9 @@ export class PostgresProjectDatasetAdapter
     snapshotRef: ProjectDatasetRef,
     ctx: ToolContext,
   ): Promise<ProjectSnapshotQueryDescriptor | undefined> {
-    assertTrusted(ctx)
-    const staged = this.#staged.get(snapshotRef.id)
-    if (staged === undefined || staged.scopeKey !== scopeKeyOf(scopeRef)) return undefined
+    assertScope(scopeRef, ctx)
+    const staged = await this.#restore(scopeRef, snapshotRef.id)
+    if (staged === undefined || stableJson(staged.metadata.snapshotRef) !== stableJson(snapshotRef)) return undefined
     return {
       snapshotRef,
       objectId: staged.objectId,
@@ -412,12 +438,13 @@ export class PostgresProjectDatasetAdapter
       relationKind: 'view',
       sourceObjectRef: projectDatasetSourceObjectRef(staged.snapshotId, staged.objectId),
       columns: staged.columns,
+      metadata: staged.metadata,
     }
   }
 
   /** The AST/object whitelist for the query path is exactly the staged snapshot views. */
-  #allowlist(): readonly BusinessObjectMapping[] {
-    return [...this.#staged.values()].map((staged) => ({
+  #allowlist(ctx: ToolContext): readonly BusinessObjectMapping[] {
+    return [...this.#staged.values()].filter((staged) => staged.scopeKey === scopeKeyOf({ tenantId: ctx.principal.tenantId, spaceId: ctx.allowedResources.spaceId })).map((staged) => ({
       objectRef: projectDatasetSourceObjectRef(staged.snapshotId, staged.objectId),
       schema: this.#schema,
       relation: staged.view,
@@ -441,10 +468,11 @@ export class PostgresProjectDatasetAdapter
     if (plan.mode !== 'direct') {
       return this.#rejected('UNSUPPORTED_QUERY', 'only direct SQL plans are validated by this adapter')
     }
+    await this.#restoreDeclared(plan.referencedObjects, ctx)
     const validation = validateReadOnlySql({
       sql: plan.sql,
       parameters: plan.parameters,
-      allowlist: this.#allowlist(),
+      allowlist: this.#allowlist(ctx),
       declaredObjects: plan.referencedObjects,
       authorizedSourceRefs: ctx.allowedResources.sourceRefs,
     })
@@ -467,14 +495,22 @@ export class PostgresProjectDatasetAdapter
     ctx: ToolContext,
   ): Promise<StructuredQueryExecuteResponse> {
     assertTrusted(ctx)
+    const target: ActiveProjectQuery = { runId: ctx.runId, scopeKey: scopeKeyOf({ tenantId: ctx.principal.tenantId, spaceId: ctx.allowedResources.spaceId }), cancelled: false, pid: undefined }
+    const targetRef = globalThis.crypto.randomUUID()
+    this.#active.set(targetRef, target)
+    try { return await this.#execute(request, ctx, target) } finally { this.#active.delete(targetRef) }
+  }
+
+  async #execute(request: StructuredQueryExecuteRequest, ctx: ToolContext, target: ActiveProjectQuery): Promise<StructuredQueryExecuteResponse> {
     const plan = request.plan
     if (plan.mode !== 'direct') {
       throw new PostgresQueryError('UNSUPPORTED_QUERY', 'only direct SQL plans are executed by this adapter')
     }
+    await this.#restoreDeclared(plan.referencedObjects, ctx)
     const validation = validateReadOnlySql({
       sql: plan.sql,
       parameters: plan.parameters,
-      allowlist: this.#allowlist(),
+      allowlist: this.#allowlist(ctx),
       declaredObjects: plan.referencedObjects,
       authorizedSourceRefs: ctx.allowedResources.sourceRefs,
     })
@@ -487,10 +523,22 @@ export class PostgresProjectDatasetAdapter
       1,
       Math.min(request.limits.maxDurationMs, deadlineRemaining, DEFAULT_QUERY_TIMEOUT_MS),
     )
-    const raw = await this.#runReadOnly(validation.executableSql, plan.parameters, maxRows, timeoutMs)
+    const cursorPin = sha256DigestOf(stableJson({ scope: scopeKeyOf({ tenantId: ctx.principal.tenantId, spaceId: ctx.allowedResources.spaceId }), plan }))
+    const offset = decodeCursor(request.cursor, cursorPin)
+    const raw = await this.#runReadOnly(validation.executableSql, plan.parameters, maxRows, timeoutMs, offset, target)
     const truncated = raw.rows.length > maxRows
     const kept = truncated ? raw.rows.slice(0, maxRows) : raw.rows
-    const rows: unknown[][] = kept.map((row) => row.map((value) => normalizeCell(value)))
+    const rows: unknown[][] = []
+    let bytes = 0
+    for (const row of kept) {
+      const normalized = row.map((value) => normalizeCell(value))
+      bytes += Buffer.byteLength(stableJson(normalized), 'utf8')
+      if (bytes > request.limits.maxBytes) {
+        if (rows.length === 0) throw new PostgresQueryError('RESULT_TOO_LARGE', 'a project query row exceeds the byte budget')
+        break
+      }
+      rows.push(normalized)
+    }
     const columns: QueryColumn[] = raw.fields.map((field) => ({
       name: field.name,
       type: columnTypeFromOid(field.dataTypeID),
@@ -503,8 +551,9 @@ export class PostgresProjectDatasetAdapter
     }
     const coverage: ToolCoverage = {
       returned: rows.length,
-      truncated,
-      completeness: truncated ? 'truncated' : 'complete',
+      truncated: truncated || rows.length < kept.length,
+      completeness: truncated || rows.length < kept.length ? 'truncated' : 'complete',
+      ...(truncated || rows.length < kept.length ? { cursor: encodeCursor(offset + rows.length, cursorPin) } : {}),
     }
     const snapshot: SourceSnapshot = {
       sourceRef: projectDatasetSourceRef(staged.snapshotId),
@@ -513,12 +562,20 @@ export class PostgresProjectDatasetAdapter
       consistency: 'immutable',
       resultDigest: sha256DigestOf(stableJson({ columns, rows })),
     }
-    return { snapshot, columns, rows, nextCursor: null, coverage }
+    return { snapshot, columns, rows, nextCursor: coverage.cursor ?? null, coverage }
   }
+
+  activeTargets(): readonly string[] { return [...this.#active.keys()] }
 
   async cancel(request: CancelRequest, ctx: ToolContext): Promise<CancelResponse> {
     assertTrusted(ctx)
-    return { targetRef: request.targetRef, state: 'already_terminal', acceptedAt: new Date().toISOString() }
+    const target = this.#active.get(request.targetRef)
+    const acceptedAt = new Date().toISOString()
+    if (target === undefined) return { targetRef: request.targetRef, state: 'already_terminal', acceptedAt }
+    if (target.runId !== ctx.runId || target.scopeKey !== scopeKeyOf({ tenantId: ctx.principal.tenantId, spaceId: ctx.allowedResources.spaceId })) throw new ProjectDatasetError('FORBIDDEN', 'a foreign query cannot be cancelled')
+    target.cancelled = true
+    if (target.pid !== undefined) await this.#pool.query('SELECT pg_cancel_backend($1)', [target.pid])
+    return { targetRef: request.targetRef, state: 'cancelling', acceptedAt }
   }
 
   async #runReadOnly(
@@ -526,29 +583,36 @@ export class PostgresProjectDatasetAdapter
     parameters: readonly (string | number | boolean | null)[],
     maxRows: number,
     timeoutMs: number,
+    offset: number,
+    target: ActiveProjectQuery,
   ): Promise<{
     readonly rows: unknown[][]
     readonly fields: readonly { readonly name: string; readonly dataTypeID: number }[]
   }> {
-    const client = await this.#queryPool.connect()
+    let client: PoolClient | undefined
     try {
+      client = await this.#queryPool.connect()
+      const pid = await client.query<{ pid: number }>('SELECT pg_backend_pid() AS pid')
+      target.pid = pid.rows[0]?.pid
+      if (target.cancelled) throw new PostgresQueryError('INTERNAL_ERROR', 'the project query was cancelled')
       await client.query('BEGIN TRANSACTION READ ONLY')
       await client.query(`SET LOCAL statement_timeout = ${String(Math.floor(timeoutMs))}`)
-      const wrapped = `SELECT * FROM (${sql}) AS "ontology_page" LIMIT ${String(maxRows + 1)}`
+      const wrapped = `SELECT * FROM (${sql}) AS "ontology_page" LIMIT ${String(maxRows + 1)} OFFSET ${String(offset)}`
       const result = await client.query<unknown[]>({ text: wrapped, values: [...parameters], rowMode: 'array' })
+      if (target.cancelled) throw new PostgresQueryError('INTERNAL_ERROR', 'the project query was cancelled')
       await client.query('COMMIT')
       return {
         rows: result.rows as unknown[][],
         fields: result.fields.map((field) => ({ name: field.name, dataTypeID: field.dataTypeID })),
       }
     } catch (error) {
-      await client.query('ROLLBACK').catch(() => undefined)
+      await client?.query('ROLLBACK').catch(() => undefined)
       if (error instanceof PostgresQueryError) throw error
-      throw new PostgresQueryError('INTERNAL_ERROR', error instanceof Error ? error.message : 'the query failed', {
+      throw new PostgresQueryError(isRecord(error) && error['code'] === '57014' && !target.cancelled ? 'DEADLINE_EXCEEDED' : 'INTERNAL_ERROR', error instanceof Error ? error.message : 'the query failed', {
         cause: error,
       })
     } finally {
-      client.release()
+      client?.release()
     }
   }
 
@@ -569,9 +633,11 @@ export class PostgresProjectDatasetAdapter
          row_count bigint NOT NULL,
          schema_digest text NOT NULL,
          canonical_digest text NOT NULL,
-         recorded_at timestamptz NOT NULL
+         recorded_at timestamptz NOT NULL,
+         metadata jsonb
        )`,
     )
+    await this.#pool.query(`ALTER TABLE ${this.#table(SNAPSHOT_TABLE)} ADD COLUMN IF NOT EXISTS metadata jsonb`)
     await this.#pool.query(
       `CREATE TABLE IF NOT EXISTS ${this.#table(ROW_TABLE)} (
          snapshot_id uuid NOT NULL,
@@ -608,6 +674,36 @@ export class PostgresProjectDatasetAdapter
       values: row.values,
       sources: row.sources,
     }))
+  }
+
+  async #restore(scope: ScopeRef, id: string): Promise<StagedQuery | undefined> {
+    let result: { readonly rows: MetaRow[] }
+    try {
+      result = await this.#pool.query<MetaRow>(`SELECT metadata, canonical_digest, columns, row_count::text AS row_count FROM ${this.#table(SNAPSHOT_TABLE)} WHERE snapshot_id = $1::uuid AND metadata->'scopeRef'->>'tenantId' = $2 AND metadata->'scopeRef'->>'spaceId' = $3`, [id, scope.tenantId, scope.spaceId])
+    } catch (error) {
+      if (isRecord(error) && (error['code'] === '42P01' || error['code'] === '42703')) return undefined
+      throw error
+    }
+    const metadata = result.rows[0]?.metadata
+    if (metadata === undefined || metadata === null) return undefined
+    assertProjectDatasetMetadataShape(metadata)
+    if (metadata.snapshotRef.id !== id || scopeKeyOf(metadata.scopeRef) !== scopeKeyOf(scope)) return undefined
+    const relation = await this.#pool.query<{ present: boolean }>('SELECT to_regclass($1) IS NOT NULL AS present', [this.#table(queryViewName(id))])
+    if (relation.rows[0]?.present !== true) { this.#staged.delete(id); return undefined }
+    const staged: StagedQuery = { scopeKey: scopeKeyOf(scope), snapshotId: id, objectId: metadata.body.objectId,
+      version: metadata.snapshotRef.version, view: queryViewName(id), columns: metadata.body.columns, metadata }
+    this.#staged.set(id, staged)
+    return staged
+  }
+
+  async #restoreDeclared(objects: readonly import('@ontology/contracts').SourceObjectRef[], ctx: ToolContext): Promise<void> {
+    const scope = { tenantId: ctx.principal.tenantId, spaceId: ctx.allowedResources.spaceId }
+    if (objects.length > 1) throw new PostgresQueryError('UNSUPPORTED_QUERY', 'project queries address one fixed snapshot')
+    for (const object of objects) {
+      if (object.sourceRef.namespace !== 'project-dataset') continue
+      const staged = await this.#restore(scope, object.sourceRef.sourceId)
+      if (staged === undefined) throw new PostgresQueryError('SNAPSHOT_UNAVAILABLE', 'the scoped fixed project snapshot is unavailable')
+    }
   }
 
   #table(name: string): string {

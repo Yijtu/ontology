@@ -53,6 +53,7 @@ function fieldsOf(descriptor: ProjectSnapshotQueryDescriptor): FieldMapping[] {
       fieldRef: column.name,
       column: column.name,
       valueType: column.valueType,
+      ...(['number', 'quantity'].includes(column.valueType) ? { exactDecimal: true } : {}),
       ...(unit === undefined ? {} : { unit }),
     })
   }

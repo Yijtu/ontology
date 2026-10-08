@@ -11,19 +11,22 @@ import type {
   UnitCode,
   Uuid,
   VersionRef,
+  ProjectRevisionRef,
 } from './generated/contracts'
+import { assertProjectFactInputShape } from './project-mapping'
+import type { ProjectFactSourcePin } from './project-mapping'
 import type { StructuredQueryPort } from './ports'
 import type { AttributeValueType } from './semantic-definitions'
 import type { SourceLocator } from './structured-parse'
 import type { ToolContext } from './trusted'
-import { isRecord, isResourceRef, isUuid, isVersionRef } from './asset-workspace'
+import { isRecord, isResourceRef, isUuid, isVersionRef, isRevisionString, isSha256Digest } from './asset-workspace'
 
 /**
  * Project dataset snapshots: the fixed, queryable materialisation of a project's
- * *approved* records (SPEC v0.3a asset-data-ui §3.2/§6.2/§6.3, A.US-006/P.US-013).
+ * official published facts (SPEC v0.3a asset-data-ui §3.2/§6.2/§6.3, A.US-006/P.US-013).
  *
  * A project revision pins mappings and an approved-input digest. This boundary turns the
- * bound project records into a canonical, backend-neutral dataset: one row per project
+ * published facts into a canonical, backend-neutral dataset: one row per project
  * record, canonical attribute columns, and every row carrying the exact physical source
  * (original document + parse + locator) each value was read from.
  *
@@ -34,7 +37,7 @@ import { isRecord, isResourceRef, isUuid, isVersionRef } from './asset-workspace
  *
  * Two different client column names / units that describe the same business value normalise
  * to the same canonical cell, so the canonical rows (and the canonical digest) are identical;
- * only the `sources` and `mappingRefs` differ, which is exactly the audit trail.
+ * the complete snapshot identity additionally binds scope, project/definition and published source pins.
  */
 
 export const PROJECT_DATASET_SCHEMA_VERSION = 'project-dataset-snapshot@1'
@@ -60,6 +63,11 @@ export interface ProjectDatasetFieldSource {
   readonly documentRef: ResourceRef
   readonly parseId: Uuid
   readonly locator: SourceLocator
+  readonly factSource?: ProjectFactSourcePin
+  readonly statementId?: Uuid
+  readonly statementVersion?: RevisionString
+  readonly recordedAt?: string
+  readonly rowDigest?: Sha256Digest
 }
 
 /** One canonical dataset row. `sources` locates every value at its actual physical object. */
@@ -106,6 +114,31 @@ export interface ProjectDatasetSnapshotBody {
   readonly rows: readonly ProjectDatasetRow[]
   readonly coverage: ProjectDatasetCoverage
   readonly recordedAt: string
+  /** Official publication/identity read point and digest, fixed at projection creation. */
+  readonly factRecordedPoint?: { readonly semantic: RevisionString; readonly identity: RevisionString }
+  readonly sourceDigest?: Sha256Digest
+  readonly projectRevisionRef?: ProjectRevisionRef
+}
+
+/** The publication reader supplies canonical rows, never staged project records. */
+export interface ProjectPublishedDataset {
+  readonly rows: readonly ProjectDatasetRow[]
+  readonly coverage: ProjectDatasetCoverage
+  readonly factRecordedPoint: { readonly semantic: RevisionString; readonly identity: RevisionString }
+  readonly sourceDigest: Sha256Digest
+}
+
+export interface ProjectPublishedDatasetSource {
+  read(scopeRef: ScopeRef, revision: import('./generated/contracts').ProjectRevision, objectId: string, ctx: ToolContext): Promise<ProjectPublishedDataset>
+}
+
+export interface ProjectDatasetSnapshotMetadata {
+  readonly scopeRef: ScopeRef
+  readonly snapshotRef: ProjectDatasetRef
+  readonly body: Omit<ProjectDatasetSnapshotBody, 'rows'>
+  readonly rowContentDigest?: Sha256Digest
+  /** DuckDB precision selected from exact input decimals, never by rounding. */
+  readonly decimalScales?: Readonly<Record<string, number>>
 }
 
 /** The resource reference that pins one immutable dataset snapshot. */
@@ -205,6 +238,7 @@ export interface ProjectSnapshotQueryDescriptor {
   /** The fixed source object the generated SQL is bound to and must declare. */
   readonly sourceObjectRef: SourceObjectRef
   readonly columns: readonly ProjectDatasetColumn[]
+  readonly metadata?: ProjectDatasetSnapshotMetadata
 }
 
 /**
@@ -336,6 +370,11 @@ function isSourceLocator(value: unknown): value is SourceLocator {
 
 function isFieldSource(value: unknown): value is ProjectDatasetFieldSource {
   if (!isRecord(value)) return false
+  if (value['factSource'] !== undefined) {
+    try { assertProjectFactInputShape({ sources: [value['factSource']] }) } catch { return false }
+    if (!isUuid(value['statementId']) || !isRevisionString(value['statementVersion']) ||
+      typeof value['recordedAt'] !== 'string' || !isSha256Digest(value['rowDigest'])) return false
+  }
   return (
     isNonEmptyString(value['fieldId']) &&
     isResourceRef(value['documentRef']) &&
@@ -383,8 +422,23 @@ export function assertProjectDatasetSnapshotShape(value: unknown): asserts value
   if (!isNonEmptyString(body['backend'])) throw invalidDataset('backend must be a non-empty string')
   const columns = body['columns']
   if (!Array.isArray(columns) || !columns.every(isDatasetColumn)) throw invalidDataset('columns are malformed')
+  if (new Set(columns.map((column) => column.name)).size !== columns.length || columns.some((column) => ['record_id', 'object_id', 'source_row_key', 'values_json', 'sources_json'].includes(column.name))) throw invalidDataset('columns contain duplicate or reserved names')
   const rows = body['rows']
   if (!Array.isArray(rows) || !rows.every(isDatasetRow)) throw invalidDataset('rows are malformed')
+  if (rows.length > 20_000 || new Set(rows.map((row) => row.recordId)).size !== rows.length) throw invalidDataset('rows exceed the record cap or duplicate physical identities')
+  const columnsByName = new Map(columns.map((column) => [column.name, column]))
+  for (const row of rows) {
+    if (row.objectId !== body['objectId']) throw invalidDataset('a row belongs to another object')
+    for (const [name, cell] of Object.entries(row.values)) {
+      const column = columnsByName.get(name)
+      if (column === undefined) throw invalidDataset('a row contains an undeclared attribute')
+      if (cell.kind === 'quantity') {
+        if (column.valueType !== 'quantity' || cell.unitCode !== column.canonicalUnitCode || !/^-?(?:0|[1-9]\d*)(?:\.\d+)?$/.test(cell.value)) throw invalidDataset('a quantity cell differs from its declared type/unit')
+      } else if (cell.value !== null && (column.valueType === 'quantity' || column.valueType === 'boolean' && typeof cell.value !== 'boolean' ||
+        column.valueType === 'number' && (typeof cell.value !== 'string' || !/^-?(?:0|[1-9]\d*)(?:\.\d+)?$/.test(cell.value)) ||
+        ['string', 'timestamp', 'enum', 'reference'].includes(column.valueType) && typeof cell.value !== 'string')) throw invalidDataset('a scalar cell differs from its declared type')
+    }
+  }
   const coverage = body['coverage']
   if (!isRecord(coverage)) throw invalidDataset('coverage is malformed')
   for (const field of ['expectedCount', 'processedCount'] as const) {
@@ -397,6 +451,24 @@ export function assertProjectDatasetSnapshotShape(value: unknown): asserts value
     throw invalidDataset('coverage.completeness is not a known status')
   }
   if (!isNonEmptyString(body['recordedAt'])) throw invalidDataset('recordedAt must be a timestamp')
+  if (body['factRecordedPoint'] !== undefined) {
+    const point = body['factRecordedPoint']
+    const revision = body['projectRevisionRef']
+    if (!isRecord(point) || !isRevisionString(point['semantic']) || !isRevisionString(point['identity']) || !isSha256Digest(body['sourceDigest']) ||
+      !isRecord(revision) || !isUuid(revision['projectId']) || !isRevisionString(revision['revision']) || !isSha256Digest(revision['digest']) ||
+      revision['projectId'] !== body['projectId'] || revision['revision'] !== body['projectRevision']) throw invalidDataset('official fact snapshot pins are malformed')
+  }
+}
+
+export function assertProjectDatasetFieldSourcesShape(value: unknown): asserts value is ProjectDatasetFieldSource[] {
+  if (!Array.isArray(value) || !value.every(isFieldSource)) throw invalidDataset('project dataset field sources are malformed')
+}
+
+export function assertProjectDatasetMetadataShape(value: unknown): asserts value is ProjectDatasetSnapshotMetadata {
+  if (!isRecord(value) || !isRecord(value['scopeRef']) || !isNonEmptyString(value['scopeRef']['tenantId']) || !isNonEmptyString(value['scopeRef']['spaceId']) || !isRecord(value['body'])) throw invalidDataset('dataset metadata is malformed')
+  assertProjectDatasetSnapshotShape({ ref: value['snapshotRef'], body: { ...value['body'], rows: [] } })
+  if (value['rowContentDigest'] !== undefined && !isSha256Digest(value['rowContentDigest'])) throw invalidDataset('row content digest is malformed')
+  if (value['decimalScales'] !== undefined && (!isRecord(value['decimalScales']) || !Object.values(value['decimalScales']).every((scale) => typeof scale === 'number' && Number.isInteger(scale) && scale >= 0 && scale <= 38))) throw invalidDataset('decimal scales are malformed')
 }
 
 function invalidDataset(message: string): ProjectDatasetError {

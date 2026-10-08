@@ -1,4 +1,4 @@
-import { randomBytes } from 'node:crypto'
+import { randomBytes, randomUUID } from 'node:crypto'
 import { Client } from 'pg'
 import { afterAll, beforeAll, describe, expect, it } from 'vitest'
 import { BudgetService, InMemoryBudgetLedgerStore, sha256DigestOf } from '@ontology/core'
@@ -26,6 +26,7 @@ import type {
 import {
   projectDatasetSourceObjectRef,
   projectDatasetSourceRef,
+  createToolContext,
 } from '@ontology/contracts'
 import {
   GATEWAY_LEDGER,
@@ -200,6 +201,7 @@ const duck = new DuckDbProjectDatasetAdapter()
 let container: PostgresContainer | undefined
 let admin: Client | undefined
 let pg: PostgresProjectDatasetAdapter | undefined
+let bulkDuckDescriptor: ProjectSnapshotQueryDescriptor | undefined
 
 beforeAll(async () => {
   const duckInput = stageInputFor(DUCK_SNAPSHOT_ID, duck.backend)
@@ -354,4 +356,99 @@ describe('project semantic SQL against two real business backends', () => {
       restarted.close()
     }
   }, 30_000)
+  it('keeps exact DECIMAL, declared text and every cell origin across 1001 paged rows on both backends', async () => {
+    const pgAdapter = pg
+    if (pgAdapter === undefined || admin === undefined) throw new Error('the PG business backend is unavailable')
+    const columns: ProjectDatasetColumn[] = [{ name: 'code', valueType: 'string' }, { name: 'amount', valueType: 'number' }]
+    const rows: ProjectDatasetRow[] = Array.from({ length: 1001 }, (_unused, index) => ({
+      recordId: `70000000-0000-4000-8000-${String(index).padStart(12, '0')}`, objectId: 'Meter', sourceRowKey: `csv:bulk:row:${String(index + 2)}`,
+      values: { code: { kind: 'scalar', value: '000123' }, amount: { kind: 'scalar', value: index % 2 === 0 ? '9007199254740993.000000000001' : '-9007199254740994.000000000002' } },
+      sources: ['code', 'amount'].map((fieldId, column) => ({ ...locator(fieldId, column + 1), locator: { kind: 'table_cell', format: 'csv', recordIndex: index + 1, row: index + 2, column: column + 1, normalizationMapRef: 'bulk-map' } })),
+    }))
+    for (const backend of [duck, pgAdapter]) {
+      const id = randomUUID()
+      const canonicalDigest = sha256DigestOf(canonicalJson({ objectId: 'Meter', columns, rows: rows.map((row) => ({ recordId: row.recordId, values: row.values })) }))
+      const base = stageInputFor(id, backend.backend).input
+      const input: ProjectDatasetStageInput = { ...base, snapshotRef: { ...base.snapshotRef, digest: canonicalDigest }, canonicalDigest,
+        schemaDigest: sha256DigestOf(canonicalJson(columns)), body: { ...base.body, columns, rows, coverage: { expectedCount: rows.length, processedCount: rows.length, excluded: [], completeness: 'complete' } } }
+      const normal = contextFor(id)
+      const ctx = createToolContext({ ...normal, allowedResources: { ...normal.allowedResources, maxRows: 250 } })
+      await backend.stageSnapshot(SCOPE, input, ctx)
+      if (backend === pgAdapter) await admin.query(`GRANT SELECT ON ${PG_SCHEMA}.${viewName(id)} TO ${READ_ONLY_ROLE}`)
+      const descriptor = await backend.describeSnapshot(SCOPE, input.snapshotRef, ctx)
+      if (descriptor === undefined) throw new Error('the bulk descriptor is missing')
+      if (backend === duck) bulkDuckDescriptor = descriptor
+      const service = new ProjectSemanticQueryService({ query: backend })
+      const plan: SemanticQueryPlan = { mode: 'semantic', concepts: ['Meter'], fields: ['code', 'amount'], links: [], filters: [],
+        orderBy: [{ fieldRef: 'record_id', direction: 'asc' }], limit: 1001, mappingVersion: projectSnapshotMappingRef({ descriptor }) }
+      const all = []
+      let cursor: string | undefined
+      do {
+        const result = await service.execute({ descriptor, plan, limits: { ...LIMITS, maxRows: 1001 }, ...(cursor === undefined ? {} : { cursor }) }, ctx)
+        expect(result.rows.length).toBeLessThanOrEqual(250)
+        all.push(...result.rows)
+        expect(result.coverage.truncated).toBe(all.length < 1001)
+        cursor = result.coverage.cursor
+      } while (cursor !== undefined)
+      expect(all).toHaveLength(1001)
+      expect(new Set(all.map((row) => row.recordId)).size).toBe(1001)
+      expect(all[0]?.values).toEqual(['000123', '9007199254740993.000000000001'])
+      expect(all[1]?.values).toEqual(['000123', '-9007199254740994.000000000002'])
+      expect(all[1000]?.sources.find((source) => source.fieldId === 'amount')?.locator).toMatchObject({ kind: 'table_cell', row: 1002, column: 2 })
+      expect(await backend.describeSnapshot(SCOPE, { ...input.snapshotRef, digest: `sha256:${'f'.repeat(64)}` }, ctx)).toBeUndefined()
+      const foreign = gatewayContext({ tenantId: '99999999-9999-4999-8999-999999999999', spaceId: SPACE, sourceRefs: [projectDatasetSourceRef(id)] })
+      expect(await backend.describeSnapshot({ tenantId: foreign.principal.tenantId, spaceId: SPACE }, input.snapshotRef, foreign)).toBeUndefined()
+      await expect(backend.execute({ plan: { mode: 'direct', statementKind: 'select', sql: `SELECT code FROM ${backend === pgAdapter ? `${PG_SCHEMA}.${viewName(id)}` : descriptor.relation}`, parameters: [], referencedObjects: [descriptor.sourceObjectRef], readOnly: true }, limits: LIMITS, snapshotRequest: { consistency: 'immutable' } }, foreign)).rejects.toMatchObject({ code: 'SNAPSHOT_UNAVAILABLE' })
+      await expect(backend.stageSnapshot(SCOPE, { ...input, body: { ...input.body, rows: rows.map((row, index) => index === 0 ? { ...row, sources: [] } : row) } }, ctx)).rejects.toMatchObject({ code: 'IDEMPOTENCY_CONFLICT' })
+    }
+  }, 120_000)
+
+  it('interrupts a real PG read without returning a late success and refuses a foreign cancellation', async () => {
+    const backend = pg
+    if (backend === undefined || admin === undefined || container === undefined) throw new Error('the isolated PG backend is unavailable')
+    const descriptor = await backend.describeSnapshot(SCOPE, stageInputFor(PG_SNAPSHOT_ID, backend.backend).snapshotRef, contextFor(PG_SNAPSHOT_ID))
+    if (descriptor === undefined) throw new Error('the PG descriptor is missing')
+    const blocker = new Client({ connectionString: container.adminUrl })
+    await blocker.connect()
+    await blocker.query('BEGIN')
+    await blocker.query(`LOCK TABLE ${PG_SCHEMA}.project_dataset_rows IN ACCESS EXCLUSIVE MODE`)
+    const ctx = contextFor(PG_SNAPSHOT_ID)
+    const pending = backend.execute({ plan: { mode: 'direct', statementKind: 'select', sql: `SELECT "meterValue" FROM ${PG_SCHEMA}.${descriptor.relation}`, parameters: [], referencedObjects: [descriptor.sourceObjectRef], readOnly: true }, limits: LIMITS, snapshotRequest: { consistency: 'immutable' } }, ctx)
+    const outcome = pending.then(() => 'late_success', (error: unknown) => error)
+    try {
+      const endAt = Date.now() + 10_000
+      let blocked = false
+      while (Date.now() < endAt) {
+        const state = await admin.query<{ count: string }>("SELECT count(*)::text FROM pg_stat_activity WHERE application_name='project-semantic-sql-test-readonly' AND wait_event_type='Lock'")
+        if (state.rows[0]?.count !== '0') { blocked = true; break }
+        await new Promise((resolve) => setTimeout(resolve, 10))
+      }
+      expect(blocked).toBe(true)
+      const targetRef = backend.activeTargets()[0]
+      if (targetRef === undefined) throw new Error('the blocked query has no cancellation target')
+      const foreign = gatewayContext({ tenantId: TENANT, spaceId: SPACE, runId: randomUUID(), sourceRefs: [projectDatasetSourceRef(PG_SNAPSHOT_ID)] })
+      await expect(backend.cancel({ targetRef, reason: 'foreign run' }, foreign)).rejects.toMatchObject({ code: 'FORBIDDEN' })
+      expect((await backend.cancel({ targetRef, reason: 'human cancelled read' }, ctx)).state).toBe('cancelling')
+      const result = await outcome
+      expect(result).toBeInstanceOf(Error)
+      expect((result as Error).message).toMatch(/cancel/i)
+      expect(backend.activeTargets()).toEqual([])
+    } finally { await blocker.query('ROLLBACK'); await blocker.end() }
+  }, 60_000)
+
+  it('interrupts a real DuckDB query and prevents its late result from succeeding', async () => {
+    const descriptor = bulkDuckDescriptor
+    if (descriptor === undefined) throw new Error('the bulk DuckDB snapshot is missing')
+    const ctx = contextFor(descriptor.snapshotRef.id)
+    const pending = duck.execute({ plan: { mode: 'direct', statementKind: 'select', sql: `SELECT COUNT(*) FROM "${descriptor.relation}" a CROSS JOIN "${descriptor.relation}" b CROSS JOIN "${descriptor.relation}" c WHERE a.amount + b.amount + c.amount > 0`, parameters: [], referencedObjects: [descriptor.sourceObjectRef], readOnly: true }, limits: LIMITS, snapshotRequest: { consistency: 'immutable' } }, ctx)
+    const outcome = pending.then(() => 'late_success', (error: unknown) => error)
+    const endAt = Date.now() + 10_000
+    while (duck.runningTargets().length === 0 && Date.now() < endAt) await new Promise((resolve) => setTimeout(resolve, 1))
+    const targetRef = duck.runningTargets()[0]
+    if (targetRef === undefined) throw new Error('the DuckDB query has no cancellation target')
+    expect((await duck.cancel({ targetRef, reason: 'human cancelled the real projection read' }, ctx)).state).toBe('cancelling')
+    expect(await outcome).toMatchObject({ code: 'CANCELLED' })
+    expect(duck.activeTargets()).toEqual([])
+  }, 60_000)
+
 })

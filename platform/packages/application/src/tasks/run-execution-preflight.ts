@@ -54,6 +54,7 @@ export interface RunExecutionPreflightDependencies {
   readonly supportedResultSchemaRefs: readonly VersionRef[]
   readonly effectiveLimitsRef: VersionRef
   readonly parameters: TaskParameterValidator
+  readonly projectQuerySnapshot?: (scope: ScopeRef, revision: ProjectRevision, parameters: Readonly<Record<string, unknown>>, ctx: ToolContext) => Promise<ResourceRef>
   readonly now?: () => string
 }
 
@@ -105,6 +106,7 @@ export class RunExecutionPreflightService implements RunExecutionBinder {
   readonly #supportedResultSchemaRefs: readonly VersionRef[]
   readonly #effectiveLimitsRef: VersionRef
   readonly #parameters: TaskParameterValidator
+  readonly #projectQuerySnapshot: RunExecutionPreflightDependencies['projectQuerySnapshot']
   readonly #now: () => string
 
   constructor(dependencies: RunExecutionPreflightDependencies) {
@@ -118,6 +120,7 @@ export class RunExecutionPreflightService implements RunExecutionBinder {
     this.#supportedResultSchemaRefs = dependencies.supportedResultSchemaRefs
     this.#effectiveLimitsRef = dependencies.effectiveLimitsRef
     this.#parameters = dependencies.parameters
+    this.#projectQuerySnapshot = dependencies.projectQuerySnapshot
     this.#now = dependencies.now ?? (() => new Date().toISOString())
   }
 
@@ -161,8 +164,16 @@ export class RunExecutionPreflightService implements RunExecutionBinder {
       }
     }
 
+    let projectDatasetSnapshotRef: ResourceRef | undefined
+    if (binding?.kind === 'structured_query' && request.mode === 'task') {
+      if (binding.actionDefinitionRef.digest !== revision.definitionRef.digest) throw new RunServiceError('TASK_NOT_READY', 'the structured query task definition digest differs from the pinned project definition')
+      if (this.#projectQuerySnapshot === undefined) throw new RunServiceError('TASK_NOT_READY', 'the official project query snapshot resolver is not mounted')
+      projectDatasetSnapshotRef = await this.#projectQuerySnapshot(scopeRef, revision, request.parameters, ctx)
+    }
+
     const executionBinding: RunExecutionBinding = {
       schemaVersion: 'run-execution-binding@1',
+      ...(projectDatasetSnapshotRef === undefined ? {} : { projectDatasetSnapshotRef }),
       runId: input.runId,
       request,
       resolvedProfileRef: input.profileBinding.resolvedProfileRef,

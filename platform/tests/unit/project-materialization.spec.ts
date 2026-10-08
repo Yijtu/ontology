@@ -1,4 +1,5 @@
 import { describe, expect, it } from 'vitest'
+import { controlledPublishedDatasetSource } from '../fixtures/controlled-published-dataset'
 import {
   InMemoryProjectReadinessStore,
   InMemoryIndustrySchemaSource,
@@ -252,8 +253,7 @@ function serviceWith(rows: readonly ProjectRecordVersion[], backend = new FakeBa
   projects.seed(OTHER_PROJECT, '1')
   const dependencies: ProjectDataMaterializationDependencies = {
     projects,
-    records: new FakeRecords([...rows]),
-    mappings: new FakeMappings(),
+    publishedSource: controlledPublishedDatasetSource(new FakeRecords([...rows]), new FakeMappings()),
     readiness: new InMemoryProjectReadinessStore(),
     schemaSource: new InMemoryIndustrySchemaSource([{ ref: DEFINITION_REF, schema: schema() }]),
     writer: backend,
@@ -262,7 +262,7 @@ function serviceWith(rows: readonly ProjectRecordVersion[], backend = new FakeBa
   }
   const service = new ProjectDataMaterializationService(dependencies)
   const ctx = toolContext(SCOPES.tenantId, SCOPES.spaceId, ['operator'])
-  return { service, backend, ctx }
+  return { service, backend, ctx, dependencies }
 }
 
 describe('ProjectDataMaterializationService (unit)', () => {
@@ -322,4 +322,28 @@ describe('ProjectDataMaterializationService (unit)', () => {
       code: 'SNAPSHOT_UNAVAILABLE',
     })
   })
+  it('requires the official publication port even when legacy records are confirmed', async () => {
+    const { dependencies, ctx } = serviceWith([record(RECORD_A, '1005')])
+    const { publishedSource: _published, ...withoutSource } = dependencies
+    void _published
+    const service = new ProjectDataMaterializationService({ ...withoutSource, records: new FakeRecords([record(RECORD_A, '1005')]), mappings: new FakeMappings() })
+    await expect(service.materialize(PROJECT_ID, { objectId: 'Meter' }, ctx)).rejects.toMatchObject({ code: 'INPUT_NOT_READY' })
+  })
+
+  it('discards a newly staged snapshot when official sources change during the build and never activates it', async () => {
+    const { dependencies, backend, ctx } = serviceWith([record(RECORD_A, '1005')])
+    const source = dependencies.publishedSource
+    if (source === undefined) throw new Error('the controlled publication source is missing')
+    let changed = false
+    const stage = backend.stageSnapshot.bind(backend)
+    backend.stageSnapshot = async (...args) => { const result = await stage(...args); changed = true; return result }
+    const service = new ProjectDataMaterializationService({ ...dependencies, publishedSource: { read: async (...args) => {
+      const result = await source.read(...args)
+      return changed ? { ...result, sourceDigest: sha('a') } : result
+    } } })
+    await expect(service.materialize(PROJECT_ID, { objectId: 'Meter' }, ctx)).rejects.toMatchObject({ code: 'INPUT_NOT_READY' })
+    expect(backend.snapshots.size).toBe(0)
+    await expect(service.queryActive({ projectId: PROJECT_ID }, ctx)).rejects.toMatchObject({ code: 'SNAPSHOT_UNAVAILABLE' })
+  })
+
 })

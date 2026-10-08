@@ -17,6 +17,7 @@ import type {
   RunExecutionBindingStore,
   ScopeRef,
   SemanticQueryPlan,
+  ProjectSnapshotQueryDescriptor,
   TaskBindingStore,
   ToolContext,
   VersionRef,
@@ -33,6 +34,7 @@ import {
   SemanticSchemaVocabularyService,
   compileSemanticQuery,
   renderCompiledQuery,
+  projectSnapshotMappingRef,
 } from '@ontology/semantic-engine'
 import type { CoreExampleScenario } from './core-example-loader'
 import { createCoreFactsPlan } from './core-facts-plan'
@@ -73,6 +75,7 @@ export interface CoreTemplatePlanResolverOptions {
     input: { readonly runId: string; readonly resolvedProfileHash: string; readonly stateRef: ResourceRef },
     ctx: ToolContext,
   ) => Promise<boolean>
+  readonly projectQueryDescriptor?: (execution: RunExecutionBinding, objectId: string, ctx: ToolContext) => Promise<ProjectSnapshotQueryDescriptor>
   readonly now?: () => string
 }
 
@@ -342,6 +345,7 @@ export class CoreTemplatePlanResolver implements TemplatePlanResolver {
   readonly #operations: OperationRegistry
   readonly #decisionStateRefProvider: DecisionStateRefProvider
   readonly #isRouteClarificationReceiptApproved: CoreTemplatePlanResolverOptions['isRouteClarificationReceiptApproved']
+  readonly #projectQueryDescriptor: CoreTemplatePlanResolverOptions['projectQueryDescriptor']
   readonly #now: () => string
 
   constructor(options: CoreTemplatePlanResolverOptions) {
@@ -359,6 +363,7 @@ export class CoreTemplatePlanResolver implements TemplatePlanResolver {
     this.#operations = options.operations
     this.#decisionStateRefProvider = options.decisionStateRefProvider
     this.#isRouteClarificationReceiptApproved = options.isRouteClarificationReceiptApproved
+    this.#projectQueryDescriptor = options.projectQueryDescriptor
     this.#now = options.now ?? (() => new Date().toISOString())
   }
 
@@ -536,7 +541,7 @@ export class CoreTemplatePlanResolver implements TemplatePlanResolver {
     const existing = await this.#receipts.findByRequest(this.#scopeRef, pins, requestDigest, request.dependencies.ctx)
     if (existing !== undefined) return planPreparation(existing, sourceReceiptRef)
 
-    const fixedPlan = this.#fixedTaskPlan(loaded) ?? this.#fixedFactsPlan(loaded)
+    const fixedPlan = await this.#fixedTaskPlan(loaded, request.dependencies.ctx) ?? this.#fixedFactsPlan(loaded)
     const generationBound = modelBindingMatches(loaded.resolved, this.#modelRefs, 'generation')
     const decisionBound = modelBindingMatches(loaded.resolved, this.#modelRefs, 'decision')
     const generationModelRef = generationBound ? modelRefOf(loaded.resolved, 'generation') : undefined
@@ -695,7 +700,7 @@ export class CoreTemplatePlanResolver implements TemplatePlanResolver {
    * A legacy question-mode run has no execution binding and falls through to the existing
    * question routing.
    */
-  #fixedTaskPlan(loaded: LoadedRunInputs): ExecutablePlan | undefined {
+  async #fixedTaskPlan(loaded: LoadedRunInputs, ctx: ToolContext): Promise<ExecutablePlan | undefined> {
     const execution = loaded.execution
     if (execution === undefined || execution.request.mode !== 'task') return undefined
     const binding = loaded.taskBinding
@@ -708,7 +713,7 @@ export class CoreTemplatePlanResolver implements TemplatePlanResolver {
       case 'compute':
         return this.#computePlan(loaded, binding)
       case 'structured_query':
-        return this.#structuredQueryPlan(loaded, execution.request.parameters)
+        return this.#structuredQueryPlan(loaded, execution.request.parameters, ctx)
       case 'document_qa':
         return this.#documentQaPlan(loaded, execution.request.parameters)
       case 'rule_judgement':
@@ -755,7 +760,7 @@ export class CoreTemplatePlanResolver implements TemplatePlanResolver {
     return singleStepPlan(loaded.run.runId, `compute:${binding.taskBindingRef.id}`, step)
   }
 
-  #structuredQueryPlan(loaded: LoadedRunInputs, parameters: Readonly<Record<string, unknown>>): ExecutablePlan {
+  async #structuredQueryPlan(loaded: LoadedRunInputs, parameters: Readonly<Record<string, unknown>>, ctx: ToolContext): Promise<ExecutablePlan> {
     if (!loaded.resolved.toolBindings.some((binding) => binding.toolId === 'data_query' && binding.enabled)) {
       throw new WorkflowControllerError('CAPABILITY_NOT_CONFIGURED', 'the resolved profile does not enable data_query for a structured query task')
     }
@@ -763,17 +768,18 @@ export class CoreTemplatePlanResolver implements TemplatePlanResolver {
     if (parsed === undefined) {
       throw new WorkflowControllerError('INVALID_ARGUMENT', 'a structured query task requires objectId and a fields array')
     }
-    const mapping = loaded.resolved.mappingRefs[0]
-    if (mapping === undefined) {
-      throw new WorkflowControllerError('CAPABILITY_NOT_CONFIGURED', 'the resolved profile mounts no mapping for a structured query task')
+    if (loaded.execution === undefined || this.#projectQueryDescriptor === undefined) {
+      throw new WorkflowControllerError('CAPABILITY_NOT_CONFIGURED', 'the fixed project query snapshot resolver is not mounted')
     }
+    const descriptor = await this.#projectQueryDescriptor(loaded.execution, parsed.objectId, ctx)
+    const mapping = projectSnapshotMappingRef({ descriptor })
     const queryPlan: SemanticQueryPlan = {
       mode: 'semantic',
       concepts: [parsed.objectId],
-      fields: [...parsed.fields],
+      fields: [...parsed.fields, 'record_id', 'sources_json'],
       links: [],
       filters: [],
-      orderBy: [],
+      orderBy: [{ fieldRef: 'record_id', direction: 'asc' }],
       limit: parsed.limit ?? 100,
       mappingVersion: { id: mapping.id, version: mapping.version, digest: mapping.digest },
     }

@@ -7,27 +7,21 @@ import {
 } from '@ontology/contracts'
 import type {
   AttributeValueType,
-  ImportMappingVersion,
   IndustryObjectSchema,
   IndustrySchema,
   IndustrySchemaSource,
-  NormalizedProjectFieldValue,
-  ProjectDatasetCell,
   ProjectDatasetColumn,
   ProjectDatasetCoverage,
-  ProjectDatasetExclusion,
-  ProjectDatasetFieldSource,
   ProjectDatasetQueryPort,
   ProjectDatasetQueryResult,
-  ProjectDatasetRow,
   ProjectDatasetSnapshot,
   ProjectDatasetSnapshotBody,
   ProjectDatasetStageInput,
   ProjectDatasetWriterPort,
+  ProjectPublishedDatasetSource,
   ProjectMappingStore,
   ProjectReadinessStore,
   ProjectRecordStore,
-  ProjectRecordVersion,
   ProjectRevision,
   ProjectRevisionRef,
   ReadinessProjection,
@@ -40,8 +34,6 @@ import type {
 import { canonicalJson, sha256DigestOf } from '../profiles/canonical'
 
 const MATERIALIZATION_ROLES: readonly string[] = ['platform-admin', 'profile-editor', 'operator']
-const RECORD_PAGE_LIMIT = 250
-const MAX_DATASET_ROWS = 20_000
 
 export interface MaterializeProjectDatasetInput {
   readonly objectId: string
@@ -96,8 +88,10 @@ export interface ProjectDataMaterializationDependencies {
       ctx: ToolContext,
     ): Promise<ProjectRevision | undefined>
   }
-  readonly records: ProjectRecordStore
-  readonly mappings: ProjectMappingStore
+  /** Legacy constructors may omit the source, but materialisation then fails explicitly. */
+  readonly publishedSource?: ProjectPublishedDatasetSource
+  readonly records?: ProjectRecordStore
+  readonly mappings?: ProjectMappingStore
   readonly readiness: ProjectReadinessStore
   readonly schemaSource: IndustrySchemaSource
   readonly writer: ProjectDatasetWriterPort
@@ -137,13 +131,6 @@ function deterministicUuid(seed: string): Uuid {
   return `${joined.slice(0, 8)}-${joined.slice(8, 12)}-${joined.slice(12, 16)}-${joined.slice(16, 20)}-${joined.slice(20)}`
 }
 
-function cellOf(value: NormalizedProjectFieldValue): ProjectDatasetCell {
-  if (value.kind === 'quantity') {
-    return { kind: 'quantity', value: value.value, unitCode: value.unitCode }
-  }
-  return { kind: 'scalar', value: value.value }
-}
-
 function columnsOf(object: IndustryObjectSchema): ProjectDatasetColumn[] {
   return [...object.attributes]
     .map((attribute) => ({
@@ -156,22 +143,14 @@ function columnsOf(object: IndustryObjectSchema): ProjectDatasetColumn[] {
 }
 
 /**
- * The project-data materialiser (SPEC v0.3a asset-data-ui §3.2/§6.2/§6.3, A.US-006/P.US-013).
- *
- * It freezes the project's *approved* records into a canonical, backend-neutral dataset and
- * writes it through the independent writer port into a business backend. The dataset digest
- * covers only `objectId` + columns + canonical values, so the same business data mapped through
- * different client column names or units is *semantically identical*: same digest, same rows.
- *
- * Activation is gated: the `dataset` readiness projection is upserted `ready` only after the
- * backend re-reported the same row count and digest (coverage validation). A projection that is
- * not `ready`, or a pinned snapshot that is not the active target, is reported
- * `SNAPSHOT_UNAVAILABLE`; a newer dataset is never silently substituted.
+ * Freeze official published project facts into an independent, immutable business projection.
+ * Physical project records supply provenance only through the published-source port. Snapshot
+ * identity binds scope, project revision, definition/mappings, fact recorded point and sources.
+ * No missing/failed readiness target may substitute a startup example or a newer dataset.
  */
 export class ProjectDataMaterializationService {
   readonly #projects: ProjectDataMaterializationDependencies['projects']
-  readonly #records: ProjectRecordStore
-  readonly #mappings: ProjectMappingStore
+  readonly #publishedSource: ProjectPublishedDatasetSource | undefined
   readonly #readiness: ProjectReadinessStore
   readonly #schemaSource: IndustrySchemaSource
   readonly #writer: ProjectDatasetWriterPort
@@ -180,8 +159,7 @@ export class ProjectDataMaterializationService {
 
   constructor(dependencies: ProjectDataMaterializationDependencies) {
     this.#projects = dependencies.projects
-    this.#records = dependencies.records
-    this.#mappings = dependencies.mappings
+    this.#publishedSource = dependencies.publishedSource
     this.#readiness = dependencies.readiness
     this.#schemaSource = dependencies.schemaSource
     this.#writer = dependencies.writer
@@ -215,25 +193,14 @@ export class ProjectDataMaterializationService {
       throw new ProjectDatasetError('INVALID_ARGUMENT', `object ${input.objectId} is not declared by the pinned definition`)
     }
 
-    const records = await this.#allRecords(scopeRef, projectId, input.objectId, ctx)
     const columns = columnsOf(object)
-    const { rows, excluded } = await this.#project(object, columns, records, scopeRef, ctx)
-    if (records.length !== rows.length + excluded.length) {
-      throw new ProjectDatasetError('MATERIALIZATION_MISMATCH', 'the projected rows do not reconcile with the read records')
+    if (this.#publishedSource === undefined) {
+      throw new ProjectDatasetError('INPUT_NOT_READY', 'the official published project fact source is not mounted')
     }
-    if (excluded.length > 0 && input.allowPartial !== true) {
-      throw new ProjectDatasetError(
-        'INPUT_NOT_READY',
-        `${excluded.length} record(s) for ${input.objectId} are not field-confirmed; confirm them or pass allowPartial`,
-        { reasons: excluded.map((entry) => `${entry.recordId}: ${entry.reason}`) },
-      )
-    }
-
-    const coverage: ProjectDatasetCoverage = {
-      expectedCount: records.length,
-      processedCount: rows.length,
-      excluded,
-      completeness: excluded.length === 0 && rows.length === records.length ? 'complete' : 'partial',
+    const published = await this.#publishedSource.read(scopeRef, revision, input.objectId, ctx)
+    const { rows, coverage } = published
+    if (coverage.completeness !== 'complete' && input.allowPartial !== true) {
+      throw new ProjectDatasetError('INPUT_NOT_READY', 'the official published fact projection is incomplete')
     }
     const canonicalDigest = sha256DigestOf(
       canonicalJson({
@@ -243,11 +210,13 @@ export class ProjectDataMaterializationService {
       }),
     )
     const schemaDigest = sha256DigestOf(canonicalJson(columns))
-    const snapshotId = deterministicUuid(`${projectId}\u0000${input.objectId}\u0000${revision.ref.revision}\u0000${canonicalDigest}`)
+    const snapshotDigest = sha256DigestOf(canonicalJson({ scopeRef, projectRevisionRef: revision.ref, definitionRef: revision.definitionRef,
+      mappingRefs: revision.mappingRefs, factRecordedPoint: published.factRecordedPoint, sourceDigest: published.sourceDigest, canonicalDigest }))
+    const snapshotId = deterministicUuid(snapshotDigest)
     const snapshotRef = {
       id: snapshotId,
       version: `1.0.${revision.ref.revision}` as Semver,
-      digest: canonicalDigest,
+      digest: snapshotDigest,
       kind: 'dataset' as const,
     }
     const body: ProjectDatasetSnapshotBody = {
@@ -263,11 +232,14 @@ export class ProjectDataMaterializationService {
       rows,
       coverage,
       recordedAt: this.#now(),
+      projectRevisionRef: revision.ref,
+      factRecordedPoint: published.factRecordedPoint,
+      sourceDigest: published.sourceDigest,
     }
     assertProjectDatasetSnapshotShape({ ref: snapshotRef, body })
 
     const meta = {
-      idempotencyKey: input.idempotencyKey ?? `dataset:${projectId}:${input.objectId}:${revision.ref.revision}`,
+      idempotencyKey: input.idempotencyKey ?? `dataset:${snapshotId}`,
       requestDigest: sha256DigestOf(canonicalJson({ projectId, objectId: input.objectId, revision: revision.ref.revision, canonicalDigest })),
     }
     const stageInput: ProjectDatasetStageInput = { body, snapshotRef, schemaDigest, canonicalDigest, meta }
@@ -290,7 +262,16 @@ export class ProjectDataMaterializationService {
       )
     }
 
-    await this.#activate(scopeRef, revision, snapshotRef, coverage, canonicalDigest, ctx)
+    try {
+      const current = await this.#publishedSource.read(scopeRef, revision, input.objectId, ctx)
+      if (current.sourceDigest !== published.sourceDigest) {
+        throw new ProjectDatasetError('INPUT_NOT_READY', 'the official published sources changed during projection creation')
+      }
+      await this.#activate(scopeRef, revision, snapshotRef, coverage, snapshotDigest, ctx)
+    } catch (error) {
+      if (staged.created) await this.#writer.discardSnapshot(scopeRef, snapshotRef, ctx)
+      throw error
+    }
     return this.#statusFrom(revision.ref, input.objectId, snapshotRef, coverage, 'ready')
   }
 
@@ -319,7 +300,7 @@ export class ProjectDataMaterializationService {
     if (projection === undefined || projection.state !== 'ready') {
       throw new ProjectDatasetError('SNAPSHOT_UNAVAILABLE', 'the dataset projection is not activated for this project revision')
     }
-    if (projection.targetRef.id !== input.snapshotRef.id || projection.targetDigest !== input.snapshotRef.digest) {
+    if (projection.targetRef.id !== input.snapshotRef.id || projection.targetRef.version !== input.snapshotRef.version || projection.targetDigest !== input.snapshotRef.digest) {
       throw new ProjectDatasetError(
         'SNAPSHOT_UNAVAILABLE',
         'the pinned snapshot is not the active dataset for this project revision; re-read readiness instead of a newer dataset',
@@ -368,79 +349,6 @@ export class ProjectDataMaterializationService {
       },
       ctx,
     )
-  }
-
-  async #allRecords(
-    scopeRef: ScopeRef,
-    projectId: Uuid,
-    objectId: string,
-    ctx: ToolContext,
-  ): Promise<ProjectRecordVersion[]> {
-    const records: ProjectRecordVersion[] = []
-    let cursor: string | undefined
-    for (;;) {
-      const page = await this.#records.listRecords(
-        scopeRef,
-        projectId,
-        { objectId, limit: RECORD_PAGE_LIMIT, ...(cursor === undefined ? {} : { cursor }) },
-        ctx,
-      )
-      for (const record of page.records) {
-        if (records.length >= MAX_DATASET_ROWS) {
-          throw new ProjectDatasetError('INVALID_ARGUMENT', `a single dataset materialisation is bounded to ${MAX_DATASET_ROWS} records`)
-        }
-        records.push(record)
-      }
-      if (page.nextCursor === undefined) break
-      cursor = page.nextCursor
-    }
-    return records
-  }
-
-  async #project(
-    object: IndustryObjectSchema,
-    columns: readonly ProjectDatasetColumn[],
-    records: readonly ProjectRecordVersion[],
-    scopeRef: ScopeRef,
-    ctx: ToolContext,
-  ): Promise<{ readonly rows: ProjectDatasetRow[]; readonly excluded: ProjectDatasetExclusion[] }> {
-    const rows: ProjectDatasetRow[] = []
-    const excluded: ProjectDatasetExclusion[] = []
-    const mappingCache = new Map<string, ImportMappingVersion | undefined>()
-    for (const record of records) {
-      if (record.objectId !== object.objectId) continue
-      if (record.status !== 'confirmed') {
-        excluded.push({ recordId: record.recordId, reason: `status:${record.status}` })
-        continue
-      }
-      const byField = new Map(record.fields.map((field) => [field.fieldId, field]))
-      const values: Record<string, ProjectDatasetCell> = {}
-      const sources: ProjectDatasetFieldSource[] = []
-      let mapping: ImportMappingVersion | undefined | null = null
-      for (const column of columns) {
-        const field = byField.get(column.name)
-        if (field === undefined) continue
-        values[column.name] = cellOf(field.normalized)
-        if (mapping === null) {
-          const key = `${record.mappingId}@${record.mappingVersion}`
-          mapping = mappingCache.has(key)
-            ? mappingCache.get(key)
-            : await this.#mappings.getMapping(scopeRef, record.projectId, record.mappingId, record.mappingVersion, ctx)
-          mappingCache.set(key, mapping)
-        }
-        if (mapping !== undefined) {
-          sources.push({
-            fieldId: field.fieldId,
-            documentRef: mapping.originalRef,
-            parseId: mapping.parseId,
-            locator: field.locator,
-          })
-        }
-      }
-      rows.push({ recordId: record.recordId, objectId: record.objectId, sourceRowKey: record.sourceRowKey, values, sources })
-    }
-    rows.sort((left, right) => (left.recordId < right.recordId ? -1 : left.recordId > right.recordId ? 1 : 0))
-    return { rows, excluded }
   }
 
   async #activate(

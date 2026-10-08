@@ -518,6 +518,9 @@
         },
         "effectiveTime": {
           "$ref": "#/$defs/EffectiveTime"
+        },
+        "projectDatasetSnapshotRef": {
+          "$ref": "./common.schema.json#/$defs/ResourceRef"
         }
       }
     },

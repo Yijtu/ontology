@@ -1,4 +1,5 @@
 import { createHash, randomUUID } from 'node:crypto'
+import { controlledPublishedDatasetSource } from '../fixtures/controlled-published-dataset'
 import { createApiServer } from '@ontology/app-api'
 import type { AuthenticatedRequest, ProjectDocumentService } from '@ontology/app-api'
 import {
@@ -748,8 +749,7 @@ export async function startProjectHarness(): Promise<ProjectHarness> {
   const datasetWriter = new InMemoryDatasetWriter()
   const dataset = new ProjectDataMaterializationService({
     projects,
-    records,
-    mappings,
+    publishedSource: controlledPublishedDatasetSource(records, mappings),
     readiness,
     schemaSource,
     writer: datasetWriter,
