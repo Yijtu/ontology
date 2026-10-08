@@ -510,7 +510,7 @@ export class InstanceReviewService {
         kind: input.kind,
         ...(nonEmpty(target) ? { targetEntityId: target } : {}),
         reason: input.reason,
-        actor: record.actor,
+        actor: ctx.principal.subjectId,
         recordedAt,
         revision,
       },

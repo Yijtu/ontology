@@ -8,7 +8,7 @@ import type {
   ToolContext,
   Uuid,
 } from '@ontology/contracts'
-import { InstanceReviewError } from '@ontology/contracts'
+import { createToolContext, InstanceReviewError } from '@ontology/contracts'
 import {
   InMemoryInstanceReviewStore,
   InstanceReviewService,
@@ -104,6 +104,14 @@ async function createRecord(
 }
 
 describe('instance review service (key-field confirmation and identity)', () => {
+  it('attributes an identity adjudication to its reviewer while preserving the record creator', async () => {
+    const { service } = serviceWithStore()
+    const record = await createRecord(service)
+    const reviewer = createToolContext({ ...ctx, principal: { ...ctx.principal, subjectId: 'different-reviewer' } })
+    const decided = await service.adjudicateIdentity(ctx.allowedResources, PROJECT_ID, record.recordId, { expectedRevision: record.recordRevision, kind: 'create', reason: 'human reviewed the identity', idempotencyKey: 'different-reviewer-001' }, reviewer)
+    expect(decided.identity.adjudications[0]?.actor).toBe('different-reviewer')
+    expect(decided.actor).toBe(ctx.principal.subjectId)
+  })
   it('creates a record with raw/normalized/source/status and computes identity confidence', async () => {
     const { service } = serviceWithStore()
     const entity = randomUUID()
