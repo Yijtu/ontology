@@ -9,6 +9,7 @@ import type {
   Rfc3339UtcTimestamp,
   SourceRef,
   SourceWatermark,
+  Sha256Digest,
   ToolCoverage,
   ToolWarning,
 } from './generated/contracts'
@@ -65,6 +66,12 @@ export interface ComputeOperationResult {
 
 export interface ComputeOperationHandler {
   readonly operationRef: OperationRef
+  /** Trusted host pin for an actual closed build artifact. Required by registered task execution. */
+  readonly artifact?: {
+    readonly handlerDigest: Sha256Digest
+    /** Recheck the finite artifact before execution or replay; absence/inconsistency fails closed. */
+    assertIntegrity(): void
+  }
   execute(request: ComputeOperationRequest): Promise<ComputeOperationResult>
 }
 

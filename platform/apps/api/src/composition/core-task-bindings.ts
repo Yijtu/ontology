@@ -1,3 +1,4 @@
+import { exampleComputeArtifact } from './example-compute-artifact'
 import type {
   PublishedTaskBinding,
   PublishedTaskBindingBody,
@@ -149,7 +150,7 @@ function bodyFor(
     ...(operationRef === undefined ? {} : { operationRef }),
     ...(operationRef === undefined
       ? {}
-      : { registeredOperationDigest: registeredOperationDigest(exampleRegisteredOperation()) }),
+      : { registeredOperationDigest: registeredOperationDigest(exampleRegisteredOperation(exampleComputeArtifact)) }),
   }
 }
 
