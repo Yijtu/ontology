@@ -110,6 +110,8 @@ describe('Core deployment picker', () => {
       scenarioPicker!.dispatchEvent(new Event('change', { bubbles: true }))
       await Promise.resolve()
     })
+    const discard = container.querySelector('[data-testid="shell-discard-changes"]')
+    if (discard !== null) await act(async () => { discard.dispatchEvent(new MouseEvent('click', { bubbles: true })) })
     expect(container.querySelector('[data-testid="scope-profile"]')?.textContent).toContain('industrial-profile@1.0.0')
     expect(requestedProfiles).toContain('industrial-profile')
     expect(container.querySelector('[data-testid="query-registered-task"]')?.textContent).toContain('facts:operating_hours')

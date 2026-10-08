@@ -126,7 +126,7 @@ function workspaceQuery(workspaceId: string | undefined): void {
   const url = new URL(window.location.href)
   if (workspaceId === undefined) url.searchParams.delete('workspace')
   else url.searchParams.set('workspace', workspaceId)
-  window.history.replaceState(null, '', `${url.pathname}${url.search}`)
+  window.history.replaceState(window.history.state, '', `${url.pathname}${url.search}${url.hash}`)
 }
 
 export function OntologyWorkspacePanel({

@@ -358,3 +358,6 @@ export { classifyPublicError, publicRecoveryLabel } from './state/public-errors'
 export type { PublicErrorFamily, PublicFailure, PublicRecovery } from './state/public-errors'
 export { PublicEmptyState, PublicStateNotice } from './components/PublicStateNotice'
 export type { PublicEmptyStateProps, PublicStateNoticeProps } from './components/PublicStateNotice'
+
+export { Button, Panel, Field, StatusBadge, StateFeedback, DataTable, Drawer } from './components/ui'
+export type { AppViewContext, AppViewContribution } from './components/App'
