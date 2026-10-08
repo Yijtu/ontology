@@ -16,6 +16,7 @@ import {
   FakeDocumentSearchPort,
   entityCandidate,
   indexEntry,
+  identitySnapshot,
 } from './identity-fixtures'
 import { buildIndustrySchema } from './extraction-fixtures'
 import {
@@ -74,6 +75,31 @@ function withBudget(): { readonly budget: BudgetLedgerPort; readonly store: InMe
 }
 
 describe('entity candidate recall — identity scope and layered strategies', () => {
+  it('presents an identity once when the bounded index page contains several alias rows', async () => {
+    const entry = indexEntry({ entityId: 'SAME-ENTITY', displayName: 'Charger One', normalizedName: 'charger one' })
+    const service = new EntityCandidateRecallService({
+      schemaSource: new InMemoryIndustrySchemaSource([{ ref: IDENTITY_DEFINITION_REF, schema: buildIndustrySchema(IDENTITY_DEFINITION_REF) }]),
+      index: { query: async (query) => ({ entries: query.match.kind === 'context' ? [entry, { ...entry, alias: 'another label' }] : [], knownTotal: query.match.kind === 'context' ? 2 : 0, truncated: false, snapshot: identitySnapshot() }) },
+    })
+    const result = await service.recall(request(entityCandidate({ attributes: [] })), CTX_A)
+    expect(result.candidates.map((candidate) => candidate.entityId)).toEqual(['SAME-ENTITY'])
+    expect(result.candidates[0]?.rank).toBe(1)
+    expect(result.coverage.knownTotal).toBeUndefined()
+  })
+  it('refuses a recalled definition that differs from the stored extraction or a contradictory native id', async () => {
+    const service = makeService([])
+    await expect(service.recall({ ...request(entityCandidate()), definitionRef: { ...IDENTITY_DEFINITION_REF, version: '0.9.0' } }, CTX_A)).rejects.toMatchObject({ code: 'INVALID_REQUEST' })
+    await expect(service.recall(request(entityCandidate({ nativeId: 'OTHER-ID' })), CTX_A)).rejects.toMatchObject({ code: 'INVALID_REQUEST' })
+  })
+
+  it('always applies the host project dimension even when the definition omits it', async () => {
+    const entries = [
+      indexEntry({ entityId: 'P-A', nativeId: 'DEV-1', dimensions: { ...IDENTITY_DIMENSIONS, project: 'project-a' } }),
+      indexEntry({ entityId: 'P-B', nativeId: 'DEV-1', dimensions: { ...IDENTITY_DIMENSIONS, project: 'project-b' } }),
+    ]
+    const result = await makeService(entries).recall({ ...request(entityCandidate()), projectId: 'project-a' }, CTX_A)
+    expect(result.candidates.map((candidate) => candidate.entityId)).toEqual(['P-A'])
+  })
   it('prefers a stable native identifier over a same-name fuzzy match', async () => {
     const entries = [
       indexEntry({ entityId: 'E-A', nativeId: 'DEV-1', displayName: 'Charger One', normalizedName: 'charger one' }),

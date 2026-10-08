@@ -163,7 +163,22 @@ export class IdentityDecisionService {
     }
     const expectedRevision = request.expectedRevision
     const candidate = await this.#requireCandidate(scopeRef, request.candidateId, ctx)
-    const target = await this.#resolveTarget(scopeRef, candidate, ctx)
+    const fence = request.projectFence
+    if (fence !== undefined && (fence.projectRevisionRef.projectId !== request.projectId || fence.parseId !== candidate.inputVersion.parseId ||
+      fence.definitionRef.id !== candidate.inputVersion.definitionRef.id || fence.definitionRef.version !== candidate.inputVersion.definitionRef.version || fence.definitionRef.digest !== candidate.inputVersion.definitionRef.digest)) {
+      throw new IdentityDecisionError('IDENTITY_SCOPE_MISMATCH', 'project fence does not describe the stored candidate and trusted project')
+    }
+    const declaredTarget = await this.#resolveTarget(scopeRef, candidate, ctx)
+    const project = request.projectId
+    const storedProject = declaredTarget.scopeDimensions['project']
+    if (project !== undefined && storedProject !== undefined && project !== storedProject) {
+      throw new IdentityDecisionError('IDENTITY_SCOPE_MISMATCH', 'stored identity project differs from the trusted project')
+    }
+    const target = project === undefined ? declaredTarget : {
+      ...declaredTarget,
+      scopeDimensionIds: [...new Set([...declaredTarget.scopeDimensionIds, 'project'])],
+      scopeDimensions: { ...declaredTarget.scopeDimensions, project },
+    }
     const currentRevision = await this.#currentRevision(scopeRef, candidate.candidateId, ctx)
     if (currentRevision !== expectedRevision) {
       throw new IdentityDecisionError(
@@ -191,14 +206,15 @@ export class IdentityDecisionService {
     try {
       const record = await this.#deps.store.appendDecision(
         scopeRef,
-        { expectedRevision, ...plan },
+        { expectedRevision, ...plan, ...(request.projectFence === undefined ? {} : { projectFence: request.projectFence }) },
         ctx,
       )
       return this.#toView(record, plan.entity)
     } catch (error) {
-      if (error instanceof IdentityDecisionStoreError && error.code === 'REVISION_CONFLICT') {
+      if (error instanceof IdentityDecisionStoreError && (error.code === 'REVISION_CONFLICT' || error.code === 'PROJECT_FENCE_STALE')) {
         throw new IdentityDecisionError('VERSION_CONFLICT', error.message, { cause: error })
       }
+      if (error instanceof IdentityDecisionStoreError && error.code === 'PROJECT_FENCE_UNSUPPORTED') throw new IdentityDecisionError('CAPABILITY_NOT_CONFIGURED', error.message, { cause: error })
       throw error
     }
   }

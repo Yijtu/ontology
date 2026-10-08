@@ -182,3 +182,7 @@ export {
   readRevisionHeader,
   scopeRefFor,
 } from './http/shared'
+export { createInstanceIdentityWorkflow, InstanceIdentityWorkflow } from './composition/instance-identity'
+export type { InstanceIdentityWorkflowOptions, InstanceIdentityCreateInput } from './composition/instance-identity'
+export { registerInstanceReviewRoutes } from './http/instances'
+export type { InstanceReviewRouteDependencies } from './http/instances'

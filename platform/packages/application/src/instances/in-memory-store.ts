@@ -147,6 +147,7 @@ export class InMemoryInstanceReviewStore implements InstanceReviewStore {
       recordRevision: revision,
       objectTypeRef: input.objectTypeRef,
       identity: {
+        ...(input.identityBinding === undefined ? {} : { binding: clone(input.identityBinding) }),
         state: input.identityState,
         confidence: input.identityConfidence,
         candidates: clone(input.identityCandidates),

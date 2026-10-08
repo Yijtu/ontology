@@ -143,6 +143,7 @@ export class InMemoryIdentityDecisionStore implements IdentityDecisionStore {
     ctx: ToolContext,
   ): Promise<IdentityDecisionRecord> {
     resolveScope(scopeRef, ctx)
+    if (input.projectFence !== undefined) throw new IdentityDecisionStoreError('PROJECT_FENCE_UNSUPPORTED', 'this in-memory identity store cannot atomically validate project/source pins')
     const key = scopeKey(scopeRef)
     const heads = copyMap(this.#heads.get(key))
     const entities = copyMap(this.#entities.get(key))

@@ -213,6 +213,8 @@ export interface SimilarityBackend {
 
 /** One extracted entity mention to recall known identities for. */
 export interface EntityRecallRequest {
+  /** Host-pinned project isolation; the index must have a confirmed `project` dimension mapping. */
+  readonly projectId?: Uuid
   /** The published definition version the candidate was extracted under. */
   readonly definitionRef: VersionRef
   readonly candidate: EntityCandidate

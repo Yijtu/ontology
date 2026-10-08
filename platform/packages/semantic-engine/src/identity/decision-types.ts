@@ -5,6 +5,7 @@ import type {
   IdentityDecisionKind,
   IdentityDecisionRecord,
   IdentityDecisionStore,
+  IdentityDecisionProjectFence,
   IdentityEntityRecord,
   IdentityScoreEvidence,
   IdentityStrongIdentity,
@@ -27,6 +28,9 @@ import type {
 
 /** What a reviewer submits for one candidate. */
 export interface IdentityDecisionRequest {
+  /** Trusted project namespace supplied by the instance host, never the public decision body. */
+  readonly projectId?: Uuid
+  readonly projectFence?: IdentityDecisionProjectFence
   readonly candidateId: Uuid
   readonly kind: IdentityDecisionKind
   /**
@@ -100,6 +104,7 @@ export type IdentityDecisionErrorCode =
   | 'IDENTITY_EVIDENCE_REQUIRED'
   | 'IDENTITY_EVIDENCE_INVALID'
   | 'IDENTITY_SCORE_BELOW_THRESHOLD'
+  | 'CAPABILITY_NOT_CONFIGURED'
 
 const PLATFORM_CODE: Readonly<Record<IdentityDecisionErrorCode, ErrorCode>> = {
   SCOPE_MISMATCH: 'FORBIDDEN',
@@ -114,6 +119,7 @@ const PLATFORM_CODE: Readonly<Record<IdentityDecisionErrorCode, ErrorCode>> = {
   IDENTITY_EVIDENCE_REQUIRED: 'INSUFFICIENT_DATA',
   IDENTITY_EVIDENCE_INVALID: 'INSUFFICIENT_DATA',
   IDENTITY_SCORE_BELOW_THRESHOLD: 'INSUFFICIENT_DATA',
+  CAPABILITY_NOT_CONFIGURED: 'CAPABILITY_NOT_CONFIGURED',
 }
 
 /**
@@ -133,6 +139,7 @@ const HTTP_STATUS: Readonly<Record<IdentityDecisionErrorCode, number>> = {
   IDENTITY_EVIDENCE_REQUIRED: 422,
   IDENTITY_EVIDENCE_INVALID: 422,
   IDENTITY_SCORE_BELOW_THRESHOLD: 422,
+  CAPABILITY_NOT_CONFIGURED: 503,
 }
 
 export class IdentityDecisionError extends Error {

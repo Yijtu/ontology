@@ -3,19 +3,29 @@ import { afterAll, beforeAll, describe, expect, it, vi } from 'vitest'
 import {
   ControlPostgresDatabase,
   PostgresInstanceReviewStore,
+  PostgresCandidateStore,
+  PostgresProjectStore,
+  PostgresProjectDocumentStore,
+  PostgresIdentityDecisionStore,
+  PostgresJobStore,
   runControlMigrations,
 } from '@ontology/adapter-control-postgres'
-import { InstanceReviewService } from '@ontology/application'
+import { InstanceReviewService, InMemoryIndustrySchemaSource, JobService } from '@ontology/application'
 import type { InstanceFieldPolicy } from '@ontology/application'
-import { createApiServer } from '@ontology/app-api'
+import { createApiServer, createInstanceIdentityWorkflow } from '@ontology/app-api'
 import type { AuthenticatedRequest } from '@ontology/app-api'
 import type {
   InstanceFieldSource,
+  EntityCandidate,
+  IndustrySchema,
   InstanceIdentityCandidate,
   ResourceRef,
   ToolContext,
   Uuid,
 } from '@ontology/contracts'
+import { IdentityDecisionService, InMemoryIdentityIndexReader } from '@ontology/semantic-engine'
+import type { IdentityIndexEntry } from '@ontology/semantic-engine'
+import { seedIdentityProject, seedIdentityParse } from './instance-identity-fixtures'
 import { toolContext } from '../unit/component-registry-fixtures'
 import { MIGRATIONS_DIR, createJobScope, startJobDatabase } from './job-postgres-harness'
 import type { JobDbHarness, JobTestScope } from './job-postgres-harness'
@@ -34,6 +44,19 @@ let scope: JobTestScope
 let otherScope: JobTestScope
 let ctx: ToolContext
 let projectId: Uuid
+let candidateStore: PostgresCandidateStore
+let documents: PostgresProjectDocumentStore
+let identityStore: PostgresIdentityDecisionStore
+let schemaSource: InMemoryIndustrySchemaSource
+const identityEntries: IdentityIndexEntry[] = []
+const DEFINITION = { id: 'instance.fixture', version: '1.0.0', digest: DIGEST }
+const schema: IndustrySchema = {
+  namespace: 'fixture', definitionRef: DEFINITION,
+  objects: [{ objectId: 'device', displayName: 'Device', identityScopeId: 'device_identity', attributes: [
+    { attributeId: 'device_name', valueType: 'string', minCardinality: 0, maxCardinality: 1, identityKey: false },
+    { attributeId: 'capacity', valueType: 'string', minCardinality: 0, maxCardinality: 1, identityKey: false },
+  ] }], relations: [], identityScopes: [{ identityScopeId: 'device_identity', objectId: 'device', scopeDimensions: [], identityAttributeIds: [] }],
+}
 
 const fieldPolicy: InstanceFieldPolicy = {
   validate: ({ objectTypeRef, fieldId, normalizedValue }) => {
@@ -103,8 +126,41 @@ function headersOf(options: CallOptions): Record<string, string> {
   return headers
 }
 
-function post(url: string, options: CallOptions = {}) {
-  return app.inject({ method: 'POST', url, headers: headersOf(options), ...(options.body === undefined ? {} : { payload: options.body }) })
+async function post(url: string, options: CallOptions = {}) {
+  let payload = options.body
+  if (url === `/api/v1/projects/${projectId}/instance-records` && payload !== undefined) {
+    // Server-side fixture setup preserves this suite's field/history assertions; the actual
+    // request sends selectors only. Real business-index recall is covered by identity-recall-postgres.
+    const body = payload as ReturnType<typeof createBody>
+    const fields = body['fields'] as { fieldId: string; rawValue: string; normalizedValue?: { kind: string; value: string }; source: InstanceFieldSource }[]
+    const first = fields[0]
+    if (first === undefined) throw new Error('fixture has no fields')
+    const parseId = first.source.parseId
+    await seedIdentityParse(harness.adminClient, scope.scopeRef, parseId)
+    const jobId = randomUUID()
+    await new JobService({ store: new PostgresJobStore(database) }).createJob({ jobId, kind: 'ingestion', sourceRef: 'instance-fixture', documentRef: parseId, pipelineVersion: '1.0.0', idempotencyKey: `fixture-${jobId}` }, ctx)
+    const candidateId = randomUUID()
+    const extracted: EntityCandidate = {
+      kind: 'entity', candidateId, jobId, objectId: 'device', identityScopeId: 'device_identity',
+      attributes: fields.map((field) => ({ attributeId: field.fieldId, value: field.normalizedValue?.value ?? field.rawValue, raw: field.rawValue })),
+      sourceSpans: [{ kind: 'structured', parseId, recordId: randomUUID(), sourceRowKey: candidateId, locator: first.source.locator, rowDigest: first.source.quoteDigest }],
+      deterministic: false, state: 'pending_review', issues: [], inputVersion: { definitionRef: DEFINITION, parseId, parserVersion: '1.0.0', pipelineVersion: '1.0.0' },
+      idempotencyKey: `sha256:${candidateId.replaceAll('-', '').padEnd(64, '0')}`, recordedAt: new Date().toISOString(),
+    }
+    await candidateStore.insertCandidates(scope.scopeRef, [extracted], ctx)
+    const documentId = randomUUID()
+    await documents.registerDocument(scope.scopeRef, projectId, { documentId, documentRef: first.source.documentRef, documentDigest: first.source.documentRef.digest, parseId, parseRef: resourceRef(), textDigest: first.source.textDigest, precision: 'exact', actor: 'fixture', recordedAt: new Date().toISOString() }, ctx)
+    for (const entry of body['identityCandidates'] as InstanceIdentityCandidate[]) {
+      if (await identityStore.getEntity(scope.scopeRef, entry.entityId, ctx) === undefined) {
+        let ids = 0
+        const decisions = new IdentityDecisionService({ store: identityStore, candidates: candidateStore, schemaSource, newId: () => ++ids === 2 ? entry.entityId : randomUUID() })
+        await decisions.decide({ projectId, candidateId, kind: 'create_pending', expectedRevision: '0' }, ctx)
+      }
+      if (!identityEntries.some((known) => known.entityId === entry.entityId)) identityEntries.push({ tenantId: scope.tenantId, spaceId: scope.spaceId, entityId: entry.entityId, objectId: entry.objectId, identityScopeId: 'device_identity', displayName: entry.displayName, normalizedName: entry.displayName.toLowerCase(), entityType: entry.objectId, aliasConfirmed: false, dimensions: { project: projectId } })
+    }
+    payload = { candidateId, documentId, relations: body['relations'] }
+  }
+  return app.inject({ method: 'POST', url, headers: headersOf(options), ...(payload === undefined ? {} : { payload }) })
 }
 
 function get(url: string, options: CallOptions = {}) {
@@ -113,13 +169,7 @@ function get(url: string, options: CallOptions = {}) {
 
 async function seedProject(): Promise<Uuid> {
   const id = randomUUID()
-  await harness.adminClient.query(
-    `INSERT INTO agent_platform.projects
-       (tenant_id, space_id, project_id, title, head_revision, state,
-        create_idempotency_key, create_request_digest, created_by, created_at, updated_at)
-     VALUES ($1, $2, $3, 'Instance review project', 1, 'draft', $4, $5, 'tester', now(), now())`,
-    [scope.tenantId, scope.spaceId, id, `review-${randomUUID()}`, DIGEST],
-  )
+  await seedIdentityProject(harness.adminClient, scope.scopeRef, id, DEFINITION)
   return id
 }
 
@@ -145,7 +195,14 @@ beforeAll(async () => {
   database = new ControlPostgresDatabase({ connectionString: harness.appUrl, maxPoolSize: 4 })
   store = new PostgresInstanceReviewStore(database)
   service = new InstanceReviewService({ store, fieldPolicy, now: () => '2026-09-29T00:00:00Z' })
-  app = createApiServer({ authenticate: authenticator, instanceReviews: { service } })
+  candidateStore = new PostgresCandidateStore(database)
+  documents = new PostgresProjectDocumentStore(database)
+  identityStore = new PostgresIdentityDecisionStore(database)
+  schemaSource = new InMemoryIndustrySchemaSource([{ ref: DEFINITION, schema }])
+  const identity = createInstanceIdentityWorkflow({ identityMappingRef: DEFINITION, service, projects: new PostgresProjectStore(database), projectDocuments: documents, candidates: candidateStore, identityStore, schemaSource,
+    index: { query: (query, context) => new InMemoryIdentityIndexReader(identityEntries).query(query, context) },
+  })
+  app = createApiServer({ authenticate: authenticator, instanceReviews: { service, identity } })
   await app.ready()
   projectId = await seedProject()
 }, 300_000)
