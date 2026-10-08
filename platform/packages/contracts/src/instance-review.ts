@@ -5,10 +5,12 @@ import type {
   ScopeRef,
   Sha256Digest,
   Uuid,
+  VersionRef,
+  ProjectRevisionRef,
 } from './generated/contracts'
 import type { SourceLocator } from './structured-parse'
 import type { ToolContext } from './trusted'
-import { isRecord, isResourceRef, isRevisionString, isSha256Digest, isUuid } from './asset-workspace'
+import { isRecord, isResourceRef, isRevisionString, isSha256Digest, isUuid, isVersionRef } from './asset-workspace'
 
 /**
  * Public instance review: key-field confirmation and entity identity adjudication
@@ -80,10 +82,25 @@ export interface InstanceIdentityCandidate {
   readonly displayName: string
   readonly strategy: 'native_id' | 'alias' | 'context' | 'similarity'
   readonly score?: number
+  readonly rank?: number
+  readonly identityScopeId?: string
+  readonly evidenceRefs?: readonly ResourceRef[]
+}
+
+/** Server-stored extraction and project pins. A later head/source change requires a new recall. */
+export interface InstanceIdentityBinding {
+  readonly candidateId: Uuid
+  readonly documentId: Uuid
+  readonly projectRevisionRef: ProjectRevisionRef
+  readonly definitionRef: VersionRef
+  readonly membershipRevision: RevisionString
+  readonly visibilityEpoch: RevisionString
+  readonly identityScopeId: string
 }
 
 /** One append-only identity adjudication recorded against a record. */
 export interface InstanceIdentityAdjudication {
+  readonly idempotencyKey?: string
   readonly decisionId: Uuid
   readonly kind: InstanceIdentityAdjudicationKind
   readonly targetEntityId?: string
@@ -94,6 +111,7 @@ export interface InstanceIdentityAdjudication {
 }
 
 export interface InstanceIdentityView {
+  readonly binding?: InstanceIdentityBinding
   readonly state: InstanceIdentityState
   readonly confidence: InstanceIdentityConfidence
   readonly candidates: readonly InstanceIdentityCandidate[]
@@ -138,6 +156,7 @@ export interface InstanceReviewListFilter {
 
 /** Append one immutable record revision. `expectedRevision` is the CAS guard (`0` creates). */
 export interface AppendInstanceRecordInput {
+  readonly identityBinding?: InstanceIdentityBinding
   readonly recordId: Uuid
   readonly expectedRevision: RevisionString
   readonly objectTypeRef: string
@@ -358,6 +377,7 @@ export function isInstanceRecordView(value: unknown): value is InstanceRecordVie
 
 function isInstanceIdentityView(value: unknown): value is InstanceIdentityView {
   if (!isRecord(value)) return false
+  if (value['binding'] !== undefined && !isInstanceIdentityBinding(value['binding'])) return false
   if (typeof value['state'] !== 'string' || !(IDENTITY_STATES as readonly string[]).includes(value['state'])) {
     return false
   }
@@ -369,4 +389,13 @@ function isInstanceIdentityView(value: unknown): value is InstanceIdentityView {
   if (!Array.isArray(value['cannotLinkEntityIds'])) return false
   if (!Array.isArray(value['adjudications'])) return false
   return isRevisionString(value['decisionRevision'])
+}
+
+export function isInstanceIdentityBinding(value: unknown): value is InstanceIdentityBinding {
+  if (!isRecord(value) || !isRecord(value['projectRevisionRef'])) return false
+  const project = value['projectRevisionRef']
+  return isUuid(value['candidateId']) && isUuid(value['documentId']) &&
+    isUuid(project['projectId']) && isRevisionString(project['revision']) && isSha256Digest(project['digest']) &&
+    isVersionRef(value['definitionRef']) && isRevisionString(value['membershipRevision']) &&
+    isRevisionString(value['visibilityEpoch']) && isNonEmptyString(value['identityScopeId'])
 }

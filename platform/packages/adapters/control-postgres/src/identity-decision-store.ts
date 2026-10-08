@@ -19,6 +19,7 @@ import type {
 } from '@ontology/contracts'
 import type { QueryResultRow } from 'pg'
 import { ControlPostgresDatabase } from './database'
+import { assertIdentityProjectFence } from './identity-project-fence'
 import { MATERIALIZED_PROJECTION_REF } from './materialization-store'
 
 interface ScopedQuery {
@@ -321,6 +322,7 @@ export class PostgresIdentityDecisionStore implements IdentityDecisionStore {
   ): Promise<IdentityDecisionRecord> {
     return this.#withScope(scopeRef, ctx, async (query) => {
       const draft = input.draft
+      if (input.projectFence !== undefined) await assertIdentityProjectFence(query, input.projectFence)
       await query.query(
         `INSERT INTO agent_platform.identity_decision_heads (tenant_id, space_id, candidate_id, revision)
          VALUES (current_setting('app.tenant_id')::uuid, current_setting('app.space_id')::uuid, $1, 0)

@@ -1,29 +1,24 @@
 import type { FastifyInstance, FastifyRequest } from 'fastify'
 import {
   InstanceReviewError,
-  isInstanceFieldSource,
   isInstanceNormalizedValue,
-  isResourceRef,
   isUuid,
 } from '@ontology/contracts'
 import type {
-  InstanceFieldSource,
   InstanceFieldStatus,
-  InstanceIdentityCandidate,
   InstanceNormalizedValue,
   InstancePublicationState,
   InstanceRawValue,
-  ResourceRef,
   RevisionString,
+  ToolContext,
 } from '@ontology/contracts'
 import type {
-  CreateInstanceFieldInput,
-  CreateInstanceRecordInput,
   CreateInstanceRelationInput,
   FieldConfirmationDecisionInput,
   InstanceReviewService,
 } from '@ontology/application'
 import { createRequestToolContext } from './context'
+import type { InstanceIdentityWorkflow } from '../composition/instance-identity'
 import {
   authenticateRequest,
   isRecord,
@@ -32,24 +27,23 @@ import {
   readTraceId,
   ForbiddenError,
   InvalidRequestFieldError,
+  CapabilityNotConfiguredError,
+  readQueryInteger,
 } from './shared'
 import type { AuthenticatedRequest, RequestAuthenticator } from './shared'
 
 const REVIEWER_ROLES: readonly string[] = ['semantic-reviewer', 'platform-admin', 'data-editor']
 const FIELD_STATUSES: readonly InstanceFieldStatus[] = ['pending', 'confirmed', 'conflict']
 const PUBLICATION_STATES: readonly InstancePublicationState[] = ['draft', 'approved', 'published']
-const CONFIDENCE_STRATEGIES: readonly InstanceIdentityCandidate['strategy'][] = [
-  'native_id',
-  'alias',
-  'context',
-  'similarity',
-]
 const DECISION_KINDS = ['confirm', 'conflict', 'reject'] as const
 const ADJUDICATION_KINDS = ['match', 'cannot_link', 'split', 'create'] as const
 
 export interface InstanceReviewRouteDependencies {
   readonly service: InstanceReviewService
   readonly authenticate: RequestAuthenticator
+  readonly identity?: Pick<InstanceIdentityWorkflow, 'recall' | 'createRecord' | 'adjudicateIdentity' | 'validatePublication'>
+  /** Host-resolved identity index source/mapping and project corpus authorization. */
+  readonly identityContext?: (auth: AuthenticatedRequest, projectId: string, traceId: string) => ToolContext | Promise<ToolContext>
 }
 
 function requireIdempotencyKey(request: FastifyRequest): string {
@@ -94,75 +88,6 @@ function parseNormalizedValue(value: unknown): InstanceNormalizedValue | undefin
     throw new InvalidRequestFieldError('normalizedValue must be a scalar/quantity/reference object')
   }
   return value
-}
-
-function parseSource(value: unknown): InstanceFieldSource {
-  if (!isInstanceFieldSource(value)) {
-    throw new InvalidRequestFieldError('source must carry documentRef/parseId/chunkId/locator/textDigest/quoteDigest')
-  }
-  return value
-}
-
-function parseResourceRef(value: unknown, field: string): ResourceRef {
-  if (!isResourceRef(value)) {
-    throw new InvalidRequestFieldError(`${field} must carry a uuid id, version, sha256 digest and kind`)
-  }
-  return value
-}
-
-function parseCandidates(value: unknown): InstanceIdentityCandidate[] {
-  if (value === undefined) return []
-  if (!Array.isArray(value)) {
-    throw new InvalidRequestFieldError('identityCandidates must be an array')
-  }
-  return value.map((entry, index) => {
-    if (!isRecord(entry)) {
-      throw new InvalidRequestFieldError(`identityCandidates[${String(index)}] must be an object`)
-    }
-    const strategy = entry['strategy']
-    if (
-      typeof entry['entityId'] !== 'string' ||
-      entry['entityId'].length === 0 ||
-      typeof entry['objectId'] !== 'string' ||
-      entry['objectId'].length === 0 ||
-      typeof entry['displayName'] !== 'string' ||
-      typeof strategy !== 'string' ||
-      !(CONFIDENCE_STRATEGIES as readonly string[]).includes(strategy)
-    ) {
-      throw new InvalidRequestFieldError(
-        `identityCandidates[${String(index)}] must carry entityId/objectId/displayName and a known strategy`,
-      )
-    }
-    const score = entry['score']
-    if (score !== undefined && (typeof score !== 'number' || !Number.isFinite(score))) {
-      throw new InvalidRequestFieldError(`identityCandidates[${String(index)}].score must be a finite number`)
-    }
-    return {
-      entityId: entry['entityId'],
-      objectId: entry['objectId'],
-      displayName: entry['displayName'],
-      strategy: strategy as InstanceIdentityCandidate['strategy'],
-      ...(score === undefined ? {} : { score }),
-    }
-  })
-}
-
-function parseFields(value: unknown): CreateInstanceFieldInput[] {
-  if (!Array.isArray(value) || value.length === 0) {
-    throw new InvalidRequestFieldError('fields must be a non-empty array')
-  }
-  return value.map((entry, index) => {
-    if (!isRecord(entry)) {
-      throw new InvalidRequestFieldError(`fields[${String(index)}] must be an object`)
-    }
-    const normalized = parseNormalizedValue(entry['normalizedValue'])
-    return {
-      fieldId: readNonEmpty(entry, 'fieldId'),
-      rawValue: parseRawValue(entry['rawValue']),
-      ...(normalized === undefined ? {} : { normalizedValue: normalized }),
-      source: parseSource(entry['source']),
-    }
-  })
 }
 
 function parseRelations(value: unknown): CreateInstanceRelationInput[] {
@@ -224,6 +149,28 @@ export function registerInstanceReviewRoutes(
   const contextFor = (auth: AuthenticatedRequest, traceId: string, resourceId: string) =>
     createRequestToolContext({ principal: auth.principal, spaceId: auth.spaceId, traceId, runId: resourceId })
   const scopeFor = (auth: AuthenticatedRequest) => ({ tenantId: auth.principal.tenantId, spaceId: auth.spaceId })
+  const identityContextFor = (auth: AuthenticatedRequest, projectId: string, traceId: string) =>
+    dependencies.identityContext?.(auth, projectId, traceId) ?? contextFor(auth, traceId, projectId)
+  const requireIdentity = () => {
+    if (dependencies.identity === undefined) throw new CapabilityNotConfiguredError('instance identity recall is not configured')
+    return dependencies.identity
+  }
+
+  app.get<{ Params: { projectId: string } }>(
+    '/api/v1/projects/:projectId/identity-recall',
+    async (request, reply) => {
+      const traceId = readTraceId(request)
+      const auth = authenticateRequest(dependencies.authenticate, request, reply)
+      if (auth === undefined) return reply
+      const candidateId = readQueryString(request, 'candidateId')
+      const documentId = readQueryString(request, 'documentId')
+      if (!isUuid(candidateId) || !isUuid(documentId)) throw new InvalidRequestFieldError('candidateId and documentId must be UUIDs')
+      const projectId = request.params.projectId
+      const recall = await requireIdentity().recall(scopeFor(auth), projectId, candidateId, documentId, await identityContextFor(auth, projectId, traceId), readQueryInteger(request, 'limit'))
+      reply.status(200).send({ data: { recall }, meta: { traceId } })
+      return reply
+    },
+  )
 
   app.get<{ Params: { projectId: string } }>(
     '/api/v1/projects/:projectId/instance-records',
@@ -304,23 +251,19 @@ export function registerInstanceReviewRoutes(
       const body = request.body
       if (!isRecord(body)) throw new InvalidRequestFieldError('the request body must be a JSON object')
       const projectId = request.params.projectId
-      const input: CreateInstanceRecordInput = {
-        objectTypeRef: readNonEmpty(body, 'objectTypeRef'),
-        ...(typeof body['displayName'] === 'string' ? { displayName: body['displayName'] } : {}),
-        identityCandidates: parseCandidates(body['identityCandidates']),
-        fields: parseFields(body['fields']),
-        relations: parseRelations(body['relations']),
-        sourceRef: parseResourceRef(body['sourceRef'], 'sourceRef'),
-        actor: auth.principal.subjectId,
-        idempotencyKey: requireIdempotencyKey(request),
+      if (body['identityCandidates'] !== undefined) {
+        throw new InvalidRequestFieldError('identityCandidates are server recalled; submit stored candidateId and documentId')
       }
-      const record = await dependencies.service.createRecord(
-        scopeFor(auth),
-        projectId,
-        input,
-        contextFor(auth, traceId, projectId),
+      const candidateId = readNonEmpty(body, 'candidateId')
+      const documentId = readNonEmpty(body, 'documentId')
+      if (!isUuid(candidateId) || !isUuid(documentId)) throw new InvalidRequestFieldError('candidateId and documentId must be UUIDs')
+      const outcome = await requireIdentity().createRecord(
+        scopeFor(auth), projectId,
+        { candidateId, documentId, relations: parseRelations(body['relations']), idempotencyKey: requireIdempotencyKey(request) },
+        await identityContextFor(auth, projectId, traceId),
       )
-      reply.status(201).send({ data: { record }, meta: { traceId, revision: record.recordRevision } })
+      const { record } = outcome
+      reply.status(201).send({ data: outcome, meta: { traceId, revision: record.recordRevision } })
       return reply
     },
   )
@@ -399,7 +342,7 @@ export function registerInstanceReviewRoutes(
       if (targetEntityId !== undefined && typeof targetEntityId !== 'string') {
         throw new InvalidRequestFieldError('targetEntityId must be a string')
       }
-      const record = await dependencies.service.adjudicateIdentity(
+      const record = await requireIdentity().adjudicateIdentity(
         scopeFor(auth),
         projectId,
         recordId,
@@ -410,7 +353,7 @@ export function registerInstanceReviewRoutes(
           reason: readNonEmpty(body, 'reason'),
           idempotencyKey: requireIdempotencyKey(request),
         },
-        contextFor(auth, traceId, recordId),
+        await identityContextFor(auth, projectId, traceId),
       )
       reply.status(200).send({ data: { record }, meta: { traceId, revision: record.recordRevision } })
       return reply
@@ -425,6 +368,7 @@ export function registerInstanceReviewRoutes(
       if (auth === undefined) return reply
       assertReviewer(auth)
       const { projectId, recordId } = request.params
+      await requireIdentity().validatePublication(scopeFor(auth), projectId, recordId, await identityContextFor(auth, projectId, traceId))
       const record = await dependencies.service.approve(
         scopeFor(auth),
         projectId,
@@ -445,6 +389,7 @@ export function registerInstanceReviewRoutes(
       if (auth === undefined) return reply
       assertReviewer(auth)
       const { projectId, recordId } = request.params
+      await requireIdentity().validatePublication(scopeFor(auth), projectId, recordId, await identityContextFor(auth, projectId, traceId))
       const record = await dependencies.service.publish(
         scopeFor(auth),
         projectId,

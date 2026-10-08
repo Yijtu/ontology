@@ -4,6 +4,7 @@ import type {
   InstanceFieldValue,
   InstanceIdentityAdjudication,
   InstanceIdentityCandidate,
+  InstanceIdentityBinding,
   InstanceIdentityConfidence,
   InstanceIdentityState,
   InstanceNormalizedValue,
@@ -78,6 +79,7 @@ export interface CreateInstanceRelationInput {
 }
 
 export interface CreateInstanceRecordInput {
+  readonly identityBinding?: InstanceIdentityBinding
   readonly recordId?: Uuid
   readonly objectTypeRef: string
   /** The record's own display name, used to detect a same-name/different-object collision. */
@@ -112,6 +114,8 @@ export interface FieldConfirmationInput {
 }
 
 export interface IdentityAdjudicationInput {
+  /** Trusted decision service's entity id when creating an identity. Not an HTTP body field. */
+  readonly resolvedEntityId?: string
   readonly expectedRevision: RevisionString
   readonly kind: 'match' | 'cannot_link' | 'split' | 'create'
   readonly targetEntityId?: string
@@ -243,6 +247,7 @@ export class InstanceReviewService {
         expectedRevision: '0',
         objectTypeRef: input.objectTypeRef,
         identityCandidates: input.identityCandidates,
+        ...(input.identityBinding === undefined ? {} : { identityBinding: input.identityBinding }),
         identityState: 'unresolved',
         identityConfidence: confidence,
         sameNameDifferentMeaning,
@@ -466,7 +471,7 @@ export class InstanceReviewService {
       }
       case 'create': {
         state = 'created'
-        matchedEntityId = matchedEntityId ?? this.#newId()
+        matchedEntityId = input.resolvedEntityId ?? matchedEntityId ?? this.#newId()
         break
       }
       case 'cannot_link': {
@@ -501,10 +506,11 @@ export class InstanceReviewService {
       ...record.identity.adjudications,
       {
         decisionId: this.#newId(),
+        idempotencyKey: input.idempotencyKey,
         kind: input.kind,
         ...(nonEmpty(target) ? { targetEntityId: target } : {}),
         reason: input.reason,
-        actor: record.actor,
+        actor: ctx.principal.subjectId,
         recordedAt,
         revision,
       },
@@ -522,6 +528,7 @@ export class InstanceReviewService {
         expectedRevision: record.recordRevision,
         objectTypeRef: record.objectTypeRef,
         identityCandidates: candidates,
+        ...(record.identity.binding === undefined ? {} : { identityBinding: record.identity.binding }),
         identityState: state,
         identityConfidence: confidence,
         ...(matchedEntityId === undefined ? {} : { matchedEntityId }),
@@ -530,7 +537,7 @@ export class InstanceReviewService {
         adjudications,
         fields: record.fields,
         relations: record.relations,
-        publicationState: record.publicationState,
+        publicationState: 'draft',
         ...(record.publishedRevision === undefined ? {} : { publishedRevision: record.publishedRevision }),
         sourceRef: record.sourceRef,
         actor: record.actor,
@@ -602,6 +609,7 @@ export class InstanceReviewService {
         expectedRevision: record.recordRevision,
         objectTypeRef: record.objectTypeRef,
         identityCandidates: record.identity.candidates,
+        ...(record.identity.binding === undefined ? {} : { identityBinding: record.identity.binding }),
         identityState: record.identity.state,
         identityConfidence: record.identity.confidence,
         ...(record.identity.matchedEntityId === undefined
@@ -720,6 +728,7 @@ export class InstanceReviewService {
         expectedRevision: record.recordRevision,
         objectTypeRef: record.objectTypeRef,
         identityCandidates: record.identity.candidates,
+        ...(record.identity.binding === undefined ? {} : { identityBinding: record.identity.binding }),
         identityState: record.identity.state,
         identityConfidence: record.identity.confidence,
         ...(record.identity.matchedEntityId === undefined

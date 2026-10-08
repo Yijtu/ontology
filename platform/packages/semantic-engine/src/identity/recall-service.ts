@@ -103,15 +103,21 @@ function mergeEvidence(...groups: readonly (readonly ResourceRef[])[]): Resource
  */
 export class EntityCandidateRecallService {
   readonly #deps: EntityCandidateRecallDependencies
+  readonly #newId: () => string
 
   constructor(dependencies: EntityCandidateRecallDependencies) {
     this.#deps = dependencies
+    this.#newId = dependencies.newId ?? (() => globalThis.crypto.randomUUID())
   }
 
   async recall(request: EntityRecallRequest, ctx: ToolContext): Promise<IdentityRecallResult> {
     const scope = scopeOf(ctx)
     const limit = clampLimit(request.limit)
     const candidate = request.candidate
+    const extractedUnder = candidate.inputVersion.definitionRef
+    if (extractedUnder.id !== request.definitionRef.id || extractedUnder.version !== request.definitionRef.version || extractedUnder.digest !== request.definitionRef.digest) {
+      throw new IdentityRecallError('INVALID_REQUEST', 'recall must use the exact definition version stored with the candidate')
+    }
     const observedText = request.observedText
     const normalizedText = normalizeIdentityText(observedText)
     if (normalizedText.length === 0) {
@@ -121,6 +127,13 @@ export class EntityCandidateRecallService {
     const schema = await this.#requireSchema(scope, request, ctx)
     const identityScope = this.#requireIdentityScope(schema, candidate)
     const scopeDimensions = this.#scopeDimensions(identityScope, request)
+    if (request.projectId !== undefined) {
+      const declared = scopeDimensions.find((entry) => entry.dimension === 'project')
+      if (declared !== undefined && declared.value !== request.projectId) {
+        throw new IdentityRecallError('SCOPE_MISMATCH', 'stored candidate project dimension differs from the pinned project')
+      }
+      if (declared === undefined) scopeDimensions.push({ dimension: 'project', value: request.projectId })
+    }
 
     const layers = await this.#generateCandidates({
       scope,
@@ -217,6 +230,9 @@ export class EntityCandidateRecallService {
         `object ${candidate.objectId} declares identity scope ${object.identityScopeId}, which the definition does not define`,
       )
     }
+    if (identityScope.objectId !== candidate.objectId) {
+      throw new IdentityRecallError('SCOPE_MISMATCH', 'the definition identity domain belongs to another object')
+    }
     if (candidate.identityScopeId !== undefined && candidate.identityScopeId !== identityScope.identityScopeId) {
       throw new IdentityRecallError(
         'SCOPE_MISMATCH',
@@ -229,7 +245,7 @@ export class EntityCandidateRecallService {
   #scopeDimensions(
     identityScope: IndustryIdentityScopeSchema,
     request: EntityRecallRequest,
-  ): readonly { readonly dimension: string; readonly value: string }[] {
+  ): { readonly dimension: string; readonly value: string }[] {
     return identityScope.scopeDimensions.map((dimension) => {
       const value = request.scopeDimensionValues[dimension]
       if (value === undefined || value.length === 0) {
@@ -269,8 +285,11 @@ export class EntityCandidateRecallService {
       limit: args.limit,
     }
 
-    const strongId =
-      args.candidate.nativeId ?? identityValueOf(args.candidate, args.identityScope.identityAttributeIds)
+    const attributeIdentity = identityValueOf(args.candidate, args.identityScope.identityAttributeIds)
+    if (args.candidate.nativeId !== undefined && attributeIdentity !== undefined && args.candidate.nativeId !== attributeIdentity) {
+      throw new IdentityRecallError('INVALID_REQUEST', 'stored nativeId contradicts the definition identity attribute')
+    }
+    const strongId = args.candidate.nativeId ?? attributeIdentity
     if (strongId !== undefined && strongId.length > 0) {
       attempted.push('strong_identifier')
       const page = await this.#deps.index.query(
@@ -327,12 +346,15 @@ export class EntityCandidateRecallService {
     readonly completeness: CompletenessStatus
     readonly snapshot: SourceSnapshot
   } {
-    const candidates = page.entries.map((entry) => this.#candidateOf(strategy, matchedValue, entry))
+    // An index may expose several alias rows for one entity. Compare and present that identity once.
+    const byEntity = new Map<string, IdentityIndexEntry>()
+    for (const entry of page.entries) if (!byEntity.has(entry.entityId)) byEntity.set(entry.entityId, entry)
+    const candidates = [...byEntity.values()].map((entry) => this.#candidateOf(strategy, matchedValue, entry))
     return {
       candidates,
       attempted,
       truncated: page.truncated,
-      ...(page.knownTotal === undefined ? {} : { knownTotal: page.knownTotal }),
+      ...(page.knownTotal === undefined || byEntity.size !== page.entries.length ? {} : { knownTotal: page.knownTotal }),
       completeness: page.truncated ? 'truncated' : 'complete',
       snapshot: page.snapshot,
     }
@@ -440,14 +462,14 @@ export class EntityCandidateRecallService {
     const reservation = await budget.reserve(
       {
         ledgerId,
-        idempotencyKey: `identity-similarity:${args.request.candidate.candidateId}`,
+        idempotencyKey: `identity-similarity:${args.request.candidate.candidateId}:${this.#newId()}`,
         toolCalls: 0,
         modelTokens: this.#deps.similarityTokenEstimate ?? DEFAULT_SIMILARITY_TOKEN_ESTIMATE,
       },
       args.ctx,
     )
     const reservationId = reservation.reservation?.reservationId
-    if (!reservation.granted || reservationId === undefined) {
+    if (!reservation.granted || reservationId === undefined || reservation.reservation?.status !== 'reserved') {
       throw new IdentityRecallError(
         'BUDGET_REFUSED',
         reservation.denial?.message ?? 'the shared ledger refused the similarity reservation',

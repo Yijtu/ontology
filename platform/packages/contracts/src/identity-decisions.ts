@@ -6,6 +6,7 @@ import type {
   ScopeRef,
   Uuid,
   VersionRef,
+  ProjectRevisionRef,
 } from './generated/contracts'
 import type { ToolContext } from './trusted'
 
@@ -201,6 +202,16 @@ export interface IdentityDecisionCloseAssertion {
   readonly validTo: Rfc3339UtcTimestamp
 }
 
+/** Host-read fixed point rechecked atomically with an instance identity decision. */
+export interface IdentityDecisionProjectFence {
+  readonly projectRevisionRef: ProjectRevisionRef
+  readonly definitionRef: VersionRef
+  readonly documentId: Uuid
+  readonly parseId: Uuid
+  readonly membershipRevision: RevisionString
+  readonly visibilityEpoch: RevisionString
+}
+
 /**
  * Everything one `appendDecision` applies in a single transaction: the new immutable
  * decision version, any entity/assertion/link-constraint side effect and, for a
@@ -208,6 +219,7 @@ export interface IdentityDecisionCloseAssertion {
  * let a committed decision lose its side effect (SPEC D6/§8).
  */
 export interface AppendIdentityDecisionInput {
+  readonly projectFence?: IdentityDecisionProjectFence
   /** The revision the caller last read; `0` means "no decision yet". */
   readonly expectedRevision: RevisionString
   /** Target entity/cluster head the caller read; required for match, split and cannot-link writes. */
@@ -292,6 +304,8 @@ export type IdentityDecisionStoreErrorCode =
   | 'REVISION_CONFLICT'
   | 'ENTITY_NOT_FOUND'
   | 'DECISION_STORE_FAILED'
+  | 'PROJECT_FENCE_STALE'
+  | 'PROJECT_FENCE_UNSUPPORTED'
 
 export class IdentityDecisionStoreError extends Error {
   readonly code: IdentityDecisionStoreErrorCode

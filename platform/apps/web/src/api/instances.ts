@@ -7,13 +7,11 @@ import type {
   InstanceConfirmationEvent,
   InstanceFieldDecision,
   InstanceFieldSource,
-  InstanceIdentityCandidate,
   InstanceIdentityConfidence,
   InstanceIdentityState,
   InstanceNormalizedValue,
   InstanceRecordView,
   InstanceRawValue,
-  ResourceRef,
   RevisionString,
 } from '@ontology/contracts'
 
@@ -40,12 +38,9 @@ export interface CreateInstanceRelationInput {
 }
 
 export interface CreateInstanceRecordRequest {
-  readonly objectTypeRef: string
-  readonly displayName?: string
-  readonly identityCandidates: readonly InstanceIdentityCandidate[]
-  readonly fields: readonly CreateInstanceFieldInput[]
-  readonly relations: readonly CreateInstanceRelationInput[]
-  readonly sourceRef: ResourceRef
+  readonly candidateId: string
+  readonly documentId: string
+  readonly relations?: readonly CreateInstanceRelationInput[]
 }
 
 export interface EditInstanceFieldRequest {

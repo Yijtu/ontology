@@ -3,9 +3,12 @@ import { createApiServer } from '@ontology/app-api'
 import type { AuthenticatedRequest } from '@ontology/app-api'
 import { InMemoryInstanceReviewStore, InstanceReviewService } from '@ontology/application'
 import type { InstanceFieldPolicy } from '@ontology/application'
-import { createToolContext } from '@ontology/contracts'
+import type { CreateInstanceRecordInput } from '@ontology/application'
+import { createToolContext, InstanceReviewError } from '@ontology/contracts'
 import type {
   InstanceFieldSource,
+  InstanceIdentityBinding,
+  InstanceRecordView,
   InstanceNormalizedValue,
   ResourceRef,
   ScopeRef,
@@ -112,25 +115,57 @@ export async function startInstanceReviewHarness(): Promise<InstanceReviewHarnes
     now: () => '2026-09-29T00:00:00Z',
     newId: () => randomUUID(),
   })
+  const ctx = trustedContext('e2e-reviewer')
+  const scope = INSTANCE_REVIEW_SCOPE
+  const projectId = INSTANCE_REVIEW_PROJECT_ID
+  const trusted = new Map<string, { readonly binding: InstanceIdentityBinding; readonly sourceRef: ResourceRef; readonly objectTypeRef: string }>()
+  const createTrustedRecord = async (input: CreateInstanceRecordInput) => {
+    const binding: InstanceIdentityBinding = {
+      candidateId: randomUUID(), documentId: input.sourceRef.id,
+      projectRevisionRef: { projectId, revision: '1', digest: DIGEST },
+      definitionRef: { id: 'ui-fixture.definition', version: '1.0.0', digest: DIGEST },
+      membershipRevision: '1', visibilityEpoch: '1', identityScopeId: `${input.objectTypeRef}_identity`,
+    }
+    trusted.set(binding.candidateId, { binding, sourceRef: input.sourceRef, objectTypeRef: input.objectTypeRef })
+    return service.createRecord(scope, projectId, { ...input, identityBinding: binding }, ctx)
+  }
+  const requireTrustedRecord = async (requestedScope: ScopeRef, project: string, recordId: string, context: ToolContext): Promise<InstanceRecordView> => {
+    const record = await service.getRecord(requestedScope, project, recordId, context)
+    const fixture = record.identity.binding === undefined ? undefined : trusted.get(record.identity.binding.candidateId)
+    if (project !== projectId || fixture === undefined || JSON.stringify(record.identity.binding) !== JSON.stringify(fixture.binding) || JSON.stringify(record.sourceRef) !== JSON.stringify(fixture.sourceRef) || record.objectTypeRef !== fixture.objectTypeRef) throw new InstanceReviewError('IDENTITY_CONFLICT', 'UI record no longer matches its server-seeded candidate/project/source pins')
+    return record
+  }
   const app = createApiServer({
     authenticate: instanceReviewAuthenticator,
-    instanceReviews: { service },
+    instanceReviews: {
+      service,
+      // This browser fixture isolates field/identity rendering over synthetic record projections.
+      // Stored-candidate recall and semantic binding authority use the real PostgreSQL acceptance
+      // suite; this adapter is confined to the test harness and cannot create records over HTTP.
+      identity: {
+        recall: async () => { throw new Error('UI fixture does not implement candidate recall') },
+        createRecord: async () => { throw new Error('UI fixture seeds trusted records directly') },
+        adjudicateIdentity: async (requestedScope, project, recordId, input, context) => {
+          await requireTrustedRecord(requestedScope, project, recordId, context)
+          return service.adjudicateIdentity(requestedScope, project, recordId, input, context)
+        },
+        validatePublication: async (scope, project, recordId, context) => {
+          const record = await requireTrustedRecord(scope, project, recordId, context)
+          if (record.identity.state !== 'matched' && record.identity.state !== 'created') throw new InstanceReviewError('PUBLICATION_BLOCKED', 'a human identity decision is required')
+        },
+      },
+    },
   })
   await app.listen({ host: '127.0.0.1', port: 0 })
   const address = app.server.address()
   if (address === null || typeof address === 'string') throw new Error('the instance review API did not bind a TCP port')
   const baseUrl = `http://127.0.0.1:${address.port}`
   const client = new WorkbenchClient({ baseUrl })
-  const ctx = trustedContext('e2e-reviewer')
-  const scope = INSTANCE_REVIEW_SCOPE
-  const projectId = INSTANCE_REVIEW_PROJECT_ID
 
   const mainDeviceEntity = randomUUID()
   const sensorEntity = randomUUID()
 
-  const duplicate = await service.createRecord(
-    scope,
-    projectId,
+  const duplicate = await createTrustedRecord(
     {
       objectTypeRef: 'device',
       displayName: 'Bridge A',
@@ -145,12 +180,9 @@ export async function startInstanceReviewHarness(): Promise<InstanceReviewHarnes
       actor: 'e2e-reviewer',
       idempotencyKey: `seed-duplicate-${randomUUID()}`,
     },
-    ctx,
   )
 
-  const main = await service.createRecord(
-    scope,
-    projectId,
+  const main = await createTrustedRecord(
     {
       objectTypeRef: 'device',
       displayName: 'Bridge A',
@@ -167,12 +199,9 @@ export async function startInstanceReviewHarness(): Promise<InstanceReviewHarnes
       actor: 'e2e-reviewer',
       idempotencyKey: `seed-main-${randomUUID()}`,
     },
-    ctx,
   )
 
-  const pendingRelation = await service.createRecord(
-    scope,
-    projectId,
+  const pendingRelation = await createTrustedRecord(
     {
       objectTypeRef: 'device',
       displayName: 'Bridge B',
@@ -185,7 +214,6 @@ export async function startInstanceReviewHarness(): Promise<InstanceReviewHarnes
       actor: 'e2e-reviewer',
       idempotencyKey: `seed-pending-${randomUUID()}`,
     },
-    ctx,
   )
 
   return {

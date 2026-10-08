@@ -1,6 +1,6 @@
 import { createHash } from 'node:crypto'
 import type { QueryResultRow } from 'pg'
-import { InstanceReviewError, isToolContext } from '@ontology/contracts'
+import { IdentityDecisionStoreError, InstanceReviewError, isToolContext } from '@ontology/contracts'
 import type {
   AppendInstanceConfirmationInput,
   AppendInstanceRecordInput,
@@ -9,6 +9,7 @@ import type {
   InstanceFieldValue,
   InstanceIdentityAdjudication,
   InstanceIdentityCandidate,
+  InstanceIdentityBinding,
   InstanceIdentityConfidence,
   InstanceIdentityState,
   InstanceRecordView,
@@ -20,6 +21,7 @@ import type {
   ToolContext,
   Uuid,
 } from '@ontology/contracts'
+import { assertIdentityProjectFence, assertPublishedInstanceBinding } from './identity-project-fence'
 import { ControlPostgresDatabase } from './database'
 
 interface ScopedQuery {
@@ -42,6 +44,7 @@ interface RecordRow extends QueryResultRow {
   published_revision: string | null
   body: {
     identity: {
+      binding?: InstanceIdentityBinding
       candidates: InstanceIdentityCandidate[]
       cannotLinkEntityIds: string[]
       adjudications: InstanceIdentityAdjudication[]
@@ -94,6 +97,7 @@ function toRecord(row: RecordRow): InstanceRecordView {
     recordRevision: String(row.revision),
     objectTypeRef: row.object_type_ref,
     identity: {
+      ...(body.identity.binding === undefined ? {} : { binding: body.identity.binding }),
       state: row.identity_state,
       confidence: row.identity_confidence,
       candidates: body.identity.candidates,
@@ -195,8 +199,23 @@ export class PostgresInstanceReviewStore implements InstanceReviewStore {
       if (!locked) {
         throw new InstanceReviewError('PROJECT_NOT_FOUND', `project ${projectId} is not visible in this scope`)
       }
+      if (input.identityBinding !== undefined) {
+        const binding = input.identityBinding
+        const parseId = input.fields[0]?.source.parseId
+        if (binding.projectRevisionRef.projectId !== projectId || parseId === undefined) throw new InstanceReviewError('IDENTITY_CONFLICT', 'instance identity binding has no matching project/source')
+        try {
+          await assertIdentityProjectFence(query, { projectRevisionRef: binding.projectRevisionRef, definitionRef: binding.definitionRef, documentId: binding.documentId, parseId, membershipRevision: binding.membershipRevision, visibilityEpoch: binding.visibilityEpoch })
+        } catch (error) {
+          if (error instanceof IdentityDecisionStoreError && error.code === 'PROJECT_FENCE_STALE') throw new InstanceReviewError('IDENTITY_CONFLICT', 'instance project/source pins changed before revision commit', { cause: error })
+          throw error
+        }
+      }
+      if (input.publicationState === 'approved' || input.publicationState === 'published') await assertPublishedInstanceBinding(query, projectId, input)
       const replay = await this.#recordByIdempotencyKey(query, input.idempotencyKey)
       if (replay !== undefined) {
+        if (replay.project_id !== projectId || replay.record_id !== input.recordId || digestOf(replay.body.identity.binding ?? null) !== digestOf(input.identityBinding ?? null)) {
+          throw new InstanceReviewError('IDEMPOTENCY_CONFLICT', 'record key was used for another project/candidate binding')
+        }
         return toRecord(replay)
       }
       const current = await this.#latestRecord(query, projectId, input.recordId)
@@ -210,6 +229,7 @@ export class PostgresInstanceReviewStore implements InstanceReviewStore {
       const revision = (BigInt(currentRevision) + 1n).toString()
       const body = {
         identity: {
+          ...(input.identityBinding === undefined ? {} : { binding: input.identityBinding }),
           candidates: input.identityCandidates,
           cannotLinkEntityIds: input.cannotLinkEntityIds,
           adjudications: input.adjudications,
@@ -256,7 +276,7 @@ export class PostgresInstanceReviewStore implements InstanceReviewStore {
       } catch (error) {
         if (pgCodeOf(error) === '23505') {
           const concurrent = await this.#recordByIdempotencyKey(query, input.idempotencyKey)
-          if (concurrent !== undefined) return toRecord(concurrent)
+          if (concurrent !== undefined && concurrent.project_id === projectId && concurrent.record_id === input.recordId && digestOf(concurrent.body.identity.binding ?? null) === digestOf(input.identityBinding ?? null)) return toRecord(concurrent)
           throw new InstanceReviewError('VERSION_CONFLICT', 'a concurrent write won the record revision', {
             cause: error,
           })
@@ -353,13 +373,14 @@ export class PostgresInstanceReviewStore implements InstanceReviewStore {
     })
   }
 
+  // Serialize instance writers while allowing document-membership FK key-share locks.
   async #lockProject(query: ScopedQuery, projectId: Uuid): Promise<boolean> {
     const row = await query.query<{ project_id: string }>(
       `SELECT project_id FROM agent_platform.projects
         WHERE tenant_id = current_setting('app.tenant_id')::uuid
           AND space_id = current_setting('app.space_id')::uuid
           AND project_id = $1::uuid
-        FOR UPDATE`,
+        FOR NO KEY UPDATE`,
       [projectId],
     )
     return row.rows[0] !== undefined
