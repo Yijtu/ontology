@@ -42,7 +42,7 @@ describe('workbench in a real browser', () => {
   it('runs the happy path on desktop: preflight, degradations, activation, no secret', async () => {
     const context = await browser.newContext({ viewport: { width: 1280, height: 900 } })
     const page = await context.newPage()
-    await page.goto(web.origin)
+    await page.goto(`${web.origin}/?view=workbench`)
     await page.waitForSelector('[data-testid="preflight"]')
     expect(await page.getAttribute('.workbench', 'data-viewport')).toBe('desktop')
 
@@ -73,7 +73,7 @@ describe('workbench in a real browser', () => {
   it('renders the narrow layout and keeps the error path visible', async () => {
     const context = await browser.newContext({ viewport: { width: 390, height: 844 } })
     const page = await context.newPage()
-    await page.goto(web.origin)
+    await page.goto(`${web.origin}/?view=workbench`)
     await page.waitForSelector('[data-testid="preflight"]')
     expect(await page.getAttribute('.workbench', 'data-viewport')).toBe('narrow')
 
@@ -124,7 +124,7 @@ describe('workbench in a real browser', () => {
     const context = await browser.newContext({ viewport: { width: 1024, height: 800 } })
     const page = await context.newPage()
     try {
-      await page.goto(host.origin)
+      await page.goto(`${host.origin}/?view=workbench`)
       await page.waitForSelector('[data-testid="preflight"]')
       await page.click('[data-testid="preflight"]')
       await page.waitForSelector('[data-state="not_configured"]')

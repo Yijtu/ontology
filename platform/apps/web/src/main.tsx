@@ -13,9 +13,12 @@ const client = new WorkbenchClient({ baseUrl })
 
 function initialView(params: URLSearchParams, scenarioViews: readonly AppViewContribution[], fallback: AppView): AppView {
   const requested = params.get('view')
-  const coreViews = ['workbench', 'query', 'jobs', 'review', 'evidence']
+  const coreViews = ['start', 'ontology', 'projects', 'definitions', 'instances', 'packages', 'business', 'workbench', 'query', 'jobs', 'review', 'evidence']
   const allowed = [...coreViews, ...scenarioViews.map((entry) => entry.view)]
-  return requested !== null && allowed.includes(requested) ? requested : fallback
+  if (requested !== null && allowed.includes(requested)) return requested
+  // A bound run (`?run=`) is reproduced on the workbench, so keep that default for deep links.
+  if (params.has('run')) return 'workbench'
+  return fallback
 }
 
 function mountApp(container: HTMLElement, input: {
@@ -42,11 +45,7 @@ function mountApp(container: HTMLElement, input: {
         deploymentModels: input.coreDeployment.models,
         deploymentOperatorEnabled: input.coreDeployment.operatorEnabled,
       }),
-      initialView: initialView(
-        params,
-        input.deployment.scenarioViews,
-        input.coreDeployment?.operatorEnabled === false ? 'query' : 'workbench',
-      ),
+      initialView: initialView(params, input.deployment.scenarioViews, 'start'),
       ...(boundRunId === undefined ? {} : { boundRunId }),
       ...(jobId === undefined ? {} : { initialJobId: jobId }),
       ...(candidateId === undefined ? {} : { initialCandidateId: candidateId }),

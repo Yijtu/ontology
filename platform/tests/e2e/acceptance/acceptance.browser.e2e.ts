@@ -84,7 +84,7 @@ describe('LOCAL-054 cross-layer acceptance in a real browser', () => {
     const page = await context.newPage()
 
     // 1. Configuration workbench: preflight resolves and the profile activates.
-    await page.goto(web.origin)
+    await page.goto(`${web.origin}/?view=workbench`)
     await page.waitForSelector('[data-testid="preflight"]')
     await page.click('[data-testid="preflight"]')
     await page.waitForSelector('[data-testid="preflight-status"][data-status="resolved"]')
