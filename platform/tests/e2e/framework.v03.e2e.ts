@@ -28,6 +28,13 @@ let directory = ''
 let client: WorkbenchClient
 let workspaceId = ''
 let appDatabaseUrl = ''
+let closing = false
+const workerDiagnostics: { readonly duringClose: boolean; readonly name: string; readonly code?: string; readonly message: string }[] = []
+function recordWorkerError(error: unknown): void {
+  const code = typeof error === 'object' && error !== null && 'code' in error ? String(error.code) : undefined
+  workerDiagnostics.push({ duringClose: closing, name: error instanceof Error ? error.name : typeof error,
+    ...(code === undefined ? {} : { code }), message: error instanceof Error ? error.message : String(error) })
+}
 
 beforeAll(async () => {
   postgres = await startPostgresContainer()
@@ -48,7 +55,7 @@ beforeAll(async () => {
   appDatabaseUrl = database.href
   directory = await mkdtemp(join(tmpdir(), 'ontology-framework-'))
   composition = await createCoreLocalComposition({ databaseUrl: database.href, objectDirectory: directory, scopeRef,
-    examples: loadCoreExamples({ targetScopeRef: scopeRef }), allowLocalOperator: true, modelsEnabled: false, jevEnabled: false })
+    examples: loadCoreExamples({ targetScopeRef: scopeRef }), allowLocalOperator: true, modelsEnabled: false, jevEnabled: false, onWorkerError: recordWorkerError })
   api = createCoreApi(composition.dependencies)
   const origin = await api.listen({ host: '127.0.0.1', port: 0 })
   client = new WorkbenchClient({ baseUrl: origin })
@@ -57,6 +64,7 @@ beforeAll(async () => {
 }, 300_000)
 
 afterAll(async () => {
+  closing = true
   await browser?.close()
   await web?.close()
   await api?.close()
@@ -64,6 +72,10 @@ afterAll(async () => {
   await admin?.end()
   if (directory !== '') await rm(directory, { recursive: true, force: true })
   await postgres?.stop()
+  await record('gap-017-worker-diagnostic', workerDiagnostics.map((entry) => JSON.stringify(entry)))
+  // The route-only run has no published facts. Its deliberate data-gap failure is distinct
+  // from shutdown diagnostics; every other worker error remains an acceptance failure.
+  expect(workerDiagnostics.filter((entry) => entry.duringClose || entry.name !== 'TypedDraftWriterError' || entry.code !== 'INSUFFICIENT_DATA')).toEqual([])
 })
 
 async function newPage(width = 1440): Promise<Page> {
@@ -209,7 +221,9 @@ describe('professional product framework: real production host', () => {
     const page = await browser.newPage({ viewport: { width: 1440, height: 1050 } })
     const view = (expected: string) => page.waitForFunction((value) => document.querySelector('.app')?.getAttribute('data-view') === value, expected)
     try {
-      for (const extra of ['', '&view=unknown-view']) {
+      // Cold reloads used to expose the shell before passive history listeners were installed.
+      // Repeated native traversal exercises that timing window without sleeps or fake popstate.
+      for (const extra of Array.from({ length: 12 }, (_, index) => index % 2 === 0 ? '' : '&view=unknown-view')) {
         const target = `${web.origin}/?run=${run.runId}${extra}`
         await page.goto(target)
         await view('workbench')

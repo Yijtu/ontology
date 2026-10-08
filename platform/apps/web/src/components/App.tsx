@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
+import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from 'react'
 import type { ReactNode } from 'react'
 import type { IndustryWorkspace, ProfileRef, ProjectRecord, ProjectRevision, ResourceRef, RevisionString, VersionRef } from '@ontology/contracts'
 import type { CoreDeploymentInfo, CoreDeploymentScenario, WorkbenchClient } from '../api/client'
@@ -231,16 +231,18 @@ export function App({
   }, [guard, view])
 
   useEffect(() => { mainRef.current?.focus({ preventScroll: true }) }, [view])
-  useEffect(() => {
+  useLayoutEffect(() => {
     if (!dirty) return undefined
     const preventUnload = (event: BeforeUnloadEvent) => { event.preventDefault(); event.returnValue = '' }
     window.addEventListener('beforeunload', preventUnload)
     return () => window.removeEventListener('beforeunload', preventUnload)
   }, [dirty])
-  useEffect(() => {
+  // The URL and listeners must be ready in the same commit as the visible shell. A passive
+  // effect can otherwise miss a fast native traversal immediately after a document reload.
+  useLayoutEffect(() => {
     window.history.replaceState(indexedHistoryState(historyIndex.current), '', window.location.href)
   }, [])
-  useEffect(() => {
+  useLayoutEffect(() => {
     const pop = (event: PopStateEvent) => {
       const target = new URL(window.location.href)
       const targetIndex = readHistoryIndex(event.state)
