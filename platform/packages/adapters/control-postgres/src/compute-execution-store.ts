@@ -36,6 +36,7 @@ async function withScope<T>(
   scopeRef: ScopeRef,
   ctx: ToolContext,
   run: (query: ScopedQuery) => Promise<T>,
+  signal?: AbortSignal,
 ): Promise<T> {
   if (!isToolContext(ctx)) {
     throw new ControlStorageError('SCOPE_MISMATCH', 'a host-minted trusted tool context is required')
@@ -50,12 +51,17 @@ async function withScope<T>(
     { tenantId: scopeRef.tenantId, spaceId: scopeRef.spaceId },
     async (client) => {
       await client.query("SELECT set_config('app.trace_id', $1, true)", [ctx.traceId])
-      return run({
+      signal?.throwIfAborted()
+      const value = await run({
         query: async <Row extends QueryResultRow>(text: string, values?: readonly unknown[]) => {
+          signal?.throwIfAborted()
           const result = await client.query<Row>(text, values === undefined ? undefined : [...values])
+          signal?.throwIfAborted()
           return { rows: result.rows, rowCount: result.rowCount ?? 0 }
         },
       })
+      signal?.throwIfAborted()
+      return value
     },
   )
 }
@@ -214,6 +220,7 @@ export class PostgresComputeInvocationStore implements ComputeInvocationStore {
     logicalKeyDigest: Sha256Digest,
     result: { readonly resultRef: ResourceRef; readonly resultDigest: Sha256Digest },
     ctx: ToolContext,
+    signal?: AbortSignal,
   ): Promise<ComputeInvocationRecord> {
     return this.#transition(scopeRef, logicalKeyDigest, ctx, (current, now) => ({
       ...current,
@@ -225,7 +232,7 @@ export class PostgresComputeInvocationStore implements ComputeInvocationStore {
       state: 'completed',
       resultRef: result.resultRef,
       resultDigest: result.resultDigest,
-    })
+    }, signal)
   }
 
   async fail(
@@ -252,6 +259,7 @@ export class PostgresComputeInvocationStore implements ComputeInvocationStore {
       readonly resultRef?: ResourceRef
       readonly resultDigest?: Sha256Digest
     },
+    signal?: AbortSignal,
   ): Promise<ComputeInvocationRecord> {
     return withScope(this.#database, scopeRef, ctx, async (query) => {
       const now = new Date().toISOString()
@@ -268,6 +276,21 @@ export class PostgresComputeInvocationStore implements ComputeInvocationStore {
         throw new ControlStorageError('NOT_FOUND', 'the compute invocation no longer exists in this scope')
       }
       assertComputeInvocationRecordShape(row.record)
+      if (row.record.state === 'completed') {
+        if (columns.state === 'completed' && (
+          row.record.resultRef?.id !== columns.resultRef?.id ||
+          row.record.resultRef?.version !== columns.resultRef?.version ||
+          row.record.resultRef?.digest !== columns.resultRef?.digest ||
+          row.record.resultRef?.kind !== columns.resultRef?.kind ||
+          row.record.resultDigest !== columns.resultDigest)) {
+          throw new ControlStorageError('IDEMPOTENCY_CONFLICT', 'a completed compute invocation cannot adopt another result')
+        }
+        return row.record
+      }
+      if (row.record.state !== 'executing') {
+        if (columns.state !== 'completed' && (row.record.state === 'failed' || row.record.state === 'cancelled')) return row.record
+        throw new ControlStorageError('INVALID_OPERATION', 'only an executing compute invocation can enter a terminal state')
+      }
       const updated = mutate(row.record, now)
       assertComputeInvocationRecordShape(updated)
       await query.query(
@@ -287,7 +310,7 @@ export class PostgresComputeInvocationStore implements ComputeInvocationStore {
         ],
       )
       return updated
-    })
+    }, signal)
   }
 }
 

@@ -1,5 +1,5 @@
 import { sha256DigestOf } from '@ontology/core'
-import { findRegisteredOperation, isToolContext } from '@ontology/contracts'
+import { computeOperationKey, findRegisteredOperation, isToolContext } from '@ontology/contracts'
 import type {
   CapabilityLimits,
   ComputationData,
@@ -38,7 +38,8 @@ import {
 } from '../handlers/compute'
 import type { SchemaValidationIssue, ToolSchemaValidator } from '../types'
 import { canonicalJson, snapshotFrom } from '../types'
-import { ComputeExecutionError } from './errors'
+import { ComputeExecutionError, isComputeExecutionError } from './errors'
+import { assertComputeHandlerArtifact } from './build-artifact'
 
 /**
  * Registered compute execution (SPEC v0.3a §EX-6, §5.1 step 3-4, issue V03-031).
@@ -197,6 +198,10 @@ export class RegisteredComputeExecutionService {
         `no handler is registered for operation ${input.operationRef.id}@${input.operationRef.version}`,
       )
     }
+    assertComputeHandlerArtifact(handler, operation.handlerDigest)
+    if (operation.handlerRef.digest !== operation.handlerDigest) {
+      throw new ComputeExecutionError('COMPUTE_CONTRACT_MISMATCH', 'the registered handler reference and digest disagree')
+    }
     assertNoComputeBypass(input.parameters, input.inputRefs)
 
     const logicalKeyDigest = computeLogicalKeyDigest(scopeRef, input)
@@ -206,7 +211,7 @@ export class RegisteredComputeExecutionService {
       ctx,
     )
     if (prepared.record.state === 'completed') {
-      return this.#reuse(scopeRef, prepared.record, ctx)
+      return this.#reuse(scopeRef, prepared.record, input.signal, ctx)
     }
 
     const ownerId = input.ownerId ?? this.#newId()
@@ -220,10 +225,11 @@ export class RegisteredComputeExecutionService {
       )
     }
     if (claimed.state === 'completed') {
-      return this.#reuse(scopeRef, claimed, ctx)
+      return this.#reuse(scopeRef, claimed, input.signal, ctx)
     }
 
     let result: ComputeOperationResult
+    let completionPersisted = false
     try {
       result = await runComputeWithBudget(
         ({ signal }) =>
@@ -244,6 +250,14 @@ export class RegisteredComputeExecutionService {
         input.deadline,
         input.signal,
       )
+      const finished = await this.#finish(scopeRef, claimed, operation, result, input, ctx)
+      completionPersisted = true
+      if (input.signal.aborted) {
+        throw new ComputeExecutionError('COMPUTE_FUNCTION_FAILED', 'the compute response was cancelled after terminal persistence', {
+          platformCode: 'DEADLINE_EXCEEDED', retryable: false,
+        })
+      }
+      return finished
     } catch (error) {
       const cancelled = input.signal.aborted
       const attempt: ComputeInvocationAttempt = {
@@ -254,16 +268,17 @@ export class RegisteredComputeExecutionService {
         retryable: operation.readOnly,
         recordedAt: this.#now(),
       }
-      await this.#invocations.fail(scopeRef, logicalKeyDigest, attempt, ctx)
-      if (error instanceof ComputeExecutionError) throw error
+      // A committed completion is historical evidence. Cancellation still rejects the response,
+      // but cleanup must never rewrite that already-committed fact as a failed/cancelled attempt.
+      if (!completionPersisted) await this.#invocations.fail(scopeRef, logicalKeyDigest, attempt, ctx)
+      if (isComputeExecutionError(error)) throw error
       throw new ComputeExecutionError(
         'COMPUTE_FUNCTION_FAILED',
         `the registered compute operation ${input.operationRef.id}@${input.operationRef.version} failed: ${attempt.message}`,
-        { cause: error, retryable: operation.readOnly },
+        { cause: error, retryable: operation.readOnly, ...(cancelled ? { platformCode: 'DEADLINE_EXCEEDED' } : {}) },
       )
     }
 
-    return this.#finish(scopeRef, claimed, operation, result, input, ctx)
   }
 
   #resolveOperation(input: ComputeExecutionInput): RegisteredOperation {
@@ -330,8 +345,17 @@ export class RegisteredComputeExecutionService {
   async #reuse(
     scopeRef: ScopeRef,
     record: ComputeInvocationRecord,
+    signal: AbortSignal,
     ctx: ToolContext,
   ): Promise<ComputeExecutionResult> {
+    const assertActive = (): void => {
+      if (signal.aborted) {
+        throw new ComputeExecutionError('COMPUTE_FUNCTION_FAILED', 'the compute replay was cancelled', {
+          platformCode: 'DEADLINE_EXCEEDED', retryable: false,
+        })
+      }
+    }
+    assertActive()
     if (record.resultRef === undefined) {
       throw new ComputeExecutionError(
         'COMPUTE_CONTRACT_MISMATCH',
@@ -339,6 +363,7 @@ export class RegisteredComputeExecutionService {
       )
     }
     const archived = await this.#results.getArtifact(scopeRef, record.resultRef, ctx)
+    assertActive()
     if (archived === undefined) {
       throw new ComputeExecutionError(
         'COMPUTE_CONTRACT_MISMATCH',
@@ -352,6 +377,16 @@ export class RegisteredComputeExecutionService {
         'the completed invocation output bindings are not archived in this scope',
       )
     }
+    if (archived.artifact.registeredOperationDigest !== record.registeredOperationDigest ||
+      computeOperationKey(archived.artifact.operationRef) !== computeOperationKey(record.operationRef) ||
+      archived.artifact.invocationId !== record.invocationId ||
+      archived.artifact.logicalKeyDigest !== record.logicalKeyDigest ||
+      sha256DigestOf(canonicalJson(archived.artifact)) !== record.resultDigest ||
+      record.resultRef.digest !== record.resultDigest ||
+      sha256DigestOf(canonicalJson(bindings.bindings)) !== archived.artifact.outputBindingsRef.digest) {
+      throw new ComputeExecutionError('COMPUTE_CONTRACT_MISMATCH', 'the archived compute result does not match its invocation pins')
+    }
+    assertActive()
     return { invocation: record, artifact: archived.artifact, bindings: bindings.bindings, reused: true }
   }
 
@@ -363,6 +398,14 @@ export class RegisteredComputeExecutionService {
     input: ComputeExecutionInput,
     ctx: ToolContext,
   ): Promise<ComputeExecutionResult> {
+    const assertActive = (): void => {
+      if (input.signal.aborted) {
+        throw new ComputeExecutionError('COMPUTE_FUNCTION_FAILED', 'the compute result was cancelled before completion', {
+          platformCode: 'DEADLINE_EXCEEDED', retryable: operation.readOnly,
+        })
+      }
+    }
+    assertActive()
     if (!isComputationPayload(result.payload)) {
       throw new ComputeExecutionError(
         'COMPUTE_CONTRACT_MISMATCH',
@@ -386,6 +429,7 @@ export class RegisteredComputeExecutionService {
     })
     const bindingsRef = this.#mintRef(bindings, 'artifact')
     await this.#bindings.putBindings(scopeRef, bindingsRef, bindings, ctx)
+    assertActive()
 
     const now = this.#now()
     const artifact: ComputeResultArtifact = {
@@ -414,11 +458,13 @@ export class RegisteredComputeExecutionService {
     }
     const artifactRef = this.#mintRef(artifact, 'computation')
     await this.#results.putArtifact(scopeRef, artifactRef, artifact, ctx)
+    assertActive()
     const completed = await this.#invocations.complete(
       scopeRef,
       invocation.logicalKeyDigest,
       { resultRef: artifactRef, resultDigest: artifactRef.digest },
       ctx,
+      input.signal,
     )
     return { invocation: completed, artifact, bindings, payload: result.payload, reused: false }
   }

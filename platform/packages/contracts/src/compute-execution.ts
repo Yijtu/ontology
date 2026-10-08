@@ -201,6 +201,8 @@ export interface ComputeInvocationStore {
     logicalKeyDigest: Sha256Digest,
     result: { readonly resultRef: ResourceRef; readonly resultDigest: Sha256Digest },
     ctx: ToolContext,
+    /** The same shared execution signal; check before committing terminal persistence. */
+    signal?: AbortSignal,
   ): Promise<ComputeInvocationRecord>
   fail(
     scopeRef: ScopeRef,

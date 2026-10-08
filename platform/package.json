@@ -9,9 +9,10 @@
     "pnpm": ">=10.0.0"
   },
   "scripts": {
-    "lint": "eslint .",
+    "lint": "node scripts/build-compute-artifact.mjs --check && eslint .",
     "typecheck": "tsc -p tsconfig.json && tsc -p apps/web/tsconfig.json && tsc -p tsconfig.acceptance.json",
     "build:web": "pnpm --filter @ontology/app-web run build",
+    "build:compute": "node scripts/build-compute-artifact.mjs",
     "test": "vitest run",
     "test:acceptance": "vitest run --project acceptance",
     "test:e2e": "vitest run --config vitest.e2e.config.ts",
@@ -55,6 +56,7 @@
     "ajv": "^8.20.0",
     "ajv-formats": "^3.0.1",
     "eslint": "^10.11.0",
+    "esbuild": "0.28.2",
     "jsdom": "^30.1.0",
     "pg": "^8.16.3",
     "react": "^19.3.0",

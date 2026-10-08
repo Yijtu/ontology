@@ -4,6 +4,8 @@
  */
 export { ComputeExecutionError, isComputeExecutionError } from './errors'
 export type { ComputeExecutionErrorCode } from './errors'
+export { assertComputeHandlerArtifact, computeBuildArtifactDigest, createArtifactComputeHandlers, verifyComputeBuildArtifact } from './build-artifact'
+export type { ArtifactComputeHandlerOptions, ComputeBuildArtifactManifest } from './build-artifact'
 export {
   EXAMPLE_ALGORITHM_REF,
   EXAMPLE_INPUT_SCHEMA_VERSION,
@@ -14,6 +16,7 @@ export {
   exampleOperationRegistry,
   exampleRegisteredOperation,
 } from './example-operation'
+export type { ExampleComputeArtifactOptions } from './example-operation'
 export {
   RegisteredComputeExecutionService,
   computeLogicalKeyDigest,
