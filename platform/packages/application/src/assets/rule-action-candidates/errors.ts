@@ -19,6 +19,10 @@ export type RuleActionCandidateErrorCode =
   | 'LIFECYCLE_INVALID'
   | 'INVALID_MODEL_OUTPUT'
   | 'ARBITRARY_EXECUTABLE_REJECTED'
+  | 'MODEL_NOT_CONFIGURED'
+  | 'GENERATION_FAILED'
+  | 'CANCELLED'
+  | 'VALIDATION_BLOCKED'
 
 const HTTP_STATUS: Readonly<Record<RuleActionCandidateErrorCode, number>> = {
   INVALID_ARGUMENT: 400,
@@ -34,6 +38,10 @@ const HTTP_STATUS: Readonly<Record<RuleActionCandidateErrorCode, number>> = {
   LIFECYCLE_INVALID: 409,
   INVALID_MODEL_OUTPUT: 422,
   ARBITRARY_EXECUTABLE_REJECTED: 422,
+  MODEL_NOT_CONFIGURED: 409,
+  GENERATION_FAILED: 503,
+  CANCELLED: 409,
+  VALIDATION_BLOCKED: 422,
 }
 
 export interface RuleActionCandidateErrorOptions extends ErrorOptions {

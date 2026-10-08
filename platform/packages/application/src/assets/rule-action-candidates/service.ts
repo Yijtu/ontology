@@ -28,11 +28,13 @@ import type {
   ToolContext,
   Uuid,
   RuleDependencyCandidateReference,
+  RuleActionGenerationContext,
 } from '@ontology/contracts'
 import { candidateIdFor, canonicalJson, sha256DigestOf } from '../../extraction/canonical'
 import { RuleActionCandidateError } from './errors'
 import { parseRuleActionCandidateOutput } from './model-output'
 import type { DraftRuleActionCandidate } from './model-output'
+import { readLatestWorkspaceDraft } from '../workspace-draft'
 
 const EDITOR_ROLES: readonly string[] = ['profile-editor', 'platform-admin']
 const DEFAULT_PAGE = 100
@@ -220,6 +222,17 @@ export class RuleActionCandidateService {
     actor: string,
     ctx: ToolContext,
   ): Promise<IngestRuleActionOutputView> {
+    return this.#ingestOutput(workspaceId, input, actor, ctx, true)
+  }
+
+  /** Build validated drafts without writes, for the atomic generation store. */
+  prepareRuleActionOutput(workspaceId: Uuid, input: IngestRuleActionOutputInput,
+    actor: string, ctx: ToolContext): Promise<IngestRuleActionOutputView> {
+    return this.#ingestOutput(workspaceId, input, actor, ctx, false)
+  }
+
+  async #ingestOutput(workspaceId: Uuid, input: IngestRuleActionOutputInput,
+    actor: string, ctx: ToolContext, persist: boolean): Promise<IngestRuleActionOutputView> {
     assertEditor(ctx)
     const key = requireIdempotencyKey(input.idempotencyKey)
     const prepared = await this.#prepare(workspaceId, input.expectedRevision, ctx, 'ingest rule/action candidates')
@@ -249,6 +262,8 @@ export class RuleActionCandidateService {
             candidateKey,
             actor,
             ctx,
+            undefined,
+            persist,
           ),
         )
       } else {
@@ -260,6 +275,8 @@ export class RuleActionCandidateService {
             actor,
             ctx,
             input.bindingContext,
+            undefined,
+            persist,
           ),
         )
       }
@@ -279,7 +296,7 @@ export class RuleActionCandidateService {
     requireReason(input.reason)
     const prepared = await this.#prepare(workspaceId, input.expectedRevision, ctx, 'edit a rule candidate')
     const original = await this.#requireRule(workspaceId, input.candidateId, ctx)
-    return this.#persistRule(prepared, input, key, actor, ctx, original.candidateId)
+    return this.#persistRule(prepared, input, key, actor, ctx, original.candidateId, true, editedGenerationContext(original))
   }
 
   /** Append a new action revision replacing `input.candidateId`; the original is preserved. */
@@ -294,7 +311,7 @@ export class RuleActionCandidateService {
     requireReason(input.reason)
     const prepared = await this.#prepare(workspaceId, input.expectedRevision, ctx, 'edit an action candidate')
     const original = await this.#requireAction(workspaceId, input.candidateId, ctx)
-    return this.#persistAction(prepared, input, key, actor, ctx, input.bindingContext, original.candidateId)
+    return this.#persistAction(prepared, input, key, actor, ctx, input.bindingContext, original.candidateId, true, editedGenerationContext(original))
   }
 
   /**
@@ -310,6 +327,7 @@ export class RuleActionCandidateService {
     assertEditor(ctx)
     const prepared = await this.#prepare(workspaceId, input.expectedRevision, ctx, 'enable a rule candidate')
     const candidate = await this.#requireRule(workspaceId, input.candidateId, ctx)
+    assertGenerationGrounded(candidate, prepared)
     if (candidate.lifecycle === 'enabled') return { candidate, created: false }
     if (candidate.lifecycle === 'rejected') {
       throw new RuleActionCandidateError('LIFECYCLE_INVALID', 'a rejected rule candidate cannot be enabled')
@@ -345,6 +363,7 @@ export class RuleActionCandidateService {
     assertEditor(ctx)
     const prepared = await this.#prepare(workspaceId, input.expectedRevision, ctx, 'enable an action candidate')
     const candidate = await this.#requireAction(workspaceId, input.candidateId, ctx)
+    assertGenerationGrounded(candidate, prepared)
     if (candidate.lifecycle === 'enabled') return { candidate, created: false }
     if (candidate.lifecycle === 'rejected') {
       throw new RuleActionCandidateError('LIFECYCLE_INVALID', 'a rejected action candidate cannot be enabled')
@@ -398,6 +417,8 @@ export class RuleActionCandidateService {
     actor: string,
     ctx: ToolContext,
     replacesCandidateId?: Uuid,
+    persist = true,
+    generationContext?: RuleActionGenerationContext,
   ): Promise<RuleCandidateVersion> {
     const definition = await this.#relationDefinition(prepared.workspace.workspaceId, prepared.scopeRef, ctx)
     const ruleDependencies = proposal.ruleDependencies ?? []
@@ -410,6 +431,7 @@ export class RuleActionCandidateService {
       relationPremises: (definition === undefined ? [] : relationPremisesFromDefinition(definition, proposal.condition)).filter((premise) => premise.fromObjectId === proposal.applicability.objectId),
     })
     const version: RuleCandidateVersion = {
+      ...(generationContext === undefined ? {} : { generationContext }),
       candidateId: this.#candidateId(key, proposal.ruleId),
       workspaceId: prepared.workspace.workspaceId,
       logicalId: proposal.ruleId,
@@ -449,6 +471,8 @@ export class RuleActionCandidateService {
           support,
         },
         sourceRefs: proposal.sourceRefs,
+        sourceSpans: proposal.sourceSpans ?? [],
+        ...(generationContext === undefined ? {} : { generationContext }),
         draftRevision: prepared.draftRevision,
         draftDigest: prepared.draftDigest,
       }),
@@ -456,7 +480,7 @@ export class RuleActionCandidateService {
       actor,
       recordedAt: this.#now(),
     }
-    const stored = await this.#candidates.insert(prepared.scopeRef, version, ctx)
+    const stored = persist ? await this.#candidates.insert(prepared.scopeRef, version, ctx) : version
     return asRule(stored)
   }
 
@@ -468,6 +492,8 @@ export class RuleActionCandidateService {
     ctx: ToolContext,
     bindingContext?: ActionCapabilityBindingInput,
     replacesCandidateId?: Uuid,
+    persist = true,
+    generationContext?: RuleActionGenerationContext,
   ): Promise<ActionCandidateVersion> {
     const binding: ActionCapabilityBinding | undefined =
       bindingContext === undefined ? undefined : bindActionDeclaration(proposal.declaration, bindingContext)
@@ -477,6 +503,7 @@ export class RuleActionCandidateService {
       ...(binding === undefined ? {} : { binding }),
     }
     const version: ActionCandidateVersion = {
+      ...(generationContext === undefined ? {} : { generationContext }),
       candidateId: this.#candidateId(key, proposal.declaration.actionId),
       workspaceId: prepared.workspace.workspaceId,
       logicalId: proposal.declaration.actionId,
@@ -496,6 +523,8 @@ export class RuleActionCandidateService {
         kind: 'action',
         payload,
         sourceRefs: proposal.sourceRefs,
+        sourceSpans: proposal.sourceSpans ?? [],
+        ...(generationContext === undefined ? {} : { generationContext }),
         draftRevision: prepared.draftRevision,
         draftDigest: prepared.draftDigest,
       }),
@@ -503,7 +532,7 @@ export class RuleActionCandidateService {
       actor,
       recordedAt: this.#now(),
     }
-    const stored = await this.#candidates.insert(prepared.scopeRef, version, ctx)
+    const stored = persist ? await this.#candidates.insert(prepared.scopeRef, version, ctx) : version
     return asAction(stored)
   }
 
@@ -521,6 +550,8 @@ export class RuleActionCandidateService {
     readonly kind: 'rule' | 'action'
     readonly payload: unknown
     readonly sourceRefs: readonly ResourceRef[]
+    readonly sourceSpans: readonly CandidateSourceSpan[]
+    readonly generationContext?: RuleActionGenerationContext
     readonly draftRevision: RevisionString
     readonly draftDigest: Sha256Digest
   }): Sha256Digest {
@@ -531,6 +562,8 @@ export class RuleActionCandidateService {
         kind: args.kind,
         payload: args.payload,
         sourceRefs: args.sourceRefs,
+        sourceSpans: args.sourceSpans,
+        ...(args.generationContext === undefined ? {} : { generationContext: args.generationContext }),
         draftRevision: args.draftRevision,
         draftDigest: args.draftDigest,
       }),
@@ -554,8 +587,7 @@ export class RuleActionCandidateService {
         reasons: [`expectedRevision=${expected}`, `currentRevision=${workspace.headRevision}`],
       })
     }
-    const drafts = await this.#workspaces.listDrafts(scopeRef, workspaceId, ctx)
-    const draft = drafts[drafts.length - 1]
+    const draft = await readLatestWorkspaceDraft(this.#workspaces, scopeRef, workspaceId, ctx)
     if (draft === undefined) {
       throw new RuleActionCandidateError('WORKSPACE_NOT_FOUND', `workspace ${workspaceId} has no draft revision`)
     }
@@ -587,6 +619,25 @@ export class RuleActionCandidateService {
     }
     return asAction(candidate)
   }
+}
+
+function assertGenerationGrounded(candidate: RuleActionCandidateVersion, prepared: Prepared): void {
+  if (candidate.generationContext !== undefined &&
+    (candidate.generationContext.inputDraftRef.workspaceId !== prepared.workspace.workspaceId ||
+      candidate.generationContext.inputDraftRef.revision !== prepared.draftRevision || candidate.generationContext.inputDraftRef.digest !== prepared.draftDigest)) {
+    throw new RuleActionCandidateError('VERSION_CONFLICT', 'generated source context differs from the current workspace draft')
+  }
+  if (candidate.generationContext !== undefined &&
+    (candidate.generationContext.issues.length > 0 || candidate.sourceSpans.length === 0)) {
+    throw new RuleActionCandidateError('VALIDATION_BLOCKED', 'generated candidate requires complete source and terminology confirmation',
+      { reasons: candidate.generationContext.issues.map((issue) => `${issue.path}: ${issue.message}`) })
+  }
+}
+
+function editedGenerationContext(candidate: RuleActionCandidateVersion): RuleActionGenerationContext | undefined {
+  return candidate.generationContext === undefined ? undefined : { ...candidate.generationContext,
+    issues: [...candidate.generationContext.issues, { code: 'SOURCE_UNRESOLVED', path: 'editedContent',
+      message: 'Edited clauses require fresh source confirmation; previous generation grounding is historical.' }] }
 }
 
 function asRule(candidate: RuleActionCandidateVersion): RuleCandidateVersion {

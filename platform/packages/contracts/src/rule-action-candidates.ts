@@ -22,6 +22,8 @@ import { findEmbeddedSecretViolations, findIndustryPackViolations } from './indu
 import { findRegisteredOperation } from './operations'
 import type { SemanticDefinitionVersion } from './semantic-definitions'
 import type { ToolContext } from './trusted'
+import type { RuleActionGenerationContext } from './rule-action-generation'
+import { isResourceRef as isGeneratedSourceRef } from './asset-workspace'
 
 /**
  * Rule and action candidates with finite-grammar support validation and capability binding
@@ -277,6 +279,7 @@ export function assertRuleDependencyShape(dependencies: unknown, refs: unknown):
 
 /** Complete immutable rule body frozen by the existing pack publication transaction. */
 export interface PublishedRuleDeclaration {
+  readonly generationContext?: RuleActionGenerationContext
   readonly candidateId: Uuid
   readonly contentDigest: Sha256Digest
   readonly enabledAt: Rfc3339UtcTimestamp
@@ -539,6 +542,7 @@ export interface ActionCandidatePayload {
 /* ----------------------------------------------------------------------------------------- */
 
 export interface RuleActionCandidateVersion {
+  readonly generationContext?: RuleActionGenerationContext
   readonly candidateId: Uuid
   readonly workspaceId: Uuid
   readonly logicalId: string
@@ -626,6 +630,7 @@ export type RuleActionCandidateStoreErrorCode =
   | 'IDEMPOTENCY_CONFLICT'
   | 'INVALID_CANDIDATE'
   | 'STORE_FAILED'
+  | 'VERSION_CONFLICT'
 
 export class RuleActionCandidateStoreError extends Error {
   readonly code: RuleActionCandidateStoreErrorCode
@@ -733,6 +738,15 @@ export function assertRuleActionCandidateShape(
   if (!isDigest(value['idempotencyKey'])) throw invalid('idempotencyKey must be a sha256 digest')
   if (!isNonEmptyString(value['actor'])) throw invalid('actor must be a non-empty string')
   if (!isNonEmptyString(value['recordedAt'])) throw invalid('recordedAt must be a timestamp')
+  const context = value['generationContext']
+  if (context !== undefined) {
+    if (!isRecord(context) || !isUuid(context['batchId']) || !isDigest(context['contextDigest']) || !isRecord(context['inputDraftRef']) ||
+      !Array.isArray(context['issues']) || context['issues'].length > 256 || context['issues'].some((entry: unknown) => !isRecord(entry) || !['SOURCE_UNRESOLVED','SOURCE_INCOMPLETE','TERM_UNRESOLVED','DEPENDENCY_UNRESOLVED'].includes(String(entry['code'])) || !isNonEmptyString(entry['path']) || !isNonEmptyString(entry['message'])) ||
+      !Array.isArray(context['sourceSelections']) || context['sourceSelections'].length > 128 || context['sourceSelections'].some((entry: unknown) => !isRecord(entry) || !isNonEmptyString(entry['path']) || !Number.isSafeInteger(entry['sourceIndex']) || !Number.isSafeInteger(entry['fragmentIndex'])) ||
+      !Array.isArray(context['inputSourceRefs']) || context['inputSourceRefs'].length > 64 || !context['inputSourceRefs'].every(isGeneratedSourceRef) ||
+      !Array.isArray(context['sourceBindings']) || context['sourceBindings'].length > 128 || context['sourceBindings'].some((entry: unknown) => !isRecord(entry) || !isNonEmptyString(entry['path']) || !isGeneratedSourceRef(entry['sourceRef']) || !isRecord(entry['sourceSpan']) || !isUuid(entry['sourceSpan']['parseId']) ||
+        (entry['sourceSpan']['kind'] === 'structured' ? !isUuid(entry['sourceSpan']['recordId']) || !isDigest(entry['sourceSpan']['rowDigest']) : !isUuid(entry['sourceSpan']['chunkId']) || !isDigest(entry['sourceSpan']['quoteDigest'])))) throw invalid('generation context requires bounded provenance and issue pins')
+  }
 }
 
 /** Derive relation authority from the pinned definition and preserve the reviewed rule's target filter. */
