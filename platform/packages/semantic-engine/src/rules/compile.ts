@@ -1,16 +1,22 @@
 import type {
   PublishedRuleVersion,
+  PublishedExecutableRule,
   RuleExpressionNode,
   RuleProvenanceSpan,
   ScopeRef,
   SemanticFilter,
   SemanticDefinitionVersion,
   VersionRef,
+  RuleDependencyReference,
 } from '@ontology/contracts'
-import { relationPremisesFromDefinition } from '@ontology/contracts'
+import { assertRuleDependencyShape, relationPremisesFromDefinition } from '@ontology/contracts'
 import { validateRuleSupport } from './support'
 import { sha256DigestOf } from '../definitions/canonical'
 import { RuleEvaluationError } from './errors'
+import { publishedRuleRef, publishedRuleDependencyRef, publishedRuleConsequenceKey } from './dependencies'
+import { isRuleDecimalValue, isRuleScalarDecimalValue } from './values'
+import { validateRuleConclusionBinding } from '@ontology/core'
+import { projectIndustrySchema } from '../definitions/industry-schema'
 import type {
   CompiledPublishedRuleInstance,
   PublishedRuleCompilation,
@@ -30,6 +36,7 @@ interface CompiledCondition {
 }
 
 export interface PublishedRuleCompilerOptions {
+  readonly projectId?: string
   readonly scopeRef: ScopeRef
   readonly definitionRef: VersionRef
   /** Confirmed entity instances in this read scope; rule.objectId is matched exactly. */
@@ -65,6 +72,9 @@ export function supportRuleFromPublishedRule(
   rule: PublishedRuleVersion,
   facts: readonly RuleFact[],
 ): SupportRule {
+  if ((rule.ruleDependencies?.length ?? 0) > 0 || (rule.dependencyRefs?.length ?? 0) > 0) {
+    throw new RuleEvaluationError('INVALID_RULE', 'legacy helper cannot preserve fixed published dependency/entity scope; use compilePublishedRuleInstances')
+  }
   if (rule.exceptions.length > 0) {
     throw new RuleEvaluationError(
       'UNSUPPORTED_NEGATION',
@@ -106,17 +116,26 @@ export function supportRuleFromPublishedRule(
  * The synthetic conclusion key names rule applicability, not an industry action or business fact.
  */
 export function compilePublishedRuleInstances(
-  rules: readonly PublishedRuleVersion[],
+  rules: readonly PublishedExecutableRule[],
   facts: readonly RuleFact[],
   options: PublishedRuleCompilerOptions,
 ): PublishedRuleCompilation {
   const instances: CompiledPublishedRuleInstance[] = []
   const issues: RuleCapabilityIssue[] = []
+  const dependencyRules: SupportRule[] = []
   const subjects = dedupeSubjects(options.subjects)
+  const dependencyLookups = new Map<string, Map<string, readonly string[]>>()
+  for (const rule of rules) {
+    if (rule.projectId !== options.projectId) continue
+    let lookup = dependencyLookups.get(rule.objectId)
+    if (lookup === undefined) { lookup = new Map(); dependencyLookups.set(rule.objectId, lookup) }
+    lookup.set(rule.ruleId, rule.ruleDependencies ?? [])
+  }
   const completeRangeAttributeIds = new Set(options.completeRangeAttributeIds ?? [])
   const factsByInstance = new Map<string, Map<string, RuleFact[]>>()
   const relationFactsByInstance = new Map<string, Map<string, RuleFact[]>>()
   for (const fact of facts) {
+    if (options.projectId !== undefined && fact.projectId !== options.projectId) continue
     const instanceKey = factInstanceKey(fact.subject, fact.objectId, fact.schemaRef)
     const index = fact.relation === undefined ? factsByInstance : relationFactsByInstance
     let byPredicate = index.get(instanceKey)
@@ -132,6 +151,7 @@ export function compilePublishedRuleInstances(
   for (const rule of [...rules].sort((left, right) =>
     `${left.ruleId}@${left.version}:${left.ruleVersionId}`.localeCompare(`${right.ruleId}@${right.version}:${right.ruleVersionId}`),
   )) {
+    if (rule.projectId !== options.projectId) continue
     const sourceSpans = spansOf(rule.expression, rule.exceptions.map((exception) => exception.condition))
     let ruleRef: VersionRef
     try {
@@ -153,12 +173,28 @@ export function compilePublishedRuleInstances(
       options.definition.scopeRef.tenantId === options.scopeRef.tenantId && options.definition.scopeRef.spaceId === options.scopeRef.spaceId &&
       factInstanceKey('', '', options.definition.ref) === factInstanceKey('', '', options.definitionRef)
       ? relationPremisesFromDefinition(options.definition, rule.expression).filter((declaration) => declaration.fromObjectId === rule.objectId) : []
-    const support = validateRuleSupport({ ruleId: rule.ruleId, condition: rule.expression, exceptions: rule.exceptions, relationPremises: declarations })
+    const support = validateRuleSupport({ ruleId: rule.ruleId, condition: rule.expression, exceptions: rule.exceptions, relationPremises: declarations,
+      ruleDependencies: rule.ruleDependencies ?? [], dependencyLookup: dependencyLookups.get(rule.objectId) ?? new Map() })
     if (!support.executable) {
-      issues.push({ ruleId: rule.ruleId, ruleVersionId: rule.ruleVersionId, publishedRevision: rule.version, ruleRef, objectId: rule.objectId, code: support.findings.some((finding) => finding.code === 'UNSUPPORTED_NEGATION' || finding.code === 'UNSUPPORTED_EXCEPTION') ? 'UNSUPPORTED_NEGATION' : 'UNSUPPORTED_FILTER', message: support.findings.map((finding) => finding.message).join('; '), sourceSpans })
+      issues.push({ ruleId: rule.ruleId, ruleVersionId: rule.ruleVersionId, publishedRevision: rule.version, ruleRef, objectId: rule.objectId, code: support.findings.some((finding) => finding.code === 'RULE_DEPENDENCY_CYCLE') ? 'CYCLE_DETECTED' : support.findings.some((finding) => finding.code === 'RULE_DEPENDENCY_DEPTH') ? 'DEPENDENCY_DEPTH_EXCEEDED' : support.findings.some((finding) => finding.code === 'UNSUPPORTED_NEGATION' || finding.code === 'UNSUPPORTED_EXCEPTION') ? 'UNSUPPORTED_NEGATION' : 'UNSUPPORTED_FILTER', message: support.findings.map((finding) => finding.message).join('; '), sourceSpans })
       continue
     }
-    const applicableSubjects = subjects.filter((subject) => subject.objectId === rule.objectId)
+    let refs: readonly RuleDependencyReference[]
+    try {
+      if ([rule.validFrom, rule.validTo].some((value) => value !== undefined && (!/^\d{4}-\d\d-\d\dT\d\d:\d\d:\d\d(?:\.\d+)?Z$/.test(value) || !Number.isFinite(Date.parse(value)))) ||
+        rule.validFrom !== undefined && rule.validTo !== undefined && Date.parse(rule.validTo) <= Date.parse(rule.validFrom)) throw new RuleEvaluationError('INVALID_RULE', 'published rule validity must be a nonempty UTC interval')
+      refs = checkedDependencies(rule, rules, options)
+    } catch (error) {
+      if (!(error instanceof RuleEvaluationError)) throw error
+      issues.push({ ruleId: rule.ruleId, ruleVersionId: rule.ruleVersionId, publishedRevision: rule.version, ruleRef, objectId: rule.objectId, code: error.code, message: error.message, sourceSpans })
+      continue
+    }
+    const applicableSubjects = subjects.filter((subject) => subject.objectId === rule.objectId && subject.projectId === options.projectId)
+    for (const ref of refs) {
+      if (!rules.some((upstream) => upstream.projectId === options.projectId && upstream.ruleId === ref.ruleId && sameRef(publishedRuleRef(upstream), ref.ruleRef))) {
+        issues.push({ ruleId: rule.ruleId, ruleVersionId: rule.ruleVersionId, publishedRevision: rule.version, ruleRef, objectId: rule.objectId, code: 'UNRESOLVED_DEPENDENCY', message: `fixed upstream ${ref.ruleId}@${ref.ruleRef.version} is no longer current; retain unknown support`, sourceSpans })
+      }
+    }
     if (applicableSubjects.length === 0) {
       try {
         compileNode(rule.expression, NO_FACTS, rule.ruleId, true, completeRangeAttributeIds, {
@@ -200,6 +236,7 @@ export function compilePublishedRuleInstances(
         ruleRef,
         objectId: rule.objectId,
         subjectEntityId: subject.subjectEntityId,
+        ...(options.projectId === undefined ? {} : { projectId: options.projectId }),
       }
       const instanceKey = `rule-instance:${sha256DigestOf(instanceIdentity)}`
       const applicabilityKey = `rule-applicability:${sha256DigestOf(instanceIdentity)}`
@@ -213,7 +250,7 @@ export function compilePublishedRuleInstances(
           completeRangeAttributeIds,
           { subject, attributeFactsByInstance: factsByInstance, relationFactsByInstance, declarations, definitionRef: options.definitionRef, scopeRef: options.scopeRef, completeness: options.relationCompleteness ?? [] },
         )
-        const conditionGroups = compiledCondition.groups
+        const conditionGroups = bindDependencyGroups(compiledCondition.groups, refs, subject.subjectEntityId)
         const conditionGroupIds = conditionGroups.map((group) => group.groupId)
         const premiseGroups: RulePremiseGroup[] = [...conditionGroups]
         const exceptions: { exceptionId: string; groupIds: string[] }[] = []
@@ -225,7 +262,7 @@ export function compilePublishedRuleInstances(
             true,
             completeRangeAttributeIds,
           )
-          const exceptionGroups = compiledException.groups
+          const exceptionGroups = bindDependencyGroups(compiledException.groups, refs, subject.subjectEntityId)
           if (exceptionGroups.length !== 1 || exceptionGroups[0]?.polarity === 'negative') {
             throw new RuleEvaluationError(
               'UNSUPPORTED_NEGATION',
@@ -263,6 +300,11 @@ export function compilePublishedRuleInstances(
           conditionGroupIds,
           exceptions,
           sourceSpans,
+          ...(rule.validFrom === undefined ? {} : { validFrom: new Date(rule.validFrom).toISOString() }),
+          ...(rule.validTo === undefined ? {} : { validTo: new Date(rule.validTo).toISOString() }),
+          ...('publishedPackRef' in rule ? { publishedPackRef: rule.publishedPackRef } : {}),
+          ...(refs.length === 0 ? {} : { dependencyRefs: refs }),
+          ...(options.projectId === undefined ? {} : { projectId: options.projectId }),
         } as const
         const supportRule: SupportRule = {
           ruleRef,
@@ -284,6 +326,12 @@ export function compilePublishedRuleInstances(
           propositionKey: applicabilityKey,
           predicate: 'rule.applicability',
         })
+        if (validConclusion(rule, options) && rule.conclusion !== undefined) {
+          const ref = publishedRuleDependencyRef(rule, options.scopeRef, options.definitionRef)
+          dependencyRules.push({ ...supportRule, ruleId: `${instanceKey}:dependency-consequence`,
+            publishedInstance: { ...metadata, emitApplicabilityArtifact: false },
+            conclusion: { propositionKey: publishedRuleConsequenceKey(ref, subject.subjectEntityId), predicate: ref.predicate, value: rule.conclusion.value } })
+        }
       } catch (error) {
         if (!(error instanceof RuleEvaluationError)) throw error
         issues.push({
@@ -303,6 +351,7 @@ export function compilePublishedRuleInstances(
 
   return {
     instances: instances.sort((left, right) => left.instanceKey.localeCompare(right.instanceKey)),
+    dependencyRules: dependencyRules.sort((left, right) => left.ruleId.localeCompare(right.ruleId)),
     issues: issues.sort((left, right) =>
       `${left.ruleId}@${left.subjectEntityId ?? ''}`.localeCompare(`${right.ruleId}@${right.subjectEntityId ?? ''}`),
     ),
@@ -317,8 +366,52 @@ function dedupeSubjects(subjects: readonly PublishedRuleSubject[]): PublishedRul
   )
 }
 
-function publishedRuleRef(rule: PublishedRuleVersion): VersionRef {
-  return { id: rule.ruleVersionId, version: semverRevision(rule.version), digest: sha256DigestOf(rule) }
+function sameRef(left: VersionRef, right: VersionRef): boolean {
+  return left.id === right.id && left.version === right.version && left.digest === right.digest
+}
+
+function validConclusion(rule: PublishedExecutableRule, options?: PublishedRuleCompilerOptions): boolean {
+  const binding = rule.conclusion
+  if (binding !== undefined && options?.definition !== undefined && validateRuleConclusionBinding(binding, rule.objectId, projectIndustrySchema(options.definition)).reason !== undefined) return false
+  return binding !== undefined && typeof binding.predicate === 'string' && binding.predicate.length > 0 &&
+    (typeof binding.value === 'boolean' || typeof binding.value === 'string' || isRuleDecimalValue(binding.value) || isRuleScalarDecimalValue(binding.value))
+}
+
+function checkedDependencies(rule: PublishedExecutableRule, rules: readonly PublishedExecutableRule[], options: PublishedRuleCompilerOptions): readonly RuleDependencyReference[] {
+  const refs = rule.dependencyRefs ?? []
+  try { assertRuleDependencyShape(rule.ruleDependencies ?? [], refs) } catch (error) {
+    throw new RuleEvaluationError('INVALID_RULE', `rule ${rule.ruleId} has no exact dependency pins`, { cause: error })
+  }
+  const attributes = expressionAttributeIds(rule.expression)
+  for (const exception of rule.exceptions) for (const id of expressionAttributeIds(exception.condition)) attributes.add(id)
+  for (const ref of refs) {
+    if (ref.scopeRef.tenantId !== options.scopeRef.tenantId || ref.scopeRef.spaceId !== options.scopeRef.spaceId ||
+      !sameRef(ref.definitionRef, options.definitionRef) || ref.objectId !== rule.objectId || ref.projectId !== options.projectId) {
+      throw new RuleEvaluationError('SCOPE_MISMATCH', `dependency ${ref.ruleId} must bind the same project, object and definition`)
+    }
+    if (!attributes.has(ref.predicate)) throw new RuleEvaluationError('INVALID_RULE', `dependency ${ref.ruleId} is not consumed by the preserved condition`)
+    if ('publishedPackRef' in rule ? ref.publishedPackRef !== undefined && !sameRef(ref.publishedPackRef, rule.publishedPackRef) : ref.publishedPackRef !== undefined) {
+      throw new RuleEvaluationError('INVALID_RULE', 'dependencies must bind one exact publication origin and version')
+    }
+    const upstream = rules.find((candidate) => candidate.ruleVersionId === ref.ruleRef.id && candidate.projectId === options.projectId)
+    if (upstream !== undefined && ('publishedPackRef' in rule ? !('publishedPackRef' in upstream) || !sameRef(rule.publishedPackRef, upstream.publishedPackRef) : 'publishedPackRef' in upstream)) {
+      throw new RuleEvaluationError('INVALID_RULE', 'upstream dependency must retain the same exact publication origin/version')
+    }
+    if (upstream !== undefined && sameRef(publishedRuleRef(upstream), ref.ruleRef) &&
+      (upstream.ruleId !== ref.ruleId || upstream.objectId !== ref.objectId || upstream.conclusion?.predicate !== ref.predicate || !validConclusion(upstream))) {
+      throw new RuleEvaluationError('INVALID_RULE', `dependency ${ref.ruleId} does not name its reviewed consequence`)
+    }
+  }
+  return 'publishedPackRef' in rule ? refs.map((ref) => ({ ...ref, publishedPackRef: rule.publishedPackRef })) : refs
+}
+
+function bindDependencyGroups(groups: readonly RulePremiseGroup[], refs: readonly RuleDependencyReference[], subjectId: string): RulePremiseGroup[] {
+  return groups.map((group) => {
+    const dependencies = refs.filter((ref) => ref.predicate === group.filter.fieldRef)
+    if (dependencies.length === 0 || group.relation !== undefined) return group
+    if (group.polarity === 'negative') throw new RuleEvaluationError('UNSUPPORTED_NEGATION', 'a derived dependency cannot be negated as an explicit observation')
+    return { ...group, alternatives: dependencies.map((ref) => ({ alternativeId: `${ref.ruleId}:${ref.ruleRef.id}`, propositionKey: publishedRuleConsequenceKey(ref, subjectId) })) }
+  })
 }
 
 function legacyRuleRef(rule: PublishedRuleVersion): VersionRef {

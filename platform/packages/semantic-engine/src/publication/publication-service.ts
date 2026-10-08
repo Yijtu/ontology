@@ -1,4 +1,4 @@
-import { isToolContext } from '@ontology/contracts'
+import { isToolContext, ReviewableCandidateReadError } from '@ontology/contracts'
 import type {
   AppendCandidateReviewInput,
   CandidateRecord,
@@ -30,12 +30,13 @@ import type {
   Uuid,
   VersionRef,
 } from '@ontology/contracts'
-import { SemanticPublicationStoreError, assertProjectFactInputShape, candidateSourceRef } from '@ontology/contracts'
+import { SemanticPublicationStoreError, assertProjectFactInputShape, assertRuleDependencyShape, candidateSourceRef } from '@ontology/contracts'
 import { validateRuleConclusionBinding } from '@ontology/core'
 import { sha256DigestOf } from '../definitions/canonical'
 import { SemanticPublicationError } from './errors'
 import type { PublicationRejectionReason } from './errors'
 import type { SemanticPublicationServiceDependencies } from './types'
+import { publishedRuleRef } from '../rules/dependencies'
 
 const REVIEWER_ROLES: readonly string[] = ['semantic-reviewer', 'platform-admin']
 const PUBLISHER_ROLES: readonly string[] = ['semantic-publisher', 'platform-admin']
@@ -130,7 +131,10 @@ export class SemanticPublicationService {
       const candidate = await this.#requireCandidate(scopeRef, request.candidateId, ctx)
       if (candidate.inputVersion.projectFact !== undefined) contentDigest = candidate.idempotencyKey
     } else {
-      const view = await this.#reviewableCandidates.readCandidate(scopeRef, request.candidateId, ctx)
+      const view = await this.#reviewableCandidates.readCandidate(scopeRef, request.candidateId, ctx).catch((error: unknown) => {
+        if (error instanceof ReviewableCandidateReadError) throw new SemanticPublicationError('CANDIDATE_DOMAIN_UNPUBLISHABLE', error.message, { cause: error })
+        throw error
+      })
       if (view === undefined) {
         throw new SemanticPublicationError(
           'CANDIDATE_NOT_FOUND',
@@ -227,6 +231,7 @@ export class SemanticPublicationService {
       } else if (candidate.kind === 'relation') {
         statements.push(this.#statementOfRelation(candidate, publicationId, publishedAt, mapped))
       } else if (candidate.kind === 'rule') {
+        await this.#assertRuleDependencies(scopeRef, candidate, request.schemaRef, ctx)
         if (candidate.conflicts.length > 0) {
           throw new SemanticPublicationError(
             'CANDIDATE_CONFLICTED',
@@ -718,9 +723,30 @@ export class SemanticPublicationService {
       expression: candidate.expression,
       exceptions: candidate.exceptions,
       ...(conclusion === undefined ? {} : { conclusion }),
+      ...((candidate.ruleDependencies?.length ?? 0) === 0 ? {} : { ruleDependencies: candidate.ruleDependencies, dependencyRefs: candidate.dependencyRefs }),
+      ...(candidate.projectId === undefined ? {} : { projectId: candidate.projectId }),
       recordedAt,
       sourceCandidateId: candidate.candidateId,
       publicationId,
+    }
+  }
+
+  async #assertRuleDependencies(scopeRef: ScopeRef, candidate: CandidateRecord & { readonly kind: 'rule' }, definitionRef: VersionRef, ctx: ToolContext): Promise<void> {
+    const refs = candidate.dependencyRefs ?? []
+    try { assertRuleDependencyShape(candidate.ruleDependencies ?? [], refs) } catch (error) {
+      throw new SemanticPublicationError('CANDIDATE_FAILED', 'every rule dependency needs an exact reviewed version', { cause: error })
+    }
+    for (const ref of refs) {
+      if (ref.scopeRef.tenantId !== scopeRef.tenantId || ref.scopeRef.spaceId !== scopeRef.spaceId || !sameRef(ref.definitionRef, definitionRef) ||
+        ref.objectId !== candidate.objectId || ref.projectId !== candidate.projectId || ref.publishedPackRef !== undefined) {
+        throw new SemanticPublicationError('CANDIDATE_FAILED', 'rule dependencies must bind the same object, project and definition')
+      }
+      const versions = await this.#store.listRuleVersions(scopeRef, { sourceCandidateId: ref.ruleRef.id, limit: 1_000 }, ctx)
+      if (versions.length === 1_000) throw new SemanticPublicationError('CANDIDATE_FAILED', 'rule dependency version lookup exceeded its bounded page')
+      const upstream = versions.find((rule) => rule.ruleVersionId === ref.ruleRef.id && sameRef(publishedRuleRef(rule), ref.ruleRef) &&
+        rule.ruleId === ref.ruleId && rule.objectId === ref.objectId && rule.projectId === ref.projectId && rule.conclusion?.predicate === ref.predicate)
+      const publication = upstream === undefined ? undefined : await this.#store.getPublication(scopeRef, upstream.publicationId, ctx)
+      if (publication === undefined || !sameRef(publication.schemaRef, definitionRef)) throw new SemanticPublicationError('CANDIDATE_FAILED', 'rule dependency does not resolve to its fixed published consequence')
     }
   }
 

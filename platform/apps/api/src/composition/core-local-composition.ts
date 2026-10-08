@@ -2112,6 +2112,7 @@ export async function createCoreLocalComposition(options: CoreLocalCompositionOp
     const reviewableCandidates = new CompositeReviewableCandidateReader({
       definition: assetCandidateStore,
       instance: candidateStore,
+      ruleActions: ruleActionCandidateStore,
     })
     const semanticPublication = new SemanticPublicationService({
       store: publicationStore,

@@ -205,7 +205,8 @@ describe('incremental materialisation against real PostgreSQL and the real outbo
       validity: VALIDITY,
     }
     const ticket = await materializer.beginChange(retractChange, ctx)
-    expect(ticket.affectedRuleIds).toHaveLength(2)
+    expect(ticket.affectedRuleIds).toHaveLength(3)
+    expect(ticket.affectedRuleIds.filter((id) => id.endsWith(':dependency-consequence'))).toHaveLength(1)
     expect(ticket.affectedRuleIds.every((ruleId) => ruleId.startsWith('rule-instance:'))).toBe(true)
 
     // The semantic change commits, then the change is handed to the worker through the real outbox.

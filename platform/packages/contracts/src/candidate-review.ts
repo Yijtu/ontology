@@ -33,3 +33,8 @@ export interface ReviewableCandidateReader {
     ctx: ToolContext,
   ): Promise<ReviewableCandidateView | undefined>
 }
+
+export class ReviewableCandidateReadError extends Error {
+  readonly code: 'AMBIGUOUS_CANDIDATE' | 'SCOPE_MISMATCH'
+  constructor(code: 'AMBIGUOUS_CANDIDATE' | 'SCOPE_MISMATCH', message: string) { super(message); this.name = 'ReviewableCandidateReadError'; this.code = code }
+}

@@ -1,4 +1,4 @@
-import { SemanticPublicationStoreError, isToolContext } from '@ontology/contracts'
+import { SemanticPublicationStoreError, assertRuleDependencyShape, isToolContext } from '@ontology/contracts'
 import type {
   AppendCandidateReviewInput,
   CandidateReviewDecision,
@@ -96,6 +96,9 @@ interface RuleRow extends QueryResultRow {
   expression: PublishedRuleVersion['expression']
   exceptions: PublishedRuleVersion['exceptions']
   conclusion: NonNullable<PublishedRuleVersion['conclusion']> | null
+  rule_dependencies: readonly string[]
+  dependency_refs: NonNullable<PublishedRuleVersion['dependencyRefs']>
+  project_id: string | null
   valid_from: Date | null
   valid_to: Date | null
   recorded_at: Date
@@ -122,7 +125,7 @@ const STATEMENT_COLUMNS = `statement_id, proposition_key, kind, object_id, relat
   predicate, value, unit_code, valid_from, valid_to, recorded_at, source_candidate_id, source_refs,
   publication_id, version, status`
 const RULE_COLUMNS = `rule_version_id, rule_id, version, object_id, severity, impact, expression,
-  exceptions, conclusion, valid_from, valid_to, recorded_at, source_candidate_id, publication_id`
+  exceptions, conclusion, rule_dependencies, dependency_refs, project_id, valid_from, valid_to, recorded_at, source_candidate_id, publication_id`
 const REVISION_COLUMNS = `revision_id, statement_id, version, kind, reason, corrected_value, valid_from,
   valid_to, recorded_at, actor, supersedes_version, invalidation_outbox_id`
 const REVIEW_COLUMNS = `review_id, candidate_id, revision, decision, reason, evidence_refs, recorded_at,
@@ -166,6 +169,7 @@ function toStatement(row: StatementRow): PublishedStatement {
 }
 
 function toRuleVersion(row: RuleRow): PublishedRuleVersion {
+  assertRuleDependencyShape(row.rule_dependencies, row.dependency_refs)
   return {
     ruleVersionId: row.rule_version_id,
     ruleId: row.rule_id,
@@ -176,6 +180,8 @@ function toRuleVersion(row: RuleRow): PublishedRuleVersion {
     expression: row.expression,
     exceptions: row.exceptions,
     ...(row.conclusion === null ? {} : { conclusion: row.conclusion }),
+    ...(row.rule_dependencies.length === 0 ? {} : { ruleDependencies: row.rule_dependencies, dependencyRefs: row.dependency_refs }),
+    ...(row.project_id === null ? {} : { projectId: row.project_id }),
     ...(row.valid_from === null ? {} : { validFrom: row.valid_from.toISOString() }),
     ...(row.valid_to === null ? {} : { validTo: row.valid_to.toISOString() }),
     recordedAt: row.recorded_at.toISOString(),
@@ -545,16 +551,17 @@ export class PostgresSemanticPublicationStore implements SemanticPublicationStor
       }
 
       for (const rule of publication.ruleVersions) {
+        assertRuleDependencyShape(rule.ruleDependencies ?? [], rule.dependencyRefs ?? [])
         await query.query(
           `INSERT INTO agent_platform.published_rule_versions
              (tenant_id, space_id, rule_version_id, rule_id, version, object_id, severity, impact,
               expression, exceptions, conclusion, valid_from, valid_to, recorded_at, source_candidate_id,
-              publication_id)
+              publication_id, rule_dependencies, dependency_refs, project_id)
            VALUES (
              current_setting('app.tenant_id')::uuid,
              current_setting('app.space_id')::uuid,
              $1, $2, $3::bigint, $4, $5, $6, $7::jsonb, $8::jsonb, $9::jsonb,
-             $10::timestamptz, $11::timestamptz, $12::timestamptz, $13, $14)`,
+             $10::timestamptz, $11::timestamptz, $12::timestamptz, $13, $14, $15::jsonb, $16::jsonb, $17::uuid)`,
           [
             rule.ruleVersionId,
             rule.ruleId,
@@ -570,6 +577,9 @@ export class PostgresSemanticPublicationStore implements SemanticPublicationStor
             rule.recordedAt,
             rule.sourceCandidateId,
             rule.publicationId,
+            JSON.stringify(rule.ruleDependencies ?? []),
+            JSON.stringify(rule.dependencyRefs ?? []),
+            rule.projectId ?? null,
           ],
         )
       }

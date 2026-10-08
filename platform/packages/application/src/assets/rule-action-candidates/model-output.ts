@@ -1,6 +1,7 @@
 import {
   findEmbeddedSecretViolations,
   findIndustryPackViolations,
+  assertRuleDependencyCandidateShape,
 } from '@ontology/contracts'
 import type {
   ActionDeclaration,
@@ -12,6 +13,7 @@ import type {
   RuleExceptionNode,
   RuleExpressionNode,
   VersionRef,
+  RuleDependencyCandidateReference,
 } from '@ontology/contracts'
 import { RuleActionCandidateError } from './errors'
 
@@ -26,6 +28,7 @@ import { RuleActionCandidateError } from './errors'
  */
 
 export interface DraftRuleCandidate {
+  readonly dependencyRefs?: readonly RuleDependencyCandidateReference[]
   readonly kind: 'rule'
   readonly ruleId: string
   readonly displayName: string
@@ -231,6 +234,11 @@ function parseConclusion(value: unknown, field: string): RuleConclusionBinding |
 }
 
 function parseRuleCandidate(entry: Record<string, unknown>, field: string): DraftRuleCandidate {
+  const dependencies = optionalStringArray(entry['ruleDependencies'], `${field}.ruleDependencies`)
+  const refs = entry['dependencyRefs'] ?? []
+  if (entry['dependencyRefs'] !== undefined) {
+    try { assertRuleDependencyCandidateShape(dependencies, refs) } catch (error) { throw new RuleActionCandidateError('INVALID_MODEL_OUTPUT', 'rule dependencies require fixed finite pins', { cause: error }) }
+  }
   const conclusion = parseConclusion(entry['conclusion'], `${field}.conclusion`)
   const sourceIndex = optionalSourceIndex(entry['sourceIndex'], `${field}.sourceIndex`)
   const applicabilityNote = optionalString(entry['applicabilityNote'], `${field}.applicabilityNote`)
@@ -245,7 +253,8 @@ function parseRuleCandidate(entry: Record<string, unknown>, field: string): Draf
     condition: parseRuleExpression(entry['condition'], `${field}.condition`),
     exceptions: parseExceptions(entry['exceptions'], `${field}.exceptions`),
     ...(conclusion === undefined ? {} : { conclusion }),
-    ruleDependencies: optionalStringArray(entry['ruleDependencies'], `${field}.ruleDependencies`),
+    ruleDependencies: dependencies,
+    ...(entry['dependencyRefs'] === undefined ? {} : { dependencyRefs: refs as readonly RuleDependencyCandidateReference[] }),
     ...(sourceIndex === undefined ? {} : { sourceIndex }),
   }
 }

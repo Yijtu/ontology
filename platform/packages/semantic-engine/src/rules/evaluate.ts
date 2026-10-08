@@ -4,7 +4,7 @@ import { sha256DigestOf } from '../definitions/canonical'
 import { evaluateFiniteCondition } from './boolean'
 import { RuleEvaluationError } from './errors'
 import { conclusionQualifiedKey, factQualifiedKey } from './proposition'
-import { assertSupportedFilter, evaluateFilter, isRuleDecimalValue } from './values'
+import { assertSupportedFilter, canonicalDecimalString, evaluateFilter, isRuleDecimalValue, isRuleScalarDecimalValue } from './values'
 import type {
   RuleAssertionValue,
   RuleConclusionResult,
@@ -408,7 +408,7 @@ function evaluateAlternative(
   alternative: RulePremiseAlternative,
   group: RulePremiseGroup,
   state: EvaluationState,
-): { outcome: Outcome; value?: RuleAssertionValue; leaf?: SupportLeafNode; factRefs?: readonly RuleFactRef[] } {
+): { outcome: Outcome; value?: RuleAssertionValue; leaf?: SupportLeafNode; factRefs?: readonly RuleFactRef[]; withdrawn?: boolean } {
   if (alternative.assertionId !== undefined) {
     const fact = state.factsById.get(alternative.assertionId)
     if (fact === undefined) {
@@ -437,8 +437,8 @@ function evaluateAlternative(
     const active = resolution?.active
     if (active === undefined) {
       return resolution?.latest === undefined
-        ? { outcome: 'unknown' }
-        : { outcome: 'unknown', factRefs: [factRefOf(resolution.latest)] }
+        ? { outcome: 'unknown', ...(resolution === undefined ? {} : { withdrawn: true }) }
+        : { outcome: 'unknown', withdrawn: true, factRefs: [factRefOf(resolution.latest)] }
     }
     const value = active.value
     const factRefs = [factRefOf(active)]
@@ -467,12 +467,22 @@ function evaluateAlternative(
   const leaf: SupportLeafNode = {
     kind: 'fact',
     nodeId: `derived:${propositionKey}`,
+    upstreamConclusionNodeId: `conclusion:${propositionKey}`,
     label: propositionKey,
     state: combined.state,
     ...(combined.value === undefined ? {} : { value: combined.value }),
   }
-  if (combined.state === 'conflict') return { outcome: 'conflict', leaf }
-  if (combined.state === 'unknown' || combined.value === undefined) return { outcome: 'unknown', leaf }
+  if (combined.state === 'conflict') return { outcome: 'conflict', leaf, factRefs }
+  if (combined.state === 'unknown' || combined.value === undefined) return { outcome: 'unknown', leaf, factRefs }
+  // A derived business value must remain in its declared comparison domain; in particular a
+  // boolean observed through a string operand cannot manufacture `ne` support.
+  if ((typeof combined.value === 'boolean' || typeof combined.value === 'string') &&
+    (group.unitCode !== undefined || !['eq', 'ne', 'in', 'is_not_null'].includes(group.filter.op) || group.filter.values.some((value) => typeof value !== typeof combined.value))) {
+    return { outcome: 'unknown', leaf, factRefs }
+  }
+  if ((isRuleDecimalValue(combined.value) || isRuleScalarDecimalValue(combined.value)) &&
+    (isRuleDecimalValue(combined.value) && group.unitCode !== combined.value.unit || isRuleScalarDecimalValue(combined.value) && group.unitCode !== undefined ||
+      group.filter.values.some((value) => typeof value !== 'string' && typeof value !== 'number' || canonicalDecimalString(String(value)) === undefined))) return { outcome: 'unknown', leaf, factRefs }
   const match = matchValue(group, combined.value)
   const outcome: Outcome = match === undefined ? 'unknown' : match ? 'satisfied' : 'refuted'
   return { outcome, value: combined.value, leaf, factRefs }
@@ -583,12 +593,17 @@ function evaluateGroup(
   let anyRefuted = false
   let anyConflict = false
   let allRefuted = true
+  let observedAlternatives = 0
 
   for (const alternative of group.alternatives) {
     const evaluated = evaluateAlternative(alternative, group, state)
     factRefs.push(...(evaluated.factRefs ?? []))
     if (evaluated.leaf !== undefined) leaves.push(evaluated.leaf)
     alternativeNodeIds.push(evaluated.leaf?.nodeId ?? `fact:${alternative.assertionId ?? alternative.alternativeId}`)
+    // A withdrawn/out-of-range source is retained as provenance, but is not a live observation
+    // whose missing value defeats a surviving explicit false exception observation.
+    if (evaluated.withdrawn === true) continue
+    observedAlternatives += 1
     if (evaluated.outcome === 'satisfied') {
       anySatisfied = true
       satisfiedAlternativeIds.push(alternative.alternativeId)
@@ -602,7 +617,7 @@ function evaluateGroup(
   if (polarity === 'negative') {
     if (anyConflict) outcome = 'conflict'
     else if (anySatisfied) outcome = 'refuted'
-    else if (allRefuted) outcome = 'satisfied'
+    else if (allRefuted && observedAlternatives > 0) outcome = 'satisfied'
     else outcome = 'unknown'
   } else if (anyConflict) {
     outcome = 'conflict'
@@ -940,7 +955,7 @@ function applicabilityFor(
     return { exceptionId: exception.exceptionId, state, factRefs }
   })
   let state: RuleApplicabilityResult['state']
-  if (conditionState === 'false' || exceptionStates.some((exception) => exception.state === 'true')) {
+  if (!publishedRuleCovers(rule, input.request.validAt) || conditionState === 'false' || exceptionStates.some((exception) => exception.state === 'true')) {
     state = 'not_applicable'
   } else if (conditionState === 'conflict' || exceptionStates.some((exception) => exception.state === 'conflict')) {
     state = 'conflict'
@@ -986,8 +1001,17 @@ function applicabilityFor(
       factRefs,
     }),
     sourceSpans: metadata.sourceSpans,
+    ...(metadata.publishedPackRef === undefined ? {} : { publishedPackRef: metadata.publishedPackRef }),
+    ...(metadata.dependencyRefs === undefined ? {} : { dependencyRefs: metadata.dependencyRefs }),
+    ...(metadata.projectId === undefined ? {} : { projectId: metadata.projectId }),
     complete: input.complete ?? false,
   }
+}
+
+function publishedRuleCovers(rule: SupportRule, validAt: string | undefined): boolean {
+  if (validAt === undefined || rule.publishedInstance === undefined) return true
+  const at = Date.parse(validAt), from = rule.publishedInstance.validFrom, to = rule.publishedInstance.validTo
+  return (from === undefined || Date.parse(from) <= at) && (to === undefined || at < Date.parse(to))
 }
 
 function refutedPublishedOutcomeAsUnknown(outcome: RuleOutcome): RuleOutcome {
@@ -1056,7 +1080,8 @@ export class RuleEvaluator {
     const inputDigest = sha256DigestOf(canonicalInput(input))
     const applicabilities: RuleApplicabilityResult[] = []
     for (const rule of orderedRules) {
-      const outcome = evaluateRule(rule, state)
+      const evaluated = evaluateRule(rule, state)
+      const outcome: RuleOutcome = publishedRuleCovers(rule, input.request.validAt) ? evaluated : { ...evaluated, state: 'refuted', value: false }
       const applicability = applicabilityFor(rule, outcome, input, inputDigest)
       if (applicability !== undefined && rule.publishedInstance?.emitApplicabilityArtifact !== false) {
         applicabilities.push(applicability)
@@ -1089,7 +1114,14 @@ export class RuleEvaluator {
       const rule = orderedRules.find((candidate) => candidate.conclusion.propositionKey === propositionKey)
       if (rule === undefined) continue
       const predicate = rule.conclusion.predicate ?? propositionKey
-      const combined = combineConclusion(outcomes, conflictedPredicates.has(predicate))
+      const instance = rule.publishedInstance
+      const scopedPredicateConflict = instance === undefined ? conflictedPredicates.has(predicate) : conflicts.some((conflict) =>
+        conflict.propositionKey === predicate && conflict.assertionIds.some((id) => {
+          const fact = factsById.get(id)
+          return fact?.subject === instance.subjectEntityId && fact.objectId === instance.objectId && fact.schemaRef?.id === instance.definitionRef.id &&
+            fact.schemaRef.version === instance.definitionRef.version && fact.schemaRef.digest === instance.definitionRef.digest && fact.projectId === instance.projectId
+        }))
+      const combined = combineConclusion(outcomes, scopedPredicateConflict)
       const supportNodeId = `conclusion:${propositionKey}`
       const ruleRefs = dedupeVersionRefs(
         orderedRules

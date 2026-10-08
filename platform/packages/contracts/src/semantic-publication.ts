@@ -7,12 +7,14 @@ import type {
   Sha256Digest,
   Uuid,
   VersionRef,
+  ProjectRevisionRef,
 } from './generated/contracts'
 import type { CandidateKind } from './extraction'
 import type { NewOutboxMessage } from './job-store'
 import type { RuleConclusionBinding, RuleExceptionNode, RuleExpressionNode, RuleImpact } from './rule-extraction'
 import type { ToolContext } from './trusted'
 import type { ProjectFactPublicationFence } from './project-mapping'
+import type { RuleDependencyReference } from './rule-action-candidates'
 
 /**
  * Semantic publication and candidate review (SPEC D4.6/D5/D6, C6, US-011/US-012/US-015,
@@ -139,11 +141,33 @@ export interface PublishedRuleVersion {
   readonly exceptions: readonly RuleExceptionNode[]
   /** Optional human-reviewed business consequence; absence means applicability only. */
   readonly conclusion?: RuleConclusionBinding
+  readonly ruleDependencies?: readonly string[]
+  readonly dependencyRefs?: readonly RuleDependencyReference[]
+  readonly projectId?: Uuid
   readonly validFrom?: Rfc3339UtcTimestamp
   readonly validTo?: Rfc3339UtcTimestamp
   readonly recordedAt: Rfc3339UtcTimestamp
   readonly sourceCandidateId: Uuid
   readonly publicationId: Uuid
+}
+
+/** A published pack rule retains its real origin; it is never a fabricated extraction publication. */
+export interface PublishedPackRuleVersion extends Omit<PublishedRuleVersion, 'publicationId'> {
+  readonly publishedPackRef: VersionRef
+  readonly ruleRef: VersionRef
+}
+export type PublishedExecutableRule = PublishedRuleVersion | PublishedPackRuleVersion
+
+export interface PublishedRuleDeclarationRequest {
+  /** Host-selected from an authorized immutable historical binding; never an HTTP request flag. */
+  readonly readMode?: 'current' | 'published_snapshot'
+  readonly projectRevisionRef?: ProjectRevisionRef
+  readonly packRef: VersionRef
+  readonly definitionRef: VersionRef
+  readonly projectId?: Uuid
+}
+export interface PublishedRuleDeclarationReader {
+  read(scopeRef: ScopeRef, request: PublishedRuleDeclarationRequest, ctx: ToolContext): Promise<readonly PublishedPackRuleVersion[]>
 }
 
 /** A published semantic version: the facts, the rules and the outbox event, one transaction. */
