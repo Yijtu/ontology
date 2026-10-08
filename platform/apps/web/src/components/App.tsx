@@ -4,6 +4,7 @@ import type { IndustryWorkspace, ProfileRef, ProjectRecord, ProjectRevision, Res
 import type { CoreDeploymentInfo, CoreDeploymentScenario, WorkbenchClient } from '../api/client'
 import type { IndustryPackSummary } from '../api/projects'
 import { createWorkbenchResultSource } from '../api/results'
+import { indexedHistoryState, readHistoryIndex, resolveAppView } from '../navigation'
 import { deriveProjectBinding } from '../project-binding'
 import { createScenarioRegistry } from '../scenarios/composition'
 import { BusinessWorkbenchPanel } from './BusinessWorkbenchPanel'
@@ -123,7 +124,7 @@ function writeParam(name: string, value: string | undefined): void {
   const url = new URL(window.location.href)
   if (value === undefined) url.searchParams.delete(name)
   else url.searchParams.set(name, value)
-  window.history.replaceState(null, '', `${url.pathname}${url.search}${url.hash}`)
+  window.history.replaceState(window.history.state, '', `${url.pathname}${url.search}${url.hash}`)
 }
 
 function coreViewOf(view: AppView): boolean {
@@ -176,7 +177,9 @@ export function App({
   const [menuOpen, setMenuOpen] = useState(false)
   const [contextOpen, setContextOpen] = useState(false)
   const mainRef = useRef<HTMLElement>(null)
-  const currentUrl = useRef(typeof window === 'undefined' ? '' : window.location.href)
+  const historyIndex = useRef(typeof window === 'undefined' ? 0 : readHistoryIndex(window.history.state) ?? 0)
+  const restoringTraversal = useRef<{ readonly targetIndex: number } | undefined>(undefined)
+  const acceptedTraversal = useRef<number | undefined>(undefined)
   const [packs, setPacks] = useState<readonly IndustryPackSummary[]>(EMPTY_PACKS)
 
   useEffect(() => {
@@ -198,7 +201,6 @@ export function App({
   const currentProjectRevision = projectRevision !== undefined && projectRevision.ref.projectId === projectId && projectRevision.ref.revision === selectedProject?.headRevision ? projectRevision : undefined
   const bindingStale = projectBinding !== undefined && (projectBinding.profileRef.id !== activeScenario?.profileRef.id || projectBinding.profileRef.version !== activeScenario?.profileRef.version)
 
-  const rememberUrl = useCallback(() => { currentUrl.current = window.location.href }, [])
   const guard = useCallback((run: () => void) => {
     if (dirty) setPending({ run })
     else run()
@@ -221,11 +223,12 @@ export function App({
       setMenuOpen(false)
       const url = new URL(window.location.href)
       url.searchParams.set('view', next)
-      window.history.pushState(null, '', `${url.pathname}${url.search}${url.hash}`)
-      rememberUrl()
+      historyIndex.current += 1
+      window.history.pushState(indexedHistoryState(historyIndex.current), '', `${url.pathname}${url.search}${url.hash}`)
+
       setContextReload((count) => count + 1)
     })
-  }, [guard, view, rememberUrl])
+  }, [guard, view])
 
   useEffect(() => { mainRef.current?.focus({ preventScroll: true }) }, [view])
   useEffect(() => {
@@ -235,12 +238,35 @@ export function App({
     return () => window.removeEventListener('beforeunload', preventUnload)
   }, [dirty])
   useEffect(() => {
-    const pop = () => {
+    window.history.replaceState(indexedHistoryState(historyIndex.current), '', window.location.href)
+  }, [])
+  useEffect(() => {
+    const pop = (event: PopStateEvent) => {
       const target = new URL(window.location.href)
-      const next = target.searchParams.get('view') ?? 'start'
-      if (!coreViewOf(next) && !scenarioViews.some((entry) => entry.view === next)) return
-      window.history.replaceState(null, '', currentUrl.current)
-      guard(() => {
+      const targetIndex = readHistoryIndex(event.state)
+      const restoration = restoringTraversal.current
+      if (restoration !== undefined) {
+        if (targetIndex === historyIndex.current) {
+          restoringTraversal.current = undefined
+          // Offer the decision only after the browser is back on the edited entry. Cancelling
+          // then leaves both entry and index untouched; accepting replays the original traversal.
+          setPending({ run: () => {
+            acceptedTraversal.current = restoration.targetIndex
+            window.history.go(restoration.targetIndex - historyIndex.current)
+          } })
+        } else if (targetIndex !== undefined) window.history.go(historyIndex.current - targetIndex)
+        return
+      }
+      const accepted = targetIndex !== undefined && acceptedTraversal.current === targetIndex
+      acceptedTraversal.current = undefined
+      if (dirty && !accepted && targetIndex !== undefined && targetIndex !== historyIndex.current) {
+        restoringTraversal.current = { targetIndex }
+        window.history.go(historyIndex.current - targetIndex)
+        return
+      }
+      const apply = () => {
+        const next = resolveAppView(target.searchParams, scenarioViews)
+        if (targetIndex !== undefined) historyIndex.current = targetIndex
         clearScopeReferences()
         setView(next)
         setWorkspaceId(target.searchParams.get('workspace') ?? undefined)
@@ -255,13 +281,15 @@ export function App({
         const linkedProfileId = target.searchParams.get('profileId')
         const linkedProfileVersion = target.searchParams.get('profileVersion')
         if (linkedProfileId && linkedProfileVersion) setActiveProfileRef({ id: linkedProfileId, version: linkedProfileVersion })
-        window.history.replaceState(null, '', target.href)
-        rememberUrl()
-      })
+        window.history.replaceState(indexedHistoryState(historyIndex.current), '', target.href)
+
+      }
+      if (accepted || !dirty) apply()
+      else guard(apply)
     }
     window.addEventListener('popstate', pop)
     return () => window.removeEventListener('popstate', pop)
-  }, [guard, scenarioViews, scenarioOptions, clearScopeReferences, rememberUrl, profileRef.id, profileRef.version])
+  }, [dirty, guard, scenarioViews, scenarioOptions, clearScopeReferences, profileRef.id, profileRef.version])
 
   useEffect(() => {
     setProjectRevision(undefined)
@@ -369,22 +397,22 @@ export function App({
     writeParam('profileId', ref.id)
     writeParam('profileVersion', ref.version)
     if (activeScenario !== undefined) writeParam('scenarioId', activeScenario.scenarioId)
-    rememberUrl()
-  }, [activeScenario, clearScopeReferences, rememberUrl])
+
+  }, [activeScenario, clearScopeReferences])
 
   const selectWorkspace = useCallback((value: string | undefined) => {
     if (value === workspaceId) return
-    const apply = () => { clearScopeReferences(); setWorkspaceId(value); writeParam('workspace', value); rememberUrl() }
+    const apply = () => { clearScopeReferences(); setWorkspaceId(value); writeParam('workspace', value) }
     if (scopeBound) guard(apply)
     else apply()
-  }, [workspaceId, scopeBound, guard, clearScopeReferences, rememberUrl])
+  }, [workspaceId, scopeBound, guard, clearScopeReferences])
 
   const selectProject = useCallback((value: string | undefined) => {
     if (value === projectId) return
-    const apply = () => { clearScopeReferences(); setProjectId(value); writeParam('project', value); rememberUrl() }
+    const apply = () => { clearScopeReferences(); setProjectId(value); writeParam('project', value) }
     if (scopeBound) guard(apply)
     else apply()
-  }, [projectId, scopeBound, guard, clearScopeReferences, rememberUrl])
+  }, [projectId, scopeBound, guard, clearScopeReferences])
 
   const contribution = scenarioViews.find((entry) => entry.view === view)
   const tabs = [...CORE_TABS, ...scenarioViews.map(({ view: extraView, label }) => ({ view: extraView, label }))]
@@ -431,7 +459,7 @@ export function App({
           writeParam('scenarioId', scenario.scenarioId); writeParam('project', undefined); writeParam('workspace', undefined)
           // Explicit-profile links must reload into the scenario the user selected.
           if (readParam('profileId') !== undefined) { writeParam('profileId', scenario.profileRef.id); writeParam('profileVersion', scenario.profileRef.version) }
-          rememberUrl()
+
         })
       }}>{scenarioOptions.map((scenario) => <option key={scenario.scenarioId} value={scenario.scenarioId}>{scenario.label}</option>)}</select>}</Field></div>}
     <Field label="本体工作区">{(attributes) => <select {...attributes} data-testid="context-workspace-select" value={workspaceId ?? ''}
@@ -451,7 +479,7 @@ export function App({
 
   return (
     <div className="app" data-viewport={viewport} data-view={view}>
-      <a className="app__skip" href="#workspace-content">跳到工作内容</a>
+      <a className="app__skip" href="#workspace-content" onClick={(event) => { event.preventDefault(); mainRef.current?.focus() }}>跳到工作内容</a>
       <aside className="app__sidebar"><div className="app__brand"><span aria-hidden="true">◈</span><div><strong>本体工作台</strong><small>语义 · 数据 · 实践</small></div></div>{viewport === 'narrow' ? null : navigation}
         <div className="app__sidebar-foot">{readOnly ? '只读访问' : '操作员工作空间'}<small>以已审核版本开展工作</small></div></aside>
       <div className="app__workspace">

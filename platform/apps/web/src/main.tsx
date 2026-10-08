@@ -4,7 +4,7 @@ import { createRoot } from 'react-dom/client'
 import { WorkbenchClient } from './api/client'
 import type { CoreDeploymentInfo } from './api/client'
 import { App } from './components/App'
-import type { AppView, AppViewContribution } from './components/App'
+import { resolveAppView } from './navigation'
 import { resolveWebDeployment } from './deployment'
 import type { WebDeployment } from './deployment'
 import { Button, Panel, StateFeedback } from './components/ui'
@@ -12,16 +12,6 @@ import './styles.css'
 
 const baseUrl = import.meta.env.VITE_API_BASE_URL ?? ''
 const client = new WorkbenchClient({ baseUrl })
-
-function initialView(params: URLSearchParams, scenarioViews: readonly AppViewContribution[], fallback: AppView): AppView {
-  const requested = params.get('view')
-  const coreViews = ['start', 'ontology', 'projects', 'definitions', 'instances', 'packages', 'business', 'workbench', 'query', 'jobs', 'review', 'evidence']
-  const allowed = [...coreViews, ...scenarioViews.map((entry) => entry.view)]
-  if (requested !== null && allowed.includes(requested)) return requested
-  // A bound run (`?run=`) is reproduced on the workbench, so keep that default for deep links.
-  if (params.has('run')) return 'workbench'
-  return fallback
-}
 
 function mountApp(root: Root, input: {
   readonly deployment: WebDeployment
@@ -46,7 +36,7 @@ function mountApp(root: Root, input: {
         deploymentModels: input.coreDeployment.models,
         deploymentOperatorEnabled: input.coreDeployment.operatorEnabled,
       }),
-      initialView: initialView(params, input.deployment.scenarioViews, 'start'),
+      initialView: resolveAppView(params, input.deployment.scenarioViews, 'start'),
       ...(boundRunId === undefined ? {} : { boundRunId }),
       ...(jobId === undefined ? {} : { initialJobId: jobId }),
       ...(candidateId === undefined ? {} : { initialCandidateId: candidateId }),

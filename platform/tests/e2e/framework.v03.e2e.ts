@@ -154,6 +154,85 @@ describe('professional product framework: real production host', () => {
     } finally { await page.close() }
   })
 
+  it('preserves browser entries when dirty Back/Forward is cancelled or accepted', async () => {
+    const page = await newPage()
+    const view = (expected: string) => page.waitForFunction((value) => document.querySelector('.app')?.getAttribute('data-view') === value, expected)
+    const decision = () => page.getByRole('dialog', { name: '离开当前工作内容？' }).waitFor()
+    try {
+      const overviewUrl = page.url()
+      await openView(page, 'query')
+      const queryUrl = page.url()
+      await page.getByTestId('query-question').fill('返回时保留的问题')
+      await page.goBack()
+      await decision()
+      expect(page.url()).toBe(queryUrl)
+      await page.getByRole('button', { name: '继续编辑', exact: true }).click()
+      expect(await page.getByTestId('query-question').inputValue()).toBe('返回时保留的问题')
+      await page.goBack()
+      await decision()
+      await page.getByTestId('shell-discard-changes').click()
+      await view('start')
+      expect(page.url()).toBe(overviewUrl)
+      await page.goForward()
+      await view('query')
+      expect(page.url()).toBe(queryUrl)
+      await openView(page, 'definitions')
+      const definitionsUrl = page.url()
+      await page.goBack()
+      await view('query')
+      await page.getByTestId('query-question').fill('前进时保留的问题')
+      await page.goForward()
+      await decision()
+      expect(page.url()).toBe(queryUrl)
+      await page.getByRole('button', { name: '继续编辑', exact: true }).click()
+      expect(await page.getByTestId('query-question').inputValue()).toBe('前进时保留的问题')
+      await page.goForward()
+      await decision()
+      await page.getByTestId('shell-discard-changes').click()
+      await view('definitions')
+      expect(page.url()).toBe(definitionsUrl)
+      await page.goBack()
+      await view('query')
+      await page.goBack()
+      await view('start')
+      expect(page.url()).toBe(overviewUrl)
+    } finally { await page.close() }
+  })
+
+  it('resolves bound-run and invalid-view URLs identically on Back/Forward/reload', async () => {
+    if (browser === undefined || web === undefined) throw new Error('framework environment unavailable')
+    const deployment = await client.getCoreDeployment()
+    const scenario = deployment.scenarios[0]
+    if (scenario === undefined) throw new Error('no real scenario available')
+    const run = await client.createRun({ profileRef: scenario.profileRef, question: 'facts:facility_id', context: { timeZone: 'UTC' }, preferences: { route: 'template', allowWeb: false } })
+    await expect.poll(async () => ['published', 'cancelled', 'failed', 'blocked'].includes((await client.getRun(run.runId)).state), { timeout: 30_000, interval: 100 }).toBe(true)
+    const page = await browser.newPage({ viewport: { width: 1440, height: 1050 } })
+    const view = (expected: string) => page.waitForFunction((value) => document.querySelector('.app')?.getAttribute('data-view') === value, expected)
+    try {
+      for (const extra of ['', '&view=unknown-view']) {
+        const target = `${web.origin}/?run=${run.runId}${extra}`
+        await page.goto(target)
+        await view('workbench')
+        await page.getByTestId('bound-run-id').waitFor()
+        expect(await page.getByTestId('bound-run-id').textContent()).toBe(run.runId)
+        await openView(page, 'query')
+        await page.goBack()
+        await view('workbench')
+        expect(page.url()).toBe(target)
+        await page.reload()
+        await view('workbench')
+        await page.goForward()
+        await view('query')
+        await page.reload()
+        await view('query')
+        await page.goBack()
+        await view('workbench')
+        expect(page.url()).toBe(target)
+      }
+      await record('gap-017-history', ['Back/Forward=real browser traversal', 'dirty cancellation=entry and index preserved', 'dirty acceptance=original traversal replayed', 'bound run=real API-created persisted run', 'route resolution=shared startup/history, including invalid view and reload'])
+    } finally { await page.close() }
+  })
+
   it('keeps the real read-only deployment and startup failure path usable', async () => {
     if (postgres === undefined || admin === undefined || browser === undefined) throw new Error('framework environment unavailable')
     const scopeRef = { tenantId: randomUUID(), spaceId: randomUUID() }
