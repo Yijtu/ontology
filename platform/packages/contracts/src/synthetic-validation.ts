@@ -302,6 +302,8 @@ export interface IndustryValidationReport {
   /** Synthetic samples never become real published facts. */
   readonly realFactsWritten: false
   readonly definition?: DefinitionValidationReport
+  readonly ruleActionPins?: readonly RuleActionPublicationPin[]
+  readonly strategy?: DefinitionRevisionStrategy
   readonly rules: readonly RuleValidationResult[]
   readonly actions: readonly ActionValidationResult[]
   readonly semanticPublished: ValidationSurfaceGate
@@ -315,6 +317,12 @@ export interface IndustryValidationReport {
   readonly idempotencyKey: string
   readonly actor: string
   readonly recordedAt: Rfc3339UtcTimestamp
+}
+
+export interface RuleActionPublicationPin {
+  readonly candidateId: Uuid
+  readonly contentDigest: Sha256Digest
+  readonly enabledAt: Rfc3339UtcTimestamp
 }
 
 /* ----------------------------------------------------------------------------------------- */
@@ -446,6 +454,7 @@ export interface ReviseSyntheticExampleSetInput {
 }
 
 export interface RunIndustryValidationInput {
+  readonly strategy?: DefinitionRevisionStrategy
   readonly exampleSetId: Uuid
   readonly draftRef?: VersionRef
   readonly definitionRef?: VersionRef

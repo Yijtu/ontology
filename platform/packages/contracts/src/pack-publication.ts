@@ -16,6 +16,8 @@ import type { ActionCapabilityStatus } from './rule-action-candidates'
 import type { SemanticDefinitionAudit, SemanticDefinitionRecord } from './semantic-definitions'
 import type { NewOutboxMessage } from './job-store'
 import type { ToolContext } from './trusted'
+import type { DefinitionApprovalPin, DefinitionRevisionStrategy } from './definition-editing'
+import type { RuleActionPublicationPin } from './synthetic-validation'
 
 /**
  * Immutable industry-pack publication and the persistent dynamic catalogue (SPEC v0.3a
@@ -131,6 +133,9 @@ export interface PackVersionDiff {
  * catalogue reports and never carry customer data.
  */
 export interface PublishedPackAsset {
+  readonly strategy?: DefinitionRevisionStrategy
+  readonly approvalPins?: readonly DefinitionApprovalPin[]
+  readonly ruleActionPins?: readonly RuleActionPublicationPin[]
   readonly packRef: VersionRef
   readonly workspaceId: Uuid
   readonly namespace: string
@@ -169,6 +174,8 @@ export interface PublishedPackAssetFilter {
  * committed pack lose its definition version or its workspace pointer (SPEC §4.2 point 4).
  */
 export interface CommitApprovedPackInput {
+  readonly approvalPins?: readonly DefinitionApprovalPin[]
+  readonly ruleActionPins?: readonly RuleActionPublicationPin[]
   /** The workspace publication head the caller read; `0` means "first publication". */
   readonly expectedRevision: RevisionString
   /** The immutable definition version published in the same transaction. */
@@ -308,6 +315,7 @@ export function isIndustryAssetPublicationError(value: unknown): value is Indust
 /* ----------------------------------------------------------------------------------------- */
 
 export interface PublishIndustryPackInput {
+  readonly strategy?: DefinitionRevisionStrategy
   readonly packId: string
   readonly version: Semver
   /** The industry validation report the draft was confirmed by. */
@@ -371,6 +379,22 @@ export function isResourceRefValue(value: unknown): value is ResourceRef {
  */
 export function assertPublishedPackAssetShape(value: unknown): asserts value is PublishedPackAsset {
   if (!isRecord(value)) throw invalid('a published pack asset must be an object')
+  const approvals = value['approvalPins']
+  if (approvals !== undefined && (!Array.isArray(approvals) || !approvals.every((pin: unknown) => isRecord(pin) &&
+      isUuid(pin['candidateId']) && isDigest(pin['contentDigest']) && isRevisionStringValue(pin['reviewRevision']) && pin['reviewRevision'] !== '0'))) {
+    throw invalid('approvalPins must contain candidate/content/review revision pins')
+  }
+  const enabled = value['ruleActionPins']
+  if (enabled !== undefined && (!Array.isArray(enabled) || !enabled.every((pin: unknown) => isRecord(pin) &&
+      isUuid(pin['candidateId']) && isDigest(pin['contentDigest']) && typeof pin['enabledAt'] === 'string' && Number.isFinite(Date.parse(pin['enabledAt']))))) {
+    throw invalid('ruleActionPins must contain candidate/content/enablement pins')
+  }
+  const strategy = value['strategy']
+  if (strategy !== undefined && (!isRecord(strategy) || !['new_version', 'keep_independent', 'retire_previous'].includes(String(strategy['kind'])) ||
+      typeof strategy['reason'] !== 'string' || strategy['reason'].trim().length === 0 ||
+      (strategy['supersedesRef'] !== undefined && !isVersionRefValue(strategy['supersedesRef'])))) {
+    throw invalid('strategy must contain a supported decision, reason and optional predecessor pin')
+  }
   if (!isVersionRefValue(value['packRef'])) throw invalid('packRef must be a version reference')
   if (!isUuid(value['workspaceId'])) throw invalid('workspaceId must be a uuid')
   if (!isNonEmptyString(value['namespace'])) throw invalid('namespace must be a non-empty string')

@@ -237,16 +237,18 @@ function buildHarness(options: HarnessOptions = {}) {
   workspaces.seed(SCOPE, ws, [draft(WORKSPACE_ID, '1', options.basePackRef)])
   const candidates = new InMemoryAssetCandidateStore()
   const editing = new InMemoryDefinitionEditingStore()
+  const reviews = new InMemorySemanticPublicationStore()
+  const reviewableCandidates = new CompositeReviewableCandidateReader({ definition: candidates, instance: new InMemoryCandidateStore() })
   const service = new DefinitionCandidateEditingService({
     workspaces,
-    candidates,
+    candidates, reviews, reviewableCandidates,
     terminology: options.terminology ?? new StaticDefinitionTerminologySource(),
     editing,
     ...(options.published === undefined ? {} : { publishedDefinitions: options.published }),
     now: () => `2026-09-29T00:00:${String(counter % 60).padStart(2, '0')}Z`,
     newId: () => randomUUID(),
   })
-  return { service, workspaces, candidates, editing }
+  return { service, workspaces, candidates, editing, reviews }
 }
 
 async function seedCandidate(
@@ -491,6 +493,10 @@ describe('definition candidate editing and disambiguation', () => {
     expect(blocked.publishable).toBe(false)
     expect(blocked.blockers.some((blocker) => blocker.code === 'REVISION_STRATEGY_REQUIRED')).toBe(true)
 
+    for (const candidate of await h.candidates.listCandidates(SCOPE, WORKSPACE_ID, {}, EDITOR)) {
+      await h.reviews.appendReview(SCOPE, { expectedRevision: '0', draft: { reviewId: randomUUID(), candidateId: candidate.candidateId,
+        contentDigest: candidate.contentDigest, decision: 'approve', reason: 'reviewed changes', evidenceRefs: [], actor: 'reviewer', recordedAt: '2026-09-29T00:00:00Z' } }, EDITOR)
+    }
     const allowed = await h.service.validateForPublication(
       { workspaceId: WORKSPACE_ID, revision: '1', strategy: { kind: 'new_version', reason: 'rename intent, republish instances' } },
       EDITOR,

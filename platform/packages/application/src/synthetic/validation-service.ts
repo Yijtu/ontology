@@ -21,13 +21,11 @@ import type {
   IndustryWorkspaceStore,
   ResourceRef,
   RuleActionCandidateStore,
-  RuleActionCandidateVersion,
   RuleCandidateVersion,
   RuleSupportValidator,
   RuleValidationResult,
   RunIndustryValidationInput,
   ScopeRef,
-  Sha256Digest,
   SyntheticCaseCoverage,
   SyntheticCaseEvaluator,
   SyntheticExpectation,
@@ -38,7 +36,8 @@ import type {
   Uuid,
   ValidationSurfaceGate,
 } from '@ontology/contracts'
-import { canonicalJson, sha256DigestOf } from '../extraction/canonical'
+import { currentRuleActionProjection, industryValidationDigest, ruleActionPublicationPins } from '../assets/publication/publication-pins'
+import { canonicalJson } from '../profiles/canonical'
 
 const EDITOR_ROLES: readonly string[] = ['profile-editor', 'platform-admin']
 const DEFAULT_PAGE = 100
@@ -157,7 +156,12 @@ export class IndustryValidationService {
       throw new SyntheticValidationError('VERSION_CONFLICT', 'the workspace head moved before this validation')
     }
     const replay = await this.#deps.reports.findByIdempotencyKey(scopeRef, key, ctx)
-    if (replay !== undefined) return replay
+    if (replay !== undefined) {
+      if (replay.exampleSetId !== input.exampleSetId || replay.revision !== expected || canonicalJson(replay.strategy) !== canonicalJson(input.strategy)) {
+        throw new SyntheticValidationError('IDEMPOTENCY_CONFLICT', 'validation key was already used for a different example set, revision or strategy')
+      }
+      return replay
+    }
 
     const set = await this.#deps.exampleSets.get(scopeRef, workspaceId, input.exampleSetId, ctx)
     if (set === undefined) {
@@ -172,7 +176,7 @@ export class IndustryValidationService {
     const deploymentBlockers: IndustryValidationIssue[] = []
 
     const definition = await this.#deps.definitions.validateForPublication(
-      { workspaceId, revision: workspace.headRevision },
+      { workspaceId, revision: workspace.headRevision, ...(input.strategy === undefined ? {} : { strategy: input.strategy }) },
       ctx,
     )
     for (const finding of definition.blockers) {
@@ -184,7 +188,8 @@ export class IndustryValidationService {
     }
 
     const candidates = await this.#deps.ruleActions.list(scopeRef, workspaceId, { limit: CANDIDATE_PAGE }, ctx)
-    const current = currentCandidates(candidates)
+    if (candidates.length === CANDIDATE_PAGE) throw new SyntheticValidationError('INVALID_ARGUMENT', 'candidate page is incomplete; publication validation must cover every revision')
+    const current = currentRuleActionProjection(candidates).filter((candidate) => candidate.lifecycle !== 'rejected')
     const ruleCandidates = current.filter(isRuleCandidateVersion)
     const actionCandidates = current.filter(isActionCandidateVersion)
 
@@ -425,7 +430,7 @@ export class IndustryValidationService {
       digest: set.contentDigest,
       kind: 'dataset',
     }
-    const report: IndustryValidationReport = {
+    const report: Omit<IndustryValidationReport, 'contentDigest'> = {
       validationId: this.#newId(),
       workspaceId,
       revision: workspace.headRevision,
@@ -439,6 +444,8 @@ export class IndustryValidationService {
       businessApproval: 'none',
       realFactsWritten: false,
       definition,
+      ...(input.strategy === undefined ? {} : { strategy: input.strategy }),
+      ruleActionPins: ruleActionPublicationPins(current),
       rules: ruleResults,
       actions: actionResults,
       semanticPublished,
@@ -448,12 +455,11 @@ export class IndustryValidationService {
       issues,
       expectationResults,
       coverage,
-      contentDigest: this.#contentDigest(exampleSetRef, ruleResults, actionResults, expectationResults),
       idempotencyKey: key,
       actor,
       recordedAt: this.#now(),
     }
-    return this.#deps.reports.insert(scopeRef, report, ctx)
+    return this.#deps.reports.insert(scopeRef, { ...report, contentDigest: industryValidationDigest(report) }, ctx)
   }
 
   async getReport(workspaceId: Uuid, validationId: Uuid, ctx: ToolContext): Promise<IndustryValidationReport | undefined> {
@@ -515,35 +521,9 @@ export class IndustryValidationService {
     }
     return receipts
   }
-
-  #contentDigest(
-    exampleSetRef: ResourceRef,
-    rules: readonly RuleValidationResult[],
-    actions: readonly ActionValidationResult[],
-    expectations: readonly SyntheticExpectationResult[],
-  ): Sha256Digest {
-    return sha256DigestOf(
-      canonicalJson({
-        exampleSetRef,
-        rules,
-        actions,
-        expectations,
-      }),
-    )
-  }
 }
 
 type ActionCandidateVersionDeclaration = Parameters<typeof bindActionDeclaration>[0]
-
-function currentCandidates(candidates: readonly RuleActionCandidateVersion[]): RuleActionCandidateVersion[] {
-  const latest = new Map<string, RuleActionCandidateVersion>()
-  for (const candidate of candidates) {
-    if (candidate.lifecycle === 'rejected') continue
-    const existing = latest.get(candidate.logicalId)
-    if (existing === undefined || existing.recordedAt <= candidate.recordedAt) latest.set(candidate.logicalId, candidate)
-  }
-  return [...latest.values()].sort((left, right) => left.logicalId.localeCompare(right.logicalId))
-}
 
 function coveredCases(set: SyntheticExampleSetVersion, kind: SyntheticExpectation['kind'], targetId: string): string[] {
   return set.expectations

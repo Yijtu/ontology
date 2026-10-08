@@ -65,6 +65,8 @@ export type DefinitionValidationCode =
   | 'INVALID_IDENTITY'
   | 'DEFINITION_CONFLICT'
   | 'REVISION_STRATEGY_REQUIRED'
+  | 'REVISION_STRATEGY_INVALID'
+  | 'CANDIDATE_NOT_APPROVED'
 
 export interface DefinitionValidationFinding {
   readonly code: DefinitionValidationCode
@@ -135,12 +137,20 @@ export interface DefinitionValidationReport {
   readonly revision: RevisionString
   /** The candidate revisions that make up the current definition projection. */
   readonly checkedCandidateIds: readonly Uuid[]
+  /** Current ledger approvals, pinned for validation and the atomic publication recheck. */
+  readonly approvalPins?: readonly DefinitionApprovalPin[]
   readonly blockers: readonly DefinitionValidationFinding[]
   readonly warnings: readonly DefinitionValidationFinding[]
   /** Unsupported rules preserved as non-executable instead of being deleted. */
   readonly nonExecutableRules: readonly UnsupportedDefinitionRule[]
   readonly compatibility: DefinitionCompatibilityReport
   readonly publishable: boolean
+}
+
+export interface DefinitionApprovalPin {
+  readonly candidateId: Uuid
+  readonly contentDigest: Sha256Digest
+  readonly reviewRevision: RevisionString
 }
 
 /**

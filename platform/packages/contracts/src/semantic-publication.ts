@@ -62,6 +62,8 @@ export interface CandidateReviewRecord {
   readonly evidenceRefs: readonly ResourceRef[]
   readonly recordedAt: Rfc3339UtcTimestamp
   readonly actor: string
+  /** Exact reviewed content. Legacy records stay readable but cannot approve a definition pack. */
+  readonly contentDigest?: Sha256Digest
   /** The revision this version supersedes, absent for the first review. */
   readonly supersedesRevision?: RevisionString
 }

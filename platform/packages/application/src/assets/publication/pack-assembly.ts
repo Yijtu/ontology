@@ -41,6 +41,7 @@ import type {
   VersionRef,
 } from '@ontology/contracts'
 import { canonicalJson, sha256DigestOf } from '../../profiles/canonical'
+import { diffDefinitionProjection } from '../definition-candidates/validation'
 
 /**
  * Pure assembly of an immutable industry pack from a human-reviewed draft and its validation
@@ -358,82 +359,20 @@ export function buildTestSuite(report: IndustryValidationReport, namespace: stri
 /* Version diff                                                                               */
 /* ----------------------------------------------------------------------------------------- */
 
-function compareRecords(
-  previous: SemanticDefinitionRecord | undefined,
-  next: SemanticDefinitionRecord,
-  scope: PackVersionChangeScope,
-): PackVersionChange[] {
-  const changes: PackVersionChange[] = []
-  if (previous === undefined) {
-    for (const object of next.objects) {
-      changes.push({ scope, change: 'OBJECT_ADDED', logicalId: object.id, breaking: false, message: `new object ${object.id}` })
-    }
-    for (const attribute of next.attributes) {
-      changes.push({ scope, change: 'ATTRIBUTE_ADDED', logicalId: attribute.id, breaking: false, message: `new attribute ${attribute.id}` })
-    }
-    for (const relation of next.relations) {
-      changes.push({ scope, change: 'RELATION_ADDED', logicalId: relation.id, breaking: false, message: `new relation ${relation.id}` })
-    }
-    return changes
-  }
-  const beforeObjects = new Map(previous.objects.map((entry) => [entry.id, entry]))
-  const beforeAttributes = new Map(previous.attributes.map((entry) => [entry.id, entry]))
-  const beforeRelations = new Map(previous.relations.map((entry) => [entry.id, entry]))
-  const seenObjects = new Set<string>()
-  const seenAttributes = new Set<string>()
-  const seenRelations = new Set<string>()
-
-  for (const object of next.objects) {
-    seenObjects.add(object.id)
-    const before = beforeObjects.get(object.id)
-    if (before === undefined) {
-      changes.push({ scope, change: 'OBJECT_ADDED', logicalId: object.id, breaking: false, message: `new object ${object.id}` })
-    } else if (before.displayName !== object.displayName) {
-      changes.push({ scope, change: 'OBJECT_CHANGED', logicalId: object.id, breaking: false, message: `display name of ${object.id} changed` })
-    }
-  }
-  for (const attribute of next.attributes) {
-    seenAttributes.add(attribute.id)
-    const before = beforeAttributes.get(attribute.id)
-    if (before === undefined) {
-      changes.push({ scope, change: 'ATTRIBUTE_ADDED', logicalId: attribute.id, breaking: false, message: `new attribute ${attribute.id}` })
-      continue
-    }
-    if (before.valueType !== attribute.valueType) {
-      changes.push({ scope, change: 'VALUE_TYPE_CHANGED', logicalId: attribute.id, breaking: true, message: `value type of ${attribute.id} changed`, before: before.valueType, after: attribute.valueType })
-    }
-    if ((before.unit?.unitCode ?? '') !== (attribute.unit?.unitCode ?? '')) {
-      changes.push({ scope, change: 'UNIT_CHANGED', logicalId: attribute.id, breaking: true, message: `unit of ${attribute.id} changed`, before: before.unit?.unitCode ?? '', after: attribute.unit?.unitCode ?? '' })
-    }
-    if (before.objectId !== attribute.objectId) {
-      changes.push({ scope, change: 'ATTRIBUTE_CHANGED', logicalId: attribute.id, breaking: true, message: `owning object of ${attribute.id} changed`, before: before.objectId, after: attribute.objectId })
-    }
-  }
-  for (const relation of next.relations) {
-    seenRelations.add(relation.id)
-    const before = beforeRelations.get(relation.id)
-    if (before === undefined) {
-      changes.push({ scope, change: 'RELATION_ADDED', logicalId: relation.id, breaking: false, message: `new relation ${relation.id}` })
-    } else if (before.fromObjectId !== relation.fromObjectId || before.toObjectId !== relation.toObjectId) {
-      changes.push({ scope, change: 'RELATION_CHANGED', logicalId: relation.id, breaking: true, message: `endpoints of ${relation.id} changed` })
-    }
-  }
-  for (const object of previous.objects) {
-    if (!seenObjects.has(object.id)) {
-      changes.push({ scope, change: 'OBJECT_REMOVED', logicalId: object.id, breaking: true, message: `object ${object.id} was removed` })
-    }
-  }
-  for (const attribute of previous.attributes) {
-    if (!seenAttributes.has(attribute.id)) {
-      changes.push({ scope, change: 'ATTRIBUTE_REMOVED', logicalId: attribute.id, breaking: true, message: `attribute ${attribute.id} was removed` })
-    }
-  }
-  for (const relation of previous.relations) {
-    if (!seenRelations.has(relation.id)) {
-      changes.push({ scope, change: 'RELATION_REMOVED', logicalId: relation.id, breaking: true, message: `relation ${relation.id} was removed` })
-    }
-  }
-  return changes
+function compareRecords(previous: SemanticDefinitionRecord | undefined, next: SemanticDefinitionRecord, scope: PackVersionChangeScope): PackVersionChange[] {
+  const projection: Pick<AssetCandidateVersion, 'payload' | 'logicalId' | 'kind'>[] = [
+    ...next.objects.map((object) => ({ kind: 'object' as const, logicalId: object.id, displayName: object.displayName,
+      identityAttributeIds: next.identityScopes.find((identity) => identity.objectId === object.id)?.identityAttributeIds ?? [] })),
+    ...next.attributes.map((attribute) => ({ kind: 'attribute' as const, logicalId: attribute.id, displayName: attribute.id,
+      objectLogicalId: attribute.objectId, valueType: attribute.valueType, minCardinality: attribute.cardinality.min,
+      maxCardinality: attribute.cardinality.max, ...(attribute.unit === undefined ? {} : { unitCode: attribute.unit.unitCode, dimension: attribute.unit.dimension }),
+      ...(attribute.referencesObjectId === undefined ? {} : { referencesObjectLogicalId: attribute.referencesObjectId }) })),
+    ...next.relations.map((relation) => ({ kind: 'relation' as const, logicalId: relation.id, displayName: relation.id,
+      fromObjectLogicalId: relation.fromObjectId, toObjectLogicalId: relation.toObjectId, minCardinality: relation.cardinality.min, maxCardinality: relation.cardinality.max })),
+  ].map((payload) => ({ logicalId: payload.logicalId, kind: payload.kind,
+    payload: { ...payload, businessMeaning: '', suggestedReason: '', conflicts: [] } }))
+  const diff = diffDefinitionProjection(projection, previous, { workspaceId: '00000000-0000-4000-8000-000000000000', revision: '0' })
+  return [...diff.additions, ...diff.changes].map(({ code, kind, ...change }) => { void kind; return { ...change, scope, change: code } })
 }
 
 function compareActions(
@@ -624,6 +563,10 @@ export function assemblePack(args: AssemblePackArgs): AssembledPack {
     sourceIndexDigest: indexDigest,
     capabilities,
     validationId: args.report.validationId,
+    validationDigest: args.report.contentDigest,
+    strategy: args.report.strategy,
+    approvalPins: args.report.definition?.approvalPins,
+    ruleActionPins: args.report.ruleActionPins,
     actionDeclarationsRef,
   })
   const packRef = artifactRef(`${namespace}.${args.packId}`, args.version, contentDigest)
@@ -661,6 +604,9 @@ export function assemblePack(args: AssemblePackArgs): AssembledPack {
   }
 
   const asset: PublishedPackAssetDraft = {
+    ...(args.report.strategy === undefined ? {} : { strategy: args.report.strategy }),
+    ...(args.report.definition?.approvalPins === undefined ? {} : { approvalPins: args.report.definition.approvalPins }),
+    ...(args.report.ruleActionPins === undefined ? {} : { ruleActionPins: args.report.ruleActionPins }),
     packRef,
     workspaceId: args.workspace.workspaceId,
     namespace,

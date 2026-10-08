@@ -25,3 +25,6 @@ export {
 export type { AssemblePackArgs, AssembledPack } from './pack-assembly'
 export { InMemoryPublishedPackAssetStore } from './in-memory-store'
 export type { InMemoryPublishedPackAssetStoreDependencies } from './in-memory-store'
+export { definitionApprovalPins, currentRuleActionProjection, ruleActionPublicationPins, industryValidationDigest } from './publication-pins'
+export type { CandidateApprovalReader } from './publication-pins'
+export { createPackPublicationGuard } from './publication-pins'

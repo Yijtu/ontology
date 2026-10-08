@@ -23,6 +23,15 @@ import type {
 import { findIndustryPackViolations, findEmbeddedSecretViolations } from '@ontology/contracts'
 import {
   InMemoryAssetCandidateStore,
+  InMemoryCandidateStore,
+  CompositeReviewableCandidateReader,
+  createPackPublicationGuard,
+  definitionApprovalPins,
+  currentDefinitionProjection,
+  diffDefinitionProjection,
+  industryValidationDigest,
+  ruleActionPublicationPins,
+  currentRuleActionProjection,
   InMemoryPublishedPackAssetStore,
   InMemoryRuleActionCandidateStore,
   IndustryAssetPublicationService,
@@ -30,8 +39,9 @@ import {
   StoreBackedIndustryManifestSource,
   StoreBackedIndustryPackCatalogue,
   buildVersionDiff,
+  buildDefinitionRecord,
 } from '@ontology/application'
-import { InMemorySemanticDefinitionStore } from '@ontology/semantic-engine'
+import { InMemorySemanticDefinitionStore, InMemorySemanticPublicationStore } from '@ontology/semantic-engine'
 import { toolContext } from './component-registry-fixtures'
 
 const TENANT = '11111111-1111-4111-8111-111111111111'
@@ -215,7 +225,8 @@ function actionCandidate(recordedAt: string): RuleActionCandidateVersion {
     payload: { kind: 'action', declaration: unboundDeclaration() },
     sourceRefs: [resourceRef()],
     sourceSpans: [],
-    lifecycle: 'draft',
+    lifecycle: 'enabled',
+    enabledAt: recordedAt,
     contentDigest: DIGEST,
     idempotencyKey: digest(`${randomUUID().replaceAll('-', '')}${randomUUID().replaceAll('-', '')}`),
     actor: 'editor-1',
@@ -295,7 +306,10 @@ interface Harness {
   seedWorkspace(): void
   seedDefinitionCandidates(): Promise<void>
   seedAction(): Promise<void>
-  seedReport(report: IndustryValidationReport): void
+  seedReport(report: IndustryValidationReport): Promise<void>
+  readonly candidates: InMemoryAssetCandidateStore
+  readonly reviews: InMemorySemanticPublicationStore
+  readonly ruleActions: InMemoryRuleActionCandidateStore
 }
 
 function harness(): Harness {
@@ -308,9 +322,12 @@ function harness(): Harness {
   const definitionCandidates = new InMemoryAssetCandidateStore()
   const ruleActions = new InMemoryRuleActionCandidateStore()
   const syntheticSets = new EmptySyntheticExampleSetStore()
+  const reviews = new InMemorySemanticPublicationStore()
+  const reviewableCandidates = new CompositeReviewableCandidateReader({ definition: definitionCandidates, instance: new InMemoryCandidateStore() })
   const definitions = new InMemorySemanticDefinitionStore()
   const published = new InMemoryPublishedPackAssetStore({
     definitions,
+    publicationGuard: createPackPublicationGuard({ workspaces, definitionCandidates, ruleActions, reviews, reviewableCandidates }),
     onPublished: (scopeRef, workspaceId, revision, packRef) => {
       void scopeRef
       workspaces.advanceHead(workspaceId, revision, packRef)
@@ -320,6 +337,7 @@ function harness(): Harness {
 
   const service = new IndustryAssetPublicationService({
     workspaces,
+    reviews, reviewableCandidates,
     validations: reports,
     definitionCandidates,
     ruleActions,
@@ -385,14 +403,31 @@ function harness(): Harness {
       }, '2026-09-29T00:00:03Z'),
     ]
     await definitionCandidates.insertBatch(SCOPE, batch(batchId, candidates.length), candidates, EDITOR)
+    for (const candidate of candidates) await reviews.appendReview(SCOPE, { expectedRevision: '0', draft: {
+      reviewId: randomUUID(), candidateId: candidate.candidateId, contentDigest: candidate.contentDigest, decision: 'approve',
+      reason: 'reviewed declaration', evidenceRefs: [], recordedAt: now(), actor: 'reviewer-1',
+    } }, EDITOR)
   }
 
   const seedAction = async (): Promise<void> => {
     await ruleActions.insert(SCOPE, actionCandidate('2026-09-29T00:00:04Z'), EDITOR)
   }
 
-  const seedReport = (report: IndustryValidationReport): void => {
-    reports.seed(report)
+  const seedReport = async (report: IndustryValidationReport): Promise<void> => {
+    const projection = currentDefinitionProjection(await definitionCandidates.listCandidates(SCOPE, WORKSPACE_ID, {}, EDITOR))
+    const approvals = await definitionApprovalPins(projection, SCOPE, EDITOR, reviewableCandidates, reviews)
+    const prior = (await published.listPacks(SCOPE, { namespace: 'demo-industry' }, EDITOR)).at(-1)
+    const previous = prior === undefined ? undefined : await definitions.findVersion('demo-industry', prior.definitionRef.id, prior.definitionRef.version, SCOPE, EDITOR)
+    const actionIds = new Map((await ruleActions.list(SCOPE, WORKSPACE_ID, {}, EDITOR)).filter((candidate) => candidate.payload.kind === 'action').map((candidate) => [candidate.logicalId, candidate.candidateId]))
+    const pinned: IndustryValidationReport = { ...report,
+      actions: report.actions.map((result) => ({ ...result, candidateId: actionIds.get(result.actionId) ?? result.candidateId })),
+      definition: { workspaceId: WORKSPACE_ID, revision: report.revision, checkedCandidateIds: projection.map((candidate) => candidate.candidateId),
+        approvalPins: approvals.pins, blockers: approvals.blockers, warnings: [], nonExecutableRules: [], publishable: approvals.blockers.length === 0,
+        compatibility: diffDefinitionProjection(projection, previous, { workspaceId: WORKSPACE_ID, revision: report.revision,
+          ...(previous === undefined ? {} : { publishedRef: previous.ref }), ...(report.strategy === undefined ? {} : { strategy: report.strategy }) }) },
+      ruleActionPins: ruleActionPublicationPins(currentRuleActionProjection(await ruleActions.list(SCOPE, WORKSPACE_ID, {}, EDITOR))),
+    }
+    reports.seed({ ...pinned, contentDigest: industryValidationDigest(pinned) })
   }
 
   return {
@@ -405,6 +440,7 @@ function harness(): Harness {
     catalogue,
     manifestSource,
     exporter,
+    candidates: definitionCandidates, reviews, ruleActions,
     seedWorkspace,
     seedDefinitionCandidates,
     seedAction,
@@ -417,9 +453,145 @@ async function seedAll(h: Harness): Promise<IndustryValidationReport> {
   await h.seedDefinitionCandidates()
   await h.seedAction()
   const report = validationReport()
-  h.seedReport(report)
+  await h.seedReport(report)
   return report
 }
+
+function publishFixture(h: Harness, report: IndustryValidationReport, overrides: Partial<Parameters<IndustryAssetPublicationService['publish']>[1]> = {}) {
+  return h.service.publish(WORKSPACE_ID, { packId: 'demo-pack', version: '1.0.0', validationId: report.validationId,
+    expectedRevision: report.revision, idempotencyKey: `publish-${randomUUID()}`, ...overrides }, 'editor-1', EDITOR)
+}
+
+describe('content-pinned publication approvals', () => {
+  it.each(['failed', 'pending_confirmation', 'rejected'] as const)('refuses an approved candidate in %s state', async (state) => {
+    const h = harness()
+    const report = await seedAll(h)
+    const candidate = (await h.candidates.listCandidates(SCOPE, WORKSPACE_ID, {}, EDITOR))[0]!
+    await h.candidates.transitionCandidate(SCOPE, candidate.candidateId, { state, issues: [], transitionedAt: h.clock.now() }, EDITOR)
+    await expect(publishFixture(h, report)).rejects.toMatchObject({ code: state === 'rejected' ? 'VALIDATION_STALE' : 'VALIDATION_BLOCKED' })
+  })
+
+  it.each(['reject', 'legacy_approve', 'wrong_digest'] as const)('refuses the current %s ledger decision', async (decision) => {
+    const h = harness()
+    const report = await seedAll(h)
+    const candidate = (await h.candidates.listCandidates(SCOPE, WORKSPACE_ID, {}, EDITOR))[0]!
+    await h.reviews.appendReview(SCOPE, { expectedRevision: '1', draft: { reviewId: randomUUID(), candidateId: candidate.candidateId,
+      ...(decision === 'legacy_approve' ? {} : { contentDigest: decision === 'wrong_digest' ? digest('a') : candidate.contentDigest }),
+      decision: decision === 'reject' ? 'reject' : 'approve', reason: 'review changed', evidenceRefs: [], actor: 'reviewer', recordedAt: h.clock.now() } }, EDITOR)
+    await expect(publishFixture(h, report)).rejects.toMatchObject({ code: 'VALIDATION_BLOCKED' })
+    expect(await h.reviews.getReview(SCOPE, candidate.candidateId, '1', EDITOR)).toMatchObject({ decision: 'approve', contentDigest: candidate.contentDigest })
+  })
+
+  it('keeps an unapproved replacement visible in the draft and invalidates the old approval', async () => {
+    const h = harness()
+    const report = await seedAll(h)
+    const original = (await h.candidates.listCandidates(SCOPE, WORKSPACE_ID, {}, EDITOR))[0]!
+    const batchId = randomUUID()
+    const replacement = { ...definitionCandidate(batchId, original.logicalId, original.payload, h.clock.now()), replacesCandidateId: original.candidateId }
+    await h.candidates.insertBatch(SCOPE, batch(batchId, 1), [replacement], EDITOR)
+    const projection = currentDefinitionProjection(await h.candidates.listCandidates(SCOPE, WORKSPACE_ID, {}, EDITOR))
+    expect(projection.map((candidate) => candidate.candidateId)).toContain(replacement.candidateId)
+    expect(projection.map((candidate) => candidate.candidateId)).not.toContain(original.candidateId)
+    await expect(publishFixture(h, report)).rejects.toMatchObject({ code: 'VALIDATION_BLOCKED' })
+    expect(await h.reviews.getReview(SCOPE, original.candidateId, '1', EDITOR)).toMatchObject({ decision: 'approve' })
+  })
+
+  it.each(['draft', 'rejected'] as const)('does not fall back to an enabled rule/action ancestor when its latest revision is %s', async (lifecycle) => {
+    const h = harness()
+    const report = await seedAll(h)
+    const original = (await h.ruleActions.list(SCOPE, WORKSPACE_ID, {}, EDITOR))[0]!
+    const { enabledAt, ...draftOriginal } = original
+    void enabledAt
+    const replacement = { ...draftOriginal, candidateId: randomUUID(), lifecycle,
+      replacesCandidateId: original.candidateId, recordedAt: h.clock.now(), idempotencyKey: digest('b') }
+    await h.ruleActions.insert(SCOPE, replacement, EDITOR)
+    await expect(publishFixture(h, report)).rejects.toMatchObject({ code: 'VALIDATION_STALE' })
+    await h.seedReport(report)
+    const asset = await publishFixture(h, report)
+    expect(asset.capabilities.actions).toEqual([])
+    expect(asset.ruleActionPins).toEqual([])
+  })
+
+  it('invalidates validation when approval changes even to another approve', async () => {
+    const h = harness()
+    const report = await seedAll(h)
+    const candidate = (await h.candidates.listCandidates(SCOPE, WORKSPACE_ID, {}, EDITOR))[0]!
+    await h.reviews.appendReview(SCOPE, { expectedRevision: '1', draft: { reviewId: randomUUID(), candidateId: candidate.candidateId,
+      contentDigest: candidate.contentDigest, decision: 'approve', reason: 'new decision', evidenceRefs: [], actor: 'reviewer', recordedAt: h.clock.now() } }, EDITOR)
+    await expect(publishFixture(h, report)).rejects.toMatchObject({ code: 'VALIDATION_STALE' })
+  })
+
+  it.each(['new_version', 'keep_independent', 'retire_previous'] as const)('carries %s strategy into publication while preserving the prior asset', async (kind) => {
+    const h = harness()
+    const first = await seedAll(h)
+    const previous = await publishFixture(h, first)
+    const original = (await h.candidates.listCandidates(SCOPE, WORKSPACE_ID, {}, EDITOR)).find((candidate) => candidate.logicalId === 'power')!
+    const batchId = randomUUID()
+    const changed = { ...definitionCandidate(batchId, 'power', { kind: 'attribute', logicalId: 'power', displayName: 'Power label',
+      businessMeaning: 'a label', suggestedReason: 'reviewed', conflicts: [], objectLogicalId: 'device', valueType: 'string', minCardinality: 0, maxCardinality: 1 }, h.clock.now()),
+      replacesCandidateId: original.candidateId }
+    await h.candidates.insertBatch(SCOPE, batch(batchId, 1), [changed], EDITOR)
+    await h.reviews.appendReview(SCOPE, { expectedRevision: '0', draft: { reviewId: randomUUID(), candidateId: changed.candidateId,
+      contentDigest: changed.contentDigest, decision: 'approve', reason: 'reviewed', evidenceRefs: [], actor: 'reviewer', recordedAt: h.clock.now() } }, EDITOR)
+    const noStrategy = validationReport({ revision: '2' })
+    await h.seedReport(noStrategy)
+    await expect(publishFixture(h, noStrategy, { version: '2.0.0' })).rejects.toMatchObject({ code: 'VALIDATION_BLOCKED' })
+    const strategy = { kind, reason: 'explicit revision decision', ...(kind === 'retire_previous' ? { supersedesRef: previous.definitionRef } : {}) }
+    const report = validationReport({ revision: '2', strategy })
+    await h.seedReport(report)
+    await expect(publishFixture(h, report, { version: '2.0.0' })).rejects.toMatchObject({ code: 'VALIDATION_STALE' })
+    const asset = await publishFixture(h, report, { version: '2.0.0', strategy, packId: kind === 'keep_independent' ? 'independent-pack' : 'demo-pack' })
+    expect(asset.strategy).toEqual(strategy)
+    expect(asset.diff.breakingChanges.map((change) => change.change)).toContain('VALUE_TYPE_CHANGED')
+    expect(await h.published.findByRef(SCOPE, previous.packRef, EDITOR)).toEqual(previous)
+  })
+
+  it.each(['blank_reason', 'same_version', 'same_identity', 'wrong_predecessor'] as const)('blocks an invalid strategy: %s', async (failure) => {
+    const h = harness()
+    const first = await seedAll(h)
+    await publishFixture(h, first)
+    const strategy = failure === 'same_identity' ? { kind: 'keep_independent' as const, reason: 'independent' }
+      : failure === 'wrong_predecessor' ? { kind: 'retire_previous' as const, reason: 'retire', supersedesRef: versionRef('other') }
+      : { kind: 'new_version' as const, reason: failure === 'blank_reason' ? ' ' : 'version' }
+    const report = validationReport({ revision: '2', strategy })
+    await h.seedReport(report)
+    await expect(publishFixture(h, report, { version: failure === 'same_version' ? '1.0.0' : '2.0.0', strategy })).rejects.toMatchObject({ code: 'VALIDATION_BLOCKED' })
+  })
+
+  it('uses the same complete semantic diff in editing and pack publication', async () => {
+    const h = harness()
+    const report = await seedAll(h)
+    const priorAsset = await publishFixture(h, report)
+    const base = await h.candidates.listCandidates(SCOPE, WORKSPACE_ID, {}, EDITOR)
+    const relation = definitionCandidate(randomUUID(), 'linked', { kind: 'relation', logicalId: 'linked', displayName: 'Linked', businessMeaning: '', suggestedReason: '', conflicts: [],
+      fromObjectLogicalId: 'device', toObjectLogicalId: 'device', minCardinality: 0, maxCardinality: 'unbounded' }, h.clock.now())
+    const refAttribute = definitionCandidate(randomUUID(), 'owner', { kind: 'attribute', logicalId: 'owner', displayName: 'Owner', businessMeaning: '', suggestedReason: '', conflicts: [],
+      objectLogicalId: 'device', valueType: 'reference', referencesObjectLogicalId: 'device', minCardinality: 0, maxCardinality: 'unbounded' }, h.clock.now())
+    const before = [...base, relation, refAttribute]
+    const after = before.filter((candidate) => candidate.logicalId !== 'device_id').map((candidate): AssetCandidateVersion => {
+      const payload = candidate.payload
+      if (payload.kind === 'object') return { ...candidate, payload: { ...payload, identityAttributeIds: [] } }
+      if (payload.kind === 'relation') return { ...candidate, payload: { ...payload, toObjectLogicalId: 'other', minCardinality: 1, maxCardinality: 1 } }
+      const { unitCode, dimension, ...withoutUnit } = payload
+      void unitCode; void dimension
+      return { ...candidate, payload: { ...withoutUnit, objectLogicalId: 'other', minCardinality: 1, maxCardinality: 1,
+        ...(payload.valueType === 'reference' ? { referencesObjectLogicalId: 'other' } : { valueType: 'number' }) } }
+    })
+    const workspace = (await h.workspaces.getWorkspace(SCOPE, WORKSPACE_ID))!
+    const record = (projection: readonly AssetCandidateVersion[]) => buildDefinitionRecord({ workspace, scopeRef: SCOPE, definitionId: 'diff', version: '1.0.0',
+      projection, standardProvenance: [], publishedAt: h.clock.now() })
+    const prior = record(before)
+    const editing = diffDefinitionProjection(after, prior, { workspaceId: WORKSPACE_ID, revision: '1' })
+    const diff = buildVersionDiff({ toPackRef: versionRef('next'), from: { definition: prior,
+      asset: priorAsset },
+      toDefinition: record(after), toCapabilities: { semanticPublished: true, deploymentExecutable: true, requiredCapabilities: [], missingCapabilities: [], actions: [] } })
+    expect(diff.changes.filter((change) => change.scope === 'definition').map((change) => change.change).sort())
+      .toEqual([...editing.additions, ...editing.changes].map((change) => change.code).sort())
+    expect(editing.breakingChanges.map((change) => change.code)).toEqual(expect.arrayContaining([
+      'IDENTITY_CHANGED', 'REFERENCE_CHANGED', 'ATTRIBUTE_CHANGED', 'VALUE_TYPE_CHANGED', 'UNIT_CHANGED', 'RELATION_CHANGED', 'CARDINALITY_CHANGED', 'ATTRIBUTE_REMOVED',
+    ]))
+  })
+})
 
 describe('industry asset publication', () => {
   it('publishes an immutable pack, pins declarations/source index and keeps the two surfaces separate', async () => {
@@ -493,7 +665,7 @@ describe('industry asset publication', () => {
       deploymentExecutable: { passed: true, blockers: [] },
       gate: 'blocked_semantic',
     })
-    h.seedReport(report)
+    await h.seedReport(report)
     await expect(
       h.service.publish(
         WORKSPACE_ID,
@@ -528,7 +700,7 @@ describe('industry asset publication', () => {
     const h = harness()
     const report = await seedAll(h)
     const stale = validationReport({ validationId: randomUUID(), revision: '0' })
-    h.seedReport(stale)
+    await h.seedReport(stale)
     await expect(
       h.service.publish(
         WORKSPACE_ID,
@@ -558,7 +730,7 @@ describe('industry asset publication', () => {
     )
     // A second pack in the same namespace claiming the same version is refused.
     const second = validationReport({ validationId: randomUUID(), revision: '2' })
-    h.seedReport(second)
+    await h.seedReport(second)
     await expect(
       h.service.publish(
         WORKSPACE_ID,

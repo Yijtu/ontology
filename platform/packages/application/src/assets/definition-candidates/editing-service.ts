@@ -40,7 +40,10 @@ import type {
   Uuid,
   VersionRef,
   CandidateSourceSpan,
+  ReviewableCandidateReader,
 } from '@ontology/contracts'
+import { definitionApprovalPins } from '../publication/publication-pins'
+import type { CandidateApprovalReader } from '../publication/publication-pins'
 import { candidateIdFor, canonicalJson, sha256DigestOf } from '../../extraction/canonical'
 import { DefinitionCandidateError } from './errors'
 import { EMPTY_TERMINOLOGY } from './terminology'
@@ -57,6 +60,7 @@ import {
 const EDITOR_ROLES: readonly string[] = ['profile-editor', 'platform-admin']
 const MAX_OPERANDS = 64
 const DEFAULT_PAGE = 100
+const CANDIDATE_PAGE = 250
 
 /** The synthetic "author" recorded for a human edit, so a batch is never confused with a model call. */
 export const DEFINITION_EDIT_MODEL_REF: ModelRef = { modelId: 'definition-editor', version: '1.0.0' }
@@ -80,6 +84,8 @@ export const DEFINITION_EDIT_POLICY_REF: VersionRef = {
 }
 
 export interface DefinitionCandidateEditingDependencies {
+  readonly reviewableCandidates?: ReviewableCandidateReader
+  readonly reviews?: CandidateApprovalReader
   readonly workspaces: IndustryWorkspaceStore
   readonly candidates: AssetCandidateStore
   readonly terminology: DefinitionTerminologySource
@@ -186,6 +192,8 @@ function countOf(candidates: readonly AssetCandidateVersion[]): AssetCandidateBa
  * an unsupported rule is saved as non-executable instead of being deleted.
  */
 export class DefinitionCandidateEditingService {
+  readonly #reviewableCandidates: ReviewableCandidateReader | undefined
+  readonly #reviews: CandidateApprovalReader | undefined
   readonly #workspaces: IndustryWorkspaceStore
   readonly #candidates: AssetCandidateStore
   readonly #terminology: DefinitionTerminologySource
@@ -195,6 +203,8 @@ export class DefinitionCandidateEditingService {
   readonly #newId: () => string
 
   constructor(dependencies: DefinitionCandidateEditingDependencies) {
+    this.#reviewableCandidates = dependencies.reviewableCandidates
+    this.#reviews = dependencies.reviews
     this.#workspaces = dependencies.workspaces
     this.#candidates = dependencies.candidates
     this.#terminology = dependencies.terminology
@@ -488,13 +498,19 @@ export class DefinitionCandidateEditingService {
       throw new DefinitionCandidateError('WORKSPACE_NOT_FOUND', `workspace ${input.workspaceId} is not visible in this scope`)
     }
     const projection = await this.#projection(input.workspaceId, [], new Set<string>(), ctx)
+    if (workspace.headRevision !== input.revision) {
+      throw new DefinitionCandidateError('VERSION_CONFLICT', 'publication validation requires the current workspace revision')
+    }
     const drafts = await this.#workspaces.listDrafts(scopeOf(ctx), input.workspaceId, ctx)
     const draft = drafts.find((entry) => entry.revision === input.revision) ?? drafts[drafts.length - 1]
     if (draft === undefined) {
       throw new DefinitionCandidateError('DRAFT_NOT_FOUND', `workspace ${input.workspaceId} has no draft to validate`)
     }
     const prepared: Prepared = { scopeRef: scopeOf(ctx), workspace, draft, actor: ctx.principal.subjectId }
-    return this.#validate(prepared, projection, input.strategy, ctx, true)
+    const validation = await this.#validate(prepared, projection, input.strategy, ctx, true)
+    const approvals = await definitionApprovalPins(projection, scopeOf(ctx), ctx, this.#reviewableCandidates, this.#reviews)
+    const blockers = [...validation.blockers, ...approvals.blockers]
+    return { ...validation, approvalPins: approvals.pins, blockers, publishable: blockers.length === 0 }
   }
 
   /** The diff between the current projection and the published definition version. */
@@ -685,7 +701,8 @@ export class DefinitionCandidateEditingService {
     readonly ctx: ToolContext
     readonly rejectOriginals?: readonly AssetCandidateVersion[]
   }): Promise<DefinitionEditingResult> {
-    const all = await this.#candidates.listCandidates(args.prepared.scopeRef, args.prepared.workspace.workspaceId, {}, args.ctx)
+    const all = await this.#candidates.listCandidates(args.prepared.scopeRef, args.prepared.workspace.workspaceId, { limit: CANDIDATE_PAGE }, args.ctx)
+    if (all.length === CANDIDATE_PAGE) throw new DefinitionCandidateError('INVALID_ARGUMENT', 'candidate page is incomplete; a complete semantic projection is required')
     const provisional = args.shells.map((shell) => finalize(shell, [], []))
     const projected = projectionOf(all, provisional, args.forcedRejected)
     const validation = await this.#validate(args.prepared, projected, undefined, args.ctx)
@@ -749,7 +766,8 @@ export class DefinitionCandidateEditingService {
     forcedRejected: ReadonlySet<string>,
     ctx: ToolContext,
   ): Promise<AssetCandidateVersion[]> {
-    const all = await this.#candidates.listCandidates(scopeOf(ctx), workspaceId, {}, ctx)
+    const all = await this.#candidates.listCandidates(scopeOf(ctx), workspaceId, { limit: CANDIDATE_PAGE }, ctx)
+    if (all.length === CANDIDATE_PAGE) throw new DefinitionCandidateError('INVALID_ARGUMENT', 'candidate page is incomplete; a complete semantic projection is required')
     return projectionOf(all, extra, forcedRejected)
   }
 
@@ -765,7 +783,7 @@ export class DefinitionCandidateEditingService {
     const published = await this.#published(prepared.workspace, prepared.draft, ctx)
     const compatibility = diffDefinitionProjection(projection, published?.version, {
       workspaceId: prepared.workspace.workspaceId,
-      revision: prepared.draft.revision,
+      revision: enforceExplicitly ? prepared.workspace.headRevision : prepared.draft.revision,
       ...(published?.ref === undefined ? {} : { publishedRef: published.ref }),
       ...(strategy === undefined ? {} : { strategy }),
     })
@@ -777,7 +795,7 @@ export class DefinitionCandidateEditingService {
     )
     return validateDefinitionProjection(projection, {
       workspaceId: prepared.workspace.workspaceId,
-      revision: prepared.draft.revision,
+      revision: enforceExplicitly ? prepared.workspace.headRevision : prepared.draft.revision,
       terminology,
       compatibility,
       ...(strategy === undefined ? {} : { strategy }),
@@ -791,7 +809,7 @@ export class DefinitionCandidateEditingService {
     draft: AssetDraftVersion,
     ctx: ToolContext,
   ): Promise<{ ref?: VersionRef; version?: SemanticDefinitionVersion } | undefined> {
-    const basePackRef = draft.basePackRef
+    const basePackRef = workspace.latestPublishedPackRef ?? draft.basePackRef
     if (basePackRef === undefined || this.#publishedDefinitions === undefined) return undefined
     if (!isVersionRef(basePackRef)) return undefined
     const version = await this.#publishedDefinitions.findVersion(
@@ -939,6 +957,8 @@ function conflictKind(
     case 'INVALID_IDENTITY':
       return 'identity_conflict'
     case 'REVISION_STRATEGY_REQUIRED':
+    case 'REVISION_STRATEGY_INVALID':
+    case 'CANDIDATE_NOT_APPROVED':
       return undefined
   }
 }

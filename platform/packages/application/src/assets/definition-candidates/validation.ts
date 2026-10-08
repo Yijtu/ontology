@@ -11,7 +11,7 @@ import type {
   DefinitionValidationReport,
   IndustryAttributeValueType,
   RevisionString,
-  SemanticDefinitionVersion,
+  SemanticDefinitionRecord,
   UnsupportedDefinitionRule,
   Uuid,
 } from '@ontology/contracts'
@@ -65,6 +65,17 @@ export interface DefinitionValidationContext {
   readonly unsupportedRules?: readonly UnsupportedDefinitionRule[]
   /** Only publication validation enforces the revision-strategy requirement. */
   readonly enforceRevisionStrategy?: boolean
+}
+
+/** Shared strategy validation for editing validation and the final publication gate. */
+export function definitionRevisionStrategyProblem(strategy: DefinitionRevisionStrategy | undefined, publishedRef: DefinitionCompatibilityReport['publishedRef']): string | undefined {
+  if (strategy === undefined) return undefined
+  if (!['new_version', 'keep_independent', 'retire_previous'].includes(strategy.kind) ||
+      typeof strategy.reason !== 'string' || strategy.reason.trim().length === 0) return 'revision strategy needs a supported kind and a reason'
+  if (strategy.kind === 'retire_previous' && (strategy.supersedesRef === undefined || publishedRef === undefined)) return 'retirement must pin the published predecessor'
+  const ref = strategy.supersedesRef
+  if (ref !== undefined && (ref.id !== publishedRef?.id || ref.version !== publishedRef.version || ref.digest !== publishedRef.digest)) return 'revision strategy pins a different published predecessor'
+  return undefined
 }
 
 function blocker(
@@ -184,6 +195,11 @@ export function validateDefinitionProjection(
         }),
       )
     }
+  }
+
+  if (context.enforceRevisionStrategy === true && definitionRevisionStrategyProblem(context.strategy, context.compatibility.publishedRef) !== undefined) {
+    findings.push(blocker({ code: 'REVISION_STRATEGY_INVALID', candidateId: emptyUuid(), logicalId: '',
+      path: 'compatibility.strategy', message: 'revision strategy must name a supported kind, a reason and the current published predecessor when superseding' }))
   }
 
   const blockers = findings.filter((finding) => finding.severity === 'blocker')
@@ -445,13 +461,13 @@ function emptyUuid(): Uuid {
 /* ------------------------------------------------------------------------------------- */
 
 interface PublishedIndex {
-  readonly objects: Map<string, SemanticDefinitionVersion['objects'][number]>
-  readonly attributes: Map<string, SemanticDefinitionVersion['attributes'][number]>
-  readonly relations: Map<string, SemanticDefinitionVersion['relations'][number]>
+  readonly objects: Map<string, SemanticDefinitionRecord['objects'][number]>
+  readonly attributes: Map<string, SemanticDefinitionRecord['attributes'][number]>
+  readonly relations: Map<string, SemanticDefinitionRecord['relations'][number]>
   readonly identityByObject: Map<string, readonly string[]>
 }
 
-function indexPublished(published: SemanticDefinitionVersion): PublishedIndex {
+function indexPublished(published: SemanticDefinitionRecord): PublishedIndex {
   const objects = new Map(published.objects.map((object) => [object.id, object]))
   const attributes = new Map(published.attributes.map((attribute) => [attribute.id, attribute]))
   const relations = new Map(published.relations.map((relation) => [relation.id, relation]))
@@ -473,8 +489,8 @@ function change(
  * revision strategy before publication; the old run/instance/history is never rewritten.
  */
 export function diffDefinitionProjection(
-  projection: readonly AssetCandidateVersion[],
-  published: SemanticDefinitionVersion | undefined,
+  projection: readonly Pick<AssetCandidateVersion, 'payload' | 'logicalId' | 'kind'>[],
+  published: SemanticDefinitionRecord | undefined,
   meta: { readonly workspaceId: Uuid; readonly revision: RevisionString; readonly publishedRef?: DefinitionCompatibilityReport['publishedRef']; readonly strategy?: DefinitionRevisionStrategy },
 ): DefinitionCompatibilityReport {
   if (published === undefined) {
@@ -482,7 +498,8 @@ export function diffDefinitionProjection(
       workspaceId: meta.workspaceId,
       revision: meta.revision,
       ...(meta.publishedRef === undefined ? {} : { publishedRef: meta.publishedRef }),
-      additions: [],
+      additions: projection.map((candidate) => ({ code: candidate.kind === 'object' ? 'OBJECT_ADDED' : candidate.kind === 'attribute' ? 'ATTRIBUTE_ADDED' : 'RELATION_ADDED',
+        logicalId: candidate.logicalId, kind: candidate.kind, breaking: false, message: `new ${candidate.kind} "${candidate.logicalId}"` })),
       changes: [],
       breakingChanges: [],
       requiresRevisionStrategy: false,
@@ -496,7 +513,7 @@ export function diffDefinitionProjection(
 
   for (const candidate of projection) {
     const payload = candidate.payload
-    seen.add(payload.logicalId)
+    seen.add(`${payload.kind}\u0000${payload.logicalId}`)
     if (payload.kind === 'object') {
       const before = index.objects.get(payload.logicalId)
       if (before === undefined) {
@@ -515,7 +532,8 @@ export function diffDefinitionProjection(
           before: beforeIdentity.join(','),
           after: afterIdentity.join(','),
         }))
-      } else if (before.displayName !== payload.displayName) {
+      }
+      if (before.displayName !== payload.displayName) {
         changes.push(change({ code: 'OBJECT_CHANGED', logicalId: payload.logicalId, kind: 'object', breaking: false, message: `display name of "${payload.logicalId}" changed` }))
       }
     } else if (payload.kind === 'attribute') {
@@ -527,7 +545,7 @@ export function diffDefinitionProjection(
       if (before.valueType !== payload.valueType) {
         changes.push(change({ code: 'VALUE_TYPE_CHANGED', logicalId: payload.logicalId, kind: 'attribute', breaking: true, message: `value type of "${payload.logicalId}" changed`, before: before.valueType, after: payload.valueType }))
       }
-      if ((before.unit?.unitCode ?? undefined) !== payload.unitCode) {
+      if ((before.unit?.unitCode ?? undefined) !== payload.unitCode || before.unit?.dimension !== (payload.unitCode === undefined ? undefined : payload.dimension ?? 'unspecified')) {
         changes.push(change({ code: 'UNIT_CHANGED', logicalId: payload.logicalId, kind: 'attribute', breaking: true, message: `unit of "${payload.logicalId}" changed`, ...(before.unit === undefined ? {} : { before: before.unit.unitCode }), ...(payload.unitCode === undefined ? {} : { after: payload.unitCode }) }))
       }
       if (before.objectId !== payload.objectLogicalId) {
@@ -555,17 +573,17 @@ export function diffDefinitionProjection(
   }
 
   for (const object of published.objects) {
-    if (!seen.has(object.id)) {
+    if (!seen.has(`object\u0000${object.id}`)) {
       changes.push(change({ code: 'OBJECT_REMOVED', logicalId: object.id, kind: 'object', breaking: true, message: `object "${object.id}" was removed` }))
     }
   }
   for (const attribute of published.attributes) {
-    if (!seen.has(attribute.id)) {
+    if (!seen.has(`attribute\u0000${attribute.id}`)) {
       changes.push(change({ code: 'ATTRIBUTE_REMOVED', logicalId: attribute.id, kind: 'attribute', breaking: true, message: `attribute "${attribute.id}" was removed` }))
     }
   }
   for (const relation of published.relations) {
-    if (!seen.has(relation.id)) {
+    if (!seen.has(`relation\u0000${relation.id}`)) {
       changes.push(change({ code: 'RELATION_REMOVED', logicalId: relation.id, kind: 'relation', breaking: true, message: `relation "${relation.id}" was removed` }))
     }
   }
@@ -688,6 +706,8 @@ export function issueCodeFor(finding: DefinitionValidationFinding): AssetCandida
     case 'DEFINITION_CONFLICT':
       return 'TERMINOLOGY_MISMATCH'
     case 'REVISION_STRATEGY_REQUIRED':
+    case 'REVISION_STRATEGY_INVALID':
+    case 'CANDIDATE_NOT_APPROVED':
       return 'INVALID_MODEL_OUTPUT'
   }
 }
