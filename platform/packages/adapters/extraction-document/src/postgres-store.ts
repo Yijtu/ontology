@@ -501,6 +501,29 @@ export class PostgresDocumentParseStore implements DocumentParseStore {
     )
   }
 
+  async listChunkPage(scopeRef: ScopeRef, parseId: Uuid,
+    page: { readonly limit: number; readonly cursor?: string }, ctx: ToolContext): Promise<{
+      readonly chunks: readonly DocumentChunkRecord[]; readonly nextCursor?: string
+    }> {
+    const scope = scopeWith(scopeRef, ctx)
+    const after = page.cursor === undefined ? -1 : Number(page.cursor)
+    if (!Number.isSafeInteger(page.limit) || page.limit < 1 || page.limit > 64
+      || !Number.isSafeInteger(after) || after < -1
+      || (page.cursor !== undefined && String(after) !== page.cursor)) {
+      throw new DocumentExtractionError('INVALID_REQUEST', 'invalid bounded chunk page')
+    }
+    return this.#withScope(scope, async (client) => {
+      const result = await client.query<ChunkRow>(`${CHUNK_SELECT}
+        WHERE tenant_id = $1 AND space_id = $2 AND parse_id = $3 AND ordinal > $4
+        ORDER BY ordinal LIMIT $5`, [scope.tenantId, scope.spaceId, parseId, after, page.limit + 1])
+      const hasMore = result.rows.length > page.limit
+      const rows = result.rows.slice(0, page.limit)
+      const last = rows[rows.length - 1]
+      return { chunks: rows.map(toChunkRecord),
+        ...(hasMore && last !== undefined ? { nextCursor: String(last.ordinal) } : {}) }
+    }, { readOnly: true })
+  }
+
   async close(): Promise<void> {
     await this.#pool.end()
   }

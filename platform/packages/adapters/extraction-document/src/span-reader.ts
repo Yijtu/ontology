@@ -1,6 +1,7 @@
 import { isToolContext } from '@ontology/contracts'
 import type {
   DocumentParseStore,
+  DocumentParseRecord,
   DocumentSpanReaderPort,
   ReadSpanRequest,
   ReadSpanResponse,
@@ -72,6 +73,25 @@ export class DocumentSpanReader implements DocumentSpanReaderPort {
         `no parse of ${request.documentRef.digest} is visible in this scope`,
       )
     }
+
+    return this.#read(record, request, ctx)
+  }
+
+  /** Read a pinned parse instead of silently resolving a newer parser revision. */
+  async readParsedSpan(record: DocumentParseRecord, request: ReadSpanRequest, ctx: ToolContext): Promise<ReadSpanResponse> {
+    const scope = trustedScope(ctx)
+    if (record.scopeRef.tenantId !== scope.tenantId || record.scopeRef.spaceId !== scope.spaceId
+      || record.originalRef.id !== request.documentRef.id
+      || record.originalRef.version !== request.documentRef.version
+      || record.originalRef.digest !== request.documentRef.digest) {
+      throw new DocumentExtractionError('SCOPE_MISMATCH', 'the pinned parse does not match the authorized original')
+    }
+
+    return this.#read(record, request, ctx)
+  }
+
+  async #read(record: DocumentParseRecord, request: ReadSpanRequest, ctx: ToolContext): Promise<ReadSpanResponse> {
+    const scope = trustedScope(ctx)
 
     const locator = request.locator
     let text: string
