@@ -1,3 +1,4 @@
+import { relationDefinition, relationCondition } from './rule-relation-fixtures'
 import { randomUUID } from 'node:crypto'
 import { describe, expect, it } from 'vitest'
 import type {
@@ -17,6 +18,7 @@ import type {
   RevisionString,
   RuleExceptionNode,
   RuleExpressionNode,
+  SemanticDefinitionVersion,
   ScopeRef,
   SyntheticCase,
   SyntheticExpectation,
@@ -174,7 +176,7 @@ class FakeActionTrials {
   }
 }
 
-function harness() {
+function harness(pinnedDefinition?: SemanticDefinitionVersion) {
   const workspaces = new FixtureWorkspaceStore()
   const workspace: IndustryWorkspace = {
     workspaceId: WORKSPACE_ID,
@@ -192,6 +194,7 @@ function harness() {
     workspaces,
     candidates: ruleActions,
     support: new FiniteGrammarRuleSupportValidator(),
+    ...(pinnedDefinition === undefined ? {} : { readRelationDefinition: async () => pinnedDefinition }),
     now: () => '2026-09-29T00:00:00Z',
   })
   const exampleSets = new InMemorySyntheticExampleSetStore()
@@ -210,6 +213,7 @@ function harness() {
     definitions,
     ruleActions,
     support: new FiniteGrammarRuleSupportValidator(),
+    ...(pinnedDefinition === undefined ? {} : { readRelationDefinition: async () => pinnedDefinition }),
     evaluator: new FiniteGrammarSyntheticEvaluator(),
     actionTrials,
     now: () => '2026-09-29T00:00:00Z',
@@ -671,5 +675,25 @@ describe('synthetic isolation guard', () => {
     expect(() =>
       h.validationService.assertSyntheticTarget(set, 'live', SCOPE, EDITOR),
     ).toThrowError(expect.objectContaining({ code: 'SYNTHETIC_NOT_PUBLISHABLE' }))
+  })
+})
+
+describe('pinned target-condition validation plumbing (#253)', () => {
+  it('uses target observations from each isolated case and refuses a mismatched definition pin', async () => {
+    const definition = relationDefinition(SCOPE)
+    const h = harness(definition)
+    await h.ruleActionService.saveRuleCandidate(WORKSPACE_ID, {
+      displayName: 'Relation rule', businessMeaning: 'requires an active target meter', suggestedReason: 'source', ruleId: 'site_ready',
+      applicability: { objectId: 'site' }, condition: relationCondition, exceptions: [], sourceRefs: [resourceRef()],
+      expectedRevision: '1', idempotencyKey: 'synthetic-relation-rule',
+    }, 'editor-1', EDITOR)
+    const samples = cases().map((sample) => ({ ...sample, objectTypeRef: 'site', fields: [{ fieldId: 'active', value: true }], relations: [{ relationId: 'meter_of', targetObjectRef: 'meter', endpointResolved: true, targetFields: [{ fieldId: 'active', value: false }, { fieldId: 'power', value: 12, unitCode: 'kW' }] }] }))
+    const gold: SyntheticExpectation[] = samples.map((sample) => ({ expectationId: `gold-${sample.caseId}`, caseId: sample.caseId, kind: 'rule', ruleId: 'site_ready', expected: 'false', origin: 'authored_oracle', reason: 'an explicitly inactive target refutes the premise', confirmedBy: 'expert-1', confirmedAt: '2026-10-01T00:00:00Z' }))
+    const set = await h.exampleService.generate(WORKSPACE_ID, { caseKinds: ['missing_parameter', 'same_name_different_meaning', 'contradiction', 'wrong_unit', 'missing_capability'], cases: samples, expectations: gold, expectedRevision: '1', idempotencyKey: 'synthetic-relation-set' }, 'editor-1', EDITOR)
+    const report = await h.validationService.validate(WORKSPACE_ID, { definitionRef: definition.ref, exampleSetId: set.exampleSetId, expectedRevision: '1', idempotencyKey: 'synthetic-relation-validation' }, 'editor-1', EDITOR)
+    expect(report.rules[0]?.deploymentExecutable).toBe(true)
+    expect(report.expectationResults.every((expectation) => expectation.matched && expectation.actual === 'false')).toBe(true)
+    const mismatched = await h.validationService.validate(WORKSPACE_ID, { definitionRef: { ...definition.ref, digest: DIGEST }, exampleSetId: set.exampleSetId, expectedRevision: '1', idempotencyKey: 'synthetic-relation-wrong-pin' }, 'editor-1', EDITOR)
+    expect(mismatched.rules[0]?.deploymentExecutable).toBe(false)
   })
 })

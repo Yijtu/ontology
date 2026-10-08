@@ -109,6 +109,8 @@ export interface RuleRangeNode {
 export interface RuleRelationNode {
   readonly op: 'relation'
   readonly relationId: string
+  /** Reviewed rule-specific condition on the schema-declared target; positive finite subset. */
+  readonly targetCondition?: RuleExpressionNode
   readonly spans: readonly RuleProvenanceSpan[]
 }
 

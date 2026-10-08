@@ -195,7 +195,7 @@ export function parseRuleExpression(value: unknown, field: string): RuleExpressi
     case 'not':
       return { op: 'not', operand: parseRuleExpression(value['operand'], `${field}.operand`), spans: [] }
     case 'relation':
-      return { op: 'relation', relationId: requireString(value['relationId'], `${field}.relationId`), spans: [] }
+      return { op: 'relation', relationId: requireString(value['relationId'], `${field}.relationId`), ...(value['targetCondition'] === undefined ? {} : { targetCondition: parseRuleExpression(value['targetCondition'], `${field}.targetCondition`) }), spans: [] }
     default:
       throw invalid(`model output field "${field}.op" is not a known expression node`)
   }

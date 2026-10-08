@@ -1,5 +1,6 @@
 import {
   bindActionDeclaration,
+  relationPremisesFromDefinition,
 } from '@ontology/contracts'
 import type {
   ActionCandidateVersion,
@@ -20,6 +21,7 @@ import type {
   RuleExceptionNode,
   RuleExpressionNode,
   RuleSupportReport,
+  SemanticDefinitionVersion,
   RuleSupportValidator,
   ScopeRef,
   Sha256Digest,
@@ -109,6 +111,8 @@ export interface RuleActionCandidateServiceDependencies {
   readonly workspaces: IndustryWorkspaceStore
   readonly candidates: RuleActionCandidateStore
   readonly support: RuleSupportValidator
+  /** Trusted resolver of the workspace's pinned published definition. */
+  readonly readRelationDefinition?: (workspaceId: Uuid, ctx: ToolContext) => Promise<SemanticDefinitionVersion | undefined>
   readonly now?: () => string
 }
 
@@ -168,12 +172,14 @@ export class RuleActionCandidateService {
   readonly #workspaces: IndustryWorkspaceStore
   readonly #candidates: RuleActionCandidateStore
   readonly #support: RuleSupportValidator
+  readonly #readRelationDefinition: RuleActionCandidateServiceDependencies['readRelationDefinition']
   readonly #now: () => string
 
   constructor(dependencies: RuleActionCandidateServiceDependencies) {
     this.#workspaces = dependencies.workspaces
     this.#candidates = dependencies.candidates
     this.#support = dependencies.support
+    this.#readRelationDefinition = dependencies.readRelationDefinition
     this.#now = dependencies.now ?? (() => new Date().toISOString())
   }
 
@@ -305,7 +311,8 @@ export class RuleActionCandidateService {
     if (candidate.lifecycle === 'rejected') {
       throw new RuleActionCandidateError('LIFECYCLE_INVALID', 'a rejected rule candidate cannot be enabled')
     }
-    const support = this.#supportReport(candidate.payload)
+    const definition = await this.#relationDefinition(workspaceId, prepared.scopeRef, ctx)
+    const support = this.#supportReport(candidate.payload, definition)
     if (!support.executable) {
       throw new RuleActionCandidateError(
         'SUPPORT_VALIDATION_BLOCKED',
@@ -370,12 +377,13 @@ export class RuleActionCandidateService {
 
   /* ----------------------------------------------------------------------------------- */
 
-  #supportReport(payload: { ruleId: string; condition: RuleExpressionNode; exceptions: readonly RuleExceptionNode[]; ruleDependencies: readonly string[] }): RuleSupportReport {
+  #supportReport(payload: { applicability: RuleApplicability; ruleId: string; condition: RuleExpressionNode; exceptions: readonly RuleExceptionNode[]; ruleDependencies: readonly string[] }, definition: SemanticDefinitionVersion | undefined): RuleSupportReport {
     return this.#support.validate({
       ruleId: payload.ruleId,
       condition: payload.condition,
       exceptions: payload.exceptions,
       ruleDependencies: payload.ruleDependencies,
+      relationPremises: (definition === undefined ? [] : relationPremisesFromDefinition(definition, payload.condition)).filter((premise) => premise.fromObjectId === payload.applicability.objectId),
     })
   }
 
@@ -387,12 +395,14 @@ export class RuleActionCandidateService {
     ctx: ToolContext,
     replacesCandidateId?: Uuid,
   ): Promise<RuleCandidateVersion> {
+    const definition = await this.#relationDefinition(prepared.workspace.workspaceId, prepared.scopeRef, ctx)
     const ruleDependencies = proposal.ruleDependencies ?? []
     const support = this.#support.validate({
       ruleId: proposal.ruleId,
       condition: proposal.condition,
       exceptions: proposal.exceptions,
       ruleDependencies,
+      relationPremises: (definition === undefined ? [] : relationPremisesFromDefinition(definition, proposal.condition)).filter((premise) => premise.fromObjectId === proposal.applicability.objectId),
     })
     const version: RuleCandidateVersion = {
       candidateId: this.#candidateId(key, proposal.ruleId),
@@ -548,6 +558,11 @@ export class RuleActionCandidateService {
       draftRevision: draft.revision,
       draftDigest: draft.digest,
     }
+  }
+
+  async #relationDefinition(workspaceId: Uuid, scopeRef: ScopeRef, ctx: ToolContext): Promise<SemanticDefinitionVersion | undefined> {
+    const definition = await this.#readRelationDefinition?.(workspaceId, ctx)
+    return definition?.scopeRef.tenantId === scopeRef.tenantId && definition.scopeRef.spaceId === scopeRef.spaceId ? definition : undefined
   }
 
   async #requireRule(workspaceId: Uuid, candidateId: Uuid, ctx: ToolContext): Promise<RuleCandidateVersion> {

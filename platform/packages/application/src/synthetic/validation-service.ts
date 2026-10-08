@@ -3,6 +3,7 @@ import {
   assertSyntheticExampleSetVersion,
   assertSyntheticNotPublishedAsObserved,
   bindActionDeclaration,
+  relationPremisesFromDefinition,
   isActionCandidateVersion,
   isIndependentExpectationOrigin,
   isRuleCandidateVersion,
@@ -23,6 +24,7 @@ import type {
   RuleActionCandidateStore,
   RuleCandidateVersion,
   RuleSupportValidator,
+  SemanticDefinitionVersion,
   RuleValidationResult,
   RunIndustryValidationInput,
   ScopeRef,
@@ -51,6 +53,7 @@ export interface IndustryValidationServiceDependencies {
   readonly ruleActions: RuleActionCandidateStore
   readonly support: RuleSupportValidator
   readonly evaluator: SyntheticCaseEvaluator
+  readonly readRelationDefinition?: (workspaceId: Uuid, ctx: ToolContext) => Promise<SemanticDefinitionVersion | undefined>
   readonly actionTrials?: ActionTrialPort
   readonly now?: () => string
   readonly newId?: () => string
@@ -193,6 +196,10 @@ export class IndustryValidationService {
     const ruleCandidates = current.filter(isRuleCandidateVersion)
     const actionCandidates = current.filter(isActionCandidateVersion)
 
+    const relationDefinition = await this.#deps.readRelationDefinition?.(workspaceId, ctx)
+    const pinnedRelationDefinition = relationDefinition === undefined ||
+      relationDefinition.scopeRef.tenantId !== scopeRef.tenantId || relationDefinition.scopeRef.spaceId !== scopeRef.spaceId ||
+      (input.definitionRef !== undefined && canonicalJson(input.definitionRef) !== canonicalJson(relationDefinition.ref)) ? undefined : relationDefinition
     const ruleResults: RuleValidationResult[] = []
     for (const candidate of ruleCandidates) {
       const payload = candidate.payload
@@ -201,6 +208,7 @@ export class IndustryValidationService {
         condition: payload.condition,
         exceptions: payload.exceptions,
         ruleDependencies: payload.ruleDependencies,
+        relationPremises: (pinnedRelationDefinition === undefined ? [] : relationPremisesFromDefinition(pinnedRelationDefinition, payload.condition)).filter((premise) => premise.fromObjectId === payload.applicability.objectId),
       })
       if (!support.executable) {
         deploymentBlockers.push(
@@ -334,6 +342,7 @@ export class IndustryValidationService {
           condition: payload.condition,
           exceptions: payload.exceptions,
           fields: item.fields,
+          relationPremises: (pinnedRelationDefinition === undefined ? [] : relationPremisesFromDefinition(pinnedRelationDefinition, payload.condition)).filter((premise) => premise.fromObjectId === item.objectTypeRef),
           ...(item.relations === undefined ? {} : { relations: item.relations }),
         })
         const matched = evaluated.conditionState === expectation.expected

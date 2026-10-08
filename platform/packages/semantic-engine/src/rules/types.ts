@@ -41,6 +41,8 @@ export type RuleAssertionValue = DecimalQuantity | string | boolean
 /** One version of a logical assertion as published into the append-only event stream (D3.1). */
 export interface RuleFact {
   readonly assertionId: string
+  /** Explicit relation edge metadata; these facts are never attribute observations. */
+  readonly relation?: { readonly relationId: string; readonly targetEntityId?: string; readonly targetObjectId: string; readonly endpointResolved: boolean }
   readonly logicalAssertionId: string
   readonly recordedSeq: RevisionString
   readonly op: 'assert' | 'correct' | 'retract'
@@ -58,6 +60,16 @@ export interface RuleFact {
   readonly sourceRef: SourceRef
   readonly sourceRefs?: readonly ResourceRef[]
   readonly evidenceId?: string
+}
+
+/** An explicit closed-world relation proof tied to one exact project, definition and bitemporal read. */
+export interface RuleRelationReadCompleteness {
+  readonly scopeRef: ScopeRef
+  readonly definitionRef: VersionRef
+  readonly subjectEntityId: string
+  readonly relationId: string
+  readonly validAt: string
+  readonly asOfRecordedSeq: RevisionString
 }
 
 /**
@@ -90,6 +102,18 @@ export interface RulePremiseGroup {
   readonly explicitObservation?: boolean
   /** Expected quantity unit; incompatible observations remain unknown instead of comparing amounts. */
   readonly unitCode?: string
+  /** One-hop existential branches, each requiring its own edge AND target condition. */
+  readonly relation?: {
+    readonly relationId: string
+    readonly completeness?: Pick<RuleRelationReadCompleteness, 'validAt' | 'asOfRecordedSeq'>
+    readonly targetGroups: readonly RulePremiseGroup[]
+    readonly targetConditions: readonly { readonly targetKey: string; readonly groupIds: readonly string[]; readonly condition: RuleConditionPlan }[]
+    readonly branches: readonly {
+      readonly edge: RulePremiseAlternative
+      readonly endpointResolved: boolean
+      readonly targetKey?: string
+    }[]
+  }
 }
 
 /**
@@ -253,6 +277,13 @@ export interface SupportGroupNode {
   readonly groupId: string
   readonly state: SupportNodeState
   readonly alternativeNodeIds: readonly string[]
+  /** Existential OR of branches; each branch requires its edge AND finite target condition. */
+  readonly relationBranches?: readonly {
+    readonly edgeNodeId: string
+    readonly state: SupportNodeState
+    readonly targetGroupNodeIds: readonly string[]
+    readonly targetCondition?: RuleConditionPlan
+  }[]
 }
 
 /** One rule node: the AND of its group nodes. */

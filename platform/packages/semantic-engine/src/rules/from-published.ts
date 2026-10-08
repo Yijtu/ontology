@@ -1,4 +1,4 @@
-import type { PublishedStatement, ResourceRef, SourceRef, VersionRef } from '@ontology/contracts'
+import type { IdentityPublishedBindingSnapshot, SemanticDefinitionVersion, PublishedStatement, ResourceRef, SourceRef, VersionRef } from '@ontology/contracts'
 import type {
   AttributeProjectionIssue,
   PublishedAttributeProjection,
@@ -223,4 +223,52 @@ export function ruleFactsFromStatements(
   options?: Partial<PublishedAttributeProjectionOptions>,
 ): RuleFact[] {
   return [...projectFacts(statements, options?.schemaRef).facts]
+}
+
+/** Resolve real published candidate endpoints against the scoped, confirmed identity snapshot. */
+export function projectPublishedRelationFacts(statements: readonly PublishedStatement[], options: {
+  readonly definition: SemanticDefinitionVersion
+  readonly bindings: IdentityPublishedBindingSnapshot['bindings']
+}): { readonly facts: readonly RuleFact[]; readonly issues: readonly { readonly statementId: string; readonly code: string; readonly message: string }[] } {
+  const facts: RuleFact[] = []
+  const issues: { statementId: string; code: string; message: string }[] = []
+  const declarations = new Map(options.definition.relations.map((relation) => [relation.id, relation]))
+  const bindings = new Map(options.bindings.map((binding) => [binding.candidateId, binding]))
+  const resolve = (endpoint: Record<string, unknown>): string | undefined => {
+    const candidateId = endpoint['candidateId']
+    if (typeof candidateId !== 'string') return undefined
+    const binding = bindings.get(candidateId)
+    const [assertion] = binding?.openAssertions ?? []
+    if (assertion === undefined || binding?.openAssertions.length !== 1 || assertion.objectId !== endpoint['objectId'] ||
+        binding.cannotLinkEntityIds.includes(assertion.entityId)) return undefined
+    return assertion.entityId
+  }
+  for (const statement of statements) {
+    if (statement.kind !== 'relation') continue
+    const declaration = statement.relationId === undefined ? undefined : declarations.get(statement.relationId)
+    const from = recordOf(statement.value['from'])
+    const to = recordOf(statement.value['to'])
+    if (declaration === undefined || from === undefined || to === undefined ||
+        from['objectId'] !== declaration.fromObjectId || to['objectId'] !== declaration.toObjectId) {
+      issues.push({ statementId: statement.statementId, code: 'RELATION_ENDPOINT_MISMATCH', message: 'published relation endpoints do not match the pinned definition' })
+      continue
+    }
+    const subject = resolve(from)
+    const target = resolve(to)
+    if (subject === undefined || target === undefined) {
+      issues.push({ statementId: statement.statementId, code: 'RELATION_ENDPOINT_UNRESOLVED', message: 'published relation has no unique confirmed endpoint binding' })
+    }
+    if (subject === undefined) continue
+    facts.push({
+      assertionId: `${statement.statementId}@${statement.version}`,
+      logicalAssertionId: statement.statementId, recordedSeq: statement.version, op: operationOf(statement),
+      subject, objectId: declaration.fromObjectId, predicate: declaration.id, value: true,
+      relation: { relationId: declaration.id, targetObjectId: declaration.toObjectId, endpointResolved: target !== undefined,
+        ...(target === undefined ? {} : { targetEntityId: target }) },
+      schemaRef: options.definition.ref, sourceStatementId: statement.statementId,
+      sourceRef: sourceRefOf(statement), sourceRefs: sourceRefsOf(statement),
+      validity: { validFrom: statement.validFrom ?? '1970-01-01T00:00:00Z', ...(statement.validTo === undefined ? {} : { validTo: statement.validTo }) },
+    })
+  }
+  return { facts, issues }
 }

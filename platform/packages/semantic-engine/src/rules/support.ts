@@ -49,6 +49,7 @@ export interface LoweredConditionLeaf {
    * it through confirmed published relations, never through a field value.
    */
   readonly relationId?: string
+  readonly relationDeclaration?: RuleRelationPremiseDeclaration
 }
 
 /**
@@ -199,7 +200,8 @@ function lowerPlan(
       return { kind: 'leaf', leaf: { ...operand.leaf, negative: true } }
     }
     case 'relation': {
-      const declaration = relations.declarations.get(node.relationId)
+      const declared = relations.declarations.get(node.relationId)
+      const declaration = declared === undefined ? undefined : { ...declared, ...(node.targetCondition === undefined ? {} : { targetCondition: node.targetCondition }) }
       if (declaration === undefined) {
         findings.push({
           code: 'RELATION_PREMISE_UNSUPPORTED',
@@ -218,6 +220,13 @@ function lowerPlan(
         })
         return undefined
       }
+      if (declaration.targetCondition !== undefined) {
+        const target = lowerPlan(declaration.targetCondition, `${path}.targetCondition`, findings, depth + 1, relations)
+        if (target === undefined || targetHasNegation(target)) {
+          findings.push({ code: 'RELATION_PREMISE_UNSUPPORTED', message: 'target condition must use positive compare/range/all/any', path, rawForm: declaration.targetCondition })
+          return undefined
+        }
+      }
       relations.relationCount += 1
       return {
         kind: 'leaf',
@@ -227,6 +236,7 @@ function lowerPlan(
           values: [],
           negative: false,
           relationId: node.relationId,
+          relationDeclaration: declaration,
         },
       }
     }
@@ -304,7 +314,7 @@ export class FiniteGrammarRuleSupportValidator implements RuleSupportValidator {
       const plan = lowerPlan(exception.condition, `exceptions[${String(index)}].condition`, findings, 0, relations)
       if (plan === undefined) continue
       // An exception is a negated condition; a relation premise may never be negated (SPEC §5.2).
-      if (plan.kind === 'leaf' && (plan.leaf.negative || plan.leaf.relationId !== undefined)) {
+      if (containsRelationNode(exception.condition) || (plan.kind === 'leaf' && plan.leaf.negative)) {
         findings.push({
           code: 'UNSUPPORTED_EXCEPTION',
           message: `exception ${exception.exceptionId} must be one explicit comparison, range, same-condition or different-condition any`,
@@ -369,7 +379,10 @@ export function lowerConditionPlan(
     relationCount: 0,
   }
   const plan = lowerPlan(condition, 'condition', findings, 0, relations)
-  return { plan, findings }
+  if (relations.relationCount > 1) {
+    findings.push({ code: 'RELATION_PREMISE_UNSUPPORTED', message: 'at most one positive one-hop relation premise is executable', path: 'condition', rawForm: condition })
+  }
+  return { plan: findings.length === 0 ? plan : undefined, findings }
 }
 
 function flattenConjunction(plan: LoweredConditionPlan): LoweredConditionLeaf[] | undefined {
@@ -406,4 +419,8 @@ export function lowerConditionLeaves(condition: RuleExpressionNode): LoweredCond
     return { leaves: [], findings }
   }
   return { leaves, findings }
+}
+
+function targetHasNegation(plan: LoweredConditionPlan): boolean {
+  return plan.kind === 'leaf' ? plan.leaf.negative : plan.children.some(targetHasNegation)
 }

@@ -11,7 +11,7 @@ import type {
 import { assessRuleSupport } from '@ontology/contracts'
 import { canonicalDecimalString } from '@ontology/core'
 import { collectConditionBranches, evaluateFiniteCondition } from '../rules/boolean'
-import { lowerConditionPlan } from '../rules/support'
+import { lowerConditionPlan, validateRuleSupport } from '../rules/support'
 import type { LoweredConditionLeaf, LoweredConditionPlan } from '../rules/support'
 import { evaluateFilter } from '../rules/values'
 import type { RuleAssertionValue } from '../rules/types'
@@ -71,7 +71,7 @@ function groupedFields(fields: readonly SyntheticCaseField[]): Map<string, Synth
 }
 
 function valueKey(field: SyntheticCaseField): string {
-  return JSON.stringify({ value: field.value, unitCode: field.unitCode ?? null })
+  return JSON.stringify(assertionValueOf(field))
 }
 
 function leafConflict(leaf: LoweredConditionLeaf, grouped: ReadonlyMap<string, SyntheticCaseField[]>): RuleSourceConflict | undefined {
@@ -108,14 +108,20 @@ function groupedRelations(relations: readonly SyntheticCaseRelation[]): Map<stri
  * Merely declaring a relation is never treated as a field value.
  */
 function evaluateRelation(
-  relationId: string,
+  declaration: RuleRelationPremiseDeclaration,
   relations: ReadonlyMap<string, SyntheticCaseRelation[]>,
   complete: boolean,
 ): RuleConditionState {
-  const matches = relations.get(relationId) ?? []
+  const matches = relations.get(declaration.relationId) ?? []
   if (matches.length === 0) return complete ? 'false' : 'unknown'
-  if (matches.some((relation) => relation.endpointResolved)) return 'true'
-  return 'unknown'
+  const states = matches.map((relation): RuleConditionState => {
+    if (!relation.endpointResolved || relation.targetObjectRef !== declaration.toObjectId) return 'unknown'
+    if (declaration.targetCondition === undefined) return 'true'
+    const target = lowerConditionPlan(declaration.targetCondition)
+    return target.plan === undefined ? 'unknown' : evaluateFiniteCondition(target.plan, (leaf) =>
+      evaluateLeaf(leaf, groupedFields(relation.targetFields ?? []), new Map(), false))
+  })
+  return evaluateFiniteCondition({ kind: 'any', children: states.map((state) => ({ kind: 'leaf', leaf: state })) }, (state) => state)
 }
 
 function evaluateLeaf(
@@ -125,7 +131,7 @@ function evaluateLeaf(
   relationReadComplete: boolean,
 ): RuleConditionState {
   if (leaf.relationId !== undefined) {
-    const state = evaluateRelation(leaf.relationId, relations, relationReadComplete)
+    const state = leaf.relationDeclaration === undefined ? 'unknown' : evaluateRelation(leaf.relationDeclaration, relations, relationReadComplete)
     return leaf.negative ? negate(state) : state
   }
   const candidates = grouped.get(leaf.attributeId) ?? []
@@ -169,7 +175,8 @@ export class FiniteGrammarSyntheticEvaluator implements SyntheticCaseEvaluator {
     const relations = groupedRelations(input.relations ?? [])
     const relationReadComplete = input.relationReadComplete === true
     const relationPremises = input.relationPremises ?? []
-    const condition = lowerConditionPlan(input.condition, relationPremises)
+    const support = validateRuleSupport({ ruleId: 'synthetic', condition: input.condition, exceptions: input.exceptions, relationPremises })
+    const condition = support.executable ? lowerConditionPlan(input.condition, relationPremises) : { plan: undefined, findings: support.findings }
     const rawConditionState =
       condition.plan === undefined
         ? 'unknown'
@@ -184,12 +191,15 @@ export class FiniteGrammarSyntheticEvaluator implements SyntheticCaseEvaluator {
         : collectConditionBranches(condition.plan, (leaf) => evaluateLeaf(leaf, grouped, relations, relationReadComplete))
 
     const sourceConflicts: RuleSourceConflict[] = []
-    if (condition.plan !== undefined) collectConflicts(condition.plan, grouped, sourceConflicts)
+    if (condition.plan !== undefined) {
+      collectConflicts(condition.plan, grouped, sourceConflicts)
+      collectRelationConflicts(condition.plan, relations, sourceConflicts)
+    }
 
     const findings = [...condition.findings]
     const exceptionStates: { exceptionId: string; state: RuleConditionState }[] = []
     for (const exception of input.exceptions) {
-      const lowered = lowerConditionPlan(exception.condition, relationPremises)
+      const lowered = support.executable ? lowerConditionPlan(exception.condition, relationPremises) : { plan: undefined, findings: [] }
       findings.push(...lowered.findings)
       const state =
         lowered.plan === undefined
@@ -223,4 +233,18 @@ function collectConflicts(
     return
   }
   for (const child of plan.children) collectConflicts(child, grouped, out)
+}
+
+function collectRelationConflicts(plan: LoweredConditionPlan, relations: ReadonlyMap<string, SyntheticCaseRelation[]>, out: RuleSourceConflict[]): void {
+  if (plan.kind !== 'leaf') {
+    plan.children.forEach((child) => collectRelationConflicts(child, relations, out))
+    return
+  }
+  const declaration = plan.leaf.relationDeclaration
+  if (declaration?.targetCondition === undefined) return
+  const target = lowerConditionPlan(declaration.targetCondition)
+  if (target.plan === undefined) return
+  for (const relation of relations.get(declaration.relationId) ?? []) {
+    if (relation.endpointResolved && relation.targetObjectRef === declaration.toObjectId) collectConflicts(target.plan, groupedFields(relation.targetFields ?? []), out)
+  }
 }
