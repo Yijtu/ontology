@@ -251,6 +251,22 @@ describe('entity candidate recall — identity scope and layered strategies', ()
 })
 
 describe('entity candidate recall — bounded similarity and evidence', () => {
+  it('charges repeated comparisons to distinct reservations on the same bounded shared ledger', async () => {
+    const backend = new CountingSimilarityBackend()
+    const shared = withBudget()
+    await shared.budget.openLedger({ ledgerId: LEDGER_ID, kind: 'run', overrideLimits: { maxModelTokens: 1040 } }, CTX_A)
+    const service = makeService([indexEntry({ entityId: 'E-1', displayName: 'Charger One', normalizedName: 'charger one' })], { similarity: backend, budget: shared.budget })
+    const input = request(entityCandidate({ attributes: [] }), { ledgerId: LEDGER_ID })
+    await service.recall(input, CTX_A)
+    await service.recall(input, CTX_A)
+    await expect(service.recall(input, CTX_A)).rejects.toMatchObject({ code: 'BUDGET_REFUSED' })
+    expect(backend.calls).toBe(2)
+    const scope = { tenantId: TENANT_A, spaceId: SPACE_A }
+    const reservations = await shared.store.listReservations(scope, LEDGER_ID, CTX_A)
+    expect(reservations).toHaveLength(2)
+    expect(new Set(reservations.map((reservation) => reservation.idempotencyKey)).size).toBe(2)
+    expect((await shared.store.getLedger(scope, LEDGER_ID, CTX_A))?.consumed.modelTokens).toBe(32)
+  })
   it('reports the similarity path unavailable instead of presenting keyword-only as similarity', async () => {
     const entries = [indexEntry({ entityId: 'E-1', displayName: 'Charger One', normalizedName: 'charger one' })]
     const result = await makeService(entries).recall(

@@ -309,6 +309,8 @@ export interface IdentityRecallResult {
 }
 
 export interface EntityCandidateRecallDependencies {
+  /** Host-minted id for each actual similarity comparison attempt on the same shared ledger. */
+  readonly newId?: () => Uuid
   /** Published definitions; the identity scope is resolved from here, never from a name. */
   readonly schemaSource: IndustrySchemaSource
   /** Bounded identity-index reader (production: StructuredQueryPort; tests: in-memory). */

@@ -103,9 +103,11 @@ function mergeEvidence(...groups: readonly (readonly ResourceRef[])[]): Resource
  */
 export class EntityCandidateRecallService {
   readonly #deps: EntityCandidateRecallDependencies
+  readonly #newId: () => string
 
   constructor(dependencies: EntityCandidateRecallDependencies) {
     this.#deps = dependencies
+    this.#newId = dependencies.newId ?? (() => globalThis.crypto.randomUUID())
   }
 
   async recall(request: EntityRecallRequest, ctx: ToolContext): Promise<IdentityRecallResult> {
@@ -460,14 +462,14 @@ export class EntityCandidateRecallService {
     const reservation = await budget.reserve(
       {
         ledgerId,
-        idempotencyKey: `identity-similarity:${args.request.candidate.candidateId}`,
+        idempotencyKey: `identity-similarity:${args.request.candidate.candidateId}:${this.#newId()}`,
         toolCalls: 0,
         modelTokens: this.#deps.similarityTokenEstimate ?? DEFAULT_SIMILARITY_TOKEN_ESTIMATE,
       },
       args.ctx,
     )
     const reservationId = reservation.reservation?.reservationId
-    if (!reservation.granted || reservationId === undefined) {
+    if (!reservation.granted || reservationId === undefined || reservation.reservation?.status !== 'reserved') {
       throw new IdentityRecallError(
         'BUDGET_REFUSED',
         reservation.denial?.message ?? 'the shared ledger refused the similarity reservation',
