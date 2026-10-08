@@ -1,3 +1,4 @@
+import { exampleComputeArtifact } from './example-compute-artifact'
 import { createHash, randomUUID } from 'node:crypto'
 import { readFile } from 'node:fs/promises'
 import Ajv2020 from 'ajv/dist/2020.js'
@@ -400,7 +401,7 @@ function disabledDecision() {
  * Core branches on an industry name.
  */
 function operationRegistry(): OperationRegistry {
-  const operations = [exampleRegisteredOperation()]
+  const operations = [exampleRegisteredOperation(exampleComputeArtifact)]
   return {
     namespace: 'core-local',
     registryVersion: COMPONENT_VERSION,
@@ -411,7 +412,7 @@ function operationRegistry(): OperationRegistry {
 
 /** The profile compute binding that enables the registered example operation for a run. */
 function exampleComputeBinding(): ComputeBinding {
-  const operation = exampleRegisteredOperation()
+  const operation = exampleRegisteredOperation(exampleComputeArtifact)
   return {
     operationRef: operation.operationRef,
     handlerRef: operation.handlerRef,
@@ -1714,7 +1715,7 @@ export async function createCoreLocalComposition(options: CoreLocalCompositionOp
       catalogSourceRef: { namespace: 'ontology-core-local', sourceId: 'duckdb-synthetic-snapshot' },
       compute: {
         registry: operationRegistry(),
-        handlers: createExampleComputeHandlers(),
+        handlers: createExampleComputeHandlers(exampleComputeArtifact),
         artifacts: computeArtifacts,
         reader: computeReader,
         validator: toolSchemaValidator(createAjv()),
