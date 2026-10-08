@@ -27,3 +27,21 @@ export function relationDefinition(scopeRef: ScopeRef): SemanticDefinitionVersio
   }
   return { ...draft, ref: { id: draft.definitionId, version: draft.version, digest: definitionVersionDigest(draft) }, publishedAt: '2026-10-01T00:00:00Z' }
 }
+
+/** Independently invalid scalar/operator/unit domains for the pinned meter attributes. */
+export const invalidRelationTargets: readonly { readonly name: string; readonly targetCondition: RuleExpressionNode }[] = [
+  { name: 'boolean ne string', targetCondition: { op: 'compare', attributeId: 'active', operator: 'ne', value: 'true', spans: [] } },
+  { name: 'string ne boolean', targetCondition: { op: 'compare', attributeId: 'meter_id', operator: 'ne', value: true, spans: [] } },
+  { name: 'boolean ordered comparison', targetCondition: { op: 'compare', attributeId: 'active', operator: 'gt', value: true, spans: [] } },
+  { name: 'boolean range', targetCondition: { op: 'range', attributeId: 'active', min: 0, max: 1, spans: [] } },
+  { name: 'quantity comparison missing unit', targetCondition: { op: 'compare', attributeId: 'power', operator: 'gte', value: 10, spans: [] } },
+  { name: 'quantity comparison wrong unit', targetCondition: { op: 'compare', attributeId: 'power', operator: 'gte', value: 10, unitCode: 'W', spans: [] } },
+  { name: 'quantity range missing unit', targetCondition: { op: 'range', attributeId: 'power', min: 10, max: 20, spans: [] } },
+  { name: 'quantity range wrong unit', targetCondition: { op: 'range', attributeId: 'power', min: 10, max: 20, unitCode: 'W', spans: [] } },
+  { name: 'quantity comparison nonnumeric string', targetCondition: { op: 'compare', attributeId: 'power', operator: 'ne', value: 'high', unitCode: 'kW', spans: [] } },
+  { name: 'categorical ordered comparison', targetCondition: { op: 'compare', attributeId: 'meter_id', operator: 'gt', value: 'same-name', spans: [] } },
+  { name: 'unit on boolean', targetCondition: { op: 'compare', attributeId: 'active', operator: 'eq', value: true, unitCode: 'kW', spans: [] } },
+  { name: 'invalid leaf inside any', targetCondition: { op: 'any', operands: [{ op: 'compare', attributeId: 'active', operator: 'eq', value: true, spans: [] }, { op: 'compare', attributeId: 'active', operator: 'ne', value: 'true', spans: [] }], spans: [] } },
+  { name: 'invalid leaf inside all', targetCondition: { op: 'all', operands: [{ op: 'compare', attributeId: 'active', operator: 'eq', value: true, spans: [] }, { op: 'range', attributeId: 'power', min: 10, spans: [] }], spans: [] } },
+  { name: 'reversed range', targetCondition: { op: 'range', attributeId: 'power', min: 20, max: 10, unitCode: 'kW', spans: [] } },
+]

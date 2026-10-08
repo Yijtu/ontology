@@ -12,7 +12,7 @@ import type { CandidateRecord, EntityCandidate, RelationCandidate, RuleCandidate
 import { createJobScope, startJobDatabase } from './job-postgres-harness'
 import type { JobDbHarness, JobTestScope } from './job-postgres-harness'
 import { toolContext } from '../unit/component-registry-fixtures'
-import { relationCondition, relationDefinition } from '../unit/rule-relation-fixtures'
+import { relationCondition, relationDefinition, invalidRelationTargets } from '../unit/rule-relation-fixtures'
 
 let harness: JobDbHarness
 let database: ControlPostgresDatabase
@@ -158,6 +158,29 @@ describe('real structured import → review → publish → compile → relation
     expect(historical.applicabilities.find((item) => item.ruleId === 'site_ready')?.conditionState).toBe('true')
     await p.publisher.reviseStatement({ statementId: secondEdge.candidateId, kind: 'retraction', reason: 'remaining edge withdrawn', expectedRevision: '1', idempotencyKey: 'relation-edge-two-withdraw' }, p.ctx)
     expect((await evaluate(p)).ready?.conditionState).toBe('unknown')
+  }, 120_000)
+
+  it('rejects invalid target types/units in real reviewed and published rules without activating them', async () => {
+    const p = await project('relation-typed-targets')
+    const initial = await imported(p, true)
+    const a = additions(initial.entities)
+    const template = a.rules[0]
+    if (template === undefined) throw new Error('missing rule fixture')
+    const invalid = invalidRelationTargets.map(({ name, targetCondition }): RuleCandidate => {
+      const id = randomUUID()
+      return { ...template, candidateId: id, idempotencyKey: sha256DigestOf(id), ruleId: `invalid_${name.replaceAll(' ', '_')}`, expression: { op: 'relation', relationId: 'meter_of', targetCondition, spans: [] } }
+    })
+    await candidateStore.insertCandidates(p.scope.scopeRef, [...a.edges, ...a.rules, ...invalid], p.ctx)
+    const publication = await publish(p, [...initial.entities, ...a.edges, ...a.rules, ...invalid], 'relation-typed-first')
+    expect(publication.ruleVersions.filter((rule) => rule.ruleId.startsWith('invalid_'))).toHaveLength(invalid.length)
+    const data = await p.source.load(p.scope.scopeRef, p.ctx)
+    expect(data.ruleIssues?.map((issue) => issue.ruleId).sort()).toEqual(invalid.map((rule) => rule.ruleId).sort())
+    expect(data.rules.every((rule) => !rule.publishedInstance?.ruleId.startsWith('invalid_'))).toBe(true)
+    const evaluated = new RuleEvaluator().evaluate({ scopeRef: p.scope.scopeRef, definitionRef: p.definition.ref, facts: data.facts, rules: data.rules, request: { scopeRef: p.scope.scopeRef, projectionRef: p.definition.ref } })
+    expect(evaluated.applicabilities.find((rule) => rule.ruleId === 'site_ready')?.conditionState).toBe('true')
+    expect(evaluated.applicabilities.find((rule) => rule.ruleId === 'site_inactive')?.conditionState).toBe('false')
+    expect(evaluated.applicabilities.some((rule) => rule.ruleId.startsWith('invalid_'))).toBe(false)
+    expect((await p.publisher.getPublication(publication.publicationId, p.ctx)).ruleVersions.filter((rule) => rule.ruleId.startsWith('invalid_'))).toHaveLength(invalid.length)
   }, 120_000)
 
   it('keeps absent edges unknown and unresolved endpoint bindings unusable after a real identity withdrawal', async () => {

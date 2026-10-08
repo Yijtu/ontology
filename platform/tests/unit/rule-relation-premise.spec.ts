@@ -1,6 +1,6 @@
 import { relationPremisesFromDefinition } from '@ontology/contracts'
 import type { RuleFact } from '@ontology/semantic-engine'
-import { relationDefinition, relationCondition, targetCondition } from './rule-relation-fixtures'
+import { relationDefinition, relationCondition, targetCondition, invalidRelationTargets } from './rule-relation-fixtures'
 import { SCOPE_A } from './verification-fixtures'
 import { describe, expect, it } from 'vitest'
 import type {
@@ -289,6 +289,38 @@ describe('published and synthetic target-condition parity (#253)', () => {
     expect(evaluate([original, corrected, ...observations]).applicability?.conditionState).toBe('false')
     expect(evaluate([original, corrected, ...observations], false, { asOfRecordedSeq: '1' }).applicability?.conditionState).toBe('true')
     expect(evaluate([{ ...original, op: 'retract' }, ...observations.map((fact) => ({ ...fact, value: false }))]).applicability?.conditionState).toBe('unknown')
+  })
+
+  it.each(invalidRelationTargets)('rejects the pinned target domain: $name across support, synthetic and compilation', ({ targetCondition }) => {
+    const condition: RuleExpressionNode = { op: 'relation', relationId: 'meter_of', targetCondition, spans: [] }
+    const premises = relationPremisesFromDefinition(definition, condition)
+    expect(premises).toEqual([])
+    const support = new FiniteGrammarRuleSupportValidator().validate({ ruleId: 'typed-target', condition, exceptions: [], relationPremises: premises })
+    expect(support.executable).toBe(false)
+    expect(support.findings.map((finding) => finding.code)).toContain('RELATION_PREMISE_UNSUPPORTED')
+    const synthetic = new FiniteGrammarSyntheticEvaluator().evaluateRule({ condition, exceptions: [], fields: [], relationPremises: premises, relations: [{ relationId: 'meter_of', targetObjectRef: 'meter', endpointResolved: true, targetFields: [{ fieldId: 'active', value: true }, { fieldId: 'meter_id', value: 'same-name' }, { fieldId: 'power', value: 12, unitCode: 'kW' }] }] })
+    expect(synthetic.conditionState).toBe('unknown')
+    expect(synthetic.findings.map((finding) => finding.code)).toContain('RELATION_PREMISE_UNSUPPORTED')
+    const compiled = compilePublishedRuleInstances([{ ...rule, expression: condition }], [edge(), fact('active', 'active', true), fact('power', 'power', { amount: '12', unit: 'kW' })], { scopeRef: SCOPE_A, definitionRef: definition.ref, definition, subjects: [{ objectId: 'site', subjectEntityId: 'site-1' }] })
+    expect(compiled.instances).toEqual([])
+    expect(compiled.issues).toHaveLength(1)
+  })
+
+  it.each([
+    { name: 'typed boolean ne', targetCondition: { op: 'compare', attributeId: 'active', operator: 'ne', value: false, spans: [] } },
+    { name: 'exact quantity eq', targetCondition: { op: 'compare', attributeId: 'power', operator: 'eq', value: '12.00', unitCode: 'kW', spans: [] } },
+    { name: 'numeric range with unit', targetCondition: { op: 'range', attributeId: 'power', min: 10, max: 20, unitCode: 'kW', spans: [] } },
+  ] satisfies readonly { readonly name: string; readonly targetCondition: RuleExpressionNode }[])('preserves valid pinned target parity: $name', ({ targetCondition }) => {
+    const condition: RuleExpressionNode = { op: 'relation', relationId: 'meter_of', targetCondition, spans: [] }
+    const premises = relationPremisesFromDefinition(definition, condition)
+    expect(new FiniteGrammarRuleSupportValidator().validate({ ruleId: 'typed-target', condition, exceptions: [], relationPremises: premises }).executable).toBe(true)
+    const synthetic = new FiniteGrammarSyntheticEvaluator().evaluateRule({ condition, exceptions: [], fields: [], relationPremises: premises, relations: [{ relationId: 'meter_of', targetObjectRef: 'meter', endpointResolved: true, targetFields: [{ fieldId: 'active', value: true }, { fieldId: 'power', value: 12, unitCode: 'kW' }] }] })
+    expect(synthetic.conditionState).toBe('true')
+    const facts = [edge(), fact('active', 'active', true), fact('power', 'power', { amount: '12', unit: 'kW' })]
+    const compiled = compilePublishedRuleInstances([{ ...rule, expression: condition }], facts, { scopeRef: SCOPE_A, definitionRef: definition.ref, definition, subjects: [{ objectId: 'site', subjectEntityId: 'site-1' }] })
+    expect(compiled.issues).toEqual([])
+    const evaluated = new RuleEvaluator().evaluate({ scopeRef: SCOPE_A, definitionRef: definition.ref, facts, rules: compiled.instances.map((instance) => instance.supportRule), request: { scopeRef: SCOPE_A, projectionRef: definition.ref } })
+    expect(evaluated.applicabilities[0]?.conditionState).toBe('true')
   })
 
   it('validates rule-scoped target attribute ownership and the exact definition pin', () => {
