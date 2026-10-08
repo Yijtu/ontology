@@ -8,3 +8,4 @@
  */
 export * from './public-api'
 export * from './typed-results-digest'
+export * from './rule-action-generation'

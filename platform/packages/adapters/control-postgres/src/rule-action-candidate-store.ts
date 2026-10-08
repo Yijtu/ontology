@@ -26,6 +26,7 @@ interface ScopedQuery {
 }
 
 interface CandidateRow extends QueryResultRow {
+  generation_context: RuleActionCandidateVersion['generationContext'] | null
   candidate_id: string
   workspace_id: string
   logical_id: string
@@ -49,10 +50,11 @@ interface CandidateRow extends QueryResultRow {
 
 const COLUMNS = `candidate_id, workspace_id, logical_id, domain, kind, display_name, business_meaning,
   suggested_reason, payload, source_refs, source_spans, lifecycle, enabled_at, replaces_candidate_id,
-  generation_call_ref, content_digest, idempotency_key, actor, recorded_at`
+  generation_call_ref, content_digest, idempotency_key, actor, recorded_at, generation_context`
 
 function toCandidate(row: CandidateRow): RuleActionCandidateVersion {
   return {
+    ...(row.generation_context === null || row.generation_context === undefined ? {} : { generationContext: row.generation_context }),
     candidateId: row.candidate_id,
     workspaceId: row.workspace_id,
     logicalId: row.logical_id,
@@ -110,12 +112,12 @@ export class PostgresRuleActionCandidateStore implements RuleActionCandidateStor
         `INSERT INTO agent_platform.asset_rule_action_candidates
            (tenant_id, space_id, candidate_id, workspace_id, logical_id, domain, kind, display_name,
             business_meaning, suggested_reason, payload, source_refs, source_spans, lifecycle, enabled_at,
-            replaces_candidate_id, generation_call_ref, content_digest, idempotency_key, actor, trace_id, recorded_at)
+            replaces_candidate_id, generation_call_ref, content_digest, idempotency_key, actor, trace_id, recorded_at, generation_context)
          VALUES (
            current_setting('app.tenant_id')::uuid,
            current_setting('app.space_id')::uuid,
            $1::uuid, $2::uuid, $3, $4, $5, $6, $7, $8, $9::jsonb, $10::jsonb, $11::jsonb, $12, $13::timestamptz,
-           $14::uuid, $15::jsonb, $16, $17, $18, current_setting('app.trace_id', true), $19::timestamptz)
+           $14::uuid, $15::jsonb, $16, $17, $18, current_setting('app.trace_id', true), $19::timestamptz, $20::jsonb)
          ON CONFLICT (tenant_id, space_id, idempotency_key) DO NOTHING
          RETURNING ${COLUMNS}`,
         [
@@ -138,6 +140,7 @@ export class PostgresRuleActionCandidateStore implements RuleActionCandidateStor
           candidate.idempotencyKey,
           candidate.actor,
           candidate.recordedAt,
+          candidate.generationContext === undefined ? null : JSON.stringify(candidate.generationContext),
         ],
       )
       const row = inserted.rows[0]

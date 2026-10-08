@@ -31,3 +31,5 @@ export type {
   SaveActionCandidateInput,
   SaveRuleCandidateInput,
 } from './service'
+export { RuleActionCandidateGenerationService, RULE_ACTION_PROMPT_VERSION, RULE_ACTION_RESPONSE_SCHEMA_REF } from './generation-service'
+export type { RuleActionGenerationInput, RuleActionGenerationExecution, RuleActionGenerationDependencies, RuleActionGenerationView, RuleActionSourceConfirmationInput } from './generation-service'

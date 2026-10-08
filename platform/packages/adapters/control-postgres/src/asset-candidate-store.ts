@@ -282,7 +282,7 @@ export class PostgresAssetCandidateStore implements AssetCandidateStore {
         `SELECT ${BATCH_COLUMNS} FROM agent_platform.asset_candidate_batches
           WHERE tenant_id = current_setting('app.tenant_id')::uuid
             AND space_id = current_setting('app.space_id')::uuid
-            AND batch_id = $1`,
+            AND batch_id = $1 AND generation_family = 'definition'`,
         [batchId],
       )
       const row = result.rows[0]
@@ -312,7 +312,7 @@ export class PostgresAssetCandidateStore implements AssetCandidateStore {
         `SELECT ${BATCH_COLUMNS} FROM agent_platform.asset_candidate_batches
           WHERE tenant_id = current_setting('app.tenant_id')::uuid
             AND space_id = current_setting('app.space_id')::uuid
-            AND workspace_id = $1
+            AND workspace_id = $1 AND generation_family = 'definition'
           ORDER BY recorded_at, batch_id
           LIMIT $2`,
         [workspaceId, limit],
@@ -412,7 +412,7 @@ export class PostgresAssetCandidateStore implements AssetCandidateStore {
       `SELECT ${BATCH_COLUMNS} FROM agent_platform.asset_candidate_batches
         WHERE tenant_id = current_setting('app.tenant_id')::uuid
           AND space_id = current_setting('app.space_id')::uuid
-          AND idempotency_key = $1`,
+          AND idempotency_key = $1 AND generation_family = 'definition'`,
       [idempotencyKey],
     )
     return result.rows[0]
