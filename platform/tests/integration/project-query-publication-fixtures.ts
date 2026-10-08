@@ -84,6 +84,12 @@ export function projectQueryPublicationFixture(input: {
     }
     return { entities, documentId, mapping: confirmation.mapping, records: bound.records }
   }
+  const restage = async (source: Awaited<ReturnType<typeof importCsv>>) => {
+    const entities: EntityCandidate[] = []
+    for (let offset = 0; offset < source.records.length; offset += 200) entities.push(...await workflow.materialization.stageRecords(projectId, { documentId: source.documentId,
+      recordRefs: source.records.slice(offset, offset + 200).map((record) => ({ recordId: record.recordId, revision: record.revision })) }, ctx))
+    return { ...source, entities }
+  }
   const approveAndPublish = async (source: Awaited<ReturnType<typeof importCsv>>) => {
     const confirm = async (candidate: EntityCandidate): Promise<void> => {
       const created = await identity.createRecord(scope, projectId, { candidateId: candidate.candidateId, documentId: source.documentId, relations: [], idempotencyKey: `query-instance-${candidate.candidateId}` }, ctx)
@@ -103,5 +109,5 @@ export function projectQueryPublicationFixture(input: {
     }
     return results
   }
-  return { projects, mappings, records, documents, identities, publications, readiness, schemas, workflow, publishedSource, definition, importCsv, approveAndPublish, replaceReadDefinition: (value: SemanticDefinitionVersion) => { readDefinition = value } }
+  return { projects, mappings, records, documents, identities, publications, readiness, schemas, workflow, publishedSource, definition, importCsv, restage, approveAndPublish, replaceReadDefinition: (value: SemanticDefinitionVersion) => { readDefinition = value } }
 }

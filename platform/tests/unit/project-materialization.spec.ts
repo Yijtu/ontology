@@ -14,6 +14,7 @@ import type {
   InsertMappingResult,
   MappingRef,
   ProjectDatasetQueryPort,
+  ProjectDatasetActivationReceipt,
   ProjectDatasetQueryRequest,
   ProjectDatasetQueryResult,
   ProjectDatasetStageInput,
@@ -206,7 +207,14 @@ class FakeMappings implements ProjectMappingStore {
 class FakeBackend implements ProjectDatasetWriterPort, ProjectDatasetQueryPort {
   readonly backend = 'test-memory'
   readonly snapshots = new Map<string, ProjectDatasetQueryResult>()
+  readonly activations = new Map<string, ProjectDatasetActivationReceipt>()
   failNext = false
+
+  async recordActivation(_scope: ScopeRef, receipt: ProjectDatasetActivationReceipt): Promise<void> {
+    if (!this.activations.has(receipt.snapshotRef.id)) this.activations.set(receipt.snapshotRef.id, receipt)
+  }
+
+  async getActivation(_scope: ScopeRef, snapshotRef: { readonly id: string }): Promise<ProjectDatasetActivationReceipt | undefined> { return this.activations.get(snapshotRef.id) }
 
   async stageSnapshot(_scope: ScopeRef, input: ProjectDatasetStageInput): Promise<ProjectDatasetStageResult> {
     if (this.failNext) {
@@ -344,6 +352,13 @@ describe('ProjectDataMaterializationService (unit)', () => {
     await expect(service.materialize(PROJECT_ID, { objectId: 'Meter' }, ctx)).rejects.toMatchObject({ code: 'INPUT_NOT_READY' })
     expect(backend.snapshots.size).toBe(0)
     await expect(service.queryActive({ projectId: PROJECT_ID }, ctx)).rejects.toMatchObject({ code: 'SNAPSHOT_UNAVAILABLE' })
+  })
+
+  it('refuses an arbitrary staged snapshot without an actual immutable activation receipt', async () => {
+    const { service, backend, ctx } = serviceWith([record(RECORD_A, '1005')])
+    const status = await service.materialize(PROJECT_ID, { objectId: 'Meter' }, ctx)
+    backend.activations.delete(status.snapshotRef!.id)
+    await expect(service.query({ projectRevisionRef: status.projectRevisionRef, snapshotRef: status.snapshotRef! }, ctx)).rejects.toMatchObject({ code: 'SNAPSHOT_UNAVAILABLE' })
   })
 
 })

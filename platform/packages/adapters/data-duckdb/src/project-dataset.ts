@@ -6,6 +6,8 @@ import {
   isToolContext,
   assertProjectDatasetSnapshotShape,
   assertProjectDatasetMetadataShape,
+  assertProjectDatasetActivationShape,
+  projectDatasetPhysicalCellsMatch,
 } from '@ontology/contracts'
 import type {
   AttributeValueType,
@@ -24,6 +26,7 @@ import type {
   ProjectDatasetRow,
   ProjectDatasetStageInput,
   ProjectDatasetStageResult,
+  ProjectDatasetActivationReceipt,
   ProjectDatasetSnapshotMetadata,
   ProjectDatasetWriterPort,
   ProjectSnapshotQueryDescriptor,
@@ -274,7 +277,7 @@ export class DuckDbProjectDatasetAdapter
     const metadata: ProjectDatasetSnapshotMetadata = { scopeRef, snapshotRef, body: snapshotBody, decimalScales: decimalScalesOf(body.columns, body.rows), rowContentDigest: sha256DigestOf(canonicalJson(body.rows)) }
     const existing = await this.#restore(scopeRef, snapshotId)
     if (existing !== undefined) {
-      if (canonicalJson({ ...existing.metadata, body: { ...existing.metadata.body, recordedAt: '' } }) !== canonicalJson({ ...metadata, body: { ...metadata.body, recordedAt: '' } }) || existing.canonicalDigest !== input.canonicalDigest) throw new ProjectDatasetError('IDEMPOTENCY_CONFLICT', 'the snapshot identity already carries different content')
+      if (canonicalJson({ ...existing.metadata, activation: undefined, body: { ...existing.metadata.body, recordedAt: '' } }) !== canonicalJson({ ...metadata, activation: undefined, body: { ...metadata.body, recordedAt: '' } }) || existing.canonicalDigest !== input.canonicalDigest) throw new ProjectDatasetError('IDEMPOTENCY_CONFLICT', 'the snapshot identity already carries different content')
       return { snapshotRef, rowCount: existing.rowCount, schemaDigest: existing.schemaDigest, canonicalDigest: existing.canonicalDigest, created: false }
     }
     await this.#engine.runTrusted('BEGIN TRANSACTION')
@@ -360,9 +363,30 @@ export class DuckDbProjectDatasetAdapter
     await this.start()
     const staged = await this.#restore(scopeRef, snapshotRef.id)
     if (staged === undefined) return
+    if (staged.metadata.activation !== undefined) throw new ProjectDatasetError('FORBIDDEN', 'an activated historical snapshot cannot be discarded')
     this.#snapshots.delete(snapshotRef.id)
     await this.#engine.runTrusted('DELETE FROM "project_dataset_metadata" WHERE snapshot_id = ?', [snapshotRef.id])
     await this.#engine.runTrusted(`DROP TABLE IF EXISTS ${quoteIdentifier(tableFor(snapshotRef.id))}`)
+  }
+
+  async recordActivation(scopeRef: ScopeRef, receipt: ProjectDatasetActivationReceipt, ctx: ToolContext): Promise<void> {
+    assertScope(scopeRef, ctx)
+    assertProjectDatasetActivationShape(receipt)
+    if (!ctx.principal.roles.some((role) => ['operator', 'profile-editor', 'platform-admin'].includes(role))) throw new ProjectDatasetError('FORBIDDEN', 'snapshot activation is a host materialization operation')
+    await this.start()
+    const staged = await this.#restore(scopeRef, receipt.snapshotRef.id)
+    if (staged === undefined) throw new ProjectDatasetError('SNAPSHOT_UNAVAILABLE', 'the activated snapshot is missing')
+    if (staged.metadata.activation !== undefined) return
+    const metadata = { ...staged.metadata, activation: receipt }
+    assertProjectDatasetMetadataShape(metadata)
+    await this.#engine.runTrusted('UPDATE "project_dataset_metadata" SET metadata = ? WHERE snapshot_id = ?', [JSON.stringify(metadata), receipt.snapshotRef.id])
+  }
+
+  async getActivation(scopeRef: ScopeRef, snapshotRef: ProjectDatasetRef, ctx: ToolContext): Promise<ProjectDatasetActivationReceipt | undefined> {
+    assertScope(scopeRef, ctx)
+    await this.start()
+    const staged = await this.#restore(scopeRef, snapshotRef.id)
+    return staged !== undefined && canonicalJson(staged.metadata.snapshotRef) === canonicalJson(snapshotRef) ? staged.metadata.activation : undefined
   }
 
   async querySnapshot(
@@ -674,6 +698,17 @@ export class DuckDbProjectDatasetAdapter
       if (metadata.snapshotRef.id !== id) return undefined
       const relation = await session.executeReadOnly('SELECT table_name FROM information_schema.tables WHERE table_schema = ? AND table_name = ?', ['main', tableFor(id)], 1)
       if (relation.rawRows.length === 0) { this.#snapshots.delete(id); return undefined }
+      const verified = await session.executeReadOnly(`SELECT ${['record_id', 'object_id', 'source_row_key', 'values_json', 'sources_json', ...metadata.body.columns.map((column) => column.name)].map(quoteIdentifier).join(', ')} FROM ${quoteIdentifier(tableFor(id))} ORDER BY "record_id" LIMIT 20001`, [], 20001)
+      const persisted: ProjectDatasetRow[] = verified.rawRows.map((row) => ({ recordId: String(row[0]), objectId: String(row[1]), sourceRowKey: String(row[2]),
+        values: JSON.parse(String(row[3])) as Record<string, ProjectDatasetCell>, sources: JSON.parse(String(row[4])) as ProjectDatasetFieldSource[] }))
+      const physical = verified.rawRows.map((row, rowIndex) => ({ recordId: String(row[0]), values: Object.fromEntries(metadata.body.columns.map((column, columnIndex) => {
+        const index = columnIndex + 5
+        return [column.name, normaliseValue(verified.columnTypeIds[index] ?? 0, row[index], verified.jsRows[rowIndex]?.[index])]
+      })) }))
+      assertProjectDatasetSnapshotShape({ ref: metadata.snapshotRef, body: { ...metadata.body, rows: persisted } })
+      if (persisted.length !== metadata.body.coverage.processedCount || metadata.rowContentDigest !== sha256DigestOf(canonicalJson(persisted)) ||
+        canonicalDigestOf(metadata.body.columns, persisted) !== String(row[2]) || sha256DigestOf(canonicalJson(metadata.body.columns)) !== String(row[1]) ||
+        !projectDatasetPhysicalCellsMatch(metadata.body.columns, persisted, physical)) throw new ProjectDatasetError('SNAPSHOT_UNAVAILABLE', 'the immutable DuckDB projection JSON or typed columns changed')
       const staged: StagedSnapshot = { scopeKey: scopeKeyOf(scope), snapshotId: id, objectId: metadata.body.objectId,
         version: metadata.snapshotRef.version, table: tableFor(id), columns: metadata.body.columns, rowCount: metadata.body.coverage.processedCount,
         schemaDigest: String(row[1]), canonicalDigest: String(row[2]), metadata }

@@ -9,6 +9,8 @@ import {
   isToolContext,
   assertProjectDatasetSnapshotShape,
   assertProjectDatasetMetadataShape,
+  assertProjectDatasetActivationShape,
+  projectDatasetPhysicalCellsMatch,
 } from '@ontology/contracts'
 import type {
   AttributeValueType,
@@ -27,6 +29,7 @@ import type {
   ProjectDatasetRow,
   ProjectDatasetStageInput,
   ProjectDatasetStageResult,
+  ProjectDatasetActivationReceipt,
   ProjectDatasetSnapshotMetadata,
   ProjectDatasetWriterPort,
   ProjectSnapshotQueryDescriptor,
@@ -71,6 +74,7 @@ export interface PostgresProjectDatasetConfig {
   readonly maxPoolSize?: number
   readonly maxQueryPoolSize?: number
   readonly applicationName?: string
+  readonly faultInjection?: { readonly beforeReadCommit?: () => Promise<void> }
 }
 
 function isRecord(value: unknown): value is Record<string, unknown> {
@@ -200,6 +204,7 @@ interface MetaRow extends QueryResultRow {
   canonical_digest: string
   row_count: string
   metadata: ProjectDatasetSnapshotMetadata | null
+  schema_digest: string
 }
 
 /**
@@ -221,10 +226,12 @@ export class PostgresProjectDatasetAdapter
   readonly #queryPool: Pool
   readonly #ownsQueryPool: boolean
   readonly #schema: string
+  readonly #beforeReadCommit: (() => Promise<void>) | undefined
   readonly #staged = new Map<string, StagedQuery>()
   readonly #active = new Map<string, ActiveProjectQuery>()
 
   constructor(config: PostgresProjectDatasetConfig) {
+    this.#beforeReadCommit = config.faultInjection?.beforeReadCommit
     this.#schema = config.schema ?? DEFAULT_SCHEMA
     if (!IDENTIFIER.test(this.#schema) || /^(?:public|control|ontology_control|agent_platform)$/i.test(this.#schema)) {
       throw new ProjectDatasetError('INVALID_ARGUMENT', `invalid business schema "${this.#schema}"`)
@@ -290,7 +297,7 @@ export class PostgresProjectDatasetAdapter
       const existing = await client.query<MetaRow>(`SELECT metadata, canonical_digest FROM ${this.#table(SNAPSHOT_TABLE)} WHERE snapshot_id = $1::uuid FOR UPDATE`, [snapshotId])
       const stored = existing.rows[0]
       if (stored?.metadata === null || stored?.metadata === undefined ||
-        stableJson({ ...stored.metadata, body: { ...stored.metadata.body, recordedAt: '' } }) !== stableJson({ ...metadata, body: { ...metadata.body, recordedAt: '' } }) || stored.canonical_digest !== input.canonicalDigest) {
+        stableJson({ ...stored.metadata, activation: undefined, body: { ...stored.metadata.body, recordedAt: '' } }) !== stableJson({ ...metadata, activation: undefined, body: { ...metadata.body, recordedAt: '' } }) || stored.canonical_digest !== input.canonicalDigest) {
         throw new ProjectDatasetError('IDEMPOTENCY_CONFLICT', 'the snapshot identity already carries different content or scope')
       }
       for (let start = 0; start < body.rows.length; start += INSERT_BATCH) {
@@ -331,6 +338,8 @@ export class PostgresProjectDatasetAdapter
             `(values -> ${quoteLiteral(column.name)} ->> 'value')::${postgresTypeOfProject(column.valueType)} AS ${quoteIdentifier(column.name)}`,
         ),
         `sources::text AS ${quoteIdentifier('sources_json')}`,
+        `source_row_key AS ${quoteIdentifier('source_row_key')}`,
+        `values::text AS ${quoteIdentifier('values_json')}`,
       ].join(', ')
       await client.query(
         `CREATE OR REPLACE VIEW ${this.#table(view)} AS
@@ -367,9 +376,28 @@ export class PostgresProjectDatasetAdapter
     assertScope(scopeRef, ctx)
     const staged = await this.#restore(scopeRef, snapshotRef.id)
     if (staged === undefined) return
+    if (staged.metadata.activation !== undefined) throw new ProjectDatasetError('FORBIDDEN', 'an activated historical snapshot cannot be discarded')
     this.#staged.delete(snapshotRef.id)
     await this.#pool.query(`DROP VIEW IF EXISTS ${this.#table(queryViewName(snapshotRef.id))}`)
     await this.#deleteSnapshot(snapshotRef.id)
+  }
+
+  async recordActivation(scopeRef: ScopeRef, receipt: ProjectDatasetActivationReceipt, ctx: ToolContext): Promise<void> {
+    assertScope(scopeRef, ctx)
+    assertProjectDatasetActivationShape(receipt)
+    if (!ctx.principal.roles.some((role) => ['operator', 'profile-editor', 'platform-admin'].includes(role))) throw new ProjectDatasetError('FORBIDDEN', 'snapshot activation is a host materialization operation')
+    const staged = await this.#restore(scopeRef, receipt.snapshotRef.id)
+    if (staged === undefined) throw new ProjectDatasetError('SNAPSHOT_UNAVAILABLE', 'the activated snapshot is missing')
+    const metadata = { ...staged.metadata, activation: receipt }
+    assertProjectDatasetMetadataShape(metadata)
+    await this.#pool.query(`UPDATE ${this.#table(SNAPSHOT_TABLE)} SET metadata = jsonb_set(metadata, '{activation}', $2::jsonb) WHERE snapshot_id = $1::uuid AND metadata->'scopeRef'->>'tenantId' = $3 AND metadata->'scopeRef'->>'spaceId' = $4 AND NOT (metadata ? 'activation')`,
+      [receipt.snapshotRef.id, JSON.stringify(receipt), scopeRef.tenantId, scopeRef.spaceId])
+  }
+
+  async getActivation(scopeRef: ScopeRef, snapshotRef: ProjectDatasetRef, ctx: ToolContext): Promise<ProjectDatasetActivationReceipt | undefined> {
+    assertScope(scopeRef, ctx)
+    const staged = await this.#restore(scopeRef, snapshotRef.id)
+    return staged !== undefined && stableJson(staged.metadata.snapshotRef) === stableJson(snapshotRef) ? staged.metadata.activation : undefined
   }
 
   async querySnapshot(
@@ -506,7 +534,7 @@ export class PostgresProjectDatasetAdapter
     if (plan.mode !== 'direct') {
       throw new PostgresQueryError('UNSUPPORTED_QUERY', 'only direct SQL plans are executed by this adapter')
     }
-    await this.#restoreDeclared(plan.referencedObjects, ctx)
+    await this.#restoreDeclared(plan.referencedObjects, ctx, target)
     const validation = validateReadOnlySql({
       sql: plan.sql,
       parameters: plan.parameters,
@@ -526,6 +554,7 @@ export class PostgresProjectDatasetAdapter
     const cursorPin = sha256DigestOf(stableJson({ scope: scopeKeyOf({ tenantId: ctx.principal.tenantId, spaceId: ctx.allowedResources.spaceId }), plan }))
     const offset = decodeCursor(request.cursor, cursorPin)
     const raw = await this.#runReadOnly(validation.executableSql, plan.parameters, maxRows, timeoutMs, offset, target)
+    if (target.cancelled) throw new PostgresQueryError('INTERNAL_ERROR', 'the project query was cancelled after its read')
     const truncated = raw.rows.length > maxRows
     const kept = truncated ? raw.rows.slice(0, maxRows) : raw.rows
     const rows: unknown[][] = []
@@ -600,7 +629,9 @@ export class PostgresProjectDatasetAdapter
       const wrapped = `SELECT * FROM (${sql}) AS "ontology_page" LIMIT ${String(maxRows + 1)} OFFSET ${String(offset)}`
       const result = await client.query<unknown[]>({ text: wrapped, values: [...parameters], rowMode: 'array' })
       if (target.cancelled) throw new PostgresQueryError('INTERNAL_ERROR', 'the project query was cancelled')
+      await this.#beforeReadCommit?.()
       await client.query('COMMIT')
+      if (target.cancelled) throw new PostgresQueryError('INTERNAL_ERROR', 'the project query was cancelled after commit')
       return {
         rows: result.rows as unknown[][],
         fields: result.fields.map((field) => ({ name: field.name, dataTypeID: field.dataTypeID })),
@@ -664,7 +695,7 @@ export class PostgresProjectDatasetAdapter
     void columns
     const result = await client.query<RowRow>(
       `SELECT record_id::text AS record_id, object_id, source_row_key, values, sources
-         FROM ${this.#table(ROW_TABLE)} WHERE snapshot_id = $1::uuid ORDER BY record_id`,
+         FROM ${this.#table(ROW_TABLE)} WHERE snapshot_id = $1::uuid ORDER BY record_id LIMIT 20001`,
       [snapshotId],
     )
     return result.rows.map((row) => ({
@@ -676,32 +707,56 @@ export class PostgresProjectDatasetAdapter
     }))
   }
 
-  async #restore(scope: ScopeRef, id: string): Promise<StagedQuery | undefined> {
-    let result: { readonly rows: MetaRow[] }
+  async #restore(scope: ScopeRef, id: string, target?: ActiveProjectQuery): Promise<StagedQuery | undefined> {
+    const client = await this.#pool.connect()
+    let metadata: ProjectDatasetSnapshotMetadata
     try {
-      result = await this.#pool.query<MetaRow>(`SELECT metadata, canonical_digest, columns, row_count::text AS row_count FROM ${this.#table(SNAPSHOT_TABLE)} WHERE snapshot_id = $1::uuid AND metadata->'scopeRef'->>'tenantId' = $2 AND metadata->'scopeRef'->>'spaceId' = $3`, [id, scope.tenantId, scope.spaceId])
+      if (target !== undefined) {
+        const pid = await client.query<{ pid: number }>('SELECT pg_backend_pid() AS pid')
+        target.pid = pid.rows[0]?.pid
+        if (target.cancelled) throw new PostgresQueryError('INTERNAL_ERROR', 'the project query was cancelled before integrity verification')
+      }
+      await client.query('BEGIN TRANSACTION ISOLATION LEVEL REPEATABLE READ READ ONLY')
+      const result = await client.query<MetaRow>(`SELECT metadata, canonical_digest, schema_digest, columns, row_count::text AS row_count FROM ${this.#table(SNAPSHOT_TABLE)} WHERE snapshot_id = $1::uuid AND metadata->'scopeRef'->>'tenantId' = $2 AND metadata->'scopeRef'->>'spaceId' = $3`, [id, scope.tenantId, scope.spaceId])
+      const record = result.rows[0]
+      if (record?.metadata === undefined || record.metadata === null) { await client.query('ROLLBACK'); return undefined }
+      metadata = record.metadata
+      assertProjectDatasetMetadataShape(metadata)
+      if (metadata.snapshotRef.id !== id || scopeKeyOf(metadata.scopeRef) !== scopeKeyOf(scope)) { await client.query('ROLLBACK'); return undefined }
+      const relation = await client.query<{ present: boolean }>('SELECT to_regclass($1) IS NOT NULL AS present', [this.#table(queryViewName(id))])
+      if (relation.rows[0]?.present !== true) { await client.query('ROLLBACK'); this.#staged.delete(id); return undefined }
+      const persisted = await this.#readRows(client, id, metadata.body.columns)
+      await this.#assertPhysicalIntegrity(client, metadata, persisted, record.canonical_digest, record.schema_digest)
+      await client.query('COMMIT')
     } catch (error) {
+      await client.query('ROLLBACK').catch(() => undefined)
       if (isRecord(error) && (error['code'] === '42P01' || error['code'] === '42703')) return undefined
-      throw error
-    }
-    const metadata = result.rows[0]?.metadata
-    if (metadata === undefined || metadata === null) return undefined
-    assertProjectDatasetMetadataShape(metadata)
-    if (metadata.snapshotRef.id !== id || scopeKeyOf(metadata.scopeRef) !== scopeKeyOf(scope)) return undefined
-    const relation = await this.#pool.query<{ present: boolean }>('SELECT to_regclass($1) IS NOT NULL AS present', [this.#table(queryViewName(id))])
-    if (relation.rows[0]?.present !== true) { this.#staged.delete(id); return undefined }
+      if (target?.cancelled === true) throw new PostgresQueryError('INTERNAL_ERROR', 'the project query was cancelled during integrity verification', { cause: error })
+      if (error instanceof ProjectDatasetError) throw error
+      throw new ProjectDatasetError('SNAPSHOT_UNAVAILABLE', 'the fixed PostgreSQL snapshot could not be verified', { cause: error })
+    } finally { if (target !== undefined) target.pid = undefined; client.release() }
     const staged: StagedQuery = { scopeKey: scopeKeyOf(scope), snapshotId: id, objectId: metadata.body.objectId,
       version: metadata.snapshotRef.version, view: queryViewName(id), columns: metadata.body.columns, metadata }
     this.#staged.set(id, staged)
     return staged
   }
 
-  async #restoreDeclared(objects: readonly import('@ontology/contracts').SourceObjectRef[], ctx: ToolContext): Promise<void> {
+  async #assertPhysicalIntegrity(client: PoolClient, metadata: ProjectDatasetSnapshotMetadata, persisted: readonly ProjectDatasetRow[], canonicalDigest: string, schemaDigest: string): Promise<void> {
+    assertProjectDatasetSnapshotShape({ ref: metadata.snapshotRef, body: { ...metadata.body, rows: persisted } })
+    const view = this.#table(queryViewName(metadata.snapshotRef.id))
+    const typed = await client.query<unknown[]>({ text: `SELECT ${["record_id", ...metadata.body.columns.map((column) => column.name)].map(quoteIdentifier).join(', ')} FROM ${view} ORDER BY "record_id" LIMIT 20001`, rowMode: 'array' })
+    const physical = typed.rows.map((row) => ({ recordId: String(row[0]), values: Object.fromEntries(metadata.body.columns.map((column, index) => [column.name, normalizeCell(row[index + 1])])) }))
+    if (persisted.length !== metadata.body.coverage.processedCount || metadata.rowContentDigest !== sha256DigestOf(stableJson(persisted)) ||
+      canonicalDigestOf(metadata.body.columns, persisted) !== canonicalDigest || sha256DigestOf(stableJson(metadata.body.columns)) !== schemaDigest ||
+      !projectDatasetPhysicalCellsMatch(metadata.body.columns, persisted, physical)) throw new ProjectDatasetError('SNAPSHOT_UNAVAILABLE', 'the immutable PostgreSQL projection rows or typed columns changed')
+  }
+
+  async #restoreDeclared(objects: readonly import('@ontology/contracts').SourceObjectRef[], ctx: ToolContext, target?: ActiveProjectQuery): Promise<void> {
     const scope = { tenantId: ctx.principal.tenantId, spaceId: ctx.allowedResources.spaceId }
     if (objects.length > 1) throw new PostgresQueryError('UNSUPPORTED_QUERY', 'project queries address one fixed snapshot')
     for (const object of objects) {
       if (object.sourceRef.namespace !== 'project-dataset') continue
-      const staged = await this.#restore(scope, object.sourceRef.sourceId)
+      const staged = await this.#restore(scope, object.sourceRef.sourceId, target)
       if (staged === undefined) throw new PostgresQueryError('SNAPSHOT_UNAVAILABLE', 'the scoped fixed project snapshot is unavailable')
     }
   }

@@ -1,8 +1,11 @@
 import { randomBytes, randomUUID } from 'node:crypto'
+import { mkdtemp, rm } from 'node:fs/promises'
+import { tmpdir } from 'node:os'
+import { join } from 'node:path'
 import { Client } from 'pg'
 import { afterAll, beforeAll, describe, expect, it } from 'vitest'
 import { BudgetService, InMemoryBudgetLedgerStore, sha256DigestOf } from '@ontology/core'
-import { DuckDbProjectDatasetAdapter, canonicalJson } from '@ontology/adapter-data-duckdb'
+import { DuckDbProjectDatasetAdapter, DuckDbEngine, canonicalJson } from '@ontology/adapter-data-duckdb'
 import { PostgresProjectDatasetAdapter } from '@ontology/adapter-data-postgres'
 import {
   InMemorySemanticMappingRegistry,
@@ -419,7 +422,7 @@ describe('project semantic SQL against two real business backends', () => {
       const endAt = Date.now() + 10_000
       let blocked = false
       while (Date.now() < endAt) {
-        const state = await admin.query<{ count: string }>("SELECT count(*)::text FROM pg_stat_activity WHERE application_name='project-semantic-sql-test-readonly' AND wait_event_type='Lock'")
+        const state = await admin.query<{ count: string }>("SELECT count(*)::text FROM pg_stat_activity WHERE application_name IN ('project-semantic-sql-test','project-semantic-sql-test-readonly') AND wait_event_type='Lock'")
         if (state.rows[0]?.count !== '0') { blocked = true; break }
         await new Promise((resolve) => setTimeout(resolve, 10))
       }
@@ -449,6 +452,63 @@ describe('project semantic SQL against two real business backends', () => {
     expect((await duck.cancel({ targetRef, reason: 'human cancelled the real projection read' }, ctx)).state).toBe('cancelling')
     expect(await outcome).toMatchObject({ code: 'CANCELLED' })
     expect(duck.activeTargets()).toEqual([])
+  }, 60_000)
+
+  it('refuses canonical JSON and typed-column tampering after reopening either backend', async () => {
+    if (container === undefined || admin === undefined) throw new Error('the isolated business backend is unavailable')
+    const directory = await mkdtemp(join(tmpdir(), 'project-integrity-'))
+    try {
+      for (const tamper of ['canonical', 'typed'] as const) {
+        const id = randomUUID()
+        const path = join(directory, `${id}.duckdb`)
+        const first = new DuckDbProjectDatasetAdapter({ instancePath: path })
+        const staged = stageInputFor(id, first.backend)
+        await first.stageSnapshot(SCOPE, staged.input, contextFor(id))
+        first.close()
+        const owner = new DuckDbEngine({ instancePath: path, writableProjection: true })
+        await owner.start()
+        if (tamper === 'typed') await owner.runTrusted(`UPDATE "ds_${id.replaceAll('-', '_')}" SET "meterValue" = 9999 WHERE "record_id" = ?`, [ROWS[0]!.recordId])
+        else await owner.runTrusted(`UPDATE "ds_${id.replaceAll('-', '_')}" SET "values_json" = ? WHERE "record_id" = ?`, [JSON.stringify({ ...ROWS[0]!.values, meterValue: { kind: 'quantity', value: '9999', unitCode: 'Wh' } }), ROWS[0]!.recordId])
+        owner.close()
+        const reopened = new DuckDbProjectDatasetAdapter({ instancePath: path })
+        try { await expect(reopened.describeSnapshot(SCOPE, staged.snapshotRef, contextFor(id))).rejects.toMatchObject({ code: 'SNAPSHOT_UNAVAILABLE' }) } finally { reopened.close() }
+      }
+      const id = randomUUID()
+      const config = { connectionString: container.adminUrl, schema: PG_SCHEMA }
+      const first = new PostgresProjectDatasetAdapter(config)
+      const staged = stageInputFor(id, first.backend)
+      await first.stageSnapshot(SCOPE, staged.input, contextFor(id))
+      await first.close()
+      await admin.query(`UPDATE ${PG_SCHEMA}.project_dataset_rows SET values = jsonb_set(values, '{meterValue,value}', '"9999"'::jsonb) WHERE snapshot_id=$1::uuid AND record_id=$2::uuid`, [id, ROWS[0]!.recordId])
+      const reopened = new PostgresProjectDatasetAdapter(config)
+      try { await expect(reopened.describeSnapshot(SCOPE, staged.snapshotRef, contextFor(id))).rejects.toMatchObject({ code: 'SNAPSHOT_UNAVAILABLE' }) } finally { await reopened.close() }
+    } finally { await rm(directory, { recursive: true, force: true }) }
+  }, 60_000)
+
+  it('fences accepted cancellation between the final read check and the actual PostgreSQL COMMIT', async () => {
+    if (container === undefined) throw new Error('the isolated business backend is unavailable')
+    let entered: () => void = () => undefined
+    let release: () => void = () => undefined
+    const paused = new Promise<void>((resolve) => { entered = resolve })
+    const continueCommit = new Promise<void>((resolve) => { release = resolve })
+    const backend = new PostgresProjectDatasetAdapter({ connectionString: container.adminUrl, schema: PG_SCHEMA, faultInjection: { beforeReadCommit: async () => { entered(); await continueCommit } } })
+    const id = randomUUID()
+    const ctx = contextFor(id)
+    const staged = stageInputFor(id, backend.backend)
+    try {
+      await backend.stageSnapshot(SCOPE, staged.input, ctx)
+      const descriptor = await backend.describeSnapshot(SCOPE, staged.snapshotRef, ctx)
+      if (descriptor === undefined) throw new Error('the exact commit-race snapshot is missing')
+      const pending = backend.execute({ plan: { mode: 'direct', statementKind: 'select', sql: `SELECT "meterValue" FROM ${PG_SCHEMA}.${descriptor.relation}`, parameters: [], referencedObjects: [descriptor.sourceObjectRef], readOnly: true }, limits: LIMITS, snapshotRequest: { consistency: 'immutable' } }, ctx)
+      const outcome = pending.then(() => 'late_success', (error: unknown) => error)
+      await paused
+      const targetRef = backend.activeTargets()[0]
+      if (targetRef === undefined) throw new Error('the actual read/COMMIT has no target')
+      expect((await backend.cancel({ targetRef, reason: 'accepted during real COMMIT boundary' }, ctx)).state).toBe('cancelling')
+      release()
+      expect(await outcome).toMatchObject({ message: expect.stringMatching(/cancelled after commit/i) })
+      expect(backend.activeTargets()).toEqual([])
+    } finally { release(); await backend.close() }
   }, 60_000)
 
 })

@@ -218,6 +218,7 @@ let queryRegistry: PostgresArtifactRegistry
 let structuredStore: PostgresStructuredIngestionStore
 let originalAnswer: Record<string, unknown>
 let originalRunId = ''
+let initialSource: Awaited<ReturnType<ReturnType<typeof projectQueryPublicationFixture>['importCsv']>>
 
 beforeAll(async () => {
   await startIsolatedDatabase()
@@ -264,7 +265,10 @@ beforeAll(async () => {
   publishedFixture = projectQueryPublicationFixture({ db: queryDatabase, blobs, structured: structuredStore, scope: scopeRef, ctx: trustedContext(scopeRef), projectId: PROJECT_ID,
     definition: { ...scenario.definitionDraft, ref: scenario.definitionRef, publishedAt: new Date().toISOString() } })
   const source = await publishedFixture.importCsv(OBJECT_ID, 'code,network,district,due\nP-101,private-network,north,true\nP-102,private-network,south,false\n', ['facility_id', 'network_code', 'facility_district_code', 'inspection_due'])
-  await publishedFixture.approveAndPublish(source)
+  const district = await publishedFixture.importCsv('transport_district', 'code,network,name\nnorth,private-network,North\n', ['district_code', 'district_network_code', 'district_name'])
+  initialSource = await publishedFixture.restage(source)
+  await publishedFixture.approveAndPublish(initialSource)
+  await publishedFixture.approveAndPublish(district)
   const projected = await request(`/api/v1/projects/${PROJECT_ID}/dataset-snapshots`, { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ objectId: OBJECT_ID }) })
   if (projected.status !== 201) throw new Error(`official dataset creation failed: ${await projected.text()}`)
   projectRevisionRefValue = ((await jsonBody(projected)).data['status'] as { projectRevisionRef: ProjectRevisionRef }).projectRevisionRef
@@ -394,6 +398,64 @@ describe('mounted Core structured-query task binding through the normal HTTP hos
     if (preview.status !== 200) throw new Error(`mapping preview failed: ${await preview.text()}`)
     expect((await jsonBody(preview)).data['preview']).toBeDefined()
   }, 120_000)
+  it('keeps authorized P1 history across another object and retraction rebuilds in the SAME project revision and restart', async () => {
+    const ctx = trustedContext(scopeRef)
+    const executions = new PostgresRunExecutionBindingStore(queryDatabase)
+    const archived = await executions.getBindingByRun(scopeRef, originalRunId, ctx)
+    const originalRef = archived?.binding.projectDatasetSnapshotRef
+    if (archived === undefined || originalRef === undefined) throw new Error('the original execution is missing')
+    const district = await request(`/api/v1/projects/${PROJECT_ID}/dataset-snapshots`, { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ objectId: 'transport_district' }) })
+    if (district.status !== 201) throw new Error(`same-revision district projection failed: ${await district.text()}`)
+    expect(((await jsonBody(district)).data['status'] as { projectRevisionRef: ProjectRevisionRef }).projectRevisionRef).toEqual(projectRevisionRefValue)
+    await api?.close(); await composition?.close()
+    composition = await createCoreLocalComposition({ databaseUrl: appUrl, projectDataset: { connectionString: businessUrl, schema: 'business_dataset' }, objectDirectory, scopeRef, examples: loadCoreExamples({ targetScopeRef: scopeRef }), allowLocalOperator: true })
+    api = createCoreApi(composition.dependencies)
+    baseUrl = (await api.listen({ host: '127.0.0.1', port: 0 })).replace(/\/$/u, '')
+    const backend = new PostgresProjectDatasetAdapter({ connectionString: businessUrl, schema: 'business_dataset' })
+    const oldCtx = createToolContext({ ...ctx, runId: originalRunId, allowedResources: { ...ctx.allowedResources, sourceRefs: [{ namespace: 'project-dataset', sourceId: originalRef.id }] } })
+    const workflow = createCoreProjectQueryWorkflow({ query: backend, publishedSource: publishedFixture.publishedSource, projects: publishedFixture.projects, readiness: publishedFixture.readiness,
+      executionBindings: executions, taskBindings: new PostgresPublishedTaskBindingStore(queryDatabase), definition: async () => publishedFixture.definition })
+    const replay = async () => {
+      const descriptor = await workflow.resolveExecution(archived.binding, OBJECT_ID, oldCtx)
+      const outcome = await workflow.handler({ toolId: 'data_query', execute: async () => { throw new Error('historical startup fallback') } }).execute({ callId: randomUUID(), toolId: 'data_query', ctx: oldCtx,
+        deadline: oldCtx.deadline, traceId: oldCtx.traceId, signal: new AbortController().signal, resultLimits: { maxRows: 1000, maxBytes: 1_048_576, maxDurationMs: 30_000 },
+        arguments: { kind: 'query', mode: 'semantic', queryPlan: { mode: 'semantic', concepts: [OBJECT_ID], fields: [...FIELDS, 'record_id', 'sources_json'], links: [], filters: [], orderBy: [{ fieldRef: 'record_id', direction: 'asc' }], limit: 10, mappingVersion: projectSnapshotMappingRef({ descriptor }) } } })
+      expect((outcome.payload as DataQueryOutput).table?.rows.map((row) => [row[0], row[1]]).sort()).toEqual([['P-101', true], ['P-102', false]])
+    }
+    try {
+      await replay()
+      const revision = await publishedFixture.projects.getRevision(scopeRef, PROJECT_ID, projectRevisionRefValue.revision, ctx)
+      if (revision === undefined) throw new Error('the original revision disappeared')
+      await expect(workflow.resolveForCreation(scopeRef, revision, { objectId: OBJECT_ID }, ctx)).rejects.toMatchObject({ code: 'SNAPSHOT_UNAVAILABLE' })
+      const withdrawn = initialSource.entities.find((candidate) => candidate.attributes.some((attribute) => attribute.attributeId === 'facility_id' && attribute.value === 'P-101'))
+      if (withdrawn === undefined) throw new Error('missing original P-101 source')
+      await publishedFixture.workflow.publication.reviseStatement({ statementId: withdrawn.candidateId, kind: 'retraction', expectedRevision: '1', idempotencyKey: `same-revision-withdraw-${PROJECT_ID}`, reason: 'human withdrew one official support' }, ctx)
+      const rebuilt = await request(`/api/v1/projects/${PROJECT_ID}/dataset-snapshots`, { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ objectId: OBJECT_ID }) })
+      if (rebuilt.status !== 201) throw new Error(`same-revision retraction rebuild failed: ${await rebuilt.text()}`)
+      const next = (await jsonBody(rebuilt)).data['status'] as { projectRevisionRef: ProjectRevisionRef; snapshotRef: ResourceRef }
+      expect(next.projectRevisionRef).toEqual(projectRevisionRefValue)
+      expect(next.snapshotRef).not.toEqual(originalRef)
+      expect(await workflow.resolveForCreation(scopeRef, revision, { objectId: OBJECT_ID }, ctx)).toEqual(next.snapshotRef)
+      const deployment = await jsonBody(await request('/api/v1/core/deployment'))
+      const profileRef = (deployment.data['scenarios'] as { scenarioId: string; profileRef: { id: string; version: string } }[]).find((scenario) => scenario.scenarioId === SCENARIO_ID)?.profileRef
+      const admitted = await request('/api/v1/runs', { method: 'POST', headers: { 'content-type': 'application/json', 'idempotency-key': `same-revision-current-${PROJECT_ID}` }, body: JSON.stringify({
+        profileRef, question: 'query the current same-revision published snapshot', context: { timeZone: 'UTC' }, preferences: { route: 'template', allowWeb: false },
+        task: { mode: 'task', projectRevisionRef: projectRevisionRefValue, inputSnapshotRef: APPROVED_INPUT_REF, inputSnapshotDigest: APPROVED_INPUT_REF.digest, taskBindingRef: structuredBinding.taskBindingRef, parameters: { objectId: OBJECT_ID, fields: [...FIELDS], limit: 10 } },
+      }) })
+      if (admitted.status !== 202) throw new Error(`same-revision current admission failed: ${await admitted.text()}`)
+      const newRunId = (await jsonBody(admitted)).data['runId']
+      if (typeof newRunId !== 'string') throw new Error('the new same-revision run is missing')
+      expect((await executions.getBindingByRun(scopeRef, newRunId, ctx))?.binding.projectDatasetSnapshotRef).toEqual(next.snapshotRef)
+      const currentAnswer = await waitForAnswer(newRunId)
+      const assertions = (currentAnswer['v3Body'] as { assertions: { subject: string; predicate: string; value: unknown }[] }).assertions
+      expect(assertions.filter((assertion) => assertion.predicate === 'inspection_due').map((assertion) => [assertion.subject, assertion.value])).toEqual([['P-102', false]])
+
+      await replay()
+      const historical = await jsonBody(await request(`/api/v1/runs/${originalRunId}/answer`))
+      expect(historical.data['v3Body']).toEqual(originalAnswer['v3Body'])
+    } finally { await backend.close() }
+  }, 180_000)
+
   it('changes the normal task result for new published input while the old run keeps its fixed history after restart', async () => {
     const source = await publishedFixture.importCsv(OBJECT_ID, 'code,network,district,due\nP-103,private-network,north,false\n', ['facility_id', 'network_code', 'facility_district_code', 'inspection_due'])
     await publishedFixture.approveAndPublish(source)

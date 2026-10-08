@@ -193,6 +193,10 @@ export class ProjectDataMaterializationService {
       throw new ProjectDatasetError('INVALID_ARGUMENT', `object ${input.objectId} is not declared by the pinned definition`)
     }
 
+    const priorActivation = await this.#readiness.getProjection(scopeRef, revision.ref, 'dataset', ctx)
+    // Reserve the next generation before building. Equal-generation competing targets still
+    // lose the store's CAS; a late build cannot step past a newer source revocation.
+    const activationFence = priorActivation === undefined ? revision.ref.revision : String(BigInt(priorActivation.fenceRevision) + 1n)
     const columns = columnsOf(object)
     if (this.#publishedSource === undefined) {
       throw new ProjectDatasetError('INPUT_NOT_READY', 'the official published project fact source is not mounted')
@@ -267,7 +271,7 @@ export class ProjectDataMaterializationService {
       if (current.sourceDigest !== published.sourceDigest) {
         throw new ProjectDatasetError('INPUT_NOT_READY', 'the official published sources changed during projection creation')
       }
-      await this.#activate(scopeRef, revision, snapshotRef, coverage, snapshotDigest, ctx)
+      await this.#activate(scopeRef, revision, snapshotRef, coverage, snapshotDigest, input.objectId, published.sourceDigest, published.factRecordedPoint, activationFence, ctx)
     } catch (error) {
       if (staged.created) await this.#writer.discardSnapshot(scopeRef, snapshotRef, ctx)
       throw error
@@ -290,21 +294,19 @@ export class ProjectDataMaterializationService {
   }
 
   /**
-   * Resolve one exact pinned dataset snapshot. The gate is the independent `dataset` readiness
-   * projection: before activation, or when the pinned snapshot is not the active target, the
-   * read is refused with `SNAPSHOT_UNAVAILABLE` rather than falling back to a newer dataset.
+   * Resolve an exact historical snapshot through its immutable activation receipt. The mutable
+   * current target belongs to admission/queryActive; it cannot revoke an earlier authorized
+   * historical recorded point merely because another snapshot becomes current.
    */
   async query(input: ProjectDatasetQueryInput, ctx: ToolContext): Promise<ProjectDatasetQueryResult> {
     const scopeRef = scopeOf(ctx)
-    const projection = await this.#readiness.getProjection(scopeRef, input.projectRevisionRef, 'dataset', ctx)
-    if (projection === undefined || projection.state !== 'ready') {
-      throw new ProjectDatasetError('SNAPSHOT_UNAVAILABLE', 'the dataset projection is not activated for this project revision')
-    }
-    if (projection.targetRef.id !== input.snapshotRef.id || projection.targetRef.version !== input.snapshotRef.version || projection.targetDigest !== input.snapshotRef.digest) {
-      throw new ProjectDatasetError(
-        'SNAPSHOT_UNAVAILABLE',
-        'the pinned snapshot is not the active dataset for this project revision; re-read readiness instead of a newer dataset',
-      )
+    const revision = await this.#projects.getRevision(scopeRef, input.projectRevisionRef.projectId, input.projectRevisionRef.revision, ctx)
+    const receipt = await this.#query.getActivation(scopeRef, input.snapshotRef, ctx)
+    if (revision === undefined || revision.ref.digest !== input.projectRevisionRef.digest || receipt === undefined ||
+      receipt.scopeRef.tenantId !== scopeRef.tenantId || receipt.scopeRef.spaceId !== scopeRef.spaceId ||
+      receipt.projectRevisionRef.projectId !== input.projectRevisionRef.projectId || receipt.projectRevisionRef.revision !== input.projectRevisionRef.revision || receipt.projectRevisionRef.digest !== input.projectRevisionRef.digest ||
+      receipt.snapshotRef.id !== input.snapshotRef.id || receipt.snapshotRef.version !== input.snapshotRef.version || receipt.snapshotRef.digest !== input.snapshotRef.digest) {
+      throw new ProjectDatasetError('SNAPSHOT_UNAVAILABLE', 'the exact historical dataset has no immutable scoped activation receipt')
     }
     return this.#query.querySnapshot(
       scopeRef,
@@ -357,10 +359,14 @@ export class ProjectDataMaterializationService {
     snapshotRef: ProjectDatasetSnapshot['ref'],
     coverage: ProjectDatasetCoverage,
     canonicalDigest: Sha256Digest,
+    objectId: string,
+    sourceDigest: Sha256Digest,
+    factRecordedPoint: { readonly semantic: string; readonly identity: string },
+    activationFence: string,
     ctx: ToolContext,
   ): Promise<void> {
     try {
-      await this.#readiness.upsertProjection(
+      const activated = await this.#readiness.upsertProjection(
         scopeRef,
         {
           projectRevisionRef: revision.ref,
@@ -372,7 +378,7 @@ export class ProjectDataMaterializationService {
           processedCount: coverage.processedCount,
           failedCount: coverage.excluded.length,
           targetDigest: canonicalDigest,
-          fenceRevision: revision.ref.revision,
+          fenceRevision: activationFence,
           idempotencyKey: `dataset:${revision.ref.projectId}:${revision.ref.revision}:${snapshotRef.id}`,
           requestDigest: sha256DigestOf(canonicalJson({ projectRevisionRef: revision.ref, targetRef: snapshotRef })),
           actor: 'project-data-materializer',
@@ -380,6 +386,10 @@ export class ProjectDataMaterializationService {
         },
         ctx,
       )
+      const proof = activated.projection
+      if (proof.state !== 'ready' || proof.targetRef.id !== snapshotRef.id || proof.targetRef.version !== snapshotRef.version || proof.targetDigest !== snapshotRef.digest) throw new ProjectDatasetError('SNAPSHOT_UNAVAILABLE', 'the readiness store did not activate this exact snapshot')
+      await this.#writer.recordActivation(scopeRef, { schemaVersion: 'project-dataset-activation@1', scopeRef, projectRevisionRef: revision.ref,
+        snapshotRef, objectId, sourceDigest, factRecordedPoint, activatedAt: this.#now() }, ctx)
     } catch (error) {
       if (error instanceof ProjectReadinessStoreError && error.code === 'FENCE_STALE') {
         throw new ProjectDatasetError('MATERIALIZATION_MISMATCH', 'the project revision advanced while materialising; a newer dataset is already active', { cause: error })

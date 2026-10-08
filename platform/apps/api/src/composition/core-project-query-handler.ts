@@ -8,7 +8,7 @@ import type {
   ColumnType, DataQueryOutput,
 } from '@ontology/contracts'
 import { InMemorySemanticMappingRegistry, buildProjectSnapshotMapping, projectSnapshotMappingRef, definitionVersionDigest } from '@ontology/semantic-engine'
-import { DataQueryHandler, ToolGatewayError } from '@ontology/tool-services'
+import { DataQueryHandler, ToolGatewayError, canonicalJson } from '@ontology/tool-services'
 import type { ToolExecutionRequest, ToolHandler } from '@ontology/tool-services'
 
 export interface CoreProjectQueryOptions {
@@ -36,9 +36,6 @@ function isColumnType(value: unknown): value is ColumnType {
 export function createCoreProjectQueryWorkflow(options: CoreProjectQueryOptions) {
   const describe = async (scope: ScopeRef, revisionRef: ProjectRevisionRef, ref: ResourceRef, objectId: string, ctx: ToolContext): Promise<ProjectSnapshotQueryDescriptor> => {
     const revision = await options.projects.getRevision(scope, revisionRef.projectId, revisionRef.revision, ctx)
-    const gate = await options.readiness.getProjection(scope, revisionRef, 'dataset', ctx)
-    const readyRef = gate?.targetRef
-    if (gate?.state !== 'ready' || readyRef === undefined || !('kind' in readyRef) || !sameRef(readyRef, ref) || gate.targetDigest !== ref.digest) throw new ProjectDatasetError('SNAPSHOT_UNAVAILABLE', 'the exact historical project snapshot readiness gate is not ready')
     const descriptor = await options.query.describeSnapshot(scope, ref, ctx)
     const definition = revision === undefined ? undefined : await options.definition(scope, revision.definitionRef, ctx)
     const metadata = descriptor?.metadata
@@ -49,7 +46,7 @@ export function createCoreProjectQueryWorkflow(options: CoreProjectQueryOptions)
       !sameRef(metadata.snapshotRef, ref) || descriptor.objectId !== objectId || metadata.body.projectRevisionRef?.projectId !== revisionRef.projectId ||
       metadata.body.projectRevisionRef.revision !== revisionRef.revision || metadata.body.projectRevisionRef.digest !== revisionRef.digest ||
       metadata.body.definitionRef.id !== revision.definitionRef.id || metadata.body.definitionRef.version !== revision.definitionRef.version ||
-      metadata.body.definitionRef.digest !== revision.definitionRef.digest || metadata.body.factRecordedPoint === undefined || metadata.body.sourceDigest === undefined) {
+      metadata.body.definitionRef.digest !== revision.definitionRef.digest || metadata.body.factRecordedPoint === undefined || metadata.body.sourceDigest === undefined || metadata.activation === undefined) {
       throw new ProjectDatasetError('SNAPSHOT_UNAVAILABLE', 'the exact official project query snapshot is not ready')
     }
     return descriptor
@@ -68,8 +65,11 @@ export function createCoreProjectQueryWorkflow(options: CoreProjectQueryOptions)
     return target
   }
   const resolveExecution = async (execution: RunExecutionBinding, objectId: string, ctx: ToolContext): Promise<ProjectSnapshotQueryDescriptor> => {
-    const request = execution.request
-    const ref = execution.projectDatasetSnapshotRef
+    const scope = { tenantId: ctx.principal.tenantId, spaceId: ctx.allowedResources.spaceId }
+    const archived = await options.executionBindings.getBindingByRun(scope, ctx.runId, ctx)
+    if (archived === undefined || execution.runId !== ctx.runId || canonicalJson(archived.binding) !== canonicalJson(execution)) throw new WorkflowControllerError('CAPABILITY_NOT_CONFIGURED', 'historical query authorization requires the exact stored run execution binding')
+    const request = archived.binding.request
+    const ref = archived.binding.projectDatasetSnapshotRef
     if (request.mode !== 'task' || ref === undefined) throw new WorkflowControllerError('CAPABILITY_NOT_CONFIGURED', 'the structured query run has no archived project dataset snapshot')
     return describe({ tenantId: ctx.principal.tenantId, spaceId: ctx.allowedResources.spaceId }, request.projectRevisionRef, ref, objectId, ctx)
   }

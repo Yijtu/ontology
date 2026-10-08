@@ -139,6 +139,19 @@ export interface ProjectDatasetSnapshotMetadata {
   readonly rowContentDigest?: Sha256Digest
   /** DuckDB precision selected from exact input decimals, never by rounding. */
   readonly decimalScales?: Readonly<Record<string, number>>
+  readonly activation?: ProjectDatasetActivationReceipt
+}
+
+/** Immutable evidence of a successful readiness activation; never a request flag. */
+export interface ProjectDatasetActivationReceipt {
+  readonly schemaVersion: 'project-dataset-activation@1'
+  readonly scopeRef: ScopeRef
+  readonly projectRevisionRef: ProjectRevisionRef
+  readonly snapshotRef: ProjectDatasetRef
+  readonly objectId: string
+  readonly sourceDigest: Sha256Digest
+  readonly factRecordedPoint: { readonly semantic: RevisionString; readonly identity: RevisionString }
+  readonly activatedAt: string
 }
 
 /** The resource reference that pins one immutable dataset snapshot. */
@@ -208,10 +221,13 @@ export interface ProjectDatasetWriterPort {
   ): Promise<ProjectDatasetStageResult>
   /** Drop a stamped snapshot that was never activated; kept for crash cleanup. */
   discardSnapshot(scopeRef: ScopeRef, snapshotRef: ProjectDatasetRef, ctx: ToolContext): Promise<void>
+  /** Host-only: called after the authoritative readiness store reports this exact ready target. */
+  recordActivation(scopeRef: ScopeRef, receipt: ProjectDatasetActivationReceipt, ctx: ToolContext): Promise<void>
 }
 
 /** The read port. It resolves only the exact pinned snapshot and never a mutable "latest". */
 export interface ProjectDatasetQueryPort {
+  getActivation(scopeRef: ScopeRef, snapshotRef: ProjectDatasetRef, ctx: ToolContext): Promise<ProjectDatasetActivationReceipt | undefined>
   querySnapshot(
     scopeRef: ScopeRef,
     request: ProjectDatasetQueryRequest,
@@ -469,6 +485,52 @@ export function assertProjectDatasetMetadataShape(value: unknown): asserts value
   assertProjectDatasetSnapshotShape({ ref: value['snapshotRef'], body: { ...value['body'], rows: [] } })
   if (value['rowContentDigest'] !== undefined && !isSha256Digest(value['rowContentDigest'])) throw invalidDataset('row content digest is malformed')
   if (value['decimalScales'] !== undefined && (!isRecord(value['decimalScales']) || !Object.values(value['decimalScales']).every((scale) => typeof scale === 'number' && Number.isInteger(scale) && scale >= 0 && scale <= 38))) throw invalidDataset('decimal scales are malformed')
+  if (value['activation'] !== undefined) {
+    assertProjectDatasetActivationShape(value['activation'])
+    const receipt = value['activation']
+    const ref = value['snapshotRef']
+    if (!isResourceRef(ref)) throw invalidDataset('activation snapshot reference is malformed')
+    const body = value['body']
+    const point = body['factRecordedPoint']
+    const revision = body['projectRevisionRef']
+    if (!isRecord(point) || !isRecord(revision) || receipt.scopeRef.tenantId !== value['scopeRef']['tenantId'] || receipt.scopeRef.spaceId !== value['scopeRef']['spaceId'] ||
+      receipt.snapshotRef.id !== ref.id || receipt.snapshotRef.version !== ref.version || receipt.snapshotRef.digest !== ref.digest ||
+      receipt.projectRevisionRef.projectId !== revision['projectId'] || receipt.projectRevisionRef.revision !== revision['revision'] || receipt.projectRevisionRef.digest !== revision['digest'] ||
+      receipt.objectId !== body['objectId'] || receipt.sourceDigest !== body['sourceDigest'] || receipt.factRecordedPoint.semantic !== point['semantic'] || receipt.factRecordedPoint.identity !== point['identity']) throw invalidDataset('activation receipt differs from its immutable snapshot pins')
+  }
+}
+
+export function assertProjectDatasetActivationShape(value: unknown): asserts value is ProjectDatasetActivationReceipt {
+  if (!isRecord(value) || value['schemaVersion'] !== 'project-dataset-activation@1' || !isRecord(value['scopeRef']) ||
+    !isNonEmptyString(value['scopeRef']['tenantId']) || !isNonEmptyString(value['scopeRef']['spaceId']) || !isResourceRef(value['snapshotRef']) || value['snapshotRef'].kind !== 'dataset' ||
+    !isRecord(value['projectRevisionRef']) || !isUuid(value['projectRevisionRef']['projectId']) || !isRevisionString(value['projectRevisionRef']['revision']) || !isSha256Digest(value['projectRevisionRef']['digest']) ||
+    !isNonEmptyString(value['objectId']) || !isSha256Digest(value['sourceDigest']) || !isRecord(value['factRecordedPoint']) || !isRevisionString(value['factRecordedPoint']['semantic']) || !isRevisionString(value['factRecordedPoint']['identity']) ||
+    typeof value['activatedAt'] !== 'string' || Number.isNaN(Date.parse(value['activatedAt']))) throw invalidDataset('activation receipt is malformed')
+}
+
+/** Compare typed physical columns with the canonical cells without converting decimals to Number. */
+export function projectDatasetPhysicalCellsMatch(columns: readonly ProjectDatasetColumn[], canonical: readonly ProjectDatasetRow[], physical: readonly { readonly recordId: string; readonly values: Readonly<Record<string, unknown>> }[]): boolean {
+  if (canonical.length !== physical.length) return false
+  const decimal = (value: unknown): string | undefined => {
+    if (typeof value !== 'string' || !/^-?(?:0|[1-9]\d*)(?:\.\d+)?$/.test(value)) return undefined
+    const negative = value.startsWith('-')
+    const [integer = '', fraction = ''] = value.replace(/^-/, '').split('.')
+    const trimmed = fraction.replace(/0+$/, '')
+    const amount = `${integer}${trimmed === '' ? '' : `.${trimmed}`}`
+    return amount === '0' ? '0' : `${negative ? '-' : ''}${amount}`
+  }
+  return canonical.every((row, index) => {
+    const actual = physical[index]
+    if (actual?.recordId !== row.recordId) return false
+    return columns.every((column) => {
+      const expected = row.values[column.name]?.value ?? null
+      const value = actual.values[column.name] ?? null
+      if (expected === null) return value === null
+      if (column.valueType === 'number' || column.valueType === 'quantity') return decimal(expected) !== undefined && decimal(expected) === decimal(value)
+      if (column.valueType === 'timestamp') return typeof expected === 'string' && typeof value === 'string' && Date.parse(expected) === Date.parse(value)
+      return expected === value
+    })
+  })
 }
 
 function invalidDataset(message: string): ProjectDatasetError {
