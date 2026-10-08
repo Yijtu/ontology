@@ -8,12 +8,12 @@ import type { AddressInfo } from 'node:net'
 import { fileURLToPath } from 'node:url'
 import { Client } from 'pg'
 import { afterAll, beforeAll, describe, expect, it } from 'vitest'
-import { runControlMigrations } from '@ontology/adapter-control-postgres'
+import { ControlPostgresDatabase, PostgresComponentRegistryStore, runControlMigrations } from '@ontology/adapter-control-postgres'
 import { FileSystemObjectStore, LocalImmutableBlobStore, PostgresArtifactRegistry } from '@ontology/adapter-blob-local'
 import { LocalDocumentExtractionService, PostgresDocumentParseStore, publishGroundingDocumentSet } from '@ontology/adapter-extraction-document'
 import { createCoreApi, createCoreLocalComposition, loadCoreExamples } from '@ontology/app-api'
 import type { CoreLocalComposition } from '@ontology/app-api'
-import type { ResourceRef, ScopeRef, VersionRef, AssetCandidateVersion, SemanticDefinitionRecord } from '@ontology/contracts'
+import type { ResourceRef, ScopeRef, VersionRef, AssetCandidateVersion, SemanticDefinitionRecord, ComponentVersionRecord } from '@ontology/contracts'
 import { toolContext } from '../unit/component-registry-fixtures'
 import { startPostgresContainer } from './postgres-container'
 import type { PostgresContainer } from './postgres-container'
@@ -602,4 +602,44 @@ describe('the default Core host composition chain (real PostgreSQL)', () => {
     expect(bundle.data.packRef.id).toBe(publishedPackRef?.id)
     expect(bundle.data.packRef.version).toBe(publishedPackRef?.version)
   }, 240_000)
+
+  it('rechecks actual scoped registry deprecation and retirement before fresh generation through the current host', async () => {
+    const spec = Object.values(composition?.dependencies.profileSpecsByScenario ?? {})[0]
+    if (spec === undefined) throw new Error('the mounted static profile is missing')
+    const workspace = await mountedWorkspace(spec.industryRef)
+    const initial = await generateMounted(workspace)
+    expect(initial.status).toBe(201)
+    const database = new ControlPostgresDatabase({ connectionString: appUrl, maxPoolSize: 2 })
+    try {
+      const registry = new PostgresComponentRegistryStore(database)
+      const ctx = toolContext(scope.tenantId, scope.spaceId, ['platform-admin'], 'retirement-reviewer')
+      const key = { kind: 'industry_pack' as const, id: spec.industryRef.id, version: spec.industryRef.version }
+      const found = await registry.findVersion(key, scope, ctx)
+      if (found === undefined) throw new Error('the exact static registered component is missing')
+      let record: ComponentVersionRecord = found
+      const manifest = record.manifest
+      for (const to of ['deprecated', 'retired'] as const) {
+        const at = new Date().toISOString()
+        const next: ComponentVersionRecord = { ...record, lifecycleState: to, ...(to === 'deprecated' ? { deprecatedAt: at } : { retiredAt: at }) }
+        await registry.applyTransition(scope, key, record.lifecycleState, next, {
+          fromState: record.lifecycleState, toState: to, digest: record.manifestRef.digest,
+          payloadDigest: DIGEST, idempotencyKey: `retire-${randomUUID()}`, occurredAt: at, actor: 'retirement-reviewer',
+        }, ctx)
+        record = next
+        expect((await registry.findVersion(key, scope, ctx))?.lifecycleState).toBe(to)
+        expect(record.manifest).toEqual(manifest)
+        const before = modelRequests.length
+        const blocked = await generateMounted(workspace)
+        expect(blocked.status).toBe(422)
+        const failure = await jsonBody(blocked) as { error: { reasons?: string[]; message: string } }
+        expect(failure.error.message).toContain(to)
+        expect(modelRequests.length).toBe(before)
+      }
+      const otherCtx = toolContext(otherScope.tenantId, otherScope.spaceId, ['platform-admin'], 'other-retirement-reviewer')
+      expect((await registry.findVersion(key, otherScope, otherCtx))?.lifecycleState).toBe('active')
+      await expect(registry.findVersion(key, otherScope, ctx)).rejects.toMatchObject({ code: 'SCOPE_MISMATCH' })
+    } finally {
+      await database.close()
+    }
+  })
 })

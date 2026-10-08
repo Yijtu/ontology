@@ -1,6 +1,7 @@
 import { definitionRecordOf, isToolContext, isVersionRef } from '@ontology/contracts'
 import type {
   IndustryPackCatalogue,
+  ComponentRegistryStore,
   PublishedDefinitionVersionReader,
   PublishedPackAssetStore,
   ScopeRef,
@@ -16,6 +17,7 @@ export interface DynamicDefinitionTerminologyDependencies {
   /** Authorised catalogue containing dynamic publications and any controlled static seed. */
   readonly catalogue: IndustryPackCatalogue
   readonly definitions: PublishedDefinitionVersionReader
+  readonly registry: Pick<ComponentRegistryStore, 'findVersion'>
   readonly publishedPacks?: Pick<PublishedPackAssetStore, 'findByRef'>
 }
 
@@ -50,6 +52,22 @@ export class DynamicDefinitionTerminologySource implements DefinitionTerminology
     if (pack.manifest.maturity === 'deprecated') {
       throw new DefinitionCandidateError('VALIDATION_BLOCKED', 'the pinned base pack is retired')
     }
+    const registered = await this.#deps.registry.findVersion({ kind: 'industry_pack', id: basePackRef.id, version: basePackRef.version }, scopeRef, ctx)
+    if (registered !== undefined) {
+      if (!sameRef(registered.manifestRef, basePackRef) || registered.manifest.kind !== 'industry_pack' ||
+          !sameRef(registered.manifest, basePackRef) ||
+          (registered.manifest.namespace !== undefined && registered.manifest.namespace !== pack.manifest.namespace)) {
+        throw new DefinitionCandidateError('VERSION_CONFLICT', 'the registered base pack does not match its exact pin or namespace')
+      }
+      if (registered.manifest.trustStatus === 'revoked') {
+        throw new DefinitionCandidateError('FORBIDDEN', 'the registered base pack trust has been revoked')
+      }
+      if (registered.lifecycleState === 'deprecated' || registered.lifecycleState === 'retired') {
+        throw new DefinitionCandidateError('VALIDATION_BLOCKED', `the registered base pack is ${registered.lifecycleState}`, {
+          reasons: [`registry_lifecycle_${registered.lifecycleState}`],
+        })
+      }
+    }
     let prior: DefinitionPredecessor
     try {
       prior = await resolvePinnedDefinition({
@@ -62,6 +80,11 @@ export class DynamicDefinitionTerminologySource implements DefinitionTerminology
         throw new DefinitionCandidateError('SCHEMA_NOT_FOUND', error.message, { cause: error })
       }
       throw error
+    }
+    // Dynamic publication is an authorised ledger without mandatory component registration.
+    // A static catalogue seed alone cannot prove current registered availability.
+    if (registered === undefined && prior.asset === undefined) {
+      throw new DefinitionCandidateError('SCHEMA_NOT_FOUND', 'the pinned static base pack has no authorised registry entry')
     }
     if (prior.definition.namespace !== pack.manifest.namespace ||
         !sameRef(prior.definition.ref, pack.manifest.definitionsRef) ||

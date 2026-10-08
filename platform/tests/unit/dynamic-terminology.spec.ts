@@ -1,5 +1,5 @@
 import { describe, expect, it, vi } from 'vitest'
-import type { PackAsset, ScopeRef, SemanticDefinitionVersion, VersionRef } from '@ontology/contracts'
+import type { ComponentVersionRecord, PackAsset, ScopeRef, SemanticDefinitionVersion, VersionRef } from '@ontology/contracts'
 import {
   createDynamicDefinitionTerminologySource,
   DynamicDefinitionTerminologySource,
@@ -7,7 +7,7 @@ import {
   StaticDefinitionTerminologySource,
 } from '@ontology/application'
 import { sampleCoreDraft } from './semantic-definition-fixtures'
-import { toolContext } from './component-registry-fixtures'
+import { sampleManifest, toolContext } from './component-registry-fixtures'
 
 const SCOPE: ScopeRef = { tenantId: '11111111-1111-4111-8111-111111111111', spaceId: 'aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa' }
 const CTX = toolContext(SCOPE.tenantId, SCOPE.spaceId)
@@ -41,7 +41,14 @@ function fixture(definition: SemanticDefinitionVersion | undefined = DEFINITION,
   const catalogue = new InMemoryIndustryPackCatalogue()
   catalogue.registerPack(asset)
   const findVersion = vi.fn<() => Promise<SemanticDefinitionVersion | undefined>>(async () => definition)
-  return { source: createDynamicDefinitionTerminologySource({ catalogue, definitions: { findVersion } }), catalogue, findVersion }
+  const registryFind = vi.fn<() => Promise<ComponentVersionRecord | undefined>>(async () => registeredPack(asset.ref))
+  const registry = { findVersion: registryFind }
+  return { source: createDynamicDefinitionTerminologySource({ catalogue, definitions: { findVersion }, registry }), catalogue, findVersion, registry, registryFind }
+}
+
+function registeredPack(ref = REF): ComponentVersionRecord {
+  return { manifestRef: ref, manifest: sampleManifest({ kind: 'industry_pack', id: ref.id, version: ref.version,
+    digest: ref.digest, namespace: DEFINITION.namespace }), lifecycleState: 'active', registeredAt: DEFINITION.publishedAt }
 }
 
 describe('exact mounted definition terminology', () => {
@@ -72,7 +79,7 @@ describe('exact mounted definition terminology', () => {
     const findByRef = vi.fn(async () => undefined)
     // 101 unrelated registered versions do not affect the pinned lookup.
     for (let index = 1; index <= 101; index += 1) h.catalogue.registerPack(pack({ ...REF, version: `1.0.${String(index)}` }))
-    const source = new DynamicDefinitionTerminologySource({ catalogue: h.catalogue, definitions: { findVersion: h.findVersion }, publishedPacks: { findByRef } })
+    const source = new DynamicDefinitionTerminologySource({ catalogue: h.catalogue, definitions: { findVersion: h.findVersion }, publishedPacks: { findByRef }, registry: h.registry })
     expect((await source.getTerminology(SCOPE, REF, CTX))?.packRef).toEqual(REF)
     expect(findByRef).toHaveBeenCalledExactlyOnceWith(SCOPE, REF, CTX)
     expect(h.findVersion).toHaveBeenCalledExactlyOnceWith(DEFINITION.namespace, DEFINITION.ref.id, '1.0.0', SCOPE, CTX)
@@ -122,10 +129,28 @@ describe('exact mounted definition terminology', () => {
     const findPack = vi.fn().mockResolvedValueOnce(pack()).mockResolvedValueOnce(undefined).mockResolvedValueOnce({
       ...pack(), manifest: { ...pack().manifest, maturity: 'deprecated' },
     })
-    const source = createDynamicDefinitionTerminologySource({ catalogue: { findPack, listEntries: async () => [] }, definitions: { findVersion: async () => DEFINITION } })
+    const source = createDynamicDefinitionTerminologySource({ catalogue: { findPack, listEntries: async () => [] }, definitions: { findVersion: async () => DEFINITION }, registry: { findVersion: async () => registeredPack() } })
     expect((await source.getTerminology(SCOPE, REF, CTX))?.objectLogicalIds).toContain('device')
     await expect(source.getTerminology(SCOPE, REF, CTX)).rejects.toMatchObject({ code: 'SCHEMA_NOT_FOUND' })
     await expect(source.getTerminology(SCOPE, REF, CTX)).rejects.toMatchObject({ code: 'VALIDATION_BLOCKED' })
+  })
+
+  it.each(['deprecated', 'retired'] as const)('rejects registry lifecycle %s even when the immutable manifest is stable', async (lifecycleState) => {
+    const h = fixture()
+    h.registryFind.mockResolvedValue({ ...registeredPack(), lifecycleState })
+    await expect(h.source.getTerminology(SCOPE, REF, CTX)).rejects.toMatchObject({ code: 'VALIDATION_BLOCKED', reasons: [`registry_lifecycle_${lifecycleState}`] })
+    expect(h.findVersion).not.toHaveBeenCalled()
+    expect(h.registryFind).toHaveBeenCalledExactlyOnceWith({ kind: 'industry_pack', id: REF.id, version: REF.version }, SCOPE, CTX)
+  })
+
+  it('requires current static registration and rejects a mismatched registry digest or revoked trust', async () => {
+    const h = fixture()
+    h.registryFind.mockResolvedValueOnce(undefined)
+    await expect(h.source.getTerminology(SCOPE, REF, CTX)).rejects.toMatchObject({ code: 'SCHEMA_NOT_FOUND' })
+    h.registryFind.mockResolvedValueOnce({ ...registeredPack(), manifestRef: { ...REF, digest: DEFINITION.ref.digest } })
+    await expect(h.source.getTerminology(SCOPE, REF, CTX)).rejects.toMatchObject({ code: 'VERSION_CONFLICT' })
+    h.registryFind.mockResolvedValueOnce({ ...registeredPack(), manifest: { ...registeredPack().manifest, trustStatus: 'revoked' } })
+    await expect(h.source.getTerminology(SCOPE, REF, CTX)).rejects.toMatchObject({ code: 'FORBIDDEN' })
   })
 
   it('keys fixed terms by the full ref and never uses a bootstrap fallback for a missing pin', async () => {

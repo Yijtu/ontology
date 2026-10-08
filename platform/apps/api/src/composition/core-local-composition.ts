@@ -799,6 +799,7 @@ function terminologySourceFor(
   scenarios: readonly CoreExampleScenario[],
   publishedPacks: PostgresPublishedPackAssetStore,
   definitions: PostgresSemanticDefinitionStore,
+  registry: PostgresComponentRegistryStore,
 ): DefinitionTerminologySource {
   const staticCatalogue = new InMemoryIndustryPackCatalogue()
   for (const scenario of scenarios) staticCatalogue.registerPack({
@@ -810,6 +811,7 @@ function terminologySourceFor(
   return createDynamicDefinitionTerminologySource({
     catalogue: new StoreBackedIndustryPackCatalogue({ store: publishedPacks, fallback: staticCatalogue }),
     definitions,
+    registry,
     publishedPacks,
   })
 }
@@ -2120,7 +2122,7 @@ export async function createCoreLocalComposition(options: CoreLocalCompositionOp
     })
     const identityService = new IdentityDecisionService({ store: identityStore, candidates: candidateStore, schemaSource })
 
-    const terminology = terminologySourceFor(options.examples.scenarios, publishedPackStore, definitionStore)
+    const terminology = terminologySourceFor(options.examples.scenarios, publishedPackStore, definitionStore, componentStore)
     const ruleSupport = new FiniteGrammarRuleSupportValidator()
     const ruleActionCandidateService = new RuleActionCandidateService({
       workspaces: workspaceStore,
