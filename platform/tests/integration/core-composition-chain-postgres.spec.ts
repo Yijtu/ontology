@@ -42,7 +42,7 @@ const generatedDefinition = {
       displayName: 'Asset',
       businessMeaning: 'A maintained physical asset',
       suggestedReason: 'named in the source',
-      sourceIndex: 0,
+      sourceIndex: 0, fragmentIndex: 0,
       identityAttributeIds: ['asset_code'],
     },
   ],
@@ -52,7 +52,7 @@ const generatedDefinition = {
       displayName: 'Asset code',
       businessMeaning: 'The stable code that identifies an asset',
       suggestedReason: 'named in the source',
-      sourceIndex: 0,
+      sourceIndex: 0, fragmentIndex: 0,
       objectLogicalId: 'asset',
       valueType: 'string',
       minCardinality: 1,
@@ -63,7 +63,7 @@ const generatedDefinition = {
       displayName: 'Inspection due',
       businessMeaning: 'Whether the next scheduled inspection is due',
       suggestedReason: 'named in the source',
-      sourceIndex: 0,
+      sourceIndex: 0, fragmentIndex: 0,
       objectLogicalId: 'asset',
       valueType: 'boolean',
       minCardinality: 0,
@@ -158,7 +158,7 @@ async function groundedSource(workspaceId: string): Promise<{ sourceRef: Resourc
     await objectStore.init()
     const blobs = new LocalImmutableBlobStore({ objectStore, registry })
     const ctx = toolContext(scope.tenantId, scope.spaceId, ['platform-admin', 'data-editor'], 'grounding-reviewer')
-    const bytes = new TextEncoder().encode('An Asset is a maintained physical asset. Its stable asset_code identifies it. The boolean inspection_due records whether its next scheduled inspection is due.')
+    const bytes = new TextEncoder().encode(`An Asset is a maintained physical asset. Its stable asset_code identifies it. The boolean inspection_due records whether its next scheduled inspection is due. Workspace ${workspaceId}.`)
     const staged = await blobs.stage(bytes, { scopeRef: scope }, ctx)
     const sourceRef = (await blobs.publish({ scopeRef: scope, ...staged, mediaType: 'text/plain', purpose: 'document' }, ctx)).blobRef
     const parse = await new LocalDocumentExtractionService({ blobs, store: documents }).parse({ scopeRef: scope, originalRef: sourceRef }, ctx)
@@ -449,15 +449,15 @@ describe('the default Core host composition chain (real PostgreSQL)', () => {
     const pin = publishedPackRef
     if (pin === undefined || admin === undefined) throw new Error('the initial publication is missing')
     const workspaceB = await mountedWorkspace(pin)
-    const object = { displayName: 'Asset', businessMeaning: 'a product in a financial catalogue', suggestedReason: 'source', sourceIndex: 0, identityAttributeIds: [] }
+    const object = { displayName: 'Asset', businessMeaning: 'a product in a financial catalogue', suggestedReason: 'source', sourceIndex: 0, fragmentIndex: 0, identityAttributeIds: [] }
     controlledDefinition = {
       objects: [{ ...object, logicalId: 'asset', displayName: 'Renamed Asset', businessMeaning: 'a maintained physical asset', identityAttributeIds: ['asset_code'] },
         { ...object, logicalId: 'catalog_product' }],
       attributes: [
-        { logicalId: 'condition', displayName: 'Condition', businessMeaning: 'condition of the maintained asset', suggestedReason: 'source', sourceIndex: 0, objectLogicalId: 'asset', valueType: 'boolean' },
-        { logicalId: 'inspection_due', displayName: 'Inspection due', businessMeaning: 'a model type conflict', suggestedReason: 'source', sourceIndex: 0, objectLogicalId: 'asset', valueType: 'string' },
+        { logicalId: 'condition', displayName: 'Condition', businessMeaning: 'condition of the maintained asset', suggestedReason: 'source', sourceIndex: 0, fragmentIndex: 0, objectLogicalId: 'asset', valueType: 'boolean' },
+        { logicalId: 'inspection_due', displayName: 'Inspection due', businessMeaning: 'a model type conflict', suggestedReason: 'source', sourceIndex: 0, fragmentIndex: 0, objectLogicalId: 'asset', valueType: 'string' },
       ],
-      relations: [{ logicalId: 'product_requires_asset', displayName: 'Requires asset', businessMeaning: 'product requires maintained asset', suggestedReason: 'source', sourceIndex: 0,
+      relations: [{ logicalId: 'product_requires_asset', displayName: 'Requires asset', businessMeaning: 'product requires maintained asset', suggestedReason: 'source', sourceIndex: 0, fragmentIndex: 0,
         fromObjectLogicalId: 'catalog_product', toObjectLogicalId: 'asset' }],
     }
     try {
@@ -494,6 +494,26 @@ describe('the default Core host composition chain (real PostgreSQL)', () => {
         "SELECT body->'basePackRef' AS base_pack_ref FROM agent_platform.asset_draft_versions WHERE tenant_id=$1 AND space_id=$2 AND workspace_id=$3 AND revision=2",
         [scope.tenantId, scope.spaceId, workspaceB.workspaceId])
       expect(draft.rows[0]?.base_pack_ref).toEqual(pin)
+      const ledgersBefore = await admin.query<{ ledger_id: string }>(
+        'SELECT ledger_id FROM agent_platform.budget_ledgers WHERE tenant_id=$1 AND space_id=$2 AND run_id=$3',
+        [scope.tenantId, scope.spaceId, workspaceB.workspaceId])
+      expect(ledgersBefore.rows).toHaveLength(1)
+      await admin.query("UPDATE agent_platform.budget_ledgers SET deadline = CURRENT_TIMESTAMP - interval '1 second' WHERE tenant_id=$1 AND space_id=$2 AND run_id=$3",
+        [scope.tenantId, scope.spaceId, workspaceB.workspaceId])
+      const repeated = await generateMounted(workspaceB)
+      expect(repeated.status).toBe(201)
+      const repeatedView = (await jsonBody(repeated) as { data: { batch: { state: string }; candidates: AssetCandidateVersion[] } }).data
+      expect(repeatedView.batch.state).toBe('completed')
+      expect(repeatedView.candidates.every((candidate) => view.candidates.some((old) => old.candidateId === candidate.replacesCandidateId))).toBe(true)
+      const stable = await generateMounted(workspaceB)
+      expect(stable.status).toBe(201)
+      const stableView = (await jsonBody(stable) as { data: { candidates: AssetCandidateVersion[] } }).data
+      expect(stableView.candidates.map((candidate) => candidate.candidateId).sort()).toEqual(repeatedView.candidates.map((candidate) => candidate.candidateId).sort())
+      const ledgersAfter = await admin.query<{ ledger_id: string }>(
+        'SELECT ledger_id FROM agent_platform.budget_ledgers WHERE tenant_id=$1 AND space_id=$2 AND run_id=$3',
+        [scope.tenantId, scope.spaceId, workspaceB.workspaceId])
+      expect(ledgersAfter.rows).toHaveLength(3)
+      expect(new Set(ledgersAfter.rows.map((ledger) => ledger.ledger_id)).size).toBe(3)
     } finally {
       controlledDefinition = generatedDefinition
     }

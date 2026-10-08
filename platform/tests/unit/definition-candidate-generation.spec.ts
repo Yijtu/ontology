@@ -1,5 +1,5 @@
 import { randomUUID } from 'node:crypto'
-import { describe, expect, it } from 'vitest'
+import { describe, expect, it, vi } from 'vitest'
 import type {
   AssetDraftVersion,
   AppendAssetDraftInput,
@@ -20,10 +20,14 @@ import type {
 } from '@ontology/contracts'
 import {
   DefinitionCandidateGenerationService,
+  DefinitionCandidateEditingService,
+  InMemoryDefinitionEditingStore,
   InMemoryAssetCandidateStore,
   StaticDefinitionTerminologySource,
   TBOX_RESPONSE_SCHEMA_REF,
 } from '@ontology/application'
+import type { DefinitionCandidateGenerationDependencies } from '@ontology/application'
+import { loadCompetencyQuestions } from '../fixtures/competency-questions/loader'
 import { toolContext } from './component-registry-fixtures'
 
 const TENANT = '11111111-1111-4111-8111-111111111111'
@@ -147,6 +151,9 @@ class ScriptedGenerationPort implements GenerationPort {
   readonly requests: GenerationRequest[] = []
   #responses: string[]
   #throws = false
+  completed = true
+  stopReason: 'stop' | 'length' = 'stop'
+  beforeCompletion?: () => Promise<void>
 
   constructor(responses: readonly string[]) {
     this.#responses = [...responses]
@@ -170,7 +177,8 @@ class ScriptedGenerationPort implements GenerationPort {
     const text = this.#responses.shift() ?? '{}'
     yield { type: 'text_delta', text }
     yield { type: 'usage', usage: { inputTokens: 3, outputTokens: 7 } }
-    yield { type: 'completed', stopReason: 'stop', candidateOnly: true }
+    await this.beforeCompletion?.()
+    if (this.completed) yield { type: 'completed', stopReason: this.stopReason, candidateOnly: true }
   }
 }
 
@@ -185,23 +193,38 @@ function workspace(workspaceId: string = WORKSPACE_ID): IndustryWorkspace {
   }
 }
 
-function buildHarness(responses: readonly string[], terminology = new StaticDefinitionTerminologySource()) {
+function buildHarness(responses: readonly string[], terminology = new StaticDefinitionTerminologySource(), overrides: Partial<DefinitionCandidateGenerationDependencies> = {}) {
   const workspaces = new FixtureWorkspaceStore()
   const ws = workspace()
-  workspaces.seed(EDITOR_SCOPE, ws, [draft(ws.workspaceId, '1')])
+  const initialDraft = draft(ws.workspaceId, '1')
+  workspaces.seed(EDITOR_SCOPE, ws, [initialDraft])
   const candidates = new InMemoryAssetCandidateStore()
   const generation = new ScriptedGenerationPort(responses)
+  let resolutions = 0
   const service = new DefinitionCandidateGenerationService({
     workspaces,
     candidates,
     terminology,
-    generationForRun: () => generation,
+    sourceGrounding: {
+      read: async (request, _ctx, budget) => ({ documentSetRef: initialDraft.documentSetRef,
+        coverage: 'complete', usage: budget.usage(), sources: request.sourceRefs.map((sourceRef) => ({
+          sourceRef, trust: 'untrusted_source_data', status: 'complete', reasons: [], contents: [{
+            kind: 'text', text: 'Controlled source: equipment has rated capacity.', sourceSpan: {
+              parseId: '22222222-2222-4222-8222-222222222222', chunkId: '33333333-3333-4333-8333-333333333333',
+              locator: { kind: 'offset', startOffset: 0, endOffset: 53 }, spanKind: 'verbatim', precision: 'exact',
+              quoteDigest: DIGEST, textDigest: DIGEST,
+            },
+          }],
+        })) }),
+    },
+    generationForRun: () => { resolutions += 1; return generation },
     modelRef: MODEL_REF,
-    outputLimit: { maxTokens: 1_024 },
+    outputLimit: { maxTokens: 16_384 },
     now: () => '2026-09-29T00:00:00Z',
     newId: () => randomUUID(),
+    ...overrides,
   })
-  return { service, workspaces, candidates, generation, ws }
+  return { service, workspaces, candidates, generation, ws, initialDraft, resolutions: () => resolutions }
 }
 
 function input(overrides: Partial<Parameters<DefinitionCandidateGenerationService['generate']>[0]> = {}) {
@@ -223,7 +246,7 @@ const SOURCED_PAYLOAD = JSON.stringify({
       displayName: 'Device',
       businessMeaning: 'a monitored physical device',
       suggestedReason: 'the source lists devices with ratings',
-      sourceIndex: 0,
+      sourceIndex: 0, fragmentIndex: 0,
       identityAttributeIds: ['device_serial'],
     },
   ],
@@ -237,7 +260,7 @@ const SOURCED_PAYLOAD = JSON.stringify({
       valueType: 'string',
       minCardinality: 1,
       maxCardinality: 1,
-      sourceIndex: 0,
+      sourceIndex: 0, fragmentIndex: 0,
     },
     {
       logicalId: 'rated_power',
@@ -248,7 +271,7 @@ const SOURCED_PAYLOAD = JSON.stringify({
       valueType: 'quantity',
       unitCode: 'kW',
       dimension: 'power',
-      sourceIndex: 0,
+      sourceIndex: 0, fragmentIndex: 0,
     },
   ],
   relations: [
@@ -259,7 +282,7 @@ const SOURCED_PAYLOAD = JSON.stringify({
       suggestedReason: 'the source pairs meters with devices',
       fromObjectLogicalId: 'meter',
       toObjectLogicalId: 'device',
-      sourceIndex: 0,
+      sourceIndex: 0, fragmentIndex: 0,
     },
   ],
 })
@@ -352,7 +375,7 @@ describe('definition (TBox) candidate generation service', () => {
           displayName: 'Device',
           businessMeaning: 'a monitored physical device',
           suggestedReason: 'listed',
-          sourceIndex: 0,
+          sourceIndex: 0, fragmentIndex: 0,
         },
       ],
     })
@@ -383,7 +406,7 @@ describe('definition (TBox) candidate generation service', () => {
           objectLogicalId: 'device',
           valueType: 'quantity',
           unitCode: 'kW',
-          sourceIndex: 0,
+          sourceIndex: 0, fragmentIndex: 0,
         },
       ],
     })
@@ -453,7 +476,8 @@ describe('definition (TBox) candidate generation service', () => {
   it('reports a missing model capability as a configuration failure, with no batch', async () => {
     const workspaces = new FixtureWorkspaceStore()
     const ws = workspace()
-    workspaces.seed(EDITOR_SCOPE, ws, [draft(ws.workspaceId, '1')])
+    const initialDraft = draft(ws.workspaceId, '1')
+  workspaces.seed(EDITOR_SCOPE, ws, [initialDraft])
     const candidates = new InMemoryAssetCandidateStore()
     const service = new DefinitionCandidateGenerationService({
       workspaces,
@@ -461,11 +485,231 @@ describe('definition (TBox) candidate generation service', () => {
       terminology: new StaticDefinitionTerminologySource(),
       generationForRun: () => undefined,
       modelRef: MODEL_REF,
-      outputLimit: { maxTokens: 1_024 },
+      outputLimit: { maxTokens: 16_384 },
     })
     await expect(service.generate(input(), 'editor-1', EDITOR)).rejects.toMatchObject({
       code: 'MODEL_NOT_CONFIGURED',
     })
     expect(await service.listBatches(WORKSPACE_ID, 10, EDITOR)).toHaveLength(0)
+  })
+})
+
+function proposedObject(logicalId = 'equipment', source = true) {
+  return { logicalId, displayName: 'Equipment', businessMeaning: 'An item maintained by this business.',
+    suggestedReason: 'The approved source describes equipment.', ...(source ? { sourceIndex: 0, fragmentIndex: 0 } : {}) }
+}
+
+describe('grounded generation and immutable rebase', () => {
+  it('includes actual untrusted text and server fragments; a source number alone stays pending', async () => {
+    const object = { ...proposedObject(), fragmentIndex: undefined }
+    const h = buildHarness([JSON.stringify({ objects: [object] })])
+    const result = await h.service.generate(input(), 'editor-1', EDITOR)
+    expect(h.generation.requests[0]?.messages.at(-1)?.content).toContain('Controlled source: equipment has rated capacity.')
+    expect(h.generation.requests[0]?.messages.at(-1)?.content).toContain('untrusted_source_data')
+    expect(result.candidates[0]).toMatchObject({ state: 'pending_confirmation', sourceRefs: [], sourceSpans: [], pendingConfirmation: true })
+  })
+
+  it.each([{ sql: 'SELECT * FROM secrets' }, { script: 'eval(payload)' }])('rejects undeclared executable payload fields', async (extra) => {
+    const h = buildHarness([JSON.stringify({ objects: [{ ...proposedObject(), ...extra }] })])
+    expect((await h.service.generate(input(), 'editor-1', EDITOR)).batch).toMatchObject({ state: 'failed', error: { code: 'INVALID_MODEL_OUTPUT' } })
+  })
+
+  it('preserves two identical logical-id collision outputs as separate failed versions with accurate counts', async () => {
+    const h = buildHarness([JSON.stringify({ objects: [proposedObject('duplicate'), proposedObject('duplicate')] })])
+    const result = await h.service.generate(input(), 'editor-1', EDITOR)
+    expect(result.candidates).toHaveLength(2)
+    expect(new Set(result.candidates.map((candidate) => candidate.candidateId)).size).toBe(2)
+    expect(result.batch.counts).toMatchObject({ total: 2, failed: 2 })
+    expect(result.candidates.every((candidate) => candidate.state === 'failed')).toBe(true)
+  })
+
+  it('does not accept fabricated fragment indices as source grounding', async () => {
+    const h = buildHarness([JSON.stringify({ objects: [{ ...proposedObject(), fragmentIndex: 99 }] })])
+    const result = await h.service.generate(input(), 'editor-1', EDITOR)
+    expect(result.candidates[0]).toMatchObject({ pendingConfirmation: true, sourceRefs: [], sourceSpans: [] })
+  })
+
+  it('reuses exact immutable content and original producing batches across new generation keys and replay', async () => {
+    const h = buildHarness([SOURCED_PAYLOAD, SOURCED_PAYLOAD, SOURCED_PAYLOAD])
+    const initial = await h.service.generate(input(), 'editor-1', EDITOR)
+    const list = h.candidates.listCandidates.bind(h.candidates)
+    let reverse = false
+    const reordered = vi.spyOn(h.candidates, 'listCandidates').mockImplementation(async (...args) => {
+      const rows = await list(...args)
+      reverse = !reverse
+      return reverse ? rows.reverse() : rows
+    })
+    const first = await h.service.generate(input(), 'editor-1', EDITOR)
+    expect(first.candidates.every((candidate) => initial.candidates.some((old) => old.candidateId === candidate.replacesCandidateId))).toBe(true)
+    const nextInput = input()
+    const second = await h.service.generate(nextInput, 'editor-1', EDITOR)
+    expect(second.candidates.map((candidate) => candidate.candidateId).sort()).toEqual(first.candidates.map((candidate) => candidate.candidateId).sort())
+    expect(second.candidates.every((candidate) => candidate.batchId === first.batch.batchId)).toBe(true)
+    expect(second.batch.reusedCandidateIds).toHaveLength(first.candidates.length)
+    expect(await h.candidates.listCandidatesByBatch(EDITOR_SCOPE, second.batch.batchId, EDITOR)).toEqual([])
+    expect((await h.service.generate(nextInput, 'editor-1', EDITOR)).candidates).toEqual(second.candidates)
+    expect(h.generation.calls).toBe(3)
+    expect(second.batch.schemaDigest).toBe(first.batch.schemaDigest)
+    reordered.mockRestore()
+  })
+
+  it('appends changed model content, then retains subsequent human edits as explicit conflicts', async () => {
+    const payload = (name: string) => JSON.stringify({ objects: [{ ...proposedObject(), displayName: name }] })
+    const h = buildHarness([payload('Equipment'), payload('Machine'), payload('Equipment'), payload('Equipment'), payload('Equipment')])
+    const first = await h.service.generate(input(), 'editor-1', EDITOR)
+    const changed = await h.service.generate(input(), 'editor-1', EDITOR)
+    expect(changed.candidates[0]?.replacesCandidateId).toBe(first.candidates[0]?.candidateId)
+    const original = changed.candidates[0]
+    if (original === undefined) throw new Error('expected changed object')
+    const editing = new DefinitionCandidateEditingService({ workspaces: h.workspaces, candidates: h.candidates,
+      editing: new InMemoryDefinitionEditingStore(), terminology: new StaticDefinitionTerminologySource() })
+    const human = await editing.edit(WORKSPACE_ID, { expectedRevision: '1', candidateId: original.candidateId,
+      payload: { ...original.payload, displayName: 'Human maintained equipment' }, reason: 'business owner wording', idempotencyKey: `human-${randomUUID()}` }, 'editor-1', EDITOR)
+    const regenerated = await h.service.generate(input(), 'editor-1', EDITOR)
+    expect(regenerated.candidates[0]?.payload.displayName).toBe('Human maintained equipment')
+    expect(regenerated.candidates[0]?.replacesCandidateId).toBe(human.candidates[0]?.candidateId)
+    expect(regenerated.candidates[0]?.issues.some((issue) => issue.code === 'REBASE_CONFLICT')).toBe(true)
+    expect(regenerated.candidates[0]?.state).toBe('pending_review')
+    expect(regenerated.candidates[0]?.generationCallRef).toBeUndefined()
+    expect((await h.candidates.getCandidate(EDITOR_SCOPE, human.candidates[0]?.candidateId ?? '', EDITOR))?.payload.displayName).toBe('Human maintained equipment')
+    const refresh = await h.service.generate(input(), 'editor-1', EDITOR)
+    const stable = await h.service.generate(input(), 'editor-1', EDITOR)
+    expect(stable.candidates[0]?.candidateId).toBe(refresh.candidates[0]?.candidateId)
+    const conflict = refresh.candidates[0]?.payload.conflicts.find((value) => value.kind === 'human_edit_conflict')
+    expect(conflict?.proposedDefinition?.displayName).toBe('Equipment')
+    expect(conflict?.proposedContentDigest).toMatch(/^sha256:/)
+    expect(h.generation.requests.at(-1)?.messages[1]?.content).not.toContain(conflict?.proposedContentDigest)
+  })
+
+  it('provides finite approved CQ intents and the business boundary without expected gold', async () => {
+    const set = loadCompetencyQuestions()[0]
+    if (set === undefined) throw new Error('expected authored transport declaration')
+    const h = buildHarness([JSON.stringify({ objects: [proposedObject()] })], undefined, {
+      competencyQuestions: { readApproved: async (scope, ref) => scope.tenantId === TENANT && ref.digest === set.ref.digest ? set : undefined },
+    })
+    const result = await h.service.generate(input({ competencyQuestionRef: set.ref }), 'editor-1', EDITOR)
+    expect(result.batch.state).toBe('completed')
+    const context = h.generation.requests[0]?.messages[1]?.content ?? ''
+    expect(context).toContain(set.ref.digest)
+    expect(context).toContain(set.body.questions[0]?.question)
+    expect(context).toContain('model equipment')
+    expect(context).not.toContain('derivation')
+    expect(context).not.toContain('expected')
+  })
+
+  it('keeps header-only suggestions pending and refuses human confirmation without a real row', async () => {
+    const corpus: { documentSetRef?: ResourceRef } = {}
+    const h = buildHarness([JSON.stringify({ objects: [proposedObject()] })], undefined, { sourceGrounding: {
+      read: async (request, _ctx, budget) => {
+        const documentSetRef = corpus.documentSetRef
+        if (documentSetRef === undefined) throw new Error('fixture corpus not ready')
+        return { documentSetRef, coverage: 'complete', usage: budget.usage(), sources: request.sourceRefs.map((sourceRef) => ({
+          sourceRef, trust: 'untrusted_source_data', status: 'complete', reasons: [], contents: [{ kind: 'table', format: 'csv',
+            headerRow: 1, columns: [{ column: 1, index: 0, header: 'Equipment', headerDigest: DIGEST, address: 'A', hidden: false }], rows: [] }],
+        })) }
+      },
+    } })
+    corpus.documentSetRef = h.initialDraft.documentSetRef
+    const candidate = (await h.service.generate(input(), 'editor-1', EDITOR)).candidates[0]
+    if (candidate === undefined) throw new Error('expected pending suggestion')
+    expect(candidate).toMatchObject({ state: 'pending_confirmation', sourceSpans: [] })
+    expect(h.generation.requests[0]?.messages.at(-1)?.content).toContain('Equipment')
+    await expect(h.service.confirmSource({ workspaceId: WORKSPACE_ID, expectedRevision: '1', candidateId: candidate.candidateId,
+      contentDigest: candidate.contentDigest, sourceRef: input().sourceRefs[0] ?? resourceRef(), fragmentIndex: 0,
+      reason: 'header is not a data row', idempotencyKey: `header-${randomUUID()}` }, 'editor-1', EDITOR)).rejects.toMatchObject({ code: 'VALIDATION_BLOCKED' })
+  })
+
+  it('models relative to exact current draft candidates and resolves references to retained objects', async () => {
+    const h = buildHarness([JSON.stringify({ objects: [proposedObject()] }), JSON.stringify({ attributes: [{ ...proposedObject('equipment_serial'), objectLogicalId: 'equipment', valueType: 'string' }] })])
+    const first = await h.service.generate(input(), 'editor-1', EDITOR)
+    const next = await h.service.generate(input(), 'editor-1', EDITOR)
+    expect(next.candidates[0]?.state).toBe('produced')
+    expect(next.candidates[0]?.issues).toEqual([])
+    expect(h.generation.requests[1]?.messages[1]?.content).toContain('equipment')
+    expect(h.generation.requests[1]?.messages[1]?.content).not.toContain(first.candidates[0]?.candidateId)
+    expect(h.generation.requests[1]?.messages[1]?.content).toContain('not_published_truth')
+  })
+
+  it('never reuses a clean version after draft/base and terminology validation change', async () => {
+    const baseRef: VersionRef = { id: 'changed-base', version: '2.0.0', digest: DIGEST }
+    const terminology = new StaticDefinitionTerminologySource([{ definitionRef: baseRef,
+      terminology: { objectLogicalIds: ['device'], attributeLogicalIds: ['rated_power'], relationLogicalIds: [],
+        displayNames: {}, attributes: [{ logicalId: 'rated_power', objectLogicalId: 'device', valueType: 'string' }] } }])
+    const h = buildHarness([SOURCED_PAYLOAD, SOURCED_PAYLOAD], terminology)
+    const first = await h.service.generate(input(), 'editor-1', EDITOR)
+    h.workspaces.seed(EDITOR_SCOPE, { ...h.ws, headRevision: '2' }, [h.initialDraft,
+      { ...h.initialDraft, revision: '2', digest: `sha256:${'e'.repeat(64)}`, basePackRef: baseRef }])
+    const next = await h.service.generate(input({ expectedRevision: '2' }), 'editor-1', EDITOR)
+    const oldAttribute = first.candidates.find((candidate) => candidate.logicalId === 'rated_power')
+    const newAttribute = next.candidates.find((candidate) => candidate.logicalId === 'rated_power')
+    expect(newAttribute?.candidateId).not.toBe(oldAttribute?.candidateId)
+    expect(newAttribute?.replacesCandidateId).toBe(oldAttribute?.candidateId)
+    expect(newAttribute?.issues.some((issue) => issue.code === 'TERMINOLOGY_MISMATCH')).toBe(true)
+    expect(newAttribute?.inputDraftRef.revision).toBe('2')
+    expect(next.batch.reusedCandidateIds).toEqual([])
+  })
+
+  it('human source confirmation appends the exact payload with a real span and requires a new review', async () => {
+    const h = buildHarness([JSON.stringify({ objects: [proposedObject('equipment', false)] })])
+    const pending = (await h.service.generate(input(), 'editor-1', EDITOR)).candidates[0]
+    if (pending === undefined) throw new Error('expected pending suggestion')
+    const confirm = { workspaceId: WORKSPACE_ID, expectedRevision: '1', candidateId: pending.candidateId,
+      contentDigest: pending.contentDigest, sourceRef: resourceRef('11111111-2222-4333-8444-555555555555'),
+      fragmentIndex: 0, reason: 'I read the equipment definition in this fragment', idempotencyKey: `confirm-${randomUUID()}` }
+    const result = await h.service.confirmSource(confirm, 'editor-1', EDITOR)
+    expect(result.candidates[0]?.candidateId).not.toBe(pending.candidateId)
+    expect(result.candidates[0]).toMatchObject({ payload: pending.payload, replacesCandidateId: pending.candidateId,
+      pendingConfirmation: false, sourceSpans: [{ quoteDigest: DIGEST }] })
+    expect(result.candidates[0]?.generationCallRef).toBeUndefined()
+    expect((await h.candidates.getCandidate(EDITOR_SCOPE, pending.candidateId, EDITOR))?.pendingConfirmation).toBe(true)
+    expect((await h.service.confirmSource(confirm, 'editor-1', EDITOR)).created).toBe(false)
+    expect(h.generation.calls).toBe(1)
+    await expect(h.service.confirmSource({ ...confirm, idempotencyKey: `invalid-${randomUUID()}`, fragmentIndex: 33 }, 'editor-1', EDITOR)).rejects.toMatchObject({ code: 'VERSION_CONFLICT' })
+  })
+
+  it.each([['length', true], ['stop', false]] as const)('records incomplete streams (%s / completed=%s) as failures even with valid JSON', async (reason, completed) => {
+    const h = buildHarness([JSON.stringify({ objects: [proposedObject()] })])
+    h.generation.stopReason = reason
+    h.generation.completed = completed
+    const result = await h.service.generate(input(), 'editor-1', EDITOR)
+    expect(result.batch).toMatchObject({ state: 'failed', error: { code: 'GENERATION_FAILED' } })
+    expect(result.candidates).toEqual([])
+  })
+
+  it('shares cancellation and a bounded output allowance across all 500 candidates', async () => {
+    const responses = Array.from({ length: 20 }, (_, page) => JSON.stringify({ objects: Array.from({ length: 25 }, (_, row) => proposedObject(`equipment_${page * 25 + row}`)) }))
+    const h = buildHarness(responses)
+    const result = await h.service.generate(input({ candidateLimit: 500 }), 'editor-1', EDITOR)
+    expect(result.candidates).toHaveLength(500)
+    expect(result.batch.counts.total).toBe(500)
+    expect(h.generation.calls).toBe(20)
+    expect(h.resolutions()).toBe(1)
+    expect(h.generation.requests.every((request) => request.outputLimit.maxTokens === 13_312)).toBe(true)
+    expect(new Set(result.candidates.map((candidate) => candidate.candidateId)).size).toBe(500)
+  })
+
+  it('keeps all batches on one shared port and saves no partial candidates when its budget refuses later calls', async () => {
+    const responses = Array.from({ length: 4 }, (_, page) => JSON.stringify({ objects: Array.from({ length: 25 }, (_, row) => proposedObject(`bounded_${page * 25 + row}`)) }))
+    const h = buildHarness(responses)
+    h.generation.beforeCompletion = async () => { if (h.generation.calls === 3) throw new Error('shared model budget exhausted') }
+    const result = await h.service.generate(input({ candidateLimit: 100 }), 'editor-1', EDITOR)
+    expect(result.batch.state).toBe('failed')
+    expect(result.candidates).toEqual([])
+    expect(h.generation.calls).toBe(3)
+    expect(h.resolutions()).toBe(1)
+    expect(await h.service.listCandidates(WORKSPACE_ID, { limit: 100 }, EDITOR)).toEqual([])
+  })
+
+  it('discards late model content after cancellation and refuses missing approved CQ context', async () => {
+    const h = buildHarness([SOURCED_PAYLOAD])
+    const controller = new AbortController()
+    h.generation.beforeCompletion = async () => { controller.abort() }
+    const result = await h.service.generate(input(), 'editor-1', EDITOR, controller.signal)
+    expect(result.batch).toMatchObject({ state: 'failed', error: { code: 'CANCELLED' } })
+    expect(result.candidates).toEqual([])
+    const another = buildHarness([SOURCED_PAYLOAD])
+    const missing = await another.service.generate(input({ competencyQuestionRef: POLICY_REF }), 'editor-1', EDITOR)
+    expect(missing.batch).toMatchObject({ state: 'failed', error: { code: 'VALIDATION_BLOCKED' } })
+    expect(another.generation.calls).toBe(0)
   })
 })

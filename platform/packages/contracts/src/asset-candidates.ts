@@ -72,6 +72,7 @@ export type AssetCandidateIssueCode =
   | 'INVALID_CARDINALITY'
   | 'INVALID_IDENTITY'
   | 'INVALID_MODEL_OUTPUT'
+  | 'REBASE_CONFLICT'
 
 export interface AssetCandidateIssue {
   readonly code: AssetCandidateIssueCode
@@ -85,6 +86,9 @@ export interface AssetCandidateIssue {
  * Conflicts are surfaced for a human and never auto-resolved.
  */
 export interface DefinitionCandidateConflict {
+  /** Concrete audit digest stays outside model semantic context to avoid self-hash cycles. */
+  readonly proposedContentDigest?: Sha256Digest
+  readonly proposedDefinition?: DefinitionCandidateProposal
   readonly kind:
     | 'logical_id_collision'
     | 'endpoint_unresolved'
@@ -92,6 +96,7 @@ export interface DefinitionCandidateConflict {
     | 'unit_conflict'
     | 'cardinality_conflict'
     | 'identity_conflict'
+    | 'human_edit_conflict'
   readonly message: string
   readonly relatedLogicalIds: readonly string[]
 }
@@ -140,11 +145,19 @@ export type DefinitionCandidatePayload =
   | DefinitionAttributeCandidate
   | DefinitionRelationCandidate
 
+/** A finite declaration alternative; conflict/audit metadata never nests recursively. */
+export type DefinitionCandidateProposal =
+  | Omit<DefinitionObjectCandidate, 'conflicts'>
+  | Omit<DefinitionAttributeCandidate, 'conflicts'>
+  | Omit<DefinitionRelationCandidate, 'conflicts'>
+
 /**
  * The immutable input version a generation was produced under (SPEC §3.1): the workspace draft
  * revision it was generated against and the published pack it extended, when one was mounted.
  */
 export interface DefinitionCandidateInputDraftRef {
+  /** Exact modelling boundary/mounted terminology/CQ/template context; legacy rows stay readable. */
+  readonly contextDigest?: Sha256Digest
   readonly workspaceId: Uuid
   readonly revision: RevisionString
   readonly digest: Sha256Digest
@@ -174,7 +187,7 @@ export interface AssetCandidateVersion {
   readonly issues: readonly AssetCandidateIssue[]
   /**
    * True when the suggestion has no source locator and must be confirmed by a human before it
-   * is treated as grounded (P.US-004.AC-03). Always true iff `sourceRefs` is empty.
+   * is treated as grounded (P.US-004.AC-03). True whenever no valid read-back source span has been selected.
    */
   readonly pendingConfirmation: boolean
   readonly replacesCandidateId?: Uuid
@@ -207,6 +220,8 @@ export interface AssetCandidateBatchError {
  * returns the stored batch; a different payload is an `IDEMPOTENCY_CONFLICT`.
  */
 export interface AssetCandidateBatch {
+  /** Exact immutable versions reused; their original producing batch/review are preserved. */
+  readonly reusedCandidateIds?: readonly Uuid[]
   readonly batchId: Uuid
   readonly workspaceId: Uuid
   readonly domain: 'definition'
@@ -246,6 +261,21 @@ export interface AssetCandidateStateTransition {
   readonly transitionedAt: Rfc3339UtcTimestamp
 }
 
+export type AssetCandidateCommitPin = Pick<AssetCandidateVersion,
+  'candidateId' | 'contentDigest' | 'state' | 'inputDraftRef' | 'sourceRefs' | 'sourceSpans' | 'issues' | 'pendingConfirmation'>
+
+export function assetCandidateCommitPin(candidate: AssetCandidateVersion): AssetCandidateCommitPin {
+  return { candidateId: candidate.candidateId, contentDigest: candidate.contentDigest, state: candidate.state,
+    inputDraftRef: candidate.inputDraftRef, sourceRefs: candidate.sourceRefs, sourceSpans: candidate.sourceSpans,
+    issues: candidate.issues, pendingConfirmation: candidate.pendingConfirmation }
+}
+
+export interface AssetCandidateInsertGuard {
+  readonly expectedWorkspaceRevision: RevisionString
+  /** All replacement heads, including rejected heads; no implicit ancestor resurrection. */
+  readonly currentCandidatePins: readonly AssetCandidateCommitPin[]
+}
+
 /**
  * Control persistence for definition candidates (SPEC §4.1). Every method runs in the trusted
  * tenant/space scope and RLS is a second layer behind the explicit scope predicate.
@@ -258,6 +288,7 @@ export interface AssetCandidateStore {
     batch: AssetCandidateBatch,
     candidates: readonly AssetCandidateVersion[],
     ctx: ToolContext,
+    guard?: AssetCandidateInsertGuard,
   ): Promise<AssetCandidateInsertResult>
   getBatch(
     scopeRef: ScopeRef,
@@ -309,6 +340,7 @@ export type AssetCandidateStoreErrorCode =
   | 'INVALID_BATCH'
   | 'INVALID_CANDIDATE'
   | 'STORE_FAILED'
+  | 'VERSION_CONFLICT'
 
 export class AssetCandidateStoreError extends Error {
   readonly code: AssetCandidateStoreErrorCode
@@ -420,7 +452,7 @@ export function assertAssetCandidateVersionShape(
   assertCandidatePayload(value['payload'], value['kind'])
   if (!isRecord(value['inputDraftRef'])) throw invalidCandidate('inputDraftRef must be an object')
   const draftRef = value['inputDraftRef']
-  if (!isUuid(draftRef['workspaceId']) || !isRevision(draftRef['revision']) || !isDigest(draftRef['digest'])) {
+  if ((draftRef['contextDigest'] !== undefined && !isDigest(draftRef['contextDigest'])) || !isUuid(draftRef['workspaceId']) || !isRevision(draftRef['revision']) || !isDigest(draftRef['digest'])) {
     throw invalidCandidate('inputDraftRef must carry workspaceId/revision/digest')
   }
   if (!Array.isArray(value['sourceRefs']) || !Array.isArray(value['sourceSpans'])) {
@@ -441,12 +473,13 @@ export function assertAssetCandidateVersionShape(
 /** Validate one generation batch before it is persisted. */
 export function assertAssetCandidateBatchShape(value: unknown): asserts value is AssetCandidateBatch {
   if (!isRecord(value)) throw invalidBatch('definition candidate batch must be an object')
+  if (value['reusedCandidateIds'] !== undefined && (!Array.isArray(value['reusedCandidateIds']) || value['reusedCandidateIds'].length > 500 || !value['reusedCandidateIds'].every(isUuid) || new Set(value['reusedCandidateIds']).size !== value['reusedCandidateIds'].length)) throw invalidBatch('reusedCandidateIds must be bounded unique UUID references')
   if (!isUuid(value['batchId'])) throw invalidBatch('batchId must be a uuid')
   if (!isUuid(value['workspaceId'])) throw invalidBatch('workspaceId must be a uuid')
   if (value['domain'] !== 'definition') throw invalidBatch('domain must be definition')
   if (!isRecord(value['inputDraftRef'])) throw invalidBatch('inputDraftRef must be an object')
   const draftRef = value['inputDraftRef']
-  if (!isUuid(draftRef['workspaceId']) || !isRevision(draftRef['revision']) || !isDigest(draftRef['digest'])) {
+  if ((draftRef['contextDigest'] !== undefined && !isDigest(draftRef['contextDigest'])) || !isUuid(draftRef['workspaceId']) || !isRevision(draftRef['revision']) || !isDigest(draftRef['digest'])) {
     throw invalidBatch('inputDraftRef must carry workspaceId/revision/digest')
   }
   assertVersionRef(value['responseSchemaRef'], 'responseSchemaRef', invalidBatch)

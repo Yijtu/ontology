@@ -280,6 +280,8 @@ export interface IndustryWorkspaceStore {
     revision: RevisionString,
     ctx: ToolContext,
   ): Promise<AssetDraftVersion | undefined>
+  /** Exact current draft without a history page cap. */
+  getLatestDraft?(scopeRef: ScopeRef, workspaceId: Uuid, ctx: ToolContext): Promise<AssetDraftVersion | undefined>
   listDrafts(
     scopeRef: ScopeRef,
     workspaceId: Uuid,
