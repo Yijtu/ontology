@@ -1,10 +1,12 @@
 import { answerDraftContentHash, inputManifestDigest, scenarioManifestHash } from '@ontology/application'
 import { createToolContext, isRecord, isResourceRef, isRevisionString, isSha256Digest, isStructuredParseSelection, isToolContext, isUuid, isVersionRef, sha256OfCanonical } from '@ontology/contracts'
-import type { AnswerStorePort, ArchivedRunExecutionBinding, CandidateStore, DataMode, DocumentParseStore, InstanceReviewStore, ProjectDocumentStore, ProjectMappingStore, ProjectRecordStore, ProjectStore, ProvenanceEvidenceView, PublishedAnswer, ResourceRef, RulePremiseReplayPort, RunExecutionBindingStore, RunStore, ScopeRef, SourceLocator, SourceReReadability, StructuredIngestionStore, StructuredParseOptions, ToolContext, VersionRef, WorkflowManifestStore } from '@ontology/contracts'
-import { DocumentSpanReader, STRUCTURED_PARSER_ID, STRUCTURED_PARSER_VERSION, StructuredDocumentParser, StructuredDocumentSpanReader, reconcileStructuredResult, sha256DigestOfBytes, sha256DigestOfText } from '@ontology/adapter-extraction-document'
+import type { AnswerStorePort, ArchivedRunExecutionBinding, BlobGetAuthorizedRequest, BlobGetAuthorizedResponse, CandidateStore, DataMode, DocumentParseStore, InstanceReviewStore, ProjectDocumentStore, ProjectMappingStore, ProjectRecordStore, ProjectStore, ProvenanceEvidenceView, PublishedAnswer, ResourceRef, RulePremiseReplayPort, RunExecutionBindingStore, RunStore, ScopeRef, SourceLocator, SourceReReadability, StructuredIngestionStore, ToolContext, VersionRef, WorkflowManifestStore } from '@ontology/contracts'
+import { DocumentSpanReader, StructuredDocumentSpanReader, sha256DigestOfBytes, sha256DigestOfText } from '@ontology/adapter-extraction-document'
 import type { DocumentArtifactStore, StructuredProjectionOrigin } from '@ontology/adapter-extraction-document'
 import type { ProvenanceReadService } from '@ontology/provenance'
 import { ForbiddenError } from '../http/shared'
+import { createRequestNativeSourceReader } from './core-native-source-reader'
+import type { RequestNativeSourceReader } from './core-native-source-reader'
 
 export interface CoreSourceCell {
   readonly raw: string | boolean | null
@@ -68,7 +70,9 @@ export interface CoreSourceViewOptions {
   readonly runs: Pick<RunStore, 'getRun'>
   readonly manifests: Pick<WorkflowManifestStore, 'getRunManifest' | 'getInputManifest'>
   readonly executionBindings: Pick<RunExecutionBindingStore, 'getBindingByRun'>
-  readonly blobs: DocumentArtifactStore
+  readonly blobs: DocumentArtifactStore & {
+    getAuthorizedMetadata(request: BlobGetAuthorizedRequest, ctx: ToolContext): Promise<Omit<BlobGetAuthorizedResponse, 'integrityVerified'>>
+  }
   readonly parses: DocumentParseStore
   readonly ingestion: Pick<StructuredIngestionStore, 'findParseByDigest' | 'listRecords'>
   readonly projects: Pick<ProjectStore, 'getProject' | 'getRevision'>
@@ -143,12 +147,24 @@ function bodyHash(answer: PublishedAnswer): string {
 export function createCoreSourceViewReader(options: CoreSourceViewOptions) {
   const spans = new StructuredDocumentSpanReader(options)
   const textSpans = new DocumentSpanReader({ blobs: options.blobs, store: options.parses })
+  const metadataOf = async (ref: ResourceRef, ctx: ToolContext, signal: AbortSignal, cap: number) => {
+    check(signal, ctx)
+    try {
+      const meta = await options.blobs.getAuthorizedMetadata({ scopeRef: scopeOf(ctx), blobRef: ref }, ctx)
+      check(signal, ctx)
+      requireSource(equal(meta.blobRef, ref) && meta.contentDigest === ref.digest && Number.isSafeInteger(meta.byteSize) && meta.byteSize > 0 && meta.byteSize <= cap, 'the immutable source failed its full reference or pre-read byte bound')
+      return meta
+    } catch (error) {
+      check(signal, ctx)
+      if (error instanceof CoreSourceViewError) throw error
+      throw new CoreSourceViewError('SOURCE_UNVERIFIABLE', 'the authorized source metadata is unavailable')
+    }
+  }
   const bytesOf = async (ref: ResourceRef, ctx: ToolContext, signal: AbortSignal, cap = 1_048_576): Promise<Uint8Array> => {
     check(signal, ctx)
     try {
       const request = { scopeRef: scopeOf(ctx), blobRef: ref }
-      const meta = await options.blobs.getAuthorized(request, ctx)
-      requireSource(meta.integrityVerified && equal(meta.blobRef, ref) && meta.contentDigest === ref.digest && Number.isSafeInteger(meta.byteSize) && meta.byteSize > 0 && meta.byteSize <= cap, 'the immutable source failed its full reference, integrity or byte bound')
+      const meta = await metadataOf(ref, ctx, signal, cap)
       const bytes = await options.blobs.readAuthorized(request, ctx)
       check(signal, ctx)
       requireSource(bytes.byteLength === meta.byteSize && sha256DigestOfBytes(bytes) === ref.digest, 'the immutable source bytes differ from the saved reference')
@@ -164,45 +180,23 @@ export function createCoreSourceViewReader(options: CoreSourceViewOptions) {
     try { return JSON.parse(new TextDecoder('utf-8', { fatal: true }).decode(bytes)) as unknown }
     catch { throw new CoreSourceViewError('SOURCE_UNVERIFIABLE', 'the immutable JSON source is malformed') }
   }
-  const nativeRow = async (originalRef: ResourceRef, parserVersion: string, parseId: string, recordId: string, rowDigest: string, selection: Omit<StructuredParseOptions, 'mediaType'>, ctx: ToolContext, signal: AbortSignal) => {
-    requireSource(isStructuredParseSelection(selection), 'the actual native selection is required')
-    const native = await options.ingestion.findParseByDigest(scopeOf(ctx), originalRef.digest, parserVersion, ctx)
-    requireSource(native !== undefined && native.parseId === parseId && equal(native.originalRef, originalRef) && native.parserId === STRUCTURED_PARSER_ID && native.parserVersion === STRUCTURED_PARSER_VERSION, 'the actual native parse identity differs from the supported source parser')
-    requireSource(native.parseOptions === undefined || equal(native.parseOptions, selection), 'the selection differs from the stored native parser selection')
-    const parsed = new StructuredDocumentParser().parse(await bytesOf(originalRef, ctx, signal, 8 * 1_048_576), { ...selection, mediaType: native.originalMediaType })
-    check(signal, ctx)
-    requireSource(parsed.status !== 'rejected' && parsed.format === native.format && equal(parsed.coverage, native.coverage), 'the original bytes do not reproduce the actual native parse')
-    const entry = reconcileStructuredResult(parsed, scopeOf(ctx), originalRef.digest).entries.find((row) => row.recordId === recordId)
-    requireSource(entry !== undefined && entry.state === 'parsed' && entry.rowDigest === rowDigest, 'the original row fingerprint differs from the saved source')
-    let cursor: string | undefined
-    let scanned = 0
-    const cursors = new Set<string>()
-    let found = false
-    do {
-      check(signal, ctx)
-      const page = await options.ingestion.listRecords(scopeOf(ctx), parseId, { limit: 200, ...(cursor === undefined ? {} : { cursor }) }, ctx)
-      scanned += page.records.length
-      requireSource(scanned <= 10_000 && page.total === native.coverage.parsedUnits, 'the stored native row inventory exceeds its bound or coverage')
-      const stored = page.records.find((row) => row.recordId === recordId)
-      if (stored !== undefined) { requireSource(equal(stored, entry), 'the original row differs from the immutable stored native row'); found = true; break }
-      cursor = page.nextCursor
-      requireSource(cursor === undefined || !cursors.has(cursor), 'the native row cursor did not advance')
-      if (cursor !== undefined) cursors.add(cursor)
-    } while (cursor !== undefined)
-    requireSource(found, 'the original row is absent from the actual native parse')
-    const rows = parsed.tables.flatMap((table) => table.rows.map((row) => ({ row, table })))
-    const selected = rows.find(({ row }) => equal(row.locator, entry.locator))
-    const record = parsed.records.find((row) => equal(row.locator, entry.locator))
-    const cells = selected?.row.cells ?? record?.cells
-    requireSource(cells !== undefined && cells.length > 0 && cells.length <= 128, 'the native row has no bounded original cells')
-    return { native, entry, cells, columns: selected?.table.columns ?? [] }
+  const nativeFor = (ctx: ToolContext, signal: AbortSignal): RequestNativeSourceReader => {
+    const native = createRequestNativeSourceReader({ scope: scopeOf(ctx), ctx, signal, ingestion: options.ingestion, readBytes: (ref, cap) => bytesOf(ref, ctx, signal, cap), check: () => check(signal, ctx) })
+    return { read: async (...args) => {
+      try { return await native.read(...args) }
+      catch (error) {
+        check(signal, ctx)
+        if (error instanceof CoreSourceViewError) throw error
+        throw new CoreSourceViewError('SOURCE_UNVERIFIABLE', error instanceof Error ? error.message : 'the actual original native source could not be replayed')
+      }
+    } }
   }
-  const originCells = async (origin: StructuredProjectionOrigin, ctx: ToolContext, signal: AbortSignal) => {
+  const originCells = async (origin: StructuredProjectionOrigin, ctx: ToolContext, signal: AbortSignal, native: RequestNativeSourceReader) => {
     const parse = await options.parses.getParse(scopeOf(ctx), origin.parseId, ctx)
     requireSource(parse !== undefined && equal(parse.originalRef, origin.originalRef), 'the actual projection parse is unavailable')
     const map = await jsonOf(parse.spanMapRef, ctx, signal, 4 * 1_048_576)
     requireSource(isRecord(map) && map['structuredParseId'] === origin.parseId && typeof map['parserVersion'] === 'string' && isStructuredParseSelection(map['selection']), 'the immutable projection has no replayable actual selection')
-    const row = await nativeRow(origin.originalRef, map['parserVersion'], origin.parseId, origin.recordId, origin.rowDigest, map['selection'], ctx, signal)
+    const row = await native.read(origin.originalRef, map['parserVersion'], origin.parseId, origin.recordId, origin.rowDigest, map['selection'], parse.spanMapRef)
     requireSource(equal(row.entry.locator, origin.rowLocator) && row.entry.sourceRowKey === origin.sourceRowKey && equal(row.cells.map((cell) => ({ locator: cell.locator, rawDigest: sha256DigestOfText(cell.raw), kind: cell.kind })), origin.cells), 'the archived projection cells differ from the genuine original row')
     return row.cells.map((cell, index): CoreSourceCell => ({ raw: cell.raw, locator: cell.locator,
       ...(row.columns[index] === undefined ? {} : { columnLabel: row.columns[index].header }), rowLabel: String(row.entry.row) }))
@@ -240,6 +234,7 @@ export function createCoreSourceViewReader(options: CoreSourceViewOptions) {
     requireSource(input !== undefined && input.manifestId === manifest.inputManifestId && input.runId === answer.runId && input.entries.length <= 1_000 && input.digest === answer.evidenceManifestHash && inputManifestDigest(input.runId, input.entries) === input.digest && scenarioManifestHash(manifest, input) === answer.scenarioManifestHash && run.resolvedProfileHash === manifest.resolvedProfileRef.snapshotHash && equal(manifest.resolvedProfileRef, archived.binding.resolvedProfileRef) && equal(run.runtimeRef, manifest.runtimeRef), 'the saved answer is detached from its actual run/evidence manifest')
     if (answer.v3Body !== undefined) requireSource(equal(answer.v3Body.executionBindingRef, archived.ref), 'the typed answer pins a different execution binding')
     const ctx = createToolContext({ ...requestCtx, runId: answer.runId, resolvedProfileHash: run.resolvedProfileHash })
+    const native = nativeFor(ctx, signal)
     const evidenceReads = new Map<string, Awaited<ReturnType<typeof loadEvidence>>>()
     const readEvidence = async (ref: ResourceRef) => {
       const prior = evidenceReads.get(ref.id)
@@ -320,12 +315,15 @@ export function createCoreSourceViewReader(options: CoreSourceViewOptions) {
         requireSource(isRecord(member) && isUuid(member['parseId']) && isUuid(member['documentId']) && isResourceRef(member['parseRef']) && isRevisionString(member['membershipRevision']), 'the fixed document member has invalid original/parse pins')
         const parse = await options.parses.getParse(scope, member['parseId'], ctx)
         requireSource(parse !== undefined && equal(parse.originalRef, span['documentRef']) && equal(parse.spanMapRef, member['parseRef']), 'the QA span differs from the actual immutable saved parse')
+        await metadataOf(parse.originalRef, ctx, signal, 8 * 1_048_576)
+        await metadataOf(parse.normalizedRef, ctx, signal, 8 * 1_048_576)
+        await metadataOf(parse.spanMapRef, ctx, signal, 4 * 1_048_576)
         const read = await spans.readParsedSpan(parse, { documentRef: span['documentRef'], locator, maxBytes: 16_384 }, ctx)
         requireSource(read.truncated !== true && read.text === span['quote'] && read.textDigest === span['textDigest'] && read.textDigest === span['quoteDigest'], 'the QA text does not replay the original saved span')
         const origin = await spans.readOrigin({ documentRef: span['documentRef'], locator }, ctx)
         requireSource(equal(origin ?? null, span['sourceOrigin'] ?? null), 'the actual original cell origins differ from the archived QA result')
         const fragmentBase = { originalRef: parse.originalRef, parseRef: parse.spanMapRef, locator: origin?.rowLocator ?? locator }
-        if (origin !== undefined) fragments.push({ ...fragmentBase, precision: 'approximate', cells: await originCells(origin, ctx, signal) })
+        if (origin !== undefined) fragments.push({ ...fragmentBase, precision: 'approximate', cells: await originCells(origin, ctx, signal, native) })
         else { requireSource(span['spanKind'] === 'verbatim' && locator.kind !== 'approximate_locator', 'an approximate document has no original structured cells'); fragments.push({ ...fragmentBase, precision: 'exact', text: read.text }) }
         const current = await options.documents.getMembership(scope, revision.ref.projectId, member['documentId'], ctx)
         membershipReads.push({ projectId: revision.ref.projectId, documentId: member['documentId'], membership: current })
@@ -348,7 +346,7 @@ export function createCoreSourceViewReader(options: CoreSourceViewOptions) {
         requireSource(candidate !== undefined && pin !== undefined, 'the mapped premise has no actual saved candidate/source pin')
         const mapping = await options.mappings.getMapping(scope, pin.projectRevisionRef.projectId, pin.mappingRef.id, pin.mappingRef.version, ctx)
         requireSource(mapping !== undefined && equal(mapping.ref, pin.mappingRef) && equal(mapping.originalRef, payload['documentRef']), 'the mapped rule premise has no actual confirmed mapping')
-        const row = await nativeRow(mapping.originalRef, candidate.inputVersion.parserVersion, mapping.parseId, span['recordId'], span['rowDigest'], mapping.options, ctx, signal)
+        const row = await native.read(mapping.originalRef, candidate.inputVersion.parserVersion, mapping.parseId, span['recordId'], span['rowDigest'], mapping.options, mapping.ref)
         const cell = row.cells.find((cell) => equal(cell.locator, span['locator']))
         requireSource(cell !== undefined, 'the mapped premise does not locate an original cell')
         requireSource(parse === undefined || equal(parse.originalRef, mapping.originalRef), 'the mapped premise projection belongs to another original')
@@ -356,6 +354,8 @@ export function createCoreSourceViewReader(options: CoreSourceViewOptions) {
       } else {
         requireSource(parse !== undefined && equal(parse.originalRef, payload['documentRef']) && parse.parserVersion === payload['parserVersion'], 'the original policy parse differs from its saved binding')
         const locator = textLocator(span['locator'])
+        await bytesOf(parse.originalRef, ctx, signal, 8 * 1_048_576)
+        await metadataOf(parse.normalizedRef, ctx, signal, 8 * 1_048_576)
         const read = await textSpans.readParsedSpan(parse, { documentRef: parse.originalRef, locator, maxBytes: 128 * 1024 }, ctx)
         const savedText = new TextDecoder('utf-8', { fatal: true }).decode(await bytesOf(payload['textArtifactRef'], ctx, signal))
         requireSource(read.truncated !== true && read.text === savedText && read.textDigest === record.envelope.resultDigest, 'the original policy/fact text differs from the archived binding')
@@ -410,6 +410,7 @@ export function createCoreSourceViewReader(options: CoreSourceViewOptions) {
       return { record, binding, candidate, member, visibility, revision, project, span, field }
     }
     const before = await snapshot()
+    const native = nativeFor(ctx, signal)
     const { candidate, member, span, field } = before
     const parse = await options.parses.getParse(scope, span.parseId, ctx)
     requireSource(parse !== undefined && equal(parse.originalRef, member.documentRef) && equal(parse.spanMapRef, member.parseRef), 'the field source does not have the actual project document parse')
@@ -428,7 +429,7 @@ export function createCoreSourceViewReader(options: CoreSourceViewOptions) {
       requireSource(mapping.digest === mappingDigest && mapping.ref.digest === mappingDigest && mapping.objectId === candidate.objectId, 'the saved mapping failed its actual complete content hash')
       const entry = mapping.entries.filter((entry) => entry.fieldRef === fieldId)
       requireSource(entry.length === 1 && entry[0] !== undefined && equal(record.fields.find((value) => value.fieldId === fieldId)?.locator, span.locator), 'the actual mapping does not uniquely bind this field locator')
-      const row = await nativeRow(mapping.originalRef, candidate.inputVersion.parserVersion, mapping.parseId, span.recordId, span.rowDigest, mapping.options, ctx, signal)
+      const row = await native.read(mapping.originalRef, candidate.inputVersion.parserVersion, mapping.parseId, span.recordId, span.rowDigest, mapping.options, mapping.ref)
       const cell = row.cells[entry[0].columnIndex]
       const column = row.columns[entry[0].columnIndex]
       requireSource(cell !== undefined && column !== undefined && column.header === entry[0].header && column.headerDigest === entry[0].headerDigest && equal(cell.locator, span.locator), 'the field locator does not name the actual confirmed original column/cell')
@@ -436,6 +437,10 @@ export function createCoreSourceViewReader(options: CoreSourceViewOptions) {
       requireSource(equal(await options.records.getRecord(scope, projectId, pin.recordId, ctx), record) && equal(await options.mappings.getMapping(scope, projectId, pin.mappingRef.id, pin.mappingRef.version, ctx), mapping), 'the actual mapped record changed during source read')
     } else {
       requireSource(field.source.chunkId === span.chunkId && field.source.textDigest === span.textDigest && field.source.quoteDigest === span.quoteDigest && parse.parserVersion === candidate.inputVersion.parserVersion, 'the field differs from its actual parsed text source')
+      // Character/page readers otherwise touch only normalized text. Re-readable
+      // means the actual original still passes its complete byte integrity proof.
+      await bytesOf(member.documentRef, ctx, signal, 8 * 1_048_576)
+      await metadataOf(parse.normalizedRef, ctx, signal, 8 * 1_048_576)
       const read = await textSpans.readParsedSpan(parse, { documentRef: member.documentRef, locator: span.locator, maxBytes: 128 * 1024 }, ctx)
       requireSource(read.truncated !== true && read.textDigest === span.textDigest && read.textDigest === span.quoteDigest, 'the original field text failed exact source replay')
       result = { ...base, precision: span.precision, locator: textLocator(span.locator), text: read.text }

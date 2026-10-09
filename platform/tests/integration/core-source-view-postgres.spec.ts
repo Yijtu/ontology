@@ -1,16 +1,16 @@
 import { randomUUID } from 'node:crypto'
-import { mkdtemp, rm } from 'node:fs/promises'
+import { mkdtemp, readFile, rm } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { afterAll, beforeAll, describe, expect, it, vi } from 'vitest'
 import { FileSystemObjectStore, LocalImmutableBlobStore, PostgresArtifactRegistry } from '@ontology/adapter-blob-local'
 import { ControlPostgresDatabase, PostgresAnswerStore, PostgresCandidateStore, PostgresEvidenceStore, PostgresIdentityDecisionStore, PostgresInstanceReviewStore, PostgresJobStore, PostgresProfileStore, PostgresProjectDocumentStore, PostgresProjectMappingStore, PostgresProjectReadinessStore, PostgresProjectRecordStore, PostgresProjectStore, PostgresRunExecutionBindingStore, PostgresRunStore, PostgresSemanticPublicationStore, PostgresWorkflowStore } from '@ontology/adapter-control-postgres'
-import { LocalStructuredIngestionService, PostgresDocumentParseStore, PostgresStructuredIngestionStore, StructuredDocumentParser, StructuredDocumentProjectionService } from '@ontology/adapter-extraction-document'
+import { LocalDocumentExtractionService, LocalStructuredIngestionService, PostgresDocumentParseStore, PostgresStructuredIngestionStore, StructuredDocumentParser, StructuredDocumentProjectionService } from '@ontology/adapter-extraction-document'
 import { coreScenarioTaskBindings, createCoreApi, createCoreLocalComposition, createCoreSourceViewReader, createCoreStructuredImportWorkflow, createInstanceIdentityWorkflow, createProjectFactWorkflow, loadCoreExamples, registerCoreSourceViewRoutes } from '@ontology/app-api'
 import type { CoreSourceViewOptions } from '@ontology/app-api'
 import { canonicalJson, InMemoryIndustrySchemaSource, InstanceReviewService, JobService, ProjectMappingService, ProjectService, encodeStructuredExtractionRef, sha256DigestOf } from '@ontology/application'
 import { createToolContext } from '@ontology/contracts'
-import type { ColumnMappingEntry, ProjectRevisionBody, PublishedAnswer, ResourceRef, ToolContext } from '@ontology/contracts'
+import type { ColumnMappingEntry, EntityCandidate, ProjectRevisionBody, PublishedAnswer, ResourceRef, ToolContext } from '@ontology/contracts'
 import { InMemoryIdentityIndexReader, projectIndustrySchema, SupportEvidenceDependencySource } from '@ontology/semantic-engine'
 import { ProvenanceReadService } from '@ontology/provenance'
 import { createJobScope, startJobDatabase } from './job-postgres-harness'
@@ -238,6 +238,54 @@ async function fieldFixture(format: 'csv' | 'xlsx') {
 }
 
 describe('current instance field original source (real mapping, native parser, candidate, identity record)', () => {
+  it('requires the actual PDF original bytes even when its nonidentity normalized page stays readable, and gates oversize before any body read', async () => {
+    const scope = await createJobScope(harness.adminClient, 'pdf-field-origin')
+    const ctx = freshContext(scope.tenantId, scope.spaceId, ['platform-admin', 'data-editor', 'semantic-reviewer'])
+    const definition = relationDefinition(scope.scopeRef)
+    const projectId = randomUUID()
+    await seedIdentityProject(harness.adminClient, scope.scopeRef, projectId, definition.ref)
+    await new ProjectService({ projects, readiness: new PostgresProjectReadinessStore(db), jobs, catalogue: { listEntries: async () => [], findPack: async () => undefined } }).appendRevision(projectId, { expectedRevision: '1', reason: 'actual original document source configuration' }, randomUUID(), ctx.principal.subjectId, ctx)
+    const originalBytes = new Uint8Array(await readFile(new URL('../fixtures/documents/service-terms.pdf', import.meta.url)))
+    const staged = await blobs.stage(originalBytes, { scopeRef: scope.scopeRef }, ctx)
+    const original = await blobs.publish({ scopeRef: scope.scopeRef, contentDigest: staged.contentDigest, byteSize: staged.byteSize, mediaType: 'application/pdf', purpose: 'document' }, ctx)
+    const parsed = await new LocalDocumentExtractionService({ blobs, store: parses }).parse({ scopeRef: scope.scopeRef, originalRef: original.blobRef }, ctx)
+    expect(parsed.offsetUnit).toBe('character')
+    expect(parsed.normalizedRef.digest).not.toBe(parsed.originalRef.digest)
+    const chunk = parsed.chunks.find((chunk) => chunk.locator.kind === 'page')
+    if (chunk === undefined) throw new Error('the real PDF has no normalized page locator')
+    const documentId = randomUUID()
+    await documents.registerDocument(scope.scopeRef, projectId, { documentId, documentRef: parsed.originalRef, documentDigest: parsed.originalRef.digest, parseId: parsed.parseId, parseRef: parsed.spanMapRef, textDigest: parsed.normalizedRef.digest, precision: chunk.precision, actor: ctx.principal.subjectId, recordedAt: new Date().toISOString() }, ctx)
+    const job = await new JobService({ store: jobs }).createJob({ jobId: randomUUID(), kind: 'ingestion', sourceRef: original.blobRef.id, documentRef: original.blobRef.id, pipelineVersion: '1.0.0', idempotencyKey: randomUUID() }, ctx)
+    const attributes = [{ attributeId: 'site_id', value: chunk.text, raw: chunk.text }]
+    const sourceSpans = [{ parseId: parsed.parseId, chunkId: chunk.chunkId, locator: chunk.locator, spanKind: chunk.spanKind, precision: chunk.precision, textDigest: chunk.textDigest, quoteDigest: chunk.quoteDigest }]
+    const inputVersion = { definitionRef: definition.ref, parseId: parsed.parseId, parserVersion: parsed.parserVersion, pipelineVersion: '1.0.0', documentVersionRef: parsed.originalRef }
+    const candidate: EntityCandidate = { candidateId: randomUUID(), jobId: job.jobId, kind: 'entity', objectId: 'site', attributes, sourceSpans, inputVersion, deterministic: true, state: 'pending_review', issues: [], idempotencyKey: sha256DigestOf(canonicalJson({ jobId: job.jobId, attributes, sourceSpans, inputVersion })), recordedAt: new Date().toISOString() }
+    await candidates.insertCandidates(scope.scopeRef, [candidate], ctx)
+    const schemaSource = new InMemoryIndustrySchemaSource([{ ref: definition.ref, schema: projectIndustrySchema(definition) }])
+    const identity = createInstanceIdentityWorkflow({ service: new InstanceReviewService({ store: instances }), projects, projectDocuments: documents, candidates, identityStore: identities, schemaSource, identityMappingRef: definition.ref, index: new InMemoryIdentityIndexReader([]) })
+    const created = await identity.createRecord(scope.scopeRef, projectId, { candidateId: candidate.candidateId, documentId, relations: [], idempotencyKey: randomUUID() }, ctx)
+    const reader = createCoreSourceViewReader(options)
+    const read = () => reader.instanceFieldSource(projectId, created.record.recordId, 'site_id', created.record.recordRevision, ctx, signal())
+    expect(await read()).toMatchObject({ readability: 're_readable', originalRef: original.blobRef, text: chunk.text })
+    const normalized = await blobs.readAuthorized({ scopeRef: scope.scopeRef, blobRef: parsed.normalizedRef }, ctx)
+    const objects = new FileSystemObjectStore(directory)
+    await objects.remove(original.contentDigest)
+    expect(await blobs.readAuthorized({ scopeRef: scope.scopeRef, blobRef: parsed.normalizedRef }, ctx)).toEqual(normalized)
+    await expect(read()).rejects.toMatchObject({ code: 'SOURCE_UNVERIFIABLE' })
+    await objects.publish(original.contentDigest, originalBytes)
+    const corrupted = originalBytes.slice(); corrupted[0] = 0
+    await objects.publish(original.contentDigest, corrupted)
+    expect(await blobs.readAuthorized({ scopeRef: scope.scopeRef, blobRef: parsed.normalizedRef }, ctx)).toEqual(normalized)
+    await expect(read()).rejects.toMatchObject({ code: 'SOURCE_UNVERIFIABLE' })
+    await objects.publish(original.contentDigest, originalBytes)
+    const metadata = blobs.getAuthorizedMetadata.bind(blobs)
+    vi.spyOn(blobs, 'getAuthorizedMetadata').mockImplementationOnce(async (...args) => ({ ...await metadata(...args), byteSize: 8 * 1_048_576 + 1 }))
+    const body = vi.spyOn(blobs, 'readAuthorized')
+    await expect(read()).rejects.toMatchObject({ code: 'SOURCE_UNVERIFIABLE' })
+    expect(body).not.toHaveBeenCalled()
+    vi.restoreAllMocks()
+    expect(await read()).toMatchObject({ readability: 're_readable', text: chunk.text })
+  }, 120_000)
   it.each(['csv', 'xlsx'] as const)('reads %s chosen/header2 row14 beyond preview and rejects wrong revision/cell/current-source and async source/cancellation races', async (format) => {
     const p = await fieldFixture(format)
     const reader = createCoreSourceViewReader(options)
