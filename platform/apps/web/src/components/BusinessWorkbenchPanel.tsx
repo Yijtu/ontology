@@ -404,8 +404,10 @@ export function BusinessWorkbenchPanel({
                       question: selectedTask.displayName,
                       context: { timeZone },
                       preferences: { route: 'auto', allowWeb: false },
-                      task: { bindingRef: selectedTask.bindingRef, arguments: parameters },
-                      ...(inputSelection === undefined ? {} : { inputSelection }),
+                      task: {
+                        bindingRef: selectedTask.bindingRef, arguments: parameters,
+                        ...(inputSelection === undefined ? {} : { inputSelection }),
+                      },
                     })
                   }}
                 />

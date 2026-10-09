@@ -212,6 +212,70 @@ describe('public business workbench lists mounted and authorised tasks', () => {
 })
 
 describe('parameter change requires an explicit confirmation', () => {
+  it.each([true, false])('sends nested task inputSelection through real Business HTTP and respects retryable=%s with identical body/key recovery', async (retryable) => {
+    // Catalogue rows are declared UI wire fixtures. The normal19 PG/browser gate is separate.
+    // The failure is injected before the real write; reads/client/session/HTTP remain actual.
+    const projectId = '10000000-0000-4000-8000-000000000021'
+    const sha = `sha256:${'b'.repeat(64)}`
+    const project = { projectId, title: '已确认计算项目', headRevision: '2', activeRevision: '1', state: 'active', createdBy: 'human', createdAt: '2026-10-10T00:00:00Z', updatedAt: '2026-10-10T00:00:00Z' }
+    const bindingRef = { id: 'actual-host-compute-wire', version: '1.0.0', digest: sha }
+    const task: ProjectTaskItem = {
+      bindingRef, taskKind: 'compute', displayName: '汇总已确认件数', parameterSchema: {}, requiredCapabilities: [], requiredReadiness: ['dataset'], available: true, unavailableReasons: [], requiresInputSelection: true,
+      inputRequirements: { maxDecimalPlaces: 4, units: ['each'], currencies: ['CNY'], minimumAmount: '0', description: '仅汇总已确认每件数量。', maxRows: 1000 },
+      objects: [{ objectId: 'goods', displayName: '商品', attributes: [
+        { attributeId: 'sku', displayName: '商品编号', valueType: 'string', required: true, minCardinality: 1, maxCardinality: 1 },
+        { attributeId: 'pieces', displayName: '件数', valueType: 'quantity', unit: 'each', required: true, minCardinality: 1, maxCardinality: 1 },
+      ] }],
+    }
+    const submissions: { body: unknown; key: unknown }[] = []
+    const stream = new FakeStream()
+    const built = await startHarness({ streamFactory: stream.factory, extraRoutes: (app) => {
+      app.get('/api/v1/projects', async () => ({ data: { projects: [project] } }))
+      app.get(`/api/v1/core/projects/${projectId}/task-catalogue`, async () => ({ data: { project, revision: {
+        ref: { projectId, revision: '1', digest: sha }, industryPackRef: { id: 'published-pack', version: '1.0.0', digest: sha }, definitionRef: { id: 'published-definition', version: '1.0.0', digest: sha },
+        profileRef: { ...PROFILE, snapshotHash: sha }, mappingRefs: [], documentSetRef: { id: 'actual-corpus-wire', version: '1.0.0', digest: sha, kind: 'artifact' }, semanticPublicationRefs: [], sourceVisibilityEpoch: '1', changeReason: 'active context during staging',
+      }, tasks: [task] } }))
+      app.addHook('preHandler', async (request, reply) => {
+        if (request.method !== 'POST' || request.url !== '/api/v1/runs') return
+        submissions.push({ body: request.body, key: request.headers['idempotency-key'] })
+        return reply.code(503).send({ error: { code: 'SOURCE_UNAVAILABLE', message: 'injected refusal before the run write', retryable }, traceId: 'actual-http-write-fault' })
+      })
+    } })
+    try {
+      const container = document.createElement('div'); document.body.appendChild(container)
+      const root = createRoot(container); mounted.push({ root, container })
+      await act(async () => root.render(createElement(BusinessWorkbenchPanel, { client: built.client, registry: createScenarioRegistry(), profileRef: { id: 'staging-profile-must-not-send', version: '2.0.0' }, timeZone: 'Asia/Shanghai', projectId, grantedCapabilities: [] })))
+      await waitFor(() => container.querySelector('[data-testid="task-entry"]') !== null, 'active actual HTTP task catalogue')
+      await click(container.querySelector('[data-testid="task-entry"]') as Element)
+      for (const [key, value] of Object.entries({ objectId: 'goods', idField: 'sku', amountField: 'pieces' })) {
+        const field = container.querySelector<HTMLSelectElement>(`[data-testid="compute-input-${key}"]`)
+        if (field === null) throw new Error(`missing compute field: ${key}`)
+        await select(field, value)
+      }
+      await click(container.querySelector('[data-testid="task-parameter-preview"]') as Element)
+      await click(container.querySelector('[data-testid="task-parameter-confirm"]') as Element)
+      expect(container.querySelector<HTMLButtonElement>('[data-testid="task-run"]')?.disabled).toBe(false)
+      await submit(container.querySelector('[data-testid="task-schema-form"]') as Element)
+      await waitFor(() => submissions.length === 1 && container.querySelector('[data-testid="business-state"][data-code="SOURCE_UNAVAILABLE"]') !== null, 'real HTTP write refusal')
+      const expected = { profileRef: PROFILE, projectId, question: task.displayName, context: { timeZone: 'Asia/Shanghai' }, preferences: { route: 'auto', allowWeb: false }, task: { bindingRef, arguments: {}, inputSelection: { objectId: 'goods', idField: 'sku', amountField: 'pieces' } } }
+      expect(submissions[0]?.body).toEqual(expected)
+      expect(submissions[0]?.body).not.toHaveProperty('inputSelection')
+      expect(submissions[0]?.key).toBeTruthy()
+      expect(container.querySelector('[data-testid="business-state"]')?.getAttribute('data-retryable')).toBe(String(retryable))
+      if (!retryable) {
+        expect(container.querySelector('[data-testid="public-state-recover"]')).toBeNull()
+        expect(submissions).toHaveLength(1)
+        expect(stream.opened).toEqual([])
+        return
+      }
+      await waitFor(() => container.querySelector('[data-testid="public-state-recover"]') !== null, 'recoverable actual HTTP failure')
+      await click(container.querySelector('[data-testid="public-state-recover"]') as Element)
+      await waitFor(() => submissions.length === 2 && container.querySelector('[data-testid="public-state-recover"]') !== null, 'same saved submission retry')
+      expect(submissions[1]).toEqual(submissions[0])
+      expect(stream.opened).toEqual([])
+      expect(container.querySelector('[data-testid="business-run-panel"]')).toBeNull()
+    } finally { await built.app.close() }
+  })
   it('selects actual single-value compute fields, rejects unsupported units and confirms inputs separately from parameters', async () => {
     const accepted: { parameters: Readonly<Record<string, unknown>>; selection?: ProjectComputeInputSelection }[] = []
     const task: ProjectTaskItem = {

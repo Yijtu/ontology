@@ -13,6 +13,9 @@ function failure(error: unknown): QueryEvent {
   const detail: WorkbenchError = {
     code: api?.code ?? 'NETWORK_ERROR',
     message: error instanceof Error ? error.message : '请求无法完成。',
+    ...(api === undefined ? { retryable: true } : {
+      status: api.status, retryable: api.retryable, missingCapabilities: api.missingCapabilities,
+    }),
     ...(api?.traceId === undefined ? {} : { traceId: api.traceId }),
     ...(api === undefined || api.reasons.length === 0 ? {} : { reasons: api.reasons }),
   }

@@ -23,8 +23,11 @@ export interface CreateRunRequest {
   readonly context: CreateRunContext
   readonly preferences: RunPreferences
   readonly projectId?: string
-  readonly task?: { readonly bindingRef: VersionRef; readonly arguments: Readonly<Record<string, unknown>> }
-  readonly inputSelection?: ProjectComputeInputSelection
+  readonly task?: {
+    readonly bindingRef: VersionRef
+    readonly arguments: Readonly<Record<string, unknown>>
+    readonly inputSelection?: ProjectComputeInputSelection
+  }
 }
 
 /** User-selected fields from the active project catalogue; the host resolves immutable inputs. */
