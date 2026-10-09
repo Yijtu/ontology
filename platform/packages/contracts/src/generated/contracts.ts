@@ -3739,4 +3739,5 @@ export interface DataQueryOutput {
   table?: TableData
   statistics?: AggregateStatistic[]
   computation?: ComputationData
+  coverage?: ToolCoverage
 }

@@ -30,6 +30,8 @@ import type {
   StructuredParseOptions,
   ValueMappingEntry,
   VersionRef,
+  ImportMappingVersion,
+  ToolContext,
 } from '@ontology/contracts'
 import { ProjectError } from '@ontology/application'
 import type {
@@ -71,6 +73,7 @@ export interface ProjectRouteDependencies {
   readonly service: ProjectService
   /** Column-mapping confirmation, unit normalisation and record binding (V03-017). */
   readonly mappings?: ProjectMappingService
+  readonly afterMappingConfirmed?: (mapping: ImportMappingVersion, key: string, ctx: ToolContext) => Promise<void>
   /** Approved-data materialisation and fixed-snapshot reads (V03-018). */
   readonly dataset?: ProjectDataMaterializationService
   readonly evolution?: import('@ontology/application').ProjectEvolutionService
@@ -709,6 +712,7 @@ export function registerProjectRoutes(
           auth.principal.subjectId,
           contextFor(auth, traceId, projectId),
         )
+        await dependencies.afterMappingConfirmed?.(result.mapping, requireIdempotencyKey(request), contextFor(auth, traceId, projectId))
         reply.status(result.created ? 201 : 200).send({
           data: { mapping: result.mapping, preview: result.preview, created: result.created },
           meta: { traceId },

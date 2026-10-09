@@ -37,6 +37,7 @@ function isColumnType(value: unknown): value is ColumnType {
 export function createCoreProjectQueryWorkflow(options: CoreProjectQueryOptions) {
   const describe = async (scope: ScopeRef, revisionRef: ProjectRevisionRef, ref: ResourceRef, objectId: string, ctx: ToolContext): Promise<ProjectSnapshotQueryDescriptor> => {
     const revision = await options.projects.getRevision(scope, revisionRef.projectId, revisionRef.revision, ctx)
+    if (revision?.executionPurpose === 'synthetic_validation') throw new ProjectDatasetError('SNAPSHOT_UNAVAILABLE', 'private competency snapshots cannot be read through the ordinary observed business query handler')
     const descriptor = await options.query.describeSnapshot(scope, ref, ctx)
     const definition = revision === undefined ? undefined : await options.definition(scope, revision.definitionRef, ctx)
     const metadata = descriptor?.metadata
@@ -53,6 +54,7 @@ export function createCoreProjectQueryWorkflow(options: CoreProjectQueryOptions)
     return descriptor
   }
   const resolveForCreation = async (scope: ScopeRef, revision: ProjectRevision, parameters: Readonly<Record<string, unknown>>, ctx: ToolContext): Promise<ResourceRef> => {
+    if (revision.executionPurpose === 'synthetic_validation') throw new ProjectDatasetError('SNAPSHOT_UNAVAILABLE', 'private competency snapshots cannot authorize an ordinary observed business task')
     const objectId = parameters['objectId']
     if (typeof objectId !== 'string') throw new ProjectDatasetError('INVALID_ARGUMENT', 'a project query requires an objectId')
     const head = await options.projects.getProject(scope, revision.ref.projectId, ctx)
@@ -114,7 +116,7 @@ export function createCoreProjectQueryWorkflow(options: CoreProjectQueryOptions)
         if (!Array.isArray(row)) throw new ToolGatewayError('HANDLER_FAILED', 'the fixed project query returned a malformed row')
         return [...row]
       })
-      const located: DataQueryOutput = { resultKind: 'table', table: { columns, rows } }
+      const located: DataQueryOutput = { resultKind: 'table', table: { columns, rows }, coverage: outcome.coverage }
       return { ...outcome, payload: located }
     },
   })

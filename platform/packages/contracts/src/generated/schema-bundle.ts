@@ -8792,7 +8792,8 @@ export const SCHEMA_DOCUMENTS: readonly JsonSchemaObject[] = [
           "rows": {
             "type": "array",
             "items": {
-              "type": "array"
+              "type": "array",
+              "items": {}
             }
           }
         }
@@ -8858,6 +8859,9 @@ export const SCHEMA_DOCUMENTS: readonly JsonSchemaObject[] = [
           },
           "computation": {
             "$ref": "#/$defs/ComputationData"
+          },
+          "coverage": {
+            "$ref": "#/$defs/ToolCoverage"
           }
         }
       }

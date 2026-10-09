@@ -3,6 +3,7 @@ import { mkdtemp, rm } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { afterAll, beforeAll, describe, expect, it, vi } from 'vitest'
+import { Client } from 'pg'
 import { FileSystemObjectStore, LocalImmutableBlobStore, PostgresArtifactRegistry } from '@ontology/adapter-blob-local'
 import { DocumentSpanReader, LocalDocumentExtractionService, LocalStructuredIngestionService, PostgresDocumentParseStore, PostgresStructuredIngestionStore, StructuredDocumentParser, StructuredPremiseSourceReader } from '@ontology/adapter-extraction-document'
 import {
@@ -11,6 +12,7 @@ import {
   PostgresProjectMappingStore, PostgresProjectReadinessStore, PostgresProjectRecordStore,
   PostgresProjectStore, PostgresSemanticPublicationStore,
   PostgresMaterializationStore, PostgresEvidenceStore,
+  ControlPostgresRepository, PostgresSemanticDefinitionStore,
 } from '@ontology/adapter-control-postgres'
 import { DraftVerificationService, TypedEvidenceDraftWriter, InMemoryIndustrySchemaSource, InstanceReviewService, JobService, ProjectMappingService, ProjectService, encodeStructuredExtractionRef } from '@ontology/application'
 import { createBlobArtifactWriter, createProjectFactWorkflow, createInstanceIdentityWorkflow, createCoreStructuredImportWorkflow } from '@ontology/app-api'
@@ -24,7 +26,7 @@ import {
   definitionVersionDigest, projectIndustrySchema, projectPublishedAttributeFacts, sha256DigestOf,
   ArchivedRulePremiseReplayVerifier, IncrementalMaterializer, MaterializedRuleDerivationEvidenceProducer,
 } from '@ontology/semantic-engine'
-import type { EntityCandidate, ColumnMappingEntry, ResourceRef, RuleCandidate, StructuredParseOptions, ToolContext } from '@ontology/contracts'
+import type { EntityCandidate, ColumnMappingEntry, ResourceRef, RuleCandidate, StructuredParseOptions, ToolContext, ScopeRef, PublishSemanticPublicationInput } from '@ontology/contracts'
 import { createJobScope, startJobDatabase } from './job-postgres-harness'
 import type { JobDbHarness } from './job-postgres-harness'
 import { seedIdentityProject } from './instance-identity-fixtures'
@@ -83,7 +85,7 @@ afterAll(async () => {
   await harness?.stop()
 })
 
-async function setup(label: string, store = publicationStore, numeric = false) {
+async function setup(label: string, store = publicationStore, numeric = false, reference = false) {
   const scope = await createJobScope(harness.adminClient, label)
   const ctx = toolContext(scope.tenantId, scope.spaceId, ['platform-admin', 'profile-editor', 'semantic-reviewer', 'semantic-publisher'])
   const projectId = randomUUID()
@@ -92,7 +94,17 @@ async function setup(label: string, store = publicationStore, numeric = false) {
     { namespace: base.namespace, standardProvenance: [], kind: 'attribute' as const, id: 'reading', objectId: 'meter', valueType: 'number' as const, cardinality: { min: 1, max: 1 } },
     { namespace: base.namespace, standardProvenance: [], kind: 'attribute' as const, id: 'label', objectId: 'meter', valueType: 'string' as const, cardinality: { min: 1, max: 1 } },
   ] }
-  const definition = numeric ? { ...extended, ref: { ...base.ref, digest: definitionVersionDigest(extended) } } : base
+  let definition = numeric ? { ...extended, ref: { ...base.ref, digest: definitionVersionDigest(extended) } } : base
+  if (reference) {
+    const policy = await blobs.stage(new TextEncoder().encode('Synthetic declaration: meter.target references one confirmed meter in the same project identity domain.'), { scopeRef: scope.scopeRef }, ctx)
+    const original = await blobs.publish({ scopeRef: scope.scopeRef, contentDigest: policy.contentDigest, byteSize: policy.byteSize, mediaType: 'text/plain', purpose: 'document' }, ctx)
+    const standardProvenance = [{ standardRef: { id: original.blobRef.id, version: original.blobRef.version, digest: original.blobRef.digest }, provenanceKind: 'synthetic_assumption' as const }]
+    definition = await new SemanticDefinitionService({ control: new ControlPostgresRepository(db), store: new PostgresSemanticDefinitionStore(db) }).publish({ scopeRef: scope.scopeRef,
+      namespace: base.namespace, definitionId: base.definitionId, version: base.version, layer: base.layer, standardProvenance,
+      objects: base.objects.map((object) => ({ ...object, standardProvenance })),
+      attributes: [...base.attributes.map((attribute) => ({ ...attribute, standardProvenance })), { kind: 'attribute', namespace: base.namespace, standardProvenance, id: 'target', objectId: 'meter', valueType: 'reference', referencesObjectId: 'meter', cardinality: { min: 0, max: 1 } }],
+      identityScopes: base.identityScopes.map((identity) => ({ ...identity, standardProvenance })), relations: base.relations.map((relation) => ({ ...relation, standardProvenance })), ruleConstraints: [] }, ctx)
+  }
   await seedIdentityProject(harness.adminClient, scope.scopeRef, projectId, definition.ref)
   const schemas = new InMemoryIndustrySchemaSource([{ ref: definition.ref, schema: projectIndustrySchema(definition) }])
   const originals = { read: async (request: { approvedInputRefs: readonly ResourceRef[] }, context: ToolContext) => {
@@ -111,8 +123,8 @@ async function setup(label: string, store = publicationStore, numeric = false) {
 }
 type Fixture = Awaited<ReturnType<typeof setup>>
 
-async function imported(p: Fixture, format: 'csv' | 'xlsx', objectId = 'meter', raw = '12000.000000000001', options: Omit<StructuredParseOptions, 'mediaType'> = { headerRow: 1 }, extraRow = false, reading = '9007199254740993') {
-  const csv = objectId === 'site' ? 'site_label\nS-1\n' : `device_label,watts,on${p.numeric ? ',reading,label' : ''}\nM-1,${raw},true${p.numeric ? `,${reading},${reading}` : ''}\n${extraRow ? 'M-2,20000,true\n' : ''}`
+async function imported(p: Fixture, format: 'csv' | 'xlsx', objectId = 'meter', raw = '12000.000000000001', options: Omit<StructuredParseOptions, 'mediaType'> = { headerRow: 1 }, extraRow = false, reading = '9007199254740993', referenceValue?: string, nativeId = 'M-1') {
+  const csv = objectId === 'site' ? 'site_label\nS-1\n' : `device_label,watts,on${p.numeric ? ',reading,label' : ''}${referenceValue === undefined ? '' : ',target_id'}\n${nativeId},${raw},true${p.numeric ? `,${reading},${reading}` : ''}${referenceValue === undefined ? '' : `,${referenceValue}`}\n${extraRow ? 'M-2,20000,true\n' : ''}`
   const bytes = format === 'csv' ? new TextEncoder().encode(csv) : buildXlsx({ sharedStrings: ['enabled', 'kilowatts', 'code', 'true', 'M-1'], sheetXml: worksheetOf([
     rowXml(1, [sharedStringCell('A1', 0), sharedStringCell('B1', 1), sharedStringCell('C1', 2)]),
     rowXml(2, [sharedStringCell('A2', 3), numberCellXml('B2', '12.000000000000001'), sharedStringCell('C2', 4)]),
@@ -126,7 +138,7 @@ async function imported(p: Fixture, format: 'csv' | 'xlsx', objectId = 'meter', 
   p.sourceJobs.set(parsed.parse.parseId, jobId)
   const table = new StructuredDocumentParser().parse(bytes, { ...options, mediaType }).tables[0]
   if (table === undefined) throw new Error('no parsed table')
-  const fieldIds = objectId === 'site' ? ['site_id'] : format === 'csv' ? ['meter_id', 'power', 'active', ...(p.numeric ? ['reading', 'label'] : [])] : ['active', 'power', 'meter_id']
+  const fieldIds = objectId === 'site' ? ['site_id'] : format === 'csv' ? ['meter_id', 'power', 'active', ...(p.numeric ? ['reading', 'label'] : []), ...(referenceValue === undefined ? [] : ['target'])] : ['active', 'power', 'meter_id']
   const entries: ColumnMappingEntry[] = table.columns.map((column, index) => ({ fieldRef: fieldIds[index] ?? '', header: column.header, headerDigest: column.headerDigest, columnIndex: column.index,
     ...(fieldIds[index] === 'power' ? { sourceUnitCode: format === 'csv' ? 'W' : 'kW', canonicalUnitCode: 'kW', ...(format === 'csv' ? { unitConversion: { fromUnitCode: 'W', toUnitCode: 'kW', numerator: '1', denominator: '1000' } } : {}) } : {}),
   }))
@@ -172,6 +184,51 @@ async function confirmed(p: Fixture, candidate: EntityCandidate, documentId: str
 }
 async function publish(p: Fixture, selected: readonly { candidateId: string; kind: 'entity' | 'relation' | 'rule' }[], key: string = randomUUID()) {
   return p.workflow.publication.publish({ approvedCandidateRefs: selected, schemaRef: p.definition.ref, expectedRevision: await publicationStore.latestPublicationRevision(p.scope.scopeRef, p.ctx), idempotencyKey: key }, p.ctx)
+}
+
+class ReferenceCapturingStore extends PostgresSemanticPublicationStore {
+  captured: PublishSemanticPublicationInput | undefined
+  beforeWrite: (() => Promise<void>) | undefined
+  override async publish(scope: ScopeRef, input: PublishSemanticPublicationInput, ctx: ToolContext) {
+    this.captured = input
+    await this.beforeWrite?.()
+    return super.publish(scope, input, ctx)
+  }
+}
+
+async function referenceFixture(label: string, self = false) {
+  const store = new ReferenceCapturingStore(db)
+  const p = await setup(label, store, false, true)
+  const original = await imported(p, 'csv')
+  await mount(p, [original])
+  const targetCandidate = await stage(p, original)
+  const targetRecord = await confirmed(p, targetCandidate, original.documentId)
+  const targetId = targetRecord.identity.matchedEntityId
+  if (targetId === undefined) throw new Error('real human target identity was not confirmed')
+  const source = await imported(p, 'csv', 'meter', '12000.000000000001', { headerRow: 1 }, false, '9007199254740993', targetId, self ? 'M-1' : 'M-2')
+  const current = await projects.getProject(p.scope.scopeRef, p.projectId, p.ctx)
+  const revision = current === undefined ? undefined : await projects.getRevision(p.scope.scopeRef, p.projectId, current.headRevision, p.ctx)
+  if (revision === undefined) throw new Error('the real reference project revision is missing')
+  await p.projectService.appendRevision(p.projectId, { expectedRevision: revision.ref.revision, reason: 'human confirmed exact reference source mapping', mappingRefs: [...revision.mappingRefs, source.mapping.ref] }, `reference-mount-${p.projectId}`, p.ctx.principal.subjectId, p.ctx)
+  const candidate = await stage(p, source)
+  const record = await confirmed(p, candidate, source.documentId, self ? targetId : undefined)
+  const edited = await p.instances.editField(p.scope.scopeRef, p.projectId, candidate.candidateId, { expectedRevision: record.recordRevision, fieldId: 'target',
+    normalizedValue: { kind: 'reference', entityId: targetId }, reason: 'human selected the exact original canonical reference', idempotencyKey: `reference-edit-${candidate.candidateId}` }, p.ctx)
+  const typed = await p.instances.confirmFields(p.scope.scopeRef, p.projectId, candidate.candidateId, { expectedRevision: edited.recordRevision,
+    decisions: [{ fieldId: 'target', decision: 'confirm' }], idempotencyKey: `typed-reference-${candidate.candidateId}` }, p.ctx)
+  expect(candidate.attributes.find((attribute) => attribute.attributeId === 'target')?.value).toBe(targetId)
+  expect(typed.record.fields.find((field) => field.fieldId === 'target')?.normalizedValue).toEqual({ kind: 'reference', entityId: targetId })
+  return { p, store, candidate, targetId }
+}
+
+async function waitForReferenceHeadLock(): Promise<void> {
+  const deadline = Date.now() + 15_000
+  while (Date.now() < deadline) {
+    const waiting = await harness.adminClient.query<{ count: string }>("SELECT count(*)::text AS count FROM pg_stat_activity WHERE datname=current_database() AND wait_event_type='Lock' AND query LIKE '%identity_decision_heads%candidate_id=ANY%FOR SHARE%'")
+    if (waiting.rows[0]?.count !== '0') return
+    await new Promise((resolve) => setTimeout(resolve, 100))
+  }
+  throw new Error('the actual publisher did not wait on the identity head within its fixed barrier bound')
 }
 
 async function prepareOneHopPremiseReplay(label: string) {
@@ -221,6 +278,68 @@ async function prepareOneHopPremiseReplay(label: string) {
 }
 
 describe('confirmed structured records → official facts (real PostgreSQL)', () => {
+  it('publishes only exact declared references and rechecks actual target authority at the physical fence', async () => {
+    const healthy = await referenceFixture('reference-healthy')
+    const positive = await publish(healthy.p, [{ candidateId: healthy.candidate.candidateId, kind: 'entity' }])
+    expect(positive.statements[0]?.value['attributes']).toContainEqual(expect.objectContaining({ attributeId: 'target', value: healthy.targetId }))
+    const { p, store, candidate, targetId } = await referenceFixture('reference-negative')
+    const baseline = await publicationStore.latestPublicationRevision(p.scope.scopeRef, p.ctx)
+    const original = await identities.getEntity(p.scope.scopeRef, targetId, p.ctx)
+    if (original === undefined) throw new Error('the actual reference target is missing')
+    store.beforeWrite = async () => { throw new Error('capture genuine app-checked request before commit') }
+    await expect(publish(p, [{ candidateId: candidate.candidateId, kind: 'entity' }])).rejects.toThrow('capture genuine app-checked request')
+    const actual = store.captured
+    if (actual === undefined) throw new Error('the genuine checked publication was not captured')
+    for (const mutation of [
+      { state: 'pending', objectId: original.objectId, dimensions: original.scopeDimensions },
+      { state: 'confirmed', objectId: 'site', dimensions: original.scopeDimensions },
+      { state: 'confirmed', objectId: original.objectId, dimensions: { ...original.scopeDimensions, project: randomUUID() } },
+    ]) {
+      await harness.adminClient.query('UPDATE agent_platform.identity_entities SET state=$4,object_id=$5,scope_dimensions=$6::jsonb WHERE tenant_id=$1 AND space_id=$2 AND entity_id=$3', [p.scope.tenantId, p.scope.spaceId, targetId, mutation.state, mutation.objectId, JSON.stringify(mutation.dimensions)])
+      await expect(publish(p, [{ candidateId: candidate.candidateId, kind: 'entity' }])).rejects.toMatchObject({ code: 'IDENTITY_CONSTRAINT_BLOCKED' })
+      await expect(publicationStore.publish(p.scope.scopeRef, actual, p.ctx)).rejects.toMatchObject({ code: 'IDENTITY_CONSTRAINT_BLOCKED' })
+      expect(await publicationStore.latestPublicationRevision(p.scope.scopeRef, p.ctx)).toBe(baseline)
+      const outbox = await harness.adminClient.query<{ count: string }>('SELECT count(*)::text AS count FROM agent_platform.job_outbox WHERE tenant_id=$1 AND space_id=$2 AND outbox_id=$3', [p.scope.tenantId, p.scope.spaceId, actual.outbox.outboxId])
+      expect(outbox.rows[0]?.count).toBe('0')
+    }
+    await harness.adminClient.query('UPDATE agent_platform.identity_entities SET state=$4,object_id=$5,scope_dimensions=$6::jsonb WHERE tenant_id=$1 AND space_id=$2 AND entity_id=$3', [p.scope.tenantId, p.scope.spaceId, targetId, original.state, original.objectId, JSON.stringify(original.scopeDimensions)])
+    store.beforeWrite = async () => {
+      await harness.adminClient.query("UPDATE agent_platform.identity_entities SET state='pending' WHERE tenant_id=$1 AND space_id=$2 AND entity_id=$3", [p.scope.tenantId, p.scope.spaceId, targetId])
+    }
+    await expect(publish(p, [{ candidateId: candidate.candidateId, kind: 'entity' }])).rejects.toMatchObject({ code: 'IDENTITY_CONSTRAINT_BLOCKED' })
+    expect(await publicationStore.latestPublicationRevision(p.scope.scopeRef, p.ctx)).toBe(baseline)
+    await harness.adminClient.query("UPDATE agent_platform.identity_entities SET state='confirmed' WHERE tenant_id=$1 AND space_id=$2 AND entity_id=$3", [p.scope.tenantId, p.scope.spaceId, targetId])
+    const record = await p.instances.getRecord(p.scope.scopeRef, p.projectId, candidate.candidateId, p.ctx)
+    const edited = await p.instances.editField(p.scope.scopeRef, p.projectId, candidate.candidateId, { expectedRevision: record.recordRevision, fieldId: 'target',
+      normalizedValue: { kind: 'reference', entityId: 'different-from-original' }, reason: 'negative test: differs from the original mapped target', idempotencyKey: `changed-ref-edit-${candidate.candidateId}` }, p.ctx)
+    const changed = await p.instances.confirmFields(p.scope.scopeRef, p.projectId, candidate.candidateId, { expectedRevision: edited.recordRevision,
+      decisions: [{ fieldId: 'target', decision: 'confirm' }], idempotencyKey: `changed-reference-${candidate.candidateId}` }, p.ctx)
+    expect(changed.record.fields.find((field) => field.fieldId === 'target')?.normalizedValue).toEqual({ kind: 'reference', entityId: 'different-from-original' })
+    await expect(publish(p, [{ candidateId: candidate.candidateId, kind: 'entity' }])).rejects.toMatchObject({ code: 'CANDIDATE_NOT_APPROVED' })
+    expect(await publicationStore.latestPublicationRevision(p.scope.scopeRef, p.ctx)).toBe(baseline)
+  })
+
+  it('locks all identity heads before a self-reference target so an actual concurrent identity writer can finish', async () => {
+    const { p, candidate, targetId } = await referenceFixture('self-reference-lock-order', true)
+    const blocker = new Client({ connectionString: harness.adminUrl, application_name: 'reference-lock-blocker' })
+    await blocker.connect()
+    await blocker.query('BEGIN')
+    let pending: ReturnType<typeof publish> | undefined
+    try {
+      await blocker.query('SELECT revision FROM agent_platform.identity_decision_heads WHERE tenant_id=$1 AND space_id=$2 AND candidate_id=$3 FOR UPDATE', [p.scope.tenantId, p.scope.spaceId, candidate.candidateId])
+      pending = publish(p, [{ candidateId: candidate.candidateId, kind: 'entity' }])
+      void pending.catch(() => undefined)
+      await waitForReferenceHeadLock()
+      await blocker.query("SET LOCAL lock_timeout='3s'")
+      const target = await blocker.query('SELECT entity_id FROM agent_platform.identity_entities WHERE tenant_id=$1 AND space_id=$2 AND entity_id=$3 FOR UPDATE', [p.scope.tenantId, p.scope.spaceId, targetId])
+      expect(target.rowCount).toBe(1)
+    } finally { await blocker.query('ROLLBACK'); await blocker.end() }
+    if (pending === undefined) throw new Error('the actual publisher was not started')
+    const saved = await pending
+    expect(saved.statements[0]?.subjectEntityId).toBe(targetId)
+    expect(saved.statements[0]?.value['attributes']).toContainEqual(expect.objectContaining({ attributeId: 'target', value: targetId }))
+  })
+
   it('delegates actual structured rule source evidence under the index leaf and still rejects forged premise cells (#268)', async () => {
     const { p, artifact, payload, record, deps } = await prepareOneHopPremiseReplay('indexed-rule-source-dispatch')
     const keyword = new PostgresKeywordIndexStore({ connectionString: harness.appUrl, maxPoolSize: 2 })

@@ -23,7 +23,7 @@ export interface ProjectFactMaterializationDependencies {
   readonly schemaSource: IndustrySchemaSource
   readonly jobs: Pick<JobStore, 'getJob'>
   /** Host lookup over its ingestion jobs; never a request-selected job or source proof. */
-  readonly resolveSourceJob: (scope: ScopeRef, parseId: Uuid, ctx: ToolContext) => Promise<Uuid | undefined>
+  readonly resolveSourceJob: (scope: ScopeRef, parseId: Uuid, ctx: ToolContext, definitionRef: VersionRef) => Promise<Uuid | undefined>
   readonly now?: () => string
 }
 
@@ -98,7 +98,7 @@ export class ProjectFactMaterializationService {
       const mapping = await this.#deps.mappings.getMapping(scope, projectId, record.mappingId, record.mappingVersion, ctx)
       if (mapping === undefined || !sameRef(mapping.definitionRef, revision.definitionRef) || !revision.mappingRefs.some((pin) => sameRef(pin, mapping.ref))) throw new ProjectError('VERSION_CONFLICT', 'the exact confirmed mapping must be pinned by the project revision')
       if ((mapping.format !== 'csv' && mapping.format !== 'xlsx') || mapping.parseId !== membership.parseId || !sameRef(mapping.originalRef, membership.documentRef)) throw new ProjectError('SOURCE_UNREADABLE', 'mapping source differs from the active project document')
-      const jobId = sourceJobId ?? await this.#deps.resolveSourceJob(scope, mapping.parseId, ctx)
+      const jobId = sourceJobId ?? await this.#deps.resolveSourceJob(scope, mapping.parseId, ctx, revision.definitionRef)
       const job = jobId === undefined ? undefined : await this.#deps.jobs.getJob(scope, jobId, ctx)
       if (job?.documentRef === undefined || job.kind !== 'ingestion' && !(sourceJobId!==undefined && job.kind==='dataset_materialization' && job.sourceRef===`project-evolution-source:${projectId}`)) throw new ProjectError('SOURCE_UNREADABLE', 'the host must resolve a durable original-source ingestion or owned evolution job')
       const input = decodeStructuredExtractionRef(job.documentRef)

@@ -212,3 +212,8 @@ export { createCoreSourceViewReader, CoreSourceViewError } from './composition/c
 export type { CoreSourceViewOptions, CoreAnswerSourceView, CoreInstanceFieldSourceView, CoreSourceCell, CoreSourceFragment } from './composition/core-source-view'
 export { registerCoreSourceViewRoutes } from './http/core-source-views'
 export type { CoreSourceViewRouteDependencies } from './http/core-source-views'
+export { createCoreAuthoring } from './composition/core-authoring'
+export type { CoreAuthoringOptions } from './composition/core-authoring'
+export { createCoreProjectComputeInput, parseCoreComputeInputSelection } from './composition/core-project-compute-input'
+export type { CoreComputeInputSelection } from './composition/core-project-compute-input'
+export { createCoreApprovedInput } from './composition/core-approved-input'

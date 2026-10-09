@@ -1,5 +1,5 @@
 import type { FastifyInstance, FastifyRequest } from 'fastify'
-import { isRecord, isUuid } from '@ontology/contracts'
+import { isRecord, isUuid, isStructuredParseSelection } from '@ontology/contracts'
 import type {
   ParseCoverage,
   ResourceRef,
@@ -8,6 +8,7 @@ import type {
   StructuredFormat,
   StructuredParseStatus,
   StructuredRecordCounts,
+  StructuredParseOptions,
   ToolContext,
   Uuid,
 } from '@ontology/contracts'
@@ -43,6 +44,7 @@ export interface ProjectStructuredImportInput {
   readonly format: StructuredFormat
   readonly mediaType: string
   readonly content: Uint8Array
+  readonly options?: Omit<StructuredParseOptions, 'mediaType'>
   readonly sourceRef?: SourceRef
 }
 
@@ -154,6 +156,7 @@ export function registerProjectImportRoute(
         throw new InvalidRequestFieldError('mediaType must be a non-empty string')
       }
       const content = decodeContent(body['content'], body['contentEncoding'])
+      if (body['options'] !== undefined && !isStructuredParseSelection(body['options'])) throw new InvalidRequestFieldError('options must be a closed native parser selection')
       const sourceRef = readSourceRef(body['sourceRef'])
       const result = await dependencies.service.importStructuredSource(
         projectId,
@@ -161,6 +164,7 @@ export function registerProjectImportRoute(
           format,
           mediaType: mediaType.split(';', 1)[0]?.trim().toLowerCase() ?? mediaType,
           content,
+          ...(body['options'] === undefined ? {} : { options: body['options'] }),
           ...(sourceRef === undefined ? {} : { sourceRef }),
         },
         contextFor(auth, traceId, projectId),

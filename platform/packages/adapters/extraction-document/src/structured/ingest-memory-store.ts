@@ -69,6 +69,12 @@ export class InMemoryStructuredIngestionStore implements StructuredIngestionStor
     return { created: true }
   }
 
+  async getParse(scopeRef: ScopeRef, parseId: Uuid, ctx: ToolContext): Promise<StructuredParseRecord | undefined> {
+    this.#assertOpen()
+    const scope = assertScope(scopeRef, ctx)
+    return [...this.#parses.values()].find((record) => record.parseId === parseId && record.scopeRef.tenantId === scope.tenantId && record.scopeRef.spaceId === scope.spaceId)
+  }
+
   async findParseByDigest(
     scopeRef: ScopeRef,
     originalDigest: Sha256Digest,

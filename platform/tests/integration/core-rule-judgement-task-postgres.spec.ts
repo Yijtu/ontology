@@ -294,7 +294,7 @@ async function seedPublishedSemanticsReadiness(ref: ProjectRevisionRef, targetRe
       }
       await new Promise((resolve) => setTimeout(resolve, 100))
     }
-    if (target === undefined) throw new Error('one real stored project rule computation is required before semantic readiness')
+    if (target === undefined) throw new Error(`one real stored project rule computation is required before semantic readiness; worker=${[...new Set(workerErrors.map((error) => `${error.name}: ${error.message}`))].slice(0, 8).join(' | ')}`)
     const prior = await store.getProjection(scopeRef, ref, 'published_semantics', trustedContext(scopeRef, ['platform-admin', 'operator']))
     const saved = await store.upsertProjection(
       scopeRef,
@@ -548,6 +548,22 @@ async function waitState(runId: string, states: readonly string[]): Promise<Reco
   throw new Error(`semantic route did not reach ${states.join(', ')}`)
 }
 
+async function waitFailedJournal(runId: string, code: string): Promise<{ readonly state: Record<string, unknown>; readonly events: string }> {
+  const stop = Date.now() + 60_000
+  while (Date.now() < stop) {
+    const state = (await jsonBody(await request(`/api/v1/runs/${runId}`))).data
+    if (state['state'] === 'published') throw new Error('a refused task published an answer')
+    if (state['state'] === 'failed') {
+      const events = await request(`/api/v1/runs/${runId}/events`).then((response) => response.text())
+      // The existing controller commits the state CAS before its append-only public journal.
+      // Wait for both real records within the same bound, not for a guessed delay.
+      if (events.includes(code)) return { state, events }
+    }
+    await new Promise((resolve) => setTimeout(resolve, 100))
+  }
+  throw new Error(`the actual failed task journal never recorded ${code}`)
+}
+
 describe('controlled semantic task selection through the ordinary listening HTTP host (#265)', () => {
   it('resolves readable policy/entity names to actual scoped rule refs and verifies original mapped premises at answer@3', async () => {
     proposal = { kind: 'rule_judgement', rule: 'project-inspection-policy', entity: 'T-ROUTE' }
@@ -641,22 +657,26 @@ describe('controlled semantic task selection through the ordinary listening HTTP
     expect(missing.status).toBe(202)
     const missingId = (await jsonBody(missing)).data['runId']
     if (typeof missingId !== 'string') throw new Error('missing disabled-capability run')
-    expect((await waitState(missingId, ['failed', 'published']))['state']).toBe('failed')
-    const events = await request(`/api/v1/runs/${missingId}/events`).then((response) => response.text())
+    const failure = await waitFailedJournal(missingId, 'CAPABILITY_NOT_CONFIGURED')
+    expect(failure.state['state']).toBe('failed')
+    expect(failure.state['cancelReason']).toBe('CAPABILITY_NOT_CONFIGURED')
+    const events = failure.events
     expect(events).toContain('CAPABILITY_NOT_CONFIGURED')
     expect(events).not.toContain('controlled-semantic-secret')
     const rejected = await request('/api/v1/runs', { method: 'POST', headers: { 'content-type': 'application/json', 'idempotency-key': `foreign-entity-${randomUUID()}` }, body: JSON.stringify({ profileRef: baseProfileRef, question: 'Check the selected entity', context: { timeZone: 'UTC' }, preferences: { route: 'template', allowWeb: false }, task: { mode: 'task', projectRevisionRef: projectRevisionRefValue, inputSnapshotRef: approvedInputRef, inputSnapshotDigest: approvedInputRef.digest, taskBindingRef: await ruleBindingRef(), parameters: { ruleRef: projectRuleRef, objectId: OBJECT_ID, subjectEntityId: foreignEntityId, validAt: artifactValidAt, asOfRecordedSeq: artifactRecordedSeq } } }) })
     expect(rejected.status).toBe(202)
     const rejectedId = (await jsonBody(rejected)).data['runId']
     if (typeof rejectedId !== 'string') throw new Error('missing foreign-entity run')
-    expect((await waitState(rejectedId, ['failed', 'published']))['state']).toBe('failed')
-    expect(await request(`/api/v1/runs/${rejectedId}/events`).then((response) => response.text())).toContain('FORBIDDEN')
+    const foreignFailure = await waitFailedJournal(rejectedId, 'FORBIDDEN')
+    expect(foreignFailure.state['state']).toBe('failed')
+    expect(foreignFailure.events).toContain('FORBIDDEN')
     const unsupported = await request('/api/v1/runs', { method: 'POST', headers: { 'content-type': 'application/json', 'idempotency-key': `unsupported-axis-${randomUUID()}` }, body: JSON.stringify({ profileRef: baseProfileRef, question: 'Render the business proposition', context: { timeZone: 'UTC' }, preferences: { route: 'template', allowWeb: false }, task: { mode: 'task', projectRevisionRef: projectRevisionRefValue, inputSnapshotRef: approvedInputRef, inputSnapshotDigest: approvedInputRef.digest, taskBindingRef: await ruleBindingRef(), parameters: { ruleRef: projectRuleRef, objectId: OBJECT_ID, subjectEntityId: routingEntityId, validAt: artifactValidAt, asOfRecordedSeq: artifactRecordedSeq, judgementAxis: 'business_proposition' } } }) })
     expect(unsupported.status).toBe(202)
     const unsupportedId = (await jsonBody(unsupported)).data['runId']
     if (typeof unsupportedId !== 'string') throw new Error('missing unsupported-axis run')
-    expect((await waitState(unsupportedId, ['failed', 'published']))['state']).toBe('failed')
-    expect(await request(`/api/v1/runs/${unsupportedId}/events`).then((response) => response.text())).toContain('UNSUPPORTED_QUERY')
+    const unsupportedFailure = await waitFailedJournal(unsupportedId, 'UNSUPPORTED_QUERY')
+    expect(unsupportedFailure.state['state']).toBe('failed')
+    expect(unsupportedFailure.events).toContain('UNSUPPORTED_QUERY')
   }, 180_000)
 
   it('rejects a foreign project revision before any model call and keeps model-off explicit forms usable', async () => {

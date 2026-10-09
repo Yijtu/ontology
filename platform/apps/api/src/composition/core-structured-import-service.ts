@@ -69,7 +69,8 @@ export function createCoreStructuredImportWorkflow(options: CoreStructuredImport
       if (project === undefined || project.state === 'archived') throw new InvalidRequestFieldError('a non-archived project visible in this scope is required')
       const staged = await options.blobs.stage(input.content, { scopeRef: scope }, ctx)
       const written = await options.blobs.publish({ scopeRef: scope, contentDigest: staged.contentDigest, byteSize: staged.byteSize, mediaType: input.mediaType, purpose: 'document' }, ctx)
-      const parsed = await ingestion.parse({ scopeRef: scope, originalRef: written.blobRef, options: {}, ...(input.sourceRef === undefined ? {} : { sourceRef: input.sourceRef }) }, ctx)
+      const parsed = await ingestion.parse({ scopeRef: scope, originalRef: written.blobRef, options: input.options ?? {}, ...(input.sourceRef === undefined ? {} : { sourceRef: input.sourceRef }) }, ctx)
+      if (sha256OfCanonical(parsed.parse.parseOptions) !== sha256OfCanonical(input.options ?? {})) throw new InvalidRequestFieldError('the original already has a different native sheet/header selection; select its actual stored options')
       if (input.format !== parsed.parse.format) throw new InvalidRequestFieldError('the declared format differs from the authorized source media type')
       const base = { parseId: parsed.parse.parseId, originalRef: parsed.parse.originalRef, originalMediaType: parsed.parse.originalMediaType, format: parsed.parse.format,
         status: parsed.parse.status, counts: parsed.parse.counts, coverage: parsed.parse.coverage, reused: parsed.reused }

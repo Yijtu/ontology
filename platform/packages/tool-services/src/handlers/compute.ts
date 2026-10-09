@@ -191,7 +191,7 @@ export async function runComputeWithBudget(
 /** Convert a contract compute result into the generic tool outcome the gateway persists. */
 export function computeOutcomeOf(result: ComputeOperationResult): ToolExecutionOutcome {
   return {
-    payload: result.payload,
+    payload: { ...result.payload, coverage: result.coverage },
     status: result.status,
     coverage: result.coverage,
     sources: result.sources.map((source) => ({

@@ -2,7 +2,7 @@ import type { PoolClient, QueryResultRow } from 'pg'
 import { assertProjectEvolutionPlan, assertProjectFactInputShape, isToolContext, isUuid, isRevisionString, isSha256Digest, isResourceRef, ProjectStoreError, PROJECT_EVOLUTION_TOPIC } from '@ontology/contracts'
 import type { ExtractionInputVersion, ProjectEvolutionPlan, ProjectEvolutionRecord, ProjectEvolutionSnapshot, ProjectEvolutionStore, ProjectEvolutionState, ResourceRef, ScopeRef, ToolContext } from '@ontology/contracts'
 import { ControlPostgresDatabase } from './database'
-import { assertConfirmation } from './project-fact-publication-fence'
+import { assertConfirmation, lockProjectFactIdentityHeads } from './project-fact-publication-fence'
 interface Row {
     plan: ProjectEvolutionPlan
     revision: string
@@ -89,6 +89,10 @@ export class PostgresProjectEvolutionStore implements ProjectEvolutionStore {
     }
     async #facts(c: PoolClient, row: Row): Promise<void> {
         const plan = row.plan, projectId = plan.targetRevisionRef.projectId
+        await lockProjectFactIdentityHeads({ query: async (text, values) => {
+            const result = await c.query(text, values === undefined ? undefined : [...values])
+            return { rows: result.rows, rowCount: result.rowCount ?? 0 }
+        } }, row.candidate_ids)
         for (const candidateId of [...row.candidate_ids].sort()) {
             const candidate = await c.query<{
                 input_version: ExtractionInputVersion

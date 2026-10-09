@@ -1,16 +1,27 @@
 import { WorkflowControllerError } from '@ontology/application'
 import type { MaterializationPublishedSource, PublishedSemanticData } from '@ontology/semantic-engine'
-import type { ScopeRef, ToolContext } from '@ontology/contracts'
+import type { ProjectRevision, ScopeRef, ToolContext } from '@ontology/contracts'
 import type { CoreSemanticTaskResolver } from './core-semantic-task-resolver'
 
 /** Preserve each existing definition partition and append actual authorized project partitions. */
 export class CoreProjectSemanticPartitions implements MaterializationPublishedSource {
-  constructor(readonly base: MaterializationPublishedSource, readonly selectors: CoreSemanticTaskResolver) {}
+  constructor(readonly base: MaterializationPublishedSource, readonly selectors: CoreSemanticTaskResolver,
+    readonly inventory?: (scope: ScopeRef, ctx: ToolContext) => Promise<readonly ProjectRevision[]>) {}
   async load(scope: ScopeRef, ctx: ToolContext): Promise<PublishedSemanticData> {
     const original = await this.base.load(scope, ctx)
     const parts = [...original.partitions ?? [original]]
     const keys = new Set<string>()
     const added: PublishedSemanticData[] = []
+    for (const revision of await this.inventory?.(scope, ctx) ?? []) {
+      if (revision.executionPurpose === 'synthetic_validation') continue
+      const key = `${revision.ref.projectId}:${revision.definitionRef.digest}`
+      if (keys.has(key)) continue
+      keys.add(key)
+      if (keys.size > 32) throw new WorkflowControllerError('CAPABILITY_NOT_CONFIGURED', 'the host project materialization inventory exceeds its finite 32-partition bound')
+      const definition = await this.selectors.options.definition(scope, revision.definitionRef, ctx)
+      if (definition === undefined) throw new WorkflowControllerError('CAPABILITY_NOT_CONFIGURED', 'an actual project has no exact stored definition partition')
+      added.push(await this.selectors.options.source(revision, definition).load(scope, ctx))
+    }
     for (const part of parts) {
       const definition = part.premiseInput?.definition
       const ids = [...new Set(part.facts.flatMap((fact) => fact.projectId === undefined ? [] : [fact.projectId]))]
@@ -21,6 +32,7 @@ export class CoreProjectSemanticPartitions implements MaterializationPublishedSo
         if (keys.size > 32) throw new WorkflowControllerError('CAPABILITY_NOT_CONFIGURED', 'the host project materialization inventory exceeds its finite 32-partition bound')
         const project = await this.selectors.options.projects.getProject(scope, id, ctx)
         const revision = project === undefined ? undefined : await this.selectors.options.projects.getRevision(scope, id, project.activeRevision ?? project.headRevision, ctx)
+        if (revision?.executionPurpose === 'synthetic_validation') throw new WorkflowControllerError('CAPABILITY_NOT_CONFIGURED', 'a private competency fact entered the normal business publication source')
         if (project === undefined || project.state === 'archived' || revision === undefined || definition === undefined || revision.definitionRef.digest !== definition.ref.digest || revision.definitionRef.id !== definition.ref.id || revision.definitionRef.version !== definition.ref.version) throw new WorkflowControllerError('CAPABILITY_NOT_CONFIGURED', 'an official project fact has no exact authorized active definition partition')
         added.push(await this.selectors.options.source(revision, definition).load(scope, ctx))
       }

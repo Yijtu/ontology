@@ -56,6 +56,19 @@ test('keeps both external-model integrations off by default and never forwards t
   assert.equal(disabled.webEnvironment.VITE_MASQUERADE_API_KEY, undefined)
 })
 
+test('keeps the actual business writer and read-only database URLs on the API side only', () => {
+  const writer = 'postgresql://business_writer:synthetic-writer@127.0.0.1:54331/business'
+  const reader = 'postgresql://business_reader:synthetic-reader@127.0.0.1:54331/business'
+  const config = resolveCoreDevEnvironment({ CORE_DATABASE_URL: appUrl }, {
+    PROJECT_BUSINESS_DATABASE_URL: writer,
+    PROJECT_BUSINESS_READONLY_DATABASE_URL: reader,
+  })
+  assert.equal(config.apiEnvironment.PROJECT_BUSINESS_DATABASE_URL, writer)
+  assert.equal(config.apiEnvironment.PROJECT_BUSINESS_READONLY_DATABASE_URL, reader)
+  assert.equal(config.webEnvironment.PROJECT_BUSINESS_DATABASE_URL, undefined)
+  assert.equal(config.webEnvironment.PROJECT_BUSINESS_READONLY_DATABASE_URL, undefined)
+})
+
 test('company generation-only forwards only its configured API-side secret', () => {
   const companySecret = 'local-only-company-secret'
   const jevSecret = 'local-only-jev-secret'

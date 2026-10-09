@@ -33,6 +33,8 @@ import type { RuleActionCandidateRouteDependencies } from './rule-action-candida
 import { registerInstanceReviewRoutes } from './instances'
 import type { InstanceReviewRouteDependencies } from './instances'
 import { registerSyntheticValidationRoutes } from './synthetic-validation'
+import { registerCompetencyQuestionRoutes } from './competency-questions'
+import type { CompetencyQuestionRouteDependencies } from './competency-questions'
 import type { SyntheticValidationRouteDependencies } from './synthetic-validation'
 import { registerProjectRoutes } from './projects'
 import type { ProjectRouteDependencies } from './projects'
@@ -54,6 +56,7 @@ export interface ApiServerOptions {
     readonly progress?: RunProgressReader
     readonly dispatch?: RunApiOptions['dispatch']
     readonly validateSubmission?: RunApiOptions['validateSubmission']
+    readonly resolveRequest?: RunApiOptions['resolveRequest']
     readonly submissionMode?: RunApiOptions['submissionMode']
   }
   /** Register the durable-job surface (`POST /ingestions`, `GET /jobs/{id}`, retry). */
@@ -86,6 +89,7 @@ export interface ApiServerOptions {
   readonly instanceReviews?: Omit<InstanceReviewRouteDependencies, 'authenticate'>
   /** Register the synthetic sandbox / industry validation surface (`/industry-workspaces/:id/validations`). */
   readonly syntheticValidation?: Omit<SyntheticValidationRouteDependencies, 'authenticate'>
+  readonly competencyQuestions?: Omit<CompetencyQuestionRouteDependencies, 'authenticate'>
   /** Register the customer-project, pack-mounting and readiness surface (`/projects`). */
   readonly projects?: Omit<ProjectRouteDependencies, 'authenticate'>
   /** Register the project document corpus and search surface (`/projects/:id/document-*`). */
@@ -96,6 +100,7 @@ export interface ApiServerOptions {
 export function createApiServer(options: ApiServerOptions): FastifyInstance {
   const app = Fastify({ logger: options.logger ?? false })
   installErrorHandler(app)
+  if (options.competencyQuestions !== undefined) registerCompetencyQuestionRoutes(app, { ...options.competencyQuestions, authenticate: options.authenticate })
   if (options.runs !== undefined) {
     registerRunRoutes(app, {
       service: options.runs.service,
@@ -103,6 +108,7 @@ export function createApiServer(options: ApiServerOptions): FastifyInstance {
       ...(options.runs.progress === undefined ? {} : { progress: options.runs.progress }),
       ...(options.runs.dispatch === undefined ? {} : { dispatch: options.runs.dispatch }),
       ...(options.runs.validateSubmission === undefined ? {} : { validateSubmission: options.runs.validateSubmission }),
+      ...(options.runs.resolveRequest === undefined ? {} : { resolveRequest: options.runs.resolveRequest }),
       ...(options.runs.submissionMode === undefined ? {} : { submissionMode: options.runs.submissionMode }),
     })
   }

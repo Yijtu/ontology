@@ -585,6 +585,7 @@ export class SemanticPublicationService {
     const fences: ProjectFactPublicationFence[] = []
     for (const source of mapped.sources) {
       const entityCandidate = await this.#requireCandidate(scopeRef, source.entityCandidateId, ctx)
+      const schema = await this.#requireSchema(scopeRef, source.definitionRef, ctx)
       const record = await this.#instanceRecords.getRecord(scopeRef, source.projectRevisionRef.projectId, source.entityCandidateId, ctx)
       const binding = record?.identity.binding
       if (entityCandidate.kind !== 'entity' || record === undefined || binding?.candidateId !== entityCandidate.candidateId || binding.documentId !== source.documentId || binding.projectRevisionRef.projectId !== source.projectRevisionRef.projectId ||
@@ -596,9 +597,18 @@ export class SemanticPublicationService {
           const span = entityCandidate.sourceSpans[entityCandidate.attributes.findIndex((attribute) => attribute.attributeId === field.fieldId)]
           return field.status !== 'confirmed' || field.actor === undefined || field.confirmedAt === undefined || value === undefined ||
             field.rawValue !== value.raw || span?.kind !== 'structured' || field.source.parseId !== span.parseId || field.source.textDigest !== span.rowDigest || sha256DigestOf(field.source.locator) !== sha256DigestOf(span.locator) ||
-            (field.normalizedValue?.kind === 'quantity' ? field.normalizedValue.value !== value.value || field.normalizedValue.unitCode !== value.unitCode : field.normalizedValue?.kind !== 'scalar' || field.normalizedValue.value !== value.value)
+            (schema.objects.find((object) => object.objectId === entityCandidate.objectId)?.attributes.find((attribute) => attribute.attributeId === field.fieldId)?.valueType === 'reference'
+              ? field.normalizedValue?.kind !== 'reference' || field.normalizedValue.entityId !== value.value || value.unitCode !== undefined
+              : field.normalizedValue?.kind === 'quantity' ? field.normalizedValue.value !== value.value || field.normalizedValue.unitCode !== value.unitCode : field.normalizedValue?.kind !== 'scalar' || field.normalizedValue.value !== value.value)
         })) {
         throw new SemanticPublicationError('CANDIDATE_NOT_APPROVED', 'mapped fields or authoritative human identity are missing, edited or stale')
+      }
+      for (const field of record.fields) if (field.normalizedValue?.kind === 'reference') {
+        const attribute = schema.objects.find((object) => object.objectId === entityCandidate.objectId)?.attributes.find((attribute) => attribute.attributeId === field.fieldId)
+        const targetObject = schema.objects.find((object) => object.objectId === attribute?.referencesObjectId)
+        const targetScope = targetObject === undefined ? undefined : schema.identityScopes.find((identity) => identity.identityScopeId === targetObject.identityScopeId && identity.objectId === targetObject.objectId)
+        const target = await this.#identity.getEntity(scopeRef, field.normalizedValue.entityId, ctx)
+        if (attribute?.valueType !== 'reference' || targetObject === undefined || targetScope === undefined || !targetScope.scopeDimensions.includes('project') || target?.state !== 'confirmed' || target.objectId !== targetObject.objectId || target.identityScopeId !== targetScope.identityScopeId || target.scopeDimensions['project'] !== source.projectRevisionRef.projectId || targetScope.scopeDimensions.some((dimension) => typeof target.scopeDimensions[dimension] !== 'string' || target.scopeDimensions[dimension].length === 0)) throw new SemanticPublicationError('IDENTITY_CONSTRAINT_BLOCKED', 'the mapped reference must retain its exact original value and a confirmed target in the declared project identity domain')
       }
       const entity = await this.#identity.getEntity(scopeRef, record.identity.matchedEntityId, ctx)
       if (entity?.state !== 'confirmed' || entity.scopeDimensions['project'] !== source.projectRevisionRef.projectId || entity.objectId !== entityCandidate.objectId || entity.identityScopeId !== binding.identityScopeId) {

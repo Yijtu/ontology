@@ -5,20 +5,22 @@ import type {
   PublishedTaskBinding, RunExecutionBinding, ScopeRef, SemanticDefinitionVersion, TaskBindingStore,
   ToolContext, VersionRef,
   OntologyRuleJudgementRequest,
+  PublishedRuleDeclarationReader,
 } from '@ontology/contracts'
 import { findRegisteredOperation } from '@ontology/contracts'
 import { PublishedSemanticSource, definitionVersionDigest, publishedRuleRef } from '@ontology/semantic-engine'
-import type { PublishedSemanticReadView } from '@ontology/semantic-engine'
+import type { MaterializationPublishedSource, PublishedSemanticReadView } from '@ontology/semantic-engine'
 import { canonicalJson, registeredOperationDigest } from '@ontology/tool-services'
 
 export interface CoreSemanticTaskResolverOptions {
   readonly projects: Pick<ProjectStore, 'getProject' | 'getRevision'>
   readonly taskBindings: TaskBindingStore
   readonly materialization: Pick<MaterializationStore, 'getProjectionState' | 'readSlices'>
-  readonly source: (revision: ProjectRevision, definition: SemanticDefinitionVersion) => PublishedSemanticSource
+  readonly source: (revision: ProjectRevision, definition: SemanticDefinitionVersion) => MaterializationPublishedSource
   readonly definition: (scope: ScopeRef, ref: VersionRef, ctx: ToolContext) => Promise<SemanticDefinitionVersion | undefined>
   readonly operations: OperationRegistry
   readonly parameters: TaskParameterValidator
+  readonly computeInputAvailable?: (execution: RunExecutionBinding, revision: ProjectRevision, binding: PublishedTaskBinding, ctx: ToolContext) => Promise<boolean>
   readonly competencyQuestions?: { readonly reader: ApprovedCompetencyQuestionReader; readonly refForRevision: (revision: ProjectRevision) => VersionRef | undefined }
 }
 
@@ -39,6 +41,7 @@ export class CoreSemanticTaskResolver {
     const ref = execution.request.projectRevisionRef
     const revision = await this.options.projects.getRevision(scope, ref.projectId, ref.revision, ctx)
     const head = await this.options.projects.getProject(scope, ref.projectId, ctx)
+    if (revision?.executionPurpose === 'synthetic_validation') throw new WorkflowControllerError('FORBIDDEN', 'private competency inputs cannot become ordinary observed business task selections')
     if (revision === undefined || head === undefined || head.state === 'archived' || revision.ref.digest !== ref.digest || (head.activeRevision ?? head.headRevision) !== ref.revision) {
       throw new WorkflowControllerError('FORBIDDEN', 'semantic task selection requires the authorized active project revision')
     }
@@ -54,16 +57,46 @@ export class CoreSemanticTaskResolver {
       if (binding.kind === 'compute') {
         const operation = binding.operationRef === undefined ? undefined : findRegisteredOperation(this.options.operations, binding.operationRef)
         if (operation === undefined || !enabledOperations.has(`${operation.operationRef.id}@${operation.operationRef.version}`) || binding.registeredOperationDigest !== registeredOperationDigest(operation)) continue
+        if (this.options.computeInputAvailable !== undefined && !await this.options.computeInputAvailable(execution, revision, binding, ctx)) continue
       }
       bindings.push(binding)
     }
     if (bindings.length > 32) throw new WorkflowControllerError('INVALID_SCHEMA', 'the project task inventory exceeds its finite bound')
+    return this.#readInventory(revision, definition, bindings, ctx)
+  }
+
+  /** Read-only catalogue admission from actual current project/profile selectors, before a run exists. */
+  async readCurrentInventory(projectId: string, enabledTools: ReadonlySet<string>, enabledOperations: ReadonlySet<string>, ctx: ToolContext) {
+    const scope = scopeOf(ctx)
+    const project = await this.options.projects.getProject(scope, projectId, ctx)
+    const revision = project === undefined ? undefined : await this.options.projects.getRevision(scope, projectId, project.activeRevision ?? project.headRevision, ctx)
+    if (revision?.executionPurpose === 'synthetic_validation') throw new WorkflowControllerError('FORBIDDEN', 'private competency projects have no ordinary business selector inventory')
+    const definition = revision === undefined ? undefined : await this.options.definition(scope, revision.definitionRef, ctx)
+    if (project === undefined || project.state === 'archived' || revision === undefined || definition === undefined || !sameRef(definition.ref, revision.definitionRef) || definitionVersionDigest(definition) !== definition.ref.digest || definition.scopeRef.tenantId !== scope.tenantId || definition.scopeRef.spaceId !== scope.spaceId) throw new WorkflowControllerError('FORBIDDEN', 'a current exact authorized project definition is required')
+    const inventory = await this.options.taskBindings.listBindings(scope, { definitionRef: definition.ref }, ctx)
+    if (inventory.length > 32) throw new WorkflowControllerError('CAPABILITY_NOT_CONFIGURED', 'the task catalogue exceeds its finite bound')
+    const bindings = inventory.filter((binding) => {
+      if (!sameRef(binding.actionDefinitionRef, definition.ref)) return false
+      const tool = binding.kind === 'structured_query' || binding.kind === 'compute' ? 'data_query' : binding.kind === 'document_qa' ? 'document_search' : 'ontology_lookup'
+      if (!enabledTools.has(tool)) return false
+      if (binding.kind !== 'compute') return true
+      const operation = binding.operationRef === undefined ? undefined : findRegisteredOperation(this.options.operations, binding.operationRef)
+      return operation !== undefined && enabledOperations.has(`${operation.operationRef.id}@${operation.operationRef.version}`) && binding.registeredOperationDigest === registeredOperationDigest(operation)
+    })
+    const result = await this.#readInventory(revision, definition, bindings, ctx)
+    const current = await this.options.projects.getProject(scope, projectId, ctx)
+    if (canonicalJson(current) !== canonicalJson(project)) throw new WorkflowControllerError('VERSION_CONFLICT', 'the actual task catalogue project changed during readback')
+    return result
+  }
+
+  async #readInventory(revision: ProjectRevision, definition: SemanticDefinitionVersion, bindings: readonly PublishedTaskBinding[], ctx: ToolContext) {
+    const scope = scopeOf(ctx)
     const source = await this.options.source(revision, definition).load(scope, ctx)
     if (source.complete !== true || source.facts.length > 1000 || (source.premiseInput?.declarations.length ?? 0) > 250) throw new WorkflowControllerError('CAPABILITY_NOT_CONFIGURED', 'the official project selector inventory is incomplete or exceeds its bound')
     const entities = new Map<string, { readonly entityId: string; readonly objectId: string; readonly labels: string[] }>()
     const identityFields = new Set(definition.identityScopes.flatMap((identity) => identity.identityAttributeIds))
     for (const fact of source.facts) {
-      if (fact.op === 'retract' || fact.objectId === undefined || fact.projectId !== ref.projectId || fact.relation !== undefined) continue
+      if (fact.op === 'retract' || fact.objectId === undefined || fact.projectId !== revision.ref.projectId || fact.relation !== undefined) continue
       const key = `${fact.objectId}\u0000${fact.subject}`
       let entity = entities.get(key)
       if (entity === undefined) { entity = { entityId: fact.subject, objectId: fact.objectId, labels: [] }; entities.set(key, entity) }
@@ -121,7 +154,7 @@ export class CoreSemanticTaskResolver {
     } else if (intent.kind === 'document_qa') parameters = { query: intent.query, ...(intent.limit === undefined ? {} : { limit: intent.limit }) }
     else if (intent.kind === 'compute') parameters = intent.parameters
     else {
-      const entities = loaded.entities.filter((entity) => entity.labels.includes(intent.entity) && (intent.object === undefined || entity.objectId === intent.object || loaded.definition.objects.some((object) => object.id === entity.objectId && object.displayName === intent.object)))
+      const entities = loaded.entities.filter((entity) => (entity.entityId === intent.entity || entity.labels.includes(intent.entity)) && (intent.object === undefined || entity.objectId === intent.object || loaded.definition.objects.some((object) => object.id === entity.objectId && object.displayName === intent.object)))
       if (entities.length !== 1) return { kind: 'clarify', reason: entities.length === 0 ? 'Choose a confirmed entity in this project.' : 'This entity name identifies several confirmed entities. Specify its object and full identity.' }
       const entity = entities[0]!
       if (intent.kind === 'relations') {
@@ -156,6 +189,11 @@ export class CoreSemanticTaskResolver {
 }
 
 /** Narrow host construction helper: no generic registry, function lookup or alternate truth. */
-export function createCoreSemanticTaskSource(publications: PublishedSemanticReadView, options: Omit<NonNullable<ConstructorParameters<typeof PublishedSemanticSource>[1]>, 'definition' | 'projectId'>) {
-  return (revision: ProjectRevision, definition: SemanticDefinitionVersion) => new PublishedSemanticSource(publications, { ...options, definition, projectId: revision.ref.projectId, maxRecords: 1000 })
+export function createCoreSemanticTaskSource(publications: PublishedSemanticReadView, options: Omit<NonNullable<ConstructorParameters<typeof PublishedSemanticSource>[1]>, 'definition' | 'projectId'>,
+  packReader?: { readonly reader: PublishedRuleDeclarationReader; readonly applies: (revision: ProjectRevision, scope: ScopeRef, ctx: ToolContext) => boolean | Promise<boolean> }) {
+  return (revision: ProjectRevision, definition: SemanticDefinitionVersion): MaterializationPublishedSource => ({ load: async (scope, ctx) => {
+    const applies = await packReader?.applies(revision, scope, ctx) === true
+    return new PublishedSemanticSource(publications, { ...options, definition, projectId: revision.ref.projectId, maxRecords: 1000,
+      ...(!applies || packReader === undefined ? {} : { publishedRules: { reader: packReader.reader, request: { packRef: revision.industryPackRef, definitionRef: definition.ref, projectId: revision.ref.projectId } } }) }).load(scope, ctx)
+  } })
 }
