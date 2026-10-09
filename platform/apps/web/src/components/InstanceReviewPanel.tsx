@@ -19,7 +19,7 @@ import { formatLocator } from './project/VerifiedCell'
 import './project/project-workbench.css'
 import { readProjectSources, readProjectTasks } from '../api/project-workbench'
 import type { ProjectSourceCatalogue, ProjectTaskCatalogue } from '../api/project-workbench'
-import { sameSourceLocator } from '../api/source-views'
+import { CurrentInstanceFieldSource } from './project/CurrentInstanceFieldSource'
 import { ProjectNotice } from './project/ProjectNotice'
 
 export interface InstanceReviewPanelProps {
@@ -139,24 +139,6 @@ export function InstanceReviewPanel({
         : editDraft.scalarType === 'boolean'
           ? editDraft.value === 'true' || editDraft.value === 'false'
           : editingSchema?.enumValues === undefined || editingSchema.enumValues.includes(editDraft.value))
-  const sourceCells =
-    sourceField === undefined
-      ? []
-      : (currentSources?.sources
-          .filter(
-            (source) =>
-              source.parseId === sourceField.source.parseId &&
-              source.originalRef.id === sourceField.source.documentRef.id &&
-              source.originalRef.version === sourceField.source.documentRef.version &&
-              source.originalRef.digest === sourceField.source.documentRef.digest &&
-              (record?.identity.binding === undefined ||
-                record.identity.binding.documentId === source.documentId),
-          )
-          .flatMap((source) => source.tables ?? [])
-          .flatMap((table) => table.rows)
-          .flatMap((row) => row.cells)
-          .filter((cell) => sameSourceLocator(cell.locator, sourceField.source.locator)) ?? [])
-
   const loadList = useCallback(async () => {
     const request = listRequest('list')
     setPhase('loading')
@@ -739,15 +721,7 @@ export function InstanceReviewPanel({
             <p>{formatLocator(sourceField.source.locator)}</p>
             <blockquote>{sourceField.rawValue === null ? '空值' : String(sourceField.rawValue)}</blockquote>
             <p>以上为该记录保存的字段值。</p>
-            {sourceCells.length === 1 && sourceCells[0] !== undefined ? (
-              <>
-                <h3>原文件中的实际单元格</h3>
-                <p>{formatLocator(sourceCells[0].locator)}</p>
-                <blockquote>{sourceCells[0].raw === null ? '空值' : String(sourceCells[0].raw)}</blockquote>
-              </>
-            ) : (
-              <p>当前有界原始预览未唯一返回这个单元格。已保存的定位仍保留，不能声称已重读该位置的原文。</p>
-            )}
+            {record === undefined ? null : <CurrentInstanceFieldSource client={client} record={record} fieldId={sourceField.fieldId} reload={reloadSelected} />}
             <details className="project-audit">
               <summary>定位与版本</summary>
               <dl>

@@ -3,7 +3,7 @@ import { act, createElement } from 'react'
 import { createRoot } from 'react-dom/client'
 import { describe, expect, it } from 'vitest'
 import type { InstanceNormalizedValue, InstanceRecordView } from '@ontology/contracts'
-import { InstanceReviewPanel } from '@ontology/app-web'
+import { InstanceReviewPanel, readInstanceFieldSource } from '@ontology/app-web'
 import { WorkbenchClient } from '@ontology/app-web/client'
 
 const reactEnvironment = globalThis as typeof globalThis & { IS_REACT_ACT_ENVIRONMENT?: boolean }
@@ -103,6 +103,36 @@ async function render(
 }
 
 describe('instance review panel', () => {
+  it('reads a field beyond the bounded preview from its exact current-record endpoint and rejects a different revision', async () => {
+    const exact = '9007199254740993.00000000000000000001'
+    const locator = { kind: 'table_cell' as const, format: 'xlsx' as const, sheetId: 'sheet2', sheetName: '已选工作表', recordIndex: 12, row: 14, column: 2, address: 'B14', normalizationMapRef: 'actual-native-map' }
+    const originalRef = { id: RECORD_ID, version: '1.0.0', digest: DIGEST, kind: 'document' as const }
+    const selected: InstanceRecordView = { ...RECORD, fields: [{ ...RECORD.fields[0]!, fieldId: 'reading', rawValue: '已审核的记录值', source: { ...RECORD.fields[0]!.source, documentRef: originalRef, locator } }], sourceRef: originalRef }
+    const actual = { projectId: PROJECT_ID, recordId: RECORD_ID, recordRevision: '1', fieldId: 'reading', precision: 'exact', readability: 're_readable', originalRef, parseRef: { id: RECORD_ID, version: '1.0.0', digest: DIGEST, kind: 'artifact' }, parseId: RECORD_ID, locator, cells: [{ raw: exact, locator, columnLabel: '原始读数', rowLabel: '14' }] }
+    const requests: string[] = []
+    let wrongRevision = false
+    const client = new WorkbenchClient({ baseUrl: 'http://api.test', fetchImpl: (input) => {
+      const url = new URL(String(input)); requests.push(url.pathname + url.search)
+      if (url.pathname.endsWith('/fields/reading/source')) return Promise.resolve(jsonResponse({ data: wrongRevision ? { ...actual, recordRevision: '2' } : actual }))
+      if (url.pathname.endsWith('/instance-records')) return Promise.resolve(jsonResponse({ data: { records: [selected] } }))
+      if (url.pathname.endsWith(`/instance-records/${RECORD_ID}`)) return Promise.resolve(jsonResponse({ data: { record: selected } }))
+      return Promise.resolve(jsonResponse({ data: {} }, 404))
+    } })
+    const { container, root } = await render(createElement(InstanceReviewPanel, { client, projectId: PROJECT_ID }))
+    try {
+      await act(async () => { await Promise.resolve() })
+      const open = container.querySelector('[data-testid="instance-field-source"] button')
+      if (open === null) throw new Error('field source action missing')
+      await act(async () => { open.dispatchEvent(new MouseEvent('click', { bubbles: true })); await Promise.resolve() })
+      const body = container.querySelector('[aria-label="当前字段的原始来源"]')
+      expect(body?.textContent).toContain(exact)
+      expect(body?.textContent).toContain('B14')
+      expect(requests).toContain(`/api/v1/core/projects/${PROJECT_ID}/instance-records/${RECORD_ID}/fields/reading/source?recordRevision=1`)
+      expect(container.textContent).not.toContain('当前有界原始预览未唯一返回')
+      wrongRevision = true
+      await expect(readInstanceFieldSource(client, selected, 'reading')).rejects.toMatchObject({ code: 'SOURCE_REFERENCE_MISMATCH' })
+    } finally { await act(async () => root.unmount()); container.remove() }
+  })
   it('shows the empty state when no record is visible', async () => {
     const client = new WorkbenchClient({
       baseUrl: 'http://api.test',

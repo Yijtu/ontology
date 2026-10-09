@@ -220,6 +220,30 @@ describe('fixed answer source guards', () => {
     expect(container.textContent).not.toContain('UNTRUSTED_FREE_SUMMARY')
     expect(container.textContent).not.toContain('精确引文')
   })
+  it('keeps separate originals and selected cells for every actual answer fragment', async () => {
+    const secondRef: ResourceRef = { ...ORIGINAL, id: '10000000-0000-4000-8000-000000000012', digest: `sha256:${'b'.repeat(64)}` }
+    const secondLocator: SourceLocator = { ...LOCATOR, sheetName: '第二份台账', sheetId: 'sheet3', row: 14, address: 'B14' }
+    const first = { precision: 'approximate' as const, originalRef: ORIGINAL, parseRef: source.parseRef!, locator: LOCATOR, cells: source.cells! }
+    const second = { precision: 'approximate' as const, originalRef: secondRef, parseRef: { id: 'second-parse', version: '1.0.0', digest: secondRef.digest, kind: 'artifact' as const }, locator: secondLocator, cells: [{ raw: '12000.000000000000001', locator: secondLocator, columnLabel: '另一份资料功率' }] }
+    const view = { ...source, locator: LOCATOR, fragments: [first, second] }
+    expect(isAnswerSourceView(view)).toBe(true)
+    expect(isAnswerSourceView({ ...view, originalRef: secondRef })).toBe(false)
+    expect(isAnswerSourceView({ ...view, fragments: [{ ...first, cells: [{ raw: 'forged', locator: LOCATOR }] }, second] })).toBe(false)
+    const container = await renderAnswer(view)
+    const fragments = [...container.querySelectorAll('[data-testid="answer-source-fragment"]')]
+    expect(fragments).toHaveLength(2)
+    expect(fragments[0]?.textContent).toContain(EXACT)
+    expect(fragments[0]?.textContent).toContain(ORIGINAL.id)
+    expect(fragments[0]?.textContent).not.toContain(secondRef.id)
+    expect(fragments[1]?.textContent).toContain(secondRef.id)
+    expect(fragments[1]?.textContent).not.toContain(ORIGINAL.id)
+    const locate = fragments[1]?.querySelector('button')
+    if (locate === null || locate === undefined) throw new Error('the second original cell action is missing')
+    await act(async () => { locate.dispatchEvent(new MouseEvent('click', { bubbles: true })) })
+    expect(fragments[1]?.querySelector('[data-testid="original-cell-location"]')?.textContent).toContain('12000.000000000000001')
+    expect(fragments[1]?.querySelector('[data-testid="original-cell-location"]')?.textContent).toContain('B14')
+    expect(fragments[0]?.querySelector('[data-testid="original-cell-location"]')).toBeNull()
+  })
   it('refuses forged exact structured QA and suppresses unreadable original cells', async () => {
     expect(isAnswerSourceView({ ...source, precision: 'exact' })).toBe(false)
     expect(isAnswerSourceView({ ...source, originalRef: undefined })).toBe(false)

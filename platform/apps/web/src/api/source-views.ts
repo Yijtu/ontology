@@ -1,5 +1,6 @@
 import type {
   DataMode,
+  InstanceRecordView,
   ProvenanceEvidenceView,
   PublishedAnswer,
   ResourceRef,
@@ -10,6 +11,7 @@ import type {
 import type { WorkbenchClient } from './client'
 import { ApiError } from './errors'
 import { isResourceRef, isVersionRef } from './projects'
+import { isRevisionString, isUuid } from '@ontology/contracts'
 
 const record = (value: unknown): value is Record<string, unknown> =>
   typeof value === 'object' && value !== null && !Array.isArray(value)
@@ -211,6 +213,32 @@ export function isProvenanceView(value: unknown): value is ProvenanceEvidenceVie
   )
 }
 
+export interface SourceCellView {
+  readonly raw: string | boolean | null
+  readonly locator: SourceLocator
+  readonly columnLabel?: string
+  readonly rowLabel?: string
+}
+export interface AnswerSourceFragment {
+  readonly precision: 'exact' | 'approximate'
+  readonly originalRef: ResourceRef
+  readonly parseRef: ResourceRef
+  readonly locator: SourceLocator
+  readonly text?: string
+  readonly cells?: readonly SourceCellView[]
+}
+const isCells = (value: unknown): value is readonly SourceCellView[] =>
+  Array.isArray(value) && value.length <= 128 && value.every((cell: unknown) => record(cell) &&
+    (cell['raw'] === null || typeof cell['raw'] === 'string' || typeof cell['raw'] === 'boolean') &&
+    isSourceLocator(cell['locator']) && optionalString(cell['columnLabel']) && optionalString(cell['rowLabel']))
+const sameRef = (left: ResourceRef | undefined, right: ResourceRef | undefined): boolean =>
+  left === undefined || right === undefined ? left === right : left.id === right.id && left.version === right.version && left.digest === right.digest && left.kind === right.kind
+function isFragment(value: unknown): value is AnswerSourceFragment {
+  return record(value) && ['exact', 'approximate'].includes(String(value['precision'])) && isResourceRef(value['originalRef']) &&
+    isResourceRef(value['parseRef']) && isSourceLocator(value['locator']) && optionalString(value['text']) &&
+    (value['cells'] === undefined || isCells(value['cells'])) &&
+    (value['precision'] === 'approximate' ? Array.isArray(value['cells']) && value['cells'].length > 0 : typeof value['text'] === 'string' || Array.isArray(value['cells']) && value['cells'].length > 0)
+}
 export interface AnswerSourceView {
   readonly answerId: string
   readonly evidenceId: string
@@ -221,16 +249,16 @@ export interface AnswerSourceView {
   readonly readability: SourceReReadability
   readonly title: string
   readonly text?: string
-  readonly cells?: readonly {
-    readonly raw: string | boolean | null
-    readonly locator: SourceLocator
-    readonly columnLabel?: string
-    readonly rowLabel?: string
-  }[]
+  readonly cells?: readonly SourceCellView[]
+  readonly fragments?: readonly AnswerSourceFragment[]
   readonly originalRef?: ResourceRef
   readonly parseRef?: ResourceRef
   readonly locator?: SourceLocator
   readonly support?: ProvenanceEvidenceView
+  readonly sourceReadLimitation?: string
+  readonly archivedPayload?: Readonly<Record<string, unknown>>
+  readonly fixedInputRef?: ResourceRef
+  readonly fixedDatasetSnapshotRef?: ResourceRef
   readonly dataMode: DataMode
 }
 export function isAnswerSourceView(value: unknown): value is AnswerSourceView {
@@ -245,27 +273,34 @@ export function isAnswerSourceView(value: unknown): value is AnswerSourceView {
     !readable(value['readability']) ||
     !text(value['title']) ||
     !optionalString(value['text']) ||
+    !optionalString(value['sourceReadLimitation']) ||
     !mode(value['dataMode'])
   )
     return false
   if (
     value['cells'] !== undefined &&
-    (!Array.isArray(value['cells']) ||
-      !value['cells'].every(
-        (cell: unknown) =>
-          record(cell) &&
-          (cell['raw'] === null || typeof cell['raw'] === 'string' || typeof cell['raw'] === 'boolean') &&
-          isSourceLocator(cell['locator']) &&
-          optionalString(cell['columnLabel']) &&
-          optionalString(cell['rowLabel']),
-      ))
+    !isCells(value['cells'])
   )
     return false
+  if (value['fragments'] !== undefined) {
+    const fragments = value['fragments']
+    if (!Array.isArray(fragments) || fragments.length === 0 || fragments.length > 10 || !fragments.every(isFragment) || !['document_span', 'structured_qa'].includes(String(value['family']))) return false
+    const first = fragments[0]
+    if (first === undefined || first.precision !== value['precision'] || !isResourceRef(value['originalRef']) || !sameRef(first.originalRef, value['originalRef']) || !isResourceRef(value['parseRef']) || !sameRef(first.parseRef, value['parseRef']) || !isSourceLocator(value['locator']) || !sameSourceLocator(first.locator, value['locator']) || first.text !== value['text']) return false
+    const cells = value['cells']
+    if (first.cells === undefined ? cells !== undefined : !isCells(cells) || first.cells.length !== cells.length || first.cells.some((cell, index) => {
+      const other = cells[index]
+      return other === undefined || cell.raw !== other.raw || cell.columnLabel !== other.columnLabel || cell.rowLabel !== other.rowLabel || !sameSourceLocator(cell.locator, other.locator)
+    })) return false
+  }
   if (
     (value['originalRef'] !== undefined && !isResourceRef(value['originalRef'])) ||
     (value['parseRef'] !== undefined && !isResourceRef(value['parseRef'])) ||
     (value['locator'] !== undefined && !isSourceLocator(value['locator'])) ||
     (value['support'] !== undefined && !isProvenanceView(value['support']))
+    || (value['archivedPayload'] !== undefined && !record(value['archivedPayload']))
+    || (value['fixedInputRef'] !== undefined && !isResourceRef(value['fixedInputRef']))
+    || (value['fixedDatasetSnapshotRef'] !== undefined && !isResourceRef(value['fixedDatasetSnapshotRef']))
   )
     return false
   if (
@@ -279,6 +314,34 @@ export function isAnswerSourceView(value: unknown): value is AnswerSourceView {
   )
     return false
   return true
+}
+export interface InstanceFieldSourceView {
+  readonly projectId: string
+  readonly recordId: string
+  readonly recordRevision: string
+  readonly fieldId: string
+  readonly precision: 'exact' | 'approximate'
+  readonly readability: 're_readable'
+  readonly originalRef: ResourceRef
+  readonly parseRef: ResourceRef
+  readonly parseId: string
+  readonly locator: SourceLocator
+  readonly text?: string
+  readonly cells?: readonly SourceCellView[]
+}
+export function isInstanceFieldSourceView(value: unknown): value is InstanceFieldSourceView {
+  return record(value) && isUuid(value['projectId']) && isUuid(value['recordId']) && isRevisionString(value['recordRevision']) && text(value['fieldId']) &&
+    ['exact', 'approximate'].includes(String(value['precision'])) && value['readability'] === 're_readable' && isResourceRef(value['originalRef']) &&
+    isResourceRef(value['parseRef']) && isUuid(value['parseId']) && isSourceLocator(value['locator']) && optionalString(value['text']) &&
+    (value['cells'] === undefined || isCells(value['cells'])) && (typeof value['text'] === 'string' || Array.isArray(value['cells']) && value['cells'].length > 0)
+}
+export async function readInstanceFieldSource(client: Pick<WorkbenchClient, 'requestJson'>, instance: InstanceRecordView, fieldId: string, signal?: AbortSignal): Promise<InstanceFieldSourceView> {
+  const path = `/api/v1/core/projects/${encodeURIComponent(instance.projectId)}/instance-records/${encodeURIComponent(instance.recordId)}/fields/${encodeURIComponent(fieldId)}/source?recordRevision=${encodeURIComponent(instance.recordRevision)}`
+  const value = await client.requestJson<unknown>('GET', path, signal === undefined ? {} : { signal })
+  const field = instance.fields.find((field) => field.fieldId === fieldId)
+  if (!isInstanceFieldSourceView(value) || field === undefined || value.projectId !== instance.projectId || value.recordId !== instance.recordId || value.recordRevision !== instance.recordRevision || value.fieldId !== fieldId || value.parseId !== field.source.parseId || !sameRef(value.originalRef, field.source.documentRef) || !sameSourceLocator(value.locator, field.source.locator) || value.cells?.some((cell) => !sameSourceLocator(cell.locator, value.locator)))
+    throw new ApiError(502, { code: 'SOURCE_REFERENCE_MISMATCH', message: '原始来源与当前记录修订或字段定位不一致，已停止展示。', retryable: false, reasons: [], missingCapabilities: [] })
+  return value
 }
 export type AnswerSourceLoader = (
   answer: PublishedAnswer,

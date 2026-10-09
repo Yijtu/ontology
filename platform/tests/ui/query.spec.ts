@@ -468,6 +468,57 @@ describe('clarification resumes on the same shared budget', () => {
 })
 
 describe('cancel and the five observable outcomes', () => {
+  it.each(['network', 'server'] as const)('never restores project A after project B creation %s failure and retries B with the same idempotency key', async (fault) => {
+    const stream = new FakeStream()
+    const built = await harness()
+    const runId = await seedRun(built)
+    const projectA = '10000000-0000-4000-8000-000000000001'
+    const projectB = '10000000-0000-4000-8000-000000000002'
+    const sha = `sha256:${'a'.repeat(64)}`
+    const projects = [projectA, projectB].map((projectId) => ({ projectId, title: projectId === projectA ? '项目甲' : '项目乙', headRevision: '1', state: 'active', createdBy: 'human', createdAt: '2026-10-09T00:00:00Z', updatedAt: '2026-10-09T00:00:00Z' }))
+    const submissions: { body: Record<string, unknown>; key: string | null }[] = []
+    let oldRunReads = 0
+    const client = new WorkbenchClient({ baseUrl: built.baseUrl, eventStreamFactory: stream.factory, fetchImpl: async (input, init) => {
+      const path = new URL(String(input)).pathname
+      if (path === `/api/v1/runs/${runId}`) oldRunReads += 1
+      if (path === '/api/v1/projects') return jsonResponse(200, { data: { projects } })
+      if (path.endsWith('/task-catalogue')) {
+        const projectId = path.includes(projectA) ? projectA : projectB
+        return jsonResponse(200, { data: { project: projects.find((project) => project.projectId === projectId), revision: { ref: { projectId, revision: '1', digest: sha }, industryPackRef: { id: 'pack', version: '1.0.0', digest: sha }, definitionRef: { id: 'definition', version: '1.0.0', digest: sha }, mappingRefs: [], profileRef: { ...PROFILE, snapshotHash: sha }, documentSetRef: { id: projectId, version: '1.0.0', digest: sha, kind: 'artifact' }, semanticPublicationRefs: [], sourceVisibilityEpoch: '1', changeReason: 'independent UI wire context' }, tasks: [] } })
+      }
+      if (path === '/api/v1/runs' && init?.method === 'POST') {
+        submissions.push({ body: JSON.parse(String(init.body)) as Record<string, unknown>, key: new Headers(init.headers).get('idempotency-key') })
+        if (fault === 'network') throw new TypeError('injected project B creation transport failure')
+        return jsonResponse(503, { error: { code: 'SOURCE_UNAVAILABLE', message: 'injected project B creation server failure', retryable: true } })
+      }
+      return fetch(input, { ...init, headers: { ...(init?.headers ?? {}), 'x-test-subject': 'ui-owner', 'x-test-roles': 'platform-admin,business-user,scoped-reader,operator', 'x-test-scope': 'a' } })
+    } })
+    const container = document.createElement('div'); document.body.appendChild(container)
+    const root = createRoot(container); mounted.push({ root, container })
+    const props = { client, profileRef: PROFILE, timeZone: 'Asia/Shanghai', initialRunId: runId }
+    await act(async () => { root.render(createElement(QueryPanel, { ...props, projectId: projectA })) })
+    await waitFor(() => container.querySelector('[data-testid="query-run"]') !== null, 'actual A deep-linked run')
+    const readsBefore = oldRunReads
+    await act(async () => { root.render(createElement(QueryPanel, { ...props, projectId: projectB })) })
+    await waitFor(() => container.querySelector('[data-testid="query-run"]') === null && container.textContent?.includes('当前项目尚无就绪的任务') === true, 'B project context and actual catalogue wire')
+    const question = container.querySelector<HTMLTextAreaElement>('[data-testid="query-question"]')
+    const ask = container.querySelector('[data-testid="query-ask"]')
+    if (question === null || ask === null) throw new Error('B ask controls missing')
+    await type(question, '只查询项目乙的当前资料')
+    await click(ask)
+    await waitFor(() => container.querySelector('[data-testid="state-panel-recover"]') !== null, 'B create failure recovery')
+    await click(container.querySelector('[data-testid="state-panel-recover"]') as Element)
+    await waitFor(() => submissions.length === 2 && container.querySelector('[data-testid="state-panel-recover"]') !== null, 'same B submission recovery attempt')
+    expect(submissions[0]?.body['projectId']).toBe(projectB)
+    expect(submissions[1]?.body).toEqual(submissions[0]?.body)
+    expect(submissions[1]?.key).toBe(submissions[0]?.key)
+    expect(submissions[0]?.key).toBeTruthy()
+    expect(oldRunReads).toBe(readsBefore)
+    expect(stream.generations).toHaveLength(1)
+    expect(container.querySelector('[data-testid="query-run"]')).toBeNull()
+    await act(async () => { stream.generations[0]?.onEvent({ id: 'late-A-published', event: 'answer.published', data: { publicationKind: 'verified' } }) })
+    expect(container.querySelector('[data-testid="outcome-normal"]')).toBeNull()
+  })
   it('clears a saved run when the selected project changes and ignores its late stream', async () => {
     const stream = new FakeStream()
     const built = await harness({ streamFactory: stream.factory })

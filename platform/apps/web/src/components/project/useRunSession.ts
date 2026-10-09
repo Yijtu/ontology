@@ -49,10 +49,15 @@ export function useRunSession(
   const stream = useRef<RunEventStream | undefined>(undefined)
   const active = useRef<{ ticket: Ticket; runId: string; cancelled: boolean } | undefined>(undefined)
   const submitting = useRef(false)
-  const retainedSubmission = useRef<{ serialized: string; key: string } | undefined>(undefined)
+  const retainedSubmission = useRef<{ request: CreateRunRequest; serialized: string; key: string } | undefined>(undefined)
   const restoredInitial = useRef<{ client: WorkbenchClient; runId: string; projectKey: string } | undefined>(
     undefined,
   )
+  // A deep link belongs to the project where it was first supplied, including a
+  // failed restore. Keeping the same prop across project navigation grants no new owner.
+  if (initialRunId === undefined) restoredInitial.current = undefined
+  else if (restoredInitial.current === undefined || restoredInitial.current.client !== client || restoredInitial.current.runId !== initialRunId)
+    restoredInitial.current = { client, runId: initialRunId, projectKey }
 
   const closeStream = useCallback(() => {
     stream.current?.close()
@@ -171,18 +176,13 @@ export function useRunSession(
     const ticket = begin('session')
     void (async () => {
       await reloadScope()
-      if (initialRunId === undefined) restoredInitial.current = undefined
       const prior = restoredInitial.current
       const requestedRestore =
         initialRunId !== undefined &&
-        (prior === undefined ||
-          prior.client !== client ||
-          prior.runId !== initialRunId ||
-          prior.projectKey === projectKey)
+        prior?.client === client && prior.runId === initialRunId && prior.projectKey === projectKey
       if (ticket.current() && initialRunId !== undefined && requestedRestore) {
         try {
           await adopt(initialRunId, ticket)
-          if (ticket.current()) restoredInitial.current = { client, runId: initialRunId, projectKey }
         } catch (error) {
           if (ticket.current()) dispatch(failure(error))
         }
@@ -200,7 +200,7 @@ export function useRunSession(
     dispatch({ type: 'askStarted' })
     const serialized = JSON.stringify(request)
     if (retainedSubmission.current?.serialized !== serialized)
-      retainedSubmission.current = { serialized, key: client.newRequestKey() }
+      retainedSubmission.current = { request, serialized, key: client.newRequestKey() }
     try {
       const created = await client.createRun(request, retainedSubmission.current.key)
       if (!ticket.current()) return
@@ -261,16 +261,29 @@ export function useRunSession(
     }
   }
   const recover = async () => {
-    const runId = active.current?.runId ?? stateRef.current.run?.runId ?? initialRunId
+    if (submitting.current) return
+    const currentSession = active.current?.ticket.current() === true ? active.current : undefined
+    const ownInitial = restoredInitial.current
+    const retained = retainedSubmission.current
+    const runId = currentSession?.runId ?? stateRef.current.run?.runId ??
+      (retained === undefined && ownInitial?.client === client && ownInitial.projectKey === projectKey ? ownInitial.runId : undefined)
     const ticket = begin('session')
     closeStream()
     active.current = undefined
     dispatch({ type: 'restoreStarted' })
     try {
-      if (runId === undefined) await reloadScope()
+      if (runId === undefined && retained !== undefined) {
+        submitting.current = true
+        const created = await client.createRun(retained.request, retained.key)
+        if (!ticket.current()) return
+        await adopt(created.runId, ticket, true)
+        if (ticket.current()) retainedSubmission.current = undefined
+      } else if (runId === undefined) await reloadScope()
       else await adopt(runId, ticket)
     } catch (error) {
       if (ticket.current()) dispatch(failure(error))
+    } finally {
+      if (ticket.current()) submitting.current = false
     }
   }
   return { state, dispatch, create, respond, cancel, reloadScope, recover }

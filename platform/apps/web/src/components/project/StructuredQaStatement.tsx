@@ -4,7 +4,7 @@ import type { AnswerSourceLoader, AnswerSourceView } from '../../api/source-view
 import { boundAnswerSource } from '../../api/source-views'
 import { Button } from '../ui'
 import { ProjectNotice } from './ProjectNotice'
-import { formatLocator, VerifiedCell } from './VerifiedCell'
+import { SourceFragmentContent } from './SourceFragmentContent'
 import { useRequestFence } from './useRequestFence'
 
 /** A free summary is never rendered. Only fixed, authorized original-cell projections qualify. */
@@ -82,29 +82,7 @@ export function StructuredQaStatement({
           <span className="project-state project-state--partial">
             近似投影 · {current.readability === 'archived_snapshot_only' ? '仅归档快照' : '可重读原文件'}
           </span>
-          <div className="project-table" tabIndex={0} role="region" aria-label="结构化来源中的实际单元格">
-            <table>
-              <thead>
-                <tr>
-                  <th>字段 / 位置</th>
-                  <th>原始值</th>
-                </tr>
-              </thead>
-              <tbody>
-                {current.cells?.map((cell, index) => (
-                  <tr key={index}>
-                    <td>
-                      {cell.columnLabel ?? formatLocator(cell.locator)}
-                      {cell.rowLabel === undefined ? null : <small>{cell.rowLabel}</small>}
-                    </td>
-                    <td>
-                      <VerifiedCell value={cell.raw} />
-                    </td>
-                  </tr>
-                ))}
-              </tbody>
-            </table>
-          </div>
+          {(current.fragments ?? [current]).map((fragment, index, fragments) => <SourceFragmentContent key={`${fragment.originalRef?.id}:${fragment.originalRef?.digest}:${JSON.stringify(fragment.locator ?? index)}`} fragment={fragment} {...(fragments.length > 1 ? { label: `来源片段 ${index + 1}` } : {})} />)}
           {onOpen === undefined || selected === undefined ? null : (
             <Button variant="quiet" onClick={() => onOpen(selected)}>
               查看原始单元格与定位 ↗

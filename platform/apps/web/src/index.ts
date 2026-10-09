@@ -374,3 +374,5 @@ export { ProjectEvolutionPanel } from './components/project/ProjectEvolutionPane
 export { stageProjectFacts } from './api/project-facts'
 export type { StagedProjectCandidate } from './api/project-facts'
 export { readEvolutionTarget, startProjectEvolution, readProjectEvolution, operateProjectEvolution, isProjectEvolutionRecord } from './api/project-evolution'
+export { readInstanceFieldSource, isInstanceFieldSourceView } from './api/source-views'
+export type { AnswerSourceFragment, SourceCellView, InstanceFieldSourceView } from './api/source-views'

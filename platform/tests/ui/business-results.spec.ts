@@ -382,6 +382,28 @@ describe('typed results share the same verified version', () => {
       await second.app.close()
     }
   })
+  it('keeps archived query payload and fixed refs folded while stating the original-cell read limitation', async () => {
+    const built = await harness()
+    const actual = createWorkbenchResultSource(built.harness.client)
+    const load = actual.loadSource
+    if (load === undefined) throw new Error('actual fixed source route unavailable')
+    const source = { ...actual, loadSource: async (...args: Parameters<typeof load>) => ({ ...await load(...args), sourceReadLimitation: '保存的是该运行的查询结果。', archivedPayload: { internal_snapshot_marker: 'ARCHIVE_PAYLOAD_SENTINEL', lexical_decimal: '9007199254740993.000000000001' }, fixedInputRef: { id: 'wire-input-fixture', version: '1.0.0', digest: `sha256:${'a'.repeat(64)}`, kind: 'artifact' as const }, fixedDatasetSnapshotRef: { id: 'wire-dataset-fixture', version: '1.0.0', digest: `sha256:${'b'.repeat(64)}`, kind: 'artifact' as const } }) }
+    const container = document.createElement('div'); document.body.appendChild(container)
+    const root = createRoot(container); mounted.push({ root, container })
+    await act(async () => { root.render(createElement(ResultWorkbenchPanel, { source, runId: built.runId, initialTab: 'tables' })) })
+    await waitFor(() => container.querySelector('[data-testid="result-cell-evidence"]') !== null, 'actual verified table source action')
+    await click(container.querySelector('[data-testid="result-cell-evidence"]') as Element)
+    await waitFor(() => container.querySelector('[data-testid="query-source-archive"]') !== null, 'saved query source detail')
+    const view = container.querySelector('[data-testid="result-evidence"]')
+    expect(view?.textContent).toContain('暂不支持回读原始表格单元格')
+    expect(view?.querySelector('blockquote')).toBeNull()
+    const archive = view?.querySelector<HTMLDetailsElement>('[data-testid="query-source-archive"]')
+    expect(archive?.open).toBe(false)
+    expect(archive?.querySelector('pre')?.textContent).toContain('ARCHIVE_PAYLOAD_SENTINEL')
+    expect(archive?.textContent).toContain('9007199254740993.000000000001')
+    expect(archive?.textContent).toContain('wire-input-fixture')
+    expect(container.querySelector('[data-testid="result-table"]')?.getAttribute('data-page')).toBe('0')
+  })
 })
 
 describe('running a task is controllable', () => {
