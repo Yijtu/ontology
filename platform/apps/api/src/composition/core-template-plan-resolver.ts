@@ -1,4 +1,4 @@
-import { RunPlanner, WorkflowControllerError } from '@ontology/application'
+import { RunPlanner, SemanticTaskIntentPlanner, WorkflowControllerError } from '@ontology/application'
 import type { DecisionStateRefProvider, ProfileResolver, RunService } from '@ontology/application'
 import type {
   ConfirmedContext,
@@ -42,6 +42,7 @@ import { canonicalJson } from '@ontology/tool-services'
 import type { TemplatePlanPreparation, TemplatePlanPreparationRequest, TemplatePlanResolver, PublishedPlan } from '@ontology/adapter-runtime-template'
 import { PostgresCorePlanReceiptStore } from './core-plan-receipts'
 import type { CorePlanReceiptPayload, CorePlanReceiptPins, CorePlanReceiptRecord, CorePlanRouteSummary } from './core-plan-receipts'
+import type { CoreSemanticTaskResolver, CoreSemanticTaskSelection } from './core-semantic-task-resolver'
 
 const MAX_ORDINARY_QUESTION_BYTES = 4_096
 const MAX_PLAN_STEPS = 32
@@ -76,6 +77,7 @@ export interface CoreTemplatePlanResolverOptions {
     ctx: ToolContext,
   ) => Promise<boolean>
   readonly projectQueryDescriptor?: (execution: RunExecutionBinding, objectId: string, ctx: ToolContext) => Promise<ProjectSnapshotQueryDescriptor>
+  readonly semanticTasks?: CoreSemanticTaskResolver
   readonly now?: () => string
 }
 
@@ -346,6 +348,7 @@ export class CoreTemplatePlanResolver implements TemplatePlanResolver {
   readonly #decisionStateRefProvider: DecisionStateRefProvider
   readonly #isRouteClarificationReceiptApproved: CoreTemplatePlanResolverOptions['isRouteClarificationReceiptApproved']
   readonly #projectQueryDescriptor: CoreTemplatePlanResolverOptions['projectQueryDescriptor']
+  readonly #semanticTasks: CoreTemplatePlanResolverOptions['semanticTasks']
   readonly #now: () => string
 
   constructor(options: CoreTemplatePlanResolverOptions) {
@@ -364,6 +367,7 @@ export class CoreTemplatePlanResolver implements TemplatePlanResolver {
     this.#decisionStateRefProvider = options.decisionStateRefProvider
     this.#isRouteClarificationReceiptApproved = options.isRouteClarificationReceiptApproved
     this.#projectQueryDescriptor = options.projectQueryDescriptor
+    this.#semanticTasks = options.semanticTasks
     this.#now = options.now ?? (() => new Date().toISOString())
   }
 
@@ -467,6 +471,17 @@ export class CoreTemplatePlanResolver implements TemplatePlanResolver {
       throw new WorkflowControllerError('INVALID_ARGUMENT', 'the question exceeds the bounded plan-preparation size')
     }
     const routeSignals = routeSignalsFor(question)
+    const taskContext = await this.#loadTaskContext(run, ctx)
+    const definitionRefs = [scenario.definitionRef]
+    let taskDefinition = taskContext.taskBinding?.actionDefinitionRef
+    if (taskDefinition === undefined && taskContext.execution !== undefined && this.#semanticTasks !== undefined) {
+      const fixed = taskContext.execution.request.projectRevisionRef
+      const revision = await this.#semanticTasks.options.projects.getRevision(this.#scopeRef, fixed.projectId, fixed.revision, ctx)
+      if (revision === undefined || revision.ref.digest !== fixed.digest) throw new WorkflowControllerError('FORBIDDEN', 'the archived project definition is unavailable')
+      taskDefinition = revision.definitionRef
+    }
+    const fixedTaskDefinition = taskDefinition
+    if (fixedTaskDefinition !== undefined && !definitionRefs.some((ref) => sameVersionRef(ref, fixedTaskDefinition))) definitionRefs.push(fixedTaskDefinition)
     const basePins: CorePlanReceiptPins = {
       runId,
       profileRef: run.profileRef,
@@ -475,11 +490,10 @@ export class CoreTemplatePlanResolver implements TemplatePlanResolver {
       inputManifestDigest: inputManifest.digest,
       effectiveQuestionDigest: sha256DigestOf(question),
       mappingRefs: [...resolvedRecord.resolved.mappingRefs],
-      definitionRefs: [scenario.definitionRef],
+      definitionRefs,
       toolBindingsDigest: sha256DigestOf(canonicalJson(resolvedRecord.resolved.toolBindings)),
       routeSignalsDigest: sha256DigestOf(canonicalJson(routeSignals)),
     }
-    const taskContext = await this.#loadTaskContext(run, ctx)
     return {
       run,
       scopeRef: this.#scopeRef,
@@ -547,7 +561,7 @@ export class CoreTemplatePlanResolver implements TemplatePlanResolver {
     const generationModelRef = generationBound ? modelRefOf(loaded.resolved, 'generation') : undefined
     const decisionModelRef = decisionBound ? modelRefOf(loaded.resolved, 'decision') : undefined
     const toolIds = new Set(loaded.resolved.toolBindings.filter((binding) => binding.enabled).map((binding) => binding.toolId))
-    if (fixedPlan === undefined && !toolIds.has('data_query')) {
+    if (fixedPlan === undefined && loaded.execution?.request.mode !== 'question' && !toolIds.has('data_query')) {
       throw new WorkflowControllerError('CAPABILITY_NOT_CONFIGURED', 'the resolved profile does not enable data_query for ordinary semantic plans')
     }
     if (fixedPlan === undefined && !generationBound) {
@@ -605,7 +619,27 @@ export class CoreTemplatePlanResolver implements TemplatePlanResolver {
       decisionStateRefProvider: this.#decisionStateRefProvider,
     })
 
-    const decision = await planner.route({
+    let taskSelection: CoreSemanticTaskSelection | undefined
+    let semanticDecision: RouteDecision | undefined
+    if (loaded.execution?.request.mode === 'question') {
+      const resolver = this.#semanticTasks
+      if (resolver === undefined || generationModelRef === undefined) throw new WorkflowControllerError('CAPABILITY_NOT_CONFIGURED', 'semantic task selection requires the configured host resolver and generation binding')
+      const operations = new Set(loaded.resolved.computeBindings.filter((binding) => binding.enabled).map((binding) => `${binding.operationRef.id}@${binding.operationRef.version}`))
+      const catalog = await resolver.load(loaded.execution, toolIds, request.dependencies.ctx, operations)
+      const intent = await new SemanticTaskIntentPlanner(request.dependencies.generation, generationModelRef).propose({ question: loaded.question, catalog: catalog.catalog, ...(routeClarification === undefined ? {} : { clarification: routeClarification.typedResponse }) }, request.dependencies.ctx, request.dependencies.signal)
+      const current = await resolver.load(loaded.execution, toolIds, request.dependencies.ctx, operations)
+      if (canonicalJson(current.source.readRevision) !== canonicalJson(catalog.source.readRevision) || canonicalJson(current.catalog) !== canonicalJson(catalog.catalog)) throw new WorkflowControllerError('VERSION_CONFLICT', 'the authorized semantic task inventory changed during model selection')
+      const resolved = await resolver.resolve(intent, current, loaded.execution, request.dependencies.ctx)
+      if (resolved.kind === 'clarify') {
+        semanticDecision = { route: 'clarify', reason: resolved.reason, clarification: { questionRef: { id: `semantic-task:${loaded.run.runId}`, version: '1.0.0', digest: sha256DigestOf(resolved.reason) }, questionType: 'noul', prompt: resolved.reason } }
+      } else {
+        taskSelection = resolved.selection
+        const plan = await this.#selectedTaskPlan(loaded, resolved.binding, resolved.selection.parameters, request.dependencies.ctx)
+        if (plan === undefined) throw new WorkflowControllerError('INVALID_SCHEMA', 'the selected semantic task has no fixed plan')
+        semanticDecision = { route: 'fixed_path', reason: 'the host resolved one enabled semantic task from the fixed project inventory', plan }
+      }
+    }
+    const decision = semanticDecision ?? await planner.route({
       runId: loaded.run.runId,
       question: loaded.question,
       context: confirmedContextOf(loaded.run),
@@ -681,8 +715,10 @@ export class CoreTemplatePlanResolver implements TemplatePlanResolver {
         pins,
         route,
         steps: planStepsOf(decision, toolIds),
+        ...(taskSelection === undefined ? {} : { taskSelection }),
       }
     }
+    if (request.dependencies.signal.aborted) throw new WorkflowControllerError('DEADLINE_EXCEEDED', 'task planning was cancelled before its immutable receipt was saved')
     const saved = await this.#receipts.saveIfAbsent(this.#scopeRef, {
       pins,
       requestDigest,
@@ -707,22 +743,32 @@ export class CoreTemplatePlanResolver implements TemplatePlanResolver {
     if (binding === undefined) {
       throw new WorkflowControllerError('CAPABILITY_NOT_CONFIGURED', 'the run pins a task binding that is not archived')
     }
+    if (binding.kind === 'rule_judgement' && typeof execution.request.parameters['rule'] === 'string' && typeof execution.request.parameters['entity'] === 'string') {
+      if (this.#semanticTasks === undefined) throw new WorkflowControllerError('CAPABILITY_NOT_CONFIGURED', 'the server rule selector is not configured')
+      const tools = new Set(loaded.resolved.toolBindings.filter((tool) => tool.enabled).map((tool) => tool.toolId))
+      const inventory = await this.#semanticTasks.load(execution, tools, ctx)
+      const object = execution.request.parameters['object']
+      const resolution = await this.#semanticTasks.resolve({ kind: 'rule_judgement', rule: execution.request.parameters['rule'], entity: execution.request.parameters['entity'], ...(typeof object === 'string' ? { object } : {}) }, inventory, execution, ctx)
+      if (resolution.kind === 'clarify') throw new WorkflowControllerError('INVALID_ARGUMENT', resolution.reason)
+      return this.#selectedTaskPlan(loaded, resolution.binding, resolution.selection.parameters, ctx)
+    }
+    return this.#selectedTaskPlan(loaded, binding, execution.request.parameters, ctx)
+  }
+
+  async #selectedTaskPlan(loaded: LoadedRunInputs, binding: PublishedTaskBinding, parameters: Readonly<Record<string, unknown>>, ctx: ToolContext): Promise<ExecutablePlan | undefined> {
     switch (binding.kind) {
       case 'published_facts':
         return this.#fixedFactsPlan(loaded)
       case 'compute':
-        return this.#computePlan(loaded, binding)
+        return this.#computePlan(loaded, binding, parameters)
       case 'structured_query':
-        return this.#structuredQueryPlan(loaded, execution.request.parameters, ctx)
+        return this.#structuredQueryPlan(loaded, parameters, ctx)
       case 'document_qa':
-        return this.#documentQaPlan(loaded, execution.request.parameters)
+        return this.#documentQaPlan(loaded, parameters)
       case 'rule_judgement':
-        return this.#ruleJudgementPlan(loaded, execution.request.parameters)
+        return this.#ruleJudgementPlan(loaded, parameters, binding.actionDefinitionRef)
       case 'relations':
-        throw new WorkflowControllerError(
-          'CAPABILITY_NOT_CONFIGURED',
-          'relation navigation tasks require the run-scoped published-relation navigator, which is not a model tool on this host',
-        )
+        return this.#relationsPlan(loaded, parameters)
       default: {
         const exhaustive: never = binding.kind
         throw new WorkflowControllerError('INVALID_SCHEMA', `unhandled task kind ${String(exhaustive)}`)
@@ -730,7 +776,7 @@ export class CoreTemplatePlanResolver implements TemplatePlanResolver {
     }
   }
 
-  #computePlan(loaded: LoadedRunInputs, binding: PublishedTaskBinding): ExecutablePlan {
+  #computePlan(loaded: LoadedRunInputs, binding: PublishedTaskBinding, parameters: Readonly<Record<string, unknown>>): ExecutablePlan {
     if (binding.operationRef === undefined) {
       throw new WorkflowControllerError('INVALID_SCHEMA', 'a compute task binding must pin a registered operation')
     }
@@ -742,7 +788,7 @@ export class CoreTemplatePlanResolver implements TemplatePlanResolver {
       throw new WorkflowControllerError('INVALID_SCHEMA', 'the registered operation record does not match the task binding pin')
     }
     const execution = loaded.execution
-    if (execution === undefined || execution.request.mode !== 'task') {
+    if (execution === undefined) {
       throw new WorkflowControllerError('INVALID_SCHEMA', 'a compute task requires a task-mode execution binding')
     }
     const step: ExecutablePlanStep = {
@@ -752,7 +798,7 @@ export class CoreTemplatePlanResolver implements TemplatePlanResolver {
         kind: 'compute',
         operationRef: operation.operationRef,
         inputSchemaDigest: operation.inputSchemaDigest,
-        parameters: execution.request.parameters,
+        parameters,
         inputRefs: [execution.request.inputSnapshotRef],
       },
       dependsOn: [],
@@ -802,7 +848,7 @@ export class CoreTemplatePlanResolver implements TemplatePlanResolver {
       throw new WorkflowControllerError('INVALID_ARGUMENT', 'a document Q&A task requires a query string')
     }
     const execution = loaded.execution
-    if (execution === undefined || execution.request.mode !== 'task') {
+    if (execution === undefined) {
       throw new WorkflowControllerError('INVALID_SCHEMA', 'a document Q&A task requires a task-mode execution binding')
     }
     // A document-QA run searches only the pinned project's own document collection; the
@@ -831,7 +877,7 @@ export class CoreTemplatePlanResolver implements TemplatePlanResolver {
    * The producer is a run-scoped evidence step: the tool result carries the derived
    * `rule_derivation` evidence the typed verifier and publication gate consume.
    */
-  #ruleJudgementPlan(loaded: LoadedRunInputs, parameters: Readonly<Record<string, unknown>>): ExecutablePlan {
+  #ruleJudgementPlan(loaded: LoadedRunInputs, parameters: Readonly<Record<string, unknown>>, definitionRef: VersionRef): ExecutablePlan {
     if (!loaded.resolved.toolBindings.some((binding) => binding.toolId === 'ontology_lookup' && binding.enabled)) {
       throw new WorkflowControllerError('CAPABILITY_NOT_CONFIGURED', 'the resolved profile does not enable ontology_lookup for a rule judgement task')
     }
@@ -840,7 +886,7 @@ export class CoreTemplatePlanResolver implements TemplatePlanResolver {
       throw new WorkflowControllerError('INVALID_ARGUMENT', 'a rule judgement task requires ruleRef, objectId, subjectEntityId, validAt and asOfRecordedSeq')
     }
     const execution = loaded.execution
-    if (execution === undefined || execution.request.mode !== 'task') {
+    if (execution === undefined) {
       throw new WorkflowControllerError('INVALID_SCHEMA', 'a rule judgement task requires a task-mode execution binding')
     }
     const step: ExecutablePlanStep = {
@@ -852,7 +898,7 @@ export class CoreTemplatePlanResolver implements TemplatePlanResolver {
         request: {
           kind: 'rule_judgement',
           ruleRef: parsed.ruleRef,
-          definitionRef: loaded.scenario.definitionRef,
+          definitionRef,
           objectId: parsed.objectId,
           subjectEntityId: parsed.subjectEntityId,
           validAt: parsed.validAt,
@@ -865,6 +911,11 @@ export class CoreTemplatePlanResolver implements TemplatePlanResolver {
       sourceVersion: parsed.ruleRef,
     }
     return singleStepPlan(loaded.run.runId, `rule_judgement:${parsed.subjectEntityId}:${sha256DigestOf(canonicalJson(parsed.ruleRef))}`, step)
+  }
+
+  #relationsPlan(loaded: LoadedRunInputs, parameters: Readonly<Record<string, unknown>>): ExecutablePlan {
+    if (loaded.execution === undefined || !loaded.resolved.toolBindings.some((binding) => binding.toolId === 'ontology_lookup' && binding.enabled)) throw new WorkflowControllerError('CAPABILITY_NOT_CONFIGURED', 'the relation task requires its fixed execution binding and ontology lookup')
+    return singleStepPlan(loaded.run.runId, 'relations', { stepId: 'q1', toolId: 'ontology_lookup', arguments: { scopeRef: loaded.scopeRef, intent: 'relations', request: { kind: 'relation_navigation', ...parameters } }, dependsOn: [] })
   }
 
   #fixedFactsPlan(loaded: LoadedRunInputs): ExecutablePlan | undefined {

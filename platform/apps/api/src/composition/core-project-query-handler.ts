@@ -79,7 +79,7 @@ export function createCoreProjectQueryWorkflow(options: CoreProjectQueryOptions)
     if (archived === undefined || execution.runId !== ctx.runId || canonicalJson(archived.binding) !== canonicalJson(execution)) throw new WorkflowControllerError('CAPABILITY_NOT_CONFIGURED', 'historical query authorization requires the exact stored run execution binding')
     const request = archived.binding.request
     const ref = archived.binding.projectDatasetSnapshotRef
-    if (request.mode !== 'task' || ref === undefined) throw new WorkflowControllerError('CAPABILITY_NOT_CONFIGURED', 'the structured query run has no archived project dataset snapshot')
+    if (ref === undefined) throw new WorkflowControllerError('CAPABILITY_NOT_CONFIGURED', 'the structured query run has no archived project dataset snapshot')
     return describe({ tenantId: ctx.principal.tenantId, spaceId: ctx.allowedResources.spaceId }, request.projectRevisionRef, ref, objectId, ctx)
   }
   const handler = (fallback: ToolHandler): ToolHandler => ({
@@ -88,10 +88,14 @@ export function createCoreProjectQueryWorkflow(options: CoreProjectQueryOptions)
       const scope = { tenantId: request.ctx.principal.tenantId, spaceId: request.ctx.allowedResources.spaceId }
       const archived = await options.executionBindings.getBindingByRun(scope, request.ctx.runId, request.ctx)
       const execution = archived?.binding
-      if (execution?.request.mode !== 'task') return fallback.execute(request)
-      const binding = await options.taskBindings.getBinding(scope, execution.request.taskBindingRef, request.ctx)
-      if (binding?.kind !== 'structured_query') return fallback.execute(request)
-      const objectId = execution.request.parameters['objectId']
+      if (execution === undefined) return fallback.execute(request)
+      if (execution.request.mode === 'task') {
+        const binding = await options.taskBindings.getBinding(scope, execution.request.taskBindingRef, request.ctx)
+        if (binding?.kind !== 'structured_query') return fallback.execute(request)
+      } else if (request.arguments['kind'] !== 'query') return fallback.execute(request)
+      const queryPlan = request.arguments['queryPlan']
+      const objectId = execution.request.mode === 'task' ? execution.request.parameters['objectId']
+        : isRecord(queryPlan) && Array.isArray(queryPlan['concepts']) && queryPlan['concepts'].length === 1 ? queryPlan['concepts'][0] : undefined
       if (typeof objectId !== 'string' || request.arguments['kind'] !== 'query' || request.arguments['mode'] !== 'semantic') throw new ToolGatewayError('INVALID_ARGUMENTS', 'the fixed structured query task requires its semantic project query')
       const descriptor = await resolveExecution(execution, objectId, request.ctx)
       if (!request.ctx.allowedResources.sourceRefs.some((ref) => ref.namespace === 'project-dataset' && ref.sourceId === descriptor.snapshotRef.id)) throw new ToolGatewayError('INVALID_ARGUMENTS', 'the archived project snapshot is outside the trusted run allowlist', { platformCode: 'FORBIDDEN' })
@@ -114,7 +118,15 @@ export function createCoreProjectQueryWorkflow(options: CoreProjectQueryOptions)
       return { ...outcome, payload: located }
     },
   })
-  return { resolveForCreation, resolveExecution, handler,
+  const resolveQuestionForCreation = async (scope: ScopeRef, revision: ProjectRevision, ctx: ToolContext): Promise<ResourceRef | undefined> => {
+    const projection = await options.readiness.getProjection(scope, revision.ref, 'dataset', ctx)
+    const target = projection?.targetRef
+    if (projection?.state !== 'ready' || target === undefined || !('kind' in target) || target.kind !== 'dataset') return undefined
+    const descriptor = await options.query.describeSnapshot(scope, target, ctx)
+    if (descriptor === undefined) throw new ProjectDatasetError('SNAPSHOT_UNAVAILABLE', 'the ready project query snapshot is unavailable')
+    return resolveForCreation(scope, revision, { objectId: descriptor.objectId }, ctx)
+  }
+  return { resolveForCreation, resolveQuestionForCreation, resolveExecution, handler,
     mappingRef: projectSnapshotMappingRef,
     sourceRef: projectDatasetSourceRef }
 }
