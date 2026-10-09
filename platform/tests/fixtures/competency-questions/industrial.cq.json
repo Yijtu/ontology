@@ -1,8 +1,8 @@
 {
   "ref": {
     "id": "cq.industrial.set",
-    "version": "1.0.0",
-    "digest": "sha256:d4a17aa190981c590e926d31a4139798ad461fb6e4c351a72a69c49d16cd9d6d"
+    "version": "1.1.0",
+    "digest": "sha256:4e1aa18b7e630a81a1e1df50b834671816f029ff24193d4f48bee6531c005770"
   },
   "body": {
     "schemaVersion": "competency-questions@1",
@@ -53,13 +53,44 @@
         "id": "cq.industrial.source",
         "version": "1.0.0",
         "digest": "sha256:3f3eb751e3d27b03636bb2b7fd27c1736aa50605fafc6beec826b51a840a7ff2"
+      },
+      {
+        "id": "cq.industrial.rows.source",
+        "version": "1.0.0",
+        "digest": "sha256:8f372538efcf5d876b52b9db549dea5d53e59a828e66be9b6feae4495ed07dd3"
+      },
+      {
+        "id": "cq.industrial.alarm.source",
+        "version": "1.0.0",
+        "digest": "sha256:c0a0e82478a994e49f452b65c8195bf1e94741fb74a38a387a95ca95c2b11b00"
+      },
+      {
+        "id": "cq.industrial.boundary.source",
+        "version": "1.0.0",
+        "digest": "sha256:6a8fcbbecb38863e645e2005b9251df4dc05c32e2a75d21206e3e1af8b8d70dd"
+      },
+      {
+        "id": "cq.industrial.version-two.source",
+        "version": "1.0.0",
+        "digest": "sha256:a1d83c39d6212a73cec568c720c9acbf8a4a57618c258d89a90b81e1df0e12fb"
+      },
+      {
+        "id": "cq.industrial.workshop.source",
+        "version": "1.0.0",
+        "digest": "sha256:adaf170554ab1a661bb14c8c33b7d7b26620a12939126ee3aac2ae6452be58cf"
+      },
+      {
+        "id": "cq.industrial.compute-input.source",
+        "version": "1.0.0",
+        "digest": "sha256:84efdae6315e73d780c5329fed2b441f24f9e559763d391f9a28a4658be0f058"
       }
     ],
     "allowedCapabilities": [
       "semantic_read",
       "relation_read",
       "rule_evaluation",
-      "registered_compute"
+      "registered_compute",
+      "structured_query"
     ],
     "questions": [
       {
@@ -92,13 +123,13 @@
               "status": "active",
               "source": {
                 "sourceRef": {
-                  "id": "cq.industrial.source",
+                  "id": "cq.industrial.rows.source",
                   "version": "1.0.0",
-                  "digest": "sha256:3f3eb751e3d27b03636bb2b7fd27c1736aa50605fafc6beec826b51a840a7ff2"
+                  "digest": "sha256:8f372538efcf5d876b52b9db549dea5d53e59a828e66be9b6feae4495ed07dd3"
                 },
-                "startOffset": 73,
-                "endOffset": 88,
-                "quoteDigest": "sha256:0a6a32e89f43923339c79013c38a2882983d2dace2e75c844d4f34ae09672f5a",
+                "startOffset": 36,
+                "endOffset": 55,
+                "quoteDigest": "sha256:fb45f5b8577db4f4b77e2449bf746824c979153f97676cc6ded56a998ba194a5",
                 "offsetUnit": "utf8_byte"
               }
             },
@@ -115,18 +146,32 @@
               "status": "active",
               "source": {
                 "sourceRef": {
-                  "id": "cq.industrial.source",
+                  "id": "cq.industrial.rows.source",
                   "version": "1.0.0",
-                  "digest": "sha256:3f3eb751e3d27b03636bb2b7fd27c1736aa50605fafc6beec826b51a840a7ff2"
+                  "digest": "sha256:8f372538efcf5d876b52b9db549dea5d53e59a828e66be9b6feae4495ed07dd3"
                 },
-                "startOffset": 90,
-                "endOffset": 101,
-                "quoteDigest": "sha256:0e4d482ec49b780667f354cf1f9593df44820d3b31e3e5751bb0cd53e22725d3",
+                "startOffset": 36,
+                "endOffset": 55,
+                "quoteDigest": "sha256:fb45f5b8577db4f4b77e2449bf746824c979153f97676cc6ded56a998ba194a5",
                 "offsetUnit": "utf8_byte"
               }
             }
           ],
-          "relations": []
+          "relations": [],
+          "structuredSources": [
+            {
+              "sourceRef": {
+                "id": "cq.industrial.rows.source",
+                "version": "1.0.0",
+                "digest": "sha256:8f372538efcf5d876b52b9db549dea5d53e59a828e66be9b6feae4495ed07dd3"
+              },
+              "objectId": "asset",
+              "attributeIds": [
+                "asset_code",
+                "hours"
+              ]
+            }
+          ]
         },
         "intent": {
           "projectId": "44444444-4444-4444-8444-444444444444",
@@ -141,24 +186,13 @@
         "requiredSources": [
           {
             "sourceRef": {
-              "id": "cq.industrial.source",
+              "id": "cq.industrial.rows.source",
               "version": "1.0.0",
-              "digest": "sha256:3f3eb751e3d27b03636bb2b7fd27c1736aa50605fafc6beec826b51a840a7ff2"
+              "digest": "sha256:8f372538efcf5d876b52b9db549dea5d53e59a828e66be9b6feae4495ed07dd3"
             },
-            "startOffset": 73,
-            "endOffset": 88,
-            "quoteDigest": "sha256:0a6a32e89f43923339c79013c38a2882983d2dace2e75c844d4f34ae09672f5a",
-            "offsetUnit": "utf8_byte"
-          },
-          {
-            "sourceRef": {
-              "id": "cq.industrial.source",
-              "version": "1.0.0",
-              "digest": "sha256:3f3eb751e3d27b03636bb2b7fd27c1736aa50605fafc6beec826b51a840a7ff2"
-            },
-            "startOffset": 90,
-            "endOffset": 101,
-            "quoteDigest": "sha256:0e4d482ec49b780667f354cf1f9593df44820d3b31e3e5751bb0cd53e22725d3",
+            "startOffset": 36,
+            "endOffset": 55,
+            "quoteDigest": "sha256:fb45f5b8577db4f4b77e2449bf746824c979153f97676cc6ded56a998ba194a5",
             "offsetUnit": "utf8_byte"
           }
         ],
@@ -205,13 +239,13 @@
               "status": "active",
               "source": {
                 "sourceRef": {
-                  "id": "cq.industrial.source",
+                  "id": "cq.industrial.rows.source",
                   "version": "1.0.0",
-                  "digest": "sha256:3f3eb751e3d27b03636bb2b7fd27c1736aa50605fafc6beec826b51a840a7ff2"
+                  "digest": "sha256:8f372538efcf5d876b52b9db549dea5d53e59a828e66be9b6feae4495ed07dd3"
                 },
-                "startOffset": 73,
-                "endOffset": 88,
-                "quoteDigest": "sha256:0a6a32e89f43923339c79013c38a2882983d2dace2e75c844d4f34ae09672f5a",
+                "startOffset": 36,
+                "endOffset": 55,
+                "quoteDigest": "sha256:fb45f5b8577db4f4b77e2449bf746824c979153f97676cc6ded56a998ba194a5",
                 "offsetUnit": "utf8_byte"
               }
             },
@@ -228,13 +262,13 @@
               "status": "active",
               "source": {
                 "sourceRef": {
-                  "id": "cq.industrial.source",
+                  "id": "cq.industrial.rows.source",
                   "version": "1.0.0",
-                  "digest": "sha256:3f3eb751e3d27b03636bb2b7fd27c1736aa50605fafc6beec826b51a840a7ff2"
+                  "digest": "sha256:8f372538efcf5d876b52b9db549dea5d53e59a828e66be9b6feae4495ed07dd3"
                 },
-                "startOffset": 90,
-                "endOffset": 101,
-                "quoteDigest": "sha256:0e4d482ec49b780667f354cf1f9593df44820d3b31e3e5751bb0cd53e22725d3",
+                "startOffset": 36,
+                "endOffset": 55,
+                "quoteDigest": "sha256:fb45f5b8577db4f4b77e2449bf746824c979153f97676cc6ded56a998ba194a5",
                 "offsetUnit": "utf8_byte"
               }
             },
@@ -248,13 +282,13 @@
               "status": "active",
               "source": {
                 "sourceRef": {
-                  "id": "cq.industrial.source",
+                  "id": "cq.industrial.rows.source",
                   "version": "1.0.0",
-                  "digest": "sha256:3f3eb751e3d27b03636bb2b7fd27c1736aa50605fafc6beec826b51a840a7ff2"
+                  "digest": "sha256:8f372538efcf5d876b52b9db549dea5d53e59a828e66be9b6feae4495ed07dd3"
                 },
-                "startOffset": 152,
-                "endOffset": 167,
-                "quoteDigest": "sha256:9a3dac9c3cd7b9a2272656f5dc086589e6d35469f9c2f295ff8fcde69e059528",
+                "startOffset": 56,
+                "endOffset": 70,
+                "quoteDigest": "sha256:27ad9f877be5bf581b04ae181d2c9a0693cc71d93d90bbf6a2d0d69a48ccac92",
                 "offsetUnit": "utf8_byte"
               }
             },
@@ -271,18 +305,32 @@
               "status": "active",
               "source": {
                 "sourceRef": {
-                  "id": "cq.industrial.source",
+                  "id": "cq.industrial.rows.source",
                   "version": "1.0.0",
-                  "digest": "sha256:3f3eb751e3d27b03636bb2b7fd27c1736aa50605fafc6beec826b51a840a7ff2"
+                  "digest": "sha256:8f372538efcf5d876b52b9db549dea5d53e59a828e66be9b6feae4495ed07dd3"
                 },
-                "startOffset": 169,
-                "endOffset": 179,
-                "quoteDigest": "sha256:2fed3913961d686cc08d731a1db6e07d30f7a9d1974ae3dc3afd336236948b12",
+                "startOffset": 56,
+                "endOffset": 70,
+                "quoteDigest": "sha256:27ad9f877be5bf581b04ae181d2c9a0693cc71d93d90bbf6a2d0d69a48ccac92",
                 "offsetUnit": "utf8_byte"
               }
             }
           ],
-          "relations": []
+          "relations": [],
+          "structuredSources": [
+            {
+              "sourceRef": {
+                "id": "cq.industrial.rows.source",
+                "version": "1.0.0",
+                "digest": "sha256:8f372538efcf5d876b52b9db549dea5d53e59a828e66be9b6feae4495ed07dd3"
+              },
+              "objectId": "asset",
+              "attributeIds": [
+                "asset_code",
+                "hours"
+              ]
+            }
+          ]
         },
         "intent": {
           "projectId": "44444444-4444-4444-8444-444444444444",
@@ -291,51 +339,30 @@
           "attributeId": "hours"
         },
         "requiredCapabilities": [
-          "semantic_read"
+          "semantic_read",
+          "structured_query"
         ],
         "requiredSources": [
           {
             "sourceRef": {
-              "id": "cq.industrial.source",
+              "id": "cq.industrial.rows.source",
               "version": "1.0.0",
-              "digest": "sha256:3f3eb751e3d27b03636bb2b7fd27c1736aa50605fafc6beec826b51a840a7ff2"
+              "digest": "sha256:8f372538efcf5d876b52b9db549dea5d53e59a828e66be9b6feae4495ed07dd3"
             },
-            "startOffset": 73,
-            "endOffset": 88,
-            "quoteDigest": "sha256:0a6a32e89f43923339c79013c38a2882983d2dace2e75c844d4f34ae09672f5a",
+            "startOffset": 36,
+            "endOffset": 55,
+            "quoteDigest": "sha256:fb45f5b8577db4f4b77e2449bf746824c979153f97676cc6ded56a998ba194a5",
             "offsetUnit": "utf8_byte"
           },
           {
             "sourceRef": {
-              "id": "cq.industrial.source",
+              "id": "cq.industrial.rows.source",
               "version": "1.0.0",
-              "digest": "sha256:3f3eb751e3d27b03636bb2b7fd27c1736aa50605fafc6beec826b51a840a7ff2"
+              "digest": "sha256:8f372538efcf5d876b52b9db549dea5d53e59a828e66be9b6feae4495ed07dd3"
             },
-            "startOffset": 90,
-            "endOffset": 101,
-            "quoteDigest": "sha256:0e4d482ec49b780667f354cf1f9593df44820d3b31e3e5751bb0cd53e22725d3",
-            "offsetUnit": "utf8_byte"
-          },
-          {
-            "sourceRef": {
-              "id": "cq.industrial.source",
-              "version": "1.0.0",
-              "digest": "sha256:3f3eb751e3d27b03636bb2b7fd27c1736aa50605fafc6beec826b51a840a7ff2"
-            },
-            "startOffset": 152,
-            "endOffset": 167,
-            "quoteDigest": "sha256:9a3dac9c3cd7b9a2272656f5dc086589e6d35469f9c2f295ff8fcde69e059528",
-            "offsetUnit": "utf8_byte"
-          },
-          {
-            "sourceRef": {
-              "id": "cq.industrial.source",
-              "version": "1.0.0",
-              "digest": "sha256:3f3eb751e3d27b03636bb2b7fd27c1736aa50605fafc6beec826b51a840a7ff2"
-            },
-            "startOffset": 169,
-            "endOffset": 179,
-            "quoteDigest": "sha256:2fed3913961d686cc08d731a1db6e07d30f7a9d1974ae3dc3afd336236948b12",
+            "startOffset": 56,
+            "endOffset": 70,
+            "quoteDigest": "sha256:27ad9f877be5bf581b04ae181d2c9a0693cc71d93d90bbf6a2d0d69a48ccac92",
             "offsetUnit": "utf8_byte"
           }
         ],
@@ -398,13 +425,13 @@
               "status": "active",
               "source": {
                 "sourceRef": {
-                  "id": "cq.industrial.source",
+                  "id": "cq.industrial.rows.source",
                   "version": "1.0.0",
-                  "digest": "sha256:3f3eb751e3d27b03636bb2b7fd27c1736aa50605fafc6beec826b51a840a7ff2"
+                  "digest": "sha256:8f372538efcf5d876b52b9db549dea5d53e59a828e66be9b6feae4495ed07dd3"
                 },
-                "startOffset": 73,
-                "endOffset": 88,
-                "quoteDigest": "sha256:0a6a32e89f43923339c79013c38a2882983d2dace2e75c844d4f34ae09672f5a",
+                "startOffset": 36,
+                "endOffset": 55,
+                "quoteDigest": "sha256:fb45f5b8577db4f4b77e2449bf746824c979153f97676cc6ded56a998ba194a5",
                 "offsetUnit": "utf8_byte"
               }
             },
@@ -421,13 +448,13 @@
               "status": "active",
               "source": {
                 "sourceRef": {
-                  "id": "cq.industrial.source",
+                  "id": "cq.industrial.rows.source",
                   "version": "1.0.0",
-                  "digest": "sha256:3f3eb751e3d27b03636bb2b7fd27c1736aa50605fafc6beec826b51a840a7ff2"
+                  "digest": "sha256:8f372538efcf5d876b52b9db549dea5d53e59a828e66be9b6feae4495ed07dd3"
                 },
-                "startOffset": 90,
-                "endOffset": 101,
-                "quoteDigest": "sha256:0e4d482ec49b780667f354cf1f9593df44820d3b31e3e5751bb0cd53e22725d3",
+                "startOffset": 36,
+                "endOffset": 55,
+                "quoteDigest": "sha256:fb45f5b8577db4f4b77e2449bf746824c979153f97676cc6ded56a998ba194a5",
                 "offsetUnit": "utf8_byte"
               }
             },
@@ -441,18 +468,33 @@
               "status": "active",
               "source": {
                 "sourceRef": {
-                  "id": "cq.industrial.source",
+                  "id": "cq.industrial.rows.source",
                   "version": "1.0.0",
-                  "digest": "sha256:3f3eb751e3d27b03636bb2b7fd27c1736aa50605fafc6beec826b51a840a7ff2"
+                  "digest": "sha256:8f372538efcf5d876b52b9db549dea5d53e59a828e66be9b6feae4495ed07dd3"
                 },
-                "startOffset": 103,
-                "endOffset": 115,
-                "quoteDigest": "sha256:79926748f08a9b537c348ec5fd2bc8a512a87fd757c91984374f56700e5f9d74",
+                "startOffset": 36,
+                "endOffset": 55,
+                "quoteDigest": "sha256:fb45f5b8577db4f4b77e2449bf746824c979153f97676cc6ded56a998ba194a5",
                 "offsetUnit": "utf8_byte"
               }
             }
           ],
-          "relations": []
+          "relations": [],
+          "structuredSources": [
+            {
+              "sourceRef": {
+                "id": "cq.industrial.rows.source",
+                "version": "1.0.0",
+                "digest": "sha256:8f372538efcf5d876b52b9db549dea5d53e59a828e66be9b6feae4495ed07dd3"
+              },
+              "objectId": "asset",
+              "attributeIds": [
+                "asset_code",
+                "hours",
+                "exempt"
+              ]
+            }
+          ]
         },
         "intent": {
           "projectId": "44444444-4444-4444-8444-444444444444",
@@ -466,39 +508,6 @@
           "rule_evaluation"
         ],
         "requiredSources": [
-          {
-            "sourceRef": {
-              "id": "cq.industrial.source",
-              "version": "1.0.0",
-              "digest": "sha256:3f3eb751e3d27b03636bb2b7fd27c1736aa50605fafc6beec826b51a840a7ff2"
-            },
-            "startOffset": 73,
-            "endOffset": 88,
-            "quoteDigest": "sha256:0a6a32e89f43923339c79013c38a2882983d2dace2e75c844d4f34ae09672f5a",
-            "offsetUnit": "utf8_byte"
-          },
-          {
-            "sourceRef": {
-              "id": "cq.industrial.source",
-              "version": "1.0.0",
-              "digest": "sha256:3f3eb751e3d27b03636bb2b7fd27c1736aa50605fafc6beec826b51a840a7ff2"
-            },
-            "startOffset": 90,
-            "endOffset": 101,
-            "quoteDigest": "sha256:0e4d482ec49b780667f354cf1f9593df44820d3b31e3e5751bb0cd53e22725d3",
-            "offsetUnit": "utf8_byte"
-          },
-          {
-            "sourceRef": {
-              "id": "cq.industrial.source",
-              "version": "1.0.0",
-              "digest": "sha256:3f3eb751e3d27b03636bb2b7fd27c1736aa50605fafc6beec826b51a840a7ff2"
-            },
-            "startOffset": 103,
-            "endOffset": 115,
-            "quoteDigest": "sha256:79926748f08a9b537c348ec5fd2bc8a512a87fd757c91984374f56700e5f9d74",
-            "offsetUnit": "utf8_byte"
-          },
           {
             "sourceRef": {
               "id": "cq.industrial.source",
@@ -530,6 +539,17 @@
             "startOffset": 392,
             "endOffset": 462,
             "quoteDigest": "sha256:e5e6300fc7ac76c34d53251355fe05237f01e0572bf6ec10f734cb51b057bed7",
+            "offsetUnit": "utf8_byte"
+          },
+          {
+            "sourceRef": {
+              "id": "cq.industrial.rows.source",
+              "version": "1.0.0",
+              "digest": "sha256:8f372538efcf5d876b52b9db549dea5d53e59a828e66be9b6feae4495ed07dd3"
+            },
+            "startOffset": 36,
+            "endOffset": 55,
+            "quoteDigest": "sha256:fb45f5b8577db4f4b77e2449bf746824c979153f97676cc6ded56a998ba194a5",
             "offsetUnit": "utf8_byte"
           }
         ],
@@ -581,13 +601,13 @@
               "status": "active",
               "source": {
                 "sourceRef": {
-                  "id": "cq.industrial.source",
+                  "id": "cq.industrial.rows.source",
                   "version": "1.0.0",
-                  "digest": "sha256:3f3eb751e3d27b03636bb2b7fd27c1736aa50605fafc6beec826b51a840a7ff2"
+                  "digest": "sha256:8f372538efcf5d876b52b9db549dea5d53e59a828e66be9b6feae4495ed07dd3"
                 },
-                "startOffset": 73,
-                "endOffset": 88,
-                "quoteDigest": "sha256:0a6a32e89f43923339c79013c38a2882983d2dace2e75c844d4f34ae09672f5a",
+                "startOffset": 36,
+                "endOffset": 55,
+                "quoteDigest": "sha256:fb45f5b8577db4f4b77e2449bf746824c979153f97676cc6ded56a998ba194a5",
                 "offsetUnit": "utf8_byte"
               }
             },
@@ -601,18 +621,32 @@
               "status": "active",
               "source": {
                 "sourceRef": {
-                  "id": "cq.industrial.source",
+                  "id": "cq.industrial.rows.source",
                   "version": "1.0.0",
-                  "digest": "sha256:3f3eb751e3d27b03636bb2b7fd27c1736aa50605fafc6beec826b51a840a7ff2"
+                  "digest": "sha256:8f372538efcf5d876b52b9db549dea5d53e59a828e66be9b6feae4495ed07dd3"
                 },
-                "startOffset": 103,
-                "endOffset": 115,
-                "quoteDigest": "sha256:79926748f08a9b537c348ec5fd2bc8a512a87fd757c91984374f56700e5f9d74",
+                "startOffset": 36,
+                "endOffset": 55,
+                "quoteDigest": "sha256:fb45f5b8577db4f4b77e2449bf746824c979153f97676cc6ded56a998ba194a5",
                 "offsetUnit": "utf8_byte"
               }
             }
           ],
-          "relations": []
+          "relations": [],
+          "structuredSources": [
+            {
+              "sourceRef": {
+                "id": "cq.industrial.rows.source",
+                "version": "1.0.0",
+                "digest": "sha256:8f372538efcf5d876b52b9db549dea5d53e59a828e66be9b6feae4495ed07dd3"
+              },
+              "objectId": "asset",
+              "attributeIds": [
+                "asset_code",
+                "exempt"
+              ]
+            }
+          ]
         },
         "intent": {
           "projectId": "44444444-4444-4444-8444-444444444444",
@@ -632,31 +666,20 @@
               "version": "1.0.0",
               "digest": "sha256:3f3eb751e3d27b03636bb2b7fd27c1736aa50605fafc6beec826b51a840a7ff2"
             },
-            "startOffset": 73,
-            "endOffset": 88,
-            "quoteDigest": "sha256:0a6a32e89f43923339c79013c38a2882983d2dace2e75c844d4f34ae09672f5a",
-            "offsetUnit": "utf8_byte"
-          },
-          {
-            "sourceRef": {
-              "id": "cq.industrial.source",
-              "version": "1.0.0",
-              "digest": "sha256:3f3eb751e3d27b03636bb2b7fd27c1736aa50605fafc6beec826b51a840a7ff2"
-            },
-            "startOffset": 103,
-            "endOffset": 115,
-            "quoteDigest": "sha256:79926748f08a9b537c348ec5fd2bc8a512a87fd757c91984374f56700e5f9d74",
-            "offsetUnit": "utf8_byte"
-          },
-          {
-            "sourceRef": {
-              "id": "cq.industrial.source",
-              "version": "1.0.0",
-              "digest": "sha256:3f3eb751e3d27b03636bb2b7fd27c1736aa50605fafc6beec826b51a840a7ff2"
-            },
             "startOffset": 244,
             "endOffset": 315,
             "quoteDigest": "sha256:b469c19c6c0b09016225d42faa78d82a6295c5f6e08ad329549f776ac128ee3e",
+            "offsetUnit": "utf8_byte"
+          },
+          {
+            "sourceRef": {
+              "id": "cq.industrial.rows.source",
+              "version": "1.0.0",
+              "digest": "sha256:8f372538efcf5d876b52b9db549dea5d53e59a828e66be9b6feae4495ed07dd3"
+            },
+            "startOffset": 36,
+            "endOffset": 55,
+            "quoteDigest": "sha256:fb45f5b8577db4f4b77e2449bf746824c979153f97676cc6ded56a998ba194a5",
             "offsetUnit": "utf8_byte"
           }
         ],
@@ -708,13 +731,13 @@
               "status": "active",
               "source": {
                 "sourceRef": {
-                  "id": "cq.industrial.source",
+                  "id": "cq.industrial.rows.source",
                   "version": "1.0.0",
-                  "digest": "sha256:3f3eb751e3d27b03636bb2b7fd27c1736aa50605fafc6beec826b51a840a7ff2"
+                  "digest": "sha256:8f372538efcf5d876b52b9db549dea5d53e59a828e66be9b6feae4495ed07dd3"
                 },
-                "startOffset": 73,
-                "endOffset": 88,
-                "quoteDigest": "sha256:0a6a32e89f43923339c79013c38a2882983d2dace2e75c844d4f34ae09672f5a",
+                "startOffset": 36,
+                "endOffset": 55,
+                "quoteDigest": "sha256:fb45f5b8577db4f4b77e2449bf746824c979153f97676cc6ded56a998ba194a5",
                 "offsetUnit": "utf8_byte"
               }
             },
@@ -731,13 +754,13 @@
               "status": "active",
               "source": {
                 "sourceRef": {
-                  "id": "cq.industrial.source",
+                  "id": "cq.industrial.rows.source",
                   "version": "1.0.0",
-                  "digest": "sha256:3f3eb751e3d27b03636bb2b7fd27c1736aa50605fafc6beec826b51a840a7ff2"
+                  "digest": "sha256:8f372538efcf5d876b52b9db549dea5d53e59a828e66be9b6feae4495ed07dd3"
                 },
-                "startOffset": 90,
-                "endOffset": 101,
-                "quoteDigest": "sha256:0e4d482ec49b780667f354cf1f9593df44820d3b31e3e5751bb0cd53e22725d3",
+                "startOffset": 36,
+                "endOffset": 55,
+                "quoteDigest": "sha256:fb45f5b8577db4f4b77e2449bf746824c979153f97676cc6ded56a998ba194a5",
                 "offsetUnit": "utf8_byte"
               }
             },
@@ -754,13 +777,13 @@
               "status": "retracted",
               "source": {
                 "sourceRef": {
-                  "id": "cq.industrial.source",
+                  "id": "cq.industrial.rows.source",
                   "version": "1.0.0",
-                  "digest": "sha256:3f3eb751e3d27b03636bb2b7fd27c1736aa50605fafc6beec826b51a840a7ff2"
+                  "digest": "sha256:8f372538efcf5d876b52b9db549dea5d53e59a828e66be9b6feae4495ed07dd3"
                 },
-                "startOffset": 90,
-                "endOffset": 101,
-                "quoteDigest": "sha256:0e4d482ec49b780667f354cf1f9593df44820d3b31e3e5751bb0cd53e22725d3",
+                "startOffset": 36,
+                "endOffset": 55,
+                "quoteDigest": "sha256:fb45f5b8577db4f4b77e2449bf746824c979153f97676cc6ded56a998ba194a5",
                 "offsetUnit": "utf8_byte"
               }
             },
@@ -774,18 +797,43 @@
               "status": "active",
               "source": {
                 "sourceRef": {
-                  "id": "cq.industrial.source",
+                  "id": "cq.industrial.alarm.source",
                   "version": "1.0.0",
-                  "digest": "sha256:3f3eb751e3d27b03636bb2b7fd27c1736aa50605fafc6beec826b51a840a7ff2"
+                  "digest": "sha256:c0a0e82478a994e49f452b65c8195bf1e94741fb74a38a387a95ca95c2b11b00"
                 },
-                "startOffset": 117,
-                "endOffset": 127,
-                "quoteDigest": "sha256:2e6c666fd134ca1144b10899d9136f868219348495be1eb005b065f14418be3c",
+                "startOffset": 17,
+                "endOffset": 26,
+                "quoteDigest": "sha256:8e0aebfebdefbc5824c9bebbb2ddb83cf80734a0329e32f51d270dbff73f8c99",
                 "offsetUnit": "utf8_byte"
               }
             }
           ],
-          "relations": []
+          "relations": [],
+          "structuredSources": [
+            {
+              "sourceRef": {
+                "id": "cq.industrial.rows.source",
+                "version": "1.0.0",
+                "digest": "sha256:8f372538efcf5d876b52b9db549dea5d53e59a828e66be9b6feae4495ed07dd3"
+              },
+              "objectId": "asset",
+              "attributeIds": [
+                "asset_code",
+                "hours"
+              ]
+            },
+            {
+              "sourceRef": {
+                "id": "cq.industrial.alarm.source",
+                "version": "1.0.0",
+                "digest": "sha256:c0a0e82478a994e49f452b65c8195bf1e94741fb74a38a387a95ca95c2b11b00"
+              },
+              "objectId": "asset",
+              "attributeIds": [
+                "alarm"
+              ]
+            }
+          ]
         },
         "intent": {
           "projectId": "44444444-4444-4444-8444-444444444444",
@@ -805,42 +853,31 @@
               "version": "1.0.0",
               "digest": "sha256:3f3eb751e3d27b03636bb2b7fd27c1736aa50605fafc6beec826b51a840a7ff2"
             },
-            "startOffset": 73,
-            "endOffset": 88,
-            "quoteDigest": "sha256:0a6a32e89f43923339c79013c38a2882983d2dace2e75c844d4f34ae09672f5a",
-            "offsetUnit": "utf8_byte"
-          },
-          {
-            "sourceRef": {
-              "id": "cq.industrial.source",
-              "version": "1.0.0",
-              "digest": "sha256:3f3eb751e3d27b03636bb2b7fd27c1736aa50605fafc6beec826b51a840a7ff2"
-            },
-            "startOffset": 90,
-            "endOffset": 101,
-            "quoteDigest": "sha256:0e4d482ec49b780667f354cf1f9593df44820d3b31e3e5751bb0cd53e22725d3",
-            "offsetUnit": "utf8_byte"
-          },
-          {
-            "sourceRef": {
-              "id": "cq.industrial.source",
-              "version": "1.0.0",
-              "digest": "sha256:3f3eb751e3d27b03636bb2b7fd27c1736aa50605fafc6beec826b51a840a7ff2"
-            },
-            "startOffset": 117,
-            "endOffset": 127,
-            "quoteDigest": "sha256:2e6c666fd134ca1144b10899d9136f868219348495be1eb005b065f14418be3c",
-            "offsetUnit": "utf8_byte"
-          },
-          {
-            "sourceRef": {
-              "id": "cq.industrial.source",
-              "version": "1.0.0",
-              "digest": "sha256:3f3eb751e3d27b03636bb2b7fd27c1736aa50605fafc6beec826b51a840a7ff2"
-            },
             "startOffset": 532,
             "endOffset": 590,
             "quoteDigest": "sha256:04818f47e23e2060bc802183553b5a9636053fe976898a8b24e3d31125f1d2bc",
+            "offsetUnit": "utf8_byte"
+          },
+          {
+            "sourceRef": {
+              "id": "cq.industrial.rows.source",
+              "version": "1.0.0",
+              "digest": "sha256:8f372538efcf5d876b52b9db549dea5d53e59a828e66be9b6feae4495ed07dd3"
+            },
+            "startOffset": 36,
+            "endOffset": 55,
+            "quoteDigest": "sha256:fb45f5b8577db4f4b77e2449bf746824c979153f97676cc6ded56a998ba194a5",
+            "offsetUnit": "utf8_byte"
+          },
+          {
+            "sourceRef": {
+              "id": "cq.industrial.alarm.source",
+              "version": "1.0.0",
+              "digest": "sha256:c0a0e82478a994e49f452b65c8195bf1e94741fb74a38a387a95ca95c2b11b00"
+            },
+            "startOffset": 17,
+            "endOffset": 26,
+            "quoteDigest": "sha256:8e0aebfebdefbc5824c9bebbb2ddb83cf80734a0329e32f51d270dbff73f8c99",
             "offsetUnit": "utf8_byte"
           }
         ],
@@ -892,13 +929,13 @@
               "status": "active",
               "source": {
                 "sourceRef": {
-                  "id": "cq.industrial.source",
+                  "id": "cq.industrial.rows.source",
                   "version": "1.0.0",
-                  "digest": "sha256:3f3eb751e3d27b03636bb2b7fd27c1736aa50605fafc6beec826b51a840a7ff2"
+                  "digest": "sha256:8f372538efcf5d876b52b9db549dea5d53e59a828e66be9b6feae4495ed07dd3"
                 },
-                "startOffset": 73,
-                "endOffset": 88,
-                "quoteDigest": "sha256:0a6a32e89f43923339c79013c38a2882983d2dace2e75c844d4f34ae09672f5a",
+                "startOffset": 36,
+                "endOffset": 55,
+                "quoteDigest": "sha256:fb45f5b8577db4f4b77e2449bf746824c979153f97676cc6ded56a998ba194a5",
                 "offsetUnit": "utf8_byte"
               }
             },
@@ -915,13 +952,13 @@
               "status": "active",
               "source": {
                 "sourceRef": {
-                  "id": "cq.industrial.source",
+                  "id": "cq.industrial.rows.source",
                   "version": "1.0.0",
-                  "digest": "sha256:3f3eb751e3d27b03636bb2b7fd27c1736aa50605fafc6beec826b51a840a7ff2"
+                  "digest": "sha256:8f372538efcf5d876b52b9db549dea5d53e59a828e66be9b6feae4495ed07dd3"
                 },
-                "startOffset": 90,
-                "endOffset": 101,
-                "quoteDigest": "sha256:0e4d482ec49b780667f354cf1f9593df44820d3b31e3e5751bb0cd53e22725d3",
+                "startOffset": 36,
+                "endOffset": 55,
+                "quoteDigest": "sha256:fb45f5b8577db4f4b77e2449bf746824c979153f97676cc6ded56a998ba194a5",
                 "offsetUnit": "utf8_byte"
               }
             },
@@ -938,13 +975,13 @@
               "status": "retracted",
               "source": {
                 "sourceRef": {
-                  "id": "cq.industrial.source",
+                  "id": "cq.industrial.rows.source",
                   "version": "1.0.0",
-                  "digest": "sha256:3f3eb751e3d27b03636bb2b7fd27c1736aa50605fafc6beec826b51a840a7ff2"
+                  "digest": "sha256:8f372538efcf5d876b52b9db549dea5d53e59a828e66be9b6feae4495ed07dd3"
                 },
-                "startOffset": 90,
-                "endOffset": 101,
-                "quoteDigest": "sha256:0e4d482ec49b780667f354cf1f9593df44820d3b31e3e5751bb0cd53e22725d3",
+                "startOffset": 36,
+                "endOffset": 55,
+                "quoteDigest": "sha256:fb45f5b8577db4f4b77e2449bf746824c979153f97676cc6ded56a998ba194a5",
                 "offsetUnit": "utf8_byte"
               }
             },
@@ -958,13 +995,13 @@
               "status": "active",
               "source": {
                 "sourceRef": {
-                  "id": "cq.industrial.source",
+                  "id": "cq.industrial.alarm.source",
                   "version": "1.0.0",
-                  "digest": "sha256:3f3eb751e3d27b03636bb2b7fd27c1736aa50605fafc6beec826b51a840a7ff2"
+                  "digest": "sha256:c0a0e82478a994e49f452b65c8195bf1e94741fb74a38a387a95ca95c2b11b00"
                 },
-                "startOffset": 117,
-                "endOffset": 127,
-                "quoteDigest": "sha256:2e6c666fd134ca1144b10899d9136f868219348495be1eb005b065f14418be3c",
+                "startOffset": 17,
+                "endOffset": 26,
+                "quoteDigest": "sha256:8e0aebfebdefbc5824c9bebbb2ddb83cf80734a0329e32f51d270dbff73f8c99",
                 "offsetUnit": "utf8_byte"
               }
             },
@@ -978,18 +1015,43 @@
               "status": "retracted",
               "source": {
                 "sourceRef": {
-                  "id": "cq.industrial.source",
+                  "id": "cq.industrial.alarm.source",
                   "version": "1.0.0",
-                  "digest": "sha256:3f3eb751e3d27b03636bb2b7fd27c1736aa50605fafc6beec826b51a840a7ff2"
+                  "digest": "sha256:c0a0e82478a994e49f452b65c8195bf1e94741fb74a38a387a95ca95c2b11b00"
                 },
-                "startOffset": 117,
-                "endOffset": 127,
-                "quoteDigest": "sha256:2e6c666fd134ca1144b10899d9136f868219348495be1eb005b065f14418be3c",
+                "startOffset": 17,
+                "endOffset": 26,
+                "quoteDigest": "sha256:8e0aebfebdefbc5824c9bebbb2ddb83cf80734a0329e32f51d270dbff73f8c99",
                 "offsetUnit": "utf8_byte"
               }
             }
           ],
-          "relations": []
+          "relations": [],
+          "structuredSources": [
+            {
+              "sourceRef": {
+                "id": "cq.industrial.rows.source",
+                "version": "1.0.0",
+                "digest": "sha256:8f372538efcf5d876b52b9db549dea5d53e59a828e66be9b6feae4495ed07dd3"
+              },
+              "objectId": "asset",
+              "attributeIds": [
+                "asset_code",
+                "hours"
+              ]
+            },
+            {
+              "sourceRef": {
+                "id": "cq.industrial.alarm.source",
+                "version": "1.0.0",
+                "digest": "sha256:c0a0e82478a994e49f452b65c8195bf1e94741fb74a38a387a95ca95c2b11b00"
+              },
+              "objectId": "asset",
+              "attributeIds": [
+                "alarm"
+              ]
+            }
+          ]
         },
         "intent": {
           "projectId": "44444444-4444-4444-8444-444444444444",
@@ -1009,42 +1071,31 @@
               "version": "1.0.0",
               "digest": "sha256:3f3eb751e3d27b03636bb2b7fd27c1736aa50605fafc6beec826b51a840a7ff2"
             },
-            "startOffset": 73,
-            "endOffset": 88,
-            "quoteDigest": "sha256:0a6a32e89f43923339c79013c38a2882983d2dace2e75c844d4f34ae09672f5a",
-            "offsetUnit": "utf8_byte"
-          },
-          {
-            "sourceRef": {
-              "id": "cq.industrial.source",
-              "version": "1.0.0",
-              "digest": "sha256:3f3eb751e3d27b03636bb2b7fd27c1736aa50605fafc6beec826b51a840a7ff2"
-            },
-            "startOffset": 90,
-            "endOffset": 101,
-            "quoteDigest": "sha256:0e4d482ec49b780667f354cf1f9593df44820d3b31e3e5751bb0cd53e22725d3",
-            "offsetUnit": "utf8_byte"
-          },
-          {
-            "sourceRef": {
-              "id": "cq.industrial.source",
-              "version": "1.0.0",
-              "digest": "sha256:3f3eb751e3d27b03636bb2b7fd27c1736aa50605fafc6beec826b51a840a7ff2"
-            },
-            "startOffset": 117,
-            "endOffset": 127,
-            "quoteDigest": "sha256:2e6c666fd134ca1144b10899d9136f868219348495be1eb005b065f14418be3c",
-            "offsetUnit": "utf8_byte"
-          },
-          {
-            "sourceRef": {
-              "id": "cq.industrial.source",
-              "version": "1.0.0",
-              "digest": "sha256:3f3eb751e3d27b03636bb2b7fd27c1736aa50605fafc6beec826b51a840a7ff2"
-            },
             "startOffset": 532,
             "endOffset": 590,
             "quoteDigest": "sha256:04818f47e23e2060bc802183553b5a9636053fe976898a8b24e3d31125f1d2bc",
+            "offsetUnit": "utf8_byte"
+          },
+          {
+            "sourceRef": {
+              "id": "cq.industrial.rows.source",
+              "version": "1.0.0",
+              "digest": "sha256:8f372538efcf5d876b52b9db549dea5d53e59a828e66be9b6feae4495ed07dd3"
+            },
+            "startOffset": 36,
+            "endOffset": 55,
+            "quoteDigest": "sha256:fb45f5b8577db4f4b77e2449bf746824c979153f97676cc6ded56a998ba194a5",
+            "offsetUnit": "utf8_byte"
+          },
+          {
+            "sourceRef": {
+              "id": "cq.industrial.alarm.source",
+              "version": "1.0.0",
+              "digest": "sha256:c0a0e82478a994e49f452b65c8195bf1e94741fb74a38a387a95ca95c2b11b00"
+            },
+            "startOffset": 17,
+            "endOffset": 26,
+            "quoteDigest": "sha256:8e0aebfebdefbc5824c9bebbb2ddb83cf80734a0329e32f51d270dbff73f8c99",
             "offsetUnit": "utf8_byte"
           }
         ],
@@ -1096,13 +1147,13 @@
               "status": "active",
               "source": {
                 "sourceRef": {
-                  "id": "cq.industrial.source",
+                  "id": "cq.industrial.rows.source",
                   "version": "1.0.0",
-                  "digest": "sha256:3f3eb751e3d27b03636bb2b7fd27c1736aa50605fafc6beec826b51a840a7ff2"
+                  "digest": "sha256:8f372538efcf5d876b52b9db549dea5d53e59a828e66be9b6feae4495ed07dd3"
                 },
-                "startOffset": 73,
-                "endOffset": 88,
-                "quoteDigest": "sha256:0a6a32e89f43923339c79013c38a2882983d2dace2e75c844d4f34ae09672f5a",
+                "startOffset": 36,
+                "endOffset": 55,
+                "quoteDigest": "sha256:fb45f5b8577db4f4b77e2449bf746824c979153f97676cc6ded56a998ba194a5",
                 "offsetUnit": "utf8_byte"
               }
             },
@@ -1119,13 +1170,13 @@
               "status": "active",
               "source": {
                 "sourceRef": {
-                  "id": "cq.industrial.source",
+                  "id": "cq.industrial.rows.source",
                   "version": "1.0.0",
-                  "digest": "sha256:3f3eb751e3d27b03636bb2b7fd27c1736aa50605fafc6beec826b51a840a7ff2"
+                  "digest": "sha256:8f372538efcf5d876b52b9db549dea5d53e59a828e66be9b6feae4495ed07dd3"
                 },
-                "startOffset": 90,
-                "endOffset": 101,
-                "quoteDigest": "sha256:0e4d482ec49b780667f354cf1f9593df44820d3b31e3e5751bb0cd53e22725d3",
+                "startOffset": 36,
+                "endOffset": 55,
+                "quoteDigest": "sha256:fb45f5b8577db4f4b77e2449bf746824c979153f97676cc6ded56a998ba194a5",
                 "offsetUnit": "utf8_byte"
               }
             },
@@ -1142,13 +1193,13 @@
               "status": "retracted",
               "source": {
                 "sourceRef": {
-                  "id": "cq.industrial.source",
+                  "id": "cq.industrial.rows.source",
                   "version": "1.0.0",
-                  "digest": "sha256:3f3eb751e3d27b03636bb2b7fd27c1736aa50605fafc6beec826b51a840a7ff2"
+                  "digest": "sha256:8f372538efcf5d876b52b9db549dea5d53e59a828e66be9b6feae4495ed07dd3"
                 },
-                "startOffset": 90,
-                "endOffset": 101,
-                "quoteDigest": "sha256:0e4d482ec49b780667f354cf1f9593df44820d3b31e3e5751bb0cd53e22725d3",
+                "startOffset": 36,
+                "endOffset": 55,
+                "quoteDigest": "sha256:fb45f5b8577db4f4b77e2449bf746824c979153f97676cc6ded56a998ba194a5",
                 "offsetUnit": "utf8_byte"
               }
             },
@@ -1162,13 +1213,13 @@
               "status": "active",
               "source": {
                 "sourceRef": {
-                  "id": "cq.industrial.source",
+                  "id": "cq.industrial.alarm.source",
                   "version": "1.0.0",
-                  "digest": "sha256:3f3eb751e3d27b03636bb2b7fd27c1736aa50605fafc6beec826b51a840a7ff2"
+                  "digest": "sha256:c0a0e82478a994e49f452b65c8195bf1e94741fb74a38a387a95ca95c2b11b00"
                 },
-                "startOffset": 117,
-                "endOffset": 127,
-                "quoteDigest": "sha256:2e6c666fd134ca1144b10899d9136f868219348495be1eb005b065f14418be3c",
+                "startOffset": 17,
+                "endOffset": 26,
+                "quoteDigest": "sha256:8e0aebfebdefbc5824c9bebbb2ddb83cf80734a0329e32f51d270dbff73f8c99",
                 "offsetUnit": "utf8_byte"
               }
             },
@@ -1182,18 +1233,43 @@
               "status": "retracted",
               "source": {
                 "sourceRef": {
-                  "id": "cq.industrial.source",
+                  "id": "cq.industrial.alarm.source",
                   "version": "1.0.0",
-                  "digest": "sha256:3f3eb751e3d27b03636bb2b7fd27c1736aa50605fafc6beec826b51a840a7ff2"
+                  "digest": "sha256:c0a0e82478a994e49f452b65c8195bf1e94741fb74a38a387a95ca95c2b11b00"
                 },
-                "startOffset": 117,
-                "endOffset": 127,
-                "quoteDigest": "sha256:2e6c666fd134ca1144b10899d9136f868219348495be1eb005b065f14418be3c",
+                "startOffset": 17,
+                "endOffset": 26,
+                "quoteDigest": "sha256:8e0aebfebdefbc5824c9bebbb2ddb83cf80734a0329e32f51d270dbff73f8c99",
                 "offsetUnit": "utf8_byte"
               }
             }
           ],
-          "relations": []
+          "relations": [],
+          "structuredSources": [
+            {
+              "sourceRef": {
+                "id": "cq.industrial.rows.source",
+                "version": "1.0.0",
+                "digest": "sha256:8f372538efcf5d876b52b9db549dea5d53e59a828e66be9b6feae4495ed07dd3"
+              },
+              "objectId": "asset",
+              "attributeIds": [
+                "asset_code",
+                "hours"
+              ]
+            },
+            {
+              "sourceRef": {
+                "id": "cq.industrial.alarm.source",
+                "version": "1.0.0",
+                "digest": "sha256:c0a0e82478a994e49f452b65c8195bf1e94741fb74a38a387a95ca95c2b11b00"
+              },
+              "objectId": "asset",
+              "attributeIds": [
+                "alarm"
+              ]
+            }
+          ]
         },
         "intent": {
           "projectId": "44444444-4444-4444-8444-444444444444",
@@ -1213,42 +1289,31 @@
               "version": "1.0.0",
               "digest": "sha256:3f3eb751e3d27b03636bb2b7fd27c1736aa50605fafc6beec826b51a840a7ff2"
             },
-            "startOffset": 73,
-            "endOffset": 88,
-            "quoteDigest": "sha256:0a6a32e89f43923339c79013c38a2882983d2dace2e75c844d4f34ae09672f5a",
-            "offsetUnit": "utf8_byte"
-          },
-          {
-            "sourceRef": {
-              "id": "cq.industrial.source",
-              "version": "1.0.0",
-              "digest": "sha256:3f3eb751e3d27b03636bb2b7fd27c1736aa50605fafc6beec826b51a840a7ff2"
-            },
-            "startOffset": 90,
-            "endOffset": 101,
-            "quoteDigest": "sha256:0e4d482ec49b780667f354cf1f9593df44820d3b31e3e5751bb0cd53e22725d3",
-            "offsetUnit": "utf8_byte"
-          },
-          {
-            "sourceRef": {
-              "id": "cq.industrial.source",
-              "version": "1.0.0",
-              "digest": "sha256:3f3eb751e3d27b03636bb2b7fd27c1736aa50605fafc6beec826b51a840a7ff2"
-            },
-            "startOffset": 117,
-            "endOffset": 127,
-            "quoteDigest": "sha256:2e6c666fd134ca1144b10899d9136f868219348495be1eb005b065f14418be3c",
-            "offsetUnit": "utf8_byte"
-          },
-          {
-            "sourceRef": {
-              "id": "cq.industrial.source",
-              "version": "1.0.0",
-              "digest": "sha256:3f3eb751e3d27b03636bb2b7fd27c1736aa50605fafc6beec826b51a840a7ff2"
-            },
             "startOffset": 532,
             "endOffset": 590,
             "quoteDigest": "sha256:04818f47e23e2060bc802183553b5a9636053fe976898a8b24e3d31125f1d2bc",
+            "offsetUnit": "utf8_byte"
+          },
+          {
+            "sourceRef": {
+              "id": "cq.industrial.rows.source",
+              "version": "1.0.0",
+              "digest": "sha256:8f372538efcf5d876b52b9db549dea5d53e59a828e66be9b6feae4495ed07dd3"
+            },
+            "startOffset": 36,
+            "endOffset": 55,
+            "quoteDigest": "sha256:fb45f5b8577db4f4b77e2449bf746824c979153f97676cc6ded56a998ba194a5",
+            "offsetUnit": "utf8_byte"
+          },
+          {
+            "sourceRef": {
+              "id": "cq.industrial.alarm.source",
+              "version": "1.0.0",
+              "digest": "sha256:c0a0e82478a994e49f452b65c8195bf1e94741fb74a38a387a95ca95c2b11b00"
+            },
+            "startOffset": 17,
+            "endOffset": 26,
+            "quoteDigest": "sha256:8e0aebfebdefbc5824c9bebbb2ddb83cf80734a0329e32f51d270dbff73f8c99",
             "offsetUnit": "utf8_byte"
           }
         ],
@@ -1294,13 +1359,13 @@
               "status": "active",
               "source": {
                 "sourceRef": {
-                  "id": "cq.industrial.source",
+                  "id": "cq.industrial.rows.source",
                   "version": "1.0.0",
-                  "digest": "sha256:3f3eb751e3d27b03636bb2b7fd27c1736aa50605fafc6beec826b51a840a7ff2"
+                  "digest": "sha256:8f372538efcf5d876b52b9db549dea5d53e59a828e66be9b6feae4495ed07dd3"
                 },
-                "startOffset": 73,
-                "endOffset": 88,
-                "quoteDigest": "sha256:0a6a32e89f43923339c79013c38a2882983d2dace2e75c844d4f34ae09672f5a",
+                "startOffset": 36,
+                "endOffset": 55,
+                "quoteDigest": "sha256:fb45f5b8577db4f4b77e2449bf746824c979153f97676cc6ded56a998ba194a5",
                 "offsetUnit": "utf8_byte"
               }
             },
@@ -1314,18 +1379,42 @@
               "status": "active",
               "source": {
                 "sourceRef": {
-                  "id": "cq.industrial.source",
+                  "id": "cq.industrial.version-two.source",
                   "version": "1.0.0",
-                  "digest": "sha256:3f3eb751e3d27b03636bb2b7fd27c1736aa50605fafc6beec826b51a840a7ff2"
+                  "digest": "sha256:a1d83c39d6212a73cec568c720c9acbf8a4a57618c258d89a90b81e1df0e12fb"
                 },
-                "startOffset": 722,
-                "endOffset": 747,
-                "quoteDigest": "sha256:027910e6df7cad2fa59f9d725a42732d701bc11c899aaa7daa9429bb23385f4d",
+                "startOffset": 26,
+                "endOffset": 35,
+                "quoteDigest": "sha256:8e0aebfebdefbc5824c9bebbb2ddb83cf80734a0329e32f51d270dbff73f8c99",
                 "offsetUnit": "utf8_byte"
               }
             }
           ],
-          "relations": []
+          "relations": [],
+          "structuredSources": [
+            {
+              "sourceRef": {
+                "id": "cq.industrial.rows.source",
+                "version": "1.0.0",
+                "digest": "sha256:8f372538efcf5d876b52b9db549dea5d53e59a828e66be9b6feae4495ed07dd3"
+              },
+              "objectId": "asset",
+              "attributeIds": [
+                "asset_code"
+              ]
+            },
+            {
+              "sourceRef": {
+                "id": "cq.industrial.version-two.source",
+                "version": "1.0.0",
+                "digest": "sha256:a1d83c39d6212a73cec568c720c9acbf8a4a57618c258d89a90b81e1df0e12fb"
+              },
+              "objectId": "asset",
+              "attributeIds": [
+                "inspection_due"
+              ]
+            }
+          ]
         },
         "intent": {
           "projectId": "44444444-4444-4444-8444-444444444444",
@@ -1340,24 +1429,24 @@
         "requiredSources": [
           {
             "sourceRef": {
-              "id": "cq.industrial.source",
+              "id": "cq.industrial.rows.source",
               "version": "1.0.0",
-              "digest": "sha256:3f3eb751e3d27b03636bb2b7fd27c1736aa50605fafc6beec826b51a840a7ff2"
+              "digest": "sha256:8f372538efcf5d876b52b9db549dea5d53e59a828e66be9b6feae4495ed07dd3"
             },
-            "startOffset": 73,
-            "endOffset": 88,
-            "quoteDigest": "sha256:0a6a32e89f43923339c79013c38a2882983d2dace2e75c844d4f34ae09672f5a",
+            "startOffset": 36,
+            "endOffset": 55,
+            "quoteDigest": "sha256:fb45f5b8577db4f4b77e2449bf746824c979153f97676cc6ded56a998ba194a5",
             "offsetUnit": "utf8_byte"
           },
           {
             "sourceRef": {
-              "id": "cq.industrial.source",
+              "id": "cq.industrial.version-two.source",
               "version": "1.0.0",
-              "digest": "sha256:3f3eb751e3d27b03636bb2b7fd27c1736aa50605fafc6beec826b51a840a7ff2"
+              "digest": "sha256:a1d83c39d6212a73cec568c720c9acbf8a4a57618c258d89a90b81e1df0e12fb"
             },
-            "startOffset": 722,
-            "endOffset": 747,
-            "quoteDigest": "sha256:027910e6df7cad2fa59f9d725a42732d701bc11c899aaa7daa9429bb23385f4d",
+            "startOffset": 26,
+            "endOffset": 35,
+            "quoteDigest": "sha256:8e0aebfebdefbc5824c9bebbb2ddb83cf80734a0329e32f51d270dbff73f8c99",
             "offsetUnit": "utf8_byte"
           }
         ],
@@ -1401,13 +1490,13 @@
               "status": "active",
               "source": {
                 "sourceRef": {
-                  "id": "cq.industrial.source",
+                  "id": "cq.industrial.rows.source",
                   "version": "1.0.0",
-                  "digest": "sha256:3f3eb751e3d27b03636bb2b7fd27c1736aa50605fafc6beec826b51a840a7ff2"
+                  "digest": "sha256:8f372538efcf5d876b52b9db549dea5d53e59a828e66be9b6feae4495ed07dd3"
                 },
-                "startOffset": 73,
-                "endOffset": 88,
-                "quoteDigest": "sha256:0a6a32e89f43923339c79013c38a2882983d2dace2e75c844d4f34ae09672f5a",
+                "startOffset": 36,
+                "endOffset": 55,
+                "quoteDigest": "sha256:fb45f5b8577db4f4b77e2449bf746824c979153f97676cc6ded56a998ba194a5",
                 "offsetUnit": "utf8_byte"
               }
             },
@@ -1421,18 +1510,42 @@
               "status": "active",
               "source": {
                 "sourceRef": {
-                  "id": "cq.industrial.source",
+                  "id": "cq.industrial.version-two.source",
                   "version": "1.0.0",
-                  "digest": "sha256:3f3eb751e3d27b03636bb2b7fd27c1736aa50605fafc6beec826b51a840a7ff2"
+                  "digest": "sha256:a1d83c39d6212a73cec568c720c9acbf8a4a57618c258d89a90b81e1df0e12fb"
                 },
-                "startOffset": 722,
-                "endOffset": 747,
-                "quoteDigest": "sha256:027910e6df7cad2fa59f9d725a42732d701bc11c899aaa7daa9429bb23385f4d",
+                "startOffset": 26,
+                "endOffset": 35,
+                "quoteDigest": "sha256:8e0aebfebdefbc5824c9bebbb2ddb83cf80734a0329e32f51d270dbff73f8c99",
                 "offsetUnit": "utf8_byte"
               }
             }
           ],
-          "relations": []
+          "relations": [],
+          "structuredSources": [
+            {
+              "sourceRef": {
+                "id": "cq.industrial.rows.source",
+                "version": "1.0.0",
+                "digest": "sha256:8f372538efcf5d876b52b9db549dea5d53e59a828e66be9b6feae4495ed07dd3"
+              },
+              "objectId": "asset",
+              "attributeIds": [
+                "asset_code"
+              ]
+            },
+            {
+              "sourceRef": {
+                "id": "cq.industrial.version-two.source",
+                "version": "1.0.0",
+                "digest": "sha256:a1d83c39d6212a73cec568c720c9acbf8a4a57618c258d89a90b81e1df0e12fb"
+              },
+              "objectId": "asset",
+              "attributeIds": [
+                "inspection_due"
+              ]
+            }
+          ]
         },
         "intent": {
           "projectId": "44444444-4444-4444-8444-444444444444",
@@ -1447,24 +1560,24 @@
         "requiredSources": [
           {
             "sourceRef": {
-              "id": "cq.industrial.source",
+              "id": "cq.industrial.rows.source",
               "version": "1.0.0",
-              "digest": "sha256:3f3eb751e3d27b03636bb2b7fd27c1736aa50605fafc6beec826b51a840a7ff2"
+              "digest": "sha256:8f372538efcf5d876b52b9db549dea5d53e59a828e66be9b6feae4495ed07dd3"
             },
-            "startOffset": 73,
-            "endOffset": 88,
-            "quoteDigest": "sha256:0a6a32e89f43923339c79013c38a2882983d2dace2e75c844d4f34ae09672f5a",
+            "startOffset": 36,
+            "endOffset": 55,
+            "quoteDigest": "sha256:fb45f5b8577db4f4b77e2449bf746824c979153f97676cc6ded56a998ba194a5",
             "offsetUnit": "utf8_byte"
           },
           {
             "sourceRef": {
-              "id": "cq.industrial.source",
+              "id": "cq.industrial.version-two.source",
               "version": "1.0.0",
-              "digest": "sha256:3f3eb751e3d27b03636bb2b7fd27c1736aa50605fafc6beec826b51a840a7ff2"
+              "digest": "sha256:a1d83c39d6212a73cec568c720c9acbf8a4a57618c258d89a90b81e1df0e12fb"
             },
-            "startOffset": 722,
-            "endOffset": 747,
-            "quoteDigest": "sha256:027910e6df7cad2fa59f9d725a42732d701bc11c899aaa7daa9429bb23385f4d",
+            "startOffset": 26,
+            "endOffset": 35,
+            "quoteDigest": "sha256:8e0aebfebdefbc5824c9bebbb2ddb83cf80734a0329e32f51d270dbff73f8c99",
             "offsetUnit": "utf8_byte"
           }
         ],
@@ -1514,13 +1627,13 @@
               "status": "active",
               "source": {
                 "sourceRef": {
-                  "id": "cq.industrial.source",
+                  "id": "cq.industrial.boundary.source",
                   "version": "1.0.0",
-                  "digest": "sha256:3f3eb751e3d27b03636bb2b7fd27c1736aa50605fafc6beec826b51a840a7ff2"
+                  "digest": "sha256:6a8fcbbecb38863e645e2005b9251df4dc05c32e2a75d21206e3e1af8b8d70dd"
                 },
-                "startOffset": 612,
-                "endOffset": 627,
-                "quoteDigest": "sha256:b6c267ef6533d1219f154e14734dfb781cf3e8eb0f2b060cbb03006c14cdab25",
+                "startOffset": 24,
+                "endOffset": 38,
+                "quoteDigest": "sha256:66a4899831ae05393e9357baa735533b1ac1709cbce9b357cba4de4ac8536fe3",
                 "offsetUnit": "utf8_byte"
               }
             },
@@ -1537,13 +1650,13 @@
               "status": "active",
               "source": {
                 "sourceRef": {
-                  "id": "cq.industrial.source",
+                  "id": "cq.industrial.boundary.source",
                   "version": "1.0.0",
-                  "digest": "sha256:3f3eb751e3d27b03636bb2b7fd27c1736aa50605fafc6beec826b51a840a7ff2"
+                  "digest": "sha256:6a8fcbbecb38863e645e2005b9251df4dc05c32e2a75d21206e3e1af8b8d70dd"
                 },
-                "startOffset": 629,
-                "endOffset": 640,
-                "quoteDigest": "sha256:671ad0f20ac9b5c343c016abd9f1cda27711440ad573917437f888be54dd6d3a",
+                "startOffset": 24,
+                "endOffset": 38,
+                "quoteDigest": "sha256:66a4899831ae05393e9357baa735533b1ac1709cbce9b357cba4de4ac8536fe3",
                 "offsetUnit": "utf8_byte"
               }
             },
@@ -1557,18 +1670,33 @@
               "status": "active",
               "source": {
                 "sourceRef": {
-                  "id": "cq.industrial.source",
+                  "id": "cq.industrial.boundary.source",
                   "version": "1.0.0",
-                  "digest": "sha256:3f3eb751e3d27b03636bb2b7fd27c1736aa50605fafc6beec826b51a840a7ff2"
+                  "digest": "sha256:6a8fcbbecb38863e645e2005b9251df4dc05c32e2a75d21206e3e1af8b8d70dd"
                 },
-                "startOffset": 629,
-                "endOffset": 655,
-                "quoteDigest": "sha256:a7cf94aa739bc1aa686ba8102a46835d488c94ab7922bbe7ea5a22c392c6fd91",
+                "startOffset": 24,
+                "endOffset": 38,
+                "quoteDigest": "sha256:66a4899831ae05393e9357baa735533b1ac1709cbce9b357cba4de4ac8536fe3",
                 "offsetUnit": "utf8_byte"
               }
             }
           ],
-          "relations": []
+          "relations": [],
+          "structuredSources": [
+            {
+              "sourceRef": {
+                "id": "cq.industrial.boundary.source",
+                "version": "1.0.0",
+                "digest": "sha256:6a8fcbbecb38863e645e2005b9251df4dc05c32e2a75d21206e3e1af8b8d70dd"
+              },
+              "objectId": "asset",
+              "attributeIds": [
+                "asset_code",
+                "hours",
+                "exempt"
+              ]
+            }
+          ]
         },
         "intent": {
           "projectId": "44444444-4444-4444-8444-444444444444",
@@ -1588,42 +1716,20 @@
               "version": "1.0.0",
               "digest": "sha256:3f3eb751e3d27b03636bb2b7fd27c1736aa50605fafc6beec826b51a840a7ff2"
             },
-            "startOffset": 612,
-            "endOffset": 627,
-            "quoteDigest": "sha256:b6c267ef6533d1219f154e14734dfb781cf3e8eb0f2b060cbb03006c14cdab25",
-            "offsetUnit": "utf8_byte"
-          },
-          {
-            "sourceRef": {
-              "id": "cq.industrial.source",
-              "version": "1.0.0",
-              "digest": "sha256:3f3eb751e3d27b03636bb2b7fd27c1736aa50605fafc6beec826b51a840a7ff2"
-            },
-            "startOffset": 629,
-            "endOffset": 640,
-            "quoteDigest": "sha256:671ad0f20ac9b5c343c016abd9f1cda27711440ad573917437f888be54dd6d3a",
-            "offsetUnit": "utf8_byte"
-          },
-          {
-            "sourceRef": {
-              "id": "cq.industrial.source",
-              "version": "1.0.0",
-              "digest": "sha256:3f3eb751e3d27b03636bb2b7fd27c1736aa50605fafc6beec826b51a840a7ff2"
-            },
-            "startOffset": 629,
-            "endOffset": 655,
-            "quoteDigest": "sha256:a7cf94aa739bc1aa686ba8102a46835d488c94ab7922bbe7ea5a22c392c6fd91",
-            "offsetUnit": "utf8_byte"
-          },
-          {
-            "sourceRef": {
-              "id": "cq.industrial.source",
-              "version": "1.0.0",
-              "digest": "sha256:3f3eb751e3d27b03636bb2b7fd27c1736aa50605fafc6beec826b51a840a7ff2"
-            },
             "startOffset": 244,
             "endOffset": 315,
             "quoteDigest": "sha256:b469c19c6c0b09016225d42faa78d82a6295c5f6e08ad329549f776ac128ee3e",
+            "offsetUnit": "utf8_byte"
+          },
+          {
+            "sourceRef": {
+              "id": "cq.industrial.boundary.source",
+              "version": "1.0.0",
+              "digest": "sha256:6a8fcbbecb38863e645e2005b9251df4dc05c32e2a75d21206e3e1af8b8d70dd"
+            },
+            "startOffset": 24,
+            "endOffset": 38,
+            "quoteDigest": "sha256:66a4899831ae05393e9357baa735533b1ac1709cbce9b357cba4de4ac8536fe3",
             "offsetUnit": "utf8_byte"
           }
         ],
@@ -1637,6 +1743,227 @@
         "derivation": "人工规则用>=100而不是>100；精确100 h在闭边界内，exempt=false不阻断。",
         "specRefs": [
           "tasks/spec-v0.3a/execution-evidence.md#EX-11"
+        ]
+      },
+      {
+        "questionId": "industrial-relation",
+        "question": "A-01 的已确认维护车间是哪一个？",
+        "taskKind": "relations",
+        "definitionRef": {
+          "id": "cq.industrial.definition",
+          "version": "1.0.0",
+          "digest": "sha256:0ded79d1c8e5b003f8c5e460d77dccf3e9260dd8782cc25d198bc57fd24eb937"
+        },
+        "ruleRefs": [],
+        "input": {
+          "dataMode": "synthetic",
+          "scopeRef": {
+            "tenantId": "11111111-1111-4111-8111-111111111111",
+            "spaceId": "aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa"
+          },
+          "projectId": "44444444-4444-4444-8444-444444444444",
+          "validAt": "2026-10-08T00:00:00Z",
+          "asOfRecordedSeq": "1",
+          "observations": [
+            {
+              "factId": "relation-asset-code",
+              "entityId": "A-01",
+              "objectId": "asset",
+              "attributeId": "asset_code",
+              "value": "A-01",
+              "recordedSeq": "1",
+              "status": "active",
+              "source": {
+                "sourceRef": {
+                  "id": "cq.industrial.rows.source",
+                  "version": "1.0.0",
+                  "digest": "sha256:8f372538efcf5d876b52b9db549dea5d53e59a828e66be9b6feae4495ed07dd3"
+                },
+                "startOffset": 36,
+                "endOffset": 55,
+                "quoteDigest": "sha256:fb45f5b8577db4f4b77e2449bf746824c979153f97676cc6ded56a998ba194a5",
+                "offsetUnit": "utf8_byte"
+              }
+            },
+            {
+              "factId": "relation-shop-code",
+              "entityId": "W-01",
+              "objectId": "workshop",
+              "attributeId": "shop_code",
+              "value": "W-01",
+              "recordedSeq": "1",
+              "status": "active",
+              "source": {
+                "sourceRef": {
+                  "id": "cq.industrial.workshop.source",
+                  "version": "1.0.0",
+                  "digest": "sha256:adaf170554ab1a661bb14c8c33b7d7b26620a12939126ee3aac2ae6452be58cf"
+                },
+                "startOffset": 18,
+                "endOffset": 28,
+                "quoteDigest": "sha256:84962322b6260dd43057af03ee9244c92c106789a82a56959ab652134655f082",
+                "offsetUnit": "utf8_byte"
+              }
+            }
+          ],
+          "relations": [
+            {
+              "factId": "A-01-in-workshop",
+              "relationId": "in_workshop",
+              "fromEntityId": "A-01",
+              "toEntityId": "W-01",
+              "endpointsResolved": true,
+              "recordedSeq": "1",
+              "status": "active",
+              "source": {
+                "sourceRef": {
+                  "id": "cq.industrial.rows.source",
+                  "version": "1.0.0",
+                  "digest": "sha256:8f372538efcf5d876b52b9db549dea5d53e59a828e66be9b6feae4495ed07dd3"
+                },
+                "startOffset": 36,
+                "endOffset": 55,
+                "quoteDigest": "sha256:fb45f5b8577db4f4b77e2449bf746824c979153f97676cc6ded56a998ba194a5",
+                "offsetUnit": "utf8_byte"
+              }
+            }
+          ],
+          "structuredSources": [
+            {
+              "sourceRef": {
+                "id": "cq.industrial.rows.source",
+                "version": "1.0.0",
+                "digest": "sha256:8f372538efcf5d876b52b9db549dea5d53e59a828e66be9b6feae4495ed07dd3"
+              },
+              "objectId": "asset",
+              "attributeIds": [
+                "asset_code"
+              ]
+            },
+            {
+              "sourceRef": {
+                "id": "cq.industrial.workshop.source",
+                "version": "1.0.0",
+                "digest": "sha256:adaf170554ab1a661bb14c8c33b7d7b26620a12939126ee3aac2ae6452be58cf"
+              },
+              "objectId": "workshop",
+              "attributeIds": [
+                "shop_code"
+              ]
+            }
+          ]
+        },
+        "intent": {
+          "kind": "relation",
+          "projectId": "44444444-4444-4444-8444-444444444444",
+          "objectId": "asset",
+          "subjectEntityId": "A-01",
+          "relationId": "in_workshop"
+        },
+        "requiredCapabilities": [
+          "semantic_read",
+          "relation_read"
+        ],
+        "requiredSources": [
+          {
+            "sourceRef": {
+              "id": "cq.industrial.rows.source",
+              "version": "1.0.0",
+              "digest": "sha256:8f372538efcf5d876b52b9db549dea5d53e59a828e66be9b6feae4495ed07dd3"
+            },
+            "startOffset": 36,
+            "endOffset": 55,
+            "quoteDigest": "sha256:fb45f5b8577db4f4b77e2449bf746824c979153f97676cc6ded56a998ba194a5",
+            "offsetUnit": "utf8_byte"
+          },
+          {
+            "sourceRef": {
+              "id": "cq.industrial.workshop.source",
+              "version": "1.0.0",
+              "digest": "sha256:adaf170554ab1a661bb14c8c33b7d7b26620a12939126ee3aac2ae6452be58cf"
+            },
+            "startOffset": 18,
+            "endOffset": 28,
+            "quoteDigest": "sha256:84962322b6260dd43057af03ee9244c92c106789a82a56959ab652134655f082",
+            "offsetUnit": "utf8_byte"
+          }
+        ],
+        "expected": {
+          "kind": "relation",
+          "targetEntityIds": [
+            "W-01"
+          ],
+          "completeness": "complete"
+        },
+        "goldOrigin": "authored_oracle",
+        "derivation": "独立资产原始行明确写 A-01 in_workshop=W-01；车间是否有人值守不改变已确认的关系目标。",
+        "specRefs": [
+          "tasks/spec-v0.3a/execution-evidence.md#EX-4.3"
+        ]
+      },
+      {
+        "questionId": "industrial-registered-compute",
+        "question": "注册的合成汇总操作对验核金额输入给出的总金额是多少？",
+        "taskKind": "compute",
+        "definitionRef": {
+          "id": "cq.industrial.definition",
+          "version": "1.0.0",
+          "digest": "sha256:0ded79d1c8e5b003f8c5e460d77dccf3e9260dd8782cc25d198bc57fd24eb937"
+        },
+        "ruleRefs": [],
+        "input": {
+          "dataMode": "synthetic",
+          "scopeRef": {
+            "tenantId": "11111111-1111-4111-8111-111111111111",
+            "spaceId": "aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa"
+          },
+          "projectId": "44444444-4444-4444-8444-444444444444",
+          "validAt": "2026-10-08T00:00:00Z",
+          "asOfRecordedSeq": "1",
+          "observations": [],
+          "relations": []
+        },
+        "intent": {
+          "kind": "registered_compute",
+          "projectId": "44444444-4444-4444-8444-444444444444",
+          "operationRef": {
+            "id": "example.compute.aggregate",
+            "version": "1"
+          },
+          "inputSourceRef": {
+            "id": "cq.industrial.compute-input.source",
+            "version": "1.0.0",
+            "digest": "sha256:84efdae6315e73d780c5329fed2b441f24f9e559763d391f9a28a4658be0f058"
+          },
+          "metric": "total_cost"
+        },
+        "requiredCapabilities": [
+          "registered_compute"
+        ],
+        "requiredSources": [
+          {
+            "sourceRef": {
+              "id": "cq.industrial.compute-input.source",
+              "version": "1.0.0",
+              "digest": "sha256:84efdae6315e73d780c5329fed2b441f24f9e559763d391f9a28a4658be0f058"
+            },
+            "startOffset": 0,
+            "endOffset": 191,
+            "quoteDigest": "sha256:fff6e86462eb2bcd49369cdc7f8dc8b987b139f4ffbef2c2e5dbc7dd9789fc76",
+            "offsetUnit": "utf8_byte"
+          }
+        ],
+        "expected": {
+          "kind": "value",
+          "value": {
+            "amount": "39",
+            "currency": "CNY"
+          }
+        },
+        "goldOrigin": "authored_oracle",
+        "derivation": "独立金额原始 JSON 仅 35 CNY 和 4 CNY 两行计入货币轴；3 each 与 4 each 是另一个单位轴，人工金标为 39 CNY。真实客户报价仍未验证。",
+        "specRefs": [
+          "tasks/spec-v0.3a/execution-evidence.md#EX-6"
         ]
       }
     ],

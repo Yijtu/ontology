@@ -1,5 +1,6 @@
 import {
   SyntheticValidationError,
+  CompetencyQuestionError,
   assertSyntheticExampleSetVersion,
   assertSyntheticNotPublishedAsObserved,
   bindActionDeclaration,
@@ -40,12 +41,16 @@ import type {
 } from '@ontology/contracts'
 import { currentRuleActionProjection, industryValidationDigest, ruleActionPublicationPins } from '../assets/publication/publication-pins'
 import { canonicalJson } from '../profiles/canonical'
+import type { CompetencyRunner } from './competency-runner'
 
 const EDITOR_ROLES: readonly string[] = ['profile-editor', 'platform-admin']
 const DEFAULT_PAGE = 100
 const CANDIDATE_PAGE = 250
 
 export interface IndustryValidationServiceDependencies {
+  readonly competencyRunner?: Pick<CompetencyRunner, 'run'>
+  /** Production hosts require CQ coverage; legacy constructors retain their prior subset. */
+  readonly requireCompetencyQuestions?: boolean
   readonly workspaces: IndustryWorkspaceStore
   readonly exampleSets: SyntheticExampleSetStore
   readonly reports: IndustryValidationReportStore
@@ -147,6 +152,8 @@ export class IndustryValidationService {
     actor: string,
     ctx: ToolContext,
   ): Promise<IndustryValidationReport> {
+    const assertNotCancelled = () => { if (input.signal?.aborted === true) throw new CompetencyQuestionError('CANCELLED', 'industry validation was cancelled') }
+    assertNotCancelled()
     assertEditor(ctx)
     const key = requireIdempotencyKey(input.idempotencyKey)
     const scopeRef = scopeOf(ctx)
@@ -159,8 +166,10 @@ export class IndustryValidationService {
       throw new SyntheticValidationError('VERSION_CONFLICT', 'the workspace head moved before this validation')
     }
     const replay = await this.#deps.reports.findByIdempotencyKey(scopeRef, key, ctx)
+    assertNotCancelled()
     if (replay !== undefined) {
-      if (replay.exampleSetId !== input.exampleSetId || replay.revision !== expected || canonicalJson(replay.strategy) !== canonicalJson(input.strategy)) {
+      if (replay.exampleSetId !== input.exampleSetId || replay.revision !== expected || canonicalJson(replay.strategy) !== canonicalJson(input.strategy) || canonicalJson(replay.competencyQuestionRef) !== canonicalJson(input.competencyQuestionRef) ||
+          (replay.competencyRequired === true) !== (this.#deps.requireCompetencyQuestions === true || input.competencyQuestionRef !== undefined)) {
         throw new SyntheticValidationError('IDEMPOTENCY_CONFLICT', 'validation key was already used for a different example set, revision or strategy')
       }
       return replay
@@ -415,6 +424,18 @@ export class IndustryValidationService {
       }
     })
 
+    let competency: IndustryValidationReport['competency']
+    if (input.competencyQuestionRef !== undefined && this.#deps.competencyRunner !== undefined) {
+      competency = await this.#deps.competencyRunner.run(input.competencyQuestionRef, ctx, input.signal ?? new AbortController().signal, {
+        workspaceId, revision: workspace.headRevision, definitionApprovalPins: definition.approvalPins ?? [], ruleActionPins: ruleActionPublicationPins(current),
+      })
+      for (const result of competency.results) if (result.status !== 'passed') deploymentBlockers.push(issueFor(
+        result.status === 'not_yet_executable' ? 'CQ_NOT_EXECUTABLE' : 'CQ_MISMATCH', 'deployment',
+        result.reason ?? 'the required competency question failed', { caseId: result.questionId },
+      ))
+    } else if (input.competencyQuestionRef !== undefined || this.#deps.requireCompetencyQuestions === true) {
+      deploymentBlockers.push(issueFor(input.competencyQuestionRef === undefined ? 'CQ_REQUIRED' : 'CQ_NOT_EXECUTABLE', 'deployment', 'an approved executable competency question set is required for deployment readiness'))
+    }
     const semanticPassed = semanticBlockers.length === 0
     const deploymentPassed =
       deploymentBlockers.length === 0 &&
@@ -455,6 +476,9 @@ export class IndustryValidationService {
       businessApproval: 'none',
       realFactsWritten: false,
       definition,
+      ...(input.competencyQuestionRef === undefined ? {} : { competencyQuestionRef: input.competencyQuestionRef }),
+      ...(this.#deps.requireCompetencyQuestions === true || input.competencyQuestionRef !== undefined ? { competencyRequired: true as const } : {}),
+      ...(competency === undefined ? {} : { competency }),
       ...(input.strategy === undefined ? {} : { strategy: input.strategy }),
       ruleActionPins: ruleActionPublicationPins(current),
       rules: ruleResults,
@@ -470,7 +494,10 @@ export class IndustryValidationService {
       actor,
       recordedAt: this.#now(),
     }
-    return this.#deps.reports.insert(scopeRef, { ...report, contentDigest: industryValidationDigest(report) }, ctx)
+    assertNotCancelled()
+    const saved = await this.#deps.reports.insert(scopeRef, { ...report, contentDigest: industryValidationDigest(report) }, ctx)
+    assertNotCancelled()
+    return saved
   }
 
   async getReport(workspaceId: Uuid, validationId: Uuid, ctx: ToolContext): Promise<IndustryValidationReport | undefined> {
@@ -590,6 +617,7 @@ function expectationResult(
   matched: boolean,
 ): SyntheticExpectationResult {
   return {
+    question: expectation.reason,
     expectationId: expectation.expectationId,
     caseId: expectation.caseId,
     kind: expectation.kind,

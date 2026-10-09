@@ -231,7 +231,7 @@ export function buildDefinitionRecord(args: {
       id: `${candidate.payload.logicalId}.identity`,
       namespace,
       objectId: candidate.payload.logicalId,
-      scopeDimensions: [] as string[],
+      scopeDimensions: [...(candidate.payload.identityScopeDimensions ?? [])],
       identityAttributeIds: [...candidate.payload.identityAttributeIds],
       standardProvenance: args.standardProvenance,
     }))
@@ -352,15 +352,20 @@ export function buildCapabilityStatus(args: {
 /* ----------------------------------------------------------------------------------------- */
 
 export function buildTestSuite(report: IndustryValidationReport, namespace: string, version: Semver): PackTestSuite {
-  const cases: PackTestCase[] = report.expectationResults
+  const cases: PackTestCase[] = report.competency === undefined ? report.expectationResults
     .map((expectation): PackTestCase => ({
       caseId: expectation.caseId,
-      question: `validation case ${expectation.caseId}`,
+      question: expectation.question ?? `验证${expectation.kind === 'rule' ? '规则' : '动作'} ${expectation.targetId} 的声明行为`,
       expectedCapabilities: expectation.kind === 'action' ? [expectation.targetId] : [],
       expectedStatus: expectation.expected === 'executable' ? 'resolved' : 'missing_capabilities',
     }))
     .filter((entry, index, all) => all.findIndex((candidate) => candidate.caseId === entry.caseId) === index)
-    .sort((left, right) => (left.caseId < right.caseId ? -1 : left.caseId > right.caseId ? 1 : 0))
+    .sort((left, right) => (left.caseId < right.caseId ? -1 : left.caseId > right.caseId ? 1 : 0)) : report.competency.results.map((result) => ({
+      caseId: result.questionId, question: result.question, expectedCapabilities: result.requiredCapabilities,
+      expectedStatus: result.status, competencyQuestionRef: report.competency!.questionSetRef,
+      definitionRef: result.definitionRef, ruleRefs: result.ruleRefs,
+      sourceRefs: result.requiredSources.map((source) => source.sourceRef).filter((ref, index, all) => all.findIndex((other) => other.id === ref.id && other.version === ref.version && other.digest === ref.digest) === index), required: true,
+    }))
   const ref = artifactRef(`${namespace}.test-suite`, version, contentDigestOf(cases))
   return { ref, cases }
 }
@@ -372,7 +377,8 @@ export function buildTestSuite(report: IndustryValidationReport, namespace: stri
 function compareRecords(previous: SemanticDefinitionRecord | undefined, next: SemanticDefinitionRecord, scope: PackVersionChangeScope): PackVersionChange[] {
   const projection: Pick<AssetCandidateVersion, 'payload' | 'logicalId' | 'kind'>[] = [
     ...next.objects.map((object) => ({ kind: 'object' as const, logicalId: object.id, displayName: object.displayName,
-      identityAttributeIds: next.identityScopes.find((identity) => identity.objectId === object.id)?.identityAttributeIds ?? [] })),
+      identityAttributeIds: next.identityScopes.find((identity) => identity.objectId === object.id)?.identityAttributeIds ?? [],
+      identityScopeDimensions: next.identityScopes.find((identity) => identity.objectId === object.id)?.scopeDimensions ?? [] })),
     ...next.attributes.map((attribute) => ({ kind: 'attribute' as const, logicalId: attribute.id, displayName: attribute.id,
       objectLogicalId: attribute.objectId, valueType: attribute.valueType, minCardinality: attribute.cardinality.min,
       maxCardinality: attribute.cardinality.max, ...(attribute.unit === undefined ? {} : { unitCode: attribute.unit.unitCode, dimension: attribute.unit.dimension }),

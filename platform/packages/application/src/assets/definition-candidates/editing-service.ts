@@ -44,6 +44,7 @@ import type {
   PublishedPackAssetStore,
 } from '@ontology/contracts'
 import { definitionApprovalPins } from '../publication/publication-pins'
+import { definitionEditedContentDigest } from '../candidate-content-digests'
 import type { CandidateApprovalReader } from '../publication/publication-pins'
 import { DefinitionPredecessorError, resolveDefinitionPredecessor } from '../publication/definition-predecessor'
 import { candidateIdFor, canonicalJson, sha256DigestOf } from '../../extraction/canonical'
@@ -69,11 +70,11 @@ export const DEFINITION_EDIT_MODEL_REF: ModelRef = { modelId: 'definition-editor
 
 export const DEFINITION_EDIT_RESPONSE_SCHEMA_REF: VersionRef = {
   id: 'ontology.candidate-editing',
-  version: '1.0.0',
+  version: '1.1.0',
   digest: sha256DigestOf(
     canonicalJson({
       operations: ['edit', 'merge', 'split', 'keep_separate', 'reject'],
-      payload: 'DefinitionCandidatePayload (object|attribute|relation)',
+      payload: 'DefinitionCandidatePayload (object|attribute|relation); optional object identityScopeDimensions: at most 16 unique non-empty names',
       adjudication: 'kind + candidateIds + producedCandidateIds + reason + affected + findings',
     }),
   ),
@@ -896,17 +897,15 @@ function finalize(
   const state: AssetCandidateState = hard ? 'failed' : shell.sourceRefs.length === 0 ? 'pending_confirmation' : 'produced'
   const conflicts = conflictsFor(shell.candidateId, findings)
   const payload: DefinitionCandidatePayload = { ...shell.payload, conflicts: [...shell.payload.conflicts, ...conflicts] }
-  const contentDigest = sha256DigestOf(
-    canonicalJson({
-      workspaceId: shell.workspaceId,
-      logicalId: shell.logicalId,
-      kind: shell.kind,
-      payload,
-      inputDraftRef: shell.inputDraftRef,
-      sourceRefs: shell.sourceRefs,
-      issues,
-    }),
-  )
+  const contentDigest = definitionEditedContentDigest({
+    workspaceId: shell.workspaceId,
+    logicalId: shell.logicalId,
+    kind: shell.kind,
+    payload,
+    inputDraftRef: shell.inputDraftRef,
+    sourceRefs: shell.sourceRefs,
+    issues,
+  })
   return {
     candidateId: shell.candidateId,
     batchId: shell.batchId,

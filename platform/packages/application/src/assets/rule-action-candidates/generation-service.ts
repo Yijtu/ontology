@@ -8,6 +8,7 @@ import type { ActionCapabilityBindingInput, AssetCandidateStore, AssetCandidateV
   IndustryWorkspaceStore } from '@ontology/contracts'
 import { candidateIdFor, canonicalJson, sha256DigestOf } from '../../extraction/canonical'
 import { readLatestWorkspaceDraft } from '../workspace-draft'
+import { ruleActionGroundedContentDigest } from '../candidate-content-digests'
 import { SourceGroundingBudget } from '../source-grounding/budget'
 import { groundingContext, groundingFragments, sameResourcePin, selectedGrounding } from '../definition-candidates/grounding'
 import type { DefinitionGroundingFragment } from '../definition-candidates/grounding'
@@ -304,7 +305,7 @@ function groundCandidate(candidate: RuleActionCandidateVersion, proposal: DraftR
   const relations = new Map([...(terms?.definition?.relations ?? []).map((relation) => ({ id: relation.id, from: relation.fromObjectId, to: relation.toObjectId })),
     ...selected.flatMap((row) => row.payload.kind === 'relation' ? [{ id: row.logicalId, from: row.payload.fromObjectLogicalId, to: row.payload.toObjectLogicalId }] : [])].map((relation) => [relation.id, relation]))
   const visit = (node: RuleExpressionNode, path: string, objectId: string): RuleExpressionNode => {
-    if (node.op === 'all' || node.op === 'any') return { ...node, operands: node.operands.map((operand, i) => visit(operand, `${path}.operands[${String(i)}]`, objectId)) }
+    if (node.op === 'all' || node.op === 'any') return { ...node, spans: locate(path), operands: node.operands.map((operand, i) => visit(operand, `${path}.operands[${String(i)}]`, objectId)) }
     if (node.op === 'not') return { ...node, spans: locate(path), operand: visit(node.operand, `${path}.operand`, objectId) }
     if (node.op === 'relation') {
       const relation = relations.get(node.relationId)
@@ -346,9 +347,9 @@ function groundCandidate(candidate: RuleActionCandidateVersion, proposal: DraftR
     payload.declaration.preconditions.forEach((_, index) => locate(`declaration.preconditions[${String(index)}]`))
   }
   const generationContext = { ...context, inputSourceRefs, sourceBindings, issues, sourceSelections: proposal.sourceSelections }
-  const contentDigest = sha256DigestOf(canonicalJson({ workspaceId: candidate.workspaceId, kind: candidate.kind,
+  const contentDigest = ruleActionGroundedContentDigest({ workspaceId: candidate.workspaceId, kind: candidate.kind,
     logicalId: candidate.logicalId, displayName: candidate.displayName, businessMeaning: candidate.businessMeaning,
-    suggestedReason: candidate.suggestedReason, payload, sourceRefs: refs, sourceSpans: spans, generationContext }))
+    suggestedReason: candidate.suggestedReason, payload, sourceRefs: refs, sourceSpans: spans, generationContext })
   return { ...candidate, payload, sourceRefs: refs, sourceSpans: spans, contentDigest, generationContext,
     generationCallRef: { id: context.batchId, version: '1.0.0', digest: context.contextDigest, kind: 'artifact' } }
 }

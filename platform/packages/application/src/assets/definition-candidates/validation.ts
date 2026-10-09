@@ -272,6 +272,16 @@ function validateCandidate(
         )
       }
     }
+    for (const dimension of payload.identityScopeDimensions ?? []) {
+      if (dimension === 'project') continue
+      const attribute = index.attributes.get(dimension)
+      if (attribute?.payload.kind !== 'attribute' || attribute.objectLogicalId !== payload.logicalId ||
+          attribute.payload.valueType !== 'string' || !isSingleRequired(attribute.payload)) {
+        out.push(blocker({ code: 'INVALID_IDENTITY', candidateId: candidate.candidateId,
+          logicalId: payload.logicalId, path: path('identityScopeDimensions'),
+          message: `identity scope dimension "${dimension}" must be project or a required single-valued string attribute of "${payload.logicalId}"` }))
+      }
+    }
     return out
   }
 
@@ -465,6 +475,7 @@ interface PublishedIndex {
   readonly attributes: Map<string, SemanticDefinitionRecord['attributes'][number]>
   readonly relations: Map<string, SemanticDefinitionRecord['relations'][number]>
   readonly identityByObject: Map<string, readonly string[]>
+  readonly dimensionsByObject: Map<string, readonly string[]>
 }
 
 function indexPublished(published: SemanticDefinitionRecord): PublishedIndex {
@@ -474,7 +485,8 @@ function indexPublished(published: SemanticDefinitionRecord): PublishedIndex {
   const identityByObject = new Map(
     published.identityScopes.map((scope) => [scope.objectId, [...scope.identityAttributeIds].sort()]),
   )
-  return { objects, attributes, relations, identityByObject }
+  const dimensionsByObject = new Map(published.identityScopes.map((scope) => [scope.objectId, [...scope.scopeDimensions].sort()]))
+  return { objects, attributes, relations, identityByObject, dimensionsByObject }
 }
 
 function change(
@@ -522,7 +534,7 @@ export function diffDefinitionProjection(
       }
       const beforeIdentity = index.identityByObject.get(payload.logicalId) ?? []
       const afterIdentity = [...payload.identityAttributeIds].sort()
-      if (beforeIdentity.join(',') !== afterIdentity.join(',')) {
+      if (JSON.stringify(beforeIdentity) !== JSON.stringify(afterIdentity)) {
         changes.push(change({
           code: 'IDENTITY_CHANGED',
           logicalId: payload.logicalId,
@@ -532,6 +544,13 @@ export function diffDefinitionProjection(
           before: beforeIdentity.join(','),
           after: afterIdentity.join(','),
         }))
+      }
+      const beforeDimensions = index.dimensionsByObject.get(payload.logicalId) ?? []
+      const afterDimensions = [...(payload.identityScopeDimensions ?? [])].sort()
+      if (JSON.stringify(beforeDimensions) !== JSON.stringify(afterDimensions)) {
+        changes.push(change({ code: 'IDENTITY_CHANGED', logicalId: payload.logicalId, kind: 'object', breaking: true,
+          message: `identity scope dimensions of "${payload.logicalId}" changed`,
+          before: JSON.stringify(beforeDimensions), after: JSON.stringify(afterDimensions) }))
       }
       if (before.displayName !== payload.displayName) {
         changes.push(change({ code: 'OBJECT_CHANGED', logicalId: payload.logicalId, kind: 'object', breaking: false, message: `display name of "${payload.logicalId}" changed` }))
@@ -675,7 +694,7 @@ export function computeAffectedDefinitions(
       }
     }
     if (payload.kind === 'object') {
-      for (const identityId of payload.identityAttributeIds) {
+      for (const identityId of [...payload.identityAttributeIds, ...(payload.identityScopeDimensions ?? []).filter((dimension) => dimension !== 'project')]) {
         if (changed.has(identityId)) {
           push({
             logicalId: payload.logicalId,

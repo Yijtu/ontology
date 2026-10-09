@@ -66,6 +66,8 @@ export interface RuleActionGenerationGuard {
 
 export interface RuleActionGenerationStore {
   find(scope: ScopeRef, key: string, ctx: ToolContext): Promise<RuleActionGenerationBatch | undefined>
+  /** Read the immutable saved batch pinned by a candidate's generation context. */
+  getById(scope: ScopeRef, batchId: Uuid, ctx: ToolContext): Promise<RuleActionGenerationBatch | undefined>
   commit(scope: ScopeRef, batch: RuleActionGenerationBatch, candidates: readonly RuleActionCandidateVersion[],
     guard: RuleActionGenerationGuard, ctx: ToolContext): Promise<{ readonly batch: RuleActionGenerationBatch; readonly candidates: readonly RuleActionCandidateVersion[]; readonly created: boolean }>
 }

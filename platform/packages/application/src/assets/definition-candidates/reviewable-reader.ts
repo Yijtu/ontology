@@ -11,6 +11,7 @@ import type {
 } from '@ontology/contracts'
 
 export interface CompositeReviewableCandidateReaderDependencies {
+  readonly competencyQuestions?: ReviewableCandidateReader
   readonly ruleActions?: Pick<RuleActionCandidateStore, 'get'>
   readonly definition: Pick<AssetCandidateStore, 'getCandidate'>
   readonly instance: Pick<CandidateStore, 'getCandidate'>
@@ -27,11 +28,13 @@ export class CompositeReviewableCandidateReader implements ReviewableCandidateRe
   readonly #definition: CompositeReviewableCandidateReaderDependencies['definition']
   readonly #instance: CompositeReviewableCandidateReaderDependencies['instance']
   readonly #ruleActions: CompositeReviewableCandidateReaderDependencies['ruleActions']
+  readonly #competencyQuestions: CompositeReviewableCandidateReaderDependencies['competencyQuestions']
 
   constructor(dependencies: CompositeReviewableCandidateReaderDependencies) {
     this.#definition = dependencies.definition
     this.#instance = dependencies.instance
     this.#ruleActions = dependencies.ruleActions
+    this.#competencyQuestions = dependencies.competencyQuestions
   }
 
   async readCandidate(
@@ -40,8 +43,9 @@ export class CompositeReviewableCandidateReader implements ReviewableCandidateRe
     ctx: ToolContext,
   ): Promise<ReviewableCandidateView | undefined> {
     if (!isToolContext(ctx) || ctx.principal.tenantId !== scopeRef.tenantId || ctx.allowedResources.tenantId !== scopeRef.tenantId || ctx.allowedResources.spaceId !== scopeRef.spaceId) throw new ReviewableCandidateReadError('SCOPE_MISMATCH', 'candidate review requires the trusted scope')
-    const [definition, ruleAction, instance] = await Promise.all([this.#definition.getCandidate(scopeRef, candidateId, ctx), this.#ruleActions?.get(scopeRef, candidateId, ctx), this.#instance.getCandidate(scopeRef, candidateId, ctx)])
-    if ([definition, ruleAction, instance].filter((row) => row !== undefined).length > 1) throw new ReviewableCandidateReadError('AMBIGUOUS_CANDIDATE', 'candidate id belongs to multiple review domains; approval cannot choose one implicitly')
+    const [definition, ruleAction, instance, competency] = await Promise.all([this.#definition.getCandidate(scopeRef, candidateId, ctx), this.#ruleActions?.get(scopeRef, candidateId, ctx), this.#instance.getCandidate(scopeRef, candidateId, ctx), this.#competencyQuestions?.readCandidate(scopeRef, candidateId, ctx)])
+    if ([definition, ruleAction, instance, competency].filter((row) => row !== undefined).length > 1) throw new ReviewableCandidateReadError('AMBIGUOUS_CANDIDATE', 'candidate id belongs to multiple review domains; approval cannot choose one implicitly')
+    if (competency !== undefined) return competency
     if (definition !== undefined) {
       return {
         candidateId: definition.candidateId,

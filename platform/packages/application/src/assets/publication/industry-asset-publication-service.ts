@@ -4,6 +4,7 @@ import {
   findIndustryPackViolations,
 } from '@ontology/contracts'
 import type {
+  ApprovedCompetencyQuestionReader,
   AssetCandidateStore,
   IndustryValidationReport,
   IndustryValidationReportStore,
@@ -62,6 +63,8 @@ const CANDIDATE_PAGE = 250
 export const PACK_PUBLISHED_TOPIC = 'asset.pack.published'
 
 export interface IndustryAssetPublicationDependencies {
+  readonly requireCompetencyQuestions?: boolean
+  readonly competencyQuestions?: ApprovedCompetencyQuestionReader
   readonly baseCatalogue?: IndustryPackCatalogue
   readonly reviewableCandidates?: ReviewableCandidateReader
   readonly reviews?: CandidateApprovalReader
@@ -192,6 +195,16 @@ export class IndustryAssetPublicationService {
         `the draft for workspace ${workspaceId} is not fully deployment-executable`,
         { reasons: report.deploymentExecutable.blockers.map((blocker) => `${blocker.code}: ${blocker.message}`) },
       )
+    }
+    if (this.#deps.requireCompetencyQuestions === true && (report.competencyRequired !== true || report.competency === undefined && report.deploymentExecutable.passed)) {
+      throw new IndustryAssetPublicationError('VALIDATION_STALE', 'a fresh required competency validation must precede this publication')
+    }
+    if (report.competency !== undefined && await this.#deps.competencyQuestions?.readApproved(scopeRef, report.competency.questionSetRef, ctx) === undefined) {
+      throw new IndustryAssetPublicationError('VALIDATION_STALE', 'the pinned competency declaration is no longer approved')
+    }
+    if (report.competency !== undefined && canonicalJson(report.competency.validationTarget) !== canonicalJson({ workspaceId, revision: report.revision,
+      definitionApprovalPins: report.definition?.approvalPins ?? [], ruleActionPins: report.ruleActionPins ?? [] })) {
+      throw new IndustryAssetPublicationError('VALIDATION_STALE', 'competency results must bind the same reviewed definition and rule draft')
     }
 
     const candidates = await this.#deps.definitionCandidates.listCandidates(scopeRef, workspaceId, { limit: CANDIDATE_PAGE }, ctx)

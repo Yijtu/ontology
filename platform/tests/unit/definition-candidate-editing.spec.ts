@@ -1,5 +1,6 @@
 import { randomUUID } from 'node:crypto'
 import { describe, expect, it } from 'vitest'
+import { isDefinitionCandidatePayload } from '@ontology/contracts'
 import type {
   AppendAssetDraftInput,
   AssetCandidateBatch,
@@ -31,6 +32,8 @@ import {
   sha256DigestOf,
   canonicalJson,
   StaticDefinitionTerminologySource,
+  parseDefinitionCandidateOutput,
+  diffDefinitionProjection,
 } from '@ontology/application'
 import { InMemorySemanticPublicationStore, SemanticPublicationService } from '@ontology/semantic-engine'
 import { toolContext } from './component-registry-fixtures'
@@ -171,7 +174,7 @@ class UnusedIdentity implements IdentityDecisionStore {
   }
 }
 
-function objectPayload(logicalId: string, identity: readonly string[] = []): DefinitionCandidatePayload {
+function objectPayload(logicalId: string, identity: readonly string[] = []): Extract<DefinitionCandidatePayload, { kind: 'object' }> {
   return {
     kind: 'object',
     logicalId,
@@ -341,6 +344,57 @@ function publishedVersion(attributes: readonly { id: string; valueType: string; 
 const BASE_PACK_REF: VersionRef = { id: 'pack', version: '1.0.0', digest: DIGEST }
 
 describe('definition candidate editing and disambiguation', () => {
+  it('accepts only bounded unique scope dimensions through both model and human-edit boundaries', () => {
+    const payload = { ...objectPayload('device', ['device_serial']), identityScopeDimensions: ['project', 'site_code'] }
+    expect(isDefinitionCandidatePayload(payload)).toBe(true)
+    expect(parseDefinitionCandidateOutput(JSON.stringify({ objects: [{ logicalId: 'device', displayName: 'Device',
+      businessMeaning: 'device', suggestedReason: 'source', identityAttributeIds: ['device_serial'], identityScopeDimensions: ['project', 'site_code'] }] })).candidates[0]?.identityScopeDimensions).toEqual(['project', 'site_code'])
+    for (const dimensions of [['project', 'project'], [''], ['x'.repeat(257)], Array.from({ length: 17 }, (_, index) => `scope${String(index)}`), [42]]) {
+      expect(isDefinitionCandidatePayload({ ...payload, identityScopeDimensions: dimensions })).toBe(false)
+      expect(() => parseDefinitionCandidateOutput(JSON.stringify({ objects: [{ logicalId: 'device', displayName: 'Device',
+        businessMeaning: 'device', suggestedReason: 'source', identityScopeDimensions: dimensions }] }))).toThrow()
+    }
+    expect(isDefinitionCandidatePayload({ ...payload, scopeDimensions: ['forged-project'] })).toBe(false)
+  })
+
+  it('validates scope dimensions against required single string attributes of the same object', async () => {
+    const h = buildHarness()
+    await seedCandidate(h.candidates, attributePayload('device_serial', 'device', { valueType: 'string', minCardinality: 1, maxCardinality: 1 }))
+    await seedCandidate(h.candidates, attributePayload('site_code', 'device', { valueType: 'string', minCardinality: 1, maxCardinality: 1 }))
+    await seedCandidate(h.candidates, attributePayload('optional_site', 'device', { valueType: 'string', minCardinality: 0, maxCardinality: 1 }))
+    await seedCandidate(h.candidates, attributePayload('numeric_site', 'device', { valueType: 'number', minCardinality: 1, maxCardinality: 1 }))
+    await seedCandidate(h.candidates, objectPayload('other_device'))
+    await seedCandidate(h.candidates, attributePayload('foreign_site', 'other_device', { valueType: 'string', minCardinality: 1, maxCardinality: 1 }))
+    let currentId = (await seedCandidate(h.candidates, { ...objectPayload('device', ['device_serial']), identityScopeDimensions: ['project', 'site_code'] })).candidateId
+    expect((await h.service.validateForPublication({ workspaceId: WORKSPACE_ID, revision: '1' }, EDITOR)).blockers.filter((finding) => finding.path.endsWith('identityScopeDimensions'))).toEqual([])
+    for (const dimension of ['missing_site', 'optional_site', 'numeric_site', 'foreign_site']) {
+      const edited = await h.service.edit(WORKSPACE_ID, { candidateId: currentId, expectedRevision: '1',
+        payload: { ...objectPayload('device', ['device_serial']), identityScopeDimensions: ['project', dimension] },
+        reason: 'test the actual scope contract', idempotencyKey: `scope-${randomUUID()}` }, 'editor-1', EDITOR)
+      const next = edited.candidates[0]
+      if (next === undefined) throw new Error('expected a new scope candidate revision')
+      currentId = next.candidateId
+      expect((await h.service.validateForPublication({ workspaceId: WORKSPACE_ID, revision: '1' }, EDITOR)).blockers).toEqual(expect.arrayContaining([
+        expect.objectContaining({ code: 'INVALID_IDENTITY', logicalId: 'device', path: expect.stringContaining('identityScopeDimensions') }),
+      ]))
+    }
+  })
+
+  it('treats identity partition changes as breaking while absent dimensions retain legacy meaning', () => {
+    const previous = publishedVersion([{ id: 'device_serial', objectId: 'device', valueType: 'string' }])
+    const payload = objectPayload('device', ['device_serial'])
+    const serial = { payload: attributePayload('device_serial', 'device', { valueType: 'string', minCardinality: 0, maxCardinality: 1 }), logicalId: 'device_serial', kind: 'attribute' as const }
+    const projection = [{ payload, logicalId: 'device', kind: 'object' as const }, serial]
+    expect(diffDefinitionProjection(projection, previous, { workspaceId: WORKSPACE_ID, revision: '1' }).breakingChanges).toEqual([])
+    const changed = diffDefinitionProjection([{ payload: { ...payload, identityScopeDimensions: ['project'] }, logicalId: 'device', kind: 'object' }, serial], previous, { workspaceId: WORKSPACE_ID, revision: '1' })
+    expect(changed.requiresRevisionStrategy).toBe(true)
+    expect(changed.breakingChanges).toEqual([expect.objectContaining({ code: 'IDENTITY_CHANGED', before: '[]', after: '["project"]' })])
+    const ambiguousNames = { ...previous, identityScopes: previous.identityScopes.map((scope) => ({ ...scope, identityAttributeIds: ['a,b', 'c'] })) }
+    const distinctKeys = diffDefinitionProjection([{ payload: objectPayload('device', ['a', 'b,c']), logicalId: 'device', kind: 'object' }, serial], ambiguousNames,
+      { workspaceId: WORKSPACE_ID, revision: '1' })
+    expect(distinctKeys.breakingChanges.some((entry) => entry.code === 'IDENTITY_CHANGED')).toBe(true)
+  })
+
   it('edits an attribute type and unit into a new immutable revision and preserves the original', async () => {
     const h = buildHarness()
     const original = await seedCandidate(h.candidates, attributePayload('rated_power', 'device', { valueType: 'quantity', unitCode: 'kW' }))

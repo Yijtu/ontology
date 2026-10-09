@@ -18,6 +18,7 @@ export interface DraftDefinitionCandidate {
   readonly sourceIndex?: number
   readonly fragmentIndex?: number
   readonly identityAttributeIds?: readonly string[]
+  readonly identityScopeDimensions?: readonly string[]
   readonly objectLogicalId?: string
   readonly valueType?: IndustryAttributeValueType
   readonly unitCode?: string
@@ -150,12 +151,18 @@ function parseObject(entry: unknown, field: string): DraftDefinitionCandidate {
   if (!isRecord(entry)) {
     throw new DefinitionCandidateError('INVALID_MODEL_OUTPUT', `model output ${field} must be an object`)
   }
-  rejectFields(entry, ['identityAttributeIds'], field)
+  rejectFields(entry, ['identityAttributeIds', 'identityScopeDimensions'], field)
   const identity = optionalStringArray(entry['identityAttributeIds'], `${field}.identityAttributeIds`)
+  const dimensions = optionalStringArray(entry['identityScopeDimensions'], `${field}.identityScopeDimensions`)
+  if (dimensions !== undefined && (dimensions.length > 16 || new Set(dimensions).size !== dimensions.length ||
+      dimensions.some((dimension) => dimension.trim().length === 0 || dimension.length > 256))) {
+    throw new DefinitionCandidateError('INVALID_MODEL_OUTPUT', `model output ${field}.identityScopeDimensions must contain at most 16 unique non-empty dimension names`)
+  }
   return {
     kind: 'object',
     ...commonOf(entry, field),
     ...(identity === undefined ? {} : { identityAttributeIds: identity }),
+    ...(dimensions === undefined ? {} : { identityScopeDimensions: dimensions }),
   }
 }
 

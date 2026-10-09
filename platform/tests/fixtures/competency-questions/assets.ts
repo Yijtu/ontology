@@ -139,3 +139,19 @@ export const COMPETENCY_ASSETS = {
   transport: { definitions: [TRANSPORT_DEFINITION], rules: TRANSPORT_RULES, document: TRANSPORT_DOCUMENT },
   industrial: { definitions: [INDUSTRIAL_DEFINITION, INDUSTRIAL_DEFINITION_V2], rules: INDUSTRIAL_RULES, document: INDUSTRIAL_DOCUMENT },
 } as const
+
+/** Independently authored CSV/registered-operation originals; bytes remain separate from gold. */
+export const CQ_ADDITIONAL_SOURCES = [
+  { industry: "transport", filename: "transport-facility.csv", objectId: "facility", document: competencyFixtureDocument("transport.rows", "facility_code,length,condition,closed,located_in\nF-01,12.5,bad,false,D-01\nF-02,5.0,good,false,\n") },
+  { industry: "transport", filename: "transport-alternative.csv", objectId: "facility", document: competencyFixtureDocument("transport.alternative", "facility_code,condition\nF-01,good\n") },
+  { industry: "transport", filename: "transport-exception.csv", objectId: "facility", document: competencyFixtureDocument("transport.exception", "facility_code,closed\nF-01,true\n") },
+  { industry: "transport", filename: "transport-wrong-unit.csv", objectId: "facility", document: competencyFixtureDocument("transport.wrong-unit", "facility_code,length\nF-01,12.5\n") },
+  { industry: "transport", filename: "transport-district.csv", objectId: "district", document: competencyFixtureDocument("transport.district", "district_code,watch\nD-01,true\n") },
+  { industry: "transport", filename: "transport-compute-input.json", objectId: undefined, document: competencyFixtureDocument("transport.compute-input", "{\"rows\":[{\"id\":\"stock-a\",\"amount\":\"12.5\",\"unit\":\"each\"},{\"id\":\"stock-b\",\"amount\":\"5.0\",\"unit\":\"each\"}]}\n") },
+  { industry: "industrial", filename: "industrial-hours.csv", objectId: "asset", document: competencyFixtureDocument("industrial.rows", "asset_code,hours,exempt,in_workshop\nA-01,120,false,W-01\nA-02,30,false,\n") },
+  { industry: "industrial", filename: "industrial-alarm.csv", objectId: "asset", document: competencyFixtureDocument("industrial.alarm", "asset_code,alarm\nA-01,true\nA-02,false\n") },
+  { industry: "industrial", filename: "industrial-boundary.csv", objectId: "asset", document: competencyFixtureDocument("industrial.boundary", "asset_code,hours,exempt\nA-03,100,false\n") },
+  { industry: "industrial", filename: "industrial-version-two.csv", objectId: "asset", document: competencyFixtureDocument("industrial.version-two", "asset_code,inspection_due\nA-01,true\n") },
+  { industry: "industrial", filename: "industrial-workshop.csv", objectId: "workshop", document: competencyFixtureDocument("industrial.workshop", "shop_code,staffed\nW-01,false\n") },
+  { industry: "industrial", filename: "industrial-compute-input.json", objectId: undefined, document: competencyFixtureDocument("industrial.compute-input", "{\"rows\":[{\"id\":\"stock-a\",\"amount\":\"3\",\"unit\":\"each\"},{\"id\":\"stock-b\",\"amount\":\"4\",\"unit\":\"each\"},{\"id\":\"cost-a\",\"amount\":\"35\",\"currency\":\"CNY\"},{\"id\":\"cost-b\",\"amount\":\"4\",\"currency\":\"CNY\"}]}\n") },
+] as const
