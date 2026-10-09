@@ -482,6 +482,18 @@ function renderCitation(
       ...(isResourceRef(documentVersionRef) ? { documentVersionPointer: `${prefix}/documentVersionRef` } : {}),
     }
     const assertionId = stableUuid(`citation:${runId}:${evidenceRef.id}:${String(index)}:${documentRef.id}`)
+    if (locatorKind === 'approximate_locator' || node['spanKind'] === 'approximate') {
+      const sourceOrigin = node['sourceOrigin']
+      const projectionRef = isRecord(sourceOrigin) ? sourceOrigin['projectionRef'] : undefined
+      rendered.limitations.push('approximate_document_source', 'limited_factual_result')
+      // A structured projection is readable derived data, never a verbatim source quote.
+      // Missing origin/projection proof cannot be promoted to an exact citation.
+      if (isResourceRef(projectionRef)) rendered.assertions.push({ assertionId, kind: 'artifact_summary', subject,
+        predicate: 'structured_source_projection', artifactRef: projectionRef, summary: quote,
+        references: [{ ...binding, documentPointer: `${prefix}/sourceOrigin/projectionRef` }],
+      })
+      continue
+    }
     rendered.assertions.push({
       assertionId,
       kind: 'document_quote',

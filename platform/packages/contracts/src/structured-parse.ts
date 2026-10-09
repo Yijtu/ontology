@@ -339,3 +339,27 @@ export interface StructuredDocumentParserPort {
   parse(bytes: Uint8Array, options: StructuredParseOptions): StructuredParseResult
 }
 
+/** Strict stored selection boundary. No unknown fields, scripts or implicit coercion. */
+export function isStructuredParseSelection(value: unknown): value is Omit<StructuredParseOptions, 'mediaType'> {
+  if (typeof value !== 'object' || value === null || Array.isArray(value)) return false
+  if (Object.getPrototypeOf(value) !== Object.prototype && Object.getPrototypeOf(value) !== null) return false
+  const row = value as Record<string, unknown>
+  const keys = ['caps', 'encoding', 'delimiter', 'quote', 'headerRow', 'dataStartRow', 'sheetId', 'sheetName', 'capBreachMode']
+  if (Object.keys(row).some((key) => !keys.includes(key))) return false
+  if (row['encoding'] !== undefined && row['encoding'] !== 'utf-8') return false
+  if (row['delimiter'] !== undefined && (typeof row['delimiter'] !== 'string' || ![',', ';', '\t', '|'].includes(row['delimiter']))) return false
+  if (row['quote'] !== undefined && row['quote'] !== '"' && row['quote'] !== "'") return false
+  if (row['capBreachMode'] !== undefined && row['capBreachMode'] !== 'reject' && row['capBreachMode'] !== 'truncate') return false
+  for (const key of ['headerRow', 'dataStartRow']) if (row[key] !== undefined && (typeof row[key] !== 'number' || !Number.isSafeInteger(row[key]) || row[key] < 1)) return false
+  for (const key of ['sheetId', 'sheetName']) if (row[key] !== undefined && (typeof row[key] !== 'string' || row[key].length === 0)) return false
+  if (row['caps'] !== undefined) {
+    if (typeof row['caps'] !== 'object' || row['caps'] === null || Array.isArray(row['caps'])) return false
+    if (Object.getPrototypeOf(row['caps']) !== Object.prototype && Object.getPrototypeOf(row['caps']) !== null) return false
+    const caps = row['caps'] as Record<string, unknown>
+    const capKeys = ['maxFileBytes', 'maxExpandedBytes', 'maxZipEntries', 'maxRows', 'maxColumns', 'maxCellBytes', 'maxDepth']
+    if (Object.keys(caps).some((key) => !capKeys.includes(key))) return false
+    if (Object.values(caps).some((limit) => typeof limit !== 'number' || !Number.isSafeInteger(limit) || limit < 1)) return false
+  }
+  return true
+}
+

@@ -22,7 +22,7 @@ import type {
   ToolContext,
   Uuid,
 } from '@ontology/contracts'
-import { projectCollectionRef, isToolContext } from '@ontology/contracts'
+import { projectCollectionRef, isToolContext, ProjectReadinessStoreError } from '@ontology/contracts'
 import { Bm25IndexBuilder } from './builder'
 import { DocumentSearchError } from './errors'
 import { Bm25DocumentSearchService, DEFAULT_SEARCH_LIMIT } from './service'
@@ -151,6 +151,7 @@ export class ProjectDocumentIndexService {
   ): Promise<ProjectDocumentIndexStatus> {
     trustScope(ctx)
     const scope = trustedScope(ctx)
+    await this.#validateSource(input, ctx)
     await this.#store.registerDocument(scope, projectId, input, ctx)
     return this.getStatus(projectId, ctx)
   }
@@ -163,6 +164,7 @@ export class ProjectDocumentIndexService {
   ): Promise<ProjectDocumentIndexStatus> {
     trustScope(ctx)
     const scope = trustedScope(ctx)
+    if (input.replacement !== undefined) await this.#validateSource(input.replacement, ctx)
     await this.#store.reviseDocument(scope, projectId, input, ctx)
     return this.getStatus(projectId, ctx)
   }
@@ -172,8 +174,9 @@ export class ProjectDocumentIndexService {
    * A build whose epoch moved before activation is reported `stale` and never
    * becomes the active index.
    */
-  async buildIndex(projectId: Uuid, ctx: ToolContext): Promise<ProjectDocumentIndexStatus> {
+  async buildIndex(projectId: Uuid, ctx: ToolContext, options: { readonly signal?: AbortSignal } = {}): Promise<ProjectDocumentIndexStatus> {
     trustScope(ctx)
+    options.signal?.throwIfAborted()
     const scope = trustedScope(ctx)
     const collectionRef = projectCollectionRef(projectId)
     const visibility = await this.#store.getVisibility(scope, projectId, ctx)
@@ -182,6 +185,7 @@ export class ProjectDocumentIndexService {
 
     const corpus = await this.#currentCorpus(scope, projectId, ctx)
     const built = await this.#builder.build({ collectionRef, parses: corpus.parses }, ctx)
+    options.signal?.throwIfAborted()
     const recordedAt = this.#now()
     const receiptWrite = await this.#store.recordIndexReceipt(
       scope,
@@ -205,17 +209,15 @@ export class ProjectDocumentIndexService {
       // of reporting the epoch the doomed build carried.
       return this.getStatus(projectId, ctx)
     }
+    options.signal?.throwIfAborted()
     await this.#builder.activate(collectionRef, built.generation.generation, ctx)
+    options.signal?.throwIfAborted()
     await this.#recordReadiness(projectId, receiptWrite.receipt, ctx)
+    options.signal?.throwIfAborted()
     this.#cache.clear()
-    return this.#statusFrom(
-      projectId,
-      collectionRef,
-      epoch,
-      membershipRevision,
-      built.generation,
-      receiptWrite.receipt,
-    )
+    const status = await this.getStatus(projectId, ctx)
+    options.signal?.throwIfAborted()
+    return status
   }
 
   async getStatus(projectId: Uuid, ctx: ToolContext): Promise<ProjectDocumentIndexStatus> {
@@ -230,7 +232,8 @@ export class ProjectDocumentIndexService {
       return this.#statusFrom(projectId, collectionRef, epoch, membershipRevision, undefined, undefined)
     }
     const receipt = await this.#store.getIndexReceipt(scope, projectId, active.generation, ctx)
-    return this.#statusFrom(projectId, collectionRef, epoch, membershipRevision, active, receipt)
+    const current = await this.#store.getVisibility(scope, projectId, ctx)
+    return this.#statusFrom(projectId, collectionRef, current?.epoch ?? epoch, current?.membershipRevision ?? membershipRevision, active, receipt)
   }
 
   /** Search the project's active index, returning real fragments with fixed revisions. */
@@ -268,7 +271,11 @@ export class ProjectDocumentIndexService {
 
     const key = cacheKey(scope, projectId, receipt, request.query, limit)
     const cached = this.#cache.get(key)
-    if (cached !== undefined) return cached.result
+    if (cached !== undefined) {
+      const current = await this.#store.getVisibility(scope, projectId, ctx)
+      if (current?.epoch === epoch) return cached.result
+      return emptyResult(projectId, collectionRef, request.query, current?.epoch ?? '0', 'stale', active.generation, receipt.visibilityEpoch, this.#maxFragments, this.#maxFragmentBytes)
+    }
 
     let detail: DocumentSearchDetail
     try {
@@ -315,7 +322,7 @@ export class ProjectDocumentIndexService {
     const current = await this.#store.getVisibility(scope, projectId, ctx)
     const currentEpoch = current?.epoch ?? '0'
     const historical = currentEpoch !== epoch
-    const servedFragments = fragments
+    const servedFragments = historical ? [] : fragments
 
     const returned = servedFragments.length
     const result: ProjectDocumentSearchResult = {
@@ -418,6 +425,14 @@ export class ProjectDocumentIndexService {
     return { memberships, parses, truncated: truncated || parseMissing }
   }
 
+  async #validateSource(input: Pick<ProjectDocumentMembership, 'documentRef' | 'documentDigest' | 'parseId' | 'parseRef' | 'textDigest' | 'precision'>, ctx: ToolContext): Promise<void> {
+    const parse = await this.#parseStore.getParse(trustedScope(ctx), input.parseId, ctx)
+    const sameRef = (left: ResourceRef, right: ResourceRef) => left.id === right.id && left.version === right.version && left.digest === right.digest && left.kind === right.kind
+    if (parse === undefined || !sameRef(parse.originalRef, input.documentRef) || input.documentDigest !== parse.originalRef.digest || !sameRef(parse.spanMapRef, input.parseRef)
+      || (input.textDigest !== parse.normalizedRef.digest && input.textDigest !== parse.spanMapRef.digest)) throw new DocumentSearchError('INVALID_ARGUMENT', 'the membership must pin an actual authorized document parse and its original/projection artifacts')
+    if (input.precision === 'exact' && (await this.#parseStore.listChunks(trustedScope(ctx), input.parseId, ctx)).some((chunk) => chunk.precision === 'approximate')) throw new DocumentSearchError('INVALID_ARGUMENT', 'approximate source chunks cannot be registered as exact')
+  }
+
   async #corpusView(
     scope: ScopeRef,
     projectId: Uuid,
@@ -518,7 +533,7 @@ export class ProjectDocumentIndexService {
     const scope = trustedScope(ctx)
     const project = await this.#projects.getProject(scope, projectId, ctx)
     if (project === undefined) return
-    const revision = await this.#projects.getRevision(scope, projectId, project.headRevision, ctx)
+    const revision = await this.#projects.getRevision(scope, projectId, project.activeRevision ?? project.headRevision, ctx)
     if (revision === undefined) return
     const projectRevisionRef: ProjectRevisionRef = revision.ref
     try {
@@ -548,10 +563,11 @@ export class ProjectDocumentIndexService {
         },
         ctx,
       )
-    } catch {
+    } catch (error) {
       // Readiness is an advisory projection: a fence refusal (a newer revision
-      // already exists) must not fail the build itself. The receipt CAS above is
-      // the authoritative visibility gate.
+      // already exists) leaves the receipt visibility gate authoritative. Other
+      // failures stay explicit and retryable rather than masquerading as success.
+      if (!(error instanceof ProjectReadinessStoreError && error.code === 'FENCE_STALE')) throw error
     }
   }
 }

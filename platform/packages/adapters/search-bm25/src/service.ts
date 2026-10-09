@@ -128,6 +128,8 @@ export class Bm25DocumentSearchService {
   async searchDetailed(
     request: DocumentSearchRequest,
     ctx: ToolContext,
+    /** Constructor/host-selected immutable generations; never part of tool arguments. */
+    fixedCollections?: readonly { readonly collectionRef: string; readonly generation: string }[],
   ): Promise<DocumentSearchDetail> {
     const scope = trustedScope(ctx)
     assertKeywordMode(request)
@@ -149,7 +151,14 @@ export class Bm25DocumentSearchService {
     )
     const terms = [...new Set(tokenize(request.query))]
 
-    const resolved = await this.#resolveCollections(scope, collections, request, queryDigest, ctx)
+    const resolved = fixedCollections === undefined
+      ? await this.#resolveCollections(scope, collections, request, queryDigest, ctx)
+      : await Promise.all(fixedCollections.map(async (pin) => {
+          if (request.cursor !== undefined || fixedCollections.length !== collections.length || new Set(fixedCollections.map((entry) => entry.collectionRef)).size !== collections.length || !collections.includes(pin.collectionRef)) throw new DocumentSearchError('INVALID_ARGUMENT', 'the fixed collection pins differ from the authorized request')
+          const generation = await this.#store.getGeneration(scope, pin.collectionRef, pin.generation, ctx)
+          if (generation === undefined) throw new DocumentSearchError('SNAPSHOT_UNAVAILABLE', 'the fixed index generation is unavailable')
+          return { collectionRef: pin.collectionRef, generation }
+        }))
 
     const scored: ScoredDocument[] = []
     const completenesses: CompletenessStatus[] = []
@@ -190,13 +199,19 @@ export class Bm25DocumentSearchService {
       }
     }
 
-    // Duplicate copies of the same underlying content share a digest, so only the
-    // best-scoring copy counts: a repeated source is not independent evidence.
+    // Structured projections retain distinct located rows. Ordinary text/PDF
+    // keeps one best hit per original lineage, so copied files never add support.
     const best = new Map<string, ScoredDocument>()
     for (const entry of scored) {
-      const existing = best.get(entry.document.documentDigest)
+      const locator = entry.document.locator
+      const structuredMedia = ['text/csv', 'application/csv', 'application/json', 'text/json', 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet'].includes(entry.document.mediaType)
+      const structuredRow = structuredMedia && entry.document.spanKind === 'approximate' && entry.document.precision === 'approximate' && locator.kind === 'approximate_locator'
+      const key = structuredRow
+        ? JSON.stringify([entry.document.documentDigest, entry.document.quoteDigest, locator.kind, locator.page ?? null, locator.startOffset ?? null, locator.endOffset ?? null])
+        : entry.document.documentDigest
+      const existing = best.get(key)
       if (existing === undefined || entry.score > existing.score) {
-        best.set(entry.document.documentDigest, entry)
+        best.set(key, entry)
       }
     }
     const duplicatesCollapsed = scored.length - best.size

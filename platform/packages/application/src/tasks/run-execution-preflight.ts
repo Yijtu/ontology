@@ -55,6 +55,7 @@ export interface RunExecutionPreflightDependencies {
   readonly effectiveLimitsRef: VersionRef
   readonly parameters: TaskParameterValidator
   readonly projectQuerySnapshot?: (scope: ScopeRef, revision: ProjectRevision, parameters: Readonly<Record<string, unknown>>, ctx: ToolContext) => Promise<ResourceRef>
+  readonly projectDocumentIndexSnapshot?: (scope: ScopeRef, revision: ProjectRevision, ctx: ToolContext) => Promise<ResourceRef>
   readonly questionQuerySnapshot?: (scope: ScopeRef, revision: ProjectRevision, ctx: ToolContext) => Promise<ResourceRef | undefined>
   /** Server-built evolved input, read from actual approved data pages and human ledger receipts. */
   readonly projectApprovedInput?: (scope: ScopeRef, revision: ProjectRevision, ctx: ToolContext) => Promise<ResourceRef | undefined>
@@ -111,6 +112,7 @@ export class RunExecutionPreflightService implements RunExecutionBinder {
   readonly #effectiveLimitsRef: VersionRef
   readonly #parameters: TaskParameterValidator
   readonly #projectQuerySnapshot: RunExecutionPreflightDependencies['projectQuerySnapshot']
+  readonly #projectDocumentIndexSnapshot: RunExecutionPreflightDependencies['projectDocumentIndexSnapshot']
   readonly #questionQuerySnapshot: RunExecutionPreflightDependencies['questionQuerySnapshot']
   readonly #now: () => string
 
@@ -127,6 +129,7 @@ export class RunExecutionPreflightService implements RunExecutionBinder {
     this.#effectiveLimitsRef = dependencies.effectiveLimitsRef
     this.#parameters = dependencies.parameters
     this.#projectQuerySnapshot = dependencies.projectQuerySnapshot
+    this.#projectDocumentIndexSnapshot = dependencies.projectDocumentIndexSnapshot
     this.#questionQuerySnapshot = dependencies.questionQuerySnapshot
     this.#now = dependencies.now ?? (() => new Date().toISOString())
   }
@@ -184,9 +187,15 @@ export class RunExecutionPreflightService implements RunExecutionBinder {
       if (allowed.some((binding) => binding?.kind === 'structured_query')) projectDatasetSnapshotRef = await this.#questionQuerySnapshot(scopeRef, revision, ctx)
     }
 
+    let projectDocumentIndexSnapshotRef: ResourceRef | undefined
+    if (this.#projectDocumentIndexSnapshot !== undefined) {
+      const documentAllowed = binding?.kind === 'document_qa' || (request.mode === 'question' && (await Promise.all(allowedTaskBindingRefs.map((ref) => this.#taskBindings.getBinding(scopeRef, ref, ctx)))).some((candidate) => candidate?.kind === 'document_qa'))
+      if (documentAllowed) projectDocumentIndexSnapshotRef = await this.#projectDocumentIndexSnapshot(scopeRef, revision, ctx)
+    }
     const executionBinding: RunExecutionBinding = {
       schemaVersion: 'run-execution-binding@1',
       ...(projectDatasetSnapshotRef === undefined ? {} : { projectDatasetSnapshotRef }),
+      ...(projectDocumentIndexSnapshotRef === undefined ? {} : { projectDocumentIndexSnapshotRef }),
       runId: input.runId,
       request,
       resolvedProfileRef: input.profileBinding.resolvedProfileRef,

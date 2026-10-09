@@ -76,6 +76,7 @@ export interface DraftVerificationDependencies {
 
 const VERIFIED_LIMITATION_CODES = new Set<string>([
   'limited_factual_result',
+  'approximate_document_source',
   'no_supported_statements',
   'verification_never_passed',
   'unclassified_evidence_gap',

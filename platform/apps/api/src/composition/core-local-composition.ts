@@ -201,6 +201,7 @@ import { createEnvSecretResolver } from './secret-resolver'
 import { createPostgresProvenanceRead } from './provenance-read'
 import { createCoreModelCapabilityFactory } from './core-model-capabilities'
 import { createCoreDocumentSearchHandler } from './core-document-search-handler'
+import { createCoreStructuredImportWorkflow } from './core-structured-import-service'
 import { createCoreOntologyLookupHandler } from './core-rule-judgement-handler'
 import { CoreSemanticTaskResolver, createCoreSemanticTaskSource } from './core-semantic-task-resolver'
 import { CoreRelationsTaskHandler } from './core-relations-task-handler'
@@ -994,6 +995,8 @@ export interface CoreLocalCompositionOptions {
   readonly projectDataset?: PostgresProjectDatasetConfig
   /** Narrow active-snapshot guard; full evolution composition is owned by the deployment. */
   readonly projectEvolution?: import('@ontology/application').ProjectEvolutionService
+  /** Narrow optional leaf; broad production mounting is owned by the deployment factory. */
+  readonly projectStructuredImports?: typeof createCoreStructuredImportWorkflow
   readonly scopeRef: ScopeRef
   readonly examples: LoadedCoreExamples
   readonly allowLocalOperator?: boolean
@@ -1320,6 +1323,7 @@ class CorePublicationValidity implements PublicationValidityPort {
     readonly tables?: TableVerificationReceiptStore
     readonly policies?: TaskPolicyReportStore
     readonly rulePremises?: import('@ontology/contracts').RulePremiseReplayPort
+    readonly documentSources?: import('@ontology/application').PublicationEvidenceValidator
     readonly relations?: CoreRelationsTaskHandler
   }) {
     this.#engine = new PublicationValidityEngine({
@@ -1329,6 +1333,7 @@ class CorePublicationValidity implements PublicationValidityPort {
         ...defaultPublicationEvidenceValidators(),
         new CoreObservationPublicationValidator({ facts: input.facts, scopeRef: input.scopeRef, ...(input.relations === undefined ? {} : { relations: input.relations }) }),
         ruleDerivationValidator(input.rulePremises),
+        ...(input.documentSources === undefined ? [] : [input.documentSources]),
       ],
       ...(input.tables === undefined ? {} : { tables: input.tables }),
       ...(input.policies === undefined ? {} : { policies: input.policies }),
@@ -1685,9 +1690,11 @@ export async function createCoreLocalComposition(options: CoreLocalCompositionOp
     ))
     const duckDb = await createDuckDbSnapshot(options.examples.scenarios)
     cleanup.unshift(async () => duckDb.close())
-    const documentSpanReader = new DocumentSpanReader({ blobs: blobStore, store: parseStore })
+    const structuredImports = options.projectStructuredImports?.({ blobs: blobStore, parses: parseStore, ingestion: structuredStore, projects: projectStore,
+      documents: projectDocumentStore, indexStore: keywordIndexStore, readiness: projectReadinessStore, executionBindings: runExecutionBindingStore, mappings: projectMappingStore })
+    const documentSpanReader = structuredImports?.spanReader ?? new DocumentSpanReader({ blobs: blobStore, store: parseStore })
     const documentSearch = new Bm25DocumentSearchService({ indexStore: keywordIndexStore, spanReader: documentSpanReader })
-    const projectDocumentIndexService = new ProjectDocumentIndexService({
+    const projectDocumentIndexService = structuredImports?.index ?? new ProjectDocumentIndexService({
       store: projectDocumentStore,
       parseStore,
       indexStore: keywordIndexStore,
@@ -1777,7 +1784,7 @@ export async function createCoreLocalComposition(options: CoreLocalCompositionOp
         validator: toolSchemaValidator(createAjv()),
       },
     })
-    const documentSearchHandler = createCoreDocumentSearchHandler({
+    const documentSearchHandler = structuredImports?.handler ?? createCoreDocumentSearchHandler({
       service: documentSearch,
       spanReader: documentSpanReader,
       dataMode: 'observed',
@@ -1812,6 +1819,7 @@ export async function createCoreLocalComposition(options: CoreLocalCompositionOp
       effectiveLimitsRef: CORE_EFFECTIVE_LIMITS_REF,
       parameters: taskParameterValidator(createAjv()),
       projectQuerySnapshot: projectQuery.resolveForCreation,
+      ...(structuredImports === undefined ? {} : { projectDocumentIndexSnapshot: structuredImports.resolveForCreation }),
       questionQuerySnapshot: projectQuery.resolveQuestionForCreation,
       ...(options.projectEvolution === undefined ? {} : { projectApprovedInput: (scope: ScopeRef, revision: import('@ontology/contracts').ProjectRevision, ctx: ToolContext) => options.projectEvolution!.resolveApprovedInput(scope,revision,ctx) }),
     })
@@ -1965,6 +1973,7 @@ export async function createCoreLocalComposition(options: CoreLocalCompositionOp
         manifests: workflowStore,
         validity: new CorePublicationValidity({
           rulePremises: rulePremiseVerifier,
+          ...(structuredImports === undefined ? {} : { documentSources: structuredImports.publicationValidator }),
           relations: relationsTask,
           evidence: evidenceStore,
           artifacts: blobStore,
@@ -2311,7 +2320,7 @@ export async function createCoreLocalComposition(options: CoreLocalCompositionOp
     // as an immutable original, then run the real structured parser and persist the reconciled
     // rows. The returned parseId/originalRef/format feed the column-mapping route, so a project
     // can map and bind on the real parse instead of a startup fixture.
-    const projectStructuredImportService: ProjectStructuredImportService = {
+    const projectStructuredImportService: ProjectStructuredImportService = structuredImports?.imports ?? {
       async importStructuredSource(projectId, input, ctx) {
         await projectService.getProject(projectId, ctx)
         const written = await createBlobArtifactWriter(blobStore).putBytes(

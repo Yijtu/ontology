@@ -78,3 +78,5 @@ export type {
   StructuralLine,
 } from './types'
 export * from './source-grounding'
+export { StructuredDocumentProjectionService, StructuredDocumentSpanReader, STRUCTURED_PROJECTION_VERSION, STRUCTURED_PROJECTION_MAX_ROWS, STRUCTURED_PROJECTION_MAX_MAP_BYTES } from './structured/document-projection'
+export type { StructuredDocumentProjectionDependencies, StructuredProjectionOrigin } from './structured/document-projection'

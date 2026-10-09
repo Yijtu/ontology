@@ -27,6 +27,7 @@ import {
   coreScenarioTaskBindings,
   createCoreApi,
   createCoreLocalComposition,
+  createCoreStructuredImportWorkflow,
   createBlobArtifactWriter,
   loadCoreExamples,
 } from '@ontology/app-api'
@@ -113,6 +114,7 @@ let modelProfileRef: { id: string; version: string }
 let baseProfileRef: { id: string; version: string }
 let missingCapabilityProfileRef: { id: string; version: string }
 let routingFixture: ReturnType<typeof projectQueryPublicationFixture>
+let routingDocuments: ReturnType<typeof createCoreStructuredImportWorkflow>
 let routingDatabase: ControlPostgresDatabase
 let routingRegistry: PostgresArtifactRegistry
 let routingStructured: PostgresStructuredIngestionStore
@@ -403,6 +405,7 @@ beforeAll(async () => {
     scopeRef,
     examples: loadCoreExamples({ targetScopeRef: scopeRef }),
     allowLocalOperator: true,
+    projectStructuredImports: (options) => { routingDocuments = createCoreStructuredImportWorkflow(options); return routingDocuments },
     modelsEnabled: true,
     modelEnvironment: {
       CORE_ENABLE_MODELS: 'true', CORE_COMPANY_MODEL_BASE_URL: await controlledModels(),
@@ -423,7 +426,8 @@ beforeAll(async () => {
   await objects.init()
   const blobs = new LocalImmutableBlobStore({ objectStore: objects, registry: routingRegistry })
   const definition = await new SemanticDefinitionService({ store: new PostgresSemanticDefinitionStore(routingDatabase), control: new ControlPostgresRepository(routingDatabase) }).getVersion({ scopeRef, namespace: scenario.namespace, definitionId: scenario.definitionRef.id, version: scenario.definitionRef.version }, ctx)
-  routingFixture = projectQueryPublicationFixture({ db: routingDatabase, blobs, structured: routingStructured, scope: scopeRef, ctx, projectId: PROJECT_ID, definition })
+  routingFixture = projectQueryPublicationFixture({ db: routingDatabase, blobs, structured: routingStructured, scope: scopeRef, ctx, projectId: PROJECT_ID, definition,
+    projectDocument: (parse, context) => routingDocuments.projection.project(parse, context) })
   const first = await routingFixture.importCsv(OBJECT_ID, 'code,network,district,due\nT-ROUTE,route-network,north,true\nT-OTHER,route-network,north,false\n', ['facility_id', 'network_code', 'facility_district_code', 'inspection_due'])
   const district = await routingFixture.importCsv('transport_district', 'code,network,name\nnorth,route-network,North\n', ['district_code', 'district_network_code', 'district_name'])
   const policyParses = new PostgresDocumentParseStore({ connectionString: appUrl })
@@ -433,6 +437,10 @@ beforeAll(async () => {
     await routingFixture.documents.registerDocument(scopeRef, PROJECT_ID, { documentId: randomUUID(), documentRef: policyDocument.originalRef, documentDigest: policyDocument.originalRef.digest, parseId: policyDocument.parseId,
       parseRef: storedParse.spanMapRef, textDigest: storedParse.spanMapRef.digest, precision: 'exact', actor: ctx.principal.subjectId, recordedAt: new Date().toISOString() }, ctx)
   } finally { await policyParses.close() }
+  const project = await routingFixture.projects.getProject(scopeRef, PROJECT_ID, ctx)
+  if (project === undefined) throw new Error('the real routing source project is missing')
+  await routingFixture.projectService.appendRevision(PROJECT_ID, { expectedRevision: project.headRevision, reason: 'pin actual authorized indexed source corpus',
+    documentSetRef: await routingDocuments.documentSet(PROJECT_ID, ctx) }, `routing-corpus-${randomUUID()}`, ctx.principal.subjectId, ctx)
   const source = await routingFixture.restage(first)
   const districtSource = await routingFixture.restage(district)
   await routingFixture.approveAndPublish(source)
