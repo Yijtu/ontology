@@ -534,7 +534,7 @@ export function diffDefinitionProjection(
       }
       const beforeIdentity = index.identityByObject.get(payload.logicalId) ?? []
       const afterIdentity = [...payload.identityAttributeIds].sort()
-      if (beforeIdentity.join(',') !== afterIdentity.join(',')) {
+      if (JSON.stringify(beforeIdentity) !== JSON.stringify(afterIdentity)) {
         changes.push(change({
           code: 'IDENTITY_CHANGED',
           logicalId: payload.logicalId,

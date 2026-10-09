@@ -77,6 +77,11 @@ describe('CQ comparison boundary (unit ports, not real capability acceptance)', 
     const h: ReturnType<typeof boundaryHarness> = boundaryHarness({ execute: async (request) => { controller.abort(); return h.complete(request) } })
     await expect(h.runner.run(h.set.ref, context(), controller.signal)).rejects.toMatchObject({ code: 'CANCELLED' })
   })
+  it('classifies an accepted abort raised by the actual execution port without returning a report', async () => {
+    const controller = new AbortController()
+    const h = boundaryHarness({ execute: async () => { controller.abort(); controller.signal.throwIfAborted(); throw new Error('abort must interrupt execution') } })
+    await expect(h.runner.run(h.set.ref, context(), controller.signal)).rejects.toMatchObject({ code: 'CANCELLED', cause: expect.objectContaining({ name: 'AbortError' }) })
+  })
   it('compares exact decimal quantity axes without treating categorical numeric strings as quantities', async () => {
     const h: ReturnType<typeof boundaryHarness> = boundaryHarness({ execute: async (request) => h.complete(request, { kind: 'value', value: { amount: '12.500', unit: 'm' } }) })
     expect((await h.runner.run(h.set.ref, context(), new AbortController().signal)).passed).toBe(true)

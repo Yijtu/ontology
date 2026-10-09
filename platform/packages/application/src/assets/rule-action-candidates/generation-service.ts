@@ -305,7 +305,7 @@ function groundCandidate(candidate: RuleActionCandidateVersion, proposal: DraftR
   const relations = new Map([...(terms?.definition?.relations ?? []).map((relation) => ({ id: relation.id, from: relation.fromObjectId, to: relation.toObjectId })),
     ...selected.flatMap((row) => row.payload.kind === 'relation' ? [{ id: row.logicalId, from: row.payload.fromObjectLogicalId, to: row.payload.toObjectLogicalId }] : [])].map((relation) => [relation.id, relation]))
   const visit = (node: RuleExpressionNode, path: string, objectId: string): RuleExpressionNode => {
-    if (node.op === 'all' || node.op === 'any') return { ...node, operands: node.operands.map((operand, i) => visit(operand, `${path}.operands[${String(i)}]`, objectId)) }
+    if (node.op === 'all' || node.op === 'any') return { ...node, spans: locate(path), operands: node.operands.map((operand, i) => visit(operand, `${path}.operands[${String(i)}]`, objectId)) }
     if (node.op === 'not') return { ...node, spans: locate(path), operand: visit(node.operand, `${path}.operand`, objectId) }
     if (node.op === 'relation') {
       const relation = relations.get(node.relationId)

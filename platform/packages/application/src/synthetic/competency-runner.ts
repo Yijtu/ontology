@@ -49,6 +49,13 @@ export class CompetencyRunner {
   constructor(dependencies: CompetencyRunnerDependencies) { this.#deps = dependencies }
 
   async run(ref: VersionRef, ctx: ToolContext, signal: AbortSignal, validationTarget?: CompetencyValidationTarget): Promise<CompetencyRunReport> {
+    try { return await this.#run(ref, ctx, signal, validationTarget) } catch (cause) {
+      if (signal.aborted) throw new CompetencyQuestionError('CANCELLED', 'competency execution was cancelled', { cause })
+      throw cause
+    }
+  }
+
+  async #run(ref: VersionRef, ctx: ToolContext, signal: AbortSignal, validationTarget?: CompetencyValidationTarget): Promise<CompetencyRunReport> {
     if (!isToolContext(ctx) || ctx.principal.tenantId !== ctx.allowedResources.tenantId) throw new CompetencyQuestionError('SCOPE_MISMATCH', 'competency execution requires a trusted scope')
     const scope: ScopeRef = { tenantId: ctx.principal.tenantId, spaceId: ctx.allowedResources.spaceId }
     const abort = () => { if (signal.aborted) throw new CompetencyQuestionError('CANCELLED', 'competency execution was cancelled') }

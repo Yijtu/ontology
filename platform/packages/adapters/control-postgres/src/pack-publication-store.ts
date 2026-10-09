@@ -1,4 +1,5 @@
 import type { QueryResultRow } from 'pg'
+import { createHash } from 'node:crypto'
 import {
   COMPETENCY_BODY_MEDIA_TYPE,
   PublishedPackAssetStoreError,
@@ -14,6 +15,7 @@ import type {
   PublishedPackAssetFilter,
   PublishedPackAssetStore,
   ScopeRef,
+  ScopedArtifactReader,
   SemanticDefinitionAudit,
   SemanticDefinitionRecord,
   ToolContext,
@@ -58,7 +60,7 @@ function toAsset(row: AssetRow): PublishedPackAsset {
 export class PostgresPublishedPackAssetStore implements PublishedPackAssetStore {
   readonly #database: ControlPostgresDatabase
 
-  constructor(database: ControlPostgresDatabase) {
+  constructor(database: ControlPostgresDatabase, readonly options: { readonly competencyBodies?: ScopedArtifactReader } = {}) {
     this.#database = database
   }
 
@@ -101,7 +103,7 @@ export class PostgresPublishedPackAssetStore implements PublishedPackAssetStore 
           `workspace head is ${workspaceRow.head_revision}, not the expected ${input.expectedRevision}`,
         )
       }
-      await this.#guardPublicationPins(query, input)
+      await this.#guardPublicationPins(query, input, ctx)
 
       const existingPack = await this.#byPackIdVersion(query, pack.packRef.id, pack.packRef.version)
       if (existingPack !== undefined) {
@@ -197,8 +199,8 @@ export class PostgresPublishedPackAssetStore implements PublishedPackAssetStore 
     })
   }
 
-  async #guardPublicationPins(query: ScopedQuery, input: CommitApprovedPackInput): Promise<void> {
-    await this.#guardCompetency(query, input)
+  async #guardPublicationPins(query: ScopedQuery, input: CommitApprovedPackInput, ctx: ToolContext): Promise<void> {
+    await this.#guardCompetency(query, input, ctx)
     const rows = await query.query<{ candidate_id: string; content_digest: string; state: string; pending_confirmation: boolean;
       review_revision: string | null; decision: string | null; reviewed_digest: string | null }>(
       `SELECT c.candidate_id, c.content_digest, c.state, c.pending_confirmation,
@@ -288,12 +290,12 @@ export class PostgresPublishedPackAssetStore implements PublishedPackAssetStore 
     }
   }
 
-  async #guardCompetency(query: ScopedQuery, input: CommitApprovedPackInput): Promise<void> {
+  async #guardCompetency(query: ScopedQuery, input: CommitApprovedPackInput, ctx: ToolContext): Promise<void> {
     const cases = input.pack.packAsset.testSuite.cases
     const validation = await query.query<{ report: IndustryValidationReport; content_digest: string }>(
       `SELECT report, content_digest FROM agent_platform.industry_validation_reports
        WHERE tenant_id=current_setting('app.tenant_id')::uuid AND space_id=current_setting('app.space_id')::uuid
-         AND validation_id=$1::uuid AND workspace_id=$2::uuid AND revision=$3::bigint`,
+         AND validation_id=$1::uuid AND workspace_id=$2::uuid AND revision=$3::text`,
       [input.pack.validationRef.id, input.pack.workspaceId, input.expectedRevision],
     )
     const stored = validation.rows[0]
@@ -325,6 +327,18 @@ export class PostgresPublishedPackAssetStore implements PublishedPackAssetStore 
       [competency.questionSetRef.id, competency.questionSetRef.digest, COMPETENCY_BODY_MEDIA_TYPE],
     )
     if (approved.rows.length !== 1) throw new PublishedPackAssetStoreError('VERSION_CONFLICT', 'competency approval or body artifact changed before publication commit')
+    if (this.options.competencyBodies === undefined) throw new PublishedPackAssetStoreError('VERSION_CONFLICT', 'competency publication requires the actual immutable body reader')
+    // The current review head remains locked through COMMIT. Metadata alone cannot
+    // establish that the actual canonical body bytes still match the reviewed hash.
+    try {
+      const bytes = await this.options.competencyBodies.read({ approvedInputRefs: [{ ...competency.questionSetRef, kind: 'artifact' }] }, ctx)
+      if (bytes.byteLength > 1_048_576 || `sha256:${createHash('sha256').update(bytes).digest('hex')}` !== competency.questionSetRef.digest) {
+        throw new PublishedPackAssetStoreError('VERSION_CONFLICT', 'competency body bytes changed before publication commit')
+      }
+    } catch (cause) {
+      if (cause instanceof PublishedPackAssetStoreError) throw cause
+      throw new PublishedPackAssetStoreError('VERSION_CONFLICT', 'competency body became unavailable before publication commit', { cause })
+    }
   }
 
   async #insertDefinition(query: ScopedQuery, definition: SemanticDefinitionRecord): Promise<void> {

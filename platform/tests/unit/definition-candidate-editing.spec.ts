@@ -389,6 +389,10 @@ describe('definition candidate editing and disambiguation', () => {
     const changed = diffDefinitionProjection([{ payload: { ...payload, identityScopeDimensions: ['project'] }, logicalId: 'device', kind: 'object' }, serial], previous, { workspaceId: WORKSPACE_ID, revision: '1' })
     expect(changed.requiresRevisionStrategy).toBe(true)
     expect(changed.breakingChanges).toEqual([expect.objectContaining({ code: 'IDENTITY_CHANGED', before: '[]', after: '["project"]' })])
+    const ambiguousNames = { ...previous, identityScopes: previous.identityScopes.map((scope) => ({ ...scope, identityAttributeIds: ['a,b', 'c'] })) }
+    const distinctKeys = diffDefinitionProjection([{ payload: objectPayload('device', ['a', 'b,c']), logicalId: 'device', kind: 'object' }, serial], ambiguousNames,
+      { workspaceId: WORKSPACE_ID, revision: '1' })
+    expect(distinctKeys.breakingChanges.some((entry) => entry.code === 'IDENTITY_CHANGED')).toBe(true)
   })
 
   it('edits an attribute type and unit into a new immutable revision and preserves the original', async () => {

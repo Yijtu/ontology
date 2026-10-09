@@ -9,6 +9,7 @@ import type {
 import { canonicalJson } from '@ontology/application'
 import {
   publishedRuleConsequenceKey, publishedRuleDependencyRef, publishedRuleRef, projectSnapshotMappingRef,
+  sameUtcInstant,
 } from '@ontology/semantic-engine'
 import type {
   IncrementalMaterializer, MaterializationPublishedSource, MaterializedRuleDerivationEvidenceProducer,
@@ -17,6 +18,8 @@ import type {
 import type { RegisteredOperation } from '@ontology/contracts'
 
 export interface PreparedCompetencyCase {
+  /** Re-read current project/source/template/target pins around actual execution I/O. */
+  readonly validateCurrent: (ctx: ToolContext, signal: AbortSignal) => Promise<void>
   /** Actual archived source/project/definition/rule/event binding, re-read by the executor. */
   readonly executionInputRef: ResourceRef
   readonly recordedPoint: string
@@ -47,7 +50,8 @@ export interface PreparedCompetencyCase {
 
 export type PreparedCompetencyInput =
   | { readonly status: 'prepared'; readonly input: PreparedCompetencyCase }
-  | { readonly status: 'refused'; readonly reason: Extract<CompetencyExpectation, { kind: 'refusal' }>['reason']; readonly artifacts: readonly ResourceRef[]; readonly consumedOriginals: readonly ResourceRef[]; readonly validationTargetDigest?: string }
+  | { readonly status: 'refused'; readonly reason: Extract<CompetencyExpectation, { kind: 'refusal' }>['reason']; readonly artifacts: readonly ResourceRef[]; readonly consumedOriginals: readonly ResourceRef[]; readonly validationTargetDigest?: string;
+      readonly validateCurrent: (ctx: ToolContext, signal: AbortSignal) => Promise<void> }
   | { readonly status: 'not_yet_executable'; readonly reason: string }
 
 export interface CoreCompetencyExecutionOptions {
@@ -88,12 +92,16 @@ export function createCoreCompetencyExecution(options: CoreCompetencyExecutionOp
     if (prepared.status === 'not_yet_executable') return prepared
     const finish = async (actual: CompetencyExpectation, artifactRefs: readonly ResourceRef[], originals: readonly ResourceRef[], validationTargetDigest?: string): Promise<CompetencyExecutionResult> => {
       const sources = await coveredSources(request, originals, ctx, signal)
+      if (prepared.status === 'prepared') await prepared.input.validateCurrent(ctx, signal)
+      else await prepared.validateCurrent(ctx, signal)
       signal.throwIfAborted()
       return { status: 'executed', actual, inputDigest: request.inputDigest, definitionRef: request.definitionRef, ruleRefs: request.ruleRefs,
         ...(validationTargetDigest === undefined ? {} : { validationTargetDigest }), artifactRefs, sources }
     }
     if (prepared.status === 'refused') return finish({ kind: 'refusal', reason: prepared.reason }, prepared.artifacts, prepared.consumedOriginals, prepared.validationTargetDigest)
     const input = prepared.input
+    await input.validateCurrent(ctx, signal)
+    signal.throwIfAborted()
     const captured = await readJson(input.executionInputRef, ctx)
     const actualRules = input.rules?.versions.map((row) => ({ declarationRef: row.declarationRef, actualRef: publishedRuleRef(row.published) })) ?? []
     const points = isRecord(captured) && Array.isArray(captured['recordedPoints']) ? captured['recordedPoints'] : []
@@ -171,7 +179,7 @@ export function createCoreCompetencyExecution(options: CoreCompetencyExecutionOp
       if (read.status !== 'materialized') return { status: 'not_yet_executable', reason: 'the exact persisted rule point is unavailable or fenced' }
       const ruleRef = publishedRuleRef(rule.published)
       const artifact = read.ruleArtifacts?.find((row) => sameRef(row.ruleRef, ruleRef) && row.objectId === intent.objectId && row.subjectEntityId === entityId)
-      if (artifact === undefined || artifact.validAt !== request.input.validAt || artifact.asOfRecordedSeq !== rules.recordedPoint) return { status: 'not_yet_executable', reason: 'the exact captured rule computation is unavailable' }
+      if (artifact === undefined || artifact.validAt === undefined || !sameUtcInstant(artifact.validAt, request.input.validAt) || artifact.asOfRecordedSeq !== rules.recordedPoint) return { status: 'not_yet_executable', reason: 'the exact captured rule computation is unavailable' }
       const evidence = await rules.producer.record({ scopeRef: request.input.scopeRef, ruleRef, definitionRef: input.definition.ref, objectId: intent.objectId,
         subjectEntityId: entityId, validAt: request.input.validAt, asOfRecordedSeq: rules.recordedPoint, observedAt: new Date().toISOString(), sourceSnapshots: [], dataMode: 'synthetic' }, ctx)
       const payloadRef = evidence.envelope.payloadRef
