@@ -5,6 +5,7 @@ import {
 } from '@ontology/contracts'
 import type {
   ActionCandidateVersion,
+  AssetDraftReference,
   AssetCandidateVersion,
   AttributeDefinition,
   CapabilityRequirement,
@@ -467,7 +468,7 @@ export function buildVersionDiff(args: {
 /* ----------------------------------------------------------------------------------------- */
 
 export interface AssemblePackArgs {
-  readonly sourceDraftRef?: import('@ontology/contracts').AssetDraftReference
+  readonly sourceDraftRef?: AssetDraftReference
   readonly ruleReviewPins?: readonly DefinitionApprovalPin[]
   readonly workspace: IndustryWorkspace
   readonly scopeRef: ScopeRef
