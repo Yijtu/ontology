@@ -157,7 +157,8 @@ export type RunId = string
  * This interface was referenced by `OntologyContracts`'s JSON-Schema
  * via the `definition` "CompetencyGoldValue".
  */
-export type CompetencyGoldValue = string | boolean | DecimalQuantity
+export type CompetencyGoldValue =
+  string | boolean | DecimalQuantity | Money | CompetencyExactScalarDecimal
 /**
  * This interface was referenced by `OntologyContracts`'s JSON-Schema
  * via the `definition` "CompetencyQuestionIntent".
@@ -190,6 +191,16 @@ export type CompetencyQuestionIntent =
       subjectEntityId: string
       relationId: string
     }
+  | {
+      kind: 'registered_compute'
+      projectId: Uuid
+      operationRef: {
+        id: 'example.compute.aggregate'
+        version: '1'
+      }
+      inputSourceRef: VersionRef
+      metric: 'record_count' | 'total_quantity' | 'total_cost'
+    }
 /**
  * This interface was referenced by `OntologyContracts`'s JSON-Schema
  * via the `definition` "CompetencyExpectation".
@@ -209,6 +220,7 @@ export type CompetencyExpectation =
       reason:
         'cross_project' | 'definition_version_mismatch' | 'unit_mismatch' | 'unsupported_capability'
     }
+  | CompetencyRelationExpectation
 /**
  * This interface was referenced by `OntologyContracts`'s JSON-Schema
  * via the `definition` "CompetencyQuestion".
@@ -943,6 +955,14 @@ export interface Integrity {
 }
 /**
  * This interface was referenced by `OntologyContracts`'s JSON-Schema
+ * via the `definition` "CompetencyExactScalarDecimal".
+ */
+export interface CompetencyExactScalarDecimal {
+  kind: 'scalar_decimal'
+  amount: DecimalString
+}
+/**
+ * This interface was referenced by `OntologyContracts`'s JSON-Schema
  * via the `definition` "CompetencySourceLocation".
  */
 export interface CompetencySourceLocation {
@@ -964,7 +984,7 @@ export interface CompetencyObservation {
   entityId: string
   objectId: string
   attributeId: string
-  value: CompetencyGoldValue
+  value: string | boolean | DecimalQuantity
   recordedSeq: RevisionString
   status: 'active' | 'retracted'
   source: CompetencySourceLocation
@@ -1003,6 +1023,23 @@ export interface CompetencySyntheticInput {
    * @maxItems 256
    */
   relations: CompetencyRelationInput[]
+  /**
+   * @maxItems 10
+   */
+  structuredSources?: CompetencyStructuredSource[]
+}
+/**
+ * This interface was referenced by `OntologyContracts`'s JSON-Schema
+ * via the `definition` "CompetencyStructuredSource".
+ */
+export interface CompetencyStructuredSource {
+  sourceRef: VersionRef
+  objectId: string
+  /**
+   * @minItems 1
+   * @maxItems 32
+   */
+  attributeIds: string[]
 }
 /**
  * This interface was referenced by `OntologyContracts`'s JSON-Schema
@@ -1013,6 +1050,18 @@ export interface CompetencyRuleExpectation {
   conditionState: 'true' | 'false' | 'unknown' | 'conflict'
   applicability: 'applicable' | 'not_applicable' | 'unknown' | 'conflict'
   propositionState: 'true' | 'false' | 'unknown' | 'conflict'
+}
+/**
+ * This interface was referenced by `OntologyContracts`'s JSON-Schema
+ * via the `definition` "CompetencyRelationExpectation".
+ */
+export interface CompetencyRelationExpectation {
+  kind: 'relation'
+  /**
+   * @maxItems 32
+   */
+  targetEntityIds: string[]
+  completeness: 'complete' | 'partial' | 'unknown'
 }
 export interface CompetencyQuestion1 {
   questionId: string

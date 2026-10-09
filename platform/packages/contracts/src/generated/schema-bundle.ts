@@ -587,6 +587,12 @@ export const SCHEMA_DOCUMENTS: readonly JsonSchemaObject[] = [
           },
           {
             "$ref": "./common.schema.json#/$defs/DecimalQuantity"
+          },
+          {
+            "$ref": "./common.schema.json#/$defs/Money"
+          },
+          {
+            "$ref": "#/$defs/CompetencyExactScalarDecimal"
           }
         ],
         "title": "CompetencyGoldValue"
@@ -662,7 +668,18 @@ export const SCHEMA_DOCUMENTS: readonly JsonSchemaObject[] = [
             "pattern": "\\S"
           },
           "value": {
-            "$ref": "#/$defs/CompetencyGoldValue"
+            "oneOf": [
+              {
+                "type": "string",
+                "maxLength": 4096
+              },
+              {
+                "type": "boolean"
+              },
+              {
+                "$ref": "./common.schema.json#/$defs/DecimalQuantity"
+              }
+            ]
           },
           "recordedSeq": {
             "$ref": "./common.schema.json#/$defs/RevisionString"
@@ -778,6 +795,13 @@ export const SCHEMA_DOCUMENTS: readonly JsonSchemaObject[] = [
             },
             "minItems": 0,
             "maxItems": 256
+          },
+          "structuredSources": {
+            "type": "array",
+            "maxItems": 10,
+            "items": {
+              "$ref": "#/$defs/CompetencyStructuredSource"
+            }
           }
         },
         "title": "CompetencySyntheticInput"
@@ -925,6 +949,51 @@ export const SCHEMA_DOCUMENTS: readonly JsonSchemaObject[] = [
                 "pattern": "\\S"
               }
             }
+          },
+          {
+            "type": "object",
+            "additionalProperties": false,
+            "required": [
+              "kind",
+              "projectId",
+              "operationRef",
+              "inputSourceRef",
+              "metric"
+            ],
+            "properties": {
+              "kind": {
+                "const": "registered_compute"
+              },
+              "projectId": {
+                "$ref": "./common.schema.json#/$defs/Uuid"
+              },
+              "operationRef": {
+                "type": "object",
+                "additionalProperties": false,
+                "required": [
+                  "id",
+                  "version"
+                ],
+                "properties": {
+                  "id": {
+                    "const": "example.compute.aggregate"
+                  },
+                  "version": {
+                    "const": "1"
+                  }
+                }
+              },
+              "inputSourceRef": {
+                "$ref": "./common.schema.json#/$defs/VersionRef"
+              },
+              "metric": {
+                "enum": [
+                  "record_count",
+                  "total_quantity",
+                  "total_cost"
+                ]
+              }
+            }
           }
         ]
       },
@@ -1028,6 +1097,9 @@ export const SCHEMA_DOCUMENTS: readonly JsonSchemaObject[] = [
                 ]
               }
             }
+          },
+          {
+            "$ref": "#/$defs/CompetencyRelationExpectation"
           }
         ],
         "title": "CompetencyExpectation"
@@ -1374,6 +1446,87 @@ export const SCHEMA_DOCUMENTS: readonly JsonSchemaObject[] = [
           }
         },
         "title": "CompetencyQuestionSet"
+      },
+      "CompetencyExactScalarDecimal": {
+        "title": "CompetencyExactScalarDecimal",
+        "type": "object",
+        "additionalProperties": false,
+        "required": [
+          "kind",
+          "amount"
+        ],
+        "properties": {
+          "kind": {
+            "const": "scalar_decimal"
+          },
+          "amount": {
+            "$ref": "./common.schema.json#/$defs/DecimalString"
+          }
+        }
+      },
+      "CompetencyRelationExpectation": {
+        "title": "CompetencyRelationExpectation",
+        "type": "object",
+        "additionalProperties": false,
+        "required": [
+          "kind",
+          "targetEntityIds",
+          "completeness"
+        ],
+        "properties": {
+          "kind": {
+            "const": "relation"
+          },
+          "targetEntityIds": {
+            "type": "array",
+            "uniqueItems": true,
+            "maxItems": 32,
+            "items": {
+              "type": "string",
+              "minLength": 1,
+              "maxLength": 256,
+              "pattern": "\\S"
+            }
+          },
+          "completeness": {
+            "enum": [
+              "complete",
+              "partial",
+              "unknown"
+            ]
+          }
+        }
+      },
+      "CompetencyStructuredSource": {
+        "title": "CompetencyStructuredSource",
+        "type": "object",
+        "additionalProperties": false,
+        "required": [
+          "sourceRef",
+          "objectId",
+          "attributeIds"
+        ],
+        "properties": {
+          "sourceRef": {
+            "$ref": "./common.schema.json#/$defs/VersionRef"
+          },
+          "objectId": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 256
+          },
+          "attributeIds": {
+            "type": "array",
+            "minItems": 1,
+            "maxItems": 32,
+            "uniqueItems": true,
+            "items": {
+              "type": "string",
+              "minLength": 1,
+              "maxLength": 256
+            }
+          }
+        }
       }
     }
   },

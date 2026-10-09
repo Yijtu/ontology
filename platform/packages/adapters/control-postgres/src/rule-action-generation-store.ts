@@ -29,6 +29,15 @@ export class PostgresRuleActionGenerationStore implements RuleActionGenerationSt
     assertScope(scope, ctx)
     return this.database.withIdentityScope(scope, (client) => this.#find(client, key))
   }
+  getById(scope: ScopeRef, batchId: string, ctx: ToolContext): Promise<RuleActionGenerationBatch | undefined> {
+    assertScope(scope, ctx)
+    return this.database.withIdentityScope(scope, async (client) => {
+      const result = await client.query<{ rule_action_result: unknown }>(`SELECT rule_action_result FROM agent_platform.asset_candidate_batches
+        WHERE tenant_id=current_setting('app.tenant_id')::uuid AND space_id=current_setting('app.space_id')::uuid
+          AND batch_id=$1 AND generation_family='rule_action'`, [batchId])
+      return result.rows[0] === undefined ? undefined : batchOf(result.rows[0].rule_action_result)
+    })
+  }
   async commit(scope: ScopeRef, batch: RuleActionGenerationBatch, candidates: readonly RuleActionCandidateVersion[],
     guard: RuleActionGenerationGuard, ctx: ToolContext): Promise<{ batch: RuleActionGenerationBatch; candidates: readonly RuleActionCandidateVersion[]; created: boolean }> {
     assertScope(scope, ctx); assertRuleActionGenerationBatch(batch); candidates.forEach(assertRuleActionCandidateShape); cancelled(guard)

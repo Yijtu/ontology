@@ -13,10 +13,15 @@ export interface CompetencyQuestionBoundary {
   readonly digestBody: (body: CompetencyQuestionSetBody) => Sha256Digest
 }
 
-export type CompetencyQuestionErrorCode = 'INVALID_DECLARATION' | 'DIGEST_MISMATCH' | 'UNKNOWN_PIN' | 'UNDECLARED_CAPABILITY' | 'EXTERNAL_GOLD_UNAVAILABLE'
+export type CompetencyQuestionErrorCode = 'INVALID_DECLARATION' | 'DIGEST_MISMATCH' | 'UNKNOWN_PIN' | 'UNDECLARED_CAPABILITY' | 'EXTERNAL_GOLD_UNAVAILABLE' | 'FORBIDDEN' | 'SCOPE_MISMATCH' | 'NOT_APPROVED' | 'CANCELLED'
 
 export class CompetencyQuestionError extends Error {
-  constructor(readonly code: CompetencyQuestionErrorCode, message: string) { super(message); this.name = 'CompetencyQuestionError' }
+  readonly httpStatus: number
+  constructor(readonly code: CompetencyQuestionErrorCode, message: string, options?: ErrorOptions) {
+    super(message, options); this.name = 'CompetencyQuestionError'
+    this.httpStatus = code === 'FORBIDDEN' || code === 'SCOPE_MISMATCH' ? 403 : code === 'UNKNOWN_PIN' ? 404
+      : code === 'DIGEST_MISMATCH' || code === 'NOT_APPROVED' || code === 'CANCELLED' ? 409 : 400
+  }
 }
 
 function sameRef(left: VersionRef, right: VersionRef): boolean {
@@ -42,9 +47,15 @@ export function assertCompetencyQuestionSet(
     if (ids.has(question.questionId)) throw new CompetencyQuestionError('INVALID_DECLARATION', 'question IDs must be unique inside a version')
     ids.add(question.questionId)
     const taskKind = question.intent.kind === 'attribute' ? 'published_facts' : question.intent.kind === 'quantity_sum' ? 'structured_query'
-      : question.intent.kind === 'rule' ? 'rule_judgement' : 'relations'
+      : question.intent.kind === 'rule' ? 'rule_judgement' : question.intent.kind === 'registered_compute' ? 'compute' : 'relations'
     if (question.taskKind !== taskKind) throw new CompetencyQuestionError('INVALID_DECLARATION', 'task kind must match the structured intent')
     if (question.intent.kind === 'rule' && question.ruleRefs.length === 0) throw new CompetencyQuestionError('UNKNOWN_PIN', 'rule judgement requires a pinned rule declaration')
+    const intent = question.intent
+    if (intent.kind === 'registered_compute' &&
+        (!question.requiredCapabilities.includes('registered_compute') || !value.body.sourceRefs.some((ref) => sameRef(ref, intent.inputSourceRef)) ||
+          !question.requiredSources.some((location) => sameRef(location.sourceRef, intent.inputSourceRef)))) {
+      throw new CompetencyQuestionError('UNKNOWN_PIN', 'registered compute requires a pinned original input and an explicit registered capability')
+    }
     if (!value.body.definitionRefs.some((ref) => sameRef(ref, question.definitionRef)) ||
         question.ruleRefs.some((ref) => !value.body.ruleRefs.some((known) => sameRef(known, ref))) ||
         question.requiredSources.some((location) => !value.body.sourceRefs.some((ref) => sameRef(ref, location.sourceRef)))) {
@@ -52,6 +63,11 @@ export function assertCompetencyQuestionSet(
     }
     if (question.requiredCapabilities.some((capability) => !allowed.has(capability))) {
       throw new CompetencyQuestionError('UNDECLARED_CAPABILITY', 'question requires a capability outside the declaration allowlist')
+    }
+    for (const structured of question.input.structuredSources ?? []) {
+      if (!value.body.sourceRefs.some((ref) => sameRef(ref, structured.sourceRef)) || !question.requiredSources.some((location) => sameRef(location.sourceRef, structured.sourceRef))) {
+        throw new CompetencyQuestionError('UNKNOWN_PIN', 'structured synthetic input must bind a declared required original source')
+      }
     }
     const locations = [...question.requiredSources, ...question.input.observations.map((fact) => fact.source),
       ...question.input.relations.map((relation) => relation.source)]

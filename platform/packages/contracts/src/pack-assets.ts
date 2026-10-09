@@ -102,7 +102,12 @@ export interface PackTestCase {
   readonly caseId: string
   readonly question: string
   readonly expectedCapabilities: readonly string[]
-  readonly expectedStatus: 'resolved' | 'missing_capabilities'
+  readonly expectedStatus: 'resolved' | 'missing_capabilities' | 'passed' | 'failed' | 'not_yet_executable'
+  readonly competencyQuestionRef?: VersionRef
+  readonly definitionRef?: VersionRef
+  readonly ruleRefs?: readonly VersionRef[]
+  readonly sourceRefs?: readonly VersionRef[]
+  readonly required?: boolean
 }
 
 export interface PackTestSuite {

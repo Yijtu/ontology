@@ -6,7 +6,7 @@ import {
 import type { CompetencyQuestionSet } from '@ontology/contracts'
 import { validateDefinitionVersion, definitionVersionDigest } from '@ontology/semantic-engine'
 import { loadCompetencyQuestions, competencyQuestionBoundary } from '../fixtures/competency-questions/loader'
-import { COMPETENCY_ASSETS, byteDigest, competencyDigest, competencyFixtureDocument } from '../fixtures/competency-questions/assets'
+import { COMPETENCY_ASSETS, CQ_ADDITIONAL_SOURCES, byteDigest, competencyDigest, competencyFixtureDocument } from '../fixtures/competency-questions/assets'
 
 const boundary = competencyQuestionBoundary()
 const sets = loadCompetencyQuestions()
@@ -50,9 +50,12 @@ describe('versioned independent competency declarations', () => {
       const bytes = readFileSync(new URL(`../fixtures/competency-questions/${industry}.source.txt`, import.meta.url))
       expect(bytes.includes(13)).toBe(false)
       expect(byteDigest(bytes)).toBe(COMPETENCY_ASSETS[industry].document.ref.digest)
+      const originals = [{ ref: COMPETENCY_ASSETS[industry].document.ref, bytes }, ...CQ_ADDITIONAL_SOURCES.filter((source) => source.industry === industry).map((source) => ({ ref: source.document.ref, bytes: readFileSync(new URL(`../fixtures/competency-questions/${source.filename}`, import.meta.url)) }))]
       for (const question of sets[index]!.body.questions) for (const location of question.requiredSources) {
+        const actual = originals.find((original) => original.ref.digest === location.sourceRef.digest && original.ref.id === location.sourceRef.id)?.bytes
+        expect(actual).toBeDefined()
         expect(location.offsetUnit).toBe('utf8_byte')
-        expect(byteDigest(bytes.subarray(location.startOffset, location.endOffset))).toBe(location.quoteDigest)
+        expect(byteDigest(actual!.subarray(location.startOffset, location.endOffset))).toBe(location.quoteDigest)
       }
     }
   })
@@ -85,6 +88,24 @@ describe('versioned independent competency declarations', () => {
     expect(denial.intent.projectId).not.toBe(denial.input.projectId)
     expect(denial.expected).toEqual({ kind: 'refusal', reason: 'cross_project' })
   })
+  it('declares actual relation and finite registered compute tasks independently of SQL quantity sums', () => {
+    const questions = sets.flatMap((set) => set.body.questions)
+    expect(questions.filter((question) => question.intent.kind === 'registered_compute')).toHaveLength(2)
+    expect(questions.filter((question) => question.intent.kind === 'relation')).toHaveLength(2)
+    expect(questions.find((question) => question.questionId === 'transport-registered-compute')?.expected).toEqual({ kind: 'value', value: { amount: '17.5', unit: 'each' } })
+    expect(questions.find((question) => question.questionId === 'industrial-registered-compute')?.expected).toEqual({ kind: 'value', value: { amount: '39', currency: 'CNY' } })
+    expect(questions.find((question) => question.questionId === 'transport-sum')?.taskKind).toBe('structured_query')
+    expect(questions.find((question) => question.questionId === 'industrial-one-withdrawal')?.input.structuredSources?.map((source) => source.sourceRef.id)).toContain('cq.industrial.alarm.source')
+  })
+  it.each(['operation', 'metric', 'source'])('rejects unregistered or unpinned compute selector (%s)', (change) => {
+    reject((value) => {
+      const question = value.body.questions.find((item) => item.intent.kind === 'registered_compute')!
+      if (question.intent.kind !== 'registered_compute') throw new Error('missing compute question')
+      if (change === 'operation') Object.assign(question.intent.operationRef, { id: 'arbitrary.eval' })
+      if (change === 'metric') Object.assign(question.intent, { metric: '/customer/private-price' })
+      if (change === 'source') question.intent.inputSourceRef = { ...question.intent.inputSourceRef, version: '99.0.0' }
+    }, change === 'source' ? 'UNKNOWN_PIN' : 'INVALID_DECLARATION')
+  })
 
   it('rejects changes under an unchanged envelope digest and a wrong requested pin', () => {
     reject((value) => { value.body.questions[0]!.question = 'changed declaration' }, 'DIGEST_MISMATCH', false)
@@ -112,7 +133,7 @@ describe('versioned independent competency declarations', () => {
     reject((value) => { const location = value.body.questions[0]!.requiredSources[0]!; location.endOffset = location.startOffset + delta })
   })
   it('rejects an input location omitted from required evidence', () => {
-    reject((value) => { value.body.questions[0]!.requiredSources.shift() }, 'UNKNOWN_PIN')
+    reject((value) => { value.body.questions.find((question) => question.questionId === 'transport-sum')!.requiredSources.shift() }, 'UNKNOWN_PIN')
   })
   it.each(['missing_attribute', 'missing_rule', 'conflicting_selector', 'sql', 'script'])('rejects non-executable or executable-payload selector: %s', (mutation) => {
     reject((value) => {

@@ -1,10 +1,12 @@
 import type { QueryResultRow } from 'pg'
 import {
+  COMPETENCY_BODY_MEDIA_TYPE,
   PublishedPackAssetStoreError,
   assertPublishedPackAssetShape,
   isToolContext,
 } from '@ontology/contracts'
 import type {
+  IndustryValidationReport,
   CommitApprovedPackInput,
   CommitApprovedPackResult,
   NewOutboxMessage,
@@ -196,6 +198,7 @@ export class PostgresPublishedPackAssetStore implements PublishedPackAssetStore 
   }
 
   async #guardPublicationPins(query: ScopedQuery, input: CommitApprovedPackInput): Promise<void> {
+    await this.#guardCompetency(query, input)
     const rows = await query.query<{ candidate_id: string; content_digest: string; state: string; pending_confirmation: boolean;
       review_revision: string | null; decision: string | null; reviewed_digest: string | null }>(
       `SELECT c.candidate_id, c.content_digest, c.state, c.pending_confirmation,
@@ -283,6 +286,45 @@ export class PostgresPublishedPackAssetStore implements PublishedPackAssetStore 
       )
       if (valid?.rows.length !== 1) throw new PublishedPackAssetStoreError('VERSION_CONFLICT', 'rule approval, provenance or complete body changed before publication')
     }
+  }
+
+  async #guardCompetency(query: ScopedQuery, input: CommitApprovedPackInput): Promise<void> {
+    const cases = input.pack.packAsset.testSuite.cases
+    const validation = await query.query<{ report: IndustryValidationReport; content_digest: string }>(
+      `SELECT report, content_digest FROM agent_platform.industry_validation_reports
+       WHERE tenant_id=current_setting('app.tenant_id')::uuid AND space_id=current_setting('app.space_id')::uuid
+         AND validation_id=$1::uuid AND workspace_id=$2::uuid AND revision=$3::bigint`,
+      [input.pack.validationRef.id, input.pack.workspaceId, input.expectedRevision],
+    )
+    const stored = validation.rows[0]
+    const competency = stored?.report.competency
+    if (competency === undefined) {
+      if (stored?.report.competencyRequired === true && input.pack.capabilities.deploymentExecutable) throw new PublishedPackAssetStoreError('VERSION_CONFLICT', 'required competency validation is not deployment-executable')
+      if (cases.some((item) => item.competencyQuestionRef !== undefined)) throw new PublishedPackAssetStoreError('VERSION_CONFLICT', 'competency suite has no actual scoped validation')
+      return
+    }
+    const target = competency.validationTarget
+    const targetPins = target?.definitionApprovalPins ?? []
+    const targetRules = target?.ruleActionPins ?? []
+    if (stored?.content_digest !== input.pack.validationRef.digest || target?.workspaceId !== input.pack.workspaceId || target.revision !== input.expectedRevision ||
+        targetPins.length !== (input.approvalPins ?? []).length || targetPins.some((pin) => !(input.approvalPins ?? []).some((other) => other.candidateId === pin.candidateId && other.contentDigest === pin.contentDigest && other.reviewRevision === pin.reviewRevision)) ||
+        targetRules.length !== (input.ruleActionPins ?? []).length || targetRules.some((pin) => !(input.ruleActionPins ?? []).some((other) => other.candidateId === pin.candidateId && other.contentDigest === pin.contentDigest && other.enabledAt === pin.enabledAt)) ||
+        cases.length !== competency.results.length || competency.results.some((result) => !cases.some((item) => item.caseId === result.questionId && item.question === result.question && item.expectedStatus === result.status &&
+          item.competencyQuestionRef?.id === competency.questionSetRef.id && item.competencyQuestionRef.version === competency.questionSetRef.version && item.competencyQuestionRef.digest === competency.questionSetRef.digest)) ||
+        (input.pack.capabilities.deploymentExecutable && (!competency.passed || competency.results.some((result) => result.status !== 'passed')))) {
+      throw new PublishedPackAssetStoreError('VERSION_CONFLICT', 'competency validation does not pin the complete actual reviewed draft and suite')
+    }
+    const approved = await query.query<{ candidate_id: string }>(
+      `SELECT h.candidate_id FROM agent_platform.candidate_review_heads h
+       JOIN agent_platform.semantic_candidate_reviews r ON r.tenant_id=h.tenant_id AND r.space_id=h.space_id AND r.candidate_id=h.candidate_id AND r.revision=h.revision
+       JOIN agent_platform.artifact_references a ON a.tenant_id=h.tenant_id AND a.space_id=h.space_id AND a.blob_ref_id=h.candidate_id
+       JOIN agent_platform.artifact_blobs b ON b.tenant_id=a.tenant_id AND b.space_id=a.space_id AND b.content_digest=a.content_digest
+       WHERE h.tenant_id=current_setting('app.tenant_id')::uuid AND h.space_id=current_setting('app.space_id')::uuid AND h.candidate_id=$1::uuid
+         AND r.decision='approve' AND r.content_digest=$2 AND a.content_digest=$2 AND a.purpose='artifact' AND b.media_type=$3 AND b.byte_size<=1048576
+       FOR UPDATE OF h,r`,
+      [competency.questionSetRef.id, competency.questionSetRef.digest, COMPETENCY_BODY_MEDIA_TYPE],
+    )
+    if (approved.rows.length !== 1) throw new PublishedPackAssetStoreError('VERSION_CONFLICT', 'competency approval or body artifact changed before publication commit')
   }
 
   async #insertDefinition(query: ScopedQuery, definition: SemanticDefinitionRecord): Promise<void> {

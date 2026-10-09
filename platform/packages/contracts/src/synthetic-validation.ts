@@ -22,6 +22,7 @@ import type {
 import type { RuleConditionState, RuleExceptionNode, RuleExpressionNode } from './rule-extraction'
 import type { FiniteRuleConditionEvaluation } from './rule-boolean'
 import type { DefinitionRevisionStrategy, DefinitionValidationReport } from './definition-editing'
+import type { CompetencyRunReport } from './competency-execution'
 
 /**
  * Isolated synthetic instances and the industry validation service (SPEC v0.3a
@@ -199,6 +200,9 @@ export type IndustryValidationIssueCode =
   | 'CASE_KIND_UNCOVERED'
   | 'NO_INDEPENDENT_EXPECTATIONS'
   | 'SYNTHETIC_MARKER_MISSING'
+  | 'CQ_REQUIRED'
+  | 'CQ_NOT_EXECUTABLE'
+  | 'CQ_MISMATCH'
 
 export interface IndustryValidationIssue {
   readonly code: IndustryValidationIssueCode
@@ -262,6 +266,7 @@ export interface ActionValidationResult {
 }
 
 export interface SyntheticExpectationResult {
+  readonly question?: string
   readonly expectationId: string
   readonly caseId: string
   readonly kind: SyntheticExpectation['kind']
@@ -289,6 +294,9 @@ export interface ValidationSurfaceGate {
 export type IndustryValidationGate = 'open' | 'blocked_semantic' | 'blocked_execution' | 'blocked_both'
 
 export interface IndustryValidationReport {
+  readonly competencyQuestionRef?: VersionRef
+  readonly competencyRequired?: true
+  readonly competency?: CompetencyRunReport
   readonly validationId: Uuid
   readonly workspaceId: Uuid
   readonly revision: RevisionString
@@ -456,6 +464,9 @@ export interface ReviseSyntheticExampleSetInput {
 }
 
 export interface RunIndustryValidationInput {
+  readonly competencyQuestionRef?: VersionRef
+  /** One server-owned cancellation signal; request bodies cannot mint it. */
+  readonly signal?: AbortSignal
   readonly strategy?: DefinitionRevisionStrategy
   readonly exampleSetId: Uuid
   readonly draftRef?: VersionRef

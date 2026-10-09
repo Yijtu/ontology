@@ -116,6 +116,8 @@ export interface DefinitionObjectCandidate extends DefinitionCandidateCommon {
   readonly kind: 'object'
   /** Attribute logical ids that identify one instance of this object type. */
   readonly identityAttributeIds: readonly string[]
+  /** Optional identity partition dimensions; `project` is supplied only by the trusted host. */
+  readonly identityScopeDimensions?: readonly string[]
 }
 
 export interface DefinitionAttributeCandidate extends DefinitionCandidateCommon {
@@ -420,6 +422,14 @@ function assertCandidatePayload(payload: unknown, kind: DefinitionCandidateKind)
     throw invalidCandidate('candidate payload requires a non-empty suggestedReason')
   }
   if (!Array.isArray(payload['conflicts'])) throw invalidCandidate('candidate payload requires a conflicts array')
+  if (kind === 'object' && payload['identityScopeDimensions'] !== undefined) {
+    const dimensions = payload['identityScopeDimensions']
+    if (!Array.isArray(dimensions) || dimensions.length > 16 ||
+        !dimensions.every((entry) => typeof entry === 'string' && entry.trim().length > 0 && entry.length <= 256) ||
+        new Set(dimensions).size !== dimensions.length) {
+      throw invalidCandidate('identityScopeDimensions must contain at most 16 unique non-empty dimension names')
+    }
+  }
   if (kind === 'attribute') {
     if (!isNonEmptyString(payload['objectLogicalId'])) {
       throw invalidCandidate('an attribute payload requires an objectLogicalId')

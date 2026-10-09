@@ -44,7 +44,7 @@ import { EMPTY_TERMINOLOGY } from './terminology'
 import type { DefinitionTerminologySource, MountedDefinitionTerminology } from './terminology'
 
 /** The fixed prompt/schema-context template version recorded with every generation call (A §5.3). */
-export const TBOX_PROMPT_VERSION = 'ontology.tbox-generation@3'
+export const TBOX_PROMPT_VERSION = 'ontology.tbox-generation@4'
 
 /**
  * The published response schema the TBox modelling role answers with. It is deliberately a
@@ -53,10 +53,10 @@ export const TBOX_PROMPT_VERSION = 'ontology.tbox-generation@3'
  */
 export const TBOX_RESPONSE_SCHEMA_REF: VersionRef = {
   id: 'ontology.generation.definition-candidates',
-  version: '2.0.0',
+  version: '2.1.0',
   digest: sha256DigestOf(
     canonicalJson({
-      objects: 'logicalId + displayName + businessMeaning + suggestedReason + identityAttributeIds[]',
+      objects: 'logicalId + displayName + businessMeaning + suggestedReason + identityAttributeIds[] + identityScopeDimensions? (at most 16 unique names; project or required single-valued string attributes of the same object)',
       attributes:
         'logicalId + objectLogicalId + valueType + unitCode? + dimension? + enumValues? + referencesObjectLogicalId? + minCardinality? + maxCardinality?',
       relations: 'logicalId + fromObjectLogicalId + toObjectLogicalId + minCardinality? + maxCardinality?',
@@ -209,7 +209,8 @@ function payloadOf(draft: DraftDefinitionCandidate, displayName: string): Defini
     suggestedReason: draft.suggestedReason,
   }
   if (draft.kind === 'object') {
-    return { kind: 'object', ...common, conflicts: [], identityAttributeIds: draft.identityAttributeIds ?? [] }
+    return { kind: 'object', ...common, conflicts: [], identityAttributeIds: draft.identityAttributeIds ?? [],
+      ...(draft.identityScopeDimensions === undefined ? {} : { identityScopeDimensions: draft.identityScopeDimensions }) }
   }
   if (draft.kind === 'attribute') {
     return {
@@ -961,6 +962,7 @@ export class DefinitionCandidateGenerationService {
       'You propose ontology DEFINITION candidates (new object types, attributes and relations) from sources.',
       'Answer with JSON only: {"objects":[...],"attributes":[...],"relations":[...]}.',
       'Every candidate needs logicalId, displayName, businessMeaning and suggestedReason.',
+      'An object declares identityAttributeIds and MAY declare at most 16 unique identityScopeDimensions: project (the trusted current project), or required single-valued string attributes of that same object. Never supply a project id in the definition.',
       'An attribute needs objectLogicalId and valueType (string|number|boolean|timestamp|enum|quantity|reference); a quantity needs unitCode; a reference needs referencesObjectLogicalId.',
       'A relation needs fromObjectLogicalId and toObjectLogicalId.',
       'A candidate MAY select a real fragment by zero-based sourceIndex AND fragmentIndex. Both are required; absent or invalid fragments require human confirmation. Do not invent locators or cite headers without a real data row.',

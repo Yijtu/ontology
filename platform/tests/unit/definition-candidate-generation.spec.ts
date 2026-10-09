@@ -620,7 +620,9 @@ describe('grounded generation and immutable rebase', () => {
   })
 
   it('models relative to exact current draft candidates and resolves references to retained objects', async () => {
-    const h = buildHarness([JSON.stringify({ objects: [proposedObject()] }), JSON.stringify({ attributes: [{ ...proposedObject('equipment_serial'), objectLogicalId: 'equipment', valueType: 'string' }] })])
+    const h = buildHarness([JSON.stringify({ objects: [{ ...proposedObject(), identityAttributeIds: ['equipment_serial'], identityScopeDimensions: ['project'] }],
+      attributes: [{ ...proposedObject('equipment_serial'), objectLogicalId: 'equipment', valueType: 'string', minCardinality: 1, maxCardinality: 1 }] }),
+      JSON.stringify({ attributes: [{ ...proposedObject('equipment_state'), objectLogicalId: 'equipment', valueType: 'string' }] })])
     const first = await h.service.generate(input(), 'editor-1', EDITOR)
     const next = await h.service.generate(input(), 'editor-1', EDITOR)
     expect(next.candidates[0]?.state).toBe('produced')
@@ -628,6 +630,8 @@ describe('grounded generation and immutable rebase', () => {
     expect(h.generation.requests[1]?.messages[1]?.content).toContain('equipment')
     expect(h.generation.requests[1]?.messages[1]?.content).not.toContain(first.candidates[0]?.candidateId)
     expect(h.generation.requests[1]?.messages[1]?.content).toContain('not_published_truth')
+    expect(first.candidates.find((candidate) => candidate.kind === 'object')?.payload).toMatchObject({ identityScopeDimensions: ['project'] })
+    expect(h.generation.requests[1]?.messages[1]?.content).toContain('"identityScopeDimensions":["project"]')
   })
 
   it('never reuses a clean version after draft/base and terminology validation change', async () => {

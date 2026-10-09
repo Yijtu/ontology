@@ -1,4 +1,4 @@
-import type { FastifyInstance, FastifyRequest } from 'fastify'
+import type { FastifyInstance, FastifyReply, FastifyRequest } from 'fastify'
 import {
   isResourceRef,
   isSyntheticCaseKind,
@@ -37,6 +37,16 @@ const DEFAULT_PAGE_SIZE = 100
 const MAX_PAGE_SIZE = 250
 const TARGET_DATA_MODES = ['synthetic', 'observed', 'live'] as const
 const EXPECTATION_ORIGINS = ['expert_confirmed', 'authored_oracle', 'generated', 'implementation_output'] as const
+
+async function withValidationSignal<T>(request: FastifyRequest, reply: FastifyReply, operation: (signal: AbortSignal) => Promise<T>): Promise<T> {
+  const controller = new AbortController()
+  const abort = () => { controller.abort() }
+  const close = () => { if (!reply.raw.writableEnded) controller.abort() }
+  request.raw.once('aborted', abort); reply.raw.once('close', close)
+  if (request.raw.aborted) abort()
+  try { return await operation(controller.signal) }
+  finally { request.raw.off('aborted', abort); reply.raw.off('close', close) }
+}
 
 export interface SyntheticValidationRouteDependencies {
   readonly exampleService: SyntheticExampleService
@@ -331,12 +341,14 @@ export function registerSyntheticValidationRoutes(
       const ctx = contextFor(auth, traceId, workspaceId)
       const bindingContext = dependencies.bindingContext?.(ctx)
       const strategy = body['strategy']
+      if (Object.keys(body).some((field) => !['exampleSetId', 'strategy', 'draftRef', 'definitionRef', 'validationPolicyRef', 'competencyQuestionRef'].includes(field))) throw new InvalidRequestFieldError('validation contains an unsupported field')
       if (strategy !== undefined && !isDefinitionRevisionStrategy(strategy)) {
         throw new InvalidRequestFieldError('strategy must carry a supported revision decision, reason and optional predecessor reference')
       }
       const input: RunIndustryValidationInput = {
         ...(strategy === undefined ? {} : { strategy }),
         exampleSetId: readNonEmpty(body, 'exampleSetId'),
+        ...(body['competencyQuestionRef'] === undefined ? {} : { competencyQuestionRef: parseVersionRef(body['competencyQuestionRef'], 'competencyQuestionRef') }),
         ...(body['draftRef'] === undefined ? {} : { draftRef: parseVersionRef(body['draftRef'], 'draftRef') }),
         ...(body['definitionRef'] === undefined
           ? {}
@@ -348,12 +360,12 @@ export function registerSyntheticValidationRoutes(
         expectedRevision: readIfMatch(request),
         idempotencyKey: requireIdempotencyKey(request),
       }
-      const report = await dependencies.validationService.validate(
+      const report = await withValidationSignal(request, reply, (signal) => dependencies.validationService.validate(
         workspaceId,
-        input,
+        { ...input, signal },
         auth.principal.subjectId,
         ctx,
-      )
+      ))
       reply.status(201).send({ data: { validation: report }, meta: { traceId } })
       return reply
     },

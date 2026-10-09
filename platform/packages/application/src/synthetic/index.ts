@@ -12,3 +12,7 @@ export {
   DEFAULT_INDUSTRY_VALIDATION_PAGE,
 } from './validation-service'
 export type { IndustryValidationServiceDependencies } from './validation-service'
+export { CompetencyQuestionService } from './competency-questions'
+export type { CompetencyQuestionServiceDependencies } from './competency-questions'
+export { CompetencyRunner, competencyExecutionRequest } from './competency-runner'
+export type { CompetencyRunnerDependencies } from './competency-runner'

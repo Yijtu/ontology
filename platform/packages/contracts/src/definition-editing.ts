@@ -353,8 +353,17 @@ export function isDefinitionCandidatePayload(value: unknown): value is Definitio
   if (!nonEmpty(value['logicalId']) || !nonEmpty(value['displayName'])) return false
   if (typeof value['businessMeaning'] !== 'string' || typeof value['suggestedReason'] !== 'string') return false
   if (!Array.isArray(value['conflicts'])) return false
+  const commonFields = ['kind', 'logicalId', 'displayName', 'businessMeaning', 'suggestedReason', 'conflicts']
+  const fields = kind === 'object' ? ['identityAttributeIds', 'identityScopeDimensions']
+    : kind === 'attribute' ? ['objectLogicalId', 'valueType', 'unitCode', 'dimension', 'enumValues', 'referencesObjectLogicalId', 'minCardinality', 'maxCardinality']
+      : ['fromObjectLogicalId', 'toObjectLogicalId', 'minCardinality', 'maxCardinality']
+  if (Object.keys(value).some((key) => !commonFields.includes(key) && !fields.includes(key))) return false
   if (kind === 'object') {
-    return Array.isArray(value['identityAttributeIds']) && value['identityAttributeIds'].every(isString)
+    const dimensions = value['identityScopeDimensions']
+    return Array.isArray(value['identityAttributeIds']) && value['identityAttributeIds'].every(isString) &&
+      (dimensions === undefined || (Array.isArray(dimensions) && dimensions.length <= 16 &&
+        dimensions.every((entry) => typeof entry === 'string' && entry.trim().length > 0 && entry.length <= 256) &&
+        new Set(dimensions).size === dimensions.length))
   }
   if (kind === 'attribute') {
     return (

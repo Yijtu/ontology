@@ -69,11 +69,11 @@ export const DEFINITION_EDIT_MODEL_REF: ModelRef = { modelId: 'definition-editor
 
 export const DEFINITION_EDIT_RESPONSE_SCHEMA_REF: VersionRef = {
   id: 'ontology.candidate-editing',
-  version: '1.0.0',
+  version: '1.1.0',
   digest: sha256DigestOf(
     canonicalJson({
       operations: ['edit', 'merge', 'split', 'keep_separate', 'reject'],
-      payload: 'DefinitionCandidatePayload (object|attribute|relation)',
+      payload: 'DefinitionCandidatePayload (object|attribute|relation); optional object identityScopeDimensions: at most 16 unique non-empty names',
       adjudication: 'kind + candidateIds + producedCandidateIds + reason + affected + findings',
     }),
   ),
