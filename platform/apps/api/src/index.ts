@@ -207,5 +207,8 @@ export { CoreSemanticTaskResolver, createCoreSemanticTaskSource } from './compos
 export type { CoreSemanticTaskResolverOptions, CoreSemanticTaskSelection, CoreSemanticTaskResolution } from './composition/core-semantic-task-resolver'
 export { CoreRelationsTaskHandler } from './composition/core-relations-task-handler'
 export type { CoreRelationsTaskHandlerOptions } from './composition/core-relations-task-handler'
-
 export type { CompetencyExtractedRuleAlias, CompetencyPackRuleAlias, CompetencyRuleAlias, CompetencyTemplateRuleSource } from './composition/competency-rule-origins'
+export { createCoreSourceViewReader, CoreSourceViewError } from './composition/core-source-view'
+export type { CoreSourceViewOptions, CoreAnswerSourceView, CoreInstanceFieldSourceView, CoreSourceCell, CoreSourceFragment } from './composition/core-source-view'
+export { registerCoreSourceViewRoutes } from './http/core-source-views'
+export type { CoreSourceViewRouteDependencies } from './http/core-source-views'
