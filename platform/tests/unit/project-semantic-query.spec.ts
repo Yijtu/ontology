@@ -26,6 +26,7 @@ import type {
   ToolContext,
 } from '@ontology/contracts'
 import { gatewayContext } from './tool-gateway-fixtures'
+import { sha256DigestOf } from '@ontology/core'
 
 /**
  * V03-025 unit coverage: the project-snapshot semantic query path compiles against the *fixed*
@@ -87,6 +88,10 @@ class FakeProjectSnapshotQuery implements ProjectSnapshotQueryPort {
   readonly backend = 'fake-project-dataset'
   validateResponse: StructuredQueryValidateResponse = { valid: true, warnings: [] }
   readonly seenPlans: { readonly mode: string; readonly sql: string }[] = []
+  responseRows: unknown[][] = [
+    ['d1', '1005.0000000000', 'rec-1', JSON.stringify([SOURCE_LOCATOR])],
+    ['d2', '2500.0000000000', 'rec-2', JSON.stringify([])],
+  ]
 
   async describeSnapshot(): Promise<ProjectSnapshotQueryDescriptor | undefined> {
     return DESCRIPTOR
@@ -113,10 +118,7 @@ class FakeProjectSnapshotQuery implements ProjectSnapshotQueryPort {
         { name: 'record_id', type: 'string' },
         { name: 'sources_json', type: 'string' },
       ],
-      rows: [
-        ['d1', '1005.0000000000', 'rec-1', JSON.stringify([SOURCE_LOCATOR])],
-        ['d2', '2500.0000000000', 'rec-2', JSON.stringify([])],
-      ],
+      rows: this.responseRows,
       nextCursor: null,
       coverage: { returned: 2, truncated: false, completeness: 'complete' },
     }
@@ -191,6 +193,53 @@ describe('project snapshot semantic query service', () => {
     expect(port.seenPlans[0]?.mode).toBe('direct')
     expect(port.seenPlans[0]?.sql).toContain('"record_id"')
     expect(port.seenPlans[0]?.sql).toContain('"sources_json"')
+  })
+
+  it('preserves the legacy mapping digest when the full source column uses the old default layout', () => {
+    const expected = sha256DigestOf(JSON.stringify({
+      id: 'project-snapshot:Meter',
+      snapshotRef: SNAPSHOT_REF,
+      objectId: 'Meter',
+      dialect: 'duckdb',
+      schema: 'main',
+      relation: 'dsq_test_snapshot',
+      sourceObjectRef: DESCRIPTOR.sourceObjectRef,
+      columns: [
+        { name: 'deviceId', valueType: 'string', canonicalUnitCode: null, dimension: null },
+        { name: 'meterValue', valueType: 'quantity', canonicalUnitCode: 'Wh', dimension: 'energy' },
+      ],
+    }))
+    expect(projectSnapshotMappingRef({ descriptor: DESCRIPTOR }).digest).toBe(expected)
+  })
+
+  it('pins an explicitly advertised full-source column while preserving the output contract', async () => {
+    const port = new FakeProjectSnapshotQuery()
+    const descriptor = { ...DESCRIPTOR, sourceProjection: 'full_array' as const }
+    const service = new ProjectSemanticQueryService({ query: port })
+    const result = await service.execute({ descriptor, plan: planFor(projectSnapshotMappingRef({ descriptor })), limits: LIMITS }, context())
+
+    expect(port.seenPlans[0]?.sql).toContain('"sources_full_json"')
+    expect(result.rows[0]?.sources).toEqual([SOURCE_LOCATOR])
+    expect(result.columns.map((column) => column.name)).toEqual(['deviceId', 'meterValue'])
+    expect(projectSnapshotMappingRef({ descriptor })).not.toEqual(projectSnapshotMappingRef({ descriptor: DESCRIPTOR }))
+
+    const compactDescriptor = { ...descriptor, sourceProjection: 'compact_pin' as const }
+    const compactMapping = buildProjectSnapshotMapping({ descriptor: compactDescriptor })
+    expect(compactMapping.objects[0]?.fields.find((field) => field.fieldRef === 'sources_json')?.column).toBe('sources_json')
+    expect(projectSnapshotMappingRef({ descriptor: compactDescriptor })).not.toEqual(projectSnapshotMappingRef({ descriptor }))
+  })
+
+  it('refuses a compact source token in the generic full-array source column', async () => {
+    const port = new FakeProjectSnapshotQuery()
+    port.responseRows = [[
+      'd1',
+      '1005.0000000000',
+      'rec-1',
+      JSON.stringify({ schemaVersion: 'project-dataset-source-origins@1', recordId: '00000000-0000-4000-8000-000000000001', sourcesDigest: `sha256:${'a'.repeat(64)}` }),
+    ]]
+    const service = new ProjectSemanticQueryService({ query: port })
+    await expect(service.execute({ descriptor: DESCRIPTOR, plan: planFor(), limits: LIMITS }, context()))
+      .rejects.toMatchObject({ code: 'SNAPSHOT_UNAVAILABLE', message: 'the fixed project row provenance is malformed' })
   })
 
   it('refuses a plan pinned to another mapping version instead of recompiling against latest', () => {

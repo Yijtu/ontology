@@ -27,6 +27,7 @@ import type {
   ToolResult,
 } from '@ontology/contracts'
 import {
+  PROJECT_DATASET_SOURCE_ORIGIN_DIGEST_VERSION,
   projectDatasetSourceObjectRef,
   projectDatasetSourceRef,
   createToolContext,
@@ -250,6 +251,29 @@ function viewName(snapshotId: string): string {
   return `dsq_${snapshotId.replace(/[^a-zA-Z0-9_]/g, '_')}`
 }
 
+function snapshotViewSql(snapshotId: string, options: { readonly legacy: boolean; readonly corruptMeterValue?: boolean }): string {
+  const projections = [
+    'record_id::text AS "record_id"',
+    'object_id AS "object_id"',
+    `(values -> 'deviceId' ->> 'value')::text AS "deviceId"`,
+    `(values -> 'meterValue' ->> 'value')::numeric${options.corruptMeterValue === true ? ' + 1::numeric' : ''} AS "meterValue"`,
+    `CASE WHEN sources_digest IS NULL THEN sources::text ELSE jsonb_build_object('schemaVersion', '${PROJECT_DATASET_SOURCE_ORIGIN_DIGEST_VERSION}', 'recordId', record_id::text, 'sourcesDigest', sources_digest)::text END AS "sources_json"`,
+    'source_row_key AS "source_row_key"',
+    'values::text AS "values_json"',
+    ...(options.legacy ? [] : ['sources::text AS "sources_full_json"']),
+  ]
+  return `CREATE VIEW ${PG_SCHEMA}.${viewName(snapshotId)} AS
+    SELECT ${projections.join(', ')} FROM ${PG_SCHEMA}.project_dataset_rows
+    WHERE snapshot_id = '${snapshotId}'::uuid`
+}
+
+async function recreateSnapshotView(adminClient: Client, snapshotId: string, options: { readonly legacy: boolean; readonly corruptMeterValue?: boolean }): Promise<void> {
+  const target = `${PG_SCHEMA}.${viewName(snapshotId)}`
+  await adminClient.query(`DROP VIEW IF EXISTS ${target}`)
+  await adminClient.query(snapshotViewSql(snapshotId, options))
+  await adminClient.query(`GRANT SELECT ON ${target} TO ${READ_ONLY_ROLE}`)
+}
+
 describe('project semantic SQL against two real business backends', () => {
   it('returns the same normalised rows for DuckDB and PostgreSQL', async () => {
     const duckDescriptor = await duck.describeSnapshot(SCOPE, { ...stageInputFor(DUCK_SNAPSHOT_ID, duck.backend).snapshotRef }, contextFor(DUCK_SNAPSHOT_ID))
@@ -283,6 +307,33 @@ describe('project semantic SQL against two real business backends', () => {
 
     expect(duckResult.columns.map((column) => column.name)).toEqual(['deviceId', 'meterValue'])
     expect(pgResult.columns.map((column) => column.name)).toEqual(['deviceId', 'meterValue'])
+  }, 120_000)
+
+  it('upgrades a verified legacy source view and refuses a tampered legacy typed view before repair', async () => {
+    const backend = pg
+    const adminClient = admin
+    if (backend === undefined || adminClient === undefined) throw new Error('the isolated PG backend is unavailable')
+    const input = stageInputFor(PG_SNAPSHOT_ID, backend.backend)
+    const ctx = contextFor(PG_SNAPSHOT_ID)
+    try {
+      await recreateSnapshotView(adminClient, PG_SNAPSHOT_ID, { legacy: true })
+      const descriptor = await backend.describeSnapshot(SCOPE, input.snapshotRef, ctx)
+      expect(descriptor?.sourceProjection).toBe('full_array')
+      if (descriptor === undefined) throw new Error('the upgraded full-source descriptor is unavailable')
+      const service = new ProjectSemanticQueryService({ query: backend })
+      const result = await service.execute({ descriptor, plan: planFor(descriptor), limits: LIMITS }, ctx)
+      expect(result.rows[0]?.sources.map((source) => source.fieldId).sort()).toEqual(['deviceId', 'meterValue'])
+
+      await recreateSnapshotView(adminClient, PG_SNAPSHOT_ID, { legacy: true, corruptMeterValue: true })
+      await expect(backend.describeSnapshot(SCOPE, input.snapshotRef, ctx)).rejects.toMatchObject({ code: 'SNAPSHOT_UNAVAILABLE' })
+      const columns = await adminClient.query<{ present: boolean }>(
+        `SELECT EXISTS (SELECT 1 FROM information_schema.columns WHERE table_schema = $1 AND table_name = $2 AND column_name = 'sources_full_json') AS present`,
+        [PG_SCHEMA, viewName(PG_SNAPSHOT_ID)],
+      )
+      expect(columns.rows[0]?.present).toBe(false)
+    } finally {
+      await recreateSnapshotView(adminClient, PG_SNAPSHOT_ID, { legacy: false })
+    }
   }, 120_000)
 
   it('executes through the data_query tool gateway against the fixed snapshot', async () => {

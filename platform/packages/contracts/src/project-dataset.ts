@@ -269,6 +269,8 @@ export interface ProjectSnapshotQueryDescriptor {
   /** The fixed source object the generated SQL is bound to and must declare. */
   readonly sourceObjectRef: SourceObjectRef
   readonly columns: readonly ProjectDatasetColumn[]
+  /** Adapter-pinned source layout. Missing means the legacy full array in `sources_json`. */
+  readonly sourceProjection?: 'full_array' | 'compact_pin'
   readonly metadata?: ProjectDatasetSnapshotMetadata
 }
 
