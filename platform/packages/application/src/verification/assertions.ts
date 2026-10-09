@@ -69,13 +69,14 @@ export function checkVerifiedAssertions(
   ctx: ToolContext,
   now: Rfc3339UtcTimestamp,
   requireFieldBinding = false,
+  replayedRules: ReadonlySet<string> = new Set(),
 ): AssertionCheckOutcome {
   void ctx
   const findings: VerificationFinding[] = []
   const supportedAssertionIds: Uuid[] = []
   for (const assertion of assertions) {
     if (assertion.kind === 'rule_judgement') {
-      const ruleFindings = verifyRuleJudgement(assertion, resolved, now)
+      const ruleFindings = verifyRuleJudgement(assertion, resolved, now, replayedRules)
       if (ruleFindings.length === 0) supportedAssertionIds.push(assertion.assertionId)
       findings.push(...ruleFindings)
       continue

@@ -248,14 +248,22 @@ describe('typed draft writer renders every result family into verifiable typed s
     expect(verification.verdict).toBe('pass')
   })
 
-  it('renders a rule derivation as a rule_judgement assertion', async () => {
+  it('renders a legacy rule artifact but refuses verification without archived actual premises', async () => {
     const h = harness()
     await h.put('rule_derivation', { schemaVersion: 'rule-derivation-support-payload@1', artifact: ruleArtifact() })
     const manifest = h.manifest()
     const result = await h.writer().writeDraft(request(manifest), ownerContext())
     expect(result.draft.assertions?.[0]).toMatchObject({ kind: 'rule_judgement', value: 'true' })
     const verification = await h.verifier().verify({ runId: RUN_ID, draft: result.draft, inputManifest: manifest }, ownerContext())
-    expect(verification.verdict).toBe('pass')
+    expect(verification.verdict).toBe('fail')
+    expect(verification.failedChecks).toContain('rule_premise_missing')
+  })
+
+  it('retains approximate premise precision as a factual limitation on a rule draft', async () => {
+    const h = harness()
+    await h.put('rule_derivation', { schemaVersion: 'rule-derivation-support-payload@1', artifact: ruleArtifact(), premiseRefs: [], sourceEvidenceMappings: [{ sourceSpan: { precision: 'approximate' } }] })
+    const result = await h.writer().writeDraft(request(h.manifest()), ownerContext())
+    expect(result.draft.limitations).toContain('limited_factual_result')
   })
 
   it('renders a document span as an exact document_quote assertion', async () => {

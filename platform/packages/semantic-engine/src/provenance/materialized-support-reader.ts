@@ -112,6 +112,12 @@ function isTextCandidateSourceSpan(value: unknown): value is TextCandidateSource
   return true
 }
 
+function sourceSpanMatchesRef(value: unknown, ref: ResourceRef): boolean {
+  if (isTextCandidateSourceSpan(value)) return value.chunkId === ref.id && value.quoteDigest === ref.digest && value.textDigest === ref.digest
+  return isRecord(value) && value['kind'] === 'structured' && isString(value['parseId']) && value['recordId'] === ref.id && value['rowDigest'] === ref.digest &&
+    isString(value['sourceRowKey']) && isRecord(value['locator']) && ['table_cell', 'table_row', 'json_pointer'].includes(String(value['locator']['kind']))
+}
+
 function isRuleProvenanceSpan(value: unknown): value is RuleProvenanceSpan {
   if (!isRecord(value) || !isString(value['parseId']) || !isString(value['chunkId']) ||
       !isString(value['quoteDigest']) ||
@@ -353,10 +359,8 @@ function isSourceEvidenceMapping(value: unknown): value is RuleDerivationSourceE
       !isResourceRef(value['documentRef']) || value['documentRef'].kind !== 'document' ||
       value['documentVersionRef'].digest !== value['documentRef'].digest || !isString(value['parserVersion']) ||
       !isResourceRef(value['evidenceRef']) || value['evidenceRef'].kind !== 'evidence' ||
-      !isTextCandidateSourceSpan(value['sourceSpan'])) return false
-  const span = value['sourceSpan']
-  return span['chunkId'] === value['sourceRef'].id && span['quoteDigest'] === value['sourceRef'].digest &&
-    span['textDigest'] === value['sourceRef'].digest
+      !sourceSpanMatchesRef(value['sourceSpan'], value['sourceRef'])) return false
+  return true
 }
 
 function isRuleSourceSpanArchiveBinding(value: unknown): value is RuleSourceSpanArchiveBinding {
@@ -367,11 +371,9 @@ function isRuleSourceSpanArchiveBinding(value: unknown): value is RuleSourceSpan
       !isResourceRef(value['documentVersionRef']) || value['documentVersionRef'].kind !== 'document' ||
       !isResourceRef(value['documentRef']) || value['documentRef'].kind !== 'document' ||
       value['documentVersionRef'].digest !== value['documentRef'].digest ||
-      !isString(value['parserVersion']) || !isTextCandidateSourceSpan(value['sourceSpan']) ||
+      !isString(value['parserVersion']) || !sourceSpanMatchesRef(value['sourceSpan'], value['sourceRef']) ||
       !isResourceRef(value['textArtifactRef']) || value['textArtifactRef'].kind !== 'artifact') return false
-  const span = value['sourceSpan']
-  return span['chunkId'] === value['sourceRef'].id && span['quoteDigest'] === value['sourceRef'].digest &&
-    span['textDigest'] === value['sourceRef'].digest
+  return true
 }
 
 function isPolicySourceEvidenceMapping(value: unknown): value is RulePolicySourceEvidenceMapping {
@@ -576,9 +578,7 @@ export class MaterializedRuleSupportReader implements PublishedRuleSupportReader
                mapping.documentRef.kind !== 'document' || mapping.documentVersionRef.digest !== mapping.documentRef.digest ||
                mapping.evidenceRef.kind !== 'evidence' ||
                mapping.parserVersion !== sourceRef.version ||
-               mapping.sourceSpan.chunkId !== sourceRef.id ||
-               mapping.sourceSpan.quoteDigest !== sourceRef.digest ||
-               mapping.sourceSpan.textDigest !== sourceRef.digest ||
+               !sourceSpanMatchesRef(mapping.sourceSpan, sourceRef) ||
                !(await this.#rawSourceEvidenceMatches(scopeRef, mapping, ctx))) {
             complete = false
             sourceRefs.push(sourceRef)

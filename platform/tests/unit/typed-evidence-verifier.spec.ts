@@ -164,7 +164,7 @@ function ruleAssertion(
 }
 
 describe('typed evidence verifier verifies rule judgements from the archived computation', () => {
-  it('passes an applicability judgement that recomputes from the archived rule artifact', async () => {
+  it('refuses an applicability archive without an independent actual-premise replay port', async () => {
     const h = harness()
     const rule = await h.put('rule_derivation', ruleSupportPayload(ruleArtifact()))
     const manifest = h.manifest()
@@ -175,8 +175,9 @@ describe('typed evidence verifier verifies rule judgements from the archived com
       inputManifest: manifest,
     }, ownerContext())
 
-    expect(result.verdict).toBe('pass')
-    expect(result.supportedAssertionIds).toEqual([assertion.assertionId])
+    expect(result.verdict).toBe('fail')
+    expect(result.failedChecks).toContain('rule_premise_missing')
+    expect(result.supportedAssertionIds).toEqual([])
   })
 
   it('blocks a wrong rule verdict even when the semantic review returns supported with probability 0.999', async () => {
@@ -285,7 +286,8 @@ describe('typed evidence verifier verifies rule judgements from the archived com
       draft: assertionDraft(manifest2.digest, [assertion]),
       inputManifest: manifest2,
     }, ownerContext())
-    expect(passed.verdict).toBe('pass')
+    expect(passed.verdict).toBe('fail')
+    expect(passed.failedChecks).toContain('rule_premise_missing')
   })
 })
 

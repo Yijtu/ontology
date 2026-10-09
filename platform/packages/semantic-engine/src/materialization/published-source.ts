@@ -25,7 +25,7 @@ import {
   isRuleScalarDecimalValue,
 } from '../rules'
 import type { DependencyEntityBinding } from './dependency-index'
-import type { SupportRule } from '../rules'
+import type { SupportRule, PublishedRuleCompilation } from '../rules'
 import { readAllPublishedRules, readAllPublishedStatements, readAtStableRevision } from './published-pages'
 import type { PublishedPageLimits } from './published-pages'
 import type {
@@ -111,6 +111,32 @@ function hasValidStoredConclusion(rule: PublishedExecutableRule): boolean {
   if (typeof binding.predicate !== 'string' || binding.predicate.length === 0) return false
   if (typeof binding.value === 'string' || typeof binding.value === 'boolean') return true
   return isRuleDecimalValue(binding.value) || isRuleScalarDecimalValue(binding.value)
+}
+
+/** The same declaration compilation is used at admission and archived-input verification. */
+export function publishedSemanticComputationRules(
+  compiled: PublishedRuleCompilation,
+  declarations: readonly PublishedExecutableRule[],
+  scopeRef: ScopeRef,
+  definitionRef: VersionRef,
+  projectId?: string,
+): { readonly rules: readonly SupportRule[]; readonly invalidConclusionRules: readonly PublishedExecutableRule[] } {
+  const byVersion = new Map(declarations.map((rule) => [rule.ruleVersionId, rule]))
+  const invalidConclusionRules: PublishedExecutableRule[] = []
+  const rules = compiled.instances.flatMap((instance): SupportRule[] => {
+    const published = byVersion.get(instance.ruleVersionId)
+    if (published === undefined || published.conclusion === undefined) return [instance.supportRule]
+    if (!hasValidStoredConclusion(published) || !compiled.dependencyRules.some((rule) => rule.publishedInstance?.ruleVersionId === instance.ruleVersionId)) {
+      invalidConclusionRules.push(published)
+      return [instance.supportRule]
+    }
+    const binding = published.conclusion
+    return [instance.supportRule, { ...instance.supportRule, ruleId: `${instance.instanceKey}:consequence`,
+      ...(instance.supportRule.publishedInstance === undefined ? {} : { publishedInstance: { ...instance.supportRule.publishedInstance, emitApplicabilityArtifact: false } }),
+      conclusion: { propositionKey: businessPropositionKey(scopeRef, definitionRef, instance.subjectEntityId, instance.objectId, binding.predicate, projectId), predicate: binding.predicate, value: binding.value },
+    }]
+  })
+  return { rules: [...rules, ...compiled.dependencyRules], invalidConclusionRules }
 }
 
 /**
@@ -329,35 +355,14 @@ export class PublishedSemanticSource implements MaterializationPublishedSource {
             }
           }),
         ]
-        const rulesByVersion = new Map(currentRules.map((rule) => [rule.ruleVersionId, rule]))
-        const computationRules: SupportRule[] = compiled.instances.flatMap((instance): SupportRule[] => {
-          const published = rulesByVersion.get(instance.ruleVersionId)
-          if (published === undefined || published.conclusion === undefined) return [instance.supportRule]
-          if (!hasValidStoredConclusion(published) || !compiled.dependencyRules.some((rule) => rule.publishedInstance?.ruleVersionId === instance.ruleVersionId)) {
-            issues.push({
-              code: 'PUBLISHED_RULE_CONCLUSION_INVALID',
-              message: `published rule ${published.ruleId} has a malformed business conclusion; only applicability is retained`,
-            })
-            return [instance.supportRule]
-          }
-          const binding = published.conclusion
-          const consequenceRule = {
-            ...instance.supportRule,
-            ruleId: `${instance.instanceKey}:consequence`,
-            ...(instance.supportRule.publishedInstance === undefined
-              ? {}
-              : { publishedInstance: { ...instance.supportRule.publishedInstance, emitApplicabilityArtifact: false } }),
-            conclusion: {
-              propositionKey: businessPropositionKey(scopeRef, definitionRef, instance.subjectEntityId, instance.objectId, binding.predicate, this.#projectId),
-              predicate: binding.predicate,
-              value: binding.value,
-            },
-          }
-          return [instance.supportRule, consequenceRule]
-        })
+        const computation = publishedSemanticComputationRules(compiled, currentRules, scopeRef, definitionRef, this.#projectId)
+        for (const published of computation.invalidConclusionRules) issues.push({ code: 'PUBLISHED_RULE_CONCLUSION_INVALID', message: `published rule ${published.ruleId} has a malformed business conclusion; only applicability is retained` })
         return {
           facts,
-          rules: [...computationRules, ...compiled.dependencyRules],
+          premiseInput: { declarations: currentRules, subjects, facts, completeRangeAttributeIds: this.#completeRangeAttributeIds,
+            attributeStatements: validEntityStatements, relationStatements: scopedStatements.filter((statement) => statement.kind === 'relation'), identityBindings: identityBindings.bindings,
+            ...(definition === undefined ? {} : { definition }) },
+          rules: computation.rules,
           entityBindings,
           identityBindings: [...identityBindings.bindings],
           definitionRef,

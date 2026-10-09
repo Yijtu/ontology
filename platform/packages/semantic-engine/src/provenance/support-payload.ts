@@ -3,7 +3,8 @@ import type {
   RuleComputationArtifact,
   RuleProvenanceSpan,
   Semver,
-  TextCandidateSourceSpan,
+  CandidateSourceSpan,
+  ParseCoverage,
 } from '@ontology/contracts'
 
 /**
@@ -17,6 +18,7 @@ import type {
 
 /** One authorized conversion from a raw published fact resource to an archived evidence envelope. */
 export interface RuleDerivationSourceEvidenceMapping {
+  readonly sourceCoverage?: ParseCoverage
   readonly premiseGroup: string
   readonly assertionId: string
   readonly logicalAssertionId: string
@@ -27,12 +29,13 @@ export interface RuleDerivationSourceEvidenceMapping {
   /** Actual immutable parse original passed to DocumentSpanReader; its id can differ. */
   readonly documentRef: ResourceRef
   readonly parserVersion: Semver
-  readonly sourceSpan: TextCandidateSourceSpan
+  readonly sourceSpan: CandidateSourceSpan
   readonly evidenceRef: ResourceRef
 }
 
 /** Immutable attestation archived by a fact-premise document-span evidence envelope. */
 export interface RuleSourceSpanArchiveBinding {
+  readonly sourceCoverage?: ParseCoverage
   readonly schemaVersion: 'rule-source-span-binding@1'
   readonly premiseGroup: string
   readonly assertionId: string
@@ -43,7 +46,7 @@ export interface RuleSourceSpanArchiveBinding {
   /** Physical immutable original ref returned by the scoped parse record. */
   readonly documentRef: ResourceRef
   readonly parserVersion: Semver
-  readonly sourceSpan: TextCandidateSourceSpan
+  readonly sourceSpan: CandidateSourceSpan
   readonly textArtifactRef: ResourceRef
 }
 
@@ -54,6 +57,7 @@ export interface RuleSourceSpanArchiveBinding {
  * where the immutable text and the `document_span` evidence were archived.
  */
 export interface RulePolicySourceEvidenceMapping {
+  readonly sourceCoverage?: ParseCoverage
   readonly span: RuleProvenanceSpan
   readonly documentVersionRef: ResourceRef
   /** Physical immutable original ref returned by the scoped parse record. */
@@ -65,6 +69,7 @@ export interface RulePolicySourceEvidenceMapping {
 
 /** Immutable attestation archived by a specification-span document-span evidence envelope. */
 export interface RulePolicySpanArchiveBinding {
+  readonly sourceCoverage?: ParseCoverage
   readonly schemaVersion: 'rule-policy-span-binding@1'
   readonly span: RuleProvenanceSpan
   readonly documentVersionRef: ResourceRef
@@ -80,4 +85,5 @@ export interface RuleDerivationSupportPayload {
   readonly artifact: RuleComputationArtifact
   readonly sourceEvidenceMappings: readonly RuleDerivationSourceEvidenceMapping[]
   readonly policySourceEvidenceMappings: readonly RulePolicySourceEvidenceMapping[]
+  readonly premiseRefs?: readonly ResourceRef[]
 }
