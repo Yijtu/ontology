@@ -85,7 +85,15 @@ export class CoreSemanticTaskResolver {
     })
     const result = await this.#readInventory(revision, definition, bindings, ctx)
     const current = await this.options.projects.getProject(scope, projectId, ctx)
-    if (canonicalJson(current) !== canonicalJson(project)) throw new WorkflowControllerError('VERSION_CONFLICT', 'the actual task catalogue project changed during readback')
+    // During an explicit evolution the head may advance while the old active
+    // revision remains the authorized business catalogue. Recheck that active
+    // selector and project state, rather than treating the independent staging
+    // head as a change to the inventory we just read.
+    const selectedRevision = project.activeRevision ?? project.headRevision
+    const currentRevision = await this.options.projects.getRevision(scope, projectId, selectedRevision, ctx)
+    if (current === undefined || current.state !== project.state || (current.activeRevision ?? current.headRevision) !== selectedRevision || canonicalJson(currentRevision) !== canonicalJson(revision)) {
+      throw new WorkflowControllerError('VERSION_CONFLICT', 'the actual task catalogue project changed during readback')
+    }
     return result
   }
 
