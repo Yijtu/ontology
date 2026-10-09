@@ -198,6 +198,28 @@ const TABLE_PAYLOAD = {
   },
 }
 
+function manyRowQueryPayload(rowCount = 251): Record<string, unknown> {
+  return {
+    resultKind: 'table',
+    table: {
+      tableId: 'query-result-251',
+      columns: [
+        { name: 'record_id', type: 'string', semanticFieldRef: 'record_id' },
+        { name: 'sources_json', type: 'string', semanticFieldRef: 'sources_json' },
+        { name: 'subject_entity_id', type: 'string', semanticFieldRef: 'subject_entity_id' },
+        { name: 'state', type: 'string', semanticFieldRef: 'state' },
+      ],
+      rows: Array.from({ length: rowCount }, (_, index) => [
+        `record-${String(index + 1)}`,
+        `source-${String(index + 1)}`,
+        `entity-${String(index + 1)}`,
+        'active',
+      ]),
+      coverage: { returned: rowCount, truncated: false },
+    },
+  }
+}
+
 const COMPUTE_PAYLOAD = {
   resultKind: 'computation',
   table: {
@@ -320,6 +342,127 @@ describe('typed draft writer renders every result family into verifiable typed s
     expect(verification.verdict).toBe('pass')
   })
 
+  it('bounds only the inline preview for one exact complete formal table and omits reserved columns', async () => {
+    const h = harness()
+    const payload = manyRowQueryPayload()
+    const evidenceRef = await h.put('observation', payload)
+    const record = await h.evidence.get(SCOPE_A, evidenceRef.id)
+    if (record === undefined) throw new Error('the complete query evidence was not archived')
+
+    const executionBindingRef: ResourceRef = { id: randomUUID(), version: '1.0.0', digest: DIGEST, kind: 'artifact' }
+    const finalizationReceiptRef: ResourceRef = { id: randomUUID(), version: '1.0.0', digest: DIGEST_B, kind: 'artifact' }
+    const outputSchemaRef = { id: 'schema.query', version: '1.0.0', digest: DIGEST }
+    const table = {
+      schemaVersion: 'table-artifact-manifest@1' as const,
+      tableId: 'query-result-251',
+      outputSchemaRef,
+      columns: [
+        { columnRef: 'subject_entity_id', semanticPredicate: 'subject_entity_id', valueType: 'string' as const, schemaPointer: '/subject_entity_id' },
+        { columnRef: 'state', semanticPredicate: 'state', valueType: 'string' as const, schemaPointer: '/state' },
+      ],
+      totalRows: 251,
+      rowKeyOrder: 'ascending' as const,
+      pages: [
+        { pageIndex: 0, artifactRef: { id: randomUUID(), version: '1.0.0', digest: DIGEST, kind: 'artifact' as const }, artifactDigest: DIGEST, rowCount: 250, firstRowKey: 'entity-001', lastRowKey: 'entity-250', pageCoverageDigest: DIGEST_B },
+        { pageIndex: 1, artifactRef: { id: randomUUID(), version: '1.0.0', digest: DIGEST_B, kind: 'artifact' as const }, artifactDigest: DIGEST_B, rowCount: 1, firstRowKey: 'entity-251', lastRowKey: 'entity-251', pageCoverageDigest: DIGEST },
+      ],
+      coverage: { returned: 251, truncated: false },
+      complete: true,
+    }
+    const resultManifest: TypedResultManifest = {
+      schemaVersion: 'typed-result-manifest@1',
+      executionBindingRef,
+      taskBindingRef: { id: 'task.query', version: '1.0.0', digest: DIGEST },
+      resultKind: 'structured_query',
+      outputSchemaRef,
+      inputSnapshotRef: { id: randomUUID(), version: '1.0.0', digest: DIGEST_B, kind: 'artifact' },
+      outputDigest: sha256DigestOf(`[{"ref":{"digest":"${evidenceRef.digest}","id":"${evidenceRef.id}","kind":"evidence","version":"${evidenceRef.version}"},"resultDigest":"${record.envelope.resultDigest}"}]`),
+      tables: [table],
+      limitations: [],
+      coverage: { returned: 251, truncated: false },
+      domainStatus: 'known',
+      dataMode: 'synthetic',
+    }
+    const resultManifestDigest = typedResultManifestContentDigest(resultManifest)
+    const context = typedResultContextFor({
+      executionBindingRef,
+      resultManifest,
+      resultManifestRef: { id: randomUUID(), version: '1.0.0', digest: resultManifestDigest, kind: 'artifact' },
+      finalizationReceiptRef,
+      finalizationReceiptDigest: finalizationReceiptRef.digest,
+    })
+    const result = await h.writer(context).writeDraft(request(h.manifest()), ownerContext())
+
+    expect((result.draft.claims?.length ?? 0) + (result.draft.assertions?.length ?? 0)).toBe(128)
+    expect(result.draft.assertions?.every((item) => !['record_id', 'sources_json'].includes(item.predicate))).toBe(true)
+    expect(result.draft.claims?.every((item) => !['record_id', 'sources_json'].includes(item.predicate))).toBe(true)
+    expect(result.draft.blocks).toHaveLength(128)
+    expect(table.totalRows).toBe(251)
+    expect(table.pages.reduce((total, page) => total + page.rowCount, 0)).toBe(251)
+    expect(result.draft.finalizationReceiptRef).toEqual(finalizationReceiptRef)
+
+    const mismatchedManifest = { ...resultManifest, outputDigest: DIGEST }
+    const mismatchedManifestContext = {
+      ...context,
+      resultManifest: mismatchedManifest,
+    }
+    const mismatchedHash = await h.writer(mismatchedManifestContext).writeDraft(request(h.manifest()), ownerContext())
+    expect(mismatchedHash.draft.assertions).toHaveLength(502)
+
+    const wrongEvidenceManifest = { ...resultManifest, outputDigest: DIGEST_B }
+    const wrongEvidenceDigest = typedResultManifestContentDigest(wrongEvidenceManifest)
+    const wrongEvidenceContext = typedResultContextFor({
+      executionBindingRef,
+      resultManifest: wrongEvidenceManifest,
+      resultManifestRef: { ...context.resultManifestRef, digest: wrongEvidenceDigest },
+      finalizationReceiptRef,
+      finalizationReceiptDigest: finalizationReceiptRef.digest,
+    })
+    const wrongEvidence = await h.writer(wrongEvidenceContext).writeDraft(request(h.manifest()), ownerContext())
+    expect(wrongEvidence.draft.assertions).toHaveLength(502)
+
+    const truncatedManifest: TypedResultManifest = {
+      ...resultManifest,
+      coverage: { returned: 251, truncated: true },
+      domainStatus: 'unknown',
+    }
+    const truncatedDigest = typedResultManifestContentDigest(truncatedManifest)
+    const truncatedContext = typedResultContextFor({
+      executionBindingRef,
+      resultManifest: truncatedManifest,
+      resultManifestRef: { ...context.resultManifestRef, digest: truncatedDigest },
+      finalizationReceiptRef,
+      finalizationReceiptDigest: finalizationReceiptRef.digest,
+    })
+    const truncated = await h.writer(truncatedContext).writeDraft(request(h.manifest()), ownerContext())
+    expect(truncated.draft.assertions).toHaveLength(502)
+  })
+
+  it('keeps the legacy inline table complete instead of silently cropping it', async () => {
+    const h = harness()
+    await h.put('observation', manyRowQueryPayload())
+    const result = await h.writer().writeDraft(request(h.manifest()), ownerContext())
+    expect(result.draft.assertions).toHaveLength(502)
+    expect(result.draft.assertions?.some((item) => ['record_id', 'sources_json'].includes(item.predicate))).toBe(false)
+  })
+
+  it('keeps record_id as row identity when it is the only available subject column', async () => {
+    const h = harness()
+    await h.put('observation', {
+      resultKind: 'table',
+      table: {
+        columns: [
+          { name: 'record_id', type: 'string', semanticFieldRef: 'record_id' },
+          { name: 'state', type: 'string', semanticFieldRef: 'state' },
+        ],
+        rows: [['row-1', 'active']],
+      },
+    })
+    const result = await h.writer().writeDraft(request(h.manifest()), ownerContext())
+    expect(result.draft.assertions).toHaveLength(1)
+    expect(result.draft.assertions?.[0]).toMatchObject({ subject: 'row-1', predicate: 'state', value: 'active' })
+  })
+
   it('projects a registered operation\'s computation.metrics into unit- and currency-bound claims', async () => {
     const h = harness()
     await h.put('computation', REGISTERED_COMPUTE_PAYLOAD)
@@ -407,6 +550,20 @@ describe('typed draft writer pins the verified version for an answer-draft@3 pub
     resultManifestDigest: resultManifestRef.digest,
     finalizationReceiptRef,
     finalizationReceiptDigest: finalizationReceiptRef.digest,
+    resultManifest: {
+      schemaVersion: 'typed-result-manifest@1',
+      executionBindingRef,
+      taskBindingRef: { id: 'task.demo', version: '1.0.0', digest: DIGEST },
+      resultKind: 'structured_query',
+      outputSchemaRef: { id: 'schema.demo', version: '1.0.0', digest: DIGEST },
+      inputSnapshotRef: resultManifestRef,
+      outputDigest: DIGEST,
+      tables: [],
+      limitations: [],
+      coverage: { returned: 1, truncated: false },
+      domainStatus: 'known',
+      dataMode: 'synthetic',
+    },
   }
 
   it('emits a @3 body whose hash binds the manifest, receipt and execution binding', async () => {
