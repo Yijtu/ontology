@@ -98,6 +98,8 @@ ReviewedRuleProposal 使用执行分册的有限规则 AST、显式例外、结�
 
 ActionDeclaration 保存语义名称、输入／输出 SchemaRef、前置条件、所需能力、权限、readOnly／副作用类别及 TaskBindingRef。其实际 operationRef／handlerRef 由受信部署装配，未绑定可保存／发布声明，但执行能力状态必须为不可用。A 仅启用有受控实现的只读示例动作；不自动注册模型生成代码。
 
+GAP-008 的平台生成、逐条件原文定位、共同预算／CAS，以及人工编辑后的来源确认接口见 [规则与动作生成契约](../../platform/docs/rule-action-generation.md)。人工确认必须回读实际批准资料并追加新的未审核候选；旧批准、模型生成调用和旧来源状态不得继承为新修订的依据。
+
 草稿状态与候选状态分开。一次生成保存独立 candidate versions 和生成调用记录，完成后只生成“应用建议”差异，不覆盖期间发生的人工编辑。用户接受建议、编辑、合并术语或拆分类型均追加新草稿修订；涉及内容改变的候选产生新 candidateId，之前的 approve 不能沿用。仅改变显示排序不改变定义内容，但仍记录草稿操作。
 
 TBox 候选内容由新 asset_candidate_versions 保存，审核继续写现有 semantic_candidate_reviews／candidate_review_heads。抽出可注入的 ReviewableCandidateReader，使现有审核服务可读取实例或 TBox 的 candidateId／state／digest／source；审核路由、角色、reason、evidenceRefs、If-Match 和历史算法共用。事实发布端显式拒绝 domain=definition 的候选，行业包发布端显式拒绝 instance 候选。这里新增的是审核对象，没有另一套 approve 真值或第二份决定表。
