@@ -199,7 +199,7 @@ import type {
 } from '@ontology/semantic-engine'
 import { DataQueryHandler, EXAMPLE_COMPUTE_DATA_SCHEMA, EXAMPLE_OPERATION_REF, OntologyLookupHandler, canonicalJson, createExampleComputeHandlers, exampleRegisteredOperation } from '@ontology/tool-services'
 import type { ToolSchemaValidator } from '@ontology/tool-services'
-import { controlRecordSequence, JobWorkerLoop, MaterializationOutboxConsumer, TopicOutboxConsumerRouter, WorkflowDispatchWorker, createIngestionHandlerRegistry } from '@ontology/app-worker'
+import { controlRecordSequence, JobWorkerLoop, MaterializationOutboxConsumer, ProjectEvolutionOutboxConsumer, TopicOutboxConsumerRouter, WorkflowDispatchWorker, createIngestionHandlerRegistry } from '@ontology/app-worker'
 import { createCoreApprovedInput } from './core-approved-input'
 import { createCoreRunRequestResolver } from './core-run-request'
 import { createCoreInstanceIdentity } from './core-instance-identity'
@@ -217,6 +217,7 @@ import { createCoreProjectComputeInput } from './core-project-compute-input'
 import { createCorePackExecutionProfiles } from './core-pack-execution-profiles'
 import { createCoreVerifiedTableSource } from './core-verified-tables'
 import { createCoreTableResults } from './core-table-results'
+import { createCoreProjectSemanticReadiness } from './core-project-semantic-readiness'
 import { registerCoreSourceViewRoutes } from '../http/core-source-views'
 import { createProjectFactWorkflow } from './project-facts'
 import { CoreFactsPlanError, createCoreFactsPlan } from './core-facts-plan'
@@ -1958,7 +1959,7 @@ export async function createCoreLocalComposition(options: CoreLocalCompositionOp
         ? [projectCollectionRef(request.projectRevisionRef.projectId)]
         : []
     }
-    const termLabels = createCoreDefinitionLabelReader({ packs: publishedPackStore, candidates: assetCandidateStore })
+    const termLabels = createCoreDefinitionLabelReader({ packs: publishedPackStore, candidates: assetCandidateStore,ruleActions: ruleActionCandidateStore })
     const authoring = createCoreAuthoring({ blobs: blobStore, registry: artifactRegistry, objectStore, workspaces: workspaceStore, jobs: jobStore, parses: parseStore, structured: structuredStore, operations: operationRegistry(), models: modelCapabilities, terminology: { getTerminology: (...args) => terminology.getTerminology(...args) }, termLabels })
     const tableArtifactStore = new PostgresTableArtifactStore(database, { writer: gatewayComposition.artifacts, reader: scopedOriginals })
     const tableVerificationStore = new PostgresTableVerificationStore(database)
@@ -1966,6 +1967,16 @@ export async function createCoreLocalComposition(options: CoreLocalCompositionOp
     if (tableSchema === undefined) throw new CoreCapabilityError('the actual canonical query output schema is unavailable')
     const tableSchemaRef = await authoring.stableWrite(`core-data-query-output-schema:${sha256DigestOf(canonicalJson(tableSchema))}`,new TextEncoder().encode(canonicalJson(tableSchema)),'application/schema+json','artifact',profileContext)
     const tableResults = createCoreTableResults({ evidence: evidenceStore,artifacts: blobStore,pages: tableArtifactStore,manifests: tableArtifactStore,receipts: tableVerificationStore,finalizationReceipts: taskFinalizationReceiptStore,
+      columnLabels: async (input,ctx) => {
+        const trustedScope = { tenantId: ctx.principal.tenantId,spaceId: ctx.allowedResources.spaceId }
+        const saved = await runExecutionBindingStore.getBindingByRun(trustedScope,input.runId,ctx)
+        if (saved === undefined || canonicalJson(saved.ref) !== canonicalJson(input.executionBindingRef)) throw new CoreCapabilityError('column names require this exact saved run execution binding')
+        const request = saved.binding.request, revision = await projectStore.getRevision(trustedScope,request.projectRevisionRef.projectId,request.projectRevisionRef.revision,ctx)
+        if (revision === undefined || canonicalJson(revision.ref) !== canonicalJson(request.projectRevisionRef)) throw new CoreCapabilityError('column names require the exact fixed published project definition')
+        const selection = request.mode === 'task' ? request : await planReceiptStore.selectedTaskForRun(trustedScope,ctx)
+        const labels = await termLabels(trustedScope,revision.industryPackRef,revision.definitionRef,ctx)
+        return Object.fromEntries(labels?.attributes.filter((attribute) => attribute.objectId === selection?.parameters['objectId']).map((attribute) => [attribute.attributeId,attribute.displayName]) ?? [])
+      },
       writer: { putBytes: async (input,ctx) => { const digest = `sha256:${createHash('sha256').update(input.content).digest('hex')}` as const
         const ref = await authoring.stableWrite(`table-artifact:${digest}`,input.content,input.mediaType,'artifact',ctx)
         return { blobRef: ref,contentDigest: digest,integrity: { algorithm: 'sha256',digest,verifiedAt: hostClock().toISOString() } } } },
@@ -2179,12 +2190,17 @@ export async function createCoreLocalComposition(options: CoreLocalCompositionOp
     })
     const outboxConsumer = new TopicOutboxConsumerRouter(
       [
-        createBusinessMaterializationConsumer({ inner: materializationConsumer, publications: publicationStore, projects: projectStore, candidates: candidateStore, identity: identityStore }),
+        createBusinessMaterializationConsumer({ inner: materializationConsumer, publications: publicationStore, projects: projectStore, candidates: candidateStore, identity: identityStore,
+          afterBusinessMaterialization: createCoreProjectSemanticReadiness({ projects: projectStore,readiness: projectReadinessStore,profiles: profileResolver,selectors: semanticTasks,materialization: materializationStore,publications: publicationStore,identity: identityStore,authoring,now: () => hostClock().toISOString() }) }),
         createCompetencyPreviewOutboxConsumer({ projects: projectStore, jobs: jobStore }),
         new CoreFactsOutboxFallback(candidateStore, scopeRef),
         new IndustryWorkspaceOutboxConsumer(workspaceStore, scopeRef),
         new PackPublicationOutboxConsumer(publishedPackStore, scopeRef),
         new ProjectRevisionOutboxConsumer(projectStore, scopeRef),
+        new ProjectEvolutionOutboxConsumer({ rebuild: (...args) => {
+          if (projectEvolution === undefined) throw new CoreCapabilityError('the actual project evolution workflow is not initialized')
+          return projectEvolution.rebuild(...args)
+        } }),
       ],
       new UnsupportedOutboxConsumer(),
     )
@@ -2203,10 +2219,6 @@ export async function createCoreLocalComposition(options: CoreLocalCompositionOp
         process.stderr.write('[core-worker] ingestion/outbox cycle failed\n')
       },
     })
-    jobLoopAbort = new AbortController()
-    jobLoopPromise = jobLoop.start(jobLoopAbort.signal)
-    dispatchAbort = new AbortController()
-    dispatchWorkerPromise = workflowDispatchWorker.run(dispatchAbort.signal)
 
     const runValidation = async (
       submission: { readonly profileRef: ProfileRef; readonly question: string; readonly scopeRef: ScopeRef; readonly task?: RunExecutionRequest },
@@ -2470,6 +2482,7 @@ export async function createCoreLocalComposition(options: CoreLocalCompositionOp
       dataset: { writer: projectDatasetAdapter, query: projectDatasetAdapter },
       previousInput: { archive: (scope, revision, ctx) => approvedInputs.resolve(scope, revision, ctx),
         validate: (scope, revision, ref, ctx) => approvedInputs.validateCaptured(scope, revision, ref, ctx) },
+      targetIdentityMapping: (_scope,projectId,definitionRef,ctx) => projectApi.targetIdentityMapping(projectId,definitionRef,ctx),
     }).service
     const projectApi = createCoreProjectApi({ projects: projectStore, documents: projectDocumentStore, jobs: jobStore, readiness: projectReadinessStore,
       catalogue: packCatalogue, profiles: profileResolver, schemas: schemaSource, tasks: taskBindingStore, operations: operationRegistry(),
@@ -2610,6 +2623,11 @@ export async function createCoreLocalComposition(options: CoreLocalCompositionOp
       ...(options.logger === undefined ? {} : { logger: options.logger }),
     }
 
+    // Start recovery only after every normal source, input and evolution port is mounted.
+    jobLoopAbort = new AbortController()
+    jobLoopPromise = jobLoop.start(jobLoopAbort.signal)
+    dispatchAbort = new AbortController()
+    dispatchWorkerPromise = workflowDispatchWorker.run(dispatchAbort.signal)
     return {
       dependencies,
       async close() {

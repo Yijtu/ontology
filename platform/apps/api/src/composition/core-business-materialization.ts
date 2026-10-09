@@ -1,4 +1,5 @@
 import { WorkflowControllerError, canonicalJson } from '@ontology/application'
+import { parseMaterializationChange } from '@ontology/app-worker'
 import type { OutboxConsumer } from '@ontology/application'
 import { assertProjectFactInputShape, isUuid } from '@ontology/contracts'
 import type { CandidateStore, IdentityDecisionStore, JobStore, OutboxMessageRecord, ProjectStore, ScopeRef, SemanticPublicationStore, ToolContext } from '@ontology/contracts'
@@ -10,6 +11,7 @@ export function createBusinessMaterializationConsumer(options: {
   readonly projects: Pick<ProjectStore, 'getProject' | 'getRevision'>
   readonly candidates: Pick<CandidateStore, 'getCandidate'>
   readonly identity: IdentityDecisionStore
+  readonly afterBusinessMaterialization?: (projectIds: readonly string[],message: OutboxMessageRecord,ctx: ToolContext) => Promise<void>
 }): OutboxConsumer & { readonly topics: readonly string[] } {
   function invalid(message: string): never { throw new WorkflowControllerError('CAPABILITY_NOT_CONFIGURED', message) }
   return { topics: options.inner.topics, consume: async (message: OutboxMessageRecord, ctx: ToolContext) => {
@@ -59,12 +61,30 @@ export function createBusinessMaterializationConsumer(options: {
         if (candidate?.kind !== 'entity') invalid('the actual split source candidate is unavailable')
         await provenanceMode(candidate.inputVersion.projectFact)
       }
-    } else if (message.topic !== 'semantic.materialization.requested') invalid('this consumer received an unowned event topic')
+    } else if (message.topic === 'semantic.materialization.requested') {
+      const change = parseMaterializationChange(payload['change'])
+      if (canonicalJson(change.scopeRef) !== canonicalJson(scope)) invalid('the requested projection change belongs to another scope')
+      if (change.kind === 'assertion_published' || change.kind === 'assertion_corrected' || change.kind === 'assertion_retracted' || change.kind === 'validity_expired') {
+        const statement = await options.publications.getStatement(scope,change.logicalAssertionId,ctx)
+        if (statement === undefined) invalid('the requested projection change has no actual scoped statement origin')
+        await provenanceMode(statement.value['provenance'])
+      } else if (change.kind === 'identity_changed') {
+        if (options.identity.getDecisionById === undefined) invalid('the requested identity projection change has no exact decision reader')
+        const decision = await options.identity.getDecisionById(scope,change.changeId,ctx)
+        if (decision?.kind !== 'split' || decision.targetEntityId !== change.entityId || canonicalJson(decision.separatedCandidateIds) !== canonicalJson(change.separatedCandidateIds)) invalid('the requested identity projection change differs from its actual decision')
+        for (const candidateId of decision.separatedCandidateIds ?? []) {
+          const candidate = await options.candidates.getCandidate(scope,candidateId,ctx)
+          if (candidate?.kind !== 'entity') invalid('the actual requested identity source candidate is unavailable')
+          await provenanceMode(candidate.inputVersion.projectFact)
+        }
+      }
+    } else invalid('this consumer received an unowned event topic')
     if (modes.size > 1) invalid('a materialization event cannot mix private synthetic and ordinary business source ownership')
     if (modes.has('synthetic_validation')) return
     // The actual CQ producer already writes its own namespaced projection. Acknowledging
     // this persisted event neither advances the global watermark nor closes a business fence.
     await options.inner.consume(message, ctx)
+    if (message.topic === 'semantic.materialization.requested') await options.afterBusinessMaterialization?.([...projects],message,ctx)
   } }
 }
 

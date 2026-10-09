@@ -14,6 +14,8 @@ export interface CoreTableResultsOptions {
   readonly manifests: TableArtifactManifestStore
   readonly receipts: TableVerificationReceiptStore
   readonly finalizationReceipts?: Pick<TaskFinalizationReceiptStore, 'getReceipt'>
+  /** Display-only names from this run's fixed published definition and original CIDs. */
+  readonly columnLabels?: (input: CoreTableBuildInput, ctx: ToolContext) => Promise<Readonly<Record<string,string>>>
   readonly verifier: Pick<TableHardVerificationService, 'verifyTable'>
   /** Actual archived canonical tools schema, independent from the outer result-format token. */
   readonly tableOutputSchema: { readonly ref: ResourceRef; readonly body: Readonly<Record<string, unknown>> }
@@ -167,6 +169,7 @@ export function createCoreTableResults(options: CoreTableResultsOptions) {
       const scope = scopeFor(ctx)
       if (input.runId !== ctx.runId) return invalid('the query table belongs to another run')
       if (input.resultKind !== 'structured_query') return []
+      const labels = await options.columnLabels?.(input,ctx)
       const outputSchemaRef = await tableSchema(ctx)
       const result: TableArtifactManifest[] = []
       for (const entry of input.evidence) {
@@ -182,7 +185,12 @@ export function createCoreTableResults(options: CoreTableResultsOptions) {
         if (rows.length === 0) continue
         const subjectIndex = columns.findIndex((column) => column.name === 'record_id')
         if (subjectIndex < 0 || !columns.some((column) => column.name === 'sources_json')) return invalid('the query did not archive real row identity and source lineage')
-        const visible = columns.flatMap((column, index) => column.name === 'record_id' || column.name === 'sources_json' ? [] : [{ column, index, descriptor: descriptorOf(column, index) }])
+        const visible = columns.flatMap((column,index) => {
+          if (column.name === 'record_id' || column.name === 'sources_json') return []
+          const label = column.semanticFieldRef === undefined ? undefined : labels?.[column.semanticFieldRef]
+          if (label !== undefined && (typeof label !== 'string' || label.length === 0 || label.length > 512)) return invalid('an actual saved semantic column label is malformed')
+          return [{ column,index,descriptor: { ...descriptorOf(column,index),...(label === undefined ? {} : { displayLabel: label }) } }]
+        })
         if (visible.length === 0 || visible.length > MAX_TABLE_COLUMNS) return invalid('the query has no bounded visible semantic column set')
         const tableId = `query.${sha256OfCanonical({ evidenceRef: entry.ref, outputRef: entry.outputRef, inputSnapshotRef: input.inputSnapshotRef, outputSchemaRef, resultFormatRef: input.outputSchemaRef }).slice(7)}`
         const boundRows: TableArtifactRow[] = rows.map((row: unknown, rowIndex) => {

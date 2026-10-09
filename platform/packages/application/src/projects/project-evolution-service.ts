@@ -11,7 +11,7 @@ import type { ProjectDataMaterializationService } from './project-materializatio
 import { ProjectEvolutionInputService } from './project-evolution-input'
 import type { ProjectEvolutionInputDependencies } from './project-evolution-input'
 import { resolvedProfileDigest } from '../profiles/canonical'
-import type { ProfileStore, ProjectRecordStore, ResolvedProfileRef, ResourceRef } from '@ontology/contracts'
+import type { MappingRef, ProfileStore, ProjectRecordStore, ResolvedProfileRef, ResourceRef } from '@ontology/contracts'
 export interface StartProjectEvolutionInput {
     readonly expectedRevision: string | undefined
     readonly industryPackRef: VersionRef
@@ -22,6 +22,7 @@ export interface StartProjectEvolutionInput {
     readonly profileRef?: ResolvedProfileRef
 }
 export interface ProjectEvolutionDependencies {
+    readonly targetIdentityMapping?: (scope: ScopeRef, projectId: string, definitionRef: VersionRef, ctx: ToolContext) => Promise<MappingRef>
     readonly previousInput?: {
         archive(scope: ScopeRef, revision: ProjectRevision, ctx: ToolContext): Promise<ResourceRef>
         validate(scope: ScopeRef, revision: ProjectRevision, ref: ResourceRef, ctx: ToolContext): Promise<ResourceRef>
@@ -245,8 +246,9 @@ export class ProjectEvolutionService {
             })
         }
         const previousInputRef = await this.deps.previousInput?.archive(scope, previous, ctx)
+        const targetIdentity = await this.deps.targetIdentityMapping?.(scope,projectId,after.definitionRef,ctx)
         const revision = bodyToRevision({
-            schemaVersion: 'project-revision@1', projectId, revision: String(BigInt(project.headRevision) + 1n), ...(previous.executionPurpose === undefined ? {} : { executionPurpose: previous.executionPurpose }), industryPackRef: pack.ref, definitionRef: after.definitionRef, mappingRefs: [...previous.mappingRefs.filter((ref) => !mounted.some((mapping) => same(ref, mapping.ref))), ...sources.map((s) => s.mappingRef)], profileRef, documentSetRef: previous.documentSetRef, semanticPublicationRefs: [], sourceVisibilityEpoch: visibility.epoch, changeReason: input.strategy.reason
+            schemaVersion: 'project-revision@1', projectId, revision: String(BigInt(project.headRevision) + 1n), ...(previous.executionPurpose === undefined ? {} : { executionPurpose: previous.executionPurpose }), industryPackRef: pack.ref, definitionRef: after.definitionRef, mappingRefs: [...previous.mappingRefs.filter((ref) => !mounted.some((mapping) => same(ref, mapping.ref)) && (targetIdentity === undefined || !same(ref.sourceObjectRef,targetIdentity.sourceObjectRef))), ...sources.map((s) => s.mappingRef),...(targetIdentity === undefined ? [] : [targetIdentity])], profileRef, documentSetRef: previous.documentSetRef, semanticPublicationRefs: [], sourceVisibilityEpoch: visibility.epoch, changeReason: input.strategy.reason
         })
         const jobId = uuid(`evolution-job:${scope.tenantId}:${scope.spaceId}:${projectId}:${key}`)
         const plan: ProjectEvolutionPlan = {

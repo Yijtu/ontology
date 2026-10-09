@@ -35,6 +35,15 @@ export function createCoreProjectApi(options: {
 }) {
   const scope = (ctx: ToolContext) => ({ tenantId: ctx.principal.tenantId, spaceId: ctx.allowedResources.spaceId })
   const sourceReader = new ParsedSourceGroundingReader({ blobs: options.blobs, documents: options.parses, tables: options.structured })
+  const targetIdentityMapping = async (projectId: string,definitionRef: VersionRef,ctx: ToolContext): Promise<MappingRef> => {
+    const project = await options.projects.getProject(scope(ctx),projectId,ctx)
+    const schema = await options.schemas.getSchema(scope(ctx),definitionRef,ctx)
+    if (project === undefined || project.state === 'archived' || schema === undefined || canonicalJson(schema.definitionRef) !== canonicalJson(definitionRef)) throw new InvalidRequestFieldError('the target identity catalogue requires the exact scoped project and published definition')
+    const sourceObjectRef = { sourceRef: { namespace: 'ontology.identity_index',sourceId: projectId },objectPath: 'confirmed_identity_index' }
+    const body = { schemaVersion: 'core-identity-catalogue@1',scopeRef: scope(ctx),projectId,definitionRef,identityScopes: schema.identityScopes,sourceObjectRef }
+    const catalogue = await options.authoring.stableWrite(`project-target-identity:${projectId}:${definitionRef.digest}`,new TextEncoder().encode(canonicalJson(body)),'application/json','artifact',ctx)
+    return { id: catalogue.id,version: catalogue.version,digest: catalogue.digest,role: 'catalog',sourceObjectRef }
+  }
   const afterMappingConfirmed = async (mapping: ImportMappingVersion, key: string, ctx: ToolContext) => {
     const project = await options.projects.getProject(scope(ctx),mapping.projectId,ctx)
     const revision = project === undefined ? undefined : await options.projects.getRevision(scope(ctx),mapping.projectId,project.headRevision,ctx)
@@ -143,14 +152,14 @@ export function createCoreProjectApi(options: {
           attributes: object.attributes.map((attribute) => ({ attributeId: attribute.attributeId, displayName: termLabels?.attributes.find((entry) => entry.objectId === object.objectId && entry.attributeId === attribute.attributeId)?.displayName ?? '未提供名称', valueType: attribute.valueType, required: attribute.minCardinality > 0, minCardinality: attribute.minCardinality, maxCardinality: attribute.maxCardinality,
             ...(attribute.unitCode === undefined ? {} : { unit: attribute.unitCode }), ...(attribute.enumValues === undefined ? {} : { enumValues: attribute.enumValues }), ...(attribute.referencesObjectId === undefined ? {} : { referencesObjectId: attribute.referencesObjectId }) })),
           entities: inventory?.entities.filter((entity) => entity.objectId === object.objectId && entity.labels.length > 0).map((entity) => ({ entityId: entity.entityId, displayName: entity.labels[0] })) ?? [] })),
-        rules: inventory?.declarations.map((rule) => ({ ruleId: rule.ruleId, displayName: rule.ruleId, objectId: rule.objectId })) ?? [],
+        rules: inventory?.declarations.map((rule) => ({ ruleId: rule.ruleId, displayName: termLabels?.rules?.find((label) => label.ruleId === rule.ruleId && label.objectId === rule.objectId)?.displayName ?? '未提供名称', objectId: rule.objectId })) ?? [],
         relations: schema.relations.map((relation) => ({ relationId: relation.relationId, displayName: termLabels?.relations.find((entry) => entry.relationId === relation.relationId)?.displayName ?? '未提供名称', fromObjectId: relation.fromObjectId, toObjectId: relation.toObjectId })) }
     })
     const after = await options.projects.getProject(scope(ctx), projectId, ctx)
     if (after === undefined || (after.activeRevision ?? after.headRevision) !== revision.ref.revision || after.state === 'archived') throw new InvalidRequestFieldError('the active business project changed during catalogue readback')
     return { project, revision, tasks, selectorCoverage: selectorFailure === undefined ? 'complete' : 'unavailable' }
   }
-  return { sourceCatalogue, taskCatalogue, afterMappingConfirmed, register(app: FastifyInstance, authenticate: RequestAuthenticator) {
+  return { sourceCatalogue, taskCatalogue, afterMappingConfirmed, targetIdentityMapping, register(app: FastifyInstance, authenticate: RequestAuthenticator) {
     const trusted = (request: Parameters<RequestAuthenticator>[0], reply: Parameters<typeof authenticateRequest>[2]) => {
       const auth = authenticateRequest(authenticate, request, reply); if (auth === undefined) return undefined
       const traceId = readTraceId(request)

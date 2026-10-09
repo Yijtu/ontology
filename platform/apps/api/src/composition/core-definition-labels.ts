@@ -1,10 +1,11 @@
-import { publishedPackContentDigest } from '@ontology/application'
-import type { AssetCandidateStore, PublishedPackAssetStore, ScopeRef, ToolContext, VersionRef } from '@ontology/contracts'
+import { canonicalJson, publishedPackContentDigest } from '@ontology/application'
+import type { AssetCandidateStore, PublishedPackAssetStore, RuleActionCandidateStore, ScopeRef, ToolContext, VersionRef } from '@ontology/contracts'
 import { InvalidRequestFieldError } from '../http/shared'
 
 export interface CoreDefinitionLabels {
   readonly attributes: readonly { readonly objectId: string; readonly attributeId: string; readonly displayName: string }[]
   readonly relations: readonly { readonly relationId: string; readonly displayName: string }[]
+  readonly rules?: readonly { readonly ruleId: string; readonly objectId: string; readonly displayName: string }[]
 }
 export type CoreDefinitionLabelReader = (scope: ScopeRef, packRef: VersionRef, definitionRef: VersionRef, ctx: ToolContext) => Promise<CoreDefinitionLabels | undefined>
 
@@ -12,6 +13,7 @@ export type CoreDefinitionLabelReader = (scope: ScopeRef, packRef: VersionRef, d
 export function createCoreDefinitionLabelReader(options: {
   readonly packs: Pick<PublishedPackAssetStore, 'findByRef'>
   readonly candidates: Pick<AssetCandidateStore, 'getCandidate'>
+  readonly ruleActions?: Pick<RuleActionCandidateStore,'get'>
 }): CoreDefinitionLabelReader {
   return async (scope, packRef, definitionRef, ctx) => {
     const asset = await options.packs.findByRef(scope, packRef, ctx)
@@ -28,6 +30,12 @@ export function createCoreDefinitionLabelReader(options: {
         if (payload.kind === 'relation') relations.push({ relationId: payload.logicalId, displayName: payload.displayName })
       }
     }
-    return { attributes, relations }
+    const rules: NonNullable<CoreDefinitionLabels['rules']>[number][] = []
+    if (options.ruleActions !== undefined) for (const declaration of asset.ruleDeclarations ?? []) {
+      const candidate = await options.ruleActions.get(scope,declaration.candidateId,ctx)
+      if (candidate === undefined || candidate.kind !== 'rule' || candidate.workspaceId !== asset.workspaceId || candidate.contentDigest !== declaration.contentDigest || candidate.payload.kind !== 'rule' || canonicalJson(candidate.payload) !== canonicalJson(declaration.payload)) throw new InvalidRequestFieldError('the frozen authored rule label candidate is unavailable or changed')
+      rules.push({ ruleId: candidate.payload.ruleId,objectId: candidate.payload.applicability.objectId,displayName: candidate.displayName })
+    }
+    return { attributes, relations, rules }
   }
 }

@@ -174,6 +174,8 @@ describe('normal Core authoring, reviewed pack execution support and actual CQ d
     const answer = await publishedAnswer(text(queryRun['runId']))
     const resultView = await call(`/api/v1/answers/${text(answer['answerId'])}/result`)
     expect(resultView['tables']).toHaveLength(1)
+    expect(JSON.stringify(resultView['tables'])).toContain('运行工时')
+    expect(JSON.stringify(resultView['tables'])).toContain('设备编号')
     const computeTask = tasks['tasks'].map(object).find((task) => task['taskKind'] === 'compute')
     expect(computeTask?.['available'],JSON.stringify(computeTask)).toBe(true)
     expect(computeTask?.['parameterSchema']).toMatchObject({ properties: {} })
@@ -182,6 +184,24 @@ describe('normal Core authoring, reviewed pack execution support and actual CQ d
     expect(object(computeAnswer['v3Body'])['claims']).toContainEqual(expect.objectContaining({ predicate: 'total_quantity',kind: 'computation',value: { value: '3.75',unit: 'each' } }))
     const computeState = await call(`/api/v1/runs/${text(computeRun['runId'])}`)
     expect(object(computeState['scope'])['explicitDegradations']).not.toContainEqual(expect.objectContaining({ capability: 'compute:example.compute.aggregate@1' }))
+    let currentTasks = await call(`/api/v1/core/projects/${projectId}/task-catalogue`)
+    if (!Array.isArray(currentTasks['tasks'])) throw new Error('the actual current task catalogue is missing')
+    let ruleTask = currentTasks['tasks'].map(object).find((task) => task['taskKind'] === 'rule_judgement')
+    const readinessDeadline = Date.now()+30_000
+    while (ruleTask?.['available'] !== true && Date.now()<readinessDeadline) {
+      await new Promise<void>((done)=>setTimeout(done,100))
+      currentTasks = await call(`/api/v1/core/projects/${projectId}/task-catalogue`)
+      if (!Array.isArray(currentTasks['tasks'])) throw new Error('the actual current task catalogue is missing')
+      ruleTask = currentTasks['tasks'].map(object).find((task) => task['taskKind'] === 'rule_judgement')
+    }
+    if (ruleTask?.['available'] !== true) {
+      const [projection,readiness] = await Promise.all([harness.adminClient.query('SELECT row_to_json(p) body FROM agent_platform.projection_state p WHERE tenant_id=$1::uuid AND space_id=$2::uuid',[scope.tenantId,scope.spaceId]),harness.adminClient.query('SELECT row_to_json(p) body FROM agent_platform.project_readiness p WHERE tenant_id=$1::uuid AND space_id=$2::uuid AND project_id=$3::uuid',[scope.tenantId,scope.spaceId,projectId])])
+      throw new Error(`actual rule readiness did not advance: ${JSON.stringify({ ruleTask,projection: projection.rows,readiness: readiness.rows,workerErrors: workerErrors.map((error) => error instanceof Error ? { message: error.message,cause: error.cause } : error) })}`)
+    }
+    const ruleRun = await call('/api/v1/runs',{ profileRef: { id: profile['id'],version: profile['version'] },projectId,question: 'N-1是否符合已审核工时规则的条件',context: { timeZone: 'UTC' },preferences: { route: 'template',allowWeb: false },task: { bindingRef: ruleTask?.['bindingRef'],arguments: { rule: 'maintenance',entity: 'N-1' } } })
+    const ruleAnswer = await publishedAnswer(text(ruleRun['runId']))
+    expect(object(ruleAnswer['v3Body'])['assertions']).toContainEqual(expect.objectContaining({ kind: 'rule_judgement',value: 'true',judgementAxis: 'applicability' }))
+    expect(ruleTask['rules']).toContainEqual(expect.objectContaining({ ruleId: 'maintenance',displayName: '工时条件' }))
     const privateJobs = await harness.adminClient.query<{ stage: string; last_error: unknown }>(`SELECT DISTINCT j.stage,j.last_error FROM agent_platform.jobs j
       JOIN agent_platform.published_statements s ON s.tenant_id=j.tenant_id AND s.space_id=j.space_id AND s.source_job_id=j.job_id
       JOIN agent_platform.project_revisions r ON r.tenant_id=s.tenant_id AND r.space_id=s.space_id AND r.project_id::text=s.value#>>'{provenance,sources,0,projectRevisionRef,projectId}'
