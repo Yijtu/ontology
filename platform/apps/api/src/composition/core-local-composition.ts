@@ -21,6 +21,8 @@ import {
   PostgresBudgetLedgerStore,
   PostgresCandidateStore,
   PostgresComponentRegistryStore,
+  PostgresComputeOutputBindingsStore,
+  PostgresComputeResultArtifactStore,
   PostgresDecisionStateReferenceStore,
   PostgresDefinitionEditingStore,
   PostgresEvidenceStore,
@@ -2491,21 +2493,25 @@ export async function createCoreLocalComposition(options: CoreLocalCompositionOp
     const resolveRunRequest = createCoreRunRequestResolver({ projects: projectStore, runs: runStore, bindings: runExecutionBindingStore, tasks: taskBindingStore,
       inputs: { ...approvedInputs, resolve: (scope, revision, ctx, signal) => resolveApprovedInput(scope, revision, ctx, signal ?? new AbortController().signal) },
       prepareComputeInput, authoring, reader: scopedOriginals, now: () => hostClock().toISOString() })
-    const sourceViews = createCoreSourceViewReader({ answers: answerStore, evidence: evidenceStore, runs: runStore, manifests: workflowStore,
-      executionBindings: runExecutionBindingStore, blobs: blobStore, parses: parseStore, ingestion: structuredStore, projects: projectStore,
-      documents: projectDocumentStore, instances: instanceReviewStore, candidates: candidateStore, records: projectRecordStore, mappings: projectMappingStore,
-      provenance: provenanceRead.provenance,
-      publishedRuleReplay: () => new ArchivedRulePremiseReplayVerifier({ materialization: materializationStore, publications: publicationStore,
-        evidence: evidenceStore, artifacts: blobStore, projects: projectStore, projectDocuments: projectDocumentStore, records: projectRecordStore,
-        candidates: candidateStore, identity: identityStore, documentParses: parseStore, documentSpans: documentSpanReader,
-        structuredSources: structuredPremiseSources, publishedRules: packRuleReader, readMode: 'published_snapshot' }),
-    })
     const projectStructuredImportService = structuredImports.imports
     // A manifest is only served as *verified* when the table-verification receipt it names
     // actually exists. Otherwise the reader refuses to render it as a formal table
     // (TABLE_UNVERIFIED) instead of trusting the stored ref alone.
     const verifiedTableManifests: VerifiedTableManifestSource = createCoreVerifiedTableSource({ answers: answerStore, runs: runStore,
       tables: tableArtifactStore, receipts: tableVerificationStore, blobs: blobStore })
+    const computeResultStore = new PostgresComputeResultArtifactStore(database)
+    const computeOutputBindingsStore = new PostgresComputeOutputBindingsStore(database)
+    const sourceViews = createCoreSourceViewReader({ answers: answerStore, evidence: evidenceStore, runs: runStore, manifests: workflowStore,
+      executionBindings: runExecutionBindingStore, blobs: blobStore, parses: parseStore, ingestion: structuredStore, projects: projectStore,
+      documents: projectDocumentStore, instances: instanceReviewStore, candidates: candidateStore, records: projectRecordStore, mappings: projectMappingStore,
+      datasets: projectDatasetAdapter, publications: publicationStore, computeResults: computeResultStore, computeBindings: computeOutputBindingsStore,
+      tasks: taskBindingStore, taskInputs: taskInputSnapshotStore, verifiedTables: verifiedTableManifests, tablePages: tableArtifactStore, tableReceipts: tableVerificationStore,
+      provenance: provenanceRead.provenance,
+      publishedRuleReplay: () => new ArchivedRulePremiseReplayVerifier({ materialization: materializationStore, publications: publicationStore,
+        evidence: evidenceStore, artifacts: blobStore, projects: projectStore, projectDocuments: projectDocumentStore, records: projectRecordStore,
+        candidates: candidateStore, identity: identityStore, documentParses: parseStore, documentSpans: documentSpanReader,
+        structuredSources: structuredPremiseSources, publishedRules: packRuleReader, readMode: 'published_snapshot' }),
+    })
     const tableArtifactReadService = new TableArtifactReadService({
       manifests: verifiedTableManifests,
       pages: tableArtifactStore,

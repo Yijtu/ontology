@@ -37,6 +37,19 @@ async function publishedAnswer(runId: string) {
   }
   throw new Error('the actual normal controller did not publish before its original30s bound')
 }
+function firstEvidenceRef(answer: Record<string, unknown>): ResourceRef {
+  const body = object(answer['v3Body'])
+  for (const group of [body['assertions'], body['claims']]) {
+    if (!Array.isArray(group)) continue
+    for (const item of group) {
+      if (!isRecord(item) || !Array.isArray(item['references'])) continue
+      for (const reference of item['references']) {
+        if (isRecord(reference) && isResourceRef(reference['evidenceRef'])) return reference['evidenceRef']
+      }
+    }
+  }
+  throw new Error('the actual normal answer has no cited source evidence')
+}
 beforeAll(async () => {
   harness = await startJobDatabase(); scope = (await createJobScope(harness.adminClient, 'normal-authoring-preview')).scopeRef
   server = createServer(async (request, response) => {
@@ -176,12 +189,22 @@ describe('normal Core authoring, reviewed pack execution support and actual CQ d
     expect(resultView['tables']).toHaveLength(1)
     expect(JSON.stringify(resultView['tables'])).toContain('运行工时')
     expect(JSON.stringify(resultView['tables'])).toContain('设备编号')
+    const actualTable = object((resultView['tables'] as unknown[])[0]), tableId = text(actualTable['tableId'])
+    const actualPage = await call(`/api/v1/answers/${text(answer['answerId'])}/tables/${tableId}`)
+    const actualRow = object((actualPage['rows'] as unknown[])[0]), actualColumn = (actualPage['columns'] as unknown[]).map(object).find((column) => column['semanticPredicate'] === 'machine_id')
+    if (actualColumn === undefined) throw new Error('the actual normal query table has no mapped machine identifier column')
+    const querySource = await call(`/api/v1/core/answers/${text(answer['answerId'])}/sources/${firstEvidenceRef(answer).id}?tableId=${encodeURIComponent(tableId)}&rowKey=${encodeURIComponent(text(actualRow['rowKey']))}&columnRef=${encodeURIComponent(text(actualColumn['columnRef']))}`)
+    expect(querySource).toMatchObject({ answerId: answer['answerId'], evidenceId: firstEvidenceRef(answer).id, selectedCell: { tableId, rowKey: actualRow['rowKey'], columnRef: actualColumn['columnRef'] }, sourceCoverage: { mode: 'saved_cell', coverage: 'complete' }, readability: 'archived_snapshot_only' })
+    expect(JSON.stringify(querySource['fragments'])).toContain('N-1')
     const computeTask = tasks['tasks'].map(object).find((task) => task['taskKind'] === 'compute')
     expect(computeTask?.['available'],JSON.stringify(computeTask)).toBe(true)
     expect(computeTask?.['parameterSchema']).toMatchObject({ properties: {} })
     const computeRun = await call('/api/v1/runs',{ profileRef: { id: profile['id'],version: profile['version'] },projectId,question: '汇总已审核原始行的每件数量',context: { timeZone: 'UTC' },preferences: { route: 'template',allowWeb: false },task: { bindingRef: computeTask?.['bindingRef'],arguments: {},inputSelection: { objectId: 'machine',idField: 'machine_id',amountField: 'amount',unitField: 'amount_unit' } } })
     const computeAnswer = await publishedAnswer(text(computeRun['runId']))
     expect(object(computeAnswer['v3Body'])['claims']).toContainEqual(expect.objectContaining({ predicate: 'total_quantity',kind: 'computation',value: { value: '3.75',unit: 'each' } }))
+    const computeSource = await call(`/api/v1/core/answers/${text(computeAnswer['answerId'])}/sources/${firstEvidenceRef(computeAnswer).id}`)
+    expect(computeSource).toMatchObject({ answerId: computeAnswer['answerId'], evidenceId: firstEvidenceRef(computeAnswer).id, sourceCoverage: { mode: 'compute_input_sample', coverage: 'complete' }, readability: 'archived_snapshot_only' })
+    expect(JSON.stringify(computeSource['fragments'])).toContain('2.5')
     const computeState = await call(`/api/v1/runs/${text(computeRun['runId'])}`)
     expect(object(computeState['scope'])['explicitDegradations']).not.toContainEqual(expect.objectContaining({ capability: 'compute:example.compute.aggregate@1' }))
     let currentTasks = await call(`/api/v1/core/projects/${projectId}/task-catalogue`)
