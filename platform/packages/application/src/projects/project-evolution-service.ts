@@ -246,7 +246,7 @@ export class ProjectEvolutionService {
         }
         const previousInputRef = await this.deps.previousInput?.archive(scope, previous, ctx)
         const revision = bodyToRevision({
-            schemaVersion: 'project-revision@1', projectId, revision: String(BigInt(project.headRevision) + 1n), industryPackRef: pack.ref, definitionRef: after.definitionRef, mappingRefs: [...previous.mappingRefs.filter((ref) => !mounted.some((mapping) => same(ref, mapping.ref))), ...sources.map((s) => s.mappingRef)], profileRef, documentSetRef: previous.documentSetRef, semanticPublicationRefs: [], sourceVisibilityEpoch: visibility.epoch, changeReason: input.strategy.reason
+            schemaVersion: 'project-revision@1', projectId, revision: String(BigInt(project.headRevision) + 1n), ...(previous.executionPurpose === undefined ? {} : { executionPurpose: previous.executionPurpose }), industryPackRef: pack.ref, definitionRef: after.definitionRef, mappingRefs: [...previous.mappingRefs.filter((ref) => !mounted.some((mapping) => same(ref, mapping.ref))), ...sources.map((s) => s.mappingRef)], profileRef, documentSetRef: previous.documentSetRef, semanticPublicationRefs: [], sourceVisibilityEpoch: visibility.epoch, changeReason: input.strategy.reason
         })
         const jobId = uuid(`evolution-job:${scope.tenantId}:${scope.spaceId}:${projectId}:${key}`)
         const plan: ProjectEvolutionPlan = {

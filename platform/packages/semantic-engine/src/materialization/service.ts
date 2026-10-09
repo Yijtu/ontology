@@ -297,6 +297,7 @@ function incompleteReadResult(
 export class IncrementalMaterializer {
   readonly #publishedSource: MaterializationPublishedSource
   readonly #materialization: MaterializationServiceDependencies['materialization']
+  readonly #projectionRef: VersionRef
   readonly #evaluator: RuleEvaluator
   readonly #maxFanout: number
   readonly #now: () => string
@@ -306,6 +307,7 @@ export class IncrementalMaterializer {
   constructor(dependencies: MaterializationServiceDependencies) {
     this.#publishedSource = dependencies.publishedSource
     this.#materialization = dependencies.materialization
+    this.#projectionRef = dependencies.projectionRef ?? PROJECTION_REF
     this.#evaluator = dependencies.evaluator ?? new RuleEvaluator()
     this.#maxFanout = dependencies.maxFanout ?? DEFAULT_MAX_FANOUT
     this.#now = dependencies.now ?? (() => new Date().toISOString())
@@ -852,7 +854,7 @@ export class IncrementalMaterializer {
   ): MaterializedConclusion | undefined {
     const request: ControlReadProjectionRequest = {
       scopeRef,
-      projectionRef: PROJECTION_REF,
+      projectionRef: this.#projectionRef,
       validAt: window.validFrom,
       asOfRecordedSeq: change.recordedSeq,
     }

@@ -248,6 +248,8 @@ export interface AppendIdentityDecisionInput {
  * overwriting the winner.
  */
 export interface IdentityDecisionStore {
+  /** Exact scoped immutable decision lookup for trusted outbox admission. */
+  getDecisionById?(scopeRef: ScopeRef, decisionId: Uuid, ctx: ToolContext): Promise<IdentityDecisionRecord | undefined>
   getEntity(
     scopeRef: ScopeRef,
     entityId: string,

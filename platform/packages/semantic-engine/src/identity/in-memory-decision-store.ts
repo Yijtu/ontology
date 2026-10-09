@@ -61,6 +61,7 @@ function copyDecisionMap(
 export class InMemoryIdentityDecisionStore implements IdentityDecisionStore {
   readonly #entities = new Map<string, Map<string, IdentityEntityRecord>>()
   readonly #decisions = new Map<string, Map<Uuid, IdentityDecisionRecord[]>>()
+  readonly #decisionsById = new Map<string, Map<Uuid, IdentityDecisionRecord>>()
   readonly #heads = new Map<string, Map<Uuid, bigint>>()
   readonly #assertions = new Map<string, Map<Uuid, IdentityAssertionRecord>>()
   readonly #constraints = new Map<string, Map<Uuid, IdentityLinkConstraintRecord>>()
@@ -259,10 +260,12 @@ export class InMemoryIdentityDecisionStore implements IdentityDecisionStore {
     history.push(clone(record))
     heads.set(record.candidateId, revisionNumber)
     decisions.set(record.candidateId, history)
+    if (this.#scoped(this.#decisionsById, scopeRef).has(record.decisionId)) throw new IdentityDecisionStoreError('DECISION_STORE_FAILED', 'immutable decision id already exists in this scope')
     this.#entities.set(key, entities)
     this.#assertions.set(key, assertions)
     this.#constraints.set(key, constraints)
     this.#heads.set(key, heads)
+    this.#scoped(this.#decisionsById, scopeRef).set(record.decisionId, clone(record))
     this.#decisions.set(key, decisions)
     this.#readRevisions.set(key, (this.#readRevisions.get(key) ?? 0n) + 1n)
     return clone(record)
@@ -277,6 +280,12 @@ export class InMemoryIdentityDecisionStore implements IdentityDecisionStore {
     resolveScope(scopeRef, ctx)
     const history = this.#scoped(this.#decisions, scopeRef).get(candidateId) ?? []
     const record = history.find((entry) => entry.revision === revision)
+    return record === undefined ? undefined : clone(record)
+  }
+
+  async getDecisionById(scopeRef: ScopeRef, decisionId: Uuid, ctx: ToolContext): Promise<IdentityDecisionRecord | undefined> {
+    resolveScope(scopeRef, ctx)
+    const record = this.#scoped(this.#decisionsById, scopeRef).get(decisionId)
     return record === undefined ? undefined : clone(record)
   }
 

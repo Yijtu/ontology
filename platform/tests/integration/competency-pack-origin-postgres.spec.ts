@@ -4,14 +4,14 @@ import { tmpdir } from 'node:os'
 import { join, resolve } from 'node:path'
 import { afterAll, beforeAll, describe, expect, it } from 'vitest'
 import { FileSystemObjectStore, LocalImmutableBlobStore, PostgresArtifactRegistry } from '@ontology/adapter-blob-local'
-import { ControlPostgresDatabase } from '@ontology/adapter-control-postgres'
+import { ControlPostgresDatabase, PostgresCandidateStore, PostgresIdentityDecisionStore, PostgresInstanceReviewStore, PostgresJobStore, PostgresMaterializationStore, PostgresProfileStore, PostgresProjectReadinessStore, PostgresProjectStore, PostgresSemanticPublicationStore } from '@ontology/adapter-control-postgres'
 import { PostgresDocumentParseStore, PostgresStructuredIngestionStore } from '@ontology/adapter-extraction-document'
 import { DuckDbProjectDatasetAdapter } from '@ontology/adapter-data-duckdb'
-import { CompetencyRunner, IndustryValidationService, competencyExecutionRequest, contentDigestOf, readWorkspacePublicationSourceDrafts } from '@ontology/application'
+import { CompetencyRunner, IndustryValidationService, ProjectService, StoreBackedIndustryPackCatalogue, InMemoryIndustrySchemaSource, competencyExecutionRequest, contentDigestOf, readWorkspacePublicationSourceDrafts } from '@ontology/application'
 import { createBlobArtifactWriter, createCompetencyProjectPreparer, createCoreCompetencyExecution, createRequestToolContext } from '@ontology/app-api'
 import { createToolContext, isRecord } from '@ontology/contracts'
-import { FiniteGrammarRuleSupportValidator, FiniteGrammarSyntheticEvaluator, publishedRuleApplicabilityKey, publishedRuleRef } from '@ontology/semantic-engine'
-import type { CompetencyQuestionSetBody, ResourceRef, ScopeRef, ToolContext } from '@ontology/contracts'
+import { FiniteGrammarRuleSupportValidator, FiniteGrammarSyntheticEvaluator, IdentityDecisionService, projectIndustrySchema, publishedRuleApplicabilityKey, publishedRuleRef } from '@ontology/semantic-engine'
+import type { CompetencyQuestionSetBody, ProjectRevision, ResourceRef, ScopeRef, ToolContext } from '@ontology/contracts'
 import { createPackOriginFixture } from './competency-pack-origin-fixture'
 import { createJobScope, startJobDatabase } from './job-postgres-harness'
 import type { JobDbHarness } from './job-postgres-harness'
@@ -36,11 +36,13 @@ async function bodyFor(f: Awaited<ReturnType<typeof fixture>>, ctx: ToolContext,
   await f.review(declaration.ref.id)
   return declaration
 }
+function executionFor(f: Awaited<ReturnType<typeof fixture>>, prepare: Parameters<typeof createCoreCompetencyExecution>[0]['prepare']) {
+  return createCoreCompetencyExecution({ prepare, sources: f.questionWorkflow.sources, artifacts: createBlobArtifactWriter(blobs), reader: { read: async (request, ctx) => { const ref = request.approvedInputRefs[0]; if (request.approvedInputRefs.length !== 1 || ref === undefined) throw new Error('one actual immutable execution artifact required'); return blobs.readAuthorized({ scopeRef: scope, blobRef: ref }, ctx) } } })
+}
 function executor(f: Awaited<ReturnType<typeof fixture>>, options: { readonly bindingRef?: ResourceRef; readonly afterPrepare?: () => Promise<unknown> } = {}) {
   const actualPrepare = createCompetencyProjectPreparer({ database: db, blobs, parses, structured, query, producerComponentRef: f.producerComponentRef, binding: async () => options.bindingRef ?? f.bindingRef, target: f.targetReader, publishedRules: f.publishedRules, packs: f.packs })
   const prepare = async (...args: Parameters<typeof actualPrepare>) => { const result = await actualPrepare(...args); if (result.status === 'prepared') await options.afterPrepare?.(); return result }
-  const artifacts = createBlobArtifactWriter(blobs)
-  const execution = createCoreCompetencyExecution({ prepare, sources: f.questionWorkflow.sources, artifacts, reader: { read: async (request, ctx) => { const ref = request.approvedInputRefs[0]; if (request.approvedInputRefs.length !== 1 || ref === undefined) throw new Error('one actual immutable execution artifact required'); return blobs.readAuthorized({ scopeRef: scope, blobRef: ref }, ctx) } } })
+  const execution = executionFor(f, prepare)
   return { prepare, execution }
 }
 async function readArtifact(ref: ResourceRef, ctx: ToolContext) { const bytes = await blobs.readAuthorized({ scopeRef: scope, blobRef: ref }, ctx); const value: unknown = JSON.parse(new TextDecoder().decode(bytes)); if (!isRecord(value)) throw new Error('actual archive is not an object'); return value }
@@ -61,18 +63,28 @@ describe('actual current-domain published pack rule origin in competency executi
   })
   it('standalone: reads actual pack origin through genuine facts/materializer/producer/14 replay without claiming a current deployment gate', async () => {
     const ctx = context(), f = await fixture(ctx), declaration = await bodyFor(f, ctx, 'applicability_only')
+    const global = new PostgresMaterializationStore(db)
+    await global.openFence(scope, { fenceId: randomUUID(), reason: 'ordinary global projection fence must survive unrelated synthetic execution', propositionKeys: [], openedAt: new Date().toISOString() }, ctx)
+    const before = { state: await global.getProjectionState(scope, ctx), fences: await global.listOpenFences(scope, ctx), slices: await global.readSlices(scope, { limit: 100 }, ctx) }
     const { execution, prepare } = executor(f)
     const question = declaration.body.questions[0]
     if (question === undefined) throw new Error('actual independent question absent')
     const request = competencyExecutionRequest(declaration.ref, question)
     const prepared = await prepare(request, ctx, new AbortController().signal)
     if (prepared.status !== 'prepared' || prepared.input.rules === undefined) throw new Error('actual preparation unavailable')
+    expect(prepared.input.project.executionPurpose).toBe('synthetic_validation')
+    expect(prepared.input.projection?.ref.id).toBe(`projection.competency.${prepared.input.project.ref.projectId}`)
+    if (prepared.input.projection === undefined) throw new Error('actual isolated projection configuration missing')
+    const config = await readArtifact(prepared.input.projection.configRef, ctx)
+    expect(config).toMatchObject({ schemaVersion: 'competency-projection-configuration@1', scopeRef: scope, projectId: prepared.input.project.ref.projectId, definitionRef: f.definition.ref, packRef: f.asset.packRef })
+    expect(prepared.input.projection.ref.digest).toBe(prepared.input.projection.configRef.digest)
     const rules = prepared.input.rules, version = rules.versions[0]?.published, entity = prepared.input.entities.get('machine\u0000M-1')
     if (version === undefined || entity === undefined) throw new Error('actual published rule/entity absent')
     const key = publishedRuleApplicabilityKey({ tenantId: scope.tenantId, spaceId: scope.spaceId, definitionRef: prepared.input.definition.ref, ruleRef: publishedRuleRef(version), objectId: 'machine', subjectEntityId: entity, projectId: prepared.input.project.ref.projectId })
     const read = await rules.materializer.read({ scopeRef: scope, projectionRef: rules.projectionRef, validAt: request.input.validAt, asOfRecordedSeq: rules.recordedPoint, propositionKeys: [key] }, ctx)
     const artifact = read.ruleArtifacts?.find((row) => row.subjectEntityId === entity)
     if (artifact === undefined) throw new Error('actual exact artifact missing')
+    expect(artifact.premiseInput?.request.projectionRef).toEqual(prepared.input.projection.ref)
     const evidence = await rules.producer.record({ scopeRef: scope, ruleRef: publishedRuleRef(version), definitionRef: prepared.input.definition.ref, objectId: 'machine', subjectEntityId: entity, validAt: request.input.validAt, asOfRecordedSeq: rules.recordedPoint, observedAt: new Date().toISOString(), sourceSnapshots: [], dataMode: 'synthetic' }, ctx)
     if (evidence.envelope.payloadRef === undefined) throw new Error('actual immutable payload absent')
     const payload = await readArtifact(evidence.envelope.payloadRef, ctx)
@@ -87,6 +99,7 @@ describe('actual current-domain published pack rule origin in competency executi
     expect(await f.reviews.latestReviewRevision(scope, f.sourceRule.candidateId, ctx)).toBe('1')
     expect(await f.reviews.listRuleVersions(scope, { sourceCandidateId: f.sourceRule.candidateId, limit: 2 }, ctx)).toEqual([])
     expect(f.asset.capabilities.deploymentExecutable).toBe(false)
+    expect({ state: await global.getProjectionState(scope, ctx), fences: await global.listOpenFences(scope, ctx), slices: await global.readSlices(scope, { limit: 100 }, ctx) }).toEqual(before)
   })
   it('executes actual stored pack declarations with14 replay and no extraction clone or second approval', async () => {
     const ctx = context(), f = await fixture(ctx, 'business_conclusion'), declaration = await bodyFor(f, ctx, 'business_consequence'), question = declaration.body.questions[0]
@@ -165,5 +178,83 @@ describe('actual current-domain published pack rule origin in competency executi
       expect(bindingRef.digest).not.toBe(f.bindingRef.digest)
       expect(await executor(f, { bindingRef }).prepare(request, ctx, signal)).toMatchObject({ status: 'not_yet_executable' })
     }
+  })
+  it('isolates real split fences and keeps immutable purpose through project revisions and SQL pagination', async () => {
+    const ctx = context(), f = await fixture(ctx), declaration = await bodyFor(f, ctx, 'applicability_only'), question = declaration.body.questions[0]
+    if (question === undefined) throw new Error('independent question missing')
+    const { prepare } = executor(f), request = competencyExecutionRequest(declaration.ref, question), signal = new AbortController().signal
+    const a = await prepare(request, ctx, signal), b = await prepare(request, ctx, signal)
+    if (a.status !== 'prepared' || b.status !== 'prepared' || a.input.projection === undefined || b.input.projection === undefined) throw new Error('two genuine independently admitted cases required')
+    expect(a.input.projection.ref.id).not.toBe(b.input.projection.ref.id)
+    const storeA = new PostgresMaterializationStore(db, a.input.projection.ref.id), storeB = new PostgresMaterializationStore(db, b.input.projection.ref.id), global = new PostgresMaterializationStore(db)
+    const priorAFences = await storeA.listOpenFences(scope, ctx)
+    const before = { global: await global.getProjectionState(scope, ctx), globalFences: await global.listOpenFences(scope, ctx), b: await storeB.getProjectionState(scope, ctx), bFences: await storeB.listOpenFences(scope, ctx) }
+    const publications = new PostgresSemanticPublicationStore(db), candidates = new PostgresCandidateStore(db), projects = new PostgresProjectStore(db)
+    const archived = await readArtifact(a.input.executionInputRef, ctx), withdrawals = archived['withdrawals']
+    const selected = Array.isArray(withdrawals) ? withdrawals.find((row: unknown) => isRecord(row) && row['logicalFactId'] === 'original-hours') : undefined
+    if (!isRecord(selected) || typeof selected['actualStatementId'] !== 'string') throw new Error('actual archived original-row event selector required')
+    const source = await publications.getStatement(scope, selected['actualStatementId'], ctx)
+    if (source?.kind !== 'entity' || source.status !== 'active' || source.subjectEntityId === undefined || source.subjectEntityId !== a.input.entities.get('machine\u0000M-1')) throw new Error('exact actual confirmed original row required')
+    const record = await new PostgresInstanceReviewStore(db).getRecord(scope, a.input.project.ref.projectId, source.sourceCandidateId, ctx), binding = record?.identity.binding
+    const candidate = await candidates.getCandidate(scope, source.sourceCandidateId, ctx)
+    if (binding === undefined || candidate?.kind !== 'entity') throw new Error('real confirmed source/identity binding required')
+    const identity = new PostgresIdentityDecisionStore(db, { materializationProjectionRef: a.input.projection.ref.id })
+    const split = await new IdentityDecisionService({ store: identity, candidates, schemaSource: new InMemoryIndustrySchemaSource([{ ref: f.definition.ref, schema: projectIndustrySchema(f.definition) }]) }).decide({
+      candidateId: candidate.candidateId, kind: 'split', targetEntityId: source.subjectEntityId, projectId: a.input.project.ref.projectId,
+      expectedRevision: await identity.latestRevision(scope, candidate.candidateId, ctx), justification: 'human separates the actual original row in this synthetic case',
+      projectFence: { projectRevisionRef: binding.projectRevisionRef, definitionRef: binding.definitionRef, documentId: binding.documentId, parseId: candidate.inputVersion.parseId, membershipRevision: binding.membershipRevision, visibilityEpoch: binding.visibilityEpoch },
+    }, ctx)
+    const decision = await identity.getDecisionById(scope, split.decisionId, ctx)
+    expect(decision).toMatchObject({ decisionId: split.decisionId, candidateId: candidate.candidateId, kind: 'split', targetEntityId: source.subjectEntityId, separatedCandidateIds: [candidate.candidateId] })
+    expect(decision?.invalidationOutboxId).toBeDefined()
+    expect(await identity.getDecisionById(scope, randomUUID(), ctx)).toBeUndefined()
+    const foreign = await createJobScope(harness.adminClient, 'foreign-case-decision')
+    const foreignCtx = createToolContext({ ...ctx, principal: { ...ctx.principal, tenantId: foreign.scopeRef.tenantId }, allowedResources: { ...ctx.allowedResources, tenantId: foreign.scopeRef.tenantId, spaceId: foreign.scopeRef.spaceId } })
+    expect(await identity.getDecisionById(foreign.scopeRef, split.decisionId, foreignCtx)).toBeUndefined()
+    await expect(identity.getDecisionById(foreign.scopeRef, split.decisionId, ctx)).rejects.toMatchObject({ code: 'SCOPE_MISMATCH' })
+    const afterAFences = await storeA.listOpenFences(scope, ctx), added = afterAFences.filter((fence) => !priorAFences.some((old) => old.fenceId === fence.fenceId))
+    expect(afterAFences).toHaveLength(priorAFences.length + 1)
+    expect(added).toHaveLength(1)
+    expect(added[0]?.reason).toBe(`identity split ${split.decisionId}: human separates the actual original row in this synthetic case`)
+    expect({ global: await global.getProjectionState(scope, ctx), globalFences: await global.listOpenFences(scope, ctx), b: await storeB.getProjectionState(scope, ctx), bFences: await storeB.listOpenFences(scope, ctx) }).toEqual(before)
+    await expect(a.input.validateCurrent(ctx, signal)).rejects.toMatchObject({ code: 'DIGEST_MISMATCH' })
+    const jobs = new PostgresJobStore(db), readiness = new PostgresProjectReadinessStore(db), catalogue = new StoreBackedIndustryPackCatalogue({ store: f.packs })
+    const service = new ProjectService({ projects, jobs, readiness, catalogue })
+    const updated = await service.appendRevision(a.input.project.ref.projectId, { expectedRevision: a.input.project.ref.revision, reason: 'human updates the same synthetic project without changing its purpose' }, `purpose-update-${randomUUID()}`, ctx.principal.subjectId, ctx)
+    expect(updated.revision.executionPurpose).toBe('synthetic_validation')
+    const businessId = randomUUID(), emptySet = await f.put({ schemaVersion: 'project-document-set@1', projectId: businessId, members: [] })
+    const profile = await new PostgresProfileStore(db).findResolvedProfile(f.resolved.resolvedProfileRef, f.resolved.resolvedProfileHash, scope, ctx)
+    if (profile === undefined) throw new Error('actual resolved profile missing')
+    let first = true
+    const business = await new ProjectService({ projects, jobs, readiness, catalogue, newId: () => { if (first) { first = false; return businessId }; return randomUUID() } }).createProject({ title: 'Actual ordinary business project', industryPackRef: f.asset.packRef, profileRef: f.resolved.resolvedProfileRef, mappingRefs: profile.resolved.mappingRefs, documentSetRef: emptySet }, `business-${businessId}`, ctx.principal.subjectId, ctx)
+    expect(business.revision.executionPurpose).toBeUndefined()
+    const filtered = new PostgresProjectStore(db, { excludeSyntheticValidationProjects: true })
+    expect((await filtered.listProjects(scope, { limit: 1 }, ctx)).map((row) => row.projectId)).toEqual([businessId])
+    const unfiltered = await projects.listProjects(scope, { limit: 1 }, ctx), firstProject = unfiltered[0]
+    if (firstProject === undefined) throw new Error('actual first default project missing')
+    expect((await projects.getRevision(scope, firstProject.projectId, firstProject.headRevision, ctx))?.executionPurpose).toBe('synthetic_validation')
+    expect(await filtered.getRevision(scope, a.input.project.ref.projectId, a.input.project.ref.revision, ctx)).toEqual(a.input.project)
+    for (const prior of [updated.revision, business.revision]) {
+      const { ref, ...pins } = prior, next = String(BigInt(ref.revision) + 1n)
+      if (prior.executionPurpose === undefined) pins.executionPurpose = 'synthetic_validation'; else delete pins.executionPurpose
+      const body = { schemaVersion: 'project-revision@1', projectId: ref.projectId, revision: next, ...pins }, revision: ProjectRevision = { ...pins, ref: { ...ref, revision: next, digest: contentDigestOf(body) } }, now = new Date().toISOString()
+      await expect(projects.appendRevision(scope, ref.projectId, { expectedRevision: ref.revision, revision, idempotencyKey: `purpose-forge-${randomUUID()}`, requestDigest: contentDigestOf(body), actor: ctx.principal.subjectId, recordedAt: now, outboxJobId: candidate.jobId, outbox: { outboxId: randomUUID(), topic: 'project.revision.created', payload: { projectId: ref.projectId }, idempotencyKey: randomUUID(), availableAt: now, createdAt: now } }, ctx)).rejects.toMatchObject({ code: 'INVALID_REVISION' })
+      expect((await projects.getProject(scope, ref.projectId, ctx))?.headRevision).toBe(ref.revision)
+    }
+  })
+  it('rejects a correctly archived replacement projection configuration that differs from the actual saved computation', async () => {
+    const ctx = context(), f = await fixture(ctx), declaration = await bodyFor(f, ctx, 'applicability_only'), question = declaration.body.questions[0]
+    if (question === undefined) throw new Error('independent question missing')
+    const { prepare } = executor(f)
+    const execution = executionFor(f, async (request, context, signal) => {
+      const prepared = await prepare(request, context, signal)
+      if (prepared.status !== 'prepared' || prepared.input.projection === undefined || prepared.input.rules === undefined) throw new Error('genuine prepared case/config/rules required')
+      const config = await readArtifact(prepared.input.projection.configRef, context)
+      const configRef = await f.put({ ...config, producerComponentRef: f.asset.packRef }), ref = { ...prepared.input.projection.ref, digest: configRef.digest }
+      expect(configRef.digest).not.toBe(prepared.input.projection.configRef.digest)
+      const captured = await readArtifact(prepared.input.executionInputRef, context), executionInputRef = await f.put({ ...captured, projectionRef: ref, projectionConfigRef: configRef })
+      return { ...prepared, input: { ...prepared.input, executionInputRef, projection: { ref, configRef }, rules: { ...prepared.input.rules, projectionRef: ref } } }
+    })
+    await expect(execution.execute(competencyExecutionRequest(declaration.ref, question), ctx, new AbortController().signal)).rejects.toMatchObject({ code: 'DIGEST_MISMATCH' })
   })
 })

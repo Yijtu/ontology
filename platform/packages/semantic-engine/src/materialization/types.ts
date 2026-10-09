@@ -57,6 +57,8 @@ export interface MaterializationServiceDependencies {
   readonly publishedSource: MaterializationPublishedSource
   /** Fence, dirty flag, projection state and append-only projection slices. */
   readonly materialization: MaterializationStore
+  /** Host-pinned projection configuration, archived by synthetic execution when supplied. */
+  readonly projectionRef?: VersionRef
   readonly evaluator?: RuleEvaluator
   /**
    * Above this many affected rules a change is conservatively deferred: the whole scope is

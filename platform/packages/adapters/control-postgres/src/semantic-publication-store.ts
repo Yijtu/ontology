@@ -45,6 +45,8 @@ export interface PostgresSemanticPublicationStoreOptions {
   readonly faultInjection?: PublicationFaultInjection
   /** Host-only business read view; exclusion runs before keyset paging and finite source limits. */
   readonly excludeSyntheticValidationProjects?: boolean
+  /** Host-selected physical projection; public publication inputs cannot select this. */
+  readonly materializationProjectionRef?: string
 }
 
 interface ReviewRow extends QueryResultRow {
@@ -225,11 +227,13 @@ export class PostgresSemanticPublicationStore implements SemanticPublicationStor
   readonly #database: ControlPostgresDatabase
   readonly #faultInjection: PublicationFaultInjection | undefined
   readonly #excludeSyntheticValidationProjects: boolean
+  readonly #materializationProjectionRef: string
 
   constructor(database: ControlPostgresDatabase, options?: PostgresSemanticPublicationStoreOptions) {
     this.#database = database
     this.#faultInjection = options?.faultInjection
     this.#excludeSyntheticValidationProjects = options?.excludeSyntheticValidationProjects === true
+    this.#materializationProjectionRef = options?.materializationProjectionRef ?? MATERIALIZED_PROJECTION_REF
   }
 
   async latestReviewRevision(
@@ -901,7 +905,7 @@ export class PostgresSemanticPublicationStore implements SemanticPublicationStor
         WHERE tenant_id = current_setting('app.tenant_id')::uuid
           AND space_id = current_setting('app.space_id')::uuid
           AND projection_ref = $1`,
-      [MATERIALIZED_PROJECTION_REF],
+      [this.#materializationProjectionRef],
     )
     const generation = state.rows[0]?.generation ?? '0'
     for (const fence of fences) {
@@ -914,7 +918,7 @@ export class PostgresSemanticPublicationStore implements SemanticPublicationStor
            current_setting('app.space_id')::uuid,
            $1, $2, $3::bigint, $4, $5::jsonb, 'open', $6::timestamptz)`,
         [
-          MATERIALIZED_PROJECTION_REF,
+          this.#materializationProjectionRef,
           fence.fenceId,
           generation,
           fence.reason,
