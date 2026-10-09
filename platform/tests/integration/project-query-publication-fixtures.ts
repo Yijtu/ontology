@@ -11,13 +11,14 @@ import type { PostgresStructuredIngestionStore } from '@ontology/adapter-extract
 import { InMemoryIndustrySchemaSource, InstanceReviewService, JobService, ProjectMappingService, ProjectService, encodeStructuredExtractionRef } from '@ontology/application'
 import { createInstanceIdentityWorkflow, createProjectFactWorkflow } from '@ontology/app-api'
 import { InMemoryIdentityIndexReader, PublishedProjectDatasetSource, projectIndustrySchema } from '@ontology/semantic-engine'
-import type { ColumnMappingEntry, EntityCandidate, ResourceRef, ScopeRef, SemanticDefinitionVersion, ToolContext } from '@ontology/contracts'
+import type { ColumnMappingEntry, DocumentParseRecord, EntityCandidate, ResourceRef, ScopeRef, SemanticDefinitionVersion, StructuredParseRecord, ToolContext } from '@ontology/contracts'
 
 /** Real stored import, human fields/identity, review ledger and fenced PG publication. */
 export function projectQueryPublicationFixture(input: {
   db: ControlPostgresDatabase; blobs: LocalImmutableBlobStore; structured: PostgresStructuredIngestionStore;
   scope: ScopeRef; ctx: ToolContext; projectId: string; definition: SemanticDefinitionVersion;
   additionalDefinitions?: readonly SemanticDefinitionVersion[];
+  projectDocument?: (parse: StructuredParseRecord, ctx: ToolContext) => Promise<DocumentParseRecord>;
 }) {
   const { db, blobs, structured, scope, ctx, projectId, definition } = input
   const projects = new PostgresProjectStore(db)
@@ -69,8 +70,10 @@ export function projectQueryPublicationFixture(input: {
     })
     const confirmation = await mappingService.confirmMapping(projectId, { format: 'csv', parseId: parsed.parse.parseId, originalRef: original.blobRef, originalMediaType: 'text/csv', options: { headerRow: 1 }, objectId, entries }, `query-map-${jobId}`, ctx.principal.subjectId, ctx)
     const documentId = randomUUID()
+    const projection = await input.projectDocument?.(parsed.parse, ctx)
     await documents.registerDocument(scope, projectId, { documentId, documentRef: original.blobRef, documentDigest: original.blobRef.digest, parseId: parsed.parse.parseId,
-      parseRef: { id: parsed.parse.parseId, version: '1.0.0', digest: original.blobRef.digest, kind: 'artifact' }, textDigest: original.blobRef.digest, precision: 'exact', actor: ctx.principal.subjectId, recordedAt: new Date().toISOString() }, ctx)
+      parseRef: projection?.spanMapRef ?? { id: parsed.parse.parseId, version: '1.0.0', digest: original.blobRef.digest, kind: 'artifact' }, textDigest: projection?.normalizedRef.digest ?? original.blobRef.digest,
+      precision: projection === undefined ? 'exact' : 'approximate', actor: ctx.principal.subjectId, recordedAt: new Date().toISOString() }, ctx)
     const project = await projects.getProject(scope, projectId, ctx)
     if (project === undefined) throw new Error('the query project is missing')
     const previous = await projects.getRevision(scope, projectId, project.headRevision, ctx)
@@ -111,5 +114,5 @@ export function projectQueryPublicationFixture(input: {
     }
     return results
   }
-  return { projects, mappings, records, documents, identities, publications, readiness, schemas, workflow, publishedSource, definition, importCsv, restage, approveAndPublish, candidates, instances, instanceService, mappingService, jobs, identity, replaceReadDefinition: (value: SemanticDefinitionVersion) => { readDefinition = value } }
+  return { projects, projectService, mappings, records, documents, identities, publications, readiness, schemas, workflow, publishedSource, definition, importCsv, restage, approveAndPublish, candidates, instances, instanceService, mappingService, jobs, identity, replaceReadDefinition: (value: SemanticDefinitionVersion) => { readDefinition = value } }
 }
