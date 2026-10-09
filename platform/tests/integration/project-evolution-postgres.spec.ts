@@ -112,7 +112,7 @@ async function fixture(label: string, strategy: DefinitionRevisionStrategyKind =
     const identity = createInstanceIdentityWorkflow({
         service: p.instanceService, projects: p.projects, projectDocuments: p.documents, candidates: p.candidates, identityStore: p.identities, schemaSource: p.schemas, identityMappingRef: definition.ref, index: new InMemoryIdentityIndexReader([])
     })
-    const evolve = (backend: ProjectDatasetQueryPort & ProjectDatasetWriterPort, instances = identity) => {
+    const evolve = (backend: ProjectDatasetQueryPort & ProjectDatasetWriterPort, instances = identity, inputWriter = createBlobArtifactWriter(blobs)) => {
         const store = new PostgresProjectEvolutionStore(db)
         const { service, dataset } = createProjectEvolutionWorkflow({
             projects: p.projects, store, mappings: p.mappings, records: p.records, mappingService: p.mappingService, documents: p.documents, catalogue: {
@@ -120,7 +120,7 @@ async function fixture(label: string, strategy: DefinitionRevisionStrategyKind =
             }, schemas: p.schemas, jobs: p.jobs, facts: p.workflow.materialization, candidates: p.candidates, publications: p.publications, publishedSource: p.publishedSource, readiness: p.readiness, dataset: {
                 writer: backend, query: backend
             }, input: {
-                writer: createBlobArtifactWriter(blobs), reader: {
+                writer: inputWriter, reader: {
                     read: async (request, ctx) => blobs.readAuthorized({
                         scopeRef: {
                             tenantId: ctx.principal.tenantId, spaceId: ctx.allowedResources.spaceId
@@ -164,6 +164,54 @@ async function fixture(label: string, strategy: DefinitionRevisionStrategyKind =
     }
 }
 describe('explicit ontology evolution over actual original sources and human facts (PostgreSQL)', () => {
+    it('keeps a genuine same-content reapproval readable both between approved-input archive/CAS and after ready', async () => {
+        const p = await fixture('evolve-reapprove'), backend = new DuckDbProjectDatasetAdapter(), writer = createBlobArtifactWriter(blobs)
+        let selected: readonly string[] = []
+        let raced = false
+        const reapprove = async (reason: string) => {
+            for (const candidateId of selected)
+                await p.workflow.publication.reviewCandidate({
+                    candidateId, expectedRevision: await p.publications.latestReviewRevision(p.scope, candidateId, p.ctx), decision: 'approve', reason
+                }, p.ctx)
+        }
+        const inputWriter = {
+            putBytes: async (...args: Parameters<typeof writer.putBytes>) => {
+                const result = await writer.putBytes(...args)
+                const body: unknown = JSON.parse(new TextDecoder().decode(args[0].content))
+                if (!raced && typeof body === 'object' && body !== null && 'schemaVersion' in body && body.schemaVersion === 'project-input-snapshot@1') {
+                    raced = true
+                    await reapprove('human reaffirmed unchanged content after actual input artifact write')
+                }
+                return result
+            }
+        }
+        try {
+            const { service, dataset } = p.evolve(backend, undefined, inputWriter)
+            await dataset.materialize(p.projectId, {
+                objectId: 'meter'
+            }, p.ctx)
+            const plan = await service.start(p.projectId, p.start, `reapprove-${randomUUID()}`, p.ctx), pending = await service.rebuild(p.projectId, plan.plan.evolutionId, p.ctx)
+            selected = pending.candidateIds
+            await p.humanReview(selected)
+            const ready = await service.activate(p.projectId, plan.plan.evolutionId, [], p.ctx)
+            expect(raced).toBe(true)
+            const revision = await p.projects.getRevision(p.scope, p.projectId, ready.plan.targetRevisionRef.revision, p.ctx)
+            if (revision === undefined)
+                throw new Error('activated revision missing')
+            expect(await service.resolveApprovedInput(p.scope, revision, p.ctx)).toEqual(ready.inputSnapshotRef)
+            await reapprove('human reaffirmed the same content after the project was already ready')
+            expect(await service.resolveApprovedInput(p.scope, revision, p.ctx)).toEqual(ready.inputSnapshotRef)
+            await p.workflow.publication.reviewCandidate({
+                candidateId: selected[0]!, expectedRevision: await p.publications.latestReviewRevision(p.scope, selected[0]!, p.ctx), decision: 'reject', reason: 'human explicitly revoked this candidate'
+            }, p.ctx)
+            await expect(service.resolveApprovedInput(p.scope, revision, p.ctx)).rejects.toMatchObject({
+                code: 'READINESS_CONFLICT'
+            })
+        }
+        finally {
+            backend.close()
+        }
+    }, 120000)
     it('rebuilds two objects from their own originals and keeps both exact new object snapshots queryable', async () => {
         const p = await fixture('evolve-multiple-objects', 'new_version', false, false, true), backend = new DuckDbProjectDatasetAdapter()
         try {

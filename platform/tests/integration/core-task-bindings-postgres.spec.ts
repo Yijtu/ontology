@@ -501,7 +501,8 @@ describe('mounted Core structured-query task binding through the normal HTTP hos
           if (revision === undefined)
               throw new Error('target revision unavailable')
           expect(revision.profileRef).toEqual(start.profileRef)
-          expect(await evolution.service.resolveApprovedInput(scopeRef, revision, ctx)).toEqual(ready.inputSnapshotRef)
+          for(const candidateId of pending.candidateIds) await p.workflow.publication.reviewCandidate({candidateId,expectedRevision:await p.publications.latestReviewRevision(scopeRef,candidateId,ctx),decision:'approve',reason:'human reaffirmed unchanged approved input after CAS'},ctx)
+      expect(await evolution.service.resolveApprovedInput(scopeRef, revision, ctx)).toEqual(ready.inputSnapshotRef)
           const inputBytes = await blobs.readAuthorized({
               scopeRef, blobRef: ready.inputSnapshotRef
           }, ctx), inputBody: unknown = JSON.parse(new TextDecoder().decode(inputBytes))

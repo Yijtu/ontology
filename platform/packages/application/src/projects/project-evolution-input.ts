@@ -1,5 +1,5 @@
 import { createHash } from 'node:crypto'
-import { isRecord, isResourceRef, isUuid, assertProjectDatasetFieldSourcesShape } from '@ontology/contracts'
+import { isRecord, isResourceRef, isUuid, isRevisionString, assertProjectDatasetFieldSourcesShape } from '@ontology/contracts'
 import type { ApprovedInputSnapshot, CandidateStore, ImmutableArtifactWriter, InstanceReviewStore, ProjectDatasetReadRow, ProjectEvolutionRecord, ProjectEvolutionSnapshot, ProjectRecordStore, ResourceRef, ScopeRef, ScopedArtifactReader, SemanticPublicationStore, ToolContext } from '@ontology/contracts'
 import { canonicalJson } from '../profiles/canonical'
 import { ProjectError } from './errors'
@@ -171,8 +171,22 @@ export class ProjectEvolutionInputService {
                 invalid('the archived human confirmation page is unavailable')
             confirmed.push(...page.confirmations)
         }
-        if (!same(confirmed, await this.#human(scope, record, ctx)))
-            invalid('the actual human confirmation/review evidence changed')
+        const currentHuman = await this.#human(scope, record, ctx)
+        if (confirmed.length !== currentHuman.length)
+            invalid('the actual human confirmation coverage changed')
+        for (let index = 0; index < currentHuman.length; index++) {
+            const archived = confirmed[index], current = currentHuman[index]!
+            if (!isRecord(archived) || archived.candidateId !== current.candidateId || !isRecord(archived.review) || !isRevisionString(archived.review.revision))
+                invalid('the frozen human review selector is malformed')
+            const frozenReview = await this.deps.reviews.getReview(scope, current.candidateId, archived.review.revision, ctx)
+            // A same-content reaffirmation does not change the already approved input. The
+            // historical approval must still be real, while #human enforces current approval,
+            // fields and identity; none of those source/confirmation checks are relaxed.
+            if (frozenReview?.decision !== 'approve' || frozenReview.contentDigest !== current.candidateDigest || !same(archived, {
+                ...current, review: frozenReview
+            }))
+                invalid('the actual human confirmation/review evidence changed')
+        }
         return record.inputSnapshotRef
     }
 }

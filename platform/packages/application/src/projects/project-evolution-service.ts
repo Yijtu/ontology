@@ -1,6 +1,6 @@
 import { createHash } from 'node:crypto'
 import { EMPTY_JOB_COUNTS, PROJECT_EVOLUTION_TOPIC, ProjectStoreError, isToolContext, isUuid, isVersionRef, isRevisionString, isDefinitionRevisionStrategy, assertProjectEvolutionPlan } from '@ontology/contracts'
-import type { CandidateStore, DefinitionRevisionStrategy, IndustryPackCatalogue, IndustrySchema, IndustrySchemaSource, JobStore, ProjectDocumentStore, ProjectEvolutionImpact, ProjectEvolutionPlan, ProjectEvolutionRecord, ProjectEvolutionRemap, ProjectEvolutionStore, ProjectMappingStore, ProjectPublishedDatasetSource, ProjectReadinessStore, ProjectRevisionRef, ProjectStore, ScopeRef, SemanticPublicationStore, ToolContext, VersionRef } from '@ontology/contracts'
+import type { CandidateStore, DefinitionRevisionStrategy, IndustryPackCatalogue, IndustrySchema, IndustrySchemaSource, JobStore, ProjectDocumentStore, ProjectEvolutionImpact, ProjectEvolutionPlan, ProjectEvolutionRecord, ProjectEvolutionSnapshot, ProjectRevision, ProjectEvolutionRemap, ProjectEvolutionStore, ProjectMappingStore, ProjectPublishedDatasetSource, ProjectReadinessStore, ProjectRevisionRef, ProjectStore, ScopeRef, SemanticPublicationStore, ToolContext, VersionRef } from '@ontology/contracts'
 import { canonicalJson, sha256DigestOf } from '../profiles/canonical'
 import { bodyToRevision } from './project-service'
 import { ProjectError } from './errors'
@@ -364,7 +364,7 @@ export class ProjectEvolutionService {
             throw new ProjectError('READINESS_CONFLICT', 'relation changes remain explicitly pending human resolution', {
                 reasons: unresolved.map((i) => i.logicalId)
             })
-        const snapshots: import('@ontology/contracts').ProjectEvolutionSnapshot[] = []
+        const snapshots: ProjectEvolutionSnapshot[] = []
         for (const objectId of new Set(p.sources.map((source) => source.objectId))) {
             const official = await this.deps.publishedSource.read(scope, revision, objectId, ctx)
             const rows = new Map(official.rows.map((row) => [row.recordId, row]))
@@ -431,7 +431,7 @@ export class ProjectEvolutionService {
         return record?.state === 'ready' && same(record.plan.targetRevisionRef, revision) ? record.snapshots?.find((snapshot) => snapshot.objectId === objectId)?.snapshotRef : undefined
     }
     /** Current task admission verifies the real approved row and human confirmation artifacts. */
-    async resolveApprovedInput(scope: ScopeRef, revision: import('@ontology/contracts').ProjectRevision, ctx: ToolContext): Promise<ResourceRef | undefined> {
+    async resolveApprovedInput(scope: ScopeRef, revision: ProjectRevision, ctx: ToolContext): Promise<ResourceRef | undefined> {
         const current = await this.deps.projects.getProject(scope, revision.ref.projectId, ctx)
         const record = await this.deps.store.activeRebuild(scope, revision.ref.projectId, ctx)
         if (record?.state !== 'ready' || (current?.activeRevision ?? current?.headRevision) !== revision.ref.revision || !same(record.plan.targetRevisionRef, revision.ref))
