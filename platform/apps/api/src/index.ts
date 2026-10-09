@@ -207,3 +207,5 @@ export { CoreSemanticTaskResolver, createCoreSemanticTaskSource } from './compos
 export type { CoreSemanticTaskResolverOptions, CoreSemanticTaskSelection, CoreSemanticTaskResolution } from './composition/core-semantic-task-resolver'
 export { CoreRelationsTaskHandler } from './composition/core-relations-task-handler'
 export type { CoreRelationsTaskHandlerOptions } from './composition/core-relations-task-handler'
+
+export type { CompetencyExtractedRuleAlias, CompetencyPackRuleAlias, CompetencyRuleAlias, CompetencyTemplateRuleSource } from './composition/competency-rule-origins'

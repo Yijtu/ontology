@@ -8,7 +8,7 @@ import type {
 } from '@ontology/contracts'
 import { canonicalJson } from '@ontology/application'
 import {
-  publishedRuleConsequenceKey, publishedRuleDependencyRef, publishedRuleRef, projectSnapshotMappingRef,
+  publishedRuleConsequenceKey, publishedRuleApplicabilityKey, publishedRuleDependencyRef, publishedRuleRef, projectSnapshotMappingRef,
   sameUtcInstant, compareUtcInstants,
 } from '@ontology/semantic-engine'
 import type {
@@ -179,7 +179,10 @@ export function createCoreCompetencyExecution(options: CoreCompetencyExecutionOp
       const entityId = input.entities.get(entityKey(intent.objectId, intent.subjectEntityId))
       const rule = rules?.versions.find((row) => row.published.ruleId === intent.ruleId && request.ruleRefs.some((ref) => sameRef(ref, row.declarationRef)))
       if (rules === undefined || entityId === undefined || rule === undefined) return { status: 'not_yet_executable', reason: 'the pinned published rule or confirmed entity is unavailable' }
-      const key = publishedRuleConsequenceKey(publishedRuleDependencyRef(rule.published, request.input.scopeRef, input.definition.ref), entityId)
+      const key = rule.published.conclusion === undefined
+        ? publishedRuleApplicabilityKey({ tenantId: ctx.principal.tenantId, spaceId: ctx.allowedResources.spaceId, definitionRef: input.definition.ref,
+          ruleRef: publishedRuleRef(rule.published), objectId: rule.published.objectId, subjectEntityId: entityId, projectId: input.project.ref.projectId })
+        : publishedRuleConsequenceKey(publishedRuleDependencyRef(rule.published, request.input.scopeRef, input.definition.ref), entityId)
       const read = await rules.materializer.read({ scopeRef: request.input.scopeRef, projectionRef: rules.projectionRef, validAt: request.input.validAt, asOfRecordedSeq: rules.recordedPoint, propositionKeys: [key] }, ctx)
       if (read.status !== 'materialized') return { status: 'not_yet_executable', reason: 'the exact persisted rule point is unavailable or fenced' }
       const ruleRef = publishedRuleRef(rule.published)
@@ -192,7 +195,7 @@ export function createCoreCompetencyExecution(options: CoreCompetencyExecutionOp
       const payload = await readJson(payloadRef, ctx)
       if (!await rules.replay.verify({ artifact, payload }, ctx)) throw new CompetencyQuestionError('DIGEST_MISMATCH', 'actual published rule premises and original sources did not replay')
       const conclusion = read.conclusions.find((row) => row.propositionKey === key)
-      const propositionState = conclusion?.domainStatus === 'conflict' ? 'conflict' : conclusion?.domainStatus === 'known' && typeof conclusion.value === 'boolean' ? (conclusion.value ? 'true' : 'false') : 'unknown'
+      const propositionState = rule.published.conclusion === undefined ? 'unknown' : conclusion?.domainStatus === 'conflict' ? 'conflict' : conclusion?.domainStatus === 'known' && typeof conclusion.value === 'boolean' ? (conclusion.value ? 'true' : 'false') : 'unknown'
       actual = { kind: 'rule', conditionState: artifact.applicability.conditionState, applicability: artifact.applicability.state, propositionState }
       proof = { artifact, conclusion, evidenceRef: evidence.evidenceRef, payloadRef }; additional.push(evidence.evidenceRef, payloadRef)
     } else if (intent.kind === 'relation') {

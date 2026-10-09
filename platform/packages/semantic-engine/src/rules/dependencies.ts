@@ -9,6 +9,20 @@ export function publishedRuleRef(rule: PublishedExecutableRule): VersionRef {
   return { id: rule.ruleVersionId, version: `${rule.version}.0.0`, digest: sha256DigestOf(rule) }
 }
 
+/** Exact compiler identity for applicability; this does not assert a business consequence. */
+export interface PublishedRuleInstanceIdentity {
+  readonly tenantId: string
+  readonly spaceId: string
+  readonly definitionRef: VersionRef
+  readonly ruleRef: VersionRef
+  readonly objectId: string
+  readonly subjectEntityId: string
+  readonly projectId?: string
+}
+export function publishedRuleApplicabilityKey(identity: PublishedRuleInstanceIdentity): string {
+  return `rule-applicability:${sha256DigestOf(identity)}`
+}
+
 export function publishedRuleConsequenceKey(ref: RuleDependencyReference, subjectEntityId: string): string {
   return `rule-consequence:${sha256DigestOf({ ...ref, subjectEntityId })}`
 }
