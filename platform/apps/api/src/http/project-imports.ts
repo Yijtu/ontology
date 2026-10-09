@@ -55,6 +55,10 @@ export interface ProjectStructuredImportResult {
   readonly counts: StructuredRecordCounts
   readonly coverage: ParseCoverage
   readonly reused: boolean
+  /** Host-built document membership and immutable corpus, separate from fact approval. */
+  readonly documentId?: Uuid
+  readonly documentSetRef?: ResourceRef
+  readonly documentIndexState?: string
 }
 
 export interface ProjectStructuredImportService {
@@ -171,6 +175,9 @@ export function registerProjectImportRoute(
           counts: result.counts,
           coverage: result.coverage,
           reused: result.reused,
+          ...(result.documentId === undefined ? {} : { documentId: result.documentId }),
+          ...(result.documentSetRef === undefined ? {} : { documentSetRef: result.documentSetRef }),
+          ...(result.documentIndexState === undefined ? {} : { documentIndexState: result.documentIndexState }),
         },
         meta: { traceId, idempotencyKey },
       })

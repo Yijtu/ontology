@@ -521,6 +521,9 @@
         },
         "projectDatasetSnapshotRef": {
           "$ref": "./common.schema.json#/$defs/ResourceRef"
+        },
+        "projectDocumentIndexSnapshotRef": {
+          "$ref": "./common.schema.json#/$defs/ResourceRef"
         }
       }
     },

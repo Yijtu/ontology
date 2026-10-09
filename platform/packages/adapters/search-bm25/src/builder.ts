@@ -118,7 +118,7 @@ export class Bm25IndexBuilder {
         indexRef,
         docCount: documents.length,
         avgDocLength: documents.length === 0 ? 0 : totalLength / documents.length,
-        completeness: complete ? 'complete' : 'partial',
+        completeness: request.parses.some((parse) => parse.coverage.completeness === 'truncated') ? 'truncated' : complete ? 'complete' : 'partial',
         builtAt: this.#now(),
         documents,
       },

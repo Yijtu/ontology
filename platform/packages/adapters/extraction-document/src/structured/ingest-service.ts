@@ -1,4 +1,4 @@
-import { isToolContext } from '@ontology/contracts'
+import { isToolContext, isStructuredParseSelection } from '@ontology/contracts'
 import type {
   ScopeRef,
   Sha256Digest,
@@ -202,6 +202,8 @@ export class LocalStructuredIngestionService implements StructuredIngestionPort 
   async parse(request: StructuredIngestionRequest, ctx: ToolContext): Promise<StructuredIngestionResult> {
     const scope = resolveScope(request.scopeRef, ctx)
     validateRequest(request)
+    if (!isStructuredParseSelection(request.options)) throw new StructuredIngestionError('INVALID_REQUEST', 'the native parse selection contains unsupported fields or values')
+    const selection = structuredClone(request.options)
     const parserVersion = request.parserVersion ?? STRUCTURED_PARSER_VERSION
 
     const existing = await this.#store.findParseByDigest(scope, request.originalRef.digest, parserVersion, ctx)
@@ -212,7 +214,7 @@ export class LocalStructuredIngestionService implements StructuredIngestionPort 
     const authorized = await this.#blobs.getAuthorized({ scopeRef: scope, blobRef: request.originalRef }, ctx)
     const bytes = await this.#blobs.readAuthorized({ scopeRef: scope, blobRef: request.originalRef }, ctx)
 
-    const result = this.#parser.parse(bytes, { ...request.options, mediaType: authorized.mediaType })
+    const result = this.#parser.parse(bytes, { ...selection, mediaType: authorized.mediaType })
     if (result.status === 'rejected') {
       const first = result.diagnostics[0]
       throw new StructuredIngestionError(
@@ -234,6 +236,7 @@ export class LocalStructuredIngestionService implements StructuredIngestionPort 
       originalRef: authorized.blobRef,
       parserId: STRUCTURED_PARSER_ID,
       parserVersion,
+      parseOptions: selection,
       status: result.status,
       coverage: result.coverage,
       counts,

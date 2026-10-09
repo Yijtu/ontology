@@ -1,4 +1,4 @@
-import { isToolContext } from '@ontology/contracts'
+import { isToolContext, isStructuredParseSelection } from '@ontology/contracts'
 import type {
   RecordStructuredParseResult,
   ScopeRef,
@@ -61,6 +61,7 @@ export class InMemoryStructuredIngestionStore implements StructuredIngestionStor
   ): Promise<RecordStructuredParseResult> {
     this.#assertOpen()
     const scope = assertScope(record.scopeRef, ctx)
+    if (record.parseOptions !== undefined && !isStructuredParseSelection(record.parseOptions)) throw new StructuredIngestionError('INVALID_REQUEST', 'stored native selection must match the strict supported contract')
     const key = `${scope.tenantId}|${scope.spaceId}|${record.originalRef.digest}|${record.parserVersion}`
     if (this.#parses.has(key)) return { created: false }
     this.#parses.set(key, record)

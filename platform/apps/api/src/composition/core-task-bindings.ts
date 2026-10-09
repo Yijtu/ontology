@@ -54,15 +54,25 @@ function parameterSchemaOf(kind: TaskKind): Readonly<Record<string, unknown>> {
           validAt: { $ref: `${CONTRACT_SCHEMA_BASE}/common.schema.json#/$defs/Rfc3339UtcTimestamp` },
           asOfRecordedSeq: { type: 'string', minLength: 1 },
           judgementAxis: { type: 'string', enum: ['applicability', 'business_proposition'] },
+          rule: { type: 'string', minLength: 1 },
+          entity: { type: 'string', minLength: 1 },
+          object: { type: 'string', minLength: 1 },
         },
-        required: ['ruleRef', 'objectId', 'subjectEntityId', 'validAt', 'asOfRecordedSeq'],
+        oneOf: [
+          { required: ['ruleRef', 'objectId', 'subjectEntityId', 'validAt', 'asOfRecordedSeq'], properties: { ruleRef: true, objectId: true, subjectEntityId: true, validAt: true, asOfRecordedSeq: true, rule: false, entity: false, object: false } },
+          { required: ['rule', 'entity'], properties: { rule: true, entity: true, ruleRef: false, subjectEntityId: false, validAt: false, asOfRecordedSeq: false, objectId: false, judgementAxis: false } },
+        ],
       }
     case 'relations':
       return {
         type: 'object',
         additionalProperties: false,
-        properties: { question: { type: 'string' } },
-        required: ['question'],
+        properties: {
+          startEntityId: { type: 'string', minLength: 1 },
+          relationIds: { type: 'array', minItems: 1, maxItems: 3, items: { type: 'string', minLength: 1 } },
+          validAt: { $ref: `${CONTRACT_SCHEMA_BASE}/common.schema.json#/$defs/Rfc3339UtcTimestamp` },
+        },
+        required: ['startEntityId', 'relationIds', 'validAt'],
       }
     case 'structured_query':
       return {
@@ -185,6 +195,7 @@ export const CORE_MOUNTED_TASK_KINDS: readonly TaskKind[] = [
   'structured_query',
   'document_qa',
   'rule_judgement',
+  'relations',
   'compute',
 ]
 

@@ -120,6 +120,11 @@ export class PostgresProjectReadinessStore implements ProjectReadinessStore {
         const owner = await query.query<{ head_revision: string; staging_writable: boolean }>(`SELECT head_revision::text,staging_writable FROM agent_platform.projects
           WHERE tenant_id=current_setting('app.tenant_id')::uuid AND space_id=current_setting('app.space_id')::uuid AND project_id=$1::uuid FOR SHARE`, [input.projectRevisionRef.projectId])
         if (owner.rows[0]?.head_revision === input.projectRevisionRef.revision && owner.rows[0].staging_writable === false) throw new ProjectReadinessStoreError('FENCE_STALE', 'cancelled staging revisions cannot become ready')
+        if (input.kind === 'document_index') {
+          const visibility = await query.query<{ epoch: string }>(`SELECT visibility_epoch::text AS epoch FROM agent_platform.project_visibility
+            WHERE tenant_id=current_setting('app.tenant_id')::uuid AND space_id=current_setting('app.space_id')::uuid AND project_id=$1::uuid FOR SHARE`, [input.projectRevisionRef.projectId])
+          if (visibility.rows[0]?.epoch !== input.fenceRevision) throw new ProjectReadinessStoreError('FENCE_STALE', 'the document corpus changed before readiness committed')
+        }
       }
       const replay = await this.#byIdempotencyKey(query, input.idempotencyKey)
       if (replay !== undefined) {

@@ -13,7 +13,9 @@ import {
   PostgresMaterializationStore, PostgresEvidenceStore,
 } from '@ontology/adapter-control-postgres'
 import { DraftVerificationService, TypedEvidenceDraftWriter, InMemoryIndustrySchemaSource, InstanceReviewService, JobService, ProjectMappingService, ProjectService, encodeStructuredExtractionRef } from '@ontology/application'
-import { createBlobArtifactWriter, createProjectFactWorkflow, createInstanceIdentityWorkflow } from '@ontology/app-api'
+import { createBlobArtifactWriter, createProjectFactWorkflow, createInstanceIdentityWorkflow, createCoreStructuredImportWorkflow } from '@ontology/app-api'
+import { PostgresKeywordIndexStore } from '@ontology/adapter-search-bm25'
+import { PostgresRunExecutionBindingStore } from '@ontology/adapter-control-postgres'
 import {
   IdentityDecisionService, InMemoryIdentityIndexReader, PublishedSemanticSource,
   PublishedFactsReferenceProvider, OntologyLookupService, SemanticDefinitionService,
@@ -129,7 +131,7 @@ async function imported(p: Fixture, format: 'csv' | 'xlsx', objectId = 'meter', 
     ...(fieldIds[index] === 'power' ? { sourceUnitCode: format === 'csv' ? 'W' : 'kW', canonicalUnitCode: 'kW', ...(format === 'csv' ? { unitConversion: { fromUnitCode: 'W', toUnitCode: 'kW', numerator: '1', denominator: '1000' } } : {}) } : {}),
   }))
   const confirmation = await p.mapping.confirmMapping(p.projectId, { format, parseId: parsed.parse.parseId, originalRef: original.blobRef, originalMediaType: mediaType, options, objectId, entries }, `confirm-${jobId}`, p.ctx.principal.subjectId, p.ctx)
-  const documentId = randomUUID()
+  const documentId: string = randomUUID()
   await documents.registerDocument(p.scope.scopeRef, p.projectId, { documentId, documentRef: original.blobRef, documentDigest: original.blobRef.digest, parseId: parsed.parse.parseId, parseRef: { id: parsed.parse.parseId, version: '1.0.0', digest: original.blobRef.digest, kind: 'artifact' }, textDigest: original.blobRef.digest, precision: 'exact', actor: p.ctx.principal.subjectId, recordedAt: new Date().toISOString() }, p.ctx)
   return { mapping: confirmation.mapping, parse: parsed.parse, documentId }
 }
@@ -219,6 +221,100 @@ async function prepareOneHopPremiseReplay(label: string) {
 }
 
 describe('confirmed structured records → official facts (real PostgreSQL)', () => {
+  it('delegates actual structured rule source evidence under the index leaf and still rejects forged premise cells (#268)', async () => {
+    const { p, artifact, payload, record, deps } = await prepareOneHopPremiseReplay('indexed-rule-source-dispatch')
+    const keyword = new PostgresKeywordIndexStore({ connectionString: harness.appUrl, maxPoolSize: 2 })
+    try {
+      const bridge = createCoreStructuredImportWorkflow({ blobs, parses: documentParses, ingestion: structured, projects, documents, mappings, indexStore: keyword,
+        readiness: new PostgresProjectReadinessStore(db), executionBindings: new PostgresRunExecutionBindingStore(db) })
+      const replay = new ArchivedRulePremiseReplayVerifier(deps)
+      expect(await replay.verify({ artifact, payload }, p.ctx)).toBe(true)
+      const sourceMappings = payload['sourceEvidenceMappings']
+      if (!Array.isArray(sourceMappings)) throw new Error('actual mapped rule source mappings are missing')
+      let structuredSources = 0
+      for (const item of sourceMappings) {
+        if (!isRecord(item) || !isRecord(item['evidenceRef']) || typeof item['evidenceRef']['id'] !== 'string') throw new Error('actual source evidence ref is missing')
+        const source = await deps.evidence.get(p.scope.scopeRef, item['evidenceRef']['id'], p.ctx)
+        if (source?.envelope.payloadRef === undefined) throw new Error('actual original source evidence is missing')
+        const sourcePayload: unknown = JSON.parse(new TextDecoder().decode(await blobs.readAuthorized({ scopeRef: p.scope.scopeRef, blobRef: source.envelope.payloadRef }, p.ctx)))
+        expect((await bridge.publicationValidator.validate({ record: source, payload: sourcePayload, ctx: p.ctx, now: new Date().toISOString() })).state).toBe('current')
+        expect((await bridge.publicationValidator.validate({ record: source, payload: { spans: [], indexVersion: {} }, ctx: p.ctx, now: new Date().toISOString() })).state).toBe('blocked')
+        if (isRecord(item['sourceSpan']) && item['sourceSpan']['kind'] === 'structured') structuredSources += 1
+      }
+      expect(structuredSources).toBeGreaterThan(0)
+      const forged = structuredClone(payload)
+      const changed = forged['sourceEvidenceMappings']
+      if (!Array.isArray(changed)) throw new Error('actual source mapping archive disappeared')
+      const row = changed.find((item: unknown) => isRecord(item) && isRecord(item['sourceSpan']) && item['sourceSpan']['kind'] === 'structured')
+      if (!isRecord(row) || !isRecord(row['sourceSpan']) || !isRecord(row['sourceSpan']['locator'])) throw new Error('actual cell mapping is missing')
+      row['sourceSpan']['locator']['column'] = 127
+      expect(await replay.verify({ artifact, payload: forged }, p.ctx)).toBe(false)
+      // The final rule gate retains the actual replay, rather than blessing the
+      // source-family dispatch as a replacement for independent premise checks.
+      expect(record.envelope.kind).toBe('rule_derivation')
+    } finally { await keyword.close() }
+  })
+  it('preserves cached Chosen/header2 native selection through real indexing, mapping, human approval and official facts (#268)', async () => {
+    for (const legacy of [false, true]) {
+      const p = await setup(`indexed-selected-${legacy}`)
+      const inline = (address: string, value: string) => `<c r="${address}" t="inlineStr"><is><t>${value}</t></is></c>`
+      const first = worksheetOf([rowXml(1, [inline('A1', 'enabled'), inline('B1', 'kilowatts'), inline('C1', 'code')]), rowXml(2, [inline('A2', 'false'), numberCellXml('B2', '1'), inline('C2', 'WRONG-FIRST')])])
+      const chosen = worksheetOf([rowXml(1, [inline('A1', 'Maintenance source')]), rowXml(2, [inline('A2', 'enabled'), inline('B2', 'kilowatts'), inline('C2', 'code')]), rowXml(3, [inline('A3', 'true'), numberCellXml('B3', '12.5'), inline('C3', 'M-CHOSEN')])])
+      const bytes = buildZip([
+        { name: 'xl/workbook.xml', data: '<workbook xmlns="http://schemas.openxmlformats.org/spreadsheetml/2006/main" xmlns:r="http://schemas.openxmlformats.org/officeDocument/2006/relationships"><sheets><sheet name="First" sheetId="1" r:id="rId1"/><sheet name="Chosen" sheetId="2" r:id="rId2"/></sheets></workbook>' },
+        { name: 'xl/_rels/workbook.xml.rels', data: '<Relationships xmlns="http://schemas.openxmlformats.org/package/2006/relationships"><Relationship Id="rId1" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/worksheet" Target="worksheets/sheet1.xml"/><Relationship Id="rId2" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/worksheet" Target="worksheets/sheet2.xml"/></Relationships>' },
+        { name: 'xl/worksheets/sheet1.xml', data: first }, { name: 'xl/worksheets/sheet2.xml', data: chosen },
+      ])
+      const mediaType = 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet'
+      const options = { sheetName: 'Chosen', headerRow: 2 }
+      const staged = await blobs.stage(bytes, { scopeRef: p.scope.scopeRef }, p.ctx)
+      const original = await blobs.publish({ scopeRef: p.scope.scopeRef, contentDigest: staged.contentDigest, byteSize: staged.byteSize, mediaType, purpose: 'document' }, p.ctx)
+      const parsed = await new LocalStructuredIngestionService({ blobs, store: structured }).parse({ scopeRef: p.scope.scopeRef, originalRef: original.blobRef, options }, p.ctx)
+      expect(parsed.parse.parseOptions).toEqual(options)
+      const actual = new StructuredDocumentParser().parse(bytes, { ...options, mediaType }).tables[0]
+      if (actual === undefined) throw new Error('the actual selected native sheet was not parsed')
+      const fieldIds = ['active', 'power', 'meter_id']
+      const entries = actual.columns.map((column, index) => ({ fieldRef: fieldIds[index] ?? '', header: column.header, headerDigest: column.headerDigest, columnIndex: column.index,
+        ...(index === 1 ? { sourceUnitCode: 'kW', canonicalUnitCode: 'kW' } : {}) }))
+      const mapped = await p.mapping.confirmMapping(p.projectId, { format: 'xlsx', parseId: parsed.parse.parseId, originalRef: original.blobRef, originalMediaType: mediaType, options, sheetId: '2', sheetName: 'Chosen', objectId: 'meter', entries }, `mapped-index-${randomUUID()}`, p.ctx.principal.subjectId, p.ctx)
+      await p.projectService.appendRevision(p.projectId, { expectedRevision: '1', reason: 'human confirmed actual selected source headers', mappingRefs: [...(await projects.getRevision(p.scope.scopeRef, p.projectId, '1', p.ctx))?.mappingRefs ?? [], mapped.mapping.ref] }, `mount-index-${randomUUID()}`, p.ctx.principal.subjectId, p.ctx)
+      const jobId = randomUUID()
+      await new JobService({ store: jobs }).createJob({ jobId, kind: 'ingestion', sourceRef: original.blobRef.id, pipelineVersion: '1.0.0', idempotencyKey: `indexed-source-${jobId}`,
+        documentRef: encodeStructuredExtractionRef({ kind: 'structured_extraction', parseId: parsed.parse.parseId, parserVersion: parsed.parse.parserVersion, definitionRef: p.definition.ref, format: 'xlsx', originalRef: original.blobRef, originalMediaType: mediaType, options }) }, p.ctx)
+      p.sourceJobs.set(parsed.parse.parseId, jobId)
+      if (legacy) await harness.adminClient.query('UPDATE agent_platform.document_structured_parses SET parse_options=NULL WHERE tenant_id=$1 AND space_id=$2 AND parse_id=$3', [p.scope.tenantId, p.scope.spaceId, parsed.parse.parseId])
+      const keyword = new PostgresKeywordIndexStore({ connectionString: harness.appUrl, maxPoolSize: 2 })
+      try {
+        const bridge = createCoreStructuredImportWorkflow({ blobs, parses: documentParses, ingestion: structured, projects, documents, mappings, indexStore: keyword,
+          readiness: new PostgresProjectReadinessStore(db), executionBindings: new PostgresRunExecutionBindingStore(db) })
+        const imported = await bridge.imports.importStructuredSource(p.projectId, { format: 'xlsx', mediaType, content: bytes }, p.ctx)
+        if (imported.documentId === undefined) throw new Error('the source bridge did not register the actual source')
+        expect(imported.reused).toBe(true)
+        const member = await documents.getMembership(p.scope.scopeRef, p.projectId, imported.documentId, p.ctx)
+        expect(member?.parseId).toBe(parsed.parse.parseId)
+        expect((await bridge.index.buildIndex(p.projectId, p.ctx)).state).toBe('ready')
+        const fragment = (await bridge.index.search({ projectId: p.projectId, query: 'M-CHOSEN' }, p.ctx)).fragments[0]
+        if (fragment === undefined) throw new Error('the real selected row was not indexed')
+        expect(fragment.text).toContain('12.5')
+        expect(fragment.text).not.toContain('WRONG-FIRST')
+        const origin = await bridge.spanReader.readOrigin({ documentRef: fragment.documentRef, locator: fragment.locator }, p.ctx)
+        expect(origin?.parseId).toBe(parsed.parse.parseId)
+        expect(origin?.headerRow).toBe(2)
+        expect(origin?.cells[1]?.locator).toMatchObject({ sheetId: '2', sheetName: 'Chosen', row: 3, column: 2, address: 'B3' })
+        const source = { mapping: mapped.mapping, parse: parsed.parse, documentId: imported.documentId }
+        const candidate = await stage(p, source)
+        expect(candidate.inputVersion.parseId).toBe(member?.parseId)
+        expect(await publicationStore.listStatements(p.scope.scopeRef, {}, p.ctx)).toEqual([])
+        await confirmed(p, candidate, source.documentId)
+        await publish(p, [candidate])
+        const official = await new PublishedSemanticSource(publicationStore, { definition: p.definition, identity: identities, projectId: p.projectId }).load(p.scope.scopeRef, p.ctx)
+        expect(official.facts.some((fact) => fact.predicate === 'power')).toBe(true)
+        const span = candidate.sourceSpans.find((span) => span.kind === 'structured' && span.locator.kind === 'table_cell' && span.locator.column === 2)
+        if (span?.kind !== 'structured') throw new Error('the published fact lost its actual cell span')
+        expect(await new StructuredPremiseSourceReader({ artifacts: blobs, mappings, ingestion: structured }).read(candidate, span, p.ctx)).toMatchObject({ documentRef: original.blobRef, parserVersion: parsed.parse.parserVersion })
+      } finally { await keyword.close() }
+    }
+  })
   it('reads the normally confirmed second-sheet XLSX premise and refuses a first-sheet locator with the same row ordinal (#264)', async () => {
     const p = await setup('premise-second-sheet')
     const inline = (address: string, value: string) => `<c r="${address}" t="inlineStr"><is><t>${value}</t></is></c>`

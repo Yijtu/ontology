@@ -201,7 +201,11 @@ import { createEnvSecretResolver } from './secret-resolver'
 import { createPostgresProvenanceRead } from './provenance-read'
 import { createCoreModelCapabilityFactory } from './core-model-capabilities'
 import { createCoreDocumentSearchHandler } from './core-document-search-handler'
+import { createCoreStructuredImportWorkflow } from './core-structured-import-service'
 import { createCoreOntologyLookupHandler } from './core-rule-judgement-handler'
+import { CoreSemanticTaskResolver, createCoreSemanticTaskSource } from './core-semantic-task-resolver'
+import { CoreRelationsTaskHandler } from './core-relations-task-handler'
+import { CoreProjectSemanticPartitions } from './core-project-semantic-partitions'
 import { createCoreModelEvidenceRecorders } from './model-evidence'
 import { createCoreDecisionStateRefProvider } from './decision-state-reference'
 import { PostgresCorePlanReceiptStore } from './core-plan-receipts'
@@ -991,6 +995,8 @@ export interface CoreLocalCompositionOptions {
   readonly projectDataset?: PostgresProjectDatasetConfig
   /** Narrow active-snapshot guard; full evolution composition is owned by the deployment. */
   readonly projectEvolution?: import('@ontology/application').ProjectEvolutionService
+  /** Narrow optional leaf; broad production mounting is owned by the deployment factory. */
+  readonly projectStructuredImports?: typeof createCoreStructuredImportWorkflow
   readonly scopeRef: ScopeRef
   readonly examples: LoadedCoreExamples
   readonly allowLocalOperator?: boolean
@@ -1230,13 +1236,18 @@ class CoreObservationPublicationValidator implements PublicationEvidenceValidato
   readonly evidenceKind = 'observation' as const
   readonly #facts: CorePublishedFactsProvider
   readonly #scopeRef: ScopeRef
+  readonly #relations: CoreRelationsTaskHandler | undefined
 
-  constructor(input: { readonly facts: CorePublishedFactsProvider; readonly scopeRef: ScopeRef }) {
+  constructor(input: { readonly facts: CorePublishedFactsProvider; readonly scopeRef: ScopeRef; readonly relations?: CoreRelationsTaskHandler }) {
     this.#facts = input.facts
     this.#scopeRef = input.scopeRef
+    this.#relations = input.relations
   }
 
   async validate({ record, payload, ctx }: PublicationEvidenceValidationInput): Promise<PublicationEvidenceValidation> {
+    if (isRecord(payload) && payload['resultKind'] === 'relations') {
+      try { return this.#relations !== undefined && await this.#relations.verify(payload, ctx) ? { state: 'current' } : { state: 'blocked', reasons: ['evidence_unverifiable'], details: ['published project relations changed or cannot be re-read'] } } catch { return { state: 'blocked', reasons: ['evidence_unverifiable'], details: ['published project relations cannot be re-read'] } }
+    }
     if (!isRecord(payload) || !Array.isArray(payload['items'])) return { state: 'current' }
     const items = payload['items']
     const factItems = items.filter((item) => isRecord(item) && item['kind'] === 'fact')
@@ -1312,14 +1323,17 @@ class CorePublicationValidity implements PublicationValidityPort {
     readonly tables?: TableVerificationReceiptStore
     readonly policies?: TaskPolicyReportStore
     readonly rulePremises?: import('@ontology/contracts').RulePremiseReplayPort
+    readonly documentSources?: import('@ontology/application').PublicationEvidenceValidator
+    readonly relations?: CoreRelationsTaskHandler
   }) {
     this.#engine = new PublicationValidityEngine({
       evidence: input.evidence,
       artifacts: input.artifacts,
       validators: [
         ...defaultPublicationEvidenceValidators(),
-        new CoreObservationPublicationValidator({ facts: input.facts, scopeRef: input.scopeRef }),
+        new CoreObservationPublicationValidator({ facts: input.facts, scopeRef: input.scopeRef, ...(input.relations === undefined ? {} : { relations: input.relations }) }),
         ruleDerivationValidator(input.rulePremises),
+        ...(input.documentSources === undefined ? [] : [input.documentSources]),
       ],
       ...(input.tables === undefined ? {} : { tables: input.tables }),
       ...(input.policies === undefined ? {} : { policies: input.policies }),
@@ -1676,9 +1690,11 @@ export async function createCoreLocalComposition(options: CoreLocalCompositionOp
     ))
     const duckDb = await createDuckDbSnapshot(options.examples.scenarios)
     cleanup.unshift(async () => duckDb.close())
-    const documentSpanReader = new DocumentSpanReader({ blobs: blobStore, store: parseStore })
+    const structuredImports = options.projectStructuredImports?.({ blobs: blobStore, parses: parseStore, ingestion: structuredStore, projects: projectStore,
+      documents: projectDocumentStore, indexStore: keywordIndexStore, readiness: projectReadinessStore, executionBindings: runExecutionBindingStore, mappings: projectMappingStore })
+    const documentSpanReader = structuredImports?.spanReader ?? new DocumentSpanReader({ blobs: blobStore, store: parseStore })
     const documentSearch = new Bm25DocumentSearchService({ indexStore: keywordIndexStore, spanReader: documentSpanReader })
-    const projectDocumentIndexService = new ProjectDocumentIndexService({
+    const projectDocumentIndexService = structuredImports?.index ?? new ProjectDocumentIndexService({
       store: projectDocumentStore,
       parseStore,
       indexStore: keywordIndexStore,
@@ -1721,10 +1737,22 @@ export async function createCoreLocalComposition(options: CoreLocalCompositionOp
       structuredSources: structuredPremiseSources,
       componentRef: componentRef('compute_extension', 'core-rule-derivation-producer', 'rule-derivation-producer@1.0.0'),
     })
+    const semanticTasks = new CoreSemanticTaskResolver({
+      projects: projectStore, taskBindings: taskBindingStore, materialization: materializationStore,
+      source: createCoreSemanticTaskSource(publicationStore, { identity: identityStore }),
+      definition: async (scope, ref, ctx) => (await definitionStore.listVersions(scope, {}, ctx)).find((version) => sameVersionRef(version.ref, ref)),
+      operations: operationRegistry(), parameters: taskParameterValidator(createAjv()),
+    })
+    const relationsTask = new CoreRelationsTaskHandler({ executions: runExecutionBindingStore, selectors: semanticTasks, publications: publicationStore, identity: identityStore })
     const ontologyLookupHandler = createCoreOntologyLookupHandler({
       lookup: lookupHandler,
       producer: ruleDerivationProducer,
       sourceRef: { namespace: 'ontology-core-local', sourceId: 'materialized-rule-derivation' },
+      relations: relationsTask,
+      authorizeRule: async (request, ctx) => {
+        const archived = await runExecutionBindingStore.getBindingByRun(scopeRef, ctx.runId, ctx)
+        return archived !== undefined && semanticTasks.authorizeRule(request, archived.binding, ctx)
+      },
     })
     // The registered-compute path (ADR-11, SPEC v0.3a §EX-6): the handler runs the registered
     // neutral example operation through the same bounded helpers the gateway uses. A handler
@@ -1756,7 +1784,7 @@ export async function createCoreLocalComposition(options: CoreLocalCompositionOp
         validator: toolSchemaValidator(createAjv()),
       },
     })
-    const documentSearchHandler = createCoreDocumentSearchHandler({
+    const documentSearchHandler = structuredImports?.handler ?? createCoreDocumentSearchHandler({
       service: documentSearch,
       spanReader: documentSpanReader,
       dataMode: 'observed',
@@ -1791,6 +1819,8 @@ export async function createCoreLocalComposition(options: CoreLocalCompositionOp
       effectiveLimitsRef: CORE_EFFECTIVE_LIMITS_REF,
       parameters: taskParameterValidator(createAjv()),
       projectQuerySnapshot: projectQuery.resolveForCreation,
+      ...(structuredImports === undefined ? {} : { projectDocumentIndexSnapshot: structuredImports.resolveForCreation }),
+      questionQuerySnapshot: projectQuery.resolveQuestionForCreation,
       ...(options.projectEvolution === undefined ? {} : { projectApprovedInput: (scope: ScopeRef, revision: import('@ontology/contracts').ProjectRevision, ctx: ToolContext) => options.projectEvolution!.resolveApprovedInput(scope,revision,ctx) }),
     })
     const runs = new RunService({
@@ -1826,6 +1856,7 @@ export async function createCoreLocalComposition(options: CoreLocalCompositionOp
       operations: operationRegistry(),
       decisionStateRefProvider,
       projectQueryDescriptor: projectQuery.resolveExecution,
+      semanticTasks,
       isRouteClarificationReceiptApproved: (input, ctx) => decisionStateReferences.isApproved(scopeRef, input, ctx),
     })
     const templateRuntime = new TemplateRuntimeAdapter({ manifest: templateRuntimeRecord.manifest, plans: planResolver })
@@ -1852,7 +1883,11 @@ export async function createCoreLocalComposition(options: CoreLocalCompositionOp
     const runAllowedCollectionRefs = async (runId: Uuid, ctx: ToolContext): Promise<readonly string[]> => {
       const archived = await runExecutionBindingStore.getBindingByRun(scopeRef, runId, ctx)
       const request = archived?.binding.request
-      if (request === undefined || request.mode !== 'task') return []
+      if (request === undefined) return []
+      if (request.mode === 'question') {
+        const bindings = await Promise.all(archived!.binding.allowedTaskBindingRefs.map((ref) => taskBindingStore.getBinding(scopeRef, ref, ctx)))
+        return bindings.some((binding) => binding?.kind === 'document_qa') ? [projectCollectionRef(request.projectRevisionRef.projectId)] : []
+      }
       const binding = await taskBindingStore.getBinding(scopeRef, request.taskBindingRef, ctx)
       // A document-QA run may search only its own pinned project's host-minted collection.
       return binding?.kind === 'document_qa'
@@ -1919,6 +1954,7 @@ export async function createCoreLocalComposition(options: CoreLocalCompositionOp
           artifacts: blobStore,
           artifactWriter: gatewayComposition.artifacts,
           receipts: taskFinalizationReceiptStore,
+          questionTaskSelection: (ctx) => planReceiptStore.selectedTaskForRun(scopeRef, ctx),
         }),
       }),
       limited: new RestrictedLimitedAnswerComposer(),
@@ -1937,6 +1973,8 @@ export async function createCoreLocalComposition(options: CoreLocalCompositionOp
         manifests: workflowStore,
         validity: new CorePublicationValidity({
           rulePremises: rulePremiseVerifier,
+          ...(structuredImports === undefined ? {} : { documentSources: structuredImports.publicationValidator }),
+          relations: relationsTask,
           evidence: evidenceStore,
           artifacts: blobStore,
           facts,
@@ -2050,7 +2088,7 @@ export async function createCoreLocalComposition(options: CoreLocalCompositionOp
         )
       },
     })
-    const materializer = new IncrementalMaterializer({ publishedSource: multiSchemaSource, materialization: materializationStore })
+    const materializer = new IncrementalMaterializer({ publishedSource: new CoreProjectSemanticPartitions(multiSchemaSource, semanticTasks), materialization: materializationStore })
     const materializationConsumer = new MaterializationOutboxConsumer({
       materializer,
       publications: publicationStore,
@@ -2282,7 +2320,7 @@ export async function createCoreLocalComposition(options: CoreLocalCompositionOp
     // as an immutable original, then run the real structured parser and persist the reconciled
     // rows. The returned parseId/originalRef/format feed the column-mapping route, so a project
     // can map and bind on the real parse instead of a startup fixture.
-    const projectStructuredImportService: ProjectStructuredImportService = {
+    const projectStructuredImportService: ProjectStructuredImportService = structuredImports?.imports ?? {
       async importStructuredSource(projectId, input, ctx) {
         await projectService.getProject(projectId, ctx)
         const written = await createBlobArtifactWriter(blobStore).putBytes(

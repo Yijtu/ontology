@@ -1,4 +1,4 @@
-import type { DataMode, DocumentSpanReaderPort } from '@ontology/contracts'
+import type { DataMode, DocumentSpanReaderPort, ReadSpanRequest, ToolContext } from '@ontology/contracts'
 import { parseDocumentSearchRequest } from '@ontology/adapter-search-bm25'
 import type { Bm25DocumentSearchService } from '@ontology/adapter-search-bm25'
 import type { ToolExecutionOutcome, ToolHandler, ToolSourceObservation } from '@ontology/tool-services'
@@ -23,6 +23,10 @@ export interface CoreDocumentSearchHandlerDependencies {
   readonly service: Bm25DocumentSearchService
   readonly spanReader: DocumentSpanReaderPort
   readonly dataMode?: DataMode
+  readonly maxSpans?: number
+  readonly fixedCollections?: (ctx: ToolContext) => Promise<readonly { readonly collectionRef: string; readonly generation: string }[]>
+  readonly checkCurrent?: (ctx: ToolContext) => Promise<void>
+  readonly readOrigin?: (request: ReadSpanRequest, ctx: ToolContext) => Promise<unknown>
 }
 
 interface CitationSpan {
@@ -34,6 +38,7 @@ interface CitationSpan {
   readonly quote: string
   readonly subject: string
   readonly score?: number
+  readonly sourceOrigin?: unknown
 }
 
 export function createCoreDocumentSearchHandler(
@@ -43,7 +48,10 @@ export function createCoreDocumentSearchHandler(
     toolId: 'document_search',
     async execute(request): Promise<ToolExecutionOutcome> {
       const parsed = parseDocumentSearchRequest(request.arguments)
-      const detail = await dependencies.service.searchDetailed(parsed, request.ctx)
+      if (dependencies.maxSpans !== undefined) parsed.limit = Math.min(parsed.limit ?? dependencies.maxSpans, dependencies.maxSpans)
+      request.signal.throwIfAborted()
+      const pins = await dependencies.fixedCollections?.(request.ctx)
+      const detail = await dependencies.service.searchDetailed(parsed, request.ctx, pins)
       const spans: CitationSpan[] = []
       const warnings: { code: string; message: string }[] = []
       for (const span of detail.response.spans) {
@@ -66,9 +74,12 @@ export function createCoreDocumentSearchHandler(
           spanKind: span.spanKind,
           quote: read.text,
           subject: span.documentRef.id,
+          ...(dependencies.readOrigin === undefined ? {} : { sourceOrigin: await dependencies.readOrigin({ documentRef: span.documentRef, locator: span.locator }, request.ctx) }),
           ...(span.score === undefined ? {} : { score: span.score }),
         })
       }
+      request.signal.throwIfAborted()
+      await dependencies.checkCurrent?.(request.ctx)
       const snapshot = detail.response.snapshot
       const source: ToolSourceObservation = {
         sourceRef: snapshot.sourceRef,

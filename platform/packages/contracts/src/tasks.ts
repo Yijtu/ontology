@@ -127,6 +127,7 @@ export function assertRunExecutionBindingShape(value: unknown): asserts value is
   }
   if (!isVersionRef(value['effectiveLimitsRef'])) throw invalidTask('effectiveLimitsRef is malformed')
   if (value['projectDatasetSnapshotRef'] !== undefined && (!isResourceRef(value['projectDatasetSnapshotRef']) || value['projectDatasetSnapshotRef'].kind !== 'dataset')) throw invalidTask('projectDatasetSnapshotRef is malformed')
+  if (value['projectDocumentIndexSnapshotRef'] !== undefined && (!isResourceRef(value['projectDocumentIndexSnapshotRef']) || value['projectDocumentIndexSnapshotRef'].kind !== 'artifact')) throw invalidTask('projectDocumentIndexSnapshotRef is malformed')
   const effectiveTime = value['effectiveTime']
   if (
     !isRecord(effectiveTime) ||

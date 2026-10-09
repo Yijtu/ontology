@@ -1,4 +1,4 @@
-import { assertProjectDocumentMembershipShape } from '@ontology/contracts'
+import { assertProjectDocumentMembershipShape, sha256OfCanonical } from '@ontology/contracts'
 import type {
   ListProjectDocumentsFilter,
   ProjectDocumentMembership,
@@ -90,6 +90,13 @@ export class InMemoryProjectDocumentStore implements ProjectDocumentStore {
       projectId,
       epoch: '0',
       membershipRevision: '0',
+    }
+    const existing = await this.getMembership(scope, projectId, input.documentId, ctx)
+    if (existing !== undefined) {
+      const pins = (value: RegisterProjectDocumentInput | ProjectDocumentMembership) => ({ documentRef: value.documentRef, documentDigest: value.documentDigest,
+        parseId: value.parseId, parseRef: value.parseRef, textDigest: value.textDigest, precision: value.precision, sourceRef: value.sourceRef ?? null })
+      if (existing.state !== 'active' || sha256OfCanonical(pins(existing)) !== sha256OfCanonical(pins(input))) throw new DocumentSearchError('INVALID_ARGUMENT', 'import cannot mutate or revive an existing withdrawn document')
+      return { membership: existing, visibility: clone(current), created: false }
     }
     const epoch = nextRevision(current.epoch)
     const membershipRevision = nextRevision(current.membershipRevision)

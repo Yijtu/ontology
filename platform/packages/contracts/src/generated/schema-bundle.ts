@@ -7679,6 +7679,9 @@ export const SCHEMA_DOCUMENTS: readonly JsonSchemaObject[] = [
           },
           "projectDatasetSnapshotRef": {
             "$ref": "./common.schema.json#/$defs/ResourceRef"
+          },
+          "projectDocumentIndexSnapshotRef": {
+            "$ref": "./common.schema.json#/$defs/ResourceRef"
           }
         }
       },
@@ -8255,12 +8258,46 @@ export const SCHEMA_DOCUMENTS: readonly JsonSchemaObject[] = [
           }
         }
       },
+      "OntologyRelationNavigationRequest": {
+        "title": "OntologyRelationNavigationRequest",
+        "description": "A host-resolved finite published relation navigation within the run's fixed project. No mapping join, arbitrary function or authority selector.",
+        "type": "object",
+        "additionalProperties": false,
+        "required": [
+          "kind",
+          "startEntityId",
+          "relationIds",
+          "validAt"
+        ],
+        "properties": {
+          "kind": {
+            "const": "relation_navigation"
+          },
+          "startEntityId": {
+            "$ref": "common.schema.json#/$defs/NonEmptyString"
+          },
+          "relationIds": {
+            "type": "array",
+            "minItems": 1,
+            "maxItems": 3,
+            "items": {
+              "$ref": "common.schema.json#/$defs/NonEmptyString"
+            }
+          },
+          "validAt": {
+            "$ref": "common.schema.json#/$defs/Rfc3339UtcTimestamp"
+          }
+        }
+      },
       "OntologyLookupRequest": {
         "title": "OntologyLookupRequest",
-        "description": "The typed intent-specific request that accompanies an ontology_lookup intent. Only rule judgement is defined in this phase; the legacy intent-only path is unchanged.",
+        "description": "Finite host-resolved rule judgement or published relation navigation; the legacy intent-only path is unchanged.",
         "oneOf": [
           {
             "$ref": "#/$defs/OntologyRuleJudgementRequest"
+          },
+          {
+            "$ref": "#/$defs/OntologyRelationNavigationRequest"
           }
         ]
       },

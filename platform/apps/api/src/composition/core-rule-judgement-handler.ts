@@ -42,6 +42,8 @@ export interface CoreOntologyLookupHandlerDependencies {
   readonly producer: MaterializedRuleDerivationEvidenceProducer
   /** The control/semantic store the rule derivation read from; never fabricated here. */
   readonly sourceRef: SourceRef
+  readonly relations?: ToolHandler
+  readonly authorizeRule?: (request: OntologyRuleJudgementRequest, ctx: ToolContext) => Promise<boolean>
 }
 
 function trustScope(ctx: ToolContext): ScopeRef {
@@ -107,6 +109,10 @@ export class CoreOntologyLookupHandler implements ToolHandler {
   }
 
   async execute(request: ToolExecutionRequest): Promise<ToolExecutionOutcome> {
+    if (request.arguments['intent'] === 'relations' && isRecord(request.arguments['request']) && request.arguments['request']['kind'] === 'relation_navigation') {
+      if (this.#dependencies.relations === undefined) throw new ToolGatewayError('HANDLER_FAILED', 'the published relation task handler is not configured', { platformCode: 'CAPABILITY_NOT_CONFIGURED' })
+      return this.#dependencies.relations.execute(request)
+    }
     const ruleRequest = request.arguments['intent'] === 'rules'
       ? readRuleJudgementRequest(request.arguments)
       : undefined
@@ -119,6 +125,8 @@ export class CoreOntologyLookupHandler implements ToolHandler {
     ruleRequest: OntologyRuleJudgementRequest,
   ): Promise<ToolExecutionOutcome> {
     const scopeRef = trustScope(request.ctx)
+    if (ruleRequest.judgementAxis === 'business_proposition') throw new ToolGatewayError('INVALID_ARGUMENTS', 'this rule task renders applicability; business proposition rendering is not configured', { platformCode: 'UNSUPPORTED_QUERY' })
+    if (this.#dependencies.authorizeRule !== undefined && !(await this.#dependencies.authorizeRule(ruleRequest, request.ctx))) throw new ToolGatewayError('INVALID_ARGUMENTS', 'the rule instance is outside the fixed authorized project inventory', { platformCode: 'FORBIDDEN' })
     const trust = request.arguments['scopeRef']
     if (isRecord(trust) && (trust['tenantId'] !== scopeRef.tenantId || trust['spaceId'] !== scopeRef.spaceId)) {
       throw new ToolGatewayError('SCOPE_MISMATCH', 'the requested rule scope is outside the trusted context scope')

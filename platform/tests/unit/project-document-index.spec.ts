@@ -71,7 +71,7 @@ async function seedDocument(
     originalRef,
     normalizedMediaType: 'text/plain',
     normalizedByteSize: text.length,
-    normalizedRef: artifactRef(`${label}-normalized`),
+    normalizedRef: { ...artifactRef(`${label}-normalized`), digest: sha256DigestOf(text) },
     spanMapMediaType: 'application/json',
     spanMapRef: artifactRef(`${label}-span-map`),
     parserId: 'ontology.document-parser',
@@ -169,6 +169,12 @@ async function seedInto(harnessRef: Harness, label: string, text: string): Promi
 }
 
 describe('ProjectDocumentIndexService', () => {
+  it('refuses a membership that replaces an actual parse artifact with a request-selected reference', async () => {
+    const h = harness()
+    const doc = await seedInto(h, 'refusal', 'the battery warranty covers five years')
+    await expect(h.service.importDocument(randomUUID(), { documentId: doc.documentId, documentRef: doc.parse.originalRef, documentDigest: doc.parse.originalRef.digest,
+      parseId: doc.parse.parseId, parseRef: artifactRef('forged map'), textDigest: sha256DigestOf(doc.text), precision: 'exact', actor: 'operator', recordedAt: NOW }, CTX_A)).rejects.toMatchObject({ code: 'INVALID_ARGUMENT' })
+  })
   it('indexes an imported authorised document and returns a real fragment with a fixed revision', async () => {
     const h = harness()
     const doc = await seedInto(h, 'alpha', 'the battery warranty covers five years')
