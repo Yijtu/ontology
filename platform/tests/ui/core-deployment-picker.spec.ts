@@ -117,7 +117,7 @@ describe('Core deployment picker', () => {
     expect(container.querySelector('[data-testid="query-registered-task"]')?.textContent).toContain('facts:operating_hours')
     expect(container.querySelector('[data-testid="tab-energy"]')).toBeNull()
     expect(container.querySelector('[data-testid="core-deployment-classification"]')?.textContent).toBe('合成演示数据（非行业标准）')
-    expect(container.querySelector('[data-testid="query-capability-note"]')?.textContent).toContain('Company生成未启用')
+    expect(container.querySelector('[data-testid="query-capability-note"]')?.textContent).toContain('文本生成未启用')
   })
 
   it('passes the mounted base profile spec into the shared Workbench publication flow', async () => {

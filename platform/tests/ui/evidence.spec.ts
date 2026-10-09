@@ -94,7 +94,9 @@ function jsonResponse(status: number, body: unknown): Response {
   })
 }
 
-async function provenanceHarness(options: ProvenanceFixtureOptions = {}): Promise<{ built: Harness; host: ProvenanceHost }> {
+async function provenanceHarness(
+  options: ProvenanceFixtureOptions = {},
+): Promise<{ built: Harness; host: ProvenanceHost }> {
   const host = createProvenanceHost(options)
   const built = await startHarness({ provenance: { evidence: host.evidence, history: host.history } })
   openHarnesses.push(built)
@@ -119,7 +121,9 @@ describe('evidence/history UI states (real routes over HTTP)', () => {
     const client = new WorkbenchClient({ baseUrl: 'http://127.0.0.1:1', fetchImpl: () => pending })
     const container = await renderEvidence(client, EVIDENCE_ID)
     expect(container.querySelector('[data-state="loading"]')).not.toBeNull()
-    expect(container.querySelector('[data-testid="evidence-panel"]')?.getAttribute('data-phase')).toBe('loading')
+    expect(container.querySelector('[data-testid="evidence-panel"]')?.getAttribute('data-phase')).toBe(
+      'loading',
+    )
   })
 
   it('renders an explicit empty/awaiting-input state before any request', async () => {
@@ -136,7 +140,9 @@ describe('evidence/history UI states (real routes over HTTP)', () => {
     })
     const container = await renderEvidence(client, EVIDENCE_ID)
     await waitFor(() => container.querySelector('[data-state="failure"]') !== null, 'failure state')
-    expect(container.querySelector('[data-testid="state-error-code"]')?.textContent).toContain('NETWORK_ERROR')
+    expect(container.querySelector('[data-testid="state-error-code"]')?.textContent).toContain(
+      'NETWORK_ERROR',
+    )
   })
 
   it('renders a not-configured state for CAPABILITY_NOT_CONFIGURED', async () => {
@@ -171,9 +177,13 @@ describe('expand a conclusion to its real basis', () => {
     expect(container.querySelector('[data-testid="basis-kind"]')?.textContent).toContain('rule_derivation')
     expect(container.querySelector('[data-testid="rule-refs"]')?.textContent).toContain('rule.battery-ready')
     expect(container.querySelectorAll('[data-testid="premise-group"]').length).toBe(2)
-    expect(container.querySelector('[data-testid="premise-alternatives"]')?.textContent).toContain('另有等价依据')
+    expect(container.querySelector('[data-testid="premise-alternatives"]')?.textContent).toContain(
+      '另有等价依据',
+    )
 
-    const locators = [...container.querySelectorAll('[data-testid="source-locator"]')].map((node) => node.textContent)
+    const locators = [...container.querySelectorAll('[data-testid="source-locator"]')].map(
+      (node) => node.textContent,
+    )
     expect(locators.some((text) => text?.includes(AUTHORIZED_SOURCE_LOCATOR))).toBe(true)
     expect(locators.some((text) => text?.includes('document://battery-manual.pdf'))).toBe(true)
     const rereadability = [...container.querySelectorAll('[data-testid="source-rereadability"]')].map(
@@ -181,7 +191,9 @@ describe('expand a conclusion to its real basis', () => {
     )
     expect(rereadability.some((text) => text?.includes('原来源可重读'))).toBe(true)
     expect(rereadability.some((text) => text?.includes('仅归档快照'))).toBe(true)
-    expect(container.querySelector('[data-testid="archived-result"]')?.getAttribute('data-verified')).toBe('true')
+    expect(container.querySelector('[data-testid="archived-result"]')?.getAttribute('data-verified')).toBe(
+      'true',
+    )
     const sourceSummary = container.querySelector('[data-testid="original-source-rereadable"]')
     expect(sourceSummary?.getAttribute('data-rereadable')).toBe('true')
     expect(sourceSummary?.textContent).toContain('所有已列来源证据均可复核（含归档快照）')
@@ -217,32 +229,47 @@ describe('expand a conclusion to its real basis', () => {
     const status = container.querySelector('[data-testid="support-resolution"]')
     expect(status?.getAttribute('data-state')).toBe('ambiguous')
     expect(status?.getAttribute('data-complete')).toBe('false')
-    expect(container.querySelector('[data-testid="support-resolution-reason"]')?.textContent)
-      .toContain('two entity instances')
+    expect(container.querySelector('[data-testid="support-resolution-reason"]')?.textContent).toContain(
+      'two entity instances',
+    )
 
     await click(container.querySelector('[data-testid="load-graph"]') as Element)
-    await waitFor(() => container.querySelector('[data-testid="graph-support-coverage"]') !== null, 'graph support coverage')
-    expect(container.querySelector('[data-testid="graph-support-coverage"]')?.getAttribute('data-complete')).toBe('false')
-    expect(container.querySelector('[data-testid="graph-support-completeness"]')?.textContent)
-      .toContain('不能据此判断不存在其他依据')
-    expect(container.querySelector('[data-testid="graph-support-resolution"]')?.getAttribute('data-state')).toBe('unknown')
+    await waitFor(
+      () => container.querySelector('[data-testid="graph-support-coverage"]') !== null,
+      'graph support coverage',
+    )
+    expect(
+      container.querySelector('[data-testid="graph-support-coverage"]')?.getAttribute('data-complete'),
+    ).toBe('false')
+    expect(container.querySelector('[data-testid="graph-support-completeness"]')?.textContent).toContain(
+      '不能据此判断不存在其他依据',
+    )
+    expect(
+      container.querySelector('[data-testid="graph-support-resolution"]')?.getAttribute('data-state'),
+    ).toBe('unknown')
   })
 
-  it('marks the view as an explicit historical replay when asOf/validAt are set', async () => {
+  it('labels an explicitly requested evidence point without inferring historical readability', async () => {
     const { built } = await provenanceHarness()
     const container = await renderEvidence(built.client, EVIDENCE_ID)
     await waitFor(() => container.querySelector('[data-testid="evidence-basis"]') !== null, 'basis')
-    expect(container.querySelector('[data-testid="evidence-scope"]')?.getAttribute('data-historical')).toBe('false')
+    expect(container.querySelector('[data-testid="evidence-scope"]')?.getAttribute('data-historical')).toBe(
+      'false',
+    )
 
     const asOf = container.querySelector<HTMLInputElement>('[data-testid="evidence-asof-input"]')
     if (asOf === null) throw new Error('the asOf field is missing')
     await type(asOf, '2026-09-21T06:00:00Z')
     await click(container.querySelector('[data-testid="load-evidence"]') as Element)
     await waitFor(
-      () => container.querySelector('[data-testid="evidence-scope"]')?.getAttribute('data-historical') === 'true',
+      () =>
+        container.querySelector('[data-testid="evidence-scope"]')?.getAttribute('data-historical') === 'true',
       'historical view',
     )
-    expect(container.querySelector('[data-testid="evidence-scope"]')?.textContent).toContain('历史视图')
+    expect(container.querySelector('[data-testid="evidence-scope"]')?.textContent).toContain('指定时点视图')
+    expect(container.querySelector('[data-testid="evidence-scope"]')?.textContent).toContain(
+      '2026-09-21T06:00:00Z',
+    )
   })
 })
 
@@ -260,7 +287,10 @@ describe('a large dependency graph pages on demand and marks truncation', () => 
     await type(depth, '2')
 
     await click(container.querySelector('[data-testid="load-graph"]') as Element)
-    await waitFor(() => container.querySelector('[data-testid="graph-truncated"]') !== null, 'truncation flag')
+    await waitFor(
+      () => container.querySelector('[data-testid="graph-truncated"]') !== null,
+      'truncation flag',
+    )
     expect(container.querySelector('[data-testid="graph-complete"]')).toBeNull()
     expect(container.querySelector('[data-testid="load-more-graph"]')).not.toBeNull()
     expect(container.querySelector('[data-testid="graph-meta"]')?.textContent).toContain('inbound')
@@ -340,7 +370,10 @@ describe('a version change clears the comparison but keeps the history', () => {
     await type(base, '1')
     await type(compare, '2')
     await click(container.querySelector('[data-testid="compare-versions"]') as Element)
-    await waitFor(() => container.querySelector('[data-testid="history-comparison"]') !== null, 'comparison again')
+    await waitFor(
+      () => container.querySelector('[data-testid="history-comparison"]') !== null,
+      'comparison again',
+    )
     const changes = [...container.querySelectorAll('[data-testid="comparison-change"]')].map((node) =>
       node.getAttribute('data-field'),
     )
@@ -355,7 +388,9 @@ describe('responsive and secret hygiene', () => {
     const { built } = await provenanceHarness()
     const container = await renderEvidence(built.client)
     await waitFor(() => container.querySelector('[data-state="empty"]') !== null, 'empty state')
-    expect(container.querySelector('[data-testid="evidence-panel"]')?.getAttribute('data-viewport')).toBe('narrow')
+    expect(container.querySelector('[data-testid="evidence-panel"]')?.getAttribute('data-viewport')).toBe(
+      'narrow',
+    )
     setInnerWidth(1280)
   })
 

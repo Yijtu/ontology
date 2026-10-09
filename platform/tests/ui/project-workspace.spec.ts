@@ -34,7 +34,10 @@ const REVISION: ProjectRevision = {
       version: '1.0.0',
       digest: DIGEST,
       role: 'catalog',
-      sourceObjectRef: { sourceRef: { namespace: 'project-import', sourceId: 'mapping-1' }, objectPath: 'device' },
+      sourceObjectRef: {
+        sourceRef: { namespace: 'project-import', sourceId: 'mapping-1' },
+        objectPath: 'device',
+      },
     },
   ],
   profileRef: { id: 'profile-1', version: '1.0.0', snapshotHash: DIGEST },
@@ -55,8 +58,18 @@ const SOURCE: ProjectSourceCandidate = {
   label: '设备台账.csv',
   format: 'csv',
   mediaType: 'text/csv',
-  documentRef: { id: 'bbbbbbbb-0000-4000-8000-000000000001', version: '1.0.0', digest: DIGEST, kind: 'document' },
-  parseRef: { id: 'bbbbbbbb-0000-4000-8000-000000000002', version: '1.0.0', digest: DIGEST, kind: 'artifact' },
+  documentRef: {
+    id: 'bbbbbbbb-0000-4000-8000-000000000001',
+    version: '1.0.0',
+    digest: DIGEST,
+    kind: 'document',
+  },
+  parseRef: {
+    id: 'bbbbbbbb-0000-4000-8000-000000000002',
+    version: '1.0.0',
+    digest: DIGEST,
+    kind: 'artifact',
+  },
   parseId: PARSE_ID,
   objects: [
     {
@@ -93,6 +106,7 @@ function jsonResponse(body: unknown, status = 200): Response {
 interface MockOptions {
   readonly empty?: boolean
   readonly readinessConfirmable?: boolean
+  readonly onBootstrap?: (body: unknown, key: string | null) => void
 }
 
 function clientForFixture(options: MockOptions = {}): WorkbenchClient {
@@ -108,7 +122,72 @@ function clientForFixture(options: MockOptions = {}): WorkbenchClient {
       }
       if (method === 'POST' && path === '/api/v1/projects') {
         created = true
-        return Promise.resolve(jsonResponse({ data: { project: PROJECT, revision: REVISION, created: true } }, 201))
+        return Promise.resolve(
+          jsonResponse({ data: { project: PROJECT, revision: REVISION, created: true } }, 201),
+        )
+      }
+      if (method === 'POST' && path === '/api/v1/core/project-bootstrap') {
+        options.onBootstrap?.(
+          JSON.parse(String(init?.body)),
+          new Headers(init?.headers).get('idempotency-key'),
+        )
+        created = true
+        return Promise.resolve(
+          jsonResponse(
+            {
+              data: {
+                project: PROJECT,
+                revision: REVISION,
+                created: true,
+                scopeRef: { tenantId: 'fixture-tenant', spaceId: 'fixture-space' },
+              },
+            },
+            201,
+          ),
+        )
+      }
+      if (method === 'GET' && path.endsWith('/source-catalogue')) {
+        return Promise.resolve(
+          jsonResponse({
+            data: {
+              project: PROJECT,
+              revision: REVISION,
+              sources: [
+                {
+                  documentId: 'bbbbbbbb-0000-4000-8000-000000000003',
+                  originalRef: SOURCE.documentRef,
+                  parseRef: SOURCE.parseRef,
+                  parseId: PARSE_ID,
+                  precision: 'approximate',
+                  name: SOURCE.label,
+                  kind: 'csv',
+                  format: 'csv',
+                  mediaType: SOURCE.mediaType,
+                  options: {},
+                  tables: [
+                    {
+                      tableId: 'source-table',
+                      headerRow: 1,
+                      columns: SOURCE.objects[0]?.columns ?? [],
+                      rows: [],
+                    },
+                  ],
+                },
+              ],
+              objects: SOURCE.objects.map((object) => ({
+                objectId: object.objectId,
+                displayName: object.label,
+                attributes: object.fields.map((field) => ({
+                  attributeId: field.fieldRef,
+                  displayName: field.label,
+                  valueType: field.valueType,
+                  required: field.required,
+                  ...('unitCode' in field ? { unit: field.unitCode } : {}),
+                })),
+              })),
+            },
+          }),
+        )
       }
       if (method === 'GET' && path.endsWith('/revisions')) {
         return Promise.resolve(jsonResponse({ data: { revisions: [REVISION] } }))
@@ -122,7 +201,12 @@ function clientForFixture(options: MockOptions = {}): WorkbenchClient {
               requiredReadiness: ['published_semantics', 'dataset', 'document_index'],
               ready: false,
               blockers: [
-                { code: 'READINESS_NOT_BUILT', message: 'dataset readiness has not been built', retryable: true, readinessKind: 'dataset' },
+                {
+                  code: 'READINESS_NOT_BUILT',
+                  message: 'dataset readiness has not been built',
+                  retryable: true,
+                  readinessKind: 'dataset',
+                },
               ],
             },
           }),
@@ -163,7 +247,12 @@ function clientForFixture(options: MockOptions = {}): WorkbenchClient {
                 columns: [],
                 unmappedColumns: [],
                 issues: [
-                  { code: 'MISSING_COLUMN', severity: 'error', message: 'required attribute name has no column correspondence', fieldRef: 'name' },
+                  {
+                    code: 'MISSING_COLUMN',
+                    severity: 'error',
+                    message: 'required attribute name has no column correspondence',
+                    fieldRef: 'name',
+                  },
                 ],
                 rowCount: 0,
                 confirmable: options.readinessConfirmable === true,
@@ -177,7 +266,9 @@ function clientForFixture(options: MockOptions = {}): WorkbenchClient {
   })
 }
 
-async function render(panel: ReturnType<typeof createElement>): Promise<{ container: HTMLElement; root: ReturnType<typeof createRoot> }> {
+async function render(
+  panel: ReturnType<typeof createElement>,
+): Promise<{ container: HTMLElement; root: ReturnType<typeof createRoot> }> {
   const container = document.createElement('div')
   document.body.appendChild(container)
   const root = createRoot(container)
@@ -212,7 +303,12 @@ describe('project workspace panel', () => {
   it('shows an empty state and localises required-field failures without creating anything', async () => {
     const client = clientForFixture({ empty: true })
     const { container, root } = await render(
-      createElement(ProjectWorkspacePanel, { client, projectBinding: BINDING, packs: PACKS, sources: [SOURCE] }),
+      createElement(ProjectWorkspacePanel, {
+        client,
+        projectBinding: BINDING,
+        packs: PACKS,
+        sources: [SOURCE],
+      }),
     )
     try {
       expect(container.querySelector('[data-testid="project-empty"]')).not.toBeNull()
@@ -223,9 +319,15 @@ describe('project workspace panel', () => {
         form.dispatchEvent(new Event('submit', { bubbles: true, cancelable: true }))
         await Promise.resolve()
       })
-      expect(container.querySelector('[data-testid="project-create-error-title"]')?.textContent).toContain('项目名称')
-      expect(container.querySelector('[data-testid="project-create-error-pack"]')?.textContent).toContain('行业包')
-      expect(container.querySelector('[data-testid="project-create-failure"]')?.getAttribute('data-code')).toBe('INVALID_ARGUMENT')
+      expect(container.querySelector('[data-testid="project-create-error-title"]')?.textContent).toContain(
+        '项目名称',
+      )
+      expect(container.querySelector('[data-testid="project-create-pack"]')?.textContent).toContain(
+        '当前场景',
+      )
+      expect(
+        container.querySelector('[data-testid="project-create-failure"]')?.getAttribute('data-code'),
+      ).toBe('INVALID_ARGUMENT')
       expect(container.querySelector('[data-testid="project-list-item"]')).toBeNull()
     } finally {
       await act(async () => root.unmount())
@@ -234,16 +336,27 @@ describe('project workspace panel', () => {
   })
 
   it('creates a project and shows the independent semantic/query/index readiness projections', async () => {
-    const client = clientForFixture({ empty: true })
+    let bootstrapBody: unknown
+    let requestKey: string | null = null
+    const client = clientForFixture({
+      empty: true,
+      onBootstrap: (body, key) => {
+        bootstrapBody = body
+        requestKey = key
+      },
+    })
     const { container, root } = await render(
-      createElement(ProjectWorkspacePanel, { client, projectBinding: BINDING, packs: PACKS, sources: [SOURCE] }),
+      createElement(ProjectWorkspacePanel, {
+        client,
+        projectBinding: BINDING,
+        packs: PACKS,
+        sources: [SOURCE],
+      }),
     )
     try {
       const title = container.querySelector('[data-testid="project-create-title"]') as HTMLInputElement
-      const pack = container.querySelector('[data-testid="project-create-pack"]') as HTMLSelectElement
       await act(async () => {
         setInputValue(title, '桥架项目')
-        setSelectValue(pack, 'demo.bridge-pack@1.0.0')
       })
       await act(async () => {
         const form = container.querySelector('[data-testid="project-create"]') as HTMLFormElement
@@ -251,13 +364,24 @@ describe('project workspace panel', () => {
         await Promise.resolve()
       })
       await flush()
+      expect(bootstrapBody).toEqual({
+        title: '桥架项目',
+        profileRef: { id: BINDING.profileRef.id, version: BINDING.profileRef.version },
+      })
+      expect(requestKey).not.toBeNull()
       expect(container.querySelector('[data-testid="project-detail-head-revision"]')?.textContent).toBe('1')
       const rows = container.querySelectorAll('[data-testid="readiness-row"]')
       expect(rows.length).toBe(3)
-      expect(container.querySelector('[data-testid="readiness-state-published_semantics"]')?.textContent).toBe('未构建')
+      expect(
+        container.querySelector('[data-testid="readiness-state-published_semantics"]')?.textContent,
+      ).toBe('未构建')
       expect(container.querySelector('[data-testid="readiness-state-dataset"]')?.textContent).toBe('未构建')
-      expect(container.querySelector('[data-testid="readiness-state-document_index"]')?.textContent).toBe('未构建')
-      expect(container.querySelector('[data-testid="readiness-blocker"]')?.getAttribute('data-code')).toBe('READINESS_NOT_BUILT')
+      expect(container.querySelector('[data-testid="readiness-state-document_index"]')?.textContent).toBe(
+        '未构建',
+      )
+      expect(container.querySelector('[data-testid="readiness-blocker"]')?.getAttribute('data-code')).toBe(
+        'READINESS_NOT_BUILT',
+      )
     } finally {
       await act(async () => root.unmount())
       container.remove()
@@ -267,14 +391,21 @@ describe('project workspace panel', () => {
   it('locates a mapping blocker in the preview and does not present it as confirmable', async () => {
     const client = clientForFixture()
     const { container, root } = await render(
-      createElement(ProjectWorkspacePanel, { client, projectBinding: BINDING, packs: PACKS, sources: [SOURCE] }),
+      createElement(ProjectWorkspacePanel, {
+        client,
+        projectBinding: BINDING,
+        packs: PACKS,
+        sources: [SOURCE],
+      }),
     )
     try {
       const source = container.querySelector('[data-testid="mapping-source"]') as HTMLSelectElement
       const object = container.querySelector('[data-testid="mapping-object"]') as HTMLSelectElement
       await act(async () => {
-        source.value = 'source-1'
-        source.dispatchEvent(new Event('change', { bubbles: true }))
+        const actualSource = source.options[1]?.value
+        expect(actualSource).toBe('bbbbbbbb-0000-4000-8000-000000000003:source-table')
+        if (actualSource === undefined) throw new Error('stored source catalogue option missing')
+        setSelectValue(source, actualSource)
       })
       await act(async () => {
         object.value = 'device'
@@ -286,8 +417,15 @@ describe('project workspace panel', () => {
       })
       const issue = container.querySelector('[data-testid="mapping-issue"]')
       expect(issue?.getAttribute('data-code')).toBe('MISSING_COLUMN')
-      expect(container.querySelector('[data-testid="mapping-preview"]')?.getAttribute('data-confirmable')).toBe('false')
-      expect(container.querySelector('[data-testid="mapping-preview-confirmable"]')?.textContent).toContain('不可确认')
+      expect(
+        container.querySelector('[data-testid="mapping-preview"]')?.getAttribute('data-confirmable'),
+      ).toBe('false')
+      expect(container.querySelector('[data-testid="mapping-preview-confirmable"]')?.textContent).toContain(
+        '不可确认',
+      )
+      expect(
+        container.querySelector<HTMLButtonElement>('[data-testid="mapping-confirm-button"]')?.disabled,
+      ).toBe(true)
     } finally {
       await act(async () => root.unmount())
       container.remove()
@@ -314,7 +452,12 @@ describe('project workspace panel', () => {
       },
     })
     const { container, root } = await render(
-      createElement(ProjectWorkspacePanel, { client, projectBinding: BINDING, packs: PACKS, sources: [SOURCE] }),
+      createElement(ProjectWorkspacePanel, {
+        client,
+        projectBinding: BINDING,
+        packs: PACKS,
+        sources: [SOURCE],
+      }),
     )
     try {
       await flush()
@@ -336,7 +479,13 @@ describe('project workspace panel', () => {
   it('hides create and mapping actions for a readonly principal but keeps the project list', async () => {
     const client = clientForFixture()
     const { container, root } = await render(
-      createElement(ProjectWorkspacePanel, { client, projectBinding: BINDING, packs: PACKS, sources: [SOURCE], readOnly: true }),
+      createElement(ProjectWorkspacePanel, {
+        client,
+        projectBinding: BINDING,
+        packs: PACKS,
+        sources: [SOURCE],
+        readOnly: true,
+      }),
     )
     try {
       expect(container.querySelector('[data-testid="project-create"]')).toBeNull()

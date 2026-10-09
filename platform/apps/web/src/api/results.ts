@@ -11,6 +11,7 @@ import type {
   VersionRef,
 } from '@ontology/contracts'
 import type { RunAnswerResult } from './query'
+import type { AnswerSourceLoader } from './source-views'
 
 /**
  * The public typed-result / table read surface (SPEC v0.3a execution-evidence §EX-7.1/§EX-9,
@@ -157,6 +158,7 @@ export interface ResultSource {
   loadEvidence(ref: ResourceRef): Promise<ProvenanceEvidenceView>
   loadHistory(runId: string): Promise<ResultHistoryView>
   requestExport(runId: string): Promise<VerifiedResultExport>
+  readonly loadSource?: AnswerSourceLoader
 }
 
 /** The structural client the result source needs; `WorkbenchClient` satisfies it. */
@@ -167,6 +169,7 @@ export interface ResultSourceClient {
   getEvidence(evidenceId: string): Promise<ProvenanceEvidenceView>
   getResultHistory(runId: string): Promise<ResultHistoryView>
   exportVerifiedResult(runId: string): Promise<VerifiedResultExport>
+  readonly getAnswerSource?: AnswerSourceLoader
 }
 
 const SHA256 = /^sha256:[0-9a-f]{64}$/u
@@ -368,11 +371,15 @@ export function createWorkbenchResultSource(client: ResultSourceClient): ResultS
       if (answer.kind === 'in_progress') return { kind: 'in_progress', state: answer.state }
       if (answer.kind === 'unavailable') return { kind: 'unavailable', code: answer.code, message: answer.message }
       const view = await client.getVerifiedResult(answer.answer.answerId)
+      if (answer.answer.runId !== runId || view.runId !== runId || view.answerId !== answer.answer.answerId || view.contentHash !== answer.answer.contentHash) {
+        return { kind: 'blocked', code: 'REVISION_CHANGED', message: '答案正文与核验结果的版本不一致。' }
+      }
       return { kind: 'verified', answer: answer.answer, view }
     },
     loadTablePage: (answerId, tableId, cursor) => client.getAnswerTablePage(answerId, tableId, cursor),
     loadEvidence: (ref) => client.getEvidence(ref.id),
     loadHistory: (runId) => client.getResultHistory(runId),
     requestExport: (runId) => client.exportVerifiedResult(runId),
+    ...(client.getAnswerSource === undefined ? {} : { loadSource: client.getAnswerSource.bind(client) }),
   }
 }

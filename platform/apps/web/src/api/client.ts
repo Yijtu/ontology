@@ -37,6 +37,8 @@ import type {
   VersionRef,
 } from '@ontology/contracts'
 import { ApiError, toApiFailure } from './errors'
+import { isProvenanceView, readAnswerSource } from './source-views'
+import type { AnswerSourceView } from './source-views'
 import {
   asExecutionRecord,
   asScenarioDescriptor,
@@ -319,10 +321,11 @@ export interface CoreImportResult {
   readonly sourceRef: SourceRef
 }
 
-interface RequestOptions {
+export interface RequestOptions {
   readonly body?: unknown
   readonly idempotencyKey?: string
   readonly ifMatch?: string
+  readonly signal?: AbortSignal
 }
 
 function defaultId(): string {
@@ -569,10 +572,10 @@ export class WorkbenchClient {
     return this.#request<RunScopeView>('GET', `/api/v1/runs/scope?${query.toString()}`)
   }
 
-  createRun(request: CreateRunRequest): Promise<CreateRunView> {
+  createRun(request: CreateRunRequest, idempotencyKey?: string): Promise<CreateRunView> {
     return this.#request<CreateRunView>('POST', '/api/v1/runs', {
       body: request,
-      idempotencyKey: this.#newId(),
+      idempotencyKey: idempotencyKey ?? this.#newId(),
     })
   }
 
@@ -1166,11 +1169,12 @@ export class WorkbenchClient {
   createInstanceRecord(
     projectId: string,
     request: CreateInstanceRecordRequest,
+    idempotencyKey?: string,
   ): Promise<InstanceRecordView> {
     const path = `/api/v1/projects/${encodeURIComponent(projectId)}/instance-records`
     return this.#request<unknown>('POST', path, {
       body: request,
-      idempotencyKey: this.#newId(),
+      idempotencyKey: idempotencyKey ?? this.#newId(),
     }).then((data) => this.readInstanceRecord(path, data))
   }
 
@@ -1370,10 +1374,15 @@ export class WorkbenchClient {
 
   /** `GET /evidence/{id}`: the authorized provenance view of one evidence item. */
   getEvidence(evidenceId: string, query: EvidenceReadQuery = {}): Promise<ProvenanceEvidenceView> {
-    return this.#request<ProvenanceEvidenceView>(
+    const path = `/api/v1/evidence/${encodeURIComponent(evidenceId)}${optionalTimeQuery(query)}`
+    return this.#request<unknown>(
       'GET',
-      `/api/v1/evidence/${encodeURIComponent(evidenceId)}${optionalTimeQuery(query)}`,
-    )
+      path,
+    ).then((view) => { if (!isProvenanceView(view) || view.evidenceId !== evidenceId) throw malformedResponse(path, 'the evidence view was not recognised'); return view })
+  }
+
+  getAnswerSource(answer: PublishedAnswer, evidenceRef: ResourceRef, signal?: AbortSignal): Promise<AnswerSourceView> {
+    return readAnswerSource(this, answer, evidenceRef, signal)
   }
 
   /**
@@ -1668,9 +1677,10 @@ export class WorkbenchClient {
   confirmProjectMapping(
     projectId: string,
     request: ColumnMappingRequestView,
+    idempotencyKey?: string,
   ): Promise<{ readonly mapping: ImportMappingVersion; readonly preview: MappingPreview }> {
     const path = `/api/v1/projects/${encodeURIComponent(projectId)}/mappings`
-    return this.#request<unknown>('POST', path, { body: request, idempotencyKey: this.#newId() }).then((data) => {
+    return this.#request<unknown>('POST', path, { body: request, idempotencyKey: idempotencyKey ?? this.#newId() }).then((data) => {
       if (!isRecord(data) || !isImportMappingVersion(data['mapping']) || !isMappingPreview(data['preview'])) {
         throw malformedResponse(path, 'the confirmed mapping was not recognised')
       }
@@ -1705,9 +1715,10 @@ export class WorkbenchClient {
   bindProjectRecords(
     projectId: string,
     request: { readonly parseId: string; readonly mappingId: string; readonly mappingVersion: string },
+    idempotencyKey?: string,
   ): Promise<{ readonly records: readonly ProjectRecordVersion[]; readonly created: boolean }> {
     const path = `/api/v1/projects/${encodeURIComponent(projectId)}/records`
-    return this.#request<unknown>('POST', path, { body: request, idempotencyKey: this.#newId() }).then((data) => {
+    return this.#request<unknown>('POST', path, { body: request, idempotencyKey: idempotencyKey ?? this.#newId() }).then((data) => {
       if (!isRecord(data) || !Array.isArray(data['records']) || typeof data['created'] !== 'boolean') {
         throw malformedResponse(path, 'the bound project records were not recognised')
       }
@@ -1729,9 +1740,10 @@ export class WorkbenchClient {
   materializeProjectDataset(
     projectId: string,
     request: { readonly objectId: string; readonly revision?: string; readonly allowPartial?: boolean },
+    idempotencyKey?: string,
   ): Promise<ProjectDatasetStatusView> {
     const path = `/api/v1/projects/${encodeURIComponent(projectId)}/dataset-snapshots`
-    return this.#request<unknown>('POST', path, { body: request, idempotencyKey: this.#newId() }).then((data) => {
+    return this.#request<unknown>('POST', path, { body: request, idempotencyKey: idempotencyKey ?? this.#newId() }).then((data) => {
       if (!isRecord(data) || !isProjectDatasetStatus(data['status'])) {
         throw malformedResponse(path, 'the materialised project dataset was not recognised')
       }
@@ -1749,9 +1761,9 @@ export class WorkbenchClient {
     })
   }
 
-  buildProjectDocumentIndex(projectId: string): Promise<ProjectDocumentIndexStatusView> {
+  buildProjectDocumentIndex(projectId: string, idempotencyKey?: string): Promise<ProjectDocumentIndexStatusView> {
     const path = `/api/v1/projects/${encodeURIComponent(projectId)}/document-index`
-    return this.#request<unknown>('POST', path, { body: {}, idempotencyKey: this.#newId() }).then((data) => {
+    return this.#request<unknown>('POST', path, { body: {}, idempotencyKey: idempotencyKey ?? this.#newId() }).then((data) => {
       if (!isRecord(data) || !isProjectDocumentIndexStatus(data['status'])) {
         throw malformedResponse(path, 'the built project document index was not recognised')
       }
@@ -1778,10 +1790,11 @@ export class WorkbenchClient {
     })
   }
 
-  async #requestWithMeta<T>(path: string): Promise<{ data: T; nextCursor: string | undefined }> {
+  async #requestWithMeta<T>(path: string, signal?: AbortSignal): Promise<{ data: T; nextCursor: string | undefined }> {
     const response = await this.#fetch(`${this.#baseUrl}${path}`, {
       method: 'GET',
       headers: { accept: 'application/json' },
+      ...(signal === undefined ? {} : { signal }),
     })
     const text = await response.text()
     let parsed: unknown
@@ -1800,9 +1813,26 @@ export class WorkbenchClient {
     return { data, nextCursor }
   }
 
-  async #request<T>(method: string, path: string, options: RequestOptions = {}): Promise<T> {
+  newRequestKey(): string { return this.#newId() }
+
+  /** Shared authenticated transport. Domain callers must validate the returned wire body. */
+  requestJson<T = unknown>(method: string, path: string, options: RequestOptions = {}): Promise<T> {
+    return this.#request<T>(method, path, options)
+  }
+
+  requestBytes<T = unknown>(method: string, path: string, bytes: Uint8Array, options: Omit<RequestOptions, 'body'> & {
+    readonly mediaType: string
+  }): Promise<T> {
+    return this.#request<T>(method, path, options, bytes)
+  }
+
+  async #request<T>(method: string, path: string, options: RequestOptions = {}, bytes?: Uint8Array): Promise<T> {
     const headers: Record<string, string> = { accept: 'application/json' }
     if (options.body !== undefined) headers['content-type'] = 'application/json'
+    if (bytes !== undefined && 'mediaType' in options && typeof options.mediaType === 'string') {
+      headers['content-type'] = 'application/octet-stream'
+      headers['x-source-media-type'] = options.mediaType
+    }
     if (options.idempotencyKey !== undefined) headers['idempotency-key'] = options.idempotencyKey
     if (options.ifMatch !== undefined) headers['if-match'] = options.ifMatch
 
@@ -1810,6 +1840,8 @@ export class WorkbenchClient {
       method,
       headers,
       ...(options.body === undefined ? {} : { body: JSON.stringify(options.body) }),
+      ...(bytes === undefined ? {} : { body: new Blob([new Uint8Array(bytes)]) }),
+      ...(options.signal === undefined ? {} : { signal: options.signal }),
     })
     const text = await response.text()
     let parsed: unknown

@@ -64,6 +64,8 @@ export function isProjectRecord(value: unknown): value is ProjectRecord {
     isString(value['title']) &&
     isRevisionString(value['headRevision']) &&
     (value['state'] === 'draft' || value['state'] === 'active' || value['state'] === 'archived') &&
+    (value['activeRevision'] === undefined || isRevisionString(value['activeRevision'])) &&
+    (value['stagingWritable'] === undefined || typeof value['stagingWritable'] === 'boolean') &&
     typeof value['createdBy'] === 'string' &&
     typeof value['createdAt'] === 'string' &&
     typeof value['updatedAt'] === 'string'

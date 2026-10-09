@@ -47,7 +47,13 @@ const VERIFIED_TABLE_ID = 'device_capacity'
 const UNVERIFIED_TABLE_ID = 'raw_compute'
 
 const COLUMNS: readonly TableColumnDescriptor[] = [
-  { columnRef: 'name', semanticPredicate: 'name', valueType: 'string', schemaPointer: '/name', displayLabel: '名称' },
+  {
+    columnRef: 'name',
+    semanticPredicate: 'name',
+    valueType: 'string',
+    schemaPointer: '/name',
+    displayLabel: '名称',
+  },
   {
     columnRef: 'capacity',
     semanticPredicate: 'capacity',
@@ -79,7 +85,13 @@ function bindings(rowKey: string, evidence: ResourceRef, resultDigest: string): 
   }))
 }
 
-function row(rowKey: string, subject: string, name: string, capacity: string, seed: number): TableArtifactRow {
+function row(
+  rowKey: string,
+  subject: string,
+  name: string,
+  capacity: string,
+  seed: number,
+): TableArtifactRow {
   const evidence = evidenceRef(seed)
   const resultDigest = sha256OfCanonical({ result: seed })
   return { rowKey, subject, cells: { name, capacity }, bindings: bindings(rowKey, evidence, resultDigest) }
@@ -345,7 +357,12 @@ function exportView(currentRunId: string): Record<string, unknown> {
       },
     ],
     sourceIndex: [
-      { evidenceId: evidence.id, evidenceRef: evidence, resultDigest: sha256OfCanonical({ result: 1 }), boundBy: ['claim'] },
+      {
+        evidenceId: evidence.id,
+        evidenceRef: evidence,
+        resultDigest: sha256OfCanonical({ result: 1 }),
+        boundBy: ['claim'],
+      },
     ],
   }
 }
@@ -364,7 +381,10 @@ function mapTableErrorStatus(code: string): number {
   return 422
 }
 
-function evidenceView(seed: number, reReadability: 're_readable' | 'archived_snapshot_only' | 'unverifiable'): ProvenanceEvidenceView {
+function evidenceView(
+  seed: number,
+  reReadability: 're_readable' | 'archived_snapshot_only' | 'unverifiable',
+): ProvenanceEvidenceView {
   const ref = evidenceRef(seed)
   const outcome = reReadability === 'unverifiable' ? 'unverifiable' : 'verifiable'
   const supportResolution: ProvenanceSupportResolution = { state: 'not_rule', complete: true }
@@ -374,7 +394,10 @@ function evidenceView(seed: number, reReadability: 're_readable' | 'archived_sna
     kind: 'observation',
     dataMode: 'observed',
     scopeRef: { tenantId: SCOPE.tenantId, spaceId: SCOPE.spaceId },
-    producedBy: { componentRef: { id: 'component.business-results', version: '1.0.0', digest: ref.digest }, runId: '00000000-0000-4000-8000-000000000000' },
+    producedBy: {
+      componentRef: { id: 'component.business-results', version: '1.0.0', digest: ref.digest },
+      runId: '00000000-0000-4000-8000-000000000000',
+    },
     observedAt: '2026-09-21T00:00:00Z',
     recordedAt: '2026-09-21T00:00:00Z',
     revision: '1',
@@ -393,7 +416,9 @@ function evidenceView(seed: number, reReadability: 're_readable' | 'archived_sna
         resultDigest: ref.digest,
         ...(reReadability === 'archived_snapshot_only' ? { archivedResultRef: ref } : {}),
         reReadability,
-        ...(reReadability === 'archived_snapshot_only' ? { reason: '原始来源不可重读，仅保留已核验的归档快照' } : {}),
+        ...(reReadability === 'archived_snapshot_only'
+          ? { reason: '原始来源不可重读，仅保留已核验的归档快照' }
+          : {}),
       },
     ],
     originalSourceReReadable: reReadability === 're_readable',
@@ -413,21 +438,30 @@ function createBusinessEvidenceSurface(): EvidenceReadSurface {
       const seed = Number(evidenceId.slice(-1))
       const readability = bySeed[seed]
       if (readability === undefined) {
-        return Promise.reject(new ProvenanceReadError('EVIDENCE_NOT_FOUND', `no authorized evidence ${evidenceId}`))
+        return Promise.reject(
+          new ProvenanceReadError('EVIDENCE_NOT_FOUND', `no authorized evidence ${evidenceId}`),
+        )
       }
       return Promise.resolve(evidenceView(seed, readability))
     },
     getDependencies(evidenceId: string): Promise<never> {
-      return Promise.reject(new ProvenanceReadError('EVIDENCE_NOT_FOUND', `no dependency graph for ${evidenceId}`))
+      return Promise.reject(
+        new ProvenanceReadError('EVIDENCE_NOT_FOUND', `no dependency graph for ${evidenceId}`),
+      )
     },
     exportEvidence(): Promise<never> {
-      return Promise.reject(new ProvenanceReadError('EVIDENCE_NOT_FOUND', 'export is not part of this fixture'))
+      return Promise.reject(
+        new ProvenanceReadError('EVIDENCE_NOT_FOUND', 'export is not part of this fixture'),
+      )
     },
   }
 }
 
 export async function startBusinessResultsHarness(
-  options: { readonly fixedPrincipal?: boolean; readonly streamFactory?: NonNullable<HarnessOptions['streamFactory']> } = {},
+  options: {
+    readonly fixedPrincipal?: boolean
+    readonly streamFactory?: NonNullable<HarnessOptions['streamFactory']>
+  } = {},
 ): Promise<BusinessResultsHarness> {
   const ctx = toolContext(['business-user', 'scoped-reader'], 'business-results')
   const store = new InMemoryTableArtifactStore()
@@ -461,9 +495,50 @@ export async function startBusinessResultsHarness(
   })
 
   const extraRoutes: NonNullable<HarnessOptions['extraRoutes']> = (app) => {
+    app.get<{ Params: { answerId: string; evidenceId: string } }>(
+      '/api/v1/core/answers/:answerId/sources/:evidenceId',
+      async (request, reply) => {
+        const boundRef = [evidenceRef(1), evidenceRef(2), evidenceRef(3)].find(
+          (ref) => ref.id === request.params.evidenceId,
+        )
+        if (request.params.answerId !== ANSWER_ID || boundRef === undefined) {
+          reply.status(404).send({
+            error: { code: 'NOT_FOUND', message: 'no source bound to this answer', retryable: false },
+            traceId: 'fixture',
+          })
+          return reply
+        }
+        const support = await createBusinessEvidenceSurface().getEvidence(boundRef.id, {}, ctx)
+        const readability =
+          support.outcome === 'unverifiable'
+            ? 'unverifiable'
+            : support.sources.every((source) => source.reReadability === 're_readable')
+              ? 're_readable'
+              : 'archived_snapshot_only'
+        reply.status(200).send({
+          data: {
+            answerId: ANSWER_ID,
+            evidenceId: boundRef.id,
+            answerRef: { id: ANSWER_ID, version: '1.0.0', digest: resultView().contentHash },
+            evidenceRef: boundRef,
+            family: 'data_query',
+            precision: 'exact',
+            readability,
+            title: '查询时保存的来源快照',
+            support,
+            dataMode: support.dataMode,
+          },
+          meta: { traceId: 'fixture' },
+        })
+        return reply
+      },
+    )
     app.get<{ Params: { answerId: string } }>('/api/v1/answers/:answerId/result', async (request, reply) => {
       if (request.params.answerId !== ANSWER_ID) {
-        reply.status(404).send({ error: { code: 'NOT_FOUND', message: 'no verified result', retryable: false }, traceId: 'fixture' })
+        reply.status(404).send({
+          error: { code: 'NOT_FOUND', message: 'no verified result', retryable: false },
+          traceId: 'fixture',
+        })
         return reply
       }
       reply.status(200).send({ data: resultView(), meta: { traceId: 'fixture' } })
@@ -510,7 +585,11 @@ export async function startBusinessResultsHarness(
         const format = request.query.format ?? 'json'
         if (format !== 'json') {
           reply.status(422).send({
-            error: { code: 'EXPORT_FORMAT_UNSUPPORTED', message: `unsupported format ${format}`, retryable: false },
+            error: {
+              code: 'EXPORT_FORMAT_UNSUPPORTED',
+              message: `unsupported format ${format}`,
+              retryable: false,
+            },
             traceId: 'fixture',
           })
           return reply

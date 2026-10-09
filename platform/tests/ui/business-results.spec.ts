@@ -5,9 +5,16 @@ import { createRoot } from 'react-dom/client'
 import type { Root } from 'react-dom/client'
 import { afterEach, describe, expect, it } from 'vitest'
 import type { RuntimeEvent } from '@ontology/contracts'
-import { BusinessWorkbenchPanel, ResultWorkbenchPanel, createScenarioRegistry, createWorkbenchResultSource } from '@ontology/app-web'
+import type { ProjectTaskItem } from '@ontology/app-web'
+import {
+  BusinessWorkbenchPanel,
+  ResultWorkbenchPanel,
+  TaskRunForm,
+  createScenarioRegistry,
+  createWorkbenchResultSource,
+} from '@ontology/app-web'
 import type { RunEvent, RunEventHandlers, RunEventStreamFactory } from '@ontology/app-web/client'
-import { PROFILE } from './workbench-fixtures'
+import { PROFILE, startHarness } from './workbench-fixtures'
 import { businessEvidenceRef, startBusinessResultsHarness } from './business-results-fixtures'
 import type { BusinessResultsHarness } from './business-results-fixtures'
 
@@ -104,7 +111,11 @@ async function type(element: HTMLInputElement | HTMLTextAreaElement, value: stri
 
 async function renderWorkbench(
   harness: BusinessResultsHarness,
-  options: { readonly grantedCapabilities?: readonly string[]; readonly readOnly?: boolean; readonly initialRunId?: string } = {},
+  options: {
+    readonly grantedCapabilities?: readonly string[]
+    readonly readOnly?: boolean
+    readonly initialRunId?: string
+  } = {},
 ): Promise<HTMLElement> {
   const container = document.createElement('div')
   document.body.appendChild(container)
@@ -120,8 +131,16 @@ async function renderWorkbench(
         declarations: {
           ontology: [],
           business: [
-            { moduleRef: { id: 'scene.neutral.alpha', version: '1.0.0', digest: `sha256:${'a1'.repeat(32)}` }, taskBindingRefs: [], requiredCapabilities: ['data.readonly'] },
-            { moduleRef: { id: 'scene.neutral.beta', version: '1.0.0', digest: `sha256:${'b2'.repeat(32)}` }, taskBindingRefs: [], requiredCapabilities: ['pricing.compute'] },
+            {
+              moduleRef: { id: 'scene.neutral.alpha', version: '1.0.0', digest: `sha256:${'a1'.repeat(32)}` },
+              taskBindingRefs: [],
+              requiredCapabilities: ['data.readonly'],
+            },
+            {
+              moduleRef: { id: 'scene.neutral.beta', version: '1.0.0', digest: `sha256:${'b2'.repeat(32)}` },
+              taskBindingRefs: [],
+              requiredCapabilities: ['pricing.compute'],
+            },
           ],
         },
         grantedCapabilities: options.grantedCapabilities ?? ['data.readonly', 'pricing.compute'],
@@ -161,10 +180,16 @@ describe('public business workbench lists mounted and authorised tasks', () => {
   it('lists only the mounted+authorised tasks and explains a missing capability', async () => {
     const built = await harness()
     const container = await renderWorkbench(built)
-    await waitFor(() => container.querySelectorAll('[data-testid="task-entry"]').length === 2, 'two task entries')
+    await waitFor(
+      () => container.querySelectorAll('[data-testid="task-entry"]').length === 2,
+      'two task entries',
+    )
 
     const restricted = await renderWorkbench(built, { grantedCapabilities: ['data.readonly'] })
-    await waitFor(() => restricted.querySelectorAll('[data-testid="task-entry"]').length === 1, 'one authorised task')
+    await waitFor(
+      () => restricted.querySelectorAll('[data-testid="task-entry"]').length === 1,
+      'one authorised task',
+    )
     const unavailable = restricted.querySelector('[data-testid="task-unavailable"]')?.textContent ?? ''
     expect(unavailable).toContain('pricing.compute')
   })
@@ -181,24 +206,63 @@ describe('public business workbench lists mounted and authorised tasks', () => {
 })
 
 describe('parameter change requires an explicit confirmation', () => {
-  it('shows a concrete diff and does not apply it until confirmed', async () => {
-    const built = await harness()
-    const container = await renderWorkbench(built)
-    await waitFor(() => container.querySelectorAll('[data-testid="task-entry"]').length === 2, 'task entries')
-    await click(container.querySelectorAll('[data-testid="task-entry"]')[0] as Element)
-
-    const parameter = container.querySelector<HTMLInputElement>('[data-testid="business-parameter"]')
-    if (parameter === null) throw new Error('parameter input missing')
-    await type(parameter, '42')
-    expect(container.querySelector('[data-testid="business-parameter-diff"]')).toBeNull()
-
-    await click(container.querySelector('[data-testid="business-parameter-preview"]') as Element)
-    expect(container.querySelector('[data-testid="diff-proposed"]')?.textContent).toContain('42')
-    expect(container.querySelector('[data-testid="business-parameter-confirmed"]')).toBeNull()
-
-    await click(container.querySelector('[data-testid="business-parameter-confirm"]') as Element)
-    expect(container.querySelector('[data-testid="business-parameter-confirmed"]')?.textContent).toContain('42')
-    expect(container.querySelector('[data-testid="business-parameter-diff"]')).toBeNull()
+  it('shows a concrete schema parameter diff and submits only the confirmed values', async () => {
+    const accepted: Readonly<Record<string, unknown>>[] = []
+    const task: ProjectTaskItem = {
+      bindingRef: { id: 'test.exact-quantity', version: '1.0.0', digest: `sha256:${'b'.repeat(64)}` },
+      taskKind: 'compute',
+      displayName: '核对数量',
+      parameterSchema: {
+        type: 'object',
+        properties: { quantity: { type: 'string', title: '数量' } },
+        required: ['quantity'],
+        additionalProperties: false,
+      },
+      requiredCapabilities: [],
+      requiredReadiness: [],
+      available: true,
+      unavailableReasons: [],
+    }
+    const container = document.createElement('div')
+    document.body.appendChild(container)
+    const root = createRoot(container)
+    mounted.push({ root, container })
+    await act(async () => {
+      root.render(
+        createElement(TaskRunForm, {
+          task,
+          objects: [],
+          disabled: false,
+          onRun: (parameters) => {
+            accepted.push(parameters)
+            return Promise.resolve()
+          },
+        }),
+      )
+    })
+    const parameter = container.querySelector<HTMLInputElement>('[data-testid="task-parameter-quantity"]')
+    if (parameter === null) throw new Error('schema parameter input missing')
+    const exact = '9007199254740993.00000000000000000001'
+    await type(parameter, exact)
+    expect(container.querySelector('[data-testid="task-parameter-diff"]')).toBeNull()
+    expect(container.querySelector<HTMLButtonElement>('[data-testid="task-run"]')?.disabled).toBe(true)
+    await click(container.querySelector('[data-testid="task-parameter-preview"]') as Element)
+    expect(container.querySelector('[data-testid="task-parameter-diff"]')?.textContent).toContain(
+      `数量：未提供 → ${exact}`,
+    )
+    expect(accepted).toEqual([])
+    await click(container.querySelector('[data-testid="task-parameter-confirm"]') as Element)
+    expect(container.querySelector('[data-testid="task-parameter-diff"]')).toBeNull()
+    expect(container.querySelector<HTMLButtonElement>('[data-testid="task-run"]')?.disabled).toBe(false)
+    await submit(container.querySelector('[data-testid="task-schema-form"]') as Element)
+    expect(accepted).toEqual([{ quantity: exact }])
+    await type(parameter, '43')
+    expect(container.querySelector<HTMLButtonElement>('[data-testid="task-run"]')?.disabled).toBe(true)
+    await click(container.querySelector('[data-testid="task-parameter-preview"]') as Element)
+    expect(container.querySelector('[data-testid="task-parameter-diff"]')?.textContent).toContain(
+      `${exact} → 43`,
+    )
+    expect(accepted).toEqual([{ quantity: exact }])
   })
 })
 
@@ -206,7 +270,10 @@ describe('typed results share the same verified version', () => {
   it('renders 正文/结果表/依据, pages the table and keeps provenance states apart', async () => {
     const built = await harness()
     const container = await renderResult(built)
-    await waitFor(() => container.querySelector('[data-testid="result-workbench"] [data-testid="result-body"]') !== null, 'verified result')
+    await waitFor(
+      () => container.querySelector('[data-testid="result-workbench"] [data-testid="result-body"]') !== null,
+      'verified result',
+    )
 
     // 正文: the verified @3 narrative is rendered from its result-bound claims.
     expect(container.querySelector('[data-testid="published-answer-body"]')).not.toBeNull()
@@ -215,21 +282,33 @@ describe('typed results share the same verified version', () => {
     await click(container.querySelector('[data-testid="result-tab-tables"]') as Element)
     await waitFor(() => container.querySelector('[data-testid="result-table-row"]') !== null, 'table page')
     expect(container.querySelectorAll('[data-testid="result-table-row"]').length).toBe(2)
+    expect(container.querySelectorAll('[data-testid="result-cell-evidence"]').length).toBe(4)
     expect(container.querySelector('[data-testid="result-table"]')?.getAttribute('data-page')).toBe('0')
 
     // 依据: the first row's source is current; a later page's source is missing.
     await click(container.querySelector('[data-testid="result-cell-evidence"]') as Element)
     await waitFor(() => container.querySelector('[data-testid="result-evidence"]') !== null, 'evidence view')
-    expect(container.querySelector('[data-testid="result-evidence"]')?.getAttribute('data-readability')).toBe('current')
+    expect(container.querySelector('[data-testid="result-evidence"]')?.getAttribute('data-readability')).toBe(
+      'current',
+    )
+    expect(container.querySelector('[data-testid="result-table"]')?.getAttribute('data-page')).toBe('0')
+    const closeSource = container.querySelector('dialog button[aria-label="关闭结果依据"]')
+    if (closeSource === null) throw new Error('source drawer close action missing')
+    await click(closeSource)
 
     await click(container.querySelector('[data-testid="result-tab-tables"]') as Element)
     const next = container.querySelector<HTMLButtonElement>('[data-testid="result-table-next"]')
     if (next === null) throw new Error('next page button missing')
     await click(next)
-    await waitFor(() => container.querySelector('[data-testid="result-table"]')?.getAttribute('data-page') === '1', 'second page')
+    await waitFor(
+      () => container.querySelector('[data-testid="result-table"]')?.getAttribute('data-page') === '1',
+      'second page',
+    )
     await click(container.querySelector('[data-testid="result-cell-evidence"]') as Element)
     await waitFor(
-      () => container.querySelector('[data-testid="result-evidence"]')?.getAttribute('data-readability') === 'missing',
+      () =>
+        container.querySelector('[data-testid="result-evidence"]')?.getAttribute('data-readability') ===
+        'missing',
       'missing evidence',
     )
   })
@@ -244,6 +323,64 @@ describe('typed results share the same verified version', () => {
     })
     expect(status.statusCode).toBe(422)
     expect((status.json() as { error: { code: string } }).error.code).toBe('TABLE_UNVERIFIED')
+  })
+
+  it('does not restore an earlier table page after switching to another real run', async () => {
+    const built = await harness()
+    const actual = createWorkbenchResultSource(built.harness.client)
+    let release: (() => void) | undefined
+    let requested = false
+    const source = {
+      ...actual,
+      loadTablePage: async (answerId: string, tableId: string, cursor?: string) => {
+        const page = await actual.loadTablePage(answerId, tableId, cursor)
+        requested = true
+        await new Promise<void>((resolve) => {
+          release = resolve
+        })
+        return page
+      },
+    }
+    const container = document.createElement('div')
+    document.body.appendChild(container)
+    const root = createRoot(container)
+    mounted.push({ root, container })
+    await act(async () => {
+      root.render(createElement(ResultWorkbenchPanel, { source, runId: built.runId, initialTab: 'tables' }))
+    })
+    await waitFor(() => requested, 'actual first page read')
+    const second = await startHarness()
+    try {
+      const next = await second.client.createRun({
+        profileRef: PROFILE,
+        question: 'another real run',
+        context: { timeZone: 'Asia/Shanghai' },
+        preferences: { route: 'auto', allowWeb: false },
+      })
+      const nextSource = createWorkbenchResultSource(second.client)
+      await act(async () => {
+        root.render(
+          createElement(ResultWorkbenchPanel, {
+            source: nextSource,
+            runId: next.runId,
+            initialTab: 'tables',
+          }),
+        )
+      })
+      await waitFor(
+        () => container.querySelector('[data-testid="result-in-progress"]') !== null,
+        'second run in progress',
+      )
+      await act(async () => {
+        release?.()
+      })
+      expect(container.querySelectorAll('[data-testid="result-table-row"]').length).toBe(0)
+      expect(container.querySelector('[data-testid="result-workbench"]')?.getAttribute('data-run-id')).toBe(
+        next.runId,
+      )
+    } finally {
+      await second.app.close()
+    }
   })
 })
 
@@ -271,7 +408,11 @@ describe('running a task is controllable', () => {
     expect(created.statusCode).toBe(202)
     const runId = (created.json() as { data: { runId: string } }).data.runId
     await built.harness.runService.recordRuntimeEvent(runId, planEvent(runId), built.harness.ctx)
-    await built.harness.runService.recordRuntimeEvent(runId, clarificationEvent(runId, randomUUID()), built.harness.ctx)
+    await built.harness.runService.recordRuntimeEvent(
+      runId,
+      clarificationEvent(runId, randomUUID()),
+      built.harness.ctx,
+    )
 
     const container = await renderWorkbench(built, { initialRunId: runId })
     await waitFor(() => stream.opened.length > 0, 'the SSE stream to open')
@@ -285,13 +426,19 @@ describe('running a task is controllable', () => {
         data: { clarificationId, questionType: 'choice', occurredAt: '2026-09-21T00:02:00Z' },
       })
     })
-    await waitFor(() => container.querySelector('[data-testid="business-clarification"]') !== null, 'clarification')
+    await waitFor(
+      () => container.querySelector('[data-testid="business-clarification"]') !== null,
+      'clarification',
+    )
 
     const input = container.querySelector<HTMLInputElement>('[data-testid="business-clarification-input"]')
     if (input === null) throw new Error('the clarification input is missing')
     await type(input, '选择 A')
     await click(container.querySelector('[data-testid="business-clarification-submit"]') as Element)
-    await waitFor(() => container.querySelector('[data-testid="business-notice"]') !== null, 'clarification notice')
+    await waitFor(
+      () => container.querySelector('[data-testid="business-notice"]') !== null,
+      'clarification notice',
+    )
   })
 
   it('cancels a run and records the cancelled outcome', async () => {
@@ -306,7 +453,9 @@ describe('running a task is controllable', () => {
     if (cancel === null) throw new Error('the cancel button is missing')
     await click(cancel)
     await waitFor(
-      () => container.querySelector('[data-testid="business-outcome"]')?.getAttribute('data-outcome') === 'cancelled',
+      () =>
+        container.querySelector('[data-testid="business-outcome"]')?.getAttribute('data-outcome') ===
+        'cancelled',
       'cancelled outcome',
     )
   })

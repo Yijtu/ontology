@@ -8,6 +8,7 @@ import type {
   RunState,
   Sha256Digest,
   SseEventType,
+  VersionRef,
 } from '@ontology/contracts'
 
 /**
@@ -21,6 +22,8 @@ export interface CreateRunRequest {
   readonly question: string
   readonly context: CreateRunContext
   readonly preferences: RunPreferences
+  readonly projectId?: string
+  readonly task?: { readonly bindingRef: VersionRef; readonly arguments: Readonly<Record<string, unknown>> }
 }
 
 export interface CreateRunView {
