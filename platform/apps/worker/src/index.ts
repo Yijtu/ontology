@@ -36,3 +36,4 @@ export { SIMULATION_RESULT_MEDIA_TYPE, SimulationStageHandler, createWorkerStage
 export type { SimulationRunGuard, SimulationStageDependencies } from './simulation-stage'
 export { WorkflowDispatchWorker } from './workflow-dispatch-worker'
 export type { WorkflowDispatchWorkerOptions } from './workflow-dispatch-worker'
+export { ProjectEvolutionOutboxConsumer } from './project-evolution-consumer'

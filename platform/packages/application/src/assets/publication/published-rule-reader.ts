@@ -33,6 +33,8 @@ export class PublishedPackRuleDeclarationReader implements PublishedRuleDeclarat
       publishedPackContentDigest(asset) !== asset.contentDigest || asset.ruleDeclarations === undefined ||
       contentDigestOf(asset.ruleDeclarations) !== asset.manifest.rulePolicyRef.digest || asset.packAsset.ruleDeclarationsRef?.digest !== asset.manifest.rulePolicyRef.digest) blocked('published rule bodies or exact pack/definition pins disagree')
     const historical = request.readMode === 'published_snapshot'
+    const boundProject = request.projectId === undefined ? undefined : await this.#deps.projects?.getProject(scope, request.projectId, ctx)
+    const stagingActive = boundProject?.activeRevision !== undefined && boundProject.activeRevision !== boundProject.headRevision
     if (!historical) {
       // Reuse the normal current-pack authorization, exact-definition and registry lifecycle gate.
       await new DynamicDefinitionTerminologySource({ catalogue: new StoreBackedIndustryPackCatalogue({ store: this.#deps.packs }), definitions: this.#deps.definitions,
@@ -41,11 +43,13 @@ export class PublishedPackRuleDeclarationReader implements PublishedRuleDeclarat
           throw error
         })
       const peers = await this.#deps.packs.listPacks(scope, { namespace: asset.namespace, limit: 250 }, ctx)
-      if (peers.length === 250 || peers.some((peer) => peer.strategy?.kind === 'retire_previous' && peer.strategy.supersedesRef !== undefined && sameRef(peer.strategy.supersedesRef, asset.definitionRef))) blocked('published rule pack is retired or retirement coverage is incomplete')
+      // A project keeps its stored old active binding until its own rebuild CAS. Explicit
+      // trust/lifecycle revocation and that declaration's current human review still apply.
+      if (peers.length === 250 || !stagingActive && peers.some((peer) => peer.strategy?.kind === 'retire_previous' && peer.strategy.supersedesRef !== undefined && sameRef(peer.strategy.supersedesRef, asset.definitionRef))) blocked('published rule pack is retired or retirement coverage is incomplete')
     }
     if (request.projectId !== undefined) {
-      const project = await this.#deps.projects?.getProject(scope, request.projectId, ctx)
-      const projectRevision = historical ? request.projectRevisionRef?.revision : project?.headRevision
+      const project = boundProject
+      const projectRevision = historical ? request.projectRevisionRef?.revision : project?.activeRevision ?? project?.headRevision
       const revision = projectRevision === undefined ? undefined : await this.#deps.projects?.getRevision(scope, request.projectId, projectRevision, ctx)
       if (project === undefined || !historical && project.state === 'archived' || revision === undefined || !sameRef(revision.industryPackRef, request.packRef) || !sameRef(revision.definitionRef, request.definitionRef) ||
         historical && (request.projectRevisionRef?.projectId !== request.projectId || request.projectRevisionRef.digest !== revision.ref.digest)) blocked('project does not pin this exact active or historical pack and definition')

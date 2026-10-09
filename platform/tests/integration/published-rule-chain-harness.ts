@@ -5,7 +5,7 @@ import { join } from 'node:path'
 import { expect } from 'vitest'
 import { FileSystemObjectStore, LocalImmutableBlobStore, PostgresArtifactRegistry } from '@ontology/adapter-blob-local'
 import { LocalDocumentExtractionService, PostgresDocumentParseStore } from '@ontology/adapter-extraction-document'
-import { PostgresAssetCandidateStore, PostgresAssetWorkspaceStore, PostgresBudgetLedgerStore, PostgresCandidateStore, PostgresComponentRegistryStore, PostgresDefinitionEditingStore, PostgresIdentityDecisionStore, PostgresIndustryValidationReportStore, PostgresJobStore, PostgresPublishedPackAssetStore, PostgresRuleActionCandidateStore, PostgresSemanticDefinitionStore, PostgresSemanticPublicationStore, PostgresSyntheticExampleSetStore, ControlPostgresRepository } from '@ontology/adapter-control-postgres'
+import { PostgresAssetCandidateStore, PostgresAssetWorkspaceStore, PostgresBudgetLedgerStore, PostgresCandidateStore, PostgresComponentRegistryStore, PostgresDefinitionEditingStore, PostgresIdentityDecisionStore, PostgresIndustryValidationReportStore, PostgresJobStore, PostgresPublishedPackAssetStore, PostgresProjectStore, PostgresRuleActionCandidateStore, PostgresSemanticDefinitionStore, PostgresSemanticPublicationStore, PostgresSyntheticExampleSetStore, ControlPostgresRepository } from '@ontology/adapter-control-postgres'
 import type { ControlPostgresDatabase } from '@ontology/adapter-control-postgres'
 import { CompositeReviewableCandidateReader, DefinitionCandidateEditingService, ExtractionPipeline, IndustryAssetPublicationService, IndustryValidationService, IndustryWorkspaceService, InMemoryIndustrySchemaSource, JobService, PublishedPackRuleDeclarationReader, RuleActionCandidateService, SyntheticExampleService, contentDigestOf } from '@ontology/application'
 import { BudgetService } from '@ontology/core'
@@ -128,7 +128,7 @@ export async function publishedRuleChainHarness(database: ControlPostgresDatabas
     const rule = receipt.ruleVersions[0]; if (rule === undefined) throw new Error('missing persisted rule')
     return rule
   }
-  const packReader = new PublishedPackRuleDeclarationReader({ packs, registry: new PostgresComponentRegistryStore(database), definitions: definitionStore, candidates: ruleActions, reviews: publication, reviewableCandidates: reader })
+  const packReader = new PublishedPackRuleDeclarationReader({ packs, registry: new PostgresComponentRegistryStore(database), definitions: definitionStore, candidates: ruleActions, reviews: publication, reviewableCandidates: reader, projects: new PostgresProjectStore(database) })
   const request = { packRef: asset.packRef, definitionRef: definition.ref }
   const source = new PublishedSemanticSource(publication, { definition, identity: identities, publishedRules: { reader: packReader, request } })
   const gold = loadCompetencyQuestions().flatMap((set) => set.body.questions).find((question) => question.questionId === 'industrial-three-layer')

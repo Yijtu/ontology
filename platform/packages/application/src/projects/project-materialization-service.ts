@@ -25,6 +25,7 @@ import type {
   ProjectRevision,
   ProjectRevisionRef,
   ReadinessProjection,
+  ResourceRef,
   ScopeRef,
   Semver,
   Sha256Digest,
@@ -80,7 +81,7 @@ export interface ProjectDataMaterializationDependencies {
       scopeRef: ScopeRef,
       projectId: Uuid,
       ctx: ToolContext,
-    ): Promise<{ readonly headRevision: string } | undefined>
+    ): Promise<{ readonly headRevision: string; readonly activeRevision?: string; readonly stagingWritable?: boolean } | undefined>
     getRevision(
       scopeRef: ScopeRef,
       projectId: Uuid,
@@ -96,6 +97,10 @@ export interface ProjectDataMaterializationDependencies {
   readonly schemaSource: IndustrySchemaSource
   readonly writer: ProjectDatasetWriterPort
   readonly query: ProjectDatasetQueryPort
+  readonly evolution?: {
+    assertActiveRebuild(scope: ScopeRef, revision: ProjectRevisionRef, ctx: ToolContext): Promise<boolean>
+    resolveActiveSnapshot(scope: ScopeRef, revision: ProjectRevisionRef, objectId: string, ctx: ToolContext): Promise<ResourceRef | undefined>
+  }
   readonly newId?: () => string
   readonly now?: () => string
 }
@@ -155,6 +160,7 @@ export class ProjectDataMaterializationService {
   readonly #schemaSource: IndustrySchemaSource
   readonly #writer: ProjectDatasetWriterPort
   readonly #query: ProjectDatasetQueryPort
+  readonly #evolution: ProjectDataMaterializationDependencies['evolution']
   readonly #now: () => string
 
   constructor(dependencies: ProjectDataMaterializationDependencies) {
@@ -164,11 +170,16 @@ export class ProjectDataMaterializationService {
     this.#schemaSource = dependencies.schemaSource
     this.#writer = dependencies.writer
     this.#query = dependencies.query
+    this.#evolution = dependencies.evolution
     this.#now = dependencies.now ?? (() => new Date().toISOString())
   }
 
   get backend(): string {
     return this.#writer.backend
+  }
+  /** Host rebuild uses the actual immutable backend receipt, never a supplied readiness boolean. */
+  async activationReceipt(snapshotRef: ResourceRef, ctx: ToolContext) {
+    return this.#query.getActivation(scopeOf(ctx),snapshotRef,ctx)
   }
 
   async materialize(
@@ -183,6 +194,7 @@ export class ProjectDataMaterializationService {
       throw new ProjectDatasetError('PROJECT_NOT_FOUND', `project ${projectId} is not visible in this scope`)
     }
     const revisionNumber = input.revision ?? project.headRevision
+    if (project.stagingWritable === false && revisionNumber === project.headRevision) throw new ProjectDatasetError('INPUT_NOT_READY', 'the staging evolution is cancelled')
     const revision = await this.#projects.getRevision(scopeRef, projectId, revisionNumber, ctx)
     if (revision === undefined) {
       throw new ProjectDatasetError('REVISION_NOT_FOUND', `project ${projectId} has no readable revision ${revisionNumber}`)
@@ -285,7 +297,7 @@ export class ProjectDataMaterializationService {
     if (project === undefined) {
       throw new ProjectDatasetError('PROJECT_NOT_FOUND', `project ${projectId} is not visible in this scope`)
     }
-    const revision = await this.#projects.getRevision(scopeRef, projectId, project.headRevision, ctx)
+    const revision = await this.#projects.getRevision(scopeRef, projectId, project.activeRevision ?? project.headRevision, ctx)
     if (revision === undefined) {
       throw new ProjectDatasetError('REVISION_NOT_FOUND', `project ${projectId} has no readable head revision`)
     }
@@ -331,7 +343,7 @@ export class ProjectDataMaterializationService {
     if (project === undefined) {
       throw new ProjectDatasetError('PROJECT_NOT_FOUND', `project ${input.projectId} is not visible in this scope`)
     }
-    const revisionNumber = input.revision ?? project.headRevision
+    const revisionNumber = input.revision ?? project.activeRevision ?? project.headRevision
     const revision = await this.#projects.getRevision(scopeRef, input.projectId, revisionNumber, ctx)
     if (revision === undefined) {
       throw new ProjectDatasetError('REVISION_NOT_FOUND', `project ${input.projectId} has no readable revision ${revisionNumber}`)
@@ -341,10 +353,20 @@ export class ProjectDataMaterializationService {
     if (projection === undefined || projection.state !== 'ready' || target === undefined || !('kind' in target) || target.kind !== 'dataset') {
       throw new ProjectDatasetError('SNAPSHOT_UNAVAILABLE', 'no dataset snapshot is activated for this project revision')
     }
+    const targetReceipt=await this.#query.getActivation(scopeRef,target,ctx)
+    const selected = input.objectId === undefined || targetReceipt?.objectId===input.objectId ? target : await this.#evolution?.resolveActiveSnapshot(scopeRef,revision.ref,input.objectId,ctx) ?? target
+    const receipt=selected===target ? targetReceipt : await this.#query.getActivation(scopeRef,selected,ctx)
+    const retained = await this.#evolution?.assertActiveRebuild(scopeRef, revision.ref, ctx) === true
+    if (!retained) {
+      if (project.headRevision !== (project.activeRevision ?? project.headRevision) || this.#publishedSource === undefined) throw new ProjectDatasetError('SNAPSHOT_UNAVAILABLE','the exact active source must be verified during a rebuild')
+      if(receipt===undefined) throw new ProjectDatasetError('SNAPSHOT_UNAVAILABLE','the active snapshot receipt is unavailable')
+      const current = await this.#publishedSource.read(scopeRef,revision,input.objectId ?? receipt.objectId,ctx)
+      if(receipt?.sourceDigest!==current.sourceDigest) throw new ProjectDatasetError('SNAPSHOT_UNAVAILABLE','the official current sources changed; rebuild the dataset')
+    }
     return this.query(
       {
         projectRevisionRef: revision.ref,
-        snapshotRef: target,
+        snapshotRef: selected,
         ...(input.objectId === undefined ? {} : { objectId: input.objectId }),
         ...(input.limit === undefined ? {} : { limit: input.limit }),
         ...(input.cursor === undefined ? {} : { cursor: input.cursor }),

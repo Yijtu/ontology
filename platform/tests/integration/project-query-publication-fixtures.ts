@@ -17,6 +17,7 @@ import type { ColumnMappingEntry, EntityCandidate, ResourceRef, ScopeRef, Semant
 export function projectQueryPublicationFixture(input: {
   db: ControlPostgresDatabase; blobs: LocalImmutableBlobStore; structured: PostgresStructuredIngestionStore;
   scope: ScopeRef; ctx: ToolContext; projectId: string; definition: SemanticDefinitionVersion;
+  additionalDefinitions?: readonly SemanticDefinitionVersion[];
 }) {
   const { db, blobs, structured, scope, ctx, projectId, definition } = input
   const projects = new PostgresProjectStore(db)
@@ -30,7 +31,7 @@ export function projectQueryPublicationFixture(input: {
   const readiness = new PostgresProjectReadinessStore(db)
   const jobs = new PostgresJobStore(db)
   const sourceJobs = new Map<string, string>()
-  const schemas = new InMemoryIndustrySchemaSource([{ ref: definition.ref, schema: projectIndustrySchema(definition) }])
+  const schemas = new InMemoryIndustrySchemaSource([definition,...input.additionalDefinitions ?? []].map((value)=>({ref:value.ref,schema:projectIndustrySchema(value)})))
   const originals = { read: async (request: { approvedInputRefs: readonly ResourceRef[] }, context: ToolContext) => {
     const ref = request.approvedInputRefs[0]
     if (ref === undefined) throw new Error('the import has no original')
@@ -45,7 +46,7 @@ export function projectQueryPublicationFixture(input: {
   const projectService = new ProjectService({ projects, readiness, jobs, catalogue: { listEntries: async () => [], findPack: async () => undefined } })
   let readDefinition = definition
   const publishedSource = new PublishedProjectDatasetSource({ publications, identity: identities, records, mappings, projectDocuments: documents,
-    definition: async (_scope, ref) => ref.digest === readDefinition.ref.digest ? readDefinition : undefined })
+    definition: async (_scope, ref) => ref.digest === readDefinition.ref.digest ? readDefinition : input.additionalDefinitions?.find((value)=>value.ref.digest===ref.digest) })
 
   const importCsv = async (objectId: string, csv: string, fieldIds: readonly string[], units: Readonly<Record<string, string | { readonly source: string; readonly canonical: string; readonly numerator: string; readonly denominator: string }>> = {}) => {
     const bytes = new TextEncoder().encode(csv)
@@ -58,12 +59,13 @@ export function projectQueryPublicationFixture(input: {
     sourceJobs.set(parsed.parse.parseId, jobId)
     const table = new StructuredDocumentParser().parse(bytes, { mediaType: 'text/csv', headerRow: 1 }).tables[0]
     if (table === undefined) throw new Error('the query CSV did not produce a table')
-    const entries: ColumnMappingEntry[] = table.columns.map((column, index) => {
+    const entries: ColumnMappingEntry[] = table.columns.flatMap((column, index) => {
       const fieldRef = fieldIds[index]
       if (fieldRef === undefined) throw new Error('a query column has no declared field')
+      if (fieldRef === '') return []
       const unit = units[fieldRef]
-      return { fieldRef, header: column.header, headerDigest: column.headerDigest, columnIndex: index,
-        ...(unit === undefined ? {} : typeof unit === 'string' ? { sourceUnitCode: unit, canonicalUnitCode: unit } : { sourceUnitCode: unit.source, canonicalUnitCode: unit.canonical, unitConversion: { fromUnitCode: unit.source, toUnitCode: unit.canonical, numerator: unit.numerator, denominator: unit.denominator } }) }
+      return [{ fieldRef, header: column.header, headerDigest: column.headerDigest, columnIndex: index,
+        ...(unit === undefined ? {} : typeof unit === 'string' ? { sourceUnitCode: unit, canonicalUnitCode: unit } : { sourceUnitCode: unit.source, canonicalUnitCode: unit.canonical, unitConversion: { fromUnitCode: unit.source, toUnitCode: unit.canonical, numerator: unit.numerator, denominator: unit.denominator } }) }]
     })
     const confirmation = await mappingService.confirmMapping(projectId, { format: 'csv', parseId: parsed.parse.parseId, originalRef: original.blobRef, originalMediaType: 'text/csv', options: { headerRow: 1 }, objectId, entries }, `query-map-${jobId}`, ctx.principal.subjectId, ctx)
     const documentId = randomUUID()
@@ -109,5 +111,5 @@ export function projectQueryPublicationFixture(input: {
     }
     return results
   }
-  return { projects, mappings, records, documents, identities, publications, readiness, schemas, workflow, publishedSource, definition, importCsv, restage, approveAndPublish, replaceReadDefinition: (value: SemanticDefinitionVersion) => { readDefinition = value } }
+  return { projects, mappings, records, documents, identities, publications, readiness, schemas, workflow, publishedSource, definition, importCsv, restage, approveAndPublish, candidates, instances, instanceService, mappingService, jobs, identity, replaceReadDefinition: (value: SemanticDefinitionVersion) => { readDefinition = value } }
 }

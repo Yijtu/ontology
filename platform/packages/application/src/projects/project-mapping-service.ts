@@ -309,7 +309,7 @@ function diagnosticsAsIssues(diagnostics: readonly StructuredParseIssue[]): Mapp
  * `bindRecords` derives stable project-record versions keyed by the original-record identity.
  */
 export interface ProjectMappingServiceDependencies {
-  readonly projects: { getProject: (scopeRef: ScopeRef, projectId: Uuid, ctx: ToolContext) => Promise<{ headRevision: RevisionString } | undefined> }
+  readonly projects: { getProject: (scopeRef: ScopeRef, projectId: Uuid, ctx: ToolContext) => Promise<{ headRevision: RevisionString; stagingWritable?: boolean } | undefined> }
   readonly revisions: { getRevision: (scopeRef: ScopeRef, projectId: Uuid, revision: RevisionString, ctx: ToolContext) => Promise<{ definitionRef: VersionRef } | undefined> }
   readonly mappings: ProjectMappingStore
   readonly records: ProjectRecordStore
@@ -387,9 +387,28 @@ export class ProjectMappingService {
     ctx: ToolContext,
   ): Promise<ConfirmMappingResult> {
     assertEditor(ctx)
+    requireIdempotencyKey(idempotencyKey)
+    return this.#confirm(projectId, request, idempotencyKey, actor, ctx)
+  }
+
+  /** Host evolution path: exact target definition and stable mapping identity, still human correspondence. */
+  async prepareEvolutionMapping(projectId: Uuid, definitionRef: VersionRef, request: ColumnMappingRequest, mappingId: Uuid, idempotencyKey: string, ctx: ToolContext): Promise<ConfirmMappingResult> {
+    assertEditor(ctx)
+    await this.#requireProject(scopeOf(ctx), projectId, ctx)
+    return this.#confirm(projectId, request, idempotencyKey, ctx.principal.subjectId, ctx, { definitionRef, mappingId })
+  }
+
+  async #confirm(projectId: Uuid, request: ColumnMappingRequest, idempotencyKey: string, actor: string, ctx: ToolContext, evolution?: { definitionRef: VersionRef; mappingId: Uuid }): Promise<ConfirmMappingResult> {
     const scopeRef = scopeOf(ctx)
     requireIdempotencyKey(idempotencyKey)
-    const preview = await this.previewMapping(projectId, request, ctx)
+    let preview: MappingPreview
+    if (evolution === undefined) preview = await this.previewMapping(projectId, request, ctx)
+    else {
+      const schema = await this.#requireSchema(scopeRef, evolution.definitionRef, ctx)
+      const object = schema.objects.find((item) => item.objectId === request.objectId)
+      if (object === undefined) throw new ProjectError('INVALID_ARGUMENT', 'the evolution object is not declared')
+      preview = this.#buildPreview(projectId, evolution.definitionRef, object, request, await this.#reparse(request, ctx))
+    }
     if (!preview.confirmable) {
       const first = preview.issues.find((entry) => entry.severity === 'error')
       throw new ProjectError(
@@ -398,8 +417,8 @@ export class ProjectMappingService {
         { reasons: preview.issues.filter((entry) => entry.severity === 'error').map((entry) => `${entry.code}: ${entry.message}`) },
       )
     }
-    const mappingId = request.mappingId ?? this.#newId()
-    const version = request.mappingId === undefined
+    const mappingId = evolution?.mappingId ?? request.mappingId ?? this.#newId()
+    const version = evolution !== undefined || request.mappingId === undefined
       ? '1.0.0'
       : nextVersion(await this.#mappings.latestVersion(scopeRef, projectId, mappingId, ctx))
     const body = {
@@ -470,7 +489,10 @@ export class ProjectMappingService {
     assertEditor(ctx)
     const scopeRef = scopeOf(ctx)
     requireIdempotencyKey(idempotencyKey)
+    const maxRecords = request.maxRecords ?? MAX_BIND_RECORDS
+    if (!Number.isInteger(maxRecords) || maxRecords < 1 || maxRecords > MAX_BIND_RECORDS) throw new ProjectError('INVALID_ARGUMENT', 'the bind record budget must be 1..20000')
     const project = await this.#requireProject(scopeRef, projectId, ctx)
+    if(project.stagingWritable===false) throw new ProjectError('VERSION_CONFLICT','the staging evolution is not writable')
     const revision = await this.#revisions.getRevision(scopeRef, projectId, project.headRevision, ctx)
     if (revision === undefined) {
       throw new ProjectError('REVISION_NOT_FOUND', `project ${projectId} has no readable head revision`)
@@ -524,8 +546,8 @@ export class ProjectMappingService {
       for (const entry of page.records) {
         if (entry.state !== 'parsed') continue
         scanned += 1
-        if (scanned > MAX_BIND_RECORDS) {
-          throw new ProjectError('INVALID_ARGUMENT', `a single bind is bounded to ${MAX_BIND_RECORDS} rows`)
+        if (scanned > maxRecords) {
+          throw new ProjectError('INVALID_ARGUMENT', `a single bind is bounded to ${maxRecords} rows`)
         }
         const row = reparsed.bySourceRowKey.get(entry.sourceRowKey)
         if (row === undefined) {
@@ -651,7 +673,7 @@ export class ProjectMappingService {
     }
   }
 
-  async #requireProject(scopeRef: ScopeRef, projectId: Uuid, ctx: ToolContext): Promise<{ headRevision: RevisionString }> {
+  async #requireProject(scopeRef: ScopeRef, projectId: Uuid, ctx: ToolContext): Promise<{ headRevision: RevisionString; stagingWritable?: boolean }> {
     const project = await this.#projects.getProject(scopeRef, projectId, ctx)
     if (project === undefined) {
       throw new ProjectError('PROJECT_NOT_FOUND', `project ${projectId} is not visible in this scope`)

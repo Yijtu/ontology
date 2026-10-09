@@ -67,6 +67,15 @@ export class ProjectFactMaterializationService {
   constructor(deps: ProjectFactMaterializationDependencies) { this.#deps = deps }
 
   async stageRecords(projectId: Uuid, request: StageProjectFactsRequest, ctx: ToolContext): Promise<readonly EntityCandidate[]> {
+    return this.#stageRecords(projectId, request, ctx)
+  }
+
+  /** Host-owned rebuild pins a newly persisted original-source extraction job. Same checks apply. */
+  async stageEvolutionRecords(projectId: Uuid, request: StageProjectFactsRequest, sourceJobId: Uuid, ctx: ToolContext): Promise<readonly EntityCandidate[]> {
+    return this.#stageRecords(projectId, request, ctx, sourceJobId)
+  }
+
+  async #stageRecords(projectId: Uuid, request: StageProjectFactsRequest, ctx: ToolContext, sourceJobId?: Uuid): Promise<readonly EntityCandidate[]> {
     const scope = scopeOf(ctx)
     if (request.recordRefs.length === 0 || request.recordRefs.length > PROJECT_FACT_BATCH_LIMIT || new Set(request.recordRefs.map((ref) => ref.recordId)).size !== request.recordRefs.length) {
       throw new ProjectError('INVALID_ARGUMENT', `select 1..${PROJECT_FACT_BATCH_LIMIT} distinct record revisions per batch`)
@@ -77,6 +86,7 @@ export class ProjectFactMaterializationService {
     const membership = await this.#deps.projectDocuments.getMembership(scope, projectId, request.documentId, ctx)
     const visibility = await this.#deps.projectDocuments.getVisibility(scope, projectId, ctx)
     if (project === undefined || project.state === 'archived' || revision === undefined) throw new ProjectError('PROJECT_NOT_FOUND', 'an active project revision is required')
+    if(project.stagingWritable===false) throw new ProjectError('VERSION_CONFLICT','cancelled or withdrawn evolution heads cannot stage facts')
     if (membership?.state !== 'active' || visibility === undefined) throw new ProjectError('SOURCE_UNREADABLE', 'active project source membership is required')
     const schema = await this.#deps.schemaSource.getSchema(scope, revision.definitionRef, ctx)
     if (schema === undefined || !sameRef(schema.definitionRef, revision.definitionRef)) throw new ProjectError('INVALID_ARGUMENT', 'the exact project definition must be visible')
@@ -88,9 +98,9 @@ export class ProjectFactMaterializationService {
       const mapping = await this.#deps.mappings.getMapping(scope, projectId, record.mappingId, record.mappingVersion, ctx)
       if (mapping === undefined || !sameRef(mapping.definitionRef, revision.definitionRef) || !revision.mappingRefs.some((pin) => sameRef(pin, mapping.ref))) throw new ProjectError('VERSION_CONFLICT', 'the exact confirmed mapping must be pinned by the project revision')
       if ((mapping.format !== 'csv' && mapping.format !== 'xlsx') || mapping.parseId !== membership.parseId || !sameRef(mapping.originalRef, membership.documentRef)) throw new ProjectError('SOURCE_UNREADABLE', 'mapping source differs from the active project document')
-      const jobId = await this.#deps.resolveSourceJob(scope, mapping.parseId, ctx)
+      const jobId = sourceJobId ?? await this.#deps.resolveSourceJob(scope, mapping.parseId, ctx)
       const job = jobId === undefined ? undefined : await this.#deps.jobs.getJob(scope, jobId, ctx)
-      if (job?.documentRef === undefined || job.kind !== 'ingestion') throw new ProjectError('SOURCE_UNREADABLE', 'the host must resolve a durable structured ingestion job')
+      if (job?.documentRef === undefined || job.kind !== 'ingestion' && !(sourceJobId!==undefined && job.kind==='dataset_materialization' && job.sourceRef===`project-evolution-source:${projectId}`)) throw new ProjectError('SOURCE_UNREADABLE', 'the host must resolve a durable original-source ingestion or owned evolution job')
       const input = decodeStructuredExtractionRef(job.documentRef)
       if (input.parseId !== mapping.parseId || !sameRef(input.originalRef, mapping.originalRef) || !sameRef(input.definitionRef, revision.definitionRef)) throw new ProjectError('SOURCE_UNREADABLE', 'ingestion job does not pin this parse, original and definition')
       const parse = await this.#deps.ingestion.findParseByDigest(scope, mapping.originalRef.digest, input.parserVersion, ctx)

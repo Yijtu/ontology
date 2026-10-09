@@ -15,6 +15,8 @@ import {
   ControlPostgresDatabase,
   PostgresRunExecutionBindingStore,
   PostgresPublishedTaskBindingStore,
+  PostgresProjectEvolutionStore,
+  PostgresProfileStore,
   runControlMigrations,
 } from '@ontology/adapter-control-postgres'
 import {
@@ -22,11 +24,14 @@ import {
   coreScenarioTaskBindings,
   createCoreApi,
   createCoreProjectQueryWorkflow,
+  createProjectEvolutionWorkflow,
+  createBlobArtifactWriter,
+  createInstanceIdentityWorkflow,
   createCoreLocalComposition,
   loadCoreExamples,
 } from '@ontology/app-api'
-import type { CoreLocalComposition } from '@ontology/app-api'
-import { canonicalJson, sha256DigestOf } from '@ontology/application'
+import type { CoreLocalComposition, CoreExampleScenario } from '@ontology/app-api'
+import { canonicalJson, sha256DigestOf, ProjectService } from '@ontology/application'
 import { createToolContext } from '@ontology/contracts'
 import type {
   MappingRef,
@@ -35,7 +40,10 @@ import type {
   ResourceRef,
   ScopeRef,
   ToolContext,
+  PackAsset,
 } from '@ontology/contracts'
+import { definitionVersionDigest, InMemoryIdentityIndexReader, projectIndustrySchema, validateDefinitionVersion } from '@ontology/semantic-engine'
+import { seedIdentityProject } from './instance-identity-fixtures'
 import { startPostgresContainer } from './postgres-container'
 import type { PostgresContainer } from './postgres-container'
 
@@ -287,6 +295,255 @@ afterAll(async () => {
 })
 
 describe('mounted Core structured-query task binding through the normal HTTP host (real PostgreSQL)', () => {
+  it('runs old active tasks during staging, then admits a real new profile/input task and verifies the new original field after CAS', async () => {
+      if (admin === undefined)
+          throw new Error('PG fixture unavailable')
+      const ctx = trustedContext(scopeRef), projectId = randomUUID(), definition = publishedFixture.definition
+      const examples = loadCoreExamples({
+          targetScopeRef: scopeRef
+      }), base = examples.scenarios.find((scenario) => scenario.scenarioId === SCENARIO_ID)
+      if (base === undefined)
+          throw new Error('base scenario missing')
+      const namespace = `${definition.namespace}-evolved`
+      const nextBody = {
+          ...definition, namespace, definitionId: `${definition.definitionId}_evolved`, version: '1.0.0', objects: definition.objects.map((row) => ({
+              ...row, namespace
+          })), attributes: [...definition.attributes.map((row) => ({
+                  ...row, namespace
+              })), {
+                  kind: 'attribute' as const, namespace, standardProvenance: definition.standardProvenance, id: 'evolution_note', objectId: OBJECT_ID, valueType: 'string' as const, cardinality: {
+                      min: 0, max: 1
+                  }
+              }], relations: definition.relations.map((row) => ({
+              ...row, namespace
+          })), identityScopes: definition.identityScopes.map((row) => ({
+              ...row, namespace
+          })), ruleConstraints: definition.ruleConstraints.map((row) => ({
+              ...row, namespace
+          }))
+      }
+      expect(validateDefinitionVersion(nextBody)).toEqual([])
+      const next = {
+          ...nextBody, ref: {
+              id: nextBody.definitionId, version: nextBody.version, digest: definitionVersionDigest(nextBody)
+          }
+      }
+      const industryManifest = {
+          ...base.industryManifest, namespace, definitionsRef: next.ref
+      }
+      const nextScenario: CoreExampleScenario = {
+          ...base, scenarioId: `${SCENARIO_ID}-evolved`, namespace, label: 'Evolved transport input', profileRef: {
+              id: 'transport-evolution-profile', version: '1.0.0'
+          }, industryManifest, definitionDraft: nextBody, definitionRef: next.ref, industrySchema: projectIndustrySchema(next)
+      }
+      const extended = {
+          ...examples, scenarios: [...examples.scenarios, nextScenario]
+      }
+      await api?.close()
+      await composition?.close()
+      // The normal host registers, publishes, preflights and activates the actual compatible profile.
+      composition = await createCoreLocalComposition({
+          databaseUrl: appUrl, projectDataset: {
+              connectionString: businessUrl, schema: 'business_dataset'
+          }, objectDirectory, scopeRef, examples: extended, allowLocalOperator: true, onWorkerError(error) {
+              if (error instanceof Error)
+                  workerErrors.push(error)
+          }
+      })
+      api = createCoreApi(composition.dependencies)
+      baseUrl = (await api.listen({
+          host: '127.0.0.1', port: 0
+      })).replace(/\/$/u, '')
+      const profileStore = new PostgresProfileStore(queryDatabase), resolved = (await profileStore.listResolvedProfiles(nextScenario.profileRef, scopeRef, ctx))[0]
+      if (resolved === undefined)
+          throw new Error('the actual new profile was not resolved')
+      await seedIdentityProject(admin, scopeRef, projectId, definition.ref)
+      const objects = new FileSystemObjectStore(objectDirectory)
+      await objects.init()
+      const blobs = new LocalImmutableBlobStore({
+          objectStore: objects, registry: queryRegistry
+      })
+      const p = projectQueryPublicationFixture({
+          db: queryDatabase, blobs, structured: structuredStore, scope: scopeRef, ctx, projectId, definition, additionalDefinitions: [next]
+      })
+      const imported = await p.importCsv(OBJECT_ID, 'code,network,district,due,note\nP-201,private-network,north,true,checked on original source\n', ['facility_id', 'network_code', 'facility_district_code', 'inspection_due', ''])
+      await new ProjectService({
+          projects: p.projects, readiness: p.readiness, jobs: p.jobs, catalogue: {
+              listEntries: async () => [], findPack: async () => undefined
+          }
+      }).appendRevision(projectId, {
+          expectedRevision: '2', approvedInputRef: APPROVED_INPUT_REF, reason: 'freeze the approved old task input'
+      }, `task-evolution-input-${projectId}`, ctx.principal.subjectId, ctx)
+      const source = await p.restage(imported)
+      await p.approveAndPublish(source)
+      const backend = new PostgresProjectDatasetAdapter({
+          connectionString: businessUrl, schema: 'business_dataset'
+      })
+      const pack: PackAsset = {
+          ref: resolved.resolved.industryRef, manifest: industryManifest, testSuite: base.testSuite
+      }
+      const identity = createInstanceIdentityWorkflow({
+          service: p.instanceService, projects: p.projects, projectDocuments: p.documents, candidates: p.candidates, identityStore: p.identities, schemaSource: p.schemas, identityMappingRef: definition.ref, index: new InMemoryIdentityIndexReader([])
+      })
+      const evolution = createProjectEvolutionWorkflow({
+          projects: p.projects, store: new PostgresProjectEvolutionStore(queryDatabase), mappings: p.mappings, records: p.records, mappingService: p.mappingService, documents: p.documents, catalogue: {
+              listEntries: async () => [], findPack: async () => pack
+          }, schemas: p.schemas, jobs: p.jobs, facts: p.workflow.materialization, candidates: p.candidates, publications: p.publications, publishedSource: p.publishedSource, readiness: p.readiness, dataset: {
+              writer: backend, query: backend
+          }, input: {
+              writer: createBlobArtifactWriter(blobs), reader: {
+                  read: async (request, context) => blobs.readAuthorized({
+                      scopeRef, blobRef: request.approvedInputRefs[0]!
+                  }, context)
+              }, instances: p.instances
+          }, profiles: profileStore, instances: identity
+      })
+      try {
+          const old = await evolution.dataset.materialize(projectId, {
+              objectId: OBJECT_ID
+          }, ctx)
+          const start = {
+              expectedRevision: '3', industryPackRef: pack.ref, profileRef: {
+                  ...resolved.profileRef, snapshotHash: resolved.snapshotHash
+              }, strategy: {
+                  kind: 'keep_independent' as const, reason: 'human chose independent evolved ontology'
+              }, remappings: [{
+                      mappingRef: source.mapping.ref, documentId: source.documentId, objectId: OBJECT_ID, entries: [...source.mapping.entries, {
+                              fieldRef: 'evolution_note', header: 'note', headerDigest: sha256DigestOf('note'), columnIndex: 4
+                          }]
+                  }], maxRecords: 1, maxAttempts: 1
+          }
+          await expect(evolution.service.start(projectId, {
+              ...start, profileRef: {
+                  ...start.profileRef, snapshotHash: DIGEST
+              }
+          }, `wrong-profile-${projectId}`, ctx)).rejects.toMatchObject({
+              code: 'READINESS_CONFLICT'
+          })
+          const plan = await evolution.service.start(projectId, start, `normal-task-evolution-${projectId}`, ctx), pending = await evolution.service.rebuild(projectId, plan.plan.evolutionId, ctx)
+          expect(pending.state).toBe('awaiting_review')
+          await api?.close()
+          await composition?.close()
+          composition = await createCoreLocalComposition({
+              databaseUrl: appUrl, projectDataset: {
+                  connectionString: businessUrl, schema: 'business_dataset'
+              }, projectEvolution: evolution.service, objectDirectory, scopeRef, examples: extended, allowLocalOperator: true, onWorkerError(error) {
+                  if (error instanceof Error)
+                      workerErrors.push(error)
+              }
+          })
+          api = createCoreApi(composition.dependencies)
+          baseUrl = (await api.listen({
+              host: '127.0.0.1', port: 0
+          })).replace(/\/$/u, '')
+          const deployment = await jsonBody(await request('/api/v1/core/deployment')), profiles = deployment.data['scenarios'] as {
+              scenarioId: string
+              profileRef: {
+                  id: string
+                  version: string
+              }
+          }[]
+          const oldProfile = profiles.find((row) => row.scenarioId === SCENARIO_ID)?.profileRef, newProfile = profiles.find((row) => row.scenarioId === nextScenario.scenarioId)?.profileRef
+          const postTask = (key: string, profileRef: unknown, revision: ProjectRevisionRef, input: ResourceRef, binding: unknown, fields: readonly string[]) => request('/api/v1/runs', {
+              method: 'POST', headers: {
+                  'content-type': 'application/json', 'idempotency-key': key
+              }, body: JSON.stringify({
+                  profileRef, question: 'query the actual reviewed original source', context: {
+                      timeZone: 'UTC'
+                  }, preferences: {
+                      route: 'template', allowWeb: false
+                  }, task: {
+                      mode: 'task', projectRevisionRef: revision, inputSnapshotRef: input, inputSnapshotDigest: input.digest, taskBindingRef: binding, parameters: {
+                          objectId: OBJECT_ID, fields, limit: 10
+                      }
+                  }
+              })
+          })
+          const admitted = await postTask(`during-evolution-${projectId}`, oldProfile, old.projectRevisionRef, APPROVED_INPUT_REF, structuredBinding.taskBindingRef, FIELDS)
+          if (admitted.status !== 202)
+              throw new Error(`old-active ordinary admission failed: ${await admitted.text()}`)
+          const oldRunId = (await jsonBody(admitted)).data['runId']
+          if (typeof oldRunId !== 'string')
+              throw new Error('missing old real run')
+          const oldAnswer = await waitForAnswer(oldRunId)
+          expect((oldAnswer['v3Body'] as {
+              assertions: {
+                  subject: string
+                  predicate: string
+                  value: unknown
+              }[]
+          }).assertions.filter((a) => a.predicate === 'inspection_due').map((a) => [a.subject, a.value])).toEqual([['P-201', true]])
+          for (const candidateId of pending.candidateIds) {
+              const human = await p.instances.getRecord(scopeRef, projectId, candidateId, ctx)
+              if (human === undefined)
+                  throw new Error('pending real human instance missing')
+              const confirmed = await p.instanceService.confirmFields(scopeRef, projectId, candidateId, {
+                  expectedRevision: human.recordRevision, decisions: human.fields.map((field) => ({
+                      fieldId: field.fieldId, decision: 'confirm'
+                  })), idempotencyKey: `evolve-fields-${candidateId}`
+              }, ctx)
+              await identity.adjudicateIdentity(scopeRef, projectId, candidateId, {
+                  expectedRevision: confirmed.record.recordRevision, kind: 'create', reason: 'human inspected the new source and identity', idempotencyKey: `evolve-identity-${candidateId}`
+              }, ctx)
+              await p.workflow.publication.reviewCandidate({
+                  candidateId, expectedRevision: '0', decision: 'approve', reason: 'human reviewed the new original note field'
+              }, ctx)
+          }
+          await p.workflow.publication.publish({
+              approvedCandidateRefs: pending.candidateIds.map((candidateId) => ({
+                  candidateId, kind: 'entity' as const
+              })), schemaRef: next.ref, expectedRevision: await p.publications.latestPublicationRevision(scopeRef, ctx), idempotencyKey: `new-facts-${projectId}`
+          }, ctx)
+          const ready = await evolution.service.activate(projectId, plan.plan.evolutionId, [], ctx)
+          if (ready.inputSnapshotRef === undefined || ready.snapshots?.[0] === undefined)
+              throw new Error('real approved input and ready snapshot not built')
+          const revision = await p.projects.getRevision(scopeRef, projectId, ready.plan.targetRevisionRef.revision, ctx)
+          if (revision === undefined)
+              throw new Error('target revision unavailable')
+          expect(revision.profileRef).toEqual(start.profileRef)
+          expect(await evolution.service.resolveApprovedInput(scopeRef, revision, ctx)).toEqual(ready.inputSnapshotRef)
+          const inputBytes = await blobs.readAuthorized({
+              scopeRef, blobRef: ready.inputSnapshotRef
+          }, ctx), inputBody: unknown = JSON.parse(new TextDecoder().decode(inputBytes))
+          expect(inputBody).toMatchObject({
+              schemaVersion: 'project-input-snapshot@1', counts: {
+                  total: 1, confirmed: 1, approved: 1, pending: 0, failed: 0
+              }, recordPages: [{
+                      rowCount: 1
+                  }]
+          })
+          const newBinding = coreScenarioTaskBindings(nextScenario).find((row) => row.kind === 'structured_query')
+          if (newBinding === undefined)
+              throw new Error('actual new task binding missing')
+          const refused = await postTask(`old-input-new-view-${projectId}`, newProfile, revision.ref, APPROVED_INPUT_REF, newBinding.taskBindingRef, ['facility_id', 'evolution_note'])
+          expect(refused.status).toBe(409)
+          const wrongProfile = await postTask(`old-profile-new-view-${projectId}`, oldProfile, revision.ref, ready.inputSnapshotRef, newBinding.taskBindingRef, ['facility_id', 'evolution_note'])
+          expect(wrongProfile.status).toBe(409)
+          const nextRun = await postTask(`after-evolution-${projectId}`, newProfile, revision.ref, ready.inputSnapshotRef, newBinding.taskBindingRef, ['facility_id', 'evolution_note', 'inspection_due'])
+          if (nextRun.status !== 202)
+              throw new Error(`new ordinary admission failed: ${await nextRun.text()}`)
+          const newRunId = (await jsonBody(nextRun)).data['runId']
+          if (typeof newRunId !== 'string')
+              throw new Error('missing new real run')
+          const answer = await waitForAnswer(newRunId)
+          expect((answer['v3Body'] as {
+              assertions: {
+                  subject: string
+                  predicate: string
+                  value: unknown
+              }[]
+          }).assertions.filter((row) => row.predicate === 'evolution_note').map((row) => [row.subject, row.value])).toEqual([['P-201', 'checked on original source']])
+          const archived = await new PostgresRunExecutionBindingStore(queryDatabase).getBindingByRun(scopeRef, newRunId, ctx)
+          expect(archived?.binding.projectDatasetSnapshotRef).toEqual(ready.snapshots[0].snapshotRef)
+          expect((await jsonBody(await request(`/api/v1/runs/${oldRunId}/answer`))).data['v3Body']).toEqual(oldAnswer['v3Body'])
+          expect((await evolution.dataset.query({
+              projectRevisionRef: old.projectRevisionRef, snapshotRef: old.snapshotRef!
+          }, ctx)).rows[0]?.values['evolution_note']).toBeUndefined()
+      }
+      finally {
+          await backend.close()
+      }
+  }, 180000)
   it('runs the deterministic semantic plan and publishes a read-back answer-draft@3', async () => {
     const deployment = await jsonBody(await request('/api/v1/core/deployment'))
     const scenarios = deployment.data['scenarios'] as { scenarioId: string; profileRef: { id: string; version: string } }[]

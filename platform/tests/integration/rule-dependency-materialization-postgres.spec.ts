@@ -17,6 +17,8 @@ import { createJobScope, startJobDatabase } from './job-postgres-harness'
 import type { JobDbHarness, JobTestScope } from './job-postgres-harness'
 import { publishedRuleChainHarness } from './published-rule-chain-harness'
 import { INDUSTRIAL_RULES } from '../fixtures/competency-questions/assets'
+import { PostgresProjectStore, PostgresProjectReadinessStore, PostgresJobStore } from '@ontology/adapter-control-postgres'
+import { ProjectService, canonicalJson, sha256DigestOf } from '@ontology/application'
 
 /**
  * Real-PostgreSQL acceptance for the three-layer acyclic rule-dependency graph, its incremental
@@ -140,6 +142,60 @@ afterAll(async () => {
 })
 
 describe('actual published pack rule chain (#262)', () => {
+  it('reads the actual current frozen project rules from the active revision while a different staging head exists', async () => {
+      const s = await createJobScope(harness.adminClient, 'evolution-active-pack-rules'), context = toolContext(s.tenantId, s.spaceId, ['platform-admin', 'profile-editor', 'data-editor', 'semantic-reviewer', 'semantic-publisher'])
+      const p = await publishedRuleChainHarness(database, harness.appUrl, s, context), projectId = randomUUID()
+      try {
+          const projectService = new ProjectService({
+              projects: new PostgresProjectStore(database), readiness: new PostgresProjectReadinessStore(database), jobs: new PostgresJobStore(database), catalogue: {
+                  listEntries: async () => [], findPack: async () => p.asset.packAsset
+              }
+          })
+          const created = await projectService.createProject({
+              title: 'old active rule version', industryPackRef: p.asset.packRef, profileRef: {
+                  id: 'reader-fixture', version: '1.0.0', snapshotHash: p.asset.packRef.digest
+              }, documentSetRef: {
+                  id: randomUUID(), version: '1.0.0', digest: p.asset.packRef.digest, kind: 'artifact'
+              }, mappingRefs: [{
+                      ...p.definition.ref, role: 'catalog', sourceObjectRef: {
+                          sourceRef: {
+                              namespace: 'rule-reader', sourceId: 'identity'
+                          }, objectPath: 'identity'
+                      }
+                  }]
+          }, `active-rules-${projectId}`, context.principal.subjectId, context)
+          const actualProjectId = created.project.projectId
+          const firstBody = {
+              schemaVersion: 'project-revision@1', projectId: actualProjectId, revision: '1', industryPackRef: p.asset.packRef, definitionRef: p.definition.ref, mappingRefs: created.revision.mappingRefs, profileRef: created.revision.profileRef, documentSetRef: created.revision.documentSetRef, semanticPublicationRefs: [], sourceVisibilityEpoch: '0', changeReason: 'created'
+          }
+          const firstDigest = created.revision.ref.digest
+          const stagedBody = {
+              ...firstBody, revision: '2', definitionRef: {
+                  ...p.definition.ref, version: '2.0.0', digest: `sha256:${'f'.repeat(64)}`
+              }, changeReason: 'different staging selector fixture'
+          }
+          await harness.adminClient.query(`INSERT INTO agent_platform.project_revisions(tenant_id,space_id,project_id,revision,digest,body,source_visibility_epoch,change_reason,idempotency_key,request_digest,actor,recorded_at) VALUES($1,$2,$3,2,$4,$5::jsonb,0,$6,$7,$4,'fixture',now())`, [s.tenantId, s.spaceId, actualProjectId, sha256DigestOf(canonicalJson(stagedBody)), JSON.stringify(stagedBody), stagedBody.changeReason, randomUUID()])
+          await harness.adminClient.query('UPDATE agent_platform.projects SET head_revision=2,active_revision=1 WHERE tenant_id=$1 AND space_id=$2 AND project_id=$3', [s.tenantId, s.spaceId, actualProjectId])
+          const current = await p.packReader.read(s.scopeRef, {
+              ...p.request, projectId: actualProjectId
+          }, context)
+          expect(current.map((rule) => rule.ruleId).sort()).toEqual(['layer-three', 'layer-two', 'service'])
+          expect(current.every((rule) => rule.projectId === actualProjectId && rule.publishedPackRef.digest === p.asset.packRef.digest)).toBe(true)
+          expect(await p.packReader.read(s.scopeRef, {
+              ...p.request, projectId: actualProjectId, readMode: 'published_snapshot', projectRevisionRef: {
+                  projectId: actualProjectId, revision: '1', digest: firstDigest
+              }
+          }, context)).toEqual(current)
+          await expect(p.packReader.read(s.scopeRef, {
+              ...p.request, projectId: actualProjectId, definitionRef: stagedBody.definitionRef
+          }, context)).rejects.toMatchObject({
+              code: 'VALIDATION_BLOCKED'
+          })
+      }
+      finally {
+          await p.close()
+      }
+  }, 180000)
   it('persists extracted dependency pins through migration 080 and evaluates the stored three-layer chain', async () => {
     const s = await createJobScope(harness.adminClient, 'extracted-published-chain')
     const context = toolContext(s.tenantId, s.spaceId, ['platform-admin', 'profile-editor', 'data-editor', 'semantic-reviewer', 'semantic-publisher'])
