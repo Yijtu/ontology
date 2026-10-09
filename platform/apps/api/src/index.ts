@@ -194,3 +194,7 @@ export { createCoreProjectQueryWorkflow } from './composition/core-project-query
 export type { CoreProjectQueryOptions, CoreProjectQueryWorkflow } from './composition/core-project-query-handler'
 export { createCoreStructuredImportWorkflow } from './composition/core-structured-import-service'
 export type { CoreStructuredImportOptions } from './composition/core-structured-import-service'
+export { CoreSemanticTaskResolver, createCoreSemanticTaskSource } from './composition/core-semantic-task-resolver'
+export type { CoreSemanticTaskResolverOptions, CoreSemanticTaskSelection, CoreSemanticTaskResolution } from './composition/core-semantic-task-resolver'
+export { CoreRelationsTaskHandler } from './composition/core-relations-task-handler'
+export type { CoreRelationsTaskHandlerOptions } from './composition/core-relations-task-handler'

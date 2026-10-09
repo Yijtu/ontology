@@ -238,6 +238,29 @@ function evidenceRequest(ruleRef: VersionRef, validAt: string, asOf: RevisionStr
 }
 
 describe('MaterializedRuleSupportReader', () => {
+  it('pins an authorized payload before evaluating unrelated same-rule entities with different recorded points, while refusing a forged target', async () => {
+    const older = fixture(), target = fixture()
+    await older.apply([statement({ subject: 'entity-a', statementId: 'older-parent', sourceRefs: [resource('12121212-1212-4212-8212-121212121212')] })], '1')
+    await target.apply([statement({ subject: 'entity-b', statementId: 'target-parent', sourceRefs: [resource('34343434-3434-4434-8434-343434343434')] })], '2')
+    const selected = (await target.artifactsAt(VALID_FROM, '2'))[0]
+    if (selected === undefined) throw new Error('actual materializer produced no target')
+    const slices = [...await older.materialization.readSlices(SCOPE, { validAt: VALID_FROM, asOfRecordedSeq: '2' }, CTX), ...await target.materialization.readSlices(SCOPE, { validAt: VALID_FROM, asOfRecordedSeq: '2' }, CTX)]
+    const payloads = new PayloadBytes()
+    const bytes = new TextEncoder().encode(JSON.stringify(selected))
+    const payloadRef = resource('target-payload', 'artifact', rawDigest(bytes))
+    payloads.put(payloadRef, bytes)
+    const reader = new MaterializedRuleSupportReader({ materialization: { readSlices: async () => slices }, evidence: target.evidence, payloadMetadataReader: payloads, payloadReader: payloads })
+    const read = await reader.readCandidates(SCOPE, evidenceRequest(target.ruleRef, VALID_FROM, '2', payloadRef), CTX)
+    expect(read.complete).toBe(true)
+    expect(read.candidates.map((candidate) => candidate.subjectEntityId)).toEqual(['entity-b'])
+    const forgedBytes = new TextEncoder().encode(JSON.stringify({ ...selected, subjectEntityId: 'invented-target' }))
+    const forged = resource('forged-target', 'artifact', rawDigest(forgedBytes))
+    payloads.put(forged, forgedBytes)
+    expect(await reader.readCandidates(SCOPE, evidenceRequest(target.ruleRef, VALID_FROM, '2', forged), CTX)).toEqual({ complete: false, candidates: [] })
+    const targetKey = slices.find((slice) => slice.conclusion.ruleArtifacts?.some((artifact) => artifact.instanceKey === selected.instanceKey))?.propositionKey
+    const corrupted = new MaterializedRuleSupportReader({ materialization: { readSlices: async () => slices.map((slice) => slice.propositionKey !== targetKey ? slice : { ...slice, conclusion: { ...slice.conclusion, ruleArtifacts: [] } }) }, evidence: target.evidence, payloadMetadataReader: payloads, payloadReader: payloads })
+    expect(await corrupted.readCandidates(SCOPE, evidenceRequest(target.ruleRef, VALID_FROM, '2', payloadRef), CTX)).toEqual({ complete: false, candidates: [] })
+  })
   it('reads actual materializer slices and preserves child-to-parent OR supports', async () => {
     const data = fixture()
     const evidenceA = resource('eeeeeeee-eeee-4eee-8eee-eeeeeeeeeeee')

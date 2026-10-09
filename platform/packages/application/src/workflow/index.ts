@@ -23,8 +23,8 @@ export type { AnswerPublicationDependencies } from './publication'
 export { InMemoryAnswerStore } from './answers'
 export { InMemoryPublicationValidity } from './validity'
 export { RestrictedLimitedAnswerComposer } from './limited-answer'
-export { RunPlanner, parseSemanticQueryPlan } from './planning'
-export type { PlanRequest, RunPlannerDependencies } from './planning'
+export { RunPlanner, parseSemanticQueryPlan, SemanticTaskIntentPlanner, parseSemanticTaskIntent } from './planning'
+export type { PlanRequest, RunPlannerDependencies, SemanticTaskIntent } from './planning'
 export {
   BoundedQuestionRewriter,
   QUESTION_REWRITE_VERSION,

@@ -1,4 +1,4 @@
-import { isToolContext } from '@ontology/contracts'
+import { ERROR_CATALOG, isToolContext } from '@ontology/contracts'
 import { sha256DigestOf } from '@ontology/core'
 import type {
   AbandonedAttempt,
@@ -17,6 +17,7 @@ import type {
   ToolId,
   ToolResult,
   VersionRef,
+  ErrorCode,
 } from '@ontology/contracts'
 import {
   CHECKPOINT_SCHEMA_VERSION,
@@ -41,6 +42,8 @@ const RUNTIME_KIND = 'runtime-template'
 type StepStatus = 'pending' | 'running' | 'done' | 'failed'
 type StepOutcome = 'done' | 'failed' | 'aborted' | 'abort_run'
 type Emit = (event: RuntimeEvent) => void
+type PreparedPlan = { readonly kind: 'plan'; readonly published: PublishedPlan; readonly receiptBacked: boolean }
+  | (Extract<TemplatePlanPreparation, { readonly kind: 'clarification' }> & { readonly receiptBacked: true })
 
 interface Runnable {
   readonly step: PublishedPlan['spec']['steps'][number]
@@ -102,12 +105,13 @@ export class TemplateRuntimeAdapter implements RuntimeAdapter {
     return this.#stream(async (emit) => {
       const ctx = this.#requireContext(deps)
       this.#assertRunId(input.runId, ctx)
-      const preparation = await this.#preparePlan({
+      const preparation = await this.#prepareOrFail({
         mode: 'start',
         input,
         ...(input.planRef === undefined ? {} : { planRef: input.planRef }),
         dependencies: deps,
-      })
+      }, emit)
+      if (preparation === undefined) return
       if (preparation.kind === 'clarification') {
         await this.#emitPreparationClarification(input.runId, preparation, deps, emit)
         return
@@ -136,12 +140,13 @@ export class TemplateRuntimeAdapter implements RuntimeAdapter {
       this.#assertCheckpointCompatible(input.checkpointRef)
       const bytes = await deps.checkpoints.load(input.runId, input.checkpointRef, ctx)
       const restored = decodeCheckpoint(bytes, input.checkpointRef)
-      const preparation = await this.#preparePlan({
+      const preparation = await this.#prepareOrFail({
         mode: 'resume',
         input,
         planRef: restored.planRef,
         dependencies: deps,
-      })
+      }, emit)
+      if (preparation === undefined) return
       if (preparation.kind === 'clarification') {
         await this.#emitPreparationClarification(input.runId, preparation, deps, emit)
         return
@@ -578,10 +583,7 @@ export class TemplateRuntimeAdapter implements RuntimeAdapter {
 
   async #preparePlan(
     request: TemplatePlanPreparationRequest,
-  ): Promise<
-    | { readonly kind: 'plan'; readonly published: PublishedPlan; readonly receiptBacked: boolean }
-    | (Extract<TemplatePlanPreparation, { readonly kind: 'clarification' }> & { readonly receiptBacked: true })
-  > {
+  ): Promise<PreparedPlan> {
     if (this.#plans.prepare === undefined) {
       const published = await this.#resolvePlan(request.planRef, request.dependencies.ctx)
       return { kind: 'plan', published, receiptBacked: false }
@@ -610,6 +612,17 @@ export class TemplateRuntimeAdapter implements RuntimeAdapter {
     }
     validatePlan(published.spec)
     return { kind: 'plan', published, receiptBacked: true }
+  }
+
+  async #prepareOrFail(request: TemplatePlanPreparationRequest, emit: Emit): Promise<PreparedPlan | undefined> {
+    try { return await this.#preparePlan(request) } catch (error) {
+      // Recovery incompatibility retains its existing throw/unsafe-recovery contract. An
+      // aborted operation must not emit a late failure over an accepted cancellation.
+      if (request.dependencies.signal.aborted || typeof error !== 'object' || error === null || !('code' in error) || !isCanonicalErrorCode(error.code) || error.code === 'CHECKPOINT_INCOMPATIBLE') throw error
+      emit({ type: 'failed', runId: request.input.runId, eventId: this.#newId(), sequence: 0, occurredAt: this.#now(),
+        error: platformErrorFor(error.code, 'The task could not be planned with the current authorized inputs and capabilities.', request.dependencies.ctx.traceId) })
+      return undefined
+    }
   }
 
   async #emitPreparationClarification(
@@ -702,6 +715,10 @@ function uniqueToolIds(steps: readonly PublishedPlan['spec']['steps'][number][])
 
 function messageOf(error: unknown): string {
   return error instanceof Error ? error.message : 'unknown runtime failure'
+}
+
+function isCanonicalErrorCode(value: unknown): value is ErrorCode {
+  return typeof value === 'string' && Object.hasOwn(ERROR_CATALOG, value)
 }
 
 function isResourceRef(value: unknown): value is ResourceRef {

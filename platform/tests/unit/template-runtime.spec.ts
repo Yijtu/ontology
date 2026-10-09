@@ -12,6 +12,7 @@ import type {
   RuntimeEvent,
 } from '@ontology/contracts'
 import { sha256DigestOf } from '@ontology/core'
+import { WorkflowControllerError } from '@ontology/application'
 import {
   Barrier,
   RUN_ID,
@@ -71,6 +72,18 @@ function eventsOfType<T extends RuntimeEvent['type']>(
 }
 
 describe('TemplateRuntimeAdapter — plan execution (SPEC §4.2, D7)', () => {
+  it('preserves canonical planning failures without exposing provider text or executing tools', async () => {
+    const dependencies = buildDependencies()
+    const adapter = new TemplateRuntimeAdapter({ manifest: runtimeManifest(), plans: {
+      async resolve() { throw new Error('unexpected plan resolution') },
+      async prepare() { throw new WorkflowControllerError('CAPABILITY_NOT_CONFIGURED', 'raw provider text with a private connection') },
+    } })
+    const events = await collect(adapter.start(runtimeInput(), dependencies.dependencies))
+    expect(events.map((event) => event.type)).toEqual(['failed'])
+    const failed = eventsOfType(events, 'failed')[0]
+    expect(failed?.error.code).toBe('CAPABILITY_NOT_CONFIGURED')
+    expect(failed?.error.message).not.toContain('private connection')
+  })
   it('prepares with the real runtime inputs, then checkpoints an immutable receipt before the first tool', async () => {
     const receiptRef: ResourceRef = {
       id: 'plan-template-prepared',
