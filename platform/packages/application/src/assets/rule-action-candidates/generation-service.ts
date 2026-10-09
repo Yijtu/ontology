@@ -8,6 +8,7 @@ import type { ActionCapabilityBindingInput, AssetCandidateStore, AssetCandidateV
   IndustryWorkspaceStore } from '@ontology/contracts'
 import { candidateIdFor, canonicalJson, sha256DigestOf } from '../../extraction/canonical'
 import { readLatestWorkspaceDraft } from '../workspace-draft'
+import { ruleActionGroundedContentDigest } from '../candidate-content-digests'
 import { SourceGroundingBudget } from '../source-grounding/budget'
 import { groundingContext, groundingFragments, sameResourcePin, selectedGrounding } from '../definition-candidates/grounding'
 import type { DefinitionGroundingFragment } from '../definition-candidates/grounding'
@@ -346,9 +347,9 @@ function groundCandidate(candidate: RuleActionCandidateVersion, proposal: DraftR
     payload.declaration.preconditions.forEach((_, index) => locate(`declaration.preconditions[${String(index)}]`))
   }
   const generationContext = { ...context, inputSourceRefs, sourceBindings, issues, sourceSelections: proposal.sourceSelections }
-  const contentDigest = sha256DigestOf(canonicalJson({ workspaceId: candidate.workspaceId, kind: candidate.kind,
+  const contentDigest = ruleActionGroundedContentDigest({ workspaceId: candidate.workspaceId, kind: candidate.kind,
     logicalId: candidate.logicalId, displayName: candidate.displayName, businessMeaning: candidate.businessMeaning,
-    suggestedReason: candidate.suggestedReason, payload, sourceRefs: refs, sourceSpans: spans, generationContext }))
+    suggestedReason: candidate.suggestedReason, payload, sourceRefs: refs, sourceSpans: spans, generationContext })
   return { ...candidate, payload, sourceRefs: refs, sourceSpans: spans, contentDigest, generationContext,
     generationCallRef: { id: context.batchId, version: '1.0.0', digest: context.contextDigest, kind: 'artifact' } }
 }

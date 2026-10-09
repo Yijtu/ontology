@@ -1,4 +1,4 @@
-import { assertRuleActionCandidateShape, assertRuleActionGenerationBatch, isToolContext, RuleActionCandidateStoreError } from '@ontology/contracts'
+import { assertRuleActionCandidateShape, assertRuleActionGenerationBatch, isToolContext, isUuid, RuleActionCandidateStoreError } from '@ontology/contracts'
 import type { RuleActionCandidateVersion, RuleActionGenerationBatch, RuleActionGenerationGuard,
   RuleActionGenerationStore, ScopeRef, ToolContext } from '@ontology/contracts'
 import type { PoolClient } from 'pg'
@@ -31,11 +31,20 @@ export class PostgresRuleActionGenerationStore implements RuleActionGenerationSt
   }
   getById(scope: ScopeRef, batchId: string, ctx: ToolContext): Promise<RuleActionGenerationBatch | undefined> {
     assertScope(scope, ctx)
+    if (!isUuid(batchId)) throw new RuleActionCandidateStoreError('INVALID_CANDIDATE', 'batchId must be an exact UUID')
     return this.database.withIdentityScope(scope, async (client) => {
-      const result = await client.query<{ rule_action_result: unknown }>(`SELECT rule_action_result FROM agent_platform.asset_candidate_batches
+      const result = await client.query<{ rule_action_result: unknown; matches: boolean }>(`SELECT rule_action_result,
+        (rule_action_result->>'batchId'=batch_id::text AND rule_action_result->>'workspaceId'=workspace_id::text
+          AND rule_action_result->'inputDraftRef'=input_draft_ref AND rule_action_result->>'contextDigest'=schema_digest
+          AND rule_action_result->'documentSetRef'=document_set_ref) AS matches FROM agent_platform.asset_candidate_batches
         WHERE tenant_id=current_setting('app.tenant_id')::uuid AND space_id=current_setting('app.space_id')::uuid
           AND batch_id=$1 AND generation_family='rule_action'`, [batchId])
-      return result.rows[0] === undefined ? undefined : batchOf(result.rows[0].rule_action_result)
+      const row = result.rows[0]
+      if (row === undefined) return undefined
+      if (row.matches !== true) throw new RuleActionCandidateStoreError('STORE_FAILED', 'saved rule batch body differs from its immutable metadata')
+      try { return batchOf(row.rule_action_result) } catch (cause) {
+        throw new RuleActionCandidateStoreError('STORE_FAILED', 'saved rule batch body is malformed', { cause })
+      }
     })
   }
   async commit(scope: ScopeRef, batch: RuleActionGenerationBatch, candidates: readonly RuleActionCandidateVersion[],

@@ -53,16 +53,14 @@ describe('CQ comparison boundary (unit ports, not real capability acceptance)', 
     expect(report.results[0]?.status).toBe('not_yet_executable')
   })
   it('requires every original source and a real execution artifact rather than value equality alone', async () => {
-    let h: ReturnType<typeof boundaryHarness>
-    h = boundaryHarness({ execute: async (request) => ({ ...h.complete(request), artifactRefs: [], sources: [] }) })
+    const h: ReturnType<typeof boundaryHarness> = boundaryHarness({ execute: async (request) => ({ ...h.complete(request), artifactRefs: [], sources: [] }) })
     const report = await h.runner.run(h.set.ref, context(), new AbortController().signal)
     expect(report.passed).toBe(false)
     expect(report.results[0]?.status).toBe('failed')
     expect(report.results[0]?.sourceCoverage.complete).toBe(false)
   })
   it.each(['input', 'definition', 'rule'] as const)('refuses an execution that changes the exact %s pin', async (changed) => {
-    let h: ReturnType<typeof boundaryHarness>
-    h = boundaryHarness({ execute: async (request) => ({ ...h.complete(request),
+    const h: ReturnType<typeof boundaryHarness> = boundaryHarness({ execute: async (request) => ({ ...h.complete(request),
       ...(changed === 'input' ? { inputDigest: `sha256:${'f'.repeat(64)}` } : changed === 'definition' ? { definitionRef: { ...request.definitionRef, version: '99.0.0' } } : { ruleRefs: [{ id: 'wrong', version: '1.0.0', digest: `sha256:${'f'.repeat(64)}` }] }) }) })
     await expect(h.runner.run(h.set.ref, context(), new AbortController().signal)).rejects.toMatchObject({ code: 'DIGEST_MISMATCH' })
   })
@@ -76,13 +74,11 @@ describe('CQ comparison boundary (unit ports, not real capability acceptance)', 
   })
   it('does not publish a late report when cancellation is accepted inside execution', async () => {
     const controller = new AbortController()
-    let h: ReturnType<typeof boundaryHarness>
-    h = boundaryHarness({ execute: async (request) => { controller.abort(); return h.complete(request) } })
+    const h: ReturnType<typeof boundaryHarness> = boundaryHarness({ execute: async (request) => { controller.abort(); return h.complete(request) } })
     await expect(h.runner.run(h.set.ref, context(), controller.signal)).rejects.toMatchObject({ code: 'CANCELLED' })
   })
   it('compares exact decimal quantity axes without treating categorical numeric strings as quantities', async () => {
-    let h: ReturnType<typeof boundaryHarness>
-    h = boundaryHarness({ execute: async (request) => h.complete(request, { kind: 'value', value: { amount: '12.500', unit: 'm' } }) })
+    const h: ReturnType<typeof boundaryHarness> = boundaryHarness({ execute: async (request) => h.complete(request, { kind: 'value', value: { amount: '12.500', unit: 'm' } }) })
     expect((await h.runner.run(h.set.ref, context(), new AbortController().signal)).passed).toBe(true)
     const text = boundaryHarness({ execute: async (request) => ({ status: 'executed', actual: { kind: 'value', value: '12.5' }, inputDigest: request.inputDigest, definitionRef: request.definitionRef,
       ruleRefs: request.ruleRefs, sources: request.requiredSources, artifactRefs: [{ id: '88888888-8888-4888-8888-888888888888', version: '1.0.0', digest: request.inputDigest, kind: 'artifact' }] }) })

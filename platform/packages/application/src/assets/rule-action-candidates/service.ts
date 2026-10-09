@@ -31,6 +31,7 @@ import type {
   RuleActionGenerationContext,
 } from '@ontology/contracts'
 import { candidateIdFor, canonicalJson, sha256DigestOf } from '../../extraction/canonical'
+import { ruleActionDeclaredContentDigest } from '../candidate-content-digests'
 import { RuleActionCandidateError } from './errors'
 import { parseRuleActionCandidateOutput } from './model-output'
 import type { DraftRuleActionCandidate } from './model-output'
@@ -555,19 +556,7 @@ export class RuleActionCandidateService {
     readonly draftRevision: RevisionString
     readonly draftDigest: Sha256Digest
   }): Sha256Digest {
-    return sha256DigestOf(
-      canonicalJson({
-        workspaceId: args.workspaceId,
-        logicalId: args.logicalId,
-        kind: args.kind,
-        payload: args.payload,
-        sourceRefs: args.sourceRefs,
-        sourceSpans: args.sourceSpans,
-        ...(args.generationContext === undefined ? {} : { generationContext: args.generationContext }),
-        draftRevision: args.draftRevision,
-        draftDigest: args.draftDigest,
-      }),
-    )
+    return ruleActionDeclaredContentDigest(args)
   }
 
   async #prepare(

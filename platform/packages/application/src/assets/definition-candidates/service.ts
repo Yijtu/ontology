@@ -32,6 +32,7 @@ import type {
 } from '@ontology/contracts'
 import { candidateIdFor, canonicalJson, sha256DigestOf } from '../../extraction/canonical'
 import { readLatestWorkspaceDraft } from '../workspace-draft'
+import { definitionGeneratedContentDigest } from '../candidate-content-digests'
 import { SourceGroundingBudget } from '../source-grounding/budget'
 import { groundingContext, groundingFragments, selectedGrounding, sameResourcePin } from './grounding'
 import type { DefinitionGroundingFragment } from './grounding'
@@ -63,6 +64,12 @@ export const TBOX_RESPONSE_SCHEMA_REF: VersionRef = {
       provenance: 'sourceIndex? + fragmentIndex? select actual grounded source span; absent or invalid means pending confirmation',
     }),
   ),
+}
+
+/** Existing human confirmation producer, exposed for exact authoritative batch recognition. */
+export const DEFINITION_SOURCE_CONFIRMATION_SCHEMA_REF: VersionRef = {
+  id: 'ontology.definition-source-confirmation', version: '1.0.0',
+  digest: sha256DigestOf(canonicalJson({ operation: 'append human-preserved payload with actual read-back source' })),
 }
 
 const EDITOR_ROLES: readonly string[] = ['profile-editor', 'platform-admin']
@@ -569,8 +576,7 @@ export class DefinitionCandidateGenerationService {
       payload: original.payload, inputDraftRef, sourceRefs, sourceSpans, issues, pendingConfirmation: false,
       state: issues.length === 0 ? 'produced' : 'pending_review', replacesCandidateId: original.candidateId,
       contentDigest, idempotencyKey, recordedAt }
-    const confirmationRef: VersionRef = { id: 'ontology.definition-source-confirmation', version: '1.0.0',
-      digest: sha256DigestOf(canonicalJson({ operation: 'append human-preserved payload with actual read-back source' })) }
+    const confirmationRef = DEFINITION_SOURCE_CONFIRMATION_SCHEMA_REF
     const batch: AssetCandidateBatch = { batchId, workspaceId: input.workspaceId, domain: 'definition', inputDraftRef,
       modelRef: { modelId: 'definition-source-confirmation', version: '1.0.0' }, responseSchemaRef: confirmationRef,
       schemaDigest: confirmationRef.digest, documentSetRef: draft.documentSetRef, generationPolicyRef: confirmationRef,
@@ -800,18 +806,16 @@ export class DefinitionCandidateGenerationService {
       const hard = issues.some((issue) => HARD_ISSUES.includes(issue.code))
       const state: AssetCandidateState = hard ? 'failed' : provenanceMissing ? 'pending_confirmation' : 'produced'
       const payload: DefinitionCandidatePayload = { ...payloadOf(draft, displayName), conflicts }
-      const contentDigest = sha256DigestOf(
-        canonicalJson({
-          workspaceId: args.input.workspaceId,
-          logicalId: draft.logicalId,
-          kind: draft.kind,
-          payload,
-          inputDraftRef,
-          sourceRefs,
-          sourceSpans,
-          issues,
-        }),
-      )
+      const contentDigest = definitionGeneratedContentDigest({
+        workspaceId: args.input.workspaceId,
+        logicalId: draft.logicalId,
+        kind: draft.kind,
+        payload,
+        inputDraftRef,
+        sourceRefs,
+        sourceSpans,
+        issues,
+      })
       const idempotencyKey = sha256DigestOf(
         canonicalJson({ batchKey: args.input.idempotencyKey, logicalId: draft.logicalId, ordinal, contentDigest }),
       )

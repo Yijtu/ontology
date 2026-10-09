@@ -1,5 +1,5 @@
 import { createHash, randomUUID } from 'node:crypto'
-import { CompetencyQuestionError, isRecord, isResourceRef, sha256OfCanonical } from '@ontology/contracts'
+import { CompetencyQuestionError, isRecord, isResourceRef, isToolContext, sha256OfCanonical } from '@ontology/contracts'
 import type {
   CompetencyExecutionPort, CompetencyExecutionRequest, CompetencyExecutionResult, CompetencyExpectation,
   CompetencySourceLocation, CompetencySourceReader, ImmutableArtifactWriter, ProjectRevision,
@@ -31,7 +31,7 @@ export interface PreparedCompetencyCase {
   readonly consumedOriginals: readonly ResourceRef[]
   readonly validationTargetDigest?: string
   readonly facts: MaterializationPublishedSource
-  readonly query?: { readonly service: ProjectSemanticQueryService; readonly descriptor: ProjectSnapshotQueryDescriptor }
+  readonly query?: { readonly service: ProjectSemanticQueryService; readonly descriptor: ProjectSnapshotQueryDescriptor; readonly context: ToolContext }
   readonly rules?: {
     readonly materializer: IncrementalMaterializer
     readonly projectionRef: VersionRef
@@ -86,18 +86,31 @@ export function createCoreCompetencyExecution(options: CoreCompetencyExecutionOp
     const prepared = await options.prepare(request, ctx, signal)
     signal.throwIfAborted()
     if (prepared.status === 'not_yet_executable') return prepared
-    const finish = async (actual: CompetencyExpectation, artifactRefs: readonly ResourceRef[], originals: readonly ResourceRef[], validationTargetDigest?: string): Promise<CompetencyExecutionResult> => ({
-      status: 'executed', actual, inputDigest: request.inputDigest, definitionRef: request.definitionRef, ruleRefs: request.ruleRefs,
-      ...(validationTargetDigest === undefined ? {} : { validationTargetDigest }), artifactRefs,
-      sources: await coveredSources(request, originals, ctx, signal),
-    })
+    const finish = async (actual: CompetencyExpectation, artifactRefs: readonly ResourceRef[], originals: readonly ResourceRef[], validationTargetDigest?: string): Promise<CompetencyExecutionResult> => {
+      const sources = await coveredSources(request, originals, ctx, signal)
+      signal.throwIfAborted()
+      return { status: 'executed', actual, inputDigest: request.inputDigest, definitionRef: request.definitionRef, ruleRefs: request.ruleRefs,
+        ...(validationTargetDigest === undefined ? {} : { validationTargetDigest }), artifactRefs, sources }
+    }
     if (prepared.status === 'refused') return finish({ kind: 'refusal', reason: prepared.reason }, prepared.artifacts, prepared.consumedOriginals, prepared.validationTargetDigest)
     const input = prepared.input
     const captured = await readJson(input.executionInputRef, ctx)
+    const actualRules = input.rules?.versions.map((row) => ({ declarationRef: row.declarationRef, actualRef: publishedRuleRef(row.published) })) ?? []
+    const points = isRecord(captured) && Array.isArray(captured['recordedPoints']) ? captured['recordedPoints'] : []
+    const selectedPoints = points.filter((point: unknown) => isRecord(point) && point['logical'] === request.input.asOfRecordedSeq)
     if (!isRecord(captured) || captured['schemaVersion'] !== 'competency-actual-input-binding@1' || captured['inputDigest'] !== request.inputDigest ||
+        captured['declarationProjectId'] !== request.input.projectId || captured['dataMode'] !== 'synthetic' || captured['businessApproval'] !== 'none' ||
         sha256OfCanonical(captured['projectRevisionRef']) !== sha256OfCanonical(input.project.ref) ||
         sha256OfCanonical(captured['definitionRef']) !== sha256OfCanonical(input.definition.ref) ||
-        sha256OfCanonical(captured['declarationDefinitionRef']) !== sha256OfCanonical(request.definitionRef)) throw new CompetencyQuestionError('DIGEST_MISMATCH', 'the actual archived competency input lineage does not match the prepared case')
+        sha256OfCanonical(captured['declarationDefinitionRef']) !== sha256OfCanonical(request.definitionRef) ||
+        canonicalJson(captured['originals']) !== canonicalJson(input.consumedOriginals) || canonicalJson(captured['rules']) !== canonicalJson(actualRules) ||
+        points.length === 0 || points.length > 201 || selectedPoints.length !== 1 || !isRecord(selectedPoints[0]) || selectedPoints[0]['actual'] !== input.recordedPoint ||
+        points.some((point: unknown) => !isRecord(point) || typeof point['logical'] !== 'string' || typeof point['actual'] !== 'string' || !/^\d+$/u.test(point['actual'])) ||
+        new Set(points.map((point: unknown) => isRecord(point) ? point['logical'] : undefined)).size !== points.length ||
+        canonicalJson(captured['entityBindings']) !== canonicalJson([...input.entities]) || canonicalJson(captured['businessBindings']) !== canonicalJson([...input.businessIds]) ||
+        captured['validationTargetDigest'] !== input.validationTargetDigest || (input.rules !== undefined && input.rules.recordedPoint !== input.recordedPoint)) {
+      throw new CompetencyQuestionError('DIGEST_MISMATCH', 'the actual archived competency input lineage does not match the prepared case')
+    }
     if (input.declaredProjectId !== request.input.projectId || !sameRef(input.declarationDefinitionRef, request.definitionRef) ||
         !sameRef(input.project.definitionRef, input.definition.ref) ||
         (request.validationTarget !== undefined && input.validationTargetDigest !== sha256OfCanonical(request.validationTarget))) throw new CompetencyQuestionError('DIGEST_MISMATCH', 'competency prepared input changed its project, definition or reviewed draft binding')
@@ -133,10 +146,18 @@ export function createCoreCompetencyExecution(options: CoreCompetencyExecutionOp
           metadata.body.definitionRef === undefined || !sameRef(metadata.body.definitionRef, input.definition.ref) || metadata.body.factRecordedPoint?.semantic !== input.recordedPoint || metadata.body.coverage.completeness !== 'complete' ||
           metadata.activation === undefined || !sameRef(metadata.activation.snapshotRef, input.query.descriptor.snapshotRef) ||
           sha256OfCanonical(metadata.activation.projectRevisionRef) !== sha256OfCanonical(input.project.ref)) return { status: 'not_yet_executable', reason: 'the fixed query snapshot has no exact activated project/definition/recorded-point quantity binding' }
+      const queryContext = input.query.context
+      if (!isToolContext(queryContext) || queryContext.runId !== ctx.runId || canonicalJson(queryContext.principal) !== canonicalJson(ctx.principal) ||
+          queryContext.resolvedProfileHash !== input.project.profileRef.snapshotHash ||
+          queryContext.allowedResources.tenantId !== ctx.principal.tenantId || queryContext.allowedResources.spaceId !== ctx.allowedResources.spaceId ||
+          queryContext.allowedResources.maxRows < 1 || queryContext.allowedResources.maxRows > 2 || queryContext.allowedResources.sourceRefs.length !== 1 ||
+          canonicalJson(queryContext.allowedResources.sourceRefs[0]) !== canonicalJson(input.query.descriptor.sourceObjectRef.sourceRef)) {
+        throw new CompetencyQuestionError('SCOPE_MISMATCH', 'the host query context must grant only the exact activated snapshot and share the validation run and principal')
+      }
       const queried = await input.query.service.execute({ descriptor: input.query.descriptor,
         plan: { mode: 'semantic', concepts: [intent.objectId], fields: [intent.attributeId], links: [], filters: [], orderBy: [], limit: 1,
           mappingVersion: projectSnapshotMappingRef({ descriptor: input.query.descriptor }), aggregation: { kind: 'sum', fieldRefs: [intent.attributeId], groupBy: [] } },
-        limits: { maxRows: 2, maxBytes: 16_384, maxDurationMs: 10_000 } }, ctx)
+        limits: { maxRows: 2, maxBytes: 16_384, maxDurationMs: 10_000 } }, queryContext)
       const value = queried.rows[0]?.values[0]
       if (queried.coverage.truncated || (queried.coverage.completeness !== undefined && queried.coverage.completeness !== 'complete') || queried.rows.length !== 1 || typeof value !== 'string') return { status: 'not_yet_executable', reason: 'the physical quantity query did not return one complete exact decimal' }
       actual = { kind: 'value', value: { amount: value, unit: field.unit.unitCode } }; proof = queried
@@ -145,7 +166,8 @@ export function createCoreCompetencyExecution(options: CoreCompetencyExecutionOp
       const entityId = input.entities.get(entityKey(intent.objectId, intent.subjectEntityId))
       const rule = rules?.versions.find((row) => row.published.ruleId === intent.ruleId && request.ruleRefs.some((ref) => sameRef(ref, row.declarationRef)))
       if (rules === undefined || entityId === undefined || rule === undefined) return { status: 'not_yet_executable', reason: 'the pinned published rule or confirmed entity is unavailable' }
-      const read = await rules.materializer.read({ scopeRef: request.input.scopeRef, projectionRef: rules.projectionRef, validAt: request.input.validAt, asOfRecordedSeq: rules.recordedPoint }, ctx)
+      const key = publishedRuleConsequenceKey(publishedRuleDependencyRef(rule.published, request.input.scopeRef, input.definition.ref), entityId)
+      const read = await rules.materializer.read({ scopeRef: request.input.scopeRef, projectionRef: rules.projectionRef, validAt: request.input.validAt, asOfRecordedSeq: rules.recordedPoint, propositionKeys: [key] }, ctx)
       if (read.status !== 'materialized') return { status: 'not_yet_executable', reason: 'the exact persisted rule point is unavailable or fenced' }
       const ruleRef = publishedRuleRef(rule.published)
       const artifact = read.ruleArtifacts?.find((row) => sameRef(row.ruleRef, ruleRef) && row.objectId === intent.objectId && row.subjectEntityId === entityId)
@@ -156,7 +178,6 @@ export function createCoreCompetencyExecution(options: CoreCompetencyExecutionOp
       if (payloadRef === undefined) throw new CompetencyQuestionError('DIGEST_MISMATCH', 'real rule evidence has no immutable payload')
       const payload = await readJson(payloadRef, ctx)
       if (!await rules.replay.verify({ artifact, payload }, ctx)) throw new CompetencyQuestionError('DIGEST_MISMATCH', 'actual published rule premises and original sources did not replay')
-      const key = publishedRuleConsequenceKey(publishedRuleDependencyRef(rule.published, request.input.scopeRef, input.definition.ref), entityId)
       const conclusion = read.conclusions.find((row) => row.propositionKey === key)
       const propositionState = conclusion?.domainStatus === 'conflict' ? 'conflict' : conclusion?.domainStatus === 'known' && typeof conclusion.value === 'boolean' ? (conclusion.value ? 'true' : 'false') : 'unknown'
       actual = { kind: 'rule', conditionState: artifact.applicability.conditionState, applicability: artifact.applicability.state, propositionState }
@@ -171,7 +192,9 @@ export function createCoreCompetencyExecution(options: CoreCompetencyExecutionOp
     } else {
       const compute = input.compute
       if (compute === undefined || compute.operation.operationRef.id !== intent.operationRef.id || compute.operation.operationRef.version !== intent.operationRef.version || !sameRef(compute.inputRef, intent.inputSourceRef)) return { status: 'not_yet_executable', reason: 'the exact registered operation or approved original input is unavailable' }
-      if (compute.context.runId !== ctx.runId || compute.context.principal.subjectId !== ctx.principal.subjectId || compute.context.principal.tenantId !== ctx.principal.tenantId || compute.context.allowedResources.spaceId !== ctx.allowedResources.spaceId) throw new CompetencyQuestionError('SCOPE_MISMATCH', 'registered compute must share the actual validation run and principal')
+      if (!isToolContext(compute.context) || compute.context.runId !== ctx.runId || canonicalJson(compute.context.principal) !== canonicalJson(ctx.principal) ||
+          compute.context.resolvedProfileHash !== input.project.profileRef.snapshotHash || compute.context.allowedResources.tenantId !== ctx.principal.tenantId ||
+          compute.context.allowedResources.spaceId !== ctx.allowedResources.spaceId) throw new CompetencyQuestionError('SCOPE_MISMATCH', 'registered compute must share the actual validation run, full principal and pinned project profile')
       const result = await compute.gateway.invoke({ callId: randomUUID(), toolId: 'data_query', arguments: { kind: 'compute', operationRef: intent.operationRef,
         inputSchemaDigest: compute.operation.inputSchemaDigest, inputRefs: [compute.inputRef], parameters: {} } }, compute.context)
       if (result.status !== 'ok' || result.dataRef === undefined) throw new CompetencyQuestionError('INVALID_DECLARATION', 'the actual registered compute gateway failed', { cause: result.error })

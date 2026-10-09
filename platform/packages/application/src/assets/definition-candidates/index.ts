@@ -16,6 +16,7 @@ export {
   DefinitionCandidateGenerationService,
   TBOX_PROMPT_VERSION,
   TBOX_RESPONSE_SCHEMA_REF,
+  DEFINITION_SOURCE_CONFIRMATION_SCHEMA_REF,
 } from './service'
 export type {
   DefinitionCandidateGenerationDependencies,
@@ -47,3 +48,4 @@ export { DynamicDefinitionTerminologySource, createDynamicDefinitionTerminologyS
 export type { DynamicDefinitionTerminologyDependencies } from './dynamic-terminology'
 
 export type { DefinitionSourceConfirmationInput } from './service'
+export { groundingFragments, selectedGrounding } from './grounding'
