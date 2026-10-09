@@ -866,7 +866,9 @@ describe('production instance recall → human binding → semantic publication'
       const withdrawal = projectDocuments.reviseDocument(scope.scopeRef, projectId, { documentId, op: 'retract', reason: 'concurrent withdrawal', actor: 'reviewer', recordedAt: new Date().toISOString() }, ctx)
       await waitForLock('UPDATE agent_platform.project_visibility')
       const sourceChange = attempt(candidates[1]?.candidateId ?? '')
-      await waitForLock('FROM agent_platform.project_document_memberships')
+      // Source revision now holds the project lock before waiting on visibility.
+      // Observe the real earlier barrier; the same final source/refusal checks follow.
+      await waitForLock('SELECT head_revision')
       const withdrawnPublication = attemptPublication('concurrent-source-publish')
       await waitForLock('SELECT project_id FROM agent_platform.projects')
       await blocker.query('COMMIT')

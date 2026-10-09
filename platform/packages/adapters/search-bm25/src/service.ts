@@ -199,12 +199,16 @@ export class Bm25DocumentSearchService {
       }
     }
 
-    // Collapse copies of the same located quote, while retaining distinct rows or
-    // clauses from one original. A repeated file is not independent evidence.
+    // Structured projections retain distinct located rows. Ordinary text/PDF
+    // keeps one best hit per original lineage, so copied files never add support.
     const best = new Map<string, ScoredDocument>()
     for (const entry of scored) {
       const locator = entry.document.locator
-      const key = JSON.stringify([entry.document.documentDigest, entry.document.quoteDigest, locator.kind, locator.page ?? null, locator.startOffset ?? null, locator.endOffset ?? null])
+      const structuredMedia = ['text/csv', 'application/csv', 'application/json', 'text/json', 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet'].includes(entry.document.mediaType)
+      const structuredRow = structuredMedia && entry.document.spanKind === 'approximate' && entry.document.precision === 'approximate' && locator.kind === 'approximate_locator'
+      const key = structuredRow
+        ? JSON.stringify([entry.document.documentDigest, entry.document.quoteDigest, locator.kind, locator.page ?? null, locator.startOffset ?? null, locator.endOffset ?? null])
+        : entry.document.documentDigest
       const existing = best.get(key)
       if (existing === undefined || entry.score > existing.score) {
         best.set(key, entry)
