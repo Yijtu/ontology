@@ -3,6 +3,8 @@ import {
   isDefinitionCandidateKind,
   isDefinitionCandidatePayload,
   isRecord,
+  isResourceRef,
+  isVersionRef,
   isRevisionString,
   isRuleActionCandidateKind,
   isRuleActionCandidateLifecycle,
@@ -26,6 +28,7 @@ import type {
   RuleActionCandidateLifecycle,
   RuleActionCandidateVersion,
   RuleCandidatePayload,
+  RuleDependencyCandidateReference,
   UnsupportedDefinitionRule,
 } from '@ontology/contracts'
 
@@ -121,6 +124,7 @@ export interface RuleCandidateDraft {
   readonly exceptions: readonly unknown[]
   readonly conclusion?: unknown
   readonly ruleDependencies?: readonly string[]
+  readonly dependencyRefs?: readonly RuleDependencyCandidateReference[]
 }
 
 export interface ActionCandidateDraft {
@@ -136,6 +140,7 @@ export interface ActionCandidateDraft {
   readonly readOnly: boolean
   readonly sideEffect: 'none' | 'read_only' | 'writes' | 'external'
   readonly evidenceRequirements: readonly string[]
+  readonly taskBindingRef?: { readonly id: string; readonly version: string; readonly digest: string }
   readonly suggestedOperationRef?: { readonly id: string; readonly version: string }
 }
 
@@ -166,10 +171,10 @@ function isAssetCandidateVersion(value: unknown): value is AssetCandidateVersion
   if (value['domain'] !== 'definition') return false
   if (!isDefinitionCandidateKind(value['kind'])) return false
   if (!isAssetCandidateState(value['state'])) return false
-  if (!isDefinitionCandidatePayload(value['payload'])) return false
-  if (!Array.isArray(value['sourceRefs']) || !Array.isArray(value['issues'])) return false
-  if (!isRecord(value['inputDraftRef'])) return false
-  return true
+  if (!isDefinitionCandidatePayload(value['payload']) || value['payload'].kind !== value['kind'] || value['payload'].logicalId !== value['logicalId']) return false
+  if (!Array.isArray(value['sourceRefs']) || !value['sourceRefs'].every(isResourceRef) || !Array.isArray(value['sourceSpans']) || !Array.isArray(value['issues']) || !value['issues'].every((v: unknown) => isRecord(v) && typeof v['message'] === 'string' && typeof v['code'] === 'string')) return false
+  if (!isRecord(value['inputDraftRef']) || value['inputDraftRef']['workspaceId'] !== value['workspaceId'] || !isRevisionString(value['inputDraftRef']['revision']) || !isSha256Digest(value['inputDraftRef']['digest'])) return false
+  return isSha256Digest(value['contentDigest']) && typeof value['pendingConfirmation'] === 'boolean'
 }
 
 function isAssetCandidateBatch(value: unknown): value is AssetCandidateBatch {
@@ -178,36 +183,31 @@ function isAssetCandidateBatch(value: unknown): value is AssetCandidateBatch {
   if (value['domain'] !== 'definition') return false
   if (!isRecord(value['inputDraftRef'])) return false
   if (typeof value['state'] !== 'string') return false
-  if (!isRecord(value['counts'])) return false
+  const counts = value['counts']
+  if (!isRecord(counts) || !['total','produced','pendingConfirmation','pendingReview','failed'].every((key) => typeof counts[key] === 'number' && Number.isSafeInteger(counts[key]) && counts[key] >= 0)) return false
+  if (value['error'] !== undefined && (!isRecord(value['error']) || typeof value['error']['code'] !== 'string' || typeof value['error']['message'] !== 'string' || typeof value['error']['retryable'] !== 'boolean')) return false
   return typeof value['idempotencyKey'] === 'string'
 }
 
-function isRuleActionCandidatePayload(
-  value: unknown,
-): value is RuleCandidatePayload | ActionCandidatePayload {
+function stringList(value: unknown): value is readonly string[] { return Array.isArray(value) && value.every((v): v is string => typeof v === 'string') }
+export function isRuleExpression(value: unknown, depth = 0): boolean {
+  if (depth > 64 || !isRecord(value) || !Array.isArray(value['spans'])) return false
+  if (value['op'] === 'compare') return typeof value['attributeId'] === 'string' && ['eq','ne','gt','gte','lt','lte'].includes(String(value['operator'])) && (typeof value['value'] === 'string' || typeof value['value'] === 'boolean' || typeof value['value'] === 'number' && Number.isFinite(value['value']))
+  if (value['op'] === 'range') return typeof value['attributeId'] === 'string' && (value['min'] === undefined || typeof value['min'] === 'number' && Number.isFinite(value['min'])) && (value['max'] === undefined || typeof value['max'] === 'number' && Number.isFinite(value['max']))
+  if (value['op'] === 'relation') return typeof value['relationId'] === 'string' && (value['targetCondition'] === undefined || isRuleExpression(value['targetCondition'], depth + 1))
+  if (value['op'] === 'not') return isRuleExpression(value['operand'], depth + 1)
+  return (value['op'] === 'all' || value['op'] === 'any') && Array.isArray(value['operands']) && value['operands'].length <= 256 && value['operands'].every((v: unknown) => isRuleExpression(v, depth + 1))
+}
+function findings(value: unknown): boolean { return Array.isArray(value) && value.every((v: unknown) => isRecord(v) && typeof v['message'] === 'string' && typeof v['code'] === 'string') }
+function isRuleActionCandidatePayload(value: unknown): value is RuleCandidatePayload | ActionCandidatePayload {
   if (!isRecord(value)) return false
-  const kind = value['kind']
-  if (kind === 'rule') {
-    return (
-      typeof value['ruleId'] === 'string' &&
-      isRecord(value['applicability']) &&
-      isRecord(value['condition']) &&
-      Array.isArray(value['exceptions']) &&
-      isRecord(value['support']) &&
-      typeof (value['support'] as Record<string, unknown>)['executable'] === 'boolean'
-    )
-  }
-  if (kind === 'action') {
-    if (!isRecord(value['declaration'])) return false
-    const binding = value['binding']
-    if (binding === undefined) return true
-    return (
-      isRecord(binding) &&
-      (binding['status'] === 'executable' || binding['status'] === 'not_executable') &&
-      typeof binding['executable'] === 'boolean'
-    )
-  }
-  return false
+  if (value['kind'] === 'rule') return typeof value['ruleId'] === 'string' && isRecord(value['applicability']) && typeof value['applicability']['objectId'] === 'string' && isRuleExpression(value['condition']) &&
+    Array.isArray(value['exceptions']) && value['exceptions'].every((v: unknown) => isRecord(v) && typeof v['exceptionId'] === 'string' && isRuleExpression(v['condition'])) &&
+    stringList(value['ruleDependencies']) && (value['dependencyRefs'] === undefined || Array.isArray(value['dependencyRefs'])) && isRecord(value['support']) && typeof value['support']['executable'] === 'boolean' && findings(value['support']['findings'])
+  if (value['kind'] !== 'action' || !isRecord(value['declaration'])) return false
+  const d = value['declaration']; const binding = value['binding']
+  return typeof d['actionId'] === 'string' && typeof d['displayName'] === 'string' && typeof d['businessMeaning'] === 'string' && typeof d['suggestedReason'] === 'string' && isVersionRef(d['inputSchemaRef']) && isVersionRef(d['outputSchemaRef']) && stringList(d['preconditions']) && stringList(d['permissions']) && stringList(d['evidenceRequirements']) && typeof d['readOnly'] === 'boolean' && ['none','read_only','writes','external'].includes(String(d['sideEffect'])) && Array.isArray(d['requiredCapabilities']) && d['requiredCapabilities'].every((v: unknown) => isRecord(v) && typeof v['name'] === 'string' && isRecord(v['versionRange']) && typeof v['versionRange']['min'] === 'string') &&
+    (binding === undefined || isRecord(binding) && ['executable','not_executable'].includes(String(binding['status'])) && typeof binding['executable'] === 'boolean' && findings(binding['findings']))
 }
 
 function isRuleActionCandidateVersion(value: unknown): value is RuleActionCandidateVersion {
@@ -220,8 +220,10 @@ function isRuleActionCandidateVersion(value: unknown): value is RuleActionCandid
   if (typeof value['displayName'] !== 'string' || value['displayName'].length === 0) return false
   if (typeof value['businessMeaning'] !== 'string') return false
   if (typeof value['suggestedReason'] !== 'string') return false
-  if (!isRuleActionCandidatePayload(value['payload'])) return false
-  if (!Array.isArray(value['sourceRefs'])) return false
+  if (!isRuleActionCandidatePayload(value['payload']) || value['payload'].kind !== value['kind']) return false
+  if (!Array.isArray(value['sourceRefs']) || !value['sourceRefs'].every(isResourceRef) || !Array.isArray(value['sourceSpans'])) return false
+  const generation = value['generationContext']
+  if (generation !== undefined && (!isRecord(generation) || !isRecord(generation['inputDraftRef']) || !isRevisionString(generation['inputDraftRef']['revision']) || !Array.isArray(generation['issues']) || !generation['issues'].every((v: unknown) => isRecord(v) && typeof v['code'] === 'string' && typeof v['message'] === 'string') || !Array.isArray(generation['inputSourceRefs']) || !generation['inputSourceRefs'].every(isResourceRef))) return false
   return isSha256Digest(value['contentDigest'])
 }
 
@@ -251,11 +253,12 @@ function isDefinitionEditingResult(value: unknown): value is DefinitionEditingRe
   return value['candidates'].every(isEditedDefinitionCandidate)
 }
 
+function isDefinitionChange(value: unknown): boolean { return isRecord(value) && typeof value['code'] === 'string' && typeof value['logicalId'] === 'string' && isDefinitionCandidateKind(value['kind']) && typeof value['breaking'] === 'boolean' && typeof value['message'] === 'string' && (value['before'] === undefined || typeof value['before'] === 'string') && (value['after'] === undefined || typeof value['after'] === 'string') }
 function isDefinitionCompatibilityReport(value: unknown): value is DefinitionCompatibilityReport {
   if (!isRecord(value)) return false
   if (!isUuid(value['workspaceId']) || !isRevisionString(value['revision'])) return false
-  if (!Array.isArray(value['additions']) || !Array.isArray(value['changes'])) return false
-  if (!Array.isArray(value['breakingChanges'])) return false
+  if (!Array.isArray(value['additions']) || !value['additions'].every(isDefinitionChange) || !Array.isArray(value['changes']) || !value['changes'].every(isDefinitionChange)) return false
+  if (!Array.isArray(value['breakingChanges']) || !value['breakingChanges'].every(isDefinitionChange)) return false
   return typeof value['requiresRevisionStrategy'] === 'boolean'
 }
 

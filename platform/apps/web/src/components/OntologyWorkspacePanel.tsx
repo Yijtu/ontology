@@ -1,5 +1,5 @@
-import { useCallback, useEffect, useState } from 'react'
-import type { AssetDraftVersion, IndustryWorkspace, IndustryWorkspaceBoundary, ResourceRef } from '@ontology/contracts'
+import { useCallback, useEffect, useRef, useState } from 'react'
+import type { AssetDraftVersion, IndustryWorkspace, IndustryWorkspaceBoundary } from '@ontology/contracts'
 import type { WorkbenchClient } from '../api/client'
 import { ApiError } from '../api/errors'
 import type { WorkspaceIdentity } from '../workspace-identity'
@@ -9,6 +9,10 @@ import { PublicEmptyState, PublicStateNotice } from './PublicStateNotice'
 import { classifyPublicError } from '../state/public-errors'
 import type { PublicFailure } from '../state/public-errors'
 import type { WorkbenchError, WorkbenchPhase } from '../state/workbench'
+import { Button } from './ui'
+import { DefinitionWorkbenchPanel } from './DefinitionWorkbenchPanel'
+import { PackagePublicationPanel } from './PackagePublicationPanel'
+import './ontology/ontology.css'
 import { WorkspaceSourcesPanel } from './WorkspaceSourcesPanel'
 
 /**
@@ -107,20 +111,6 @@ function phaseFor(error: unknown): WorkbenchPhase {
   return 'failure'
 }
 
-function canonicalInitialSourceSet(input: {
-  readonly namespace: string
-  readonly displayName: string
-  readonly boundary: IndustryWorkspaceBoundary
-}): string {
-  return JSON.stringify({
-    kind: 'industry-source-set',
-    namespace: input.namespace,
-    displayName: input.displayName,
-    boundary: input.boundary,
-    sources: [],
-  })
-}
-
 function workspaceQuery(workspaceId: string | undefined): void {
   if (typeof window === 'undefined') return
   const url = new URL(window.location.href)
@@ -134,6 +124,13 @@ export function OntologyWorkspacePanel({
   identity = webWorkspaceIdentity,
   readOnly = false,
 }: OntologyWorkspacePanelProps) {
+  const [stage, setStage] = useState('sources')
+  const [visited, setVisited] = useState<ReadonlySet<string>>(new Set(['sources']))
+  const openStage = (next: string) => { setVisited((old) => new Set(old).add(next)); setStage(next) }
+  const selectedRef = useRef<string | undefined>(undefined)
+  const boundaryBuffers = useRef(new Map<string, WorkspaceCreateFields>())
+  const createPending = useRef<{ readonly body: string; readonly key: string } | undefined>(undefined)
+  const listEpoch = useRef(0)
   const [workspaces, setWorkspaces] = useState<readonly IndustryWorkspace[]>([])
   const [phase, setPhase] = useState<WorkbenchPhase>('loading')
   const [error, setError] = useState<WorkbenchError | undefined>(undefined)
@@ -147,20 +144,23 @@ export function OntologyWorkspacePanel({
   const [editFields, setEditFields] = useState<WorkspaceCreateFields>(EMPTY_CREATE_FIELDS)
   const [editMode, setEditMode] = useState(false)
 
+  selectedRef.current = selectedId
   const selected = workspaces.find((workspace) => workspace.workspaceId === selectedId)
 
   const loadDrafts = useCallback(
     async (workspaceId: string): Promise<void> => {
       const list = await client.listIndustryWorkspaceDrafts(workspaceId)
-      setDrafts(list)
+      if (selectedRef.current === workspaceId) setDrafts(list)
     },
     [client],
   )
 
   const loadList = useCallback(async (): Promise<void> => {
+    const token = ++listEpoch.current
     setPhase('loading')
     try {
       const list = await client.listIndustryWorkspaces()
+      if (listEpoch.current !== token) return
       setWorkspaces(list)
       const requested = typeof window === 'undefined' ? undefined : new URLSearchParams(window.location.search).get('workspace')
       const matching = list.find((workspace) => workspace.workspaceId === requested)
@@ -193,6 +193,8 @@ export function OntologyWorkspacePanel({
 
   useEffect(() => {
     if (!editMode || selected === undefined) return
+    const saved = boundaryBuffers.current.get(selected.workspaceId)
+    if (saved !== undefined) { setEditFields(saved); return }
     setEditFields({
       displayName: selected.displayName,
       namespace: selected.namespace,
@@ -207,6 +209,7 @@ export function OntologyWorkspacePanel({
 
   const selectWorkspace = (workspaceId: string): void => {
     setSelectedId(workspaceId)
+    setStage('sources')
     setEditMode(false)
     workspaceQuery(workspaceId)
   }
@@ -222,16 +225,11 @@ export function OntologyWorkspacePanel({
     setCreateFailure(undefined)
     try {
       const boundary = boundaryOf(fields)
-      const digest = await identity.sha256(
-        canonicalInitialSourceSet({ namespace: fields.namespace.trim(), displayName: fields.displayName.trim(), boundary }),
-      )
-      const documentSetRef: ResourceRef = { id: identity.newId(), version: '1.0.0', digest, kind: 'artifact' }
-      const view = await client.createIndustryWorkspace({
-        namespace: fields.namespace.trim(),
-        displayName: fields.displayName.trim(),
-        boundary,
-        documentSetRef,
-      })
+      const request = { namespace: fields.namespace.trim(), displayName: fields.displayName.trim(), boundary }
+      const body = JSON.stringify(request)
+      if (createPending.current?.body !== body) createPending.current = { body, key: client.newRequestKey() }
+      const view = await client.bootstrapIndustryWorkspace(request, { idempotencyKey: createPending.current.key })
+      createPending.current = undefined
       setFields(EMPTY_CREATE_FIELDS)
       setWorkspaces((previous) => [view.workspace, ...previous])
       selectWorkspace(view.workspace.workspaceId)
@@ -263,6 +261,8 @@ export function OntologyWorkspacePanel({
       setWorkspaces((previous) =>
         previous.map((workspace) => (workspace.workspaceId === view.workspace.workspaceId ? view.workspace : workspace)),
       )
+      boundaryBuffers.current.delete(view.workspace.workspaceId)
+      if (selectedRef.current !== view.workspace.workspaceId) return
       setEditMode(false)
       await loadDrafts(view.workspace.workspaceId)
     } catch (caught) {
@@ -272,31 +272,18 @@ export function OntologyWorkspacePanel({
     }
   }
 
-  const registerSourceSet = async (documentSetRef: ResourceRef, reason: string): Promise<void> => {
-    if (selected === undefined) throw new Error('select a workspace before registering a source set')
-    const view = await client.appendIndustryWorkspaceDraft(selected.workspaceId, {
-      expectedRevision: selected.headRevision,
-      reason,
-      documentSetRef,
-    })
-    setWorkspaces((previous) =>
-      previous.map((workspace) => (workspace.workspaceId === view.workspace.workspaceId ? view.workspace : workspace)),
-    )
-    await loadDrafts(view.workspace.workspaceId)
-  }
-
   const setField = (key: keyof WorkspaceCreateFields, value: string): void => {
     setFields((previous) => ({ ...previous, [key]: value }))
   }
 
   const setEditField = (key: keyof WorkspaceCreateFields, value: string): void => {
-    setEditFields((previous) => ({ ...previous, [key]: value }))
+    setEditFields((previous) => { const next = { ...previous, [key]: value }; if (selectedId !== undefined) boundaryBuffers.current.set(selectedId, next); return next })
   }
 
   return (
-    <section className="ontology-workspace" data-testid="ontology-workspace" data-phase={phase}>
+    <section className="ontology-workspace ontology-workbench" data-testid="ontology-workspace" data-phase={phase}>
       <header className="panel__header">
-        <h2>本体工作区</h2>
+<p className="ontology-eyebrow">本体工作区</p><h2>从业务资料走到可验核的版本</h2>
         <p className="panel__hint">创建、继续或切换行业本体工作区；保存后有稳定的工作区标识与草稿修订，刷新回读一致。</p>
       </header>
 
@@ -452,7 +439,7 @@ export function OntologyWorkspacePanel({
       {selected === undefined ? null : (
         <div className="ontology-workspace__detail" data-testid="workspace-detail" data-workspace-id={selected.workspaceId}>
           <h3 data-testid="workspace-detail-name">{selected.displayName}</h3>
-          <dl>
+          <details><summary>工作区边界与版本信息</summary><dl>
             <dt>命名空间</dt>
             <dd data-testid="workspace-detail-namespace">{selected.namespace}</dd>
             <dt>修订</dt>
@@ -463,7 +450,7 @@ export function OntologyWorkspacePanel({
             <dd data-testid="workspace-detail-goals">{selected.boundary.goals.join('；')}</dd>
             <dt>适用地区</dt>
             <dd data-testid="workspace-detail-region">{selected.boundary.applicability.region ?? '—'}</dd>
-          </dl>
+          </dl></details>
 
           {readOnly ? null : (
             <div className="ontology-workspace__edit">
@@ -517,7 +504,7 @@ export function OntologyWorkspacePanel({
             </div>
           )}
 
-          <div className="ontology-workspace__drafts" data-testid="workspace-drafts" data-count={drafts.length}>
+          <details><summary>工作区修订历史</summary><div className="ontology-workspace__drafts" data-testid="workspace-drafts" data-count={drafts.length}>
             <h4>草稿修订</h4>
             {drafts.length === 0 ? (
               <p data-testid="workspace-drafts-empty">尚无草稿修订。</p>
@@ -532,13 +519,16 @@ export function OntologyWorkspacePanel({
             )}
           </div>
 
-          <WorkspaceSourcesPanel
+          </details>
+          <nav className="ontology-stage-tabs" aria-label="本体工作步骤"><Button aria-current={stage === "sources" ? "step" : undefined} onClick={() => openStage("sources")}>1–2 资料与生成</Button><Button aria-current={stage === "review" ? "step" : undefined} onClick={() => openStage("review")}>3 编辑与审核</Button><Button aria-current={stage === "publish" ? "step" : undefined} onClick={() => openStage("publish")}>4–5 验核与发布</Button></nav>
+          {visited.has("review") ? <div hidden={stage !== "review"}><DefinitionWorkbenchPanel client={client} workspaceId={selected.workspaceId} readOnly={readOnly} /></div> : null}{visited.has("publish") ? <div hidden={stage !== "publish"}><PackagePublicationPanel client={client} workspaceId={selected.workspaceId} readOnly={readOnly} /></div> : null}<div hidden={stage !== "sources"}><WorkspaceSourcesPanel
             client={client}
             workspace={selected}
             identity={identity}
             readOnly={readOnly}
-            onRegisterSourceSet={registerSourceSet}
-          />
+            onWorkspaceChanged={(workspace, draft) => { setWorkspaces((old) => old.map((value) => value.workspaceId === workspace.workspaceId ? workspace : value)); if (selectedRef.current === workspace.workspaceId) setDrafts((old) => [...old.filter((v) => v.revision !== draft.revision), draft]) }}
+            onContinue={() => openStage("review")}
+          /></div>
         </div>
       )}
     </section>

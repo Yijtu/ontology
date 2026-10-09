@@ -1,5 +1,5 @@
-import { useCallback, useEffect, useState } from 'react'
-import type { MappingRef, ProjectRecord, ResolvedProfileRef, ResourceRef } from '@ontology/contracts'
+import { useCallback, useEffect, useRef, useState } from 'react'
+import type { DefinitionRevisionStrategy, MappingRef, ProjectRecord, ResolvedProfileRef, ResourceRef, VersionRef } from '@ontology/contracts'
 import type { WorkbenchClient } from '../api/client'
 import { ApiError } from '../api/errors'
 import type { IndustryPackSummary } from '../api/projects'
@@ -13,6 +13,11 @@ import {
   type SyntheticExampleSetView,
   type ValidationSurfaceGateView,
 } from '../api/package-publication'
+import type { ExecutionPreviewView } from '../api/execution-preview'
+import { CompetencyQuestionWorkbench } from './ontology/CompetencyQuestionWorkbench'
+import { expectationText } from '../api/competency'
+import { FullVersionDiff, RevisionStrategyForm } from './ontology/FullVersionDiff'
+import './ontology/ontology.css'
 import { StatePanel } from './StatePanel'
 import { PublicStateNotice } from './PublicStateNotice'
 import { classifyPublicError } from '../state/public-errors'
@@ -79,6 +84,7 @@ export function publicationBlocked(
 ): boolean {
   if (report === undefined) return true
   if (!report.semanticPublished.passed) return true
+  if (report.competencyRequired && (report.competencyQuestionRef === undefined || !report.competency?.passed)) return true
   if (requireDeploymentExecutable && !report.deploymentExecutable.passed) return true
   return false
 }
@@ -129,7 +135,7 @@ function SurfaceView({
       data-testid={`validation-surface-${surface}`}
       data-passed={gate.passed}
     >
-      <h4>{surface === 'semantic' ? '语义已发布' : '当前部署可执行'}</h4>
+      <h4>{surface === 'semantic' ? '语义校验' : '当前部署可执行'}</h4>
       <p data-testid={`validation-surface-${surface}-status`}>
         {gate.passed ? '通过' : `${String(gate.blockers.length)} 个阻断项`}
       </p>
@@ -155,6 +161,17 @@ export function PackagePublicationPanel({
   initialValidationId,
   readOnly = false,
 }: PackagePublicationPanelProps) {
+  const [strategy, setStrategy] = useState<DefinitionRevisionStrategy>()
+  const [approvedCQRef, setApprovedCQRef] = useState<VersionRef>()
+  const [executionPreview, setExecutionPreview] = useState<ExecutionPreviewView>()
+  const [currentHead, setCurrentHead] = useState<string>()
+  const [validating, setValidating] = useState(false)
+  const [validationNotice, setValidationNotice] = useState('')
+  const validationAbort = useRef<AbortController | undefined>(undefined)
+  const writeKeys = useRef(new Map<string, string>())
+  const epoch = useRef(0)
+  const workspaceRef = useRef(workspaceId)
+  workspaceRef.current = workspaceId
   const [phase, setPhase] = useState<WorkbenchPhase>('loading')
   const [error, setError] = useState<WorkbenchError | undefined>(undefined)
   const [busy, setBusy] = useState(false)
@@ -176,56 +193,97 @@ export function PackagePublicationPanel({
   const [mountedProject, setMountedProject] = useState<ProjectRecord | undefined>(undefined)
 
   const load = useCallback(async (): Promise<void> => {
+    const token = ++epoch.current
     setPhase('loading')
     try {
-      const [packList, setList] = await Promise.all([
+      const [packList, setList, workspaceHead] = await Promise.all([
         client.listIndustryPacks(),
         client.listSyntheticExampleSets(workspaceId),
+        client.getIndustryWorkspace(workspaceId),
       ])
+      if (epoch.current !== token || workspaceRef.current !== workspaceId) return
+      setCurrentHead(workspaceHead.headRevision)
       setPacks(packList)
       setExampleSets(setList)
       const loaded = initialValidationId === undefined ? undefined : await client.getValidation(workspaceId, initialValidationId)
+      if (epoch.current !== token || workspaceRef.current !== workspaceId) return
       setReport(loaded)
       setSelectedExampleSetId((previous) => loaded?.exampleSetId ?? previous ?? setList[0]?.exampleSetId)
       setPhase('ready')
     } catch (caught) {
+      if (epoch.current !== token) return
       setError(toError(caught))
       setPhase(phaseFor(caught))
     }
   }, [client, workspaceId, initialValidationId])
 
   useEffect(() => {
+    setReport(undefined); setPublication(undefined); setExportBundle(undefined); setMountedProject(undefined); setStrategy(undefined); setApprovedCQRef(undefined); setBusy(false); setSelectedExampleSetId(undefined); setExecutionPreview(undefined); setCurrentHead(undefined); setValidating(false); setValidationNotice('')
     void load()
+    return () => { epoch.current++; validationAbort.current?.abort() }
   }, [load])
 
   const run = useCallback(
-    async (operation: () => Promise<void>): Promise<void> => {
+    async (operation: (active: () => boolean) => Promise<void>): Promise<void> => {
+      const token = epoch.current
+      const active = () => epoch.current === token
       setBusy(true)
       setActionError(undefined)
       try {
-        await operation()
+        await operation(active)
       } catch (caught) {
-        setActionError(toError(caught))
+        if (active()) setActionError(toError(caught))
       } finally {
-        setBusy(false)
+        if (active()) setBusy(false)
       }
     },
     [],
   )
 
+  const approvedRefRef = useRef<VersionRef | undefined>(undefined)
+  const handleApprovedCQRef = useCallback((ref: VersionRef | undefined) => {
+    if (JSON.stringify(approvedRefRef.current) !== JSON.stringify(ref)) { setReport(undefined); setPublication(undefined) }
+    approvedRefRef.current = ref; setApprovedCQRef(ref)
+  }, [])
+
   const selectedExampleSet = exampleSets.find((set) => set.exampleSetId === selectedExampleSetId)
+
+  const prepareExecution = (): void => {
+    if (selectedExampleSetId === undefined || readOnly) return
+    void run(async (active) => {
+      const head = await client.getIndustryWorkspace(workspaceId)
+      if (!active()) return
+      const identity = `${workspaceId}:preview:${head.headRevision}:${selectedExampleSetId}`
+      const key = writeKeys.current.get(identity) ?? client.newRequestKey(); writeKeys.current.set(identity, key)
+      const preview = await client.prepareExecutionPreview(workspaceId, selectedExampleSetId, { ifMatch: head.headRevision, idempotencyKey: key })
+      if (!active()) return
+      if (preview.workspace.workspaceId !== workspaceId || preview.draft.revision !== head.headRevision) throw new Error('执行支持返回了其他工作区或版本。')
+      writeKeys.current.delete(identity); setExecutionPreview(preview); setCurrentHead(preview.draft.revision); setReport(undefined); setPublication(undefined)
+    })
+  }
 
   const runValidation = (): void => {
     if (selectedExampleSetId === undefined) {
       setActionError({ code: 'INVALID_ARGUMENT', message: '请选择一个合成样例集后再运行验证。' })
       return
     }
-    const expectedRevision = report?.revision ?? selectedExampleSet?.targetDraftRef?.version
-    void run(async () => {
-      const next = await client.createSyntheticValidation(workspaceId, {
-        exampleSetId: selectedExampleSetId,
-        ...(expectedRevision === undefined ? {} : { expectedRevision }),
-      })
+    void run(async (active) => {
+      const head = await client.getIndustryWorkspace(workspaceId)
+      if (!active()) return
+      const expectedRevision = head.headRevision
+      setCurrentHead(expectedRevision)
+      const request = { exampleSetId: selectedExampleSetId, expectedRevision,
+        ...(approvedCQRef === undefined ? {} : { competencyQuestionRef: approvedCQRef }),
+        ...(strategy === undefined ? {} : { strategy }) }
+      const identity = `${workspaceId}:validate:${JSON.stringify(request)}`
+      const key = writeKeys.current.get(identity) ?? client.newRequestKey(); writeKeys.current.set(identity, key)
+      const abort = new AbortController(); validationAbort.current = abort; setValidating(true); setValidationNotice(''); setReport(undefined); setPublication(undefined)
+      let next: IndustryValidationReportView
+      try { next = await client.createSyntheticValidation(workspaceId, request, { idempotencyKey: key, signal: abort.signal }) }
+      catch (error) { if (active() && abort.signal.aborted) { setValidationNotice('已停止等待，验核结果与取消状态待服务端回读确认。当前题集与人工编辑均保留。'); return }; throw error }
+      finally { if (active()) setValidating(false) }
+      if (!active() || abort.signal.aborted) return
+      writeKeys.current.delete(identity)
       setReport(next)
       setSelectedExampleSetId(next.exampleSetId)
       setPublication(undefined)
@@ -233,6 +291,7 @@ export function PackagePublicationPanel({
   }
 
   const publish = (): void => {
+    if (report !== undefined && report.revision !== currentHead) { setActionError({ code: 'VERSION_CONFLICT', message: '报告对应的工作区版本已变化，请按当前版本重新验核。' }); return }
     if (report === undefined) {
       setActionError({ code: 'REVISION_REQUIRED', message: '没有可发布验证结果，请先运行合成验证。' })
       return
@@ -251,16 +310,23 @@ export function PackagePublicationPanel({
       setActionError({ code: 'INVALID_ARGUMENT', message: '请填写包 ID。' })
       return
     }
-    void run(async () => {
-      const result = await client.publishPack(workspaceId, {
+    void run(async (active) => {
+      const request = {
         packId: trimmedPackId,
         version: packVersion.trim(),
         validationId: report.validationId,
+        ...(strategy === undefined ? {} : { strategy }),
         requireDeploymentExecutable,
         expectedRevision: report.revision,
-      })
+      }
+      const identity = `${workspaceId}:publish:${JSON.stringify(request)}`
+      const key = writeKeys.current.get(identity) ?? client.newRequestKey(); writeKeys.current.set(identity, key)
+      const result = await client.publishPack(workspaceId, request, { idempotencyKey: key })
+      if (!active()) return
+      writeKeys.current.delete(identity)
       setPublication(result)
       const refreshed = await client.listIndustryPacks()
+      if (!active()) return
       setPacks(refreshed)
     })
   }
@@ -271,8 +337,9 @@ export function PackagePublicationPanel({
       setActionError({ code: 'INVALID_ARGUMENT', message: '该条目没有可导出的精确版本。' })
       return
     }
-    void run(async () => {
+    void run(async (active) => {
       const bundle = await client.exportIndustryPack(ref.id, ref.version)
+      if (!active()) return
       setExportBundle(bundle)
     })
   }
@@ -294,7 +361,7 @@ export function PackagePublicationPanel({
       })
       return
     }
-    void run(async () => {
+    void run(async (active) => {
       if (mountBinding !== undefined) {
         const created = await client.createProject({
           title: projectTitle.trim(),
@@ -303,17 +370,20 @@ export function PackagePublicationPanel({
           mappingRefs: mountBinding.mappingRefs,
           documentSetRef: mountBinding.documentSetRef,
         })
+        if (!active()) return
         setMountedProject(created.project)
         return
       }
       const projectId = existingProjectId
       if (projectId === undefined) return
       const project = await client.getProject(projectId)
+      if (!active()) return
       const view = await client.mountProjectPack(projectId, {
         expectedRevision: project.headRevision,
         industryPackRef: ref,
         reason: '从工作台挂载新发布包',
       })
+      if (!active()) return
       setMountedProject(view.project)
     })
   }
@@ -322,17 +392,17 @@ export function PackagePublicationPanel({
     summary.packRef !== undefined && summary.usable,
   )
   const summary = report === undefined ? undefined : expectationSummary(report.expectationResults)
-  const blocked = publicationBlocked(report, requireDeploymentExecutable)
+  const blocked = publicationBlocked(report, requireDeploymentExecutable) || report?.revision !== currentHead
 
   return (
     <section
-      className="package-publication"
+      className="package-publication ontology-workbench"
       data-testid="package-publication"
       data-phase={phase}
       data-workspace-id={workspaceId}
     >
       <header className="panel__header">
-        <h2>包验证、发布、导出与项目挂载</h2>
+        <p className="ontology-eyebrow">本体工作区 · 第 4–5 步 / 5</p><h2>验核业务能力，再发布明确的版本</h2>
         <p className="panel__hint">
           合成反例只用于验证；语义发布与当前部署可执行是两个独立结论。导出为不可变声明包，不含客户实例与真实价表。
         </p>
@@ -357,6 +427,10 @@ export function PackagePublicationPanel({
 
       {phase === 'ready' ? (
         <>
+          {validationNotice ? <p role="status" className="ontology-notice">{validationNotice}</p> : null}{validating ? <button type="button" onClick={() => validationAbort.current?.abort()}>停止等待验核并保留人工输入</button> : null}
+          <section className="ontology-execution-support"><h3>准备真实执行支持</h3><p>对当前已审核声明保存真实的语义发布版本，供合成验核使用。此操作不批准题集、不授予业务审批，也不表示部署可执行；需要部署维护者权限。</p>{readOnly ? null : <button type="button" disabled={busy || selectedExampleSetId === undefined} onClick={prepareExecution}>准备执行验证</button>}{executionPreview === undefined ? <p>尚未准备当前版本的执行支持；接口未装配时会明确显示不可用。</p> : <div><p>✓ 当前执行支持已准备 · 业务审批：无 · 部署：仍未通过验核。</p><p>后续新题集必须使用这些实际版本和真实上传来源，独立填写期望并重新人工批准。不会自动把旧题集改成当前版本。</p><details><summary>实际执行版本、声明和来源绑定</summary><pre>{JSON.stringify(executionPreview, null, 2)}</pre></details></div>}</section>
+          <CompetencyQuestionWorkbench client={client} workspaceId={workspaceId} readOnly={readOnly} disabled={busy} onApprovedRef={handleApprovedCQRef} />
+          <RevisionStrategyForm value={strategy} disabled={busy || readOnly} onChange={(next) => { setStrategy(next); setReport(undefined); setPublication(undefined) }} {...(exportBundle?.versionDiff?.fromPackRef === undefined ? {} : { previous: exportBundle.versionDiff.fromPackRef })} />
           <section className="package-publication__sandbox" data-testid="validation-sandbox">
             <h3>合成验证与反例</h3>
             {exampleSets.length === 0 ? (
@@ -374,7 +448,7 @@ export function PackagePublicationPanel({
                         disabled={busy}
                         onChange={() => setSelectedExampleSetId(set.exampleSetId)}
                       />
-                      {set.exampleSetId.slice(0, 8)} · 标记：{set.isolationLabel}
+                      合成反例集 · {set.cases.length} 个场景（非客户事实）
                     </label>
                     <ul data-testid="validation-counterexamples">
                       {set.cases.map((counterExample) => (
@@ -437,6 +511,8 @@ export function PackagePublicationPanel({
                   </li>
                 ))}
               </ul>
+              {report.competencyRequired && report.competency === undefined ? <p role="alert">当前版本需要业务能力问题报告，尚未取得可执行结果。</p> : null}
+              {report.competency === undefined ? null : <section><h3>真实业务能力验核结果</h3><p>{report.competency.passed ? '当前题集全部通过' : '存在失败或暂不可执行的问题'}；合成验核不授予业务审批。</p><ul className="ontology-question-list">{report.competency.results.map((result) => <li key={result.questionId}><strong>{result.question}</strong><p>{result.status === 'passed' ? '✓ 通过' : result.status === 'failed' ? '! 不一致' : '! 暂不可执行'} · {result.reason ?? ''}</p><p>独立期望：{expectationText(result.expected)} · 实际：{expectationText(result.actual)}</p><p>原文覆盖：{result.sourceCoverage.verified}/{result.sourceCoverage.required} · {result.sourceCoverage.complete ? '完整' : '不完整'}</p><details><summary>验核明细与版本</summary><pre>{JSON.stringify(result, null, 2)}</pre></details></li>)}</ul></section>}
               <ul data-testid="validation-expectations">
                 {report.expectationResults.map((result, index) => (
                   <li
@@ -456,7 +532,7 @@ export function PackagePublicationPanel({
           <section className="package-publication__publish" data-testid="asset-publish-section">
             <h3>发布不可变包</h3>
             <label>
-              包 ID
+              发布标识（高级）
               <input
                 type="text"
                 data-testid="asset-publish-pack-id"
@@ -492,7 +568,7 @@ export function PackagePublicationPanel({
             )}
             {blocked && !readOnly ? (
               <p data-testid="asset-publish-blocker">
-                {report === undefined ? '没有验证报告。' : '发布受阻：先修复验证/执行阻断项，或仅做语义发布。'}
+                {report === undefined ? '请先验核当前版本。' : '发布受阻：请修复当前报告中的阻断项，再重新验核。'}
               </p>
             ) : null}
             {publication === undefined ? null : (
@@ -572,6 +648,7 @@ export function PackagePublicationPanel({
                   <p data-testid="pack-version-diff-summary">
                     相对上一版本变更 {exportBundle.versionDiff.changes.length} 项，破坏性 {exportBundle.versionDiff.breakingChanges.length} 项
                   </p>
+                  <FullVersionDiff changes={exportBundle.versionDiff.changes} />
                   <ul data-testid="pack-version-diff-changes">
                     {exportBundle.versionDiff.changes.map((change, index) => (
                       <li key={`${change.logicalId}:${String(index)}`} data-testid="pack-version-diff-change" data-breaking={change.breaking}>

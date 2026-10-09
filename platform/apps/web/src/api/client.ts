@@ -1,3 +1,7 @@
+import { parseExecutionPreview } from './execution-preview'
+import type { ExecutionPreviewView } from './execution-preview'
+import { parseWorkspaceAuthoring, parseWorkspaceCorpus, parseWorkspaceSource } from './workspace-authoring'
+import type { WorkspaceAuthoringContext, WorkspaceSourceCatalogue, WorkspaceSourceView } from './workspace-authoring'
 import type {
   ActiveProfileRecord,
   AssetCandidateBatch,
@@ -319,10 +323,11 @@ export interface CoreImportResult {
   readonly sourceRef: SourceRef
 }
 
-interface RequestOptions {
+export interface RequestOptions {
   readonly body?: unknown
   readonly idempotencyKey?: string
   readonly ifMatch?: string
+  readonly signal?: AbortSignal
 }
 
 function defaultId(): string {
@@ -760,6 +765,30 @@ export class WorkbenchClient {
       }
       return data['workspace']
     })
+  }
+
+  /** Normal host creates the actual empty corpus; the browser supplies only business boundary. */
+  bootstrapIndustryWorkspace(request: Omit<CreateIndustryWorkspaceRequest, 'documentSetRef'>, options: RequestOptions = {}): Promise<{ readonly workspace: IndustryWorkspace; readonly draft: AssetDraftVersion }> {
+    return this.#request<unknown>('POST', '/api/v1/core/workspace-bootstrap', { ...options, body: request, idempotencyKey: options.idempotencyKey ?? this.#newId() }).then((value) => {
+      if (!isRecord(value) || !isIndustryWorkspace(value['workspace']) || !isAssetDraftVersion(value['draft']) || value['draft'].workspaceId !== value['workspace'].workspaceId) throw malformedResponse('/api/v1/core/workspace-bootstrap', 'actual workspace/corpus pins were not recognised')
+      return { workspace: value['workspace'], draft: value['draft'] }
+    })
+  }
+
+  getWorkspaceSources(workspaceId: string, signal?: AbortSignal): Promise<WorkspaceSourceCatalogue> {
+    return this.#request<unknown>('GET', `/api/v1/core/workspaces/${encodeURIComponent(workspaceId)}/sources`, { ...(signal === undefined ? {} : { signal }) }).then(parseWorkspaceCorpus)
+  }
+
+  uploadWorkspaceSource(workspaceId: string, request: { readonly name: string; readonly mediaType: string; readonly contentEncoding: 'base64'; readonly content: string; readonly options?: { readonly headerRow?: number; readonly dataStartRow?: number; readonly sheetId?: string; readonly sheetName?: string } }, options: RequestOptions): Promise<{ readonly workspace: IndustryWorkspace; readonly draft: AssetDraftVersion; readonly source: WorkspaceSourceView }> {
+    const path = `/api/v1/core/workspaces/${encodeURIComponent(workspaceId)}/sources`
+    return this.#request<unknown>('POST', path, { ...options, body: request }).then((value) => {
+      if (!isRecord(value) || !isIndustryWorkspace(value['workspace']) || !isAssetDraftVersion(value['draft']) || value['draft'].workspaceId !== value['workspace'].workspaceId || value['draft'].revision !== value['workspace'].headRevision) throw malformedResponse(path, 'actual uploaded source/corpus pins were not recognised')
+      return { workspace: value['workspace'], draft: value['draft'], source: parseWorkspaceSource(value['source']) }
+    })
+  }
+
+  getWorkspaceAuthoringContext(workspaceId: string, signal?: AbortSignal): Promise<WorkspaceAuthoringContext> {
+    return this.#request<unknown>('GET', `/api/v1/core/workspaces/${encodeURIComponent(workspaceId)}/authoring-context`, { ...(signal === undefined ? {} : { signal }) }).then(parseWorkspaceAuthoring)
   }
 
   /** `POST /industry-workspaces`: create the workspace head plus its first immutable draft. */
@@ -1572,16 +1601,22 @@ export class WorkbenchClient {
     })
   }
 
+  prepareExecutionPreview(workspaceId: string, exampleSetId: string, options: RequestOptions): Promise<ExecutionPreviewView> {
+    return this.#request<unknown>('POST', `/api/v1/core/workspaces/${encodeURIComponent(workspaceId)}/execution-preview`, { ...options, body: { exampleSetId } }).then(parseExecutionPreview)
+  }
+
   /** `POST /industry-workspaces/:id/validations`: run the synthetic validation over a draft. */
   createSyntheticValidation(
     workspaceId: string,
     request: RunValidationRequest,
+    options: Pick<RequestOptions, 'signal' | 'idempotencyKey'> = {},
   ): Promise<IndustryValidationReportView> {
     const path = `/api/v1/industry-workspaces/${encodeURIComponent(workspaceId)}/validations`
     return this.#request<unknown>('POST', path, {
-      body: { exampleSetId: request.exampleSetId },
+      body: { exampleSetId: request.exampleSetId, ...(request.competencyQuestionRef === undefined ? {} : { competencyQuestionRef: request.competencyQuestionRef }), ...(request.strategy === undefined ? {} : { strategy: request.strategy }) },
       ...(request.expectedRevision === undefined ? {} : { ifMatch: request.expectedRevision }),
-      idempotencyKey: this.#newId(),
+      idempotencyKey: options.idempotencyKey ?? this.#newId(),
+      ...(options.signal === undefined ? {} : { signal: options.signal }),
     }).then((data) => this.readValidationReport(path, data))
   }
 
@@ -1596,17 +1631,19 @@ export class WorkbenchClient {
    * The server refuses a blocked semantic surface, and refuses a not-fully-executable deployment
    * surface when `requireDeploymentExecutable` is set. The two surfaces come back independently.
    */
-  publishPack(workspaceId: string, request: PublishPackRequest): Promise<PublishedPackResultView> {
+  publishPack(workspaceId: string, request: PublishPackRequest, options: Pick<RequestOptions, 'signal' | 'idempotencyKey'> = {}): Promise<PublishedPackResultView> {
     const path = `/api/v1/industry-workspaces/${encodeURIComponent(workspaceId)}/publications`
     return this.#request<unknown>('POST', path, {
       body: {
         packId: request.packId,
         version: request.version,
         validationId: request.validationId,
+        ...(request.strategy === undefined ? {} : { strategy: request.strategy }),
         ...(request.requireDeploymentExecutable ? { requireDeploymentExecutable: true } : {}),
       },
       ifMatch: request.expectedRevision,
-      idempotencyKey: this.#newId(),
+      idempotencyKey: options.idempotencyKey ?? this.#newId(),
+      ...(options.signal === undefined ? {} : { signal: options.signal }),
     }).then((data) => {
       if (!isRecord(data) || !isVersionRef(data['packRef']) || !isPackCapabilityStatusView(data['capabilityStatus'])) {
         throw malformedResponse(path, 'the published pack result was not recognised')
@@ -1778,10 +1815,11 @@ export class WorkbenchClient {
     })
   }
 
-  async #requestWithMeta<T>(path: string): Promise<{ data: T; nextCursor: string | undefined }> {
+  async #requestWithMeta<T>(path: string, signal?: AbortSignal): Promise<{ data: T; nextCursor: string | undefined }> {
     const response = await this.#fetch(`${this.#baseUrl}${path}`, {
       method: 'GET',
       headers: { accept: 'application/json' },
+      ...(signal === undefined ? {} : { signal }),
     })
     const text = await response.text()
     let parsed: unknown
@@ -1800,9 +1838,26 @@ export class WorkbenchClient {
     return { data, nextCursor }
   }
 
-  async #request<T>(method: string, path: string, options: RequestOptions = {}): Promise<T> {
+  newRequestKey(): string { return this.#newId() }
+
+  /** Shared authenticated transport. Domain callers must validate the returned wire body. */
+  requestJson<T = unknown>(method: string, path: string, options: RequestOptions = {}): Promise<T> {
+    return this.#request<T>(method, path, options)
+  }
+
+  requestBytes<T = unknown>(method: string, path: string, bytes: Uint8Array, options: Omit<RequestOptions, 'body'> & {
+    readonly mediaType: string
+  }): Promise<T> {
+    return this.#request<T>(method, path, options, bytes)
+  }
+
+  async #request<T>(method: string, path: string, options: RequestOptions = {}, bytes?: Uint8Array): Promise<T> {
     const headers: Record<string, string> = { accept: 'application/json' }
     if (options.body !== undefined) headers['content-type'] = 'application/json'
+    if (bytes !== undefined && 'mediaType' in options && typeof options.mediaType === 'string') {
+      headers['content-type'] = 'application/octet-stream'
+      headers['x-source-media-type'] = options.mediaType
+    }
     if (options.idempotencyKey !== undefined) headers['idempotency-key'] = options.idempotencyKey
     if (options.ifMatch !== undefined) headers['if-match'] = options.ifMatch
 
@@ -1810,6 +1865,8 @@ export class WorkbenchClient {
       method,
       headers,
       ...(options.body === undefined ? {} : { body: JSON.stringify(options.body) }),
+      ...(bytes === undefined ? {} : { body: new Blob([new Uint8Array(bytes)]) }),
+      ...(options.signal === undefined ? {} : { signal: options.signal }),
     })
     const text = await response.text()
     let parsed: unknown
