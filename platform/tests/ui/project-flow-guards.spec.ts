@@ -510,6 +510,19 @@ describe('stored-record staging and evolution wire contract', () => {
       objects: [],
     }
     expect(isProjectSourceCatalogue(data)).toBe(true)
+    const withOpaqueEntity = {
+      ...data,
+      objects: [{ objectId: 'device', displayName: '设备', attributes: [], entities: [{ entityId: 'entity:opaque:17', displayName: '合法实体' }] }],
+    }
+    expect(isProjectSourceCatalogue(withOpaqueEntity)).toBe(true)
+    expect(isProjectSourceCatalogue({
+      ...withOpaqueEntity,
+      objects: [{ ...withOpaqueEntity.objects[0]!, entities: [{ entityId: '', displayName: '无身份候选' }] }],
+    })).toBe(false)
+    expect(isProjectSourceCatalogue({
+      ...withOpaqueEntity,
+      objects: [{ ...withOpaqueEntity.objects[0]!, entities: [{ entityId: ['entity:opaque:17'], displayName: '畸形候选' }] }],
+    })).toBe(false)
     const client = new WorkbenchClient({
       baseUrl: 'http://api.test',
       fetchImpl: () => Promise.resolve(json(data)),

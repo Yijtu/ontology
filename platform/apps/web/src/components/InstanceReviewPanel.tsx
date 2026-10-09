@@ -17,8 +17,8 @@ import {
 import type { InstanceValueDraft } from './project/InstanceValueEditor'
 import { formatLocator } from './project/VerifiedCell'
 import './project/project-workbench.css'
-import { readProjectSources, readProjectTasks } from '../api/project-workbench'
-import type { ProjectSourceCatalogue, ProjectTaskCatalogue } from '../api/project-workbench'
+import { readProjectSources } from '../api/project-workbench'
+import type { ProjectSourceCatalogue } from '../api/project-workbench'
 import { CurrentInstanceFieldSource } from './project/CurrentInstanceFieldSource'
 import { ProjectNotice } from './project/ProjectNotice'
 
@@ -111,25 +111,26 @@ export function InstanceReviewPanel({
   const listRequest = useRequestFence(listScope)
   const detailRequest = useRequestFence(detailScope)
   const [sourceCatalogue, setSourceCatalogue] = useState<ProjectSourceCatalogue>()
-  const [taskCatalogue, setTaskCatalogue] = useState<ProjectTaskCatalogue>()
   const [metadataOwner, setMetadataOwner] = useState<unknown>()
   const [metadataError, setMetadataError] = useState<unknown>()
   const currentSources = metadataOwner === listScope ? sourceCatalogue : undefined
-  const currentTasks =
-    metadataOwner === listScope && taskCatalogue?.revision.ref.digest === currentSources?.revision.ref.digest
-      ? taskCatalogue
-      : undefined
+  const recordBindingRef = record?.identity.binding?.projectRevisionRef
+  const recordMatchesSourceRevision =
+    record !== undefined &&
+    currentSources?.project.projectId === projectId &&
+    recordBindingRef?.projectId === projectId &&
+    recordBindingRef.revision === currentSources.revision.ref.revision &&
+    recordBindingRef.digest === currentSources.revision.ref.digest
+  const sourceObjectForRecord = recordMatchesSourceRevision
+    ? currentSources?.objects.find((object) => object.objectId === record?.objectTypeRef)
+    : undefined
   const schemaFor = (fieldId: string) =>
-    currentSources?.objects
-      .find((object) => object.objectId === record?.objectTypeRef)
-      ?.attributes.find((field) => field.attributeId === fieldId)
+    sourceObjectForRecord?.attributes.find((field) => field.attributeId === fieldId)
   const editingSchema = editingField === undefined ? undefined : schemaFor(editingField)
   const referenceChoices =
     editingSchema?.referencesObjectId === undefined
       ? undefined
-      : currentTasks?.tasks
-          .flatMap((task) => task.objects ?? [])
-          .find((object) => object.objectId === editingSchema.referencesObjectId)?.entities
+      : currentSources?.objects.find((object) => object.objectId === editingSchema.referencesObjectId)?.entities
   const draftValid =
     editDraft !== undefined &&
     (editDraft.kind === 'quantity'
@@ -172,18 +173,13 @@ export function InstanceReviewPanel({
   useEffect(() => {
     const request = listRequest('metadata')
     setSourceCatalogue(undefined)
-    setTaskCatalogue(undefined)
     setMetadataError(undefined)
-    void Promise.allSettled([
-      readProjectSources(client, projectId, request.signal),
-      readProjectTasks(client, projectId, request.signal),
-    ]).then(([sources, tasks]) => {
+    void readProjectSources(client, projectId, request.signal).then((sources) => {
       if (!request.current()) return
       setMetadataOwner(listScope)
-      if (sources.status === 'fulfilled') setSourceCatalogue(sources.value)
-      else setMetadataError(sources.reason)
-      if (tasks.status === 'fulfilled') setTaskCatalogue(tasks.value)
-      else if (sources.status === 'fulfilled') setMetadataError(tasks.reason)
+      setSourceCatalogue(sources)
+    }).catch((error: unknown) => {
+      if (request.current()) setMetadataError(error)
     })
   }, [client, projectId, listRequest, listScope])
   const reloadSelected = useCallback(async () => {

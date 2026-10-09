@@ -86,6 +86,7 @@ export interface ProjectNativeSource {
 export interface ProjectCanonicalObject {
   readonly objectId: string
   readonly displayName: string
+  readonly entities?: readonly { readonly entityId: string; readonly displayName: string }[]
   readonly attributes: readonly {
     readonly attributeId: string
     readonly displayName: string
@@ -227,6 +228,14 @@ function isObject(value: unknown): value is ProjectCanonicalObject {
     record(value) &&
     text(value['objectId']) &&
     text(value['displayName']) &&
+    (value['entities'] === undefined ||
+      (Array.isArray(value['entities']) &&
+        value['entities'].every(
+          (entity: unknown) =>
+            record(entity) &&
+            text(entity['entityId']) &&
+            text(entity['displayName']),
+        ))) &&
     Array.isArray(value['attributes']) &&
     value['attributes'].every(
       (field: unknown) =>
