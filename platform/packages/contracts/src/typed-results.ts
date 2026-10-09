@@ -412,6 +412,12 @@ export type TableHardVerificationOutcome =
 
 /** Immutable persistence for table-verification receipts (idempotent per exact ref digest). */
 export interface TableVerificationReceiptStore {
+  /** Exact scoped discovery of an already-earned receipt; conflicting bodies refuse. */
+  findReceipt?(
+    scopeRef: ScopeRef,
+    input: { readonly resultManifestRef: ResourceRef; readonly draftHash: Sha256Digest; readonly tableId: NonEmptyString },
+    ctx: ToolContext,
+  ): Promise<ArchivedTableVerificationReceipt | undefined>
   putReceipt(
     scopeRef: ScopeRef,
     receiptRef: ResourceRef,
