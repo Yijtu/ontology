@@ -31,6 +31,10 @@ export interface CoreAnswerSourceView {
   readonly support?: ProvenanceEvidenceView
   /** Every original stays attached to its own cells when one search returned several files. */
   readonly fragments?: readonly CoreSourceFragment[]
+  readonly sourceReadLimitation?: string
+  readonly archivedPayload?: Readonly<Record<string, unknown>>
+  readonly fixedInputRef?: ResourceRef
+  readonly fixedDatasetSnapshotRef?: ResourceRef
   readonly dataMode: DataMode
 }
 
@@ -359,7 +363,12 @@ export function createCoreSourceViewReader(options: CoreSourceViewOptions) {
       }
     } else {
       requireSource(record.envelope.kind === 'observation' || record.envelope.kind === 'computation', 'this evidence family has no supported business source projection')
-      view = { ...base, family: 'data_query', precision: 'exact', readability: 'archived_snapshot_only', title: '已保存的数据查询结果', text: JSON.stringify(payload, null, 2) }
+      view = { ...base, family: 'data_query', precision: 'exact', readability: 'archived_snapshot_only',
+        title: record.envelope.kind === 'computation' ? '本次保存的计算结果' : '本次保存的查询结果',
+        text: '本次保存的查询或计算结果可核对；暂不支持从这份记录回读原始表格单元格。',
+        sourceReadLimitation: '暂不支持回读原始表格单元格；此处展示本次答案实际保存的结果与固定输入版本。',
+        archivedPayload: payload, fixedInputRef: archived.binding.request.inputSnapshotRef,
+        ...(archived.binding.projectDatasetSnapshotRef === undefined ? {} : { fixedDatasetSnapshotRef: archived.binding.projectDatasetSnapshotRef }) }
     }
     check(signal, ctx)
     requireSource(equal(await options.answers.findByAnswer(answerId, ctx), answer) && equal(await options.executionBindings.getBindingByRun(scope, answer.runId, ctx), archived) && equal(await options.evidence.get(scope, evidenceId, ctx), record), 'the saved answer/evidence binding changed during the source read')
