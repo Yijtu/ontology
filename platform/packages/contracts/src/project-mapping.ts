@@ -303,6 +303,7 @@ export interface BindRecordsRequest {
   readonly parseId: Uuid
   readonly mappingId: Uuid
   readonly mappingVersion: Semver
+  readonly maxRecords?: number
 }
 
 export interface ProjectRecordCounts {

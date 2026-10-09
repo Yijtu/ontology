@@ -120,6 +120,8 @@ export interface ProjectRevisionView {
   readonly readiness: readonly ReadinessProjection[]
   /** True when the revision is not the current project head. */
   readonly historical: boolean
+  readonly active: boolean
+  readonly staging: boolean
 }
 
 /** Readiness of one revision for a declared set of projections, with fixable blockers. */
@@ -154,6 +156,8 @@ export interface ProjectServiceDependencies {
   readonly jobs: JobStore
   /** The published-pack read port; a project can only mount an exact published version. */
   readonly catalogue: IndustryPackCatalogue
+  /** Configured evolution hosts forbid legacy instant definition switches, including empty projects. */
+  readonly evolutionPolicy?: 'staged_only'
   readonly newId?: () => string
   readonly now?: () => string
 }
@@ -241,7 +245,7 @@ function mapStoreError(error: unknown): never {
   throw error
 }
 
-function bodyToRevision(body: ProjectRevisionBody): ProjectRevision {
+export function bodyToRevision(body: ProjectRevisionBody): ProjectRevision {
   const digest = sha256DigestOf(canonicalJson(body))
   return {
     ref: { projectId: body.projectId, revision: body.revision, digest },
@@ -365,6 +369,7 @@ export class ProjectService {
   readonly #readiness: ProjectReadinessStore
   readonly #jobs: JobStore
   readonly #catalogue: IndustryPackCatalogue
+  readonly #evolutionPolicy: ProjectServiceDependencies['evolutionPolicy']
   readonly #newId: () => string
   readonly #now: () => string
 
@@ -373,6 +378,7 @@ export class ProjectService {
     this.#readiness = dependencies.readiness
     this.#jobs = dependencies.jobs
     this.#catalogue = dependencies.catalogue
+    this.#evolutionPolicy = dependencies.evolutionPolicy
     this.#newId = dependencies.newId ?? (() => globalThis.crypto.randomUUID())
     this.#now = dependencies.now ?? (() => new Date().toISOString())
   }
@@ -483,7 +489,9 @@ export class ProjectService {
     return {
       revision: stored,
       readiness,
-      historical: stored.ref.revision !== project.headRevision,
+      historical: stored.ref.revision !== (project.activeRevision ?? project.headRevision),
+      active: stored.ref.revision === (project.activeRevision ?? project.headRevision),
+      staging: stored.ref.revision === project.headRevision && project.headRevision !== (project.activeRevision ?? project.headRevision),
     }
   }
 
@@ -530,7 +538,7 @@ export class ProjectService {
   ): Promise<ProjectReadinessView> {
     const scopeRef = scopeOf(ctx)
     const project = await this.#requireProject(scopeRef, projectId, ctx)
-    const targetRevision = revision ?? project.headRevision
+    const targetRevision = revision ?? project.activeRevision ?? project.headRevision
     const stored = await this.#requireRevision(scopeRef, projectId, targetRevision, ctx)
     const required = requiredReadiness ?? PROJECT_READINESS_KINDS
     return this.#readinessView(scopeRef, stored, required, ctx)
@@ -626,6 +634,7 @@ export class ProjectService {
       industryPackRef = input.industryPackRef
       definitionRef = pack.manifest.definitionsRef
     }
+    if(this.#evolutionPolicy==='staged_only' && (definitionRef.id!==previous.definitionRef.id || definitionRef.version!==previous.definitionRef.version || definitionRef.digest!==previous.definitionRef.digest)) throw new ProjectError('INVALID_ARGUMENT','definition switches require /projects/:id/evolutions with an explicit strategy and bounded original remappings')
     const mappingRefs = input.mappingRefs ?? previous.mappingRefs
     if (mappingRefs.length === 0) {
       throw new ProjectError('INVALID_ARGUMENT', 'mappingRefs must be a non-empty mapping array')

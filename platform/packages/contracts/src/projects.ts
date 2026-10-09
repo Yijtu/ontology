@@ -21,6 +21,7 @@ import type {
 } from './generated/contracts'
 import type { NewOutboxMessage } from './job-store'
 import type { ToolContext } from './trusted'
+import type { ProjectEvolutionPlan } from './project-evolution'
 import {
   isRecord,
   isResourceRef,
@@ -146,6 +147,9 @@ export interface ProjectRecord {
   readonly projectId: Uuid
   readonly title: NonEmptyString
   readonly headRevision: RevisionString
+  /** Last fully activated revision; a newer head can be a bounded evolution in review. */
+  readonly activeRevision?: RevisionString
+  readonly stagingWritable?: boolean
   readonly state: ProjectState
   readonly createdBy: string
   readonly createdAt: Rfc3339UtcTimestamp
@@ -201,6 +205,8 @@ export interface AppendProjectRevisionInput {
   readonly recordedAt: Rfc3339UtcTimestamp
   readonly outbox: NewOutboxMessage
   readonly outboxJobId: Uuid
+  /** Host-produced bounded rebuild plan, committed with the staging revision/outbox. */
+  readonly evolution?: ProjectEvolutionPlan
 }
 
 export interface AppendFieldConfirmationInput {

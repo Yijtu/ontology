@@ -989,6 +989,8 @@ export interface CoreLocalCompositionOptions {
   readonly objectDirectory: string
   /** Explicit independent business database writer/query credentials; omitted uses rebuildable DuckDB. */
   readonly projectDataset?: PostgresProjectDatasetConfig
+  /** Narrow active-snapshot guard; full evolution composition is owned by the deployment. */
+  readonly projectEvolution?: import('@ontology/application').ProjectEvolutionService
   readonly scopeRef: ScopeRef
   readonly examples: LoadedCoreExamples
   readonly allowLocalOperator?: boolean
@@ -1608,10 +1610,12 @@ export async function createCoreLocalComposition(options: CoreLocalCompositionOp
       schemaSource,
       writer: projectDatasetAdapter,
       query: projectDatasetAdapter,
+      ...(options.projectEvolution === undefined ? {} : { evolution: options.projectEvolution }),
     })
     const projectQuery = createCoreProjectQueryWorkflow({ query: projectDatasetAdapter, publishedSource: publishedProjectDatasetSource,
       projects: projectStore, readiness: projectReadinessStore, executionBindings: runExecutionBindingStore, taskBindings: taskBindingStore,
       definition: async (scope, ref, ctx) => (await definitionStore.listVersions(scope, {}, ctx)).find((version) => sameVersionRef(version.ref, ref)),
+      ...(options.projectEvolution === undefined ? {} : { evolution: options.projectEvolution }),
     })
     const profileValidatorImpl = profileValidator(createAjv())
     const industrySource = new StoreBackedIndustryManifestSource({
@@ -1787,6 +1791,7 @@ export async function createCoreLocalComposition(options: CoreLocalCompositionOp
       effectiveLimitsRef: CORE_EFFECTIVE_LIMITS_REF,
       parameters: taskParameterValidator(createAjv()),
       projectQuerySnapshot: projectQuery.resolveForCreation,
+      ...(options.projectEvolution === undefined ? {} : { projectApprovedInput: (scope: ScopeRef, revision: import('@ontology/contracts').ProjectRevision, ctx: ToolContext) => options.projectEvolution!.resolveApprovedInput(scope,revision,ctx) }),
     })
     const runs = new RunService({
       store: runStore,
@@ -2250,6 +2255,7 @@ export async function createCoreLocalComposition(options: CoreLocalCompositionOp
       registryStore: componentStore,
     })
     const projectService = new ProjectService({
+      ...(options.projectEvolution === undefined ? {} : { evolutionPolicy: 'staged_only' as const }),
       projects: projectStore,
       readiness: projectReadinessStore,
       jobs: jobStore,
@@ -2407,7 +2413,7 @@ export async function createCoreLocalComposition(options: CoreLocalCompositionOp
         definitionEditing: { service: definitionEditingService },
         ruleActionCandidates: { service: ruleActionCandidateService, bindingContext: actionBindingContext },
         instanceReviews: { service: instanceReviewService },
-        projects: { service: projectService, mappings: projectMappingService, dataset: projectDatasetService },
+        projects: { service: projectService, mappings: projectMappingService, dataset: projectDatasetService, ...(options.projectEvolution === undefined ? {} : { evolution: options.projectEvolution }) },
         projectDocuments: { service: projectDocumentIndexService },
         syntheticValidation: {
           exampleService: syntheticExampleService,

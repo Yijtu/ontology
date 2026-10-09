@@ -6,6 +6,7 @@ import {
   isSha256Digest,
   isUuid,
   isVersionRef,
+  isDefinitionRevisionStrategy,
 } from '@ontology/contracts'
 import type {
   BindRecordsRequest,
@@ -72,6 +73,7 @@ export interface ProjectRouteDependencies {
   readonly mappings?: ProjectMappingService
   /** Approved-data materialisation and fixed-snapshot reads (V03-018). */
   readonly dataset?: ProjectDataMaterializationService
+  readonly evolution?: import('@ontology/application').ProjectEvolutionService
   readonly authenticate: RequestAuthenticator
 }
 
@@ -418,6 +420,62 @@ export function registerProjectRoutes(
       runId: resourceId,
     })
 
+  if (dependencies.evolution !== undefined) {
+      const evolution = dependencies.evolution
+      for (const path of ['/api/v1/projects/:projectId/evolutions','/api/v1/projects/:projectId/evolve']) app.post<{
+          Params: {
+              projectId: string
+          }
+      }>(path, async (request, reply) => {
+          const auth = authenticateRequest(dependencies.authenticate, request, reply)
+          if (auth === undefined)
+              return reply
+          const body = request.body
+          if (!isRecord(body))
+              throw new InvalidRequestFieldError('an evolution body is required')
+          rejectUnknownFields(body, ['industryPackRef', 'strategy', 'remappings', 'maxRecords', 'maxAttempts','profileRef'])
+          if (!isDefinitionRevisionStrategy(body['strategy']) || !Array.isArray(body['remappings']))
+              throw new InvalidRequestFieldError('explicit strategy and original remappings are required')
+          const remappings = body['remappings'].map((entry: unknown) => {
+              if (!isRecord(entry) || !isUuid(entry['documentId']) || typeof entry['objectId'] !== 'string' || !Array.isArray(entry['entries']))
+                  throw new InvalidRequestFieldError('a remapping must name its stored mapping/document, object and entries')
+              rejectUnknownFields(entry, ['mappingRef', 'documentId', 'objectId', 'entries'])
+              return { mappingRef: parseMappingRefs([entry['mappingRef']], 'mappingRef')[0]!, documentId: entry['documentId'], objectId: entry['objectId'], entries: entry['entries'].map((value, index) => parseMappingEntry(value, `entries[${index}]`)) }
+          })
+          const traceId = readTraceId(request)
+          const result = await evolution.start(request.params.projectId, { expectedRevision: readIfMatch(request), industryPackRef: parseVersionRef(body['industryPackRef'], 'industryPackRef'), strategy: body['strategy'], remappings, maxRecords: optionalPositiveInteger(body['maxRecords'], 'maxRecords') ?? 2000, maxAttempts: optionalPositiveInteger(body['maxAttempts'], 'maxAttempts') ?? 1,...(body['profileRef']===undefined?{}:{profileRef:parseResolvedProfileRef(body['profileRef'])}) }, requireIdempotencyKey(request), contextFor(auth, traceId, request.params.projectId))
+          return reply.status(202).send({ data: { evolution: result }, meta: { traceId, revision: result.revision } })
+      })
+      app.get<{
+          Params: {
+              projectId: string
+              evolutionId: string
+          }
+      }>('/api/v1/projects/:projectId/evolutions/:evolutionId', async (request, reply) => { const auth = authenticateRequest(dependencies.authenticate, request, reply); if (auth === undefined)
+          return reply; const traceId = readTraceId(request); const result = await evolution.get(request.params.projectId, request.params.evolutionId, contextFor(auth, traceId, request.params.projectId)); return reply.send({ data: { evolution: result }, meta: { traceId, revision: result.revision } }); })
+      for (const operation of ['activate', 'cancel', 'retry'] as const)
+          app.post<{
+              Params: {
+                  projectId: string
+                  evolutionId: string
+              }
+          }>(`/api/v1/projects/:projectId/evolutions/:evolutionId/${operation}`, async (request, reply) => {
+              const auth = authenticateRequest(dependencies.authenticate, request, reply)
+              if (auth === undefined)
+                  return reply
+              const traceId = readTraceId(request), ctx = contextFor(auth, traceId, request.params.projectId)
+              const body = request.body ?? {}
+              if (!isRecord(body))
+                  throw new InvalidRequestFieldError('the operation body must be an object')
+              rejectUnknownFields(body, operation === 'activate' ? ['relationCandidateIds'] : [])
+              const ids = body['relationCandidateIds'] ?? []
+              if (!Array.isArray(ids) || !ids.every(isUuid))
+                  throw new InvalidRequestFieldError('relationCandidateIds must be stored candidate UUIDs')
+              const result = operation === 'activate' ? await evolution.activate(request.params.projectId, request.params.evolutionId, ids, ctx) : await evolution[operation](request.params.projectId, request.params.evolutionId, ctx)
+              return reply.send({ data: { evolution: result }, meta: { traceId, revision: result.revision } })
+          })
+  }
+
   app.post('/api/v1/projects', async (request, reply) => {
     const traceId = readTraceId(request)
     const auth = authenticateRequest(dependencies.authenticate, request, reply)
@@ -529,6 +587,8 @@ export function registerProjectRoutes(
           revision: view.revision,
           readiness: view.readiness,
           historical: view.historical,
+          active: view.active,
+          staging: view.staging,
         },
         meta: { traceId, revision: view.revision.ref.revision },
       })

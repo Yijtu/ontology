@@ -95,7 +95,7 @@ export function isTerminalJobStage(stage: PipelineStage): boolean {
   return stage === 'published' || stage === 'failed' || stage === 'cancelled' || stage === 'rejected'
 }
 
-export type JobKind = 'ingestion' | 'simulation'
+export type JobKind = 'ingestion' | 'simulation' | 'dataset_materialization'
 
 /**
  * Attempt lifecycle. `pending` is a retry that was requested but not yet leased; `leased`

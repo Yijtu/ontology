@@ -15,13 +15,14 @@ export interface CoreProjectQueryOptions {
   readonly query: ProjectSnapshotQueryPort
   readonly publishedSource: ProjectPublishedDatasetSource
   readonly projects: {
-    getProject(scope: ScopeRef, projectId: string, ctx: ToolContext): Promise<{ readonly headRevision: string } | undefined>
+    getProject(scope: ScopeRef, projectId: string, ctx: ToolContext): Promise<{ readonly headRevision: string; readonly activeRevision?: string } | undefined>
     getRevision(scope: ScopeRef, projectId: string, revision: string, ctx: ToolContext): Promise<ProjectRevision | undefined>
   }
   readonly readiness: ProjectReadinessStore
   readonly executionBindings: RunExecutionBindingStore
   readonly taskBindings: TaskBindingStore
   readonly definition: (scope: ScopeRef, ref: VersionRef, ctx: ToolContext) => Promise<SemanticDefinitionVersion | undefined>
+  readonly evolution?: { assertActiveRebuild(scope: ScopeRef, revision: ProjectRevisionRef, ctx: ToolContext): Promise<boolean>; resolveActiveSnapshot(scope: ScopeRef, revision: ProjectRevisionRef, objectId: string, ctx: ToolContext): Promise<ResourceRef | undefined> }
 }
 
 function sameRef(a: ResourceRef, b: ResourceRef): boolean {
@@ -55,14 +56,22 @@ export function createCoreProjectQueryWorkflow(options: CoreProjectQueryOptions)
     const objectId = parameters['objectId']
     if (typeof objectId !== 'string') throw new ProjectDatasetError('INVALID_ARGUMENT', 'a project query requires an objectId')
     const head = await options.projects.getProject(scope, revision.ref.projectId, ctx)
-    if (head === undefined || head.headRevision !== revision.ref.revision) throw new ProjectDatasetError('SNAPSHOT_UNAVAILABLE', 'new project query runs require the current project revision')
+    if (head === undefined || (head.activeRevision ?? head.headRevision) !== revision.ref.revision) throw new ProjectDatasetError('SNAPSHOT_UNAVAILABLE', 'new project query runs require the current active project revision')
     const projection = await options.readiness.getProjection(scope, revision.ref, 'dataset', ctx)
     const target = projection?.targetRef
     if (projection?.state !== 'ready' || target === undefined || !('kind' in target) || target.kind !== 'dataset' || projection.targetDigest !== target.digest) throw new ProjectDatasetError('SNAPSHOT_UNAVAILABLE', 'the project dataset readiness gate is not ready')
-    const descriptor = await describe(scope, revision.ref, target, objectId, ctx)
-    const current = await options.publishedSource.read(scope, revision, objectId, ctx)
-    if (current.sourceDigest !== descriptor.metadata?.body.sourceDigest) throw new ProjectDatasetError('SNAPSHOT_UNAVAILABLE', 'the official published sources changed; rebuild the project projection')
-    return target
+    const currentTarget = await options.query.describeSnapshot(scope,target,ctx)
+    const selected = currentTarget?.objectId===objectId ? target : await options.evolution?.resolveActiveSnapshot(scope,revision.ref,objectId,ctx)
+    if(selected===undefined) throw new ProjectDatasetError('SNAPSHOT_UNAVAILABLE','this object has no active immutable snapshot')
+    const descriptor = await describe(scope, revision.ref, selected, objectId, ctx)
+    const rebuilding = head.headRevision !== (head.activeRevision ?? head.headRevision)
+    if (rebuilding) {
+      if (await options.evolution?.assertActiveRebuild(scope, revision.ref, ctx) !== true) throw new ProjectDatasetError('SNAPSHOT_UNAVAILABLE', 'the exact old active source pins must be verified during rebuild')
+    } else {
+      const current = await options.publishedSource.read(scope, revision, objectId, ctx)
+      if (current.sourceDigest !== descriptor.metadata?.body.sourceDigest) throw new ProjectDatasetError('SNAPSHOT_UNAVAILABLE', 'the official published sources changed; rebuild the project projection')
+    }
+    return selected
   }
   const resolveExecution = async (execution: RunExecutionBinding, objectId: string, ctx: ToolContext): Promise<ProjectSnapshotQueryDescriptor> => {
     const scope = { tenantId: ctx.principal.tenantId, spaceId: ctx.allowedResources.spaceId }

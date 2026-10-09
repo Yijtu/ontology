@@ -101,7 +101,7 @@ export async function assertProjectFactPublicationFences(query: Query, input: Pu
   }
 }
 
-async function assertConfirmation(query: Query, fence: ProjectFactPublicationFence): Promise<void> {
+export async function assertConfirmation(query: Query, fence: ProjectFactPublicationFence): Promise<void> {
   const source = fence.source
   const instance = await query.query<{ revision: string; matched_entity_id: string; identity_state: string; body: { fields: InstanceFieldValue[]; identity: { binding?: InstanceIdentityBinding } } }>(
     `SELECT revision::text,matched_entity_id,identity_state,body FROM agent_platform.instance_review_records WHERE ${SCOPE}

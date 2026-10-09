@@ -8,6 +8,7 @@ import {
   isSha256Digest,
   isToolContext,
   isUuid,
+  assertProjectEvolutionPlan,
 } from '@ontology/contracts'
 import type {
   AppendFieldConfirmationInput,
@@ -31,6 +32,7 @@ import type {
   Uuid,
 } from '@ontology/contracts'
 import { ControlPostgresDatabase } from './database'
+import { assertEvolutionSourcePins } from './project-evolution-store'
 
 interface ScopedQuery {
   query<Row extends QueryResultRow>(
@@ -43,6 +45,8 @@ interface ProjectRow extends QueryResultRow {
   project_id: string
   title: string
   head_revision: string
+  active_revision: string
+  staging_writable: boolean
   state: ProjectState
   create_request_digest: string
   created_by: string
@@ -78,7 +82,7 @@ function pgCodeOf(error: unknown): unknown {
   return error.code
 }
 
-const PROJECT_COLUMNS = `project_id, title, head_revision, state, create_request_digest, created_by,
+const PROJECT_COLUMNS = `project_id, title, head_revision, active_revision, staging_writable, state, create_request_digest, created_by,
   created_at, updated_at`
 
 function toProject(row: ProjectRow): ProjectRecord {
@@ -86,6 +90,8 @@ function toProject(row: ProjectRow): ProjectRecord {
     projectId: row.project_id,
     title: row.title,
     headRevision: row.head_revision,
+    activeRevision: row.active_revision,
+    stagingWritable: row.staging_writable,
     state: row.state,
     createdBy: row.created_by,
     createdAt: row.created_at.toISOString(),
@@ -251,6 +257,8 @@ export class PostgresProjectStore implements ProjectStore {
           projectId: input.projectId,
           title: input.title,
           headRevision: '1',
+          activeRevision: '1',
+          stagingWritable: true,
           state,
           createdBy: input.actor,
           createdAt: input.recordedAt,
@@ -374,16 +382,35 @@ export class PostgresProjectStore implements ProjectStore {
       if (revision.ref.revision !== nextRevision) {
         throw new ProjectStoreError('INVALID_REVISION', `the appended revision must be ${nextRevision}`)
       }
+      const live = await query.query<{ evolution_id: string }>(`SELECT evolution_id FROM agent_platform.project_evolutions
+        WHERE tenant_id=current_setting('app.tenant_id')::uuid AND space_id=current_setting('app.space_id')::uuid
+          AND project_id=$1::uuid AND state IN ('queued','running','awaiting_review','needs_human','failed') LIMIT 1`, [projectId])
+      if (live.rows.length > 0 || (input.evolution === undefined && projectRow.active_revision !== head)) throw new ProjectStoreError('VERSION_CONFLICT', 'complete or cancel the explicit evolution before changing this project')
+      const previous = await this.#revisionAt(query,projectId,head)
+      if(input.evolution===undefined && (previous?.body.definitionRef.id!==revision.definitionRef.id || previous.body.definitionRef.version!==revision.definitionRef.version || previous.body.definitionRef.digest!==revision.definitionRef.digest)) {
+        const populated=await query.query(`SELECT 1 FROM agent_platform.project_record_versions WHERE tenant_id=current_setting('app.tenant_id')::uuid AND space_id=current_setting('app.space_id')::uuid AND project_id=$1::uuid
+          UNION ALL SELECT 1 FROM agent_platform.published_rule_versions WHERE tenant_id=current_setting('app.tenant_id')::uuid AND space_id=current_setting('app.space_id')::uuid AND project_id=$1::uuid LIMIT 1`,[projectId])
+        if(populated.rows.length>0) throw new ProjectStoreError('VERSION_CONFLICT','a populated project must use explicit bounded evolution instead of replacing definitionRef')
+      }
+      if (input.evolution !== undefined) {
+        assertProjectEvolutionPlan(input.evolution)
+        const active=await this.#revisionAt(query,projectId,projectRow.active_revision)
+        if(active?.digest!==input.evolution.previousRevisionRef.digest || input.evolution.requestDigest!==input.requestDigest || input.evolution.sources.some((source)=>!revision.mappingRefs.some((ref)=>ref.id===source.mappingRef.id && ref.version===source.mappingRef.version && ref.digest===source.mappingRef.digest))) throw new ProjectStoreError('INVALID_REVISION','the complete evolution plan must match its real previous revision and new mapping pins')
+        if (input.evolution.targetRevisionRef.digest !== revision.ref.digest || input.evolution.targetRevisionRef.revision !== revision.ref.revision || input.evolution.previousRevisionRef.revision !== projectRow.active_revision || input.evolution.targetRevisionRef.projectId !== projectId || input.evolution.previousRevisionRef.projectId !== projectId) throw new ProjectStoreError('INVALID_REVISION', 'evolution revision pins disagree')
+        await assertEvolutionSourcePins(query,input.evolution)
+        await query.query(`INSERT INTO agent_platform.project_evolutions (tenant_id,space_id,project_id,evolution_id,job_id,plan,idempotency_key,request_digest,actor,trace_id,recorded_at)
+          VALUES(current_setting('app.tenant_id')::uuid,current_setting('app.space_id')::uuid,$1::uuid,$2::uuid,$3::uuid,$4::jsonb,$5,$6,$7,$8,$9::timestamptz)`, [projectId,input.evolution.evolutionId,input.evolution.jobId,JSON.stringify(input.evolution),input.idempotencyKey,input.requestDigest,input.actor,ctx.traceId,input.recordedAt])
+      }
 
       await this.#insertRevision(query, input.outboxJobId, revision, input.idempotencyKey, input.requestDigest, input.actor, input.recordedAt)
       const advanced = await query.query<ProjectRow>(
         `UPDATE agent_platform.projects
-            SET head_revision = $2::bigint, updated_at = $3::timestamptz
+            SET head_revision = $2::bigint, active_revision = CASE WHEN $4::boolean THEN active_revision ELSE $2::bigint END, staging_writable=true, updated_at = $3::timestamptz
           WHERE tenant_id = current_setting('app.tenant_id')::uuid
             AND space_id = current_setting('app.space_id')::uuid
             AND project_id = $1::uuid
           RETURNING ${PROJECT_COLUMNS}`,
-        [projectId, nextRevision, input.recordedAt],
+        [projectId, nextRevision, input.recordedAt, input.evolution !== undefined],
       )
       const updated = advanced.rows[0]
       if (updated === undefined) {

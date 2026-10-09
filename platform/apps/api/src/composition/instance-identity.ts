@@ -220,6 +220,7 @@ export class InstanceIdentityWorkflow {
     const project = await this.#deps.projects.getProject(scope, projectId, ctx)
     if (project === undefined || project.state === 'archived') throw new InstanceReviewError('PROJECT_NOT_FOUND', 'active project is not visible')
     const revision = await this.#deps.projects.getRevision(scope, projectId, project.headRevision, ctx)
+    if(project.stagingWritable===false) throw conflict('the staging evolution is not writable')
     const candidate = await this.#deps.candidates.getCandidate(scope, candidateId, ctx)
     const membership = await this.#deps.projectDocuments.getMembership(scope, projectId, documentId, ctx)
     const visibility = await this.#deps.projectDocuments.getVisibility(scope, projectId, ctx)

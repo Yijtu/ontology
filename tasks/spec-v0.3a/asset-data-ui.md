@@ -161,6 +161,14 @@ datasetSnapshotRef 指向从批准行、映射、物理 Schema 和行顺序构�
 
 项目头可变，修订不可变。字段、资料、身份绑定、mapping 或行业版本变化产生新修订；当前任务使用明确 ProjectRevisionRef，旧 run 不更换 inputSnapshotRef。语义／SQL／文档索引 readiness 独立：属性任务无需强制等待 BM25，文档任务必须等待该 corpus 的索引，规则任务必须等待所需语义 fence。只允许依 taskBinding 所需能力判定 ready。
 
+换本体版本使用 `POST /projects/:id/evolutions`（`/evolve` 为同一严格入口），须有 If-Match、Idempotency-Key、确切已发布行业包、`new_version / keep_independent / retire_previous` 策略和逐个原始导入映射的人工对应关系。配置演化的宿主拒绝旧 pack-mount 瞬时改定义入口；PG 也拒绝已有记录／项目规则的项目仅替换 definitionRef。项目可变读 envelope 的 `headRevision` 固定新的待审核修订，`activeRevision` 固定当前已激活修订。当前普通查询／已发布项目规则读 active；新候选、字段确认、身份裁决与事实发布仍校验 staging head。`stagingWritable=false` 拒绝取消后的迟到写入。旧 run 继续使用归档绑定和不可变的已激活快照，不用当前 readiness 代替历史授权。
+
+演化协调复用 topic outbox，保留原始资料／parse／映射／全部贡献语句版本和已发布原始 recordId 集合。原文重新读取、绑定新映射、200 个 selector 一批的候选抽取和 pending 实例创建均有界；不复制原审核或身份决定。最多 10 个来源、20,000 个原始记录／次、3 个尝试，重试共享累计 recordOperations／batches，不重新获得预算。缺失／冲突类型等不可迁移记录保持 `needs_human`，关系变更须有真实的新端点候选、当前人工审核和关系发布。已撤回的原始记录不会因为重读同一字节而再次成为支撑。
+
+所有重建实体经既有字段确认、身份裁决、审核账本和事实发布后，官方事实 reader 复核完整原始记录覆盖及新增字段，再建立各对象的确切业务快照。实际后端 activation receipt、当前源／语句／人工决定和 readiness 在最终项目事务再次校验；只有 staging head 与旧 active 同时满足 CAS 时才更新 activeRevision。`keep_independent` 保留旧 readiness；`retire_previous` 仅撤旧版当前 readiness，保留所有历史事实、语句版本、旧快照与凭据。失败／取消／撤回／并发换版均不能让旧尝试重新激活。`dataset_materialization` 演化作业由其专属 outbox consumer 和有限 CAS 协调处理，通用 ingestion worker 不重复执行它。
+
+新版输入由真实已激活业务快照中的官方记录分页归档；独立 confirmation manifest 保存既有字段确认事件、真实身份绑定及内容固定的审核账本记录。`ApprovedInputSnapshot` 使用这些真实页、明确排除项及实际已确认／已批准计数，不能只写一个批准 marker。最终 CAS 将其不可变 `inputSnapshotRef` 与各对象快照一起封存在演化激活记录中，不回填 staging ProjectRevision。普通任务 preflight 在修订本身没有旧 approvedInputRef 时，通过宿主 `projectApprovedInput` 端口读取实际工件字节并重核数据页、激活快照与人工证据；仅接受同一实际输入 ref/digest。配置了 ProfileStore 的演化同时要求确切的目标 ResolvedProfileRef，复算实际已解析 manifest hash 并核对目标 industryRef；新版普通任务必须使用该项目修订固定的实际 profile。旧输入／旧 profile 不得借新版 ready 绕过这些固定引用。
+
 ### 3.3 字段确认与记录修订
 
 ~~~ts

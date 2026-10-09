@@ -377,6 +377,7 @@ export class PostgresJobStore implements JobStore {
                 )
               )
             )
+            AND j.kind <> 'dataset_materialization'
           ORDER BY j.next_attempt_at ASC, j.created_at ASC
           LIMIT 1
           FOR UPDATE OF j SKIP LOCKED`,

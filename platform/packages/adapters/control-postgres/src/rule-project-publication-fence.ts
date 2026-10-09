@@ -29,13 +29,13 @@ export async function assertRuleProjectPublicationFences(query: Query, input: Pu
     const pin = pins.find((entry) => entry.candidateId === candidate.candidate_id), rule = input.publication.ruleVersions.find((entry) => entry.sourceCandidateId === candidate.candidate_id)
     if (pin === undefined || rule === undefined || rule.ruleVersionId !== candidate.candidate_id || pin.projectRevisionRef.projectId !== candidate.project_id || rule.projectId !== candidate.project_id || !sameRef(pin.definitionRef, input.publication.schemaRef) ||
       !input.publication.approvedCandidateRefs.some((ref) => ref.candidateId === candidate.candidate_id && ref.kind === 'rule')) blocked()
-    const project = await query.query<{ head_revision: string; state: string; digest: string; definition_ref: VersionRef }>(
-      `SELECT p.head_revision::text AS head_revision,p.state,r.digest,r.body->'definitionRef' AS definition_ref
+    const project = await query.query<{ head_revision: string; state: string; digest: string; definition_ref: VersionRef; staging_writable: boolean }>(
+      `SELECT p.head_revision::text AS head_revision,p.state,p.staging_writable,r.digest,r.body->'definitionRef' AS definition_ref
        FROM agent_platform.projects p JOIN agent_platform.project_revisions r ON r.tenant_id=p.tenant_id AND r.space_id=p.space_id AND r.project_id=p.project_id AND r.revision=p.head_revision
        WHERE p.tenant_id=current_setting('app.tenant_id')::uuid AND p.space_id=current_setting('app.space_id')::uuid AND p.project_id=$1::uuid`, [candidate.project_id],
     )
     const current = project.rows[0]
-    if (current === undefined || current.state === 'archived' || current.head_revision !== pin.projectRevisionRef.revision || current.digest !== pin.projectRevisionRef.digest || !sameRef(current.definition_ref, pin.definitionRef)) blocked()
+    if (current === undefined || current.staging_writable !== true || current.state === 'archived' || current.head_revision !== pin.projectRevisionRef.revision || current.digest !== pin.projectRevisionRef.digest || !sameRef(current.definition_ref, pin.definitionRef)) blocked()
     await query.query(`SELECT 1 FROM agent_platform.extraction_candidates WHERE ${SCOPE} AND candidate_id=$1::uuid FOR SHARE`, [candidate.candidate_id])
     await query.query(`SELECT 1 FROM agent_platform.candidate_review_heads WHERE ${SCOPE} AND candidate_id=$1::uuid FOR SHARE`, [candidate.candidate_id])
     const exact = await query.query<{ exact: boolean }>(

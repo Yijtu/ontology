@@ -55,6 +55,8 @@ export interface RunExecutionPreflightDependencies {
   readonly effectiveLimitsRef: VersionRef
   readonly parameters: TaskParameterValidator
   readonly projectQuerySnapshot?: (scope: ScopeRef, revision: ProjectRevision, parameters: Readonly<Record<string, unknown>>, ctx: ToolContext) => Promise<ResourceRef>
+  /** Server-built evolved input, read from actual approved data pages and human ledger receipts. */
+  readonly projectApprovedInput?: (scope: ScopeRef, revision: ProjectRevision, ctx: ToolContext) => Promise<ResourceRef | undefined>
   readonly now?: () => string
 }
 
@@ -101,6 +103,7 @@ export class RunExecutionPreflightService implements RunExecutionBinder {
   readonly #inputSnapshots: TaskInputSnapshotStore
   readonly #runExecutionBindings: RunExecutionBindingStore
   readonly #readiness: ProjectReadinessStore
+  readonly #projectApprovedInput: RunExecutionPreflightDependencies['projectApprovedInput']
   readonly #operations: OperationRegistry
   readonly #availableCapabilities: readonly ResolvedCapability[]
   readonly #supportedResultSchemaRefs: readonly VersionRef[]
@@ -115,6 +118,7 @@ export class RunExecutionPreflightService implements RunExecutionBinder {
     this.#inputSnapshots = dependencies.inputSnapshots
     this.#runExecutionBindings = dependencies.runExecutionBindings
     this.#readiness = dependencies.readiness
+    this.#projectApprovedInput = dependencies.projectApprovedInput
     this.#operations = dependencies.operations
     this.#availableCapabilities = dependencies.availableCapabilities
     this.#supportedResultSchemaRefs = dependencies.supportedResultSchemaRefs
@@ -136,7 +140,9 @@ export class RunExecutionPreflightService implements RunExecutionBinder {
 
     const request = input.request
     const revision = await this.#requireRevision(scopeRef, request.projectRevisionRef, ctx)
-    await this.#verifyInputSnapshot(scopeRef, revision, request, ctx)
+    const evolvedApproved = revision.approvedInputRef===undefined ? await this.#projectApprovedInput?.(scopeRef,revision,ctx) : undefined
+    if(evolvedApproved!==undefined && canonicalJson(input.profileBinding.resolvedProfileRef)!==canonicalJson(revision.profileRef)) throw new RunServiceError('INPUT_SNAPSHOT_INVALID','the evolved task must use its exact validated target profile')
+    await this.#verifyInputSnapshot(scopeRef, revision, request, ctx,evolvedApproved)
 
     const binding = request.mode === 'task'
       ? await this.#requireTaskBinding(scopeRef, revision, request, ctx)
@@ -186,7 +192,7 @@ export class RunExecutionPreflightService implements RunExecutionBinder {
           inputSnapshotDigest: request.inputSnapshotDigest,
           definitionRef: revision.definitionRef,
           mappingRefs: revision.mappingRefs,
-          approvedInputRef: revision.approvedInputRef ?? null,
+          approvedInputRef: revision.approvedInputRef ?? evolvedApproved ?? null,
         }),
       ),
       effectiveLimitsRef: this.#effectiveLimitsRef,
@@ -231,8 +237,9 @@ export class RunExecutionPreflightService implements RunExecutionBinder {
     revision: ProjectRevision,
     request: RunExecutionRequest,
     ctx: ToolContext,
+    evolvedApproved?: ResourceRef,
   ): Promise<void> {
-    const approved = revision.approvedInputRef
+    const approved = revision.approvedInputRef ?? evolvedApproved
     if (approved !== undefined && sameResource(request.inputSnapshotRef, approved)) {
       if (request.inputSnapshotDigest !== approved.digest) {
         throw new RunServiceError('INPUT_SNAPSHOT_INVALID', 'the approved-input digest does not match the pinned project revision')

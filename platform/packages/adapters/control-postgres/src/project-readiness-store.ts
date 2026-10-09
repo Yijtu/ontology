@@ -116,6 +116,11 @@ export class PostgresProjectReadinessStore implements ProjectReadinessStore {
     assertReadinessProjectionShape(projection)
 
     return this.#withScope(scopeRef, ctx, async (query) => {
+      if (input.state === 'ready') {
+        const owner = await query.query<{ head_revision: string; staging_writable: boolean }>(`SELECT head_revision::text,staging_writable FROM agent_platform.projects
+          WHERE tenant_id=current_setting('app.tenant_id')::uuid AND space_id=current_setting('app.space_id')::uuid AND project_id=$1::uuid FOR SHARE`, [input.projectRevisionRef.projectId])
+        if (owner.rows[0]?.head_revision === input.projectRevisionRef.revision && owner.rows[0].staging_writable === false) throw new ProjectReadinessStoreError('FENCE_STALE', 'cancelled staging revisions cannot become ready')
+      }
       const replay = await this.#byIdempotencyKey(query, input.idempotencyKey)
       if (replay !== undefined) {
         if (replay.request_digest !== input.requestDigest) {
