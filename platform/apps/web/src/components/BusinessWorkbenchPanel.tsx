@@ -396,7 +396,7 @@ export function BusinessWorkbenchPanel({
                   task={selectedTask}
                   objects={activeObjects}
                   disabled={state.busy || readOnly}
-                  onRun={async (parameters) => {
+                  onRun={async (parameters, inputSelection) => {
                     if (selectedProjectId === undefined || !selectedTask.available) return
                     await session.create({
                       profileRef: { id: executionProfile.id, version: executionProfile.version },
@@ -405,6 +405,7 @@ export function BusinessWorkbenchPanel({
                       context: { timeZone },
                       preferences: { route: 'auto', allowWeb: false },
                       task: { bindingRef: selectedTask.bindingRef, arguments: parameters },
+                      ...(inputSelection === undefined ? {} : { inputSelection }),
                     })
                   }}
                 />

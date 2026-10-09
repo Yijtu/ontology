@@ -20,6 +20,10 @@ import {
   readProjectSources,
   stageProjectFacts,
   startProjectEvolution,
+  readProjectEvolution,
+  operateProjectEvolution,
+  VerifiedCell,
+  AnswerSourceContent,
   initialQueryState,
   queryReducer,
 } from '@ontology/app-web'
@@ -186,7 +190,7 @@ afterEach(async () => {
     container.remove()
   }
 })
-async function renderAnswer(view: AnswerSourceView) {
+async function renderAnswer(view: unknown) {
   const container = document.createElement('div')
   document.body.appendChild(container)
   const root = createRoot(container)
@@ -207,6 +211,79 @@ async function renderAnswer(view: AnswerSourceView) {
 }
 
 describe('fixed answer source guards', () => {
+  it('requests only the clicked saved table cell and refuses a different or omitted selector echo', async () => {
+    const selector = { tableId: 'actual-table', rowKey: 'opaque-saved-row-1001', columnRef: 'power' }
+    const view: AnswerSourceView = {
+      answerId: ANSWER, evidenceId: EVIDENCE.id, answerRef: source.answerRef, evidenceRef: EVIDENCE,
+      family: 'data_query', precision: 'exact', readability: 'archived_snapshot_only', title: '所选字段的固定输入', dataMode: 'observed', selectedCell: selector,
+      sourceCoverage: { mode: 'saved_cell', requested: 1, verified: 1, displayed: 1, knownTotal: 1, truncated: false, coverage: 'complete', maxRows: 10, maxFragments: 10 },
+      fragments: [{ precision: 'exact', originalRef: ORIGINAL, parseRef: source.parseRef!, locator: LOCATOR, cells: source.cells! }],
+      sourceReadLimitation: '原始值保留导入时的单位与完整小数字符串。',
+    }
+    let path = ''
+    const client = new WorkbenchClient({ baseUrl: 'http://api.test', fetchImpl: (input) => { path = String(input); return Promise.resolve(json(view)) } })
+    expect(await readAnswerSource(client, answer, EVIDENCE, undefined, selector)).toEqual(view)
+    const url = new URL(path)
+    expect([...url.searchParams.entries()]).toEqual(Object.entries(selector))
+    for (const selectedCell of [undefined, { ...selector, rowKey: 'another-row' }, { ...selector, columnRef: 'different-field' }, { ...selector, latest: true }]) {
+      const wrong = new WorkbenchClient({ baseUrl: 'http://api.test', fetchImpl: () => Promise.resolve(json({ ...view, selectedCell })) })
+      await expect(readAnswerSource(wrong, answer, EVIDENCE, undefined, selector)).rejects.toMatchObject({ code: 'SOURCE_REFERENCE_MISMATCH' })
+    }
+    await expect(readAnswerSource(client, answer, EVIDENCE)).rejects.toMatchObject({ code: 'SOURCE_REFERENCE_MISMATCH' })
+    const container = document.createElement('div'); document.body.appendChild(container)
+    const root = createRoot(container); mounted.push({ root, container })
+    await act(async () => root.render(createElement(AnswerSourceContent, { view })))
+    expect(container.textContent).toContain('对应所选结果单元格')
+    expect(container.textContent).toContain(EXACT)
+    expect(container.textContent).not.toContain('暂不支持回读原始表格单元格')
+    expect(container.textContent).toContain('核验时保存的固定来源')
+    await act(async () => container.querySelector('button')?.dispatchEvent(new MouseEvent('click', { bubbles: true })))
+    expect(container.querySelector('[data-testid="original-cell-location"]')?.textContent).toContain('B3')
+  })
+  it('labels bounded aggregate inputs and folds exact input artifacts; malformed coverage and enum arrays refuse', async () => {
+    const view: AnswerSourceView = {
+      answerId: ANSWER, evidenceId: EVIDENCE.id, answerRef: source.answerRef, evidenceRef: EVIDENCE,
+      family: 'data_query', precision: 'exact', readability: 're_readable', title: '计算固定输入来源', dataMode: 'observed',
+      sourceCoverage: { mode: 'compute_input_sample', requested: 10, verified: 10, displayed: 10, knownTotal: 1001, truncated: true, coverage: 'partial', maxRows: 10, maxFragments: 10 },
+      fragments: [{ precision: 'exact', originalRef: ORIGINAL, parseRef: source.parseRef!, locator: LOCATOR, cells: source.cells! }],
+      inputArtifacts: [{ ref: source.parseRef!, byteSize: 20_000, inputRefPointers: ['/inputRefs/0'], text: 'SAVED_INPUT_PREFIX', textTruncated: true }],
+    }
+    expect(isAnswerSourceView(view)).toBe(true)
+    for (const sourceCoverage of [{ ...view.sourceCoverage, truncated: false }, { ...view.sourceCoverage, displayed: 11 }, { ...view.sourceCoverage, mode: ['compute_input_sample'] }, { ...view.sourceCoverage, coverage: ['partial'] }])
+      expect(isAnswerSourceView({ ...view, sourceCoverage })).toBe(false)
+    expect(isAnswerSourceView({ ...view, inputArtifacts: [{ ...view.inputArtifacts![0], inputRefPointers: ['/arbitrary/source'] }] })).toBe(false)
+    const container = document.createElement('div'); document.body.appendChild(container)
+    const root = createRoot(container); mounted.push({ root, container })
+    await act(async () => root.render(createElement(AnswerSourceContent, { view })))
+    expect(container.textContent).toContain('共 1001 条')
+    expect(container.textContent).toContain('展示 10 条')
+    expect(container.textContent).toContain('不能视为全部来源')
+    expect(container.textContent).toContain('不与某一个原始单元格一一对应')
+    const details = container.querySelector<HTMLDetailsElement>('[data-testid="query-source-archive"]')
+    expect(details?.open).toBe(false)
+    expect(details?.textContent).toContain('SAVED_INPUT_PREFIX')
+    expect(details?.textContent).toContain('仅显示开头部分')
+  })
+  it('refuses coercible array enums before any source or archived text is rendered', async () => {
+    for (const key of ['family', 'precision', 'readability', 'dataMode'] as const) {
+      const malformed = { ...source, [key]: [source[key]], text: 'ARRAY_ENUM_SOURCE_MUST_NOT_RENDER' }
+      expect(isAnswerSourceView(malformed)).toBe(false)
+      const container = await renderAnswer(malformed)
+      expect(container.textContent).not.toContain(EXACT)
+      expect(container.textContent).not.toContain('ARRAY_ENUM_SOURCE_MUST_NOT_RENDER')
+      expect(container.textContent).not.toContain('UNTRUSTED_FREE_SUMMARY')
+    }
+    expect(isAnswerSourceView({ ...source, cells: [{ ...source.cells![0], locator: { ...LOCATOR, format: ['xlsx'] } }] })).toBe(false)
+  })
+  it('renders the actual formal-table quantity shape with its exact 18-decimal string and actual unit', async () => {
+    const container = document.createElement('div')
+    document.body.appendChild(container)
+    const root = createRoot(container)
+    mounted.push({ root, container })
+    await act(async () => root.render(createElement(VerifiedCell, { value: { value: '9.000000000000000001', unit: 'kWh' }, valueType: 'quantity' })))
+    expect(container.textContent).toBe('9.000000000000000001 kWh')
+    expect(container.textContent).not.toContain('暂不可展示')
+  })
   it('does not revive cancellation when a replay batch also contains a late publication', () => {
     const state = queryReducer(initialQueryState(), { type: 'runEvents', events: [{ id: 'cancel', event: 'run.state', data: { state: 'cancelled' } }, { id: 'late', event: 'answer.published', data: { publicationKind: 'verified' } }] })
     expect(state.outcome).toBe('cancelled')
@@ -272,6 +349,13 @@ describe('fixed answer source guards', () => {
 })
 
 describe('stored-record staging and evolution wire contract', () => {
+  it('binds GET and every evolution operation to the exact requested plan ID', async () => {
+    const wrongId = '10000000-0000-4000-8000-000000000099'
+    const client = new WorkbenchClient({ baseUrl: 'http://api.test', fetchImpl: () => Promise.resolve(json({ evolution: { ...plan, plan: { ...plan.plan, evolutionId: wrongId } } })) })
+    await expect(readProjectEvolution(client, PROJECT, EVOLUTION)).rejects.toMatchObject({ code: 'MALFORMED_RESPONSE' })
+    for (const operation of ['activate', 'cancel', 'retry'] as const)
+      await expect(operateProjectEvolution(client, PROJECT, EVOLUTION, operation)).rejects.toMatchObject({ code: 'MALFORMED_RESPONSE' })
+  })
   it('stages only document and exact saved row selectors and checks returned candidate correlation', async () => {
     let submitted: unknown
     const candidate = {

@@ -16,7 +16,7 @@ import { Button, Drawer } from './ui'
 import { VerifiedCell } from './project/VerifiedCell'
 import { useRequestFence } from './project/useRequestFence'
 import { EvidenceSummary } from './project/EvidenceSummary'
-import type { AnswerSourceView } from '../api/source-views'
+import type { AnswerSourceView, SavedCellSelector } from '../api/source-views'
 import { boundAnswerSource } from '../api/source-views'
 import { AnswerSourceContent } from './project/AnswerSourceContent'
 import './project/project-workbench.css'
@@ -121,7 +121,7 @@ function TableView({
     readonly blocked?: string
   }
   readonly tableId: string
-  readonly onOpenEvidence?: (ref: ResourceRef) => void
+  readonly onOpenEvidence?: (ref: ResourceRef, selector: SavedCellSelector) => void
 }) {
   if (state.blocked !== undefined) {
     return (
@@ -179,7 +179,7 @@ function TableView({
                             type="button"
                             data-testid="result-cell-evidence"
                             data-evidence-id={binding.evidenceRef.id}
-                            onClick={() => onOpenEvidence?.(binding.evidenceRef)}
+                            onClick={() => onOpenEvidence?.(binding.evidenceRef, { tableId: page.tableId, rowKey: row.rowKey, columnRef: column.columnRef })}
                             aria-label={`查看${column.displayLabel ?? column.semanticPredicate}的来源`}
                           >
                             来源 ↗
@@ -413,7 +413,7 @@ export function ResultWorkbenchPanel({
 
   const openTablePage = useCallback(
     async (nextTableId: string, cursor?: string) => {
-      if (answerId === undefined) return
+      if (answerId === undefined || verified === undefined) return
       const request = beginRequest('table')
       const summary = tables.find((table) => table.tableId === nextTableId)
       if (summary === undefined || summary.verificationReceiptRef === undefined) {
@@ -427,8 +427,8 @@ export function ResultWorkbenchPanel({
         if (
           page.answerId !== answerId ||
           page.tableId !== nextTableId ||
-          page.resultManifestDigest !== verified?.view.resultManifestDigest ||
-          !sameRef(page.resultManifestRef, verified.view.resultManifestRef) ||
+          page.resultManifestDigest !== (summary.tableManifestDigest ?? verified?.view.resultManifestDigest) ||
+          !sameRef(page.resultManifestRef, summary.tableManifestRef ?? verified.view.resultManifestRef) ||
           !sameRef(page.tableVerificationReceiptRef, summary.verificationReceiptRef)
         ) {
           setTableState({ loading: false, error: '结果表版本或核验回执发生变化，已停止展示。' })
@@ -453,7 +453,7 @@ export function ResultWorkbenchPanel({
   }, [verified, answerId, initialTableId, openTablePage])
 
   const selectEvidence = useCallback(
-    async (ref: ResourceRef) => {
+    async (ref: ResourceRef, selector?: SavedCellSelector) => {
       const request = beginRequest('evidence')
       setEvidenceRef(ref)
       setEvidenceState({ loading: true })
@@ -461,9 +461,10 @@ export function ResultWorkbenchPanel({
         if (source.loadSource !== undefined && verified !== undefined) {
           if (ref.kind !== 'evidence') throw new Error('请从该陈述的证据来源查看原文与原始单元格。')
           const sourceView = boundAnswerSource(
-            await source.loadSource(verified.answer, ref, request.signal),
+            await source.loadSource(verified.answer, ref, request.signal, selector),
             verified.answer,
             ref,
+            selector,
           )
           if (request.current()) setEvidenceState({ loading: false, sourceView })
         } else {
@@ -504,8 +505,8 @@ export function ResultWorkbenchPanel({
   }, [source, selectedRunId, answerId, verified, beginRequest])
 
   const openEvidence = onOpenEvidence
-  const handleEvidence = (ref: ResourceRef) => {
-    void selectEvidence(ref)
+  const handleEvidence = (ref: ResourceRef, selector?: SavedCellSelector) => {
+    void selectEvidence(ref, selector)
     // Keep the selected result and its scroll position while the source drawer is open.
   }
 

@@ -41,6 +41,12 @@ export function VerifiedCell({
   if (typeof value === 'number')
     return <span className="project-value project-value--number">{String(value)}</span>
   if (record(value)) {
+    if (typeof value['value'] === 'string' && typeof value['unit'] === 'string')
+      return (
+        <span className="project-value project-value--number">
+          {value['value']}<span className="project-value__unit"> {value['unit']}</span>
+        </span>
+      )
     if (
       value['kind'] === 'quantity' &&
       typeof value['value'] === 'string' &&

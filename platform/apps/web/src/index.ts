@@ -389,3 +389,7 @@ export type { ExecutionPreviewView, ExecutionRuleChoice } from './api/execution-
 export { prepareHumanRuleInput, buildHumanRuleQuestion, humanQuestionSet, appendHumanQuestion, canAppendHumanQuestion } from './api/competency-authoring'
 export { CompetencyQuestionWorkbench } from './components/ontology/CompetencyQuestionWorkbench'
 export type { WorkspaceAuthoringContext, WorkspaceSourceCatalogue, WorkspaceSourceView, EligibleOperationView } from './api/workspace-authoring'
+export { VerifiedCell } from './components/project/VerifiedCell'
+export { AnswerSourceContent } from './components/project/AnswerSourceContent'
+export type { SavedCellSelector, SourceReadCoverage, SavedInputArtifactView } from './api/source-views'
+export type { ProjectComputeInputSelection } from './api/query'

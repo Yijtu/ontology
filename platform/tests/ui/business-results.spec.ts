@@ -4,8 +4,8 @@ import { act, createElement } from 'react'
 import { createRoot } from 'react-dom/client'
 import type { Root } from 'react-dom/client'
 import { afterEach, describe, expect, it } from 'vitest'
-import type { RuntimeEvent } from '@ontology/contracts'
-import type { ProjectTaskItem } from '@ontology/app-web'
+import type { RuntimeEvent, ResourceRef } from '@ontology/contracts'
+import type { ProjectTaskItem, ProjectComputeInputSelection, SavedCellSelector } from '@ontology/app-web'
 import {
   BusinessWorkbenchPanel,
   ResultWorkbenchPanel,
@@ -108,6 +108,12 @@ async function type(element: HTMLInputElement | HTMLTextAreaElement, value: stri
     element.dispatchEvent(new Event('input', { bubbles: true }))
   })
 }
+async function select(element: HTMLSelectElement, value: string): Promise<void> {
+  await act(async () => {
+    element.value = value
+    element.dispatchEvent(new Event('change', { bubbles: true }))
+  })
+}
 
 async function renderWorkbench(
   harness: BusinessResultsHarness,
@@ -206,6 +212,57 @@ describe('public business workbench lists mounted and authorised tasks', () => {
 })
 
 describe('parameter change requires an explicit confirmation', () => {
+  it('selects actual single-value compute fields, rejects unsupported units and confirms inputs separately from parameters', async () => {
+    const accepted: { parameters: Readonly<Record<string, unknown>>; selection?: ProjectComputeInputSelection }[] = []
+    const task: ProjectTaskItem = {
+      bindingRef: { id: 'registered-compute', version: '1.0.0', digest: `sha256:${'b'.repeat(64)}` }, taskKind: 'compute', displayName: '汇总每件数量',
+      parameterSchema: {}, requiredCapabilities: [], requiredReadiness: ['dataset'], available: true, unavailableReasons: [], requiresInputSelection: true,
+      inputRequirements: { maxDecimalPlaces: 4, units: ['each'], currencies: ['CNY'], minimumAmount: '0', description: '这项登记计算支持非负数、最多四位小数；工时暂不可用。', maxRows: 1000 },
+      objects: [
+        { objectId: 'goods', displayName: '已确认商品', attributes: [
+          { attributeId: 'sku', displayName: '商品编号', valueType: 'string', required: true, minCardinality: 1, maxCardinality: 1 },
+          { attributeId: 'amount', displayName: '精确数量', valueType: 'number', required: true, minCardinality: 1, maxCardinality: 1 },
+          { attributeId: 'hours', displayName: '工时', valueType: 'quantity', unit: 'h', required: true, minCardinality: 1, maxCardinality: 1 },
+          { attributeId: 'pieces', displayName: '每件数量', valueType: 'quantity', unit: 'each', required: true, minCardinality: 1, maxCardinality: 1 },
+          { attributeId: 'units', displayName: '确认单位', valueType: 'enum', enumValues: ['each'], required: true, minCardinality: 1, maxCardinality: 1 },
+          { attributeId: 'multi', displayName: '多个数量', valueType: 'number', required: true, minCardinality: 1, maxCardinality: 'unbounded' },
+        ] },
+        { objectId: 'logs', displayName: '另一种记录', attributes: [] },
+      ],
+    }
+    const container = document.createElement('div'); document.body.appendChild(container)
+    const root = createRoot(container); mounted.push({ root, container })
+    await act(async () => root.render(createElement(TaskRunForm, { task, objects: [], disabled: false, onRun: (parameters, selection) => { accepted.push({ parameters, ...(selection === undefined ? {} : { selection }) }); return Promise.resolve() } })))
+    const input = (key: string) => {
+      const element = container.querySelector<HTMLSelectElement>(`[data-testid="compute-input-${key}"]`)
+      if (element === null) throw new Error(`input selector missing: ${key}`)
+      return element
+    }
+    expect(container.textContent).toContain('最多四位小数')
+    expect(container.textContent).toContain('最多 1000 条记录')
+    expect(container.querySelector('textarea')).toBeNull()
+    await select(input('objectId'), 'goods')
+    expect([...input('amountField').options].map((option) => option.value)).toEqual(['', 'amount', 'pieces'])
+    await select(input('idField'), 'sku')
+    await select(input('amountField'), 'amount')
+    expect(container.querySelector<HTMLButtonElement>('[data-testid="task-run"]')?.disabled).toBe(true)
+    expect(container.querySelector<HTMLButtonElement>('[data-testid="task-parameter-preview"]')?.disabled).toBe(true)
+    await select(input('unitField'), 'units')
+    await click(container.querySelector('[data-testid="task-parameter-preview"]') as Element)
+    expect(container.querySelector('[data-testid="task-parameter-diff"]')?.textContent).toContain('汇总数值字段：未选择 → 精确数量')
+    await submit(container.querySelector('form') as Element)
+    expect(accepted).toEqual([])
+    await click(container.querySelector('[data-testid="task-parameter-confirm"]') as Element)
+    await submit(container.querySelector('form') as Element)
+    expect(accepted).toEqual([{ parameters: {}, selection: { objectId: 'goods', idField: 'sku', amountField: 'amount', unitField: 'units' } }])
+    await select(input('objectId'), 'logs')
+    expect(input('idField').value).toBe('')
+    expect(input('amountField').value).toBe('')
+    expect(input('unitField').value).toBe('')
+    expect(container.querySelector<HTMLButtonElement>('[data-testid="task-run"]')?.disabled).toBe(true)
+    await submit(container.querySelector('form') as Element)
+    expect(accepted).toHaveLength(1)
+  })
   it('shows a concrete schema parameter diff and submits only the confirmed values', async () => {
     const accepted: Readonly<Record<string, unknown>>[] = []
     const task: ProjectTaskItem = {
@@ -267,6 +324,72 @@ describe('parameter change requires an explicit confirmation', () => {
 })
 
 describe('typed results share the same verified version', () => {
+  it('keeps a later clicked cell when an earlier source read of the same evidence returns late', async () => {
+    const built = await harness()
+    const actual = createWorkbenchResultSource(built.harness.client)
+    let release: (() => void) | undefined
+    let waiting = false
+    const source = { ...actual, loadSource: async (...args: Parameters<NonNullable<typeof actual.loadSource>>) => {
+      if (actual.loadSource === undefined) throw new Error('source route missing')
+      const view = await actual.loadSource(...args)
+      if (args[3]?.columnRef === 'name') {
+        waiting = true
+        await new Promise<void>((resolve) => { release = resolve })
+        return { ...view, title: '较早字段的迟到来源' }
+      }
+      return { ...view, title: '当前容量字段的来源' }
+    } }
+    const container = document.createElement('div'); document.body.appendChild(container)
+    const root = createRoot(container); mounted.push({ root, container })
+    await act(async () => root.render(createElement(ResultWorkbenchPanel, { source, runId: built.runId, initialTab: 'tables' })))
+    await waitFor(() => container.querySelector('[data-testid="result-cell-evidence"]') !== null, 'actual cell actions')
+    const row = container.querySelector('[data-testid="result-table-row"]')
+    const name = row?.querySelector('[data-testid="result-table-cell-name"] button')
+    const capacity = row?.querySelector('[data-testid="result-table-cell-capacity"] button')
+    if (name === undefined || name === null || capacity === undefined || capacity === null) throw new Error('cell actions missing')
+    await click(name)
+    await waitFor(() => waiting, 'earlier source read paused after actual HTTP read')
+    await click(container.querySelector('dialog button[aria-label="关闭结果依据"]') as Element)
+    await click(capacity)
+    await waitFor(() => container.querySelector('[data-testid="result-evidence"]')?.textContent?.includes('当前容量字段的来源') === true, 'later same-evidence cell source')
+    await act(async () => release?.())
+    expect(container.querySelector('[data-testid="result-evidence"]')?.textContent).toContain('当前容量字段的来源')
+    expect(container.textContent).not.toContain('较早字段的迟到来源')
+    expect(container.querySelector('[data-testid="result-table"]')?.getAttribute('data-page')).toBe('0')
+  })
+  it('uses the earned per-table manifest independently of the outer result format and sends the clicked later-page cell selector', async () => {
+    const built = await harness()
+    const actual = createWorkbenchResultSource(built.harness.client)
+    const requested: SavedCellSelector[] = []
+    const source = { ...actual,
+      loadResult: async (runId: string) => {
+        const load = await actual.loadResult(runId)
+        if (load.kind !== 'verified') return load
+        const outer: ResourceRef = { id: 'outer-result-format-wire', version: '1.0.0', digest: `sha256:${'c'.repeat(64)}`, kind: 'artifact' }
+        return { ...load, view: { ...load.view, resultManifestRef: outer, resultManifestDigest: outer.digest, tables: load.view.tables.map((table) => table.verificationReceiptRef === undefined ? table : { ...table, tableManifestRef: load.view.resultManifestRef, tableManifestDigest: load.view.resultManifestDigest }) } }
+      },
+      loadSource: async (...args: Parameters<NonNullable<typeof actual.loadSource>>) => {
+        if (args[3] !== undefined) requested.push(args[3])
+        if (actual.loadSource === undefined) throw new Error('source route missing')
+        return actual.loadSource(...args)
+      },
+    }
+    const container = document.createElement('div'); document.body.appendChild(container)
+    const root = createRoot(container); mounted.push({ root, container })
+    await act(async () => root.render(createElement(ResultWorkbenchPanel, { source, runId: built.runId, initialTab: 'tables' })))
+    await waitFor(() => container.querySelector('[data-testid="result-table-row"]') !== null, 'real earned per-table page with distinct outer format')
+    expect(container.querySelector('[data-testid="result-table-error"]')).toBeNull()
+    await click(container.querySelector('[data-testid="result-table-next"]') as Element)
+    await waitFor(() => container.querySelector('[data-testid="result-table"]')?.getAttribute('data-page') === '1', 'later immutable page')
+    const firstRow = container.querySelector('[data-testid="result-table-row"]')
+    const capacity = firstRow?.querySelector('[data-testid="result-table-cell-capacity"] [data-testid="result-cell-evidence"]')
+    if (capacity === undefined || capacity === null) throw new Error('bound later-page cell source missing')
+    await click(capacity)
+    await waitFor(() => container.querySelector('[data-testid="result-evidence"]') !== null, 'exact selected source response')
+    expect(requested).toEqual([{ tableId: built.verifiedTableId, rowKey: 'r3', columnRef: 'capacity' }])
+    expect(container.querySelector('[data-testid="result-evidence"]')?.getAttribute('data-readability')).toBe('missing')
+    expect(container.querySelector('[data-testid="result-table"]')?.getAttribute('data-page')).toBe('1')
+  })
   it('renders 正文/结果表/依据, pages the table and keeps provenance states apart', async () => {
     const built = await harness()
     const container = await renderResult(built)

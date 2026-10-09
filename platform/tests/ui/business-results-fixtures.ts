@@ -495,7 +495,7 @@ export async function startBusinessResultsHarness(
   })
 
   const extraRoutes: NonNullable<HarnessOptions['extraRoutes']> = (app) => {
-    app.get<{ Params: { answerId: string; evidenceId: string } }>(
+    app.get<{ Params: { answerId: string; evidenceId: string }; Querystring: { tableId?: string; rowKey?: string; columnRef?: string } }>(
       '/api/v1/core/answers/:answerId/sources/:evidenceId',
       async (request, reply) => {
         const boundRef = [evidenceRef(1), evidenceRef(2), evidenceRef(3)].find(
@@ -506,6 +506,13 @@ export async function startBusinessResultsHarness(
             error: { code: 'NOT_FOUND', message: 'no source bound to this answer', retryable: false },
             traceId: 'fixture',
           })
+          return reply
+        }
+        const { tableId, rowKey, columnRef } = request.query
+        const hasSelector = tableId !== undefined || rowKey !== undefined || columnRef !== undefined
+        const selected = PAGE_BODIES.flatMap((page) => page.rows).find((row) => row.rowKey === rowKey)
+        if (hasSelector && (tableId !== VERIFIED_TABLE_ID || selected === undefined || !selected.bindings.some((binding) => binding.columnRef === columnRef && binding.evidenceRef.id === boundRef.id))) {
+          reply.status(404).send({ error: { code: 'NOT_FOUND', message: 'no such saved cell/evidence binding', retryable: false }, traceId: 'fixture' })
           return reply
         }
         const support = await createBusinessEvidenceSurface().getEvidence(boundRef.id, {}, ctx)
@@ -527,6 +534,7 @@ export async function startBusinessResultsHarness(
             title: '查询时保存的来源快照',
             support,
             dataMode: support.dataMode,
+            ...(hasSelector ? { selectedCell: { tableId, rowKey, columnRef }, sourceCoverage: { mode: 'unsupported', requested: 1, verified: 0, displayed: 0, knownTotal: null, truncated: true, coverage: 'unsupported', maxRows: 10, maxFragments: 10 } } : {}),
           },
           meta: { traceId: 'fixture' },
         })

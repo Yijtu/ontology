@@ -145,13 +145,15 @@ async function readResult(
   path: string,
   projectId: string,
   options: Parameters<WorkbenchClient['requestJson']>[2],
+  expectedEvolutionId?: string,
 ): Promise<ProjectEvolutionRecord> {
   const value = await client.requestJson<unknown>(method, path, options)
   if (
     !record(value) ||
     !isProjectEvolutionRecord(value['evolution']) ||
     value['evolution'].plan.previousRevisionRef.projectId !== projectId ||
-    value['evolution'].plan.targetRevisionRef.projectId !== projectId
+    value['evolution'].plan.targetRevisionRef.projectId !== projectId ||
+    (expectedEvolutionId !== undefined && value['evolution'].plan.evolutionId !== expectedEvolutionId)
   )
     malformed()
   return value['evolution']
@@ -190,6 +192,7 @@ export function readProjectEvolution(
     `/api/v1/projects/${encodeURIComponent(projectId)}/evolutions/${encodeURIComponent(evolutionId)}`,
     projectId,
     signal === undefined ? {} : { signal },
+    evolutionId,
   )
 }
 export function operateProjectEvolution(
@@ -209,5 +212,6 @@ export function operateProjectEvolution(
       body: operation === 'activate' ? { relationCandidateIds } : {},
       ...(signal === undefined ? {} : { signal }),
     },
+    evolutionId,
   )
 }

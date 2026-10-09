@@ -30,6 +30,7 @@ const digest = (value: unknown): value is Sha256Digest =>
 const strings = (value: unknown): value is string[] => Array.isArray(value) && value.every(text)
 const index = (value: unknown): value is number =>
   typeof value === 'number' && Number.isSafeInteger(value) && value >= 0
+const enumValue = (value: unknown, choices: readonly string[]) => typeof value === 'string' && choices.includes(value)
 function invalid(path: string): never {
   throw new ApiError(502, {
     code: 'MALFORMED_RESPONSE',
@@ -91,6 +92,8 @@ export interface ProjectCanonicalObject {
     readonly valueType: string
     readonly unit?: string
     readonly required: boolean
+    readonly minCardinality?: number
+    readonly maxCardinality?: number | 'unbounded'
     readonly enumValues?: readonly string[]
     readonly referencesObjectId?: string
   }[]
@@ -111,6 +114,15 @@ export interface ProjectTaskItem {
   readonly requiredReadiness: readonly ProjectReadinessKind[]
   readonly available: boolean
   readonly unavailableReasons: readonly string[]
+  readonly requiresInputSelection?: boolean
+  readonly inputRequirements?: {
+    readonly maxDecimalPlaces: number
+    readonly units: readonly string[]
+    readonly currencies: readonly string[]
+    readonly minimumAmount: string
+    readonly description: string
+    readonly maxRows: number
+  }
   readonly objects?: readonly TaskObjectChoice[]
   readonly rules?: readonly {
     readonly ruleId: string
@@ -177,7 +189,7 @@ function isNativeSource(value: unknown): value is ProjectNativeSource {
     isResourceRef(value['parseRef']) &&
     text(value['parseId']) &&
     text(value['kind']) &&
-    ['exact', 'approximate'].includes(String(value['precision'])) &&
+    enumValue(value['precision'], ['exact', 'approximate']) &&
     ['name', 'mediaType', 'originalMediaType', 'format'].every(
       (key) => value[key] === undefined || typeof value[key] === 'string',
     ) &&
@@ -192,8 +204,8 @@ function isNativeSource(value: unknown): value is ProjectNativeSource {
 function isCoverage(value: unknown): value is ParseCoverage {
   return (
     record(value) &&
-    ['complete', 'partial', 'failed'].includes(String(value['status'])) &&
-    ['complete', 'partial', 'truncated', 'unknown'].includes(String(value['completeness'])) &&
+    enumValue(value['status'], ['complete', 'partial', 'failed']) &&
+    enumValue(value['completeness'], ['complete', 'partial', 'truncated', 'unknown']) &&
     ['totalUnits', 'parsedUnits', 'skippedUnits'].every((key) => index(value[key])) &&
     strings(value['skippedReasons']) &&
     strings(value['notes'])
@@ -223,6 +235,9 @@ function isObject(value: unknown): value is ProjectCanonicalObject {
         text(field['displayName']) &&
         text(field['valueType']) &&
         typeof field['required'] === 'boolean' &&
+        (field['minCardinality'] === undefined || index(field['minCardinality'])) &&
+        (field['maxCardinality'] === undefined || field['maxCardinality'] === 'unbounded' || index(field['maxCardinality'])) &&
+        (field['minCardinality'] === undefined || field['maxCardinality'] === undefined || field['maxCardinality'] === 'unbounded' || field['minCardinality'] <= field['maxCardinality']) &&
         (field['unit'] === undefined || typeof field['unit'] === 'string') &&
         (field['enumValues'] === undefined || strings(field['enumValues'])) &&
         (field['referencesObjectId'] === undefined || text(field['referencesObjectId'])),
@@ -248,18 +263,18 @@ function isTask(value: unknown): value is ProjectTaskItem {
   return (
     record(value) &&
     isVersionRef(value['bindingRef']) &&
-    ['published_facts', 'structured_query', 'rule_judgement', 'relations', 'document_qa', 'compute'].includes(
-      String(value['taskKind']),
-    ) &&
+    enumValue(value['taskKind'], ['published_facts', 'structured_query', 'rule_judgement', 'relations', 'document_qa', 'compute']) &&
     text(value['displayName']) &&
     record(value['parameterSchema']) &&
     strings(value['requiredCapabilities']) &&
     Array.isArray(value['requiredReadiness']) &&
     value['requiredReadiness'].every((kind: unknown) =>
-      ['published_semantics', 'dataset', 'document_index'].includes(String(kind)),
+      enumValue(kind, ['published_semantics', 'dataset', 'document_index']),
     ) &&
     typeof value['available'] === 'boolean' &&
     strings(value['unavailableReasons']) &&
+    (value['requiresInputSelection'] === undefined || typeof value['requiresInputSelection'] === 'boolean' && value['taskKind'] === 'compute') &&
+    (value['inputRequirements'] === undefined || isInputRequirements(value['inputRequirements']) && value['taskKind'] === 'compute' && value['requiresInputSelection'] === true) &&
     (value['objects'] === undefined ||
       (Array.isArray(value['objects']) &&
         value['objects'].every(
@@ -292,6 +307,11 @@ function isTask(value: unknown): value is ProjectTaskItem {
             text(relation['toObjectId']),
         )))
   )
+}
+function isInputRequirements(value: unknown): value is NonNullable<ProjectTaskItem['inputRequirements']> {
+  return record(value) && index(value['maxDecimalPlaces']) && value['maxDecimalPlaces'] <= 100 &&
+    strings(value['units']) && strings(value['currencies']) && text(value['minimumAmount']) &&
+    /^(?:0|[1-9][0-9]*)(?:\.[0-9]+)?$/u.test(value['minimumAmount']) && text(value['description']) && index(value['maxRows']) && value['maxRows'] > 0
 }
 export function isProjectTaskCatalogue(value: unknown): value is ProjectTaskCatalogue {
   return (

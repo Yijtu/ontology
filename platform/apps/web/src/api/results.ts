@@ -36,6 +36,8 @@ export interface VerifiedTableSummary {
   readonly columns: readonly TableColumnDescriptor[]
   readonly complete: boolean
   readonly verificationReceiptRef?: ResourceRef
+  readonly tableManifestRef?: ResourceRef
+  readonly tableManifestDigest?: Sha256Digest
 }
 
 /** The authorized, data-only projection of a verified `typed-result-manifest@1`. */
@@ -277,7 +279,9 @@ function isTableSummary(value: unknown): value is VerifiedTableSummary {
     Array.isArray(value['columns']) &&
     value['columns'].every(isColumnDescriptor) &&
     typeof value['complete'] === 'boolean' &&
-    (value['verificationReceiptRef'] === undefined || isResourceRef(value['verificationReceiptRef']))
+    (value['verificationReceiptRef'] === undefined || isResourceRef(value['verificationReceiptRef'])) &&
+    (value['tableManifestRef'] === undefined && value['tableManifestDigest'] === undefined ||
+      isResourceRef(value['verificationReceiptRef']) && isResourceRef(value['tableManifestRef']) && isDigest(value['tableManifestDigest']) && value['tableManifestRef'].digest === value['tableManifestDigest'])
   )
 }
 

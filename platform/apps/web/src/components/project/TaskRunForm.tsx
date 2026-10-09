@@ -1,5 +1,6 @@
 import { useMemo, useState } from 'react'
 import type { ProjectCanonicalObject, ProjectTaskItem } from '../../api/project-workbench'
+import type { ProjectComputeInputSelection } from '../../api/query'
 import { Button, Field } from '../ui'
 
 const record = (value: unknown): value is Record<string, unknown> =>
@@ -153,6 +154,7 @@ function fieldsFor(
     })
   }
   const schema = task.parameterSchema
+  if (Object.keys(schema).length === 0) return { fields }
   if (schema['type'] !== 'object' || !record(schema['properties']))
     return { fields, error: '任务未提供可用的对象参数 Schema。' }
   if (task.taskKind === 'rule_judgement') {
@@ -266,16 +268,41 @@ export function TaskRunForm({
   readonly task: ProjectTaskItem
   readonly objects: readonly ProjectCanonicalObject[]
   readonly disabled: boolean
-  readonly onRun: (parameters: Readonly<Record<string, unknown>>) => Promise<void>
+  readonly onRun: (parameters: Readonly<Record<string, unknown>>, inputSelection?: ProjectComputeInputSelection) => Promise<void>
 }) {
   const [values, setValues] = useState<Readonly<Record<string, Raw>>>({})
   const [confirmedValues, setConfirmedValues] = useState<Readonly<Record<string, Raw>>>({})
   const [confirmedSignature, setConfirmedSignature] = useState('{}')
   const [previewSignature, setPreviewSignature] = useState<string>()
+  const [inputValues, setInputValues] = useState<Partial<ProjectComputeInputSelection>>({})
+  const [confirmedInput, setConfirmedInput] = useState<Partial<ProjectComputeInputSelection>>({})
+  const [confirmedInputLabels, setConfirmedInputLabels] = useState<Partial<Record<keyof ProjectComputeInputSelection, string>>>({})
   const projection = useMemo(() => fieldsFor(task, objects, values), [task, objects, values])
   const parsed = useMemo(() => parametersFor(projection.fields, values), [projection.fields, values])
-  const signature = JSON.stringify(parsed.parameters)
-  const valid = projection.error === undefined && parsed.error === undefined
+  const requiresInput = task.requiresInputSelection === true
+  const inputObjects = (task.objects ?? []).map((object) => ({ ...object, attributes: object.attributes ?? objects.find((entry) => entry.objectId === object.objectId)?.attributes ?? [] }))
+  const selectedObject = inputObjects.find((object) => object.objectId === inputValues.objectId)
+  const singleFields = (selectedObject?.attributes ?? []).filter((field) => field.maxCardinality === 1)
+  const requirements = task.inputRequirements
+  const choices: Readonly<Record<keyof ProjectComputeInputSelection, readonly Choice[]>> = {
+    objectId: inputObjects.map((object) => ({ value: object.objectId, label: object.displayName })),
+    idField: singleFields.filter((field) => ['string', 'enum'].includes(field.valueType)).map((field) => ({ value: field.attributeId, label: field.displayName })),
+    amountField: singleFields.filter((field) => field.valueType === 'number' || field.valueType === 'quantity' && field.unit !== undefined && requirements?.units.includes(field.unit)).map((field) => ({ value: field.attributeId, label: `${field.displayName}${field.unit === undefined ? '' : `（${field.unit}）`}` })),
+    unitField: singleFields.filter((field) => ['string', 'enum'].includes(field.valueType) && (field.enumValues === undefined || field.enumValues.every((unit) => requirements?.units.includes(unit)))).map((field) => ({ value: field.attributeId, label: field.displayName })),
+    currencyField: singleFields.filter((field) => ['string', 'enum'].includes(field.valueType) && (field.enumValues === undefined || field.enumValues.every((currency) => requirements?.currencies.includes(currency)))).map((field) => ({ value: field.attributeId, label: field.displayName })),
+  }
+  const inputLabels: Readonly<Record<keyof ProjectComputeInputSelection, string>> = { objectId: '输入记录类型', idField: '唯一标识字段', amountField: '汇总数值字段', unitField: '单位字段', currencyField: '币种字段' }
+  const inputKeys = ['objectId', 'idField', 'amountField', 'unitField', 'currencyField'] as const
+  const amount = singleFields.find((field) => field.attributeId === inputValues.amountField)
+  const selectionValid = requirements !== undefined && inputKeys.every((key) => inputValues[key] === undefined ? key === 'unitField' || key === 'currencyField' : choices[key].some((choice) => choice.value === inputValues[key])) &&
+    (amount?.valueType === 'quantity' || inputValues.unitField !== undefined || inputValues.currencyField !== undefined)
+  const inputSelection: ProjectComputeInputSelection | undefined = selectionValid && inputValues.objectId !== undefined && inputValues.idField !== undefined && inputValues.amountField !== undefined ? {
+    objectId: inputValues.objectId, idField: inputValues.idField, amountField: inputValues.amountField,
+    ...(inputValues.unitField === undefined ? {} : { unitField: inputValues.unitField }),
+    ...(inputValues.currencyField === undefined ? {} : { currencyField: inputValues.currencyField }),
+  } : undefined
+  const signature = JSON.stringify(requiresInput ? { parameters: parsed.parameters, inputSelection: inputValues } : parsed.parameters)
+  const valid = projection.error === undefined && parsed.error === undefined && (!requiresInput || selectionValid)
   const changed = signature !== confirmedSignature
   const display = (field: ParameterField, raw: Raw | undefined) =>
     empty(raw)
@@ -295,7 +322,7 @@ export function TaskRunForm({
       data-testid="task-schema-form"
       onSubmit={(event) => {
         event.preventDefault()
-        if (valid && !changed && task.available && !disabled) void onRun(parsed.parameters)
+        if (valid && !changed && task.available && !disabled) void onRun(parsed.parameters, requiresInput ? inputSelection : undefined)
       }}
     >
       <h3>{task.displayName}</h3>
@@ -307,6 +334,19 @@ export function TaskRunForm({
           ))}
         </div>
       )}
+      {!requiresInput ? null : <fieldset disabled={disabled || !task.available} data-testid="compute-input-selection">
+        <legend>选择已确认的计算输入</legend>
+        {requirements === undefined ? <p role="alert">尚未取得这项计算的输入要求，暂不能执行。</p> : <p>{requirements.description} 一次最多 {requirements.maxRows} 条记录。</p>}
+        {inputKeys.map((key) => <Field key={key} label={`${inputLabels[key]}${key === 'unitField' || key === 'currencyField' ? '（可选）' : ' *'}`}>
+          {(attributes) => <select {...attributes} data-testid={`compute-input-${key}`} value={inputValues[key] ?? ''} onChange={(event) => {
+            const value = event.target.value
+            setPreviewSignature(undefined)
+            setInputValues((previous) => key === 'objectId' ? value === '' ? {} : { objectId: value } : Object.fromEntries(Object.entries({ ...previous, [key]: value }).filter(([, entry]) => entry !== '')))
+          }}><option value="">{key === 'unitField' || key === 'currencyField' ? '不选择' : '请选择…'}</option>{choices[key].map((choice) => <option key={choice.value} value={choice.value}>{choice.label}</option>)}</select>}
+        </Field>)}
+        {amount?.valueType !== 'number' ? null : <p className="project-source-note">数值字段需要选择实际单位或币种字段。实际记录中的值与精度仍由服务端核验。</p>}
+        {selectedObject === undefined || choices.amountField.length > 0 ? null : <p role="status">此记录类型没有符合该计算单位与单值要求的数值字段。</p>}
+      </fieldset>}
       {projection.fields.map((field) => (
         <Field
           key={keyOf(field.path)}
@@ -392,6 +432,7 @@ export function TaskRunForm({
       {previewSignature !== signature ? null : (
         <div className="project-notice" data-testid="task-parameter-diff">
           <h4>确认参数变更</h4>
+          {!requiresInput ? null : inputKeys.filter((key) => inputValues[key] !== confirmedInput[key]).map((key) => <p key={key}>{inputLabels[key]}：{confirmedInputLabels[key] ?? '未选择'} → {choices[key].find((choice) => choice.value === inputValues[key])?.label ?? '未选择'}</p>)}
           {projection.fields
             .filter(
               (field) =>
@@ -410,6 +451,8 @@ export function TaskRunForm({
             onClick={() => {
               if (previewSignature === signature) {
                 setConfirmedValues({ ...values })
+                setConfirmedInput({ ...inputValues })
+                setConfirmedInputLabels(Object.fromEntries(inputKeys.map((key) => [key, choices[key].find((choice) => choice.value === inputValues[key])?.label ?? '未选择'])))
                 setConfirmedSignature(signature)
                 setPreviewSignature(undefined)
               }

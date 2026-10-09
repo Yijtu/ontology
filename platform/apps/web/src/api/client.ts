@@ -42,7 +42,7 @@ import type {
 } from '@ontology/contracts'
 import { ApiError, toApiFailure } from './errors'
 import { isProvenanceView, readAnswerSource } from './source-views'
-import type { AnswerSourceView } from './source-views'
+import type { AnswerSourceView, SavedCellSelector } from './source-views'
 import {
   asExecutionRecord,
   asScenarioDescriptor,
@@ -1409,8 +1409,8 @@ export class WorkbenchClient {
     ).then((view) => { if (!isProvenanceView(view) || view.evidenceId !== evidenceId) throw malformedResponse(path, 'the evidence view was not recognised'); return view })
   }
 
-  getAnswerSource(answer: PublishedAnswer, evidenceRef: ResourceRef, signal?: AbortSignal): Promise<AnswerSourceView> {
-    return readAnswerSource(this, answer, evidenceRef, signal)
+  getAnswerSource(answer: PublishedAnswer, evidenceRef: ResourceRef, signal?: AbortSignal, selector?: SavedCellSelector): Promise<AnswerSourceView> {
+    return readAnswerSource(this, answer, evidenceRef, signal, selector)
   }
 
   /**
