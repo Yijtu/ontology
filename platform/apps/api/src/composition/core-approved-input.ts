@@ -1,6 +1,6 @@
 import { createHash } from 'node:crypto'
-import { isRecord, isResourceRef } from '@ontology/contracts'
-import type { ApprovedInputSnapshot, CandidateStore, IndustrySchemaSource, InstanceReviewStore, ProjectDocumentStore, ProjectPublishedDatasetSource, ProjectRecordStore, ProjectRevision, ProjectStore, ReviewableCandidateReader, ScopedArtifactReader, ScopeRef, SemanticPublicationStore, ToolContext } from '@ontology/contracts'
+import { assertProjectRecordVersionShape, isRecord, isResourceRef, isRevisionString } from '@ontology/contracts'
+import type { ApprovedInputSnapshot, CandidateStore, IdentityDecisionStore, IndustrySchemaSource, InstanceReviewStore, ProjectDocumentStore, ProjectEvolutionPlan, ProjectEvolutionStore, ProjectMappingStore, ProjectPublishedDatasetSource, ProjectRecordStore, ProjectRecordVersion, ProjectRevision, ProjectStore, ReviewableCandidateReader, ScopedArtifactReader, ScopeRef, SemanticPublicationStore, ToolContext } from '@ontology/contracts'
 import { RunServiceError, canonicalJson, sha256DigestOf } from '@ontology/application'
 import { InvalidRequestFieldError } from '../http/shared'
 import type { createCoreAuthoring } from './core-authoring'
@@ -11,6 +11,9 @@ export function createCoreApprovedInput(options: {
   readonly instances: InstanceReviewStore; readonly candidates: CandidateStore; readonly reviews: SemanticPublicationStore
   readonly reviewable: ReviewableCandidateReader; readonly schemas: IndustrySchemaSource; readonly source: ProjectPublishedDatasetSource
   readonly reader: ScopedArtifactReader; readonly authoring: ReturnType<typeof createCoreAuthoring>
+  readonly evolutions?: Pick<ProjectEvolutionStore,'activeRebuild' | 'assertSources'>
+  readonly identity?: Pick<IdentityDecisionStore,'latestReadRevision'>
+  readonly mappings?: Pick<ProjectMappingStore,'getMapping'>
 }) {
   const readMany = async <T,R>(values: readonly T[], read: (value: T) => Promise<R>): Promise<R[]> => {
     const result: R[] = []
@@ -74,12 +77,21 @@ export function createCoreApprovedInput(options: {
     if (sha256DigestOf(canonicalJson(selection)) !== manifest['semanticPinsDigest']) return invalid()
     return { selection, human }
   }
-  const collect = async (scope: ScopeRef, revision: ProjectRevision, ctx: ToolContext, signal?: AbortSignal, frozen?: Readonly<Record<string, unknown>>) => {
+  const collect = async (scope: ScopeRef, revision: ProjectRevision, ctx: ToolContext, signal?: AbortSignal, frozen?: Readonly<Record<string, unknown>>,plan?: ProjectEvolutionPlan) => {
     const check = () => { if (signal?.aborted === true) throw new RunServiceError('DEADLINE_EXCEEDED', 'the normal input capture was cancelled', { cause: signal.reason }) }
     check()
     const project = await options.projects.getProject(scope, revision.ref.projectId, ctx)
     if (project === undefined || project.state === 'archived' || (project.activeRevision ?? project.headRevision) !== revision.ref.revision || canonicalJson(await options.projects.getRevision(scope, revision.ref.projectId, revision.ref.revision, ctx)) !== canonicalJson(revision)) throw new InvalidRequestFieldError('normal input requires the exact authorized active project revision')
     if (revision.executionPurpose === 'synthetic_validation') throw new InvalidRequestFieldError('private competency inputs cannot become ordinary observed business inputs')
+    let acceptedTarget: ProjectRevision | undefined
+    if (plan !== undefined) {
+      const accepted = await options.evolutions?.activeRebuild(scope,revision.ref.projectId,ctx)
+      const target = await options.projects.getRevision(scope,revision.ref.projectId,project.headRevision,ctx)
+      if (frozen === undefined || accepted === undefined || options.evolutions === undefined || canonicalJson(accepted.plan) !== canonicalJson(plan) || canonicalJson(plan.previousRevisionRef) !== canonicalJson(revision.ref) || canonicalJson(target?.ref) !== canonicalJson(plan.targetRevisionRef) || project.headRevision === revision.ref.revision) throw new InvalidRequestFieldError('immutable old records require the exact current accepted previous-input evolution plan')
+      acceptedTarget = target
+      await options.evolutions.assertSources(scope,revision.ref.projectId,plan.evolutionId,ctx)
+      check()
+    }
     const visibility = await options.documents.getVisibility(scope, revision.ref.projectId, ctx)
     const allMembers = await options.documents.listDocuments(scope, revision.ref.projectId, { state: 'active', limit: 200 }, ctx)
     if (allMembers.nextCursor !== null) throw new InvalidRequestFieldError('the current input source inventory exceeds 200 originals')
@@ -94,7 +106,8 @@ export function createCoreApprovedInput(options: {
     const schema = await options.schemas.getSchema(scope, revision.definitionRef, ctx)
     if (schema === undefined || schema.objects.length > 64) throw new InvalidRequestFieldError('the current input definition is unavailable or exceeds its finite object bound')
     const semantic = await options.reviews.latestReadRevision(scope, ctx)
-    const allPhysical = []
+    const identityRevision = await options.identity?.latestReadRevision(scope,ctx)
+    const allPhysical: ProjectRecordVersion[] = []
     let cursor: string | undefined
     do {
       check()
@@ -103,10 +116,32 @@ export function createCoreApprovedInput(options: {
       if (allPhysical.length > 20_000 || cursor !== undefined && page.nextCursor === cursor) throw new InvalidRequestFieldError('the normal input record inventory exceeded its finite bound')
       cursor = page.nextCursor
     } while (cursor !== undefined)
+    const latestPhysical = new Map(allPhysical.map((record) => [record.recordId,record]))
     const frozenPhysical = frozen?.['physical']
     if (frozen !== undefined && (!Array.isArray(frozenPhysical) || frozenPhysical.length > 20_000)) throw new InvalidRequestFieldError('the accepted previous physical selection is malformed')
     const selectedRecordIds = Array.isArray(frozenPhysical) ? new Set(frozenPhysical.flatMap((saved: unknown) => isRecord(saved) && typeof saved['recordId'] === 'string' ? [saved['recordId']] : [])) : undefined
-    const physical = selectedRecordIds === undefined ? allPhysical : allPhysical.filter((record) => selectedRecordIds.has(record.recordId))
+    const oldApprovedIds = new Set(Array.isArray(frozen?.['rows']) ? frozen['rows'].flatMap((row: unknown) => isRecord(row) && typeof row['recordId'] === 'string' ? [row['recordId']] : []) : [])
+    const mappingReads = new Map<string,ReturnType<NonNullable<typeof options.mappings>['getMapping']>>()
+    const oldMapping = (id: string,version: string) => {
+      const key = `${id}@${version}`
+      let found = mappingReads.get(key)
+      if (found === undefined) { if (options.mappings === undefined) throw new InvalidRequestFieldError('the accepted remapping requires its actual immutable mapping reader'); found = options.mappings.getMapping(scope,revision.ref.projectId,id,version,ctx); mappingReads.set(key,found) }
+      return found
+    }
+    const physical = plan === undefined || !Array.isArray(frozenPhysical) ? selectedRecordIds === undefined ? allPhysical : allPhysical.filter((record) => selectedRecordIds.has(record.recordId)) : await readMany(frozenPhysical,async (saved: unknown) => {
+      check(); assertProjectRecordVersionShape(saved)
+      if (!isRevisionString(saved.revision) || options.records.getRecordVersion === undefined) throw new InvalidRequestFieldError('exact accepted immutable physical version reading is unavailable')
+      const old = await options.records.getRecordVersion(scope,revision.ref.projectId,saved.recordId,saved.revision,ctx)
+      const latest = latestPhysical.get(saved.recordId)
+      if (old === undefined || canonicalJson(old) !== canonicalJson(saved) || latest === undefined) throw new InvalidRequestFieldError('an exact accepted original physical version is missing or changed')
+      if (canonicalJson(latest) !== canonicalJson(old)) {
+        const source = plan.sources.find((source) => source.previousMappingRef.id === old.mappingId && source.previousMappingRef.version === old.mappingVersion && source.mappingRef.id === latest.mappingId && source.mappingRef.version === latest.mappingVersion && latest.sourceDigest === old.sourceDigest && latest.sourceRowKey === old.sourceRowKey && latest.objectId === source.objectId && (!oldApprovedIds.has(old.recordId) || source.recordIds.includes(old.recordId)))
+        if (source === undefined) throw new InvalidRequestFieldError('the current physical replacement is outside this exact accepted target remapping')
+        const [before,after] = await Promise.all([oldMapping(old.mappingId,old.mappingVersion),oldMapping(latest.mappingId,latest.mappingVersion)])
+        if (before === undefined || after === undefined || canonicalJson(before.ref) !== canonicalJson(source.previousMappingRef) || canonicalJson(after.ref) !== canonicalJson(source.mappingRef) || before.parseId !== source.parseId || after.parseId !== source.parseId || canonicalJson(before.originalRef) !== canonicalJson(source.originalRef) || canonicalJson(after.originalRef) !== canonicalJson(source.originalRef) || canonicalJson(before.definitionRef) !== canonicalJson(revision.definitionRef) || canonicalJson(after.definitionRef) !== canonicalJson(acceptedTarget?.definitionRef)) throw new InvalidRequestFieldError('the accepted old/target mapping versions do not bind their actual common native parse and original')
+      }
+      check(); return old
+    })
     if (Array.isArray(frozenPhysical) && canonicalJson(physical) !== canonicalJson(frozenPhysical)) throw new InvalidRequestFieldError('an accepted previous physical original record changed during staging')
     const rows = []
     const sources = []
@@ -131,10 +166,17 @@ export function createCoreApprovedInput(options: {
         afterStatementId = last
       } while (!hasOwnPublished)
       if (!hasOwnPublished) continue
-      const official = await options.source.read(scope, revision, object.objectId, ctx)
+      const official = plan === undefined ? await options.source.read(scope, revision, object.objectId, ctx)
+        : options.source.readAtRecordVersions === undefined ? undefined : await options.source.readAtRecordVersions(scope,revision,object.objectId,physical.map((record) => ({ recordId: record.recordId,revision: record.revision })),ctx)
+      if (official === undefined) throw new InvalidRequestFieldError('official old-input reading requires its exact immutable record-version port')
       if (official.coverage.completeness !== 'complete' || official.rows.length + rows.length > 20_000) throw new InvalidRequestFieldError('the normal input official row coverage is incomplete')
       rows.push(...official.rows)
-      sources.push({ objectId: object.objectId, sourceDigest: official.sourceDigest, factRecordedPoint: official.factRecordedPoint })
+      if (plan === undefined) sources.push({ objectId: object.objectId, sourceDigest: official.sourceDigest, factRecordedPoint: official.factRecordedPoint })
+      else {
+        const saved = Array.isArray(frozen?.['sources']) ? frozen['sources'].find((source: unknown) => isRecord(source) && source['objectId'] === object.objectId) : undefined
+        if (!isRecord(saved) || saved['sourceDigest'] !== official.sourceDigest || !isRecord(saved['factRecordedPoint']) || !isRevisionString(saved['factRecordedPoint']['semantic']) || !isRevisionString(saved['factRecordedPoint']['identity'])) throw new InvalidRequestFieldError('the actual old official source differs from its accepted captured recorded point')
+        sources.push({ objectId: object.objectId,sourceDigest: official.sourceDigest,factRecordedPoint: { semantic: saved['factRecordedPoint']['semantic'],identity: saved['factRecordedPoint']['identity'] } })
+      }
     }
     rows.sort((left, right) => left.recordId.localeCompare(right.recordId))
     if (new Set(rows.map((row) => row.recordId)).size !== rows.length) throw new InvalidRequestFieldError('multiple official rows share a physical input record')
@@ -174,6 +216,11 @@ export function createCoreApprovedInput(options: {
     const checkSources = async () => {
       check()
       if (canonicalJson(await options.projects.getProject(scope, revision.ref.projectId, ctx)) !== canonicalJson(project) || canonicalJson(await options.documents.getVisibility(scope, revision.ref.projectId, ctx)) !== canonicalJson(visibility) || canonicalJson(await options.documents.listDocuments(scope, revision.ref.projectId, { state: 'active', limit: 200 }, ctx)) !== canonicalJson(allMembers) || await options.reviews.latestReadRevision(scope, ctx) !== semantic) throw new InvalidRequestFieldError('the actual project or source head changed during normal input capture')
+      if (identityRevision !== undefined && await options.identity?.latestReadRevision(scope,ctx) !== identityRevision) throw new InvalidRequestFieldError('the actual published identity authority changed during normal input capture')
+      if (plan !== undefined) {
+        if (canonicalJson((await options.evolutions?.activeRebuild(scope,revision.ref.projectId,ctx))?.plan) !== canonicalJson(plan)) throw new InvalidRequestFieldError('the accepted old-input plan changed during capture')
+        await options.evolutions?.assertSources(scope,revision.ref.projectId,plan.evolutionId,ctx)
+      }
     }
     await checkSources()
     await readMany(human,async (captured) => {
@@ -185,18 +232,19 @@ export function createCoreApprovedInput(options: {
     })
     await checkSources()
     check()
-    return { current, human, excluded, semantic }
+    return { current, human, excluded, semantic, identityRevision }
   }
-  const validateCaptured = async (scope: ScopeRef, revision: ProjectRevision, ref: import('@ontology/contracts').ResourceRef, ctx: ToolContext, signal?: AbortSignal) => {
+  const validateCaptured = async (scope: ScopeRef, revision: ProjectRevision, ref: import('@ontology/contracts').ResourceRef, ctx: ToolContext, signal?: AbortSignal,plan?: ProjectEvolutionPlan) => {
     const check = () => { if (signal?.aborted === true) throw new RunServiceError('DEADLINE_EXCEEDED', 'the previous input validation was cancelled', { cause: signal.reason }) }
     const invalid = (): never => { throw new InvalidRequestFieldError('the accepted previous input no longer binds its actual original rows and current human authority') }
     check()
+    if (plan !== undefined && canonicalJson(plan.previousInputRef) !== canonicalJson(ref)) return invalid()
     const body = await readJson(ref, ctx)
     if (!isRecord(body) || body['schemaVersion'] !== 'project-input-snapshot@1' || body['projectId'] !== revision.ref.projectId || body['inputRevision'] !== revision.ref.revision || canonicalJson(body['definitionRef']) !== canonicalJson(revision.definitionRef) || canonicalJson(body['mappingRefs']) !== canonicalJson(revision.mappingRefs) || !isResourceRef(body['confirmationManifestRef']) || !Array.isArray(body['recordPages']) || body['recordPages'].length > 200) return invalid()
     const manifest = await readJson(body['confirmationManifestRef'], ctx)
     const capture = await readCapture(manifest,body,revision,ctx,signal)
     const selection = capture.selection
-    const collected = await collect(scope, revision, ctx, signal, selection)
+    const collected = await collect(scope, revision, ctx, signal, selection,plan)
     if (canonicalJson(collected.current) !== canonicalJson(selection)) invalid()
     const archived: unknown[] = []
     for (const page of body['recordPages']) {
@@ -227,8 +275,8 @@ export function createCoreApprovedInput(options: {
       bytesRead += bytes.byteLength
       if (bytesRead > 33_554_432 || `sha256:${createHash('sha256').update(bytes).digest('hex')}` !== member.documentRef.digest) invalid()
     }
-    const after = await collect(scope, revision, ctx, signal, selection)
-    if (after.semantic !== collected.semantic || canonicalJson(after.current) !== canonicalJson(collected.current)) invalid()
+    const after = await collect(scope, revision, ctx, signal, selection,plan)
+    if (after.semantic !== collected.semantic || after.identityRevision !== collected.identityRevision || canonicalJson(after.current) !== canonicalJson(collected.current)) invalid()
     check()
     return ref
   }
@@ -247,7 +295,7 @@ export function createCoreApprovedInput(options: {
         if (bytesRead > 33_554_432 || `sha256:${createHash('sha256').update(bytes).digest('hex')}` !== member.documentRef.digest) throw new InvalidRequestFieldError('the actual input original bytes changed or exceeded 32 MiB')
       }
       const after = await collect(scope, revision, ctx, signal)
-      if (after.semantic !== collected.semantic || canonicalJson(after.current) !== canonicalJson(collected.current)) throw new InvalidRequestFieldError('the actual normal input source or human authority changed during archival')
+      if (after.semantic !== collected.semantic || after.identityRevision !== collected.identityRevision || canonicalJson(after.current) !== canonicalJson(collected.current)) throw new InvalidRequestFieldError('the actual normal input source or human authority changed during archival')
     }
     if (existing !== undefined) {
       const saved = await readJson(existing, ctx)

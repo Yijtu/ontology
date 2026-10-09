@@ -25,7 +25,7 @@ export interface ProjectEvolutionDependencies {
     readonly targetIdentityMapping?: (scope: ScopeRef, projectId: string, definitionRef: VersionRef, ctx: ToolContext) => Promise<MappingRef>
     readonly previousInput?: {
         archive(scope: ScopeRef, revision: ProjectRevision, ctx: ToolContext): Promise<ResourceRef>
-        validate(scope: ScopeRef, revision: ProjectRevision, ref: ResourceRef, ctx: ToolContext): Promise<ResourceRef>
+        validate(scope: ScopeRef, revision: ProjectRevision, ref: ResourceRef, ctx: ToolContext, plan?: ProjectEvolutionPlan): Promise<ResourceRef>
     }
     readonly projects: ProjectStore
     readonly store: ProjectEvolutionStore
@@ -445,7 +445,7 @@ export class ProjectEvolutionService {
         if (record !== undefined && record.plan.previousInputRef !== undefined && this.deps.previousInput !== undefined &&
             (current?.activeRevision ?? current?.headRevision) === revision.ref.revision && current?.headRevision === record.plan.targetRevisionRef.revision && same(record.plan.previousRevisionRef, revision.ref)) {
             await this.#sourcePins(scope, revision.ref.projectId, record.plan.evolutionId, ctx)
-            const ref = await this.deps.previousInput.validate(scope, revision, record.plan.previousInputRef, ctx)
+            const ref = await this.deps.previousInput.validate(scope, revision, record.plan.previousInputRef, ctx,record.plan)
             if (!same(await this.deps.projects.getProject(scope, revision.ref.projectId, ctx), current) || !same(await this.deps.store.activeRebuild(scope, revision.ref.projectId, ctx), record)) throw new ProjectError('READINESS_CONFLICT', 'the old-active staging input receipt changed during validation')
             await this.#sourcePins(scope, revision.ref.projectId, record.plan.evolutionId, ctx)
             return ref

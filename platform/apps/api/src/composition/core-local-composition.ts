@@ -2461,7 +2461,8 @@ export async function createCoreLocalComposition(options: CoreLocalCompositionOp
       parser: new StructuredDocumentParser(),
     })
     const instanceIdentity = createCoreInstanceIdentity({ projects: projectStore, documents: projectDocumentStore, candidates: candidateStore, identities: identityStore, instances: instanceReviewStore, schemas: schemaSource, reader: scopedOriginals })
-    normalApprovedInputs.current = createCoreApprovedInput({ projects: projectStore, documents: projectDocumentStore, records: projectRecordStore,
+    const projectEvolutionStore = new PostgresProjectEvolutionStore(database)
+    normalApprovedInputs.current = createCoreApprovedInput({ projects: projectStore, documents: projectDocumentStore, records: projectRecordStore,evolutions: projectEvolutionStore,identity: identityStore,mappings: projectMappingStore,
       instances: instanceReviewStore, candidates: candidateStore, reviews: publicationStore, reviewable: reviewableCandidates,
       schemas: schemaSource, source: publishedProjectDatasetSource, reader: scopedOriginals, authoring })
     const approvedInputs = normalApprovedInputs.current
@@ -2472,7 +2473,6 @@ export async function createCoreLocalComposition(options: CoreLocalCompositionOp
     }
     const prepareComputeInput = createCoreProjectComputeInput({ blobs: blobStore, authoring, snapshots: taskInputSnapshotStore,
       schemas: schemaSource, operations: operationRegistry(), validator: taskParameterValidator(createAjv()), validateBase: resolveApprovedInput })
-    const projectEvolutionStore = new PostgresProjectEvolutionStore(database)
     projectEvolution ??= createProjectEvolutionWorkflow({ projects: projectStore, store: projectEvolutionStore, mappings: projectMappingStore,
       mappingService: projectMappingService, documents: projectDocumentStore, catalogue: packCatalogue, schemas: schemaSource, jobs: jobStore,
       facts: projectFacts.materialization, candidates: candidateStore, publications: publicationStore, publishedSource: publishedProjectDatasetSource,
@@ -2481,7 +2481,7 @@ export async function createCoreLocalComposition(options: CoreLocalCompositionOp
       instances: { createRecord: (scope, projectId, input, ctx) => instanceIdentity.identity.createRecord(scope, projectId, input, ctx) },
       dataset: { writer: projectDatasetAdapter, query: projectDatasetAdapter },
       previousInput: { archive: (scope, revision, ctx) => approvedInputs.resolve(scope, revision, ctx),
-        validate: (scope, revision, ref, ctx) => approvedInputs.validateCaptured(scope, revision, ref, ctx) },
+        validate: (scope, revision, ref, ctx,plan) => approvedInputs.validateCaptured(scope, revision, ref, ctx,undefined,plan) },
       targetIdentityMapping: (_scope,projectId,definitionRef,ctx) => projectApi.targetIdentityMapping(projectId,definitionRef,ctx),
     }).service
     const projectApi = createCoreProjectApi({ projects: projectStore, documents: projectDocumentStore, jobs: jobStore, readiness: projectReadinessStore,

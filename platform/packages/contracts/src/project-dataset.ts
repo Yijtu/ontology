@@ -130,6 +130,8 @@ export interface ProjectPublishedDataset {
 
 export interface ProjectPublishedDatasetSource {
   read(scopeRef: ScopeRef, revision: import('./generated/contracts').ProjectRevision, objectId: string, ctx: ToolContext): Promise<ProjectPublishedDataset>
+  /** Re-read current official statements using exact accepted physical record versions. */
+  readAtRecordVersions?(scopeRef: ScopeRef, revision: import('./generated/contracts').ProjectRevision, objectId: string, records: readonly { readonly recordId: Uuid; readonly revision: RevisionString }[], ctx: ToolContext): Promise<ProjectPublishedDataset>
 }
 
 export interface ProjectDatasetSnapshotMetadata {
