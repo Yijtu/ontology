@@ -35,8 +35,13 @@ export function createCoreProjectSemanticReadiness(options: {
         sourceDigest: sha256DigestOf(canonicalJson({ facts: inventory.source.facts,rules: inventory.source.rules,declarations: inventory.declarations })),expectedFacts: inventory.source.facts.length,outboxId: message.outboxId }
       const digest = sha256DigestOf(canonicalJson(body))
       const receipt = await options.authoring.stableWrite(`project-semantic-readiness:${digest}`,new TextEncoder().encode(canonicalJson(body)),'application/json','artifact',ctx)
-      const [semantic,identity,current,projection] = await Promise.all([options.publications.latestReadRevision(scope,ctx),options.identity.latestReadRevision(scope,ctx),options.projects.getProject(scope,projectId,ctx),options.materialization.getProjectionState(scope,ctx)])
-      if (semantic !== inventory.source.readRevision.semantic || identity !== inventory.source.readRevision.identity || canonicalJson(current) !== canonicalJson(project) || canonicalJson(projection) !== canonicalJson(state)) throw new WorkflowControllerError('VERSION_CONFLICT','the actual project semantic source or projection changed during readiness capture')
+      const [semantic,identity,current,currentRevision,projection] = await Promise.all([options.publications.latestReadRevision(scope,ctx),options.identity.latestReadRevision(scope,ctx),options.projects.getProject(scope,projectId,ctx),options.projects.getRevision(scope,projectId,revision.ref.revision,ctx),options.materialization.getProjectionState(scope,ctx)])
+      // A staged head may advance independently while this worker is recording
+      // readiness for the still-active revision. Fence the business selector,
+      // full immutable revision, source points, and projection that were read.
+      const selectedRevision = project.activeRevision ?? project.headRevision
+      const currentSelectedRevision = current?.activeRevision ?? current?.headRevision
+      if (semantic !== inventory.source.readRevision.semantic || identity !== inventory.source.readRevision.identity || current === undefined || current.state !== project.state || currentSelectedRevision !== selectedRevision || selectedRevision !== revision.ref.revision || canonicalJson(currentRevision) !== canonicalJson(revision) || canonicalJson(projection) !== canonicalJson(state)) throw new WorkflowControllerError('VERSION_CONFLICT','the actual project semantic source or projection changed during readiness capture')
       // The readiness target is the fixed definition; the independently archived receipt
       // records each actual source/projection point without changing that target's axis.
       await options.readiness.upsertProjection(scope,{ projectRevisionRef: revision.ref,kind: 'published_semantics',targetRef: revision.definitionRef,targetDigest: revision.definitionRef.digest,receiptRef: receipt,

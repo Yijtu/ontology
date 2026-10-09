@@ -7,6 +7,8 @@ import {
   assertProjectDatasetSnapshotShape,
   assertProjectDatasetMetadataShape,
   assertProjectDatasetActivationShape,
+  PROJECT_DATASET_SOURCE_ORIGIN_DIGEST_VERSION,
+  isProjectDatasetSourceOriginDigest,
   projectDatasetPhysicalCellsMatch,
 } from '@ontology/contracts'
 import type {
@@ -168,6 +170,7 @@ interface StagedSnapshot {
   readonly objectId: string
   readonly version: string
   readonly table: string
+  readonly sourceOriginsColumn: 'sources_full_json' | 'sources_json'
   readonly columns: readonly ProjectDatasetColumn[]
   readonly rowCount: number
   readonly schemaDigest: string
@@ -189,6 +192,10 @@ function valuesJsonOf(row: ProjectDatasetRow): string {
 }
 
 function sourcesJsonOf(row: ProjectDatasetRow): string {
+  return canonicalJson({ schemaVersion: PROJECT_DATASET_SOURCE_ORIGIN_DIGEST_VERSION, recordId: row.recordId, sourcesDigest: sha256DigestOf(canonicalJson(row.sources)) })
+}
+
+function fullSourcesJsonOf(row: ProjectDatasetRow): string {
   return JSON.stringify(row.sources)
 }
 
@@ -291,6 +298,7 @@ export class DuckDbProjectDatasetAdapter
         `${quoteIdentifier('source_row_key')} VARCHAR NOT NULL`,
         `${quoteIdentifier('values_json')} VARCHAR NOT NULL`,
         `${quoteIdentifier('sources_json')} VARCHAR NOT NULL`,
+        `${quoteIdentifier('sources_full_json')} VARCHAR NOT NULL`,
         ...columns.map((column) => `${quoteIdentifier(column.name)} ${physicalTypeOfProject(column.valueType, metadata.decimalScales?.[column.name])}`),
       ].join(', ')
       await this.#engine.runTrusted(`CREATE TABLE ${quoteIdentifier(table)} (${definitions})`)
@@ -301,7 +309,7 @@ export class DuckDbProjectDatasetAdapter
       const columnPlaceholders = columns
         .map((column) => `CAST(? AS ${physicalTypeOfProject(column.valueType, metadata.decimalScales?.[column.name])})`)
         .join(', ')
-      const placeholders = `(${['?', '?', '?', '?', '?', columnPlaceholders].join(', ')})`
+      const placeholders = `(${['?', '?', '?', '?', '?', '?', columnPlaceholders].join(', ')})`
       const rows = body.rows
       for (let start = 0; start < rows.length; start += INSERT_BATCH) {
         const batch = rows.slice(start, start + INSERT_BATCH)
@@ -312,6 +320,7 @@ export class DuckDbProjectDatasetAdapter
           row.sourceRowKey,
           valuesJsonOf(row),
           sourcesJsonOf(row),
+          fullSourcesJsonOf(row),
           ...columns.map((column) => {
             const cell = row.values[column.name]
             return cell === undefined ? null : typedCellValue(cell)
@@ -319,7 +328,7 @@ export class DuckDbProjectDatasetAdapter
         ])
         await this.#engine.runTrusted(
           `INSERT INTO ${quoteIdentifier(table)}
-             (${['record_id', 'object_id', 'source_row_key', 'values_json', 'sources_json', ...columns.map((column) => column.name)].map(quoteIdentifier).join(', ')})
+             (${['record_id', 'object_id', 'source_row_key', 'values_json', 'sources_json', 'sources_full_json', ...columns.map((column) => column.name)].map(quoteIdentifier).join(', ')})
            VALUES ${valuesSql}`,
           parameters,
         )
@@ -339,6 +348,7 @@ export class DuckDbProjectDatasetAdapter
         objectId: body.objectId,
         version: snapshotRef.version,
         table,
+        sourceOriginsColumn: 'sources_full_json',
         columns,
         rowCount: persisted.length,
         schemaDigest: input.schemaDigest,
@@ -412,7 +422,7 @@ export class DuckDbProjectDatasetAdapter
       const objectFilter = request.objectId === undefined ? '' : ` WHERE ${quoteIdentifier('object_id')} = ?`
       const parameters = request.objectId === undefined ? [] : [request.objectId]
       const execution = await session.executeReadOnly(
-        `SELECT ${['record_id', 'object_id', 'source_row_key', 'values_json', 'sources_json'].map(quoteIdentifier).join(', ')}
+        `SELECT ${['record_id', 'object_id', 'source_row_key', 'values_json', staged.sourceOriginsColumn].map(quoteIdentifier).join(', ')}
            FROM ${quoteIdentifier(staged.table)}${objectFilter}
           ORDER BY ${quoteIdentifier('record_id')}
           LIMIT ${String(limit + 1)} OFFSET ${String(offset)}`,
@@ -698,9 +708,20 @@ export class DuckDbProjectDatasetAdapter
       if (metadata.snapshotRef.id !== id) return undefined
       const relation = await session.executeReadOnly('SELECT table_name FROM information_schema.tables WHERE table_schema = ? AND table_name = ?', ['main', tableFor(id)], 1)
       if (relation.rawRows.length === 0) { this.#snapshots.delete(id); return undefined }
-      const verified = await session.executeReadOnly(`SELECT ${['record_id', 'object_id', 'source_row_key', 'values_json', 'sources_json', ...metadata.body.columns.map((column) => column.name)].map(quoteIdentifier).join(', ')} FROM ${quoteIdentifier(tableFor(id))} ORDER BY "record_id" LIMIT 20001`, [], 20001)
+      const fullSourcesColumn = await session.executeReadOnly('SELECT column_name FROM information_schema.columns WHERE table_schema = ? AND table_name = ? AND column_name = ?', ['main', tableFor(id), 'sources_full_json'], 1)
+      const sourceOriginsColumn: StagedSnapshot['sourceOriginsColumn'] = fullSourcesColumn.rawRows.length > 0 ? 'sources_full_json' : 'sources_json'
+      const verified = await session.executeReadOnly(`SELECT ${['record_id', 'object_id', 'source_row_key', 'values_json', sourceOriginsColumn, ...metadata.body.columns.map((column) => column.name)].map(quoteIdentifier).join(', ')} FROM ${quoteIdentifier(tableFor(id))} ORDER BY "record_id" LIMIT 20001`, [], 20001)
       const persisted: ProjectDatasetRow[] = verified.rawRows.map((row) => ({ recordId: String(row[0]), objectId: String(row[1]), sourceRowKey: String(row[2]),
         values: JSON.parse(String(row[3])) as Record<string, ProjectDatasetCell>, sources: JSON.parse(String(row[4])) as ProjectDatasetFieldSource[] }))
+      if (sourceOriginsColumn === 'sources_full_json') {
+        const compactRows = await session.executeReadOnly(`SELECT ${['record_id', 'sources_json'].map(quoteIdentifier).join(', ')} FROM ${quoteIdentifier(tableFor(id))} ORDER BY "record_id" LIMIT 20001`, [], 20001)
+        if (compactRows.rawRows.length !== persisted.length || compactRows.rawRows.some((compact, index) => {
+          let token: unknown
+          try { token = JSON.parse(String(compact[1])) as unknown } catch { return true }
+          const row = persisted[index]
+          return row === undefined || String(compact[0]) !== row.recordId || !isProjectDatasetSourceOriginDigest(token) || token.recordId !== row.recordId || token.sourcesDigest !== sha256DigestOf(canonicalJson(row.sources))
+        })) throw new ProjectDatasetError('SNAPSHOT_UNAVAILABLE', 'the compact DuckDB source token differs from its complete private source array')
+      }
       const physical = verified.rawRows.map((row, rowIndex) => ({ recordId: String(row[0]), values: Object.fromEntries(metadata.body.columns.map((column, columnIndex) => {
         const index = columnIndex + 5
         return [column.name, normaliseValue(verified.columnTypeIds[index] ?? 0, row[index], verified.jsRows[rowIndex]?.[index])]
@@ -710,7 +731,7 @@ export class DuckDbProjectDatasetAdapter
         canonicalDigestOf(metadata.body.columns, persisted) !== String(row[2]) || sha256DigestOf(canonicalJson(metadata.body.columns)) !== String(row[1]) ||
         !projectDatasetPhysicalCellsMatch(metadata.body.columns, persisted, physical)) throw new ProjectDatasetError('SNAPSHOT_UNAVAILABLE', 'the immutable DuckDB projection JSON or typed columns changed')
       const staged: StagedSnapshot = { scopeKey: scopeKeyOf(scope), snapshotId: id, objectId: metadata.body.objectId,
-        version: metadata.snapshotRef.version, table: tableFor(id), columns: metadata.body.columns, rowCount: metadata.body.coverage.processedCount,
+        version: metadata.snapshotRef.version, table: tableFor(id), sourceOriginsColumn, columns: metadata.body.columns, rowCount: metadata.body.coverage.processedCount,
         schemaDigest: String(row[1]), canonicalDigest: String(row[2]), metadata }
       this.#snapshots.set(id, staged)
       return staged
@@ -729,7 +750,7 @@ export class DuckDbProjectDatasetAdapter
 
   async #readBack(table: string, columns: readonly ProjectDatasetColumn[]): Promise<ProjectDatasetRow[]> {
     void columns
-    const rows = await this.#engine.readTrusted(`SELECT ${['record_id', 'object_id', 'source_row_key', 'values_json', 'sources_json'].map(quoteIdentifier).join(', ')} FROM ${quoteIdentifier(table)} ORDER BY ${quoteIdentifier('record_id')}`)
+    const rows = await this.#engine.readTrusted(`SELECT ${['record_id', 'object_id', 'source_row_key', 'values_json', 'sources_full_json'].map(quoteIdentifier).join(', ')} FROM ${quoteIdentifier(table)} ORDER BY ${quoteIdentifier('record_id')}`)
     return rows.map((raw) => ({ recordId: String(raw[0]), objectId: String(raw[1]), sourceRowKey: String(raw[2]),
       values: JSON.parse(String(raw[3])) as Record<string, ProjectDatasetCell>, sources: JSON.parse(String(raw[4])) as ProjectDatasetFieldSource[] }))
   }

@@ -3,13 +3,13 @@ import { ProjectDatasetError, projectDatasetSourceRef, isRecord } from '@ontolog
 import type {
   ProjectPublishedDatasetSource, ProjectReadinessStore, ProjectRevision, ProjectRevisionRef,
   ProjectSnapshotQueryDescriptor, ProjectSnapshotQueryPort, ResourceRef, RunExecutionBinding,
-  RunExecutionBindingStore, ScopeRef, TaskBindingStore, ToolContext,
+  RunExecutionBindingStore, ScopeRef, TaskBindingStore, ToolContext, PublishedTaskBinding,
   SemanticDefinitionVersion, VersionRef,
   ColumnType, DataQueryOutput,
 } from '@ontology/contracts'
 import { InMemorySemanticMappingRegistry, buildProjectSnapshotMapping, projectSnapshotMappingRef, definitionVersionDigest } from '@ontology/semantic-engine'
 import { DataQueryHandler, ToolGatewayError, canonicalJson } from '@ontology/tool-services'
-import type { ToolExecutionRequest, ToolHandler } from '@ontology/tool-services'
+import type { ToolExecutionOutcome, ToolExecutionRequest, ToolHandler } from '@ontology/tool-services'
 
 export interface CoreProjectQueryOptions {
   readonly query: ProjectSnapshotQueryPort
@@ -21,6 +21,7 @@ export interface CoreProjectQueryOptions {
   readonly readiness: ProjectReadinessStore
   readonly executionBindings: RunExecutionBindingStore
   readonly taskBindings: TaskBindingStore
+  readonly executeRegisteredCompute?: (request: ToolExecutionRequest, binding: PublishedTaskBinding, execution: RunExecutionBinding) => Promise<ToolExecutionOutcome>
   readonly definition: (scope: ScopeRef, ref: VersionRef, ctx: ToolContext) => Promise<SemanticDefinitionVersion | undefined>
   readonly evolution?: { assertActiveRebuild(scope: ScopeRef, revision: ProjectRevisionRef, ctx: ToolContext): Promise<boolean>; resolveActiveSnapshot(scope: ScopeRef, revision: ProjectRevisionRef, objectId: string, ctx: ToolContext): Promise<ResourceRef | undefined> }
 }
@@ -93,6 +94,10 @@ export function createCoreProjectQueryWorkflow(options: CoreProjectQueryOptions)
       if (execution === undefined) return fallback.execute(request)
       if (execution.request.mode === 'task') {
         const binding = await options.taskBindings.getBinding(scope, execution.request.taskBindingRef, request.ctx)
+        if (binding?.kind === 'compute') {
+          if (request.arguments['kind'] !== 'compute' || options.executeRegisteredCompute === undefined) throw new ToolGatewayError('HANDLER_NOT_REGISTERED', 'the fixed registered compute task is unavailable')
+          return options.executeRegisteredCompute(request, binding, execution)
+        }
         if (binding?.kind !== 'structured_query') return fallback.execute(request)
       } else if (request.arguments['kind'] !== 'query') return fallback.execute(request)
       const queryPlan = request.arguments['queryPlan']

@@ -70,6 +70,19 @@ export interface ProjectDatasetFieldSource {
   readonly rowDigest?: Sha256Digest
 }
 
+/** Compact query-only pin to the full original source array stored in the exact dataset row. */
+export const PROJECT_DATASET_SOURCE_ORIGIN_DIGEST_VERSION = 'project-dataset-source-origins@1' as const
+export interface ProjectDatasetSourceOriginDigest {
+  readonly schemaVersion: typeof PROJECT_DATASET_SOURCE_ORIGIN_DIGEST_VERSION
+  readonly recordId: Uuid
+  readonly sourcesDigest: Sha256Digest
+}
+export function isProjectDatasetSourceOriginDigest(value: unknown): value is ProjectDatasetSourceOriginDigest {
+  return isRecord(value) && value['schemaVersion'] === PROJECT_DATASET_SOURCE_ORIGIN_DIGEST_VERSION &&
+    Object.keys(value).length === 3 && Object.keys(value).every((key) => ['schemaVersion', 'recordId', 'sourcesDigest'].includes(key)) &&
+    isUuid(value['recordId']) && isSha256Digest(value['sourcesDigest'])
+}
+
 /** One canonical dataset row. `sources` locates every value at its actual physical object. */
 export interface ProjectDatasetRow {
   readonly recordId: Uuid
@@ -440,7 +453,7 @@ export function assertProjectDatasetSnapshotShape(value: unknown): asserts value
   if (!isNonEmptyString(body['backend'])) throw invalidDataset('backend must be a non-empty string')
   const columns = body['columns']
   if (!Array.isArray(columns) || !columns.every(isDatasetColumn)) throw invalidDataset('columns are malformed')
-  if (new Set(columns.map((column) => column.name)).size !== columns.length || columns.some((column) => ['record_id', 'object_id', 'source_row_key', 'values_json', 'sources_json'].includes(column.name))) throw invalidDataset('columns contain duplicate or reserved names')
+  if (new Set(columns.map((column) => column.name)).size !== columns.length || columns.some((column) => ['record_id', 'object_id', 'source_row_key', 'values_json', 'sources_json', 'sources_full_json'].includes(column.name.toLowerCase()))) throw invalidDataset('columns contain duplicate or reserved names')
   const rows = body['rows']
   if (!Array.isArray(rows) || !rows.every(isDatasetRow)) throw invalidDataset('rows are malformed')
   if (rows.length > 20_000 || new Set(rows.map((row) => row.recordId)).size !== rows.length) throw invalidDataset('rows exceed the record cap or duplicate physical identities')

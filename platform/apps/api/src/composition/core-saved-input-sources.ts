@@ -1,14 +1,16 @@
-import { assertProjectDatasetFieldSourcesShape, isComputeOutputBindings, isComputeResultArtifact, isRecord, isResourceRef, isRevisionString, isUuid, sha256OfCanonical } from '@ontology/contracts'
-import type { ArchivedRunExecutionBinding, CandidateStore, ComputeOutputBindingsStore, ComputeResultArtifactStore, DocumentParseStore, InstanceReviewStore, ProjectDatasetFieldSource, ProjectDatasetQueryPort, ProjectMappingStore, ProjectRevision, ProjectSnapshotQueryPort, ResourceRef, ScopeRef, SemanticPublicationStore, TaskBindingStore, TaskInputSnapshotStore, ToolContext } from '@ontology/contracts'
+import { assertProjectDatasetFieldSourcesShape, isComputeOutputBindings, isComputeResultArtifact, isProjectDatasetSourceOriginDigest, isRecord, isResourceRef, isRevisionString, isUuid, sha256OfCanonical } from '@ontology/contracts'
+import type { ArchivedRunExecutionBinding, CandidateStore, ComputeInvocationStore, ComputeOutputBindingsStore, ComputeResultArtifactStore, DocumentParseStore, InstanceReviewStore, ProjectDatasetFieldSource, ProjectDatasetQueryPort, ProjectMappingStore, ProjectRevision, ProjectSnapshotQueryPort, ResourceRef, ScopeRef, SemanticPublicationStore, TaskBindingStore, TaskInputSnapshotStore, ToolContext } from '@ontology/contracts'
 import type { CoreSourceFragment } from './core-source-view'
 import type { RequestNativeSourceReader } from './core-native-source-reader'
 import type { SavedCellRead } from './core-saved-cell-reader'
 import { savedPointer } from './core-saved-cell-reader'
 import { canonicalDecimal, canonicalJson, sha256DigestOf } from '@ontology/application'
+import { computeLogicalKeyDigest } from '@ontology/tool-services'
 
 export interface SavedInputSourcePorts {
   readonly datasets?: Pick<ProjectSnapshotQueryPort, 'describeSnapshot'> & Pick<ProjectDatasetQueryPort, 'getActivation'>
   readonly publications?: Pick<SemanticPublicationStore, 'getReview' | 'getStatementRevision' | 'getStatement' | 'getPublication'>
+  readonly computeInvocations?: Pick<ComputeInvocationStore, 'get'>
   readonly computeResults?: Pick<ComputeResultArtifactStore, 'getArtifact'>
   readonly computeBindings?: Pick<ComputeOutputBindingsStore, 'getBindings'>
   readonly tasks?: Pick<TaskBindingStore, 'getBinding'>
@@ -99,17 +101,28 @@ async function readSavedInputSourcesWithinBudget(input: SavedInputRead): Promise
   const fixedInputRef = execution.request.inputSnapshotRef
   input.check()
   if (isRecord(payload['computation'])) {
-    if (input.ports.computeResults === undefined || input.ports.computeBindings === undefined || input.ports.tasks === undefined) return unsupported('固定计算输入读取尚未配置。', cell === undefined ? 0 : 1)
+    if (input.ports.computeInvocations === undefined || input.ports.computeResults === undefined || input.ports.computeBindings === undefined || input.ports.tasks === undefined) return unsupported('固定计算输入读取尚未配置。', cell === undefined ? 0 : 1)
     const computation = payload['computation']
-    requireInput(isResourceRef(computation['resultRef']), 'the saved computation has no exact result wrapper reference')
-    const stored = await input.ports.computeResults.getArtifact(input.scope, computation['resultRef'], input.ctx)
-    requireInput(stored !== undefined && equal(stored.ref, computation['resultRef']) && isComputeResultArtifact(stored.artifact) && producerDigest(stored.artifact) === stored.ref.digest, 'the actual computation wrapper failed its complete stored body hash')
+    requireInput(isResourceRef(computation['resultRef']) && execution.request.mode === 'task', 'the saved computation has no exact output ref or task-mode execution pin')
+    const taskBindingRef = execution.request.taskBindingRef
+    const task = await input.ports.tasks.getBinding(input.scope, taskBindingRef, input.ctx)
+    requireInput(task !== undefined && equal(task.taskBindingRef, taskBindingRef) && task.kind === 'compute' && task.operationRef !== undefined && equal(task.operationRef, computation['operationRef']) && typeof task.registeredOperationDigest === 'string', 'the archived run task does not bind this computation operation')
+    const parametersDigest = sha256DigestOf(canonicalJson(execution.request.parameters))
+    const logicalKeyDigest = computeLogicalKeyDigest(input.scope, { taskBindingRef, inputSnapshotDigest: fixedInputRef.digest, parametersDigest, registeredOperationDigest: task.registeredOperationDigest })
+    const invocation = await input.ports.computeInvocations.get(input.scope, logicalKeyDigest, input.ctx)
+    requireInput(invocation !== undefined && invocation.state === 'completed' && invocation.resultRef !== undefined && invocation.resultDigest !== undefined && invocation.resultRef.digest === invocation.resultDigest &&
+      invocation.logicalKeyDigest === logicalKeyDigest && equal(invocation.taskBindingRef, taskBindingRef) && equal(invocation.operationRef, task.operationRef) && invocation.registeredOperationDigest === task.registeredOperationDigest &&
+      equal(invocation.inputSnapshotRef, fixedInputRef) && invocation.inputSnapshotDigest === fixedInputRef.digest && invocation.parametersDigest === parametersDigest, 'the exact saved compute invocation is unavailable or differs from its trusted task/input/parameter pins')
+    const stored = await input.ports.computeResults.getArtifact(input.scope, invocation.resultRef, input.ctx)
+    requireInput(stored !== undefined && equal(stored.ref, invocation.resultRef) && isComputeResultArtifact(stored.artifact) && producerDigest(stored.artifact) === stored.ref.digest &&
+      stored.artifact.invocationId === invocation.invocationId && stored.artifact.logicalKeyDigest === logicalKeyDigest, 'the actual computation wrapper failed its exact invocation binding or complete stored body hash')
     const artifact = stored.artifact
-    requireInput(equal(artifact.inputSnapshotRef, fixedInputRef) && artifact.inputSnapshotDigest === fixedInputRef.digest && equal(artifact.operationRef, computation['operationRef']) && equal(artifact.algorithmVersion, computation['algorithmVersion']) && execution.allowedTaskBindingRefs.some((ref) => equal(ref, artifact.taskBindingRef)) && (execution.request.mode !== 'task' || equal(execution.request.taskBindingRef, artifact.taskBindingRef)), 'the saved computation has different input/operation/task pins')
-    const task = await input.ports.tasks.getBinding(input.scope, artifact.taskBindingRef, input.ctx)
-    requireInput(task !== undefined && equal(task.taskBindingRef, artifact.taskBindingRef) && task.kind === 'compute' && equal(task.actionDefinitionRef, input.revision.definitionRef) && equal(task.operationRef, artifact.operationRef) && task.registeredOperationDigest === artifact.registeredOperationDigest, 'the stored compute task does not pin this actual definition/operation body')
-    const { taskBindingRef, ...taskBody } = task
-    requireInput(producerDigest({ ...taskBody, taskBindingIdentity: { id: taskBindingRef.id, version: taskBindingRef.version } }) === taskBindingRef.digest && producerDigest(task.parameterSchema) === task.parameterSchemaDigest, 'the actual published task failed its canonical declaration/parameter schema hash')
+    requireInput(equal(artifact.inputSnapshotRef, fixedInputRef) && artifact.inputSnapshotDigest === fixedInputRef.digest && equal(artifact.operationRef, computation['operationRef']) && equal(artifact.algorithmVersion, computation['algorithmVersion']) &&
+      equal(artifact.taskBindingRef, taskBindingRef) && artifact.registeredOperationDigest === task.registeredOperationDigest && artifact.parametersDigest === parametersDigest && equal(artifact.outputArtifactRef, computation['resultRef']) &&
+      execution.allowedTaskBindingRefs.some((ref) => equal(ref, artifact.taskBindingRef)), 'the saved computation has different output/operation/task/input pins')
+    requireInput(equal(task.actionDefinitionRef, input.revision.definitionRef) && equal(task.operationRef, artifact.operationRef) && task.registeredOperationDigest === artifact.registeredOperationDigest, 'the stored compute task does not pin this actual definition/operation body')
+    const { taskBindingRef: storedTaskRef, ...taskBody } = task
+    requireInput(producerDigest({ ...taskBody, taskBindingIdentity: { id: storedTaskRef.id, version: storedTaskRef.version } }) === storedTaskRef.digest && producerDigest(task.parameterSchema) === task.parameterSchemaDigest, 'the actual published task failed its canonical declaration/parameter schema hash')
     const parameters = await input.readJson(artifact.parametersRef, 1_048_576)
     requireInput(artifact.parametersRef.digest === artifact.parametersDigest && (execution.request.mode !== 'task' || equal(parameters, execution.request.parameters)), 'the actual archived compute parameters differ from the saved task request')
     const storedBindings = await input.ports.computeBindings.getBindings(input.scope, artifact.outputBindingsRef, input.ctx)
@@ -237,10 +250,19 @@ async function readSavedInputSourcesWithinBudget(input: SavedInputRead): Promise
   const choices: OriginChoice[] = chosen.map((selected) => {
     const recordId = selected.values[recordIndex]
     requireInput(isUuid(recordId), 'the saved query row has no actual record identity')
-    let sources: unknown = selected.values[sourcesIndex]
-    if (typeof sources === 'string') { try { sources = JSON.parse(sources) as unknown } catch { requireInput(false, 'the saved query source JSON is malformed') } }
-    try { assertProjectDatasetFieldSourcesShape(sources) } catch { requireInput(false, 'the saved query sources are malformed') }
-    return { recordId, sources, fields: selected.fields, completeSources: true, checkField: (row, fieldId) => {
+    let sourceValue: unknown = selected.values[sourcesIndex]
+    if (typeof sourceValue === 'string') { try { sourceValue = JSON.parse(sourceValue) as unknown } catch { requireInput(false, 'the saved query source JSON is malformed') } }
+    let sources: readonly ProjectDatasetFieldSource[]
+    let sourcesDigest: string | undefined
+    if (isProjectDatasetSourceOriginDigest(sourceValue)) {
+      requireInput(sourceValue.recordId === recordId, 'the compact query source token belongs to another actual record')
+      sourcesDigest = sourceValue.sourcesDigest
+      sources = []
+    } else {
+      try { assertProjectDatasetFieldSourcesShape(sourceValue) } catch { requireInput(false, 'the saved query sources are malformed') }
+      sources = sourceValue as readonly ProjectDatasetFieldSource[]
+    }
+    return { recordId, sources, ...(sourcesDigest === undefined ? {} : { sourcesDigest }), fields: selected.fields, completeSources: true, checkField: (row, fieldId) => {
       const found = columns.map((column: unknown, index) => ({ column, index })).filter(({ column }) => isRecord(column) && column['semanticFieldRef'] === fieldId)
       requireInput(found.length === 1 && found[0] !== undefined && isRecord(found[0].column), 'the saved query field descriptor is missing or ambiguous')
       const outputField = found[0], outputColumn = outputField.column
@@ -266,6 +288,7 @@ async function readSavedInputSourcesWithinBudget(input: SavedInputRead): Promise
 interface OriginChoice {
   readonly recordId: string
   readonly sources: readonly ProjectDatasetFieldSource[]
+  readonly sourcesDigest?: string
   readonly fields: readonly string[]
   readonly completeSources: boolean
   readonly checkField: (row: SavedRow, fieldId: string) => void
@@ -361,7 +384,8 @@ async function readApprovedOrigins(input: SavedInputRead, origin: OriginSelectio
       pageCache.set(sha256OfCanonical(pageRef), archivedRows)
     }
     const row = archivedRows.find((row) => row.recordId === recordId)
-    requireInput(row !== undefined && row.objectId === origin.objectId && equal(selected.completeSources ? row.sources : row.sources.filter((source) => selected.fields.includes(source.fieldId)), selected.sources), 'the actual returned record/source JSON differs from the complete captured approved row')
+    const matchedSources = row === undefined ? undefined : selected.completeSources ? row.sources : row.sources.filter((source) => selected.fields.includes(source.fieldId))
+    requireInput(row !== undefined && row.objectId === origin.objectId && (selected.sourcesDigest === undefined ? equal(matchedSources, selected.sources) : producerDigest(row.sources) === selected.sourcesDigest), 'the actual returned record/source JSON differs from the complete captured approved row')
     if (normal !== undefined && !pagedNormal) requireInput(Array.isArray(normal['rows']) && normal['rows'].some((saved: unknown) => equal(saved, row)), 'the approved page is detached from its actual captured semantic row')
     const groups = new Map<string, CoreSourceFragment>()
     for (const fieldId of selected.fields) {

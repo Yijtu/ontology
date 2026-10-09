@@ -10,6 +10,7 @@ import {
   assertProjectDatasetSnapshotShape,
   assertProjectDatasetMetadataShape,
   assertProjectDatasetActivationShape,
+  PROJECT_DATASET_SOURCE_ORIGIN_DIGEST_VERSION,
   projectDatasetPhysicalCellsMatch,
 } from '@ontology/contracts'
 import type {
@@ -303,7 +304,7 @@ export class PostgresProjectDatasetAdapter
       for (let start = 0; start < body.rows.length; start += INSERT_BATCH) {
         const batch = body.rows.slice(start, start + INSERT_BATCH)
         const valuesSql = batch
-          .map((_row, index) => `($${String(index * 6 + 1)}::uuid, $${String(index * 6 + 2)}::uuid, $${String(index * 6 + 3)}, $${String(index * 6 + 4)}, $${String(index * 6 + 5)}::jsonb, $${String(index * 6 + 6)}::jsonb)`)
+          .map((_row, index) => `($${String(index * 7 + 1)}::uuid, $${String(index * 7 + 2)}::uuid, $${String(index * 7 + 3)}, $${String(index * 7 + 4)}, $${String(index * 7 + 5)}::jsonb, $${String(index * 7 + 6)}::jsonb, $${String(index * 7 + 7)})`)
           .join(', ')
         const parameters = batch.flatMap((row) => [
           snapshotId,
@@ -312,9 +313,10 @@ export class PostgresProjectDatasetAdapter
           row.sourceRowKey,
           JSON.stringify(row.values),
           JSON.stringify(row.sources),
+          sha256DigestOf(stableJson(row.sources)),
         ])
         await client.query(
-          `INSERT INTO ${this.#table(ROW_TABLE)} (snapshot_id, record_id, object_id, source_row_key, values, sources)
+          `INSERT INTO ${this.#table(ROW_TABLE)} (snapshot_id, record_id, object_id, source_row_key, values, sources, sources_digest)
            VALUES ${valuesSql}
            ON CONFLICT (snapshot_id, record_id) DO NOTHING`,
           parameters,
@@ -337,7 +339,7 @@ export class PostgresProjectDatasetAdapter
           (column) =>
             `(values -> ${quoteLiteral(column.name)} ->> 'value')::${postgresTypeOfProject(column.valueType)} AS ${quoteIdentifier(column.name)}`,
         ),
-        `sources::text AS ${quoteIdentifier('sources_json')}`,
+        `CASE WHEN sources_digest IS NULL THEN sources::text ELSE jsonb_build_object('schemaVersion', ${quoteLiteral(PROJECT_DATASET_SOURCE_ORIGIN_DIGEST_VERSION)}, 'recordId', record_id::text, 'sourcesDigest', sources_digest)::text END AS ${quoteIdentifier('sources_json')}`,
         `source_row_key AS ${quoteIdentifier('source_row_key')}`,
         `values::text AS ${quoteIdentifier('values_json')}`,
       ].join(', ')
@@ -677,9 +679,11 @@ export class PostgresProjectDatasetAdapter
          source_row_key text NOT NULL,
          values jsonb NOT NULL,
          sources jsonb NOT NULL,
+         sources_digest text,
          PRIMARY KEY (snapshot_id, record_id)
        )`,
     )
+    await this.#pool.query(`ALTER TABLE ${this.#table(ROW_TABLE)} ADD COLUMN IF NOT EXISTS sources_digest text`)
   }
 
   async #deleteSnapshot(snapshotId: string): Promise<void> {
@@ -743,6 +747,8 @@ export class PostgresProjectDatasetAdapter
 
   async #assertPhysicalIntegrity(client: PoolClient, metadata: ProjectDatasetSnapshotMetadata, persisted: readonly ProjectDatasetRow[], canonicalDigest: string, schemaDigest: string): Promise<void> {
     assertProjectDatasetSnapshotShape({ ref: metadata.snapshotRef, body: { ...metadata.body, rows: persisted } })
+    const sourcePins = await client.query<{ record_id: string; sources_digest: string | null }>(`SELECT record_id::text AS record_id, sources_digest FROM ${this.#table(ROW_TABLE)} WHERE snapshot_id = $1::uuid ORDER BY record_id LIMIT 20001`, [metadata.snapshotRef.id])
+    if (sourcePins.rows.length !== persisted.length || sourcePins.rows.some((pin, index) => pin.record_id !== persisted[index]?.recordId || pin.sources_digest !== null && pin.sources_digest !== sha256DigestOf(stableJson(persisted[index]?.sources)))) throw new ProjectDatasetError('SNAPSHOT_UNAVAILABLE', 'the compact PostgreSQL source pin differs from its complete stored source array')
     const view = this.#table(queryViewName(metadata.snapshotRef.id))
     const typed = await client.query<unknown[]>({ text: `SELECT ${["record_id", ...metadata.body.columns.map((column) => column.name)].map(quoteIdentifier).join(', ')} FROM ${view} ORDER BY "record_id" LIMIT 20001`, rowMode: 'array' })
     const physical = typed.rows.map((row) => ({ recordId: String(row[0]), values: Object.fromEntries(metadata.body.columns.map((column, index) => [column.name, normalizeCell(row[index + 1])])) }))
