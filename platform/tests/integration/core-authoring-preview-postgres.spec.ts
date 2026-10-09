@@ -195,7 +195,12 @@ describe('normal Core authoring, reviewed pack execution support and actual CQ d
     if (actualColumn === undefined) throw new Error('the actual normal query table has no mapped machine identifier column')
     const querySource = await call(`/api/v1/core/answers/${text(answer['answerId'])}/sources/${firstEvidenceRef(answer).id}?tableId=${encodeURIComponent(tableId)}&rowKey=${encodeURIComponent(text(actualRow['rowKey']))}&columnRef=${encodeURIComponent(text(actualColumn['columnRef']))}`)
     expect(querySource).toMatchObject({ answerId: answer['answerId'], evidenceId: firstEvidenceRef(answer).id, selectedCell: { tableId, rowKey: actualRow['rowKey'], columnRef: actualColumn['columnRef'] }, sourceCoverage: { mode: 'saved_cell', coverage: 'complete' }, readability: 'archived_snapshot_only' })
-    expect(JSON.stringify(querySource['fragments'])).toContain('N-1')
+    const queryFragment = object((querySource['fragments'] as unknown[])[0])
+    const selectedMachineId = text(object(actualRow['cells'])[text(actualColumn['columnRef'])])
+    const selectedSource = ({ 'N-1': { row: 2, identifier: 'N-1' }, 'N-2': { row: 3, identifier: 'N-2' } } as const)[selectedMachineId as 'N-1' | 'N-2']
+    expect(selectedSource, JSON.stringify({ selectedMachineId, rowKey: actualRow['rowKey'] })).toBeDefined()
+    expect(queryFragment['locator']).toMatchObject({ kind: 'table_row', row: selectedSource?.row })
+    expect(queryFragment['cells']).toContainEqual(expect.objectContaining({ raw: selectedSource?.identifier, columnLabel: actualColumn['semanticPredicate'], locator: expect.objectContaining({ address: `A${selectedSource?.row}` }) }))
     const computeTask = tasks['tasks'].map(object).find((task) => task['taskKind'] === 'compute')
     expect(computeTask?.['available'],JSON.stringify(computeTask)).toBe(true)
     expect(computeTask?.['parameterSchema']).toMatchObject({ properties: {} })

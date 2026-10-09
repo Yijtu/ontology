@@ -16,6 +16,21 @@ export function actualText(value: unknown): string { if (typeof value !== 'strin
 export function actualVersion(value: unknown): VersionRef { if (!isVersionRef(value)) throw new Error('actual version pin missing'); return { id: value.id, version: value.version, digest: value.digest } }
 export function actualResource(value: unknown): ResourceRef { if (!isResourceRef(value)) throw new Error('actual resource pin missing'); return value }
 export function actualArray(value: unknown): readonly unknown[] { if (!Array.isArray(value)) throw new Error('actual array response missing'); return value }
+async function mapConcurrent<T, R>(values: readonly T[], width: number, operation: (value: T, index: number) => Promise<R>): Promise<R[]> {
+  const result = new Array<R>(values.length)
+  let next = 0
+  const workers = Array.from({ length: Math.min(width, values.length) }, async () => {
+    while (next < values.length) {
+      const index = next++, value = values[index]
+      if (value === undefined) throw new Error('the bounded fixture worker lost its input')
+      result[index] = await operation(value, index)
+    }
+  })
+  const settled = await Promise.allSettled(workers)
+  const failure = settled.find((entry): entry is PromiseRejectedResult => entry.status === 'rejected')
+  if (failure !== undefined) throw new Error('a bounded real HTTP review worker failed', { cause: failure.reason })
+  return result
+}
 
 export interface FirstActivePack { readonly workspaceId: string; readonly packRef: VersionRef; readonly definitionRef: VersionRef; readonly profileRef: ResolvedProfileRef; readonly unitCode: 'h' | 'min' }
 
@@ -119,24 +134,32 @@ export interface FirstActiveProject {
 }
 
 /** Import/confirm/publish real original rows without creating ANY ordinary run/input capture. */
-export async function createFirstActiveProject(f: FirstActiveFixture, pack: FirstActivePack, title: string): Promise<FirstActiveProject> {
+export async function createFirstActiveProject(f: FirstActiveFixture, pack: FirstActivePack, title: string, sourceRows?: readonly { readonly machineId: string; readonly hours: string }[]): Promise<FirstActiveProject> {
   const business = await f.call('/api/v1/core/project-bootstrap', { title, profileRef: { id: pack.profileRef.id, version: pack.profileRef.version } }), projectId = actualText(actualObject(business['project'])['projectId'])
   expect(actualObject(business['revision'])['executionPurpose']).toBeUndefined()
   expect(actualObject(business['revision'])['industryPackRef']).toEqual(pack.packRef); expect(actualObject(business['revision'])['definitionRef']).toEqual(pack.definitionRef)
   // These inputs precede all query expectations; the third original column is deliberately
   // unmapped by P1 and must not enter old-active output while P2 is unapproved.
-  const imported = await f.call(`/api/v1/projects/${projectId}/structured-imports`, { format: 'csv', mediaType: 'text/csv', content: 'machine_id,hours,phase_note\nOLD-A,9.125,staged-only-A\nOLD-B,10.25,staged-only-B\n', contentEncoding: 'utf-8' })
+  const csv = sourceRows === undefined ? 'machine_id,hours,phase_note\nOLD-A,9.125,staged-only-A\nOLD-B,10.25,staged-only-B\n'
+    : `machine_id,hours,phase_note\n${sourceRows.map((row) => `${row.machineId},${row.hours},staged-only`).join('\n')}\n`
+  const imported = await f.call(`/api/v1/projects/${projectId}/structured-imports`, { format: 'csv', mediaType: 'text/csv', content: csv, contentEncoding: 'utf-8' })
   const catalogue = await f.call(`/api/v1/core/projects/${projectId}/source-catalogue`), source = actualObject(actualArray(catalogue['sources'])[0]), table = actualObject(actualArray(source['tables'])[0]), sourceColumns = actualArray(table['columns']).map(actualObject)
   const entries = firstActiveEntries(sourceColumns, false)
   const mapped = await f.call(`/api/v1/projects/${projectId}/mappings`, { format: 'csv', parseId: imported['parseId'], originalRef: imported['originalRef'], originalMediaType: imported['originalMediaType'], options: {}, objectId: 'machine', entries })
   const mapping = actualObject(mapped['mapping']), bound = await f.call(`/api/v1/projects/${projectId}/records`, { parseId: imported['parseId'], mappingId: mapping['mappingId'], mappingVersion: mapping['version'] })
-  const staged = await f.call(`/api/v1/core/projects/${projectId}/fact-candidates`, { documentId: imported['documentId'], recordRefs: actualArray(bound['records']).map((row) => ({ recordId: actualObject(row)['recordId'], revision: actualObject(row)['revision'] })) })
-  const candidateIds = actualArray(staged['candidates']).map((row) => actualText(actualObject(row)['candidateId']))
-  expect(candidateIds).toHaveLength(2)
-  for (const id of candidateIds) {
-    const created = await f.call(`/api/v1/projects/${projectId}/instance-records`, { candidateId: id, documentId: imported['documentId'] })
-    await confirmFirstActiveCandidate(f, projectId, id, actualObject(created['record']))
+  const recordRefs = actualArray(bound['records']).map((row) => ({ recordId: actualObject(row)['recordId'], revision: actualObject(row)['revision'] }))
+  const candidateIds: string[] = []
+  for (let offset = 0; offset < recordRefs.length; offset += 200) {
+    const staged = await f.call(`/api/v1/core/projects/${projectId}/fact-candidates`, { documentId: imported['documentId'], recordRefs: recordRefs.slice(offset, offset + 200) })
+    candidateIds.push(...actualArray(staged['candidates']).map((row) => actualText(actualObject(row)['candidateId'])))
   }
+  expect(candidateIds).toHaveLength(sourceRows?.length ?? 2)
+  const records = await mapConcurrent(candidateIds, 8, async (id) => actualObject((await f.call(`/api/v1/projects/${projectId}/instance-records`, { candidateId: id, documentId: imported['documentId'] }))['record']))
+  await mapConcurrent(candidateIds, 8, async (id, index) => {
+    const record = records[index]
+    if (record === undefined) throw new Error('the actual candidate has no created project record')
+    await confirmFirstActiveCandidate(f, projectId, id, record)
+  })
   await publishFirstActiveFacts(f, candidateIds, pack.definitionRef)
   const materialized = await f.call(`/api/v1/projects/${projectId}/dataset-snapshots`, { objectId: 'machine' })
   expect(actualObject(materialized['status'])['state']).toBe('ready')
@@ -161,8 +184,12 @@ export async function confirmFirstActiveCandidate(f: FirstActiveFixture, project
 }
 
 export async function publishFirstActiveFacts(f: FirstActiveFixture, ids: readonly string[], definitionRef: VersionRef) {
-  const ledger = await f.call('/api/v1/semantic-publications'), current = actualArray(ledger['publications']).reduce<bigint>((value, row) => { const revision = BigInt(actualText(actualObject(row)['revision'])); return revision > value ? revision : value }, 0n)
-  return f.call('/api/v1/semantic-publications', { approvedCandidateRefs: ids.map((candidateId) => ({ candidateId, kind: 'entity' })), schemaRef: definitionRef }, current.toString())
+  let result: Record<string, unknown> = {}
+  for (let offset = 0; offset < ids.length; offset += 200) {
+    const ledger = await f.call('/api/v1/semantic-publications'), current = actualArray(ledger['publications']).reduce<bigint>((value, row) => { const revision = BigInt(actualText(actualObject(row)['revision'])); return revision > value ? revision : value }, 0n)
+    result = await f.call('/api/v1/semantic-publications', { approvedCandidateRefs: ids.slice(offset, offset + 200).map((candidateId) => ({ candidateId, kind: 'entity' })), schemaRef: definitionRef }, current.toString())
+  }
+  return result
 }
 
 export async function waitFirstActiveEvolution(f: FirstActiveFixture, projectId: string, evolutionId: string) {
@@ -177,15 +204,24 @@ export async function waitFirstActiveEvolution(f: FirstActiveFixture, projectId:
   throw new Error('actual evolution worker did not finish within its original30s polling bound')
 }
 
-export async function firstActiveQuery(f: FirstActiveFixture, projectId: string, profile: ResolvedProfileRef, fields: readonly string[]) {
+export async function firstActiveQuery(f: FirstActiveFixture, projectId: string, profile: ResolvedProfileRef, fields: readonly string[], limit = 2) {
   const catalogue = await f.call(`/api/v1/core/projects/${projectId}/task-catalogue`), binding = actualArray(catalogue['tasks']).map(actualObject).find((row) => row['taskKind'] === 'structured_query')
   if (binding === undefined || binding['available'] !== true) throw new Error(`actual old-active task is unavailable: ${JSON.stringify(binding)}`)
-  const created = await f.call('/api/v1/runs', { profileRef: { id: profile.id, version: profile.version }, projectId, question: '读取此实际生效版本已审核的原始工时', context: { timeZone: 'UTC' }, preferences: { route: 'template', allowWeb: false }, task: { bindingRef: binding['bindingRef'], arguments: { objectId: 'machine', fields, limit: 2 } } })
+  const created = await f.call('/api/v1/runs', { profileRef: { id: profile.id, version: profile.version }, projectId, question: '读取此实际生效版本已审核的原始工时', context: { timeZone: 'UTC' }, preferences: { route: 'template', allowWeb: false }, task: { bindingRef: binding['bindingRef'], arguments: { objectId: 'machine', fields, limit } } })
   const runId = actualText(created['runId']), deadline = Date.now() + 30_000
   while (Date.now() < deadline) {
     const response = await f.rawCall(`/api/v1/runs/${runId}/answer`)
     if (response.status === 200) return { runId, answer: actualObject(actualObject(await response.json() as unknown)['data']), catalogue }
-    if (response.status !== 202) throw new Error(`actual first active query refused: ${await response.text()}; ${JSON.stringify(await f.call(`/api/v1/runs/${runId}`))}`)
+    if (response.status !== 202) {
+      const [ledger, reservations, runState, verifications, workflowManifest] = await Promise.all([
+        f.harness.adminClient.query(`SELECT ledger_id,limits,tool_calls_consumed,repair_attempts_consumed,rows_consumed,bytes_consumed,model_tokens_consumed FROM agent_platform.budget_ledgers WHERE tenant_id=$1::uuid AND space_id=$2::uuid AND run_id=$3::uuid`, [f.scope.tenantId, f.scope.spaceId, runId]),
+        f.harness.adminClient.query(`SELECT reservation_id,idempotency_key,status,tool_calls,reserved_rows,reserved_bytes,actual_rows,actual_bytes,actual_tool_calls FROM agent_platform.budget_reservations WHERE tenant_id=$1::uuid AND space_id=$2::uuid AND run_id=$3::uuid ORDER BY granted_at`, [f.scope.tenantId, f.scope.spaceId, runId]),
+        f.harness.adminClient.query(`SELECT state,revision::text FROM agent_platform.workflow_run_states WHERE tenant_id=$1::uuid AND space_id=$2::uuid AND run_id=$3::uuid`, [f.scope.tenantId, f.scope.spaceId, runId]),
+        f.harness.adminClient.query(`SELECT record FROM agent_platform.workflow_verifications WHERE tenant_id=$1::uuid AND space_id=$2::uuid AND run_id=$3::uuid`, [f.scope.tenantId, f.scope.spaceId, runId]),
+        f.harness.adminClient.query(`SELECT manifest FROM agent_platform.workflow_run_manifests WHERE tenant_id=$1::uuid AND space_id=$2::uuid AND run_id=$3::uuid`, [f.scope.tenantId, f.scope.spaceId, runId]),
+      ])
+      throw new Error(`actual first active query refused: ${await response.text()}; ${JSON.stringify({ run: await f.call(`/api/v1/runs/${runId}`), ledger: ledger.rows, reservations: reservations.rows, runState: runState.rows, verifications: verifications.rows, workflowManifest: workflowManifest.rows })}`)
+    }
     await new Promise<void>((done) => setTimeout(done, 100))
   }
   throw new Error('actual first active query did not publish within original30s bound')

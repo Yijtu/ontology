@@ -22,6 +22,7 @@ import {
   PostgresCandidateStore,
   PostgresComponentRegistryStore,
   PostgresComputeOutputBindingsStore,
+  PostgresComputeInvocationStore,
   PostgresComputeResultArtifactStore,
   PostgresDecisionStateReferenceStore,
   PostgresDefinitionEditingStore,
@@ -199,7 +200,7 @@ import type {
   OntologyFactReferenceProvider,
   PublishedSemanticData,
 } from '@ontology/semantic-engine'
-import { DataQueryHandler, EXAMPLE_COMPUTE_DATA_SCHEMA, EXAMPLE_OPERATION_REF, OntologyLookupHandler, canonicalJson, createExampleComputeHandlers, exampleRegisteredOperation } from '@ontology/tool-services'
+import { DataQueryHandler, EXAMPLE_COMPUTE_DATA_SCHEMA, EXAMPLE_OPERATION_REF, OntologyLookupHandler, RegisteredComputeExecutionService, canonicalJson, createExampleComputeHandlers, exampleRegisteredOperation } from '@ontology/tool-services'
 import type { ToolSchemaValidator } from '@ontology/tool-services'
 import { controlRecordSequence, JobWorkerLoop, MaterializationOutboxConsumer, ProjectEvolutionOutboxConsumer, TopicOutboxConsumerRouter, WorkflowDispatchWorker, createIngestionHandlerRegistry } from '@ontology/app-worker'
 import { createCoreApprovedInput } from './core-approved-input'
@@ -1677,6 +1678,43 @@ export async function createCoreLocalComposition(options: CoreLocalCompositionOp
     })
     const projectQuery = createCoreProjectQueryWorkflow({ query: projectDatasetAdapter, publishedSource: publishedProjectDatasetSource,
       projects: projectStore, readiness: projectReadinessStore, executionBindings: runExecutionBindingStore, taskBindings: taskBindingStore,
+      executeRegisteredCompute: async (request, binding, execution) => {
+        const service = registeredComputeExecution
+        const args = request.arguments
+        const parameters = args['parameters']
+        const operationRef = binding.operationRef
+        if (execution.request.mode !== 'task' || binding.registeredOperationDigest === undefined || operationRef === undefined ||
+          !isRecord(parameters) || canonicalJson(args['operationRef']) !== canonicalJson(operationRef) ||
+          args['inputSchemaDigest'] !== operationRegistry().operations.find((operation) => canonicalJson(operation.operationRef) === canonicalJson(operationRef))?.inputSchemaDigest ||
+          canonicalJson(args['inputRefs']) !== canonicalJson([execution.request.inputSnapshotRef]) || canonicalJson(parameters) !== canonicalJson(execution.request.parameters)) {
+          throw new CoreCapabilityError('the registered computation differs from its exact saved task, operation or fixed input pins')
+        }
+        const parameterBytes = new TextEncoder().encode(canonicalJson(parameters))
+        const parameterArtifact = await computeArtifacts.putBytes({ scopeRef: { tenantId: request.ctx.principal.tenantId, spaceId: request.ctx.allowedResources.spaceId },
+          content: parameterBytes, mediaType: 'application/json' }, request.ctx)
+        const parameterDigest = sha256DigestOf(canonicalJson(parameters))
+        if (parameterArtifact.contentDigest !== parameterDigest) throw new CoreCapabilityError('the registered computation parameter archive failed its canonical body digest')
+        const result = await service.execute({ taskBindingRef: binding.taskBindingRef, operationRef, registeredOperationDigest: binding.registeredOperationDigest,
+          inputSnapshotRef: execution.request.inputSnapshotRef, inputSnapshotDigest: execution.request.inputSnapshotDigest,
+          parametersRef: parameterArtifact.blobRef, parametersDigest: parameterDigest, parameters,
+          inputRefs: [execution.request.inputSnapshotRef], requiredInputRefs: [execution.request.inputSnapshotRef],
+          deadline: request.deadline, signal: request.signal }, request.ctx)
+        const wrapperRef = result.invocation.resultRef
+        if (wrapperRef === undefined) throw new CoreCapabilityError('the registered computation has no archived result wrapper')
+        let payload = result.payload
+        if (payload === undefined) {
+          const bytes = await blobStore.readAuthorized({ scopeRef: { tenantId: request.ctx.principal.tenantId, spaceId: request.ctx.allowedResources.spaceId }, blobRef: result.artifact.outputArtifactRef }, request.ctx)
+          if (`sha256:${createHash('sha256').update(bytes).digest('hex')}` !== result.artifact.outputDigest) throw new CoreCapabilityError('the reused computation output failed its exact archived digest')
+          const output: unknown = JSON.parse(new TextDecoder('utf-8', { fatal: true }).decode(bytes))
+          if (!isRecord(output) || !isRecord(output['metrics'])) throw new CoreCapabilityError('the reused computation output has no typed metrics')
+          payload = { resultKind: 'computation', computation: { operationRef: result.artifact.operationRef, resultRef: result.artifact.outputArtifactRef,
+            algorithmVersion: result.artifact.algorithmVersion, metrics: output['metrics'], domainStatus: result.artifact.domainStatus } }
+        }
+        return { payload, status: result.artifact.coverage.truncated ? 'partial' : result.artifact.coverage.returned === 0 ? 'empty' : 'ok',
+          coverage: result.artifact.coverage, sources: result.artifact.sourceSnapshots.map((source) => ({ sourceRef: source.sourceRef, schemaVersion: source.schemaVersion,
+            consistency: source.consistency, resultDigest: source.resultDigest, ...(source.asOf === undefined ? {} : { asOf: source.asOf }), ...(source.watermark === undefined ? {} : { watermark: source.watermark }) })), domainStatus: result.artifact.domainStatus,
+          usage: { rows: result.artifact.coverage.returned }, dataMode: result.artifact.dataMode, evidenceKind: 'computation' }
+      },
       definition: async (scope, ref, ctx) => definitionStore.findVersionByRef(scope, ref, ctx),
       evolution: evolutionGuard,
     })
@@ -1836,6 +1874,12 @@ export async function createCoreLocalComposition(options: CoreLocalCompositionOp
         )
       },
     }
+    const computeResultStore = new PostgresComputeResultArtifactStore(database)
+    const computeOutputBindingsStore = new PostgresComputeOutputBindingsStore(database)
+    const computeInvocationStore = new PostgresComputeInvocationStore(database)
+    const registeredComputeExecution = new RegisteredComputeExecutionService({ operations: operationRegistry(), handlers: createExampleComputeHandlers(exampleComputeArtifact),
+      artifacts: computeArtifacts, reader: computeReader, validator: toolSchemaValidator(createAjv()), invocations: computeInvocationStore,
+      outputBindings: computeOutputBindingsStore, resultArtifacts: computeResultStore })
     const dataQueryHandler = new DataQueryHandler({
       query: duckDb,
       catalog: duckDb,
@@ -2499,12 +2543,10 @@ export async function createCoreLocalComposition(options: CoreLocalCompositionOp
     // (TABLE_UNVERIFIED) instead of trusting the stored ref alone.
     const verifiedTableManifests: VerifiedTableManifestSource = createCoreVerifiedTableSource({ answers: answerStore, runs: runStore,
       tables: tableArtifactStore, receipts: tableVerificationStore, blobs: blobStore })
-    const computeResultStore = new PostgresComputeResultArtifactStore(database)
-    const computeOutputBindingsStore = new PostgresComputeOutputBindingsStore(database)
     const sourceViews = createCoreSourceViewReader({ answers: answerStore, evidence: evidenceStore, runs: runStore, manifests: workflowStore,
       executionBindings: runExecutionBindingStore, blobs: blobStore, parses: parseStore, ingestion: structuredStore, projects: projectStore,
       documents: projectDocumentStore, instances: instanceReviewStore, candidates: candidateStore, records: projectRecordStore, mappings: projectMappingStore,
-      datasets: projectDatasetAdapter, publications: publicationStore, computeResults: computeResultStore, computeBindings: computeOutputBindingsStore,
+      datasets: projectDatasetAdapter, publications: publicationStore, computeInvocations: computeInvocationStore, computeResults: computeResultStore, computeBindings: computeOutputBindingsStore,
       tasks: taskBindingStore, taskInputs: taskInputSnapshotStore, verifiedTables: verifiedTableManifests, tablePages: tableArtifactStore, tableReceipts: tableVerificationStore,
       provenance: provenanceRead.provenance,
       publishedRuleReplay: () => new ArchivedRulePremiseReplayVerifier({ materialization: materializationStore, publications: publicationStore,

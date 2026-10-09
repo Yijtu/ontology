@@ -42,6 +42,44 @@ async function tableRows(answer: Record<string, unknown>) {
 }
 
 describe('normal first query during a genuine staged ontology upgrade (real PG/HTTP/worker)', () => {
+  it('reads the actual selected cells from the later page of a complete 251-row formal result', async () => {
+    const authoredRows = Array.from({ length: 251 }, (_, index) => ({ machineId: `PAGE-${String(index).padStart(3, '0')}`, hours: '9.000000000000000001' }))
+    const expectedById = new Map(authoredRows.map((row, index) => [row.machineId, { ...row, csvRow: index + 2, recordIndex: index + 1 }]))
+    const project = await createFirstActiveProject(f, p1, '真实正式结果第二页原文回读证明', authoredRows)
+    const query = await firstActiveQuery(f, project.projectId, p1.profileRef, ['machine_id', 'hours'], 300)
+    const result = await f.call(`/api/v1/answers/${actualText(query.answer['answerId'])}/result`)
+    const formalTable = actualObject(actualArray(result['tables'])[0]), tableId = actualText(formalTable['tableId'])
+    expect(formalTable['complete']).toBe(true)
+    expect(actualArray(formalTable['pages']).map((page) => actualObject(page)['rowCount'])).toEqual([250, 1])
+    expect(formalTable['totalRows']).toBe(251)
+
+    const firstPage = await f.call(`/api/v1/answers/${actualText(query.answer['answerId'])}/tables/${tableId}`)
+    expect(actualArray(firstPage['rows'])).toHaveLength(250)
+    const cursor = actualText(firstPage['cursor'])
+    const secondPage = await f.call(`/api/v1/answers/${actualText(query.answer['answerId'])}/tables/${tableId}?cursor=${encodeURIComponent(cursor)}`)
+    expect(secondPage['pageIndex']).toBe(1)
+    expect(actualArray(secondPage['rows'])).toHaveLength(1)
+    const laterRow = actualObject(actualArray(secondPage['rows'])[0]), columns = actualArray(secondPage['columns']).map(actualObject)
+    const idColumn = columns.find((column) => column['semanticPredicate'] === 'machine_id'), quantityColumn = columns.find((column) => column['semanticPredicate'] === 'hours')
+    if (idColumn === undefined || quantityColumn === undefined) throw new Error('the actual later formal page has no selected identifier/quantity columns')
+    const cells = actualObject(laterRow['cells']), machineId = actualText(cells[actualText(idColumn['columnRef'])]), quantity = actualObject(cells[actualText(quantityColumn['columnRef'])])
+    const expected = expectedById.get(machineId)
+    if (expected === undefined) throw new Error(`the actual later-page row ${machineId} has no independently authored CSV source row`)
+    expect(quantity).toEqual({ value: expected.hours, unit: 'h' })
+
+    for (const [column, expectedRaw, address] of [[idColumn, expected.machineId, `A${expected.csvRow}`], [quantityColumn, expected.hours, `B${expected.csvRow}`]] as const) {
+      const cellBinding = actualArray(laterRow['bindings']).map(actualObject).find((binding) => binding['columnRef'] === column['columnRef'])
+      if (cellBinding === undefined) throw new Error(`the actual later-page cell has no evidence binding for ${String(column['semanticPredicate'])}`)
+      const evidenceRef = actualResource(cellBinding['evidenceRef'])
+      const source = await f.call(`/api/v1/core/answers/${actualText(query.answer['answerId'])}/sources/${evidenceRef.id}?tableId=${encodeURIComponent(tableId)}&rowKey=${encodeURIComponent(actualText(laterRow['rowKey']))}&columnRef=${encodeURIComponent(actualText(column['columnRef']))}`)
+      expect(source).toMatchObject({ answerId: query.answer['answerId'], selectedCell: { tableId, rowKey: laterRow['rowKey'], columnRef: column['columnRef'] }, sourceCoverage: { mode: 'saved_cell', coverage: 'complete' }, readability: 'archived_snapshot_only' })
+      const fragment = actualObject(actualArray(source['fragments'])[0])
+      expect(fragment['locator']).toMatchObject({ kind: 'table_row', recordIndex: expected.recordIndex, row: expected.csvRow })
+      expect(fragment['cells']).toContainEqual(expect.objectContaining({ raw: expectedRaw, columnLabel: column['semanticPredicate'], locator: expect.objectContaining({ address }) }))
+    }
+    expect(f.workerErrors.map((error) => error instanceof Error ? error.message : error)).toEqual([])
+  })
+
   it('seals P1 before staging without any prior query, keeps first old-active formal output and later activates independently reviewed P2', async () => {
     const project = await createFirstActiveProject(f, p1, '首次旧生效查询的合成证明'), upgrade = await startUpgrade(project)
     const staged = await waitFirstActiveEvolution(f, project.projectId, upgrade.evolutionId)
