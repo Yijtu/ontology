@@ -37,6 +37,7 @@ import type {
   MappingRef,
   ProjectRevisionBody,
   ProjectRevisionRef,
+  ResolvedProfileRef,
   ResourceRef,
   ScopeRef,
   ToolContext,
@@ -80,7 +81,7 @@ function mappingRef(): MappingRef {
   }
 }
 
-function revisionBody(definitionRef: { id: string; version: string; digest: string }): ProjectRevisionBody {
+function revisionBody(definitionRef: { id: string; version: string; digest: string }, profileRef: ResolvedProfileRef): ProjectRevisionBody {
   return {
     schemaVersion: 'project-revision@1',
     projectId: PROJECT_ID,
@@ -88,7 +89,7 @@ function revisionBody(definitionRef: { id: string; version: string; digest: stri
     industryPackRef: { id: 'taskbind-pack', version: '1.0.0', digest: DIGEST },
     definitionRef,
     mappingRefs: [mappingRef(), { ...definitionRef, role: 'catalog', sourceObjectRef: { sourceRef: { namespace: 'taskbind', sourceId: 'identity' }, objectPath: 'identity_index' } }],
-    profileRef: { id: 'taskbind-profile', version: '1.0.0', snapshotHash: DIGEST },
+    profileRef,
     documentSetRef: DOCUMENT_SET_REF,
     approvedInputRef: APPROVED_INPUT_REF,
     semanticPublicationRefs: [definitionRef],
@@ -218,6 +219,21 @@ async function waitForAnswer(runId: string): Promise<Record<string, unknown>> {
   throw new Error(`run ${runId} did not publish an answer before the deadline`)
 }
 
+async function waitForOutboxDispatch(outboxId: string): Promise<number> {
+  if (admin === undefined) throw new Error('isolated PostgreSQL admin client is unavailable')
+  const deadline = Date.now() + 15_000
+  while (Date.now() < deadline) {
+    const result = await admin.query<{ state: string; attempts: number; dispatched_at: Date | null }>('SELECT state,attempts,dispatched_at FROM agent_platform.job_outbox WHERE tenant_id=$1 AND space_id=$2 AND outbox_id=$3', [scopeRef.tenantId, scopeRef.spaceId, outboxId])
+    if (result.rows[0]?.state === 'dispatched' && result.rows[0].dispatched_at !== null) {
+      if (result.rows[0].attempts !== 1) throw new Error(`actual publication outbox ${outboxId} dispatched ${result.rows[0].attempts} times`)
+      return result.rows[0].attempts
+    }
+    if (workerErrors.length > 0) throw new Error(`actual publication outbox failed before its fence settled: ${workerErrors.map((error) => `${error.name}: ${error.message}`).join('; ')}`)
+    await new Promise((resolve) => setTimeout(resolve, 100))
+  }
+  throw new Error(`the actual publication outbox ${outboxId} did not dispatch within its fixed 15-second barrier`)
+}
+
 let structuredBinding: { taskBindingRef: { id: string; version: string; digest: string } }
 let projectRevisionRefValue: ProjectRevisionRef
 let publishedFixture: ReturnType<typeof projectQueryPublicationFixture>
@@ -248,10 +264,6 @@ beforeAll(async () => {
   const compute = mounted.find((binding) => binding.kind === 'compute')
   expect(compute?.operationRef?.id).toBe('example.compute.aggregate')
 
-  const body = revisionBody(scenario.definitionRef)
-  projectRevisionRefValue = projectRevisionRef(body)
-  await seedProject(body)
-
   composition = await createCoreLocalComposition({
     databaseUrl: appUrl,
     projectDataset: { connectionString: businessUrl, schema: 'business_dataset' },
@@ -264,6 +276,16 @@ beforeAll(async () => {
   api = createCoreApi(composition.dependencies)
   const address = await api.listen({ host: '127.0.0.1', port: 0 })
   baseUrl = address.replace(/\/$/u, '')
+  const preflight = await request(`/api/v1/profiles/${encodeURIComponent(scenario.profileRef.id)}/preflight`, {
+    method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ version: scenario.profileRef.version }),
+  })
+  if (preflight.status !== 200) throw new Error(`the actual mounted project profile did not preflight: ${await preflight.text()}`)
+  const preflightData = (await jsonBody(preflight)).data as { status?: string; resolvedProfile?: { snapshotHash?: string } }
+  const snapshotHash = preflightData.resolvedProfile?.snapshotHash
+  if (preflightData.status !== 'resolved' || snapshotHash === undefined) throw new Error('the actual mounted project profile has no resolved snapshot hash')
+  const body = revisionBody(scenario.definitionRef, { id: scenario.profileRef.id, version: scenario.profileRef.version, snapshotHash })
+  projectRevisionRefValue = projectRevisionRef(body)
+  await seedProject(body)
   queryDatabase = new ControlPostgresDatabase({ connectionString: appUrl, maxPoolSize: 4 })
   queryRegistry = new PostgresArtifactRegistry({ connectionString: appUrl, maxPoolSize: 2 })
   structuredStore = new PostgresStructuredIngestionStore({ connectionString: appUrl, maxPoolSize: 2 })
@@ -275,8 +297,18 @@ beforeAll(async () => {
   const source = await publishedFixture.importCsv(OBJECT_ID, 'code,network,district,due\nP-101,private-network,north,true\nP-102,private-network,south,false\n', ['facility_id', 'network_code', 'facility_district_code', 'inspection_due'])
   const district = await publishedFixture.importCsv('transport_district', 'code,network,name\nnorth,private-network,North\n', ['district_code', 'district_network_code', 'district_name'])
   initialSource = await publishedFixture.restage(source)
-  await publishedFixture.approveAndPublish(initialSource)
-  await publishedFixture.approveAndPublish(district)
+  const firstPublication = await publishedFixture.approveAndPublish(initialSource)
+  const firstOutboxId = firstPublication[0]?.outboxId
+  if (firstOutboxId === undefined) throw new Error('the actual first publication outbox is missing')
+  const firstWorkerErrors = workerErrors.length
+  expect(await waitForOutboxDispatch(firstOutboxId)).toBe(1)
+  expect(workerErrors.length).toBe(firstWorkerErrors)
+  const secondPublication = await publishedFixture.approveAndPublish(district)
+  const secondOutboxId = secondPublication[0]?.outboxId
+  if (secondOutboxId === undefined) throw new Error('the actual second publication outbox is missing')
+  const secondWorkerErrors = workerErrors.length
+  expect(await waitForOutboxDispatch(secondOutboxId)).toBe(1)
+  expect(workerErrors.length).toBe(secondWorkerErrors)
   const projected = await request(`/api/v1/projects/${PROJECT_ID}/dataset-snapshots`, { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ objectId: OBJECT_ID }) })
   if (projected.status !== 201) throw new Error(`official dataset creation failed: ${await projected.text()}`)
   projectRevisionRefValue = ((await jsonBody(projected)).data['status'] as { projectRevisionRef: ProjectRevisionRef }).projectRevisionRef
@@ -613,6 +645,7 @@ describe('mounted Core structured-query task binding through the normal HTTP hos
     const versions = exportedBody.data['versions'] as { answerId: string; contentHash: string }
     expect(versions.answerId).toBe(answerId)
     expect(versions.contentHash).toBe(answer['contentHash'])
+    expect(workerErrors.map((error) => ({ name: error.name, message: error.message, cause: error.cause instanceof Error ? error.cause.message : error.cause }))).toEqual([])
   }, 180_000)
 
   it('imports a structured source for a project and previews column mapping on the real parse', async () => {
