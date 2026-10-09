@@ -12,6 +12,19 @@ export function createCoreApprovedInput(options: {
   readonly reviewable: ReviewableCandidateReader; readonly schemas: IndustrySchemaSource; readonly source: ProjectPublishedDatasetSource
   readonly reader: ScopedArtifactReader; readonly authoring: ReturnType<typeof createCoreAuthoring>
 }) {
+  const readMany = async <T,R>(values: readonly T[], read: (value: T) => Promise<R>): Promise<R[]> => {
+    const result: R[] = []
+    let next = 0
+    let failed = false
+    await Promise.all(Array.from({ length: Math.min(4,values.length) },async () => {
+      while (!failed && next < values.length) {
+        const index = next++, value = values[index]
+        if (value === undefined) throw new InvalidRequestFieldError('the bounded current input read selector is missing')
+        try { result[index] = await read(value) } catch (error) { failed = true; throw error }
+      }
+    }))
+    return result
+  }
   const readJson = async (ref: Parameters<ScopedArtifactReader['read']>[0]['approvedInputRefs'][number], ctx: ToolContext): Promise<unknown> => {
     const bytes = await options.reader.read({ approvedInputRefs: [ref] }, ctx)
     if (bytes.byteLength > 8_388_608 || `sha256:${createHash('sha256').update(bytes).digest('hex')}` !== ref.digest) throw new InvalidRequestFieldError('the actual approved input artifact failed byte integrity')
@@ -125,21 +138,25 @@ export function createCoreApprovedInput(options: {
     }
     rows.sort((left, right) => left.recordId.localeCompare(right.recordId))
     if (new Set(rows.map((row) => row.recordId)).size !== rows.length) throw new InvalidRequestFieldError('multiple official rows share a physical input record')
-    const human = []
-    const candidateIds = new Set<string>()
+    const statementVersions = new Map<string,string>()
     for (const row of rows) for (const source of row.sources) {
       check()
-      if (source.statementId === undefined) throw new InvalidRequestFieldError('an official input field lacks its actual statement origin')
-      const statement = await options.reviews.getStatement(scope, source.statementId, ctx)
-      if (statement === undefined || statement.version !== source.statementVersion || statement.status !== 'active') throw new InvalidRequestFieldError('the input statement origin changed')
-      if (candidateIds.has(statement.sourceCandidateId)) continue
-      candidateIds.add(statement.sourceCandidateId)
-      const candidate = await options.candidates.getCandidate(scope, statement.sourceCandidateId, ctx)
-      const instance = await options.instances.getRecord(scope, revision.ref.projectId, statement.sourceCandidateId, ctx)
-      const events = await options.instances.listConfirmations(scope, revision.ref.projectId, statement.sourceCandidateId, ctx)
-      const reviewRevision = await options.reviews.latestReviewRevision(scope, statement.sourceCandidateId, ctx)
-      const review = await options.reviews.getReview(scope, statement.sourceCandidateId, reviewRevision, ctx)
-      const view = await options.reviewable.readCandidate(scope, statement.sourceCandidateId, ctx)
+      if (source.statementId === undefined || source.statementVersion === undefined || statementVersions.has(source.statementId) && statementVersions.get(source.statementId) !== source.statementVersion) throw new InvalidRequestFieldError('an official input field lacks one exact actual statement origin/version')
+      statementVersions.set(source.statementId,source.statementVersion)
+    }
+    const statements = await readMany([...statementVersions],async ([statementId,version]) => {
+      check()
+      const statement = await options.reviews.getStatement(scope,statementId,ctx)
+      if (statement === undefined || statement.version !== version || statement.status !== 'active') throw new InvalidRequestFieldError('the input statement origin changed')
+      check(); return statement
+    })
+    const human = await readMany([...new Set(statements.map((statement) => statement.sourceCandidateId))],async (candidateId) => {
+      check()
+      const [candidate,instance,events,reviewRevision,view] = await Promise.all([
+        options.candidates.getCandidate(scope,candidateId,ctx),options.instances.getRecord(scope,revision.ref.projectId,candidateId,ctx),
+        options.instances.listConfirmations(scope,revision.ref.projectId,candidateId,ctx),options.reviews.latestReviewRevision(scope,candidateId,ctx),options.reviewable.readCandidate(scope,candidateId,ctx),
+      ])
+      const review = await options.reviews.getReview(scope,candidateId,reviewRevision,ctx)
       if (candidate?.kind !== 'entity' || instance === undefined || canonicalJson(instance.identity.binding?.projectRevisionRef) !== canonicalJson(revision.ref) || !['matched', 'created'].includes(instance.identity.state) || instance.fields.length !== candidate.attributes.length || instance.fields.some((field) => {
         const attribute = candidate.attributes.find((attribute) => attribute.attributeId === field.fieldId)
         const declared = schema.objects.find((object) => object.objectId === candidate.objectId)?.attributes.find((attribute) => attribute.attributeId === field.fieldId)
@@ -147,8 +164,8 @@ export function createCoreApprovedInput(options: {
           (declared?.valueType === 'reference' ? field.normalizedValue?.kind !== 'reference' || field.normalizedValue.entityId !== attribute.value : field.normalizedValue?.kind === 'quantity' ? field.normalizedValue.value !== attribute.value || field.normalizedValue.unitCode !== attribute.unitCode : field.normalizedValue?.kind !== 'scalar' || field.normalizedValue.value !== attribute.value) ||
           !events.some((event) => event.fieldId === field.fieldId && event.confirmationRevision === field.confirmationRevision && event.actor === field.actor && event.status === 'confirmed')
       }) || view?.contentDigest === undefined || review?.decision !== 'approve' || review.contentDigest !== view.contentDigest) throw new InvalidRequestFieldError('the current input lacks actual field, identity or content-pinned human review evidence')
-      human.push({ candidateId: candidate.candidateId, candidateDigest: view.contentDigest, instance, events, review })
-    }
+      check(); return { candidateId: candidate.candidateId, candidateDigest: view.contentDigest, instance, events, review }
+    })
     human.sort((left, right) => left.candidateId.localeCompare(right.candidateId))
     const allowed = new Set(rows.map((row) => row.recordId))
     const excluded = physical.filter((record) => !allowed.has(record.recordId)).map((record) => ({ recordId: record.recordId, reason: 'not_in_current_published_original_input', actor: ctx.principal.subjectId }))
@@ -159,14 +176,13 @@ export function createCoreApprovedInput(options: {
       if (canonicalJson(await options.projects.getProject(scope, revision.ref.projectId, ctx)) !== canonicalJson(project) || canonicalJson(await options.documents.getVisibility(scope, revision.ref.projectId, ctx)) !== canonicalJson(visibility) || canonicalJson(await options.documents.listDocuments(scope, revision.ref.projectId, { state: 'active', limit: 200 }, ctx)) !== canonicalJson(allMembers) || await options.reviews.latestReadRevision(scope, ctx) !== semantic) throw new InvalidRequestFieldError('the actual project or source head changed during normal input capture')
     }
     await checkSources()
-    for (const captured of human) {
+    await readMany(human,async (captured) => {
       check()
-      const record = await options.instances.getRecord(scope, revision.ref.projectId, captured.candidateId, ctx)
-      const head = await options.reviews.latestReviewRevision(scope, captured.candidateId, ctx)
+      const [record,head,view] = await Promise.all([options.instances.getRecord(scope,revision.ref.projectId,captured.candidateId,ctx),options.reviews.latestReviewRevision(scope,captured.candidateId,ctx),options.reviewable.readCandidate(scope,captured.candidateId,ctx)])
       const review = await options.reviews.getReview(scope, captured.candidateId, head, ctx)
-      const view = await options.reviewable.readCandidate(scope, captured.candidateId, ctx)
       if (canonicalJson(record) !== canonicalJson(captured.instance) || review?.decision !== 'approve' || review.contentDigest !== captured.candidateDigest || view?.contentDigest !== captured.candidateDigest) throw new InvalidRequestFieldError('the actual human field/identity/content approval changed during source capture')
-    }
+      check()
+    })
     await checkSources()
     check()
     return { current, human, excluded, semantic }
@@ -196,13 +212,14 @@ export function createCoreApprovedInput(options: {
     if (capture.human.length !== collected.human.length) invalid()
     const savedHumans = new Map(capture.human.map((row: unknown) => { if (!isRecord(row) || typeof row['candidateId'] !== 'string') return invalid(); return [row['candidateId'], row] as const }))
     if (savedHumans.size !== capture.human.length) invalid()
-    for (const current of collected.human) {
+    await readMany(collected.human,async (current) => {
       check()
       const saved = savedHumans.get(current.candidateId)
       if (!isRecord(saved) || !isRecord(saved['review']) || typeof saved['review']['revision'] !== 'string') return invalid()
       const actual = await options.reviews.getReview(scope, current.candidateId, saved['review']['revision'], ctx)
       if (actual?.decision !== 'approve' || actual.contentDigest !== current.candidateDigest || canonicalJson(saved) !== canonicalJson({ ...current, review: actual })) invalid()
-    }
+      check()
+    })
     let bytesRead = 0
     for (const member of collected.current.members) {
       check()
@@ -238,12 +255,13 @@ export function createCoreApprovedInput(options: {
       const manifest = await readJson(saved['confirmationManifestRef'], ctx)
       const capture = await readCapture(manifest,saved,revision,ctx,signal)
       if (canonicalJson(capture.selection) !== canonicalJson(collected.current)) throw new InvalidRequestFieldError('the prior input archive does not bind current actual authority')
-      for (const row of capture.human) {
+      await readMany(capture.human,async (row) => {
         check()
         if (!isRecord(row) || typeof row['candidateId'] !== 'string' || !isRecord(row['review']) || typeof row['review']['revision'] !== 'string') throw new InvalidRequestFieldError('a captured actual review pin is malformed')
         const actual = await options.reviews.getReview(scope, row['candidateId'], row['review']['revision'], ctx)
         if (canonicalJson(actual) !== canonicalJson(row['review'])) throw new InvalidRequestFieldError('the captured approval does not match its real immutable ledger act')
-      }
+        check()
+      })
       await validateSourcesAndCurrent()
       check()
       return existing

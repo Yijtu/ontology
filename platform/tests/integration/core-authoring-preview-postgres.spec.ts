@@ -27,6 +27,16 @@ async function call(path: string, body?: unknown, revision?: string, key = rando
   expect(response.ok, `${path}: ${response.status} ${raw}`).toBe(true)
   return object(object(JSON.parse(raw) as unknown)['data'])
 }
+async function publishedAnswer(runId: string) {
+  const deadline = Date.now()+30_000
+  while (Date.now()<deadline) {
+    const response = await fetch(`${baseUrl}/api/v1/runs/${runId}/answer`)
+    if (response.status===200) return object(object(await response.json() as unknown)['data'])
+    if (response.status!==202) throw new Error(`normal task publication refused: ${await response.text()}; run=${JSON.stringify(await call(`/api/v1/runs/${runId}`))}; workers=${JSON.stringify(workerErrors.map((error) => error instanceof Error ? { message: error.message,cause: error.cause,stack: error.stack } : error))}`)
+    await new Promise<void>((done)=>setTimeout(done,100))
+  }
+  throw new Error('the actual normal controller did not publish before its original30s bound')
+}
 beforeAll(async () => {
   harness = await startJobDatabase(); scope = (await createJobScope(harness.adminClient, 'normal-authoring-preview')).scopeRef
   server = createServer(async (request, response) => {
@@ -58,7 +68,7 @@ describe('normal Core authoring, reviewed pack execution support and actual CQ d
   it('keeps the same human-reviewed source through HTTP preview retry, new CQ approval and physical final publication', async () => {
     const created = await call('/api/v1/core/workspace-bootstrap', { namespace: `normal-${randomUUID()}`, displayName: '设备工时规则', boundary: { goals: ['核对设备工时条件'], included: ['设备工时'], excluded: ['真实设备控制'], applicability: {} } })
     const workspaceId = text(object(created['workspace'])['workspaceId'])
-    const policy = '设备通过 machine_id 标识，身份限定在当前项目。hours 是以 h 为单位的工时数量。设备工时达到 8 h 时符合工时规则的条件；缺少工时不能判断。'
+    const policy = '设备通过 machine_id 标识，身份限定在当前项目。hours 是以 h 为单位的工时数量。设备工时达到 8 h 时符合工时规则的条件；缺少工时不能判断。amount 是可选的非负精确小数，amount_unit 是可选的单位文本；每件数量使用 each，登记示例汇总最多四位小数的每件数量。'
     const source = await call(`/api/v1/core/workspaces/${workspaceId}/sources`, { name: '工时规则.txt', mediaType: 'text/plain', contentEncoding: 'base64', content: Buffer.from(policy).toString('base64') }, '1')
     const sourceRef = resource(object(source['source'])['sourceRef'])
     const context = await call(`/api/v1/core/workspaces/${workspaceId}/authoring-context`)
@@ -67,8 +77,10 @@ describe('normal Core authoring, reviewed pack execution support and actual CQ d
     proposal = { objects: [{ ...common, logicalId: 'machine', displayName: '设备', identityAttributeIds: ['machine_id'], identityScopeDimensions: ['project'] }], attributes: [
       { ...common, logicalId: 'machine_id', objectLogicalId: 'machine', displayName: '设备编号', valueType: 'string', minCardinality: 1, maxCardinality: 1 },
       { ...common, logicalId: 'hours', objectLogicalId: 'machine', displayName: '运行工时', valueType: 'quantity', unitCode: 'h', dimension: 'time', minCardinality: 1, maxCardinality: 1 },
+      { ...common, logicalId: 'amount', objectLogicalId: 'machine', displayName: '数量', valueType: 'number', minCardinality: 0, maxCardinality: 1 },
+      { ...common, logicalId: 'amount_unit', objectLogicalId: 'machine', displayName: '数量单位', valueType: 'string', minCardinality: 0, maxCardinality: 1 },
     ] }
-    const generated = await call(`/api/v1/industry-workspaces/${workspaceId}/generations`, { kinds: ['object','attribute'], sourceRefs: [sourceRef], generationPolicyRef, candidateLimit: 3 }, '2')
+    const generated = await call(`/api/v1/industry-workspaces/${workspaceId}/generations`, { kinds: ['object','attribute'], sourceRefs: [sourceRef], generationPolicyRef, candidateLimit: 5 }, '2')
     if (!Array.isArray(generated['candidates'])) throw new Error('normal generated candidates missing')
     const ids = generated['candidates'].map((candidate: unknown) => text(object(candidate)['candidateId']))
     const review = async (candidateId: string) => call(`/api/v1/candidates/${candidateId}/reviews`, { decision: 'approve', reason: '人工逐项核对原文及当前候选内容' }, '0')
@@ -120,7 +132,7 @@ describe('normal Core authoring, reviewed pack execution support and actual CQ d
     expect(object(business['revision'])['industryPackRef']).toEqual(object(published['pack'])['packRef'])
     expect(object(business['revision'])['definitionRef']).toEqual(object(published['pack'])['definitionRef'])
     const projectId = text(object(business['project'])['projectId'])
-    const imported = await call(`/api/v1/projects/${projectId}/structured-imports`, { format: 'csv', mediaType: 'text/csv', content: 'machine_id,hours\nN-1,9.000000000000000001\nN-2,7.25\n', contentEncoding: 'utf-8' })
+    const imported = await call(`/api/v1/projects/${projectId}/structured-imports`, { format: 'csv', mediaType: 'text/csv', content: 'machine_id,hours,amount,amount_unit\nN-1,9.000000000000000001,2.5,each\nN-2,7.25,1.25,each\n', contentEncoding: 'utf-8' })
     const beforeMap = await call(`/api/v1/core/projects/${projectId}/source-catalogue`)
     if (!Array.isArray(beforeMap['sources'])) throw new Error('actual business source catalogue missing')
     const nativeSource = object(beforeMap['sources'][0])
@@ -128,7 +140,7 @@ describe('normal Core authoring, reviewed pack execution support and actual CQ d
     const nativeTable = object(nativeSource['tables'][0])
     if (!Array.isArray(nativeTable['columns'])) throw new Error('actual business original column catalogue missing')
     const mappingBody = { format: 'csv', parseId: imported['parseId'], originalRef: imported['originalRef'], originalMediaType: imported['originalMediaType'], options: {}, objectId: 'machine',
-      entries: nativeTable['columns'].map((value: unknown,index: number) => { const column = object(value); return { fieldRef: index === 0 ? 'machine_id' : 'hours', columnIndex: column['columnIndex'], header: column['header'], headerDigest: column['headerDigest'], ...(index === 0 ? {} : { sourceUnitCode: 'h', canonicalUnitCode: 'h' }) } }) }
+      entries: nativeTable['columns'].map((value: unknown) => { const column = object(value); return { fieldRef: column['header'], columnIndex: column['columnIndex'], header: column['header'], headerDigest: column['headerDigest'], ...(column['header'] !== 'hours' ? {} : { sourceUnitCode: 'h', canonicalUnitCode: 'h' }) } }) }
     const mappingKey = randomUUID(), mapped = await call(`/api/v1/projects/${projectId}/mappings`,mappingBody,undefined,mappingKey)
     const mounted = await call(`/api/v1/core/projects/${projectId}/source-catalogue`)
     expect(object(mounted['revision'])['mappingRefs']).toContainEqual(object(mapped['mapping'])['ref'])
@@ -159,17 +171,17 @@ describe('normal Core authoring, reviewed pack execution support and actual CQ d
     const queryTask = tasks['tasks'].map(object).find((task) => task['taskKind'] === 'structured_query')
     expect(queryTask?.['available'],JSON.stringify(queryTask)).toBe(true)
     const queryRun = await call('/api/v1/runs', { profileRef: { id: profile['id'],version: profile['version'] },projectId,question: '查看已审核设备的原始工时',context: { timeZone: 'UTC' },preferences: { route: 'template',allowWeb: false },task: { bindingRef: queryTask?.['bindingRef'],arguments: { objectId: 'machine',fields: ['machine_id','hours'],limit: 2 } } })
-    const runId = text(queryRun['runId']), answerDeadline = Date.now() + 30_000
-    let answer: Record<string,unknown> | undefined
-    while (Date.now() < answerDeadline) {
-      const response = await fetch(`${baseUrl}/api/v1/runs/${runId}/answer`)
-      if (response.status === 200) { answer = object(object(await response.json() as unknown)['data']); break }
-      if (response.status !== 202) throw new Error(`normal query publication refused: ${await response.text()}; run=${JSON.stringify(await call(`/api/v1/runs/${runId}`))}; workers=${JSON.stringify(workerErrors.map((error) => error instanceof Error ? { message: error.message,cause: error.cause } : error))}`)
-      await new Promise<void>((done) => setTimeout(done,100))
-    }
-    expect(answer,'actual normal controller did not publish before its original30s bound').toBeDefined()
-    const resultView = await call(`/api/v1/answers/${text(answer?.['answerId'])}/result`)
+    const answer = await publishedAnswer(text(queryRun['runId']))
+    const resultView = await call(`/api/v1/answers/${text(answer['answerId'])}/result`)
     expect(resultView['tables']).toHaveLength(1)
+    const computeTask = tasks['tasks'].map(object).find((task) => task['taskKind'] === 'compute')
+    expect(computeTask?.['available'],JSON.stringify(computeTask)).toBe(true)
+    expect(computeTask?.['parameterSchema']).toMatchObject({ properties: {} })
+    const computeRun = await call('/api/v1/runs',{ profileRef: { id: profile['id'],version: profile['version'] },projectId,question: '汇总已审核原始行的每件数量',context: { timeZone: 'UTC' },preferences: { route: 'template',allowWeb: false },task: { bindingRef: computeTask?.['bindingRef'],arguments: {},inputSelection: { objectId: 'machine',idField: 'machine_id',amountField: 'amount',unitField: 'amount_unit' } } })
+    const computeAnswer = await publishedAnswer(text(computeRun['runId']))
+    expect(object(computeAnswer['v3Body'])['claims']).toContainEqual(expect.objectContaining({ predicate: 'total_quantity',kind: 'computation',value: { value: '3.75',unit: 'each' } }))
+    const computeState = await call(`/api/v1/runs/${text(computeRun['runId'])}`)
+    expect(object(computeState['scope'])['explicitDegradations']).not.toContainEqual(expect.objectContaining({ capability: 'compute:example.compute.aggregate@1' }))
     const privateJobs = await harness.adminClient.query<{ stage: string; last_error: unknown }>(`SELECT DISTINCT j.stage,j.last_error FROM agent_platform.jobs j
       JOIN agent_platform.published_statements s ON s.tenant_id=j.tenant_id AND s.space_id=j.space_id AND s.source_job_id=j.job_id
       JOIN agent_platform.project_revisions r ON r.tenant_id=s.tenant_id AND r.space_id=s.space_id AND r.project_id::text=s.value#>>'{provenance,sources,0,projectRevisionRef,projectId}'

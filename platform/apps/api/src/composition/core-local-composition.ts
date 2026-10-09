@@ -338,6 +338,9 @@ function scenarioComponentRecords(
     entrypoint: '@ontology/adapter-search-bm25',
     now,
   }))
+  const computeOperation = exampleRegisteredOperation(exampleComputeArtifact)
+  add(componentRecord({ kind: 'compute_extension',ref: computeOperation.handlerRef,capabilityNames: ['registered_compute'],
+    entrypoint: '@ontology/tool-services/compute/example-artifact',now }))
   if (modelRefs.generation !== undefined) {
     add(componentRecord({
       kind: 'generation',
@@ -378,9 +381,11 @@ async function registerComponents(
       }
       continue
     }
-    const bytes = new TextEncoder().encode(canonicalJson({ schemaVersion: 'core-host-component@1', manifest: record.manifest }))
+    const operation = record.manifest.kind === 'compute_extension' && record.manifest.entrypointRef.kind === 'package' && record.manifest.entrypointRef.ref === '@ontology/tool-services/compute/example-artifact' ? exampleRegisteredOperation(exampleComputeArtifact) : undefined
+    if (operation !== undefined && !sameVersionRef(record.manifestRef,operation.handlerRef)) throw new CoreCapabilityError('the compute extension does not pin the verified registered build artifact')
+    const bytes = operation === undefined ? new TextEncoder().encode(canonicalJson({ schemaVersion: 'core-host-component@1', manifest: record.manifest })) : exampleComputeArtifact.readArtifact()
     const staged = await blobs.stage(bytes, { scopeRef }, ctx)
-    const artifact = await blobs.putImmutable({ scopeRef, contentDigest: staged.contentDigest, byteSize: staged.byteSize, mediaType: 'application/vnd.ontology.host-component+json' }, ctx)
+    const artifact = await blobs.putImmutable({ scopeRef, contentDigest: staged.contentDigest, byteSize: staged.byteSize, mediaType: operation === undefined ? 'application/vnd.ontology.host-component+json' : 'text/javascript' }, ctx)
     await store.insertVersion(scopeRef, componentRegistrationInput(record, record.registeredAt, artifact.blobRef), ctx)
   }
 }
