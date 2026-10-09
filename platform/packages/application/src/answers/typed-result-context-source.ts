@@ -62,6 +62,8 @@ export interface TypedResultContextSourceDependencies {
   readonly artifacts: TypedDraftArtifactStore
   readonly artifactWriter: ImmutableArtifactWriter
   readonly receipts: TaskFinalizationReceiptStore
+  /** Host reads the immutable executed plan receipt; a model response is never a selection. */
+  readonly questionTaskSelection?: (ctx: ToolContext) => Promise<{ readonly taskBindingRef: VersionRef; readonly parameters: Readonly<Record<string, unknown>> } | undefined>
   readonly newId?: () => Uuid
 }
 
@@ -182,10 +184,10 @@ export class RunTypedResultContextSource implements TypedResultContextSource {
       throw new TypedDraftWriterError('INCOMPLETE_RESULT', 'the run execution binding is not archived in this scope')
     }
     const request = archived.binding.request
-    if (request.mode !== 'task') {
-      return undefined
-    }
-    const taskBinding = await this.#requireTaskBinding(scopeRef, request.taskBindingRef, ctx)
+    const selection = request.mode === 'task' ? request : await this.#deps.questionTaskSelection?.(ctx)
+    if (selection === undefined) return undefined
+    if (!archived.binding.allowedTaskBindingRefs.some((ref) => canonicalJson(ref) === canonicalJson(selection.taskBindingRef))) throw new TypedDraftWriterError('INCOMPLETE_RESULT', 'the executed task is outside the immutable run allowlist')
+    const taskBinding = await this.#requireTaskBinding(scopeRef, selection.taskBindingRef, ctx)
     this.#assertFinalizable(taskBinding)
 
     const runManifest = await this.#deps.manifests.getRunManifest(input.runId, ctx)
@@ -204,7 +206,7 @@ export class RunTypedResultContextSource implements TypedResultContextSource {
 
     const manifest = buildTypedResultManifest({
       executionBindingRef,
-      taskBindingRef: request.taskBindingRef,
+      taskBindingRef: selection.taskBindingRef,
       resultKind: taskBinding.kind,
       outputSchemaRef: taskBinding.resultSchemaRef,
       inputSnapshotRef: request.inputSnapshotRef,
@@ -217,11 +219,11 @@ export class RunTypedResultContextSource implements TypedResultContextSource {
       throw new TypedDraftWriterError('INCOMPLETE_RESULT', 'the archived typed result manifest ref does not match its content digest')
     }
 
-    const parametersRef = await this.#archiveParameters(scopeRef, request.parameters, ctx)
+    const parametersRef = await this.#archiveParameters(scopeRef, selection.parameters, ctx)
     const receipt: TaskFinalizationReceipt = {
       schemaVersion: 'task-finalization-receipt@1',
       executionBindingRef,
-      taskBindingRef: request.taskBindingRef,
+      taskBindingRef: selection.taskBindingRef,
       inputSnapshotRef: request.inputSnapshotRef,
       inputSnapshotDigest: request.inputSnapshotDigest,
       parametersRef,

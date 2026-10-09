@@ -15,6 +15,7 @@ import type {
 import { sha256DigestOf } from '@ontology/core'
 import { canonicalJson } from '@ontology/tool-services'
 import type { QueryResultRow } from 'pg'
+import type { CoreSemanticTaskSelection } from './core-semantic-task-resolver'
 import { ControlPostgresDatabase } from '@ontology/adapter-control-postgres'
 
 const PLAN_RECEIPT_VERSION = '1.0.0'
@@ -54,6 +55,7 @@ export type CorePlanReceiptPayload =
   | (CorePlanReceiptPayloadBase & {
       readonly kind: 'plan'
       readonly steps: readonly PlanStep[]
+      readonly taskSelection?: CoreSemanticTaskSelection
     })
   | (CorePlanReceiptPayloadBase & {
       readonly kind: 'clarification'
@@ -200,12 +202,15 @@ function parsePayload(value: unknown): CorePlanReceiptPayload | undefined {
   if (value['kind'] === 'plan' && routeSummary.route !== 'clarify' &&
       Array.isArray(value['steps']) && value['steps'].length > 0 &&
       value['steps'].length <= MAX_PLAN_STEPS && value['steps'].every(isPlanStep)) {
+    const selection = value['taskSelection']
+    if (selection !== undefined && (!isRecord(selection) || !isVersionRef(selection['taskBindingRef']) || !isRecord(selection['parameters']))) return undefined
     return {
       schemaVersion: 'core-template-plan-receipt@1',
       kind: 'plan',
       pins: value['pins'],
       route: routeSummary,
       steps: value['steps'],
+      ...(isRecord(selection) && isVersionRef(selection['taskBindingRef']) && isRecord(selection['parameters']) ? { taskSelection: { taskBindingRef: selection['taskBindingRef'], parameters: selection['parameters'] } } : {}),
     }
   }
   if (value['kind'] === 'clarification' && routeSummary.route === 'clarify' &&
@@ -291,6 +296,24 @@ export class PostgresCorePlanReceiptStore {
 
   constructor(database: ControlPostgresDatabase) {
     this.#database = database
+  }
+
+  /** Only one immutable executable selection can finalize a question run. */
+  async selectedTaskForRun(scopeRef: ScopeRef, ctx: ToolContext): Promise<CoreSemanticTaskSelection | undefined> {
+    const scope = trustedScope(scopeRef, ctx)
+    const rows = await this.#database.withIdentityScope(scope, async (client) => client.query<CorePlanReceiptRow>(
+      `SELECT receipt.run_id, receipt.receipt_id, receipt.profile_ref, receipt.resolved_profile_hash,
+              receipt.runtime_ref, receipt.input_manifest_digest, receipt.request_digest,
+              receipt.receipt_digest, receipt.receipt_payload, receipt.created_at
+         FROM agent_platform.core_plan_receipts receipt JOIN agent_platform.runs run
+           ON run.tenant_id=receipt.tenant_id AND run.space_id=receipt.space_id AND run.run_id=receipt.run_id
+        WHERE receipt.tenant_id=current_setting('app.tenant_id')::uuid AND receipt.space_id=current_setting('app.space_id')::uuid
+          AND receipt.run_id=$1 AND receipt.resolved_profile_hash=$2 AND run.resolved_profile_hash=$2
+          AND receipt.receipt_payload->>'kind'='plan' LIMIT 2`, [ctx.runId, ctx.resolvedProfileHash]))
+    if (rows.rows.length > 1) throw new CorePlanReceiptStoreError('CORRUPT_RECORD', 'the question run has ambiguous executable receipts')
+    const row = rows.rows[0]
+    const record = row === undefined ? undefined : parseRow(row)
+    return record?.payload.kind === 'plan' ? record.payload.taskSelection : undefined
   }
 
   async findByRequest(

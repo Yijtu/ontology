@@ -449,18 +449,32 @@ export class MaterializedRuleSupportReader implements PublishedRuleSupportReader
     }, ctx)
     if (slices.length > this.#maxSlices) return { complete: false, candidates: [] }
 
+    const payload = request.payloadRef === undefined ? undefined : await this.#readPayloadArtifact(scopeRef, request.payloadRef, ctx)
+    if (payload === 'invalid') return { complete: false, candidates: [] }
+    const pinned = typeof payload === 'object' ? payload.artifact : undefined
+    if (pinned !== undefined && (!exactCandidate(pinned, scopeRef, request) || !digestIsSelfConsistent(pinned))) return { complete: false, candidates: [] }
+    // The authorized, rehashed payload is only a locator. Actual saved history identifies
+    // its proposition ownership; all latest target slices still have to match in full.
+    const ownedPropositions = pinned === undefined ? undefined : new Set(slices.filter((slice) =>
+      slice.conclusion.ruleArtifacts?.some((artifact) => isRecord(artifact) && artifact['instanceKey'] === pinned.instanceKey),
+    ).map((slice) => slice.propositionKey))
+
     let complete = true
     const candidatesByIdentity = new Map<string, CandidateWithArtifact>()
     // A corrected or retracted interval accrues more than one append-only slice. Only the latest
     // slice at or before the requested recorded sequence may speak for that interval; an older
     // slice is history, not an incomplete candidate set.
     for (const slice of latestSlicesAtPoint(slices)) {
+      if (ownedPropositions !== undefined && !ownedPropositions.has(slice.propositionKey)) continue
       if (!sameScope(slice.scopeRef, scopeRef)) {
         complete = false
         continue
       }
       if (!covers(slice, request.validAt)) continue
-      if (!slice.conclusion.ruleRefs.some((ref) => sameVersion(ref, request.ruleRef))) continue
+      if (!slice.conclusion.ruleRefs.some((ref) => sameVersion(ref, request.ruleRef))) {
+        if (pinned !== undefined) complete = false
+        continue
+      }
       const artifacts = slice.conclusion.ruleArtifacts
       if (artifacts === undefined || artifacts.length === 0) {
         complete = false
@@ -472,6 +486,7 @@ export class MaterializedRuleSupportReader implements PublishedRuleSupportReader
           complete = false
           continue
         }
+        if (pinned !== undefined && (candidate.instanceKey !== pinned.instanceKey || candidate.subjectEntityId !== pinned.subjectEntityId || candidate.objectId !== pinned.objectId || candidate.projectId !== pinned.projectId || !sameVersion(candidate.definitionRef, pinned.definitionRef))) continue
         if (!exactCandidate(candidate, scopeRef, request)) continue
         matchingArtifactFound = true
         const instance = supportInstanceOf(slice, candidate)
@@ -493,8 +508,6 @@ export class MaterializedRuleSupportReader implements PublishedRuleSupportReader
     let candidates = [...candidatesByIdentity.values()]
     let payloadMappingsApplied = false
     if (request.payloadRef !== undefined) {
-      const payload = await this.#readPayloadArtifact(scopeRef, request.payloadRef, ctx)
-      if (payload === 'invalid') return { complete: false, candidates: [] }
       if (payload !== undefined && payload !== 'oversized') {
         const payloadArtifact = payload.artifact
         if (!exactCandidate(payloadArtifact, scopeRef, request)) return { complete: false, candidates: [] }

@@ -735,13 +735,18 @@ export type ToolResultStatus = 'ok' | 'partial' | 'empty' | 'error'
  * via the `definition` "OntologyLookupIntent".
  */
 export type OntologyLookupIntent = 'definitions' | 'resolve' | 'relations' | 'rules' | 'facts'
+export type NonEmptyString2 = string
 /**
- * The typed intent-specific request that accompanies an ontology_lookup intent. Only rule judgement is defined in this phase; the legacy intent-only path is unchanged.
+ * RFC3339 instant normalized to UTC. Only the literal 'Z' offset is accepted; a separate IanaTimeZone field carries the user/billing zone.
+ */
+export type Rfc3339UtcTimestamp1 = string
+/**
+ * Finite host-resolved rule judgement or published relation navigation; the legacy intent-only path is unchanged.
  *
  * This interface was referenced by `OntologyContracts`'s JSON-Schema
  * via the `definition` "OntologyLookupRequest".
  */
-export type OntologyLookupRequest = OntologyRuleJudgementRequest
+export type OntologyLookupRequest = OntologyRuleJudgementRequest | OntologyRelationNavigationRequest
 /**
  * C4 discriminated union: describe | query(mode direct|semantic) | compute. Every branch has a complete schema.
  *
@@ -3454,6 +3459,22 @@ export interface OntologyRuleJudgementRequest {
   validAt: Rfc3339UtcTimestamp
   asOfRecordedSeq: RevisionString
   judgementAxis?: 'applicability' | 'business_proposition'
+}
+/**
+ * A host-resolved finite published relation navigation within the run's fixed project. No mapping join, arbitrary function or authority selector.
+ *
+ * This interface was referenced by `OntologyContracts`'s JSON-Schema
+ * via the `definition` "OntologyRelationNavigationRequest".
+ */
+export interface OntologyRelationNavigationRequest {
+  kind: 'relation_navigation'
+  startEntityId: NonEmptyString2
+  /**
+   * @minItems 1
+   * @maxItems 3
+   */
+  relationIds: NonEmptyString2[]
+  validAt: Rfc3339UtcTimestamp1
 }
 /**
  * This interface was referenced by `OntologyContracts`'s JSON-Schema
