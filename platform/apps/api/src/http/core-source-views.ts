@@ -2,6 +2,7 @@ import type { FastifyInstance, FastifyReply, FastifyRequest } from 'fastify'
 import { isRecord, isRevisionString, isUuid } from '@ontology/contracts'
 import type { ToolContext } from '@ontology/contracts'
 import type { createCoreSourceViewReader } from '../composition/core-source-view'
+import type { SavedCellSelector } from '../composition/core-saved-cell-reader'
 import { authenticateRequest, InvalidRequestFieldError, readTraceId } from './shared'
 import type { AuthenticatedRequest, RequestAuthenticator } from './shared'
 
@@ -33,9 +34,15 @@ export function registerCoreSourceViewRoutes(app: FastifyInstance, dependencies:
     const auth = authenticateRequest(dependencies.authenticate, request, reply)
     if (auth === undefined) return reply
     if (!isUuid(request.params.answerId) || !isUuid(request.params.evidenceId)) throw new InvalidRequestFieldError('answerId and evidenceId must be UUIDs')
-    if (!isRecord(request.query) || Object.keys(request.query).length > 0) throw new InvalidRequestFieldError('answer source reads accept no history, latest or source override parameters')
+    if (!isRecord(request.query) || Object.keys(request.query).some((key) => !['tableId', 'rowKey', 'columnRef'].includes(key))) throw new InvalidRequestFieldError('answer source reads accept only the exact saved table/cell selectors')
+    let selector: SavedCellSelector | undefined
+    if (Object.keys(request.query).length > 0) {
+      const { tableId, rowKey, columnRef } = request.query
+      if (typeof tableId !== 'string' || typeof rowKey !== 'string' || typeof columnRef !== 'string' || [tableId, rowKey, columnRef].some((value) => value.length === 0 || value.length > 1_024)) throw new InvalidRequestFieldError('tableId, rowKey and columnRef must be supplied together as bounded saved identities')
+      selector = { tableId, rowKey, columnRef }
+    }
     const ctx = await dependencies.contextFor(auth, traceId)
-    const data = await withSignal(request, reply, (signal) => dependencies.reader.answerSource(request.params.answerId, request.params.evidenceId, ctx, signal))
+    const data = await withSignal(request, reply, (signal) => dependencies.reader.answerSource(request.params.answerId, request.params.evidenceId, ctx, signal, selector))
     return reply.send({ data, meta: { traceId } })
   })
   app.get<{ Params: { projectId: string; recordId: string; fieldId: string } }>('/api/v1/core/projects/:projectId/instance-records/:recordId/fields/:fieldId/source', async (request, reply) => {

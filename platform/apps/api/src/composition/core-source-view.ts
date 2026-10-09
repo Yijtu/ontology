@@ -7,6 +7,10 @@ import type { ProvenanceReadService } from '@ontology/provenance'
 import { ForbiddenError } from '../http/shared'
 import { createRequestNativeSourceReader } from './core-native-source-reader'
 import type { RequestNativeSourceReader } from './core-native-source-reader'
+import { readSavedCell } from './core-saved-cell-reader'
+import type { SavedCellPorts, SavedCellRead, SavedCellSelector } from './core-saved-cell-reader'
+import { readSavedInputSources } from './core-saved-input-sources'
+import type { SavedInputArtifactView, SavedInputSourcePorts, SourceReadCoverage } from './core-saved-input-sources'
 
 export interface CoreSourceCell {
   readonly raw: string | boolean | null
@@ -37,6 +41,9 @@ export interface CoreAnswerSourceView {
   readonly archivedPayload?: Readonly<Record<string, unknown>>
   readonly fixedInputRef?: ResourceRef
   readonly fixedDatasetSnapshotRef?: ResourceRef
+  readonly sourceCoverage?: SourceReadCoverage
+  readonly inputArtifacts?: readonly SavedInputArtifactView[]
+  readonly selectedCell?: SavedCellSelector
   readonly dataMode: DataMode
 }
 
@@ -64,7 +71,7 @@ export interface CoreInstanceFieldSourceView {
   readonly cells?: readonly CoreSourceCell[]
 }
 
-export interface CoreSourceViewOptions {
+export interface CoreSourceViewOptions extends SavedCellPorts, SavedInputSourcePorts {
   readonly answers: Pick<AnswerStorePort, 'findByAnswer'>
   readonly evidence: Pick<import('@ontology/contracts').EvidenceStorePort, 'get'>
   readonly runs: Pick<RunStore, 'getRun'>
@@ -77,7 +84,7 @@ export interface CoreSourceViewOptions {
   readonly ingestion: Pick<StructuredIngestionStore, 'findParseByDigest' | 'listRecords'>
   readonly projects: Pick<ProjectStore, 'getProject' | 'getRevision'>
   readonly documents: Pick<ProjectDocumentStore, 'getMembership' | 'getVisibility'>
-  readonly instances: Pick<InstanceReviewStore, 'getRecord'>
+  readonly instances: Pick<InstanceReviewStore, 'getRecord' | 'listConfirmations'>
   readonly candidates: Pick<CandidateStore, 'getCandidate'>
   readonly records: Pick<ProjectRecordStore, 'getRecord'>
   readonly mappings: Pick<ProjectMappingStore, 'getMapping'>
@@ -217,7 +224,7 @@ export function createCoreSourceViewReader(options: CoreSourceViewOptions) {
     } else requireSource(record.envelope.resultDigest === record.envelope.payloadRef.digest, 'the evidence result digest differs from its actual archived result')
     return { record, payload }
   }
-  const answerSource = async (answerId: string, evidenceId: string, requestCtx: ToolContext, signal: AbortSignal): Promise<CoreAnswerSourceView> => {
+  const answerSource = async (answerId: string, evidenceId: string, requestCtx: ToolContext, signal: AbortSignal, selector?: SavedCellSelector): Promise<CoreAnswerSourceView> => {
     const scope = scopeOf(requestCtx)
     check(signal, requestCtx)
     const answer = await options.answers.findByAnswer(answerId, requestCtx)
@@ -247,6 +254,15 @@ export function createCoreSourceViewReader(options: CoreSourceViewOptions) {
     const body = answer.v3Body ?? answer.body
     requireSource(body !== undefined && body.claims.length + body.assertions.length <= 256, 'the saved answer exceeds its supported binding bound')
     const roots = new Map<string, ResourceRef>()
+    let selectedCell: SavedCellRead | undefined
+    if (selector !== undefined) {
+      const entries = input.entries.filter((entry) => entry.kind === 'evidence' && entry.ref?.id === evidenceId)
+      requireSource(entries.length === 1 && entries[0]?.ref !== undefined, 'the requested cell evidence is not uniquely in the saved answer manifest')
+      selectedCell = await readSavedCell({ ports: options, answer, archived, scope, ctx, selector, evidenceRef: entries[0].ref, readJson: (ref, cap) => jsonOf(ref, ctx, signal, cap), check: () => check(signal, ctx) })
+      const loaded = await readEvidence(selectedCell.binding.evidenceRef)
+      requireSource(loaded.record.envelope.resultDigest === selectedCell.binding.resultDigest && (loaded.record.envelope.producedBy.runId === answer.runId || loaded.record.envelope.producedBy.runId === undefined && loaded.record.envelope.kind === 'rule_derivation'), 'the actual saved cell evidence belongs to another run or result')
+      roots.set(selectedCell.binding.evidenceRef.id, selectedCell.binding.evidenceRef)
+    }
     for (const statement of [...body.claims, ...body.assertions]) {
       requireSource(isRecord(statement) && Array.isArray(statement['references']) && statement['references'].length <= 256, 'a saved statement has no bounded result bindings')
       for (const binding of statement['references']) {
@@ -363,17 +379,22 @@ export function createCoreSourceViewReader(options: CoreSourceViewOptions) {
       }
     } else {
       requireSource(record.envelope.kind === 'observation' || record.envelope.kind === 'computation', 'this evidence family has no supported business source projection')
+      const originalInputs = await readSavedInputSources({ ports: options, candidates: options.candidates, mappings: options.mappings, parses: options.parses, confirmations: options.instances,
+        scope, ctx, archived, revision: fixedRevision, payload, ...(selectedCell === undefined ? {} : { cell: selectedCell }), native,
+        readJson: (ref, cap) => jsonOf(ref, ctx, signal, cap), readBytes: (ref, cap) => bytesOf(ref, ctx, signal, cap), check: () => check(signal, ctx) })
       view = { ...base, family: 'data_query', precision: 'exact', readability: 'archived_snapshot_only',
         title: record.envelope.kind === 'computation' ? '本次保存的计算结果' : '本次保存的查询结果',
-        text: '本次保存的查询或计算结果可核对；暂不支持从这份记录回读原始表格单元格。',
+        text: originalInputs.sourceCoverage.knownTotal === 0 ? '本次查询没有返回记录。' : (originalInputs.fragments?.length ?? 0) > 0 ? '这里展示本次已保存结果固定的原始输入来源，保留导入时的原始值和位置。' : '本次保存的查询或计算结果可核对；这份记录尚无可回读的原始表格单元格链。',
         sourceReadLimitation: '暂不支持回读原始表格单元格；此处展示本次答案实际保存的结果与固定输入版本。',
-        archivedPayload: payload, fixedInputRef: archived.binding.request.inputSnapshotRef,
-        ...(archived.binding.projectDatasetSnapshotRef === undefined ? {} : { fixedDatasetSnapshotRef: archived.binding.projectDatasetSnapshotRef }) }
+        ...(new TextEncoder().encode(JSON.stringify(payload)).byteLength <= 65_536 ? { archivedPayload: payload } : {}), fixedInputRef: archived.binding.request.inputSnapshotRef,
+        ...(archived.binding.projectDatasetSnapshotRef === undefined ? {} : { fixedDatasetSnapshotRef: archived.binding.projectDatasetSnapshotRef }), ...originalInputs,
+        ...(selectedCell === undefined ? {} : { selectedCell: selectedCell.selector }) }
     }
     check(signal, ctx)
     requireSource(equal(await options.answers.findByAnswer(answerId, ctx), answer) && equal(await options.executionBindings.getBindingByRun(scope, answer.runId, ctx), archived) && equal(await options.evidence.get(scope, evidenceId, ctx), record), 'the saved answer/evidence binding changed during the source read')
     requireSource(equal(await options.manifests.getInputManifest(manifest.inputManifestId, ctx), input), 'the saved evidence manifest changed during the source read')
     requireSource(equal(await options.projects.getRevision(scope, fixedRevision.ref.projectId, fixedRevision.ref.revision, ctx), fixedRevision), 'the fixed project revision changed during the source read')
+    if (selectedCell !== undefined) requireSource(equal(await readSavedCell({ ports: options, answer, archived, scope, ctx, selector: selectedCell.selector, evidenceRef: ref, readJson: (ref, cap) => jsonOf(ref, ctx, signal, cap), check: () => check(signal, ctx) }), selectedCell), 'the saved table/cell/receipt changed during original source reads')
     for (const loaded of evidenceReads.values()) {
       check(signal, ctx)
       requireSource(equal(await options.evidence.get(scope, loaded.record.evidenceRef.id, ctx), loaded.record), 'a verified reachable support envelope changed during the source read')
