@@ -172,6 +172,7 @@ export interface IdentityInvalidationEvent {
 
 export interface IdentityEntityFilter {
   readonly objectId?: string
+  readonly projectId?: Uuid
   readonly state?: IdentityEntityState
   /** Bounded page size; a caller never reads an unbounded entity table. */
   readonly limit?: number

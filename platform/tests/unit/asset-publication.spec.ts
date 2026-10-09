@@ -22,7 +22,7 @@ import type {
   VersionRef,
   IndustryPackCatalogue,
 } from '@ontology/contracts'
-import { findIndustryPackViolations, findEmbeddedSecretViolations } from '@ontology/contracts'
+import { assetDraftContent, findIndustryPackViolations, findEmbeddedSecretViolations } from '@ontology/contracts'
 import {
   InMemoryAssetCandidateStore,
   InMemoryCandidateStore,
@@ -43,6 +43,8 @@ import {
   buildVersionDiff,
   buildDefinitionRecord,
   resolveDefinitionPredecessor,
+  canonicalJson,
+  sha256DigestOf,
 } from '@ontology/application'
 import { InMemorySemanticDefinitionStore, InMemorySemanticPublicationStore } from '@ontology/semantic-engine'
 import { toolContext } from './component-registry-fixtures'
@@ -119,13 +121,14 @@ class FixtureWorkspaceStore implements IndustryWorkspaceStore {
     this.#workspaces.set(workspace.workspaceId, workspace)
   }
   seedDraft(draft: AssetDraftVersion): void {
-    this.#drafts.set(draft.workspaceId, draft)
+    this.#drafts.set(`${draft.workspaceId}:${draft.revision}`, { ...draft, digest: sha256DigestOf(canonicalJson(assetDraftContent(draft))) })
   }
 
-  advanceHead(workspaceId: Uuid, revision: RevisionString, packRef: VersionRef): void {
+  advanceHead(workspaceId: Uuid, revision: RevisionString, packRef: VersionRef, checkpoint?: AssetDraftVersion): void {
     const current = this.#workspaces.get(workspaceId)
     if (current === undefined) return
     this.#workspaces.set(workspaceId, { ...current, headRevision: revision, state: 'published', latestPublishedPackRef: packRef })
+    if (checkpoint !== undefined) this.seedDraft(checkpoint)
   }
 
   async createWorkspace(): Promise<never> {
@@ -140,14 +143,13 @@ class FixtureWorkspaceStore implements IndustryWorkspaceStore {
     return [...this.#workspaces.values()]
   }
 
-  async getDraft(): Promise<undefined> {
-    return undefined
+  async getDraft(_scope: ScopeRef, workspaceId: Uuid, revision: string): Promise<AssetDraftVersion | undefined> {
+    return this.#drafts.get(`${workspaceId}:${revision}`)
   }
 
   async listDrafts(_scope: ScopeRef, workspaceId: Uuid): Promise<AssetDraftVersion[]> {
     void _scope
-    const draft = this.#drafts.get(workspaceId)
-    return draft === undefined ? [] : [draft]
+    return [...this.#drafts.values()].filter((draft) => draft.workspaceId === workspaceId).sort((a, b) => Number(BigInt(a.revision) - BigInt(b.revision)))
   }
 
   async appendDraft(_s: ScopeRef, _w: Uuid, _i: AppendAssetDraftInput, _c: ToolContext): Promise<never> {
@@ -337,9 +339,9 @@ function harness(baseCatalogue?: IndustryPackCatalogue): Harness {
   const published = new InMemoryPublishedPackAssetStore({
     definitions,
     publicationGuard: createPackPublicationGuard({ workspaces, definitionCandidates, ruleActions, reviews, reviewableCandidates }),
-    onPublished: (scopeRef, workspaceId, revision, packRef) => {
+    onPublished: (scopeRef, workspaceId, revision, packRef, checkpoint) => {
       void scopeRef
-      workspaces.advanceHead(workspaceId, revision, packRef)
+      workspaces.advanceHead(workspaceId, revision, packRef, checkpoint)
     },
   })
   const reports = new FixtureValidationReportStore()

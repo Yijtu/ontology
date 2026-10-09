@@ -7,7 +7,7 @@ import { FileSystemObjectStore, LocalImmutableBlobStore, PostgresArtifactRegistr
 import { ControlPostgresDatabase } from '@ontology/adapter-control-postgres'
 import { PostgresDocumentParseStore, PostgresStructuredIngestionStore } from '@ontology/adapter-extraction-document'
 import { DuckDbProjectDatasetAdapter } from '@ontology/adapter-data-duckdb'
-import { CompetencyRunner, IndustryValidationService, competencyExecutionRequest, contentDigestOf } from '@ontology/application'
+import { CompetencyRunner, IndustryValidationService, competencyExecutionRequest, contentDigestOf, readWorkspacePublicationSourceDrafts } from '@ontology/application'
 import { createBlobArtifactWriter, createCompetencyProjectPreparer, createCoreCompetencyExecution, createRequestToolContext } from '@ontology/app-api'
 import { createToolContext, isRecord } from '@ontology/contracts'
 import { FiniteGrammarRuleSupportValidator, FiniteGrammarSyntheticEvaluator, publishedRuleApplicabilityKey, publishedRuleRef } from '@ontology/semantic-engine'
@@ -122,6 +122,16 @@ describe('actual current-domain published pack rule origin in competency executi
     expect(deployed.validationRef.id).toBe(report.validationId)
     expect(deployed.capabilities).toMatchObject({ semanticPublished: true, deploymentExecutable: true })
     expect(deployed.ruleDeclarations?.[0]).toMatchObject({ candidateId: f.sourceRule.candidateId, contentDigest: f.sourceRule.contentDigest, reviewRevision: '1' })
+    expect(f.sourceRule.generationContext?.inputDraftRef.revision).toBe('2')
+    expect(f.asset.revision).toBe('3')
+    expect(deployed.revision).toBe('4')
+    expect(deployed.sourceDraftRef?.revision).toBe('3')
+    const finalDraft = await f.workspaces.getDraft(scope, f.workspace.workspaceId, '4', ctx)
+    if (finalDraft === undefined) throw new Error('physical final publication must create its actual current draft')
+    const frames = await readWorkspacePublicationSourceDrafts({ workspaces: f.workspaces, packs: f.packs, definitions: f.terms, ruleActions: f.actions }, scope, f.workspace.workspaceId, finalDraft, ctx)
+    expect(frames.map((frame) => frame.revision)).toEqual(['4','3','2'])
+    expect(frames.at(-1)?.digest).toBe(f.sourceRule.generationContext?.inputDraftRef.digest)
+    expect(await f.reviews.latestReviewRevision(scope, f.sourceRule.candidateId, ctx)).toBe('1')
   })
   it('keeps same-content reapproval and blocks a real late human rejection before execution', async () => {
     const ctx = context(), f = await fixture(ctx), declaration = await bodyFor(f, ctx, 'applicability_only'), question = declaration.body.questions[0]

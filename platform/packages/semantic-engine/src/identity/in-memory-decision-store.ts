@@ -99,6 +99,7 @@ export class InMemoryIdentityDecisionStore implements IdentityDecisionStore {
     let records = [...this.#scoped(this.#entities, scopeRef).values()]
     if (filter.objectId !== undefined) records = records.filter((record) => record.objectId === filter.objectId)
     if (filter.state !== undefined) records = records.filter((record) => record.state === filter.state)
+    if (filter.projectId !== undefined) records = records.filter((record) => record.scopeDimensions['project'] === filter.projectId)
     records.sort((left, right) => (left.entityId < right.entityId ? -1 : left.entityId > right.entityId ? 1 : 0))
     return records.slice(0, filter.limit ?? records.length).map(clone)
   }

@@ -230,6 +230,10 @@ export class PostgresIdentityDecisionStore implements IdentityDecisionStore {
         values.push(filter.state)
         clauses.push(`state = $${String(values.length)}`)
       }
+      if (filter.projectId !== undefined) {
+        values.push(filter.projectId)
+        clauses.push(`scope_dimensions->>'project' = $${String(values.length)}`)
+      }
       values.push(filter.limit ?? 1000)
       const result = await query.query<EntityRow>(
         `SELECT ${ENTITY_COLUMNS} FROM agent_platform.identity_entities

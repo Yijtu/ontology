@@ -1,7 +1,7 @@
 import { randomUUID } from 'node:crypto'
 import { readFile } from 'node:fs/promises'
 import { fileURLToPath } from 'node:url'
-import { CompositeReviewableCandidateReader, ComponentRegistry, DefinitionCandidateEditingService, DefinitionCandidateGenerationService, IndustryAssetPublicationService, IndustryValidationService, IndustryWorkspaceService, InMemoryIndustrySchemaSource, ProfileResolver, PublishedPackRuleDeclarationReader, RuleActionCandidateGenerationService, RuleActionCandidateService, StaticDefinitionTerminologySource, StoreBackedIndustryManifestSource, SyntheticExampleService, canonicalJson, createSourceGroundingService, currentDefinitionProjection, currentRuleActionProjection, definitionApprovalPins, ruleActionPublicationPins } from '@ontology/application'
+import { CompositeReviewableCandidateReader, ComponentRegistry, DefinitionCandidateEditingService, DefinitionCandidateGenerationService, IndustryAssetPublicationService, IndustryValidationService, IndustryWorkspaceService, InMemoryIndustrySchemaSource, ProfileResolver, PublishedPackRuleDeclarationReader, RuleActionCandidateGenerationService, RuleActionCandidateService, StaticDefinitionTerminologySource, StoreBackedIndustryManifestSource, SyntheticExampleService, canonicalJson, createSourceGroundingService, currentDefinitionProjection, currentRuleActionProjection, definitionApprovalPins, ruleActionPublicationPins, readWorkspacePublicationSourceDrafts } from '@ontology/application'
 import { ArtifactGroundingDocumentSetReader, LocalDocumentExtractionService, ParsedSourceGroundingReader, publishGroundingDocumentSet } from '@ontology/adapter-extraction-document'
 import type { PostgresDocumentParseStore, PostgresStructuredIngestionStore } from '@ontology/adapter-extraction-document'
 import type { LocalImmutableBlobStore, PostgresArtifactRegistry } from '@ontology/adapter-blob-local'
@@ -115,6 +115,7 @@ export async function createPackOriginFixture(input: { readonly database: Contro
   const workspace = await workspaces.getWorkspace(scope, workspaceId, ctx)
   if (workspace === undefined) throw new Error('actual published workspace is missing')
   const target: CompetencyValidationTarget = { ...targetBeforePublication, revision: workspace.headRevision }
-  const targetReader = createCompetencyValidationTargetReader({ workspaces, definitionCandidates: terms, ruleActions: actions, ruleGeneration: batches, reviews, reviewableCandidates: reviewable, definitions, candidates, grounding, publishedRules, packs })
+  const targetReader = createCompetencyValidationTargetReader({ workspaces, definitionCandidates: terms, ruleActions: actions, ruleGeneration: batches, reviews, reviewableCandidates: reviewable, definitions, candidates, grounding, publishedRules, packs,
+    sourceDraft: async (actualScope, actualWorkspaceId, currentDraft, actualContext, signal) => (await readWorkspacePublicationSourceDrafts({ workspaces, packs, definitions: terms, ruleActions: actions }, actualScope, actualWorkspaceId, currentDraft, actualContext, signal)).at(-1) })
   return { workspaceService, workspaces, terms, actions, reviews, reviewer, review, packs, definitions, definition, sourceRule, projection, target, targetBeforePublication, template, bindingRef, publishedRules, rules, targetReader, producerComponentRef, asset, report, sample, reports, sets, editing, publication, questionWorkflow, policy, policyBytes, original, nativeBytes, resolved, workspace, put }
 }

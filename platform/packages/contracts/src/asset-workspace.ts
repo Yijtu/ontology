@@ -162,6 +162,25 @@ export function assertAssetDraftVersionShape(value: unknown): asserts value is A
   if (value.validationRef !== undefined && !isResourceRef(value.validationRef)) {
     throw invalidDraft('validationRef is malformed')
   }
+  if (value.publicationCheckpoint !== undefined) {
+    const receipt = value.publicationCheckpoint
+    if (!isRecord(receipt) || Object.keys(receipt).some((key) => !['sourceDraftRef', 'packRef', 'validationRef'].includes(key)) || !isAssetDraftReference(receipt.sourceDraftRef) || receipt.sourceDraftRef.workspaceId !== value.workspaceId || BigInt(receipt.sourceDraftRef.revision) >= BigInt(value.revision) || !isVersionRef(receipt.packRef) || !isResourceRef(receipt.validationRef)) throw invalidDraft('publication checkpoint requires an exact earlier source draft and actual pack/report receipt')
+  }
+}
+
+export function isAssetDraftReference(value: unknown): value is import('./generated/contracts').AssetDraftReference {
+  return isRecord(value) && Object.keys(value).every((key) => ['workspaceId', 'revision', 'digest'].includes(key)) && isUuid(value.workspaceId) && isRevisionString(value.revision) && isSha256Digest(value.digest)
+}
+
+/** Source meaning excludes publication/audit checkpoints, while the full draft digest includes them. */
+export function assetDraftSourceContent(draft: Omit<AssetDraftVersion, 'digest'>): Record<string, unknown> {
+  return { workspaceId: draft.workspaceId, basePackRef: draft.basePackRef ?? null, documentSetRef: draft.documentSetRef,
+    candidateRefs: [...draft.candidateRefs].sort((left, right) => left.logicalId < right.logicalId ? -1 : left.logicalId > right.logicalId ? 1 : 0), syntheticExampleSetRef: draft.syntheticExampleSetRef ?? null }
+}
+
+export function assetDraftContent(draft: Omit<AssetDraftVersion, 'digest'>): Record<string, unknown> {
+  return { ...assetDraftSourceContent(draft), revision: draft.revision, validationRef: draft.validationRef ?? null,
+    ...(draft.publicationCheckpoint === undefined ? {} : { publicationCheckpoint: draft.publicationCheckpoint }) }
 }
 
 function invalidWorkspace(message: string): IndustryWorkspaceStoreError {

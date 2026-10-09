@@ -43,6 +43,8 @@ export interface PublicationFaultInjection {
 
 export interface PostgresSemanticPublicationStoreOptions {
   readonly faultInjection?: PublicationFaultInjection
+  /** Host-only business read view; exclusion runs before keyset paging and finite source limits. */
+  readonly excludeSyntheticValidationProjects?: boolean
 }
 
 interface ReviewRow extends QueryResultRow {
@@ -222,10 +224,12 @@ function toRevision(row: RevisionRow): StatementRevisionRecord {
 export class PostgresSemanticPublicationStore implements SemanticPublicationStore {
   readonly #database: ControlPostgresDatabase
   readonly #faultInjection: PublicationFaultInjection | undefined
+  readonly #excludeSyntheticValidationProjects: boolean
 
   constructor(database: ControlPostgresDatabase, options?: PostgresSemanticPublicationStoreOptions) {
     this.#database = database
     this.#faultInjection = options?.faultInjection
+    this.#excludeSyntheticValidationProjects = options?.excludeSyntheticValidationProjects === true
   }
 
   async latestReviewRevision(
@@ -687,6 +691,12 @@ export class PostgresSemanticPublicationStore implements SemanticPublicationStor
         `space_id = current_setting('app.space_id')::uuid`,
       ]
       const values: unknown[] = []
+      if (this.#excludeSyntheticValidationProjects) clauses.push(`NOT EXISTS (
+        SELECT 1 FROM jsonb_array_elements(CASE WHEN jsonb_typeof(published_statements.value#>'{provenance,sources}')='array'
+          THEN published_statements.value#>'{provenance,sources}' ELSE '[]'::jsonb END) source
+        JOIN agent_platform.project_revisions pr ON pr.tenant_id=published_statements.tenant_id AND pr.space_id=published_statements.space_id
+          AND pr.project_id::text=source#>>'{projectRevisionRef,projectId}' AND pr.revision::text=source#>>'{projectRevisionRef,revision}'
+        WHERE pr.body->>'executionPurpose'='synthetic_validation')`)
       if (filter.propositionKey !== undefined) {
         values.push(filter.propositionKey)
         clauses.push(`proposition_key = $${String(values.length)}`)
@@ -734,6 +744,9 @@ export class PostgresSemanticPublicationStore implements SemanticPublicationStor
         `space_id = current_setting('app.space_id')::uuid`,
       ]
       const values: unknown[] = []
+      if (this.#excludeSyntheticValidationProjects) clauses.push(`NOT EXISTS (
+        SELECT 1 FROM agent_platform.project_revisions pr WHERE pr.tenant_id=published_rule_versions.tenant_id AND pr.space_id=published_rule_versions.space_id
+          AND pr.project_id=published_rule_versions.project_id AND pr.body->>'executionPurpose'='synthetic_validation')`)
       if (filter.objectId !== undefined) {
         values.push(filter.objectId)
         clauses.push(`object_id = $${String(values.length)}`)

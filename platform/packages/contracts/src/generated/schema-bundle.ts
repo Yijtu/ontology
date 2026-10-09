@@ -173,6 +173,52 @@ export const SCHEMA_DOCUMENTS: readonly JsonSchemaObject[] = [
           },
           "validationRef": {
             "$ref": "./common.schema.json#/$defs/ResourceRef"
+          },
+          "publicationCheckpoint": {
+            "$ref": "#/$defs/AssetDraftPublicationCheckpoint"
+          }
+        }
+      },
+      "AssetDraftReference": {
+        "title": "AssetDraftReference",
+        "type": "object",
+        "additionalProperties": false,
+        "required": [
+          "workspaceId",
+          "revision",
+          "digest"
+        ],
+        "properties": {
+          "workspaceId": {
+            "$ref": "./common.schema.json#/$defs/Uuid"
+          },
+          "revision": {
+            "$ref": "./common.schema.json#/$defs/RevisionString"
+          },
+          "digest": {
+            "$ref": "./common.schema.json#/$defs/Sha256Digest"
+          }
+        }
+      },
+      "AssetDraftPublicationCheckpoint": {
+        "title": "AssetDraftPublicationCheckpoint",
+        "description": "Trusted receipt written atomically with the actual pack publication; it never changes the original producer draft or human approval.",
+        "type": "object",
+        "additionalProperties": false,
+        "required": [
+          "sourceDraftRef",
+          "packRef",
+          "validationRef"
+        ],
+        "properties": {
+          "sourceDraftRef": {
+            "$ref": "#/$defs/AssetDraftReference"
+          },
+          "packRef": {
+            "$ref": "./common.schema.json#/$defs/VersionRef"
+          },
+          "validationRef": {
+            "$ref": "./common.schema.json#/$defs/ResourceRef"
           }
         }
       }
@@ -6018,6 +6064,10 @@ export const SCHEMA_DOCUMENTS: readonly JsonSchemaObject[] = [
           },
           "changeReason": {
             "$ref": "./common.schema.json#/$defs/NonEmptyString"
+          },
+          "executionPurpose": {
+            "const": "synthetic_validation",
+            "description": "Host-owned internal validation purpose. Absence retains ordinary business semantics; later revisions cannot clear or change this trusted classification."
           }
         }
       },
@@ -6080,6 +6130,10 @@ export const SCHEMA_DOCUMENTS: readonly JsonSchemaObject[] = [
           },
           "changeReason": {
             "$ref": "./common.schema.json#/$defs/NonEmptyString"
+          },
+          "executionPurpose": {
+            "const": "synthetic_validation",
+            "description": "Host-owned internal validation purpose. Absence retains ordinary business semantics; later revisions cannot clear or change this trusted classification."
           }
         }
       },

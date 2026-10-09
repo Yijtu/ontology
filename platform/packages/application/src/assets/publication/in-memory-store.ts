@@ -2,9 +2,11 @@ import {
   PublishedPackAssetStoreError,
   assertPublishedPackAssetShape,
   isToolContext,
+  assetDraftContent,
 } from '@ontology/contracts'
 import type {
   CommitApprovedPackInput,
+  AssetDraftVersion,
   CommitApprovedPackResult,
   PublishedPackAsset,
   PublishedPackAssetFilter,
@@ -14,6 +16,7 @@ import type {
   ToolContext,
   VersionRef,
 } from '@ontology/contracts'
+import { canonicalJson, sha256DigestOf } from '../../profiles/canonical'
 
 function scopeKey(scopeRef: ScopeRef): string {
   return `${scopeRef.tenantId}\u0000${scopeRef.spaceId}`
@@ -44,6 +47,7 @@ export interface InMemoryPublishedPackAssetStoreDependencies {
     workspaceId: string,
     revision: string,
     packRef: VersionRef,
+    checkpoint?: AssetDraftVersion,
   ) => void | Promise<void>
   /**
    * The definition store the immutable definition version is written to, mirroring the single
@@ -145,7 +149,11 @@ export class InMemoryPublishedPackAssetStore implements PublishedPackAssetStore 
       version,
       requestDigest: input.requestDigest,
     })
-    await this.#dependencies.onPublished?.(scopeRef, asset.workspaceId, revision, asset.packRef)
+    const source = input.sourceDraft
+    const body = source === undefined || asset.sourceDraftRef === undefined ? undefined : { ...source, revision,
+      validationRef: asset.validationRef, publicationCheckpoint: { sourceDraftRef: asset.sourceDraftRef, packRef: asset.packRef, validationRef: asset.validationRef } }
+    const checkpoint = body === undefined ? undefined : { ...body, digest: sha256DigestOf(canonicalJson(assetDraftContent(body))) }
+    await this.#dependencies.onPublished?.(scopeRef, asset.workspaceId, revision, asset.packRef, checkpoint)
     return { asset, created: true }
   }
 

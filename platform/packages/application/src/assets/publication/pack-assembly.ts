@@ -1,6 +1,7 @@
 import {
   isActionCandidateVersion,
   packMaturityLabelOf,
+  publishedPackContent,
 } from '@ontology/contracts'
 import type {
   ActionCandidateVersion,
@@ -70,11 +71,7 @@ export function contentDigestOf(value: unknown): Sha256Digest {
 
 /** Recompute the immutable publication pin using the same complete semantics as assembly. */
 export function publishedPackContentDigest(asset: PublishedPackAsset | PublishedPackAssetDraft): Sha256Digest {
-  const action = asset.packAsset.actionDeclarationsRef
-  return contentDigestOf({ namespace: asset.namespace, maturity: asset.maturity, manifest: asset.manifest, definitionRef: asset.definitionRef,
-    sourceIndexDigest: asset.sourceIndex.digest, capabilities: asset.capabilities, validationId: asset.validationRef.id, validationDigest: asset.validationRef.digest,
-    strategy: asset.strategy, approvalPins: asset.approvalPins, ruleActionPins: asset.ruleActionPins, ruleReviewPins: asset.ruleReviewPins ?? [],
-    actionDeclarationsRef: action === undefined ? undefined : { id: action.id, version: asset.packRef.version, digest: action.digest } })
+  return contentDigestOf(publishedPackContent(asset))
 }
 
 function artifactRef(id: string, version: Semver, digest: Sha256Digest): VersionRef {
@@ -470,6 +467,7 @@ export function buildVersionDiff(args: {
 /* ----------------------------------------------------------------------------------------- */
 
 export interface AssemblePackArgs {
+  readonly sourceDraftRef?: import('@ontology/contracts').AssetDraftReference
   readonly ruleReviewPins?: readonly DefinitionApprovalPin[]
   readonly workspace: IndustryWorkspace
   readonly scopeRef: ScopeRef
@@ -577,6 +575,7 @@ export function assemblePack(args: AssemblePackArgs): AssembledPack {
     approvalPins: args.report.definition?.approvalPins,
     ruleActionPins: args.report.ruleActionPins,
     ruleReviewPins: args.ruleReviewPins ?? [],
+    ...(args.sourceDraftRef === undefined ? {} : { sourceDraftRef: args.sourceDraftRef }),
     actionDeclarationsRef,
   })
   const packRef = artifactRef(`${namespace}.${args.packId}`, args.version, contentDigest)
@@ -614,6 +613,7 @@ export function assemblePack(args: AssemblePackArgs): AssembledPack {
   }
 
   const asset: PublishedPackAssetDraft = {
+    ...(args.sourceDraftRef === undefined ? {} : { sourceDraftRef: args.sourceDraftRef }),
     ...(args.report.strategy === undefined ? {} : { strategy: args.report.strategy }),
     ...(args.report.definition?.approvalPins === undefined ? {} : { approvalPins: args.report.definition.approvalPins }),
     ...(args.report.ruleActionPins === undefined ? {} : { ruleActionPins: args.report.ruleActionPins }),
