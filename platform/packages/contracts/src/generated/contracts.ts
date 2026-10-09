@@ -3259,6 +3259,7 @@ export interface RunExecutionBinding {
   effectiveLimitsRef: VersionRef
   effectiveTime: EffectiveTime
   projectDatasetSnapshotRef?: ResourceRef
+  projectDocumentIndexSnapshotRef?: ResourceRef
 }
 /**
  * One actionable reason a task is not available. `code` is the machine contract (registered error catalogue); `message` is user-facing copy. No secrets or another project's data appear here.

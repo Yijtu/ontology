@@ -4,6 +4,7 @@ import {
   assertProjectDocumentMembershipShape,
   isToolContext,
   isUuid,
+  sha256OfCanonical,
 } from '@ontology/contracts'
 import type {
   CompletenessStatus,
@@ -191,6 +192,16 @@ export class PostgresProjectDocumentStore implements ProjectDocumentStore {
       throw invalid('projectId and documentId must be uuids')
     }
     return this.#withScope(scopeRef, ctx, async (query) => {
+      await this.#lockProject(query, projectId)
+      const current = await this.#currentMembershipRow(query, projectId, input.documentId, true)
+      if (current !== undefined) {
+        const membership = toMembership(current, projectId)
+        const pins = (value: RegisterProjectDocumentInput | ProjectDocumentMembership) => ({ documentRef: value.documentRef, documentDigest: value.documentDigest,
+          parseId: value.parseId, parseRef: value.parseRef, textDigest: value.textDigest, precision: value.precision, sourceRef: value.sourceRef ?? null })
+        if (membership.state !== 'active' || sha256OfCanonical(pins(membership)) !== sha256OfCanonical(pins(input))) throw invalid('an existing or withdrawn document requires an explicit revision; import cannot revive or mutate it')
+        const visibility = await this.#visibilityRow(query, projectId)
+        return { membership, visibility: { projectId, epoch: toRevision(visibility?.visibility_epoch ?? '0'), membershipRevision: toRevision(visibility?.membership_revision ?? '0') }, created: false }
+      }
       const visibility = await this.#bumpEpoch(query, projectId)
       const membership: ProjectDocumentMembership = {
         projectId,
@@ -230,6 +241,7 @@ export class PostgresProjectDocumentStore implements ProjectDocumentStore {
       throw invalid('a replace revision requires a replacement document')
     }
     return this.#withScope(scopeRef, ctx, async (query) => {
+      await this.#lockProject(query, projectId)
       const current = await this.#currentMembershipRow(query, projectId, input.documentId, true)
       if (current === undefined) {
         throw new ProjectDocumentStoreError(
@@ -456,6 +468,12 @@ export class PostgresProjectDocumentStore implements ProjectDocumentStore {
     return result.rows[0]
   }
 
+  async #lockProject(query: ScopedQuery, projectId: Uuid): Promise<void> {
+    const owner = await query.query<{ project_id: string }>(`SELECT project_id FROM agent_platform.projects
+      WHERE tenant_id = current_setting('app.tenant_id')::uuid AND space_id = current_setting('app.space_id')::uuid AND project_id = $1::uuid FOR UPDATE`, [projectId])
+    if (owner.rows[0] === undefined) throw new ProjectDocumentStoreError('PROJECT_NOT_FOUND', 'the project is not visible in this scope')
+  }
+
   async #bumpEpoch(query: ScopedQuery, projectId: Uuid): Promise<ProjectVisibility> {
     try {
       await query.query(
@@ -491,6 +509,10 @@ export class PostgresProjectDocumentStore implements ProjectDocumentStore {
     if (row === undefined) {
       throw invalid('the project visibility epoch could not be advanced')
     }
+    // Visibility moves first, in this transaction. Facts have their own readiness owner.
+    await query.query(`UPDATE agent_platform.project_readiness SET state = 'revoked', completeness = 'partial'
+      WHERE tenant_id = current_setting('app.tenant_id')::uuid AND space_id = current_setting('app.space_id')::uuid
+        AND project_id = $1::uuid AND kind = 'document_index'`, [projectId])
     return {
       projectId,
       epoch: toRevision(row.visibility_epoch),

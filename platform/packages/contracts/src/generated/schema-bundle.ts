@@ -7526,6 +7526,9 @@ export const SCHEMA_DOCUMENTS: readonly JsonSchemaObject[] = [
           },
           "projectDatasetSnapshotRef": {
             "$ref": "./common.schema.json#/$defs/ResourceRef"
+          },
+          "projectDocumentIndexSnapshotRef": {
+            "$ref": "./common.schema.json#/$defs/ResourceRef"
           }
         }
       },

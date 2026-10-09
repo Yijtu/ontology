@@ -415,6 +415,8 @@ export function verifyDocumentCitation(
 
   if (
     assertion.precision !== 'exact' ||
+    assertion.locator.kind === 'approximate_locator' ||
+    (isRecord(locator) && locator['kind'] === 'approximate_locator') ||
     archivedQuote !== assertion.quote ||
     quoteDigest !== assertion.quoteDigest ||
     textDigest !== assertion.textDigest ||

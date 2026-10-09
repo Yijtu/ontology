@@ -312,6 +312,12 @@ ImportMappingVersion 保存文件选择、header digest、fieldRef→column inde
 
 ## 7. BM25 文档索引修订、撤回与就绪
 
+结构化导入叶服务使用真实不可变原文及现有 structured parse。CSV/XLSX 的表头与行、JSON 的记录生成有界文本投影：最多 1000 行、每行 8 KiB、文本 1 MiB、来源映射 4 MiB，超限显式记录 skipped/truncated，不改变解析器或业务查询的默认上限。文本导入沿用原始 byte-offset 的精确引用。表格/JSON 投影偏移只定位派生文本，来源映射另存实际 parseId、recordId、rowDigest、每个原始 cell/JSON locator 和 rawDigest；不能把该偏移称为原文件内的精确文本位置。
+
+`POST /projects/:id/structured-imports` 除既有 parse 信息外返回 host 生成的 documentId、documentSetRef 与 documentIndexState。成员只引用授权原文及投影 artifacts；同一原文的并发重试收敛到现有 parse/member，撤回后导入不能重新激活同一成员。调用方通过既有项目修订流程固定返回的真实 documentSetRef，索引 ready 不表示字段、身份、事实或 dataset 已批准。普通 document_qa 的 admission 在既有 RunExecutionBinding 中保存 host 生成的 projectDocumentIndexSnapshotRef，固定项目修订、documentSet、generation 和 visibility epoch，检索与最终发布均重新检查；请求不能携带历史开关或自行声明该证明。
+
+近似投影问答使用既有 artifact_summary，绑定实际派生 artifact 及原始 cell 来源，保留 approximate_document_source/limited_factual_result；不冒充精确逐字引用。原文/来源位置/固定索引失效或撤回阻止新的发布，已核验历史答案和其归档证据仍按原有授权读取。相同文件的不同定位行保留为不同检索片段，重复文件中的同定位 quote 按 lineage 折叠。
+
 collectionRef 由 host 生成 project:<projectId>，客户端／模型只能通过项目任务请求其可用文档能力。corpus 是固定 DocumentSet 中授权 active memberships及完整 parse refs，不是全空间 listParses；索引 digests包括 tokenizer/parser版本、成员documentRef/parseRef/textDigest与visibility epoch。
 
 现 builder 存在读取全部 generations再 Number(max)+1 的竞争和精度风险；改为 scope＋collection 的 bigint counter锁和唯一digest复用。每个 build job固定 request corpus ref，parses由 coordinator在领取时按该manifest分页读取，不在composition写死。

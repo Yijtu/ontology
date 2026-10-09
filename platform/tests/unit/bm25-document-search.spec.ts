@@ -374,6 +374,17 @@ describe('coverage semantics', () => {
 })
 
 describe('duplicate sources', () => {
+  it('retains two differently located source rows from the same original', async () => {
+    const store = new InMemoryKeywordIndexStore()
+    const contentDigest = `sha256:${'e'.repeat(64)}`
+    await seedGeneration(store, COLLECTION, '1', [
+      { ...doc({ chunkId: '00000000-0000-4000-8000-000000000011', text: 'target first row', documentDigest: contentDigest }), locator: { kind: 'approximate_locator', startOffset: 0, endOffset: 16 } },
+      { ...doc({ chunkId: '00000000-0000-4000-8000-000000000012', text: 'target second row', documentDigest: contentDigest }), locator: { kind: 'approximate_locator', startOffset: 17, endOffset: 34 } },
+    ])
+    const detail = await serviceWith(store).searchDetailed(keywordRequest(), CTX_A)
+    expect(detail.response.spans).toHaveLength(2)
+    expect(detail.duplicatesCollapsed).toBe(0)
+  })
   it('collapses copies of the same content into one independent evidence span', async () => {
     const store = new InMemoryKeywordIndexStore()
     const contentDigest = `sha256:${'e'.repeat(64)}`

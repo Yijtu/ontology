@@ -276,6 +276,30 @@ describe('typed draft writer renders every result family into verifiable typed s
     expect(verification.verdict).toBe('pass')
   })
 
+  it('keeps a structured projection limited and refuses a forged exact citation at an approximate locator', async () => {
+    const h = harness()
+    const projectionRef: ResourceRef = { id: 'd3333333-3333-4333-8333-333333333333', version: '1.0.0', digest: DIGEST, kind: 'artifact' }
+    await h.put('document_span', { ...CITATION_PAYLOAD, locator: { kind: 'approximate_locator', startOffset: 0, endOffset: 42 }, spanKind: 'approximate', sourceOrigin: { precision: 'approximate', projectionRef } })
+    const manifest = h.manifest()
+    const result = await h.writer().writeDraft(request(manifest), ownerContext())
+    expect(result.draft.assertions?.[0]).toMatchObject({ kind: 'artifact_summary', artifactRef: projectionRef })
+    expect(result.draft.limitations).toContain('limited_factual_result')
+    const limitedVerification = await h.verifier().verify({ runId: RUN_ID, draft: result.draft, inputManifest: manifest, trustedLimitations: result.limitations ?? [] }, ownerContext())
+    expect(limitedVerification, JSON.stringify(limitedVerification.findings)).toMatchObject({ verdict: 'pass' })
+
+    const precise = harness()
+    await precise.put('document_span', CITATION_PAYLOAD)
+    const exactManifest = precise.manifest()
+    const written = await precise.writer().writeDraft(request(exactManifest), ownerContext())
+    const assertion = written.draft.assertions?.[0]
+    if (assertion?.kind !== 'document_quote') throw new Error('the exact fixture did not render a citation')
+    const forged = { ...written.draft, assertions: [{ ...assertion, locator: { kind: 'approximate_locator' as const, page: 4 }, precision: 'exact' as const }] }
+    forged.contentHash = answerDraftContentHash(RUN_ID, forged.blocks, forged.evidenceManifestHash, forged.claims ?? [], forged.assertions, { schemaVersion: 'answer-draft@2', limitations: forged.limitations })
+    const verification = await precise.verifier().verify({ runId: RUN_ID, draft: forged, inputManifest: exactManifest }, ownerContext())
+    expect(verification.verdict).toBe('fail')
+    expect(verification.findings?.some((finding) => finding.code === 'document_quote_mismatch')).toBe(true)
+  })
+
   it('renders structured-query cells as row-bound typed assertions', async () => {
     const h = harness()
     await h.put('observation', TABLE_PAYLOAD)
