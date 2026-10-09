@@ -1,7 +1,7 @@
 /**
  * The client-side identity seam for the workspace home (AGENTS: ids/randomness are injected, not
- * read from ambient global state). The default uses the browser's Web Crypto so a source-set
- * reference carries a real SHA-256 digest rather than a placeholder; a test injects a
+ * read from ambient global state). The default uses the browser's Web Crypto for explicit proposal identifiers
+ * and canonical human-authored content checksums; stored corpus and target pins come from the host; a test injects a
  * deterministic implementation so a jsdom run does not depend on `crypto.subtle`.
  */
 export interface WorkspaceIdentity {
@@ -26,7 +26,7 @@ export const webWorkspaceIdentity: WorkspaceIdentity = {
   async sha256(text: string): Promise<string> {
     const subtle = globalThis.crypto?.subtle
     if (subtle === undefined) {
-      throw new Error('the browser SubtleCrypto API is required to digest a source set')
+      throw new Error('the browser SubtleCrypto API is required to digest human-authored content')
     }
     const encoded = new TextEncoder().encode(text)
     const digest = await subtle.digest('SHA-256', encoded)

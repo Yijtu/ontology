@@ -305,6 +305,7 @@ function createFetchImpl(state: MockState): typeof fetch {
         }),
       )
     }
+    if (url.endsWith('/reviews') && method === 'GET') return Promise.resolve(jsonResponse({ data: { reviews: [] } }))
     if (url.includes('/candidates') && method === 'GET') {
       return Promise.resolve(jsonResponse({ data: { candidates: state.candidates } }))
     }
@@ -373,101 +374,66 @@ describe('definition workbench edit helpers', () => {
 })
 
 describe('definition workbench panel', () => {
-  it('shows source, conflicts, pending confirmation and the generation-vs-draft drift', async () => {
-    const state: MockState = {
-      candidates: [
-        definitionCandidate({ candidateId: OBJECT_ID, logicalId: 'device', kind: 'object', payload: OBJECT_PAYLOAD }),
-        definitionCandidate({ candidateId: ATTRIBUTE_ID, logicalId: 'capacity', kind: 'attribute', payload: ATTRIBUTE_PAYLOAD }),
-        definitionCandidate({ candidateId: RELATION_ID, logicalId: 'part_of', kind: 'relation', payload: RELATION_PAYLOAD, sourceCount: 0 }),
-        definitionCandidate({ candidateId: PENDING_ID, logicalId: 'ghost_term', kind: 'object', payload: { ...OBJECT_PAYLOAD, logicalId: 'ghost_term', displayName: '未定位术语', conflicts: [] }, state: 'pending_confirmation', sourceCount: 0, pending: true }),
-      ],
-    }
-    const client = new WorkbenchClient({ baseUrl: 'http://api.test', fetchImpl: createFetchImpl(state) })
-    const { container, root } = await mount(client)
+  it('shows a selectable queue, current source state, conflicts, drift and actual batch counts', async () => {
+    const state: MockState = { candidates: [
+      definitionCandidate({ candidateId: OBJECT_ID, logicalId: 'device', kind: 'object', payload: OBJECT_PAYLOAD }),
+      definitionCandidate({ candidateId: ATTRIBUTE_ID, logicalId: 'capacity', kind: 'attribute', payload: ATTRIBUTE_PAYLOAD }),
+      definitionCandidate({ candidateId: RELATION_ID, logicalId: 'part_of', kind: 'relation', payload: RELATION_PAYLOAD, sourceCount: 0 }),
+      definitionCandidate({ candidateId: PENDING_ID, logicalId: 'ghost_term', kind: 'object', payload: { ...OBJECT_PAYLOAD, logicalId: 'ghost_term', displayName: '未定位术语', conflicts: [] }, state: 'pending_confirmation', sourceCount: 0, pending: true }),
+    ] }
+    const { container, root } = await mount(new WorkbenchClient({ baseUrl: 'http://api.test', fetchImpl: createFetchImpl(state) }))
     try {
       expect(container.querySelectorAll('[data-testid="definition-candidate"]')).toHaveLength(4)
-      const attribute = container.querySelector(`[data-testid="definition-candidate"][data-candidate-id="${ATTRIBUTE_ID}"]`)
-      expect(attribute?.getAttribute('data-kind')).toBe('attribute')
-      expect(attribute?.querySelector('[data-testid="definition-candidate-conflict"]')?.textContent).toContain('unit_conflict')
-      const pending = container.querySelector(`[data-testid="definition-candidate"][data-candidate-id="${PENDING_ID}"]`)
-      expect(pending?.querySelector('[data-testid="definition-candidate-pending"]')).not.toBeNull()
-      const object = container.querySelector(`[data-testid="definition-candidate"][data-candidate-id="${OBJECT_ID}"]`)
-      expect(object?.getAttribute('data-stale')).toBe('true')
-      expect(container.querySelector('[data-testid="definition-candidate"][data-candidate-id="' + OBJECT_ID + '"] [data-testid="definition-candidate-draft"]')?.textContent).toContain('已过期')
-      expect(container.querySelector('[data-testid="draft-diff-generated"]')?.textContent).toContain('capacity')
-      expect(container.querySelector('[data-testid="draft-diff-only"]')?.textContent).toContain('无')
-      expect(container.querySelector('[data-testid="generation-batch"]')?.getAttribute('data-stale')).toBe('true')
-    } finally {
-      await unmount(container, root)
-    }
+      expect(container.textContent).toContain('此候选产生于较早的工作区版本')
+      expect(container.textContent).toContain('实际产生 4 个候选')
+      await act(async () => container.querySelector<HTMLButtonElement>(`[data-candidate-id="${ATTRIBUTE_ID}"] button`)?.click())
+      expect(container.querySelector('.ontology-detail')?.textContent).toContain('与已发布单位 kg 不一致')
+      await act(async () => container.querySelector<HTMLButtonElement>(`[data-candidate-id="${PENDING_ID}"] button`)?.click())
+      expect(container.querySelector('.ontology-detail')?.textContent).toContain('待确认来源')
+      const approval = [...container.querySelectorAll<HTMLButtonElement>('button')].find((button) => button.textContent === '批准当前内容')
+      expect(approval?.disabled).toBe(true)
+      expect(container.querySelector('.ontology-advanced')?.hasAttribute('open')).toBe(false)
+    } finally { await unmount(container, root) }
   })
 
-  it('shows the rule support state, the action binding reason and the unsupported rule as non-executable', async () => {
-    const state: MockState = { candidates: [] }
-    const client = new WorkbenchClient({ baseUrl: 'http://api.test', fetchImpl: createFetchImpl(state) })
-    const { container, root } = await mount(client)
+  it('preserves unsupported conditions, action binding reasons and complete before/after diffs', async () => {
+    const { container, root } = await mount(new WorkbenchClient({ baseUrl: 'http://api.test', fetchImpl: createFetchImpl({ candidates: [] }) }))
     try {
-      const rule = container.querySelector(`[data-testid="rule-action-candidate"][data-candidate-id="${RULE_UNSUPPORTED_ID}"]`)
-      expect(rule?.getAttribute('data-support')).toBe('not_yet_executable')
-      expect(rule?.querySelector('[data-testid="rule-support"]')?.textContent).toContain('暂不可执行')
-      expect(rule?.querySelector('[data-testid="rule-support-finding"]')?.textContent).toContain('RELATION_PREMISE_UNSUPPORTED')
-
-      const action = container.querySelector(`[data-testid="rule-action-candidate"][data-candidate-id="${ACTION_UNBOUND_ID}"]`)
-      expect(action?.getAttribute('data-binding')).toBe('not_executable')
-      expect(action?.querySelector('[data-testid="action-binding"]')?.getAttribute('data-binding-status')).toBe('not_executable')
-      expect(action?.querySelector('[data-testid="action-binding-finding"]')?.textContent).toContain('NO_REGISTERED_OPERATION')
-
-      expect(container.querySelector('[data-testid="unsupported-rule"]')?.getAttribute('data-executable')).toBe('false')
-      expect(container.querySelector('[data-testid="definition-version-diff"]')).not.toBeNull()
-      expect(container.querySelector('[data-testid="compat-change"]')?.getAttribute('data-breaking')).toBe('true')
-    } finally {
-      await unmount(container, root)
-    }
+      expect(container.querySelector('.ontology-detail')?.textContent).toContain('暂不可执行')
+      expect(container.querySelector('.ontology-detail')?.textContent).toContain('RELATION_PREMISE_UNSUPPORTED')
+      await act(async () => container.querySelector<HTMLButtonElement>(`[data-candidate-id="${ACTION_UNBOUND_ID}"] button`)?.click())
+      expect(container.querySelector('.ontology-detail')?.textContent).toContain('NO_REGISTERED_OPERATION')
+      expect(container.textContent).toContain('保留的不可执行规则')
+      expect(container.querySelector('.ontology-full-diff')?.textContent).toContain('变更前')
+      expect(container.querySelector('.ontology-full-diff')?.textContent).toContain('变更后')
+      expect(container.querySelector('.ontology-full-diff')?.textContent).toContain('破坏性变更')
+    } finally { await unmount(container, root) }
   })
 
-  it('blocks enabling a non-executable rule with the server reason', async () => {
-    const state: MockState = { candidates: [] }
-    const client = new WorkbenchClient({ baseUrl: 'http://api.test', fetchImpl: createFetchImpl(state) })
+  it('prevents enabling a rule lacking support/current content approval without issuing a write', async () => {
+    let enableCalls = 0
+    const original = createFetchImpl({ candidates: [] })
+    const client = new WorkbenchClient({ baseUrl: 'http://api.test', fetchImpl: (input, init) => { if (String(input).endsWith('/enable')) enableCalls++; return original(input, init) } })
     const { container, root } = await mount(client)
     try {
-      const rule = container.querySelector(`[data-testid="rule-action-candidate"][data-candidate-id="${RULE_UNSUPPORTED_ID}"]`)
-      await act(async () => {
-        rule?.querySelector<HTMLButtonElement>('[data-testid="rule-action-enable"]')?.click()
-      })
-      const failure = container.querySelector('[data-testid="definition-action-failure"]')
-      expect(failure?.getAttribute('data-code')).toBe('SUPPORT_VALIDATION_BLOCKED')
-      expect(failure?.textContent).toContain('SUPPORT_VALIDATION_BLOCKED')
-    } finally {
-      await unmount(container, root)
-    }
+      const enable = [...container.querySelectorAll<HTMLButtonElement>('button')].find((button) => button.textContent === '启用通过验核的声明')
+      expect(enable?.disabled).toBe(true)
+      await act(async () => enable?.click())
+      expect(enableCalls).toBe(0)
+    } finally { await unmount(container, root) }
   })
 
-  it('rejects a definition candidate through the real endpoint and reflects the new state', async () => {
-    const state: MockState = {
-      candidates: [definitionCandidate({ candidateId: OBJECT_ID, logicalId: 'device', kind: 'object', payload: OBJECT_PAYLOAD })],
-    }
-    const client = new WorkbenchClient({ baseUrl: 'http://api.test', fetchImpl: createFetchImpl(state) })
-    const { container, root } = await mount(client)
+  it('withdraws a definition through its actual adjudication endpoint and keeps the returned state', async () => {
+    const state: MockState = { candidates: [definitionCandidate({ candidateId: OBJECT_ID, logicalId: 'device', kind: 'object', payload: OBJECT_PAYLOAD })] }
+    const { container, root } = await mount(new WorkbenchClient({ baseUrl: 'http://api.test', fetchImpl: createFetchImpl(state) }))
     try {
-      await act(async () => {
-        container.querySelector<HTMLButtonElement>('[data-testid="definition-candidate-reject-start"]')?.click()
-      })
-      const reason = container.querySelector<HTMLInputElement>('[data-testid="definition-reject-reason"]')
-      if (reason === null) throw new Error('the reject form is missing')
-      await act(async () => {
-        setInputValue(reason, '重复术语')
-      })
-      await act(async () => {
-        container.querySelector<HTMLFormElement>('[data-testid="definition-reject-form"]')?.dispatchEvent(
-          new Event('submit', { bubbles: true, cancelable: true }),
-        )
-      })
-      expect(
-        container.querySelector(`[data-testid="definition-candidate"][data-candidate-id="${OBJECT_ID}"]`)?.getAttribute('data-state'),
-      ).toBe('rejected')
-    } finally {
-      await unmount(container, root)
-    }
+      const reason = [...container.querySelectorAll<HTMLTextAreaElement>('textarea')].find((input) => document.querySelector(`label[for="${input.id}"]`)?.textContent === '审核意见')
+      if (reason === undefined) throw new Error('the human reason field is missing')
+      await act(async () => setInputValue(reason, '重复术语'))
+      await act(async () => [...container.querySelectorAll<HTMLButtonElement>('button')].find((button) => button.textContent === '撤销此定义候选')?.click())
+      expect(container.querySelector(`[data-candidate-id="${OBJECT_ID}"]`)?.getAttribute('data-state')).toBe('rejected')
+      expect(container.querySelector('.ontology-detail')?.textContent).toContain('已拒绝')
+    } finally { await unmount(container, root) }
   })
 })
 

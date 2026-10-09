@@ -1,5 +1,6 @@
 import type {
   CapabilityRequirement,
+  DefinitionRevisionStrategy,
   ResourceRef,
   RevisionString,
   VersionRef,
@@ -120,7 +121,20 @@ export interface SyntheticCaseCoverageView {
 export type IndustryValidationGate = 'open' | 'blocked_semantic' | 'blocked_execution' | 'blocked_both'
 
 /** The industry validation report the workbench reads to gate publication (V03-014). */
+export interface CompetencyResultView {
+  readonly questionId: string
+  readonly question: string
+  readonly status: 'passed' | 'failed' | 'not_yet_executable'
+  readonly expected: unknown
+  readonly actual?: unknown
+  readonly reason?: string
+  readonly sourceCoverage: { readonly required: number; readonly verified: number; readonly complete: boolean }
+}
 export interface IndustryValidationReportView {
+  readonly competencyQuestionRef?: VersionRef
+  readonly competencyRequired?: true
+  readonly competency?: { readonly passed: boolean; readonly results: readonly CompetencyResultView[] }
+  readonly strategy?: DefinitionRevisionStrategy
   readonly validationId: string
   readonly workspaceId: string
   readonly revision: RevisionString
@@ -202,6 +216,8 @@ export interface RunValidationRequest {
   readonly exampleSetId: string
   /** The head revision the caller read; omitted means no `If-Match` was sent. */
   readonly expectedRevision?: RevisionString
+  readonly competencyQuestionRef?: VersionRef
+  readonly strategy?: DefinitionRevisionStrategy
 }
 
 export interface PublishPackRequest {
@@ -211,6 +227,7 @@ export interface PublishPackRequest {
   /** Refuse a pack whose deployment surface is not fully executable instead of publishing it. */
   readonly requireDeploymentExecutable: boolean
   readonly expectedRevision: RevisionString
+  readonly strategy?: DefinitionRevisionStrategy
 }
 
 function isRecord(value: unknown): value is Record<string, unknown> {
@@ -291,6 +308,18 @@ function isCoverage(value: unknown): value is SyntheticCaseCoverageView {
     isStringArray(value['ruleIds']) && isStringArray(value['actionIds'])
 }
 
+function isCompetencyResult(value: unknown): value is CompetencyResultView {
+  if (!isRecord(value) || !isNonEmptyString(value['questionId']) || !isNonEmptyString(value['question']) ||
+    typeof value['status'] !== 'string' || !['passed', 'failed', 'not_yet_executable'].includes(value['status']) || value['expected'] === undefined ||
+    (value['reason'] !== undefined && typeof value['reason'] !== 'string') || !isRecord(value['sourceCoverage'])) return false
+  const { required, verified, complete } = value['sourceCoverage']
+  return typeof required === 'number' && Number.isSafeInteger(required) && required >= 0 &&
+    typeof verified === 'number' && Number.isSafeInteger(verified) && verified >= 0 && verified <= required &&
+    typeof complete === 'boolean' && (!complete || verified === required)
+}
+function isCompetency(value: unknown): boolean {
+  return isRecord(value) && typeof value['passed'] === 'boolean' && Array.isArray(value['results']) && value['results'].every(isCompetencyResult)
+}
 export function isIndustryValidationReportView(value: unknown): value is IndustryValidationReportView {
   return isRecord(value) && isNonEmptyString(value['validationId']) && isNonEmptyString(value['workspaceId']) &&
     typeof value['revision'] === 'string' && isNonEmptyString(value['exampleSetId']) &&
@@ -303,7 +332,10 @@ export function isIndustryValidationReportView(value: unknown): value is Industr
     Array.isArray(value['issues']) && value['issues'].every(isIssue) &&
     Array.isArray(value['expectationResults']) && value['expectationResults'].every(isExpectationResult) &&
     Array.isArray(value['coverage']) && value['coverage'].every(isCoverage) &&
-    isSha256(value['contentDigest']) && typeof value['recordedAt'] === 'string'
+    isSha256(value['contentDigest']) && typeof value['recordedAt'] === 'string' &&
+    (value['competencyQuestionRef'] === undefined || isVersionRef(value['competencyQuestionRef'])) &&
+    (value['competencyRequired'] === undefined || value['competencyRequired'] === true) &&
+    (value['competency'] === undefined || isCompetency(value['competency']))
 }
 
 function isActionPin(value: unknown): value is PackActionDeclarationPinView {
