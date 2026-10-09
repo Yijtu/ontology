@@ -71,12 +71,12 @@ export async function readGrounding(client: WorkbenchClient, workspaceId: string
   const value = await client.requestJson('POST', `/api/v1/industry-workspaces/${encodeURIComponent(workspaceId)}/source-grounding`, { ...options, body: { sourceRefs } })
   return parseGrounding(value)
 }
-export interface HumanReviewView { readonly revision: string; readonly contentDigest?: string; readonly decision: string; readonly reason: string }
+export interface HumanReviewView { readonly candidateId: string; readonly revision: string; readonly contentDigest?: string; readonly decision: string; readonly reason: string }
 export async function readHumanReviews(client: WorkbenchClient, candidateId: string, signal?: AbortSignal): Promise<readonly HumanReviewView[]> {
   const value = await client.requestJson('GET', `/api/v1/candidates/${encodeURIComponent(candidateId)}/reviews`, { ...(signal === undefined ? {} : { signal }) })
   if (!isRecord(value) || !Array.isArray(value['reviews'])) return invalidWire()
   return value['reviews'].map((review: unknown) => {
-    if (!isRecord(review) || !isRevisionString(review['revision']) || review['contentDigest'] !== undefined && !isSha256Digest(review['contentDigest']) || typeof review['decision'] !== 'string' || typeof review['reason'] !== 'string') return invalidWire()
-    return { revision: review['revision'], ...(isSha256Digest(review['contentDigest']) ? { contentDigest: review['contentDigest'] } : {}), decision: review['decision'], reason: review['reason'] }
+    if (!isRecord(review) || review['candidateId'] !== candidateId || !isUuid(review['candidateId']) || !isRevisionString(review['revision']) || review['contentDigest'] !== undefined && !isSha256Digest(review['contentDigest']) || typeof review['decision'] !== 'string' || typeof review['reason'] !== 'string') return invalidWire()
+    return { candidateId: review['candidateId'], revision: review['revision'], ...(isSha256Digest(review['contentDigest']) ? { contentDigest: review['contentDigest'] } : {}), decision: review['decision'], reason: review['reason'] }
   })
 }

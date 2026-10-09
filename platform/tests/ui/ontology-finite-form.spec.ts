@@ -46,7 +46,7 @@ describe('finite condition and scope-switch regressions', () => {
       expect([...container.querySelectorAll<HTMLButtonElement>('button')].find((b) => b.textContent === '读取原题集与当前审批')?.disabled).toBe(false)
       const declaration: unknown = JSON.parse(readFileSync(resolve('tests/fixtures/competency-questions/industrial.cq.json'), 'utf8'))
       await act(async () => completeOld?.(new Response(JSON.stringify({ data: { declaration, approved: true } }), { headers: { 'content-type': 'application/json' } })))
-      expect(approved).toBe(0); expect(container.textContent).toContain('尚未读取题集'); expect(labelled(container, '题集版本引用').disabled).toBe(false)
+      expect(approved).toBe(0); expect(container.textContent).toContain('尚未编写当前题集'); expect(labelled(container, '题集版本引用').disabled).toBe(false)
     } finally { await act(async () => root.unmount()); container.remove() }
   })
 })

@@ -164,6 +164,7 @@ export function PackagePublicationPanel({
   const [strategy, setStrategy] = useState<DefinitionRevisionStrategy>()
   const [approvedCQRef, setApprovedCQRef] = useState<VersionRef>()
   const [executionPreview, setExecutionPreview] = useState<ExecutionPreviewView>()
+  const [previewReadNotice, setPreviewReadNotice] = useState('')
   const [currentHead, setCurrentHead] = useState<string>()
   const [validating, setValidating] = useState(false)
   const [validationNotice, setValidationNotice] = useState('')
@@ -222,6 +223,16 @@ export function PackagePublicationPanel({
     void load()
     return () => { epoch.current++; validationAbort.current?.abort() }
   }, [load])
+  useEffect(() => {
+    if (currentHead === undefined) return undefined
+    const abort = new AbortController(); setPreviewReadNotice('正在读取当前已保存的执行支持…')
+    void client.getExecutionPreview(workspaceId, abort.signal).then((preview) => {
+      if (abort.signal.aborted || workspaceRef.current !== workspaceId) return
+      if (preview.workspace.workspaceId !== workspaceId || preview.draft.revision !== currentHead) { setExecutionPreview(undefined); setPreviewReadNotice('工作区版本已变化，请刷新当前版本后重新读取执行支持。'); return }
+      setExecutionPreview(preview); setPreviewReadNotice('已读取当前真实保存的执行支持；仍需独立编写并批准新题集。')
+    }).catch((error: unknown) => { if (!abort.signal.aborted) { setExecutionPreview(undefined); setPreviewReadNotice(`当前执行支持尚不可用：${toError(error).message}`) } })
+    return () => abort.abort()
+  }, [client, workspaceId, currentHead])
 
   const run = useCallback(
     async (operation: (active: () => boolean) => Promise<void>): Promise<void> => {
@@ -257,7 +268,9 @@ export function PackagePublicationPanel({
       const key = writeKeys.current.get(identity) ?? client.newRequestKey(); writeKeys.current.set(identity, key)
       const preview = await client.prepareExecutionPreview(workspaceId, selectedExampleSetId, { ifMatch: head.headRevision, idempotencyKey: key })
       if (!active()) return
-      if (preview.workspace.workspaceId !== workspaceId || preview.draft.revision !== head.headRevision) throw new Error('执行支持返回了其他工作区或版本。')
+      const confirmed = await client.getIndustryWorkspace(workspaceId)
+      if (!active()) return
+      if (preview.workspace.workspaceId !== workspaceId || preview.draft.revision !== confirmed.headRevision) throw new Error('执行支持与当前真实工作区版本不一致，请刷新核对。')
       writeKeys.current.delete(identity); setExecutionPreview(preview); setCurrentHead(preview.draft.revision); setReport(undefined); setPublication(undefined)
     })
   }
@@ -429,7 +442,8 @@ export function PackagePublicationPanel({
         <>
           {validationNotice ? <p role="status" className="ontology-notice">{validationNotice}</p> : null}{validating ? <button type="button" onClick={() => validationAbort.current?.abort()}>停止等待验核并保留人工输入</button> : null}
           <section className="ontology-execution-support"><h3>准备真实执行支持</h3><p>对当前已审核声明保存真实的语义发布版本，供合成验核使用。此操作不批准题集、不授予业务审批，也不表示部署可执行；需要部署维护者权限。</p>{readOnly ? null : <button type="button" disabled={busy || selectedExampleSetId === undefined} onClick={prepareExecution}>准备执行验证</button>}{executionPreview === undefined ? <p>尚未准备当前版本的执行支持；接口未装配时会明确显示不可用。</p> : <div><p>✓ 当前执行支持已准备 · 业务审批：无 · 部署：仍未通过验核。</p><p>后续新题集必须使用这些实际版本和真实上传来源，独立填写期望并重新人工批准。不会自动把旧题集改成当前版本。</p><details><summary>实际执行版本、声明和来源绑定</summary><pre>{JSON.stringify(executionPreview, null, 2)}</pre></details></div>}</section>
-          <CompetencyQuestionWorkbench client={client} workspaceId={workspaceId} readOnly={readOnly} disabled={busy} onApprovedRef={handleApprovedCQRef} />
+          {previewReadNotice ? <p role="status" className="ontology-hint">{previewReadNotice}</p> : null}
+          <CompetencyQuestionWorkbench client={client} workspaceId={workspaceId} {...(executionPreview === undefined ? {} : { preview: executionPreview })} readOnly={readOnly} disabled={busy} onApprovedRef={handleApprovedCQRef} />
           <RevisionStrategyForm value={strategy} disabled={busy || readOnly} onChange={(next) => { setStrategy(next); setReport(undefined); setPublication(undefined) }} {...(exportBundle?.versionDiff?.fromPackRef === undefined ? {} : { previous: exportBundle.versionDiff.fromPackRef })} />
           <section className="package-publication__sandbox" data-testid="validation-sandbox">
             <h3>合成验证与反例</h3>

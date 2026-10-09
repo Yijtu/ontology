@@ -74,9 +74,9 @@ describe('ontology immutable authoring workflow', () => {
       }
       if (path.endsWith('/reviews')) {
         const id = path.split('/').at(-2)
-        if (method === 'GET') return json({ reviews: id === A ? [{ revision: '1', contentDigest: hash, decision: 'approve', reason: '旧内容审批' }] : [] })
+        if (method === 'GET') return json({ reviews: id === A ? [{ candidateId: A, revision: '1', contentDigest: hash, decision: 'approve', reason: '旧内容审批' }] : [] })
         expect(id).toBe(C); expect(new Headers(init?.headers).get('if-match')).toBe('0')
-        return json({ revision: '1', contentDigest: groundedHash, decision: 'approve', reason: '独立批准新内容' })
+        return json({ candidateId: C, revision: '1', contentDigest: groundedHash, decision: 'approve', reason: '独立批准新内容' })
       }
       if (path.endsWith('/source-grounding')) return json({ workspaceRevision: revision, inputDraftRef: { workspaceId: W, revision, digest: hash }, documentSetRef: draft().documentSetRef, coverage: 'complete', usage: { fragments: 1, bytes: 12, inputTokens: 12, pages: 1, readBytes: 12 }, sources: [{ sourceRef: original, trust: 'untrusted_source_data', status: 'complete', reasons: [], contents: [] }], fragments: [{ sourceIndex: 0, fragmentIndex: 0, sourceRef: original, sourceSpan: span, content: { kind: 'text', text: '这是独立原始规定' } }] })
       if (path.endsWith('/sources')) return json({ workspace: workspace(), draft: draft(), sources: [{ sourceRef: original, name: '原始规定', kind: 'document', parseId: B, parserVersion: '1.0.0', status: 'complete', previewCoverage: 'complete', coverage: { status: 'complete', completeness: 'complete', totalUnits: 1, parsedUnits: 1, skippedUnits: 0, skippedReasons: [], notes: [] } }] })

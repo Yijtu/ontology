@@ -1604,6 +1604,9 @@ export class WorkbenchClient {
   prepareExecutionPreview(workspaceId: string, exampleSetId: string, options: RequestOptions): Promise<ExecutionPreviewView> {
     return this.#request<unknown>('POST', `/api/v1/core/workspaces/${encodeURIComponent(workspaceId)}/execution-preview`, { ...options, body: { exampleSetId } }).then(parseExecutionPreview)
   }
+  getExecutionPreview(workspaceId: string, signal?: AbortSignal): Promise<ExecutionPreviewView> {
+    return this.#request<unknown>('GET', `/api/v1/core/workspaces/${encodeURIComponent(workspaceId)}/execution-preview`, { ...(signal === undefined ? {} : { signal }) }).then(parseExecutionPreview)
+  }
 
   /** `POST /industry-workspaces/:id/validations`: run the synthetic validation over a draft. */
   createSyntheticValidation(

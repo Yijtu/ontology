@@ -1,10 +1,12 @@
 import { isRecord } from '@ontology/contracts'
 import type { AssetCandidateVersion, RuleExpressionNode } from '@ontology/contracts'
+import { editorAttributeChoices, editorRelationChoices } from '../../api/semantic-authoring'
+import type { FormalDefinitionView, TermLabelsView } from '../../api/semantic-authoring'
 import { Button, Field } from '../ui'
 
 export function conditionSummary(value: unknown, labels: ReadonlyMap<string, string> = new Map()): string {
   if (!isRecord(value)) return '条件格式无法确认'
-  const label = (id: unknown) => typeof id === 'string' ? labels.get(id) ?? id : '未选择'
+  const label = (id: unknown) => typeof id === 'string' ? labels.get(id) ?? '未提供名称' : '未选择'
   if (value['op'] === 'compare') {
     const operators: Record<string, string> = { eq: '等于', ne: '不等于', gt: '大于', gte: '大于或等于', lt: '小于', lte: '小于或等于' }
     return `${label(value['attributeId'])} ${operators[String(value['operator'])] ?? '未知比较'} ${String(value['value'])}${typeof value['unitCode'] === 'string' ? ` ${value['unitCode']}` : ''}`
@@ -21,26 +23,28 @@ export function clausePaths(value: RuleExpressionNode, path = 'condition'): read
     : value.op === 'relation' && value.targetCondition !== undefined ? clausePaths(value.targetCondition, `${path}.targetCondition`) : []
   return [path, ...children]
 }
-export function ConditionEditor({ value, onChange, definitions, objectId, disabled = false, depth = 0, relationAllowed = true }: {
+export function ConditionEditor({ value, onChange, definitions, inheritedDefinition, termLabels, objectId, disabled = false, depth = 0, relationAllowed = true }: {
   readonly value: RuleExpressionNode; readonly onChange: (value: RuleExpressionNode) => void
   readonly definitions: readonly AssetCandidateVersion[]; readonly objectId: string; readonly disabled?: boolean; readonly depth?: number; readonly relationAllowed?: boolean
+  readonly inheritedDefinition?: FormalDefinitionView; readonly termLabels?: TermLabelsView
 }) {
-  const attrs = definitions.filter((candidate) => candidate.payload.kind === 'attribute' && candidate.payload.objectLogicalId === objectId)
-  const relations = definitions.filter((candidate) => candidate.payload.kind === 'relation' && candidate.payload.fromObjectLogicalId === objectId)
-  const base = (): RuleExpressionNode => ({ op: 'compare', attributeId: attrs[0]?.logicalId ?? '', operator: 'eq', value: '', spans: [] })
+  const attrs = editorAttributeChoices(definitions, inheritedDefinition, termLabels).filter((attribute) => attribute.objectId === objectId)
+  const relations = editorRelationChoices(definitions, inheritedDefinition, termLabels).filter((relation) => relation.fromObjectId === objectId)
+  const inheritedProps = { ...(inheritedDefinition === undefined ? {} : { inheritedDefinition }), ...(termLabels === undefined ? {} : { termLabels }) }
+  const base = (): RuleExpressionNode => ({ op: 'compare', attributeId: '', operator: 'eq', value: '', spans: [] })
   const changeKind = (kind: string) => {
     if (kind === 'compare') onChange(base())
     else if (kind === 'all' || kind === 'any') onChange({ op: kind, operands: [base(), base()], spans: [] })
     else if (kind === 'not') onChange({ op: 'not', operand: base(), spans: [] })
-    else if (kind === 'range') onChange({ op: 'range', attributeId: attrs[0]?.logicalId ?? '', spans: [] })
-    else if (kind === 'relation' && relationAllowed) onChange({ op: 'relation', relationId: relations[0]?.logicalId ?? '', spans: [] })
+    else if (kind === 'range') onChange({ op: 'range', attributeId: '', spans: [] })
+    else if (kind === 'relation' && relationAllowed) onChange({ op: 'relation', relationId: '', spans: [] })
   }
-  const currentAttribute = value.op === 'compare' || value.op === 'range' ? attrs.find((c) => c.logicalId === value.attributeId) : undefined
-  const boolean = currentAttribute?.payload.kind === 'attribute' && currentAttribute.payload.valueType === 'boolean'
-  const numeric = currentAttribute?.payload.kind === 'attribute' && ['number', 'quantity'].includes(currentAttribute.payload.valueType)
+  const currentAttribute = value.op === 'compare' || value.op === 'range' ? attrs.find((c) => c.attributeId === value.attributeId) : undefined
+  const boolean = currentAttribute?.valueType === 'boolean'
+  const numeric = currentAttribute !== undefined && ['number', 'quantity'].includes(currentAttribute.valueType)
   const decimalInvalid = value.op === 'compare' && numeric && (typeof value.value !== 'string' || !/^-?(?:0|[1-9]\d*)(?:\.\d+)?$/.test(value.value))
-  const selectedRelation = value.op === 'relation' ? relations.find((r) => r.logicalId === value.relationId) : undefined
-  const targetObjectId = selectedRelation?.payload.kind === 'relation' ? selectedRelation.payload.toObjectLogicalId : ''
+  const selectedRelation = value.op === 'relation' ? relations.find((r) => r.relationId === value.relationId) : undefined
+  const targetObjectId = selectedRelation?.toObjectId ?? ''
   return <fieldset className="ontology-condition" disabled={disabled}><legend>条件{depth > 0 ? ` · 第 ${depth + 1} 层` : ''}</legend>
     <Field label="条件组合">{(a) => <select {...a} value={value.op} onChange={(e) => changeKind(e.target.value)}>
       <option value="compare">属性比较</option><option value="range">范围</option>
@@ -48,12 +52,12 @@ export function ConditionEditor({ value, onChange, definitions, objectId, disabl
       <option value="not" disabled={depth >= 7}>否定已观测值</option><option value="relation" disabled={!relationAllowed || relations.length === 0}>一跳关系</option>
     </select>}</Field>
     {value.op === 'compare' || value.op === 'range' ? <Field label="属性">{(a) => <select {...a} value={value.attributeId} onChange={(e) => {
-      const attr = attrs.find((c) => c.logicalId === e.target.value)
+      const attr = attrs.find((c) => c.attributeId === e.target.value)
       const { unitCode, ...base } = value; void unitCode
-      const nextUnit = attr?.payload.kind === 'attribute' ? attr.payload.unitCode : undefined
-      const nextBoolean = attr?.payload.kind === 'attribute' && attr.payload.valueType === 'boolean'
+      const nextUnit = attr?.unitCode
+      const nextBoolean = attr?.valueType === 'boolean'
       onChange({ ...base, attributeId: e.target.value, ...(nextUnit === undefined ? {} : { unitCode: nextUnit }), ...(value.op === 'compare' ? { value: nextBoolean ? typeof value.value === 'boolean' ? value.value : '' : typeof value.value === 'boolean' ? '' : value.value } : {}) })
-    }}><option value="">选择当前对象的属性</option>{attrs.map((attr) => <option key={attr.candidateId} value={attr.logicalId}>{attr.payload.displayName}</option>)}</select>}</Field> : null}
+    }}><option value="">选择当前对象的属性</option>{attrs.map((attr) => <option key={attr.attributeId} value={attr.attributeId}>{attr.displayName}</option>)}</select>}</Field> : null}
     {value.op === 'compare' ? <div className="ontology-form-grid"><Field label="比较方式">{(a) => <select {...a} value={value.operator} onChange={(e) => {
       const op = e.target.value
       if (op === 'eq' || op === 'ne' || op === 'gt' || op === 'gte' || op === 'lt' || op === 'lte') onChange({ ...value, operator: op })
@@ -65,8 +69,8 @@ export function ConditionEditor({ value, onChange, definitions, objectId, disabl
       if (/^-?\d+$/.test(raw) && Number.isSafeInteger(Number(raw))) onChange({ ...value, [key]: Number(raw) })
       else if (raw === '') { const next = { ...value }; delete next[key]; onChange(next) }
     }} />}</Field>)}</div></div> : null}
-    {value.op === 'all' || value.op === 'any' ? <div>{value.operands.map((operand, i) => <div key={i}><ConditionEditor value={operand} onChange={(node) => onChange({ ...value, operands: value.operands.map((v, j) => j === i ? node : v) })} definitions={definitions} objectId={objectId} disabled={disabled} depth={depth + 1} relationAllowed={relationAllowed} /><Button disabled={value.operands.length <= 1} onClick={() => onChange({ ...value, operands: value.operands.filter((_v, j) => j !== i) })}>移除此条件</Button></div>)}<Button disabled={value.operands.length >= 16 || depth >= 7} onClick={() => onChange({ ...value, operands: [...value.operands, base()] })}>添加条件</Button></div> : null}
-    {value.op === 'not' ? <ConditionEditor value={value.operand} onChange={(operand) => onChange({ ...value, operand })} definitions={definitions} objectId={objectId} disabled={disabled} depth={depth + 1} relationAllowed={false} /> : null}
-    {value.op === 'relation' ? <div><Field label="关系">{(a) => <select {...a} value={value.relationId} onChange={(e) => onChange({ ...value, relationId: e.target.value })}><option value="">选择已声明关系</option>{relations.map((r) => <option key={r.candidateId} value={r.logicalId}>{r.payload.displayName}</option>)}</select>}</Field>{value.targetCondition === undefined ? <Button onClick={() => onChange({ ...value, targetCondition: { op: 'compare', attributeId: '', operator: 'eq', value: '', spans: [] } })}>添加目标对象条件</Button> : <ConditionEditor value={value.targetCondition} onChange={(targetCondition) => onChange({ ...value, targetCondition })} definitions={definitions} objectId={targetObjectId} disabled={disabled} depth={depth + 1} relationAllowed={false} />}</div> : null}
+    {value.op === 'all' || value.op === 'any' ? <div>{value.operands.map((operand, i) => <div key={i}><ConditionEditor value={operand} onChange={(node) => onChange({ ...value, operands: value.operands.map((v, j) => j === i ? node : v) })} definitions={definitions} {...inheritedProps} objectId={objectId} disabled={disabled} depth={depth + 1} relationAllowed={relationAllowed} /><Button disabled={value.operands.length <= 1} onClick={() => onChange({ ...value, operands: value.operands.filter((_v, j) => j !== i) })}>移除此条件</Button></div>)}<Button disabled={value.operands.length >= 16 || depth >= 7} onClick={() => onChange({ ...value, operands: [...value.operands, base()] })}>添加条件</Button></div> : null}
+    {value.op === 'not' ? <ConditionEditor value={value.operand} onChange={(operand) => onChange({ ...value, operand })} definitions={definitions} {...inheritedProps} objectId={objectId} disabled={disabled} depth={depth + 1} relationAllowed={false} /> : null}
+    {value.op === 'relation' ? <div><Field label="关系">{(a) => <select {...a} value={value.relationId} onChange={(e) => onChange({ ...value, relationId: e.target.value })}><option value="">选择已声明关系</option>{relations.map((r) => <option key={r.relationId} value={r.relationId}>{r.displayName}</option>)}</select>}</Field>{value.targetCondition === undefined ? <Button onClick={() => onChange({ ...value, targetCondition: { op: 'compare', attributeId: '', operator: 'eq', value: '', spans: [] } })}>添加目标对象条件</Button> : <ConditionEditor value={value.targetCondition} onChange={(targetCondition) => onChange({ ...value, targetCondition })} definitions={definitions} {...inheritedProps} objectId={targetObjectId} disabled={disabled} depth={depth + 1} relationAllowed={false} />}</div> : null}
   </fieldset>
 }
