@@ -85,7 +85,9 @@ export class InMemoryTableArtifactStore
   ): Promise<void> {
     assertTrustedScope(scopeRef, ctx)
     assertTableArtifactManifestShape(manifest)
-    const archived: ArchivedTableArtifactManifest = { ref: manifestRef, manifest, verificationReceiptRef }
+    const archived: ArchivedTableArtifactManifest = { answerId, ref: manifestRef, manifest, verificationReceiptRef }
+    const existing = this.#manifests.get(`${scopeKey(scopeRef)}|${refKey(manifestRef)}`)
+    if (existing !== undefined && JSON.stringify(existing) !== JSON.stringify(archived)) throw new Error('the immutable table registration already belongs to another answer, receipt or body')
     this.#manifests.set(`${scopeKey(scopeRef)}|${refKey(manifestRef)}`, archived)
     this.#byAnswerTable.set(`${scopeKey(scopeRef)}|${answerId}|${manifest.tableId}`, archived)
   }

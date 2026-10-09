@@ -207,6 +207,8 @@ export interface TableArtifactPage {
 
 /** One archived table manifest and the receipt that proves the full table was verified. */
 export interface ArchivedTableArtifactManifest {
+  /** Actual scoped storage association, independent from the immutable manifest body. */
+  readonly answerId?: Uuid
   readonly ref: ResourceRef
   readonly manifest: TableArtifactManifest
   /**
