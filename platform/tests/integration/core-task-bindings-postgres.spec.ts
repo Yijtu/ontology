@@ -234,6 +234,23 @@ async function waitForOutboxDispatch(outboxId: string): Promise<number> {
   throw new Error(`the actual publication outbox ${outboxId} did not dispatch within its fixed 15-second barrier`)
 }
 
+async function reviewAndPublishSources(sources: readonly Awaited<ReturnType<ReturnType<typeof projectQueryPublicationFixture>['importCsv']>>[]) {
+  const candidates = sources.flatMap((source) => source.entities)
+  const context = trustedContext(scopeRef)
+  for (const source of sources) {
+    for (const candidate of source.entities) {
+      const created = await publishedFixture.identity.createRecord(scopeRef, PROJECT_ID, { candidateId: candidate.candidateId, documentId: source.documentId, relations: [], idempotencyKey: `taskbind-record-${candidate.candidateId}` }, context)
+      const confirmed = await publishedFixture.instanceService.confirmFields(scopeRef, PROJECT_ID, candidate.candidateId, { expectedRevision: created.record.recordRevision,
+        decisions: created.record.fields.map((field) => ({ fieldId: field.fieldId, decision: 'confirm' })), idempotencyKey: `taskbind-fields-${candidate.candidateId}` }, context)
+      await publishedFixture.identity.adjudicateIdentity(scopeRef, PROJECT_ID, candidate.candidateId, { expectedRevision: confirmed.record.recordRevision, kind: 'create', reason: 'human verified exact fixture query identity', idempotencyKey: `taskbind-identity-${candidate.candidateId}` }, context)
+      await publishedFixture.workflow.publication.reviewCandidate({ candidateId: candidate.candidateId, expectedRevision: '0', decision: 'approve', reason: 'human reviewed exact mapped query cells' }, context)
+    }
+  }
+  if (candidates.length === 0) throw new Error('the actual query fixture has no reviewed source candidates')
+  return publishedFixture.workflow.publication.publish({ approvedCandidateRefs: candidates.map((candidate) => ({ candidateId: candidate.candidateId, kind: 'entity' as const })), schemaRef: publishedFixture.definition.ref,
+    expectedRevision: await publishedFixture.publications.latestPublicationRevision(scopeRef, context), idempotencyKey: `taskbind-fixture-publish-${PROJECT_ID}` }, context)
+}
+
 let structuredBinding: { taskBindingRef: { id: string; version: string; digest: string } }
 let projectRevisionRefValue: ProjectRevisionRef
 let publishedFixture: ReturnType<typeof projectQueryPublicationFixture>
@@ -297,18 +314,9 @@ beforeAll(async () => {
   const source = await publishedFixture.importCsv(OBJECT_ID, 'code,network,district,due\nP-101,private-network,north,true\nP-102,private-network,south,false\n', ['facility_id', 'network_code', 'facility_district_code', 'inspection_due'])
   const district = await publishedFixture.importCsv('transport_district', 'code,network,name\nnorth,private-network,North\n', ['district_code', 'district_network_code', 'district_name'])
   initialSource = await publishedFixture.restage(source)
-  const firstPublication = await publishedFixture.approveAndPublish(initialSource)
-  const firstOutboxId = firstPublication[0]?.outboxId
-  if (firstOutboxId === undefined) throw new Error('the actual first publication outbox is missing')
-  const firstWorkerErrors = workerErrors.length
-  expect(await waitForOutboxDispatch(firstOutboxId)).toBe(1)
-  expect(workerErrors.length).toBe(firstWorkerErrors)
-  const secondPublication = await publishedFixture.approveAndPublish(district)
-  const secondOutboxId = secondPublication[0]?.outboxId
-  if (secondOutboxId === undefined) throw new Error('the actual second publication outbox is missing')
-  const secondWorkerErrors = workerErrors.length
-  expect(await waitForOutboxDispatch(secondOutboxId)).toBe(1)
-  expect(workerErrors.length).toBe(secondWorkerErrors)
+  const publication = await reviewAndPublishSources([initialSource, district])
+  expect(await waitForOutboxDispatch(publication.outboxId)).toBe(1)
+  expect(workerErrors.map((error) => ({ name: error.name, message: error.message }))).toEqual([])
   const projected = await request(`/api/v1/projects/${PROJECT_ID}/dataset-snapshots`, { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ objectId: OBJECT_ID }) })
   if (projected.status !== 201) throw new Error(`official dataset creation failed: ${await projected.text()}`)
   projectRevisionRefValue = ((await jsonBody(projected)).data['status'] as { projectRevisionRef: ProjectRevisionRef }).projectRevisionRef
