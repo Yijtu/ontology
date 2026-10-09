@@ -149,7 +149,7 @@ export function createCoreAuthoring(options: CoreAuthoringOptions) {
         let source: GroundingSourceApproval
         if (['text/csv', 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet'].includes(body['mediaType'])) {
           const parsed = await new LocalStructuredIngestionService({ blobs: options.blobs, store: options.structured }).parse({ scopeRef: scope(trusted.ctx), originalRef: sourceRef, options: body['options'] ?? {} }, trusted.ctx)
-          if (canonicalJson(parsed.parse.parseOptions) !== canonicalJson(body['options'] ?? {})) throw new InvalidRequestFieldError('these original bytes already have another native selection; use the actual stored sheet/header selection shown in the source catalogue')
+          if (body['options'] !== undefined && canonicalJson(parsed.parse.parseOptions) !== canonicalJson(body['options'])) throw new InvalidRequestFieldError('these original bytes already have another native selection; use the actual stored sheet/header selection shown in the source catalogue')
           if (parsed.parse.status !== 'complete') throw new InvalidRequestFieldError('the source must parse completely before entering the approved corpus')
           source = { sourceRef: parsed.parse.originalRef, state: 'approved', kind: 'table', parserVersion: parsed.parse.parserVersion, parseId: parsed.parse.parseId, ...(parsed.parse.parseOptions === undefined ? {} : { tableOptions: parsed.parse.parseOptions }) }
         } else {
