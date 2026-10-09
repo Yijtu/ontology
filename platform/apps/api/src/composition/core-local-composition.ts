@@ -1570,7 +1570,7 @@ export async function createCoreLocalComposition(options: CoreLocalCompositionOp
       return blobStore.readAuthorized({ scopeRef: { tenantId: ctx.principal.tenantId, spaceId: ctx.allowedResources.spaceId }, blobRef: target }, ctx)
     } }
     const publishedPackStore = new PostgresPublishedPackAssetStore(database, { competencyBodies: scopedOriginals })
-    const projectStore = new PostgresProjectStore(database, { excludeSyntheticValidationProjects: true })
+    const projectStore = new PostgresProjectStore(database, { excludeSyntheticValidationProjects: true,requirePublishedInputEvolution: true })
     const projectReadinessStore = new PostgresProjectReadinessStore(database)
     const projectMappingStore = new PostgresProjectMappingStore(database)
     const projectDocumentStore = new PostgresProjectDocumentStore(database)

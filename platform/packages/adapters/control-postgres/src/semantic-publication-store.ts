@@ -38,7 +38,7 @@ interface ScopedQuery {
  * throw here leaves no publication, statement, rule or outbox row behind.
  */
 export interface PublicationFaultInjection {
-  readonly beforeCommit?: () => void
+  readonly beforeCommit?: () => void | Promise<void>
 }
 
 export interface PostgresSemanticPublicationStoreOptions {
@@ -625,7 +625,7 @@ export class PostgresSemanticPublicationStore implements SemanticPublicationStor
 
       await this.#openMaterializationFences(query, input.materializationFences ?? [])
 
-      this.#faultInjection?.beforeCommit?.()
+      await this.#faultInjection?.beforeCommit?.()
       return { publication, created: true }
     })
   }
