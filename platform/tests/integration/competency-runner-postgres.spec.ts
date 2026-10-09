@@ -5,16 +5,16 @@ import { join, resolve } from 'node:path'
 import { Client } from 'pg'
 import { afterAll, beforeAll, describe, expect, it } from 'vitest'
 import { FileSystemObjectStore, LocalImmutableBlobStore, PostgresArtifactRegistry } from '@ontology/adapter-blob-local'
-import { ControlPostgresDatabase, PostgresInstanceReviewStore, PostgresProjectDocumentStore, PostgresProjectStore } from '@ontology/adapter-control-postgres'
+import { ControlPostgresDatabase, PostgresInstanceReviewStore, PostgresJobStore, PostgresProjectDocumentStore, PostgresProjectMappingStore, PostgresProjectReadinessStore, PostgresProjectRecordStore, PostgresProjectStore } from '@ontology/adapter-control-postgres'
 import { PostgresDocumentParseStore, PostgresStructuredIngestionStore } from '@ontology/adapter-extraction-document'
 import { DuckDbProjectDatasetAdapter } from '@ontology/adapter-data-duckdb'
 import { PostgresProjectDatasetAdapter } from '@ontology/adapter-data-postgres'
 import { createCoreCompetencyExecution, createCompetencyProjectPreparer, createRequestToolContext } from '@ontology/app-api'
 import type { CompetencyRunReport, ScopeRef, ToolContext } from '@ontology/contracts'
 import { createToolContext } from '@ontology/contracts'
-import { isRecord, isResourceRef } from '@ontology/contracts'
-import type { ResourceRef } from '@ontology/contracts'
-import { InstanceReviewService, competencyExecutionRequest } from '@ontology/application'
+import { assertProjectFactInputShape, isRecord, isResourceRef } from '@ontology/contracts'
+import type { ProjectRevisionRef, ResourceRef } from '@ontology/contracts'
+import { InstanceReviewService, ProjectService, competencyExecutionRequest } from '@ontology/application'
 import { publishedRuleConsequenceKey, publishedRuleDependencyRef, publishedRuleRef, publishedStatementProjectId, sameUtcInstant } from '@ontology/semantic-engine'
 import { competencyRunnerHarness } from './competency-runner-harness'
 import { createJobScope, startJobDatabase } from './job-postgres-harness'
@@ -35,6 +35,61 @@ async function savedBody(ref: ResourceRef, ctx: ToolContext): Promise<Record<str
   const body: unknown = JSON.parse(new TextDecoder().decode(bytes))
   if (!isRecord(body)) throw new Error('the actual saved artifact body is invalid')
   return body
+}
+
+async function assertWithdrawalArchives(results: readonly { readonly questionId: string; readonly artifactRefs: readonly ResourceRef[] }[], ctx: ToolContext): Promise<void> {
+  for (const id of ['industrial-one-withdrawal', 'industrial-last-withdrawal', 'industrial-historical']) {
+    const result = results.find((row) => row.questionId === id), inputRef = result?.artifactRefs[0]
+    const question = fixtures.sets.flatMap((row) => row.body.questions).find((row) => row.questionId === id)
+    if (inputRef === undefined || question === undefined) throw new Error('real withdrawal execution archive missing')
+    const input = await savedBody(inputRef, ctx)
+    const withdrawals = Array.isArray(input['withdrawals']) ? input['withdrawals'] : []
+    const rowFor = async (attributeId: string) => {
+      const declared = question.input.observations.find((row) => row.status === 'active' && row.entityId === 'A-01' && row.attributeId === attributeId)
+      const binding = withdrawals.find((row: unknown) => isRecord(row) && row['logicalFactId'] === declared?.factId)
+      if (declared === undefined || !isRecord(binding) || typeof binding['actualStatementId'] !== 'string') throw new Error('the exact logical support has no real row binding')
+      const statement = await fixtures.publications.getStatement(scope, binding['actualStatementId'], ctx)
+      if (statement === undefined) throw new Error('real published support row missing')
+      expect(statement.objectId).toBe('asset')
+      expect(statement.value['attributes']).toEqual(expect.arrayContaining([expect.objectContaining({ attributeId: 'asset_code', value: 'A-01' }), expect.objectContaining({ attributeId })]))
+      const provenance = statement.value['provenance']
+      assertProjectFactInputShape(provenance)
+      expect(provenance.sources).toHaveLength(1)
+      const pin = provenance.sources[0]
+      if (pin === undefined) throw new Error('actual statement has no authoritative project source pin')
+      const mapping = await new PostgresProjectMappingStore(db).getMapping(scope, pin.projectRevisionRef.projectId, pin.mappingRef.id, pin.mappingRef.version, ctx)
+      const record = await new PostgresProjectRecordStore(db).getRecord(scope, pin.projectRevisionRef.projectId, pin.recordId, ctx)
+      if (mapping === undefined || record === undefined) throw new Error('actual published source mapping/record unavailable')
+      expect(mapping.ref).toEqual(pin.mappingRef)
+      expect(mapping.originalRef.id).toBe(declared.source.sourceRef.id)
+      expect(mapping.originalRef.version).toBe(declared.source.sourceRef.version)
+      expect(mapping.originalRef.digest).toBe(declared.source.sourceRef.digest)
+      expect(record.revision).toBe(pin.recordRevision)
+      expect(record.contentDigest).toBe(pin.contentDigest)
+      expect(record.sourceDigest).toBe(pin.sourceDigest)
+      expect(statement.sourceRefs.some((ref) => ref.id === pin.recordId && ref.digest === pin.sourceDigest)).toBe(true)
+      return { statement, declared }
+    }
+    const hours = await rowFor('hours'), alarm = await rowFor('alarm')
+    expect(hours.statement.statementId).not.toBe(alarm.statement.statementId)
+    expect(hours.declared.source.sourceRef.id).not.toBe(alarm.declared.source.sourceRef.id)
+    expect(hours.statement.subjectEntityId).toBe(alarm.statement.subjectEntityId)
+    expect(hours.statement.status).toBe('retracted')
+    expect(alarm.statement.status).toBe(id === 'industrial-one-withdrawal' ? 'active' : 'retracted')
+    const points = Array.isArray(input['recordedPoints']) ? input['recordedPoints'] : []
+    for (const logical of ['1', ...(id === 'industrial-one-withdrawal' ? ['2'] : ['2', '3'])]) {
+      const point = points.find((row: unknown) => isRecord(row) && row['logical'] === logical)
+      if (!isRecord(point) || !isResourceRef(point['captureRef'])) throw new Error('actual old event capture missing')
+      const capture = await savedBody(point['captureRef'], ctx), data = capture['data']
+      if (!isRecord(data) || !Array.isArray(data['facts'])) throw new Error('actual old official facts missing')
+      expect(capture['recordedPoint']).toBe(point['actual'])
+      const facts = data['facts']
+      const fact = (statementId: string, attributeId: string) => facts.find((row: unknown) => isRecord(row) && row['sourceStatementId'] === statementId && row['attributeId'] === attributeId)
+      expect(fact(hours.statement.statementId, 'hours')).toMatchObject({ subject: hours.statement.subjectEntityId, op: logical === '1' ? 'assert' : 'retract' })
+      expect(fact(alarm.statement.statementId, 'alarm')).toMatchObject({ subject: alarm.statement.subjectEntityId, op: logical === '3' ? 'retract' : 'assert' })
+    }
+    if (id === 'industrial-historical') expect(input['selectedRecordedPoint']).toBe(points.find((row: unknown) => isRecord(row) && row['logical'] === '1')?.['actual'])
+  }
 }
 
 beforeAll(async () => {
@@ -84,6 +139,71 @@ afterAll(async () => {
 })
 
 describe('all canonical independent competency golds through real originals and stored services', () => {
+  for (const backend of ['duckdb', 'postgres'] as const) it(`${backend}: replays exact hours and independent alarm ROW withdrawals with immutable old official points`, async () => {
+    const ctx = context(), signal = new AbortController().signal, results: { questionId: string; artifactRefs: readonly ResourceRef[] }[] = []
+    const set = fixtures.sets.find((row) => row.body.industryId === 'industrial-synthetic')
+    if (set === undefined) throw new Error('actual approved industrial declaration missing')
+    const query = backend === 'duckdb' ? duck : sql
+    const execution = createCoreCompetencyExecution({ prepare: createCompetencyProjectPreparer({ database: db, blobs, parses, structured, query, producerComponentRef: fixtures.producerComponentRef,
+      binding: async (request) => fixtures.bindings.get(`${request.definitionRef.id}@${request.definitionRef.version}`), compute: fixtures.computeFor(query) }), sources: fixtures.questionWorkflow.sources, artifacts: fixtures.writer,
+      reader: { read: async (request, context) => { const ref = request.approvedInputRefs[0]; if (ref === undefined) throw new Error('missing actual artifact'); return blobs.readAuthorized({ scopeRef: scope, blobRef: ref }, context) } } })
+    for (const id of ['industrial-one-withdrawal', 'industrial-last-withdrawal', 'industrial-historical']) {
+      const question = set.body.questions.find((row) => row.questionId === id)
+      if (question === undefined) throw new Error('independent withdrawal question missing')
+      const result = await execution.execute(competencyExecutionRequest(set.ref, question), ctx, signal)
+      expect(result.status).toBe('executed')
+      if (result.status !== 'executed') throw new Error(result.reason)
+      expect(result.actual).toEqual(question.expected)
+      expect(result.sources).toHaveLength(question.requiredSources.length)
+      results.push({ questionId: id, artifactRefs: result.artifactRefs })
+    }
+    await assertWithdrawalArchives(results, ctx)
+  }, 120_000)
+  it('binds a healthy cross-project refusal and rejects a real head advance during its artifact write', async () => {
+    const ctx = context(), set = fixtures.sets.find((row) => row.body.industryId === 'transport-synthetic')
+    const question = set?.body.questions.find((row) => row.questionId === 'transport-project-denial')
+    if (set === undefined || question === undefined) throw new Error('actual approved cross-project declaration missing')
+    const request = competencyExecutionRequest(set.ref, question), signal = new AbortController().signal
+    const execute = (store: LocalImmutableBlobStore) => createCoreCompetencyExecution({ prepare: createCompetencyProjectPreparer({ database: db, blobs: store, parses, structured, query: duck, producerComponentRef: fixtures.producerComponentRef,
+      binding: async () => fixtures.bindings.get(`${request.definitionRef.id}@${request.definitionRef.version}`), compute: fixtures.computeFor(duck) }), sources: fixtures.questionWorkflow.sources, artifacts: fixtures.writer,
+      reader: { read: async (request, context) => { const ref = request.approvedInputRefs[0]; if (ref === undefined) throw new Error('missing actual artifact'); return blobs.readAuthorized({ scopeRef: scope, blobRef: ref }, context) } } })
+    const healthy = await execute(blobs).execute(request, ctx, signal)
+    expect(healthy.status).toBe('executed')
+    if (healthy.status === 'executed') { expect(healthy.actual).toEqual(question.expected); expect(healthy.sources).toHaveLength(question.requiredSources.length) }
+    const projects = new PostgresProjectStore(db)
+    const service = new ProjectService({ projects, readiness: new PostgresProjectReadinessStore(db), jobs: new PostgresJobStore(db), catalogue: { listEntries: async () => [], findPack: async () => undefined } })
+    let digest: string | undefined, prior: ProjectRevisionRef | undefined, archived: ResourceRef | undefined, changed = false
+    class ActualDelayedRefusalStore extends LocalImmutableBlobStore {
+      override async stage(...args: Parameters<LocalImmutableBlobStore['stage']>): ReturnType<LocalImmutableBlobStore['stage']> {
+        const result = await super.stage(...args)
+        let body: unknown
+        try { body = JSON.parse(new TextDecoder().decode(args[0])) } catch { return result }
+        if (isRecord(body) && body['schemaVersion'] === 'competency-admission-refusal@1' && body['kind'] === 'cross_project') digest = result.contentDigest
+        return result
+      }
+      override async publish(...args: Parameters<LocalImmutableBlobStore['publish']>): ReturnType<LocalImmutableBlobStore['publish']> {
+        const result = await super.publish(...args)
+        if (!changed && args[0].contentDigest === digest) {
+          archived = result.blobRef
+          const body = await savedBody(result.blobRef, args[1]), fixed = body['fixedProjectRevisionRef']
+          if (!isRecord(fixed) || typeof fixed['projectId'] !== 'string') throw new Error('actual cross-project artifact lost its project pin')
+          const head = await projects.getProject(scope, fixed['projectId'], args[1])
+          const revision = head === undefined ? undefined : await projects.getRevision(scope, head.projectId, head.headRevision, args[1])
+          if (head === undefined || revision === undefined) throw new Error('actual refusal project disappeared before the write fence')
+          expect(fixed).toEqual(revision.ref); prior = revision.ref; changed = true
+          await service.appendRevision(head.projectId, { expectedRevision: head.headRevision, reason: 'synthetic human appended a real project revision during refusal artifact I/O' }, `refusal-race-${randomUUID()}`, args[1].principal.subjectId, args[1])
+        }
+        return result
+      }
+    }
+    const objects = new FileSystemObjectStore(directory); await objects.init()
+    const delayed = new ActualDelayedRefusalStore({ objectStore: objects, registry })
+    await expect(execute(delayed).execute(request, ctx, signal)).rejects.toMatchObject({ code: 'DIGEST_MISMATCH' })
+    expect(changed).toBe(true)
+    if (prior === undefined || archived === undefined) throw new Error('actual delayed refusal proof was not recorded')
+    expect((await savedBody(archived, ctx))['fixedProjectRevisionRef']).toEqual(prior)
+    expect(BigInt((await projects.getProject(scope, prior.projectId, ctx))?.headRevision ?? '0')).toBeGreaterThan(BigInt(prior.revision))
+  }, 60_000)
   it('refuses current-only navigation when the real edge is published after the selected event point', async () => {
     const ctx = context(), set = fixtures.sets.find((row) => row.body.industryId === 'transport-synthetic')
     const original = set?.body.questions.find((row) => row.questionId === 'transport-relation')
@@ -270,43 +390,7 @@ describe('all canonical independent competency golds through real originals and 
       expect(results.filter((result) => result.status !== 'passed').map((result) => ({ id: result.questionId, status: result.status, reason: result.reason, actual: result.actual }))).toEqual([])
       expect(reports.every((report) => report.passed)).toBe(true)
       expect(results.every((result) => result.sourceCoverage.complete && result.artifactRefs.length > 0)).toBe(true)
-      for (const id of ['industrial-one-withdrawal', 'industrial-last-withdrawal', 'industrial-historical']) {
-        const result = results.find((row) => row.questionId === id), inputRef = result?.artifactRefs[0]
-        const question = fixtures.sets.flatMap((row) => row.body.questions).find((row) => row.questionId === id)
-        if (inputRef === undefined || question === undefined) throw new Error('real withdrawal execution archive missing')
-        const input = await savedBody(inputRef, ctx)
-        const withdrawals = Array.isArray(input['withdrawals']) ? input['withdrawals'] : []
-        const rowFor = async (attributeId: string) => {
-          const declared = question.input.observations.find((row) => row.status === 'active' && row.entityId === 'A-01' && row.attributeId === attributeId)
-          const binding = withdrawals.find((row: unknown) => isRecord(row) && row['logicalFactId'] === declared?.factId)
-          if (declared === undefined || !isRecord(binding) || typeof binding['actualStatementId'] !== 'string') throw new Error('the exact logical support has no real row binding')
-          const statement = await fixtures.publications.getStatement(scope, binding['actualStatementId'], ctx)
-          if (statement === undefined) throw new Error('real published support row missing')
-          expect(statement.objectId).toBe('asset')
-          expect(statement.value['attributes']).toEqual(expect.arrayContaining([expect.objectContaining({ attributeId: 'asset_code', value: 'A-01' }), expect.objectContaining({ attributeId })]))
-          expect(statement.sourceRefs.some((ref) => ref.id === declared.source.sourceRef.id && ref.digest === declared.source.sourceRef.digest)).toBe(true)
-          return { statement, declared }
-        }
-        const hours = await rowFor('hours'), alarm = await rowFor('alarm')
-        expect(hours.statement.statementId).not.toBe(alarm.statement.statementId)
-        expect(hours.declared.source.sourceRef.id).not.toBe(alarm.declared.source.sourceRef.id)
-        expect(hours.statement.subjectEntityId).toBe(alarm.statement.subjectEntityId)
-        expect(hours.statement.status).toBe('retracted')
-        expect(alarm.statement.status).toBe(id === 'industrial-one-withdrawal' ? 'active' : 'retracted')
-        const points = Array.isArray(input['recordedPoints']) ? input['recordedPoints'] : []
-        for (const logical of ['1', ...(id === 'industrial-one-withdrawal' ? ['2'] : ['2', '3'])]) {
-          const point = points.find((row: unknown) => isRecord(row) && row['logical'] === logical)
-          if (!isRecord(point) || !isResourceRef(point['captureRef'])) throw new Error('actual old event capture missing')
-          const capture = await savedBody(point['captureRef'], ctx), data = capture['data']
-          if (!isRecord(data) || !Array.isArray(data['facts'])) throw new Error('actual old official facts missing')
-          expect(capture['recordedPoint']).toBe(point['actual'])
-          const facts = data['facts']
-          const fact = (statementId: string, attributeId: string) => facts.find((row: unknown) => isRecord(row) && row['sourceStatementId'] === statementId && row['attributeId'] === attributeId)
-          expect(fact(hours.statement.statementId, 'hours')).toMatchObject({ subject: hours.statement.subjectEntityId, op: logical === '1' ? 'assert' : 'retract' })
-          expect(fact(alarm.statement.statementId, 'alarm')).toMatchObject({ subject: alarm.statement.subjectEntityId, op: logical === '3' ? 'retract' : 'assert' })
-        }
-        if (id === 'industrial-historical') expect(input['selectedRecordedPoint']).toBe(points.find((row: unknown) => isRecord(row) && row['logical'] === '1')?.['actual'])
-      }
+      await assertWithdrawalArchives(results, ctx)
       if (backend === 'postgres') {
         const reader = new Client({ connectionString: readConnection }); await reader.connect()
         try {

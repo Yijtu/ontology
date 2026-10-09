@@ -255,8 +255,8 @@ export function createCompetencyProjectPreparer(options: CompetencyProjectPrepar
       let refused = false
       try { await projectService.getProject(request.intent.projectId, ctx) } catch (error) { if (isRecord(error) && error['code'] === 'PROJECT_NOT_FOUND') refused = true; else throw error }
       if (!refused) return { status: 'not_yet_executable', reason: 'foreign admission requires an actual authorization/input binding refusal' }
-      const refusal = (await writer.putBytes({ scopeRef: scope, mediaType: 'application/json', content: new TextEncoder().encode(canonicalJson({ schemaVersion: 'competency-admission-refusal@1', kind: 'cross_project', requestedProjectId: request.intent.projectId, fixedProjectRevisionRef: project.ref, inputDigest: request.inputDigest, dataMode: 'synthetic' })) }, ctx)).blobRef
       const admission = await captureAdmissionAuthority()
+      const refusal = (await writer.putBytes({ scopeRef: scope, mediaType: 'application/json', content: new TextEncoder().encode(canonicalJson({ schemaVersion: 'competency-admission-refusal@1', kind: 'cross_project', requestedProjectId: request.intent.projectId, fixedProjectRevisionRef: admission.project.ref, inputDigest: request.inputDigest, dataMode: 'synthetic' })) }, ctx)).blobRef
       return { status: 'refused', validateCurrent: admission.validateCurrent, reason: 'cross_project', artifacts: [inputRef, refusal], consumedOriginals: [...consumed.values()], ...(validationTargetDigest === undefined ? {} : { validationTargetDigest }) }
     }
     const publisher = facts.publication
