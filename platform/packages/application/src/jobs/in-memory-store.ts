@@ -91,6 +91,7 @@ export class InMemoryJobStore implements JobStore {
     record: NewLogicalJobRecord,
     ctx: ToolContext,
   ): Promise<JobInsertResult> {
+    if (record.initialStage !== undefined && record.initialStage !== 'awaiting_review') throw new JobStoreError('STAGE_CONFLICT', 'the manual source handoff may only wait for actual human review')
     resolveStoreScope(scopeRef, ctx)
     const idempotencySlot = `${scopePrefix(scopeRef)}${record.idempotencyKey}`
     const existingByKey = this.#idempotency.get(idempotencySlot)
@@ -116,7 +117,7 @@ export class InMemoryJobStore implements JobStore {
     }
     const job: StoredJob = {
       ...clone(record),
-      stage: 'received',
+      stage: record.initialStage ?? 'received',
       revision: '1',
       attemptCount: 0,
       abandonedAttemptCount: 0,
