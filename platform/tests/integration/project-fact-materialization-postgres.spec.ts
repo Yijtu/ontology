@@ -29,7 +29,7 @@ import { seedIdentityProject } from './instance-identity-fixtures'
 import { toolContext } from '../unit/component-registry-fixtures'
 import { RecordingControlRepository } from '../unit/semantic-definition-fixtures'
 import { relationDefinition, targetCondition } from '../unit/rule-relation-fixtures'
-import { buildXlsx, numberCellXml, rowXml, sharedStringCell, worksheetOf } from '../fixtures/structured/xlsx'
+import { buildXlsx, buildZip, numberCellXml, rowXml, sharedStringCell, worksheetOf } from '../fixtures/structured/xlsx'
 import { buildInputManifest, RUN_ID, verificationPolicy } from '../unit/verification-fixtures'
 import { isRecord } from '@ontology/contracts'
 
@@ -219,6 +219,58 @@ async function prepareOneHopPremiseReplay(label: string) {
 }
 
 describe('confirmed structured records → official facts (real PostgreSQL)', () => {
+  it('reads the normally confirmed second-sheet XLSX premise and refuses a first-sheet locator with the same row ordinal (#264)', async () => {
+    const p = await setup('premise-second-sheet')
+    const inline = (address: string, value: string) => `<c r="${address}" t="inlineStr"><is><t>${value}</t></is></c>`
+    const sheet = (code: string, power: string, enabled: string) => worksheetOf([
+      rowXml(1, [inline('A1', 'enabled'), inline('B1', 'kilowatts'), inline('C1', 'code')]),
+      rowXml(2, [inline('A2', enabled), numberCellXml('B2', power), inline('C2', code)]),
+    ])
+    const bytes = buildZip([
+      { name: 'xl/workbook.xml', data: '<workbook xmlns="http://schemas.openxmlformats.org/spreadsheetml/2006/main" xmlns:r="http://schemas.openxmlformats.org/officeDocument/2006/relationships"><sheets><sheet name="First" sheetId="1" r:id="rId1"/><sheet name="Chosen" sheetId="2" r:id="rId2"/></sheets></workbook>' },
+      { name: 'xl/_rels/workbook.xml.rels', data: '<Relationships xmlns="http://schemas.openxmlformats.org/package/2006/relationships"><Relationship Id="rId1" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/worksheet" Target="worksheets/sheet1.xml"/><Relationship Id="rId2" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/worksheet" Target="worksheets/sheet2.xml"/></Relationships>' },
+      { name: 'xl/worksheets/sheet1.xml', data: sheet('wrong-first-sheet', '1', 'false') },
+      { name: 'xl/worksheets/sheet2.xml', data: sheet('M-SECOND', '12.5', 'true') },
+    ])
+    const mediaType = 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet'
+    const options = { headerRow: 1, sheetName: 'Chosen' }
+    const staged = await blobs.stage(bytes, { scopeRef: p.scope.scopeRef }, p.ctx)
+    const original = await blobs.publish({ scopeRef: p.scope.scopeRef, contentDigest: staged.contentDigest, byteSize: staged.byteSize, mediaType, purpose: 'document' }, p.ctx)
+    const parsed = await new LocalStructuredIngestionService({ blobs, store: structured }).parse({ scopeRef: p.scope.scopeRef, originalRef: original.blobRef, options }, p.ctx)
+    const actual = new StructuredDocumentParser().parse(bytes, { ...options, mediaType })
+    expect(actual.tables).toHaveLength(1)
+    const table = actual.tables[0]
+    if (table === undefined) throw new Error('missing actual selected worksheet')
+    expect(table.sheetId).toBe('2')
+    const fieldIds = ['active', 'power', 'meter_id']
+    const entries = table.columns.map((column, index) => ({ fieldRef: fieldIds[index] ?? '', header: column.header, headerDigest: column.headerDigest, columnIndex: column.index,
+      ...(index === 1 ? { sourceUnitCode: 'kW', canonicalUnitCode: 'kW' } : {}) }))
+    const confirmation = await p.mapping.confirmMapping(p.projectId, { format: 'xlsx', parseId: parsed.parse.parseId, originalRef: original.blobRef, originalMediaType: mediaType,
+      options, sheetId: '2', sheetName: 'Chosen', objectId: 'meter', entries }, `second-sheet-map-${randomUUID()}`, p.ctx.principal.subjectId, p.ctx)
+    const jobId = randomUUID()
+    await new JobService({ store: jobs }).createJob({ jobId, kind: 'ingestion', sourceRef: 'real-second-sheet-original', pipelineVersion: '1.0.0', idempotencyKey: `second-sheet-job-${jobId}`,
+      documentRef: encodeStructuredExtractionRef({ kind: 'structured_extraction', parseId: parsed.parse.parseId, parserVersion: parsed.parse.parserVersion, definitionRef: p.definition.ref,
+        format: 'xlsx', originalRef: original.blobRef, originalMediaType: mediaType, options }) }, p.ctx)
+    p.sourceJobs.set(parsed.parse.parseId, jobId)
+    const documentId = randomUUID()
+    await documents.registerDocument(p.scope.scopeRef, p.projectId, { documentId, documentRef: original.blobRef, documentDigest: original.blobRef.digest, parseId: parsed.parse.parseId,
+      parseRef: { id: parsed.parse.parseId, version: parsed.parse.parserVersion, digest: original.blobRef.digest, kind: 'artifact' }, textDigest: original.blobRef.digest, precision: 'exact',
+      actor: p.ctx.principal.subjectId, recordedAt: new Date().toISOString() }, p.ctx)
+    const source = { mapping: confirmation.mapping, parse: parsed.parse, documentId }
+    await mount(p, [source])
+    const candidate = await stage(p, source)
+    await confirmed(p, candidate, documentId)
+    await publish(p, [candidate])
+    expect(candidate.attributes.find((attribute) => attribute.attributeId === 'meter_id')?.value).toBe('M-SECOND')
+    const span = candidate.sourceSpans[0]
+    if (span?.kind !== 'structured' || span.locator.kind !== 'table_cell') throw new Error('missing actual second-sheet cell')
+    expect(span.locator).toMatchObject({ sheetId: '2', sheetName: 'Chosen', row: 2, recordIndex: 1 })
+    const reader = new StructuredPremiseSourceReader({ artifacts: blobs, mappings, ingestion: structured })
+    const read = await reader.read(candidate, span, p.ctx)
+    expect(read?.rowText).toContain('M-SECOND')
+    expect(read?.rowText).not.toContain('wrong-first-sheet')
+    expect(await reader.read(candidate, { ...span, locator: { ...span.locator, sheetId: '1', sheetName: 'First' } }, p.ctx)).toBeUndefined()
+  })
   it('blocks a real mapped record head change during source read while retaining its original historical proof (#264)', async () => {
     const { p, cb, artifact, payload, deps, structuredSources } = await prepareOneHopPremiseReplay('mapped-record-head-race')
     const source = cb.inputVersion.projectFact?.sources[0]
