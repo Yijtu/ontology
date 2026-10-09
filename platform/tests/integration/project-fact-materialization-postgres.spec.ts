@@ -231,6 +231,17 @@ async function waitForReferenceHeadLock(): Promise<void> {
   throw new Error('the actual publisher did not wait on the identity head within its fixed barrier bound')
 }
 
+async function waitForProjectAppendLock(): Promise<void> {
+  const deadline = Date.now() + 15_000
+  while (Date.now() < deadline) {
+    const waiting = await harness.adminClient.query<{ count: string }>("SELECT count(*)::text AS count FROM pg_stat_activity WHERE datname=current_database() AND wait_event_type='Lock' AND query LIKE '%FROM agent_platform.projects%' AND query LIKE '%FOR UPDATE%'")
+    if (waiting.rows[0]?.count !== '0') return
+    await new Promise((resolve) => setTimeout(resolve, 100))
+  }
+  const blocked = await harness.adminClient.query<{ query: string; wait_event_type: string | null; wait_event: string | null }>("SELECT query,wait_event_type,wait_event FROM pg_stat_activity WHERE datname=current_database() AND wait_event_type='Lock'")
+  throw new Error(`the actual mapping append did not wait on the publisher project lock within its fixed barrier bound: ${JSON.stringify(blocked.rows)}`)
+}
+
 async function prepareOneHopPremiseReplay(label: string) {
   const p = await setup(label), a = await imported(p, 'csv'), b = await imported(p, 'xlsx'), s = await imported(p, 'csv', 'site')
   await mount(p, [a, b, s])
@@ -672,6 +683,52 @@ describe('confirmed structured records → official facts (real PostgreSQL)', ()
     })
     try { await expect(publish(p, [c])).rejects.toMatchObject({ code: 'PROJECT_FENCE_STALE' }) } finally { vi.restoreAllMocks() }
     expect(await publicationStore.listStatements(p.scope.scopeRef, {}, p.ctx)).toEqual([])
+  })
+
+  it('serializes a real published-fact commit against a direct input-remount append', async () => {
+    let enterCommit!: () => void
+    let releaseCommit!: () => void
+    const entered = new Promise<void>((resolve) => { enterCommit = resolve })
+    const released = new Promise<void>((resolve) => { releaseCommit = resolve })
+    const barrier = new PostgresSemanticPublicationStore(db, { faultInjection: { beforeCommit: async () => { enterCommit(); await released } } })
+    const p = await setup('atomic-published-remount-race', barrier)
+    const original = await imported(p, 'csv')
+    await mount(p, [original])
+    const remounted = await imported(p, 'csv', 'meter', '9000')
+    const candidate = await stage(p, original)
+    expect(candidate.inputVersion.projectFact).toBeDefined()
+    await confirmed(p, candidate, original.documentId)
+
+    const guardedProjects = new PostgresProjectStore(db, { requirePublishedInputEvolution: true })
+    const guardedService = new ProjectService({ projects: guardedProjects, readiness: new PostgresProjectReadinessStore(db), jobs,
+      catalogue: { listEntries: async () => [], findPack: async () => undefined } })
+    const current = await guardedProjects.getProject(p.scope.scopeRef, p.projectId, p.ctx)
+    if (current === undefined) throw new Error('the actual remount race project is unavailable')
+    const currentRevision = await guardedProjects.getRevision(p.scope.scopeRef, p.projectId, current.headRevision, p.ctx)
+    if (currentRevision === undefined) throw new Error('the actual remount race revision is unavailable')
+    const append = () => guardedService.appendRevision(p.projectId, { expectedRevision: current.headRevision,
+      reason: 'directly remount changed business input before explicit evolution', mappingRefs: [...currentRevision.mappingRefs, remounted.mapping.ref] }, `atomic-remount-${p.projectId}`, p.ctx.principal.subjectId, p.ctx)
+      .then(() => ({ code: 'UNEXPECTED_SUCCESS' }), (error: unknown) => error)
+
+    let publishing: ReturnType<typeof publish> | undefined
+    try {
+      publishing = publish(p, [{ candidateId: candidate.candidateId, kind: 'entity' }], `atomic-fact-${p.projectId}`)
+      await entered
+      const remounting = append()
+      await waitForProjectAppendLock()
+      releaseCommit()
+      const publication = await publishing
+      expect(publication.statements).toHaveLength(1)
+      expect(await remounting).toMatchObject({ code: 'VERSION_CONFLICT' })
+      const after = await guardedProjects.getProject(p.scope.scopeRef, p.projectId, p.ctx)
+      expect(after?.headRevision).toBe(current.headRevision)
+      const revision = await guardedProjects.getRevision(p.scope.scopeRef, p.projectId, current.headRevision, p.ctx)
+      expect(revision?.mappingRefs).toEqual((await projects.getRevision(p.scope.scopeRef, p.projectId, current.headRevision, p.ctx))?.mappingRefs)
+      expect((await publicationStore.listStatements(p.scope.scopeRef, {}, p.ctx)).map((statement) => statement.statementId)).toContain(candidate.candidateId)
+    } finally {
+      releaseCommit()
+      await publishing?.catch(() => undefined)
+    }
   })
 
   it('rolls back facts/publication/outbox together and retries without duplicate truth', async () => {
