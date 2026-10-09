@@ -7,7 +7,7 @@ import { ProjectService, SourceGroundingBudget, WorkflowControllerError, canonic
 import type { ProfileResolver } from '@ontology/application'
 import type { ProjectFactMaterializationService } from '@ontology/application'
 import { isRecord, isUuid, isRevisionString, tryParseSemver } from '@ontology/contracts'
-import type { IndustryPackCatalogue, IndustrySchemaSource, ImportMappingVersion, JobStore, MappingRef, OperationRegistry, ProjectDocumentStore, ProjectEvolutionStore, ProjectReadinessStore, ProjectStore, ResolvedCapability, SemanticPublicationStore, TaskBindingStore, ToolContext, VersionRef } from '@ontology/contracts'
+import type { IndustryPackCatalogue, IndustrySchemaSource, ImportMappingVersion, JobStore, MappingRef, OperationRegistry, ProjectDocumentStore, ProjectEvolutionStore, ProjectReadinessStore, ProjectStore, ResolvedCapability, ResourceRef, SemanticPublicationStore, TaskBindingStore, ToolContext, VersionRef } from '@ontology/contracts'
 import { createRequestToolContext } from '../http/context'
 import { authenticateRequest, ForbiddenError, InvalidRequestFieldError, readHeader, readTraceId } from '../http/shared'
 import type { RequestAuthenticator } from '../http/shared'
@@ -16,6 +16,7 @@ import type { createCoreInstanceIdentity } from './core-instance-identity'
 import type { CoreSemanticTaskResolver } from './core-semantic-task-resolver'
 import { mountCoreDefinitionTaskBindings } from './core-task-bindings'
 import type { CoreDefinitionLabelReader } from './core-definition-labels'
+import { EXAMPLE_COMPUTE_INPUT_REQUIREMENTS, EXAMPLE_OPERATION_REF } from '@ontology/tool-services'
 
 export function createCoreProjectApi(options: {
   readonly projects: ProjectStore; readonly documents: ProjectDocumentStore; readonly jobs: JobStore
@@ -30,6 +31,7 @@ export function createCoreProjectApi(options: {
   readonly termLabels: CoreDefinitionLabelReader
   readonly computeInputConfigured: boolean
   readonly publications: Pick<SemanticPublicationStore, 'listStatements'>
+  readonly documentSetFor: (projectId: string,ctx: ToolContext) => Promise<ResourceRef>
 }) {
   const scope = (ctx: ToolContext) => ({ tenantId: ctx.principal.tenantId, spaceId: ctx.allowedResources.spaceId })
   const sourceReader = new ParsedSourceGroundingReader({ blobs: options.blobs, documents: options.parses, tables: options.structured })
@@ -41,8 +43,7 @@ export function createCoreProjectApi(options: {
     const members = await options.documents.listDocuments(scope(ctx),mapping.projectId,{ state: 'active',limit: 200 },ctx)
     const visibility = await options.documents.getVisibility(scope(ctx),mapping.projectId,ctx)
     if (members.nextCursor !== null || visibility === undefined || members.memberships.filter((member) => member.parseId === mapping.parseId && canonicalJson(member.documentRef) === canonicalJson(mapping.originalRef)).length !== 1) throw new InvalidRequestFieldError('the confirmed mapping has no unique current authorized original membership')
-    const documentSetRef = await options.authoring.stableWrite(`project-input-corpus:${mapping.projectId}:${canonicalJson(members.memberships.map((member) => ({ documentId: member.documentId,membershipRevision: member.membershipRevision })))}`,new TextEncoder().encode(canonicalJson({ schemaVersion: 'project-document-set@1',projectId: mapping.projectId,
-      members: members.memberships.map((member) => ({ documentId: member.documentId,documentRef: member.documentRef,parseId: member.parseId,parseRef: member.parseRef,membershipRevision: member.membershipRevision,precision: member.precision })) })), 'application/json','artifact',ctx)
+    const documentSetRef = await options.documentSetFor(mapping.projectId,ctx)
     if (revision.mappingRefs.some((ref) => canonicalJson(ref) === canonicalJson(mapping.ref)) && revision.documentSetRef.digest === documentSetRef.digest && revision.sourceVisibilityEpoch === visibility.epoch) return
     const schema = await options.schemas.getSchema(scope(ctx),revision.definitionRef,ctx)
     if (schema === undefined || schema.objects.length > 64) throw new InvalidRequestFieldError('the exact input definition is unavailable or exceeds its finite bound')
@@ -128,15 +129,15 @@ export function createCoreProjectApi(options: {
     }
     const tasks = bindings.map((binding) => {
       const tool = binding.kind === 'structured_query' || binding.kind === 'compute' ? 'data_query' : binding.kind === 'document_qa' ? 'document_search' : 'ontology_lookup'
-      const capability = evaluateTaskCapability({ binding, availableCapabilities: resolved.resolved.resolvedCapabilities, readiness,
+      const capability = evaluateTaskCapability({ binding, availableCapabilities: options.availableCapabilities, readiness,
         operations: options.operations, supportedResultSchemaRefs: [options.resultSchemaRef] })
       const enabled = resolved.resolved.toolBindings.some((entry) => entry.toolId === tool && entry.enabled)
       const needsSelectors = binding.kind === 'rule_judgement' || binding.kind === 'relations'
-      const computeReady = binding.kind !== 'compute' || options.computeInputConfigured && readiness.some((projection) => projection.kind === 'dataset' && projection.state === 'ready')
+      const computeReady = binding.kind !== 'compute' || options.computeInputConfigured && readiness.some((projection) => projection.kind === 'dataset' && projection.state === 'ready') && resolved.resolved.computeBindings.some((entry) => entry.enabled && entry.operationRef.id === binding.operationRef?.id && entry.operationRef.version === binding.operationRef.version)
       return { bindingRef: binding.taskBindingRef, taskKind: binding.kind, displayName: labels[binding.kind], parameterSchema: binding.parameterSchema,
         requiredCapabilities: binding.requiredCapabilities, requiredReadiness: binding.requiredReadiness,
         available: binding.kind !== 'published_facts' && enabled && capability.state === 'available' && computeReady && (!needsSelectors || selectorFailure === undefined), unavailableReasons: [...capability.blockers.map((blocker) => blocker.message), ...(enabled ? [] : ['当前配置未启用所需工具']), ...(binding.kind === 'published_facts' ? ['请使用项目数据查询查看已发布事实'] : []), ...(!computeReady ? ['项目计算需要实际就绪数据和明确选择的输入字段'] : []), ...(needsSelectors && selectorFailure !== undefined ? [selectorFailure] : [])],
-        ...(binding.kind === 'compute' ? { requiresInputSelection: true } : {}),
+        ...(binding.kind === 'compute' ? { requiresInputSelection: true,...(binding.operationRef?.id !== EXAMPLE_OPERATION_REF.id || binding.operationRef.version !== EXAMPLE_OPERATION_REF.version ? {} : { inputRequirements: { ...EXAMPLE_COMPUTE_INPUT_REQUIREMENTS,maxRows: options.operations.operations.find((operation) => operation.operationRef.id === binding.operationRef?.id && operation.operationRef.version === binding.operationRef.version)?.limits.maxRows } }) } : {}),
         ...(binding.kind === 'relations' ? { hostParameters: ['validAt'] } : {}),
         objects: schema.objects.map((object) => ({ objectId: object.objectId, displayName: object.displayName,
           attributes: object.attributes.map((attribute) => ({ attributeId: attribute.attributeId, displayName: termLabels?.attributes.find((entry) => entry.objectId === object.objectId && entry.attributeId === attribute.attributeId)?.displayName ?? '未提供名称', valueType: attribute.valueType, required: attribute.minCardinality > 0, minCardinality: attribute.minCardinality, maxCardinality: attribute.maxCardinality,

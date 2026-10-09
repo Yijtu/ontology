@@ -2,7 +2,7 @@ import { createHash } from 'node:crypto'
 import { answerDraftContentHash, canonicalJson, resolveJsonPointer, typedResultManifestContentDigest } from '@ontology/application'
 import type { TableHardVerificationService, TypedResultContextSourceDependencies, VerificationArtifactStore } from '@ontology/application'
 import { MAX_TABLE_COLUMNS, MAX_TABLE_PAGE_ROWS, MAX_TABLE_RESULT_ROWS, assertTableArtifactManifestShape, assertTableArtifactPageBodyShape, assertTypedResultManifestShape, isRecord, isResourceRef, isTaskFinalizationReceipt, isToolContext, sha256OfCanonical, tableArtifactContentDigest, tableManifestContentDigest, tablePageCoverageDigest } from '@ontology/contracts'
-import type { AnswerDraft, EvidenceStorePort, ImmutableArtifactWriter, PublicationTableVerificationRequirement, PublishedAnswer, ResourceRef, ScopeRef, Sha256Digest, TableArtifactManifest, TableArtifactManifestStore, TableArtifactPageBody, TableArtifactPageStore, TableArtifactRow, TableColumnDescriptor, TableHardVerificationOutcome, TableVerificationReceiptStore, ToolContext, ToolCoverage, Uuid, VersionRef } from '@ontology/contracts'
+import type { AnswerDraft, EvidenceStorePort, ImmutableArtifactWriter, PublicationTableVerificationRequirement, PublishedAnswer, ResourceRef, ScopeRef, Sha256Digest, TableArtifactManifest, TableArtifactManifestStore, TableArtifactPageBody, TableArtifactPageStore, TableArtifactRow, TableColumnDescriptor, TableHardVerificationOutcome, TableVerificationReceiptStore, TaskFinalizationReceiptStore, ToolContext, ToolCoverage, Uuid, VersionRef } from '@ontology/contracts'
 
 export type CoreTableBuildInput = Parameters<NonNullable<TypedResultContextSourceDependencies['tables']>>[0]
 
@@ -13,6 +13,7 @@ export interface CoreTableResultsOptions {
   readonly pages: TableArtifactPageStore
   readonly manifests: TableArtifactManifestStore
   readonly receipts: TableVerificationReceiptStore
+  readonly finalizationReceipts?: Pick<TaskFinalizationReceiptStore, 'getReceipt'>
   readonly verifier: Pick<TableHardVerificationService, 'verifyTable'>
   /** Actual archived canonical tools schema, independent from the outer result-format token. */
   readonly tableOutputSchema: { readonly ref: ResourceRef; readonly body: Readonly<Record<string, unknown>> }
@@ -121,7 +122,9 @@ export function createCoreTableResults(options: CoreTableResultsOptions) {
     if (manifest.tables.length > 0) {
       const schema = await tableSchema(ctx)
       if (manifest.tables.some((table) => !same(table.outputSchemaRef, schema))) return invalid('the table schema differs from its actual registered schema body')
-      const receipt = await read(draft.finalizationReceiptRef, ctx)
+      const actualFinalization = await options.finalizationReceipts?.getReceipt(scopeFor(ctx),draft.finalizationReceiptRef,ctx)
+      if (options.finalizationReceipts !== undefined && (actualFinalization === undefined || !same(actualFinalization.ref,draft.finalizationReceiptRef) || sha256OfCanonical(actualFinalization.receipt) !== draft.finalizationReceiptDigest)) return invalid('the actual scoped finalization ledger entry does not match this exact draft receipt')
+      const receipt = options.finalizationReceipts === undefined ? await read(draft.finalizationReceiptRef, ctx) : actualFinalization?.receipt
       if (!isTaskFinalizationReceipt(receipt) || draft.finalizationReceiptRef.digest !== draft.finalizationReceiptDigest || !same(receipt.executionBindingRef, manifest.executionBindingRef) || !same(receipt.taskBindingRef, manifest.taskBindingRef) || !same(receipt.inputSnapshotRef, manifest.inputSnapshotRef) || receipt.inputSnapshotDigest !== manifest.inputSnapshotRef.digest || !same(receipt.typedResultManifestRef, draft.resultManifestRef) || receipt.typedResultManifestDigest !== draft.resultManifestDigest || receipt.outputArtifactRefs.length !== receipt.outputDigests.length || receipt.outputArtifactRefs.some((ref, index) => ref.digest !== receipt.outputDigests[index])) return invalid('the tables do not retain the actual task finalization output pins')
       const checkedEvidence = new Set<string>()
       for (const table of manifest.tables) for (const descriptor of table.pages) {

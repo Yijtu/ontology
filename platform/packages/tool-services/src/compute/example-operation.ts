@@ -50,6 +50,10 @@ export const EXAMPLE_COMPUTE_DATA_SCHEMA: Readonly<Record<string, unknown>> = {
     required: ['id', 'amount'], properties: { id: { type: 'string' }, amount: { type: 'string' },
       unit: { type: 'string' }, currency: { type: 'string' } } } } },
 }
+export const EXAMPLE_COMPUTE_INPUT_REQUIREMENTS = {
+  maxDecimalPlaces: 4, units: ['each'], currencies: ['CNY'], minimumAmount: '0',
+  description: '这项登记计算汇总每件数量与人民币金额，支持非负数、最多四位小数；工时等其他单位暂不可用。',
+}
 
 const OUTPUT_SCHEMA: Readonly<Record<string, unknown>> = {
   type: 'object',

@@ -107,6 +107,7 @@ import {
   RunTypedResultContextSource,
   VerifiedResultExportService,
   TableArtifactReadService,
+  TableHardVerificationService,
   VerifiedResultReadService,
   defaultPublicationEvidenceValidators,
   ruleDerivationValidator,
@@ -215,6 +216,7 @@ import { createCoreDefinitionLabelReader } from './core-definition-labels'
 import { createCoreProjectComputeInput } from './core-project-compute-input'
 import { createCorePackExecutionProfiles } from './core-pack-execution-profiles'
 import { createCoreVerifiedTableSource } from './core-verified-tables'
+import { createCoreTableResults } from './core-table-results'
 import { registerCoreSourceViewRoutes } from '../http/core-source-views'
 import { createProjectFactWorkflow } from './project-facts'
 import { CoreFactsPlanError, createCoreFactsPlan } from './core-facts-plan'
@@ -1574,10 +1576,10 @@ export async function createCoreLocalComposition(options: CoreLocalCompositionOp
     const identityStore = new PostgresIdentityDecisionStore(database)
     const publicationStore = new PostgresSemanticPublicationStore(database, { excludeSyntheticValidationProjects: true })
     const definitionStore = new PostgresSemanticDefinitionStore(database)
-    let publishedPackRules: PublishedRuleDeclarationReader | undefined
+    const publishedPackRules: { current?: PublishedRuleDeclarationReader } = {}
     const packRuleReader: PublishedRuleDeclarationReader = { read: (...args) => {
-      if (publishedPackRules === undefined) throw new CoreCapabilityError('the actual published pack rule reader is not initialized')
-      return publishedPackRules.read(...args)
+      if (publishedPackRules.current === undefined) throw new CoreCapabilityError('the actual published pack rule reader is not initialized')
+      return publishedPackRules.current.read(...args)
     } }
     const workflowStore = new PostgresWorkflowStore(database)
     const planReceiptStore = new PostgresCorePlanReceiptStore(database)
@@ -1654,7 +1656,7 @@ export async function createCoreLocalComposition(options: CoreLocalCompositionOp
       definition: async (scope, ref, ctx) => definitionStore.findVersionByRef(scope, ref, ctx),
     })
     let projectEvolution = options.projectEvolution
-    let normalApprovedInputs: ReturnType<typeof createCoreApprovedInput> | undefined
+    const normalApprovedInputs: { current?: ReturnType<typeof createCoreApprovedInput> } = {}
     const evolutionGuard = { assertActiveRebuild: (scope: ScopeRef, revision: import('@ontology/contracts').ProjectRevisionRef, ctx: ToolContext) => projectEvolution?.assertActiveRebuild(scope, revision, ctx) ?? Promise.resolve(false), resolveActiveSnapshot: (scope: ScopeRef, revision: import('@ontology/contracts').ProjectRevisionRef, objectId: string, ctx: ToolContext) => projectEvolution?.resolveActiveSnapshot(scope, revision, objectId, ctx) ?? Promise.resolve(undefined) }
     const projectDatasetService = new ProjectDataMaterializationService({
       projects: projectStore,
@@ -1878,7 +1880,7 @@ export async function createCoreLocalComposition(options: CoreLocalCompositionOp
       projectQuerySnapshot: projectQuery.resolveForCreation,
       ...(structuredImports === undefined ? {} : { projectDocumentIndexSnapshot: structuredImports.resolveForCreation }),
       questionQuerySnapshot: projectQuery.resolveQuestionForCreation,
-      projectApprovedInput: async (scope: ScopeRef, revision: import('@ontology/contracts').ProjectRevision, ctx: ToolContext) => (await projectEvolution?.resolveApprovedInput(scope, revision, ctx)) ?? await normalApprovedInputs?.resolve(scope, revision, ctx),
+      projectApprovedInput: async (scope: ScopeRef, revision: import('@ontology/contracts').ProjectRevision, ctx: ToolContext) => (await projectEvolution?.resolveApprovedInput(scope, revision, ctx)) ?? await normalApprovedInputs.current?.resolve(scope, revision, ctx),
     })
     const runs = new RunService({
       store: runStore,
@@ -1951,6 +1953,21 @@ export async function createCoreLocalComposition(options: CoreLocalCompositionOp
         ? [projectCollectionRef(request.projectRevisionRef.projectId)]
         : []
     }
+    const termLabels = createCoreDefinitionLabelReader({ packs: publishedPackStore, candidates: assetCandidateStore })
+    const authoring = createCoreAuthoring({ blobs: blobStore, registry: artifactRegistry, objectStore, workspaces: workspaceStore, jobs: jobStore, parses: parseStore, structured: structuredStore, operations: operationRegistry(), models: modelCapabilities, terminology: { getTerminology: (...args) => terminology.getTerminology(...args) }, termLabels })
+    const tableArtifactStore = new PostgresTableArtifactStore(database, { writer: gatewayComposition.artifacts, reader: scopedOriginals })
+    const tableVerificationStore = new PostgresTableVerificationStore(database)
+    const tableSchema = SCHEMA_DOCUMENTS.find((schema) => schema['$id'] === 'https://ontology.local/schema/tools.schema.json')
+    if (tableSchema === undefined) throw new CoreCapabilityError('the actual canonical query output schema is unavailable')
+    const tableSchemaRef = await authoring.stableWrite(`core-data-query-output-schema:${sha256DigestOf(canonicalJson(tableSchema))}`,new TextEncoder().encode(canonicalJson(tableSchema)),'application/schema+json','artifact',profileContext)
+    const tableResults = createCoreTableResults({ evidence: evidenceStore,artifacts: blobStore,pages: tableArtifactStore,manifests: tableArtifactStore,receipts: tableVerificationStore,finalizationReceipts: taskFinalizationReceiptStore,
+      writer: { putBytes: async (input,ctx) => { const digest = `sha256:${createHash('sha256').update(input.content).digest('hex')}` as const
+        const ref = await authoring.stableWrite(`table-artifact:${digest}`,input.content,input.mediaType,'artifact',ctx)
+        return { blobRef: ref,contentDigest: digest,integrity: { algorithm: 'sha256',digest,verifiedAt: hostClock().toISOString() } } } },
+      findArtifact: (_scope,digest,ctx) => authoring.findStableArtifact(`table-artifact:${digest}`,ctx),tableOutputSchema: { ref: tableSchemaRef,body: tableSchema },
+      verifier: new TableHardVerificationService({ pages: tableArtifactStore,receipts: tableVerificationStore,progress: tableVerificationStore,artifacts: blobStore,evidence: evidenceStore }) })
+    const draftVerifier = new DraftVerificationService({ evidence: evidenceStore,artifacts: blobStore,rulePremises: rulePremiseVerifier,decisionStateRefProvider,
+      policy: { ...DEFAULT_VERIFICATION_POLICY,semanticReview: 'disabled' } })
     const controllerDependencies = {
       runs,
       phase,
@@ -2012,22 +2029,19 @@ export async function createCoreLocalComposition(options: CoreLocalCompositionOp
           artifactWriter: gatewayComposition.artifacts,
           receipts: taskFinalizationReceiptStore,
           questionTaskSelection: (ctx) => planReceiptStore.selectedTaskForRun(scopeRef, ctx),
+          tables: tableResults.build,
         }),
       }),
       limited: new RestrictedLimitedAnswerComposer(),
-      verifier: new DraftVerificationService({
-        evidence: evidenceStore,
-        artifacts: blobStore,
-        rulePremises: rulePremiseVerifier,
-        decisionStateRefProvider,
-        policy: { ...DEFAULT_VERIFICATION_POLICY, semanticReview: 'disabled' },
-      }),
+      verifier: { verify: async (request: Parameters<DraftVerificationService['verify']>[0],ctx: ToolContext) => { await tableResults.verify(request.draft,ctx); return draftVerifier.verify(request,ctx) } },
       verifications: workflowStore,
       publisher: new AnswerPublicationService({
         runs: runStore,
         answers: answerStore,
         verifications: workflowStore,
         manifests: workflowStore,
+        tableVerifications: tableResults.requirements,
+        registerTables: tableResults.register,
         validity: new CorePublicationValidity({
           rulePremises: rulePremiseVerifier,
           ...(structuredImports === undefined ? {} : { documentSources: structuredImports.publicationValidator }),
@@ -2036,7 +2050,7 @@ export async function createCoreLocalComposition(options: CoreLocalCompositionOp
           artifacts: blobStore,
           facts,
           scopeRef,
-          tables: new PostgresTableVerificationStore(database),
+          tables: tableVerificationStore,
           policies: new PostgresTaskPolicyReportStore(database),
         }),
       }),
@@ -2270,15 +2284,13 @@ export async function createCoreLocalComposition(options: CoreLocalCompositionOp
     }
 
     const competencyQuestions = createCompetencyQuestionWorkflow({ blobs: blobStore, registry: artifactRegistry, reviews: publicationStore })
-    const termLabels = createCoreDefinitionLabelReader({ packs: publishedPackStore, candidates: assetCandidateStore })
-    const authoring = createCoreAuthoring({ blobs: blobStore, registry: artifactRegistry, objectStore, workspaces: workspaceStore, jobs: jobStore, parses: parseStore, structured: structuredStore, operations: operationRegistry(), models: modelCapabilities, terminology: { getTerminology: (...args) => terminology.getTerminology(...args) }, termLabels })
     const reviewableCandidates = new CompositeReviewableCandidateReader({
       competencyQuestions: competencyQuestions.service,
       definition: assetCandidateStore,
       instance: candidateStore,
       ruleActions: ruleActionCandidateStore,
     })
-    publishedPackRules = new PublishedPackRuleDeclarationReader({ packs: publishedPackStore, registry: componentStore, definitions: definitionStore,
+    publishedPackRules.current = new PublishedPackRuleDeclarationReader({ packs: publishedPackStore, registry: componentStore, definitions: definitionStore,
       candidates: ruleActionCandidateStore, reviews: publicationStore, reviewableCandidates, projects: projectStore })
     const projectFacts = createProjectFactWorkflow({
       materialization: { projects: projectStore, mappings: projectMappingStore, records: projectRecordStore,
@@ -2432,10 +2444,10 @@ export async function createCoreLocalComposition(options: CoreLocalCompositionOp
       parser: new StructuredDocumentParser(),
     })
     const instanceIdentity = createCoreInstanceIdentity({ projects: projectStore, documents: projectDocumentStore, candidates: candidateStore, identities: identityStore, instances: instanceReviewStore, schemas: schemaSource, reader: scopedOriginals })
-    normalApprovedInputs = createCoreApprovedInput({ projects: projectStore, documents: projectDocumentStore, records: projectRecordStore,
+    normalApprovedInputs.current = createCoreApprovedInput({ projects: projectStore, documents: projectDocumentStore, records: projectRecordStore,
       instances: instanceReviewStore, candidates: candidateStore, reviews: publicationStore, reviewable: reviewableCandidates,
       schemas: schemaSource, source: publishedProjectDatasetSource, reader: scopedOriginals, authoring })
-    const approvedInputs = normalApprovedInputs
+    const approvedInputs = normalApprovedInputs.current
     const resolveApprovedInput = async (scope: ScopeRef, revision: import('@ontology/contracts').ProjectRevision, ctx: ToolContext, signal: AbortSignal) => {
       const evolved = await projectEvolution?.resolveApprovedInput(scope, revision, ctx)
       if (signal.aborted) throw new RunServiceError('DEADLINE_EXCEEDED', 'the normal run input validation was cancelled', { cause: signal.reason })
@@ -2457,7 +2469,7 @@ export async function createCoreLocalComposition(options: CoreLocalCompositionOp
     const projectApi = createCoreProjectApi({ projects: projectStore, documents: projectDocumentStore, jobs: jobStore, readiness: projectReadinessStore,
       catalogue: packCatalogue, profiles: profileResolver, schemas: schemaSource, tasks: taskBindingStore, operations: operationRegistry(),
       availableCapabilities: resolvedCapabilitiesFrom(componentRecords), resultSchemaRef: CORE_TYPED_RESULT_SCHEMA_REF,
-      blobs: blobStore, parses: parseStore, structured: structuredStore, authoring, identity: instanceIdentity, facts: projectFacts.materialization, evolutions: projectEvolutionStore, selectors: semanticTasks, termLabels, computeInputConfigured: true, publications: publicationStore })
+      blobs: blobStore, parses: parseStore, structured: structuredStore, authoring, identity: instanceIdentity, facts: projectFacts.materialization, evolutions: projectEvolutionStore, selectors: semanticTasks, termLabels, computeInputConfigured: true, publications: publicationStore, documentSetFor: structuredImports.documentSet })
     const resolveRunRequest = createCoreRunRequestResolver({ projects: projectStore, runs: runStore, bindings: runExecutionBindingStore, tasks: taskBindingStore,
       inputs: { ...approvedInputs, resolve: (scope, revision, ctx, signal) => resolveApprovedInput(scope, revision, ctx, signal ?? new AbortController().signal) },
       prepareComputeInput, authoring, reader: scopedOriginals, now: () => hostClock().toISOString() })
@@ -2471,20 +2483,6 @@ export async function createCoreLocalComposition(options: CoreLocalCompositionOp
         structuredSources: structuredPremiseSources, publishedRules: packRuleReader, readMode: 'published_snapshot' }),
     })
     const projectStructuredImportService = structuredImports.imports
-    const tableArtifactStore = new PostgresTableArtifactStore(database, {
-      writer: gatewayComposition.artifacts,
-      reader: {
-        read: (request, ctx) => {
-          const target = request.approvedInputRefs[0]
-          if (target === undefined) throw new Error('the table page read carried no approved input reference')
-          return blobStore.readAuthorized(
-            { scopeRef: { tenantId: ctx.principal.tenantId, spaceId: ctx.allowedResources.spaceId }, blobRef: target },
-            ctx,
-          )
-        },
-      },
-    })
-    const tableVerificationStore = new PostgresTableVerificationStore(database)
     // A manifest is only served as *verified* when the table-verification receipt it names
     // actually exists. Otherwise the reader refuses to render it as a formal table
     // (TABLE_UNVERIFIED) instead of trusting the stored ref alone.

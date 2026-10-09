@@ -157,7 +157,19 @@ describe('normal Core authoring, reviewed pack execution support and actual CQ d
     const tasks = await call(`/api/v1/core/projects/${projectId}/task-catalogue`)
     if (!Array.isArray(tasks['tasks'])) throw new Error('actual business task catalogue missing')
     const queryTask = tasks['tasks'].map(object).find((task) => task['taskKind'] === 'structured_query')
-    expect(queryTask?.['available']).toBe(true)
+    expect(queryTask?.['available'],JSON.stringify(queryTask)).toBe(true)
+    const queryRun = await call('/api/v1/runs', { profileRef: { id: profile['id'],version: profile['version'] },projectId,question: '查看已审核设备的原始工时',context: { timeZone: 'UTC' },preferences: { route: 'template',allowWeb: false },task: { bindingRef: queryTask?.['bindingRef'],arguments: { objectId: 'machine',fields: ['machine_id','hours'],limit: 2 } } })
+    const runId = text(queryRun['runId']), answerDeadline = Date.now() + 30_000
+    let answer: Record<string,unknown> | undefined
+    while (Date.now() < answerDeadline) {
+      const response = await fetch(`${baseUrl}/api/v1/runs/${runId}/answer`)
+      if (response.status === 200) { answer = object(object(await response.json() as unknown)['data']); break }
+      if (response.status !== 202) throw new Error(`normal query publication refused: ${await response.text()}; run=${JSON.stringify(await call(`/api/v1/runs/${runId}`))}; workers=${JSON.stringify(workerErrors.map((error) => error instanceof Error ? { message: error.message,cause: error.cause } : error))}`)
+      await new Promise<void>((done) => setTimeout(done,100))
+    }
+    expect(answer,'actual normal controller did not publish before its original30s bound').toBeDefined()
+    const resultView = await call(`/api/v1/answers/${text(answer?.['answerId'])}/result`)
+    expect(resultView['tables']).toHaveLength(1)
     const privateJobs = await harness.adminClient.query<{ stage: string; last_error: unknown }>(`SELECT DISTINCT j.stage,j.last_error FROM agent_platform.jobs j
       JOIN agent_platform.published_statements s ON s.tenant_id=j.tenant_id AND s.space_id=j.space_id AND s.source_job_id=j.job_id
       JOIN agent_platform.project_revisions r ON r.tenant_id=s.tenant_id AND r.space_id=s.space_id AND r.project_id::text=s.value#>>'{provenance,sources,0,projectRevisionRef,projectId}'

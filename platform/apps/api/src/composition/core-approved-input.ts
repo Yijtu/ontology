@@ -17,8 +17,15 @@ export function createCoreApprovedInput(options: {
     if (bytes.byteLength > 8_388_608 || `sha256:${createHash('sha256').update(bytes).digest('hex')}` !== ref.digest) throw new InvalidRequestFieldError('the actual approved input artifact failed byte integrity')
     return JSON.parse(new TextDecoder('utf-8', { fatal: true }).decode(bytes)) as unknown
   }
-  const readCapture = async (manifest: unknown, body: Readonly<Record<string, unknown>>, revision: ProjectRevision, ctx: ToolContext) => {
+  const readCapture = async (manifest: unknown, body: Readonly<Record<string, unknown>>, revision: ProjectRevision, ctx: ToolContext, signal?: AbortSignal) => {
     const invalid = (): never => { throw new InvalidRequestFieldError('the actual normal input confirmation pages are malformed or detached') }
+    const checkRead = () => { if (signal?.aborted === true) throw new RunServiceError('DEADLINE_EXCEEDED','the approved input page read was cancelled',{ cause: signal.reason }) }
+    const read = async (ref: import('@ontology/contracts').ResourceRef) => {
+      checkRead()
+      const value = await readJson(ref,ctx)
+      checkRead()
+      return value
+    }
     if (!isRecord(manifest) || !isRecord(manifest['semanticPins'])) return invalid()
     const semanticPins = manifest['semanticPins']
     if (manifest['normalArchiveVersion'] === undefined) {
@@ -32,19 +39,19 @@ export function createCoreApprovedInput(options: {
     const physical: unknown[] = [], rows: unknown[] = [], human: Record<string, unknown>[] = []
     for (const ref of manifest['physicalPages']) {
       if (!isResourceRef(ref)) return invalid()
-      const page = await readJson(ref,ctx)
+      const page = await read(ref)
       if (!isRecord(page) || page['schemaVersion'] !== 'project-input-physical-page@1' || canonicalJson(page['projectRevisionRef']) !== canonicalJson(revision.ref) || !Array.isArray(page['records']) || page['records'].length > 100) return invalid()
       physical.push(...page['records'])
     }
     for (const pin of body['recordPages']) {
       if (!isRecord(pin) || !isResourceRef(pin['ref'])) return invalid()
-      const page = await readJson(pin['ref'],ctx)
+      const page = await read(pin['ref'])
       if (!isRecord(page) || page['schemaVersion'] !== 'project-input-record-page@1' || canonicalJson(page['projectRevisionRef']) !== canonicalJson(revision.ref) || canonicalJson(page['definitionRef']) !== canonicalJson(revision.definitionRef) || !Array.isArray(page['records']) || page['records'].length !== pin['rowCount'] || page['records'].length > 100 || page['records'][0]?.['recordId'] !== pin['firstRecordId'] || page['records'].at(-1)?.['recordId'] !== pin['lastRecordId']) return invalid()
       rows.push(...page['records'])
     }
     for (const ref of manifest['confirmationPages']) {
       if (!isResourceRef(ref)) return invalid()
-      const page = await readJson(ref,ctx)
+      const page = await read(ref)
       if (!isRecord(page) || page['schemaVersion'] !== 'project-input-confirmations-page@1' || canonicalJson(page['projectRevisionRef']) !== canonicalJson(revision.ref) || !Array.isArray(page['confirmations']) || page['confirmations'].length > 100) return invalid()
       for (const row of page['confirmations']) { if (!isRecord(row) || !isRecord(row['review'])) return invalid(); human.push(row) }
     }
@@ -171,7 +178,7 @@ export function createCoreApprovedInput(options: {
     const body = await readJson(ref, ctx)
     if (!isRecord(body) || body['schemaVersion'] !== 'project-input-snapshot@1' || body['projectId'] !== revision.ref.projectId || body['inputRevision'] !== revision.ref.revision || canonicalJson(body['definitionRef']) !== canonicalJson(revision.definitionRef) || canonicalJson(body['mappingRefs']) !== canonicalJson(revision.mappingRefs) || !isResourceRef(body['confirmationManifestRef']) || !Array.isArray(body['recordPages']) || body['recordPages'].length > 200) return invalid()
     const manifest = await readJson(body['confirmationManifestRef'], ctx)
-    const capture = await readCapture(manifest,body,revision,ctx)
+    const capture = await readCapture(manifest,body,revision,ctx,signal)
     const selection = capture.selection
     const collected = await collect(scope, revision, ctx, signal, selection)
     if (canonicalJson(collected.current) !== canonicalJson(selection)) invalid()
@@ -229,9 +236,10 @@ export function createCoreApprovedInput(options: {
       const saved = await readJson(existing, ctx)
       if (!isRecord(saved) || saved['schemaVersion'] !== 'project-input-snapshot@1' || saved['projectId'] !== revision.ref.projectId || saved['inputRevision'] !== revision.ref.revision || !isResourceRef(saved['confirmationManifestRef'])) throw new InvalidRequestFieldError('the actual prior input archive is malformed')
       const manifest = await readJson(saved['confirmationManifestRef'], ctx)
-      const capture = await readCapture(manifest,saved,revision,ctx)
+      const capture = await readCapture(manifest,saved,revision,ctx,signal)
       if (canonicalJson(capture.selection) !== canonicalJson(collected.current)) throw new InvalidRequestFieldError('the prior input archive does not bind current actual authority')
       for (const row of capture.human) {
+        check()
         if (!isRecord(row) || typeof row['candidateId'] !== 'string' || !isRecord(row['review']) || typeof row['review']['revision'] !== 'string') throw new InvalidRequestFieldError('a captured actual review pin is malformed')
         const actual = await options.reviews.getReview(scope, row['candidateId'], row['review']['revision'], ctx)
         if (canonicalJson(actual) !== canonicalJson(row['review'])) throw new InvalidRequestFieldError('the captured approval does not match its real immutable ledger act')
