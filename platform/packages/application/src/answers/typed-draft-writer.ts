@@ -19,6 +19,7 @@ import type {
 } from '@ontology/contracts'
 import { answerDraftContentHash } from '../workflow/canonical'
 import { typedResultManifestContentDigest } from './typed-result-manifest'
+import { rulePremiseHasSourceLimitation } from './rule-premise-bindings'
 
 /**
  * The typed evidence draft writer (SPEC v0.3a execution-evidence §EX-7.1, §EX-12; issue
@@ -393,6 +394,7 @@ function renderRule(
     return rendered
   }
   const { artifact, pointer } = found
+  if (rulePremiseHasSourceLimitation(payload)) rendered.limitations.push('limited_factual_result')
   const subject = artifact['subjectEntityId']
   const predicate = artifact['predicate']
   const ruleRef = artifact['ruleRef']
@@ -409,8 +411,9 @@ function renderRule(
     predicate,
     value: verdict,
     ruleRef,
-    premiseRefs: [],
+    premiseRefs: Array.isArray(payload['premiseRefs']) ? payload['premiseRefs'].filter(isResourceRef) : [],
     judgementAxis: 'applicability',
+    ...(typeof artifact['validAt'] === 'string' ? { asOf: artifact['validAt'] } : {}),
     ...(typeof artifact['computationDigest'] === 'string' ? { computationDigest: artifact['computationDigest'] } : {}),
     references: [{
       evidenceRef,
@@ -418,6 +421,7 @@ function renderRule(
       valuePointer: pointer === '' ? '' : pointer,
       subjectPointer: pointer === '' ? '/subjectEntityId' : `${pointer}/subjectEntityId`,
       rulePointer: pointer,
+      ...(typeof artifact['validAt'] === 'string' ? { timePointer: `${pointer}/validAt` } : {}),
     }],
   })
   return rendered

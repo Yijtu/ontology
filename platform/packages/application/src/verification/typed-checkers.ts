@@ -191,13 +191,14 @@ export function verifyRuleJudgement(
   assertion: RuleAssertion,
   resolved: ReadonlyMap<string, ResolvedEvidence>,
   now: Rfc3339UtcTimestamp,
+  replayedRules: ReadonlySet<string> = new Set(),
 ): VerificationFinding[] {
   const findings: VerificationFinding[] = []
   if (assertion.references.length === 0) findings.push(finding(assertion, undefined, 'unbound_claim'))
 
   for (const premiseRef of assertion.premiseRefs) {
     const premise = resolved.get(premiseRef.id)
-    if (premise === undefined || premise.unreadable || premise.payload === undefined) {
+    if (premise === undefined || premise.unreadable || premise.payload === undefined || !sameResourceRef(premise.record.evidenceRef, premiseRef)) {
       findings.push(finding(assertion, undefined, 'rule_premise_missing', { evidenceRef: premiseRef }))
     }
   }
@@ -243,9 +244,22 @@ export function verifyRuleJudgement(
       findings.push(finding(assertion, reference, 'rule_judgement_mismatch', { field: 'computation', pointer }))
       continue
     }
+    const archivedPremises = isRecord(located.payload) ? located.payload['premiseRefs'] : undefined
+    if (!Array.isArray(archivedPremises) || !sameRecord(archivedPremises, assertion.premiseRefs) || !replayedRules.has(reference.evidenceRef.id)) {
+      findings.push(finding(assertion, reference, 'rule_premise_missing', { field: 'premiseRefs' }))
+    }
     if (!sameVersionRef(artifact['ruleRef'], assertion.ruleRef)) {
       findings.push(finding(assertion, reference, 'rule_judgement_mismatch', { field: 'ruleRef' }))
       continue
+    }
+    if (!sameVersionRef(located.record.envelope.producedBy.ruleRef, assertion.ruleRef) || !sameRecord(artifact['scopeRef'], located.record.envelope.scopeRef)) {
+      findings.push(finding(assertion, reference, 'rule_judgement_mismatch', { field: 'ruleRef' }))
+    }
+    if (artifact['predicate'] !== assertion.predicate) {
+      findings.push(finding(assertion, reference, 'predicate_mismatch', { expected: typeof artifact['predicate'] === 'string' ? artifact['predicate'] : 'absent', actual: assertion.predicate }))
+    }
+    if (assertion.asOf !== undefined && artifact['validAt'] !== assertion.asOf) {
+      findings.push(finding(assertion, reference, 'time_mismatch', { expected: typeof artifact['validAt'] === 'string' ? artifact['validAt'] : 'absent', actual: assertion.asOf }))
     }
     const artifactSubject = artifact['subjectEntityId']
     if (typeof artifactSubject === 'string' && artifactSubject !== assertion.subject) {

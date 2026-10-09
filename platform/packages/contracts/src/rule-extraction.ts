@@ -1,4 +1,9 @@
-import type { DecimalQuantity, DocumentSpan, ResourceRef, RevisionString, ScopeRef, Sha256Digest, Uuid, VersionRef } from './generated/contracts'
+import type { ControlReadProjectionRequest, DecimalQuantity, DocumentSpan, ResourceRef, RevisionString, ScopeRef, Sha256Digest, SourceRef, Uuid, ValidityInterval, VersionRef } from './generated/contracts'
+import type { SemanticDefinitionVersion } from './semantic-definitions'
+import type { PublishedExecutableRule, PublishedStatement } from './semantic-publication'
+import type { IdentityPublishedBinding } from './identity-decisions'
+import type { ToolContext } from './trusted'
+import type { CandidateRecord, StructuredCandidateSourceSpan } from './extraction'
 import type { SpanPrecision } from './document-parse'
 import type { ExactScalarDecimal } from './materialization'
 import type { RuleDependencyReference } from './rule-action-candidates'
@@ -39,8 +44,61 @@ export interface RuleComputationFactRef {
   readonly sourceRefs?: readonly ResourceRef[]
 }
 
+/** Exact official observations consumed by a rule, including edge endpoints and tombstones. */
+export interface RulePremiseObservation {
+  readonly projectId?: string
+  readonly assertionId: string
+  readonly relation?: { readonly relationId: string; readonly targetEntityId?: string; readonly targetObjectId: string; readonly endpointResolved: boolean }
+  readonly logicalAssertionId: string
+  readonly recordedSeq: RevisionString
+  readonly op: 'assert' | 'correct' | 'retract'
+  readonly subject: string
+  readonly predicate: string
+  readonly value?: RuleConclusionBinding['value']
+  readonly sourceStatementId?: string
+  readonly objectId?: string
+  readonly attributeId?: string
+  readonly schemaRef?: VersionRef
+  readonly validity: ValidityInterval
+  readonly sourceRef: SourceRef
+  readonly sourceRefs?: readonly ResourceRef[]
+  readonly evidenceId?: string
+}
+
+/** Saved at materialization, before mutable publication heads can change. No compiled AST. */
+export interface RulePremiseReplayInput {
+  readonly request: ControlReadProjectionRequest
+  readonly definition?: SemanticDefinitionVersion
+  readonly declarations: readonly PublishedExecutableRule[]
+  readonly attributeStatements: readonly PublishedStatement[]
+  readonly relationStatements: readonly PublishedStatement[]
+  readonly identityBindings: readonly IdentityPublishedBinding[]
+  readonly subjects: readonly { readonly subjectEntityId: string; readonly objectId: string; readonly projectId?: string }[]
+  readonly facts: readonly RulePremiseObservation[]
+  readonly completeRangeAttributeIds: readonly string[]
+  readonly evaluatedRuleIds: readonly string[]
+  readonly complete: boolean
+}
+
+/** Independent archived-input verification, implemented by the semantic engine, injected by host. */
+export interface RulePremiseReplayPort {
+  verify(input: { readonly artifact: unknown; readonly payload: unknown }, ctx: ToolContext): Promise<boolean>
+}
+
+/** Authorized read of one real original row/cell using its stored mapping/parser pins. */
+export interface RuleStructuredPremiseSourcePort {
+  read(candidate: CandidateRecord, span: StructuredCandidateSourceSpan, ctx: ToolContext): Promise<{
+    readonly documentRef: ResourceRef
+    readonly documentVersionRef: ResourceRef
+    readonly parserVersion: string
+    /** The exact UTF-8 row fingerprint input, containing original raw tokens and cell kinds. */
+    readonly rowText: string
+  } | undefined>
+}
+
 /** The durable typed result of computing one published rule against one entity. */
 export interface RuleComputationArtifact {
+  readonly premiseInput?: RulePremiseReplayInput
   readonly publishedPackRef?: VersionRef
   readonly dependencyRefs?: readonly RuleDependencyReference[]
   readonly projectId?: string

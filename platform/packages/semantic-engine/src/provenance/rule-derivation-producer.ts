@@ -2,6 +2,7 @@ import { createHash, randomUUID } from 'node:crypto'
 import type {
   CandidateRecord,
   CandidateStore,
+  CandidateSourceSpan,
   DataMode,
   DocumentParseStore,
   DocumentSpanReaderPort,
@@ -16,6 +17,9 @@ import type {
   RevisionString,
   RuleComputationArtifact,
   RuleComputationFactRef,
+  RulePremiseObservation,
+  ParseCoverage,
+  RuleStructuredPremiseSourcePort,
   RuleProvenanceSpan,
   Semver,
   ScopeRef,
@@ -30,7 +34,6 @@ import { compareUtcInstants, sameUtcInstant } from './instant'
 import {
   digestIsSelfConsistent,
   isRuleComputationArtifact,
-  materializedRuleSupportFactGroupsOf,
 } from './materialized-support-reader'
 import type {
   RuleDerivationSourceEvidenceMapping,
@@ -39,6 +42,7 @@ import type {
   RulePolicySpanArchiveBinding,
   RuleSourceSpanArchiveBinding,
 } from './support-payload'
+import { rulePremisePolicySpans, rulePremiseSourceTargetsOf } from './rule-premise-sources'
 
 const DEFAULT_MAX_SLICES = 10_000
 const MAX_SOURCE_EVIDENCE_REFS = 256
@@ -81,6 +85,7 @@ export interface MaterializedRuleDerivationEvidenceProducerDependencies {
   readonly documentParses?: Pick<DocumentParseStore, 'findParseByDigest' | 'getParse'>
   /** Optional authorized source-span reader. Raw chunk refs remain incomplete without this port. */
   readonly documentSpans?: DocumentSpanReaderPort
+  readonly structuredSources?: RuleStructuredPremiseSourcePort
   readonly componentRef: VersionRef
   readonly maxSlices?: number
   readonly newId?: () => Uuid
@@ -199,9 +204,10 @@ function documentCandidateMatches(
   artifact: RuleComputationArtifact,
   sourceRef: ResourceRef,
   sourceStatementId: string,
+  observation?: RulePremiseObservation,
 ): { readonly documentVersionRef: ResourceRef; readonly span: TextCandidateSourceSpan } | undefined {
-  if (candidate.kind !== 'entity' || candidate.candidateId !== sourceStatementId ||
-      candidate.objectId !== artifact.objectId ||
+  if ((candidate.kind !== 'entity' && candidate.kind !== 'relation') || candidate.candidateId !== sourceStatementId ||
+      candidate.kind === 'entity' && candidate.objectId !== (observation?.objectId ?? artifact.objectId) ||
       !sameVersion(candidate.inputVersion.definitionRef, artifact.definitionRef) ||
       candidate.inputVersion.documentVersionRef === undefined ||
       candidate.inputVersion.documentVersionRef.kind !== 'document' ||
@@ -234,10 +240,11 @@ interface SupportFactMappingTarget {
 }
 
 interface ArchivedSourceMapping {
+  readonly sourceCoverage?: ParseCoverage
   readonly evidenceRef: ResourceRef
   readonly documentVersionRef: ResourceRef
   readonly documentRef: ResourceRef
-  readonly sourceSpan: TextCandidateSourceSpan
+  readonly sourceSpan: CandidateSourceSpan
   readonly parserVersion: Semver
 }
 
@@ -246,17 +253,7 @@ type ArchivedSourceMappingResult =
   | { readonly ok: false; readonly reason: string }
 
 function supportFactMappingTargets(slice: ProjectionSlice, artifact: RuleComputationArtifact): SupportFactMappingTarget[] | undefined {
-  const groups = materializedRuleSupportFactGroupsOf(slice, artifact)
-  if (groups === undefined) return undefined
-  const targets: SupportFactMappingTarget[] = []
-  for (const group of groups) {
-    for (const fact of group.factRefs) {
-      for (const sourceRef of fact.sourceRefs ?? []) {
-        if (sourceRef.kind !== 'evidence') targets.push({ groupId: group.groupId, fact, sourceRef })
-      }
-    }
-  }
-  return targets
+  return [...rulePremiseSourceTargetsOf(slice, artifact)]
 }
 
 async function missingEvidenceRefs(
@@ -303,6 +300,7 @@ export class MaterializedRuleDerivationEvidenceProducer {
   readonly #candidates: Pick<CandidateStore, 'getCandidate'> | undefined
   readonly #documentParses: Pick<DocumentParseStore, 'findParseByDigest' | 'getParse'> | undefined
   readonly #documentSpans: DocumentSpanReaderPort | undefined
+  readonly #structuredSources: RuleStructuredPremiseSourcePort | undefined
   readonly #componentRef: VersionRef
   readonly #maxSlices: number
   readonly #newId: () => Uuid
@@ -314,6 +312,7 @@ export class MaterializedRuleDerivationEvidenceProducer {
     this.#candidates = dependencies.candidates
     this.#documentParses = dependencies.documentParses
     this.#documentSpans = dependencies.documentSpans
+    this.#structuredSources = dependencies.structuredSources
     this.#componentRef = dependencies.componentRef
     this.#maxSlices = dependencies.maxSlices ?? DEFAULT_MAX_SLICES
     this.#newId = dependencies.newId ?? (() => randomUUID())
@@ -375,6 +374,8 @@ export class MaterializedRuleDerivationEvidenceProducer {
       artifact: selected.artifact,
       sourceEvidenceMappings: [...bridge.mappings],
       policySourceEvidenceMappings: [...policyBridge.mappings],
+      premiseRefs: [...new Map([...refs.filter((ref) => ref.kind === 'evidence'), ...bridge.mappings.map((mapping) => mapping.evidenceRef),
+        ...policyBridge.mappings.map((mapping) => mapping.evidenceRef)].map((ref) => [refIdentity(ref), ref])).values()],
     }
     let payload = new TextEncoder().encode(JSON.stringify(supportPayload))
     if (payload.byteLength > MAX_RULE_SUPPORT_PAYLOAD_BYTES) {
@@ -477,7 +478,32 @@ export class MaterializedRuleDerivationEvidenceProducer {
           limitations.add(`published source candidate ${sourceStatementId} is not available in this scope`)
           continue
         }
-        const resolved = documentCandidateMatches(candidate, selected.artifact, target.sourceRef, sourceStatementId)
+        const observation = selected.artifact.premiseInput?.facts.find((fact) => fact.assertionId === target.fact.assertionId)
+        const fieldIndex = candidate.kind === 'entity' ? candidate.attributes.findIndex((attribute) => attribute.attributeId === observation?.attributeId) : -1
+        const structured = fieldIndex < 0 ? candidate.sourceSpans.find((span) => span.kind === 'structured' && span.recordId === target.sourceRef.id) : candidate.sourceSpans[fieldIndex]
+        if (structured?.kind === 'structured') {
+          if (this.#structuredSources === undefined || candidate.candidateId !== sourceStatementId || !sameVersion(candidate.inputVersion.definitionRef, selected.artifact.definitionRef) ||
+            structured.recordId !== target.sourceRef.id || structured.rowDigest !== target.sourceRef.digest || candidate.inputVersion.parserVersion !== target.sourceRef.version) {
+            limitations.add(`structured premise ${target.fact.assertionId} lacks an exact source reader or field pin`)
+            continue
+          }
+          const read = await this.#structuredSources.read(candidate, structured, ctx)
+          if (read === undefined) { limitations.add(`structured premise ${target.fact.assertionId} could not round-trip its original row/cell`); continue }
+          const bytes = new TextEncoder().encode(read.rowText)
+          if (sha256OfBytes(bytes) !== structured.rowDigest || bytes.byteLength > MAX_ARCHIVED_SOURCE_SPAN_BYTES) { limitations.add('structured row fingerprint or byte bound did not match'); continue }
+          const textArtifactRef = await this.#archiveArtifactBytes(input.scopeRef, bytes, 'application/json', ctx)
+          const source = { sourceSpan: structured, documentRef: read.documentRef, documentVersionRef: read.documentVersionRef, parserVersion: read.parserVersion }
+          const binding: RuleSourceSpanArchiveBinding = { schemaVersion: 'rule-source-span-binding@1', premiseGroup: target.groupId, assertionId: target.fact.assertionId,
+            logicalAssertionId: target.fact.logicalAssertionId, sourceStatementId, sourceRef: target.sourceRef, ...source, textArtifactRef }
+          const recorded = await this.#recordDocumentSpanEvidence({ input, selected, binding, textArtifactRef, resultDigest: structured.rowDigest, approximate: false, ctx,
+            response: { snapshot: { sourceRef: { namespace: 'structured-original', sourceId: read.documentRef.id }, schemaVersion: read.parserVersion, readAt: input.observedAt, consistency: 'repeatable_read', resultDigest: structured.rowDigest } } })
+          if (!recorded.ok) { limitations.add(recorded.reason); continue }
+          mappings.push({ premiseGroup: target.groupId, assertionId: target.fact.assertionId, logicalAssertionId: target.fact.logicalAssertionId, sourceStatementId, sourceRef: target.sourceRef, ...source, evidenceRef: recorded.evidenceRef })
+          mappedKeys.add(resourceKey)
+          continue
+        }
+        const resolved = documentCandidateMatches(candidate, selected.artifact, target.sourceRef, sourceStatementId,
+          observation)
         if (resolved === undefined) {
           limitations.add(`published source candidate ${sourceStatementId} does not prove the exact raw chunk ref`)
           continue
@@ -507,6 +533,7 @@ export class MaterializedRuleDerivationEvidenceProducer {
         }, ctx)
         stage = 'source archive and evidence write'
         const archived = await this.#archiveSourceSpan(input, selected, target, sourceStatementId, {
+          sourceCoverage: parse.coverage,
           documentVersionRef: resolved.documentVersionRef,
           documentRef: parse.originalRef,
           sourceSpan: resolved.span,
@@ -531,6 +558,7 @@ export class MaterializedRuleDerivationEvidenceProducer {
         documentRef: cached.documentRef,
         documentVersionRef: cached.documentVersionRef,
         parserVersion: cached.parserVersion,
+        ...(cached.sourceCoverage === undefined ? {} : { sourceCoverage: cached.sourceCoverage }),
         sourceSpan: cached.sourceSpan,
         evidenceRef: cached.evidenceRef,
       })
@@ -544,7 +572,7 @@ export class MaterializedRuleDerivationEvidenceProducer {
     selected: MaterializedCandidate,
     ctx: ToolContext,
   ): Promise<PolicyBridgeResult> {
-    const spans = selected.artifact.sourceSpans
+    const spans = rulePremisePolicySpans(selected.artifact)
     if (spans.length === 0) return { mappings: [], limitations: [] }
     if (spans.length > MAX_POLICY_SPANS) {
       return { mappings: [], limitations: ['the specification span bridge exceeded its 256-span bound'] }
@@ -579,6 +607,7 @@ export class MaterializedRuleDerivationEvidenceProducer {
           documentVersionRef: parse.documentVersionRef,
           documentRef: parse.originalRef,
           parserVersion: parse.parserVersion,
+          sourceCoverage: parse.coverage,
         }, response, ctx)
         if (!archived.ok) {
           limitations.add(`specification span ${span.chunkId} was not bridged: ${archived.reason}`)
@@ -616,6 +645,7 @@ export class MaterializedRuleDerivationEvidenceProducer {
       return { ok: false, reason: 'DocumentSpanReader returned a truncated span or a different original document ref' }
     }
     const span = source.sourceSpan
+    if (span.kind === 'structured') return { ok: false, reason: 'a structured row requires the original-row reader' }
     const bytes = new TextEncoder().encode(response.text)
     const digest = sha256OfBytes(bytes)
     if (bytes.byteLength === 0 || bytes.byteLength > MAX_ARCHIVED_SOURCE_SPAN_BYTES ||
@@ -636,6 +666,7 @@ export class MaterializedRuleDerivationEvidenceProducer {
       parserVersion: source.parserVersion,
       sourceSpan: span,
       textArtifactRef,
+      ...(source.sourceCoverage === undefined ? {} : { sourceCoverage: source.sourceCoverage }),
     }
     const recorded = await this.#recordDocumentSpanEvidence({
       input, selected, binding, textArtifactRef, resultDigest: sourceRef.digest,
@@ -652,6 +683,7 @@ export class MaterializedRuleDerivationEvidenceProducer {
       readonly documentVersionRef: ResourceRef
       readonly documentRef: ResourceRef
       readonly parserVersion: Semver
+      readonly sourceCoverage?: ParseCoverage
     },
     response: ReadSpanResponse,
     ctx: ToolContext,
@@ -673,6 +705,7 @@ export class MaterializedRuleDerivationEvidenceProducer {
       documentRef: source.documentRef,
       parserVersion: source.parserVersion,
       textArtifactRef,
+      ...(source.sourceCoverage === undefined ? {} : { sourceCoverage: source.sourceCoverage }),
     }
     const recorded = await this.#recordDocumentSpanEvidence({
       input, selected, binding, textArtifactRef, resultDigest: source.span.quoteDigest,
@@ -688,6 +721,7 @@ export class MaterializedRuleDerivationEvidenceProducer {
         parserVersion: source.parserVersion,
         textArtifactRef,
         evidenceRef: recorded.evidenceRef,
+        ...(source.sourceCoverage === undefined ? {} : { sourceCoverage: source.sourceCoverage }),
       },
     }
   }
@@ -716,7 +750,7 @@ export class MaterializedRuleDerivationEvidenceProducer {
     readonly binding: RuleSourceSpanArchiveBinding | RulePolicySpanArchiveBinding
     readonly textArtifactRef: ResourceRef
     readonly resultDigest: string
-    readonly response: ReadSpanResponse
+    readonly response: Pick<ReadSpanResponse, 'snapshot'>
     readonly approximate: boolean
     readonly ctx: ToolContext
   }): Promise<{ readonly ok: true; readonly evidenceRef: ResourceRef } | { readonly ok: false; readonly reason: string }> {

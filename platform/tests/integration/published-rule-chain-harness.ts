@@ -30,7 +30,7 @@ export async function publishedRuleChainHarness(database: ControlPostgresDatabas
   const parseText = async (text: string) => {
     const staged = await blobs.stage(new TextEncoder().encode(text), { scopeRef: scope.scopeRef }, ctx)
     const original = await blobs.publish({ scopeRef: scope.scopeRef, contentDigest: staged.contentDigest, byteSize: staged.byteSize, mediaType: 'text/plain', purpose: 'document' }, ctx)
-    return parser.parse({ scopeRef: scope.scopeRef, originalRef: original.blobRef }, ctx)
+    return parser.parse({ scopeRef: scope.scopeRef, originalRef: original.blobRef, documentVersionRef: original.blobRef }, ctx)
   }
   const parsed = await parseText(INDUSTRIAL_TEXT)
   const first = parsed.chunks[0]; if (first === undefined) throw new Error('missing actual rule source chunk')
@@ -111,14 +111,15 @@ export async function publishedRuleChainHarness(database: ControlPostgresDatabas
     await publisher.publish({ schemaRef: definition.ref, approvedCandidateRefs: [{ kind: 'entity', candidateId: candidate.candidateId }], expectedRevision: await publication.latestPublicationRevision(scope.scopeRef, ctx), idempotencyKey: `fact-publish-${jobId}` }, ctx)
     return { candidate, entityId }
   }
-  const publishExtractedRule = async (fixture: typeof INDUSTRIAL_RULES[number], dependencies: readonly RuleDependencyReference[] = []) => {
+  const publishExtractedRule = async (fixture: typeof INDUSTRIAL_RULES[number], dependencies: readonly RuleDependencyReference[] = [], sourceText?: string) => {
+    const ruleDocument = sourceText === undefined ? parsed : await parseText(sourceText)
     const declaration = fixture.declaration
-    const createdJob = await new JobService({ store: jobs }).createJob({ jobId: randomUUID(), kind: 'ingestion', sourceRef: `${parsed.originalRef.id}:${contentDigestOf({ declaration, dependencies })}`, documentRef: parsed.originalRef.id, pipelineVersion: '1.0.0', idempotencyKey: `extract-rule-${randomUUID()}` }, ctx)
+    const createdJob = await new JobService({ store: jobs }).createJob({ jobId: randomUUID(), kind: 'ingestion', sourceRef: `${ruleDocument.originalRef.id}:${contentDigestOf({ declaration, dependencies })}`, documentRef: ruleDocument.originalRef.id, pipelineVersion: '1.0.0', idempotencyKey: `extract-rule-${randomUUID()}` }, ctx)
     const jobId = createdJob.jobId
     await budget.openLedger({ ledgerId: jobId, kind: 'background', runId: jobId }, ctx)
     const pipeline = new ExtractionPipeline({ schemaSource: schemas, candidates: instances, budget, modelRef: MODEL_REF, outputLimit: { maxTokens: 512 }, generation: new CountingGenerationPort(generationResponse({ entities: [], relations: [], rules: [{ ruleId: `extracted-${declaration.ruleId}`, objectId: declaration.objectId, severity: 'soft', impact: 'low', expression: declaration.condition, exceptions: declaration.exceptions.map((row) => row.condition), conclusion: declaration.conclusion,
       ruleDependencies: dependencies.map((row) => row.ruleId), dependencyRefs: dependencies }], exceptions: [] })) })
-    const input = { jobId, parseId: parsed.parseId, parserVersion: parsed.parserVersion, pipelineVersion: '1.0.0', definitionRef: definition.ref, documentVersionRef: parsed.originalRef, chunks: parsed.chunks, truncatedChunkIds: [] }
+    const input = { jobId, parseId: ruleDocument.parseId, parserVersion: ruleDocument.parserVersion, pipelineVersion: '1.0.0', definitionRef: definition.ref, documentVersionRef: ruleDocument.originalRef, chunks: ruleDocument.chunks, truncatedChunkIds: [] }
     const run = { ledgerId: jobId, ctx, signal: new AbortController().signal }
     await pipeline.extract(input, run); expect((await pipeline.validate(input, run)).failed).toBe(0)
     const candidate = (await instances.listCandidates(scope.scopeRef, { jobId }, ctx)).find((row) => row.kind === 'rule')
@@ -133,7 +134,7 @@ export async function publishedRuleChainHarness(database: ControlPostgresDatabas
   const source = new PublishedSemanticSource(publication, { definition, identity: identities, publishedRules: { reader: packReader, request } })
   const gold = loadCompetencyQuestions().flatMap((set) => set.body.questions).find((question) => question.questionId === 'industrial-three-layer')
   if (gold?.expected.kind !== 'rule') throw new Error('missing independent literal three-layer gold')
-  return { asset, definition, source, packReader, request, publisher, publication, saved, ruleActions, instances, reader, rules, approve, importSupport, publishExtractedRule, goldExpected: gold.expected,
+  return { asset, definition, source, packReader, request, publisher, publication, saved, ruleActions, instances, reader, rules, approve, importSupport, publishExtractedRule, goldExpected: gold.expected, blobs, parses, identities,
     close }
   } catch (error) { await close(); throw error }
 }

@@ -1,4 +1,4 @@
-import { createHash, randomUUID } from 'node:crypto'
+import { randomUUID } from 'node:crypto'
 import { mkdtemp, rm } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
@@ -8,7 +8,12 @@ import { afterAll, beforeAll, describe, expect, it } from 'vitest'
 import { FileSystemObjectStore, LocalImmutableBlobStore, PostgresArtifactRegistry } from '@ontology/adapter-blob-local'
 import {
   ControlPostgresDatabase,
-  PostgresEvidenceStore,
+  ControlPostgresRepository,
+  PostgresCandidateStore,
+  PostgresIdentityDecisionStore,
+  PostgresJobStore,
+  PostgresSemanticPublicationStore,
+  PostgresSemanticDefinitionStore,
   PostgresMaterializationStore,
   PostgresProjectReadinessStore,
   runControlMigrations,
@@ -21,27 +26,16 @@ import {
   loadCoreExamples,
 } from '@ontology/app-api'
 import type { CoreLocalComposition } from '@ontology/app-api'
-import { canonicalJson, sha256DigestOf } from '@ontology/application'
-import {
-  compilePublishedRuleInstances,
-  IncrementalMaterializer,
-  projectPublishedAttributeFacts,
-  sha256DigestOf as digestOfCanonical,
-} from '@ontology/semantic-engine'
-import type {
-  MaterializationPublishedSource,
-  PublishedSemanticData,
-  RuleFact,
-  SupportRule,
-} from '@ontology/semantic-engine'
+import { canonicalJson, sha256DigestOf, InMemoryIndustrySchemaSource, JobService } from '@ontology/application'
+import { IdentityDecisionService, IncrementalMaterializer, PublishedSemanticSource, SemanticDefinitionService, SemanticPublicationService, publishedRuleRef } from '@ontology/semantic-engine'
 import { createToolContext } from '@ontology/contracts'
 import type {
-  EvidenceEnvelope,
+  EntityCandidate,
+  RuleCandidate,
+  ParsedDocument,
   MappingRef,
   ProjectRevisionBody,
   ProjectRevisionRef,
-  PublishedRuleVersion,
-  PublishedStatement,
   ResourceRef,
   ScopeRef,
   ToolContext,
@@ -70,17 +64,13 @@ const SCENARIO_ID = 'transport-facility-inspection'
 const PROJECT_ID = randomUUID()
 const COMPONENT_DIGEST = `sha256:${'a'.repeat(64)}`
 const CHANGE_REASON = 'W08 rule judgement task acceptance'
-const SUBJECT_ID = '77777777-7777-4777-8777-777777777777'
+let SUBJECT_ID = ''
 const PREDICATE = 'inspection_due'
 const OBJECT_ID = 'transport_facility'
-const POLICY_TEXT = 'Policy: a transport facility with a due inspection is flagged for review.'
+const POLICY_TEXT = 'Observed facility_id=T-RULE; network_code=N-RULE; facility_district_code=north; inspection_due=true. Policy: a transport facility with a due inspection is flagged for review.'
 const VALIDITY = { validFrom: '2020-01-01T00:00:00Z', validTo: '2099-01-01T00:00:00Z' }
 const VALID_AT = '2026-09-30T00:00:00Z'
-const POLICY_LOCATOR = { kind: 'offset' as const, startOffset: 0, endOffset: new TextEncoder().encode(POLICY_TEXT).byteLength }
 
-function digestOfText(text: string): string {
-  return `sha256:${createHash('sha256').update(new TextEncoder().encode(text)).digest('hex')}`
-}
 
 function mappingRef(): MappingRef {
   return {
@@ -109,17 +99,8 @@ let ruleRef: VersionRef
 let artifactValidAt = VALID_AT
 let artifactRecordedSeq = '1'
 let approvedInputRef: ResourceRef
-let policyParseId = ''
+let policyDocument: ParsedDocument
 const workerErrors: Error[] = []
-
-interface PolicySpan {
-  readonly parseId: string
-  readonly chunkId: string
-  readonly locator: typeof POLICY_LOCATOR
-  readonly spanKind: 'verbatim'
-  readonly precision: 'exact'
-  readonly quoteDigest: string
-}
 
 function trustedContext(scope: ScopeRef, roles: readonly string[]): ToolContext {
   return createToolContext({
@@ -163,51 +144,6 @@ async function startIsolatedDatabase(): Promise<void> {
   appUrl = `${base.protocol}//${encodeURIComponent('ontology_app')}:${encodeURIComponent(APP_PASSWORD)}@${base.hostname}:${base.port}/${base.pathname.replace(/^\//, '')}`
 }
 
-function observationEvidence(evidenceId: string): { readonly envelope: EvidenceEnvelope; readonly ref: ResourceRef } {
-  const body: Omit<EvidenceEnvelope, 'integrity'> = {
-    evidenceId,
-    kind: 'observation',
-    scopeRef,
-    producedBy: { componentRef: { id: 'corerule-premise', version: '1.0.0', digest: COMPONENT_DIGEST } },
-    observedAt: VALID_AT,
-    sourceSnapshots: [],
-    resultDigest: COMPONENT_DIGEST,
-    dependencies: [],
-    dataMode: 'observed',
-  }
-  const digest = digestOfCanonical(body)
-  return {
-    envelope: { ...body, integrity: { algorithm: 'sha256', digest, verifiedAt: VALID_AT } },
-    ref: { id: evidenceId, version: '1.0.0', digest, kind: 'evidence' },
-  }
-}
-
-function publishedRule(policySpan: PolicySpan): PublishedRuleVersion {
-  return {
-    ruleVersionId: randomUUID(),
-    ruleId: 'inspection-due-policy',
-    version: '1',
-    objectId: OBJECT_ID,
-    severity: 'soft',
-    impact: 'low',
-    expression: { op: 'compare', attributeId: PREDICATE, operator: 'eq', value: true, spans: [policySpan] },
-    exceptions: [],
-    recordedAt: VALIDITY.validFrom,
-    sourceCandidateId: randomUUID(),
-    publicationId: randomUUID(),
-  }
-}
-
-class FixturePublishedSource implements MaterializationPublishedSource {
-  readonly #data: PublishedSemanticData
-  constructor(data: PublishedSemanticData) {
-    this.#data = data
-  }
-  async load(): Promise<PublishedSemanticData> {
-    return this.#data
-  }
-}
-
 /** Parse the policy document through the real parser so the rule policy span resolves. */
 async function parsePolicyDocument(): Promise<void> {
   const objectStore = new FileSystemObjectStore(objectDirectory)
@@ -226,7 +162,7 @@ async function parsePolicyDocument(): Promise<void> {
       { scopeRef, originalRef: published.blobRef, documentVersionRef },
       author,
     )
-    policyParseId = parsed.parseId
+    policyDocument = parsed
   } finally {
     await parseStore.close().catch(() => undefined)
     await registry.close().catch(() => undefined)
@@ -237,79 +173,47 @@ async function parsePolicyDocument(): Promise<void> {
 async function seedMaterializedRule(definitionRef: VersionRef): Promise<VersionRef> {
   const database = new ControlPostgresDatabase({ connectionString: appUrl, maxPoolSize: 4 })
   const materialization = new PostgresMaterializationStore(database)
-  const evidence = new PostgresEvidenceStore(database)
-  const ctx = trustedContext(scopeRef, ['platform-admin', 'operator', 'semantic-publisher', 'semantic-reviewer'])
+  const candidates = new PostgresCandidateStore(database), identityStore = new PostgresIdentityDecisionStore(database), publications = new PostgresSemanticPublicationStore(database)
+  const ctx = trustedContext(scopeRef, ['platform-admin', 'operator', 'data-editor', 'semantic-publisher', 'semantic-reviewer'])
   try {
-    const premiseEvidence = observationEvidence(randomUUID())
-    await evidence.record(scopeRef, premiseEvidence.envelope, ctx)
-    const statement: PublishedStatement = {
-      statementId: randomUUID(),
-      propositionKey: `transport_facility.${SUBJECT_ID}`,
-      kind: 'entity',
-      objectId: OBJECT_ID,
-      subjectEntityId: SUBJECT_ID,
-      predicate: OBJECT_ID,
-      value: { attributes: [{ attributeId: PREDICATE, value: true }] },
-      validFrom: VALIDITY.validFrom,
-      validTo: VALIDITY.validTo,
-      recordedAt: VALIDITY.validFrom,
-      sourceCandidateId: randomUUID(),
-      sourceRefs: [premiseEvidence.ref],
-      publicationId: randomUUID(),
-      version: '1',
-      status: 'active',
-    }
-    const projection = projectPublishedAttributeFacts([statement], { schemaRef: definitionRef })
-    expect(projection.issues).toEqual([])
-    const facts: readonly RuleFact[] = projection.facts
-    const policySpan = {
-      parseId: policyParseId,
-      chunkId: randomUUID(),
-      locator: POLICY_LOCATOR,
-      spanKind: 'verbatim' as const,
-      precision: 'exact' as const,
-      quoteDigest: digestOfText(POLICY_TEXT),
-    }
-    const rule = publishedRule(policySpan)
-    const compiled = compilePublishedRuleInstances([rule], facts, {
-      scopeRef,
-      definitionRef,
-      subjects: [{ subjectEntityId: SUBJECT_ID, objectId: OBJECT_ID }],
-    })
-    expect(compiled.instances).toHaveLength(1)
-    const supportRule: SupportRule | undefined = compiled.instances[0]?.supportRule
-    if (supportRule === undefined) throw new Error('the compiler produced no support rule')
-    const source = new FixturePublishedSource({
-      facts,
-      rules: [supportRule],
-      entityBindings: [],
-      definitionRef,
-      complete: true,
-      historicalAsOfSupported: true,
-    })
+    const scenario = loadCoreExamples({ targetScopeRef: scopeRef }).scenarios.find((entry) => entry.scenarioId === SCENARIO_ID)
+    if (scenario === undefined) throw new Error('missing mounted actual schema')
+    const definition = await new SemanticDefinitionService({ store: new PostgresSemanticDefinitionStore(database), control: new ControlPostgresRepository(database) }).publish(scenario.definitionDraft, ctx)
+    expect(definition.ref).toEqual(definitionRef)
+    const schemas = new InMemoryIndustrySchemaSource([{ ref: definitionRef, schema: scenario.industrySchema }])
+    const identity = new IdentityDecisionService({ store: identityStore, candidates, schemaSource: schemas })
+    const publisher = new SemanticPublicationService({ store: publications, candidates, schemaSource: schemas, identity: identityStore })
+    const job = await new JobService({ store: new PostgresJobStore(database) }).createJob({ jobId: randomUUID(), kind: 'ingestion', sourceRef: policyDocument.originalRef.id, documentRef: policyDocument.originalRef.id,
+      pipelineVersion: '1.0.0', idempotencyKey: `rule-source-${randomUUID()}` }, ctx)
+    const chunk = policyDocument.chunks[0]
+    if (chunk === undefined) throw new Error('missing exact parsed source span')
+    const span = { parseId: policyDocument.parseId, chunkId: chunk.chunkId, locator: chunk.locator, spanKind: chunk.spanKind, precision: chunk.precision, quoteDigest: chunk.quoteDigest, textDigest: chunk.textDigest }
+    const common = { jobId: job.jobId, sourceSpans: [span], inputVersion: { definitionRef, parseId: policyDocument.parseId, parserVersion: policyDocument.parserVersion, pipelineVersion: '1.0.0', documentVersionRef: policyDocument.documentVersionRef ?? policyDocument.originalRef },
+      deterministic: true, state: 'pending_review' as const, issues: [], recordedAt: new Date().toISOString() }
+    const entity: EntityCandidate = { ...common, candidateId: randomUUID(), kind: 'entity', objectId: OBJECT_ID, identityScopeId: 'transport_facility_identity',
+      attributes: [{ attributeId: 'facility_id', value: 'T-RULE' }, { attributeId: 'network_code', value: 'N-RULE' }, { attributeId: 'facility_district_code', value: 'north' }, { attributeId: PREDICATE, value: true }], idempotencyKey: sha256DigestOf('actual rule entity') }
+    const rule: RuleCandidate = { ...common, candidateId: randomUUID(), kind: 'rule', objectId: OBJECT_ID, ruleId: 'inspection-due-policy',
+      expression: { op: 'compare', attributeId: PREDICATE, operator: 'eq', value: true, spans: [span] }, exceptions: [], severity: 'soft', impact: 'low', conflicts: [], reviewRequirement: 'required', idempotencyKey: sha256DigestOf('actual declared rule') }
+    await candidates.insertCandidates(scopeRef, [entity, rule], ctx)
+    const pending = await identity.decide({ candidateId: entity.candidateId, kind: 'create_pending', expectedRevision: '0' }, ctx)
+    if (pending.targetEntityId === undefined) throw new Error('missing actual published identity')
+    SUBJECT_ID = pending.targetEntityId
+    await identity.decide({ candidateId: entity.candidateId, kind: 'match', targetEntityId: SUBJECT_ID, expectedRevision: '1', strongIdentity: { kind: 'native_id', attributeId: 'facility_id', value: 'T-RULE' } }, ctx)
+    for (const candidate of [entity, rule]) await publisher.reviewCandidate({ candidateId: candidate.candidateId, decision: 'approve', reason: 'human reviewed exact original fields and complete declaration', expectedRevision: '0' }, ctx)
+    const published = await publisher.publish({ schemaRef: definitionRef, approvedCandidateRefs: [{ kind: 'entity', candidateId: entity.candidateId }, { kind: 'rule', candidateId: rule.candidateId }], expectedRevision: '0', idempotencyKey: `actual-rule-publish-${randomUUID()}` }, ctx)
+    const version = published.ruleVersions[0]
+    if (version === undefined) throw new Error('missing real published rule version')
+    ruleRef = publishedRuleRef(version)
+    const source = new PublishedSemanticSource(publications, { definition, identity: identityStore })
     const materializer = new IncrementalMaterializer({ publishedSource: source, materialization })
-    ruleRef = { id: rule.ruleVersionId, version: '1.0.0', digest: digestOfCanonical(rule) }
-    await materializer.applyChange({
-      changeId: randomUUID(),
-      scopeRef,
-      recordedSeq: '1',
-      recordedAt: VALIDITY.validFrom,
-      kind: 'assertion_published',
-      logicalAssertionId: SUBJECT_ID,
-      predicate: PREDICATE,
-      validity: VALIDITY,
-    }, ctx)
-    const slices = await materialization.readSlices(scopeRef, { validAt: VALID_AT, asOfRecordedSeq: '1', limit: 100 }, ctx)
-    const artifact = slices
-      .flatMap((slice) => slice.conclusion.ruleArtifacts ?? [])
-      .find((candidate) => candidate.ruleRef.id === ruleRef.id && candidate.subjectEntityId === SUBJECT_ID)
-    if (artifact === undefined) throw new Error('the real materializer persisted no rule artifact')
+    await materializer.applyChange({ changeId: randomUUID(), scopeRef, recordedSeq: '1', recordedAt: new Date().toISOString(), kind: 'assertion_published', logicalAssertionId: entity.candidateId, predicate: PREDICATE, validity: VALIDITY }, ctx)
+    const slices = await materialization.readSlices(scopeRef, { validAt: new Date(Date.now() + 1_000).toISOString(), asOfRecordedSeq: '1', limit: 100 }, ctx)
+    const artifact = slices.flatMap((slice) => slice.conclusion.ruleArtifacts ?? []).find((candidate) => candidate.ruleRef.id === ruleRef.id && candidate.subjectEntityId === SUBJECT_ID && candidate.applicability.state === 'applicable')
+    if (artifact === undefined) throw new Error('the actual published materializer persisted no rule artifact')
     artifactValidAt = artifact.validAt ?? VALID_AT
     artifactRecordedSeq = artifact.asOfRecordedSeq ?? '1'
     return ruleRef
-  } finally {
-    await database.close().catch(() => undefined)
-  }
+  } finally { await database.close() }
 }
 
 /** Record the `published_semantics` readiness projection the rule binding requires. */
@@ -477,6 +381,7 @@ describe('rule-judgement task run through the normal HTTP host (real PostgreSQL)
       ruleRef?: VersionRef
       subject?: string
       predicate?: string
+      premiseRefs?: ResourceRef[]
       references?: { evidenceRef?: { id: string; kind: string } }[]
     }
     const v3Body = answer['v3Body'] as { schemaVersion: string; assertions?: RuleAssertionBody[] }
@@ -484,6 +389,7 @@ describe('rule-judgement task run through the normal HTTP host (real PostgreSQL)
     const rules = (v3Body.assertions ?? []).filter((entry) => entry.kind === 'rule_judgement')
     expect(rules.length).toBeGreaterThanOrEqual(1)
     expect(rules[0]?.value).toBe('true')
+    expect(rules[0]?.premiseRefs?.length).toBeGreaterThan(0)
     expect(rules[0]?.subject).toBe(SUBJECT_ID)
     expect(typeof rules[0]?.predicate).toBe('string')
     if (rules[0]?.ruleRef === undefined) throw new Error('the rule assertion carried no rule ref')
