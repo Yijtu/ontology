@@ -1,18 +1,26 @@
 import { createHash, randomUUID } from 'node:crypto'
 import { afterAll, beforeAll, describe, expect, it } from 'vitest'
-import { ControlPostgresDatabase, PostgresTableArtifactStore } from '@ontology/adapter-control-postgres'
-import { TableArtifactReadService } from '@ontology/application'
+import { ControlPostgresDatabase, PostgresTableArtifactStore, PostgresTableVerificationStore } from '@ontology/adapter-control-postgres'
+import { TableArtifactReadService, TableHardVerificationService, canonicalJson } from '@ontology/application'
 import {
   TableArtifactReadError,
   createToolContext,
   decodeTableReadCursor,
   encodeTableReadCursor,
   tableArtifactContentDigest,
+  tableManifestContentDigest,
   tablePageCoverageDigest,
+  sha256OfCanonical,
 } from '@ontology/contracts'
+import type { VerificationArtifactStore } from '@ontology/application'
 import type {
   ArtifactWriteRequest,
+  BlobGetAuthorizedRequest,
+  BlobGetAuthorizedResponse,
   BlobPutImmutableResponse,
+  EvidenceEnvelope,
+  EvidenceRecord,
+  EvidenceStorePort,
   ImmutableArtifactWriter,
   ResourceRef,
   ScopedArtifactReader,
@@ -27,7 +35,6 @@ import { createJobScope, startJobDatabase } from './job-postgres-harness'
 import type { JobDbHarness, JobTestScope } from './job-postgres-harness'
 
 const DIGEST = `sha256:${'a'.repeat(64)}`
-const DIGEST_B = `sha256:${'b'.repeat(64)}`
 const NOW = '2026-09-30T00:00:00Z'
 const TABLE_ID = 'table.energy'
 const ROW_TOTAL = 1001
@@ -55,6 +62,54 @@ class MemoryArtifacts implements ImmutableArtifactWriter {
       integrity: { algorithm: 'sha256', digest, verifiedAt: NOW },
     }
   }
+
+  async getAuthorized(request: BlobGetAuthorizedRequest): Promise<BlobGetAuthorizedResponse> {
+    const bytes = this.blobs.get(request.blobRef.digest)
+    if (bytes === undefined) throw new Error(`no blob for ${request.blobRef.digest}`)
+    return { blobRef: request.blobRef, contentDigest: request.blobRef.digest, mediaType: 'application/json', byteSize: bytes.byteLength, integrityVerified: true }
+  }
+
+  async readAuthorized(request: BlobGetAuthorizedRequest): Promise<Uint8Array> {
+    const bytes = this.blobs.get(request.blobRef.digest)
+    if (bytes === undefined) throw new Error(`no blob for ${request.blobRef.digest}`)
+    return bytes
+  }
+}
+
+class MemoryEvidence implements EvidenceStorePort {
+  readonly #records = new Map<string, EvidenceRecord>()
+
+  seed(scopeRef: { readonly tenantId: string; readonly spaceId: string }, payload: unknown, artifacts: MemoryArtifacts): { readonly ref: ResourceRef; readonly digest: string } {
+    const bytes = new TextEncoder().encode(canonicalJson(payload)), digest = digestOfBytes(bytes), payloadRef: ResourceRef = { id: randomUUID(), version: '1.0.0', digest, kind: 'artifact' }
+    artifacts.blobs.set(digest, bytes)
+    const evidenceId = randomUUID()
+    const envelope: EvidenceEnvelope = {
+      evidenceId,
+      kind: 'observation',
+      scopeRef,
+      producedBy: { componentRef: { id: 'table-fixture', version: '1.0.0', digest: DIGEST }, runId: randomUUID() },
+      observedAt: NOW,
+      sourceSnapshots: [{ sourceRef: { namespace: 'fixture', sourceId: 'table-row' }, schemaVersion: '1', readAt: NOW, consistency: 'repeatable_read', resultDigest: digest }],
+      resultDigest: digest,
+      dependencies: [],
+      dataMode: 'synthetic',
+      payloadRef,
+      integrity: { algorithm: 'sha256', digest, verifiedAt: NOW },
+    }
+    this.#records.set(evidenceId, { evidenceRef: { id: evidenceId, version: '1.0.0', digest, kind: 'evidence' }, envelope, envelopeDigest: digest, revision: '1', recordedAt: NOW })
+    return { ref: { id: evidenceId, version: '1.0.0', digest, kind: 'evidence' }, digest }
+  }
+
+  record(): Promise<EvidenceRecord> { return Promise.reject(new Error('not used')) }
+  get(_scopeRef: unknown, evidenceId: string): Promise<EvidenceRecord | undefined> { return Promise.resolve(this.#records.get(evidenceId)) }
+  listByRun(): Promise<EvidenceRecord[]> { return Promise.resolve([]) }
+}
+
+class MemoryVerificationArtifacts implements VerificationArtifactStore {
+  readonly #artifacts: MemoryArtifacts
+  constructor(artifacts: MemoryArtifacts) { this.#artifacts = artifacts }
+  getAuthorized(request: BlobGetAuthorizedRequest): Promise<BlobGetAuthorizedResponse> { return this.#artifacts.getAuthorized(request) }
+  readAuthorized(request: BlobGetAuthorizedRequest): Promise<Uint8Array> { return this.#artifacts.readAuthorized(request) }
 }
 
 class MemoryReader implements ScopedArtifactReader {
@@ -87,11 +142,7 @@ function ctxFor(target: JobTestScope): ToolContext {
   })
 }
 
-function evidenceRef(): ResourceRef {
-  return { id: randomUUID(), version: '1.0.0', digest: DIGEST, kind: 'artifact' }
-}
-
-function buildPage(pageIndex: number, rowKeys: readonly string[]): { ref: ResourceRef; body: TableArtifactPageBody } {
+function buildPage(pageIndex: number, rowKeys: readonly string[], target: JobTestScope, evidence: MemoryEvidence, artifacts: MemoryArtifacts): { ref: ResourceRef; body: TableArtifactPageBody } {
   const ref: ResourceRef = { id: randomUUID(), version: '1.0.0', digest: DIGEST, kind: 'artifact' }
   const body: TableArtifactPageBody = {
     schemaVersion: 'table-artifact-page@1',
@@ -100,26 +151,30 @@ function buildPage(pageIndex: number, rowKeys: readonly string[]): { ref: Resour
     pageIndex,
     columnRefs: ['amount', 'site'],
     rowKeyOrder: 'ascending',
-    rows: rowKeys.map((rowKey, index) => ({
-      rowKey,
-      cells: { amount: String(index), site: `site-${rowKey}` },
-      bindings: [
-        { rowKey, columnRef: 'amount', evidenceRef: evidenceRef(), resultDigest: DIGEST, valuePointer: '/amount', subjectPointer: '/site', unitPointer: '/unit' },
-        { rowKey, columnRef: 'site', evidenceRef: evidenceRef(), resultDigest: DIGEST, valuePointer: '/site', subjectPointer: '/site' },
-      ],
-    })),
+    rows: rowKeys.map((rowKey, index) => {
+      const site = `site-${rowKey}`, evidenceItem = evidence.seed(scopeRef(target), { amount: String(index), site, unit: 'kWh' }, artifacts)
+      return {
+        rowKey,
+        subject: site,
+        cells: { amount: { value: String(index), unit: 'kWh' }, site },
+        bindings: [
+          { rowKey, columnRef: 'amount', evidenceRef: evidenceItem.ref, resultDigest: evidenceItem.digest, valuePointer: '/amount', subjectPointer: '/site', unitPointer: '/unit' },
+          { rowKey, columnRef: 'site', evidenceRef: evidenceItem.ref, resultDigest: evidenceItem.digest, valuePointer: '/site', subjectPointer: '/site' },
+        ],
+      }
+    }),
     coverage: { returned: rowKeys.length, truncated: false },
   }
   return { ref, body }
 }
 
-function buildTable(): { manifest: TableArtifactManifest; pages: readonly { ref: ResourceRef; body: TableArtifactPageBody }[]; ref: ResourceRef; receiptRef: ResourceRef } {
+function buildTable(target: JobTestScope, evidence: MemoryEvidence, artifacts: MemoryArtifacts): { manifest: TableArtifactManifest; pages: readonly { ref: ResourceRef; body: TableArtifactPageBody }[]; manifestDigest: string } {
   const pages: { ref: ResourceRef; body: TableArtifactPageBody }[] = []
   for (let pageIndex = 0; pageIndex * PAGE_SIZE < ROW_TOTAL; pageIndex += 1) {
     const start = pageIndex * PAGE_SIZE
     const end = Math.min(start + PAGE_SIZE, ROW_TOTAL)
     const rowKeys = Array.from({ length: end - start }, (_value, offset) => `r-${String(start + offset).padStart(5, '0')}`)
-    pages.push(buildPage(pageIndex, rowKeys))
+    pages.push(buildPage(pageIndex, rowKeys, target, evidence, artifacts))
   }
   const manifest: TableArtifactManifest = {
     schemaVersion: 'table-artifact-manifest@1',
@@ -143,8 +198,7 @@ function buildTable(): { manifest: TableArtifactManifest; pages: readonly { ref:
   return {
     manifest,
     pages,
-    ref: { id: randomUUID(), version: '1.0.0', digest: DIGEST, kind: 'artifact' },
-    receiptRef: { id: randomUUID(), version: '1.0.0', digest: DIGEST_B, kind: 'artifact' },
+    manifestDigest: tableManifestContentDigest(manifest),
   }
 }
 
@@ -172,6 +226,8 @@ let scope: JobTestScope
 let otherScope: JobTestScope
 let store: PostgresTableArtifactStore
 let artifacts: MemoryArtifacts
+let evidence: MemoryEvidence
+let verification: TableHardVerificationService
 let service: TableArtifactReadService
 
 beforeAll(async () => {
@@ -180,7 +236,9 @@ beforeAll(async () => {
   scope = await createJobScope(harness.adminClient, 'table-artifacts')
   otherScope = await createJobScope(harness.adminClient, 'table-artifacts-other')
   artifacts = new MemoryArtifacts()
+  evidence = new MemoryEvidence()
   store = new PostgresTableArtifactStore(database, { writer: artifacts, reader: new MemoryReader(artifacts) })
+  verification = new TableHardVerificationService({ pages: store, evidence, artifacts: new MemoryVerificationArtifacts(artifacts), receipts: new PostgresTableVerificationStore(database), progress: new PostgresTableVerificationStore(database), now: () => NOW })
   service = new TableArtifactReadService({ manifests: store, pages: store, progress: store })
 })
 
@@ -190,12 +248,17 @@ afterAll(async () => {
 })
 
 async function seedTable(target: JobTestScope, answerId: string): Promise<{ manifest: TableArtifactManifest }> {
-  const built = buildTable()
+  const built = buildTable(target, evidence, artifacts)
   const ctx = ctxFor(target)
   for (const page of built.pages) {
     await store.putPage(scopeRef(target), { ...page.ref, digest: tableArtifactContentDigest(page.body) }, page.body, ctx)
   }
-  await store.putManifest(scopeRef(target), answerId, built.ref, built.manifest, built.receiptRef, ctx)
+  const manifestBytes = new TextEncoder().encode(canonicalJson(built.manifest))
+  const archivedManifest = await artifacts.putBytes({ scopeRef: scopeRef(target), content: manifestBytes, mediaType: 'application/json' })
+  if (archivedManifest.blobRef.digest !== built.manifestDigest) throw new Error('the archived table manifest does not match its complete canonical digest')
+  const outcome = await verification.verifyTable({ resultManifestRef: archivedManifest.blobRef, resultManifestDigest: archivedManifest.blobRef.digest, draftHash: sha256OfCanonical({ answerId, tableId: TABLE_ID }), tableId: TABLE_ID, manifest: built.manifest }, ctx)
+  if (outcome.status !== 'pass') throw new Error(`the table fixture did not earn a verification receipt: ${outcome.report.findings.map((finding) => finding.code).join(', ')}`)
+  await store.putManifest(scopeRef(target), answerId, archivedManifest.blobRef, built.manifest, outcome.receipt.ref, ctx)
   return { manifest: built.manifest }
 }
 
@@ -268,7 +331,7 @@ describe('table artifact manifest and paginated read over real PostgreSQL', () =
   })
 
   it('is idempotent for the same page artifact ref', async () => {
-    const built = buildTable()
+    const built = buildTable(scope, evidence, artifacts)
     const ctx = ctxFor(scope)
     const first = built.pages[0]
     if (first === undefined) throw new Error('no first page')
