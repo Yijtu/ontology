@@ -1,347 +1,131 @@
-import { useState } from 'react'
-import type { IndustryWorkspace, PipelineStage, ResourceRef } from '@ontology/contracts'
+import { useCallback, useEffect, useRef, useState } from 'react'
+import { isRecord } from '@ontology/contracts'
+import type { AssetCandidateBatch, AssetDraftVersion, IndustryWorkspace, ResourceRef } from '@ontology/contracts'
 import type { WorkbenchClient } from '../api/client'
-import type { JobView } from '../api/review'
-import { ApiError } from '../api/errors'
-import { PublicEmptyState, PublicStateNotice } from './PublicStateNotice'
+import type { WorkspaceIdentity } from '../workspace-identity'
+import { definitionGuard } from '../api/definitions'
+import { encodeOriginalBytes, nativeCellText } from '../api/workspace-authoring'
+import type { WorkspaceAuthoringContext, WorkspaceSourceCatalogue } from '../api/workspace-authoring'
+import { SourceEvidencePane } from './ontology/SourceEvidencePane'
+import type { GroundingView } from '../api/ontology'
+import { invalidWire, readGrounding } from '../api/ontology'
 import { classifyPublicError } from '../state/public-errors'
 import type { PublicFailure } from '../state/public-errors'
-import type { WorkspaceIdentity } from '../workspace-identity'
+import { PublicStateNotice } from './PublicStateNotice'
+import { Button, DataTable, Drawer, Field, StatusBadge } from './ui'
+import './ontology/ontology.css'
 
-/**
- * Source operations for one industry workspace (SPEC v0.3a §5/§9.2, P.US-003.AC-02).
- *
- * An import is a real `POST /api/v1/ingestions`; progress is the real `GET /api/v1/jobs/{id}`
- * projection. The panel keeps file, source revision, media type, processing stage and the parsed
- * counts separate, and it never labels a stage that is still running or partly failed as a full
- * success — `processed` counts handled items, not published assets.
- */
-
-export type SupportedSourceType = 'text' | 'json' | 'csv' | 'xlsx'
-
-export interface WorkspaceSource {
-  readonly jobId: string
-  readonly fileName: string
-  readonly mediaType: SupportedSourceType
-  readonly revision: string
-  readonly documentSetRef: ResourceRef
-  readonly job?: JobView
-  readonly jobError?: string
-}
-
+export type SupportedSourceType = 'text' | 'json' | 'csv' | 'xlsx' | 'pdf' | 'docx'
+/** Legacy source-item type retained for callers; normal host corpus revisions are read through WorkspaceSourceCatalogue. */
+export interface WorkspaceSource { readonly jobId: string; readonly fileName: string; readonly mediaType: SupportedSourceType; readonly revision: string; readonly documentSetRef: ResourceRef }
 export interface WorkspaceSourcesPanelProps {
-  readonly client: WorkbenchClient
-  readonly workspace: IndustryWorkspace
-  readonly identity: WorkspaceIdentity
-  readonly readOnly?: boolean
-  /** Append a workspace draft revision that registers the new source set. */
+  readonly client: WorkbenchClient; readonly workspace: IndustryWorkspace; readonly identity: WorkspaceIdentity; readonly readOnly?: boolean
+  /** @deprecated Normal host commits the actual corpus atomically; use onWorkspaceChanged for its stored revision. */
   readonly onRegisterSourceSet?: (documentSetRef: ResourceRef, reason: string) => Promise<void>
+  readonly onWorkspaceChanged?: (workspace: IndustryWorkspace, draft: AssetDraftVersion) => void
+  readonly onContinue?: () => void
 }
-
-const STAGE_LABEL: Readonly<Record<PipelineStage, string>> = {
-  received: '已接收',
-  parsed: '已解析',
-  extracted: '已抽取',
-  validated: '已校验',
-  awaiting_review: '待审核',
-  published: '已发布',
-  failed: '失败',
-  cancelled: '已取消',
-  rejected: '已拒绝',
-}
-
-const TYPE_LABEL: Readonly<Record<SupportedSourceType, string>> = {
-  text: '文本',
-  json: 'JSON',
-  csv: 'CSV',
-  xlsx: 'XLSX',
-}
-
-const SOURCE_TYPES: readonly SupportedSourceType[] = ['text', 'json', 'csv', 'xlsx']
-
-function detectType(fileName: string): SupportedSourceType {
-  const lower = fileName.toLowerCase()
-  if (lower.endsWith('.json')) return 'json'
-  if (lower.endsWith('.csv')) return 'csv'
-  if (lower.endsWith('.xlsx')) return 'xlsx'
-  return 'text'
-}
-
-interface SourceOutcome {
-  readonly kind: 'success' | 'partial' | 'processing'
-  readonly label: string
-}
-
-/**
- * Classify one job's progress. Only a terminal, fully-processed stage with no failures and no
- * skipped rows is a full success; anything else is explicitly partial or still processing.
- */
-const PARSED_STAGES: readonly PipelineStage[] = ['validated', 'awaiting_review', 'published']
-
-function outcomeOf(job: JobView): SourceOutcome {
-  const terminal = PARSED_STAGES.includes(job.stage)
-  const complete = job.counts.total > 0 && job.counts.processed === job.counts.total
-  if (terminal && complete && job.counts.failed === 0 && job.counts.skipped === 0) {
-    return { kind: 'success', label: '全部成功' }
-  }
-  if (job.stage === 'failed' || job.counts.failed > 0 || (job.counts.total > 0 && job.counts.processed < job.counts.total)) {
-    return { kind: 'partial', label: '部分解析（未计为全量成功）' }
-  }
-  return { kind: 'processing', label: '处理中' }
-}
-
-function errorMessage(error: unknown): string {
-  if (error instanceof ApiError) return `${error.code}: ${error.message}`
-  return error instanceof Error ? error.message : '请求失败。'
-}
-
-function canonicalSourcePayload(input: {
-  readonly fileName: string
-  readonly mediaType: SupportedSourceType
-  readonly url: string | undefined
-  readonly text: string
-}): string {
-  return JSON.stringify({
-    kind: 'industry-source',
-    fileName: input.fileName,
-    mediaType: input.mediaType,
-    url: input.url ?? null,
-    text: input.text,
-  })
-}
-
-export function WorkspaceSourcesPanel({
-  client,
-  workspace,
-  identity,
-  readOnly = false,
-  onRegisterSourceSet,
-}: WorkspaceSourcesPanelProps) {
-  const [sources, setSources] = useState<readonly WorkspaceSource[]>([])
-  const [pastedText, setPastedText] = useState('')
-  const [chosenName, setChosenName] = useState('')
-  const [chosenType, setChosenType] = useState<SupportedSourceType>('text')
+const mediaTypes: Readonly<Record<string, string>> = { txt: 'text/plain', md: 'text/markdown', csv: 'text/csv', xlsx: 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet', pdf: 'application/pdf' }
+export function WorkspaceSourcesPanel({ client, workspace, readOnly = false, onWorkspaceChanged, onContinue }: WorkspaceSourcesPanelProps) {
+  const [catalogue, setCatalogue] = useState<WorkspaceSourceCatalogue>()
+  const [context, setContext] = useState<WorkspaceAuthoringContext>()
+  const [failure, setFailure] = useState<PublicFailure>()
   const [busy, setBusy] = useState(false)
-  const [failure, setFailure] = useState<PublicFailure | undefined>(undefined)
-  const [notice, setNotice] = useState<string | undefined>(undefined)
-
-  const reloadJob = async (jobId: string): Promise<void> => {
-    try {
-      const job = await client.getJob(jobId)
-      setSources((previous) =>
-        previous.map((source) => (source.jobId === jobId ? { ...source, job } : source)),
-      )
-    } catch (error) {
-      setSources((previous) =>
-        previous.map((source) =>
-          source.jobId === jobId ? { ...source, jobError: errorMessage(error) } : source,
-        ),
-      )
-    }
-  }
-
-  const submit = async (event: { preventDefault: () => void }): Promise<void> => {
-    event.preventDefault()
-    if (busy) return
-    if (chosenName.trim().length === 0) {
-      setFailure(classifyPublicError({ code: 'INVALID_ARGUMENT', message: '请先选择文件或填写资料名称。' }))
-      return
-    }
-    setBusy(true)
+  const [notice, setNotice] = useState('')
+  const [name, setName] = useState('')
+  const [file, setFile] = useState<File>()
+  const [pastedText, setPastedText] = useState('')
+  const [headerRow, setHeaderRow] = useState('1')
+  const [dataStartRow, setDataStartRow] = useState('2')
+  const [sheetName, setSheetName] = useState('')
+  const [selected, setSelected] = useState<readonly string[]>([])
+  const [generationKind, setGenerationKind] = useState('definitions')
+  const [preview, setPreview] = useState<GroundingView>()
+  const [previewOpen, setPreviewOpen] = useState(false)
+  const [fragment, setFragment] = useState('')
+  const [batch, setBatch] = useState<AssetCandidateBatch>()
+  const inputSnapshots = useRef(new Map<string, { readonly name: string; readonly file: File | undefined; readonly text: string; readonly headerRow: string; readonly dataStartRow: string; readonly sheetName: string }>())
+  const inputSnapshot = useRef({ name, file, text: pastedText, headerRow, dataStartRow, sheetName })
+  inputSnapshot.current = { name, file, text: pastedText, headerRow, dataStartRow, sheetName }
+  const activeWorkspace = useRef('')
+  const epoch = useRef(0)
+  const controller = useRef<AbortController | undefined>(undefined)
+  const pending = useRef<{ readonly identity: string; readonly key: string; readonly revision: string } | undefined>(undefined)
+  const load = useCallback(async () => {
+    const token = ++epoch.current
+    const abort = new AbortController(); controller.current?.abort(); controller.current = abort
     setFailure(undefined)
-    setNotice(undefined)
     try {
-      const revision = String(sources.filter((source) => source.fileName === chosenName).length + 1)
-      const digest = await identity.sha256(
-        canonicalSourcePayload({ fileName: chosenName, mediaType: chosenType, url: undefined, text: pastedText }),
-      )
-      const documentSetRef: ResourceRef = {
-        id: identity.newId(),
-        version: '1.0.0',
-        digest,
-        kind: 'artifact',
-      }
-      const created = await client.createIngestion({
-        sourceRef: `industry-workspace:${workspace.workspaceId}:${chosenName}`,
-        documentRef: `${chosenName}#r${revision}`,
-        pipelineVersion: '1.0.0',
-      })
-      const source: WorkspaceSource = {
-        jobId: created.jobId,
-        fileName: chosenName,
-        mediaType: chosenType,
-        revision,
-        documentSetRef,
-      }
-      setSources((previous) => [...previous, source])
-      setNotice(`已提交资料 ${chosenName}（修订 ${revision}），解析任务 ${created.jobId}。`)
-      setPastedText('')
-      setChosenName('')
-      setChosenType('text')
-      await reloadJob(created.jobId)
-      if (onRegisterSourceSet !== undefined) {
-        await onRegisterSourceSet(documentSetRef, `register source ${chosenName} revision ${revision}`)
-      }
-    } catch (error) {
-      setFailure(classifyPublicError(error))
-    } finally {
-      setBusy(false)
+      const [sources, authoring] = await Promise.all([client.getWorkspaceSources(workspace.workspaceId, abort.signal), client.getWorkspaceAuthoringContext(workspace.workspaceId, abort.signal)])
+      if (abort.signal.aborted || epoch.current !== token) return
+      if (sources.workspace.workspaceId !== workspace.workspaceId || authoring.workspace.workspaceId !== workspace.workspaceId || sources.draft.revision !== authoring.draft.revision) return invalidWire()
+      setCatalogue(sources); setContext(authoring)
+      setSelected((old) => old.length === 0 ? sources.sources.map((s) => s.sourceRef.id) : old.filter((id) => sources.sources.some((s) => s.sourceRef.id === id)))
+    } catch (error) { if (!abort.signal.aborted && epoch.current === token) setFailure(classifyPublicError(error)) }
+  }, [client, workspace.workspaceId, workspace.headRevision])
+  useEffect(() => {
+    const workspaceId = workspace.workspaceId
+    if (activeWorkspace.current !== workspaceId) {
+      activeWorkspace.current = workspaceId
+      const saved = inputSnapshots.current.get(workspaceId)
+      setCatalogue(undefined); setContext(undefined); setSelected([]); setNotice(''); setBatch(undefined); setPreview(undefined); setPreviewOpen(false); setBusy(false); pending.current = undefined
+      setFile(saved?.file); setPastedText(saved?.text ?? ''); setName(saved?.name ?? ''); setHeaderRow(saved?.headerRow ?? '1'); setDataStartRow(saved?.dataStartRow ?? '2'); setSheetName(saved?.sheetName ?? '')
     }
+    void load()
+    return () => { inputSnapshots.current.set(workspaceId, inputSnapshot.current); epoch.current++; controller.current?.abort() }
+  }, [load, workspace.workspaceId])
+  const upload = async () => {
+    if (readOnly || busy || catalogue === undefined || !name.trim() || file === undefined && !pastedText.trim()) return
+    const token = epoch.current; const abort = new AbortController(); controller.current = abort; setBusy(true); setFailure(undefined); setNotice('')
+    try {
+      const bytes = file === undefined ? new TextEncoder().encode(pastedText) : new Uint8Array(await file.arrayBuffer())
+      if (bytes.byteLength === 0 || bytes.byteLength > 8_388_608) throw new Error('资料需非空且不超过 8 MiB；更低的部署限制仍由服务端检查。')
+      const ext = file?.name.split('.').pop()?.toLowerCase() ?? 'txt'
+      const mediaType = mediaTypes[ext]
+      if (mediaType === undefined) throw new Error('请选择支持的原始资料格式。')
+      const table = ext === 'csv' || ext === 'xlsx'
+      if (table && (!/^\d+$/.test(headerRow) || !/^\d+$/.test(dataStartRow) || !Number.isSafeInteger(Number(headerRow)) || !Number.isSafeInteger(Number(dataStartRow)) || Number(headerRow) < 1 || Number(dataStartRow) <= Number(headerRow))) throw new Error('表头行需为正整数，数据起始行须在表头之后。')
+      const request = { name: name.trim(), mediaType, contentEncoding: 'base64' as const, content: encodeOriginalBytes(bytes), ...(table ? { options: { headerRow: Number(headerRow), dataStartRow: Number(dataStartRow), ...(sheetName.trim() ? { sheetName: sheetName.trim() } : {}) } } : {}) }
+      const identity = JSON.stringify(request)
+      if (pending.current?.identity !== identity) pending.current = { identity, key: client.newRequestKey(), revision: catalogue.draft.revision }
+      const result = await client.uploadWorkspaceSource(workspace.workspaceId, request, { ifMatch: pending.current.revision, idempotencyKey: pending.current.key, signal: abort.signal })
+      if (abort.signal.aborted || token !== epoch.current) return
+      pending.current = undefined; setNotice('原始字节已存储并解析，工作区语料已生成真实新版本。解析完成不等于候选已批准或语义已发布。'); setFile(undefined); setPastedText(''); setName('')
+      setBusy(false)
+      onWorkspaceChanged?.(result.workspace, result.draft)
+      await load()
+    } catch (error) { if (epoch.current === token) { if (abort.signal.aborted) setNotice('已停止等待，上传写入结果待核对。原始文件与本次请求保留，可刷新后确认或用同一请求重试。'); else setFailure(classifyPublicError(error)) } }
+    finally { if (epoch.current === token || !abort.signal.aborted) setBusy(false) }
   }
-
-  if (readOnly) {
-    return (
-      <section className="workspace-sources" data-testid="workspace-sources" data-readonly="true">
-        <h3>资料</h3>
-        <p data-testid="workspace-sources-readonly">只读模式：不显示资料上传入口。</p>
-      </section>
-    )
+  const previewSource = async (ref: ResourceRef) => {
+    if (catalogue === undefined || busy) return
+    const token = epoch.current; const abort = new AbortController(); controller.current = abort; setFailure(undefined)
+    try { const value = await readGrounding(client, workspace.workspaceId, [ref], { ifMatch: catalogue.draft.revision, signal: abort.signal }); if (!abort.signal.aborted && epoch.current === token) { setPreview(value); setFragment(''); setPreviewOpen(true) } }
+    catch (error) { if (!abort.signal.aborted && epoch.current === token) setFailure(classifyPublicError(error)) }
   }
-
-  return (
-    <section className="workspace-sources" data-testid="workspace-sources">
-      <header className="panel__header">
-        <h3>资料与解析进度</h3>
-        <p className="panel__hint">
-          上传或粘贴资料即创建真实解析任务；资料列表显示文件、修订、类型、处理阶段、已解析数量与失败项，
-          部分解析不会被写成全量成功。
-        </p>
-      </header>
-
-      <form className="workspace-sources__form" data-testid="workspace-source-form" onSubmit={(event) => void submit(event)}>
-        <label className="workspace-sources__field">
-          <span>选择文件</span>
-          <input
-            type="file"
-            data-testid="source-file-input"
-            disabled={busy}
-            onChange={(event) => {
-              const file = event.target.files?.[0]
-              if (file === undefined) return
-              setChosenName(file.name)
-              setChosenType(detectType(file.name))
-              void file.text().then(
-                (text) => setPastedText(text),
-                () => setFailure(classifyPublicError({ code: 'UNSUPPORTED_MEDIA_TYPE', message: '无法读取所选文件内容。' })),
-              )
-            }}
-          />
-        </label>
-        <label className="workspace-sources__field">
-          <span>资料名称</span>
-          <input
-            type="text"
-            data-testid="source-name-input"
-            value={chosenName}
-            disabled={busy}
-            onChange={(event) => {
-              setChosenName(event.target.value)
-              setChosenType(detectType(event.target.value))
-            }}
-          />
-        </label>
-        <label className="workspace-sources__field">
-          <span>类型</span>
-          <select
-            data-testid="source-type-select"
-            value={chosenType}
-            disabled={busy}
-            onChange={(event) => setChosenType(event.target.value as SupportedSourceType)}
-          >
-            {SOURCE_TYPES.map((type) => (
-              <option key={type} value={type}>
-                {TYPE_LABEL[type]}
-              </option>
-            ))}
-          </select>
-        </label>
-        <label className="workspace-sources__field workspace-sources__field--wide">
-          <span>粘贴文本（无文件时使用）</span>
-          <textarea
-            data-testid="source-text-input"
-            value={pastedText}
-            disabled={busy}
-            onChange={(event) => setPastedText(event.target.value)}
-          />
-        </label>
-        <button type="submit" data-testid="source-submit" disabled={busy}>
-          {busy ? '提交中…' : '导入并解析'}
-        </button>
-      </form>
-
-      {notice === undefined ? null : (
-        <p role="status" data-testid="source-notice">
-          {notice}
-        </p>
-      )}
-      {failure === undefined ? null : (
-        <PublicStateNotice
-          testId="source-error"
-          failure={failure}
-          onRecover={() => void submit({ preventDefault: () => undefined })}
-        />
-      )}
-
-      {sources.length === 0 ? (
-        <PublicEmptyState
-          testId="workspace-sources-empty"
-          title="尚无资料"
-          requirement="至少一份可解析的文本、JSON、CSV 或 XLSX 资料。"
-          nextStep="在上方选择文件或粘贴文本，点击“导入并解析”。"
-        />
-      ) : (
-        <table className="workspace-sources__table" data-testid="workspace-source-list">
-          <thead>
-            <tr>
-              <th>文件</th>
-              <th>修订</th>
-              <th>类型</th>
-              <th>处理阶段</th>
-              <th>已解析</th>
-              <th>失败</th>
-              <th>结论</th>
-              <th />
-            </tr>
-          </thead>
-          <tbody>
-            {sources.map((source) => {
-              const job = source.job
-              const outcome = job === undefined ? undefined : outcomeOf(job)
-              return (
-                <tr key={source.jobId} data-testid="workspace-source-row" data-job-id={source.jobId}>
-                  <td data-testid="source-file">{source.fileName}</td>
-                  <td data-testid="source-revision">{source.revision}</td>
-                  <td data-testid="source-type">{TYPE_LABEL[source.mediaType]}</td>
-                  <td data-testid="source-stage" data-stage={job?.stage ?? 'loading'}>
-                    {job === undefined ? '加载中…' : STAGE_LABEL[job.stage]}
-                  </td>
-                  <td data-testid="source-processed">
-                    {job === undefined ? '—' : `${String(job.counts.processed)}/${String(job.counts.total)}`}
-                  </td>
-                  <td data-testid="source-failed" data-failed={(job?.counts.failed ?? 0) > 0}>
-                    {job === undefined ? '—' : String(job.counts.failed)}
-                  </td>
-                  <td data-testid="source-outcome" data-kind={outcome?.kind ?? 'loading'}>
-                    {source.jobError !== undefined
-                      ? `读取进度失败：${source.jobError}`
-                      : outcome?.label ?? '加载中…'}
-                  </td>
-                  <td>
-                    <button
-                      type="button"
-                      data-testid="source-refresh"
-                      disabled={busy}
-                      onClick={() => void reloadJob(source.jobId)}
-                    >
-                      刷新进度
-                    </button>
-                  </td>
-                </tr>
-              )
-            })}
-          </tbody>
-        </table>
-      )}
-    </section>
-  )
+  const generate = async () => {
+    if (readOnly || busy || context === undefined || catalogue === undefined || selected.length === 0) return
+    const token = epoch.current; const abort = new AbortController(); controller.current = abort; setBusy(true); setFailure(undefined); setNotice('')
+    try {
+      const sourceRefs = catalogue.sources.filter((s) => selected.includes(s.sourceRef.id)).map((s) => s.sourceRef)
+      const body = generationKind === 'definitions' ? { kinds: ['object', 'attribute', 'relation'], sourceRefs, generationPolicyRef: context.generationPolicyRef, documentSetRef: catalogue.draft.documentSetRef, candidateLimit: context.generationLimits.maxCandidatesPerCall } : { kinds: generationKind === 'rules' ? ['rule'] : ['action'], sourceRefs, generationPolicyRef: context.generationPolicyRef, candidateLimit: context.generationLimits.maxCandidatesPerCall }
+      const identity = JSON.stringify({ body, kind: generationKind })
+      if (pending.current?.identity !== identity) pending.current = { identity, key: client.newRequestKey(), revision: catalogue.draft.revision }
+      const path = `/api/v1/industry-workspaces/${encodeURIComponent(workspace.workspaceId)}/${generationKind === 'definitions' ? 'generations' : 'rule-action-generations'}`
+      const value = await client.requestJson('POST', path, { body, ifMatch: pending.current.revision, idempotencyKey: pending.current.key, signal: abort.signal })
+      if (abort.signal.aborted || token !== epoch.current) return
+      if (!isRecord(value) || !definitionGuard.assetCandidateBatch(value['batch']) || !Array.isArray(value['candidates'])) return invalidWire()
+      pending.current = undefined; setBatch(value['batch']); setNotice(`服务端已记录 ${value['candidates'].length} 个候选。请进入候选审核，核对真实依据；生成不会自动批准。`)
+    } catch (error) { if (epoch.current === token) { if (abort.signal.aborted) setNotice('已请求停止等待；服务端取消状态与迟到结果以重新读取的实际批次记录为准。'); else setFailure(classifyPublicError(error)) } }
+    finally { if (epoch.current === token) setBusy(false) }
+  }
+  return <section className="ontology-workbench ontology-sources" aria-label="工作区资料准备"><header className="ontology-workflow-head"><div><p className="ontology-eyebrow">本体工作区 · 第 1–2 步 / 5</p><h2>先读懂资料，再生成候选</h2><p>原文和表格数据保留实际版本。资料是待核对的数据，不能授予模型权限。</p></div><Button disabled={busy} onClick={() => void load()}>刷新资料与能力</Button></header>
+    {failure === undefined ? null : <PublicStateNotice failure={failure} onRecover={() => void load()} />}{catalogue === undefined ? <p className="ontology-notice">尚未取得真实语料目录。当前部署需要装配资料接口后才能上传或生成；本页不会补造语料引用。</p> : null}{notice ? <p role="status" className="ontology-notice">{notice}</p> : null}
+    {!readOnly ? <form onSubmit={(e) => { e.preventDefault(); void upload() }}><div className="ontology-form-grid"><Field label="资料名称">{(a) => <input {...a} required disabled={busy} value={name} onChange={(e) => setName(e.target.value)} />}</Field><Field label="选择原始文件" hint="文本、Markdown、PDF、CSV、XLSX；保留原始字节。">{(a) => <input {...a} type="file" accept=".txt,.md,.pdf,.csv,.xlsx" disabled={busy} onChange={(e) => { const next = e.target.files?.[0]; setFile(next); if (next !== undefined) { setName(next.name); setPastedText('') } }} />}</Field></div><Field label="或粘贴文本资料">{(a) => <textarea {...a} disabled={busy || file !== undefined} value={pastedText} onChange={(e) => setPastedText(e.target.value)} />}</Field>{file?.name.match(/\.(csv|xlsx)$/i) ? <div className="ontology-form-grid"><Field label="实际表头所在行">{(a) => <input {...a} disabled={busy} value={headerRow} inputMode="numeric" onChange={(e) => setHeaderRow(e.target.value)} />}</Field><Field label="实际数据起始行">{(a) => <input {...a} disabled={busy} value={dataStartRow} inputMode="numeric" onChange={(e) => setDataStartRow(e.target.value)} />}</Field><Field label="工作表名称（多表时填写）">{(a) => <input {...a} disabled={busy} value={sheetName} onChange={(e) => setSheetName(e.target.value)} />}</Field></div> : null}<Button variant="primary" type="submit" disabled={busy || catalogue === undefined || !name.trim() || file === undefined && !pastedText.trim()}>上传并读取真实资料</Button></form> : <p>只读角色仍可查看真实资料与解析覆盖；上传、生成与确认需要编辑权限。</p>}
+    <h3>已保存的资料</h3>{catalogue?.sources.length === 0 ? <p className="ontology-empty">真实语料当前为空，上传后会显示原文版本与解析结果。</p> : catalogue?.sources.map((source, index) => <article key={source.sourceRef.id} className="ontology-source-card"><header className="ontology-pane-heading"><label><input type="checkbox" disabled={busy || readOnly} checked={selected.includes(source.sourceRef.id)} onChange={(e) => setSelected((old) => e.target.checked ? [...old, source.sourceRef.id] : old.filter((id) => id !== source.sourceRef.id))} /><strong>{source.name ?? `资料 ${index + 1}`}</strong></label><StatusBadge tone={source.previewCoverage === 'complete' ? 'success' : 'warning'}>{source.previewCoverage === 'complete' ? '预览完整' : '预览有限'} · {({ complete: '解析完成', parsed: '解析完成', partial: '部分解析', failed: '解析失败', pending: '等待解析', processing: '正在解析' } as Readonly<Record<string, string>>)[source.status] ?? '待核对解析状态'}</StatusBadge></header>
+      <p>原始解析覆盖：{source.coverage.parsedUnits}/{source.coverage.totalUnits}；跳过 {source.coverage.skippedUnits}。{source.coverage.completeness === 'complete' ? '原始解析完整。' : '原始解析存在范围限制。'}</p><p>{source.previewCoverage === 'complete' ? '当前预览完整。' : '当前预览有范围限制，不能当作全部原文。'}</p>{source.coverage.skippedReasons.length === 0 ? null : <details><summary>未解析内容与原因</summary><p>{source.coverage.skippedReasons.join("、")}</p></details>}
+      {source.tables?.map((table) => <div key={table.tableId}><h4>{table.sheetName ?? table.name ?? '原始表格'} · 表头第 {table.headerRow} 行</h4><DataTable caption="服务端解析的原始表头与数据行"><thead><tr>{table.columns.map((column) => <th key={column.columnIndex}>{column.header || '（空表头）'}</th>)}</tr></thead><tbody>{table.rows.map((row) => <tr key={row.sourceRowKey}>{table.columns.map((column) => <td key={column.columnIndex}>{nativeCellText(row.cells.find((cell) => cell.columnIndex === column.columnIndex))}</td>)}</tr>)}</tbody></DataTable><p className="ontology-hint">预览有上限；表头用于理解字段，不能作为数据行来源。</p></div>)}<Button disabled={busy} onClick={() => void previewSource(source.sourceRef)}>查看真实原文与片段</Button><details><summary>原文、解析与语料固定版本</summary><pre>{JSON.stringify(source, null, 2)}</pre></details></article>)}
+    <Drawer open={previewOpen} title="原始资料预览" onClose={() => setPreviewOpen(false)}><SourceEvidencePane value={preview} selected={fragment} onSelect={setFragment} /></Drawer>
+    <section className="ontology-generation"><h3>生成候选</h3>{context === undefined ? <p>尚未取得当前环境的真实生成配置。</p> : <><p>{context.models.generationEnabled ? '生成模型已配置。' : '生成模型未配置；仍可读取资料、手动编辑已有候选并确认真实来源。'} 决策模型{context.models.decisionEnabled ? '已配置' : '未配置'}。</p><p className="ontology-hint">每次最多生成 {context.generationLimits.maxCandidatesPerCall} 个候选；最多读取 {context.generationLimits.maxSources} 份资料与 {context.generationLimits.sourceFragments} 个片段。输入上下文上限 {context.generationLimits.sourceContextBytes / 1024} KiB，原始读取上限 {context.generationLimits.sourceReadBytes / 1024} KiB，模型输出长度预算 {context.generationLimits.maxOutputTokens} tokens。剩余额度未提供，不显示推测进度或模型正确率。</p>{!readOnly ? <div className="ontology-actions"><Field label="生成范围">{(a) => <select {...a} value={generationKind} onChange={(e) => setGenerationKind(e.target.value)}><option value="definitions">对象、属性与关系</option><option value="rules">规则候选</option><option value="actions">动作声明候选</option></select>}</Field><Button variant="primary" disabled={busy || !context.models.generationEnabled || selected.length === 0 || selected.length > context.generationLimits.maxSources} onClick={() => void generate()}>从所选真实资料生成候选</Button></div> : null}<details><summary>实际生成策略与工作区固定版本</summary><pre>{JSON.stringify({ generationPolicyRef: context.generationPolicyRef, draft: context.draft }, null, 2)}</pre></details></>}{batch === undefined ? null : <section><h4>当前生成批次</h4><StatusBadge tone={batch.state === 'failed' ? 'danger' : batch.state === 'pending_confirmation' ? 'warning' : 'neutral'}>{batch.state === 'failed' ? '生成失败' : batch.state === 'pending_confirmation' ? '生成结束，来源仍待确认' : '生成结束，候选尚需审核'}</StatusBadge><p>实际候选 {batch.counts.total} 项 · 来源待确认 {batch.counts.pendingConfirmation} 项 · 待人工审核 {batch.counts.pendingReview} 项 · 失败 {batch.counts.failed} 项。</p><p>工作区修订：{batch.inputDraftRef.revision}。来源覆盖与失败原因以实际原文读取及本批次记录为准，候选数不代表发布数。</p>{batch.error === undefined ? null : <PublicStateNotice failure={classifyPublicError(batch.error)} />}<details><summary>高级：服务端记录的完整生成批次</summary><pre>{JSON.stringify(batch, null, 2)}</pre></details></section>}{onContinue === undefined ? null : <Button disabled={busy} onClick={onContinue}>继续编辑与审核候选 →</Button>}</section>{busy ? <Button onClick={() => controller.current?.abort()}>停止等待并保留当前输入</Button> : null}
+  </section>
 }

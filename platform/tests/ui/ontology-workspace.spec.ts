@@ -106,11 +106,13 @@ describe('ontology workspace panel', () => {
         if (url.includes('/industry-workspaces') && method === 'GET') {
           return Promise.resolve(jsonResponse({ data: { workspaces: [] } }))
         }
-        if (url.endsWith('/industry-workspaces') && method === 'POST') {
+        if (url.endsWith('/core/workspace-bootstrap') && method === 'POST') {
           const body = isRecord(init?.body) ? init.body : JSON.parse(String(init?.body)) as unknown
           if (!isRecord(body) || typeof body['displayName'] !== 'string') {
             return Promise.resolve(jsonResponse({ error: { code: 'INVALID_ARGUMENT', message: 'bad' } }, 400))
           }
+          expect(body).not.toHaveProperty('documentSetRef')
+          expect(body).not.toHaveProperty('profileRef')
           return Promise.resolve(jsonResponse({ data: { workspace: created, draftRef: {
             workspaceId: WORKSPACE_ID, revision: '1', digest: DIGEST,
           }, draft, created: true } }))

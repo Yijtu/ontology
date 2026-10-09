@@ -1,3 +1,7 @@
+import { parseExecutionPreview } from './execution-preview'
+import type { ExecutionPreviewView } from './execution-preview'
+import { parseWorkspaceAuthoring, parseWorkspaceCorpus, parseWorkspaceSource } from './workspace-authoring'
+import type { WorkspaceAuthoringContext, WorkspaceSourceCatalogue, WorkspaceSourceView } from './workspace-authoring'
 import type {
   ActiveProfileRecord,
   AssetCandidateBatch,
@@ -763,6 +767,30 @@ export class WorkbenchClient {
       }
       return data['workspace']
     })
+  }
+
+  /** Normal host creates the actual empty corpus; the browser supplies only business boundary. */
+  bootstrapIndustryWorkspace(request: Omit<CreateIndustryWorkspaceRequest, 'documentSetRef'>, options: RequestOptions = {}): Promise<{ readonly workspace: IndustryWorkspace; readonly draft: AssetDraftVersion }> {
+    return this.#request<unknown>('POST', '/api/v1/core/workspace-bootstrap', { ...options, body: request, idempotencyKey: options.idempotencyKey ?? this.#newId() }).then((value) => {
+      if (!isRecord(value) || !isIndustryWorkspace(value['workspace']) || !isAssetDraftVersion(value['draft']) || value['draft'].workspaceId !== value['workspace'].workspaceId) throw malformedResponse('/api/v1/core/workspace-bootstrap', 'actual workspace/corpus pins were not recognised')
+      return { workspace: value['workspace'], draft: value['draft'] }
+    })
+  }
+
+  getWorkspaceSources(workspaceId: string, signal?: AbortSignal): Promise<WorkspaceSourceCatalogue> {
+    return this.#request<unknown>('GET', `/api/v1/core/workspaces/${encodeURIComponent(workspaceId)}/sources`, { ...(signal === undefined ? {} : { signal }) }).then(parseWorkspaceCorpus)
+  }
+
+  uploadWorkspaceSource(workspaceId: string, request: { readonly name: string; readonly mediaType: string; readonly contentEncoding: 'base64'; readonly content: string; readonly options?: { readonly headerRow?: number; readonly dataStartRow?: number; readonly sheetId?: string; readonly sheetName?: string } }, options: RequestOptions): Promise<{ readonly workspace: IndustryWorkspace; readonly draft: AssetDraftVersion; readonly source: WorkspaceSourceView }> {
+    const path = `/api/v1/core/workspaces/${encodeURIComponent(workspaceId)}/sources`
+    return this.#request<unknown>('POST', path, { ...options, body: request }).then((value) => {
+      if (!isRecord(value) || !isIndustryWorkspace(value['workspace']) || !isAssetDraftVersion(value['draft']) || value['draft'].workspaceId !== value['workspace'].workspaceId || value['draft'].revision !== value['workspace'].headRevision) throw malformedResponse(path, 'actual uploaded source/corpus pins were not recognised')
+      return { workspace: value['workspace'], draft: value['draft'], source: parseWorkspaceSource(value['source']) }
+    })
+  }
+
+  getWorkspaceAuthoringContext(workspaceId: string, signal?: AbortSignal): Promise<WorkspaceAuthoringContext> {
+    return this.#request<unknown>('GET', `/api/v1/core/workspaces/${encodeURIComponent(workspaceId)}/authoring-context`, { ...(signal === undefined ? {} : { signal }) }).then(parseWorkspaceAuthoring)
   }
 
   /** `POST /industry-workspaces`: create the workspace head plus its first immutable draft. */
@@ -1581,16 +1609,25 @@ export class WorkbenchClient {
     })
   }
 
+  prepareExecutionPreview(workspaceId: string, exampleSetId: string, options: RequestOptions): Promise<ExecutionPreviewView> {
+    return this.#request<unknown>('POST', `/api/v1/core/workspaces/${encodeURIComponent(workspaceId)}/execution-preview`, { ...options, body: { exampleSetId } }).then(parseExecutionPreview)
+  }
+  getExecutionPreview(workspaceId: string, signal?: AbortSignal): Promise<ExecutionPreviewView> {
+    return this.#request<unknown>('GET', `/api/v1/core/workspaces/${encodeURIComponent(workspaceId)}/execution-preview`, { ...(signal === undefined ? {} : { signal }) }).then(parseExecutionPreview)
+  }
+
   /** `POST /industry-workspaces/:id/validations`: run the synthetic validation over a draft. */
   createSyntheticValidation(
     workspaceId: string,
     request: RunValidationRequest,
+    options: Pick<RequestOptions, 'signal' | 'idempotencyKey'> = {},
   ): Promise<IndustryValidationReportView> {
     const path = `/api/v1/industry-workspaces/${encodeURIComponent(workspaceId)}/validations`
     return this.#request<unknown>('POST', path, {
-      body: { exampleSetId: request.exampleSetId },
+      body: { exampleSetId: request.exampleSetId, ...(request.competencyQuestionRef === undefined ? {} : { competencyQuestionRef: request.competencyQuestionRef }), ...(request.strategy === undefined ? {} : { strategy: request.strategy }) },
       ...(request.expectedRevision === undefined ? {} : { ifMatch: request.expectedRevision }),
-      idempotencyKey: this.#newId(),
+      idempotencyKey: options.idempotencyKey ?? this.#newId(),
+      ...(options.signal === undefined ? {} : { signal: options.signal }),
     }).then((data) => this.readValidationReport(path, data))
   }
 
@@ -1605,17 +1642,19 @@ export class WorkbenchClient {
    * The server refuses a blocked semantic surface, and refuses a not-fully-executable deployment
    * surface when `requireDeploymentExecutable` is set. The two surfaces come back independently.
    */
-  publishPack(workspaceId: string, request: PublishPackRequest): Promise<PublishedPackResultView> {
+  publishPack(workspaceId: string, request: PublishPackRequest, options: Pick<RequestOptions, 'signal' | 'idempotencyKey'> = {}): Promise<PublishedPackResultView> {
     const path = `/api/v1/industry-workspaces/${encodeURIComponent(workspaceId)}/publications`
     return this.#request<unknown>('POST', path, {
       body: {
         packId: request.packId,
         version: request.version,
         validationId: request.validationId,
+        ...(request.strategy === undefined ? {} : { strategy: request.strategy }),
         ...(request.requireDeploymentExecutable ? { requireDeploymentExecutable: true } : {}),
       },
       ifMatch: request.expectedRevision,
-      idempotencyKey: this.#newId(),
+      idempotencyKey: options.idempotencyKey ?? this.#newId(),
+      ...(options.signal === undefined ? {} : { signal: options.signal }),
     }).then((data) => {
       if (!isRecord(data) || !isVersionRef(data['packRef']) || !isPackCapabilityStatusView(data['capabilityStatus'])) {
         throw malformedResponse(path, 'the published pack result was not recognised')
