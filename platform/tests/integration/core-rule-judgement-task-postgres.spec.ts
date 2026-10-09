@@ -23,6 +23,7 @@ import {
   coreScenarioTaskBindings,
   createCoreApi,
   createCoreLocalComposition,
+  createCoreStructuredImportWorkflow,
   loadCoreExamples,
 } from '@ontology/app-api'
 import type { CoreLocalComposition } from '@ontology/app-api'
@@ -324,6 +325,7 @@ beforeAll(async () => {
     scopeRef,
     examples: loadCoreExamples({ targetScopeRef: scopeRef }),
     allowLocalOperator: true,
+    projectStructuredImports: createCoreStructuredImportWorkflow,
     onWorkerError(error) { if (error instanceof Error) workerErrors.push(error) },
   })
   api = createCoreApi(composition.dependencies)

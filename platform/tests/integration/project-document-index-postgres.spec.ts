@@ -86,6 +86,7 @@ let service: ProjectDocumentIndexService
 let database: ControlPostgresDatabase
 let structuredStore: PostgresStructuredIngestionStore
 let workflow: ReturnType<typeof createCoreStructuredImportWorkflow>
+let readinessStore: PostgresProjectReadinessStore
 
 async function publishText(label: string): Promise<DocumentParseRecord> {
   const bytes = textDocument(label)
@@ -202,9 +203,10 @@ beforeAll(async () => {
   database = new ControlPostgresDatabase({ connectionString: appUrl, maxPoolSize: 4 })
   projectStore = new PostgresProjectDocumentStore(database)
   structuredStore = new PostgresStructuredIngestionStore({ connectionString: appUrl, maxPoolSize: 4 })
+  readinessStore = new PostgresProjectReadinessStore(database)
   workflow = createCoreStructuredImportWorkflow({ blobs: blobStore, parses: parseStore, ingestion: structuredStore,
     projects: new PostgresProjectStore(database), documents: projectStore, indexStore,
-    readiness: new PostgresProjectReadinessStore(database), executionBindings: new PostgresRunExecutionBindingStore(database) })
+    readiness: readinessStore, executionBindings: new PostgresRunExecutionBindingStore(database) })
   parseService = new LocalDocumentExtractionService({
     blobs: blobStore,
     store: parseStore,
@@ -274,6 +276,9 @@ describe('real structured import/index membership bridge', () => {
       expect(fragment.precision).toBe('approximate')
       expect(fragment.locator.kind).toBe('approximate_locator')
       expect(fragment.documentRef).toEqual(imported.originalRef)
+      const membership = await projectStore.getMembership(SCOPE_A, projectId, String(imported.documentId), CTX_A)
+      expect(membership?.parseId).toBe(imported.parseId)
+      expect((await parseStore.getParse(SCOPE_A, imported.parseId, CTX_A))?.spanMapRef).toEqual(membership?.parseRef)
       const origin = await workflow.spanReader.readOrigin({ documentRef: fragment.documentRef, locator: fragment.locator }, CTX_A)
       expect(origin?.parseId).toBe(imported.parseId)
       expect(origin?.cells[1]?.locator).toMatchObject({ kind: 'table_cell', format, row: 2, column: 2, address: 'B2' })
@@ -501,6 +506,33 @@ describe('normal structured import → real BM25 → fixed-run document QA → a
         if (wrongCell === undefined) throw new Error('the actual cell origin is missing')
         wrongCell.column = 3
         expect((await workflow.publicationValidator.validate({ record, payload: forgedPayload, ctx, now: new Date().toISOString() })).state).toBe('blocked')
+        expect((await workflow.publicationValidator.validate({ record, payload: { quote: 'forged source-family downgrade' }, ctx, now: new Date().toISOString() })).state).toBe('blocked')
+        if (format === 'csv') {
+          for (const finalPhase of ['readiness', 'status'] as const) {
+            let entered: () => void = () => undefined
+            let release: () => void = () => undefined
+            const paused = new Promise<void>((resolve) => { entered = resolve })
+            const barrier = new Promise<void>((resolve) => { release = resolve })
+            if (finalPhase === 'readiness') {
+              const write = readinessStore.upsertProjection.bind(readinessStore)
+              vi.spyOn(readinessStore, 'upsertProjection').mockImplementationOnce(async (...args) => { entered(); await barrier; return write(...args) })
+            } else {
+              const read = indexStore.getActiveGeneration.bind(indexStore)
+              vi.spyOn(indexStore, 'getActiveGeneration').mockImplementationOnce(async (...args) => { entered(); await barrier; return read(...args) })
+            }
+            const cancellation = new AbortController()
+            const pending = workflow.index.buildIndex(projectId, CTX_A, { signal: cancellation.signal })
+            const refusal = expect(pending).rejects.toThrow(`cancelled final ${finalPhase}`)
+            await paused
+            cancellation.abort(new Error(`cancelled final ${finalPhase}`))
+            release()
+            await refusal
+            vi.restoreAllMocks()
+            // A pre-existing/concurrent valid winner remains ready; the cancelled
+            // caller must not report success or globally revoke another build.
+            expect((await workflow.index.getStatus(projectId, CTX_A)).state).toBe('ready')
+          }
+        }
         const archived = await adminClient.query<{ binding: RunExecutionBinding }>('SELECT binding FROM agent_platform.run_execution_bindings WHERE run_id=$1', [runId])
         expect(archived.rows[0]?.binding.projectDocumentIndexSnapshotRef).toBeDefined()
         await request(`/api/v1/projects/${projectId}/document-memberships/${String(imported['documentId'])}/revisions`, { op: 'retract', reason: 'withdraw the original source' })

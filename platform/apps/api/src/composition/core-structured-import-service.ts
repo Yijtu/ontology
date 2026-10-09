@@ -2,11 +2,13 @@ import { LocalDocumentExtractionService, LocalStructuredIngestionService, Struct
 import type { DocumentArtifactStore } from '@ontology/adapter-extraction-document'
 import { Bm25DocumentSearchService, ProjectDocumentIndexService } from '@ontology/adapter-search-bm25'
 import type { KeywordIndexStore } from '@ontology/adapter-search-bm25'
-import { isRecord, isResourceRef, isRevisionString, isToolContext, isVersionRef, projectCollectionRef, sha256OfCanonical } from '@ontology/contracts'
-import type { DocumentParseStore, ProjectDocumentStore, ProjectReadinessStore, ProjectRevision, ProjectStore, ReadSpanRequest, ResourceRef, RunExecutionBindingStore, ScopeRef, StructuredIngestionStore, ToolContext, VersionRef } from '@ontology/contracts'
+import { isRecord, isResourceRef, isRevisionString, isStructuredParseSelection, isToolContext, isUuid, isVersionRef, projectCollectionRef, sha256OfCanonical } from '@ontology/contracts'
+import { StructuredDocumentParser } from '@ontology/adapter-extraction-document'
+import type { DocumentParseStore, ProjectDocumentStore, ProjectMappingStore, ProjectReadinessStore, ProjectRevision, ProjectStore, ReadSpanRequest, ResourceRef, RunExecutionBindingStore, ScopeRef, StructuredIngestionStore, ToolContext, VersionRef } from '@ontology/contracts'
 import { createCoreDocumentSearchHandler } from './core-document-search-handler'
 import type { ProjectStructuredImportService } from '../http/project-imports'
 import { ForbiddenError, InvalidRequestFieldError } from '../http/shared'
+import { documentSpanValidator } from '@ontology/application'
 import type { PublicationEvidenceValidator } from '@ontology/application'
 
 export interface CoreStructuredImportOptions {
@@ -18,6 +20,7 @@ export interface CoreStructuredImportOptions {
   readonly indexStore: KeywordIndexStore
   readonly readiness: ProjectReadinessStore
   readonly executionBindings: RunExecutionBindingStore
+  readonly mappings?: Pick<ProjectMappingStore, 'getMapping'>
   readonly now?: () => string
 }
 
@@ -63,7 +66,7 @@ export function createCoreStructuredImportWorkflow(options: CoreStructuredImport
       const scope = scopeOf(ctx)
       if (!ctx.principal.roles.some((role) => ['platform-admin', 'operator', 'data-editor'].includes(role))) throw new ForbiddenError('structured imports require an operator role')
       const project = await options.projects.getProject(scope, projectId, ctx)
-      if (project === undefined || project.state !== 'active') throw new InvalidRequestFieldError('an active project visible in this scope is required')
+      if (project === undefined || project.state === 'archived') throw new InvalidRequestFieldError('a non-archived project visible in this scope is required')
       const staged = await options.blobs.stage(input.content, { scopeRef: scope }, ctx)
       const written = await options.blobs.publish({ scopeRef: scope, contentDigest: staged.contentDigest, byteSize: staged.byteSize, mediaType: input.mediaType, purpose: 'document' }, ctx)
       const parsed = await ingestion.parse({ scopeRef: scope, originalRef: written.blobRef, options: {}, ...(input.sourceRef === undefined ? {} : { sourceRef: input.sourceRef }) }, ctx)
@@ -73,7 +76,29 @@ export function createCoreStructuredImportWorkflow(options: CoreStructuredImport
       const projected = parsed.parse.format === 'text'
         ? await new LocalDocumentExtractionService({ blobs: options.blobs, store: options.parses }).parse({ scopeRef: scope, originalRef: parsed.parse.originalRef,
             ...(parsed.parse.sourceRef === undefined ? {} : { sourceRef: parsed.parse.sourceRef }) }, ctx)
-        : await projection.project(parsed.parse, ctx)
+        : await new StructuredDocumentProjectionService({ ...options, resolveLegacySelection: async (parse, context) => {
+            const project = await options.projects.getProject(scope, projectId, context)
+            const revision = project === undefined ? undefined : await options.projects.getRevision(scope, projectId, project.headRevision, context)
+            if (revision === undefined || options.mappings === undefined || revision.mappingRefs.length > 200) throw new InvalidRequestFieldError('legacy selection requires an actual mounted confirmed mapping')
+            const selections = []
+            for (const ref of revision.mappingRefs) {
+              if (!isUuid(ref.id)) continue
+              const mapping = await options.mappings.getMapping(scope, projectId, ref.id, ref.version, context)
+              if (mapping === undefined || sha256OfCanonical(mapping.ref) !== sha256OfCanonical(ref) || mapping.parseId !== parse.parseId
+                || sha256OfCanonical(mapping.originalRef) !== sha256OfCanonical(parse.originalRef) || sha256OfCanonical(mapping.definitionRef) !== sha256OfCanonical(revision.definitionRef)) continue
+              const mappingBody = { definitionRef: mapping.definitionRef, format: mapping.format, parseId: mapping.parseId, originalMediaType: mapping.originalMediaType,
+                options: mapping.options, objectId: mapping.objectId, sheetId: mapping.sheetId ?? null, sheetName: mapping.sheetName ?? null, entries: [...mapping.entries].sort((a, b) => a.columnIndex - b.columnIndex) }
+              if (mapping.digest !== ref.digest || sha256OfCanonical(mappingBody) !== ref.digest || !isStructuredParseSelection(mapping.options)) throw new InvalidRequestFieldError('the actual confirmed mapping selection failed its content pin')
+              const actual = new StructuredDocumentParser().parse(input.content, { ...mapping.options, mediaType: parse.originalMediaType })
+              const table = actual.tables[0]
+              if (actual.status === 'rejected' || table === undefined || mapping.entries.some((entry) => table.columns[entry.columnIndex]?.header !== entry.header || table.columns[entry.columnIndex]?.headerDigest !== entry.headerDigest)) throw new InvalidRequestFieldError('the confirmed original headers cannot reproduce the actual legacy selection')
+              selections.push(mapping.options)
+            }
+            const unique = new Map(selections.map((selection) => [sha256OfCanonical(selection), selection]))
+            const selected = [...unique.values()][0]
+            if (unique.size !== 1 || selected === undefined) throw new InvalidRequestFieldError('the legacy parse does not have one unique actual confirmed selection')
+            return selected
+          } }).project(parsed.parse, ctx)
       const documentId = deterministicUuid(`${scope.tenantId}|${scope.spaceId}|${projectId}|${parsed.parse.parseId}`)
       const status = await index.importDocument(projectId, { documentId, documentRef: parsed.parse.originalRef, documentDigest: parsed.parse.originalRef.digest,
         parseId: projected.parseId, parseRef: projected.spanMapRef, textDigest: projected.normalizedRef.digest, precision: parsed.parse.format === 'text' ? 'exact' : 'approximate',
@@ -84,7 +109,7 @@ export function createCoreStructuredImportWorkflow(options: CoreStructuredImport
   const resolveForCreation = async (scope: ScopeRef, revision: ProjectRevision, ctx: ToolContext): Promise<ResourceRef> => {
     if (sha256OfCanonical(scope) !== sha256OfCanonical(scopeOf(ctx))) throw new ForbiddenError('the document snapshot scope differs from the trusted run')
     const currentProject = await options.projects.getProject(scope, revision.ref.projectId, ctx)
-    if (currentProject === undefined || currentProject.state !== 'active' || (currentProject.activeRevision ?? currentProject.headRevision) !== revision.ref.revision) throw new InvalidRequestFieldError('a new document QA run requires the current active project revision')
+    if (currentProject === undefined || currentProject.state === 'archived' || (currentProject.activeRevision ?? currentProject.headRevision) !== revision.ref.revision) throw new InvalidRequestFieldError('a new document QA run requires the current active project revision')
     const status = await index.getStatus(revision.ref.projectId, ctx)
     if (status.state !== 'ready' || status.indexRef === undefined || status.generation === undefined) throw new InvalidRequestFieldError('the project document index is not ready')
     const currentSet = await documentSet(revision.ref.projectId, ctx)
@@ -117,7 +142,7 @@ export function createCoreStructuredImportWorkflow(options: CoreStructuredImport
     const revision = await options.projects.getRevision(scope, pin.projectRevisionRef.projectId, pin.projectRevisionRef.revision, ctx)
     const project = await options.projects.getProject(scope, pin.projectRevisionRef.projectId, ctx)
     const visibility = await options.documents.getVisibility(scope, pin.projectRevisionRef.projectId, ctx)
-    if (project?.state !== 'active' || revision === undefined || sha256OfCanonical(revision.ref) !== sha256OfCanonical(pin.projectRevisionRef) || sha256OfCanonical(revision.documentSetRef) !== sha256OfCanonical(pin.documentSetRef)
+    if (project === undefined || project.state === 'archived' || revision === undefined || sha256OfCanonical(revision.ref) !== sha256OfCanonical(pin.projectRevisionRef) || sha256OfCanonical(revision.documentSetRef) !== sha256OfCanonical(pin.documentSetRef)
       || visibility?.epoch !== pin.visibilityEpoch || visibility.membershipRevision !== pin.membershipRevision) throw new InvalidRequestFieldError('the fixed run document set was changed or withdrawn')
     const generation = await options.indexStore.getGeneration(scope, projectCollectionRef(pin.projectRevisionRef.projectId), pin.generation, ctx)
     if (generation === undefined || sha256OfCanonical(generation.indexRef) !== sha256OfCanonical(pin.indexRef)) throw new InvalidRequestFieldError('the fixed document index generation is unavailable or changed')
@@ -130,11 +155,22 @@ export function createCoreStructuredImportWorkflow(options: CoreStructuredImport
       return [{ collectionRef: projectCollectionRef(pin.projectRevisionRef.projectId), generation: pin.generation }]
     }, checkCurrent: async (ctx) => { await readSnapshot(ctx) }, readOrigin: (request, ctx) => spanReader.readOrigin(request, ctx),
   })
+  const originalSpanValidator = documentSpanValidator()
   const publicationValidator: PublicationEvidenceValidator = { evidenceKind: 'document_span',
-    async validate({ payload, ctx }) {
+    async validate(input) {
+      const { payload, ctx, record } = input
+      // Source snapshots and producer are host-recorded envelope identity. Other
+      // rule/policy source-span families retain their existing validator/replay gate.
+      const producer = record.envelope.producedBy
+      const isGateway = producer.componentRef.id === 'tool-gateway' && producer.componentRef.version === '1.0.0'
+        && producer.componentRef.digest === sha256DigestOfBytes(new TextEncoder().encode('tool-gateway@1.0.0'))
+      const keywordSource = record.envelope.sourceSnapshots.some((snapshot) => snapshot.sourceRef.namespace === 'ontology.keyword_index')
+      const isQa = isGateway && producer.runId !== undefined && keywordSource
+      const claimsQaShape = isRecord(payload) && (Array.isArray(payload['spans']) || payload['indexVersion'] !== undefined)
+      if (!isQa) return claimsQaShape ? { state: 'blocked', reasons: ['evidence_unverifiable'] } : originalSpanValidator.validate(input)
       try {
         const snapshot = await readSnapshot(ctx)
-        if (snapshot === undefined || !isRecord(payload) || !Array.isArray(payload['spans'])) return { state: 'blocked', reasons: ['evidence_unverifiable'] }
+        if (snapshot === undefined || !isRecord(payload) || !Array.isArray(payload['spans']) || !isRecord(payload['indexVersion'])) return { state: 'blocked', reasons: ['evidence_unverifiable'] }
         if (payload['spans'].length > 10) return { state: 'blocked', reasons: ['evidence_unverifiable'] }
         const setMetadata = await options.blobs.getAuthorized({ scopeRef: scopeOf(ctx), blobRef: snapshot.documentSetRef }, ctx)
         if (!setMetadata.integrityVerified || setMetadata.byteSize > 1_048_576) return { state: 'blocked', reasons: ['evidence_unverifiable'] }

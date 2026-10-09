@@ -88,6 +88,8 @@ export interface StructuredParseRecord {
   readonly originalRef: ResourceRef
   readonly parserId: string
   readonly parserVersion: Semver
+  /** Actual captured native selection; missing only on legacy records, never an implicit default. */
+  readonly parseOptions?: Omit<StructuredParseOptions, 'mediaType'>
   readonly status: StructuredParseStatus
   readonly coverage: ParseCoverage
   readonly counts: StructuredRecordCounts

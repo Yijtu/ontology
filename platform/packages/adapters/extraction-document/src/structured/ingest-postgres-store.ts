@@ -28,6 +28,7 @@ import type {
   Uuid,
 } from '@ontology/contracts'
 import { StructuredIngestionError } from './ingest-errors'
+import { isStructuredParseSelection } from '@ontology/contracts'
 
 export interface PostgresStructuredIngestionStoreConfig {
   readonly connectionString: string
@@ -59,6 +60,7 @@ interface ParseRow extends QueryResultRow {
   source_id: string | null
   document_version_ref: unknown
   created_at: Date
+  parse_options: unknown
 }
 
 interface RecordRow extends QueryResultRow {
@@ -76,7 +78,7 @@ interface RecordRow extends QueryResultRow {
 const PARSE_SELECT = `SELECT parse_id, tenant_id, space_id, original_blob_ref_id,
   original_content_digest, original_media_type, original_kind, format, parser_id, parser_version,
   parse_status, coverage, counts, sheets, diagnostics, source_namespace, source_id,
-  document_version_ref, created_at
+  document_version_ref, created_at, parse_options
   FROM agent_platform.document_structured_parses`
 
 const RECORD_SELECT = `SELECT record_id, source_row_key, record_index, row_number, state, locator,
@@ -311,6 +313,7 @@ function toResourceRef(id: string, digest: string, kind: ResourceKind): Resource
 }
 
 function toParseRecord(row: ParseRow): StructuredParseRecord {
+  if (row.parse_options !== null && !isStructuredParseSelection(row.parse_options)) return fail('the stored native parse selection is malformed')
   const documentVersionRef =
     row.document_version_ref === null || !isRecord(row.document_version_ref)
       ? undefined
@@ -327,6 +330,7 @@ function toParseRecord(row: ParseRow): StructuredParseRecord {
     ),
     parserId: row.parser_id,
     parserVersion: row.parser_version,
+    ...(row.parse_options === null ? {} : { parseOptions: row.parse_options }),
     status: oneOf<StructuredParseStatus>(
       row.parse_status,
       ['complete', 'incomplete', 'rejected'],
@@ -446,15 +450,16 @@ export class PostgresStructuredIngestionStore implements StructuredIngestionStor
     ctx: ToolContext,
   ): Promise<RecordStructuredParseResult> {
     const scope = scopeWith(record.scopeRef, ctx)
+    if (record.parseOptions !== undefined && !isStructuredParseSelection(record.parseOptions)) throw new StructuredIngestionError('INVALID_REQUEST', 'stored native selection must match the strict supported contract')
     return this.#withScope(scope, async (client) => {
       const inserted = await client.query<{ parse_id: string }>(
         `INSERT INTO agent_platform.document_structured_parses (
            tenant_id, space_id, parse_id,
            original_blob_ref_id, original_content_digest, original_media_type, original_kind,
            format, parser_id, parser_version, parse_status, coverage, counts, sheets, diagnostics,
-           source_namespace, source_id, document_version_ref, created_at)
+           source_namespace, source_id, document_version_ref, created_at, parse_options)
          VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12::jsonb, $13::jsonb,
-                 $14::jsonb, $15::jsonb, $16, $17, $18::jsonb, $19)
+                 $14::jsonb, $15::jsonb, $16, $17, $18::jsonb, $19, $20::jsonb)
          ON CONFLICT (tenant_id, space_id, original_content_digest, parser_version) DO NOTHING
          RETURNING parse_id`,
         [
@@ -477,6 +482,7 @@ export class PostgresStructuredIngestionStore implements StructuredIngestionStor
           record.sourceRef?.sourceId ?? null,
           record.documentVersionRef === undefined ? null : JSON.stringify(record.documentVersionRef),
           record.createdAt,
+          record.parseOptions === undefined ? null : JSON.stringify(record.parseOptions),
         ],
       )
       if (inserted.rows[0] === undefined) return { created: false }

@@ -1,5 +1,5 @@
-import { isToolContext, sha256OfCanonical } from '@ontology/contracts'
-import type { DocumentChunkRecord, DocumentParseRecord, DocumentParseStore, DocumentSpanReaderPort, ReadSpanRequest, ReadSpanResponse, ResourceRef, StructuredParseRecord, StructuredIngestionStore, StructuredTable, SourceLocator, ToolContext } from '@ontology/contracts'
+import { isToolContext, isRecord, isStructuredParseSelection, sha256OfCanonical } from '@ontology/contracts'
+import type { DocumentChunkRecord, DocumentParseRecord, DocumentParseStore, DocumentSpanReaderPort, ReadSpanRequest, ReadSpanResponse, ResourceRef, StructuredParseRecord, StructuredParseOptions, StructuredIngestionStore, StructuredTable, SourceLocator, ToolContext } from '@ontology/contracts'
 import { DocumentExtractionError } from '../errors'
 import { deterministicUuid, sha256DigestOfBytes, sha256DigestOfText } from '../hashing'
 import { buildNormalizedTextArtifact, NORMALIZED_TEXT_MEDIA_TYPE } from '../normalized-artifact'
@@ -9,6 +9,7 @@ import { StructuredDocumentParser, STRUCTURED_PARSER_ID, STRUCTURED_PARSER_VERSI
 import { reconcileStructuredResult } from './ingest-service'
 
 export const STRUCTURED_PROJECTION_VERSION = '1.0.18'
+const STRUCTURED_PROJECTION_ID = 'ontology.structured-document-projection'
 export const STRUCTURED_PROJECTION_MAX_ROWS = 1_000
 const MAX_PROJECTION_BYTES = 1_048_576
 const MAX_ROW_BYTES = 8_192
@@ -34,6 +35,8 @@ export interface StructuredDocumentProjectionDependencies {
   readonly parses: DocumentParseStore
   readonly ingestion: Pick<StructuredIngestionStore, 'findParseByDigest' | 'listRecords'>
   readonly now?: () => string
+  /** Legacy recovery from actual scoped native/mapping pins, never a guessed default. */
+  readonly resolveLegacySelection?: (parse: StructuredParseRecord, ctx: ToolContext) => Promise<Omit<StructuredParseOptions, 'mediaType'>>
 }
 
 interface ProjectionRow { readonly start: number; readonly end: number; readonly text: string; readonly origin: StructuredProjectionOrigin }
@@ -48,8 +51,8 @@ function tableText(table: StructuredTable, cells: readonly { readonly raw: strin
   return JSON.stringify({ headers: table.columns.map((column) => column.header), cells: cells.map((cell) => cell.raw) })
 }
 
-function derive(bytes: Uint8Array, parse: StructuredParseRecord) {
-  const result = new StructuredDocumentParser().parse(bytes, { mediaType: parse.originalMediaType })
+function derive(bytes: Uint8Array, parse: StructuredParseRecord, selection: Omit<StructuredParseOptions, 'mediaType'>) {
+  const result = new StructuredDocumentParser().parse(bytes, { ...selection, mediaType: parse.originalMediaType })
   if (result.status === 'rejected' || result.format !== parse.format || sha256OfCanonical(result.coverage) !== sha256OfCanonical(parse.coverage)) throw new DocumentExtractionError('SPAN_STORE_FAILED', 'the stored structured parse cannot be reproduced from the original selection')
   const entries = reconcileStructuredResult(result, parse.scopeRef, parse.originalRef.digest).entries
   const byLocator = new Map(entries.map((entry) => [sha256OfCanonical(entry.locator), entry]))
@@ -97,7 +100,7 @@ function derive(bytes: Uint8Array, parse: StructuredParseRecord) {
     parsedUnits: rows.length, skippedUnits: parse.coverage.skippedUnits + skipped,
     skippedReasons: [...parse.coverage.skippedReasons, ...(skipped === 0 ? [] : ['structured text projection row/byte limits'])] }
   const map = new TextEncoder().encode(JSON.stringify({ schemaVersion: 'structured-document-projection@1',
-    structuredParseId: parse.parseId, parserVersion: parse.parserVersion, originalRef: parse.originalRef,
+    structuredParseId: parse.parseId, parserVersion: parse.parserVersion, originalRef: parse.originalRef, selection,
     coverage, rows: rows.map(({ start, end, origin }) => ({ start, end, origin })) }))
   return { text, rows, coverage, map }
 }
@@ -114,8 +117,13 @@ export class StructuredDocumentProjectionService {
     if (stored === undefined || sha256OfCanonical(stored) !== sha256OfCanonical(parse)) throw new DocumentExtractionError('SPAN_STORE_FAILED', 'the projection requires the actual stored structured parse')
     const bytes = await this.originalBytes(parse.originalRef, ctx)
     const existing = await this.dependencies.parses.findParseByDigest(scope, parse.originalRef.digest, STRUCTURED_PROJECTION_VERSION, ctx)
-    if (existing !== undefined) return existing
-    const projection = derive(bytes, parse)
+    if (existing !== undefined) {
+      if (existing.parseId !== parse.parseId) throw new DocumentExtractionError('SPAN_STORE_FAILED', 'the stored projection does not retain the actual original structured parse identity')
+      return existing
+    }
+    const selection = parse.parseOptions ?? await this.dependencies.resolveLegacySelection?.(parse, ctx)
+    if (!isStructuredParseSelection(selection)) throw new DocumentExtractionError('SPAN_STORE_FAILED', 'the legacy parse requires its actual authoritative native selection')
+    const projection = derive(bytes, parse, selection)
     const unresolved = new Map(projection.rows.map((row) => [row.origin.recordId, row.origin]))
     let cursor: string | undefined
     let scanned = 0
@@ -133,7 +141,7 @@ export class StructuredDocumentProjectionService {
       cursor = page.nextCursor
       if (cursor !== undefined && seenCursors.has(cursor)) throw new DocumentExtractionError('SPAN_STORE_FAILED', 'the structured source page cursor did not advance')
       if (cursor !== undefined) seenCursors.add(cursor)
-    } while (cursor !== undefined)
+    } while (cursor !== undefined && unresolved.size > 0)
     if (unresolved.size > 0) throw new DocumentExtractionError('SPAN_STORE_FAILED', 'the projection source rows do not belong to the actual stored parse selection')
     const normalized = buildNormalizedTextArtifact('character', projection.text)
     const publish = async (bytes: Uint8Array, mediaType: string) => {
@@ -142,7 +150,9 @@ export class StructuredDocumentProjectionService {
     }
     const normalizedRef = (await publish(normalized, NORMALIZED_TEXT_MEDIA_TYPE)).blobRef
     const spanMapRef = (await publish(projection.map, 'application/vnd.ontology.structured-document-map+json')).blobRef
-    const parseId = deterministicUuid(`${scope.tenantId}|${scope.spaceId}|${parse.originalRef.digest}|${STRUCTURED_PROJECTION_VERSION}`)
+    // Memberships and mapped facts pin the original structured parse. The separate
+    // document store holds its bounded text projection under that same source ID.
+    const parseId = parse.parseId
     const chunks: DocumentChunkRecord[] = projection.rows.map((row, ordinal) => ({
       chunkId: deterministicUuid(`${parseId}|${ordinal}`), ordinal, chunkKind: parse.format === 'json' ? 'paragraph' : 'table', text: row.text,
       textDigest: sha256DigestOfText(row.text), quoteDigest: sha256DigestOfText(row.text),
@@ -153,7 +163,7 @@ export class StructuredDocumentProjectionService {
     const record: DocumentParseRecord = { parseId, scopeRef: scope, mediaKind: 'text', originalMediaType: parse.originalMediaType,
       originalRef: parse.originalRef, normalizedMediaType: NORMALIZED_TEXT_MEDIA_TYPE, normalizedByteSize: normalized.byteLength,
       normalizedRef, spanMapMediaType: 'application/vnd.ontology.structured-document-map+json', spanMapRef,
-      parserId: 'ontology.structured-document-projection', parserVersion: STRUCTURED_PROJECTION_VERSION, offsetUnit: 'character',
+      parserId: STRUCTURED_PROJECTION_ID, parserVersion: STRUCTURED_PROJECTION_VERSION, offsetUnit: 'character',
       coverage: projection.coverage, pages: [], ...(parse.sourceRef === undefined ? {} : { sourceRef: parse.sourceRef }),
       documentVersionRef: parse.documentVersionRef ?? parse.originalRef, createdAt: this.dependencies.now?.() ?? new Date().toISOString() }
     const saved = await this.dependencies.parses.recordParse(record, chunks, ctx)
@@ -186,13 +196,16 @@ export class StructuredDocumentSpanReader implements DocumentSpanReaderPort {
   async readOrigin(request: ReadSpanRequest, ctx: ToolContext): Promise<StructuredProjectionOrigin | undefined> {
     const scope = scopeOf(ctx)
     const record = await this.dependencies.parses.findParseByDigest(scope, request.documentRef.digest, STRUCTURED_PROJECTION_VERSION, ctx)
-    if (record === undefined || request.locator.normalizationMapRef !== record.spanMapRef.digest) return undefined
+    if (record === undefined || record.parserId !== STRUCTURED_PROJECTION_ID || request.locator.normalizationMapRef !== record.spanMapRef.digest) return undefined
     const parse = await this.dependencies.ingestion.findParseByDigest(scope, request.documentRef.digest, STRUCTURED_PARSER_VERSION, ctx)
     if (parse === undefined || sha256OfCanonical(parse.originalRef) !== sha256OfCanonical(request.documentRef)) throw new DocumentExtractionError('SPAN_STORE_FAILED', 'the projection has no matching authorized original structured parse')
-    const projection = derive(await this.#projection.originalBytes(request.documentRef, ctx), parse)
     const mapMetadata = await this.dependencies.blobs.getAuthorized({ scopeRef: scope, blobRef: record.spanMapRef }, ctx)
     if (!mapMetadata.integrityVerified || mapMetadata.byteSize > STRUCTURED_PROJECTION_MAX_MAP_BYTES) throw new DocumentExtractionError('SPAN_STORE_FAILED', 'the source map exceeds its finite artifact bound or failed integrity')
     const savedMap = await this.dependencies.blobs.readAuthorized({ scopeRef: scope, blobRef: record.spanMapRef }, ctx)
+    const map: unknown = JSON.parse(new TextDecoder().decode(savedMap))
+    if (!isRecord(map) || map['schemaVersion'] !== 'structured-document-projection@1' || map['structuredParseId'] !== parse.parseId || !isStructuredParseSelection(map['selection'])
+      || (parse.parseOptions !== undefined && sha256OfCanonical(parse.parseOptions) !== sha256OfCanonical(map['selection']))) throw new DocumentExtractionError('SPAN_STORE_FAILED', 'the source map does not pin the actual native selection')
+    const projection = derive(await this.#projection.originalBytes(request.documentRef, ctx), parse, map['selection'])
     if (sha256DigestOfBytes(savedMap) !== record.spanMapRef.digest || sha256DigestOfBytes(projection.map) !== record.spanMapRef.digest) throw new DocumentExtractionError('SPAN_STORE_FAILED', 'the original source does not reproduce the pinned projection map')
     const row = projection.rows.find((candidate) => candidate.start === request.locator.startOffset && candidate.end === request.locator.endOffset)
     if (row === undefined || request.locator.kind !== 'approximate_locator') throw new DocumentExtractionError('SPAN_OUT_OF_RANGE', 'the locator does not name a complete projected source row')
@@ -206,7 +219,7 @@ export class StructuredDocumentSpanReader implements DocumentSpanReaderPort {
     return this.#text.readParsedSpan(record, request, ctx)
   }
   async readParsedSpan(record: DocumentParseRecord, request: ReadSpanRequest, ctx: ToolContext): Promise<ReadSpanResponse> {
-    if (record.parserVersion === STRUCTURED_PROJECTION_VERSION) await this.readOrigin(request, ctx)
+    if (record.parserId === STRUCTURED_PROJECTION_ID && record.parserVersion === STRUCTURED_PROJECTION_VERSION) await this.readOrigin(request, ctx)
     return this.#text.readParsedSpan(record, request, ctx)
   }
 }

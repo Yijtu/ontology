@@ -1,6 +1,15 @@
 import { expect, it } from 'vitest'
 import { InMemoryDocumentParseStore, InMemoryStructuredIngestionStore, LocalStructuredIngestionService, STRUCTURED_PROJECTION_MAX_MAP_BYTES, StructuredDocumentProjectionService } from '@ontology/adapter-extraction-document'
 import { createTestToolContext, InMemoryArtifactStore } from '../fixtures/documents/test-doubles'
+import { isStructuredParseSelection } from '@ontology/contracts'
+
+it('refuses unknown or script-like native selection fields rather than coercing them', () => {
+  expect(isStructuredParseSelection({ sheetName: 'Chosen', headerRow: 2, delimiter: ';' })).toBe(true)
+  expect(isStructuredParseSelection({ script: 'anything' })).toBe(false)
+  expect(isStructuredParseSelection({ delimiter: [';'] })).toBe(false)
+  expect(isStructuredParseSelection({ caps: { maxRows: '1000' } })).toBe(false)
+  expect(isStructuredParseSelection(new Date())).toBe(false)
+})
 
 it('bounds a wide table source map and accounts for every excluded row', async () => {
   const scope = { tenantId: '11111111-1111-4111-8111-111111111111', spaceId: 'aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa' }

@@ -1682,7 +1682,7 @@ export async function createCoreLocalComposition(options: CoreLocalCompositionOp
     const duckDb = await createDuckDbSnapshot(options.examples.scenarios)
     cleanup.unshift(async () => duckDb.close())
     const structuredImports = options.projectStructuredImports?.({ blobs: blobStore, parses: parseStore, ingestion: structuredStore, projects: projectStore,
-      documents: projectDocumentStore, indexStore: keywordIndexStore, readiness: projectReadinessStore, executionBindings: runExecutionBindingStore })
+      documents: projectDocumentStore, indexStore: keywordIndexStore, readiness: projectReadinessStore, executionBindings: runExecutionBindingStore, mappings: projectMappingStore })
     const documentSpanReader = structuredImports?.spanReader ?? new DocumentSpanReader({ blobs: blobStore, store: parseStore })
     const documentSearch = new Bm25DocumentSearchService({ indexStore: keywordIndexStore, spanReader: documentSpanReader })
     const projectDocumentIndexService = structuredImports?.index ?? new ProjectDocumentIndexService({

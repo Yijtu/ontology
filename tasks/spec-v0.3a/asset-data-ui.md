@@ -318,6 +318,8 @@ ImportMappingVersion 保存文件选择、header digest、fieldRef→column inde
 
 近似投影问答使用既有 artifact_summary，绑定实际派生 artifact 及原始 cell 来源，保留 approximate_document_source/limited_factual_result；不冒充精确逐字引用。原文/来源位置/固定索引失效或撤回阻止新的发布，已核验历史答案和其归档证据仍按原有授权读取。相同文件的不同定位行保留为不同检索片段，重复文件中的同定位 quote 按 lineage 折叠。
 
+成员、structured parse 和文档投影使用同一原始 parseId，使映射、事实及演进的现有来源 fence 保持一致；投影 parser/version 与原始 parser/version 分开记录。迁移 086 保存实际 native parse_options，immutable map 固定可回放 selection。NULL 历史记录不能猜默认 sheet/header，仅允许从 scoped、当前修订固定的实际确认 mapping 恢复唯一选择，并核验 mapping 内容摘要、原始表头、持久化行及每个 cell。未知字段和脚本不是 selection。问答来源验证按实际 gateway envelope 身份、keyword 来源及 QA schema 分流；规则/政策 document_span 保留既有来源验证及真实 premise replay。最终 readiness 写入或状态读取期间的取消不得晚回成功，也不能全局撤销其他有效并发构建。
+
 collectionRef 由 host 生成 project:<projectId>，客户端／模型只能通过项目任务请求其可用文档能力。corpus 是固定 DocumentSet 中授权 active memberships及完整 parse refs，不是全空间 listParses；索引 digests包括 tokenizer/parser版本、成员documentRef/parseRef/textDigest与visibility epoch。
 
 现 builder 存在读取全部 generations再 Number(max)+1 的竞争和精度风险；改为 scope＋collection 的 bigint counter锁和唯一digest复用。每个 build job固定 request corpus ref，parses由 coordinator在领取时按该manifest分页读取，不在composition写死。

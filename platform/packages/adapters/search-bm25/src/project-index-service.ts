@@ -213,8 +213,11 @@ export class ProjectDocumentIndexService {
     await this.#builder.activate(collectionRef, built.generation.generation, ctx)
     options.signal?.throwIfAborted()
     await this.#recordReadiness(projectId, receiptWrite.receipt, ctx)
+    options.signal?.throwIfAborted()
     this.#cache.clear()
-    return this.getStatus(projectId, ctx)
+    const status = await this.getStatus(projectId, ctx)
+    options.signal?.throwIfAborted()
+    return status
   }
 
   async getStatus(projectId: Uuid, ctx: ToolContext): Promise<ProjectDocumentIndexStatus> {
