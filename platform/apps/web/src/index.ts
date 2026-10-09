@@ -361,3 +361,16 @@ export type { PublicEmptyStateProps, PublicStateNoticeProps } from './components
 
 export { Button, Panel, Field, StatusBadge, StateFeedback, DataTable, Drawer } from './components/ui'
 export type { AppViewContext, AppViewContribution } from './components/App'
+
+export { parseGrounding } from './api/ontology'
+export { encodeOriginalBytes, parseWorkspaceAuthoring, parseWorkspaceCorpus } from './api/workspace-authoring'
+export { canonicalBody, parseCompetencyDeclaration, replaceOriginalRef, selectCompetencyQuestions, expectationText } from './api/competency'
+export { DefinitionEditor } from './components/ontology/DefinitionEditor'
+export { ConditionEditor, conditionSummary, clausePaths } from './components/ontology/ConditionEditor'
+export { parseFormalDefinition, parseTermLabels, formalAttributeLabel } from './api/semantic-authoring'
+export type { FormalDefinitionView, FormalAttributeView, FormalObjectView, FormalRelationView, TermLabelsView } from './api/semantic-authoring'
+export { parseExecutionPreview } from './api/execution-preview'
+export type { ExecutionPreviewView, ExecutionRuleChoice } from './api/execution-preview'
+export { prepareHumanRuleInput, buildHumanRuleQuestion, humanQuestionSet, appendHumanQuestion, canAppendHumanQuestion } from './api/competency-authoring'
+export { CompetencyQuestionWorkbench } from './components/ontology/CompetencyQuestionWorkbench'
+export type { WorkspaceAuthoringContext, WorkspaceSourceCatalogue, WorkspaceSourceView, EligibleOperationView } from './api/workspace-authoring'
