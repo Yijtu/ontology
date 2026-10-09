@@ -4,12 +4,12 @@ import type {
   CompetencyExecutionPort, CompetencyExecutionRequest, CompetencyExecutionResult, CompetencyExpectation,
   CompetencySourceLocation, CompetencySourceReader, ImmutableArtifactWriter, ProjectRevision,
   ProjectSnapshotQueryDescriptor, PublishedExecutableRule, ResourceRef, RulePremiseReplayPort,
-  ScopedArtifactReader, SemanticDefinitionVersion, ToolContext, ToolGateway, VersionRef,
+  ScopedArtifactReader, ScopeRef, SemanticDefinitionVersion, ToolContext, ToolGateway, VersionRef,
 } from '@ontology/contracts'
 import { canonicalJson } from '@ontology/application'
 import {
   publishedRuleConsequenceKey, publishedRuleDependencyRef, publishedRuleRef, projectSnapshotMappingRef,
-  sameUtcInstant,
+  sameUtcInstant, compareUtcInstants,
 } from '@ontology/semantic-engine'
 import type {
   IncrementalMaterializer, MaterializationPublishedSource, MaterializedRuleDerivationEvidenceProducer,
@@ -44,7 +44,11 @@ export interface PreparedCompetencyCase {
     readonly producer: MaterializedRuleDerivationEvidenceProducer
     readonly replay: RulePremiseReplayPort
   }
-  readonly relations?: PublishedRelationNavigator
+  readonly relations?: {
+    readonly navigator: PublishedRelationNavigator
+    /** Actual monotonic semantic read head; the navigator itself has no historical port. */
+    readonly readRecordedPoint: (scope: ScopeRef, ctx: ToolContext) => Promise<string>
+  }
   readonly compute?: { readonly gateway: ToolGateway; readonly context: ToolContext; readonly operation: RegisteredOperation; readonly inputRef: ResourceRef }
 }
 
@@ -112,6 +116,7 @@ export function createCoreCompetencyExecution(options: CoreCompetencyExecutionOp
         sha256OfCanonical(captured['definitionRef']) !== sha256OfCanonical(input.definition.ref) ||
         sha256OfCanonical(captured['declarationDefinitionRef']) !== sha256OfCanonical(request.definitionRef) ||
         canonicalJson(captured['originals']) !== canonicalJson(input.consumedOriginals) || canonicalJson(captured['rules']) !== canonicalJson(actualRules) ||
+        captured['selectedRecordedPoint'] !== input.recordedPoint ||
         points.length === 0 || points.length > 201 || selectedPoints.length !== 1 || !isRecord(selectedPoints[0]) || selectedPoints[0]['actual'] !== input.recordedPoint ||
         points.some((point: unknown) => !isRecord(point) || typeof point['logical'] !== 'string' || typeof point['actual'] !== 'string' || !/^\d+$/u.test(point['actual'])) ||
         new Set(points.map((point: unknown) => isRecord(point) ? point['logical'] : undefined)).size !== points.length ||
@@ -139,9 +144,9 @@ export function createCoreCompetencyExecution(options: CoreCompetencyExecutionOp
       if (!input.definition.attributes.some((field) => field.objectId === intent.objectId && field.id === intent.attributeId)) return { status: 'not_yet_executable', reason: 'definition mismatch requires an actual schema admission refusal artifact' }
       const read = await input.facts.load(request.input.scopeRef, ctx)
       if (read.complete !== true || read.definitionRef === undefined || !sameRef(read.definitionRef, input.definition.ref) || read.readRevision?.semantic !== input.recordedPoint) return { status: 'not_yet_executable', reason: 'official fact coverage, definition or exact recorded point is unavailable' }
-      const validAt = Date.parse(request.input.validAt)
       const facts = read.facts.filter((fact) => fact.projectId === input.project.ref.projectId && fact.subject === entityId && fact.objectId === intent.objectId && fact.attributeId === intent.attributeId && fact.op !== 'retract' &&
-        (fact.validity.validFrom === undefined || Date.parse(fact.validity.validFrom) <= validAt) && (fact.validity.validTo === undefined || validAt < Date.parse(fact.validity.validTo)))
+        (fact.validity.validFrom === undefined || (compareUtcInstants(fact.validity.validFrom, request.input.validAt) ?? 1) <= 0) &&
+        (fact.validity.validTo === undefined || (compareUtcInstants(request.input.validAt, fact.validity.validTo) ?? 1) < 0))
       const values = [...new Map(facts.filter((fact) => fact.value !== undefined).map((fact) => [canonicalJson(fact.value), fact.value!])).values()]
       actual = values.length === 1 ? { kind: 'value', value: values[0]! } : { kind: 'unknown', reason: values.length === 0 ? 'no published observation' : 'conflicting published observations' }
       proof = { facts, readRevision: read.readRevision, definitionRef: read.definitionRef }
@@ -193,7 +198,9 @@ export function createCoreCompetencyExecution(options: CoreCompetencyExecutionOp
     } else if (intent.kind === 'relation') {
       const entityId = input.entities.get(entityKey(intent.objectId, intent.subjectEntityId))
       if (input.relations === undefined || entityId === undefined) return { status: 'not_yet_executable', reason: 'published relation navigation is not mounted or its entity is unresolved' }
-      const result = await input.relations.navigate({ startEntityId: entityId, relationIds: [intent.relationId], validAt: request.input.validAt, maxPaths: 32, signal }, ctx)
+      if (await input.relations.readRecordedPoint(request.input.scopeRef, ctx) !== input.recordedPoint) return { status: 'not_yet_executable', reason: 'historical relation navigation is not supported by the actual current navigation port' }
+      const result = await input.relations.navigator.navigate({ startEntityId: entityId, relationIds: [intent.relationId], validAt: request.input.validAt, maxPaths: 32, signal }, ctx)
+      if (await input.relations.readRecordedPoint(request.input.scopeRef, ctx) !== input.recordedPoint) throw new CompetencyQuestionError('DIGEST_MISMATCH', 'the actual relation read point changed during navigation')
       const targets = result.paths.map((path) => input.businessIds.get(path.endEntityId))
       if (targets.some((target) => target === undefined)) return { status: 'not_yet_executable', reason: 'a confirmed relation target lacks an actual business identity binding' }
       actual = { kind: 'relation', targetEntityIds: [...new Set(targets.filter((target): target is string => target !== undefined))].sort(), completeness: result.completeness }; proof = result
