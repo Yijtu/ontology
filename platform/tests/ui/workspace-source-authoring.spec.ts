@@ -77,4 +77,38 @@ describe('workspace source UI boundary', () => {
       expect(changes).toBe(0); expect(container.textContent).toContain('上传写入结果待核对'); expect(container.querySelector<HTMLInputElement>('input[required]')?.value).toBe('原始台账.xlsx'); expect(container.textContent).not.toContain('原始字节已存储并解析')
     } finally { await act(async () => root.unmount()); container.remove() }
   })
+
+  it('distinguishes a complete original parse from a bounded eight-row partial preview', async () => {
+    const preview = { ...source, previewCoverage: 'partial', coverage: { ...source.coverage, totalUnits: 10, parsedUnits: 10 }, tables: [{ ...source.tables[0], rows: Array.from({ length: 8 }, (_, index) => ({ sourceRowKey: `row-${index + 4}`, cells: [{ columnIndex: 0, raw: String(index) }] })) }] }
+    const client = new WorkbenchClient({ baseUrl: 'http://ui-unit.test', fetchImpl: async (input) => String(input).endsWith('/authoring-context') ? baseline('/authoring-context', '1') : json({ workspace: workspace(), draft: draft('1'), sources: [preview] }) })
+    const container = document.createElement('div'); document.body.appendChild(container); const root = createRoot(container)
+    try {
+      await act(async () => root.render(createElement(WorkspaceSourcesPanel, { client, workspace: workspace(), identity })))
+      expect(container.textContent).toContain('原始解析覆盖：10/10'); expect(container.textContent).toContain('原始解析完整。')
+      expect(container.textContent).toContain('预览有限 · 解析完成')
+      expect(container.textContent).toContain('当前预览有范围限制，不能当作全部原文。'); expect(container.textContent).not.toContain('当前预览完整。')
+      expect(container.querySelectorAll('tbody tr')).toHaveLength(8)
+    } finally { await act(async () => root.unmount()); container.remove() }
+  })
+
+  it('locks the exact submitted name/header/data-row/sheet until a delayed acknowledgement completes', async () => {
+    let revision = '1', changes = 0
+    let resolveUpload: (response: Response) => void = () => { throw new Error('upload resolver missing') }
+    const delayed = new Promise<Response>((resolve) => { resolveUpload = resolve })
+    const client = new WorkbenchClient({ baseUrl: 'http://ui-unit.test', fetchImpl: (input, init) => init?.method === 'POST' ? delayed : Promise.resolve(baseline(new URL(String(input)).pathname, revision)) })
+    const container = document.createElement('div'); document.body.appendChild(container); const root = createRoot(container)
+    const inputFor = (label: string) => { const node = [...container.querySelectorAll('label')].find((value) => value.textContent === label); const input = node === undefined ? null : container.querySelector<HTMLInputElement>(`[id="${node.htmlFor}"]`); if (input === null) throw new Error(`Missing ${label}`); return input }
+    try {
+      await act(async () => root.render(createElement(WorkspaceSourcesPanel, { client, workspace: workspace(), identity, onWorkspaceChanged: () => { changes++ } })))
+      await chooseFile(container); await text(container, '资料名称', '本次已提交台账'); await text(container, '实际表头所在行', '3'); await text(container, '实际数据起始行', '4'); await text(container, '工作表名称（多表时填写）', '运营台账')
+      await button(container, '上传并读取真实资料')
+      for (const label of ['资料名称', '实际表头所在行', '实际数据起始行', '工作表名称（多表时填写）']) expect(inputFor(label).disabled).toBe(true)
+      expect(inputFor('资料名称').value).toBe('本次已提交台账'); expect(inputFor('实际表头所在行').value).toBe('3'); expect(inputFor('实际数据起始行').value).toBe('4'); expect(inputFor('工作表名称（多表时填写）').value).toBe('运营台账')
+      expect([...container.querySelectorAll<HTMLButtonElement>('button')].find((node) => node.textContent === '停止等待并保留当前输入')?.disabled).toBe(false)
+      revision = '2'; await act(async () => resolveUpload(json({ workspace: workspace('2'), draft: draft('2'), source })))
+      expect(changes).toBe(1); expect(inputFor('资料名称').disabled).toBe(false)
+      await text(container, '资料名称', '下一份资料的新名称')
+      expect(inputFor('资料名称').value).toBe('下一份资料的新名称')
+    } finally { await act(async () => root.unmount()); container.remove() }
+  })
 })

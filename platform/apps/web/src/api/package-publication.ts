@@ -281,10 +281,7 @@ export function isSyntheticExampleSetView(value: unknown): value is SyntheticExa
     Array.isArray(value['caseKinds']) &&
     value['caseKinds'].every(isCaseKind) && Array.isArray(value['cases']) && value['cases'].every(isCase) &&
     Array.isArray(value['expectations']) && value['expectations'].every(isExpectation) &&
-    isSha256(value['contentDigest']) && typeof value['recordedAt'] === 'string' &&
-    (value['competencyQuestionRef'] === undefined || isVersionRef(value['competencyQuestionRef'])) &&
-    (value['competencyRequired'] === undefined || value['competencyRequired'] === true) &&
-    (value['competency'] === undefined || isCompetency(value['competency']))
+    isSha256(value['contentDigest']) && typeof value['recordedAt'] === 'string'
 }
 
 function isIssue(value: unknown): value is IndustryValidationIssueView {
@@ -312,10 +309,13 @@ function isCoverage(value: unknown): value is SyntheticCaseCoverageView {
 }
 
 function isCompetencyResult(value: unknown): value is CompetencyResultView {
-  return isRecord(value) && typeof value['questionId'] === 'string' && typeof value['question'] === 'string' &&
-    ['passed', 'failed', 'not_yet_executable'].includes(String(value['status'])) && value['expected'] !== undefined &&
-    (value['reason'] === undefined || typeof value['reason'] === 'string') && isRecord(value['sourceCoverage']) &&
-    typeof value['sourceCoverage']['required'] === 'number' && typeof value['sourceCoverage']['verified'] === 'number' && typeof value['sourceCoverage']['complete'] === 'boolean'
+  if (!isRecord(value) || !isNonEmptyString(value['questionId']) || !isNonEmptyString(value['question']) ||
+    typeof value['status'] !== 'string' || !['passed', 'failed', 'not_yet_executable'].includes(value['status']) || value['expected'] === undefined ||
+    (value['reason'] !== undefined && typeof value['reason'] !== 'string') || !isRecord(value['sourceCoverage'])) return false
+  const { required, verified, complete } = value['sourceCoverage']
+  return typeof required === 'number' && Number.isSafeInteger(required) && required >= 0 &&
+    typeof verified === 'number' && Number.isSafeInteger(verified) && verified >= 0 && verified <= required &&
+    typeof complete === 'boolean' && (!complete || verified === required)
 }
 function isCompetency(value: unknown): boolean {
   return isRecord(value) && typeof value['passed'] === 'boolean' && Array.isArray(value['results']) && value['results'].every(isCompetencyResult)
@@ -332,7 +332,10 @@ export function isIndustryValidationReportView(value: unknown): value is Industr
     Array.isArray(value['issues']) && value['issues'].every(isIssue) &&
     Array.isArray(value['expectationResults']) && value['expectationResults'].every(isExpectationResult) &&
     Array.isArray(value['coverage']) && value['coverage'].every(isCoverage) &&
-    isSha256(value['contentDigest']) && typeof value['recordedAt'] === 'string'
+    isSha256(value['contentDigest']) && typeof value['recordedAt'] === 'string' &&
+    (value['competencyQuestionRef'] === undefined || isVersionRef(value['competencyQuestionRef'])) &&
+    (value['competencyRequired'] === undefined || value['competencyRequired'] === true) &&
+    (value['competency'] === undefined || isCompetency(value['competency']))
 }
 
 function isActionPin(value: unknown): value is PackActionDeclarationPinView {

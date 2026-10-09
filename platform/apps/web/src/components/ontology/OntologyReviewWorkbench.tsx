@@ -79,6 +79,9 @@ export function OntologyReviewWorkbench({ client, workspaceId, readOnly = false 
   const [mergeBaseId, setMergeBaseId] = useState('')
   const [operationReason, setOperationReason] = useState('')
   const [splitNames, setSplitNames] = useState('')
+  const [unsupportedRuleId, setUnsupportedRuleId] = useState('')
+  const [unsupportedRaw, setUnsupportedRaw] = useState('')
+  const [unsupportedReason, setUnsupportedReason] = useState('')
   const epoch = useRef(0)
   const currentWorkspace = useRef(workspaceId)
   currentWorkspace.current = workspaceId
@@ -157,7 +160,7 @@ export function OntologyReviewWorkbench({ client, workspaceId, readOnly = false 
   const changeRule = (nextCondition: RuleExpressionNode, nextExceptions = exceptions, nextReason = ruleReason) => { ruleBuffers.current.set(bufferKey, { condition: nextCondition, exceptions: nextExceptions, reason: nextReason }); setCondition(nextCondition); setExceptions(nextExceptions); setRuleReason(nextReason) }
   const changeAction = (declaration: ActionDeclaration, reason = actionReason) => { actionBuffers.current.set(bufferKey, { declaration, reason }); setActionDraft(declaration); setActionReason(reason) }
   const setBuffer = (next: EditBuffer) => { if (selected === undefined) return; const key = `${workspaceId}:${selected.candidateId}:${selected.contentDigest}`; setBuffers((old) => new Map(old).set(key, next)) }
-  const write = async (path: string, body: unknown, onResult?: (result: unknown) => string | undefined, reviewRevision?: string) => {
+  const write = async (path: string, body: unknown, onResult?: (result: unknown) => string | undefined, reviewRevision?: string, successMessage?: string) => {
     if (readOnly || busy || draft === undefined) return
     const token = epoch.current
     const target = workspaceId
@@ -171,7 +174,7 @@ export function OntologyReviewWorkbench({ client, workspaceId, readOnly = false 
       const next = onResult?.(result)
       if (path.endsWith('/reviews') && (!isRecord(result) || result['candidateId'] !== selected?.candidateId || result['contentDigest'] !== selected?.contentDigest || !isRevisionString(result['revision']))) return invalidWire()
       retainedKeys.current.delete(identity)
-      setNotice('操作已由服务端确认。新的内容需要重新确认依据并单独审核。'); setEditing(false); setOperation(undefined)
+      setNotice(successMessage ?? '操作已由服务端确认。新的内容需要重新确认依据并单独审核。'); setEditing(false); setOperation(undefined)
       await load(next)
       if (currentWorkspace.current === target && !controller.signal.aborted) setReviewRefresh((value) => value + 1)
     } catch (error) {
@@ -262,6 +265,16 @@ export function OntologyReviewWorkbench({ client, workspaceId, readOnly = false 
     }}>确认并生成新版本</Button><details><summary>查看完整操作前结构</summary><pre>{JSON.stringify((operation === 'split' && selected !== undefined ? [selected] : chosenDefinitions).map((c) => c.payload), null, 2)}</pre></details></Drawer>
     <section className="ontology-lifecycle"><h3>生成与变更记录</h3>{batches.length === 0 ? <p>尚无已记录的生成批次。</p> : batches.map((batch) => <article key={batch.batchId}><p>实际产生 {batch.counts.total} 个候选 · 待来源确认 {batch.counts.pendingConfirmation} · 失败 {batch.counts.failed}</p>{batch.error === undefined ? null : <p className="ontology-notice">{batch.error.message}</p>}<details><summary>批次版本与调用信息</summary><pre>{JSON.stringify(batch, null, 2)}</pre></details></article>)}
       {unsupported.length === 0 ? null : <section><h4>保留的不可执行规则</h4>{unsupported.map((value) => <article key={value.ruleId}><StatusBadge tone="warning">暂不可执行</StatusBadge><p>{value.reason}</p><details><summary>完整原始规则</summary><pre>{JSON.stringify(value, null, 2)}</pre></details></article>)}</section>}
+      {!readOnly ? <details className="ontology-advanced"><summary>高级：保留暂时无法表达的规则</summary><p>原文或 JSON 按输入文本完整保留。此记录不可执行，不会自动生成规则、批准或启用声明。</p><form onSubmit={(event) => {
+        event.preventDefault()
+        if (busy || draft === undefined || !unsupportedRuleId.trim() || !unsupportedReason.trim() || !unsupportedRaw.trim()) return
+        const ruleId = unsupportedRuleId.trim(), reason = unsupportedReason.trim(), rawForm = unsupportedRaw
+        void write(`${prefix}/unsupported-rules`, { ruleId, reason, rawForm }, (value) => {
+          if (!isRecord(value) || !definitionGuard.unsupportedDefinitionRule(value['rule']) || value['rule'].workspaceId !== workspaceId || value['rule'].ruleId !== ruleId || value['rule'].rawForm !== rawForm || value['rule'].reason !== reason) return invalidWire()
+          setUnsupportedRuleId(''); setUnsupportedReason(''); setUnsupportedRaw('')
+          return undefined
+        }, undefined, '服务端已保存不可执行的原始规则记录；不授予业务审批或执行能力。')
+      }}><fieldset disabled={busy || loading || draft === undefined}><Field label="规则记录标记">{(attributes) => <input {...attributes} value={unsupportedRuleId} onChange={(event) => setUnsupportedRuleId(event.target.value)} />}</Field><Field label="保留原因">{(attributes) => <textarea {...attributes} value={unsupportedReason} onChange={(event) => setUnsupportedReason(event.target.value)} />}</Field><Field label="完整原文（文本或 JSON）">{(attributes) => <textarea {...attributes} value={unsupportedRaw} onChange={(event) => setUnsupportedRaw(event.target.value)} />}</Field><Button type="submit" disabled={!unsupportedRuleId.trim() || !unsupportedReason.trim() || !unsupportedRaw.trim()}>记录为不可执行</Button></fieldset></form></details> : null}
       <section><h4>服务端记录的实际编辑影响</h4>{adjudications.map((adjudication) => <article key={adjudication.adjudicationId}><p>{adjudication.reason}</p><ul>{adjudication.affected.map((affected, i) => <li key={i}>{labels.get(affected.logicalId) ?? affected.logicalId}：{affected.impact}</li>)}</ul>{adjudication.findings.map((finding, i) => <p key={i} className="ontology-notice">{finding.message}</p>)}<details><summary>完整裁决与版本信息</summary><pre>{JSON.stringify(adjudication, null, 2)}</pre></details></article>)}</section>
     </section>{diff === undefined ? <p>尚未取得当前版本的差异。</p> : <FullVersionDiff changes={[...diff.additions, ...diff.changes]} labels={labels} />}
     <details className="ontology-advanced"><summary>差异完整版本与阻断详情</summary><pre>{JSON.stringify(diff, null, 2)}</pre></details>
