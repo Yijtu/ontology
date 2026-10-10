@@ -1,7 +1,7 @@
 import { randomUUID } from 'node:crypto'
 import { mkdtemp, rm, writeFile } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
-import { join } from 'node:path'
+import { join, resolve } from 'node:path'
 import { fileURLToPath } from 'node:url'
 import { Client } from 'pg'
 import { chromium } from '@playwright/test'
@@ -132,15 +132,18 @@ afterAll(async () => {
   await close('Core composition', composition === undefined ? undefined : () => composition?.close() ?? Promise.resolve())
   await close('PostgreSQL admin client', admin === undefined ? undefined : () => admin?.end() ?? Promise.resolve())
   await close('PostgreSQL container', postgres === undefined ? undefined : () => postgres?.stop() ?? Promise.resolve())
-  if (fileDirectory !== '') await close('temporary files', () => rm(fileDirectory, { recursive: true, force: true }))
+  if (fileDirectory !== '') await close('temporary files', async () => {
+    const owned = resolve(fileDirectory)
+    if (!owned.startsWith(resolve(tmpdir(), 'ontology-gap22-project-'))) throw new Error('temporary cleanup escaped the owned test directory')
+    await rm(owned, { recursive: true, force: true })
+  })
   try {
     await record('gap22-project-worker-diagnostics', workerDiagnostics.map((entry) => JSON.stringify(entry)))
   } catch (error) {
     teardownErrors.push(new Error('worker diagnostics could not be saved', { cause: error }))
   }
-  const unassignedWorkerErrors = workerDiagnostics.filter((entry) => !entry.duringClose)
-  if (unassignedWorkerErrors.length > 0) {
-    teardownErrors.push(new Error(`unexpected Core worker errors: ${unassignedWorkerErrors.map((entry) => JSON.stringify(entry)).join('; ')}`))
+  if (workerDiagnostics.length > 0) {
+    teardownErrors.push(new Error(`unexpected Core worker errors: ${workerDiagnostics.map((entry) => JSON.stringify(entry)).join('; ')}`))
   }
   if (teardownErrors.length > 0) throw new AggregateError(teardownErrors, 'GAP-022 E2E teardown or worker diagnostics failed')
 })
@@ -401,7 +404,7 @@ describe('GAP-022 normal App project source-to-publication pipeline', () => {
       await page.waitForFunction(() => document.querySelector('[data-testid="readiness-state-dataset"]')?.textContent === '已就绪')
 
       // Capture the responsive project state at the four required widths.
-      for (const width of [1440, 1024, 768, 390]) {
+      for (const width of [1440, 1024, 768, 390, 320]) {
         await page.setViewportSize({ width, height: width === 390 ? 844 : 900 })
         expect(await page.evaluate(() => document.documentElement.scrollWidth <= window.innerWidth)).toBe(true)
         await capture(page, `gap22-project-materialized-${width}`)
@@ -416,7 +419,7 @@ describe('GAP-022 normal App project source-to-publication pipeline', () => {
         `expectedPrepublishProbe=404 GET /api/v1/statements/${stagedFactCandidateId}`,
         'source=original-csv-cell-row-2-column-1-value-GAP22-ASSET-001',
         'dataset=ready-after-visible-materialize-action',
-        'viewports=1440,1024,768,390; page-level-horizontal-overflow=none',
+        'viewports=1440,1024,768,390,320; page-level-horizontal-overflow=none',
         ...apiTrace,
         ...apiResponses,
         ...(apiFailures.length === 0 ? [] : [`apiFailures=${apiFailures.join(',')}`]),
@@ -425,5 +428,5 @@ describe('GAP-022 normal App project source-to-publication pipeline', () => {
     } finally {
       await context.close()
     }
-  }, 240_000)
+  })
 })
