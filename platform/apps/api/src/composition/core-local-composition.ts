@@ -1832,6 +1832,8 @@ export async function createCoreLocalComposition(options: CoreLocalCompositionOp
       source: createCoreSemanticTaskSource(publicationStore, { identity: identityStore }, { reader: packRuleReader, applies: async (revision, scope, ctx) => {
         const asset = await publishedPackStore.findPack(scope, revision.industryPackRef.id, revision.industryPackRef.version, ctx)
         if (asset === undefined) {
+          const scenario = scenarioForIndustryRef(options.examples.scenarios, revision.industryPackRef)
+          if (scenario !== undefined && sameVersionRef(scenario.definitionRef, revision.definitionRef)) return false
           const registered = await componentStore.findVersion({ kind: 'industry_pack', id: revision.industryPackRef.id, version: revision.industryPackRef.version }, scope, ctx)
           if (registered?.manifest.entrypointRef.kind === 'package' && registered.manifest.entrypointRef.ref === 'declarative-industry-manifest') throw new CoreCapabilityError('the registered declaration-pack loader has no actual immutable published pack')
           return false
