@@ -1,5 +1,5 @@
 import { randomUUID } from 'node:crypto'
-import { createApiServer } from '@ontology/app-api'
+import { createApiServer, createRequestToolContext } from '@ontology/app-api'
 import type { AuthenticatedRequest } from '@ontology/app-api'
 import {
   InMemoryAssetCandidateStore,
@@ -548,6 +548,31 @@ export async function startPackagePublishHarness(): Promise<PackagePublishHarnes
     syntheticValidation: { exampleService, validationService },
     packs: { catalogue, packExports, packUpgrades, publication },
     projects: { service: projectService },
+  })
+  // Publication tests already own these approved stores. Expose their real scoped read
+  // models for the new authoring controls; this fixture has no model-generation binding.
+  const reader = (resourceId: string) => {
+    const auth = packagePublishAuthenticator()
+    return {
+      scope: { tenantId: auth.principal.tenantId, spaceId: auth.spaceId },
+      ctx: createRequestToolContext({ ...auth, traceId: randomUUID(), runId: resourceId }),
+    }
+  }
+  app.get<{ Params: { workspaceId: string } }>('/api/v1/industry-workspaces/:workspaceId/candidates', async (request, reply) => {
+    const { scope, ctx } = reader(request.params.workspaceId)
+    if (await workspaceStore.getWorkspace(scope, request.params.workspaceId, ctx) === undefined) return reply.code(404).send({ error: { code: 'NOT_FOUND', message: 'Workspace unavailable' } })
+    const candidates = await candidateStore.listCandidates(scope, request.params.workspaceId, { limit: 250 }, ctx)
+    return reply.send({ data: { candidates }, meta: { traceId: ctx.traceId } })
+  })
+  app.get<{ Params: { workspaceId: string } }>('/api/v1/industry-workspaces/:workspaceId/rule-action-candidates', async (request, reply) => {
+    const { scope, ctx } = reader(request.params.workspaceId)
+    if (await workspaceStore.getWorkspace(scope, request.params.workspaceId, ctx) === undefined) return reply.code(404).send({ error: { code: 'NOT_FOUND', message: 'Workspace unavailable' } })
+    const candidates = await ruleActionStore.list(scope, request.params.workspaceId, { limit: 250 }, ctx)
+    return reply.send({ data: { candidates }, meta: { traceId: ctx.traceId } })
+  })
+  app.get<{ Params: { candidateId: string } }>('/api/v1/candidates/:candidateId/reviews', async (request, reply) => {
+    const { scope, ctx } = reader(request.params.candidateId)
+    return reply.send({ data: { reviews: await reviews.listReviews(scope, request.params.candidateId, ctx) }, meta: { traceId: ctx.traceId } })
   })
   await app.listen({ host: '127.0.0.1', port: 0 })
   const address = app.server.address()
