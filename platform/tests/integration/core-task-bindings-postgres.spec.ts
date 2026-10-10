@@ -9,6 +9,7 @@ import { PostgresStructuredIngestionStore } from '@ontology/adapter-extraction-d
 import { PostgresProjectDatasetAdapter } from '@ontology/adapter-data-postgres'
 import type { DataQueryOutput } from '@ontology/contracts'
 import { projectQueryPublicationFixture } from './project-query-publication-fixtures'
+import { publicationMaterializationBarrier } from './publication-materialization-fixture'
 import { afterAll, beforeAll, describe, expect, it } from 'vitest'
 import {
   ControlPostgresDatabase,
@@ -313,18 +314,7 @@ async function waitForAnswer(runId: string): Promise<Record<string, unknown>> {
 }
 
 async function waitForOutboxDispatch(outboxId: string): Promise<number> {
-  if (admin === undefined) throw new Error('isolated PostgreSQL admin client is unavailable')
-  const deadline = Date.now() + 15_000
-  while (Date.now() < deadline) {
-    const result = await admin.query<{ state: string; attempts: number; dispatched_at: Date | null }>('SELECT state,attempts,dispatched_at FROM agent_platform.job_outbox WHERE tenant_id=$1 AND space_id=$2 AND outbox_id=$3', [scopeRef.tenantId, scopeRef.spaceId, outboxId])
-    if (result.rows[0]?.state === 'dispatched' && result.rows[0].dispatched_at !== null) {
-      if (result.rows[0].attempts !== 1) throw new Error(`actual publication outbox ${outboxId} dispatched ${result.rows[0].attempts} times`)
-      return result.rows[0].attempts
-    }
-    if (workerErrors.length > 0) throw new Error(`actual publication outbox failed before its fence settled: ${JSON.stringify(workerErrorSummary(workerErrors))}`)
-    await new Promise((resolve) => setTimeout(resolve, 100))
-  }
-  throw new Error(`the actual publication outbox ${outboxId} did not dispatch within its fixed 15-second barrier`)
+  return waitForPublication(outboxId)
 }
 
 async function sameRevisionProvenanceDiagnostic(objectId: string): Promise<Record<string, unknown>> {
@@ -472,6 +462,7 @@ let initialProjectDocumentPins: { readonly objectId: string; readonly documentId
 const subsequentProjectDocumentPins: { objectId: string; documentId: string; parseId: string }[] = []
 let publishedFixture: ReturnType<typeof projectQueryPublicationFixture>
 let queryDatabase: ControlPostgresDatabase
+let waitForPublication: ReturnType<typeof publicationMaterializationBarrier>
 let queryRegistry: PostgresArtifactRegistry
 let structuredStore: PostgresStructuredIngestionStore
 let originalAnswer: Record<string, unknown>
@@ -529,6 +520,11 @@ beforeAll(async () => {
   const objects = new FileSystemObjectStore(objectDirectory)
   await objects.init()
   const blobs = new LocalImmutableBlobStore({ objectStore: objects, registry: queryRegistry })
+  if (admin === undefined) throw new Error('the actual materialization completion reader is unavailable')
+  waitForPublication = publicationMaterializationBarrier({ client: admin, database: queryDatabase, blobs, scope: scopeRef,
+    context: () => trustedContext(scopeRef),
+    assertWorkerHealthy: () => { if (workerErrors.length > 0) throw new Error(`actual publication materialization worker failed: ${JSON.stringify(workerErrorSummary(workerErrors))}`) },
+  })
   publishedFixture = projectQueryPublicationFixture({ db: queryDatabase, blobs, structured: structuredStore, scope: scopeRef, ctx: trustedContext(scopeRef), projectId: PROJECT_ID,
     definition: { ...scenario.definitionDraft, ref: scenario.definitionRef, publishedAt: new Date().toISOString() } })
   const source = await publishedFixture.importCsv(OBJECT_ID, 'code,network,district,due\nP-101,private-network,north,true\nP-102,private-network,south,false\n', ['facility_id', 'network_code', 'facility_district_code', 'inspection_due'])

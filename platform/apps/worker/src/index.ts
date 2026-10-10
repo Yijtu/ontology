@@ -20,6 +20,7 @@ export {
   MaterializationOutboxError,
   MATERIALIZATION_REQUESTED_TOPIC,
   parseMaterializationChange,
+  parseMaterializationRequest,
   PUBLICATION_PUBLISHED_TOPIC,
   serializeMaterializationChange,
   STATEMENT_CORRECTED_TOPIC,
@@ -27,6 +28,7 @@ export {
 } from './materialization-consumer'
 export type {
   MaterializationOutboxConsumerDependencies,
+  MaterializationRequestEntry,
   MaterializationOutboxErrorCode,
   MaterializationOutboxWriter,
   MaterializationPublicationView,

@@ -5,11 +5,13 @@ import { tmpdir } from 'node:os'
 import { join, resolve } from 'node:path'
 import { expect } from 'vitest'
 import { FileSystemObjectStore, LocalImmutableBlobStore, PostgresArtifactRegistry } from '@ontology/adapter-blob-local'
+import { ControlPostgresDatabase } from '@ontology/adapter-control-postgres'
 import { createCoreApi, createCoreLocalComposition, createCompetencyQuestionBoundary, loadCoreExamples } from '@ontology/app-api'
-import { contentDigestOf } from '@ontology/application'
+import { canonicalJson, contentDigestOf } from '@ontology/application'
 import { createToolContext, isRecord, isResourceRef, isVersionRef } from '@ontology/contracts'
 import type { ColumnMappingEntry, CompetencyQuestionSetBody, ResolvedProfileRef, ResourceRef, VersionRef } from '@ontology/contracts'
 import { createJobScope, startJobDatabase } from './job-postgres-harness'
+import { publicationMaterializationBarrier } from './publication-materialization-fixture'
 
 export function actualObject(value: unknown): Record<string, unknown> { if (!isRecord(value)) throw new Error('actual object response missing'); return value }
 export function actualText(value: unknown): string { if (typeof value !== 'string' || value === '') throw new Error('actual string response missing'); return value }
@@ -34,13 +36,70 @@ async function mapConcurrent<T, R>(values: readonly T[], width: number, operatio
 
 export interface FirstActivePack { readonly workspaceId: string; readonly packRef: VersionRef; readonly definitionRef: VersionRef; readonly profileRef: ResolvedProfileRef; readonly unitCode: 'h' | 'min' }
 
+export type FirstActiveWorkerPhase = 'fixture_setup' | 'pack_publication' | 'source_import' | 'human_confirmation' | 'facts_publication' | 'outbox_dispatch_wait' | 'evolution' | 'query' | 'teardown'
+export interface FirstActiveWorkerError {
+  readonly phase: FirstActiveWorkerPhase
+  readonly awaitedPublicationOutboxId?: string
+  readonly errorType: string
+  readonly name: string
+  readonly code?: string
+  readonly message?: string
+  readonly keys: readonly string[]
+}
+
+const safeWorkerErrorNames = new Set(['CoreCapabilityError', 'Error', 'IncompletePublishedReadError', 'JobStoreError', 'ProjectError', 'ProjectStoreError', 'SemanticPublicationStoreError', 'TypeError', 'WorkflowControllerError'])
+const safeWorkerErrorCodes = new Set(['CAPABILITY_NOT_CONFIGURED', 'INCOMPLETE_PUBLISHED_READ', 'INVALID_ARGUMENT', 'JOB_NOT_FOUND', 'READINESS_CONFLICT', 'REVISION_CONFLICT', 'SOURCE_UNREADABLE', 'VERSION_CONFLICT'])
+
+function firstActiveWorkerError(error: unknown, phase: FirstActiveWorkerPhase, outboxId?: string): FirstActiveWorkerError {
+  const readString = (key: 'name' | 'code' | 'message'): string | undefined => {
+    if ((typeof error !== 'object' || error === null) && typeof error !== 'function') return undefined
+    try {
+      const value: unknown = Reflect.get(error, key)
+      return typeof value === 'string' ? value.slice(0, key === 'message' ? 240 : 120) : undefined
+    } catch { return undefined }
+  }
+  let keys: string[] = []
+  if ((typeof error === 'object' && error !== null) || typeof error === 'function') {
+    try { keys = Object.keys(error).slice(0, 12).map((key) => key.slice(0, 80)) } catch { keys = ['<keys-unavailable>'] }
+  }
+  const rawName = readString('name'), rawCode = readString('code')
+  const message = readString('message')?.replace(/postgres(?:ql)?:\/\/[^\s]+/giu, '[redacted]')
+    .replace(/(password|api[_-]?key|token)\s*[=:]\s*[^\s,;]+/giu, '$1=[redacted]')
+    .replace(/\b[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}\b/giu, '[redacted-id]')
+    .replace(/sha256:[0-9a-f]{64}/giu, '[redacted-digest]')
+    .replace(/\b(?:OLD-A|OLD-B|M-1|staged-only|machine_id|phase_note|hours)\b/giu, '[redacted-value]')
+  return {
+    phase,
+    ...(outboxId === undefined ? {} : { awaitedPublicationOutboxId: outboxId }),
+    errorType: typeof error,
+    name: rawName !== undefined && safeWorkerErrorNames.has(rawName) ? rawName : 'unknown',
+    ...(rawCode !== undefined && safeWorkerErrorCodes.has(rawCode) ? { code: rawCode } : {}),
+    ...(message === undefined ? {} : { message: message.slice(0, 160) }),
+    keys,
+  }
+}
+
+function firstActiveWorkerErrorSummary(errors: readonly FirstActiveWorkerError[]) {
+  const groups = new Map<string, FirstActiveWorkerError & { count: number }>()
+  for (const error of errors) {
+    const key = canonicalJson(error), existing = groups.get(key)
+    if (existing === undefined) groups.set(key, { ...error, count: 1 })
+    else existing.count += 1
+  }
+  const all = [...groups.values()]
+  return { totalCount: errors.length, groups: all.slice(0, 8), unrepresentedCount: all.slice(8).reduce((total, group) => total + group.count, 0), lastSamples: errors.slice(-8) }
+}
+
 /** Actual normal Company adapter, HTTP host/worker and real scoped PostgreSQL stores.
  * Only model proposals are controlled; sources, review ledgers, pack/profile refs and inputs
  * are produced by their real services. No expected answer is accepted by this factory. */
 export async function startFirstActiveFixture() {
   const harness = await startJobDatabase(), scope = (await createJobScope(harness.adminClient, 'first-active-evolution')).scopeRef
   let proposal: unknown = {}
-  const modelCalls: string[] = [], workerErrors: unknown[] = []
+  const modelCalls: string[] = [], workerErrors: FirstActiveWorkerError[] = []
+  let workerPhase: FirstActiveWorkerPhase = 'fixture_setup'
+  let currentOutboxId: string | undefined
+  const setWorkerContext = (phase: FirstActiveWorkerPhase, outboxId?: string): void => { workerPhase = phase; currentOutboxId = outboxId }
   const server = createServer(async (request, response) => {
     const chunks: Buffer[] = []; for await (const chunk of request) chunks.push(Buffer.isBuffer(chunk) ? chunk : Buffer.from(chunk))
     const input = actualObject(JSON.parse(Buffer.concat(chunks).toString('utf8')) as unknown)
@@ -53,10 +112,16 @@ export async function startFirstActiveFixture() {
   const address = server.address(); if (address === null || typeof address === 'string') throw new Error('controlled proposal server unavailable')
   const directory = await mkdtemp(join(tmpdir(), 'core-first-active-'))
   const composition = await createCoreLocalComposition({ databaseUrl: harness.appUrl, objectDirectory: directory, scopeRef: scope, examples: loadCoreExamples({ targetScopeRef: scope }), allowLocalOperator: true, modelsEnabled: true, jevEnabled: false,
-    onWorkerError: (error) => { workerErrors.push(error) }, modelEnvironment: { CORE_COMPANY_MODEL_BASE_URL: `http://127.0.0.1:${address.port}`, CORE_COMPANY_MODEL_SECRET_REF: 'env:CORE_COMPANY_MODEL_API_KEY', CORE_COMPANY_MODEL_API_KEY: 'local-controlled-proposal-only', CORE_COMPANY_MODEL_PLATFORM_ID: 'source-proposal', CORE_COMPANY_MODEL_VENDOR_MODEL: 'controlled-source-proposal', CORE_COMPANY_MODEL_PROTOCOL: 'openai-compatible' } })
+    onWorkerError: (error) => {
+      const observation = firstActiveWorkerError(error, workerPhase, currentOutboxId)
+      workerErrors.push(observation)
+      process.stderr.write(`[core-worker-error-observed] ${JSON.stringify(observation)}\n`)
+    }, modelEnvironment: { CORE_COMPANY_MODEL_BASE_URL: `http://127.0.0.1:${address.port}`, CORE_COMPANY_MODEL_SECRET_REF: 'env:CORE_COMPANY_MODEL_API_KEY', CORE_COMPANY_MODEL_API_KEY: 'local-controlled-proposal-only', CORE_COMPANY_MODEL_PLATFORM_ID: 'source-proposal', CORE_COMPANY_MODEL_VENDOR_MODEL: 'controlled-source-proposal', CORE_COMPANY_MODEL_PROTOCOL: 'openai-compatible' } })
   const api = createCoreApi(composition.dependencies), baseUrl = await api.listen({ host: '127.0.0.1', port: 0 })
   const objects = new FileSystemObjectStore(directory), registry = new PostgresArtifactRegistry({ connectionString: harness.appUrl, maxPoolSize: 2 })
   const blobs = new LocalImmutableBlobStore({ objectStore: objects, registry })
+  const proofDatabase = new ControlPostgresDatabase({ connectionString: harness.appUrl, maxPoolSize: 4 })
+  let proofProfile: ResolvedProfileRef | undefined
   const rawCall = (path: string, body?: unknown, revision?: string, key: string = randomUUID()) => fetch(`${baseUrl}${path}`, { method: body === undefined ? 'GET' : 'POST', headers: { 'content-type': 'application/json', 'idempotency-key': key, ...(revision === undefined ? {} : { 'if-match': revision }) }, ...(body === undefined ? {} : { body: JSON.stringify(body) }), signal: AbortSignal.timeout(30_000) })
   const call = async (path: string, body?: unknown, revision?: string, key?: string): Promise<Record<string, unknown>> => {
     const response = await rawCall(path, body, revision, key), raw = await response.text()
@@ -64,14 +129,21 @@ export async function startFirstActiveFixture() {
     return actualObject(actualObject(JSON.parse(raw) as unknown)['data'])
   }
   const review = (id: string, revision = '0') => call(`/api/v1/candidates/${id}/reviews`, { decision: 'approve', reason: '人工逐项核对实际原文与当前候选内容' }, revision)
-  const readArtifact = async (ref: ResourceRef, profile: ResolvedProfileRef) => {
+  const proofContext = (profile: ResolvedProfileRef, maxRows = 1_000) => {
     const now = new Date().toISOString(), deadline = new Date(Date.now() + 120_000).toISOString(), runId = randomUUID()
-    const ctx = createToolContext({ principal: { tenantId: scope.tenantId, subjectId: 'first-active-proof-reader', roles: ['platform-admin'], scopes: [], authEpoch: 1 }, runId, resolvedProfileHash: profile.snapshotHash, policyVersion: '1.0.0', deadline, budgetReservation: { reservationId: randomUUID(), runId, grantedAt: now, expiresAt: deadline }, allowedResources: { ...scope, resourceKinds: ['artifact', 'document', 'plan'], sourceRefs: [], collectionRefs: [], domains: [], maxRows: 0 }, traceId: randomUUID() })
-    const bytes = await blobs.readAuthorized({ scopeRef: scope, blobRef: ref }, ctx)
+    return createToolContext({ principal: { tenantId: scope.tenantId, subjectId: 'first-active-proof-reader', roles: ['platform-admin'], scopes: [], authEpoch: 1 }, runId, resolvedProfileHash: profile.snapshotHash, policyVersion: '1.0.0', deadline, budgetReservation: { reservationId: randomUUID(), runId, grantedAt: now, expiresAt: deadline }, allowedResources: { ...scope, resourceKinds: ['artifact', 'document', 'plan'], sourceRefs: [], collectionRefs: [], domains: [], maxRows }, traceId: randomUUID() })
+  }
+  const readArtifact = async (ref: ResourceRef, profile: ResolvedProfileRef) => {
+    const bytes = await blobs.readAuthorized({ scopeRef: scope, blobRef: ref }, proofContext(profile, 0))
     return actualObject(JSON.parse(new TextDecoder('utf-8', { fatal: true }).decode(bytes)) as unknown)
   }
+  const waitForPublication = publicationMaterializationBarrier({ client: harness.adminClient, database: proofDatabase, blobs, scope,
+    context: () => { if (proofProfile === undefined) throw new Error('the actual published proof profile is unavailable'); return proofContext(proofProfile) },
+    assertWorkerHealthy: () => { if (workerErrors.length > 0) throw new Error(`actual publication materialization worker failed: ${JSON.stringify(firstActiveWorkerErrorSummary(workerErrors))}`) },
+  })
 
   const publishPack = async (unitCode: 'h' | 'min', includeNote: boolean): Promise<FirstActivePack> => {
+    setWorkerContext('pack_publication')
     const created = await call('/api/v1/core/workspace-bootstrap', { namespace: `first-${unitCode}-${randomUUID()}`, displayName: `设备工时${unitCode}`, boundary: { goals: ['核对实际工时输入与版本升级'], included: ['项目设备工时'], excluded: ['真实设备控制'], applicability: {} } })
     const workspaceId = actualText(actualObject(created['workspace'])['workspaceId']), threshold = unitCode === 'h' ? '8' : '480'
     const policy = `设备通过 machine_id 标识，身份限定在当前项目。hours 是以 ${unitCode} 为单位的工时数量，量纲为 time。设备工时达到 ${threshold} ${unitCode} 时符合工时规则的条件；缺少工时不能判断。${includeNote ? 'phase_note 是可选的阶段说明文本，不能从旧版本未确认的列自动获得业务批准。' : ''}`
@@ -113,11 +185,12 @@ export async function startFirstActiveFixture() {
     const pack = actualObject(published['pack']), packRef = actualVersion(pack['packRef']), actualDefinitionRef = actualVersion(pack['definitionRef']), configured = await call('/api/v1/core/published-pack-profiles', { packRef }), profile = actualObject(configured['profileRef'])
     expect(configured['definitionRef']).toEqual(actualDefinitionRef)
     const snapshotHash = actualText(profile['snapshotHash']); if (!/^sha256:[0-9a-f]{64}$/u.test(snapshotHash)) throw new Error('actual resolved profile digest missing')
-    return { workspaceId, packRef, definitionRef: actualDefinitionRef, profileRef: { id: actualText(profile['id']), version: actualText(profile['version']), snapshotHash }, unitCode }
+    proofProfile = { id: actualText(profile['id']), version: actualText(profile['version']), snapshotHash }
+    return { workspaceId, packRef, definitionRef: actualDefinitionRef, profileRef: proofProfile, unitCode }
   }
 
-  return { harness, scope, modelCalls, workerErrors, call, rawCall, review, readArtifact, publishPack,
-    async close() { await api.close(); await composition.close(); await registry.close(); await new Promise<void>((done) => server.close(() => done())); await harness.stop(); const owned = resolve(directory); if (!owned.startsWith(resolve(tmpdir(), 'core-first-active-'))) throw new Error('owned staging cleanup escaped its prefix'); await rm(owned, { recursive: true, force: true }) } }
+  return { harness, scope, modelCalls, workerErrors, call, rawCall, review, readArtifact, publishPack, setWorkerContext, waitForPublication,
+    async close() { setWorkerContext('teardown'); await api.close(); await composition.close(); await registry.close(); await proofDatabase.close(); await new Promise<void>((done) => server.close(() => done())); await harness.stop(); const owned = resolve(directory); if (!owned.startsWith(resolve(tmpdir(), 'core-first-active-'))) throw new Error('owned staging cleanup escaped its prefix'); await rm(owned, { recursive: true, force: true }); if (workerErrors.length > 0) process.stderr.write(`[core-worker-error-summary] ${JSON.stringify(firstActiveWorkerErrorSummary(workerErrors))}\n`) } }
 }
 
 export type FirstActiveFixture = Awaited<ReturnType<typeof startFirstActiveFixture>>
@@ -135,6 +208,7 @@ export interface FirstActiveProject {
 
 /** Import/confirm/publish real original rows without creating ANY ordinary run/input capture. */
 export async function createFirstActiveProject(f: FirstActiveFixture, pack: FirstActivePack, title: string, sourceRows?: readonly { readonly machineId: string; readonly hours: string }[]): Promise<FirstActiveProject> {
+  f.setWorkerContext('source_import')
   const business = await f.call('/api/v1/core/project-bootstrap', { title, profileRef: { id: pack.profileRef.id, version: pack.profileRef.version } }), projectId = actualText(actualObject(business['project'])['projectId'])
   expect(actualObject(business['revision'])['executionPurpose']).toBeUndefined()
   expect(actualObject(business['revision'])['industryPackRef']).toEqual(pack.packRef); expect(actualObject(business['revision'])['definitionRef']).toEqual(pack.definitionRef)
@@ -154,6 +228,7 @@ export async function createFirstActiveProject(f: FirstActiveFixture, pack: Firs
     candidateIds.push(...actualArray(staged['candidates']).map((row) => actualText(actualObject(row)['candidateId'])))
   }
   expect(candidateIds).toHaveLength(sourceRows?.length ?? 2)
+  f.setWorkerContext('human_confirmation')
   const records = await mapConcurrent(candidateIds, 8, async (id) => actualObject((await f.call(`/api/v1/projects/${projectId}/instance-records`, { candidateId: id, documentId: imported['documentId'] }))['record']))
   await mapConcurrent(candidateIds, 8, async (id, index) => {
     const record = records[index]
@@ -177,6 +252,7 @@ export function firstActiveEntries(columns: readonly Record<string, unknown>[], 
 }
 
 export async function confirmFirstActiveCandidate(f: FirstActiveFixture, projectId: string, candidateId: string, initial?: Record<string, unknown>) {
+  f.setWorkerContext('human_confirmation')
   let record = initial ?? actualObject((await f.call(`/api/v1/projects/${projectId}/instance-records/${candidateId}`))['record'])
   record = actualObject((await f.call(`/api/v1/projects/${projectId}/instance-records/${candidateId}/field-confirmations`, { decisions: actualArray(record['fields']).map((field) => ({ fieldId: actualObject(field)['fieldId'], decision: 'confirm' })) }, actualText(record['recordRevision'])))['record'])
   await f.call(`/api/v1/projects/${projectId}/instance-records/${candidateId}/identity-decisions`, { kind: 'create', reason: '人工核对当前版本实际原始字段与项目内身份' }, actualText(record['recordRevision']))
@@ -186,35 +262,23 @@ export async function confirmFirstActiveCandidate(f: FirstActiveFixture, project
 export async function publishFirstActiveFacts(f: FirstActiveFixture, ids: readonly string[], definitionRef: VersionRef) {
   let result: Record<string, unknown> = {}
   for (let offset = 0; offset < ids.length; offset += 200) {
+    f.setWorkerContext('facts_publication')
     const ledger = await f.call('/api/v1/semantic-publications'), current = actualArray(ledger['publications']).reduce<bigint>((value, row) => { const revision = BigInt(actualText(actualObject(row)['revision'])); return revision > value ? revision : value }, 0n)
     const publication = await f.call('/api/v1/semantic-publications', { approvedCandidateRefs: ids.slice(offset, offset + 200).map((candidateId) => ({ candidateId, kind: 'entity' })), schemaRef: definitionRef }, current.toString())
     const outboxId = actualText(publication['outboxId'])
-    const deadline = Date.now() + 15_000
-    let dispatched = false
-    while (Date.now() < deadline) {
-      const row = await f.harness.adminClient.query<{ state: string; attempts: number; dispatched_at: Date | null }>(
-        'SELECT state, attempts, dispatched_at FROM agent_platform.job_outbox WHERE tenant_id=$1 AND space_id=$2 AND outbox_id=$3',
-        [f.scope.tenantId, f.scope.spaceId, outboxId],
-      )
-      if (row.rows[0]?.state === 'dispatched' && row.rows[0].dispatched_at !== null) {
-        if (row.rows[0].attempts !== 1) throw new Error(`actual publication outbox ${outboxId} dispatched ${row.rows[0].attempts} times`)
-        dispatched = true
-        break
-      }
-      if (f.workerErrors.length > 0) throw new Error(`actual publication outbox failed before its fence settled: ${f.workerErrors.map((error) => error instanceof Error ? `${error.name}: ${error.message}` : 'unclassified worker error').join('; ')}`)
-      await new Promise<void>((done) => setTimeout(done, 100))
-    }
-    if (!dispatched) throw new Error(`the actual publication outbox ${outboxId} did not dispatch within its fixed 15-second barrier`)
+    f.setWorkerContext('outbox_dispatch_wait', outboxId)
+    await f.waitForPublication(outboxId)
     result = publication
   }
   return result
 }
 
 export async function waitFirstActiveEvolution(f: FirstActiveFixture, projectId: string, evolutionId: string) {
+  f.setWorkerContext('evolution')
   const deadline = Date.now() + 30_000
   while (Date.now() < deadline) {
     const value = actualObject((await f.call(`/api/v1/projects/${projectId}/evolutions/${evolutionId}`))['evolution'])
-    if (f.workerErrors.length > 0) throw new Error(`actual worker cycle failure: ${JSON.stringify(f.workerErrors.slice(0, 3).map((error) => error instanceof Error ? { name: error.name, message: error.message, stack: error.stack, cause: error.cause instanceof Error ? { name: error.cause.name, message: error.cause.message } : typeof error.cause === 'string' ? error.cause : undefined } : 'unclassified worker error'))}; evolution=${JSON.stringify(value)}`)
+    if (f.workerErrors.length > 0) throw new Error(`actual worker cycle failure: ${JSON.stringify(firstActiveWorkerErrorSummary(f.workerErrors))}; evolution=${JSON.stringify(value)}`)
     if (value['state'] === 'awaiting_review' || value['state'] === 'needs_human' || value['state'] === 'ready') return value
     if (value['state'] === 'failed' || value['state'] === 'cancelled') throw new Error(`actual evolution worker refused: ${JSON.stringify(value)}`)
     await new Promise<void>((done) => setTimeout(done, 100))
@@ -223,6 +287,7 @@ export async function waitFirstActiveEvolution(f: FirstActiveFixture, projectId:
 }
 
 export async function firstActiveQuery(f: FirstActiveFixture, projectId: string, profile: ResolvedProfileRef, fields: readonly string[], limit = 2) {
+  f.setWorkerContext('query')
   const catalogue = await f.call(`/api/v1/core/projects/${projectId}/task-catalogue`), binding = actualArray(catalogue['tasks']).map(actualObject).find((row) => row['taskKind'] === 'structured_query')
   if (binding === undefined || binding['available'] !== true) throw new Error(`actual old-active task is unavailable: ${JSON.stringify(binding)}`)
   const created = await f.call('/api/v1/runs', { profileRef: { id: profile.id, version: profile.version }, projectId, question: '读取此实际生效版本已审核的原始工时', context: { timeZone: 'UTC' }, preferences: { route: 'template', allowWeb: false }, task: { bindingRef: binding['bindingRef'], arguments: { objectId: 'machine', fields, limit } } })

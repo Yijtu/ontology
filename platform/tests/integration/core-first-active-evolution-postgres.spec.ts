@@ -15,6 +15,7 @@ beforeAll(async () => {
 afterAll(async () => { await f?.close() })
 
 async function startUpgrade(project: FirstActiveProject) {
+  f.setWorkerContext('evolution')
   const prior = actualObject(project.revision['ref']), before = await f.harness.adminClient.query<{ count: string }>(`SELECT count(*)::text AS count FROM agent_platform.run_execution_bindings WHERE tenant_id=$1 AND space_id=$2 AND binding#>>'{request,projectRevisionRef,projectId}'=$3`, [f.scope.tenantId, f.scope.spaceId, project.projectId])
   expect(before.rows[0]?.count).toBe('0')
   const response = await f.call(`/api/v1/projects/${project.projectId}/evolutions`, { industryPackRef: p2.packRef, profileRef: p2.profileRef, strategy: { kind: 'keep_independent', reason: '人工明确选择独立命名空间的新工时定义' }, remappings: [{ mappingRef: project.mapping['ref'], documentId: project.documentId, objectId: 'machine', entries: firstActiveEntries(project.sourceColumns, true) }], maxRecords: 2, maxAttempts: 1 }, actualText(prior['revision']))
@@ -80,7 +81,7 @@ describe('normal first query during a genuine staged ontology upgrade (real PG/H
       expect(fragment['locator']).toMatchObject({ kind: 'table_row', recordIndex: expected.recordIndex, row: expected.csvRow })
       expect(fragment['cells']).toContainEqual(expect.objectContaining({ raw: expectedRaw, columnLabel: column['semanticPredicate'], locator: expect.objectContaining({ address }) }))
     }
-    expect(f.workerErrors.map((error) => error instanceof Error ? error.message : error)).toEqual([])
+    expect(f.workerErrors).toEqual([])
   })
 
   it('seals P1 before staging without any prior query, keeps first old-active formal output and later activates independently reviewed P2', async () => {
@@ -133,7 +134,7 @@ describe('normal first query during a genuine staged ontology upgrade (real PG/H
     expect(oldReadback['contentHash']).toBe(old.answer['contentHash']); expect(oldReadback['v3Body']).toEqual(old.answer['v3Body'])
     const history = await f.call(`/api/v1/runs/${old.runId}/answer/history`)
     expect(actualArray(history['entries'])).toContainEqual(expect.objectContaining({ answerId: old.answer['answerId'], contentHash: old.answer['contentHash'] }))
-    expect(f.workerErrors.map((error) => error instanceof Error ? error.message : error)).toEqual([])
+    expect(f.workerErrors).toEqual([])
   })
 
   it('refuses the real old seal after current human approval withdrawal and separately after actual source retraction, without a pre-staging query', async () => {

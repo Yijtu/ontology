@@ -1,4 +1,4 @@
-import { isToolContext } from '@ontology/contracts'
+import { isToolContext, isUuid } from '@ontology/contracts'
 import type {
   ControlRepository,
   MaterializationChange,
@@ -95,8 +95,47 @@ export interface MaterializationOutboxConsumerDependencies {
   /** The same store the materialiser writes fences to, used to release a fence if enqueue fails. */
   readonly materialization: MaterializationStore
   readonly pageSize?: number
+  readonly publicationBatchSize?: number
   readonly now?: () => string
   readonly newId?: () => string
+}
+
+export interface MaterializationRequestEntry {
+  readonly fenceId: Uuid
+  readonly change: MaterializationChange
+}
+
+/** Decode the legacy single request or the bounded publication batch from an untrusted payload. */
+export function parseMaterializationRequest(value: unknown): readonly MaterializationRequestEntry[] {
+  const payload = asRecord(value)
+  if (payload === undefined) throw new MaterializationOutboxError('INVALID_MESSAGE', 'the materialization request must be an object')
+  const hasBatch = Object.hasOwn(payload, 'changes')
+  const hasSingle = Object.hasOwn(payload, 'change') || Object.hasOwn(payload, 'fenceId')
+  if (hasBatch && hasSingle) throw new MaterializationOutboxError('INVALID_MESSAGE', 'a materialization request cannot mix single and batch fields')
+  if (!hasBatch) return [{ fenceId: requiredString(payload, 'fenceId'), change: parseMaterializationChange(payload['change']) }]
+  const raw = payload['changes']
+  if (!Array.isArray(raw) || raw.length < 1 || raw.length > 8) throw new MaterializationOutboxError('INVALID_MESSAGE', 'a materialization batch must contain between 1 and 8 changes')
+  const entries = raw.map((item): MaterializationRequestEntry => {
+    const record = asRecord(item)
+    if (record === undefined) throw new MaterializationOutboxError('INVALID_MESSAGE', 'each materialization batch entry must be an object')
+    return { fenceId: requiredString(record, 'fenceId'), change: parseMaterializationChange(record['change']) }
+  })
+  const fences = new Set<string>(), changes = new Set<string>()
+  let previous: bigint | undefined
+  let scopeKey: string | undefined
+  for (const { fenceId, change } of entries) {
+    if (!isUuid(fenceId) || !isUuid(change.changeId) || !isUuid(change.scopeRef.tenantId) || !isUuid(change.scopeRef.spaceId)) throw new MaterializationOutboxError('INVALID_MESSAGE', 'materialization batch fence, change, tenant, and space IDs must be UUIDs')
+    if (fences.has(fenceId) || changes.has(change.changeId)) throw new MaterializationOutboxError('INVALID_MESSAGE', 'a materialization batch cannot repeat fence or change IDs')
+    fences.add(fenceId); changes.add(change.changeId)
+    const key = `${change.scopeRef.tenantId}\u0000${change.scopeRef.spaceId}`
+    if (scopeKey !== undefined && scopeKey !== key) throw new MaterializationOutboxError('INVALID_MESSAGE', 'a materialization batch must use one scope')
+    scopeKey = key
+    if (!/^(?:0|[1-9]\d*)$/.test(change.recordedSeq)) throw new MaterializationOutboxError('INVALID_MESSAGE', 'materialization recorded sequences must be canonical non-negative integers')
+    const sequence = BigInt(change.recordedSeq)
+    if (previous !== undefined && sequence <= previous) throw new MaterializationOutboxError('INVALID_MESSAGE', 'materialization batch sequences must strictly increase')
+    previous = sequence
+  }
+  return entries
 }
 
 function scopeOf(ctx: ToolContext): ScopeRef {
@@ -348,6 +387,7 @@ export class MaterializationOutboxConsumer implements OutboxConsumer {
   readonly #outbox: MaterializationOutboxWriter
   readonly #materialization: MaterializationStore
   readonly #pageSize: number
+  readonly #publicationBatchSize: number
   readonly #now: () => string
   readonly #newId: () => string
 
@@ -361,6 +401,8 @@ export class MaterializationOutboxConsumer implements OutboxConsumer {
     if (!Number.isSafeInteger(this.#pageSize) || this.#pageSize < 1 || this.#pageSize > DEFAULT_PAGE_SIZE) {
       throw new MaterializationOutboxError('INVALID_MESSAGE', `pageSize must be between 1 and ${String(DEFAULT_PAGE_SIZE)}`)
     }
+    this.#publicationBatchSize = dependencies.publicationBatchSize ?? 1
+    if (!Number.isSafeInteger(this.#publicationBatchSize) || this.#publicationBatchSize < 1 || this.#publicationBatchSize > 8) throw new MaterializationOutboxError('INVALID_MESSAGE', 'publicationBatchSize must be between 1 and 8')
     this.#now = dependencies.now ?? (() => new Date().toISOString())
     this.#newId = dependencies.newId ?? (() => globalThis.crypto.randomUUID())
   }
@@ -387,22 +429,17 @@ export class MaterializationOutboxConsumer implements OutboxConsumer {
   }
 
   async #advance(message: OutboxMessageRecord, ctx: ToolContext): Promise<void> {
-    const payload = asRecord(message.payload)
-    if (payload === undefined) {
-      throw new MaterializationOutboxError('INVALID_MESSAGE', 'the materialization request must be an object')
-    }
-    const fenceId = requiredString(payload, 'fenceId')
-    const change = parseMaterializationChange(payload['change'])
-    const ticket: MaterializationTicket = {
-      change,
-      fenceId,
+    const entries = parseMaterializationRequest(message.payload)
+    const tickets: MaterializationTicket[] = entries.map(({ fenceId, change }) => ({
+      change, fenceId,
       // Empty affected sets: `advance` resolves the affected rules and propositions from the
       // dependency index, exactly as if `beginChange` had just produced the ticket.
       affectedRuleIds: [],
       affectedPropositionKeys: [],
       deferred: false,
-    }
-    await this.#materializer.advance(ticket, ctx)
+    }))
+    if (entries.length === 1) await this.#materializer.advance(tickets[0]!, ctx)
+    else await this.#materializer.advanceBatch(tickets, ctx)
   }
 
   async #requestForPublication(message: OutboxMessageRecord, ctx: ToolContext): Promise<void> {
@@ -417,12 +454,9 @@ export class MaterializationOutboxConsumer implements OutboxConsumer {
     }
     const fences = parseFenceBindings(message.payload)
     const statements = await this.#listPublicationStatements(scopeRef, publicationId, ctx)
-    for (const statement of statements) {
-      await this.#openAndEnqueue(
-        scopeRef,
-        statement.statementId,
-        message.jobId,
-        (recordedSeq, recordedAt) => ({
+    const rules = await this.#listPublicationRules(scopeRef, publicationId, ctx)
+    const changes: { changeId: Uuid; build: (seq: RevisionString, at: Rfc3339UtcTimestamp) => MaterializationChange }[] = []
+    for (const statement of statements) changes.push({ changeId: statement.statementId, build: (recordedSeq, recordedAt) => ({
           changeId: statement.statementId,
           scopeRef,
           recordedSeq,
@@ -434,18 +468,8 @@ export class MaterializationOutboxConsumer implements OutboxConsumer {
             ? {}
             : { subjectEntityId: statement.subjectEntityId }),
           validity: validityOf(statement),
-        }),
-        ctx,
-        fences.get(statement.statementId),
-      )
-    }
-    const rules = await this.#listPublicationRules(scopeRef, publicationId, ctx)
-    for (const rule of rules) {
-      await this.#openAndEnqueue(
-        scopeRef,
-        rule.ruleVersionId,
-        message.jobId,
-        (recordedSeq, recordedAt) => ({
+        }) })
+    for (const rule of rules) changes.push({ changeId: rule.ruleVersionId, build: (recordedSeq, recordedAt) => ({
           changeId: rule.ruleVersionId,
           scopeRef,
           recordedSeq,
@@ -453,11 +477,20 @@ export class MaterializationOutboxConsumer implements OutboxConsumer {
           kind: 'rule_changed',
           ruleId: rule.ruleId,
           propositionKey: rule.objectId,
-        }),
-        ctx,
-        fences.get(rule.ruleVersionId),
-      )
+        }) })
+    const allPreopened = changes.length > 0 && changes.every(({ changeId }) => fences.has(changeId))
+    if (this.#publicationBatchSize > 1 && allPreopened) {
+      const entries: MaterializationRequestEntry[] = []
+      for (const item of changes) {
+        entries.push({ fenceId: fences.get(item.changeId)!, change: item.build(await this.#sequence.next(scopeRef, `materialization:${item.changeId}`, ctx), this.#now()) })
+      }
+      for (let offset = 0; offset < entries.length; offset += this.#publicationBatchSize) {
+        const batch = entries.slice(offset, offset + this.#publicationBatchSize)
+        await this.#enqueueRequest(scopeRef, message.jobId, batch, ctx)
+      }
+      return
     }
+    for (const item of changes) await this.#openAndEnqueue(scopeRef, item.changeId, message.jobId, item.build, ctx, fences.get(item.changeId))
   }
 
   async #listPublicationStatements(
@@ -639,20 +672,24 @@ export class MaterializationOutboxConsumer implements OutboxConsumer {
       const ticket = await this.#materializer.beginChange(change, ctx)
       fenceId = ticket.fenceId
     }
-    const message: NewOutboxMessage = {
-      outboxId: this.#newId(),
-      topic: REQUEST_TOPIC,
-      payload: { fenceId, change: serializeMaterializationChange(change) },
-      idempotencyKey: `materialization-request:${fenceId}`,
-      availableAt: recordedAt,
-      createdAt: recordedAt,
-    }
     try {
-      await this.#outbox.appendOutbox(scopeRef, jobId, message, ctx)
+      await this.#enqueueRequest(scopeRef, jobId, [{ fenceId, change }], ctx, recordedAt)
     } catch (error) {
       if (preOpenedFenceId === undefined) await this.#releaseFence(scopeRef, fenceId, ctx)
       throw error
     }
+  }
+
+  async #enqueueRequest(scopeRef: ScopeRef, jobId: Uuid, entries: readonly MaterializationRequestEntry[], ctx: ToolContext, at = this.#now()): Promise<void> {
+    const payload = entries.length === 1
+      ? { fenceId: entries[0]!.fenceId, change: serializeMaterializationChange(entries[0]!.change) }
+      : { changes: entries.map(({ fenceId, change }) => ({ fenceId, change: serializeMaterializationChange(change) })) }
+    const idempotencyKey = entries.length === 1
+      ? `materialization-request:${entries[0]!.fenceId}`
+      : `materialization-request-batch:${entries.map(({ fenceId }) => fenceId).join(':')}`
+    await this.#outbox.appendOutbox(scopeRef, jobId, {
+      outboxId: this.#newId(), topic: REQUEST_TOPIC, payload, idempotencyKey, availableAt: at, createdAt: at,
+    }, ctx)
   }
 
   async #releaseFence(scopeRef: ScopeRef, fenceId: Uuid, ctx: ToolContext): Promise<void> {

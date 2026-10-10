@@ -2237,6 +2237,7 @@ export async function createCoreLocalComposition(options: CoreLocalCompositionOp
       sequence: controlRecordSequence(control, 'semantic.core-local-materialization'),
       outbox: jobStore,
       materialization: materializationStore,
+      publicationBatchSize: 8,
     })
     const outboxConsumer = new TopicOutboxConsumerRouter(
       [
