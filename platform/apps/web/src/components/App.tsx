@@ -416,11 +416,22 @@ export function App({
     else apply()
   }, [projectId, scopeBound, guard, clearScopeReferences])
 
-  const adoptCreatedProject = useCallback((value: string) => {
+  const adoptCreatedProject = useCallback((project: ProjectRecord) => {
     setDirty(false)
     clearScopeReferences()
-    setProjectId(value)
-    writeParam('project', value)
+    setProjects((previous) => [project, ...previous.filter((entry) => entry.projectId !== project.projectId)])
+    setProjectId(project.projectId)
+    writeParam('project', project.projectId)
+    setContextReload((count) => count + 1)
+  }, [clearScopeReferences])
+
+  const adoptCreatedWorkspace = useCallback((workspace: IndustryWorkspace) => {
+    setDirty(false)
+    clearScopeReferences()
+    setWorkspaces((previous) => [workspace, ...previous.filter((entry) => entry.workspaceId !== workspace.workspaceId)])
+    setWorkspaceId(workspace.workspaceId)
+    writeParam('workspace', workspace.workspaceId)
+    setContextReload((count) => count + 1)
   }, [clearScopeReferences])
 
   const contribution = scenarioViews.find((entry) => entry.view === view)
@@ -585,7 +596,7 @@ export function App({
         />
       ) : null}
 
-      {view === 'ontology' ? <OntologyWorkspacePanel client={client} readOnly={readOnly} {...(workspaceId === undefined ? {} : { initialWorkspaceId: workspaceId })} onSelectWorkspace={selectWorkspace} /> : null}
+      {view === 'ontology' ? <OntologyWorkspacePanel client={client} readOnly={readOnly} {...(workspaceId === undefined ? {} : { initialWorkspaceId: workspaceId })} onSelectWorkspace={selectWorkspace} onWorkspaceCreated={adoptCreatedWorkspace} /> : null}
 
       {view === 'projects' ? (
         bindingPhase === 'loading' || bindingStale ? <StateFeedback tone="loading" title="正在准备项目工作台" description="读取当前场景的配置与映射。" /> : bindingPhase === 'failure' ? <StateFeedback tone="error" title="项目工作台准备失败" description="当前配置未能读取，请重试。" action={<Button onClick={() => setContextReload((count) => count + 1)}>重试</Button>} /> : activeScenario === undefined || projectBinding === undefined ? (

@@ -32,6 +32,7 @@ export interface OntologyWorkspacePanelProps {
   readonly readOnly?: boolean
   readonly initialWorkspaceId?: string
   readonly onSelectWorkspace?: (workspaceId: string | undefined) => void
+  readonly onWorkspaceCreated?: (workspace: IndustryWorkspace) => void
 }
 
 export interface WorkspaceCreateFields {
@@ -127,6 +128,7 @@ export function OntologyWorkspacePanel({
   readOnly = false,
   initialWorkspaceId,
   onSelectWorkspace,
+  onWorkspaceCreated,
 }: OntologyWorkspacePanelProps) {
   const [stage, setStage] = useState('sources')
   const [visited, setVisited] = useState<ReadonlySet<string>>(new Set(['sources']))
@@ -168,18 +170,20 @@ export function OntologyWorkspacePanel({
       setWorkspaces(list)
       const requested = initialWorkspaceId ?? (typeof window === 'undefined' ? undefined : new URLSearchParams(window.location.search).get('workspace'))
       const matching = list.find((workspace) => workspace.workspaceId === requested)
+      const first = matching?.workspaceId ?? list[0]?.workspaceId
       setSelectedId((previous) => {
         const candidate = matching?.workspaceId ?? previous
         return candidate !== undefined && list.some((workspace) => workspace.workspaceId === candidate)
           ? candidate
           : list[0]?.workspaceId
       })
+      if (requested === undefined && first !== undefined) onSelectWorkspace?.(first)
       setPhase(list.length === 0 ? 'empty' : 'ready')
     } catch (caught) {
       setError(toError(caught))
       setPhase(phaseFor(caught))
     }
-  }, [client, initialWorkspaceId])
+  }, [client, initialWorkspaceId, onSelectWorkspace])
 
   useEffect(() => {
     void loadList()
@@ -194,10 +198,6 @@ export function OntologyWorkspacePanel({
       setError(toError(caught))
     })
   }, [selectedId, loadDrafts])
-
-  useEffect(() => {
-    if (selectedId !== undefined) onSelectWorkspace?.(selectedId)
-  }, [selectedId, onSelectWorkspace])
 
   useEffect(() => {
     if (!editMode || selected === undefined) return
@@ -247,6 +247,7 @@ export function OntologyWorkspacePanel({
       createPending.current = undefined
       setFields(EMPTY_CREATE_FIELDS)
       setWorkspaces((previous) => [view.workspace, ...previous])
+      onWorkspaceCreated?.(view.workspace)
       selectWorkspace(view.workspace.workspaceId)
       setPhase('ready')
     } catch (caught) {

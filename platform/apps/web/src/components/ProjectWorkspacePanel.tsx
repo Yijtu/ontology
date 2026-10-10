@@ -114,7 +114,7 @@ export interface ProjectWorkspacePanelProps {
   readonly readOnly?: boolean
   readonly initialProjectId?: string
   readonly onSelectProject?: (projectId: string) => void
-  readonly onProjectCreated?: (projectId: string) => void
+  readonly onProjectCreated?: (project: ProjectRecord) => void
   readonly initialEvolutionId?: string
   readonly onEvolution?: (evolutionId: string) => void
 }
@@ -191,6 +191,7 @@ export function ProjectWorkspacePanel({
   const packRequest = useRef<AbortController | undefined>(undefined)
   const packChoiceRef = useRef(packChoice)
   packChoiceRef.current = packChoice
+  useEffect(() => () => packRequest.current?.abort(), [client, selectedId, profileRef?.id, profileRef?.version])
   const [busy, setBusy] = useState(false)
   const [step, setStep] = useState<'overview' | 'import' | 'mapping' | 'records' | 'review' | 'history'>(
     'overview',
@@ -490,7 +491,7 @@ export function ProjectWorkspacePanel({
           : []),
       ])
       setSelectedId(result.project.projectId)
-      onProjectCreated?.(result.project.projectId)
+      onProjectCreated?.(result.project)
       setTitle('')
       createKey.current = undefined
       setPhase('ready')
@@ -846,7 +847,7 @@ export function ProjectWorkspacePanel({
                   <PublicStateNotice
                     testId="project-create-failure"
                     failure={classifyPublicError(createFailure)}
-                    onRecover={() => void create()}
+                    onRecover={() => void (packChoice.length > 0 && configuredPackProfile === undefined ? configurePack(packChoice) : create())}
                   />
                 )}
               </form>
