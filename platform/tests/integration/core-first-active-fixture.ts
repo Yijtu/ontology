@@ -111,13 +111,30 @@ export async function startFirstActiveFixture() {
   await new Promise<void>((done) => server.listen(0, '127.0.0.1', done))
   const address = server.address(); if (address === null || typeof address === 'string') throw new Error('controlled proposal server unavailable')
   const directory = await mkdtemp(join(tmpdir(), 'core-first-active-'))
-  const composition = await createCoreLocalComposition({ databaseUrl: harness.appUrl, objectDirectory: directory, scopeRef: scope, examples: loadCoreExamples({ targetScopeRef: scope }), allowLocalOperator: true, modelsEnabled: true, jevEnabled: false,
+  const compositionOptions = { databaseUrl: harness.appUrl, objectDirectory: directory, scopeRef: scope, examples: loadCoreExamples({ targetScopeRef: scope }), allowLocalOperator: true, modelsEnabled: true, jevEnabled: false,
     onWorkerError: (error) => {
       const observation = firstActiveWorkerError(error, workerPhase, currentOutboxId)
       workerErrors.push(observation)
       process.stderr.write(`[core-worker-error-observed] ${JSON.stringify(observation)}\n`)
-    }, modelEnvironment: { CORE_COMPANY_MODEL_BASE_URL: `http://127.0.0.1:${address.port}`, CORE_COMPANY_MODEL_SECRET_REF: 'env:CORE_COMPANY_MODEL_API_KEY', CORE_COMPANY_MODEL_API_KEY: 'local-controlled-proposal-only', CORE_COMPANY_MODEL_PLATFORM_ID: 'source-proposal', CORE_COMPANY_MODEL_VENDOR_MODEL: 'controlled-source-proposal', CORE_COMPANY_MODEL_PROTOCOL: 'openai-compatible' } })
-  const api = createCoreApi(composition.dependencies), baseUrl = await api.listen({ host: '127.0.0.1', port: 0 })
+    }, modelEnvironment: { CORE_COMPANY_MODEL_BASE_URL: `http://127.0.0.1:${address.port}`, CORE_COMPANY_MODEL_SECRET_REF: 'env:CORE_COMPANY_MODEL_API_KEY', CORE_COMPANY_MODEL_API_KEY: 'local-controlled-proposal-only', CORE_COMPANY_MODEL_PLATFORM_ID: 'source-proposal', CORE_COMPANY_MODEL_VENDOR_MODEL: 'controlled-source-proposal', CORE_COMPANY_MODEL_PROTOCOL: 'openai-compatible' } } satisfies Parameters<typeof createCoreLocalComposition>[0]
+  let composition = await createCoreLocalComposition(compositionOptions)
+  let api = createCoreApi(composition.dependencies), baseUrl = await api.listen({ host: '127.0.0.1', port: 0 })
+  let hostOpen = true, fixtureClosed = false
+  const stopHost = async (releaseLock?: () => Promise<void>): Promise<void> => {
+    if (!hostOpen) return
+    await api.close()
+    const closing = composition.close()
+    await Promise.resolve()
+    await releaseLock?.()
+    await closing
+    hostOpen = false
+  }
+  const startHost = async (): Promise<void> => {
+    composition = await createCoreLocalComposition(compositionOptions)
+    api = createCoreApi(composition.dependencies)
+    baseUrl = await api.listen({ host: '127.0.0.1', port: 0 })
+    hostOpen = true
+  }
   const objects = new FileSystemObjectStore(directory), registry = new PostgresArtifactRegistry({ connectionString: harness.appUrl, maxPoolSize: 2 })
   const blobs = new LocalImmutableBlobStore({ objectStore: objects, registry })
   const proofDatabase = new ControlPostgresDatabase({ connectionString: harness.appUrl, maxPoolSize: 4 })
@@ -189,8 +206,9 @@ export async function startFirstActiveFixture() {
     return { workspaceId, packRef, definitionRef: actualDefinitionRef, profileRef: proofProfile, unitCode }
   }
 
-  return { harness, scope, modelCalls, workerErrors, call, rawCall, review, readArtifact, publishPack, setWorkerContext, waitForPublication,
-    async close() { setWorkerContext('teardown'); await api.close(); await composition.close(); await registry.close(); await proofDatabase.close(); await new Promise<void>((done) => server.close(() => done())); await harness.stop(); const owned = resolve(directory); if (!owned.startsWith(resolve(tmpdir(), 'core-first-active-'))) throw new Error('owned staging cleanup escaped its prefix'); await rm(owned, { recursive: true, force: true }); if (workerErrors.length > 0) process.stderr.write(`[core-worker-error-summary] ${JSON.stringify(firstActiveWorkerErrorSummary(workerErrors))}\n`) } }
+  return { harness, scope, modelCalls, workerErrors, call, rawCall, review, readArtifact, proofContext, blobs, proofDatabase, publishPack, setWorkerContext, waitForPublication,
+    async restart(options: { readonly releaseLock: () => Promise<void>; readonly beforeStart: () => Promise<void> }) { await stopHost(options.releaseLock); await options.beforeStart(); await startHost() },
+    async close() { if (fixtureClosed) return; fixtureClosed = true; setWorkerContext('teardown'); await stopHost(); await registry.close(); await proofDatabase.close(); await new Promise<void>((done) => server.close(() => done())); await harness.stop(); const owned = resolve(directory); if (!owned.startsWith(resolve(tmpdir(), 'core-first-active-'))) throw new Error('owned staging cleanup escaped its prefix'); await rm(owned, { recursive: true, force: true }); if (workerErrors.length > 0) process.stderr.write(`[core-worker-error-summary] ${JSON.stringify(firstActiveWorkerErrorSummary(workerErrors))}\n`) } }
 }
 
 export type FirstActiveFixture = Awaited<ReturnType<typeof startFirstActiveFixture>>
