@@ -1,4 +1,5 @@
 import { afterAll, beforeAll, describe, expect, it } from 'vitest'
+import { Client } from 'pg'
 import { PostgresIdentityDecisionStore, PostgresMaterializationStore, PostgresProjectReadinessStore, PostgresProjectStore, PostgresSemanticPublicationStore } from '@ontology/adapter-control-postgres'
 import { canonicalJson, sha256DigestOf } from '@ontology/application'
 import { isRecord } from '@ontology/contracts'
@@ -76,6 +77,8 @@ describe('cross-project readiness recovery after a real Core host restart', () =
     }
 
     const locker = fixture.harness.adminClient
+    const observer = new Client({ connectionString: fixture.harness.adminUrl })
+    await observer.connect()
     let lockHeld = false
     let aFenceId: string | undefined
     let bFenceId: string | undefined
@@ -85,11 +88,12 @@ describe('cross-project readiness recovery after a real Core host restart', () =
       lockHeld = true
       const lockOwner = (await locker.query<{ pid: number }>('SELECT pg_backend_pid() AS pid')).rows[0]
       if (lockOwner === undefined) throw new Error('the PostgreSQL readiness lock owner has no backend PID')
-      await locker.query(
+      const lockedProjection = await locker.query(
         `SELECT generation FROM agent_platform.projection_state
          WHERE tenant_id=$1 AND space_id=$2 AND projection_ref='projection.materialized' FOR UPDATE`,
         [scope.tenantId, scope.spaceId],
       )
+      if (lockedProjection.rowCount !== 1) throw new Error(`the real scope projection row was not locked: ${String(lockedProjection.rowCount)}`)
 
       const aParentId = await correctActualStatement(statementA.statementId, statementA.version, 'A')
       const aParent = (await locker.query<ActualOutboxRow>(
@@ -105,7 +109,8 @@ describe('cross-project readiness recovery after a real Core host restart', () =
       let observedBlock = false
       let aBlockedChild: ActualChildRow | undefined
       while (Date.now() < blockedDeadline) {
-        const waiting = await locker.query<{ pid: number; query: string }>(
+        if (fixture.workerErrors.length > 0) throw new Error(`the actual worker failed before its A child lock wait: ${JSON.stringify(fixture.workerErrors.slice(-4))}`)
+        const waiting = await observer.query<{ pid: number; query: string }>(
           `SELECT pid,query FROM pg_stat_activity
            WHERE wait_event_type='Lock' AND $1=ANY(pg_blocking_pids(pid)) AND query ILIKE '%projection_state%'`,
           [lockOwner.pid],
@@ -120,9 +125,28 @@ describe('cross-project readiness recovery after a real Core host restart', () =
         }
         await new Promise<void>((done) => setTimeout(done, 100))
       }
-      expect(observedBlock).toBe(true)
+      if (!observedBlock) {
+        const [parentSnapshot, children, projection, waiting] = await Promise.all([
+          locker.query<{ job_id: string; topic: string; state: string; attempts: number }>(
+            `SELECT job_id,topic,state,attempts FROM agent_platform.job_outbox WHERE tenant_id=$1 AND space_id=$2 AND outbox_id=$3`,
+            [scope.tenantId, scope.spaceId, aParentId],
+          ),
+          locker.query<{ outbox_id: string; state: string; attempts: number; dispatched_at: Date | null }>(
+            `SELECT outbox_id,state,attempts,dispatched_at FROM agent_platform.job_outbox
+             WHERE tenant_id=$1 AND space_id=$2 AND topic='semantic.materialization.requested'
+               AND payload->>'fenceId'=$3`, [scope.tenantId, scope.spaceId, aFenceId],
+          ),
+          locker.query<{ generation: string }>(`SELECT generation::text FROM agent_platform.projection_state WHERE tenant_id=$1 AND space_id=$2 AND projection_ref='projection.materialized'`, [scope.tenantId, scope.spaceId]),
+          observer.query<{ pid: number; application_name: string; wait_event_type: string | null; wait_event: string | null; query: string; blockers: number[] }>(
+            `SELECT pid,application_name,wait_event_type,wait_event,left(query,400) AS query,pg_blocking_pids(pid) AS blockers
+             FROM pg_stat_activity WHERE datname=current_database() AND pid<>$1
+               AND (wait_event_type IS NOT NULL OR query ILIKE '%materialization%') ORDER BY pid`, [lockOwner.pid],
+          ),
+        ])
+        throw new Error(`the actual A child did not block on the locked projection row: ${JSON.stringify({ parent: parentSnapshot.rows, children: children.rows, projection: projection.rows, sessions: waiting.rows, workerErrors: fixture.workerErrors.slice(-4) })}`)
+      }
       expect(aBlockedChild?.state).toBe('pending')
-      expect(aBlockedChild?.attempts).toBe(1)
+      expect(aBlockedChild?.attempts).toBe(0)
       expect(aBlockedChild?.dispatched_at).toBeNull()
 
       bParentId = await correctActualStatement(statementB.statementId, statementB.version, 'B')
@@ -247,6 +271,7 @@ describe('cross-project readiness recovery after a real Core host restart', () =
         await locker.query('ROLLBACK').catch(() => undefined)
         lockHeld = false
       }
+      await observer.end().catch(() => undefined)
     }
   }, 120_000)
 })
