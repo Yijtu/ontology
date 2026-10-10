@@ -170,6 +170,34 @@ export class PostgresTableVerificationStore
     })
   }
 
+  async findReceipt(
+    scopeRef: ScopeRef,
+    input: { readonly resultManifestRef: ResourceRef; readonly draftHash: string; readonly tableId: NonEmptyString },
+    ctx: ToolContext,
+  ): Promise<ArchivedTableVerificationReceipt | undefined> {
+    return withScope(this.#database, scopeRef, ctx, async (query) => {
+      const result = await query.query<ReceiptRow & { receipt_id: string; version: string; digest: string; content_count: string; digest_count: string }>(
+        `WITH matching AS (
+           SELECT receipt_id, version, digest, receipt FROM agent_platform.table_verification_receipts
+            WHERE tenant_id=current_setting('app.tenant_id')::uuid
+              AND space_id=current_setting('app.space_id')::uuid
+              AND manifest_id=$1 AND manifest_version=$2 AND manifest_digest=$3
+              AND draft_hash=$4 AND table_id=$5
+         ), consistency AS (
+           SELECT count(DISTINCT receipt)::text AS content_count, count(DISTINCT digest)::text AS digest_count FROM matching
+         ) SELECT matching.*, consistency.content_count, consistency.digest_count
+             FROM matching CROSS JOIN consistency ORDER BY receipt_id,version,digest LIMIT 1`,
+        [input.resultManifestRef.id, input.resultManifestRef.version, input.resultManifestRef.digest, input.draftHash, input.tableId],
+      )
+      const row = result.rows[0]
+      if (row === undefined) return undefined
+      if (row.content_count !== '1' || row.digest_count !== '1') throw new ControlStorageError('UNIQUE_VIOLATION', 'the same table/draft receipt lookup has conflicting immutable bodies')
+      assertTableVerificationReceiptShape(row.receipt)
+      if (sha256OfCanonical(row.receipt) !== row.digest || sha256OfCanonical(row.receipt.resultManifestRef) !== sha256OfCanonical(input.resultManifestRef) || row.receipt.resultManifestDigest !== input.resultManifestRef.digest || row.receipt.draftHash !== input.draftHash || row.receipt.tableId !== input.tableId) throw new ControlStorageError('UNIQUE_VIOLATION', 'the actual saved table receipt does not match its lookup pins')
+      return { ref: { id: row.receipt_id, version: row.version, digest: row.digest, kind: 'artifact' }, receipt: row.receipt }
+    })
+  }
+
   async getProgress(
     scopeRef: ScopeRef,
     manifestRef: ResourceRef,

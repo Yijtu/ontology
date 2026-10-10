@@ -1,5 +1,6 @@
 import type {
   CapabilityRequirement,
+  AssetDraftReference,
   IndustryManifest,
   IndustryMaturity,
   ResourceRef,
@@ -19,6 +20,7 @@ import type { ToolContext } from './trusted'
 import type { DefinitionApprovalPin, DefinitionRevisionStrategy } from './definition-editing'
 import type { RuleActionPublicationPin } from './synthetic-validation'
 import { assertRuleDependencyCandidateShape } from './rule-action-candidates'
+import { isAssetDraftReference } from './asset-workspace'
 
 /**
  * Immutable industry-pack publication and the persistent dynamic catalogue (SPEC v0.3a
@@ -134,6 +136,7 @@ export interface PackVersionDiff {
  * catalogue reports and never carry customer data.
  */
 export interface PublishedPackAsset {
+  readonly sourceDraftRef?: AssetDraftReference
   readonly ruleDeclarations?: readonly PublishedRuleDeclaration[]
   readonly ruleReviewPins?: readonly DefinitionApprovalPin[]
   readonly strategy?: DefinitionRevisionStrategy
@@ -162,6 +165,16 @@ export interface PublishedPackAsset {
 /** Everything except the store-assigned revision and timestamp. */
 export type PublishedPackAssetDraft = Omit<PublishedPackAsset, 'revision' | 'publishedAt'>
 
+/** Complete immutable publication hash input; shared by producers and physical receipt readers. */
+export function publishedPackContent(asset: PublishedPackAsset | PublishedPackAssetDraft): Record<string, unknown> {
+  const action = asset.packAsset.actionDeclarationsRef
+  return { namespace: asset.namespace, maturity: asset.maturity, manifest: asset.manifest, definitionRef: asset.definitionRef,
+    sourceIndexDigest: asset.sourceIndex.digest, capabilities: asset.capabilities, validationId: asset.validationRef.id, validationDigest: asset.validationRef.digest,
+    strategy: asset.strategy, approvalPins: asset.approvalPins, ruleActionPins: asset.ruleActionPins, ruleReviewPins: asset.ruleReviewPins ?? [],
+    ...(asset.sourceDraftRef === undefined ? {} : { sourceDraftRef: asset.sourceDraftRef }),
+    actionDeclarationsRef: action === undefined ? undefined : { id: action.id, version: asset.packRef.version, digest: action.digest } }
+}
+
 export interface PublishedPackAssetFilter {
   readonly namespace?: string
   /** Bounded page size; a caller never reads an unbounded table. */
@@ -177,6 +190,7 @@ export interface PublishedPackAssetFilter {
  * committed pack lose its definition version or its workspace pointer (SPEC §4.2 point 4).
  */
 export interface CommitApprovedPackInput {
+  readonly sourceDraft?: import('./generated/contracts').AssetDraftVersion
   readonly ruleReviewPins?: readonly DefinitionApprovalPin[]
   readonly approvalPins?: readonly DefinitionApprovalPin[]
   readonly ruleActionPins?: readonly RuleActionPublicationPin[]
@@ -383,6 +397,7 @@ export function isResourceRefValue(value: unknown): value is ResourceRef {
  */
 export function assertPublishedPackAssetShape(value: unknown): asserts value is PublishedPackAsset {
   if (!isRecord(value)) throw invalid('a published pack asset must be an object')
+  if (value['sourceDraftRef'] !== undefined && (!isAssetDraftReference(value['sourceDraftRef']) || value['sourceDraftRef'].workspaceId !== value['workspaceId'])) throw invalid('sourceDraftRef must pin the actual scoped publishing draft')
   const approvals = value['approvalPins']
   if (approvals !== undefined && (!Array.isArray(approvals) || !approvals.every((pin: unknown) => isRecord(pin) &&
       isUuid(pin['candidateId']) && isDigest(pin['contentDigest']) && isRevisionStringValue(pin['reviewRevision']) && pin['reviewRevision'] !== '0'))) {

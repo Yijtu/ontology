@@ -9,7 +9,11 @@
       "description": "Exact reference to one immutable project revision. `digest` is computed over ProjectRevisionBody and pins the revision so a reader can detect drift instead of trusting a mutable head.",
       "type": "object",
       "additionalProperties": false,
-      "required": ["projectId", "revision", "digest"],
+      "required": [
+        "projectId",
+        "revision",
+        "digest"
+      ],
       "properties": {
         "projectId": {
           "$ref": "./common.schema.json#/$defs/Uuid"
@@ -89,6 +93,10 @@
         },
         "changeReason": {
           "$ref": "./common.schema.json#/$defs/NonEmptyString"
+        },
+        "executionPurpose": {
+          "const": "synthetic_validation",
+          "description": "Host-owned internal validation purpose. Absence retains ordinary business semantics; later revisions cannot clear or change this trusted classification."
         }
       }
     },
@@ -151,6 +159,10 @@
         },
         "changeReason": {
           "$ref": "./common.schema.json#/$defs/NonEmptyString"
+        },
+        "executionPurpose": {
+          "const": "synthetic_validation",
+          "description": "Host-owned internal validation purpose. Absence retains ordinary business semantics; later revisions cannot clear or change this trusted classification."
         }
       }
     },
@@ -159,7 +171,14 @@
       "description": "Record reconciliation for one approved-input snapshot. Every record is accounted for exactly once: total = confirmed + approved + excluded + pending + failed is not asserted here, but the counters are reported separately so a partial input is never presented as complete.",
       "type": "object",
       "additionalProperties": false,
-      "required": ["total", "confirmed", "approved", "excluded", "pending", "failed"],
+      "required": [
+        "total",
+        "confirmed",
+        "approved",
+        "excluded",
+        "pending",
+        "failed"
+      ],
       "properties": {
         "total": {
           "type": "integer",
@@ -192,7 +211,12 @@
       "description": "One bounded page of an approved-input snapshot. The ref points at the archived page artifact; first/last record ids let a reader prove stable order and detect a gap.",
       "type": "object",
       "additionalProperties": false,
-      "required": ["ref", "rowCount", "firstRecordId", "lastRecordId"],
+      "required": [
+        "ref",
+        "rowCount",
+        "firstRecordId",
+        "lastRecordId"
+      ],
       "properties": {
         "ref": {
           "$ref": "./common.schema.json#/$defs/ResourceRef"
@@ -214,7 +238,11 @@
       "description": "A record explicitly excluded from the approved input, with the reason and actor so an exclusion can never be a silent omission.",
       "type": "object",
       "additionalProperties": false,
-      "required": ["recordId", "reason", "actor"],
+      "required": [
+        "recordId",
+        "reason",
+        "actor"
+      ],
       "properties": {
         "recordId": {
           "$ref": "./common.schema.json#/$defs/Uuid"
@@ -291,7 +319,11 @@
       "description": "Read envelope for an approved-input snapshot. `projectRevisionRef` and `inputSnapshotRef` live here, outside the hashed ApprovedInputSnapshot body, so the artifact digest can be computed before the project revision that references it exists.",
       "type": "object",
       "additionalProperties": false,
-      "required": ["projectRevisionRef", "inputSnapshotRef", "snapshot"],
+      "required": [
+        "projectRevisionRef",
+        "inputSnapshotRef",
+        "snapshot"
+      ],
       "properties": {
         "projectRevisionRef": {
           "$ref": "#/$defs/ProjectRevisionRef"
@@ -308,20 +340,34 @@
       "title": "ProjectReadinessKind",
       "description": "The three independent project projections. A task only waits on the projections its binding requires: a compute task is not blocked by an unrelated document index.",
       "type": "string",
-      "enum": ["published_semantics", "dataset", "document_index"]
+      "enum": [
+        "published_semantics",
+        "dataset",
+        "document_index"
+      ]
     },
     "ProjectReadinessState": {
       "title": "ProjectReadinessState",
       "description": "State of one readiness projection. `ready` is only set by a CAS activation after the target digest and coverage were verified; the fallback is never a startup snapshot.",
       "type": "string",
-      "enum": ["pending", "building", "ready", "failed", "revoked"]
+      "enum": [
+        "pending",
+        "building",
+        "ready",
+        "failed",
+        "revoked"
+      ]
     },
     "ReadinessError": {
       "title": "ReadinessError",
       "description": "A classified, retryable-or-not failure on a readiness projection. The message is user-facing copy; the code is the machine contract.",
       "type": "object",
       "additionalProperties": false,
-      "required": ["code", "retryable", "message"],
+      "required": [
+        "code",
+        "retryable",
+        "message"
+      ],
       "properties": {
         "code": {
           "$ref": "./common.schema.json#/$defs/NonEmptyString"

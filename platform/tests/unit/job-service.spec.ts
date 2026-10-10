@@ -49,6 +49,16 @@ async function runToStop(
 }
 
 describe('logical job and attempt separation', () => {
+  it('keeps a trusted parsed manual source awaiting human review without claiming it or resetting job identity', async () => {
+    const { store, budget, clock, service } = harness()
+    const input = newJobInput({ idempotencyKey: 'actual-manual-source' })
+    const manual = await service.createJob({ ...input, initialStage: 'awaiting_review', initialCounts: { total: 2, processed: 2, failed: 0, skipped: 0 } }, EDITOR_A)
+    expect(manual.stage).toBe('awaiting_review')
+    expect(await workerFor(store, budget, clock, pipelineHandlers()).runOnce(SCOPE_A, EDITOR_A)).toEqual({ disposition: 'idle' })
+    expect(await service.createJob({ ...input, jobId: randomUUID(), initialStage: 'awaiting_review', initialCounts: { total: 2, processed: 2, failed: 0, skipped: 0 } }, EDITOR_A)).toMatchObject({ jobId: manual.jobId, reused: true })
+    await expect(service.createJob(input, EDITOR_A)).rejects.toMatchObject({ code: 'IDEMPOTENCY_CONFLICT' })
+    expect(await store.listAttempts(SCOPE_A, manual.jobId, EDITOR_A)).toEqual([])
+  })
   it('runs one attempt through the pipeline to awaiting_review without a second attempt', async () => {
     const { store, budget, clock, service } = harness()
     const input = newJobInput()

@@ -5,6 +5,7 @@ import {
   isToolContext,
   tableArtifactContentDigest,
   tablePageCoverageDigest,
+  tableManifestContentDigest,
 } from '@ontology/contracts'
 import type {
   ArchivedTableArtifactManifest,
@@ -64,26 +65,37 @@ async function withScope<T>(
 }
 
 interface ManifestRow extends QueryResultRow {
+  answer_id: string
   manifest_id: string
   version: string
   digest: string
-  verification_receipt_id: string
-  verification_receipt_version: string
-  verification_receipt_digest: string
+  verification_receipt_id: string | null
+  verification_receipt_version: string | null
+  verification_receipt_digest: string | null
   manifest: TableArtifactManifest
 }
 
 function archivedFromRow(row: ManifestRow): ArchivedTableArtifactManifest {
   assertTableArtifactManifestShape(row.manifest)
+  const receiptColumns = [row.verification_receipt_id, row.verification_receipt_version, row.verification_receipt_digest]
+  const hasReceipt = receiptColumns.every((value) => value !== null)
+  if (!hasReceipt && receiptColumns.some((value) => value !== null)) {
+    throw new ControlStorageError('UNIQUE_VIOLATION', 'the table registration has an incomplete verification receipt reference')
+  }
   return {
+    answerId: row.answer_id,
     ref: { id: row.manifest_id, version: row.version, digest: row.digest, kind: 'artifact' },
     manifest: row.manifest,
-    verificationReceiptRef: {
-      id: row.verification_receipt_id,
-      version: row.verification_receipt_version,
-      digest: row.verification_receipt_digest,
-      kind: 'artifact',
-    },
+    ...(hasReceipt
+      ? {
+          verificationReceiptRef: {
+            id: row.verification_receipt_id!,
+            version: row.verification_receipt_version!,
+            digest: row.verification_receipt_digest!,
+            kind: 'artifact' as const,
+          },
+        }
+      : {}),
   }
 }
 
@@ -130,10 +142,11 @@ export class PostgresTableArtifactStore
     answerId: Uuid,
     manifestRef: ResourceRef,
     manifest: TableArtifactManifest,
-    verificationReceiptRef: ResourceRef,
+    verificationReceiptRef: ResourceRef | undefined,
     ctx: ToolContext,
   ): Promise<void> {
     assertTableArtifactManifestShape(manifest)
+    if (manifestRef.kind !== 'artifact' || manifestRef.digest !== tableManifestContentDigest(manifest) || (verificationReceiptRef !== undefined && verificationReceiptRef.kind !== 'artifact')) throw new ControlStorageError('UNIQUE_VIOLATION', 'the table registration must retain its actual full manifest and earned receipt references')
     await withScope(this.#database, scopeRef, ctx, async (query) => {
       const inserted = await query.query(
         `INSERT INTO agent_platform.table_result_manifests
@@ -157,21 +170,21 @@ export class PostgresTableArtifactStore
           manifest.totalRows,
           manifest.pages.length,
           manifest.complete,
-          verificationReceiptRef.id,
-          verificationReceiptRef.version,
-          verificationReceiptRef.digest,
+          verificationReceiptRef?.id ?? null,
+          verificationReceiptRef?.version ?? null,
+          verificationReceiptRef?.digest ?? null,
           JSON.stringify(manifest),
           new Date().toISOString(),
         ],
       )
       if (inserted.rows.length > 0) return
       const existing = await query.query<ManifestRow & { same_content: boolean }>(
-        `SELECT (manifest = $4::jsonb) AS same_content
+        `SELECT (manifest = $4::jsonb AND answer_id=$5::uuid AND verification_receipt_id IS NOT DISTINCT FROM $6::uuid AND verification_receipt_version IS NOT DISTINCT FROM $7 AND verification_receipt_digest IS NOT DISTINCT FROM $8) AS same_content
            FROM agent_platform.table_result_manifests
           WHERE tenant_id = current_setting('app.tenant_id')::uuid
             AND space_id = current_setting('app.space_id')::uuid
             AND manifest_id = $1 AND version = $2 AND digest = $3`,
-        [manifestRef.id, manifestRef.version, manifestRef.digest, JSON.stringify(manifest)],
+        [manifestRef.id, manifestRef.version, manifestRef.digest, JSON.stringify(manifest), answerId, verificationReceiptRef?.id ?? null, verificationReceiptRef?.version ?? null, verificationReceiptRef?.digest ?? null],
       )
       const row = existing.rows[0]
       if (row === undefined || row.same_content !== true) {
@@ -190,7 +203,7 @@ export class PostgresTableArtifactStore
   ): Promise<ArchivedTableArtifactManifest | undefined> {
     return withScope(this.#database, scopeRef, ctx, async (query) => {
       const result = await query.query<ManifestRow>(
-        `SELECT manifest_id, version, digest, verification_receipt_id, verification_receipt_version,
+        `SELECT answer_id, manifest_id, version, digest, verification_receipt_id, verification_receipt_version,
                 verification_receipt_digest, manifest
            FROM agent_platform.table_result_manifests
           WHERE tenant_id = current_setting('app.tenant_id')::uuid
@@ -211,7 +224,7 @@ export class PostgresTableArtifactStore
   ): Promise<ArchivedTableArtifactManifest | undefined> {
     return withScope(this.#database, scopeRef, ctx, async (query) => {
       const result = await query.query<ManifestRow>(
-        `SELECT manifest_id, version, digest, verification_receipt_id, verification_receipt_version,
+        `SELECT answer_id, manifest_id, version, digest, verification_receipt_id, verification_receipt_version,
                 verification_receipt_digest, manifest
            FROM agent_platform.table_result_manifests
           WHERE tenant_id = current_setting('app.tenant_id')::uuid

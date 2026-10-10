@@ -857,6 +857,7 @@ export interface AssetDraftVersion {
   candidateRefs: AssetDraftCandidateRef[]
   syntheticExampleSetRef?: ResourceRef
   validationRef?: ResourceRef
+  publicationCheckpoint?: AssetDraftPublicationCheckpoint
 }
 /**
  * Reference to an internal platform resource. Internal resources use UUID ids; digests pin the exact immutable revision.
@@ -869,6 +870,26 @@ export interface ResourceRef {
   version: Semver
   digest: Sha256Digest
   kind: ResourceKind
+}
+/**
+ * Trusted receipt written atomically with the actual pack publication; it never changes the original producer draft or human approval.
+ *
+ * This interface was referenced by `OntologyContracts`'s JSON-Schema
+ * via the `definition` "AssetDraftPublicationCheckpoint".
+ */
+export interface AssetDraftPublicationCheckpoint {
+  sourceDraftRef: AssetDraftReference
+  packRef: VersionRef
+  validationRef: ResourceRef
+}
+/**
+ * This interface was referenced by `OntologyContracts`'s JSON-Schema
+ * via the `definition` "AssetDraftReference".
+ */
+export interface AssetDraftReference {
+  workspaceId: Uuid
+  revision: RevisionString
+  digest: Sha256Digest
 }
 /**
  * Physical quantity with an exact decimal amount and a canonical unit. Never a JSON float.
@@ -2723,6 +2744,10 @@ export interface ProjectRevisionBody {
   semanticPublicationRefs: VersionRef[]
   sourceVisibilityEpoch: RevisionString
   changeReason: NonEmptyString
+  /**
+   * Host-owned internal validation purpose. Absence retains ordinary business semantics; later revisions cannot clear or change this trusted classification.
+   */
+  executionPurpose?: 'synthetic_validation'
 }
 /**
  * Read envelope of a project revision. It repeats the body pins inline and adds `ref`, whose digest is computed over ProjectRevisionBody. Readiness is projected separately; it is never back-filled into this immutable revision.
@@ -2746,6 +2771,10 @@ export interface ProjectRevision {
   semanticPublicationRefs: VersionRef[]
   sourceVisibilityEpoch: RevisionString
   changeReason: NonEmptyString
+  /**
+   * Host-owned internal validation purpose. Absence retains ordinary business semantics; later revisions cannot clear or change this trusted classification.
+   */
+  executionPurpose?: 'synthetic_validation'
 }
 /**
  * Record reconciliation for one approved-input snapshot. Every record is accounted for exactly once: total = confirmed + approved + excluded + pending + failed is not asserted here, but the counters are reported separately so a partial input is never presented as complete.
@@ -3710,4 +3739,5 @@ export interface DataQueryOutput {
   table?: TableData
   statistics?: AggregateStatistic[]
   computation?: ComputationData
+  coverage?: ToolCoverage
 }

@@ -38,11 +38,15 @@ interface ScopedQuery {
  * throw here leaves no publication, statement, rule or outbox row behind.
  */
 export interface PublicationFaultInjection {
-  readonly beforeCommit?: () => void
+  readonly beforeCommit?: () => void | Promise<void>
 }
 
 export interface PostgresSemanticPublicationStoreOptions {
   readonly faultInjection?: PublicationFaultInjection
+  /** Host-only business read view; exclusion runs before keyset paging and finite source limits. */
+  readonly excludeSyntheticValidationProjects?: boolean
+  /** Host-selected physical projection; public publication inputs cannot select this. */
+  readonly materializationProjectionRef?: string
 }
 
 interface ReviewRow extends QueryResultRow {
@@ -222,10 +226,14 @@ function toRevision(row: RevisionRow): StatementRevisionRecord {
 export class PostgresSemanticPublicationStore implements SemanticPublicationStore {
   readonly #database: ControlPostgresDatabase
   readonly #faultInjection: PublicationFaultInjection | undefined
+  readonly #excludeSyntheticValidationProjects: boolean
+  readonly #materializationProjectionRef: string
 
   constructor(database: ControlPostgresDatabase, options?: PostgresSemanticPublicationStoreOptions) {
     this.#database = database
     this.#faultInjection = options?.faultInjection
+    this.#excludeSyntheticValidationProjects = options?.excludeSyntheticValidationProjects === true
+    this.#materializationProjectionRef = options?.materializationProjectionRef ?? MATERIALIZED_PROJECTION_REF
   }
 
   async latestReviewRevision(
@@ -617,7 +625,7 @@ export class PostgresSemanticPublicationStore implements SemanticPublicationStor
 
       await this.#openMaterializationFences(query, input.materializationFences ?? [])
 
-      this.#faultInjection?.beforeCommit?.()
+      await this.#faultInjection?.beforeCommit?.()
       return { publication, created: true }
     })
   }
@@ -687,6 +695,12 @@ export class PostgresSemanticPublicationStore implements SemanticPublicationStor
         `space_id = current_setting('app.space_id')::uuid`,
       ]
       const values: unknown[] = []
+      if (this.#excludeSyntheticValidationProjects) clauses.push(`NOT EXISTS (
+        SELECT 1 FROM jsonb_array_elements(CASE WHEN jsonb_typeof(published_statements.value#>'{provenance,sources}')='array'
+          THEN published_statements.value#>'{provenance,sources}' ELSE '[]'::jsonb END) source
+        JOIN agent_platform.project_revisions pr ON pr.tenant_id=published_statements.tenant_id AND pr.space_id=published_statements.space_id
+          AND pr.project_id::text=source#>>'{projectRevisionRef,projectId}' AND pr.revision::text=source#>>'{projectRevisionRef,revision}'
+        WHERE pr.body->>'executionPurpose'='synthetic_validation')`)
       if (filter.propositionKey !== undefined) {
         values.push(filter.propositionKey)
         clauses.push(`proposition_key = $${String(values.length)}`)
@@ -734,6 +748,9 @@ export class PostgresSemanticPublicationStore implements SemanticPublicationStor
         `space_id = current_setting('app.space_id')::uuid`,
       ]
       const values: unknown[] = []
+      if (this.#excludeSyntheticValidationProjects) clauses.push(`NOT EXISTS (
+        SELECT 1 FROM agent_platform.project_revisions pr WHERE pr.tenant_id=published_rule_versions.tenant_id AND pr.space_id=published_rule_versions.space_id
+          AND pr.project_id=published_rule_versions.project_id AND pr.body->>'executionPurpose'='synthetic_validation')`)
       if (filter.objectId !== undefined) {
         values.push(filter.objectId)
         clauses.push(`object_id = $${String(values.length)}`)
@@ -888,7 +905,7 @@ export class PostgresSemanticPublicationStore implements SemanticPublicationStor
         WHERE tenant_id = current_setting('app.tenant_id')::uuid
           AND space_id = current_setting('app.space_id')::uuid
           AND projection_ref = $1`,
-      [MATERIALIZED_PROJECTION_REF],
+      [this.#materializationProjectionRef],
     )
     const generation = state.rows[0]?.generation ?? '0'
     for (const fence of fences) {
@@ -901,7 +918,7 @@ export class PostgresSemanticPublicationStore implements SemanticPublicationStor
            current_setting('app.space_id')::uuid,
            $1, $2, $3::bigint, $4, $5::jsonb, 'open', $6::timestamptz)`,
         [
-          MATERIALIZED_PROJECTION_REF,
+          this.#materializationProjectionRef,
           fence.fenceId,
           generation,
           fence.reason,

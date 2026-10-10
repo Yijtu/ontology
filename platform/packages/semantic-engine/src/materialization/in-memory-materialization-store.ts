@@ -223,6 +223,13 @@ export class InMemoryMaterializationStore implements MaterializationStore {
         `the projection is at generation ${String(state.generation)}, not ${input.expectedGeneration}`,
       )
     }
+    const fenceIds = [...input.fenceId === undefined ? [] : [input.fenceId], ...input.additionalFenceIds ?? []]
+    if ((input.additionalFenceIds?.length ?? 0) > 0) {
+      if (input.fenceId === undefined || fenceIds.length > 8 || new Set(fenceIds).size !== fenceIds.length) {
+        throw new MaterializationStoreError('MATERIALIZATION_STORE_FAILED', 'a projection batch requires at most eight distinct fences')
+      }
+      if (fenceIds.some((fenceId) => !state.fences.has(fenceId))) throw new MaterializationStoreError('FENCE_NOT_FOUND', 'the projection batch contains a fence outside its actual scope or projection')
+    }
     const generation = String(state.generation + 1)
     let appended = 0
     for (const slice of input.slices) {
@@ -234,10 +241,10 @@ export class InMemoryMaterializationStore implements MaterializationStore {
     state.watermark = clone(input.watermark)
     state.dirty = false
     delete state.dirtyReason
-    if (input.fenceId !== undefined) {
-      const fence = state.fences.get(input.fenceId)
+    for (const fenceId of fenceIds) {
+      const fence = state.fences.get(fenceId)
       if (fence !== undefined && fence.state === 'open') {
-        state.fences.set(input.fenceId, { ...fence, state: 'closed', closedAt: input.committedAt })
+        state.fences.set(fenceId, { ...fence, state: 'closed', closedAt: input.committedAt })
       }
     }
     return { state: this.#projectionState(scopeRef, state), appendedSlices: appended }

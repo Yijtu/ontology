@@ -1,4 +1,4 @@
-import { isToolContext } from '@ontology/contracts'
+import { isToolContext, isUuid } from '@ontology/contracts'
 import { AnswerStoreError } from '@ontology/contracts'
 import { isResourceRef } from '@ontology/contracts'
 import type {
@@ -8,6 +8,7 @@ import type {
   PublishedAnswer,
   PublicationKind,
   PublicationValidityPort,
+  PublicationTableVerificationRequirement,
   PublishRequest,
   ResourceRef,
   RunStore,
@@ -24,6 +25,9 @@ import { answerDraftContentHash, scenarioManifestHash } from './canonical'
 import { PublicationRejectedError, WorkflowControllerError } from './errors'
 
 export interface AnswerPublicationDependencies {
+  readonly tableVerifications?: (draft: AnswerDraft, ctx: ToolContext) => Promise<readonly PublicationTableVerificationRequirement[]>
+  /** Register earned table records before the physical answer CAS; readers require the actual answer. */
+  readonly registerTables?: (answer: PublishedAnswer, draft: AnswerDraft, ctx: ToolContext) => Promise<Uuid>
   /** Run records: the atomic cancellation check is a read of the run row. */
   readonly runs: RunStore
   /** Durable, append-only published answers. */
@@ -80,6 +84,8 @@ export class AnswerPublicationService implements AnswerPublisherPort {
   readonly #validity: PublicationValidityPort
   readonly #now: () => string
   readonly #newId: () => string
+  readonly #tableVerifications: AnswerPublicationDependencies['tableVerifications']
+  readonly #registerTables: AnswerPublicationDependencies['registerTables']
 
   constructor(dependencies: AnswerPublicationDependencies) {
     this.#runs = dependencies.runs
@@ -89,6 +95,8 @@ export class AnswerPublicationService implements AnswerPublisherPort {
     this.#validity = dependencies.validity
     this.#now = dependencies.now ?? (() => new Date().toISOString())
     this.#newId = dependencies.newId ?? (() => globalThis.crypto.randomUUID())
+    this.#tableVerifications = dependencies.tableVerifications
+    this.#registerTables = dependencies.registerTables
   }
 
   async publish(request: PublishRequest, ctx: ToolContext): Promise<PublishedAnswer> {
@@ -194,6 +202,7 @@ export class AnswerPublicationService implements AnswerPublisherPort {
       )
     }
 
+    const tableVerifications = await this.#tableVerifications?.(draft, ctx)
     const validity = await this.#validity.check(
       {
         runId: grant.runId,
@@ -202,6 +211,7 @@ export class AnswerPublicationService implements AnswerPublisherPort {
         evidenceManifestHash: draft.evidenceManifestHash,
         evidenceRefs: evidenceRefsOf(inputManifest),
         verifiedAt: recorded.verification.verifiedAt,
+        ...(tableVerifications === undefined ? {} : { tableVerifications }),
       },
       ctx,
     )
@@ -226,7 +236,7 @@ export class AnswerPublicationService implements AnswerPublisherPort {
     // The publication metadata carries an explicit history `asOf`; changing the verified
     // limitations here would create a body that no longer matches the draft hash.
     const limitations = [...draft.limitations]
-    const answer: PublishedAnswer = {
+    let answer: PublishedAnswer = {
       answerId: this.#newId(),
       runId: grant.runId,
       draftId: draft.draftId,
@@ -258,6 +268,11 @@ export class AnswerPublicationService implements AnswerPublisherPort {
             },
           }),
       publishedAt: this.#now(),
+    }
+    if (this.#registerTables !== undefined) {
+      const answerId = await this.#registerTables(answer, draft, ctx)
+      if (!isUuid(answerId)) throw new PublicationRejectedError('table_verification_missing', 'the actual table registration did not return its scoped answer identity')
+      answer = { ...answer, answerId }
     }
 
     // The insert re-reads the run state/revision in the same transaction, so a cancellation

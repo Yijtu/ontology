@@ -1,5 +1,5 @@
-import { SemanticPublicationStoreError, assertProjectFactInputShape } from '@ontology/contracts'
-import type { CandidateKind, CandidateSourceSpan, EntityCandidate, ExtractionInputVersion, InstanceFieldValue, InstanceIdentityBinding, ProjectFactPublicationFence, PublishSemanticPublicationInput, VersionRef } from '@ontology/contracts'
+import { SemanticPublicationStoreError, assertProjectFactInputShape, semanticDefinitionContent, sha256OfCanonical } from '@ontology/contracts'
+import type { CandidateKind, CandidateSourceSpan, EntityCandidate, ExtractionInputVersion, InstanceFieldValue, InstanceIdentityBinding, ProjectFactPublicationFence, PublishSemanticPublicationInput, SemanticDefinitionRecord, VersionRef } from '@ontology/contracts'
 import type { QueryResultRow } from 'pg'
 import { assertIdentityProjectFence } from './identity-project-fence'
 
@@ -96,13 +96,23 @@ export async function assertProjectFactPublicationFences(query: Query, input: Pu
     )
     if (values.rows[0]?.exact !== true) blocked()
   }
+  await lockProjectFactIdentityHeads(query, fences.map((fence) => fence.source.entityCandidateId))
   for (const fence of [...fences].sort((a, b) => a.source.entityCandidateId.localeCompare(b.source.entityCandidateId))) {
     await assertConfirmation(query, fence)
   }
 }
 
+/** Every own head precedes any own/reference target lock, including multi-record commits. */
+export async function lockProjectFactIdentityHeads(query: Query, candidateIds: readonly string[]): Promise<void> {
+  const unique = [...new Set(candidateIds)].sort()
+  if (unique.length === 0) return
+  const result = await query.query<{ candidate_id: string }>(`SELECT candidate_id FROM agent_platform.identity_decision_heads WHERE ${SCOPE} AND candidate_id=ANY($1::uuid[]) ORDER BY candidate_id FOR SHARE`, [unique])
+  if (result.rows.length !== unique.length) blocked()
+}
+
 export async function assertConfirmation(query: Query, fence: ProjectFactPublicationFence): Promise<void> {
   const source = fence.source
+  await lockProjectFactIdentityHeads(query, [source.entityCandidateId])
   const instance = await query.query<{ revision: string; matched_entity_id: string; identity_state: string; body: { fields: InstanceFieldValue[]; identity: { binding?: InstanceIdentityBinding } } }>(
     `SELECT revision::text,matched_entity_id,identity_state,body FROM agent_platform.instance_review_records WHERE ${SCOPE}
       AND project_id=$1::uuid AND record_id=$2::uuid ORDER BY revision DESC LIMIT 1 FOR SHARE`,
@@ -119,6 +129,12 @@ export async function assertConfirmation(query: Query, fence: ProjectFactPublica
   const row = instance.rows[0]
   const attributes = candidate.rows[0]?.payload.attributes
   const binding = row?.body.identity.binding
+  const definitions = await query.query<{ definition: SemanticDefinitionRecord }>(
+    `SELECT definition FROM agent_platform.semantic_definition_versions WHERE ${SCOPE}
+      AND definition_id=$1 AND version=$2 AND definition->'ref'->>'digest'=$3 LIMIT 2 FOR SHARE`, [source.definitionRef.id, source.definitionRef.version, source.definitionRef.digest],
+  )
+  const definition = definitions.rows[0]?.definition
+  if (definitions.rows.length > 1 || definition !== undefined && (!sameRef(definition.ref, source.definitionRef) || definition.definitionId !== source.definitionRef.id || definition.version !== source.definitionRef.version || !Array.isArray(definition.attributes) || !Array.isArray(definition.objects) || !Array.isArray(definition.identityScopes) || sha256OfCanonical(semanticDefinitionContent(definition)) !== source.definitionRef.digest)) blocked()
   if (row?.revision !== fence.instanceRevision || row.matched_entity_id !== fence.entityId || !['matched','created'].includes(row.identity_state) || attributes === undefined || row.body.fields.length !== attributes.length ||
     binding?.candidateId !== source.entityCandidateId || binding.documentId !== source.documentId || binding.projectRevisionRef.projectId !== source.projectRevisionRef.projectId || binding.projectRevisionRef.revision !== source.projectRevisionRef.revision || binding.projectRevisionRef.digest !== source.projectRevisionRef.digest || !sameRef(binding.definitionRef, source.definitionRef) || binding.membershipRevision !== source.membershipRevision || binding.visibilityEpoch !== source.visibilityEpoch ||
     row.body.fields.some((field) => {
@@ -126,9 +142,24 @@ export async function assertConfirmation(query: Query, fence: ProjectFactPublica
       const span = candidate.rows[0]?.source_spans[attributes.findIndex((entry) => entry.attributeId === field.fieldId)]
       return field.status !== 'confirmed' || field.actor === undefined || field.confirmedAt === undefined || value === undefined ||
         field.rawValue !== value.raw || span?.kind !== 'structured' || field.source.parseId !== span.parseId || field.source.textDigest !== span.rowDigest || JSON.stringify(field.source.locator) !== JSON.stringify(span.locator) ||
-        (field.normalizedValue?.kind === 'quantity' ? field.normalizedValue.value !== value.value || field.normalizedValue.unitCode !== value.unitCode : field.normalizedValue?.kind !== 'scalar' || field.normalizedValue.value !== value.value)
+        (definition?.attributes.find((attribute) => attribute.objectId === candidate.rows[0]?.payload.objectId && attribute.id === field.fieldId)?.valueType === 'reference'
+          ? field.normalizedValue?.kind !== 'reference' || field.normalizedValue.entityId !== value.value || value.unitCode !== undefined
+          : field.normalizedValue?.kind === 'quantity' ? field.normalizedValue.value !== value.value || field.normalizedValue.unitCode !== value.unitCode : field.normalizedValue?.kind !== 'scalar' || field.normalizedValue.value !== value.value)
     }) || reviewed.rows[0]?.decision !== 'approve' || reviewed.rows[0].content_digest !== fence.candidateDigest) blocked()
-  await query.query(`SELECT revision FROM agent_platform.identity_decision_heads WHERE ${SCOPE} AND candidate_id=$1::uuid FOR SHARE`, [source.entityCandidateId])
+  for (const field of [...row.body.fields].sort((left, right) => (left.normalizedValue?.kind === 'reference' ? left.normalizedValue.entityId : '').localeCompare(right.normalizedValue?.kind === 'reference' ? right.normalizedValue.entityId : ''))) {
+    if (field.normalizedValue?.kind !== 'reference') continue
+    const attribute = definition?.attributes.find((attribute) => attribute.objectId === candidate.rows[0]?.payload.objectId && attribute.id === field.fieldId)
+    const object = definition?.objects.find((object) => object.id === attribute?.referencesObjectId)
+    const identity = object === undefined ? undefined : definition?.identityScopes.find((identity) => identity.objectId === object.id && identity.id === object.identityScopeId)
+    if (attribute?.valueType !== 'reference' || object === undefined || identity === undefined || !identity.scopeDimensions.includes('project')) blocked()
+    const target = await query.query<{ scope_dimensions: Record<string, string> }>(
+      `SELECT scope_dimensions FROM agent_platform.identity_entities WHERE ${SCOPE} AND entity_id=$1 AND state='confirmed'
+        AND object_id=$2 AND identity_scope_id=$3 AND scope_dimensions->>'project'=$4 FOR SHARE`,
+      [field.normalizedValue.entityId, object.id, identity.id, source.projectRevisionRef.projectId],
+    )
+    const currentTarget = target.rows[0]
+    if (target.rows.length !== 1 || currentTarget === undefined || identity.scopeDimensions.some((dimension) => typeof currentTarget.scope_dimensions[dimension] !== 'string' || currentTarget.scope_dimensions[dimension]?.length === 0)) blocked()
+  }
   const entity = await query.query<{ object_id: string; identity_scope_id: string; state: string; project: string }>(
     `SELECT object_id,identity_scope_id,state,scope_dimensions->>'project' AS project FROM agent_platform.identity_entities WHERE ${SCOPE} AND entity_id=$1 FOR SHARE`, [fence.entityId],
   )

@@ -57,6 +57,8 @@ export interface PublishedSemanticReadView {
 }
 
 export interface PublishedSemanticSourceOptions extends PublishedPageLimits {
+  /** Reuse one complete read only while its source and live declaration authority remain exact. */
+  readonly cacheStableReads?: boolean
   readonly publishedRules?: { readonly reader: PublishedRuleDeclarationReader; readonly request: PublishedRuleDeclarationRequest }
   readonly projectId?: string
   /** The run/profile pin. A multi-schema scope must provide an exact definition version. */
@@ -72,6 +74,7 @@ const DEFAULT_PAGE_SIZE = 1_000
 const DEFAULT_MAX_RECORDS = 100_000
 const IDENTITY_BATCH_SIZE = 1_000
 const IDENTITY_READ_CONCURRENCY = 4
+const MAX_CACHED_JSON_BYTES = 8 * 1024 * 1024
 
 function sameVersion(left: VersionRef, right: VersionRef): boolean {
   return left.id === right.id && left.version === right.version && left.digest === right.digest
@@ -153,6 +156,8 @@ export class PublishedSemanticSource implements MaterializationPublishedSource {
   readonly #completeRangeAttributeIds: readonly string[]
   readonly #projectId: string | undefined
   readonly #publishedRules: PublishedSemanticSourceOptions['publishedRules']
+  readonly #cacheStableReads: boolean
+  #cached: { readonly key: string; readonly value: PublishedSemanticData; readonly declarationsDigest?: string } | undefined
 
   constructor(readView: PublishedSemanticReadView, options: PublishedSemanticSourceOptions = {}) {
     this.#readView = readView
@@ -166,6 +171,7 @@ export class PublishedSemanticSource implements MaterializationPublishedSource {
     this.#completeRangeAttributeIds = options.completeRangeAttributeIds ?? []
     this.#projectId = options.projectId
     this.#publishedRules = options.publishedRules
+    this.#cacheStableReads = options.cacheStableReads === true
   }
 
   async load(scopeRef: ScopeRef, ctx: ToolContext): Promise<PublishedSemanticData> {
@@ -173,6 +179,30 @@ export class PublishedSemanticSource implements MaterializationPublishedSource {
     const readIdentityRevision = identity === undefined
       ? async (): Promise<RevisionString> => '0'
       : () => identity.latestReadRevision(scopeRef, ctx)
+    const fingerprint = () => sha256DigestOf({ scopeRef, principal: ctx.principal, allowedResources: ctx.allowedResources,
+      policyVersion: ctx.policyVersion, resolvedProfileHash: ctx.resolvedProfileHash, definition: this.#definition,
+      definitionRef: this.#definitionRef, projectId: this.#projectId, pageLimits: this.#pageLimits,
+      completeRangeAttributeIds: this.#completeRangeAttributeIds, publishedRuleRequest: this.#publishedRules?.request })
+    const cacheKey = this.#cacheStableReads ? fingerprint() : undefined
+    const cached = this.#cached
+    if (cacheKey !== undefined && cached?.key === cacheKey && cached.value.readRevision !== undefined) {
+      const [semantic, identityRevision] = await Promise.all([this.#readView.latestReadRevision(scopeRef, ctx), readIdentityRevision()])
+      if (semantic === cached.value.readRevision.semantic && identityRevision === cached.value.readRevision.identity) {
+        let declarationsDigest: string | undefined
+        let authorityValid = true
+        if (this.#publishedRules !== undefined) {
+          try { declarationsDigest = sha256DigestOf(await this.#publishedRules.reader.read(scopeRef, this.#publishedRules.request, ctx)) }
+          catch (error) {
+            if (!(error instanceof IndustryAssetPublicationError)) throw error
+            authorityValid = false
+          }
+        }
+        const [afterSemantic, afterIdentity] = await Promise.all([this.#readView.latestReadRevision(scopeRef, ctx), readIdentityRevision()])
+        if (authorityValid && declarationsDigest === cached.declarationsDigest && semantic === afterSemantic && identityRevision === afterIdentity && cacheKey === fingerprint()) return structuredClone(cached.value)
+      }
+      this.#cached = undefined
+    }
+    let declarationsDigest: string | undefined
     const snapshot = await readAtStableRevision(
       this.#readView,
       readIdentityRevision,
@@ -306,6 +336,7 @@ export class PublishedSemanticSource implements MaterializationPublishedSource {
             issues.push({ code: 'PUBLISHED_RULE_DECLARATION_UNAVAILABLE', message: error.message })
             return { facts: [], rules: [], entityBindings: [], definitionRef, historicalAsOfSupported: false, complete: false, issues }
           }
+          declarationsDigest = sha256DigestOf(declarations)
           const collisions = declarations.filter((rule) => currentRules.some((extracted) => ruleKey(extracted) === ruleKey(rule) || extracted.ruleVersionId === rule.ruleVersionId))
           if (collisions.length > 0) {
             issues.push({ code: 'PUBLISHED_RULE_ORIGIN_AMBIGUOUS', message: 'extracted and published-pack rules collide; an exact origin must be selected' })
@@ -376,7 +407,13 @@ export class PublishedSemanticSource implements MaterializationPublishedSource {
         }
       },
     )
-    return { ...snapshot.value, readRevision: snapshot.readRevision }
+    const value = { ...snapshot.value, readRevision: snapshot.readRevision }
+    if (cacheKey !== undefined && cacheKey === fingerprint() && value.complete === true && value.readRevision !== undefined &&
+      new TextEncoder().encode(JSON.stringify(value)).byteLength <= MAX_CACHED_JSON_BYTES) {
+      this.#cached = { key: cacheKey, value: structuredClone(value), ...(declarationsDigest === undefined ? {} : { declarationsDigest }) }
+      return structuredClone(this.#cached.value)
+    }
+    return value
   }
 
   async #readIdentityBindings(

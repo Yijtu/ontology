@@ -128,6 +128,8 @@ export class JobService {
    * identity is content-derived.
    */
   async createJob(input: CreateJobInput, ctx: ToolContext): Promise<CreateJobResult> {
+    if (input.initialStage !== undefined && input.initialStage !== 'awaiting_review' || input.initialCounts !== undefined && input.initialStage === undefined ||
+        input.initialCounts !== undefined && (Object.keys(input.initialCounts).some((key) => !['total','processed','failed','skipped'].includes(key)) || [input.initialCounts.total,input.initialCounts.processed,input.initialCounts.failed,input.initialCounts.skipped].some((count) => !Number.isSafeInteger(count) || count < 0 || count > 20_000) || input.initialCounts.processed + input.initialCounts.failed + input.initialCounts.skipped > input.initialCounts.total)) throw new JobServiceError('INVALID_ARGUMENT', 'the trusted manual source handoff requires bounded actual parsed counts and an awaiting-review stage')
     const scopeRef = scopeOf(ctx)
     assertEditor(ctx)
     if (
@@ -182,13 +184,14 @@ export class JobService {
         {
           jobId: input.jobId,
           kind: input.kind,
+          ...(input.initialStage === undefined ? {} : { initialStage: input.initialStage }),
           sourceRef: input.sourceRef,
           ...(input.documentRef === undefined ? {} : { documentRef: input.documentRef }),
           ...(input.datasetRef === undefined ? {} : { datasetRef: input.datasetRef }),
           pipelineVersion: input.pipelineVersion,
           idempotencyKey: input.idempotencyKey,
           inputDigest,
-          counts: { total: 0, processed: 0, failed: 0, skipped: 0 },
+          counts: input.initialCounts ?? { total: 0, processed: 0, failed: 0, skipped: 0 },
           createdAt,
           createdBy: ctx.principal.subjectId,
         },
@@ -305,6 +308,7 @@ export class JobService {
         documentRef: input.documentRef,
         datasetRef: input.datasetRef ?? null,
         pipelineVersion: input.pipelineVersion,
+        ...(input.initialStage === undefined ? {} : { initialStage: input.initialStage, initialCounts: input.initialCounts ?? { total: 0, processed: 0, failed: 0, skipped: 0 } }),
       }),
     )
   }

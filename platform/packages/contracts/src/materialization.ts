@@ -196,6 +196,8 @@ export interface ReadProjectionSlicesRequest {
 export interface CommitProjectionInput {
   /** The fence this commit closes; `undefined` when no fence was opened. */
   readonly fenceId?: Uuid
+  /** Up to seven other fences closed atomically for one bounded worker batch. */
+  readonly additionalFenceIds?: readonly Uuid[]
   readonly expectedGeneration: RevisionString
   readonly recordedSeq: RevisionString
   readonly watermark: SourceWatermark

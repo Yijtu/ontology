@@ -300,6 +300,24 @@ afterAll(async () => {
 })
 
 describe('structured ingestion through the existing jobs/outbox pipeline', () => {
+  it('authenticates a native parse winner across both unique keys and refuses different selections or rows', async () => {
+    const context = await newContext('native-conflict')
+    const bytes = new TextEncoder().encode('device,hours\nM-1,9.000000000000000001\n')
+    const originalRef = await publishOriginalBytes(context, bytes, CSV_MEDIA)
+    const ingestion = new LocalStructuredIngestionService({ blobs: blobStore, store: structuredStore, now: clock.now })
+    const saved = await ingestion.parse({ scopeRef: context.scopeRef, originalRef, options: { headerRow: 1 } }, context.ctx)
+    const page = await structuredStore.listRecords(context.scopeRef, saved.parse.parseId, { limit: 10 }, context.ctx)
+    const alias = await publishOriginalBytes(context, bytes, CSV_MEDIA)
+    expect(await structuredStore.recordParse({ ...saved.parse, originalRef: alias, createdAt: new Date().toISOString() }, page.records, context.ctx)).toEqual({ created: false })
+    await expect(structuredStore.recordParse({ ...saved.parse, parseOptions: { headerRow: 2 } }, page.records, context.ctx)).rejects.toMatchObject({ code: 'INVALID_REQUEST' })
+    const first = page.records[0]
+    if (first === undefined) throw new Error('actual original row is missing')
+    await expect(structuredStore.recordParse(saved.parse, [{ ...first, rowDigest: `sha256:${'0'.repeat(64)}` }], context.ctx)).rejects.toMatchObject({ code: 'INVALID_REQUEST' })
+    const different = await publishOriginalBytes(context, new TextEncoder().encode('device,hours\nM-2,10\n'), CSV_MEDIA)
+    await expect(structuredStore.recordParse({ ...saved.parse, originalRef: different }, page.records, context.ctx)).rejects.toMatchObject({ code: 'INVALID_REQUEST' })
+    expect(await structuredStore.getParse(context.scopeRef, saved.parse.parseId, context.ctx)).toEqual(saved.parse)
+    expect(await structuredStore.listRecords(context.scopeRef, saved.parse.parseId, { limit: 10 }, context.ctx)).toEqual(page)
+  })
   it('persists located rows, reports the stage counts and drains the outbox', async () => {
     const context = await newContext('structured-e2e')
     const csv = 'sku,qty\nA-1,10\nA-2,20\nA-3,30\n'

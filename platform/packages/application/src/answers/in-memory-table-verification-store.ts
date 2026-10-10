@@ -19,6 +19,10 @@ function refKey(ref: ResourceRef): string {
   return `${ref.id}|${ref.version}|${ref.digest}`
 }
 
+function lookupKey(scopeRef: ScopeRef, input: { readonly resultManifestRef: ResourceRef; readonly draftHash: string; readonly tableId: string }): string {
+  return `${scopeKey(scopeRef)}|${sha256OfCanonical(input)}`
+}
+
 function assertTrustedScope(scopeRef: ScopeRef, ctx: ToolContext): void {
   if (!isToolContext(ctx)) {
     throw new Error('a host-minted trusted tool context is required')
@@ -44,6 +48,7 @@ export class InMemoryTableVerificationStore
   implements TableVerificationReceiptStore, TableVerificationProgressStore
 {
   readonly #receipts = new Map<string, ArchivedTableVerificationReceipt>()
+  readonly #byTableDraft = new Map<string, Set<string>>()
   readonly #progress = new Map<string, TableVerificationProgress>()
 
   async putReceipt(
@@ -58,7 +63,12 @@ export class InMemoryTableVerificationStore
     if (receiptRef.digest !== digest) {
       throw new Error(`receipt ref digest ${receiptRef.digest} does not match its content digest ${digest}`)
     }
-    this.#receipts.set(`${scopeKey(scopeRef)}|${refKey(receiptRef)}`, { ref: receiptRef, receipt })
+    const key = `${scopeKey(scopeRef)}|${refKey(receiptRef)}`
+    this.#receipts.set(key, { ref: receiptRef, receipt })
+    const lookup = lookupKey(scopeRef, { resultManifestRef: receipt.resultManifestRef, draftHash: receipt.draftHash, tableId: receipt.tableId })
+    const refs = this.#byTableDraft.get(lookup) ?? new Set<string>()
+    refs.add(key)
+    this.#byTableDraft.set(lookup, refs)
   }
 
   async getReceipt(
@@ -68,6 +78,24 @@ export class InMemoryTableVerificationStore
   ): Promise<ArchivedTableVerificationReceipt | undefined> {
     assertTrustedScope(scopeRef, ctx)
     return this.#receipts.get(`${scopeKey(scopeRef)}|${refKey(receiptRef)}`)
+  }
+
+  async findReceipt(
+    scopeRef: ScopeRef,
+    input: { readonly resultManifestRef: ResourceRef; readonly draftHash: string; readonly tableId: NonEmptyString },
+    ctx: ToolContext,
+  ): Promise<ArchivedTableVerificationReceipt | undefined> {
+    assertTrustedScope(scopeRef, ctx)
+    let result: ArchivedTableVerificationReceipt | undefined
+    for (const key of this.#byTableDraft.get(lookupKey(scopeRef, input)) ?? []) {
+      const value = this.#receipts.get(key)
+      if (value === undefined) throw new Error('the exact receipt index points at unavailable content')
+      assertTableVerificationReceiptShape(value.receipt)
+      if (sha256OfCanonical(value.receipt) !== value.ref.digest || value.receipt.resultManifestDigest !== input.resultManifestRef.digest) throw new Error('the actual saved table receipt does not match its digest pins')
+      if (result !== undefined && (sha256OfCanonical(result.receipt) !== value.ref.digest || result.ref.digest !== value.ref.digest)) throw new Error('the same table/draft receipt lookup has conflicting immutable bodies')
+      if (result === undefined || refKey(value.ref) < refKey(result.ref)) result = value
+    }
+    return result === undefined ? undefined : structuredClone(result)
   }
 
   async getProgress(

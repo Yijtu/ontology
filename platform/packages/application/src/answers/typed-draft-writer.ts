@@ -18,6 +18,7 @@ import type {
   VerifiedAssertion,
 } from '@ontology/contracts'
 import { answerDraftContentHash } from '../workflow/canonical'
+import { canonicalJson } from '../profiles/canonical'
 import { typedResultManifestContentDigest } from './typed-result-manifest'
 import { rulePremiseHasSourceLimitation } from './rule-premise-bindings'
 
@@ -86,6 +87,8 @@ export interface TypedResultContext {
   readonly resultManifestDigest: Sha256Digest
   readonly finalizationReceiptRef: ResourceRef
   readonly finalizationReceiptDigest: Sha256Digest
+  /** Internal proof body used only to authorize a bounded inline preview of a complete table. */
+  readonly resultManifest?: TypedResultManifest
 }
 
 export interface TypedResultContextSource {
@@ -114,6 +117,7 @@ export function typedResultContextFor(input: {
     resultManifestDigest,
     finalizationReceiptRef: input.finalizationReceiptRef,
     finalizationReceiptDigest: input.finalizationReceiptDigest,
+    resultManifest: input.resultManifest,
   }
 }
 
@@ -521,6 +525,8 @@ const NUMERIC_TYPES = new Set(['number', 'decimal', 'integer', 'quantity'])
 const BOOLEAN_TYPES = new Set(['boolean', 'bool'])
 const ENTITY_TYPES = new Set(['entity', 'entity_ref', 'ref', 'relation_ref'])
 const MONEY_TYPES = new Set(['money', 'currency'])
+const MAX_INLINE_TABLE_PREVIEW = 128
+const RESERVED_TABLE_FIELDS = new Set(['record_id', 'sources_json'])
 
 function columnField(column: Record<string, unknown>, index: number): string {
   if (isNonEmptyString(column['semanticFieldRef'])) return column['semanticFieldRef']
@@ -546,6 +552,7 @@ function renderTable(
   resultDigest: Sha256Digest,
   runId: Uuid,
   kind: string,
+  preview?: { readonly businessFields: ReadonlySet<string>; readonly maxStatements: number },
 ): Rendered {
   const rendered = emptyRendered()
   const table = payload['table']
@@ -568,7 +575,7 @@ function renderTable(
   const subjectPointerFor = (row: number): string =>
     subjectIndex === -1 ? `/table/rowKeys/${String(row)}` : `/table/rows/${String(row)}/${String(subjectIndex)}`
 
-  for (const [rowIndex, row] of rows.entries()) {
+  rowLoop: for (const [rowIndex, row] of rows.entries()) {
     const subject = valueAt(payload, subjectPointerFor(rowIndex))
     if (typeof subject !== 'string' || subject.length === 0) continue
     for (const [columnIndex, column] of columns.entries()) {
@@ -578,6 +585,8 @@ function renderTable(
       const pointer = `/table/rows/${String(rowIndex)}/${String(columnIndex)}`
       const fieldPointer = `/table/columns/${String(columnIndex)}`
       const field = columnField(column, columnIndex)
+      if (RESERVED_TABLE_FIELDS.has(field.toLowerCase())) continue
+      if (preview !== undefined && !preview.businessFields.has(field)) continue
       if (type !== undefined && MONEY_TYPES.has(type)) {
         rendered.limitations.push('money_requires_table_manifest')
         continue
@@ -605,6 +614,7 @@ function renderTable(
             fieldRefPointer: fieldPointer,
           }],
         })
+        if (preview !== undefined && rendered.claims.length + rendered.assertions.length >= preview.maxStatements) break rowLoop
         continue
       }
       const assertionId = stableUuid(`cell:${runId}:${evidenceRef.id}:${String(rowIndex)}:${field}`)
@@ -622,9 +632,85 @@ function renderTable(
       } else if (typeof cell === 'string') {
         rendered.assertions.push({ assertionId, kind: 'string', subject, predicate: field, value: cell, references: [binding] })
       }
+      if (preview !== undefined && rendered.claims.length + rendered.assertions.length >= preview.maxStatements) break rowLoop
     }
   }
   return rendered
+}
+
+interface InlineEvidence {
+  readonly ref: ResourceRef
+  readonly resultDigest: Sha256Digest
+  readonly payload: Record<string, unknown>
+}
+
+/**
+ * Prove that the sole inline table is exactly the complete business table in the pinned
+ * result manifest. A manifest ref alone is insufficient: legacy, truncated, ambiguous, or
+ * column-mismatched results retain the existing full inline-render behavior.
+ */
+function completeFormalTableFields(
+  typedResult: TypedResultContext | undefined,
+  evidence: readonly InlineEvidence[],
+): ReadonlySet<string> | undefined {
+  if (typedResult === undefined || evidence.length !== 1) return undefined
+  const manifest = typedResult.resultManifest
+  if (manifest === undefined) return undefined
+  if (
+    typedResultManifestContentDigest(manifest) !== typedResult.resultManifestDigest ||
+    typedResult.resultManifestRef.digest !== typedResult.resultManifestDigest ||
+    manifest.schemaVersion !== 'typed-result-manifest@1' ||
+    manifest.resultKind !== 'structured_query' ||
+    !sameRef(manifest.executionBindingRef, typedResult.executionBindingRef) ||
+    manifest.domainStatus !== 'known' ||
+    manifest.coverage.truncated ||
+    manifest.limitations.length > 0 ||
+    manifest.tables.length !== 1
+  ) return undefined
+  const [entry] = evidence
+  if (entry === undefined) return undefined
+  const table = entry.payload['table']
+  if (!isRecord(table) || !Array.isArray(table['columns']) || !Array.isArray(table['rows'])) return undefined
+  const columns = table['columns'].filter(isRecord)
+  const rows = table['rows'].filter(Array.isArray)
+  const formal = manifest.tables[0]
+  const coverage = isRecord(table['coverage']) ? table['coverage'] : entry.payload['coverage']
+  const coverageReturned = isRecord(coverage) ? coverage['returned'] : undefined
+  const payloadTableId = table['tableId']
+  if (
+    formal === undefined ||
+    !formal.complete ||
+    formal.coverage.truncated ||
+    formal.coverage.returned !== rows.length ||
+    formal.totalRows !== rows.length ||
+    formal.pages.reduce((total, page) => total + page.rowCount, 0) !== formal.totalRows ||
+    formal.pages.length === 0 ||
+    manifest.coverage.returned !== formal.totalRows ||
+    !isRecord(coverage) ||
+    coverageReturned !== rows.length ||
+    coverage['truncated'] !== false ||
+    (payloadTableId !== undefined && payloadTableId !== formal.tableId)
+  ) return undefined
+
+  const businessColumns = columns.flatMap((column, index) => {
+    const field = columnField(column, index)
+    return RESERVED_TABLE_FIELDS.has(field.toLowerCase()) ? [] : [field]
+  })
+  const formalFields = formal.columns.map((column) => column.semanticPredicate)
+  if (
+    businessColumns.length === 0 ||
+    new Set(businessColumns).size !== businessColumns.length ||
+    new Set(formalFields).size !== formalFields.length ||
+    businessColumns.length !== formalFields.length ||
+    businessColumns.some((field) => !formalFields.includes(field))
+  ) return undefined
+
+  const outputDigest = sha256DigestOf(canonicalJson([{
+    ref: entry.ref,
+    resultDigest: entry.resultDigest,
+  }]))
+  if (manifest.outputDigest !== outputDigest) return undefined
+  return new Set(businessColumns)
 }
 
 /* ----------------------------------------------------------------------------------------- */
@@ -736,9 +822,11 @@ export class TypedEvidenceDraftWriter implements DraftWriterPort {
 
   async writeDraft(request: DraftWriterRequest, ctx: ToolContext): Promise<DraftWriterResult> {
     const scopeRef: ScopeRef = { tenantId: ctx.principal.tenantId, spaceId: ctx.allowedResources.spaceId }
-    const rendered = emptyRendered()
+    let rendered = emptyRendered()
     const usedEvidenceRefs: ResourceRef[] = []
     const seenEvidenceIds = new Set<string>()
+    const inlineEvidence: InlineEvidence[] = []
+    const entries: { readonly record: EvidenceRecord; readonly payload: Record<string, unknown>; readonly evidenceRef: ResourceRef }[] = []
 
     for (const entry of request.inputManifest.entries) {
       const evidenceRef = entry.ref
@@ -754,13 +842,28 @@ export class TypedEvidenceDraftWriter implements DraftWriterPort {
         usedEvidenceRefs.push(evidenceRef)
         seenEvidenceIds.add(evidenceRef.id)
       }
+      inlineEvidence.push({ ref: evidenceRef, resultDigest: record.envelope.resultDigest, payload })
+      entries.push({ record, payload, evidenceRef })
+    }
 
-      const from = this.#renderEvidence(record, payload, evidenceRef, request.runId)
+    for (const entry of entries) {
+      const from = this.#renderEvidence(entry.record, entry.payload, entry.evidenceRef, request.runId)
       merge(rendered, from)
     }
 
     if (rendered.claims.length + rendered.assertions.length === 0) {
       throw new TypedDraftWriterError('INSUFFICIENT_DATA', 'no complete result-backed statements were available for the answer')
+    }
+
+    const typedResult = await this.#options.typedResult?.resolve({ runId: request.runId }, ctx)
+    const formalBusinessFields = completeFormalTableFields(typedResult, inlineEvidence)
+    if (formalBusinessFields !== undefined) {
+      rendered = emptyRendered()
+      for (const entry of entries) {
+        const preview = { businessFields: formalBusinessFields, maxStatements: MAX_INLINE_TABLE_PREVIEW }
+        const from = this.#renderEvidence(entry.record, entry.payload, entry.evidenceRef, request.runId, preview)
+        merge(rendered, from)
+      }
     }
 
     const blocks: readonly unknown[] = [
@@ -769,8 +872,6 @@ export class TypedEvidenceDraftWriter implements DraftWriterPort {
     ]
     const limitations = [...new Set(rendered.limitations)].sort()
     const evidenceManifestHash = request.inputManifest.digest
-    const typedResult = await this.#options.typedResult?.resolve({ runId: request.runId }, ctx)
-
     if (typedResult !== undefined) {
       const contentHash = answerDraftContentHash(
         request.runId,
@@ -860,6 +961,7 @@ export class TypedEvidenceDraftWriter implements DraftWriterPort {
     payload: Record<string, unknown>,
     evidenceRef: ResourceRef,
     runId: Uuid,
+    preview?: { readonly businessFields: ReadonlySet<string>; readonly maxStatements: number },
   ): Rendered {
     const resultDigest = record.envelope.resultDigest
     if (isFactPage(payload)) return renderFacts(payload, evidenceRef, resultDigest, runId)
@@ -867,7 +969,7 @@ export class TypedEvidenceDraftWriter implements DraftWriterPort {
       return renderRelations(payload, evidenceRef, resultDigest, runId)
     }
     if (payload['resultKind'] === 'table' || payload['resultKind'] === 'statistics') {
-      return renderTable(payload, evidenceRef, resultDigest, runId, 'table')
+      return renderTable(payload, evidenceRef, resultDigest, runId, 'table', preview)
     }
     switch (record.envelope.kind) {
       case 'rule_derivation':
@@ -878,7 +980,7 @@ export class TypedEvidenceDraftWriter implements DraftWriterPort {
         // A presentable compute result renders as a table; the registered operation path emits
         // only `computation.metrics`, which is projected into row-bound quantity/money claims.
         return isRecord(payload['table'])
-          ? renderTable(payload, evidenceRef, resultDigest, runId, 'computation')
+          ? renderTable(payload, evidenceRef, resultDigest, runId, 'computation', preview)
           : renderComputeMetrics(payload, evidenceRef, resultDigest, runId)
       default: {
         const rendered = emptyRendered()

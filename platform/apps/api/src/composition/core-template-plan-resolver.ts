@@ -24,6 +24,7 @@ import type {
   WorkflowManifestStore,
   WorkflowInputManifest,
 } from '@ontology/contracts'
+import { coreCompactSourceProjection } from './core-project-query-handler'
 import { findRegisteredOperation } from '@ontology/contracts'
 import { projectCollectionRef } from '@ontology/contracts'
 import { registeredOperationDigest } from '@ontology/tool-services'
@@ -85,7 +86,7 @@ interface LoadedRunInputs {
   readonly run: Awaited<ReturnType<RunService['getRun']>>
   readonly scopeRef: ScopeRef
   readonly resolved: Awaited<ReturnType<ProfileResolver['getResolvedProfile']>>['resolved']
-  readonly scenario: CoreExampleScenario
+  readonly scenario?: CoreExampleScenario
   readonly inputManifest: WorkflowInputManifest
   readonly question: string
   readonly routeSignals: RouteSignals
@@ -464,7 +465,6 @@ export class CoreTemplatePlanResolver implements TemplatePlanResolver {
     const scenario = this.#scenarios.find((candidate) =>
       sameVersionRef(resolvedRecord.resolved.industryRef, industryRefFor(candidate)),
     )
-    if (scenario === undefined) throw new WorkflowControllerError('CAPABILITY_NOT_CONFIGURED', 'the run pins an industry package not mounted by this deployment')
 
     const question = effectiveQuestionOf(run)
     if (new TextEncoder().encode(question).byteLength > MAX_ORDINARY_QUESTION_BYTES) {
@@ -472,7 +472,7 @@ export class CoreTemplatePlanResolver implements TemplatePlanResolver {
     }
     const routeSignals = routeSignalsFor(question)
     const taskContext = await this.#loadTaskContext(run, ctx)
-    const definitionRefs = [scenario.definitionRef]
+    const definitionRefs = scenario === undefined ? [] : [scenario.definitionRef]
     let taskDefinition = taskContext.taskBinding?.actionDefinitionRef
     if (taskDefinition === undefined && taskContext.execution !== undefined && this.#semanticTasks !== undefined) {
       const fixed = taskContext.execution.request.projectRevisionRef
@@ -482,6 +482,7 @@ export class CoreTemplatePlanResolver implements TemplatePlanResolver {
     }
     const fixedTaskDefinition = taskDefinition
     if (fixedTaskDefinition !== undefined && !definitionRefs.some((ref) => sameVersionRef(ref, fixedTaskDefinition))) definitionRefs.push(fixedTaskDefinition)
+    if (definitionRefs.length === 0) throw new WorkflowControllerError('CAPABILITY_NOT_CONFIGURED', 'a stored project definition is required for this industry profile')
     const basePins: CorePlanReceiptPins = {
       runId,
       profileRef: run.profileRef,
@@ -498,7 +499,7 @@ export class CoreTemplatePlanResolver implements TemplatePlanResolver {
       run,
       scopeRef: this.#scopeRef,
       resolved: resolvedRecord.resolved,
-      scenario,
+      ...(scenario === undefined ? {} : { scenario }),
       inputManifest,
       question,
       routeSignals,
@@ -573,7 +574,7 @@ export class CoreTemplatePlanResolver implements TemplatePlanResolver {
         mappings: this.#mappings,
         resolveDefinition: async (ref, ctx) => {
           const scenario = this.#scenarios.find((candidate) => sameVersionRef(candidate.definitionRef, ref))
-          if (scenario === undefined) return undefined
+          if (scenario === undefined) return this.#semanticTasks?.options.definition(this.#scopeRef, ref, ctx)
           const definition = await this.#semanticDefinitions.getVersion({
             scopeRef: this.#scopeRef,
             namespace: scenario.namespace,
@@ -647,7 +648,7 @@ export class CoreTemplatePlanResolver implements TemplatePlanResolver {
       ...(fixedPlan === undefined ? {} : { fixedPlan }),
       signals,
       mappingRefs: [...loaded.resolved.mappingRefs],
-      definitionRefs: [loaded.scenario.definitionRef],
+      definitionRefs: [...loaded.basePins.definitionRefs],
       ...(routeClarification === undefined ? {} : { routeClarification }),
     }, request.dependencies.ctx, request.dependencies.signal)
 
@@ -817,7 +818,7 @@ export class CoreTemplatePlanResolver implements TemplatePlanResolver {
     if (loaded.execution === undefined || this.#projectQueryDescriptor === undefined) {
       throw new WorkflowControllerError('CAPABILITY_NOT_CONFIGURED', 'the fixed project query snapshot resolver is not mounted')
     }
-    const descriptor = await this.#projectQueryDescriptor(loaded.execution, parsed.objectId, ctx)
+    const descriptor = coreCompactSourceProjection(await this.#projectQueryDescriptor(loaded.execution, parsed.objectId, ctx))
     const mapping = projectSnapshotMappingRef({ descriptor })
     const queryPlan: SemanticQueryPlan = {
       mode: 'semantic',
@@ -920,6 +921,7 @@ export class CoreTemplatePlanResolver implements TemplatePlanResolver {
 
   #fixedFactsPlan(loaded: LoadedRunInputs): ExecutablePlan | undefined {
     if (!loaded.question.trim().startsWith('facts:')) return undefined
+    if (loaded.scenario === undefined) throw new WorkflowControllerError('UNSUPPORTED_QUERY', 'the legacy facts shorthand requires a controlled startup scenario; use the actual project query task')
     if (!loaded.resolved.toolBindings.some((binding) => binding.toolId === 'ontology_lookup' && binding.enabled)) {
       throw new WorkflowControllerError('CAPABILITY_NOT_CONFIGURED', 'the resolved profile does not enable ontology_lookup for facts tasks')
     }

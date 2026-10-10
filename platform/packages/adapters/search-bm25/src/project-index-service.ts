@@ -550,7 +550,7 @@ export class ProjectDocumentIndexService {
           failedCount: 0,
           targetDigest: receipt.targetDigest,
           fenceRevision: receipt.visibilityEpoch,
-          idempotencyKey: `document-index:${projectId}:${receipt.generation}`,
+          idempotencyKey: `document-index:${projectRevisionRef.projectId}:${projectRevisionRef.revision}:${projectRevisionRef.digest}:${receipt.generation}`,
           requestDigest: sha256DigestOf(
             JSON.stringify({
               projectRevisionRef,

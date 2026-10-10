@@ -80,6 +80,7 @@ function isMappingRefArray(value: unknown): value is MappingRef[] {
 
 export function assertProjectRevisionBodyShape(value: unknown): asserts value is ProjectRevisionBody {
   if (!isRecord(value)) throw invalidRevision('project revision body must be an object')
+  if (value.executionPurpose !== undefined && value.executionPurpose !== 'synthetic_validation') throw invalidRevision('executionPurpose must be the host synthetic validation marker')
   if (value.schemaVersion !== 'project-revision@1') {
     throw invalidRevision('project revision body must declare schemaVersion project-revision@1')
   }

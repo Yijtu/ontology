@@ -1,33 +1,35 @@
 import {
-  buildDefinitionRecord, canonicalJson, currentDefinitionProjection,
+  buildDefinitionRecord, canonicalJson, publishedPackContentDigest, contentDigestOf, currentDefinitionProjection,
   currentRuleActionProjection, definitionApprovalPins, ruleActionPublicationPins, SourceGroundingBudget,
   definitionGeneratedContentDigest, definitionEditedContentDigest, ruleActionGroundedContentDigest, ruleActionDeclaredContentDigest,
   TBOX_RESPONSE_SCHEMA_REF, DEFINITION_EDIT_RESPONSE_SCHEMA_REF, DEFINITION_SOURCE_CONFIRMATION_SCHEMA_REF, RULE_ACTION_RESPONSE_SCHEMA_REF,
   groundingFragments, selectedGrounding,
 } from '@ontology/application'
 import {
-  CompetencyQuestionError, isRecord, isToolContext, isUuid, isVersionRef,
+  CompetencyQuestionError, IndustryAssetPublicationError, assertPublishedPackAssetShape, isRecord, isToolContext, isUuid, isVersionRef,
   relationPremisesFromDefinition,
 } from '@ontology/contracts'
 import type {
-  AssetCandidateStore, AssetCandidateVersion, CandidateSourceSpan, CandidateStore,
+  AssetCandidateStore, AssetCandidateVersion, AssetDraftVersion, CandidateSourceSpan, CandidateStore,
   CompetencyValidationTarget, GroundedSourceContent, IndustryWorkspaceStore,
   ResolvedProfileRef, ReviewableCandidateReader, RuleActionCandidateStore, RuleActionCandidateVersion, RuleActionGenerationStore,
-  RuleCandidate, RuleCandidateVersion, RuleDependencyCandidateReference, ScopeRef,
+  RuleCandidate, RuleCandidateVersion, PublishedPackAsset, PublishedPackAssetStore, PublishedPackRuleVersion, PublishedRuleDeclarationReader, RuleDependencyCandidateReference, ScopeRef,
   SemanticDefinitionStore, SemanticDefinitionVersion, SemanticPublicationStore, SourceGroundingPort,
   SemanticDefinitionRecord, ToolContext, VersionRef,
 } from '@ontology/contracts'
+import type { CompetencyRuleAlias, CompetencyPackRuleAlias, CompetencyTemplateRuleSource } from './competency-rule-origins'
 import { definitionVersionDigest, FiniteGrammarRuleSupportValidator, publishedRuleRef } from '@ontology/semantic-engine'
 
 /** Structural public seam shared with the actual project preparer; no private imports. */
 export interface CompetencyTargetTemplate {
   readonly schemaVersion: 'competency-template-binding@1'
+  readonly sourceOrigin?: 'published_pack'
   readonly declarationDefinitionRef: VersionRef
   readonly definitionRef: VersionRef
   readonly namespace: string
   readonly packRef: VersionRef
   readonly profileRef: ResolvedProfileRef
-  readonly rules: readonly { readonly declarationRef: VersionRef; readonly publishedRef: VersionRef; readonly sourceCandidateId: string; readonly publicationId: string }[]
+  readonly rules: readonly CompetencyRuleAlias[]
   readonly dataMode: 'synthetic'
   readonly businessApproval: 'none'
 }
@@ -41,6 +43,10 @@ export interface CompetencyValidationTargetReaderOptions {
   readonly reviewableCandidates: ReviewableCandidateReader
   readonly definitions: Pick<SemanticDefinitionStore, 'findVersion'>
   readonly candidates: Pick<CandidateStore, 'getCandidate'>
+  readonly publishedRules?: PublishedRuleDeclarationReader
+  readonly packs?: Pick<PublishedPackAssetStore, 'findByRef'>
+  /** Host verifies the actual bounded publication receipt chain; never select a latest draft. */
+  readonly sourceDraft?: (scope: ScopeRef, workspaceId: string, currentDraft: AssetDraftVersion, ctx: ToolContext, signal: AbortSignal) => Promise<AssetDraftVersion | undefined>
   readonly grounding: SourceGroundingPort
 }
 
@@ -101,7 +107,7 @@ function ruleOrigins(value: unknown, actual: ReadonlyMap<string, CandidateSource
 export function createCompetencyValidationTargetReader(options: CompetencyValidationTargetReaderOptions) {
   const support = new FiniteGrammarRuleSupportValidator()
   return async (target: CompetencyValidationTarget, template: CompetencyTargetTemplate,
-    suppliedDefinition: SemanticDefinitionVersion, suppliedRules: readonly RuleCandidate[], ctx: ToolContext, signal: AbortSignal): Promise<boolean> => {
+    suppliedDefinition: SemanticDefinitionVersion, suppliedRules: readonly CompetencyTemplateRuleSource[], ctx: ToolContext, signal: AbortSignal): Promise<boolean> => {
     signal.throwIfAborted()
     if (!isToolContext(ctx) || ctx.principal.tenantId !== ctx.allowedResources.tenantId) throw new CompetencyQuestionError('SCOPE_MISMATCH', 'competency target requires a consistent trusted scope')
     const scope: ScopeRef = { tenantId: ctx.principal.tenantId, spaceId: ctx.allowedResources.spaceId }
@@ -109,12 +115,22 @@ export function createCompetencyValidationTargetReader(options: CompetencyValida
       || target.definitionApprovalPins.length > MAX_CANDIDATES || target.ruleActionPins.length > MAX_CANDIDATES
       || template.schemaVersion !== 'competency-template-binding@1' || template.dataMode !== 'synthetic' || template.businessApproval !== 'none'
       || template.rules.length > MAX_CANDIDATES || suppliedRules.length !== template.rules.length) return false
+    if (template.sourceOrigin !== undefined && template.sourceOrigin !== 'published_pack' ||
+      (template.sourceOrigin === 'published_pack' ? template.rules.some((alias) => alias.origin !== 'pack') : template.rules.some((alias) => alias.origin === 'pack'))) return false
 
     const readTarget = async () => {
       const workspace = await options.workspaces.getWorkspace(scope, target.workspaceId, ctx)
       if (workspace === undefined || workspace.state === 'archived' || workspace.headRevision !== target.revision) return undefined
       const draft = await options.workspaces.getDraft(scope, target.workspaceId, workspace.headRevision, ctx)
       if (draft === undefined || draft.revision !== target.revision) return undefined
+      let generationDraft = draft
+      if (template.sourceOrigin === 'published_pack' && options.sourceDraft !== undefined) {
+        const resolved = await options.sourceDraft(scope, target.workspaceId, draft, ctx, signal)
+        if (resolved === undefined || resolved.workspaceId !== target.workspaceId) return undefined
+        const stored = await options.workspaces.getDraft(scope, target.workspaceId, resolved.revision, ctx)
+        if (stored === undefined || !equal(stored, resolved)) return undefined
+        generationDraft = stored
+      }
       const definitions = await options.definitionCandidates.listCandidates(scope, target.workspaceId, { limit: MAX_CANDIDATES }, ctx)
       const rules = await options.ruleActions.list(scope, target.workspaceId, { limit: MAX_CANDIDATES }, ctx)
       if (definitions.length >= MAX_CANDIDATES || rules.length >= MAX_CANDIDATES) return undefined
@@ -150,13 +166,13 @@ export function createCompetencyValidationTargetReader(options: CompetencyValida
         reviewPins.push({ candidateId: row.candidateId, contentDigest: row.contentDigest })
         const context = row.generationContext
         if (context !== undefined && (context.issues.length > 0 || context.inputDraftRef.workspaceId !== target.workspaceId
-          || context.inputDraftRef.revision !== draft.revision || context.inputDraftRef.digest !== draft.digest
+          || context.inputDraftRef.revision !== generationDraft.revision || context.inputDraftRef.digest !== generationDraft.digest
           || context.sourceBindings.length === 0)) return undefined
         if (context !== undefined) {
           const batch = await options.ruleGeneration.getById(scope, context.batchId, ctx)
           if (batch === undefined || batch.workspaceId !== target.workspaceId || batch.generationFamily !== 'rule_action' || batch.state !== 'completed'
             || !equal(batch.inputDraftRef, context.inputDraftRef) || batch.contextDigest !== context.contextDigest
-            || !same(batch.documentSetRef, draft.documentSetRef) || !equal(batch.sourceRefs, context.inputSourceRefs)
+            || !same(batch.documentSetRef, generationDraft.documentSetRef) || !equal(batch.sourceRefs, context.inputSourceRefs)
             || !batch.candidateIds.includes(row.candidateId) || !same(batch.responseSchemaRef, RULE_ACTION_RESPONSE_SCHEMA_REF)
             || ruleActionGroundedContentDigest(row) !== row.contentDigest) return undefined
           if (batch.sourceConfirmationOf !== undefined) {
@@ -166,15 +182,15 @@ export function createCompetencyValidationTargetReader(options: CompetencyValida
             predecessors.push(prior)
           }
           generationBatches.push(batch)
-        } else if (ruleActionDeclaredContentDigest({ ...row, draftRevision: draft.revision, draftDigest: draft.digest }) !== row.contentDigest) {
+        } else if (ruleActionDeclaredContentDigest({ ...row, draftRevision: generationDraft.revision, draftDigest: generationDraft.digest }) !== row.contentDigest) {
           return undefined
         }
       }
       for (const row of projection) {
-        if (row.inputDraftRef.workspaceId !== target.workspaceId || row.inputDraftRef.revision !== draft.revision || row.inputDraftRef.digest !== draft.digest) return undefined
+        if (row.inputDraftRef.workspaceId !== target.workspaceId || row.inputDraftRef.revision !== generationDraft.revision || row.inputDraftRef.digest !== generationDraft.digest) return undefined
         const batch = await options.definitionCandidates.getBatch(scope, row.batchId, ctx)
         if (batch === undefined || batch.workspaceId !== target.workspaceId || batch.state !== 'completed' || !equal(batch.inputDraftRef, row.inputDraftRef)
-          || !same(batch.documentSetRef, draft.documentSetRef)) return undefined
+          || !same(batch.documentSetRef, generationDraft.documentSetRef)) return undefined
         if (same(batch.responseSchemaRef, TBOX_RESPONSE_SCHEMA_REF)) {
           if (definitionGeneratedContentDigest(row) !== row.contentDigest || batch.schemaDigest !== row.inputDraftRef.contextDigest) return undefined
         } else if (same(batch.responseSchemaRef, DEFINITION_EDIT_RESPONSE_SCHEMA_REF)) {
@@ -192,7 +208,7 @@ export function createCompetencyValidationTargetReader(options: CompetencyValida
         } else return undefined
         definitionBatches.push(batch)
       }
-      return { workspace, draft, projection, rules: current, definitionBatches, generationBatches, predecessors, approvals: approvals.pins.map(({ candidateId, contentDigest }) => ({ candidateId, contentDigest })), reviewPins }
+      return { workspace, draft, generationDraft, projection, rules: current, definitionBatches, generationBatches, predecessors, approvals: approvals.pins.map(({ candidateId, contentDigest }) => ({ candidateId, contentDigest })), reviewPins }
     }
 
     const initial = await readTarget()
@@ -205,14 +221,46 @@ export function createCompetencyValidationTargetReader(options: CompetencyValida
     if (!equal(definitionSemantics(assembled), definitionSemantics(definition))) return false
 
     if (new Set(suppliedRules.map((row) => row.ruleId)).size !== suppliedRules.length) return false
-    const actualRules = new Map<string, { candidate: RuleCandidate; declarationRef: VersionRef; publishedRef: VersionRef }>()
+    type PackDeclaration = NonNullable<PublishedPackAsset['ruleDeclarations']>[number]
+    type ActualRule = { readonly origin: 'extracted'; readonly candidate: RuleCandidate; readonly declarationRef: VersionRef; readonly publishedRef: VersionRef }
+      | { readonly origin: 'pack'; readonly candidate: PublishedPackRuleVersion; readonly declaration: PackDeclaration; readonly declarationRef: VersionRef; readonly publishedRef: VersionRef }
+    const actualRules = new Map<string, ActualRule>()
+    const packAliases = template.rules.filter((alias): alias is CompetencyPackRuleAlias => alias.origin === 'pack')
+    const readPack = async () => {
+      if (template.sourceOrigin !== 'published_pack') return undefined
+      if (options.publishedRules === undefined || options.packs === undefined || packAliases.some((alias) => !same(alias.publishedPackRef, template.packRef))) return undefined
+      const asset = await options.packs.findByRef(scope, template.packRef, ctx)
+      if (asset === undefined) return undefined
+      assertPublishedPackAssetShape(asset)
+      if (!same(asset.packRef, template.packRef) || !same(asset.definitionRef, template.definitionRef) || publishedPackContentDigest(asset) !== template.packRef.digest || asset.ruleDeclarations === undefined || contentDigestOf(asset.ruleDeclarations) !== asset.manifest.rulePolicyRef.digest || asset.packAsset.ruleDeclarationsRef?.digest !== asset.manifest.rulePolicyRef.digest) return undefined
+      let rules: readonly PublishedPackRuleVersion[]
+      try { rules = await options.publishedRules.read(scope, { packRef: template.packRef, definitionRef: template.definitionRef }, ctx) }
+      catch (error) { if (error instanceof IndustryAssetPublicationError && ['VALIDATION_BLOCKED','FORBIDDEN','VERSION_CONFLICT','SCHEMA_NOT_FOUND'].includes(error.code)) return undefined; throw error }
+      return { asset, rules }
+    }
+    const packOrigin = await readPack()
+    if (template.sourceOrigin === 'published_pack' && packOrigin === undefined) return false
     for (const alias of template.rules) {
+      if (!isVersionRef(alias.declarationRef) || !isVersionRef(alias.publishedRef) || !isUuid(alias.sourceCandidateId)) return false
+      if (alias.origin === 'pack') {
+        if (!same(alias.declarationRef, alias.publishedRef) || !isVersionRef(alias.publishedPackRef) || Object.keys(alias).some((key) => !['origin','declarationRef','publishedRef','sourceCandidateId','publishedPackRef'].includes(key))) return false
+        const published = packOrigin?.rules.find((row) => row.sourceCandidateId === alias.sourceCandidateId && row.ruleVersionId === alias.sourceCandidateId && same(row.ruleRef, alias.publishedRef) && same(row.publishedPackRef, alias.publishedPackRef))
+        const declaration = packOrigin?.asset.ruleDeclarations?.find((row) => row.candidateId === alias.sourceCandidateId && row.contentDigest === alias.publishedRef.digest)
+        const declared = suppliedRules.find((row): row is PublishedPackRuleVersion => 'publishedPackRef' in row && row.sourceCandidateId === alias.sourceCandidateId && row.ruleVersionId === alias.sourceCandidateId && same(row.ruleRef, alias.publishedRef))
+        const current = initial.rules.find((row) => row.candidateId === alias.sourceCandidateId)
+        if (published === undefined || declared === undefined || declaration === undefined || current?.kind !== 'rule' || !equal(published, declared) ||
+          current.contentDigest !== declaration.contentDigest || !equal(current.payload, declaration.payload) || !equal(current.sourceRefs, declaration.sourceRefs) || !equal(current.sourceSpans, declaration.sourceSpans) ||
+          current.enabledAt !== declaration.enabledAt || !equal(current.generationCallRef, declaration.generationCallRef) || actualRules.has(published.ruleId)) return false
+        actualRules.set(published.ruleId, { origin: 'pack', candidate: published, declaration, declarationRef: alias.declarationRef, publishedRef: alias.publishedRef })
+        continue
+      }
+      if (alias.origin !== undefined && alias.origin !== 'extracted' || Object.keys(alias).some((key) => !['origin','declarationRef','publishedRef','sourceCandidateId','publicationId'].includes(key))) return false
       if (!isUuid(alias.sourceCandidateId) || !isUuid(alias.publicationId)) return false
       const inventory = await options.reviews.listRuleVersions(scope, { sourceCandidateId: alias.sourceCandidateId, publicationId: alias.publicationId, limit: 2 }, ctx)
       if (inventory.length !== 1) return false
       const published = inventory.find((row) => same(publishedRuleRef(row), alias.publishedRef))
       const candidate = published === undefined ? undefined : await options.candidates.getCandidate(scope, published.sourceCandidateId, ctx)
-      const declared = candidate?.kind === 'rule' ? suppliedRules.find((row) => row.candidateId === candidate.candidateId) : undefined
+      const declared = candidate?.kind === 'rule' ? suppliedRules.find((row): row is RuleCandidate => !('publishedPackRef' in row) && row.candidateId === candidate.candidateId) : undefined
       if (candidate?.kind === 'rule' && (candidate.issues.length > 0 || candidate.state === 'failed' || candidate.state === 'rejected')) return false
       const origin = published === undefined ? undefined : await options.reviews.getPublication(scope, published.publicationId, ctx)
       if (published === undefined || candidate?.kind !== 'rule' || declared === undefined || !equal(candidate, declared) || origin === undefined || !same(origin.schemaRef, definition.ref)
@@ -223,7 +271,7 @@ export function createCompetencyValidationTargetReader(options: CompetencyValida
       const view = await options.reviewableCandidates.readCandidate(scope, candidate.candidateId, ctx)
       if (view?.domain !== 'instance' || view.kind !== 'rule' || view.candidateId !== candidate.candidateId || view.state !== candidate.state
         || view.contentDigest === undefined || review?.decision !== 'approve' || review.contentDigest !== view.contentDigest || actualRules.has(candidate.ruleId)) return false
-      actualRules.set(candidate.ruleId, { candidate, declarationRef: alias.declarationRef, publishedRef: alias.publishedRef })
+      actualRules.set(candidate.ruleId, { origin: 'extracted', candidate, declarationRef: alias.declarationRef, publishedRef: alias.publishedRef })
     }
     const currentRules = initial.rules.filter((row): row is RuleCandidateVersion => row.kind === 'rule' && row.payload.kind === 'rule')
     if (currentRules.length !== actualRules.size) return false
@@ -259,7 +307,12 @@ export function createCompetencyValidationTargetReader(options: CompetencyValida
     }).sort((a, b) => canonicalJson(a).localeCompare(canonicalJson(b)))
     for (const row of currentRules) {
       const actual = actualRules.get(row.payload.ruleId)
-      if (actual === undefined || !equal(row.payload.applicability, { objectId: actual.candidate.objectId })
+      if (actual === undefined) return false
+      if (actual.origin === 'pack') {
+        // The same reviewed enabled candidate is published directly; do not synthesize
+        // an extraction body or normalize away applicability/source/dependency fields.
+        if (row.candidateId !== actual.declaration.candidateId || row.contentDigest !== actual.declaration.contentDigest || !equal(row.payload, actual.declaration.payload)) return false
+      } else if (!equal(row.payload.applicability, { objectId: actual.candidate.objectId })
         || !equal(normalize(row.payload.condition, 'target'), normalize(actual.candidate.expression, 'template'))
         || !equal(normalize(row.payload.exceptions, 'target'), normalize(actual.candidate.exceptions, 'template'))
         || !equal(row.payload.conclusion, actual.candidate.conclusion)
@@ -304,7 +357,10 @@ export function createCompetencyValidationTargetReader(options: CompetencyValida
     // Template candidate bodies and their human review heads are fenced too.
     const finalDefinition = await options.definitions.findVersion(template.namespace, template.definitionRef.id, template.definitionRef.version, scope, ctx)
     if (!equal(finalDefinition, definition)) return false
+    const finalPackOrigin = await readPack()
+    if (packOrigin !== undefined && (finalPackOrigin === undefined || !equal(finalPackOrigin, packOrigin))) return false
     for (const actual of actualRules.values()) {
+      if (actual.origin === 'pack') continue
       const candidate = await options.candidates.getCandidate(scope, actual.candidate.candidateId, ctx)
       const revision = await options.reviews.latestReviewRevision(scope, actual.candidate.candidateId, ctx)
       const review = await options.reviews.getReview(scope, actual.candidate.candidateId, revision, ctx)

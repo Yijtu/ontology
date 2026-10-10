@@ -8,7 +8,12 @@
       "title": "IndustryWorkspaceState",
       "description": "Draft lifecycle. `published` and `archived` are terminal for the current head; editing appends a new draft revision.",
       "type": "string",
-      "enum": ["draft", "review", "published", "archived"]
+      "enum": [
+        "draft",
+        "review",
+        "published",
+        "archived"
+      ]
     },
     "IndustryWorkspaceApplicability": {
       "title": "IndustryWorkspaceApplicability",
@@ -32,7 +37,12 @@
       "description": "The business boundary the workspace models: goals it targets, what is in scope and what is explicitly excluded, plus applicability. Excluded entries are kept so the boundary stays falsifiable instead of silently shrinking.",
       "type": "object",
       "additionalProperties": false,
-      "required": ["goals", "included", "excluded", "applicability"],
+      "required": [
+        "goals",
+        "included",
+        "excluded",
+        "applicability"
+      ],
       "properties": {
         "goals": {
           "type": "array",
@@ -99,7 +109,11 @@
       "description": "A logical definition id pinned to one immutable candidate version. A content-changing edit appends a new candidate id; the digest lets a reader detect a candidate that was replaced instead of edited.",
       "type": "object",
       "additionalProperties": false,
-      "required": ["logicalId", "candidateId", "digest"],
+      "required": [
+        "logicalId",
+        "candidateId",
+        "digest"
+      ],
       "properties": {
         "logicalId": {
           "$ref": "./common.schema.json#/$defs/NonEmptyString"
@@ -117,7 +131,13 @@
       "description": "One append-only draft revision of an industry workspace. `documentSetRef` fixes the sources the draft was generated from; candidate refs point at immutable candidate versions, never at mutable payloads.",
       "type": "object",
       "additionalProperties": false,
-      "required": ["workspaceId", "revision", "digest", "documentSetRef", "candidateRefs"],
+      "required": [
+        "workspaceId",
+        "revision",
+        "digest",
+        "documentSetRef",
+        "candidateRefs"
+      ],
       "properties": {
         "workspaceId": {
           "$ref": "./common.schema.json#/$defs/Uuid"
@@ -142,6 +162,52 @@
         },
         "syntheticExampleSetRef": {
           "$ref": "./common.schema.json#/$defs/ResourceRef"
+        },
+        "validationRef": {
+          "$ref": "./common.schema.json#/$defs/ResourceRef"
+        },
+        "publicationCheckpoint": {
+          "$ref": "#/$defs/AssetDraftPublicationCheckpoint"
+        }
+      }
+    },
+    "AssetDraftReference": {
+      "title": "AssetDraftReference",
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "workspaceId",
+        "revision",
+        "digest"
+      ],
+      "properties": {
+        "workspaceId": {
+          "$ref": "./common.schema.json#/$defs/Uuid"
+        },
+        "revision": {
+          "$ref": "./common.schema.json#/$defs/RevisionString"
+        },
+        "digest": {
+          "$ref": "./common.schema.json#/$defs/Sha256Digest"
+        }
+      }
+    },
+    "AssetDraftPublicationCheckpoint": {
+      "title": "AssetDraftPublicationCheckpoint",
+      "description": "Trusted receipt written atomically with the actual pack publication; it never changes the original producer draft or human approval.",
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "sourceDraftRef",
+        "packRef",
+        "validationRef"
+      ],
+      "properties": {
+        "sourceDraftRef": {
+          "$ref": "#/$defs/AssetDraftReference"
+        },
+        "packRef": {
+          "$ref": "./common.schema.json#/$defs/VersionRef"
         },
         "validationRef": {
           "$ref": "./common.schema.json#/$defs/ResourceRef"

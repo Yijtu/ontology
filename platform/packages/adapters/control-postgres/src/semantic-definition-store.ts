@@ -14,6 +14,7 @@ import type {
   SemanticDefinitionStore,
   SemanticDefinitionVersion,
   ToolContext,
+  VersionRef,
 } from '@ontology/contracts'
 import { ControlPostgresDatabase } from './database'
 
@@ -71,6 +72,17 @@ export class PostgresSemanticDefinitionStore implements SemanticDefinitionStore 
 
   constructor(database: ControlPostgresDatabase) {
     this.#database = database
+  }
+
+  async findVersionByRef(scopeRef: ScopeRef, ref: VersionRef, ctx: ToolContext): Promise<SemanticDefinitionVersion | undefined> {
+    return this.#withScope(scopeRef, ctx, async (query) => {
+      const result = await query.query<VersionRow>(`SELECT definition FROM agent_platform.semantic_definition_versions
+        WHERE tenant_id = current_setting('app.tenant_id')::uuid AND space_id = current_setting('app.space_id')::uuid
+        AND definition_id = $1 AND version = $2 AND definition->'ref'->>'digest' = $3 LIMIT 2`, [ref.id, ref.version, ref.digest])
+      if (result.rows.length > 1) throw new SemanticDefinitionStoreError('VERSION_EXISTS', 'the exact immutable definition reference is ambiguous')
+      const row = result.rows[0]
+      return row === undefined ? undefined : definitionVersionFromRecord(row.definition, scopeRef)
+    })
   }
 
   async findVersion(

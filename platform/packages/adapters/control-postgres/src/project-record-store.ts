@@ -4,6 +4,7 @@ import {
   assertProjectRecordVersionShape,
   isToolContext,
   isUuid,
+  isRevisionString,
 } from '@ontology/contracts'
 import type {
   AppendProjectRecordResult,
@@ -187,6 +188,20 @@ export class PostgresProjectRecordStore implements ProjectRecordStore {
     return this.#withScope(scopeRef, ctx, async (query) => {
       const latest = await this.#latest(query, projectId, recordId)
       return latest?.body
+    })
+  }
+
+  async getRecordVersion(scopeRef: ScopeRef,projectId: Uuid,recordId: Uuid,revision: string,ctx: ToolContext): Promise<ProjectRecordVersion | undefined> {
+    if (!isUuid(projectId) || !isUuid(recordId) || !isRevisionString(revision)) throw new ProjectMappingStoreError('INVALID_RECORD','an exact scoped project, record and immutable revision are required')
+    return this.#withScope(scopeRef,ctx,async (query) => {
+      const found = await query.query<RecordRow>(`SELECT ${RECORD_SELECT} FROM agent_platform.project_record_versions
+        WHERE tenant_id=current_setting('app.tenant_id')::uuid AND space_id=current_setting('app.space_id')::uuid
+        AND project_id=$1::uuid AND record_id=$2::uuid AND revision=$3::bigint`,[projectId,recordId,revision])
+      const body = found.rows[0]?.body
+      if (body === undefined) return undefined
+      assertProjectRecordVersionShape(body)
+      if (body.projectId !== projectId || body.recordId !== recordId || body.revision !== revision) throw new ProjectMappingStoreError('INVALID_RECORD','the immutable record body does not match its exact physical selector')
+      return body
     })
   }
 

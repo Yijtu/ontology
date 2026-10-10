@@ -104,6 +104,7 @@ function revisionBodyOf(revision: ProjectRevision): ProjectRevisionBody {
     schemaVersion: 'project-revision@1',
     projectId: revision.ref.projectId,
     revision: revision.ref.revision,
+    ...(revision.executionPurpose === undefined ? {} : { executionPurpose: revision.executionPurpose }),
     industryPackRef: revision.industryPackRef,
     definitionRef: revision.definitionRef,
     mappingRefs: revision.mappingRefs,
@@ -127,6 +128,7 @@ function toRevision(row: RevisionRow): ProjectRevision {
   }
   return {
     ref,
+    ...(body.executionPurpose === undefined ? {} : { executionPurpose: body.executionPurpose }),
     industryPackRef: body.industryPackRef,
     definitionRef: body.definitionRef,
     mappingRefs: body.mappingRefs,
@@ -172,9 +174,13 @@ function toConfirmation(row: ConfirmationRow): FieldConfirmationEventRecord {
  */
 export class PostgresProjectStore implements ProjectStore {
   readonly #database: ControlPostgresDatabase
+  readonly #excludeSyntheticValidationProjects: boolean
+  readonly #requirePublishedInputEvolution: boolean
 
-  constructor(database: ControlPostgresDatabase) {
+  constructor(database: ControlPostgresDatabase, options: { readonly excludeSyntheticValidationProjects?: boolean; readonly requirePublishedInputEvolution?: boolean } = {}) {
     this.#database = database
+    this.#excludeSyntheticValidationProjects = options.excludeSyntheticValidationProjects === true
+    this.#requirePublishedInputEvolution = options.requirePublishedInputEvolution === true
   }
 
   async createProject(
@@ -293,6 +299,10 @@ export class PostgresProjectStore implements ProjectStore {
            WHERE tenant_id = current_setting('app.tenant_id')::uuid
              AND space_id = current_setting('app.space_id')::uuid
              AND ($1::text IS NULL OR state = $1)
+             ${this.#excludeSyntheticValidationProjects ? `AND NOT EXISTS (SELECT 1 FROM agent_platform.project_revisions AS purpose_revision
+               WHERE purpose_revision.tenant_id=projects.tenant_id AND purpose_revision.space_id=projects.space_id
+                 AND purpose_revision.project_id=projects.project_id AND purpose_revision.revision=projects.head_revision
+                 AND purpose_revision.body->>'executionPurpose'='synthetic_validation')` : ''}
            ORDER BY updated_at, project_id
            LIMIT $2`,
         [filter.state ?? null, limit],
@@ -387,6 +397,19 @@ export class PostgresProjectStore implements ProjectStore {
           AND project_id=$1::uuid AND state IN ('queued','running','awaiting_review','needs_human','failed') LIMIT 1`, [projectId])
       if (live.rows.length > 0 || (input.evolution === undefined && projectRow.active_revision !== head)) throw new ProjectStoreError('VERSION_CONFLICT', 'complete or cancel the explicit evolution before changing this project')
       const previous = await this.#revisionAt(query,projectId,head)
+      if (previous === undefined || previous.body.executionPurpose !== revision.executionPurpose) throw new ProjectStoreError('INVALID_REVISION', 'a project execution purpose is immutable across all revisions')
+      if (this.#requirePublishedInputEvolution && input.evolution === undefined) {
+        const changed = await query.query<{ changed: boolean }>('SELECT ($1::jsonb IS DISTINCT FROM $2::jsonb) OR ($3::jsonb IS DISTINCT FROM $4::jsonb) AS changed',[JSON.stringify(previous.body.mappingRefs),JSON.stringify(revision.mappingRefs),JSON.stringify(previous.body.documentSetRef),JSON.stringify(revision.documentSetRef)])
+        if (changed.rows[0]?.changed === true) {
+          // Publication takes this same project's SHARE lock. Reading after our UPDATE
+          // lock therefore includes a publication that won the scan-to-append race.
+          const published = await query.query(`SELECT 1 FROM agent_platform.published_statements s
+            WHERE s.tenant_id=current_setting('app.tenant_id')::uuid AND s.space_id=current_setting('app.space_id')::uuid AND s.status='active'
+              AND EXISTS (SELECT 1 FROM jsonb_array_elements(CASE WHEN jsonb_typeof(s.value#>'{provenance,sources}')='array' THEN s.value#>'{provenance,sources}' ELSE '[]'::jsonb END) pin
+                WHERE pin#>>'{projectRevisionRef,projectId}'=$1) LIMIT 1`,[projectId])
+          if (published.rows.length > 0) throw new ProjectStoreError('VERSION_CONFLICT','a project with actual published original facts must use explicit evolution before remounting input sources or mappings')
+        }
+      }
       if(input.evolution===undefined && (previous?.body.definitionRef.id!==revision.definitionRef.id || previous.body.definitionRef.version!==revision.definitionRef.version || previous.body.definitionRef.digest!==revision.definitionRef.digest)) {
         const populated=await query.query(`SELECT 1 FROM agent_platform.project_record_versions WHERE tenant_id=current_setting('app.tenant_id')::uuid AND space_id=current_setting('app.space_id')::uuid AND project_id=$1::uuid
           UNION ALL SELECT 1 FROM agent_platform.published_rule_versions WHERE tenant_id=current_setting('app.tenant_id')::uuid AND space_id=current_setting('app.space_id')::uuid AND project_id=$1::uuid LIMIT 1`,[projectId])

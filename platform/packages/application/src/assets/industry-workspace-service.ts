@@ -3,6 +3,7 @@ import {
   IndustryWorkspaceStoreError,
   JobStoreError,
   assertIndustryWorkspaceShape,
+  assetDraftContent,
   isToolContext,
 } from '@ontology/contracts'
 import type {
@@ -179,17 +180,7 @@ function sortedCandidateRefs(refs: readonly AssetDraftCandidateRef[]): AssetDraf
 
 /** Content digest of one immutable draft revision, excluding the digest field itself. */
 function draftDigest(draft: Omit<AssetDraftVersion, 'digest'>): Sha256Digest {
-  return sha256DigestOf(
-    canonicalJson({
-      workspaceId: draft.workspaceId,
-      revision: draft.revision,
-      basePackRef: draft.basePackRef ?? null,
-      documentSetRef: draft.documentSetRef,
-      candidateRefs: sortedCandidateRefs(draft.candidateRefs),
-      syntheticExampleSetRef: draft.syntheticExampleSetRef ?? null,
-      validationRef: draft.validationRef ?? null,
-    }),
-  )
+  return sha256DigestOf(canonicalJson(assetDraftContent(draft)))
 }
 
 function changesOf(

@@ -11,6 +11,7 @@ import type {
   ProjectionCommitResult,
   ProjectionSlice,
   ProjectionState,
+  RulePremiseReplayInput,
   ReadProjectionSlicesRequest,
   ScopeRef,
   SourceWatermark,
@@ -80,6 +81,47 @@ function resolveScope(scopeRef: ScopeRef, ctx: ToolContext): void {
 // contain it.
 function sliceKey(slice: ProjectionSlice): string {
   return `${slice.propositionKey}\u001f${slice.validity.validFrom}\u001f${slice.validity.validTo ?? ''}\u001f${slice.recordedSeq}`
+}
+
+type PremiseSource = Omit<RulePremiseReplayInput, 'request' | 'evaluatedRuleIds' | 'complete'>
+
+function samePremiseSource(left: PremiseSource, right: PremiseSource): boolean {
+  const entries = Object.entries<unknown>(left)
+  const values = new Map(Object.entries<unknown>(right))
+  return entries.length === values.size && entries.every(([key, value]) => values.has(key) && values.get(key) === value)
+}
+
+/** Transport shared source objects once; SQL restores every original artifact field. */
+function projectionWritePayload(slices: readonly ProjectionSlice[]) {
+  const sources: PremiseSource[] = []
+  const byStatements = new Map<PremiseSource['attributeStatements'], number[]>()
+  const rows = slices.map((slice) => {
+    const artifacts = slice.conclusion.ruleArtifacts?.map((artifact) => {
+      const premise = artifact.premiseInput
+      if (premise === undefined) return { body: artifact }
+      const { request, evaluatedRuleIds, complete, ...source } = premise
+      const candidates = byStatements.get(source.attributeStatements) ?? []
+      let index = candidates.find((candidate) => {
+        const previous = sources[candidate]
+        return previous !== undefined && samePremiseSource(previous, source)
+      })
+      if (index === undefined) {
+        index = sources.length
+        sources.push(source)
+        candidates.push(index)
+        byStatements.set(source.attributeStatements, candidates)
+      }
+      return { body: { ...artifact, premiseInput: { request, evaluatedRuleIds, complete } }, sharedPremise: index }
+    })
+    return {
+      sliceKey: sliceKey(slice), propositionKey: slice.propositionKey,
+      qualifiedPropositionKey: slice.qualifiedPropositionKey, predicate: slice.predicate, domainStatus: slice.domainStatus,
+      ...(slice.value === undefined ? {} : { value: slice.value }), validFrom: slice.validity.validFrom,
+      ...(slice.validity.validTo === undefined ? {} : { validTo: slice.validity.validTo }), recordedSeq: slice.recordedSeq,
+      conclusion: artifacts === undefined ? slice.conclusion : { ...slice.conclusion, ruleArtifacts: artifacts },
+    }
+  })
+  return { rows: JSON.stringify(rows), sources: JSON.stringify(sources) }
 }
 
 function toFence(row: FenceRow, scopeRef: ScopeRef): MaterializationFence {
@@ -311,6 +353,10 @@ export class PostgresMaterializationStore implements MaterializationStore {
     ctx: ToolContext,
   ): Promise<ProjectionCommitResult> {
     resolveScope(scopeRef, ctx)
+    const fenceIds = [...input.fenceId === undefined ? [] : [input.fenceId], ...input.additionalFenceIds ?? []]
+    if ((input.additionalFenceIds?.length ?? 0) > 0 && (input.fenceId === undefined || fenceIds.length > 8 || new Set(fenceIds).size !== fenceIds.length)) {
+      throw new MaterializationStoreError('MATERIALIZATION_STORE_FAILED', 'a projection batch requires at most eight distinct fences')
+    }
     return this.#db.withIdentityScope({ tenantId: scopeRef.tenantId, spaceId: scopeRef.spaceId }, async (client) => {
       await client.query(
         `INSERT INTO agent_platform.projection_state
@@ -326,31 +372,47 @@ export class PostgresMaterializationStore implements MaterializationStore {
           `the projection is at generation ${String(current)}, not ${input.expectedGeneration}`,
         )
       }
+      if ((input.additionalFenceIds?.length ?? 0) > 0) {
+        const fences = await client.query(
+          `SELECT fence_id FROM agent_platform.materialization_fences
+             WHERE tenant_id = $1 AND space_id = $2 AND projection_ref = $3 AND fence_id = ANY($4::uuid[])
+             FOR UPDATE`,
+          [scopeRef.tenantId, scopeRef.spaceId, this.#projectionRef, fenceIds],
+        )
+        if (fences.rows.length !== fenceIds.length) throw new MaterializationStoreError('FENCE_NOT_FOUND', 'the projection batch contains a fence outside its actual scope or projection')
+      }
       const next = current + 1
       let appended = 0
-      for (const slice of input.slices) {
+      for (let offset = 0; offset < input.slices.length; offset += 8) {
+        const payload = projectionWritePayload(input.slices.slice(offset, offset + 8))
         const inserted = await client.query(
           `INSERT INTO agent_platform.projection_slices
              (tenant_id, space_id, projection_ref, slice_key, generation, proposition_key,
               qualified_proposition_key, predicate, domain_status, value, valid_from, valid_to,
               recorded_seq, conclusion)
-           VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10::jsonb, $11, $12, $13, $14::jsonb)
+           SELECT $1, $2, $3, write_row.item->>'sliceKey', $4, write_row.item->>'propositionKey',
+             write_row.item->>'qualifiedPropositionKey', write_row.item->>'predicate', write_row.item->>'domainStatus', write_row.item->'value',
+             (write_row.item->>'validFrom')::timestamptz, (write_row.item->>'validTo')::timestamptz, write_row.item->>'recordedSeq',
+             CASE WHEN jsonb_typeof(write_row.item#>'{conclusion,ruleArtifacts}')='array' THEN
+               jsonb_set(write_row.item->'conclusion', '{ruleArtifacts}', (
+                 SELECT COALESCE(jsonb_agg(
+                   CASE WHEN artifact.item ? 'sharedPremise' THEN
+                     jsonb_set(artifact.item->'body', '{premiseInput}',
+                       ($6::jsonb->((artifact.item->>'sharedPremise')::int)) || (artifact.item#>'{body,premiseInput}'))
+                   ELSE artifact.item->'body' END ORDER BY artifact.ordinal), '[]'::jsonb)
+                 FROM jsonb_array_elements(write_row.item#>'{conclusion,ruleArtifacts}') WITH ORDINALITY AS artifact(item, ordinal)
+               ))
+             ELSE write_row.item->'conclusion' END
+           FROM jsonb_array_elements($5::jsonb) WITH ORDINALITY AS write_row(item, ordinal)
+           ORDER BY write_row.ordinal
            ON CONFLICT (tenant_id, space_id, slice_key) DO NOTHING`,
           [
             scopeRef.tenantId,
             scopeRef.spaceId,
             this.#projectionRef,
-            sliceKey(slice),
             next,
-            slice.propositionKey,
-            slice.qualifiedPropositionKey,
-            slice.predicate,
-            slice.domainStatus,
-            slice.value === undefined ? null : JSON.stringify(slice.value),
-            slice.validity.validFrom,
-            slice.validity.validTo ?? null,
-            slice.recordedSeq,
-            JSON.stringify(slice.conclusion),
+            payload.rows,
+            payload.sources,
           ],
         )
         appended += inserted.rowCount ?? 0
@@ -374,12 +436,12 @@ export class PostgresMaterializationStore implements MaterializationStore {
       if (row === undefined) {
         throw new MaterializationStoreError('MATERIALIZATION_STORE_FAILED', 'commitProjection updated no state row')
       }
-      if (input.fenceId !== undefined) {
+      if (fenceIds.length > 0) {
         await client.query(
           `UPDATE agent_platform.materialization_fences
-              SET state = 'closed', closed_at = $4
-            WHERE tenant_id = $1 AND space_id = $2 AND fence_id = $3 AND state = 'open'`,
-          [scopeRef.tenantId, scopeRef.spaceId, input.fenceId, input.committedAt],
+              SET state = 'closed', closed_at = $5
+            WHERE tenant_id = $1 AND space_id = $2 AND projection_ref = $3 AND fence_id = ANY($4::uuid[]) AND state = 'open'`,
+          [scopeRef.tenantId, scopeRef.spaceId, this.#projectionRef, fenceIds, input.committedAt],
         )
       }
       return { state: toState(row, scopeRef), appendedSlices: appended }

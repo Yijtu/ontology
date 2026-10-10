@@ -3,13 +3,13 @@ import { ProjectDatasetError, projectDatasetSourceRef, isRecord } from '@ontolog
 import type {
   ProjectPublishedDatasetSource, ProjectReadinessStore, ProjectRevision, ProjectRevisionRef,
   ProjectSnapshotQueryDescriptor, ProjectSnapshotQueryPort, ResourceRef, RunExecutionBinding,
-  RunExecutionBindingStore, ScopeRef, TaskBindingStore, ToolContext,
+  RunExecutionBindingStore, ScopeRef, TaskBindingStore, ToolContext, PublishedTaskBinding,
   SemanticDefinitionVersion, VersionRef,
   ColumnType, DataQueryOutput,
 } from '@ontology/contracts'
 import { InMemorySemanticMappingRegistry, buildProjectSnapshotMapping, projectSnapshotMappingRef, definitionVersionDigest } from '@ontology/semantic-engine'
 import { DataQueryHandler, ToolGatewayError, canonicalJson } from '@ontology/tool-services'
-import type { ToolExecutionRequest, ToolHandler } from '@ontology/tool-services'
+import type { ToolExecutionOutcome, ToolExecutionRequest, ToolHandler } from '@ontology/tool-services'
 
 export interface CoreProjectQueryOptions {
   readonly query: ProjectSnapshotQueryPort
@@ -21,6 +21,7 @@ export interface CoreProjectQueryOptions {
   readonly readiness: ProjectReadinessStore
   readonly executionBindings: RunExecutionBindingStore
   readonly taskBindings: TaskBindingStore
+  readonly executeRegisteredCompute?: (request: ToolExecutionRequest, binding: PublishedTaskBinding, execution: RunExecutionBinding) => Promise<ToolExecutionOutcome>
   readonly definition: (scope: ScopeRef, ref: VersionRef, ctx: ToolContext) => Promise<SemanticDefinitionVersion | undefined>
   readonly evolution?: { assertActiveRebuild(scope: ScopeRef, revision: ProjectRevisionRef, ctx: ToolContext): Promise<boolean>; resolveActiveSnapshot(scope: ScopeRef, revision: ProjectRevisionRef, objectId: string, ctx: ToolContext): Promise<ResourceRef | undefined> }
 }
@@ -33,10 +34,21 @@ function isColumnType(value: unknown): value is ColumnType {
   return typeof value === 'string' && ['string', 'integer', 'decimal', 'boolean', 'timestamp', 'json', 'binary'].includes(value)
 }
 
+/** Selects the Core-only compact source pin when this adapter advertises the paired full array. */
+export function coreCompactSourceProjection(descriptor: ProjectSnapshotQueryDescriptor): ProjectSnapshotQueryDescriptor {
+  return descriptor.sourceProjection === 'full_array' ? { ...descriptor, sourceProjection: 'compact_pin' } : descriptor
+}
+
+/** Core's query plan and handler share the same compact source-pin projection mapping. */
+function coreProjectSnapshotMappingRef(input: Parameters<typeof projectSnapshotMappingRef>[0]) {
+  return projectSnapshotMappingRef({ ...input, descriptor: coreCompactSourceProjection(input.descriptor) })
+}
+
 /** Fixed project snapshot resolution, shared by task creation, planning and the tool handler. */
 export function createCoreProjectQueryWorkflow(options: CoreProjectQueryOptions) {
   const describe = async (scope: ScopeRef, revisionRef: ProjectRevisionRef, ref: ResourceRef, objectId: string, ctx: ToolContext): Promise<ProjectSnapshotQueryDescriptor> => {
     const revision = await options.projects.getRevision(scope, revisionRef.projectId, revisionRef.revision, ctx)
+    if (revision?.executionPurpose === 'synthetic_validation') throw new ProjectDatasetError('SNAPSHOT_UNAVAILABLE', 'private competency snapshots cannot be read through the ordinary observed business query handler')
     const descriptor = await options.query.describeSnapshot(scope, ref, ctx)
     const definition = revision === undefined ? undefined : await options.definition(scope, revision.definitionRef, ctx)
     const metadata = descriptor?.metadata
@@ -53,6 +65,7 @@ export function createCoreProjectQueryWorkflow(options: CoreProjectQueryOptions)
     return descriptor
   }
   const resolveForCreation = async (scope: ScopeRef, revision: ProjectRevision, parameters: Readonly<Record<string, unknown>>, ctx: ToolContext): Promise<ResourceRef> => {
+    if (revision.executionPurpose === 'synthetic_validation') throw new ProjectDatasetError('SNAPSHOT_UNAVAILABLE', 'private competency snapshots cannot authorize an ordinary observed business task')
     const objectId = parameters['objectId']
     if (typeof objectId !== 'string') throw new ProjectDatasetError('INVALID_ARGUMENT', 'a project query requires an objectId')
     const head = await options.projects.getProject(scope, revision.ref.projectId, ctx)
@@ -91,13 +104,17 @@ export function createCoreProjectQueryWorkflow(options: CoreProjectQueryOptions)
       if (execution === undefined) return fallback.execute(request)
       if (execution.request.mode === 'task') {
         const binding = await options.taskBindings.getBinding(scope, execution.request.taskBindingRef, request.ctx)
+        if (binding?.kind === 'compute') {
+          if (request.arguments['kind'] !== 'compute' || options.executeRegisteredCompute === undefined) throw new ToolGatewayError('HANDLER_NOT_REGISTERED', 'the fixed registered compute task is unavailable')
+          return options.executeRegisteredCompute(request, binding, execution)
+        }
         if (binding?.kind !== 'structured_query') return fallback.execute(request)
       } else if (request.arguments['kind'] !== 'query') return fallback.execute(request)
       const queryPlan = request.arguments['queryPlan']
       const objectId = execution.request.mode === 'task' ? execution.request.parameters['objectId']
         : isRecord(queryPlan) && Array.isArray(queryPlan['concepts']) && queryPlan['concepts'].length === 1 ? queryPlan['concepts'][0] : undefined
       if (typeof objectId !== 'string' || request.arguments['kind'] !== 'query' || request.arguments['mode'] !== 'semantic') throw new ToolGatewayError('INVALID_ARGUMENTS', 'the fixed structured query task requires its semantic project query')
-      const descriptor = await resolveExecution(execution, objectId, request.ctx)
+      const descriptor = coreCompactSourceProjection(await resolveExecution(execution, objectId, request.ctx))
       if (!request.ctx.allowedResources.sourceRefs.some((ref) => ref.namespace === 'project-dataset' && ref.sourceId === descriptor.snapshotRef.id)) throw new ToolGatewayError('INVALID_ARGUMENTS', 'the archived project snapshot is outside the trusted run allowlist', { platformCode: 'FORBIDDEN' })
       const outcome = await new DataQueryHandler({ query: options.query, consistency: 'immutable', dataMode: 'observed',
         mappings: new InMemorySemanticMappingRegistry([buildProjectSnapshotMapping({ descriptor })]) }).execute(request)
@@ -114,7 +131,7 @@ export function createCoreProjectQueryWorkflow(options: CoreProjectQueryOptions)
         if (!Array.isArray(row)) throw new ToolGatewayError('HANDLER_FAILED', 'the fixed project query returned a malformed row')
         return [...row]
       })
-      const located: DataQueryOutput = { resultKind: 'table', table: { columns, rows } }
+      const located: DataQueryOutput = { resultKind: 'table', table: { columns, rows }, coverage: outcome.coverage }
       return { ...outcome, payload: located }
     },
   })
@@ -127,7 +144,7 @@ export function createCoreProjectQueryWorkflow(options: CoreProjectQueryOptions)
     return resolveForCreation(scope, revision, { objectId: descriptor.objectId }, ctx)
   }
   return { resolveForCreation, resolveQuestionForCreation, resolveExecution, handler,
-    mappingRef: projectSnapshotMappingRef,
+    mappingRef: coreProjectSnapshotMappingRef,
     sourceRef: projectDatasetSourceRef }
 }
 
