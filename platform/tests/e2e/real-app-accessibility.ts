@@ -19,9 +19,10 @@ export interface SourceDrawerProbe {
 export interface AccessibilityReport {
   readonly state: string
   readonly viewport: { readonly width: number; readonly height: number }
-  readonly labels: readonly { readonly name: string; readonly visibleLabel: string; readonly accessibleName: string }[]
+  readonly labels: readonly { readonly name: string; readonly visibleLabel: string; readonly accessibleSnapshot: string }[]
   readonly contrast: readonly { readonly name: string; readonly foreground: string; readonly background: string; readonly ratio: number; readonly minimum: number }[]
-  readonly reducedMotion: { readonly mediaMatches: boolean; readonly probes: readonly { readonly name: string; readonly animationDuration: string; readonly transitionDuration: string }[] }
+  readonly reducedMotion: { readonly mediaMatches: boolean; readonly probes: readonly { readonly name: string; readonly animationDuration: string; readonly transitionDuration: string; readonly maximumAnimationMs: number; readonly maximumTransitionMs: number }[] }
+  readonly nonTextControlBoundaries: { readonly measured: false; readonly note: string }
   readonly drawer?: { readonly first: string; readonly last: string; readonly focusReturned: boolean }
 }
 
@@ -39,7 +40,7 @@ export async function collectRealAppAccessibilityEvidence(page: Page, options: {
   expect(options.visibleControls.length, `${options.state}: provide visible controls to inspect`).toBeGreaterThan(0)
   expect(options.contrastProbes.length, `${options.state}: provide contrast probes to inspect`).toBeGreaterThan(0)
   expect(options.motionProbes.length, `${options.state}: provide reduced-motion probes to inspect`).toBeGreaterThan(0)
-  const labels = [] as { name: string; visibleLabel: string; accessibleName: string }[]
+  const labels = [] as { name: string; visibleLabel: string; accessibleSnapshot: string }[]
   for (const control of options.visibleControls) {
     await expect(control.locator, `${options.state}: ${control.name} should be visible`).toBeVisible()
     const evidence = await control.locator.evaluate((node) => {
@@ -51,17 +52,11 @@ export async function collectRealAppAccessibilityEvidence(page: Page, options: {
       const associated = node instanceof HTMLInputElement || node instanceof HTMLSelectElement || node instanceof HTMLTextAreaElement
         ? Array.from(node.labels ?? []).filter(visible).map((label) => label.innerText.trim()).filter(Boolean)
         : []
-      const labelledBy = (node.getAttribute('aria-labelledby') ?? '').split(/\s+/).filter(Boolean)
-        .map((id) => document.getElementById(id)).filter((label): label is HTMLElement => label instanceof HTMLElement && visible(label))
-        .map((label) => label.innerText.trim()).filter(Boolean)
-      const ariaLabel = node.getAttribute('aria-label')?.trim() ?? ''
-      const visibleLabel = [...associated, ...labelledBy].join(' ').trim()
-      const accessibleName = visibleLabel || ariaLabel || (node instanceof HTMLButtonElement ? node.innerText.trim() : '')
-      return { visibleLabel, accessibleName }
+      return { visibleLabel: associated.join(' ').trim() }
     })
     expect(evidence.visibleLabel, `${options.state}: ${control.name} needs a visible associated label`).not.toBe('')
-    expect(evidence.accessibleName, `${options.state}: ${control.name} needs an accessible name`).not.toBe('')
-    labels.push({ name: control.name, ...evidence })
+    await expect(control.locator, `${options.state}: ${control.name} needs an accessible name`).toHaveAccessibleName(/\S+/)
+    labels.push({ name: control.name, ...evidence, accessibleSnapshot: await control.locator.ariaSnapshot() })
   }
 
   const contrast = [] as AccessibilityReport['contrast'][number][]
@@ -112,20 +107,29 @@ export async function collectRealAppAccessibilityEvidence(page: Page, options: {
     expect(measurement.ratio, `${options.state}: ${probe.name} contrast`).toBeGreaterThanOrEqual(measurement.minimum)
     contrast.push({ name: probe.name, foreground: measurement.foreground, background: measurement.background, ratio: measurement.ratio, minimum: measurement.minimum })
   }
+  expect(contrast.length, `${options.state}: provide at least one active contrast sample`).toBeGreaterThan(0)
 
   await page.emulateMedia({ reducedMotion: 'reduce' })
   const mediaMatches = await page.evaluate(() => matchMedia('(prefers-reduced-motion: reduce)').matches)
   expect(mediaMatches, `${options.state}: reduced-motion media preference`).toBe(true)
-  const motion = [] as { name: string; animationDuration: string; transitionDuration: string }[]
+  const motion = [] as { name: string; animationDuration: string; transitionDuration: string; maximumAnimationMs: number; maximumTransitionMs: number }[]
   for (const probe of options.motionProbes) {
     await expect(probe.locator, `${options.state}: motion probe ${probe.name} should be visible`).toBeVisible()
     const durations = await probe.locator.evaluate((node) => {
       const style = getComputedStyle(node)
-      return { animationDuration: style.animationDuration, transitionDuration: style.transitionDuration }
+      const maximumMs = (value: string): number => {
+        const values = value.split(',').map((duration) => {
+          const match = duration.trim().match(/^([\d.]+)(ms|s)$/)
+          if (match === null) throw new Error(`unsupported computed duration: ${duration}`)
+          return Number(match[1]) * (match[2] === 's' ? 1000 : 1)
+        })
+        return Math.max(...values)
+      }
+      return { animationDuration: style.animationDuration, transitionDuration: style.transitionDuration,
+        maximumAnimationMs: maximumMs(style.animationDuration), maximumTransitionMs: maximumMs(style.transitionDuration) }
     })
-    const allZero = (value: string): boolean => value.split(',').every((duration) => Number.parseFloat(duration) === 0)
-    expect(allZero(durations.animationDuration), `${options.state}: ${probe.name} animation duration`).toBe(true)
-    expect(allZero(durations.transitionDuration), `${options.state}: ${probe.name} transition duration`).toBe(true)
+    expect(durations.maximumAnimationMs, `${options.state}: ${probe.name} animation duration`).toBeLessThanOrEqual(1)
+    expect(durations.maximumTransitionMs, `${options.state}: ${probe.name} transition duration`).toBeLessThanOrEqual(1)
     motion.push({ name: probe.name, ...durations })
   }
 
@@ -133,11 +137,11 @@ export async function collectRealAppAccessibilityEvidence(page: Page, options: {
   if (options.sourceDrawer !== undefined) {
     const { dialog, trigger } = options.sourceDrawer
     await expect(dialog).toBeVisible()
-    const focusable = dialog.locator('button:not(:disabled), input:not(:disabled), select:not(:disabled), textarea:not(:disabled), a[href], [tabindex="0"]')
+    const focusable = dialog.locator('button:not(:disabled), input:not(:disabled), select:not(:disabled), textarea:not(:disabled), a[href], summary, [tabindex="0"]')
     const entries = await focusable.evaluateAll((nodes) => nodes.map((node, index) => ({ node, index })).filter(({ node }) => {
       if (!(node instanceof HTMLElement)) return false
       const style = getComputedStyle(node)
-      return style.display !== 'none' && style.visibility !== 'hidden' && node.getClientRects().length > 0 && node.tabIndex >= 0 && !node.closest('details:not([open])')
+      return style.display !== 'none' && style.visibility !== 'hidden' && node.getClientRects().length > 0 && node.tabIndex >= 0 && node.closest('[inert]') === null
     }).map(({ node, index }) => ({ index, name: (node as HTMLElement).innerText.trim() || (node as HTMLElement).getAttribute('aria-label') || (node as HTMLElement).tagName })))
     expect(entries.length, 'source drawer needs visible keyboard-focusable controls').toBeGreaterThan(0)
     expect(await dialog.evaluate((node) => node.contains(document.activeElement)), 'focus should enter source drawer').toBe(true)
@@ -149,12 +153,15 @@ export async function collectRealAppAccessibilityEvidence(page: Page, options: {
     await page.keyboard.press('Shift+Tab')
     await expect(focusable.nth(entries[entries.length - 1]!.index)).toBeFocused()
     await page.keyboard.press('Tab')
-    await expect(focusable.first()).toBeFocused()
+    await expect(focusable.nth(entries[0]!.index)).toBeFocused()
     await page.keyboard.press('Escape')
     await expect(dialog).toBeHidden()
     await expect(trigger).toBeFocused()
     drawer = { first: entries[0]!.name, last: entries[entries.length - 1]!.name, focusReturned: true }
   }
 
-  return { state: options.state, viewport: page.viewportSize() ?? { width: 0, height: 0 }, labels, contrast, reducedMotion: { mediaMatches, probes: motion }, ...(drawer === undefined ? {} : { drawer }) }
+  return { state: options.state, viewport: page.viewportSize() ?? { width: 0, height: 0 }, labels, contrast,
+    reducedMotion: { mediaMatches, probes: motion },
+    nonTextControlBoundaries: { measured: false, note: 'Control and focus-indicator boundary contrast is not sampled by this text-contrast helper.' },
+    ...(drawer === undefined ? {} : { drawer }) }
 }
