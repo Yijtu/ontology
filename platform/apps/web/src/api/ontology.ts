@@ -80,3 +80,9 @@ export async function readHumanReviews(client: WorkbenchClient, candidateId: str
     return { candidateId: review['candidateId'], revision: review['revision'], ...(isSha256Digest(review['contentDigest']) ? { contentDigest: review['contentDigest'] } : {}), decision: review['decision'], reason: review['reason'] }
   })
 }
+
+export function isLatestHumanReviewApproval(reviews: readonly HumanReviewView[], contentDigest: string): boolean {
+  const latest = reviews.reduce<HumanReviewView | undefined>((current, review) =>
+    current === undefined || BigInt(review.revision) > BigInt(current.revision) ? review : current, undefined)
+  return latest?.decision === 'approve' && latest.contentDigest === contentDigest
+}

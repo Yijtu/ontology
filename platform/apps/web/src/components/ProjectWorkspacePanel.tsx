@@ -7,6 +7,7 @@ import type {
   ProjectRecord,
   ProjectReadinessKind,
   ProjectRecordVersion,
+  ProjectRecordFieldStatus,
   ProjectRevision,
   ReadinessProjection,
   ResolvedProfileRef,
@@ -152,6 +153,12 @@ function readinessLabel(kind: ProjectReadinessKind): string {
     case 'document_index':
       return '文档索引'
   }
+}
+
+function fieldStatusLabel(status: ProjectRecordFieldStatus): string {
+  if (status === 'confirmed') return '已由人确认'
+  if (status === 'conflict') return '存在冲突'
+  return '待确认'
 }
 
 function projectionFor(
@@ -1465,6 +1472,7 @@ export function ProjectWorkspacePanel({
                 hidden={step !== 'records'}
               >
                 <h4>项目记录</h4>
+                <p className="project-source-note">以下记录已按确认的字段映射整理。这里的字段确认只表示来源值与项目语义映射已核对；正式业务事实还需在实例审核中完成审批与发布。</p>
                 <p data-testid="record-total">共 {recordTotal} 条</p>
                 <ProjectFactStaging
                   client={client}
@@ -1489,6 +1497,7 @@ export function ProjectWorkspacePanel({
                 {records.length === 0 ? (
                   <p data-testid="record-empty">当前页无记录。</p>
                 ) : (
+                  <div className="project-table" role="region" aria-label="项目映射记录" tabIndex={0}>
                   <table data-testid="record-table">
                     <thead>
                       <tr>
@@ -1499,40 +1508,47 @@ export function ProjectWorkspacePanel({
                       </tr>
                     </thead>
                     <tbody>
-                      {records.map((record) => (
-                        <tr
-                          key={record.recordId}
-                          data-testid="record-row"
-                          data-record-id={record.recordId}
-                          data-status={record.status}
-                        >
-                          <td>
-                            {record.fields.find((field) => typeof field.raw === 'string')?.raw ?? '项目记录'}
-                            <details className="project-audit">
-                              <summary>记录标识</summary>
-                              <code data-testid="record-id">{record.recordId}</code>
-                            </details>
-                          </td>
-                          <td>{record.objectId}</td>
-                          <td data-testid="record-status">{record.status}</td>
-                          <td>
-                            {record.fields.map((field) => (
-                              <span
-                                key={field.fieldId}
-                                data-testid={`record-field-${field.fieldId}`}
-                                data-status={field.status}
-                              >
-                                {field.fieldId}：{field.raw === null ? '∅' : String(field.raw)} →{' '}
-                                {field.normalized.kind === 'quantity'
-                                  ? `${field.normalized.value} ${field.normalized.unitCode}`
-                                  : String(field.normalized.value ?? '∅')}
-                              </span>
-                            ))}
-                          </td>
-                        </tr>
-                      ))}
+                      {records.map((record) => {
+                        const object = catalogue?.objects.find((entry) => entry.objectId === record.objectId)
+                        const sourceKeyField = record.fields.find((field) => typeof field.raw === 'string')
+                        return (
+                          <tr
+                            key={record.recordId}
+                            data-testid="record-row"
+                            data-record-id={record.recordId}
+                            data-status={record.status}
+                          >
+                            <td>
+                              <strong>{sourceKeyField?.raw ?? '项目记录'}</strong>
+                              <small>映射原始键</small>
+                              <details className="project-audit">
+                                <summary>记录标识</summary>
+                                <code data-testid="record-id">{record.recordId}</code>
+                              </details>
+                            </td>
+                            <td>{object?.displayName ?? record.objectId}</td>
+                            <td data-testid="record-status" data-status={record.status}>{fieldStatusLabel(record.status)}</td>
+                            <td>
+                              <div className="project-record-fields">
+                                {record.fields.map((field) => {
+                                  const attribute = object?.attributes.find((entry) => entry.attributeId === field.fieldId)
+                                  const normalized = field.normalized.kind === 'quantity'
+                                    ? `${field.normalized.value} ${field.normalized.unitCode}`
+                                    : String(field.normalized.value ?? '∅')
+                                  return <div className="project-record-field" key={field.fieldId} data-testid={`record-field-${field.fieldId}`} data-status={field.status}>
+                                    <div className="project-record-field__head"><strong>{attribute?.displayName ?? field.fieldId}</strong><span>{fieldStatusLabel(field.status)}</span></div>
+                                    <p><span>原始</span><code>{field.raw === null ? '∅' : String(field.raw)}</code></p>
+                                    <p><span>规范</span><code>{normalized}</code></p>
+                                  </div>
+                                })}
+                              </div>
+                            </td>
+                          </tr>
+                        )
+                      })}
                     </tbody>
                   </table>
+                  </div>
                 )}
                 {nextCursor === undefined ? null : (
                   <button type="button" data-testid="record-next" onClick={() => void nextPage()}>

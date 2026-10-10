@@ -8,7 +8,7 @@ import { encodeOriginalBytes, nativeCellText } from '../api/workspace-authoring'
 import type { WorkspaceAuthoringContext, WorkspaceSourceCatalogue } from '../api/workspace-authoring'
 import { SourceEvidencePane } from './ontology/SourceEvidencePane'
 import type { GroundingView } from '../api/ontology'
-import { invalidWire, readGrounding, readHumanReviews } from '../api/ontology'
+import { invalidWire, isLatestHumanReviewApproval, readGrounding, readHumanReviews } from '../api/ontology'
 import { classifyPublicError } from '../state/public-errors'
 import type { PublicFailure } from '../state/public-errors'
 import { PublicStateNotice } from './PublicStateNotice'
@@ -67,7 +67,7 @@ export function WorkspaceSourcesPanel({ client, workspace, readOnly = false, onW
       for (let offset = 0; offset < reviewable.length; offset += 8) {
         const batch = await Promise.all(reviewable.slice(offset, offset + 8).map(async (candidate) => ({ candidate, reviews: await readHumanReviews(client, candidate.candidateId, abort.signal) })))
         if (abort.signal.aborted || epoch.current !== token) return
-        approved.push(...batch.filter(({ candidate, reviews }) => reviews.some((review) => review.decision === 'approve' && review.contentDigest === candidate.contentDigest)).map(({ candidate }) => candidate))
+        approved.push(...batch.filter(({ candidate, reviews }) => isLatestHumanReviewApproval(reviews, candidate.contentDigest)).map(({ candidate }) => candidate))
       }
       setRuleTerms(approved)
       setSelectedRuleTermIds((old) => old.filter((id) => approved.some((candidate) => candidate.candidateId === id)))

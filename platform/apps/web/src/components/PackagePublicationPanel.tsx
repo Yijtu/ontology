@@ -21,7 +21,7 @@ import { FullVersionDiff, RevisionStrategyForm } from './ontology/FullVersionDif
 import './ontology/ontology.css'
 import { StatePanel } from './StatePanel'
 import { PublicStateNotice } from './PublicStateNotice'
-import { readHumanReviews } from '../api/ontology'
+import { isLatestHumanReviewApproval, readHumanReviews } from '../api/ontology'
 import { Button } from './ui'
 import { classifyPublicError } from '../state/public-errors'
 import type { WorkbenchError, WorkbenchPhase } from '../state/workbench'
@@ -227,13 +227,23 @@ export function PackagePublicationPanel({
       for (let offset = 0; offset < reviewable.length; offset += 8) {
         const batch = await Promise.all(reviewable.slice(offset, offset + 8).map(async (candidate) => ({
           candidate,
-          approved: (await readHumanReviews(client, candidate.candidateId)).some((review) => review.decision === 'approve' && review.contentDigest === candidate.contentDigest),
+          approved: isLatestHumanReviewApproval(await readHumanReviews(client, candidate.candidateId), candidate.contentDigest),
         })))
         reviewedDefinitions.push(...batch)
       }
+      if (epoch.current !== token || workspaceRef.current !== workspaceId) return
+      setDefinitionCandidates(reviewedDefinitions.filter(({ approved }) => approved).map(({ candidate }) => candidate))
+      const reviewedRules = [] as { candidate: RuleActionCandidateVersion; approved: boolean }[]
+      const enabledRules = rules.filter((candidate) => candidate.lifecycle === 'enabled' && candidate.payload.kind === 'rule')
+      for (let offset = 0; offset < enabledRules.length; offset += 8) {
+        const batch = await Promise.all(enabledRules.slice(offset, offset + 8).map(async (candidate) => ({
+          candidate,
+          approved: isLatestHumanReviewApproval(await readHumanReviews(client, candidate.candidateId), candidate.contentDigest),
+        })))
         if (epoch.current !== token || workspaceRef.current !== workspaceId) return
-        setDefinitionCandidates(reviewedDefinitions.filter(({ approved }) => approved).map(({ candidate }) => candidate))
-      setRuleCandidates(rules)
+        reviewedRules.push(...batch)
+      }
+      setRuleCandidates(reviewedRules.filter(({ approved }) => approved).map(({ candidate }) => candidate))
       const loaded = initialValidationId === undefined ? undefined : await client.getValidation(workspaceId, initialValidationId)
       if (epoch.current !== token || workspaceRef.current !== workspaceId) return
       setReport(loaded)
