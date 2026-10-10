@@ -212,6 +212,7 @@ describe('GAP-022 normal App project source-to-publication pipeline', () => {
           { name: 'project creation submit text', locator: page.getByTestId('project-create-submit') },
         ],
         motionProbes: [{ name: 'project title control', locator: page.getByTestId('project-create-title') }],
+        nativeControlProbes: [{ name: 'project title control', locator: page.getByTestId('project-create-title') }],
       })
       accessibilityEvidence.push(JSON.stringify(initialAccessibility))
 

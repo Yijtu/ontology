@@ -22,14 +22,137 @@ export interface SourceDrawerKeyboardEvidence {
   readonly focusReturned: boolean
 }
 
+export interface NativeControlProbe {
+  readonly name: string
+  readonly locator: Locator
+}
+
+export interface NativeControlBoundaryEvidence {
+  readonly name: string
+  readonly border: {
+    readonly sides: readonly { readonly side: string; readonly color: string; readonly width: string; readonly insideBackground: string; readonly outsideBackground: string; readonly insideRatio: number; readonly outsideRatio: number }[]
+    readonly minimum: 3
+  }
+  readonly focus: {
+    readonly focusVisible: true
+    readonly outlineStyle: string
+    readonly outlineWidth: string
+    readonly outlineOffset: string
+    readonly outlineColor: string
+    readonly background: string
+    readonly ratio: number
+    readonly sampledUnobscuredPoints: number
+    readonly minimum: 3
+  }
+}
+
 export interface AccessibilityReport {
   readonly state: string
   readonly viewport: { readonly width: number; readonly height: number }
   readonly labels: readonly { readonly name: string; readonly visibleLabel: string; readonly accessibleSnapshot: string }[]
   readonly contrast: readonly { readonly name: string; readonly foreground: string; readonly background: string; readonly ratio: number; readonly minimum: number }[]
   readonly reducedMotion: { readonly mediaMatches: boolean; readonly probes: readonly { readonly name: string; readonly animationDuration: string; readonly transitionDuration: string; readonly maximumAnimationMs: number; readonly maximumTransitionMs: number }[] }
-  readonly nonTextControlBoundaries: { readonly measured: false; readonly note: string }
+  readonly nonTextControlBoundaries: { readonly measured: boolean; readonly note?: string; readonly nativeControls: readonly NativeControlBoundaryEvidence[] }
   readonly drawer?: SourceDrawerKeyboardEvidence
+}
+
+/** Sample one actual native control's visible border and keyboard focus indicator. */
+export async function collectRealAppNativeControlEvidence(page: Page, probe: NativeControlProbe): Promise<NativeControlBoundaryEvidence> {
+  await expect(probe.locator, `${probe.name} should be visible before keyboard focus`).toBeVisible()
+  let focused = false
+  for (let step = 0; step < 100; step += 1) {
+    if (await probe.locator.evaluate((node) => node === document.activeElement)) {
+      focused = true
+      break
+    }
+    await page.keyboard.press('Tab')
+  }
+  expect(focused || await probe.locator.evaluate((node) => node === document.activeElement), `${probe.name} must be reachable with native Tab input`).toBe(true)
+  await expect(probe.locator).toBeFocused()
+  const result = await probe.locator.evaluate((node) => {
+    if (!(node instanceof HTMLElement)) throw new Error('native control probe is not an HTMLElement')
+    const parseOpaque = (value: string): [number, number, number] => {
+      const match = value.match(/^rgba?\(\s*([\d.]+)[,\s]+([\d.]+)[,\s]+([\d.]+)(?:\s*[,/]\s*([\d.]+%?))?\s*\)$/)
+      if (match === null) throw new Error(`unsupported paint: ${value}`)
+      const alpha = match[4] === undefined ? 1 : match[4].endsWith('%') ? Number(match[4].slice(0, -1)) / 100 : Number(match[4])
+      if (alpha !== 1) throw new Error(`non-opaque paint is unsupported: ${value}`)
+      return [Number(match[1]), Number(match[2]), Number(match[3])]
+    }
+    const rgb = (color: [number, number, number]): string => `rgb(${color[0]}, ${color[1]}, ${color[2]})`
+    const ratio = (first: [number, number, number], second: [number, number, number]): number => {
+      const luminance = (color: [number, number, number]): number => {
+        const values = color.map((channel) => channel / 255).map((channel) => channel <= 0.04045 ? channel / 12.92 : ((channel + 0.055) / 1.055) ** 2.4)
+        return 0.2126 * values[0]! + 0.7152 * values[1]! + 0.0722 * values[2]!
+      }
+      const a = luminance(first)
+      const b = luminance(second)
+      return (Math.max(a, b) + 0.05) / (Math.min(a, b) + 0.05)
+    }
+    const opaqueBackground = (start: Element | null): { readonly color: [number, number, number]; readonly text: string } => {
+      for (let current = start; current !== null; current = current.parentElement) {
+        const style = getComputedStyle(current)
+        if (style.backgroundImage !== 'none' || style.mixBlendMode !== 'normal' || Number(style.opacity) !== 1) {
+          throw new Error(`unsupported background compositing on ${current.tagName}`)
+        }
+        const parsed = style.backgroundColor.match(/^rgba?\(\s*[\d.]+/)
+        if (parsed === null) throw new Error(`unsupported background paint: ${style.backgroundColor}`)
+        const alphaMatch = style.backgroundColor.match(/^rgba\([^,]+,[^,]+,[^,]+,\s*([\d.]+%?)\s*\)$/i)
+          ?? style.backgroundColor.match(/^rgb\([^/]+\/\s*([\d.]+%?)\s*\)$/i)
+        const alpha = alphaMatch === null ? 1 : alphaMatch[1]!.endsWith('%') ? Number(alphaMatch[1]!.slice(0, -1)) / 100 : Number(alphaMatch[1])
+        if (alpha === 0) continue
+        const color = parseOpaque(style.backgroundColor)
+        return { color, text: rgb(color) }
+      }
+      throw new Error('no opaque flat ancestor background is available for this sample')
+    }
+    const style = getComputedStyle(node)
+    const inside = parseOpaque(style.backgroundColor)
+    const outside = opaqueBackground(node.parentElement)
+    const sides = (['Top', 'Right', 'Bottom', 'Left'] as const).map((side) => {
+      const colorValue = style[`border${side}Color` as 'borderTopColor' | 'borderRightColor' | 'borderBottomColor' | 'borderLeftColor']
+      const width = style[`border${side}Width` as 'borderTopWidth' | 'borderRightWidth' | 'borderBottomWidth' | 'borderLeftWidth']
+      const border = parseOpaque(colorValue)
+      if (style[`border${side}Style` as 'borderTopStyle' | 'borderRightStyle' | 'borderBottomStyle' | 'borderLeftStyle'] === 'none' || Number.parseFloat(width) <= 0) {
+        throw new Error(`${side} control border has no visible width/style`)
+      }
+      return { side: side.toLowerCase(), color: rgb(border), width, insideBackground: rgb(inside), outsideBackground: outside.text,
+        insideRatio: ratio(border, inside), outsideRatio: ratio(border, outside.color) }
+    })
+    const focusVisible = node.matches(':focus-visible')
+    if (!focusVisible) throw new Error('keyboard-focused control does not match :focus-visible')
+    const outlineColorValue = style.outlineColor
+    const outlineColor = parseOpaque(outlineColorValue)
+    const outlineWidth = style.outlineWidth
+    if (style.outlineStyle === 'none' || Number.parseFloat(outlineWidth) < 2) throw new Error(`focus outline is not clearly visible: ${style.outlineStyle} ${outlineWidth}`)
+    const rect = node.getBoundingClientRect()
+    const view = { width: window.innerWidth, height: window.innerHeight }
+    const offset = Number.parseFloat(style.outlineOffset)
+    const width = Number.parseFloat(outlineWidth)
+    const ringPoints = [
+      [rect.left + rect.width / 2, rect.top - offset - width / 2],
+      [rect.right + offset + width / 2, rect.top + rect.height / 2],
+      [rect.left + rect.width / 2, rect.bottom + offset + width / 2],
+      [rect.left - offset - width / 2, rect.top + rect.height / 2],
+    ]
+    if (rect.left < 0 || rect.top < 0 || rect.right > view.width || rect.bottom > view.height || ringPoints.some(([x, y]) => x === undefined || y === undefined || x < 0 || y < 0 || x >= view.width || y >= view.height)) {
+      throw new Error('focused control or sampled focus outline extends outside the viewport')
+    }
+    for (const [x, y] of ringPoints) {
+      const hit = document.elementFromPoint(x!, y!)
+      if (!(hit instanceof Element) || !(hit === node || hit.contains(node) || node.contains(hit))) throw new Error('sampled focus outline point is obscured by another element')
+    }
+    return { sides, focus: { outlineStyle: style.outlineStyle, outlineWidth, outlineOffset: style.outlineOffset,
+      outlineColor: rgb(outlineColor), background: outside.text, ratio: ratio(outlineColor, outside.color), sampledUnobscuredPoints: ringPoints.length } }
+  })
+  for (const side of result.sides) {
+    expect(side.insideRatio, `${probe.name} ${side.side} border contrast against control fill`).toBeGreaterThanOrEqual(3)
+    expect(side.outsideRatio, `${probe.name} ${side.side} border contrast against surrounding surface`).toBeGreaterThanOrEqual(3)
+  }
+  expect(result.focus.ratio, `${probe.name} focus outline contrast`).toBeGreaterThanOrEqual(3)
+  return { name: probe.name,
+    border: { sides: result.sides, minimum: 3 },
+    focus: { focusVisible: true, ...result.focus, minimum: 3 },
+  }
 }
 
 /** Test the actual open source drawer with native keyboard input and return focus evidence. */
@@ -68,6 +191,7 @@ export async function collectRealAppAccessibilityEvidence(page: Page, options: {
   readonly visibleControls: readonly { readonly name: string; readonly locator: Locator }[]
   readonly contrastProbes: readonly ContrastProbe[]
   readonly motionProbes: readonly MotionProbe[]
+  readonly nativeControlProbes?: readonly NativeControlProbe[]
   readonly sourceDrawer?: SourceDrawerProbe
 }): Promise<AccessibilityReport> {
   expect(options.visibleControls.length, `${options.state}: provide visible controls to inspect`).toBeGreaterThan(0)
@@ -166,6 +290,9 @@ export async function collectRealAppAccessibilityEvidence(page: Page, options: {
     motion.push({ name: probe.name, ...durations })
   }
 
+  const nativeControls: NativeControlBoundaryEvidence[] = []
+  for (const probe of options.nativeControlProbes ?? []) nativeControls.push(await collectRealAppNativeControlEvidence(page, probe))
+
   let drawer: AccessibilityReport['drawer']
   if (options.sourceDrawer !== undefined) {
     drawer = await collectRealAppDrawerEvidence(page, options.sourceDrawer)
@@ -173,6 +300,7 @@ export async function collectRealAppAccessibilityEvidence(page: Page, options: {
 
   return { state: options.state, viewport: page.viewportSize() ?? { width: 0, height: 0 }, labels, contrast,
     reducedMotion: { mediaMatches, probes: motion },
-    nonTextControlBoundaries: { measured: false, note: 'Control and focus-indicator boundary contrast is not sampled by this text-contrast helper.' },
+    nonTextControlBoundaries: { measured: nativeControls.length > 0, nativeControls,
+      ...(nativeControls.length === 0 ? { note: 'No native control border or focus-indicator boundary was sampled in this state.' } : {}) },
     ...(drawer === undefined ? {} : { drawer }) }
 }
