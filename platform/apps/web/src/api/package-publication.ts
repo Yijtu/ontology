@@ -83,6 +83,29 @@ export interface SyntheticExampleSetView {
   readonly recordedAt: string
 }
 
+export interface CreateSyntheticExampleSetRequest {
+  readonly caseKinds: readonly SyntheticCaseKind[]
+  readonly cases: readonly {
+    readonly caseId: string
+    readonly caseKind: SyntheticCaseKind
+    readonly objectTypeRef: string
+    readonly fields: readonly { readonly fieldId: string; readonly value: string | number | boolean | null; readonly unitCode?: string }[]
+    readonly note?: string
+  }[]
+  readonly expectations: readonly {
+    readonly expectationId: string
+    readonly caseId: string
+    readonly kind: 'rule'
+    readonly ruleId: string
+    readonly expected: 'true' | 'false' | 'unknown' | 'conflict'
+    readonly origin: 'authored_oracle'
+    readonly reason: string
+    readonly confirmedBy: string
+    readonly confirmedAt: string
+  }[]
+  readonly expectedRevision: RevisionString
+}
+
 export interface IndustryValidationIssueView {
   readonly code: string
   readonly surface: PackageValidationSurface
