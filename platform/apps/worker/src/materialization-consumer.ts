@@ -75,6 +75,7 @@ export interface MaterializationPublicationView extends PublishedSemanticReadVie
  */
 export interface MaterializationRecordSequence {
   next(scopeRef: ScopeRef, idempotencyKey: string, ctx: ToolContext): Promise<RevisionString>
+  nextBatch?(scopeRef: ScopeRef, idempotencyKeys: readonly string[], ctx: ToolContext): Promise<readonly RevisionString[]>
 }
 
 /** The transactional-outbox writer a consumer uses to hand the change back to the worker. */
@@ -481,9 +482,21 @@ export class MaterializationOutboxConsumer implements OutboxConsumer {
     const allPreopened = changes.length > 0 && changes.every(({ changeId }) => fences.has(changeId))
     if (this.#publicationBatchSize > 1 && allPreopened) {
       const entries: MaterializationRequestEntry[] = []
-      for (const item of changes) {
-        entries.push({ fenceId: fences.get(item.changeId)!, change: item.build(await this.#sequence.next(scopeRef, `materialization:${item.changeId}`, ctx), this.#now()) })
+      const keys = changes.map((item) => `materialization:${item.changeId}`)
+      let sequences: readonly RevisionString[]
+      if (this.#sequence.nextBatch !== undefined) sequences = await this.#sequence.nextBatch(scopeRef, keys, ctx)
+      else {
+        const values: RevisionString[] = []
+        for (const key of keys) values.push(await this.#sequence.next(scopeRef, key, ctx))
+        sequences = values
       }
+      if (sequences.length !== changes.length) throw new MaterializationOutboxError('INVALID_MESSAGE', 'the actual publication sequence batch has incomplete coverage')
+      for (const [index, item] of changes.entries()) {
+        const sequence = sequences[index]
+        if (sequence === undefined) throw new MaterializationOutboxError('INVALID_MESSAGE', 'a publication change has no actual source sequence')
+        entries.push({ fenceId: fences.get(item.changeId)!, change: item.build(sequence, this.#now()) })
+      }
+      entries.sort((left, right) => BigInt(left.change.recordedSeq) < BigInt(right.change.recordedSeq) ? -1 : BigInt(left.change.recordedSeq) > BigInt(right.change.recordedSeq) ? 1 : 0)
       for (let offset = 0; offset < entries.length; offset += this.#publicationBatchSize) {
         const batch = entries.slice(offset, offset + this.#publicationBatchSize)
         await this.#enqueueRequest(scopeRef, message.jobId, batch, ctx)
@@ -711,6 +724,20 @@ export function controlRecordSequence(
   streamRef = 'semantic.materialization',
 ): MaterializationRecordSequence {
   return {
+    async nextBatch(scopeRef, idempotencyKeys, ctx) {
+      const sequences: RevisionString[] = []
+      if (repository.appendEvents === undefined) {
+        for (const idempotencyKey of idempotencyKeys) sequences.push((await repository.appendEvent({ scopeRef, streamRef, payloadDigest: sha256DigestOf({ streamRef, idempotencyKey }), idempotencyKey }, ctx)).recordedSeq)
+      } else {
+        for (let offset = 0; offset < idempotencyKeys.length; offset += 64) {
+          const keys = idempotencyKeys.slice(offset, offset + 64)
+          const results = await repository.appendEvents(keys.map((idempotencyKey) => ({ scopeRef, streamRef, payloadDigest: sha256DigestOf({ streamRef, idempotencyKey }), idempotencyKey })), ctx)
+          if (results.length !== keys.length) throw new MaterializationOutboxError('INVALID_MESSAGE', 'the event ledger returned an incomplete source sequence batch')
+          sequences.push(...results.map((result) => result.recordedSeq))
+        }
+      }
+      return sequences
+    },
     async next(scopeRef, idempotencyKey, ctx) {
       const response = await repository.appendEvent(
         {
