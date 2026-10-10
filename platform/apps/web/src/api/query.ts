@@ -8,6 +8,7 @@ import type {
   RunState,
   Sha256Digest,
   SseEventType,
+  VersionRef,
 } from '@ontology/contracts'
 
 /**
@@ -21,6 +22,21 @@ export interface CreateRunRequest {
   readonly question: string
   readonly context: CreateRunContext
   readonly preferences: RunPreferences
+  readonly projectId?: string
+  readonly task?: {
+    readonly bindingRef: VersionRef
+    readonly arguments: Readonly<Record<string, unknown>>
+    readonly inputSelection?: ProjectComputeInputSelection
+  }
+}
+
+/** User-selected fields from the active project catalogue; the host resolves immutable inputs. */
+export interface ProjectComputeInputSelection {
+  readonly objectId: string
+  readonly idField: string
+  readonly amountField: string
+  readonly unitField?: string
+  readonly currencyField?: string
 }
 
 export interface CreateRunView {

@@ -21,11 +21,13 @@ const openHarnesses: Harness[] = []
 class FakeStream {
   readonly opened: { readonly url: string; readonly lastEventId: string | undefined }[] = []
   closed = 0
+  readonly generations: RunEventHandlers[] = []
   #handlers: RunEventHandlers | undefined
 
   readonly factory: RunEventStreamFactory = (url, lastEventId, handlers) => {
     this.opened.push({ url, lastEventId })
     this.#handlers = handlers
+    this.generations.push(handlers)
     handlers.onOpen?.()
     return {
       close: () => {
@@ -94,9 +96,7 @@ async function push(stream: FakeStream, event: RunEvent): Promise<void> {
 async function type(element: HTMLInputElement | HTMLTextAreaElement, value: string): Promise<void> {
   await act(async () => {
     const descriptor = Object.getOwnPropertyDescriptor(
-      element instanceof HTMLTextAreaElement
-        ? HTMLTextAreaElement.prototype
-        : HTMLInputElement.prototype,
+      element instanceof HTMLTextAreaElement ? HTMLTextAreaElement.prototype : HTMLInputElement.prototype,
       'value',
     )
     descriptor?.set?.call(element, value)
@@ -197,7 +197,12 @@ function publishedAnswer(runId: string, overrides: Partial<PublishedAnswer> = {}
     scenarioManifestHash: `sha256:${'c'.repeat(64)}`,
     publicationKind: 'verified',
     limitations: [],
-    body: { schemaVersion: 'answer-draft@1', blocks: [{ kind: 'text', text: 'A verified result.' }], claims: [], assertions: [] },
+    body: {
+      schemaVersion: 'answer-draft@1',
+      blocks: [{ kind: 'text', text: 'A verified result.' }],
+      claims: [],
+      assertions: [],
+    },
     publishedAt: '2026-09-21T00:00:00Z',
     ...overrides,
   }
@@ -239,7 +244,9 @@ describe('business query UI states (real API fixture over HTTP)', () => {
     })
     const container = await renderQuery(client)
     await waitFor(() => container.querySelector('[data-state="failure"]') !== null, 'failure state')
-    expect(container.querySelector('[data-testid="state-error-code"]')?.textContent).toContain('NETWORK_ERROR')
+    expect(container.querySelector('[data-testid="state-error-code"]')?.textContent).toContain(
+      'NETWORK_ERROR',
+    )
   })
 
   it('renders a permission-denied state for a 403', async () => {
@@ -254,7 +261,10 @@ describe('business query UI states (real API fixture over HTTP)', () => {
         ),
     })
     const container = await renderQuery(client)
-    await waitFor(() => container.querySelector('[data-state="permission_denied"]') !== null, 'permission denied')
+    await waitFor(
+      () => container.querySelector('[data-state="permission_denied"]') !== null,
+      'permission denied',
+    )
     expect(container.querySelector('[data-testid="state-error-code"]')?.textContent).toContain('FORBIDDEN')
   })
 
@@ -285,7 +295,9 @@ describe('business query UI states (real API fixture over HTTP)', () => {
     const built = await harness()
     const container = await renderQuery(built.client)
     await waitFor(() => container.querySelector('[data-state="empty"]') !== null, 'empty state')
-    expect(container.querySelector('[data-testid="query-panel"]')?.getAttribute('data-viewport')).toBe('narrow')
+    expect(container.querySelector('[data-testid="query-panel"]')?.getAttribute('data-viewport')).toBe(
+      'narrow',
+    )
     setInnerWidth(1280)
   })
 
@@ -305,8 +317,9 @@ describe('ask within the resolved scenario scope', () => {
     const container = await renderQuery(built.client, undefined, undefined, tasks)
     await waitFor(() => container.querySelector('[data-testid="query-ask"]') !== null, 'ask form')
 
-    expect(container.querySelector('[data-testid="query-capability-note"]')?.textContent)
-      .toContain('最多可用逗号组合3个属性')
+    expect(container.querySelector('[data-testid="query-capability-note"]')?.textContent).toContain(
+      '当前提供 3 项已注册任务',
+    )
     const question = container.querySelector<HTMLTextAreaElement>('[data-testid="query-question"]')
     const ask = container.querySelector('[data-testid="query-ask"]')
     if (question === null || ask === null) throw new Error('the facts query fields are missing')
@@ -329,7 +342,9 @@ describe('ask within the resolved scenario scope', () => {
     const container = await renderQuery(built.client)
     await waitFor(() => container.querySelector('[data-testid="query-ask"]') !== null, 'ask form')
 
-    const tools = [...container.querySelectorAll('[data-testid="scope-tool"]')].map((node) => node.textContent)
+    const tools = [...container.querySelectorAll('[data-testid="scope-tool"]')].map(
+      (node) => node.textContent,
+    )
     expect(tools).toContain('data_query')
     expect(tools).not.toContain('web_search')
     expect(container.querySelector('[data-testid="scope-web"]')?.getAttribute('data-enabled')).toBe('false')
@@ -395,9 +410,9 @@ describe('ask within the resolved scenario scope', () => {
       'unverified_answer.delta',
     )
     expect(container.innerHTML).not.toContain(draftText)
-    expect(container.querySelector('[data-testid="query-answer"]')?.getAttribute('data-answer-state')).not.toBe(
-      'published',
-    )
+    expect(
+      container.querySelector('[data-testid="query-answer"]')?.getAttribute('data-answer-state'),
+    ).not.toBe('published')
   })
 })
 
@@ -424,7 +439,10 @@ describe('clarification resumes on the same shared budget', () => {
         occurredAt: '2026-09-21T00:02:00Z',
       },
     })
-    await waitFor(() => container.querySelector('[data-testid="query-clarification"]') !== null, 'clarification')
+    await waitFor(
+      () => container.querySelector('[data-testid="query-clarification"]') !== null,
+      'clarification',
+    )
 
     const before = container.querySelector('[data-testid="budget-tool-calls"]')?.textContent ?? ''
     expect(before).toContain('6')
@@ -450,6 +468,177 @@ describe('clarification resumes on the same shared budget', () => {
 })
 
 describe('cancel and the five observable outcomes', () => {
+  it.each(['network', 'server'] as const)('never restores project A after project B creation %s failure and retries B with the same idempotency key', async (fault) => {
+    const stream = new FakeStream()
+    const built = await harness()
+    const runId = await seedRun(built)
+    const projectA = '10000000-0000-4000-8000-000000000001'
+    const projectB = '10000000-0000-4000-8000-000000000002'
+    const sha = `sha256:${'a'.repeat(64)}`
+    const projects = [projectA, projectB].map((projectId) => ({ projectId, title: projectId === projectA ? '项目甲' : '项目乙', headRevision: '1', state: 'active', createdBy: 'human', createdAt: '2026-10-09T00:00:00Z', updatedAt: '2026-10-09T00:00:00Z' }))
+    const submissions: { body: Record<string, unknown>; key: string | null }[] = []
+    let oldRunReads = 0
+    const client = new WorkbenchClient({ baseUrl: built.baseUrl, eventStreamFactory: stream.factory, fetchImpl: async (input, init) => {
+      const path = new URL(String(input)).pathname
+      if (path === `/api/v1/runs/${runId}`) oldRunReads += 1
+      if (path === '/api/v1/projects') return jsonResponse(200, { data: { projects } })
+      if (path.endsWith('/task-catalogue')) {
+        const projectId = path.includes(projectA) ? projectA : projectB
+        return jsonResponse(200, { data: { project: projects.find((project) => project.projectId === projectId), revision: { ref: { projectId, revision: '1', digest: sha }, industryPackRef: { id: 'pack', version: '1.0.0', digest: sha }, definitionRef: { id: 'definition', version: '1.0.0', digest: sha }, mappingRefs: [], profileRef: { ...PROFILE, snapshotHash: sha }, documentSetRef: { id: projectId, version: '1.0.0', digest: sha, kind: 'artifact' }, semanticPublicationRefs: [], sourceVisibilityEpoch: '1', changeReason: 'independent UI wire context' }, tasks: [] } })
+      }
+      if (path === '/api/v1/runs' && init?.method === 'POST') {
+        submissions.push({ body: JSON.parse(String(init.body)) as Record<string, unknown>, key: new Headers(init.headers).get('idempotency-key') })
+        if (fault === 'network') throw new TypeError('injected project B creation transport failure')
+        return jsonResponse(503, { error: { code: 'SOURCE_UNAVAILABLE', message: 'injected project B creation server failure', retryable: true } })
+      }
+      return fetch(input, { ...init, headers: { ...(init?.headers ?? {}), 'x-test-subject': 'ui-owner', 'x-test-roles': 'platform-admin,business-user,scoped-reader,operator', 'x-test-scope': 'a' } })
+    } })
+    const container = document.createElement('div'); document.body.appendChild(container)
+    const root = createRoot(container); mounted.push({ root, container })
+    const props = { client, profileRef: PROFILE, timeZone: 'Asia/Shanghai', initialRunId: runId }
+    await act(async () => { root.render(createElement(QueryPanel, { ...props, projectId: projectA })) })
+    await waitFor(() => container.querySelector('[data-testid="query-run"]') !== null, 'actual A deep-linked run')
+    const readsBefore = oldRunReads
+    await act(async () => { root.render(createElement(QueryPanel, { ...props, projectId: projectB })) })
+    await waitFor(() => container.querySelector('[data-testid="query-run"]') === null && container.textContent?.includes('当前项目尚无就绪的任务') === true, 'B project context and actual catalogue wire')
+    const question = container.querySelector<HTMLTextAreaElement>('[data-testid="query-question"]')
+    const ask = container.querySelector('[data-testid="query-ask"]')
+    if (question === null || ask === null) throw new Error('B ask controls missing')
+    await type(question, '只查询项目乙的当前资料')
+    await click(ask)
+    await waitFor(() => container.querySelector('[data-testid="state-panel-recover"]') !== null, 'B create failure recovery')
+    await click(container.querySelector('[data-testid="state-panel-recover"]') as Element)
+    await waitFor(() => submissions.length === 2 && container.querySelector('[data-testid="state-panel-recover"]') !== null, 'same B submission recovery attempt')
+    expect(submissions[0]?.body['projectId']).toBe(projectB)
+    expect(submissions[1]?.body).toEqual(submissions[0]?.body)
+    expect(submissions[1]?.key).toBe(submissions[0]?.key)
+    expect(submissions[0]?.key).toBeTruthy()
+    expect(oldRunReads).toBe(readsBefore)
+    expect(stream.generations).toHaveLength(1)
+    expect(container.querySelector('[data-testid="query-run"]')).toBeNull()
+    await act(async () => { stream.generations[0]?.onEvent({ id: 'late-A-published', event: 'answer.published', data: { publicationKind: 'verified' } }) })
+    expect(container.querySelector('[data-testid="outcome-normal"]')).toBeNull()
+  })
+  it('clears a saved run when the selected project changes and ignores its late stream', async () => {
+    const stream = new FakeStream()
+    const built = await harness({ streamFactory: stream.factory })
+    const runId = await seedRun(built)
+    const container = document.createElement('div')
+    document.body.appendChild(container)
+    const root = createRoot(container)
+    mounted.push({ root, container })
+    const props = {
+      client: built.client,
+      profileRef: PROFILE,
+      timeZone: 'Asia/Shanghai',
+      initialRunId: runId,
+    }
+    await act(async () => {
+      root.render(createElement(QueryPanel, { ...props, projectId: '10000000-0000-4000-8000-000000000001' }))
+    })
+    await waitFor(
+      () => container.querySelector('[data-testid="query-run"]') !== null,
+      'saved run in first project context',
+    )
+    const previous = stream.generations[0]
+    await act(async () => {
+      root.render(createElement(QueryPanel, { ...props, projectId: '10000000-0000-4000-8000-000000000002' }))
+    })
+    await waitFor(
+      () => container.querySelector('[data-testid="query-run"]') === null,
+      'cleared run in new project context',
+    )
+    await act(async () => {
+      previous?.onEvent({
+        id: 'late-project-frame',
+        event: 'answer.published',
+        data: { publicationKind: 'verified' },
+      })
+    })
+    expect(stream.generations).toHaveLength(1)
+    expect(container.querySelector('[data-testid="query-run"]')).toBeNull()
+    expect(container.querySelector('[data-testid="outcome-normal"]')).toBeNull()
+  })
+  it.each(['conflict', 'lost_response'] as const)(
+    're-reads the actual run after a cancel %s and fences old callbacks',
+    async (fault) => {
+      const stream = new FakeStream()
+      const built = await harness()
+      const runId = await seedRun(built)
+      await built.runService.recordRuntimeEvent(runId, planEvent(runId), built.ctx)
+      await built.consumeBudget(runId, 2)
+      let injected = false
+      let creates = 0
+      const client = new WorkbenchClient({
+        baseUrl: built.baseUrl,
+        eventStreamFactory: stream.factory,
+        fetchImpl: async (input, init) => {
+          const path = new URL(String(input)).pathname
+          if (path === '/api/v1/runs' && init?.method === 'POST') creates += 1
+          const options: RequestInit = {
+            ...init,
+            headers: {
+              ...(init?.headers ?? {}),
+              'x-test-subject': 'ui-owner',
+              'x-test-roles':
+                'platform-admin,profile-editor,business-user,scoped-reader,operator,semantic-reviewer,semantic-publisher',
+              'x-test-scope': 'a',
+            },
+          }
+          if (path.endsWith('/cancel') && !injected) {
+            injected = true
+            if (fault === 'conflict')
+              return jsonResponse(409, {
+                error: {
+                  code: 'VERSION_CONFLICT',
+                  message: 'injected cancel write conflict',
+                  retryable: false,
+                },
+              })
+            await fetch(input, options)
+            throw new TypeError('injected lost cancel response after actual write')
+          }
+          return fetch(input, options)
+        },
+      })
+      const container = await renderQuery(client, runId)
+      await waitFor(() => stream.generations.length === 1, 'original actual run session')
+      const old = stream.generations[0]
+      const before = container.querySelector('[data-testid="budget-tool-calls"]')?.textContent
+      await click(container.querySelector('[data-testid="query-cancel"]') as Element)
+      await waitFor(
+        () => container.querySelector('[data-testid="state-panel-recover"]') !== null,
+        'cancel recovery entry',
+      )
+      await click(container.querySelector('[data-testid="state-panel-recover"]') as Element)
+      await waitFor(
+        () =>
+          fault === 'conflict'
+            ? stream.generations.length === 2
+            : container.querySelector('[data-testid="outcome-cancelled"]') !== null,
+        'actual cancellation readback',
+      )
+      await act(async () => {
+        old?.onEvent({
+          id: 'late-cancel-frame',
+          event: 'answer.published',
+          data: { publicationKind: 'verified' },
+        })
+      })
+      expect(container.querySelector('[data-testid="outcome-normal"]')).toBeNull()
+      expect(container.querySelector('[data-testid="budget-tool-calls"]')?.textContent).toBe(before)
+      expect(creates).toBe(0)
+      if (fault === 'conflict') {
+        expect((await built.runService.getRun(runId, built.ctx)).state).toBe('collecting')
+        await click(container.querySelector('[data-testid="query-cancel"]') as Element)
+        await waitFor(
+          () => container.querySelector('[data-testid="outcome-cancelled"]') !== null,
+          'cancel after restored active session',
+        )
+      }
+      expect((await built.runService.getRun(runId, built.ctx)).state).toBe('cancelled')
+    },
+  )
   it('cancels the run and shows the cancelled outcome', async () => {
     const stream = new FakeStream()
     const built = await harness({ streamFactory: stream.factory })
@@ -457,7 +646,10 @@ describe('cancel and the five observable outcomes', () => {
     const container = await renderQuery(built.client, runId)
     await waitFor(() => container.querySelector('[data-testid="query-cancel"]') !== null, 'cancel button')
     await click(container.querySelector('[data-testid="query-cancel"]') as Element)
-    await waitFor(() => container.querySelector('[data-testid="outcome-cancelled"]') !== null, 'cancelled outcome')
+    await waitFor(
+      () => container.querySelector('[data-testid="outcome-cancelled"]') !== null,
+      'cancelled outcome',
+    )
     const run = await built.runService.getRun(runId, built.ctx)
     expect(run.state).toBe('cancelled')
   })
@@ -478,18 +670,28 @@ describe('cancel and the five observable outcomes', () => {
   it('shows the limited answer with its limitations', async () => {
     const built = await harness()
     const runId = await seedRun(built)
-    built.seedAnswer(runId, publishedAnswer(runId, {
-      publicationKind: 'history_limited',
-      asOf: '2026-09-20T00:00:00Z',
-      limitations: ['incomplete-evidence'],
-    }))
+    built.seedAnswer(
+      runId,
+      publishedAnswer(runId, {
+        publicationKind: 'history_limited',
+        asOf: '2026-09-20T00:00:00Z',
+        limitations: ['incomplete-evidence'],
+      }),
+    )
     const container = await renderQuery(built.client, runId)
-    await waitFor(() => container.querySelector('[data-testid="outcome-limited"]') !== null, 'limited outcome')
-    expect(container.querySelector('[data-testid="published-answer-limitations"]')?.textContent).toContain('证据不完整')
-    expect(container.querySelector('[data-testid="published-answer-as-of"]')?.textContent).toContain('2026-09-20T00:00:00Z')
+    await waitFor(
+      () => container.querySelector('[data-testid="outcome-limited"]') !== null,
+      'limited outcome',
+    )
+    expect(container.querySelector('[data-testid="published-answer-limitations"]')?.textContent).toContain(
+      '证据不完整',
+    )
+    expect(container.querySelector('[data-testid="published-answer-as-of"]')?.textContent).toContain(
+      '2026-09-20T00:00:00Z',
+    )
   })
 
-  it('renders a typed published body and passes the full evidence ref to the host', async () => {
+  it('keeps a typed answer in place while viewing its source and passes the full ref on explicit navigation', async () => {
     const built = await harness()
     const runId = await seedRun(built)
     const evidenceRef: ResourceRef = {
@@ -499,33 +701,51 @@ describe('cancel and the five observable outcomes', () => {
       kind: 'evidence',
     }
     const assertionId = randomUUID()
-    built.seedAnswer(runId, publishedAnswer(runId, {
-      body: {
-        schemaVersion: 'answer-draft@2',
-        blocks: [{ kind: 'assertion', assertionId }],
-        claims: [],
-        assertions: [{
-          assertionId,
-          subject: 'facility-T-01',
-          predicate: 'inspection_due',
-          kind: 'boolean',
-          value: false,
-          references: [{
-            evidenceRef,
-            resultDigest: evidenceRef.digest,
-            valuePointer: '/table/rows/0/columns/0',
-            subjectPointer: '/table/rows/0/columns/1',
-            fieldRefPointer: '/table/columns/0/fieldRef',
-          }],
-        }],
-      },
-    }))
+    built.seedAnswer(
+      runId,
+      publishedAnswer(runId, {
+        body: {
+          schemaVersion: 'answer-draft@2',
+          blocks: [{ kind: 'assertion', assertionId }],
+          claims: [],
+          assertions: [
+            {
+              assertionId,
+              subject: 'facility-T-01',
+              predicate: 'inspection_due',
+              kind: 'boolean',
+              value: false,
+              references: [
+                {
+                  evidenceRef,
+                  resultDigest: evidenceRef.digest,
+                  valuePointer: '/table/rows/0/columns/0',
+                  subjectPointer: '/table/rows/0/columns/1',
+                  fieldRefPointer: '/table/columns/0/fieldRef',
+                },
+              ],
+            },
+          ],
+        },
+      }),
+    )
     const opened: ResourceRef[] = []
     const container = await renderQuery(built.client, runId, (ref) => opened.push(ref))
 
-    await waitFor(() => container.querySelector('[data-testid="published-answer-boolean"]') !== null, 'typed published answer body')
+    await waitFor(
+      () => container.querySelector('[data-testid="published-answer-boolean"]') !== null,
+      'typed published answer body',
+    )
     expect(container.querySelector('[data-testid="published-answer-boolean"]')?.textContent).toBe('否')
     await click(container.querySelector('[data-testid="published-answer-evidence-reference"]') as Element)
+    expect(container.querySelector('dialog[open]')).not.toBeNull()
+    expect(container.querySelector('[data-testid="published-answer-boolean"]')?.textContent).toBe('否')
+    expect(opened).toEqual([])
+    const navigation = Array.from(container.querySelectorAll('dialog button')).find(
+      (button) => button.textContent === '查看完整来源页面',
+    )
+    if (navigation === undefined) throw new Error('explicit source navigation missing')
+    await click(navigation)
     expect(opened).toEqual([evidenceRef])
   })
 
@@ -567,7 +787,10 @@ describe('cancel and the five observable outcomes', () => {
       event: 'run.failed',
       data: { error: { code: 'DATA_CONFLICT', message: 'conflicting evidence' } },
     })
-    await waitFor(() => conflictContainer.querySelector('[data-testid="outcome-conflict"]') !== null, 'conflict')
+    await waitFor(
+      () => conflictContainer.querySelector('[data-testid="outcome-conflict"]') !== null,
+      'conflict',
+    )
 
     const toolStream = new FakeStream()
     const toolHarness = await harness({ streamFactory: toolStream.factory })

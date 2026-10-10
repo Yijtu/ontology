@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useReducer, useState } from 'react'
+import { useCallback, useEffect, useMemo, useReducer, useState } from 'react'
 import type {
   DependencyGraphView,
   EvidenceDependencyDirection,
@@ -15,6 +15,10 @@ import type { EvidenceEvent } from '../state/evidence'
 import type { WorkbenchError } from '../state/workbench'
 import { StatePanel } from './StatePanel'
 import { useViewport } from './useViewport'
+import { useRequestFence } from './project/useRequestFence'
+import { EvidenceSummary } from './project/EvidenceSummary'
+import { VerifiedCell } from './project/VerifiedCell'
+import './project/project-workbench.css'
 
 /**
  * The on-demand provenance and history surface (US-017/US-022, FR-19/FR-30, SPEC C6/C3.1/C4).
@@ -91,94 +95,113 @@ function graphFailureEvent(error: unknown): EvidenceEvent {
   return { type: 'graphFailed', error: toError(error) }
 }
 
-function BasisPanel({ evidence }: { readonly evidence: ProvenanceEvidenceView }) {
+function BasisPanel({
+  evidence,
+  onOpenEvidence,
+}: {
+  readonly evidence: ProvenanceEvidenceView
+  readonly onOpenEvidence: (ref: ResourceRef) => void
+}) {
   return (
     <section className="evidence__basis" data-testid="evidence-basis" data-outcome={evidence.outcome}>
-      <h3>实际依据（服务端记录）</h3>
+      <h3>结论依据</h3>
+      <EvidenceSummary evidence={evidence} onOpenEvidence={onOpenEvidence} />
       <p className="evidence__note" data-testid="basis-note">
         仅展示服务端提供的依据（规则、前提组、来源快照定位），不展示模型思维链。
       </p>
-      <dl className="evidence__facts">
-        <dt>结论 ID</dt>
-        <dd data-testid="basis-evidence-id">{evidence.evidenceId}</dd>
-        <dt>结论类型</dt>
-        <dd data-testid="basis-kind">{evidence.kind}</dd>
-        <dt>数据模式</dt>
-        <dd data-testid="basis-data-mode">{evidence.dataMode}</dd>
-        <dt>可验证性</dt>
-        <dd data-testid="basis-outcome">{evidence.outcome}</dd>
-        <dt>完整性摘要校验</dt>
-        <dd data-testid="basis-integrity">{String(evidence.integrityVerified)}</dd>
-        <dt>记录时间</dt>
-        <dd data-testid="basis-recorded-at">{evidence.recordedAt}</dd>
-        <dt>观测时间</dt>
-        <dd data-testid="basis-observed-at">{evidence.observedAt}</dd>
-        <dt>结果摘要</dt>
-        <dd data-testid="basis-result-digest">{evidence.resultDigest}</dd>
-        {evidence.producedBy.runId === undefined ? null : (
-          <>
-            <dt>产生运行</dt>
-            <dd data-testid="basis-run">{evidence.producedBy.runId}</dd>
-          </>
-        )}
-      </dl>
+      <details className="project-audit">
+        <summary>核验、时间与版本详情</summary>
+        <dl className="evidence__facts">
+          <dt>结论 ID</dt>
+          <dd data-testid="basis-evidence-id">{evidence.evidenceId}</dd>
+          <dt>结论类型</dt>
+          <dd data-testid="basis-kind">{evidence.kind}</dd>
+          <dt>数据模式</dt>
+          <dd data-testid="basis-data-mode">{evidence.dataMode}</dd>
+          <dt>可验证性</dt>
+          <dd data-testid="basis-outcome">{evidence.outcome}</dd>
+          <dt>完整性摘要校验</dt>
+          <dd data-testid="basis-integrity">{String(evidence.integrityVerified)}</dd>
+          <dt>记录时间</dt>
+          <dd data-testid="basis-recorded-at">{evidence.recordedAt}</dd>
+          <dt>观测时间</dt>
+          <dd data-testid="basis-observed-at">{evidence.observedAt}</dd>
+          <dt>结果摘要</dt>
+          <dd data-testid="basis-result-digest">{evidence.resultDigest}</dd>
+          {evidence.producedBy.runId === undefined ? null : (
+            <>
+              <dt>产生运行</dt>
+              <dd data-testid="basis-run">{evidence.producedBy.runId}</dd>
+            </>
+          )}
+        </dl>
+      </details>
       {evidence.reason === undefined ? null : (
         <p className="evidence__unverifiable" data-testid="basis-reason" role="alert">
           不可验证原因：{evidence.reason}
         </p>
       )}
 
-      <h4>规则</h4>
-      {evidence.ruleRefs.length === 0 ? (
-        <p data-testid="rule-none">直接观测，无规则推导。</p>
-      ) : (
-        <ul className="evidence__rules" data-testid="rule-refs">
-          {evidence.ruleRefs.map((rule) => (
-            <li key={`${rule.id}@${rule.version}`} data-testid="rule-ref">
-              规则 {rule.id}@{rule.version}
-            </li>
-          ))}
-        </ul>
-      )}
-
-      <section className="evidence__support" data-testid="support-resolution"
-        data-state={evidence.supportResolution?.state ?? 'unknown'}
-        data-complete={evidence.supportResolution?.complete ?? false}>
-        <h4>规则支撑完整性</h4>
-        <p data-testid="support-resolution-state">
-          {evidence.supportResolution === undefined
-            ? '服务端未报告规则支撑完整性'
-            : `${SUPPORT_STATE_LABEL[evidence.supportResolution.state]}（${evidence.supportResolution.complete ? '完整' : '不完整'}）`}
-        </p>
-        {evidence.supportResolution?.reason === undefined ? null : (
-          <p data-testid="support-resolution-reason">{evidence.supportResolution.reason}</p>
+      <details className="project-audit">
+        <summary>规则与支撑契约详情</summary>
+        <h4>规则版本</h4>
+        {evidence.ruleRefs.length === 0 ? (
+          <p data-testid="rule-none">直接观测，无规则推导。</p>
+        ) : (
+          <ul className="evidence__rules" data-testid="rule-refs">
+            {evidence.ruleRefs.map((rule) => (
+              <li key={`${rule.id}@${rule.version}`} data-testid="rule-ref">
+                规则 {rule.id}@{rule.version}
+              </li>
+            ))}
+          </ul>
         )}
-      </section>
 
-      <h4>前提组（AND of OR）</h4>
-      {evidence.premiseGroups.length === 0 ? (
-        <p data-testid="premise-none">无规则前提组。</p>
-      ) : (
-        <ul className="evidence__premises" data-testid="premise-groups">
-          {evidence.premiseGroups.map((group) => (
-            <li key={group.groupId} data-testid="premise-group" data-alternatives={group.alternativeEvidenceIds.length}>
-              前提组 {group.groupId}：
-              {group.alternativeEvidenceIds.map((id) => (
-                <span key={id} className="evidence__premise-id" data-testid="premise-evidence">
-                  {id}
-                </span>
-              ))}
-              {group.alternativeEvidenceIds.length > 1 ? (
-                <span className="evidence__alternatives" data-testid="premise-alternatives">
-                  另有等价依据（{group.alternativeEvidenceIds.length - 1} 条），撤回一条不会删除结论。
-                </span>
-              ) : null}
-            </li>
-          ))}
-        </ul>
-      )}
+        <section
+          className="evidence__support"
+          data-testid="support-resolution"
+          data-state={evidence.supportResolution?.state ?? 'unknown'}
+          data-complete={evidence.supportResolution?.complete ?? false}
+        >
+          <h4>规则支撑完整性</h4>
+          <p data-testid="support-resolution-state">
+            {evidence.supportResolution === undefined
+              ? '服务端未报告规则支撑完整性'
+              : `${SUPPORT_STATE_LABEL[evidence.supportResolution.state]}（${evidence.supportResolution.complete ? '完整' : '不完整'}）`}
+          </p>
+          {evidence.supportResolution?.reason === undefined ? null : (
+            <p data-testid="support-resolution-reason">{evidence.supportResolution.reason}</p>
+          )}
+        </section>
 
-      <h4>来源快照（SQL / 文档定位与可重读性）</h4>
+        <h4>前提组（AND of OR）</h4>
+        {evidence.premiseGroups.length === 0 ? (
+          <p data-testid="premise-none">无规则前提组。</p>
+        ) : (
+          <ul className="evidence__premises" data-testid="premise-groups">
+            {evidence.premiseGroups.map((group) => (
+              <li
+                key={group.groupId}
+                data-testid="premise-group"
+                data-alternatives={group.alternativeEvidenceIds.length}
+              >
+                前提组 {group.groupId}：
+                {group.alternativeEvidenceIds.map((id) => (
+                  <span key={id} className="evidence__premise-id" data-testid="premise-evidence">
+                    {id}
+                  </span>
+                ))}
+                {group.alternativeEvidenceIds.length > 1 ? (
+                  <span className="evidence__alternatives" data-testid="premise-alternatives">
+                    另有等价依据（{group.alternativeEvidenceIds.length - 1} 条），撤回一条不会删除结论。
+                  </span>
+                ) : null}
+              </li>
+            ))}
+          </ul>
+        )}
+      </details>
+      <h4>来源可读状态</h4>
       {evidence.sources.length === 0 ? (
         <p data-testid="source-none">无来源快照。</p>
       ) : (
@@ -189,9 +212,13 @@ function BasisPanel({ evidence }: { readonly evidence: ProvenanceEvidenceView })
               data-testid="source-snapshot"
               data-rereadability={source.reReadability}
             >
-              <p className="evidence__locator" data-testid="source-locator">
-                定位：{source.sourceRef.namespace}://{source.sourceRef.sourceId} · schema {source.schemaVersion}
-              </p>
+              <details className="project-audit">
+                <summary>来源定位与版本</summary>
+                <p className="evidence__locator" data-testid="source-locator">
+                  定位：{source.sourceRef.namespace}://{source.sourceRef.sourceId} · schema{' '}
+                  {source.schemaVersion}
+                </p>
+              </details>
               <p data-testid="source-read-at">
                 读取时间：{source.readAt} · 一致性：{source.consistency}
               </p>
@@ -279,8 +306,8 @@ function GraphPanel({
       {graph === undefined ? null : (
         <>
           <p data-testid="graph-meta">
-            根 {graph.rootEvidenceId} · 方向 {graph.direction} · 深度 {graph.depth} · 已加载 {graphPages} 页 · 节点{' '}
-            {graph.nodes.length} · 边 {graph.edges.length}
+            根 {graph.rootEvidenceId} · 方向 {graph.direction} · 深度 {graph.depth} · 已加载 {graphPages} 页 ·
+            节点 {graph.nodes.length} · 边 {graph.edges.length}
           </p>
 
           {graph.coverage.truncated ? (
@@ -294,8 +321,11 @@ function GraphPanel({
             </p>
           )}
 
-          <section className="evidence__support-coverage" data-testid="graph-support-coverage"
-            data-complete={graph.coverage.support?.complete ?? false}>
+          <section
+            className="evidence__support-coverage"
+            data-testid="graph-support-coverage"
+            data-complete={graph.coverage.support?.complete ?? false}
+          >
             <h4>规则支撑覆盖</h4>
             <p data-testid="graph-support-completeness">
               {graph.coverage.support === undefined
@@ -307,8 +337,12 @@ function GraphPanel({
             {graph.coverage.support === undefined ? null : (
               <ul data-testid="graph-support-resolutions">
                 {graph.coverage.support.resolutions.map((entry) => (
-                  <li key={entry.evidenceId} data-testid="graph-support-resolution"
-                    data-state={entry.resolution.state} data-complete={entry.resolution.complete}>
+                  <li
+                    key={entry.evidenceId}
+                    data-testid="graph-support-resolution"
+                    data-state={entry.resolution.state}
+                    data-complete={entry.resolution.complete}
+                  >
                     {entry.evidenceId}：{SUPPORT_STATE_LABEL[entry.resolution.state]}
                     {entry.resolution.reason === undefined ? '' : `（${entry.resolution.reason}）`}
                   </li>
@@ -319,7 +353,12 @@ function GraphPanel({
 
           <ul className="evidence__nodes" data-testid="graph-nodes" data-count={graph.nodes.length}>
             {graph.nodes.map((node) => (
-              <li key={node.evidenceId} data-testid="graph-node" data-outcome={node.outcome} data-depth={node.depth}>
+              <li
+                key={node.evidenceId}
+                data-testid="graph-node"
+                data-outcome={node.outcome}
+                data-depth={node.depth}
+              >
                 深度 {node.depth} · {node.evidenceId}
                 {node.kind === undefined ? '' : ` · ${node.kind}`}
                 {node.outcome === 'unverifiable' ? '（不可验证）' : ''}
@@ -358,7 +397,11 @@ function AssertionRow({ assertion }: { readonly assertion: HistoricalAssertionVi
       {assertion.revisionKind === undefined ? null : (
         <span data-testid="assertion-revision-kind"> · {assertion.revisionKind}</span>
       )}
-      <span data-testid="assertion-value"> · {JSON.stringify(assertion.value)}</span>
+      <span data-testid="assertion-value">
+        {' '}
+        · <VerifiedCell value={assertion.value['value'] ?? assertion.value} />
+        {assertion.unitCode === undefined ? null : ` ${assertion.unitCode}`}
+      </span>
       <span data-testid="assertion-recorded-at"> · 记录于 {assertion.recordedAt}</span>
       {assertion.revisionReason === undefined ? null : (
         <span data-testid="assertion-reason"> · 理由 {assertion.revisionReason}</span>
@@ -367,10 +410,17 @@ function AssertionRow({ assertion }: { readonly assertion: HistoricalAssertionVi
   )
 }
 
-export function EvidencePanel({ client, initialEvidenceId, initialObjectId, initialReference }: EvidencePanelProps) {
+export function EvidencePanel({
+  client,
+  initialEvidenceId,
+  initialObjectId,
+  initialReference,
+}: EvidencePanelProps) {
   const viewport = useViewport()
   const [state, dispatch] = useReducer(evidenceReducer, undefined, initialEvidenceState)
-  const [evidenceInput, setEvidenceInput] = useState(initialEvidenceId ?? (initialReference?.kind === 'evidence' ? initialReference.id : ''))
+  const [evidenceInput, setEvidenceInput] = useState(
+    initialEvidenceId ?? (initialReference?.kind === 'evidence' ? initialReference.id : ''),
+  )
   const [asOfInput, setAsOfInput] = useState('')
   const [validAtInput, setValidAtInput] = useState('')
   const [objectInput, setObjectInput] = useState(initialObjectId ?? '')
@@ -378,9 +428,16 @@ export function EvidencePanel({ client, initialEvidenceId, initialObjectId, init
   const [historyValidAtInput, setHistoryValidAtInput] = useState('')
   const [baseVersion, setBaseVersion] = useState('')
   const [compareVersion, setCompareVersion] = useState('')
+  const scope = useMemo(
+    () => ({ client, initialEvidenceId, initialObjectId, initialReference }),
+    [client, initialEvidenceId, initialObjectId, initialReference],
+  )
+  const begin = useRequestFence(scope)
 
   const loadEvidence = useCallback(
     async (evidenceId: string, asOf: string, validAt: string) => {
+      const request = begin('evidence')
+      begin('graph')
       dispatch({
         type: 'evidenceLoadStarted',
         evidenceId,
@@ -392,18 +449,19 @@ export function EvidencePanel({ client, initialEvidenceId, initialObjectId, init
           ...(asOf.trim().length === 0 ? {} : { asOf: asOf.trim() }),
           ...(validAt.trim().length === 0 ? {} : { validAt: validAt.trim() }),
         })
-        dispatch({ type: 'evidenceLoaded', evidence })
+        if (request.current()) dispatch({ type: 'evidenceLoaded', evidence })
       } catch (error) {
-        dispatch(failureEvent(error))
+        if (request.current()) dispatch(failureEvent(error))
       }
     },
-    [client],
+    [client, begin],
   )
 
   const loadGraph = useCallback(
     async (append: boolean) => {
       const evidenceId = state.evidenceId
       if (evidenceId === undefined) return
+      const request = begin('graph')
       dispatch({ type: 'graphLoadStarted' })
       try {
         const page = await client.getEvidenceDependencies(evidenceId, {
@@ -411,36 +469,40 @@ export function EvidencePanel({ client, initialEvidenceId, initialObjectId, init
           depth: state.depth,
           ...(append && state.graphCursor !== undefined ? { cursor: state.graphCursor } : {}),
         })
-        dispatch({
-          type: 'graphLoaded',
-          graph: page.graph,
-          nextCursor: page.nextCursor ?? page.graph.coverage.cursor,
-          append,
-        })
+        if (request.current())
+          dispatch({
+            type: 'graphLoaded',
+            graph: page.graph,
+            nextCursor: page.nextCursor ?? page.graph.coverage.cursor,
+            append,
+          })
       } catch (error) {
-        dispatch(graphFailureEvent(error))
+        if (request.current()) dispatch(graphFailureEvent(error))
       }
     },
-    [client, state.evidenceId, state.direction, state.depth, state.graphCursor],
+    [client, state.evidenceId, state.direction, state.depth, state.graphCursor, begin],
   )
 
   const loadHistory = useCallback(
     async (objectId: string, recordedAt: string, validAt: string) => {
+      const request = begin('history')
       dispatch({ type: 'historyLoadStarted', objectId })
       try {
         const page = await client.getObjectHistory(objectId, {
           ...(recordedAt.trim().length === 0 ? {} : { recordedAt: recordedAt.trim() }),
           ...(validAt.trim().length === 0 ? {} : { validAt: validAt.trim() }),
         })
-        dispatch({ type: 'historyLoaded', view: page.view, nextCursor: page.nextCursor })
+        if (request.current())
+          dispatch({ type: 'historyLoaded', view: page.view, nextCursor: page.nextCursor })
       } catch (error) {
-        dispatch(historyFailureEvent(error))
+        if (request.current()) dispatch(historyFailureEvent(error))
       }
     },
-    [client],
+    [client, begin],
   )
 
-  const selectedEvidenceId = initialEvidenceId ?? (initialReference?.kind === 'evidence' ? initialReference.id : undefined)
+  const selectedEvidenceId =
+    initialEvidenceId ?? (initialReference?.kind === 'evidence' ? initialReference.id : undefined)
   useEffect(() => {
     if (selectedEvidenceId !== undefined) void loadEvidence(selectedEvidenceId, '', '')
   }, [selectedEvidenceId, loadEvidence])
@@ -460,13 +522,13 @@ export function EvidencePanel({ client, initialEvidenceId, initialObjectId, init
 
   return (
     <section
-      className={`evidence evidence--${viewport}`}
+      className={`evidence evidence--${viewport} project-page`}
       data-testid="evidence-panel"
       data-viewport={viewport}
       data-phase={phase}
     >
       <header className="panel__header">
-        <h2>证据展开与历史对比</h2>
+        <h2>依据与历史</h2>
         <p className="panel__hint">
           从结论按需展开实际依据（规则、前提组、来源快照定位）与依赖图；大图分页并显式标注截断。历史版本始终可回看，
           依据变化会清除旧比较结果。
@@ -474,10 +536,22 @@ export function EvidencePanel({ client, initialEvidenceId, initialObjectId, init
       </header>
 
       {initialReference === undefined ? null : (
-        <aside className="evidence__selected-ref" data-testid="selected-source-reference" data-kind={initialReference.kind}>
-          <h3>答案来源引用</h3>
-          <p><code>{initialReference.kind}:{initialReference.id}@{initialReference.version}</code></p>
-          <p><code>{initialReference.digest}</code></p>
+        <aside
+          className="evidence__selected-ref"
+          data-testid="selected-source-reference"
+          data-kind={initialReference.kind}
+        >
+          <details className="project-audit">
+            <summary>所选来源的固定引用</summary>
+            <p>
+              <code>
+                {initialReference.kind}:{initialReference.id}@{initialReference.version}
+              </code>
+            </p>
+            <p>
+              <code>{initialReference.digest}</code>
+            </p>
+          </details>
           {initialReference.kind === 'evidence' ? null : (
             <p data-testid="source-reference-viewer-unavailable">
               此引用已从答案精确保留；当前证据查看器仅展开已归档的 evidence 记录。
@@ -486,7 +560,10 @@ export function EvidencePanel({ client, initialEvidenceId, initialObjectId, init
         </aside>
       )}
 
-      {phase === 'loading' || phase === 'not_configured' || phase === 'failure' || phase === 'permission_denied' ? (
+      {phase === 'loading' ||
+      phase === 'not_configured' ||
+      phase === 'failure' ||
+      phase === 'permission_denied' ? (
         <StatePanel phase={phase} {...(state.error === undefined ? {} : { error: state.error })} />
       ) : null}
 
@@ -494,44 +571,47 @@ export function EvidencePanel({ client, initialEvidenceId, initialObjectId, init
 
       {phase === 'empty' || phase === 'ready' ? (
         <div className="evidence__body">
-          <section className="evidence__lookup" data-testid="evidence-lookup">
-            <h3>展开结论依据</h3>
-            <label className="evidence__field">
-              <span>证据 ID</span>
-              <input
-                type="text"
-                data-testid="evidence-id-input"
-                value={evidenceInput}
-                onChange={(event) => setEvidenceInput(event.target.value)}
-              />
-            </label>
-            <label className="evidence__field">
-              <span>历史系统版本 asOf（可选）</span>
-              <input
-                type="text"
-                data-testid="evidence-asof-input"
-                value={asOfInput}
-                onChange={(event) => setAsOfInput(event.target.value)}
-              />
-            </label>
-            <label className="evidence__field">
-              <span>历史业务时间 validAt（可选）</span>
-              <input
-                type="text"
-                data-testid="evidence-validat-input"
-                value={validAtInput}
-                onChange={(event) => setValidAtInput(event.target.value)}
-              />
-            </label>
-            <button
-              type="button"
-              data-testid="load-evidence"
-              disabled={state.busy || evidenceInput.trim().length === 0}
-              onClick={() => void loadEvidence(evidenceInput.trim(), asOfInput, validAtInput)}
-            >
-              加载依据
-            </button>
-          </section>
+          <details className="project-audit" open={evidence === undefined}>
+            <summary>查找证据或指定历史时点</summary>
+            <section className="evidence__lookup" data-testid="evidence-lookup">
+              <h3>展开结论依据</h3>
+              <label className="evidence__field">
+                <span>证据 ID</span>
+                <input
+                  type="text"
+                  data-testid="evidence-id-input"
+                  value={evidenceInput}
+                  onChange={(event) => setEvidenceInput(event.target.value)}
+                />
+              </label>
+              <label className="evidence__field">
+                <span>历史系统版本 asOf（可选）</span>
+                <input
+                  type="text"
+                  data-testid="evidence-asof-input"
+                  value={asOfInput}
+                  onChange={(event) => setAsOfInput(event.target.value)}
+                />
+              </label>
+              <label className="evidence__field">
+                <span>历史业务时间 validAt（可选）</span>
+                <input
+                  type="text"
+                  data-testid="evidence-validat-input"
+                  value={validAtInput}
+                  onChange={(event) => setValidAtInput(event.target.value)}
+                />
+              </label>
+              <button
+                type="button"
+                data-testid="load-evidence"
+                disabled={state.busy || evidenceInput.trim().length === 0}
+                onClick={() => void loadEvidence(evidenceInput.trim(), asOfInput, validAtInput)}
+              >
+                加载依据
+              </button>
+            </section>
+          </details>
 
           {evidence === undefined ? (
             <p className="evidence__prompt" data-testid="evidence-prompt">
@@ -541,22 +621,35 @@ export function EvidencePanel({ client, initialEvidenceId, initialObjectId, init
             <>
               <p data-testid="evidence-scope" data-historical={historical}>
                 {historical
-                  ? `历史视图（asOf=${state.asOf ?? '—'}，validAt=${state.validAt ?? '—'}）`
+                  ? `指定时点视图（asOf=${state.asOf ?? '—'}，validAt=${state.validAt ?? '—'}）`
                   : '当前视图'}
               </p>
-              <BasisPanel evidence={evidence} />
-              <GraphPanel
-                graph={state.graph}
-                graphPages={state.graphPages}
-                graphCursor={state.graphCursor}
-                graphError={state.graphError}
-                busy={state.busy}
-                direction={state.direction}
-                depth={state.depth}
-                onDirection={(direction) => dispatch({ type: 'setDirection', direction })}
-                onDepth={(depth) => dispatch({ type: 'setDepth', depth })}
-                onLoad={(append) => void loadGraph(append)}
-              />
+              <BasisPanel evidence={evidence} onOpenEvidence={(ref) => void loadEvidence(ref.id, '', '')} />
+              {state.graph?.coverage.truncated === true ||
+              state.graph?.coverage.support?.complete === false ? (
+                <p className="project-notice">依赖记录尚未完整展开，不能据此断言不存在其他依据。</p>
+              ) : null}
+              <details className="project-audit">
+                <summary>依赖关系与完整性详情</summary>
+                <GraphPanel
+                  graph={state.graph}
+                  graphPages={state.graphPages}
+                  graphCursor={state.graphCursor}
+                  graphError={state.graphError}
+                  busy={state.busy}
+                  direction={state.direction}
+                  depth={state.depth}
+                  onDirection={(direction) => {
+                    begin('graph')
+                    dispatch({ type: 'setDirection', direction })
+                  }}
+                  onDepth={(depth) => {
+                    begin('graph')
+                    dispatch({ type: 'setDepth', depth })
+                  }}
+                  onLoad={(append) => void loadGraph(append)}
+                />
+              </details>
             </>
           )}
 
@@ -599,7 +692,12 @@ export function EvidencePanel({ client, initialEvidenceId, initialObjectId, init
             </button>
 
             {state.historyError === undefined ? null : (
-              <p className="evidence__error" data-testid="history-error" data-code={state.historyError.code} role="alert">
+              <p
+                className="evidence__error"
+                data-testid="history-error"
+                data-code={state.historyError.code}
+                role="alert"
+              >
                 历史不可读（{state.historyError.code}）：{state.historyError.message}
               </p>
             )}
@@ -617,9 +715,16 @@ export function EvidencePanel({ client, initialEvidenceId, initialObjectId, init
                     历史页已截断：还有更早/更多的版本未加载。
                   </p>
                 ) : null}
-                <ol className="evidence__assertions" data-testid="history-assertions" data-count={state.history.assertions.length}>
+                <ol
+                  className="evidence__assertions"
+                  data-testid="history-assertions"
+                  data-count={state.history.assertions.length}
+                >
                   {state.history.assertions.map((assertion) => (
-                    <AssertionRow key={`${assertion.statementId}:${assertion.version}`} assertion={assertion} />
+                    <AssertionRow
+                      key={`${assertion.statementId}:${assertion.version}`}
+                      assertion={assertion}
+                    />
                   ))}
                 </ol>
 
@@ -649,7 +754,11 @@ export function EvidencePanel({ client, initialEvidenceId, initialObjectId, init
                   >
                     比较版本
                   </button>
-                  <button type="button" data-testid="clear-comparison" onClick={() => dispatch({ type: 'compareCleared' })}>
+                  <button
+                    type="button"
+                    data-testid="clear-comparison"
+                    onClick={() => dispatch({ type: 'compareCleared' })}
+                  >
                     清除比较
                   </button>
                 </div>

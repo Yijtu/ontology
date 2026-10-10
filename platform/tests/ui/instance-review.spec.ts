@@ -2,8 +2,8 @@
 import { act, createElement } from 'react'
 import { createRoot } from 'react-dom/client'
 import { describe, expect, it } from 'vitest'
-import type { InstanceRecordView } from '@ontology/contracts'
-import { InstanceReviewPanel } from '@ontology/app-web'
+import type { InstanceNormalizedValue, InstanceRecordView } from '@ontology/contracts'
+import { InstanceReviewPanel, readInstanceFieldSource } from '@ontology/app-web'
 import { WorkbenchClient } from '@ontology/app-web/client'
 
 const reactEnvironment = globalThis as typeof globalThis & { IS_REACT_ACT_ENVIRONMENT?: boolean }
@@ -22,8 +22,18 @@ const RECORD: InstanceRecordView = {
     state: 'unresolved',
     confidence: 'candidate',
     candidates: [
-      { entityId: '88888888-8888-4888-8888-888888888888', objectId: 'device', displayName: 'Bridge A', strategy: 'native_id' },
-      { entityId: '99999999-9999-4999-8999-999999999999', objectId: 'sensor', displayName: 'Bridge A', strategy: 'context' },
+      {
+        entityId: '88888888-8888-4888-8888-888888888888',
+        objectId: 'device',
+        displayName: 'Bridge A',
+        strategy: 'native_id',
+      },
+      {
+        entityId: '99999999-9999-4999-8999-999999999999',
+        objectId: 'sensor',
+        displayName: 'Bridge A',
+        strategy: 'context',
+      },
     ],
     sameNameDifferentMeaning: true,
     cannotLinkEntityIds: [],
@@ -39,7 +49,13 @@ const RECORD: InstanceRecordView = {
         documentRef: { id: RECORD_ID, version: '1.0.0', digest: DIGEST, kind: 'artifact' },
         parseId: RECORD_ID,
         chunkId: RECORD_ID,
-        locator: { kind: 'json_pointer', pointer: '/device_name', startByte: 0, endByte: 4, normalizationMapRef: 'nm' },
+        locator: {
+          kind: 'json_pointer',
+          pointer: '/device_name',
+          startByte: 0,
+          endByte: 4,
+          normalizationMapRef: 'nm',
+        },
         textDigest: DIGEST,
         quoteDigest: DIGEST,
       },
@@ -74,7 +90,9 @@ function clientForFixture(): WorkbenchClient {
   })
 }
 
-async function render(panel: ReturnType<typeof createElement>): Promise<{ container: HTMLElement; root: ReturnType<typeof createRoot> }> {
+async function render(
+  panel: ReturnType<typeof createElement>,
+): Promise<{ container: HTMLElement; root: ReturnType<typeof createRoot> }> {
   const container = document.createElement('div')
   document.body.appendChild(container)
   const root = createRoot(container)
@@ -85,12 +103,44 @@ async function render(panel: ReturnType<typeof createElement>): Promise<{ contai
 }
 
 describe('instance review panel', () => {
+  it('reads a field beyond the bounded preview from its exact current-record endpoint and rejects a different revision', async () => {
+    const exact = '9007199254740993.00000000000000000001'
+    const locator = { kind: 'table_cell' as const, format: 'xlsx' as const, sheetId: 'sheet2', sheetName: '已选工作表', recordIndex: 12, row: 14, column: 2, address: 'B14', normalizationMapRef: 'actual-native-map' }
+    const originalRef = { id: RECORD_ID, version: '1.0.0', digest: DIGEST, kind: 'document' as const }
+    const selected: InstanceRecordView = { ...RECORD, fields: [{ ...RECORD.fields[0]!, fieldId: 'reading', rawValue: '已审核的记录值', source: { ...RECORD.fields[0]!.source, documentRef: originalRef, locator } }], sourceRef: originalRef }
+    const actual = { projectId: PROJECT_ID, recordId: RECORD_ID, recordRevision: '1', fieldId: 'reading', precision: 'exact', readability: 're_readable', originalRef, parseRef: { id: RECORD_ID, version: '1.0.0', digest: DIGEST, kind: 'artifact' }, parseId: RECORD_ID, locator, cells: [{ raw: exact, locator, columnLabel: '原始读数', rowLabel: '14' }] }
+    const requests: string[] = []
+    let wrongRevision = false
+    const client = new WorkbenchClient({ baseUrl: 'http://api.test', fetchImpl: (input) => {
+      const url = new URL(String(input)); requests.push(url.pathname + url.search)
+      if (url.pathname.endsWith('/fields/reading/source')) return Promise.resolve(jsonResponse({ data: wrongRevision ? { ...actual, recordRevision: '2' } : actual }))
+      if (url.pathname.endsWith('/instance-records')) return Promise.resolve(jsonResponse({ data: { records: [selected] } }))
+      if (url.pathname.endsWith(`/instance-records/${RECORD_ID}`)) return Promise.resolve(jsonResponse({ data: { record: selected } }))
+      return Promise.resolve(jsonResponse({ data: {} }, 404))
+    } })
+    const { container, root } = await render(createElement(InstanceReviewPanel, { client, projectId: PROJECT_ID }))
+    try {
+      await act(async () => { await Promise.resolve() })
+      const open = container.querySelector('[data-testid="instance-field-source"] button')
+      if (open === null) throw new Error('field source action missing')
+      await act(async () => { open.dispatchEvent(new MouseEvent('click', { bubbles: true })); await Promise.resolve() })
+      const body = container.querySelector('[aria-label="当前字段的原始来源"]')
+      expect(body?.textContent).toContain(exact)
+      expect(body?.textContent).toContain('B14')
+      expect(requests).toContain(`/api/v1/core/projects/${PROJECT_ID}/instance-records/${RECORD_ID}/fields/reading/source?recordRevision=1`)
+      expect(container.textContent).not.toContain('当前有界原始预览未唯一返回')
+      wrongRevision = true
+      await expect(readInstanceFieldSource(client, selected, 'reading')).rejects.toMatchObject({ code: 'SOURCE_REFERENCE_MISMATCH' })
+    } finally { await act(async () => root.unmount()); container.remove() }
+  })
   it('shows the empty state when no record is visible', async () => {
     const client = new WorkbenchClient({
       baseUrl: 'http://api.test',
       fetchImpl: () => Promise.resolve(jsonResponse({ data: { records: [] } })),
     })
-    const { container, root } = await render(createElement(InstanceReviewPanel, { client, projectId: PROJECT_ID }))
+    const { container, root } = await render(
+      createElement(InstanceReviewPanel, { client, projectId: PROJECT_ID }),
+    )
     try {
       expect(container.querySelector('[data-testid="instance-review-empty"]')).not.toBeNull()
     } finally {
@@ -101,16 +151,24 @@ describe('instance review panel', () => {
 
   it('renders a record with its raw/normalized/source/status and identity confidence', async () => {
     const client = clientForFixture()
-    const { container, root } = await render(createElement(InstanceReviewPanel, { client, projectId: PROJECT_ID }))
+    const { container, root } = await render(
+      createElement(InstanceReviewPanel, { client, projectId: PROJECT_ID }),
+    )
     try {
       await act(async () => {
         await Promise.resolve()
       })
-      expect(container.querySelector('[data-testid="instance-identity-confidence"]')?.textContent).toContain('candidate')
-      expect(container.querySelector('[data-testid="instance-identity-same-name"]')?.textContent).toContain('是')
+      expect(container.querySelector('[data-testid="instance-identity-confidence"]')?.textContent).toContain(
+        'candidate',
+      )
+      expect(container.querySelector('[data-testid="instance-identity-same-name"]')?.textContent).toContain(
+        '是',
+      )
       const row = container.querySelector('[data-testid="instance-field-row"]')
       expect(row?.querySelector('[data-testid="instance-field-raw"]')?.textContent).toBe('Bridge A')
-      expect(row?.querySelector('[data-testid="instance-field-status"]')?.getAttribute('data-status')).toBe('pending')
+      expect(row?.querySelector('[data-testid="instance-field-status"]')?.getAttribute('data-status')).toBe(
+        'pending',
+      )
       expect(container.querySelector('[data-testid="instance-field-confirm"]')).not.toBeNull()
     } finally {
       await act(async () => root.unmount())
@@ -132,6 +190,417 @@ describe('instance review panel', () => {
       expect(container.querySelector('[data-testid="instance-identity-match"]')).toBeNull()
       expect(container.querySelector('[data-testid="instance-approve"]')).toBeNull()
       expect(container.querySelector('[data-testid="instance-publish"]')).toBeNull()
+    } finally {
+      await act(async () => root.unmount())
+      container.remove()
+    }
+  })
+
+  it.each([
+    {
+      initial: { kind: 'quantity', value: '1.25', unitCode: 'kW' } satisfies InstanceNormalizedValue,
+      typed: '9007199254740993.00000000000000000001',
+      expected: { kind: 'quantity', value: '9007199254740993.00000000000000000001', unitCode: 'kW' },
+      schema: { valueType: 'quantity', unit: 'kW' },
+    },
+    {
+      initial: { kind: 'scalar', value: true } satisfies InstanceNormalizedValue,
+      typed: 'false',
+      expected: { kind: 'scalar', value: false },
+      schema: { valueType: 'boolean' },
+    },
+    {
+      initial: {
+        kind: 'reference',
+        entityId: '88888888-8888-4888-8888-888888888888',
+      } satisfies InstanceNormalizedValue,
+      typed: '99999999-9999-4999-8999-999999999999',
+      expected: { kind: 'reference', entityId: '99999999-9999-4999-8999-999999999999' },
+      schema: { valueType: 'reference', referencesObjectId: 'device' },
+    },
+  ])(
+    'submits the stored value family and preserves exact input ($initial.kind)',
+    async ({ initial, typed, expected, schema }) => {
+      const field = RECORD.fields[0]
+      if (field === undefined) throw new Error('fixture field missing')
+      const record: InstanceRecordView = {
+        ...RECORD,
+        identity: {
+          ...RECORD.identity,
+          binding: {
+            candidateId: RECORD_ID,
+            documentId: RECORD_ID,
+            projectRevisionRef: { projectId: PROJECT_ID, revision: '1', digest: DIGEST },
+            definitionRef: { id: 'typed-editor-definition', version: '1.0.0', digest: DIGEST },
+            membershipRevision: '1',
+            visibilityEpoch: '1',
+            identityScopeId: 'typed-editor-scope',
+          },
+        },
+        fields: [{ ...field, normalizedValue: initial }],
+      }
+      let body: unknown
+      let revision: string | null = null
+      const project = {
+        projectId: PROJECT_ID,
+        title: '合成类型检查项目',
+        headRevision: '1',
+        state: 'draft',
+        createdBy: 'tester',
+        createdAt: RECORD.recordedAt,
+        updatedAt: RECORD.recordedAt,
+      }
+      const projectRevision = {
+        ref: { projectId: PROJECT_ID, revision: '1', digest: DIGEST },
+        industryPackRef: { id: 'typed-editor-pack', version: '1.0.0', digest: DIGEST },
+        definitionRef: { id: 'typed-editor-definition', version: '1.0.0', digest: DIGEST },
+        profileRef: { id: 'typed-editor-profile', version: '1.0.0', snapshotHash: DIGEST },
+        mappingRefs: [],
+        documentSetRef: RECORD.sourceRef,
+        semanticPublicationRefs: [],
+        sourceVisibilityEpoch: '1',
+        changeReason: 'synthetic UI field-family fixture',
+      }
+      const objects = [
+        {
+          objectId: 'device',
+          displayName: '设备',
+          attributes: [{ attributeId: field.fieldId, displayName: '待核对值', required: true, ...schema }],
+          entities: [
+            { entityId: '88888888-8888-4888-8888-888888888888', displayName: '已确认设备 A' },
+            { entityId: '99999999-9999-4999-8999-999999999999', displayName: '已确认设备 B' },
+          ],
+        },
+      ]
+      const client = new WorkbenchClient({
+        baseUrl: 'http://api.test',
+        fetchImpl: (input, options) => {
+          if (String(input).endsWith('/source-catalogue'))
+            return Promise.resolve(
+              jsonResponse({ data: { project, revision: projectRevision, sources: [], objects } }),
+            )
+          if (String(input).endsWith('/task-catalogue'))
+            return Promise.resolve(
+              jsonResponse({
+                data: {
+                  project,
+                  revision: projectRevision,
+                  tasks: [
+                    {
+                      bindingRef: { id: 'editor-options', version: '1.0.0', digest: DIGEST },
+                      taskKind: 'published_facts',
+                      displayName: '已发布事实',
+                      parameterSchema: { type: 'object', properties: {} },
+                      requiredCapabilities: [],
+                      requiredReadiness: [],
+                      available: true,
+                      unavailableReasons: [],
+                      objects,
+                    },
+                  ],
+                },
+              }),
+            )
+          if (String(input).endsWith('/field-edits')) {
+            body = JSON.parse(String(options?.body))
+            revision = new Headers(options?.headers).get('if-match')
+            return Promise.resolve(jsonResponse({ data: { record } }))
+          }
+          return Promise.resolve(
+            jsonResponse({
+              data: String(input).endsWith('/instance-records') ? { records: [record] } : { record },
+            }),
+          )
+        },
+      })
+      const { container, root } = await render(
+        createElement(InstanceReviewPanel, { client, projectId: PROJECT_ID }),
+      )
+      try {
+        await act(async () => {
+          container.querySelector<HTMLButtonElement>('[data-testid="instance-field-edit-start"]')?.click()
+        })
+        const input = container.querySelector<HTMLInputElement | HTMLSelectElement>(
+          '[data-testid="instance-field-edit-input"]',
+        )
+        const reason = container.querySelector<HTMLInputElement>('[data-testid="instance-field-edit-reason"]')
+        if (input === null || reason === null) throw new Error('typed editor missing')
+        await act(async () => {
+          Object.getOwnPropertyDescriptor(
+            input instanceof HTMLSelectElement ? HTMLSelectElement.prototype : HTMLInputElement.prototype,
+            'value',
+          )?.set?.call(input, typed)
+          input.dispatchEvent(
+            new Event(input instanceof HTMLSelectElement ? 'change' : 'input', { bubbles: true }),
+          )
+          Object.getOwnPropertyDescriptor(HTMLInputElement.prototype, 'value')?.set?.call(
+            reason,
+            '核对实际来源后修正',
+          )
+          reason.dispatchEvent(new Event('input', { bubbles: true }))
+        })
+        await act(async () => {
+          container
+            .querySelector('form')
+            ?.dispatchEvent(new Event('submit', { bubbles: true, cancelable: true }))
+        })
+        expect(body).toMatchObject({
+          fieldId: 'device_name',
+          normalizedValue: expected,
+          reason: '核对实际来源后修正',
+        })
+        expect(revision).toBe('1')
+      } finally {
+        await act(async () => root.unmount())
+        container.remove()
+      }
+    },
+  )
+
+  it('does not restore an old project record when its read finishes after selection changes', async () => {
+    let finishOld: ((response: Response) => void) | undefined
+    const otherProject = '55555555-5555-4555-8555-555555555555'
+    const otherRecord = {
+      ...RECORD,
+      projectId: otherProject,
+      recordId: '66666666-6666-4666-8666-666666666666',
+    }
+    const client = new WorkbenchClient({
+      baseUrl: 'http://api.test',
+      fetchImpl: (input) => {
+        const path = String(input)
+        if (path.endsWith(`/instance-records/${RECORD_ID}`))
+          return new Promise<Response>((resolve) => {
+            finishOld = resolve
+          })
+        const other = path.includes(otherProject)
+        return Promise.resolve(
+          jsonResponse({
+            data: path.endsWith('/instance-records')
+              ? { records: [other ? otherRecord : RECORD] }
+              : { record: otherRecord },
+          }),
+        )
+      },
+    })
+    const { container, root } = await render(
+      createElement(InstanceReviewPanel, { client, projectId: PROJECT_ID }),
+    )
+    try {
+      expect(finishOld).toBeDefined()
+      await act(async () => {
+        root.render(createElement(InstanceReviewPanel, { client, projectId: otherProject }))
+      })
+      expect(container.querySelector('[data-testid="instance-detail"]')?.getAttribute('data-record-id')).toBe(
+        otherRecord.recordId,
+      )
+      await act(async () => {
+        finishOld?.(jsonResponse({ data: { record: RECORD } }))
+      })
+      expect(container.querySelector('[data-testid="instance-detail"]')?.getAttribute('data-record-id')).toBe(
+        otherRecord.recordId,
+      )
+      expect(container.querySelector('[data-testid="instance-field-edit-form"]')).toBeNull()
+    } finally {
+      await act(async () => root.unmount())
+      container.remove()
+    }
+  })
+
+  it('uses exact target-revision source entities for references while the active task catalogue is older', async () => {
+    const activeDigest = `sha256:${'b'.repeat(64)}`
+    const targetDigest = `sha256:${'c'.repeat(64)}`
+    const targetRecord: InstanceRecordView = {
+      ...RECORD,
+      fields: [
+        {
+          ...RECORD.fields[0]!,
+          fieldId: 'site_ref',
+          normalizedValue: { kind: 'reference', entityId: '88888888-8888-4888-8888-888888888888' },
+        },
+      ],
+      identity: {
+        ...RECORD.identity,
+        binding: {
+          candidateId: RECORD_ID,
+          documentId: RECORD_ID,
+          projectRevisionRef: { projectId: PROJECT_ID, revision: '2', digest: targetDigest },
+          definitionRef: { id: 'target-definition', version: '2.0.0', digest: targetDigest },
+          membershipRevision: '2',
+          visibilityEpoch: '2',
+          identityScopeId: 'target-scope',
+        },
+      },
+    }
+    const project = {
+      projectId: PROJECT_ID,
+      title: '演进中的项目',
+      headRevision: '2',
+      activeRevision: '1',
+      state: 'active',
+      stagingWritable: true,
+      createdBy: 'tester',
+      createdAt: RECORD.recordedAt,
+      updatedAt: RECORD.recordedAt,
+    }
+    const revision = (number: string, digest: string) => ({
+      ref: { projectId: PROJECT_ID, revision: number, digest },
+      industryPackRef: { id: 'target-pack', version: '2.0.0', digest },
+      definitionRef: { id: 'target-definition', version: '2.0.0', digest },
+      profileRef: { id: 'target-profile', version: '2.0.0', snapshotHash: digest },
+      mappingRefs: [],
+      documentSetRef: RECORD.sourceRef,
+      semanticPublicationRefs: [],
+      sourceVisibilityEpoch: number,
+      changeReason: 'staging target reference editor regression',
+    })
+    const targetEntities = [
+      { entityId: 'aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa', displayName: 'P2 目标位置' },
+    ]
+    let viewedRecord = targetRecord
+    let editRequest: { url: string; body: unknown; ifMatch: string | null } | undefined
+    const client = new WorkbenchClient({
+      baseUrl: 'http://api.test',
+      fetchImpl: (input, options) => {
+        const url = new URL(String(input))
+        if (url.pathname.endsWith('/source-catalogue'))
+          return Promise.resolve(
+            jsonResponse({
+              data: {
+                project,
+                revision: revision('2', targetDigest),
+                sources: [],
+                objects: [
+                  {
+                    objectId: 'device',
+                    displayName: '设备',
+                    attributes: [
+                      {
+                        attributeId: 'site_ref',
+                        displayName: '位置',
+                        valueType: 'reference',
+                        required: false,
+                        referencesObjectId: 'site',
+                      },
+                    ],
+                  },
+                  { objectId: 'site', displayName: '位置', attributes: [], entities: targetEntities },
+                ],
+              },
+            }),
+          )
+        if (url.pathname.endsWith('/task-catalogue'))
+          return Promise.resolve(
+            jsonResponse({
+              data: {
+                project,
+                revision: revision('1', activeDigest),
+                tasks: [
+                  {
+                    bindingRef: { id: 'active-task', version: '1.0.0', digest: activeDigest },
+                    taskKind: 'published_facts',
+                    displayName: '旧版选择器',
+                    parameterSchema: { type: 'object', properties: {} },
+                    requiredCapabilities: [],
+                    requiredReadiness: [],
+                    available: true,
+                    unavailableReasons: [],
+                    objects: [
+                      {
+                        objectId: 'site',
+                        displayName: '位置',
+                        entities: [
+                          { entityId: 'bbbbbbbb-bbbb-4bbb-8bbb-bbbbbbbbbbbb', displayName: 'P1 旧位置' },
+                        ],
+                      },
+                    ],
+                  },
+                ],
+              },
+            }),
+          )
+        if (url.pathname.endsWith('/field-edits')) {
+          editRequest = {
+            url: `${url.pathname}${url.search}`,
+            body: JSON.parse(String(options?.body)),
+            ifMatch: new Headers(options?.headers).get('if-match'),
+          }
+          return Promise.resolve(jsonResponse({ data: { record: targetRecord } }))
+        }
+        return Promise.resolve(
+          jsonResponse({
+            data: url.pathname.endsWith('/instance-records')
+              ? { records: [viewedRecord] }
+              : { record: viewedRecord },
+          }),
+        )
+      },
+    })
+    const { container, root } = await render(
+      createElement(InstanceReviewPanel, { client, projectId: PROJECT_ID }),
+    )
+    try {
+      await act(async () => { await Promise.resolve() })
+      await act(async () => {
+        container.querySelector<HTMLButtonElement>('[data-testid="instance-field-edit-start"]')?.click()
+      })
+      const select = container.querySelector<HTMLSelectElement>('[data-testid="instance-field-edit-input"]')
+      if (select === null) throw new Error('target reference selector missing')
+      expect([...select.options].map((option) => option.textContent)).toContain('P2 目标位置')
+      expect([...select.options].map((option) => option.textContent)).not.toContain('P1 旧位置')
+      await act(async () => {
+        Object.getOwnPropertyDescriptor(HTMLSelectElement.prototype, 'value')?.set?.call(
+          select,
+          targetEntities[0]!.entityId,
+        )
+        select.dispatchEvent(new Event('change', { bubbles: true }))
+      })
+      const reason = container.querySelector<HTMLInputElement>('[data-testid="instance-field-edit-reason"]')
+      if (reason === null) throw new Error('reference edit reason missing')
+      await act(async () => {
+        Object.getOwnPropertyDescriptor(HTMLInputElement.prototype, 'value')?.set?.call(reason, '按目标目录核对')
+        reason.dispatchEvent(new Event('input', { bubbles: true }))
+      })
+      await act(async () => {
+        container.querySelector('form')?.dispatchEvent(new Event('submit', { bubbles: true, cancelable: true }))
+      })
+      expect(editRequest).toMatchObject({
+        url: `/api/v1/projects/${PROJECT_ID}/instance-records/${RECORD_ID}/field-edits`,
+        body: {
+          fieldId: 'site_ref',
+          normalizedValue: { kind: 'reference', entityId: targetEntities[0]!.entityId },
+          reason: '按目标目录核对',
+        },
+        ifMatch: '1',
+      })
+      viewedRecord = {
+        ...targetRecord,
+        identity: {
+          ...targetRecord.identity,
+          binding: {
+            ...targetRecord.identity.binding!,
+            projectRevisionRef: { projectId: PROJECT_ID, revision: '1', digest: activeDigest },
+          },
+        },
+      }
+      const staleBoundView = await render(
+        createElement(InstanceReviewPanel, { client, projectId: PROJECT_ID }),
+      )
+      try {
+        await act(async () => { await Promise.resolve() })
+        await act(async () => {
+          staleBoundView.container.querySelector<HTMLButtonElement>('[data-testid="instance-field-edit-start"]')?.click()
+        })
+        const staleSchemaSelect = staleBoundView.container.querySelector<HTMLSelectElement>(
+          '[data-testid="instance-field-edit-input"]',
+        )
+        if (staleSchemaSelect === null) throw new Error('stale reference selector missing')
+        expect([...staleSchemaSelect.options].map((option) => option.textContent)).not.toContain('P2 目标位置')
+        expect(staleSchemaSelect.disabled).toBe(true)
+      } finally {
+        await act(async () => staleBoundView.root.unmount())
+        staleBoundView.container.remove()
+      }
     } finally {
       await act(async () => root.unmount())
       container.remove()

@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useRef, useState } from 'react'
+import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import type { ProvenanceEvidenceView, PublishedAnswer, ResourceRef } from '@ontology/contracts'
 import type {
   ResultHistoryView,
@@ -12,6 +12,14 @@ import type { PublicFailure } from '../state/public-errors'
 import { PublicStateNotice } from './PublicStateNotice'
 import { PublishedAnswerBody } from './PublishedAnswerBody'
 import type { PublishedAnswerLabelKind } from './PublishedAnswerBody'
+import { Button, Drawer } from './ui'
+import { VerifiedCell } from './project/VerifiedCell'
+import { useRequestFence } from './project/useRequestFence'
+import { EvidenceSummary } from './project/EvidenceSummary'
+import type { AnswerSourceView, SavedCellSelector } from '../api/source-views'
+import { boundAnswerSource } from '../api/source-views'
+import { AnswerSourceContent } from './project/AnswerSourceContent'
+import './project/project-workbench.css'
 
 /**
  * The public typed-result workbench (SPEC v0.3a execution-evidence §EX-7.1, asset-data-ui §9.2,
@@ -62,6 +70,14 @@ const VALIDITY_LABELS: Readonly<Record<string, string>> = {
 function errorMessage(error: unknown): string {
   return error instanceof Error ? error.message : '读取结果失败'
 }
+function sameRef(left: ResourceRef, right: ResourceRef): boolean {
+  return (
+    left.kind === right.kind &&
+    left.id === right.id &&
+    left.version === right.version &&
+    left.digest === right.digest
+  )
+}
 
 function resultOf(load: VerifiedResultLoad): Extract<VerifiedResultLoad, { kind: 'verified' }> | undefined {
   return load.kind === 'verified' ? load : undefined
@@ -83,19 +99,13 @@ function collectEvidenceRefs(page: VerifiedTablePageView | undefined): readonly 
   return refs
 }
 
-function cellText(value: unknown): string {
-  if (typeof value === 'string') return value
-  if (typeof value === 'number' || typeof value === 'boolean') return String(value)
-  if (value === null || value === undefined) return ''
-  return JSON.stringify(value)
-}
-
 function readabilityOf(view: ProvenanceEvidenceView | undefined): 'current' | 'historical' | 'missing' {
   if (view === undefined) return 'missing'
   if (view.outcome !== 'verifiable') return 'missing'
-  if (view.originalSourceReReadable) return 'current'
-  if (view.asOf !== undefined || view.validAt !== undefined) return 'historical'
+  if (view.sources.length > 0 && view.sources.every((source) => source.reReadability === 're_readable'))
+    return 'current'
   if (view.sources.some((source) => source.reReadability === 'archived_snapshot_only')) return 'historical'
+  if (view.archivedResult?.verified === true) return 'historical'
   return 'missing'
 }
 
@@ -104,9 +114,14 @@ function TableView({
   tableId,
   onOpenEvidence,
 }: {
-  readonly state: { readonly page?: VerifiedTablePageView; readonly loading: boolean; readonly error?: string; readonly blocked?: string }
+  readonly state: {
+    readonly page?: VerifiedTablePageView
+    readonly loading: boolean
+    readonly error?: string
+    readonly blocked?: string
+  }
   readonly tableId: string
-  readonly onOpenEvidence?: (ref: ResourceRef) => void
+  readonly onOpenEvidence?: (ref: ResourceRef, selector: SavedCellSelector) => void
 }) {
   if (state.blocked !== undefined) {
     return (
@@ -127,57 +142,69 @@ function TableView({
   }
   const page = state.page
   return (
-    <div className="result-workbench__table" data-testid="result-table" data-page={page.pageIndex} data-pages={page.pageCount}>
+    <div
+      className="result-workbench__table"
+      data-testid="result-table"
+      data-page={page.pageIndex}
+      data-pages={page.pageCount}
+    >
       <p data-testid="result-table-coverage" data-truncated={page.coverage.truncated}>
-        第 {page.pageIndex + 1}/{page.pageCount} 页 · 共 {page.totalRows} 行 · 返回 {page.coverage.returned} 行
-        {page.complete ? '' : '（不完整）'}
+        第 {page.pageIndex + 1}/{page.pageCount} 页 · 共 {page.totalRows} 行 · 返回 {page.coverage.returned}{' '}
+        行{page.complete ? '' : '（不完整）'}
       </p>
-      <table>
-        <thead>
-          <tr>
-            <th>行标识</th>
-            {page.columns.map((column) => (
-              <th key={column.columnRef}>{column.displayLabel ?? column.semanticPredicate}</th>
-            ))}
-            <th>依据</th>
-          </tr>
-        </thead>
-        <tbody>
-          {page.rows.map((row) => (
-            <tr key={row.rowKey} data-testid="result-table-row" data-row-key={row.rowKey}>
-              <td data-testid="result-table-subject">{row.subject ?? row.rowKey}</td>
+      <div className="project-table" tabIndex={0} role="region" aria-label="已核验结果表">
+        <table>
+          <thead>
+            <tr>
+              <th>行标识</th>
               {page.columns.map((column) => (
-                <td key={column.columnRef} data-testid={`result-table-cell-${column.columnRef}`}>
-                  {cellText(row.cells[column.columnRef])}
-                </td>
+                <th key={column.columnRef}>{column.displayLabel ?? column.semanticPredicate}</th>
               ))}
-              <td>
-                {row.bindings.slice(0, 1).map((binding, index) => (
-                  <button
-                    key={`${binding.columnRef}:${index}`}
-                    type="button"
-                    data-testid="result-cell-evidence"
-                    data-evidence-id={binding.evidenceRef.id}
-                    onClick={() => onOpenEvidence?.(binding.evidenceRef)}
-                  >
-                    来源
-                  </button>
-                ))}
-              </td>
             </tr>
-          ))}
-        </tbody>
-      </table>
+          </thead>
+          <tbody>
+            {page.rows.map((row) => (
+              <tr key={row.rowKey} data-testid="result-table-row" data-row-key={row.rowKey}>
+                <td data-testid="result-table-subject">{row.subject ?? row.rowKey}</td>
+                {page.columns.map((column) => (
+                  <td key={column.columnRef} data-testid={`result-table-cell-${column.columnRef}`}>
+                    <VerifiedCell value={row.cells[column.columnRef]} valueType={column.valueType} />
+                    <div>
+                      {row.bindings
+                        .filter((binding) => binding.columnRef === column.columnRef)
+                        .map((binding, index) => (
+                          <button
+                            className="project-source-button"
+                            key={`${binding.evidenceRef.id}:${index}`}
+                            type="button"
+                            data-testid="result-cell-evidence"
+                            data-evidence-id={binding.evidenceRef.id}
+                            onClick={() => onOpenEvidence?.(binding.evidenceRef, { tableId: page.tableId, rowKey: row.rowKey, columnRef: column.columnRef })}
+                            aria-label={`查看${column.displayLabel ?? column.semanticPredicate}的来源`}
+                          >
+                            来源 ↗
+                          </button>
+                        ))}
+                    </div>
+                  </td>
+                ))}
+              </tr>
+            ))}
+          </tbody>
+        </table>
+      </div>
     </div>
   )
 }
 
 function EvidenceView({
   view,
+  sourceView,
   loading,
   error,
 }: {
   readonly view?: ProvenanceEvidenceView
+  readonly sourceView?: AnswerSourceView
   readonly loading: boolean
   readonly error?: string
 }) {
@@ -189,24 +216,42 @@ function EvidenceView({
       </p>
     )
   }
+  if (sourceView !== undefined)
+    return <AnswerSourceContent key={`${sourceView.answerId}:${sourceView.evidenceId}`} view={sourceView} />
   if (view === undefined) {
     return <p data-testid="result-evidence-empty">请选择一条来源以查看其依据。</p>
   }
   const readability = readabilityOf(view)
   return (
-    <section className="result-workbench__evidence" data-testid="result-evidence" data-readability={readability}>
-      <p data-testid="result-evidence-id">{view.evidenceId}</p>
-      <p data-testid="result-evidence-kind">
-        {view.kind} · {view.dataMode}
-      </p>
+    <section
+      className="result-workbench__evidence"
+      data-testid="result-evidence"
+      data-readability={readability}
+    >
+      <EvidenceSummary evidence={view} />
+      <details className="project-audit">
+        <summary>证据标识与类型</summary>
+        <p data-testid="result-evidence-id">{view.evidenceId}</p>
+        <p data-testid="result-evidence-kind">
+          {view.kind} · {view.dataMode}
+        </p>
+      </details>
       <p data-testid="result-evidence-outcome" data-outcome={view.outcome}>
         结果：{view.outcome === 'verifiable' ? '可核验' : '不可核验'}
         {view.asOf === undefined ? '' : ` · 历史时点 ${view.asOf}`}
       </p>
       <ul data-testid="result-evidence-sources">
         {view.sources.map((source, index) => (
-          <li key={`${source.sourceRef.namespace}:${source.sourceRef.sourceId}:${index}`} data-readability={source.reReadability}>
-            {source.sourceRef.sourceId} · {source.reReadability === 're_readable' ? '可重读原始来源' : source.reReadability === 'archived_snapshot_only' ? '仅归档快照' : '来源不可用'}
+          <li
+            key={`${source.sourceRef.namespace}:${source.sourceRef.sourceId}:${index}`}
+            data-readability={source.reReadability}
+          >
+            {source.sourceRef.sourceId} ·{' '}
+            {source.reReadability === 're_readable'
+              ? '可重读原始来源'
+              : source.reReadability === 'archived_snapshot_only'
+                ? '仅归档快照'
+                : '来源不可用'}
           </li>
         ))}
       </ul>
@@ -216,8 +261,12 @@ function EvidenceView({
 
 function HistoryView({
   state,
+  onSelect,
+  selectedRunId,
 }: {
   readonly state: { readonly view?: ResultHistoryView; readonly loading: boolean; readonly error?: string }
+  readonly onSelect: (entry: ResultHistoryView['entries'][number]) => void
+  readonly selectedRunId: string
 }) {
   if (state.loading) return <p data-testid="history-loading">正在读取结果修订历史…</p>
   if (state.error !== undefined) {
@@ -229,12 +278,16 @@ function HistoryView({
   }
   if (state.view === undefined) return null
   return (
-    <section className="result-workbench__history" data-testid="result-history" data-logical-key={state.view.logicalKey}>
+    <section
+      className="result-workbench__history"
+      data-testid="result-history"
+      data-logical-key={state.view.logicalKey}
+    >
       <p data-testid="history-current" data-answer-id={state.view.currentAnswerId}>
-        当前版本：{state.view.currentAnswerId}
+        当前结果版本已标记
         {state.view.projectRevision === undefined ? '' : ` · 项目修订 ${state.view.projectRevision}`}
       </p>
-      <ul>
+      <ul className="project-history-list">
         {state.view.entries.map((entry) => (
           <li
             key={entry.answerId}
@@ -244,7 +297,21 @@ function HistoryView({
             data-run-id={entry.runId}
             data-content-hash={entry.contentHash}
           >
-            #{entry.revisionIndex} · {entry.label} · {entry.publicationKind} · {entry.contentHash}
+            <button
+              type="button"
+              aria-current={entry.runId === selectedRunId ? 'true' : undefined}
+              onClick={() => onSelect(entry)}
+            >
+              修订 {entry.revisionIndex} · {entry.label}
+              <small>
+                {entry.publishedAt} · {entry.publicationKind === 'history_limited' ? '历史受限' : '已核验'} ·
+                固定版本读取
+              </small>
+            </button>
+            <details className="project-audit">
+              <summary>版本标识</summary>
+              <code>{entry.contentHash}</code>
+            </details>
           </li>
         ))}
       </ul>
@@ -263,54 +330,116 @@ export function ResultWorkbenchPanel({
   const [load, setLoad] = useState<LoadState>({ status: 'loading' })
   const [tab, setTab] = useState<ResultWorkbenchTab>(initialTab)
   const [tableId, setTableId] = useState<string | undefined>(initialTableId)
-  const [tableState, setTableState] = useState<{ page?: VerifiedTablePageView; loading: boolean; error?: string; blocked?: string }>({ loading: false })
+  const [tableState, setTableState] = useState<{
+    page?: VerifiedTablePageView
+    loading: boolean
+    error?: string
+    blocked?: string
+  }>({ loading: false })
   const [evidenceRef, setEvidenceRef] = useState<ResourceRef | undefined>()
-  const [evidenceState, setEvidenceState] = useState<{ view?: ProvenanceEvidenceView; loading: boolean; error?: string }>({ loading: false })
-  const [historyState, setHistoryState] = useState<{ view?: ResultHistoryView; loading: boolean; error?: string }>({ loading: false })
-  const [exportState, setExportState] = useState<{ data?: VerifiedResultExport; loading: boolean; error?: string }>({ loading: false })
+  const [evidenceState, setEvidenceState] = useState<{
+    view?: ProvenanceEvidenceView
+    sourceView?: AnswerSourceView
+    loading: boolean
+    error?: string
+  }>({ loading: false })
+  const [historyState, setHistoryState] = useState<{
+    view?: ResultHistoryView
+    loading: boolean
+    error?: string
+  }>({ loading: false })
+  const [exportState, setExportState] = useState<{
+    data?: VerifiedResultExport
+    loading: boolean
+    error?: string
+  }>({ loading: false })
   const [reloadNonce, setReloadNonce] = useState(0)
+  const [historySelection, setHistorySelection] = useState<{
+    owner: string
+    runId: string
+    answerId: string
+    contentHash: string
+  }>()
+  const selection = historySelection?.owner === runId ? historySelection : undefined
+  const selectedRunId = selection?.runId ?? runId
+  const scope = useMemo(() => ({ source, selectedRunId, reloadNonce }), [source, selectedRunId, reloadNonce])
+  const [loadedScope, setLoadedScope] = useState<unknown>()
+  const beginRequest = useRequestFence(scope)
   const autoLoadedFor = useRef<string | undefined>(undefined)
 
   useEffect(() => {
-    let cancelled = false
+    const request = beginRequest('result')
     setLoad({ status: 'loading' })
+    setTableState({ loading: false })
+    setEvidenceState({ loading: false })
+    setEvidenceRef(undefined)
+    setHistoryState({ loading: false })
+    setExportState({ loading: false })
+    setTableId(initialTableId)
+    autoLoadedFor.current = undefined
     void source
-      .loadResult(runId)
+      .loadResult(selectedRunId)
       .then((result) => {
-        if (!cancelled) setLoad({ status: 'ready', load: result })
+        if (!request.current()) return
+        if (
+          result.kind === 'verified' &&
+          (result.answer.answerId !== result.view.answerId ||
+            result.view.runId !== selectedRunId ||
+            (selection !== undefined &&
+              (result.view.answerId !== selection.answerId ||
+                result.view.contentHash !== selection.contentHash)))
+        ) {
+          setLoad({
+            status: 'ready',
+            load: {
+              kind: 'blocked',
+              code: 'REVISION_CHANGED',
+              message: '读取到的版本与所选结果不一致，请重新选择历史版本。',
+            },
+          })
+          return
+        }
+        setLoad({ status: 'ready', load: result })
+        setLoadedScope(scope)
       })
       .catch((error: unknown) => {
-        if (!cancelled) setLoad({ status: 'error', failure: classifyPublicError(error) })
+        if (request.current()) setLoad({ status: 'error', failure: classifyPublicError(error) })
       })
-    return () => {
-      cancelled = true
-    }
-  }, [source, runId, reloadNonce])
+  }, [source, selectedRunId, selection, initialTableId, beginRequest, scope])
 
-  const verified = load.status === 'ready' ? resultOf(load.load) : undefined
+  const verified = loadedScope === scope && load.status === 'ready' ? resultOf(load.load) : undefined
   const answerId = verified?.answer.answerId
   const tables = verified?.view.tables ?? []
 
   const openTablePage = useCallback(
     async (nextTableId: string, cursor?: string) => {
-      if (answerId === undefined) return
+      if (answerId === undefined || verified === undefined) return
+      const request = beginRequest('table')
       const summary = tables.find((table) => table.tableId === nextTableId)
-      if (summary !== undefined && summary.verificationReceiptRef === undefined) {
+      if (summary === undefined || summary.verificationReceiptRef === undefined) {
         setTableState({ loading: false, blocked: nextTableId })
         return
       }
-      setTableState((previous) => ({
-        loading: true,
-        ...(previous.page === undefined ? {} : { page: previous.page }),
-      }))
+      setTableState({ loading: true })
       try {
         const page = await source.loadTablePage(answerId, nextTableId, cursor)
+        if (!request.current()) return
+        if (
+          page.answerId !== answerId ||
+          page.tableId !== nextTableId ||
+          page.resultManifestDigest !== (summary.tableManifestDigest ?? verified?.view.resultManifestDigest) ||
+          !sameRef(page.resultManifestRef, summary.tableManifestRef ?? verified.view.resultManifestRef) ||
+          !sameRef(page.tableVerificationReceiptRef, summary.verificationReceiptRef)
+        ) {
+          setTableState({ loading: false, error: '结果表版本或核验回执发生变化，已停止展示。' })
+          return
+        }
         setTableState({ page, loading: false })
       } catch (error) {
-        setTableState({ loading: false, error: errorMessage(error) })
+        if (request.current()) setTableState({ loading: false, error: errorMessage(error) })
       }
     },
-    [answerId, source, tables],
+    [answerId, source, tables, verified, beginRequest],
   )
 
   useEffect(() => {
@@ -324,45 +453,61 @@ export function ResultWorkbenchPanel({
   }, [verified, answerId, initialTableId, openTablePage])
 
   const selectEvidence = useCallback(
-    async (ref: ResourceRef) => {
+    async (ref: ResourceRef, selector?: SavedCellSelector) => {
+      const request = beginRequest('evidence')
       setEvidenceRef(ref)
-      setTab('evidence')
       setEvidenceState({ loading: true })
       try {
-        const view = await source.loadEvidence(ref)
-        setEvidenceState({ loading: false, view })
+        if (source.loadSource !== undefined && verified !== undefined) {
+          if (ref.kind !== 'evidence') throw new Error('请从该陈述的证据来源查看原文与原始单元格。')
+          const sourceView = boundAnswerSource(
+            await source.loadSource(verified.answer, ref, request.signal, selector),
+            verified.answer,
+            ref,
+            selector,
+          )
+          if (request.current()) setEvidenceState({ loading: false, sourceView })
+        } else {
+          const view = await source.loadEvidence(ref)
+          if (request.current()) setEvidenceState({ loading: false, view })
+        }
       } catch (error) {
-        setEvidenceState({ loading: false, error: errorMessage(error) })
+        if (request.current()) setEvidenceState({ loading: false, error: errorMessage(error) })
       }
     },
-    [source],
+    [source, verified, beginRequest],
   )
 
   const loadHistory = useCallback(async () => {
     if (historyState.view !== undefined || historyState.loading) return
+    const request = beginRequest('history')
     setHistoryState({ loading: true })
     try {
       const view = await source.loadHistory(runId)
-      setHistoryState({ loading: false, view })
+      if (request.current()) setHistoryState({ loading: false, view })
     } catch (error) {
-      setHistoryState({ loading: false, error: errorMessage(error) })
+      if (request.current()) setHistoryState({ loading: false, error: errorMessage(error) })
     }
-  }, [source, runId, historyState.view, historyState.loading])
+  }, [source, runId, historyState.view, historyState.loading, beginRequest])
 
   const requestExport = useCallback(async () => {
+    const request = beginRequest('export')
     setExportState({ loading: true })
     try {
-      const data = await source.requestExport(runId)
+      const data = await source.requestExport(selectedRunId)
+      if (!request.current()) return
+      if (data.versions.answerId !== answerId || data.versions.contentHash !== verified?.view.contentHash)
+        throw new Error('导出版本与当前所选结果不一致。')
       setExportState({ loading: false, data })
     } catch (error) {
-      setExportState({ loading: false, error: errorMessage(error) })
+      if (request.current()) setExportState({ loading: false, error: errorMessage(error) })
     }
-  }, [source, runId])
+  }, [source, selectedRunId, answerId, verified, beginRequest])
 
   const openEvidence = onOpenEvidence
-  const handleEvidence = (ref: ResourceRef) => {
-    void selectEvidence(ref)
-    openEvidence?.(ref)
+  const handleEvidence = (ref: ResourceRef, selector?: SavedCellSelector) => {
+    void selectEvidence(ref, selector)
+    // Keep the selected result and its scroll position while the source drawer is open.
   }
 
   const exportHref =
@@ -371,7 +516,16 @@ export function ResultWorkbenchPanel({
       : `data:application/json;charset=utf-8,${encodeURIComponent(JSON.stringify(exportState.data))}`
 
   return (
-    <section className="result-workbench" data-testid="result-workbench" data-run-id={runId}>
+    <section
+      className="result-workbench project-page"
+      data-testid="result-workbench"
+      data-run-id={selectedRunId}
+    >
+      {selection === undefined ? null : (
+        <div className="project-notice">
+          正在读取所选历史版本。<Button onClick={() => setHistorySelection(undefined)}>返回本次运行</Button>
+        </div>
+      )}
       {load.status === 'loading' ? <p data-testid="result-loading">正在读取已核验结果…</p> : null}
       {load.status === 'error' ? (
         <PublicStateNotice
@@ -401,14 +555,26 @@ export function ResultWorkbenchPanel({
               {verified.view.publicationKind === 'history_limited' ? '历史受限已核验结果' : '已核验结果'}
             </h3>
             <p data-testid="result-validity" data-state={verified.view.currentValidity.state}>
-              有效性：{VALIDITY_LABELS[verified.view.currentValidity.state] ?? verified.view.currentValidity.state}
-              {verified.view.currentValidity.reason === undefined ? '' : `（${verified.view.currentValidity.reason}）`}
+              有效性：
+              {VALIDITY_LABELS[verified.view.currentValidity.state] ?? verified.view.currentValidity.state}
+              {verified.view.currentValidity.reason === undefined
+                ? ''
+                : `（${verified.view.currentValidity.reason}）`}
             </p>
             <p data-testid="result-domain-status">领域状态：{verified.view.domainStatus}</p>
             <p data-testid="result-coverage" data-truncated={verified.view.coverage.truncated}>
-              覆盖：返回 {verified.view.coverage.returned} 条{verified.view.coverage.truncated ? '（已截断，非完整）' : ''}
+              覆盖：返回 {verified.view.coverage.returned} 条
+              {verified.view.coverage.truncated ? '（已截断，非完整）' : ''}
             </p>
-            <p data-testid="result-content-hash">{verified.view.contentHash}</p>
+            <details className="project-audit">
+              <summary>核验与版本信息</summary>
+              <p data-testid="result-content-hash">
+                <code>{verified.view.contentHash}</code>
+              </p>
+              <p>
+                运行：<code>{selectedRunId}</code>
+              </p>
+            </details>
             <div className="result-workbench__export">
               <button
                 type="button"
@@ -431,7 +597,11 @@ export function ResultWorkbenchPanel({
                 >
                   export@{exportState.data.schemaVersion} · {exportState.data.versions.contentHash}
                   {exportHref === undefined ? null : (
-                    <a data-testid="result-export-download" download={`verified-result-${runId}.json`} href={exportHref}>
+                    <a
+                      data-testid="result-export-download"
+                      download={`verified-result-${runId}.json`}
+                      href={exportHref}
+                    >
                       下载
                     </a>
                   )}
@@ -447,7 +617,7 @@ export function ResultWorkbenchPanel({
             )}
           </header>
 
-          <nav className="result-workbench__tabs" aria-label="结果视图">
+          <nav className="result-workbench__tabs project-local-tabs" aria-label="结果视图">
             {(['body', 'tables', 'evidence', 'history'] as const).map((entry) => (
               <button
                 key={entry}
@@ -469,7 +639,8 @@ export function ResultWorkbenchPanel({
             <div data-testid="result-body">
               <PublishedAnswerBody
                 answer={verified.answer as PublishedAnswer}
-                {...(resolveLabel === undefined ? {} : { resolveLabel })}
+                {...(source.loadSource === undefined ? {} : { loadSource: source.loadSource })}
+                {...(resolveLabel === undefined || selection !== undefined ? {} : { resolveLabel })}
                 onEvidenceReference={handleEvidence}
               />
             </div>
@@ -532,11 +703,35 @@ export function ResultWorkbenchPanel({
 
           {tab === 'history' ? (
             <div data-testid="result-history-tab">
-              <HistoryView state={historyState} />
+              <HistoryView
+                state={historyState}
+                selectedRunId={selectedRunId}
+                onSelect={(entry) => {
+                  setHistorySelection({
+                    owner: runId,
+                    runId: entry.runId,
+                    answerId: entry.answerId,
+                    contentHash: entry.contentHash,
+                  })
+                  setTab('body')
+                }}
+              />
             </div>
           ) : null}
         </>
       )}
+      <Drawer
+        open={loadedScope === scope && evidenceRef !== undefined}
+        title="结果依据"
+        onClose={() => setEvidenceRef(undefined)}
+      >
+        <EvidenceView {...evidenceState} />
+        {onOpenEvidence === undefined || evidenceRef === undefined ? null : (
+          <Button variant="quiet" onClick={() => openEvidence?.(evidenceRef)}>
+            查看完整依赖与历史
+          </Button>
+        )}
+      </Drawer>
     </section>
   )
 }
