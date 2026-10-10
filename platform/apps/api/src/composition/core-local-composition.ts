@@ -1795,7 +1795,7 @@ export async function createCoreLocalComposition(options: CoreLocalCompositionOp
     const publishedSourceList = await Promise.all(options.examples.scenarios.map(async (scenario) => {
       const definition = await semanticDefinitions.getVersion({ scopeRef, namespace: scenario.namespace, definitionId: scenario.definitionRef.id, version: scenario.definitionRef.version }, profileContext)
       if (!sameVersionRef(definition.ref, scenario.definitionRef)) throw new Error('the mounted source definition differs from the actual published version')
-      return new PublishedSemanticSource(publicationStore, { identity: identityStore, definition })
+      return new PublishedSemanticSource(publicationStore, { identity: identityStore, definition, cacheStableReads: true })
     }))
     const multiSchemaSource = new CoreMultiSchemaPublishedSource(publishedSourceList)
     const factsProviders = options.examples.scenarios.map((scenario, index) => ({

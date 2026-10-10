@@ -199,9 +199,18 @@ export class CoreSemanticTaskResolver {
 /** Narrow host construction helper: no generic registry, function lookup or alternate truth. */
 export function createCoreSemanticTaskSource(publications: PublishedSemanticReadView, options: Omit<NonNullable<ConstructorParameters<typeof PublishedSemanticSource>[1]>, 'definition' | 'projectId'>,
   packReader?: { readonly reader: PublishedRuleDeclarationReader; readonly applies: (revision: ProjectRevision, scope: ScopeRef, ctx: ToolContext) => boolean | Promise<boolean> }) {
+  const sources = new Map<string, PublishedSemanticSource>()
   return (revision: ProjectRevision, definition: SemanticDefinitionVersion): MaterializationPublishedSource => ({ load: async (scope, ctx) => {
     const applies = await packReader?.applies(revision, scope, ctx) === true
-    return new PublishedSemanticSource(publications, { ...options, definition, projectId: revision.ref.projectId, maxRecords: 1000,
-      ...(!applies || packReader === undefined ? {} : { publishedRules: { reader: packReader.reader, request: { packRef: revision.industryPackRef, definitionRef: definition.ref, projectId: revision.ref.projectId } } }) }).load(scope, ctx)
+    const key = canonicalJson({ scope, revision, definition, applies })
+    let source = sources.get(key)
+    if (source === undefined) {
+      source = new PublishedSemanticSource(publications, { ...options, definition, projectId: revision.ref.projectId, maxRecords: 1000, cacheStableReads: options.cacheStableReads ?? true,
+        ...(!applies || packReader === undefined ? {} : { publishedRules: { reader: packReader.reader, request: { packRef: revision.industryPackRef, definitionRef: definition.ref, projectId: revision.ref.projectId } } }) })
+    }
+    sources.delete(key)
+    sources.set(key, source)
+    if (sources.size > 64) { const oldest = sources.keys().next().value; if (oldest !== undefined) sources.delete(oldest) }
+    return source.load(scope, ctx)
   } })
 }

@@ -16,6 +16,8 @@ export function createCoreProjectSemanticReadiness(options: {
 }) {
   return async (projectIds: readonly string[],message: OutboxMessageRecord,ctx: ToolContext) => {
     const scope = { tenantId: ctx.principal.tenantId,spaceId: ctx.allowedResources.spaceId }
+    const pending = await options.materialization.getProjectionState(scope, ctx)
+    if (pending === undefined || pending.dirty || pending.watermark.kind !== 'sequence') return
     for (const projectId of projectIds) {
       const project = await options.projects.getProject(scope,projectId,ctx)
       const revision = project === undefined ? undefined : await options.projects.getRevision(scope,projectId,project.activeRevision ?? project.headRevision,ctx)
