@@ -526,7 +526,7 @@
     min-width: 520px;
   }
 }
-@media (max-width: 719px) {
+@container project-record-list (max-width: 680px) {
   .project-workspace__records .project-table {
     overflow: visible;
     border: 0;
@@ -634,6 +634,11 @@
 .instance-review select {
   width: 100%;
   min-width: 0;
+}
+.project-workspace__records {
+  min-width: 0;
+  container-name: project-record-list;
+  container-type: inline-size;
 }
 .project-create-disclosure {
   padding: 16px;
