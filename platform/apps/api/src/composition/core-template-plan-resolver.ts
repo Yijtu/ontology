@@ -24,6 +24,7 @@ import type {
   WorkflowManifestStore,
   WorkflowInputManifest,
 } from '@ontology/contracts'
+import { coreCompactSourceProjection } from './core-project-query-handler'
 import { findRegisteredOperation } from '@ontology/contracts'
 import { projectCollectionRef } from '@ontology/contracts'
 import { registeredOperationDigest } from '@ontology/tool-services'
@@ -817,7 +818,7 @@ export class CoreTemplatePlanResolver implements TemplatePlanResolver {
     if (loaded.execution === undefined || this.#projectQueryDescriptor === undefined) {
       throw new WorkflowControllerError('CAPABILITY_NOT_CONFIGURED', 'the fixed project query snapshot resolver is not mounted')
     }
-    const descriptor = await this.#projectQueryDescriptor(loaded.execution, parsed.objectId, ctx)
+    const descriptor = coreCompactSourceProjection(await this.#projectQueryDescriptor(loaded.execution, parsed.objectId, ctx))
     const mapping = projectSnapshotMappingRef({ descriptor })
     const queryPlan: SemanticQueryPlan = {
       mode: 'semantic',

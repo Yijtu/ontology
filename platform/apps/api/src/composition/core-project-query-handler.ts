@@ -34,6 +34,11 @@ function isColumnType(value: unknown): value is ColumnType {
   return typeof value === 'string' && ['string', 'integer', 'decimal', 'boolean', 'timestamp', 'json', 'binary'].includes(value)
 }
 
+/** Selects the Core-only compact source pin when this adapter advertises the paired full array. */
+export function coreCompactSourceProjection(descriptor: ProjectSnapshotQueryDescriptor): ProjectSnapshotQueryDescriptor {
+  return descriptor.sourceProjection === 'full_array' ? { ...descriptor, sourceProjection: 'compact_pin' } : descriptor
+}
+
 /** Fixed project snapshot resolution, shared by task creation, planning and the tool handler. */
 export function createCoreProjectQueryWorkflow(options: CoreProjectQueryOptions) {
   const describe = async (scope: ScopeRef, revisionRef: ProjectRevisionRef, ref: ResourceRef, objectId: string, ctx: ToolContext): Promise<ProjectSnapshotQueryDescriptor> => {
@@ -104,7 +109,7 @@ export function createCoreProjectQueryWorkflow(options: CoreProjectQueryOptions)
       const objectId = execution.request.mode === 'task' ? execution.request.parameters['objectId']
         : isRecord(queryPlan) && Array.isArray(queryPlan['concepts']) && queryPlan['concepts'].length === 1 ? queryPlan['concepts'][0] : undefined
       if (typeof objectId !== 'string' || request.arguments['kind'] !== 'query' || request.arguments['mode'] !== 'semantic') throw new ToolGatewayError('INVALID_ARGUMENTS', 'the fixed structured query task requires its semantic project query')
-      const descriptor = await resolveExecution(execution, objectId, request.ctx)
+      const descriptor = coreCompactSourceProjection(await resolveExecution(execution, objectId, request.ctx))
       if (!request.ctx.allowedResources.sourceRefs.some((ref) => ref.namespace === 'project-dataset' && ref.sourceId === descriptor.snapshotRef.id)) throw new ToolGatewayError('INVALID_ARGUMENTS', 'the archived project snapshot is outside the trusted run allowlist', { platformCode: 'FORBIDDEN' })
       const outcome = await new DataQueryHandler({ query: options.query, consistency: 'immutable', dataMode: 'observed',
         mappings: new InMemorySemanticMappingRegistry([buildProjectSnapshotMapping({ descriptor })]) }).execute(request)

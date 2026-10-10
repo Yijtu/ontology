@@ -475,6 +475,7 @@ export class DuckDbProjectDatasetAdapter
       relationKind: 'table',
       sourceObjectRef: projectDatasetSourceObjectRef(staged.snapshotId, staged.objectId),
       columns: staged.columns,
+      ...(staged.sourceOriginsColumn === 'sources_full_json' ? { sourceProjection: 'full_array' as const } : {}),
       metadata: staged.metadata,
     }
   }
