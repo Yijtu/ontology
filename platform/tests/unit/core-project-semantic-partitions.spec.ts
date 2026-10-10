@@ -85,11 +85,12 @@ async function loadPartitions(input: {
   readonly head: ProjectRevision
   readonly oldPart: PublishedSemanticData
   readonly historicalRevision?: ProjectRevision
+  readonly currentActiveRevision?: string
 }) {
   const revisions = new Map([[input.active.ref.revision, input.active], [input.head.ref.revision, input.head]])
   if (input.historicalRevision !== undefined) revisions.set(input.historicalRevision.ref.revision, input.historicalRevision)
   const projectStore: Pick<ProjectStore, 'getProject' | 'getRevision'> = {
-    getProject: vi.fn(async () => projectRecord(input.active.ref.revision, input.head.ref.revision)),
+    getProject: vi.fn(async () => projectRecord(input.currentActiveRevision ?? input.active.ref.revision, input.head.ref.revision)),
     getRevision: vi.fn(async (_scope, _projectId, number) => revisions.get(number)),
   }
   const definitions = new Map([[input.active.definitionRef.digest, definition(input.active.definitionRef.version, input.active.definitionRef.digest)]])
@@ -151,6 +152,12 @@ describe('CoreProjectSemanticPartitions', () => {
     const future = revision('3', definition1.ref)
     await expect(loadPartitions({ active: revision('2', definition2.ref), head: revision('2', definition2.ref), historicalRevision: future, oldPart: partition(future, definition1) }))
       .rejects.toMatchObject({ code: 'CAPABILITY_NOT_CONFIGURED', message: 'a historical project partition has no exact authorized stored revision provenance', failedChecks: ['pinned_revision_not_active_history_or_staged_head'] })
+  })
+
+  it('fails closed as a revision conflict when active CAS advances during source capture', async () => {
+    const stagedP2 = revision('2', definition2.ref)
+    await expect(loadPartitions({ active: revision('1', definition1.ref), head: stagedP2, currentActiveRevision: '2', historicalRevision: stagedP2, oldPart: partition(stagedP2, definition2) }))
+      .rejects.toMatchObject({ code: 'VERSION_CONFLICT', message: 'the active project revision changed during historical source capture', failedChecks: ['active_project_revision_changed'] })
   })
 
   it('rejects unbounded historical revisions before issuing store reads', async () => {

@@ -126,6 +126,9 @@ export class CoreProjectSemanticPartitions implements MaterializationPublishedSo
         if (active !== undefined && definition !== undefined && !sameDefinition(active.definitionRef, definition.ref)) {
           const failure = await hasExactHistoricalProjectPartition({ part, projectId: id, active, scope, ctx, projects: this.selectors.options.projects })
           if (failure !== undefined) {
+            if (failure === 'active_project_revision_changed') {
+              throw new WorkflowControllerError('VERSION_CONFLICT', 'the active project revision changed during historical source capture', { failedChecks: [failure] })
+            }
             throw new WorkflowControllerError('CAPABILITY_NOT_CONFIGURED', 'a historical project partition has no exact authorized stored revision provenance', { failedChecks: [failure] })
           }
           keys.add(key)
