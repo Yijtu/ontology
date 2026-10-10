@@ -748,4 +748,44 @@ describe('the default Core host composition chain (real PostgreSQL)', () => {
       await database.close()
     }
   })
+
+  it('fails closed when a registered dynamic declaration pack has no immutable published asset', async () => {
+    const packRef = publishedPackRef
+    if (packRef === undefined || admin === undefined) throw new Error('the actual published dynamic pack is missing')
+    const configured = await request(baseUrl, '/api/v1/core/published-pack-profiles', {
+      method: 'POST', headers: { 'content-type': 'application/json', 'idempotency-key': `missing-asset-profile-${randomUUID()}` },
+      body: JSON.stringify({ packRef }),
+    })
+    if (configured.status !== 200) throw new Error(`actual dynamic pack profile configuration failed: ${await failureDetail(configured)}`)
+    const profile = (await jsonBody(configured) as { data: { profileRef: { id: string; version: string }; definitionRef: VersionRef } }).data
+    const bootstrapped = await request(baseUrl, '/api/v1/core/project-bootstrap', {
+      method: 'POST', headers: { 'content-type': 'application/json', 'idempotency-key': `missing-asset-project-${randomUUID()}` },
+      body: JSON.stringify({ title: 'Dynamic declaration without stored asset', profileRef: { id: profile.profileRef.id, version: profile.profileRef.version } }),
+    })
+    if (bootstrapped.status !== 201) throw new Error(`actual dynamic pack project bootstrap failed: ${await failureDetail(bootstrapped)}`)
+    const project = (await jsonBody(bootstrapped) as { data: { project: { projectId: string }; revision: { industryPackRef: VersionRef; definitionRef: VersionRef } } }).data
+    expect(project.revision.industryPackRef).toEqual(packRef)
+    expect(project.revision.definitionRef).toEqual(profile.definitionRef)
+
+    const registered = await admin.query<{ manifest: unknown; lifecycle_state: string }>(
+      `SELECT manifest,lifecycle_state FROM agent_platform.component_versions
+        WHERE tenant_id=$1 AND space_id=$2 AND kind='industry_pack' AND component_id=$3 AND version=$4`,
+      [scope.tenantId, scope.spaceId, packRef.id, packRef.version],
+    )
+    expect(registered.rows).toHaveLength(1)
+    expect(registered.rows[0]?.lifecycle_state).toBe('active')
+    const registeredManifest = registered.rows[0]?.manifest as { id?: string; version?: string; digest?: string; entrypointRef?: { kind?: string; ref?: string } } | undefined
+    expect(registeredManifest).toMatchObject({ id: packRef.id, version: packRef.version, digest: packRef.digest,
+      entrypointRef: { kind: 'package', ref: 'declarative-industry-manifest' } })
+
+    const removed = await admin.query<{ pack_id: string }>(
+      'DELETE FROM agent_platform.published_pack_assets WHERE tenant_id=$1 AND space_id=$2 AND pack_id=$3 AND version=$4 RETURNING pack_id',
+      [scope.tenantId, scope.spaceId, packRef.id, packRef.version],
+    )
+    expect(removed.rows).toEqual([{ pack_id: packRef.id }])
+    const catalogue = await request(baseUrl, `/api/v1/core/projects/${project.project.projectId}/task-catalogue`)
+    expect(catalogue.status).toBe(409)
+    const failure = await jsonBody(catalogue) as { error: { code: string; message: string } }
+    expect(failure.error).toMatchObject({ code: 'CAPABILITY_NOT_CONFIGURED', message: 'the registered declaration-pack loader has no actual immutable published pack' })
+  }, 60_000)
 })
