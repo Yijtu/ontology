@@ -13,7 +13,9 @@ import { FileSystemObjectStore, LocalImmutableBlobStore, PostgresArtifactRegistr
 import { LocalDocumentExtractionService, PostgresDocumentParseStore, publishGroundingDocumentSet } from '@ontology/adapter-extraction-document'
 import { createCoreApi, createCoreLocalComposition, loadCoreExamples } from '@ontology/app-api'
 import type { CoreLocalComposition } from '@ontology/app-api'
+import { contentDigestOf } from '@ontology/application'
 import type { ResourceRef, ScopeRef, VersionRef, AssetCandidateVersion, SemanticDefinitionRecord, ComponentVersionRecord } from '@ontology/contracts'
+import type { CompetencyQuestionSetBody } from '@ontology/contracts'
 import { toolContext } from '../unit/component-registry-fixtures'
 import { startPostgresContainer } from './postgres-container'
 import type { PostgresContainer } from './postgres-container'
@@ -150,7 +152,7 @@ async function failureDetail(response: Response): Promise<string> {
   return await response.text()
 }
 
-async function groundedSource(workspaceId: string): Promise<{ sourceRef: ResourceRef; documentSetRef: ResourceRef }> {
+async function groundedSource(workspaceId: string): Promise<{ sourceRef: ResourceRef; documentSetRef: ResourceRef; sourceText: string }> {
   const registry = new PostgresArtifactRegistry({ connectionString: appUrl, maxPoolSize: 2 })
   const documents = new PostgresDocumentParseStore({ connectionString: appUrl, maxPoolSize: 2 })
   try {
@@ -158,13 +160,14 @@ async function groundedSource(workspaceId: string): Promise<{ sourceRef: Resourc
     await objectStore.init()
     const blobs = new LocalImmutableBlobStore({ objectStore, registry })
     const ctx = toolContext(scope.tenantId, scope.spaceId, ['platform-admin', 'data-editor'], 'grounding-reviewer')
-    const bytes = new TextEncoder().encode(`An Asset is a maintained physical asset. Its stable asset_code identifies it. The boolean inspection_due records whether its next scheduled inspection is due. Workspace ${workspaceId}.`)
+    const sourceText = `An Asset is a maintained physical asset. Its stable asset_code identifies it. The boolean inspection_due records whether its next scheduled inspection is due. Workspace ${workspaceId}.`
+    const bytes = new TextEncoder().encode(sourceText)
     const staged = await blobs.stage(bytes, { scopeRef: scope }, ctx)
     const sourceRef = (await blobs.publish({ scopeRef: scope, ...staged, mediaType: 'text/plain', purpose: 'document' }, ctx)).blobRef
-    const parse = await new LocalDocumentExtractionService({ blobs, store: documents }).parse({ scopeRef: scope, originalRef: sourceRef }, ctx)
+    const parse = await new LocalDocumentExtractionService({ blobs, store: documents }).parse({ scopeRef: scope, originalRef: sourceRef, documentVersionRef: sourceRef }, ctx)
     const documentSetRef = await publishGroundingDocumentSet(blobs, { schemaVersion: '1.0.0', workspaceId, scopeRef: scope,
       sources: [{ sourceRef, state: 'approved', kind: 'document', parserVersion: parse.parserVersion, parseId: parse.parseId }] }, ctx)
-    return { sourceRef, documentSetRef }
+    return { sourceRef, documentSetRef, sourceText }
   } finally {
     await documents.close()
     await registry.close()
@@ -197,6 +200,8 @@ async function startCompositionFor(scopeRef: ScopeRef): Promise<{ composition: C
 
 let modelServerBaseUrl = ''
 let publishedPackRef: { id: string; version: string; digest: string } | undefined
+let chainPreviewPackRef: VersionRef | undefined
+let chainSourceRef: ResourceRef | undefined
 let workspaceId = ''
 let chainExampleSetId = ''
 
@@ -261,13 +266,14 @@ describe('the default Core host composition chain (real PostgreSQL)', () => {
     })
     if (create.status !== 201) throw new Error(`workspace create failed: ${await failureDetail(create)}`)
     workspaceId = (await jsonBody(create) as { data: { workspace: { workspaceId: string } } }).data.workspace.workspaceId
-    const { sourceRef, documentSetRef } = await groundedSource(workspaceId)
+    const { sourceRef, documentSetRef, sourceText } = await groundedSource(workspaceId)
+    chainSourceRef = sourceRef
     const groundedDraft = await request(baseUrl, `/api/v1/industry-workspaces/${workspaceId}/draft-operations`, {
       method: 'POST', headers: { 'content-type': 'application/json', 'if-match': '1', 'idempotency-key': 'chain-approved-source' },
       body: JSON.stringify({ operation: 'edit', reason: 'attach the approved parsed source', documentSetRef }),
     })
     if (groundedDraft.status !== 200) throw new Error(`source attachment failed: ${await failureDetail(groundedDraft)}`)
-    const workspaceRevision = (await jsonBody(groundedDraft) as { data: { workspace: { headRevision: string } } }).data.workspace.headRevision
+    let workspaceRevision = (await jsonBody(groundedDraft) as { data: { workspace: { headRevision: string } } }).data.workspace.headRevision
     expect(workspaceRevision).toBe('2')
 
     const generation = await request(baseUrl, `/api/v1/industry-workspaces/${workspaceId}/generations`, {
@@ -335,25 +341,23 @@ describe('the default Core host composition chain (real PostgreSQL)', () => {
     expect((await jsonBody(reviewHistory) as { data: { reviews: { candidateId: string; decision: string }[] } }).data.reviews)
       .toEqual(expect.arrayContaining([expect.objectContaining({ candidateId: attributeCandidate.candidateId, decision: 'approve' })]))
 
-    const rule = await request(baseUrl, `/api/v1/industry-workspaces/${workspaceId}/rule-action-candidates/ingest`, {
+    controlledDefinition = {
+      rules: [{ kind: 'rule', ruleId: 'inspection_due_rule', displayName: 'Inspection due rule',
+        businessMeaning: 'The next inspection is due', suggestedReason: 'derived from the reviewed registry source', objectId: 'asset',
+        condition: { op: 'compare', attributeId: 'inspection_due', operator: 'eq', value: true }, exceptions: [], ruleDependencies: [],
+        sourceSelections: ['applicability', 'condition'].map((path) => ({ path, sourceIndex: 0, fragmentIndex: 0 })) }],
+      actions: [],
+    }
+    const rule = await request(baseUrl, `/api/v1/industry-workspaces/${workspaceId}/rule-action-generations`, {
       method: 'POST',
       headers: { 'content-type': 'application/json', 'if-match': workspaceRevision, 'idempotency-key': 'chain-rule' },
       body: JSON.stringify({
-        rules: [{
-          kind: 'rule',
-          ruleId: 'inspection_due_rule',
-          displayName: 'Inspection due rule',
-          businessMeaning: 'The next inspection is due',
-          suggestedReason: 'derived from the registry',
-          objectId: 'asset',
-          condition: { op: 'compare', attributeId: 'inspection_due', operator: 'eq', value: true },
-          exceptions: [],
-          ruleDependencies: [],
-        }],
+        kinds: ['rule'], sourceRefs: [sourceRef], selectedDefinitionCandidateIds: currentCandidateIds,
+        generationPolicyRef: POLICY_REF, candidateLimit: 1,
       }),
     })
-    if (rule.status !== 201) throw new Error(`rule ingest failed: ${await failureDetail(rule)}`)
-    const ruleCandidateId = (await jsonBody(rule) as { data: { rules: { candidateId: string }[] } }).data.rules[0]?.candidateId
+    if (rule.status !== 201) throw new Error(`rule generation failed: ${await failureDetail(rule)}`)
+    const ruleCandidateId = (await jsonBody(rule) as { data: { candidates: { candidateId: string; kind: string }[] } }).data.candidates.find((candidate) => candidate.kind === 'rule')?.candidateId
     if (ruleCandidateId === undefined) throw new Error('the ingested rule candidate id is missing')
     const enableRule = await request(baseUrl, `/api/v1/industry-workspaces/${workspaceId}/rule-action-candidates/${ruleCandidateId}/enable`, {
       method: 'POST',
@@ -395,16 +399,65 @@ describe('the default Core host composition chain (real PostgreSQL)', () => {
     const exampleSetId = (await jsonBody(exampleSet) as { data: { exampleSet: { exampleSetId: string } } }).data.exampleSet.exampleSetId
     chainExampleSetId = exampleSetId
 
+    const executionPreview = await request(baseUrl, `/api/v1/core/workspaces/${workspaceId}/execution-preview`, {
+      method: 'POST', headers: { 'content-type': 'application/json', 'if-match': workspaceRevision, 'idempotency-key': 'chain-execution-preview' },
+      body: JSON.stringify({ exampleSetId }),
+    })
+    if (executionPreview.status !== 201) throw new Error(`execution preview failed: ${await failureDetail(executionPreview)}`)
+    const previewData = (await jsonBody(executionPreview) as { data: { definitionRef: VersionRef; ruleRefs: VersionRef[]; packRef: VersionRef; workspace: { headRevision: string } } }).data
+    workspaceRevision = previewData.workspace.headRevision
+    chainPreviewPackRef = previewData.packRef
+    if (previewData.ruleRefs.length !== 1) throw new Error('the actual execution preview did not return one rule pin')
+    const sourceVersion = { id: sourceRef.id, version: sourceRef.version, digest: sourceRef.digest }
+    const logicalProjectId = randomUUID()
+    const location = { sourceRef: sourceVersion, startOffset: 0, endOffset: Buffer.byteLength(sourceText), quoteDigest: sourceRef.digest, offsetUnit: 'utf8_byte' as const }
+    const nativeCsv = 'asset_code,inspection_due\nASSET-1,true\n'
+    const nativeUpload = await fetch(`${baseUrl}/api/v1/competency-question-sources`, { method: 'POST',
+      headers: { 'content-type': 'application/octet-stream', 'x-source-media-type': 'text/csv' }, body: nativeCsv, signal: AbortSignal.timeout(30_000) })
+    if (!nativeUpload.ok) throw new Error(`actual synthetic entity source upload failed: ${await nativeUpload.text()}`)
+    const nativeSource = (await nativeUpload.json() as { data: { sourceRef: ResourceRef } }).data.sourceRef
+    const nativeVersion = { id: nativeSource.id, version: nativeSource.version, digest: nativeSource.digest }
+    const nativeLocation = { sourceRef: nativeVersion, startOffset: 0, endOffset: Buffer.byteLength(nativeCsv), quoteDigest: nativeSource.digest, offsetUnit: 'utf8_byte' as const }
+    const competencyBody: CompetencyQuestionSetBody = {
+      schemaVersion: 'competency-questions@1', classification: 'synthetic_demo_not_an_industry_standard', execution: 'not_run',
+      industryId: 'chain-acceptance', definitionRefs: [previewData.definitionRef], ruleRefs: previewData.ruleRefs, sourceRefs: [sourceVersion, nativeVersion],
+      allowedCapabilities: ['semantic_read'],
+      externalGold: { status: 'missing_resources', acceptance: 'unverified', missingResources: ['human_quote_gold'] },
+      questions: [{ questionId: 'inspection-due', question: 'Does the reviewed inspection rule apply to this asset?', taskKind: 'rule_judgement',
+        definitionRef: previewData.definitionRef, ruleRefs: previewData.ruleRefs,
+        input: { dataMode: 'synthetic', scopeRef: scope, projectId: logicalProjectId, validAt: '2026-10-09T00:00:00Z', asOfRecordedSeq: '1',
+          observations: [
+            { factId: 'asset-code', entityId: 'ASSET-1', objectId: 'asset', attributeId: 'asset_code', value: 'ASSET-1', recordedSeq: '1', status: 'active', source: nativeLocation },
+            { factId: 'inspection-due', entityId: 'ASSET-1', objectId: 'asset', attributeId: 'inspection_due', value: true, recordedSeq: '1', status: 'active', source: nativeLocation },
+          ], relations: [], structuredSources: [{ sourceRef: nativeVersion, objectId: 'asset', attributeIds: ['asset_code', 'inspection_due'] }] },
+        intent: { kind: 'rule', projectId: logicalProjectId, objectId: 'asset', subjectEntityId: 'ASSET-1', ruleId: 'inspection_due_rule' },
+        requiredCapabilities: ['semantic_read'], requiredSources: [location, nativeLocation],
+        expected: { kind: 'rule', conditionState: 'true', applicability: 'applicable', propositionState: 'unknown' },
+        goldOrigin: 'authored_oracle', derivation: '该声明只验证规则条件和适用性，不声称真实客户业务结论。',
+        specRefs: ['tasks/spec-v0.3a/execution-evidence.md#EX-11'] }],
+    }
+    const declaration = await request(baseUrl, '/api/v1/competency-question-sets', {
+      method: 'POST', headers: { 'content-type': 'application/json', 'idempotency-key': 'chain-competency-question' },
+      body: JSON.stringify({ ref: { id: randomUUID(), version: '1.0.0', digest: contentDigestOf(competencyBody) }, body: competencyBody }),
+    })
+    if (declaration.status !== 201) throw new Error(`competency question upload failed: ${await failureDetail(declaration)}`)
+    const declarationData = (await jsonBody(declaration) as { data: { declaration: { ref: VersionRef }; candidateId: string } }).data
+    const competencyReview = await request(baseUrl, `/api/v1/candidates/${declarationData.candidateId}/reviews`, {
+      method: 'POST', headers: { 'content-type': 'application/json', 'if-match': '0' },
+      body: JSON.stringify({ decision: 'approve', reason: 'reviewed the authored competency question against the actual rule source and synthetic oracle' }),
+    })
+    if (competencyReview.status !== 200) throw new Error(`competency question review failed: ${await failureDetail(competencyReview)}`)
+
     const validation = await request(baseUrl, `/api/v1/industry-workspaces/${workspaceId}/validations`, {
       method: 'POST',
       headers: { 'content-type': 'application/json', 'if-match': workspaceRevision, 'idempotency-key': 'chain-validation' },
-      body: JSON.stringify({ exampleSetId }),
+      body: JSON.stringify({ exampleSetId, competencyQuestionRef: declarationData.declaration.ref, definitionRef: previewData.definitionRef }),
     })
     if (validation.status !== 201) throw new Error(`validation failed: ${await failureDetail(validation)}`)
     const report = (await jsonBody(validation) as { data: { validation: { validationId: string; publishable: boolean; semanticPublished: { passed: boolean }; deploymentExecutable: { passed: boolean } } } }).data.validation
     expect(report.semanticPublished.passed, JSON.stringify(report)).toBe(true)
-    expect(report.deploymentExecutable.passed).toBe(true)
-    expect(report.publishable).toBe(true)
+    expect(report.deploymentExecutable.passed, JSON.stringify(report)).toBe(true)
+    expect(report.publishable, JSON.stringify(report)).toBe(true)
 
     // CAS conflict blocking: a stale revision may not publish the pack.
     const stalePublish = await request(baseUrl, `/api/v1/industry-workspaces/${workspaceId}/publications`, {
@@ -441,8 +494,10 @@ describe('the default Core host composition chain (real PostgreSQL)', () => {
     expect(foreignAdjudicationRows).toHaveLength(0)
     const foreignCatalogue = await request(otherBaseUrl, '/api/v1/industry-packs')
     expect(foreignCatalogue.status).toBe(200)
-    const foreignPacks = (await jsonBody(foreignCatalogue) as { data: { packs: unknown[] } }).data.packs
-    expect(foreignPacks).toHaveLength(0)
+    const foreignPacks = (await jsonBody(foreignCatalogue) as { data: { packs: { packRef?: VersionRef }[] } }).data.packs
+    expect(foreignPacks).not.toContainEqual(expect.objectContaining({ packRef: publishedPackRef }))
+    expect(foreignPacks).not.toContainEqual(expect.objectContaining({ packRef: chainPreviewPackRef }))
+    expect(foreignPacks.some((entry) => entry.packRef?.id.startsWith('chain-acceptance.') === true)).toBe(false)
   }, 240_000)
 
   it('loads newly published package A in workspace B, persists incremental references and explains conflicts', async () => {
@@ -581,6 +636,32 @@ describe('the default Core host composition chain (real PostgreSQL)', () => {
       body: JSON.stringify({ packId: 'chain-pack', version: '2.0.0', validationId: randomUUID(), strategy: { kind: 'invented', reason: 'bad' } }),
     })
     expect(invalid.status).toBe(400)
+
+    if (chainSourceRef === undefined) throw new Error('the original reviewed source is unavailable for rule reconfirmation')
+    const ruleInventory = await request(baseUrl, `/api/v1/industry-workspaces/${workspaceId}/rule-action-candidates?kind=rule`)
+    if (ruleInventory.status !== 200) throw new Error(`current rule inventory failed: ${await failureDetail(ruleInventory)}`)
+    const currentRule = (await jsonBody(ruleInventory) as { data: { candidates: { candidateId: string; contentDigest: string; payload: { ruleId: string } }[] } }).data.candidates
+      .find((candidate) => candidate.payload.ruleId === 'inspection_due_rule')
+    if (currentRule === undefined) throw new Error('the current inspection rule declaration is missing')
+    const sourceConfirmation = await request(baseUrl, `/api/v1/industry-workspaces/${workspaceId}/rule-action-candidates/${currentRule.candidateId}/source-confirmations`, {
+      method: 'POST', headers: { 'content-type': 'application/json', 'if-match': revision, 'idempotency-key': 'chain-breaking-rule-source-confirmation' },
+      body: JSON.stringify({ contentDigest: currentRule.contentDigest, sourceRefs: [chainSourceRef],
+        sourceSelections: ['applicability', 'condition'].map((path) => ({ path, sourceIndex: 0, fragmentIndex: 0 })),
+        reason: 'reconfirm the unchanged rule against its exact original source after the definition revision changed' }),
+    })
+    if (sourceConfirmation.status !== 201) throw new Error(`rule source reconfirmation failed: ${await failureDetail(sourceConfirmation)}`)
+    const refreshedRule = (await jsonBody(sourceConfirmation) as { data: { candidates: { candidateId: string }[] } }).data.candidates[0]
+    if (refreshedRule === undefined) throw new Error('the refreshed source-grounded rule revision is missing')
+    const ruleApproval = await request(baseUrl, `/api/v1/candidates/${refreshedRule.candidateId}/reviews`, {
+      method: 'POST', headers: { 'content-type': 'application/json', 'if-match': '0' },
+      body: JSON.stringify({ decision: 'approve', reason: 'human reviewed the freshly source-grounded rule at the new definition revision' }),
+    })
+    if (ruleApproval.status !== 200) throw new Error(`refreshed rule review failed: ${await failureDetail(ruleApproval)}`)
+    const ruleEnablement = await request(baseUrl, `/api/v1/industry-workspaces/${workspaceId}/rule-action-candidates/${refreshedRule.candidateId}/enable`, {
+      method: 'POST', headers: { 'if-match': revision },
+    })
+    if (ruleEnablement.status !== 200) throw new Error(`refreshed rule enablement failed: ${await failureDetail(ruleEnablement)}`)
+
     const strategy = { kind: 'new_version', reason: 'explicitly publish numeric code semantics as v2' }
     const validated = await request(baseUrl, `/api/v1/industry-workspaces/${workspaceId}/validations`, {
       method: 'POST', headers: { 'content-type': 'application/json', 'if-match': revision, 'idempotency-key': 'chain-breaking-with-strategy' },

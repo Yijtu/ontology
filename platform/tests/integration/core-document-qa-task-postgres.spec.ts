@@ -333,6 +333,8 @@ describe('document-QA task run through the normal HTTP host (real PostgreSQL, re
     const mountedScenario = scenarios.find((entry) => entry.scenarioId === SCENARIO_ID)
     if (mountedScenario === undefined) throw new Error('the transport scenario was not exposed')
 
+    expect(workerErrors.map((error) => ({ name: error.name, message: error.message, code: (error as Error & { code?: unknown }).code }))).toEqual([])
+    const workerErrorStart = workerErrors.length
     const runResponse = await request('/api/v1/runs', {
       method: 'POST',
       headers: { 'content-type': 'application/json', 'idempotency-key': `docqa-task-miss-${PROJECT_ID}` },
@@ -371,5 +373,14 @@ describe('document-QA task run through the normal HTTP host (real PostgreSQL, re
       await new Promise((resolve) => setTimeout(resolve, 100))
     }
     expect(fabricated).toBe(false)
+    const terminalResponse = await request(`/api/v1/runs/${encodeURIComponent(runId)}`)
+    if (terminalResponse.status !== 200) throw new Error(`no-match run status failed: ${await terminalResponse.text()}`)
+    const terminal = (await jsonBody(terminalResponse)).data
+    const eventsResponse = await fetch(`${baseUrl}/api/v1/runs/${encodeURIComponent(runId)}/events`, { signal: AbortSignal.timeout(30_000) })
+    const events = eventsResponse.ok ? await eventsResponse.text() : `events-status:${String(eventsResponse.status)}`
+    expect(terminal['state']).toBe('failed')
+    expect(events).toContain('"state":"failed","reason":"workflow_failed"')
+    expect(workerErrors.slice(workerErrorStart).map((error) => ({ name: error.name, message: error.message, code: (error as Error & { code?: unknown }).code })))
+      .toEqual([{ name: 'TypedDraftWriterError', message: 'no complete result-backed statements were available for the answer', code: 'INSUFFICIENT_DATA' }])
   }, 120_000)
 })

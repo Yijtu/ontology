@@ -8,7 +8,7 @@ import { FileSystemObjectStore, LocalImmutableBlobStore, PostgresArtifactRegistr
 import { DuckDbProjectDatasetAdapter } from '@ontology/adapter-data-duckdb'
 import { ControlPostgresDatabase, PostgresAnswerStore, PostgresAssetCandidateStore, PostgresAssetWorkspaceStore, PostgresCandidateStore, PostgresComputeInvocationStore, PostgresComputeOutputBindingsStore, PostgresComputeResultArtifactStore, PostgresEvidenceStore, PostgresIdentityDecisionStore, PostgresInstanceReviewStore, PostgresJobStore, PostgresProfileStore, PostgresProjectDocumentStore, PostgresProjectMappingStore, PostgresProjectReadinessStore, PostgresProjectRecordStore, PostgresProjectStore, PostgresPublishedTaskBindingStore, PostgresRunExecutionBindingStore, PostgresRunStore, PostgresSemanticPublicationStore, PostgresTaskInputSnapshotStore, PostgresWorkflowStore } from '@ontology/adapter-control-postgres'
 import { LocalDocumentExtractionService, LocalStructuredIngestionService, PostgresDocumentParseStore, PostgresStructuredIngestionStore, StructuredDocumentParser, StructuredDocumentProjectionService } from '@ontology/adapter-extraction-document'
-import { coreScenarioTaskBindings, createBlobArtifactWriter, createCoreApi, createCoreApprovedInput, createCoreAuthoring, createCoreLocalComposition, createCoreProjectComputeInput, createCoreSourceViewReader, createCoreStructuredImportWorkflow, createInstanceIdentityWorkflow, createProjectFactWorkflow, createRequestNativeSourceReader, loadCoreExamples, readSavedInputSources, registerCoreSourceViewRoutes } from '@ontology/app-api'
+import { coreScenarioTaskBindings, createBlobArtifactWriter, createCoreApi, createCoreApprovedInput, createCoreAuthoring, createCoreLocalComposition, createCoreProjectComputeInput, createCoreSourceViewReader, createCoreStructuredImportWorkflow, createInstanceIdentityWorkflow, createProjectFactWorkflow, createRequestNativeSourceReader, loadCoreExamples, readSavedInputSources } from '@ontology/app-api'
 import type { CoreSourceViewOptions } from '@ontology/app-api'
 import { canonicalJson, CompositeReviewableCandidateReader, InMemoryIndustrySchemaSource, InstanceReviewService, JobService, ProjectDataMaterializationService, ProjectMappingService, ProjectService, encodeStructuredExtractionRef, sha256DigestOf } from '@ontology/application'
 import { createExampleComputeHandlers, exampleOperationRegistry, exampleRegisteredOperation, RegisteredComputeExecutionService, registeredOperationDigest } from '@ontology/tool-services'
@@ -81,7 +81,6 @@ describe('actual saved-answer source views (PostgreSQL, original bytes, normal w
     const composition = await createCoreLocalComposition({ databaseUrl: harness.appUrl, objectDirectory: directory, scopeRef: scope.scopeRef, examples: loadCoreExamples({ targetScopeRef: scope.scopeRef }), allowLocalOperator: true, projectStructuredImports: createCoreStructuredImportWorkflow })
     const api = createCoreApi(composition.dependencies)
     const reader = createCoreSourceViewReader(options)
-    registerCoreSourceViewRoutes(api, { reader, authenticate: () => ({ principal: ctx.principal, spaceId: scope.spaceId }), contextFor: () => ctx })
     try {
       const base = await api.listen({ host: '127.0.0.1', port: 0 })
       const request = async (path: string, body?: object) => {
