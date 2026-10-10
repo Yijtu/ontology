@@ -311,6 +311,10 @@ export class PostgresMaterializationStore implements MaterializationStore {
     ctx: ToolContext,
   ): Promise<ProjectionCommitResult> {
     resolveScope(scopeRef, ctx)
+    const fenceIds = [...input.fenceId === undefined ? [] : [input.fenceId], ...input.additionalFenceIds ?? []]
+    if ((input.additionalFenceIds?.length ?? 0) > 0 && (input.fenceId === undefined || fenceIds.length > 8 || new Set(fenceIds).size !== fenceIds.length)) {
+      throw new MaterializationStoreError('MATERIALIZATION_STORE_FAILED', 'a projection batch requires at most eight distinct fences')
+    }
     return this.#db.withIdentityScope({ tenantId: scopeRef.tenantId, spaceId: scopeRef.spaceId }, async (client) => {
       await client.query(
         `INSERT INTO agent_platform.projection_state
@@ -325,6 +329,15 @@ export class PostgresMaterializationStore implements MaterializationStore {
           'GENERATION_CONFLICT',
           `the projection is at generation ${String(current)}, not ${input.expectedGeneration}`,
         )
+      }
+      if ((input.additionalFenceIds?.length ?? 0) > 0) {
+        const fences = await client.query(
+          `SELECT fence_id FROM agent_platform.materialization_fences
+             WHERE tenant_id = $1 AND space_id = $2 AND projection_ref = $3 AND fence_id = ANY($4::uuid[])
+             FOR UPDATE`,
+          [scopeRef.tenantId, scopeRef.spaceId, this.#projectionRef, fenceIds],
+        )
+        if (fences.rows.length !== fenceIds.length) throw new MaterializationStoreError('FENCE_NOT_FOUND', 'the projection batch contains a fence outside its actual scope or projection')
       }
       const next = current + 1
       let appended = 0
@@ -374,12 +387,12 @@ export class PostgresMaterializationStore implements MaterializationStore {
       if (row === undefined) {
         throw new MaterializationStoreError('MATERIALIZATION_STORE_FAILED', 'commitProjection updated no state row')
       }
-      if (input.fenceId !== undefined) {
+      if (fenceIds.length > 0) {
         await client.query(
           `UPDATE agent_platform.materialization_fences
-              SET state = 'closed', closed_at = $4
-            WHERE tenant_id = $1 AND space_id = $2 AND fence_id = $3 AND state = 'open'`,
-          [scopeRef.tenantId, scopeRef.spaceId, input.fenceId, input.committedAt],
+              SET state = 'closed', closed_at = $5
+            WHERE tenant_id = $1 AND space_id = $2 AND projection_ref = $3 AND fence_id = ANY($4::uuid[]) AND state = 'open'`,
+          [scopeRef.tenantId, scopeRef.spaceId, this.#projectionRef, fenceIds, input.committedAt],
         )
       }
       return { state: toState(row, scopeRef), appendedSlices: appended }

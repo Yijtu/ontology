@@ -152,6 +152,38 @@ afterAll(async () => {
 })
 
 describe('incremental materialisation against real PostgreSQL and the real outbox', () => {
+  it('atomically closes a bounded set of actual fences and rolls back missing or foreign batch members', async () => {
+    const owner = await createJobScope(harness.adminClient, 'materialization-batch-owner')
+    const foreign = await createJobScope(harness.adminClient, 'materialization-batch-foreign')
+    const ownerCtx = toolContext(owner.tenantId, owner.spaceId, ['platform-admin'])
+    const foreignCtx = toolContext(foreign.tenantId, foreign.spaceId, ['platform-admin'])
+    const store = new PostgresMaterializationStore(database)
+    const openedAt = new Date().toISOString()
+    const first = await store.openFence(owner.scopeRef, { fenceId: randomUUID(), reason: 'first actual batch change', propositionKeys: [], openedAt }, ownerCtx)
+    const second = await store.openFence(owner.scopeRef, { fenceId: randomUUID(), reason: 'second actual batch change', propositionKeys: [], openedAt }, ownerCtx)
+    const unrelated = await store.openFence(foreign.scopeRef, { fenceId: randomUUID(), reason: 'another tenant batch', propositionKeys: [], openedAt }, foreignCtx)
+    const input = { fenceId: first.fenceId, expectedGeneration: '0', recordedSeq: '2', watermark: { kind: 'sequence' as const, value: '2' }, slices: [], committedAt: new Date().toISOString() }
+    const originalState = await store.getProjectionState(owner.scopeRef, ownerCtx)
+
+    for (const unavailable of [randomUUID(), unrelated.fenceId]) {
+      await expect(store.commitProjection(owner.scopeRef, { ...input, additionalFenceIds: [unavailable] }, ownerCtx)).rejects.toMatchObject({ code: 'FENCE_NOT_FOUND' })
+      expect(await store.getProjectionState(owner.scopeRef, ownerCtx)).toEqual(originalState)
+      expect(await store.readSlices(owner.scopeRef, {}, ownerCtx)).toEqual([])
+      expect((await store.getFence(owner.scopeRef, first.fenceId, ownerCtx))?.state).toBe('open')
+      expect((await store.getFence(owner.scopeRef, second.fenceId, ownerCtx))?.state).toBe('open')
+      expect((await store.getFence(foreign.scopeRef, unrelated.fenceId, foreignCtx))?.state).toBe('open')
+    }
+
+    const committed = await store.commitProjection(owner.scopeRef, { ...input, additionalFenceIds: [second.fenceId] }, ownerCtx)
+    expect(committed.state).toMatchObject({ generation: '1', watermark: { kind: 'sequence', value: '2' }, dirty: false })
+    expect(await store.listOpenFences(owner.scopeRef, ownerCtx)).toEqual([])
+    expect((await store.getFence(owner.scopeRef, first.fenceId, ownerCtx))?.state).toBe('closed')
+    expect((await store.getFence(owner.scopeRef, second.fenceId, ownerCtx))?.state).toBe('closed')
+    expect((await store.getFence(foreign.scopeRef, unrelated.fenceId, foreignCtx))?.state).toBe('open')
+    await expect(store.commitProjection(owner.scopeRef, { ...input, additionalFenceIds: [second.fenceId] }, ownerCtx)).rejects.toMatchObject({ code: 'GENERATION_CONFLICT' })
+    expect(await store.getProjectionState(owner.scopeRef, ownerCtx)).toEqual(committed.state)
+  })
+
   it('sets the fence first, refuses a stale read during the in-flight recompute and advances asynchronously', async () => {
     const seedPublication = randomUUID()
     const battery = statementFor(seedPublication)
