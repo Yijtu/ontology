@@ -56,6 +56,7 @@ describe('package validation, publish, export and mount in a real browser', () =
       expect(await page.locator('[data-testid="validation-publishable"]').getAttribute('data-publishable')).toBe('true')
 
       // Publish the real pack: the result comes from the actual publication service.
+      await page.getByText('高级：发布标识与版本', { exact: true }).click()
       await page.fill('[data-testid="asset-publish-pack-id"]', 'demo.bridge-pack')
       await page.fill('[data-testid="asset-publish-version"]', '1.0.0')
       await page.click('[data-testid="asset-publish"]')
@@ -103,6 +104,7 @@ describe('package validation, publish, export and mount in a real browser', () =
 
       // Default: a dependency-free semantic publish is allowed and the two surfaces stay separate.
       expect(await page.locator('[data-testid="asset-publish"]').isEnabled()).toBe(true)
+      await page.getByText('高级：发布标识与版本', { exact: true }).click()
       await page.fill('[data-testid="asset-publish-pack-id"]', 'demo.bridge-pack')
       await page.fill('[data-testid="asset-publish-version"]', '2.0.0')
       await page.click('[data-testid="asset-publish"]')
