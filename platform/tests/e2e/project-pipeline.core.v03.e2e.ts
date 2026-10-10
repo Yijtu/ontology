@@ -15,6 +15,7 @@ import { startPostgresContainer } from '../integration/postgres-container'
 import type { PostgresContainer } from '../integration/postgres-container'
 import { capture, record, startWebHost } from './web-host'
 import type { WebHost } from './web-host'
+import { collectRealAppAccessibilityEvidence, collectRealAppDrawerEvidence } from './real-app-accessibility'
 
 /**
  * GAP-022 project pipeline on the normal, production-composed App URL.
@@ -163,6 +164,7 @@ describe('GAP-022 normal App project source-to-publication pipeline', () => {
     const page = await context.newPage()
     const apiFailures: string[] = []
     const apiResponses: string[] = []
+    const accessibilityEvidence: string[] = []
     let stagedFactCandidateId: string | undefined
     let factSemanticPublicationStarted = false
     page.on('request', (request) => {
@@ -197,6 +199,21 @@ describe('GAP-022 normal App project source-to-publication pipeline', () => {
       await page.getByTestId('tab-projects').click()
       await page.waitForSelector('[data-testid="project-workspace"]')
       await page.waitForSelector('[data-testid="project-create-title"]')
+      const initialAccessibility = await collectRealAppAccessibilityEvidence(page, {
+        state: 'project-create-empty',
+        visibleControls: [
+          { name: 'project title', locator: page.getByTestId('project-create-title') },
+          { name: 'published package version', locator: page.getByTestId('project-create-pack') },
+          { name: 'deployment scenario', locator: page.getByTestId('core-scenario-select') },
+        ],
+        contrastProbes: [
+          { name: 'project creation heading', locator: page.locator('[data-testid="project-create"] h3') },
+          { name: 'project title label', locator: page.locator('[data-testid="project-create-title"]').locator('xpath=..') },
+          { name: 'project creation submit text', locator: page.getByTestId('project-create-submit') },
+        ],
+        motionProbes: [{ name: 'project title control', locator: page.getByTestId('project-create-title') }],
+      })
+      accessibilityEvidence.push(JSON.stringify(initialAccessibility))
 
       const createResponse = page.waitForResponse((response) =>
         requestPath(response) === '/api/v1/core/project-bootstrap' && response.request().method() === 'POST',
@@ -336,9 +353,9 @@ describe('GAP-022 normal App project source-to-publication pipeline', () => {
       expect(await sourceDialog.getByTestId('original-cell-location').textContent()).toContain('GAP22-ASSET-001')
       expect(await sourceDialog.getByTestId('original-cell-location').textContent()).toContain('A2')
       await capture(page, 'gap22-project-original-cell-drawer-1440')
-      await page.keyboard.press('Escape')
-      await sourceDialog.waitFor({ state: 'hidden' })
-      expect(await sourceButton.evaluate((element) => element === document.activeElement)).toBe(true)
+      const drawerAccessibility = await collectRealAppDrawerEvidence(page, { dialog: sourceDialog, trigger: sourceButton })
+      expect(drawerAccessibility.focusReturned).toBe(true)
+      accessibilityEvidence.push(JSON.stringify({ state: 'project-original-cell-source-drawer', ...drawerAccessibility }))
 
       // Instance publication completes the human field/identity review record. The fact itself
       // becomes an official semantic fact only after candidate review and semantic publication,
@@ -420,6 +437,7 @@ describe('GAP-022 normal App project source-to-publication pipeline', () => {
         'source=original-csv-cell-row-2-column-1-value-GAP22-ASSET-001',
         'dataset=ready-after-visible-materialize-action',
         'viewports=1440,1024,768,390,320; page-level-horizontal-overflow=none',
+        ...accessibilityEvidence.map((report) => `accessibility=${report}`),
         ...apiTrace,
         ...apiResponses,
         ...(apiFailures.length === 0 ? [] : [`apiFailures=${apiFailures.join(',')}`]),
