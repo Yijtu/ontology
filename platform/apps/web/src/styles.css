@@ -1193,7 +1193,7 @@ button, input, select, textarea { font: inherit; min-width: 0; max-width: 100%; 
 button { min-height: 40px; padding: 8px 14px; border-radius: var(--radius); line-height: 1.4; background: var(--surface); color: var(--ink); border-color: #bccacb; font-weight: 600; }
 button:hover:not(:disabled) { background: var(--accent-soft); border-color: var(--accent); }
 button:disabled { color: #5d6a6e; background: #edf0f0; border-color: #cdd5d6; }
-input:not([type="checkbox"]):not([type="radio"]), select, textarea { min-height: 40px; background: var(--surface); color: var(--ink); border: 1px solid #aab9bc; border-radius: 6px; padding: 8px 10px; }
+input:not([type="checkbox"]):not([type="radio"]), select, textarea { min-height: 40px; background: var(--surface); color: var(--ink); border: 1px solid var(--control-line); border-radius: 6px; padding: 8px 10px; }
 input[type="checkbox"], input[type="radio"] { accent-color: var(--accent); width: 18px; height: 18px; }
 textarea { line-height: 1.6; resize: vertical; }
 :focus-visible { outline: 3px solid var(--focus); outline-offset: 3px; }
