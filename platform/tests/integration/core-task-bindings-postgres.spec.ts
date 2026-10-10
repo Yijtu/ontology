@@ -7,7 +7,6 @@ import { Client } from 'pg'
 import { FileSystemObjectStore, LocalImmutableBlobStore, PostgresArtifactRegistry } from '@ontology/adapter-blob-local'
 import { PostgresStructuredIngestionStore } from '@ontology/adapter-extraction-document'
 import { PostgresProjectDatasetAdapter } from '@ontology/adapter-data-postgres'
-import { projectSnapshotMappingRef } from '@ontology/semantic-engine'
 import type { DataQueryOutput } from '@ontology/contracts'
 import { projectQueryPublicationFixture } from './project-query-publication-fixtures'
 import { afterAll, beforeAll, describe, expect, it } from 'vitest'
@@ -32,7 +31,7 @@ import {
 } from '@ontology/app-api'
 import type { CoreLocalComposition, CoreExampleScenario } from '@ontology/app-api'
 import { canonicalJson, sha256DigestOf, ProjectService } from '@ontology/application'
-import { createToolContext } from '@ontology/contracts'
+import { assertProjectFactInputShape, createToolContext, isRecord } from '@ontology/contracts'
 import type {
   MappingRef,
   ProjectRevisionBody,
@@ -42,6 +41,7 @@ import type {
   ScopeRef,
   ToolContext,
   PackAsset,
+  VersionRef,
 } from '@ontology/contracts'
 import { definitionVersionDigest, InMemoryIdentityIndexReader, projectIndustrySchema, validateDefinitionVersion } from '@ontology/semantic-engine'
 import { seedIdentityProject } from './instance-identity-fixtures'
@@ -81,12 +81,12 @@ function mappingRef(): MappingRef {
   }
 }
 
-function revisionBody(definitionRef: { id: string; version: string; digest: string }, profileRef: ResolvedProfileRef): ProjectRevisionBody {
+function revisionBody(definitionRef: { id: string; version: string; digest: string }, industryPackRef: VersionRef, profileRef: ResolvedProfileRef): ProjectRevisionBody {
   return {
     schemaVersion: 'project-revision@1',
     projectId: PROJECT_ID,
     revision: '1',
-    industryPackRef: { id: 'taskbind-pack', version: '1.0.0', digest: DIGEST },
+    industryPackRef,
     definitionRef,
     mappingRefs: [mappingRef(), { ...definitionRef, role: 'catalog', sourceObjectRef: { sourceRef: { namespace: 'taskbind', sourceId: 'identity' }, objectPath: 'identity_index' } }],
     profileRef,
@@ -234,6 +234,102 @@ async function waitForOutboxDispatch(outboxId: string): Promise<number> {
   throw new Error(`the actual publication outbox ${outboxId} did not dispatch within its fixed 15-second barrier`)
 }
 
+async function sameRevisionProvenanceDiagnostic(objectId: string): Promise<Record<string, unknown>> {
+  const ctx = trustedContext(scopeRef), project = await publishedFixture.projects.getProject(scopeRef, PROJECT_ID, ctx)
+  const revision = await publishedFixture.projects.getRevision(scopeRef, PROJECT_ID, projectRevisionRefValue.revision, ctx)
+  const [visibility, statements] = await Promise.all([
+    publishedFixture.documents.getVisibility(scopeRef, PROJECT_ID, ctx),
+    publishedFixture.publications.listStatements(scopeRef, { objectId, status: 'active', limit: 100 }, ctx),
+  ])
+  const pins: Record<string, unknown>[] = []
+  for (const statement of statements) {
+    const provenanceValue = statement.value['provenance']
+    const sourceSpansValue = isRecord(provenanceValue) ? provenanceValue['sourceSpans'] : undefined
+    try { assertProjectFactInputShape(provenanceValue) }
+    catch { pins.push({ statementId: statement.statementId, pinShape: 'invalid' }); continue }
+    const sourceSpans = Array.isArray(sourceSpansValue) ? sourceSpansValue : []
+    for (const pin of provenanceValue.sources) {
+      const [latestRecord, pinnedRecord, mapping, membership, parse] = await Promise.all([
+        publishedFixture.records.getRecord(scopeRef, PROJECT_ID, pin.recordId, ctx),
+        publishedFixture.records.getRecordVersion?.(scopeRef, PROJECT_ID, pin.recordId, pin.recordRevision, ctx) ?? Promise.resolve(undefined),
+        publishedFixture.mappings.getMapping(scopeRef, PROJECT_ID, pin.mappingRef.id, pin.mappingRef.version, ctx),
+        publishedFixture.documents.getMembership(scopeRef, PROJECT_ID, pin.documentId, ctx),
+        structuredStore?.getParse(scopeRef, pin.parseId, ctx) ?? Promise.resolve(undefined),
+      ])
+      const mismatches: string[] = []
+      if (latestRecord === undefined) mismatches.push('record_missing')
+      else {
+        if (latestRecord.revision !== pin.recordRevision) mismatches.push('record_revision_mismatch')
+        if (latestRecord.contentDigest !== pin.contentDigest) mismatches.push('record_content_digest_mismatch')
+        if (latestRecord.sourceDigest !== pin.sourceDigest) mismatches.push('record_source_digest_mismatch')
+      }
+      if (pinnedRecord === undefined) mismatches.push('record_version_unavailable')
+      else if (pinnedRecord.recordId !== pin.recordId || pinnedRecord.revision !== pin.recordRevision || pinnedRecord.contentDigest !== pin.contentDigest || pinnedRecord.sourceDigest !== pin.sourceDigest ||
+        pinnedRecord.mappingId !== pin.mappingRef.id || pinnedRecord.mappingVersion !== pin.mappingRef.version) {
+        mismatches.push('record_version_pin_mismatch')
+      }
+      if (mapping === undefined) mismatches.push('mapping_missing')
+      else {
+        if (canonicalJson(mapping.ref) !== canonicalJson(pin.mappingRef)) mismatches.push('mapping_ref_mismatch')
+        if (mapping.parseId !== pin.parseId) mismatches.push('mapping_parse_mismatch')
+        if (revision?.mappingRefs.some((ref) => canonicalJson(ref) === canonicalJson(pin.mappingRef)) !== true) mismatches.push('project_revision_mapping_missing')
+      }
+      if (membership === undefined) mismatches.push('membership_missing')
+      else {
+        if (membership.state !== 'active') mismatches.push('membership_not_active')
+        if (membership.membershipRevision !== pin.membershipRevision) mismatches.push('membership_revision_mismatch')
+        if (membership.parseId !== pin.parseId) mismatches.push('membership_parse_mismatch')
+      }
+      if (visibility === undefined) mismatches.push('visibility_missing')
+      else if (visibility.epoch !== pin.visibilityEpoch) mismatches.push('visibility_epoch_mismatch')
+      const matchingSpans = pinnedRecord === undefined ? 0 : pinnedRecord.fields.filter((field) => sourceSpans.some((span) => isRecord(span) &&
+        span['kind'] === 'structured' && span['recordId'] === pin.recordId && span['parseId'] === pin.parseId &&
+        span['rowDigest'] === pin.sourceDigest && canonicalJson(span['locator']) === canonicalJson(field.locator))).length
+      if (!Array.isArray(sourceSpansValue)) mismatches.push('source_spans_missing')
+      else if (matchingSpans !== (pinnedRecord?.fields.length ?? 0)) mismatches.push('source_span_field_mismatch')
+      pins.push({
+        statementId: statement.statementId,
+        projectRevisionRef: pin.projectRevisionRef,
+        definitionRef: pin.definitionRef,
+        mappingRef: pin.mappingRef,
+        recordId: pin.recordId,
+        recordRevision: pin.recordRevision,
+        contentDigest: pin.contentDigest,
+        sourceDigest: pin.sourceDigest,
+        documentId: pin.documentId,
+        parseId: pin.parseId,
+        membershipRevision: pin.membershipRevision,
+        visibilityEpoch: pin.visibilityEpoch,
+        actual: {
+          projectRevisionRef: revision?.ref,
+          latestRecordRevision: latestRecord?.revision,
+          latestContentDigest: latestRecord?.contentDigest,
+          latestSourceDigest: latestRecord?.sourceDigest,
+          pinnedRecordAvailable: pinnedRecord !== undefined,
+          mappingRef: mapping?.ref,
+          mappingParseId: mapping?.parseId,
+          parserVersion: parse?.parserVersion,
+          membership: membership === undefined ? undefined : { state: membership.state, membershipRevision: membership.membershipRevision, parseId: membership.parseId },
+          visibilityEpoch: visibility?.epoch,
+          sourceSpanCount: sourceSpans.length,
+          sourceSpanFieldMatches: matchingSpans,
+        },
+        mismatches,
+      })
+    }
+  }
+  return {
+    objectId,
+    project: project === undefined ? undefined : { projectId: PROJECT_ID, activeRevision: project.activeRevision, headRevision: project.headRevision },
+    projectRevisionRef: revision?.ref,
+    mappingRefs: revision?.mappingRefs.map((ref) => ({ id: ref.id, version: ref.version, digest: ref.digest })),
+    visibility: visibility === undefined ? undefined : { epoch: visibility.epoch, membershipRevision: visibility.membershipRevision },
+    statementCount: statements.length,
+    statementRowsTruncated: statements.length >= 100,
+    pins,
+  }
+}
+
 async function reviewAndPublishSources(sources: readonly Awaited<ReturnType<ReturnType<typeof projectQueryPublicationFixture>['importCsv']>>[]) {
   const candidates = sources.flatMap((source) => source.entities)
   const context = trustedContext(scopeRef)
@@ -253,6 +349,8 @@ async function reviewAndPublishSources(sources: readonly Awaited<ReturnType<Retu
 
 let structuredBinding: { taskBindingRef: { id: string; version: string; digest: string } }
 let projectRevisionRefValue: ProjectRevisionRef
+let actualBaseProfileRef: ResolvedProfileRef
+let actualBaseIndustryPackRef: VersionRef
 let publishedFixture: ReturnType<typeof projectQueryPublicationFixture>
 let queryDatabase: ControlPostgresDatabase
 let queryRegistry: PostgresArtifactRegistry
@@ -297,10 +395,12 @@ beforeAll(async () => {
     method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ version: scenario.profileRef.version }),
   })
   if (preflight.status !== 200) throw new Error(`the actual mounted project profile did not preflight: ${await preflight.text()}`)
-  const preflightData = (await jsonBody(preflight)).data as { status?: string; resolvedProfile?: { snapshotHash?: string } }
-  const snapshotHash = preflightData.resolvedProfile?.snapshotHash
-  if (preflightData.status !== 'resolved' || snapshotHash === undefined) throw new Error('the actual mounted project profile has no resolved snapshot hash')
-  const body = revisionBody(scenario.definitionRef, { id: scenario.profileRef.id, version: scenario.profileRef.version, snapshotHash })
+  const preflightData = (await jsonBody(preflight)).data as { status?: string; resolvedProfile?: { snapshotHash?: string; industryRef?: VersionRef } }
+  const snapshotHash = preflightData.resolvedProfile?.snapshotHash, industryPackRef = preflightData.resolvedProfile?.industryRef
+  if (preflightData.status !== 'resolved' || snapshotHash === undefined || industryPackRef === undefined) throw new Error('the actual mounted project profile has no resolved snapshot or industry pack pin')
+  actualBaseProfileRef = { id: scenario.profileRef.id, version: scenario.profileRef.version, snapshotHash }
+  actualBaseIndustryPackRef = industryPackRef
+  const body = revisionBody(scenario.definitionRef, industryPackRef, actualBaseProfileRef)
   projectRevisionRefValue = projectRevisionRef(body)
   await seedProject(body)
   queryDatabase = new ControlPostgresDatabase({ connectionString: appUrl, maxPoolSize: 4 })
@@ -397,7 +497,7 @@ describe('mounted Core structured-query task binding through the normal HTTP hos
       const profileStore = new PostgresProfileStore(queryDatabase), resolved = (await profileStore.listResolvedProfiles(nextScenario.profileRef, scopeRef, ctx))[0]
       if (resolved === undefined)
           throw new Error('the actual new profile was not resolved')
-      await seedIdentityProject(admin, scopeRef, projectId, definition.ref)
+      await seedIdentityProject(admin, scopeRef, projectId, definition.ref, definition.ref, { industryPackRef: actualBaseIndustryPackRef, profileRef: actualBaseProfileRef })
       const objects = new FileSystemObjectStore(objectDirectory)
       await objects.init()
       const blobs = new LocalImmutableBlobStore({
@@ -415,7 +515,8 @@ describe('mounted Core structured-query task binding through the normal HTTP hos
           expectedRevision: '2', approvedInputRef: APPROVED_INPUT_REF, reason: 'freeze the approved old task input'
       }, `task-evolution-input-${projectId}`, ctx.principal.subjectId, ctx)
       const source = await p.restage(imported)
-      await p.approveAndPublish(source)
+      const publications = await p.approveAndPublish(source)
+      for (const publication of publications) await waitForOutboxDispatch(publication.outboxId)
       const backend = new PostgresProjectDatasetAdapter({
           connectionString: businessUrl, schema: 'business_dataset'
       })
@@ -657,13 +758,18 @@ describe('mounted Core structured-query task binding through the normal HTTP hos
   }, 180_000)
 
   it('imports a structured source for a project and previews column mapping on the real parse', async () => {
+    const bootstrapped = await request('/api/v1/core/project-bootstrap', { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ title: 'W06 mapping preview isolation', profileRef: { id: actualBaseProfileRef.id, version: actualBaseProfileRef.version } }) })
+    if (bootstrapped.status !== 201) throw new Error(`independent preview project bootstrap failed: ${await bootstrapped.text()}`)
+    const previewProject = (await jsonBody(bootstrapped)).data['project']
+    if (!isRecord(previewProject) || typeof previewProject['projectId'] !== 'string') throw new Error('independent preview project bootstrap returned no project identity')
+    const previewProjectId = previewProject['projectId']
     const content = JSON.stringify([
       { facility_id: 'T-01', inspection_due: true },
       { facility_id: 'T-02', inspection_due: false },
     ])
-    const imported = await request(`/api/v1/projects/${PROJECT_ID}/structured-imports`, {
+    const imported = await request(`/api/v1/projects/${previewProjectId}/structured-imports`, {
       method: 'POST',
-      headers: { 'content-type': 'application/json', 'idempotency-key': `taskbind-import-${PROJECT_ID}` },
+      headers: { 'content-type': 'application/json', 'idempotency-key': `taskbind-import-${previewProjectId}` },
       body: JSON.stringify({ format: 'json', mediaType: 'application/json', content }),
     })
     if (imported.status !== 201) throw new Error(`structured import failed: ${await imported.text()}`)
@@ -678,7 +784,7 @@ describe('mounted Core structured-query task binding through the normal HTTP hos
     expect(counts.total).toBeGreaterThanOrEqual(2)
 
     const headerDigest = (header: string): string => sha256DigestOf(header)
-    const preview = await request(`/api/v1/projects/${PROJECT_ID}/mappings/preview`, {
+    const preview = await request(`/api/v1/projects/${previewProjectId}/mappings/preview`, {
       method: 'POST',
       headers: { 'content-type': 'application/json' },
       body: JSON.stringify({
@@ -704,7 +810,11 @@ describe('mounted Core structured-query task binding through the normal HTTP hos
     const originalRef = archived?.binding.projectDatasetSnapshotRef
     if (archived === undefined || originalRef === undefined) throw new Error('the original execution is missing')
     const district = await request(`/api/v1/projects/${PROJECT_ID}/dataset-snapshots`, { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ objectId: 'transport_district' }) })
-    if (district.status !== 201) throw new Error(`same-revision district projection failed: ${await district.text()}`)
+    if (district.status !== 201) {
+      const responseBody = await district.text()
+      const provenance = await sameRevisionProvenanceDiagnostic('transport_district')
+      throw new Error(`same-revision district projection failed: ${responseBody}; pinDiagnostic=${canonicalJson(provenance)}`)
+    }
     expect(((await jsonBody(district)).data['status'] as { projectRevisionRef: ProjectRevisionRef }).projectRevisionRef).toEqual(projectRevisionRefValue)
     await api?.close(); await composition?.close()
     composition = await createCoreLocalComposition({ databaseUrl: appUrl, projectDataset: { connectionString: businessUrl, schema: 'business_dataset' }, objectDirectory, scopeRef, examples: loadCoreExamples({ targetScopeRef: scopeRef }), allowLocalOperator: true })
@@ -718,7 +828,7 @@ describe('mounted Core structured-query task binding through the normal HTTP hos
       const descriptor = await workflow.resolveExecution(archived.binding, OBJECT_ID, oldCtx)
       const outcome = await workflow.handler({ toolId: 'data_query', execute: async () => { throw new Error('historical startup fallback') } }).execute({ callId: randomUUID(), toolId: 'data_query', ctx: oldCtx,
         deadline: oldCtx.deadline, traceId: oldCtx.traceId, signal: new AbortController().signal, resultLimits: { maxRows: 1000, maxBytes: 1_048_576, maxDurationMs: 30_000 },
-        arguments: { kind: 'query', mode: 'semantic', queryPlan: { mode: 'semantic', concepts: [OBJECT_ID], fields: [...FIELDS, 'record_id', 'sources_json'], links: [], filters: [], orderBy: [{ fieldRef: 'record_id', direction: 'asc' }], limit: 10, mappingVersion: projectSnapshotMappingRef({ descriptor }) } } })
+        arguments: { kind: 'query', mode: 'semantic', queryPlan: { mode: 'semantic', concepts: [OBJECT_ID], fields: [...FIELDS, 'record_id', 'sources_json'], links: [], filters: [], orderBy: [{ fieldRef: 'record_id', direction: 'asc' }], limit: 10, mappingVersion: workflow.mappingRef({ descriptor }) } } })
       expect((outcome.payload as DataQueryOutput).table?.rows.map((row) => [row[0], row[1]]).sort()).toEqual([['P-101', true], ['P-102', false]])
     }
     try {
@@ -801,7 +911,7 @@ describe('mounted Core structured-query task binding through the normal HTTP hos
         callId: randomUUID(), toolId: 'data_query', ctx: oldCtx, deadline: oldCtx.deadline, traceId: oldCtx.traceId,
         signal: new AbortController().signal, resultLimits: { maxRows: 1000, maxBytes: 1_048_576, maxDurationMs: 30_000 },
         arguments: { kind: 'query', mode: 'semantic', queryPlan: { mode: 'semantic', concepts: [OBJECT_ID], fields: [...FIELDS, 'record_id', 'sources_json'],
-          links: [], filters: [], orderBy: [{ fieldRef: 'record_id', direction: 'asc' }], limit: 10, mappingVersion: projectSnapshotMappingRef({ descriptor }) } },
+          links: [], filters: [], orderBy: [{ fieldRef: 'record_id', direction: 'asc' }], limit: 10, mappingVersion: workflow.mappingRef({ descriptor }) } },
       })
       expect((outcome.payload as DataQueryOutput).table?.rows.map((row) => [row[0], row[1]]).sort()).toEqual([['P-101', true], ['P-102', false]])
       expect((outcome.payload as DataQueryOutput).table?.rows.every((row) => String(row[3]).includes(projectRevisionRefValue.digest))).toBe(true)

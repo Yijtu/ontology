@@ -187,7 +187,25 @@ export async function publishFirstActiveFacts(f: FirstActiveFixture, ids: readon
   let result: Record<string, unknown> = {}
   for (let offset = 0; offset < ids.length; offset += 200) {
     const ledger = await f.call('/api/v1/semantic-publications'), current = actualArray(ledger['publications']).reduce<bigint>((value, row) => { const revision = BigInt(actualText(actualObject(row)['revision'])); return revision > value ? revision : value }, 0n)
-    result = await f.call('/api/v1/semantic-publications', { approvedCandidateRefs: ids.slice(offset, offset + 200).map((candidateId) => ({ candidateId, kind: 'entity' })), schemaRef: definitionRef }, current.toString())
+    const publication = await f.call('/api/v1/semantic-publications', { approvedCandidateRefs: ids.slice(offset, offset + 200).map((candidateId) => ({ candidateId, kind: 'entity' })), schemaRef: definitionRef }, current.toString())
+    const outboxId = actualText(publication['outboxId'])
+    const deadline = Date.now() + 15_000
+    let dispatched = false
+    while (Date.now() < deadline) {
+      const row = await f.harness.adminClient.query<{ state: string; attempts: number; dispatched_at: Date | null }>(
+        'SELECT state, attempts, dispatched_at FROM agent_platform.job_outbox WHERE tenant_id=$1 AND space_id=$2 AND outbox_id=$3',
+        [f.scope.tenantId, f.scope.spaceId, outboxId],
+      )
+      if (row.rows[0]?.state === 'dispatched' && row.rows[0].dispatched_at !== null) {
+        if (row.rows[0].attempts !== 1) throw new Error(`actual publication outbox ${outboxId} dispatched ${row.rows[0].attempts} times`)
+        dispatched = true
+        break
+      }
+      if (f.workerErrors.length > 0) throw new Error(`actual publication outbox failed before its fence settled: ${f.workerErrors.map((error) => error instanceof Error ? `${error.name}: ${error.message}` : 'unclassified worker error').join('; ')}`)
+      await new Promise<void>((done) => setTimeout(done, 100))
+    }
+    if (!dispatched) throw new Error(`the actual publication outbox ${outboxId} did not dispatch within its fixed 15-second barrier`)
+    result = publication
   }
   return result
 }

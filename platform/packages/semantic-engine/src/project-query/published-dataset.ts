@@ -117,14 +117,36 @@ export class PublishedProjectDatasetSource implements ProjectPublishedDatasetSou
       const mapping = mappingCache.get(mappingKey)
       if (!membershipCache.has(pin.documentId)) membershipCache.set(pin.documentId, await this.options.projectDocuments.getMembership(scope, revision.ref.projectId, pin.documentId, ctx))
       const membership = membershipCache.get(pin.documentId)
-      if (record === undefined || record.revision !== pin.recordRevision || record.contentDigest !== pin.contentDigest || record.sourceDigest !== pin.sourceDigest ||
-        mapping === undefined || !sameRef(mapping.ref, pin.mappingRef) || mapping.parseId !== pin.parseId ||
-        membership?.state !== 'active' || membership.membershipRevision !== pin.membershipRevision || membership.parseId !== pin.parseId || visibility?.epoch !== pin.visibilityEpoch ||
-        !Array.isArray(provenance['sourceSpans'])) {
-        throw new ProjectDatasetError('INPUT_NOT_READY', 'the exact published field provenance is unavailable')
+      const sourceSpans = provenance['sourceSpans']
+      const provenanceFailures: string[] = []
+      if (record === undefined) provenanceFailures.push('record_missing')
+      else {
+        if (record.revision !== pin.recordRevision) provenanceFailures.push('record_revision_mismatch')
+        if (record.contentDigest !== pin.contentDigest) provenanceFailures.push('record_content_digest_mismatch')
+        if (record.sourceDigest !== pin.sourceDigest) provenanceFailures.push('record_source_digest_mismatch')
+      }
+      if (mapping === undefined) provenanceFailures.push('mapping_missing')
+      else {
+        if (!sameRef(mapping.ref, pin.mappingRef)) provenanceFailures.push('mapping_ref_mismatch')
+        if (mapping.parseId !== pin.parseId) provenanceFailures.push('mapping_parse_mismatch')
+      }
+      if (membership === undefined) provenanceFailures.push('membership_missing')
+      else {
+        if (membership.state !== 'active') provenanceFailures.push('membership_not_active')
+        if (membership.membershipRevision !== pin.membershipRevision) provenanceFailures.push('membership_revision_mismatch')
+        if (membership.parseId !== pin.parseId) provenanceFailures.push('membership_parse_mismatch')
+      }
+      if (visibility === undefined) provenanceFailures.push('visibility_missing')
+      else if (visibility.epoch !== pin.visibilityEpoch) provenanceFailures.push('visibility_epoch_mismatch')
+      if (!Array.isArray(sourceSpans)) provenanceFailures.push('source_spans_missing')
+      if (provenanceFailures.length > 0) {
+        throw new ProjectDatasetError('INPUT_NOT_READY', 'the exact published field provenance is unavailable', { reasons: provenanceFailures })
+      }
+      if (record === undefined || mapping === undefined || membership === undefined || visibility === undefined || !Array.isArray(sourceSpans)) {
+        throw new ProjectDatasetError('INPUT_NOT_READY', 'the exact published field provenance is unavailable', { reasons: ['provenance_pin_unavailable'] })
       }
       if (sha256DigestOf({ objectId: record.objectId, fields: record.fields, mappingRef: mapping.ref, sourceDigest: record.sourceDigest, sourceRowKey: record.sourceRowKey }) !== record.contentDigest) throw new ProjectDatasetError('INPUT_NOT_READY', 'the published physical row provenance content changed')
-      const spans: unknown[] = provenance['sourceSpans']
+      const spans: unknown[] = sourceSpans
       const values: Record<string, ProjectDatasetCell> = {}
       const sources: ProjectDatasetFieldSource[] = []
       for (const fact of facts) {

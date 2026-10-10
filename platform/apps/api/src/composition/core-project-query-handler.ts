@@ -39,6 +39,11 @@ export function coreCompactSourceProjection(descriptor: ProjectSnapshotQueryDesc
   return descriptor.sourceProjection === 'full_array' ? { ...descriptor, sourceProjection: 'compact_pin' } : descriptor
 }
 
+/** Core's query plan and handler share the same compact source-pin projection mapping. */
+function coreProjectSnapshotMappingRef(input: Parameters<typeof projectSnapshotMappingRef>[0]) {
+  return projectSnapshotMappingRef({ ...input, descriptor: coreCompactSourceProjection(input.descriptor) })
+}
+
 /** Fixed project snapshot resolution, shared by task creation, planning and the tool handler. */
 export function createCoreProjectQueryWorkflow(options: CoreProjectQueryOptions) {
   const describe = async (scope: ScopeRef, revisionRef: ProjectRevisionRef, ref: ResourceRef, objectId: string, ctx: ToolContext): Promise<ProjectSnapshotQueryDescriptor> => {
@@ -139,7 +144,7 @@ export function createCoreProjectQueryWorkflow(options: CoreProjectQueryOptions)
     return resolveForCreation(scope, revision, { objectId: descriptor.objectId }, ctx)
   }
   return { resolveForCreation, resolveQuestionForCreation, resolveExecution, handler,
-    mappingRef: projectSnapshotMappingRef,
+    mappingRef: coreProjectSnapshotMappingRef,
     sourceRef: projectDatasetSourceRef }
 }
 
