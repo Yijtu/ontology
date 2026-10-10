@@ -159,6 +159,7 @@ import type {
   OutboxMessageRecord,
   ProfileRef,
   ProfileSpec,
+  ProjectRevision,
   ProjectStore,
   PublicationValidityPort,
   PublishedRuleDeclarationReader,
@@ -2218,7 +2219,7 @@ export async function createCoreLocalComposition(options: CoreLocalCompositionOp
         )
       },
     })
-    const materializer = new IncrementalMaterializer({ publishedSource: new CoreProjectSemanticPartitions(multiSchemaSource, semanticTasks, async (scope, ctx) => {
+    const currentProjectRevisions = async (scope: ScopeRef, ctx: ToolContext): Promise<readonly ProjectRevision[]> => {
       const projects = [...await projectStore.listProjects(scope, { state: 'draft', limit: 33 }, ctx), ...await projectStore.listProjects(scope, { state: 'active', limit: 33 }, ctx)]
       if (projects.length > 32) throw new CoreCapabilityError('the actual current project partition inventory exceeds 32 projects')
       const revisions = []
@@ -2228,7 +2229,8 @@ export async function createCoreLocalComposition(options: CoreLocalCompositionOp
         revisions.push(revision)
       }
       return revisions
-    }), materialization: materializationStore })
+    }
+    const materializer = new IncrementalMaterializer({ publishedSource: new CoreProjectSemanticPartitions(multiSchemaSource, semanticTasks, currentProjectRevisions), materialization: materializationStore })
     const materializationConsumer = new MaterializationOutboxConsumer({
       materializer,
       publications: publicationStore,
@@ -2239,7 +2241,7 @@ export async function createCoreLocalComposition(options: CoreLocalCompositionOp
     const outboxConsumer = new TopicOutboxConsumerRouter(
       [
         createBusinessMaterializationConsumer({ inner: materializationConsumer, publications: publicationStore, projects: projectStore, candidates: candidateStore, identity: identityStore,
-          afterBusinessMaterialization: createCoreProjectSemanticReadiness({ projects: projectStore,readiness: projectReadinessStore,profiles: profileResolver,selectors: semanticTasks,materialization: materializationStore,publications: publicationStore,identity: identityStore,authoring,now: () => hostClock().toISOString() }) }),
+          afterBusinessMaterialization: createCoreProjectSemanticReadiness({ projects: projectStore,readiness: projectReadinessStore,profiles: profileResolver,selectors: semanticTasks,materialization: materializationStore,currentRevisions: currentProjectRevisions,publications: publicationStore,identity: identityStore,authoring,now: () => hostClock().toISOString() }) }),
         createCompetencyPreviewOutboxConsumer({ projects: projectStore, jobs: jobStore }),
         new CoreFactsOutboxFallback(candidateStore, scopeRef),
         new IndustryWorkspaceOutboxConsumer(workspaceStore, scopeRef),
