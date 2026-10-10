@@ -12,14 +12,20 @@ import { IncrementalMaterializer, PublishedSemanticSource, sha256DigestOf } from
 import type { MaterializationTicket } from '@ontology/semantic-engine'
 import type {
   MaterializationChange,
+  MaterializedConclusion,
   NewOutboxMessage,
   OutboxMessageRecord,
+  ProjectionSlice,
   PublishedRuleVersion,
   PublishedStatement,
   PublishSemanticPublicationInput,
+  RuleComputationArtifact,
+  RulePremiseObservation,
+  RulePremiseReplayInput,
   ResourceRef,
   ToolContext,
   Uuid,
+  VersionRef,
 } from '@ontology/contracts'
 import { toolContext } from '../unit/component-registry-fixtures'
 import { createJobScope, startJobDatabase } from './job-postgres-harness'
@@ -182,6 +188,130 @@ describe('incremental materialisation against real PostgreSQL and the real outbo
     expect((await store.getFence(foreign.scopeRef, unrelated.fenceId, foreignCtx))?.state).toBe('open')
     await expect(store.commitProjection(owner.scopeRef, { ...input, additionalFenceIds: [second.fenceId] }, ownerCtx)).rejects.toMatchObject({ code: 'GENERATION_CONFLICT' })
     expect(await store.getProjectionState(owner.scopeRef, ownerCtx)).toEqual(committed.state)
+  })
+
+  it('round-trips wide premise archives unchanged across two bulk SQL chunks', async () => {
+    const owner = await createJobScope(harness.adminClient, 'materialization-bulk-roundtrip')
+    const ownerCtx = toolContext(owner.tenantId, owner.spaceId, ['platform-admin'])
+    const store = new PostgresMaterializationStore(database)
+    const openedAt = new Date().toISOString()
+    const fences = []
+    for (let index = 0; index < 8; index += 1) {
+      fences.push(await store.openFence(owner.scopeRef, {
+        fenceId: randomUUID(), reason: 'round-trip batch event ' + String(index + 1), propositionKeys: [], openedAt,
+      }, ownerCtx))
+    }
+
+    const definitionRef: VersionRef = { id: 'round-trip-definition', version: '1.0.0', digest: DIGEST }
+    const ruleRef: VersionRef = { id: 'round-trip-rule', version: '1.0.0', digest: DIGEST }
+    const premiseStatements = Array.from({ length: 200 }, () => statementFor(randomUUID()))
+    const premiseFacts: RulePremiseObservation[] = Array.from({ length: 40 }, (_, index) => ({
+      assertionId: 'premise-' + String(index),
+      logicalAssertionId: 'logical-premise-' + String(index),
+      recordedSeq: String(index + 1),
+      op: index % 2 === 0 ? 'assert' : 'correct',
+      subject: 'entity.premise-' + String(index),
+      predicate: 'device.exact_cost',
+      value: index === 0 ? { kind: 'scalar_decimal', amount: '123456789012345678.123456789012345678' } : '中文“quoted” premise ' + String(index),
+      objectId: 'device',
+      attributeId: 'device.exact_cost',
+      validity: VALIDITY,
+      sourceRef: { namespace: 'documents', sourceId: 'wide-premise-' + String(index) },
+    }))
+    const sharedBase: Omit<RulePremiseReplayInput, 'request' | 'evaluatedRuleIds' | 'complete'> = {
+      declarations: [ruleVersionFor(randomUUID())],
+      attributeStatements: premiseStatements,
+      relationStatements: [],
+      identityBindings: [],
+      subjects: Array.from({ length: 40 }, (_, index) => ({ subjectEntityId: 'entity.premise-' + String(index), objectId: 'device' })),
+      facts: premiseFacts,
+      completeRangeAttributeIds: ['device.exact_cost'],
+    }
+    const separateBase: typeof sharedBase = { ...sharedBase, completeRangeAttributeIds: ['device.other_complete_range'] }
+    const archiveRequest = (sequence: number) => ({
+      scopeRef: owner.scopeRef,
+      projectionRef: { id: 'projection.bulk-roundtrip', version: '1.0.0', digest: DIGEST },
+      asOfRecordedSeq: String(sequence),
+      validAt: '2026-09-21T' + String(sequence).padStart(2, '0') + ':00:00Z',
+    })
+    const artifactOf = (sequence: number, base: typeof sharedBase, capturePremise = true): RuleComputationArtifact => ({
+      ...(capturePremise ? { premiseInput: {
+        ...base,
+        request: archiveRequest(sequence),
+        evaluatedRuleIds: ['rule.roundtrip.' + String(sequence)],
+        complete: sequence % 2 === 0,
+      } } : {}),
+      schemaVersion: 'rule-computation-artifact@1',
+      scopeRef: owner.scopeRef,
+      definitionRef,
+      ruleRef,
+      ruleId: 'rule.roundtrip.' + String(sequence),
+      ruleVersionId: randomUUID(),
+      publishedRevision: String(sequence),
+      instanceKey: 'instance.' + String(sequence),
+      objectId: 'device',
+      subjectEntityId: 'entity.roundtrip.' + String(sequence),
+      predicate: 'device.exact_cost',
+      applicability: { state: 'applicable', conditionState: 'true', exceptionStates: [], positiveSupport: true },
+      factRefs: [{ assertionId: 'artifact-fact-' + String(sequence), logicalAssertionId: 'artifact-logical-fact-' + String(sequence), recordedSeq: String(sequence), digest: DIGEST }],
+      sourceStatementIds: ['artifact-statement-' + String(sequence)],
+      inputDigest: DIGEST,
+      computationDigest: DIGEST,
+      sourceSpans: [],
+      complete: sequence % 2 === 0,
+    })
+    const conclusionOf = (sequence: number, variant: number): MaterializedConclusion => ({
+      propositionKey: 'device.roundtrip.' + String(sequence),
+      qualifiedPropositionKey: sha256DigestOf('qualified-roundtrip-' + String(sequence)),
+      predicate: 'device.exact_cost',
+      domainStatus: 'known',
+      value: '包含中文、"quoted" 和 123456789012345678.123456789012345678 / ' + String(sequence),
+      satisfiedBy: [{ groupId: 'group-' + String(sequence), alternativeIds: ['alternative-' + String(sequence)] }],
+      ruleRefs: [ruleRef],
+      factRefs: [{ assertionId: 'slice-fact-' + String(sequence), logicalAssertionId: 'slice-logical-fact-' + String(sequence), recordedSeq: String(sequence), digest: DIGEST }],
+      supportNodeId: 'support-' + String(sequence),
+      ...(sequence === 1 ? {} : { ruleArtifacts: sequence === 2 ? [] : [
+        ...(sequence === 3 && variant === 0 ? [artifactOf(30, sharedBase, false)] : []),
+        artifactOf(sequence * 2 + variant, sequence === 4 && variant === 1 ? separateBase : sharedBase),
+      ] }),
+    })
+    const slices: ProjectionSlice[] = Array.from({ length: 16 }, (_, index) => {
+      const sequence = Math.floor(index / 2) + 1
+      const variant = index % 2
+      const conclusion = conclusionOf(sequence, variant)
+      const propositionKey = 'device.roundtrip.' + String(sequence) + '.' + String(variant)
+      return {
+        scopeRef: owner.scopeRef,
+        generation: '0',
+        propositionKey,
+        qualifiedPropositionKey: sha256DigestOf('qualified-roundtrip-' + String(sequence) + '-' + String(variant)),
+        predicate: 'device.exact_cost',
+        domainStatus: 'known',
+        ...(conclusion.value === undefined ? {} : { value: conclusion.value }),
+        validity: { validFrom: new Date('2026-09-21T' + String(sequence).padStart(2, '0') + ':' + (variant === 0 ? '00' : '30') + ':00Z').toISOString(), validTo: new Date('2026-09-22T00:00:00Z').toISOString() },
+        recordedSeq: String(sequence),
+        conclusion: { ...conclusion, propositionKey, qualifiedPropositionKey: sha256DigestOf('qualified-roundtrip-' + String(sequence) + '-' + String(variant)) },
+      }
+    })
+    const expectedSlices = slices.map((slice) => ({ ...slice, generation: '1' }))
+    const commitInput = {
+      fenceId: fences[0]!.fenceId,
+      additionalFenceIds: fences.slice(1).map((fence) => fence.fenceId),
+      expectedGeneration: '0' as const,
+      recordedSeq: '8',
+      watermark: { kind: 'sequence' as const, value: '8' },
+      slices,
+      committedAt: new Date().toISOString(),
+    }
+    const committed = await store.commitProjection(owner.scopeRef, commitInput, ownerCtx)
+
+    expect(committed).toMatchObject({ state: { generation: '1', watermark: { kind: 'sequence', value: '8' } }, appendedSlices: 16 })
+    expect(await store.readSlices(owner.scopeRef, {}, ownerCtx)).toEqual(expectedSlices)
+    expect(await store.listOpenFences(owner.scopeRef, ownerCtx)).toEqual([])
+
+    await expect(store.commitProjection(owner.scopeRef, commitInput, ownerCtx)).rejects.toMatchObject({ code: 'GENERATION_CONFLICT' })
+    expect(await store.getProjectionState(owner.scopeRef, ownerCtx)).toEqual(committed.state)
+    expect(await store.readSlices(owner.scopeRef, {}, ownerCtx)).toEqual(expectedSlices)
   })
 
   it('sets the fence first, refuses a stale read during the in-flight recompute and advances asynchronously', async () => {
