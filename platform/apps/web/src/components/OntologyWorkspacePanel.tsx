@@ -136,6 +136,8 @@ export function OntologyWorkspacePanel({
   const selectedRef = useRef<string | undefined>(undefined)
   const boundaryBuffers = useRef(new Map<string, WorkspaceCreateFields>())
   const createPending = useRef<{ readonly body: string; readonly key: string } | undefined>(undefined)
+  const createEpoch = useRef(0)
+  const createAbort = useRef<AbortController | undefined>(undefined)
   const listEpoch = useRef(0)
   const [workspaces, setWorkspaces] = useState<readonly IndustryWorkspace[]>([])
   const [phase, setPhase] = useState<WorkbenchPhase>('loading')
@@ -189,6 +191,11 @@ export function OntologyWorkspacePanel({
     void loadList()
   }, [loadList])
 
+  useEffect(() => () => {
+    createEpoch.current++
+    createAbort.current?.abort()
+  }, [])
+
   useEffect(() => {
     if (selectedId === undefined) {
       setDrafts([])
@@ -215,7 +222,12 @@ export function OntologyWorkspacePanel({
     })
   }, [editMode, selected])
 
-  const selectWorkspace = (workspaceId: string): void => {
+  const selectWorkspace = (workspaceId: string, acknowledgedCreate = false): void => {
+    if (!acknowledgedCreate) {
+      createEpoch.current++
+      createAbort.current?.abort()
+      setBusy(false)
+    }
     setSelectedId(workspaceId)
     onSelectWorkspace?.(workspaceId)
     setStage('sources')
@@ -225,6 +237,9 @@ export function OntologyWorkspacePanel({
 
   useEffect(() => {
     if (initialWorkspaceId !== undefined && initialWorkspaceId !== selectedId && workspaces.some((entry) => entry.workspaceId === initialWorkspaceId)) {
+      createEpoch.current++
+      createAbort.current?.abort()
+      setBusy(false)
       setSelectedId(initialWorkspaceId)
     }
   }, [initialWorkspaceId, selectedId, workspaces])
@@ -238,22 +253,27 @@ export function OntologyWorkspacePanel({
     }
     setBusy(true)
     setCreateFailure(undefined)
+    const token = ++createEpoch.current
+    createAbort.current?.abort()
+    const abort = new AbortController()
+    createAbort.current = abort
     try {
       const boundary = boundaryOf(fields)
       const request = { namespace: fields.namespace.trim(), displayName: fields.displayName.trim(), boundary }
       const body = JSON.stringify(request)
       if (createPending.current?.body !== body) createPending.current = { body, key: client.newRequestKey() }
-      const view = await client.bootstrapIndustryWorkspace(request, { idempotencyKey: createPending.current.key })
+      const view = await client.bootstrapIndustryWorkspace(request, { idempotencyKey: createPending.current.key, signal: abort.signal })
+      if (abort.signal.aborted || token !== createEpoch.current) return
       createPending.current = undefined
       setFields(EMPTY_CREATE_FIELDS)
       setWorkspaces((previous) => [view.workspace, ...previous])
       onWorkspaceCreated?.(view.workspace)
-      selectWorkspace(view.workspace.workspaceId)
+      selectWorkspace(view.workspace.workspaceId, true)
       setPhase('ready')
     } catch (caught) {
-      setCreateFailure(classifyPublicError(toError(caught)))
+      if (!abort.signal.aborted && token === createEpoch.current) setCreateFailure(classifyPublicError(toError(caught)))
     } finally {
-      setBusy(false)
+      if (token === createEpoch.current) setBusy(false)
     }
   }
 
