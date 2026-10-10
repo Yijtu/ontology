@@ -16,6 +16,12 @@ export interface SourceDrawerProbe {
   readonly trigger: Locator
 }
 
+export interface SourceDrawerKeyboardEvidence {
+  readonly first: string
+  readonly last: string
+  readonly focusReturned: boolean
+}
+
 export interface AccessibilityReport {
   readonly state: string
   readonly viewport: { readonly width: number; readonly height: number }
@@ -23,7 +29,34 @@ export interface AccessibilityReport {
   readonly contrast: readonly { readonly name: string; readonly foreground: string; readonly background: string; readonly ratio: number; readonly minimum: number }[]
   readonly reducedMotion: { readonly mediaMatches: boolean; readonly probes: readonly { readonly name: string; readonly animationDuration: string; readonly transitionDuration: string; readonly maximumAnimationMs: number; readonly maximumTransitionMs: number }[] }
   readonly nonTextControlBoundaries: { readonly measured: false; readonly note: string }
-  readonly drawer?: { readonly first: string; readonly last: string; readonly focusReturned: boolean }
+  readonly drawer?: SourceDrawerKeyboardEvidence
+}
+
+/** Test the actual open source drawer with native keyboard input and return focus evidence. */
+export async function collectRealAppDrawerEvidence(page: Page, probe: SourceDrawerProbe): Promise<SourceDrawerKeyboardEvidence> {
+  const { dialog, trigger } = probe
+  await expect(dialog).toBeVisible()
+  const focusable = dialog.locator('button:not(:disabled), input:not(:disabled), select:not(:disabled), textarea:not(:disabled), a[href], summary, [tabindex="0"]')
+  const entries = await focusable.evaluateAll((nodes) => nodes.map((node, index) => ({ node, index })).filter(({ node }) => {
+    if (!(node instanceof HTMLElement)) return false
+    const style = getComputedStyle(node)
+    return style.display !== 'none' && style.visibility !== 'hidden' && node.getClientRects().length > 0 && node.tabIndex >= 0 && node.closest('[inert]') === null
+  }).map(({ node, index }) => ({ index, name: (node as HTMLElement).innerText.trim() || (node as HTMLElement).getAttribute('aria-label') || (node as HTMLElement).tagName })))
+  expect(entries.length, 'source drawer needs visible keyboard-focusable controls').toBeGreaterThan(0)
+  expect(await dialog.evaluate((node) => node.contains(document.activeElement)), 'focus should enter source drawer').toBe(true)
+  for (let step = 0; step < entries.length; step += 1) {
+    if (await focusable.nth(entries[0]!.index).evaluate((node) => node === document.activeElement)) break
+    await page.keyboard.press('Tab')
+  }
+  await expect(focusable.nth(entries[0]!.index)).toBeFocused()
+  await page.keyboard.press('Shift+Tab')
+  await expect(focusable.nth(entries[entries.length - 1]!.index)).toBeFocused()
+  await page.keyboard.press('Tab')
+  await expect(focusable.nth(entries[0]!.index)).toBeFocused()
+  await page.keyboard.press('Escape')
+  await expect(dialog).toBeHidden()
+  await expect(trigger).toBeFocused()
+  return { first: entries[0]!.name, last: entries[entries.length - 1]!.name, focusReturned: true }
 }
 
 /**
@@ -135,29 +168,7 @@ export async function collectRealAppAccessibilityEvidence(page: Page, options: {
 
   let drawer: AccessibilityReport['drawer']
   if (options.sourceDrawer !== undefined) {
-    const { dialog, trigger } = options.sourceDrawer
-    await expect(dialog).toBeVisible()
-    const focusable = dialog.locator('button:not(:disabled), input:not(:disabled), select:not(:disabled), textarea:not(:disabled), a[href], summary, [tabindex="0"]')
-    const entries = await focusable.evaluateAll((nodes) => nodes.map((node, index) => ({ node, index })).filter(({ node }) => {
-      if (!(node instanceof HTMLElement)) return false
-      const style = getComputedStyle(node)
-      return style.display !== 'none' && style.visibility !== 'hidden' && node.getClientRects().length > 0 && node.tabIndex >= 0 && node.closest('[inert]') === null
-    }).map(({ node, index }) => ({ index, name: (node as HTMLElement).innerText.trim() || (node as HTMLElement).getAttribute('aria-label') || (node as HTMLElement).tagName })))
-    expect(entries.length, 'source drawer needs visible keyboard-focusable controls').toBeGreaterThan(0)
-    expect(await dialog.evaluate((node) => node.contains(document.activeElement)), 'focus should enter source drawer').toBe(true)
-    for (let step = 0; step < entries.length; step += 1) {
-      if (await focusable.nth(entries[0]!.index).evaluate((node) => node === document.activeElement)) break
-      await page.keyboard.press('Tab')
-    }
-    await expect(focusable.nth(entries[0]!.index)).toBeFocused()
-    await page.keyboard.press('Shift+Tab')
-    await expect(focusable.nth(entries[entries.length - 1]!.index)).toBeFocused()
-    await page.keyboard.press('Tab')
-    await expect(focusable.nth(entries[0]!.index)).toBeFocused()
-    await page.keyboard.press('Escape')
-    await expect(dialog).toBeHidden()
-    await expect(trigger).toBeFocused()
-    drawer = { first: entries[0]!.name, last: entries[entries.length - 1]!.name, focusReturned: true }
+    drawer = await collectRealAppDrawerEvidence(page, options.sourceDrawer)
   }
 
   return { state: options.state, viewport: page.viewportSize() ?? { width: 0, height: 0 }, labels, contrast,
