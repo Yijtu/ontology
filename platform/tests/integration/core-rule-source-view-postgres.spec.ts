@@ -1,6 +1,6 @@
 import { PostgresAnswerStore, PostgresEvidenceStore, PostgresRunStore, PostgresWorkflowStore, PostgresRunExecutionBindingStore } from '@ontology/adapter-control-postgres'
 import { createCoreSourceViewReader } from '@ontology/app-api'
-import { DocumentSpanReader, StructuredPremiseSourceReader } from '@ontology/adapter-extraction-document'
+import { DocumentSpanReader, StructuredPremiseSourceReader, sha256DigestOfBytes } from '@ontology/adapter-extraction-document'
 import { ArchivedRulePremiseReplayVerifier } from '@ontology/semantic-engine'
 import { randomUUID } from 'node:crypto'
 import { mkdtemp, rm } from 'node:fs/promises'
@@ -31,8 +31,8 @@ import {
 } from '@ontology/app-api'
 import type { CoreLocalComposition } from '@ontology/app-api'
 import { canonicalJson, sha256DigestOf, JobService } from '@ontology/application'
-import { SemanticDefinitionService, SemanticPublicationService, publishedRuleRef } from '@ontology/semantic-engine'
-import { createToolContext } from '@ontology/contracts'
+import { PublishedSemanticSource, SemanticDefinitionService, SemanticPublicationService, publishedRuleRef } from '@ontology/semantic-engine'
+import { createToolContext, isRecord } from '@ontology/contracts'
 import type {
   RuleCandidate,
   ParsedDocument,
@@ -43,6 +43,7 @@ import type {
   ScopeRef,
   ToolContext,
   VersionRef,
+  ProfileSpec,
 } from '@ontology/contracts'
 import { projectQueryPublicationFixture } from './project-query-publication-fixtures'
 import { startPostgresContainer } from './postgres-container'
@@ -103,6 +104,25 @@ let artifactRecordedSeq = '1'
 let approvedInputRef: ResourceRef
 let policyDocument: ParsedDocument
 const workerErrors: Error[] = []
+
+function workerErrorSummary(errors: readonly Error[]) {
+  const groups = new Map<string, { readonly name: string; readonly code?: string; readonly message: string; count: number }>()
+  const describe = (error: Error) => {
+    const code = (error as Error & { readonly code?: unknown }).code
+    const message = error.message.replace(/postgres(?:ql)?:\/\/[^\s]+/giu, '[redacted]')
+      .replace(/(password|api[_-]?key)\s*[=:]\s*[^\s,;]+/giu, '$1=[redacted]')
+      .replace(POLICY_TEXT, '[redacted-policy]').replace(/\b(?:T-RULE|T-ROUTE|T-OTHER|N-RULE|route-network|north)\b/giu, '[redacted-value]').slice(0, 160)
+    return { name: error.name, ...(typeof code === 'string' ? { code } : {}), message }
+  }
+  for (const error of errors) {
+    const value = describe(error), key = canonicalJson(value), existing = groups.get(key)
+    if (existing === undefined) groups.set(key, { ...value, count: 1 })
+    else existing.count += 1
+  }
+  const all = [...groups.values()], shown = all.slice(0, 8)
+  return { totalCount: errors.length, groups: shown,
+    unrepresentedCount: all.slice(8).reduce((total, group) => total + group.count, 0), lastSamples: errors.slice(-8).map(describe) }
+}
 let routingFixture: ReturnType<typeof projectQueryPublicationFixture>
 let routingDocuments: ReturnType<typeof createCoreStructuredImportWorkflow>
 let routingDatabase: ControlPostgresDatabase
@@ -179,7 +199,62 @@ async function parsePolicyDocument(): Promise<void> {
 }
 
 /** Materialize one real rule instance (premise fact + specification span) into the shared DB. */
-async function seedPublishedSemanticsReadiness(ref: ProjectRevisionRef, targetRef: VersionRef): Promise<void> {
+async function reportRuleArtifactSetupDiagnostic(ctx: ToolContext, targetRef: VersionRef, materialization: PostgresMaterializationStore): Promise<void> {
+  const project = await routingFixture.projects.getProject(scopeRef, PROJECT_ID, ctx)
+  const selectedRevision = project?.activeRevision ?? project?.headRevision
+  const currentRevision = selectedRevision === undefined ? undefined : await routingFixture.projects.getRevision(scopeRef, PROJECT_ID, selectedRevision, ctx)
+  const directSource = new PublishedSemanticSource(routingFixture.publications, { definition: routingFixture.definition, identity: routingFixture.identities, projectId: PROJECT_ID, maxRecords: 1_000 })
+  let direct: Awaited<ReturnType<typeof directSource.load>> | undefined
+  let directReadError: { readonly name: string; readonly code?: string; readonly message: string } | undefined
+  try { direct = await directSource.load(scopeRef, ctx) } catch (error) {
+    const failure: Error & { readonly code?: unknown } = error instanceof Error ? error as Error & { readonly code?: unknown } : new Error(String(error))
+    directReadError = { name: failure.name, ...(typeof failure.code === 'string' ? { code: failure.code } : {}), message: failure.message
+      .replace(/postgres(?:ql)?:\/\/[^\s]+/giu, '[redacted]')
+      .replace(/(password|api[_-]?key)\s*[=:]\s*[^\s,;]+/giu, '$1=[redacted]').slice(0, 240) }
+  }
+  const state = await materialization.getProjectionState(scopeRef, ctx)
+  const slices = state?.watermark.kind === 'sequence'
+    ? await materialization.readSlices(scopeRef, { validAt: new Date().toISOString(), asOfRecordedSeq: state.watermark.value, limit: 1_000 }, ctx)
+    : []
+  const declarations = direct?.premiseInput?.declarations.filter((row) => canonicalJson(publishedRuleRef(row)) === canonicalJson(targetRef)).slice(0, 4) ?? []
+  const compiledInstances = (direct?.rules ?? []).flatMap((row) => row.publishedInstance !== undefined && canonicalJson(row.publishedInstance.ruleRef) === canonicalJson(targetRef)
+    ? [{ projectId: row.publishedInstance.projectId, objectId: row.publishedInstance.objectId, subjectEntityId: row.publishedInstance.subjectEntityId, instanceKey: row.publishedInstance.instanceKey }]
+    : []).slice(0, 8)
+  const subjectRows = direct?.premiseInput?.subjects.filter((row) => row.projectId === PROJECT_ID && row.objectId === OBJECT_ID) ?? []
+  const statement = direct?.premiseInput?.attributeStatements.find((row) => row.subjectEntityId === routingEntityId && row.objectId === OBJECT_ID)
+  const candidate = statement === undefined ? undefined : await routingFixture.candidates.getCandidate(scopeRef, statement.sourceCandidateId, ctx)
+  const binding = direct?.identityBindings?.find((row) => row.candidateId === statement?.sourceCandidateId)
+  const premiseFacts = (direct?.facts ?? []).filter((row) => row.projectId === PROJECT_ID && row.subject === routingEntityId && row.objectId === OBJECT_ID && row.attributeId === 'inspection_due')
+    .slice(0, 8).map((row) => ({ assertionId: row.assertionId, sourceStatementId: row.sourceStatementId, subject: row.subject, objectId: row.objectId, attributeId: row.attributeId, op: row.op, value: row.value }))
+  const sourcePin = candidate?.inputVersion.projectFact?.sources[0]
+  const artifacts = slices.flatMap((slice) => slice.conclusion.ruleArtifacts ?? [])
+    .filter((artifact) => artifact.projectId === PROJECT_ID && canonicalJson(artifact.ruleRef) === canonicalJson(targetRef))
+    .slice(0, 8).map((artifact) => ({ subjectEntityId: artifact.subjectEntityId, objectId: artifact.objectId, applicability: artifact.applicability.state,
+      conditionState: artifact.applicability.conditionState, validAt: artifact.validAt, asOfRecordedSeq: artifact.asOfRecordedSeq }))
+  const outbox = admin === undefined ? [] : (await admin.query<{ outbox_id: string; topic: string; state: string; attempts: number; available_at: Date | string }>(
+    `SELECT outbox_id, topic, state, attempts, available_at FROM agent_platform.job_outbox
+      WHERE tenant_id = $1 AND space_id = $2 AND state = 'pending' ORDER BY created_at ASC LIMIT 8`, [scopeRef.tenantId, scopeRef.spaceId],
+  )).rows.map((row) => ({ outboxId: row.outbox_id, topic: row.topic, state: row.state, attempts: row.attempts,
+    availableAt: row.available_at instanceof Date ? row.available_at.toISOString() : row.available_at }))
+  console.error('[rule-artifact-setup-diagnostic]', JSON.stringify({
+    project: project === undefined ? undefined : { projectId: PROJECT_ID, state: project.state, headRevision: project.headRevision, activeRevision: project.activeRevision,
+      selectedRevision: currentRevision?.ref, definitionRef: currentRevision?.definitionRef, profileRef: currentRevision?.profileRef, industryPackRef: currentRevision?.industryPackRef },
+    source: { complete: direct?.complete, readRevision: direct?.readRevision, issueCodes: direct?.issues?.slice(0, 8).map((issue) => issue.code), directReadError,
+      ruleIssues: direct?.ruleIssues?.slice(0, 8).map((issue) => ({ code: issue.code, ruleId: issue.ruleId, subjectEntityId: issue.subjectEntityId })),
+      declarationRefs: declarations.map((row) => publishedRuleRef(row)), compiledInstances,
+      subjectCount: subjectRows.length, containsRoutingSubject: subjectRows.some((row) => row.subjectEntityId === routingEntityId),
+      routingEntityBinding: binding === undefined ? undefined : { candidateId: binding.candidateId,
+        openAssertions: binding.openAssertions.map((row) => ({ entityId: row.entityId, objectId: row.objectId })), cannotLinkEntityIds: binding.cannotLinkEntityIds.slice(0, 8) },
+      routingDueFacts: premiseFacts },
+    candidateSourcePin: sourcePin === undefined ? undefined : { projectRevisionRef: sourcePin.projectRevisionRef, mappingRef: sourcePin.mappingRef,
+      recordId: sourcePin.recordId, recordRevision: sourcePin.recordRevision, contentDigest: sourcePin.contentDigest, sourceDigest: sourcePin.sourceDigest,
+      parseId: sourcePin.parseId, membershipRevision: sourcePin.membershipRevision, visibilityEpoch: sourcePin.visibilityEpoch },
+    projection: state === undefined ? undefined : { dirty: state.dirty, generation: state.generation, watermark: state.watermark }, artifacts, outbox,
+    workerErrors: workerErrorSummary(workerErrors),
+  }))
+}
+
+async function waitForActualPublishedSemanticsReadiness(ref: ProjectRevisionRef, targetRef: VersionRef): Promise<void> {
   const database = new ControlPostgresDatabase({ connectionString: appUrl, maxPoolSize: 4 })
   try {
     const store = new PostgresProjectReadinessStore(database)
@@ -187,57 +262,70 @@ async function seedPublishedSemanticsReadiness(ref: ProjectRevisionRef, targetRe
     const materialization = new PostgresMaterializationStore(database)
     const revision = await new PostgresProjectStore(database).getRevision(scopeRef, ref.projectId, ref.revision, ctx)
     if (revision?.ref.digest !== ref.digest) throw new Error('the semantic readiness producer has no exact stored project revision')
+    const objects = new FileSystemObjectStore(objectDirectory)
+    await objects.init()
+    const blobs = new LocalImmutableBlobStore({ objectStore: objects, registry: routingRegistry })
+    const source = new PublishedSemanticSource(routingFixture.publications, { definition: routingFixture.definition, identity: routingFixture.identities, projectId: PROJECT_ID, maxRecords: 1_000 })
     const endAt = Date.now() + 60_000
-    let target: ResourceRef | undefined
+    let lastReceiptKey = ''
+    let lastMismatch = 'normal published-semantics readiness is still pending'
     while (Date.now() < endAt) {
+      const readiness = await store.getProjection(scopeRef, ref, 'published_semantics', ctx)
       const state = await materialization.getProjectionState(scopeRef, ctx)
-      if (state !== undefined && !state.dirty && state.watermark.kind === 'sequence') {
-        const slices = await materialization.readSlices(scopeRef, { validAt: new Date().toISOString(), asOfRecordedSeq: state.watermark.value, limit: 1000 }, ctx)
-        const actual = slices.flatMap((slice) => slice.conclusion.ruleArtifacts ?? []).filter((artifact) => artifact.projectId === ref.projectId && canonicalJson(artifact.ruleRef) === canonicalJson(targetRef) && canonicalJson(artifact.definitionRef) === canonicalJson(revision.definitionRef) && artifact.scopeRef.tenantId === scopeRef.tenantId && artifact.scopeRef.spaceId === scopeRef.spaceId)
-          .sort((a, b) => BigInt(a.asOfRecordedSeq ?? '0') > BigInt(b.asOfRecordedSeq ?? '0') ? -1 : 1)[0]
-        if (actual?.validAt !== undefined && actual.asOfRecordedSeq !== undefined) {
-          const objects = new FileSystemObjectStore(objectDirectory)
-          await objects.init()
-          const blobs = new LocalImmutableBlobStore({ objectStore: objects, registry: routingRegistry })
-          // Finite fixture producer exports the real immutable computation. Readiness is
-          // admission metadata; the normal task still independently rereads facts and replays14.
-          target = (await createBlobArtifactWriter(blobs).putBytes({ scopeRef, content: new TextEncoder().encode(canonicalJson(actual)), mediaType: 'application/json' }, ctx)).blobRef
-          expect(target.digest).toBe(sha256DigestOf(canonicalJson(actual)))
-          expect(JSON.parse(new TextDecoder().decode(await blobs.readAuthorized({ scopeRef, blobRef: target }, ctx)))).toEqual(actual)
-          break
+      if (readiness?.state === 'ready' && canonicalJson(readiness.targetRef) === canonicalJson(revision.definitionRef) &&
+          readiness.targetDigest === revision.definitionRef.digest && readiness.completeness === 'complete' && readiness.failedCount === 0 && readiness.receiptRef !== undefined &&
+          state !== undefined && !state.dirty && state.watermark.kind === 'sequence') {
+        const receiptKey = readiness.receiptRef.digest
+        if (receiptKey !== lastReceiptKey) {
+          try {
+            const metadata = await blobs.getAuthorized({ scopeRef, blobRef: readiness.receiptRef }, ctx)
+            if (!metadata.integrityVerified || !Number.isSafeInteger(metadata.byteSize) || metadata.byteSize < 1 || metadata.byteSize > 1_048_576) {
+              lastReceiptKey = receiptKey
+              lastMismatch = 'normal readiness receipt metadata is not integrity-verified'
+            }
+            else {
+              const bytes = await blobs.readAuthorized({ scopeRef, blobRef: readiness.receiptRef }, ctx)
+              if (bytes.byteLength !== metadata.byteSize || sha256DigestOfBytes(bytes) !== readiness.receiptRef.digest) {
+                lastReceiptKey = receiptKey
+                lastMismatch = 'normal readiness receipt bytes differ from their immutable ref'
+              }
+              else {
+                const raw: unknown = JSON.parse(new TextDecoder('utf-8', { fatal: true }).decode(bytes))
+                const captured = await source.load(scopeRef, ctx)
+                const sourceDigest = sha256DigestOf(canonicalJson({ facts: captured.facts, rules: captured.rules, declarations: captured.premiseInput?.declarations ?? [] }))
+                const matches = isRecord(raw) && raw['schemaVersion'] === 'project-published-semantics-readiness@1' &&
+                  canonicalJson(raw['projectRevisionRef']) === canonicalJson(revision.ref) && canonicalJson(raw['definitionRef']) === canonicalJson(revision.definitionRef) &&
+                  canonicalJson(raw['industryPackRef']) === canonicalJson(revision.industryPackRef) && canonicalJson(raw['sourceReadRevision']) === canonicalJson(captured.readRevision) &&
+                  canonicalJson(raw['projection']) === canonicalJson(state) && raw['sourceDigest'] === sourceDigest && raw['expectedFacts'] === captured.facts.length &&
+                  typeof raw['outboxId'] === 'string' && raw['outboxId'].length > 0 && captured.complete === true &&
+                  readiness.expectedCount === captured.facts.length && readiness.processedCount === captured.facts.length
+                if (matches) return
+                lastReceiptKey = receiptKey
+                lastMismatch = 'normal readiness receipt does not pin the exact project revision, source and materialization projection'
+              }
+            }
+          } catch (error) {
+            const readFenceChanged = error instanceof Error && error.name === 'IncompletePublishedReadError' &&
+              (error as Error & { readonly code?: unknown }).code === 'INCOMPLETE_PUBLISHED_READ'
+            lastReceiptKey = readFenceChanged ? '' : receiptKey
+            lastMismatch = error instanceof Error ? `${error.name}: ${error.message}`.replace(/postgres(?:ql)?:\/\/[^\s]+/giu, '[redacted]').slice(0, 240) : 'normal readiness receipt verification failed'
+          }
         }
       }
       await new Promise((resolve) => setTimeout(resolve, 100))
     }
-    if (target === undefined) throw new Error('one real stored project rule computation is required before semantic readiness')
-    const prior = await store.getProjection(scopeRef, ref, 'published_semantics', trustedContext(scopeRef, ['platform-admin', 'operator']))
-    const saved = await store.upsertProjection(
-      scopeRef,
-      {
-        projectRevisionRef: ref,
-        kind: 'published_semantics',
-        targetRef: target,
-        state: 'ready',
-        completeness: 'complete',
-        expectedCount: 1,
-        processedCount: 1,
-        failedCount: 0,
-        targetDigest: target.digest,
-        fenceRevision: String(BigInt(prior?.fenceRevision ?? '0') + 1n),
-        idempotencyKey: `published-semantics-${PROJECT_ID}-${ref.revision}`,
-        requestDigest: COMPONENT_DIGEST,
-        actor: 'tester',
-        recordedAt: new Date().toISOString(),
-      },
-      trustedContext(scopeRef, ['platform-admin', 'operator']),
-    )
-    expect(saved.projection.state).toBe('ready')
+    await reportRuleArtifactSetupDiagnostic(ctx, targetRef, materialization)
+    throw new Error(`normal host published-semantics readiness did not produce a verified receipt for this project revision: ${lastMismatch}`)
   } finally {
     await database.close().catch(() => undefined)
   }
 }
 
-async function seedProject(definitionRef: VersionRef): Promise<void> {
+async function seedProject(
+  definitionRef: VersionRef,
+  profileRef: ProjectRevisionBody['profileRef'],
+  industryPackRef: ProjectRevisionBody['industryPackRef'],
+): Promise<void> {
   if (admin === undefined) throw new Error('isolated PostgreSQL admin client is unavailable')
   const objects = new FileSystemObjectStore(objectDirectory)
   await objects.init()
@@ -250,10 +338,10 @@ async function seedProject(definitionRef: VersionRef): Promise<void> {
     schemaVersion: 'project-revision@1',
     projectId: PROJECT_ID,
     revision: '1',
-    industryPackRef: { id: 'corerule-pack', version: '1.0.0', digest: COMPONENT_DIGEST },
+    industryPackRef,
     definitionRef,
     mappingRefs: [mappingRef(), { ...definitionRef, role: 'catalog', sourceObjectRef: { sourceRef: { namespace: 'corerule', sourceId: 'identity' }, objectPath: 'identity_index' } }],
-    profileRef: { id: 'corerule-profile', version: '1.0.0', snapshotHash: COMPONENT_DIGEST },
+    profileRef,
     documentSetRef: { id: randomUUID(), version: '1.0.0', digest: COMPONENT_DIGEST, kind: 'document' },
     approvedInputRef,
     semanticPublicationRefs: [definitionRef],
@@ -311,7 +399,6 @@ beforeAll(async () => {
   const scenario = loadCoreExamples({ targetScopeRef: scopeRef }).scenarios.find((entry) => entry.scenarioId === SCENARIO_ID)
   if (scenario === undefined) throw new Error(`scenario ${SCENARIO_ID} was not mounted`)
   await parsePolicyDocument()
-  await seedProject(scenario.definitionRef)
 
   composition = await createCoreLocalComposition({
     databaseUrl: appUrl,
@@ -326,6 +413,15 @@ beforeAll(async () => {
   const address = await api.listen({ host: '127.0.0.1', port: 0 })
   baseUrl = address.replace(/\/$/u, '')
   const ctx = trustedContext(scopeRef, ['platform-admin', 'operator', 'data-editor', 'semantic-reviewer', 'semantic-publisher'])
+  const deployment = (await jsonBody(await request('/api/v1/core/deployment'))).data['scenarios'] as { scenarioId: string; profileRef: { id: string; version: string }; baseProfileSpec: ProfileSpec }[]
+  const mounted = deployment.find((entry) => entry.scenarioId === SCENARIO_ID)
+  if (mounted === undefined) throw new Error('the actual Core scenario profile is missing')
+  const preflight = await request(`/api/v1/profiles/${encodeURIComponent(mounted.profileRef.id)}/preflight`, { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ version: mounted.profileRef.version }) })
+  if (preflight.status !== 200) throw new Error('the actual Core scenario profile did not pass preflight')
+  const preflightData = (await jsonBody(preflight)).data
+  const snapshotHash = (preflightData['resolvedProfile'] as { readonly snapshotHash?: unknown } | undefined)?.snapshotHash
+  if (preflightData['status'] !== 'resolved' || typeof snapshotHash !== 'string') throw new Error('the actual Core scenario profile has no resolved immutable snapshot hash')
+  await seedProject(scenario.definitionRef, { ...mounted.profileRef, snapshotHash }, mounted.baseProfileSpec.industryRef)
   routingDatabase = new ControlPostgresDatabase({ connectionString: appUrl, maxPoolSize: 4 })
   routingRegistry = new PostgresArtifactRegistry({ connectionString: appUrl, maxPoolSize: 2 })
   routingStructured = new PostgresStructuredIngestionStore({ connectionString: appUrl, maxPoolSize: 2 })
@@ -377,7 +473,7 @@ beforeAll(async () => {
   const projected = await request(`/api/v1/projects/${PROJECT_ID}/dataset-snapshots`, { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ objectId: OBJECT_ID }) })
   if (projected.status !== 201) throw new Error(`real mapped dataset failed: ${await projected.text()}`)
   projectRevisionRefValue = ((await jsonBody(projected)).data['status'] as { projectRevisionRef: ProjectRevisionRef }).projectRevisionRef
-  await seedPublishedSemanticsReadiness(projectRevisionRefValue, projectRuleRef)
+  await waitForActualPublishedSemanticsReadiness(projectRevisionRefValue, projectRuleRef)
   const materialization = new PostgresMaterializationStore(routingDatabase)
   const endAt = Date.now() + 60_000
   while (Date.now() < endAt) {
@@ -393,12 +489,16 @@ beforeAll(async () => {
     }
     await new Promise((resolve) => setTimeout(resolve, 100))
   }
+  if (SUBJECT_ID !== routingEntityId) {
+    await reportRuleArtifactSetupDiagnostic(ctx, projectRuleRef, materialization)
+  }
   expect(SUBJECT_ID).toBe(routingEntityId)
 }, 300_000)
 
 afterAll(async () => {
   await api?.close().catch(() => undefined)
   await composition?.close().catch(() => undefined)
+  if (workerErrors.length > 0) console.error('[core-worker-error-summary]', JSON.stringify(workerErrorSummary(workerErrors)))
   await routingStructured?.close()
   await routingRegistry?.close()
   await routingDatabase?.close()
