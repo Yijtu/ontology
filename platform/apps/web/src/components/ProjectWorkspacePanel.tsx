@@ -186,6 +186,13 @@ export function ProjectWorkspacePanel({
   const [error, setError] = useState<WorkbenchError | undefined>(undefined)
   const [loadedProjects, setProjects] = useState<readonly ProjectRecord[]>([])
   const [selectedId, setSelectedId] = useState<string | undefined>(initialProjectId)
+  const previousInitialProjectId = useRef(initialProjectId)
+  const pendingIncomingSelection = useRef<{ readonly projectId: string | undefined } | undefined>(undefined)
+  if (previousInitialProjectId.current !== initialProjectId) {
+    previousInitialProjectId.current = initialProjectId
+    pendingIncomingSelection.current = { projectId: initialProjectId }
+    setSelectedId(initialProjectId)
+  }
   const [configuredPackProfile, setConfiguredPackProfile] = useState<ProfileRef | undefined>()
   const [packChoice, setPackChoice] = useState('')
   const activeProfile = packChoice.length > 0 ? configuredPackProfile : profileRef ?? projectBinding?.profileRef
@@ -352,7 +359,7 @@ export function ProjectWorkspacePanel({
       setProjects(projectList)
       setListOwner(listScope)
       setSelectedId((previous) => {
-        const wanted = previous ?? initialProjectId
+        const wanted = initialProjectId ?? previous
         return wanted !== undefined && projectList.some((project) => project.projectId === wanted)
           ? wanted
           : projectList[0]?.projectId
@@ -466,6 +473,11 @@ export function ProjectWorkspacePanel({
       void refreshRecords(selectedId).catch((caught: unknown) => setActionError(toError(caught)))
   }, [selectedId, refreshRecords])
   useEffect(() => {
+    const incoming = pendingIncomingSelection.current
+    if (incoming !== undefined && incoming.projectId === selectedId) {
+      pendingIncomingSelection.current = undefined
+      return
+    }
     if (selectedId !== undefined) onSelectProject?.(selectedId)
   }, [selectedId, onSelectProject])
 
