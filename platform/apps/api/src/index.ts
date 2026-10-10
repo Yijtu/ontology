@@ -3,6 +3,7 @@ export {
   createPostgresComponentRegistryStore,
 } from './composition/component-registry'
 export type { ComponentRegistryComposition, ComponentRegistryCompositionOptions } from './composition/component-registry'
+export { CoreProjectSemanticPartitions } from './composition/core-project-semantic-partitions'
 export {
   createPostgresSemanticDefinitionService,
   createPostgresSemanticDefinitionStore,
