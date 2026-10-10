@@ -13,7 +13,7 @@ import { assertRuleDependencyShape, relationPremisesFromDefinition } from '@onto
 import { validateRuleSupport } from './support'
 import { sha256DigestOf } from '../definitions/canonical'
 import { RuleEvaluationError } from './errors'
-import { publishedRuleRef, publishedRuleDependencyRef, publishedRuleConsequenceKey } from './dependencies'
+import { publishedRuleRef, publishedRuleDependencyRef, publishedRuleConsequenceKey, publishedRuleApplicabilityKey } from './dependencies'
 import { isRuleDecimalValue, isRuleScalarDecimalValue } from './values'
 import { validateRuleConclusionBinding } from '@ontology/core'
 import { projectIndustrySchema } from '../definitions/industry-schema'
@@ -239,7 +239,7 @@ export function compilePublishedRuleInstances(
         ...(options.projectId === undefined ? {} : { projectId: options.projectId }),
       }
       const instanceKey = `rule-instance:${sha256DigestOf(instanceIdentity)}`
-      const applicabilityKey = `rule-applicability:${sha256DigestOf(instanceIdentity)}`
+      const applicabilityKey = publishedRuleApplicabilityKey(instanceIdentity)
       const sourceSpans = spansOf(rule.expression, rule.exceptions.map((exception) => exception.condition))
       try {
         const compiledCondition = compileNode(

@@ -8,7 +8,7 @@ import type {
 } from '@ontology/contracts'
 import { canonicalJson } from '@ontology/application'
 import {
-  publishedRuleConsequenceKey, publishedRuleDependencyRef, publishedRuleRef, projectSnapshotMappingRef,
+  publishedRuleConsequenceKey, publishedRuleApplicabilityKey, publishedRuleDependencyRef, publishedRuleRef, projectSnapshotMappingRef,
   sameUtcInstant, compareUtcInstants,
 } from '@ontology/semantic-engine'
 import type {
@@ -22,6 +22,7 @@ export interface PreparedCompetencyCase {
   readonly validateCurrent: (ctx: ToolContext, signal: AbortSignal) => Promise<void>
   /** Actual archived source/project/definition/rule/event binding, re-read by the executor. */
   readonly executionInputRef: ResourceRef
+  readonly projection?: { readonly ref: VersionRef; readonly configRef: ResourceRef }
   readonly recordedPoint: string
   readonly declaredProjectId: string
   readonly declarationDefinitionRef: VersionRef
@@ -114,6 +115,7 @@ export function createCoreCompetencyExecution(options: CoreCompetencyExecutionOp
         captured['declarationProjectId'] !== request.input.projectId || captured['dataMode'] !== 'synthetic' || captured['businessApproval'] !== 'none' ||
         sha256OfCanonical(captured['projectRevisionRef']) !== sha256OfCanonical(input.project.ref) ||
         sha256OfCanonical(captured['definitionRef']) !== sha256OfCanonical(input.definition.ref) ||
+        canonicalJson(captured['projectionRef'] ?? null) !== canonicalJson(input.projection?.ref ?? null) || canonicalJson(captured['projectionConfigRef'] ?? null) !== canonicalJson(input.projection?.configRef ?? null) ||
         sha256OfCanonical(captured['declarationDefinitionRef']) !== sha256OfCanonical(request.definitionRef) ||
         canonicalJson(captured['originals']) !== canonicalJson(input.consumedOriginals) || canonicalJson(captured['rules']) !== canonicalJson(actualRules) ||
         captured['selectedRecordedPoint'] !== input.recordedPoint ||
@@ -124,6 +126,14 @@ export function createCoreCompetencyExecution(options: CoreCompetencyExecutionOp
         captured['validationTargetDigest'] !== input.validationTargetDigest || (input.rules !== undefined && input.rules.recordedPoint !== input.recordedPoint)) {
       throw new CompetencyQuestionError('DIGEST_MISMATCH', 'the actual archived competency input lineage does not match the prepared case')
     }
+    if (input.project.executionPurpose === 'synthetic_validation' && input.projection === undefined) throw new CompetencyQuestionError('DIGEST_MISMATCH', 'synthetic execution requires its actual isolated projection configuration')
+    if (input.projection !== undefined) {
+      const config = await readJson(input.projection.configRef, ctx)
+      if (input.projection.ref.id !== `projection.competency.${input.project.ref.projectId}` || input.projection.ref.version !== input.projection.configRef.version || input.projection.ref.digest !== input.projection.configRef.digest ||
+        !isRecord(config) || config['schemaVersion'] !== 'competency-projection-configuration@1' || config['projectId'] !== input.project.ref.projectId ||
+        canonicalJson(config['scopeRef']) !== canonicalJson(request.input.scopeRef) || canonicalJson(config['definitionRef']) !== canonicalJson(input.definition.ref) || canonicalJson(config['packRef']) !== canonicalJson(input.project.industryPackRef) ||
+        (input.rules !== undefined && !sameRef(input.rules.projectionRef, input.projection.ref))) throw new CompetencyQuestionError('DIGEST_MISMATCH', 'the actual case projection configuration does not match its stored synthetic project')
+    }
     if (input.declaredProjectId !== request.input.projectId || !sameRef(input.declarationDefinitionRef, request.definitionRef) ||
         !sameRef(input.project.definitionRef, input.definition.ref) ||
         (request.validationTarget !== undefined && input.validationTargetDigest !== sha256OfCanonical(request.validationTarget))) throw new CompetencyQuestionError('DIGEST_MISMATCH', 'competency prepared input changed its project, definition or reviewed draft binding')
@@ -133,11 +143,12 @@ export function createCoreCompetencyExecution(options: CoreCompetencyExecutionOp
     const inputArchive = await archive({ inputDigest: request.inputDigest, questionSetRef: request.questionSetRef, executionInputRef: input.executionInputRef,
       projectRevisionRef: input.project.ref, definitionRef: input.definition.ref, recordedPoint: input.recordedPoint,
       declarationDefinitionRef: input.declarationDefinitionRef, originals: originalRefs,
+      ...(input.projection === undefined ? {} : { projectionRef: input.projection.ref, projectionConfigRef: input.projection.configRef }),
       ...(input.rules === undefined ? {} : { recordedPoint: input.rules.recordedPoint, rules: input.rules.versions.map((row) => ({ declarationRef: row.declarationRef, ruleRef: publishedRuleRef(row.published) })) }),
       ...(input.query === undefined ? {} : { snapshotRef: input.query.descriptor.snapshotRef }), businessApproval: 'none', dataMode: 'synthetic' }, ctx)
     let actual: CompetencyExpectation
     let proof: unknown
-    const additional: ResourceRef[] = []
+    const additional: ResourceRef[] = input.projection === undefined ? [] : [input.projection.configRef]
     if (intent.kind === 'attribute') {
       const entityId = input.entities.get(entityKey(intent.objectId, intent.subjectEntityId))
       if (entityId === undefined) return { status: 'not_yet_executable', reason: 'the business identifier has no unique actual confirmed entity' }
@@ -179,12 +190,16 @@ export function createCoreCompetencyExecution(options: CoreCompetencyExecutionOp
       const entityId = input.entities.get(entityKey(intent.objectId, intent.subjectEntityId))
       const rule = rules?.versions.find((row) => row.published.ruleId === intent.ruleId && request.ruleRefs.some((ref) => sameRef(ref, row.declarationRef)))
       if (rules === undefined || entityId === undefined || rule === undefined) return { status: 'not_yet_executable', reason: 'the pinned published rule or confirmed entity is unavailable' }
-      const key = publishedRuleConsequenceKey(publishedRuleDependencyRef(rule.published, request.input.scopeRef, input.definition.ref), entityId)
+      const key = rule.published.conclusion === undefined
+        ? publishedRuleApplicabilityKey({ tenantId: ctx.principal.tenantId, spaceId: ctx.allowedResources.spaceId, definitionRef: input.definition.ref,
+          ruleRef: publishedRuleRef(rule.published), objectId: rule.published.objectId, subjectEntityId: entityId, projectId: input.project.ref.projectId })
+        : publishedRuleConsequenceKey(publishedRuleDependencyRef(rule.published, request.input.scopeRef, input.definition.ref), entityId)
       const read = await rules.materializer.read({ scopeRef: request.input.scopeRef, projectionRef: rules.projectionRef, validAt: request.input.validAt, asOfRecordedSeq: rules.recordedPoint, propositionKeys: [key] }, ctx)
       if (read.status !== 'materialized') return { status: 'not_yet_executable', reason: 'the exact persisted rule point is unavailable or fenced' }
       const ruleRef = publishedRuleRef(rule.published)
       const artifact = read.ruleArtifacts?.find((row) => sameRef(row.ruleRef, ruleRef) && row.objectId === intent.objectId && row.subjectEntityId === entityId)
       if (artifact === undefined || artifact.validAt === undefined || !sameUtcInstant(artifact.validAt, request.input.validAt) || artifact.asOfRecordedSeq !== rules.recordedPoint) return { status: 'not_yet_executable', reason: 'the exact captured rule computation is unavailable' }
+      if (input.projection !== undefined && (artifact.premiseInput === undefined || !sameRef(artifact.premiseInput.request.projectionRef, input.projection.ref))) throw new CompetencyQuestionError('DIGEST_MISMATCH', 'the actual saved rule computation belongs to another projection configuration')
       const evidence = await rules.producer.record({ scopeRef: request.input.scopeRef, ruleRef, definitionRef: input.definition.ref, objectId: intent.objectId,
         subjectEntityId: entityId, validAt: request.input.validAt, asOfRecordedSeq: rules.recordedPoint, observedAt: new Date().toISOString(), sourceSnapshots: [], dataMode: 'synthetic' }, ctx)
       const payloadRef = evidence.envelope.payloadRef
@@ -192,7 +207,7 @@ export function createCoreCompetencyExecution(options: CoreCompetencyExecutionOp
       const payload = await readJson(payloadRef, ctx)
       if (!await rules.replay.verify({ artifact, payload }, ctx)) throw new CompetencyQuestionError('DIGEST_MISMATCH', 'actual published rule premises and original sources did not replay')
       const conclusion = read.conclusions.find((row) => row.propositionKey === key)
-      const propositionState = conclusion?.domainStatus === 'conflict' ? 'conflict' : conclusion?.domainStatus === 'known' && typeof conclusion.value === 'boolean' ? (conclusion.value ? 'true' : 'false') : 'unknown'
+      const propositionState = rule.published.conclusion === undefined ? 'unknown' : conclusion?.domainStatus === 'conflict' ? 'conflict' : conclusion?.domainStatus === 'known' && typeof conclusion.value === 'boolean' ? (conclusion.value ? 'true' : 'false') : 'unknown'
       actual = { kind: 'rule', conditionState: artifact.applicability.conditionState, applicability: artifact.applicability.state, propositionState }
       proof = { artifact, conclusion, evidenceRef: evidence.evidenceRef, payloadRef }; additional.push(evidence.evidenceRef, payloadRef)
     } else if (intent.kind === 'relation') {

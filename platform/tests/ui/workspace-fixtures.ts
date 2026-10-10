@@ -75,6 +75,14 @@ export class InMemoryIndustryWorkspaceStore implements IndustryWorkspaceStore {
   readonly #workspaces = new Map<string, WorkspaceEntry>()
   readonly #idempotency = new Map<string, IdempotencyEntry>()
 
+  applyPublicationCheckpoint(scope: ScopeRef, workspaceId: Uuid, checkpoint: AssetDraftVersion): void {
+    const entry = this.#require(scope, workspaceId)
+    assertAssetDraftVersionShape(checkpoint)
+    if (checkpoint.workspaceId !== workspaceId || BigInt(checkpoint.revision) !== BigInt(entry.workspace.headRevision) + 1n || checkpoint.publicationCheckpoint?.sourceDraftRef.revision !== entry.workspace.headRevision) throw new Error('invalid physical publication checkpoint fixture')
+    entry.drafts.push(clone(checkpoint))
+    entry.workspace.headRevision = checkpoint.revision
+  }
+
   async createWorkspace(
     input: CreateIndustryWorkspaceInput,
     scopeRef: ScopeRef,

@@ -249,6 +249,7 @@ export function bodyToRevision(body: ProjectRevisionBody): ProjectRevision {
   const digest = sha256DigestOf(canonicalJson(body))
   return {
     ref: { projectId: body.projectId, revision: body.revision, digest },
+    ...(body.executionPurpose === undefined ? {} : { executionPurpose: body.executionPurpose }),
     industryPackRef: body.industryPackRef,
     definitionRef: body.definitionRef,
     mappingRefs: body.mappingRefs,
@@ -644,6 +645,7 @@ export class ProjectService {
       schemaVersion: 'project-revision@1',
       projectId,
       revision: nextRevision,
+      ...(previous.executionPurpose === undefined ? {} : { executionPurpose: previous.executionPurpose }),
       industryPackRef,
       definitionRef,
       mappingRefs: [...mappingRefs],

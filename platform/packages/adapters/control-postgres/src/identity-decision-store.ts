@@ -170,6 +170,8 @@ async function readScopeRevision(query: ScopedQuery): Promise<RevisionString> {
 }
 
 export interface PostgresIdentityDecisionStoreOptions {
+  /** Host-selected projection for split fences; default ordinary identity behavior is unchanged. */
+  readonly materializationProjectionRef?: string
   /** Test-only fault seam runs after split fence/outbox/decision/read-head writes, before commit. */
   readonly faultInjection?: { readonly beforeCommit?: () => void }
 }
@@ -187,10 +189,12 @@ export interface PostgresIdentityDecisionStoreOptions {
 export class PostgresIdentityDecisionStore implements IdentityDecisionStore {
   readonly #database: ControlPostgresDatabase
   readonly #faultInjection: PostgresIdentityDecisionStoreOptions['faultInjection']
+  readonly #materializationProjectionRef: string
 
   constructor(database: ControlPostgresDatabase, options: PostgresIdentityDecisionStoreOptions = {}) {
     this.#database = database
     this.#faultInjection = options.faultInjection
+    this.#materializationProjectionRef = options.materializationProjectionRef ?? MATERIALIZED_PROJECTION_REF
   }
 
   async getEntity(
@@ -229,6 +233,10 @@ export class PostgresIdentityDecisionStore implements IdentityDecisionStore {
       if (filter.state !== undefined) {
         values.push(filter.state)
         clauses.push(`state = $${String(values.length)}`)
+      }
+      if (filter.projectId !== undefined) {
+        values.push(filter.projectId)
+        clauses.push(`scope_dimensions->>'project' = $${String(values.length)}`)
       }
       values.push(filter.limit ?? 1000)
       const result = await query.query<EntityRow>(
@@ -541,7 +549,7 @@ export class PostgresIdentityDecisionStore implements IdentityDecisionStore {
              current_setting('app.space_id')::uuid,
              $1, 0, 'sequence', '0', false, $2::timestamptz)
            ON CONFLICT (tenant_id, space_id, projection_ref) DO NOTHING`,
-          [MATERIALIZED_PROJECTION_REF, event.recordedAt],
+          [this.#materializationProjectionRef, event.recordedAt],
         )
         const projection = await query.query<{ generation: string }>(
           `SELECT generation::text AS generation FROM agent_platform.projection_state
@@ -549,7 +557,7 @@ export class PostgresIdentityDecisionStore implements IdentityDecisionStore {
               AND space_id = current_setting('app.space_id')::uuid
               AND projection_ref = $1
             FOR UPDATE`,
-          [MATERIALIZED_PROJECTION_REF],
+          [this.#materializationProjectionRef],
         )
         const generation = projection.rows[0]?.generation
         if (generation === undefined) {
@@ -563,7 +571,7 @@ export class PostgresIdentityDecisionStore implements IdentityDecisionStore {
              current_setting('app.space_id')::uuid,
              $1, $2, $3::bigint, $4, '[]'::jsonb, 'open', $5::timestamptz)`,
           [
-            MATERIALIZED_PROJECTION_REF,
+            this.#materializationProjectionRef,
             event.materializationFenceId,
             generation,
             `identity split ${event.decisionId}: ${event.reason}`,
@@ -661,6 +669,15 @@ export class PostgresIdentityDecisionStore implements IdentityDecisionStore {
             AND revision = $2::bigint`,
         [candidateId, revision],
       )
+      const row = result.rows[0]
+      return row === undefined ? undefined : toDecision(row)
+    })
+  }
+
+  async getDecisionById(scopeRef: ScopeRef, decisionId: Uuid, ctx: ToolContext): Promise<IdentityDecisionRecord | undefined> {
+    return this.#withScope(scopeRef, ctx, async (query) => {
+      const result = await query.query<DecisionRow>(`SELECT ${DECISION_COLUMNS} FROM agent_platform.identity_decisions
+        WHERE tenant_id=current_setting('app.tenant_id')::uuid AND space_id=current_setting('app.space_id')::uuid AND decision_id=$1::uuid`, [decisionId])
       const row = result.rows[0]
       return row === undefined ? undefined : toDecision(row)
     })

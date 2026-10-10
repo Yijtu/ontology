@@ -31,6 +31,8 @@ export interface ProjectEvolutionSource {
 }
 /** Coordination only. Candidates retain the existing review/identity/publication authority. */
 export interface ProjectEvolutionPlan {
+    /** Actual old-active input captured before this same staging CAS; no prior run is required. */
+    readonly previousInputRef?: ResourceRef
     readonly evolutionId: Uuid
     readonly jobId: Uuid
     readonly previousRevisionRef: ProjectRevisionRef
@@ -89,6 +91,7 @@ export function assertProjectEvolutionPlan(value: unknown): asserts value is Pro
     const source = (s: unknown) => isRecord(s) && isUuid(s.documentId) && isUuid(s.parseId) && isUuid(s.sourceJobId) && isRevisionString(s.membershipRevision) && isRevisionString(s.visibilityEpoch) && isResourceRef(s.originalRef) && mapping(s.mappingRef) && mapping(s.previousMappingRef) && typeof s.objectId === 'string' && count(s.expectedRecords, 20000) && count(s.rawRecordCount, 20000) &&
         Array.isArray(s.recordIds) && s.recordIds.length === s.expectedRecords && s.recordIds.every(isUuid) && new Set(s.recordIds).size === s.recordIds.length && Array.isArray(s.previousStatements) && s.previousStatements.length >= s.expectedRecords && s.previousStatements.length <= 20000 && s.previousStatements.every((pin) => isRecord(pin) && isUuid(pin.statementId) && isRevisionString(pin.version))
     if (!isRecord(value) || !isUuid(value.evolutionId) || !isUuid(value.jobId) || !ref(value.previousRevisionRef) || !ref(value.targetRevisionRef) || !isSha256Digest(value.requestDigest) ||
+        (value.previousInputRef !== undefined && !isResourceRef(value.previousInputRef)) ||
         !isRecord(value.strategy) || !['new_version', 'keep_independent', 'retire_previous'].includes(String(value.strategy.kind)) || typeof value.strategy.reason !== 'string' || value.strategy.reason.trim() === '' ||
         !count(value.maxAttempts, 3) || !count(value.maxRecordOperations, 60000) || !count(value.maxBatches, 330) ||
         !Array.isArray(value.impacts) || value.impacts.length > 1000 || !value.impacts.every((i) => isRecord(i) && ['attribute', 'identity', 'type', 'unit', 'relation', 'object'].includes(String(i.kind)) && typeof i.logicalId === 'string' && ['added', 'changed', 'removed'].includes(String(i.change)) && ['reextract_review', 'human_relation', 'retire'].includes(String(i.handling))) ||

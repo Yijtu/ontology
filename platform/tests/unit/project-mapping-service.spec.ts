@@ -163,6 +163,7 @@ class InMemoryRecordStore implements ProjectRecordStore {
 
 class FakeIngestionStore implements StructuredIngestionStore {
   constructor(private readonly entries: readonly StructuredRecordEntry[]) {}
+  getParse(): Promise<undefined> { return Promise.resolve(undefined) }
   recordParse(): Promise<{ created: boolean }> {
     return Promise.reject(new Error('not used'))
   }

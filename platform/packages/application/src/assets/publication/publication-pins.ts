@@ -5,7 +5,7 @@ import type {
   AssetCandidateStore, RuleActionCandidateStore, IndustryWorkspaceStore, CommitApprovedPackInput,
   PublishedRuleDeclaration,
 } from '@ontology/contracts'
-import { PublishedPackAssetStoreError } from '@ontology/contracts'
+import { PublishedPackAssetStoreError, assetDraftContent, publishedPackContent } from '@ontology/contracts'
 import { canonicalJson, sha256DigestOf } from '../../profiles/canonical'
 import { currentDefinitionProjection } from '../definition-candidates/validation'
 
@@ -102,6 +102,13 @@ export function createPackPublicationGuard(deps: {
 }): (scope: ScopeRef, input: CommitApprovedPackInput, ctx: ToolContext) => Promise<void> {
   return async (scope, input, ctx) => {
     const workspace = await deps.workspaces.getWorkspace(scope, input.pack.workspaceId, ctx)
+    if (input.sourceDraft !== undefined) {
+      const source = await deps.workspaces.getDraft(scope, input.pack.workspaceId, input.expectedRevision, ctx)
+      if (source === undefined || canonicalJson(source) !== canonicalJson(input.sourceDraft) || sha256DigestOf(canonicalJson(assetDraftContent(source))) !== source.digest || sha256DigestOf(canonicalJson(publishedPackContent(input.pack))) !== input.pack.contentDigest || input.pack.packRef.digest !== input.pack.contentDigest ||
+        canonicalJson(input.pack.sourceDraftRef) !== canonicalJson({ workspaceId: source.workspaceId, revision: source.revision, digest: source.digest })) {
+        throw new PublishedPackAssetStoreError('VERSION_CONFLICT', 'the exact publication source draft changed before commit')
+      }
+    } else if (input.pack.sourceDraftRef !== undefined) throw new PublishedPackAssetStoreError('VERSION_CONFLICT', 'a publication source receipt requires its actual draft')
     const definitions = await deps.definitionCandidates.listCandidates(scope, input.pack.workspaceId, { limit: 250 }, ctx)
     const actions = await deps.ruleActions.list(scope, input.pack.workspaceId, { limit: 250 }, ctx)
     const approved = await definitionApprovalPins(currentDefinitionProjection(definitions), scope, ctx, deps.reviewableCandidates, deps.reviews)

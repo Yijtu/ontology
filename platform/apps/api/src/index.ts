@@ -3,6 +3,7 @@ export {
   createPostgresComponentRegistryStore,
 } from './composition/component-registry'
 export type { ComponentRegistryComposition, ComponentRegistryCompositionOptions } from './composition/component-registry'
+export { CoreProjectSemanticPartitions } from './composition/core-project-semantic-partitions'
 export {
   createPostgresSemanticDefinitionService,
   createPostgresSemanticDefinitionStore,
@@ -207,3 +208,20 @@ export { CoreSemanticTaskResolver, createCoreSemanticTaskSource } from './compos
 export type { CoreSemanticTaskResolverOptions, CoreSemanticTaskSelection, CoreSemanticTaskResolution } from './composition/core-semantic-task-resolver'
 export { CoreRelationsTaskHandler } from './composition/core-relations-task-handler'
 export type { CoreRelationsTaskHandlerOptions } from './composition/core-relations-task-handler'
+export type { CompetencyExtractedRuleAlias, CompetencyPackRuleAlias, CompetencyRuleAlias, CompetencyTemplateRuleSource } from './composition/competency-rule-origins'
+export { createCoreSourceViewReader, CoreSourceViewError } from './composition/core-source-view'
+export type { CoreSourceViewOptions, CoreAnswerSourceView, CoreInstanceFieldSourceView, CoreSourceCell, CoreSourceFragment } from './composition/core-source-view'
+export { registerCoreSourceViewRoutes } from './http/core-source-views'
+export type { CoreSourceViewRouteDependencies } from './http/core-source-views'
+export { readSavedInputSources } from './composition/core-saved-input-sources'
+export type { SavedInputSourcePorts, SavedInputSources, SavedInputArtifactView, SourceReadCoverage } from './composition/core-saved-input-sources'
+export { readSavedCell } from './composition/core-saved-cell-reader'
+export type { SavedCellSelector, SavedCellRead, SavedCellPorts } from './composition/core-saved-cell-reader'
+export { createRequestNativeSourceReader } from './composition/core-native-source-reader'
+export { createCoreAuthoring } from './composition/core-authoring'
+export type { CoreAuthoringOptions } from './composition/core-authoring'
+export { createCoreProjectComputeInput, parseCoreComputeInputSelection } from './composition/core-project-compute-input'
+export type { CoreComputeInputSelection } from './composition/core-project-compute-input'
+export { createCoreApprovedInput } from './composition/core-approved-input'
+export { createCoreTableResults, CoreTableResultError } from './composition/core-table-results'
+export type { CoreTableResultsOptions, CoreTableResults, CoreTableBuildInput } from './composition/core-table-results'

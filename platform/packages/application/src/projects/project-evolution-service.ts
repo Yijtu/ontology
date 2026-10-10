@@ -11,7 +11,7 @@ import type { ProjectDataMaterializationService } from './project-materializatio
 import { ProjectEvolutionInputService } from './project-evolution-input'
 import type { ProjectEvolutionInputDependencies } from './project-evolution-input'
 import { resolvedProfileDigest } from '../profiles/canonical'
-import type { ProfileStore, ProjectRecordStore, ResolvedProfileRef, ResourceRef } from '@ontology/contracts'
+import type { MappingRef, ProfileStore, ProjectRecordStore, ResolvedProfileRef, ResourceRef } from '@ontology/contracts'
 export interface StartProjectEvolutionInput {
     readonly expectedRevision: string | undefined
     readonly industryPackRef: VersionRef
@@ -22,6 +22,11 @@ export interface StartProjectEvolutionInput {
     readonly profileRef?: ResolvedProfileRef
 }
 export interface ProjectEvolutionDependencies {
+    readonly targetIdentityMapping?: (scope: ScopeRef, projectId: string, definitionRef: VersionRef, ctx: ToolContext) => Promise<MappingRef>
+    readonly previousInput?: {
+        archive(scope: ScopeRef, revision: ProjectRevision, ctx: ToolContext): Promise<ResourceRef>
+        validate(scope: ScopeRef, revision: ProjectRevision, ref: ResourceRef, ctx: ToolContext, plan?: ProjectEvolutionPlan): Promise<ResourceRef>
+    }
     readonly projects: ProjectStore
     readonly store: ProjectEvolutionStore
     readonly mappings: ProjectMappingStore
@@ -240,11 +245,14 @@ export class ProjectEvolutionService {
                 documentId: member.documentId, membershipRevision: member.membershipRevision, visibilityEpoch: visibility.epoch, originalRef: original.originalRef, parseId: original.parseId, previousMappingRef: original.ref, mappingRef: prepared.mapping.ref, objectId: remap.objectId, expectedRecords: oldRows.length, rawRecordCount: prepared.preview.rowCount, recordIds: oldRows.map((row) => row.recordId), previousStatements, sourceJobId
             })
         }
+        const previousInputRef = await this.deps.previousInput?.archive(scope, previous, ctx)
+        const targetIdentity = await this.deps.targetIdentityMapping?.(scope,projectId,after.definitionRef,ctx)
         const revision = bodyToRevision({
-            schemaVersion: 'project-revision@1', projectId, revision: String(BigInt(project.headRevision) + 1n), industryPackRef: pack.ref, definitionRef: after.definitionRef, mappingRefs: [...previous.mappingRefs.filter((ref) => !mounted.some((mapping) => same(ref, mapping.ref))), ...sources.map((s) => s.mappingRef)], profileRef, documentSetRef: previous.documentSetRef, semanticPublicationRefs: [], sourceVisibilityEpoch: visibility.epoch, changeReason: input.strategy.reason
+            schemaVersion: 'project-revision@1', projectId, revision: String(BigInt(project.headRevision) + 1n), ...(previous.executionPurpose === undefined ? {} : { executionPurpose: previous.executionPurpose }), industryPackRef: pack.ref, definitionRef: after.definitionRef, mappingRefs: [...previous.mappingRefs.filter((ref) => !mounted.some((mapping) => same(ref, mapping.ref)) && (targetIdentity === undefined || !same(ref.sourceObjectRef,targetIdentity.sourceObjectRef))), ...sources.map((s) => s.mappingRef),...(targetIdentity === undefined ? [] : [targetIdentity])], profileRef, documentSetRef: previous.documentSetRef, semanticPublicationRefs: [], sourceVisibilityEpoch: visibility.epoch, changeReason: input.strategy.reason
         })
         const jobId = uuid(`evolution-job:${scope.tenantId}:${scope.spaceId}:${projectId}:${key}`)
         const plan: ProjectEvolutionPlan = {
+            ...(previousInputRef === undefined ? {} : { previousInputRef }),
             evolutionId: uuid(`evolution:${scope.tenantId}:${scope.spaceId}:${projectId}:${key}`), jobId, previousRevisionRef: previous.ref, targetRevisionRef: revision.ref, strategy: input.strategy, impacts: projectEvolutionImpacts(before, after), sources, maxAttempts: input.maxAttempts, maxRecordOperations: input.maxRecords * input.maxAttempts, maxBatches: sources.reduce((n, s) => n + Math.ceil(s.expectedRecords / 200), 0) * input.maxAttempts, requestDigest: digest
         }
         assertProjectEvolutionPlan(plan)
@@ -434,6 +442,14 @@ export class ProjectEvolutionService {
     async resolveApprovedInput(scope: ScopeRef, revision: ProjectRevision, ctx: ToolContext): Promise<ResourceRef | undefined> {
         const current = await this.deps.projects.getProject(scope, revision.ref.projectId, ctx)
         const record = await this.deps.store.activeRebuild(scope, revision.ref.projectId, ctx)
+        if (record !== undefined && record.plan.previousInputRef !== undefined && this.deps.previousInput !== undefined &&
+            (current?.activeRevision ?? current?.headRevision) === revision.ref.revision && current?.headRevision === record.plan.targetRevisionRef.revision && same(record.plan.previousRevisionRef, revision.ref)) {
+            await this.#sourcePins(scope, revision.ref.projectId, record.plan.evolutionId, ctx)
+            const ref = await this.deps.previousInput.validate(scope, revision, record.plan.previousInputRef, ctx,record.plan)
+            if (!same(await this.deps.projects.getProject(scope, revision.ref.projectId, ctx), current) || !same(await this.deps.store.activeRebuild(scope, revision.ref.projectId, ctx), record)) throw new ProjectError('READINESS_CONFLICT', 'the old-active staging input receipt changed during validation')
+            await this.#sourcePins(scope, revision.ref.projectId, record.plan.evolutionId, ctx)
+            return ref
+        }
         if (record?.state !== 'ready' || (current?.activeRevision ?? current?.headRevision) !== revision.ref.revision || !same(record.plan.targetRevisionRef, revision.ref))
             return undefined
         for (const snapshot of record.snapshots ?? []) {

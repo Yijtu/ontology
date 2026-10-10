@@ -239,6 +239,7 @@ export class RunExecutionPreflightService implements RunExecutionBinder {
     if (revision === undefined) {
       throw new RunServiceError('PROJECT_NOT_FOUND', `project revision ${ref.revision} of ${ref.projectId} is not visible in this scope`)
     }
+    if (revision.executionPurpose === 'synthetic_validation') throw new RunServiceError('INVALID_ARGUMENT', 'a private competency validation project cannot be admitted as a normal business run')
     if (!sameRevisionRef(revision.ref, ref)) {
       throw new RunServiceError(
         'VERSION_CONFLICT',

@@ -156,6 +156,8 @@ export interface StructuredIngestionPort {
  * trusted tenant/space scope; RLS is a second line behind the explicit scope predicate.
  */
 export interface StructuredIngestionStore {
+  /** Exact native parse identity; document projection parser versions remain separate. */
+  getParse(scopeRef: ScopeRef, parseId: Uuid, ctx: ToolContext): Promise<StructuredParseRecord | undefined>
   /** Idempotent on (tenant, space, original digest, parser version). Rows are inserted once. */
   recordParse(
     record: StructuredParseRecord,

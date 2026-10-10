@@ -525,7 +525,7 @@ export class RegisteredComputeExecutionService {
 }
 
 /** The deterministic logical key of one compute action; the store's idempotency primary key. */
-export function computeLogicalKeyDigest(scopeRef: ScopeRef, input: ComputeExecutionInput): Sha256Digest {
+export function computeLogicalKeyDigest(scopeRef: ScopeRef, input: Pick<ComputeExecutionInput, 'taskBindingRef' | 'inputSnapshotDigest' | 'parametersDigest' | 'registeredOperationDigest'>): Sha256Digest {
   return sha256DigestOf(
     canonicalJson({
       tenantId: scopeRef.tenantId,

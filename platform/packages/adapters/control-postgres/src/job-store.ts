@@ -212,6 +212,7 @@ export class PostgresJobStore implements JobStore {
     record: NewLogicalJobRecord,
     ctx: ToolContext,
   ): Promise<JobInsertResult> {
+    if (record.initialStage !== undefined && record.initialStage !== 'awaiting_review') throw new JobStoreError('STAGE_CONFLICT', 'the manual source handoff may only wait for actual human review')
     return this.#withScope(scopeRef, ctx, async (query) => {
       const byKey = await query.query<JobRow>(
         `SELECT ${JOB_COLUMNS} FROM agent_platform.jobs
@@ -252,7 +253,7 @@ export class PostgresJobStore implements JobStore {
          VALUES (
            current_setting('app.tenant_id')::uuid,
            current_setting('app.space_id')::uuid,
-           $1, $2, $3, $4, $5, $6, 'received', $7, $8, 1, 0, 0, $9::jsonb, $10::timestamptz,
+           $1, $2, $3, $4, $5, $6, $12, $7, $8, 1, 0, 0, $9::jsonb, $10::timestamptz,
            $10::timestamptz, $11, $10::timestamptz
          )
          ON CONFLICT (tenant_id, space_id, idempotency_key) DO NOTHING
@@ -269,6 +270,7 @@ export class PostgresJobStore implements JobStore {
           JSON.stringify(record.counts),
           record.createdAt,
           record.createdBy,
+          record.initialStage ?? 'received',
         ],
       )
       const row = inserted.rows[0]

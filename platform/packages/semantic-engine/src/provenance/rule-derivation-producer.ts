@@ -77,6 +77,7 @@ export class RuleDerivationEvidenceProducerError extends Error {
 export interface MaterializedRuleDerivationEvidenceProducerDependencies {
   /** Append-only materialization slices; current publication heads are never consulted. */
   readonly materialization: Pick<MaterializationStore, 'readSlices'>
+  readonly projectionRef?: VersionRef
   readonly evidence: Pick<EvidenceStorePort, 'get' | 'record'>
   readonly artifacts: ImmutableArtifactWriter
   /** Optional bridge from the published sourceCandidateId back to its immutable extraction candidate. */
@@ -295,6 +296,7 @@ async function missingEvidenceRefs(
  */
 export class MaterializedRuleDerivationEvidenceProducer {
   readonly #materialization: Pick<MaterializationStore, 'readSlices'>
+  readonly #projectionRef: VersionRef | undefined
   readonly #evidence: Pick<EvidenceStorePort, 'get' | 'record'>
   readonly #artifacts: ImmutableArtifactWriter
   readonly #candidates: Pick<CandidateStore, 'getCandidate'> | undefined
@@ -307,6 +309,7 @@ export class MaterializedRuleDerivationEvidenceProducer {
 
   constructor(dependencies: MaterializedRuleDerivationEvidenceProducerDependencies) {
     this.#materialization = dependencies.materialization
+    this.#projectionRef = dependencies.projectionRef
     this.#evidence = dependencies.evidence
     this.#artifacts = dependencies.artifacts
     this.#candidates = dependencies.candidates
@@ -348,6 +351,7 @@ export class MaterializedRuleDerivationEvidenceProducer {
       }
     }
     const selected = uniqueCandidate(candidates)
+    if (this.#projectionRef !== undefined && (selected.artifact.premiseInput === undefined || !sameVersion(selected.artifact.premiseInput.request.projectionRef, this.#projectionRef))) throw new RuleDerivationEvidenceProducerError('MATERIALIZED_ARTIFACT_INVALID', 'the actual rule artifact belongs to another host projection configuration')
     const artifactRecordedSeq = selected.artifact.asOfRecordedSeq
     if (artifactRecordedSeq === undefined || selected.artifact.validAt === undefined) {
       throw new RuleDerivationEvidenceProducerError('MATERIALIZED_ARTIFACT_INVALID', 'the selected artifact has no exact validAt/recorded sequence pin')

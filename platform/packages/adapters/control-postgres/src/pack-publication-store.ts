@@ -4,10 +4,15 @@ import {
   COMPETENCY_BODY_MEDIA_TYPE,
   PublishedPackAssetStoreError,
   assertPublishedPackAssetShape,
+  assertAssetDraftVersionShape,
+  assetDraftContent,
+  assetDraftSourceContent,
+  publishedPackContent,
   isToolContext,
 } from '@ontology/contracts'
 import type {
   IndustryValidationReport,
+  AssetDraftVersion,
   CommitApprovedPackInput,
   CommitApprovedPackResult,
   NewOutboxMessage,
@@ -41,6 +46,16 @@ interface DigestRow extends QueryResultRow {
 }
 
 const ASSET_COLUMNS = 'content_digest, request_digest, asset'
+
+function canonical(value: unknown): string {
+  const sorted = (input: unknown): unknown => {
+    if (Array.isArray(input)) return input.map(sorted)
+    if (typeof input !== 'object' || input === null) return input
+    return Object.fromEntries(Object.entries(input).sort(([left], [right]) => left < right ? -1 : left > right ? 1 : 0).map(([key, entry]) => [key, sorted(entry)]))
+  }
+  return JSON.stringify(sorted(value))
+}
+function digestOf(value: unknown): string { return `sha256:${createHash('sha256').update(canonical(value)).digest('hex')}` }
 
 function toAsset(row: AssetRow): PublishedPackAsset {
   assertPublishedPackAssetShape(row.asset)
@@ -128,6 +143,7 @@ export class PostgresPublishedPackAssetStore implements PublishedPackAssetStore 
       const asset: PublishedPackAsset = { ...pack, revision, publishedAt: input.recordedAt }
       assertPublishedPackAssetShape(asset)
       await this.#insertAsset(query, asset, input)
+      if (input.sourceDraft !== undefined) await this.#insertCheckpoint(query, asset, input)
       await query.query(
         `UPDATE agent_platform.industry_workspaces
             SET head_revision = $2::bigint, latest_pack_ref = $3::jsonb, state = 'published', updated_at = $4::timestamptz
@@ -230,14 +246,11 @@ export class PostgresPublishedPackAssetStore implements PublishedPackAssetStore 
           row.state !== 'failed' && row.state !== 'pending_confirmation' && !row.pending_confirmation))) {
       throw new PublishedPackAssetStoreError('VERSION_CONFLICT', 'definition approval or current candidate pins changed before publication')
     }
-    const sourceDraft = await query.query<{ revision: string; digest: string }>(`SELECT revision,digest FROM agent_platform.asset_draft_versions
-      WHERE tenant_id=current_setting('app.tenant_id')::uuid AND space_id=current_setting('app.space_id')::uuid AND workspace_id=$1 ORDER BY revision DESC LIMIT 1`, [input.pack.workspaceId])
+    const sourceDrafts = await this.#sourceDrafts(query, input)
     const actions = await query.query<{ candidate_id: string; content_digest: string; enabled_at: Date; kind: string; grounded: boolean }>(
       `SELECT candidate_id, content_digest, enabled_at, kind,
          (generation_context IS NULL OR (jsonb_array_length(generation_context->'issues')=0 AND jsonb_array_length(source_spans)>0
-           AND generation_context->'inputDraftRef'->>'workspaceId'=$1::text
-           AND generation_context->'inputDraftRef'->>'revision'=$2
-           AND generation_context->'inputDraftRef'->>'digest'=$3)) AS grounded FROM (
+           AND generation_context->'inputDraftRef'=ANY(ARRAY(SELECT value FROM jsonb_array_elements($2::jsonb))))) AS grounded FROM (
          SELECT DISTINCT ON (c.logical_id) c.logical_id, c.candidate_id, c.content_digest, c.lifecycle, c.enabled_at, c.kind, c.generation_context, c.source_spans
          FROM agent_platform.asset_rule_action_candidates c
          WHERE c.tenant_id = current_setting('app.tenant_id')::uuid AND c.space_id = current_setting('app.space_id')::uuid
@@ -247,7 +260,7 @@ export class PostgresPublishedPackAssetStore implements PublishedPackAssetStore 
                AND replacement.workspace_id = c.workspace_id AND replacement.replaces_candidate_id = c.candidate_id)
          ORDER BY c.logical_id, c.recorded_at DESC, c.candidate_id DESC
        ) current_candidates WHERE lifecycle = 'enabled' AND enabled_at IS NOT NULL`,
-      [input.pack.workspaceId,sourceDraft.rows[0]?.revision ?? null,sourceDraft.rows[0]?.digest ?? null],
+      [input.pack.workspaceId, JSON.stringify(sourceDrafts.map(({ workspaceId, revision, digest }) => ({ workspaceId, revision, digest })))],
     )
     const actionPins = input.ruleActionPins ?? []
     if (actions.rows.some((row) => row.grounded !== true)) throw new PublishedPackAssetStoreError('VERSION_CONFLICT', 'generated rule/action sources are not confirmed at publication commit')
@@ -288,6 +301,57 @@ export class PostgresPublishedPackAssetStore implements PublishedPackAssetStore 
       )
       if (valid?.rows.length !== 1) throw new PublishedPackAssetStoreError('VERSION_CONFLICT', 'rule approval, provenance or complete body changed before publication')
     }
+  }
+
+  async #sourceDrafts(query: ScopedQuery, input: CommitApprovedPackInput): Promise<readonly AssetDraftVersion[]> {
+    const invalid = (): never => { throw new PublishedPackAssetStoreError('VERSION_CONFLICT', 'publication source draft or its authenticated checkpoint changed before commit') }
+    if (input.sourceDraft !== undefined && (digestOf(publishedPackContent(input.pack)) !== input.pack.contentDigest || input.pack.packRef.digest !== input.pack.contentDigest)) invalid()
+    const read = async (revision: string): Promise<AssetDraftVersion | undefined> => {
+      const result = await query.query<{ body: AssetDraftVersion; digest: string }>(`SELECT body,digest FROM agent_platform.asset_draft_versions
+        WHERE tenant_id=current_setting('app.tenant_id')::uuid AND space_id=current_setting('app.space_id')::uuid AND workspace_id=$1::uuid AND revision=$2::bigint FOR SHARE`, [input.pack.workspaceId, revision])
+      const row = result.rows[0]
+      if (row === undefined) return undefined
+      assertAssetDraftVersionShape(row.body)
+      if (row.body.workspaceId !== input.pack.workspaceId || row.body.revision !== revision || row.digest !== row.body.digest || digestOf(assetDraftContent(row.body)) !== row.digest) invalid()
+      return row.body
+    }
+    const current = await read(input.expectedRevision)
+    if (input.sourceDraft !== undefined && (current === undefined || canonical(current) !== canonical(input.sourceDraft) || canonical(input.pack.sourceDraftRef) !== canonical({ workspaceId: current.workspaceId, revision: current.revision, digest: current.digest }))) invalid()
+    if (input.sourceDraft === undefined && input.pack.sourceDraftRef !== undefined) invalid()
+    if (current === undefined) return [] // Legacy direct stores without a draft cannot authenticate generated source frames.
+    const frames: AssetDraftVersion[] = [current]
+    const pins = (input.approvalPins ?? []).map(({ candidateId, contentDigest }) => ({ candidateId, contentDigest })).sort((a, b) => a.candidateId.localeCompare(b.candidateId))
+    const rules = [...(input.ruleActionPins ?? [])].sort((a, b) => a.candidateId.localeCompare(b.candidateId))
+    let cursor = current
+    for (let depth = 0; cursor.publicationCheckpoint !== undefined; depth += 1) {
+      if (depth >= 32) invalid()
+      const receipt = cursor.publicationCheckpoint
+      const result = await query.query<AssetRow>(`SELECT ${ASSET_COLUMNS} FROM agent_platform.published_pack_assets
+        WHERE tenant_id=current_setting('app.tenant_id')::uuid AND space_id=current_setting('app.space_id')::uuid AND pack_id=$1 AND version=$2 AND content_digest=$3 FOR SHARE`, [receipt.packRef.id, receipt.packRef.version, receipt.packRef.digest])
+      const row = result.rows[0] ?? invalid()
+      const asset = toAsset(row)
+      if (asset.workspaceId !== input.pack.workspaceId || asset.revision !== cursor.revision || asset.contentDigest !== row.content_digest || digestOf(publishedPackContent(asset)) !== row.content_digest || canonical(asset.sourceDraftRef) !== canonical(receipt.sourceDraftRef) || canonical(asset.validationRef) !== canonical(receipt.validationRef) || canonical(cursor.validationRef) !== canonical(receipt.validationRef)) invalid()
+      const source = await read(receipt.sourceDraftRef.revision) ?? invalid()
+      if (source.digest !== receipt.sourceDraftRef.digest || BigInt(source.revision) >= BigInt(cursor.revision) || canonical(assetDraftSourceContent(source)) !== canonical(assetDraftSourceContent(cursor))) invalid()
+      const originalPins = (asset.approvalPins ?? []).map(({ candidateId, contentDigest }) => ({ candidateId, contentDigest })).sort((a, b) => a.candidateId.localeCompare(b.candidateId))
+      if (canonical(originalPins) !== canonical(pins) || canonical([...(asset.ruleActionPins ?? [])].sort((a, b) => a.candidateId.localeCompare(b.candidateId))) !== canonical(rules)) break
+      frames.push(source)
+      cursor = source
+    }
+    return frames
+  }
+
+  async #insertCheckpoint(query: ScopedQuery, asset: PublishedPackAsset, input: CommitApprovedPackInput): Promise<void> {
+    const source = input.sourceDraft
+    if (source === undefined || asset.sourceDraftRef === undefined) throw new PublishedPackAssetStoreError('VERSION_CONFLICT', 'publication checkpoint requires the exact source draft')
+    const body = { ...source, revision: asset.revision, validationRef: asset.validationRef,
+      publicationCheckpoint: { sourceDraftRef: asset.sourceDraftRef, packRef: asset.packRef, validationRef: asset.validationRef } }
+    const draft: AssetDraftVersion = { ...body, digest: digestOf(assetDraftContent(body)) }
+    assertAssetDraftVersionShape(draft)
+    await query.query(`INSERT INTO agent_platform.asset_draft_versions
+      (tenant_id,space_id,workspace_id,revision,digest,body,document_set_ref,idempotency_key,request_digest,outbox_id,actor,trace_id,recorded_at)
+      VALUES (current_setting('app.tenant_id')::uuid,current_setting('app.space_id')::uuid,$1::uuid,$2::bigint,$3,$4::jsonb,$5::jsonb,$6,$7,$8::uuid,$9,current_setting('app.trace_id',true),$10::timestamptz)`,
+    [draft.workspaceId,draft.revision,draft.digest,JSON.stringify(draft),JSON.stringify(draft.documentSetRef),`publication-checkpoint:${input.outbox.outboxId}`,input.requestDigest,input.outbox.outboxId,input.actor,input.recordedAt])
   }
 
   async #guardCompetency(query: ScopedQuery, input: CommitApprovedPackInput, ctx: ToolContext): Promise<void> {

@@ -371,7 +371,7 @@ describe('actual PostgreSQL/source parsing and ordinary HTTP model generation', 
     // A stale application read cannot waive the independent physical PG draft fence.
     const staleRead = vi.spyOn(workspaces, 'getLatestDraft').mockResolvedValueOnce(originalDraft)
     try {
-      await expect(publishing.publish(fixture.input.workspaceId, { packId: 'facility', version: '1.0.0', validationId: report.validationId, expectedRevision: '3', idempotencyKey: `pg-stale-${randomUUID()}` }, ctx.principal.subjectId, ctx)).rejects.toMatchObject({ code: 'VERSION_CONFLICT', message: expect.stringContaining('sources are not confirmed at publication commit') })
+      await expect(publishing.publish(fixture.input.workspaceId, { packId: 'facility', version: '1.0.0', validationId: report.validationId, expectedRevision: '3', idempotencyKey: `pg-stale-${randomUUID()}` }, ctx.principal.subjectId, ctx)).rejects.toMatchObject({ code: 'VERSION_CONFLICT', message: expect.stringContaining('publication source draft or its authenticated checkpoint changed before commit') })
     } finally { staleRead.mockRestore() }
     const confirmed = await generator.confirmSources({ workspaceId: fixture.input.workspaceId, candidateId: rule.candidateId, contentDigest: rule.contentDigest, expectedRevision: '3', sourceRefs: [fixture.sourceRef],
       sourceSelections: ['applicability','condition','exceptions[0]','exceptions[0].condition'].map((path) => ({ path, sourceIndex: 0, fragmentIndex: 0 })), reason: 'human confirmed the unchanged complete rule against the new actual draft', idempotencyKey: `renew-${randomUUID()}` }, ctx.principal.subjectId, ctx)

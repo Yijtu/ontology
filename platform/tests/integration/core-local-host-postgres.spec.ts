@@ -115,6 +115,48 @@ afterAll(async () => {
 })
 
 describe('the mounted local Core host through normal HTTP', () => {
+  it('creates genuine empty authoring corpus and preserves native source selections through the normal host', async () => {
+    const key = `normal-authoring-${randomUUID()}`
+    const declaration = { namespace: `normal-${randomUUID()}`, displayName: '设备维护规则', boundary: { goals: ['检查规则条件'], included: ['设备维护'], excluded: ['外部控制'], applicability: {} } }
+    const create = () => request('/api/v1/core/workspace-bootstrap', { method: 'POST', headers: { 'content-type': 'application/json', 'idempotency-key': key }, body: JSON.stringify(declaration) })
+    const response = await create()
+    expect(response.status, await response.clone().text()).toBe(201)
+    const created = await response.json() as { data: { workspace: { workspaceId: string; headRevision: string }; draft: { documentSetRef: { id: string; digest: string } } } }
+    const replay = await create()
+    expect(replay.status).toBe(200)
+    expect((await replay.json() as typeof created).data.workspace.workspaceId).toBe(created.data.workspace.workspaceId)
+    const workspaceId = created.data.workspace.workspaceId
+    const empty = await request(`/api/v1/core/workspaces/${workspaceId}/sources`)
+    expect(empty.status, await empty.clone().text()).toBe(200)
+    expect((await empty.json() as { data: { sources: unknown[] } }).data.sources).toEqual([])
+    const uploadKey = `normal-source-${randomUUID()}`
+    const csv = '说明,说明\n设备,时长\nD01,17.500000000000000001\n'
+    const upload = (options: unknown, key = uploadKey) => request(`/api/v1/core/workspaces/${workspaceId}/sources`, { method: 'POST', headers: { 'content-type': 'application/json', 'idempotency-key': key, 'if-match': '1' }, body: JSON.stringify({ name: '维护台账.csv', mediaType: 'text/csv', contentEncoding: 'base64', content: Buffer.from(csv).toString('base64'), options }) })
+    const imported = await upload({ headerRow: 2 })
+    expect(imported.status, await imported.clone().text()).toBe(201)
+    const saved = await imported.json() as { data: { workspace: { headRevision: string }; source: { sourceRef: { id: string }; name: string; options: { headerRow: number }; tables: { columns: { header: string }[]; rows: { cells: { raw: string; locator: { row: number; column: number } }[] }[] }[] } } }
+    expect(saved.data.workspace.headRevision).toBe('2')
+    expect(saved.data.source.name).toBe('维护台账.csv')
+    expect(saved.data.source.options.headerRow).toBe(2)
+    expect(saved.data.source.tables[0]?.columns.map((column) => column.header)).toEqual(['设备', '时长'])
+    expect(saved.data.source.tables[0]?.rows[0]?.cells[1]).toMatchObject({ raw: '17.500000000000000001', locator: { row: 3, column: 2 } })
+    const retry = await upload({ headerRow: 2 })
+    expect(retry.status, await retry.clone().text()).toBe(201)
+    expect((await retry.json() as typeof saved).data.workspace.headRevision).toBe('2')
+    const mismatch = await upload({ headerRow: 1 }, `mismatch-${randomUUID()}`)
+    expect(mismatch.status).toBe(400)
+    const catalogue = await request(`/api/v1/core/workspaces/${workspaceId}/sources`)
+    expect((await catalogue.json() as { data: { sources: typeof saved.data.source[] } }).data.sources[0]).toMatchObject({ name: '维护台账.csv', options: { headerRow: 2 } })
+    const context = await request(`/api/v1/core/workspaces/${workspaceId}/authoring-context`)
+    expect(context.status, await context.clone().text()).toBe(200)
+    const actual = await context.json() as { data: { models: { generationEnabled: boolean }; generationPolicyRef: { id: string; digest: string }; operations: { inputSchemaRef: { id: string; digest: string }; inputSchemaDigest: string; sideEffect: string; requiredPermissions: string[] }[] } }
+    expect(actual.data.models.generationEnabled).toBe(false)
+    expect(actual.data.generationPolicyRef.id).toMatch(/^[0-9a-f-]{36}$/u)
+    expect(actual.data.operations[0]?.inputSchemaRef.digest).toBe(actual.data.operations[0]?.inputSchemaDigest)
+    expect(actual.data.operations[0]?.sideEffect).toBe('read_only')
+    expect(actual.data.operations[0]?.requiredPermissions).toEqual([])
+  }, 60_000)
+
   it('ingests real raw records, requires identity/review/publication, then publishes a verified facts answer', async () => {
     const health = await request('/healthz')
     expect(health.status).toBe(200)

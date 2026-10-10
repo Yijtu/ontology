@@ -7,6 +7,7 @@ import type {
 } from '@ontology/contracts'
 import { canonicalColumnTypeOf } from './types'
 import type { FieldMapping, MappingDialect, ObjectMapping, SemanticMapping } from './types'
+import { SemanticMappingError } from './errors'
 
 /**
  * Compile a confirmed *project* mapping into the semantic mapping the SQL compiler consumes
@@ -69,10 +70,22 @@ function fieldsOf(descriptor: ProjectSnapshotQueryDescriptor): FieldMapping[] {
   })
   fields.push({
     fieldRef: PROJECT_SNAPSHOT_SOURCES_FIELD,
-    column: PROJECT_SNAPSHOT_SOURCES_FIELD,
+    column: sourceOriginsColumnOf(descriptor),
     valueType: 'string',
   })
   return fields
+}
+
+function sourceProjectionOf(descriptor: ProjectSnapshotQueryDescriptor): 'full_array' | 'compact_pin' | undefined {
+  const projection: unknown = descriptor.sourceProjection
+  if (projection === undefined || projection === 'full_array' || projection === 'compact_pin') return projection
+  throw new SemanticMappingError('INVALID_MAPPING', 'the fixed project snapshot source projection is not supported')
+}
+
+function sourceOriginsColumnOf(descriptor: ProjectSnapshotQueryDescriptor): 'sources_json' | 'sources_full_json' {
+  const projection = sourceProjectionOf(descriptor)
+  if (projection === 'full_array') return 'sources_full_json'
+  return PROJECT_SNAPSHOT_SOURCES_FIELD
 }
 
 /**
@@ -82,6 +95,7 @@ function fieldsOf(descriptor: ProjectSnapshotQueryDescriptor): FieldMapping[] {
  */
 export function projectSnapshotMappingRef(input: BuildProjectSnapshotMappingInput): VersionRef {
   const { descriptor } = input
+  const sourceProjection = sourceProjectionOf(descriptor)
   const id = `project-snapshot:${descriptor.objectId}`
   return {
     id,
@@ -95,6 +109,7 @@ export function projectSnapshotMappingRef(input: BuildProjectSnapshotMappingInpu
         schema: descriptor.schema,
         relation: descriptor.relation,
         sourceObjectRef: descriptor.sourceObjectRef,
+        ...(sourceProjection === undefined ? {} : { sourceProjection }),
         columns: descriptor.columns.map((column) => ({
           name: column.name,
           valueType: column.valueType,

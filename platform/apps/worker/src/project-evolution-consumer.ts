@@ -4,7 +4,7 @@ import type { OutboxConsumer, ProjectEvolutionService } from '@ontology/applicat
 /** Registration leaf for the normal topic router. Durable CAS owns bounded rebuild attempts. */
 export class ProjectEvolutionOutboxConsumer implements OutboxConsumer {
     readonly topics = [PROJECT_EVOLUTION_TOPIC]
-    constructor(private readonly service: ProjectEvolutionService) {
+    constructor(private readonly service: Pick<ProjectEvolutionService,'rebuild'>) {
     }
     canHandle(topic: string): boolean {
         return topic === PROJECT_EVOLUTION_TOPIC

@@ -5,9 +5,7 @@ import { join } from 'node:path'
 import { fileURLToPath } from 'node:url'
 import { Client } from 'pg'
 import { afterAll, beforeAll, describe, expect, it } from 'vitest'
-import { FileSystemObjectStore, LocalImmutableBlobStore, PostgresArtifactRegistry } from '@ontology/adapter-blob-local'
 import { runControlMigrations } from '@ontology/adapter-control-postgres'
-import { LocalDocumentExtractionService, PostgresDocumentParseStore } from '@ontology/adapter-extraction-document'
 import {
   coreScenarioTaskBindings,
   createCoreApi,
@@ -18,7 +16,6 @@ import type { CoreLocalComposition } from '@ontology/app-api'
 import { canonicalJson, sha256DigestOf } from '@ontology/application'
 import { createToolContext } from '@ontology/contracts'
 import type {
-  DocumentParseRecord,
   MappingRef,
   ProjectRevisionBody,
   ProjectRevisionRef,
@@ -95,7 +92,6 @@ let composition: CoreLocalComposition | undefined
 let api: ReturnType<typeof createCoreApi> | undefined
 let baseUrl = ''
 let projectRevisionRefValue: ProjectRevisionRef
-let parsedDocument: DocumentParseRecord
 const workerErrors: Error[] = []
 
 function trustedContext(scope: ScopeRef): ToolContext {
@@ -146,34 +142,6 @@ async function startIsolatedDatabase(): Promise<void> {
   if (alterStatement === undefined) throw new Error('could not prepare the non-owner application role')
   await admin.query(alterStatement)
   appUrl = `postgres://${encodeURIComponent('ontology_app')}:${encodeURIComponent(APP_PASSWORD)}@${new URL(container.adminUrl).hostname}:${new URL(container.adminUrl).port}/${new URL(container.adminUrl).pathname.replace(/^\//, '')}`
-}
-
-/** Publish and parse the corpus document through the real LOCAL-023 parser on the shared stores. */
-async function parseCorpusDocument(): Promise<DocumentParseRecord> {
-  const objectStore = new FileSystemObjectStore(objectDirectory)
-  await objectStore.init()
-  const registry = new PostgresArtifactRegistry({ connectionString: appUrl, maxPoolSize: 4 })
-  const parseStore = new PostgresDocumentParseStore({ connectionString: appUrl, maxPoolSize: 4 })
-  try {
-    const blobStore = new LocalImmutableBlobStore({ objectStore, registry })
-    const bytes = new TextEncoder().encode(DOCUMENT_TEXT)
-    const staged = await blobStore.stage(bytes, { scopeRef }, trustedContext(scopeRef))
-    const published = await blobStore.publish(
-      {
-        scopeRef,
-        contentDigest: staged.contentDigest,
-        mediaType: 'text/plain',
-        byteSize: staged.byteSize,
-        purpose: 'document',
-      },
-      trustedContext(scopeRef),
-    )
-    const parser = new LocalDocumentExtractionService({ blobs: blobStore, store: parseStore })
-    return await parser.parse({ scopeRef, originalRef: published.blobRef }, trustedContext(scopeRef))
-  } finally {
-    await parseStore.close().catch(() => undefined)
-    await registry.close().catch(() => undefined)
-  }
 }
 
 async function seedProject(body: ProjectRevisionBody): Promise<void> {
@@ -240,25 +208,36 @@ async function waitForAnswer(runId: string): Promise<Record<string, unknown>> {
 
 /** Register the parsed document into the project corpus and build its BM25 index via the routes. */
 async function mountCorpus(): Promise<void> {
-  const membership = await request(`/api/v1/projects/${PROJECT_ID}/document-memberships`, {
+  const importedResponse = await request(`/api/v1/projects/${PROJECT_ID}/structured-imports`, {
     method: 'POST',
     headers: { 'content-type': 'application/json', 'idempotency-key': `docqa-membership-${PROJECT_ID}` },
-    body: JSON.stringify({
-      documentRef: parsedDocument.originalRef,
-      documentDigest: parsedDocument.originalRef.digest,
-      parseId: parsedDocument.parseId,
-      parseRef: parsedDocument.spanMapRef,
-      textDigest: parsedDocument.spanMapRef.digest,
-      precision: 'exact',
-    }),
+    body: JSON.stringify({ format: 'text', mediaType: 'text/plain', content: DOCUMENT_TEXT, contentEncoding: 'utf-8' }),
   })
-  if (membership.status !== 201) throw new Error(`document membership failed: ${await membership.text()}`)
-  const index = await request(`/api/v1/projects/${PROJECT_ID}/document-index`, {
-    method: 'POST',
-  })
-  if (index.status !== 202) throw new Error(`document index build failed: ${await index.text()}`)
-  const status = (await jsonBody(index)).data['status'] as { state?: string }
+  if (importedResponse.status !== 201) throw new Error(`structured source import failed: ${await importedResponse.text()}`)
+  const imported = (await jsonBody(importedResponse)).data
+  const documentSetRef = imported['documentSetRef'] as ResourceRef | undefined
+  if (documentSetRef === undefined || documentSetRef.kind !== 'artifact' || imported['documentId'] === undefined) {
+    throw new Error('normal structured import did not return its actual fixed document set and document membership')
+  }
+  const build = await request(`/api/v1/projects/${PROJECT_ID}/document-index`, { method: 'POST' })
+  if (build.status !== 202) throw new Error(`document index build failed: ${await build.text()}`)
+  const statusResponse = await request(`/api/v1/projects/${PROJECT_ID}/document-index`)
+  if (statusResponse.status !== 200) throw new Error(`document index status failed: ${await statusResponse.text()}`)
+  const status = (await jsonBody(statusResponse)).data['status'] as { state?: string; visibilityEpoch?: string }
   expect(status.state).toBe('ready')
+  if (status.visibilityEpoch === undefined) throw new Error('ready document index did not report the actual membership visibility epoch')
+  const projects = composition?.dependencies.api?.projects
+  if (projects === undefined) throw new Error('the normal project service is not exposed by this host')
+  const mounted = await projects.service.appendRevision(PROJECT_ID, {
+    expectedRevision: '1', reason: 'pin the document set produced by the normal structured import', documentSetRef,
+    sourceVisibilityEpoch: status.visibilityEpoch,
+  }, `docqa-document-set-${PROJECT_ID}`, 'docqa-author', trustedContext(scopeRef))
+  projectRevisionRefValue = mounted.revision.ref
+  const revisionIndex = await request(`/api/v1/projects/${PROJECT_ID}/document-index`, { method: 'POST' })
+  if (revisionIndex.status !== 202) throw new Error(`fixed-revision document index build failed: ${await revisionIndex.text()}`)
+  const revisionIndexStatus = await request(`/api/v1/projects/${PROJECT_ID}/document-index`)
+  if (revisionIndexStatus.status !== 200) throw new Error(`fixed-revision document index status failed: ${await revisionIndexStatus.text()}`)
+  expect(((await jsonBody(revisionIndexStatus)).data['status'] as { state?: string }).state).toBe('ready')
 }
 
 beforeAll(async () => {
@@ -266,7 +245,6 @@ beforeAll(async () => {
   objectDirectory = await mkdtemp(join(tmpdir(), 'ontology-core-document-qa-'))
   const scenario = loadCoreExamples({ targetScopeRef: scopeRef }).scenarios.find((entry) => entry.scenarioId === SCENARIO_ID)
   if (scenario === undefined) throw new Error(`scenario ${SCENARIO_ID} was not mounted`)
-  parsedDocument = await parseCorpusDocument()
   const body = revisionBody(scenario.definitionRef, APPROVED_INPUT_REF)
   projectRevisionRefValue = projectRevisionRef(body)
   await seedProject(body)
@@ -355,6 +333,8 @@ describe('document-QA task run through the normal HTTP host (real PostgreSQL, re
     const mountedScenario = scenarios.find((entry) => entry.scenarioId === SCENARIO_ID)
     if (mountedScenario === undefined) throw new Error('the transport scenario was not exposed')
 
+    expect(workerErrors.map((error) => ({ name: error.name, message: error.message, code: (error as Error & { code?: unknown }).code }))).toEqual([])
+    const workerErrorStart = workerErrors.length
     const runResponse = await request('/api/v1/runs', {
       method: 'POST',
       headers: { 'content-type': 'application/json', 'idempotency-key': `docqa-task-miss-${PROJECT_ID}` },
@@ -393,5 +373,14 @@ describe('document-QA task run through the normal HTTP host (real PostgreSQL, re
       await new Promise((resolve) => setTimeout(resolve, 100))
     }
     expect(fabricated).toBe(false)
+    const terminalResponse = await request(`/api/v1/runs/${encodeURIComponent(runId)}`)
+    if (terminalResponse.status !== 200) throw new Error(`no-match run status failed: ${await terminalResponse.text()}`)
+    const terminal = (await jsonBody(terminalResponse)).data
+    const eventsResponse = await fetch(`${baseUrl}/api/v1/runs/${encodeURIComponent(runId)}/events`, { signal: AbortSignal.timeout(30_000) })
+    const events = eventsResponse.ok ? await eventsResponse.text() : `events-status:${String(eventsResponse.status)}`
+    expect(terminal['state']).toBe('failed')
+    expect(events).toContain('"state":"failed","reason":"workflow_failed"')
+    expect(workerErrors.slice(workerErrorStart).map((error) => ({ name: error.name, message: error.message, code: (error as Error & { code?: unknown }).code })))
+      .toEqual([{ name: 'TypedDraftWriterError', message: 'no complete result-backed statements were available for the answer', code: 'INSUFFICIENT_DATA' }])
   }, 120_000)
 })

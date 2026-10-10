@@ -140,6 +140,8 @@ export interface JobErrorInfo {
 }
 
 export interface NewLogicalJobRecord {
+  /** Trusted manual parse pipelines may hand actual parsed inputs directly to human review. */
+  readonly initialStage?: 'awaiting_review'
   readonly jobId: Uuid
   readonly kind: JobKind
   readonly sourceRef: string

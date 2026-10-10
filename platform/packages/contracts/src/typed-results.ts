@@ -207,6 +207,8 @@ export interface TableArtifactPage {
 
 /** One archived table manifest and the receipt that proves the full table was verified. */
 export interface ArchivedTableArtifactManifest {
+  /** Actual scoped storage association, independent from the immutable manifest body. */
+  readonly answerId?: Uuid
   readonly ref: ResourceRef
   readonly manifest: TableArtifactManifest
   /**
@@ -410,6 +412,12 @@ export type TableHardVerificationOutcome =
 
 /** Immutable persistence for table-verification receipts (idempotent per exact ref digest). */
 export interface TableVerificationReceiptStore {
+  /** Exact scoped discovery of an already-earned receipt; conflicting bodies refuse. */
+  findReceipt?(
+    scopeRef: ScopeRef,
+    input: { readonly resultManifestRef: ResourceRef; readonly draftHash: Sha256Digest; readonly tableId: NonEmptyString },
+    ctx: ToolContext,
+  ): Promise<ArchivedTableVerificationReceipt | undefined>
   putReceipt(
     scopeRef: ScopeRef,
     receiptRef: ResourceRef,
@@ -524,7 +532,7 @@ export interface TableArtifactManifestStore {
     answerId: Uuid,
     manifestRef: ResourceRef,
     manifest: TableArtifactManifest,
-    verificationReceiptRef: ResourceRef,
+    verificationReceiptRef: ResourceRef | undefined,
     ctx: ToolContext,
   ): Promise<void>
   getManifest(

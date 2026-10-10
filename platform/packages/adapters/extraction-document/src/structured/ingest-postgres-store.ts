@@ -28,7 +28,7 @@ import type {
   Uuid,
 } from '@ontology/contracts'
 import { StructuredIngestionError } from './ingest-errors'
-import { isStructuredParseSelection } from '@ontology/contracts'
+import { isStructuredParseSelection, sha256OfCanonical } from '@ontology/contracts'
 
 export interface PostgresStructuredIngestionStoreConfig {
   readonly connectionString: string
@@ -378,6 +378,14 @@ function toRecordEntry(row: RecordRow): StructuredRecordEntry {
   }
 }
 
+function nativeCacheContent(record: StructuredParseRecord): Readonly<Record<string, unknown>> {
+  // Source aliases and creation time belong to the winning immutable reference, while
+  // the native interpretation of identical bytes must be exactly the same.
+  return { originalDigest: record.originalRef.digest, originalMediaType: record.originalMediaType, format: record.format,
+    parserId: record.parserId, parserVersion: record.parserVersion, parseOptions: record.parseOptions ?? null,
+    status: record.status, coverage: record.coverage, counts: record.counts, sheets: record.sheets, diagnostics: record.diagnostics }
+}
+
 function decodeCursor(cursor: string | undefined): number {
   if (cursor === undefined) return 0
   if (!/^\d+$/.test(cursor)) {
@@ -450,6 +458,7 @@ export class PostgresStructuredIngestionStore implements StructuredIngestionStor
     ctx: ToolContext,
   ): Promise<RecordStructuredParseResult> {
     const scope = scopeWith(record.scopeRef, ctx)
+    if (entries.length > 20_000) throw new StructuredIngestionError('INVALID_REQUEST', 'the native record commit exceeds its finite row bound')
     if (record.parseOptions !== undefined && !isStructuredParseSelection(record.parseOptions)) throw new StructuredIngestionError('INVALID_REQUEST', 'stored native selection must match the strict supported contract')
     return this.#withScope(scope, async (client) => {
       const inserted = await client.query<{ parse_id: string }>(
@@ -460,7 +469,7 @@ export class PostgresStructuredIngestionStore implements StructuredIngestionStor
            source_namespace, source_id, document_version_ref, created_at, parse_options)
          VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12::jsonb, $13::jsonb,
                  $14::jsonb, $15::jsonb, $16, $17, $18::jsonb, $19, $20::jsonb)
-         ON CONFLICT (tenant_id, space_id, original_content_digest, parser_version) DO NOTHING
+         ON CONFLICT DO NOTHING
          RETURNING parse_id`,
         [
           scope.tenantId,
@@ -485,7 +494,19 @@ export class PostgresStructuredIngestionStore implements StructuredIngestionStor
           record.parseOptions === undefined ? null : JSON.stringify(record.parseOptions),
         ],
       )
-      if (inserted.rows[0] === undefined) return { created: false }
+      if (inserted.rows[0] === undefined) {
+        // The deterministic parse UUID and the content/parser cache key can both
+        // conflict concurrently. Authenticate the actual winner instead of swallowing
+        // a different interpretation under the other unique constraint.
+        const stored = await client.query<ParseRow>(`${PARSE_SELECT} WHERE tenant_id=$1 AND space_id=$2
+          AND (parse_id=$3 OR (original_content_digest=$4 AND parser_version=$5)) LIMIT 2`,
+        [scope.tenantId, scope.spaceId, record.parseId, record.originalRef.digest, record.parserVersion])
+        const winner = stored.rows[0]
+        if (stored.rows.length !== 1 || winner === undefined || sha256OfCanonical(nativeCacheContent(toParseRecord(winner))) !== sha256OfCanonical(nativeCacheContent(record))) throw new StructuredIngestionError('INVALID_REQUEST', 'the actual stored native selection or parse content differs from this concurrent request')
+        const rows = await client.query<RecordRow>(`${RECORD_SELECT} WHERE tenant_id=$1 AND space_id=$2 AND parse_id=$3 ORDER BY record_index LIMIT 20001`, [scope.tenantId, scope.spaceId, winner.parse_id])
+        if (rows.rows.length !== entries.length || sha256OfCanonical(rows.rows.map(toRecordEntry)) !== sha256OfCanonical(entries)) throw new StructuredIngestionError('INVALID_REQUEST', 'the actual stored native rows differ from this concurrent request')
+        return { created: false }
+      }
       for (const entry of entries) {
         await client.query(
           `INSERT INTO agent_platform.document_structured_records (
@@ -512,6 +533,15 @@ export class PostgresStructuredIngestionStore implements StructuredIngestionStor
       }
       return { created: true }
     })
+  }
+
+  async getParse(scopeRef: ScopeRef, parseId: Uuid, ctx: ToolContext): Promise<StructuredParseRecord | undefined> {
+    const scope = scopeWith(scopeRef, ctx)
+    return this.#withScope(scope, async (client) => {
+      const result = await client.query<ParseRow>(`${PARSE_SELECT} WHERE tenant_id = $1 AND space_id = $2 AND parse_id = $3 LIMIT 1`, [scope.tenantId, scope.spaceId, parseId])
+      const row = result.rows[0]
+      return row === undefined ? undefined : toParseRecord(row)
+    }, { readOnly: true })
   }
 
   async findParseByDigest(

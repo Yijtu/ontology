@@ -19,6 +19,7 @@ import type {
   ToolContext,
   ToolCoverage,
   TypedResultManifest,
+  TableArtifactManifest,
   Uuid,
   VersionRef,
   WorkflowManifestStore,
@@ -54,6 +55,10 @@ import { typedResultManifestContentDigest } from './typed-result-manifest'
  */
 
 export interface TypedResultContextSourceDependencies {
+  /** Host producer of real result-backed pages; absence preserves legacy narrative results. */
+  readonly tables?: (input: { readonly runId: Uuid; readonly executionBindingRef: ResourceRef; readonly taskBindingRef: VersionRef;
+    readonly inputSnapshotRef: ResourceRef; readonly outputSchemaRef: VersionRef; readonly resultKind: TaskKind;
+    readonly evidence: readonly { readonly ref: ResourceRef; readonly outputRef: ResourceRef; readonly resultDigest: Sha256Digest }[] }, ctx: ToolContext) => Promise<readonly TableArtifactManifest[]>
   readonly runs: RunStore
   readonly executionBindings: RunExecutionBindingStore
   readonly taskBindings: TaskBindingStore
@@ -134,6 +139,7 @@ export function buildTypedResultManifest(input: {
   readonly inputSnapshotRef: ResourceRef
   readonly outputDigest: Sha256Digest
   readonly evidence: readonly ManifestEvidence[]
+  readonly tables?: readonly TableArtifactManifest[]
 }): TypedResultManifest {
   const coverage: ToolCoverage = {
     returned: input.evidence.reduce((total, entry) => total + entry.returned, 0),
@@ -150,7 +156,7 @@ export function buildTypedResultManifest(input: {
     outputSchemaRef: input.outputSchemaRef,
     inputSnapshotRef: input.inputSnapshotRef,
     outputDigest: input.outputDigest,
-    tables: [],
+    tables: input.tables ?? [],
     limitations,
     coverage,
     domainStatus,
@@ -204,6 +210,9 @@ export class RunTypedResultContextSource implements TypedResultContextSource {
       return undefined
     }
 
+    const tableInput = { runId: input.runId, executionBindingRef, taskBindingRef: selection.taskBindingRef,
+      inputSnapshotRef: request.inputSnapshotRef, outputSchemaRef: taskBinding.resultSchemaRef, resultKind: taskBinding.kind, evidence }
+    const tables = await this.#deps.tables?.(tableInput, ctx)
     const manifest = buildTypedResultManifest({
       executionBindingRef,
       taskBindingRef: selection.taskBindingRef,
@@ -212,6 +221,7 @@ export class RunTypedResultContextSource implements TypedResultContextSource {
       inputSnapshotRef: request.inputSnapshotRef,
       outputDigest: resultOutputDigest(evidence),
       evidence,
+      ...(tables === undefined ? {} : { tables }),
     })
     const resultManifestRef = await this.#archiveManifest(scopeRef, manifest, ctx)
     const resultManifestDigest = typedResultManifestContentDigest(manifest)

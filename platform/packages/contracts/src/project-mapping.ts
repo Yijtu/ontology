@@ -421,6 +421,8 @@ export interface ProjectRecordStore {
     recordId: Uuid,
     ctx: ToolContext,
   ): Promise<ProjectRecordVersion | undefined>
+  /** Exact immutable version used by an already accepted original-input receipt. */
+  getRecordVersion?(scopeRef: ScopeRef, projectId: Uuid, recordId: Uuid, revision: RevisionString, ctx: ToolContext): Promise<ProjectRecordVersion | undefined>
 }
 
 function invalidMapping(message: string): ProjectMappingStoreError {

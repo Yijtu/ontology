@@ -349,7 +349,8 @@ export async function startPackagePublishHarness(): Promise<PackagePublishHarnes
   const callbacks: { refreshSemanticOnly?: () => Promise<void> } = {}
   const published = new InMemoryPublishedPackAssetStore({ definitions,
     publicationGuard: createPackPublicationGuard({ workspaces: workspaceStore, definitionCandidates: candidateStore, ruleActions: ruleActionStore, reviews, reviewableCandidates }),
-    onPublished: async (_scope, workspaceId, revision, packRef) => {
+    onPublished: async (_scope, workspaceId, revision, packRef, checkpoint) => {
+      if (checkpoint !== undefined) workspaceStore.applyPublicationCheckpoint(_scope, workspaceId, checkpoint)
       workspaceStore.publishedHeads.set(workspaceId, { revision, packRef })
       await callbacks.refreshSemanticOnly?.()
     },

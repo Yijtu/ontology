@@ -1,4 +1,4 @@
-import type { IdentityDecisionStore, MaterializationStore, ProjectDocumentStore, ProjectFactSourcePin, ProjectRecordStore, ProjectRevisionRef, ProjectStore, PublishedRuleDeclarationReader, PublishedStatement, RulePremiseReplayPort, SemanticPublicationStore, ToolContext } from '@ontology/contracts'
+import type { IdentityDecisionStore, MaterializationStore, ProjectDocumentStore, ProjectFactSourcePin, ProjectRecordStore, ProjectRevisionRef, ProjectStore, PublishedRuleDeclarationReader, PublishedStatement, RulePremiseReplayPort, SemanticPublicationStore, ToolContext, VersionRef } from '@ontology/contracts'
 import { assertProjectFactInputShape, isRecord } from '@ontology/contracts'
 import { sha256DigestOf } from '../definitions/canonical'
 import { definitionVersionDigest } from '../definitions/validate'
@@ -11,6 +11,7 @@ import type { RulePremiseSourceDependencies } from './rule-premise-sources'
 
 export interface RulePremiseReplayDependencies extends RulePremiseSourceDependencies {
   readonly materialization: Pick<MaterializationStore, 'readSlices'>
+  readonly projectionRef?: VersionRef
   readonly publications: Pick<SemanticPublicationStore, 'getPublication' | 'getStatementRevision' | 'getStatement' | 'listRuleVersions'>
   /** Host-selected only after resolving an authorized immutable historical run binding. */
   readonly readMode?: 'current' | 'published_snapshot'
@@ -47,6 +48,7 @@ export class ArchivedRulePremiseReplayVerifier implements RulePremiseReplayPort 
     const saved = selected?.artifact
     if (saved === undefined || saved.premiseInput === undefined || !saved.complete) return false
     const archive = saved.premiseInput
+    if (this.#deps.projectionRef !== undefined && !equal(archive.request.projectionRef, this.#deps.projectionRef)) return false
     if (!archive.complete || archive.declarations.length > 250 || archive.facts.length > 10_000 || archive.evaluatedRuleIds.length > 10_000 ||
       archive.request.validAt !== saved.validAt || archive.request.asOfRecordedSeq !== saved.asOfRecordedSeq || !equal(archive.request.scopeRef, scope)) return false
     const currentIdentityMatches = async (): Promise<boolean> => {

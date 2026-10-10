@@ -4,25 +4,27 @@ import { PostgresAssetCandidateStore, PostgresCandidateStore, PostgresComponentR
 import type { ControlPostgresDatabase } from '@ontology/adapter-control-postgres'
 import { DocumentSpanReader, LocalStructuredIngestionService, StructuredDocumentParser, StructuredDocumentProjectionService, StructuredPremiseSourceReader } from '@ontology/adapter-extraction-document'
 import type { PostgresDocumentParseStore, PostgresStructuredIngestionStore } from '@ontology/adapter-extraction-document'
-import { CompetencyQuestionError, createToolContext, isRecord, isToolContext, isUuid } from '@ontology/contracts'
-import type { ColumnMappingEntry, CompetencyExecutionRequest, CompetencyValidationTarget, EntityCandidate, InstanceRecordView, MappingRef, ProjectDatasetQueryPort, ProjectDatasetWriterPort, ProjectRecordVersion, ProjectRevision, ProjectRevisionBody, ProjectSnapshotQueryPort, ResolvedProfileRef, ResourceRef, RuleCandidate, ScopeRef, SemanticDefinitionVersion, ToolContext, ToolGateway, VersionRef, RegisteredOperation } from '@ontology/contracts'
-import { CompositeReviewableCandidateReader, InMemoryIndustrySchemaSource, InstanceReviewService, JobService, ProjectDataMaterializationService, ProjectMappingService, ProjectService, canonicalJson, encodeStructuredExtractionRef, sha256DigestOf, resolvedProfileDigest } from '@ontology/application'
+import { CompetencyQuestionError, IndustryAssetPublicationError, assertPublishedPackAssetShape, createToolContext, isRecord, isToolContext, isUuid } from '@ontology/contracts'
+import type { ColumnMappingEntry, CompetencyExecutionRequest, CompetencyValidationTarget, EntityCandidate, InstanceRecordView, MappingRef, ProjectDatasetQueryPort, ProjectDatasetWriterPort, ProjectRecordVersion, ProjectRevision, ProjectRevisionBody, ProjectSnapshotQueryPort, ResolvedProfileRef, ResourceRef, RuleCandidate, CandidateSourceSpan, PublishedPackAsset, PublishedPackAssetStore, PublishedPackRuleVersion, PublishedRuleDeclarationReader, ScopeRef, SemanticDefinitionVersion, ToolContext, ToolGateway, VersionRef, RegisteredOperation } from '@ontology/contracts'
+import { CompositeReviewableCandidateReader, InMemoryIndustrySchemaSource, InstanceReviewService, JobService, ProjectDataMaterializationService, ProjectMappingService, ProjectService, canonicalJson, encodeStructuredExtractionRef, sha256DigestOf, resolvedProfileDigest, publishedPackContentDigest, contentDigestOf } from '@ontology/application'
 import { ArchivedRulePremiseReplayVerifier, IncrementalMaterializer, InMemoryIdentityIndexReader, MaterializedRuleDerivationEvidenceProducer, ProjectSemanticQueryService, PublishedProjectDatasetSource, PublishedRelationNavigator, PublishedSemanticSource, definitionVersionDigest, projectIndustrySchema, publishedRuleDependencyRef, publishedRuleRef } from '@ontology/semantic-engine'
 import type { IdentityIndexReader, PublishedSemanticData } from '@ontology/semantic-engine'
 import { createProjectFactWorkflow } from './project-facts'
 import { createInstanceIdentityWorkflow } from './instance-identity'
 import { createBlobArtifactWriter } from './tool-gateway'
+import type { CompetencyRuleAlias, CompetencyTemplateRuleSource, CompetencyPackRuleAlias } from './competency-rule-origins'
 import type { PreparedCompetencyInput } from './competency-execution'
 
 /** Alias mappings are archived host metadata; referenced semantic/profile bodies are reread. */
 export interface CompetencyTemplateBinding {
   readonly schemaVersion: 'competency-template-binding@1'
+  readonly sourceOrigin?: 'published_pack'
   readonly declarationDefinitionRef: VersionRef
   readonly definitionRef: VersionRef
   readonly namespace: string
   readonly packRef: VersionRef
   readonly profileRef: ResolvedProfileRef
-  readonly rules: readonly { readonly declarationRef: VersionRef; readonly publishedRef: VersionRef; readonly sourceCandidateId: string; readonly publicationId: string }[]
+  readonly rules: readonly CompetencyRuleAlias[]
   readonly dataMode: 'synthetic'
   readonly businessApproval: 'none'
 }
@@ -38,7 +40,9 @@ export interface CompetencyProjectPreparerOptions {
   /** Scoped immutable binding artifact selected by an actual stored template/draft. */
   readonly binding: (request: CompetencyExecutionRequest, ctx: ToolContext) => Promise<ResourceRef | undefined>
   /** Missing target integration blocks draft validation; hashes alone never authorize it. */
-  readonly target?: (target: CompetencyValidationTarget, template: CompetencyTemplateBinding, definition: SemanticDefinitionVersion, rules: readonly RuleCandidate[], ctx: ToolContext, signal: AbortSignal) => Promise<boolean>
+  readonly target?: (target: CompetencyValidationTarget, template: CompetencyTemplateBinding, definition: SemanticDefinitionVersion, rules: readonly CompetencyTemplateRuleSource[], ctx: ToolContext, signal: AbortSignal) => Promise<boolean>
+  readonly publishedRules?: PublishedRuleDeclarationReader
+  readonly packs?: Pick<PublishedPackAssetStore, 'findByRef'>
   readonly compute?: (input: { readonly project: ProjectRevision; readonly inputRef: ResourceRef; readonly profileRef: ResolvedProfileRef }, ctx: ToolContext, signal: AbortSignal) => Promise<{ readonly gateway: ToolGateway; readonly context: ToolContext; readonly operation: RegisteredOperation }>
 }
 
@@ -48,16 +52,29 @@ function ref(value: unknown): value is VersionRef { return isRecord(value) && ty
 function templateOf(value: unknown): CompetencyTemplateBinding | undefined {
   if (!isRecord(value) || value['schemaVersion'] !== 'competency-template-binding@1' || value['dataMode'] !== 'synthetic' || value['businessApproval'] !== 'none' || typeof value['namespace'] !== 'string' || !ref(value['declarationDefinitionRef']) || !ref(value['definitionRef']) || !ref(value['packRef']) || !isRecord(value['profileRef']) || typeof value['profileRef']['id'] !== 'string' || typeof value['profileRef']['version'] !== 'string' || typeof value['profileRef']['snapshotHash'] !== 'string' || !Array.isArray(value['rules']) || value['rules'].length > 16) return undefined
   const rules: CompetencyTemplateBinding['rules'][number][] = []
-  for (const row of value['rules']) { if (!isRecord(row) || !ref(row['declarationRef']) || !ref(row['publishedRef']) || !isUuid(row['sourceCandidateId']) || !isUuid(row['publicationId'])) return undefined; rules.push({ declarationRef: row['declarationRef'], publishedRef: row['publishedRef'], sourceCandidateId: row['sourceCandidateId'], publicationId: row['publicationId'] }) }
-  return { schemaVersion: 'competency-template-binding@1', declarationDefinitionRef: value['declarationDefinitionRef'], definitionRef: value['definitionRef'], packRef: value['packRef'], namespace: value['namespace'], profileRef: { id: value['profileRef']['id'], version: value['profileRef']['version'], snapshotHash: value['profileRef']['snapshotHash'] }, rules, dataMode: 'synthetic', businessApproval: 'none' }
+  if (value['sourceOrigin'] !== undefined && value['sourceOrigin'] !== 'published_pack') return undefined
+  for (const row of value['rules']) {
+    if (!isRecord(row) || !ref(row['declarationRef']) || !ref(row['publishedRef']) || !isUuid(row['sourceCandidateId'])) return undefined
+    if (row['origin'] === 'pack') {
+      if (!ref(row['publishedPackRef']) || !same(row['declarationRef'], row['publishedRef']) || Object.keys(row).some((key) => !['origin','declarationRef','publishedRef','sourceCandidateId','publishedPackRef'].includes(key))) return undefined
+      rules.push({ origin: 'pack', declarationRef: row['declarationRef'], publishedRef: row['publishedRef'], sourceCandidateId: row['sourceCandidateId'], publishedPackRef: row['publishedPackRef'] })
+    } else {
+      if (row['origin'] !== undefined && row['origin'] !== 'extracted' || !isUuid(row['publicationId']) || Object.keys(row).some((key) => !['origin','declarationRef','publishedRef','sourceCandidateId','publicationId'].includes(key))) return undefined
+      rules.push({ ...(row['origin'] === 'extracted' ? { origin: 'extracted' as const } : {}), declarationRef: row['declarationRef'], publishedRef: row['publishedRef'], sourceCandidateId: row['sourceCandidateId'], publicationId: row['publicationId'] })
+    }
+  }
+  if (value['sourceOrigin'] === 'published_pack' ? rules.some((row) => row.origin !== 'pack') : rules.some((row) => row.origin === 'pack')) return undefined
+  return { schemaVersion: 'competency-template-binding@1', ...(value['sourceOrigin'] === 'published_pack' ? { sourceOrigin: 'published_pack' as const } : {}), declarationDefinitionRef: value['declarationDefinitionRef'], definitionRef: value['definitionRef'], packRef: value['packRef'], namespace: value['namespace'], profileRef: { id: value['profileRef']['id'], version: value['profileRef']['version'], snapshotHash: value['profileRef']['snapshotHash'] }, rules, dataMode: 'synthetic', businessApproval: 'none' }
 }
+type PackDeclaration = NonNullable<PublishedPackAsset['ruleDeclarations']>[number]
+type TemplateRule = { readonly origin: 'extracted'; readonly declarationRef: VersionRef; readonly rule: RuleCandidate; readonly sourceSpans: readonly CandidateSourceSpan[] } | { readonly origin: 'pack'; readonly declarationRef: VersionRef; readonly rule: PublishedPackRuleVersion; readonly sourceSpans: readonly CandidateSourceSpan[]; readonly declaration: PackDeclaration }
 const key = (object: string, identity: string): string => `${object}\u0000${identity}`
 
 /** Production synthetic sandbox: originals and human ledgers are real; no gold enters here. */
 export function createCompetencyProjectPreparer(options: CompetencyProjectPreparerOptions) {
   const db = options.database, projects = new PostgresProjectStore(db), mappings = new PostgresProjectMappingStore(db), records = new PostgresProjectRecordStore(db), documents = new PostgresProjectDocumentStore(db)
-  const candidates = new PostgresCandidateStore(db), identities = new PostgresIdentityDecisionStore(db), instances = new PostgresInstanceReviewStore(db), jobs = new PostgresJobStore(db), publications = new PostgresSemanticPublicationStore(db), definitions = new PostgresSemanticDefinitionStore(db)
-  const materialization = new PostgresMaterializationStore(db), evidence = new PostgresEvidenceStore(db), readiness = new PostgresProjectReadinessStore(db)
+  const candidates = new PostgresCandidateStore(db), instances = new PostgresInstanceReviewStore(db), jobs = new PostgresJobStore(db), definitions = new PostgresSemanticDefinitionStore(db)
+  const evidence = new PostgresEvidenceStore(db), readiness = new PostgresProjectReadinessStore(db)
   const writer = createBlobArtifactWriter(options.blobs), originalReader = { read: async (request: { readonly approvedInputRefs: readonly ResourceRef[] }, ctx: ToolContext) => {
     const source = request.approvedInputRefs[0]
     if (source === undefined || request.approvedInputRefs.length !== 1) throw new CompetencyQuestionError('INVALID_DECLARATION', 'one original source is required')
@@ -67,6 +84,10 @@ export function createCompetencyProjectPreparer(options: CompetencyProjectPrepar
   return async (request: CompetencyExecutionRequest, ctx: ToolContext, signal: AbortSignal): Promise<PreparedCompetencyInput> => {
     signal.throwIfAborted()
     if (!isToolContext(ctx) || ctx.principal.tenantId !== request.input.scopeRef.tenantId || ctx.allowedResources.spaceId !== request.input.scopeRef.spaceId || !ctx.principal.roles.some((role) => role === 'platform-admin' || role === 'semantic-reviewer')) throw new CompetencyQuestionError('FORBIDDEN', 'a scoped synthetic validation reviewer is required')
+    const projectId = randomUUID(), projectionNamespace = `projection.competency.${projectId}`
+    const publications = new PostgresSemanticPublicationStore(db, { materializationProjectionRef: projectionNamespace })
+    const identities = new PostgresIdentityDecisionStore(db, { materializationProjectionRef: projectionNamespace })
+    const materialization = new PostgresMaterializationStore(db, projectionNamespace)
     const scope: ScopeRef = request.input.scopeRef, artifactRef = await options.binding(request, ctx)
     if (artifactRef === undefined) return { status: 'not_yet_executable', reason: 'the actual reviewed template binding is unavailable' }
     const metadata = await options.blobs.getAuthorized({ scopeRef: scope, blobRef: artifactRef }, ctx)
@@ -83,8 +104,33 @@ export function createCompetencyProjectPreparer(options: CompetencyProjectPrepar
     if (definition.identityScopes.some((identity) => identity.identityAttributeIds.length !== 1)) return { status: 'not_yet_executable', reason: 'this bounded synthetic preparer requires one exact original native identity field per object' }
     if (request.input.relations.some((relation) => relation.status === 'retracted')) return { status: 'not_yet_executable', reason: 'a declared relation withdrawal requires an actual stored relation event mapping' }
     const schema = projectIndustrySchema(definition), schemas = new InMemoryIndustrySchemaSource([{ ref: definition.ref, schema }])
-    const templates: { declarationRef: VersionRef; rule: RuleCandidate }[] = []
+    const templates: TemplateRule[] = []
+    const packAliases = template.rules.filter((row): row is CompetencyPackRuleAlias => row.origin === 'pack')
+    const publishedPackSource = template.sourceOrigin === 'published_pack'
+    const readPack = async (context: ToolContext, projectId?: string) => {
+      if (!publishedPackSource) return undefined
+      if (options.publishedRules === undefined || options.packs === undefined || packAliases.some((alias) => !same(alias.publishedPackRef, template.packRef))) return undefined
+      const asset = await options.packs.findByRef(scope, template.packRef, context)
+      if (asset === undefined) return undefined
+      assertPublishedPackAssetShape(asset)
+      if (!same(asset.packRef, template.packRef) || !same(asset.definitionRef, template.definitionRef) || publishedPackContentDigest(asset) !== template.packRef.digest || asset.ruleDeclarations === undefined || contentDigestOf(asset.ruleDeclarations) !== asset.manifest.rulePolicyRef.digest || asset.packAsset.ruleDeclarationsRef?.digest !== asset.manifest.rulePolicyRef.digest) return undefined
+      let rules: readonly PublishedPackRuleVersion[]
+      try { rules = await options.publishedRules.read(scope, { packRef: template.packRef, definitionRef: template.definitionRef, ...(projectId === undefined ? {} : { projectId }) }, context) }
+      catch (error) { if (error instanceof IndustryAssetPublicationError && ['VALIDATION_BLOCKED','FORBIDDEN','VERSION_CONFLICT','SCHEMA_NOT_FOUND'].includes(error.code)) return undefined; throw error }
+      if (packAliases.some((alias) => rules.filter((row) => row.sourceCandidateId === alias.sourceCandidateId && row.ruleVersionId === alias.sourceCandidateId && same(row.ruleRef, alias.publishedRef) && same(row.publishedPackRef, alias.publishedPackRef)).length !== 1)) return undefined
+      return { asset, rules }
+    }
+    const packOrigin = await readPack(ctx)
+    signal.throwIfAborted()
+    if (publishedPackSource && packOrigin === undefined) return { status: 'not_yet_executable', reason: 'the exact currently reviewed published-pack rule origin is unavailable' }
     for (const row of template.rules) {
+      if (row.origin === 'pack') {
+        const published = packOrigin?.rules.find((rule) => rule.sourceCandidateId === row.sourceCandidateId && same(rule.ruleRef, row.publishedRef))
+        const declaration = packOrigin?.asset.ruleDeclarations?.find((declaration) => declaration.candidateId === row.sourceCandidateId && declaration.contentDigest === row.publishedRef.digest)
+        if (published === undefined || declaration === undefined || !same(row.declarationRef, published.ruleRef)) return { status: 'not_yet_executable', reason: 'a pack alias does not name its real stored declaration body and source candidate' }
+        templates.push({ origin: 'pack', declarationRef: row.declarationRef, rule: published, sourceSpans: declaration.sourceSpans, declaration })
+        continue
+      }
       const storedRules = await publications.listRuleVersions(scope, { sourceCandidateId: row.sourceCandidateId, publicationId: row.publicationId, limit: 2 }, ctx)
       if (storedRules.length !== 1) return { status: 'not_yet_executable', reason: 'the exact template publication origin is unavailable or ambiguous' }
       const published = storedRules.find((rule) => same(publishedRuleRef(rule), row.publishedRef))
@@ -94,22 +140,29 @@ export function createCompetencyProjectPreparer(options: CompetencyProjectPrepar
       const review = source === undefined ? undefined : await publications.getReview(scope, source.candidateId, reviewRevision, ctx)
       const view = source === undefined ? undefined : await new CompositeReviewableCandidateReader({ definition: new PostgresAssetCandidateStore(db), instance: candidates }).readCandidate(scope, source.candidateId, ctx)
       if (published === undefined || source?.kind !== 'rule' || origin === undefined || !same(origin.schemaRef, definition.ref) || !same(source.inputVersion.definitionRef, definition.ref) || review?.decision !== 'approve' || review.contentDigest !== view?.contentDigest || source.ruleId !== published.ruleId || source.objectId !== published.objectId || source.severity !== published.severity || source.impact !== published.impact || canonicalJson(source.expression) !== canonicalJson(published.expression) || canonicalJson(source.exceptions) !== canonicalJson(published.exceptions) || canonicalJson(source.conclusion) !== canonicalJson(published.conclusion) || canonicalJson(source.ruleDependencies ?? []) !== canonicalJson(published.ruleDependencies ?? []) || canonicalJson(source.dependencyRefs ?? []) !== canonicalJson(published.dependencyRefs ?? [])) return { status: 'not_yet_executable', reason: 'the actual complete template rule body/origin or current content-pinned human review is unavailable' }
-      templates.push({ declarationRef: row.declarationRef, rule: source })
+      templates.push({ origin: 'extracted', declarationRef: row.declarationRef, rule: source, sourceSpans: source.sourceSpans })
     }
     if (request.ruleRefs.some((wanted) => !templates.some((row) => same(row.declarationRef, wanted)))) return { status: 'not_yet_executable', reason: 'a requested rule has no real reviewed declaration binding' }
     if (request.validationTarget !== undefined && await options.target?.(request.validationTarget, template, definition, templates.map((row) => row.rule), ctx, signal) !== true) return { status: 'not_yet_executable', reason: 'current draft bodies or human definition/rule approval pins do not match the actual template' }
     const validationTargetDigest = request.validationTarget === undefined ? undefined : sha256DigestOf(canonicalJson(request.validationTarget))
+    const projectionConfiguration = { schemaVersion: 'competency-projection-configuration@1', scopeRef: scope, projectId, definitionRef: definition.ref, packRef: template.packRef, producerComponentRef: options.producerComponentRef }
+    const projectionConfigRef = (await writer.putBytes({ scopeRef: scope, mediaType: 'application/json', content: new TextEncoder().encode(canonicalJson(projectionConfiguration)) }, ctx)).blobRef
+    const projectionRef: VersionRef = { id: projectionNamespace, version: projectionConfigRef.version, digest: projectionConfigRef.digest }
     const validateTemplateAuthority = async (context: ToolContext, cancellation: AbortSignal): Promise<void> => {
       cancellation.throwIfAborted()
       if (!isToolContext(context) || canonicalJson(context.principal) !== canonicalJson(ctx.principal) || context.runId !== ctx.runId || context.allowedResources.spaceId !== scope.spaceId) throw new CompetencyQuestionError('SCOPE_MISMATCH', 'the actual template authority has another trusted identity')
       const bindingBytes = await options.blobs.readAuthorized({ scopeRef: scope, blobRef: artifactRef }, context)
+      const projectionBytes = await options.blobs.readAuthorized({ scopeRef: scope, blobRef: projectionConfigRef }, context)
+      if (sha256DigestOfBytes(projectionBytes) !== projectionConfigRef.digest || canonicalJson(JSON.parse(new TextDecoder('utf-8', { fatal: true }).decode(projectionBytes)) as unknown) !== canonicalJson(projectionConfiguration)) throw new CompetencyQuestionError('DIGEST_MISMATCH', 'the actual isolated projection configuration changed')
       const currentDefinition = await definitions.findVersion(template.namespace, definition.definitionId, definition.version, scope, context)
       const currentProfile = await new PostgresProfileStore(db).findResolvedProfile(template.profileRef, template.profileRef.snapshotHash, scope, context)
       const registry = new PostgresComponentRegistryStore(db)
       const currentPack = await registry.findVersion({ kind: 'industry_pack', id: template.packRef.id, version: template.packRef.version }, scope, context)
       const currentProducer = await registry.findVersion({ kind: 'compute_extension', id: options.producerComponentRef.id, version: options.producerComponentRef.version }, scope, context)
       if (sha256DigestOfBytes(bindingBytes) !== artifactRef.digest || currentDefinition === undefined || definitionVersionDigest(currentDefinition) !== definition.ref.digest || currentProfile === undefined || resolvedProfileDigest(currentProfile.profileRef, currentProfile.resolved) !== template.profileRef.snapshotHash || currentPack?.lifecycleState !== 'active' || !same(currentPack.manifestRef, template.packRef) || currentProducer?.lifecycleState !== 'active' || !same(currentProducer.manifestRef, options.producerComponentRef)) throw new CompetencyQuestionError('DIGEST_MISMATCH', 'the actual immutable template, definition, profile or host component authority changed')
-      for (const expected of templates.map((row) => row.rule)) {
+      const currentPackOrigin = await readPack(context)
+      if (packOrigin !== undefined && (currentPackOrigin === undefined || canonicalJson(currentPackOrigin) !== canonicalJson(packOrigin))) throw new CompetencyQuestionError('DIGEST_MISMATCH', 'the actual published pack rule body, original pins or current human approval changed')
+      for (const expected of templates.filter((row): row is Extract<TemplateRule, { origin: 'extracted' }> => row.origin === 'extracted').map((row) => row.rule)) {
         const current = await candidates.getCandidate(scope, expected.candidateId, context)
         const view = await new CompositeReviewableCandidateReader({ definition: new PostgresAssetCandidateStore(db), instance: candidates }).readCandidate(scope, expected.candidateId, context)
         const revision = await publications.latestReviewRevision(scope, expected.candidateId, context), review = await publications.getReview(scope, expected.candidateId, revision, context)
@@ -118,15 +171,15 @@ export function createCompetencyProjectPreparer(options: CompetencyProjectPrepar
       cancellation.throwIfAborted()
     }
 
-    const projectId = randomUUID(), jobId = randomUUID(), now = new Date().toISOString()
+    const jobId = randomUUID(), now = new Date().toISOString()
     const inputRef = (await writer.putBytes({ scopeRef: scope, mediaType: 'application/json', content: new TextEncoder().encode(canonicalJson({ schemaVersion: 'competency-preview-input@1', questionSetRef: request.questionSetRef, inputDigest: request.inputDigest, declarationProjectId: request.input.projectId, templateBindingRef: artifactRef, dataMode: 'synthetic', businessApproval: 'none' })) }, ctx)).blobRef
     const emptySet = (await writer.putBytes({ scopeRef: scope, mediaType: 'application/json', content: new TextEncoder().encode(JSON.stringify({ schemaVersion: 'project-document-set@1', projectId, members: [] })) }, ctx)).blobRef
-    await new JobService({ store: jobs }).createJob({ jobId, kind: 'dataset_materialization', sourceRef: emptySet.id, datasetRef: emptySet.id, pipelineVersion: '1.0.0', idempotencyKey: `competency-project-${projectId}` }, ctx)
+    await new JobService({ store: jobs }).createJob({ jobId, kind: 'dataset_materialization', sourceRef: emptySet.id, datasetRef: emptySet.id, pipelineVersion: '1.0.0', initialStage: 'awaiting_review', idempotencyKey: `competency-project-${projectId}` }, ctx)
     const identitySource = { sourceRef: { namespace: 'competency-preview', sourceId: projectId }, objectPath: 'confirmed_identity_index' }
     const identityCatalogue = (await writer.putBytes({ scopeRef: scope, mediaType: 'application/json', content: new TextEncoder().encode(canonicalJson({ schemaVersion: 'competency-identity-catalogue@1', scopeRef: scope, projectId, definitionRef: definition.ref, identityScopes: definition.identityScopes, sourceObjectRef: identitySource })) }, ctx)).blobRef
     const identityMapping: MappingRef = { id: identityCatalogue.id, version: identityCatalogue.version, digest: identityCatalogue.digest, role: 'catalog', sourceObjectRef: identitySource }
-    const body: ProjectRevisionBody = { schemaVersion: 'project-revision@1', projectId, revision: '1', industryPackRef: template.packRef, definitionRef: definition.ref, profileRef: template.profileRef, mappingRefs: [identityMapping], documentSetRef: emptySet, semanticPublicationRefs: [], sourceVisibilityEpoch: '0', changeReason: 'internal synthetic preview; no business approval' }
-    const revision: ProjectRevision = { ref: { projectId, revision: '1', digest: sha256DigestOf(canonicalJson(body)) }, industryPackRef: body.industryPackRef, definitionRef: body.definitionRef, profileRef: body.profileRef, mappingRefs: body.mappingRefs, documentSetRef: body.documentSetRef, semanticPublicationRefs: [], sourceVisibilityEpoch: '0', changeReason: body.changeReason }
+    const body: ProjectRevisionBody = { schemaVersion: 'project-revision@1', projectId, revision: '1', executionPurpose: 'synthetic_validation', industryPackRef: template.packRef, definitionRef: definition.ref, profileRef: template.profileRef, mappingRefs: [identityMapping], documentSetRef: emptySet, semanticPublicationRefs: [], sourceVisibilityEpoch: '0', changeReason: 'internal synthetic preview; no business approval' }
+    const revision: ProjectRevision = { ref: { projectId, revision: '1', digest: sha256DigestOf(canonicalJson(body)) }, ...(body.executionPurpose === undefined ? {} : { executionPurpose: body.executionPurpose }), industryPackRef: body.industryPackRef, definitionRef: body.definitionRef, profileRef: body.profileRef, mappingRefs: body.mappingRefs, documentSetRef: body.documentSetRef, semanticPublicationRefs: [], sourceVisibilityEpoch: '0', changeReason: body.changeReason }
     await projects.createProject({ projectId, title: 'Synthetic competency preview', firstRevision: revision, idempotencyKey: `preview-${projectId}`, requestDigest: request.inputDigest, actor: ctx.principal.subjectId, recordedAt: now, outboxJobId: jobId,
       outbox: { outboxId: randomUUID(), topic: 'competency.preview.created', payload: { projectId, inputDigest: request.inputDigest }, idempotencyKey: `preview-outbox-${projectId}`, availableAt: now, createdAt: now } }, scope, ctx)
     const projectService = new ProjectService({ projects, readiness, jobs, catalogue: { listEntries: async () => [], findPack: async () => undefined } })
@@ -171,7 +224,7 @@ export function createCompetencyProjectPreparer(options: CompetencyProjectPrepar
     const sources = request.input.structuredSources ?? []
     if (sources.length > 10 || request.input.observations.length > 200) return { status: 'not_yet_executable', reason: 'the synthetic source or observation inventory exceeds its finite bound' }
     const policyParses = new Set<string>()
-    for (const row of templates) for (const span of row.rule.sourceSpans) {
+    for (const row of templates) for (const span of row.sourceSpans) {
       if (policyParses.has(span.parseId)) continue
       policyParses.add(span.parseId)
       const parsed = await options.parses.getParse(scope, span.parseId, ctx)
@@ -222,7 +275,7 @@ export function createCompetencyProjectPreparer(options: CompetencyProjectPrepar
       const nativeKeys = chosen.map((record) => canonicalJson(record.fields.filter((field) => identityFields.includes(field.fieldId)).map((field) => field.normalized)))
       if (new Set(nativeKeys).size !== nativeKeys.length) return { status: 'not_yet_executable', reason: 'the actual original has ambiguous native rows requiring an explicit record selector' }
       const extractionJobId = randomUUID()
-      const extractionJob = await new JobService({ store: jobs }).createJob({ jobId: extractionJobId, kind: 'ingestion', sourceRef: `competency-original:${original.id}`, documentRef: encodeStructuredExtractionRef({ kind: 'structured_extraction', parseId: parsed.parse.parseId, parserVersion: parsed.parse.parserVersion, definitionRef: definition.ref, format: 'csv', originalRef: original, originalMediaType: 'text/csv', options: { headerRow: 1 } }), pipelineVersion: '1.0.0', idempotencyKey: `source-job-${projectId}-${original.id}` }, ctx)
+      const extractionJob = await new JobService({ store: jobs }).createJob({ jobId: extractionJobId, kind: 'ingestion', sourceRef: `competency-original:${original.id}`, documentRef: encodeStructuredExtractionRef({ kind: 'structured_extraction', parseId: parsed.parse.parseId, parserVersion: parsed.parse.parserVersion, definitionRef: definition.ref, format: 'csv', originalRef: original, originalMediaType: 'text/csv', options: { headerRow: 1 } }), pipelineVersion: '1.0.0', initialStage: 'awaiting_review', initialCounts: { total: parsed.parse.counts.total, processed: parsed.parse.counts.succeeded, failed: parsed.parse.counts.failed, skipped: parsed.parse.counts.skipped }, idempotencyKey: `source-job-${projectId}-${original.id}` }, ctx)
       sourceJobs.set(parsed.parse.parseId, extractionJob.jobId)
       parsedInputs.push({ documentId, parseId: parsed.parse.parseId, originalRef: original, mapping: mapped.mapping.ref, objectId: source.objectId, recordRefs: chosen.map((record) => ({ recordId: record.recordId, revision: record.revision })) })
     }
@@ -261,7 +314,15 @@ export function createCompetencyProjectPreparer(options: CompetencyProjectPrepar
     }
     const publisher = facts.publication
     const versions: { declarationRef: VersionRef; published: import('@ontology/contracts').PublishedExecutableRule }[] = []
-    const ruleQueue = [...templates]
+    const projectPackOrigin = await readPack(ctx, projectId)
+    signal.throwIfAborted()
+    if (publishedPackSource && projectPackOrigin === undefined) return { status: 'not_yet_executable', reason: 'the actual sandbox project does not pin its reviewed pack rule origin' }
+    for (const row of templates.filter((row): row is Extract<TemplateRule, { origin: 'pack' }> => row.origin === 'pack')) {
+      const published = projectPackOrigin?.rules.find((published) => published.sourceCandidateId === row.rule.sourceCandidateId && same(published.ruleRef, row.rule.ruleRef))
+      if (published === undefined) return { status: 'not_yet_executable', reason: 'the actual project-qualified pack rule is unavailable' }
+      versions.push({ declarationRef: row.declarationRef, published })
+    }
+    const ruleQueue = templates.filter((row): row is Extract<TemplateRule, { origin: 'extracted' }> => row.origin === 'extracted')
     while (ruleQueue.length > 0) {
       const readyIndex = ruleQueue.findIndex((row) => (row.rule.ruleDependencies ?? []).every((id) => versions.some((version) => version.published.ruleId === id)))
       if (readyIndex < 0) return { status: 'not_yet_executable', reason: 'actual template dependencies cannot be bound topologically' }
@@ -287,8 +348,8 @@ export function createCompetencyProjectPreparer(options: CompetencyProjectPrepar
       if (published === undefined) throw new CompetencyQuestionError('INVALID_DECLARATION', 'actual tagged template rule was not published')
       versions.push({ declarationRef: row.declarationRef, published })
     }
-    const official = new PublishedSemanticSource(publications, { definition, identity: identities, projectId, maxRecords: 1000 })
-    const materializer = new IncrementalMaterializer({ publishedSource: official, materialization })
+    const official = new PublishedSemanticSource(publications, { definition, identity: identities, projectId, maxRecords: 1000, ...(!publishedPackSource || options.publishedRules === undefined ? {} : { publishedRules: { reader: options.publishedRules, request: { packRef: template.packRef, definitionRef: definition.ref, projectId } } }) })
+    const materializer = new IncrementalMaterializer({ publishedSource: official, materialization, projectionRef })
     const points = new Map<string, string>(), captures = new Map<string, PublishedSemanticData>(), captureRefs = new Map<string, ResourceRef>()
     const inputByParse = new Map(parsedInputs.map((input) => [input.parseId, input]))
     const pointFor = (candidate: EntityCandidate): string => {
@@ -361,8 +422,8 @@ export function createCompetencyProjectPreparer(options: CompetencyProjectPrepar
     if (request.intent.kind === 'relation' && selectedPoint !== points.get([...points.keys()].at(-1) ?? '1')) return { status: 'not_yet_executable', reason: 'the existing relation navigator cannot read an earlier actual recorded point' }
     const spans = new DocumentSpanReader({ blobs: options.blobs, store: options.parses })
     const structuredSources = new StructuredPremiseSourceReader({ artifacts: options.blobs, mappings, ingestion: options.structured })
-    const producer = new MaterializedRuleDerivationEvidenceProducer({ materialization, evidence, artifacts: writer, candidates, documentParses: options.parses, documentSpans: spans, structuredSources, componentRef: options.producerComponentRef })
-    const replay = new ArchivedRulePremiseReplayVerifier({ materialization, publications, evidence, artifacts: options.blobs, candidates, identity: identities, documentParses: options.parses, documentSpans: spans, structuredSources, projects, projectDocuments: documents, records, readMode: 'published_snapshot' })
+    const producer = new MaterializedRuleDerivationEvidenceProducer({ materialization, projectionRef, evidence, artifacts: writer, candidates, documentParses: options.parses, documentSpans: spans, structuredSources, componentRef: options.producerComponentRef })
+    const replay = new ArchivedRulePremiseReplayVerifier({ materialization, projectionRef, publications, evidence, artifacts: options.blobs, candidates, identity: identities, documentParses: options.parses, documentSpans: spans, structuredSources, projects, projectDocuments: documents, records, readMode: 'published_snapshot', ...(!publishedPackSource || options.publishedRules === undefined ? {} : { publishedRules: options.publishedRules }) })
     const snapshotSource = new PublishedProjectDatasetSource({ publications, identity: identities, records, mappings, projectDocuments: documents, definition: async (_scope, wanted) => same(wanted, definition.ref) ? definition : undefined })
     let query: import('./competency-execution').PreparedCompetencyCase['query']
     if (request.intent.kind === 'quantity_sum') {
@@ -390,7 +451,7 @@ export function createCompetencyProjectPreparer(options: CompetencyProjectPrepar
     const fixedIdentities = await identities.readPublishedBindings(scope, [...selected.values()].map((row) => row.candidateId), ctx)
     if (fixedProject === undefined || fixedIdentities === undefined || !fixedIdentities.complete) return { status: 'not_yet_executable', reason: 'the exact current project/source/identity authority cannot be captured' }
     const fixedRules: RuleCandidate[] = []
-    for (const row of versions) { const stored = await candidates.getCandidate(scope, row.published.sourceCandidateId, ctx); if (stored?.kind !== 'rule') throw new CompetencyQuestionError('DIGEST_MISMATCH', 'actual sandbox rule disappeared'); fixedRules.push(stored) }
+    for (const row of versions.filter((version) => !('publishedPackRef' in version.published))) { const stored = await candidates.getCandidate(scope, row.published.sourceCandidateId, ctx); if (stored?.kind !== 'rule') throw new CompetencyQuestionError('DIGEST_MISMATCH', 'actual sandbox rule disappeared'); fixedRules.push(stored) }
     const fixedRecords: ProjectRecordVersion[] = []
     const fixedInstanceRecords: InstanceRecordView[] = []
     for (const candidate of selected.values()) {
@@ -415,6 +476,8 @@ export function createCompetencyProjectPreparer(options: CompetencyProjectPrepar
       for (const source of consumed.values()) { cancellation.throwIfAborted(); const bytes = await originalReader.read({ approvedInputRefs: [source] }, context); if (sha256DigestOfBytes(bytes) !== source.digest) throw new CompetencyQuestionError('DIGEST_MISMATCH', 'the actual original changed during execution') }
       for (const expected of fixedRecords) if (canonicalJson(await records.getRecord(scope, projectId, expected.recordId, context)) !== canonicalJson(expected)) throw new CompetencyQuestionError('DIGEST_MISMATCH', 'an actual selected record changed during execution')
       for (const expected of fixedInstanceRecords) if (canonicalJson(await instances.getRecord(scope, projectId, expected.recordId, context)) !== canonicalJson(expected)) throw new CompetencyQuestionError('DIGEST_MISMATCH', 'an actual human field or instance approval changed during execution')
+      const currentProjectPackOrigin = await readPack(context, projectId)
+      if (projectPackOrigin !== undefined && (currentProjectPackOrigin === undefined || canonicalJson(currentProjectPackOrigin) !== canonicalJson(projectPackOrigin))) throw new CompetencyQuestionError('DIGEST_MISMATCH', 'the actual project-qualified pack rule origin or current human approval changed')
       for (const expected of fixedRules) {
         const current = await candidates.getCandidate(scope, expected.candidateId, context)
         const view = await new CompositeReviewableCandidateReader({ definition: new PostgresAssetCandidateStore(db), instance: candidates }).readCandidate(scope, expected.candidateId, context)
@@ -425,15 +488,15 @@ export function createCompetencyProjectPreparer(options: CompetencyProjectPrepar
       if (canonicalJson(await projects.getProject(scope, projectId, context)) !== canonicalJson(fixedProject) || canonicalJson(await documents.getVisibility(scope, projectId, context)) !== canonicalJson(fixedVisibility)) throw new CompetencyQuestionError('DIGEST_MISMATCH', 'the final actual project/source epoch changed during validation reads')
       cancellation.throwIfAborted()
     }
-    const bindingRef = (await writer.putBytes({ scopeRef: scope, mediaType: 'application/json', content: new TextEncoder().encode(canonicalJson({ schemaVersion: 'competency-actual-input-binding@1', inputDigest: request.inputDigest, templateBindingRef: artifactRef, declarationProjectId: request.input.projectId, projectRevisionRef: project.ref, declarationDefinitionRef: request.definitionRef, definitionRef: definition.ref, selectedRecordedPoint: selectedPoint, rules: versions.map((version) => ({ declarationRef: version.declarationRef, actualRef: publishedRuleRef(version.published) })), recordedPoints: [...points].map(([logical, actual]) => ({ logical, actual, captureRef: captureRefs.get(logical) })), originals: [...consumed.values()], entityBindings: [...entities], businessBindings: [...businessIds], withdrawals: [...statementForFact].map(([logicalFactId, actualStatementId]) => ({ logicalFactId, actualStatementId })), ...(validationTargetDigest === undefined ? {} : { validationTargetDigest }), dataMode: 'synthetic', businessApproval: 'none' })) }, ctx)).blobRef
-    return { status: 'prepared', input: { validateCurrent, executionInputRef: bindingRef, declaredProjectId: request.input.projectId, declarationDefinitionRef: request.definitionRef, project, definition, recordedPoint: selectedPoint, entities, businessIds, consumedOriginals: [...consumed.values()], ...(validationTargetDigest === undefined ? {} : { validationTargetDigest }), facts: { load: async (requestedScope) => {
+    const bindingRef = (await writer.putBytes({ scopeRef: scope, mediaType: 'application/json', content: new TextEncoder().encode(canonicalJson({ schemaVersion: 'competency-actual-input-binding@1', inputDigest: request.inputDigest, templateBindingRef: artifactRef, declarationProjectId: request.input.projectId, projectRevisionRef: project.ref, declarationDefinitionRef: request.definitionRef, definitionRef: definition.ref, projectionRef, projectionConfigRef, selectedRecordedPoint: selectedPoint, rules: versions.map((version) => ({ declarationRef: version.declarationRef, actualRef: publishedRuleRef(version.published) })), recordedPoints: [...points].map(([logical, actual]) => ({ logical, actual, captureRef: captureRefs.get(logical) })), originals: [...consumed.values()], entityBindings: [...entities], businessBindings: [...businessIds], withdrawals: [...statementForFact].map(([logicalFactId, actualStatementId]) => ({ logicalFactId, actualStatementId })), ...(validationTargetDigest === undefined ? {} : { validationTargetDigest }), dataMode: 'synthetic', businessApproval: 'none' })) }, ctx)).blobRef
+    return { status: 'prepared', input: { validateCurrent, executionInputRef: bindingRef, projection: { ref: projectionRef, configRef: projectionConfigRef }, declaredProjectId: request.input.projectId, declarationDefinitionRef: request.definitionRef, project, definition, recordedPoint: selectedPoint, entities, businessIds, consumedOriginals: [...consumed.values()], ...(validationTargetDigest === undefined ? {} : { validationTargetDigest }), facts: { load: async (requestedScope) => {
       if (requestedScope.tenantId !== scope.tenantId || requestedScope.spaceId !== scope.spaceId) throw new CompetencyQuestionError('SCOPE_MISMATCH', 'captured input belongs to another scope')
       const actual = await publications.latestReadRevision(scope, ctx)
       if (points.get([...points.keys()].at(-1) ?? '1') !== actual) throw new CompetencyQuestionError('DIGEST_MISMATCH', 'actual published head changed after capture')
       const saved = await options.blobs.readAuthorized({ scopeRef: scope, blobRef: selectedCapture }, ctx)
       if (sha256DigestOfBytes(saved) !== selectedCapture.digest || canonicalJson(JSON.parse(new TextDecoder('utf-8', { fatal: true }).decode(saved)) as unknown) !== canonicalJson({ schemaVersion: 'competency-published-capture@1', projectRevisionRef: project.ref, definitionRef: definition.ref, recordedPoint: selectedPoint, data: captured })) throw new CompetencyQuestionError('DIGEST_MISMATCH', 'the archived official point capture changed')
       return captured
-    } }, ...(query === undefined ? {} : { query }), ...(compute === undefined ? {} : { compute }), ...(versions.length === 0 ? {} : { rules: { materializer, recordedPoint: selectedPoint, projectionRef: definition.ref, versions, producer, replay } }),
+    } }, ...(query === undefined ? {} : { query }), ...(compute === undefined ? {} : { compute }), ...(versions.length === 0 ? {} : { rules: { materializer, recordedPoint: selectedPoint, projectionRef, versions, producer, replay } }),
       relations: { navigator: new PublishedRelationNavigator({ publications, identity: identities, definitionRef: definition.ref, allowedRelationIds: definition.relations.map((relation) => relation.id), relationTargets: new Map(definition.relations.map((relation) => [relation.id, { fromObjectId: relation.fromObjectId, toObjectId: relation.toObjectId }])) }), readRecordedPoint: async (requestedScope, context) => {
         if (requestedScope.tenantId !== scope.tenantId || requestedScope.spaceId !== scope.spaceId) throw new CompetencyQuestionError('SCOPE_MISMATCH', 'the actual relation head belongs to another scope')
         return publications.latestReadRevision(requestedScope, context)

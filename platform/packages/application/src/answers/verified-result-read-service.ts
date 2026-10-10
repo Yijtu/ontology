@@ -49,6 +49,8 @@ export interface VerifiedTableSummary {
   readonly columns: readonly TableColumnDescriptor[]
   readonly complete: boolean
   readonly verificationReceiptRef?: ResourceRef
+  readonly tableManifestRef?: ResourceRef
+  readonly tableManifestDigest?: Sha256Digest
 }
 
 /** The authorized, data-only projection of a verified `typed-result-manifest@1`. */
@@ -250,7 +252,7 @@ export class VerifiedResultReadService {
       totalRows: table.totalRows,
       columns: table.columns,
       complete: table.complete,
-      ...(receiptRef === undefined ? {} : { verificationReceiptRef: receiptRef }),
+      ...(receiptRef === undefined || archived === undefined ? {} : { verificationReceiptRef: receiptRef, tableManifestRef: archived.ref, tableManifestDigest: tableManifestContentDigest(table) }),
     }
   }
 }

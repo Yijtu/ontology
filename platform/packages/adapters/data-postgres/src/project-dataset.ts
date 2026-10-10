@@ -10,6 +10,8 @@ import {
   assertProjectDatasetSnapshotShape,
   assertProjectDatasetMetadataShape,
   assertProjectDatasetActivationShape,
+  PROJECT_DATASET_SOURCE_ORIGIN_DIGEST_VERSION,
+  isProjectDatasetSourceOriginDigest,
   projectDatasetPhysicalCellsMatch,
 } from '@ontology/contracts'
 import type {
@@ -303,7 +305,7 @@ export class PostgresProjectDatasetAdapter
       for (let start = 0; start < body.rows.length; start += INSERT_BATCH) {
         const batch = body.rows.slice(start, start + INSERT_BATCH)
         const valuesSql = batch
-          .map((_row, index) => `($${String(index * 6 + 1)}::uuid, $${String(index * 6 + 2)}::uuid, $${String(index * 6 + 3)}, $${String(index * 6 + 4)}, $${String(index * 6 + 5)}::jsonb, $${String(index * 6 + 6)}::jsonb)`)
+          .map((_row, index) => `($${String(index * 7 + 1)}::uuid, $${String(index * 7 + 2)}::uuid, $${String(index * 7 + 3)}, $${String(index * 7 + 4)}, $${String(index * 7 + 5)}::jsonb, $${String(index * 7 + 6)}::jsonb, $${String(index * 7 + 7)})`)
           .join(', ')
         const parameters = batch.flatMap((row) => [
           snapshotId,
@@ -312,9 +314,10 @@ export class PostgresProjectDatasetAdapter
           row.sourceRowKey,
           JSON.stringify(row.values),
           JSON.stringify(row.sources),
+          sha256DigestOf(stableJson(row.sources)),
         ])
         await client.query(
-          `INSERT INTO ${this.#table(ROW_TABLE)} (snapshot_id, record_id, object_id, source_row_key, values, sources)
+          `INSERT INTO ${this.#table(ROW_TABLE)} (snapshot_id, record_id, object_id, source_row_key, values, sources, sources_digest)
            VALUES ${valuesSql}
            ON CONFLICT (snapshot_id, record_id) DO NOTHING`,
           parameters,
@@ -330,22 +333,7 @@ export class PostgresProjectDatasetAdapter
       // so a quantity becomes a real `numeric` and a boolean a real `boolean`. The view is
       // pinned to this snapshot id and is the only relation the query path can address.
       const view = queryViewName(snapshotId)
-      const projections = [
-        `record_id::text AS ${quoteIdentifier('record_id')}`,
-        `object_id AS ${quoteIdentifier('object_id')}`,
-        ...body.columns.map(
-          (column) =>
-            `(values -> ${quoteLiteral(column.name)} ->> 'value')::${postgresTypeOfProject(column.valueType)} AS ${quoteIdentifier(column.name)}`,
-        ),
-        `sources::text AS ${quoteIdentifier('sources_json')}`,
-        `source_row_key AS ${quoteIdentifier('source_row_key')}`,
-        `values::text AS ${quoteIdentifier('values_json')}`,
-      ].join(', ')
-      await client.query(
-        `CREATE OR REPLACE VIEW ${this.#table(view)} AS
-           SELECT ${projections} FROM ${this.#table(ROW_TABLE)}
-          WHERE snapshot_id = ${quoteLiteral(snapshotId)}::uuid`,
-      )
+      await client.query(this.#queryViewSql(snapshotId, stored.metadata))
       await client.query('COMMIT')
       this.#staged.set(snapshotId, {
         scopeKey: scopeKeyOf(scopeRef),
@@ -466,6 +454,7 @@ export class PostgresProjectDatasetAdapter
       relationKind: 'view',
       sourceObjectRef: projectDatasetSourceObjectRef(staged.snapshotId, staged.objectId),
       columns: staged.columns,
+      sourceProjection: 'full_array',
       metadata: staged.metadata,
     }
   }
@@ -677,9 +666,11 @@ export class PostgresProjectDatasetAdapter
          source_row_key text NOT NULL,
          values jsonb NOT NULL,
          sources jsonb NOT NULL,
+         sources_digest text,
          PRIMARY KEY (snapshot_id, record_id)
        )`,
     )
+    await this.#pool.query(`ALTER TABLE ${this.#table(ROW_TABLE)} ADD COLUMN IF NOT EXISTS sources_digest text`)
   }
 
   async #deleteSnapshot(snapshotId: string): Promise<void> {
@@ -716,7 +707,7 @@ export class PostgresProjectDatasetAdapter
         target.pid = pid.rows[0]?.pid
         if (target.cancelled) throw new PostgresQueryError('INTERNAL_ERROR', 'the project query was cancelled before integrity verification')
       }
-      await client.query('BEGIN TRANSACTION ISOLATION LEVEL REPEATABLE READ READ ONLY')
+      await client.query('BEGIN TRANSACTION ISOLATION LEVEL REPEATABLE READ')
       const result = await client.query<MetaRow>(`SELECT metadata, canonical_digest, schema_digest, columns, row_count::text AS row_count FROM ${this.#table(SNAPSHOT_TABLE)} WHERE snapshot_id = $1::uuid AND metadata->'scopeRef'->>'tenantId' = $2 AND metadata->'scopeRef'->>'spaceId' = $3`, [id, scope.tenantId, scope.spaceId])
       const record = result.rows[0]
       if (record?.metadata === undefined || record.metadata === null) { await client.query('ROLLBACK'); return undefined }
@@ -725,7 +716,17 @@ export class PostgresProjectDatasetAdapter
       if (metadata.snapshotRef.id !== id || scopeKeyOf(metadata.scopeRef) !== scopeKeyOf(scope)) { await client.query('ROLLBACK'); return undefined }
       const relation = await client.query<{ present: boolean }>('SELECT to_regclass($1) IS NOT NULL AS present', [this.#table(queryViewName(id))])
       if (relation.rows[0]?.present !== true) { await client.query('ROLLBACK'); this.#staged.delete(id); return undefined }
+      const fullSourcesColumn = await client.query<{ present: boolean }>(
+        `SELECT EXISTS (SELECT 1 FROM information_schema.columns WHERE table_schema = $1 AND table_name = $2 AND column_name = 'sources_full_json') AS present`,
+        [this.#schema, queryViewName(id)],
+      )
+      const needsSourceLayoutUpgrade = fullSourcesColumn.rows[0]?.present !== true
       const persisted = await this.#readRows(client, id, metadata.body.columns)
+      if (needsSourceLayoutUpgrade) {
+        await this.#assertPhysicalIntegrity(client, metadata, persisted, record.canonical_digest, record.schema_digest, false)
+        await this.#assertLegacySourceProjection(client, metadata.snapshotRef.id, persisted)
+        await client.query(this.#queryViewSql(id, metadata))
+      }
       await this.#assertPhysicalIntegrity(client, metadata, persisted, record.canonical_digest, record.schema_digest)
       await client.query('COMMIT')
     } catch (error) {
@@ -741,14 +742,55 @@ export class PostgresProjectDatasetAdapter
     return staged
   }
 
-  async #assertPhysicalIntegrity(client: PoolClient, metadata: ProjectDatasetSnapshotMetadata, persisted: readonly ProjectDatasetRow[], canonicalDigest: string, schemaDigest: string): Promise<void> {
+  async #assertPhysicalIntegrity(client: PoolClient, metadata: ProjectDatasetSnapshotMetadata, persisted: readonly ProjectDatasetRow[], canonicalDigest: string, schemaDigest: string, verifySourceProjection = true): Promise<void> {
     assertProjectDatasetSnapshotShape({ ref: metadata.snapshotRef, body: { ...metadata.body, rows: persisted } })
+    const sourcePins = await client.query<{ record_id: string; sources_digest: string | null }>(`SELECT record_id::text AS record_id, sources_digest FROM ${this.#table(ROW_TABLE)} WHERE snapshot_id = $1::uuid ORDER BY record_id LIMIT 20001`, [metadata.snapshotRef.id])
+    if (sourcePins.rows.length !== persisted.length || sourcePins.rows.some((pin, index) => pin.record_id !== persisted[index]?.recordId || pin.sources_digest !== null && pin.sources_digest !== sha256DigestOf(stableJson(persisted[index]?.sources)))) throw new ProjectDatasetError('SNAPSHOT_UNAVAILABLE', 'the compact PostgreSQL source pin differs from its complete stored source array')
     const view = this.#table(queryViewName(metadata.snapshotRef.id))
     const typed = await client.query<unknown[]>({ text: `SELECT ${["record_id", ...metadata.body.columns.map((column) => column.name)].map(quoteIdentifier).join(', ')} FROM ${view} ORDER BY "record_id" LIMIT 20001`, rowMode: 'array' })
     const physical = typed.rows.map((row) => ({ recordId: String(row[0]), values: Object.fromEntries(metadata.body.columns.map((column, index) => [column.name, normalizeCell(row[index + 1])])) }))
+    if (verifySourceProjection) {
+      const sourceRows = await client.query<unknown[]>({ text: `SELECT "record_id", "sources_full_json" FROM ${view} ORDER BY "record_id" LIMIT 20001`, rowMode: 'array' })
+      if (sourceRows.rows.length !== persisted.length || sourceRows.rows.some((row, index) => {
+        const expected = persisted[index]
+        if (expected === undefined || String(row[0]) !== expected.recordId) return true
+        try { return stableJson(JSON.parse(String(row[1])) as unknown) !== stableJson(expected.sources) } catch { return true }
+      })) throw new ProjectDatasetError('SNAPSHOT_UNAVAILABLE', 'the fixed PostgreSQL full-source projection differs from its complete stored source array')
+    }
     if (persisted.length !== metadata.body.coverage.processedCount || metadata.rowContentDigest !== sha256DigestOf(stableJson(persisted)) ||
       canonicalDigestOf(metadata.body.columns, persisted) !== canonicalDigest || sha256DigestOf(stableJson(metadata.body.columns)) !== schemaDigest ||
       !projectDatasetPhysicalCellsMatch(metadata.body.columns, persisted, physical)) throw new ProjectDatasetError('SNAPSHOT_UNAVAILABLE', 'the immutable PostgreSQL projection rows or typed columns changed')
+  }
+
+  async #assertLegacySourceProjection(client: PoolClient, snapshotId: string, persisted: readonly ProjectDatasetRow[]): Promise<void> {
+    const view = this.#table(queryViewName(snapshotId))
+    const rows = await client.query<unknown[]>({ text: `SELECT "record_id", "sources_json" FROM ${view} ORDER BY "record_id" LIMIT 20001`, rowMode: 'array' })
+    if (rows.rows.length !== persisted.length || rows.rows.some((row, index) => {
+      const expected = persisted[index]
+      if (expected === undefined || String(row[0]) !== expected.recordId) return true
+      let parsed: unknown
+      try { parsed = JSON.parse(String(row[1])) as unknown } catch { return true }
+      if (Array.isArray(parsed)) return stableJson(parsed) !== stableJson(expected.sources)
+      return !isProjectDatasetSourceOriginDigest(parsed) || parsed.recordId !== expected.recordId || parsed.sourcesDigest !== sha256DigestOf(stableJson(expected.sources))
+    })) throw new ProjectDatasetError('SNAPSHOT_UNAVAILABLE', 'the legacy PostgreSQL source projection differs from its complete stored source array')
+  }
+
+  #queryViewSql(snapshotId: string, metadata: ProjectDatasetSnapshotMetadata): string {
+    const projections = [
+      `record_id::text AS ${quoteIdentifier('record_id')}`,
+      `object_id AS ${quoteIdentifier('object_id')}`,
+      ...metadata.body.columns.map(
+        (column) =>
+          `(values -> ${quoteLiteral(column.name)} ->> 'value')::${postgresTypeOfProject(column.valueType)} AS ${quoteIdentifier(column.name)}`,
+      ),
+      `CASE WHEN sources_digest IS NULL THEN sources::text ELSE jsonb_build_object('schemaVersion', ${quoteLiteral(PROJECT_DATASET_SOURCE_ORIGIN_DIGEST_VERSION)}, 'recordId', record_id::text, 'sourcesDigest', sources_digest)::text END AS ${quoteIdentifier('sources_json')}`,
+      `source_row_key AS ${quoteIdentifier('source_row_key')}`,
+      `values::text AS ${quoteIdentifier('values_json')}`,
+      `sources::text AS ${quoteIdentifier('sources_full_json')}`,
+    ].join(', ')
+    return `CREATE OR REPLACE VIEW ${this.#table(queryViewName(snapshotId))} AS
+      SELECT ${projections} FROM ${this.#table(ROW_TABLE)}
+      WHERE snapshot_id = ${quoteLiteral(snapshotId)}::uuid`
   }
 
   async #restoreDeclared(objects: readonly import('@ontology/contracts').SourceObjectRef[], ctx: ToolContext, target?: ActiveProjectQuery): Promise<void> {

@@ -142,7 +142,7 @@ function requiredReadinessOf(kind: TaskKind): readonly ('published_semantics' | 
 }
 
 function bodyFor(
-  scenario: CoreExampleScenario,
+  scenario: Pick<CoreExampleScenario, 'definitionRef'>,
   kind: TaskKind,
 ): PublishedTaskBindingBody {
   const parameterSchema = parameterSchemaOf(kind)
@@ -201,6 +201,16 @@ export const CORE_MOUNTED_TASK_KINDS: readonly TaskKind[] = [
 
 export function coreScenarioTaskBindings(scenario: CoreExampleScenario): readonly PublishedTaskBinding[] {
   return CORE_MOUNTED_TASK_KINDS.map((kind) => bindingOf(bodyFor(scenario, kind)))
+}
+
+/** Normal stored definitions use the same finite host handlers and canonical binding body. */
+export async function mountCoreDefinitionTaskBindings(store: TaskBindingStore, definitionRef: VersionRef, scopeRef: ScopeRef, ctx: ToolContext): Promise<void> {
+  for (const kind of CORE_MOUNTED_TASK_KINDS) {
+    const binding = bindingOf(bodyFor({ definitionRef }, kind))
+    const current = await store.getBinding(scopeRef, binding.taskBindingRef, ctx)
+    if (current === undefined) await store.putBinding(scopeRef, binding, ctx)
+    else if (canonicalJson(current) !== canonicalJson(binding)) throw new Error('the stored definition task binding differs from the actual finite host contract')
+  }
 }
 
 /** The exact binding ref the host mounts for one (scenario, kind); deterministic and reusable. */

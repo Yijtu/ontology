@@ -8,11 +8,14 @@ export { assertComputeHandlerArtifact, computeBuildArtifactDigest, createArtifac
 export type { ArtifactComputeHandlerOptions, ComputeBuildArtifactManifest } from './build-artifact'
 export {
   EXAMPLE_ALGORITHM_REF,
+  EXAMPLE_COMPUTE_DATA_SCHEMA,
+  EXAMPLE_COMPUTE_INPUT_REQUIREMENTS,
   EXAMPLE_INPUT_SCHEMA_VERSION,
   EXAMPLE_OPERATION_LIMITS,
   EXAMPLE_OPERATION_REF,
   EXAMPLE_RESULT_MEDIA_TYPE,
   createExampleComputeHandlers,
+  decodeExampleComputeInput,
   exampleOperationRegistry,
   exampleRegisteredOperation,
 } from './example-operation'

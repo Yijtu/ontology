@@ -13,6 +13,7 @@ import { EXAMPLE_OPERATION_REF } from './artifacts/example.mjs'
 export { EXAMPLE_INPUT_SCHEMA_VERSION, EXAMPLE_OPERATION_REF, EXAMPLE_RESULT_MEDIA_TYPE } from './artifacts/example.mjs'
 import { createArtifactComputeHandlers, verifyComputeBuildArtifact } from './build-artifact'
 import { ComputeExecutionError } from './errors'
+export { decodeInput as decodeExampleComputeInput } from './example-aggregation'
 
 export interface ExampleComputeArtifactOptions {
   /** Host reader for the public @ontology/tool-services/compute/example-artifact static asset. */
@@ -40,6 +41,18 @@ const INPUT_SCHEMA: Readonly<Record<string, unknown>> = {
   type: 'object',
   additionalProperties: false,
   properties: {},
+}
+
+/** The immutable rows artifact read by the handler; distinct from invocation parameters. */
+export const EXAMPLE_COMPUTE_DATA_SCHEMA: Readonly<Record<string, unknown>> = {
+  type: 'object', additionalProperties: false, required: ['rows'],
+  properties: { rows: { type: 'array', items: { type: 'object', additionalProperties: false,
+    required: ['id', 'amount'], properties: { id: { type: 'string' }, amount: { type: 'string' },
+      unit: { type: 'string' }, currency: { type: 'string' } } } } },
+}
+export const EXAMPLE_COMPUTE_INPUT_REQUIREMENTS = {
+  maxDecimalPlaces: 4, units: ['each'], currencies: ['CNY'], minimumAmount: '0',
+  description: '这项登记计算汇总每件数量与人民币金额，支持非负数、最多四位小数；工时等其他单位暂不可用。',
 }
 
 const OUTPUT_SCHEMA: Readonly<Record<string, unknown>> = {

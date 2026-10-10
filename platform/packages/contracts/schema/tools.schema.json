@@ -825,7 +825,8 @@
         "rows": {
           "type": "array",
           "items": {
-            "type": "array"
+            "type": "array",
+            "items": {}
           }
         }
       }
@@ -880,6 +881,9 @@
         },
         "computation": {
           "$ref": "#/$defs/ComputationData"
+        },
+        "coverage": {
+          "$ref": "#/$defs/ToolCoverage"
         }
       }
     }

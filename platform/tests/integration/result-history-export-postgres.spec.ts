@@ -6,6 +6,7 @@ import { afterAll, beforeAll, describe, expect, it } from 'vitest'
 import {
   ControlPostgresDatabase,
   PostgresAnswerStore,
+  PostgresEvidenceStore,
   PostgresRunExecutionBindingStore,
   PostgresTableArtifactStore,
   PostgresTableVerificationStore,
@@ -17,17 +18,20 @@ import {
 } from '@ontology/adapter-blob-local'
 import {
   ResultHistoryService,
+  TableHardVerificationService,
   TableArtifactReadService,
   VerifiedResultExportService,
   VerifiedResultReadService,
   canonicalJson,
   typedResultManifestContentDigest,
 } from '@ontology/application'
+import type { VerificationArtifactStore } from '@ontology/application'
 import { createApiServer, createBlobArtifactWriter } from '@ontology/app-api'
 import type { AuthenticatedRequest } from '@ontology/app-api'
 import {
   createToolContext,
   sha256OfCanonical,
+  tableManifestContentDigest,
   tableArtifactContentDigest,
   tablePageCoverageDigest,
 } from '@ontology/contracts'
@@ -39,7 +43,7 @@ import type {
   TableArtifactManifest,
   TableArtifactPageBody,
   TableColumnDescriptor,
-  TableVerificationReceipt,
+  EvidenceEnvelope,
   ToolContext,
   TypedResultManifest,
   VerifiedTableManifestSource,
@@ -84,6 +88,7 @@ let otherScope: JobTestScope
 let answerStore: PostgresAnswerStore
 let tableStore: PostgresTableArtifactStore
 let verificationStore: PostgresTableVerificationStore
+let verificationArtifacts: VerificationArtifactStore
 let app: ReturnType<typeof createApiServer>
 
 function ctxFor(target: JobTestScope, runId: string): ToolContext {
@@ -111,16 +116,7 @@ function scopeRefOf(target: JobTestScope): ScopeRef {
   return { tenantId: target.tenantId, spaceId: target.spaceId }
 }
 
-function evidenceRef(seed: number): ResourceRef {
-  return {
-    id: `10000000-0000-4000-8000-${String(seed).padStart(12, '0')}`,
-    version: '1.0.0',
-    digest: DIGEST,
-    kind: 'evidence',
-  }
-}
-
-function pageBody(pageIndex: number): TableArtifactPageBody {
+function pageBody(pageIndex: number, evidenceRef: ResourceRef, resultDigest: string): TableArtifactPageBody {
   const rowKey = `r-${pageIndex}`
   return {
     schemaVersion: 'table-artifact-page@1',
@@ -133,9 +129,9 @@ function pageBody(pageIndex: number): TableArtifactPageBody {
       {
         rowKey,
         subject: `site-${rowKey}`,
-        cells: { amount: '1' },
+    cells: { amount: { value: '1', unit: 'kWh' } },
         bindings: [
-          { rowKey, columnRef: 'amount', evidenceRef: evidenceRef(1), resultDigest: DIGEST, valuePointer: '/amount', subjectPointer: '/site', unitPointer: '/unit' },
+          { rowKey, columnRef: 'amount', evidenceRef, resultDigest, valuePointer: '/amount', subjectPointer: '/site', unitPointer: '/unit' },
         ],
       },
     ],
@@ -226,7 +222,25 @@ async function seedAnswer(
   const ctx = ctxFor(target, runId)
   const scopeRef = scopeRefOf(target)
 
-  const body = pageBody(0)
+  const payload = { amount: '1', site: 'site-r-0', unit: 'kWh' }
+  const payloadBytes = new TextEncoder().encode(canonicalJson(payload))
+  const payloadArtifact = await artifactWriter.putBytes({ scopeRef, content: payloadBytes, mediaType: 'application/json' }, ctx)
+  const evidenceId = randomUUID()
+  const envelope: EvidenceEnvelope = {
+    evidenceId,
+    kind: 'observation',
+    scopeRef,
+    producedBy: { componentRef: { id: 'result-history-fixture', version: '1.0.0', digest: DIGEST }, runId },
+    observedAt: NOW,
+    sourceSnapshots: [{ sourceRef: { namespace: 'fixture', sourceId: 'table-row' }, schemaVersion: '1', readAt: NOW, consistency: 'repeatable_read', resultDigest: payloadArtifact.blobRef.digest }],
+    resultDigest: payloadArtifact.blobRef.digest,
+    dependencies: [],
+    dataMode: 'synthetic',
+    payloadRef: payloadArtifact.blobRef,
+    integrity: { algorithm: 'sha256', digest: payloadArtifact.blobRef.digest, verifiedAt: NOW },
+  }
+  const evidenceRecord = await new PostgresEvidenceStore(database).record(scopeRef, envelope, ctx)
+  const body = pageBody(0, evidenceRecord.evidenceRef, payloadArtifact.blobRef.digest)
   const pageRef: ResourceRef = { id: randomUUID(), version: '1.0.0', digest: tableArtifactContentDigest(body), kind: 'artifact' }
   await tableStore.putPage(scopeRef, pageRef, body, ctx)
   const tableManifest: TableArtifactManifest = {
@@ -250,23 +264,14 @@ async function seedAnswer(
     coverage: { returned: 1, truncated: false },
     complete: true,
   }
-  const receipt: TableVerificationReceipt = {
-    schemaVersion: 'table-verification-receipt@1',
-    draftHash: DIGEST,
-    resultManifestRef: { id: randomUUID(), version: '1.0.0', digest: sha256OfCanonical(tableManifest), kind: 'artifact' },
-    resultManifestDigest: sha256OfCanonical(tableManifest),
-    tableId: 'table.small',
-    pageDigests: [pageRef.digest],
-    checkedRows: 1,
-    expectedRows: 1,
-    checkedCells: 1,
-    expectedCells: 1,
-    checksDigest: DIGEST_B,
-    policyVersion: 'table-hard-verification@1',
-  }
-  const receiptRef: ResourceRef = { id: randomUUID(), version: '1.0.0', digest: sha256OfCanonical(receipt), kind: 'verification' }
-  await verificationStore.putReceipt(scopeRef, receiptRef, receipt, ctx)
-  await tableStore.putManifest(scopeRef, answerId, { id: randomUUID(), version: '1.0.0', digest: sha256OfCanonical(tableManifest), kind: 'artifact' }, tableManifest, receiptRef, ctx)
+  const manifestBytes = new TextEncoder().encode(canonicalJson(tableManifest))
+  const manifestArtifact = await artifactWriter.putBytes({ scopeRef, content: manifestBytes, mediaType: 'application/json' }, ctx)
+  expect(manifestArtifact.blobRef.digest).toBe(tableManifestContentDigest(tableManifest))
+  const contentHash = sha256OfCanonical({ content: answerId })
+  const verifier = new TableHardVerificationService({ pages: tableStore, evidence: new PostgresEvidenceStore(database), artifacts: verificationArtifacts, receipts: verificationStore, progress: verificationStore })
+  const verified = await verifier.verifyTable({ resultManifestRef: manifestArtifact.blobRef, resultManifestDigest: manifestArtifact.blobRef.digest, draftHash: contentHash, tableId: tableManifest.tableId, manifest: tableManifest }, ctx)
+  if (verified.status !== 'pass') throw new Error(`the result-history fixture did not earn a verification receipt: ${verified.report.findings.map((finding) => finding.code).join(', ')}`)
+  await tableStore.putManifest(scopeRef, answerId, manifestArtifact.blobRef, tableManifest, verified.receipt.ref, ctx)
 
   const bindingRef: ResourceRef = { id: randomUUID(), version: '1.0.0', digest: DIGEST, kind: 'plan' }
   const typedManifest: TypedResultManifest = {
@@ -290,7 +295,6 @@ async function seedAnswer(
   )
   expect(archived.blobRef.digest).toBe(resultManifestDigest)
 
-  const contentHash = sha256OfCanonical({ content: answerId })
   const answer: PublishedAnswer = {
     answerId,
     runId,
@@ -318,8 +322,8 @@ async function seedAnswer(
           value: { value: '1', unit: 'kWh' },
           time: { asOf: publishedAt },
           references: [
-            { evidenceRef: evidenceRef(1), resultDigest: DIGEST, valuePointer: '/amount', unitPointer: '/unit', subjectPointer: '/site' },
-            { evidenceRef: evidenceRef(1), resultDigest: DIGEST, valuePointer: '/amount', unitPointer: '/unit', subjectPointer: '/site' },
+            { evidenceRef: evidenceRecord.evidenceRef, resultDigest: payloadArtifact.blobRef.digest, valuePointer: '/amount', unitPointer: '/unit', subjectPointer: '/site' },
+            { evidenceRef: evidenceRecord.evidenceRef, resultDigest: payloadArtifact.blobRef.digest, valuePointer: '/amount', unitPointer: '/unit', subjectPointer: '/site' },
           ],
         },
       ],
@@ -330,7 +334,7 @@ async function seedAnswer(
   }
   await answerStore.record({ answer, expectedRunState: 'published', expectedRunRevision: '1' }, ctx)
   await seedBinding(target, runId, bindingRef, projectId, projectRevision)
-  return { answerId, runId, contentHash, sourceEvidenceId: evidenceRef(1).id }
+  return { answerId, runId, contentHash, sourceEvidenceId: evidenceRecord.evidenceRef.id }
 }
 
 function get(path: string, scopeTag: 'primary' | 'other' | 'none' = 'primary') {
@@ -350,6 +354,10 @@ beforeAll(async () => {
   await objectStore.init()
   registry = new PostgresArtifactRegistry({ connectionString: harness.appUrl, maxPoolSize: 4 })
   const blobStore = new LocalImmutableBlobStore({ objectStore, registry })
+  verificationArtifacts = {
+    getAuthorized: (request, ctx) => blobStore.getAuthorized(request, ctx),
+    readAuthorized: (request, ctx) => blobStore.readAuthorized(request, ctx),
+  }
   artifactWriter = createBlobArtifactWriter(blobStore)
 
   answerStore = new PostgresAnswerStore(database)

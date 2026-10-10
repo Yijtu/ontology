@@ -172,6 +172,7 @@ export interface IdentityInvalidationEvent {
 
 export interface IdentityEntityFilter {
   readonly objectId?: string
+  readonly projectId?: Uuid
   readonly state?: IdentityEntityState
   /** Bounded page size; a caller never reads an unbounded entity table. */
   readonly limit?: number
@@ -247,6 +248,8 @@ export interface AppendIdentityDecisionInput {
  * overwriting the winner.
  */
 export interface IdentityDecisionStore {
+  /** Exact scoped immutable decision lookup for trusted outbox admission. */
+  getDecisionById?(scopeRef: ScopeRef, decisionId: Uuid, ctx: ToolContext): Promise<IdentityDecisionRecord | undefined>
   getEntity(
     scopeRef: ScopeRef,
     entityId: string,

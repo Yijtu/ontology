@@ -1,4 +1,4 @@
-import { findIndustryPackViolations } from '@ontology/contracts'
+import { findIndustryPackViolations, semanticDefinitionContent } from '@ontology/contracts'
 import type {
   AttributeDefinition,
   AttributeValueType,
@@ -664,27 +664,13 @@ export function scanDefinitionPurity(value: unknown): DefinitionValidationIssue[
   }))
 }
 
-function declarationContent(draft: SemanticDefinitionVersionDraft): Record<string, unknown> {
-  return {
-    namespace: draft.namespace,
-    layer: draft.layer,
-    baseRef: draft.baseRef,
-    standardProvenance: draft.standardProvenance,
-    objects: draft.objects,
-    attributes: draft.attributes,
-    relations: draft.relations,
-    identityScopes: draft.identityScopes,
-    ruleConstraints: draft.ruleConstraints,
-  }
-}
-
 /**
  * Content digest of a definition version. It covers the declaration only (never the
  * trusted tenant/space scope), so identical core semantics published in two spaces share
  * one digest and the `VersionRef` pins exactly the published content.
  */
 export function definitionVersionDigest(draft: SemanticDefinitionVersionDraft): Sha256Digest {
-  return sha256DigestOf(declarationContent(draft))
+  return sha256DigestOf(semanticDefinitionContent(draft))
 }
 
 export interface DefinitionValidationOptions {
@@ -741,7 +727,7 @@ export function validateDefinitionVersion(
     issue(out, 'INVALID_IDENTIFIER', '$.definitionId', 'definitionId must be a lowercase identifier')
   }
   validateStandardProvenance(draft.standardProvenance, '$.standardProvenance', out)
-  out.push(...scanDefinitionPurity(declarationContent(draft)))
+  out.push(...scanDefinitionPurity(semanticDefinitionContent(draft)))
 
   validateLayerAndBase(draft, options?.base, out)
 

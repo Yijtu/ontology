@@ -16,7 +16,7 @@ import type { RuleFact } from '../rules/types'
 export interface PublishedProjectDatasetSourceOptions {
   readonly publications: PublishedSemanticReadView
   readonly identity: Pick<IdentityDecisionStore, 'latestReadRevision' | 'readPublishedBindings'>
-  readonly records: Pick<ProjectRecordStore, 'getRecord' | 'listRecords'>
+  readonly records: Pick<ProjectRecordStore, 'getRecord' | 'listRecords' | 'getRecordVersion'>
   readonly mappings: Pick<ProjectMappingStore, 'getMapping'>
   readonly projectDocuments: Pick<ProjectDocumentStore, 'getMembership' | 'getVisibility'>
   readonly definition: (scope: ScopeRef, ref: VersionRef, ctx: ToolContext) => Promise<SemanticDefinitionVersion | undefined>
@@ -31,6 +31,13 @@ export class PublishedProjectDatasetSource implements ProjectPublishedDatasetSou
   constructor(private readonly options: PublishedProjectDatasetSourceOptions) {}
 
   async read(scope: ScopeRef, revision: ProjectRevision, objectId: string, ctx: ToolContext): Promise<ProjectPublishedDataset> {
+    return this.#read(scope,revision,objectId,ctx)
+  }
+  async readAtRecordVersions(scope: ScopeRef,revision: ProjectRevision,objectId: string,records: readonly { readonly recordId: string; readonly revision: string }[],ctx: ToolContext): Promise<ProjectPublishedDataset> {
+    if (records.length > 20_000 || new Set(records.map((record) => record.recordId)).size !== records.length || this.options.records.getRecordVersion === undefined) throw new ProjectDatasetError('INPUT_NOT_READY','exact bounded immutable record-version reading is unavailable')
+    return this.#read(scope,revision,objectId,ctx,records)
+  }
+  async #read(scope: ScopeRef, revision: ProjectRevision, objectId: string, ctx: ToolContext,recordVersions?: readonly { readonly recordId: string; readonly revision: string }[]): Promise<ProjectPublishedDataset> {
     if (!isToolContext(ctx) || scope.tenantId !== ctx.principal.tenantId || scope.spaceId !== ctx.allowedResources.spaceId) {
       throw new ProjectDatasetError('SCOPE_MISMATCH', 'the published project query requires its trusted scope')
     }
@@ -68,6 +75,13 @@ export class PublishedProjectDatasetSource implements ProjectPublishedDatasetSou
       factsByStatement.set(fact.sourceStatementId, facts)
     }
     const physicalRecords = new Map<string, Awaited<ReturnType<ProjectRecordStore['getRecord']>>>()
+    if (recordVersions !== undefined) {
+      for (let offset=0;offset<recordVersions.length;offset+=4) await Promise.all(recordVersions.slice(offset,offset+4).map(async (pin) => {
+        const record = await this.options.records.getRecordVersion?.(scope,revision.ref.projectId,pin.recordId,pin.revision,ctx)
+        if (record === undefined || record.recordId !== pin.recordId || record.revision !== pin.revision || record.projectId !== revision.ref.projectId) throw new ProjectDatasetError('INPUT_NOT_READY','an exact accepted physical record version is unavailable')
+        if (record.objectId === objectId) physicalRecords.set(record.recordId,record)
+      }))
+    } else {
     let cursor: string | undefined
     do {
       const page = await this.options.records.listRecords(scope, revision.ref.projectId, { objectId, limit: 250, ...(cursor === undefined ? {} : { cursor }) }, ctx)
@@ -78,6 +92,7 @@ export class PublishedProjectDatasetSource implements ProjectPublishedDatasetSou
       if (page.nextCursor === cursor && cursor !== undefined) throw new ProjectDatasetError('INPUT_NOT_READY', 'project provenance paging did not advance')
       cursor = page.nextCursor
     } while (cursor !== undefined)
+    }
     const mappingCache = new Map<string, Awaited<ReturnType<ProjectMappingStore['getMapping']>>>()
     const membershipCache = new Map<string, Awaited<ReturnType<ProjectDocumentStore['getMembership']>>>()
     const visibility = await this.options.projectDocuments.getVisibility(scope, revision.ref.projectId, ctx)
@@ -102,14 +117,36 @@ export class PublishedProjectDatasetSource implements ProjectPublishedDatasetSou
       const mapping = mappingCache.get(mappingKey)
       if (!membershipCache.has(pin.documentId)) membershipCache.set(pin.documentId, await this.options.projectDocuments.getMembership(scope, revision.ref.projectId, pin.documentId, ctx))
       const membership = membershipCache.get(pin.documentId)
-      if (record === undefined || record.revision !== pin.recordRevision || record.contentDigest !== pin.contentDigest || record.sourceDigest !== pin.sourceDigest ||
-        mapping === undefined || !sameRef(mapping.ref, pin.mappingRef) || mapping.parseId !== pin.parseId ||
-        membership?.state !== 'active' || membership.membershipRevision !== pin.membershipRevision || membership.parseId !== pin.parseId || visibility?.epoch !== pin.visibilityEpoch ||
-        !Array.isArray(provenance['sourceSpans'])) {
-        throw new ProjectDatasetError('INPUT_NOT_READY', 'the exact published field provenance is unavailable')
+      const sourceSpans = provenance['sourceSpans']
+      const provenanceFailures: string[] = []
+      if (record === undefined) provenanceFailures.push('record_missing')
+      else {
+        if (record.revision !== pin.recordRevision) provenanceFailures.push('record_revision_mismatch')
+        if (record.contentDigest !== pin.contentDigest) provenanceFailures.push('record_content_digest_mismatch')
+        if (record.sourceDigest !== pin.sourceDigest) provenanceFailures.push('record_source_digest_mismatch')
+      }
+      if (mapping === undefined) provenanceFailures.push('mapping_missing')
+      else {
+        if (!sameRef(mapping.ref, pin.mappingRef)) provenanceFailures.push('mapping_ref_mismatch')
+        if (mapping.parseId !== pin.parseId) provenanceFailures.push('mapping_parse_mismatch')
+      }
+      if (membership === undefined) provenanceFailures.push('membership_missing')
+      else {
+        if (membership.state !== 'active') provenanceFailures.push('membership_not_active')
+        if (membership.membershipRevision !== pin.membershipRevision) provenanceFailures.push('membership_revision_mismatch')
+        if (membership.parseId !== pin.parseId) provenanceFailures.push('membership_parse_mismatch')
+      }
+      if (visibility === undefined) provenanceFailures.push('visibility_missing')
+      else if (visibility.epoch !== pin.visibilityEpoch) provenanceFailures.push('visibility_epoch_mismatch')
+      if (!Array.isArray(sourceSpans)) provenanceFailures.push('source_spans_missing')
+      if (provenanceFailures.length > 0) {
+        throw new ProjectDatasetError('INPUT_NOT_READY', 'the exact published field provenance is unavailable', { reasons: provenanceFailures })
+      }
+      if (record === undefined || mapping === undefined || membership === undefined || visibility === undefined || !Array.isArray(sourceSpans)) {
+        throw new ProjectDatasetError('INPUT_NOT_READY', 'the exact published field provenance is unavailable', { reasons: ['provenance_pin_unavailable'] })
       }
       if (sha256DigestOf({ objectId: record.objectId, fields: record.fields, mappingRef: mapping.ref, sourceDigest: record.sourceDigest, sourceRowKey: record.sourceRowKey }) !== record.contentDigest) throw new ProjectDatasetError('INPUT_NOT_READY', 'the published physical row provenance content changed')
-      const spans: unknown[] = provenance['sourceSpans']
+      const spans: unknown[] = sourceSpans
       const values: Record<string, ProjectDatasetCell> = {}
       const sources: ProjectDatasetFieldSource[] = []
       for (const fact of facts) {
