@@ -40,6 +40,7 @@ let instances: PostgresInstanceReviewStore
 let candidates: PostgresCandidateStore
 let identities: PostgresIdentityDecisionStore
 let jobs: PostgresJobStore
+let sourceHostBlobs: Parameters<typeof createCoreStructuredImportWorkflow>[0]['blobs'] | undefined
 
 beforeAll(async () => {
   harness = await startJobDatabase()
@@ -78,7 +79,8 @@ describe('actual saved-answer source views (PostgreSQL, original bytes, normal w
   it('reads real CSV/XLSX cells and text from a normally published fixed answer, refuses foreign/unbound/tampered reads, preserves archived source after withdrawal', async () => {
     const scope = await createJobScope(harness.adminClient, 'source-qa')
     const ctx = freshContext(scope.tenantId, scope.spaceId, ['platform-admin', 'operator', 'data-editor'])
-    const composition = await createCoreLocalComposition({ databaseUrl: harness.appUrl, objectDirectory: directory, scopeRef: scope.scopeRef, examples: loadCoreExamples({ targetScopeRef: scope.scopeRef }), allowLocalOperator: true, projectStructuredImports: createCoreStructuredImportWorkflow })
+    const composition = await createCoreLocalComposition({ databaseUrl: harness.appUrl, objectDirectory: directory, scopeRef: scope.scopeRef, examples: loadCoreExamples({ targetScopeRef: scope.scopeRef }), allowLocalOperator: true,
+      projectStructuredImports: (sourceOptions) => { sourceHostBlobs = sourceOptions.blobs; return createCoreStructuredImportWorkflow(sourceOptions) } })
     const api = createCoreApi(composition.dependencies)
     const reader = createCoreSourceViewReader(options)
     try {
@@ -163,36 +165,43 @@ describe('actual saved-answer source views (PostgreSQL, original bytes, normal w
         await expect(reader.answerSource(answer.answerId, evidenceRef.id, ctx, signal())).rejects.toMatchObject({ code: 'SOURCE_UNVERIFIABLE' })
         await harness.adminClient.query('UPDATE agent_platform.project_revisions SET body=$2::jsonb WHERE project_id=$1 AND revision=1', [projectId, JSON.stringify(body)])
         if (format === 'csv') {
+          if (sourceHostBlobs === undefined) throw new Error('the actual host source blob reader was not captured')
           let enter: () => void = () => undefined
           let release: () => void = () => undefined
           let finish: () => void = () => undefined
           const entered = new Promise<void>((resolve) => { enter = resolve })
           const barrier = new Promise<void>((resolve) => { release = resolve })
           const finished = new Promise<void>((resolve) => { finish = resolve })
-          let serverSignal: AbortSignal | undefined
-          let lateSuccess = false
-          const actualReader = reader.answerSource.bind(reader)
-          vi.spyOn(reader, 'answerSource').mockImplementationOnce(async (...args) => {
-            serverSignal = args[3]
-            try { const value = await actualReader(...args); lateSuccess = true; return value }
+          let originalReadEntered = false
+          const actualRead = sourceHostBlobs.readAuthorized.bind(sourceHostBlobs)
+          vi.spyOn(sourceHostBlobs, 'readAuthorized').mockImplementation(async (...args) => {
+            const requestedRef = args[0].blobRef
+            if (requestedRef.id !== originalRef.id || requestedRef.version !== originalRef.version || requestedRef.digest !== originalRef.digest || requestedRef.kind !== originalRef.kind) return await actualRead(...args)
+            originalReadEntered = true
+            enter()
+            try { await barrier; return await actualRead(...args) }
             finally { finish() }
           })
-          const actualRead = blobs.readAuthorized.bind(blobs)
-          vi.spyOn(blobs, 'readAuthorized').mockImplementationOnce(async (...args) => {
-            const bytes = await actualRead(...args)
-            enter(); await barrier
-            return bytes
-          })
           const cancellation = new AbortController()
-          const pending = fetch(`${base}${path}`, { signal: cancellation.signal })
-          const refusal = expect(pending).rejects.toThrow()
-          await entered
-          cancellation.abort()
-          await refusal
-          await vi.waitFor(() => expect(serverSignal?.aborted).toBe(true), { timeout: 5_000 })
-          release(); await finished
-          expect(lateSuccess).toBe(false)
-          vi.restoreAllMocks()
+          let pending: Promise<Response> | undefined
+          try {
+            const requestPromise = fetch(`${base}${path}`, { signal: AbortSignal.any([cancellation.signal, AbortSignal.timeout(30_000)]) })
+            pending = requestPromise
+            const pendingOutcome = requestPromise.then(() => 'completed', () => 'rejected')
+            const gateOutcome = await Promise.race([entered.then(() => 'source-read-entered'), pendingOutcome.then((outcome) => `request-${outcome}`),
+              new Promise<string>((resolve) => setTimeout(() => resolve('source-read-timeout'), 5_000))])
+            expect(gateOutcome).toBe('source-read-entered')
+            cancellation.abort()
+            await expect(requestPromise).rejects.toThrow()
+            release(); await finished
+            expect(originalReadEntered).toBe(true)
+          } finally {
+            cancellation.abort()
+            release()
+            if (originalReadEntered) await finished
+            await pending?.catch(() => undefined)
+            vi.restoreAllMocks()
+          }
         }
         await request(`/api/v1/projects/${projectId}/document-memberships/${String(imported['documentId'])}/revisions`, { op: 'retract', reason: 'human withdrew original source' })
         expect(await request(path)).toMatchObject({ readability: 'archived_snapshot_only', originalRef })
