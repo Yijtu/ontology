@@ -31,7 +31,7 @@ import {
 } from '@ontology/app-api'
 import type { CoreLocalComposition, CoreExampleScenario } from '@ontology/app-api'
 import { canonicalJson, sha256DigestOf, ProjectService } from '@ontology/application'
-import { assertProjectFactInputShape, createToolContext, isRecord } from '@ontology/contracts'
+import { assertProjectFactInputShape, createToolContext, isProjectDatasetSourceOriginDigest, isRecord } from '@ontology/contracts'
 import type {
   MappingRef,
   ProjectRevisionBody,
@@ -42,8 +42,9 @@ import type {
   ToolContext,
   PackAsset,
   VersionRef,
+  QueryLimits,
 } from '@ontology/contracts'
-import { definitionVersionDigest, InMemoryIdentityIndexReader, projectIndustrySchema, validateDefinitionVersion } from '@ontology/semantic-engine'
+import { definitionVersionDigest, InMemoryIdentityIndexReader, ProjectSemanticQueryService, projectIndustrySchema, projectSnapshotMappingRef, validateDefinitionVersion } from '@ontology/semantic-engine'
 import { seedIdentityProject } from './instance-identity-fixtures'
 import { startPostgresContainer } from './postgres-container'
 import type { PostgresContainer } from './postgres-container'
@@ -111,7 +112,99 @@ let objectDirectory = ''
 let composition: CoreLocalComposition | undefined
 let api: ReturnType<typeof createCoreApi> | undefined
 let baseUrl = ''
-const workerErrors: Error[] = []
+let mountedExamples: ReturnType<typeof loadCoreExamples>
+type WorkerErrorObservation = {
+  readonly phase: 'setup' | 'test' | 'teardown'
+  readonly host: string
+  readonly errorType: string
+  readonly name?: string
+  readonly code?: string
+  readonly message?: string
+  readonly keys: readonly string[]
+  readonly failedChecks?: readonly string[]
+}
+const workerErrors: WorkerErrorObservation[] = []
+let workerPhase: WorkerErrorObservation['phase'] = 'setup'
+const safePartitionFailureCodes = new Set([
+  'historical_definition_missing_or_active',
+  'partition_definition_pin_mismatch',
+  'historical_partition_statement_bound_exceeded',
+  'historical_partition_fact_bound_exceeded',
+  'project_fact_statement_missing_or_ambiguous',
+  'project_fact_statement_provenance_invalid',
+  'project_fact_provenance_scope_mismatch',
+  'project_fact_definition_pin_mismatch',
+  'historical_revision_read_bound_exceeded',
+  'project_missing_or_archived',
+  'active_project_revision_changed',
+  'pinned_revision_not_found_or_ref_mismatch',
+  'pinned_revision_is_synthetic_validation',
+  'pinned_revision_definition_mismatch',
+  'pinned_revision_mapping_mismatch',
+  'pinned_revision_not_active_history_or_staged_head',
+])
+
+function workerErrorMetadata(error: unknown, phase: WorkerErrorObservation['phase'], host: string): WorkerErrorObservation {
+  const readString = (key: 'name' | 'code' | 'message'): string | undefined => {
+    if ((typeof error !== 'object' || error === null) && typeof error !== 'function') return undefined
+    try {
+      const value: unknown = Reflect.get(error, key)
+      return typeof value === 'string' ? value.slice(0, key === 'message' ? 240 : 120) : undefined
+    } catch { return undefined }
+  }
+  let keys: string[] = []
+  if ((typeof error === 'object' && error !== null) || typeof error === 'function') {
+    try { keys = Object.keys(error).slice(0, 12).map((key) => key.slice(0, 80)) } catch { keys = ['<keys-unavailable>'] }
+  }
+  const name = readString('name'), code = readString('code')
+  let failedChecks: string[] = []
+  if (name === 'WorkflowControllerError' && (code === 'CAPABILITY_NOT_CONFIGURED' || code === 'VERSION_CONFLICT') &&
+    ((typeof error === 'object' && error !== null) || typeof error === 'function')) {
+    try {
+      const value: unknown = Reflect.get(error, 'failedChecks')
+      if (Array.isArray(value)) failedChecks = value.filter((entry): entry is string => typeof entry === 'string' && safePartitionFailureCodes.has(entry)).slice(0, 16)
+    } catch { failedChecks = [] }
+  }
+  const message = readString('message')?.replace(/postgres(?:ql)?:\/\/[^\s]+/giu, '[redacted]')
+    .replace(/(password|api[_-]?key|token)\s*[=:]\s*[^\s,;]+/giu, '$1=[redacted]')
+    .replace(/\b[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}\b/giu, '[redacted-id]')
+    .replace(/sha256:[0-9a-f]{64}/giu, '[redacted-digest]')
+    .replace(/\b(?:P-101|P-102|P-103|private-network|north|south)\b/giu, '[redacted-value]')
+  return {
+    phase,
+    host,
+    errorType: typeof error,
+    ...(name === undefined ? {} : { name }),
+    ...(code === undefined ? {} : { code }),
+    ...(message === undefined ? {} : { message: message.slice(0, 160) }),
+    keys,
+    ...(failedChecks.length === 0 ? {} : { failedChecks }),
+  }
+}
+
+function workerErrorSummary(errors: readonly WorkerErrorObservation[]) {
+  const groups = new Map<string, WorkerErrorObservation & { count: number }>()
+  for (const error of errors) {
+    const key = canonicalJson(error), existing = groups.get(key)
+    if (existing === undefined) groups.set(key, { ...error, count: 1 })
+    else existing.count += 1
+  }
+  const all = [...groups.values()], shown = all.slice(0, 8)
+  return {
+    totalCount: errors.length,
+    groups: shown,
+    unrepresentedCount: all.slice(8).reduce((total, group) => total + group.count, 0),
+    lastSamples: errors.slice(-8),
+  }
+}
+
+function observeWorkerErrors(host: string): (error: unknown) => void {
+  return (error) => {
+    const observation = workerErrorMetadata(error, workerPhase, host)
+    workerErrors.push(observation)
+    process.stderr.write(`[core-worker-error-observed] ${JSON.stringify(observation)}\n`)
+  }
+}
 
 function trustedContext(scope: ScopeRef): ToolContext {
   return createToolContext({
@@ -211,7 +304,7 @@ async function waitForAnswer(runId: string): Promise<Record<string, unknown>> {
     const response = await request(`/api/v1/runs/${runId}/answer`)
     if (response.status === 200) return (await jsonBody(response)).data
     if (response.status !== 202) {
-      const causes = workerErrors.map((error) => error.stack ?? error.message).join('\n')
+      const causes = JSON.stringify(workerErrorSummary(workerErrors))
       throw new Error(`answer route failed with ${String(response.status)}: ${await response.text()}; causes=${causes}`)
     }
     await new Promise((resolve) => setTimeout(resolve, 100))
@@ -228,7 +321,7 @@ async function waitForOutboxDispatch(outboxId: string): Promise<number> {
       if (result.rows[0].attempts !== 1) throw new Error(`actual publication outbox ${outboxId} dispatched ${result.rows[0].attempts} times`)
       return result.rows[0].attempts
     }
-    if (workerErrors.length > 0) throw new Error(`actual publication outbox failed before its fence settled: ${workerErrors.map((error) => `${error.name}: ${error.message}`).join('; ')}`)
+    if (workerErrors.length > 0) throw new Error(`actual publication outbox failed before its fence settled: ${JSON.stringify(workerErrorSummary(workerErrors))}`)
     await new Promise((resolve) => setTimeout(resolve, 100))
   }
   throw new Error(`the actual publication outbox ${outboxId} did not dispatch within its fixed 15-second barrier`)
@@ -237,10 +330,30 @@ async function waitForOutboxDispatch(outboxId: string): Promise<number> {
 async function sameRevisionProvenanceDiagnostic(objectId: string): Promise<Record<string, unknown>> {
   const ctx = trustedContext(scopeRef), project = await publishedFixture.projects.getProject(scopeRef, PROJECT_ID, ctx)
   const revision = await publishedFixture.projects.getRevision(scopeRef, PROJECT_ID, projectRevisionRefValue.revision, ctx)
+  if (admin === undefined) throw new Error('isolated PostgreSQL admin client is unavailable for the provenance diagnostic')
   const [visibility, statements] = await Promise.all([
     publishedFixture.documents.getVisibility(scopeRef, PROJECT_ID, ctx),
     publishedFixture.publications.listStatements(scopeRef, { objectId, status: 'active', limit: 100 }, ctx),
   ])
+  const membershipHistory = await admin.query<{
+    document_id: string
+    membership_revision: string
+    state: string
+    document_ref_id: string | null
+    document_ref_version: string | null
+    document_digest: string
+    parse_id: string
+    visibility_epoch: string
+    source_namespace: string | null
+    source_id: string | null
+    recorded_at: string
+  }>(`SELECT document_id::text AS document_id, membership_revision::text AS membership_revision, state,
+      document_ref->>'id' AS document_ref_id, document_ref->>'version' AS document_ref_version, document_digest,
+      parse_id::text AS parse_id, visibility_epoch::text AS visibility_epoch, source_namespace, source_id, recorded_at::text AS recorded_at
+     FROM agent_platform.project_document_memberships
+    WHERE tenant_id=$1::uuid AND space_id=$2::uuid AND project_id=$3::uuid
+     ORDER BY project_document_memberships.membership_revision, project_document_memberships.document_id
+     LIMIT 101`, [scopeRef.tenantId, scopeRef.spaceId, PROJECT_ID])
   const pins: Record<string, unknown>[] = []
   for (const statement of statements) {
     const provenanceValue = statement.value['provenance']
@@ -324,6 +437,10 @@ async function sameRevisionProvenanceDiagnostic(objectId: string): Promise<Recor
     projectRevisionRef: revision?.ref,
     mappingRefs: revision?.mappingRefs.map((ref) => ({ id: ref.id, version: ref.version, digest: ref.digest })),
     visibility: visibility === undefined ? undefined : { epoch: visibility.epoch, membershipRevision: visibility.membershipRevision },
+    initialProjectDocumentPins,
+    subsequentProjectDocumentPins,
+    membershipHistory: membershipHistory.rows.slice(0, 100),
+    membershipHistoryTruncated: membershipHistory.rows.length > 100,
     statementCount: statements.length,
     statementRowsTruncated: statements.length >= 100,
     pins,
@@ -351,6 +468,8 @@ let structuredBinding: { taskBindingRef: { id: string; version: string; digest: 
 let projectRevisionRefValue: ProjectRevisionRef
 let actualBaseProfileRef: ResolvedProfileRef
 let actualBaseIndustryPackRef: VersionRef
+let initialProjectDocumentPins: { readonly objectId: string; readonly documentId: string; readonly parseId: string }[] = []
+const subsequentProjectDocumentPins: { objectId: string; documentId: string; parseId: string }[] = []
 let publishedFixture: ReturnType<typeof projectQueryPublicationFixture>
 let queryDatabase: ControlPostgresDatabase
 let queryRegistry: PostgresArtifactRegistry
@@ -362,7 +481,8 @@ let initialSource: Awaited<ReturnType<ReturnType<typeof projectQueryPublicationF
 beforeAll(async () => {
   await startIsolatedDatabase()
   objectDirectory = await mkdtemp(join(tmpdir(), 'ontology-core-task-bindings-'))
-  const scenario = loadCoreExamples({ targetScopeRef: scopeRef }).scenarios.find((entry) => entry.scenarioId === SCENARIO_ID)
+  mountedExamples = loadCoreExamples({ targetScopeRef: scopeRef })
+  const scenario = mountedExamples.scenarios.find((entry) => entry.scenarioId === SCENARIO_ID)
   if (scenario === undefined) throw new Error(`scenario ${SCENARIO_ID} was not mounted`)
 
   // Every required task kind is mounted for the scenario, and the compute one pins the neutral
@@ -384,9 +504,9 @@ beforeAll(async () => {
     projectDataset: { connectionString: businessUrl, schema: 'business_dataset' },
     objectDirectory,
     scopeRef,
-    examples: loadCoreExamples({ targetScopeRef: scopeRef }),
+    examples: mountedExamples,
     allowLocalOperator: true,
-    onWorkerError(error) { if (error instanceof Error) workerErrors.push(error) },
+    onWorkerError: observeWorkerErrors('beforeAll-initial'),
   })
   api = createCoreApi(composition.dependencies)
   const address = await api.listen({ host: '127.0.0.1', port: 0 })
@@ -413,17 +533,23 @@ beforeAll(async () => {
     definition: { ...scenario.definitionDraft, ref: scenario.definitionRef, publishedAt: new Date().toISOString() } })
   const source = await publishedFixture.importCsv(OBJECT_ID, 'code,network,district,due\nP-101,private-network,north,true\nP-102,private-network,south,false\n', ['facility_id', 'network_code', 'facility_district_code', 'inspection_due'])
   const district = await publishedFixture.importCsv('transport_district', 'code,network,name\nnorth,private-network,North\n', ['district_code', 'district_network_code', 'district_name'])
+  initialProjectDocumentPins = [
+    { objectId: OBJECT_ID, documentId: source.documentId, parseId: source.mapping.parseId },
+    { objectId: 'transport_district', documentId: district.documentId, parseId: district.mapping.parseId },
+  ]
   initialSource = await publishedFixture.restage(source)
   const publication = await reviewAndPublishSources([initialSource, district])
   expect(await waitForOutboxDispatch(publication.outboxId)).toBe(1)
-  expect(workerErrors.map((error) => ({ name: error.name, message: error.message }))).toEqual([])
+  expect(workerErrors).toEqual([])
   const projected = await request(`/api/v1/projects/${PROJECT_ID}/dataset-snapshots`, { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ objectId: OBJECT_ID }) })
   if (projected.status !== 201) throw new Error(`official dataset creation failed: ${await projected.text()}`)
   projectRevisionRefValue = ((await jsonBody(projected)).data['status'] as { projectRevisionRef: ProjectRevisionRef }).projectRevisionRef
+  workerPhase = 'test'
 
 }, 240_000)
 
 afterAll(async () => {
+  workerPhase = 'teardown'
   await api?.close().catch(() => undefined)
   await composition?.close().catch(() => undefined)
   await structuredStore?.close()
@@ -432,6 +558,7 @@ afterAll(async () => {
   await admin?.end().catch(() => undefined)
   if (objectDirectory !== '') await rm(objectDirectory, { recursive: true, force: true }).catch(() => undefined)
   await container?.stop()
+  if (workerErrors.length > 0) process.stderr.write(`[core-worker-error-summary] ${JSON.stringify(workerErrorSummary(workerErrors))}\n`)
 })
 
 describe('mounted Core structured-query task binding through the normal HTTP host (real PostgreSQL)', () => {
@@ -479,16 +606,14 @@ describe('mounted Core structured-query task binding through the normal HTTP hos
       const extended = {
           ...examples, scenarios: [...examples.scenarios, nextScenario]
       }
+      mountedExamples = extended
       await api?.close()
       await composition?.close()
       // The normal host registers, publishes, preflights and activates the actual compatible profile.
       composition = await createCoreLocalComposition({
           databaseUrl: appUrl, projectDataset: {
               connectionString: businessUrl, schema: 'business_dataset'
-          }, objectDirectory, scopeRef, examples: extended, allowLocalOperator: true, onWorkerError(error) {
-              if (error instanceof Error)
-                  workerErrors.push(error)
-          }
+          }, objectDirectory, scopeRef, examples: extended, allowLocalOperator: true, onWorkerError: observeWorkerErrors('evolution-profile-activation')
       })
       api = createCoreApi(composition.dependencies)
       baseUrl = (await api.listen({
@@ -568,10 +693,7 @@ describe('mounted Core structured-query task binding through the normal HTTP hos
           composition = await createCoreLocalComposition({
               databaseUrl: appUrl, projectDataset: {
                   connectionString: businessUrl, schema: 'business_dataset'
-              }, projectEvolution: evolution.service, objectDirectory, scopeRef, examples: extended, allowLocalOperator: true, onWorkerError(error) {
-                  if (error instanceof Error)
-                      workerErrors.push(error)
-              }
+              }, projectEvolution: evolution.service, objectDirectory, scopeRef, examples: extended, allowLocalOperator: true, onWorkerError: observeWorkerErrors('evolution-awaiting-review-restart')
           })
           api = createCoreApi(composition.dependencies)
           baseUrl = (await api.listen({
@@ -630,11 +752,12 @@ describe('mounted Core structured-query task binding through the normal HTTP hos
                   candidateId, expectedRevision: '0', decision: 'approve', reason: 'human reviewed the new original note field'
               }, ctx)
           }
-          await p.workflow.publication.publish({
+          const newFactsPublication = await p.workflow.publication.publish({
               approvedCandidateRefs: pending.candidateIds.map((candidateId) => ({
                   candidateId, kind: 'entity' as const
               })), schemaRef: next.ref, expectedRevision: await p.publications.latestPublicationRevision(scopeRef, ctx), idempotencyKey: `new-facts-${projectId}`
           }, ctx)
+          await waitForOutboxDispatch(newFactsPublication.outboxId)
           const ready = await evolution.service.activate(projectId, plan.plan.evolutionId, [], ctx)
           if (ready.inputSnapshotRef === undefined || ready.snapshots?.[0] === undefined)
               throw new Error('real approved input and ready snapshot not built')
@@ -754,11 +877,11 @@ describe('mounted Core structured-query task binding through the normal HTTP hos
     const versions = exportedBody.data['versions'] as { answerId: string; contentHash: string }
     expect(versions.answerId).toBe(answerId)
     expect(versions.contentHash).toBe(answer['contentHash'])
-    expect(workerErrors.map((error) => ({ name: error.name, message: error.message, cause: error.cause instanceof Error ? error.cause.message : error.cause }))).toEqual([])
+    expect(workerErrors).toEqual([])
   }, 180_000)
 
   it('imports a structured source for a project and previews column mapping on the real parse', async () => {
-    const bootstrapped = await request('/api/v1/core/project-bootstrap', { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ title: 'W06 mapping preview isolation', profileRef: { id: actualBaseProfileRef.id, version: actualBaseProfileRef.version } }) })
+    const bootstrapped = await request('/api/v1/core/project-bootstrap', { method: 'POST', headers: { 'content-type': 'application/json', 'idempotency-key': `taskbind-preview-project-${PROJECT_ID}` }, body: JSON.stringify({ title: 'W06 mapping preview isolation', profileRef: { id: actualBaseProfileRef.id, version: actualBaseProfileRef.version } }) })
     if (bootstrapped.status !== 201) throw new Error(`independent preview project bootstrap failed: ${await bootstrapped.text()}`)
     const previewProject = (await jsonBody(bootstrapped)).data['project']
     if (!isRecord(previewProject) || typeof previewProject['projectId'] !== 'string') throw new Error('independent preview project bootstrap returned no project identity')
@@ -817,7 +940,7 @@ describe('mounted Core structured-query task binding through the normal HTTP hos
     }
     expect(((await jsonBody(district)).data['status'] as { projectRevisionRef: ProjectRevisionRef }).projectRevisionRef).toEqual(projectRevisionRefValue)
     await api?.close(); await composition?.close()
-    composition = await createCoreLocalComposition({ databaseUrl: appUrl, projectDataset: { connectionString: businessUrl, schema: 'business_dataset' }, objectDirectory, scopeRef, examples: loadCoreExamples({ targetScopeRef: scopeRef }), allowLocalOperator: true })
+    composition = await createCoreLocalComposition({ databaseUrl: appUrl, projectDataset: { connectionString: businessUrl, schema: 'business_dataset' }, objectDirectory, scopeRef, examples: mountedExamples, allowLocalOperator: true, onWorkerError: observeWorkerErrors('same-revision-restart') })
     api = createCoreApi(composition.dependencies)
     baseUrl = (await api.listen({ host: '127.0.0.1', port: 0 })).replace(/\/$/u, '')
     const backend = new PostgresProjectDatasetAdapter({ connectionString: businessUrl, schema: 'business_dataset' })
@@ -867,6 +990,7 @@ describe('mounted Core structured-query task binding through the normal HTTP hos
 
   it('changes the normal task result for new published input while the old run keeps its fixed history after restart', async () => {
     const source = await publishedFixture.importCsv(OBJECT_ID, 'code,network,district,due\nP-103,private-network,north,false\n', ['facility_id', 'network_code', 'facility_district_code', 'inspection_due'])
+    subsequentProjectDocumentPins.push({ objectId: OBJECT_ID, documentId: source.documentId, parseId: source.mapping.parseId })
     await publishedFixture.approveAndPublish(source)
     const projected = await request(`/api/v1/projects/${PROJECT_ID}/dataset-snapshots`, { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ objectId: OBJECT_ID }) })
     if (projected.status !== 201) throw new Error(`new official dataset creation failed: ${await projected.text()}`)
@@ -887,7 +1011,7 @@ describe('mounted Core structured-query task binding through the normal HTTP hos
     expect(assertions.filter((assertion) => assertion.predicate === 'inspection_due').map((assertion) => [assertion.subject, assertion.value])).toEqual([['P-103', false]])
     await api?.close()
     await composition?.close()
-    composition = await createCoreLocalComposition({ databaseUrl: appUrl, projectDataset: { connectionString: businessUrl, schema: 'business_dataset' }, objectDirectory, scopeRef, examples: loadCoreExamples({ targetScopeRef: scopeRef }), allowLocalOperator: true })
+    composition = await createCoreLocalComposition({ databaseUrl: appUrl, projectDataset: { connectionString: businessUrl, schema: 'business_dataset' }, objectDirectory, scopeRef, examples: mountedExamples, allowLocalOperator: true, onWorkerError: observeWorkerErrors('new-input-restart') })
     api = createCoreApi(composition.dependencies)
     baseUrl = (await api.listen({ host: '127.0.0.1', port: 0 })).replace(/\/$/u, '')
     const historical = await jsonBody(await request(`/api/v1/runs/${originalRunId}/answer`))
@@ -914,7 +1038,29 @@ describe('mounted Core structured-query task binding through the normal HTTP hos
           links: [], filters: [], orderBy: [{ fieldRef: 'record_id', direction: 'asc' }], limit: 10, mappingVersion: workflow.mappingRef({ descriptor }) } },
       })
       expect((outcome.payload as DataQueryOutput).table?.rows.map((row) => [row[0], row[1]]).sort()).toEqual([['P-101', true], ['P-102', false]])
-      expect((outcome.payload as DataQueryOutput).table?.rows.every((row) => String(row[3]).includes(projectRevisionRefValue.digest))).toBe(true)
+      const fullSourceDescriptor = { ...descriptor, sourceProjection: 'full_array' as const }
+      const fullSourceLimits: QueryLimits = { maxRows: 1000, maxBytes: 1_048_576, maxDurationMs: 30_000 }
+      const fullSourceResult = await new ProjectSemanticQueryService({ query: backend }).execute({
+        descriptor: fullSourceDescriptor,
+        plan: { mode: 'semantic', concepts: [OBJECT_ID], fields: [...FIELDS, 'record_id', 'sources_json'], links: [], filters: [],
+          orderBy: [{ fieldRef: 'record_id', direction: 'asc' }], limit: 10, mappingVersion: projectSnapshotMappingRef({ descriptor: fullSourceDescriptor }) },
+        limits: fullSourceLimits,
+      }, oldCtx)
+      const compactTable = (outcome.payload as DataQueryOutput).table
+      if (compactTable === undefined) throw new Error('the compact historical query has no actual result table')
+      const recordIdIndex = compactTable.columns.findIndex((column) => column.name === 'record_id')
+      const sourcesIndex = compactTable.columns.findIndex((column) => column.name === 'sources_json')
+      if (recordIdIndex < 0 || sourcesIndex < 0) throw new Error('the compact historical query omitted its exact row/source pin columns')
+      for (const compactRow of compactTable.rows) {
+        const recordId = String(compactRow[recordIdIndex]), fullRow = fullSourceResult.rows.find((row) => row.recordId === recordId)
+        if (fullRow === undefined) throw new Error(`the full-source query omitted archived row ${recordId}`)
+        const compactPin: unknown = JSON.parse(String(compactRow[sourcesIndex]))
+        if (!isProjectDatasetSourceOriginDigest(compactPin)) throw new Error(`the compact historical row ${recordId} has a malformed source digest pin`)
+        expect(fullRow.sources.length).toBeGreaterThan(0)
+        expect(compactPin.recordId).toBe(fullRow.recordId)
+        expect(compactPin.sourcesDigest).toBe(sha256DigestOf(canonicalJson(fullRow.sources)))
+        expect(fullRow.sources.every((source) => source.factSource?.projectRevisionRef.digest === projectRevisionRefValue.digest)).toBe(true)
+      }
       await expect(workflow.resolveForCreation(scopeRef, (await publishedFixture.projects.getRevision(scopeRef, PROJECT_ID, projectRevisionRefValue.revision, oldCtx))!, { objectId: OBJECT_ID }, oldCtx)).rejects.toMatchObject({ code: 'SNAPSHOT_UNAVAILABLE' })
     } finally { await backend.close() }
 
