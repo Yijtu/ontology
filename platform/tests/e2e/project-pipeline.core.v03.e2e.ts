@@ -42,6 +42,18 @@ let browser: Browser | undefined
 let fileDirectory = ''
 let projectCsvPath = ''
 const apiTrace: string[] = []
+let closing = false
+const workerDiagnostics: { readonly duringClose: boolean; readonly name: string; readonly code?: string; readonly message: string }[] = []
+
+function recordWorkerError(error: unknown): void {
+  const code = typeof error === 'object' && error !== null && 'code' in error ? String(error.code) : undefined
+  workerDiagnostics.push({
+    duringClose: closing,
+    name: error instanceof Error ? error.name : typeof error,
+    ...(code === undefined ? {} : { code }),
+    message: error instanceof Error ? error.message : String(error),
+  })
+}
 
 function applicationConnectionString(url: string, password: string): string {
   const base = new URL(url)
@@ -95,6 +107,7 @@ beforeAll(async () => {
     allowLocalOperator: true,
     modelsEnabled: false,
     jevEnabled: false,
+    onWorkerError: recordWorkerError,
   })
   api = createCoreApi(composition.dependencies)
   const origin = await api.listen({ host: '127.0.0.1', port: 0 })
@@ -103,13 +116,33 @@ beforeAll(async () => {
 }, 300_000)
 
 afterAll(async () => {
-  await browser?.close().catch(() => undefined)
-  await web?.close().catch(() => undefined)
-  await api?.close().catch(() => undefined)
-  await composition?.close().catch(() => undefined)
-  await admin?.end().catch(() => undefined)
-  await postgres?.stop().catch(() => undefined)
-  if (fileDirectory !== '') await rm(fileDirectory, { recursive: true, force: true })
+  closing = true
+  const teardownErrors: Error[] = []
+  const close = async (label: string, action: (() => Promise<unknown>) | undefined): Promise<void> => {
+    if (action === undefined) return
+    try {
+      await action()
+    } catch (error) {
+      teardownErrors.push(new Error(`${label} teardown failed`, { cause: error }))
+    }
+  }
+  await close('browser', browser === undefined ? undefined : () => browser?.close() ?? Promise.resolve())
+  await close('web host', web === undefined ? undefined : () => web?.close() ?? Promise.resolve())
+  await close('Core API', api === undefined ? undefined : () => api?.close() ?? Promise.resolve())
+  await close('Core composition', composition === undefined ? undefined : () => composition?.close() ?? Promise.resolve())
+  await close('PostgreSQL admin client', admin === undefined ? undefined : () => admin?.end() ?? Promise.resolve())
+  await close('PostgreSQL container', postgres === undefined ? undefined : () => postgres?.stop() ?? Promise.resolve())
+  if (fileDirectory !== '') await close('temporary files', () => rm(fileDirectory, { recursive: true, force: true }))
+  try {
+    await record('gap22-project-worker-diagnostics', workerDiagnostics.map((entry) => JSON.stringify(entry)))
+  } catch (error) {
+    teardownErrors.push(new Error('worker diagnostics could not be saved', { cause: error }))
+  }
+  const unassignedWorkerErrors = workerDiagnostics.filter((entry) => !entry.duringClose)
+  if (unassignedWorkerErrors.length > 0) {
+    teardownErrors.push(new Error(`unexpected Core worker errors: ${unassignedWorkerErrors.map((entry) => JSON.stringify(entry)).join('; ')}`))
+  }
+  if (teardownErrors.length > 0) throw new AggregateError(teardownErrors, 'GAP-022 E2E teardown or worker diagnostics failed')
 })
 
 async function waitForHidden(page: Page, selector: string): Promise<void> {
@@ -127,6 +160,8 @@ describe('GAP-022 normal App project source-to-publication pipeline', () => {
     const page = await context.newPage()
     const apiFailures: string[] = []
     const apiResponses: string[] = []
+    let stagedFactCandidateId: string | undefined
+    let factSemanticPublicationStarted = false
     page.on('request', (request) => {
       if (new URL(request.url()).pathname.startsWith('/api/v1/')) {
         apiTrace.push(`${request.method()} ${new URL(request.url()).pathname}`)
@@ -135,7 +170,12 @@ describe('GAP-022 normal App project source-to-publication pipeline', () => {
     page.on('response', (response) => {
       if (new URL(response.url()).pathname.startsWith('/api/v1/')) {
         apiResponses.push(`${response.status()} ${response.request().method()} ${requestPath(response)}`)
-        if (response.status() >= 400) apiFailures.push(`${response.status()} ${requestPath(response)}`)
+        const expectedNoPriorStatement = response.status() === 404 &&
+          response.request().method() === 'GET' && stagedFactCandidateId !== undefined &&
+          !factSemanticPublicationStarted && requestPath(response) === `/api/v1/statements/${stagedFactCandidateId}`
+        if (response.status() >= 400 && !expectedNoPriorStatement) {
+          apiFailures.push(`${response.status()} ${requestPath(response)}`)
+        }
       }
     })
     try {
@@ -170,6 +210,9 @@ describe('GAP-022 normal App project source-to-publication pipeline', () => {
       const projectId = created.data.project.projectId
       await page.waitForSelector(`[data-testid="project-detail"][data-project-id="${projectId}"]`)
       expect(new URL(page.url()).searchParams.get('project')).toBe(projectId)
+      const selectedProject = page.getByTestId('context-project-select').locator('option:checked')
+      expect(await selectedProject.getAttribute('value')).toBe(projectId)
+      expect(await selectedProject.textContent()).toContain('GAP-022 原始资料项目')
       expect(await page.textContent('[data-testid="project-detail-head-revision"]')).toBe('1')
       await capture(page, 'gap22-project-created-1440')
 
@@ -212,7 +255,7 @@ describe('GAP-022 normal App project source-to-publication pipeline', () => {
       const identityPreview = page.getByTestId('mapping-preview-asset_id')
       expect(await identityPreview.locator('td:nth-child(2)').textContent()).toBe('GAP22-ASSET-001')
       expect(await identityPreview.locator('td:nth-child(3)').textContent()).toBe('GAP22-ASSET-001')
-      expect(await identityPreview.locator('td:nth-child(4)').textContent()).toContain('第 2 行')
+      expect(await identityPreview.locator('td:nth-child(4)').textContent()).toBe('A2')
       await capture(page, 'gap22-project-mapping-preview-1440')
 
       const confirmMappingResponse = page.waitForResponse((response) =>
@@ -222,15 +265,28 @@ describe('GAP-022 normal App project source-to-publication pipeline', () => {
       expect((await confirmMappingResponse).ok()).toBe(true)
       await page.getByTestId('mapping-confirmed').waitFor()
       await page.getByTestId('record-bind').click()
-      await page.waitForSelector('[data-testid="record-row"][data-status="confirmed"]')
-      expect(await page.textContent('[data-testid="record-total"]')).toContain('1')
+      await page.waitForFunction(() => document.querySelector('[data-testid="bind-notice"]')?.textContent?.includes('已绑定 1 条记录') === true)
+      const recordsStepCatalogue = page.waitForResponse((response) =>
+        response.request().method() === 'GET' && requestPath(response) === `/api/v1/core/projects/${projectId}/source-catalogue`,
+      )
       await page.getByRole('button', { name: '项目记录', exact: true }).click()
+      await page.waitForSelector('[data-testid="record-row"][data-status="confirmed"]')
+      expect((await recordsStepCatalogue).ok()).toBe(true)
+      expect(await page.textContent('[data-testid="record-total"]')).toContain('1')
       await page.getByTestId('project-stage-facts').waitFor()
+      expect(await page.getByTestId('project-fact-staging').textContent()).toContain('当前页 1 条记录')
+      expect(await page.getByTestId('project-stage-facts').isEnabled()).toBe(true)
       const candidateResponse = page.waitForResponse((response) =>
         response.request().method() === 'POST' && /\/api\/v1\/core\/projects\/[^/]+\/fact-candidates$/u.test(requestPath(response)),
       )
       await page.getByTestId('project-stage-facts').click()
-      expect((await candidateResponse).status()).toBe(201)
+      const stagedResponse = await candidateResponse
+      expect(stagedResponse.status()).toBe(201)
+      const stagedPayload = await stagedResponse.json() as { data: { candidates: readonly { candidateId: string }[] } }
+      expect(stagedPayload.data.candidates).toHaveLength(1)
+      const factCandidateId = stagedPayload.data.candidates[0]?.candidateId
+      if (factCandidateId === undefined) throw new Error('the UI did not stage a source-backed project fact candidate')
+      stagedFactCandidateId = factCandidateId
       await page.getByTestId('project-create-reviews').waitFor()
       await page.getByTestId('project-create-reviews').click()
       await page.waitForSelector('[data-testid="instance-review"]')
@@ -275,13 +331,63 @@ describe('GAP-022 normal App project source-to-publication pipeline', () => {
       await sourceDialog.locator('[data-testid="answer-source-fragment"] button').first().click()
       await sourceDialog.getByTestId('original-cell-location').waitFor()
       expect(await sourceDialog.getByTestId('original-cell-location').textContent()).toContain('GAP22-ASSET-001')
-      expect(await sourceDialog.getByTestId('original-cell-location').textContent()).toContain('第 2 行')
+      expect(await sourceDialog.getByTestId('original-cell-location').textContent()).toContain('A2')
       await capture(page, 'gap22-project-original-cell-drawer-1440')
       await page.keyboard.press('Escape')
       await sourceDialog.waitFor({ state: 'hidden' })
       expect(await sourceButton.evaluate((element) => element === document.activeElement)).toBe(true)
 
+      // Instance publication completes the human field/identity review record. The fact itself
+      // becomes an official semantic fact only after candidate review and semantic publication,
+      // which is a separate visible action in the ordinary Candidate Review panel.
+      await page.getByTestId('tab-review').click()
+      const leavePrompt = page.getByRole('dialog', { name: '离开当前工作内容？' })
+      if (await leavePrompt.isVisible()) await page.getByTestId('shell-discard-changes').click()
+      await page.waitForFunction(() => new URL(window.location.href).searchParams.get('view') === 'review')
+      await page.waitForSelector('[data-testid="candidate-panel"]')
+      await page.waitForFunction(() => {
+        const phase = document.querySelector('[data-testid="candidate-panel"]')?.getAttribute('data-phase')
+        return phase !== undefined && phase !== 'loading'
+      })
+      const candidatePhase = await page.getAttribute('[data-testid="candidate-panel"]', 'data-phase')
+      if (candidatePhase !== 'ready') {
+        throw new Error(`candidate review did not load for the project fact candidate (phase=${candidatePhase}): ${await page.textContent('[data-testid="candidate-panel"]') ?? ''}`)
+      }
+      await page.waitForSelector('[data-testid="candidate-list"]')
+      const candidateItems = page.getByTestId('candidate-item')
+      let selectedFactCandidate = false
+      for (let index = 0; index < await candidateItems.count(); index += 1) {
+        await candidateItems.nth(index).click()
+        await page.waitForSelector('[data-testid="candidate-detail"]')
+        if (await page.textContent('[data-testid="candidate-id"]') === factCandidateId) {
+          selectedFactCandidate = true
+          break
+        }
+      }
+      expect(selectedFactCandidate).toBe(true)
+      expect(await page.getByTestId('candidate-detail').getAttribute('data-kind')).toBe('entity')
+      const semanticReviewResponse = page.waitForResponse((response) =>
+        response.request().method() === 'POST' && /\/api\/v1\/candidates\/[^/]+\/reviews$/u.test(requestPath(response)),
+      )
+      await page.getByTestId('review-reason').fill('依据已审核的项目字段与来源单元格批准事实发布')
+      await page.getByTestId('review-approve').click()
+      expect((await semanticReviewResponse).ok()).toBe(true)
+      await page.waitForFunction(() => document.querySelector('[data-testid="review-head"]')?.getAttribute('data-approved') === 'true')
+      const semanticPublicationResponse = page.waitForResponse((response) =>
+        response.request().method() === 'POST' && requestPath(response) === '/api/v1/semantic-publications',
+      )
+      factSemanticPublicationStarted = true
+      await page.getByTestId('publish').click()
+      expect((await semanticPublicationResponse).ok()).toBe(true)
+      await page.waitForSelector('[data-testid="statement-current"][data-status="active"]')
+      await capture(page, 'gap22-project-fact-semantics-published-1440')
+
       // Materialize the just-published record using the user-facing project action.
+      await page.getByTestId('tab-projects').click()
+      const returnPrompt = page.getByRole('dialog', { name: '离开当前工作内容？' })
+      if (await returnPrompt.isVisible()) await page.getByTestId('shell-discard-changes').click()
+      await page.waitForFunction(() => new URL(window.location.href).searchParams.get('view') === 'projects')
+      await page.waitForSelector(`[data-testid="project-detail"][data-project-id="${projectId}"]`)
       await page.getByRole('button', { name: '项目记录', exact: true }).click()
       await page.getByTestId('dataset-object').selectOption('industrial_asset')
       const materializationResponse = page.waitForResponse((response) =>
@@ -289,7 +395,8 @@ describe('GAP-022 normal App project source-to-publication pipeline', () => {
       )
       await page.getByTestId('dataset-materialize').click()
       const materialized = await materializationResponse
-      expect(materialized.ok()).toBe(true)
+      const materializationBody = await materialized.text()
+      expect(materialized.ok(), `dataset materialization returned ${materialized.status()}: ${materializationBody}`).toBe(true)
       await page.waitForSelector('[data-testid="dataset-status"][data-state="ready"]', { timeout: 60_000 })
       await page.waitForFunction(() => document.querySelector('[data-testid="readiness-state-dataset"]')?.textContent === '已就绪')
 
@@ -306,6 +413,7 @@ describe('GAP-022 normal App project source-to-publication pipeline', () => {
         'file=actual-browser-uploaded-csv',
         'mapping=server-previewed-and-confirmed',
         'record=field-confirmed+identity-created+approved+published',
+        `expectedPrepublishProbe=404 GET /api/v1/statements/${stagedFactCandidateId}`,
         'source=original-csv-cell-row-2-column-1-value-GAP22-ASSET-001',
         'dataset=ready-after-visible-materialize-action',
         'viewports=1440,1024,768,390; page-level-horizontal-overflow=none',
