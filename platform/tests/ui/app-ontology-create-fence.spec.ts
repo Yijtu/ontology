@@ -65,7 +65,14 @@ describe('main App late workspace-create acknowledgement', () => {
       expect(new URL(window.location.href).searchParams.get('view')).toBe('query')
       expect(new URL(window.location.href).searchParams.get('workspace')).toBe(workspaceA.workspaceId)
 
-      await act(async () => resolveCreate?.({ workspace: workspaceB, draft: {} as AssetDraftVersion }))
+      const draft: AssetDraftVersion = {
+        workspaceId: workspaceB.workspaceId, revision: '1', digest: `sha256:${'a'.repeat(64)}`,
+        documentSetRef: { id: '33333333-3333-4333-8333-333333333333', version: '1.0.0', digest: `sha256:${'a'.repeat(64)}`, kind: 'artifact' },
+        candidateRefs: [],
+      }
+      const completeCreate = resolveCreate
+      if (completeCreate === undefined) throw new Error('Pending validated-client response was not captured')
+      await act(async () => completeCreate({ workspace: workspaceB, draft }))
       await act(async () => { await new Promise((resolve) => setTimeout(resolve, 0)) })
       expect(new URL(window.location.href).searchParams.get('view')).toBe('query')
       expect(new URL(window.location.href).searchParams.get('workspace')).toBe(workspaceA.workspaceId)
