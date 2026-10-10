@@ -38,10 +38,10 @@ describe('ordinary independent CQ authoring at the HTTP boundary', () => {
       const body: unknown = init?.body === undefined ? undefined : JSON.parse(String(init.body))
       if (path.endsWith('/competency-question-sets')) {
         if (!isObject(body) || !isVersionRef(body['ref']) || !isObject(body['body'])) throw new Error('new declaration body missing')
-        expect(body['ref'].digest).toBe(contentDigestOf(body['body'])); saved = { ref: body['ref'], body: body['body'] }; order.push('save'); approved = false
+        expect(body['ref'].digest).toBe(contentDigestOf(body['body'])); saved = { ref: { ...body['ref'], id: randomUUID() }, body: body['body'] }; order.push('save'); approved = false
         return json({ declaration: saved, candidateId: saved.ref.id, approvalRequired: true })
       }
-      if (path.endsWith('/competency-question-sets/read')) { order.push('readback'); return json({ declaration: saved, approved }) }
+      if (path.endsWith('/competency-question-sets/read')) { if (saved === undefined || !isObject(body) || !isVersionRef(body['ref'])) throw new Error('exact server-issued CQ ref is required for readback'); expect(body['ref']).toEqual(saved.ref); order.push('readback'); return json({ declaration: saved, approved }) }
       if (path.endsWith('/reviews') && method === 'GET') return json({ reviews: [] })
       if (path.endsWith('/reviews') && method === 'POST') { expect(saved).toBeDefined(); expect(path.split('/').at(-2)).toBe(saved?.ref.id); expect(new Headers(init?.headers).get('if-match')).toBe('0'); order.push('human-review'); approved = true; return json({ candidateId: saved?.ref.id, contentDigest: saved?.ref.digest, revision: '1', decision: 'approve', reason: '独立人工审核' }) }
       return new Response('', { status: 404 })

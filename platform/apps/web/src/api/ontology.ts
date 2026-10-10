@@ -86,3 +86,8 @@ export function isLatestHumanReviewApproval(reviews: readonly HumanReviewView[],
     current === undefined || BigInt(review.revision) > BigInt(current.revision) ? review : current, undefined)
   return latest?.decision === 'approve' && latest.contentDigest === contentDigest
 }
+
+export function latestCandidateHeads<T extends { readonly candidateId: string; readonly replacesCandidateId?: string }>(candidates: readonly T[]): readonly T[] {
+  const replaced = new Set(candidates.flatMap((candidate) => candidate.replacesCandidateId === undefined ? [] : [candidate.replacesCandidateId]))
+  return candidates.filter((candidate) => !replaced.has(candidate.candidateId))
+}
