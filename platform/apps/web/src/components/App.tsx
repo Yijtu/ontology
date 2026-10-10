@@ -416,6 +416,13 @@ export function App({
     else apply()
   }, [projectId, scopeBound, guard, clearScopeReferences])
 
+  const adoptCreatedProject = useCallback((value: string) => {
+    setDirty(false)
+    clearScopeReferences()
+    setProjectId(value)
+    writeParam('project', value)
+  }, [clearScopeReferences])
+
   const contribution = scenarioViews.find((entry) => entry.view === view)
   const tabs = [...CORE_TABS, ...scenarioViews.map(({ view: extraView, label }) => ({ view: extraView, label }))]
   const contributionView = !coreViewOf(view) && contribution !== undefined
@@ -543,6 +550,8 @@ export function App({
           {...(deploymentModels === undefined ? {} : { modelCapabilities: deploymentModels })}
           onEvidenceReference={openSourceReference}
           {...(queryContextFields === undefined ? {} : { contextFields: queryContextFields })}
+          {...(projectId === undefined ? {} : { projectId })}
+          onSelectProject={selectProject}
           {...(activeRunId === undefined ? {} : { initialRunId: activeRunId })}
         />
       ) : null}
@@ -576,7 +585,7 @@ export function App({
         />
       ) : null}
 
-      {view === 'ontology' ? <OntologyWorkspacePanel client={client} readOnly={readOnly} /> : null}
+      {view === 'ontology' ? <OntologyWorkspacePanel client={client} readOnly={readOnly} {...(workspaceId === undefined ? {} : { initialWorkspaceId: workspaceId })} onSelectWorkspace={selectWorkspace} /> : null}
 
       {view === 'projects' ? (
         bindingPhase === 'loading' || bindingStale ? <StateFeedback tone="loading" title="正在准备项目工作台" description="读取当前场景的配置与映射。" /> : bindingPhase === 'failure' ? <StateFeedback tone="error" title="项目工作台准备失败" description="当前配置未能读取，请重试。" action={<Button onClick={() => setContextReload((count) => count + 1)}>重试</Button>} /> : activeScenario === undefined || projectBinding === undefined ? (
@@ -587,7 +596,7 @@ export function App({
             nextStep="先在上方场景下拉中选择一个已绑定配置的场景；若仍不可用，请确认该部署已发布行业包。"
           />
         ) : (
-          <ProjectWorkspacePanel client={client} projectBinding={projectBinding} packs={packs} readOnly={readOnly} {...(projectId === undefined ? {} : { initialProjectId: projectId })} />
+          <ProjectWorkspacePanel client={client} projectBinding={projectBinding} profileRef={activeProfileRef} packs={packs} readOnly={readOnly} {...(projectId === undefined ? {} : { initialProjectId: projectId })} onSelectProject={selectProject} onProjectCreated={adoptCreatedProject} />
         )
       ) : null}
 
@@ -640,6 +649,8 @@ export function App({
           readOnly={readOnly}
           availableTasks={availableTasks}
           resultSource={resultSource}
+          {...(projectId === undefined ? {} : { projectId })}
+          onSelectProject={selectProject}
           {...(deploymentModels === undefined ? {} : { modelCapabilities: deploymentModels })}
           onOpenSource={openSourceReference}
           {...(activeRunId === undefined ? {} : { initialRunId: activeRunId })}

@@ -1498,6 +1498,21 @@ export class WorkbenchClient {
     })
   }
 
+  /** Configure an exact, real published pack for ordinary business project creation. */
+  preparePublishedPackProfile(packRef: VersionRef, idempotencyKey: string, signal?: AbortSignal): Promise<{ readonly packRef: VersionRef; readonly definitionRef: VersionRef; readonly profileRef: ProfileRef }> {
+    const path = '/api/v1/core/published-pack-profiles'
+    return this.#request<unknown>('POST', path, { body: { packRef }, idempotencyKey, ...(signal === undefined ? {} : { signal }) }).then((data) => {
+      if (!isRecord(data) || data['purpose'] !== 'business_project_configuration' ||
+          !isVersionRef(data['packRef']) || !isVersionRef(data['definitionRef']) || !isProfileRef(data['profileRef'])) {
+        throw malformedResponse(path, 'the published pack configuration was not recognised')
+      }
+      if (data['packRef'].id !== packRef.id || data['packRef'].version !== packRef.version || data['packRef'].digest !== packRef.digest) {
+        throw malformedResponse(path, 'the configured pack does not match the exact requested published version')
+      }
+      return { packRef: data['packRef'], definitionRef: data['definitionRef'], profileRef: data['profileRef'] }
+    })
+  }
+
   /** `GET /projects`: the customer projects visible in the trusted scope. */
   listProjects(filter: { readonly state?: ProjectState; readonly limit?: number } = {}): Promise<ProjectRecord[]> {
     const query = new URLSearchParams()

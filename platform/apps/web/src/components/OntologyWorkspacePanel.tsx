@@ -30,6 +30,8 @@ export interface OntologyWorkspacePanelProps {
   readonly client: WorkbenchClient
   readonly identity?: WorkspaceIdentity
   readonly readOnly?: boolean
+  readonly initialWorkspaceId?: string
+  readonly onSelectWorkspace?: (workspaceId: string | undefined) => void
 }
 
 export interface WorkspaceCreateFields {
@@ -123,6 +125,8 @@ export function OntologyWorkspacePanel({
   client,
   identity = webWorkspaceIdentity,
   readOnly = false,
+  initialWorkspaceId,
+  onSelectWorkspace,
 }: OntologyWorkspacePanelProps) {
   const [stage, setStage] = useState('sources')
   const [visited, setVisited] = useState<ReadonlySet<string>>(new Set(['sources']))
@@ -162,7 +166,7 @@ export function OntologyWorkspacePanel({
       const list = await client.listIndustryWorkspaces()
       if (listEpoch.current !== token) return
       setWorkspaces(list)
-      const requested = typeof window === 'undefined' ? undefined : new URLSearchParams(window.location.search).get('workspace')
+      const requested = initialWorkspaceId ?? (typeof window === 'undefined' ? undefined : new URLSearchParams(window.location.search).get('workspace'))
       const matching = list.find((workspace) => workspace.workspaceId === requested)
       setSelectedId((previous) => {
         const candidate = matching?.workspaceId ?? previous
@@ -175,7 +179,7 @@ export function OntologyWorkspacePanel({
       setError(toError(caught))
       setPhase(phaseFor(caught))
     }
-  }, [client])
+  }, [client, initialWorkspaceId])
 
   useEffect(() => {
     void loadList()
@@ -190,6 +194,10 @@ export function OntologyWorkspacePanel({
       setError(toError(caught))
     })
   }, [selectedId, loadDrafts])
+
+  useEffect(() => {
+    if (selectedId !== undefined) onSelectWorkspace?.(selectedId)
+  }, [selectedId, onSelectWorkspace])
 
   useEffect(() => {
     if (!editMode || selected === undefined) return
@@ -209,10 +217,17 @@ export function OntologyWorkspacePanel({
 
   const selectWorkspace = (workspaceId: string): void => {
     setSelectedId(workspaceId)
+    onSelectWorkspace?.(workspaceId)
     setStage('sources')
     setEditMode(false)
     workspaceQuery(workspaceId)
   }
+
+  useEffect(() => {
+    if (initialWorkspaceId !== undefined && initialWorkspaceId !== selectedId && workspaces.some((entry) => entry.workspaceId === initialWorkspaceId)) {
+      setSelectedId(initialWorkspaceId)
+    }
+  }, [initialWorkspaceId, selectedId, workspaces])
 
   const create = async (): Promise<void> => {
     const errors = validateCreateFields(fields)

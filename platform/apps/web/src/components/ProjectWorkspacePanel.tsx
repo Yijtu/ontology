@@ -114,6 +114,7 @@ export interface ProjectWorkspacePanelProps {
   readonly readOnly?: boolean
   readonly initialProjectId?: string
   readonly onSelectProject?: (projectId: string) => void
+  readonly onProjectCreated?: (projectId: string) => void
   readonly initialEvolutionId?: string
   readonly onEvolution?: (evolutionId: string) => void
 }
@@ -170,6 +171,7 @@ export function ProjectWorkspacePanel({
   readOnly = false,
   initialProjectId,
   onSelectProject,
+  onProjectCreated,
   initialEvolutionId,
   onEvolution,
 }: ProjectWorkspacePanelProps) {
@@ -177,12 +179,18 @@ export function ProjectWorkspacePanel({
   const [error, setError] = useState<WorkbenchError | undefined>(undefined)
   const [loadedProjects, setProjects] = useState<readonly ProjectRecord[]>([])
   const [selectedId, setSelectedId] = useState<string | undefined>(initialProjectId)
-  const activeProfile = profileRef ?? projectBinding?.profileRef
+  const [configuredPackProfile, setConfiguredPackProfile] = useState<ProfileRef | undefined>()
+  const [packChoice, setPackChoice] = useState('')
+  const activeProfile = packChoice.length > 0 ? configuredPackProfile : profileRef ?? projectBinding?.profileRef
   const scope = useMemo(
     () => ({ client, selectedId, profileId: activeProfile?.id, version: activeProfile?.version }),
     [client, selectedId, activeProfile?.id, activeProfile?.version],
   )
   const listScope = useMemo(() => ({ client, initialProjectId }), [client, initialProjectId])
+  const packRequestKey = useRef<{ readonly packChoice: string; readonly key: string } | undefined>(undefined)
+  const packRequest = useRef<AbortController | undefined>(undefined)
+  const packChoiceRef = useRef(packChoice)
+  packChoiceRef.current = packChoice
   const [busy, setBusy] = useState(false)
   const [step, setStep] = useState<'overview' | 'import' | 'mapping' | 'records' | 'review' | 'history'>(
     'overview',
@@ -482,6 +490,7 @@ export function ProjectWorkspacePanel({
           : []),
       ])
       setSelectedId(result.project.projectId)
+      onProjectCreated?.(result.project.projectId)
       setTitle('')
       createKey.current = undefined
       setPhase('ready')
@@ -489,6 +498,28 @@ export function ProjectWorkspacePanel({
       if (request.current()) setCreateFailure(toError(caught))
     } finally {
       if (request.current()) setBusy(false)
+    }
+  }
+
+  const configurePack = async (packId: string): Promise<void> => {
+    setPackChoice(packId)
+    packChoiceRef.current = packId
+    setConfiguredPackProfile(undefined)
+    packRequest.current?.abort()
+    const pack = packs.find((candidate) => candidate.packRef !== undefined && JSON.stringify(candidate.packRef) === packId && candidate.usable)
+    if (pack?.packRef === undefined) return
+    const controller = new AbortController()
+    packRequest.current = controller
+    if (packRequestKey.current?.packChoice !== packId) packRequestKey.current = { packChoice: packId, key: client.newRequestKey() }
+    setBusy(true)
+    setCreateFailure(undefined)
+    try {
+      const configured = await client.preparePublishedPackProfile(pack.packRef, packRequestKey.current.key, controller.signal)
+      if (!controller.signal.aborted && packRequest.current === controller && packChoiceRef.current === packId) setConfiguredPackProfile(configured.profileRef)
+    } catch (caught) {
+      if (!controller.signal.aborted && packRequest.current === controller && packChoiceRef.current === packId) setCreateFailure(toError(caught))
+    } finally {
+      if (!controller.signal.aborted && packRequest.current === controller) setBusy(false)
     }
   }
 
@@ -748,7 +779,7 @@ export function ProjectWorkspacePanel({
                       data-project-id={project.projectId}
                       data-selected={project.projectId === selectedId}
                       aria-pressed={project.projectId === selectedId}
-                      onClick={() => setSelectedId(project.projectId)}
+                      onClick={() => onSelectProject === undefined ? setSelectedId(project.projectId) : onSelectProject(project.projectId)}
                     >
                       {project.title}（修订 {project.headRevision} · {project.state}）
                     </button>
@@ -784,10 +815,25 @@ export function ProjectWorkspacePanel({
                   )}
                 </label>
                 <div className="project-workspace__field">
-                  <p data-testid="project-create-pack">
+                  <label>
+                    <span>已发布行业包版本</span>
+                    <select data-testid="project-create-pack" value={packChoice} disabled={busy} onChange={(event) => void configurePack(event.target.value)}>
+                      <option value="">使用当前部署版本</option>
+                      {packs.filter((pack) => pack.usable && pack.packRef !== undefined).map((pack) => (
+                        <option key={JSON.stringify(pack.packRef)} value={JSON.stringify(pack.packRef)}>
+                          {pack.displayName} · {pack.packRef?.version}
+                        </option>
+                      ))}
+                    </select>
+                  </label>
+                  <p>
                     {activeProfile === undefined
                       ? '请先选择已注册的场景。'
-                      : '使用当前场景的已发布版本。服务端将固定行业包、映射与资料集。'}
+                      : packChoice.length > 0 && configuredPackProfile === undefined
+                        ? '正在读取所选已发布版本的项目配置。'
+                        : configuredPackProfile === undefined
+                        ? '使用当前场景的已发布版本。服务端将固定行业包、映射与资料集。'
+                        : '已由服务端注册并固定所选发布版本，可用于新建项目。'}
                   </p>
                   {createErrors['pack'] === undefined ? null : (
                     <small data-testid="project-create-error-pack">{createErrors['pack']}</small>

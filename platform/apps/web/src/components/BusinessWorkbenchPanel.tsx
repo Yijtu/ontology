@@ -286,8 +286,8 @@ export function BusinessWorkbenchPanel({
             <ProjectContextPicker
               context={projectContext}
               onSelect={(id) => {
-                projectContext.select(id)
-                onSelectProject?.(id)
+                if (onSelectProject === undefined) projectContext.select(id)
+                else onSelectProject(id)
               }}
             />
             {catalogueError === undefined ? null : <ProjectNotice error={catalogueError} />}

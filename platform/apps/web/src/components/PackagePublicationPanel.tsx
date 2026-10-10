@@ -183,7 +183,7 @@ export function PackagePublicationPanel({
   const [report, setReport] = useState<IndustryValidationReportView | undefined>(undefined)
   const [selectedExampleSetId, setSelectedExampleSetId] = useState<string | undefined>(undefined)
 
-  const [packId, setPackId] = useState('')
+  const [packId, setPackId] = useState('pack')
   const [packVersion, setPackVersion] = useState('1.0.0')
   const [requireDeploymentExecutable, setRequireDeploymentExecutable] = useState(false)
   const [publication, setPublication] = useState<PublishedPackResultView | undefined>(undefined)
@@ -545,26 +545,29 @@ export function PackagePublicationPanel({
 
           <section className="package-publication__publish" data-testid="asset-publish-section">
             <h3>发布不可变包</h3>
-            <label>
-              发布标识（高级）
-              <input
-                type="text"
-                data-testid="asset-publish-pack-id"
-                value={packId}
-                disabled={busy || readOnly}
-                onChange={(event) => setPackId(event.target.value)}
-              />
-            </label>
-            <label>
-              版本
-              <input
-                type="text"
-                data-testid="asset-publish-version"
-                value={packVersion}
-                disabled={busy || readOnly}
-                onChange={(event) => setPackVersion(event.target.value)}
-              />
-            </label>
+            <details>
+              <summary>高级：发布标识与版本</summary>
+              <label>
+                发布标识
+                <input
+                  type="text"
+                  data-testid="asset-publish-pack-id"
+                  value={packId}
+                  disabled={busy || readOnly}
+                  onChange={(event) => setPackId(event.target.value)}
+                />
+              </label>
+              <label>
+                版本
+                <input
+                  type="text"
+                  data-testid="asset-publish-version"
+                  value={packVersion}
+                  disabled={busy || readOnly}
+                  onChange={(event) => setPackVersion(event.target.value)}
+                />
+              </label>
+            </details>
             <label>
               <input
                 type="checkbox"
