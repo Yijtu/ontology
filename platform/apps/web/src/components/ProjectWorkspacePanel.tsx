@@ -838,7 +838,7 @@ export function ProjectWorkspacePanel({
                   <label>
                     <span>已发布行业包版本</span>
                     <select data-testid="project-create-pack" value={packChoice} disabled={busy} onChange={(event) => void configurePack(event.target.value)}>
-                      <option value="">使用当前部署版本</option>
+                      <option value="">使用当前场景的部署版本</option>
                       {packs.filter((pack) => pack.usable && pack.packRef !== undefined).map((pack) => (
                         <option key={JSON.stringify(pack.packRef)} value={JSON.stringify(pack.packRef)}>
                           {pack.displayName} · {pack.packRef?.version}
