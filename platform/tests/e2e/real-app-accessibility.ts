@@ -152,9 +152,9 @@ export async function collectRealAppAccessibilityEvidence(page: Page, options: {
       const style = getComputedStyle(node)
       const maximumMs = (value: string): number => {
         const values = value.split(',').map((duration) => {
-          const match = duration.trim().match(/^([\d.]+)(ms|s)$/)
+          const match = duration.trim().match(/^((?:\d+(?:\.\d*)?|\.\d+)(?:e[+-]?\d+)?)(ms|s)$/i)
           if (match === null) throw new Error(`unsupported computed duration: ${duration}`)
-          return Number(match[1]) * (match[2] === 's' ? 1000 : 1)
+          return Number(match[1]) * (match[2]?.toLowerCase() === 's' ? 1000 : 1)
         })
         return Math.max(...values)
       }
