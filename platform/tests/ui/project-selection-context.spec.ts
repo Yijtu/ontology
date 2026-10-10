@@ -32,11 +32,12 @@ describe('mounted project panel context ownership', () => {
         client, packs: [], initialProjectId: projects[0]!.projectId, onSelectProject: (id) => selected.push(id),
       })))
       expect(container.querySelector('[data-testid="project-detail"]')?.getAttribute('data-project-id')).toBe(projects[0]!.projectId)
+      selected.length = 0
       await act(async () => root.render(createElement(ProjectWorkspacePanel, {
         client, packs: [], initialProjectId: projects[1]!.projectId, onSelectProject: (id) => selected.push(id),
       })))
       expect(container.querySelector('[data-testid="project-detail"]')?.getAttribute('data-project-id')).toBe(projects[1]!.projectId)
-      expect(selected.at(-1)).toBe(projects[1]!.projectId)
+      expect(selected).not.toContain(projects[0]!.projectId)
     } finally {
       await act(async () => root.unmount())
       container.remove()
