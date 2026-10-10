@@ -300,7 +300,7 @@ export function ProjectWorkspacePanel({
           ...(table.sheetName === undefined ? {} : { sheetName: table.sheetName }),
           fields: object.attributes.map((field) => ({
             fieldRef: field.attributeId,
-            label: field.displayName,
+            label: field.displayName.trim().length > 0 && field.displayName.trim() !== '未提供名称' ? field.displayName : field.attributeId,
             valueType: field.valueType,
             required: field.required,
             ...(field.unit === undefined ? {} : { unitCode: field.unit }),
