@@ -1511,18 +1511,20 @@ export function ProjectWorkspacePanel({
                 ) : (
                   <div className="project-table" role="region" aria-label="项目映射记录" tabIndex={0}>
                   <table data-testid="record-table">
+                    <caption className="project-records__caption">当前页项目映射记录</caption>
                     <thead>
                       <tr>
-                        <th>记录</th>
-                        <th>对象</th>
-                        <th>状态</th>
-                        <th>字段</th>
+                        <th scope="col">记录</th>
+                        <th scope="col">对象</th>
+                        <th scope="col">状态</th>
+                        <th scope="col">字段</th>
                       </tr>
                     </thead>
                     <tbody>
                       {records.map((record) => {
                         const object = catalogue?.objects.find((entry) => entry.objectId === record.objectId)
                         const sourceKeyField = record.fields.find((field) => typeof field.raw === 'string')
+                        const mapping = mappings.find((entry) => entry.mappingId === record.mappingId && entry.version === record.mappingVersion)
                         return (
                           <tr
                             key={record.recordId}
@@ -1530,7 +1532,7 @@ export function ProjectWorkspacePanel({
                             data-record-id={record.recordId}
                             data-status={record.status}
                           >
-                            <td>
+                            <td data-label="记录">
                               <strong>{sourceKeyField?.raw ?? '项目记录'}</strong>
                               <small>映射原始键</small>
                               <details className="project-audit">
@@ -1538,17 +1540,22 @@ export function ProjectWorkspacePanel({
                                 <code data-testid="record-id">{record.recordId}</code>
                               </details>
                             </td>
-                            <td>{object?.displayName ?? record.objectId}</td>
-                            <td data-testid="record-status" data-status={record.status}>{fieldStatusLabel(record.status)}</td>
-                            <td>
+                            <td data-label="对象">{object?.displayName ?? record.objectId}</td>
+                            <td data-label="状态" data-testid="record-status" data-status={record.status}>{fieldStatusLabel(record.status)}</td>
+                            <td data-label="字段">
                               <div className="project-record-fields">
                                 {record.fields.map((field) => {
                                   const attribute = object?.attributes.find((entry) => entry.attributeId === field.fieldId)
+                                  const sourceHeader = mapping?.entries.find((entry) => entry.fieldRef === field.fieldId)?.header.trim()
+                                  const displayName = attribute?.displayName.trim()
+                                  const fieldLabel = displayName !== undefined && displayName.length > 0 && displayName !== '未提供名称'
+                                    ? displayName
+                                    : sourceHeader || field.fieldId
                                   const normalized = field.normalized.kind === 'quantity'
                                     ? `${field.normalized.value} ${field.normalized.unitCode}`
                                     : String(field.normalized.value ?? '∅')
                                   return <div className="project-record-field" key={field.fieldId} data-testid={`record-field-${field.fieldId}`} data-status={field.status}>
-                                    <div className="project-record-field__head"><strong>{attribute?.displayName ?? field.fieldId}</strong><span>{fieldStatusLabel(field.status)}</span></div>
+                                    <div className="project-record-field__head"><strong>{fieldLabel}</strong><span>{fieldStatusLabel(field.status)}</span></div>
                                     <p><span>原始</span><code>{field.raw === null ? '∅' : String(field.raw)}</code></p>
                                     <p><span>规范</span><code>{normalized}</code></p>
                                   </div>
