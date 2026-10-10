@@ -532,7 +532,7 @@ export interface TableArtifactManifestStore {
     answerId: Uuid,
     manifestRef: ResourceRef,
     manifest: TableArtifactManifest,
-    verificationReceiptRef: ResourceRef,
+    verificationReceiptRef: ResourceRef | undefined,
     ctx: ToolContext,
   ): Promise<void>
   getManifest(

@@ -132,7 +132,13 @@ describe('Core query table producer with real PostgreSQL and original input byte
     const archive = async (body: unknown) => (await writer.putBytes({ scopeRef: scope, content: new TextEncoder().encode(canonicalJson(body)), mediaType: 'application/json' }, queryCtx)).blobRef
     const schemaBody: unknown = JSON.parse(await readFile(new URL('../../packages/contracts/schema/tools.schema.json', import.meta.url), 'utf8'))
     if (!isRecord(schemaBody)) throw new Error('the actual canonical tools schema is unavailable')
-    const schemaRef = await archive(schemaBody)
+    const schemaDigest = sha256OfCanonical(schemaBody)
+    const schemaArtifactId = deterministicUuid(`${scope.tenantId}|${scope.spaceId}|core-data-query-output-schema:${schemaDigest}`)
+    const registeredSchema = await registry.findReference(scope, schemaArtifactId)
+    if (registeredSchema === undefined || registeredSchema.reference.purpose !== 'artifact' || registeredSchema.reference.contentDigest !== schemaDigest || registeredSchema.blob.mediaType !== 'application/schema+json') throw new Error('the actual canonical tools schema was not registered with its schema media type')
+    const schemaRef: ResourceRef = { id: registeredSchema.reference.blobRefId, version: '1.0.0', digest: schemaDigest, kind: 'artifact' }
+    const registeredSchemaBytes = await blobs.readAuthorized({ scopeRef: scope, blobRef: schemaRef }, queryCtx)
+    if (canonicalJson(JSON.parse(new TextDecoder().decode(registeredSchemaBytes))) !== canonicalJson(schemaBody)) throw new Error('the registered table schema bytes differ from the canonical schema')
     const bridge = createCoreTableResults({ artifacts: blobs, writer: stableWriter, pages, manifests: pages, receipts, evidence, findArtifact, tableOutputSchema: { ref: schemaRef, body: schemaBody }, verifier: new TableHardVerificationService({ pages, receipts, progress: receipts, artifacts: blobs, evidence }) })
     const task = coreScenarioTaskBindings(scenario).find((binding) => binding.kind === 'structured_query')
     if (task === undefined) throw new Error('the real registered structured-query task is missing')

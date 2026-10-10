@@ -6,6 +6,7 @@ import { afterAll, beforeAll, describe, expect, it } from 'vitest'
 import {
   ControlPostgresDatabase,
   PostgresAnswerStore,
+  PostgresEvidenceStore,
   PostgresTableArtifactStore,
   PostgresTableVerificationStore,
 } from '@ontology/adapter-control-postgres'
@@ -16,10 +17,12 @@ import {
 } from '@ontology/adapter-blob-local'
 import {
   TableArtifactReadService,
+  TableHardVerificationService,
   VerifiedResultReadService,
   canonicalJson,
   typedResultManifestContentDigest,
 } from '@ontology/application'
+import type { VerificationArtifactStore } from '@ontology/application'
 import { createApiServer, createBlobArtifactWriter } from '@ontology/app-api'
 import type { AuthenticatedRequest } from '@ontology/app-api'
 import {
@@ -38,7 +41,7 @@ import type {
   TableArtifactManifest,
   TableArtifactPageBody,
   TableColumnDescriptor,
-  TableVerificationReceipt,
+  EvidenceEnvelope,
   ToolContext,
   TypedResultManifest,
   VerifiedTableManifestSource,
@@ -116,11 +119,49 @@ function ctxFor(target: JobTestScope, runId: string): ToolContext {
   })
 }
 
-function evidenceRef(): ResourceRef {
-  return { id: randomUUID(), version: '1.0.0', digest: DIGEST, kind: 'artifact' }
+class FixtureEvidence {
+  readonly #store: PostgresEvidenceStore
+  constructor(store: PostgresEvidenceStore) { this.#store = store }
+  async seed(scopeRef: ScopeRef, ctx: ToolContext, payload: unknown): Promise<{ readonly ref: ResourceRef; readonly digest: string }> {
+    const bytes = new TextEncoder().encode(canonicalJson(payload))
+    const archived = await artifactWriter.putBytes({ scopeRef, content: bytes, mediaType: 'application/json' }, ctx)
+    const evidenceId = randomUUID(), digest = archived.blobRef.digest
+    const envelope: EvidenceEnvelope = {
+      evidenceId,
+      kind: 'observation',
+      scopeRef,
+      producedBy: { componentRef: { id: 'answer-route-fixture', version: '1.0.0', digest: DIGEST }, runId: ctx.runId },
+      observedAt: NOW,
+      sourceSnapshots: [{ sourceRef: { namespace: 'fixture', sourceId: 'table-row' }, schemaVersion: '1', readAt: NOW, consistency: 'repeatable_read', resultDigest: digest }],
+      resultDigest: digest,
+      dependencies: [],
+      dataMode: 'synthetic',
+      payloadRef: archived.blobRef,
+      integrity: { algorithm: 'sha256', digest, verifiedAt: NOW },
+    }
+    const record = await this.#store.record(scopeRef, envelope, ctx)
+    return { ref: record.evidenceRef, digest }
+  }
 }
 
-function pageBody(tableId: string, pageIndex: number, rowKeys: readonly string[]): TableArtifactPageBody {
+let fixtureEvidence: FixtureEvidence
+let verificationArtifacts: VerificationArtifactStore
+let tableVerifier: TableHardVerificationService
+
+async function pageBody(tableId: string, pageIndex: number, rowKeys: readonly string[], target: JobTestScope, ctx: ToolContext): Promise<TableArtifactPageBody> {
+  const rows = await Promise.all(rowKeys.map(async (rowKey, index) => {
+    const site = `site-${rowKey}`, amount = String(index)
+    const evidence = await fixtureEvidence.seed(scopeRefOf(target), ctx, { amount, site, unit: 'kWh' })
+    return {
+      rowKey,
+      subject: site,
+      cells: { amount: { value: amount, unit: 'kWh' }, site },
+      bindings: [
+        { rowKey, columnRef: 'amount', evidenceRef: evidence.ref, resultDigest: evidence.digest, valuePointer: '/amount', subjectPointer: '/site', unitPointer: '/unit' },
+        { rowKey, columnRef: 'site', evidenceRef: evidence.ref, resultDigest: evidence.digest, valuePointer: '/site', subjectPointer: '/site' },
+      ],
+    }
+  }))
   return {
     schemaVersion: 'table-artifact-page@1',
     tableId,
@@ -128,38 +169,17 @@ function pageBody(tableId: string, pageIndex: number, rowKeys: readonly string[]
     pageIndex,
     columnRefs: COLUMNS.map((column) => column.columnRef),
     rowKeyOrder: 'ascending',
-    rows: rowKeys.map((rowKey, index) => ({
-      rowKey,
-      subject: `site-${rowKey}`,
-      cells: { amount: String(index), site: `site-${rowKey}` },
-      bindings: [
-        {
-          rowKey,
-          columnRef: 'amount',
-          evidenceRef: evidenceRef(),
-          resultDigest: DIGEST,
-          valuePointer: '/amount',
-          subjectPointer: '/site',
-          unitPointer: '/unit',
-        },
-        {
-          rowKey,
-          columnRef: 'site',
-          evidenceRef: evidenceRef(),
-          resultDigest: DIGEST,
-          valuePointer: '/site',
-          subjectPointer: '/site',
-        },
-      ],
-    })),
+    rows,
     coverage: { returned: rowKeys.length, truncated: false },
   }
 }
 
-function buildTable(
+async function buildTable(
   tableId: string,
   rowTotal: number,
-): { manifest: TableArtifactManifest; pages: readonly { ref: ResourceRef; body: TableArtifactPageBody }[] } {
+  target: JobTestScope,
+  ctx: ToolContext,
+): Promise<{ manifest: TableArtifactManifest; pages: readonly { ref: ResourceRef; body: TableArtifactPageBody }[] }> {
   const pages: { ref: ResourceRef; body: TableArtifactPageBody }[] = []
   for (let pageIndex = 0; pageIndex * PAGE_SIZE < rowTotal; pageIndex += 1) {
     const start = pageIndex * PAGE_SIZE
@@ -167,7 +187,7 @@ function buildTable(
     const rowKeys = Array.from({ length: end - start }, (_value, offset) =>
       `r-${String(start + offset).padStart(5, '0')}`,
     )
-    const body = pageBody(tableId, pageIndex, rowKeys)
+    const body = await pageBody(tableId, pageIndex, rowKeys, target, ctx)
     const ref: ResourceRef = {
       id: randomUUID(),
       version: '1.0.0',
@@ -196,27 +216,6 @@ function buildTable(
     complete: rowTotal > 0,
   }
   return { manifest, pages }
-}
-
-function receiptFor(manifest: TableArtifactManifest): { ref: ResourceRef; receipt: TableVerificationReceipt } {
-  const receipt: TableVerificationReceipt = {
-    schemaVersion: 'table-verification-receipt@1',
-    draftHash: DIGEST,
-    resultManifestRef: { id: randomUUID(), version: '1.0.0', digest: sha256OfCanonical(manifest), kind: 'artifact' },
-    resultManifestDigest: sha256OfCanonical(manifest),
-    tableId: manifest.tableId,
-    pageDigests: manifest.pages.map((page) => page.artifactDigest),
-    checkedRows: manifest.totalRows,
-    expectedRows: manifest.totalRows,
-    checkedCells: manifest.totalRows * manifest.columns.length,
-    expectedCells: manifest.totalRows * manifest.columns.length,
-    checksDigest: DIGEST_B,
-    policyVersion: 'table-hard-verification@1',
-  }
-  return {
-    ref: { id: randomUUID(), version: '1.0.0', digest: sha256OfCanonical(receipt), kind: 'verification' },
-    receipt,
-  }
 }
 
 async function seedProfile(target: JobTestScope): Promise<void> {
@@ -281,25 +280,19 @@ async function seedAnswer(target: JobTestScope, tableSeeds: readonly TableSeed[]
   const tables: { tableId: string; manifest: TableArtifactManifest }[] = []
 
   for (const seed of tableSeeds) {
-    const built = buildTable(seed.tableId, seed.rowTotal)
-    const manifestRef: ResourceRef = {
-      id: randomUUID(),
-      version: '1.0.0',
-      digest: sha256OfCanonical(built.manifest),
-      kind: 'artifact',
-    }
+    const built = await buildTable(seed.tableId, seed.rowTotal, target, ctx)
     for (const page of built.pages) {
       await tableStore.putPage(scopeRef, page.ref, page.body, ctx)
     }
+    const manifestBytes = new TextEncoder().encode(canonicalJson(built.manifest))
+    const manifestArtifact = await artifactWriter.putBytes({ scopeRef, content: manifestBytes, mediaType: 'application/json' }, ctx)
+    expect(manifestArtifact.blobRef.digest).toBe(sha256OfCanonical(built.manifest))
     if (seed.verified) {
-      const receipt = receiptFor(built.manifest)
-      await verificationStore.putReceipt(scopeRef, receipt.ref, receipt.receipt, ctx)
-      await tableStore.putManifest(scopeRef, answerId, manifestRef, built.manifest, receipt.ref, ctx)
+      const outcome = await tableVerifier.verifyTable({ resultManifestRef: manifestArtifact.blobRef, resultManifestDigest: manifestArtifact.blobRef.digest, draftHash: sha256OfCanonical({ answerId, tableId: seed.tableId }), tableId: seed.tableId, manifest: built.manifest }, ctx)
+      if (outcome.status !== 'pass') throw new Error(`the answer-route fixture did not earn a verification receipt: ${outcome.report.findings.map((finding) => finding.code).join(', ')}`)
+      await tableStore.putManifest(scopeRef, answerId, manifestArtifact.blobRef, built.manifest, outcome.receipt.ref, ctx)
     } else {
-      // An unverified table: the manifest names a receipt that was never earned, so the reader
-      // must refuse to render it as a formal table instead of trusting the stored ref.
-      const neverEarned: ResourceRef = { id: randomUUID(), version: '1.0.0', digest: DIGEST_B, kind: 'verification' }
-      await tableStore.putManifest(scopeRef, answerId, manifestRef, built.manifest, neverEarned, ctx)
+      await tableStore.putManifest(scopeRef, answerId, manifestArtifact.blobRef, built.manifest, undefined, ctx)
     }
     tables.push({ tableId: seed.tableId, manifest: built.manifest })
   }
@@ -376,6 +369,10 @@ beforeAll(async () => {
   registry = new PostgresArtifactRegistry({ connectionString: harness.appUrl, maxPoolSize: 4 })
   const blobStore = new LocalImmutableBlobStore({ objectStore, registry })
   artifactWriter = createBlobArtifactWriter(blobStore)
+  verificationArtifacts = {
+    getAuthorized: (request, ctx) => blobStore.getAuthorized(request, ctx),
+    readAuthorized: (request, ctx) => blobStore.readAuthorized(request, ctx),
+  }
 
   answerStore = new PostgresAnswerStore(database)
   tableStore = new PostgresTableArtifactStore(database, {
@@ -392,6 +389,8 @@ beforeAll(async () => {
     },
   })
   verificationStore = new PostgresTableVerificationStore(database)
+  fixtureEvidence = new FixtureEvidence(new PostgresEvidenceStore(database))
+  tableVerifier = new TableHardVerificationService({ pages: tableStore, evidence: new PostgresEvidenceStore(database), artifacts: verificationArtifacts, receipts: verificationStore, progress: verificationStore })
   // Production hardening: a table is only served as verified when the receipt it names exists.
   const verifiedManifests: VerifiedTableManifestSource = {
     resolve: async (scopeRef, answerId, tableId, ctx) => {
