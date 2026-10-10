@@ -15,6 +15,8 @@ const json = (data: unknown) => new Response(JSON.stringify({ data }), { headers
 const identity = { newId: () => W, sha256: () => Promise.resolve(digest) }
 function baseline(path: string, revision: string, generationEnabled = true): Response {
   if (path.endsWith('/authoring-context')) return json({ scopeRef: { tenantId: W, spaceId: P }, workspace: workspace(revision), draft: draft(revision), generationPolicyRef: { id: 'actual-policy', version: '1.0.0', digest }, models: { generationEnabled, decisionEnabled: false }, operations: [], generationLimits: { maxOutputTokens: 16384, maxCandidatesPerCall: 25, maxSources: 64, sourceContextBytes: 65536, sourceReadBytes: 33554432, sourceFragments: 32 } })
+  // This source-boundary fixture never writes definition candidates; keep that inventory distinct from the source catalogue below.
+  if (path.endsWith('/candidates')) return json({ candidates: [] })
   return json({ workspace: workspace(revision), draft: draft(revision), sources: [source] })
 }
 async function text(container: HTMLElement, label: string, value: string) { const l = [...container.querySelectorAll('label')].find((n) => n.textContent === label); const input = l === undefined ? null : container.querySelector(`[id="${l.htmlFor}"]`); if (!(input instanceof HTMLInputElement)) throw new Error(`Missing ${label}`); await act(async () => { Object.getOwnPropertyDescriptor(HTMLInputElement.prototype, 'value')?.set?.call(input, value); input.dispatchEvent(new Event('input', { bubbles: true })) }) }
@@ -59,7 +61,7 @@ describe('workspace source UI boundary', () => {
   })
   it('displays native XLSX boolean, empty, null and missing cells without React hiding them', async () => {
     const preview = { ...source, format: 'xlsx', tables: [{ ...source.tables[0], columns: [0,1,2,3,4].map((columnIndex) => ({ columnIndex, header: `列${columnIndex + 1}`, headerDigest: digest })), rows: [{ sourceRowKey: 'row-4', cells: [{ columnIndex: 0, raw: true }, { columnIndex: 1, raw: false }, { columnIndex: 2, raw: '' }, { columnIndex: 3, raw: null }] }] }] }
-    const client = new WorkbenchClient({ baseUrl: 'http://ui-unit.test', fetchImpl: async (input) => String(input).endsWith('/authoring-context') ? baseline('/authoring-context', '1') : json({ workspace: workspace(), draft: draft('1'), sources: [preview] }) })
+    const client = new WorkbenchClient({ baseUrl: 'http://ui-unit.test', fetchImpl: async (input) => { const path = new URL(String(input)).pathname; if (path.endsWith('/authoring-context')) return baseline(path, '1'); if (path.endsWith('/candidates')) return json({ candidates: [] }); return json({ workspace: workspace(), draft: draft('1'), sources: [preview] }) } })
     const container = document.createElement('div'); document.body.appendChild(container); const root = createRoot(container)
     try { await act(async () => root.render(createElement(WorkspaceSourcesPanel, { client, workspace: workspace(), identity }))); expect([...container.querySelectorAll('tbody td')].map((cell) => cell.textContent)).toEqual(['true','false','（原文为空字符串）','（原文为 null）','（缺少此格）']) }
     finally { await act(async () => root.unmount()); container.remove() }
@@ -80,7 +82,7 @@ describe('workspace source UI boundary', () => {
 
   it('distinguishes a complete original parse from a bounded eight-row partial preview', async () => {
     const preview = { ...source, previewCoverage: 'partial', coverage: { ...source.coverage, totalUnits: 10, parsedUnits: 10 }, tables: [{ ...source.tables[0], rows: Array.from({ length: 8 }, (_, index) => ({ sourceRowKey: `row-${index + 4}`, cells: [{ columnIndex: 0, raw: String(index) }] })) }] }
-    const client = new WorkbenchClient({ baseUrl: 'http://ui-unit.test', fetchImpl: async (input) => String(input).endsWith('/authoring-context') ? baseline('/authoring-context', '1') : json({ workspace: workspace(), draft: draft('1'), sources: [preview] }) })
+    const client = new WorkbenchClient({ baseUrl: 'http://ui-unit.test', fetchImpl: async (input) => { const path = new URL(String(input)).pathname; if (path.endsWith('/authoring-context')) return baseline(path, '1'); if (path.endsWith('/candidates')) return json({ candidates: [] }); return json({ workspace: workspace(), draft: draft('1'), sources: [preview] }) } })
     const container = document.createElement('div'); document.body.appendChild(container); const root = createRoot(container)
     try {
       await act(async () => root.render(createElement(WorkspaceSourcesPanel, { client, workspace: workspace(), identity })))
