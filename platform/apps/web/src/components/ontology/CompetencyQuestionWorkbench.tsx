@@ -56,18 +56,23 @@ export function CompetencyQuestionWorkbench({ client, workspaceId, preview, read
     const digest = await webWorkspaceIdentity.sha256(canonicalBody(body))
     if (signal.aborted) return
     const proposalKey = `${workspaceId}:${digest}`
-    const ref = proposals.current.get(proposalKey) ?? { id: webWorkspaceIdentity.newId(), version: '1.0.0', digest }
-    proposals.current.set(proposalKey, ref); setStoredRef(ref); setStoredConfirmed(false); setRefText(JSON.stringify(ref))
-    const value = await client.requestJson('POST', '/api/v1/competency-question-sets', { body: { ref, body }, signal })
+    const proposedRef = proposals.current.get(proposalKey) ?? { id: webWorkspaceIdentity.newId(), version: '1.0.0', digest }
+    proposals.current.set(proposalKey, proposedRef); setStoredRef(proposedRef); setStoredConfirmed(false); setRefText(JSON.stringify(proposedRef))
+    const value = await client.requestJson('POST', '/api/v1/competency-question-sets', { body: { ref: proposedRef, body }, signal })
     if (signal.aborted) return
-    if (!isRecord(value) || value['approvalRequired'] !== true || value['candidateId'] !== ref.id) return invalidWire()
-    const written = parseCompetencyDeclaration(value['declaration']); if (written.ref?.digest !== digest || written.ref.id !== ref.id) return invalidWire()
-    const readback = await client.requestJson('POST', '/api/v1/competency-question-sets/read', { body: { ref }, signal })
+    if (!isRecord(value) || value['approvalRequired'] !== true || typeof value['candidateId'] !== 'string') return invalidWire()
+    const written = parseCompetencyDeclaration(value['declaration'])
+    const actualRef = written.ref
+    if (actualRef === undefined || actualRef.digest !== digest || value['candidateId'] !== actualRef.id || canonicalBody(written.body) !== canonicalBody(body)) return invalidWire()
+    // The server owns immutable artifact identity. Keep the returned ref immediately so a
+    // successful write with a failed/lost readback can be recovered through the exact ref.
+    proposals.current.set(proposalKey, actualRef); setStoredRef(actualRef); setRefText(JSON.stringify(actualRef))
+    const readback = await client.requestJson('POST', '/api/v1/competency-question-sets/read', { body: { ref: actualRef }, signal })
     if (signal.aborted) return
     if (!isRecord(readback) || typeof readback['approved'] !== 'boolean') return invalidWire()
-    const next = parseCompetencyDeclaration(readback['declaration']); if (next.ref === undefined || canonicalBody(next.ref) !== canonicalBody(ref) || canonicalBody(next.body) !== canonicalBody(body)) return invalidWire()
+    const next = parseCompetencyDeclaration(readback['declaration']); if (next.ref === undefined || canonicalBody(next.ref) !== canonicalBody(actualRef) || canonicalBody(next.body) !== canonicalBody(body)) return invalidWire()
     proposals.current.delete(proposalKey)
-    setDeclaration(next); setStoredRef(ref); setStoredConfirmed(true); setSelected(next.questions.map((q) => q.questionId)); setBodyText(JSON.stringify(next.body, null, 2)); setApproved(readback['approved']); onApprovedRef(readback['approved'] ? ref : undefined); setNotice(readback['approved'] ? '当前题集已重新读回，并有实际内容对应的人工批准记录。' : '新题集已存入实际审核库并重新读回，尚未人工批准；旧题集不受本次选择影响。')
+    setDeclaration(next); setStoredRef(actualRef); setStoredConfirmed(true); setSelected(next.questions.map((q) => q.questionId)); setBodyText(JSON.stringify(next.body, null, 2)); setApproved(readback['approved']); onApprovedRef(readback['approved'] ? actualRef : undefined); setNotice(readback['approved'] ? '当前题集已重新读回，并有实际内容对应的人工批准记录。' : '新题集已存入实际审核库并重新读回，尚未人工批准；旧题集不受本次选择影响。')
   })
   const approve = () => void run(async (signal) => {
     if (storedRef === undefined || !storedConfirmed || !reason.trim()) return

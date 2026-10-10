@@ -1,6 +1,6 @@
 // @vitest-environment jsdom
 import { describe, expect, it } from 'vitest'
-import { isLatestHumanReviewApproval } from '../../apps/web/src/api/ontology.js'
+import { isLatestHumanReviewApproval, latestCandidateHeads } from '../../apps/web/src/api/ontology.js'
 import type { HumanReviewView } from '../../apps/web/src/api/ontology.js'
 
 const candidateId = '11111111-1111-4111-8111-111111111111'
@@ -22,5 +22,16 @@ describe('current-content human approval', () => {
     ]
     expect(isLatestHumanReviewApproval(reviews, digest)).toBe(false)
     expect(isLatestHumanReviewApproval(reviews, `sha256:${'b'.repeat(64)}`)).toBe(true)
+  })
+
+  it('does not revive an approved candidate when a pending or rejected replacement becomes the current head', () => {
+    for (const replacementState of ['pending', 'rejected']) {
+      const current = latestCandidateHeads([
+        { candidateId: 'approved-old', approved: true },
+        { candidateId: 'replacement', replacesCandidateId: 'approved-old', approved: false, state: replacementState },
+      ])
+      expect(current.map((candidate) => candidate.candidateId)).toEqual(['replacement'])
+      expect(current.filter((candidate) => candidate.approved)).toEqual([])
+    }
   })
 })

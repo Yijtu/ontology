@@ -21,7 +21,7 @@ import { FullVersionDiff, RevisionStrategyForm } from './ontology/FullVersionDif
 import './ontology/ontology.css'
 import { StatePanel } from './StatePanel'
 import { PublicStateNotice } from './PublicStateNotice'
-import { isLatestHumanReviewApproval, readHumanReviews } from '../api/ontology'
+import { isLatestHumanReviewApproval, latestCandidateHeads, readHumanReviews } from '../api/ontology'
 import { Button } from './ui'
 import { classifyPublicError } from '../state/public-errors'
 import type { WorkbenchError, WorkbenchPhase } from '../state/workbench'
@@ -59,6 +59,7 @@ export interface PackagePublicationPanelProps {
   /** The validation report to open on load (a freshly created report from the workbench). */
   readonly initialValidationId?: string
   readonly readOnly?: boolean
+  readonly refreshKey?: number
 }
 
 /** The counter-example families a validation report proves were covered. */
@@ -163,21 +164,26 @@ export function PackagePublicationPanel({
   existingProjectId,
   initialValidationId,
   readOnly = false,
+  refreshKey,
 }: PackagePublicationPanelProps) {
   const [strategy, setStrategy] = useState<DefinitionRevisionStrategy>()
   const [approvedCQRef, setApprovedCQRef] = useState<VersionRef>()
   const [executionPreview, setExecutionPreview] = useState<ExecutionPreviewView>()
   const [previewReadNotice, setPreviewReadNotice] = useState('')
   const [currentHead, setCurrentHead] = useState<string>()
+  const currentHeadRef = useRef<string | undefined>(undefined)
+  currentHeadRef.current = currentHead
   const [validating, setValidating] = useState(false)
   const [validationNotice, setValidationNotice] = useState('')
   const validationAbort = useRef<AbortController | undefined>(undefined)
   const exampleAbort = useRef<AbortController | undefined>(undefined)
   const pendingExampleRequest = useRef<{ readonly identity: string; readonly body: CreateSyntheticExampleSetRequest; readonly key: string } | undefined>(undefined)
+  const pendingStageRefresh = useRef(false)
   const writeKeys = useRef(new Map<string, string>())
   const epoch = useRef(0)
   const workspaceRef = useRef(workspaceId)
   workspaceRef.current = workspaceId
+  const ownerResetRef = useRef(workspaceId)
   const [phase, setPhase] = useState<WorkbenchPhase>('loading')
   const [error, setError] = useState<WorkbenchError | undefined>(undefined)
   const [busy, setBusy] = useState(false)
@@ -207,9 +213,9 @@ export function PackagePublicationPanel({
   const [projectTitle, setProjectTitle] = useState('')
   const [mountedProject, setMountedProject] = useState<ProjectRecord | undefined>(undefined)
 
-  const load = useCallback(async (): Promise<void> => {
+  const load = useCallback(async (preserveReady = false): Promise<void> => {
     const token = ++epoch.current
-    setPhase('loading')
+    if (!preserveReady) { setPhase('loading'); setError(undefined) }
     try {
       const [packList, setList, workspaceHead, definitions, rules] = await Promise.all([
         client.listIndustryPacks(),
@@ -219,11 +225,12 @@ export function PackagePublicationPanel({
         readOnly ? Promise.resolve([] as RuleActionCandidateVersion[]) : client.listRuleActionCandidates(workspaceId),
       ])
       if (epoch.current !== token || workspaceRef.current !== workspaceId) return
+      const previousHead = currentHeadRef.current
       setCurrentHead(workspaceHead.headRevision)
       setPacks(packList)
       setExampleSets(setList)
       const reviewedDefinitions = [] as { candidate: AssetCandidateVersion; approved: boolean }[]
-      const reviewable = definitions.filter((candidate) => candidate.state === 'produced')
+      const reviewable = latestCandidateHeads(definitions).filter((candidate) => candidate.state !== 'failed' && candidate.state !== 'rejected' && !candidate.pendingConfirmation)
       for (let offset = 0; offset < reviewable.length; offset += 8) {
         const batch = await Promise.all(reviewable.slice(offset, offset + 8).map(async (candidate) => ({
           candidate,
@@ -234,7 +241,7 @@ export function PackagePublicationPanel({
       if (epoch.current !== token || workspaceRef.current !== workspaceId) return
       setDefinitionCandidates(reviewedDefinitions.filter(({ approved }) => approved).map(({ candidate }) => candidate))
       const reviewedRules = [] as { candidate: RuleActionCandidateVersion; approved: boolean }[]
-      const enabledRules = rules.filter((candidate) => candidate.lifecycle === 'enabled' && candidate.payload.kind === 'rule')
+      const enabledRules = latestCandidateHeads(rules).filter((candidate) => candidate.lifecycle === 'enabled' && candidate.payload.kind === 'rule')
       for (let offset = 0; offset < enabledRules.length; offset += 8) {
         const batch = await Promise.all(enabledRules.slice(offset, offset + 8).map(async (candidate) => ({
           candidate,
@@ -246,13 +253,14 @@ export function PackagePublicationPanel({
       setRuleCandidates(reviewedRules.filter(({ approved }) => approved).map(({ candidate }) => candidate))
       const loaded = initialValidationId === undefined ? undefined : await client.getValidation(workspaceId, initialValidationId)
       if (epoch.current !== token || workspaceRef.current !== workspaceId) return
-      setReport(loaded)
-      setSelectedExampleSetId((previous) => loaded?.exampleSetId ?? previous ?? setList[0]?.exampleSetId)
+      if (!preserveReady || previousHead !== workspaceHead.headRevision || loaded !== undefined) setReport(loaded)
+      setSelectedExampleSetId((previous) => loaded?.exampleSetId ?? (setList.some((entry) => entry.exampleSetId === previous) ? previous : setList[0]?.exampleSetId))
+      setActionError(undefined)
       setPhase('ready')
     } catch (caught) {
       if (epoch.current !== token) return
-      setError(toError(caught))
-      setPhase(phaseFor(caught))
+      if (preserveReady) setActionError(toError(caught))
+      else { setError(toError(caught)); setPhase(phaseFor(caught)) }
     }
   }, [client, workspaceId, initialValidationId, readOnly])
 
@@ -261,6 +269,42 @@ export function PackagePublicationPanel({
     void load()
     return () => { epoch.current++; validationAbort.current?.abort(); exampleAbort.current?.abort() }
   }, [load])
+  useEffect(() => {
+    if (ownerResetRef.current === workspaceId) return
+    ownerResetRef.current = workspaceId
+    exampleAbort.current?.abort()
+    pendingExampleRequest.current = undefined
+    setStrategy(undefined)
+    setApprovedCQRef(undefined)
+    setExecutionPreview(undefined)
+    setPreviewReadNotice('')
+    setCurrentHead(undefined)
+    setExampleRuleId('')
+    setExampleFieldId('')
+    setExampleFieldValue('')
+    setExampleExpected('')
+    setExampleReason('')
+    setExampleReviewer('')
+    setCreatingExample(false)
+    setPackId('pack')
+    setPackVersion('1.0.0')
+    setRequireDeploymentExecutable(false)
+    setPublication(undefined)
+    setExportBundle(undefined)
+    setProjectTitle('')
+    setMountedProject(undefined)
+    setActionError(undefined)
+  }, [workspaceId])
+  useEffect(() => {
+    if (refreshKey === undefined || refreshKey === 0) return
+    if (busy || creatingExample || phase === 'loading') { pendingStageRefresh.current = true; return }
+    void load(true)
+  }, [refreshKey])
+  useEffect(() => {
+    if (!pendingStageRefresh.current || busy || creatingExample || phase === 'loading') return
+    pendingStageRefresh.current = false
+    void load(true)
+  }, [busy, creatingExample, phase, load])
   useEffect(() => {
     if (currentHead === undefined) return undefined
     const abort = new AbortController(); setPreviewReadNotice('正在读取当前已保存的执行支持…')

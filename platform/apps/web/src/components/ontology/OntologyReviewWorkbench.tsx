@@ -37,7 +37,7 @@ function stateLabel(value: Candidate): string {
 }
 function ruleOf(value: Candidate | undefined) { return value !== undefined && !isDefinition(value) && value.payload.kind === 'rule' ? value.payload : undefined }
 
-export function OntologyReviewWorkbench({ client, workspaceId, readOnly = false }: { readonly client: WorkbenchClient; readonly workspaceId: string; readonly readOnly?: boolean }) {
+export function OntologyReviewWorkbench({ client, workspaceId, readOnly = false, refreshKey }: { readonly client: WorkbenchClient; readonly workspaceId: string; readonly readOnly?: boolean; readonly refreshKey?: number }) {
   const [definitions, setDefinitions] = useState<readonly AssetCandidateVersion[]>([])
   const [rules, setRules] = useState<readonly RuleActionCandidateVersion[]>([])
   const [batches, setBatches] = useState<readonly AssetCandidateBatch[]>([])
@@ -52,6 +52,7 @@ export function OntologyReviewWorkbench({ client, workspaceId, readOnly = false 
   const panelId = useId()
   const [loading, setLoading] = useState(true)
   const [busy, setBusy] = useState(false)
+  const pendingRefresh = useRef(false)
   const [failure, setFailure] = useState<PublicFailure>()
   const [notice, setNotice] = useState('')
   const [buffers, setBuffers] = useState<ReadonlyMap<string, EditBuffer>>(new Map())
@@ -130,11 +131,24 @@ export function OntologyReviewWorkbench({ client, workspaceId, readOnly = false 
     } catch (error) { if (epoch.current === token) setFailure(classifyPublicError(error)) }
     finally { if (epoch.current === token) setLoading(false) }
   }, [client, workspaceId])
+  const refreshState = useRef({ busy, loading, load })
+  refreshState.current = { busy, loading, load }
   useEffect(() => {
     setDefinitions([]); setRules([]); setBatches([]); setUnsupported([]); setAdjudications([]); setDraft(undefined); setDiff(undefined); setSelectedId(''); setEditing(false); setChecked([]); setGrounding(undefined); setReviews([]); setNotice(''); setOperation(undefined); setBusy(false)
     void load()
     return () => { epoch.current++; readAbort.current?.abort(); sourceAbort.current?.abort(); actionAbort.current?.abort() }
   }, [load])
+  useEffect(() => {
+    if (refreshKey === undefined || refreshKey === 0) return
+    const current = refreshState.current
+    if (current.busy || current.loading) { pendingRefresh.current = true; return }
+    void current.load()
+  }, [refreshKey])
+  useEffect(() => {
+    if (!pendingRefresh.current || busy || loading) return
+    pendingRefresh.current = false
+    void load()
+  }, [busy, loading, load])
   useEffect(() => {
     readAbort.current?.abort(); sourceAbort.current?.abort()
     const controller = new AbortController(); readAbort.current = controller
