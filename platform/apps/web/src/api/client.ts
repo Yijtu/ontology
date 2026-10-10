@@ -185,6 +185,7 @@ import type {
   PublishedPackResultView,
   PublishPackRequest,
   RunValidationRequest,
+  CreateSyntheticExampleSetRequest,
   SyntheticExampleSetView,
 } from './package-publication'
 
@@ -1621,6 +1622,21 @@ export class WorkbenchClient {
         throw malformedResponse(path, 'the synthetic example set list was not recognised')
       }
       return data['exampleSets']
+    })
+  }
+
+  createSyntheticExampleSet(workspaceId: string, request: CreateSyntheticExampleSetRequest, options: { readonly idempotencyKey: string; readonly signal?: AbortSignal }): Promise<SyntheticExampleSetView> {
+    const path = `/api/v1/industry-workspaces/${encodeURIComponent(workspaceId)}/synthetic-example-sets`
+    return this.#request<unknown>('POST', path, {
+      body: { caseKinds: request.caseKinds, cases: request.cases, expectations: request.expectations },
+      ifMatch: request.expectedRevision,
+      idempotencyKey: options.idempotencyKey,
+      ...(options.signal === undefined ? {} : { signal: options.signal }),
+    }).then((data) => {
+      if (!isRecord(data) || !isSyntheticExampleSetView(data['exampleSet']) || data['exampleSet'].workspaceId !== workspaceId) {
+        throw malformedResponse(path, 'the saved synthetic example set was not recognised')
+      }
+      return data['exampleSet']
     })
   }
 
