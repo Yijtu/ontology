@@ -130,33 +130,33 @@ describe('CoreProjectSemanticPartitions', () => {
   it('rejects a synthetic validation revision even when its project pins otherwise match', async () => {
     const synthetic = revision('1', definition1.ref, 'synthetic_validation')
     await expect(loadPartitions({ active: revision('2', definition2.ref), head: revision('2', definition2.ref), historicalRevision: synthetic, oldPart: partition(synthetic, definition1) }))
-      .rejects.toThrow('a historical project partition has no exact authorized stored revision provenance')
+      .rejects.toMatchObject({ code: 'CAPABILITY_NOT_CONFIGURED', message: 'a historical project partition has no exact authorized stored revision provenance', failedChecks: ['pinned_revision_is_synthetic_validation'] })
   })
 
   it('does not let another valid fact pin mask a project fact without its exact statement', async () => {
     const oldPart = partition(revision('1', definition1.ref), definition1, 2)
     const altered: PublishedSemanticData = { ...oldPart, facts: [...oldPart.facts, { ...oldPart.facts[0]!, sourceStatementId: '99999999-9999-4999-8999-999999999999' }] }
     await expect(loadPartitions({ active: revision('2', definition2.ref), head: revision('2', definition2.ref), historicalRevision: revision('1', definition1.ref), oldPart: altered }))
-      .rejects.toThrow('a historical project partition has no exact authorized stored revision provenance')
+      .rejects.toMatchObject({ code: 'CAPABILITY_NOT_CONFIGURED', message: 'a historical project partition has no exact authorized stored revision provenance', failedChecks: ['project_fact_statement_missing_or_ambiguous'] })
   })
 
   it('rejects a historical definition reference with a matching digest but a different identity', async () => {
     const sourcePart = partition(revision('1', definition1.ref), definition1)
     const forgedPart: PublishedSemanticData = { ...sourcePart, definitionRef: { ...definition1.ref, id: 'other-definition' } }
     await expect(loadPartitions({ active: revision('2', definition2.ref), head: revision('2', definition2.ref), historicalRevision: revision('1', definition1.ref), oldPart: forgedPart }))
-      .rejects.toThrow('a historical project partition has no exact authorized stored revision provenance')
+      .rejects.toMatchObject({ code: 'CAPABILITY_NOT_CONFIGURED', message: 'a historical project partition has no exact authorized stored revision provenance', failedChecks: ['partition_definition_pin_mismatch'] })
   })
 
   it('rejects a pinned revision beyond both the active revision and staged head', async () => {
     const future = revision('3', definition1.ref)
     await expect(loadPartitions({ active: revision('2', definition2.ref), head: revision('2', definition2.ref), historicalRevision: future, oldPart: partition(future, definition1) }))
-      .rejects.toThrow('a historical project partition has no exact authorized stored revision provenance')
+      .rejects.toMatchObject({ code: 'CAPABILITY_NOT_CONFIGURED', message: 'a historical project partition has no exact authorized stored revision provenance', failedChecks: ['pinned_revision_not_active_history_or_staged_head'] })
   })
 
   it('rejects unbounded historical revisions before issuing store reads', async () => {
     const pins = Array.from({ length: 33 }, (_, index) => revision(String(index + 1), definition1.ref))
     const oversized = partition(revision('1', definition1.ref), definition1, 33, pins)
     await expect(loadPartitions({ active: revision('2', definition2.ref), head: revision('2', definition2.ref), historicalRevision: revision('1', definition1.ref), oldPart: oversized }))
-      .rejects.toThrow('a historical project partition has no exact authorized stored revision provenance')
+      .rejects.toMatchObject({ code: 'CAPABILITY_NOT_CONFIGURED', message: 'a historical project partition has no exact authorized stored revision provenance', failedChecks: ['historical_revision_read_bound_exceeded'] })
   })
 })
