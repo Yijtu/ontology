@@ -5,36 +5,50 @@ import { capture, record, startWebHost } from './web-host'
 import type { WebHost } from './web-host'
 import { startWorkspaceHarness } from '../ui/workspace-fixtures'
 import type { WorkspaceHarness } from '../ui/workspace-fixtures'
+import { startCoreBrowserHost } from './core-browser-host'
 
 /**
  * Real-browser E2E for the public ontology-workspace home (V03-011 / #180, SPEC v0.3a §9.1/§9.2).
  *
- * The built `workspace-harness.html` composition mounts the V03-022 shell with the workspace home
- * injected for the ontology assistant. The loopback static host proxies `/api` to a real Fastify
- * server over in-memory stores, so the page exercises create, refresh readback, the source
- * ingestion job and the draft append over actual HTTP.
+ * Creation, source bytes and draft readback use the normal Core App and owned PostgreSQL.
+ * The neutral shell/readonly checks and the explicitly controlled partial background job use
+ * the memory HTTP harness. Partial job counters are not presented as an approved source parse.
  */
 
 let harness: WorkspaceHarness
 let web: WebHost
 let browser: Browser
+let core: Awaited<ReturnType<typeof startCoreBrowserHost>>
 
 beforeAll(async () => {
   harness = await startWorkspaceHarness()
   web = await startWebHost(harness.baseUrl)
+  core = await startCoreBrowserHost()
   browser = await chromium.launch({ headless: true })
-}, 120_000)
+}, 300_000)
 
 afterAll(async () => {
-  await browser?.close().catch(() => undefined)
-  await web?.close().catch(() => undefined)
-  await harness?.close().catch(() => undefined)
+  const errors: unknown[] = []
+  for (const close of [() => browser?.close(), () => web?.close(), () => harness?.close(), () => core?.close()]) {
+    try { await close() } catch (error) { errors.push(error) }
+  }
+  if (errors.length > 0) throw new AggregateError(errors, 'workspace browser cleanup failed')
 })
 
 async function openHome(page: Page, query = ''): Promise<void> {
   await page.goto(`${web.origin}/workspace-harness.html${query}`)
   await page.waitForSelector('[data-testid="assistant-shell"]')
   await page.waitForSelector('[data-testid="ontology-workspace"]')
+}
+
+async function openCoreHome(page: Page): Promise<void> {
+  await page.goto(core.origin)
+  await page.getByTestId('guide-home').waitFor()
+  await page.getByTestId('context-workspace-loading').waitFor({ state: 'hidden' })
+  await page.getByTestId('tab-ontology').click()
+  await page.waitForSelector('[data-testid="ontology-workspace"]:is([data-phase="ready"],[data-phase="empty"])')
+  const disclosure = page.getByTestId('workspace-create-disclosure')
+  if (await disclosure.getAttribute('open') === null) await disclosure.locator('summary').click()
 }
 
 describe('ontology workspace home in a real browser', () => {
@@ -59,7 +73,7 @@ describe('ontology workspace home in a real browser', () => {
     const context = await browser.newContext({ viewport: { width: 1280, height: 900 } })
     const page = await context.newPage()
     try {
-      await openHome(page)
+      await openCoreHome(page)
       await page.waitForSelector('[data-testid="workspace-empty"]')
 
       // Missing required fields are localised and do not create a workspace.
@@ -82,6 +96,7 @@ describe('ontology workspace home in a real browser', () => {
 
       // Ordinary refresh reads the same workspace back from the server.
       await page.reload()
+      await page.getByTestId('tab-ontology').click()
       await page.waitForSelector('[data-testid="workspace-list-item"]')
       expect(await page.textContent('[data-testid="workspace-detail-name"]')).toBe('桥架本体工作区')
       expect(await page.textContent('[data-testid="workspace-detail-head-revision"]')).toBe('1')
@@ -98,53 +113,76 @@ describe('ontology workspace home in a real browser', () => {
     }
   })
 
-  it('imports a source, shows a partly-failed parse as partial, and registers a new draft revision', async () => {
+  it('imports authentic source bytes into a new draft and keeps partial job counts distinct from publication', async () => {
     const context = await browser.newContext({ viewport: { width: 1280, height: 900 } })
     const page = await context.newPage()
     try {
-      await openHome(page)
+      await openCoreHome(page)
       await page.waitForSelector('[data-testid="workspace-create-display-name"]')
       await page.fill('[data-testid="workspace-create-display-name"]', '导入测试工作区')
       await page.fill('[data-testid="workspace-create-namespace"]', 'ingest-ontology')
       await page.fill('[data-testid="workspace-create-goals"]', '导入清单')
-      await page.click('[data-testid="workspace-create-submit"]')
-      await page.waitForSelector('[data-testid="workspace-detail"]')
+      const readNewWorkspace = (suffix: string) => page.waitForResponse(async (response) => {
+        if (response.request().method() !== 'GET' || !new URL(response.url()).pathname.endsWith(suffix) || !response.ok()) return false
+        const value = await response.json() as { data?: { workspace?: { namespace?: string } } }
+        return value.data?.workspace?.namespace === 'ingest-ontology'
+      })
+      const [createdWorkspace] = await Promise.all([
+        page.waitForResponse((response) => response.request().method() === 'POST' && new URL(response.url()).pathname === '/api/v1/core/workspace-bootstrap'),
+        readNewWorkspace('/sources'), readNewWorkspace('/authoring-context'),
+        page.click('[data-testid="workspace-create-submit"]'),
+      ])
+      expect(createdWorkspace.status()).toBe(201)
+      const createdBody = await createdWorkspace.json() as { data: { workspace: { workspaceId: string } } }
+      await page.waitForSelector(`[data-testid="workspace-detail"][data-workspace-id="${createdBody.data.workspace.workspaceId}"]`)
+      expect(await page.textContent('[data-testid="workspace-detail-name"]')).toBe('导入测试工作区')
       expect(await page.textContent('[data-testid="workspace-detail-head-revision"]')).toBe('1')
 
-      await page.setInputFiles('[data-testid="source-file-input"]', {
+      await page.getByLabel('选择原始文件', { exact: true }).setInputFiles({
         name: 'equipment.csv',
         mimeType: 'text/csv',
         buffer: Buffer.from('id,name\n1,充电器\n2,桥架\n', 'utf8'),
       })
-      await page.click('[data-testid="source-submit"]')
-      await page.waitForSelector('[data-testid="workspace-source-row"]')
-      // The import also registers the source set as a new immutable draft revision before it is
-      // done; wait for the head to advance so the row's refresh button is enabled again.
+      await page.getByLabel('资料名称', { exact: true }).fill('equipment.csv')
+      const [uploaded] = await Promise.all([
+        page.waitForResponse((response) => response.request().method() === 'POST' &&
+          new URL(response.url()).pathname === `/api/v1/core/workspaces/${createdBody.data.workspace.workspaceId}/sources`),
+        page.getByRole('button', { name: '上传并读取真实资料', exact: true }).click(),
+      ])
+      expect(uploaded.status()).toBe(201)
       await page.waitForFunction(
         () => document.querySelector('[data-testid="workspace-detail-head-revision"]')?.textContent === '2',
       )
-      const row = page.locator('[data-testid="workspace-source-row"]')
-      expect(await row.locator('[data-testid="source-file"]').textContent()).toBe('equipment.csv')
-      expect(await row.locator('[data-testid="source-revision"]').textContent()).toBe('1')
-      expect(await row.locator('[data-testid="source-type"]').textContent()).toBe('CSV')
-      expect(await row.locator('[data-testid="source-stage"]').getAttribute('data-stage')).toBe('received')
-      // A freshly received job is not a success.
-      expect(await row.locator('[data-testid="source-outcome"]').getAttribute('data-kind')).toBe('processing')
-
-      // The server records a partly-failed parse; refreshing shows the explicit partial state.
-      const jobId = await row.getAttribute('data-job-id')
-      if (jobId === null) throw new Error('the source row carries no job id')
-      await harness.seedPartialJob(jobId)
-      await row.locator('[data-testid="source-refresh"]').click()
-      await page.waitForSelector('[data-testid="source-outcome"][data-kind="partial"]')
-      expect(await row.locator('[data-testid="source-processed"]').textContent()).toBe('7/10')
-      expect(await row.locator('[data-testid="source-failed"]').textContent()).toBe('3')
-      expect(await row.locator('[data-testid="source-outcome"]').textContent()).toContain('部分解析')
-      expect(await row.locator('[data-testid="source-outcome"]').textContent()).not.toContain('全部成功')
-
-      // Registering the source set appended a new immutable draft revision.
       expect(await page.textContent('[data-testid="workspace-detail-head-revision"]')).toBe('2')
       expect(await page.locator('[data-testid="workspace-draft"]').count()).toBe(2)
+      await page.getByRole('button', { name: '查看真实原文与片段', exact: true }).click()
+      const original = page.getByRole('dialog', { name: '原始资料预览' })
+      await original.waitFor()
+      expect(await original.textContent()).toContain('充电器')
+      expect(await original.textContent()).toContain('桥架')
+      await page.keyboard.press('Escape')
+      await capture(page, 'workspace-home-source-original')
+
+      // Parsing an approved Core source is synchronous and requires completeness. Partial
+      // background work remains a separate job, with its actual processed/failed counters.
+      const created = await harness.app.inject({ method: 'POST', url: '/api/v1/ingestions',
+        headers: { 'idempotency-key': 'workspace-partial-browser-job' },
+        payload: { kind: 'ingestion', sourceRef: 'partial-job-fixture', documentRef: 'equipment.csv', pipelineVersion: '1.0.0' } })
+      expect(created.statusCode).toBe(202)
+      const jobId = (created.json() as { data: { jobId: string } }).data.jobId
+      await page.goto(`${web.origin}/?view=jobs`)
+      await page.getByTestId('job-id-input').fill(jobId)
+      await page.getByTestId('job-load').click()
+      await page.waitForSelector('[data-testid="job-stages"][data-stage="received"]')
+      expect(await page.getByTestId('published-count').getAttribute('data-count')).toBe('0')
+      await harness.seedPartialJob(jobId)
+      await page.getByTestId('job-load').click()
+      await page.getByTestId('job-failure').waitFor()
+      expect(await page.getByTestId('count-total').textContent()).toContain('10')
+      expect(await page.getByTestId('count-processed').textContent()).toContain('7')
+      expect(await page.getByTestId('count-failed').textContent()).toContain('3')
+      expect(await page.getByTestId('job-failure').textContent()).toContain('部分失败')
+      expect(await page.getByTestId('published-count').getAttribute('data-count')).toBe('0')
 
       await capture(page, 'workspace-home-source-partial')
       await record('workspace-home-source-partial', [
