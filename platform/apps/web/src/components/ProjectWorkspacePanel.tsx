@@ -987,7 +987,6 @@ export function ProjectWorkspacePanel({
                     onChanged={() => {
                       void loadProjectData(selected.projectId)
                       void reloadCatalogue(selected.projectId)
-                      void loadList()
                     }}
                     onReview={(recordId) => {
                       setReviewRecordId(recordId)
