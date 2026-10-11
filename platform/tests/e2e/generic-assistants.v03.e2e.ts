@@ -1769,6 +1769,15 @@ describe('V03-045 generic dual-assistant full-stack E2E (real chromium, real hos
     const existingIdentityScopeId = gap22FlowIdentityScopeId
     const { page, close } = await newPage()
     const evolutionRequests: string[] = []
+    const flow4ApiTrace: string[] = []
+    page.on('request', (entry) => {
+      const path = new URL(entry.url()).pathname
+      if (path.startsWith('/api/v1/')) flow4ApiTrace.push(`${entry.method()} ${path}`)
+    })
+    page.on('response', (response) => {
+      const path = new URL(response.url()).pathname
+      if (path.startsWith('/api/v1/')) flow4ApiTrace.push(`${response.status()} ${response.request().method()} ${path}`)
+    })
     page.on('request', (entry) => {
       const path = new URL(entry.url()).pathname
       if (path.startsWith(`/api/v1/projects/${gap22FlowProjectId}/evolutions/`)) evolutionRequests.push(`${entry.method()} ${path}`)
@@ -1970,7 +1979,7 @@ describe('V03-045 generic dual-assistant full-stack E2E (real chromium, real hos
       expect((await publishedRecord).ok()).toBe(true)
       await page.waitForFunction(() => document.querySelector('[data-testid="instance-detail-publication"]')?.textContent === '已发布')
 
-      const candidateReviewUrl = new URL(`${web.origin}/`)
+      const candidateReviewUrl = new URL(page.url())
       candidateReviewUrl.searchParams.set('view', 'review')
       candidateReviewUrl.searchParams.set('candidate', reextractedCandidateId)
       const candidateList = page.waitForResponse((response) => response.request().method() === 'GET' && new URL(response.url()).pathname === '/api/v1/candidates')
@@ -2039,7 +2048,7 @@ describe('V03-045 generic dual-assistant full-stack E2E (real chromium, real hos
       )
       expect(currentDataset.data.snapshotRef.kind).toBe('dataset')
       expect(currentDataset.data.rows).toHaveLength(1)
-      const statementUrl = new URL(`${web.origin}/`)
+      const statementUrl = new URL(page.url())
       statementUrl.searchParams.set('view', 'review')
       statementUrl.searchParams.set('candidate', reextractedCandidateId)
       await page.goto(statementUrl.href)
@@ -2092,6 +2101,27 @@ describe('V03-045 generic dual-assistant full-stack E2E (real chromium, real hos
         `currentDataset=${currentDataset.data.snapshotRef.id}; digest=${currentDataset.data.snapshotRef.digest}`,
         `retraction=${retraction.data.version}; status=${currentStatement.data.status}; oldAnswerStable=${oldAnswerAfterRetraction.data.contentHash === oldAnswerBefore.data.contentHash}`,
       ])
+    } catch (error) {
+      try {
+        const flow4FailureUi = await page.evaluate(() => ({
+          url: location.href,
+          appView: document.querySelector('.app')?.getAttribute('data-view'),
+          projectWorkspacePhase: document.querySelector<HTMLElement>('[data-testid="project-workspace"]')?.getAttribute('data-phase'),
+          contextProjectValue: document.querySelector<HTMLSelectElement>('[data-testid="context-project-select"]')?.value,
+          contextProjectSelectedLabel: document.querySelector<HTMLSelectElement>('[data-testid="context-project-select"]')?.selectedOptions[0]?.textContent?.trim(),
+          projectOptions: [...document.querySelectorAll<HTMLOptionElement>('[data-testid="context-project-select"] option')].map((option) => ({ value: option.value, label: option.textContent?.trim() })),
+          contextWorkspaceValue: document.querySelector<HTMLSelectElement>('[data-testid="context-workspace-select"]')?.value,
+          contextProjectLoading: document.querySelector('[data-testid="context-project-loading"]')?.textContent?.trim(),
+          projectDetails: [...document.querySelectorAll<HTMLElement>('[data-testid="project-detail"]')].map((detail) => ({ projectId: detail.getAttribute('data-project-id'), text: detail.innerText.trim() })),
+          dialogs: [...document.querySelectorAll<HTMLElement>('[role="dialog"], dialog[open]')].map((dialog) => dialog.innerText.trim()),
+          body: document.body.innerText.slice(0, 12_000),
+        }))
+        await record('gap23-flow4-failure-ui-diagnostic', [JSON.stringify({ error: error instanceof Error ? error.stack ?? error.message : String(error), ui: flow4FailureUi, requests: flow4ApiTrace })])
+        await capture(page, 'gap23-flow4-failure-ui-1440')
+      } catch (diagnosticError) {
+        await record('gap23-flow4-failure-ui-diagnostic-error', [diagnosticError instanceof Error ? diagnosticError.stack ?? diagnosticError.message : String(diagnosticError)])
+      }
+      throw error
     } finally {
       await close()
     }
