@@ -819,6 +819,7 @@ describe('V03-045 generic dual-assistant full-stack E2E (real chromium, real hos
     const apiFailures: string[] = []
     const apiFailureBodyReads: Promise<void>[] = []
     let executionPreviewPrepared = false
+    let flow1Page: Page | undefined
     let testFailed = false
     let testFailure: unknown
     try {
@@ -834,6 +835,7 @@ describe('V03-045 generic dual-assistant full-stack E2E (real chromium, real hos
       const policyText = 'For each asset, inspection_due is a condition. When inspection_due is true, the asset requires inspection. The policy applies to identified assets.'
       await writeFile(policyPath, policyText, 'utf8')
       const { page, close } = await newPage()
+      flow1Page = page
       closePage = close
     page.on('request', (entry) => {
       if (new URL(entry.url()).pathname.startsWith('/api/v1/')) apiTrace.push(`${entry.method()} ${new URL(entry.url()).pathname}`)
@@ -1318,6 +1320,32 @@ describe('V03-045 generic dual-assistant full-stack E2E (real chromium, real hos
       testFailed = true
       testFailure = error
       await Promise.all(apiFailureBodyReads)
+      if (flow1Page !== undefined) {
+        try {
+          const workspaceReadiness = await flow1Page.evaluate(() => {
+            const panel = document.querySelector<HTMLElement>('[data-testid="ontology-workspace"]')
+            const contextSelect = document.querySelector<HTMLSelectElement>('[data-testid="context-workspace-select"]')
+            const detail = document.querySelector<HTMLElement>('[data-testid="workspace-detail"]')
+            const disclosure = document.querySelector<HTMLDetailsElement>('[data-testid="workspace-create-disclosure"]')
+            return {
+              url: location.href,
+              appView: document.querySelector('.app')?.getAttribute('data-view'),
+              panelPhase: panel?.getAttribute('data-phase'),
+              contextSelectValue: contextSelect?.value,
+              contextLoading: document.querySelector('[data-testid="context-workspace-loading"]')?.textContent?.trim(),
+              contextFailure: document.querySelector('[data-testid="context-workspace-failure"]')?.textContent?.trim(),
+              detailWorkspaceId: detail?.getAttribute('data-workspace-id'),
+              disclosureOpen: disclosure?.open,
+              dialogs: [...document.querySelectorAll<HTMLElement>('[role="dialog"], dialog[open]')].map((dialog) => dialog.innerText.trim()),
+              body: document.body.innerText.slice(0, 12_000),
+            }
+          })
+          await record('gap22-flow1-workspace-readiness-diagnostic', [JSON.stringify(workspaceReadiness)])
+          await capture(flow1Page, 'gap22-flow1-workspace-readiness-failure-1440')
+        } catch (diagnosticError) {
+          await record('gap22-flow1-workspace-readiness-diagnostic-error', [diagnosticError instanceof Error ? diagnosticError.stack ?? diagnosticError.message : String(diagnosticError)])
+        }
+      }
       await record('gap22-flow1-failure', [
         error instanceof Error ? error.stack ?? error.message : String(error),
         ...apiFailures,
