@@ -13,7 +13,7 @@ import type { BusinessResultsHarness } from '../ui/business-results-fixtures'
  * modules through the trusted registry, and the loopback static host proxies `/api` to a real
  * Fastify server wired to the merged run/answer/evidence services plus the real
  * `TableArtifactReadService`. The page lists only mounted+authorised tasks, requires an explicit
- * parameter-change confirmation, runs a task, and renders 正文/结果表/依据 for the same verified
+ * task selection, runs a question, and renders 正文/结果表/依据 for the same verified
  * version with real table paging and an unverified table refused by the server.
  */
 
@@ -39,7 +39,7 @@ async function openWorkbench(page: Page, query = ''): Promise<void> {
 }
 
 describe('business workbench, typed results and provenance in a real browser', () => {
-  it('lists mounted tasks, confirms a parameter change, runs a task and renders the verified result views', async () => {
+  it('lists mounted tasks, runs their question and renders the verified result views', async () => {
     const context = await browser.newContext({ viewport: { width: 1280, height: 1000 } })
     const page = await context.newPage()
     try {
@@ -49,15 +49,10 @@ describe('business workbench, typed results and provenance in a real browser', (
       expect(await page.locator('[data-testid="task-entry"]').count()).toBe(2)
       expect(await page.locator('[data-testid="default-quote"]').count()).toBe(0)
 
-      // A parameter change shows a concrete diff and is only applied after an explicit confirm.
+      // These neutral shortcuts supply questions, not a registered parameter schema.
+      // The ordinary Core Flow3 checks typed parameter diff, confirmation and request linkage.
       await page.click('[data-testid="task-entry"]')
       expect(await page.inputValue('[data-testid="business-question"]')).toContain('中性任务')
-      await page.fill('[data-testid="business-parameter"]', '42')
-      await page.click('[data-testid="business-parameter-preview"]')
-      await page.waitForSelector('[data-testid="business-parameter-diff"]')
-      expect(await page.textContent('[data-testid="diff-proposed"]')).toContain('42')
-      await page.click('[data-testid="business-parameter-confirm"]')
-      await page.waitForSelector('[data-testid="business-parameter-confirmed"]')
 
       // Run the task; the fixture seeds the verified @3 answer for the created run.
       await page.click('[data-testid="business-run"]')
@@ -76,6 +71,8 @@ describe('business workbench, typed results and provenance in a real browser', (
       await page.click('[data-testid="result-cell-evidence"]')
       await page.waitForSelector('[data-testid="result-evidence"]')
       expect(await page.getAttribute('[data-testid="result-evidence"]', 'data-readability')).toBe('current')
+      await page.keyboard.press('Escape')
+      await page.getByRole('dialog').waitFor({ state: 'hidden' })
 
       await page.click('[data-testid="result-tab-tables"]')
       await page.click('[data-testid="result-table-next"]')
@@ -90,7 +87,7 @@ describe('business workbench, typed results and provenance in a real browser', (
       await capture(page, 'business-results-workbench')
       await record('business-results-workbench', [
         'tasks=2(mounted+authorised)',
-        'parameterChange=confirmed',
+        'typedParameterConfirmation=covered-by-normal-Core-Flow3',
         'publication=verified',
         'table=page0->page1',
         'provenance=current->missing',

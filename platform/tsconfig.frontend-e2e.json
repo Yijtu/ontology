@@ -5,10 +5,6 @@
     "jsx": "react-jsx"
   },
   "include": [
-    "tests/e2e/generic-assistants.v03.e2e.ts",
-    "tests/e2e/generic-or-fixture.ts",
-    "tests/e2e/project-pipeline.core.v03.e2e.ts",
-    "tests/e2e/real-app-accessibility.ts",
-    "tests/e2e/package-publish.v03.e2e.ts"
+    "tests/e2e/**/*.ts"
   ]
 }

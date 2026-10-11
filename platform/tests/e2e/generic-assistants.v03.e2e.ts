@@ -1100,6 +1100,13 @@ describe('V03-045 generic dual-assistant full-stack E2E (real chromium, real hos
     } catch (error) {
       testFailed = true
       testFailure = error
+      await Promise.all(apiFailureBodyReads)
+      await record('gap22-flow1-failure', [
+        error instanceof Error ? error.stack ?? error.message : String(error),
+        ...apiFailures,
+        ...apiResponses,
+        ...apiTrace,
+      ])
       throw error
     } finally {
       const cleanupErrors: unknown[] = []
@@ -1341,12 +1348,25 @@ describe('V03-045 generic dual-assistant full-stack E2E (real chromium, real hos
         return envelope.data.ready
       }, projectId, { polling: 500, timeout: 30_000 })
 
+      await page.waitForFunction(async (expectedProjectId) => {
+        const response = await fetch(`/api/v1/core/projects/${expectedProjectId}/task-catalogue`)
+        if (!response.ok) throw new Error(`actual task catalogue read failed: ${response.status}`)
+        const envelope = await response.json() as { data: { project: { projectId: string }; tasks: readonly { bindingRef: { id: string }; available: boolean }[] } }
+        return envelope.data.project.projectId === expectedProjectId &&
+          envelope.data.tasks.some((task) => task.bindingRef.id === 'core.task.rule_judgement' && task.available)
+      }, projectId, { polling: 500, timeout: 30_000 })
+
       await page.getByTestId('tab-business').click()
       await discardIfNeeded(page)
       expect(await page.getByTestId('business-project').inputValue()).toBe(projectId)
       expect(await page.getByTestId('context-project-select').inputValue()).toBe(projectId)
+      const refreshedCatalogue = page.waitForResponse((response) => response.request().method() === 'GET' &&
+        new URL(response.url()).pathname === `/api/v1/core/projects/${projectId}/task-catalogue`)
+      await page.getByTestId('business-task-refresh').click()
+      expect((await refreshedCatalogue).ok()).toBe(true)
       const ruleTask = page.locator('[data-testid="task-entry"][data-task-id="core.task.rule_judgement"]')
       await ruleTask.waitFor()
+      await page.waitForFunction(() => document.querySelector<HTMLButtonElement>('[data-testid="task-entry"][data-task-id="core.task.rule_judgement"]')?.disabled === false)
       if (await ruleTask.isDisabled()) throw new Error(`real rule task unavailable for the generated pack/project: ${await ruleTask.textContent()}; catalogue=${await page.getByTestId('business-task-list').textContent()}`)
       expect(await page.getByTestId('business-model-note').textContent()).toContain('智能判断未启用')
       await ruleTask.click()
@@ -1358,14 +1378,22 @@ describe('V03-045 generic dual-assistant full-stack E2E (real chromium, real hos
       const entityOption = (await entityField.locator('option').allTextContents()).find((label) => label.includes('GAP22-ASSET-001'))
       if (entityOption === undefined) throw new Error(`actual confirmed entity was not offered by the task schema: ${await entityField.locator('option').allTextContents()}`)
       await entityField.selectOption({ label: entityOption })
+      const selectedRule = await ruleField.inputValue()
+      const selectedEntity = await entityField.inputValue()
+      expect(await page.getByTestId('task-run').isDisabled()).toBe(true)
       await page.getByTestId('task-parameter-preview').click()
       await page.getByTestId('task-parameter-diff').waitFor()
+      expect(await page.getByTestId('task-parameter-diff').textContent()).toContain(ruleOption)
+      expect(await page.getByTestId('task-parameter-diff').textContent()).toContain(entityOption)
       await page.getByTestId('task-parameter-confirm').click()
+      expect(await page.getByTestId('task-run').isEnabled()).toBe(true)
       const modelRequestCount = modelRequests.length
       const taskRun = page.waitForResponse((response) => response.request().method() === 'POST' && new URL(response.url()).pathname === '/api/v1/runs')
       await page.getByTestId('task-run').click()
       const runResponse = await taskRun
       expect(runResponse.status()).toBe(202)
+      const submitted: unknown = runResponse.request().postDataJSON()
+      expect(submitted).toMatchObject({ projectId, task: { arguments: { rule: selectedRule, entity: selectedEntity } } })
       const runPayload = await runResponse.json() as { data: { runId: string } }
       await page.waitForSelector('[data-testid="business-run-panel"][data-state="published"]', { timeout: 60_000 })
       expect(modelRequests.length).toBe(modelRequestCount)
@@ -1447,6 +1475,13 @@ describe('V03-045 generic dual-assistant full-stack E2E (real chromium, real hos
     } catch (error) {
       testFailed = true
       testFailure = error
+      await Promise.all(apiFailureBodyReads)
+      await record('gap22-flow3-failure', [
+        error instanceof Error ? error.stack ?? error.message : String(error),
+        ...apiFailures,
+        ...apiResponses,
+        ...apiTrace,
+      ])
       throw error
     } finally {
       const cleanupErrors: unknown[] = []
