@@ -274,6 +274,7 @@ export type {
   ValidationSurfaceGateView,
 } from './api/package-publication'
 export { ProjectWorkspacePanel } from './components/ProjectWorkspacePanel'
+export { ProjectFactStaging } from './components/project/ProjectFactStaging'
 export type {
   ProjectBinding,
   ProjectSourceCandidate,
