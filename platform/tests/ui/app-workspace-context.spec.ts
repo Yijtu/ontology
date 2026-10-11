@@ -19,6 +19,34 @@ const workspaces: readonly IndustryWorkspace[] = [workspaceA, workspaceB].map((w
 afterEach(() => { vi.restoreAllMocks(); window.history.replaceState(null, '', '/') })
 
 describe('main App workspace selection ownership', () => {
+  it('adopts the first workspace into topbar and URL when ontology opens without a workspace link', async () => {
+    window.history.replaceState(null, '', '/?view=ontology')
+    const client = new WorkbenchClient({ baseUrl: 'http://context.test', fetchImpl: (input) => {
+      const path = new URL(String(input)).pathname
+      const data = path === '/api/v1/industry-workspaces' ? { workspaces }
+        : path === '/api/v1/projects' ? { projects: [] }
+          : path.endsWith('/drafts') ? { drafts: [] } : undefined
+      return Promise.resolve(new Response(JSON.stringify(data === undefined ? { error: { code: 'NOT_FOUND', message: 'Not part of this UI contract fixture' } } : { data }), {
+        status: data === undefined ? 404 : 200, headers: { 'content-type': 'application/json' },
+      }))
+    } })
+    const container = document.createElement('div')
+    document.body.append(container)
+    const root = createRoot(container)
+    try {
+      await act(async () => root.render(createElement(App, { client, profileRef: { id: 'context-profile', version: '1.0.0' }, timeZone: 'UTC', initialView: 'ontology', deploymentOperatorEnabled: true })))
+      await act(async () => { await Promise.resolve() })
+      expect(container.querySelector('[data-testid="ontology-workspace"]')?.getAttribute('data-phase')).toBe('ready')
+      expect(container.querySelector('[data-testid="workspace-detail"]')?.getAttribute('data-workspace-id')).toBe(workspaceA)
+      expect(container.querySelector<HTMLSelectElement>('[data-testid="context-workspace-select"]')?.value).toBe(workspaceA)
+      expect(new URL(window.location.href).searchParams.get('workspace')).toBe(workspaceA)
+      expect(container.querySelector<HTMLDetailsElement>('[data-testid="workspace-create-disclosure"]')?.open).toBe(false)
+    } finally {
+      await act(async () => root.unmount())
+      container.remove()
+    }
+  })
+
   it('adopts topbar workspace B while ontology stays mounted, without writing stale A back', async () => {
     window.history.replaceState(null, '', `/?view=ontology&workspace=${workspaceA}`)
     const historyWrites: string[] = []

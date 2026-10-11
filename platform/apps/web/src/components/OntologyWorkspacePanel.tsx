@@ -173,7 +173,8 @@ export function OntologyWorkspacePanel({
       const list = await client.listIndustryWorkspaces()
       if (listEpoch.current !== token) return
       setWorkspaces(list)
-      const requested = initialWorkspaceId ?? (typeof window === 'undefined' ? undefined : new URLSearchParams(window.location.search).get('workspace'))
+      const linkedWorkspaceId = typeof window === 'undefined' ? undefined : new URLSearchParams(window.location.search).get('workspace') ?? undefined
+      const requested = initialWorkspaceId ?? linkedWorkspaceId
       const matching = list.find((workspace) => workspace.workspaceId === requested)
       const first = matching?.workspaceId ?? list[0]?.workspaceId
       setSelectedId((previous) => {
