@@ -322,6 +322,8 @@ export interface BindRecordsResult {
 export interface ProjectRecordQuery {
   readonly objectId?: string
   readonly status?: ProjectRecordFieldStatus
+  /** When supplied, latest-per-record selection is limited to these revision-pinned mappings. */
+  readonly mappingRefs?: readonly Pick<MappingRef, 'id' | 'version'>[]
   readonly limit?: number
   readonly cursor?: string
 }

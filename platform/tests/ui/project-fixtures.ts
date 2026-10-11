@@ -287,7 +287,13 @@ class InMemoryProjectRecordStore implements ProjectRecordStore {
     ctx: ToolContext,
   ): Promise<ProjectRecordPage> {
     this.#trust(scopeRef, ctx)
-    const all = [...(this.#records.get(this.#key(scopeRef, projectId)) ?? [])]
+    const stored = [...(this.#records.get(this.#key(scopeRef, projectId)) ?? [])]
+    const all = query.mappingRefs === undefined ? stored : [...stored.reduce((latest, record) => {
+      if (!query.mappingRefs?.some((mapping) => mapping.id === record.mappingId && mapping.version === record.mappingVersion)) return latest
+      const prior = latest.get(record.recordId)
+      if (prior === undefined || BigInt(record.revision) > BigInt(prior.revision)) latest.set(record.recordId, record)
+      return latest
+    }, new Map<string, ProjectRecordVersion>()).values()]
       .filter((record) => query.objectId === undefined || record.objectId === query.objectId)
       .filter((record) => query.status === undefined || record.status === query.status)
       .sort((left, right) => (left.recordId < right.recordId ? -1 : left.recordId > right.recordId ? 1 : 0))
