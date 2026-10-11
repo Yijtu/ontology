@@ -1530,9 +1530,16 @@ export class WorkbenchClient {
   }
 
   /** `POST /projects`: create a project against an exact published pack version. */
-  createProject(request: CreateProjectRequest): Promise<{ readonly project: ProjectRecord; readonly revision: ProjectRevision }> {
+  createProject(
+    request: CreateProjectRequest,
+    options: { readonly idempotencyKey?: string; readonly signal?: AbortSignal } = {},
+  ): Promise<{ readonly project: ProjectRecord; readonly revision: ProjectRevision }> {
     const path = '/api/v1/projects'
-    return this.#request<unknown>('POST', path, { body: request, idempotencyKey: this.#newId() }).then((data) => {
+    return this.#request<unknown>('POST', path, {
+      body: request,
+      idempotencyKey: options.idempotencyKey ?? this.#newId(),
+      ...(options.signal === undefined ? {} : { signal: options.signal }),
+    }).then((data) => {
       if (!isRecord(data) || !isProjectRecord(data['project']) || !isProjectRevision(data['revision'])) {
         throw malformedResponse(path, 'the created project was not recognised')
       }

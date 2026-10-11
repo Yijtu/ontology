@@ -26,6 +26,7 @@ import { classifyPublicError } from '../state/public-errors'
 import type { WorkbenchError, WorkbenchPhase } from '../state/workbench'
 import type {
   ColumnMappingRequestView,
+  CreateProjectRequest,
   IndustryPackSummary,
   ProjectDatasetStatusView,
   ProjectDocumentIndexStatusView,
@@ -175,6 +176,7 @@ export function ProjectWorkspacePanel({
   projectBinding,
   profileRef,
   packs,
+  sources: configuredSources,
   readOnly = false,
   initialProjectId,
   onSelectProject,
@@ -277,10 +279,12 @@ export function ProjectWorkspacePanel({
     return key
   }
   const sources: readonly ProjectSourceCandidate[] = useMemo(() => {
-    if (catalogue === undefined || catalogue.project.projectId !== selectedId) return []
-    return catalogue.sources.flatMap((source) => {
-      const format = source.format ?? source.kind
-      if (format !== 'csv' && format !== 'xlsx' && format !== 'json' && format !== 'text') return []
+    if (catalogue === undefined || catalogue.project.projectId !== selectedId)
+      return projectBinding === undefined ? [] : configuredSources ?? []
+    const fromCatalogue: readonly ProjectSourceCandidate[] = catalogue.sources.flatMap<ProjectSourceCandidate>((source) => {
+      const candidateFormat = source.format ?? source.kind
+      if (candidateFormat !== 'csv' && candidateFormat !== 'xlsx' && candidateFormat !== 'json' && candidateFormat !== 'text') return []
+      const format: ProjectSourceCandidate['format'] = candidateFormat
       if (source.mediaType === undefined || source.options === undefined) return []
       const nativeOptions = source.options
       const mediaType = source.mediaType
@@ -311,7 +315,17 @@ export function ProjectWorkspacePanel({
         })),
       }))
     })
-  }, [catalogue, selectedId])
+    return fromCatalogue
+  }, [catalogue, selectedId, configuredSources, projectBinding])
+  const datasetObjectChoices = useMemo<readonly { readonly objectId: string; readonly displayName: string }[]>(() => {
+    if (catalogue !== undefined && catalogue.project.projectId === selectedId) return catalogue.objects
+    if (projectBinding === undefined) return []
+    const configured = new Map<string, string>()
+    for (const source of configuredSources ?? []) {
+      for (const object of source.objects) configured.set(object.objectId, object.label)
+    }
+    return [...configured].map(([objectId, displayName]) => ({ objectId, displayName }))
+  }, [catalogue, selectedId, configuredSources, projectBinding])
 
   const selected =
     phase === 'ready' ? projects.find((project) => project.projectId === selectedId) : undefined
@@ -492,15 +506,31 @@ export function ProjectWorkspacePanel({
       return
     }
     if (activeProfile === undefined) return
-    const body = { title: title.trim(), profileRef: { id: activeProfile.id, version: activeProfile.version } }
-    const serialized = JSON.stringify(body)
+    const bootstrapBody = { title: title.trim(), profileRef: { id: activeProfile.id, version: activeProfile.version } }
+    const selectedPack = packs.find((pack) => pack.packRef !== undefined && JSON.stringify(pack.packRef) === packChoice && pack.usable)?.packRef
+    if (projectBinding !== undefined && selectedPack === undefined) {
+      setCreateErrors({ pack: '请选择一个可用的行业包版本。' })
+      return
+    }
+    const boundBody: CreateProjectRequest | undefined = projectBinding === undefined || selectedPack === undefined
+      ? undefined
+      : {
+          ...bootstrapBody,
+          industryPackRef: selectedPack,
+          profileRef: projectBinding.profileRef,
+          mappingRefs: projectBinding.mappingRefs,
+          documentSetRef: projectBinding.documentSetRef,
+        }
+    const serialized = JSON.stringify(boundBody ?? bootstrapBody)
     if (createKey.current?.serialized !== serialized)
       createKey.current = { serialized, key: client.newRequestKey() }
     const request = begin('create')
     setBusy(true)
     setCreateFailure(undefined)
     try {
-      const result = await bootstrapProject(client, body, createKey.current.key, request.signal)
+      const result = boundBody === undefined
+        ? await bootstrapProject(client, bootstrapBody, createKey.current.key, request.signal)
+        : await client.createProject(boundBody, { idempotencyKey: createKey.current.key, signal: request.signal })
       if (!request.current()) return
       beginList('list')
       setListOwner(listScope)
@@ -530,6 +560,11 @@ export function ProjectWorkspacePanel({
     packRequest.current?.abort()
     const pack = packs.find((candidate) => candidate.packRef !== undefined && JSON.stringify(candidate.packRef) === packId && candidate.usable)
     if (pack?.packRef === undefined) return
+    if (projectBinding !== undefined) {
+      setConfiguredPackProfile(projectBinding.profileRef)
+      setCreateFailure(undefined)
+      return
+    }
     const controller = new AbortController()
     packRequest.current = controller
     if (packRequestKey.current?.packChoice !== packId) packRequestKey.current = { packChoice: packId, key: client.newRequestKey() }
@@ -853,6 +888,8 @@ export function ProjectWorkspacePanel({
                       ? '请先选择已注册的场景。'
                       : packChoice.length > 0 && configuredPackProfile === undefined
                         ? '正在读取所选已发布版本的项目配置。'
+                        : packChoice.length > 0 && projectBinding !== undefined
+                          ? '已绑定当前部署配置，并固定所选行业包版本，可用于新建项目。'
                         : configuredPackProfile === undefined
                         ? '使用当前场景的已发布版本。服务端将固定行业包、映射与资料集。'
                         : '已由服务端注册并固定所选发布版本，可用于新建项目。'}
@@ -1432,7 +1469,7 @@ export function ProjectWorkspacePanel({
                     onChange={(event) => setDatasetObjectId(event.target.value)}
                   >
                     <option value="">选择记录类型…</option>
-                    {catalogue?.objects.map((object) => (
+                    {datasetObjectChoices.map((object) => (
                       <option key={object.objectId} value={object.objectId}>
                         {object.displayName}
                       </option>

@@ -629,6 +629,8 @@ export interface ProjectHarness {
   readonly baseUrl: string
   readonly csv: string
   readonly parseId: string
+  readonly documentRef: ResourceRef
+  readonly parseRef: ResourceRef
   readonly close: () => Promise<void>
 }
 
@@ -783,6 +785,8 @@ export async function startProjectHarness(): Promise<ProjectHarness> {
     baseUrl,
     csv: PROJECT_FIXTURE.csv,
     parseId: PROJECT_FIXTURE.parseId,
+    documentRef: originalRef,
+    parseRef: resourceRef(PROJECT_FIXTURE.parseRefId, digestOfText('project-parse-artifact')),
     close: async () => {
       await app.close()
       await ingestion.close()

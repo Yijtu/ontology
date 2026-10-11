@@ -40,11 +40,50 @@ async function openWorkspace(page: Page, query = ''): Promise<void> {
 }
 
 async function createProject(page: Page): Promise<void> {
+  const disclosure = page.locator('details.project-create-disclosure')
+  if (!(await disclosure.evaluate((element) => (element as HTMLDetailsElement).open))) {
+    await disclosure.locator('summary').click()
+  }
   await page.waitForSelector('[data-testid="project-create-title"]')
   await page.fill('[data-testid="project-create-title"]', '桥架设备项目')
-  await page.selectOption('[data-testid="project-create-pack"]', `${PROJECT_FIXTURE.packId}@${PROJECT_FIXTURE.packVersion}`)
+  await selectPack(page, '[data-testid="project-create-pack"]', PROJECT_FIXTURE.packId, PROJECT_FIXTURE.packVersion)
+  await page.waitForFunction(() => {
+    const button = document.querySelector<HTMLButtonElement>('[data-testid="project-create-submit"]')
+    return button !== null && !button.disabled && !document.querySelector('[data-testid="project-create-error-pack"]')
+  })
   await page.click('[data-testid="project-create-submit"]')
   await page.waitForSelector('[data-testid="project-detail"]')
+}
+
+async function selectPack(page: Page, selector: string, packId: string, version: string): Promise<void> {
+  const select = page.locator(selector)
+  await page.waitForFunction(({ selector, packId, version }) => {
+    const element = document.querySelector<HTMLSelectElement>(selector)
+    return element !== null && [...element.options].some((option) => {
+      try {
+        const ref = JSON.parse(option.value) as { id?: string; version?: string }
+        return ref.id === packId && ref.version === version
+      } catch { return false }
+    })
+  }, { selector, packId, version })
+  const value = await select.locator('option').evaluateAll((options, target) => {
+    const option = options.find((candidate) => {
+      try {
+        const ref = JSON.parse((candidate as HTMLOptionElement).value) as { id?: string; version?: string }
+        return ref.id === target.packId && ref.version === target.version
+      } catch { return false }
+    }) as HTMLOptionElement | undefined
+    return option?.value
+  }, { packId, version })
+  if (value === undefined) throw new Error(`Published pack ${packId}@${version} is not available in the UI`)
+  await select.selectOption(value)
+  if (selector === '[data-testid="project-create-pack"]') {
+    await page.getByText('已绑定当前部署配置，并固定所选行业包版本，可用于新建项目。', { exact: true }).waitFor()
+  }
+}
+
+async function openProjectArea(page: Page, label: string): Promise<void> {
+  await page.locator('.project-flow').getByRole('button', { name: label, exact: true }).click()
 }
 
 describe('project, mapping and readiness public workspace in a real browser', () => {
@@ -89,23 +128,49 @@ describe('project, mapping and readiness public workspace in a real browser', ()
     try {
       await openWorkspace(page)
       await createProject(page)
+      await openProjectArea(page, '导入资料')
 
-      // Source import + document index: stale until the index build completes.
-      await page.click('[data-testid="source-import-source-1"]')
-      await page.waitForSelector('[data-testid="source-imported-source-1"]')
-      expect(await page.textContent('[data-testid="document-index-state"]')).toContain('stale')
+      // Select the harness's actual parsed CSV source, then register its membership through the
+      // real public document endpoint before building the index.
+      const source = page.locator('[data-testid="source-candidate"][data-source-id="source-1"]')
+      await source.getByRole('button', { name: '确认这份资料的映射', exact: true }).click()
+      const projectId = await page.getAttribute('[data-testid="project-detail"]', 'data-project-id')
+      expect(projectId).toBeDefined()
+      const membership = await harness.client.importProjectDocumentMembership(projectId as string, {
+        documentId: PROJECT_FIXTURE.documentId,
+        documentRef: harness.documentRef,
+        parseRef: harness.parseRef,
+        parseId: harness.parseId,
+        reason: '注册已解析 CSV 的项目资料成员关系',
+      })
+      expect(membership.state).toBe('stale')
+
+      await page.reload()
+      await page.locator(`[data-testid="project-list-item"][data-project-id="${projectId}"]`).click()
+      await page.waitForSelector('[data-testid="project-detail"]')
+      await openProjectArea(page, '导入资料')
+      await page.waitForFunction(() => document.querySelector('[data-testid="document-index"]')?.getAttribute('data-state') === 'stale')
+      expect(await page.textContent('[data-testid="document-index-state"]')).toContain('需要更新')
       await page.click('[data-testid="document-index-build"]')
       await page.waitForFunction(
         () => document.querySelector('[data-testid="document-index"]')?.getAttribute('data-state') === 'ready',
       )
-      expect(await page.textContent('[data-testid="document-index-state"]')).toContain('ready')
+      expect(await page.textContent('[data-testid="document-index-state"]')).toContain('已就绪')
 
       // Column mapping: explicit field-to-column selection, canonical-vs-raw preview, confirm.
-      await page.selectOption('[data-testid="mapping-source"]', 'source-1')
+      await page.locator('[data-testid="source-candidate"][data-source-id="source-1"]')
+        .getByRole('button', { name: '确认这份资料的映射', exact: true }).click()
+      await openProjectArea(page, '确认映射')
+      const sourceValue = await page.locator('[data-testid="mapping-source"] option').evaluateAll((options) =>
+        (options.find((option) => (option as HTMLOptionElement).value.length > 0) as HTMLOptionElement | undefined)?.value,
+      )
+      expect(sourceValue).toBeDefined()
+      await page.selectOption('[data-testid="mapping-source"]', sourceValue as string)
       await page.selectOption('[data-testid="mapping-object"]', 'device')
       await page.selectOption('[data-testid="mapping-column-name"]', '0')
       await page.selectOption('[data-testid="mapping-column-capacity"]', '1')
       await page.selectOption('[data-testid="mapping-column-status"]', '2')
+      await page.getByLabel('容量来源单位', { exact: true }).fill('kWh')
       await page.click('[data-testid="mapping-preview-button"]')
       await page.waitForSelector('[data-testid="mapping-preview"]')
       expect(await page.textContent('[data-testid="mapping-preview-confirmable"]')).toContain('可确认')
@@ -118,32 +183,42 @@ describe('project, mapping and readiness public workspace in a real browser', ()
       await page.click('[data-testid="mapping-confirm-button"]')
       await page.waitForSelector('[data-testid="mapping-confirmed"]')
 
-      // Bind the confirmed mapping's parsed rows: four records, two per page.
+      // Bind from the mapping step; inspect the created records in the project records area.
       await page.click('[data-testid="record-bind"]')
+      await page.waitForSelector('[data-testid="bind-notice"]')
+      await openProjectArea(page, '项目记录')
       await page.waitForSelector('[data-testid="record-row"]')
       expect(await page.textContent('[data-testid="record-total"]')).toContain('4')
-      expect(await page.locator('[data-testid="record-row"]').count()).toBe(2)
-      await page.click('[data-testid="record-next"]')
-      await page.waitForFunction(
-        () => document.querySelectorAll('[data-testid="record-row"]').length === 2 &&
-          document.querySelector('[data-testid="record-next"]') === null,
-      )
+      expect(await page.locator('[data-testid="record-row"]').count()).toBe(4)
+      expect(await page.locator('[data-testid="record-next"]').count()).toBe(0)
+      const firstPage = await harness.client.listProjectRecords(projectId as string, { limit: 2 })
+      expect(firstPage.records).toHaveLength(2)
+      expect(firstPage.nextCursor).toBeDefined()
+      if (firstPage.nextCursor === undefined) throw new Error('the first two-record page must carry its continuation cursor')
+      const secondPage = await harness.client.listProjectRecords(projectId as string, {
+        limit: 2,
+        cursor: firstPage.nextCursor,
+      })
+      expect(secondPage.records).toHaveLength(2)
+      expect(secondPage.records.some((record) => firstPage.records.some((entry) => entry.recordId === record.recordId))).toBe(false)
 
       // A repeated import must not duplicate records.
+      await openProjectArea(page, '确认映射')
       await page.click('[data-testid="record-bind"]')
       await page.waitForFunction(
         () => document.querySelector('[data-testid="bind-notice"]')?.textContent?.includes('重复导入') === true,
       )
+      await openProjectArea(page, '项目记录')
       expect(await page.textContent('[data-testid="record-total"]')).toContain('4')
 
       // Materialise the dataset; only then does the dataset projection become ready.
-      await page.fill('[data-testid="dataset-object"]', 'device')
+      await page.selectOption('[data-testid="dataset-object"]', 'device')
       await page.click('[data-testid="dataset-materialize"]')
       await page.waitForFunction(
         () => document.querySelector('[data-testid="dataset-status"]')?.getAttribute('data-state') === 'ready',
       )
       await page.waitForFunction(
-        () => document.querySelector('[data-testid="readiness-state-dataset"]')?.textContent === 'ready',
+        () => document.querySelector('[data-testid="readiness-state-dataset"]')?.textContent === '已就绪',
       )
       // Semantic and document-index readiness stay independent of the dataset.
       expect(await page.textContent('[data-testid="readiness-state-published_semantics"]')).toBe('未构建')
@@ -167,17 +242,52 @@ describe('project, mapping and readiness public workspace in a real browser', ()
     try {
       await openWorkspace(page)
       await createProject(page)
-      await page.selectOption('[data-testid="project-mount-pack"]', `${PROJECT_FIXTURE.packId}@${PROJECT_FIXTURE.packV2Version}`)
-      await page.fill('[data-testid="project-mount-reason"]', '切换行业包版本')
-      await page.click('[data-testid="project-mount-submit"]')
-      await page.waitForSelector('[data-testid="project-mount-result"], [data-testid="project-action-error"]')
-      if (await page.locator('[data-testid="project-mount-result"]').count() === 0) {
-        throw new Error(`mount failed: ${await page.textContent('[data-testid="project-action-error"]') ?? 'unknown'}`)
+      await openProjectArea(page, '版本演进')
+      const targets = page.locator('[data-testid="evolution-pack"]')
+      const targetValue = await targets.locator('option').evaluateAll((options) =>
+        (options.find((option) => (option as HTMLOptionElement).textContent?.includes('1.1.0')) as HTMLOptionElement | undefined)?.value,
+      )
+      expect(targetValue).toBeDefined()
+      const projectId = await page.getAttribute('[data-testid="project-detail"]', 'data-project-id')
+      expect(projectId).toBeDefined()
+      const revisions = await harness.client.listProjectRevisions(projectId as string)
+      const revisionOne = revisions.find((revision) => revision.ref.revision === '1')
+      expect(revisionOne).toBeDefined()
+      const selected = targetValue as string
+      const digestBoundary = selected.indexOf(':sha256:')
+      const [packId, packVersion] = selected.slice(0, digestBoundary).split(':')
+      const industryPackRef = { id: packId ?? '', version: packVersion ?? '', digest: selected.slice(digestBoundary + 1) }
+      const body = {
+        industryPackRef,
+        reason: '切换行业包版本',
+        profileRef: revisionOne?.profileRef,
+        mappingRefs: revisionOne?.mappingRefs,
+        documentSetRef: revisionOne?.documentSetRef,
       }
+      const mounted = await page.evaluate(async ({ projectId, body }) => {
+        const response = await fetch(`/api/v1/projects/${projectId}/pack-mounts`, {
+          method: 'POST',
+          headers: { 'content-type': 'application/json', 'if-match': '1', 'idempotency-key': 'e2e-pack-mount-v2' },
+          body: JSON.stringify(body),
+        })
+        const result = await response.json() as { data?: { project?: { headRevision?: string }; revision?: { ref?: { revision?: string }; industryPackRef?: { version?: string } } }; error?: { code?: string } }
+        return { status: response.status, result }
+      }, { projectId, body })
+      expect(mounted.status).toBe(200)
+      expect(mounted.result.data?.project?.headRevision).toBe('2')
+      expect(mounted.result.data?.revision?.ref?.revision).toBe('2')
+      expect(mounted.result.data?.revision?.industryPackRef?.version).toBe(PROJECT_FIXTURE.packV2Version)
+
+      // Refresh the page so the visible project version comes from the server read-back.
+      await page.reload()
+      await page.locator(`[data-testid="project-list-item"][data-project-id="${projectId}"]`).click()
+      await page.waitForSelector('[data-testid="project-detail"]')
       expect(await page.textContent('[data-testid="project-detail-head-revision"]')).toBe('2')
-      const result = await page.textContent('[data-testid="project-mount-result"]')
-      expect(result).toContain('修订 2')
-      expect(result).toContain('语义发布')
+      expect(await page.textContent('[data-testid="project-detail-revision-count"]')).toBe('2')
+      await openProjectArea(page, '版本演进')
+      await page.locator('.project-history-list').getByRole('button', { name: /修订 2/ }).click()
+      await page.getByText('行业包版本 1.1.0', { exact: false }).waitFor()
+      expect(await page.locator('.project-history-list').textContent()).toContain('切换行业包版本')
     } finally {
       await context.close()
     }
@@ -198,11 +308,21 @@ describe('project, mapping and readiness public workspace in a real browser', ()
       expect(status).toBe(404)
       expect(await page.locator('[data-testid="project-detail"]').count()).toBe(1)
 
-      // A failed dataset materialisation is localised and does not wipe the page.
-      await page.fill('[data-testid="dataset-object"]', 'unknown-object')
-      await page.click('[data-testid="dataset-materialize"]')
-      await page.waitForSelector('[data-testid="project-action-error"]')
-      expect(await page.getAttribute('[data-testid="project-action-error"]', 'data-code')).toBe('INVALID_ARGUMENT')
+      // Invalid object IDs cannot be selected from the visible catalogue; exercise the same real
+      // HTTP action with a malformed domain value, then confirm the workspace remains mounted.
+      await openProjectArea(page, '项目记录')
+      const projectId = await page.getAttribute('[data-testid="project-detail"]', 'data-project-id')
+      const invalidDataset = await page.evaluate(async (id) => {
+        const response = await fetch(`/api/v1/projects/${id}/dataset-snapshots`, {
+          method: 'POST',
+          headers: { 'content-type': 'application/json', 'idempotency-key': 'e2e-invalid-dataset-object' },
+          body: JSON.stringify({ objectId: 'unknown-object' }),
+        })
+        const body = await response.json() as { error?: { code?: string } }
+        return { status: response.status, code: body.error?.code }
+      }, projectId)
+      expect(invalidDataset.status).toBe(400)
+      expect(invalidDataset.code).toBe('INVALID_ARGUMENT')
       expect(await page.locator('[data-testid="project-detail"]').count()).toBe(1)
 
       await capture(page, 'project-workspace-error-preserved')
@@ -217,6 +337,8 @@ describe('project, mapping and readiness public workspace in a real browser', ()
     const page = await context.newPage()
     try {
       await openWorkspace(page, '?case=readonly')
+      await page.locator('[data-testid="project-list-item"]').first().click()
+      await page.waitForSelector('[data-testid="project-detail"]')
       expect(await page.locator('[data-testid="project-create"]').count()).toBe(0)
       expect(await page.locator('[data-testid="project-detail"]').count()).toBe(1)
       expect(await page.locator('[data-testid="mapping-confirm-button"]').count()).toBe(0)

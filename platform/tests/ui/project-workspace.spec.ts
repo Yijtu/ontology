@@ -348,7 +348,7 @@ describe('project workspace panel', () => {
     const { container, root } = await render(
       createElement(ProjectWorkspacePanel, {
         client,
-        projectBinding: BINDING,
+        profileRef: BINDING.profileRef,
         packs: PACKS,
         sources: [SOURCE],
       }),
