@@ -118,6 +118,36 @@ export function createCompetencyValidationTargetReader(options: CompetencyValida
     if (template.sourceOrigin !== undefined && template.sourceOrigin !== 'published_pack' ||
       (template.sourceOrigin === 'published_pack' ? template.rules.some((alias) => alias.origin !== 'pack') : template.rules.some((alias) => alias.origin === 'pack'))) return false
 
+    const readPackAsset = async (): Promise<PublishedPackAsset | undefined> => {
+      if (template.sourceOrigin !== 'published_pack' || options.packs === undefined) return undefined
+      const asset = await options.packs.findByRef(scope, template.packRef, ctx)
+      if (asset === undefined) return undefined
+      assertPublishedPackAssetShape(asset)
+      if (!same(asset.packRef, template.packRef) || asset.workspaceId !== target.workspaceId || asset.namespace !== template.namespace ||
+        !same(asset.definitionRef, template.definitionRef) || publishedPackContentDigest(asset) !== template.packRef.digest ||
+        asset.diff.toPackRef === undefined || !same(asset.diff.toPackRef, asset.packRef) ||
+        asset.diff.digest !== contentDigestOf({ fromPackRef: asset.diff.fromPackRef, changes: asset.diff.changes }) ||
+        !equal(asset.diff.breakingChanges, asset.diff.changes.filter((change) => change.breaking))) return undefined
+      return asset
+    }
+
+    const expectedBaseRef = async (asset: PublishedPackAsset): Promise<VersionRef | undefined | null> => {
+      const baseRef = asset.diff.fromPackRef
+      if (baseRef === undefined) return undefined
+      if (options.packs === undefined) return null
+      const predecessor = await options.packs.findByRef(scope, baseRef, ctx)
+      if (predecessor === undefined) return null
+      assertPublishedPackAssetShape(predecessor)
+      if (!same(predecessor.packRef, baseRef) || predecessor.namespace !== predecessor.manifest.namespace ||
+        predecessor.packAsset.manifest.namespace !== predecessor.namespace ||
+        publishedPackContentDigest(predecessor) !== baseRef.digest || !same(predecessor.packAsset.ref, baseRef) ||
+        !same(predecessor.packAsset.manifest.definitionsRef, predecessor.definitionRef)) return null
+      const predecessorDefinition = await options.definitions.findVersion(predecessor.namespace, predecessor.definitionRef.id, predecessor.definitionRef.version, scope, ctx)
+      if (predecessorDefinition === undefined || !same(predecessorDefinition.ref, predecessor.definitionRef) ||
+        predecessorDefinition.namespace !== predecessor.namespace || definitionVersionDigest(predecessorDefinition) !== predecessor.definitionRef.digest) return null
+      return baseRef
+    }
+
     const readTarget = async () => {
       const workspace = await options.workspaces.getWorkspace(scope, target.workspaceId, ctx)
       if (workspace === undefined || workspace.state === 'archived' || workspace.headRevision !== target.revision) return undefined
@@ -216,8 +246,13 @@ export function createCompetencyValidationTargetReader(options: CompetencyValida
     const definition = await options.definitions.findVersion(template.namespace, template.definitionRef.id, template.definitionRef.version, scope, ctx)
     if (definition === undefined || !same(definition.ref, template.definitionRef) || definitionVersionDigest(definition) !== definition.ref.digest
       || !equal(definition, suppliedDefinition)) return false
+    const previewPack = await readPackAsset()
+    if (template.sourceOrigin === 'published_pack' && previewPack === undefined) return false
+    const baseRef = previewPack === undefined ? undefined : await expectedBaseRef(previewPack)
+    if (baseRef === null) return false
     const assembled = buildDefinitionRecord({ workspace: initial.workspace, scopeRef: scope, definitionId: definition.definitionId,
-      version: definition.version, projection: initial.projection, standardProvenance: [], publishedAt: definition.publishedAt })
+      version: definition.version, projection: initial.projection, standardProvenance: [], publishedAt: definition.publishedAt,
+      ...(baseRef === undefined ? {} : { baseRef }) })
     if (!equal(definitionSemantics(assembled), definitionSemantics(definition))) return false
 
     if (new Set(suppliedRules.map((row) => row.ruleId)).size !== suppliedRules.length) return false
@@ -227,12 +262,9 @@ export function createCompetencyValidationTargetReader(options: CompetencyValida
     const actualRules = new Map<string, ActualRule>()
     const packAliases = template.rules.filter((alias): alias is CompetencyPackRuleAlias => alias.origin === 'pack')
     const readPack = async () => {
-      if (template.sourceOrigin !== 'published_pack') return undefined
-      if (options.publishedRules === undefined || options.packs === undefined || packAliases.some((alias) => !same(alias.publishedPackRef, template.packRef))) return undefined
-      const asset = await options.packs.findByRef(scope, template.packRef, ctx)
-      if (asset === undefined) return undefined
-      assertPublishedPackAssetShape(asset)
-      if (!same(asset.packRef, template.packRef) || !same(asset.definitionRef, template.definitionRef) || publishedPackContentDigest(asset) !== template.packRef.digest || asset.ruleDeclarations === undefined || contentDigestOf(asset.ruleDeclarations) !== asset.manifest.rulePolicyRef.digest || asset.packAsset.ruleDeclarationsRef?.digest !== asset.manifest.rulePolicyRef.digest) return undefined
+      if (template.sourceOrigin !== 'published_pack' || options.publishedRules === undefined || options.packs === undefined || packAliases.some((alias) => !same(alias.publishedPackRef, template.packRef))) return undefined
+      const asset = await readPackAsset()
+      if (asset === undefined || asset.ruleDeclarations === undefined || contentDigestOf(asset.ruleDeclarations) !== asset.manifest.rulePolicyRef.digest || asset.packAsset.ruleDeclarationsRef?.digest !== asset.manifest.rulePolicyRef.digest) return undefined
       let rules: readonly PublishedPackRuleVersion[]
       try { rules = await options.publishedRules.read(scope, { packRef: template.packRef, definitionRef: template.definitionRef }, ctx) }
       catch (error) { if (error instanceof IndustryAssetPublicationError && ['VALIDATION_BLOCKED','FORBIDDEN','VERSION_CONFLICT','SCHEMA_NOT_FOUND'].includes(error.code)) return undefined; throw error }
@@ -359,6 +391,8 @@ export function createCompetencyValidationTargetReader(options: CompetencyValida
     if (!equal(finalDefinition, definition)) return false
     const finalPackOrigin = await readPack()
     if (packOrigin !== undefined && (finalPackOrigin === undefined || !equal(finalPackOrigin, packOrigin))) return false
+    const finalBaseRef = finalPackOrigin === undefined ? undefined : await expectedBaseRef(finalPackOrigin.asset)
+    if (finalBaseRef === null || (baseRef === undefined ? finalBaseRef !== undefined : finalBaseRef === undefined || !same(finalBaseRef, baseRef))) return false
     for (const actual of actualRules.values()) {
       if (actual.origin === 'pack') continue
       const candidate = await options.candidates.getCandidate(scope, actual.candidate.candidateId, ctx)
