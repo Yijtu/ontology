@@ -53,7 +53,7 @@ export function isVersionRef(value: unknown): value is VersionRef {
     isSha256(value['digest'])
 }
 
-function isResolvedProfileRef(value: unknown): value is ResolvedProfileRef {
+export function isResolvedProfileRef(value: unknown): value is ResolvedProfileRef {
   return isRecord(value) && isString(value['id']) && isString(value['version']) &&
     isSha256(value['snapshotHash'])
 }
