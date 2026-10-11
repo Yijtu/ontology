@@ -8,9 +8,10 @@ const ctx = toolContext()
 const timestamp = '2026-10-12T00:00:00Z'
 const projectId = '77777777-7777-4777-8777-777777777777'
 const ref = { id: 'readiness-test', version: '1.0.0', digest: DIGEST_A }
+const mapping = { ...ref, role: 'catalog', sourceObjectRef: { sourceRef: { namespace: 'test', sourceId: 'source' }, objectPath: 'row' } }
 const receipt: ResourceRef = { ...ref, kind: 'artifact' }
 const revision: ProjectRevision = {
-  ref: { projectId, revision: '1', digest: DIGEST_A }, industryPackRef: ref, definitionRef: ref, mappingRefs: [],
+  ref: { projectId, revision: '1', digest: DIGEST_A }, industryPackRef: ref, definitionRef: ref, mappingRefs: [mapping],
   profileRef: { id: ref.id, version: ref.version, snapshotHash: DIGEST_A }, documentSetRef: receipt,
   semanticPublicationRefs: [], sourceVisibilityEpoch: '1', changeReason: 'unit capture fixture',
 }
@@ -22,7 +23,7 @@ const definition: SemanticDefinitionVersion = {
 const profile: ResolvedProfileRecord = {
   profileRef: ref, snapshotHash: DIGEST_A, outputVersion: '1.0.0', outputDigest: DIGEST_A,
   checkedAt: timestamp, resolvedAt: timestamp, createdAt: timestamp,
-  resolved: { industryRef: ref, mappingRefs: [], runtimeRef: ref, backendBindings: {}, modelBindings: {}, toolBindings: [], computeBindings: [],
+  resolved: { industryRef: ref, mappingRefs: [mapping], runtimeRef: ref, backendBindings: {}, modelBindings: {}, toolBindings: [], computeBindings: [],
     policyRef: ref, resolvedVersions: [], resolvedCapabilities: [], explicitDegradations: [], snapshotHash: DIGEST_A, resolvedAt: timestamp },
 }
 const message: OutboxMessageRecord = { outboxId: projectId, jobId: projectId, topic: 'semantic.materialization.requested', payload: {}, idempotencyKey: 'capture-unit', availableAt: timestamp, createdAt: timestamp, state: 'pending', attempts: 0 }
