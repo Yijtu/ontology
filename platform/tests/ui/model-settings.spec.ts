@@ -156,7 +156,7 @@ describe('ModelSettingsPanel', () => {
       const enabled = field(container, '启用生成模型') as HTMLInputElement
       const baseUrl = field(container, '模型服务地址') as HTMLInputElement
       const platformModelId = field(container, 'Core 平台模型 ID') as HTMLInputElement
-      const vendorModel = field(container, '服务商模型名称（可选）') as HTMLInputElement
+      const vendorModel = field(container, '服务商模型名称 *') as HTMLInputElement
       const key = field(container, 'API Key') as HTMLInputElement
       expect(key.type).toBe('password')
 
@@ -211,6 +211,7 @@ describe('ModelSettingsPanel', () => {
         (field(container, '启用生成模型') as HTMLInputElement).click()
         textValue(field(container, '模型服务地址') as HTMLInputElement, 'https://keep-this-address.example')
         textValue(field(container, 'Core 平台模型 ID') as HTMLInputElement, 'keep-this-model-id')
+        textValue(field(container, '服务商模型名称 *') as HTMLInputElement, 'vendor-chat-small')
         textValue(field(container, 'API Key') as HTMLInputElement, 'typed-secret-value')
       })
       await act(async () => {
@@ -223,6 +224,71 @@ describe('ModelSettingsPanel', () => {
       expect((field(container, 'API Key') as HTMLInputElement).type).toBe('password')
       expect(container.textContent).not.toContain('typed-secret-value')
       expect(container.textContent).not.toContain('provider-private-body-and-key-should-not-appear')
+    } finally {
+      await act(async () => root.unmount())
+    }
+  })
+
+  it('requires a vendor model and a new key before sending enabled saves or connection tests', async () => {
+    const methods: string[] = []
+    const http = client(async (input, init) => {
+      const path = new URL(String(input)).pathname
+      const method = init?.method ?? 'GET'
+      methods.push(`${method} ${path}`)
+      if (path.endsWith('/test')) return envelope({ reachable: true, message: 'sanitized' })
+      return envelope(SETTINGS)
+    })
+    const { container, root } = await render(http)
+    try {
+      await act(async () => {
+        ;(field(container, '启用生成模型') as HTMLInputElement).click()
+        textValue(field(container, '模型服务地址') as HTMLInputElement, 'https://gateway.example.com')
+        textValue(field(container, 'Core 平台模型 ID') as HTMLInputElement, 'company-generation')
+      })
+      await act(async () => {
+        ;(container.querySelector('[data-testid="model-settings-save"]') as HTMLButtonElement).click()
+      })
+      expect(container.textContent).toContain('服务商模型名称')
+      expect(container.textContent).toContain('填写服务商模型名称')
+      expect(methods).toEqual(['GET /api/v1/core/model-settings'])
+
+      await act(async () => { textValue(field(container, '服务商模型名称 *') as HTMLInputElement, 'vendor-chat-small') })
+      await act(async () => {
+        ;(container.querySelector('[data-testid="model-settings-save"]') as HTMLButtonElement).click()
+      })
+      expect(container.textContent).toContain('启用模型并测试连接需要 API Key')
+      await act(async () => {
+        ;(container.querySelector('[data-testid="model-settings-test"]') as HTMLButtonElement).click()
+      })
+      expect(methods).toEqual(['GET /api/v1/core/model-settings'])
+
+      await act(async () => { textValue(field(container, 'API Key') as HTMLInputElement, 'new-test-key') })
+      await act(async () => {
+        ;(container.querySelector('[data-testid="model-settings-test"]') as HTMLButtonElement).click()
+        await new Promise((resolve) => setTimeout(resolve, 0))
+      })
+      expect(methods).toEqual(['GET /api/v1/core/model-settings', 'POST /api/v1/core/model-settings/test'])
+      expect(container.textContent).toContain('Core 能与此配置通信')
+    } finally {
+      await act(async () => root.unmount())
+    }
+  })
+
+  it('requires a replacement key when the saved key would be sent to a different service origin', async () => {
+    const methods: string[] = []
+    const http = client(async (input, init) => {
+      const path = new URL(String(input)).pathname
+      methods.push(`${init?.method ?? 'GET'} ${path}`)
+      return envelope(SAVED)
+    })
+    const { container, root } = await render(http)
+    try {
+      await act(async () => {
+        textValue(field(container, '模型服务地址') as HTMLInputElement, 'https://other-gateway.example')
+        ;(container.querySelector('[data-testid="model-settings-test"]') as HTMLButtonElement).click()
+      })
+      expect(container.textContent).toContain('服务地址已更换，请重新填写对应的 API Key')
+      expect(methods).toEqual(['GET /api/v1/core/model-settings'])
     } finally {
       await act(async () => root.unmount())
     }

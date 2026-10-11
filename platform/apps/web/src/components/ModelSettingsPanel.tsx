@@ -59,7 +59,10 @@ function sameDraft(left: ModelSettingsDraft, right: ModelSettingsDraft): boolean
     left.platformModelId === right.platformModelId && left.vendorModel === right.vendorModel
 }
 
-function validateDraft(draft: ModelSettingsDraft): string | undefined {
+function validateDraft(
+  draft: ModelSettingsDraft,
+  options: { readonly hasApiKey: boolean; readonly apiKey: string; readonly clearApiKey: boolean; readonly savedBaseUrl: string },
+): string | undefined {
   if (!draft.enabled) return undefined
   if (draft.baseUrl.trim().length === 0) return '启用模型前，请填写模型服务地址。'
   try {
@@ -70,7 +73,22 @@ function validateDraft(draft: ModelSettingsDraft): string | undefined {
   }
   if (draft.endpoint.trim().length === 0) return '启用模型前，请填写 API 端点。'
   if (draft.platformModelId.trim().length === 0) return '启用模型前，请填写 Core 平台模型 ID。'
+  if (draft.vendorModel.trim().length === 0) return '启用模型前，请填写服务商模型名称。'
+  if (options.apiKey.length === 0 && (options.clearApiKey || !options.hasApiKey)) {
+    return '启用模型并测试连接需要 API Key。请先填写服务商提供的密钥。'
+  }
+  if (options.apiKey.length === 0 && !sameServiceOrigin(options.savedBaseUrl, draft.baseUrl)) {
+    return '服务地址已更换，请重新填写对应的 API Key。'
+  }
   return undefined
+}
+
+function sameServiceOrigin(left: string, right: string): boolean {
+  try {
+    return new URL(left.trim()).origin === new URL(right.trim()).origin
+  } catch {
+    return false
+  }
 }
 
 function failureText(action: Action, error: unknown, timedOut = false): string {
@@ -193,7 +211,12 @@ export function ModelSettingsPanel({ client, readOnly = false, onDirtyChange }: 
   const save = async (event: FormEvent<HTMLFormElement>) => {
     event.preventDefault()
     if (readOnly || busy || state?.view === undefined || draft === undefined) return
-    const validation = validateDraft(draft)
+    const validation = validateDraft(draft, {
+      hasApiKey: state.view.hasApiKey,
+      apiKey: state.apiKey,
+      clearApiKey: state.clearApiKey,
+      savedBaseUrl: state.view.baseUrl,
+    })
     if (validation !== undefined) {
       setLoaded((previous) => previous.owner !== owner ? previous : { ...previous, notice: { kind: 'error', text: validation } })
       return
@@ -232,7 +255,12 @@ export function ModelSettingsPanel({ client, readOnly = false, onDirtyChange }: 
 
   const testConnection = async () => {
     if (readOnly || busy || draft === undefined) return
-    const validation = validateDraft({ ...draft, enabled: true })
+    const validation = validateDraft({ ...draft, enabled: true }, {
+      hasApiKey: state?.view?.hasApiKey ?? false,
+      apiKey: state?.apiKey ?? '',
+      clearApiKey: state?.clearApiKey ?? false,
+      savedBaseUrl: state?.view?.baseUrl ?? '',
+    })
     if (validation !== undefined) {
       setLoaded((previous) => previous.owner !== owner ? previous : { ...previous, notice: { kind: 'error', text: validation } })
       return
@@ -328,7 +356,7 @@ export function ModelSettingsPanel({ client, readOnly = false, onDirtyChange }: 
         <Field label="Core 平台模型 ID" hint="Core 内部能力标识，例如 company-generation。">
           {(attributes) => <input {...attributes} type="text" placeholder="company-generation" value={draft.platformModelId} onChange={(event) => updateDraft({ platformModelId: event.currentTarget.value })} />}
         </Field>
-        <Field label="服务商模型名称（可选）" hint="填写服务商侧要求的模型名称；不需要映射时可留空。">
+        <Field label="服务商模型名称 *" hint="必填。填写服务商侧要求的模型名称；它与 Core 平台模型 ID 是不同标识。">
           {(attributes) => <input {...attributes} type="text" placeholder="留空或填写服务商模型名" value={draft.vendorModel} onChange={(event) => updateDraft({ vendorModel: event.currentTarget.value })} />}
         </Field>
         <Field label="API Key" hint="新增或更换密钥时填写。同一服务地址留空会保留现有密钥；更换服务地址时必须重新填写。保存后输入框会清空，读取配置不会返回密钥。">
