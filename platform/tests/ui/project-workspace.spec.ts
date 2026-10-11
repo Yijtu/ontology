@@ -335,7 +335,7 @@ describe('project workspace panel', () => {
     }
   })
 
-  it('creates a project and shows the independent semantic/query/index readiness projections', async () => {
+  it('uses Core bootstrap when a profile and deployment binding coexist, and shows independent readiness', async () => {
     let bootstrapBody: unknown
     let requestKey: string | null = null
     const client = clientForFixture({
@@ -348,6 +348,7 @@ describe('project workspace panel', () => {
     const { container, root } = await render(
       createElement(ProjectWorkspacePanel, {
         client,
+        projectBinding: BINDING,
         profileRef: BINDING.profileRef,
         packs: PACKS,
         sources: [SOURCE],

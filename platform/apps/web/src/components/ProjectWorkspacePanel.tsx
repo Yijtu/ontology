@@ -109,6 +109,7 @@ export interface ProjectBinding {
 export interface ProjectWorkspacePanelProps {
   readonly client: WorkbenchClient
   readonly projectBinding?: ProjectBinding
+  /** When provided, Core resolves the configuration; it takes precedence over binding pins. */
   readonly profileRef?: ProfileRef
   /** The published pack versions the deployment offers for project creation/mounting. */
   readonly packs: readonly IndustryPackSummary[]
@@ -184,6 +185,7 @@ export function ProjectWorkspacePanel({
   initialEvolutionId,
   onEvolution,
 }: ProjectWorkspacePanelProps) {
+  const boundConfiguration = profileRef === undefined ? projectBinding : undefined
   const [phase, setPhase] = useState<WorkbenchPhase>('loading')
   const [error, setError] = useState<WorkbenchError | undefined>(undefined)
   const [loadedProjects, setProjects] = useState<readonly ProjectRecord[]>([])
@@ -198,7 +200,7 @@ export function ProjectWorkspacePanel({
   const [configuredPackProfile, setConfiguredPackProfile] = useState<ProfileRef | undefined>()
   const [createExpanded, setCreateExpanded] = useState<boolean | undefined>()
   const [packChoice, setPackChoice] = useState('')
-  const activeProfile = packChoice.length > 0 ? configuredPackProfile : profileRef ?? projectBinding?.profileRef
+  const activeProfile = packChoice.length > 0 ? configuredPackProfile : profileRef ?? boundConfiguration?.profileRef
   const scope = useMemo(
     () => ({ client, selectedId, profileId: activeProfile?.id, version: activeProfile?.version }),
     [client, selectedId, activeProfile?.id, activeProfile?.version],
@@ -280,7 +282,7 @@ export function ProjectWorkspacePanel({
   }
   const sources: readonly ProjectSourceCandidate[] = useMemo(() => {
     if (catalogue === undefined || catalogue.project.projectId !== selectedId)
-      return projectBinding === undefined ? [] : configuredSources ?? []
+      return boundConfiguration === undefined ? [] : configuredSources ?? []
     const fromCatalogue: readonly ProjectSourceCandidate[] = catalogue.sources.flatMap<ProjectSourceCandidate>((source) => {
       const candidateFormat = source.format ?? source.kind
       if (candidateFormat !== 'csv' && candidateFormat !== 'xlsx' && candidateFormat !== 'json' && candidateFormat !== 'text') return []
@@ -316,16 +318,16 @@ export function ProjectWorkspacePanel({
       }))
     })
     return fromCatalogue
-  }, [catalogue, selectedId, configuredSources, projectBinding])
+  }, [catalogue, selectedId, configuredSources, boundConfiguration])
   const datasetObjectChoices = useMemo<readonly { readonly objectId: string; readonly displayName: string }[]>(() => {
     if (catalogue !== undefined && catalogue.project.projectId === selectedId) return catalogue.objects
-    if (projectBinding === undefined) return []
+    if (boundConfiguration === undefined) return []
     const configured = new Map<string, string>()
     for (const source of configuredSources ?? []) {
       for (const object of source.objects) configured.set(object.objectId, object.label)
     }
     return [...configured].map(([objectId, displayName]) => ({ objectId, displayName }))
-  }, [catalogue, selectedId, configuredSources, projectBinding])
+  }, [catalogue, selectedId, configuredSources, boundConfiguration])
 
   const selected =
     phase === 'ready' ? projects.find((project) => project.projectId === selectedId) : undefined
@@ -508,18 +510,18 @@ export function ProjectWorkspacePanel({
     if (activeProfile === undefined) return
     const bootstrapBody = { title: title.trim(), profileRef: { id: activeProfile.id, version: activeProfile.version } }
     const selectedPack = packs.find((pack) => pack.packRef !== undefined && JSON.stringify(pack.packRef) === packChoice && pack.usable)?.packRef
-    if (projectBinding !== undefined && selectedPack === undefined) {
+    if (boundConfiguration !== undefined && selectedPack === undefined) {
       setCreateErrors({ pack: '请选择一个可用的行业包版本。' })
       return
     }
-    const boundBody: CreateProjectRequest | undefined = projectBinding === undefined || selectedPack === undefined
+    const boundBody: CreateProjectRequest | undefined = boundConfiguration === undefined || selectedPack === undefined
       ? undefined
       : {
           ...bootstrapBody,
           industryPackRef: selectedPack,
-          profileRef: projectBinding.profileRef,
-          mappingRefs: projectBinding.mappingRefs,
-          documentSetRef: projectBinding.documentSetRef,
+          profileRef: boundConfiguration.profileRef,
+          mappingRefs: boundConfiguration.mappingRefs,
+          documentSetRef: boundConfiguration.documentSetRef,
         }
     const serialized = JSON.stringify(boundBody ?? bootstrapBody)
     if (createKey.current?.serialized !== serialized)
@@ -560,8 +562,8 @@ export function ProjectWorkspacePanel({
     packRequest.current?.abort()
     const pack = packs.find((candidate) => candidate.packRef !== undefined && JSON.stringify(candidate.packRef) === packId && candidate.usable)
     if (pack?.packRef === undefined) return
-    if (projectBinding !== undefined) {
-      setConfiguredPackProfile(projectBinding.profileRef)
+    if (boundConfiguration !== undefined) {
+      setConfiguredPackProfile(boundConfiguration.profileRef)
       setCreateFailure(undefined)
       return
     }
@@ -888,7 +890,7 @@ export function ProjectWorkspacePanel({
                       ? '请先选择已注册的场景。'
                       : packChoice.length > 0 && configuredPackProfile === undefined
                         ? '正在读取所选已发布版本的项目配置。'
-                        : packChoice.length > 0 && projectBinding !== undefined
+                        : packChoice.length > 0 && boundConfiguration !== undefined
                           ? '已绑定当前部署配置，并固定所选行业包版本，可用于新建项目。'
                         : configuredPackProfile === undefined
                         ? '使用当前场景的已发布版本。服务端将固定行业包、映射与资料集。'
