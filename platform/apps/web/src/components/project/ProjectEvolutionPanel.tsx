@@ -99,6 +99,7 @@ export function ProjectEvolutionPanel({
   callback.current = onEvolution
   const notified = useRef<string | undefined>(undefined)
   const requestKeys = useRef(new Map<string, string>())
+  const recordGeneration = useRef(0)
   const scope = useMemo(() => ({ client, projectId: project.projectId }), [client, project.projectId])
   const record = recordOwner === scope ? loadedRecord : undefined
   const begin = useRequestFence(scope)
@@ -203,14 +204,15 @@ export function ProjectEvolutionPanel({
   const refresh = useCallback(
     async (id: string) => {
       const request = begin('read')
+      const generation = recordGeneration.current
       try {
         const actual = await readProjectEvolution(client, project.projectId, id, request.signal)
-        if (request.current()) {
+        if (request.current() && generation === recordGeneration.current) {
           accept(actual)
           setError(undefined)
         }
       } catch (caught) {
-        if (request.current()) setError(caught)
+        if (request.current() && generation === recordGeneration.current) setError(caught)
       }
     },
     [client, project.projectId, begin, accept],
@@ -294,6 +296,7 @@ export function ProjectEvolutionPanel({
       maxAttempts: attempts,
     }
     const request = begin('write')
+    recordGeneration.current += 1
     setBusy(true)
     setError(undefined)
     try {
@@ -319,6 +322,7 @@ export function ProjectEvolutionPanel({
         request.signal,
       )
       if (request.current()) {
+        recordGeneration.current += 1
         accept(actual)
         onChanged()
       }
@@ -331,6 +335,7 @@ export function ProjectEvolutionPanel({
   const operate = async (operation: 'activate' | 'cancel' | 'retry') => {
     if (record === undefined || readOnly || busy) return
     const request = begin('write')
+    recordGeneration.current += 1
     setBusy(true)
     setError(undefined)
     try {
@@ -343,6 +348,7 @@ export function ProjectEvolutionPanel({
         request.signal,
       )
       if (request.current()) {
+        recordGeneration.current += 1
         accept(actual)
         onChanged()
       }
