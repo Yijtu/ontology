@@ -159,6 +159,7 @@ export function BusinessWorkbenchPanel({
   const [taskCatalogue, setTaskCatalogue] = useState<ProjectTaskCatalogue>()
   const [catalogueError, setCatalogueError] = useState<unknown>()
   const [catalogueOwner, setCatalogueOwner] = useState<unknown>()
+  const [catalogueRefresh, setCatalogueRefresh] = useState(0)
   const [selectedTaskKey, setSelectedTaskKey] = useState<string>()
   const catalogueScope = useMemo(() => ({ client, selectedProjectId }), [client, selectedProjectId])
   const begin = useRequestFence(catalogueScope)
@@ -179,7 +180,9 @@ export function BusinessWorkbenchPanel({
     setClarificationInput('')
   }, [profileRef.id, profileRef.version, selectedProjectId])
   useEffect(() => {
-    setTaskCatalogue(undefined)
+    // Keep the same project's execution profile while refreshing its readiness.
+    // A different scope is still hidden by catalogueOwner until its own read completes.
+    setTaskCatalogue((previous) => previous?.project.projectId === selectedProjectId ? previous : undefined)
     setCatalogueError(undefined)
     setSelectedTaskKey(undefined)
     if (selectedProjectId === undefined) return
@@ -194,7 +197,7 @@ export function BusinessWorkbenchPanel({
       .catch((caught: unknown) => {
         if (request.current()) setCatalogueError(caught)
       })
-  }, [client, selectedProjectId, begin, catalogueScope])
+  }, [client, selectedProjectId, begin, catalogueScope, catalogueRefresh])
   const selectedTask = actualCatalogue?.tasks.find(
     (task) =>
       `${task.bindingRef.id}:${task.bindingRef.version}:${task.bindingRef.digest}` === selectedTaskKey,
@@ -286,8 +289,8 @@ export function BusinessWorkbenchPanel({
             <ProjectContextPicker
               context={projectContext}
               onSelect={(id) => {
-                projectContext.select(id)
-                onSelectProject?.(id)
+                if (onSelectProject === undefined) projectContext.select(id)
+                else onSelectProject(id)
               }}
             />
             {catalogueError === undefined ? null : <ProjectNotice error={catalogueError} />}
@@ -302,6 +305,10 @@ export function BusinessWorkbenchPanel({
             ) : (
               <section data-testid="business-task-list">
                 <h3>当前项目可用任务</h3>
+                {selectedTaskKey === undefined ? (
+                  <Button data-testid="business-task-refresh" disabled={state.busy}
+                    onClick={() => setCatalogueRefresh((value) => value + 1)}>刷新任务与就绪状态</Button>
+                ) : null}
                 {actualCatalogue === undefined ? (
                   <p role="status">
                     {catalogueError === undefined ? '正在读取实际任务与就绪状态…' : '任务目录当前不可用。'}

@@ -26,6 +26,7 @@ export interface DefinitionWorkbenchPanelProps {
   readonly client: WorkbenchClient
   readonly workspaceId: string
   readonly readOnly?: boolean
+  readonly refreshKey?: number
 }
 
 export interface DefinitionEditFields {

@@ -100,6 +100,7 @@ describe('LOCAL-054 cross-layer acceptance in a real browser', () => {
     await page.fill('[data-testid="query-question"]', '明天备电策略如何安排？')
     await page.click('[data-testid="query-ask"]')
     await page.waitForSelector('[data-testid="query-run"]')
+    await page.getByTestId('query-budget').locator('summary').click()
     await page.waitForSelector('[data-testid="budget-tool-calls"]')
     const budget = await page.textContent('[data-testid="budget-tool-calls"]')
     await capture(page, 'acceptance-2-query-asked')

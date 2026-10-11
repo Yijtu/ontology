@@ -30,6 +30,7 @@ let workspaceId = ''
 let appDatabaseUrl = ''
 let closing = false
 const workerDiagnostics: { readonly duringClose: boolean; readonly name: string; readonly code?: string; readonly message: string }[] = []
+let expectedEmptyFactsDiagnostic: (typeof workerDiagnostics)[number] | undefined
 function recordWorkerError(error: unknown): void {
   const code = typeof error === 'object' && error !== null && 'code' in error ? String(error.code) : undefined
   workerDiagnostics.push({ duringClose: closing, name: error instanceof Error ? error.name : typeof error,
@@ -73,9 +74,8 @@ afterAll(async () => {
   if (directory !== '') await rm(directory, { recursive: true, force: true })
   await postgres?.stop()
   await record('gap-017-worker-diagnostic', workerDiagnostics.map((entry) => JSON.stringify(entry)))
-  // The route-only run has no published facts. Its deliberate data-gap failure is distinct
-  // from shutdown diagnostics; every other worker error remains an acceptance failure.
-  expect(workerDiagnostics.filter((entry) => entry.duringClose || entry.name !== 'TypedDraftWriterError' || entry.code !== 'INSUFFICIENT_DATA')).toEqual([])
+  // Only the one explicitly observed route-only failure is expected, never its whole class.
+  expect(workerDiagnostics.filter((entry) => entry !== expectedEmptyFactsDiagnostic)).toEqual([])
 })
 
 async function newPage(width = 1440): Promise<Page> {
@@ -216,8 +216,13 @@ describe('professional product framework: real production host', () => {
     const deployment = await client.getCoreDeployment()
     const scenario = deployment.scenarios[0]
     if (scenario === undefined) throw new Error('no real scenario available')
+    const diagnosticStart = workerDiagnostics.length
     const run = await client.createRun({ profileRef: scenario.profileRef, question: 'facts:facility_id', context: { timeZone: 'UTC' }, preferences: { route: 'template', allowWeb: false } })
     await expect.poll(async () => ['published', 'cancelled', 'failed', 'blocked'].includes((await client.getRun(run.runId)).state), { timeout: 30_000, interval: 100 }).toBe(true)
+    expect((await client.getRun(run.runId)).state).toBe('failed')
+    await expect.poll(() => workerDiagnostics.length, { timeout: 5_000, interval: 100 }).toBe(diagnosticStart + 1)
+    expectedEmptyFactsDiagnostic = workerDiagnostics[diagnosticStart]
+    expect(expectedEmptyFactsDiagnostic).toMatchObject({ duringClose: false, name: 'TypedDraftWriterError', code: 'INSUFFICIENT_DATA' })
     const page = await browser.newPage({ viewport: { width: 1440, height: 1050 } })
     const view = (expected: string) => page.waitForFunction((value) => document.querySelector('.app')?.getAttribute('data-view') === value, expected)
     try {
@@ -253,8 +258,15 @@ describe('professional product framework: real production host', () => {
     await admin.query('INSERT INTO agent_platform.tenants (tenant_id, slug) VALUES ($1, $2)', [scopeRef.tenantId, `readonly-${scopeRef.tenantId}`])
     await admin.query('INSERT INTO agent_platform.spaces (tenant_id, space_id, name) VALUES ($1, $2, $3)', [scopeRef.tenantId, scopeRef.spaceId, 'readonly'])
     // Reuse the migrated application connection, while keeping the two host scopes separate.
+    const readOnlyDiagnostics: typeof workerDiagnostics = []
+    let readOnlyClosing = false
     const readOnlyComposition = await createCoreLocalComposition({ databaseUrl: appDatabaseUrl, objectDirectory: join(directory, 'readonly'), scopeRef,
-      examples: loadCoreExamples({ targetScopeRef: scopeRef }), allowLocalOperator: false, modelsEnabled: false, jevEnabled: false })
+      examples: loadCoreExamples({ targetScopeRef: scopeRef }), allowLocalOperator: false, modelsEnabled: false, jevEnabled: false,
+      onWorkerError: (error) => {
+        const code = typeof error === 'object' && error !== null && 'code' in error ? String(error.code) : undefined
+        readOnlyDiagnostics.push({ duringClose: readOnlyClosing, name: error instanceof Error ? error.name : typeof error,
+          ...(code === undefined ? {} : { code }), message: error instanceof Error ? error.message : String(error) })
+      } })
     const readOnlyApi = createCoreApi(readOnlyComposition.dependencies)
     let readOnlyWeb: WebHost | undefined
     let failingWeb: WebHost | undefined
@@ -280,7 +292,10 @@ describe('professional product framework: real production host', () => {
       await failingWeb?.close()
       await readOnlyWeb?.close()
       await readOnlyApi.close()
+      readOnlyClosing = true
       await readOnlyComposition.close()
+      await record('gap-017-readonly-worker-diagnostic', readOnlyDiagnostics.map((entry) => JSON.stringify(entry)))
+      expect(readOnlyDiagnostics, 'read-only host worker errors, including shutdown').toEqual([])
     }
   })
 })

@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useRef, useState } from 'react'
-import type { DefinitionRevisionStrategy, MappingRef, ProjectRecord, ResolvedProfileRef, ResourceRef, VersionRef } from '@ontology/contracts'
+import type { AssetCandidateVersion, DefinitionRevisionStrategy, MappingRef, ProjectRecord, ResolvedProfileRef, ResourceRef, RuleActionCandidateVersion, RuleExpressionNode, VersionRef } from '@ontology/contracts'
 import type { WorkbenchClient } from '../api/client'
 import { ApiError } from '../api/errors'
 import type { IndustryPackSummary } from '../api/projects'
@@ -10,6 +10,7 @@ import {
   type PackExportBundleView,
   type PublishedPackResultView,
   type SyntheticCaseKind,
+  type CreateSyntheticExampleSetRequest,
   type SyntheticExampleSetView,
   type ValidationSurfaceGateView,
 } from '../api/package-publication'
@@ -20,6 +21,8 @@ import { FullVersionDiff, RevisionStrategyForm } from './ontology/FullVersionDif
 import './ontology/ontology.css'
 import { StatePanel } from './StatePanel'
 import { PublicStateNotice } from './PublicStateNotice'
+import { isLatestHumanReviewApproval, latestCandidateHeads, readHumanReviews } from '../api/ontology'
+import { Button } from './ui'
 import { classifyPublicError } from '../state/public-errors'
 import type { WorkbenchError, WorkbenchPhase } from '../state/workbench'
 
@@ -56,6 +59,7 @@ export interface PackagePublicationPanelProps {
   /** The validation report to open on load (a freshly created report from the workbench). */
   readonly initialValidationId?: string
   readonly readOnly?: boolean
+  readonly refreshKey?: number
 }
 
 /** The counter-example families a validation report proves were covered. */
@@ -160,30 +164,46 @@ export function PackagePublicationPanel({
   existingProjectId,
   initialValidationId,
   readOnly = false,
+  refreshKey,
 }: PackagePublicationPanelProps) {
   const [strategy, setStrategy] = useState<DefinitionRevisionStrategy>()
   const [approvedCQRef, setApprovedCQRef] = useState<VersionRef>()
   const [executionPreview, setExecutionPreview] = useState<ExecutionPreviewView>()
   const [previewReadNotice, setPreviewReadNotice] = useState('')
   const [currentHead, setCurrentHead] = useState<string>()
+  const currentHeadRef = useRef<string | undefined>(undefined)
+  currentHeadRef.current = currentHead
   const [validating, setValidating] = useState(false)
   const [validationNotice, setValidationNotice] = useState('')
   const validationAbort = useRef<AbortController | undefined>(undefined)
+  const exampleAbort = useRef<AbortController | undefined>(undefined)
+  const pendingExampleRequest = useRef<{ readonly identity: string; readonly body: CreateSyntheticExampleSetRequest; readonly key: string } | undefined>(undefined)
+  const pendingStageRefresh = useRef(false)
   const writeKeys = useRef(new Map<string, string>())
   const epoch = useRef(0)
   const workspaceRef = useRef(workspaceId)
   workspaceRef.current = workspaceId
+  const ownerResetRef = useRef(workspaceId)
   const [phase, setPhase] = useState<WorkbenchPhase>('loading')
   const [error, setError] = useState<WorkbenchError | undefined>(undefined)
   const [busy, setBusy] = useState(false)
   const [actionError, setActionError] = useState<WorkbenchError | undefined>(undefined)
 
   const [packs, setPacks] = useState<readonly IndustryPackSummary[]>([])
+  const [definitionCandidates, setDefinitionCandidates] = useState<readonly AssetCandidateVersion[]>([])
+  const [ruleCandidates, setRuleCandidates] = useState<readonly RuleActionCandidateVersion[]>([])
   const [exampleSets, setExampleSets] = useState<readonly SyntheticExampleSetView[]>([])
   const [report, setReport] = useState<IndustryValidationReportView | undefined>(undefined)
   const [selectedExampleSetId, setSelectedExampleSetId] = useState<string | undefined>(undefined)
+  const [exampleRuleId, setExampleRuleId] = useState('')
+  const [exampleFieldId, setExampleFieldId] = useState('')
+  const [exampleFieldValue, setExampleFieldValue] = useState('')
+  const [exampleExpected, setExampleExpected] = useState<'true' | 'false' | 'unknown' | 'conflict' | ''>('')
+  const [exampleReason, setExampleReason] = useState('')
+  const [exampleReviewer, setExampleReviewer] = useState('')
+  const [creatingExample, setCreatingExample] = useState(false)
 
-  const [packId, setPackId] = useState('')
+  const [packId, setPackId] = useState('pack')
   const [packVersion, setPackVersion] = useState('1.0.0')
   const [requireDeploymentExecutable, setRequireDeploymentExecutable] = useState(false)
   const [publication, setPublication] = useState<PublishedPackResultView | undefined>(undefined)
@@ -193,36 +213,98 @@ export function PackagePublicationPanel({
   const [projectTitle, setProjectTitle] = useState('')
   const [mountedProject, setMountedProject] = useState<ProjectRecord | undefined>(undefined)
 
-  const load = useCallback(async (): Promise<void> => {
+  const load = useCallback(async (preserveReady = false): Promise<void> => {
     const token = ++epoch.current
-    setPhase('loading')
+    if (!preserveReady) { setPhase('loading'); setError(undefined) }
     try {
-      const [packList, setList, workspaceHead] = await Promise.all([
+      const [packList, setList, workspaceHead, definitions, rules] = await Promise.all([
         client.listIndustryPacks(),
         client.listSyntheticExampleSets(workspaceId),
         client.getIndustryWorkspace(workspaceId),
+        readOnly ? Promise.resolve([] as AssetCandidateVersion[]) : client.listDefinitionCandidates(workspaceId),
+        readOnly ? Promise.resolve([] as RuleActionCandidateVersion[]) : client.listRuleActionCandidates(workspaceId),
       ])
       if (epoch.current !== token || workspaceRef.current !== workspaceId) return
+      const previousHead = currentHeadRef.current
       setCurrentHead(workspaceHead.headRevision)
       setPacks(packList)
       setExampleSets(setList)
+      const reviewedDefinitions = [] as { candidate: AssetCandidateVersion; approved: boolean }[]
+      const reviewable = latestCandidateHeads(definitions).filter((candidate) => candidate.state !== 'failed' && candidate.state !== 'rejected' && !candidate.pendingConfirmation)
+      for (let offset = 0; offset < reviewable.length; offset += 8) {
+        const batch = await Promise.all(reviewable.slice(offset, offset + 8).map(async (candidate) => ({
+          candidate,
+          approved: isLatestHumanReviewApproval(await readHumanReviews(client, candidate.candidateId), candidate.contentDigest),
+        })))
+        reviewedDefinitions.push(...batch)
+      }
+      if (epoch.current !== token || workspaceRef.current !== workspaceId) return
+      setDefinitionCandidates(reviewedDefinitions.filter(({ approved }) => approved).map(({ candidate }) => candidate))
+      const reviewedRules = [] as { candidate: RuleActionCandidateVersion; approved: boolean }[]
+      const enabledRules = latestCandidateHeads(rules).filter((candidate) => candidate.lifecycle === 'enabled' && candidate.payload.kind === 'rule')
+      for (let offset = 0; offset < enabledRules.length; offset += 8) {
+        const batch = await Promise.all(enabledRules.slice(offset, offset + 8).map(async (candidate) => ({
+          candidate,
+          approved: isLatestHumanReviewApproval(await readHumanReviews(client, candidate.candidateId), candidate.contentDigest),
+        })))
+        if (epoch.current !== token || workspaceRef.current !== workspaceId) return
+        reviewedRules.push(...batch)
+      }
+      setRuleCandidates(reviewedRules.filter(({ approved }) => approved).map(({ candidate }) => candidate))
       const loaded = initialValidationId === undefined ? undefined : await client.getValidation(workspaceId, initialValidationId)
       if (epoch.current !== token || workspaceRef.current !== workspaceId) return
-      setReport(loaded)
-      setSelectedExampleSetId((previous) => loaded?.exampleSetId ?? previous ?? setList[0]?.exampleSetId)
+      if (!preserveReady || previousHead !== workspaceHead.headRevision || loaded !== undefined) setReport(loaded)
+      setSelectedExampleSetId((previous) => loaded?.exampleSetId ?? (setList.some((entry) => entry.exampleSetId === previous) ? previous : setList[0]?.exampleSetId))
+      setActionError(undefined)
       setPhase('ready')
     } catch (caught) {
       if (epoch.current !== token) return
-      setError(toError(caught))
-      setPhase(phaseFor(caught))
+      if (preserveReady) setActionError(toError(caught))
+      else { setError(toError(caught)); setPhase(phaseFor(caught)) }
     }
-  }, [client, workspaceId, initialValidationId])
+  }, [client, workspaceId, initialValidationId, readOnly])
 
   useEffect(() => {
     setReport(undefined); setPublication(undefined); setExportBundle(undefined); setMountedProject(undefined); setStrategy(undefined); setApprovedCQRef(undefined); setBusy(false); setSelectedExampleSetId(undefined); setExecutionPreview(undefined); setCurrentHead(undefined); setValidating(false); setValidationNotice('')
     void load()
-    return () => { epoch.current++; validationAbort.current?.abort() }
+    return () => { epoch.current++; validationAbort.current?.abort(); exampleAbort.current?.abort() }
   }, [load])
+  useEffect(() => {
+    if (ownerResetRef.current === workspaceId) return
+    ownerResetRef.current = workspaceId
+    exampleAbort.current?.abort()
+    pendingExampleRequest.current = undefined
+    setStrategy(undefined)
+    setApprovedCQRef(undefined)
+    setExecutionPreview(undefined)
+    setPreviewReadNotice('')
+    setCurrentHead(undefined)
+    setExampleRuleId('')
+    setExampleFieldId('')
+    setExampleFieldValue('')
+    setExampleExpected('')
+    setExampleReason('')
+    setExampleReviewer('')
+    setCreatingExample(false)
+    setPackId('pack')
+    setPackVersion('1.0.0')
+    setRequireDeploymentExecutable(false)
+    setPublication(undefined)
+    setExportBundle(undefined)
+    setProjectTitle('')
+    setMountedProject(undefined)
+    setActionError(undefined)
+  }, [workspaceId])
+  useEffect(() => {
+    if (refreshKey === undefined || refreshKey === 0) return
+    if (busy || creatingExample || phase === 'loading') { pendingStageRefresh.current = true; return }
+    void load(true)
+  }, [refreshKey])
+  useEffect(() => {
+    if (!pendingStageRefresh.current || busy || creatingExample || phase === 'loading') return
+    pendingStageRefresh.current = false
+    void load(true)
+  }, [busy, creatingExample, phase, load])
   useEffect(() => {
     if (currentHead === undefined) return undefined
     const abort = new AbortController(); setPreviewReadNotice('正在读取当前已保存的执行支持…')
@@ -258,6 +340,82 @@ export function PackagePublicationPanel({
   }, [])
 
   const selectedExampleSet = exampleSets.find((set) => set.exampleSetId === selectedExampleSetId)
+  const exampleRuleCandidates = ruleCandidates.filter((candidate) => candidate.lifecycle === 'enabled' && candidate.payload.kind === 'rule')
+  const selectedExampleRule = exampleRuleCandidates.find((candidate) => candidate.payload.kind === 'rule' && candidate.payload.ruleId === exampleRuleId)
+  const exampleRule = selectedExampleRule?.payload.kind === 'rule' ? selectedExampleRule.payload : undefined
+  const exampleAttributes = definitionCandidates.flatMap((candidate) => candidate.payload.kind === 'attribute' && candidate.payload.objectLogicalId === exampleRule?.applicability.objectId && ['string', 'boolean', 'enum'].includes(candidate.payload.valueType) ? [candidate.payload] : [])
+  const selectedExampleAttribute = exampleAttributes.find((attribute) => attribute.logicalId === exampleFieldId)
+  const firstConditionAttribute = (node: RuleExpressionNode): string | undefined => {
+    if (node.op === 'compare' || node.op === 'range') return node.attributeId
+    if (node.op === 'all' || node.op === 'any') {
+      for (const operand of node.operands) {
+        const found = firstConditionAttribute(operand)
+        if (found !== undefined) return found
+      }
+    }
+    if (node.op === 'not') return firstConditionAttribute(node.operand)
+    if (node.op === 'relation' && node.targetCondition !== undefined) return firstConditionAttribute(node.targetCondition)
+    return undefined
+  }
+  const firstAttributeForRule = (ruleId: string) => {
+    const candidate = exampleRuleCandidates.find((entry) => entry.payload.kind === 'rule' && entry.payload.ruleId === ruleId)
+    if (candidate === undefined || candidate.payload.kind !== 'rule') return undefined
+    const objectId = candidate.payload.applicability.objectId
+    const conditionAttribute = firstConditionAttribute(candidate.payload.condition)
+    return definitionCandidates.find((entry) => entry.payload.kind === 'attribute' && entry.payload.objectLogicalId === objectId && entry.payload.logicalId === conditionAttribute) ??
+      definitionCandidates.find((entry) => entry.payload.kind === 'attribute' && entry.payload.objectLogicalId === objectId && ['string', 'boolean', 'enum'].includes(entry.payload.valueType))
+  }
+
+  const createExampleSet = (): void => {
+    if (readOnly || busy || creatingExample || currentHead === undefined || exampleRule === undefined || selectedExampleAttribute === undefined || !exampleExpected || !exampleReason.trim() || !exampleReviewer.trim()) return
+    let value: string | boolean | null = exampleFieldValue
+    if (exampleFieldValue === '') value = null
+    else if (selectedExampleAttribute.valueType === 'boolean') {
+      if (exampleFieldValue !== 'true' && exampleFieldValue !== 'false') return
+      value = exampleFieldValue === 'true'
+    } else if (selectedExampleAttribute.valueType !== 'string' && selectedExampleAttribute.valueType !== 'enum') {
+      return
+    }
+    const formIdentity = JSON.stringify({ workspaceId, currentHead, ruleId: exampleRule.ruleId, fieldId: selectedExampleAttribute.logicalId, value, exampleExpected, reason: exampleReason.trim(), reviewer: exampleReviewer.trim() })
+    if (pendingExampleRequest.current?.identity !== formIdentity) {
+      const caseId = client.newRequestKey()
+      const body: CreateSyntheticExampleSetRequest = {
+        caseKinds: ['missing_parameter'],
+        cases: [{ caseId, caseKind: 'missing_parameter', objectTypeRef: exampleRule.applicability.objectId, fields: [{ fieldId: selectedExampleAttribute.logicalId, value }], note: '由审核人独立编写的缺参数测试输入，不是客户事实。' }],
+        expectations: [{ expectationId: client.newRequestKey(), caseId, kind: 'rule', ruleId: exampleRule.ruleId, expected: exampleExpected, origin: 'authored_oracle', reason: exampleReason.trim(), confirmedBy: exampleReviewer.trim(), confirmedAt: new Date().toISOString() }],
+        expectedRevision: currentHead,
+      }
+      pendingExampleRequest.current = { identity: formIdentity, body, key: client.newRequestKey() }
+    }
+    const { identity, body, key } = pendingExampleRequest.current
+    const token = epoch.current
+    const controller = new AbortController()
+    exampleAbort.current?.abort()
+    exampleAbort.current = controller
+    setCreatingExample(true)
+    setActionError(undefined)
+    void (async () => {
+      try {
+        const created = await client.createSyntheticExampleSet(workspaceId, body, { idempotencyKey: key, signal: controller.signal })
+        if (controller.signal.aborted || epoch.current !== token) return
+        const readback = await client.listSyntheticExampleSets(workspaceId)
+        if (controller.signal.aborted || epoch.current !== token) return
+        const saved = readback.find((entry) => entry.exampleSetId === created.exampleSetId && entry.contentDigest === created.contentDigest)
+        if (saved === undefined || saved.expectations[0]?.origin !== 'authored_oracle' || saved.isolationLabel !== 'synthetic test') throw new Error('重新读取的合成样例与人工独立期望不一致。')
+        if (pendingExampleRequest.current?.identity === identity) pendingExampleRequest.current = undefined
+        setExampleSets(readback)
+        setSelectedExampleSetId(saved.exampleSetId)
+        setExampleFieldValue('')
+        setExampleExpected('')
+        setExampleReason('')
+        setExampleReviewer('')
+      } catch (caught) {
+        if (!controller.signal.aborted && epoch.current === token) setActionError(toError(caught))
+      } finally {
+        if (epoch.current === token) setCreatingExample(false)
+      }
+    })()
+  }
 
   const prepareExecution = (): void => {
     if (selectedExampleSetId === undefined || readOnly) return
@@ -442,6 +600,17 @@ export function PackagePublicationPanel({
         <>
           {validationNotice ? <p role="status" className="ontology-notice">{validationNotice}</p> : null}{validating ? <button type="button" onClick={() => validationAbort.current?.abort()}>停止等待验核并保留人工输入</button> : null}
           <section className="ontology-execution-support"><h3>准备真实执行支持</h3><p>对当前已审核声明保存真实的语义发布版本，供合成验核使用。此操作不批准题集、不授予业务审批，也不表示部署可执行；需要部署维护者权限。</p>{readOnly ? null : <button type="button" disabled={busy || selectedExampleSetId === undefined} onClick={prepareExecution}>准备执行验证</button>}{executionPreview === undefined ? <p>尚未准备当前版本的执行支持；接口未装配时会明确显示不可用。</p> : <div><p>✓ 当前执行支持已准备 · 业务审批：无 · 部署：仍未通过验核。</p><p>后续新题集必须使用这些实际版本和真实上传来源，独立填写期望并重新人工批准。不会自动把旧题集改成当前版本。</p><details><summary>实际执行版本、声明和来源绑定</summary><pre>{JSON.stringify(executionPreview, null, 2)}</pre></details></div>}</section>
+          {!readOnly ? <section className="ontology-cq-author" data-testid="synthetic-example-authoring"><h3>编写合成验证样例</h3><p>这里只保存与真实业务数据隔离的测试输入。请选择当前已启用规则、输入一个属性值，并独立填写四态期望与理由。保存后会重新读取服务端版本；这些样例永远不能作为客户事实。</p>
+            <label>已启用规则<select data-testid="synthetic-rule-select" value={exampleRuleId} disabled={busy || creatingExample} onChange={(event) => { const ruleId = event.target.value; setExampleRuleId(ruleId); const first = firstAttributeForRule(ruleId); setExampleFieldId(first?.payload.kind === 'attribute' ? first.payload.logicalId : ''); setExampleFieldValue('') }}><option value="">选择已启用规则</option>{exampleRuleCandidates.map((candidate) => candidate.payload.kind === 'rule' ? <option key={candidate.candidateId} value={candidate.payload.ruleId}>{candidate.displayName}</option> : null)}</select></label>
+            <p data-testid="synthetic-case-kind">测试类型：缺参数。当前表单仅支持字符串、布尔和枚举属性；数值、单位和关系样例不由此表单创建。</p>
+            <label>规则对象属性<select data-testid="synthetic-field-select" value={exampleFieldId} disabled={busy || creatingExample || exampleRule === undefined} onChange={(event) => { setExampleFieldId(event.target.value); setExampleFieldValue('') }}><option value="">选择属性</option>{exampleAttributes.map((attribute) => <option key={attribute.logicalId} value={attribute.logicalId}>{attribute.displayName}</option>)}</select></label>
+            <label>合成输入值{selectedExampleAttribute?.valueType === 'boolean' ? <select data-testid="synthetic-field-value" value={exampleFieldValue} disabled={busy || creatingExample || selectedExampleAttribute === undefined} onChange={(event) => setExampleFieldValue(event.target.value)}><option value="">空值</option><option value="true">是</option><option value="false">否</option></select> : selectedExampleAttribute?.valueType === 'enum' ? <select data-testid="synthetic-field-value" value={exampleFieldValue} disabled={busy || creatingExample || selectedExampleAttribute === undefined} onChange={(event) => setExampleFieldValue(event.target.value)}><option value="">空值</option>{selectedExampleAttribute.enumValues?.map((entry) => <option key={entry} value={entry}>{entry}</option>)}</select> : <input data-testid="synthetic-field-value" type="text" value={exampleFieldValue} disabled={busy || creatingExample || selectedExampleAttribute === undefined} onChange={(event) => setExampleFieldValue(event.target.value)} />}</label>
+            <label>独立期望<select data-testid="synthetic-expectation" value={exampleExpected} disabled={busy || creatingExample} onChange={(event) => { const next = event.target.value; if (next === '' || next === 'true' || next === 'false' || next === 'unknown' || next === 'conflict') setExampleExpected(next) }}><option value="">由审核人填写</option><option value="true">成立</option><option value="false">不成立</option><option value="unknown">未知</option><option value="conflict">冲突</option></select></label>
+            <label>期望理由<textarea data-testid="synthetic-expectation-reason" value={exampleReason} disabled={busy || creatingExample} onChange={(event) => setExampleReason(event.target.value)} /></label>
+            <label>编写并确认的审核人<textarea data-testid="synthetic-expectation-reviewer" value={exampleReviewer} disabled={busy || creatingExample} onChange={(event) => setExampleReviewer(event.target.value)} /></label>
+            {readOnly ? null : <Button variant="primary" data-testid="synthetic-example-save" disabled={busy || creatingExample || exampleRule === undefined || selectedExampleAttribute === undefined || exampleExpected === '' || !exampleReason.trim() || !exampleReviewer.trim()} onClick={createExampleSet}>{creatingExample ? '保存并重新读取…' : '保存合成样例与独立期望'}</Button>}
+            {!readOnly && exampleRuleCandidates.length === 0 ? <p role="status">当前工作区没有已启用规则；请先完成规则来源确认、人工审核与启用。</p> : null}
+          </section> : null}
           {previewReadNotice ? <p role="status" className="ontology-hint">{previewReadNotice}</p> : null}
           <CompetencyQuestionWorkbench client={client} workspaceId={workspaceId} {...(executionPreview === undefined ? {} : { preview: executionPreview })} readOnly={readOnly} disabled={busy} onApprovedRef={handleApprovedCQRef} />
           <RevisionStrategyForm value={strategy} disabled={busy || readOnly} onChange={(next) => { setStrategy(next); setReport(undefined); setPublication(undefined) }} {...(exportBundle?.versionDiff?.fromPackRef === undefined ? {} : { previous: exportBundle.versionDiff.fromPackRef })} />
@@ -545,26 +714,29 @@ export function PackagePublicationPanel({
 
           <section className="package-publication__publish" data-testid="asset-publish-section">
             <h3>发布不可变包</h3>
-            <label>
-              发布标识（高级）
-              <input
-                type="text"
-                data-testid="asset-publish-pack-id"
-                value={packId}
-                disabled={busy || readOnly}
-                onChange={(event) => setPackId(event.target.value)}
-              />
-            </label>
-            <label>
-              版本
-              <input
-                type="text"
-                data-testid="asset-publish-version"
-                value={packVersion}
-                disabled={busy || readOnly}
-                onChange={(event) => setPackVersion(event.target.value)}
-              />
-            </label>
+            <details>
+              <summary>高级：发布标识与版本</summary>
+              <label>
+                发布标识
+                <input
+                  type="text"
+                  data-testid="asset-publish-pack-id"
+                  value={packId}
+                  disabled={busy || readOnly}
+                  onChange={(event) => setPackId(event.target.value)}
+                />
+              </label>
+              <label>
+                版本
+                <input
+                  type="text"
+                  data-testid="asset-publish-version"
+                  value={packVersion}
+                  disabled={busy || readOnly}
+                  onChange={(event) => setPackVersion(event.target.value)}
+                />
+              </label>
+            </details>
             <label>
               <input
                 type="checkbox"

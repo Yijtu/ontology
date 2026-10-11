@@ -2415,7 +2415,11 @@ export async function createCoreLocalComposition(options: CoreLocalCompositionOp
       generationForRun, bindingContext: actionBindingContext,
       modelRef: { modelId: modelEnvironment['CORE_COMPANY_MODEL_PLATFORM_ID'] ?? 'model-not-configured', version: COMPONENT_VERSION }, outputLimit: { maxTokens: 16_384 },
     })
+    const staticPackCatalogue = new InMemoryIndustryPackCatalogue()
+    for (const scenario of options.examples.scenarios) staticPackCatalogue.registerPack({ ref: componentRef('industry_pack', scenario.industryManifest.namespace, scenario.industryManifest), manifest: scenario.industryManifest, testSuite: scenario.testSuite })
+    const packCatalogue = new StoreBackedIndustryPackCatalogue({ store: publishedPackStore, fallback: staticPackCatalogue })
     const definitionEditingService = new DefinitionCandidateEditingService({
+      baseCatalogue: packCatalogue,
       publishedPacks: publishedPackStore,
       reviewableCandidates,
       reviews: publicationStore,
@@ -2454,6 +2458,7 @@ export async function createCoreLocalComposition(options: CoreLocalCompositionOp
       evaluator: new FiniteGrammarSyntheticEvaluator(),
     })
     const industryAssetPublicationService = new IndustryAssetPublicationService({
+      baseCatalogue: packCatalogue,
       requireCompetencyQuestions: true,
       competencyQuestions: competencyQuestions.service,
       reviewableCandidates,
@@ -2466,9 +2471,6 @@ export async function createCoreLocalComposition(options: CoreLocalCompositionOp
       definitions: definitionStore,
       store: publishedPackStore,
     })
-    const staticPackCatalogue = new InMemoryIndustryPackCatalogue()
-    for (const scenario of options.examples.scenarios) staticPackCatalogue.registerPack({ ref: componentRef('industry_pack', scenario.industryManifest.namespace, scenario.industryManifest), manifest: scenario.industryManifest, testSuite: scenario.testSuite })
-    const packCatalogue = new StoreBackedIndustryPackCatalogue({ store: publishedPackStore, fallback: staticPackCatalogue })
     const componentRegistry = new ComponentRegistry({
       control,
       store: componentStore,

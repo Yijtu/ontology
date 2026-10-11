@@ -140,7 +140,7 @@
   width:100%;
   max-width:100%;
   min-height:42px;
-  border:1px solid var(--line);
+  border:1px solid var(--control-line);
   background:var(--surface);
   color:var(--ink);
   border-radius:6px;

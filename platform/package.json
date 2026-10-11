@@ -10,7 +10,7 @@
   },
   "scripts": {
     "lint": "node scripts/build-compute-artifact.mjs --check && eslint .",
-    "typecheck": "tsc -p tsconfig.json && tsc -p apps/web/tsconfig.json && tsc -p tsconfig.acceptance.json",
+    "typecheck": "tsc -p tsconfig.json && tsc -p apps/web/tsconfig.json && tsc -p tsconfig.acceptance.json && tsc -p tsconfig.frontend-e2e.json",
     "build:web": "pnpm --filter @ontology/app-web run build",
     "build:compute": "node scripts/build-compute-artifact.mjs",
     "test": "vitest run",

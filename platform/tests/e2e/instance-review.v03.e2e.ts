@@ -61,7 +61,7 @@ describe('instance review in a real browser', () => {
       const nameRow = fieldRow(page, 'device_name')
       expect(await nameRow.locator('[data-testid="instance-field-raw"]').textContent()).toBe('Bridge A')
       expect(await nameRow.locator('[data-testid="instance-field-normalized"]').textContent()).toBe('Bridge A')
-      expect(await nameRow.locator('[data-testid="instance-field-source"]').textContent()).toContain('json_pointer')
+      expect(await nameRow.locator('[data-testid="instance-field-source"]').textContent()).toContain('JSON 位置 /device_name')
       expect(
         await nameRow.locator('[data-testid="instance-field-status"]').getAttribute('data-status'),
       ).toBe('pending')
@@ -94,6 +94,8 @@ describe('instance review in a real browser', () => {
       await fieldRow(page, 'device_name').locator('[data-testid="instance-field-confirm"]').click()
       await page.waitForSelector('[data-testid="instance-field-row"][data-field-id="device_name"] [data-testid="instance-field-status"][data-status="confirmed"]')
 
+      const otherActions = fieldRow(page, 'capacity').locator('details')
+      await otherActions.locator('summary').click()
       await fieldRow(page, 'capacity').locator('[data-testid="instance-field-conflict"]').click()
       await page.waitForSelector('[data-testid="instance-field-row"][data-field-id="capacity"] [data-testid="instance-field-status"][data-status="conflict"]')
 
@@ -130,51 +132,57 @@ describe('instance review in a real browser', () => {
     try {
       await openPanel(page)
       await selectRecord(page, harness.recordIds.main)
+      await page.fill('[data-testid="instance-identity-reason"]', '核对原始标识与上下文')
 
       const deviceCandidate = page
         .locator('[data-testid="instance-identity-candidate"]')
-        .filter({ hasText: 'device · native_id' })
+        .filter({ hasText: 'device · 原始标识一致' })
       await deviceCandidate.locator('[data-testid="instance-identity-match"]').click()
       await page.waitForFunction(
-        () => document.querySelector('[data-testid="instance-identity-state"]')?.textContent?.includes('matched'),
+        () => document.querySelector('[data-testid="instance-identity-state"]')?.textContent?.includes('已匹配'),
       )
 
       // Matching a sensor candidate (a different object) is refused with a visible conflict.
       const sensorCandidate = page
         .locator('[data-testid="instance-identity-candidate"]')
-        .filter({ hasText: 'sensor · context' })
+        .filter({ hasText: 'sensor · 上下文匹配' })
       await sensorCandidate.locator('[data-testid="instance-identity-match"]').click()
       await page.waitForSelector('[data-testid="instance-action-failure"][data-code="IDENTITY_CONFLICT"]')
 
       await page.click('[data-testid="instance-identity-split"]')
       await page.waitForFunction(
-        () => document.querySelector('[data-testid="instance-identity-state"]')?.textContent?.includes('split'),
+        () => document.querySelector('[data-testid="instance-identity-state"]')?.textContent?.includes('已拆分'),
       )
 
       await page.fill('[data-testid="instance-identity-reason"]', '确认新实体')
       await page.click('[data-testid="instance-identity-create"]')
       await page.waitForFunction(
-        () => document.querySelector('[data-testid="instance-identity-state"]')?.textContent?.includes('created'),
+        () => document.querySelector('[data-testid="instance-identity-state"]')?.textContent?.includes('已新建'),
       )
+
+      for (const row of await page.locator('[data-testid="instance-field-row"]').all()) {
+        const confirm = row.locator('[data-testid="instance-field-confirm"]')
+        if (await confirm.count() > 0 && await confirm.isEnabled()) await confirm.click()
+      }
 
       await page.click('[data-testid="instance-approve"]')
       await page.waitForSelector('[data-testid="instance-detail-publication"]')
       await page.waitForFunction(
-        () => document.querySelector('[data-testid="instance-detail-publication"]')?.textContent === 'approved',
+        () => document.querySelector('[data-testid="instance-detail-publication"]')?.textContent === '已批准，待发布',
       )
 
       await page.click('[data-testid="instance-publish"]')
       await page.waitForFunction(
-        () => document.querySelector('[data-testid="instance-detail-publication"]')?.textContent === 'published',
+        () => document.querySelector('[data-testid="instance-detail-publication"]')?.textContent === '已发布',
       )
       const publishedRevision = await page.textContent('[data-testid="instance-detail-published-revision"]')
-      expect(publishedRevision).not.toBe('—')
+      expect(publishedRevision).toMatch(/^[1-9]\d*$/)
 
       // An ordinary refresh reads the same published revision back from the server.
       await page.reload()
       await page.waitForSelector('[data-testid="instance-record-list"]')
       await selectRecord(page, harness.recordIds.main)
-      expect(await page.textContent('[data-testid="instance-detail-publication"]')).toBe('published')
+      expect(await page.textContent('[data-testid="instance-detail-publication"]')).toBe('已发布')
       expect(await page.textContent('[data-testid="instance-detail-published-revision"]')).toBe(publishedRevision)
 
       await capture(page, 'instance-review-published')
@@ -194,6 +202,7 @@ describe('instance review in a real browser', () => {
     const page = await context.newPage()
     try {
       await openPanel(page)
+      await page.fill('[data-testid="instance-identity-reason"]', '匹配既有实体')
       await selectRecord(page, harness.recordIds.pendingRelation)
       const relation = page.locator('[data-testid="instance-relation-row"]').first()
       expect(await relation.getAttribute('data-endpoint-state')).toBe('pending')
@@ -213,12 +222,13 @@ describe('instance review in a real browser', () => {
       await openPanel(page)
       const beforeCount = await page.locator('[data-testid="instance-record-item"]').count()
       await selectRecord(page, harness.recordIds.duplicate)
+      await page.fill('[data-testid="instance-identity-reason"]', '核对重复记录的原始标识')
       const deviceCandidate = page
         .locator('[data-testid="instance-identity-candidate"]')
-        .filter({ hasText: 'device · native_id' })
+        .filter({ hasText: 'device · 原始标识一致' })
       await deviceCandidate.locator('[data-testid="instance-identity-match"]').click()
       await page.waitForFunction(
-        () => document.querySelector('[data-testid="instance-identity-state"]')?.textContent?.includes('matched'),
+        () => document.querySelector('[data-testid="instance-identity-state"]')?.textContent?.includes('已匹配'),
       )
       const afterCount = await page.locator('[data-testid="instance-record-item"]').count()
       expect(afterCount).toBe(beforeCount)

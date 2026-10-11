@@ -96,6 +96,13 @@ function createFetchImpl(state: MockState): typeof fetch {
   return (input, init) => {
     const url = String(input)
     const method = (init?.method ?? 'GET').toUpperCase()
+    // The package-publication fixture has no definition or rule candidate writes, so its actual candidate inventory is empty.
+    if (method === 'GET' && url.includes(`/industry-workspaces/${WORKSPACE_ID}/candidates`)) {
+      return Promise.resolve(jsonResponse({ data: { candidates: [] } }))
+    }
+    if (method === 'GET' && url.includes(`/industry-workspaces/${WORKSPACE_ID}/rule-action-candidates`)) {
+      return Promise.resolve(jsonResponse({ data: { candidates: [] } }))
+    }
     if (url.endsWith(`/industry-workspaces/${WORKSPACE_ID}`) && method === 'GET') return Promise.resolve(jsonResponse({ data: { workspace: { workspaceId: WORKSPACE_ID, namespace: 'test', displayName: '测试工作区', boundary: { goals: ['独立验核'], included: [], excluded: [], applicability: {} }, headRevision: state.report.revision, state: 'draft' } } }))
     if (url.includes('/synthetic-example-sets') && method === 'GET') {
       return Promise.resolve(jsonResponse({ data: { exampleSets: [exampleSet()] } }))

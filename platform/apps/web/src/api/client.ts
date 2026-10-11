@@ -185,6 +185,7 @@ import type {
   PublishedPackResultView,
   PublishPackRequest,
   RunValidationRequest,
+  CreateSyntheticExampleSetRequest,
   SyntheticExampleSetView,
 } from './package-publication'
 
@@ -1498,6 +1499,21 @@ export class WorkbenchClient {
     })
   }
 
+  /** Configure an exact, real published pack for ordinary business project creation. */
+  preparePublishedPackProfile(packRef: VersionRef, idempotencyKey: string, signal?: AbortSignal): Promise<{ readonly packRef: VersionRef; readonly definitionRef: VersionRef; readonly profileRef: ProfileRef }> {
+    const path = '/api/v1/core/published-pack-profiles'
+    return this.#request<unknown>('POST', path, { body: { packRef }, idempotencyKey, ...(signal === undefined ? {} : { signal }) }).then((data) => {
+      if (!isRecord(data) || data['purpose'] !== 'business_project_configuration' ||
+          !isVersionRef(data['packRef']) || !isVersionRef(data['definitionRef']) || !isProfileRef(data['profileRef'])) {
+        throw malformedResponse(path, 'the published pack configuration was not recognised')
+      }
+      if (data['packRef'].id !== packRef.id || data['packRef'].version !== packRef.version || data['packRef'].digest !== packRef.digest) {
+        throw malformedResponse(path, 'the configured pack does not match the exact requested published version')
+      }
+      return { packRef: data['packRef'], definitionRef: data['definitionRef'], profileRef: data['profileRef'] }
+    })
+  }
+
   /** `GET /projects`: the customer projects visible in the trusted scope. */
   listProjects(filter: { readonly state?: ProjectState; readonly limit?: number } = {}): Promise<ProjectRecord[]> {
     const query = new URLSearchParams()
@@ -1514,9 +1530,16 @@ export class WorkbenchClient {
   }
 
   /** `POST /projects`: create a project against an exact published pack version. */
-  createProject(request: CreateProjectRequest): Promise<{ readonly project: ProjectRecord; readonly revision: ProjectRevision }> {
+  createProject(
+    request: CreateProjectRequest,
+    options: { readonly idempotencyKey?: string; readonly signal?: AbortSignal } = {},
+  ): Promise<{ readonly project: ProjectRecord; readonly revision: ProjectRevision }> {
     const path = '/api/v1/projects'
-    return this.#request<unknown>('POST', path, { body: request, idempotencyKey: this.#newId() }).then((data) => {
+    return this.#request<unknown>('POST', path, {
+      body: request,
+      idempotencyKey: options.idempotencyKey ?? this.#newId(),
+      ...(options.signal === undefined ? {} : { signal: options.signal }),
+    }).then((data) => {
       if (!isRecord(data) || !isProjectRecord(data['project']) || !isProjectRevision(data['revision'])) {
         throw malformedResponse(path, 'the created project was not recognised')
       }
@@ -1606,6 +1629,21 @@ export class WorkbenchClient {
         throw malformedResponse(path, 'the synthetic example set list was not recognised')
       }
       return data['exampleSets']
+    })
+  }
+
+  createSyntheticExampleSet(workspaceId: string, request: CreateSyntheticExampleSetRequest, options: { readonly idempotencyKey: string; readonly signal?: AbortSignal }): Promise<SyntheticExampleSetView> {
+    const path = `/api/v1/industry-workspaces/${encodeURIComponent(workspaceId)}/synthetic-example-sets`
+    return this.#request<unknown>('POST', path, {
+      body: { caseKinds: request.caseKinds, cases: request.cases, expectations: request.expectations },
+      ifMatch: request.expectedRevision,
+      idempotencyKey: options.idempotencyKey,
+      ...(options.signal === undefined ? {} : { signal: options.signal }),
+    }).then((data) => {
+      if (!isRecord(data) || !isSyntheticExampleSetView(data['exampleSet']) || data['exampleSet'].workspaceId !== workspaceId) {
+        throw malformedResponse(path, 'the saved synthetic example set was not recognised')
+      }
+      return data['exampleSet']
     })
   }
 

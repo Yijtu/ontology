@@ -60,12 +60,54 @@ async function openProjectWorkspace(page: Page, query = ''): Promise<void> {
 }
 
 async function createProject(page: Page, title: string): Promise<void> {
+  const disclosure = page.locator('details.project-create-disclosure')
+  if (!(await disclosure.evaluate((element) => (element as HTMLDetailsElement).open))) {
+    await disclosure.locator('summary').click()
+  }
   await page.waitForSelector('[data-testid="project-create-title"]')
   await page.fill('[data-testid="project-create-title"]', title)
-  await page.selectOption('[data-testid="project-create-pack"]', `${PROJECT_FIXTURE.packId}@${PROJECT_FIXTURE.packVersion}`)
+  await selectPack(page, PROJECT_FIXTURE.packId, PROJECT_FIXTURE.packVersion)
+  await page.waitForFunction(() => {
+    const button = document.querySelector<HTMLButtonElement>('[data-testid="project-create-submit"]')
+    return button !== null && !button.disabled && !document.querySelector('[data-testid="project-create-error-pack"]')
+  })
   await page.click('[data-testid="project-create-submit"]')
   await page.waitForSelector('[data-testid="project-detail"]')
 }
+
+async function selectPack(page: Page, packId: string, version: string): Promise<void> {
+  const selector = '[data-testid="project-create-pack"]'
+  const select = page.locator(selector)
+  await page.waitForFunction(({ selector, packId, version }) => {
+    const element = document.querySelector<HTMLSelectElement>(selector)
+    return element !== null && [...element.options].some((option) => {
+      try {
+        const ref = JSON.parse(option.value) as { id?: string; version?: string }
+        return ref.id === packId && ref.version === version
+      } catch { return false }
+    })
+  }, { selector, packId, version })
+  const value = await select.locator('option').evaluateAll((options, target) => {
+    const option = options.find((candidate) => {
+      try {
+        const ref = JSON.parse((candidate as HTMLOptionElement).value) as { id?: string; version?: string }
+        return ref.id === target.packId && ref.version === target.version
+      } catch { return false }
+    }) as HTMLOptionElement | undefined
+    return option?.value
+  }, { packId, version })
+  if (value === undefined) throw new Error(`Published pack ${packId}@${version} is not available in the UI`)
+  await select.selectOption(value)
+  await page.getByText('已绑定当前部署配置，并固定所选行业包版本，可用于新建项目。', { exact: true }).waitFor()
+}
+
+async function openProjectCreate(page: Page): Promise<void> {
+  const disclosure = page.locator('details.project-create-disclosure')
+  if (!(await disclosure.evaluate((element) => (element as HTMLDetailsElement).open))) {
+    await disclosure.locator('summary').click()
+  }
+}
+
 
 describe('public assistant error, not-ready and permission states in a real browser', () => {
   it('writes the required materials and the next step in the empty state', async () => {
@@ -102,8 +144,9 @@ describe('public assistant error, not-ready and permission states in a real brow
         await route.continue()
       })
 
+      await openProjectCreate(page)
       await page.fill('[data-testid="project-create-title"]', '草稿不应丢失')
-      await page.selectOption('[data-testid="project-create-pack"]', `${PROJECT_FIXTURE.packId}@${PROJECT_FIXTURE.packVersion}`)
+      await selectPack(page, PROJECT_FIXTURE.packId, PROJECT_FIXTURE.packVersion)
       await page.click('[data-testid="project-create-submit"]')
       await page.waitForSelector('[data-testid="project-create-failure"][data-family="server"]')
 
@@ -154,7 +197,8 @@ describe('public assistant error, not-ready and permission states in a real brow
         await route.continue()
       })
 
-      await page.fill('[data-testid="dataset-object"]', 'device')
+      await page.locator('.project-flow').getByRole('button', { name: '项目记录', exact: true }).click()
+      await page.selectOption('[data-testid="dataset-object"]', 'device')
       await page.click('[data-testid="dataset-materialize"]')
       await page.waitForSelector('[data-testid="project-action-error"][data-family="not_ready"]')
       expect(await page.textContent('[data-testid="project-action-error"] [data-testid="public-state-reason"]')).toContain('查询数据')
@@ -188,7 +232,8 @@ describe('public assistant error, not-ready and permission states in a real brow
         await route.continue()
       })
 
-      await page.fill('[data-testid="dataset-object"]', 'device')
+      await page.locator('.project-flow').getByRole('button', { name: '项目记录', exact: true }).click()
+      await page.selectOption('[data-testid="dataset-object"]', 'device')
       await page.click('[data-testid="dataset-materialize"]')
       await page.waitForSelector('[data-testid="project-action-error"][data-family="permission"]')
       expect(await page.textContent('[data-testid="project-action-error"] [data-testid="public-state-reason"]')).toContain('权限')

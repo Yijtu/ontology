@@ -30,6 +30,9 @@ export interface OntologyWorkspacePanelProps {
   readonly client: WorkbenchClient
   readonly identity?: WorkspaceIdentity
   readonly readOnly?: boolean
+  readonly initialWorkspaceId?: string
+  readonly onSelectWorkspace?: (workspaceId: string | undefined) => void
+  readonly onWorkspaceCreated?: (workspace: IndustryWorkspace) => void
 }
 
 export interface WorkspaceCreateFields {
@@ -123,13 +126,21 @@ export function OntologyWorkspacePanel({
   client,
   identity = webWorkspaceIdentity,
   readOnly = false,
+  initialWorkspaceId,
+  onSelectWorkspace,
+  onWorkspaceCreated,
 }: OntologyWorkspacePanelProps) {
   const [stage, setStage] = useState('sources')
+  const [stageRefresh, setStageRefresh] = useState(0)
+  const [createOpen, setCreateOpen] = useState(true)
+  const initialWorkspaceListRead = useRef(false)
   const [visited, setVisited] = useState<ReadonlySet<string>>(new Set(['sources']))
-  const openStage = (next: string) => { setVisited((old) => new Set(old).add(next)); setStage(next) }
+  const openStage = (next: string) => { const wasVisited = visited.has(next); setVisited((old) => new Set(old).add(next)); if (wasVisited && next !== stage && (next === 'review' || next === 'publish')) setStageRefresh((value) => value + 1); setStage(next) }
   const selectedRef = useRef<string | undefined>(undefined)
   const boundaryBuffers = useRef(new Map<string, WorkspaceCreateFields>())
   const createPending = useRef<{ readonly body: string; readonly key: string } | undefined>(undefined)
+  const createEpoch = useRef(0)
+  const createAbort = useRef<AbortController | undefined>(undefined)
   const listEpoch = useRef(0)
   const [workspaces, setWorkspaces] = useState<readonly IndustryWorkspace[]>([])
   const [phase, setPhase] = useState<WorkbenchPhase>('loading')
@@ -162,24 +173,37 @@ export function OntologyWorkspacePanel({
       const list = await client.listIndustryWorkspaces()
       if (listEpoch.current !== token) return
       setWorkspaces(list)
-      const requested = typeof window === 'undefined' ? undefined : new URLSearchParams(window.location.search).get('workspace')
+      const requested = initialWorkspaceId ?? (typeof window === 'undefined' ? undefined : new URLSearchParams(window.location.search).get('workspace'))
       const matching = list.find((workspace) => workspace.workspaceId === requested)
+      const first = matching?.workspaceId ?? list[0]?.workspaceId
       setSelectedId((previous) => {
         const candidate = matching?.workspaceId ?? previous
         return candidate !== undefined && list.some((workspace) => workspace.workspaceId === candidate)
           ? candidate
           : list[0]?.workspaceId
       })
+      if (requested === undefined && first !== undefined) onSelectWorkspace?.(first)
       setPhase(list.length === 0 ? 'empty' : 'ready')
     } catch (caught) {
       setError(toError(caught))
       setPhase(phaseFor(caught))
     }
-  }, [client])
+  }, [client, initialWorkspaceId, onSelectWorkspace])
 
   useEffect(() => {
     void loadList()
   }, [loadList])
+
+  useEffect(() => {
+    if (phase !== 'ready' && phase !== 'empty' || initialWorkspaceListRead.current) return
+    initialWorkspaceListRead.current = true
+    setCreateOpen(workspaces.length === 0)
+  }, [phase, workspaces.length])
+
+  useEffect(() => () => {
+    createEpoch.current++
+    createAbort.current?.abort()
+  }, [])
 
   useEffect(() => {
     if (selectedId === undefined) {
@@ -207,12 +231,27 @@ export function OntologyWorkspacePanel({
     })
   }, [editMode, selected])
 
-  const selectWorkspace = (workspaceId: string): void => {
+  const selectWorkspace = (workspaceId: string, acknowledgedCreate = false): void => {
+    if (!acknowledgedCreate) {
+      createEpoch.current++
+      createAbort.current?.abort()
+      setBusy(false)
+    }
     setSelectedId(workspaceId)
+    onSelectWorkspace?.(workspaceId)
     setStage('sources')
     setEditMode(false)
     workspaceQuery(workspaceId)
   }
+
+  useEffect(() => {
+    if (initialWorkspaceId !== undefined && initialWorkspaceId !== selectedId && workspaces.some((entry) => entry.workspaceId === initialWorkspaceId)) {
+      createEpoch.current++
+      createAbort.current?.abort()
+      setBusy(false)
+      setSelectedId(initialWorkspaceId)
+    }
+  }, [initialWorkspaceId, selectedId, workspaces])
 
   const create = async (): Promise<void> => {
     const errors = validateCreateFields(fields)
@@ -223,21 +262,28 @@ export function OntologyWorkspacePanel({
     }
     setBusy(true)
     setCreateFailure(undefined)
+    const token = ++createEpoch.current
+    createAbort.current?.abort()
+    const abort = new AbortController()
+    createAbort.current = abort
     try {
       const boundary = boundaryOf(fields)
       const request = { namespace: fields.namespace.trim(), displayName: fields.displayName.trim(), boundary }
       const body = JSON.stringify(request)
       if (createPending.current?.body !== body) createPending.current = { body, key: client.newRequestKey() }
-      const view = await client.bootstrapIndustryWorkspace(request, { idempotencyKey: createPending.current.key })
+      const view = await client.bootstrapIndustryWorkspace(request, { idempotencyKey: createPending.current.key, signal: abort.signal })
+      if (abort.signal.aborted || token !== createEpoch.current) return
       createPending.current = undefined
       setFields(EMPTY_CREATE_FIELDS)
       setWorkspaces((previous) => [view.workspace, ...previous])
-      selectWorkspace(view.workspace.workspaceId)
+      onWorkspaceCreated?.(view.workspace)
+      setCreateOpen(false)
+      selectWorkspace(view.workspace.workspaceId, true)
       setPhase('ready')
     } catch (caught) {
-      setCreateFailure(classifyPublicError(toError(caught)))
+      if (!abort.signal.aborted && token === createEpoch.current) setCreateFailure(classifyPublicError(toError(caught)))
     } finally {
-      setBusy(false)
+      if (token === createEpoch.current) setBusy(false)
     }
   }
 
@@ -328,14 +374,21 @@ export function OntologyWorkspacePanel({
       ) : null}
 
       {readOnly ? null : (
-        <form
-          className="ontology-workspace__create"
-          data-testid="workspace-create-form"
-          onSubmit={(event) => {
-            event.preventDefault()
-            if (!busy) void create()
-          }}
+        <details
+          className="ontology-workspace__create-disclosure"
+          data-testid="workspace-create-disclosure"
+          open={createOpen}
+          onToggle={(event) => setCreateOpen(event.currentTarget.open)}
         >
+          <summary>＋ 新建工作区</summary>
+          <form
+            className="ontology-workspace__create"
+            data-testid="workspace-create-form"
+            onSubmit={(event) => {
+              event.preventDefault()
+              if (!busy) void create()
+            }}
+          >
           <h3>新建工作区</h3>
           <label className="ontology-workspace__field">
             <span>工作区名称</span>
@@ -433,7 +486,8 @@ export function OntologyWorkspacePanel({
               onRecover={() => void create()}
             />
           )}
-        </form>
+          </form>
+        </details>
       )}
 
       {selected === undefined ? null : (
@@ -521,7 +575,7 @@ export function OntologyWorkspacePanel({
 
           </details>
           <nav className="ontology-stage-tabs" aria-label="本体工作步骤"><Button aria-current={stage === "sources" ? "step" : undefined} onClick={() => openStage("sources")}>1–2 资料与生成</Button><Button aria-current={stage === "review" ? "step" : undefined} onClick={() => openStage("review")}>3 编辑与审核</Button><Button aria-current={stage === "publish" ? "step" : undefined} onClick={() => openStage("publish")}>4–5 验核与发布</Button></nav>
-          {visited.has("review") ? <div hidden={stage !== "review"}><DefinitionWorkbenchPanel client={client} workspaceId={selected.workspaceId} readOnly={readOnly} /></div> : null}{visited.has("publish") ? <div hidden={stage !== "publish"}><PackagePublicationPanel client={client} workspaceId={selected.workspaceId} readOnly={readOnly} /></div> : null}<div hidden={stage !== "sources"}><WorkspaceSourcesPanel
+          {visited.has("review") ? <div hidden={stage !== "review"}><DefinitionWorkbenchPanel client={client} workspaceId={selected.workspaceId} readOnly={readOnly} refreshKey={stage === 'review' ? stageRefresh : 0} /></div> : null}{visited.has("publish") ? <div hidden={stage !== "publish"}><PackagePublicationPanel client={client} workspaceId={selected.workspaceId} readOnly={readOnly} refreshKey={stage === 'publish' ? stageRefresh : 0} /></div> : null}<div hidden={stage !== "sources"}><WorkspaceSourcesPanel
             client={client}
             workspace={selected}
             identity={identity}

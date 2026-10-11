@@ -7,6 +7,7 @@ import type {
   ProjectRecord,
   ProjectReadinessKind,
   ProjectRecordVersion,
+  ProjectRecordFieldStatus,
   ProjectRevision,
   ReadinessProjection,
   ResolvedProfileRef,
@@ -25,6 +26,7 @@ import { classifyPublicError } from '../state/public-errors'
 import type { WorkbenchError, WorkbenchPhase } from '../state/workbench'
 import type {
   ColumnMappingRequestView,
+  CreateProjectRequest,
   IndustryPackSummary,
   ProjectDatasetStatusView,
   ProjectDocumentIndexStatusView,
@@ -107,6 +109,7 @@ export interface ProjectBinding {
 export interface ProjectWorkspacePanelProps {
   readonly client: WorkbenchClient
   readonly projectBinding?: ProjectBinding
+  /** When provided, Core resolves the configuration; it takes precedence over binding pins. */
   readonly profileRef?: ProfileRef
   /** The published pack versions the deployment offers for project creation/mounting. */
   readonly packs: readonly IndustryPackSummary[]
@@ -114,6 +117,7 @@ export interface ProjectWorkspacePanelProps {
   readonly readOnly?: boolean
   readonly initialProjectId?: string
   readonly onSelectProject?: (projectId: string) => void
+  readonly onProjectCreated?: (project: ProjectRecord) => void
   readonly initialEvolutionId?: string
   readonly onEvolution?: (evolutionId: string) => void
 }
@@ -153,6 +157,12 @@ function readinessLabel(kind: ProjectReadinessKind): string {
   }
 }
 
+function fieldStatusLabel(status: ProjectRecordFieldStatus): string {
+  if (status === 'confirmed') return '已由人确认'
+  if (status === 'conflict') return '存在冲突'
+  return '待确认'
+}
+
 function projectionFor(
   projections: readonly ReadinessProjection[],
   kind: ProjectReadinessKind,
@@ -167,22 +177,40 @@ export function ProjectWorkspacePanel({
   projectBinding,
   profileRef,
   packs,
+  sources: configuredSources,
   readOnly = false,
   initialProjectId,
   onSelectProject,
+  onProjectCreated,
   initialEvolutionId,
   onEvolution,
 }: ProjectWorkspacePanelProps) {
+  const boundConfiguration = profileRef === undefined ? projectBinding : undefined
   const [phase, setPhase] = useState<WorkbenchPhase>('loading')
   const [error, setError] = useState<WorkbenchError | undefined>(undefined)
   const [loadedProjects, setProjects] = useState<readonly ProjectRecord[]>([])
   const [selectedId, setSelectedId] = useState<string | undefined>(initialProjectId)
-  const activeProfile = profileRef ?? projectBinding?.profileRef
+  const previousInitialProjectId = useRef(initialProjectId)
+  const pendingIncomingSelection = useRef<{ readonly projectId: string | undefined } | undefined>(undefined)
+  if (previousInitialProjectId.current !== initialProjectId) {
+    previousInitialProjectId.current = initialProjectId
+    pendingIncomingSelection.current = { projectId: initialProjectId }
+    setSelectedId(initialProjectId)
+  }
+  const [configuredPackProfile, setConfiguredPackProfile] = useState<ProfileRef | undefined>()
+  const [createExpanded, setCreateExpanded] = useState<boolean | undefined>()
+  const [packChoice, setPackChoice] = useState('')
+  const activeProfile = packChoice.length > 0 ? configuredPackProfile : profileRef ?? boundConfiguration?.profileRef
   const scope = useMemo(
     () => ({ client, selectedId, profileId: activeProfile?.id, version: activeProfile?.version }),
     [client, selectedId, activeProfile?.id, activeProfile?.version],
   )
   const listScope = useMemo(() => ({ client, initialProjectId }), [client, initialProjectId])
+  const packRequestKey = useRef<{ readonly packChoice: string; readonly key: string } | undefined>(undefined)
+  const packRequest = useRef<AbortController | undefined>(undefined)
+  const packChoiceRef = useRef(packChoice)
+  packChoiceRef.current = packChoice
+  useEffect(() => () => packRequest.current?.abort(), [client, selectedId, profileRef?.id, profileRef?.version])
   const [busy, setBusy] = useState(false)
   const [step, setStep] = useState<'overview' | 'import' | 'mapping' | 'records' | 'review' | 'history'>(
     'overview',
@@ -253,10 +281,12 @@ export function ProjectWorkspacePanel({
     return key
   }
   const sources: readonly ProjectSourceCandidate[] = useMemo(() => {
-    if (catalogue === undefined || catalogue.project.projectId !== selectedId) return []
-    return catalogue.sources.flatMap((source) => {
-      const format = source.format ?? source.kind
-      if (format !== 'csv' && format !== 'xlsx' && format !== 'json' && format !== 'text') return []
+    if (catalogue === undefined || catalogue.project.projectId !== selectedId)
+      return boundConfiguration === undefined ? [] : configuredSources ?? []
+    const fromCatalogue: readonly ProjectSourceCandidate[] = catalogue.sources.flatMap<ProjectSourceCandidate>((source) => {
+      const candidateFormat = source.format ?? source.kind
+      if (candidateFormat !== 'csv' && candidateFormat !== 'xlsx' && candidateFormat !== 'json' && candidateFormat !== 'text') return []
+      const format: ProjectSourceCandidate['format'] = candidateFormat
       if (source.mediaType === undefined || source.options === undefined) return []
       const nativeOptions = source.options
       const mediaType = source.mediaType
@@ -277,7 +307,7 @@ export function ProjectWorkspacePanel({
           ...(table.sheetName === undefined ? {} : { sheetName: table.sheetName }),
           fields: object.attributes.map((field) => ({
             fieldRef: field.attributeId,
-            label: field.displayName,
+            label: field.displayName.trim().length > 0 && field.displayName.trim() !== '未提供名称' ? field.displayName : field.attributeId,
             valueType: field.valueType,
             required: field.required,
             ...(field.unit === undefined ? {} : { unitCode: field.unit }),
@@ -287,7 +317,17 @@ export function ProjectWorkspacePanel({
         })),
       }))
     })
-  }, [catalogue, selectedId])
+    return fromCatalogue
+  }, [catalogue, selectedId, configuredSources, boundConfiguration])
+  const datasetObjectChoices = useMemo<readonly { readonly objectId: string; readonly displayName: string }[]>(() => {
+    if (catalogue !== undefined && catalogue.project.projectId === selectedId) return catalogue.objects
+    if (boundConfiguration === undefined) return []
+    const configured = new Map<string, string>()
+    for (const source of configuredSources ?? []) {
+      for (const object of source.objects) configured.set(object.objectId, object.label)
+    }
+    return [...configured].map(([objectId, displayName]) => ({ objectId, displayName }))
+  }, [catalogue, selectedId, configuredSources, boundConfiguration])
 
   const selected =
     phase === 'ready' ? projects.find((project) => project.projectId === selectedId) : undefined
@@ -336,7 +376,7 @@ export function ProjectWorkspacePanel({
       setProjects(projectList)
       setListOwner(listScope)
       setSelectedId((previous) => {
-        const wanted = previous ?? initialProjectId
+        const wanted = initialProjectId ?? previous
         return wanted !== undefined && projectList.some((project) => project.projectId === wanted)
           ? wanted
           : projectList[0]?.projectId
@@ -450,6 +490,11 @@ export function ProjectWorkspacePanel({
       void refreshRecords(selectedId).catch((caught: unknown) => setActionError(toError(caught)))
   }, [selectedId, refreshRecords])
   useEffect(() => {
+    const incoming = pendingIncomingSelection.current
+    if (incoming !== undefined && incoming.projectId === selectedId) {
+      pendingIncomingSelection.current = undefined
+      return
+    }
     if (selectedId !== undefined) onSelectProject?.(selectedId)
   }, [selectedId, onSelectProject])
 
@@ -463,15 +508,31 @@ export function ProjectWorkspacePanel({
       return
     }
     if (activeProfile === undefined) return
-    const body = { title: title.trim(), profileRef: { id: activeProfile.id, version: activeProfile.version } }
-    const serialized = JSON.stringify(body)
+    const bootstrapBody = { title: title.trim(), profileRef: { id: activeProfile.id, version: activeProfile.version } }
+    const selectedPack = packs.find((pack) => pack.packRef !== undefined && JSON.stringify(pack.packRef) === packChoice && pack.usable)?.packRef
+    if (boundConfiguration !== undefined && selectedPack === undefined) {
+      setCreateErrors({ pack: '请选择一个可用的行业包版本。' })
+      return
+    }
+    const boundBody: CreateProjectRequest | undefined = boundConfiguration === undefined || selectedPack === undefined
+      ? undefined
+      : {
+          ...bootstrapBody,
+          industryPackRef: selectedPack,
+          profileRef: boundConfiguration.profileRef,
+          mappingRefs: boundConfiguration.mappingRefs,
+          documentSetRef: boundConfiguration.documentSetRef,
+        }
+    const serialized = JSON.stringify(boundBody ?? bootstrapBody)
     if (createKey.current?.serialized !== serialized)
       createKey.current = { serialized, key: client.newRequestKey() }
     const request = begin('create')
     setBusy(true)
     setCreateFailure(undefined)
     try {
-      const result = await bootstrapProject(client, body, createKey.current.key, request.signal)
+      const result = boundBody === undefined
+        ? await bootstrapProject(client, bootstrapBody, createKey.current.key, request.signal)
+        : await client.createProject(boundBody, { idempotencyKey: createKey.current.key, signal: request.signal })
       if (!request.current()) return
       beginList('list')
       setListOwner(listScope)
@@ -482,6 +543,8 @@ export function ProjectWorkspacePanel({
           : []),
       ])
       setSelectedId(result.project.projectId)
+      setCreateExpanded(false)
+      onProjectCreated?.(result.project)
       setTitle('')
       createKey.current = undefined
       setPhase('ready')
@@ -489,6 +552,33 @@ export function ProjectWorkspacePanel({
       if (request.current()) setCreateFailure(toError(caught))
     } finally {
       if (request.current()) setBusy(false)
+    }
+  }
+
+  const configurePack = async (packId: string): Promise<void> => {
+    setPackChoice(packId)
+    packChoiceRef.current = packId
+    setConfiguredPackProfile(undefined)
+    packRequest.current?.abort()
+    const pack = packs.find((candidate) => candidate.packRef !== undefined && JSON.stringify(candidate.packRef) === packId && candidate.usable)
+    if (pack?.packRef === undefined) return
+    if (boundConfiguration !== undefined) {
+      setConfiguredPackProfile(boundConfiguration.profileRef)
+      setCreateFailure(undefined)
+      return
+    }
+    const controller = new AbortController()
+    packRequest.current = controller
+    if (packRequestKey.current?.packChoice !== packId) packRequestKey.current = { packChoice: packId, key: client.newRequestKey() }
+    setBusy(true)
+    setCreateFailure(undefined)
+    try {
+      const configured = await client.preparePublishedPackProfile(pack.packRef, packRequestKey.current.key, controller.signal)
+      if (!controller.signal.aborted && packRequest.current === controller && packChoiceRef.current === packId) setConfiguredPackProfile(configured.profileRef)
+    } catch (caught) {
+      if (!controller.signal.aborted && packRequest.current === controller && packChoiceRef.current === packId) setCreateFailure(toError(caught))
+    } finally {
+      if (!controller.signal.aborted && packRequest.current === controller) setBusy(false)
     }
   }
 
@@ -748,7 +838,7 @@ export function ProjectWorkspacePanel({
                       data-project-id={project.projectId}
                       data-selected={project.projectId === selectedId}
                       aria-pressed={project.projectId === selectedId}
-                      onClick={() => setSelectedId(project.projectId)}
+                      onClick={() => onSelectProject === undefined ? setSelectedId(project.projectId) : onSelectProject(project.projectId)}
                     >
                       {project.title}（修订 {project.headRevision} · {project.state}）
                     </button>
@@ -759,7 +849,7 @@ export function ProjectWorkspacePanel({
           ) : null}
 
           {readOnly ? null : (
-            <details className="project-create-disclosure" open={projects.length === 0}>
+            <details className="project-create-disclosure" open={createExpanded ?? phase === 'empty'} onToggle={(event) => setCreateExpanded(event.currentTarget.open)}>
               <summary>＋ 新建项目</summary>
               <form
                 className="project-workspace__create"
@@ -784,10 +874,27 @@ export function ProjectWorkspacePanel({
                   )}
                 </label>
                 <div className="project-workspace__field">
-                  <p data-testid="project-create-pack">
+                  <label>
+                    <span>已发布行业包版本</span>
+                    <select data-testid="project-create-pack" value={packChoice} disabled={busy} onChange={(event) => void configurePack(event.target.value)}>
+                      <option value="">使用当前场景的部署版本</option>
+                      {packs.filter((pack) => pack.usable && pack.packRef !== undefined).map((pack) => (
+                        <option key={JSON.stringify(pack.packRef)} value={JSON.stringify(pack.packRef)}>
+                          {pack.displayName} · {pack.packRef?.version}
+                        </option>
+                      ))}
+                    </select>
+                  </label>
+                  <p>
                     {activeProfile === undefined
                       ? '请先选择已注册的场景。'
-                      : '使用当前场景的已发布版本。服务端将固定行业包、映射与资料集。'}
+                      : packChoice.length > 0 && configuredPackProfile === undefined
+                        ? '正在读取所选已发布版本的项目配置。'
+                        : packChoice.length > 0 && boundConfiguration !== undefined
+                          ? '已绑定当前部署配置，并固定所选行业包版本，可用于新建项目。'
+                        : configuredPackProfile === undefined
+                        ? '使用当前场景的已发布版本。服务端将固定行业包、映射与资料集。'
+                        : '已由服务端注册并固定所选发布版本，可用于新建项目。'}
                   </p>
                   {createErrors['pack'] === undefined ? null : (
                     <small data-testid="project-create-error-pack">{createErrors['pack']}</small>
@@ -800,7 +907,7 @@ export function ProjectWorkspacePanel({
                   <PublicStateNotice
                     testId="project-create-failure"
                     failure={classifyPublicError(createFailure)}
-                    onRecover={() => void create()}
+                    onRecover={() => void (packChoice.length > 0 && configuredPackProfile === undefined ? configurePack(packChoice) : create())}
                   />
                 )}
               </form>
@@ -1364,7 +1471,7 @@ export function ProjectWorkspacePanel({
                     onChange={(event) => setDatasetObjectId(event.target.value)}
                   >
                     <option value="">选择记录类型…</option>
-                    {catalogue?.objects.map((object) => (
+                    {datasetObjectChoices.map((object) => (
                       <option key={object.objectId} value={object.objectId}>
                         {object.displayName}
                       </option>
@@ -1418,6 +1525,7 @@ export function ProjectWorkspacePanel({
                 hidden={step !== 'records'}
               >
                 <h4>项目记录</h4>
+                <p className="project-source-note">以下记录已按确认的字段映射整理。这里的字段确认只表示来源值与项目语义映射已核对；正式业务事实还需在实例审核中完成审批与发布。</p>
                 <p data-testid="record-total">共 {recordTotal} 条</p>
                 <ProjectFactStaging
                   client={client}
@@ -1442,50 +1550,65 @@ export function ProjectWorkspacePanel({
                 {records.length === 0 ? (
                   <p data-testid="record-empty">当前页无记录。</p>
                 ) : (
+                  <div className="project-table" role="region" aria-label="项目映射记录" tabIndex={0}>
                   <table data-testid="record-table">
+                    <caption className="project-records__caption">当前页项目映射记录</caption>
                     <thead>
                       <tr>
-                        <th>记录</th>
-                        <th>对象</th>
-                        <th>状态</th>
-                        <th>字段</th>
+                        <th scope="col">记录</th>
+                        <th scope="col">对象</th>
+                        <th scope="col">状态</th>
+                        <th scope="col">字段</th>
                       </tr>
                     </thead>
                     <tbody>
-                      {records.map((record) => (
-                        <tr
-                          key={record.recordId}
-                          data-testid="record-row"
-                          data-record-id={record.recordId}
-                          data-status={record.status}
-                        >
-                          <td>
-                            {record.fields.find((field) => typeof field.raw === 'string')?.raw ?? '项目记录'}
-                            <details className="project-audit">
-                              <summary>记录标识</summary>
-                              <code data-testid="record-id">{record.recordId}</code>
-                            </details>
-                          </td>
-                          <td>{record.objectId}</td>
-                          <td data-testid="record-status">{record.status}</td>
-                          <td>
-                            {record.fields.map((field) => (
-                              <span
-                                key={field.fieldId}
-                                data-testid={`record-field-${field.fieldId}`}
-                                data-status={field.status}
-                              >
-                                {field.fieldId}：{field.raw === null ? '∅' : String(field.raw)} →{' '}
-                                {field.normalized.kind === 'quantity'
-                                  ? `${field.normalized.value} ${field.normalized.unitCode}`
-                                  : String(field.normalized.value ?? '∅')}
-                              </span>
-                            ))}
-                          </td>
-                        </tr>
-                      ))}
+                      {records.map((record) => {
+                        const object = catalogue?.objects.find((entry) => entry.objectId === record.objectId)
+                        const sourceKeyField = record.fields.find((field) => typeof field.raw === 'string')
+                        const mapping = mappings.find((entry) => entry.mappingId === record.mappingId && entry.version === record.mappingVersion)
+                        return (
+                          <tr
+                            key={record.recordId}
+                            data-testid="record-row"
+                            data-record-id={record.recordId}
+                            data-status={record.status}
+                          >
+                            <td data-label="记录">
+                              <strong>{sourceKeyField?.raw ?? '项目记录'}</strong>
+                              <small>映射原始键</small>
+                              <details className="project-audit">
+                                <summary>记录标识</summary>
+                                <code data-testid="record-id">{record.recordId}</code>
+                              </details>
+                            </td>
+                            <td data-label="对象">{object?.displayName ?? record.objectId}</td>
+                            <td data-label="状态" data-testid="record-status" data-status={record.status}>{fieldStatusLabel(record.status)}</td>
+                            <td data-label="字段">
+                              <div className="project-record-fields">
+                                {record.fields.map((field) => {
+                                  const attribute = object?.attributes.find((entry) => entry.attributeId === field.fieldId)
+                                  const sourceHeader = mapping?.entries.find((entry) => entry.fieldRef === field.fieldId)?.header.trim()
+                                  const displayName = attribute?.displayName.trim()
+                                  const fieldLabel = displayName !== undefined && displayName.length > 0 && displayName !== '未提供名称'
+                                    ? displayName
+                                    : sourceHeader || field.fieldId
+                                  const normalized = field.normalized.kind === 'quantity'
+                                    ? `${field.normalized.value} ${field.normalized.unitCode}`
+                                    : String(field.normalized.value ?? '∅')
+                                  return <div className="project-record-field" key={field.fieldId} data-testid={`record-field-${field.fieldId}`} data-status={field.status}>
+                                    <div className="project-record-field__head"><strong>{fieldLabel}</strong><span>{fieldStatusLabel(field.status)}</span></div>
+                                    <p><span>原始</span><code>{field.raw === null ? '∅' : String(field.raw)}</code></p>
+                                    <p><span>规范</span><code>{normalized}</code></p>
+                                  </div>
+                                })}
+                              </div>
+                            </td>
+                          </tr>
+                        )
+                      })}
                     </tbody>
                   </table>
+                  </div>
                 )}
                 {nextCursor === undefined ? null : (
                   <button type="button" data-testid="record-next" onClick={() => void nextPage()}>

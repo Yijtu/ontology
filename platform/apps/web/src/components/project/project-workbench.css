@@ -236,6 +236,14 @@
   font-size: 14px;
   text-align: left;
 }
+.project-records__caption {
+  position: absolute;
+  clip-path: inset(50%);
+  width: 1px;
+  height: 1px;
+  overflow: hidden;
+  white-space: nowrap;
+}
 .project-table th {
   background: #f6f8f8;
   color: var(--muted);
@@ -262,6 +270,52 @@
   display: block;
   color: var(--muted);
   margin-top: 6px;
+}
+.project-record-fields {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(min(100%, 190px), 1fr));
+  gap: 10px;
+  min-width: 0;
+}
+.project-record-field {
+  display: grid;
+  gap: 8px;
+  min-width: 0;
+  padding: 10px 12px;
+  border: 1px solid var(--line);
+  border-radius: 6px;
+  background: #fbfcfc;
+}
+.project-record-field__head {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 10px;
+}
+.project-record-field__head strong {
+  min-width: 0;
+  overflow-wrap: anywhere;
+}
+.project-record-field__head span {
+  flex: 0 0 auto;
+  color: var(--muted);
+  font-size: 12px;
+}
+.project-record-field p {
+  display: grid;
+  grid-template-columns: 36px minmax(0, 1fr);
+  gap: 8px;
+  margin: 0;
+  font-size: 12px;
+}
+.project-record-field p > span {
+  color: var(--muted);
+}
+.project-record-field code {
+  min-width: 0;
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+  color: var(--ink);
 }
 .project-source-button {
   border: 0;
@@ -472,6 +526,63 @@
     min-width: 520px;
   }
 }
+@container project-record-list (max-width: 680px) {
+  .project-workspace__records .project-table {
+    overflow: visible;
+    border: 0;
+  }
+  .project-workspace__records .project-table [data-testid="record-table"] {
+    display: block;
+    width: 100%;
+    min-width: 0;
+  }
+  .project-workspace__records .project-table [data-testid="record-table"] thead {
+    position: absolute;
+    clip-path: inset(50%);
+    width: 1px;
+    height: 1px;
+    overflow: hidden;
+    white-space: nowrap;
+  }
+  .project-workspace__records .project-table [data-testid="record-table"] tbody,
+  .project-workspace__records .project-table [data-testid="record-table"] tr[data-testid="record-row"] {
+    display: block;
+    width: 100%;
+    min-width: 0;
+  }
+  .project-workspace__records .project-table tr[data-testid="record-row"] {
+    margin: 0 0 12px;
+    padding: 8px 12px;
+    border: 1px solid var(--line);
+    border-radius: 8px;
+    background: var(--surface);
+  }
+  .project-workspace__records .project-table tr[data-testid="record-row"] td[data-label] {
+    display: block;
+    min-width: 0;
+    padding: 8px 0;
+    border: 0;
+    overflow-wrap: anywhere;
+  }
+  .project-workspace__records .project-table tr[data-testid="record-row"] td[data-label]::before {
+    display: block;
+    margin-bottom: 6px;
+    color: var(--muted);
+    font-size: 12px;
+    font-weight: 600;
+    content: attr(data-label);
+  }
+  .project-workspace__records .project-table tr[data-testid="record-row"] td[data-label="字段"] > .project-record-fields {
+    width: 100%;
+  }
+  .project-workspace__records .project-table tr[data-testid="record-row"] td[data-label="字段"] .project-record-field {
+    width: 100%;
+    max-width: 100%;
+  }
+  .project-workspace__records .project-table [data-testid="record-id"] {
+    overflow-wrap: anywhere;
+  }
+}
 @media (max-width: 479px) {
   .project-page__head {
     gap: 12px;
@@ -523,6 +634,11 @@
 .instance-review select {
   width: 100%;
   min-width: 0;
+}
+.project-workspace__records {
+  min-width: 0;
+  container-name: project-record-list;
+  container-type: inline-size;
 }
 .project-create-disclosure {
   padding: 16px;
