@@ -1,5 +1,5 @@
 import { randomUUID } from 'node:crypto'
-import { createApiServer } from '@ontology/app-api'
+import { createApiServer, createRequestToolContext } from '@ontology/app-api'
 import {
   DefinitionCandidateEditingService,
   DefinitionCandidateGenerationService,
@@ -10,9 +10,16 @@ import {
   RuleActionCandidateService,
   StaticDefinitionTerminologySource,
   InMemoryJobStore,
+  InMemoryCandidateStore,
+  InMemoryIndustrySchemaSource,
+  CompositeReviewableCandidateReader,
+  RuleActionCandidateGenerationService,
+  createSourceGroundingService,
 } from '@ontology/application'
-import { FiniteGrammarRuleSupportValidator } from '@ontology/semantic-engine'
-import { createToolContext } from '@ontology/contracts'
+import { FiniteGrammarRuleSupportValidator, InMemoryIdentityDecisionStore, InMemorySemanticPublicationStore, SemanticPublicationService } from '@ontology/semantic-engine'
+import { ArtifactGroundingDocumentSetReader, InMemoryDocumentParseStore, InMemoryStructuredIngestionStore, LocalDocumentExtractionService, ParsedSourceGroundingReader, publishGroundingDocumentSet } from '@ontology/adapter-extraction-document'
+import { createToolContext, isToolContext, assetCandidateCommitPin, sha256OfCanonical, RuleActionCandidateStoreError } from '@ontology/contracts'
+import { InMemoryArtifactStore } from '../fixtures/documents/test-doubles'
 import type {
   ActionDeclaration,
   AssetCandidateBatch,
@@ -27,6 +34,8 @@ import type {
   ToolContext,
   Uuid,
   VersionRef,
+  RuleActionGenerationBatch,
+  RuleActionGenerationStore,
 } from '@ontology/contracts'
 import { WorkbenchClient } from '@ontology/app-web/client'
 import {
@@ -292,14 +301,30 @@ export async function startDefinitionWorkbenchHarness(): Promise<DefinitionWorkb
   const editingStore = new InMemoryDefinitionEditingStore()
   const ruleActionStore = new InMemoryRuleActionCandidateStore()
   const terminology = new StaticDefinitionTerminologySource()
+  const declaredWorkspaceId = randomUUID()
+  let workspaceMinted = false
+  const ctx = workspaceTrustedContext(WORKSPACE_ALL_ROLES.split(','), 'e2e-owner')
+  const blobs = new InMemoryArtifactStore()
+  const documents = new InMemoryDocumentParseStore()
+  const tables = new InMemoryStructuredIngestionStore()
+  const policyText = '构件已登记。构件检查使用 bridge.inspect@1 对设备执行只读检查。所需能力 bridge.inspection，权限 compute:inspect，证据 computation。此动作不修改设备。'
+  const policyBytes = new TextEncoder().encode(policyText)
+  const stagedPolicy = await blobs.stage(policyBytes, { scopeRef: WORKSPACE_SCOPE }, ctx)
+  const policyRef = (await blobs.publish({ scopeRef: WORKSPACE_SCOPE, ...stagedPolicy, mediaType: 'text/plain', purpose: 'document' }, ctx)).blobRef
+  const parsedPolicy = await new LocalDocumentExtractionService({ blobs, store: documents }).parse({ scopeRef: WORKSPACE_SCOPE, originalRef: policyRef, documentVersionRef: policyRef }, ctx)
+  const approval = { sourceRef: policyRef, state: 'approved' as const, kind: 'document' as const, parserVersion: parsedPolicy.parserVersion, parseId: parsedPolicy.parseId }
+  const documentSetRef = await publishGroundingDocumentSet(blobs, { schemaVersion: '1.0.0', scopeRef: WORKSPACE_SCOPE, workspaceId: declaredWorkspaceId, sources: [approval] }, ctx)
+  const grounding = createSourceGroundingService({ workspaces: workspaceStore,
+    documentSets: new ArtifactGroundingDocumentSetReader(blobs), reader: new ParsedSourceGroundingReader({ blobs, documents, tables }) })
 
   const workspaceService = new IndustryWorkspaceService({
     store: workspaceStore,
     jobs: jobStore,
-    newId: () => randomUUID(),
+    newId: () => { if (!workspaceMinted) { workspaceMinted = true; return declaredWorkspaceId } return randomUUID() },
     now: () => '2026-09-29T00:00:00Z',
   })
   const generation = new DefinitionCandidateGenerationService({
+    sourceGrounding: grounding,
     workspaces: workspaceStore,
     candidates: candidateStore,
     terminology,
@@ -331,12 +356,66 @@ export async function startDefinitionWorkbenchHarness(): Promise<DefinitionWorkb
     recordedAt: '2026-09-29T00:00:00Z',
   }
 
+  const savedBatches = new Map<string, RuleActionGenerationBatch>()
+  const batchKey = (scope: typeof WORKSPACE_SCOPE, key: string, trusted: ToolContext) => {
+    if (!isToolContext(trusted) || trusted.principal.tenantId !== scope.tenantId || trusted.allowedResources.spaceId !== scope.spaceId || trusted.allowedResources.tenantId !== scope.tenantId) throw new RuleActionCandidateStoreError('SCOPE_MISMATCH', 'source confirmation requires the trusted scope')
+    return `${scope.tenantId}:${scope.spaceId}:${key}`
+  }
+  const batches: RuleActionGenerationStore = {
+    find: async (scope, key, trusted) => savedBatches.get(batchKey(scope, key, trusted)),
+    getById: async (scope, id, trusted) => {
+      batchKey(scope, id, trusted)
+      return [...savedBatches.values()].find((batch) => batch.batchId === id && savedBatches.get(`${scope.tenantId}:${scope.spaceId}:${batch.idempotencyKey}`) === batch)
+    },
+    commit: async (scope, batch, candidates, guard, trusted) => {
+      const key = batchKey(scope, batch.idempotencyKey, trusted)
+      guard.signal.throwIfAborted()
+      const workspace = await workspaceStore.getWorkspace(scope, batch.workspaceId, trusted)
+      const draft = await workspaceStore.getDraft(scope, batch.workspaceId, guard.expectedWorkspaceRevision, trusted)
+      const definitions = await candidateStore.listCandidates(scope, batch.workspaceId, { limit: 2001 }, trusted)
+      const oldDefinitions = new Set(definitions.flatMap((value) => value.replacesCandidateId === undefined ? [] : [value.replacesCandidateId]))
+      const pins = definitions.filter((value) => !oldDefinitions.has(value.candidateId)).map(assetCandidateCommitPin).sort((a, b) => a.candidateId.localeCompare(b.candidateId))
+      const actions = await ruleActionStore.list(scope, batch.workspaceId, { limit: 250 }, trusted)
+      const oldActions = new Set(actions.flatMap((value) => value.replacesCandidateId === undefined ? [] : [value.replacesCandidateId]))
+      const actionPins = actions.filter((value) => !oldActions.has(value.candidateId)).sort((a, b) => a.candidateId.localeCompare(b.candidateId))
+      if (workspace?.headRevision !== guard.expectedWorkspaceRevision || draft === undefined || draft.digest !== guard.inputDraftRef.digest ||
+        sha256OfCanonical({ value: workspace.latestPublishedPackRef }) !== sha256OfCanonical({ value: guard.latestPublishedPackRef }) ||
+        sha256OfCanonical(draft.documentSetRef) !== sha256OfCanonical(guard.documentSetRef) ||
+        sha256OfCanonical(pins) !== sha256OfCanonical(guard.definitionPins) || sha256OfCanonical(actionPins) !== sha256OfCanonical(guard.ruleActionPins)) throw new RuleActionCandidateStoreError('VERSION_CONFLICT', 'source confirmation inputs moved before commit')
+      const previous = savedBatches.get(key)
+      if (previous !== undefined && previous.requestDigest !== batch.requestDigest) throw new RuleActionCandidateStoreError('IDEMPOTENCY_CONFLICT', 'confirmation key names another request')
+      const stored = []
+      for (const candidate of candidates) stored.push(await ruleActionStore.insert(scope, candidate, trusted))
+      savedBatches.set(key, structuredClone(batch))
+      return { batch, candidates: stored, created: previous === undefined }
+    },
+  }
+  const actionGeneration = new RuleActionCandidateGenerationService({ workspaces: workspaceStore, definitionCandidates: candidateStore,
+    candidates: ruleActionStore, batches, service: ruleActionService, terminology, sourceGrounding: grounding,
+    generationForRun: () => undefined, bindingContext: () => bindingContext,
+    modelRef: { modelId: 'fixture-generation', version: '1.0.0' }, outputLimit: { maxTokens: 1024 } })
+  const instanceCandidates = new InMemoryCandidateStore()
+  const publications = new SemanticPublicationService({ store: new InMemorySemanticPublicationStore(), candidates: instanceCandidates,
+    schemaSource: new InMemoryIndustrySchemaSource([]), identity: new InMemoryIdentityDecisionStore(),
+    reviewableCandidates: new CompositeReviewableCandidateReader({ definition: candidateStore, instance: instanceCandidates, ruleActions: ruleActionStore }) })
+
   const app = createApiServer({
     authenticate: workspaceAuthenticator,
     industryWorkspaces: { service: workspaceService },
     assetCandidates: { generation },
     definitionEditing: { service: editingService },
-    ruleActionCandidates: { service: ruleActionService, bindingContext: () => bindingContext },
+    ruleActionCandidates: { service: ruleActionService, generation: actionGeneration, bindingContext: () => bindingContext },
+    publications: { service: publications },
+  })
+  app.get<{ Params: { workspaceId: string } }>('/api/v1/core/workspaces/:workspaceId/sources', async (request, reply) => {
+    const auth = workspaceAuthenticator()
+    const trusted = createRequestToolContext({ ...auth, traceId: randomUUID(), runId: request.params.workspaceId })
+    const workspace = await workspaceService.getWorkspace(request.params.workspaceId, trusted)
+    const draft = await workspaceService.getDraft(workspace.workspaceId, workspace.headRevision, trusted)
+    return reply.send({ data: { workspace, draft, scopeRef: { tenantId: auth.principal.tenantId, spaceId: auth.spaceId },
+      sources: [{ ...approval, name: '构件只读检查政策.txt', status: parsedPolicy.coverage.status, coverage: parsedPolicy.coverage,
+        previewCoverage: 'complete', byteSize: policyBytes.byteLength, mediaType: 'text/plain', originalMediaType: 'text/plain',
+        wholeSourceLocation: { sourceRef: { id: policyRef.id, version: policyRef.version, digest: policyRef.digest }, startOffset: 0, endOffset: policyBytes.byteLength, quoteDigest: policyRef.digest }, tables: [] }] }, meta: { traceId: trusted.traceId } })
   })
   await app.listen({ host: '127.0.0.1', port: 0 })
   const address = app.server.address()
@@ -345,9 +424,6 @@ export async function startDefinitionWorkbenchHarness(): Promise<DefinitionWorkb
   }
   const baseUrl = `http://127.0.0.1:${address.port}`
   const client = new WorkbenchClient({ baseUrl })
-  const ctx = workspaceTrustedContext(WORKSPACE_ALL_ROLES.split(','), 'e2e-owner')
-
-  const documentSetRef = resourceRef()
   const created = await workspaceService.createWorkspace(
     {
       namespace: DEFINITION_WORKBENCH_NAMESPACE,
@@ -417,7 +493,7 @@ export async function startDefinitionWorkbenchHarness(): Promise<DefinitionWorkb
     workspaceId,
     {
       declaration: actionDeclaration(),
-      sourceRefs: [resourceRef()],
+      sourceRefs: [policyRef],
       expectedRevision: '2',
       idempotencyKey: 'seed-action-executable',
       bindingContext,
