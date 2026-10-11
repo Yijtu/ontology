@@ -10,7 +10,7 @@ import { createCoreApi } from '@ontology/app-api'
 import { loadCoreExamples } from '@ontology/app-api'
 import { createCoreLocalComposition } from '@ontology/app-api'
 import type { CoreLocalComposition } from '@ontology/app-api'
-import type { ScopeRef } from '@ontology/contracts'
+import type { ScopeRef, VersionRef } from '@ontology/contracts'
 import { startPostgresContainer } from './postgres-container'
 import type { PostgresContainer } from './postgres-container'
 
@@ -115,6 +115,40 @@ afterAll(async () => {
 })
 
 describe('the mounted local Core host through normal HTTP', () => {
+  it.each(['transport-facility-inspection', 'industrial-asset-maintenance'])('resolves the exact registered predecessor when authoring from %s', async (scenarioId) => {
+    const scenario = loadCoreExamples({ targetScopeRef: scopeRef }).scenarios.find((entry) => entry.scenarioId === scenarioId)
+    if (scenario === undefined) throw new Error('the registered synthetic scenario is unavailable')
+    const deploymentResponse = await request('/api/v1/core/deployment')
+    expect(deploymentResponse.status).toBe(200)
+    const deployment = await deploymentResponse.json() as { data: { scenarios: { scenarioId: string; baseProfileSpec: { industryRef: VersionRef } }[] } }
+    const packRef = deployment.data.scenarios.find((entry) => entry.scenarioId === scenarioId)?.baseProfileSpec.industryRef
+    expect(packRef).toBeDefined()
+    const createdResponse = await request('/api/v1/core/workspace-bootstrap', {
+      method: 'POST', headers: { 'content-type': 'application/json', 'idempotency-key': randomUUID() },
+      body: JSON.stringify({ namespace: `predecessor-${randomUUID()}`, displayName: '已有行业包修订', boundary: { goals: ['核对所选已发布版本'], included: ['合成资料'], excluded: [], applicability: {} } }),
+    })
+    expect(createdResponse.status, await createdResponse.clone().text()).toBe(201)
+    const created = await createdResponse.json() as { data: { workspace: { workspaceId: string; headRevision: string } } }
+    const workspace = created.data.workspace
+    const selected = await request(`/api/v1/industry-workspaces/${workspace.workspaceId}/draft-operations`, {
+      method: 'POST', headers: { 'content-type': 'application/json', 'idempotency-key': randomUUID(), 'if-match': workspace.headRevision },
+      body: JSON.stringify({ operation: 'edit', basePackRef: packRef, reason: '人工选择真实注册行业包作为前驱' }),
+    })
+    expect(selected.status, await selected.clone().text()).toBe(200)
+    const current = await request(`/api/v1/industry-workspaces/${workspace.workspaceId}`)
+    const head = (await current.json() as { data: { workspace: { headRevision: string } } }).data.workspace.headRevision
+    const validated = await request(`/api/v1/industry-workspaces/${workspace.workspaceId}/definition-validations`, {
+      method: 'POST', headers: { 'content-type': 'application/json', 'idempotency-key': randomUUID() },
+      body: JSON.stringify({ revision: head }),
+    })
+    expect(validated.status, await validated.clone().text()).toBe(200)
+    const result = await validated.json() as { data: { report: { compatibility: { publishedRef: VersionRef; requiresRevisionStrategy: boolean }; checkedCandidateIds: string[]; publishable: boolean } } }
+    expect(result.data.report.compatibility.publishedRef).toEqual(scenario.definitionRef)
+    expect(result.data.report.compatibility.requiresRevisionStrategy).toBe(true)
+    expect(result.data.report.checkedCandidateIds).toEqual([])
+    expect(result.data.report.publishable).toBe(false)
+  }, 60_000)
+
   it('creates genuine empty authoring corpus and preserves native source selections through the normal host', async () => {
     const key = `normal-authoring-${randomUUID()}`
     const declaration = { namespace: `normal-${randomUUID()}`, displayName: '设备维护规则', boundary: { goals: ['检查规则条件'], included: ['设备维护'], excluded: ['外部控制'], applicability: {} } }
