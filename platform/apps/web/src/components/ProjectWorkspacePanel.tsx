@@ -194,6 +194,7 @@ export function ProjectWorkspacePanel({
     setSelectedId(initialProjectId)
   }
   const [configuredPackProfile, setConfiguredPackProfile] = useState<ProfileRef | undefined>()
+  const [createExpanded, setCreateExpanded] = useState<boolean | undefined>()
   const [packChoice, setPackChoice] = useState('')
   const activeProfile = packChoice.length > 0 ? configuredPackProfile : profileRef ?? projectBinding?.profileRef
   const scope = useMemo(
@@ -510,6 +511,7 @@ export function ProjectWorkspacePanel({
           : []),
       ])
       setSelectedId(result.project.projectId)
+      setCreateExpanded(false)
       onProjectCreated?.(result.project)
       setTitle('')
       createKey.current = undefined
@@ -810,7 +812,7 @@ export function ProjectWorkspacePanel({
           ) : null}
 
           {readOnly ? null : (
-            <details className="project-create-disclosure" open={projects.length === 0}>
+            <details className="project-create-disclosure" open={createExpanded ?? phase === 'empty'} onToggle={(event) => setCreateExpanded(event.currentTarget.open)}>
               <summary>＋ 新建项目</summary>
               <form
                 className="project-workspace__create"
