@@ -108,7 +108,7 @@ export class CoreLocalModelSettings {
     if (this.#active.revision === '0') return this.#original
     const settings = this.#active
     // Changing a provider must mint a distinct model component, never silently retarget a pinned run.
-    const fingerprint = createHash('sha256').update(JSON.stringify([settings.baseUrl, settings.endpoint, settings.protocol, settings.platformModelId, settings.vendorModel])).digest('hex').slice(0, 16)
+    const fingerprint = createHash('sha256').update(JSON.stringify([settings.revision, settings.baseUrl, settings.endpoint, settings.protocol, settings.platformModelId, settings.vendorModel])).digest('hex').slice(0, 16)
     return { ...this.#original, CORE_ENABLE_MODELS: String(settings.enabled), CORE_COMPANY_MODEL_BASE_URL: settings.baseUrl,
       CORE_COMPANY_MODEL_ENDPOINT: settings.endpoint, CORE_COMPANY_MODEL_PROTOCOL: settings.protocol,
       CORE_COMPANY_MODEL_PLATFORM_ID: `${settings.platformModelId}.local.${fingerprint}`, CORE_COMPANY_MODEL_VENDOR_MODEL: settings.vendorModel,
@@ -116,7 +116,7 @@ export class CoreLocalModelSettings {
   }
   #view(settings: StoredSettings): CoreModelSettingsView {
     const { apiKey, ...publicSettings } = settings
-    return { ...publicSettings, hasApiKey: Boolean(apiKey), activeEnabled: this.#active.enabled, restartRequired: signature(settings) !== signature(this.#active) }
+    return { ...publicSettings, hasApiKey: Boolean(apiKey), activeEnabled: this.#active.enabled, restartRequired: settings.revision !== this.#active.revision || signature(settings) !== signature(this.#active) }
   }
   async read(): Promise<CoreModelSettingsView> { return this.#view(await this.#read()) }
   async save(body: unknown): Promise<CoreModelSettingsView> {

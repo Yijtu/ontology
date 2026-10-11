@@ -1257,7 +1257,16 @@ dd { overflow-wrap: anywhere; } details > summary { cursor: pointer; padding: 8p
 .app__sidebar-foot { margin-top: auto; padding: 32px 12px 0; font-size: 12px; color: var(--muted); }.app__sidebar-foot small { display: block; }
 .app__workspace { min-width: 0; }.app__topbar { background: var(--surface); min-height: 64px; padding: 12px 32px; border-bottom: 1px solid var(--line); display: flex; justify-content: space-between; align-items: center; gap: 16px; }
 .app__breadcrumb { color: var(--muted); font-size: 13px; display: flex; gap: 12px; align-items: center; }.app__breadcrumb strong { color: var(--ink); font-weight: 600; }
-.app__topbar-actions { display: flex; align-items: center; gap: 8px; }.app__menu-button { display: none; }
+.app__topbar-actions { display: flex; align-items: center; gap: 8px; flex-wrap: wrap; justify-content: flex-end; min-width: 0; }.app__menu-button { display: none; }
+.model-settings__fields { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 18px; padding: 20px 0; border: 0; min-width: 0; }
+.model-settings__fields > legend { font-weight: 700; padding: 0; }
+.model-settings__fields :is(input, select) { min-width: 0; width: 100%; }
+.model-settings__fields input[type="checkbox"] { width: 18px; }
+.model-settings__advanced { grid-column: 1 / -1; color: var(--muted); }
+.model-settings__status { display: flex; gap: 8px; flex-wrap: wrap; padding: 16px; background: var(--canvas); border: 1px solid var(--line); border-radius: 12px; }
+.model-settings__status p { flex-basis: 100%; margin: 0; }
+.model-settings__actions { display: flex; gap: 12px; align-items: center; flex-wrap: wrap; }
+@media (max-width: 767px) { .model-settings__fields { grid-template-columns: minmax(0, 1fr); } }
 .app__context { max-width: none; margin: 0; padding: 20px 32px; background: var(--surface); display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)) minmax(120px, .7fr); align-items: start; gap: 16px; border-bottom: 1px solid var(--line); }
 .app__version { border-left: 1px solid var(--line); padding-left: 20px; display: flex; flex-direction: column; gap: 4px; font-size: 13px; color: var(--ink); }.app__version > span, .app__version small { color: var(--muted); font-size: 12px; }.app__version strong { font-weight: 600; }
 .app__context-status { padding: 0 32px; color: var(--muted); font-size: 12px; display: flex; flex-wrap: wrap; gap: 8px; align-items: center; background: white; }.app__context-status:empty { display: none; }

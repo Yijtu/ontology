@@ -1,6 +1,6 @@
 import type { AppView } from './components/App'
 
-const CORE_VIEWS = ['start', 'ontology', 'projects', 'definitions', 'instances', 'packages', 'business', 'workbench', 'query', 'jobs', 'review', 'evidence']
+const CORE_VIEWS = ['start', 'ontology', 'projects', 'definitions', 'instances', 'packages', 'business', 'workbench', 'query', 'jobs', 'review', 'evidence', 'models']
 const HISTORY_INDEX = 'ontologyWorkbenchIndex'
 
 /** Startup and browser traversal must interpret the same URL as the same surface. */

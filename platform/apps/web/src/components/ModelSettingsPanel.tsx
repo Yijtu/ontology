@@ -63,15 +63,20 @@ function validateDraft(
   draft: ModelSettingsDraft,
   options: { readonly hasApiKey: boolean; readonly apiKey: string; readonly clearApiKey: boolean; readonly savedBaseUrl: string },
 ): string | undefined {
+  if (options.hasApiKey && options.apiKey.length === 0 && !options.clearApiKey && draft.baseUrl.trim().length > 0 && !sameServiceOrigin(options.savedBaseUrl, draft.baseUrl)) {
+    return '服务地址已更换，请重新填写对应的 API Key，或明确勾选清除旧密钥。'
+  }
   if (!draft.enabled) return undefined
   if (draft.baseUrl.trim().length === 0) return '启用模型前，请填写模型服务地址。'
   try {
     const url = new URL(draft.baseUrl.trim())
     if (url.protocol !== 'https:' && url.protocol !== 'http:') return '模型服务地址须使用 HTTP 或 HTTPS。'
+    if (url.username || url.password || url.pathname !== '/' || url.search || url.hash) return '服务地址只填写域名和端口；例如 /v1 的路径请填写到 API 端点中。'
   } catch {
     return '请填写完整的模型服务地址，例如 https://gateway.example.com。'
   }
   if (draft.endpoint.trim().length === 0) return '启用模型前，请填写 API 端点。'
+  if (!draft.endpoint.startsWith('/') || draft.endpoint.startsWith('//') || /[?#\\]/u.test(draft.endpoint)) return 'API 端点须以单个 / 开头，且不能包含查询参数或片段。'
   if (draft.platformModelId.trim().length === 0) return '启用模型前，请填写 Core 平台模型 ID。'
   if (draft.vendorModel.trim().length === 0) return '启用模型前，请填写服务商模型名称。'
   if (options.apiKey.length === 0 && (options.clearApiKey || !options.hasApiKey)) {
@@ -338,7 +343,7 @@ export function ModelSettingsPanel({ client, readOnly = false, onDirtyChange }: 
         <Field label="启用生成模型" hint="启用后供配置为生成能力的功能使用；不会自动启用决策模型。">
           {(attributes) => <input {...attributes} type="checkbox" checked={draft.enabled} onChange={(event) => updateDraft({ enabled: event.currentTarget.checked })} />}
         </Field>
-        <Field label="模型服务地址" hint="填写服务提供方或公司网关的基础 URL，例如 https://gateway.example.com。">
+        <Field label="模型服务地址" hint="只填域名和端口，例如 https://gateway.example.com；不要把 /v1 放在这里。">
           {(attributes) => <input {...attributes} type="url" autoComplete="url" placeholder="https://gateway.example.com" value={draft.baseUrl} onChange={(event) => updateDraft({ baseUrl: event.currentTarget.value })} />}
         </Field>
         <Field label="API 端点" hint="相对于服务地址的请求路径；OpenAI 兼容服务通常使用 /v1/chat/completions。">
@@ -353,9 +358,9 @@ export function ModelSettingsPanel({ client, readOnly = false, onDirtyChange }: 
             <option value="private">私有协议</option>
           </select>}
         </Field>
-        <Field label="Core 平台模型 ID" hint="Core 内部能力标识，例如 company-generation。">
+        <details className="model-settings__advanced"><summary>高级设置（通常无需修改）</summary><Field label="Core 平台模型 ID" hint="用于区分本机配置，通常保留默认的 company-generation 即可。">
           {(attributes) => <input {...attributes} type="text" placeholder="company-generation" value={draft.platformModelId} onChange={(event) => updateDraft({ platformModelId: event.currentTarget.value })} />}
-        </Field>
+        </Field></details>
         <Field label="服务商模型名称 *" hint="必填。填写服务商侧要求的模型名称；它与 Core 平台模型 ID 是不同标识。">
           {(attributes) => <input {...attributes} type="text" placeholder="留空或填写服务商模型名" value={draft.vendorModel} onChange={(event) => updateDraft({ vendorModel: event.currentTarget.value })} />}
         </Field>

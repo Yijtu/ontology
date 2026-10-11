@@ -26,6 +26,8 @@ import { useViewport } from './useViewport'
 import { Workbench } from './Workbench'
 import { Button, Drawer, Field, StateFeedback, StatusBadge } from './ui'
 import { ScenarioErrorBoundary } from './ScenarioErrorBoundary'
+import { ModelSettingsPanel } from './ModelSettingsPanel'
+import { FunctionGuide } from './FunctionGuide'
 
 /**
  * The operator app shell. It composes the configuration workbench (LOCAL-037), the ingestion-job,
@@ -48,6 +50,7 @@ export type CoreAppView =
   | 'jobs'
   | 'review'
   | 'evidence'
+  | 'models'
 export type AppView = CoreAppView | (string & {})
 
 export interface AppViewContext {
@@ -100,6 +103,7 @@ const CORE_TABS: readonly { readonly view: CoreAppView; readonly label: string }
   { view: 'jobs', label: '导入任务' },
   { view: 'review', label: '候选审核' },
   { view: 'evidence', label: '证据与历史' },
+  { view: 'models', label: '生成模型设置' },
 ]
 const EMPTY_DEPLOYMENT_SCENARIOS: readonly CoreDeploymentScenario[] = []
 const EMPTY_WORKSPACES: readonly IndustryWorkspace[] = []
@@ -194,7 +198,7 @@ export function App({
   const availableTasks = activeScenario?.availableTasks ?? []
   const readOnly = deploymentOperatorEnabled !== true
   const scopeKey = `${activeProfileRef.id}@${activeProfileRef.version}:${workspaceId ?? ''}:${projectId ?? ''}:${scopeEpoch}`
-  const scopeBound = !['start', 'ontology', 'workbench'].includes(view)
+  const scopeBound = !['start', 'ontology', 'workbench', 'models'].includes(view)
   const contentKey = scopeBound ? `${view}:${scopeKey}` : `${view}:${activeProfileRef.id}@${activeProfileRef.version}`
   const selectedWorkspace = workspaces.find((entry) => entry.workspaceId === workspaceId)
   const selectedProject = projects.find((entry) => entry.projectId === projectId)
@@ -462,7 +466,7 @@ export function App({
     </button>
   )
   const navigation = <nav aria-label="主导航" className="app__navigation">
-    {CORE_TABS.filter((tab) => tab.view === 'start').map(navButton)}
+    {CORE_TABS.filter((tab) => tab.view === 'start' || tab.view === 'models').map(navButton)}
     {NAV_GROUPS.map((group) => <section key={group.label} className="app__nav-group" aria-label={group.label}>
       <h2>{group.label}</h2>{CORE_TABS.filter((tab) => group.views.some((entry) => entry === tab.view)).map(navButton)}
       {scenarioViews.filter((entry) => (entry.navigationGroup ?? 'practice') === (group.label === '本体建模' ? 'modeling' : group.label === '项目实践' ? 'practice' : 'assets')).map(navButton)}
@@ -507,6 +511,8 @@ export function App({
           <Button variant="quiet" className="app__menu-button" onClick={() => setMenuOpen(true)} aria-label="打开主导航" aria-expanded={menuOpen}>☰ 导航</Button>
           <div className="app__breadcrumb">工作空间 <span aria-hidden="true">/</span> <strong>{viewLabel}</strong></div>
           <div className="app__topbar-actions"><StatusBadge tone={readOnly ? 'warning' : 'neutral'}><span data-testid="core-deployment-mode">{readOnly ? '只读业务模式' : '本地操作员模式'}</span></StatusBadge>
+            <Button variant="quiet" data-testid="open-question-page" onClick={() => navigate('query')}>问答</Button>
+            <Button variant="quiet" data-testid="open-model-settings" onClick={() => navigate('models')}>模型设置</Button>
             <Button variant="quiet" onClick={() => setContextOpen(true)}>查看上下文</Button></div>
         </header>
         <section className="app__context" data-testid="context-bar" aria-label="工作区与项目上下文">{contextFields}</section>
@@ -525,12 +531,15 @@ export function App({
           }}>
           <ScenarioErrorBoundary resetKey={`${view}:${scopeKey}`} renderFallback={(retry) => <StateFeedback tone="error" title="工作内容暂不可用" description="本页未能正常显示。当前上下文仍保留，可以重试或切换到其他工作页面。" action={<Button onClick={retry}>重试显示</Button>} />}>
           <div key={contentKey}>
+      <FunctionGuide view={view} onNavigate={navigate} onConfigureModel={() => navigate('models')} />
+      {view === 'models' ? <ModelSettingsPanel client={client} readOnly={readOnly} onDirtyChange={setDirty} /> : null}
       {view === 'start' ? (
         <GuideHome
           scenarioLabel={activeScenario?.label ?? '当前部署'}
           classificationLabel={classificationLabel}
           operatorEnabled={deploymentOperatorEnabled === true}
           onNavigate={navigate}
+          onConfigureModel={() => navigate('models')}
           workspaces={workspaces}
           projects={projects}
           workspacePhase={workspacePhase}
@@ -557,6 +566,7 @@ export function App({
           key={`${activeProfileRef.id}@${activeProfileRef.version}`}
           profileRef={activeProfileRef}
           timeZone={timeZone}
+          onConfigureModel={() => navigate('models')}
           availableTasks={availableTasks}
           {...(deploymentModels === undefined ? {} : { modelCapabilities: deploymentModels })}
           onEvidenceReference={openSourceReference}

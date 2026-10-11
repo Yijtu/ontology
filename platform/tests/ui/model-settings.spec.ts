@@ -289,6 +289,10 @@ describe('ModelSettingsPanel', () => {
       })
       expect(container.textContent).toContain('服务地址已更换，请重新填写对应的 API Key')
       expect(methods).toEqual(['GET /api/v1/core/model-settings'])
+      await act(async () => { (field(container, '启用生成模型') as HTMLInputElement).click() })
+      await act(async () => { (container.querySelector('[data-testid="model-settings-save"]') as HTMLButtonElement).click() })
+      expect(container.textContent).toContain('服务地址已更换，请重新填写对应的 API Key')
+      expect(methods).toEqual(['GET /api/v1/core/model-settings'])
     } finally {
       await act(async () => root.unmount())
     }
