@@ -3,10 +3,11 @@ import { randomUUID } from 'node:crypto'
 import { act, createElement } from 'react'
 import { createRoot } from 'react-dom/client'
 import type { Root } from 'react-dom/client'
-import { afterEach, describe, expect, it } from 'vitest'
+import { afterEach, describe, expect, it, vi } from 'vitest'
 import type { ErrorCode, PublishedAnswer, ResourceRef, RuntimeEvent } from '@ontology/contracts'
 import { QueryPanel } from '@ontology/app-web'
 import { WorkbenchClient } from '@ontology/app-web/client'
+import type { CoreDeploymentInfo } from '@ontology/app-web'
 import type { RunEvent, RunEventHandlers, RunEventStreamFactory } from '@ontology/app-web/client'
 import { PROFILE, SENTINEL_SECRET, startHarness } from './workbench-fixtures'
 import type { Harness, HarnessOptions } from './workbench-fixtures'
@@ -50,6 +51,8 @@ async function renderQuery(
   initialRunId?: string,
   onEvidenceReference?: (ref: ResourceRef) => void,
   availableTasks: readonly string[] = [],
+  modelCapabilities?: CoreDeploymentInfo['models'],
+  onConfigureModel?: () => void,
 ): Promise<HTMLElement> {
   const container = document.createElement('div')
   document.body.appendChild(container)
@@ -61,6 +64,8 @@ async function renderQuery(
         profileRef: PROFILE,
         timeZone: 'Asia/Shanghai',
         availableTasks,
+        ...(modelCapabilities === undefined ? {} : { modelCapabilities }),
+        ...(onConfigureModel === undefined ? {} : { onConfigureModel }),
         ...(onEvidenceReference === undefined ? {} : { onEvidenceReference }),
         ...(initialRunId === undefined ? {} : { initialRunId }),
       }),
@@ -235,6 +240,22 @@ describe('business query UI states (real API fixture over HTTP)', () => {
     await waitFor(() => container.querySelector('[data-state="empty"]') !== null, 'empty state')
     expect(container.querySelector('[data-testid="query-ask"]')).not.toBeNull()
     expect(container.querySelector('[data-testid="query-run"]')).toBeNull()
+  })
+
+  it('explains official project facts and opens model settings when capabilities are missing', async () => {
+    const built = await harness()
+    const onConfigureModel = vi.fn()
+    const container = await renderQuery(built.client, undefined, undefined, [], { generation: false, decision: false }, onConfigureModel)
+    await waitFor(() => container.querySelector('[data-testid="query-start-guide"]') !== null, 'query guide')
+
+    const guide = container.querySelector('[data-testid="query-start-guide"]')
+    expect(guide?.textContent).toContain('语义发布')
+    expect(guide?.textContent).toContain('待审核候选不能替代正式事实')
+    expect(guide?.textContent).toContain('文本生成未启用')
+    const configure = container.querySelector<HTMLButtonElement>('[data-testid="query-configure-model"]')
+    if (configure === null) throw new Error('query model configuration entry is missing')
+    await click(configure)
+    expect(onConfigureModel).toHaveBeenCalledTimes(1)
   })
 
   it('renders a failure state when the API is unreachable', async () => {

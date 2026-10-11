@@ -17,6 +17,7 @@ import { StatePanel } from './StatePanel'
 import { useViewport } from './useViewport'
 import { PublishedAnswerBody } from './PublishedAnswerBody'
 import type { CoreDeploymentInfo } from '../api/client'
+import './FunctionGuide.css'
 
 /**
  * The business query surface (US-019/020/021). It lets a user ask within the resolved
@@ -42,6 +43,8 @@ export interface QueryPanelProps {
   readonly onSelectProject?: (projectId: string | undefined) => void
   /** Opens a source reference through the host's existing evidence/history surface. */
   readonly onEvidenceReference?: (ref: ResourceRef) => void
+  /** Opens the deployment-owned model settings surface. */
+  readonly onConfigureModel?: () => void
 }
 
 export type QueryContextField =
@@ -301,6 +304,7 @@ export function QueryPanel({
   contextFields = EMPTY_CONTEXT_FIELDS,
   initialRunId,
   onEvidenceReference,
+  onConfigureModel,
   readOnly = false,
   projectId,
   onSelectProject,
@@ -392,6 +396,10 @@ export function QueryPanel({
   const phase = state.phase
   const webAllowed = state.scope?.webSearchEnabled === true
   const run = state.run
+  const modelNeedsSetup = modelCapabilities === undefined || !modelCapabilities.generation || !modelCapabilities.decision
+  const modelStatus = modelCapabilities === undefined
+    ? '当前模型能力状态未知；是否可提问以项目任务目录和运行状态为准。'
+    : `文本生成${modelCapabilities.generation ? '已启用' : '未启用'}，智能路由${modelCapabilities.decision ? '已启用' : '未启用'}。确定支持范围仍以项目任务目录为准。`
 
   return (
     <section
@@ -418,6 +426,30 @@ export function QueryPanel({
         </div>
         {readOnly ? <span className="project-state">只读</span> : null}
       </header>
+
+      <section className="query-guide" data-testid="query-start-guide" aria-labelledby="query-start-guide-title">
+        <div className="query-guide__copy">
+          <h3 id="query-start-guide-title">开始前准备</h3>
+          <p>先选择项目，并查看该项目任务目录中标记为可用的能力。未列出的自然语言请求不会被假定为已支持。</p>
+          <p>只有完成语义发布且达到对应任务就绪要求的项目事实可用于问答；文件上传、字段映射、实例字段确认或待审核候选不能替代正式事实。</p>
+        </div>
+        {modelNeedsSetup ? (
+          <div className="query-guide__model" data-testid="query-model-guidance">
+            <p>{modelStatus}</p>
+            {!readOnly && onConfigureModel !== undefined ? (
+              <Button variant="quiet" data-testid="query-configure-model" onClick={onConfigureModel}>配置问答模型</Button>
+            ) : null}
+          </div>
+        ) : null}
+        <details className="query-guide__steps">
+          <summary>如何提问并核对结果</summary>
+          <ol>
+            <li>查看本页显示的实际可用任务，并按任务要求选择项目和输入条件。</li>
+            <li>运行会按当前场景能力处理；状态可能是正常、有限、缺口、冲突、失败或已取消。</li>
+            <li>打开答案引用核对原文或单元格；未核验草稿不会作为已发布答案展示。</li>
+          </ol>
+        </details>
+      </section>
 
       {phase === 'loading' ||
       phase === 'not_configured' ||

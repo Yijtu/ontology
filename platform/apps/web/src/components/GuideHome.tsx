@@ -1,6 +1,7 @@
 import type { IndustryWorkspace, ProjectRecord } from '@ontology/contracts'
 import type { AppView } from './App'
 import { Button, DataTable, Panel, StateFeedback, StatusBadge } from './ui'
+import './FunctionGuide.css'
 
 export interface GuideStep { readonly key: string; readonly label: string; readonly view: AppView; readonly description: string }
 export interface GuideCard { readonly key: string; readonly label: string; readonly view: AppView; readonly description: string }
@@ -16,6 +17,7 @@ export interface GuideHomeProps {
   readonly onRetry?: () => void
   readonly onSelectWorkspace?: (value: string | undefined) => void
   readonly onSelectProject?: (value: string | undefined) => void
+  readonly onConfigureModel?: () => void
 }
 const PATH_STEPS: readonly GuideStep[] = [
   { key: 'import', label: '资料导入', view: 'jobs', description: '保留原文与解析状态' },
@@ -28,12 +30,16 @@ const PATH_STEPS: readonly GuideStep[] = [
 const STATE_LABELS = { draft: '草稿', review: '待审核', published: '已发布', active: '使用中', archived: '已归档' } as const
 
 export function GuideHome({ scenarioLabel, classificationLabel, operatorEnabled, onNavigate, workspaces = [], projects = [],
-  workspacePhase = 'ready', projectPhase = 'ready', onRetry, onSelectWorkspace, onSelectProject }: GuideHomeProps) {
+  workspacePhase = 'ready', projectPhase = 'ready', onRetry, onSelectWorkspace, onSelectProject, onConfigureModel }: GuideHomeProps) {
   const synthetic = classificationLabel.includes('合成')
   return <section className="app__guide" data-testid="guide-home">
     <header className="app__guide-header"><div><p className="ui-eyebrow">工作概览</p><h1>把资料变成可追溯的业务知识</h1>
       <p className="app__guide-hint">先确认语义，再整理项目数据。在固定版本上开展业务实践，沿来源复核每个结果。</p></div>
-      {operatorEnabled ? <Button variant="primary" onClick={() => onNavigate('ontology')}>创建或管理工作区</Button> : <StatusBadge tone="warning">当前为只读访问</StatusBadge>}
+      <div className="guide-home-actions">
+        <Button variant="primary" onClick={() => onNavigate('query')}>开始业务问答</Button>
+        {operatorEnabled ? <Button variant="quiet" onClick={() => onNavigate('ontology')}>创建或管理工作区</Button> : <StatusBadge tone="warning">当前为只读访问</StatusBadge>}
+        {operatorEnabled && onConfigureModel !== undefined ? <Button variant="quiet" onClick={onConfigureModel}>生成模型设置</Button> : null}
+      </div>
     </header>
     <dl className="app__guide-context" data-testid="guide-context"><div><dt>当前场景</dt><dd data-testid="guide-scenario">{scenarioLabel}</dd></div>
       <div><dt>数据分类</dt><dd data-testid="guide-classification">{classificationLabel}</dd></div><div><dt>运行模式</dt><dd data-testid="guide-mode">{operatorEnabled ? '本地操作员模式' : '只读业务模式'}</dd></div></dl>
