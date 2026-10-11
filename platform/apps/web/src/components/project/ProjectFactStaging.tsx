@@ -32,7 +32,20 @@ export function ProjectFactStaging({
   const [busy, setBusy] = useState(false)
   const [error, setError] = useState<unknown>()
   const keys = useRef(new Map<string, string>())
-  const scope = useMemo(() => ({ client, projectId, rows, catalogue }), [client, projectId, rows, catalogue])
+  // Background reads replace DTO objects even when the selected immutable inputs stay
+  // identical. Fence writes by their pins so those refreshes do not cancel a user action.
+  const inputPins = JSON.stringify({
+    rows: rows.map((row) => [row.recordId, row.revision, row.contentDigest, row.sourceDigest, row.status, row.mappingId, row.mappingVersion]),
+    mappings: mappings.map((mapping) => [mapping.ref.id, mapping.ref.version, mapping.ref.digest]),
+    catalogue: catalogue === undefined ? null : {
+      project: [catalogue.project.projectId, catalogue.project.headRevision, catalogue.project.activeRevision, catalogue.project.state],
+      revision: [catalogue.revision.ref.projectId, catalogue.revision.ref.revision, catalogue.revision.ref.digest, catalogue.revision.sourceVisibilityEpoch],
+      sources: catalogue.sources.map((source) => [source.documentId, source.parseId,
+        source.originalRef.id, source.originalRef.version, source.originalRef.digest, source.originalRef.kind,
+        source.parseRef.id, source.parseRef.version, source.parseRef.digest, source.parseRef.kind]),
+    },
+  })
+  const scope = useMemo(() => ({ client, projectId, inputPins, readOnly }), [client, projectId, inputPins, readOnly])
   const begin = useRequestFence(scope)
   useEffect(() => {
     setStaged([])
