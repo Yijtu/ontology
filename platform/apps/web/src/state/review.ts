@@ -45,6 +45,8 @@ export interface ReviewState {
 export type ReviewEvent =
   | { readonly type: 'loadStarted' }
   | { readonly type: 'loaded'; readonly candidates: readonly CandidateSummary[] }
+  /** A deep-linked candidate detail owns the panel phase while the queue loads in parallel. */
+  | { readonly type: 'candidatesLoaded'; readonly candidates: readonly CandidateSummary[] }
   | { readonly type: 'failed'; readonly error: ReviewError }
   | { readonly type: 'permissionDenied'; readonly error: ReviewError }
   | { readonly type: 'notConfigured'; readonly error: ReviewError }
@@ -94,6 +96,8 @@ export function reviewReducer(state: ReviewState, event: ReviewEvent): ReviewSta
         candidates: event.candidates,
         busy: false,
       }
+    case 'candidatesLoaded':
+      return { ...state, candidates: event.candidates }
     case 'busy':
       return { ...state, busy: true }
     case 'permissionDenied':
