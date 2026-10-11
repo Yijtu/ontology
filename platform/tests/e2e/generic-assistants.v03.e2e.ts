@@ -11,8 +11,10 @@ import { chromium } from '@playwright/test'
 import type { Browser, Page } from '@playwright/test'
 import { afterAll, beforeAll, describe, expect, it } from 'vitest'
 import { runControlMigrations } from '@ontology/adapter-control-postgres'
+import { contentDigestOf } from '@ontology/application'
 import { createCoreApi, createCoreLocalComposition, loadCoreExamples } from '@ontology/app-api'
 import type { CoreLocalComposition } from '@ontology/app-api'
+import { isRecord, isVersionRef } from '@ontology/contracts'
 import type { ProjectEvolutionRecord, ResolvedProfileRef, ResourceRef, ScopeRef, VersionRef } from '@ontology/contracts'
 import { startPostgresContainer } from '../integration/postgres-container'
 import type { PostgresContainer } from '../integration/postgres-container'
@@ -293,6 +295,13 @@ let publishedPackRef: { id: string; version: string; digest: string } | undefine
 let publishedWorkspaceSource: Awaited<ReturnType<typeof prepareOrSource>> | undefined
 let gap22FlowWorkspaceId = ''
 let gap22FlowPackRef: { id: string; version: string; digest: string } | undefined
+let gap22FlowTargetPackRef: { id: string; version: string; digest: string } | undefined
+let gap22FlowProjectId = ''
+let gap22FlowRunId = ''
+let gap22FlowCsvRef: VersionRef | undefined
+let gap22FlowFactCandidateIds = new Set<string>()
+let gap22FlowEntityId = ''
+let gap22FlowIdentityScopeId = ''
 
 async function newPage(): Promise<{ page: Page; close: () => Promise<void> }> {
   const context = await browser.newContext({ viewport: { width: 1440, height: 1200 } })
@@ -810,6 +819,7 @@ describe('V03-045 generic dual-assistant full-stack E2E (real chromium, real hos
     const apiFailures: string[] = []
     const apiFailureBodyReads: Promise<void>[] = []
     let executionPreviewPrepared = false
+    let flow1Page: Page | undefined
     let testFailed = false
     let testFailure: unknown
     try {
@@ -825,6 +835,7 @@ describe('V03-045 generic dual-assistant full-stack E2E (real chromium, real hos
       const policyText = 'For each asset, inspection_due is a condition. When inspection_due is true, the asset requires inspection. The policy applies to identified assets.'
       await writeFile(policyPath, policyText, 'utf8')
       const { page, close } = await newPage()
+      flow1Page = page
       closePage = close
     page.on('request', (entry) => {
       if (new URL(entry.url()).pathname.startsWith('/api/v1/')) apiTrace.push(`${entry.method()} ${new URL(entry.url()).pathname}`)
@@ -851,11 +862,31 @@ describe('V03-045 generic dual-assistant full-stack E2E (real chromium, real hos
         await discardDirty()
         await page.waitForFunction((value) => document.querySelector('.app')?.getAttribute('data-view') === value, view)
       }
+      const appWorkspaceListResponse = page.waitForResponse((response) => response.request().method() === 'GET' && new URL(response.url()).pathname === '/api/v1/industry-workspaces')
       await page.goto(web.origin)
       await page.waitForSelector('[data-testid="guide-home"]')
+      expect((await appWorkspaceListResponse).ok()).toBe(true)
+      const ontologyWorkspaceListResponse = page.waitForResponse((response) => response.request().method() === 'GET' && new URL(response.url()).pathname === '/api/v1/industry-workspaces')
       await openView('ontology')
+      expect((await ontologyWorkspaceListResponse).ok()).toBe(true)
+      await page.waitForFunction(() => {
+        const panel = document.querySelector('[data-testid="ontology-workspace"]')
+        const contextLoading = document.querySelector('[data-testid="context-workspace-loading"]')
+        const contextSelect = document.querySelector<HTMLSelectElement>('[data-testid="context-workspace-select"]')
+        const disclosure = document.querySelector<HTMLDetailsElement>('[data-testid="workspace-create-disclosure"]')
+        if (panel === null || contextLoading !== null || contextSelect === null || disclosure === null) return false
+        const phase = panel.getAttribute('data-phase')
+        if (phase === 'empty') return contextSelect.value === '' && disclosure.open
+        if (phase !== 'ready') return false
+        if (disclosure.open) return false
+        const detail = panel.querySelector<HTMLElement>('[data-testid="workspace-detail"]')
+        const workspaceId = detail?.getAttribute('data-workspace-id')
+        return workspaceId !== undefined && workspaceId !== null && contextSelect.value === workspaceId &&
+          new URLSearchParams(location.search).get('workspace') === workspaceId
+      })
       const workspaceCreateDisclosure = page.getByTestId('workspace-create-disclosure')
       if (await workspaceCreateDisclosure.getAttribute('open') === null) await workspaceCreateDisclosure.locator('summary').click()
+      await page.getByTestId('workspace-create-display-name').waitFor({ state: 'visible' })
       const namespace = `gap22-flow1-${randomUUID().slice(0, 8)}`
       await page.getByTestId('workspace-create-display-name').fill('检修要求规则工作区')
       await page.getByTestId('workspace-create-namespace').fill(namespace)
@@ -877,7 +908,12 @@ describe('V03-045 generic dual-assistant full-stack E2E (real chromium, real hos
       await page.getByLabel('选择原始文件').setInputFiles(policyPath)
       const uploadResponse = page.waitForResponse((response) => response.request().method() === 'POST' && new URL(response.url()).pathname === `/api/v1/core/workspaces/${gap22FlowWorkspaceId}/sources`)
       await page.getByRole('button', { name: '上传并读取真实资料' }).click()
-      expect((await uploadResponse).status()).toBe(201)
+      const actualPolicyUpload = await uploadResponse
+      expect(actualPolicyUpload.status()).toBe(201)
+      const actualPolicyUploadBody = await actualPolicyUpload.json() as { data: { source: { sourceRef: ResourceRef } } }
+      const actualPolicySourceRef = actualPolicyUploadBody.data.source.sourceRef
+      expect(actualPolicySourceRef.id).toBeTruthy()
+      expect(actualPolicySourceRef.digest).toMatch(/^sha256:[0-9a-f]{64}$/u)
       await page.getByRole('button', { name: '查看真实原文与片段' }).waitFor()
       await page.getByRole('button', { name: '查看真实原文与片段' }).click()
       const originalDialog = page.getByRole('dialog', { name: '原始资料预览' })
@@ -940,7 +976,8 @@ describe('V03-045 generic dual-assistant full-stack E2E (real chromium, real hos
         expect((await approval).status()).toBe(200)
         return actualCandidateId
       }
-      for (const candidateId of sourceDefinitionIds) await confirmAndApproveDefinition(candidateId)
+      const approvedDefinitionIds: string[] = []
+      for (const candidateId of sourceDefinitionIds) approvedDefinitionIds.push(await confirmAndApproveDefinition(candidateId))
 
       await page.getByRole('button', { name: '1–2 资料与生成' }).click()
       await page.getByLabel('生成范围').selectOption('rules')
@@ -1042,6 +1079,11 @@ describe('V03-045 generic dual-assistant full-stack E2E (real chromium, real hos
       await page.getByRole('button', { name: '保存为全新题集' }).click()
       const cqSaveResponse = await cqSaveResponsePromise
       if (!cqSaveResponse.ok()) throw new Error(`actual CQ save failed: ${String(cqSaveResponse.status())} ${await cqSaveResponse.text()}; panel=${await cqWorkbench.textContent()}`)
+      const savedInitialCq = await cqSaveResponse.json() as { data?: { declaration?: { body?: unknown } } }
+      const originalFlow1CqBody = savedInitialCq.data?.declaration?.body
+      if (!isRecord(originalFlow1CqBody) || !Array.isArray(originalFlow1CqBody['questions'])) {
+        throw new Error('the actual Flow1 CQ save returned no reusable independently authored question body')
+      }
       const cqReadbackResponse = await cqReadbackResponsePromise
       if (cqReadbackResponse === undefined) throw new Error(`actual CQ save did not start readback; panel=${await cqWorkbench.textContent()}; requests=${JSON.stringify(apiTrace)}`)
       if (!cqReadbackResponse.ok()) throw new Error(`actual CQ readback failed: ${String(cqReadbackResponse.status())} ${await cqReadbackResponse.text()}; panel=${await cqWorkbench.textContent()}`)
@@ -1081,6 +1123,183 @@ describe('V03-045 generic dual-assistant full-stack E2E (real chromium, real hos
       const packList = await readJson<{ data: { packs: { packRef: { id: string; version: string; digest: string } }[] } }>(await request(baseUrl, '/api/v1/industry-packs'))
       gap22FlowPackRef = packList.data.packs.find((pack) => pack.packRef.id === `${namespace}.pack` && pack.packRef.version === '1.0.0')?.packRef
       expect(gap22FlowPackRef?.digest).toMatch(/^sha256:[0-9a-f]{64}$/u)
+      // Create a real compatible definition successor from the same grounded candidate.
+      // Logical IDs and fields stay stable. The edit inherits the exact original source pin,
+      // while its new candidate ID and digest still need an explicit human approval.
+      const currentDefinitions = await ordinaryCall(`/api/v1/industry-workspaces/${gap22FlowWorkspaceId}/candidates`)
+      if (!Array.isArray(currentDefinitions['candidates'])) throw new Error('the actual workspace definition inventory is absent')
+      const assetHead = currentDefinitions['candidates'].map((value) => value as GeneratedCandidate & { sourceRefs?: readonly ResourceRef[] })
+        .find((candidate) => approvedDefinitionIds.includes(candidate.candidateId) && candidate.kind === 'object' && candidate.payload['logicalId'] === 'asset')
+      if (assetHead === undefined) throw new Error('the actually approved asset definition candidate is not the current workspace head')
+      expect(assetHead.sourceRefs?.some((ref) => ref.id === actualPolicySourceRef.id && ref.digest === actualPolicySourceRef.digest)).toBe(true)
+      const editedAssetResponse = await jsonRequest(baseUrl, `/api/v1/industry-workspaces/${gap22FlowWorkspaceId}/candidates/${assetHead.candidateId}/edits`, {
+        payload: { ...assetHead.payload, displayName: 'Managed asset' },
+        reason: 'make a compatible display-name clarification for the next published definition version',
+      }, { 'if-match': await workspaceHead(gap22FlowWorkspaceId) })
+      const editedAssets = await readJson<{ data: { candidates: GeneratedCandidate[] } }>(editedAssetResponse)
+      const editedAsset = editedAssets.data.candidates.find((candidate) => candidate.kind === 'object' && candidate.payload['logicalId'] === 'asset')
+      if (editedAsset === undefined) throw new Error('the asset definition edit returned no current replacement candidate')
+      expect(editedAsset.candidateId).not.toBe(assetHead.candidateId)
+      expect(editedAsset.payload['displayName']).toBe('Managed asset')
+      const editedInventory = await ordinaryCall(`/api/v1/industry-workspaces/${gap22FlowWorkspaceId}/candidates`)
+      if (!Array.isArray(editedInventory['candidates'])) throw new Error('the edited definition inventory is absent')
+      const editedAssetHead = editedInventory['candidates'].map((value) => value as GeneratedCandidate & { contentDigest?: string; sourceRefs?: readonly ResourceRef[] })
+        .find((candidate) => candidate.candidateId === editedAsset.candidateId)
+      if (editedAssetHead === undefined) throw new Error('the edited asset candidate is not its current workspace head')
+      expect(editedAssetHead.contentDigest).toMatch(/^sha256:[0-9a-f]{64}$/u)
+      expect(editedAssetHead.sourceRefs?.some((ref) => ref.id === actualPolicySourceRef.id && ref.digest === actualPolicySourceRef.digest)).toBe(true)
+      const editReviewHistory = await ordinaryCall(`/api/v1/candidates/${editedAsset.candidateId}/reviews`)
+      if (!Array.isArray(editReviewHistory['reviews'])) throw new Error('the edited definition candidate has no actual review history')
+      const latestEditReviewRevision = editReviewHistory['reviews'].reduce((latest: bigint, value: unknown) => {
+        if (typeof value !== 'object' || value === null || !('revision' in value) || typeof value.revision !== 'string') throw new Error('the edited candidate review history has a malformed revision')
+        const revision = BigInt(value.revision)
+        return revision > latest ? revision : latest
+      }, 0n).toString()
+      const approvedEdit = await readJson<{ data: { candidateId: string; contentDigest: string; decision: string } }>(
+        await jsonRequest(baseUrl, `/api/v1/candidates/${editedAsset.candidateId}/reviews`, {
+          decision: 'approve', reason: '人工重新核对保留的原始来源绑定与兼容展示名修改，并批准当前定义摘要',
+        }, { 'if-match': latestEditReviewRevision }),
+      )
+      expect(approvedEdit.data).toMatchObject({ candidateId: editedAsset.candidateId, contentDigest: editedAssetHead.contentDigest, decision: 'approve' })
+
+      // Every member of the published definition projection must pin this same successor
+      // draft. Reissue the unchanged source-grounded heads as immutable edits and approve
+      // those exact new digests, so stale candidate revisions cannot leak into validation.
+      for (const prior of editedInventory['candidates'].map((value) => value as GeneratedCandidate & { sourceRefs?: readonly ResourceRef[] })) {
+        if (!approvedDefinitionIds.includes(prior.candidateId) || prior.candidateId === assetHead.candidateId) continue
+        if (!prior.sourceRefs?.some((ref) => ref.id === actualPolicySourceRef.id && ref.digest === actualPolicySourceRef.digest)) {
+          throw new Error(`unchanged definition ${prior.candidateId} (${prior.kind}:${String(prior.payload['logicalId'])}) does not carry the exact uploaded policy pin; sources=${JSON.stringify(prior.sourceRefs ?? [])}; expected=${JSON.stringify(actualPolicySourceRef)}`)
+        }
+        const response = await jsonRequest(baseUrl, `/api/v1/industry-workspaces/${gap22FlowWorkspaceId}/candidates/${prior.candidateId}/edits`, {
+          payload: prior.payload,
+          reason: '保留当前已批准的原始定义内容，并将不可变候选版本绑定到同一新工作区草稿',
+        }, { 'if-match': await workspaceHead(gap22FlowWorkspaceId) })
+        const result = await readJson<{ data: { candidates: GeneratedCandidate[] } }>(response)
+        const replacement = result.data.candidates.find((candidate) => candidate.kind === prior.kind && candidate.payload['logicalId'] === prior.payload['logicalId'])
+        if (replacement === undefined || replacement.candidateId === prior.candidateId) throw new Error(`definition ${prior.candidateId} was not reissued as a new immutable candidate`)
+        const inventory = await ordinaryCall(`/api/v1/industry-workspaces/${gap22FlowWorkspaceId}/candidates`)
+        if (!Array.isArray(inventory['candidates'])) throw new Error('the reissued definition inventory is absent')
+        const head = inventory['candidates'].map((value) => value as GeneratedCandidate & { contentDigest?: string; sourceRefs?: readonly ResourceRef[] })
+          .find((candidate) => candidate.candidateId === replacement.candidateId)
+        if (head === undefined || !head.sourceRefs?.some((ref) => ref.id === actualPolicySourceRef.id && ref.digest === actualPolicySourceRef.digest)) {
+          throw new Error(`reissued definition ${replacement.candidateId} lost its exact original source pin`)
+        }
+        const history = await ordinaryCall(`/api/v1/candidates/${replacement.candidateId}/reviews`)
+        if (!Array.isArray(history['reviews'])) throw new Error(`review history is absent for reissued definition ${replacement.candidateId}`)
+        const revision = history['reviews'].reduce((latest: bigint, value: unknown) => {
+          if (typeof value !== 'object' || value === null || !('revision' in value) || typeof value.revision !== 'string') throw new Error('reissued definition review history is malformed')
+          const number = BigInt(value.revision)
+          return number > latest ? number : latest
+        }, 0n).toString()
+        const approval = await readJson<{ data: { candidateId: string; contentDigest: string; decision: string } }>(
+          await jsonRequest(baseUrl, `/api/v1/candidates/${replacement.candidateId}/reviews`, {
+            decision: 'approve', reason: '人工重新核对保留的真实来源、当前内容和新候选摘要后批准',
+          }, { 'if-match': revision }),
+        )
+        expect(approval.data).toMatchObject({ candidateId: replacement.candidateId, contentDigest: head.contentDigest, decision: 'approve' })
+      }
+
+      // The enabled generated rule pins the pre-edit draft. Reconfirm that same saved rule
+      // against the current, complete source and revised definition draft before validating
+      // the successor pack; then approve and enable the fresh immutable candidate revision.
+      const currentRules = await ordinaryCall(`/api/v1/industry-workspaces/${gap22FlowWorkspaceId}/rule-action-candidates`)
+      if (!Array.isArray(currentRules['candidates'])) throw new Error('the current workspace rule inventory is absent')
+      const inspectionRule = currentRules['candidates'].map((value) => value as { candidateId: string; logicalId: string; contentDigest: string })
+        .find((candidate) => candidate.candidateId === groundedRuleId && candidate.logicalId === 'inspection_required')
+      if (inspectionRule === undefined) throw new Error('the originally published source-grounded inspection rule is not the current rule head')
+      const revalidatedRuleResponse = await jsonRequest(baseUrl, `/api/v1/industry-workspaces/${gap22FlowWorkspaceId}/rule-action-candidates/${inspectionRule.candidateId}/source-confirmations`, {
+        contentDigest: inspectionRule.contentDigest,
+        sourceRefs: [actualPolicySourceRef],
+        sourceSelections: ['applicability', 'condition', 'conclusion'].map((path) => ({ path, sourceIndex: 0, fragmentIndex: 0 })),
+        reason: '重新核对原检修政策中适用范围、条件与结论，并绑定当前定义草稿',
+      }, { 'if-match': await workspaceHead(gap22FlowWorkspaceId) })
+      const revalidatedRule = await readJson<{ data: { candidates: { candidateId: string }[] } }>(revalidatedRuleResponse)
+      const revalidatedRuleId = revalidatedRule.data.candidates[0]?.candidateId
+      if (revalidatedRuleId === undefined) throw new Error('the freshly grounded rule candidate is absent')
+      const revalidatedReviews = await ordinaryCall(`/api/v1/candidates/${revalidatedRuleId}/reviews`)
+      if (!Array.isArray(revalidatedReviews['reviews'])) throw new Error('the fresh rule candidate review ledger is absent')
+      const latestRuleReviewRevision = revalidatedReviews['reviews'].reduce((latest: bigint, value: unknown) => {
+        if (typeof value !== 'object' || value === null || !('revision' in value) || typeof value.revision !== 'string') throw new Error('the fresh rule review history has a malformed revision')
+        const revision = BigInt(value.revision)
+        return revision > latest ? revision : latest
+      }, 0n).toString()
+      await readJson(await jsonRequest(baseUrl, `/api/v1/candidates/${revalidatedRuleId}/reviews`, {
+        decision: 'approve', reason: '人工核对更新定义草稿后重新确认的真实来源规则内容',
+      }, { 'if-match': latestRuleReviewRevision }))
+      const reenabledRule = await jsonRequest(baseUrl, `/api/v1/industry-workspaces/${gap22FlowWorkspaceId}/rule-action-candidates/${revalidatedRuleId}/enable`, {}, { 'if-match': await workspaceHead(gap22FlowWorkspaceId) })
+      if (!reenabledRule.ok) throw new Error(`revalidated rule could not be enabled: ${String(reenabledRule.status)} ${await reenabledRule.text()}`)
+
+      // Publish a second immutable version from this same workspace through a fresh
+      // independently authored, human-approved CQ set and normal validation gate.
+      const evolutionExampleSetId = await createExampleSet(gap22FlowWorkspaceId, 'inspection_required')
+      const evolutionPreview = await ordinaryCall(`/api/v1/core/workspaces/${gap22FlowWorkspaceId}/execution-preview`,
+        { exampleSetId: evolutionExampleSetId }, await workspaceHead(gap22FlowWorkspaceId))
+      if (!isVersionRef(evolutionPreview['definitionRef']) || !Array.isArray(evolutionPreview['ruleRefs']) ||
+        evolutionPreview['ruleRefs'].length !== 1 || !isVersionRef(evolutionPreview['ruleRefs'][0])) {
+        throw new Error('the actual successor preview did not return its exact immutable definition and rule references')
+      }
+      const successorDefinitionRef: VersionRef = { ...evolutionPreview['definitionRef'] }
+      const successorRuleRef: VersionRef = { ...evolutionPreview['ruleRefs'][0] }
+      const successorCqBodyValue: unknown = structuredClone(originalFlow1CqBody)
+      if (!isRecord(successorCqBodyValue)) {
+        throw new Error('the cloned Flow1 CQ body lost its authored question')
+      }
+      const successorQuestions = successorCqBodyValue['questions']
+      if (!Array.isArray(successorQuestions)) throw new Error('the cloned Flow1 CQ body lost its authored question')
+      const successorCqBody: Record<string, unknown> = successorCqBodyValue
+      const successorQuestion = successorQuestions[0]
+      if (!isRecord(successorQuestion)) throw new Error('the independently authored Flow1 CQ contains no question to rebind')
+      expect(successorQuestion['intent']).toMatchObject({ kind: 'rule', objectId: 'asset', ruleId: 'inspection_required' })
+      expect(successorQuestion['expected']).toMatchObject({ kind: 'rule', conditionState: 'true', applicability: 'applicable', propositionState: 'true' })
+      successorCqBody['definitionRefs'] = [successorDefinitionRef]
+      successorCqBody['ruleRefs'] = [successorRuleRef]
+      successorQuestion['definitionRef'] = successorDefinitionRef
+      successorQuestion['ruleRefs'] = [successorRuleRef]
+      const successorCqRef: VersionRef = { id: randomUUID(), version: '1.0.0', digest: contentDigestOf(successorCqBody) }
+      const successorCq = await ordinaryCall('/api/v1/competency-question-sets', { ref: successorCqRef, body: successorCqBody })
+      await record('gap23-flow1-successor-cq-save', [JSON.stringify({ proposedRef: successorCqRef, result: successorCq })])
+      if (successorCq['approvalRequired'] !== true || typeof successorCq['candidateId'] !== 'string') {
+        throw new Error(`the successor CQ was not saved as a new human-review candidate: ${JSON.stringify(successorCq)}`)
+      }
+      const successorDeclaration = successorCq['declaration']
+      if (!isRecord(successorDeclaration) || !isVersionRef(successorDeclaration['ref']) || !isRecord(successorDeclaration['body'])) {
+        throw new Error('the server returned no actual successor CQ declaration')
+      }
+      const actualSuccessorCqRef: VersionRef = { ...successorDeclaration['ref'] }
+      expect(successorCq['candidateId']).toBe(actualSuccessorCqRef.id)
+      expect(actualSuccessorCqRef.digest).toBe(successorCqRef.digest)
+      expect(contentDigestOf(successorDeclaration['body'])).toBe(successorCqRef.digest)
+      const successorCqReviews = await ordinaryCall(`/api/v1/candidates/${actualSuccessorCqRef.id}/reviews`)
+      if (!Array.isArray(successorCqReviews['reviews'])) throw new Error('the successor CQ has no actual review history')
+      const latestSuccessorCqReview = successorCqReviews['reviews'].reduce((latest: bigint, value: unknown) => {
+        if (!isRecord(value) || typeof value['revision'] !== 'string') throw new Error('the successor CQ review history has a malformed revision')
+        const revision = BigInt(value['revision'])
+        return revision > latest ? revision : latest
+      }, 0n).toString()
+      const successorCqApproval = await ordinaryCall(`/api/v1/candidates/${actualSuccessorCqRef.id}/reviews`, {
+        decision: 'approve', reason: '人工重新核对 Flow1 原题的独立输入、期待与原始来源，并核实其精确绑定新定义和规则版本',
+      }, latestSuccessorCqReview)
+      expect(successorCqApproval).toMatchObject({ candidateId: actualSuccessorCqRef.id, contentDigest: actualSuccessorCqRef.digest, decision: 'approve' })
+      const successorCqReadback = await ordinaryCall('/api/v1/competency-question-sets/read', { ref: actualSuccessorCqRef })
+      const readbackDeclaration = successorCqReadback['declaration']
+      expect(successorCqReadback['approved']).toBe(true)
+      if (!isRecord(readbackDeclaration) || !isRecord(readbackDeclaration['body'])) throw new Error('the approved successor CQ readback is malformed')
+      expect(contentDigestOf(readbackDeclaration['body'])).toBe(actualSuccessorCqRef.digest)
+      const evolutionCompetency = { competencyQuestionRef: actualSuccessorCqRef, definitionRef: successorDefinitionRef }
+      const evolutionValidation = await readJson<{ data: { validation: { validationId: string; publishable: boolean } } }>(
+        await jsonRequest(baseUrl, `/api/v1/industry-workspaces/${gap22FlowWorkspaceId}/validations`,
+          { exampleSetId: evolutionExampleSetId, ...evolutionCompetency },
+          { 'if-match': await workspaceHead(gap22FlowWorkspaceId) }),
+      )
+      await record('gap23-flow1-successor-validation', [JSON.stringify(evolutionValidation.data.validation)])
+      expect(evolutionValidation.data.validation.publishable, JSON.stringify(evolutionValidation.data.validation)).toBe(true)
+      const evolutionPublication = await readJson<{ data: { packRef: { id: string; version: string; digest: string } } }>(
+        await jsonRequest(baseUrl, `/api/v1/industry-workspaces/${gap22FlowWorkspaceId}/publications`, {
+          packId: 'pack', version: '1.1.0', validationId: evolutionValidation.data.validation.validationId,
+        }, { 'if-match': await workspaceHead(gap22FlowWorkspaceId) }),
+      )
+      gap22FlowTargetPackRef = evolutionPublication.data.packRef
+      expect(gap22FlowTargetPackRef).toMatchObject({ id: gap22FlowPackRef?.id, version: '1.1.0', digest: expect.stringMatching(/^sha256:[0-9a-f]{64}$/u) })
       await capture(page, 'gap22-flow1-published-pack-1440')
       await record('gap22-flow1-actual-app-publication', [
         `workspace=${gap22FlowWorkspaceId}`,
@@ -1101,6 +1320,32 @@ describe('V03-045 generic dual-assistant full-stack E2E (real chromium, real hos
       testFailed = true
       testFailure = error
       await Promise.all(apiFailureBodyReads)
+      if (flow1Page !== undefined) {
+        try {
+          const workspaceReadiness = await flow1Page.evaluate(() => {
+            const panel = document.querySelector<HTMLElement>('[data-testid="ontology-workspace"]')
+            const contextSelect = document.querySelector<HTMLSelectElement>('[data-testid="context-workspace-select"]')
+            const detail = document.querySelector<HTMLElement>('[data-testid="workspace-detail"]')
+            const disclosure = document.querySelector<HTMLDetailsElement>('[data-testid="workspace-create-disclosure"]')
+            return {
+              url: location.href,
+              appView: document.querySelector('.app')?.getAttribute('data-view'),
+              panelPhase: panel?.getAttribute('data-phase'),
+              contextSelectValue: contextSelect?.value,
+              contextLoading: document.querySelector('[data-testid="context-workspace-loading"]')?.textContent?.trim(),
+              contextFailure: document.querySelector('[data-testid="context-workspace-failure"]')?.textContent?.trim(),
+              detailWorkspaceId: detail?.getAttribute('data-workspace-id'),
+              disclosureOpen: disclosure?.open,
+              dialogs: [...document.querySelectorAll<HTMLElement>('[role="dialog"], dialog[open]')].map((dialog) => dialog.innerText.trim()),
+              body: document.body.innerText.slice(0, 12_000),
+            }
+          })
+          await record('gap22-flow1-workspace-readiness-diagnostic', [JSON.stringify(workspaceReadiness)])
+          await capture(flow1Page, 'gap22-flow1-workspace-readiness-failure-1440')
+        } catch (diagnosticError) {
+          await record('gap22-flow1-workspace-readiness-diagnostic-error', [diagnosticError instanceof Error ? diagnosticError.stack ?? diagnosticError.message : String(diagnosticError)])
+        }
+      }
       await record('gap22-flow1-failure', [
         error instanceof Error ? error.stack ?? error.message : String(error),
         ...apiFailures,
@@ -1199,6 +1444,7 @@ describe('V03-045 generic dual-assistant full-stack E2E (real chromium, real hos
       expect(projectPayload.data.project.title).toBe('GAP-022 已发布规则项目')
       expect(projectPayload.data.revision.profileRef).toEqual(configuredPayload.data.profileRef)
       const projectId = projectPayload.data.project.projectId
+      gap22FlowProjectId = projectId
       await page.waitForSelector(`[data-testid="project-detail"][data-project-id="${projectId}"]`)
       expect(await page.getByTestId('context-project-select').inputValue()).toBe(projectId)
       expect(await page.getByTestId('context-project-select').locator('option:checked').textContent()).toContain('GAP-022 已发布规则项目')
@@ -1212,6 +1458,7 @@ describe('V03-045 generic dual-assistant full-stack E2E (real chromium, real hos
       expect(imported.ok(), `actual CSV import returned ${String(imported.status())}: ${importedBodyText}`).toBe(true)
       const importedPayload = JSON.parse(importedBodyText) as { data: { originalRef: { id: string; version: string; digest: string } } }
       const originalCsvRef = importedPayload.data.originalRef
+      gap22FlowCsvRef = originalCsvRef
       expect(originalCsvRef.digest).toMatch(/^sha256:[0-9a-f]{64}$/u)
       await page.waitForSelector('[data-testid="project-file-result"][data-status="complete"]')
       expect(await page.getByTestId('project-file-result').textContent()).toContain('共 1 行')
@@ -1256,6 +1503,7 @@ describe('V03-045 generic dual-assistant full-stack E2E (real chromium, real hos
       const stagedPayload = await stagedResponse.json() as { data: { candidates: readonly { candidateId: string }[] } }
       expect(stagedPayload.data.candidates.length).toBeGreaterThan(0)
       stagedFactCandidateIds = new Set(stagedPayload.data.candidates.map((candidate) => candidate.candidateId))
+      gap22FlowFactCandidateIds = stagedFactCandidateIds
       const factCandidateId = stagedPayload.data.candidates[0]?.candidateId
       if (factCandidateId === undefined) throw new Error('the actual project flow did not create its source-backed fact candidate')
       await page.getByTestId('project-create-reviews').click()
@@ -1273,7 +1521,15 @@ describe('V03-045 generic dual-assistant full-stack E2E (real chromium, real hos
       await page.getByTestId('instance-identity-reason').fill('根据原始资产编码确认这条项目记录的对象身份')
       const identityResponse = page.waitForResponse((response) => response.request().method() === 'POST' && new URL(response.url()).pathname.endsWith('/identity-decisions'))
       await page.getByTestId('instance-identity-create').click()
-      expect((await identityResponse).ok()).toBe(true)
+      const createdIdentity = await identityResponse
+      expect(createdIdentity.ok()).toBe(true)
+      const createdIdentityBody = await createdIdentity.json() as { data: { record: { identity: { matchedEntityId?: string; binding?: { identityScopeId: string } } } } }
+      const actualEntityId = createdIdentityBody.data.record.identity.matchedEntityId
+      if (actualEntityId === undefined) throw new Error('the real Flow3 identity-create action returned no matched entity ID')
+      gap22FlowEntityId = actualEntityId
+      const identityScopeId = createdIdentityBody.data.record.identity.binding?.identityScopeId
+      if (identityScopeId === undefined) throw new Error('the actual Flow3 identity binding omitted its stable semantic scope')
+      gap22FlowIdentityScopeId = identityScopeId
       await page.waitForFunction(() => document.querySelector('[data-testid="instance-identity-state"]')?.textContent?.includes('已新建') === true)
       const instanceApproval = page.waitForResponse((response) => response.request().method() === 'POST' && new URL(response.url()).pathname.endsWith('/approve'))
       await page.getByTestId('instance-approve').click()
@@ -1395,6 +1651,7 @@ describe('V03-045 generic dual-assistant full-stack E2E (real chromium, real hos
       const submitted: unknown = runResponse.request().postDataJSON()
       expect(submitted).toMatchObject({ projectId, task: { arguments: { rule: selectedRule, entity: selectedEntity } } })
       const runPayload = await runResponse.json() as { data: { runId: string } }
+      gap22FlowRunId = runPayload.data.runId
       await page.waitForSelector('[data-testid="business-run-panel"][data-state="published"]', { timeout: 60_000 })
       expect(modelRequests.length).toBe(modelRequestCount)
       await page.getByTestId('published-answer-body').waitFor()
@@ -1499,6 +1756,374 @@ describe('V03-045 generic dual-assistant full-stack E2E (real chromium, real hos
         } catch (error) { cleanupErrors.push(error) }
       }
       if (cleanupErrors.length > 0) throw new AggregateError(testFailed ? [testFailure, ...cleanupErrors] : cleanupErrors, 'Flow3 cleanup failed')
+    }
+  })
+
+  it('[browser] cancels and re-runs a staged version evolution against the real Flow3 project', async () => {
+    if (gap22FlowTargetPackRef === undefined || gap22FlowPackRef === undefined || gap22FlowProjectId === '' || gap22FlowRunId === '' || gap22FlowCsvRef === undefined || gap22FlowEntityId === '' || gap22FlowIdentityScopeId === '') {
+      throw new Error('the actual Flow1 target pack and Flow3 project answer/identity are required before project evolution')
+    }
+    const originalCsvRef = gap22FlowCsvRef
+    const originalPackRef = gap22FlowPackRef
+    const existingEntityId = gap22FlowEntityId
+    const existingIdentityScopeId = gap22FlowIdentityScopeId
+    const { page, close } = await newPage()
+    const evolutionRequests: string[] = []
+    const flow4ApiTrace: string[] = []
+    page.on('request', (entry) => {
+      const path = new URL(entry.url()).pathname
+      if (path.startsWith('/api/v1/')) flow4ApiTrace.push(`${entry.method()} ${path}`)
+    })
+    page.on('response', (response) => {
+      const path = new URL(response.url()).pathname
+      if (path.startsWith('/api/v1/')) flow4ApiTrace.push(`${response.status()} ${response.request().method()} ${path}`)
+    })
+    page.on('request', (entry) => {
+      const path = new URL(entry.url()).pathname
+      if (path.startsWith(`/api/v1/projects/${gap22FlowProjectId}/evolutions/`)) evolutionRequests.push(`${entry.method()} ${path}`)
+    })
+    try {
+      await page.goto(`${web.origin}/?view=projects`)
+      await page.waitForSelector('[data-testid="project-workspace"]')
+      await page.getByTestId('context-project-select').selectOption(gap22FlowProjectId)
+      await page.waitForSelector(`[data-testid="project-detail"][data-project-id="${gap22FlowProjectId}"]`)
+      await page.getByRole('button', { name: '版本演进', exact: true }).click()
+      const evolutionPanel = page.getByTestId('project-evolution')
+      await evolutionPanel.waitFor()
+
+      const targetValue = `${gap22FlowTargetPackRef.id}:${gap22FlowTargetPackRef.version}:${gap22FlowTargetPackRef.digest}`
+      const targetChoice = evolutionPanel.getByTestId('evolution-pack')
+      await targetChoice.selectOption({ value: targetValue })
+      await evolutionPanel.getByLabel('演进原因').fill('使用同一工作区经新 CQ 验证并发布的 1.1.0 版本重新处理原始项目资料')
+      await evolutionPanel.getByLabel('新版本中的记录类型').selectOption('asset')
+      const remapFields = evolutionPanel.locator('.project-remap select').nth(1)
+      await remapFields.selectOption({ label: 'asset_code' })
+      await evolutionPanel.locator('.project-remap select').nth(2).selectOption({ label: 'inspection_due' })
+      await evolutionPanel.getByLabel('我已核对原始列对应和重新审核要求，以待审核方式创建演进。').check()
+      const projectBefore = await readJson<{ data: { project: { activeRevision: string; headRevision: string } } }>(
+        await request(baseUrl, `/api/v1/projects/${gap22FlowProjectId}`),
+      )
+      const oldAnswerBefore = await readJson<{ data: { answerId: string; contentHash: string; v3Body?: unknown; body?: unknown } }>(
+        await request(baseUrl, `/api/v1/runs/${gap22FlowRunId}/answer`),
+      )
+      if (admin === undefined) throw new Error('the real PostgreSQL audit client is unavailable')
+      const oldBindingBefore = await admin.query<{ binding: unknown }>(
+        'SELECT binding FROM agent_platform.run_execution_bindings WHERE tenant_id=$1 AND space_id=$2 AND run_id=$3',
+        [scopeRef.tenantId, scopeRef.spaceId, gap22FlowRunId],
+      )
+      expect(oldBindingBefore.rows).toHaveLength(1)
+      const savedOldBinding = oldBindingBefore.rows[0]?.binding
+      const firstProfileResponse = page.waitForResponse((response) => response.request().method() === 'POST' && new URL(response.url()).pathname === '/api/v1/core/published-pack-profiles')
+      const firstPlanResponse = page.waitForResponse((response) => response.request().method() === 'POST' && new URL(response.url()).pathname === `/api/v1/projects/${gap22FlowProjectId}/evolutions`)
+      await evolutionPanel.getByTestId('evolution-start').click()
+      const configuredTargetProfile = await firstProfileResponse
+      expect(configuredTargetProfile.status()).toBe(200)
+      const configuredTargetProfileBody = await configuredTargetProfile.json() as { data: { packRef: VersionRef; definitionRef: VersionRef; profileRef: { id: string; version: string; snapshotHash: string } } }
+      expect(configuredTargetProfileBody.data.packRef).toEqual(gap22FlowTargetPackRef)
+      expect(configuredTargetProfileBody.data.profileRef.snapshotHash).toMatch(/^sha256:[0-9a-f]{64}$/u)
+      const firstPlan = await firstPlanResponse
+      const firstPlanBodyText = await firstPlan.text()
+      if (firstPlan.status() !== 202) throw new Error(`actual browser evolution start returned ${String(firstPlan.status())}: ${firstPlanBodyText}; panel=${await evolutionPanel.textContent()}`)
+      const firstEvolutionRequest = firstPlan.request().postDataJSON() as { industryPackRef: VersionRef; profileRef?: { id: string; version: string; snapshotHash: string } }
+      expect(firstEvolutionRequest.industryPackRef).toEqual(gap22FlowTargetPackRef)
+      expect(firstEvolutionRequest.profileRef).toEqual(configuredTargetProfileBody.data.profileRef)
+      const firstEvolutionRequestDigest = contentDigestOf(firstEvolutionRequest)
+      const firstPlanBody = JSON.parse(firstPlanBodyText) as { data: { evolution: ProjectEvolutionRecord } }
+      const cancelledPlanId = firstPlanBody.data.evolution.plan.evolutionId
+      expect(firstPlanBody.data.evolution.plan.previousRevisionRef.revision).toBe(projectBefore.data.project.activeRevision)
+      expect(firstPlanBody.data.evolution.plan.targetRevisionRef.revision).not.toBe(projectBefore.data.project.activeRevision)
+      const targetRevisionResponse = await readJson<{ data: { revision: { industryPackRef: { id: string; version: string; digest: string }; semanticPublicationRefs: readonly VersionRef[] } } }>(
+        await request(baseUrl, `/api/v1/projects/${gap22FlowProjectId}/revisions/${firstPlanBody.data.evolution.plan.targetRevisionRef.revision}`),
+      )
+      expect(targetRevisionResponse.data.revision.industryPackRef).toEqual(gap22FlowTargetPackRef)
+      expect(targetRevisionResponse.data.revision.semanticPublicationRefs).toEqual([])
+
+      const cancelResponse = page.waitForResponse((response) => response.request().method() === 'POST' && new URL(response.url()).pathname === `/api/v1/projects/${gap22FlowProjectId}/evolutions/${cancelledPlanId}/cancel`)
+      await evolutionPanel.getByRole('button', { name: '取消本次演进' }).click()
+      const cancelled = await cancelResponse
+      expect(cancelled.ok()).toBe(true)
+      const cancelledBody = await cancelled.json() as { data: { evolution: ProjectEvolutionRecord } }
+      expect(cancelledBody.data.evolution.state).toBe('cancelled')
+      await evolutionPanel.getByRole('heading', { name: '已取消' }).waitFor()
+      expect(await evolutionPanel.textContent()).not.toContain('MALFORMED_RESPONSE')
+      const afterCancel = await readJson<{ data: { project: { activeRevision: string; headRevision: string } } }>(
+        await request(baseUrl, `/api/v1/projects/${gap22FlowProjectId}`),
+      )
+      expect(afterCancel.data.project.activeRevision).toBe(projectBefore.data.project.activeRevision)
+      expect(afterCancel.data.project.headRevision).toBe(firstPlanBody.data.evolution.plan.targetRevisionRef.revision)
+      const oldAnswerAfterCancel = await readJson<{ data: { answerId: string; contentHash: string; v3Body?: unknown; body?: unknown } }>(
+        await request(baseUrl, `/api/v1/runs/${gap22FlowRunId}/answer`),
+      )
+      expect(oldAnswerAfterCancel.data).toEqual(oldAnswerBefore.data)
+
+      const afterCancelCatalogue = page.waitForResponse((response) => response.request().method() === 'GET' && new URL(response.url()).pathname === `/api/v1/core/projects/${gap22FlowProjectId}/source-catalogue`)
+      await page.getByRole('button', { name: '项目记录', exact: true }).click()
+      expect((await afterCancelCatalogue).ok()).toBe(true)
+      await page.getByRole('button', { name: '版本演进', exact: true }).click()
+      const refreshedEvolutionPanel = page.getByTestId('project-evolution')
+      await refreshedEvolutionPanel.getByTestId('evolution-pack').selectOption({ value: targetValue })
+      await page.waitForFunction(() => [...document.querySelectorAll<HTMLSelectElement>('.project-remap select')].some((select) =>
+        [...select.options].some((option) => option.value === 'asset')))
+      await refreshedEvolutionPanel.getByLabel('演进原因').fill('取消后的重试计划：重新映射并人工复核同一原始 CSV 的新版本记录')
+      await refreshedEvolutionPanel.getByLabel('新版本中的记录类型').selectOption('asset')
+      await refreshedEvolutionPanel.locator('.project-remap select').nth(1).selectOption({ label: 'asset_code' })
+      await refreshedEvolutionPanel.locator('.project-remap select').nth(2).selectOption({ label: 'inspection_due' })
+      await refreshedEvolutionPanel.getByLabel('我已核对原始列对应和重新审核要求，以待审核方式创建演进。').check()
+      const secondPlanResponse = page.waitForResponse((response) => response.request().method() === 'POST' && new URL(response.url()).pathname === `/api/v1/projects/${gap22FlowProjectId}/evolutions`)
+      await refreshedEvolutionPanel.getByTestId('evolution-start').click()
+      const secondPlan = await secondPlanResponse
+      const secondPlanBodyText = await secondPlan.text()
+      if (secondPlan.status() !== 202) throw new Error(`actual browser evolution restart returned ${String(secondPlan.status())}: ${secondPlanBodyText}; panel=${await refreshedEvolutionPanel.textContent()}`)
+      const secondPlanBody = JSON.parse(secondPlanBodyText) as { data: { evolution: ProjectEvolutionRecord } }
+      const activePlanId = secondPlanBody.data.evolution.plan.evolutionId
+      await record('gap23-flow4-after-start-ui', [JSON.stringify({
+        url: page.url(), panel: await refreshedEvolutionPanel.textContent(),
+        body: (await page.locator('body').innerText()).slice(0, 12_000), requests: evolutionRequests,
+      })])
+      expect(secondPlanBody.data.evolution.plan.previousRevisionRef.revision).toBe(projectBefore.data.project.activeRevision)
+      expect(secondPlanBody.data.evolution.plan.sources).toHaveLength(1)
+      expect(secondPlanBody.data.evolution.plan.sources[0]?.expectedRecords).toBe(1)
+      expect(secondPlanBody.data.evolution.plan.sources[0]?.objectId).toBe('asset')
+      expect(secondPlanBody.data.evolution.plan.sources[0]?.originalRef.id).toBe(originalCsvRef.id)
+      expect(secondPlanBody.data.evolution.plan.sources[0]?.originalRef.digest).toBe(originalCsvRef.digest)
+
+      await expect.poll(async () => {
+        const actual = await readJson<{ data: { evolution: { state: string } } }>(
+          await request(baseUrl, `/api/v1/projects/${gap22FlowProjectId}/evolutions/${activePlanId}`),
+        )
+        return actual.data.evolution.state
+      }, { timeout: 30_000, interval: 250 }).toBe('awaiting_review')
+      const staged = await readJson<{ data: { evolution: ProjectEvolutionRecord } }>(
+        await request(baseUrl, `/api/v1/projects/${gap22FlowProjectId}/evolutions/${activePlanId}`),
+      )
+      const stagedJob = await readJson<{ data: { stage: string; counts: Record<string, number>; state?: string; lastError?: unknown } }>(
+        await request(baseUrl, `/api/v1/jobs/${secondPlanBody.data.evolution.plan.jobId}`),
+      )
+      const evolvedRecordId = secondPlanBody.data.evolution.plan.sources[0]?.recordIds[0]
+      const physicalHistory = evolvedRecordId === undefined || admin === undefined ? [] : (await admin.query<{
+        revision: string; mapping_id: string; mapping_version: string; content_digest: string
+      }>(
+        'SELECT revision::text AS revision,mapping_id::text AS mapping_id,mapping_version,content_digest FROM agent_platform.project_record_versions WHERE tenant_id=$1 AND space_id=$2 AND project_id=$3 AND record_id=$4 ORDER BY revision',
+        [scopeRef.tenantId, scopeRef.spaceId, gap22FlowProjectId, evolvedRecordId],
+      )).rows
+      await record('gap23-flow4-staged-evolution-diagnostic', [JSON.stringify({ evolution: staged.data.evolution, job: stagedJob.data, physicalHistory })])
+      expect(staged.data.evolution.state).toBe('awaiting_review')
+      expect(staged.data.evolution.candidateIds).toHaveLength(1)
+      const beforePlanRefresh = await page.evaluate(() => ({
+        url: location.href,
+        dialogs: [...document.querySelectorAll<HTMLElement>('[role="dialog"], dialog[open]')]
+          .map((dialog) => dialog.innerText.trim()),
+        body: document.body.innerText.slice(0, 12_000),
+      }))
+      await record('gap23-flow4-before-plan-refresh-ui', [JSON.stringify({ ...beforePlanRefresh, panel: await refreshedEvolutionPanel.textContent(), requests: evolutionRequests })])
+      if (await page.getByRole('dialog', { name: '离开当前工作内容？' }).isVisible()) {
+        await discardIfNeeded(page)
+      }
+      const planReadback = page.waitForResponse((response) => response.request().method() === 'GET' &&
+        new URL(response.url()).pathname.startsWith(`/api/v1/projects/${gap22FlowProjectId}/evolutions/`))
+      await refreshedEvolutionPanel.getByRole('button', { name: '刷新计划' }).click()
+      const refreshedPlan = await planReadback
+      expect(refreshedPlan.ok()).toBe(true)
+      expect(new URL(refreshedPlan.url()).pathname.split('/').at(-1)).toBe(activePlanId)
+      const refreshedPlanBody = await refreshedPlan.json() as { data: { evolution: ProjectEvolutionRecord } }
+      expect(refreshedPlanBody.data.evolution.state).toBe('awaiting_review')
+      await refreshedEvolutionPanel.getByRole('heading', { name: '等待人工审核' }).waitFor()
+      const reextractedCandidateId = staged.data.evolution.candidateIds[0]
+      if (reextractedCandidateId === undefined) throw new Error('the real worker produced no candidate from the original project source')
+      expect(gap22FlowFactCandidateIds.has(reextractedCandidateId)).toBe(false)
+      await evolutionPanel.getByRole('button', { name: '核对本批 1 条重抽取记录' }).click()
+      await page.waitForSelector('[data-testid="instance-review"]')
+      const selectedRecordItem = page.locator('[data-testid="instance-record-item"][data-selected="true"]')
+      await selectedRecordItem.waitFor()
+      await page.waitForSelector('[data-testid="instance-detail"]')
+      const reextractedRecordId = await selectedRecordItem.getAttribute('data-record-id')
+      if (reextractedRecordId === null) throw new Error('the actual evolution review row has no record ID')
+      const reextractedRecord = await readJson<{ data: { record: { identity: { binding?: { candidateId: string; projectRevisionRef: { projectId: string; revision: string; digest: string } }; candidates: readonly { entityId: string; objectId: string; strategy: string; identityScopeId?: string }[] }; fields: readonly { fieldId: string; rawValue: string | boolean | null; normalizedValue?: { kind: string; value?: unknown }; source: { documentRef: VersionRef } }[] } } }>(
+        await request(baseUrl, `/api/v1/projects/${gap22FlowProjectId}/instance-records/${reextractedRecordId}`),
+      )
+      expect(reextractedRecord.data.record.identity.binding).toMatchObject({
+        candidateId: reextractedCandidateId,
+        projectRevisionRef: secondPlanBody.data.evolution.plan.targetRevisionRef,
+      })
+      const normalizedIdentity = reextractedRecord.data.record.fields.find((field) => field.fieldId === 'asset_code')
+      expect(normalizedIdentity).toMatchObject({
+        rawValue: 'GAP22-ASSET-001',
+        normalizedValue: { kind: 'scalar', value: 'GAP22-ASSET-001' },
+        source: { documentRef: { id: originalCsvRef.id, digest: originalCsvRef.digest } },
+      })
+      const existingIdentityCandidate = reextractedRecord.data.record.identity.candidates.find((candidate) => candidate.entityId === existingEntityId)
+      expect(existingIdentityCandidate).toMatchObject({ entityId: existingEntityId, objectId: 'asset', strategy: 'native_id', identityScopeId: existingIdentityScopeId })
+      const matchEntity = page.locator(`[data-testid="instance-identity-candidate"][data-entity-id="${existingEntityId}"]`)
+      await matchEntity.waitFor()
+      const reextractedFields = await page.locator('[data-testid="instance-field-row"]').evaluateAll((rows) => rows.map((row) => row.getAttribute('data-field-id') ?? ''))
+      expect(reextractedFields).toContain('asset_code')
+      expect(reextractedFields).toContain('inspection_due')
+      for (const fieldId of reextractedFields) {
+        const row = page.locator(`[data-testid="instance-field-row"][data-field-id="${fieldId}"]`)
+        await row.getByTestId('instance-field-confirm').click()
+        await row.locator('[data-testid="instance-field-status"][data-status="confirmed"]').waitFor()
+      }
+      await page.getByTestId('instance-identity-reason').fill('从项目演进重抽取的原始 CSV 资产编码确认新版本身份')
+      const identity = page.waitForResponse((response) => response.request().method() === 'POST' && new URL(response.url()).pathname.endsWith('/identity-decisions'))
+      await matchEntity.getByTestId('instance-identity-match').click()
+      const matchedIdentity = await identity
+      expect(matchedIdentity.ok()).toBe(true)
+      const matchedIdentityBody = await matchedIdentity.json() as { data: { record: { identity: { state: string; matchedEntityId?: string } } } }
+      expect(matchedIdentityBody.data.record.identity).toMatchObject({ state: 'matched', matchedEntityId: existingEntityId })
+      await page.waitForFunction(() => document.querySelector('[data-testid="instance-identity-state"]')?.textContent?.includes('已匹配') === true)
+      const approvedRecord = page.waitForResponse((response) => response.request().method() === 'POST' && new URL(response.url()).pathname.endsWith('/approve'))
+      await page.getByTestId('instance-approve').click()
+      expect((await approvedRecord).ok()).toBe(true)
+      const publishedRecord = page.waitForResponse((response) => response.request().method() === 'POST' && new URL(response.url()).pathname.endsWith('/publish'))
+      await page.getByTestId('instance-publish').click()
+      expect((await publishedRecord).ok()).toBe(true)
+      await page.waitForFunction(() => document.querySelector('[data-testid="instance-detail-publication"]')?.textContent === '已发布')
+
+      const candidateReviewUrl = new URL(page.url())
+      candidateReviewUrl.searchParams.set('view', 'review')
+      candidateReviewUrl.searchParams.set('candidate', reextractedCandidateId)
+      const candidateList = page.waitForResponse((response) => response.request().method() === 'GET' && new URL(response.url()).pathname === '/api/v1/candidates')
+      await page.goto(candidateReviewUrl.href)
+      expect((await candidateList).ok()).toBe(true)
+      await page.waitForSelector('[data-testid="candidate-panel"][data-phase="ready"]')
+      const candidateApproval = page.waitForResponse((response) => response.request().method() === 'POST' && new URL(response.url()).pathname === `/api/v1/candidates/${reextractedCandidateId}/reviews`)
+      await page.getByTestId('review-reason').fill('重新核对 1.1.0 版本重抽取记录及其原始 CSV 支持后批准')
+      await page.getByTestId('review-approve').click()
+      expect((await candidateApproval).ok()).toBe(true)
+      const semanticPublication = page.waitForResponse((response) => response.request().method() === 'POST' && new URL(response.url()).pathname === '/api/v1/semantic-publications')
+      await page.getByTestId('publish').click()
+      const semanticPublicationResponse = await semanticPublication
+      expect(semanticPublicationResponse.status()).toBe(201)
+      const semanticPublicationBody = await semanticPublicationResponse.json() as { data: { publicationId: string; versionRef: VersionRef; schemaRef: VersionRef; approvedCandidateRefs: readonly { candidateId: string; kind: string }[]; statements: readonly { statementId: string; sourceCandidateId: string; status: string; sourceRefs: readonly ResourceRef[] }[] } }
+      expect(semanticPublicationBody.data.approvedCandidateRefs).toContainEqual({ candidateId: reextractedCandidateId, kind: 'entity' })
+      expect(semanticPublicationBody.data.statements).toContainEqual(expect.objectContaining({ statementId: reextractedCandidateId, sourceCandidateId: reextractedCandidateId, status: 'active' }))
+      const semanticPublicationReadback = await readJson<{ data: typeof semanticPublicationBody.data }>(
+        await request(baseUrl, `/api/v1/semantic-publications/${semanticPublicationBody.data.publicationId}`),
+      )
+      expect(semanticPublicationReadback.data).toEqual(semanticPublicationBody.data)
+      await page.waitForSelector('[data-testid="statement-current"][data-status="active"]')
+
+      await page.getByTestId('tab-projects').click()
+      await discardIfNeeded(page)
+      await page.waitForSelector(`[data-testid="project-detail"][data-project-id="${gap22FlowProjectId}"]`)
+      await page.getByRole('button', { name: '版本演进', exact: true }).click()
+      await page.getByTestId('project-evolution').getByRole('button', { name: '激活已完成审核的版本' }).waitFor()
+      const activation = page.waitForResponse((response) => response.request().method() === 'POST' && new URL(response.url()).pathname === `/api/v1/projects/${gap22FlowProjectId}/evolutions/${activePlanId}/activate`)
+      await page.getByTestId('project-evolution').getByRole('button', { name: '激活已完成审核的版本' }).click()
+      const activatedResponse = await activation
+      expect(activatedResponse.ok()).toBe(true)
+      const activatedBody = await activatedResponse.json() as { data: { evolution: ProjectEvolutionRecord } }
+      expect(activatedBody.data.evolution.state).toBe('ready')
+      await page.getByTestId('project-evolution').getByRole('heading', { name: '新版本已激活' }).waitFor()
+      expect(await page.getByTestId('project-evolution').textContent()).not.toContain('MALFORMED_RESPONSE')
+      const currentProject = await readJson<{ data: { project: { activeRevision: string } } }>(
+        await request(baseUrl, `/api/v1/projects/${gap22FlowProjectId}`),
+      )
+      expect(BigInt(currentProject.data.project.activeRevision)).toBeGreaterThan(BigInt(projectBefore.data.project.activeRevision))
+      const currentRevisionNumber = currentProject.data.project.activeRevision
+      const currentRevision = await readJson<{ data: { revision: { industryPackRef: VersionRef; semanticPublicationRefs: readonly VersionRef[] } } }>(
+        await request(baseUrl, `/api/v1/projects/${gap22FlowProjectId}/revisions/${currentRevisionNumber}`),
+      )
+      expect(currentRevision.data.revision.industryPackRef).toEqual(gap22FlowTargetPackRef)
+      expect(currentRevision.data.revision.semanticPublicationRefs).toEqual([])
+      const oldAnswerAfterActivation = await readJson<{ data: { answerId: string; contentHash: string; v3Body?: unknown; body?: unknown } }>(
+        await request(baseUrl, `/api/v1/runs/${gap22FlowRunId}/answer`),
+      )
+      expect(oldAnswerAfterActivation.data).toEqual(oldAnswerBefore.data)
+      const oldBindingAfter = await admin.query<{ binding: unknown }>(
+        'SELECT binding FROM agent_platform.run_execution_bindings WHERE tenant_id=$1 AND space_id=$2 AND run_id=$3',
+        [scopeRef.tenantId, scopeRef.spaceId, gap22FlowRunId],
+      )
+      expect(oldBindingAfter.rows).toEqual([{ binding: savedOldBinding }])
+      const oldRevision = await readJson<{ data: { revision: { industryPackRef: VersionRef } } }>(
+        await request(baseUrl, `/api/v1/projects/${gap22FlowProjectId}/revisions/${projectBefore.data.project.activeRevision}`),
+      )
+      expect(oldRevision.data.revision.industryPackRef).toEqual(originalPackRef)
+      const actualSources = await readJson<{ data: { sources: readonly { originalRef: VersionRef }[] } }>(
+        await request(baseUrl, `/api/v1/core/projects/${gap22FlowProjectId}/source-catalogue`),
+      )
+      expect(actualSources.data.sources.some((source) => source.originalRef.id === originalCsvRef.id && source.originalRef.digest === originalCsvRef.digest)).toBe(true)
+      const currentDataset = await readJson<{ data: { snapshotRef: ResourceRef; rows: readonly unknown[] } }>(
+        await request(baseUrl, `/api/v1/projects/${gap22FlowProjectId}/dataset?objectId=asset`),
+      )
+      expect(currentDataset.data.snapshotRef.kind).toBe('dataset')
+      expect(currentDataset.data.rows).toHaveLength(1)
+      const statementUrl = new URL(page.url())
+      statementUrl.searchParams.set('view', 'review')
+      statementUrl.searchParams.set('candidate', reextractedCandidateId)
+      await page.goto(statementUrl.href)
+      await page.waitForSelector('[data-testid="statement-current"][data-status="active"]')
+      const currentStatementVersion = await page.getAttribute('[data-testid="statement-current"]', 'data-version')
+      if (currentStatementVersion === null) throw new Error('the re-extracted fact statement has no current revision')
+      await page.getByTestId('revision-reason').fill('撤回本次重抽取候选的语义依据，同时保留已发布版本与旧答案历史')
+      const statementRetraction = page.waitForResponse((response) => response.request().method() === 'POST' && new URL(response.url()).pathname === `/api/v1/statements/${reextractedCandidateId}/revisions`)
+      await page.getByTestId('revise-retraction').click()
+      const retractionResponse = await statementRetraction
+      expect(retractionResponse.status()).toBe(200)
+      const retraction = await retractionResponse.json() as { data: { statementId: string; version: string; kind: string; reason: string; supersedesVersion?: string } }
+      const retractedVersion = (BigInt(currentStatementVersion) + 1n).toString()
+      expect(retraction.data).toMatchObject({ statementId: reextractedCandidateId, version: retractedVersion, kind: 'retraction', supersedesVersion: currentStatementVersion })
+      await page.waitForSelector(`[data-testid="statement-current"][data-status="retracted"][data-version="${retractedVersion}"]`)
+      const retractionRow = page.locator(`[data-testid="revision-record"][data-kind="retraction"]`)
+      await retractionRow.waitFor()
+      expect(await retractionRow.textContent()).toContain('撤回本次重抽取候选的语义依据')
+      const currentStatement = await readJson<{ data: { status: string; version: string } }>(
+        await request(baseUrl, `/api/v1/statements/${reextractedCandidateId}`),
+      )
+      expect(currentStatement.data).toMatchObject({ status: 'retracted', version: retractedVersion })
+      const statementHistory = await readJson<{ data: { revisions: readonly { version: string; kind: string; reason: string; supersedesVersion?: string }[] } }>(
+        await request(baseUrl, `/api/v1/statements/${reextractedCandidateId}/revisions`),
+      )
+      expect(statementHistory.data.revisions).toContainEqual(expect.objectContaining({
+        version: retractedVersion, kind: 'retraction', reason: '撤回本次重抽取候选的语义依据，同时保留已发布版本与旧答案历史', supersedesVersion: currentStatementVersion,
+      }))
+      const oldAnswerAfterRetraction = await readJson<{ data: { answerId: string; contentHash: string; v3Body?: unknown; body?: unknown } }>(
+        await request(baseUrl, `/api/v1/runs/${gap22FlowRunId}/answer`),
+      )
+      expect(oldAnswerAfterRetraction.data).toEqual(oldAnswerBefore.data)
+      const oldBindingAfterRetraction = await admin.query<{ binding: unknown }>(
+        'SELECT binding FROM agent_platform.run_execution_bindings WHERE tenant_id=$1 AND space_id=$2 AND run_id=$3',
+        [scopeRef.tenantId, scopeRef.spaceId, gap22FlowRunId],
+      )
+      expect(oldBindingAfterRetraction.rows).toEqual([{ binding: savedOldBinding }])
+      await capture(page, 'gap23-flow4-retracted-evolution-support-1440')
+      await record('gap23-flow4-actual-project-evolution', [
+        `cancelledEvolution=${cancelledPlanId}`,
+        `activeEvolution=${activePlanId}`,
+        `targetPack=${gap22FlowTargetPackRef.id}@${gap22FlowTargetPackRef.version}`,
+        `activeRevision=${currentProject.data.project.activeRevision}`,
+        `newCandidate=${reextractedCandidateId}`,
+        `semanticPublication=${semanticPublicationBody.data.publicationId}@${semanticPublicationBody.data.versionRef.version}; candidate=${reextractedCandidateId}; readback=verified`,
+        `resolvedTargetProfile=${configuredTargetProfileBody.data.profileRef.id}@${configuredTargetProfileBody.data.profileRef.version}; snapshotHash=${configuredTargetProfileBody.data.profileRef.snapshotHash}`,
+        `evolutionRequestDigest=${firstEvolutionRequestDigest}`,
+        `oldAnswer=${oldAnswerBefore.data.answerId}; unchanged=${oldAnswerAfterActivation.data.contentHash === oldAnswerBefore.data.contentHash}`,
+        `fixedSource=${originalCsvRef.id}; digest=${originalCsvRef.digest}`,
+        `currentDataset=${currentDataset.data.snapshotRef.id}; digest=${currentDataset.data.snapshotRef.digest}`,
+        `retraction=${retraction.data.version}; status=${currentStatement.data.status}; oldAnswerStable=${oldAnswerAfterRetraction.data.contentHash === oldAnswerBefore.data.contentHash}`,
+      ])
+    } catch (error) {
+      try {
+        const flow4FailureUi = await page.evaluate(() => ({
+          url: location.href,
+          appView: document.querySelector('.app')?.getAttribute('data-view'),
+          projectWorkspacePhase: document.querySelector<HTMLElement>('[data-testid="project-workspace"]')?.getAttribute('data-phase'),
+          contextProjectValue: document.querySelector<HTMLSelectElement>('[data-testid="context-project-select"]')?.value,
+          contextProjectSelectedLabel: document.querySelector<HTMLSelectElement>('[data-testid="context-project-select"]')?.selectedOptions[0]?.textContent?.trim(),
+          projectOptions: [...document.querySelectorAll<HTMLOptionElement>('[data-testid="context-project-select"] option')].map((option) => ({ value: option.value, label: option.textContent?.trim() })),
+          contextWorkspaceValue: document.querySelector<HTMLSelectElement>('[data-testid="context-workspace-select"]')?.value,
+          contextProjectLoading: document.querySelector('[data-testid="context-project-loading"]')?.textContent?.trim(),
+          projectDetails: [...document.querySelectorAll<HTMLElement>('[data-testid="project-detail"]')].map((detail) => ({ projectId: detail.getAttribute('data-project-id'), text: detail.innerText.trim() })),
+          dialogs: [...document.querySelectorAll<HTMLElement>('[role="dialog"], dialog[open]')].map((dialog) => dialog.innerText.trim()),
+          body: document.body.innerText.slice(0, 12_000),
+        }))
+        await record('gap23-flow4-failure-ui-diagnostic', [JSON.stringify({ error: error instanceof Error ? error.stack ?? error.message : String(error), ui: flow4FailureUi, requests: flow4ApiTrace })])
+        await capture(page, 'gap23-flow4-failure-ui-1440')
+      } catch (diagnosticError) {
+        await record('gap23-flow4-failure-ui-diagnostic-error', [diagnosticError instanceof Error ? diagnosticError.stack ?? diagnosticError.message : String(diagnosticError)])
+      }
+      throw error
+    } finally {
+      await close()
     }
   })
 })
