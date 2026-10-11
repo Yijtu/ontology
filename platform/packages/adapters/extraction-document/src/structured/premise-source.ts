@@ -1,4 +1,4 @@
-import type { BlobGetAuthorizedRequest, CandidateRecord, ProjectMappingStore, ResourceRef, RuleStructuredPremiseSourcePort, StructuredCandidateSourceSpan, StructuredIngestionStore, ToolContext } from '@ontology/contracts'
+import type { BlobGetAuthorizedRequest, CandidateRecord, ProjectMappingStore, RuleStructuredPremiseSourcePort, StructuredCandidateSourceSpan, StructuredIngestionStore, ToolContext } from '@ontology/contracts'
 import { StructuredDocumentParser } from './index'
 import { reconcileStructuredResult } from './ingest-service'
 import { sha256DigestOfBytes } from '../hashing'
@@ -22,8 +22,9 @@ export class StructuredPremiseSourceReader implements RuleStructuredPremiseSourc
     if (pin === undefined) return undefined
     const mapping = await this.dependencies.mappings.getMapping(scope, pin.projectRevisionRef.projectId, pin.mappingRef.id, pin.mappingRef.version, ctx)
     if (mapping === undefined || mapping.ref.id !== pin.mappingRef.id || mapping.ref.version !== pin.mappingRef.version || mapping.ref.digest !== pin.mappingRef.digest || mapping.parseId !== span.parseId ||
-      mapping.definitionRef.id !== candidate.inputVersion.definitionRef.id || mapping.definitionRef.version !== candidate.inputVersion.definitionRef.version || mapping.definitionRef.digest !== candidate.inputVersion.definitionRef.digest ||
-      candidate.inputVersion.documentVersionRef === undefined || !sameResourceRef(candidate.inputVersion.documentVersionRef, mapping.originalRef)) return undefined
+      mapping.definitionRef.id !== candidate.inputVersion.definitionRef.id || mapping.definitionRef.version !== candidate.inputVersion.definitionRef.version || mapping.definitionRef.digest !== candidate.inputVersion.definitionRef.digest) return undefined
+    // A relation retains the from-endpoint's documentVersionRef while its source pins
+    // cover both endpoints. Each span's own mapping, not that single ref, pins its original.
     // Parse records are content-addressed and may be reused for another logical original ref
     // with identical bytes. Resolve the candidate's exact parse id, but authorize and re-read
     // the current mapping's original below; cached original identifiers are not authority.
@@ -45,8 +46,4 @@ export class StructuredPremiseSourceReader implements RuleStructuredPremiseSourc
     return { documentRef: mapping.originalRef, documentVersionRef: mapping.originalRef, parserVersion: parse.parserVersion,
       rowText: JSON.stringify({ sourceRowKey: entry.sourceRowKey, cells: row.cells.map((cell) => [cell.raw, cell.kind]) }) }
   }
-}
-
-function sameResourceRef(left: ResourceRef, right: ResourceRef): boolean {
-  return left.id === right.id && left.version === right.version && left.digest === right.digest && left.kind === right.kind
 }

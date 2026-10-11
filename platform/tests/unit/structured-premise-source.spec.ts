@@ -1,7 +1,7 @@
 import { randomUUID } from 'node:crypto'
 import { describe, expect, it } from 'vitest'
 import { sha256DigestOfBytes, StructuredDocumentParser, StructuredPremiseSourceReader, reconcileStructuredResult } from '@ontology/adapter-extraction-document'
-import type { CandidateRecord, EntityCandidate, ResourceRef, StructuredParseRecord, VersionRef } from '@ontology/contracts'
+import type { CandidateRecord, EntityCandidate, RelationCandidate, ResourceRef, StructuredParseRecord, VersionRef } from '@ontology/contracts'
 import type { ImportMappingVersion, StructuredCandidateSourceSpan } from '@ontology/contracts'
 import { toolContext } from './component-registry-fixtures'
 
@@ -14,13 +14,13 @@ function ref(id: string, digest: string): ResourceRef {
   return { id, version: '1.0.0', digest, kind: 'document' }
 }
 
-async function fixture(input: { readonly candidateOriginal?: ResourceRef; readonly mappingOriginal?: ResourceRef; readonly cachedOriginal?: ResourceRef; readonly integrityVerified?: boolean } = {}) {
+async function fixture(input: { readonly candidateOriginal?: ResourceRef; readonly mappingOriginal?: ResourceRef; readonly cachedOriginal?: ResourceRef; readonly integrityVerified?: boolean; readonly projectId?: string } = {}) {
   const digest = sha256DigestOfBytes(bytes)
   const currentOriginal = input.mappingOriginal ?? ref(randomUUID(), digest)
   const candidateOriginal = input.candidateOriginal ?? currentOriginal
   const cachedOriginal = input.cachedOriginal ?? ref(randomUUID(), digest)
   const parseId = randomUUID()
-  const projectId = randomUUID()
+  const projectId = input.projectId ?? randomUUID()
   const mappingId = randomUUID()
   const candidateId = randomUUID()
   const definitionRef: VersionRef = { id: 'premise-test-definition', version: '1.0.0', digest }
@@ -46,10 +46,14 @@ async function fixture(input: { readonly candidateOriginal?: ResourceRef; readon
     sheets: parsed.sheets, diagnostics: parsed.diagnostics, documentVersionRef: cachedOriginal, createdAt: '2026-10-11T00:00:00Z' }
   const reads: ResourceRef[] = []
   const reader = new StructuredPremiseSourceReader({
-    mappings: { getMapping: async () => mapping },
+    mappings: { getMapping: async (requestedScope, requestedProject, requestedId, requestedVersion) =>
+      requestedScope.tenantId === scope.tenantId && requestedScope.spaceId === scope.spaceId && requestedProject === projectId &&
+      requestedId === mappingId && requestedVersion === mapping.version ? mapping : undefined },
     ingestion: { getParse: async (_scope, wanted) => wanted === parseId ? cachedParse : undefined },
     artifacts: {
-      getAuthorized: async () => ({ integrityVerified: input.integrityVerified ?? true, byteSize: bytes.byteLength }),
+      getAuthorized: async ({ blobRef }) => ({ integrityVerified: (input.integrityVerified ?? true) &&
+        blobRef.id === currentOriginal.id && blobRef.version === currentOriginal.version && blobRef.digest === currentOriginal.digest,
+      byteSize: bytes.byteLength }),
       readAuthorized: async ({ blobRef }) => { reads.push(blobRef); return bytes },
     },
   })
@@ -66,9 +70,35 @@ describe('StructuredPremiseSourceReader', () => {
     expect(f.reads).toEqual([f.currentOriginal])
   })
 
-  it('rejects a candidate whose pinned document version is not the actual mapping original', async () => {
-    const f = await fixture({ candidateOriginal: ref(randomUUID(), sha256DigestOfBytes(bytes)) })
-    expect(await f.reader.read(f.candidate, f.span, ctx)).toBeUndefined()
+  it('reads the to-endpoint original of a relation whose primary document belongs to the from endpoint', async () => {
+    const from = await fixture()
+    const to = await fixture({ candidateOriginal: from.currentOriginal, projectId: from.mapping.projectId })
+    const relation: RelationCandidate = {
+      candidateId: randomUUID(), jobId: randomUUID(), kind: 'relation', relationId: 'linked_asset',
+      from: { objectId: 'asset', candidateId: from.candidate.candidateId },
+      to: { objectId: 'asset', candidateId: to.candidate.candidateId },
+      deterministic: true, state: 'pending_review', issues: [],
+      inputVersion: { ...from.candidate.inputVersion, projectFact: { sources: [
+        ...from.candidate.inputVersion.projectFact?.sources ?? [],
+        ...to.candidate.inputVersion.projectFact?.sources ?? [],
+      ] } },
+      sourceSpans: [...from.candidate.sourceSpans, ...to.candidate.sourceSpans],
+      idempotencyKey: 'relation-two-originals', recordedAt: '2026-10-11T00:00:00Z',
+    }
+    expect(relation.inputVersion.documentVersionRef).toEqual(from.currentOriginal)
+    expect(from.currentOriginal.id).not.toBe(to.currentOriginal.id)
+    expect(from.span.parseId).not.toBe(to.span.parseId)
+    expect(await to.reader.read(relation, to.span, ctx)).toMatchObject({ documentRef: to.currentOriginal, documentVersionRef: to.currentOriginal })
+    expect(to.reads).toEqual([to.currentOriginal])
+  })
+
+  it('rejects a source pin whose mapping digest differs from the authoritative mapping', async () => {
+    const f = await fixture()
+    const source = f.candidate.inputVersion.projectFact?.sources[0]
+    if (source === undefined) throw new Error('the fixture is missing its project source pin')
+    const forged: CandidateRecord = { ...f.candidate, inputVersion: { ...f.candidate.inputVersion,
+      projectFact: { sources: [{ ...source, mappingRef: { ...source.mappingRef, digest: sha256DigestOfBytes(new TextEncoder().encode('forged mapping')) } }] } } }
+    expect(await f.reader.read(forged, f.span, ctx)).toBeUndefined()
     expect(f.reads).toEqual([])
   })
 
