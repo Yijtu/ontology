@@ -1,7 +1,8 @@
 import { randomUUID } from 'node:crypto'
 import { contentDigestOf } from '@ontology/application'
 import { isRecord, isResourceRef, isVersionRef } from '@ontology/contracts'
-import type { ResourceRef, ScopeRef, VersionRef } from '@ontology/contracts'
+import { isImportMappingVersion } from '../../apps/web/src/api/projects'
+import type { ProjectEvolutionRemap, ResourceRef, ScopeRef, VersionRef } from '@ontology/contracts'
 
 export type GenericOrCall = (
   path: string,
@@ -18,6 +19,76 @@ export interface PreparedOrSource {
 export interface PreparedOrCompetency {
   readonly competencyQuestionRef: VersionRef
   readonly definitionRef: VersionRef
+}
+
+/** Evolution receives a real bounded original remapping, rather than an empty source placeholder. */
+export async function prepareEvolutionRemapping(input: { readonly projectId: string; readonly call: GenericOrCall }): Promise<{
+  readonly remappings: readonly ProjectEvolutionRemap[]; readonly headRevision: string;
+}> {
+  const path = `/api/v1/projects/${encodeURIComponent(input.projectId)}`
+  const imported = await input.call(`${path}/structured-imports`, {
+    format: 'csv', mediaType: 'text/csv', contentEncoding: 'utf-8', content: 'asset_code,inspection_due\nEVOLVE-ASSET,false\n',
+  })
+  const parseId = text(imported['parseId'], 'evolution original parse ID')
+  const catalogue = await input.call(`/api/v1/core/projects/${encodeURIComponent(input.projectId)}/source-catalogue`)
+  if (!Array.isArray(catalogue['sources'])) throw new Error('evolution source catalogue is absent')
+  const source = catalogue['sources'].map((row) => object(row, 'evolution source')).find((row) => row['parseId'] === parseId)
+  if (source === undefined || !Array.isArray(source['tables'])) throw new Error('actual evolution original table is absent')
+  const table = object(source['tables'][0], 'evolution original table')
+  if (!Array.isArray(table['columns'])) throw new Error('evolution original columns are absent')
+  const entries = table['columns'].map((value) => {
+    const column = object(value, 'evolution original column')
+    if (!Number.isSafeInteger(column['columnIndex'])) throw new Error('evolution original column has no actual index')
+    const header = text(column['header'], 'evolution original column header')
+    return { fieldRef: header, columnIndex: Number(column['columnIndex']), header, headerDigest: text(column['headerDigest'], 'evolution original header digest') }
+  })
+  const mappingBody = { format: 'csv', parseId, originalRef: imported['originalRef'], originalMediaType: imported['originalMediaType'], options: {}, objectId: 'asset', entries }
+  const preview = object((await input.call(`${path}/mappings/preview`, mappingBody))['preview'], 'evolution mapping preview')
+  if (preview['confirmable'] !== true) throw new Error('the original evolution mapping did not pass independent preview')
+  const mapped = await input.call(`${path}/mappings`, mappingBody)
+  const mapping = mapped['mapping']
+  if (!isImportMappingVersion(mapping)) throw new Error('the confirmed evolution mapping is not a stored version')
+  const bound = await input.call(`${path}/records`, { parseId, mappingId: mapping.mappingId, mappingVersion: mapping.version })
+  if (!Array.isArray(bound['records']) || bound['records'].length !== 1) throw new Error('the real evolution original did not bind one record')
+  const staged = await input.call(`/api/v1/core/projects/${encodeURIComponent(input.projectId)}/fact-candidates`, {
+    documentId: imported['documentId'], recordRefs: bound['records'].map((value) => {
+      const record = object(value, 'mapped evolution record')
+      return { recordId: record['recordId'], revision: record['revision'] }
+    }),
+  })
+  if (!Array.isArray(staged['candidates']) || staged['candidates'].length !== 1) throw new Error('evolution source did not stage one real fact candidate')
+  const candidateId = text(object(staged['candidates'][0], 'evolution source candidate')['candidateId'], 'evolution source candidate ID')
+  let record = object((await input.call(`${path}/instance-records`, { candidateId, documentId: imported['documentId'] }))['record'], 'evolution human review record')
+  const recordPath = `${path}/instance-records/${text(record['recordId'], 'evolution human review record ID')}`
+  if (!Array.isArray(record['fields']) || record['fields'].length !== 2) throw new Error('the actual evolution row has no two mapped human-review fields')
+  record = object((await input.call(`${recordPath}/field-confirmations`, {
+    decisions: record['fields'].map((field) => ({ fieldId: object(field, 'evolution source field')['fieldId'], decision: 'confirm' })),
+  }, text(record['recordRevision'], 'field confirmation revision')))['record'], 'field-confirmed evolution review')
+  await input.call(`${recordPath}/identity-decisions`, { kind: 'create', reason: 'human checked EVOLVE-ASSET against its original CSV identity cell' }, text(record['recordRevision'], 'identity confirmation revision'))
+  for (const action of ['approve', 'publish']) {
+    record = object((await input.call(recordPath))['record'], 'current evolution review record')
+    await input.call(`${recordPath}/${action}`, {}, text(record['recordRevision'], 'current source approval revision'))
+  }
+  const reviews = (await input.call(`/api/v1/candidates/${candidateId}/reviews`))['reviews']
+  if (!Array.isArray(reviews)) throw new Error('evolution candidate review history is absent')
+  const reviewRevision = reviews.reduce((latest: bigint, value: unknown) => {
+    const revision = BigInt(text(object(value, 'evolution review')['revision'], 'evolution review revision'))
+    return revision > latest ? revision : latest
+  }, 0n).toString()
+  await input.call(`/api/v1/candidates/${candidateId}/reviews`, { decision: 'approve', reason: 'human independently approved the exact original-backed evolution source content' }, reviewRevision)
+  const publications = (await input.call('/api/v1/semantic-publications'))['publications']
+  if (!Array.isArray(publications)) throw new Error('the actual semantic publication ledger is absent')
+  const publicationRevision = publications.reduce((latest: bigint, value: unknown) => {
+    const revision = BigInt(text(object(value, 'semantic publication')['revision'], 'semantic publication revision'))
+    return revision > latest ? revision : latest
+  }, 0n).toString()
+  await input.call('/api/v1/semantic-publications', { approvedCandidateRefs: [{ candidateId, kind: 'entity' }], schemaRef: mapping.definitionRef }, publicationRevision)
+  const dataset = await input.call(`${path}/dataset-snapshots`, { objectId: 'asset' })
+  if (object(dataset['status'], 'active evolution input dataset')['state'] !== 'ready') throw new Error('the official old-active evolution source is not materialized')
+  const project = object((await input.call(path))['project'], 'project before evolution')
+  const headRevision = text(project['headRevision'], 'project source revision')
+  if (project['activeRevision'] !== headRevision) throw new Error('the original source revision is not the actual active input')
+  return { headRevision, remappings: [{ mappingRef: mapping.ref, documentId: text(imported['documentId'], 'evolution original document ID'), objectId: 'asset', entries: mapping.entries }] }
 }
 
 function object(value: unknown, label: string): Record<string, unknown> {
@@ -66,7 +137,7 @@ export async function prepareOrSource(input: {
   const policyText = [
     'The asset_code field identifies an asset in the approved registry.',
     "The reviewed inspection rule has two different OR conditions: asset_code = 'asset-code-1' or inspection_due = true.",
-    'inspection_required names the rule conclusion; it is not asserted by this applicability fixture.',
+    'inspection_required is an optional boolean field; this OR rule supplies no business conclusion.',
   ].join(' ')
   const upload = await input.call(`/api/v1/core/workspaces/${encodeURIComponent(input.workspaceId)}/sources`, {
     name: 'generic-or-source.txt',
@@ -83,7 +154,9 @@ export async function prepareOrSource(input: {
   if (!Array.isArray(fragments) || fragments.length === 0) throw new Error('uploaded OR policy source returned no actual source-grounding fragments')
   const firstFragment = object(fragments[0], 'first policy source fragment')
   const firstFragmentSource = actualResourceRef(firstFragment['sourceRef'], 'first policy fragment source pin')
-  const firstFragmentText = text(firstFragment['text'], 'first policy source fragment text')
+  const firstFragmentContent = object(firstFragment['content'], 'first policy source fragment content')
+  if (firstFragmentContent['kind'] !== 'text') throw new Error('the actual OR policy fragment is not text')
+  const firstFragmentText = text(firstFragmentContent['text'], 'first policy source fragment text')
   if (firstFragment['sourceIndex'] !== 0 || firstFragment['fragmentIndex'] !== 0 || firstFragmentSource.id !== sourceRef.id ||
     !firstFragmentText.includes("asset_code = 'asset-code-1'") || !firstFragmentText.includes('inspection_due = true')) {
     throw new Error('actual source-grounding fragment 0/0 does not contain both reviewed OR conditions')

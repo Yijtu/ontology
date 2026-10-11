@@ -57,6 +57,8 @@ describe('actual current-domain published pack rule origin in competency executi
     expect(checkpoint).toHaveProperty('publicationCheckpoint')
     if (checkpoint === undefined) throw new Error('actual current publication checkpoint draft is missing')
     expect(await f.targetReader(f.target, f.template, f.definition, f.rules, ctx, new AbortController().signal)).toBe(true)
+    const forgedBase = { ...f.definition, baseRef: { id: 'unrelated-predecessor', version: '1.0.0', digest: contentDigestOf('unrelated-predecessor') } }
+    expect(await f.targetReader(f.target, f.template, forgedBase, f.rules, ctx, new AbortController().signal)).toBe(false)
     const edited = await f.workspaceService.draftOperation(f.workspace.workspaceId, { expectedRevision: f.workspace.headRevision, operation: 'edit', reason: 'human explicitly edits after the semantic publication checkpoint', documentSetRef: checkpoint.documentSetRef }, `real-edit-${randomUUID()}`, ctx.principal.subjectId, ctx)
     expect(edited.draft).not.toHaveProperty('publicationCheckpoint')
     expect(await f.targetReader({ ...f.target, revision: edited.workspace.headRevision }, f.template, f.definition, f.rules, ctx, new AbortController().signal)).toBe(false)

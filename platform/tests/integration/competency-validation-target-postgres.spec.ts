@@ -189,6 +189,8 @@ describe('authoritative actual current target against independently stored templ
     expect(await createCompetencyValidationTargetReader(options)({ ...f.target, definitionApprovalPins: f.target.definitionApprovalPins.slice(1) }, f.template, f.definition, f.templateRules, ctx, new AbortController().signal)).toBe(false)
     const changed = { ...f.definition, attributes: f.definition.attributes.map((attribute, index) => index === 0 ? { ...attribute, cardinality: { min: 0, max: 1 } } : attribute) }
     expect(await createCompetencyValidationTargetReader(options)(f.target, f.template, changed, f.templateRules, ctx, new AbortController().signal)).toBe(false)
+    const forgedBase = { ...f.definition, baseRef: { id: 'unrelated-predecessor', version: '1.0.0', digest: contentDigestOf('unrelated-predecessor') } }
+    expect(await createCompetencyValidationTargetReader(options)(f.target, f.template, forgedBase, f.templateRules, ctx, new AbortController().signal)).toBe(false)
     await review(f.currentRules[0]!.candidateId, 'reject'); expect(await check()).toBe(false)
     await review(f.currentRules[0]!.candidateId); expect(await check()).toBe(true)
     await review(f.templateRules[0]!.candidateId, 'reject'); expect(await check()).toBe(false)

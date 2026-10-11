@@ -1,4 +1,4 @@
-import type { BlobGetAuthorizedRequest, CandidateRecord, ProjectMappingStore, RuleStructuredPremiseSourcePort, StructuredCandidateSourceSpan, StructuredIngestionStore, ToolContext } from '@ontology/contracts'
+import type { BlobGetAuthorizedRequest, CandidateRecord, ProjectMappingStore, ResourceRef, RuleStructuredPremiseSourcePort, StructuredCandidateSourceSpan, StructuredIngestionStore, ToolContext } from '@ontology/contracts'
 import { StructuredDocumentParser } from './index'
 import { reconcileStructuredResult } from './ingest-service'
 import { sha256DigestOfBytes } from '../hashing'
@@ -10,7 +10,7 @@ export interface StructuredPremiseSourceReaderDependencies {
     readAuthorized(request: BlobGetAuthorizedRequest, ctx: ToolContext): Promise<Uint8Array>
   }
   readonly mappings: Pick<ProjectMappingStore, 'getMapping'>
-  readonly ingestion: Pick<StructuredIngestionStore, 'findParseByDigest'>
+  readonly ingestion: Pick<StructuredIngestionStore, 'getParse'>
 }
 
 /** Reparse the exact approved original selection and check the row and individual cell locator. */
@@ -22,9 +22,14 @@ export class StructuredPremiseSourceReader implements RuleStructuredPremiseSourc
     if (pin === undefined) return undefined
     const mapping = await this.dependencies.mappings.getMapping(scope, pin.projectRevisionRef.projectId, pin.mappingRef.id, pin.mappingRef.version, ctx)
     if (mapping === undefined || mapping.ref.id !== pin.mappingRef.id || mapping.ref.version !== pin.mappingRef.version || mapping.ref.digest !== pin.mappingRef.digest || mapping.parseId !== span.parseId ||
-      mapping.definitionRef.id !== candidate.inputVersion.definitionRef.id || mapping.definitionRef.version !== candidate.inputVersion.definitionRef.version || mapping.definitionRef.digest !== candidate.inputVersion.definitionRef.digest) return undefined
-    const parse = await this.dependencies.ingestion.findParseByDigest(scope, mapping.originalRef.digest, candidate.inputVersion.parserVersion, ctx)
-    if (parse === undefined || parse.scopeRef.tenantId !== scope.tenantId || parse.scopeRef.spaceId !== scope.spaceId || parse.originalRef.id !== mapping.originalRef.id || parse.originalRef.version !== mapping.originalRef.version || parse.originalRef.digest !== mapping.originalRef.digest ||
+      mapping.definitionRef.id !== candidate.inputVersion.definitionRef.id || mapping.definitionRef.version !== candidate.inputVersion.definitionRef.version || mapping.definitionRef.digest !== candidate.inputVersion.definitionRef.digest ||
+      candidate.inputVersion.documentVersionRef === undefined || !sameResourceRef(candidate.inputVersion.documentVersionRef, mapping.originalRef)) return undefined
+    // Parse records are content-addressed and may be reused for another logical original ref
+    // with identical bytes. Resolve the candidate's exact parse id, but authorize and re-read
+    // the current mapping's original below; cached original identifiers are not authority.
+    const parse = await this.dependencies.ingestion.getParse(scope, span.parseId, ctx)
+    if (parse === undefined || parse.scopeRef.tenantId !== scope.tenantId || parse.scopeRef.spaceId !== scope.spaceId || parse.originalRef.kind !== 'document' ||
+      parse.originalRef.digest !== mapping.originalRef.digest || parse.parserVersion !== candidate.inputVersion.parserVersion ||
       parse.parseId !== span.parseId || parse.status !== 'complete' || parse.coverage.completeness !== 'complete' || parse.counts.pending !== 0 || parse.counts.failed !== 0 || parse.counts.skipped !== 0) return undefined
     const request = { scopeRef: scope, blobRef: mapping.originalRef }
     const metadata = await this.dependencies.artifacts.getAuthorized(request, ctx)
@@ -37,7 +42,11 @@ export class StructuredPremiseSourceReader implements RuleStructuredPremiseSourc
     if (entry === undefined || entry.state !== 'parsed' || entry.rowDigest !== span.rowDigest || entry.sourceRowKey !== span.sourceRowKey) return undefined
     const row = result.tables.flatMap((table) => table.rows).find((row) => row.recordIndex === entry.recordIndex && row.row === entry.row)
     if (row === undefined || ![row.locator, ...row.cells.map((cell) => cell.locator)].some((locator) => sha256OfCanonical(locator) === sha256OfCanonical(span.locator))) return undefined
-    return { documentRef: mapping.originalRef, documentVersionRef: parse.documentVersionRef ?? mapping.originalRef, parserVersion: parse.parserVersion,
+    return { documentRef: mapping.originalRef, documentVersionRef: mapping.originalRef, parserVersion: parse.parserVersion,
       rowText: JSON.stringify({ sourceRowKey: entry.sourceRowKey, cells: row.cells.map((cell) => [cell.raw, cell.kind]) }) }
   }
+}
+
+function sameResourceRef(left: ResourceRef, right: ResourceRef): boolean {
+  return left.id === right.id && left.version === right.version && left.digest === right.digest && left.kind === right.kind
 }
