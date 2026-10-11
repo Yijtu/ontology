@@ -860,11 +860,31 @@ describe('V03-045 generic dual-assistant full-stack E2E (real chromium, real hos
         await discardDirty()
         await page.waitForFunction((value) => document.querySelector('.app')?.getAttribute('data-view') === value, view)
       }
+      const appWorkspaceListResponse = page.waitForResponse((response) => response.request().method() === 'GET' && new URL(response.url()).pathname === '/api/v1/industry-workspaces')
       await page.goto(web.origin)
       await page.waitForSelector('[data-testid="guide-home"]')
+      expect((await appWorkspaceListResponse).ok()).toBe(true)
+      const ontologyWorkspaceListResponse = page.waitForResponse((response) => response.request().method() === 'GET' && new URL(response.url()).pathname === '/api/v1/industry-workspaces')
       await openView('ontology')
+      expect((await ontologyWorkspaceListResponse).ok()).toBe(true)
+      await page.waitForFunction(() => {
+        const panel = document.querySelector('[data-testid="ontology-workspace"]')
+        const contextLoading = document.querySelector('[data-testid="context-workspace-loading"]')
+        const contextSelect = document.querySelector<HTMLSelectElement>('[data-testid="context-workspace-select"]')
+        const disclosure = document.querySelector<HTMLDetailsElement>('[data-testid="workspace-create-disclosure"]')
+        if (panel === null || contextLoading !== null || contextSelect === null || disclosure === null) return false
+        const phase = panel.getAttribute('data-phase')
+        if (phase === 'empty') return contextSelect.value === '' && disclosure.open
+        if (phase !== 'ready') return false
+        if (disclosure.open) return false
+        const detail = panel.querySelector<HTMLElement>('[data-testid="workspace-detail"]')
+        const workspaceId = detail?.getAttribute('data-workspace-id')
+        return workspaceId !== undefined && workspaceId !== null && contextSelect.value === workspaceId &&
+          new URLSearchParams(location.search).get('workspace') === workspaceId
+      })
       const workspaceCreateDisclosure = page.getByTestId('workspace-create-disclosure')
       if (await workspaceCreateDisclosure.getAttribute('open') === null) await workspaceCreateDisclosure.locator('summary').click()
+      await page.getByTestId('workspace-create-display-name').waitFor({ state: 'visible' })
       const namespace = `gap22-flow1-${randomUUID().slice(0, 8)}`
       await page.getByTestId('workspace-create-display-name').fill('检修要求规则工作区')
       await page.getByTestId('workspace-create-namespace').fill(namespace)
