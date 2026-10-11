@@ -82,16 +82,18 @@ export class PublishedProjectDatasetSource implements ProjectPublishedDatasetSou
         if (record.objectId === objectId) physicalRecords.set(record.recordId,record)
       }))
     } else {
-    let cursor: string | undefined
-    do {
-      const page = await this.options.records.listRecords(scope, revision.ref.projectId, { objectId, limit: 250, ...(cursor === undefined ? {} : { cursor }) }, ctx)
-      for (const record of page.records) {
-        if (physicalRecords.size >= 20_000) throw new ProjectDatasetError('INPUT_NOT_READY', 'the project provenance read exceeds its bounded record cap')
-        physicalRecords.set(record.recordId, record)
-      }
-      if (page.nextCursor === cursor && cursor !== undefined) throw new ProjectDatasetError('INPUT_NOT_READY', 'project provenance paging did not advance')
-      cursor = page.nextCursor
-    } while (cursor !== undefined)
+      let cursor: string | undefined
+      do {
+        const page = await this.options.records.listRecords(scope, revision.ref.projectId, {
+          objectId, mappingRefs: revision.mappingRefs, limit: 250, ...(cursor === undefined ? {} : { cursor }),
+        }, ctx)
+        for (const record of page.records) {
+          if (physicalRecords.size >= 20_000) throw new ProjectDatasetError('INPUT_NOT_READY', 'the project provenance read exceeds its bounded record cap')
+          physicalRecords.set(record.recordId, record)
+        }
+        if (page.nextCursor === cursor && cursor !== undefined) throw new ProjectDatasetError('INPUT_NOT_READY', 'project provenance paging did not advance')
+        cursor = page.nextCursor
+      } while (cursor !== undefined)
     }
     const mappingCache = new Map<string, Awaited<ReturnType<ProjectMappingStore['getMapping']>>>()
     const membershipCache = new Map<string, Awaited<ReturnType<ProjectDocumentStore['getMembership']>>>()

@@ -151,7 +151,14 @@ class InMemoryRecordStore implements ProjectRecordStore {
   }
 
   async listRecords(_scopeRef: ScopeRef, projectId: Uuid, query: ProjectRecordQuery): Promise<ProjectRecordPage> {
-    const all = [...this.#latest.values()].filter((record) => record.projectId === projectId)
+    const mappingRefs = query.mappingRefs
+    const candidates = mappingRefs === undefined ? [...this.#latest.values()] : this.appended.filter((record) => record.projectId === projectId &&
+      mappingRefs.some((mapping) => mapping.id === record.mappingId && mapping.version === record.mappingVersion))
+    const all = mappingRefs === undefined ? candidates : [...candidates.reduce((latest, record) => {
+      const prior = latest.get(record.recordId)
+      if (prior === undefined || BigInt(record.revision) > BigInt(prior.revision)) latest.set(record.recordId, record)
+      return latest
+    }, new Map<string, ProjectRecordVersion>()).values()]
     const filtered = query.status === undefined ? all : all.filter((record) => record.status === query.status)
     return { records: filtered, total: filtered.length }
   }

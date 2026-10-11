@@ -149,21 +149,25 @@ export class PostgresProjectRecordStore implements ProjectRecordStore {
                          WHERE tenant_id = current_setting('app.tenant_id')::uuid
                            AND space_id = current_setting('app.space_id')::uuid
                            AND project_id = $1::uuid
+                           AND ($2::jsonb IS NULL OR EXISTS (
+                             SELECT 1 FROM jsonb_array_elements($2::jsonb) AS requested_mapping(ref)
+                              WHERE requested_mapping.ref->>'id' = mapping_id::text AND requested_mapping.ref->>'version' = mapping_version
+                           ))
                          ORDER BY record_id, revision DESC`
-      const filters = `($2::text IS NULL OR object_id = $2)
-                         AND ($3::text IS NULL OR status = $3)
-                         AND ($4::text IS NULL OR record_id::text > $4)`
+      const filters = `($3::text IS NULL OR object_id = $3)
+                         AND ($4::text IS NULL OR status = $4)
+                         AND ($5::text IS NULL OR record_id::text > $5)`
       const rows = await scoped.query<RecordRow>(
         `SELECT revision::text AS revision, body FROM (${filtered}) latest
           WHERE ${filters}
           ORDER BY record_id ASC
-          LIMIT $5`,
-        [projectId, query.objectId ?? null, query.status ?? null, query.cursor ?? null, limit],
+          LIMIT $6`,
+        [projectId, query.mappingRefs === undefined ? null : JSON.stringify(query.mappingRefs), query.objectId ?? null, query.status ?? null, query.cursor ?? null, limit],
       )
       const totalResult = await scoped.query<{ total: string }>(
         `SELECT count(*)::text AS total FROM (${filtered}) latest
-          WHERE ($2::text IS NULL OR object_id = $2) AND ($3::text IS NULL OR status = $3)`,
-        [projectId, query.objectId ?? null, query.status ?? null],
+          WHERE ($3::text IS NULL OR object_id = $3) AND ($4::text IS NULL OR status = $4)`,
+        [projectId, query.mappingRefs === undefined ? null : JSON.stringify(query.mappingRefs), query.objectId ?? null, query.status ?? null],
       )
       const records = rows.rows.map((row) => row.body)
       const total = Number(totalResult.rows[0]?.total ?? '0')

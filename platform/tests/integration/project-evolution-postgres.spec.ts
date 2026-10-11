@@ -8,7 +8,7 @@ import { ControlPostgresDatabase, PostgresProjectEvolutionStore, PostgresRunExec
 import { PostgresStructuredIngestionStore } from '@ontology/adapter-extraction-document'
 import { DuckDbProjectDatasetAdapter } from '@ontology/adapter-data-duckdb'
 import { PostgresProjectDatasetAdapter } from '@ontology/adapter-data-postgres'
-import { projectEvolutionImpacts, sha256DigestOf, ProjectService } from '@ontology/application'
+import { canonicalJson, projectEvolutionImpacts, sha256DigestOf, ProjectService } from '@ontology/application'
 import { createApiServer, createBlobArtifactWriter, createCoreProjectQueryWorkflow, createInstanceIdentityWorkflow, createProjectEvolutionWorkflow } from '@ontology/app-api'
 import { ProjectEvolutionOutboxConsumer } from '@ontology/app-worker'
 import { InMemoryIdentityIndexReader, definitionVersionDigest, projectIndustrySchema, ProjectSemanticQueryService, projectSnapshotMappingRef } from '@ontology/semantic-engine'
@@ -164,6 +164,57 @@ async function fixture(label: string, strategy: DefinitionRevisionStrategyKind =
     }
 }
 describe('explicit ontology evolution over actual original sources and human facts (PostgreSQL)', () => {
+    it('keeps active published source pins readable after a canceled target bind and accepts a fresh plan', async () => {
+        const p = await fixture('evolve-cancel-replan'), backend = new DuckDbProjectDatasetAdapter()
+        try {
+            const { service, dataset } = p.evolve(backend)
+            const old = await dataset.materialize(p.projectId, { objectId: 'meter' }, p.ctx)
+            const previous = await p.projects.getRevision(p.scope, p.projectId, old.projectRevisionRef.revision, p.ctx)
+            if (previous === undefined) throw new Error('the actual active project revision is missing')
+            const before = await p.publishedSource.read(p.scope, previous, 'meter', p.ctx)
+            const first = await service.start(p.projectId, p.start, `cancel-replan-first-${randomUUID()}`, p.ctx)
+            const staged = await service.rebuild(p.projectId, first.plan.evolutionId, p.ctx)
+            expect(staged.state).toBe('awaiting_review')
+
+            const latest = await p.records.listRecords(p.scope, p.projectId, { objectId: 'meter', limit: 10 }, p.ctx)
+            expect(latest.records).toHaveLength(2)
+            expect(latest.records.every((record) => record.mappingId === staged.plan.sources[0]?.mappingRef.id && record.mappingVersion === staged.plan.sources[0]?.mappingRef.version)).toBe(true)
+            const nonUuidCatalogueRef = { id: p.pack.ref.id, version: p.pack.ref.version }
+            const activeMappingRows = await p.records.listRecords(p.scope, p.projectId, { objectId: 'meter', mappingRefs: [...previous.mappingRefs, nonUuidCatalogueRef], limit: 10 }, p.ctx)
+            expect(activeMappingRows.records).toHaveLength(2)
+            expect(activeMappingRows.records.every((record) => record.mappingId === p.source.mapping.mappingId && record.mappingVersion === p.source.mapping.version)).toBe(true)
+            expect((await p.records.listRecords(p.scope, p.projectId, { mappingRefs: [nonUuidCatalogueRef], limit: 10 }, p.ctx)).records).toEqual([])
+            expect((await p.records.listRecords(p.scope, p.projectId, { mappingRefs: [], limit: 10 }, p.ctx))).toMatchObject({ records: [], total: 0 })
+
+            const cancelled = await service.cancel(p.projectId, first.plan.evolutionId, p.ctx)
+            expect(cancelled.state).toBe('cancelled')
+            expect((await p.projects.getProject(p.scope, p.projectId, p.ctx))?.activeRevision).toBe(previous.ref.revision)
+            expect(await p.publishedSource.read(p.scope, previous, 'meter', p.ctx)).toEqual(before)
+
+            const current = await p.projects.getProject(p.scope, p.projectId, p.ctx)
+            if (current === undefined) throw new Error('the project disappeared after cancellation')
+            const next = await service.start(p.projectId, { ...p.start, expectedRevision: current.headRevision }, `cancel-replan-next-${randomUUID()}`, p.ctx)
+            expect(next.plan.previousRevisionRef).toEqual(previous.ref)
+            expect(next.plan.targetRevisionRef.revision).toBe((BigInt(first.plan.targetRevisionRef.revision) + 1n).toString())
+
+            const activeOriginal = activeMappingRows.records[0]
+            if (activeOriginal === undefined) throw new Error('the original active physical record is missing')
+            const changedFields = activeOriginal.fields.map((field) => field.fieldId === 'power'
+                ? { ...field, raw: '13.000000000000001', normalized: { kind: 'quantity' as const, value: '13.000000000000001', unitCode: 'kW' } }
+                : field)
+            const changedContentDigest = sha256DigestOf(canonicalJson({ objectId: activeOriginal.objectId, fields: changedFields, mappingRef: p.source.mapping.ref, sourceDigest: activeOriginal.sourceDigest, sourceRowKey: activeOriginal.sourceRowKey }))
+            await p.records.appendRecords(p.scope, p.projectId, [{
+                schemaVersion: 'project-record@1', projectId: activeOriginal.projectId, recordId: activeOriginal.recordId,
+                mappingId: activeOriginal.mappingId, mappingVersion: activeOriginal.mappingVersion, objectId: activeOriginal.objectId,
+                sourceRowKey: activeOriginal.sourceRowKey, sourceDigest: activeOriginal.sourceDigest, contentDigest: changedContentDigest,
+                fields: changedFields, status: activeOriginal.status, actor: p.ctx.principal.subjectId, recordedAt: new Date().toISOString(),
+            }], { idempotencyKey: `same-mapping-change-${randomUUID()}`, requestDigest: sha256DigestOf('same-mapping-changed-record') }, p.ctx)
+            await expect(p.publishedSource.read(p.scope, previous, 'meter', p.ctx)).rejects.toMatchObject({ code: 'INPUT_NOT_READY' })
+        }
+        finally {
+            backend.close()
+        }
+    }, 120000)
     it('keeps a genuine same-content reapproval readable both between approved-input archive/CAS and after ready', async () => {
         const p = await fixture('evolve-reapprove'), backend = new DuckDbProjectDatasetAdapter(), writer = createBlobArtifactWriter(blobs)
         let selected: readonly string[] = []
