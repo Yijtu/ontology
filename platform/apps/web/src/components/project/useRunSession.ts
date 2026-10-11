@@ -118,7 +118,9 @@ export function useRunSession(
       dispatch({ type: 'runLoaded', run })
       if (active.current.cancelled) return
       void loadAnswer(runId, ticket)
-      if (terminal(run.state)) return
+      // A failed run's persisted public events carry its classified reason; the run
+      // view alone cannot distinguish missing evidence, conflict and tool failure.
+      if (terminal(run.state) && run.state !== 'failed') return
       closeStream()
       stream.current = client.openRunEvents(runId, undefined, {
         onOpen: () => {
