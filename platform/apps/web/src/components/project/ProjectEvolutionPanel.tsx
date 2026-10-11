@@ -60,6 +60,7 @@ export function ProjectEvolutionPanel({
   packs,
   mappings,
   catalogue,
+  requireTargetProfile = false,
   readOnly,
   initialEvolutionId,
   onEvolution,
@@ -72,6 +73,7 @@ export function ProjectEvolutionPanel({
   readonly packs: readonly IndustryPackSummary[]
   readonly mappings: readonly ImportMappingVersion[]
   readonly catalogue?: ProjectSourceCatalogue
+  readonly requireTargetProfile?: boolean
   readonly readOnly: boolean
   readonly initialEvolutionId?: string
   readonly onEvolution?: (evolutionId: string) => void
@@ -295,12 +297,25 @@ export function ProjectEvolutionPanel({
     setBusy(true)
     setError(undefined)
     try {
+      const configured = requireTargetProfile
+        ? await client.preparePublishedPackProfile(
+            selectedPack,
+            retain(`evolution-profile:${project.projectId}:${selectedPack.id}:${selectedPack.version}:${selectedPack.digest}`),
+            request.signal,
+          )
+        : undefined
+      if (
+        configured !== undefined &&
+        (!same(configured.packRef, selectedPack) || !same(configured.definitionRef, target.definitionRef))
+      )
+        throw new Error('服务端解析的目标项目配置与本次选择的精确行业包或定义版本不一致，未提交演进。')
+      const requestBody = { ...body, ...(configured === undefined ? {} : { profileRef: configured.profileRef }) }
       const actual = await startProjectEvolution(
         client,
         project.projectId,
         project.headRevision,
-        body,
-        retain(JSON.stringify({ revision: project.headRevision, body })),
+        requestBody,
+        retain(JSON.stringify({ revision: project.headRevision, body: requestBody })),
         request.signal,
       )
       if (request.current()) {

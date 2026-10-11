@@ -3,6 +3,7 @@ import type {
   DefinitionRevisionStrategy,
   ProjectEvolutionRecord,
   ProjectEvolutionRemap,
+  ResolvedProfileRef,
   VersionRef,
 } from '@ontology/contracts'
 import type { WorkbenchClient } from './client'
@@ -164,6 +165,7 @@ export function startProjectEvolution(
   expectedRevision: string,
   body: {
     readonly industryPackRef: VersionRef
+    readonly profileRef?: ResolvedProfileRef
     readonly strategy: DefinitionRevisionStrategy
     readonly remappings: readonly ProjectEvolutionRemap[]
     readonly maxRecords: number

@@ -28,6 +28,7 @@ import type {
   ProvenanceEvidenceView,
   PublishedAnswer,
   ProfileVersionRecord,
+  ResolvedProfileRef,
   ResourceRef,
   RevisionString,
   RuleActionCandidateVersion,
@@ -158,6 +159,7 @@ import {
   isProjectRecordPageView,
   isProjectRevision,
   isProjectRevisionView,
+  isResolvedProfileRef,
 } from './projects'
 import type {
   ColumnMappingRequestView,
@@ -1500,11 +1502,11 @@ export class WorkbenchClient {
   }
 
   /** Configure an exact, real published pack for ordinary business project creation. */
-  preparePublishedPackProfile(packRef: VersionRef, idempotencyKey: string, signal?: AbortSignal): Promise<{ readonly packRef: VersionRef; readonly definitionRef: VersionRef; readonly profileRef: ProfileRef }> {
+  preparePublishedPackProfile(packRef: VersionRef, idempotencyKey: string, signal?: AbortSignal): Promise<{ readonly packRef: VersionRef; readonly definitionRef: VersionRef; readonly profileRef: ResolvedProfileRef }> {
     const path = '/api/v1/core/published-pack-profiles'
     return this.#request<unknown>('POST', path, { body: { packRef }, idempotencyKey, ...(signal === undefined ? {} : { signal }) }).then((data) => {
       if (!isRecord(data) || data['purpose'] !== 'business_project_configuration' ||
-          !isVersionRef(data['packRef']) || !isVersionRef(data['definitionRef']) || !isProfileRef(data['profileRef'])) {
+          !isVersionRef(data['packRef']) || !isVersionRef(data['definitionRef']) || !isResolvedProfileRef(data['profileRef'])) {
         throw malformedResponse(path, 'the published pack configuration was not recognised')
       }
       if (data['packRef'].id !== packRef.id || data['packRef'].version !== packRef.version || data['packRef'].digest !== packRef.digest) {
