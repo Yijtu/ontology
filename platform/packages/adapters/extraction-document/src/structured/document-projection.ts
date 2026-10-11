@@ -99,10 +99,11 @@ function derive(bytes: Uint8Array, parse: StructuredParseRecord, selection: Omit
     completeness: skipped === 0 ? parse.coverage.completeness : 'truncated' as const,
     parsedUnits: rows.length, skippedUnits: parse.coverage.skippedUnits + skipped,
     skippedReasons: [...parse.coverage.skippedReasons, ...(skipped === 0 ? [] : ['structured text projection row/byte limits'])] }
-  const map = new TextEncoder().encode(JSON.stringify({ schemaVersion: 'structured-document-projection@1',
+  const mapBody = { schemaVersion: 'structured-document-projection@1',
     structuredParseId: parse.parseId, parserVersion: parse.parserVersion, originalRef: parse.originalRef, selection,
-    coverage, rows: rows.map(({ start, end, origin }) => ({ start, end, origin })) }))
-  return { text, rows, coverage, map }
+    coverage, rows: rows.map(({ start, end, origin }) => ({ start, end, origin })) }
+  const map = new TextEncoder().encode(JSON.stringify(mapBody))
+  return { text, rows, coverage, map, mapBody }
 }
 
 /** Persists bounded table/JSON projections in the existing document parse/chunk store. */
@@ -206,7 +207,8 @@ export class StructuredDocumentSpanReader implements DocumentSpanReaderPort {
     if (!isRecord(map) || map['schemaVersion'] !== 'structured-document-projection@1' || map['structuredParseId'] !== parse.parseId || !isStructuredParseSelection(map['selection'])
       || (parse.parseOptions !== undefined && sha256OfCanonical(parse.parseOptions) !== sha256OfCanonical(map['selection']))) throw new DocumentExtractionError('SPAN_STORE_FAILED', 'the source map does not pin the actual native selection')
     const projection = derive(await this.#projection.originalBytes(request.documentRef, ctx), parse, map['selection'])
-    if (sha256DigestOfBytes(savedMap) !== record.spanMapRef.digest || sha256DigestOfBytes(projection.map) !== record.spanMapRef.digest) throw new DocumentExtractionError('SPAN_STORE_FAILED', 'the original source does not reproduce the pinned projection map')
+    // Keep the original byte pin; JSONB key ordering must not change map semantics.
+    if (sha256DigestOfBytes(savedMap) !== record.spanMapRef.digest || sha256OfCanonical(map) !== sha256OfCanonical(projection.mapBody)) throw new DocumentExtractionError('SPAN_STORE_FAILED', 'the original source does not reproduce the pinned projection map')
     const row = projection.rows.find((candidate) => candidate.start === request.locator.startOffset && candidate.end === request.locator.endOffset)
     if (row === undefined || request.locator.kind !== 'approximate_locator') throw new DocumentExtractionError('SPAN_OUT_OF_RANGE', 'the locator does not name a complete projected source row')
     return { ...row.origin, projectionRef: record.normalizedRef }
