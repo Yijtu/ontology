@@ -438,6 +438,7 @@ describe('stored-record staging and evolution wire contract', () => {
     })
     const body = {
       industryPackRef: { id: 'published-pack', version: '2.0.0', digest: SHA },
+      profileRef: { id: 'server-resolved-profile', version: '1.0.0', snapshotHash: SHA },
       strategy: { kind: 'new_version' as const, reason: '实际原始资料重抽取' },
       remappings: [
         {
@@ -464,6 +465,18 @@ describe('stored-record staging and evolution wire contract', () => {
     expect(revision).toBe('1')
     expect(key).toBe('retained-evolution-key')
     expect(submitted).toEqual(body)
+    let legacySubmitted: unknown
+    const legacyClient = new WorkbenchClient({
+      baseUrl: 'http://api.test',
+      fetchImpl: (_input, init) => {
+        legacySubmitted = JSON.parse(String(init?.body))
+        return Promise.resolve(json({ evolution: plan }))
+      },
+    })
+    const { profileRef: legacyProfileRef, ...withoutProfile } = body
+    expect(legacyProfileRef).toEqual(body.profileRef)
+    await startProjectEvolution(legacyClient, PROJECT, '1', withoutProfile, 'legacy-retained-evolution-key')
+    expect(legacySubmitted).toEqual(withoutProfile)
     expect(isProjectEvolutionRecord({ ...plan, plan: { ...plan.plan, sources: [] } })).toBe(false)
     const foreign = new WorkbenchClient({
       baseUrl: 'http://api.test',
@@ -483,6 +496,35 @@ describe('stored-record staging and evolution wire contract', () => {
     await expect(
       startProjectEvolution(foreign, PROJECT, '1', body, 'retained-evolution-key'),
     ).rejects.toMatchObject({ code: 'MALFORMED_RESPONSE' })
+  })
+  it('requires and preserves the backend-resolved snapshot hash for an exact published-pack profile', async () => {
+    const packRef = { id: 'published-pack', version: '2.0.0', digest: SHA }
+    const definitionRef = { id: 'published-definition', version: '2.0.0', digest: SHA }
+    const profileRef = { id: 'resolved-profile', version: '1.0.0', snapshotHash: SHA }
+    let submitted: unknown
+    const client = new WorkbenchClient({
+      baseUrl: 'http://api.test',
+      fetchImpl: (input, init) => {
+        expect(String(input)).toBe('http://api.test/api/v1/core/published-pack-profiles')
+        submitted = JSON.parse(String(init?.body))
+        return Promise.resolve(json({ purpose: 'business_project_configuration', packRef, definitionRef, profileRef }))
+      },
+    })
+    const configured = await client.preparePublishedPackProfile(packRef, 'retained-profile-key')
+    expect(submitted).toEqual({ packRef })
+    expect(configured).toEqual({ packRef, definitionRef, profileRef })
+
+    const missingSnapshotHash = new WorkbenchClient({
+      baseUrl: 'http://api.test',
+      fetchImpl: () => Promise.resolve(json({ purpose: 'business_project_configuration', packRef, definitionRef, profileRef: { id: profileRef.id, version: profileRef.version } })),
+    })
+    await expect(missingSnapshotHash.preparePublishedPackProfile(packRef, 'missing-hash-key')).rejects.toMatchObject({ code: 'MALFORMED_RESPONSE' })
+
+    const wrongPack = new WorkbenchClient({
+      baseUrl: 'http://api.test',
+      fetchImpl: () => Promise.resolve(json({ purpose: 'business_project_configuration', packRef: { ...packRef, version: '1.0.0' }, definitionRef, profileRef })),
+    })
+    await expect(wrongPack.preparePublishedPackProfile(packRef, 'wrong-pack-key')).rejects.toMatchObject({ code: 'MALFORMED_RESPONSE' })
   })
   it('rejects a forged foreign project catalogue rather than offering it for mapping', async () => {
     const data = {
