@@ -1,5 +1,5 @@
 import { describe, expect, it, vi } from 'vitest'
-import type { OutboxMessageRecord, ProjectRecord, ProjectRevision, ResolvedProfileRecord, ResourceRef, SemanticDefinitionVersion, UpsertProjectReadinessInput } from '@ontology/contracts'
+import type { MappingRef, OutboxMessageRecord, ProjectRecord, ProjectRevision, ResolvedProfileRecord, ResourceRef, SemanticDefinitionVersion, UpsertProjectReadinessInput } from '@ontology/contracts'
 import { createCoreProjectSemanticReadiness } from '../../apps/api/src/composition/core-project-semantic-readiness'
 import { DIGEST_A, SPACE_A, TENANT_A, toolContext } from './component-registry-fixtures'
 
@@ -8,7 +8,7 @@ const ctx = toolContext()
 const timestamp = '2026-10-12T00:00:00Z'
 const projectId = '77777777-7777-4777-8777-777777777777'
 const ref = { id: 'readiness-test', version: '1.0.0', digest: DIGEST_A }
-const mapping = { ...ref, role: 'catalog', sourceObjectRef: { sourceRef: { namespace: 'test', sourceId: 'source' }, objectPath: 'row' } }
+const mapping: MappingRef = { ...ref, role: 'catalog', sourceObjectRef: { sourceRef: { namespace: 'test', sourceId: 'source' }, objectPath: 'row' } }
 const receipt: ResourceRef = { ...ref, kind: 'artifact' }
 const revision: ProjectRevision = {
   ref: { projectId, revision: '1', digest: DIGEST_A }, industryPackRef: ref, definitionRef: ref, mappingRefs: [mapping],
