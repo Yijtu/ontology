@@ -128,7 +128,7 @@ describe('bounded model connectivity probe', () => {
       expect(result.reachable).toBe(true)
       expect(JSON.parse(requests[0] ?? '{}')).toMatchObject({ model: 'test-model', stream: true, max_tokens: 16 })
       expect(requests.join('')).not.toContain(key)
-      let redirectPolicy: RequestRedirect | undefined
+      let redirectPolicy: string | undefined
       const denied = await probeCompanyModel({ ...body, protocol: 'openai-compatible' }, { fetchImpl: async (_url, init) => {
         redirectPolicy = init?.redirect
         return new Response('credential must never be echoed', { status: 401 })
