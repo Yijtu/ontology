@@ -979,6 +979,7 @@ export function ProjectWorkspacePanel({
                     {...(activeRevision === undefined ? {} : { revision: activeRevision })}
                     packs={packs}
                     mappings={mappings}
+                    requireTargetProfile={profileRef !== undefined}
                     {...(catalogue === undefined ? {} : { catalogue })}
                     readOnly={readOnly}
                     {...(initialEvolutionId === undefined ? {} : { initialEvolutionId })}
