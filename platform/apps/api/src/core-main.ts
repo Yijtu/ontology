@@ -12,6 +12,8 @@ import type { LoadedCoreExamples } from './composition/core-example-loader'
 import { createCoreLocalComposition } from './composition/core-local-composition'
 import { resolve } from 'node:path'
 import { tmpdir } from 'node:os'
+import { CoreLocalModelSettings } from './composition/core-local-model-settings'
+import { registerCoreModelSettingsRoutes } from './http/core-model-settings'
 
 const DEFAULT_TENANT_ID = '11111111-1111-4111-8111-111111111111'
 const DEFAULT_SPACE_ID = 'aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa'
@@ -29,6 +31,8 @@ const CORE_OPERATOR_ROLES = [
 ] as const
 
 export interface CoreApiDependencies {
+  readonly modelSettings?: CoreLocalModelSettings
+  readonly webPort?: number
   readonly database: { queryUnscoped(statement: string): Promise<unknown> }
   readonly scopeRef: ScopeRef
   readonly examples: LoadedCoreExamples
@@ -115,6 +119,7 @@ export function createCoreApi(dependencies: CoreApiDependencies): FastifyInstanc
     logger: dependencies.logger ?? false,
   })
   dependencies.registerRoutes?.(app, authenticate)
+  if (dependencies.modelSettings !== undefined) registerCoreModelSettingsRoutes(app, { settings: dependencies.modelSettings, authenticate, webPort: dependencies.webPort ?? 5174 })
 
   app.get('/healthz', async (_request, reply) => {
     try {
@@ -171,22 +176,25 @@ export async function startCoreApi(): Promise<void> {
       targetScopeRef: scopeRef,
       ...(process.env['CORE_DEPLOYMENT_CONFIG'] === undefined ? {} : { indexPath: process.env['CORE_DEPLOYMENT_CONFIG'] }),
     })
+    const objectDirectory = process.env['CORE_OBJECT_DIRECTORY'] ?? resolve(tmpdir(), 'ontology-core-local', scopeRef.tenantId, scopeRef.spaceId, 'objects')
+    const modelSettings = new CoreLocalModelSettings({ objectDirectory, scopeRef, environment: process.env })
+    const modelEnvironment = await modelSettings.loadEnvironment()
     composition = await createCoreLocalComposition({
       databaseUrl: requiredEnv('CORE_DATABASE_URL'),
-      objectDirectory: process.env['CORE_OBJECT_DIRECTORY'] ?? resolve(tmpdir(), 'ontology-core-local', scopeRef.tenantId, scopeRef.spaceId, 'objects'),
+      objectDirectory,
       scopeRef,
       examples,
       allowLocalOperator: process.env['CORE_ENABLE_OPERATOR_ROUTES'] === 'true',
-      modelsEnabled: process.env['CORE_ENABLE_MODELS'] === 'true',
+      modelsEnabled: modelEnvironment['CORE_ENABLE_MODELS'] === 'true',
       jevEnabled: process.env['CORE_ENABLE_JEV'] === 'true',
-      modelEnvironment: process.env,
+      modelEnvironment,
       ...(process.env['PROJECT_BUSINESS_DATABASE_URL'] === undefined ? {} : { projectDataset: {
         connectionString: requiredEnv('PROJECT_BUSINESS_DATABASE_URL'),
         ...(process.env['PROJECT_BUSINESS_READONLY_DATABASE_URL'] === undefined ? {} : { readOnlyConnectionString: requiredEnv('PROJECT_BUSINESS_READONLY_DATABASE_URL') }),
         ...(process.env['PROJECT_BUSINESS_SCHEMA'] === undefined ? {} : { schema: requiredEnv('PROJECT_BUSINESS_SCHEMA') }),
       } }),
     })
-    app = createCoreApi({ ...composition.dependencies, logger: true })
+    app = createCoreApi({ ...composition.dependencies, modelSettings, webPort: Number(process.env['CORE_WEB_PORT'] ?? '5174'), logger: true })
     await app.listen({ host: '127.0.0.1', port: readPort(process.env['CORE_API_PORT']) })
     const shutdown = async (): Promise<void> => {
       await app?.close()

@@ -114,6 +114,8 @@ export {
 export { createCoreApi, startCoreApi } from './core-main'
 export type { CoreApiDependencies } from './core-main'
 export { registerRunRoutes } from './http/server'
+export { CoreLocalModelSettings, LocalModelSettingsError } from './composition/core-local-model-settings'
+export type { CoreModelSettingsView } from './composition/core-local-model-settings'
 export type { AuthenticatedRequest, RequestAuthenticator, RunApiOptions, RunDispatchHooks } from './http/server'
 export { RunProgressService } from './http/run-progress'
 export type {
