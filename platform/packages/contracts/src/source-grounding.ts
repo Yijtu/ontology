@@ -14,12 +14,26 @@ export interface GroundingDocumentSet {
   readonly sources: readonly GroundingSourceApproval[]
 }
 
+/**
+ * How much trust a source carries for authoring. `customer_authoritative` and `public_standard`
+ * may ground a publishable candidate; `agent_researched` is an agent proposal that defaults to
+ * pending confirmation; `synthetic` is sandbox-only and may never ground a real publication.
+ */
+export type SourceTrustTier = 'customer_authoritative' | 'public_standard' | 'agent_researched' | 'synthetic'
+
+/** The effective tier of an approved source; an omitted tier is a human-approved customer source. */
+export function sourceTrustTierOf(source: Pick<GroundingSourceApproval, 'trustTier'>): SourceTrustTier {
+  return source.trustTier ?? 'customer_authoritative'
+}
+
 export interface GroundingSourceApproval {
   readonly sourceRef: ResourceRef
   readonly state: 'approved' | 'retracted'
   readonly kind: 'document' | 'table'
   readonly parserVersion: Semver
   readonly parseId: Uuid
+  /** Provenance tier of this source. Absent means a human-approved customer source. */
+  readonly trustTier?: SourceTrustTier
   /** The exact selection approved at ingestion; parser caps cannot be overridden. */
   readonly tableOptions?: Pick<StructuredParseOptions,
     'headerRow' | 'dataStartRow' | 'delimiter' | 'quote' | 'sheetId' | 'sheetName'>
@@ -62,6 +76,8 @@ export type GroundedSourceContent = GroundedText | GroundedTable
 export interface GroundedSource {
   readonly sourceRef: ResourceRef
   readonly trust: 'untrusted_source_data'
+  /** The effective provenance tier of this source (see {@link sourceTrustTierOf}). */
+  readonly trustTier: SourceTrustTier
   readonly status: 'complete' | 'partial' | 'failed'
   readonly reasons: readonly SourceGroundingReason[]
   readonly contents: readonly GroundedSourceContent[]
@@ -151,7 +167,9 @@ export function assertGroundingDocumentSet(value: unknown): asserts value is Gro
     if (!isRecord(source) || !isResourceRef(source.sourceRef) || source.sourceRef.kind !== 'document' || !isUuid(source.parseId)
       || typeof source.parserVersion !== 'string' || !/^\d+\.\d+\.\d+$/.test(source.parserVersion)
       || !['approved', 'retracted'].includes(String(source.state))
-      || !['document', 'table'].includes(String(source.kind))) {
+      || !['document', 'table'].includes(String(source.kind))
+      || (source.trustTier !== undefined
+        && !['customer_authoritative', 'public_standard', 'agent_researched', 'synthetic'].includes(String(source.trustTier)))) {
       throw new SourceGroundingError('INVALID_REQUEST', 'invalid approved source')
     }
     if (refs.has(source.sourceRef.id)) throw new SourceGroundingError('INVALID_REQUEST', 'duplicate source id')

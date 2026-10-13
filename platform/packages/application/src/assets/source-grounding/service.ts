@@ -1,4 +1,4 @@
-import { SourceGroundingError, assertGroundingDocumentSet, isResourceRef, isToolContext, isUuid } from '@ontology/contracts'
+import { SourceGroundingError, assertGroundingDocumentSet, isResourceRef, isToolContext, isUuid, sourceTrustTierOf } from '@ontology/contracts'
 import { readLatestWorkspaceDraft } from '../workspace-draft'
 import type { GroundedSource, GroundedSourceContent, GroundingDocumentSetReaderPort,
   IndustryWorkspaceStore, ResourceRef, ScopeRef, SourceGroundingBudgetPort, SourceGroundingPort,
@@ -60,7 +60,7 @@ export class SourceGroundingService implements SourceGroundingPort {
     if (draft === undefined) throw new SourceGroundingError('NOT_APPROVED', 'workspace has no pinned document set')
     const documentSetRef = draft.documentSetRef
     const failed = (reason: SourceGroundingReason): GroundedSource[] => request.sourceRefs.map((sourceRef) => ({
-      sourceRef, trust: 'untrusted_source_data', status: 'failed', reasons: [reason], contents: [],
+      sourceRef, trust: 'untrusted_source_data', trustTier: 'customer_authoritative', status: 'failed', reasons: [reason], contents: [],
     }))
     let sources: GroundedSource[] = []
     try {
@@ -116,7 +116,7 @@ export class SourceGroundingService implements SourceGroundingPort {
           }
         }
         if (contents.length === 0 && reasons.length === 0) reasons.push('EMPTY_SOURCE')
-        sources.push({ sourceRef, trust: 'untrusted_source_data', contents,
+        sources.push({ sourceRef, trust: 'untrusted_source_data', trustTier: approval === undefined ? 'customer_authoritative' : sourceTrustTierOf(approval), contents,
           status: reasons.length === 0 ? 'complete' : contents.length > 0 ? 'partial' : 'failed',
           reasons: [...new Set(reasons)] })
       }

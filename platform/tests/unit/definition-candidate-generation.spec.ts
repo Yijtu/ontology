@@ -208,7 +208,7 @@ function buildHarness(responses: readonly string[], terminology = new StaticDefi
     sourceGrounding: {
       read: async (request, _ctx, budget) => ({ documentSetRef: initialDraft.documentSetRef,
         coverage: 'complete', usage: budget.usage(), sources: request.sourceRefs.map((sourceRef) => ({
-          sourceRef, trust: 'untrusted_source_data', status: 'complete', reasons: [], contents: [{
+          sourceRef, trust: 'untrusted_source_data', trustTier: 'customer_authoritative', status: 'complete', reasons: [], contents: [{
             kind: 'text', text: 'Controlled source: equipment has rated capacity.', sourceSpan: {
               parseId: '22222222-2222-4222-8222-222222222222', chunkId: '33333333-3333-4333-8333-333333333333',
               locator: { kind: 'offset', startOffset: 0, endOffset: 53 }, spanKind: 'verbatim', precision: 'exact',
@@ -604,7 +604,7 @@ describe('grounded generation and immutable rebase', () => {
         const documentSetRef = corpus.documentSetRef
         if (documentSetRef === undefined) throw new Error('fixture corpus not ready')
         return { documentSetRef, coverage: 'complete', usage: budget.usage(), sources: request.sourceRefs.map((sourceRef) => ({
-          sourceRef, trust: 'untrusted_source_data', status: 'complete', reasons: [], contents: [{ kind: 'table', format: 'csv',
+          sourceRef, trust: 'untrusted_source_data', trustTier: 'customer_authoritative', status: 'complete', reasons: [], contents: [{ kind: 'table', format: 'csv',
             headerRow: 1, columns: [{ column: 1, index: 0, header: 'Equipment', headerDigest: DIGEST, address: 'A', hidden: false }], rows: [] }],
         })) }
       },
