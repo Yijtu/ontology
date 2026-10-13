@@ -158,18 +158,16 @@ export function isProvenanceView(value: unknown): value is ProvenanceEvidenceVie
       !axis(specification['coverage']) ||
       !Array.isArray(specification['spans']) ||
       !specification['spans'].every(
-        (span: unknown) =>
-          record(span) &&
-          text(span['parseId']) &&
-          text(span['chunkId']) &&
-          isSourceLocator(span['locator']) &&
-          enumValue(span['spanKind'], ['verbatim', 'normalized', 'approximate']) &&
-          enumValue(span['precision'], ['exact', 'approximate']) &&
-          sha(span['quoteDigest']) &&
-          isResourceRef(span['documentRef']) &&
-          isResourceRef(span['documentVersionRef']) &&
-          text(span['parserVersion']) &&
-          isResourceRef(span['evidenceRef']),
+        (span: unknown) => {
+          if (!record(span) || !isResourceRef(span['documentRef']) || !isResourceRef(span['documentVersionRef']) ||
+              !text(span['parserVersion']) || !isResourceRef(span['evidenceRef'])) return false
+          const inner = span['span']
+          if (!record(inner) || !text(inner['parseId']) || !isSourceLocator(inner['locator'])) return false
+          return inner['kind'] === 'structured'
+            ? text(inner['recordId']) && text(inner['sourceRowKey']) && sha(inner['rowDigest'])
+            : text(inner['chunkId']) && enumValue(inner['spanKind'], ['verbatim', 'normalized', 'approximate']) &&
+              enumValue(inner['precision'], ['exact', 'approximate']) && sha(inner['quoteDigest'])
+        },
       ))
   )
     return false

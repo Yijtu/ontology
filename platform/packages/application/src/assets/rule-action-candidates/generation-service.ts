@@ -295,11 +295,12 @@ function groundCandidate(candidate: RuleActionCandidateVersion, proposal: DraftR
     sourceBindings.push({ path, sourceRef: fragment.sourceRef, sourceSpan: fragment.sourceSpan })
     if (!sourceTrustTierGroundsPublication(fragment.trustTier)) issues.push(issue('SOURCE_TRUST_BLOCKED', path,
       `The selected ${fragment.trustTier} source may not ground a publishable rule or action until a human promotes it.`))
-    if (candidate.kind === 'rule' && fragment.sourceSpan.kind === 'structured') issues.push(issue('SOURCE_UNRESOLVED', path,
-      'The actual table locator is retained, but structured rule-clause provenance is not yet executable; select supported text evidence.'))
+    if (fragment.sourceSpan.kind === 'structured' && fragment.sourceSpan.locator.kind !== 'table_cell' && fragment.sourceSpan.locator.kind !== 'table_row') {
+      issues.push(issue('SOURCE_UNRESOLVED', path, 'Only a table cell or table row locator may ground a rule or action clause.'))
+    }
     if (!spans.some((span) => canonicalJson(span) === canonicalJson(fragment.sourceSpan))) spans.push(fragment.sourceSpan)
     if (!refs.some((ref) => sameResourcePin(ref, fragment.sourceRef))) refs.push(fragment.sourceRef)
-    return fragment.sourceSpan.kind === 'structured' ? [] : [fragment.sourceSpan]
+    return [fragment.sourceSpan]
   }
   if (incomplete) issues.push(issue('SOURCE_INCOMPLETE', 'sourceRefs', 'Source coverage was truncated or incomplete.'))
   const objects = new Set([...(terms?.objectLogicalIds ?? []), ...selected.filter((row) => row.payload.kind === 'object').map((row) => row.logicalId)])

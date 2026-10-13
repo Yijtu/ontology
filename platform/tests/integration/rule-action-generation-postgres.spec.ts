@@ -112,7 +112,7 @@ async function post(workspaceId: string, body: unknown, key: string, otherScope 
 }
 
 describe('actual PostgreSQL/source parsing and ordinary HTTP model generation', () => {
-  it.each(['csv','xlsx'] as const)('retains actual second-source %s clause pins and refuses unsupported structured rule provenance', async (format) => {
+  it.each(['csv','xlsx'] as const)('retains actual second-source %s clause pins and grounds a structured rule clause', async (format) => {
     const fixture = await setup()
     const bytes = format === 'csv' ? new TextEncoder().encode('attribute,value\ninspected,true\n') : buildXlsx({ sharedStrings: ['attribute','value','inspected','true'], sheetXml: worksheetOf([
       rowXml(1, [sharedStringCell('A1',0),sharedStringCell('B1',1)]), rowXml(2, [sharedStringCell('A2',2),sharedStringCell('B2',3)]) ]) })
@@ -133,10 +133,10 @@ describe('actual PostgreSQL/source parsing and ordinary HTTP model generation', 
     for (const pin of candidate.generationContext?.sourceBindings ?? []) {
       expect(pin.sourceRef).toEqual(tableRef); expect(pin.sourceSpan).toMatchObject({ kind: 'structured', parseId: parse.parseId, rowDigest: expect.stringMatching(/^sha256:/) })
     }
-    expect(candidate.payload.condition.spans).toEqual([])
-    expect(result.batch.state).toBe('pending_confirmation')
-    expect(candidate.generationContext?.issues).toEqual(expect.arrayContaining([expect.objectContaining({ path: 'condition', code: 'SOURCE_UNRESOLVED' })]))
-    await expect(service.enableRuleCandidate(fixture.input.workspaceId, { candidateId: candidate.candidateId, expectedRevision: '3' }, ctx)).rejects.toMatchObject({ code: 'VALIDATION_BLOCKED' })
+    expect(candidate.payload.condition.spans).toEqual([expect.objectContaining({ kind: 'structured', parseId: parse.parseId, rowDigest: expect.stringMatching(/^sha256:/) })])
+    expect(result.batch.state).toBe('completed')
+    expect(candidate.generationContext?.issues).toEqual([])
+    await expect(service.enableRuleCandidate(fixture.input.workspaceId, { candidateId: candidate.candidateId, expectedRevision: '3' }, ctx)).resolves.toMatchObject({ candidate: expect.objectContaining({ lifecycle: 'enabled' }) })
     const operation = binding.registry.operations[0]; if (operation === undefined) throw new Error('missing registered operation')
     model.responses.push(JSON.stringify({ actions: [{ kind: 'action', actionId: 'table-action', displayName: 'Table declaration', businessMeaning: 'synthetic declared operation', suggestedReason: 'real table origin',
       inputSchemaRef: { id: 'input', version: '1.0.0', digest: operation.inputSchemaDigest }, outputSchemaRef: { id: 'output', version: '1.0.0', digest: operation.outputSchemaDigest }, suggestedOperationRef: operation.operationRef,
@@ -174,8 +174,10 @@ describe('actual PostgreSQL/source parsing and ordinary HTTP model generation', 
     const view = await actual.json() as { data: { candidates: RuleCandidateVersion[]; batch: { generationFamily: string; batchId: string } } }
     const candidate = view.data.candidates[0]; if (candidate === undefined) throw new Error('missing generated rule')
     expect(candidate.lifecycle).toBe('draft'); expect(candidate.generationContext?.issues).toEqual([])
-    expect(candidate.payload.condition.spans[0]?.quoteDigest).toBe(fixture.parse.chunks[0]?.quoteDigest)
-    expect(candidate.payload.exceptions[0]?.condition.spans[0]?.quoteDigest).toBe(fixture.parse.chunks[0]?.quoteDigest)
+    const conditionSpan = candidate.payload.condition.spans[0]
+    expect(conditionSpan === undefined || conditionSpan.kind === 'structured' ? undefined : conditionSpan.quoteDigest).toBe(fixture.parse.chunks[0]?.quoteDigest)
+    const exceptionSpan = candidate.payload.exceptions[0]?.condition.spans[0]
+    expect(exceptionSpan === undefined || exceptionSpan.kind === 'structured' ? undefined : exceptionSpan.quoteDigest).toBe(fixture.parse.chunks[0]?.quoteDigest)
     expect(candidate.sourceRefs).toEqual([fixture.sourceRef]); expect(view.data.batch.generationFamily).toBe('rule_action')
     expect(model.requests.at(-1)?.messages.at(-1)?.content).toContain(SOURCE)
     const replay = await post(workspaceId, body, idempotencyKey); expect(replay.status).toBe(200); expect(model.calls).toBe(before + 1)

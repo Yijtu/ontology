@@ -1,13 +1,11 @@
 import type {
-  DocumentSpan,
   EvidenceDependencyEdge,
   EvidenceRecord,
   ResourceRef,
   RevisionString,
+  RuleProvenanceSpan,
   ScopeRef,
   Semver,
-  Sha256Digest,
-  SpanPrecision,
   ToolContext,
   Uuid,
   VersionRef,
@@ -29,17 +27,11 @@ export interface RuleSupportAxisCoverage {
 
 /**
  * One resolved specification (policy) source span of a published rule. It carries the exact
- * parse/chunk identity, locator, span kind, precision and quote digest of the AST provenance
- * span plus the real immutable document refs and the archived `document_span` evidence that the
- * producer verified against them.
+ * provenance span (a text chunk or a structured row/cell) plus the real immutable document refs
+ * and the archived `document_span` evidence that the producer verified against them.
  */
 export interface PublishedRulePolicySpan {
-  readonly parseId: Uuid
-  readonly chunkId: Uuid
-  readonly locator: DocumentSpan['locator']
-  readonly spanKind: DocumentSpan['spanKind']
-  readonly precision: SpanPrecision
-  readonly quoteDigest: Sha256Digest
+  readonly span: RuleProvenanceSpan
   readonly documentRef: ResourceRef
   readonly documentVersionRef: ResourceRef
   readonly parserVersion: Semver

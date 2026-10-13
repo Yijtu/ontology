@@ -1,4 +1,5 @@
 import { createHash } from 'node:crypto'
+import { ruleProvenanceSpanDigest, ruleProvenanceSpanKey } from '@ontology/contracts'
 import type {
   BlobGetAuthorizedRequest,
   EvidenceStorePort,
@@ -119,12 +120,14 @@ function sourceSpanMatchesRef(value: unknown, ref: ResourceRef): boolean {
 }
 
 function isRuleProvenanceSpan(value: unknown): value is RuleProvenanceSpan {
-  if (!isRecord(value) || !isString(value['parseId']) || !isString(value['chunkId']) ||
-      !isString(value['quoteDigest']) ||
-      (value['precision'] !== 'exact' && value['precision'] !== 'approximate') ||
-      !['verbatim', 'normalized', 'approximate'].includes(String(value['spanKind'])) ||
-      !isLocator(value['locator'])) return false
-  return true
+  if (!isRecord(value) || !isString(value['parseId'])) return false
+  if (value['kind'] === 'structured') {
+    return isString(value['recordId']) && isString(value['sourceRowKey']) && isString(value['rowDigest']) &&
+      isRecord(value['locator']) && ['table_cell', 'table_row', 'json_pointer'].includes(String(value['locator']['kind']))
+  }
+  return isString(value['chunkId']) && isString(value['quoteDigest']) &&
+    (value['precision'] === 'exact' || value['precision'] === 'approximate') &&
+    ['verbatim', 'normalized', 'approximate'].includes(String(value['spanKind'])) && isLocator(value['locator'])
 }
 
 function isConditionState(value: unknown): value is 'true' | 'false' | 'unknown' | 'conflict' {
@@ -179,8 +182,25 @@ function sourceMappingKey(groupId: string, assertionId: string, sourceRef: Resou
   return JSON.stringify([groupId, assertionId, sourceRef.id, sourceRef.version, sourceRef.digest, sourceRef.kind])
 }
 
-function policySpanKey(span: Pick<RuleProvenanceSpan, 'parseId' | 'chunkId' | 'quoteDigest'>): string {
-  return JSON.stringify([span.parseId, span.chunkId, span.quoteDigest])
+function policySpanKey(span: RuleProvenanceSpan): string {
+  return ruleProvenanceSpanKey(span)
+}
+
+/**
+ * Whether two provenance spans name the same source element. A text span is compared by its exact
+ * chunk identity, kind, precision and locator; a structured span by its record identity, row
+ * fingerprint, row key and locator. Extra non-identity fields (e.g. a text `textDigest`) never fail
+ * the match, so a re-serialized declaration span still resolves against the archived artifact span.
+ */
+function samePolicySpan(left: RuleProvenanceSpan, right: RuleProvenanceSpan): boolean {
+  if (left.kind === 'structured' || right.kind === 'structured') {
+    return left.kind === 'structured' && right.kind === 'structured' && left.parseId === right.parseId &&
+      left.recordId === right.recordId && left.rowDigest === right.rowDigest && left.sourceRowKey === right.sourceRowKey &&
+      sha256DigestOf(left.locator) === sha256DigestOf(right.locator)
+  }
+  return left.parseId === right.parseId && left.chunkId === right.chunkId && left.quoteDigest === right.quoteDigest &&
+    left.spanKind === right.spanKind && left.precision === right.precision &&
+    sha256DigestOf(left.locator) === sha256DigestOf(right.locator)
 }
 
 function covers(slice: ProjectionSlice, validAt: string): boolean {
@@ -628,30 +648,23 @@ export class MaterializedRuleSupportReader implements PublishedRuleSupportReader
     const reasons: string[] = []
     for (const span of spans) {
       const key = policySpanKey(span)
+      const label = ruleProvenanceSpanKey(span)
       const mapping = byKey.get(key)
       if (mapping === undefined) {
-        reasons.push(`specification span ${span.chunkId} has no archived evidence mapping`)
+        reasons.push(`specification span ${label} has no archived evidence mapping`)
         continue
       }
-      if (mapping.span.parseId !== span.parseId || mapping.span.chunkId !== span.chunkId ||
-          mapping.span.quoteDigest !== span.quoteDigest ||
-          mapping.span.spanKind !== span.spanKind || mapping.span.precision !== span.precision ||
-          sha256DigestOf(mapping.span.locator) !== sha256DigestOf(span.locator) ||
+      if (!samePolicySpan(mapping.span, span) ||
           mapping.documentVersionRef.kind !== 'document' || mapping.documentRef.kind !== 'document' ||
           mapping.documentVersionRef.digest !== mapping.documentRef.digest ||
           mapping.evidenceRef.kind !== 'evidence' || mapping.textArtifactRef.kind !== 'artifact' ||
           !(await this.#policyEvidenceMatches(scopeRef, mapping, ctx))) {
-        reasons.push(`specification span ${span.chunkId} did not verify against its archived evidence`)
+        reasons.push(`specification span ${label} did not verify against its archived evidence`)
         continue
       }
       usedKeys.add(key)
       resolved.push({
-        parseId: span.parseId,
-        chunkId: span.chunkId,
-        locator: span.locator,
-        spanKind: span.spanKind,
-        precision: span.precision,
-        quoteDigest: span.quoteDigest,
+        span,
         documentRef: mapping.documentRef,
         documentVersionRef: mapping.documentVersionRef,
         parserVersion: mapping.parserVersion,
@@ -713,10 +726,10 @@ export class MaterializedRuleSupportReader implements PublishedRuleSupportReader
       const record = await this.#evidence.get(scopeRef, mapping.evidenceRef.id, ctx)
       if (record === undefined || !sameResourceRef(record.evidenceRef, mapping.evidenceRef) ||
           !sameScope(record.envelope.scopeRef, scopeRef) || record.envelope.kind !== 'document_span' ||
-          record.envelope.resultDigest !== mapping.span.quoteDigest) return false
+          record.envelope.resultDigest !== ruleProvenanceSpanDigest(mapping.span)) return false
       const bindingRef = record.envelope.payloadRef
       const sourceSnapshots = record.envelope.sourceSnapshots.filter((snapshot) =>
-        snapshot.resultDigest === mapping.span.quoteDigest && snapshot.archivedResultRef?.kind === 'artifact',
+        snapshot.resultDigest === ruleProvenanceSpanDigest(mapping.span) && snapshot.archivedResultRef?.kind === 'artifact',
       )
       if (bindingRef === undefined || bindingRef.kind !== 'artifact' || sourceSnapshots.length !== 1) return false
       const snapshot = sourceSnapshots[0]
@@ -725,7 +738,7 @@ export class MaterializedRuleSupportReader implements PublishedRuleSupportReader
       const bindingBytes = await this.#readBoundedArtifact(scopeRef, bindingRef, MAX_SOURCE_BINDING_BYTES, ctx)
       const textBytes = await this.#readBoundedArtifact(scopeRef, textRef, MAX_ARCHIVED_SOURCE_SPAN_BYTES, ctx)
       if (bindingBytes === undefined || textBytes === undefined ||
-          `sha256:${createHash('sha256').update(textBytes).digest('hex')}` !== mapping.span.quoteDigest) return false
+          `sha256:${createHash('sha256').update(textBytes).digest('hex')}` !== ruleProvenanceSpanDigest(mapping.span)) return false
       const parsedBinding = parseJson(new TextDecoder('utf-8', { fatal: true }).decode(bindingBytes))
       if (!isRulePolicySpanArchiveBinding(parsedBinding)) return false
       return sha256DigestOf(parsedBinding.span) === sha256DigestOf(mapping.span) &&

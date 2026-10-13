@@ -9,7 +9,7 @@ import type {
   VersionRef,
   RuleDependencyReference,
 } from '@ontology/contracts'
-import { assertRuleDependencyShape, relationPremisesFromDefinition } from '@ontology/contracts'
+import { assertRuleDependencyShape, relationPremisesFromDefinition, ruleProvenanceSpanKey } from '@ontology/contracts'
 import { validateRuleSupport } from './support'
 import { sha256DigestOf } from '../definitions/canonical'
 import { RuleEvaluationError } from './errors'
@@ -648,10 +648,6 @@ function spansOf(
   visit(expression)
   exceptionExpressions.forEach(visit)
   const unique = new Map<string, RuleProvenanceSpan>()
-  for (const span of spans) unique.set(`${span.parseId}:${span.chunkId}:${span.quoteDigest}`, span)
-  return [...unique.values()].sort((left, right) =>
-    `${left.parseId}:${left.chunkId}:${left.quoteDigest}`.localeCompare(
-      `${right.parseId}:${right.chunkId}:${right.quoteDigest}`,
-    ),
-  )
+  for (const span of spans) unique.set(ruleProvenanceSpanKey(span), span)
+  return [...unique.values()].sort((left, right) => ruleProvenanceSpanKey(left).localeCompare(ruleProvenanceSpanKey(right)))
 }

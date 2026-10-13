@@ -4,7 +4,7 @@ import type { PublishedExecutableRule, PublishedStatement } from './semantic-pub
 import type { IdentityPublishedBinding } from './identity-decisions'
 import type { ToolContext } from './trusted'
 import type { CandidateRecord, StructuredCandidateSourceSpan } from './extraction'
-import type { SpanPrecision } from './document-parse'
+import type { ParseCoverage, SpanPrecision } from './document-parse'
 import type { ExactScalarDecimal } from './materialization'
 import type { RuleDependencyReference } from './rule-action-candidates'
 
@@ -96,6 +96,24 @@ export interface RuleStructuredPremiseSourcePort {
   } | undefined>
 }
 
+/**
+ * Authorized read of one authored original row/cell used as a rule/action clause basis. Unlike a
+ * fact premise, the clause's source is a workspace-approved structured original that carries its own
+ * parse pin, so the reader resolves the row straight from the stored structured parse and returns
+ * the document/parser pins the verifier must compare (a structured parse never lives in the text
+ * `DocumentParseStore`). It reports `rowText`, whose sha256 is the span's `rowDigest`.
+ */
+export interface RuleStructuredPolicySourcePort {
+  read(span: StructuredRuleProvenanceSpan, ctx: ToolContext): Promise<{
+    readonly documentRef: ResourceRef
+    readonly documentVersionRef: ResourceRef
+    readonly parserVersion: string
+    readonly sourceCoverage?: ParseCoverage
+    /** The exact UTF-8 row fingerprint input, containing original raw tokens and cell kinds. */
+    readonly rowText: string
+  } | undefined>
+}
+
 /** The durable typed result of computing one published rule against one entity. */
 export interface RuleComputationArtifact {
   readonly premiseInput?: RulePremiseReplayInput
@@ -141,13 +159,36 @@ export interface RuleComputationArtifact {
  * parse stage produced (LOCAL-023) so an element is traceable to the exact source location,
  * and `precision` stays `approximate` for an OCR span.
  */
-export interface RuleProvenanceSpan {
+export interface TextRuleProvenanceSpan {
+  readonly kind?: 'text'
   readonly parseId: Uuid
   readonly chunkId: Uuid
   readonly locator: DocumentSpan['locator']
   readonly spanKind: DocumentSpan['spanKind']
   readonly precision: SpanPrecision
   readonly quoteDigest: Sha256Digest
+}
+
+/**
+ * A rule or action clause grounded in one reconciled structured row/cell (a costing table, an item
+ * list, a quota) rather than a text chunk. `kind` is absent on a text span, so an already-persisted
+ * text rule JSON needs no migration. Like a text clause it is archived as a `document_span` and
+ * re-read at derivation time, so a table-only rule is traceable to its exact row.
+ */
+export type StructuredRuleProvenanceSpan = StructuredCandidateSourceSpan
+
+export type RuleProvenanceSpan = TextRuleProvenanceSpan | StructuredRuleProvenanceSpan
+
+/** A stable identity for a rule provenance span: a text chunk keys by chunk+quote, a row by record+row. */
+export function ruleProvenanceSpanKey(span: RuleProvenanceSpan): string {
+  return span.kind === 'structured'
+    ? `${span.parseId}:${span.recordId}:${span.rowDigest}`
+    : `${span.parseId}:${span.chunkId}:${span.quoteDigest}`
+}
+
+/** The content digest a rule provenance span is pinned by: the anchored quote for text, the row fingerprint for a row. */
+export function ruleProvenanceSpanDigest(span: RuleProvenanceSpan): Sha256Digest {
+  return span.kind === 'structured' ? span.rowDigest : span.quoteDigest
 }
 
 export interface RuleComparisonNode {

@@ -159,7 +159,8 @@ describe('rule candidate extraction (SPEC D4.3/D5, US-013)', () => {
     expect(expression.operands).toHaveLength(3)
     for (const operand of expression.operands) {
       expect(operand.spans.length).toBeGreaterThan(0)
-      expect(operand.spans[0]?.chunkId).toBe(chunkA.chunkId)
+      const operandSpan = operand.spans[0]
+      expect(operandSpan !== undefined && operandSpan.kind !== 'structured' ? operandSpan.chunkId : undefined).toBe(chunkA.chunkId)
       expect(operand.spans[0]?.parseId).toBe(PARSE_ID)
     }
     const unitOperand = expression.operands[2]
@@ -174,7 +175,8 @@ describe('rule candidate extraction (SPEC D4.3/D5, US-013)', () => {
     // The exception lived in a different chunk and stays attached to the rule.
     expect(rule?.exceptions).toHaveLength(1)
     expect(rule?.exceptions[0]?.condition.op).toBe('compare')
-    expect(rule?.exceptions[0]?.spans[0]?.chunkId).toBe(chunkB.chunkId)
+    const exceptionSpan = rule?.exceptions[0]?.spans[0]
+    expect(exceptionSpan !== undefined && exceptionSpan.kind !== 'structured' ? exceptionSpan.chunkId : undefined).toBe(chunkB.chunkId)
     expect(rule?.sourceSpans.map((span) => textSpan(span)?.chunkId).sort()).toEqual(
       [chunkA.chunkId, chunkB.chunkId].sort(),
     )

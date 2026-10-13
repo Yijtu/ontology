@@ -1,6 +1,6 @@
 import { createHash } from 'node:crypto'
 import { PostgresComputeInvocationStore, PostgresComputeOutputBindingsStore, PostgresComputeResultArtifactStore } from '@ontology/adapter-control-postgres'
-import { DocumentSpanReader, StructuredPremiseSourceReader } from '@ontology/adapter-extraction-document'
+import { DocumentSpanReader, StructuredClauseSourceReader, StructuredPremiseSourceReader } from '@ontology/adapter-extraction-document'
 import { Bm25DocumentSearchService, ProjectDocumentIndexService } from '@ontology/adapter-search-bm25'
 import { ArchivedRulePremiseReplayVerifier, InMemorySemanticMappingRegistry, MaterializedRuleDerivationEvidenceProducer, OntologyLookupService, PublishedFactsReferenceProvider, PublishedSemanticSource } from '@ontology/semantic-engine'
 import { DataQueryHandler, OntologyLookupHandler, RegisteredComputeExecutionService, ToolGatewayError, canonicalJson } from '@ontology/tool-services'
@@ -80,9 +80,10 @@ export async function assembleQueryPipeline(state: Awaited<ReturnType<typeof ass
   // `rule_derivation` support payload under the run's own trusted context. It is reached only
   // through the fixed `rule_judgement` plan's `ontology_lookup(intent=rules)` step.
   const structuredPremiseSources = new StructuredPremiseSourceReader({ artifacts: blobStore, mappings: projectMappingStore, ingestion: structuredStore })
+  const structuredClauseSources = new StructuredClauseSourceReader({ artifacts: blobStore, ingestion: structuredStore })
   const rulePremiseVerifier = new ArchivedRulePremiseReplayVerifier({ materialization: materializationStore, publications: publicationStore, evidence: evidenceStore, artifacts: blobStore,
     projects: projectStore, projectDocuments: projectDocumentStore, records: projectRecordStore,
-    candidates: candidateStore, identity: identityStore, documentParses: parseStore, documentSpans: documentSpanReader, structuredSources: structuredPremiseSources, publishedRules: packRuleReader })
+    candidates: candidateStore, identity: identityStore, documentParses: parseStore, documentSpans: documentSpanReader, structuredSources: structuredPremiseSources, structuredClauses: structuredClauseSources, publishedRules: packRuleReader })
   const ruleDerivationProducer = new MaterializedRuleDerivationEvidenceProducer({
     materialization: materializationStore,
     evidence: evidenceStore,
@@ -91,6 +92,7 @@ export async function assembleQueryPipeline(state: Awaited<ReturnType<typeof ass
     documentParses: parseStore,
     documentSpans: documentSpanReader,
     structuredSources: structuredPremiseSources,
+    structuredClauses: structuredClauseSources,
     componentRef: componentRef('compute_extension', 'core-rule-derivation-producer', 'rule-derivation-producer@1.0.0'),
   })
   const semanticTasks = new CoreSemanticTaskResolver({
@@ -227,7 +229,7 @@ export async function assembleQueryPipeline(state: Awaited<ReturnType<typeof ass
 
   return {
     mappings, duckDb, structuredImports, documentSpanReader, documentSearch, projectDocumentIndexService, publishedSourceList,
-    multiSchemaSource, factsProviders, facts, lookup, lookupHandler, structuredPremiseSources, rulePremiseVerifier,
+    multiSchemaSource, factsProviders, facts, lookup, lookupHandler, structuredPremiseSources, structuredClauseSources, rulePremiseVerifier,
     ruleDerivationProducer, semanticTasks, relationsTask, ontologyLookupHandler, computeArtifacts, computeReader,
     computeResultStore, computeOutputBindingsStore, computeInvocationStore, registeredComputeExecution, projectQuery,
     dataQueryHandler, documentSearchHandler, syntheticQueryFallback, gatewayComposition,

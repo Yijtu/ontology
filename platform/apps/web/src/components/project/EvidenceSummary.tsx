@@ -68,38 +68,42 @@ export function EvidenceSummary({
         {evidence.specification?.coverage.reason === undefined ? null : (
           <p>{evidence.specification.coverage.reason}</p>
         )}
-        {evidence.specification?.spans.map((span, index) => (
-          <div key={`${span.parseId}:${span.chunkId}:${index}`}>
-            <p>
-              <span
-                className={`project-state project-state--${span.precision === 'exact' ? 'ready' : 'partial'}`}
-              >
-                {span.precision === 'exact' ? '精确定位' : '近似定位'}
-              </span>{' '}
-              {formatLocator(span.locator)}
-            </p>
-            {onOpenEvidence === undefined ? null : (
-              <button
-                className="project-source-button"
-                type="button"
-                onClick={() => onOpenEvidence(span.evidenceRef)}
-              >
-                查看这段原文 ↗
-              </button>
-            )}
-            <details className="project-audit">
-              <summary>文件与解析版本</summary>
+        {evidence.specification?.spans.map((view, index) => {
+          const span = view.span
+          const ready = span.kind === 'structured' || span.precision === 'exact'
+          const label = span.kind === 'structured' ? '表格定位' : span.precision === 'exact' ? '精确定位' : '近似定位'
+          const key = span.kind === 'structured' ? span.recordId : span.chunkId
+          return (
+            <div key={`${span.parseId}:${key}:${index}`}>
               <p>
-                <code>
-                  {span.documentRef.id}@{span.documentRef.version}
-                </code>
+                <span className={`project-state project-state--${ready ? 'ready' : 'partial'}`}>
+                  {label}
+                </span>{' '}
+                {formatLocator(span.locator)}
               </p>
-              <p>
-                <code>{span.documentRef.digest}</code>
-              </p>
-            </details>
-          </div>
-        ))}
+              {onOpenEvidence === undefined ? null : (
+                <button
+                  className="project-source-button"
+                  type="button"
+                  onClick={() => onOpenEvidence(view.evidenceRef)}
+                >
+                  查看这段原文 ↗
+                </button>
+              )}
+              <details className="project-audit">
+                <summary>文件与解析版本</summary>
+                <p>
+                  <code>
+                    {view.documentRef.id}@{view.documentRef.version}
+                  </code>
+                </p>
+                <p>
+                  <code>{view.documentRef.digest}</code>
+                </p>
+              </details>
+            </div>
+          )
+        })}
       </div>
       <p className="project-source-note">
         事实支撑完整性与规则原文定位分别核验。规则的条件成立或适用性结论，不代表额外的业务行动要求。

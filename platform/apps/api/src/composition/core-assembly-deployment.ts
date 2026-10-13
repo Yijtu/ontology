@@ -68,7 +68,7 @@ export async function assembleDeployment(
     publishedProjectDatasetSource, normalApprovedInputs, projectDatasetService, profileResolver, sources, coreModelRefs, componentRecords,
     profileRefsByScenario, profileSpecsByScenario, availableTasksByScenario, terminology, executionPreview, projectEvolutionCell, hostClock, componentStore,
   } = state
-  const { structuredImports, documentSpanReader, projectDocumentIndexService, structuredPremiseSources, semanticTasks, computeResultStore, computeOutputBindingsStore, computeInvocationStore, gatewayComposition } = query
+  const { structuredImports, documentSpanReader, projectDocumentIndexService, structuredPremiseSources, structuredClauseSources, semanticTasks, computeResultStore, computeOutputBindingsStore, computeInvocationStore, gatewayComposition } = query
   const { runProgress, runs, termLabels, authoring, tableArtifactStore, tableVerificationStore, workflowDispatchWorker, jobService, industryWorkspaceService, provenanceRead } = runtime
 
   const runValidation = async (
@@ -265,7 +265,7 @@ export async function assembleDeployment(
     publishedRuleReplay: () => new ArchivedRulePremiseReplayVerifier({ materialization: materializationStore, publications: publicationStore,
       evidence: evidenceStore, artifacts: blobStore, projects: projectStore, projectDocuments: projectDocumentStore, records: projectRecordStore,
       candidates: candidateStore, identity: identityStore, documentParses: parseStore, documentSpans: documentSpanReader,
-      structuredSources: structuredPremiseSources, publishedRules: packRuleReader, readMode: 'published_snapshot' }),
+      structuredSources: structuredPremiseSources, structuredClauses: structuredClauseSources, publishedRules: packRuleReader, readMode: 'published_snapshot' }),
   })
   const tableArtifactReadService = new TableArtifactReadService({ manifests: verifiedTableManifests, pages: tableArtifactStore, progress: tableArtifactStore })
   const verifiedResultReadService = new VerifiedResultReadService({
