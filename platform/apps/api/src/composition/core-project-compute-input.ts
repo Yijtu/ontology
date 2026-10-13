@@ -2,8 +2,8 @@ import type { LocalImmutableBlobStore } from '@ontology/adapter-blob-local'
 import { RunServiceError, canonicalJson, sha256DigestOf } from '@ontology/application'
 import type { TaskParameterValidator } from '@ontology/application'
 import { assertProjectDatasetFieldSourcesShape, findRegisteredOperation, isRecord, isResourceRef, isUuid } from '@ontology/contracts'
-import type { IndustrySchemaSource, OperationRegistry, ProjectRevision, PublishedTaskBinding, ResourceRef, ScopeRef, TaskInputSnapshotStore, ToolContext } from '@ontology/contracts'
-import { EXAMPLE_COMPUTE_DATA_SCHEMA, EXAMPLE_OPERATION_REF, decodeExampleComputeInput, registeredOperationDigest } from '@ontology/tool-services'
+import type { IndustrySchemaSource, OperationRef, OperationRegistry, ProjectRevision, PublishedTaskBinding, ResourceRef, ScopeRef, TaskInputSnapshotStore, ToolContext } from '@ontology/contracts'
+import { decodeExampleComputeInput, registeredOperationDigest } from '@ontology/tool-services'
 import type { createCoreAuthoring } from './core-authoring'
 
 /** Separate from a published operation's parameters: these are explicit original-field selections. */
@@ -22,7 +22,10 @@ export function parseCoreComputeInputSelection(value: unknown): CoreComputeInput
 /** Prepare the registered rows input from actual approved pages, with a real derived-input receipt. */
 export function createCoreProjectComputeInput(options: {
   readonly blobs: LocalImmutableBlobStore; readonly authoring: ReturnType<typeof createCoreAuthoring>
-  readonly snapshots: TaskInputSnapshotStore; readonly schemas: IndustrySchemaSource; readonly operations: OperationRegistry
+  readonly snapshots: TaskInputSnapshotStore;   readonly schemas: IndustrySchemaSource; readonly operations: OperationRegistry
+  /** The registered operation this host has a fixed approved-field input builder for, and the
+   * immutable data schema of its approved-input rows. Defaults to the neutral example op. */
+  readonly approvedInput: { readonly operationRef: OperationRef; readonly dataSchema: Readonly<Record<string, unknown>> }
   readonly validator: TaskParameterValidator
   readonly validateBase: (scope: ScopeRef, revision: ProjectRevision, ctx: ToolContext, signal: AbortSignal) => Promise<ResourceRef>
 }) {
@@ -41,7 +44,7 @@ export function createCoreProjectComputeInput(options: {
     const selection = parseCoreComputeInputSelection(supplied)
     const operation = binding.operationRef === undefined ? undefined : findRegisteredOperation(options.operations, binding.operationRef)
     if (binding.kind !== 'compute' || operation === undefined || registeredOperationDigest(operation) !== binding.registeredOperationDigest || canonicalJson(binding.actionDefinitionRef) !== canonicalJson(revision.definitionRef)) invalid('the computation does not bind its actual registered operation and active definition')
-    if (canonicalJson(operation.operationRef) !== canonicalJson(EXAMPLE_OPERATION_REF)) invalid('this host has no approved-field input builder for the selected registered operation')
+    if (canonicalJson(operation.operationRef) !== canonicalJson(options.approvedInput.operationRef)) invalid('this host has no approved-field input builder for the selected registered operation')
     const schema = await options.schemas.getSchema(scope, revision.definitionRef, ctx)
     const object = schema?.objects.find((object) => object.objectId === selection.objectId)
     const field = (id: string) => object?.attributes.find((attribute) => attribute.attributeId === id && attribute.maxCardinality === 1)
@@ -81,7 +84,7 @@ export function createCoreProjectComputeInput(options: {
       }
     }
     if (rows.length === 0 || !isRecord(body['counts']) || body['counts']['approved'] !== inspected) invalid('the computation has no complete approved input row selection')
-    const input = { rows }, validation = options.validator.validate(EXAMPLE_COMPUTE_DATA_SCHEMA, input)
+    const input = { rows }, validation = options.validator.validate(options.approvedInput.dataSchema, input)
     if (!validation.valid) invalid(`the actual selected input does not satisfy the registered operation contract: ${validation.issues.join('; ')}`)
     const bytes = new TextEncoder().encode(canonicalJson(input))
     // This existing operation has fixed four-decimal arithmetic and each/CNY metrics.
@@ -91,8 +94,8 @@ export function createCoreProjectComputeInput(options: {
       (row.unit !== undefined && row.unit !== 'each') || (row.currency !== undefined && row.currency !== 'CNY') ||
       row.unit !== 'each' && row.currency !== 'CNY')) invalid('the registered example only supports exact nonnegative amounts of up to four decimals in each or CNY')
     if (bytes.byteLength > operation.limits.maxBytes) invalid('the actual selected computation input exceeds its registered byte limit')
-    const dataSchemaBytes = new TextEncoder().encode(canonicalJson(EXAMPLE_COMPUTE_DATA_SCHEMA))
-    const dataSchemaRef = await options.authoring.stableWrite(`example-compute-data-schema:${sha256DigestOf(canonicalJson(EXAMPLE_COMPUTE_DATA_SCHEMA))}`, dataSchemaBytes, 'application/schema+json', 'artifact', ctx)
+    const dataSchemaBytes = new TextEncoder().encode(canonicalJson(options.approvedInput.dataSchema))
+    const dataSchemaRef = await options.authoring.stableWrite(`example-compute-data-schema:${sha256DigestOf(canonicalJson(options.approvedInput.dataSchema))}`, dataSchemaBytes, 'application/schema+json', 'artifact', ctx)
     const identity = `project-compute-input:${sha256DigestOf(canonicalJson({ base, binding: binding.taskBindingRef, selection }))}`
     const ref = await options.authoring.stableWrite(identity, bytes, 'application/json', 'artifact', ctx)
     const selectionRef = await options.authoring.stableWrite(`${identity}:source-selection`, new TextEncoder().encode(canonicalJson({ schemaVersion: 'core-compute-input-selection@1', projectRevisionRef: revision.ref, baseInputRef: base, inputRef: ref, taskBindingRef: binding.taskBindingRef, operationRef: operation.operationRef, registeredOperationDigest: binding.registeredOperationDigest, parameterSchemaDigest: operation.inputSchemaDigest, dataSchemaRef, selection, records: origins })), 'application/json', 'artifact', ctx)

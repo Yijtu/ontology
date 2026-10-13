@@ -5,5 +5,6 @@
  * network protocol or industry package; persistence arrives through injected ports.
  */
 export * from './budget'
+export * from './canonical'
 export * from './decimal'
 export * from './rule-conclusion'

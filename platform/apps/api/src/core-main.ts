@@ -7,7 +7,7 @@ import type { DeploymentEnvironment, MappingRef, ProfileRef, ProfileSpec, ScopeR
 import { createApiServer } from './http/app'
 import type { ApiServerOptions } from './http/app'
 import type { RequestAuthenticator } from './http/shared'
-import { loadCoreExamples } from './composition/core-example-loader'
+import { emptyCoreExamples, loadCoreExamples } from './composition/core-example-loader'
 import type { LoadedCoreExamples } from './composition/core-example-loader'
 import { createCoreLocalComposition } from './composition/core-local-composition'
 import { resolve } from 'node:path'
@@ -167,15 +167,32 @@ export function createCoreApi(dependencies: CoreApiDependencies): FastifyInstanc
   return app
 }
 
+/**
+ * The synthetic example assembly is now optional. A kernel deployment starts with zero scenarios
+ * when examples are explicitly disabled (`CORE_LOAD_EXAMPLES=false`) or when no deployment config
+ * is supplied and the default example index is absent; an explicitly configured index must still
+ * load or the process fails fast.
+ */
+function resolveCoreExamples(scopeRef: ScopeRef): LoadedCoreExamples {
+  const configuredIndex = process.env['CORE_DEPLOYMENT_CONFIG']
+  if (process.env['CORE_LOAD_EXAMPLES'] === 'false') return emptyCoreExamples()
+  try {
+    return loadCoreExamples({
+      targetScopeRef: scopeRef,
+      ...(configuredIndex === undefined ? {} : { indexPath: configuredIndex }),
+    })
+  } catch (error) {
+    if (configuredIndex !== undefined) throw error
+    return emptyCoreExamples()
+  }
+}
+
 export async function startCoreApi(): Promise<void> {
   const scopeRef = scopeFromEnvironment()
   let composition: Awaited<ReturnType<typeof createCoreLocalComposition>> | undefined
   let app: FastifyInstance | undefined
   try {
-    const examples = loadCoreExamples({
-      targetScopeRef: scopeRef,
-      ...(process.env['CORE_DEPLOYMENT_CONFIG'] === undefined ? {} : { indexPath: process.env['CORE_DEPLOYMENT_CONFIG'] }),
-    })
+    const examples = resolveCoreExamples(scopeRef)
     const objectDirectory = process.env['CORE_OBJECT_DIRECTORY'] ?? resolve(tmpdir(), 'ontology-core-local', scopeRef.tenantId, scopeRef.spaceId, 'objects')
     const modelSettings = new CoreLocalModelSettings({ objectDirectory, scopeRef, environment: process.env })
     const modelEnvironment = await modelSettings.loadEnvironment()

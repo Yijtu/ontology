@@ -1,4 +1,4 @@
-import { createHash } from 'node:crypto'
+import { canonicalJson as coreCanonicalJson, sha256DigestOf as coreSha256DigestOf } from '@ontology/core'
 import type {
   BackendBinding,
   ExplicitDegradation,
@@ -21,24 +21,13 @@ import type {
  * the hash.
  */
 
-function sortValue(value: unknown): unknown {
-  if (Array.isArray(value)) return value.map(sortValue)
-  if (value === null || typeof value !== 'object') return value
-  const source = value as Record<string, unknown>
-  const out: Record<string, unknown> = {}
-  for (const key of Object.keys(source).sort()) {
-    out[key] = sortValue(source[key])
-  }
-  return out
-}
-
-/** Stable JSON: object keys sorted recursively, arrays left in their given (already sorted) order. */
+/** Stable JSON: object keys ordered by code unit, arrays left in their given (already sorted) order. */
 export function canonicalJson(value: unknown): string {
-  return JSON.stringify(sortValue(value))
+  return coreCanonicalJson(value)
 }
 
 export function sha256DigestOf(value: string): Sha256Digest {
-  return `sha256:${createHash('sha256').update(value, 'utf8').digest('hex')}`
+  return coreSha256DigestOf(value)
 }
 
 export function refKey(ref: VersionRef): string {

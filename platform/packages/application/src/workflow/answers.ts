@@ -1,4 +1,5 @@
 import { AnswerStoreError, isToolContext } from '@ontology/contracts'
+import { canonicalJson as coreCanonicalJson } from '@ontology/core'
 import type {
   AnswerStorePort,
   PublishedAnswer,
@@ -27,11 +28,7 @@ function clone<T>(value: T): T {
 }
 
 function canonical(value: unknown): string {
-  if (Array.isArray(value)) return `[${value.map(canonical).join(',')}]`
-  if (typeof value === 'object' && value !== null) {
-    return `{${Object.entries(value).sort(([left], [right]) => left.localeCompare(right)).map(([key, part]) => `${JSON.stringify(key)}:${canonical(part)}`).join(',')}}`
-  }
-  return JSON.stringify(value) ?? 'undefined'
+  return coreCanonicalJson(value)
 }
 
 /**

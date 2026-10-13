@@ -22,6 +22,7 @@
     "@ontology/adapter-transport-local": "workspace:*",
     "@ontology/adapter-transport-mcp": "workspace:*",
     "@ontology/application": "workspace:*",
+    "@ontology/app-worker": "workspace:*",
     "@ontology/contracts": "workspace:*",
     "@ontology/core": "workspace:*",
     "@ontology/extension-home-energy": "workspace:*",
