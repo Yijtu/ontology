@@ -1,15 +1,15 @@
 import { randomUUID } from 'node:crypto'
-import { PostgresProjectEvolutionStore } from '@ontology/adapter-control-postgres'
+import { PostgresCandidateSourceStore, PostgresProjectEvolutionStore } from '@ontology/adapter-control-postgres'
 import { ArtifactGroundingDocumentSetReader, ParsedSourceGroundingReader, StructuredDocumentParser } from '@ontology/adapter-extraction-document'
 import { DATA_DUCKDB_ADAPTER_REF } from '@ontology/adapter-data-duckdb'
 import { DATA_POSTGRES_ADAPTER_REF } from '@ontology/adapter-data-postgres'
 import {
-  ComponentRegistry, CompositeReviewableCandidateReader, DefinitionCandidateEditingService, DefinitionCandidateGenerationService,
+  CandidateSourceIngestionService, ComponentRegistry, CompositeReviewableCandidateReader, DefinitionCandidateEditingService, DefinitionCandidateGenerationService,
   IndustryAssetPublicationService, IndustryPackExportService, IndustryPackUpgradeService,
   IndustryValidationService, InMemoryIndustryPackCatalogue, InstanceReviewService, JobService,
   ProjectMappingService, ProjectService, PublishedPackRuleDeclarationReader, ResultHistoryService, RuleActionCandidateService,
   RuleActionCandidateGenerationService, RunServiceError, StoreBackedIndustryPackCatalogue, SyntheticExampleService,
-  TableArtifactReadService, VerifiedResultExportService, VerifiedResultReadService, createSourceGroundingService,
+  TableArtifactReadService, VerifiedResultExportService, VerifiedResultReadService, WebResearchService, createSourceGroundingService,
   encodeStructuredExtractionRef, readWorkspacePublicationSourceDrafts,
 } from '@ontology/application'
 import { ArchivedRulePremiseReplayVerifier, FiniteGrammarRuleSupportValidator, FiniteGrammarSyntheticEvaluator, IdentityDecisionService } from '@ontology/semantic-engine'
@@ -41,6 +41,7 @@ import { createCoreInstanceIdentity } from './core-instance-identity'
 import { createCoreProjectApi } from './core-project-api'
 import { createProjectEvolutionWorkflow } from './project-evolution'
 import { createCoreStructuredImportWorkflow } from './core-structured-import-service'
+import { createBlobArtifactWriter } from './tool-gateway'
 import type { CoreLocalCompositionOptions } from './core-local-composition'
 import type { assembleInfrastructure } from './core-assembly-infrastructure'
 import type { assembleQueryPipeline } from './core-assembly-query'
@@ -274,6 +275,11 @@ export async function assembleDeployment(
   })
   const verifiedResultExportService = new VerifiedResultExportService({ reads: verifiedResultReadService, answers: answerStore, tables: verifiedTableManifests })
   const resultHistoryService = new ResultHistoryService({ answers: answerStore, bindings: runExecutionBindingStore, history: answerStore })
+  const candidateSourceStore = new PostgresCandidateSourceStore(database)
+  const candidateSourceResearch = options.webSearch === undefined ? undefined : new WebResearchService({
+    webSearch: options.webSearch,
+    ingestion: new CandidateSourceIngestionService({ artifacts: createBlobArtifactWriter(blobStore), sources: candidateSourceStore }),
+  })
   const controller = host.controller
   if (controller === undefined) throw new CoreCapabilityError('the Core controller is not mounted')
   const dependencies: CoreApiDependencies = {
@@ -308,6 +314,7 @@ export async function assembleDeployment(
       history: { service: provenanceRead.history },
       packs: { catalogue: packCatalogue, packExports: packExportService, packUpgrades: packUpgradeService, publication: industryAssetPublicationService },
       assetCandidates: { generation: definitionGenerationService },
+      candidateSources: { sources: candidateSourceStore, ...(candidateSourceResearch === undefined ? {} : { research: candidateSourceResearch }) },
       definitionEditing: { service: definitionEditingService },
       ruleActionCandidates: { service: ruleActionCandidateService, generation: ruleActionGenerationService, bindingContext: actionBindingContext },
       competencyQuestions: { service: competencyQuestions.service, uploadSource: competencyQuestions.uploadSource },

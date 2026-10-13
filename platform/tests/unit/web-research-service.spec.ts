@@ -4,6 +4,7 @@ import { createToolContext, ModelingBriefError } from '@ontology/contracts'
 import type {
   CandidateSource,
   CandidateSourceListFilter,
+  CandidateSourceRecord,
   CandidateSourceReviewState,
   CandidateSourceStore,
   ImmutableArtifactWriter,
@@ -41,22 +42,23 @@ function digestOf(text: string): `sha256:${string}` {
 }
 
 class FakeStore implements CandidateSourceStore {
-  #byKey = new Map<string, CandidateSource>()
-  async putSource(_scope: ScopeRef, input: { readonly source: CandidateSource; readonly idempotencyKey: string }): Promise<CandidateSource> {
+  #byKey = new Map<string, CandidateSourceRecord>()
+  async putSource(_scope: ScopeRef, input: { readonly source: CandidateSource; readonly idempotencyKey: string }): Promise<CandidateSourceRecord> {
     const existing = this.#byKey.get(input.idempotencyKey)
     if (existing !== undefined) return existing
-    this.#byKey.set(input.idempotencyKey, input.source)
-    return input.source
+    const record: CandidateSourceRecord = { ...input.source, revision: '1' }
+    this.#byKey.set(input.idempotencyKey, record)
+    return record
   }
-  async getSource(_scope: ScopeRef, sourceId: Uuid): Promise<CandidateSource | undefined> {
+  async getSource(_scope: ScopeRef, sourceId: Uuid): Promise<CandidateSourceRecord | undefined> {
     return [...this.#byKey.values()].find((source) => source.sourceId === sourceId)
   }
-  async listSources(_scope: ScopeRef, workspaceId: Uuid, filter: CandidateSourceListFilter): Promise<readonly CandidateSource[]> {
+  async listSources(_scope: ScopeRef, workspaceId: Uuid, filter: CandidateSourceListFilter): Promise<readonly CandidateSourceRecord[]> {
     return [...this.#byKey.values()].filter((source) => source.workspaceId === workspaceId
       && (filter.reviewState === undefined || source.reviewState === filter.reviewState)
       && (filter.trustTier === undefined || source.trustTier === filter.trustTier))
   }
-  async reviewSource(_scope: ScopeRef, input: { readonly sourceId: Uuid; readonly reviewState: CandidateSourceReviewState; readonly trustTier?: SourceTrustTier; readonly reviewedBy: string }): Promise<CandidateSource> {
+  async reviewSource(_scope: ScopeRef, input: { readonly sourceId: Uuid; readonly reviewState: CandidateSourceReviewState; readonly trustTier?: SourceTrustTier; readonly reviewedBy: string }): Promise<CandidateSourceRecord> {
     const current = [...this.#byKey.values()].find((source) => source.sourceId === input.sourceId)
     if (current === undefined) throw new Error('missing source')
     return { ...current, reviewState: input.reviewState, trustTier: input.trustTier ?? current.trustTier, reviewedBy: input.reviewedBy }

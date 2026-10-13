@@ -6,6 +6,7 @@ import type {
   CandidateSourceFreshness,
   CandidateSourceKind,
   CandidateSourceListFilter,
+  CandidateSourceRecord,
   CandidateSourceReviewState,
   CandidateSourceStore,
   ResourceRef,
@@ -39,11 +40,12 @@ interface SourceRow extends QueryResultRow {
 const COLUMNS = `workspace_id, source_id, revision, kind, trust_tier, review_state, origin, content_ref,
   content_digest, freshness, proposed_by, reviewed_by, recorded_at`
 
-function toSource(row: SourceRow): CandidateSource {
+function toSource(row: SourceRow): CandidateSourceRecord {
   return {
     schemaVersion: 'candidate-source@1',
     sourceId: row.source_id,
     workspaceId: row.workspace_id,
+    revision: row.revision,
     kind: row.kind,
     trustTier: row.trust_tier,
     origin: row.origin,
@@ -88,7 +90,7 @@ export class PostgresCandidateSourceStore implements CandidateSourceStore {
     scopeRef: ScopeRef,
     input: { readonly source: CandidateSource; readonly idempotencyKey: string },
     ctx: ToolContext,
-  ): Promise<CandidateSource> {
+  ): Promise<CandidateSourceRecord> {
     return this.#withScope(scopeRef, ctx, async (query) => {
       const requestDigest = digestOf(input.source)
       const replay = await this.#byIdempotencyKey(query, input.idempotencyKey)
@@ -134,14 +136,14 @@ export class PostgresCandidateSourceStore implements CandidateSourceStore {
     })
   }
 
-  async getSource(scopeRef: ScopeRef, sourceId: Uuid, ctx: ToolContext): Promise<CandidateSource | undefined> {
+  async getSource(scopeRef: ScopeRef, sourceId: Uuid, ctx: ToolContext): Promise<CandidateSourceRecord | undefined> {
     return this.#withScope(scopeRef, ctx, async (query) => {
       const row = await this.#byId(query, sourceId)
       return row === undefined ? undefined : toSource(row)
     })
   }
 
-  async listSources(scopeRef: ScopeRef, workspaceId: Uuid, filter: CandidateSourceListFilter, ctx: ToolContext): Promise<readonly CandidateSource[]> {
+  async listSources(scopeRef: ScopeRef, workspaceId: Uuid, filter: CandidateSourceListFilter, ctx: ToolContext): Promise<readonly CandidateSourceRecord[]> {
     const limit = normalizeLimit(filter.limit)
     return this.#withScope(scopeRef, ctx, async (query) => {
       const result = await query.query<SourceRow>(
@@ -163,7 +165,7 @@ export class PostgresCandidateSourceStore implements CandidateSourceStore {
     scopeRef: ScopeRef,
     input: { readonly sourceId: Uuid; readonly reviewState: CandidateSourceReviewState; readonly trustTier?: SourceTrustTier; readonly reviewedBy: string; readonly expectedRevision: string; readonly idempotencyKey: string },
     ctx: ToolContext,
-  ): Promise<CandidateSource> {
+  ): Promise<CandidateSourceRecord> {
     return this.#withScope(scopeRef, ctx, async (query) => {
       const locked = await query.query<SourceRow>(
         `SELECT ${COLUMNS} FROM agent_platform.candidate_sources

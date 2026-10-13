@@ -41,6 +41,15 @@ export interface CandidateSource {
   readonly recordedAt: string
 }
 
+/**
+ * A persisted candidate source: the proposal plus the store-assigned `revision` a review must
+ * compare-and-swap against. The proposal itself carries no revision, so a review can only be
+ * applied to the exact revision the reviewer saw.
+ */
+export interface CandidateSourceRecord extends CandidateSource {
+  readonly revision: string
+}
+
 export type CandidateSourceErrorCode =
   | 'INVALID_SOURCE' | 'NOT_FOUND' | 'VERSION_CONFLICT' | 'IDEMPOTENCY_CONFLICT' | 'STORE_FAILED' | 'SCOPE_MISMATCH'
 
@@ -58,11 +67,11 @@ export interface CandidateSourceListFilter {
 }
 
 export interface CandidateSourceStore {
-  putSource(scopeRef: ScopeRef, input: { readonly source: CandidateSource; readonly idempotencyKey: string }, ctx: ToolContext): Promise<CandidateSource>
-  getSource(scopeRef: ScopeRef, sourceId: Uuid, ctx: ToolContext): Promise<CandidateSource | undefined>
-  listSources(scopeRef: ScopeRef, workspaceId: Uuid, filter: CandidateSourceListFilter, ctx: ToolContext): Promise<readonly CandidateSource[]>
+  putSource(scopeRef: ScopeRef, input: { readonly source: CandidateSource; readonly idempotencyKey: string }, ctx: ToolContext): Promise<CandidateSourceRecord>
+  getSource(scopeRef: ScopeRef, sourceId: Uuid, ctx: ToolContext): Promise<CandidateSourceRecord | undefined>
+  listSources(scopeRef: ScopeRef, workspaceId: Uuid, filter: CandidateSourceListFilter, ctx: ToolContext): Promise<readonly CandidateSourceRecord[]>
   /** Promote or reject a proposed source; `expectedRevision` is a compare-and-swap fence. */
-  reviewSource(scopeRef: ScopeRef, input: { readonly sourceId: Uuid; readonly reviewState: CandidateSourceReviewState; readonly trustTier?: SourceTrustTier; readonly reviewedBy: string; readonly expectedRevision: string; readonly idempotencyKey: string }, ctx: ToolContext): Promise<CandidateSource>
+  reviewSource(scopeRef: ScopeRef, input: { readonly sourceId: Uuid; readonly reviewState: CandidateSourceReviewState; readonly trustTier?: SourceTrustTier; readonly reviewedBy: string; readonly expectedRevision: string; readonly idempotencyKey: string }, ctx: ToolContext): Promise<CandidateSourceRecord>
 }
 
 export const CANDIDATE_SOURCE_KINDS: readonly CandidateSourceKind[] = ['upload', 'web_fetch', 'standard_ref']
