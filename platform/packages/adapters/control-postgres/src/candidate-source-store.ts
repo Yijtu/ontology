@@ -161,7 +161,7 @@ export class PostgresCandidateSourceStore implements CandidateSourceStore {
 
   async reviewSource(
     scopeRef: ScopeRef,
-    input: { readonly sourceId: Uuid; readonly reviewState: CandidateSourceReviewState; readonly reviewedBy: string; readonly expectedRevision: string; readonly idempotencyKey: string },
+    input: { readonly sourceId: Uuid; readonly reviewState: CandidateSourceReviewState; readonly trustTier?: SourceTrustTier; readonly reviewedBy: string; readonly expectedRevision: string; readonly idempotencyKey: string },
     ctx: ToolContext,
   ): Promise<CandidateSource> {
     return this.#withScope(scopeRef, ctx, async (query) => {
@@ -175,19 +175,20 @@ export class PostgresCandidateSourceStore implements CandidateSourceStore {
       )
       const current = locked.rows[0]
       if (current === undefined) throw new CandidateSourceError('NOT_FOUND', `candidate source ${input.sourceId} is not visible in this scope`)
-      if (current.review_state === input.reviewState && current.reviewed_by === input.reviewedBy) return toSource(current)
+      const nextTier = input.trustTier ?? current.trust_tier
+      if (current.review_state === input.reviewState && current.reviewed_by === input.reviewedBy && current.trust_tier === nextTier) return toSource(current)
       if (current.revision !== input.expectedRevision) {
         throw new CandidateSourceError('VERSION_CONFLICT', `candidate source head is ${current.revision}, not the expected ${input.expectedRevision}`)
       }
       const nextRevision = (BigInt(current.revision) + 1n).toString()
       const updated = await query.query<SourceRow>(
         `UPDATE agent_platform.candidate_sources
-            SET revision = $2::bigint, review_state = $3, reviewed_by = $4, updated_at = now()
+            SET revision = $2::bigint, review_state = $3, trust_tier = $4, reviewed_by = $5, updated_at = now()
           WHERE tenant_id = current_setting('app.tenant_id')::uuid
             AND space_id = current_setting('app.space_id')::uuid
             AND source_id = $1::uuid
           RETURNING ${COLUMNS}`,
-        [input.sourceId, nextRevision, input.reviewState, input.reviewedBy],
+        [input.sourceId, nextRevision, input.reviewState, nextTier, input.reviewedBy],
       )
       const row = updated.rows[0]
       if (row === undefined) throw new CandidateSourceError('STORE_FAILED', 'the candidate source review was not written')

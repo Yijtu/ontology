@@ -110,6 +110,14 @@ describe('candidate source store (real PostgreSQL)', () => {
     expect(replay.reviewedBy).toBe('expert')
   })
 
+  it('promotes an agent-researched source to a publishable standard tier', async () => {
+    const proposed = source()
+    await store.putSource(scope.scopeRef, { source: proposed, idempotencyKey: `cs-${randomUUID().slice(0, 12)}` }, ctx)
+    const promoted = await store.reviewSource(scope.scopeRef, { sourceId: proposed.sourceId, reviewState: 'approved', trustTier: 'public_standard', reviewedBy: 'expert', expectedRevision: '1', idempotencyKey: `rv-${randomUUID().slice(0, 12)}` }, ctx)
+    expect(promoted.reviewState).toBe('approved')
+    expect(promoted.trustTier).toBe('public_standard')
+  })
+
   it('rejects a review against a stale expected revision', async () => {
     const proposed = source()
     await store.putSource(scope.scopeRef, { source: proposed, idempotencyKey: `cs-${randomUUID().slice(0, 12)}` }, ctx)

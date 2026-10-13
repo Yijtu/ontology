@@ -62,7 +62,7 @@ export interface CandidateSourceStore {
   getSource(scopeRef: ScopeRef, sourceId: Uuid, ctx: ToolContext): Promise<CandidateSource | undefined>
   listSources(scopeRef: ScopeRef, workspaceId: Uuid, filter: CandidateSourceListFilter, ctx: ToolContext): Promise<readonly CandidateSource[]>
   /** Promote or reject a proposed source; `expectedRevision` is a compare-and-swap fence. */
-  reviewSource(scopeRef: ScopeRef, input: { readonly sourceId: Uuid; readonly reviewState: CandidateSourceReviewState; readonly reviewedBy: string; readonly expectedRevision: string; readonly idempotencyKey: string }, ctx: ToolContext): Promise<CandidateSource>
+  reviewSource(scopeRef: ScopeRef, input: { readonly sourceId: Uuid; readonly reviewState: CandidateSourceReviewState; readonly trustTier?: SourceTrustTier; readonly reviewedBy: string; readonly expectedRevision: string; readonly idempotencyKey: string }, ctx: ToolContext): Promise<CandidateSource>
 }
 
 export const CANDIDATE_SOURCE_KINDS: readonly CandidateSourceKind[] = ['upload', 'web_fetch', 'standard_ref']
