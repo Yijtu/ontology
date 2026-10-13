@@ -6,6 +6,7 @@ import type {
   AssetCandidateBatch,
   AssetCandidateVersion,
   AssetDraftVersion,
+  CompetencyRunReport,
   DefinitionCandidatePayload,
   IndustryValidationReport,
   IndustryValidationReportStore,
@@ -780,6 +781,43 @@ describe('industry asset publication', () => {
         EDITOR,
       ),
     ).rejects.toMatchObject({ code: 'VALIDATION_BLOCKED' })
+  })
+
+  it('blocks a pack that failed a competency question even without demanding deployment executability', async () => {
+    const h = harness()
+    const report = await seedAll(h)
+    const competency: CompetencyRunReport = {
+      questionSetRef: { id: randomUUID(), version: '1.0.0', digest: DIGEST },
+      dataMode: 'synthetic',
+      definitionRefs: [],
+      ruleRefs: [],
+      sourceRefs: [],
+      results: [
+        {
+          questionId: 'bridge-steel',
+          question: 'which steel grade does the bridge use?',
+          taskKind: 'published_facts',
+          definitionRef: { id: randomUUID(), version: '1.0.0', digest: DIGEST },
+          ruleRefs: [],
+          requiredCapabilities: [],
+          requiredSources: [],
+          inputDigest: DIGEST,
+          expected: { kind: 'unknown', reason: 'no published fact for the bridge' },
+          actual: { kind: 'refusal', reason: 'unsupported_capability' },
+          status: 'failed',
+          reason: 'the draft refused where the oracle expected an unknown-aware answer',
+          sourceCoverage: { required: 1, verified: 1, complete: true },
+          artifactRefs: [],
+        },
+      ],
+      passed: false,
+      contentDigest: DIGEST,
+      externalAcceptance: { customerQuote: 'unverified', liveModelQuality: 'unverified' },
+    }
+    await h.seedReport({ ...report, competency, competencyRequired: true })
+    const error: unknown = await publishFixture(h, report).catch((captured: unknown) => captured)
+    expect(error).toMatchObject({ code: 'VALIDATION_BLOCKED' })
+    expect((error as { reasons: readonly string[] }).reasons).toContain('bridge-steel: the draft refused where the oracle expected an unknown-aware answer')
   })
 
   it('refuses a stale validation and a stale workspace head', async () => {
