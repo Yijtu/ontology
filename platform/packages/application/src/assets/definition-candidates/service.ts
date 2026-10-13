@@ -1,4 +1,4 @@
-import { assetCandidateCommitPin, AssetCandidateStoreError, isResourceRef, isSha256Digest, isToolContext, isUuid, isVersionRef } from '@ontology/contracts'
+import { assetCandidateCommitPin, AssetCandidateStoreError, isResourceRef, isSha256Digest, isToolContext, isUuid, isVersionRef, sourceTrustTierGroundsPublication } from '@ontology/contracts'
 import type {
   AssetCandidateBatch,
   AssetCandidateBatchCounts,
@@ -560,6 +560,7 @@ export class DefinitionCandidateGenerationService {
     if (!sameResourcePin(read.documentSetRef, draft.documentSetRef)) throw new DefinitionCandidateError('VERSION_CONFLICT', 'source corpus moved during confirmation')
     const selected = selectedGrounding(groundingFragments(read.sources), 0, input.fragmentIndex)
     if (selected === undefined || !sameResourcePin(selected.sourceRef, input.sourceRef)) throw new DefinitionCandidateError('VALIDATION_BLOCKED', 'the selected approved source fragment is unavailable')
+    if (!sourceTrustTierGroundsPublication(selected.trustTier)) throw new DefinitionCandidateError('VALIDATION_BLOCKED', `the selected ${selected.trustTier} source may not ground a publishable candidate until a human promotes it`)
     const batchId = this.#newId()
     const recordedAt = this.#now()
     const inputDraftRef = { workspaceId: draft.workspaceId, revision: draft.revision, digest: draft.digest,
@@ -567,7 +568,7 @@ export class DefinitionCandidateGenerationService {
         mountedRef: workspace.latestPublishedPackRef ?? draft.basePackRef, documentSetRef: draft.documentSetRef })) }
     const sourceRefs = [selected.sourceRef]
     const sourceSpans = [selected.sourceSpan]
-    const issues = original.issues.filter((issue) => issue.code !== 'MISSING_PROVENANCE')
+    const issues = original.issues.filter((issue) => issue.code !== 'MISSING_PROVENANCE' && issue.code !== 'SOURCE_TRUST_BLOCKED')
     const contentDigest = sha256DigestOf(canonicalJson({ operation: 'source_confirmation', replacesCandidateId: original.candidateId,
       payload: original.payload, inputDraftRef, sourceRefs, sourceSpans, issues, reason: input.reason }))
     const idempotencyKey = sha256DigestOf(canonicalJson({ requestDigest, contentDigest }))
@@ -801,10 +802,12 @@ export class DefinitionCandidateGenerationService {
       const sourceRefs = selected === undefined ? [] : [selected.sourceRef]
       const sourceSpans = selected === undefined ? [] : [selected.sourceSpan]
       const provenanceMissing = selected === undefined
+      const trustBlocked = selected !== undefined && !sourceTrustTierGroundsPublication(selected.trustTier)
       if (provenanceMissing) issues.push({ code: 'MISSING_PROVENANCE', message: 'no valid read-back source fragment was selected; human confirmation is required', path: 'sourceSpans' })
+      if (trustBlocked) issues.push({ code: 'SOURCE_TRUST_BLOCKED', message: `the selected ${selected.trustTier} source may not ground a publishable candidate until a human promotes it`, path: 'sourceSpans' })
 
       const hard = issues.some((issue) => HARD_ISSUES.includes(issue.code))
-      const state: AssetCandidateState = hard ? 'failed' : provenanceMissing ? 'pending_confirmation' : 'produced'
+      const state: AssetCandidateState = hard ? 'failed' : provenanceMissing || trustBlocked ? 'pending_confirmation' : 'produced'
       const payload: DefinitionCandidatePayload = { ...payloadOf(draft, displayName), conflicts }
       const contentDigest = definitionGeneratedContentDigest({
         workspaceId: args.input.workspaceId,
@@ -832,7 +835,7 @@ export class DefinitionCandidateGenerationService {
         sourceSpans,
         state,
         issues,
-        pendingConfirmation: provenanceMissing,
+        pendingConfirmation: provenanceMissing || trustBlocked,
         generationCallRef: {
           id: args.batchId,
           version: '1.0.0',

@@ -9,9 +9,9 @@ export function groundingFragments(sources: readonly GroundedSource[]): Definiti
     if (source.status === 'failed') return []
     let fragmentIndex = 0
     return source.contents.flatMap<DefinitionGroundingFragment>((content) => content.kind === 'text'
-      ? [{ sourceIndex, fragmentIndex: fragmentIndex++, sourceRef: source.sourceRef,
+      ? [{ sourceIndex, fragmentIndex: fragmentIndex++, sourceRef: source.sourceRef, trustTier: source.trustTier,
           sourceSpan: content.sourceSpan, content: { kind: 'text', text: content.text } }]
-      : content.rows.map((row) => ({ sourceIndex, fragmentIndex: fragmentIndex++, sourceRef: source.sourceRef,
+      : content.rows.map((row) => ({ sourceIndex, fragmentIndex: fragmentIndex++, sourceRef: source.sourceRef, trustTier: source.trustTier,
           sourceSpan: row.sourceSpan, content: { kind: 'table', format: content.format,
             columns: content.columns, headerRow: content.headerRow, cells: row.cells } })))
   })

@@ -345,6 +345,60 @@ describe('definition (TBox) candidate generation service', () => {
     expect(candidate?.issues.some((issue) => issue.code === 'MISSING_PROVENANCE')).toBe(true)
   })
 
+  it('keeps a candidate grounded in an agent-researched source pending until a human promotes it', async () => {
+    const corpus: { documentSetRef?: ResourceRef } = {}
+    const h = buildHarness([SOURCED_PAYLOAD], undefined, { sourceGrounding: {
+      read: async (request, _ctx, budget) => {
+        const documentSetRef = corpus.documentSetRef
+        if (documentSetRef === undefined) throw new Error('fixture corpus not ready')
+        return { documentSetRef, coverage: 'complete', usage: budget.usage(), sources: request.sourceRefs.map((sourceRef) => ({
+          sourceRef, trust: 'untrusted_source_data', trustTier: 'agent_researched', status: 'complete', reasons: [], contents: [{
+            kind: 'text', text: 'Controlled source: equipment has rated capacity.', sourceSpan: {
+              parseId: '22222222-2222-4222-8222-222222222222', chunkId: '33333333-3333-4333-8333-333333333333',
+              locator: { kind: 'offset', startOffset: 0, endOffset: 53 }, spanKind: 'verbatim', precision: 'exact',
+              quoteDigest: DIGEST, textDigest: DIGEST,
+            },
+          }],
+        })) }
+      },
+    } })
+    corpus.documentSetRef = h.initialDraft.documentSetRef
+    const result = await h.service.generate(input(), 'editor-1', EDITOR)
+    const device = result.candidates.find((candidate) => candidate.logicalId === 'device')
+    expect(device).toMatchObject({ state: 'pending_confirmation', pendingConfirmation: true })
+    expect(device?.sourceRefs).toHaveLength(1)
+    expect(device?.issues.some((issue) => issue.code === 'SOURCE_TRUST_BLOCKED')).toBe(true)
+    // Human confirmation of a low-trust source is refused rather than laundering it into a publishable version.
+    await expect(h.service.confirmSource({ workspaceId: WORKSPACE_ID, expectedRevision: '1', candidateId: device?.candidateId ?? '',
+      contentDigest: device?.contentDigest ?? DIGEST, sourceRef: input().sourceRefs[0] ?? resourceRef(), fragmentIndex: 0,
+      reason: 'sample the agent source', idempotencyKey: `trust-${randomUUID()}` }, 'editor-1', EDITOR)).rejects.toMatchObject({ code: 'VALIDATION_BLOCKED' })
+  })
+
+  it('keeps a candidate grounded in a public-standard source producible', async () => {
+    const corpus: { documentSetRef?: ResourceRef } = {}
+    const h = buildHarness([SOURCED_PAYLOAD], undefined, { sourceGrounding: {
+      read: async (request, _ctx, budget) => {
+        const documentSetRef = corpus.documentSetRef
+        if (documentSetRef === undefined) throw new Error('fixture corpus not ready')
+        return { documentSetRef, coverage: 'complete', usage: budget.usage(), sources: request.sourceRefs.map((sourceRef) => ({
+          sourceRef, trust: 'untrusted_source_data', trustTier: 'public_standard', status: 'complete', reasons: [], contents: [{
+            kind: 'text', text: 'Controlled source: equipment has rated capacity.', sourceSpan: {
+              parseId: '22222222-2222-4222-8222-222222222222', chunkId: '33333333-3333-4333-8333-333333333333',
+              locator: { kind: 'offset', startOffset: 0, endOffset: 53 }, spanKind: 'verbatim', precision: 'exact',
+              quoteDigest: DIGEST, textDigest: DIGEST,
+            },
+          }],
+        })) }
+      },
+    } })
+    corpus.documentSetRef = h.initialDraft.documentSetRef
+    const result = await h.service.generate(input(), 'editor-1', EDITOR)
+    const device = result.candidates.find((candidate) => candidate.logicalId === 'device')
+    expect(device?.state).toBe('produced')
+    expect(device?.pendingConfirmation).toBe(false)
+    expect(device?.issues).toEqual([])
+  })
+
   it('records a logical-id collision as a hard failure', async () => {
     const payload = JSON.stringify({
       objects: [

@@ -29,7 +29,7 @@ export interface RuleActionSourceSelection {
 }
 
 export interface RuleActionGenerationIssue {
-  readonly code: 'SOURCE_UNRESOLVED' | 'SOURCE_INCOMPLETE' | 'TERM_UNRESOLVED' | 'DEPENDENCY_UNRESOLVED'
+  readonly code: 'SOURCE_UNRESOLVED' | 'SOURCE_INCOMPLETE' | 'SOURCE_TRUST_BLOCKED' | 'TERM_UNRESOLVED' | 'DEPENDENCY_UNRESOLVED'
   readonly path: string
   readonly message: string
 }

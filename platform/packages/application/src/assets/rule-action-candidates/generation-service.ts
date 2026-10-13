@@ -1,4 +1,4 @@
-import { assetCandidateCommitPin, bindActionDeclaration, isResourceRef, isUuid, isVersionRef, RuleActionCandidateStoreError, SourceGroundingError } from '@ontology/contracts'
+import { assetCandidateCommitPin, bindActionDeclaration, isResourceRef, isUuid, isVersionRef, RuleActionCandidateStoreError, SourceGroundingError, sourceTrustTierGroundsPublication } from '@ontology/contracts'
 import type { ActionCapabilityBindingInput, AssetCandidateStore, AssetCandidateVersion, CandidateSourceSpan,
   GenerationOutputLimit, GenerationPort, GenerationRequest, ModelRef, ResourceRef, RevisionString,
   RuleActionCandidateKind, RuleActionCandidateStore, RuleActionCandidateVersion, RuleActionGenerationBatch,
@@ -293,6 +293,8 @@ function groundCandidate(candidate: RuleActionCandidateVersion, proposal: DraftR
     const fragment = selectedGrounding(fragments, selection?.sourceIndex, selection?.fragmentIndex)
     if (fragment === undefined) { issues.push(issue('SOURCE_UNRESOLVED', path, 'Select a real approved source fragment.')); return [] }
     sourceBindings.push({ path, sourceRef: fragment.sourceRef, sourceSpan: fragment.sourceSpan })
+    if (!sourceTrustTierGroundsPublication(fragment.trustTier)) issues.push(issue('SOURCE_TRUST_BLOCKED', path,
+      `The selected ${fragment.trustTier} source may not ground a publishable rule or action until a human promotes it.`))
     if (candidate.kind === 'rule' && fragment.sourceSpan.kind === 'structured') issues.push(issue('SOURCE_UNRESOLVED', path,
       'The actual table locator is retained, but structured rule-clause provenance is not yet executable; select supported text evidence.'))
     if (!spans.some((span) => canonicalJson(span) === canonicalJson(fragment.sourceSpan))) spans.push(fragment.sourceSpan)

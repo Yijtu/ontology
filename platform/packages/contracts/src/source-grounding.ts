@@ -26,6 +26,16 @@ export function sourceTrustTierOf(source: Pick<GroundingSourceApproval, 'trustTi
   return source.trustTier ?? 'customer_authoritative'
 }
 
+/**
+ * Whether a source tier may ground a publishable candidate. Only a human-owned customer source or a
+ * reviewed public standard qualifies; an agent-researched proposal defaults to pending confirmation
+ * and a synthetic source is sandbox-only. The publish gate reads this so provenance is enforced at
+ * the artifact boundary, not merely labelled.
+ */
+export function sourceTrustTierGroundsPublication(tier: SourceTrustTier): boolean {
+  return tier === 'customer_authoritative' || tier === 'public_standard'
+}
+
 export interface GroundingSourceApproval {
   readonly sourceRef: ResourceRef
   readonly state: 'approved' | 'retracted'
@@ -108,6 +118,8 @@ export interface GroundedSourceFragment {
   readonly sourceIndex: number
   readonly fragmentIndex: number
   readonly sourceRef: ResourceRef
+  /** The effective provenance tier of the fragment's source; a blocking tier may not ground a publishable candidate. */
+  readonly trustTier: SourceTrustTier
   readonly sourceSpan: CandidateSourceSpan
   readonly content: Omit<GroundedText, 'sourceSpan'> | {
     readonly kind: 'table'; readonly format: 'csv' | 'xlsx'; readonly columns: readonly StructuredColumn[];

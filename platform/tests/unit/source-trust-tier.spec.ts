@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest'
-import { SourceGroundingError, assertGroundingDocumentSet, sourceTrustTierOf } from '@ontology/contracts'
+import { SourceGroundingError, assertGroundingDocumentSet, sourceTrustTierGroundsPublication, sourceTrustTierOf } from '@ontology/contracts'
 
 const workspaceId = '00000000-0000-4000-8000-000000000001'
 const parseId = '00000000-0000-4000-8000-000000000002'
@@ -34,5 +34,12 @@ describe('source trust tier', () => {
   it('rejects an unknown tier at the artifact boundary', () => {
     expect(() => assertGroundingDocumentSet(documentSet([approvedSource('trusted_vendor')])))
       .toThrow(SourceGroundingError)
+  })
+
+  it('lets only customer-authoritative and public-standard sources ground a publishable candidate', () => {
+    expect(sourceTrustTierGroundsPublication('customer_authoritative')).toBe(true)
+    expect(sourceTrustTierGroundsPublication('public_standard')).toBe(true)
+    expect(sourceTrustTierGroundsPublication('agent_researched')).toBe(false)
+    expect(sourceTrustTierGroundsPublication('synthetic')).toBe(false)
   })
 })
