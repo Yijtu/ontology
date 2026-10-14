@@ -135,7 +135,7 @@ export async function assembleDeployment(
     }
   }
 
-  const competencyQuestions = createCompetencyQuestionWorkflow({ blobs: blobStore, registry: artifactRegistry, reviews: publicationStore })
+  const competencyQuestions = createCompetencyQuestionWorkflow({ blobs: blobStore, registry: artifactRegistry, reviews: publicationStore, operations: compute.registry })
   const reviewableCandidates = new CompositeReviewableCandidateReader({ competencyQuestions: competencyQuestions.service, definition: assetCandidateStore, instance: candidateStore, ruleActions: ruleActionCandidateStore })
   publishedPackRules.current = new PublishedPackRuleDeclarationReader({ packs: publishedPackStore, registry: componentStore, definitions: definitionStore,
     candidates: ruleActionCandidateStore, reviews: publicationStore, reviewableCandidates, projects: projectStore })

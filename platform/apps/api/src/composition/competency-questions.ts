@@ -2,14 +2,14 @@ import Ajv2020 from 'ajv/dist/2020.js'
 import addFormats from 'ajv-formats'
 import type { SchemaObject } from 'ajv'
 import {
-  COMPETENCY_QUESTION_SCHEMA_ID, SCHEMA_DOCUMENTS,
+  COMPETENCY_QUESTION_SCHEMA_ID, SCHEMA_DOCUMENTS, findRegisteredOperation,
   CompetencyQuestionError, isToolContext, isUuid,
 } from '@ontology/contracts'
-import type { CompetencyExpectation, CompetencyQuestionBoundary, CompetencyQuestionSet, CompetencySourceReader, SemanticPublicationStore, ToolContext, VersionRef } from '@ontology/contracts'
+import type { CompetencyExpectation, CompetencyQuestionBoundary, CompetencyQuestionSet, CompetencySourceReader, OperationRegistry, SemanticPublicationStore, ToolContext, VersionRef } from '@ontology/contracts'
 import { CompetencyQuestionService, canonicalJson, sha256DigestOf } from '@ontology/application'
 import type { ArtifactRegistry, LocalImmutableBlobStore } from '@ontology/adapter-blob-local'
 
-export function createCompetencyQuestionBoundary(): {
+export function createCompetencyQuestionBoundary(operations?: OperationRegistry): {
   readonly boundary: CompetencyQuestionBoundary
   readonly validateActual: (value: unknown) => value is CompetencyExpectation
 } {
@@ -19,7 +19,8 @@ export function createCompetencyQuestionBoundary(): {
   return {
     boundary: { schemaId: COMPETENCY_QUESTION_SCHEMA_ID,
       validate: ajv.compile<CompetencyQuestionSet>({ $ref: COMPETENCY_QUESTION_SCHEMA_ID }),
-      digestBody: (body) => sha256DigestOf(canonicalJson(body)) },
+      digestBody: (body) => sha256DigestOf(canonicalJson(body)),
+      ...(operations === undefined ? {} : { isRegisteredOperation: (ref) => findRegisteredOperation(operations, ref) !== undefined }) },
     validateActual: ajv.compile<CompetencyExpectation>({ $ref: 'https://ontology.local/schema/competency-questions.schema.json#/$defs/CompetencyExpectation' }),
   }
 }
@@ -29,8 +30,9 @@ export function createCompetencyQuestionWorkflow(options: {
   readonly blobs: LocalImmutableBlobStore
   readonly registry: Pick<ArtifactRegistry, 'findReference'>
   readonly reviews: Pick<SemanticPublicationStore, 'latestReviewRevision' | 'getReview'>
+  readonly operations?: OperationRegistry
 }) {
-  const schema = createCompetencyQuestionBoundary()
+  const schema = createCompetencyQuestionBoundary(options.operations)
   const service = new CompetencyQuestionService({
     ...schema, reviews: options.reviews, artifacts: options.blobs,
     writer: { putBytes: async (request, ctx) => {
