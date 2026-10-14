@@ -1,6 +1,6 @@
 # V03-074：通用缺口：账号登录、会话与 401 跳转（回流 main）
 
-阶段 B · 通用缺口（回流 main） · fullstack · P0 · 状态 planned · GitHub 待创建
+阶段 B · 通用缺口（回流 main） · fullstack · P0 · 状态 planned · GitHub [#310](https://github.com/Yijtu/ontology/issues/310)
 
 执行工作线：基于 main 的独立分支；目标：main（合入后由 feat/electrical-costing-poc 同步）。2026-10-14 按 [新 B PRD](../../../../../tasks/prd-ai-cost-engineer-mvp.md) 重写；V03 是规划 ID，GitHub 编号见 manifest。
 
@@ -56,5 +56,5 @@ Dependencies: 无
 
 ## 完成记录
 
-- 当前：未开工；验证未运行。GitHub Issue 待创建；文档提交不代表功能完成。
+- 当前：未开工；验证未运行。GitHub Issue [#310](https://github.com/Yijtu/ontology/issues/310)；文档提交不代表功能完成。
 - 实现后记录：提交/PR、适用命令结果、满足的验收、未验证/外部条件、迁移配置与兼容影响。

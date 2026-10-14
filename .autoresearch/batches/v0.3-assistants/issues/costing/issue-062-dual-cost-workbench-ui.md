@@ -15,7 +15,7 @@
 
 Dependencies: #228, #226, #229
 
-依赖：[V03-058](issue-058-dual-cost-calculation.md)、[V03-060](issue-060-cost-sheet-intake-ui.md)、[V03-061](issue-061-price-ui.md)。
+依赖：[#228](issue-058-dual-cost-calculation.md)、[#226](issue-060-cost-sheet-intake-ui.md)、[#229](issue-061-price-ui.md)。
 必须在 V03-051 同步门槛通过后开工；发现通用缺口先回 main，再同步。
 
 ## 验收条件

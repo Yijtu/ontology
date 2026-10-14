@@ -13,9 +13,9 @@
 
 ## 依赖与进入条件
 
-Dependencies: #222, V03-073, V03-081
+Dependencies: #222, #309, #317
 
-依赖：[V03-055](issue-055-bill-parsing-candidates.md)、[V03-073](issue-073-standard-materials.md)、[V03-081](issue-081-drawing-vision-parsing.md)。
+依赖：[#222](issue-055-bill-parsing-candidates.md)、[#309](issue-073-standard-materials.md)、[#317](issue-081-drawing-vision-parsing.md)。
 必须在 V03-051 同步门槛通过后开工；发现通用缺口先回 main，再同步。
 
 ## 验收条件

@@ -13,9 +13,9 @@
 
 ## 依赖与进入条件
 
-Dependencies: #224, V03-076, V03-077, #221
+Dependencies: #224, #312, #313, #221
 
-依赖：[V03-056](issue-056-material-matching-confirmation.md)、[V03-076](issue-076-standards-rules.md)、[V03-077](issue-077-process-rules.md)、[V03-053](issue-053-enterprise-prices.md)。
+依赖：[#224](issue-056-material-matching-confirmation.md)、[#312](issue-076-standards-rules.md)、[#313](issue-077-process-rules.md)、[#221](issue-053-enterprise-prices.md)。
 必须在 V03-051 同步门槛通过后开工；发现通用缺口先回 main，再同步。
 
 ## 验收条件

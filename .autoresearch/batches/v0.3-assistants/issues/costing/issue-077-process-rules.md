@@ -1,6 +1,6 @@
 # V03-077：实现工艺规则维护、版本与样例试算
 
-阶段 B · backend · P1 · 状态 planned · GitHub 待创建
+阶段 B · backend · P1 · 状态 planned · GitHub [#313](https://github.com/Yijtu/ontology/issues/313)
 
 执行工作线：feat/electrical-costing-poc；目标：feat/electrical-costing-poc。2026-10-14 按 [新 B PRD](../../../../../tasks/prd-ai-cost-engineer-mvp.md) 重写；V03 是规划 ID，GitHub 编号见 manifest。
 
@@ -13,9 +13,9 @@
 
 ## 依赖与进入条件
 
-Dependencies: #223, V03-076
+Dependencies: #223, #312
 
-依赖：[V03-054](issue-054-pricing-compute-operations.md)、[V03-076](issue-076-standards-rules.md)。
+依赖：[#223](issue-054-pricing-compute-operations.md)、[#312](issue-076-standards-rules.md)。
 必须在 V03-051 同步门槛通过后开工；发现通用缺口先回 main，再同步。
 
 ## 验收条件
@@ -54,5 +54,5 @@ Dependencies: #223, V03-076
 
 ## 完成记录
 
-- 当前：未开工；验证未运行。GitHub Issue 待创建；文档提交不代表功能完成。
+- 当前：未开工；验证未运行。GitHub Issue [#313](https://github.com/Yijtu/ontology/issues/313)；文档提交不代表功能完成。
 - 实现后记录：提交/PR、适用命令结果、满足的验收、未验证/外部条件、迁移配置与兼容影响。

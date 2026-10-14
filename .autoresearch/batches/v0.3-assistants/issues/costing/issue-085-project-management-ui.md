@@ -1,6 +1,6 @@
 # V03-085：实现报价项目列表与项目概览页面
 
-阶段 B · frontend · P1 · 状态 planned · GitHub 待创建
+阶段 B · frontend · P1 · 状态 planned · GitHub [#321](https://github.com/Yijtu/ontology/issues/321)
 
 执行工作线：feat/electrical-costing-poc；目标：feat/electrical-costing-poc。2026-10-14 按 [新 B PRD](../../../../../tasks/prd-ai-cost-engineer-mvp.md) 重写；V03 是规划 ID，GitHub 编号见 manifest。
 
@@ -13,9 +13,9 @@
 
 ## 依赖与进入条件
 
-Dependencies: V03-079, V03-075
+Dependencies: #315, #311
 
-依赖：[V03-079](issue-079-quotation-projects-documents.md)、[V03-075](issue-075-workbench-home-ui.md)。
+依赖：[#315](issue-079-quotation-projects-documents.md)、[#311](issue-075-workbench-home-ui.md)。
 必须在 V03-051 同步门槛通过后开工；发现通用缺口先回 main，再同步。
 
 ## 验收条件
@@ -55,5 +55,5 @@ Dependencies: V03-079, V03-075
 
 ## 完成记录
 
-- 当前：未开工；验证未运行。GitHub Issue 待创建；文档提交不代表功能完成。
+- 当前：未开工；验证未运行。GitHub Issue [#321](https://github.com/Yijtu/ontology/issues/321)；文档提交不代表功能完成。
 - 实现后记录：提交/PR、适用命令结果、满足的验收、未验证/外部条件、迁移配置与兼容影响。

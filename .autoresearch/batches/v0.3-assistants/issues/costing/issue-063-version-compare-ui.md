@@ -15,7 +15,7 @@
 
 Dependencies: #230, #236, #231
 
-依赖：[V03-059](issue-059-cost-version-snapshots.md)、[V03-067](issue-067-recalculation-diff.md)、[V03-062](issue-062-dual-cost-workbench-ui.md)。
+依赖：[#230](issue-059-cost-version-snapshots.md)、[#236](issue-067-recalculation-diff.md)、[#231](issue-062-dual-cost-workbench-ui.md)。
 必须在 V03-051 同步门槛通过后开工；发现通用缺口先回 main，再同步。
 
 ## 验收条件

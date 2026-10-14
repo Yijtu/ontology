@@ -13,9 +13,9 @@
 
 ## 依赖与进入条件
 
-Dependencies: V03-075, V03-083, #229, V03-085, #226, V03-082, #231, #233, #234, V03-084
+Dependencies: #311, #319, #229, #321, #226, #318, #231, #233, #234, #320
 
-依赖：[V03-075](issue-075-workbench-home-ui.md)、[V03-083](issue-083-asset-center-ui.md)、[V03-061](issue-061-price-ui.md)、[V03-085](issue-085-project-management-ui.md)、[V03-060](issue-060-cost-sheet-intake-ui.md)、[V03-082](issue-082-clarification-list.md)、[V03-062](issue-062-dual-cost-workbench-ui.md)、[V03-063](issue-063-version-compare-ui.md)、[V03-064](issue-064-cost-excel-export.md)、[V03-084](issue-084-external-quotation-ui-export.md)。
+依赖：[#311](issue-075-workbench-home-ui.md)、[#319](issue-083-asset-center-ui.md)、[#229](issue-061-price-ui.md)、[#321](issue-085-project-management-ui.md)、[#226](issue-060-cost-sheet-intake-ui.md)、[#318](issue-082-clarification-list.md)、[#231](issue-062-dual-cost-workbench-ui.md)、[#233](issue-063-version-compare-ui.md)、[#234](issue-064-cost-excel-export.md)、[#320](issue-084-external-quotation-ui-export.md)。
 必须在 V03-051 同步门槛通过后开工；发现通用缺口先回 main，再同步。
 
 ## 验收条件

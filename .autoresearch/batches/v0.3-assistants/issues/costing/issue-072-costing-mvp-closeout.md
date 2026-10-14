@@ -15,7 +15,7 @@
 
 Dependencies: #238, #239
 
-依赖：[V03-069](issue-069-costing-browser-e2e.md)、[V03-071](issue-071-real-sample-acceptance.md)。
+依赖：[#238](issue-069-costing-browser-e2e.md)、[#239](issue-071-real-sample-acceptance.md)。
 必须在 V03-051 同步门槛通过后开工；发现通用缺口先回 main，再同步。
 
 ## 验收条件

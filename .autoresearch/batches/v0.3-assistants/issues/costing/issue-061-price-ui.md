@@ -13,9 +13,9 @@
 
 ## 依赖与进入条件
 
-Dependencies: #221, V03-078
+Dependencies: #221, #314
 
-依赖：[V03-053](issue-053-enterprise-prices.md)、[V03-078](issue-078-market-prices.md)。
+依赖：[#221](issue-053-enterprise-prices.md)、[#314](issue-078-market-prices.md)。
 必须在 V03-051 同步门槛通过后开工；发现通用缺口先回 main，再同步。
 
 ## 验收条件

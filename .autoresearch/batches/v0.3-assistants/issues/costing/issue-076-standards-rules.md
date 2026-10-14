@@ -1,6 +1,6 @@
 # V03-076：实现执行标准文档登记与标准规则服务
 
-阶段 B · backend · P1 · 状态 planned · GitHub 待创建
+阶段 B · backend · P1 · 状态 planned · GitHub [#312](https://github.com/Yijtu/ontology/issues/312)
 
 执行工作线：feat/electrical-costing-poc；目标：feat/electrical-costing-poc。2026-10-14 按 [新 B PRD](../../../../../tasks/prd-ai-cost-engineer-mvp.md) 重写；V03 是规划 ID，GitHub 编号见 manifest。
 
@@ -15,7 +15,7 @@
 
 Dependencies: #220
 
-依赖：[V03-052](issue-052-costing-extension-skeleton.md)。
+依赖：[#220](issue-052-costing-extension-skeleton.md)。
 必须在 V03-051 同步门槛通过后开工；发现通用缺口先回 main，再同步。
 
 ## 验收条件
@@ -57,5 +57,5 @@ Dependencies: #220
 
 ## 完成记录
 
-- 当前：未开工；验证未运行。GitHub Issue 待创建；文档提交不代表功能完成。
+- 当前：未开工；验证未运行。GitHub Issue [#312](https://github.com/Yijtu/ontology/issues/312)；文档提交不代表功能完成。
 - 实现后记录：提交/PR、适用命令结果、满足的验收、未验证/外部条件、迁移配置与兼容影响。

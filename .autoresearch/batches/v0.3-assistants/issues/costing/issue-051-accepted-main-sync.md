@@ -15,7 +15,7 @@
 
 Dependencies: #218
 
-依赖：[V03-047](../core/issue-047-main-release-gate.md)。
+依赖：[#218](../core/issue-047-main-release-gate.md)。
 A 阶段已验收合入 main（V03-047 已关闭），本卡可开始。
 
 ## 验收条件

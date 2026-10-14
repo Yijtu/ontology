@@ -3838,7 +3838,7 @@
       "working_line": "feat/electrical-costing-poc",
       "verification_state": "not_run",
       "evidence": [],
-      "remote_state": "open_pending_close",
+      "remote_state": "closed",
       "remote_labels": [
         "batch:v0.3-assistants",
         "phase:costing",
@@ -3883,7 +3883,7 @@
       "working_line": "feat/electrical-costing-poc",
       "verification_state": "not_run",
       "evidence": [],
-      "remote_state": "open_pending_close",
+      "remote_state": "closed",
       "remote_labels": [
         "batch:v0.3-assistants",
         "phase:costing",
@@ -3982,7 +3982,7 @@
       "working_line": "feat/electrical-costing-poc",
       "verification_state": "not_run",
       "evidence": [],
-      "remote_state": "open_pending_close",
+      "remote_state": "closed",
       "remote_labels": [
         "batch:v0.3-assistants",
         "phase:costing",
@@ -4092,7 +4092,7 @@
       "working_line": "feat/electrical-costing-poc",
       "verification_state": "not_run",
       "evidence": [],
-      "remote_state": "open_pending_close",
+      "remote_state": "closed",
       "remote_labels": [
         "batch:v0.3-assistants",
         "phase:costing",
@@ -4217,8 +4217,8 @@
       "dependency_readiness": "waiting_dependencies",
       "external_readiness": "see_card",
       "implementation_started": false,
-      "github_issue_number": null,
-      "github_url": null,
+      "github_issue_number": 309,
+      "github_url": "https://github.com/Yijtu/ontology/issues/309",
       "file": ".autoresearch/batches/v0.3-assistants/issues/costing/issue-073-standard-materials.md",
       "depends_on": [
         "V03-052"
@@ -4242,7 +4242,7 @@
       "working_line": "feat/electrical-costing-poc",
       "verification_state": "not_run",
       "evidence": [],
-      "remote_state": "not_created",
+      "remote_state": "open",
       "remote_labels": [
         "batch:v0.3-assistants",
         "phase:costing",
@@ -4257,7 +4257,7 @@
         "action": "added",
         "remote_body_stale": false
       },
-      "published_body_sha256": null
+      "published_body_sha256": "5321af5fdb51bdd050e51df7397abf6eaddcae995e018e708578a75e7177ca2c"
     },
     {
       "local_id": "V03-074",
@@ -4270,8 +4270,8 @@
       "dependency_readiness": "ready",
       "external_readiness": "see_card",
       "implementation_started": false,
-      "github_issue_number": null,
-      "github_url": null,
+      "github_issue_number": 310,
+      "github_url": "https://github.com/Yijtu/ontology/issues/310",
       "file": ".autoresearch/batches/v0.3-assistants/issues/core/issue-074-account-login-session.md",
       "depends_on": [],
       "declared_story_refs": [
@@ -4295,7 +4295,7 @@
       "working_line": "feature-branch-from-main",
       "verification_state": "not_run",
       "evidence": [],
-      "remote_state": "not_created",
+      "remote_state": "open",
       "remote_labels": [
         "batch:v0.3-assistants",
         "phase:core",
@@ -4308,7 +4308,7 @@
         "action": "added",
         "remote_body_stale": false
       },
-      "published_body_sha256": null
+      "published_body_sha256": "1c84014381f01b25258a604d9be1f177164d71e6aff06c99629094fd6b2bd389"
     },
     {
       "local_id": "V03-075",
@@ -4321,8 +4321,8 @@
       "dependency_readiness": "waiting_dependencies",
       "external_readiness": "see_card",
       "implementation_started": false,
-      "github_issue_number": null,
-      "github_url": null,
+      "github_issue_number": 311,
+      "github_url": "https://github.com/Yijtu/ontology/issues/311",
       "file": ".autoresearch/batches/v0.3-assistants/issues/costing/issue-075-workbench-home-ui.md",
       "depends_on": [
         "V03-074",
@@ -4349,7 +4349,7 @@
       "working_line": "feat/electrical-costing-poc",
       "verification_state": "not_run",
       "evidence": [],
-      "remote_state": "not_created",
+      "remote_state": "open",
       "remote_labels": [
         "batch:v0.3-assistants",
         "phase:costing",
@@ -4364,7 +4364,7 @@
         "action": "added",
         "remote_body_stale": false
       },
-      "published_body_sha256": null
+      "published_body_sha256": "c2e3338350330eeea171ffe00594f6c84755c031c0805f6367b3e2ebfb53a029"
     },
     {
       "local_id": "V03-076",
@@ -4377,8 +4377,8 @@
       "dependency_readiness": "waiting_dependencies",
       "external_readiness": "see_card",
       "implementation_started": false,
-      "github_issue_number": null,
-      "github_url": null,
+      "github_issue_number": 312,
+      "github_url": "https://github.com/Yijtu/ontology/issues/312",
       "file": ".autoresearch/batches/v0.3-assistants/issues/costing/issue-076-standards-rules.md",
       "depends_on": [
         "V03-052"
@@ -4405,7 +4405,7 @@
       "working_line": "feat/electrical-costing-poc",
       "verification_state": "not_run",
       "evidence": [],
-      "remote_state": "not_created",
+      "remote_state": "open",
       "remote_labels": [
         "batch:v0.3-assistants",
         "phase:costing",
@@ -4420,7 +4420,7 @@
         "action": "added",
         "remote_body_stale": false
       },
-      "published_body_sha256": null
+      "published_body_sha256": "286b4422cdcc3dda5fdf68b96973989086a131bc4c657c99c77f17d34b1e7fba"
     },
     {
       "local_id": "V03-077",
@@ -4433,8 +4433,8 @@
       "dependency_readiness": "waiting_dependencies",
       "external_readiness": "see_card",
       "implementation_started": false,
-      "github_issue_number": null,
-      "github_url": null,
+      "github_issue_number": 313,
+      "github_url": "https://github.com/Yijtu/ontology/issues/313",
       "file": ".autoresearch/batches/v0.3-assistants/issues/costing/issue-077-process-rules.md",
       "depends_on": [
         "V03-054",
@@ -4459,7 +4459,7 @@
       "working_line": "feat/electrical-costing-poc",
       "verification_state": "not_run",
       "evidence": [],
-      "remote_state": "not_created",
+      "remote_state": "open",
       "remote_labels": [
         "batch:v0.3-assistants",
         "phase:costing",
@@ -4474,7 +4474,7 @@
         "action": "added",
         "remote_body_stale": false
       },
-      "published_body_sha256": null
+      "published_body_sha256": "69807f96c3a7d489fcc4aabc887a42475625476b027386aceded929822456586"
     },
     {
       "local_id": "V03-078",
@@ -4487,8 +4487,8 @@
       "dependency_readiness": "waiting_dependencies",
       "external_readiness": "see_card",
       "implementation_started": false,
-      "github_issue_number": null,
-      "github_url": null,
+      "github_issue_number": 314,
+      "github_url": "https://github.com/Yijtu/ontology/issues/314",
       "file": ".autoresearch/batches/v0.3-assistants/issues/costing/issue-078-market-prices.md",
       "depends_on": [
         "V03-053"
@@ -4512,7 +4512,7 @@
       "working_line": "feat/electrical-costing-poc",
       "verification_state": "not_run",
       "evidence": [],
-      "remote_state": "not_created",
+      "remote_state": "open",
       "remote_labels": [
         "batch:v0.3-assistants",
         "phase:costing",
@@ -4527,7 +4527,7 @@
         "action": "added",
         "remote_body_stale": false
       },
-      "published_body_sha256": null
+      "published_body_sha256": "4fc584ab489edf17e5b91e28912a02c5d03808f3d48ddef6b2c98b1a143d2fe5"
     },
     {
       "local_id": "V03-079",
@@ -4540,8 +4540,8 @@
       "dependency_readiness": "waiting_dependencies",
       "external_readiness": "see_card",
       "implementation_started": false,
-      "github_issue_number": null,
-      "github_url": null,
+      "github_issue_number": 315,
+      "github_url": "https://github.com/Yijtu/ontology/issues/315",
       "file": ".autoresearch/batches/v0.3-assistants/issues/costing/issue-079-quotation-projects-documents.md",
       "depends_on": [
         "V03-052"
@@ -4574,7 +4574,7 @@
       "working_line": "feat/electrical-costing-poc",
       "verification_state": "not_run",
       "evidence": [],
-      "remote_state": "not_created",
+      "remote_state": "open",
       "remote_labels": [
         "batch:v0.3-assistants",
         "phase:costing",
@@ -4589,7 +4589,7 @@
         "action": "added",
         "remote_body_stale": false
       },
-      "published_body_sha256": null
+      "published_body_sha256": "bf5ad4a9b6394c60e64d073e1079086f467703900e10e5a9c1b6c9ab75b57feb"
     },
     {
       "local_id": "V03-080",
@@ -4602,8 +4602,8 @@
       "dependency_readiness": "waiting_dependencies",
       "external_readiness": "external_unconfirmed",
       "implementation_started": false,
-      "github_issue_number": null,
-      "github_url": null,
+      "github_issue_number": 316,
+      "github_url": "https://github.com/Yijtu/ontology/issues/316",
       "file": ".autoresearch/batches/v0.3-assistants/issues/core/issue-080-vision-model-port.md",
       "depends_on": [
         "V03-049"
@@ -4624,7 +4624,7 @@
       "working_line": "feature-branch-from-main",
       "verification_state": "not_run",
       "evidence": [],
-      "remote_state": "not_created",
+      "remote_state": "open",
       "remote_labels": [
         "batch:v0.3-assistants",
         "phase:core",
@@ -4640,7 +4640,7 @@
         "action": "added",
         "remote_body_stale": false
       },
-      "published_body_sha256": null
+      "published_body_sha256": "046132dfd6622764f47db84cedae26b5d37b76cba2164024168cf2735fd7a3a6"
     },
     {
       "local_id": "V03-081",
@@ -4653,8 +4653,8 @@
       "dependency_readiness": "waiting_dependencies",
       "external_readiness": "external_unconfirmed",
       "implementation_started": false,
-      "github_issue_number": null,
-      "github_url": null,
+      "github_issue_number": 317,
+      "github_url": "https://github.com/Yijtu/ontology/issues/317",
       "file": ".autoresearch/batches/v0.3-assistants/issues/costing/issue-081-drawing-vision-parsing.md",
       "depends_on": [
         "V03-079",
@@ -4682,7 +4682,7 @@
       "working_line": "feat/electrical-costing-poc",
       "verification_state": "not_run",
       "evidence": [],
-      "remote_state": "not_created",
+      "remote_state": "open",
       "remote_labels": [
         "batch:v0.3-assistants",
         "phase:costing",
@@ -4698,7 +4698,7 @@
         "action": "added",
         "remote_body_stale": false
       },
-      "published_body_sha256": null
+      "published_body_sha256": "cea250985cd85f0e8301d164d09dc74a0c4cccebdb142d6ef5382af051aa54ca"
     },
     {
       "local_id": "V03-082",
@@ -4711,8 +4711,8 @@
       "dependency_readiness": "waiting_dependencies",
       "external_readiness": "see_card",
       "implementation_started": false,
-      "github_issue_number": null,
-      "github_url": null,
+      "github_issue_number": 318,
+      "github_url": "https://github.com/Yijtu/ontology/issues/318",
       "file": ".autoresearch/batches/v0.3-assistants/issues/costing/issue-082-clarification-list.md",
       "depends_on": [
         "V03-056"
@@ -4737,7 +4737,7 @@
       "working_line": "feat/electrical-costing-poc",
       "verification_state": "not_run",
       "evidence": [],
-      "remote_state": "not_created",
+      "remote_state": "open",
       "remote_labels": [
         "batch:v0.3-assistants",
         "phase:costing",
@@ -4752,7 +4752,7 @@
         "action": "added",
         "remote_body_stale": false
       },
-      "published_body_sha256": null
+      "published_body_sha256": "e175820a8a76bdec53d7159cf9b3bf448cadc3a55667ebf54ddc01c856a68217"
     },
     {
       "local_id": "V03-083",
@@ -4765,8 +4765,8 @@
       "dependency_readiness": "waiting_dependencies",
       "external_readiness": "see_card",
       "implementation_started": false,
-      "github_issue_number": null,
-      "github_url": null,
+      "github_issue_number": 319,
+      "github_url": "https://github.com/Yijtu/ontology/issues/319",
       "file": ".autoresearch/batches/v0.3-assistants/issues/costing/issue-083-asset-center-ui.md",
       "depends_on": [
         "V03-073",
@@ -4813,7 +4813,7 @@
       "working_line": "feat/electrical-costing-poc",
       "verification_state": "not_run",
       "evidence": [],
-      "remote_state": "not_created",
+      "remote_state": "open",
       "remote_labels": [
         "batch:v0.3-assistants",
         "phase:costing",
@@ -4826,7 +4826,7 @@
         "action": "added",
         "remote_body_stale": false
       },
-      "published_body_sha256": null
+      "published_body_sha256": "bca0bc11afc298630848f654162a2fca630c8100706008ba99c9571bf527767f"
     },
     {
       "local_id": "V03-084",
@@ -4839,8 +4839,8 @@
       "dependency_readiness": "waiting_dependencies",
       "external_readiness": "see_card",
       "implementation_started": false,
-      "github_issue_number": null,
-      "github_url": null,
+      "github_issue_number": 320,
+      "github_url": "https://github.com/Yijtu/ontology/issues/320",
       "file": ".autoresearch/batches/v0.3-assistants/issues/costing/issue-084-external-quotation-ui-export.md",
       "depends_on": [
         "V03-057",
@@ -4869,7 +4869,7 @@
       "working_line": "feat/electrical-costing-poc",
       "verification_state": "not_run",
       "evidence": [],
-      "remote_state": "not_created",
+      "remote_state": "open",
       "remote_labels": [
         "batch:v0.3-assistants",
         "phase:costing",
@@ -4885,7 +4885,7 @@
         "action": "added",
         "remote_body_stale": false
       },
-      "published_body_sha256": null
+      "published_body_sha256": "db9ad72cacaf3d1eeec6aecde70c7663eb3b9351a4d1489a29794a49ed6232d8"
     },
     {
       "local_id": "V03-085",
@@ -4898,8 +4898,8 @@
       "dependency_readiness": "waiting_dependencies",
       "external_readiness": "see_card",
       "implementation_started": false,
-      "github_issue_number": null,
-      "github_url": null,
+      "github_issue_number": 321,
+      "github_url": "https://github.com/Yijtu/ontology/issues/321",
       "file": ".autoresearch/batches/v0.3-assistants/issues/costing/issue-085-project-management-ui.md",
       "depends_on": [
         "V03-079",
@@ -4925,7 +4925,7 @@
       "working_line": "feat/electrical-costing-poc",
       "verification_state": "not_run",
       "evidence": [],
-      "remote_state": "not_created",
+      "remote_state": "open",
       "remote_labels": [
         "batch:v0.3-assistants",
         "phase:costing",
@@ -4938,7 +4938,7 @@
         "action": "added",
         "remote_body_stale": false
       },
-      "published_body_sha256": null
+      "published_body_sha256": "e3ae845720d25318df63dcac8a9d5c6300e5e2b5e7c8a1d49d70825b1f632480"
     }
   ],
   "publication": {
@@ -5050,7 +5050,20 @@
     238,
     227,
     239,
-    240
+    240,
+    309,
+    310,
+    311,
+    312,
+    313,
+    314,
+    315,
+    316,
+    317,
+    318,
+    319,
+    320,
+    321
   ],
   "source_hash_normalization": "utf8-without-bom-lf",
   "replan_history": [

@@ -1,6 +1,6 @@
 # V03-082：实现对客澄清单与 AI 话术起草
 
-阶段 B · fullstack · P1 · 状态 planned · GitHub 待创建
+阶段 B · fullstack · P1 · 状态 planned · GitHub [#318](https://github.com/Yijtu/ontology/issues/318)
 
 执行工作线：feat/electrical-costing-poc；目标：feat/electrical-costing-poc。2026-10-14 按 [新 B PRD](../../../../../tasks/prd-ai-cost-engineer-mvp.md) 重写；V03 是规划 ID，GitHub 编号见 manifest。
 
@@ -15,7 +15,7 @@
 
 Dependencies: #224
 
-依赖：[V03-056](issue-056-material-matching-confirmation.md)。
+依赖：[#224](issue-056-material-matching-confirmation.md)。
 必须在 V03-051 同步门槛通过后开工；发现通用缺口先回 main，再同步。
 
 ## 验收条件
@@ -55,5 +55,5 @@ Dependencies: #224
 
 ## 完成记录
 
-- 当前：未开工；验证未运行。GitHub Issue 待创建；文档提交不代表功能完成。
+- 当前：未开工；验证未运行。GitHub Issue [#318](https://github.com/Yijtu/ontology/issues/318)；文档提交不代表功能完成。
 - 实现后记录：提交/PR、适用命令结果、满足的验收、未验证/外部条件、迁移配置与兼容影响。

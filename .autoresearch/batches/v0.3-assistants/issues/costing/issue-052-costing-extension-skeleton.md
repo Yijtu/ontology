@@ -15,7 +15,7 @@
 
 Dependencies: #219, #170
 
-依赖：[V03-051](issue-051-accepted-main-sync.md)、[V03-048](issue-048-scope-discovery.md)。
+依赖：[#219](issue-051-accepted-main-sync.md)、[#170](issue-048-scope-discovery.md)。
 必须在 V03-051 同步门槛通过后开工；发现通用缺口先回 main，再同步。
 
 ## 验收条件

@@ -15,7 +15,7 @@
 
 Dependencies: #172, #238
 
-依赖：[V03-050](issue-050-sample-cases-discovery.md)、[V03-069](issue-069-costing-browser-e2e.md)。
+依赖：[#172](issue-050-sample-cases-discovery.md)、[#238](issue-069-costing-browser-e2e.md)。
 必须在 V03-051 同步门槛通过后开工；发现通用缺口先回 main，再同步。
 
 ## 验收条件

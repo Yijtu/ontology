@@ -1,6 +1,6 @@
 # V03-080：通用缺口：视觉模型端口与 PDF 页渲染（回流 main）
 
-阶段 B · 通用缺口（回流 main） · backend · P0 · 状态 planned · GitHub 待创建
+阶段 B · 通用缺口（回流 main） · backend · P0 · 状态 planned · GitHub [#316](https://github.com/Yijtu/ontology/issues/316)
 
 执行工作线：基于 main 的独立分支；目标：main（合入后由 feat/electrical-costing-poc 同步）。2026-10-14 按 [新 B PRD](../../../../../tasks/prd-ai-cost-engineer-mvp.md) 重写；V03 是规划 ID，GitHub 编号见 manifest。
 
@@ -15,7 +15,7 @@
 
 Dependencies: #171
 
-依赖：[V03-049](../costing/issue-049-deployment-confidentiality-discovery.md)。
+依赖：[#171](../costing/issue-049-deployment-confidentiality-discovery.md)。
 在 main 上独立实现与验收，不含造价语义；合入 main 后造价分支再同步。
 
 ## 验收条件
@@ -51,5 +51,5 @@ Dependencies: #171
 
 ## 完成记录
 
-- 当前：未开工；验证未运行。GitHub Issue 待创建；文档提交不代表功能完成。
+- 当前：未开工；验证未运行。GitHub Issue [#316](https://github.com/Yijtu/ontology/issues/316)；文档提交不代表功能完成。
 - 实现后记录：提交/PR、适用命令结果、满足的验收、未验证/外部条件、迁移配置与兼容影响。

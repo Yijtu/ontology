@@ -15,7 +15,7 @@
 
 Dependencies: #230
 
-依赖：[V03-059](issue-059-cost-version-snapshots.md)。
+依赖：[#230](issue-059-cost-version-snapshots.md)。
 必须在 V03-051 同步门槛通过后开工；发现通用缺口先回 main，再同步。
 
 ## 验收条件

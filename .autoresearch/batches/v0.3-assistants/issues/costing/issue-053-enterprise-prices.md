@@ -15,7 +15,7 @@
 
 Dependencies: #220
 
-依赖：[V03-052](issue-052-costing-extension-skeleton.md)。
+依赖：[#220](issue-052-costing-extension-skeleton.md)。
 必须在 V03-051 同步门槛通过后开工；发现通用缺口先回 main，再同步。
 
 ## 验收条件

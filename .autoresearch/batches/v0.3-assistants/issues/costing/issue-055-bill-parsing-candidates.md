@@ -13,9 +13,9 @@
 
 ## 依赖与进入条件
 
-Dependencies: V03-079, V03-073
+Dependencies: #315, #309
 
-依赖：[V03-079](issue-079-quotation-projects-documents.md)、[V03-073](issue-073-standard-materials.md)。
+依赖：[#315](issue-079-quotation-projects-documents.md)、[#309](issue-073-standard-materials.md)。
 必须在 V03-051 同步门槛通过后开工；发现通用缺口先回 main，再同步。
 
 ## 验收条件
