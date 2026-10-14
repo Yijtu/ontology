@@ -1,5 +1,5 @@
 import type {
-  CompetencyQuestionSet, CompetencyQuestionSetBody, ResourceRef, ScopeRef, Sha256Digest, VersionRef,
+  CompetencyQuestionSet, CompetencyQuestionSetBody, OperationRef, ResourceRef, ScopeRef, Sha256Digest, VersionRef,
 } from './generated/contracts'
 import type { ToolContext } from './trusted'
 import { findEmbeddedSecretViolations } from './industry-packs'
@@ -11,6 +11,13 @@ export interface CompetencyQuestionBoundary {
   readonly schemaId: typeof COMPETENCY_QUESTION_SCHEMA_ID
   readonly validate: (value: unknown) => value is CompetencyQuestionSet
   readonly digestBody: (body: CompetencyQuestionSetBody) => Sha256Digest
+  /**
+   * Whether a `registered_compute` intent's operation is registered in this deployment. The public
+   * schema only bounds the operation reference shape, so the host must reject an unregistered
+   * operation at declaration time; without this the check would only fire at execution. Omitted
+   * means the host has no registry to resolve against.
+   */
+  readonly isRegisteredOperation?: (ref: OperationRef) => boolean
 }
 
 export type CompetencyQuestionErrorCode = 'INVALID_DECLARATION' | 'DIGEST_MISMATCH' | 'UNKNOWN_PIN' | 'UNDECLARED_CAPABILITY' | 'EXTERNAL_GOLD_UNAVAILABLE' | 'FORBIDDEN' | 'SCOPE_MISMATCH' | 'NOT_APPROVED' | 'CANCELLED'
@@ -51,8 +58,12 @@ export function assertCompetencyQuestionSet(
     if (question.taskKind !== taskKind) throw new CompetencyQuestionError('INVALID_DECLARATION', 'task kind must match the structured intent')
     if (question.intent.kind === 'rule' && question.ruleRefs.length === 0) throw new CompetencyQuestionError('UNKNOWN_PIN', 'rule judgement requires a pinned rule declaration')
     const intent = question.intent
+    if (intent.kind === 'registered_compute' && boundary.isRegisteredOperation !== undefined && !boundary.isRegisteredOperation(intent.operationRef)) {
+      throw new CompetencyQuestionError('INVALID_DECLARATION', 'registered compute requires an operation the deployment actually registered')
+    }
     if (intent.kind === 'registered_compute' &&
-        (!question.requiredCapabilities.includes('registered_compute') || !value.body.sourceRefs.some((ref) => sameRef(ref, intent.inputSourceRef)) ||
+        (!question.requiredCapabilities.includes('registered_compute') ||
+          !value.body.sourceRefs.some((ref) => sameRef(ref, intent.inputSourceRef)) ||
           !question.requiredSources.some((location) => sameRef(location.sourceRef, intent.inputSourceRef)))) {
       throw new CompetencyQuestionError('UNKNOWN_PIN', 'registered compute requires a pinned original input and an explicit registered capability')
     }

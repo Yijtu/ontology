@@ -14,7 +14,8 @@ export function competencyQuestionBoundary(): CompetencyQuestionBoundary {
   const ajv = new Ajv2020({ strict: true, allErrors: true, allowUnionTypes: true })
   addFormats(ajv)
   for (const schema of SCHEMA_DOCUMENTS) ajv.addSchema(schema as SchemaObject)
-  return { schemaId: COMPETENCY_QUESTION_SCHEMA_ID, validate: ajv.compile<CompetencyQuestionSet>({ $ref: COMPETENCY_QUESTION_SCHEMA_ID }), digestBody: competencyDigest }
+  return { schemaId: COMPETENCY_QUESTION_SCHEMA_ID, validate: ajv.compile<CompetencyQuestionSet>({ $ref: COMPETENCY_QUESTION_SCHEMA_ID }), digestBody: competencyDigest,
+    isRegisteredOperation: (ref) => ref.id === 'example.compute.aggregate' && ref.version === '1' }
 }
 
 /** Load immutable authored inputs/gold only. No evaluator, query, materializer or model runs here. */

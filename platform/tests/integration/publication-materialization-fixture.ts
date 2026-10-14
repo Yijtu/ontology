@@ -46,7 +46,11 @@ export function publicationMaterializationBarrier(options: {
   const scope = options.scope
 
   return async (outboxId: string): Promise<number> => {
-    const deadline = Date.now() + 15_000
+    // The dispatch/readiness chain advances one child per fence; under a loaded CI runner the fixed
+    // 15s cap made this barrier red even when 24/25 children had already advanced. Give it the same
+    // generous budget the rest of the harness uses rather than a magic number (LOCAL-065/068).
+    const MATERIALIZATION_BARRIER_TIMEOUT_MS = 60_000
+    const deadline = Date.now() + MATERIALIZATION_BARRIER_TIMEOUT_MS
     const ctx = options.context()
     const initial = await options.client.query<ParentOutbox>(
       `SELECT job_id, payload, topic, state, attempts, dispatched_at FROM agent_platform.job_outbox
@@ -137,6 +141,6 @@ export function publicationMaterializationBarrier(options: {
       }
       await new Promise<void>((done) => setTimeout(done, 100))
     }
-    throw new Error(`the actual publication materialization did not finish within its fixed 15-second barrier: ${lastStage}`)
+    throw new Error(`the actual publication materialization did not finish within its ${MATERIALIZATION_BARRIER_TIMEOUT_MS / 1000}-second barrier: ${lastStage}`)
   }
 }
