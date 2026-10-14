@@ -13,7 +13,7 @@
 
 工作目录是 Git worktree，不是另一个产品或独立仓库。文件夹名可以与当前分支名不同。`D:/work/ontology/.git` 是共享 Git 仓库，另外两个工作区依赖它。
 
-最新顺序见[A 通用 Core PRD](../tasks/prd-generic-assistants-core-v0.3.md)与[总体／造价 PRD](../tasks/prd-ontology-and-business-assistants-v0.3.md)：通用能力和公共前端先进入 main，造价分支同步主线后完成专属 MVP。[第一单 POC 方案](poc/electrical-costing/first-poc-plan-2026-09-29.md)保留客户资料与函数静态核对。新需求仍处于 PRD 阶段，不代表通用功能已合并或报价已交付。
+最新顺序见[A 通用 Core PRD](../tasks/prd-generic-assistants-core-v0.3.md)、[总体 PRD](../tasks/prd-ontology-and-business-assistants-v0.3.md)与[AI 造价师 MVP PRD](../tasks/prd-ai-cost-engineer-mvp.md)：通用能力和公共前端先进入 main，造价分支同步主线后完成专属 MVP。[第一单 POC 方案](poc/electrical-costing/first-poc-plan-2026-09-29.md)保留客户资料与函数静态核对。新需求仍处于 PRD 阶段，不代表通用功能已合并或报价已交付。
 
 ## 命名和生命周期
 

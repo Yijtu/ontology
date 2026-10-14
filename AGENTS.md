@@ -6,7 +6,7 @@
 
 - 先查看 `git status`，保留已有改动。只推进已授权的任务或批次；现有执行授权无需重复确认，本文件本身不启动开发循环或发布操作。
 - 开发入口为 `platform/`。先读当前任务卡及其依赖，再按需读下列规格，不必每次加载整个 backlog。
-- 现有实现契约见[v0.2 SPEC](tasks/spec-industry-semantic-agent-v0.2.md)及分册。双助手新增行为按[A 通用 SPEC](tasks/spec-generic-assistants-core-v0.3.md)及其两个分册、[B 造价 SPEC](tasks/spec-electrical-costing-mvp-v0.3.md)实施，对应[A PRD](tasks/prd-generic-assistants-core-v0.3.md)和[总体 PRD](tasks/prd-ontology-and-business-assistants-v0.3.md)。[v0.3 独立任务批次](.autoresearch/batches/v0.3-assistants/INDEX.md)与其 manifest 是本批依赖、就绪和编号的权威；[旧 manifest](.autoresearch/issues/manifest.json)保留旧执行记录，不能按旧队列自动执行本批。`V03-xxx`／`LOCAL-xxx` 均不自动等于 GitHub `#xxx`，规格和计划测试不代表已交付。
+- 现有实现契约见[v0.2 SPEC](tasks/spec-industry-semantic-agent-v0.2.md)及分册。双助手新增行为按[A 通用 SPEC](tasks/spec-generic-assistants-core-v0.3.md)及其两个分册实施，对应[A PRD](tasks/prd-generic-assistants-core-v0.3.md)和[总体 PRD](tasks/prd-ontology-and-business-assistants-v0.3.md)；阶段 B 按[AI 造价师 MVP PRD](tasks/prd-ai-cost-engineer-mvp.md)实施（技术 SPEC 待派生）。[v0.3 独立任务批次](.autoresearch/batches/v0.3-assistants/INDEX.md)与其 manifest 是本批依赖、就绪和编号的权威；[旧 manifest](.autoresearch/issues/manifest.json)保留旧执行记录，不能按旧队列自动执行本批。`V03-xxx`／`LOCAL-xxx` 均不自动等于 GitHub `#xxx`，规格和计划测试不代表已交付。
 - 用当前代码、验收证据与任务记录核对实际状态。文档中的“尚未实现”等历史描述不代表实时进度；记录不一致时标出差异，不能据此重复实现或虚报完成。
 - 本项目独立建设，历史演示原型不构成代码、接口、数据迁移、页面或测试兼容要求；不以旧实现输出作为正确性依据。DataOS 仅视为数据中台，未验证能力不得成为实现前提。
 - 分支和工作区用途见[分支管理](docs/branch-management.md)。以 `git branch --show-current` 为准，不从目录名推断分支；功能分支 upstream 必须指向同名远端分支。

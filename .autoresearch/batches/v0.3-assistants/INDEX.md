@@ -1,30 +1,32 @@
 # v0.3 双助手：GitHub Issue 批次
 
-日期 2026-09-29。已创建 72 个 GitHub Issues：A 通用 Core 47 项，B 造价 MVP 25 项。全部保持 planned／open，未开始实现，未启动 loop-it。
+日期 2026-09-29 创建；2026-10-14 按 [AI 造价师 MVP PRD](../../../tasks/prd-ai-cost-engineer-mvp.md) 重新规划阶段 B。A 通用 Core 47 项已验收合入 main（V03-047 已关闭，基线 `4fb3a73`）。B 现有 34 项有效任务（改写 21 项、新增 13 项），4 项已取代待关闭。
 
-任务按用户要求发布到 [Yijtu/ontology 本批 Issues](https://github.com/Yijtu/ontology/issues?q=is%3Aissue+is%3Aopen+label%3A%22batch%3Av0.3-assistants%22)。本目录保留对应卡和真实编号映射；旧 .autoresearch/issues 与已有 loop 执行记录保留。V03 ID 与 GitHub 数字不能直接互换，使用 manifest 中的映射。
+任务发布在 [Yijtu/ontology 本批 Issues](https://github.com/Yijtu/ontology/issues?q=is%3Aissue+label%3A%22batch%3Av0.3-assistants%22)。新增卡在 GitHub 创建前编号为“待创建”；改写卡的远程正文在同步前仍是旧版本，以本目录为准。V03 ID 与 GitHub 数字不能直接互换，使用 manifest 中的映射。
 
 ## 从哪里开始
 
-先做 [V03-001](issues/core/issue-001-baseline-wip-audit.md)，核对 main、WIP、旧任务和保留契约。A 完整验收经 [V03-047](issues/core/issue-047-main-release-gate.md) 合入 main；B 经 [V03-051](issues/costing/issue-051-accepted-main-sync.md) 同步并验证。三个 B discovery 可以提前核对，全部专属代码等待主线门槛。
+A 已完成。B 先做 [V03-051](issues/costing/issue-051-accepted-main-sync.md) 同步已验收 main；三张盘点卡 V03-048/049/050 与通用缺口卡 [V03-074](issues/core/issue-074-account-login-session.md) 可同时开展，[V03-080](issues/core/issue-080-vision-model-port.md) 等待 V03-049 的模型授权结论。通用缺口卡在 main 上实现并合入后，造价分支再同步。
 
 ~~~mermaid
 flowchart LR
-    A0[主线与 WIP 核对] --> A[通用后端 + 公共双助手]
-    A --> AM[独立验收并合入 main]
-    AM --> S[造价同步门槛]
-    D[范围 / 权威函数 / 人工样本核对] --> B[行业资产 + 适配 + 专业 UI]
-    S --> B
-    B --> I[合成整栈验证]
-    I --> R[真实报价比对与业务签核]
+    D[盘点：计价规则 / 部署与保密 / 样本] --> S[同步已验收 main]
+    G[通用缺口：登录 / 视觉模型端口 → main] --> S2[造价分支再同步]
+    S --> K[扩展骨架 + 五类数据资产]
+    K --> P[项目与成本报价单]
+    P --> I[清单解析 + 图纸视觉解析]
+    S2 --> I
+    I --> M[匹配确认 + 澄清单]
+    M --> T[双成本测算]
+    T --> V[快照冻结 / 重算对比 / 导出]
+    V --> Q[对外报价单]
+    Q --> E[整栈 E2E]
+    E --> R[真实样本核对与收尾]
 ~~~
 
 ## GitHub 入口与编号
 
-
-开发入口 [#169](https://github.com/Yijtu/ontology/issues/169)；A 验收并合入 main 门槛 [#218](https://github.com/Yijtu/ontology/issues/218)；B 同步门槛 [#219](https://github.com/Yijtu/ontology/issues/219)。真实 adapter [#227](https://github.com/Yijtu/ontology/issues/227) → 实际样本与业务验收 [#239](https://github.com/Yijtu/ontology/issues/239) → MVP 收尾 [#240](https://github.com/Yijtu/ontology/issues/240)。
-
-只处理标签 batch:v0.3-assistants 和 manifest.github_allowlist 内的任务。下面依赖是实际 GitHub 编号；不要按 V03 的数字访问远程 Issue。
+只处理标签 batch:v0.3-assistants 且在 manifest 中状态非 superseded 的任务。依赖列为实际 GitHub 编号；尚未创建的写 V03 ID。
 
 | V03 ID | GitHub Issue | 阶段 | 依赖 |
 | --- | --- | --- | --- |
@@ -80,26 +82,39 @@ flowchart LR
 | V03-050 | [#172](https://github.com/Yijtu/ontology/issues/172) | B | 无 |
 | V03-051 | [#219](https://github.com/Yijtu/ontology/issues/219) | B | #218 |
 | V03-052 | [#220](https://github.com/Yijtu/ontology/issues/220) | B | #219、#170 |
-| V03-053 | [#221](https://github.com/Yijtu/ontology/issues/221) | B | #219、#171、#220 |
-| V03-054 | [#223](https://github.com/Yijtu/ontology/issues/223) | B | #219、#171、#220、#221 |
-| V03-055 | [#222](https://github.com/Yijtu/ontology/issues/222) | B | #219、#220 |
-| V03-056 | [#224](https://github.com/Yijtu/ontology/issues/224) | B | #222 |
-| V03-057 | [#225](https://github.com/Yijtu/ontology/issues/225) | B | #221、#224 |
-| V03-058 | [#228](https://github.com/Yijtu/ontology/issues/228) | B | #220、#223、#222、#225 |
+| V03-053 | [#221](https://github.com/Yijtu/ontology/issues/221) | B | #220 |
+| V03-054 | [#223](https://github.com/Yijtu/ontology/issues/223) | B | #220、#170 |
+| V03-055 | [#222](https://github.com/Yijtu/ontology/issues/222) | B | V03-079、V03-073 |
+| V03-056 | [#224](https://github.com/Yijtu/ontology/issues/224) | B | #222、V03-073、V03-081 |
+| V03-057 | [#225](https://github.com/Yijtu/ontology/issues/225) | B | #230 |
+| V03-058 | [#228](https://github.com/Yijtu/ontology/issues/228) | B | #224、V03-076、V03-077、#221 |
 | V03-059 | [#230](https://github.com/Yijtu/ontology/issues/230) | B | #228 |
-| V03-060 | [#226](https://github.com/Yijtu/ontology/issues/226) | B | #219、#222、#224 |
-| V03-061 | [#229](https://github.com/Yijtu/ontology/issues/229) | B | #221、#225、#226 |
-| V03-062 | [#231](https://github.com/Yijtu/ontology/issues/231) | B | #228、#230、#226、#229 |
-| V03-063 | [#233](https://github.com/Yijtu/ontology/issues/233) | B | #230、#231 |
-| V03-064 | [#234](https://github.com/Yijtu/ontology/issues/234) | B | #230、#231 |
-| V03-065 | [#232](https://github.com/Yijtu/ontology/issues/232) | B | #172、#230 |
-| V03-066 | [#235](https://github.com/Yijtu/ontology/issues/235) | B | #231、#232 |
-| V03-067 | [#236](https://github.com/Yijtu/ontology/issues/236) | B | #228、#231、#232 |
-| V03-068 | [#237](https://github.com/Yijtu/ontology/issues/237) | B | #222、#228、#232 |
-| V03-069 | [#238](https://github.com/Yijtu/ontology/issues/238) | B | #220、#221、#223、#222、#224、#225、#228、#230、#226、#229、#231、#233、#234、#232、#235、#236、#237 |
-| V03-070 | [#227](https://github.com/Yijtu/ontology/issues/227) | B | #171、#223 |
-| V03-071 | [#239](https://github.com/Yijtu/ontology/issues/239) | B | #171、#172、#238、#227 |
+| V03-060 | [#226](https://github.com/Yijtu/ontology/issues/226) | B | #222、#224、V03-081 |
+| V03-061 | [#229](https://github.com/Yijtu/ontology/issues/229) | B | #221、V03-078 |
+| V03-062 | [#231](https://github.com/Yijtu/ontology/issues/231) | B | #228、#226、#229 |
+| V03-063 | [#233](https://github.com/Yijtu/ontology/issues/233) | B | #230、#236、#231 |
+| V03-064 | [#234](https://github.com/Yijtu/ontology/issues/234) | B | #230 |
+| V03-065 | [#232](https://github.com/Yijtu/ontology/issues/232) | B（已取代） | 无 |
+| V03-066 | [#235](https://github.com/Yijtu/ontology/issues/235) | B（已取代） | 无 |
+| V03-067 | [#236](https://github.com/Yijtu/ontology/issues/236) | B | #230 |
+| V03-068 | [#237](https://github.com/Yijtu/ontology/issues/237) | B（已取代） | 无 |
+| V03-069 | [#238](https://github.com/Yijtu/ontology/issues/238) | B | V03-075、V03-083、#229、V03-085、#226、V03-082、#231、#233、#234、V03-084 |
+| V03-070 | [#227](https://github.com/Yijtu/ontology/issues/227) | B（已取代） | 无 |
+| V03-071 | [#239](https://github.com/Yijtu/ontology/issues/239) | B | #172、#238 |
 | V03-072 | [#240](https://github.com/Yijtu/ontology/issues/240) | B | #238、#239 |
+| V03-073 | 待创建 | B | #220 |
+| V03-074 | 待创建 | B | 无 |
+| V03-075 | 待创建 | B | V03-074、#219、V03-079 |
+| V03-076 | 待创建 | B | #220 |
+| V03-077 | 待创建 | B | #223、V03-076 |
+| V03-078 | 待创建 | B | #221 |
+| V03-079 | 待创建 | B | #220 |
+| V03-080 | 待创建 | B | #171 |
+| V03-081 | 待创建 | B | V03-079、V03-080、#171 |
+| V03-082 | 待创建 | B | #224 |
+| V03-083 | 待创建 | B | V03-073、V03-076、V03-077 |
+| V03-084 | 待创建 | B | #225、#231 |
+| V03-085 | 待创建 | B | V03-079、V03-075 |
 
 ## 文档与执行规则
 
@@ -108,12 +123,12 @@ flowchart LR
 - [spec-generic-assistants-core-v0.3.md](../../../tasks/spec-generic-assistants-core-v0.3.md)
 - [asset-data-ui.md](../../../tasks/spec-v0.3a/asset-data-ui.md)
 - [execution-evidence.md](../../../tasks/spec-v0.3a/execution-evidence.md)
-- [spec-electrical-costing-mvp-v0.3.md](../../../tasks/spec-electrical-costing-mvp-v0.3.md)
-- [逐项需求／计划测试覆盖](coverage.md)：每个 AC 和 FR 都有 SPEC、任务、计划测试。
-- [权威任务 manifest](manifest.json)：依赖、阶段、初始就绪、源文件 SHA256 和真实远程编号字段。
+- [prd-ai-cost-engineer-mvp.md](../../../tasks/prd-ai-cost-engineer-mvp.md)
+- [逐项需求／计划测试覆盖](coverage.md)：每个 AC 和 FR 都有规格依据、任务和计划测试。
+- [权威任务 manifest](manifest.json)：依赖、阶段、就绪、源文件 SHA256、远程编号与本次重规划记录。
 - [实施交接](handoff.md)：main 退出/场景进入、就绪与 loop-it 衔接。
 
-表中“等待”是实施依赖状态；本轮只写规格和任务，不把任何代码任务标 completed。真实模型质量、系统核验、真实客户业务接受和 MVP 验收分别记录。
+表中“等待”是实施依赖状态；本轮只写需求和任务，不把任何代码任务标 completed。内部合成验证、真实样本核对与客户试点分别记录。
 
 ## A：通用 Core → main
 
@@ -167,42 +182,60 @@ flowchart LR
 | [V03-046](issues/core/issue-046-model-quality-evidence.md) | 固定建模/提参评测集与真实模型就绪报告 | infra / P1 | V03-007、V03-008、V03-014、V03-019、V03-024、V03-036 | 等待依赖 |
 | [V03-047](issues/core/issue-047-main-release-gate.md) | 完成通用独立审查、README 与 main 基线交付 | infra / P0 | V03-045、V03-046 | 等待依赖 |
 
-## B：造价专属分支
+## B：AI 造价师 MVP
 
 | 任务 | 内容 | 类型／优先级 | 依赖 | 初始就绪 |
 | --- | --- | --- | --- | --- |
-| [V03-048](issues/costing/issue-048-scope-discovery.md) | 确认桥架报价的输入、品类、费用与图纸覆盖 | discovery / P0 | 无 | 可收集资料；外部待确认 |
-| [V03-049](issues/costing/issue-049-authority-discovery.md) | 确认权威报价函数、价格版本与复用权限 | discovery / P0 | 无 | 可收集资料；外部待确认 |
-| [V03-050](issues/costing/issue-050-gold-acceptance-discovery.md) | 取得配对人工报价、比较口径与授权验收人 | discovery / P0 | 无 | 可收集资料；外部待确认 |
-| [V03-051](issues/costing/issue-051-accepted-main-sync.md) | 同步已验收 main 并完成造价分支兼容门槛 | infra / P0 | V03-047 | 等待依赖 |
-| [V03-052](issues/costing/issue-052-industry-package.md) | 通过本体助手生成审核桥架行业包与动作声明 | domain / P1 | V03-051、V03-048 | 等待依赖 |
-| [V03-053](issues/costing/issue-053-price-snapshots.md) | 实现版本化价表、授权补价与项目采用接口 | backend / P1 | V03-051、V03-049、V03-052 | 等待依赖 |
-| [V03-054](issues/costing/issue-054-customer-quotation-adapter.md) | 实现可替换报价端口与两种合成适配的契约套件 | backend / P1 | V03-051、V03-049、V03-052、V03-053 | 等待依赖 |
-| [V03-055](issues/costing/issue-055-quote-input-snapshots.md) | 实现桥架清单映射与不可变报价输入 | backend / P1 | V03-051、V03-052 | 等待依赖 |
-| [V03-056](issues/costing/issue-056-specification-confirmation.md) | 实现规格、数量、单位与必需字段确认校验 | backend / P1 | V03-055 | 等待依赖 |
-| [V03-057](issues/costing/issue-057-pricing-context.md) | 实现费用范围、税费、舍入与计价就绪策略 | backend / P1 | V03-053、V03-056 | 等待依赖 |
-| [V03-058](issues/costing/issue-058-quote-task-operation.md) | 将 costing.quote 接入公共 task、compute 与正常报价入口 | backend / P0 | V03-052、V03-054、V03-055、V03-057 | 等待依赖 |
-| [V03-059](issues/costing/issue-059-quote-policy-evidence.md) | 实现报价输入结果策略、金额证据与完整发布门槛 | backend / P0 | V03-058 | 等待依赖 |
-| [V03-060](issues/costing/issue-060-costing-input-ui.md) | 挂载桥架资料、清单与专业参数确认页面 | frontend / P1 | V03-051、V03-055、V03-056 | 等待依赖 |
-| [V03-061](issues/costing/issue-061-pricing-ui.md) | 实现价源、计价口径与缺价修复专业界面 | frontend / P1 | V03-053、V03-057、V03-060 | 等待依赖 |
-| [V03-062](issues/costing/issue-062-quotation-workbench.md) | 实现已核验逐项报价、费用范围与业务状态工作台 | frontend / P1 | V03-058、V03-059、V03-060、V03-061 | 等待依赖 |
-| [V03-063](issues/costing/issue-063-quotation-provenance-ui.md) | 实现金额、规格、价格规则与函数版本的逐项溯源 | frontend / P1 | V03-059、V03-062 | 等待依赖 |
-| [V03-064](issues/costing/issue-064-quotation-export.md) | 实现与已核验版本一致的 XLSX 和 JSON 报价导出 | fullstack / P1 | V03-059、V03-062 | 等待依赖 |
-| [V03-065](issues/costing/issue-065-comparison-review-service.md) | 实现配对比较、业务签核与行业反馈提案服务 | backend / P1 | V03-050、V03-059 | 等待依赖 |
-| [V03-066](issues/costing/issue-066-comparison-review-ui.md) | 实现人工差异、接受退回与资产反馈专业界面 | frontend / P1 | V03-062、V03-065 | 等待依赖 |
-| [V03-067](issues/costing/issue-067-requote-lifecycle.md) | 完成重报价、版本差异、取消与 unknown 恢复闭环 | fullstack / P1 | V03-058、V03-062、V03-065 | 等待依赖 |
-| [V03-068](issues/costing/issue-068-client-mapping-conformance.md) | 验证两个客户结构映射与独立报价对照测试 | infra / P1 | V03-055、V03-058、V03-065 | 等待依赖 |
-| [V03-069](issues/costing/issue-069-costing-browser-e2e.md) | 完成造价双助手正常入口的合成整栈浏览器 E2E | infra / P0 | V03-052、V03-053、V03-054、V03-055、V03-056、V03-057、V03-058、V03-059、V03-060、V03-061、V03-062、V03-063、V03-064、V03-065、V03-066、V03-067、V03-068 | 等待依赖 |
-| [V03-070](issues/costing/issue-070-real-customer-adapter.md) | 实现并核对已授权的真实客户报价适配器 | backend / P0 | V03-049、V03-054 | 等待依赖 |
-| [V03-071](issues/costing/issue-071-real-customer-acceptance.md) | 完成真实模型、权威函数与保留样本的业务验收 | validation / P0 | V03-049、V03-050、V03-069、V03-070 | 等待依赖 |
-| [V03-072](issues/costing/issue-072-costing-mvp-closeout.md) | 完成造价 MVP 使用文档、交接与最终交付门槛 | infra / P0 | V03-069、V03-071 | 等待依赖 |
+| [V03-048](issues/costing/issue-048-scope-discovery.md) | 确认计价规则、页面参照、数据初始化与非标处理口径 | discovery / P0 | 无 | 可开展；外部待确认 |
+| [V03-049](issues/costing/issue-049-deployment-confidentiality-discovery.md) | 确认部署形态、保密边界与视觉模型端点授权 | discovery / P0 | 无 | 可开展；外部待确认 |
+| [V03-050](issues/costing/issue-050-sample-cases-discovery.md) | 取得真实清单、图纸样本与人工计算案例 | discovery / P0 | 无 | 可开展；外部待确认 |
+| [V03-051](issues/costing/issue-051-accepted-main-sync.md) | 同步已验收 main 并完成造价分支兼容门槛 | infra / P0 | V03-047 | 可开始 |
+| [V03-052](issues/costing/issue-052-costing-extension-skeleton.md) | 建立造价扩展包、场景模块与数据资产存储骨架 | backend / P1 | V03-051、V03-048 | 等待依赖 |
+| [V03-053](issues/costing/issue-053-enterprise-prices.md) | 实现企业价格维护、导入与价格历史服务 | backend / P1 | V03-052 | 等待依赖 |
+| [V03-054](issues/costing/issue-054-pricing-compute-operations.md) | 实现 2–3 种计价规则的注册 compute 操作 | backend / P0 | V03-052、V03-048 | 等待依赖 |
+| [V03-055](issues/costing/issue-055-bill-parsing-candidates.md) | 实现材料清单解析与带来源的候选条目 | backend / P1 | V03-079、V03-073 | 等待依赖 |
+| [V03-056](issues/costing/issue-056-material-matching-confirmation.md) | 实现物料匹配、差异集中与标准清单确认服务 | backend / P1 | V03-055、V03-073、V03-081 | 等待依赖 |
+| [V03-057](issues/costing/issue-057-external-quotation-service.md) | 实现对外报价单定价、税费校验与修订服务 | backend / P1 | V03-059 | 等待依赖 |
+| [V03-058](issues/costing/issue-058-dual-cost-calculation.md) | 实现双成本测算服务与允许偏差校验 | backend / P0 | V03-056、V03-076、V03-077、V03-053 | 等待依赖 |
+| [V03-059](issues/costing/issue-059-cost-version-snapshots.md) | 实现成本版本快照、冻结与依据回读 | backend / P0 | V03-058 | 等待依赖 |
+| [V03-060](issues/costing/issue-060-cost-sheet-intake-ui.md) | 实现成本报价单资料、候选与标准清单确认页面 | frontend / P1 | V03-055、V03-056、V03-081 | 等待依赖 |
+| [V03-061](issues/costing/issue-061-price-ui.md) | 实现企业价格与市场参考价页面 | frontend / P1 | V03-053、V03-078 | 等待依赖 |
+| [V03-062](issues/costing/issue-062-dual-cost-workbench-ui.md) | 实现双成本测算工作台 | frontend / P1 | V03-058、V03-060、V03-061 | 等待依赖 |
+| [V03-063](issues/costing/issue-063-version-compare-ui.md) | 实现成本版本对比、冻结与依据追溯页面 | frontend / P1 | V03-059、V03-067、V03-062 | 等待依赖 |
+| [V03-064](issues/costing/issue-064-cost-excel-export.md) | 实现成本版本 Excel 导出 | fullstack / P1 | V03-059 | 等待依赖 |
+| [V03-067](issues/costing/issue-067-recalculation-diff.md) | 实现调整重算、人工调整留痕与版本差异 | backend / P1 | V03-059 | 等待依赖 |
+| [V03-069](issues/costing/issue-069-costing-browser-e2e.md) | 完成询价到报价全链路浏览器 E2E | infra / P0 | V03-075、V03-083、V03-061、V03-085、V03-060、V03-082、V03-062、V03-063、V03-064、V03-084 | 等待依赖 |
+| [V03-071](issues/costing/issue-071-real-sample-acceptance.md) | 完成真实样本逐项核对与试点验收 | validation / P0 | V03-050、V03-069 | 等待依赖 |
+| [V03-072](issues/costing/issue-072-costing-mvp-closeout.md) | 完成造价 MVP 使用文档、交接与交付门槛 | infra / P0 | V03-069、V03-071 | 等待依赖 |
+| [V03-073](issues/costing/issue-073-standard-materials.md) | 实现标准物料库服务与 Excel 批量导入 | backend / P1 | V03-052 | 等待依赖 |
+| [V03-074](issues/core/issue-074-account-login-session.md) | 通用缺口：账号登录、会话与 401 跳转（回流 main） | fullstack / P0 | 无 | 可开始 |
+| [V03-075](issues/costing/issue-075-workbench-home-ui.md) | 实现造价工作台首页与待办汇总 | frontend / P1 | V03-074、V03-051、V03-079 | 等待依赖 |
+| [V03-076](issues/costing/issue-076-standards-rules.md) | 实现执行标准文档登记与标准规则服务 | backend / P1 | V03-052 | 等待依赖 |
+| [V03-077](issues/costing/issue-077-process-rules.md) | 实现工艺规则维护、版本与样例试算 | backend / P1 | V03-054、V03-076 | 等待依赖 |
+| [V03-078](issues/costing/issue-078-market-prices.md) | 实现市场参考价维护与对照服务 | backend / P2 | V03-053 | 等待依赖 |
+| [V03-079](issues/costing/issue-079-quotation-projects-documents.md) | 实现报价项目、成本报价单与资料上传服务 | backend / P1 | V03-052 | 等待依赖 |
+| [V03-080](issues/core/issue-080-vision-model-port.md) | 通用缺口：视觉模型端口与 PDF 页渲染（回流 main） | backend / P0 | V03-049 | 等待依赖 |
+| [V03-081](issues/costing/issue-081-drawing-vision-parsing.md) | 实现图纸视觉解析与物料属性候选 | backend / P1 | V03-079、V03-080、V03-049 | 等待依赖 |
+| [V03-082](issues/costing/issue-082-clarification-list.md) | 实现对客澄清单与 AI 话术起草 | fullstack / P1 | V03-056 | 等待依赖 |
+| [V03-083](issues/costing/issue-083-asset-center-ui.md) | 实现物料、执行标准与工艺规则管理页面 | frontend / P1 | V03-073、V03-076、V03-077 | 等待依赖 |
+| [V03-084](issues/costing/issue-084-external-quotation-ui-export.md) | 实现对外报价单页面与 Excel/PDF 导出 | fullstack / P1 | V03-057、V03-062 | 等待依赖 |
+| [V03-085](issues/costing/issue-085-project-management-ui.md) | 实现报价项目列表与项目概览页面 | frontend / P1 | V03-079、V03-075 | 等待依赖 |
+
+### 已取代（待关闭）
+
+| 任务 | 原标题 | 承接任务 | 原因 |
+| --- | --- | --- | --- |
+| [V03-065](issues/costing/issue-065-comparison-review-service.md) | 实现配对比较、业务签核与行业反馈提案服务 | V03-071 | 新 PRD 为单一造价师角色、无审批流（§5 非目标）；与人工案例的逐项核对并入 V03-071。 |
+| [V03-066](issues/costing/issue-066-comparison-review-ui.md) | 实现人工差异、接受退回与资产反馈专业界面 | V03-063、V03-071 | 多角色签核与行业反馈提案不在新 PRD 范围；版本差异页面由 V03-063 承担。 |
+| [V03-068](issues/costing/issue-068-client-mapping-conformance.md) | 验证两个客户结构映射与独立报价对照测试 | V03-055 | 新 PRD 无多客户映射复用要求；清单解析的结构覆盖在 V03-055 中验证。 |
+| [V03-070](issues/costing/issue-070-real-customer-adapter.md) | 实现并核对已授权的真实客户报价适配器 | V03-054 | 新 PRD 自研计价规则，外部系统集成为非目标（§5）；金额由 V03-054 的 compute 操作产出。 |
 
 ## 并行层次
 
 以下由依赖图生成；同层可并行不代表当前已经 ready，外部进入条件仍有效。
 
-- 第 1 层：V03-001、V03-048、V03-049、V03-050
-- 第 2 层：V03-002
+- 第 1 层：V03-001、V03-048、V03-049、V03-050、V03-074
+- 第 2 层：V03-002、V03-080
 - 第 3 层：V03-003、V03-005、V03-022
 - 第 4 层：V03-004、V03-006
 - 第 5 层：V03-007、V03-011
@@ -230,13 +263,13 @@ flowchart LR
 - 第 27 层：V03-047
 - 第 28 层：V03-051
 - 第 29 层：V03-052
-- 第 30 层：V03-053、V03-055
-- 第 31 层：V03-054、V03-056
-- 第 32 层：V03-057、V03-060、V03-070
-- 第 33 层：V03-058、V03-061
-- 第 34 层：V03-059
-- 第 35 层：V03-062、V03-065
-- 第 36 层：V03-063、V03-064、V03-066、V03-067、V03-068
+- 第 30 层：V03-053、V03-054、V03-073、V03-076、V03-079
+- 第 31 层：V03-055、V03-075、V03-077、V03-078、V03-081
+- 第 32 层：V03-056、V03-061、V03-083、V03-085
+- 第 33 层：V03-058、V03-060、V03-082
+- 第 34 层：V03-059、V03-062
+- 第 35 层：V03-057、V03-064、V03-067
+- 第 36 层：V03-063、V03-084
 - 第 37 层：V03-069
 - 第 38 层：V03-071
 - 第 39 层：V03-072

@@ -13,7 +13,7 @@
 | 本文 | 总体架构、职责、兼容策略、阶段门槛、测试和任务索引 |
 | [资产、数据与公共前端](spec-v0.3a/asset-data-ui.md) | 工作区／项目修订、候选、发布包、mapping、解析／索引就绪、公共 UI 和挂载契约 |
 | [执行、语义与证据](spec-v0.3a/execution-evidence.md) | task binding／输入与结果工件、规则／关系、runtime、typed 答案、核验、发布有效性与生命周期 |
-| [B 造价 SPEC](spec-electrical-costing-mvp-v0.3.md) | 造价声明、客户价格与函数适配、专业 UI 和业务验收；引用 A 的通用契约 |
+| [AI 造价师 MVP PRD](prd-ai-cost-engineer-mvp.md) | 阶段 B 需求（原 B 造价 SPEC 已于 2026-10-14 删除，技术 SPEC 待由新 PRD 派生）；引用 A 的通用契约 |
 | [v0.3 任务批次](../.autoresearch/batches/v0.3-assistants/INDEX.md) | 本批任务、依赖、阶段、就绪与真实远程编号映射 |
 | [逐项需求覆盖](../.autoresearch/batches/v0.3-assistants/coverage.md) | 两份 PRD 的每项验收条件／FR → SPEC、计划测试与任务 |
 

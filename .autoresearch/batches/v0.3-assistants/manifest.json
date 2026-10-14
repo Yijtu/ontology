@@ -9,20 +9,22 @@
   "github_repository": "Yijtu/ontology",
   "planning_validation": {
     "status": "passed",
-    "local_issue_files": 72,
-    "acceptance_criteria_covered": 166,
-    "functional_requirements_covered": 57,
+    "local_issue_files": 85,
+    "acceptance_criteria_covered": 257,
+    "functional_requirements_covered": 83,
     "markdown_files_checked": 81,
     "local_links_checked": 1840,
     "dependencies_acyclic": true,
     "source_hashes_checked": true,
     "legacy_manifest_preserved": true,
-    "product_tests_run": false
+    "product_tests_run": false,
+    "replanned_at": "2026-10-14"
   },
   "project_root": "D:/work/ontology-core-main",
   "requirements_namespace": {
     "A": "generic-core-prd",
-    "P": "overall-product-prd"
+    "P": "overall-product-prd",
+    "C": "ai-cost-engineer-mvp-prd"
   },
   "sources": [
     "tasks/prd-generic-assistants-core-v0.3.md",
@@ -30,15 +32,15 @@
     "tasks/spec-generic-assistants-core-v0.3.md",
     "tasks/spec-v0.3a/asset-data-ui.md",
     "tasks/spec-v0.3a/execution-evidence.md",
-    "tasks/spec-electrical-costing-mvp-v0.3.md"
+    "tasks/prd-ai-cost-engineer-mvp.md"
   ],
   "input_sha256": {
     "tasks/prd-generic-assistants-core-v0.3.md": "ac0c9780fde1889f67f86c62e66a5f6d5f4ba011b97d260f0ca6b8804fd3bb4c",
-    "tasks/prd-ontology-and-business-assistants-v0.3.md": "fc671e1bbc20da6072c7359851b17d338c255b4b350c284d6f2f5029b8abd782",
-    "tasks/spec-generic-assistants-core-v0.3.md": "5ee27d94884ddcb12b1d5b0e7fb777eb9569c530c13ece5bdb77ddc39aace57c",
+    "tasks/prd-ontology-and-business-assistants-v0.3.md": "dc12cf7938f0031374c5d19a10eccfd43a200c1a12526a49f7023b96134f8434",
+    "tasks/spec-generic-assistants-core-v0.3.md": "6cf84f6ef964d37e807ecabfd182ae01b1ad25cc618666469e855110f60c964c",
     "tasks/spec-v0.3a/asset-data-ui.md": "6ce26b2e9ad41aa50ebc719fcf7d2c6cd2d126cec82b1e146a080a6f080ba667",
     "tasks/spec-v0.3a/execution-evidence.md": "064f795ecfeaaa31db0ef47378e4acb2ed36f20a14a121b7a182c0c66500305c",
-    "tasks/spec-electrical-costing-mvp-v0.3.md": "34d81c5e341167096414d5211b26614b88c5e5f09fa20368e9573e852d552609"
+    "tasks/prd-ai-cost-engineer-mvp.md": "0ef231c24fa3dcdb4a365b4332724cdd8b591dca921fee477122f37fd77575bb"
   },
   "preserved_legacy_sha256": {
     ".autoresearch/issues/manifest.json": "7119ed8574287ae9e2d65b3c9cbe1a8a3c8f9c42687a6f3f5b1e8f9e94e4b804"
@@ -52,13 +54,17 @@
     "coreWip": {
       "branch": "feat/core-planning-provenance",
       "head": "d17c7b520298703feb65f86761f34f1557927aca"
-    }
+    },
+    "accepted_main_for_b": "4fb3a73228ce66bd03181e25706f061435facfbc"
   },
   "phase_gates": {
     "A_release": "V03-047",
     "B_main_sync": "V03-051",
+    "B_core_gaps": [
+      "V03-074",
+      "V03-080"
+    ],
     "B_internal_e2e": "V03-069",
-    "B_real_adapter": "V03-070",
     "B_real_acceptance": "V03-071",
     "B_release": "V03-072"
   },
@@ -67,10 +73,12 @@
       "V03-001",
       "V03-048",
       "V03-049",
-      "V03-050"
+      "V03-050",
+      "V03-074"
     ],
     [
-      "V03-002"
+      "V03-002",
+      "V03-080"
     ],
     [
       "V03-003",
@@ -175,34 +183,41 @@
     ],
     [
       "V03-053",
-      "V03-055"
-    ],
-    [
       "V03-054",
-      "V03-056"
+      "V03-073",
+      "V03-076",
+      "V03-079"
     ],
     [
-      "V03-057",
-      "V03-060",
-      "V03-070"
+      "V03-055",
+      "V03-075",
+      "V03-077",
+      "V03-078",
+      "V03-081"
+    ],
+    [
+      "V03-056",
+      "V03-061",
+      "V03-083",
+      "V03-085"
     ],
     [
       "V03-058",
-      "V03-061"
+      "V03-060",
+      "V03-082"
     ],
     [
-      "V03-059"
+      "V03-059",
+      "V03-062"
     ],
     [
-      "V03-062",
-      "V03-065"
+      "V03-057",
+      "V03-064",
+      "V03-067"
     ],
     [
       "V03-063",
-      "V03-064",
-      "V03-066",
-      "V03-067",
-      "V03-068"
+      "V03-084"
     ],
     [
       "V03-069"
@@ -214,15 +229,16 @@
       "V03-072"
     ]
   ],
-  "issue_count": 72,
+  "issue_count": 85,
   "phase_counts": {
     "A": 47,
-    "B": 25
+    "B": 34,
+    "B_superseded": 4
   },
   "coverage_counts": {
-    "stories": 40,
-    "acceptance_criteria": 166,
-    "functional_requirements": 57
+    "stories": 57,
+    "acceptance_criteria": 257,
+    "functional_requirements": 83
   },
   "issues": [
     {
@@ -2867,32 +2883,28 @@
     {
       "local_id": "V03-048",
       "number": 48,
-      "title": "确认桥架报价的输入、品类、费用与图纸覆盖",
+      "title": "确认计价规则、页面参照、数据初始化与非标处理口径",
       "phase": "B",
       "type": "discovery",
       "priority": "P0",
       "status": "planned",
-      "dependency_readiness": "ready_to_discover",
-      "external_readiness": "unconfirmed",
+      "dependency_readiness": "ready",
+      "external_readiness": "external_unconfirmed",
       "implementation_started": false,
       "github_issue_number": 170,
       "github_url": "https://github.com/Yijtu/ontology/issues/170",
       "file": ".autoresearch/batches/v0.3-assistants/issues/costing/issue-048-scope-discovery.md",
       "depends_on": [],
       "declared_story_refs": [
-        "P.US-012",
-        "P.US-013",
-        "P.US-014",
-        "P.US-016",
-        "P.US-019",
-        "P.US-024"
+        "C.US-005"
       ],
       "requirement_refs": [
-        "P.US-016.AC-01"
+        "C.US-005.AC-05"
       ],
       "spec_refs": [
-        "tasks/spec-electrical-costing-mvp-v0.3.md#14-已决定与尚待客户确认",
-        "tasks/spec-electrical-costing-mvp-v0.3.md#11-外部依赖图纸与未验证风险"
+        "tasks/prd-ai-cost-engineer-mvp.md#us-005工艺规则维护",
+        "tasks/prd-ai-cost-engineer-mvp.md#9-开放问题",
+        "tasks/prd-ai-cost-engineer-mvp.md#0-相对原稿的调整"
       ],
       "merge_target": "feat/electrical-costing-poc",
       "working_line": "feat/electrical-costing-poc",
@@ -2907,36 +2919,38 @@
         "external-condition"
       ],
       "github_dependencies": [],
+      "replan": {
+        "date": "2026-10-14",
+        "action": "rewritten",
+        "remote_body_stale": true
+      },
       "published_body_sha256": "79e9151261c79b40f9e7e8e4ef1d5024b3423db33a8bbc4fdae005c344d5ffbf"
     },
     {
       "local_id": "V03-049",
       "number": 49,
-      "title": "确认权威报价函数、价格版本与复用权限",
+      "title": "确认部署形态、保密边界与视觉模型端点授权",
       "phase": "B",
       "type": "discovery",
       "priority": "P0",
       "status": "planned",
-      "dependency_readiness": "ready_to_discover",
-      "external_readiness": "unconfirmed",
+      "dependency_readiness": "ready",
+      "external_readiness": "external_unconfirmed",
       "implementation_started": false,
       "github_issue_number": 171,
       "github_url": "https://github.com/Yijtu/ontology/issues/171",
-      "file": ".autoresearch/batches/v0.3-assistants/issues/costing/issue-049-authority-discovery.md",
+      "file": ".autoresearch/batches/v0.3-assistants/issues/costing/issue-049-deployment-confidentiality-discovery.md",
       "depends_on": [],
       "declared_story_refs": [
-        "P.US-007",
-        "P.US-016",
-        "P.US-017",
-        "P.US-023",
-        "P.US-024"
+        "C.US-011"
       ],
       "requirement_refs": [
-        "P.US-017.AC-03"
+        "C.US-011.AC-05"
       ],
       "spec_refs": [
-        "tasks/spec-electrical-costing-mvp-v0.3.md#51-可替换客户报价端口",
-        "tasks/spec-electrical-costing-mvp-v0.3.md#11-外部依赖图纸与未验证风险"
+        "tasks/prd-ai-cost-engineer-mvp.md#us-011图纸物料属性视觉解析不含算量和定位",
+        "tasks/prd-ai-cost-engineer-mvp.md#9-开放问题",
+        "tasks/prd-ai-cost-engineer-mvp.md#7-技术考虑"
       ],
       "merge_target": "feat/electrical-costing-poc",
       "working_line": "feat/electrical-costing-poc",
@@ -2951,36 +2965,33 @@
         "external-condition"
       ],
       "github_dependencies": [],
+      "replan": {
+        "date": "2026-10-14",
+        "action": "rewritten",
+        "remote_body_stale": true
+      },
       "published_body_sha256": "d9776114cd7f306cff681c0b82a9fe153d9520863ce71251adb8ff533769a374"
     },
     {
       "local_id": "V03-050",
       "number": 50,
-      "title": "取得配对人工报价、比较口径与授权验收人",
+      "title": "取得真实清单、图纸样本与人工计算案例",
       "phase": "B",
       "type": "discovery",
       "priority": "P0",
       "status": "planned",
-      "dependency_readiness": "ready_to_discover",
-      "external_readiness": "unconfirmed",
+      "dependency_readiness": "ready",
+      "external_readiness": "external_unconfirmed",
       "implementation_started": false,
       "github_issue_number": 172,
       "github_url": "https://github.com/Yijtu/ontology/issues/172",
-      "file": ".autoresearch/batches/v0.3-assistants/issues/costing/issue-050-gold-acceptance-discovery.md",
+      "file": ".autoresearch/batches/v0.3-assistants/issues/costing/issue-050-sample-cases-discovery.md",
       "depends_on": [],
-      "declared_story_refs": [
-        "P.US-004",
-        "P.US-008",
-        "P.US-018",
-        "P.US-022",
-        "P.US-024"
-      ],
-      "requirement_refs": [
-        "P.US-022.AC-03",
-        "P.FR-33"
-      ],
+      "declared_story_refs": [],
+      "requirement_refs": [],
       "spec_refs": [
-        "tasks/spec-electrical-costing-mvp-v0.3.md#73-四层验收与-goldcase"
+        "tasks/prd-ai-cost-engineer-mvp.md#8-成功指标",
+        "tasks/prd-ai-cost-engineer-mvp.md#9-开放问题"
       ],
       "merge_target": "feat/electrical-costing-poc",
       "working_line": "feat/electrical-costing-poc",
@@ -2995,6 +3006,11 @@
         "external-condition"
       ],
       "github_dependencies": [],
+      "replan": {
+        "date": "2026-10-14",
+        "action": "rewritten",
+        "remote_body_stale": true
+      },
       "published_body_sha256": "1925ca39b30e225aa5c60528ae741ef5b4b2590781544173ef17d78108045c44"
     },
     {
@@ -3005,7 +3021,7 @@
       "type": "infra",
       "priority": "P0",
       "status": "planned",
-      "dependency_readiness": "waiting_dependencies",
+      "dependency_readiness": "ready",
       "external_readiness": "see_card",
       "implementation_started": false,
       "github_issue_number": 219,
@@ -3014,16 +3030,10 @@
       "depends_on": [
         "V03-047"
       ],
-      "declared_story_refs": [
-        "P.US-023",
-        "P.US-024"
-      ],
-      "requirement_refs": [
-        "P.US-024.AC-01"
-      ],
+      "declared_story_refs": [],
+      "requirement_refs": [],
       "spec_refs": [
-        "tasks/spec-generic-assistants-core-v0.3.md#8-任务阶段门槛与合入-main",
-        "tasks/spec-electrical-costing-mvp-v0.3.md#12-ab-是实施门槛"
+        "tasks/prd-ai-cost-engineer-mvp.md#7-技术考虑"
       ],
       "merge_target": "feat/electrical-costing-poc",
       "working_line": "feat/electrical-costing-poc",
@@ -3039,14 +3049,19 @@
       "github_dependencies": [
         218
       ],
+      "replan": {
+        "date": "2026-10-14",
+        "action": "rewritten",
+        "remote_body_stale": true
+      },
       "published_body_sha256": "1da31d382519774bfa8e1c11e5764298d1c3d8a0ca723a04f646e9c3a2f69128"
     },
     {
       "local_id": "V03-052",
       "number": 52,
-      "title": "通过本体助手生成审核桥架行业包与动作声明",
+      "title": "建立造价扩展包、场景模块与数据资产存储骨架",
       "phase": "B",
-      "type": "domain",
+      "type": "backend",
       "priority": "P1",
       "status": "planned",
       "dependency_readiness": "waiting_dependencies",
@@ -3054,50 +3069,18 @@
       "implementation_started": false,
       "github_issue_number": 220,
       "github_url": "https://github.com/Yijtu/ontology/issues/220",
-      "file": ".autoresearch/batches/v0.3-assistants/issues/costing/issue-052-industry-package.md",
+      "file": ".autoresearch/batches/v0.3-assistants/issues/costing/issue-052-costing-extension-skeleton.md",
       "depends_on": [
         "V03-051",
         "V03-048"
       ],
-      "declared_story_refs": [
-        "P.US-001",
-        "P.US-002",
-        "P.US-004",
-        "P.US-005",
-        "P.US-006",
-        "P.US-007",
-        "P.US-009",
-        "P.US-010",
-        "P.US-011",
-        "P.US-012",
-        "P.US-023"
-      ],
+      "declared_story_refs": [],
       "requirement_refs": [
-        "P.US-001.AC-01",
-        "P.US-001.AC-02",
-        "P.US-002.AC-01",
-        "P.US-002.AC-03",
-        "P.US-004.AC-01",
-        "P.US-004.AC-02",
-        "P.US-005.AC-01",
-        "P.US-006.AC-01",
-        "P.US-007.AC-01",
-        "P.US-009.AC-01",
-        "P.US-009.AC-03",
-        "P.US-011.AC-01",
-        "P.US-011.AC-03",
-        "P.US-016.AC-02",
-        "P.US-023.AC-02",
-        "P.US-023.AC-04",
-        "P.FR-2",
-        "P.FR-4",
-        "P.FR-8",
-        "P.FR-10",
-        "P.FR-16",
-        "P.FR-17"
+        "C.FR-9"
       ],
       "spec_refs": [
-        "tasks/spec-electrical-costing-mvp-v0.3.md#3-桥架资产与确认输入"
+        "tasks/prd-ai-cost-engineer-mvp.md#4-功能需求",
+        "tasks/prd-ai-cost-engineer-mvp.md#7-技术考虑"
       ],
       "merge_target": "feat/electrical-costing-poc",
       "working_line": "feat/electrical-costing-poc",
@@ -3108,18 +3091,23 @@
         "batch:v0.3-assistants",
         "phase:costing",
         "medium",
-        "enhancement"
+        "backend"
       ],
       "github_dependencies": [
         219,
         170
       ],
+      "replan": {
+        "date": "2026-10-14",
+        "action": "rewritten",
+        "remote_body_stale": true
+      },
       "published_body_sha256": "0272c30ed7c58ccd9cbb94d0dd30c0d2f5d5fcd94fcbf4ea711831284f9992eb"
     },
     {
       "local_id": "V03-053",
       "number": 53,
-      "title": "实现版本化价表、授权补价与项目采用接口",
+      "title": "实现企业价格维护、导入与价格历史服务",
       "phase": "B",
       "type": "backend",
       "priority": "P1",
@@ -3129,28 +3117,25 @@
       "implementation_started": false,
       "github_issue_number": 221,
       "github_url": "https://github.com/Yijtu/ontology/issues/221",
-      "file": ".autoresearch/batches/v0.3-assistants/issues/costing/issue-053-price-snapshots.md",
+      "file": ".autoresearch/batches/v0.3-assistants/issues/costing/issue-053-enterprise-prices.md",
       "depends_on": [
-        "V03-051",
-        "V03-049",
         "V03-052"
       ],
       "declared_story_refs": [
-        "P.US-016",
-        "P.US-020",
-        "P.US-021"
+        "C.US-006"
       ],
       "requirement_refs": [
-        "P.US-009.AC-02",
-        "P.US-016.AC-01",
-        "P.US-016.AC-02",
-        "P.US-016.AC-03",
-        "P.FR-24"
+        "C.US-006.AC-01",
+        "C.US-006.AC-02",
+        "C.US-006.AC-03",
+        "C.US-006.AC-04",
+        "C.US-006.AC-05",
+        "C.US-006.AC-06",
+        "C.FR-7"
       ],
       "spec_refs": [
-        "tasks/spec-electrical-costing-mvp-v0.3.md#42-精确数值与价格",
-        "tasks/spec-electrical-costing-mvp-v0.3.md#52-缺价补录的实际路径",
-        "tasks/spec-electrical-costing-mvp-v0.3.md#6-api存储与隔离"
+        "tasks/prd-ai-cost-engineer-mvp.md#us-006企业价格维护与价格历史",
+        "tasks/prd-ai-cost-engineer-mvp.md#4-功能需求"
       ],
       "merge_target": "feat/electrical-costing-poc",
       "working_line": "feat/electrical-costing-poc",
@@ -3164,51 +3149,47 @@
         "backend"
       ],
       "github_dependencies": [
-        219,
-        171,
         220
       ],
+      "replan": {
+        "date": "2026-10-14",
+        "action": "rewritten",
+        "remote_body_stale": true
+      },
       "published_body_sha256": "0fae7c69a766d6def05a5f301ed4c527a6da3e33b7f96add08076cc3c5ee2c58"
     },
     {
       "local_id": "V03-054",
       "number": 54,
-      "title": "实现可替换报价端口与两种合成适配的契约套件",
+      "title": "实现 2–3 种计价规则的注册 compute 操作",
       "phase": "B",
       "type": "backend",
-      "priority": "P1",
+      "priority": "P0",
       "status": "planned",
       "dependency_readiness": "waiting_dependencies",
       "external_readiness": "see_card",
       "implementation_started": false,
       "github_issue_number": 223,
       "github_url": "https://github.com/Yijtu/ontology/issues/223",
-      "file": ".autoresearch/batches/v0.3-assistants/issues/costing/issue-054-customer-quotation-adapter.md",
+      "file": ".autoresearch/batches/v0.3-assistants/issues/costing/issue-054-pricing-compute-operations.md",
       "depends_on": [
-        "V03-051",
-        "V03-049",
         "V03-052",
-        "V03-053"
+        "V03-048"
       ],
       "declared_story_refs": [
-        "P.US-007",
-        "P.US-017",
-        "P.US-023"
+        "C.US-005",
+        "C.US-014"
       ],
       "requirement_refs": [
-        "P.US-007.AC-02",
-        "P.US-017.AC-02",
-        "P.US-017.AC-03",
-        "P.US-017.AC-04",
-        "P.US-021.AC-02",
-        "P.US-023.AC-03",
-        "P.FR-11",
-        "P.FR-24",
-        "P.FR-25",
-        "P.FR-31"
+        "C.US-005.AC-05",
+        "C.US-014.AC-06",
+        "C.FR-19"
       ],
       "spec_refs": [
-        "tasks/spec-electrical-costing-mvp-v0.3.md#51-可替换客户报价端口"
+        "tasks/prd-ai-cost-engineer-mvp.md#us-005工艺规则维护",
+        "tasks/prd-ai-cost-engineer-mvp.md#us-014双成本测算计算引擎",
+        "tasks/prd-ai-cost-engineer-mvp.md#4-功能需求",
+        "tasks/prd-ai-cost-engineer-mvp.md#7-技术考虑"
       ],
       "merge_target": "feat/electrical-costing-poc",
       "working_line": "feat/electrical-costing-poc",
@@ -3218,21 +3199,24 @@
       "remote_labels": [
         "batch:v0.3-assistants",
         "phase:costing",
-        "medium",
+        "high",
         "backend"
       ],
       "github_dependencies": [
-        219,
-        171,
         220,
-        221
+        170
       ],
+      "replan": {
+        "date": "2026-10-14",
+        "action": "rewritten",
+        "remote_body_stale": true
+      },
       "published_body_sha256": "7d8dcc0f5b4c66d111b7cd204acf6e8abb24896441f588353bd0681eb082df6f"
     },
     {
       "local_id": "V03-055",
       "number": 55,
-      "title": "实现桥架清单映射与不可变报价输入",
+      "title": "实现材料清单解析与带来源的候选条目",
       "phase": "B",
       "type": "backend",
       "priority": "P1",
@@ -3242,37 +3226,26 @@
       "implementation_started": false,
       "github_issue_number": 222,
       "github_url": "https://github.com/Yijtu/ontology/issues/222",
-      "file": ".autoresearch/batches/v0.3-assistants/issues/costing/issue-055-quote-input-snapshots.md",
+      "file": ".autoresearch/batches/v0.3-assistants/issues/costing/issue-055-bill-parsing-candidates.md",
       "depends_on": [
-        "V03-051",
-        "V03-052"
+        "V03-079",
+        "V03-073"
       ],
       "declared_story_refs": [
-        "P.US-008",
-        "P.US-010",
-        "P.US-012",
-        "P.US-013",
-        "P.US-017"
+        "C.US-010"
       ],
       "requirement_refs": [
-        "P.US-008.AC-01",
-        "P.US-008.AC-02",
-        "P.US-010.AC-03",
-        "P.US-012.AC-01",
-        "P.US-013.AC-01",
-        "P.US-013.AC-03",
-        "P.US-013.AC-04",
-        "P.US-014.AC-01",
-        "P.US-017.AC-01",
-        "P.US-023.AC-02",
-        "P.FR-18",
-        "P.FR-19",
-        "P.FR-24"
+        "C.US-010.AC-01",
+        "C.US-010.AC-02",
+        "C.US-010.AC-03",
+        "C.US-010.AC-04",
+        "C.US-010.AC-05",
+        "C.US-010.AC-06",
+        "C.FR-13"
       ],
       "spec_refs": [
-        "tasks/spec-electrical-costing-mvp-v0.3.md#32-精确字段与确认",
-        "tasks/spec-electrical-costing-mvp-v0.3.md#33-输入覆盖与排除",
-        "tasks/spec-electrical-costing-mvp-v0.3.md#44-输入函数绑定与-compute-parameters"
+        "tasks/prd-ai-cost-engineer-mvp.md#us-010材料清单-ai-解析",
+        "tasks/prd-ai-cost-engineer-mvp.md#4-功能需求"
       ],
       "merge_target": "feat/electrical-costing-poc",
       "working_line": "feat/electrical-costing-poc",
@@ -3285,16 +3258,18 @@
         "medium",
         "backend"
       ],
-      "github_dependencies": [
-        219,
-        220
-      ],
+      "github_dependencies": [],
+      "replan": {
+        "date": "2026-10-14",
+        "action": "rewritten",
+        "remote_body_stale": true
+      },
       "published_body_sha256": "d891730fd0171bb4f9380be55218fcdb12a583c9fa8aa275924850bfa143bdd5"
     },
     {
       "local_id": "V03-056",
       "number": 56,
-      "title": "实现规格、数量、单位与必需字段确认校验",
+      "title": "实现物料匹配、差异集中与标准清单确认服务",
       "phase": "B",
       "type": "backend",
       "priority": "P1",
@@ -3304,29 +3279,30 @@
       "implementation_started": false,
       "github_issue_number": 224,
       "github_url": "https://github.com/Yijtu/ontology/issues/224",
-      "file": ".autoresearch/batches/v0.3-assistants/issues/costing/issue-056-specification-confirmation.md",
+      "file": ".autoresearch/batches/v0.3-assistants/issues/costing/issue-056-material-matching-confirmation.md",
       "depends_on": [
-        "V03-055"
+        "V03-055",
+        "V03-073",
+        "V03-081"
       ],
       "declared_story_refs": [
-        "P.US-013",
-        "P.US-014",
-        "P.US-015",
-        "P.US-016"
+        "C.US-012"
       ],
       "requirement_refs": [
-        "P.US-014.AC-01",
-        "P.US-014.AC-02",
-        "P.US-014.AC-03",
-        "P.US-015.AC-03",
-        "P.US-016.AC-04",
-        "P.FR-20",
-        "P.FR-21",
-        "P.FR-23"
+        "C.US-012.AC-01",
+        "C.US-012.AC-02",
+        "C.US-012.AC-03",
+        "C.US-012.AC-04",
+        "C.US-012.AC-05",
+        "C.US-012.AC-06",
+        "C.FR-14",
+        "C.FR-15",
+        "C.FR-16",
+        "C.FR-17"
       ],
       "spec_refs": [
-        "tasks/spec-electrical-costing-mvp-v0.3.md#32-精确字段与确认",
-        "tasks/spec-electrical-costing-mvp-v0.3.md#43-税费范围与舍入"
+        "tasks/prd-ai-cost-engineer-mvp.md#us-012物料匹配与标准清单确认",
+        "tasks/prd-ai-cost-engineer-mvp.md#4-功能需求"
       ],
       "merge_target": "feat/electrical-costing-poc",
       "working_line": "feat/electrical-costing-poc",
@@ -3342,12 +3318,17 @@
       "github_dependencies": [
         222
       ],
+      "replan": {
+        "date": "2026-10-14",
+        "action": "rewritten",
+        "remote_body_stale": true
+      },
       "published_body_sha256": "8bd680be7761b56b75c871954642efbacd65a0f68ba7f29623ca79b57c349ba6"
     },
     {
       "local_id": "V03-057",
       "number": 57,
-      "title": "实现费用范围、税费、舍入与计价就绪策略",
+      "title": "实现对外报价单定价、税费校验与修订服务",
       "phase": "B",
       "type": "backend",
       "priority": "P1",
@@ -3357,31 +3338,28 @@
       "implementation_started": false,
       "github_issue_number": 225,
       "github_url": "https://github.com/Yijtu/ontology/issues/225",
-      "file": ".autoresearch/batches/v0.3-assistants/issues/costing/issue-057-pricing-context.md",
+      "file": ".autoresearch/batches/v0.3-assistants/issues/costing/issue-057-external-quotation-service.md",
       "depends_on": [
-        "V03-053",
-        "V03-056"
+        "V03-059"
       ],
       "declared_story_refs": [
-        "P.US-014",
-        "P.US-016",
-        "P.US-017"
+        "C.US-018"
       ],
       "requirement_refs": [
-        "P.US-012.AC-02",
-        "P.US-014.AC-03",
-        "P.US-016.AC-01",
-        "P.US-016.AC-02",
-        "P.US-016.AC-04",
-        "P.US-017.AC-01",
-        "P.US-017.AC-04",
-        "P.FR-15",
-        "P.FR-21",
-        "P.FR-24"
+        "C.US-018.AC-01",
+        "C.US-018.AC-02",
+        "C.US-018.AC-03",
+        "C.US-018.AC-05",
+        "C.US-018.AC-06",
+        "C.FR-27",
+        "C.FR-28",
+        "C.FR-29",
+        "C.FR-30",
+        "C.FR-31"
       ],
       "spec_refs": [
-        "tasks/spec-electrical-costing-mvp-v0.3.md#43-税费范围与舍入",
-        "tasks/spec-electrical-costing-mvp-v0.3.md#53-运行状态与正式结果"
+        "tasks/prd-ai-cost-engineer-mvp.md#us-018对外报价单",
+        "tasks/prd-ai-cost-engineer-mvp.md#4-功能需求"
       ],
       "merge_target": "feat/electrical-costing-poc",
       "working_line": "feat/electrical-costing-poc",
@@ -3395,15 +3373,19 @@
         "backend"
       ],
       "github_dependencies": [
-        221,
-        224
+        230
       ],
+      "replan": {
+        "date": "2026-10-14",
+        "action": "rewritten",
+        "remote_body_stale": true
+      },
       "published_body_sha256": "176c1fa54f438c38c4cb47e2d49109ece079c50197f3983f3ae3d0468640ac4f"
     },
     {
       "local_id": "V03-058",
       "number": 58,
-      "title": "将 costing.quote 接入公共 task、compute 与正常报价入口",
+      "title": "实现双成本测算服务与允许偏差校验",
       "phase": "B",
       "type": "backend",
       "priority": "P0",
@@ -3413,36 +3395,30 @@
       "implementation_started": false,
       "github_issue_number": 228,
       "github_url": "https://github.com/Yijtu/ontology/issues/228",
-      "file": ".autoresearch/batches/v0.3-assistants/issues/costing/issue-058-quote-task-operation.md",
+      "file": ".autoresearch/batches/v0.3-assistants/issues/costing/issue-058-dual-cost-calculation.md",
       "depends_on": [
-        "V03-052",
-        "V03-054",
-        "V03-055",
-        "V03-057"
+        "V03-056",
+        "V03-076",
+        "V03-077",
+        "V03-053"
       ],
       "declared_story_refs": [
-        "P.US-015",
-        "P.US-017",
-        "P.US-018",
-        "P.US-021",
-        "P.US-024"
+        "C.US-014"
       ],
       "requirement_refs": [
-        "P.US-001.AC-02",
-        "P.US-007.AC-02",
-        "P.US-012.AC-02",
-        "P.US-015.AC-01",
-        "P.US-015.AC-02",
-        "P.US-017.AC-02",
-        "P.US-017.AC-03",
-        "P.FR-11",
-        "P.FR-18",
-        "P.FR-22",
-        "P.FR-25"
+        "C.US-014.AC-01",
+        "C.US-014.AC-02",
+        "C.US-014.AC-03",
+        "C.US-014.AC-04",
+        "C.US-014.AC-05",
+        "C.US-014.AC-06",
+        "C.FR-19",
+        "C.FR-20",
+        "C.FR-21"
       ],
       "spec_refs": [
-        "tasks/spec-electrical-costing-mvp-v0.3.md#44-输入函数绑定与-compute-parameters",
-        "tasks/spec-electrical-costing-mvp-v0.3.md#5-客户函数价格修复与任务执行"
+        "tasks/prd-ai-cost-engineer-mvp.md#us-014双成本测算计算引擎",
+        "tasks/prd-ai-cost-engineer-mvp.md#4-功能需求"
       ],
       "merge_target": "feat/electrical-costing-poc",
       "working_line": "feat/electrical-costing-poc",
@@ -3456,17 +3432,20 @@
         "backend"
       ],
       "github_dependencies": [
-        220,
-        223,
-        222,
-        225
+        224,
+        221
       ],
+      "replan": {
+        "date": "2026-10-14",
+        "action": "rewritten",
+        "remote_body_stale": true
+      },
       "published_body_sha256": "07007325a4597c2c3bb7256073e4e04369eb8010332759d1a9bf5ac857f9d179"
     },
     {
       "local_id": "V03-059",
       "number": 59,
-      "title": "实现报价输入结果策略、金额证据与完整发布门槛",
+      "title": "实现成本版本快照、冻结与依据回读",
       "phase": "B",
       "type": "backend",
       "priority": "P0",
@@ -3476,35 +3455,25 @@
       "implementation_started": false,
       "github_issue_number": 230,
       "github_url": "https://github.com/Yijtu/ontology/issues/230",
-      "file": ".autoresearch/batches/v0.3-assistants/issues/costing/issue-059-quote-policy-evidence.md",
+      "file": ".autoresearch/batches/v0.3-assistants/issues/costing/issue-059-cost-version-snapshots.md",
       "depends_on": [
         "V03-058"
       ],
       "declared_story_refs": [
-        "P.US-016",
-        "P.US-017",
-        "P.US-018",
-        "P.US-019",
-        "P.US-020",
-        "P.US-024"
+        "C.US-016"
       ],
       "requirement_refs": [
-        "P.US-009.AC-02",
-        "P.US-014.AC-03",
-        "P.US-017.AC-04",
-        "P.US-018.AC-01",
-        "P.US-018.AC-02",
-        "P.US-018.AC-03",
-        "P.US-018.AC-04",
-        "P.US-019.AC-02",
-        "P.US-020.AC-01",
-        "P.FR-21",
-        "P.FR-26",
-        "P.FR-27"
+        "C.US-016.AC-01",
+        "C.US-016.AC-02",
+        "C.US-016.AC-03",
+        "C.US-016.AC-04",
+        "C.FR-9",
+        "C.FR-24",
+        "C.FR-25"
       ],
       "spec_refs": [
-        "tasks/spec-electrical-costing-mvp-v0.3.md#7-证据数字核验与业务验收",
-        "tasks/spec-v0.3a/execution-evidence.md#ex-61-注册任务校验策略"
+        "tasks/prd-ai-cost-engineer-mvp.md#us-016成本版本快照与追溯",
+        "tasks/prd-ai-cost-engineer-mvp.md#4-功能需求"
       ],
       "merge_target": "feat/electrical-costing-poc",
       "working_line": "feat/electrical-costing-poc",
@@ -3520,12 +3489,17 @@
       "github_dependencies": [
         228
       ],
+      "replan": {
+        "date": "2026-10-14",
+        "action": "rewritten",
+        "remote_body_stale": true
+      },
       "published_body_sha256": "7721c32d232b680e0b7b559f8fee73ed95b598620d7d34d38ffe7be49d3380ad"
     },
     {
       "local_id": "V03-060",
       "number": 60,
-      "title": "挂载桥架资料、清单与专业参数确认页面",
+      "title": "实现成本报价单资料、候选与标准清单确认页面",
       "phase": "B",
       "type": "frontend",
       "priority": "P1",
@@ -3535,40 +3509,47 @@
       "implementation_started": false,
       "github_issue_number": 226,
       "github_url": "https://github.com/Yijtu/ontology/issues/226",
-      "file": ".autoresearch/batches/v0.3-assistants/issues/costing/issue-060-costing-input-ui.md",
+      "file": ".autoresearch/batches/v0.3-assistants/issues/costing/issue-060-cost-sheet-intake-ui.md",
       "depends_on": [
-        "V03-051",
         "V03-055",
-        "V03-056"
+        "V03-056",
+        "V03-081"
       ],
       "declared_story_refs": [
-        "P.US-001",
-        "P.US-012",
-        "P.US-013",
-        "P.US-014",
-        "P.US-019"
+        "C.US-009",
+        "C.US-010",
+        "C.US-012"
       ],
       "requirement_refs": [
-        "P.US-001.AC-01",
-        "P.US-001.AC-02",
-        "P.US-012.AC-04",
-        "P.US-013.AC-01",
-        "P.US-013.AC-02",
-        "P.US-013.AC-05",
-        "P.US-014.AC-01",
-        "P.US-014.AC-02",
-        "P.US-014.AC-04",
-        "P.US-015.AC-01",
-        "P.US-015.AC-04",
-        "P.FR-1",
-        "P.FR-19",
-        "P.FR-20",
-        "P.FR-22",
-        "P.FR-35"
+        "C.US-009.AC-01",
+        "C.US-009.AC-02",
+        "C.US-009.AC-03",
+        "C.US-009.AC-04",
+        "C.US-009.AC-05",
+        "C.US-009.AC-06",
+        "C.US-010.AC-01",
+        "C.US-010.AC-02",
+        "C.US-010.AC-03",
+        "C.US-010.AC-04",
+        "C.US-010.AC-05",
+        "C.US-010.AC-06",
+        "C.US-010.AC-07",
+        "C.US-012.AC-01",
+        "C.US-012.AC-02",
+        "C.US-012.AC-03",
+        "C.US-012.AC-04",
+        "C.US-012.AC-05",
+        "C.US-012.AC-06",
+        "C.US-012.AC-07",
+        "C.FR-12",
+        "C.FR-15",
+        "C.FR-16"
       ],
       "spec_refs": [
-        "tasks/spec-electrical-costing-mvp-v0.3.md#81-frontendscenariomodule",
-        "tasks/spec-electrical-costing-mvp-v0.3.md#82-报价工作台"
+        "tasks/prd-ai-cost-engineer-mvp.md#us-009成本报价单创建与资料上传",
+        "tasks/prd-ai-cost-engineer-mvp.md#us-010材料清单-ai-解析",
+        "tasks/prd-ai-cost-engineer-mvp.md#us-012物料匹配与标准清单确认",
+        "tasks/prd-ai-cost-engineer-mvp.md#4-功能需求"
       ],
       "merge_target": "feat/electrical-costing-poc",
       "working_line": "feat/electrical-costing-poc",
@@ -3582,16 +3563,20 @@
         "frontend"
       ],
       "github_dependencies": [
-        219,
         222,
         224
       ],
+      "replan": {
+        "date": "2026-10-14",
+        "action": "rewritten",
+        "remote_body_stale": true
+      },
       "published_body_sha256": "fad9e8926bd037c9656e98e5667f7d47dede161d426e09c0fb81da429da74b5d"
     },
     {
       "local_id": "V03-061",
       "number": 61,
-      "title": "实现价源、计价口径与缺价修复专业界面",
+      "title": "实现企业价格与市场参考价页面",
       "phase": "B",
       "type": "frontend",
       "priority": "P1",
@@ -3601,28 +3586,36 @@
       "implementation_started": false,
       "github_issue_number": 229,
       "github_url": "https://github.com/Yijtu/ontology/issues/229",
-      "file": ".autoresearch/batches/v0.3-assistants/issues/costing/issue-061-pricing-ui.md",
+      "file": ".autoresearch/batches/v0.3-assistants/issues/costing/issue-061-price-ui.md",
       "depends_on": [
         "V03-053",
-        "V03-057",
-        "V03-060"
+        "V03-078"
       ],
       "declared_story_refs": [
-        "P.US-014",
-        "P.US-016",
-        "P.US-019",
-        "P.US-021"
+        "C.US-006",
+        "C.US-007"
       ],
       "requirement_refs": [
-        "P.US-015.AC-03",
-        "P.US-016.AC-01",
-        "P.US-016.AC-03",
-        "P.US-016.AC-05",
-        "P.FR-23"
+        "C.US-006.AC-01",
+        "C.US-006.AC-02",
+        "C.US-006.AC-03",
+        "C.US-006.AC-04",
+        "C.US-006.AC-05",
+        "C.US-006.AC-06",
+        "C.US-006.AC-07",
+        "C.US-007.AC-01",
+        "C.US-007.AC-02",
+        "C.US-007.AC-03",
+        "C.US-007.AC-04",
+        "C.US-007.AC-05",
+        "C.US-007.AC-06",
+        "C.FR-7",
+        "C.FR-8"
       ],
       "spec_refs": [
-        "tasks/spec-electrical-costing-mvp-v0.3.md#52-缺价补录的实际路径",
-        "tasks/spec-electrical-costing-mvp-v0.3.md#82-报价工作台"
+        "tasks/prd-ai-cost-engineer-mvp.md#us-006企业价格维护与价格历史",
+        "tasks/prd-ai-cost-engineer-mvp.md#us-007市场价格参考",
+        "tasks/prd-ai-cost-engineer-mvp.md#4-功能需求"
       ],
       "merge_target": "feat/electrical-costing-poc",
       "working_line": "feat/electrical-costing-poc",
@@ -3636,16 +3629,19 @@
         "frontend"
       ],
       "github_dependencies": [
-        221,
-        225,
-        226
+        221
       ],
+      "replan": {
+        "date": "2026-10-14",
+        "action": "rewritten",
+        "remote_body_stale": true
+      },
       "published_body_sha256": "ed1b1859ee537fc90d51f63e08c1738b484b2d7bd873a1174958894fb5da5806"
     },
     {
       "local_id": "V03-062",
       "number": 62,
-      "title": "实现已核验逐项报价、费用范围与业务状态工作台",
+      "title": "实现双成本测算工作台",
       "phase": "B",
       "type": "frontend",
       "priority": "P1",
@@ -3655,29 +3651,28 @@
       "implementation_started": false,
       "github_issue_number": 231,
       "github_url": "https://github.com/Yijtu/ontology/issues/231",
-      "file": ".autoresearch/batches/v0.3-assistants/issues/costing/issue-062-quotation-workbench.md",
+      "file": ".autoresearch/batches/v0.3-assistants/issues/costing/issue-062-dual-cost-workbench-ui.md",
       "depends_on": [
         "V03-058",
-        "V03-059",
         "V03-060",
         "V03-061"
       ],
       "declared_story_refs": [
-        "P.US-019",
-        "P.US-021",
-        "P.US-024"
+        "C.US-014"
       ],
       "requirement_refs": [
-        "P.US-018.AC-04",
-        "P.US-019.AC-01",
-        "P.US-019.AC-02",
-        "P.US-019.AC-03",
-        "P.US-019.AC-04",
-        "P.FR-28",
-        "P.FR-35"
+        "C.US-014.AC-01",
+        "C.US-014.AC-02",
+        "C.US-014.AC-03",
+        "C.US-014.AC-04",
+        "C.US-014.AC-05",
+        "C.US-014.AC-06",
+        "C.US-014.AC-07",
+        "C.FR-21"
       ],
       "spec_refs": [
-        "tasks/spec-electrical-costing-mvp-v0.3.md#82-报价工作台"
+        "tasks/prd-ai-cost-engineer-mvp.md#us-014双成本测算计算引擎",
+        "tasks/prd-ai-cost-engineer-mvp.md#4-功能需求"
       ],
       "merge_target": "feat/electrical-costing-poc",
       "working_line": "feat/electrical-costing-poc",
@@ -3692,16 +3687,20 @@
       ],
       "github_dependencies": [
         228,
-        230,
         226,
         229
       ],
+      "replan": {
+        "date": "2026-10-14",
+        "action": "rewritten",
+        "remote_body_stale": true
+      },
       "published_body_sha256": "86d2db702dc430a8ef99d33654276af3aa38b3e61d6410bf1739af9adf5c7fa5"
     },
     {
       "local_id": "V03-063",
       "number": 63,
-      "title": "实现金额、规格、价格规则与函数版本的逐项溯源",
+      "title": "实现成本版本对比、冻结与依据追溯页面",
       "phase": "B",
       "type": "frontend",
       "priority": "P1",
@@ -3711,27 +3710,33 @@
       "implementation_started": false,
       "github_issue_number": 233,
       "github_url": "https://github.com/Yijtu/ontology/issues/233",
-      "file": ".autoresearch/batches/v0.3-assistants/issues/costing/issue-063-quotation-provenance-ui.md",
+      "file": ".autoresearch/batches/v0.3-assistants/issues/costing/issue-063-version-compare-ui.md",
       "depends_on": [
         "V03-059",
+        "V03-067",
         "V03-062"
       ],
       "declared_story_refs": [
-        "P.US-018",
-        "P.US-020",
-        "P.US-024"
+        "C.US-015",
+        "C.US-016"
       ],
       "requirement_refs": [
-        "P.US-020.AC-01",
-        "P.US-020.AC-02",
-        "P.US-020.AC-03",
-        "P.US-020.AC-04",
-        "P.FR-29"
+        "C.US-015.AC-01",
+        "C.US-015.AC-02",
+        "C.US-015.AC-03",
+        "C.US-015.AC-04",
+        "C.US-015.AC-05",
+        "C.US-016.AC-01",
+        "C.US-016.AC-02",
+        "C.US-016.AC-03",
+        "C.US-016.AC-04",
+        "C.US-016.AC-05",
+        "C.FR-22"
       ],
       "spec_refs": [
-        "tasks/spec-electrical-costing-mvp-v0.3.md#71-字段绑定",
-        "tasks/spec-electrical-costing-mvp-v0.3.md#72-计算证据与发布有效性",
-        "tasks/spec-electrical-costing-mvp-v0.3.md#82-报价工作台"
+        "tasks/prd-ai-cost-engineer-mvp.md#us-015调整重算与版本对比",
+        "tasks/prd-ai-cost-engineer-mvp.md#us-016成本版本快照与追溯",
+        "tasks/prd-ai-cost-engineer-mvp.md#4-功能需求"
       ],
       "merge_target": "feat/electrical-costing-poc",
       "working_line": "feat/electrical-costing-poc",
@@ -3746,14 +3751,20 @@
       ],
       "github_dependencies": [
         230,
+        236,
         231
       ],
+      "replan": {
+        "date": "2026-10-14",
+        "action": "rewritten",
+        "remote_body_stale": true
+      },
       "published_body_sha256": "5456ea18b577fb3c7d0208b606ce0f623079e5b9b93c6a8367b81716cf2a5e9f"
     },
     {
       "local_id": "V03-064",
       "number": 64,
-      "title": "实现与已核验版本一致的 XLSX 和 JSON 报价导出",
+      "title": "实现成本版本 Excel 导出",
       "phase": "B",
       "type": "fullstack",
       "priority": "P1",
@@ -3763,24 +3774,24 @@
       "implementation_started": false,
       "github_issue_number": 234,
       "github_url": "https://github.com/Yijtu/ontology/issues/234",
-      "file": ".autoresearch/batches/v0.3-assistants/issues/costing/issue-064-quotation-export.md",
+      "file": ".autoresearch/batches/v0.3-assistants/issues/costing/issue-064-cost-excel-export.md",
       "depends_on": [
-        "V03-059",
-        "V03-062"
+        "V03-059"
       ],
       "declared_story_refs": [
-        "P.US-019",
-        "P.US-022",
-        "P.US-024"
+        "C.US-017"
       ],
       "requirement_refs": [
-        "P.US-019.AC-03",
-        "P.US-022.AC-01",
-        "P.US-022.AC-04",
-        "P.FR-32"
+        "C.US-017.AC-01",
+        "C.US-017.AC-02",
+        "C.US-017.AC-03",
+        "C.US-017.AC-04",
+        "C.US-017.AC-05",
+        "C.FR-26"
       ],
       "spec_refs": [
-        "tasks/spec-electrical-costing-mvp-v0.3.md#83-xlsx-与-json"
+        "tasks/prd-ai-cost-engineer-mvp.md#us-017成本结果导出",
+        "tasks/prd-ai-cost-engineer-mvp.md#4-功能需求"
       ],
       "merge_target": "feat/electrical-costing-poc",
       "working_line": "feat/electrical-costing-poc",
@@ -3794,9 +3805,13 @@
         "fullstack"
       ],
       "github_dependencies": [
-        230,
-        231
+        230
       ],
+      "replan": {
+        "date": "2026-10-14",
+        "action": "rewritten",
+        "remote_body_stale": true
+      },
       "published_body_sha256": "1caa77dff34eb20d9d0fe91610c5090b6dbd98f6d6b4e3193a3406a8bfde612a"
     },
     {
@@ -3806,33 +3821,121 @@
       "phase": "B",
       "type": "backend",
       "priority": "P1",
-      "status": "planned",
-      "dependency_readiness": "waiting_dependencies",
+      "status": "superseded",
+      "dependency_readiness": "not_applicable",
       "external_readiness": "see_card",
       "implementation_started": false,
       "github_issue_number": 232,
       "github_url": "https://github.com/Yijtu/ontology/issues/232",
       "file": ".autoresearch/batches/v0.3-assistants/issues/costing/issue-065-comparison-review-service.md",
+      "depends_on": [],
+      "declared_story_refs": [],
+      "requirement_refs": [],
+      "spec_refs": [
+        "tasks/prd-ai-cost-engineer-mvp.md"
+      ],
+      "merge_target": "feat/electrical-costing-poc",
+      "working_line": "feat/electrical-costing-poc",
+      "verification_state": "not_run",
+      "evidence": [],
+      "remote_state": "open_pending_close",
+      "remote_labels": [
+        "batch:v0.3-assistants",
+        "phase:costing",
+        "medium",
+        "backend"
+      ],
+      "github_dependencies": [
+        172,
+        230
+      ],
+      "published_body_sha256": "496292ebeba207bc12c6f79f30b7424f224cfa6e6a81d8955faf942e5e0cfc3d",
+      "superseded_by": [
+        "V03-071"
+      ],
+      "superseded_reason": "新 PRD 为单一造价师角色、无审批流（§5 非目标）；与人工案例的逐项核对并入 V03-071。",
+      "replan": {
+        "date": "2026-10-14",
+        "action": "superseded"
+      }
+    },
+    {
+      "local_id": "V03-066",
+      "number": 66,
+      "title": "实现人工差异、接受退回与资产反馈专业界面",
+      "phase": "B",
+      "type": "frontend",
+      "priority": "P1",
+      "status": "superseded",
+      "dependency_readiness": "not_applicable",
+      "external_readiness": "see_card",
+      "implementation_started": false,
+      "github_issue_number": 235,
+      "github_url": "https://github.com/Yijtu/ontology/issues/235",
+      "file": ".autoresearch/batches/v0.3-assistants/issues/costing/issue-066-comparison-review-ui.md",
+      "depends_on": [],
+      "declared_story_refs": [],
+      "requirement_refs": [],
+      "spec_refs": [
+        "tasks/prd-ai-cost-engineer-mvp.md"
+      ],
+      "merge_target": "feat/electrical-costing-poc",
+      "working_line": "feat/electrical-costing-poc",
+      "verification_state": "not_run",
+      "evidence": [],
+      "remote_state": "open_pending_close",
+      "remote_labels": [
+        "batch:v0.3-assistants",
+        "phase:costing",
+        "medium",
+        "frontend"
+      ],
+      "github_dependencies": [
+        231,
+        232
+      ],
+      "published_body_sha256": "274eb8e7d84b99d74c23b38db0c8a97f4c71882bd2fecdb1c80205ce3cc1815d",
+      "superseded_by": [
+        "V03-063",
+        "V03-071"
+      ],
+      "superseded_reason": "多角色签核与行业反馈提案不在新 PRD 范围；版本差异页面由 V03-063 承担。",
+      "replan": {
+        "date": "2026-10-14",
+        "action": "superseded"
+      }
+    },
+    {
+      "local_id": "V03-067",
+      "number": 67,
+      "title": "实现调整重算、人工调整留痕与版本差异",
+      "phase": "B",
+      "type": "backend",
+      "priority": "P1",
+      "status": "planned",
+      "dependency_readiness": "waiting_dependencies",
+      "external_readiness": "see_card",
+      "implementation_started": false,
+      "github_issue_number": 236,
+      "github_url": "https://github.com/Yijtu/ontology/issues/236",
+      "file": ".autoresearch/batches/v0.3-assistants/issues/costing/issue-067-recalculation-diff.md",
       "depends_on": [
-        "V03-050",
         "V03-059"
       ],
       "declared_story_refs": [
-        "P.US-005",
-        "P.US-011",
-        "P.US-021",
-        "P.US-022",
-        "P.US-023"
+        "C.US-015"
       ],
       "requirement_refs": [
-        "P.US-022.AC-02",
-        "P.US-022.AC-03",
-        "P.FR-33",
-        "P.FR-34"
+        "C.US-015.AC-01",
+        "C.US-015.AC-02",
+        "C.US-015.AC-03",
+        "C.US-015.AC-04",
+        "C.FR-22",
+        "C.FR-23"
       ],
       "spec_refs": [
-        "tasks/spec-electrical-costing-mvp-v0.3.md#73-四层验收与-goldcase",
-        "tasks/spec-electrical-costing-mvp-v0.3.md#6-api存储与隔离"
+        "tasks/prd-ai-cost-engineer-mvp.md#us-015调整重算与版本对比",
+        "tasks/prd-ai-cost-engineer-mvp.md#4-功能需求"
       ],
       "merge_target": "feat/electrical-costing-poc",
       "working_line": "feat/electrical-costing-poc",
@@ -3846,120 +3949,13 @@
         "backend"
       ],
       "github_dependencies": [
-        172,
         230
       ],
-      "published_body_sha256": "496292ebeba207bc12c6f79f30b7424f224cfa6e6a81d8955faf942e5e0cfc3d"
-    },
-    {
-      "local_id": "V03-066",
-      "number": 66,
-      "title": "实现人工差异、接受退回与资产反馈专业界面",
-      "phase": "B",
-      "type": "frontend",
-      "priority": "P1",
-      "status": "planned",
-      "dependency_readiness": "waiting_dependencies",
-      "external_readiness": "see_card",
-      "implementation_started": false,
-      "github_issue_number": 235,
-      "github_url": "https://github.com/Yijtu/ontology/issues/235",
-      "file": ".autoresearch/batches/v0.3-assistants/issues/costing/issue-066-comparison-review-ui.md",
-      "depends_on": [
-        "V03-062",
-        "V03-065"
-      ],
-      "declared_story_refs": [
-        "P.US-019",
-        "P.US-022",
-        "P.US-023",
-        "P.US-024"
-      ],
-      "requirement_refs": [
-        "P.US-019.AC-03",
-        "P.US-022.AC-03",
-        "P.US-022.AC-04",
-        "P.FR-33",
-        "P.FR-34",
-        "P.FR-35"
-      ],
-      "spec_refs": [
-        "tasks/spec-electrical-costing-mvp-v0.3.md#73-四层验收与-goldcase",
-        "tasks/spec-electrical-costing-mvp-v0.3.md#82-报价工作台"
-      ],
-      "merge_target": "feat/electrical-costing-poc",
-      "working_line": "feat/electrical-costing-poc",
-      "verification_state": "not_run",
-      "evidence": [],
-      "remote_state": "open",
-      "remote_labels": [
-        "batch:v0.3-assistants",
-        "phase:costing",
-        "medium",
-        "frontend"
-      ],
-      "github_dependencies": [
-        231,
-        232
-      ],
-      "published_body_sha256": "274eb8e7d84b99d74c23b38db0c8a97f4c71882bd2fecdb1c80205ce3cc1815d"
-    },
-    {
-      "local_id": "V03-067",
-      "number": 67,
-      "title": "完成重报价、版本差异、取消与 unknown 恢复闭环",
-      "phase": "B",
-      "type": "fullstack",
-      "priority": "P1",
-      "status": "planned",
-      "dependency_readiness": "waiting_dependencies",
-      "external_readiness": "see_card",
-      "implementation_started": false,
-      "github_issue_number": 236,
-      "github_url": "https://github.com/Yijtu/ontology/issues/236",
-      "file": ".autoresearch/batches/v0.3-assistants/issues/costing/issue-067-requote-lifecycle.md",
-      "depends_on": [
-        "V03-058",
-        "V03-062",
-        "V03-065"
-      ],
-      "declared_story_refs": [
-        "P.US-015",
-        "P.US-017",
-        "P.US-021",
-        "P.US-022",
-        "P.US-024"
-      ],
-      "requirement_refs": [
-        "P.US-015.AC-03",
-        "P.US-021.AC-01",
-        "P.US-021.AC-02",
-        "P.US-021.AC-03",
-        "P.US-021.AC-04",
-        "P.FR-23",
-        "P.FR-30",
-        "P.FR-31"
-      ],
-      "spec_refs": [
-        "tasks/spec-electrical-costing-mvp-v0.3.md#51-可替换客户报价端口",
-        "tasks/spec-electrical-costing-mvp-v0.3.md#9-错误恢复与资源限制"
-      ],
-      "merge_target": "feat/electrical-costing-poc",
-      "working_line": "feat/electrical-costing-poc",
-      "verification_state": "not_run",
-      "evidence": [],
-      "remote_state": "open",
-      "remote_labels": [
-        "batch:v0.3-assistants",
-        "phase:costing",
-        "medium",
-        "fullstack"
-      ],
-      "github_dependencies": [
-        228,
-        231,
-        232
-      ],
+      "replan": {
+        "date": "2026-10-14",
+        "action": "rewritten",
+        "remote_body_stale": true
+      },
       "published_body_sha256": "01394badaab005b772d844905b8a631dcf8f013128ea574e0afa4e060739c3a8"
     },
     {
@@ -3969,37 +3965,24 @@
       "phase": "B",
       "type": "infra",
       "priority": "P1",
-      "status": "planned",
-      "dependency_readiness": "waiting_dependencies",
+      "status": "superseded",
+      "dependency_readiness": "not_applicable",
       "external_readiness": "see_card",
       "implementation_started": false,
       "github_issue_number": 237,
       "github_url": "https://github.com/Yijtu/ontology/issues/237",
       "file": ".autoresearch/batches/v0.3-assistants/issues/costing/issue-068-client-mapping-conformance.md",
-      "depends_on": [
-        "V03-055",
-        "V03-058",
-        "V03-065"
-      ],
-      "declared_story_refs": [
-        "P.US-013",
-        "P.US-017",
-        "P.US-023",
-        "P.US-024"
-      ],
-      "requirement_refs": [
-        "P.US-023.AC-02",
-        "P.US-023.AC-04",
-        "P.FR-16"
-      ],
+      "depends_on": [],
+      "declared_story_refs": [],
+      "requirement_refs": [],
       "spec_refs": [
-        "tasks/spec-electrical-costing-mvp-v0.3.md#101-可实施测试矩阵"
+        "tasks/prd-ai-cost-engineer-mvp.md"
       ],
       "merge_target": "feat/electrical-costing-poc",
       "working_line": "feat/electrical-costing-poc",
       "verification_state": "not_run",
       "evidence": [],
-      "remote_state": "open",
+      "remote_state": "open_pending_close",
       "remote_labels": [
         "batch:v0.3-assistants",
         "phase:costing",
@@ -4011,12 +3994,20 @@
         228,
         232
       ],
-      "published_body_sha256": "3ddc0038b7be26c8b6a608efcae55caf94cc5a15f47297f9a69274d4d4b11145"
+      "published_body_sha256": "3ddc0038b7be26c8b6a608efcae55caf94cc5a15f47297f9a69274d4d4b11145",
+      "superseded_by": [
+        "V03-055"
+      ],
+      "superseded_reason": "新 PRD 无多客户映射复用要求；清单解析的结构覆盖在 V03-055 中验证。",
+      "replan": {
+        "date": "2026-10-14",
+        "action": "superseded"
+      }
     },
     {
       "local_id": "V03-069",
       "number": 69,
-      "title": "完成造价双助手正常入口的合成整栈浏览器 E2E",
+      "title": "完成询价到报价全链路浏览器 E2E",
       "phase": "B",
       "type": "infra",
       "priority": "P0",
@@ -4028,59 +4019,29 @@
       "github_url": "https://github.com/Yijtu/ontology/issues/238",
       "file": ".autoresearch/batches/v0.3-assistants/issues/costing/issue-069-costing-browser-e2e.md",
       "depends_on": [
-        "V03-052",
-        "V03-053",
-        "V03-054",
-        "V03-055",
-        "V03-056",
-        "V03-057",
-        "V03-058",
-        "V03-059",
-        "V03-060",
+        "V03-075",
+        "V03-083",
         "V03-061",
+        "V03-085",
+        "V03-060",
+        "V03-082",
         "V03-062",
         "V03-063",
         "V03-064",
-        "V03-065",
-        "V03-066",
-        "V03-067",
-        "V03-068"
+        "V03-084"
       ],
       "declared_story_refs": [
-        "P.US-001",
-        "P.US-004",
-        "P.US-006",
-        "P.US-008",
-        "P.US-024"
+        "C.US-019"
       ],
       "requirement_refs": [
-        "P.US-001.AC-04",
-        "P.US-002.AC-04",
-        "P.US-003.AC-04",
-        "P.US-004.AC-04",
-        "P.US-006.AC-04",
-        "P.US-008.AC-04",
-        "P.US-009.AC-02",
-        "P.US-009.AC-04",
-        "P.US-010.AC-04",
-        "P.US-011.AC-04",
-        "P.US-012.AC-04",
-        "P.US-013.AC-05",
-        "P.US-014.AC-04",
-        "P.US-015.AC-04",
-        "P.US-016.AC-05",
-        "P.US-019.AC-04",
-        "P.US-020.AC-04",
-        "P.US-021.AC-04",
-        "P.US-022.AC-04",
-        "P.US-024.AC-02",
-        "P.US-024.AC-03",
-        "P.US-024.AC-04",
-        "P.US-024.AC-05",
-        "P.US-024.AC-06"
+        "C.US-019.AC-01",
+        "C.US-019.AC-02",
+        "C.US-019.AC-03",
+        "C.US-019.AC-04",
+        "C.US-019.AC-05"
       ],
       "spec_refs": [
-        "tasks/spec-electrical-costing-mvp-v0.3.md#102-实际测试入口与交付证据"
+        "tasks/prd-ai-cost-engineer-mvp.md#us-019端到端测试询价到报价全链路"
       ],
       "merge_target": "feat/electrical-costing-poc",
       "working_line": "feat/electrical-costing-poc",
@@ -4094,24 +4055,17 @@
         "infra"
       ],
       "github_dependencies": [
-        220,
-        221,
-        223,
-        222,
-        224,
-        225,
-        228,
-        230,
-        226,
         229,
+        226,
         231,
         233,
-        234,
-        232,
-        235,
-        236,
-        237
+        234
       ],
+      "replan": {
+        "date": "2026-10-14",
+        "action": "rewritten",
+        "remote_body_stale": true
+      },
       "published_body_sha256": "d00cda9a7ffab2710bd9ce629c9d1e225ca61f9a4ddbccf630b61c6fef16e49f"
     },
     {
@@ -4121,40 +4075,24 @@
       "phase": "B",
       "type": "backend",
       "priority": "P0",
-      "status": "planned",
-      "dependency_readiness": "waiting_dependencies",
+      "status": "superseded",
+      "dependency_readiness": "not_applicable",
       "external_readiness": "unconfirmed",
       "implementation_started": false,
       "github_issue_number": 227,
       "github_url": "https://github.com/Yijtu/ontology/issues/227",
       "file": ".autoresearch/batches/v0.3-assistants/issues/costing/issue-070-real-customer-adapter.md",
-      "depends_on": [
-        "V03-049",
-        "V03-054"
-      ],
-      "declared_story_refs": [
-        "P.US-007",
-        "P.US-016",
-        "P.US-017",
-        "P.US-023",
-        "P.US-024"
-      ],
-      "requirement_refs": [
-        "P.US-017.AC-03",
-        "P.US-023.AC-03",
-        "P.FR-11",
-        "P.FR-24",
-        "P.FR-25"
-      ],
+      "depends_on": [],
+      "declared_story_refs": [],
+      "requirement_refs": [],
       "spec_refs": [
-        "tasks/spec-electrical-costing-mvp-v0.3.md#51-可替换客户报价端口",
-        "tasks/spec-electrical-costing-mvp-v0.3.md#11-外部依赖图纸与未验证风险"
+        "tasks/prd-ai-cost-engineer-mvp.md"
       ],
       "merge_target": "feat/electrical-costing-poc",
       "working_line": "feat/electrical-costing-poc",
       "verification_state": "not_run",
       "evidence": [],
-      "remote_state": "open",
+      "remote_state": "open_pending_close",
       "remote_labels": [
         "batch:v0.3-assistants",
         "phase:costing",
@@ -4166,47 +4104,38 @@
         171,
         223
       ],
-      "published_body_sha256": "34c4262b2eff3536fd89a14cea6e0d166caae6d3e320d318dd6b5239aa081861"
+      "published_body_sha256": "34c4262b2eff3536fd89a14cea6e0d166caae6d3e320d318dd6b5239aa081861",
+      "superseded_by": [
+        "V03-054"
+      ],
+      "superseded_reason": "新 PRD 自研计价规则，外部系统集成为非目标（§5）；金额由 V03-054 的 compute 操作产出。",
+      "replan": {
+        "date": "2026-10-14",
+        "action": "superseded"
+      }
     },
     {
       "local_id": "V03-071",
       "number": 71,
-      "title": "完成真实模型、权威函数与保留样本的业务验收",
+      "title": "完成真实样本逐项核对与试点验收",
       "phase": "B",
       "type": "validation",
       "priority": "P0",
       "status": "planned",
       "dependency_readiness": "waiting_dependencies",
-      "external_readiness": "unconfirmed",
+      "external_readiness": "external_unconfirmed",
       "implementation_started": false,
       "github_issue_number": 239,
       "github_url": "https://github.com/Yijtu/ontology/issues/239",
-      "file": ".autoresearch/batches/v0.3-assistants/issues/costing/issue-071-real-customer-acceptance.md",
+      "file": ".autoresearch/batches/v0.3-assistants/issues/costing/issue-071-real-sample-acceptance.md",
       "depends_on": [
-        "V03-049",
         "V03-050",
-        "V03-069",
-        "V03-070"
+        "V03-069"
       ],
-      "declared_story_refs": [
-        "P.US-004",
-        "P.US-006",
-        "P.US-008",
-        "P.US-016",
-        "P.US-017",
-        "P.US-018",
-        "P.US-022",
-        "P.US-024"
-      ],
-      "requirement_refs": [
-        "P.US-022.AC-02",
-        "P.US-022.AC-03",
-        "P.US-024.AC-06",
-        "P.FR-33"
-      ],
+      "declared_story_refs": [],
+      "requirement_refs": [],
       "spec_refs": [
-        "tasks/spec-electrical-costing-mvp-v0.3.md#73-四层验收与-goldcase",
-        "tasks/spec-electrical-costing-mvp-v0.3.md#11-外部依赖图纸与未验证风险"
+        "tasks/prd-ai-cost-engineer-mvp.md#8-成功指标"
       ],
       "merge_target": "feat/electrical-costing-poc",
       "working_line": "feat/electrical-costing-poc",
@@ -4221,23 +4150,26 @@
         "external-condition"
       ],
       "github_dependencies": [
-        171,
         172,
-        238,
-        227
+        238
       ],
+      "replan": {
+        "date": "2026-10-14",
+        "action": "rewritten",
+        "remote_body_stale": true
+      },
       "published_body_sha256": "8d32b5c73582319a483c16e46503557985e41899c9c73af18801233872a07f5f"
     },
     {
       "local_id": "V03-072",
       "number": 72,
-      "title": "完成造价 MVP 使用文档、交接与最终交付门槛",
+      "title": "完成造价 MVP 使用文档、交接与交付门槛",
       "phase": "B",
       "type": "infra",
       "priority": "P0",
       "status": "planned",
       "dependency_readiness": "waiting_dependencies",
-      "external_readiness": "unconfirmed",
+      "external_readiness": "external_unconfirmed",
       "implementation_started": false,
       "github_issue_number": 240,
       "github_url": "https://github.com/Yijtu/ontology/issues/240",
@@ -4246,18 +4178,10 @@
         "V03-069",
         "V03-071"
       ],
-      "declared_story_refs": [
-        "P.US-019",
-        "P.US-022",
-        "P.US-023",
-        "P.US-024"
-      ],
-      "requirement_refs": [
-        "P.US-024.AC-06"
-      ],
+      "declared_story_refs": [],
+      "requirement_refs": [],
       "spec_refs": [
-        "tasks/spec-electrical-costing-mvp-v0.3.md#10-验收映射与任务候选",
-        "tasks/spec-electrical-costing-mvp-v0.3.md#12-当前代码参照与文档交付"
+        "tasks/prd-ai-cost-engineer-mvp.md#8-成功指标"
       ],
       "merge_target": "feat/electrical-costing-poc",
       "working_line": "feat/electrical-costing-poc",
@@ -4275,7 +4199,746 @@
         238,
         239
       ],
+      "replan": {
+        "date": "2026-10-14",
+        "action": "rewritten",
+        "remote_body_stale": true
+      },
       "published_body_sha256": "ac7ed5d2b17d9f60fb0e48fdc2344f88258cc9ab3845b632ff443e8c9f63af23"
+    },
+    {
+      "local_id": "V03-073",
+      "number": 73,
+      "title": "实现标准物料库服务与 Excel 批量导入",
+      "phase": "B",
+      "type": "backend",
+      "priority": "P1",
+      "status": "planned",
+      "dependency_readiness": "waiting_dependencies",
+      "external_readiness": "see_card",
+      "implementation_started": false,
+      "github_issue_number": null,
+      "github_url": null,
+      "file": ".autoresearch/batches/v0.3-assistants/issues/costing/issue-073-standard-materials.md",
+      "depends_on": [
+        "V03-052"
+      ],
+      "declared_story_refs": [
+        "C.US-003"
+      ],
+      "requirement_refs": [
+        "C.US-003.AC-01",
+        "C.US-003.AC-02",
+        "C.US-003.AC-03",
+        "C.US-003.AC-04",
+        "C.US-003.AC-05",
+        "C.FR-3"
+      ],
+      "spec_refs": [
+        "tasks/prd-ai-cost-engineer-mvp.md#us-003标准物料库维护",
+        "tasks/prd-ai-cost-engineer-mvp.md#4-功能需求"
+      ],
+      "merge_target": "feat/electrical-costing-poc",
+      "working_line": "feat/electrical-costing-poc",
+      "verification_state": "not_run",
+      "evidence": [],
+      "remote_state": "not_created",
+      "remote_labels": [
+        "batch:v0.3-assistants",
+        "phase:costing",
+        "medium",
+        "backend"
+      ],
+      "github_dependencies": [
+        220
+      ],
+      "replan": {
+        "date": "2026-10-14",
+        "action": "added",
+        "remote_body_stale": false
+      },
+      "published_body_sha256": null
+    },
+    {
+      "local_id": "V03-074",
+      "number": 74,
+      "title": "通用缺口：账号登录、会话与 401 跳转（回流 main）",
+      "phase": "B",
+      "type": "fullstack",
+      "priority": "P0",
+      "status": "planned",
+      "dependency_readiness": "ready",
+      "external_readiness": "see_card",
+      "implementation_started": false,
+      "github_issue_number": null,
+      "github_url": null,
+      "file": ".autoresearch/batches/v0.3-assistants/issues/core/issue-074-account-login-session.md",
+      "depends_on": [],
+      "declared_story_refs": [
+        "C.US-001"
+      ],
+      "requirement_refs": [
+        "C.US-001.AC-01",
+        "C.US-001.AC-02",
+        "C.US-001.AC-03",
+        "C.US-001.AC-04",
+        "C.US-001.AC-05",
+        "C.US-001.AC-06",
+        "C.FR-1"
+      ],
+      "spec_refs": [
+        "tasks/prd-ai-cost-engineer-mvp.md#us-001造价师登录与账号基础",
+        "tasks/prd-ai-cost-engineer-mvp.md#4-功能需求",
+        "tasks/prd-ai-cost-engineer-mvp.md#7-技术考虑"
+      ],
+      "merge_target": "main",
+      "working_line": "feature-branch-from-main",
+      "verification_state": "not_run",
+      "evidence": [],
+      "remote_state": "not_created",
+      "remote_labels": [
+        "batch:v0.3-assistants",
+        "phase:core",
+        "high",
+        "fullstack"
+      ],
+      "github_dependencies": [],
+      "replan": {
+        "date": "2026-10-14",
+        "action": "added",
+        "remote_body_stale": false
+      },
+      "published_body_sha256": null
+    },
+    {
+      "local_id": "V03-075",
+      "number": 75,
+      "title": "实现造价工作台首页与待办汇总",
+      "phase": "B",
+      "type": "frontend",
+      "priority": "P1",
+      "status": "planned",
+      "dependency_readiness": "waiting_dependencies",
+      "external_readiness": "see_card",
+      "implementation_started": false,
+      "github_issue_number": null,
+      "github_url": null,
+      "file": ".autoresearch/batches/v0.3-assistants/issues/costing/issue-075-workbench-home-ui.md",
+      "depends_on": [
+        "V03-074",
+        "V03-051",
+        "V03-079"
+      ],
+      "declared_story_refs": [
+        "C.US-002"
+      ],
+      "requirement_refs": [
+        "C.US-002.AC-01",
+        "C.US-002.AC-02",
+        "C.US-002.AC-03",
+        "C.US-002.AC-04",
+        "C.US-002.AC-05",
+        "C.FR-1",
+        "C.FR-2"
+      ],
+      "spec_refs": [
+        "tasks/prd-ai-cost-engineer-mvp.md#us-002工作台首页",
+        "tasks/prd-ai-cost-engineer-mvp.md#4-功能需求"
+      ],
+      "merge_target": "feat/electrical-costing-poc",
+      "working_line": "feat/electrical-costing-poc",
+      "verification_state": "not_run",
+      "evidence": [],
+      "remote_state": "not_created",
+      "remote_labels": [
+        "batch:v0.3-assistants",
+        "phase:costing",
+        "medium",
+        "frontend"
+      ],
+      "github_dependencies": [
+        219
+      ],
+      "replan": {
+        "date": "2026-10-14",
+        "action": "added",
+        "remote_body_stale": false
+      },
+      "published_body_sha256": null
+    },
+    {
+      "local_id": "V03-076",
+      "number": 76,
+      "title": "实现执行标准文档登记与标准规则服务",
+      "phase": "B",
+      "type": "backend",
+      "priority": "P1",
+      "status": "planned",
+      "dependency_readiness": "waiting_dependencies",
+      "external_readiness": "see_card",
+      "implementation_started": false,
+      "github_issue_number": null,
+      "github_url": null,
+      "file": ".autoresearch/batches/v0.3-assistants/issues/costing/issue-076-standards-rules.md",
+      "depends_on": [
+        "V03-052"
+      ],
+      "declared_story_refs": [
+        "C.US-004"
+      ],
+      "requirement_refs": [
+        "C.US-004.AC-01",
+        "C.US-004.AC-02",
+        "C.US-004.AC-03",
+        "C.US-004.AC-04",
+        "C.US-004.AC-05",
+        "C.US-004.AC-06",
+        "C.US-004.AC-07",
+        "C.FR-4",
+        "C.FR-5"
+      ],
+      "spec_refs": [
+        "tasks/prd-ai-cost-engineer-mvp.md#us-004执行标准库维护人工梳理",
+        "tasks/prd-ai-cost-engineer-mvp.md#4-功能需求"
+      ],
+      "merge_target": "feat/electrical-costing-poc",
+      "working_line": "feat/electrical-costing-poc",
+      "verification_state": "not_run",
+      "evidence": [],
+      "remote_state": "not_created",
+      "remote_labels": [
+        "batch:v0.3-assistants",
+        "phase:costing",
+        "medium",
+        "backend"
+      ],
+      "github_dependencies": [
+        220
+      ],
+      "replan": {
+        "date": "2026-10-14",
+        "action": "added",
+        "remote_body_stale": false
+      },
+      "published_body_sha256": null
+    },
+    {
+      "local_id": "V03-077",
+      "number": 77,
+      "title": "实现工艺规则维护、版本与样例试算",
+      "phase": "B",
+      "type": "backend",
+      "priority": "P1",
+      "status": "planned",
+      "dependency_readiness": "waiting_dependencies",
+      "external_readiness": "see_card",
+      "implementation_started": false,
+      "github_issue_number": null,
+      "github_url": null,
+      "file": ".autoresearch/batches/v0.3-assistants/issues/costing/issue-077-process-rules.md",
+      "depends_on": [
+        "V03-054",
+        "V03-076"
+      ],
+      "declared_story_refs": [
+        "C.US-005"
+      ],
+      "requirement_refs": [
+        "C.US-005.AC-01",
+        "C.US-005.AC-02",
+        "C.US-005.AC-03",
+        "C.US-005.AC-04",
+        "C.US-005.AC-05",
+        "C.FR-6"
+      ],
+      "spec_refs": [
+        "tasks/prd-ai-cost-engineer-mvp.md#us-005工艺规则维护",
+        "tasks/prd-ai-cost-engineer-mvp.md#4-功能需求"
+      ],
+      "merge_target": "feat/electrical-costing-poc",
+      "working_line": "feat/electrical-costing-poc",
+      "verification_state": "not_run",
+      "evidence": [],
+      "remote_state": "not_created",
+      "remote_labels": [
+        "batch:v0.3-assistants",
+        "phase:costing",
+        "medium",
+        "backend"
+      ],
+      "github_dependencies": [
+        223
+      ],
+      "replan": {
+        "date": "2026-10-14",
+        "action": "added",
+        "remote_body_stale": false
+      },
+      "published_body_sha256": null
+    },
+    {
+      "local_id": "V03-078",
+      "number": 78,
+      "title": "实现市场参考价维护与对照服务",
+      "phase": "B",
+      "type": "backend",
+      "priority": "P2",
+      "status": "planned",
+      "dependency_readiness": "waiting_dependencies",
+      "external_readiness": "see_card",
+      "implementation_started": false,
+      "github_issue_number": null,
+      "github_url": null,
+      "file": ".autoresearch/batches/v0.3-assistants/issues/costing/issue-078-market-prices.md",
+      "depends_on": [
+        "V03-053"
+      ],
+      "declared_story_refs": [
+        "C.US-007"
+      ],
+      "requirement_refs": [
+        "C.US-007.AC-01",
+        "C.US-007.AC-02",
+        "C.US-007.AC-03",
+        "C.US-007.AC-04",
+        "C.US-007.AC-05",
+        "C.FR-8"
+      ],
+      "spec_refs": [
+        "tasks/prd-ai-cost-engineer-mvp.md#us-007市场价格参考",
+        "tasks/prd-ai-cost-engineer-mvp.md#4-功能需求"
+      ],
+      "merge_target": "feat/electrical-costing-poc",
+      "working_line": "feat/electrical-costing-poc",
+      "verification_state": "not_run",
+      "evidence": [],
+      "remote_state": "not_created",
+      "remote_labels": [
+        "batch:v0.3-assistants",
+        "phase:costing",
+        "low",
+        "backend"
+      ],
+      "github_dependencies": [
+        221
+      ],
+      "replan": {
+        "date": "2026-10-14",
+        "action": "added",
+        "remote_body_stale": false
+      },
+      "published_body_sha256": null
+    },
+    {
+      "local_id": "V03-079",
+      "number": 79,
+      "title": "实现报价项目、成本报价单与资料上传服务",
+      "phase": "B",
+      "type": "backend",
+      "priority": "P1",
+      "status": "planned",
+      "dependency_readiness": "waiting_dependencies",
+      "external_readiness": "see_card",
+      "implementation_started": false,
+      "github_issue_number": null,
+      "github_url": null,
+      "file": ".autoresearch/batches/v0.3-assistants/issues/costing/issue-079-quotation-projects-documents.md",
+      "depends_on": [
+        "V03-052"
+      ],
+      "declared_story_refs": [
+        "C.US-008",
+        "C.US-009"
+      ],
+      "requirement_refs": [
+        "C.US-008.AC-01",
+        "C.US-008.AC-02",
+        "C.US-008.AC-03",
+        "C.US-008.AC-04",
+        "C.US-008.AC-05",
+        "C.US-009.AC-01",
+        "C.US-009.AC-02",
+        "C.US-009.AC-03",
+        "C.US-009.AC-04",
+        "C.US-009.AC-05",
+        "C.FR-10",
+        "C.FR-11",
+        "C.FR-12"
+      ],
+      "spec_refs": [
+        "tasks/prd-ai-cost-engineer-mvp.md#us-008报价项目管理",
+        "tasks/prd-ai-cost-engineer-mvp.md#us-009成本报价单创建与资料上传",
+        "tasks/prd-ai-cost-engineer-mvp.md#4-功能需求"
+      ],
+      "merge_target": "feat/electrical-costing-poc",
+      "working_line": "feat/electrical-costing-poc",
+      "verification_state": "not_run",
+      "evidence": [],
+      "remote_state": "not_created",
+      "remote_labels": [
+        "batch:v0.3-assistants",
+        "phase:costing",
+        "medium",
+        "backend"
+      ],
+      "github_dependencies": [
+        220
+      ],
+      "replan": {
+        "date": "2026-10-14",
+        "action": "added",
+        "remote_body_stale": false
+      },
+      "published_body_sha256": null
+    },
+    {
+      "local_id": "V03-080",
+      "number": 80,
+      "title": "通用缺口：视觉模型端口与 PDF 页渲染（回流 main）",
+      "phase": "B",
+      "type": "backend",
+      "priority": "P0",
+      "status": "planned",
+      "dependency_readiness": "waiting_dependencies",
+      "external_readiness": "external_unconfirmed",
+      "implementation_started": false,
+      "github_issue_number": null,
+      "github_url": null,
+      "file": ".autoresearch/batches/v0.3-assistants/issues/core/issue-080-vision-model-port.md",
+      "depends_on": [
+        "V03-049"
+      ],
+      "declared_story_refs": [
+        "C.US-011"
+      ],
+      "requirement_refs": [
+        "C.US-011.AC-01",
+        "C.US-011.AC-02",
+        "C.US-011.AC-06"
+      ],
+      "spec_refs": [
+        "tasks/prd-ai-cost-engineer-mvp.md#us-011图纸物料属性视觉解析不含算量和定位",
+        "tasks/prd-ai-cost-engineer-mvp.md#7-技术考虑"
+      ],
+      "merge_target": "main",
+      "working_line": "feature-branch-from-main",
+      "verification_state": "not_run",
+      "evidence": [],
+      "remote_state": "not_created",
+      "remote_labels": [
+        "batch:v0.3-assistants",
+        "phase:core",
+        "high",
+        "backend",
+        "external-condition"
+      ],
+      "github_dependencies": [
+        171
+      ],
+      "replan": {
+        "date": "2026-10-14",
+        "action": "added",
+        "remote_body_stale": false
+      },
+      "published_body_sha256": null
+    },
+    {
+      "local_id": "V03-081",
+      "number": 81,
+      "title": "实现图纸视觉解析与物料属性候选",
+      "phase": "B",
+      "type": "backend",
+      "priority": "P1",
+      "status": "planned",
+      "dependency_readiness": "waiting_dependencies",
+      "external_readiness": "external_unconfirmed",
+      "implementation_started": false,
+      "github_issue_number": null,
+      "github_url": null,
+      "file": ".autoresearch/batches/v0.3-assistants/issues/costing/issue-081-drawing-vision-parsing.md",
+      "depends_on": [
+        "V03-079",
+        "V03-080",
+        "V03-049"
+      ],
+      "declared_story_refs": [
+        "C.US-011"
+      ],
+      "requirement_refs": [
+        "C.US-011.AC-01",
+        "C.US-011.AC-02",
+        "C.US-011.AC-03",
+        "C.US-011.AC-04",
+        "C.US-011.AC-05",
+        "C.US-011.AC-06",
+        "C.US-011.AC-07",
+        "C.FR-13"
+      ],
+      "spec_refs": [
+        "tasks/prd-ai-cost-engineer-mvp.md#us-011图纸物料属性视觉解析不含算量和定位",
+        "tasks/prd-ai-cost-engineer-mvp.md#4-功能需求"
+      ],
+      "merge_target": "feat/electrical-costing-poc",
+      "working_line": "feat/electrical-costing-poc",
+      "verification_state": "not_run",
+      "evidence": [],
+      "remote_state": "not_created",
+      "remote_labels": [
+        "batch:v0.3-assistants",
+        "phase:costing",
+        "medium",
+        "backend",
+        "external-condition"
+      ],
+      "github_dependencies": [
+        171
+      ],
+      "replan": {
+        "date": "2026-10-14",
+        "action": "added",
+        "remote_body_stale": false
+      },
+      "published_body_sha256": null
+    },
+    {
+      "local_id": "V03-082",
+      "number": 82,
+      "title": "实现对客澄清单与 AI 话术起草",
+      "phase": "B",
+      "type": "fullstack",
+      "priority": "P1",
+      "status": "planned",
+      "dependency_readiness": "waiting_dependencies",
+      "external_readiness": "see_card",
+      "implementation_started": false,
+      "github_issue_number": null,
+      "github_url": null,
+      "file": ".autoresearch/batches/v0.3-assistants/issues/costing/issue-082-clarification-list.md",
+      "depends_on": [
+        "V03-056"
+      ],
+      "declared_story_refs": [
+        "C.US-013"
+      ],
+      "requirement_refs": [
+        "C.US-013.AC-01",
+        "C.US-013.AC-02",
+        "C.US-013.AC-03",
+        "C.US-013.AC-04",
+        "C.US-013.AC-05",
+        "C.US-013.AC-06",
+        "C.FR-18"
+      ],
+      "spec_refs": [
+        "tasks/prd-ai-cost-engineer-mvp.md#us-013对客澄清单",
+        "tasks/prd-ai-cost-engineer-mvp.md#4-功能需求"
+      ],
+      "merge_target": "feat/electrical-costing-poc",
+      "working_line": "feat/electrical-costing-poc",
+      "verification_state": "not_run",
+      "evidence": [],
+      "remote_state": "not_created",
+      "remote_labels": [
+        "batch:v0.3-assistants",
+        "phase:costing",
+        "medium",
+        "fullstack"
+      ],
+      "github_dependencies": [
+        224
+      ],
+      "replan": {
+        "date": "2026-10-14",
+        "action": "added",
+        "remote_body_stale": false
+      },
+      "published_body_sha256": null
+    },
+    {
+      "local_id": "V03-083",
+      "number": 83,
+      "title": "实现物料、执行标准与工艺规则管理页面",
+      "phase": "B",
+      "type": "frontend",
+      "priority": "P1",
+      "status": "planned",
+      "dependency_readiness": "waiting_dependencies",
+      "external_readiness": "see_card",
+      "implementation_started": false,
+      "github_issue_number": null,
+      "github_url": null,
+      "file": ".autoresearch/batches/v0.3-assistants/issues/costing/issue-083-asset-center-ui.md",
+      "depends_on": [
+        "V03-073",
+        "V03-076",
+        "V03-077"
+      ],
+      "declared_story_refs": [
+        "C.US-003",
+        "C.US-004",
+        "C.US-005"
+      ],
+      "requirement_refs": [
+        "C.US-003.AC-01",
+        "C.US-003.AC-02",
+        "C.US-003.AC-03",
+        "C.US-003.AC-04",
+        "C.US-003.AC-05",
+        "C.US-003.AC-06",
+        "C.US-004.AC-01",
+        "C.US-004.AC-02",
+        "C.US-004.AC-03",
+        "C.US-004.AC-04",
+        "C.US-004.AC-05",
+        "C.US-004.AC-06",
+        "C.US-004.AC-07",
+        "C.US-004.AC-08",
+        "C.US-005.AC-01",
+        "C.US-005.AC-02",
+        "C.US-005.AC-03",
+        "C.US-005.AC-04",
+        "C.US-005.AC-05",
+        "C.US-005.AC-06",
+        "C.FR-3",
+        "C.FR-4",
+        "C.FR-6"
+      ],
+      "spec_refs": [
+        "tasks/prd-ai-cost-engineer-mvp.md#us-003标准物料库维护",
+        "tasks/prd-ai-cost-engineer-mvp.md#us-004执行标准库维护人工梳理",
+        "tasks/prd-ai-cost-engineer-mvp.md#us-005工艺规则维护",
+        "tasks/prd-ai-cost-engineer-mvp.md#4-功能需求"
+      ],
+      "merge_target": "feat/electrical-costing-poc",
+      "working_line": "feat/electrical-costing-poc",
+      "verification_state": "not_run",
+      "evidence": [],
+      "remote_state": "not_created",
+      "remote_labels": [
+        "batch:v0.3-assistants",
+        "phase:costing",
+        "medium",
+        "frontend"
+      ],
+      "github_dependencies": [],
+      "replan": {
+        "date": "2026-10-14",
+        "action": "added",
+        "remote_body_stale": false
+      },
+      "published_body_sha256": null
+    },
+    {
+      "local_id": "V03-084",
+      "number": 84,
+      "title": "实现对外报价单页面与 Excel/PDF 导出",
+      "phase": "B",
+      "type": "fullstack",
+      "priority": "P1",
+      "status": "planned",
+      "dependency_readiness": "waiting_dependencies",
+      "external_readiness": "see_card",
+      "implementation_started": false,
+      "github_issue_number": null,
+      "github_url": null,
+      "file": ".autoresearch/batches/v0.3-assistants/issues/costing/issue-084-external-quotation-ui-export.md",
+      "depends_on": [
+        "V03-057",
+        "V03-062"
+      ],
+      "declared_story_refs": [
+        "C.US-018"
+      ],
+      "requirement_refs": [
+        "C.US-018.AC-01",
+        "C.US-018.AC-02",
+        "C.US-018.AC-03",
+        "C.US-018.AC-04",
+        "C.US-018.AC-05",
+        "C.US-018.AC-06",
+        "C.US-018.AC-07",
+        "C.FR-28",
+        "C.FR-30",
+        "C.FR-31"
+      ],
+      "spec_refs": [
+        "tasks/prd-ai-cost-engineer-mvp.md#us-018对外报价单",
+        "tasks/prd-ai-cost-engineer-mvp.md#4-功能需求"
+      ],
+      "merge_target": "feat/electrical-costing-poc",
+      "working_line": "feat/electrical-costing-poc",
+      "verification_state": "not_run",
+      "evidence": [],
+      "remote_state": "not_created",
+      "remote_labels": [
+        "batch:v0.3-assistants",
+        "phase:costing",
+        "medium",
+        "fullstack"
+      ],
+      "github_dependencies": [
+        225,
+        231
+      ],
+      "replan": {
+        "date": "2026-10-14",
+        "action": "added",
+        "remote_body_stale": false
+      },
+      "published_body_sha256": null
+    },
+    {
+      "local_id": "V03-085",
+      "number": 85,
+      "title": "实现报价项目列表与项目概览页面",
+      "phase": "B",
+      "type": "frontend",
+      "priority": "P1",
+      "status": "planned",
+      "dependency_readiness": "waiting_dependencies",
+      "external_readiness": "see_card",
+      "implementation_started": false,
+      "github_issue_number": null,
+      "github_url": null,
+      "file": ".autoresearch/batches/v0.3-assistants/issues/costing/issue-085-project-management-ui.md",
+      "depends_on": [
+        "V03-079",
+        "V03-075"
+      ],
+      "declared_story_refs": [
+        "C.US-008"
+      ],
+      "requirement_refs": [
+        "C.US-008.AC-01",
+        "C.US-008.AC-02",
+        "C.US-008.AC-03",
+        "C.US-008.AC-04",
+        "C.US-008.AC-05",
+        "C.US-008.AC-06",
+        "C.FR-10"
+      ],
+      "spec_refs": [
+        "tasks/prd-ai-cost-engineer-mvp.md#us-008报价项目管理",
+        "tasks/prd-ai-cost-engineer-mvp.md#4-功能需求"
+      ],
+      "merge_target": "feat/electrical-costing-poc",
+      "working_line": "feat/electrical-costing-poc",
+      "verification_state": "not_run",
+      "evidence": [],
+      "remote_state": "not_created",
+      "remote_labels": [
+        "batch:v0.3-assistants",
+        "phase:costing",
+        "medium",
+        "frontend"
+      ],
+      "github_dependencies": [],
+      "replan": {
+        "date": "2026-10-14",
+        "action": "added",
+        "remote_body_stale": false
+      },
+      "published_body_sha256": null
     }
   ],
   "publication": {
@@ -4284,7 +4947,10 @@
     "verification": {
       "status": "passed",
       "remote_issue_count": 72,
-      "phase_counts": { "A": 47, "B": 25 },
+      "phase_counts": {
+        "A": 47,
+        "B": 25
+      },
       "dependency_edges": 252,
       "portable_remote_body_links": 388,
       "local_links_checked": 1843,
@@ -4386,5 +5052,58 @@
     239,
     240
   ],
-  "source_hash_normalization": "utf8-without-bom-lf"
+  "source_hash_normalization": "utf8-without-bom-lf",
+  "replan_history": [
+    {
+      "date": "2026-10-14",
+      "phase": "B",
+      "source": "tasks/prd-ai-cost-engineer-mvp.md",
+      "removed_source": "tasks/spec-electrical-costing-mvp-v0.3.md",
+      "rewritten": [
+        "V03-048",
+        "V03-049",
+        "V03-050",
+        "V03-051",
+        "V03-052",
+        "V03-053",
+        "V03-054",
+        "V03-055",
+        "V03-056",
+        "V03-057",
+        "V03-058",
+        "V03-059",
+        "V03-060",
+        "V03-061",
+        "V03-062",
+        "V03-063",
+        "V03-064",
+        "V03-067",
+        "V03-069",
+        "V03-071",
+        "V03-072"
+      ],
+      "added": [
+        "V03-073",
+        "V03-074",
+        "V03-075",
+        "V03-076",
+        "V03-077",
+        "V03-078",
+        "V03-079",
+        "V03-080",
+        "V03-081",
+        "V03-082",
+        "V03-083",
+        "V03-084",
+        "V03-085"
+      ],
+      "superseded": [
+        "V03-065",
+        "V03-066",
+        "V03-068",
+        "V03-070"
+      ],
+      "remote_sync": "pending_user_confirmation"
+    }
+  ]
 }
