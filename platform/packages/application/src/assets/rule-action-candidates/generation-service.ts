@@ -4,7 +4,7 @@ import type { ActionCapabilityBindingInput, AssetCandidateStore, AssetCandidateV
   RuleActionCandidateKind, RuleActionCandidateStore, RuleActionCandidateVersion, RuleActionGenerationBatch,
   RuleActionGenerationGuard, RuleActionGenerationIssue, RuleActionGenerationStore,
   RuleActionSourceSelection, Sha256Digest,
-  RuleExpressionNode, RuleProvenanceSpan, ScopeRef, SourceGroundingPort, ToolContext, Uuid, VersionRef,
+  RuleExpressionNode, RuleProvenanceSpan, ScopeRef, SourceGroundingPort, SourceGroundingRowSelector, ToolContext, Uuid, VersionRef,
   IndustryWorkspaceStore } from '@ontology/contracts'
 import { candidateIdFor, canonicalJson, sha256DigestOf } from '../../extraction/canonical'
 import { readLatestWorkspaceDraft } from '../workspace-draft'
@@ -29,6 +29,8 @@ export interface RuleActionGenerationInput {
   readonly workspaceId: Uuid
   readonly expectedRevision: RevisionString | undefined
   readonly sourceRefs: readonly ResourceRef[]
+  /** Exact table rows to include beyond the sampled page (e.g. a row a clause names). */
+  readonly rowSelectors?: readonly SourceGroundingRowSelector[]
   readonly kinds: readonly RuleActionCandidateKind[]
   readonly selectedDefinitionCandidateIds?: readonly Uuid[]
   readonly generationPolicyRef: VersionRef
@@ -172,7 +174,8 @@ export class RuleActionCandidateGenerationService {
     const guard: RuleActionGenerationGuard = { latestPublishedPackRef: workspace.latestPublishedPackRef, expectedWorkspaceRevision: input.expectedRevision,
       inputDraftRef: { workspaceId: draft.workspaceId, revision: draft.revision, digest: draft.digest },
       documentSetRef: draft.documentSetRef, definitionPins: definitions.map(assetCandidateCommitPin).sort((a, b) => a.candidateId.localeCompare(b.candidateId)), ruleActionPins: currentRules, signal }
-    const grounding = await readGrounding(this.dependencies.sourceGrounding, { workspaceId: input.workspaceId, sourceRefs: input.sourceRefs, inputDraftRef: guard.inputDraftRef }, ctx, signal)
+    const grounding = await readGrounding(this.dependencies.sourceGrounding, { workspaceId: input.workspaceId, sourceRefs: input.sourceRefs, inputDraftRef: guard.inputDraftRef,
+      ...(input.rowSelectors === undefined ? {} : { rowSelectors: input.rowSelectors }) }, ctx, signal)
     check(signal)
     if (!sameResourcePin(grounding.documentSetRef, draft.documentSetRef) || grounding.sources.length !== input.sourceRefs.length || grounding.sources.some((source, index) => !sameResourcePin(source.sourceRef, input.sourceRefs[index] ?? draft.documentSetRef))) throw new RuleActionCandidateError('VERSION_CONFLICT', 'approved source corpus changed')
     if (grounding.coverage === 'failed') throw new RuleActionCandidateError('VALIDATION_BLOCKED', 'approved source could not be read')

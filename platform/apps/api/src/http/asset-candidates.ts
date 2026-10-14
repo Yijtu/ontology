@@ -1,10 +1,12 @@
 import type { FastifyInstance, FastifyReply, FastifyRequest } from 'fastify'
-import { isResourceRef, isSha256Digest, isVersionRef } from '@ontology/contracts'
+import { isResourceRef, isSha256Digest, isSourceLocator, isUuid, isVersionRef } from '@ontology/contracts'
 import type {
   AssetCandidateState,
   DefinitionCandidateKind,
   ResourceRef,
   RevisionString,
+  SourceGroundingRowSelector,
+  SourceLocator,
   VersionRef,
 } from '@ontology/contracts'
 import type {
@@ -80,8 +82,47 @@ function parseResourceRef(value: unknown, field: string): ResourceRef {
   return value
 }
 
-function parseKinds(value: unknown): readonly DefinitionCandidateKind[] {
-  if (!Array.isArray(value) || value.length === 0) {
+/** A source confirmation may name one exact table row/cell to read beyond the sampled page. */
+function parseRowSelector(value: unknown): { readonly sourceRowKey?: string; readonly locator?: SourceLocator } | undefined {
+  if (value === undefined) return undefined
+  if (!isRecord(value) || Object.keys(value).some((key) => !['sourceRowKey', 'locator'].includes(key))) {
+    throw new InvalidRequestFieldError('rowSelector must be an object with a sourceRowKey or locator')
+  }
+  const sourceRowKey = value['sourceRowKey']
+  const locator = value['locator']
+  if (sourceRowKey !== undefined && (typeof sourceRowKey !== 'string' || sourceRowKey.length === 0)) {
+    throw new InvalidRequestFieldError('rowSelector.sourceRowKey must be a non-empty string')
+  }
+  if ((sourceRowKey === undefined) === (locator === undefined) || (locator !== undefined && !isSourceLocator(locator))) {
+    throw new InvalidRequestFieldError('rowSelector must name exactly one row key or locator')
+  }
+  return { ...(sourceRowKey === undefined ? {} : { sourceRowKey }), ...(locator === undefined ? {} : { locator }) }
+}
+
+/** A generation may request exact table rows to include beyond the sampled page. */
+export function parseRowSelectors(value: unknown): readonly SourceGroundingRowSelector[] {
+  if (value === undefined) return []
+  if (!Array.isArray(value) || value.length === 0 || value.length > 64) {
+    throw new InvalidRequestFieldError('rowSelectors must be a non-empty array of at most 64 selectors')
+  }
+  return value.map((entry, index) => {
+    const label = `rowSelectors[${String(index)}]`
+    if (!isRecord(entry) || Object.keys(entry).some((key) => !['sourceRef', 'recordId', 'sourceRowKey', 'locator'].includes(key))) {
+      throw new InvalidRequestFieldError(`${label} must carry a sourceRef and one of recordId, sourceRowKey or locator`)
+    }
+    const sourceRef = parseResourceRef(entry['sourceRef'], `${label}.sourceRef`)
+    const recordId = entry['recordId']
+    const sourceRowKey = entry['sourceRowKey']
+    const locator = entry['locator']
+    if (recordId !== undefined && !isUuid(recordId)) throw new InvalidRequestFieldError(`${label}.recordId must be a uuid`)
+    if (sourceRowKey !== undefined && (typeof sourceRowKey !== 'string' || sourceRowKey.length === 0)) throw new InvalidRequestFieldError(`${label}.sourceRowKey must be a non-empty string`)
+    if (locator !== undefined && !isSourceLocator(locator)) throw new InvalidRequestFieldError(`${label}.locator must be a source locator`)
+    if ([recordId, sourceRowKey, locator].filter((item) => item !== undefined).length !== 1) throw new InvalidRequestFieldError(`${label} must name exactly one row identity`)
+    return { sourceRef, ...(recordId === undefined ? {} : { recordId }), ...(sourceRowKey === undefined ? {} : { sourceRowKey }), ...(locator === undefined ? {} : { locator }) }
+  })
+}
+
+function parseKinds(value: unknown): readonly DefinitionCandidateKind[] {  if (!Array.isArray(value) || value.length === 0) {
     throw new InvalidRequestFieldError('kinds must be a non-empty array')
   }
   return value.map((entry, index) => {
@@ -154,8 +195,9 @@ export function registerAssetCandidateRoutes(
       if (!isRecord(body)) {
         throw new InvalidRequestFieldError('the request body must be a JSON object')
       }
-      rejectUnknownFields(body, ['kinds', 'generationPolicyRef', 'documentSetRef', 'sourceRefs', 'candidateLimit', 'competencyQuestionRef'])
+      rejectUnknownFields(body, ['kinds', 'generationPolicyRef', 'documentSetRef', 'sourceRefs', 'rowSelectors', 'candidateLimit', 'competencyQuestionRef'])
       if (body['candidateLimit'] !== undefined && (!Number.isSafeInteger(body['candidateLimit']) || Number(body['candidateLimit']) < 1 || Number(body['candidateLimit']) > 500)) throw new InvalidRequestFieldError('candidateLimit must be within 1..500')
+      const rowSelectors = parseRowSelectors(body['rowSelectors'])
       const input: DefinitionGenerationInput = {
         workspaceId,
         expectedRevision: readIfMatch(request),
@@ -165,6 +207,7 @@ export function registerAssetCandidateRoutes(
           ? {}
           : { documentSetRef: parseResourceRef(body['documentSetRef'], 'documentSetRef') }),
         sourceRefs: parseSourceRefs(body['sourceRefs']),
+        ...(rowSelectors.length === 0 ? {} : { rowSelectors }),
         ...(body['candidateLimit'] === undefined ? {} : { candidateLimit: Number(body['candidateLimit']) }),
         ...(body['competencyQuestionRef'] === undefined ? {} : { competencyQuestionRef: parseVersionRef(body['competencyQuestionRef'], 'competencyQuestionRef') }),
         idempotencyKey: requireIdempotencyKey(request),
@@ -205,16 +248,17 @@ export function registerAssetCandidateRoutes(
       if (auth === undefined) return reply
       const body = request.body
       if (!isRecord(body)) throw new InvalidRequestFieldError('the request body must be a JSON object')
-      rejectUnknownFields(body, ['contentDigest', 'sourceRef', 'fragmentIndex', 'reason'])
+      rejectUnknownFields(body, ['contentDigest', 'sourceRef', 'fragmentIndex', 'rowSelector', 'reason'])
       if (!isSha256Digest(body['contentDigest']) || !Number.isSafeInteger(body['fragmentIndex'])
         || Number(body['fragmentIndex']) < 0 || Number(body['fragmentIndex']) > 63 || typeof body['reason'] !== 'string') {
         throw new InvalidRequestFieldError('confirmation requires contentDigest, fragmentIndex within 0..63 and reason')
       }
       const contentDigest = body['contentDigest']
       const reason = body['reason']
+      const rowSelector = parseRowSelector(body['rowSelector'])
       const result = await withRequestSignal(request, reply, (signal) => dependencies.generation.confirmSource({ workspaceId: request.params.workspaceId,
         candidateId: request.params.candidateId, contentDigest, sourceRef: parseResourceRef(body['sourceRef'], 'sourceRef'),
-        fragmentIndex: Number(body['fragmentIndex']), reason, expectedRevision: readIfMatch(request),
+        fragmentIndex: Number(body['fragmentIndex']), ...(rowSelector === undefined ? {} : { rowSelector }), reason, expectedRevision: readIfMatch(request),
         idempotencyKey: requireIdempotencyKey(request) }, auth.principal.subjectId, contextFor(auth, traceId, request.params.workspaceId), signal))
       reply.status(201).send({ data: result, meta: { traceId, revision: result.batch.inputDraftRef.revision } })
       return reply

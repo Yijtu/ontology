@@ -90,6 +90,15 @@ export type SourceLocator =
   | TableCellSourceLocator
   | TableRowSourceLocator
 
+/**
+ * Boundary guard for a locator supplied from outside (host HTTP, persistence): the locator must be a
+ * plain object with a string `kind`. Its deeper shape is checked where the cell/row is actually read,
+ * so a malformed locator fails closed there rather than being trusted here.
+ */
+export function isSourceLocator(value: unknown): value is SourceLocator {
+  return typeof value === 'object' && value !== null && !Array.isArray(value) && typeof Reflect.get(value, 'kind') === 'string'
+}
+
 /** The lexical class of a parsed cell. `empty` is missing, never a zero. */
 export type StructuredCellKind =
   | 'empty'

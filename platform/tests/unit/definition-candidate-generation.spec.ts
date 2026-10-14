@@ -725,6 +725,36 @@ describe('grounded generation and immutable rebase', () => {
     await expect(h.service.confirmSource({ ...confirm, idempotencyKey: `invalid-${randomUUID()}`, fragmentIndex: 33 }, 'editor-1', EDITOR)).rejects.toMatchObject({ code: 'VERSION_CONFLICT' })
   })
 
+  it('forwards an exact table row selector when confirming a missing source', async () => {
+    let captured: readonly unknown[] | undefined
+    const corpus: { documentSetRef?: ResourceRef } = {}
+    const h = buildHarness([JSON.stringify({ objects: [proposedObject('equipment', false)] })], undefined, { sourceGrounding: {
+      read: async (request, _ctx, budget) => {
+        const documentSetRef = corpus.documentSetRef
+        if (documentSetRef === undefined) throw new Error('fixture corpus not ready')
+        captured = request.rowSelectors
+        return { documentSetRef, coverage: 'complete', usage: budget.usage(), sources: request.sourceRefs.map((sourceRef) => ({
+          sourceRef, trust: 'untrusted_source_data', trustTier: 'customer_authoritative', status: 'complete', reasons: [], contents: [{
+            kind: 'text', text: 'Controlled source: equipment has rated capacity.', sourceSpan: {
+              parseId: '22222222-2222-4222-8222-222222222222', chunkId: '33333333-3333-4333-8333-333333333333',
+              locator: { kind: 'offset', startOffset: 0, endOffset: 53 }, spanKind: 'verbatim', precision: 'exact',
+              quoteDigest: DIGEST, textDigest: DIGEST,
+            },
+          }],
+        })) }
+      },
+    } })
+    corpus.documentSetRef = h.initialDraft.documentSetRef
+    const pending = (await h.service.generate(input(), 'editor-1', EDITOR)).candidates[0]
+    if (pending === undefined) throw new Error('expected pending suggestion')
+    const sourceRef = resourceRef('11111111-2222-4333-8444-555555555555')
+    const result = await h.service.confirmSource({ workspaceId: WORKSPACE_ID, expectedRevision: '1', candidateId: pending.candidateId,
+      contentDigest: pending.contentDigest, sourceRef, fragmentIndex: 0, rowSelector: { sourceRowKey: 'row-37' },
+      reason: 'cite the standard row', idempotencyKey: `confirm-${randomUUID()}` }, 'editor-1', EDITOR)
+    expect(captured).toEqual([expect.objectContaining({ sourceRef, sourceRowKey: 'row-37' })])
+    expect(result.candidates[0]).toMatchObject({ pendingConfirmation: false, sourceSpans: [{ quoteDigest: DIGEST }] })
+  })
+
   it.each([['length', true], ['stop', false]] as const)('records incomplete streams (%s / completed=%s) as failures even with valid JSON', async (reason, completed) => {
     const h = buildHarness([JSON.stringify({ objects: [proposedObject()] })])
     h.generation.stopReason = reason

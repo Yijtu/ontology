@@ -11,6 +11,7 @@ import type {
 } from '@ontology/contracts'
 import type { RuleActionCandidateService, RuleActionCandidateGenerationService } from '@ontology/application'
 import { parseRuleActionCandidateOutput, RuleActionCandidateError } from '@ontology/application'
+import { parseRowSelectors } from './asset-candidates'
 import { createRequestToolContext } from './context'
 import {
   authenticateRequest,
@@ -155,7 +156,7 @@ export function registerRuleActionCandidateRoutes(
     if (generator === undefined) throw new RuleActionCandidateError('MODEL_NOT_CONFIGURED', 'rule/action model generation is not configured')
     const body = request.body
     if (!isRecord(body)) throw new InvalidRequestFieldError('generation body must be an object')
-    rejectUnknownFields(body, ['sourceRefs','kinds','selectedDefinitionCandidateIds','generationPolicyRef','candidateLimit'])
+    rejectUnknownFields(body, ['sourceRefs','kinds','selectedDefinitionCandidateIds','generationPolicyRef','candidateLimit','rowSelectors'])
     const kinds = body['kinds']
     if (!Array.isArray(kinds) || !kinds.every(isRuleActionCandidateKind)) throw new InvalidRequestFieldError('kinds must contain rule/action')
     const selected = body['selectedDefinitionCandidateIds']
@@ -164,10 +165,12 @@ export function registerRuleActionCandidateRoutes(
     if (!isRecord(policy) || typeof policy['id'] !== 'string' || typeof policy['version'] !== 'string' || typeof policy['digest'] !== 'string') throw new InvalidRequestFieldError('generationPolicyRef must be an exact version reference')
     const limit = body['candidateLimit']
     if (limit !== undefined && typeof limit !== 'number') throw new InvalidRequestFieldError('candidateLimit must be numeric')
+    const rowSelectors = parseRowSelectors(body['rowSelectors'])
     const policyRef = { id: policy['id'], version: policy['version'], digest: policy['digest'] }
     const result = await withGenerationSignal(request, reply, (signal) => generator.generate({ workspaceId: request.params.workspaceId,
       expectedRevision: readIfMatch(request), sourceRefs: parseSourceRefs(body['sourceRefs']), kinds,
       generationPolicyRef: policyRef,
+      ...(rowSelectors.length === 0 ? {} : { rowSelectors }),
       ...(selected === undefined ? {} : { selectedDefinitionCandidateIds: selected }), ...(limit === undefined ? {} : { candidateLimit: limit }),
       idempotencyKey: requireIdempotencyKey(request) }, auth.principal.subjectId, contextFor(auth, traceId, request.params.workspaceId), signal))
     reply.status(result.created ? 201 : 200).send({ data: result, meta: { traceId } })

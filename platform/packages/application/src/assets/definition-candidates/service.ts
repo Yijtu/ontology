@@ -26,6 +26,8 @@ import type {
   Uuid,
   VersionRef,
   SourceGroundingPort,
+  SourceGroundingRowSelector,
+  SourceLocator,
   WorkspaceSourceGroundingView,
   AssetCandidateInsertGuard,
   ApprovedCompetencyQuestionReader,
@@ -90,6 +92,8 @@ export interface DefinitionGenerationInput {
   readonly documentSetRef?: ResourceRef
   /** The bounded immutable source set the suggestions may cite; may be empty. */
   readonly sourceRefs: readonly ResourceRef[]
+  /** Exact table rows to include beyond the sampled page (e.g. a row the brief names). */
+  readonly rowSelectors?: readonly SourceGroundingRowSelector[]
   /** The candidate kinds the caller allows; the model may not widen this. */
   readonly kinds: readonly DefinitionCandidateKind[]
   readonly generationPolicyRef: VersionRef
@@ -106,6 +110,8 @@ export interface DefinitionSourceConfirmationInput {
   readonly expectedRevision: RevisionString | undefined
   readonly sourceRef: ResourceRef
   readonly fragmentIndex: number
+  /** When the source is a table, point at one exact row/cell beyond the sampled page. */
+  readonly rowSelector?: { readonly sourceRowKey?: string; readonly locator?: SourceLocator }
   readonly reason: string
   readonly idempotencyKey: string
 }
@@ -529,7 +535,8 @@ export class DefinitionCandidateGenerationService {
     requireIdempotencyKey(input.idempotencyKey)
     if (!isUuid(input.workspaceId) || !isUuid(input.candidateId) || !isSha256Digest(input.contentDigest) || !isResourceRef(input.sourceRef)
       || !Number.isSafeInteger(input.fragmentIndex) || input.fragmentIndex < 0 || input.fragmentIndex > 63
-      || typeof input.reason !== 'string' || input.reason.trim().length === 0 || input.reason.length > 2000) {
+      || typeof input.reason !== 'string' || input.reason.trim().length === 0 || input.reason.length > 2000
+      || (input.rowSelector !== undefined && [input.rowSelector.sourceRowKey, input.rowSelector.locator].filter((value) => value !== undefined).length !== 1)) {
       throw new DefinitionCandidateError('INVALID_ARGUMENT', 'source confirmation requires exact candidate/source pins, bounded fragment index and a reason')
     }
     throwIfAborted(signal)
@@ -555,7 +562,8 @@ export class DefinitionCandidateGenerationService {
     if (!original.pendingConfirmation || original.state === 'failed' || original.state === 'rejected') throw new DefinitionCandidateError('VALIDATION_BLOCKED', 'only an unresolved source suggestion can be confirmed')
     if (this.#sourceGrounding === undefined) throw new DefinitionCandidateError('SCHEMA_NOT_FOUND', 'source grounding is not configured')
     const read = await this.#sourceGrounding.read({ workspaceId: input.workspaceId, sourceRefs: [input.sourceRef],
-      inputDraftRef: { workspaceId: draft.workspaceId, revision: draft.revision, digest: draft.digest } }, ctx, new SourceGroundingBudget(signal))
+      inputDraftRef: { workspaceId: draft.workspaceId, revision: draft.revision, digest: draft.digest },
+      ...(input.rowSelector === undefined ? {} : { rowSelectors: [{ sourceRef: input.sourceRef, ...input.rowSelector }] }) }, ctx, new SourceGroundingBudget(signal))
     throwIfAborted(signal)
     if (!sameResourcePin(read.documentSetRef, draft.documentSetRef)) throw new DefinitionCandidateError('VERSION_CONFLICT', 'source corpus moved during confirmation')
     const selected = selectedGrounding(groundingFragments(read.sources), 0, input.fragmentIndex)
@@ -891,7 +899,8 @@ export class DefinitionCandidateGenerationService {
     if (execution.input.sourceRefs.length > 0) {
       if (this.#sourceGrounding === undefined) throw new DefinitionCandidateError('SCHEMA_NOT_FOUND', 'source grounding is not configured')
       const read = await this.#sourceGrounding.read({ workspaceId: execution.input.workspaceId,
-        sourceRefs: execution.input.sourceRefs, inputDraftRef: { workspaceId: draft.workspaceId, revision: draft.revision, digest: draft.digest } }, execution.ctx, budget)
+        sourceRefs: execution.input.sourceRefs, inputDraftRef: { workspaceId: draft.workspaceId, revision: draft.revision, digest: draft.digest },
+        ...(execution.input.rowSelectors === undefined ? {} : { rowSelectors: execution.input.rowSelectors }) }, execution.ctx, budget)
       throwIfAborted(execution.signal)
       if (!sameResourcePin(read.documentSetRef, documentSetRef)) throw new DefinitionCandidateError('VERSION_CONFLICT', 'the approved source corpus moved before generation')
       if (read.sources.length !== execution.input.sourceRefs.length || read.sources.some((source, index) => {
