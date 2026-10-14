@@ -213,9 +213,11 @@ export function registerRuleActionCandidateRoutes(
     if (generator === undefined) throw new RuleActionCandidateError('MODEL_NOT_CONFIGURED', 'rule/action source confirmation is not configured')
     const body = request.body
     if (!isRecord(body)) throw new InvalidRequestFieldError('confirmation body must be an object')
-    rejectUnknownFields(body, ['contentDigest','sourceRefs','sourceSelections','reason'])
+    rejectUnknownFields(body, ['contentDigest','sourceRefs','sourceSelections','reason','rowSelectors'])
+    const rowSelectors = parseRowSelectors(body['rowSelectors'])
     const result = await withGenerationSignal(request, reply, (signal) => generator.confirmSources({ workspaceId: request.params.workspaceId, candidateId: request.params.candidateId,
       contentDigest: readNonEmpty(body, 'contentDigest'), sourceRefs: parseSourceRefs(body['sourceRefs']), sourceSelections: parseSourceSelections(body['sourceSelections']),
+      ...(rowSelectors.length === 0 ? {} : { rowSelectors }),
       reason: readNonEmpty(body, 'reason'), expectedRevision: readIfMatch(request), idempotencyKey: requireIdempotencyKey(request) }, auth.principal.subjectId,
       contextFor(auth, traceId, request.params.workspaceId), signal))
     reply.status(result.created ? 201 : 200).send({ data: result, meta: { traceId } }); return reply

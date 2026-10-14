@@ -2,7 +2,7 @@ import { SourceGroundingError, assertGroundingDocumentSet, isToolContext, sha256
 import type { CandidateSourceSpan, DocumentParseStore, GroundingDocumentSet, GroundingDocumentSetReaderPort,
   GroundingSourceApproval, ResourceRef, ScopeRef, SourceGroundingBudgetPort,
   SourceGroundingChunkStore, SourceGroundingPage, SourceGroundingReaderPort, SourceGroundingReason, SourceGroundingRowSelector,
-  StructuredCell, StructuredIngestionStore, StructuredParseRecord, StructuredRecordEntry, StructuredTable, ToolContext } from '@ontology/contracts'
+  SourceLocator, StructuredCell, StructuredIngestionStore, StructuredParseRecord, StructuredRecordEntry, StructuredTable, ToolContext } from '@ontology/contracts'
 import { sha256DigestOfBytes } from './hashing'
 import { DocumentSpanReader } from './span-reader'
 import { mediaKindOf } from './extract'
@@ -175,8 +175,14 @@ export class ParsedSourceGroundingReader implements SourceGroundingReaderPort {
     return { parse, headerRow: table.headerRow, table, reconciled }
   }
 
-  #rowOf(parse: StructuredParseRecord, table: StructuredTable, reconciled: ReturnType<typeof reconcileStructuredResult>, entry: StructuredRecordEntry) {
-    const actual = reconciled.entries.find((candidate) => candidate.recordId === entry.recordId)
+  /** Resolve a locator to its row entry: a whole-row locator or any one of that row's cell locators. */
+  #entryForLocator(table: StructuredTable, reconciled: ReturnType<typeof reconcileStructuredResult>, locator: SourceLocator): StructuredRecordEntry | undefined {
+    const key = sha256OfCanonical(locator)
+    const row = table.rows.find((candidate) => sha256OfCanonical(candidate.locator) === key || candidate.cells.some((cell) => sha256OfCanonical(cell.locator) === key))
+    return row === undefined ? undefined : reconciled.entries.find((candidate) => candidate.recordIndex === row.recordIndex)
+  }
+
+  #rowOf(parse: StructuredParseRecord, table: StructuredTable, reconciled: ReturnType<typeof reconcileStructuredResult>, entry: StructuredRecordEntry) {    const actual = reconciled.entries.find((candidate) => candidate.recordId === entry.recordId)
     const row = table.rows.find((candidate) => candidate.recordIndex === entry.recordIndex)
     if (actual === undefined || row === undefined || actual.rowDigest !== entry.rowDigest
       || actual.sourceRowKey !== entry.sourceRowKey || JSON.stringify(actual.locator) !== JSON.stringify(entry.locator)) {
@@ -224,11 +230,10 @@ export class ParsedSourceGroundingReader implements SourceGroundingReaderPort {
     const rows: { readonly cells: readonly StructuredCell[]; readonly sourceSpan: CandidateSourceSpan }[] = []
     const reasons: SourceGroundingReason[] = []
     for (const selector of request.selectors) {
-      const entry = reconciled.entries.find((candidate) =>
-        selector.recordId !== undefined ? candidate.recordId === selector.recordId
-          : selector.sourceRowKey !== undefined ? candidate.sourceRowKey === selector.sourceRowKey
-            : selector.locator !== undefined ? sha256OfCanonical(candidate.locator) === sha256OfCanonical(selector.locator)
-              : false)
+      const entry = selector.recordId !== undefined ? reconciled.entries.find((candidate) => candidate.recordId === selector.recordId)
+        : selector.sourceRowKey !== undefined ? reconciled.entries.find((candidate) => candidate.sourceRowKey === selector.sourceRowKey)
+          : selector.locator !== undefined ? this.#entryForLocator(table, reconciled, selector.locator)
+            : undefined
       if (entry === undefined || entry.state !== 'parsed') { reasons.push('EMPTY_SOURCE'); continue }
       rows.push(this.#rowOf(parse, table, reconciled, entry))
     }

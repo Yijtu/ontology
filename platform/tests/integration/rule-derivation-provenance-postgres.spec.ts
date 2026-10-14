@@ -4,7 +4,7 @@ import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { afterAll, beforeAll, describe, expect, it } from 'vitest'
 import { ControlPostgresDatabase, PostgresEvidenceStore, PostgresMaterializationStore } from '@ontology/adapter-control-postgres'
-import { DocumentSpanReader, PostgresDocumentParseStore } from '@ontology/adapter-extraction-document'
+import { DocumentSpanReader, LocalStructuredIngestionService, PostgresDocumentParseStore, PostgresStructuredIngestionStore, StructuredClauseSourceReader } from '@ontology/adapter-extraction-document'
 import { FileSystemObjectStore, LocalImmutableBlobStore, PostgresArtifactRegistry } from '@ontology/adapter-blob-local'
 import { createBlobArtifactWriter } from '@ontology/app-api'
 import {
@@ -22,6 +22,7 @@ import type {
   PublishedRuleVersion,
   PublishedStatement,
   ResourceRef,
+  RuleProvenanceSpan,
   SourceRef,
   ToolContext,
   VersionRef,
@@ -90,6 +91,8 @@ let registry: PostgresArtifactRegistry
 let blobStore: LocalImmutableBlobStore
 let artifacts: ReturnType<typeof createBlobArtifactWriter>
 let spanReader: DocumentSpanReader
+let structuredStore: PostgresStructuredIngestionStore
+let structuredSpan: RuleProvenanceSpan
 let objectDirectory = ''
 let originalRef: ResourceRef
 const definitionRef: VersionRef = { id: 'transport.core', version: '1.0.0', digest: `sha256:${'d'.repeat(64)}` }
@@ -206,6 +209,20 @@ function reader(): MaterializedRuleSupportReader {
   })
 }
 
+function producerWithStructured(): MaterializedRuleDerivationEvidenceProducer {
+  return new MaterializedRuleDerivationEvidenceProducer({
+    materialization,
+    evidence,
+    artifacts,
+    structuredClauses: new StructuredClauseSourceReader({ artifacts: blobStore, ingestion: structuredStore }),
+    componentRef: COMPONENT_REF,
+  })
+}
+
+function publishedStructuredRule(): PublishedRuleVersion {
+  return { ...publishedRule(), expression: { op: 'compare', attributeId: PREDICATE, operator: 'eq', value: true, spans: [structuredSpan] } }
+}
+
 async function artifactAt(ruleRef: VersionRef, asOfRecordedSeq: string) {
   const slices = await materialization.readSlices(scope.scopeRef, { validAt: VALID_AT, asOfRecordedSeq, limit: 100 }, ctx)
   return slices
@@ -263,10 +280,23 @@ beforeAll(async () => {
   }
   await parseStore.recordParse(parseRecord, [], ctx)
   if (originalRef.id === LOGICAL_DOCUMENT_ID) throw new Error('fixture must keep the logical document id distinct from the physical original id')
+
+  structuredStore = new PostgresStructuredIngestionStore({ connectionString: harness.appUrl, maxPoolSize: 3 })
+  const csvBytes = new TextEncoder().encode('name,cost\nA,0.10\nB,0.20\n')
+  const csvStaged = await blobStore.stage(csvBytes, { scopeRef: scope.scopeRef }, ctx)
+  const csvPublished = await blobStore.publish({ scopeRef: scope.scopeRef, contentDigest: csvStaged.contentDigest, byteSize: csvStaged.byteSize, mediaType: 'text/csv', purpose: 'document' }, ctx)
+  if (csvPublished.blobRef.kind !== 'document') throw new Error('structured original was not registered as a document')
+  const structured = await new LocalStructuredIngestionService({ blobs: blobStore, store: structuredStore })
+    .parse({ scopeRef: scope.scopeRef, originalRef: csvPublished.blobRef, options: { headerRow: 1 } }, ctx)
+  const structuredRows = await structuredStore.listRecords(scope.scopeRef, structured.parse.parseId, { limit: 100 }, ctx)
+  const targetRow = structuredRows.records[1]
+  if (targetRow === undefined) throw new Error('structured fixture produced no target row')
+  structuredSpan = { kind: 'structured', parseId: structured.parse.parseId, recordId: targetRow.recordId, sourceRowKey: targetRow.sourceRowKey, locator: targetRow.locator, rowDigest: targetRow.rowDigest }
 }, 300_000)
 
 afterAll(async () => {
   await parseStore?.close().catch(() => undefined)
+  await structuredStore?.close().catch(() => undefined)
   await registry?.close().catch(() => undefined)
   await database?.close().catch(() => undefined)
   if (objectDirectory !== '') await rm(objectDirectory, { recursive: true, force: true }).catch(() => undefined)
@@ -443,4 +473,63 @@ describe('rule specification-span evidence chain against real PostgreSQL (V03-02
     expect(state?.dirty).toBe(false)
     expect(await materialization.listOpenFences(scope.scopeRef, ctx)).toHaveLength(0)
   }, 180_000)
+
+  it('grounds a structured policy clause, resolves complete support, and rejects a tampered row', async () => {
+    if (structuredSpan.kind !== 'structured') throw new Error('structured fixture span was not built')
+    const recordA = observationEvidence(randomUUID())
+    await evidence.record(scope.scopeRef, recordA.envelope, ctx)
+    const projection = projectPublishedAttributeFacts([flagStatement(ALTERNATIVE_A, recordA.ref)], { schemaRef: definitionRef })
+    const facts: readonly RuleFact[] = projection.facts
+    const rule = publishedStructuredRule()
+    const compiled = compilePublishedRuleInstances([rule], facts, { scopeRef: scope.scopeRef, definitionRef, subjects: [{ subjectEntityId: SUBJECT_ID, objectId: 'transport_facility' }] })
+    const supportRule = compiled.instances[0]?.supportRule
+    if (supportRule === undefined) throw new Error('compiler produced no support rule')
+    const source = new FixturePublishedSource({ facts, rules: [supportRule], entityBindings: [], definitionRef, complete: true, historicalAsOfSupported: true })
+    const materializer = new IncrementalMaterializer({ publishedSource: source, materialization })
+    const ruleRef: VersionRef = { id: rule.ruleVersionId, version: '1.0.0', digest: sha256DigestOf(rule) }
+    await materializer.applyChange({ changeId: randomUUID(), scopeRef: scope.scopeRef, recordedSeq: '5', recordedAt: VALIDITY.validFrom, kind: 'assertion_published', logicalAssertionId: ALTERNATIVE_A, predicate: PREDICATE, validity: VALIDITY }, ctx)
+    const artifact = await artifactAt(ruleRef, '5')
+    if (artifact === undefined) throw new Error('materializer did not persist the structured-origin artifact')
+    expect(artifact.sourceSpans).toEqual([structuredSpan])
+
+    const root = await producerWithStructured().record({ scopeRef: scope.scopeRef, ruleRef, definitionRef, objectId: artifact.objectId, subjectEntityId: artifact.subjectEntityId, validAt: artifact.validAt ?? VALID_AT, asOfRecordedSeq: '5', observedAt: VALID_AT, sourceSnapshots: [], dataMode: 'observed' }, ctx)
+    const payloadRef = root.envelope.payloadRef
+    if (payloadRef === undefined) throw new Error('structured root evidence has no support payload')
+    const resolved = await reader().readCandidates(scope.scopeRef, { ruleRef, validAt: artifact.validAt ?? VALID_AT, asOfRecordedSeq: '5', evidenceRef: root.evidenceRef, payloadRef }, ctx)
+    expect(resolved.complete).toBe(true)
+    const instance = resolved.candidates[0]
+    if (instance === undefined) throw new Error('reader resolved no structured instance')
+    expect(instance.coverage?.policy).toEqual({ complete: true })
+    expect(instance.policySpans).toHaveLength(1)
+    expect(instance.policySpans?.[0]?.span).toMatchObject({
+      kind: 'structured',
+      rowDigest: structuredSpan.rowDigest,
+    })
+    const policyEvidenceRef = instance.policySpans?.[0]?.evidenceRef
+    if (policyEvidenceRef === undefined) throw new Error('reader resolved no structured policy evidence')
+    const policyEvidence = await evidence.get(scope.scopeRef, policyEvidenceRef.id, ctx)
+    expect(policyEvidence?.envelope.kind).toBe('document_span')
+    expect(policyEvidence?.envelope.resultDigest).toBe(structuredSpan.rowDigest)
+    expect(policyEvidence?.envelope.sourceSnapshots[0]?.sourceRef.namespace).toBe('structured-original')
+
+    // Reverse: a span whose rowDigest no longer matches the original row yields incomplete support.
+    const tamperedSpan: RuleProvenanceSpan = { kind: 'structured', parseId: structuredSpan.parseId,
+      recordId: structuredSpan.recordId, sourceRowKey: structuredSpan.sourceRowKey, locator: structuredSpan.locator,
+      rowDigest: `sha256:${'f'.repeat(64)}` }
+    const tamperedRule: PublishedRuleVersion = { ...publishedRule(), expression: { op: 'compare', attributeId: PREDICATE, operator: 'eq', value: true, spans: [tamperedSpan] } }
+    const tamperedCompiled = compilePublishedRuleInstances([tamperedRule], facts, { scopeRef: scope.scopeRef, definitionRef, subjects: [{ subjectEntityId: SUBJECT_ID, objectId: 'transport_facility' }] })
+    const tamperedSupport = tamperedCompiled.instances[0]?.supportRule
+    if (tamperedSupport === undefined) throw new Error('compiler produced no tampered support rule')
+    const tamperedSource = new FixturePublishedSource({ facts, rules: [tamperedSupport], entityBindings: [], definitionRef, complete: true, historicalAsOfSupported: true })
+    const tamperedMaterializer = new IncrementalMaterializer({ publishedSource: tamperedSource, materialization })
+    const tamperedRef: VersionRef = { id: tamperedRule.ruleVersionId, version: '1.0.0', digest: sha256DigestOf(tamperedRule) }
+    await tamperedMaterializer.applyChange({ changeId: randomUUID(), scopeRef: scope.scopeRef, recordedSeq: '6', recordedAt: VALIDITY.validFrom, kind: 'assertion_published', logicalAssertionId: ALTERNATIVE_A, predicate: PREDICATE, validity: VALIDITY }, ctx)
+    const tamperedArtifact = await artifactAt(tamperedRef, '6')
+    if (tamperedArtifact === undefined) throw new Error('materializer did not persist the tampered artifact')
+    const tamperedRoot = await producerWithStructured().record({ scopeRef: scope.scopeRef, ruleRef: tamperedRef, definitionRef, objectId: tamperedArtifact.objectId, subjectEntityId: tamperedArtifact.subjectEntityId, validAt: tamperedArtifact.validAt ?? VALID_AT, asOfRecordedSeq: '6', observedAt: VALID_AT, sourceSnapshots: [], dataMode: 'observed' }, ctx)
+    const tamperedPayloadRef = tamperedRoot.envelope.payloadRef
+    if (tamperedPayloadRef === undefined) throw new Error('tampered root evidence has no payload')
+    const tamperedResolved = await reader().readCandidates(scope.scopeRef, { ruleRef: tamperedRef, validAt: tamperedArtifact.validAt ?? VALID_AT, asOfRecordedSeq: '6', evidenceRef: tamperedRoot.evidenceRef, payloadRef: tamperedPayloadRef }, ctx)
+    expect(tamperedResolved.candidates[0]?.coverage?.policy?.complete).toBe(false)
+  }, 120_000)
 })

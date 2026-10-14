@@ -109,6 +109,16 @@ describe('approved original source grounding', () => {
     expect(table.rows).toHaveLength(1)
     expect(table.rows[0]?.sourceSpan).toMatchObject({ kind: 'structured', recordId: target.recordId, rowDigest: target.rowDigest })
     expect(table.rows[0]?.cells.map((cell) => cell.raw)).toContain('0.30')
+    const sampledTable = sampled.sources[0]?.contents[0]
+    if (sampledTable?.kind !== 'table') throw new Error('expected sampled table')
+    const cellLocator = sampledTable.rows[0]?.cells[1]?.locator
+    if (cellLocator === undefined) throw new Error('sampled row has no second cell')
+    const byCell = await h.service.read({ workspaceId: h.workspace.workspaceId, sourceRefs: [sourceRef], rowSelectors: [{ sourceRef, locator: cellLocator }] }, ctx,
+      new SourceGroundingBudget(new AbortController().signal))
+    const byCellTable = byCell.sources[0]?.contents[0]
+    if (byCellTable?.kind !== 'table') throw new Error('expected a table resolved by a cell locator')
+    expect(byCellTable.rows).toHaveLength(1)
+    expect(byCellTable.rows[0]?.cells.map((cell) => cell.raw)).toContain('0.10')
     const missing = await h.service.read({ workspaceId: h.workspace.workspaceId, sourceRefs: [sourceRef], rowSelectors: [{ sourceRef, sourceRowKey: 'no-such-row' }] }, ctx,
       new SourceGroundingBudget(new AbortController().signal))
     expect(missing.sources[0]?.reasons).toContain('EMPTY_SOURCE')
