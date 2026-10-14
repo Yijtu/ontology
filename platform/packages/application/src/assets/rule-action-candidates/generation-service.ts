@@ -59,6 +59,8 @@ export interface RuleActionSourceConfirmationInput {
   readonly contentDigest: Sha256Digest
   readonly expectedRevision: RevisionString | undefined
   readonly sourceRefs: readonly ResourceRef[]
+  /** Exact table rows to include beyond the sampled page (a clause's row may lie past the cap). */
+  readonly rowSelectors?: readonly SourceGroundingRowSelector[]
   readonly sourceSelections: readonly RuleActionSourceSelection[]
   readonly idempotencyKey: string
   readonly reason: string
@@ -113,7 +115,8 @@ export class RuleActionCandidateGenerationService {
     const selected = definitions.filter((row) => !row.pendingConfirmation && row.state !== 'failed' && row.state !== 'rejected')
     const guard: RuleActionGenerationGuard = { latestPublishedPackRef: workspace.latestPublishedPackRef, expectedWorkspaceRevision: input.expectedRevision, inputDraftRef: { workspaceId: draft.workspaceId, revision: draft.revision, digest: draft.digest }, documentSetRef: draft.documentSetRef,
       definitionPins: definitions.map(assetCandidateCommitPin).sort((a,b) => a.candidateId.localeCompare(b.candidateId)), ruleActionPins: heads(history), signal }
-    const read = await readGrounding(this.dependencies.sourceGrounding, { workspaceId: input.workspaceId, sourceRefs: input.sourceRefs, inputDraftRef: guard.inputDraftRef }, ctx, signal)
+    const read = await readGrounding(this.dependencies.sourceGrounding, { workspaceId: input.workspaceId, sourceRefs: input.sourceRefs, inputDraftRef: guard.inputDraftRef,
+      ...(input.rowSelectors === undefined ? {} : { rowSelectors: input.rowSelectors }) }, ctx, signal)
     check(signal)
     if (!sameResourcePin(read.documentSetRef, draft.documentSetRef) || read.coverage !== 'complete' || read.sources.length !== input.sourceRefs.length || read.sources.some((source, index) => !sameResourcePin(source.sourceRef, input.sourceRefs[index] ?? draft.documentSetRef))) throw new RuleActionCandidateError('VALIDATION_BLOCKED', 'source confirmation requires complete exact approved source readback')
     const contextDigest = sha256DigestOf(canonicalJson({ originalDigest: original.contentDigest, reason: input.reason, draft: guard.inputDraftRef, terms, selectedTerms: semanticDraftContext(selected), sources: groundingContext(read) }))
