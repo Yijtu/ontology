@@ -1,6 +1,7 @@
 import type {
   NonEmptyString,
   OpaqueCursor,
+  ResourceRef,
   Rfc3339UtcTimestamp,
   Sha256Digest,
   VersionRef,
@@ -50,6 +51,12 @@ export interface WebSearchProviderPage {
   readonly publishedAt?: Rfc3339UtcTimestamp
   readonly fetchedAt: Rfc3339UtcTimestamp
   readonly contentDigest: Sha256Digest
+  /**
+   * The immutable snapshot of the exact page bytes, present only when the provider both retrieved
+   * and archived the page. It lets a research flow cite a stable artifact instead of a page that
+   * may change after retrieval; a page without it cannot be ingested as a citable source.
+   */
+  readonly snapshotRef?: ResourceRef
 }
 
 /**

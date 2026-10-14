@@ -16,6 +16,8 @@ export type RuleId =
   | 'workspace-dependency'
   | 'forbidden-sdk'
   | 'cross-package-relative-import'
+  | 'self-package-import'
+  | 'undeclared-workspace-dependency'
 
 export interface BoundaryConfig {
   readonly workspaceGlobs: readonly string[]
@@ -29,6 +31,8 @@ export interface WorkspacePackage {
   readonly name: string
   readonly dir: string
   readonly layer: Layer
+  /** Workspace package names declared in this package's own manifest dependency fields. */
+  readonly declared: ReadonlySet<string>
 }
 
 export interface Violation {
@@ -100,10 +104,23 @@ export function discoverPackages(root: string, config: BoundaryConfig): Workspac
     const layer = layerOf(dir)
     if (layer === undefined) continue
 
-    const manifest = JSON.parse(readFileSync(join(root, relManifest), 'utf8')) as { name?: unknown }
+    const manifest = JSON.parse(readFileSync(join(root, relManifest), 'utf8')) as {
+      name?: unknown
+      dependencies?: Readonly<Record<string, unknown>>
+      devDependencies?: Readonly<Record<string, unknown>>
+      peerDependencies?: Readonly<Record<string, unknown>>
+      optionalDependencies?: Readonly<Record<string, unknown>>
+    }
     if (typeof manifest.name !== 'string') continue
 
-    packages.push({ name: manifest.name, dir, layer })
+    const declared = new Set<string>([
+      ...Object.keys(manifest.dependencies ?? {}),
+      ...Object.keys(manifest.devDependencies ?? {}),
+      ...Object.keys(manifest.peerDependencies ?? {}),
+      ...Object.keys(manifest.optionalDependencies ?? {}),
+    ])
+
+    packages.push({ name: manifest.name, dir, layer, declared })
   }
 
   return packages.sort((a, b) => a.name.localeCompare(b.name))
@@ -153,7 +170,15 @@ function evaluate(
 
   const target = workspaceTarget(byName, specifier)
   if (target !== undefined) {
-    if (target.name === pkg.name) return []
+    if (target.name === pkg.name) {
+      return [
+        violation(
+          'self-package-import',
+          ref,
+          `${pkg.name} 不能通过包名导入自身，必须改用相对导入`,
+        ),
+      ]
+    }
 
     const allowed = config.layers[pkg.layer]
     if (allowed !== '*' && !allowed.includes(target.layer)) {
@@ -165,6 +190,19 @@ function evaluate(
         ),
       ]
     }
+
+    // An app is a composition root, not a library: it may only reach workspace packages it
+    // explicitly declares, so an undeclared app→app / app→package edge cannot slip in.
+    if (pkg.layer === 'apps' && !pkg.declared.has(target.name)) {
+      return [
+        violation(
+          'undeclared-workspace-dependency',
+          ref,
+          `${pkg.name} 导入了 ${target.name}，但未在其 package.json 中声明该依赖`,
+        ),
+      ]
+    }
+
     return []
   }
 

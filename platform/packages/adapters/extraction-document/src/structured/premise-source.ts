@@ -1,8 +1,6 @@
 import type { BlobGetAuthorizedRequest, CandidateRecord, ProjectMappingStore, RuleStructuredPremiseSourcePort, StructuredCandidateSourceSpan, StructuredIngestionStore, ToolContext } from '@ontology/contracts'
-import { StructuredDocumentParser } from './index'
-import { reconcileStructuredResult } from './ingest-service'
+import { readReconciledRow } from './reconciled-row'
 import { sha256DigestOfBytes } from '../hashing'
-import { sha256OfCanonical } from '@ontology/contracts'
 
 export interface StructuredPremiseSourceReaderDependencies {
   readonly artifacts: {
@@ -37,13 +35,8 @@ export class StructuredPremiseSourceReader implements RuleStructuredPremiseSourc
     if (!metadata.integrityVerified || !Number.isSafeInteger(metadata.byteSize) || metadata.byteSize < 1 || metadata.byteSize > 8 * 1024 * 1024) return undefined
     const bytes = await this.dependencies.artifacts.readAuthorized(request, ctx)
     if (bytes.byteLength !== metadata.byteSize || sha256DigestOfBytes(bytes) !== mapping.originalRef.digest) return undefined
-    const result = new StructuredDocumentParser().parse(bytes, { ...mapping.options, mediaType: mapping.originalMediaType })
-    if (result.status !== 'complete') return undefined
-    const entry = reconcileStructuredResult(result, scope, mapping.originalRef.digest).entries.find((row) => row.recordId === span.recordId)
-    if (entry === undefined || entry.state !== 'parsed' || entry.rowDigest !== span.rowDigest || entry.sourceRowKey !== span.sourceRowKey) return undefined
-    const row = result.tables.flatMap((table) => table.rows).find((row) => row.recordIndex === entry.recordIndex && row.row === entry.row)
-    if (row === undefined || ![row.locator, ...row.cells.map((cell) => cell.locator)].some((locator) => sha256OfCanonical(locator) === sha256OfCanonical(span.locator))) return undefined
-    return { documentRef: mapping.originalRef, documentVersionRef: mapping.originalRef, parserVersion: parse.parserVersion,
-      rowText: JSON.stringify({ sourceRowKey: entry.sourceRowKey, cells: row.cells.map((cell) => [cell.raw, cell.kind]) }) }
+    const result = readReconciledRow(parse, mapping.originalRef, mapping.options, bytes, scope, span)
+    if (result === undefined) return undefined
+    return { documentRef: mapping.originalRef, documentVersionRef: mapping.originalRef, parserVersion: parse.parserVersion, rowText: result.rowText }
   }
 }

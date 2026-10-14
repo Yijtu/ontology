@@ -355,8 +355,7 @@ describe('rule specification-span evidence chain against real PostgreSQL (V03-02
     expect(instance1.coverage?.policy).toEqual({ complete: true })
     expect(instance1.policySpans).toHaveLength(1)
     expect(instance1.policySpans?.[0]).toMatchObject({
-      locator: POLICY_LOCATOR,
-      quoteDigest: POLICY_SPAN.quoteDigest,
+      span: { locator: POLICY_LOCATOR, quoteDigest: POLICY_SPAN.quoteDigest },
       documentRef: { id: originalRef.id },
     })
     const policyEvidenceRef = instance1.policySpans?.[0]?.evidenceRef
@@ -374,7 +373,8 @@ describe('rule specification-span evidence chain against real PostgreSQL (V03-02
     expect(detailed1.supportResolution.state).toBe('resolved')
     if (detailed1.supportResolution.state !== 'resolved') throw new Error('expected resolved support at sequence 1')
     expect(detailed1.supportResolution.policy).toEqual({ complete: true })
-    expect(detailed1.supportResolution.policySpans?.[0]?.quoteDigest).toBe(POLICY_SPAN.quoteDigest)
+    const resolvedPolicySpan = detailed1.supportResolution.policySpans?.[0]?.span
+    expect(resolvedPolicySpan !== undefined && resolvedPolicySpan.kind !== 'structured' ? resolvedPolicySpan.quoteDigest : undefined).toBe(POLICY_SPAN.quoteDigest)
     expect(detailed1.supportResolution.premiseGroups
       .flatMap((group) => group.facts.map((entry) => entry.sourceStatementId)).sort())
       .toEqual([ALTERNATIVE_A, ALTERNATIVE_B].sort())

@@ -7,7 +7,7 @@ import { ProjectService, SourceGroundingBudget, WorkflowControllerError, canonic
 import type { ProfileResolver } from '@ontology/application'
 import type { ProjectFactMaterializationService } from '@ontology/application'
 import { isRecord, isUuid, isRevisionString, tryParseSemver } from '@ontology/contracts'
-import type { IndustryPackCatalogue, IndustrySchemaSource, ImportMappingVersion, JobStore, MappingRef, OperationRegistry, ProjectDocumentStore, ProjectEvolutionStore, ProjectReadinessStore, ProjectStore, ResolvedCapability, ResourceRef, SemanticPublicationStore, TaskBindingStore, ToolContext, VersionRef } from '@ontology/contracts'
+import type { IndustryPackCatalogue, IndustrySchemaSource, ImportMappingVersion, JobStore, MappingRef, OperationRef, OperationRegistry, ProjectDocumentStore, ProjectEvolutionStore, ProjectReadinessStore, ProjectStore, ResolvedCapability, ResourceRef, SemanticPublicationStore, TaskBindingStore, ToolContext, VersionRef } from '@ontology/contracts'
 import { createRequestToolContext } from '../http/context'
 import { authenticateRequest, ForbiddenError, InvalidRequestFieldError, readHeader, readTraceId } from '../http/shared'
 import type { RequestAuthenticator } from '../http/shared'
@@ -15,6 +15,8 @@ import type { createCoreAuthoring } from './core-authoring'
 import type { createCoreInstanceIdentity } from './core-instance-identity'
 import type { CoreSemanticTaskResolver } from './core-semantic-task-resolver'
 import { mountCoreDefinitionTaskBindings } from './core-task-bindings'
+import type { CoreComputePrimary } from './core-task-bindings'
+import { coreTaskToolId } from './core-task-kinds'
 import type { CoreDefinitionLabelReader } from './core-definition-labels'
 import { EXAMPLE_COMPUTE_INPUT_REQUIREMENTS, EXAMPLE_OPERATION_REF } from '@ontology/tool-services'
 
@@ -30,6 +32,9 @@ export function createCoreProjectApi(options: {
   readonly selectors: Pick<CoreSemanticTaskResolver, 'readCurrentInventory'>
   readonly termLabels: CoreDefinitionLabelReader
   readonly computeInputConfigured: boolean
+  /** The registered compute operation the mounted task bindings pin; defaults to the example op. */
+  readonly computePrimary?: CoreComputePrimary
+  readonly computeOperationRef?: OperationRef
   readonly publications: Pick<SemanticPublicationStore, 'listStatements'>
   readonly documentSetFor: (projectId: string,ctx: ToolContext) => Promise<ResourceRef>
 }) {
@@ -123,7 +128,7 @@ export function createCoreProjectApi(options: {
     const termLabels = await options.termLabels(scope(ctx), revision.industryPackRef, revision.definitionRef, ctx)
     const resolved = await options.profiles.getResolvedProfile({ scopeRef: scope(ctx), profileRef: revision.profileRef, snapshotHash: revision.profileRef.snapshotHash }, ctx)
     const readiness = await options.readiness.listProjections(scope(ctx), revision.ref, ctx)
-    await mountCoreDefinitionTaskBindings(options.tasks, revision.definitionRef, scope(ctx), ctx)
+    await mountCoreDefinitionTaskBindings(options.tasks, revision.definitionRef, scope(ctx), ctx, options.computePrimary)
     const bindings = await options.tasks.listBindings(scope(ctx), { definitionRef: revision.definitionRef }, ctx)
     if (bindings.length > 32) throw new InvalidRequestFieldError('the task inventory exceeds its bounded catalogue')
     const labels: Readonly<Record<string, string>> = { published_facts: '已发布事实', structured_query: '查询项目数据', document_qa: '查阅项目资料', rule_judgement: '判断规则条件', relations: '追踪对象关系', compute: '执行已登记计算' }
@@ -137,7 +142,7 @@ export function createCoreProjectApi(options: {
       selectorFailure = cause.message
     }
     const tasks = bindings.map((binding) => {
-      const tool = binding.kind === 'structured_query' || binding.kind === 'compute' ? 'data_query' : binding.kind === 'document_qa' ? 'document_search' : 'ontology_lookup'
+      const tool = coreTaskToolId(binding.kind)
       const capability = evaluateTaskCapability({ binding, availableCapabilities: options.availableCapabilities, readiness,
         operations: options.operations, supportedResultSchemaRefs: [options.resultSchemaRef] })
       const enabled = resolved.resolved.toolBindings.some((entry) => entry.toolId === tool && entry.enabled)
@@ -146,7 +151,7 @@ export function createCoreProjectApi(options: {
       return { bindingRef: binding.taskBindingRef, taskKind: binding.kind, displayName: labels[binding.kind], parameterSchema: binding.parameterSchema,
         requiredCapabilities: binding.requiredCapabilities, requiredReadiness: binding.requiredReadiness,
         available: binding.kind !== 'published_facts' && enabled && capability.state === 'available' && computeReady && (!needsSelectors || selectorFailure === undefined), unavailableReasons: [...capability.blockers.map((blocker) => blocker.message), ...(enabled ? [] : ['当前配置未启用所需工具']), ...(binding.kind === 'published_facts' ? ['请使用项目数据查询查看已发布事实'] : []), ...(!computeReady ? ['项目计算需要实际就绪数据和明确选择的输入字段'] : []), ...(needsSelectors && selectorFailure !== undefined ? [selectorFailure] : [])],
-        ...(binding.kind === 'compute' ? { requiresInputSelection: true,...(binding.operationRef?.id !== EXAMPLE_OPERATION_REF.id || binding.operationRef.version !== EXAMPLE_OPERATION_REF.version ? {} : { inputRequirements: { ...EXAMPLE_COMPUTE_INPUT_REQUIREMENTS,maxRows: options.operations.operations.find((operation) => operation.operationRef.id === binding.operationRef?.id && operation.operationRef.version === binding.operationRef.version)?.limits.maxRows } }) } : {}),
+        ...(binding.kind === 'compute' ? { requiresInputSelection: true,...(binding.operationRef?.id !== (options.computeOperationRef ?? EXAMPLE_OPERATION_REF).id || binding.operationRef.version !== (options.computeOperationRef ?? EXAMPLE_OPERATION_REF).version ? {} : { inputRequirements: { ...EXAMPLE_COMPUTE_INPUT_REQUIREMENTS,maxRows: options.operations.operations.find((operation) => operation.operationRef.id === binding.operationRef?.id && operation.operationRef.version === binding.operationRef.version)?.limits.maxRows } }) } : {}),
         ...(binding.kind === 'relations' ? { hostParameters: ['validAt'] } : {}),
         objects: schema.objects.map((object) => ({ objectId: object.objectId, displayName: object.displayName,
           attributes: object.attributes.map((attribute) => ({ attributeId: attribute.attributeId, displayName: termLabels?.attributes.find((entry) => entry.objectId === object.objectId && entry.attributeId === attribute.attributeId)?.displayName ?? '未提供名称', valueType: attribute.valueType, required: attribute.minCardinality > 0, minCardinality: attribute.minCardinality, maxCardinality: attribute.maxCardinality,
@@ -178,7 +183,7 @@ export function createCoreProjectApi(options: {
       const definitionRef = pack.manifest.definitionsRef
       const definition = await options.schemas.getSchema(scope(context.ctx), definitionRef, context.ctx)
       if (definition === undefined) throw new InvalidRequestFieldError('the published pack definition is unavailable')
-      await mountCoreDefinitionTaskBindings(options.tasks, definitionRef, scope(context.ctx), context.ctx)
+      await mountCoreDefinitionTaskBindings(options.tasks, definitionRef, scope(context.ctx), context.ctx, options.computePrimary)
       const projectId = deterministicUuid(`${context.ctx.principal.tenantId}|${context.ctx.allowedResources.spaceId}|project:${key}`)
       const emptySet = await options.authoring.stableWrite(`project:${key}:empty`, new TextEncoder().encode(canonicalJson({ schemaVersion: 'project-document-set@1', projectId, members: [] })), 'application/json', 'artifact', context.ctx)
       const sourceObjectRef = { sourceRef: { namespace: 'ontology.identity_index', sourceId: projectId }, objectPath: 'confirmed_identity_index' }

@@ -281,7 +281,8 @@ describe('rule candidates against a real PostgreSQL', () => {
       if (rule.expression.op === 'all') {
         for (const operand of rule.expression.operands) {
           expect(operand.spans.length).toBeGreaterThan(0)
-          expect(chunkIds.has(operand.spans[0]?.chunkId ?? '')).toBe(true)
+          const operandSpan = operand.spans[0]
+          expect(operandSpan !== undefined && operandSpan.kind !== 'structured' && chunkIds.has(operandSpan.chunkId)).toBe(true)
         }
       }
     }

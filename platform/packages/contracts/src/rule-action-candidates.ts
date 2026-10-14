@@ -741,7 +741,7 @@ export function assertRuleActionCandidateShape(
   const context = value['generationContext']
   if (context !== undefined) {
     if (!isRecord(context) || !isUuid(context['batchId']) || !isDigest(context['contextDigest']) || !isRecord(context['inputDraftRef']) ||
-      !Array.isArray(context['issues']) || context['issues'].length > 256 || context['issues'].some((entry: unknown) => !isRecord(entry) || !['SOURCE_UNRESOLVED','SOURCE_INCOMPLETE','TERM_UNRESOLVED','DEPENDENCY_UNRESOLVED'].includes(String(entry['code'])) || !isNonEmptyString(entry['path']) || !isNonEmptyString(entry['message'])) ||
+      !Array.isArray(context['issues']) || context['issues'].length > 256 || context['issues'].some((entry: unknown) => !isRecord(entry) || !['SOURCE_UNRESOLVED','SOURCE_INCOMPLETE','SOURCE_TRUST_BLOCKED','TERM_UNRESOLVED','DEPENDENCY_UNRESOLVED'].includes(String(entry['code'])) || !isNonEmptyString(entry['path']) || !isNonEmptyString(entry['message'])) ||
       !Array.isArray(context['sourceSelections']) || context['sourceSelections'].length > 128 || context['sourceSelections'].some((entry: unknown) => !isRecord(entry) || !isNonEmptyString(entry['path']) || !Number.isSafeInteger(entry['sourceIndex']) || !Number.isSafeInteger(entry['fragmentIndex'])) ||
       !Array.isArray(context['inputSourceRefs']) || context['inputSourceRefs'].length > 64 || !context['inputSourceRefs'].every(isGeneratedSourceRef) ||
       !Array.isArray(context['sourceBindings']) || context['sourceBindings'].length > 128 || context['sourceBindings'].some((entry: unknown) => !isRecord(entry) || !isNonEmptyString(entry['path']) || !isGeneratedSourceRef(entry['sourceRef']) || !isRecord(entry['sourceSpan']) || !isUuid(entry['sourceSpan']['parseId']) ||

@@ -10,6 +10,7 @@ import {
   tableManifestContentDigest,
   tablePageCoverageDigest,
 } from '@ontology/contracts'
+import { canonicalJson as coreCanonicalJson } from '@ontology/core'
 import type {
   EvidenceRecord,
   EvidenceStorePort,
@@ -132,15 +133,7 @@ function exactNumericCell(value: unknown): { readonly text: string | undefined; 
 }
 
 function canonicalJson(value: unknown): string {
-  if (Array.isArray(value)) return `[${value.map(canonicalJson).join(',')}]`
-  if (isRecord(value)) {
-    return `{${Object.entries(value)
-      .filter(([, entry]) => entry !== undefined)
-      .sort(([left], [right]) => left.localeCompare(right))
-      .map(([key, entry]) => `${JSON.stringify(key)}:${canonicalJson(entry)}`)
-      .join(',')}}`
-  }
-  return JSON.stringify(value) ?? 'undefined'
+  return coreCanonicalJson(value)
 }
 
 function shaOf(value: unknown): Sha256Digest {

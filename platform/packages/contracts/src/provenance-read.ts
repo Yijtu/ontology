@@ -1,7 +1,6 @@
 import type {
   ConsistencyLevel,
   DataMode,
-  DocumentSpan,
   EvidenceDependencyDirection,
   EvidenceDependencyRelation,
   EvidenceKind,
@@ -21,7 +20,7 @@ import type {
   VersionRef,
 } from './generated/contracts'
 import type { PublishedStatementStatus } from './semantic-publication'
-import type { SpanPrecision } from './document-parse'
+import type { RuleProvenanceSpan } from './rule-extraction'
 
 /**
  * On-demand provenance, history and controlled-detail read contracts (SPEC C3.1/C6, D3/D5,
@@ -112,12 +111,8 @@ export interface ProvenanceSupportAxisCoverage {
  * immutable document refs and the archived `document_span` evidence that proves them.
  */
 export interface ProvenanceSpecificationSpanView {
-  readonly parseId: Uuid
-  readonly chunkId: Uuid
-  readonly locator: DocumentSpan['locator']
-  readonly spanKind: DocumentSpan['spanKind']
-  readonly precision: SpanPrecision
-  readonly quoteDigest: Sha256Digest
+  /** The exact AST provenance span: a text chunk or a structured row/cell. */
+  readonly span: RuleProvenanceSpan
   readonly documentRef: ResourceRef
   readonly documentVersionRef: ResourceRef
   readonly parserVersion: Semver

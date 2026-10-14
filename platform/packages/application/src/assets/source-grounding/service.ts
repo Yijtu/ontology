@@ -1,8 +1,8 @@
-import { SourceGroundingError, assertGroundingDocumentSet, isResourceRef, isToolContext, isUuid } from '@ontology/contracts'
+import { SourceGroundingError, assertGroundingDocumentSet, isResourceRef, isToolContext, isUuid, sourceTrustTierOf } from '@ontology/contracts'
 import { readLatestWorkspaceDraft } from '../workspace-draft'
 import type { GroundedSource, GroundedSourceContent, GroundingDocumentSetReaderPort,
   IndustryWorkspaceStore, ResourceRef, ScopeRef, SourceGroundingBudgetPort, SourceGroundingPort,
-  SourceGroundingReaderPort, SourceGroundingReason, ToolContext } from '@ontology/contracts'
+  SourceGroundingReaderPort, SourceGroundingReason, SourceGroundingRowSelector, ToolContext } from '@ontology/contracts'
 
 export interface SourceGroundingDependencies {
   readonly workspaces: Pick<IndustryWorkspaceStore, 'getWorkspace' | 'getDraft' | 'listDrafts' | 'getLatestDraft'>
@@ -45,6 +45,12 @@ export class SourceGroundingService implements SourceGroundingPort {
       throw new SourceGroundingError('INVALID_REQUEST', 'a workspace and bounded unique source references are required')
     }
     const scope: ScopeRef = { tenantId: ctx.principal.tenantId, spaceId: ctx.allowedResources.spaceId }
+    const rowSelectors = request.rowSelectors ?? []
+    if (rowSelectors.length > 64 || rowSelectors.some((selector) => !isResourceRef(selector.sourceRef)
+      || !request.sourceRefs.some((ref) => ref.id === selector.sourceRef.id)
+      || [selector.recordId, selector.sourceRowKey, selector.locator].filter((value) => value !== undefined).length !== 1)) {
+      throw new SourceGroundingError('INVALID_REQUEST', 'row selectors must name at most 64 known sources, each with exactly one row identity')
+    }
     const workspace = await this.dependencies.workspaces.getWorkspace(scope, request.workspaceId, ctx)
     if (workspace === undefined || workspace.state === 'archived') {
       throw new SourceGroundingError('NOT_APPROVED', 'workspace is not visible or active')
@@ -60,7 +66,7 @@ export class SourceGroundingService implements SourceGroundingPort {
     if (draft === undefined) throw new SourceGroundingError('NOT_APPROVED', 'workspace has no pinned document set')
     const documentSetRef = draft.documentSetRef
     const failed = (reason: SourceGroundingReason): GroundedSource[] => request.sourceRefs.map((sourceRef) => ({
-      sourceRef, trust: 'untrusted_source_data', status: 'failed', reasons: [reason], contents: [],
+      sourceRef, trust: 'untrusted_source_data', trustTier: 'customer_authoritative', status: 'failed', reasons: [reason], contents: [],
     }))
     let sources: GroundedSource[] = []
     try {
@@ -81,42 +87,63 @@ export class SourceGroundingService implements SourceGroundingPort {
         else if (!sameRef(approval.sourceRef, sourceRef)) reasons.push('SOURCE_MISMATCH')
         else if (approval.state !== 'approved') reasons.push('SOURCE_RETRACTED')
         else {
+          const selectors = rowSelectors.filter((selector) => selector.sourceRef.id === sourceRef.id)
           let cursor: string | undefined
           let rows = 0
           try {
-            do {
+            if (selectors.length > 0 && approval.kind === 'table') {
               budget.check()
-              if (budget.remainingFragments === 0) { reasons.push('FRAGMENT_LIMIT'); break }
-              budget.chargePage()
-              const page = await this.dependencies.reader.readPage(scope, approval, {
-                limit: Math.min(this.#pageSize, budget.remainingFragments,
-                  approval.kind === 'table' ? this.#sampleRows - rows : this.#pageSize),
-                ...(cursor === undefined ? {} : { cursor }),
-              }, ctx, budget)
-              budget.check()
-              for (const content of page.contents) {
-                const reason = budget.accept(content)
-                if (reason !== undefined) { reasons.push(reason); break }
-                contents.push(content)
-                if (content.kind === 'table') rows += content.rows.length
+              if (budget.remainingFragments === 0) { reasons.push('FRAGMENT_LIMIT') } else {
+                budget.chargePage()
+                const targets: Omit<SourceGroundingRowSelector, 'sourceRef'>[] = selectors.map((selector) => {
+                  const { sourceRef: omitted, ...target } = selector
+                  void omitted
+                  return target
+                })
+                const page = await this.dependencies.reader.readRows(scope, approval, { limit: selectors.length, selectors: targets }, ctx, budget)
+                budget.check()
+                for (const content of page.contents) {
+                  const reason = budget.accept(content)
+                  if (reason !== undefined) { reasons.push(reason); break }
+                  contents.push(content)
+                }
+                reasons.push(...page.reasons)
               }
-              reasons.push(...page.reasons)
-              if (reasons.length > 0) break
-              if (page.nextCursor !== undefined && rows >= this.#sampleRows && approval.kind === 'table') {
-                reasons.push('SAMPLE_LIMIT'); break
-              }
-              if (page.nextCursor !== undefined && (page.nextCursor === cursor || page.contents.length === 0)) {
-                throw new SourceGroundingError('READ_FAILED', 'source reader did not advance its page')
-              }
-              cursor = page.nextCursor
-            } while (cursor !== undefined)
+            } else {
+              do {
+                budget.check()
+                if (budget.remainingFragments === 0) { reasons.push('FRAGMENT_LIMIT'); break }
+                budget.chargePage()
+                const page = await this.dependencies.reader.readPage(scope, approval, {
+                  limit: Math.min(this.#pageSize, budget.remainingFragments,
+                    approval.kind === 'table' ? this.#sampleRows - rows : this.#pageSize),
+                  ...(cursor === undefined ? {} : { cursor }),
+                }, ctx, budget)
+                budget.check()
+                for (const content of page.contents) {
+                  const reason = budget.accept(content)
+                  if (reason !== undefined) { reasons.push(reason); break }
+                  contents.push(content)
+                  if (content.kind === 'table') rows += content.rows.length
+                }
+                reasons.push(...page.reasons)
+                if (reasons.length > 0) break
+                if (page.nextCursor !== undefined && rows >= this.#sampleRows && approval.kind === 'table') {
+                  reasons.push('SAMPLE_LIMIT'); break
+                }
+                if (page.nextCursor !== undefined && (page.nextCursor === cursor || page.contents.length === 0)) {
+                  throw new SourceGroundingError('READ_FAILED', 'source reader did not advance its page')
+                }
+                cursor = page.nextCursor
+              } while (cursor !== undefined)
+            }
           } catch (error) {
             if (error instanceof SourceGroundingError && error.code === 'CANCELLED') throw error
             reasons.push(error instanceof SourceGroundingError ? error.code : 'READ_FAILED')
           }
         }
         if (contents.length === 0 && reasons.length === 0) reasons.push('EMPTY_SOURCE')
-        sources.push({ sourceRef, trust: 'untrusted_source_data', contents,
+        sources.push({ sourceRef, trust: 'untrusted_source_data', trustTier: approval === undefined ? 'customer_authoritative' : sourceTrustTierOf(approval), contents,
           status: reasons.length === 0 ? 'complete' : contents.length > 0 ? 'partial' : 'failed',
           reasons: [...new Set(reasons)] })
       }

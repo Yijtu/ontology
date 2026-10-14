@@ -151,13 +151,13 @@ export function createCoreAuthoring(options: CoreAuthoringOptions) {
           const parsed = await new LocalStructuredIngestionService({ blobs: options.blobs, store: options.structured }).parse({ scopeRef: scope(trusted.ctx), originalRef: sourceRef, options: body['options'] ?? {} }, trusted.ctx)
           if (body['options'] !== undefined && canonicalJson(parsed.parse.parseOptions) !== canonicalJson(body['options'])) throw new InvalidRequestFieldError('these original bytes already have another native selection; use the actual stored sheet/header selection shown in the source catalogue')
           if (parsed.parse.status !== 'complete') throw new InvalidRequestFieldError('the source must parse completely before entering the approved corpus')
-          source = { sourceRef: parsed.parse.originalRef, state: 'approved', kind: 'table', parserVersion: parsed.parse.parserVersion, parseId: parsed.parse.parseId, ...(parsed.parse.parseOptions === undefined ? {} : { tableOptions: parsed.parse.parseOptions }) }
+          source = { sourceRef: parsed.parse.originalRef, state: 'approved', kind: 'table', parserVersion: parsed.parse.parserVersion, parseId: parsed.parse.parseId, trustTier: 'customer_authoritative', ...(parsed.parse.parseOptions === undefined ? {} : { tableOptions: parsed.parse.parseOptions }) }
         } else {
           if (body['options'] !== undefined) throw new InvalidRequestFieldError('document sources do not accept table selections')
           const parsed = await new LocalDocumentExtractionService({ blobs: options.blobs, store: options.parses }).parse({ scopeRef: scope(trusted.ctx), originalRef: sourceRef, documentVersionRef: sourceRef }, trusted.ctx)
           if (parsed.coverage.status !== 'complete') throw new InvalidRequestFieldError('the document must parse completely before entering the approved corpus')
           if (parsed.documentVersionRef?.kind !== 'document' || parsed.documentVersionRef.id !== parsed.originalRef.id || parsed.documentVersionRef.version !== parsed.originalRef.version || parsed.documentVersionRef.digest !== parsed.originalRef.digest) throw new InvalidRequestFieldError('该缓存来源缺少可核对的原始版本记录；请导入新的文件版本后重新确认来源')
-          source = { sourceRef: parsed.originalRef, state: 'approved', kind: 'document', parserVersion: parsed.parserVersion, parseId: parsed.parseId }
+          source = { sourceRef: parsed.originalRef, state: 'approved', kind: 'document', parserVersion: parsed.parserVersion, parseId: parsed.parseId, trustTier: 'customer_authoritative' }
         }
         const manifest: GroundingDocumentSet = { ...set, sources: [...set.sources.filter((row) => row.sourceRef.id !== source.sourceRef.id), source] }
         const documentSetRef = await stableWrite(`workspace:${request.params.workspaceId}:corpus:${key}`, new TextEncoder().encode(JSON.stringify(manifest)), GROUNDING_DOCUMENT_SET_MEDIA_TYPE, 'artifact', trusted.ctx)

@@ -924,3 +924,12 @@ export function loadCoreExamples(options: LoadCoreExamplesOptions): LoadedCoreEx
   }
   return { indexPath: resolvedIndexPath, classification: parsedIndex.classification, scenarios }
 }
+
+/**
+ * Zero-scenario kernel: a deployment that mounts only its own published packs and no synthetic
+ * demo assets. The kernel must be able to start like this; the synthetic example loader is now
+ * an optional assembly, explicitly requested by the host.
+ */
+export function emptyCoreExamples(): LoadedCoreExamples {
+  return { indexPath: '', classification: INDEX_CLASSIFICATION, scenarios: [] }
+}

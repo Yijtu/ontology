@@ -195,8 +195,8 @@ export type CompetencyQuestionIntent =
       kind: 'registered_compute'
       projectId: Uuid
       operationRef: {
-        id: 'example.compute.aggregate'
-        version: '1'
+        id: string
+        version: string
       }
       inputSourceRef: VersionRef
       metric: 'record_count' | 'total_quantity' | 'total_cost'

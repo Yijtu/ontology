@@ -1,5 +1,6 @@
 import type { QueryResultRow } from 'pg'
 import { createHash } from 'node:crypto'
+import { canonicalJson as coreCanonicalJson, digestOfCanonical } from '@ontology/core'
 import {
   COMPETENCY_BODY_MEDIA_TYPE,
   PublishedPackAssetStoreError,
@@ -47,15 +48,8 @@ interface DigestRow extends QueryResultRow {
 
 const ASSET_COLUMNS = 'content_digest, request_digest, asset'
 
-function canonical(value: unknown): string {
-  const sorted = (input: unknown): unknown => {
-    if (Array.isArray(input)) return input.map(sorted)
-    if (typeof input !== 'object' || input === null) return input
-    return Object.fromEntries(Object.entries(input).sort(([left], [right]) => left < right ? -1 : left > right ? 1 : 0).map(([key, entry]) => [key, sorted(entry)]))
-  }
-  return JSON.stringify(sorted(value))
-}
-function digestOf(value: unknown): string { return `sha256:${createHash('sha256').update(canonical(value)).digest('hex')}` }
+function canonical(value: unknown): string { return coreCanonicalJson(value) }
+function digestOf(value: unknown): string { return digestOfCanonical(value) }
 
 function toAsset(row: AssetRow): PublishedPackAsset {
   assertPublishedPackAssetShape(row.asset)

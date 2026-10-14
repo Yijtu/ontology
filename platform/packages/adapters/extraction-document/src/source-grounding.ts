@@ -1,8 +1,8 @@
-import { SourceGroundingError, assertGroundingDocumentSet, isToolContext } from '@ontology/contracts'
-import type { DocumentParseStore, GroundingDocumentSet, GroundingDocumentSetReaderPort,
+import { SourceGroundingError, assertGroundingDocumentSet, isToolContext, sha256OfCanonical } from '@ontology/contracts'
+import type { CandidateSourceSpan, DocumentParseStore, GroundingDocumentSet, GroundingDocumentSetReaderPort,
   GroundingSourceApproval, ResourceRef, ScopeRef, SourceGroundingBudgetPort,
-  SourceGroundingChunkStore, SourceGroundingPage, SourceGroundingReaderPort,
-  StructuredIngestionStore, ToolContext } from '@ontology/contracts'
+  SourceGroundingChunkStore, SourceGroundingPage, SourceGroundingReaderPort, SourceGroundingReason, SourceGroundingRowSelector,
+  StructuredCell, StructuredIngestionStore, StructuredParseRecord, StructuredRecordEntry, StructuredTable, ToolContext } from '@ontology/contracts'
 import { sha256DigestOfBytes } from './hashing'
 import { DocumentSpanReader } from './span-reader'
 import { mediaKindOf } from './extract'
@@ -145,9 +145,7 @@ export class ParsedSourceGroundingReader implements SourceGroundingReaderPort {
     return { contents, reasons: [], ...(chunks.nextCursor === undefined ? {} : { nextCursor: chunks.nextCursor }) }
   }
 
-  async #table(scope: ScopeRef, source: GroundingSourceApproval,
-    page: { readonly limit: number; readonly cursor?: string }, ctx: ToolContext,
-    budget: SourceGroundingBudgetPort): Promise<SourceGroundingPage> {
+  async #resolvedTable(scope: ScopeRef, source: GroundingSourceApproval, ctx: ToolContext, budget: SourceGroundingBudgetPort) {
     const parse = await this.dependencies.tables.findParseByDigest(scope, source.sourceRef.digest, source.parserVersion, ctx)
     budget.check()
     if (parse === undefined || parse.status !== 'complete' || parse.coverage.status !== 'complete'
@@ -163,7 +161,7 @@ export class ParsedSourceGroundingReader implements SourceGroundingReaderPort {
     const bytes = await readBlob(this.dependencies.blobs, scope, source.sourceRef, ctx, budget)
     const result = new StructuredDocumentParser().parse(bytes, { ...source.tableOptions, mediaType: parse.originalMediaType })
     budget.check()
-    if (result.status !== 'complete' || result.tables.length !== 1) {
+    if (result.status !== 'complete' || result.tables.length !== 1 || parse.counts.total !== result.coverage.totalUnits) {
       throw new SourceGroundingError('PARSE_NOT_COMPLETE', 'approved table selection cannot be reproduced completely')
     }
     const table = result.tables[0]
@@ -171,24 +169,71 @@ export class ParsedSourceGroundingReader implements SourceGroundingReaderPort {
       throw new SourceGroundingError('INVALID_REQUEST', 'approved table context requires a selected header row')
     }
     const reconciled = reconcileStructuredResult(result, scope, source.sourceRef.digest)
-    const persisted = await this.dependencies.tables.listRecords(scope, source.parseId, page, ctx)
-    budget.check()
-    if (persisted.total !== reconciled.entries.length || parse.counts.total !== result.coverage.totalUnits) {
+    if (reconciled.entries.length !== parse.counts.total) {
       throw new SourceGroundingError('DIGEST_MISMATCH', 'table row coverage no longer matches the approved parse')
     }
-    const rows = persisted.records.map((entry) => {
-      const actual = reconciled.entries.find((candidate) => candidate.recordId === entry.recordId)
-      const row = table.rows.find((candidate) => candidate.recordIndex === entry.recordIndex)
-      if (actual === undefined || row === undefined || actual.rowDigest !== entry.rowDigest
-        || actual.sourceRowKey !== entry.sourceRowKey || JSON.stringify(actual.locator) !== JSON.stringify(entry.locator)) {
-        throw new SourceGroundingError('DIGEST_MISMATCH', 'table row does not round-trip to its original locator/digest')
-      }
-      return { cells: row.cells, sourceSpan: { kind: 'structured' as const, parseId: parse.parseId,
-        recordId: entry.recordId, sourceRowKey: entry.sourceRowKey, locator: entry.locator, rowDigest: entry.rowDigest } }
-    })
-    return { contents: [{ kind: 'table', format: table.format, columns: table.columns, headerRow: table.headerRow,
+    return { parse, headerRow: table.headerRow, table, reconciled }
+  }
+
+  #rowOf(parse: StructuredParseRecord, table: StructuredTable, reconciled: ReturnType<typeof reconcileStructuredResult>, entry: StructuredRecordEntry) {
+    const actual = reconciled.entries.find((candidate) => candidate.recordId === entry.recordId)
+    const row = table.rows.find((candidate) => candidate.recordIndex === entry.recordIndex)
+    if (actual === undefined || row === undefined || actual.rowDigest !== entry.rowDigest
+      || actual.sourceRowKey !== entry.sourceRowKey || JSON.stringify(actual.locator) !== JSON.stringify(entry.locator)) {
+      throw new SourceGroundingError('DIGEST_MISMATCH', 'table row does not round-trip to its original locator/digest')
+    }
+    return { cells: row.cells, sourceSpan: { kind: 'structured' as const, parseId: parse.parseId,
+      recordId: entry.recordId, sourceRowKey: entry.sourceRowKey, locator: entry.locator, rowDigest: entry.rowDigest } }
+  }
+
+  async #table(scope: ScopeRef, source: GroundingSourceApproval,
+    page: { readonly limit: number; readonly cursor?: string }, ctx: ToolContext,
+    budget: SourceGroundingBudgetPort): Promise<SourceGroundingPage> {
+    const { parse, table, headerRow, reconciled } = await this.#resolvedTable(scope, source, ctx, budget)
+    const persisted = await this.dependencies.tables.listRecords(scope, source.parseId, page, ctx)
+    budget.check()
+    if (persisted.total !== reconciled.entries.length || parse.counts.total !== reconciled.entries.length) {
+      throw new SourceGroundingError('DIGEST_MISMATCH', 'table row coverage no longer matches the approved parse')
+    }
+    const rows = persisted.records.map((entry) => this.#rowOf(parse, table, reconciled, entry))
+    return { contents: [{ kind: 'table', format: table.format, columns: table.columns, headerRow,
       ...(table.sheetId === undefined ? {} : { sheetId: table.sheetId }),
       ...(table.sheetName === undefined ? {} : { sheetName: table.sheetName }), rows }], reasons: [],
       ...(persisted.nextCursor === undefined ? {} : { nextCursor: persisted.nextCursor }) }
+  }
+
+  /**
+   * Read only the exact requested rows/cells of one approved table — each located in the re-parsed
+   * original and round-trip verified — so a clause may cite a row far beyond the sampling cap
+   * without widening the sample. A selector that matches no parsed row is reported, never faked.
+   */
+  async readRows(scope: ScopeRef, source: GroundingSourceApproval,
+    request: { readonly limit: number; readonly selectors: readonly Omit<SourceGroundingRowSelector, 'sourceRef'>[] }, ctx: ToolContext,
+    budget: SourceGroundingBudgetPort): Promise<SourceGroundingPage> {
+    assertScope(scope, ctx)
+    budget.check()
+    if (source.state !== 'approved') throw new SourceGroundingError('SOURCE_RETRACTED', 'source is retracted')
+    if (source.kind !== 'table') throw new SourceGroundingError('INVALID_REQUEST', 'row selection requires an approved table')
+    if (!Number.isSafeInteger(request.limit) || request.limit < 1 || request.limit > 64) {
+      throw new SourceGroundingError('INVALID_REQUEST', 'row limit must be within 1..64')
+    }
+    if (request.selectors.length === 0 || request.selectors.length > request.limit) {
+      throw new SourceGroundingError('INVALID_REQUEST', 'a targeted read requires between 1 and limit row selectors')
+    }
+    const { parse, table, headerRow, reconciled } = await this.#resolvedTable(scope, source, ctx, budget)
+    const rows: { readonly cells: readonly StructuredCell[]; readonly sourceSpan: CandidateSourceSpan }[] = []
+    const reasons: SourceGroundingReason[] = []
+    for (const selector of request.selectors) {
+      const entry = reconciled.entries.find((candidate) =>
+        selector.recordId !== undefined ? candidate.recordId === selector.recordId
+          : selector.sourceRowKey !== undefined ? candidate.sourceRowKey === selector.sourceRowKey
+            : selector.locator !== undefined ? sha256OfCanonical(candidate.locator) === sha256OfCanonical(selector.locator)
+              : false)
+      if (entry === undefined || entry.state !== 'parsed') { reasons.push('EMPTY_SOURCE'); continue }
+      rows.push(this.#rowOf(parse, table, reconciled, entry))
+    }
+    return { contents: [{ kind: 'table', format: table.format, columns: table.columns, headerRow,
+      ...(table.sheetId === undefined ? {} : { sheetId: table.sheetId }),
+      ...(table.sheetName === undefined ? {} : { sheetName: table.sheetName }), rows }], reasons }
   }
 }

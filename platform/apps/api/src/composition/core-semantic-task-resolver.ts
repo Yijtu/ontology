@@ -11,6 +11,7 @@ import { findRegisteredOperation } from '@ontology/contracts'
 import { PublishedSemanticSource, definitionVersionDigest, publishedRuleRef } from '@ontology/semantic-engine'
 import type { MaterializationPublishedSource, PublishedSemanticReadView } from '@ontology/semantic-engine'
 import { canonicalJson, registeredOperationDigest } from '@ontology/tool-services'
+import { coreTaskToolId } from './core-task-kinds'
 
 export interface CoreSemanticTaskResolverOptions {
   readonly projects: Pick<ProjectStore, 'getProject' | 'getRevision'>
@@ -51,7 +52,7 @@ export class CoreSemanticTaskResolver {
     for (const ref of execution.allowedTaskBindingRefs) {
       const binding = await this.options.taskBindings.getBinding(scope, ref, ctx)
       if (binding === undefined || !sameRef(binding.taskBindingRef, ref) || !sameRef(binding.actionDefinitionRef, definition.ref)) continue
-      const tool = binding.kind === 'structured_query' || binding.kind === 'compute' ? 'data_query' : binding.kind === 'document_qa' ? 'document_search' : 'ontology_lookup'
+      const tool = coreTaskToolId(binding.kind)
       if (!enabledTools.has(tool) || binding.kind === 'published_facts') continue
       if (binding.kind === 'structured_query' && execution.projectDatasetSnapshotRef === undefined) continue
       if (binding.kind === 'compute') {
@@ -77,7 +78,7 @@ export class CoreSemanticTaskResolver {
     if (inventory.length > 32) throw new WorkflowControllerError('CAPABILITY_NOT_CONFIGURED', 'the task catalogue exceeds its finite bound')
     const bindings = inventory.filter((binding) => {
       if (!sameRef(binding.actionDefinitionRef, definition.ref)) return false
-      const tool = binding.kind === 'structured_query' || binding.kind === 'compute' ? 'data_query' : binding.kind === 'document_qa' ? 'document_search' : 'ontology_lookup'
+      const tool = coreTaskToolId(binding.kind)
       if (!enabledTools.has(tool)) return false
       if (binding.kind !== 'compute') return true
       const operation = binding.operationRef === undefined ? undefined : findRegisteredOperation(this.options.operations, binding.operationRef)

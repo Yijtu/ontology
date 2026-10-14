@@ -1,10 +1,10 @@
-import { assetCandidateCommitPin, bindActionDeclaration, isResourceRef, isUuid, isVersionRef, RuleActionCandidateStoreError, SourceGroundingError } from '@ontology/contracts'
+import { assetCandidateCommitPin, bindActionDeclaration, isResourceRef, isUuid, isVersionRef, RuleActionCandidateStoreError, SourceGroundingError, sourceTrustTierGroundsPublication } from '@ontology/contracts'
 import type { ActionCapabilityBindingInput, AssetCandidateStore, AssetCandidateVersion, CandidateSourceSpan,
   GenerationOutputLimit, GenerationPort, GenerationRequest, ModelRef, ResourceRef, RevisionString,
   RuleActionCandidateKind, RuleActionCandidateStore, RuleActionCandidateVersion, RuleActionGenerationBatch,
   RuleActionGenerationGuard, RuleActionGenerationIssue, RuleActionGenerationStore,
   RuleActionSourceSelection, Sha256Digest,
-  RuleExpressionNode, RuleProvenanceSpan, ScopeRef, SourceGroundingPort, ToolContext, Uuid, VersionRef,
+  RuleExpressionNode, RuleProvenanceSpan, ScopeRef, SourceGroundingPort, SourceGroundingRowSelector, ToolContext, Uuid, VersionRef,
   IndustryWorkspaceStore } from '@ontology/contracts'
 import { candidateIdFor, canonicalJson, sha256DigestOf } from '../../extraction/canonical'
 import { readLatestWorkspaceDraft } from '../workspace-draft'
@@ -29,6 +29,8 @@ export interface RuleActionGenerationInput {
   readonly workspaceId: Uuid
   readonly expectedRevision: RevisionString | undefined
   readonly sourceRefs: readonly ResourceRef[]
+  /** Exact table rows to include beyond the sampled page (e.g. a row a clause names). */
+  readonly rowSelectors?: readonly SourceGroundingRowSelector[]
   readonly kinds: readonly RuleActionCandidateKind[]
   readonly selectedDefinitionCandidateIds?: readonly Uuid[]
   readonly generationPolicyRef: VersionRef
@@ -172,7 +174,8 @@ export class RuleActionCandidateGenerationService {
     const guard: RuleActionGenerationGuard = { latestPublishedPackRef: workspace.latestPublishedPackRef, expectedWorkspaceRevision: input.expectedRevision,
       inputDraftRef: { workspaceId: draft.workspaceId, revision: draft.revision, digest: draft.digest },
       documentSetRef: draft.documentSetRef, definitionPins: definitions.map(assetCandidateCommitPin).sort((a, b) => a.candidateId.localeCompare(b.candidateId)), ruleActionPins: currentRules, signal }
-    const grounding = await readGrounding(this.dependencies.sourceGrounding, { workspaceId: input.workspaceId, sourceRefs: input.sourceRefs, inputDraftRef: guard.inputDraftRef }, ctx, signal)
+    const grounding = await readGrounding(this.dependencies.sourceGrounding, { workspaceId: input.workspaceId, sourceRefs: input.sourceRefs, inputDraftRef: guard.inputDraftRef,
+      ...(input.rowSelectors === undefined ? {} : { rowSelectors: input.rowSelectors }) }, ctx, signal)
     check(signal)
     if (!sameResourcePin(grounding.documentSetRef, draft.documentSetRef) || grounding.sources.length !== input.sourceRefs.length || grounding.sources.some((source, index) => !sameResourcePin(source.sourceRef, input.sourceRefs[index] ?? draft.documentSetRef))) throw new RuleActionCandidateError('VERSION_CONFLICT', 'approved source corpus changed')
     if (grounding.coverage === 'failed') throw new RuleActionCandidateError('VALIDATION_BLOCKED', 'approved source could not be read')
@@ -293,11 +296,14 @@ function groundCandidate(candidate: RuleActionCandidateVersion, proposal: DraftR
     const fragment = selectedGrounding(fragments, selection?.sourceIndex, selection?.fragmentIndex)
     if (fragment === undefined) { issues.push(issue('SOURCE_UNRESOLVED', path, 'Select a real approved source fragment.')); return [] }
     sourceBindings.push({ path, sourceRef: fragment.sourceRef, sourceSpan: fragment.sourceSpan })
-    if (candidate.kind === 'rule' && fragment.sourceSpan.kind === 'structured') issues.push(issue('SOURCE_UNRESOLVED', path,
-      'The actual table locator is retained, but structured rule-clause provenance is not yet executable; select supported text evidence.'))
+    if (!sourceTrustTierGroundsPublication(fragment.trustTier)) issues.push(issue('SOURCE_TRUST_BLOCKED', path,
+      `The selected ${fragment.trustTier} source may not ground a publishable rule or action until a human promotes it.`))
+    if (fragment.sourceSpan.kind === 'structured' && fragment.sourceSpan.locator.kind !== 'table_cell' && fragment.sourceSpan.locator.kind !== 'table_row') {
+      issues.push(issue('SOURCE_UNRESOLVED', path, 'Only a table cell or table row locator may ground a rule or action clause.'))
+    }
     if (!spans.some((span) => canonicalJson(span) === canonicalJson(fragment.sourceSpan))) spans.push(fragment.sourceSpan)
     if (!refs.some((ref) => sameResourcePin(ref, fragment.sourceRef))) refs.push(fragment.sourceRef)
-    return fragment.sourceSpan.kind === 'structured' ? [] : [fragment.sourceSpan]
+    return [fragment.sourceSpan]
   }
   if (incomplete) issues.push(issue('SOURCE_INCOMPLETE', 'sourceRefs', 'Source coverage was truncated or incomplete.'))
   const objects = new Set([...(terms?.objectLogicalIds ?? []), ...selected.filter((row) => row.payload.kind === 'object').map((row) => row.logicalId)])

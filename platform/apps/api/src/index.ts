@@ -55,7 +55,7 @@ export type {
   ToolGatewayComposition,
   ToolGatewayCompositionOptions,
 } from './composition/tool-gateway'
-export { CoreExampleLoaderError, loadCoreExamples } from './composition/core-example-loader'
+export { CoreExampleLoaderError, emptyCoreExamples, loadCoreExamples } from './composition/core-example-loader'
 export type {
   CoreExampleLoaderErrorCode,
   CoreExamplePhysicalMapping,

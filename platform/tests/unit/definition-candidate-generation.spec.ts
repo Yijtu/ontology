@@ -208,7 +208,7 @@ function buildHarness(responses: readonly string[], terminology = new StaticDefi
     sourceGrounding: {
       read: async (request, _ctx, budget) => ({ documentSetRef: initialDraft.documentSetRef,
         coverage: 'complete', usage: budget.usage(), sources: request.sourceRefs.map((sourceRef) => ({
-          sourceRef, trust: 'untrusted_source_data', status: 'complete', reasons: [], contents: [{
+          sourceRef, trust: 'untrusted_source_data', trustTier: 'customer_authoritative', status: 'complete', reasons: [], contents: [{
             kind: 'text', text: 'Controlled source: equipment has rated capacity.', sourceSpan: {
               parseId: '22222222-2222-4222-8222-222222222222', chunkId: '33333333-3333-4333-8333-333333333333',
               locator: { kind: 'offset', startOffset: 0, endOffset: 53 }, spanKind: 'verbatim', precision: 'exact',
@@ -343,6 +343,60 @@ describe('definition (TBox) candidate generation service', () => {
     expect(candidate?.pendingConfirmation).toBe(true)
     expect(candidate?.sourceRefs).toEqual([])
     expect(candidate?.issues.some((issue) => issue.code === 'MISSING_PROVENANCE')).toBe(true)
+  })
+
+  it('keeps a candidate grounded in an agent-researched source pending until a human promotes it', async () => {
+    const corpus: { documentSetRef?: ResourceRef } = {}
+    const h = buildHarness([SOURCED_PAYLOAD], undefined, { sourceGrounding: {
+      read: async (request, _ctx, budget) => {
+        const documentSetRef = corpus.documentSetRef
+        if (documentSetRef === undefined) throw new Error('fixture corpus not ready')
+        return { documentSetRef, coverage: 'complete', usage: budget.usage(), sources: request.sourceRefs.map((sourceRef) => ({
+          sourceRef, trust: 'untrusted_source_data', trustTier: 'agent_researched', status: 'complete', reasons: [], contents: [{
+            kind: 'text', text: 'Controlled source: equipment has rated capacity.', sourceSpan: {
+              parseId: '22222222-2222-4222-8222-222222222222', chunkId: '33333333-3333-4333-8333-333333333333',
+              locator: { kind: 'offset', startOffset: 0, endOffset: 53 }, spanKind: 'verbatim', precision: 'exact',
+              quoteDigest: DIGEST, textDigest: DIGEST,
+            },
+          }],
+        })) }
+      },
+    } })
+    corpus.documentSetRef = h.initialDraft.documentSetRef
+    const result = await h.service.generate(input(), 'editor-1', EDITOR)
+    const device = result.candidates.find((candidate) => candidate.logicalId === 'device')
+    expect(device).toMatchObject({ state: 'pending_confirmation', pendingConfirmation: true })
+    expect(device?.sourceRefs).toHaveLength(1)
+    expect(device?.issues.some((issue) => issue.code === 'SOURCE_TRUST_BLOCKED')).toBe(true)
+    // Human confirmation of a low-trust source is refused rather than laundering it into a publishable version.
+    await expect(h.service.confirmSource({ workspaceId: WORKSPACE_ID, expectedRevision: '1', candidateId: device?.candidateId ?? '',
+      contentDigest: device?.contentDigest ?? DIGEST, sourceRef: input().sourceRefs[0] ?? resourceRef(), fragmentIndex: 0,
+      reason: 'sample the agent source', idempotencyKey: `trust-${randomUUID()}` }, 'editor-1', EDITOR)).rejects.toMatchObject({ code: 'VALIDATION_BLOCKED' })
+  })
+
+  it('keeps a candidate grounded in a public-standard source producible', async () => {
+    const corpus: { documentSetRef?: ResourceRef } = {}
+    const h = buildHarness([SOURCED_PAYLOAD], undefined, { sourceGrounding: {
+      read: async (request, _ctx, budget) => {
+        const documentSetRef = corpus.documentSetRef
+        if (documentSetRef === undefined) throw new Error('fixture corpus not ready')
+        return { documentSetRef, coverage: 'complete', usage: budget.usage(), sources: request.sourceRefs.map((sourceRef) => ({
+          sourceRef, trust: 'untrusted_source_data', trustTier: 'public_standard', status: 'complete', reasons: [], contents: [{
+            kind: 'text', text: 'Controlled source: equipment has rated capacity.', sourceSpan: {
+              parseId: '22222222-2222-4222-8222-222222222222', chunkId: '33333333-3333-4333-8333-333333333333',
+              locator: { kind: 'offset', startOffset: 0, endOffset: 53 }, spanKind: 'verbatim', precision: 'exact',
+              quoteDigest: DIGEST, textDigest: DIGEST,
+            },
+          }],
+        })) }
+      },
+    } })
+    corpus.documentSetRef = h.initialDraft.documentSetRef
+    const result = await h.service.generate(input(), 'editor-1', EDITOR)
+    const device = result.candidates.find((candidate) => candidate.logicalId === 'device')
+    expect(device?.state).toBe('produced')
+    expect(device?.pendingConfirmation).toBe(false)
+    expect(device?.issues).toEqual([])
   })
 
   it('records a logical-id collision as a hard failure', async () => {
@@ -604,7 +658,7 @@ describe('grounded generation and immutable rebase', () => {
         const documentSetRef = corpus.documentSetRef
         if (documentSetRef === undefined) throw new Error('fixture corpus not ready')
         return { documentSetRef, coverage: 'complete', usage: budget.usage(), sources: request.sourceRefs.map((sourceRef) => ({
-          sourceRef, trust: 'untrusted_source_data', status: 'complete', reasons: [], contents: [{ kind: 'table', format: 'csv',
+          sourceRef, trust: 'untrusted_source_data', trustTier: 'customer_authoritative', status: 'complete', reasons: [], contents: [{ kind: 'table', format: 'csv',
             headerRow: 1, columns: [{ column: 1, index: 0, header: 'Equipment', headerDigest: DIGEST, address: 'A', hidden: false }], rows: [] }],
         })) }
       },
@@ -669,6 +723,36 @@ describe('grounded generation and immutable rebase', () => {
     expect((await h.service.confirmSource(confirm, 'editor-1', EDITOR)).created).toBe(false)
     expect(h.generation.calls).toBe(1)
     await expect(h.service.confirmSource({ ...confirm, idempotencyKey: `invalid-${randomUUID()}`, fragmentIndex: 33 }, 'editor-1', EDITOR)).rejects.toMatchObject({ code: 'VERSION_CONFLICT' })
+  })
+
+  it('forwards an exact table row selector when confirming a missing source', async () => {
+    let captured: readonly unknown[] | undefined
+    const corpus: { documentSetRef?: ResourceRef } = {}
+    const h = buildHarness([JSON.stringify({ objects: [proposedObject('equipment', false)] })], undefined, { sourceGrounding: {
+      read: async (request, _ctx, budget) => {
+        const documentSetRef = corpus.documentSetRef
+        if (documentSetRef === undefined) throw new Error('fixture corpus not ready')
+        captured = request.rowSelectors
+        return { documentSetRef, coverage: 'complete', usage: budget.usage(), sources: request.sourceRefs.map((sourceRef) => ({
+          sourceRef, trust: 'untrusted_source_data', trustTier: 'customer_authoritative', status: 'complete', reasons: [], contents: [{
+            kind: 'text', text: 'Controlled source: equipment has rated capacity.', sourceSpan: {
+              parseId: '22222222-2222-4222-8222-222222222222', chunkId: '33333333-3333-4333-8333-333333333333',
+              locator: { kind: 'offset', startOffset: 0, endOffset: 53 }, spanKind: 'verbatim', precision: 'exact',
+              quoteDigest: DIGEST, textDigest: DIGEST,
+            },
+          }],
+        })) }
+      },
+    } })
+    corpus.documentSetRef = h.initialDraft.documentSetRef
+    const pending = (await h.service.generate(input(), 'editor-1', EDITOR)).candidates[0]
+    if (pending === undefined) throw new Error('expected pending suggestion')
+    const sourceRef = resourceRef('11111111-2222-4333-8444-555555555555')
+    const result = await h.service.confirmSource({ workspaceId: WORKSPACE_ID, expectedRevision: '1', candidateId: pending.candidateId,
+      contentDigest: pending.contentDigest, sourceRef, fragmentIndex: 0, rowSelector: { sourceRowKey: 'row-37' },
+      reason: 'cite the standard row', idempotencyKey: `confirm-${randomUUID()}` }, 'editor-1', EDITOR)
+    expect(captured).toEqual([expect.objectContaining({ sourceRef, sourceRowKey: 'row-37' })])
+    expect(result.candidates[0]).toMatchObject({ pendingConfirmation: false, sourceSpans: [{ quoteDigest: DIGEST }] })
   })
 
   it.each([['length', true], ['stop', false]] as const)('records incomplete streams (%s / completed=%s) as failures even with valid JSON', async (reason, completed) => {

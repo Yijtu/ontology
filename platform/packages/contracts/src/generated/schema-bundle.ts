@@ -1022,10 +1022,12 @@ export const SCHEMA_DOCUMENTS: readonly JsonSchemaObject[] = [
                 ],
                 "properties": {
                   "id": {
-                    "const": "example.compute.aggregate"
+                    "type": "string",
+                    "minLength": 1
                   },
                   "version": {
-                    "const": "1"
+                    "type": "string",
+                    "minLength": 1
                   }
                 }
               },

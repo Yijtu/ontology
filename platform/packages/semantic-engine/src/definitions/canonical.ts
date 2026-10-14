@@ -1,5 +1,5 @@
-import { createHash } from 'node:crypto'
 import type { Sha256Digest } from '@ontology/contracts'
+import { canonicalJson as coreCanonicalJson, digestOfCanonical } from '@ontology/core'
 
 /**
  * Deterministic serialization and small format predicates shared by validation and
@@ -7,28 +7,13 @@ import type { Sha256Digest } from '@ontology/contracts'
  * only on its content, not on object insertion order.
  */
 
-function canonicalize(value: unknown): unknown {
-  if (Array.isArray(value)) return value.map(canonicalize)
-  if (value !== null && typeof value === 'object') {
-    const source = value as Record<string, unknown>
-    const out: Record<string, unknown> = {}
-    for (const key of Object.keys(source).sort()) {
-      const entry = source[key]
-      if (entry === undefined) continue
-      out[key] = canonicalize(entry)
-    }
-    return out
-  }
-  return value
-}
-
-/** Canonical JSON for hashing. Array order is preserved; object keys are sorted. */
+/** Canonical JSON for hashing. Array order is preserved; object keys are ordered by code unit. */
 export function stableStringify(value: unknown): string {
-  return JSON.stringify(canonicalize(value))
+  return coreCanonicalJson(value)
 }
 
 export function sha256DigestOf(value: unknown): Sha256Digest {
-  return `sha256:${createHash('sha256').update(stableStringify(value), 'utf8').digest('hex')}`
+  return digestOfCanonical(value)
 }
 
 const NAMESPACE_PATTERN = /^[a-z][a-z0-9-]*$/

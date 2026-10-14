@@ -19,8 +19,9 @@ import type {
   RuleComputationFactRef,
   RulePremiseObservation,
   ParseCoverage,
+  RuleStructuredPolicySourcePort,
   RuleStructuredPremiseSourcePort,
-  RuleProvenanceSpan,
+  TextRuleProvenanceSpan,
   Semver,
   ScopeRef,
   SourceSnapshot,
@@ -87,6 +88,8 @@ export interface MaterializedRuleDerivationEvidenceProducerDependencies {
   /** Optional authorized source-span reader. Raw chunk refs remain incomplete without this port. */
   readonly documentSpans?: DocumentSpanReaderPort
   readonly structuredSources?: RuleStructuredPremiseSourcePort
+  /** Authorized reader for a rule clause grounded in an authored structured row/cell. */
+  readonly structuredClauses?: RuleStructuredPolicySourcePort
   readonly componentRef: VersionRef
   readonly maxSlices?: number
   readonly newId?: () => Uuid
@@ -303,6 +306,7 @@ export class MaterializedRuleDerivationEvidenceProducer {
   readonly #documentParses: Pick<DocumentParseStore, 'findParseByDigest' | 'getParse'> | undefined
   readonly #documentSpans: DocumentSpanReaderPort | undefined
   readonly #structuredSources: RuleStructuredPremiseSourcePort | undefined
+  readonly #structuredClauses: RuleStructuredPolicySourcePort | undefined
   readonly #componentRef: VersionRef
   readonly #maxSlices: number
   readonly #newId: () => Uuid
@@ -316,6 +320,7 @@ export class MaterializedRuleDerivationEvidenceProducer {
     this.#documentParses = dependencies.documentParses
     this.#documentSpans = dependencies.documentSpans
     this.#structuredSources = dependencies.structuredSources
+    this.#structuredClauses = dependencies.structuredClauses
     this.#componentRef = dependencies.componentRef
     this.#maxSlices = dependencies.maxSlices ?? DEFAULT_MAX_SLICES
     this.#newId = dependencies.newId ?? (() => randomUUID())
@@ -581,7 +586,7 @@ export class MaterializedRuleDerivationEvidenceProducer {
     if (spans.length > MAX_POLICY_SPANS) {
       return { mappings: [], limitations: ['the specification span bridge exceeded its 256-span bound'] }
     }
-    if (this.#documentParses === undefined || this.#documentSpans === undefined) {
+    if ((this.#documentParses === undefined || this.#documentSpans === undefined) && spans.some((span) => span.kind !== 'structured')) {
       return {
         mappings: [],
         limitations: ['published rule specification spans are retained, but the scoped parse lookup and authorized document-span reader were not both configured'],
@@ -592,7 +597,29 @@ export class MaterializedRuleDerivationEvidenceProducer {
     for (const span of spans) {
       let stage = 'scoped parse resolution'
       try {
-        const parse = await this.#documentParses.getParse(input.scopeRef, span.parseId, ctx)
+        if (span.kind === 'structured') {
+          const read = this.#structuredClauses === undefined ? undefined : await this.#structuredClauses.read(span, ctx)
+          if (read === undefined) { limitations.add(`specification row ${span.recordId} could not round-trip its original row/cell`); continue }
+          const bytes = new TextEncoder().encode(read.rowText)
+          if (bytes.byteLength === 0 || bytes.byteLength > MAX_ARCHIVED_SOURCE_SPAN_BYTES || sha256OfBytes(bytes) !== span.rowDigest) {
+            limitations.add(`specification row ${span.recordId} fingerprint or byte bound did not match`)
+            continue
+          }
+          stage = 'structured row archive'
+          const textArtifactRef = await this.#archiveArtifactBytes(input.scopeRef, bytes, 'application/json', ctx)
+          const policyBinding: RulePolicySpanArchiveBinding = { schemaVersion: 'rule-policy-span-binding@1', span, documentVersionRef: read.documentVersionRef,
+            documentRef: read.documentRef, parserVersion: read.parserVersion, textArtifactRef, ...(read.sourceCoverage === undefined ? {} : { sourceCoverage: read.sourceCoverage }) }
+          const recorded = await this.#recordDocumentSpanEvidence({ input, selected, binding: policyBinding, textArtifactRef, resultDigest: span.rowDigest, approximate: false, ctx,
+            response: { snapshot: { sourceRef: { namespace: 'structured-original', sourceId: read.documentRef.id }, schemaVersion: read.parserVersion, readAt: input.observedAt, consistency: 'repeatable_read', resultDigest: span.rowDigest } } })
+          if (!recorded.ok) { limitations.add(`specification row ${span.recordId} was not bridged: ${recorded.reason}`); continue }
+          mappings.push({ span, documentVersionRef: read.documentVersionRef, documentRef: read.documentRef, parserVersion: read.parserVersion, textArtifactRef, evidenceRef: recorded.evidenceRef,
+            ...(read.sourceCoverage === undefined ? {} : { sourceCoverage: read.sourceCoverage }) })
+          continue
+        }
+        const documentParses = this.#documentParses
+        const documentSpans = this.#documentSpans
+        if (documentParses === undefined || documentSpans === undefined) { limitations.add(`specification span ${span.chunkId} has no configured document-span reader`); continue }
+        const parse = await documentParses.getParse(input.scopeRef, span.parseId, ctx)
         if (parse === undefined || !sameScopeRef(parse.scopeRef, input.scopeRef) || parse.parseId !== span.parseId ||
             parse.documentVersionRef === undefined || parse.documentVersionRef.kind !== 'document' ||
             parse.originalRef.kind !== 'document' || parse.originalRef.digest !== parse.documentVersionRef.digest) {
@@ -600,7 +627,7 @@ export class MaterializedRuleDerivationEvidenceProducer {
           continue
         }
         stage = 'authorized span read'
-        const response = await this.#documentSpans.readSpan({
+        const response = await documentSpans.readSpan({
           documentRef: parse.originalRef,
           locator: span.locator,
           maxBytes: MAX_ARCHIVED_SOURCE_SPAN_BYTES,
@@ -619,7 +646,7 @@ export class MaterializedRuleDerivationEvidenceProducer {
         }
         mappings.push(archived.mapping)
       } catch {
-        limitations.add(`specification span ${span.chunkId} failed during ${stage}`)
+        limitations.add(`specification span ${span.kind === 'structured' ? span.recordId : span.chunkId} failed during ${stage}`)
         continue
       }
     }
@@ -683,7 +710,7 @@ export class MaterializedRuleDerivationEvidenceProducer {
     input: RecordMaterializedRuleDerivationEvidenceInput,
     selected: MaterializedCandidate,
     source: {
-      readonly span: RuleProvenanceSpan
+      readonly span: TextRuleProvenanceSpan
       readonly documentVersionRef: ResourceRef
       readonly documentRef: ResourceRef
       readonly parserVersion: Semver

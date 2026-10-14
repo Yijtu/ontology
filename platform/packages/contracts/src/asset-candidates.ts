@@ -64,6 +64,7 @@ export type AssetCandidateState =
  */
 export type AssetCandidateIssueCode =
   | 'MISSING_PROVENANCE'
+  | 'SOURCE_TRUST_BLOCKED'
   | 'KIND_NOT_ALLOWED'
   | 'LOGICAL_ID_COLLISION'
   | 'ENDPOINT_UNRESOLVED'

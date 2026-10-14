@@ -1,6 +1,6 @@
 import { createHash } from 'node:crypto'
 import { isRecord, isResourceRef } from '@ontology/contracts'
-import type { BlobGetAuthorizedRequest, CandidateStore, DocumentParseStore, DocumentSpanReaderPort, EvidenceStorePort, ProjectionSlice, ResourceRef, RuleComputationArtifact, RuleComputationFactRef, RuleProvenanceSpan, RuleStructuredPremiseSourcePort, ScopeRef, ToolContext } from '@ontology/contracts'
+import type { BlobGetAuthorizedRequest, CandidateStore, DocumentParseStore, DocumentSpanReaderPort, EvidenceStorePort, ProjectionSlice, ResourceRef, RuleComputationArtifact, RuleComputationFactRef, RuleProvenanceSpan, RuleStructuredPolicySourcePort, RuleStructuredPremiseSourcePort, ScopeRef, ToolContext } from '@ontology/contracts'
 import { sha256DigestOf } from '../definitions/canonical'
 import { publishedRuleRef } from '../rules'
 import { materializedRuleSupportFactGroupsOf } from './materialized-support-reader'
@@ -15,6 +15,7 @@ export interface RulePremiseSourceDependencies {
   readonly documentParses: Pick<DocumentParseStore, 'getParse' | 'findParseByDigest'>
   readonly documentSpans: DocumentSpanReaderPort
   readonly structuredSources?: RuleStructuredPremiseSourcePort
+  readonly structuredClauses?: RuleStructuredPolicySourcePort
 }
 const equal = (a: unknown, b: unknown): boolean => sha256DigestOf(a) === sha256DigestOf(b)
 const digest = (bytes: Uint8Array): string => `sha256:${createHash('sha256').update(bytes).digest('hex')}`
@@ -153,13 +154,23 @@ export async function verifyRulePremiseSources(artifact: RuleComputationArtifact
     const mapping = mappings[0]
     if (!isRecord(mapping) || !isResourceRef(mapping['evidenceRef'])) return false
     const binding = await readBinding(deps, scope, mapping['evidenceRef'], ctx)
-    const parse = await deps.documentParses.getParse(scope, span.parseId, ctx)
-    if (binding === undefined || parse === undefined || !equal(parse.scopeRef, scope) || binding['schemaVersion'] !== 'rule-policy-span-binding@1') return false
+    if (binding === undefined || binding['schemaVersion'] !== 'rule-policy-span-binding@1') return false
     const { evidenceRef: omitted, ...expected } = mapping
     void omitted
     const { schemaVersion: schema, ...actual } = binding
     void schema
-    if (!equal(expected, actual) || !equal(mapping['sourceCoverage'], parse.coverage) || !equal(mapping['documentRef'], parse.originalRef) || !equal(mapping['documentVersionRef'], parse.documentVersionRef) || mapping['parserVersion'] !== parse.parserVersion) return false
+    if (!equal(expected, actual)) return false
+    if (span.kind === 'structured') {
+      const read = deps.structuredClauses === undefined ? undefined : await deps.structuredClauses.read(span, ctx)
+      if (read === undefined || digest(new TextEncoder().encode(read.rowText)) !== span.rowDigest ||
+          !equal(mapping['documentRef'], read.documentRef) || !equal(mapping['documentVersionRef'], read.documentVersionRef) ||
+          mapping['parserVersion'] !== read.parserVersion || !equal(mapping['sourceCoverage'], read.sourceCoverage)) return false
+      expectedRefs.set(sha256DigestOf(mapping['evidenceRef']), mapping['evidenceRef'])
+      continue
+    }
+    const parse = await deps.documentParses.getParse(scope, span.parseId, ctx)
+    if (parse === undefined || !equal(parse.scopeRef, scope)) return false
+    if (!equal(mapping['sourceCoverage'], parse.coverage) || !equal(mapping['documentRef'], parse.originalRef) || !equal(mapping['documentVersionRef'], parse.documentVersionRef) || mapping['parserVersion'] !== parse.parserVersion) return false
     const read = await deps.documentSpans.readSpan({ documentRef: parse.originalRef, locator: span.locator, maxBytes: 128 * 1024 }, ctx)
     if (read.truncated === true || read.textDigest !== span.quoteDigest || digest(new TextEncoder().encode(read.text)) !== span.quoteDigest) return false
     expectedRefs.set(sha256DigestOf(mapping['evidenceRef']), mapping['evidenceRef'])

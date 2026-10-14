@@ -197,6 +197,19 @@ export class IndustryAssetPublicationService {
         { reasons: report.deploymentExecutable.blockers.map((blocker) => `${blocker.code}: ${blocker.message}`) },
       )
     }
+    // Hard server-side gate: a competency question that actually ran and did not match must never
+    // publish, whatever the caller demands for deployment executability. A question that could not
+    // run at all for a missing external resource stays `not_yet_executable` and is published as a
+    // declaration, so the absence of an authorized original is reported (never faked as a pass) and
+    // does not falsely block a semantically valid pack.
+    const competencyMismatches = report.competency?.results.filter((result) => result.status === 'failed') ?? []
+    if (competencyMismatches.length > 0) {
+      throw new IndustryAssetPublicationError(
+        'VALIDATION_BLOCKED',
+        `the draft for workspace ${workspaceId} failed a required competency question and was not published`,
+        { reasons: competencyMismatches.map((result) => `${result.questionId}: ${result.reason ?? result.status}`) },
+      )
+    }
     if (this.#deps.requireCompetencyQuestions === true && (report.competencyRequired !== true || report.competency === undefined && report.deploymentExecutable.passed)) {
       throw new IndustryAssetPublicationError('VALIDATION_STALE', 'a fresh required competency validation must precede this publication')
     }

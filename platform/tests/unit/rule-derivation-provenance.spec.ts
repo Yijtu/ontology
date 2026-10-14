@@ -462,8 +462,7 @@ describe('rule conclusion, premise and specification-span evidence chain (V03-02
     expect(instance.coverage?.policy).toEqual({ complete: true })
     expect(instance.policySpans).toHaveLength(1)
     expect(instance.policySpans?.[0]).toMatchObject({
-      locator: POLICY_LOCATOR,
-      quoteDigest: POLICY_TEXT_DIGEST,
+      span: { locator: POLICY_LOCATOR, quoteDigest: POLICY_TEXT_DIGEST },
       evidenceRef: policyEvidenceRef,
       documentRef: ORIGINAL_DOCUMENT,
       documentVersionRef: LOGICAL_DOCUMENT,
@@ -477,7 +476,8 @@ describe('rule conclusion, premise and specification-span evidence chain (V03-02
     expect(detailed.supportResolution.state).toBe('resolved')
     if (detailed.supportResolution.state !== 'resolved') throw new Error('expected resolved support')
     expect(detailed.supportResolution.policy).toEqual({ complete: true })
-    expect(detailed.supportResolution.policySpans?.[0]?.quoteDigest).toBe(POLICY_TEXT_DIGEST)
+    const resolvedSpan = detailed.supportResolution.policySpans?.[0]?.span
+    expect(resolvedSpan !== undefined && resolvedSpan.kind !== 'structured' ? resolvedSpan.quoteDigest : undefined).toBe(POLICY_TEXT_DIGEST)
     expect(detailed.edges.some((edge) => edge.origin === 'support' && edge.toEvidenceId === factEvidenceRef.id)).toBe(true)
   })
 
@@ -551,12 +551,7 @@ describe('provenance read surfaces fact and specification coverage separately', 
           complete: true,
           policy: { complete: false, reason: 'specification span not located' },
           policySpans: [{
-            parseId: PARSE_ID,
-            chunkId: POLICY_CHUNK_ID,
-            locator: POLICY_LOCATOR,
-            spanKind: 'verbatim',
-            precision: 'exact',
-            quoteDigest: POLICY_TEXT_DIGEST,
+            span: { parseId: PARSE_ID, chunkId: POLICY_CHUNK_ID, locator: POLICY_LOCATOR, spanKind: 'verbatim', precision: 'exact', quoteDigest: POLICY_TEXT_DIGEST },
             documentRef: ORIGINAL_DOCUMENT,
             documentVersionRef: LOGICAL_DOCUMENT,
             parserVersion: '1.0.0',
@@ -573,7 +568,8 @@ describe('provenance read surfaces fact and specification coverage separately', 
     const view = await service.getEvidence(evidenceId, {}, CTX)
     expect(view.factSupport).toEqual({ complete: true })
     expect(view.specification?.coverage).toEqual({ complete: false, reason: 'specification span not located' })
-    expect(view.specification?.spans[0]?.quoteDigest).toBe(POLICY_TEXT_DIGEST)
+    const viewedSpan = view.specification?.spans[0]?.span
+    expect(viewedSpan !== undefined && viewedSpan.kind !== 'structured' ? viewedSpan.quoteDigest : undefined).toBe(POLICY_TEXT_DIGEST)
     expect(view.specification?.spans[0]?.evidenceRef).toEqual(policyEvidenceRef)
   })
 })

@@ -1,4 +1,4 @@
-import { assetCandidateCommitPin, AssetCandidateStoreError, isResourceRef, isSha256Digest, isToolContext, isUuid, isVersionRef } from '@ontology/contracts'
+import { assetCandidateCommitPin, AssetCandidateStoreError, isResourceRef, isSha256Digest, isToolContext, isUuid, isVersionRef, sourceTrustTierGroundsPublication } from '@ontology/contracts'
 import type {
   AssetCandidateBatch,
   AssetCandidateBatchCounts,
@@ -26,6 +26,8 @@ import type {
   Uuid,
   VersionRef,
   SourceGroundingPort,
+  SourceGroundingRowSelector,
+  SourceLocator,
   WorkspaceSourceGroundingView,
   AssetCandidateInsertGuard,
   ApprovedCompetencyQuestionReader,
@@ -90,6 +92,8 @@ export interface DefinitionGenerationInput {
   readonly documentSetRef?: ResourceRef
   /** The bounded immutable source set the suggestions may cite; may be empty. */
   readonly sourceRefs: readonly ResourceRef[]
+  /** Exact table rows to include beyond the sampled page (e.g. a row the brief names). */
+  readonly rowSelectors?: readonly SourceGroundingRowSelector[]
   /** The candidate kinds the caller allows; the model may not widen this. */
   readonly kinds: readonly DefinitionCandidateKind[]
   readonly generationPolicyRef: VersionRef
@@ -106,6 +110,8 @@ export interface DefinitionSourceConfirmationInput {
   readonly expectedRevision: RevisionString | undefined
   readonly sourceRef: ResourceRef
   readonly fragmentIndex: number
+  /** When the source is a table, point at one exact row/cell beyond the sampled page. */
+  readonly rowSelector?: { readonly sourceRowKey?: string; readonly locator?: SourceLocator }
   readonly reason: string
   readonly idempotencyKey: string
 }
@@ -529,7 +535,8 @@ export class DefinitionCandidateGenerationService {
     requireIdempotencyKey(input.idempotencyKey)
     if (!isUuid(input.workspaceId) || !isUuid(input.candidateId) || !isSha256Digest(input.contentDigest) || !isResourceRef(input.sourceRef)
       || !Number.isSafeInteger(input.fragmentIndex) || input.fragmentIndex < 0 || input.fragmentIndex > 63
-      || typeof input.reason !== 'string' || input.reason.trim().length === 0 || input.reason.length > 2000) {
+      || typeof input.reason !== 'string' || input.reason.trim().length === 0 || input.reason.length > 2000
+      || (input.rowSelector !== undefined && [input.rowSelector.sourceRowKey, input.rowSelector.locator].filter((value) => value !== undefined).length !== 1)) {
       throw new DefinitionCandidateError('INVALID_ARGUMENT', 'source confirmation requires exact candidate/source pins, bounded fragment index and a reason')
     }
     throwIfAborted(signal)
@@ -555,11 +562,13 @@ export class DefinitionCandidateGenerationService {
     if (!original.pendingConfirmation || original.state === 'failed' || original.state === 'rejected') throw new DefinitionCandidateError('VALIDATION_BLOCKED', 'only an unresolved source suggestion can be confirmed')
     if (this.#sourceGrounding === undefined) throw new DefinitionCandidateError('SCHEMA_NOT_FOUND', 'source grounding is not configured')
     const read = await this.#sourceGrounding.read({ workspaceId: input.workspaceId, sourceRefs: [input.sourceRef],
-      inputDraftRef: { workspaceId: draft.workspaceId, revision: draft.revision, digest: draft.digest } }, ctx, new SourceGroundingBudget(signal))
+      inputDraftRef: { workspaceId: draft.workspaceId, revision: draft.revision, digest: draft.digest },
+      ...(input.rowSelector === undefined ? {} : { rowSelectors: [{ sourceRef: input.sourceRef, ...input.rowSelector }] }) }, ctx, new SourceGroundingBudget(signal))
     throwIfAborted(signal)
     if (!sameResourcePin(read.documentSetRef, draft.documentSetRef)) throw new DefinitionCandidateError('VERSION_CONFLICT', 'source corpus moved during confirmation')
     const selected = selectedGrounding(groundingFragments(read.sources), 0, input.fragmentIndex)
     if (selected === undefined || !sameResourcePin(selected.sourceRef, input.sourceRef)) throw new DefinitionCandidateError('VALIDATION_BLOCKED', 'the selected approved source fragment is unavailable')
+    if (!sourceTrustTierGroundsPublication(selected.trustTier)) throw new DefinitionCandidateError('VALIDATION_BLOCKED', `the selected ${selected.trustTier} source may not ground a publishable candidate until a human promotes it`)
     const batchId = this.#newId()
     const recordedAt = this.#now()
     const inputDraftRef = { workspaceId: draft.workspaceId, revision: draft.revision, digest: draft.digest,
@@ -567,7 +576,7 @@ export class DefinitionCandidateGenerationService {
         mountedRef: workspace.latestPublishedPackRef ?? draft.basePackRef, documentSetRef: draft.documentSetRef })) }
     const sourceRefs = [selected.sourceRef]
     const sourceSpans = [selected.sourceSpan]
-    const issues = original.issues.filter((issue) => issue.code !== 'MISSING_PROVENANCE')
+    const issues = original.issues.filter((issue) => issue.code !== 'MISSING_PROVENANCE' && issue.code !== 'SOURCE_TRUST_BLOCKED')
     const contentDigest = sha256DigestOf(canonicalJson({ operation: 'source_confirmation', replacesCandidateId: original.candidateId,
       payload: original.payload, inputDraftRef, sourceRefs, sourceSpans, issues, reason: input.reason }))
     const idempotencyKey = sha256DigestOf(canonicalJson({ requestDigest, contentDigest }))
@@ -801,10 +810,12 @@ export class DefinitionCandidateGenerationService {
       const sourceRefs = selected === undefined ? [] : [selected.sourceRef]
       const sourceSpans = selected === undefined ? [] : [selected.sourceSpan]
       const provenanceMissing = selected === undefined
+      const trustBlocked = selected !== undefined && !sourceTrustTierGroundsPublication(selected.trustTier)
       if (provenanceMissing) issues.push({ code: 'MISSING_PROVENANCE', message: 'no valid read-back source fragment was selected; human confirmation is required', path: 'sourceSpans' })
+      if (trustBlocked) issues.push({ code: 'SOURCE_TRUST_BLOCKED', message: `the selected ${selected.trustTier} source may not ground a publishable candidate until a human promotes it`, path: 'sourceSpans' })
 
       const hard = issues.some((issue) => HARD_ISSUES.includes(issue.code))
-      const state: AssetCandidateState = hard ? 'failed' : provenanceMissing ? 'pending_confirmation' : 'produced'
+      const state: AssetCandidateState = hard ? 'failed' : provenanceMissing || trustBlocked ? 'pending_confirmation' : 'produced'
       const payload: DefinitionCandidatePayload = { ...payloadOf(draft, displayName), conflicts }
       const contentDigest = definitionGeneratedContentDigest({
         workspaceId: args.input.workspaceId,
@@ -832,7 +843,7 @@ export class DefinitionCandidateGenerationService {
         sourceSpans,
         state,
         issues,
-        pendingConfirmation: provenanceMissing,
+        pendingConfirmation: provenanceMissing || trustBlocked,
         generationCallRef: {
           id: args.batchId,
           version: '1.0.0',
@@ -888,7 +899,8 @@ export class DefinitionCandidateGenerationService {
     if (execution.input.sourceRefs.length > 0) {
       if (this.#sourceGrounding === undefined) throw new DefinitionCandidateError('SCHEMA_NOT_FOUND', 'source grounding is not configured')
       const read = await this.#sourceGrounding.read({ workspaceId: execution.input.workspaceId,
-        sourceRefs: execution.input.sourceRefs, inputDraftRef: { workspaceId: draft.workspaceId, revision: draft.revision, digest: draft.digest } }, execution.ctx, budget)
+        sourceRefs: execution.input.sourceRefs, inputDraftRef: { workspaceId: draft.workspaceId, revision: draft.revision, digest: draft.digest },
+        ...(execution.input.rowSelectors === undefined ? {} : { rowSelectors: execution.input.rowSelectors }) }, execution.ctx, budget)
       throwIfAborted(execution.signal)
       if (!sameResourcePin(read.documentSetRef, documentSetRef)) throw new DefinitionCandidateError('VERSION_CONFLICT', 'the approved source corpus moved before generation')
       if (read.sources.length !== execution.input.sourceRefs.length || read.sources.some((source, index) => {

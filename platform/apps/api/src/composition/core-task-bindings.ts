@@ -1,8 +1,10 @@
 import { exampleComputeArtifact } from './example-compute-artifact'
 import type {
+  OperationRef,
   PublishedTaskBinding,
   PublishedTaskBindingBody,
   ScopeRef,
+  Sha256Digest,
   TaskBindingStore,
   TaskKind,
   ToolContext,
@@ -34,6 +36,23 @@ import { CORE_TYPED_RESULT_SCHEMA_REF } from './core-local-composition'
 const BINDING_VERSION = '1.0.0'
 const CONTRACT_SCHEMA_BASE = 'https://ontology.local/schema'
 const CORE_TASK_ID = (kind: TaskKind): string => `core.task.${kind}`
+
+/**
+ * The registered compute operation the mounted compute task binding pins. The generic Core no
+ * longer hardcodes the example operation here: a deployment passes its own primary operation,
+ * and the sample deployment passes exactly the neutral example one.
+ */
+export interface CoreComputePrimary {
+  readonly operationRef: OperationRef
+  readonly registeredOperationDigest: Sha256Digest
+}
+
+function defaultComputePrimary(): CoreComputePrimary {
+  return {
+    operationRef: EXAMPLE_OPERATION_REF,
+    registeredOperationDigest: registeredOperationDigest(exampleRegisteredOperation(exampleComputeArtifact)),
+  }
+}
 
 function parameterSchemaOf(kind: TaskKind): Readonly<Record<string, unknown>> {
   switch (kind) {
@@ -144,9 +163,10 @@ function requiredReadinessOf(kind: TaskKind): readonly ('published_semantics' | 
 function bodyFor(
   scenario: Pick<CoreExampleScenario, 'definitionRef'>,
   kind: TaskKind,
+  primary: CoreComputePrimary = defaultComputePrimary(),
 ): PublishedTaskBindingBody {
   const parameterSchema = parameterSchemaOf(kind)
-  const operationRef = kind === 'compute' ? EXAMPLE_OPERATION_REF : undefined
+  const operationRef = kind === 'compute' ? primary.operationRef : undefined
   return {
     schemaVersion: 'published-task-binding@1',
     taskBindingIdentity: { id: CORE_TASK_ID(kind), version: BINDING_VERSION },
@@ -160,7 +180,7 @@ function bodyFor(
     ...(operationRef === undefined ? {} : { operationRef }),
     ...(operationRef === undefined
       ? {}
-      : { registeredOperationDigest: registeredOperationDigest(exampleRegisteredOperation(exampleComputeArtifact)) }),
+      : { registeredOperationDigest: primary.registeredOperationDigest }),
   }
 }
 
@@ -199,14 +219,14 @@ export const CORE_MOUNTED_TASK_KINDS: readonly TaskKind[] = [
   'compute',
 ]
 
-export function coreScenarioTaskBindings(scenario: CoreExampleScenario): readonly PublishedTaskBinding[] {
-  return CORE_MOUNTED_TASK_KINDS.map((kind) => bindingOf(bodyFor(scenario, kind)))
+export function coreScenarioTaskBindings(scenario: CoreExampleScenario, primary: CoreComputePrimary = defaultComputePrimary()): readonly PublishedTaskBinding[] {
+  return CORE_MOUNTED_TASK_KINDS.map((kind) => bindingOf(bodyFor(scenario, kind, primary)))
 }
 
 /** Normal stored definitions use the same finite host handlers and canonical binding body. */
-export async function mountCoreDefinitionTaskBindings(store: TaskBindingStore, definitionRef: VersionRef, scopeRef: ScopeRef, ctx: ToolContext): Promise<void> {
+export async function mountCoreDefinitionTaskBindings(store: TaskBindingStore, definitionRef: VersionRef, scopeRef: ScopeRef, ctx: ToolContext, primary: CoreComputePrimary = defaultComputePrimary()): Promise<void> {
   for (const kind of CORE_MOUNTED_TASK_KINDS) {
-    const binding = bindingOf(bodyFor({ definitionRef }, kind))
+    const binding = bindingOf(bodyFor({ definitionRef }, kind, primary))
     const current = await store.getBinding(scopeRef, binding.taskBindingRef, ctx)
     if (current === undefined) await store.putBinding(scopeRef, binding, ctx)
     else if (canonicalJson(current) !== canonicalJson(binding)) throw new Error('the stored definition task binding differs from the actual finite host contract')
@@ -214,8 +234,8 @@ export async function mountCoreDefinitionTaskBindings(store: TaskBindingStore, d
 }
 
 /** The exact binding ref the host mounts for one (scenario, kind); deterministic and reusable. */
-export function coreTaskBindingRef(scenario: CoreExampleScenario, kind: TaskKind): VersionRef {
-  return bindingOf(bodyFor(scenario, kind)).taskBindingRef
+export function coreTaskBindingRef(scenario: CoreExampleScenario, kind: TaskKind, primary: CoreComputePrimary = defaultComputePrimary()): VersionRef {
+  return bindingOf(bodyFor(scenario, kind, primary)).taskBindingRef
 }
 
 /**
@@ -227,9 +247,10 @@ export async function mountCoreTaskBindings(
   scenarios: readonly CoreExampleScenario[],
   scopeRef: ScopeRef,
   ctx: ToolContext,
+  primary: CoreComputePrimary = defaultComputePrimary(),
 ): Promise<void> {
   for (const scenario of scenarios) {
-    for (const binding of coreScenarioTaskBindings(scenario)) {
+    for (const binding of coreScenarioTaskBindings(scenario, primary)) {
       const existing = await store.getBinding(scopeRef, binding.taskBindingRef, ctx)
       if (existing !== undefined) continue
       await store.putBinding(scopeRef, binding, ctx)

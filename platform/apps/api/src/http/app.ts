@@ -26,6 +26,8 @@ import { registerIndustryWorkspaceRoutes } from './industry-workspaces'
 import type { IndustryWorkspaceRouteDependencies } from './industry-workspaces'
 import { registerAssetCandidateRoutes } from './asset-candidates'
 import type { AssetCandidateRouteDependencies } from './asset-candidates'
+import { registerCandidateSourceRoutes } from './candidate-sources'
+import type { CandidateSourceRouteDependencies } from './candidate-sources'
 import { registerDefinitionEditingRoutes } from './definition-editing'
 import type { DefinitionEditingRouteDependencies } from './definition-editing'
 import { registerRuleActionCandidateRoutes } from './rule-action-candidates'
@@ -81,6 +83,8 @@ export interface ApiServerOptions {
   readonly industryWorkspaces?: Omit<IndustryWorkspaceRouteDependencies, 'authenticate'>
   /** Register the definition-candidate generation surface (`/industry-workspaces/:id/generations`). */
   readonly assetCandidates?: Omit<AssetCandidateRouteDependencies, 'authenticate'>
+  /** Register the candidate-source research and review surface (`/industry-workspaces/:id/sources`, `/research`). */
+  readonly candidateSources?: Omit<CandidateSourceRouteDependencies, 'authenticate'>
   /** Register the definition editing/validation surface (`/industry-workspaces/:id/candidates/:id/edits`). */
   readonly definitionEditing?: Omit<DefinitionEditingRouteDependencies, 'authenticate'>
   /** Register the rule/action candidate surface (`/industry-workspaces/:id/rule-action-candidates`). */
@@ -148,6 +152,12 @@ export function createApiServer(options: ApiServerOptions): FastifyInstance {
   if (options.assetCandidates !== undefined) {
     registerAssetCandidateRoutes(app, {
       ...options.assetCandidates,
+      authenticate: options.authenticate,
+    })
+  }
+  if (options.candidateSources !== undefined) {
+    registerCandidateSourceRoutes(app, {
+      ...options.candidateSources,
       authenticate: options.authenticate,
     })
   }

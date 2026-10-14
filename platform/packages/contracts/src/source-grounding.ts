@@ -2,7 +2,7 @@ import type { DefinitionCandidateInputDraftRef } from './asset-candidates'
 import type { DocumentChunkRecord } from './document-parse'
 import type { CandidateSourceSpan } from './extraction'
 import type { ResourceRef, RevisionString, ScopeRef, Semver, Uuid } from './generated/contracts'
-import type { StructuredCell, StructuredColumn, StructuredParseOptions } from './structured-parse'
+import type { StructuredCell, StructuredColumn, StructuredParseOptions, SourceLocator } from './structured-parse'
 import type { ToolContext } from './trusted'
 import { isRecord, isResourceRef, isUuid } from './asset-workspace'
 
@@ -14,12 +14,36 @@ export interface GroundingDocumentSet {
   readonly sources: readonly GroundingSourceApproval[]
 }
 
+/**
+ * How much trust a source carries for authoring. `customer_authoritative` and `public_standard`
+ * may ground a publishable candidate; `agent_researched` is an agent proposal that defaults to
+ * pending confirmation; `synthetic` is sandbox-only and may never ground a real publication.
+ */
+export type SourceTrustTier = 'customer_authoritative' | 'public_standard' | 'agent_researched' | 'synthetic'
+
+/** The effective tier of an approved source; an omitted tier is a human-approved customer source. */
+export function sourceTrustTierOf(source: Pick<GroundingSourceApproval, 'trustTier'>): SourceTrustTier {
+  return source.trustTier ?? 'customer_authoritative'
+}
+
+/**
+ * Whether a source tier may ground a publishable candidate. Only a human-owned customer source or a
+ * reviewed public standard qualifies; an agent-researched proposal defaults to pending confirmation
+ * and a synthetic source is sandbox-only. The publish gate reads this so provenance is enforced at
+ * the artifact boundary, not merely labelled.
+ */
+export function sourceTrustTierGroundsPublication(tier: SourceTrustTier): boolean {
+  return tier === 'customer_authoritative' || tier === 'public_standard'
+}
+
 export interface GroundingSourceApproval {
   readonly sourceRef: ResourceRef
   readonly state: 'approved' | 'retracted'
   readonly kind: 'document' | 'table'
   readonly parserVersion: Semver
   readonly parseId: Uuid
+  /** Provenance tier of this source. Absent means a human-approved customer source. */
+  readonly trustTier?: SourceTrustTier
   /** The exact selection approved at ingestion; parser caps cannot be overridden. */
   readonly tableOptions?: Pick<StructuredParseOptions,
     'headerRow' | 'dataStartRow' | 'delimiter' | 'quote' | 'sheetId' | 'sheetName'>
@@ -62,6 +86,8 @@ export type GroundedSourceContent = GroundedText | GroundedTable
 export interface GroundedSource {
   readonly sourceRef: ResourceRef
   readonly trust: 'untrusted_source_data'
+  /** The effective provenance tier of this source (see {@link sourceTrustTierOf}). */
+  readonly trustTier: SourceTrustTier
   readonly status: 'complete' | 'partial' | 'failed'
   readonly reasons: readonly SourceGroundingReason[]
   readonly contents: readonly GroundedSourceContent[]
@@ -92,6 +118,8 @@ export interface GroundedSourceFragment {
   readonly sourceIndex: number
   readonly fragmentIndex: number
   readonly sourceRef: ResourceRef
+  /** The effective provenance tier of the fragment's source; a blocking tier may not ground a publishable candidate. */
+  readonly trustTier: SourceTrustTier
   readonly sourceSpan: CandidateSourceSpan
   readonly content: Omit<GroundedText, 'sourceSpan'> | {
     readonly kind: 'table'; readonly format: 'csv' | 'xlsx'; readonly columns: readonly StructuredColumn[];
@@ -113,8 +141,27 @@ export interface WorkspaceSourceGroundingView extends SourceGroundingReadResult 
 }
 
 export interface SourceGroundingPort {
-  read(request: { readonly workspaceId: Uuid; readonly sourceRefs: readonly ResourceRef[]; readonly inputDraftRef?: DefinitionCandidateInputDraftRef },
-    ctx: ToolContext, budget: SourceGroundingBudgetPort): Promise<SourceGroundingReadResult>
+  read(request: SourceGroundingReadRequest, ctx: ToolContext, budget: SourceGroundingBudgetPort): Promise<SourceGroundingReadResult>
+}
+
+/**
+ * One exact row/cell requested from an approved table, by its durable record id, its source row key,
+ * or its locator. A targeted read returns only the named rows and round-trip verifies each, so a
+ * costing table row far beyond the sampling cap can still be cited without widening the sample.
+ */
+export interface SourceGroundingRowSelector {
+  readonly sourceRef: ResourceRef
+  readonly recordId?: Uuid
+  readonly sourceRowKey?: string
+  readonly locator?: SourceLocator
+}
+
+export interface SourceGroundingReadRequest {
+  readonly workspaceId: Uuid
+  readonly sourceRefs: readonly ResourceRef[]
+  readonly inputDraftRef?: DefinitionCandidateInputDraftRef
+  /** Exact rows to read instead of sampling; each is read and verified individually. */
+  readonly rowSelectors?: readonly SourceGroundingRowSelector[]
 }
 
 export interface GroundingDocumentSetReaderPort {
@@ -130,6 +177,10 @@ export interface SourceGroundingPage {
 export interface SourceGroundingReaderPort {
   readPage(scope: ScopeRef, source: GroundingSourceApproval,
     page: { readonly limit: number; readonly cursor?: string }, ctx: ToolContext,
+    budget: SourceGroundingBudgetPort): Promise<SourceGroundingPage>
+  /** Read only the exact requested rows/cells of one approved table, each round-trip verified. */
+  readRows(scope: ScopeRef, source: GroundingSourceApproval,
+    request: { readonly limit: number; readonly selectors: readonly Omit<SourceGroundingRowSelector, 'sourceRef'>[] }, ctx: ToolContext,
     budget: SourceGroundingBudgetPort): Promise<SourceGroundingPage>
 }
 export interface SourceGroundingChunkStore {
@@ -151,7 +202,9 @@ export function assertGroundingDocumentSet(value: unknown): asserts value is Gro
     if (!isRecord(source) || !isResourceRef(source.sourceRef) || source.sourceRef.kind !== 'document' || !isUuid(source.parseId)
       || typeof source.parserVersion !== 'string' || !/^\d+\.\d+\.\d+$/.test(source.parserVersion)
       || !['approved', 'retracted'].includes(String(source.state))
-      || !['document', 'table'].includes(String(source.kind))) {
+      || !['document', 'table'].includes(String(source.kind))
+      || (source.trustTier !== undefined
+        && !['customer_authoritative', 'public_standard', 'agent_researched', 'synthetic'].includes(String(source.trustTier)))) {
       throw new SourceGroundingError('INVALID_REQUEST', 'invalid approved source')
     }
     if (refs.has(source.sourceRef.id)) throw new SourceGroundingError('INVALID_REQUEST', 'duplicate source id')
