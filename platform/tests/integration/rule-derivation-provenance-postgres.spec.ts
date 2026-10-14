@@ -219,6 +219,18 @@ function producerWithStructured(): MaterializedRuleDerivationEvidenceProducer {
   })
 }
 
+function producerWithBoth(): MaterializedRuleDerivationEvidenceProducer {
+  return new MaterializedRuleDerivationEvidenceProducer({
+    materialization,
+    evidence,
+    artifacts,
+    documentParses: parseStore,
+    documentSpans: spanReader,
+    structuredClauses: new StructuredClauseSourceReader({ artifacts: blobStore, ingestion: structuredStore }),
+    componentRef: COMPONENT_REF,
+  })
+}
+
 function publishedStructuredRule(): PublishedRuleVersion {
   return { ...publishedRule(), expression: { op: 'compare', attributeId: PREDICATE, operator: 'eq', value: true, spans: [structuredSpan] } }
 }
@@ -531,5 +543,35 @@ describe('rule specification-span evidence chain against real PostgreSQL (V03-02
     if (tamperedPayloadRef === undefined) throw new Error('tampered root evidence has no payload')
     const tamperedResolved = await reader().readCandidates(scope.scopeRef, { ruleRef: tamperedRef, validAt: tamperedArtifact.validAt ?? VALID_AT, asOfRecordedSeq: '6', evidenceRef: tamperedRoot.evidenceRef, payloadRef: tamperedPayloadRef }, ctx)
     expect(tamperedResolved.candidates[0]?.coverage?.policy?.complete).toBe(false)
+  }, 120_000)
+
+  it('resolves a rule grounded on both a text chunk and a structured row', async () => {
+    if (structuredSpan.kind !== 'structured') throw new Error('structured fixture span was not built')
+    const recordA = observationEvidence(randomUUID())
+    await evidence.record(scope.scopeRef, recordA.envelope, ctx)
+    const projection = projectPublishedAttributeFacts([flagStatement(ALTERNATIVE_A, recordA.ref)], { schemaRef: definitionRef })
+    const facts: readonly RuleFact[] = projection.facts
+    const mixedRule: PublishedRuleVersion = { ...publishedRule(), expression: { op: 'compare', attributeId: PREDICATE, operator: 'eq', value: true, spans: [POLICY_SPAN, structuredSpan] } }
+    const compiled = compilePublishedRuleInstances([mixedRule], facts, { scopeRef: scope.scopeRef, definitionRef, subjects: [{ subjectEntityId: SUBJECT_ID, objectId: 'transport_facility' }] })
+    const supportRule = compiled.instances[0]?.supportRule
+    if (supportRule === undefined) throw new Error('compiler produced no mixed support rule')
+    const source = new FixturePublishedSource({ facts, rules: [supportRule], entityBindings: [], definitionRef, complete: true, historicalAsOfSupported: true })
+    const materializer = new IncrementalMaterializer({ publishedSource: source, materialization })
+    const ruleRef: VersionRef = { id: mixedRule.ruleVersionId, version: '1.0.0', digest: sha256DigestOf(mixedRule) }
+    await materializer.applyChange({ changeId: randomUUID(), scopeRef: scope.scopeRef, recordedSeq: '7', recordedAt: VALIDITY.validFrom, kind: 'assertion_published', logicalAssertionId: ALTERNATIVE_A, predicate: PREDICATE, validity: VALIDITY }, ctx)
+    const artifact = await artifactAt(ruleRef, '7')
+    if (artifact === undefined) throw new Error('materializer did not persist the mixed artifact')
+    expect(artifact.sourceSpans).toHaveLength(2)
+
+    const root = await producerWithBoth().record({ scopeRef: scope.scopeRef, ruleRef, definitionRef, objectId: artifact.objectId, subjectEntityId: artifact.subjectEntityId, validAt: artifact.validAt ?? VALID_AT, asOfRecordedSeq: '7', observedAt: VALID_AT, sourceSnapshots: [], dataMode: 'observed' }, ctx)
+    const payloadRef = root.envelope.payloadRef
+    if (payloadRef === undefined) throw new Error('mixed root evidence has no support payload')
+    const resolved = await reader().readCandidates(scope.scopeRef, { ruleRef, validAt: artifact.validAt ?? VALID_AT, asOfRecordedSeq: '7', evidenceRef: root.evidenceRef, payloadRef }, ctx)
+    expect(resolved.complete).toBe(true)
+    const instance = resolved.candidates[0]
+    if (instance === undefined) throw new Error('reader resolved no mixed instance')
+    expect(instance.coverage?.policy).toEqual({ complete: true })
+    expect(instance.policySpans).toHaveLength(2)
+    expect(instance.policySpans?.map((row) => row.span.kind === 'structured' ? 'structured' : 'text').sort()).toEqual(['structured', 'text'])
   }, 120_000)
 })
