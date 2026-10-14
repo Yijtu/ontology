@@ -2,7 +2,7 @@ import type { DefinitionCandidateInputDraftRef } from './asset-candidates'
 import type { DocumentChunkRecord } from './document-parse'
 import type { CandidateSourceSpan } from './extraction'
 import type { ResourceRef, RevisionString, ScopeRef, Semver, Uuid } from './generated/contracts'
-import type { StructuredCell, StructuredColumn, StructuredParseOptions } from './structured-parse'
+import type { StructuredCell, StructuredColumn, StructuredParseOptions, SourceLocator } from './structured-parse'
 import type { ToolContext } from './trusted'
 import { isRecord, isResourceRef, isUuid } from './asset-workspace'
 
@@ -141,8 +141,27 @@ export interface WorkspaceSourceGroundingView extends SourceGroundingReadResult 
 }
 
 export interface SourceGroundingPort {
-  read(request: { readonly workspaceId: Uuid; readonly sourceRefs: readonly ResourceRef[]; readonly inputDraftRef?: DefinitionCandidateInputDraftRef },
-    ctx: ToolContext, budget: SourceGroundingBudgetPort): Promise<SourceGroundingReadResult>
+  read(request: SourceGroundingReadRequest, ctx: ToolContext, budget: SourceGroundingBudgetPort): Promise<SourceGroundingReadResult>
+}
+
+/**
+ * One exact row/cell requested from an approved table, by its durable record id, its source row key,
+ * or its locator. A targeted read returns only the named rows and round-trip verifies each, so a
+ * costing table row far beyond the sampling cap can still be cited without widening the sample.
+ */
+export interface SourceGroundingRowSelector {
+  readonly sourceRef: ResourceRef
+  readonly recordId?: Uuid
+  readonly sourceRowKey?: string
+  readonly locator?: SourceLocator
+}
+
+export interface SourceGroundingReadRequest {
+  readonly workspaceId: Uuid
+  readonly sourceRefs: readonly ResourceRef[]
+  readonly inputDraftRef?: DefinitionCandidateInputDraftRef
+  /** Exact rows to read instead of sampling; each is read and verified individually. */
+  readonly rowSelectors?: readonly SourceGroundingRowSelector[]
 }
 
 export interface GroundingDocumentSetReaderPort {
@@ -158,6 +177,10 @@ export interface SourceGroundingPage {
 export interface SourceGroundingReaderPort {
   readPage(scope: ScopeRef, source: GroundingSourceApproval,
     page: { readonly limit: number; readonly cursor?: string }, ctx: ToolContext,
+    budget: SourceGroundingBudgetPort): Promise<SourceGroundingPage>
+  /** Read only the exact requested rows/cells of one approved table, each round-trip verified. */
+  readRows(scope: ScopeRef, source: GroundingSourceApproval,
+    request: { readonly limit: number; readonly selectors: readonly Omit<SourceGroundingRowSelector, 'sourceRef'>[] }, ctx: ToolContext,
     budget: SourceGroundingBudgetPort): Promise<SourceGroundingPage>
 }
 export interface SourceGroundingChunkStore {

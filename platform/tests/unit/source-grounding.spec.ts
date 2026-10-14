@@ -93,6 +93,27 @@ describe('approved original source grounding', () => {
     expect(result.usage.fragments).toBe(2)
   })
 
+  it('reads an exact table row beyond the bounded sample by its record, round-trip verified', async () => {
+    const h = harness()
+    const { sourceRef, parse } = await h.table(new TextEncoder().encode('name,cost\nA,0.10\nB,0.20\nC,0.30\nD,0.40\n'))
+    const sampled = await h.read([sourceRef])
+    expect(sampled.sources[0]?.reasons).toEqual(['SAMPLE_LIMIT'])
+    const records = await h.tables.listRecords(scope, parse.parseId, { limit: 100 }, ctx)
+    const target = records.records[2]
+    if (target === undefined) throw new Error('missing target row beyond the sample')
+    const result = await h.service.read({ workspaceId: h.workspace.workspaceId, sourceRefs: [sourceRef], rowSelectors: [{ sourceRef, recordId: target.recordId }] }, ctx,
+      new SourceGroundingBudget(new AbortController().signal))
+    expect(result.sources[0]?.reasons).toEqual([])
+    const table = result.sources[0]?.contents[0]
+    if (table?.kind !== 'table') throw new Error('expected table')
+    expect(table.rows).toHaveLength(1)
+    expect(table.rows[0]?.sourceSpan).toMatchObject({ kind: 'structured', recordId: target.recordId, rowDigest: target.rowDigest })
+    expect(table.rows[0]?.cells.map((cell) => cell.raw)).toContain('0.30')
+    const missing = await h.service.read({ workspaceId: h.workspace.workspaceId, sourceRefs: [sourceRef], rowSelectors: [{ sourceRef, sourceRowKey: 'no-such-row' }] }, ctx,
+      new SourceGroundingBudget(new AbortController().signal))
+    expect(missing.sources[0]?.reasons).toContain('EMPTY_SOURCE')
+  })
+
   it('reads real XLSX cells and preserves header-only tables explicitly', async () => {
     const h = harness()
     const bytes = buildXlsx({ sharedStrings: ['name', 'cost', 'A'], sheetXml: worksheetOf([
@@ -162,11 +183,14 @@ describe('approved original source grounding', () => {
     expect((await h.read([sourceRef], {}, shared)).coverage).toBe('complete')
     expect((await h.read([sourceRef], {}, shared)).sources[0]?.reasons).toEqual(['FRAGMENT_LIMIT'])
     const controller = new AbortController()
-    const delayed: SourceGroundingReaderPort = { readPage: async (...args) => {
-      const page = await h.reader.readPage(...args)
-      controller.abort()
-      return page
-    } }
+    const delayed: SourceGroundingReaderPort = {
+      readPage: async (...args) => {
+        const page = await h.reader.readPage(...args)
+        controller.abort()
+        return page
+      },
+      readRows: (...args) => h.reader.readRows(...args),
+    }
     const service = createSourceGroundingService({ workspaces: h.workspaces, documentSets: h.documentSets, reader: delayed })
     const cancelled = await service.read({ workspaceId: h.workspace.workspaceId, sourceRefs: [sourceRef] }, ctx,
       new SourceGroundingBudget(controller.signal))
@@ -211,7 +235,10 @@ describe('approved original source grounding', () => {
     const h = harness()
     const { sourceRef, parse } = await h.text()
     const service = createSourceGroundingService({ workspaces: h.workspaces, documentSets: h.documentSets,
-      reader: { readPage: async (...args) => { const page = await h.reader.readPage(...args); h.workspace.headRevision = '2'; return page } } })
+      reader: {
+        readPage: async (...args) => { const page = await h.reader.readPage(...args); h.workspace.headRevision = '2'; return page },
+        readRows: (...args) => h.reader.readRows(...args),
+      } })
     const result = await service.read({ workspaceId: h.workspace.workspaceId, sourceRefs: [sourceRef] }, ctx,
       new SourceGroundingBudget(new AbortController().signal))
     expect(result.sources[0]).toMatchObject({ reasons: ['DOCUMENT_SET_CHANGED'], contents: [] })
