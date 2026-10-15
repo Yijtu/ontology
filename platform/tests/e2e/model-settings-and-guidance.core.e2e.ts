@@ -94,6 +94,7 @@ it('configures and probes a model through the normal App and activates the saved
   try {
     await page.goto(web.origin)
     await page.getByTestId('open-model-settings').click()
+    await page.getByTestId('ai-tab-legacy').click()
     await page.getByTestId('model-settings-form').waitFor()
     await page.getByLabel('启用生成模型', { exact: true }).check()
     await page.getByLabel('模型服务地址', { exact: true }).fill(probeUrl)
@@ -163,7 +164,7 @@ it('keeps the configuration explanation visible for readonly access without disc
   const readonlyWeb = await startWebHost(await readonly.listen({ host: '127.0.0.1', port: 0 }), { bindDefaultProfile: false })
   const page = await browser.newPage()
   try {
-    await page.goto(`${readonlyWeb.origin}/?view=models`)
+    await page.goto(`${readonlyWeb.origin}/?view=models&aiTab=legacy`)
     await page.getByText('暂时无法读取配置', { exact: true }).waitFor()
     expect(await page.getByTestId('function-guide').isVisible()).toBe(true)
     expect(await page.getByTestId('model-settings-save').count()).toBe(0)

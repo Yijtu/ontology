@@ -27,7 +27,7 @@ import { useViewport } from './useViewport'
 import { Workbench } from './Workbench'
 import { Button, Drawer, Field, StateFeedback, StatusBadge } from './ui'
 import { ScenarioErrorBoundary } from './ScenarioErrorBoundary'
-import { ModelSettingsPanel } from './ModelSettingsPanel'
+import { AiSettingsPanel } from './AiSettingsPanel'
 import { FunctionGuide } from './FunctionGuide'
 
 /**
@@ -575,7 +575,8 @@ export function App({
           <ScenarioErrorBoundary resetKey={`${view}:${scopeKey}`} renderFallback={(retry) => <StateFeedback tone="error" title="工作内容暂不可用" description="本页未能正常显示。当前上下文仍保留，可以重试或切换到其他工作页面。" action={<Button onClick={retry}>重试显示</Button>} />}>
           <div key={contentKey}>
       <FunctionGuide view={view} onNavigate={navigate} onConfigureModel={() => navigate('models')} />
-      {view === 'models' ? <ModelSettingsPanel client={client} readOnly={readOnly} onDirtyChange={setDirty} /> : null}
+      {view === 'models' ? <AiSettingsPanel client={client} readOnly={readOnly} onDirtyChange={setDirty}
+        {...(workspaceId === undefined ? {} : { workspaceId })} {...(projectId === undefined ? {} : { projectId })} /> : null}
       {view === 'start' ? (
         <GuideHome
           scenarioLabel={activeScenario?.label ?? '当前部署'}

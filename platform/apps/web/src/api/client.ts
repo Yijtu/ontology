@@ -1905,7 +1905,26 @@ export class WorkbenchClient {
     return this.#request<T>(method, path, options, bytes)
   }
 
+  /** A successful request whose body the caller intentionally ignores (e.g. a 204 delete). */
+  async requestVoid(method: string, path: string, options: RequestOptions = {}): Promise<void> {
+    const { ok, status, parsed } = await this.#dispatch(method, path, options)
+    if (!ok) throw new ApiError(status, toApiFailure(status, parsed))
+  }
+
   async #request<T>(method: string, path: string, options: RequestOptions = {}, bytes?: Uint8Array): Promise<T> {
+    const { ok, status, parsed } = await this.#dispatch(method, path, options, bytes)
+    if (!ok) {
+      throw new ApiError(status, toApiFailure(status, parsed))
+    }
+    return dataOf<T>(parsed, path)
+  }
+
+  async #dispatch(
+    method: string,
+    path: string,
+    options: RequestOptions = {},
+    bytes?: Uint8Array,
+  ): Promise<{ readonly ok: boolean; readonly status: number; readonly parsed: unknown }> {
     const headers: Record<string, string> = { accept: 'application/json' }
     if (options.body !== undefined) headers['content-type'] = 'application/json'
     if (bytes !== undefined && 'mediaType' in options && typeof options.mediaType === 'string') {
@@ -1929,9 +1948,6 @@ export class WorkbenchClient {
     } catch {
       parsed = undefined
     }
-    if (!response.ok) {
-      throw new ApiError(response.status, toApiFailure(response.status, parsed))
-    }
-    return dataOf<T>(parsed, path)
+    return { ok: response.ok, status: response.status, parsed }
   }
 }
