@@ -103,10 +103,12 @@ export interface ApiServerOptions {
   /** Register the knowledge-workbench overview surface (`/workbench/overview`, `/industry-workspaces/:id/overview`, `/projects/:id/overview`). */
   readonly workbenchOverview?: Omit<WorkbenchOverviewRouteDependencies, 'authenticate'>
   readonly logger?: boolean
+  /** Close live sockets immediately on `app.close()` (test harnesses) so a keep-alive connection cannot stall teardown. */
+  readonly forceCloseConnections?: boolean
 }
 
 export function createApiServer(options: ApiServerOptions): FastifyInstance {
-  const app = Fastify({ logger: options.logger ?? false })
+  const app = Fastify({ logger: options.logger ?? false, ...(options.forceCloseConnections === true ? { forceCloseConnections: true } : {}) })
   installErrorHandler(app)
   if (options.competencyQuestions !== undefined) registerCompetencyQuestionRoutes(app, { ...options.competencyQuestions, authenticate: options.authenticate })
   if (options.runs !== undefined) {

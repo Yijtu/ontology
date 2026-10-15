@@ -742,6 +742,7 @@ export async function startHarness(options: HarnessOptions = {}): Promise<Harnes
   const energy = options.energy === undefined ? undefined : await createEnergyHarness(options.energy)
 
   const app = createApiServer({
+    forceCloseConnections: true,
     authenticate:
       options.fixedPrincipal === true ? loopbackTestAuthenticator : headerAuthenticator,
     runs: { service: runService, progress, submissionMode: 'records-only' },
