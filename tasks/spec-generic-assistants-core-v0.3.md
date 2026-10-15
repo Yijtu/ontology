@@ -252,3 +252,37 @@ V03-047 输出阶段 A release record：mainCommit、迁移清单、contracts／
 - 未知数据量通过有限限制和实测处理；部署 cap 变更需 preflight 和同契约回归，不自动承诺性能或无限深度。
 - 公司实际模型端点与评测预算由部署环境提供；无 JEV 时可走明确策略，不降低硬核验。联网搜索只在授权域名与来源已配置时可用，未配置状态必须可见。
 - 新表、answer@3 和动态 catalogue 是兼容风险较高的交付点，分卡完成 reader／writer／migration 与负向测试，不能只改页面绕过。
+
+## 10. 冻结词汇与「规格 vs 实现」差异（v0.3 A 增量）
+
+日期：2026-10-15。权威来源：[A 知识工作台重塑设计](design-core-knowledge-workbench-2026-10-15.md)（§1.6、§5.2）；产品范围见 [A PRD](prd-generic-assistants-core-v0.3.md) §6。本节冻结增量的术语与边界，并把设计稿新增能力与 main 现有实现对齐；**不臆造未在仓库或设计稿出现的实现状态**。
+
+### 10.1 术语与范围冻结
+
+双工作台、三料源、资料格式矩阵、来源类别四级、来源审核状态、研究任务状态、生效模型状态、模型选择解析顺序（对象能力指定 → 对象默认 → 空间能力指定 → 空间默认 → 未配置）以 [A PRD §6.2](prd-generic-assistants-core-v0.3.md) 为准。本文与两个分册不另立同义词；实现契约细节（字段、端口、迁移）仍以分册为准。
+
+### 10.2 规格 vs 实现差异（基线 main@0be891e）
+
+对齐原则：设计稿为权威；下表只记录设计稿能力与 main 现有实现的对照，未经核对不标为「已实现」。路径除标注外相对 `platform/`。
+
+| 设计能力 | 设计稿 | main 现状（文件／入口） | 结论 |
+| --- | --- | --- | --- |
+| 上传／粘贴料源与来源接地 | §1.3 | `packages/contracts/src/candidate-source.ts`（kind `upload`）、`packages/application/src/assets/source-grounding/`、`apps/api/src/composition/core-authoring.ts` | 已实现（可复用） |
+| 来源四级 trust tier 与审核状态 | §1.4 | `packages/contracts/src/source-grounding.ts`（`SourceTrustTier`）、`migrations/control/088_candidate_sources.sql`、`packages/adapters/control-postgres/src/candidate-source-store.ts` | 已实现（可复用） |
+| 工作区来源列出与审核入口 | §2.4 | `apps/api/src/http/candidate-sources.ts`：`GET /api/v1/industry-workspaces/:id/sources`、`POST .../sources/:sid/reviews` | 已实现（可复用） |
+| web-research 入口 | §2.3、§2.4 | `apps/api/src/http/candidate-sources.ts`：同步 `POST /api/v1/industry-workspaces/:id/research`（201，需配置 provider）；`packages/application/src/assets/candidate-sources/web-research-service.ts` | 部分实现：仅同步单次研究，产 `agent_researched`/`proposed`；无异步 research-runs、预算／授权面板、快照归档契约 |
+| 项目文件映射与来源目录 | §2.6 | `apps/api/src/composition/core-project-api.ts`：`GET /api/v1/core/projects/:projectId/source-catalogue`；项目 mapping／records | 已实现（项目作用域） |
+| 单实例级生成模型配置 | §5.1 | `apps/web/src/components/ModelSettingsPanel.tsx`、`apps/api/src/http/core-model-settings.ts`：`GET/PUT /api/v1/core/model-settings`、`POST .../test`（保存需重启） | 已实现（现状，本增量改造对象） |
+| 第一屏工作台与双工作台导航 | §1.1、§1.5 | 无 `workbench/overview` 路由 | 本次新增 |
+| AI 搜寻闭环（异步、授权、快照归档、纳入／撤回） | §1.3、§2.3、§2.4 | 无 `research-runs` / `source-admissions` / `source-retractions` / 工作区 `source-catalogue` | 本次新增 |
+| 连数据源（结构化接入） | §1.3、§2.6 | 无首屏结构化接入入口 | 本次新增（首期仅文件映射） |
+| 多模型连接目录与热切换 | §5.2～§5.4 | 无 `model-connections` / `model-assignments` / `effective-models` / 执行绑定 | 本次新增 |
+| A-R09／A-R10／A-R11 | §5.2 | — | 本次新增故事 |
+
+路径命名注意：设计稿 §2.4 以 `/api/v1` 相对路径书写（如 `/workbench/overview`、`/industry-workspaces/:id/...`），main 现有路由混用 `/api/v1/industry-workspaces/...` 与 `/api/v1/core/projects/...`。实施时按设计稿的语义确定路径，不把现状前缀差异当作契约。
+
+### 10.3 权威与边界
+
+- 设计稿与 A PRD §6 为本次增量的权威来源；实现细节以分册为准，本节点不改 `platform/`，不动 `AGENTS.md` 的断言、类型、边界与隔离规则。
+- 迁移编号沿用 §3.3：按实际 main 保留顺序分配，不在本规格占用固定数字。
+- 任务依赖与 wave 以设计稿 §3、§5.4 的节点表为准（N00～N17），不改动已交付的 V03 任务编号。
