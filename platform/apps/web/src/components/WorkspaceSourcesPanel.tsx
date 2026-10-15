@@ -35,9 +35,11 @@ export interface WorkspaceSourcesPanelProps {
   readonly onOpenResearch?: () => void
   /** Provided by a deployment that wires the project file-mapping surface; the source page only gathers the entry. */
   readonly onOpenStructuredImport?: () => void
+  /** Jump target from the industry workflow guide: focus the exact source the guide named. */
+  readonly focusSourceId?: string
 }
 const mediaTypes: Readonly<Record<string, string>> = { txt: 'text/plain', md: 'text/markdown', csv: 'text/csv', xlsx: 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet', pdf: 'application/pdf' }
-export function WorkspaceSourcesPanel({ client, workspace, readOnly = false, onWorkspaceChanged, onContinue, onOpenResearch, onOpenStructuredImport }: WorkspaceSourcesPanelProps) {
+export function WorkspaceSourcesPanel({ client, workspace, readOnly = false, onWorkspaceChanged, onContinue, onOpenResearch, onOpenStructuredImport, focusSourceId }: WorkspaceSourcesPanelProps) {
   const [catalogue, setCatalogue] = useState<WorkspaceSourceCatalogue>()
   const [context, setContext] = useState<WorkspaceAuthoringContext>()
   const [failure, setFailure] = useState<PublicFailure>()
@@ -70,6 +72,7 @@ export function WorkspaceSourcesPanel({ client, workspace, readOnly = false, onW
   const activeWorkspace = useRef('')
   const epoch = useRef(0)
   const controller = useRef<AbortController | undefined>(undefined)
+  const focusRootRef = useRef<HTMLElement>(null)
   const pending = useRef<{ readonly identity: string; readonly key: string; readonly revision: string } | undefined>(undefined)
   const load = useCallback(async () => {
     const token = ++epoch.current
@@ -109,6 +112,13 @@ export function WorkspaceSourcesPanel({ client, workspace, readOnly = false, onW
     void load()
     return () => { inputSnapshots.current.set(workspaceId, inputSnapshot.current); epoch.current++; controller.current?.abort() }
   }, [load, workspace.workspaceId])
+  // A workflow jump focuses the exact source the guide named so the reviewer lands on the row to act
+  // on. It never fabricates a row: an unknown id simply scrolls nowhere.
+  useEffect(() => {
+    if (focusSourceId === undefined) return
+    const node = focusRootRef.current?.querySelector<HTMLElement>(`[data-source-key="${focusSourceId}"]`)
+    node?.scrollIntoView?.({ block: 'center' })
+  }, [focusSourceId, library, catalogue])
   const upload = async () => {
     if (readOnly || busy || catalogue === undefined || !name.trim() || file === undefined && !pastedText.trim()) return
     const token = epoch.current; const abort = new AbortController(); controller.current = abort; setBusy(true); setFailure(undefined); setNotice('')
@@ -184,7 +194,7 @@ export function WorkspaceSourcesPanel({ client, workspace, readOnly = false, onW
   ]
   const libraryEntries = mergeSourceLibrary(catalogue?.sources ?? [], library?.availability === 'ready' ? library.sources : [])
   const libraryEmpty = catalogue !== undefined && catalogue.sources.length === 0 && libraryEntries.length === 0
-  return <section className="ontology-workbench ontology-sources" aria-label="工作区资料准备"><header className="ontology-workflow-head"><div><p className="ontology-eyebrow">本体工作区 · 第 1–2 步 / 5</p><h2>先读懂资料，再生成候选</h2><p>原文和表格数据保留实际版本。资料是待核对的数据，不能授予模型权限。</p></div><Button disabled={busy} onClick={() => void load()}>刷新资料与能力</Button></header>
+  return <section ref={focusRootRef} className="ontology-workbench ontology-sources" aria-label="工作区资料准备"><header className="ontology-workflow-head"><div><p className="ontology-eyebrow">本体工作区 · 第 1–2 步 / 5</p><h2>先读懂资料，再生成候选</h2><p>原文和表格数据保留实际版本。资料是待核对的数据，不能授予模型权限。</p></div><Button disabled={busy} onClick={() => void load()}>刷新资料与能力</Button></header>
     {failure === undefined ? null : <PublicStateNotice failure={failure} onRecover={() => void load()} />}{catalogue === undefined ? <p className="ontology-notice">尚未取得真实语料目录。当前部署需要装配资料接口后才能上传或生成；本页不会补造语料引用。</p> : null}{notice ? <p role="status" className="ontology-notice">{notice}</p> : null}
     <SourceIntakeEntries entries={intakeEntries} active={activeEntry} onSelect={setActiveEntry} />
     {!readOnly ? <form onSubmit={(e) => { e.preventDefault(); void upload() }}><fieldset className="ontology-checks" data-testid="source-purpose"><legend>资料用途</legend><label><input type="radio" name="source-purpose" value="industry_basis" checked={purpose === 'industry_basis'} disabled={busy} onChange={() => setPurpose('industry_basis')} /><span>作为行业依据（进入工作区来源库，供定义/规则生成）</span></label><label><input type="radio" name="source-purpose" value="project_record" checked={purpose === 'project_record'} disabled={busy} onChange={() => setPurpose('project_record')} /><span>作为项目记录（进入项目映射/确认/发布）</span></label><p className="ontology-hint">上传只登记原料，不会自动获得权威来源类别；来源性质与权威性需在来源审核中由有权限人员确认。</p></fieldset>{purpose === 'project_record' ? <p role="status" className="ontology-notice" data-testid="source-purpose-project">项目记录在项目工作台的数据与资料页接入（文件映射），此页不会把文件写成项目记录。</p> : null}{purpose === 'project_record' && onOpenStructuredImport !== undefined ? <Button onClick={onOpenStructuredImport}>前往项目数据与资料</Button> : null}<div className="ontology-form-grid"><Field label="资料名称">{(a) => <input {...a} required disabled={busy} value={name} onChange={(e) => setName(e.target.value)} />}</Field><Field label="选择原始文件" hint="文本、Markdown、PDF、CSV、XLSX；保留原始字节。">{(a) => <input {...a} type="file" accept=".txt,.md,.pdf,.csv,.xlsx" disabled={busy} onChange={(e) => { const next = e.target.files?.[0]; setFile(next); if (next !== undefined) { setName(next.name); setPastedText('') } }} />}</Field></div><Field label="或粘贴文本资料">{(a) => <textarea {...a} disabled={busy || file !== undefined} value={pastedText} onChange={(e) => setPastedText(e.target.value)} />}</Field>{file?.name.match(/\.(csv|xlsx)$/i) ? <div className="ontology-form-grid"><Field label="实际表头所在行">{(a) => <input {...a} disabled={busy} value={headerRow} inputMode="numeric" onChange={(e) => setHeaderRow(e.target.value)} />}</Field><Field label="实际数据起始行">{(a) => <input {...a} disabled={busy} value={dataStartRow} inputMode="numeric" onChange={(e) => setDataStartRow(e.target.value)} />}</Field><Field label="工作表名称（多表时填写）">{(a) => <input {...a} disabled={busy} value={sheetName} onChange={(e) => setSheetName(e.target.value)} />}</Field></div> : null}<Button variant="primary" type="submit" disabled={busy || purpose !== 'industry_basis' || catalogue === undefined || !name.trim() || file === undefined && !pastedText.trim()}>上传并读取真实资料</Button></form> : <p>只读角色仍可查看真实资料与解析覆盖；上传、生成与确认需要编辑权限。</p>}

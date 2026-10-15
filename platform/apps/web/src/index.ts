@@ -227,6 +227,16 @@ export { SourceIntakeEntries } from './components/SourceIntakeEntries'
 export type { SourceIntakeEntriesProps, SourceIntakeEntryView } from './components/SourceIntakeEntries'
 export { SourceLibraryList } from './components/SourceLibraryList'
 export type { SourceLibraryListProps, SourceReviewSubmission } from './components/SourceLibraryList'
+export { IndustryWorkflowGuide, deriveIndustryWorkflow, modelUnavailableReason } from './components/IndustryWorkflowGuide'
+export type {
+  IndustryWorkflowGuideProps,
+  IndustryWorkflowInputs,
+  IndustryWorkflowStage,
+  IndustryWorkflowStep,
+  IndustryWorkflowStepId,
+  IndustryWorkflowStepStatus,
+  IndustryWorkflowTarget,
+} from './components/IndustryWorkflowGuide'
 export {
   CANDIDATE_KIND_LABELS,
   CANDIDATE_SOURCE_KINDS,
