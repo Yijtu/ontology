@@ -38,7 +38,7 @@ function stateLabel(value: Candidate): string {
 }
 function ruleOf(value: Candidate | undefined) { return value !== undefined && !isDefinition(value) && value.payload.kind === 'rule' ? value.payload : undefined }
 
-export function OntologyReviewWorkbench({ client, workspaceId, readOnly = false, refreshKey }: { readonly client: WorkbenchClient; readonly workspaceId: string; readonly readOnly?: boolean; readonly refreshKey?: number }) {
+export function OntologyReviewWorkbench({ client, workspaceId, readOnly = false, refreshKey, focusCandidateId }: { readonly client: WorkbenchClient; readonly workspaceId: string; readonly readOnly?: boolean; readonly refreshKey?: number; readonly focusCandidateId?: string }) {
   const [definitions, setDefinitions] = useState<readonly AssetCandidateVersion[]>([])
   const [rules, setRules] = useState<readonly RuleActionCandidateVersion[]>([])
   const [batches, setBatches] = useState<readonly AssetCandidateBatch[]>([])
@@ -150,6 +150,13 @@ export function OntologyReviewWorkbench({ client, workspaceId, readOnly = false,
     pendingRefresh.current = false
     void load()
   }, [busy, loading, load])
+  // A workflow jump from the industry guide focuses the exact candidate it named, so the user lands
+  // on the item to fix instead of a generic list. It only selects a candidate that is really loaded.
+  useEffect(() => {
+    if (focusCandidateId === undefined || !all.some((candidate) => candidate.candidateId === focusCandidateId)) return
+    setSelectedId(focusCandidateId)
+    setPane('detail')
+  }, [focusCandidateId, all])
   useEffect(() => {
     readAbort.current?.abort(); sourceAbort.current?.abort()
     const controller = new AbortController(); readAbort.current = controller

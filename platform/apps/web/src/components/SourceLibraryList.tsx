@@ -75,7 +75,7 @@ export function SourceLibraryList({ entries, readOnly, busy, reviewBusyId, onRev
   return (
     <ul className="ontology-library" data-testid="source-library-list">
       {entries.map((entry) => (
-        <li key={entry.key} className="ontology-source-card" data-testid="source-library-entry"
+        <li key={entry.key} className="ontology-source-card" data-testid="source-library-entry" data-source-key={entry.key}
           data-kind={entry.candidate?.kind ?? 'upload'} data-review={entry.candidate?.reviewState ?? 'unrecorded'}>
           <header className="ontology-pane-heading">
             <strong>{entry.title}</strong>

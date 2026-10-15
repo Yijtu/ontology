@@ -27,6 +27,8 @@ export interface DefinitionWorkbenchPanelProps {
   readonly workspaceId: string
   readonly readOnly?: boolean
   readonly refreshKey?: number
+  /** Jump target from the industry workflow guide: the exact candidate to open. */
+  readonly focusCandidateId?: string
 }
 
 export interface DefinitionEditFields {
