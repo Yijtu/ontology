@@ -4,7 +4,8 @@ import type { IndustryWorkspace, ProfileRef, ProjectRecord, ProjectRevision, Res
 import type { CoreDeploymentInfo, CoreDeploymentScenario, WorkbenchClient } from '../api/client'
 import type { IndustryPackSummary } from '../api/projects'
 import { createWorkbenchResultSource } from '../api/results'
-import { indexedHistoryState, readHistoryIndex, resolveAppView } from '../navigation'
+import { assistantOfView, indexedHistoryState, readHistoryIndex, resolveAppView, tabOfView } from '../navigation'
+import type { WorkbenchAssistant } from '../navigation'
 import { deriveProjectBinding } from '../project-binding'
 import { createScenarioRegistry } from '../scenarios/composition'
 import { BusinessWorkbenchPanel } from './BusinessWorkbenchPanel'
@@ -90,30 +91,43 @@ export interface AppProps {
   readonly initialObjectId?: string
 }
 
-const CORE_TABS: readonly { readonly view: CoreAppView; readonly label: string }[] = [
+export interface NavTab { readonly view: CoreAppView; readonly label: string }
+
+/**
+ * The knowledge-workbench tabs. Labels are the product page names from the workbench design
+ * (§1.5); each tab keeps rendering its existing surface, so a legacy `view=` deep link still
+ * reaches the same panel. Later frontend nodes swap a hosting view for a dedicated surface.
+ */
+const CORE_TABS: readonly NavTab[] = [
   { view: 'start', label: '工作概览' },
-  { view: 'ontology', label: '本体工作区' },
-  { view: 'projects', label: '项目数据' },
-  { view: 'definitions', label: '定义与规则' },
-  { view: 'instances', label: '实例审核' },
-  { view: 'packages', label: '行业包' },
-  { view: 'business', label: '业务任务' },
-  { view: 'workbench', label: '配置工作台' },
+  { view: 'ontology', label: '概览' },
+  { view: 'jobs', label: '来源' },
+  { view: 'definitions', label: '资产' },
+  { view: 'review', label: '审核' },
+  { view: 'packages', label: '验证与发布' },
+  { view: 'projects', label: '概览' },
+  { view: 'instances', label: '待确认' },
+  { view: 'business', label: '问答与任务' },
   { view: 'query', label: '业务问答' },
-  { view: 'jobs', label: '导入任务' },
-  { view: 'review', label: '候选审核' },
-  { view: 'evidence', label: '证据与历史' },
-  { view: 'models', label: '生成模型设置' },
+  { view: 'evidence', label: '结果与历史' },
+  { view: 'workbench', label: '配置工作台' },
+  { view: 'models', label: 'AI 设置' },
 ]
+const SETTINGS_TABS: readonly CoreAppView[] = ['models', 'workbench']
 const EMPTY_DEPLOYMENT_SCENARIOS: readonly CoreDeploymentScenario[] = []
 const EMPTY_WORKSPACES: readonly IndustryWorkspace[] = []
 const EMPTY_PROJECTS: readonly ProjectRecord[] = []
 const EMPTY_PACKS: readonly IndustryPackSummary[] = []
-const NAV_GROUPS = [
-  { label: '本体建模', views: ['ontology', 'definitions', 'packages'] },
-  { label: '项目实践', views: ['projects', 'instances', 'business', 'query'] },
-  { label: '资产与历史', views: ['jobs', 'review', 'evidence'] },
-] as const
+const NAV_GROUPS: readonly { readonly key: string; readonly label: string; readonly views: readonly CoreAppView[]; readonly contribution: 'modeling' | 'practice' | 'assets' }[] = [
+  { key: 'industry', label: '行业工作台', views: ['ontology', 'jobs', 'definitions', 'review', 'packages'], contribution: 'modeling' },
+  { key: 'business', label: '项目工作台', views: ['projects', 'instances', 'business', 'query', 'evidence'], contribution: 'practice' },
+  { key: 'assets', label: '资产与历史', views: [], contribution: 'assets' },
+]
+const TOP_LEVEL_TABS: readonly { readonly key: WorkbenchAssistant | 'start'; readonly label: string; readonly target: AppView }[] = [
+  { key: 'start', label: '工作概览', target: 'start' },
+  { key: 'ontology', label: '行业工作台', target: 'ontology' },
+  { key: 'business', label: '项目工作台', target: 'projects' },
+]
 
 type OptionsPhase = 'idle' | 'loading' | 'ready' | 'failure'
 
@@ -133,6 +147,26 @@ function writeParam(name: string, value: string | undefined): void {
 
 function coreViewOf(view: AppView): boolean {
   return (CORE_TABS as readonly { readonly view: string }[]).some((tab) => tab.view === view)
+}
+
+function coreTabOf(view: AppView): NavTab | undefined {
+  return CORE_TABS.find((tab) => tab.view === view)
+}
+
+/**
+ * Keep the workbench query contract on the URL next to the legacy `view` key: a tab belongs to a
+ * top-level assistant, so refresh, forward/back and shared links all resolve the same surface.
+ * Shell-level views (overview, settings, configuration) carry no assistant.
+ */
+function applyAssistantParams(url: URL, view: AppView): void {
+  const assistant = assistantOfView(view)
+  if (assistant === undefined) {
+    url.searchParams.delete('assistant')
+    url.searchParams.delete('tab')
+    return
+  }
+  url.searchParams.set('assistant', assistant)
+  url.searchParams.set('tab', tabOfView(view) ?? 'overview')
 }
 
 export function App({
@@ -227,6 +261,7 @@ export function App({
       setMenuOpen(false)
       const url = new URL(window.location.href)
       url.searchParams.set('view', next)
+      applyAssistantParams(url, next)
       historyIndex.current += 1
       window.history.pushState(indexedHistoryState(historyIndex.current), '', `${url.pathname}${url.search}${url.hash}`)
 
@@ -459,19 +494,27 @@ export function App({
   }
 
   const viewLabel = tabs.find((tab) => tab.view === view)?.label ?? '工作台'
+  const activeAssistant = assistantOfView(view)
   const navButton = (tab: { readonly view: string; readonly label: string }) => (
     <button key={tab.view} type="button" className="app__nav-item" data-testid={`tab-${tab.view}`}
       data-active={tab.view === view} aria-current={tab.view === view ? 'page' : undefined} onClick={() => navigate(tab.view)}>
       <span>{tab.label}</span><span aria-hidden="true">{tab.view === view ? '›' : ''}</span>
     </button>
   )
+  const tabOf = (coreView: CoreAppView): NavTab => coreTabOf(coreView) ?? { view: coreView, label: coreView }
+  const topLevelButton = (entry: typeof TOP_LEVEL_TABS[number]) => {
+    const active = entry.key === 'start' ? view === 'start' : activeAssistant === entry.key
+    return <button key={entry.key} type="button" className="app__assistant" data-testid={entry.key === 'start' ? 'tab-start' : `assistant-tab-${entry.key}`}
+      data-active={active} aria-current={active ? 'page' : undefined} onClick={() => navigate(entry.target)}>{entry.label}</button>
+  }
   const navigation = <nav aria-label="主导航" className="app__navigation">
-    {CORE_TABS.filter((tab) => tab.view === 'start' || tab.view === 'models').map(navButton)}
-    {NAV_GROUPS.map((group) => <section key={group.label} className="app__nav-group" aria-label={group.label}>
-      <h2>{group.label}</h2>{CORE_TABS.filter((tab) => group.views.some((entry) => entry === tab.view)).map(navButton)}
-      {scenarioViews.filter((entry) => (entry.navigationGroup ?? 'practice') === (group.label === '本体建模' ? 'modeling' : group.label === '项目实践' ? 'practice' : 'assets')).map(navButton)}
+    <div className="app__assistants" role="tablist" aria-label="工作台">{TOP_LEVEL_TABS.map(topLevelButton)}</div>
+    {NAV_GROUPS.map((group) => <section key={group.key} className="app__nav-group" aria-label={group.label}>
+      <h2>{group.label}</h2>{group.views.map((entry) => navButton(tabOf(entry)))}
+      {scenarioViews.filter((entry) => (entry.navigationGroup ?? 'practice') === group.contribution).map(navButton)}
     </section>)}
-    <details className="app__advanced" open={view === 'workbench'}><summary>高级设置</summary>{CORE_TABS.filter((tab) => tab.view === 'workbench').map(navButton)}<p>模型、工具、配置与原始定义</p></details>
+    <details className="app__advanced" open={view === 'workbench' || view === 'models'}><summary>设置</summary>
+      {SETTINGS_TABS.map((entry) => navButton(tabOf(entry)))}<p>AI 设置、模型连接与高级配置</p></details>
   </nav>
   const contextFields = <>
     {scenarioOptions.length === 0 ? null : <div data-testid="core-deployment-picker"><Field label="部署场景">{(attributes) => <select {...attributes} data-testid="core-scenario-select" value={selectedScenarioId}
@@ -547,6 +590,10 @@ export function App({
           onRetry={() => setContextReload((count) => count + 1)}
           onSelectWorkspace={selectWorkspace}
           onSelectProject={selectProject}
+          {...(workspaceId === undefined ? {} : { selectedWorkspaceId: workspaceId })}
+          {...(projectId === undefined ? {} : { selectedProjectId: projectId })}
+          onCreateWorkspace={() => navigate('ontology')}
+          onCreateProject={() => navigate('projects')}
         />
       ) : null}
       {view === 'workbench' ? (
