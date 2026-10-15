@@ -1,5 +1,5 @@
 import { randomUUID } from 'node:crypto'
-import { PostgresCandidateSourceStore, PostgresProjectEvolutionStore, PostgresSourceAdmissionStore } from '@ontology/adapter-control-postgres'
+import { PostgresCandidateSourceStore, PostgresProjectEvolutionStore, PostgresSourceAdmissionStore, PostgresWorkbenchStateReader } from '@ontology/adapter-control-postgres'
 import { ArtifactGroundingDocumentSetReader, ParsedSourceGroundingReader, StructuredDocumentParser } from '@ontology/adapter-extraction-document'
 import { DATA_DUCKDB_ADAPTER_REF } from '@ontology/adapter-data-duckdb'
 import { DATA_POSTGRES_ADAPTER_REF } from '@ontology/adapter-data-postgres'
@@ -11,10 +11,10 @@ import {
   RuleActionCandidateGenerationService, RunServiceError, StoreBackedIndustryPackCatalogue, SyntheticExampleService,
   TableArtifactReadService, VerifiedResultExportService, VerifiedResultReadService, WebResearchService, WorkspaceSourceAdmissionService,
   createSourceGroundingService, encodeStructuredExtractionRef, readWorkspacePublicationSourceDrafts,
-  ModelConnectionService, ModelAssignmentService,
+  ModelConnectionService, ModelAssignmentService, WorkbenchOverviewService,
 } from '@ontology/application'
 import { ArchivedRulePremiseReplayVerifier, FiniteGrammarRuleSupportValidator, FiniteGrammarSyntheticEvaluator, IdentityDecisionService } from '@ontology/semantic-engine'
-import type { ActionCapabilityBindingInput, GenerationPort, ProfileRef, ProjectRevision, ScopeRef, ToolContext, VerifiedTableManifestSource } from '@ontology/contracts'
+import type { ActionCapabilityBindingInput, GenerationPort, ProfileRef, ProjectRevision, ScopeRef, ToolContext, VerifiedTableManifestSource, WorkbenchCapability } from '@ontology/contracts'
 import { createRequestToolContext } from '../http/context'
 import type { CoreApiDependencies } from '../core-main'
 import { COMPONENT_VERSION, CORE_TYPED_RESULT_SCHEMA_REF } from './core-constants'
@@ -317,6 +317,20 @@ export async function assembleDeployment(
     selection: state.modelSelectionService,
     bindings: state.modelBindingService,
   }
+  // The deterministic overview derives its next step and counts from persisted state only (design
+  // §2.5). Capabilities are read fresh so a disabled/unconfigured ability always carries a reason.
+  const workbenchOverview = new WorkbenchOverviewService({
+    state: new PostgresWorkbenchStateReader(database),
+    capabilities: {
+      readCapabilities: async (): Promise<readonly WorkbenchCapability[]> => [
+        { ability: 'generation', available: modelCapabilities.generationEnabled, ...(modelCapabilities.generationEnabled ? {} : { unavailableReason: '生成模型未配置' }) },
+        { ability: 'research', available: options.webSearch !== undefined, ...(options.webSearch === undefined ? { unavailableReason: '未配置公共搜索服务' } : {}) },
+        { ability: 'decision_jev', available: modelCapabilities.decisionEnabled, ...(modelCapabilities.decisionEnabled ? {} : { unavailableReason: '决策 JEV 未配置' }) },
+        { ability: 'archive', available: options.webSearch !== undefined, ...(options.webSearch === undefined ? { unavailableReason: '未配置可归档的搜索适配器' } : {}) },
+        { ability: 'structured_ingestion', available: true },
+      ],
+    },
+  })
   const dependencies: CoreApiDependencies = {
     database,
     scopeRef,
@@ -358,6 +372,7 @@ export async function assembleDeployment(
       instanceReviews: { service: instanceReviewService, identity: instanceIdentity.identity, identityContext: instanceIdentity.identityContext },
       projects: { service: projectService, mappings: projectMappingService, afterMappingConfirmed: projectApi.afterMappingConfirmed, dataset: projectDatasetService, evolution: projectEvolutionCell.current },
       projectDocuments: { service: projectDocumentIndexService },
+      workbenchOverview: { overview: workbenchOverview },
       syntheticValidation: { exampleService: syntheticExampleService, validationService: industryValidationService, bindingContext: actionBindingContext },
     },
     registerRoutes: (api, authenticate) => {
