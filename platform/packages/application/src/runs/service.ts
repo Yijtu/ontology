@@ -29,6 +29,7 @@ import type {
   RespondToClarificationInput,
   ResumeRunInput,
   RunExecutionBinder,
+  RunModelBinder,
   RunProfileBinder,
   RunProfileBinding,
   RunView,
@@ -51,6 +52,11 @@ export interface RunServiceDependencies {
    * `CAPABILITY_NOT_CONFIGURED` rather than silently running without a binding.
    */
   readonly execution?: RunExecutionBinder
+  /**
+   * Fixes the per-execution model binding at accept/authorize time (design §5.3). Supplied by the
+   * composition root; when absent the run keeps the legacy environment-configured model path.
+   */
+  readonly modelBinding?: RunModelBinder
   readonly now?: () => string
   readonly newId?: () => string
 }
@@ -177,6 +183,7 @@ export class RunService {
   readonly #control: ControlRepository
   readonly #profiles: RunProfileBinder
   readonly #execution: RunExecutionBinder | undefined
+  readonly #modelBinding: RunModelBinder | undefined
   readonly #now: () => string
   readonly #newId: () => string
 
@@ -185,6 +192,7 @@ export class RunService {
     this.#control = dependencies.control
     this.#profiles = dependencies.profiles
     this.#execution = dependencies.execution
+    this.#modelBinding = dependencies.modelBinding
     this.#now = dependencies.now ?? (() => new Date().toISOString())
     this.#newId = dependencies.newId ?? (() => globalThis.crypto.randomUUID())
   }
@@ -256,6 +264,17 @@ export class RunService {
         ctx,
       )
       executionBindingRef = resolution.executionBindingRef
+    }
+
+    // Fix the execution model binding before the run is dispatched (design §5.3). A model the
+    // resolved profile does not need leaves no binding, so a host with no model configured still
+    // accepts the deterministic execution; a broken fix is surfaced, never silently re-resolved.
+    if (this.#modelBinding !== undefined) {
+      await this.#modelBinding.bindModelForRun(
+        { runId: input.runId, profileBinding: binding, ...(fields.execution === undefined ? {} : { execution: fields.execution }) },
+        scopeRef,
+        ctx,
+      )
     }
 
     const createdAt = this.#now()

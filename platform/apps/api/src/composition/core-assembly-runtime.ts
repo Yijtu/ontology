@@ -54,7 +54,7 @@ export async function assembleRuntimePipeline(
     evidenceStore, materializationStore, candidateStore, assetCandidateStore, ruleActionCandidateStore, planReceiptStore,
     runStore, jobStore, dispatchStore, answerStore, workspaceStore, publishedPackStore, coreModelRefs, componentRecords,
     terminology, normalApprovedInputs, projectEvolutionCell, modelCapabilities, modelEnvironment, hostClock, allSourceRefs,
-    profileResolver, semanticDefinitions,
+    profileResolver, semanticDefinitions, modelBindingRuntime, runModelBinder, modelBindingService, modelBindingStore, modelConnectionStore,
   } = state
   const { mappings, structuredImports, rulePremiseVerifier, semanticTasks, relationsTask, facts, multiSchemaSource, projectQuery, gatewayComposition } = query
 
@@ -79,7 +79,7 @@ export async function assembleRuntimePipeline(
     questionQuerySnapshot: projectQuery.resolveQuestionForCreation,
     projectApprovedInput: async (scope: ScopeRef, revision: ProjectRevision, ctx: ToolContext) => (await projectEvolutionCell.current?.resolveApprovedInput(scope, revision, ctx)) ?? await normalApprovedInputs.current?.resolve(scope, revision, ctx),
   })
-  const runs = new RunService({ store: runStore, control: state.control, profiles: runProfileBinder, execution: executionPreflight })
+  const runs = new RunService({ store: runStore, control: state.control, profiles: runProfileBinder, execution: executionPreflight, modelBinding: runModelBinder })
   const phase = new RunPhaseDriver({ store: runStore, control: state.control })
   const dispatchFences = new Map<Uuid, WorkflowDispatchFence>()
   // Both real runtimes are assembled here at the normal Core entry: the deterministic Template
@@ -102,6 +102,15 @@ export async function assembleRuntimePipeline(
     scenarios: examples.scenarios,
     scopeRef,
     modelRefs: coreModelRefs,
+    executionModelRef: async (role, runId, ctx) => {
+      const capability = role === 'generation' ? 'generation' : 'decision_jev'
+      if (!(await modelBindingService.isUsable(runId, capability, ctx))) return undefined
+      const binding = await modelBindingStore.getBinding(scopeRef, runId, capability, ctx)
+      if (binding?.connectionId === undefined) return undefined
+      const connection = await modelConnectionStore.getConnection(scopeRef, binding.connectionId, ctx)
+      // The pinned platform model id is what the execution-bound adapter indexes its vendor map by.
+      return connection === undefined ? undefined : { modelId: connection.platformModelId, version: binding.connectionRevision ?? connection.revision }
+    },
     taskBindings: taskBindingStore,
     executionBindings: runExecutionBindingStore,
     operations: compute.registry,
@@ -182,13 +191,22 @@ export async function assembleRuntimePipeline(
         const run = await runs.getRun(binding.runId, ctx)
         const resolved = await profileResolver.getResolvedProfile({ scopeRef: { tenantId: scopeRef.tenantId, spaceId: scopeRef.spaceId }, profileRef: run.profileRef, snapshotHash: binding.resolvedProfileRef.snapshotHash }, ctx)
         const gateway = gatewayComposition.forRun({ runId: binding.runId, ledgerId: binding.budgetLedgerId, resolvedProfile: resolved.resolved, operations: compute.registry })
-        const generationBound = profileModelBindingEnabled(resolved.resolved.modelBindings['generation'], coreModelRefs.generation)
-        const decisionBound = profileModelBindingEnabled(resolved.resolved.modelBindings['decision'], coreModelRefs.decision)
+        // A run's model is the one fixed at accept time (design §5.3): read the persisted binding
+        // back, never re-resolve a default. A revoked binding fails closed (`blocked` disables the
+        // port) instead of falling through to another model; with no binding at all the legacy
+        // environment-configured adapter stays in place.
+        const bound = await modelBindingRuntime.capabilitiesForExecution({ executionId: binding.runId, ledgerId: binding.budgetLedgerId, signal: binding.signal, ctx })
         const modelExecution = modelCapabilities.forExecution({ ledgerId: binding.budgetLedgerId, signal: binding.signal })
+        const generationBound = profileModelBindingEnabled(resolved.resolved.modelBindings['generation'], coreModelRefs.generation) || bound.generation !== undefined || bound.generationBlocked
+        const decisionBound = profileModelBindingEnabled(resolved.resolved.modelBindings['decision'], coreModelRefs.decision) || bound.decision !== undefined || bound.decisionBlocked
         return {
           gateway,
-          generation: generationBound ? modelExecution.generation ?? DISABLED_GENERATION : DISABLED_GENERATION,
-          decision: decisionBound ? modelExecution.decision ?? disabledDecision() : disabledDecision(),
+          generation: generationBound
+            ? bound.generation ?? (bound.generationBlocked ? DISABLED_GENERATION : modelExecution.generation ?? DISABLED_GENERATION)
+            : DISABLED_GENERATION,
+          decision: decisionBound
+            ? bound.decision ?? (bound.decisionBlocked ? disabledDecision() : modelExecution.decision ?? disabledDecision())
+            : disabledDecision(),
           checkpoints: createRunCheckpointPort(runStore),
         } satisfies RuntimeCapabilitySet
       },
