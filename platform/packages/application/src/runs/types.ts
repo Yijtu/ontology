@@ -1,5 +1,6 @@
 import type {
   CreateRunContext,
+  ExecutionModelBinding,
   ProfileRef,
   QuestionRewrite,
   ResolvedProfileRef,
@@ -98,6 +99,32 @@ export interface RunExecutionBinder {
     scopeRef: ScopeRef,
     ctx: ToolContext,
   ): Promise<RunExecutionResolution>
+}
+
+/**
+ * The capability/object a run fixes its execution model binding against. A project execution pins
+ * the project target, so a project never inherits the model settings of the workspace that produced
+ * the pack it mounts; every other run uses the space target (design §5.3, A-R10).
+ */
+export interface RunModelBindingInput {
+  readonly runId: Uuid
+  readonly profileBinding: RunProfileBinding
+  readonly execution?: RunExecutionRequest
+}
+
+/**
+ * Fixes (and persists) the per-execution model binding at the task accept/authorize phase, before
+ * the run is dispatched. The composition root implements it from the model catalogue; the run
+ * service receives it by injection so it never imports a model adapter or a connection store. It
+ * returns `undefined` when the execution needs no model (a deterministic path) so an unconfigured
+ * host can still accept the run.
+ */
+export interface RunModelBinder {
+  bindModelForRun(
+    input: RunModelBindingInput,
+    scopeRef: ScopeRef,
+    ctx: ToolContext,
+  ): Promise<ExecutionModelBinding | undefined>
 }
 
 export interface RespondToClarificationInput {

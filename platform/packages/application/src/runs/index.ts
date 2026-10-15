@@ -22,6 +22,8 @@ export type {
   RunExecutionBinder,
   RunExecutionBinderInput,
   RunExecutionResolution,
+  RunModelBinder,
+  RunModelBindingInput,
   RunProfileBinder,
   RunProfileBinding,
   RunView,

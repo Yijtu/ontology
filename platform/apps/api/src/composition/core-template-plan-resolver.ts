@@ -66,6 +66,17 @@ export interface CoreTemplatePlanResolverOptions {
   readonly scenarios: readonly CoreExampleScenario[]
   readonly scopeRef: ScopeRef
   readonly modelRefs: CoreModelComponentRefs
+  /**
+   * Resolves the model ref an execution fixed at accept time (design §5.3). When a run carries a
+   * catalogue binding the planner uses that exact ref instead of the deployment's static model ref,
+   * so a hot-switched model is actually planned and called; a revoked binding resolves to `undefined`
+   * and never falls through to another model.
+   */
+  readonly executionModelRef?: (
+    role: 'generation' | 'decision',
+    runId: string,
+    ctx: ToolContext,
+  ) => Promise<ModelRef | undefined>
   /** Published task bindings a task-mode run pins and must resolve deterministically. */
   readonly taskBindings: TaskBindingStore
   /** Archived run execution bindings, so a task run's fixed plan is derived from its own pin. */
@@ -343,6 +354,7 @@ export class CoreTemplatePlanResolver implements TemplatePlanResolver {
   readonly #scenarios: readonly CoreExampleScenario[]
   readonly #scopeRef: ScopeRef
   readonly #modelRefs: CoreModelComponentRefs
+  readonly #executionModelRef: CoreTemplatePlanResolverOptions['executionModelRef']
   readonly #taskBindings: TaskBindingStore
   readonly #executionBindings: RunExecutionBindingStore
   readonly #operations: OperationRegistry
@@ -362,6 +374,7 @@ export class CoreTemplatePlanResolver implements TemplatePlanResolver {
     this.#scenarios = options.scenarios
     this.#scopeRef = options.scopeRef
     this.#modelRefs = options.modelRefs
+    this.#executionModelRef = options.executionModelRef
     this.#taskBindings = options.taskBindings
     this.#executionBindings = options.executionBindings
     this.#operations = options.operations
@@ -557,10 +570,17 @@ export class CoreTemplatePlanResolver implements TemplatePlanResolver {
     if (existing !== undefined) return planPreparation(existing, sourceReceiptRef)
 
     const fixedPlan = await this.#fixedTaskPlan(loaded, request.dependencies.ctx) ?? this.#fixedFactsPlan(loaded)
-    const generationBound = modelBindingMatches(loaded.resolved, this.#modelRefs, 'generation')
-    const decisionBound = modelBindingMatches(loaded.resolved, this.#modelRefs, 'decision')
-    const generationModelRef = generationBound ? modelRefOf(loaded.resolved, 'generation') : undefined
-    const decisionModelRef = decisionBound ? modelRefOf(loaded.resolved, 'decision') : undefined
+    const staticGenerationBound = modelBindingMatches(loaded.resolved, this.#modelRefs, 'generation')
+    const staticDecisionBound = modelBindingMatches(loaded.resolved, this.#modelRefs, 'decision')
+    const boundGenerationRef = staticGenerationBound ? undefined : await this.#executionModelRef?.('generation', loaded.run.runId, request.dependencies.ctx)
+    const boundDecisionRef = staticDecisionBound ? undefined : await this.#executionModelRef?.('decision', loaded.run.runId, request.dependencies.ctx)
+    const generationBound = staticGenerationBound || boundGenerationRef !== undefined
+    const generationModelRef = staticGenerationBound
+      ? modelRefOf(loaded.resolved, 'generation')
+      : boundGenerationRef
+    const decisionModelRef = staticDecisionBound
+      ? modelRefOf(loaded.resolved, 'decision')
+      : boundDecisionRef
     const toolIds = new Set(loaded.resolved.toolBindings.filter((binding) => binding.enabled).map((binding) => binding.toolId))
     if (fixedPlan === undefined && loaded.execution?.request.mode !== 'question' && !toolIds.has('data_query')) {
       throw new WorkflowControllerError('CAPABILITY_NOT_CONFIGURED', 'the resolved profile does not enable data_query for ordinary semantic plans')

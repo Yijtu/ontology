@@ -4,8 +4,8 @@ import { DATA_DUCKDB_ADAPTER_REF, DuckDbProjectDatasetAdapter } from '@ontology/
 import { DATA_POSTGRES_ADAPTER_REF, PostgresProjectDatasetAdapter } from '@ontology/adapter-data-postgres'
 import { PostgresDocumentParseStore, PostgresStructuredIngestionStore } from '@ontology/adapter-extraction-document'
 import { PostgresKeywordIndexStore } from '@ontology/adapter-search-bm25'
-import { ControlPostgresDatabase } from '@ontology/adapter-control-postgres'
-import { ProfileResolver, ProjectDataMaterializationService, SourceRegistry, StoreBackedIndustryManifestSource } from '@ontology/application'
+import { ControlPostgresDatabase, PostgresExecutionModelBindingStore, PostgresModelAssignmentStore, PostgresModelConnectionStore } from '@ontology/adapter-control-postgres'
+import { ExecutionModelBindingService, ModelSelectionService, ProfileResolver, ProjectDataMaterializationService, SourceRegistry, StoreBackedIndustryManifestSource } from '@ontology/application'
 import { definitionVersionDigest, projectIndustrySchema, PublishedProjectDatasetSource, SemanticDefinitionService } from '@ontology/semantic-engine'
 import { canonicalJson, sha256DigestOf } from '@ontology/core'
 import type { IndustrySchemaSource, ProfileRef, ProfileSpec, ScopeRef, ToolContext, Uuid, VersionRef } from '@ontology/contracts'
@@ -27,11 +27,32 @@ import { createCoreDecisionStateRefProvider } from './decision-state-reference'
 import { createCoreJevActualStateResolver } from './jev-actual-state'
 import { createCoreModelCapabilityFactory } from './core-model-capabilities'
 import { createEnvSecretResolver } from './secret-resolver'
+import { LocalModelCredentialCustodian } from './core-model-credential-custodian'
+import { createModelTargetDirectory } from './core-model-target-directory'
+import {
+  createExecutionModelBindingRuntime,
+  createRunModelBinder,
+} from './core-execution-model-binding'
+import type { JevFallbackPolicy } from '@ontology/adapter-model-jev'
 import { createPostgresSourceStore, createStaticProbeAdapterResolver } from './source-registry'
 import { emptyCoreExamples } from './core-example-loader'
 import { defaultCoreComputeRegistration } from './core-compute-registration'
 import { exampleComputeArtifact } from './example-compute-artifact'
 import { mountCoreTaskBindings } from './core-task-bindings'
+
+const JEV_FALLBACK_POLICIES: ReadonlySet<string> = new Set([
+  'deterministic', 'generative_classification', 'clarify', 'reject',
+])
+
+/** JEV keeps its existing execution behaviour policy; the catalogue never edits it (design §5.3). */
+function jevFallbackPolicyOf(env: Readonly<Record<string, string | undefined>>): JevFallbackPolicy {
+  const value = env['CORE_JEV_FALLBACK_POLICY']?.trim()
+  if (value === undefined || value.length === 0) return 'reject'
+  if (!JEV_FALLBACK_POLICIES.has(value)) {
+    throw new CoreCapabilityError('CORE_JEV_FALLBACK_POLICY must be deterministic, generative_classification, clarify or reject')
+  }
+  return value as JevFallbackPolicy
+}
 
 /** Mutable host state shared across the assembly phases and used by start/close. */
 export interface CoreAssemblyHost {
@@ -140,6 +161,49 @@ export async function assembleInfrastructure(options: CoreLocalCompositionOption
   const sources = new SourceRegistry({ control: stores.control, store: createPostgresSourceStore(database), secrets: createEnvSecretResolver(), adapters: createStaticProbeAdapterResolver([]) })
 
   const coreModelRefs = modelComponentRefsOf(modelEnvironment, modelCapabilities)
+
+  // Execution model binding (design §5.3): the shared catalogue/binding stores, the credential
+  // custodian and the per-execution capability provider. Deployment builds the admin services
+  // from these same instances so a binding always names the exact connection the catalogue holds.
+  const modelConnectionStore = new PostgresModelConnectionStore(database)
+  const modelAssignmentStore = new PostgresModelAssignmentStore(database)
+  const modelBindingStore = new PostgresExecutionModelBindingStore(database)
+  const modelCredentialCustodian = new LocalModelCredentialCustodian({ objectDirectory: options.objectDirectory })
+  const modelTargetDirectory = createModelTargetDirectory({ workspaces: stores.workspaceStore, projects: stores.projectStore })
+  const modelSelectionService = new ModelSelectionService({
+    assignments: modelAssignmentStore,
+    connections: modelConnectionStore,
+    targets: modelTargetDirectory,
+  })
+  const modelBindingService = new ExecutionModelBindingService({
+    bindings: modelBindingStore,
+    resolver: modelSelectionService,
+    connections: modelConnectionStore,
+  })
+  const jevFallbackPolicy = jevFallbackPolicyOf(modelEnvironment)
+  const modelBindingRuntime = createExecutionModelBindingRuntime({
+    scopeRef,
+    bindings: modelBindingStore,
+    connections: modelConnectionStore,
+    credentials: modelCredentialCustodian,
+    isUsable: (executionId, capability, ctx) => modelBindingService.isUsable(executionId, capability, ctx),
+    capabilityDependencies: {
+      budget: stores.budget,
+      generationEvidence: modelEvidence.generation,
+      decisionEvidence: modelEvidence.decision,
+      decisionStateResolver: jevStateResolver,
+      schemaValidator: extractionSchemaValidator,
+      jevFallbackPolicy,
+    },
+  })
+  const runModelBinder = createRunModelBinder({
+    selection: modelSelectionService,
+    bindings: modelBindingService,
+    // A run accept is a system action: the binder uses a host-minted editor context, never the
+    // requesting business user's roles, so a business user cannot widen which model is selected.
+    serverContext: (runId) => workerContext(scopeRef, allSourceRefs, runId, sha256DigestOf(`core-run-model-binding:${runId}`), hostClock),
+  })
+
   const componentRecords = [...scenarioComponentRecords(examples.scenarios, new Date().toISOString(), compute, coreModelRefs),
     componentRecord({ kind: 'compute_extension', ref: componentRef('compute_extension', 'core-rule-derivation-producer', 'rule-derivation-producer@1.0.0'), capabilityNames: ['evidence.rule_derivation'], entrypoint: '@ontology/semantic-engine', now: hostClock().toISOString() }),
     ...(options.projectDataset === undefined ? [] : [componentRecord({ kind: 'data_backend', ref: DATA_POSTGRES_ADAPTER_REF, capabilityNames: ['structured_query'], entrypoint: '@ontology/adapter-data-postgres', now: hostClock().toISOString() })]),
@@ -187,6 +251,8 @@ export async function assembleInfrastructure(options: CoreLocalCompositionOption
     materializationStore: stores.materializationStore, decisionStateReferences: stores.decisionStateReferences, answerStore: stores.answerStore,
     dispatchStore: stores.dispatchStore, budget: stores.budget,
     modelEnvironment, modelEvidence, decisionStateRefProvider, jevStateResolver, extractionSchemaValidator, modelCapabilities,
+    modelConnectionStore, modelAssignmentStore, modelBindingStore, modelCredentialCustodian, modelTargetDirectory,
+    modelSelectionService, modelBindingService, modelBindingRuntime, runModelBinder,
     schemaSource, semanticDefinitions, projectDatasetAdapter, publishedProjectDatasetSource, projectEvolutionCell, normalApprovedInputs,
     evolutionGuard, projectDatasetService, profileResolver, sources, coreModelRefs, componentRecords, bootstrapProfileSpecsByScenario,
     profileRefsByScenario, profileSpecsByScenario, availableTasksByScenario, terminology, executionPreview,
