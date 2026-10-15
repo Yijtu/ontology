@@ -48,11 +48,13 @@ export { PostgresDefinitionEditingStore } from './definition-editing-store'
 export { PostgresProjectStore } from './project-store'
 export { PostgresProjectEvolutionStore } from './project-evolution-store'
 export { PostgresProjectReadinessStore } from './project-readiness-store'
+export { PostgresWorkbenchStateReader } from './workbench-state-reader'
 export { PostgresProjectDocumentStore } from './project-document-store'
 export { PostgresProjectMappingStore } from './project-mapping-store'
 export { PostgresProjectRecordStore } from './project-record-store'
 export { PostgresInstanceReviewStore } from './instance-review-store'
 export { PostgresCandidateSourceStore } from './candidate-source-store'
+export { PostgresResearchExecutionStore } from './research-execution-store'
 export { PostgresSourceAdmissionStore } from './source-admission-store'
 export {
   PostgresSyntheticExampleSetStore,

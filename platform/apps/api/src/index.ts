@@ -150,6 +150,8 @@ export type { ProjectRouteDependencies } from './http/projects'
 export type { AssetCandidateRouteDependencies } from './http/asset-candidates'
 export { registerWorkbenchRoutes } from './http/workbench'
 export type { WorkbenchApiOptions, WorkbenchRouteDependencies } from './http/workbench'
+export { registerWorkbenchOverviewRoutes } from './http/workbench-overview'
+export type { WorkbenchOverviewRouteDependencies } from './http/workbench-overview'
 export { registerDecisionRoutes } from './http/decisions'
 export { detailOf } from './http/decisions'
 export type {

@@ -27,7 +27,7 @@ export function AnswerSourceContent({ view }: { readonly view: AnswerSourceView 
         {view.fixedDatasetSnapshotRef === undefined ? null : <><dt>固定数据快照</dt><dd><code>{view.fixedDatasetSnapshotRef.id}@{view.fixedDatasetSnapshotRef.version}</code></dd><dt>快照摘要</dt><dd><code>{view.fixedDatasetSnapshotRef.digest}</code></dd></>}</dl>
       </details>}
     </>}
-    {view.support === undefined ? null : <EvidenceSummary evidence={view.support} />}
+    {view.support === undefined ? null : <EvidenceSummary evidence={view.support} source={view} />}
     <details className="project-audit"><summary>答案与证据版本</summary><dl><dt>固定答案</dt><dd><code>{view.answerId}</code></dd><dt>答案内容摘要</dt><dd><code>{view.answerRef.digest}</code></dd><dt>证据</dt><dd><code>{view.evidenceId}</code></dd></dl></details>
   </section>
 }

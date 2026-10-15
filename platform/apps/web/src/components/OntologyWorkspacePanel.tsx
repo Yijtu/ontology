@@ -15,6 +15,8 @@ import { PackagePublicationPanel } from './PackagePublicationPanel'
 import './ontology/ontology.css'
 import { WorkspaceSourcesPanel } from './WorkspaceSourcesPanel'
 import { ResearchPanel } from './ResearchPanel'
+import { IndustryWorkflowGuide } from './IndustryWorkflowGuide'
+import type { IndustryWorkflowTarget } from './IndustryWorkflowGuide'
 
 /**
  * The public ontology-workspace home (SPEC v0.3a §9.1/§9.2, A.US-001, P.US-002). It lists the
@@ -133,6 +135,7 @@ export function OntologyWorkspacePanel({
 }: OntologyWorkspacePanelProps) {
   const [stage, setStage] = useState('sources')
   const [stageRefresh, setStageRefresh] = useState(0)
+  const [flowTarget, setFlowTarget] = useState<IndustryWorkflowTarget | undefined>(undefined)
   const [createOpen, setCreateOpen] = useState(true)
   const initialWorkspaceListRead = useRef(false)
   const [visited, setVisited] = useState<ReadonlySet<string>>(new Set(['sources']))
@@ -149,6 +152,9 @@ export function OntologyWorkspacePanel({
     window.history.replaceState(window.history.state, '', url.toString())
   }
   const openStage = (next: string) => { const wasVisited = visited.has(next); setVisited((old) => new Set(old).add(next)); if (wasVisited && next !== stage && (next === 'review' || next === 'publish')) setStageRefresh((value) => value + 1); setStage(next) }
+  // The workflow guide jumps to the exact stage and item; the target is handed to the child surface so
+  // it can focus the named source or candidate instead of a generic list. The workspace stays selected.
+  const openWorkflowTarget = (target: IndustryWorkflowTarget): void => { setFlowTarget(target); openStage(target.stage) }
   const selectedRef = useRef<string | undefined>(undefined)
   const boundaryBuffers = useRef(new Map<string, WorkspaceCreateFields>())
   const createPending = useRef<{ readonly body: string; readonly key: string } | undefined>(undefined)
@@ -254,6 +260,7 @@ export function OntologyWorkspacePanel({
     setSelectedId(workspaceId)
     onSelectWorkspace?.(workspaceId)
     setStage('sources')
+    setFlowTarget(undefined)
     setEditMode(false)
     workspaceQuery(workspaceId)
   }
@@ -588,12 +595,21 @@ export function OntologyWorkspacePanel({
           </div>
 
           </details>
+          <IndustryWorkflowGuide
+            client={client}
+            workspaceId={selected.workspaceId}
+            readOnly={readOnly}
+            activeStage={stage === 'review' ? 'review' : stage === 'publish' ? 'publish' : 'sources'}
+            onOpenStage={openWorkflowTarget}
+            refreshKey={stageRefresh}
+          />
           <nav className="ontology-stage-tabs" aria-label="本体工作步骤"><Button aria-current={stage === "sources" ? "step" : undefined} onClick={() => openStage("sources")}>1–2 资料与生成</Button><Button aria-current={stage === "review" ? "step" : undefined} onClick={() => openStage("review")}>3 编辑与审核</Button><Button aria-current={stage === "publish" ? "step" : undefined} onClick={() => openStage("publish")}>4–5 验核与发布</Button></nav>
-          {visited.has("review") ? <div hidden={stage !== "review"}><DefinitionWorkbenchPanel client={client} workspaceId={selected.workspaceId} readOnly={readOnly} refreshKey={stage === 'review' ? stageRefresh : 0} /></div> : null}{visited.has("publish") ? <div hidden={stage !== "publish"}><PackagePublicationPanel client={client} workspaceId={selected.workspaceId} readOnly={readOnly} refreshKey={stage === 'publish' ? stageRefresh : 0} /></div> : null}<div hidden={stage !== "sources"}><WorkspaceSourcesPanel
+          {visited.has("review") ? <div hidden={stage !== "review"}><DefinitionWorkbenchPanel client={client} workspaceId={selected.workspaceId} readOnly={readOnly} refreshKey={stage === 'review' ? stageRefresh : 0} {...(flowTarget?.candidateId === undefined ? {} : { focusCandidateId: flowTarget.candidateId })} /></div> : null}{visited.has("publish") ? <div hidden={stage !== "publish"}><PackagePublicationPanel client={client} workspaceId={selected.workspaceId} readOnly={readOnly} refreshKey={stage === 'publish' ? stageRefresh : 0} /></div> : null}<div hidden={stage !== "sources"}><WorkspaceSourcesPanel
             client={client}
             workspace={selected}
             identity={identity}
             readOnly={readOnly}
+            {...(flowTarget?.sourceId === undefined ? {} : { focusSourceId: flowTarget.sourceId })}
             onWorkspaceChanged={(workspace, draft) => { setWorkspaces((old) => old.map((value) => value.workspaceId === workspace.workspaceId ? workspace : value)); if (selectedRef.current === workspace.workspaceId) setDrafts((old) => [...old.filter((v) => v.revision !== draft.revision), draft]) }}
             onContinue={() => openStage("review")}
             onOpenResearch={() => setResearchOpen(true)}
