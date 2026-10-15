@@ -49,6 +49,13 @@ export interface CandidateSource {
   readonly researchRunId?: Uuid
   /** Immutable references to this source's appended review records. */
   readonly reviewRecordRefs?: readonly ResourceRef[]
+  /**
+   * The visibility fence raised by a retraction (design §2.2). Present means the source was
+   * retracted after review; the original snapshot and review history are preserved, but new
+   * publication/use must re-evaluate its dependencies.
+   */
+  readonly retractedAt?: string
+  readonly retractedBy?: string
   readonly recordedAt: string
 }
 
@@ -62,7 +69,8 @@ export interface CandidateSourceRecord extends CandidateSource {
 }
 
 export type CandidateSourceErrorCode =
-  | 'INVALID_SOURCE' | 'NOT_FOUND' | 'VERSION_CONFLICT' | 'IDEMPOTENCY_CONFLICT' | 'STORE_FAILED' | 'SCOPE_MISMATCH'
+  | 'INVALID_SOURCE' | 'NOT_FOUND' | 'VERSION_CONFLICT' | 'IDEMPOTENCY_CONFLICT' | 'STORE_FAILED'
+  | 'SCOPE_MISMATCH' | 'FORBIDDEN'
 
 export class CandidateSourceError extends Error {
   constructor(readonly code: CandidateSourceErrorCode, message: string, options?: ErrorOptions) {
@@ -192,6 +200,12 @@ function assertOptionalCandidateSourceFields(value: Record<string, unknown>): vo
     if (ids.size !== reviewRecordRefs.length) {
       throw new CandidateSourceError('INVALID_SOURCE', 'candidate source review record refs must be distinct')
     }
+  }
+  if (value['retractedAt'] !== undefined && (typeof value['retractedAt'] !== 'string' || !Number.isFinite(Date.parse(value['retractedAt'])))) {
+    throw new CandidateSourceError('INVALID_SOURCE', 'a candidate source retractedAt must be an instant')
+  }
+  if (value['retractedBy'] !== undefined && !isNonEmptyString(value['retractedBy'])) {
+    throw new CandidateSourceError('INVALID_SOURCE', 'a candidate source retractedBy must be a non-empty string')
   }
 }
 

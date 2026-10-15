@@ -1,16 +1,16 @@
 import { randomUUID } from 'node:crypto'
-import { PostgresCandidateSourceStore, PostgresProjectEvolutionStore } from '@ontology/adapter-control-postgres'
+import { PostgresCandidateSourceStore, PostgresProjectEvolutionStore, PostgresSourceAdmissionStore } from '@ontology/adapter-control-postgres'
 import { ArtifactGroundingDocumentSetReader, ParsedSourceGroundingReader, StructuredDocumentParser } from '@ontology/adapter-extraction-document'
 import { DATA_DUCKDB_ADAPTER_REF } from '@ontology/adapter-data-duckdb'
 import { DATA_POSTGRES_ADAPTER_REF } from '@ontology/adapter-data-postgres'
 import {
-  CandidateSourceIngestionService, ComponentRegistry, CompositeReviewableCandidateReader, DefinitionCandidateEditingService, DefinitionCandidateGenerationService,
+  CandidateSourceIngestionService, CandidateSourceReviewService, ComponentRegistry, CompositeReviewableCandidateReader, DefinitionCandidateEditingService, DefinitionCandidateGenerationService,
   IndustryAssetPublicationService, IndustryPackExportService, IndustryPackUpgradeService,
   IndustryValidationService, InMemoryIndustryPackCatalogue, InstanceReviewService, JobService,
   ProjectMappingService, ProjectService, PublishedPackRuleDeclarationReader, ResultHistoryService, RuleActionCandidateService,
   RuleActionCandidateGenerationService, RunServiceError, StoreBackedIndustryPackCatalogue, SyntheticExampleService,
-  TableArtifactReadService, VerifiedResultExportService, VerifiedResultReadService, WebResearchService, createSourceGroundingService,
-  encodeStructuredExtractionRef, readWorkspacePublicationSourceDrafts,
+  TableArtifactReadService, VerifiedResultExportService, VerifiedResultReadService, WebResearchService, WorkspaceSourceAdmissionService,
+  createSourceGroundingService, encodeStructuredExtractionRef, readWorkspacePublicationSourceDrafts,
 } from '@ontology/application'
 import { ArchivedRulePremiseReplayVerifier, FiniteGrammarRuleSupportValidator, FiniteGrammarSyntheticEvaluator, IdentityDecisionService } from '@ontology/semantic-engine'
 import type { ActionCapabilityBindingInput, GenerationPort, ProfileRef, ProjectRevision, ScopeRef, ToolContext, VerifiedTableManifestSource } from '@ontology/contracts'
@@ -41,6 +41,7 @@ import { createCoreInstanceIdentity } from './core-instance-identity'
 import { createCoreProjectApi } from './core-project-api'
 import { createProjectEvolutionWorkflow } from './project-evolution'
 import { createCoreStructuredImportWorkflow } from './core-structured-import-service'
+import { createSourceAdmissionPorts } from './core-source-admission'
 import { createBlobArtifactWriter } from './tool-gateway'
 import type { CoreLocalCompositionOptions } from './core-local-composition'
 import type { assembleInfrastructure } from './core-assembly-infrastructure'
@@ -280,6 +281,18 @@ export async function assembleDeployment(
     webSearch: options.webSearch,
     ingestion: new CandidateSourceIngestionService({ artifacts: createBlobArtifactWriter(blobStore), sources: candidateSourceStore }),
   })
+  const candidateSourceReview = new CandidateSourceReviewService({ sources: candidateSourceStore, retractions: candidateSourceStore })
+  const sourceAdmissionPorts = createSourceAdmissionPorts({ blobs: blobStore, objectStore, registry: artifactRegistry, parses: parseStore, structured: structuredStore })
+  const sourceAdmissionService = new WorkspaceSourceAdmissionService({
+    sources: candidateSourceStore,
+    workspaces: state.workspaceStore,
+    documentSets: new ArtifactGroundingDocumentSetReader(blobStore),
+    content: sourceAdmissionPorts.content,
+    parser: sourceAdmissionPorts.parser,
+    writer: sourceAdmissionPorts.writer,
+    admissions: new PostgresSourceAdmissionStore(database),
+    jobs: state.jobStore,
+  })
   const controller = host.controller
   if (controller === undefined) throw new CoreCapabilityError('the Core controller is not mounted')
   const dependencies: CoreApiDependencies = {
@@ -314,7 +327,8 @@ export async function assembleDeployment(
       history: { service: provenanceRead.history },
       packs: { catalogue: packCatalogue, packExports: packExportService, packUpgrades: packUpgradeService, publication: industryAssetPublicationService },
       assetCandidates: { generation: definitionGenerationService },
-      candidateSources: { sources: candidateSourceStore, ...(candidateSourceResearch === undefined ? {} : { research: candidateSourceResearch }) },
+      candidateSources: { sources: candidateSourceStore, review: candidateSourceReview, retractions: candidateSourceStore,
+        admissions: sourceAdmissionService, ...(candidateSourceResearch === undefined ? {} : { research: candidateSourceResearch }) },
       definitionEditing: { service: definitionEditingService },
       ruleActionCandidates: { service: ruleActionCandidateService, generation: ruleActionGenerationService, bindingContext: actionBindingContext },
       competencyQuestions: { service: competencyQuestions.service, uploadSource: competencyQuestions.uploadSource },

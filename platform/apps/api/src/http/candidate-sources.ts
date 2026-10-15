@@ -1,11 +1,20 @@
 import type { FastifyInstance } from 'fastify'
-import { assertModelingBriefShape, CandidateSourceError } from '@ontology/contracts'
+import {
+  assertModelingBriefShape,
+  CandidateSourceError,
+  SourceAdmissionError,
+} from '@ontology/contracts'
 import type {
+  CandidateSourceReviewCommand,
   CandidateSourceReviewState,
+  CandidateSourceRetractionStore,
   CandidateSourceStore,
+  SourceAdmissionCommand,
+  SourceAdmissionTableOptions,
+  SourceRetractionCommand,
   SourceTrustTier,
 } from '@ontology/contracts'
-import { WebResearchError } from '@ontology/application'
+import { CandidateSourceReviewService, WebResearchError, WorkspaceSourceAdmissionService } from '@ontology/application'
 import type { WebResearchService } from '@ontology/application'
 import { createRequestToolContext } from './context'
 import {
@@ -32,6 +41,12 @@ export interface CandidateSourceRouteDependencies {
   readonly sources: CandidateSourceStore
   /** Present only when a web search provider is configured for this deployment. */
   readonly research?: WebResearchService
+  /** The append-only review/retraction surface; built from `sources` when absent. */
+  readonly review?: CandidateSourceReviewService
+  /** The retraction store, when it is not the same object as `sources`. */
+  readonly retractions?: CandidateSourceRetractionStore
+  /** Present only when the deployment can admit a reviewed source into a corpus. */
+  readonly admissions?: WorkspaceSourceAdmissionService
   readonly authenticate: RequestAuthenticator
 }
 
@@ -54,10 +69,24 @@ function readPageSize(request: Parameters<RequestAuthenticator>[0]): number {
   return Math.min(raw, MAX_PAGE_SIZE)
 }
 
-/** Render a store/research failure as its classified HTTP status instead of a bare 500. */
+function readCursor(request: Parameters<RequestAuthenticator>[0]): string | undefined {
+  return readQueryString(request, 'cursor')
+}
+
+/** Render a store/research/admission failure as its classified HTTP status instead of a bare 500. */
 function classifiedFrom(error: unknown): never {
   if (error instanceof CandidateSourceError) {
-    const httpStatus = error.code === 'NOT_FOUND' ? 404 : error.code === 'SCOPE_MISMATCH' ? 403 : error.code === 'INVALID_SOURCE' ? 400 : 409
+    const httpStatus = error.code === 'NOT_FOUND' ? 404
+      : error.code === 'SCOPE_MISMATCH' || error.code === 'FORBIDDEN' ? 403
+        : error.code === 'INVALID_SOURCE' ? 400 : 409
+    throw Object.assign(new Error(error.message), { code: error.code, httpStatus })
+  }
+  if (error instanceof SourceAdmissionError) {
+    const httpStatus = error.code === 'NOT_FOUND' ? 404
+      : error.code === 'FORBIDDEN' || error.code === 'SCOPE_MISMATCH' ? 403
+        : error.code === 'INVALID_REQUEST' || error.code === 'DIGEST_MISMATCH' || error.code === 'MISSING_ORIGINAL'
+          || error.code === 'UNSUPPORTED_MEDIA_TYPE' || error.code === 'EMPTY_SOURCE' ? 400
+          : error.code === 'STORE_FAILED' ? 500 : 409
     throw Object.assign(new Error(error.message), { code: error.code, httpStatus })
   }
   if (error instanceof WebResearchError) {
@@ -68,12 +97,14 @@ function classifiedFrom(error: unknown): never {
 }
 
 /**
- * The candidate-source research and review surface (design §5).
+ * The candidate-source research, review, admission and retraction surface (design §2.2/§2.4).
  *
- * Reads list the workspace's proposed sources with their provenance tier and review state; a
- * review promotes (`public_standard`), approves or rejects one source and is a compare-and-swap on
- * the revision the reviewer read (If-Match). Research runs only for a `researcher` role, only
- * inside the brief's approved domains, and only produces `agent_researched` proposals.
+ * A review promotes/approves/rejects one source, appends an auditable event and is a compare-and-swap
+ * on the revision the reviewer read (If-Match); an admission fixes the reviewed revision, builds a
+ * new immutable workspace document set and appends the draft under one control transaction; a
+ * retraction appends an event and a fence while the original snapshot and history stay readable.
+ * Research runs only for a `researcher` role, only inside the brief's approved domains, and only
+ * produces `agent_researched` proposals.
  */
 export function registerCandidateSourceRoutes(
   app: FastifyInstance,
@@ -81,6 +112,10 @@ export function registerCandidateSourceRoutes(
 ): void {
   const contextFor = (auth: AuthenticatedRequest, traceId: string, resourceId: string, domains: readonly string[]) =>
     createRequestToolContext({ principal: auth.principal, spaceId: auth.spaceId, traceId, runId: resourceId, allowedDomains: domains })
+  const review = dependencies.review ?? new CandidateSourceReviewService({
+    sources: dependencies.sources,
+    ...(dependencies.retractions === undefined ? {} : { retractions: dependencies.retractions }),
+  })
 
   app.get<{ Params: { workspaceId: string } }>(
     '/api/v1/industry-workspaces/:workspaceId/sources',
@@ -97,17 +132,37 @@ export function registerCandidateSourceRoutes(
         throw new InvalidRequestFieldError(`trustTier must be one of ${TRUST_TIERS.join(', ')}`)
       }
       const workspaceId = request.params.workspaceId
-      const sources = await dependencies.sources.listSources(
-        { tenantId: auth.principal.tenantId, spaceId: auth.spaceId },
-        workspaceId,
-        {
-          ...(reviewState === undefined ? {} : { reviewState: reviewState as CandidateSourceReviewState }),
-          ...(trustTier === undefined ? {} : { trustTier: trustTier as SourceTrustTier }),
-          limit: readPageSize(request),
-        },
-        contextFor(auth, traceId, workspaceId, []),
-      )
+      const cursor = readCursor(request)
+      const scope = { tenantId: auth.principal.tenantId, spaceId: auth.spaceId }
+      const ctx = contextFor(auth, traceId, workspaceId, [])
+      const filter = {
+        ...(reviewState === undefined ? {} : { reviewState: reviewState as CandidateSourceReviewState }),
+        ...(trustTier === undefined ? {} : { trustTier: trustTier as SourceTrustTier }),
+      }
+      if (dependencies.sources.listSourcesPage !== undefined) {
+        const result = await dependencies.sources.listSourcesPage(scope, workspaceId,
+          { limit: readPageSize(request), ...(cursor === undefined ? {} : { cursor }), filter }, ctx)
+        reply.status(200).send({ data: { sources: result.sources }, meta: { traceId, complete: result.complete, ...(result.nextCursor === undefined ? {} : { nextCursor: result.nextCursor }) } })
+        return reply
+      }
+      const sources = await dependencies.sources.listSources(scope, workspaceId, { ...filter, limit: readPageSize(request) }, ctx)
       reply.status(200).send({ data: { sources }, meta: { traceId } })
+      return reply
+    },
+  )
+
+  app.get<{ Params: { workspaceId: string; sourceId: string } }>(
+    '/api/v1/industry-workspaces/:workspaceId/sources/:sourceId/reviews',
+    async (request, reply) => {
+      const traceId = readTraceId(request)
+      const auth = authenticateRequest(dependencies.authenticate, request, reply)
+      if (auth === undefined) return reply
+      const workspaceId = request.params.workspaceId
+      const reviewCursor = readCursor(request)
+      const page = { limit: readPageSize(request), ...(reviewCursor === undefined ? {} : { cursor: reviewCursor }) }
+      const result = await review.listReviewEvents(workspaceId, request.params.sourceId, page,
+        contextFor(auth, traceId, workspaceId, [])).catch((error: unknown) => classifiedFrom(error))
+      reply.status(200).send({ data: { events: result.events }, meta: { traceId, ...(result.nextCursor === undefined ? {} : { nextCursor: result.nextCursor }) } })
       return reply
     },
   )
@@ -123,29 +178,127 @@ export function registerCandidateSourceRoutes(
       }
       const body = request.body
       if (!isRecord(body)) throw new InvalidRequestFieldError('the request body must be a JSON object')
-      rejectUnknownFields(body, ['reviewState', 'trustTier'])
+      rejectUnknownFields(body, ['reviewState', 'trustTier', 'reason', 'basisRefs'])
       if (typeof body['reviewState'] !== 'string' || !(REVIEW_STATES as readonly string[]).includes(body['reviewState'])) {
         throw new InvalidRequestFieldError(`reviewState must be one of ${REVIEW_STATES.join(', ')}`)
       }
       if (body['trustTier'] !== undefined && (typeof body['trustTier'] !== 'string' || !(TRUST_TIERS as readonly string[]).includes(body['trustTier']))) {
         throw new InvalidRequestFieldError(`trustTier must be one of ${TRUST_TIERS.join(', ')}`)
       }
+      if (typeof body['reason'] !== 'string' || body['reason'].length === 0) {
+        throw new InvalidRequestFieldError('a review reason is required')
+      }
+      if (body['basisRefs'] !== undefined && !Array.isArray(body['basisRefs'])) {
+        throw new InvalidRequestFieldError('basisRefs must be an array of resource references')
+      }
       const header = readRevisionHeader(request)
       if (header.kind !== 'revision') throw new InvalidRequestFieldError('If-Match must be the source revision being reviewed')
       const workspaceId = request.params.workspaceId
-      const source = await dependencies.sources.reviewSource(
-        { tenantId: auth.principal.tenantId, spaceId: auth.spaceId },
-        {
-          sourceId: request.params.sourceId,
-          reviewState: body['reviewState'] as CandidateSourceReviewState,
-          ...(body['trustTier'] === undefined ? {} : { trustTier: body['trustTier'] as SourceTrustTier }),
-          reviewedBy: auth.principal.subjectId,
-          expectedRevision: header.value,
-          idempotencyKey: requireIdempotencyKey(request),
-        },
+      const command: CandidateSourceReviewCommand = {
+        schemaVersion: 'candidate-source-review@1',
+        sourceId: request.params.sourceId,
+        workspaceId,
+        reviewState: body['reviewState'] as CandidateSourceReviewState,
+        ...(body['trustTier'] === undefined ? {} : { trustTier: body['trustTier'] as SourceTrustTier }),
+        reviewedBy: auth.principal.subjectId,
+        reason: body['reason'],
+        expectedRevision: header.value,
+        basisRefs: (body['basisRefs'] ?? []) as CandidateSourceReviewCommand['basisRefs'],
+        idempotencyKey: requireIdempotencyKey(request),
+      }
+      const receipt = await review.review(command, contextFor(auth, traceId, workspaceId, []))
+        .catch((error: unknown) => classifiedFrom(error))
+      const source = await dependencies.sources.getSource(
+        { tenantId: auth.principal.tenantId, spaceId: auth.spaceId }, request.params.sourceId,
         contextFor(auth, traceId, workspaceId, []),
-      ).catch((error: unknown) => classifiedFrom(error))
-      reply.status(201).send({ data: { source }, meta: { traceId, revision: source.revision } })
+      )
+      reply.status(receipt.replayed ? 200 : 201).send({ data: { source, receipt }, meta: { traceId, revision: receipt.revision } })
+      return reply
+    },
+  )
+
+  if (dependencies.admissions !== undefined) {
+    const admissions = dependencies.admissions
+    app.post<{ Params: { workspaceId: string } }>(
+      '/api/v1/industry-workspaces/:workspaceId/source-admissions',
+      async (request, reply) => {
+        const traceId = readTraceId(request)
+        const auth = authenticateRequest(dependencies.authenticate, request, reply)
+        if (auth === undefined) return reply
+        if (!auth.principal.roles.some((role) => REVIEW_ROLES.includes(role))) {
+          throw new ForbiddenError('admitting a source requires an editor or platform-admin role')
+        }
+        const body = request.body
+        if (!isRecord(body)) throw new InvalidRequestFieldError('the request body must be a JSON object')
+        rejectUnknownFields(body, ['sourceId', 'expectedSourceRevision', 'expectedWorkspaceRevision', 'parseOptions'])
+        if (typeof body['sourceId'] !== 'string') throw new InvalidRequestFieldError('sourceId is required')
+        if (typeof body['expectedSourceRevision'] !== 'string' || typeof body['expectedWorkspaceRevision'] !== 'string') {
+          throw new InvalidRequestFieldError('expectedSourceRevision and expectedWorkspaceRevision are required')
+        }
+        const workspaceId = request.params.workspaceId
+        const command: SourceAdmissionCommand = {
+          schemaVersion: 'source-admission-command@1',
+          workspaceId,
+          sourceId: body['sourceId'],
+          expectedSourceRevision: body['expectedSourceRevision'],
+          expectedWorkspaceRevision: body['expectedWorkspaceRevision'],
+          ...(body['parseOptions'] === undefined ? {} : { parseOptions: body['parseOptions'] as SourceAdmissionTableOptions }),
+          idempotencyKey: requireIdempotencyKey(request),
+        }
+        const receipt = await admissions.admit(command, contextFor(auth, traceId, workspaceId, []))
+          .catch((error: unknown) => classifiedFrom(error))
+        reply.status(receipt.replayed ? 200 : 201).send({ data: { admission: receipt }, meta: { traceId } })
+        return reply
+      },
+    )
+
+    app.get<{ Params: { workspaceId: string } }>(
+      '/api/v1/industry-workspaces/:workspaceId/source-admissions',
+      async (request, reply) => {
+        const traceId = readTraceId(request)
+        const auth = authenticateRequest(dependencies.authenticate, request, reply)
+        if (auth === undefined) return reply
+        const workspaceId = request.params.workspaceId
+        const admissionCursor = readCursor(request)
+        const page = { limit: readPageSize(request), ...(admissionCursor === undefined ? {} : { cursor: admissionCursor }) }
+        const result = await admissions.listAdmissions(workspaceId, page, contextFor(auth, traceId, workspaceId, []))
+          .catch((error: unknown) => classifiedFrom(error))
+        reply.status(200).send({ data: { admissions: result.admissions }, meta: { traceId, ...(result.nextCursor === undefined ? {} : { nextCursor: result.nextCursor }) } })
+        return reply
+      },
+    )
+  }
+
+  app.post<{ Params: { workspaceId: string } }>(
+    '/api/v1/industry-workspaces/:workspaceId/source-retractions',
+    async (request, reply) => {
+      const traceId = readTraceId(request)
+      const auth = authenticateRequest(dependencies.authenticate, request, reply)
+      if (auth === undefined) return reply
+      if (!auth.principal.roles.some((role) => REVIEW_ROLES.includes(role))) {
+        throw new ForbiddenError('retracting a source requires an editor or platform-admin role')
+      }
+      const body = request.body
+      if (!isRecord(body)) throw new InvalidRequestFieldError('the request body must be a JSON object')
+      rejectUnknownFields(body, ['sourceId', 'reason'])
+      if (typeof body['sourceId'] !== 'string') throw new InvalidRequestFieldError('sourceId is required')
+      if (typeof body['reason'] !== 'string' || body['reason'].length === 0) {
+        throw new InvalidRequestFieldError('a retraction reason is required')
+      }
+      const header = readRevisionHeader(request)
+      if (header.kind !== 'revision') throw new InvalidRequestFieldError('If-Match must be the source revision being retracted')
+      const workspaceId = request.params.workspaceId
+      const command: SourceRetractionCommand = {
+        schemaVersion: 'source-retraction-command@1',
+        workspaceId,
+        sourceId: body['sourceId'],
+        expectedRevision: header.value,
+        reason: body['reason'],
+        idempotencyKey: requireIdempotencyKey(request),
+      }
+      const receipt = await review.retract(command, contextFor(auth, traceId, workspaceId, []))
+        .catch((error: unknown) => classifiedFrom(error))
+      reply.status(receipt.replayed ? 200 : 201).send({ data: { retraction: receipt }, meta: { traceId } })
       return reply
     },
   )
