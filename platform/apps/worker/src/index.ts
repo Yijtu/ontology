@@ -36,6 +36,8 @@ export type {
 } from './materialization-consumer'
 export { SIMULATION_RESULT_MEDIA_TYPE, SimulationStageHandler, createWorkerStageRegistry } from './simulation-stage'
 export type { SimulationRunGuard, SimulationStageDependencies } from './simulation-stage'
+export { ResearchStageHandler } from './research-stage'
+export type { ResearchStageDependencies } from './research-stage'
 export { WorkflowDispatchWorker } from './workflow-dispatch-worker'
 export type { WorkflowDispatchWorkerOptions } from './workflow-dispatch-worker'
 export { ProjectEvolutionOutboxConsumer } from './project-evolution-consumer'

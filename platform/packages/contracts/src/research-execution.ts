@@ -83,6 +83,16 @@ export interface ResearchCoverage {
 }
 
 /**
+ * A link from a research execution to one candidate source it registered. `sourceId` is the
+ * `CandidateSource` id and `url` its origin page, so a reader can open the source a run proposed
+ * without re-deriving the relationship from a page list. It carries no snapshot bytes.
+ */
+export interface ResearchSourceRef {
+  readonly sourceId: Uuid
+  readonly url: string
+}
+
+/**
  * One immutable research execution. It pins the brief/policy/budget it ran under, references the
  * job that owns progress/cancellation, and carries the coverage and both counts so a reader never
  * re-derives them from a page. `sourceCount`/`candidateCount` are deliberately separate.
@@ -103,6 +113,8 @@ export interface ResearchExecution {
   readonly sourceCount: number
   /** Candidates generated from confirmed sources; zero until a separate generation runs. */
   readonly candidateCount: number
+  /** The candidate sources this run proposed, so the sources are readable back from the run. */
+  readonly sources?: readonly ResearchSourceRef[]
   readonly stopReason?: ResearchStopReason
   readonly recordedAt: Rfc3339UtcTimestamp
 }
@@ -209,9 +221,16 @@ export function assertResearchExecutionShape(value: unknown): asserts value is R
     || !isResourceRef(value.briefRef) || !isVersionRef(value.policyRef) || !isVersionRef(value.budgetRef)
     || !isCount(value.sourceCount, Number.MAX_SAFE_INTEGER) || !isCount(value.candidateCount, Number.MAX_SAFE_INTEGER)
     || !isNonEmptyString(value.recordedAt)
-    || (value.stopReason !== undefined && !RESEARCH_STOP_REASONS.includes(value.stopReason as ResearchStopReason))) {
+    || (value.stopReason !== undefined && !RESEARCH_STOP_REASONS.includes(value.stopReason as ResearchStopReason))
+    || (value['sources'] !== undefined && !isSourceRefs(value['sources']))) {
     throw new ResearchError('INVALID_REQUEST', 'invalid research execution')
   }
   assertResearchLimits(value.limits)
   assertCoverage(value.coverage)
+}
+
+function isSourceRefs(value: unknown): boolean {
+  return Array.isArray(value)
+    && value.length <= 200
+    && value.every((entry) => isRecord(entry) && isUuid(entry['sourceId']) && isNonEmptyString(entry['url']))
 }
