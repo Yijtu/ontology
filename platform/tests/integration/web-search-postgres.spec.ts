@@ -9,6 +9,7 @@ import {
   FileSystemObjectStore,
   LocalImmutableBlobStore,
   PostgresArtifactRegistry,
+  sha256Digest,
 } from '@ontology/adapter-blob-local'
 import {
   ControlPostgresDatabase,
@@ -17,9 +18,9 @@ import {
   PostgresEvidenceStore,
   runControlMigrations,
 } from '@ontology/adapter-control-postgres'
-import { HttpWebSearchProvider } from '@ontology/adapter-search-web'
-import { createToolGatewayComposition } from '@ontology/app-api'
-import { createToolContext } from '@ontology/contracts'
+import { HttpWebSearchProvider, WebPageSnapshotArchiver } from '@ontology/adapter-search-web'
+import { createBlobArtifactWriter, createToolGatewayComposition } from '@ontology/app-api'
+import { assertWebPageSnapshotManifestShape, createToolContext } from '@ontology/contracts'
 import type { ScopeRef, ToolCall, ToolContext, ToolGateway } from '@ontology/contracts'
 import { BudgetService } from '@ontology/core'
 import { WebSearchHandler } from '@ontology/tool-services'
@@ -95,6 +96,10 @@ let budget: BudgetService
 let evidenceStore: PostgresEvidenceStore
 let gateway: ToolGateway
 let fixture: WebSearchFixture
+let archivedProvider: HttpWebSearchProvider
+
+const ARCHIVED_PAGE_HTML =
+  '<html><body><h1>Heat pump tariff guide</h1><p>Residential standing charges apply daily.</p></body></html>'
 
 function binding(): RunToolBinding {
   return { runId: RUN_A, ledgerId: LEDGER_A, resolvedProfile: fullProfile(), operations: operationRegistry() }
@@ -162,6 +167,17 @@ beforeAll(async () => {
     handlers: [handler],
   })
   gateway = composition.forRun(binding())
+
+  // A second provider with the controlled snapshot archiver, so the real PostgreSQL artifact
+  // registry and the filesystem object store prove an archived page reads back byte-for-byte.
+  archivedProvider = new HttpWebSearchProvider({
+    baseUrl: fixture.baseUrl,
+    snapshotArchive: new WebPageSnapshotArchiver({
+      artifacts: createBlobArtifactWriter(blobStore),
+      fetchImpl: async () =>
+        new Response(ARCHIVED_PAGE_HTML, { status: 200, headers: { 'content-type': 'text/html; charset=utf-8' } }),
+    }),
+  })
 }, 300_000)
 
 afterAll(async () => {
@@ -262,5 +278,27 @@ describe('real end-to-end web_search against PostgreSQL and blob-local', () => {
     // The trusted context allowlist is unchanged after fetching untrusted content.
     expect(CONTEXT_A.allowedResources.domains).toEqual(['example.com'])
     expect(fixture.requests.at(-1)?.domains).toEqual(['example.com'])
+  })
+
+  it('archives the actual page bytes and reads them back through PostgreSQL and the object store', async () => {
+    fixture.setScenario(scenarioWith([SAFE_PAGE]))
+    const result = await archivedProvider.search(
+      { query: 'heat pump tariff', allowedDomains: ['example.com'], limit: 5, deadline: '2030-01-01T00:00:00Z', signal: new AbortController().signal },
+      CONTEXT_A,
+    )
+    const page = result.pages[0]
+    if (page?.snapshotRef === undefined) throw new Error('the provider did not archive the page')
+    if (page.snapshotManifestRef === undefined) throw new Error('the provider did not record a snapshot manifest')
+
+    // The digest names the exact archived page bytes, not the provider's search summary.
+    expect(page.contentDigest).toBe(sha256Digest(new TextEncoder().encode(ARCHIVED_PAGE_HTML)))
+    const read = await blobStore.readAuthorized({ scopeRef: SCOPE_A, blobRef: page.snapshotRef }, CONTEXT_A)
+    expect(new TextDecoder().decode(read)).toBe(ARCHIVED_PAGE_HTML)
+    expect((await blobStore.getAuthorized({ scopeRef: SCOPE_A, blobRef: page.snapshotRef }, CONTEXT_A)).integrityVerified).toBe(true)
+
+    const manifest = JSON.parse(
+      new TextDecoder().decode(await blobStore.readAuthorized({ scopeRef: SCOPE_A, blobRef: page.snapshotManifestRef }, CONTEXT_A)),
+    ) as unknown
+    assertWebPageSnapshotManifestShape(manifest)
   })
 })

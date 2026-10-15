@@ -27,6 +27,8 @@ export interface GuideHomeProps {
   readonly selectedProjectId?: string
   readonly onCreateWorkspace?: (goal: string) => void
   readonly onCreateProject?: () => void
+  /** Opens the shared structured file-mapping intake (project data step) from the source entry. */
+  readonly onStructuredIntake?: () => void
 }
 
 const PATH_STEPS: readonly GuideStep[] = [
@@ -52,7 +54,7 @@ interface TodoItem { readonly id: string; readonly label: string; readonly actio
 export function GuideHome({
   scenarioLabel, classificationLabel, operatorEnabled, onNavigate, workspaces = [], projects = [],
   workspacePhase = 'ready', projectPhase = 'ready', onRetry, onSelectWorkspace, onSelectProject, onConfigureModel,
-  selectedWorkspaceId, selectedProjectId, onCreateWorkspace, onCreateProject,
+  selectedWorkspaceId, selectedProjectId, onCreateWorkspace, onCreateProject, onStructuredIntake,
 }: GuideHomeProps) {
   const [goal, setGoal] = useState('')
   const [sourceChoice, setSourceChoice] = useState<SourceEntry | undefined>(undefined)
@@ -112,7 +114,7 @@ export function GuideHome({
 
   const requestSource = (entry: SourceEntry): void => {
     if (!operatorEnabled) return
-    if (entry === 'structured') { onNavigate('projects'); return }
+    if (entry === 'structured') { (onStructuredIntake ?? (() => onNavigate('projects')))(); return }
     if (selectedWorkspace !== undefined) { onNavigate('jobs'); return }
     if (firstWorkspace !== undefined) { onSelectWorkspace?.(firstWorkspace.workspaceId); onNavigate('jobs'); return }
     setSourceChoice(entry)

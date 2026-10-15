@@ -223,6 +223,8 @@ export type { SavedCellSelector, SavedCellRead, SavedCellPorts } from './composi
 export { createRequestNativeSourceReader } from './composition/core-native-source-reader'
 export { createCoreAuthoring } from './composition/core-authoring'
 export type { CoreAuthoringOptions } from './composition/core-authoring'
+export { createSourceAdmissionPorts } from './composition/core-source-admission'
+export type { CoreSourceAdmissionOptions } from './composition/core-source-admission'
 export { createCoreProjectComputeInput, parseCoreComputeInputSelection } from './composition/core-project-compute-input'
 export type { CoreComputeInputSelection } from './composition/core-project-compute-input'
 export { createCoreApprovedInput } from './composition/core-approved-input'

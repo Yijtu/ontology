@@ -1,6 +1,7 @@
 import { useCallback, useEffect, useRef, useState } from 'react'
 import { isRecord } from '@ontology/contracts'
 import type { AssetCandidateBatch, AssetCandidateVersion, AssetDraftVersion, IndustryWorkspace, ResourceRef } from '@ontology/contracts'
+import type { SourceEntryPoint } from '@ontology/contracts'
 import type { WorkbenchClient } from '../api/client'
 import type { WorkspaceIdentity } from '../workspace-identity'
 import { definitionGuard } from '../api/definitions'
@@ -11,7 +12,13 @@ import type { GroundingView } from '../api/ontology'
 import { invalidWire, isLatestHumanReviewApproval, latestCandidateHeads, readGrounding, readHumanReviews } from '../api/ontology'
 import { classifyPublicError } from '../state/public-errors'
 import type { PublicFailure } from '../state/public-errors'
-import { PublicStateNotice } from './PublicStateNotice'
+import { PublicEmptyState, PublicStateNotice } from './PublicStateNotice'
+import { SourceIntakeEntries } from './SourceIntakeEntries'
+import type { SourceIntakeEntryView } from './SourceIntakeEntries'
+import { SourceLibraryList } from './SourceLibraryList'
+import type { SourceReviewSubmission } from './SourceLibraryList'
+import { mergeSourceLibrary, readCandidateSources, REVIEW_STATE_LABELS, reviewCandidateSource, TRUST_TIER_LABELS } from '../api/source-library'
+import type { CandidateSourceReadResult, SourceIntakePurpose, SourceLibraryEntry } from '../api/source-library'
 import { Button, DataTable, Drawer, Field, StatusBadge } from './ui'
 import './ontology/ontology.css'
 
@@ -24,9 +31,13 @@ export interface WorkspaceSourcesPanelProps {
   readonly onRegisterSourceSet?: (documentSetRef: ResourceRef, reason: string) => Promise<void>
   readonly onWorkspaceChanged?: (workspace: IndustryWorkspace, draft: AssetDraftVersion) => void
   readonly onContinue?: () => void
+  /** Provided by a deployment that wires the controlled public-search / archive service (design §1.3). */
+  readonly onOpenResearch?: () => void
+  /** Provided by a deployment that wires the project file-mapping surface; the source page only gathers the entry. */
+  readonly onOpenStructuredImport?: () => void
 }
 const mediaTypes: Readonly<Record<string, string>> = { txt: 'text/plain', md: 'text/markdown', csv: 'text/csv', xlsx: 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet', pdf: 'application/pdf' }
-export function WorkspaceSourcesPanel({ client, workspace, readOnly = false, onWorkspaceChanged, onContinue }: WorkspaceSourcesPanelProps) {
+export function WorkspaceSourcesPanel({ client, workspace, readOnly = false, onWorkspaceChanged, onContinue, onOpenResearch, onOpenStructuredImport }: WorkspaceSourcesPanelProps) {
   const [catalogue, setCatalogue] = useState<WorkspaceSourceCatalogue>()
   const [context, setContext] = useState<WorkspaceAuthoringContext>()
   const [failure, setFailure] = useState<PublicFailure>()
@@ -38,6 +49,12 @@ export function WorkspaceSourcesPanel({ client, workspace, readOnly = false, onW
   const [headerRow, setHeaderRow] = useState('1')
   const [dataStartRow, setDataStartRow] = useState('2')
   const [sheetName, setSheetName] = useState('')
+  const [purpose, setPurpose] = useState<SourceIntakePurpose>('industry_basis')
+  const [activeEntry, setActiveEntry] = useState<SourceEntryPoint>()
+  const [library, setLibrary] = useState<CandidateSourceReadResult>()
+  const [reviewBusyId, setReviewBusyId] = useState<string>()
+  const [reviewNotice, setReviewNotice] = useState('')
+  const [reviewFailure, setReviewFailure] = useState<PublicFailure>()
   const [selected, setSelected] = useState<readonly string[]>([])
   const [ruleTerms, setRuleTerms] = useState<readonly AssetCandidateVersion[]>([])
   const [selectedRuleTermIds, setSelectedRuleTermIds] = useState<readonly string[]>([])
@@ -47,9 +64,9 @@ export function WorkspaceSourcesPanel({ client, workspace, readOnly = false, onW
   const [previewOpen, setPreviewOpen] = useState(false)
   const [fragment, setFragment] = useState('')
   const [batch, setBatch] = useState<AssetCandidateBatch>()
-  const inputSnapshots = useRef(new Map<string, { readonly name: string; readonly file: File | undefined; readonly text: string; readonly headerRow: string; readonly dataStartRow: string; readonly sheetName: string }>())
-  const inputSnapshot = useRef({ name, file, text: pastedText, headerRow, dataStartRow, sheetName })
-  inputSnapshot.current = { name, file, text: pastedText, headerRow, dataStartRow, sheetName }
+  const inputSnapshots = useRef(new Map<string, { readonly name: string; readonly file: File | undefined; readonly text: string; readonly headerRow: string; readonly dataStartRow: string; readonly sheetName: string; readonly purpose: SourceIntakePurpose }>())
+  const inputSnapshot = useRef({ name, file, text: pastedText, headerRow, dataStartRow, sheetName, purpose })
+  inputSnapshot.current = { name, file, text: pastedText, headerRow, dataStartRow, sheetName, purpose }
   const activeWorkspace = useRef('')
   const epoch = useRef(0)
   const controller = useRef<AbortController | undefined>(undefined)
@@ -75,6 +92,9 @@ export function WorkspaceSourcesPanel({ client, workspace, readOnly = false, onW
       setSelectedRuleTermIds((old) => old.filter((id) => approved.some((candidate) => candidate.candidateId === id)))
       setRuleTermsPhase('ready')
       setSelected((old) => old.length === 0 ? sources.sources.map((s) => s.sourceRef.id) : old.filter((id) => sources.sources.some((s) => s.sourceRef.id === id)))
+      const candidateLibrary = await readCandidateSources(client, workspace.workspaceId, abort.signal)
+      if (abort.signal.aborted || epoch.current !== token) return
+      setLibrary(candidateLibrary)
     } catch (error) { if (!abort.signal.aborted && epoch.current === token) { setFailure(classifyPublicError(error)); setRuleTermsPhase('failure') } }
   }, [client, workspace.workspaceId, workspace.headRevision])
   useEffect(() => {
@@ -83,7 +103,8 @@ export function WorkspaceSourcesPanel({ client, workspace, readOnly = false, onW
       activeWorkspace.current = workspaceId
       const saved = inputSnapshots.current.get(workspaceId)
       setCatalogue(undefined); setContext(undefined); setSelected([]); setRuleTerms([]); setSelectedRuleTermIds([]); setRuleTermsPhase('loading'); setNotice(''); setBatch(undefined); setPreview(undefined); setPreviewOpen(false); setBusy(false); pending.current = undefined
-      setFile(saved?.file); setPastedText(saved?.text ?? ''); setName(saved?.name ?? ''); setHeaderRow(saved?.headerRow ?? '1'); setDataStartRow(saved?.dataStartRow ?? '2'); setSheetName(saved?.sheetName ?? '')
+      setLibrary(undefined); setReviewBusyId(undefined); setReviewNotice(''); setReviewFailure(undefined); setActiveEntry(undefined)
+      setFile(saved?.file); setPastedText(saved?.text ?? ''); setName(saved?.name ?? ''); setHeaderRow(saved?.headerRow ?? '1'); setDataStartRow(saved?.dataStartRow ?? '2'); setSheetName(saved?.sheetName ?? ''); setPurpose(saved?.purpose ?? 'industry_basis')
     }
     void load()
     return () => { inputSnapshots.current.set(workspaceId, inputSnapshot.current); epoch.current++; controller.current?.abort() }
@@ -117,6 +138,26 @@ export function WorkspaceSourcesPanel({ client, workspace, readOnly = false, onW
     try { const value = await readGrounding(client, workspace.workspaceId, [ref], { ifMatch: catalogue.draft.revision, signal: abort.signal }); if (!abort.signal.aborted && epoch.current === token) { setPreview(value); setFragment(''); setPreviewOpen(true) } }
     catch (error) { if (!abort.signal.aborted && epoch.current === token) setFailure(classifyPublicError(error)) }
   }
+  const submitReview = async (entry: SourceLibraryEntry, submission: SourceReviewSubmission) => {
+    const candidate = entry.candidate
+    if (readOnly || busy || reviewBusyId !== undefined || candidate === undefined) return
+    const token = epoch.current; const abort = new AbortController(); controller.current = abort
+    setReviewBusyId(candidate.sourceId); setReviewNotice(''); setReviewFailure(undefined)
+    try {
+      const result = await reviewCandidateSource(client, workspace.workspaceId, {
+        sourceId: candidate.sourceId, reviewState: submission.reviewState,
+        ...(submission.reviewState === 'approved' ? { trustTier: submission.trustTier } : {}),
+        reason: submission.reason, expectedRevision: candidate.revision, basisRefs: [], idempotencyKey: client.newRequestKey(),
+      }, { signal: abort.signal })
+      if (abort.signal.aborted || token !== epoch.current) return
+      setReviewNotice(`来源审核已记录（${REVIEW_STATE_LABELS[result.reviewState]} · ${TRUST_TIER_LABELS[result.trustTier]}）${result.replayed ? '（幂等回执，未重复追加事件）' : ''}。审核通过与提升来源类别是两件事。`)
+      await load()
+    } catch (error) {
+      if (token !== epoch.current) return
+      if (abort.signal.aborted) setReviewNotice('已停止等待审核结果；服务端记录状态以重新读取为准，本次输入保留在表单中。')
+      else setReviewFailure(classifyPublicError(error))
+    } finally { if (token === epoch.current) setReviewBusyId(undefined) }
+  }
   const generate = async () => {
     if (readOnly || busy || context === undefined || catalogue === undefined || selected.length === 0) return
     const token = epoch.current; const abort = new AbortController(); controller.current = abort; setBusy(true); setFailure(undefined); setNotice('')
@@ -134,12 +175,31 @@ export function WorkspaceSourcesPanel({ client, workspace, readOnly = false, onW
     } catch (error) { if (epoch.current === token) { if (abort.signal.aborted) setNotice('已请求停止等待；服务端取消状态与迟到结果以重新读取的实际批次记录为准。'); else setFailure(classifyPublicError(error)) } }
     finally { if (epoch.current === token) setBusy(false) }
   }
+  // The three intake entries are gathered here; an entry the deployment cannot serve is shown with
+  // its reason and recovery rather than a bare disabled control (design §1.3, A-R01/A-R04).
+  const intakeEntries: readonly SourceIntakeEntryView[] = [
+    { entry: 'ai_research', title: 'AI 搜寻公共资料', subtitle: '调研后由你确认，只产候选', available: onOpenResearch !== undefined, ...(onOpenResearch === undefined ? { reason: '当前部署未接入受控的公共搜索与归档服务。', recovery: '接入受控搜索/归档服务并授权允许域名后，本入口可用。' } : {}) },
+    { entry: 'upload', title: '上传或粘贴资料', subtitle: '文本、Markdown、PDF、CSV、XLSX', available: !readOnly, ...(readOnly ? { reason: '只读角色不能上传资料。', recovery: '请由具备编辑权限的成员上传。' } : {}) },
+    { entry: 'structured_file', title: '接入结构化数据', subtitle: '当前支持文件映射', available: onOpenStructuredImport !== undefined, ...(onOpenStructuredImport === undefined ? { reason: '本期结构化接入只做文件映射，在项目工作台的数据与资料页完成。', recovery: '进入项目工作台 · 数据与资料接入文件映射。' } : {}) },
+  ]
+  const libraryEntries = mergeSourceLibrary(catalogue?.sources ?? [], library?.availability === 'ready' ? library.sources : [])
+  const libraryEmpty = catalogue !== undefined && catalogue.sources.length === 0 && libraryEntries.length === 0
   return <section className="ontology-workbench ontology-sources" aria-label="工作区资料准备"><header className="ontology-workflow-head"><div><p className="ontology-eyebrow">本体工作区 · 第 1–2 步 / 5</p><h2>先读懂资料，再生成候选</h2><p>原文和表格数据保留实际版本。资料是待核对的数据，不能授予模型权限。</p></div><Button disabled={busy} onClick={() => void load()}>刷新资料与能力</Button></header>
     {failure === undefined ? null : <PublicStateNotice failure={failure} onRecover={() => void load()} />}{catalogue === undefined ? <p className="ontology-notice">尚未取得真实语料目录。当前部署需要装配资料接口后才能上传或生成；本页不会补造语料引用。</p> : null}{notice ? <p role="status" className="ontology-notice">{notice}</p> : null}
-    {!readOnly ? <form onSubmit={(e) => { e.preventDefault(); void upload() }}><div className="ontology-form-grid"><Field label="资料名称">{(a) => <input {...a} required disabled={busy} value={name} onChange={(e) => setName(e.target.value)} />}</Field><Field label="选择原始文件" hint="文本、Markdown、PDF、CSV、XLSX；保留原始字节。">{(a) => <input {...a} type="file" accept=".txt,.md,.pdf,.csv,.xlsx" disabled={busy} onChange={(e) => { const next = e.target.files?.[0]; setFile(next); if (next !== undefined) { setName(next.name); setPastedText('') } }} />}</Field></div><Field label="或粘贴文本资料">{(a) => <textarea {...a} disabled={busy || file !== undefined} value={pastedText} onChange={(e) => setPastedText(e.target.value)} />}</Field>{file?.name.match(/\.(csv|xlsx)$/i) ? <div className="ontology-form-grid"><Field label="实际表头所在行">{(a) => <input {...a} disabled={busy} value={headerRow} inputMode="numeric" onChange={(e) => setHeaderRow(e.target.value)} />}</Field><Field label="实际数据起始行">{(a) => <input {...a} disabled={busy} value={dataStartRow} inputMode="numeric" onChange={(e) => setDataStartRow(e.target.value)} />}</Field><Field label="工作表名称（多表时填写）">{(a) => <input {...a} disabled={busy} value={sheetName} onChange={(e) => setSheetName(e.target.value)} />}</Field></div> : null}<Button variant="primary" type="submit" disabled={busy || catalogue === undefined || !name.trim() || file === undefined && !pastedText.trim()}>上传并读取真实资料</Button></form> : <p>只读角色仍可查看真实资料与解析覆盖；上传、生成与确认需要编辑权限。</p>}
+    <SourceIntakeEntries entries={intakeEntries} active={activeEntry} onSelect={setActiveEntry} />
+    {!readOnly ? <form onSubmit={(e) => { e.preventDefault(); void upload() }}><fieldset className="ontology-checks" data-testid="source-purpose"><legend>资料用途</legend><label><input type="radio" name="source-purpose" value="industry_basis" checked={purpose === 'industry_basis'} disabled={busy} onChange={() => setPurpose('industry_basis')} /><span>作为行业依据（进入工作区来源库，供定义/规则生成）</span></label><label><input type="radio" name="source-purpose" value="project_record" checked={purpose === 'project_record'} disabled={busy} onChange={() => setPurpose('project_record')} /><span>作为项目记录（进入项目映射/确认/发布）</span></label><p className="ontology-hint">上传只登记原料，不会自动获得权威来源类别；来源性质与权威性需在来源审核中由有权限人员确认。</p></fieldset>{purpose === 'project_record' ? <p role="status" className="ontology-notice" data-testid="source-purpose-project">项目记录在项目工作台的数据与资料页接入（文件映射），此页不会把文件写成项目记录。</p> : null}{purpose === 'project_record' && onOpenStructuredImport !== undefined ? <Button onClick={onOpenStructuredImport}>前往项目数据与资料</Button> : null}<div className="ontology-form-grid"><Field label="资料名称">{(a) => <input {...a} required disabled={busy} value={name} onChange={(e) => setName(e.target.value)} />}</Field><Field label="选择原始文件" hint="文本、Markdown、PDF、CSV、XLSX；保留原始字节。">{(a) => <input {...a} type="file" accept=".txt,.md,.pdf,.csv,.xlsx" disabled={busy} onChange={(e) => { const next = e.target.files?.[0]; setFile(next); if (next !== undefined) { setName(next.name); setPastedText('') } }} />}</Field></div><Field label="或粘贴文本资料">{(a) => <textarea {...a} disabled={busy || file !== undefined} value={pastedText} onChange={(e) => setPastedText(e.target.value)} />}</Field>{file?.name.match(/\.(csv|xlsx)$/i) ? <div className="ontology-form-grid"><Field label="实际表头所在行">{(a) => <input {...a} disabled={busy} value={headerRow} inputMode="numeric" onChange={(e) => setHeaderRow(e.target.value)} />}</Field><Field label="实际数据起始行">{(a) => <input {...a} disabled={busy} value={dataStartRow} inputMode="numeric" onChange={(e) => setDataStartRow(e.target.value)} />}</Field><Field label="工作表名称（多表时填写）">{(a) => <input {...a} disabled={busy} value={sheetName} onChange={(e) => setSheetName(e.target.value)} />}</Field></div> : null}<Button variant="primary" type="submit" disabled={busy || purpose !== 'industry_basis' || catalogue === undefined || !name.trim() || file === undefined && !pastedText.trim()}>上传并读取真实资料</Button></form> : <p>只读角色仍可查看真实资料与解析覆盖；上传、生成与确认需要编辑权限。</p>}
     <h3>已保存的资料</h3>{catalogue?.sources.length === 0 ? <p className="ontology-empty">真实语料当前为空，上传后会显示原文版本与解析结果。</p> : catalogue?.sources.map((source, index) => <article key={source.sourceRef.id} className="ontology-source-card"><header className="ontology-pane-heading"><label><input type="checkbox" disabled={busy || readOnly} checked={selected.includes(source.sourceRef.id)} onChange={(e) => setSelected((old) => e.target.checked ? [...old, source.sourceRef.id] : old.filter((id) => id !== source.sourceRef.id))} /><strong>{source.name ?? `资料 ${index + 1}`}</strong></label><StatusBadge tone={source.previewCoverage === 'complete' ? 'success' : 'warning'}>{source.previewCoverage === 'complete' ? '预览完整' : '预览有限'} · {({ complete: '解析完成', parsed: '解析完成', partial: '部分解析', failed: '解析失败', pending: '等待解析', processing: '正在解析' } as Readonly<Record<string, string>>)[source.status] ?? '待核对解析状态'}</StatusBadge></header>
       <p>原始解析覆盖：{source.coverage.parsedUnits}/{source.coverage.totalUnits}；跳过 {source.coverage.skippedUnits}。{source.coverage.completeness === 'complete' ? '原始解析完整。' : '原始解析存在范围限制。'}</p><p>{source.previewCoverage === 'complete' ? '当前预览完整。' : '当前预览有范围限制，不能当作全部原文。'}</p>{source.coverage.skippedReasons.length === 0 ? null : <details><summary>未解析内容与原因</summary><p>{source.coverage.skippedReasons.join("、")}</p></details>}
       {source.tables?.map((table) => <div key={table.tableId}><h4>{table.sheetName ?? table.name ?? '原始表格'} · 表头第 {table.headerRow} 行</h4><DataTable caption="服务端解析的原始表头与数据行"><thead><tr>{table.columns.map((column) => <th key={column.columnIndex}>{column.header || '（空表头）'}</th>)}</tr></thead><tbody>{table.rows.map((row) => <tr key={row.sourceRowKey}>{table.columns.map((column) => <td key={column.columnIndex}>{nativeCellText(row.cells.find((cell) => cell.columnIndex === column.columnIndex))}</td>)}</tr>)}</tbody></DataTable><p className="ontology-hint">预览有上限；表头用于理解字段，不能作为数据行来源。</p></div>)}<Button disabled={busy} onClick={() => void previewSource(source.sourceRef)}>查看真实原文与片段</Button><details><summary>原文、解析与语料固定版本</summary><pre>{JSON.stringify(source, null, 2)}</pre></details></article>)}
+    <h3>来源库</h3>
+    <p className="ontology-hint">来源库把每条来源的四件事分开显示：来源类别（四级）、审核状态、解析状态、纳入状态。接受一份来源不等于把它提升为公共标准。</p>
+    {reviewFailure === undefined ? null : <PublicStateNotice testId="source-review-failure" failure={reviewFailure} onRecover={() => void load()} />}
+    {reviewNotice ? <p role="status" className="ontology-notice" data-testid="source-review-notice">{reviewNotice}</p> : null}
+    {library === undefined ? <p className="ontology-empty" data-testid="source-library-loading">正在读取来源审核记录…</p> : <>
+      {library.availability === 'unavailable' ? <p className="ontology-empty" data-testid="source-library-unavailable">{library.reason}</p> : null}
+      {libraryEmpty ? <PublicEmptyState testId="source-library-empty" title="还没有来源记录" requirement="至少一条真实来源：上传并读取的资料，或经 AI 搜寻后确认来源。" nextStep="使用上方的三料源入口开始；上传或确认后会在这里显示真实的类别、审核、解析与纳入状态。" /> : null}
+      <SourceLibraryList entries={libraryEntries} readOnly={readOnly} busy={busy} reviewBusyId={reviewBusyId} onReview={(entry, submission) => void submitReview(entry, submission)} onPreview={(ref) => void previewSource(ref)} />
+    </>}
     <Drawer open={previewOpen} title="原始资料预览" onClose={() => setPreviewOpen(false)}><SourceEvidencePane value={preview} selected={fragment} onSelect={setFragment} /></Drawer>
     <section className="ontology-generation"><h3>生成候选</h3>{context === undefined ? <p>尚未取得当前环境的真实生成配置。</p> : <><p>{context.models.generationEnabled ? '生成模型已配置。' : '生成模型未配置；仍可读取资料、手动编辑已有候选并确认真实来源。'} 决策模型{context.models.decisionEnabled ? '已配置' : '未配置'}。</p><p className="ontology-hint">每次最多生成 {context.generationLimits.maxCandidatesPerCall} 个候选；最多读取 {context.generationLimits.maxSources} 份资料与 {context.generationLimits.sourceFragments} 个片段。输入上下文上限 {context.generationLimits.sourceContextBytes / 1024} KiB，原始读取上限 {context.generationLimits.sourceReadBytes / 1024} KiB，模型输出长度预算 {context.generationLimits.maxOutputTokens} tokens。剩余额度未提供，不显示推测进度或模型正确率。</p>{!readOnly ? <div className="ontology-actions"><Field label="生成范围">{(a) => <select {...a} value={generationKind} disabled={busy} onChange={(e) => { const next = e.target.value; setGenerationKind(next); if (next === 'rules') void load() }}><option value="definitions">对象、属性与关系</option><option value="rules">规则候选</option><option value="actions">动作声明候选</option></select>}</Field><Button variant="primary" disabled={busy || !context.models.generationEnabled || selected.length === 0 || selected.length > context.generationLimits.maxSources || generationKind === 'rules' && (selectedRuleTermIds.length === 0 || ruleTermsPhase !== 'ready')} onClick={() => void generate()}>从所选真实资料生成候选</Button></div> : null}{generationKind === 'rules' && !readOnly ? <fieldset data-testid="rule-generation-terms" data-phase={ruleTermsPhase}><legend>从已审核定义中选择规则术语</legend>{ruleTermsPhase === 'loading' ? <p role="status">正在读取来源确认和当前内容的审核记录…</p> : ruleTermsPhase === 'failure' ? <p role="alert">术语审核记录读取失败。刷新本页后可以重试。</p> : ruleTerms.length === 0 ? <p>当前没有来源已确认且内容已人工批准的对象、属性或关系候选。先完成定义审核后再生成规则。</p> : ruleTerms.map((candidate) => <label key={candidate.candidateId}><input type="checkbox" data-testid="rule-generation-term" checked={selectedRuleTermIds.includes(candidate.candidateId)} disabled={busy} onChange={(event) => setSelectedRuleTermIds((previous) => event.target.checked ? [...previous, candidate.candidateId] : previous.filter((id) => id !== candidate.candidateId))} />{candidate.payload.displayName} · {candidate.kind}</label>)}</fieldset> : null}<details><summary>实际生成策略与工作区固定版本</summary><pre>{JSON.stringify({ generationPolicyRef: context.generationPolicyRef, draft: context.draft }, null, 2)}</pre></details></>}{batch === undefined ? null : <section><h4>当前生成批次</h4><StatusBadge tone={batch.state === 'failed' ? 'danger' : batch.state === 'pending_confirmation' ? 'warning' : 'neutral'}>{batch.state === 'failed' ? '生成失败' : batch.state === 'pending_confirmation' ? '生成结束，来源仍待确认' : '生成结束，候选尚需审核'}</StatusBadge><p>实际候选 {batch.counts.total} 项 · 来源待确认 {batch.counts.pendingConfirmation} 项 · 待人工审核 {batch.counts.pendingReview} 项 · 失败 {batch.counts.failed} 项。</p><p>工作区修订：{batch.inputDraftRef.revision}。来源覆盖与失败原因以实际原文读取及本批次记录为准，候选数不代表发布数。</p>{batch.error === undefined ? null : <PublicStateNotice failure={classifyPublicError(batch.error)} />}<details><summary>高级：服务端记录的完整生成批次</summary><pre>{JSON.stringify(batch, null, 2)}</pre></details></section>}{onContinue === undefined ? null : <Button disabled={busy} onClick={onContinue}>继续编辑与审核候选 →</Button>}</section>{busy ? <Button onClick={() => controller.current?.abort()}>停止等待并保留当前输入</Button> : null}
   </section>

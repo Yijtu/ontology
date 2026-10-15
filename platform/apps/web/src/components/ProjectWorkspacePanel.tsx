@@ -46,6 +46,11 @@ import { ProjectEvolutionPanel } from './project/ProjectEvolutionPanel'
 import { MappingValuePairs } from './project/MappingValuePairs'
 import { ProjectRevisionHistory } from './project/ProjectRevisionHistory'
 import { readinessStatusLabel } from '../state/project-labels'
+import {
+  STRUCTURED_INTAKE_STAGE_LABEL,
+  StructuredIntakeNotice,
+  structuredIntakeStage,
+} from './structured/StructuredIntakeNotice'
 
 /**
  * The public business-project workspace (SPEC v0.3a asset-data-ui §9.1/§9.2, A.US-002/
@@ -116,6 +121,8 @@ export interface ProjectWorkspacePanelProps {
   readonly sources?: readonly ProjectSourceCandidate[]
   readonly readOnly?: boolean
   readonly initialProjectId?: string
+  /** Product-step deep link: `tab=data` opens the structured file-mapping intake (design §2.5). */
+  readonly initialStep?: 'overview' | 'import' | 'mapping' | 'records' | 'review' | 'history'
   readonly onSelectProject?: (projectId: string) => void
   readonly onProjectCreated?: (project: ProjectRecord) => void
   readonly initialEvolutionId?: string
@@ -163,6 +170,16 @@ function fieldStatusLabel(status: ProjectRecordFieldStatus): string {
   return '待确认'
 }
 
+/** Where an issue sits in the original file, so a failure is located rather than summarised. */
+function mappingIssueLocation(issue: MappingIssue): string {
+  const parts: string[] = []
+  if (issue.recordIndex !== undefined) parts.push(`记录 ${issue.recordIndex}`)
+  if (issue.columnIndex !== undefined) parts.push(`列 ${issue.columnIndex + 1}`)
+  if (issue.header !== undefined) parts.push(`表头「${issue.header}」`)
+  if (issue.fieldRef !== undefined) parts.push(`字段 ${issue.fieldRef}`)
+  return parts.join(' · ')
+}
+
 function projectionFor(
   projections: readonly ReadinessProjection[],
   kind: ProjectReadinessKind,
@@ -180,6 +197,7 @@ export function ProjectWorkspacePanel({
   sources: configuredSources,
   readOnly = false,
   initialProjectId,
+  initialStep = 'overview',
   onSelectProject,
   onProjectCreated,
   initialEvolutionId,
@@ -213,7 +231,7 @@ export function ProjectWorkspacePanel({
   useEffect(() => () => packRequest.current?.abort(), [client, selectedId, profileRef?.id, profileRef?.version])
   const [busy, setBusy] = useState(false)
   const [step, setStep] = useState<'overview' | 'import' | 'mapping' | 'records' | 'review' | 'history'>(
-    'overview',
+    initialStep,
   )
   const [reviewNonce, setReviewNonce] = useState(0)
   const [reviewRecordId, setReviewRecordId] = useState<string>()
@@ -241,6 +259,7 @@ export function ProjectWorkspacePanel({
   const [loadedPreview, setPreview] = useState<MappingPreview | undefined>(undefined)
   const [previewError, setPreviewError] = useState<WorkbenchError | undefined>(undefined)
   const [loadedConfirmedMapping, setConfirmedMapping] = useState<ImportMappingVersion | undefined>(undefined)
+  const [mappingRevised, setMappingRevised] = useState(false)
   const [previewRequest, setPreviewRequest] = useState<string>()
   const [sourceUnits, setSourceUnits] = useState<Readonly<Record<string, string>>>({})
   const [conversions, setConversions] = useState<
@@ -653,11 +672,37 @@ export function ProjectWorkspacePanel({
   const beginMapping = useRequestFence(mappingScope)
   const preview = mappingOwner === mappingScope ? loadedPreview : undefined
   const confirmedMapping = mappingOwner === mappingScope ? loadedConfirmedMapping : undefined
+  const intakeStage = useMemo(
+    () =>
+      structuredIntakeStage({
+        sourceCount: sources.length,
+        mappingCount: mappings.length,
+        mappingConfirmed: confirmedMapping !== undefined,
+        recordTotal,
+        readiness:
+          readiness === undefined
+            ? undefined
+            : {
+                blockers: readiness.blockers,
+                states: readiness.projections.map((projection) => projection.state),
+              },
+      }),
+    [sources.length, mappings.length, confirmedMapping, recordTotal, readiness],
+  )
+  // A confirmed mapping for the same source/object makes the next confirmation an append:
+  // editing a correspondence or unit factor produces a new immutable revision, not a rewrite.
+  const priorMappingId = useMemo(() => {
+    if (activeSource === undefined || activeObject === undefined) return undefined
+    return mappings.find(
+      (mapping) => mapping.parseId === activeSource.parseId && mapping.objectId === activeObject.objectId,
+    )?.mappingId
+  }, [mappings, activeSource, activeObject])
   useEffect(() => {
     setPreview(undefined)
     setPreviewRequest(undefined)
     setConfirmedMapping(undefined)
     setPreviewError(undefined)
+    setMappingRevised(false)
   }, [mappingScope])
 
   const previewMapping = async (): Promise<void> => {
@@ -691,25 +736,29 @@ export function ProjectWorkspacePanel({
       return
     const body = buildMappingRequest(activeSource, activeObject, selectedEntries)
     if (JSON.stringify(body) !== previewRequest) return
+    const confirmBody =
+      priorMappingId === undefined ? body : { ...body, mappingId: priorMappingId }
     const request = beginMapping('mapping')
     setBusy(true)
     setPreviewError(undefined)
     try {
       const result = await client.confirmProjectMapping(
         selected.projectId,
-        body,
-        retainedKey('mapping', body),
+        confirmBody,
+        retainedKey('mapping', confirmBody),
       )
       if (!request.current()) return
       setMappingOwner(mappingScope)
       setConfirmedMapping(result.mapping)
+      setMappingRevised(priorMappingId !== undefined)
       setPreview(result.preview)
-      setMappings((previous) => [result.mapping, ...previous])
+      setMappings((previous) => [result.mapping, ...previous.filter((entry) => entry.mappingId !== result.mapping.mappingId || entry.version !== result.mapping.version)])
       await reloadCatalogue(selected.projectId)
       await loadProjectData(selected.projectId)
     } catch (caught) {
       if (!request.current()) return
       setConfirmedMapping(undefined)
+      setMappingRevised(false)
       setPreviewError(toError(caught))
     } finally {
       if (request.current()) setBusy(false)
@@ -1063,6 +1112,9 @@ export function ProjectWorkspacePanel({
                 hidden={step !== 'import'}
               >
                 <h4>资料导入</h4>
+                <p data-testid="structured-intake-status-import" data-stage={intakeStage}>
+                  接入状态：{STRUCTURED_INTAKE_STAGE_LABEL[intakeStage]}
+                </p>
                 <ProjectFileImport
                   client={client}
                   projectId={selected.projectId}
@@ -1173,6 +1225,18 @@ export function ProjectWorkspacePanel({
                 hidden={step !== 'mapping'}
               >
                 <h4>列映射确认</h4>
+                <StructuredIntakeNotice testId="mapping-intake" />
+                <p data-testid="structured-intake-status" data-stage={intakeStage}>
+                  接入状态：{STRUCTURED_INTAKE_STAGE_LABEL[intakeStage]}
+                </p>
+                {sources.length === 0 ? (
+                  <PublicEmptyState
+                    testId="mapping-empty"
+                    title="暂无可映射的资料"
+                    requirement="一份已解析、含真实表头与解析选择的原始文件。"
+                    nextStep="先切到“导入资料”上传 CSV、XLSX 或 JSON，解析完成后再回到本步确认映射。"
+                  />
+                ) : null}
                 {mappings.length === 0 ? null : (
                   <details className="project-audit">
                     <summary>现有映射版本 · {mappings.length}</summary>
@@ -1397,23 +1461,53 @@ export function ProjectWorkspacePanel({
                   <div data-testid="mapping-preview" data-confirmable={preview.confirmable}>
                     <p data-testid="mapping-preview-rows">数据行 {preview.rowCount}</p>
                     <ul data-testid="mapping-issues">
-                      {preview.issues.map((mappingIssue: MappingIssue, index) => (
-                        <li
-                          key={`${mappingIssue.code}:${String(index)}`}
-                          data-testid="mapping-issue"
-                          data-code={mappingIssue.code}
-                          data-severity={mappingIssue.severity}
-                        >
-                          {mappingIssue.code}：{mappingIssue.message}
-                        </li>
-                      ))}
+                      {preview.issues.map((mappingIssue: MappingIssue, index) => {
+                        const location = mappingIssueLocation(mappingIssue)
+                        return (
+                          <li
+                            key={`${mappingIssue.code}:${String(index)}`}
+                            data-testid="mapping-issue"
+                            data-code={mappingIssue.code}
+                            data-severity={mappingIssue.severity}
+                            {...(mappingIssue.recordIndex === undefined ? {} : { 'data-record-index': mappingIssue.recordIndex })}
+                            {...(mappingIssue.columnIndex === undefined ? {} : { 'data-column-index': mappingIssue.columnIndex })}
+                            {...(mappingIssue.header === undefined ? {} : { 'data-header': mappingIssue.header })}
+                          >
+                            <span data-testid="mapping-issue-message">
+                              {mappingIssue.code}：{mappingIssue.message}
+                            </span>
+                            {location.length === 0 ? null : (
+                              <span data-testid="mapping-issue-location">定位：{location}</span>
+                            )}
+                          </li>
+                        )
+                      })}
                     </ul>
+                    {preview.issues.some((mappingIssue: MappingIssue) => mappingIssue.code === 'MISSING_COLUMN') ? (
+                      <div className="project-notice" data-testid="mapping-missing-column" role="alert">
+                        <p>
+                          缺少必填列的对应：来源表头没有映射到全部必填规范字段，映射暂不可确认。
+                          请返回上方为缺失字段选择来源列，或重新导入包含该列的资料。
+                        </p>
+                        <button
+                          type="button"
+                          data-testid="mapping-missing-column-recover"
+                          onClick={() => {
+                            setPreview(undefined)
+                            setPreviewRequest(undefined)
+                          }}
+                        >
+                          返回选择来源列
+                        </button>
+                      </div>
+                    ) : null}
                     <table data-testid="mapping-preview-table">
                       <thead>
                         <tr>
                           <th>规范字段</th>
                           <th>原始值</th>
                           <th>规范值</th>
+                          <th>单位（原值 → 规范值）</th>
                           <th>实际定位</th>
                         </tr>
                       </thead>
@@ -1427,6 +1521,11 @@ export function ProjectWorkspacePanel({
                             <td>{column.fieldRef}</td>
                             <td>{column.samples[0]?.raw ?? '—'}</td>
                             <td>{column.samples[0]?.canonical ?? '—'}</td>
+                            <td data-testid={`mapping-preview-unit-${column.fieldRef}`}>
+                              {column.valueType === 'quantity'
+                                ? `${column.sourceUnitCode ?? '未声明'} → ${column.canonicalUnitCode ?? '未声明'}`
+                                : '—'}
+                            </td>
                             <td>{formatLocator(column.samples[0]?.locator)}</td>
                           </tr>
                         ))}
@@ -1439,8 +1538,9 @@ export function ProjectWorkspacePanel({
                 )}
 
                 {confirmedMapping === undefined ? null : (
-                  <p data-testid="mapping-confirmed" data-mapping-id={confirmedMapping.mappingId}>
+                  <p data-testid="mapping-confirmed" data-mapping-id={confirmedMapping.mappingId} data-revised={mappingRevised}>
                     映射已确认 · 版本 {confirmedMapping.version}
+                    {mappingRevised ? '（修改已生成新修订）' : ''}
                   </p>
                 )}
                 {bindNotice === undefined ? null : <p data-testid="bind-notice">{bindNotice}</p>}

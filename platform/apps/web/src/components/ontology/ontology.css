@@ -296,6 +296,44 @@
   color:var(--muted);
   line-height:1.8
 }
+.ontology-intake {
+  margin:24px 0
+}
+.ontology-intake__list {
+  display:grid;
+  grid-template-columns:repeat(auto-fit,minmax(220px,1fr));
+  gap:12px;
+  list-style:none;
+  margin:12px 0 0;
+  padding:0
+}
+.ontology-intake__list button {
+  display:grid;
+  gap:4px;
+  width:100%;
+  height:100%;
+  text-align:left;
+  padding:16px;
+  border:1px solid var(--line);
+  border-radius:8px;
+  background:var(--surface)
+}
+.ontology-intake__list button span {
+  font-size:13px;
+  color:var(--muted)
+}
+.ontology-intake__list button small {
+  font-size:12px;
+  color:var(--muted)
+}
+.ontology-intake__list li[data-available=false] button {
+  border-style:dashed
+}
+.ontology-library {
+  list-style:none;
+  margin:0;
+  padding:0
+}
 @media(max-width:1279px) {
   .ontology-three-pane {
     grid-template-columns:200px minmax(0,1fr)

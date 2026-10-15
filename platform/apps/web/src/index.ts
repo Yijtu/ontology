@@ -17,6 +17,16 @@ export { CandidateReviewPanel } from './components/CandidateReviewPanel'
 export type { CandidateReviewPanelProps } from './components/CandidateReviewPanel'
 export { CoreImportPanel } from './components/CoreImportPanel'
 export type { CoreImportPanelProps } from './components/CoreImportPanel'
+export {
+  StructuredIntakeNotice,
+  STRUCTURED_INTAKE_STAGE_LABEL,
+  structuredIntakeStage,
+} from './components/structured/StructuredIntakeNotice'
+export type {
+  StructuredIntakeNoticeProps,
+  StructuredIntakeStage,
+  StructuredIntakeStageInput,
+} from './components/structured/StructuredIntakeNotice'
 export { QueryPanel } from './components/QueryPanel'
 export type { QueryContextField, QueryPanelProps } from './components/QueryPanel'
 export { EvidencePanel } from './components/EvidencePanel'
@@ -213,6 +223,31 @@ export type {
   WorkspaceSource,
   WorkspaceSourcesPanelProps,
 } from './components/WorkspaceSourcesPanel'
+export { SourceIntakeEntries } from './components/SourceIntakeEntries'
+export type { SourceIntakeEntriesProps, SourceIntakeEntryView } from './components/SourceIntakeEntries'
+export { SourceLibraryList } from './components/SourceLibraryList'
+export type { SourceLibraryListProps, SourceReviewSubmission } from './components/SourceLibraryList'
+export {
+  CANDIDATE_KIND_LABELS,
+  CANDIDATE_SOURCE_KINDS,
+  CANDIDATE_SOURCE_REVIEW_STATES,
+  INTAKE_PURPOSE_LABELS,
+  mergeSourceLibrary,
+  readCandidateSources,
+  REVIEW_STATE_LABELS,
+  reviewCandidateSource,
+  TRUST_TIER_LABELS,
+} from './api/source-library'
+export type {
+  CandidateSourceKind,
+  CandidateSourceReadResult,
+  CandidateSourceReviewRequest,
+  CandidateSourceReviewResult,
+  CandidateSourceReviewState,
+  CandidateSourceRecordView,
+  SourceIntakePurpose,
+  SourceLibraryEntry,
+} from './api/source-library'
 export { webWorkspaceIdentity } from './workspace-identity'
 export type { WorkspaceIdentity } from './workspace-identity'
 export type {
