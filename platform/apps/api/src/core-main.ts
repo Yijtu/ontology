@@ -13,6 +13,7 @@ import { createCoreLocalComposition } from './composition/core-local-composition
 import { resolve } from 'node:path'
 import { tmpdir } from 'node:os'
 import { CoreLocalModelSettings } from './composition/core-local-model-settings'
+import { CoreModelSettingsMigration } from './composition/core-model-settings-migration'
 import { registerCoreModelSettingsRoutes } from './http/core-model-settings'
 
 const DEFAULT_TENANT_ID = '11111111-1111-4111-8111-111111111111'
@@ -32,6 +33,13 @@ const CORE_OPERATOR_ROLES = [
 
 export interface CoreApiDependencies {
   readonly modelSettings?: CoreLocalModelSettings
+  readonly modelSettingsMigration?: { isMigrated(): Promise<boolean> }
+  readonly aiSettings?: {
+    readonly connections: import('@ontology/application').ModelConnectionService
+    readonly assignments: import('@ontology/application').ModelAssignmentService
+    readonly selection: import('@ontology/application').ModelSelectionService
+    readonly bindings: import('@ontology/application').ExecutionModelBindingService
+  }
   readonly webPort?: number
   readonly database: { queryUnscoped(statement: string): Promise<unknown> }
   readonly scopeRef: ScopeRef
@@ -119,7 +127,7 @@ export function createCoreApi(dependencies: CoreApiDependencies): FastifyInstanc
     logger: dependencies.logger ?? false,
   })
   dependencies.registerRoutes?.(app, authenticate)
-  if (dependencies.modelSettings !== undefined) registerCoreModelSettingsRoutes(app, { settings: dependencies.modelSettings, authenticate, webPort: dependencies.webPort ?? 5174 })
+  if (dependencies.modelSettings !== undefined) registerCoreModelSettingsRoutes(app, { settings: dependencies.modelSettings, authenticate, webPort: dependencies.webPort ?? 5174, ...(dependencies.modelSettingsMigration === undefined ? {} : { migration: dependencies.modelSettingsMigration }) })
 
   app.get('/healthz', async (_request, reply) => {
     try {
@@ -211,7 +219,17 @@ export async function startCoreApi(): Promise<void> {
         ...(process.env['PROJECT_BUSINESS_SCHEMA'] === undefined ? {} : { schema: requiredEnv('PROJECT_BUSINESS_SCHEMA') }),
       } }),
     })
-    app = createCoreApi({ ...composition.dependencies, modelSettings, webPort: Number(process.env['CORE_WEB_PORT'] ?? '5174'), logger: true })
+    const aiSettings = composition.dependencies.aiSettings
+    const modelSettingsMigration = aiSettings === undefined
+      ? undefined
+      : new CoreModelSettingsMigration({
+        settings: modelSettings,
+        connections: aiSettings.connections,
+        assignments: aiSettings.assignments,
+        environment: process.env,
+      })
+    if (modelSettingsMigration !== undefined) await modelSettingsMigration.migrate()
+    app = createCoreApi({ ...composition.dependencies, modelSettings, ...(modelSettingsMigration === undefined ? {} : { modelSettingsMigration }), webPort: Number(process.env['CORE_WEB_PORT'] ?? '5174'), logger: true })
     await app.listen({ host: '127.0.0.1', port: readPort(process.env['CORE_API_PORT']) })
     const shutdown = async (): Promise<void> => {
       await app?.close()

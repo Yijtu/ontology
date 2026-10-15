@@ -16,6 +16,13 @@ interface StoredSettings {
   readonly vendorModel: string
   readonly apiKey: string
 }
+/** The server-side legacy settings snapshot the one-time migration reads (never sent to a client). */
+export type CoreStoredModelSettings = StoredSettings
+export interface CoreModelSettingsMigrationSnapshot {
+  /** True when the legacy settings file existed; false means the migration may fall back to the environment. */
+  readonly fileExists: boolean
+  readonly settings: CoreStoredModelSettings
+}
 export interface CoreModelSettingsView extends Omit<StoredSettings, 'apiKey'> {
   readonly hasApiKey: boolean
   readonly activeEnabled: boolean
@@ -78,6 +85,7 @@ function signature(value: StoredSettings): string {
 export class CoreLocalModelSettings {
   readonly scopeRef: ScopeRef
   readonly #path: string
+  readonly #markerPath: string
   readonly #original: Readonly<Record<string, string | undefined>>
   #active: StoredSettings
   #writes: Promise<unknown> = Promise.resolve()
@@ -85,8 +93,48 @@ export class CoreLocalModelSettings {
   constructor(input: { readonly objectDirectory: string; readonly scopeRef: ScopeRef; readonly environment: Readonly<Record<string, string | undefined>> }) {
     this.scopeRef = { ...input.scopeRef }
     this.#path = join(input.objectDirectory, '.core-settings', input.scopeRef.tenantId, input.scopeRef.spaceId, 'generation.json')
+    this.#markerPath = join(input.objectDirectory, '.core-settings', input.scopeRef.tenantId, input.scopeRef.spaceId, 'migrated.flag')
     this.#original = { ...input.environment }
     this.#active = fromEnvironment(input.environment)
+  }
+  /** True once the one-time bridge to the multi-model catalogue has run for this scope. */
+  async isMigrated(): Promise<boolean> {
+    try { await stat(this.#markerPath); return true } catch { return false }
+  }
+  /** Record that the bridge has completed; idempotent. */
+  async markMigrated(): Promise<void> {
+    await mkdir(dirname(this.#markerPath), { recursive: true, mode: 0o700 })
+    await writeFile(this.#markerPath, JSON.stringify({ migratedAt: new Date().toISOString() }), { flag: 'w', mode: 0o600 })
+  }
+  /**
+   * Read the legacy settings for the one-time bridge. The file's apiKey is revealed only here, to
+   * the server-side migration, and is moved into credential custody; the legacy reader itself never
+   * returns it. A corrupt file fails loudly rather than silently falling back to the environment.
+   */
+  async readForMigration(): Promise<CoreModelSettingsMigrationSnapshot> {
+    const fileExists = await stat(this.#path).then(() => true).catch(() => false)
+    return { fileExists, settings: await this.#read() }
+  }
+  /**
+   * Remove the plaintext API key from the legacy file after a successful migration (design §5.3
+   * step ⑦). The remaining non-secret fields and the revision history are preserved; the write is
+   * atomic and idempotent (a file with no key is left unchanged). Environment-backed legacy secrets
+   * are not rewritten because the process environment is not this class's to mutate.
+   */
+  async clearStoredCredentialForMigration(): Promise<void> {
+    const fileExists = await stat(this.#path).then(() => true).catch(() => false)
+    if (!fileExists) return
+    const current = await this.#read()
+    if (current.apiKey === '') return
+    // The catalogue now owns the enabled state; the legacy file becomes inert history, so it is
+    // written disabled rather than left as an enabled-but-keyless config the legacy reader rejects.
+    const next = { ...current, enabled: false, apiKey: '', revision: String(BigInt(current.revision) + 1n) }
+    const temporary = `${this.#path}.${randomUUID()}.tmp`
+    try {
+      await writeFile(temporary, JSON.stringify(next), { flag: 'wx', mode: 0o600 })
+      await rename(temporary, this.#path)
+    } catch { throw new LocalModelSettingsError('CONFIG_STORAGE_UNAVAILABLE', 503, '本机模型设置凭据清理失败，请检查存储权限。') }
+    finally { await unlink(temporary).catch(() => undefined) }
   }
   async #read(): Promise<StoredSettings> {
     let text: string

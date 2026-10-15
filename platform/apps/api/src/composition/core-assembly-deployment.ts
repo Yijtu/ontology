@@ -1,5 +1,5 @@
 import { randomUUID } from 'node:crypto'
-import { PostgresCandidateSourceStore, PostgresProjectEvolutionStore } from '@ontology/adapter-control-postgres'
+import { PostgresCandidateSourceStore, PostgresProjectEvolutionStore, PostgresModelConnectionStore, PostgresModelAssignmentStore, PostgresExecutionModelBindingStore } from '@ontology/adapter-control-postgres'
 import { ArtifactGroundingDocumentSetReader, ParsedSourceGroundingReader, StructuredDocumentParser } from '@ontology/adapter-extraction-document'
 import { DATA_DUCKDB_ADAPTER_REF } from '@ontology/adapter-data-duckdb'
 import { DATA_POSTGRES_ADAPTER_REF } from '@ontology/adapter-data-postgres'
@@ -11,6 +11,7 @@ import {
   RuleActionCandidateGenerationService, RunServiceError, StoreBackedIndustryPackCatalogue, SyntheticExampleService,
   TableArtifactReadService, VerifiedResultExportService, VerifiedResultReadService, WebResearchService, createSourceGroundingService,
   encodeStructuredExtractionRef, readWorkspacePublicationSourceDrafts,
+  ModelConnectionService, ModelAssignmentService, ModelSelectionService, ExecutionModelBindingService,
 } from '@ontology/application'
 import { ArchivedRulePremiseReplayVerifier, FiniteGrammarRuleSupportValidator, FiniteGrammarSyntheticEvaluator, IdentityDecisionService } from '@ontology/semantic-engine'
 import type { ActionCapabilityBindingInput, GenerationPort, ProfileRef, ProjectRevision, ScopeRef, ToolContext, VerifiedTableManifestSource } from '@ontology/contracts'
@@ -25,6 +26,10 @@ import { profileModelBindingEnabled, resolvedCapabilitiesFrom, resolveScenarioPr
 import { validateCoreFactsRequest } from './core-facts-providers'
 import { registerCoreSourceViewRoutes } from '../http/core-source-views'
 import { registerCoreImportRoute, registerCoreRelationNavigationRoute } from '../http/core-core-routes'
+import { registerModelConnectionRoutes } from '../http/core-model-connections'
+import { LocalModelCredentialCustodian } from './core-model-credential-custodian'
+import { createCoreModelProbe } from './core-model-probe'
+import { createModelTargetDirectory } from './core-model-target-directory'
 import { registerProjectImportRoute } from '../http/project-imports'
 import { createCompetencyQuestionWorkflow } from './competency-questions'
 import { createCompetencyValidationTargetReader } from './competency-validation-target'
@@ -282,10 +287,38 @@ export async function assembleDeployment(
   })
   const controller = host.controller
   if (controller === undefined) throw new CoreCapabilityError('the Core controller is not mounted')
+
+  // Model-connection catalogue / assignment / selection (design §5.3, A-R09/A-R10).
+  const modelConnectionStore = new PostgresModelConnectionStore(database)
+  const modelAssignmentStore = new PostgresModelAssignmentStore(database)
+  const modelBindingStore = new PostgresExecutionModelBindingStore(database)
+  const modelCredentialCustodian = new LocalModelCredentialCustodian({ objectDirectory: options.objectDirectory })
+  const modelTargetDirectory = createModelTargetDirectory({ workspaces: state.workspaceStore, projects: projectStore })
+  const modelSelectionService = new ModelSelectionService({
+    assignments: modelAssignmentStore,
+    connections: modelConnectionStore,
+    targets: modelTargetDirectory,
+  })
+  const aiSettings = {
+    connections: new ModelConnectionService({
+      connections: modelConnectionStore,
+      credentials: modelCredentialCustodian,
+      assignments: modelAssignmentStore,
+      probe: createCoreModelProbe({ credentials: modelCredentialCustodian }),
+    }),
+    assignments: new ModelAssignmentService({
+      assignments: modelAssignmentStore,
+      connections: modelConnectionStore,
+      targets: modelTargetDirectory,
+    }),
+    selection: modelSelectionService,
+    bindings: new ExecutionModelBindingService({ bindings: modelBindingStore, resolver: modelSelectionService }),
+  }
   const dependencies: CoreApiDependencies = {
     database,
     scopeRef,
     examples,
+    aiSettings,
     readScenarioProfile,
     profileRefsByScenario,
     profileSpecsByScenario,
@@ -331,6 +364,7 @@ export async function assembleDeployment(
       registerCoreSourceViewRoutes(api, { reader: sourceViews, authenticate, contextFor: (auth, traceId) => createRequestToolContext({ ...auth, traceId, runId: randomUUID() }) })
       registerCoreImportRoute({ app: api, authenticate, scopeRef, examples, service: jobService, objectStore, registry: artifactRegistry, generationEnabled: modelCapabilities.generationEnabled })
       registerCoreRelationNavigationRoute({ app: api, authenticate, examples, publications: publicationStore, identity: identityStore })
+      registerModelConnectionRoutes(api, { ...aiSettings, authenticate, webPort: Number(process.env['CORE_WEB_PORT'] ?? '5174') })
       registerProjectImportRoute(api, { authenticate, scopeRef, service: projectStructuredImportService })
     },
     ...(options.logger === undefined ? {} : { logger: options.logger }),

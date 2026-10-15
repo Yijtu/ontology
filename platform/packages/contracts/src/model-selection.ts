@@ -7,6 +7,7 @@ import type {
   Uuid,
   VersionRef,
 } from './generated/contracts'
+import type { SecretValue } from './source-bindings'
 import type { ToolContext } from './trusted'
 import { isRecord, isRevisionString, isUuid, isVersionRef } from './asset-workspace'
 
@@ -178,6 +179,8 @@ export interface EffectiveModelSelection {
   readonly state: EffectiveModelState
   readonly connectionId?: Uuid
   readonly connectionSummary?: ModelConnectionSummary
+  /** The revision of the assignment set the selection was resolved from; pinned into a binding. */
+  readonly assignmentRevision?: RevisionString
   readonly blockedReason?: ModelSelectionReason
   readonly resolvedAt: Rfc3339UtcTimestamp
 }
@@ -261,6 +264,16 @@ export function modelAdapterSupportsCapability(adapterType: ModelAdapterType, ca
   return capability === 'generation' || capability === 'research'
 }
 
+/** One probe outcome recorded against a stored connection revision. */
+export interface ModelConnectionTestRecord {
+  readonly connectionId: Uuid
+  readonly revision: RevisionString
+  readonly status: ModelConnectionTestStatus
+  readonly testedAt: Rfc3339UtcTimestamp
+  readonly reason?: ModelConnectionTestReason
+  readonly latencyMs?: number
+}
+
 /** Control persistence for the connection catalogue. It stores metadata only, never a credential. */
 export interface ModelConnectionStore {
   listConnections(
@@ -286,11 +299,20 @@ export interface ModelConnectionStore {
     input: { readonly connectionId: Uuid; readonly change: ModelConnectionCredentialChange },
     ctx: ToolContext,
   ): Promise<ModelConnectionSummary>
+  /**
+   * The opaque credential reference for a connection, or `undefined` when it has none. The
+   * reference is not a secret, but it is server-only: it lets the host resolve the value for a
+   * probe without ever putting the value or the reference into a browser-facing view.
+   */
+  getCredentialRef(scopeRef: ScopeRef, connectionId: Uuid, ctx: ToolContext): Promise<ResourceRef | undefined>
+  /** Record the latest probe summary on the connection; idempotent per connection revision. */
+  recordTest(scopeRef: ScopeRef, record: ModelConnectionTestRecord, ctx: ToolContext): Promise<ModelConnectionSummary>
 }
 
 /** Control persistence for assignment sets; `putAssignmentSet` enforces default uniqueness. */
 export interface ModelAssignmentStore {
   getAssignmentSet(scopeRef: ScopeRef, scope: ModelTargetScope, ctx: ToolContext): Promise<ModelAssignmentSet | undefined>
+  listAssignmentSets(scopeRef: ScopeRef, ctx: ToolContext): Promise<readonly ModelAssignmentSet[]>
   putAssignmentSet(
     scopeRef: ScopeRef,
     input: { readonly set: ModelAssignmentSet; readonly expectedRevision?: RevisionString },
@@ -311,7 +333,11 @@ export interface ModelSelectionResolver {
 export interface ModelConnectionProbePort {
   probe(
     scopeRef: ScopeRef,
-    request: { readonly draft: ModelConnectionDescriptor; readonly credentialRef?: ResourceRef },
+    request: {
+      readonly draft: ModelConnectionDescriptor
+      readonly credentialRef?: ResourceRef
+      readonly signal?: AbortSignal
+    },
     ctx: ToolContext,
   ): Promise<ModelConnectionTestResult>
 }
@@ -325,6 +351,39 @@ export interface ExecutionModelBindingStore {
     capability: ModelCapability,
     ctx: ToolContext,
   ): Promise<ExecutionModelBinding | undefined>
+}
+
+/**
+ * Host credential custody: model API keys live outside the control database, in an
+ * OS-protected local store keyed by an opaque `ResourceRef`. The plaintext is written once
+ * (`stage` -> `activate`), never read back into a domain entity, never returned by a store
+ * and never serialised (`SecretValue` renders `[redacted]`). Every operation is idempotent so
+ * an interrupted write can be cleaned up and retried (design §5.3).
+ */
+export interface ModelCredentialCustodian {
+  /** Write a new credential value under a fresh opaque ref without making it current. */
+  stage(
+    scopeRef: ScopeRef,
+    input: { readonly connectionId: Uuid; readonly secret: SecretValue },
+    ctx: ToolContext,
+  ): Promise<ResourceRef>
+  /** Make a staged credential current; idempotent if already active. */
+  activate(scopeRef: ScopeRef, credentialRef: ResourceRef, ctx: ToolContext): Promise<void>
+  /** Remove a staged-but-not-activated credential; idempotent when already gone. */
+  discard(scopeRef: ScopeRef, credentialRef: ResourceRef, ctx: ToolContext): Promise<void>
+  /** Remove every stored credential for a connection; idempotent when already clear. */
+  revoke(scopeRef: ScopeRef, connectionId: Uuid, ctx: ToolContext): Promise<void>
+  /** Resolve stored material for a probe/run; the value never crosses a serialisable boundary. */
+  resolve(scopeRef: ScopeRef, credentialRef: ResourceRef, ctx: ToolContext): Promise<SecretValue>
+}
+
+/**
+ * Ownership check for an assignment target. The path/query id is never trusted: the
+ * host-supplied directory verifies the workspace/project actually belongs to the trusted
+ * tenant/space before an assignment may name it. A foreign target is invisible (SCOPE_MISMATCH).
+ */
+export interface ModelTargetDirectory {
+  assertTargetInScope(scopeRef: ScopeRef, scope: ModelTargetScope, ctx: ToolContext): Promise<void>
 }
 
 const ADAPTER_TYPES: readonly ModelAdapterType[] = ['company_generation', 'jev']
@@ -449,6 +508,7 @@ export function assertEffectiveModelSelectionShape(value: unknown): asserts valu
     || !SELECTION_SOURCES.includes(value['resolvedFrom'] as ModelSelectionSource)
     || !EFFECTIVE_STATES.includes(value['state'] as EffectiveModelState)
     || (value['connectionId'] !== undefined && !isUuid(value['connectionId']))
+    || (value['assignmentRevision'] !== undefined && !isRevisionString(value['assignmentRevision']))
     || (value['blockedReason'] !== undefined && !MODEL_SELECTION_REASONS.includes(value['blockedReason'] as ModelSelectionReason))
     || !isNonEmptyString(value['resolvedAt'])) {
     throw new ModelSelectionError('INVALID_ARGUMENT', 'invalid effective model selection')
