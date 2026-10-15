@@ -9,6 +9,7 @@
 - [PRD v0.2](tasks/prd-industry-semantic-agent-v0.2.md)规定产品范围；[SPEC 主文](tasks/spec-industry-semantic-agent-v0.2.md)及分册规定实现契约；[Issue manifest](.autoresearch/issues/manifest.json)记录任务依赖与真实 GitHub 编号映射。`LOCAL-xxx` 不自动等于 GitHub `#xxx`。
 - 用当前代码、验收证据与任务记录核对实际状态。文档中的“尚未实现”等历史描述不代表实时进度；记录不一致时标出差异，不能据此重复实现或虚报完成。
 - 本项目独立建设，历史演示原型不构成代码、接口、数据迁移、页面或测试兼容要求；不以旧实现输出作为正确性依据。DataOS 仅视为数据中台，未验证能力不得成为实现前提。
+- **main 只承载通用 Core 能力、公共前端和 A 阶段文档（A 的 PRD/SPEC）。** 业务/场景内容（如造价 B 的 PRD/SPEC、`.autoresearch/batches/v0.3-assistants/` 任务批次）只维护在对应的规划/场景分支，不进入 main。同步 main 到场景分支时若出现这类路径的 delete/modify 冲突，保留场景分支（业务）版本，不把业务内容回退或覆盖到主线。
 
 ## 架构边界
 
