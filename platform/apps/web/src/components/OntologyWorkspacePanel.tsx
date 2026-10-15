@@ -9,11 +9,12 @@ import { PublicEmptyState, PublicStateNotice } from './PublicStateNotice'
 import { classifyPublicError } from '../state/public-errors'
 import type { PublicFailure } from '../state/public-errors'
 import type { WorkbenchError, WorkbenchPhase } from '../state/workbench'
-import { Button } from './ui'
+import { Button, Drawer } from './ui'
 import { DefinitionWorkbenchPanel } from './DefinitionWorkbenchPanel'
 import { PackagePublicationPanel } from './PackagePublicationPanel'
 import './ontology/ontology.css'
 import { WorkspaceSourcesPanel } from './WorkspaceSourcesPanel'
+import { ResearchPanel } from './ResearchPanel'
 
 /**
  * The public ontology-workspace home (SPEC v0.3a §9.1/§9.2, A.US-001, P.US-002). It lists the
@@ -135,6 +136,18 @@ export function OntologyWorkspacePanel({
   const [createOpen, setCreateOpen] = useState(true)
   const initialWorkspaceListRead = useRef(false)
   const [visited, setVisited] = useState<ReadonlySet<string>>(new Set(['sources']))
+  // The AI-research surface opens from the sources intake entry; `?research=<id>` resumes a run
+  // after a reload so progress is always re-read from the server, never replayed from local state.
+  const [researchId, setResearchId] = useState<string | undefined>(() => typeof window === 'undefined' ? undefined : new URLSearchParams(window.location.search).get('research') ?? undefined)
+  const [researchOpen, setResearchOpen] = useState(researchId !== undefined)
+  const syncResearchId = (next: string | undefined) => {
+    setResearchId(next)
+    if (typeof window === 'undefined') return
+    const url = new URL(window.location.href)
+    if (next === undefined) url.searchParams.delete('research')
+    else url.searchParams.set('research', next)
+    window.history.replaceState(window.history.state, '', url.toString())
+  }
   const openStage = (next: string) => { const wasVisited = visited.has(next); setVisited((old) => new Set(old).add(next)); if (wasVisited && next !== stage && (next === 'review' || next === 'publish')) setStageRefresh((value) => value + 1); setStage(next) }
   const selectedRef = useRef<string | undefined>(undefined)
   const boundaryBuffers = useRef(new Map<string, WorkspaceCreateFields>())
@@ -583,7 +596,18 @@ export function OntologyWorkspacePanel({
             readOnly={readOnly}
             onWorkspaceChanged={(workspace, draft) => { setWorkspaces((old) => old.map((value) => value.workspaceId === workspace.workspaceId ? workspace : value)); if (selectedRef.current === workspace.workspaceId) setDrafts((old) => [...old.filter((v) => v.revision !== draft.revision), draft]) }}
             onContinue={() => openStage("review")}
+            onOpenResearch={() => setResearchOpen(true)}
           /></div>
+          {selected === undefined ? null : <Drawer open={researchOpen} title="AI 搜寻公共资料" onClose={() => setResearchOpen(false)}>
+            <ResearchPanel
+              client={client}
+              workspaceId={selected.workspaceId}
+              readOnly={readOnly}
+              {...(researchId === undefined ? {} : { initialResearchId: researchId })}
+              onResearchChanged={syncResearchId}
+              onOpenGeneration={() => { setResearchOpen(false); openStage("review") }}
+            />
+          </Drawer>}
         </div>
       )}
     </section>
