@@ -140,7 +140,10 @@ export function createExecutionModelCapabilities(input: {
   if (binding.connectionId === undefined || binding.connectionId !== connection.connectionId) {
     throw new ModelSelectionError('MODEL_BINDING_REVOKED', 'the execution binding does not name this connection')
   }
-  const models = { [connection.platformModelId]: { vendorModel: connection.providerModelName } }
+  // The adapter indexes its vendor map by the same identity an execution's model ref carries — the
+  // catalogue connection's component ref id — so a profile/binding that pins the connection
+  // component is invoked by exactly the key this adapter was built with.
+  const models = { [modelConnectionComponentRef(connection).id]: { vendorModel: connection.providerModelName } }
   if (connection.adapterType === 'company_generation' && (binding.capability === 'generation' || binding.capability === 'research')) {
     const protocol: CompanyModelProtocol = connection.protocol === 'private' ? 'private' : 'openai-compatible'
     const generation = new CompanyGenerationAdapter({
@@ -164,7 +167,7 @@ export function createExecutionModelCapabilities(input: {
       baseUrl: requiredBaseUrl(connection),
       ...(connection.endpoint === undefined ? {} : { endpoint: connection.endpoint }),
       secretRef: modelConnectionSecretRef(connection.connectionId),
-      models: { [connection.platformModelId]: { vendorModel: connection.providerModelName, fallbackPolicy: dependencies.jevFallbackPolicy } },
+      models: { [modelConnectionComponentRef(connection).id]: { vendorModel: connection.providerModelName, fallbackPolicy: dependencies.jevFallbackPolicy } },
       ...(dependencies.decisionStateResolver === undefined ? {} : { stateResolver: dependencies.decisionStateResolver }),
       fallbackPolicy: dependencies.jevFallbackPolicy,
       secrets,

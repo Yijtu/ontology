@@ -27,10 +27,12 @@ import { createCoreDefinitionLabelReader } from './core-definition-labels'
 import { createCoreTableResults } from './core-table-results'
 import { createBusinessMaterializationConsumer, createCompetencyPreviewOutboxConsumer } from './core-business-materialization'
 import { createCoreProjectSemanticReadiness } from './core-project-semantic-readiness'
+import { createCoreWebSearchProvider } from './core-web-search'
 import { CoreProjectSemanticPartitions } from './core-project-semantic-partitions'
 import { CorePublicationValidity, CoreInputValidity } from './core-publication-validity'
 import { CoreFactsOutboxFallback, IndustryWorkspaceOutboxConsumer, PackPublicationOutboxConsumer, ProjectRevisionOutboxConsumer, UnsupportedOutboxConsumer } from './core-outbox-consumers'
 import { CoreTemplatePlanResolver } from './core-template-plan-resolver'
+import { modelConnectionComponentRef } from './core-execution-model-binding'
 import { createPostgresProvenanceRead } from './provenance-read'
 import type { CoreLocalCompositionOptions } from './core-local-composition'
 import type { assembleInfrastructure } from './core-assembly-infrastructure'
@@ -55,6 +57,7 @@ export async function assembleRuntimePipeline(
     runStore, jobStore, dispatchStore, answerStore, workspaceStore, publishedPackStore, coreModelRefs, componentRecords,
     terminology, normalApprovedInputs, projectEvolutionCell, modelCapabilities, modelEnvironment, hostClock, allSourceRefs,
     profileResolver, semanticDefinitions, modelBindingRuntime, runModelBinder, modelBindingService, modelBindingStore, modelConnectionStore,
+    deploymentModelCapabilities,
   } = state
   const { mappings, structuredImports, rulePremiseVerifier, semanticTasks, relationsTask, facts, multiSchemaSource, projectQuery, gatewayComposition } = query
 
@@ -108,8 +111,9 @@ export async function assembleRuntimePipeline(
       const binding = await modelBindingStore.getBinding(scopeRef, runId, capability, ctx)
       if (binding?.connectionId === undefined) return undefined
       const connection = await modelConnectionStore.getConnection(scopeRef, binding.connectionId, ctx)
-      // The pinned platform model id is what the execution-bound adapter indexes its vendor map by.
-      return connection === undefined ? undefined : { modelId: connection.platformModelId, version: binding.connectionRevision ?? connection.revision }
+      // The execution-bound adapter indexes its vendor map by the pinned connection's component ref
+      // id, so the planner must name exactly that identity to reach the model it was built with.
+      return connection === undefined ? undefined : { modelId: modelConnectionComponentRef(connection).id, version: binding.connectionRevision ?? connection.revision }
     },
     taskBindings: taskBindingStore,
     executionBindings: runExecutionBindingStore,
@@ -149,7 +153,7 @@ export async function assembleRuntimePipeline(
     return binding?.kind === 'document_qa' ? [projectCollectionRef(request.projectRevisionRef.projectId)] : []
   }
   const termLabels = createCoreDefinitionLabelReader({ packs: publishedPackStore, candidates: assetCandidateStore, ruleActions: ruleActionCandidateStore })
-  const authoring = createCoreAuthoring({ blobs: blobStore, registry: artifactRegistry, objectStore, workspaces: workspaceStore, jobs: jobStore, parses: parseStore, structured: structuredStore, operations: compute.registry, models: modelCapabilities, terminology: { getTerminology: (...args) => terminology.getTerminology(...args) }, termLabels })
+  const authoring = createCoreAuthoring({ blobs: blobStore, registry: artifactRegistry, objectStore, workspaces: workspaceStore, jobs: jobStore, parses: parseStore, structured: structuredStore, operations: compute.registry, models: { generationEnabled: deploymentModelCapabilities.generation, decisionEnabled: deploymentModelCapabilities.decision }, terminology: { getTerminology: (...args) => terminology.getTerminology(...args) }, termLabels })
   const tableArtifactStore = new PostgresTableArtifactStore(database, { writer: gatewayComposition.artifacts, reader: state.scopedOriginals })
   const tableVerificationStore = new PostgresTableVerificationStore(database)
   const tableSchema = SCHEMA_DOCUMENTS.find((schema) => schema['$id'] === 'https://ontology.local/schema/tools.schema.json')
@@ -301,12 +305,16 @@ export async function assembleRuntimePipeline(
   // search provider it also wires the research workflow and its worker stage, so a durable
   // `research` job runs the fixed chain. When no provider is configured the research capability
   // is simply absent — selecting a research model never enables `web_search` on its own.
+  // A normal start discovers research by constructing the controlled, snapshot-archiving search
+  // provider from deployment configuration; a test host may still inject its own provider. With
+  // neither configured, research is explicitly absent (never a fabricated capability).
+  const webSearch = options.webSearch ?? createCoreWebSearchProvider({ env: modelEnvironment, artifacts: gatewayComposition.artifacts })
   const researchExecutionStore = new PostgresResearchExecutionStore(database)
-  const researchWorkflow = options.webSearch === undefined ? undefined : new ResearchWorkflowService({
+  const researchWorkflow = webSearch === undefined ? undefined : new ResearchWorkflowService({
     jobs: jobService,
     executions: researchExecutionStore,
     research: new WebResearchService({
-      webSearch: options.webSearch,
+      webSearch,
       ingestion: new CandidateSourceIngestionService({ artifacts: gatewayComposition.artifacts, sources: new PostgresCandidateSourceStore(database) }),
     }),
     budget: state.budget,
@@ -365,6 +373,6 @@ export async function assembleRuntimePipeline(
     runProfileBinder, runProgress, executionPreflight, runs, phase, planResolver, termLabels, authoring, tableArtifactStore,
     tableVerificationStore, tableResults, draftVerifier, workflowDispatchWorker, jobService, industryWorkspaceService, parser,
     pipeline, structuredExtractionService, handlers, jobWorker, currentProjectRevisions, materializer, outboxConsumer, dispatcher, provenanceRead,
-    researchWorkflow,
+    researchWorkflow, webSearch,
   }
 }

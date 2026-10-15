@@ -5,7 +5,7 @@ import { DATA_POSTGRES_ADAPTER_REF, PostgresProjectDatasetAdapter } from '@ontol
 import { PostgresDocumentParseStore, PostgresStructuredIngestionStore } from '@ontology/adapter-extraction-document'
 import { PostgresKeywordIndexStore } from '@ontology/adapter-search-bm25'
 import { ControlPostgresDatabase, PostgresExecutionModelBindingStore, PostgresModelAssignmentStore, PostgresModelConnectionStore } from '@ontology/adapter-control-postgres'
-import { ExecutionModelBindingService, ModelSelectionService, ProfileResolver, ProjectDataMaterializationService, SourceRegistry, StoreBackedIndustryManifestSource } from '@ontology/application'
+import { ExecutionModelBindingService, ModelAssignmentService, ModelConnectionService, ModelSelectionService, ProfileResolver, ProjectDataMaterializationService, SourceRegistry, StoreBackedIndustryManifestSource } from '@ontology/application'
 import { definitionVersionDigest, projectIndustrySchema, PublishedProjectDatasetSource, SemanticDefinitionService } from '@ontology/semantic-engine'
 import { canonicalJson, sha256DigestOf } from '@ontology/core'
 import type { IndustrySchemaSource, ProfileRef, ProfileSpec, ScopeRef, ToolContext, Uuid, VersionRef } from '@ontology/contracts'
@@ -19,7 +19,8 @@ import { COMPONENT_VERSION, WORKER_RUN_ID } from './core-constants'
 import { CoreCapabilityError } from './core-errors'
 import { sameVersionRef, sourceKey } from './core-composition-shared'
 import { createAjv, profileValidator, terminologySourceFor } from './core-validators'
-import { componentRecord, industrySourceFor, modelComponentRefsOf, profileSpecFor, registerComponents, registerProfiles, scenarioComponentRecords, scenarioForIndustryRef, schemasByScenario, sourceRefsOf, workerContext } from './core-component-registration'
+import { componentRecord, industrySourceFor, profileSpecFor, registerComponents, registerProfiles, scenarioComponentRecords, scenarioForIndustryRef, schemasByScenario, sourceRefsOf, workerContext } from './core-component-registration'
+import type { CoreModelComponentRefs } from './core-template-plan-resolver'
 import { componentRef } from './core-component-ref'
 import { createCoreControlStores } from './core-control-stores'
 import { createCoreModelEvidenceRecorders } from './model-evidence'
@@ -30,9 +31,15 @@ import { createEnvSecretResolver } from './secret-resolver'
 import { LocalModelCredentialCustodian } from './core-model-credential-custodian'
 import { createModelTargetDirectory } from './core-model-target-directory'
 import {
+  catalogueModelComponentRecords,
   createExecutionModelBindingRuntime,
   createRunModelBinder,
+  modelConnectionComponentRef,
 } from './core-execution-model-binding'
+import { createCoreModelProbe } from './core-model-probe'
+import { CoreModelSettingsMigration } from './core-model-settings-migration'
+import { CoreLocalModelSettings } from './core-local-model-settings'
+import type { EffectiveModelSelection } from '@ontology/contracts'
 import type { JevFallbackPolicy } from '@ontology/adapter-model-jev'
 import { createPostgresSourceStore, createStaticProbeAdapterResolver } from './source-registry'
 import { emptyCoreExamples } from './core-example-loader'
@@ -52,6 +59,31 @@ function jevFallbackPolicyOf(env: Readonly<Record<string, string | undefined>>):
     throw new CoreCapabilityError('CORE_JEV_FALLBACK_POLICY must be deterministic, generative_classification, clarify or reject')
   }
   return value as JevFallbackPolicy
+}
+
+/** A stable, non-secret reason for why a deployment-level model capability is not available. */
+function unavailableReasonFor(selection: EffectiveModelSelection): string | undefined {
+  switch (selection.state) {
+    case 'available':
+      return undefined
+    case 'disabled':
+      return '模型连接已停用'
+    case 'blocked':
+      switch (selection.blockedReason) {
+        case 'CREDENTIAL_MISSING':
+          return '模型连接缺少凭据'
+        case 'MODEL_DISABLED':
+          return '模型连接已停用'
+        case 'MODEL_CAPABILITY_MISMATCH':
+          return '模型连接不支持该能力'
+        case 'MODEL_BINDING_REVOKED':
+          return '模型绑定已被撤销'
+        default:
+          return '模型连接不可用'
+      }
+    default:
+      return '未配置模型连接'
+  }
 }
 
 /** Mutable host state shared across the assembly phases and used by start/close. */
@@ -160,11 +192,10 @@ export async function assembleInfrastructure(options: CoreLocalCompositionOption
   const profileResolver = new ProfileResolver({ control: stores.control, store: stores.profileStore, registry: stores.componentStore, industry: industrySource, validator: profileValidatorImpl })
   const sources = new SourceRegistry({ control: stores.control, store: createPostgresSourceStore(database), secrets: createEnvSecretResolver(), adapters: createStaticProbeAdapterResolver([]) })
 
-  const coreModelRefs = modelComponentRefsOf(modelEnvironment, modelCapabilities)
-
   // Execution model binding (design §5.3): the shared catalogue/binding stores, the credential
-  // custodian and the per-execution capability provider. Deployment builds the admin services
-  // from these same instances so a binding always names the exact connection the catalogue holds.
+  // custodian and the per-execution capability provider. The catalogue admin services are built
+  // here so the one-time migration can run *before* the deployment projection and component
+  // registration read the model directory.
   const modelConnectionStore = new PostgresModelConnectionStore(database)
   const modelAssignmentStore = new PostgresModelAssignmentStore(database)
   const modelBindingStore = new PostgresExecutionModelBindingStore(database)
@@ -204,7 +235,65 @@ export async function assembleInfrastructure(options: CoreLocalCompositionOption
     serverContext: (runId) => workerContext(scopeRef, allSourceRefs, runId, sha256DigestOf(`core-run-model-binding:${runId}`), hostClock),
   })
 
-  const componentRecords = [...scenarioComponentRecords(examples.scenarios, new Date().toISOString(), compute, coreModelRefs),
+  // The catalogue admin services, shared with the deployment so a binding always names the exact
+  // connection this catalogue holds.
+  const aiSettings = {
+    connections: new ModelConnectionService({
+      connections: modelConnectionStore,
+      credentials: modelCredentialCustodian,
+      assignments: modelAssignmentStore,
+      probe: createCoreModelProbe({ credentials: modelCredentialCustodian }),
+    }),
+    assignments: new ModelAssignmentService({
+      assignments: modelAssignmentStore,
+      connections: modelConnectionStore,
+      targets: modelTargetDirectory,
+    }),
+    selection: modelSelectionService,
+    bindings: modelBindingService,
+  }
+
+  // The one-time legacy-settings bridge runs on the normal start path *before* the deployment
+  // projection is read, so an env/local generation config becomes a catalogue connection first
+  // (design §5.3 step ①–⑦). A deployment that passes its own `modelSettings` shares that instance.
+  const modelSettings = options.modelSettings ?? new CoreLocalModelSettings({
+    objectDirectory: options.objectDirectory,
+    scopeRef,
+    environment: modelEnvironment,
+  })
+  const modelSettingsMigration = new CoreModelSettingsMigration({
+    settings: modelSettings,
+    connections: aiSettings.connections,
+    assignments: aiSettings.assignments,
+    environment: modelEnvironment,
+  })
+  await modelSettingsMigration.migrate()
+
+  // The deployment capability projection and the startup model component registration are derived
+  // from the actual model directory, never a static env flag (design §5.3). An empty directory
+  // degrades explicitly to "not configured" with a reason; a named-but-broken connection is
+  // `blocked` (also not available), so an unavailable ability always carries an honest cause.
+  const projectionContext = workerContext(scopeRef, allSourceRefs, WORKER_RUN_ID, sha256DigestOf('core-model-projection'), hostClock)
+  const catalogueConnections = await modelConnectionStore.listConnections(scopeRef, {}, projectionContext)
+  const generationSelection = await modelSelectionService.resolve(scopeRef, { scope: { kind: 'space' }, capability: 'generation' }, projectionContext)
+  const decisionSelection = await modelSelectionService.resolve(scopeRef, { scope: { kind: 'space' }, capability: 'decision_jev' }, projectionContext)
+  const deploymentModelCapabilities = {
+    generation: generationSelection.state === 'available',
+    decision: decisionSelection.state === 'available',
+    generationReason: unavailableReasonFor(generationSelection),
+    decisionReason: unavailableReasonFor(decisionSelection),
+  }
+  const coreModelRefs: CoreModelComponentRefs = {
+    ...(generationSelection.state === 'available' && generationSelection.connectionSummary !== undefined
+      ? { generation: modelConnectionComponentRef(generationSelection.connectionSummary) } : {}),
+    ...(decisionSelection.state === 'available' && decisionSelection.connectionSummary !== undefined
+      ? { decision: modelConnectionComponentRef(decisionSelection.connectionSummary) } : {}),
+  }
+
+  // Model components are registered from the catalogue so a run's fixed binding names a component
+  // this deployment actually registered; the env-based refs are no longer registered statically.
+  const componentRecords = [...scenarioComponentRecords(examples.scenarios, new Date().toISOString(), compute),
+    ...catalogueModelComponentRecords(catalogueConnections, hostClock().toISOString()),
     componentRecord({ kind: 'compute_extension', ref: componentRef('compute_extension', 'core-rule-derivation-producer', 'rule-derivation-producer@1.0.0'), capabilityNames: ['evidence.rule_derivation'], entrypoint: '@ontology/semantic-engine', now: hostClock().toISOString() }),
     ...(options.projectDataset === undefined ? [] : [componentRecord({ kind: 'data_backend', ref: DATA_POSTGRES_ADAPTER_REF, capabilityNames: ['structured_query'], entrypoint: '@ontology/adapter-data-postgres', now: hostClock().toISOString() })]),
   ]
@@ -252,7 +341,8 @@ export async function assembleInfrastructure(options: CoreLocalCompositionOption
     dispatchStore: stores.dispatchStore, budget: stores.budget,
     modelEnvironment, modelEvidence, decisionStateRefProvider, jevStateResolver, extractionSchemaValidator, modelCapabilities,
     modelConnectionStore, modelAssignmentStore, modelBindingStore, modelCredentialCustodian, modelTargetDirectory,
-    modelSelectionService, modelBindingService, modelBindingRuntime, runModelBinder,
+    modelSelectionService, modelBindingService, modelBindingRuntime, runModelBinder, aiSettings,
+    modelSettings, modelSettingsMigration, deploymentModelCapabilities,
     schemaSource, semanticDefinitions, projectDatasetAdapter, publishedProjectDatasetSource, projectEvolutionCell, normalApprovedInputs,
     evolutionGuard, projectDatasetService, profileResolver, sources, coreModelRefs, componentRecords, bootstrapProfileSpecsByScenario,
     profileRefsByScenario, profileSpecsByScenario, availableTasksByScenario, terminology, executionPreview,

@@ -176,6 +176,9 @@ importers:
       '@ontology/adapter-search-bm25':
         specifier: workspace:*
         version: link:../../packages/adapters/search-bm25
+      '@ontology/adapter-search-web':
+        specifier: workspace:*
+        version: link:../../packages/adapters/search-web
       '@ontology/adapter-transport-local':
         specifier: workspace:*
         version: link:../../packages/adapters/transport-local

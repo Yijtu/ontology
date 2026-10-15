@@ -34,6 +34,8 @@ export interface CoreLocalCompositionOptions {
   readonly jevEnabled?: boolean
   /** Server-side model configuration. The browser process never receives this object. */
   readonly modelEnvironment?: Readonly<Record<string, string | undefined>>
+  /** The legacy local model-settings store the one-time catalogue migration reads. */
+  readonly modelSettings?: import('./core-local-model-settings').CoreLocalModelSettings
   /** Enables the modelling research surface; web_search stays disabled when it is omitted. */
   readonly webSearch?: import('@ontology/contracts').WebSearchProvider
   /** Injectable host clock for deadline/recovery verification; production defaults to wall time. */

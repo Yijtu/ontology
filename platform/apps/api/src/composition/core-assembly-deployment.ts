@@ -11,7 +11,7 @@ import {
   RuleActionCandidateGenerationService, RunServiceError, StoreBackedIndustryPackCatalogue, SyntheticExampleService,
   TableArtifactReadService, VerifiedResultExportService, VerifiedResultReadService, WebResearchService, WorkspaceSourceAdmissionService,
   createSourceGroundingService, encodeStructuredExtractionRef, readWorkspacePublicationSourceDrafts,
-  ModelConnectionService, ModelAssignmentService, WorkbenchOverviewService,
+  WorkbenchOverviewService,
 } from '@ontology/application'
 import { ArchivedRulePremiseReplayVerifier, FiniteGrammarRuleSupportValidator, FiniteGrammarSyntheticEvaluator, IdentityDecisionService } from '@ontology/semantic-engine'
 import type { ActionCapabilityBindingInput, GenerationPort, ProfileRef, ProjectRevision, ScopeRef, ToolContext, VerifiedTableManifestSource, WorkbenchCapability } from '@ontology/contracts'
@@ -27,7 +27,6 @@ import { validateCoreFactsRequest } from './core-facts-providers'
 import { registerCoreSourceViewRoutes } from '../http/core-source-views'
 import { registerCoreImportRoute, registerCoreRelationNavigationRoute } from '../http/core-core-routes'
 import { registerModelConnectionRoutes } from '../http/core-model-connections'
-import { createCoreModelProbe } from './core-model-probe'
 import { registerProjectImportRoute } from '../http/project-imports'
 import { createCompetencyQuestionWorkflow } from './competency-questions'
 import { createCompetencyValidationTargetReader } from './competency-validation-target'
@@ -71,9 +70,10 @@ export async function assembleDeployment(
     packRuleReader, answerStore, dispatchStore, budget, modelEnvironment, modelCapabilities, schemaSource, projectDatasetAdapter,
     publishedProjectDatasetSource, normalApprovedInputs, projectDatasetService, profileResolver, sources, coreModelRefs, componentRecords,
     profileRefsByScenario, profileSpecsByScenario, availableTasksByScenario, terminology, executionPreview, projectEvolutionCell, hostClock, componentStore,
+    aiSettings, modelSettings, modelSettingsMigration, deploymentModelCapabilities, modelBindingRuntime,
   } = state
   const { structuredImports, documentSpanReader, projectDocumentIndexService, structuredPremiseSources, structuredClauseSources, semanticTasks, computeResultStore, computeOutputBindingsStore, computeInvocationStore, gatewayComposition } = query
-  const { runProgress, runs, termLabels, authoring, tableArtifactStore, tableVerificationStore, workflowDispatchWorker, jobService, industryWorkspaceService, provenanceRead } = runtime
+  const { runProgress, runs, termLabels, authoring, tableArtifactStore, tableVerificationStore, workflowDispatchWorker, jobService, industryWorkspaceService, provenanceRead, webSearch } = runtime
 
   const runValidation = async (
     submission: { readonly profileRef: ProfileRef; readonly question: string; readonly scopeRef: ScopeRef; readonly task?: import('@ontology/contracts').RunExecutionRequest },
@@ -102,8 +102,8 @@ export async function assembleDeployment(
     if (!resolved.toolBindings.some((binding) => binding.toolId === 'data_query' && binding.enabled)) {
       throw new CoreCapabilityError('ordinary natural-language queries require data_query to be enabled in the resolved profile')
     }
-    if (!modelCapabilities.generationEnabled || !profileModelBindingEnabled(resolved.modelBindings['generation'], coreModelRefs.generation)) {
-      throw new CoreCapabilityError('ordinary natural-language queries require a configured generation model bound by the resolved profile')
+    if (!deploymentModelCapabilities.generation || !profileModelBindingEnabled(resolved.modelBindings['generation'], coreModelRefs.generation)) {
+      throw new CoreCapabilityError(`ordinary natural-language queries require a configured generation model bound by the resolved profile${deploymentModelCapabilities.generationReason === undefined ? '' : ` (${deploymentModelCapabilities.generationReason})`}`)
     }
     const catalog = resolved.backendBindings['catalog']
     if (catalog === undefined || !sameVersionRef(catalog.adapterRef, DATA_DUCKDB_ADAPTER_REF) || resolved.mappingRefs.length === 0) {
@@ -165,23 +165,37 @@ export async function assembleDeployment(
     documentSets: new ArtifactGroundingDocumentSetReader(blobStore),
     reader: new ParsedSourceGroundingReader({ blobs: blobStore, documents: parseStore, tables: structuredStore }) })
   const generationForRun = async ({ ctx, signal }: { readonly ctx: ToolContext; readonly signal: AbortSignal }): Promise<GenerationPort | undefined> => {
-    if (!modelCapabilities.generationEnabled) return undefined
+    // No generation model at all: return before opening a ledger, so a no-model deployment stays a
+    // pure deterministic path with no side effects.
+    if (!deploymentModelCapabilities.generation && !modelCapabilities.generationEnabled) return undefined
     signal.throwIfAborted()
     const ledger = await budget.openLedger({ ledgerId: randomUUID(), kind: 'background', runId: ctx.runId }, ctx)
     signal.throwIfAborted()
+    // The workspace generation services bind the same per-execution model a run does (design §5.3):
+    // when this execution carries a fixed binding it is used and never re-resolved; a revoked
+    // binding fails closed. Only an execution with no catalogue binding falls back to the legacy
+    // environment adapter.
+    const bound = await modelBindingRuntime.capabilitiesForExecution({ executionId: ctx.runId, ledgerId: ledger.ledgerId, signal, ctx })
+    if (bound.generation !== undefined) return bound.generation
+    if (bound.generationBlocked) return undefined
     return modelCapabilities.forExecution({ ledgerId: ledger.ledgerId, signal }).generation
   }
+  // Workspace candidate generation does not create an execution binding, so it still names the
+  // legacy environment adapter's model id; the run controller itself always uses the fixed binding.
+  const workspaceGenerationModelId = (): string => options.modelsEnabled === true
+    ? modelEnvironment['CORE_COMPANY_MODEL_PLATFORM_ID'] ?? 'model-not-configured'
+    : 'model-not-configured'
   const actionBindingContext = (): ActionCapabilityBindingInput => ({ registry: compute.registry, availableCapabilities: ['agent_runtime', 'structured_query', 'document_search', 'industry.semantics'], recordedAt: hostClock().toISOString() })
   const ruleActionCandidateService = new RuleActionCandidateService({ workspaces: state.workspaceStore, candidates: ruleActionCandidateStore, support: ruleSupport })
   const definitionGenerationService = new DefinitionCandidateGenerationService({
     sourceGrounding, competencyQuestions: competencyQuestions.service, workspaces: state.workspaceStore, candidates: assetCandidateStore, terminology, generationForRun,
-    modelRef: { modelId: options.modelsEnabled === true ? modelEnvironment['CORE_COMPANY_MODEL_PLATFORM_ID'] ?? 'model-not-configured' : 'model-not-configured', version: COMPONENT_VERSION },
+    modelRef: { modelId: workspaceGenerationModelId(), version: COMPONENT_VERSION },
     outputLimit: { maxTokens: 16_384 },
   })
   const ruleActionGenerationService = new RuleActionCandidateGenerationService({
     workspaces: state.workspaceStore, definitionCandidates: assetCandidateStore, candidates: ruleActionCandidateStore, batches: ruleActionGenerationStore,
     service: ruleActionCandidateService, terminology, sourceGrounding, generationForRun, bindingContext: actionBindingContext,
-    modelRef: { modelId: modelEnvironment['CORE_COMPANY_MODEL_PLATFORM_ID'] ?? 'model-not-configured', version: COMPONENT_VERSION }, outputLimit: { maxTokens: 16_384 },
+    modelRef: { modelId: workspaceGenerationModelId(), version: COMPONENT_VERSION }, outputLimit: { maxTokens: 16_384 },
   })
   const staticPackCatalogue = new InMemoryIndustryPackCatalogue()
   for (const scenario of examples.scenarios) staticPackCatalogue.registerPack({ ref: componentRef('industry_pack', scenario.industryManifest.namespace, scenario.industryManifest), manifest: scenario.industryManifest, testSuite: scenario.testSuite })
@@ -280,8 +294,8 @@ export async function assembleDeployment(
   const verifiedResultExportService = new VerifiedResultExportService({ reads: verifiedResultReadService, answers: answerStore, tables: verifiedTableManifests })
   const resultHistoryService = new ResultHistoryService({ answers: answerStore, bindings: runExecutionBindingStore, history: answerStore })
   const candidateSourceStore = new PostgresCandidateSourceStore(database)
-  const candidateSourceResearch = options.webSearch === undefined ? undefined : new WebResearchService({
-    webSearch: options.webSearch,
+  const candidateSourceResearch = webSearch === undefined ? undefined : new WebResearchService({
+    webSearch,
     ingestion: new CandidateSourceIngestionService({ artifacts: createBlobArtifactWriter(blobStore), sources: candidateSourceStore }),
   })
   const candidateSourceReview = new CandidateSourceReviewService({ sources: candidateSourceStore, retractions: candidateSourceStore })
@@ -299,34 +313,17 @@ export async function assembleDeployment(
   const controller = host.controller
   if (controller === undefined) throw new CoreCapabilityError('the Core controller is not mounted')
 
-  // Model-connection catalogue / assignment / selection (design §5.3, A-R09/A-R10). The stores,
-  // credential custodian and binding service are shared with the runtime assembly (built once in
-  // infrastructure), so a run's fixed binding names exactly the connection this catalogue holds.
-  const aiSettings = {
-    connections: new ModelConnectionService({
-      connections: state.modelConnectionStore,
-      credentials: state.modelCredentialCustodian,
-      assignments: state.modelAssignmentStore,
-      probe: createCoreModelProbe({ credentials: state.modelCredentialCustodian }),
-    }),
-    assignments: new ModelAssignmentService({
-      assignments: state.modelAssignmentStore,
-      connections: state.modelConnectionStore,
-      targets: state.modelTargetDirectory,
-    }),
-    selection: state.modelSelectionService,
-    bindings: state.modelBindingService,
-  }
   // The deterministic overview derives its next step and counts from persisted state only (design
-  // §2.5). Capabilities are read fresh so a disabled/unconfigured ability always carries a reason.
+  // §2.5). Capabilities are read fresh so a disabled/unconfigured ability always carries a reason;
+  // the model abilities project the *deployment's model directory*, not a static env flag.
   const workbenchOverview = new WorkbenchOverviewService({
     state: new PostgresWorkbenchStateReader(database),
     capabilities: {
       readCapabilities: async (): Promise<readonly WorkbenchCapability[]> => [
-        { ability: 'generation', available: modelCapabilities.generationEnabled, ...(modelCapabilities.generationEnabled ? {} : { unavailableReason: '生成模型未配置' }) },
-        { ability: 'research', available: options.webSearch !== undefined, ...(options.webSearch === undefined ? { unavailableReason: '未配置公共搜索服务' } : {}) },
-        { ability: 'decision_jev', available: modelCapabilities.decisionEnabled, ...(modelCapabilities.decisionEnabled ? {} : { unavailableReason: '决策 JEV 未配置' }) },
-        { ability: 'archive', available: options.webSearch !== undefined, ...(options.webSearch === undefined ? { unavailableReason: '未配置可归档的搜索适配器' } : {}) },
+        { ability: 'generation', available: deploymentModelCapabilities.generation, ...(deploymentModelCapabilities.generation || deploymentModelCapabilities.generationReason === undefined ? {} : { unavailableReason: deploymentModelCapabilities.generationReason }) },
+        { ability: 'research', available: webSearch !== undefined, ...(webSearch === undefined ? { unavailableReason: '未配置公共搜索服务' } : {}) },
+        { ability: 'decision_jev', available: deploymentModelCapabilities.decision, ...(deploymentModelCapabilities.decision || deploymentModelCapabilities.decisionReason === undefined ? {} : { unavailableReason: deploymentModelCapabilities.decisionReason }) },
+        { ability: 'archive', available: webSearch !== undefined, ...(webSearch === undefined ? { unavailableReason: '未配置可归档的搜索适配器' } : {}) },
         { ability: 'structured_ingestion', available: true },
       ],
     },
@@ -336,10 +333,12 @@ export async function assembleDeployment(
     scopeRef,
     examples,
     aiSettings,
+    modelSettings,
+    modelSettingsMigration,
     readScenarioProfile,
     profileRefsByScenario,
     profileSpecsByScenario,
-    modelCapabilities: { generation: modelCapabilities.generationEnabled, decision: modelCapabilities.decisionEnabled },
+    modelCapabilities: { generation: deploymentModelCapabilities.generation, decision: deploymentModelCapabilities.decision },
     availableTasksByScenario,
     allowLocalOperator: options.allowLocalOperator ?? false,
     api: {
@@ -382,7 +381,7 @@ export async function assembleDeployment(
       executionPreview.current?.register(api, authenticate)
       packExecutionProfiles?.register(api, authenticate)
       registerCoreSourceViewRoutes(api, { reader: sourceViews, authenticate, contextFor: (auth, traceId) => createRequestToolContext({ ...auth, traceId, runId: randomUUID() }) })
-      registerCoreImportRoute({ app: api, authenticate, scopeRef, examples, service: jobService, objectStore, registry: artifactRegistry, generationEnabled: modelCapabilities.generationEnabled })
+      registerCoreImportRoute({ app: api, authenticate, scopeRef, examples, service: jobService, objectStore, registry: artifactRegistry, generationEnabled: deploymentModelCapabilities.generation })
       registerCoreRelationNavigationRoute({ app: api, authenticate, examples, publications: publicationStore, identity: identityStore })
       registerModelConnectionRoutes(api, { ...aiSettings, authenticate, webPort: Number(process.env['CORE_WEB_PORT'] ?? '5174') })
       registerProjectImportRoute(api, { authenticate, scopeRef, service: projectStructuredImportService })

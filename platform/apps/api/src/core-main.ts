@@ -13,7 +13,6 @@ import { createCoreLocalComposition } from './composition/core-local-composition
 import { resolve } from 'node:path'
 import { tmpdir } from 'node:os'
 import { CoreLocalModelSettings } from './composition/core-local-model-settings'
-import { CoreModelSettingsMigration } from './composition/core-model-settings-migration'
 import { registerCoreModelSettingsRoutes } from './http/core-model-settings'
 
 const DEFAULT_TENANT_ID = '11111111-1111-4111-8111-111111111111'
@@ -213,23 +212,17 @@ export async function startCoreApi(): Promise<void> {
       modelsEnabled: modelEnvironment['CORE_ENABLE_MODELS'] === 'true',
       jevEnabled: process.env['CORE_ENABLE_JEV'] === 'true',
       modelEnvironment,
+      modelSettings,
       ...(process.env['PROJECT_BUSINESS_DATABASE_URL'] === undefined ? {} : { projectDataset: {
         connectionString: requiredEnv('PROJECT_BUSINESS_DATABASE_URL'),
         ...(process.env['PROJECT_BUSINESS_READONLY_DATABASE_URL'] === undefined ? {} : { readOnlyConnectionString: requiredEnv('PROJECT_BUSINESS_READONLY_DATABASE_URL') }),
         ...(process.env['PROJECT_BUSINESS_SCHEMA'] === undefined ? {} : { schema: requiredEnv('PROJECT_BUSINESS_SCHEMA') }),
       } }),
     })
-    const aiSettings = composition.dependencies.aiSettings
-    const modelSettingsMigration = aiSettings === undefined
-      ? undefined
-      : new CoreModelSettingsMigration({
-        settings: modelSettings,
-        connections: aiSettings.connections,
-        assignments: aiSettings.assignments,
-        environment: process.env,
-      })
-    if (modelSettingsMigration !== undefined) await modelSettingsMigration.migrate()
-    app = createCoreApi({ ...composition.dependencies, modelSettings, ...(modelSettingsMigration === undefined ? {} : { modelSettingsMigration }), webPort: Number(process.env['CORE_WEB_PORT'] ?? '5174'), logger: true })
+    // The one-time legacy-settings migration and the model-directory projection both run inside the
+    // composition (before component registration), so this entry point no longer mutates the
+    // catalogue itself; it only serves the legacy settings route with the shared instance.
+    app = createCoreApi({ ...composition.dependencies, webPort: Number(process.env['CORE_WEB_PORT'] ?? '5174'), logger: true })
     await app.listen({ host: '127.0.0.1', port: readPort(process.env['CORE_API_PORT']) })
     const shutdown = async (): Promise<void> => {
       await app?.close()
