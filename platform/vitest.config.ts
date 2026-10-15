@@ -18,6 +18,12 @@ const ARCHITECTURE_TEST_TIMEOUT_MS = 60_000
 // red. Give the unit/contracts project one explicit, generous budget too.
 const UNIT_TEST_TIMEOUT_MS = 30_000
 
+// The UI suites start a real Fastify app and the harness client keeps keep-alive sockets open,
+// so the per-test teardown hook (unmount React, then close the app) can exceed vitest's 10s
+// default on a loaded CI runner — that made `pnpm run verify` red on `tests/ui/query.spec.ts`.
+// Give the unit/contracts project the same explicit hook budget the other projects already use.
+const UNIT_HOOK_TIMEOUT_MS = 30_000
+
 // Container-backed suites contend for the Docker daemon, host ports and child
 // processes. The required CI run showed timeouts with four concurrent integration
 // workers on its shared runner, so keep two workers while preserving every test and
@@ -58,6 +64,7 @@ export default defineConfig({
             'tests/ui/**/*.spec.ts',
           ],
           testTimeout: UNIT_TEST_TIMEOUT_MS,
+          hookTimeout: UNIT_HOOK_TIMEOUT_MS,
         },
       },
       {
