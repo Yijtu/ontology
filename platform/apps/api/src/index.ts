@@ -105,6 +105,8 @@ export type { ProjectDocumentRouteDependencies, ProjectDocumentService } from '.
 export type { ApiServerOptions } from './http/app'
 export { CORE_TYPED_RESULT_SCHEMA_REF, createCoreLocalComposition, createDuckDbSnapshot } from './composition/core-local-composition'
 export type { CoreLocalComposition, CoreLocalCompositionOptions } from './composition/core-local-composition'
+export { createCoreWebSearchProvider } from './composition/core-web-search'
+export type { CoreWebSearchOptions } from './composition/core-web-search'
 export {
   CORE_MOUNTED_TASK_KINDS,
   coreScenarioTaskBindings,

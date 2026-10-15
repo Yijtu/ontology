@@ -94,6 +94,24 @@ export interface ResearchRunRequest {
   readonly allowedDomains: readonly string[]
 }
 
+/**
+ * The exact body the N08 run route accepts: the brief's fields plus the two counts and the deadline,
+ * with policy/budget refs pinned server-side. It is deliberately flat (the route rejects unknown
+ * fields), and it carries only the public brief the user submitted — no record, original or secret.
+ */
+function researchRunBody(request: ResearchRunRequest): Record<string, unknown> {
+  return {
+    goal: request.brief.goal,
+    allowedResearchDomains: request.brief.allowedResearchDomains,
+    targetKinds: request.brief.targetKinds,
+    ...(request.brief.freshnessHint === undefined ? {} : { freshnessHint: request.brief.freshnessHint }),
+    ...(request.brief.mustCover === undefined ? {} : { mustCover: request.brief.mustCover }),
+    sourceLimit: request.limits.sourceLimit,
+    candidateLimit: request.limits.candidateLimit,
+    deadline: request.limits.deadline,
+  }
+}
+
 const DOMAIN = /^(?=.{1,253}$)([a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?\.)+[a-z]{2,}$/iu
 
 export interface ResearchDraftValidation {
@@ -181,7 +199,7 @@ export async function startResearchRun(
   options: RequestOptions = {},
 ): Promise<ResearchExecution> {
   const path = `/api/v1/industry-workspaces/${encodeURIComponent(workspaceId)}/research-runs`
-  const value = await client.requestJson<unknown>('POST', path, { ...options, body: request, idempotencyKey })
+  const value = await client.requestJson<unknown>('POST', path, { ...options, body: researchRunBody(request), idempotencyKey })
   return researchFromEnvelope(value)
 }
 

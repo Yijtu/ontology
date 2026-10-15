@@ -572,15 +572,18 @@ export class CoreTemplatePlanResolver implements TemplatePlanResolver {
     const fixedPlan = await this.#fixedTaskPlan(loaded, request.dependencies.ctx) ?? this.#fixedFactsPlan(loaded)
     const staticGenerationBound = modelBindingMatches(loaded.resolved, this.#modelRefs, 'generation')
     const staticDecisionBound = modelBindingMatches(loaded.resolved, this.#modelRefs, 'decision')
-    const boundGenerationRef = staticGenerationBound ? undefined : await this.#executionModelRef?.('generation', loaded.run.runId, request.dependencies.ctx)
-    const boundDecisionRef = staticDecisionBound ? undefined : await this.#executionModelRef?.('decision', loaded.run.runId, request.dependencies.ctx)
+    // An execution fixed a binding at accept time: that exact ref is what the execution-bound
+    // adapter is keyed by, so it takes precedence over the profile's static ref even when both
+    // name the same catalogue component (design §5.3: 每次都按固定绑定调用).
+    const boundGenerationRef = await this.#executionModelRef?.('generation', loaded.run.runId, request.dependencies.ctx)
+    const boundDecisionRef = await this.#executionModelRef?.('decision', loaded.run.runId, request.dependencies.ctx)
     const generationBound = staticGenerationBound || boundGenerationRef !== undefined
-    const generationModelRef = staticGenerationBound
+    const generationModelRef = boundGenerationRef ?? (staticGenerationBound
       ? modelRefOf(loaded.resolved, 'generation')
-      : boundGenerationRef
-    const decisionModelRef = staticDecisionBound
+      : undefined)
+    const decisionModelRef = boundDecisionRef ?? (staticDecisionBound
       ? modelRefOf(loaded.resolved, 'decision')
-      : boundDecisionRef
+      : undefined)
     const toolIds = new Set(loaded.resolved.toolBindings.filter((binding) => binding.enabled).map((binding) => binding.toolId))
     if (fixedPlan === undefined && loaded.execution?.request.mode !== 'question' && !toolIds.has('data_query')) {
       throw new WorkflowControllerError('CAPABILITY_NOT_CONFIGURED', 'the resolved profile does not enable data_query for ordinary semantic plans')
