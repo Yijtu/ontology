@@ -3,6 +3,8 @@
 需要 Node.js 22+、pnpm 和已启动的 Docker Desktop。从仓库的 `platform/` 目录运行。依赖版本以 `package.json` 和锁文件为准。
 
 > 启动与下列 CSV 示例已于 2026-10-11 在独立实例实测：54 个迁移、API/网页/代理就绪、人工发布与 A2 来源定位、进程重启后的数据保留均通过。相关修复已合入主线；本批生产基线为 `780a3b0`；完整批次进度见[验收记录](v03-a-core-acceptance-2026-10-11.md)。
+>
+> 重塑为「Ontology 知识工作台」（首屏工作概览、三料源入口、双工作台、AI 设置）后的验收见 [A 增量验收记录](v03-a-workbench-acceptance-2026-10-15.md)。
 
 ## 第一次启动
 
@@ -30,7 +32,7 @@ pnpm exec node scripts/dev-core.mjs
 
 看到 API 和网页均已就绪后，打开 [http://127.0.0.1:5174](http://127.0.0.1:5174)。如果改过 `CORE_WEB_PORT`，使用对应端口。
 
-数据库准备命令负责迁移并生成忽略提交的 `.env.core.local`。其中保存的是非超级用户 `ontology_app` 的应用连接、端口和演示范围，不保存管理员连接或数据库服务器密码。API 启动本身不执行迁移。当前主线有 54 个迁移，数量会随开发变化。
+数据库准备命令负责迁移并生成忽略提交的 `.env.core.local`。其中保存的是非超级用户 `ontology_app` 的应用连接、端口和演示范围，不保存管理员连接或数据库服务器密码。API 启动本身不执行迁移。当前主线有 59 个迁移，数量会随开发变化。
 
 `CORE_ENABLE_OPERATOR_ROUTES=true` 打开这台本机上的资料导入、审核和发布入口，便于走完整演示。模型和 JEV 分别关闭；导入结构化资料及人工审核无需调用外部模型。启动器检查端口占用、API 健康和网页就绪，并将网页的 `/api` 请求代理到此实例。
 
@@ -54,7 +56,7 @@ DEMO-ASSET-001,DEMO-NET,WS-A
 DEMO-ASSET-002,DEMO-NET,WS-A
 ```
 
-在首页选择工业资产维护场景，进入项目并新建项目。通过“导入资料”上传 CSV，确认映射后绑定记录。在项目记录中生成事实候选，再核对字段、确认身份、批准并发布实例记录；随后到候选审核页批准并发布语义事实。回到项目生成数据集，就能查看正式进入查询范围的行。
+从首页「接入结构化数据」（三料源之一）进入项目工作台的数据与资料页，上传 CSV、确认映射后绑定记录。在项目记录中生成事实候选，再核对字段、确认身份、批准并发布实例记录；随后到候选审核页批准并发布语义事实。回到项目生成数据集，就能查看正式进入查询范围的行。
 
 点击字段来源可以回到原始单元格：第一条资产位于 `A2`。上传成功、记录发布和正式事实发布是不同步骤，未经批准的候选不会因为导入了文件就进入正式数据集。
 
@@ -81,4 +83,4 @@ docker compose --project-name $coreProject --file deploy/core/compose.yaml stop
 
 同机运行第二套实例时，使用独立仓库工作区、Compose 项目名、三个空闲端口、对象目录，以及明确的 `CORE_TENANT_ID` / `CORE_SPACE_ID` UUID。每个工作区有自己的 `.env.core.local`。启动器拒绝历史服务端口 `3000/5173/54329`，也拒绝远程或非 `ontology_core` 数据库。
 
-默认业务查询后端是 DuckDB。通过 `PROJECT_BUSINESS_DATABASE_URL` 等配置可接独立的 PostgreSQL 业务数据后端；这与控制库的 `CORE_DATABASE_URL` 是两种连接。模型提供方、生产认证和客户数据源接入属于另行配置的能力，参考 [Core 设计](../../tasks/spec-main-core-product-2026-09-28.md) 与 [本批验收记录](v03-a-core-acceptance-2026-10-11.md)。
+默认业务查询后端是 DuckDB。通过 `PROJECT_BUSINESS_DATABASE_URL` 等配置可接独立的 PostgreSQL 业务数据后端；这与控制库的 `CORE_DATABASE_URL` 是两种连接。模型提供方、生产认证和客户数据源接入属于另行配置的能力，参考 [Core 设计](../../tasks/spec-main-core-product-2026-09-28.md)、[本批验收记录](v03-a-core-acceptance-2026-10-11.md) 与 [A 增量验收记录](v03-a-workbench-acceptance-2026-10-15.md)。
