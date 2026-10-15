@@ -1,6 +1,7 @@
 import { useEffect, useState } from 'react'
 import type { CoreDeploymentScenario, WorkbenchClient } from '../api/client'
 import { ApiError } from '../api/errors'
+import { StructuredIntakeNotice } from './structured/StructuredIntakeNotice'
 
 export interface CoreImportPanelProps {
   readonly client: WorkbenchClient
@@ -40,15 +41,17 @@ export function CoreImportPanel({ client, scenarios, initialScenarioId, operator
   return (
     <section className="core-import" data-testid="core-import-panel">
       <header className="panel__header">
-        <h3>导入原始记录</h3>
+        <h3>接入结构化数据（文件映射）</h3>
         <p className="panel__hint">
-          选择已挂载的来源并粘贴{generationEnabled ? 'UTF-8原始文档或JSON记录' : '带强身份键的JSON记录'}。
+          行业依据入口与项目记录入口复用同一文件映射流程：选择资料并粘贴
+          {generationEnabled ? 'UTF-8原始文档或JSON记录' : '带强身份键的JSON记录'}，服务端固定快照后进入解析与映射确认。
           {generationEnabled
             ? '系统先尝试原生字段映射，其余内容走已配置的提取模型并进入候选审核。'
             : '没有生成模型时，非原生文本会被明确拒绝。'}
-          本地 API 还需由操作者显式启用导入权限。
+          本地 API 还需由操作者显式启用导入权限。未完成映射与确认前，本入口不会显示「就绪」。
         </p>
       </header>
+      <StructuredIntakeNotice testId="core-import-intake" />
       <form
         className="core-import__form"
         onSubmit={(event) => {
