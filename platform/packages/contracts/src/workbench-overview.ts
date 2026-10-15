@@ -1,9 +1,13 @@
 import type {
+  IndustryWorkspaceState,
+  ProjectReadinessKind,
+  ProjectReadinessState,
   RevisionString,
   Rfc3339UtcTimestamp,
   ScopeRef,
   Sha256Digest,
   Uuid,
+  VersionRef,
 } from './generated/contracts'
 import type { ToolContext } from './trusted'
 import { isRecord, isRevisionString, isSha256Digest, isUuid } from './asset-workspace'
@@ -108,6 +112,78 @@ export class WorkbenchOverviewError extends Error {
 /** Read-only projection port. It never writes and never returns another scope's counts. */
 export interface WorkbenchOverviewReader {
   readOverview(scopeRef: ScopeRef, subject: WorkbenchSubject, ctx: ToolContext): Promise<WorkbenchOverview>
+}
+
+/**
+ * One readiness projection summarised for the overview (design §2.4/§2.5). The error summary is
+ * carried so a caller can return a concrete recovery target instead of a generic prompt.
+ */
+export interface WorkbenchReadinessSummary {
+  readonly kind: ProjectReadinessKind
+  readonly state: ProjectReadinessState
+  readonly retryable: boolean
+  readonly errorCode?: string
+}
+
+/**
+ * The raw, scope-isolated workspace facts the deterministic overview derives from. Every count is
+ * an aggregate over persisted state; none of it is guessed by a model. It carries no proposal or
+ * approval truth beyond what the owning services already persist.
+ */
+export interface WorkbenchWorkspaceState {
+  readonly workspaceId: Uuid
+  readonly revision: RevisionString
+  readonly state: IndustryWorkspaceState
+  readonly sourceCount: number
+  readonly proposedSourceCount: number
+  readonly approvedSourceCount: number
+  readonly admittedSourceCount: number
+  readonly candidateCount: number
+  readonly candidatesPendingReview: number
+  /** Whether a publishable synthetic validation exists for this workspace revision. */
+  readonly validationSatisfied: boolean
+  readonly publishedPackRef?: VersionRef
+}
+
+/** The raw, scope-isolated project facts the deterministic overview derives from. */
+export interface WorkbenchProjectState {
+  readonly projectId: Uuid
+  readonly revision: RevisionString
+  readonly mountedPackRef?: VersionRef
+  readonly recordsPendingConfirmation: number
+  readonly readiness: readonly WorkbenchReadinessSummary[]
+  readonly availableTaskCount: number
+}
+
+/** The scope-wide summary counts for the first-screen overview. No per-subject identity is exposed. */
+export interface WorkbenchSpaceState {
+  readonly workspaceCount: number
+  readonly projectCount: number
+  readonly proposedSources: number
+  readonly approvedSourcesNotAdmitted: number
+  readonly candidatesPendingReview: number
+  readonly recordsPendingConfirmation: number
+  readonly blockedTasks: number
+}
+
+/**
+ * The read port the deterministic overview service composes (design §2.4/§2.5). A reader runs
+ * every query inside the trusted scope, so a subject that is not visible in the caller's
+ * tenant/space is `undefined` (a `NOT_FOUND`) rather than another scope's counts.
+ */
+export interface WorkbenchStateReader {
+  readSpaceState(scopeRef: ScopeRef, ctx: ToolContext): Promise<WorkbenchSpaceState>
+  readWorkspaceState(scopeRef: ScopeRef, workspaceId: Uuid, ctx: ToolContext): Promise<WorkbenchWorkspaceState | undefined>
+  readProjectState(scopeRef: ScopeRef, projectId: Uuid, ctx: ToolContext): Promise<WorkbenchProjectState | undefined>
+}
+
+/**
+ * The capability projection port. Capabilities depend on deployment configuration (a configured
+ * model, search provider or structured-ingestion backend), so they are read fresh rather than
+ * frozen at construction; an unavailable ability always carries a concrete reason.
+ */
+export interface WorkbenchCapabilitySource {
+  readCapabilities(scopeRef: ScopeRef, ctx: ToolContext): Promise<readonly WorkbenchCapability[]>
 }
 
 export const WORKBENCH_NEXT_STEP_ACTIONS: readonly WorkbenchNextStepAction[] = [

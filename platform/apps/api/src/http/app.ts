@@ -42,6 +42,8 @@ import { registerProjectRoutes } from './projects'
 import type { ProjectRouteDependencies } from './projects'
 import { registerProjectDocumentRoutes } from './project-documents'
 import type { ProjectDocumentRouteDependencies } from './project-documents'
+import { registerWorkbenchOverviewRoutes } from './workbench-overview'
+import type { WorkbenchOverviewRouteDependencies } from './workbench-overview'
 import { installErrorHandler } from './shared'
 import type { RequestAuthenticator } from './shared'
 
@@ -98,6 +100,8 @@ export interface ApiServerOptions {
   readonly projects?: Omit<ProjectRouteDependencies, 'authenticate'>
   /** Register the project document corpus and search surface (`/projects/:id/document-*`). */
   readonly projectDocuments?: Omit<ProjectDocumentRouteDependencies, 'authenticate'>
+  /** Register the knowledge-workbench overview surface (`/workbench/overview`, `/industry-workspaces/:id/overview`, `/projects/:id/overview`). */
+  readonly workbenchOverview?: Omit<WorkbenchOverviewRouteDependencies, 'authenticate'>
   readonly logger?: boolean
 }
 
@@ -194,6 +198,12 @@ export function createApiServer(options: ApiServerOptions): FastifyInstance {
   if (options.projectDocuments !== undefined) {
     registerProjectDocumentRoutes(app, {
       ...options.projectDocuments,
+      authenticate: options.authenticate,
+    })
+  }
+  if (options.workbenchOverview !== undefined) {
+    registerWorkbenchOverviewRoutes(app, {
+      ...options.workbenchOverview,
       authenticate: options.authenticate,
     })
   }
