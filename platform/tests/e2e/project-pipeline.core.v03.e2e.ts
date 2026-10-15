@@ -276,7 +276,10 @@ describe('GAP-022 normal App project source-to-publication pipeline', () => {
       const identityPreview = page.getByTestId('mapping-preview-asset_id')
       expect(await identityPreview.locator('td:nth-child(2)').textContent()).toBe('GAP22-ASSET-001')
       expect(await identityPreview.locator('td:nth-child(3)').textContent()).toBe('GAP22-ASSET-001')
-      expect(await identityPreview.locator('td:nth-child(4)').textContent()).toBe('A2')
+      // The mapping preview now shows 规范字段 | 原始值 | 规范值 | 单位 | 实际定位 (design §1.5/N07):
+      // a string field has no unit, and the original cell address moved to the locator column.
+      expect(await identityPreview.locator('td:nth-child(4)').textContent()).toBe('—')
+      expect(await identityPreview.locator('td:nth-child(5)').textContent()).toContain('A2')
       await capture(page, 'gap22-project-mapping-preview-1440')
 
       const confirmMappingResponse = page.waitForResponse((response) =>

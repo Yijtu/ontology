@@ -193,7 +193,11 @@ describe('official published facts → fixed project dataset (real control PG an
         else expect(rows).toEqual(canonicalRows)
       }
     } finally { duck.close(); await business.close() }
-  }, 300_000)
+    // 1001 mapped rows are materialised, paged at 250 rows and fully compared on both the DuckDB
+    // and the PostgreSQL business backends. That real work sits within a few seconds of the 300s
+    // budget in isolation and exceeds it whenever the integration project's second container
+    // worker runs a peer 1001-row suite, so give it an explicit bound with headroom.
+  }, 600_000)
 
   it('projects two actual client column/unit mappings to equal semantics with distinct exact cell origins', async () => {
     const a = await fixture('query-client-watts', 'device_label,watts,on,reading,label\nM-1,12000.000000000001,true,9007199254740993,000123\n', ['meter_id', 'power', 'active', 'reading', 'label'], { power: { source: 'W', canonical: 'kW', numerator: '1', denominator: '1000' } })

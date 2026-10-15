@@ -364,3 +364,49 @@ describe('ExecutionModelBindingService', () => {
   })
 })
 
+describe('model catalogue isolation (N13 high-risk)', () => {
+  const WORKSPACE_B: ModelTargetScope = { kind: 'industry_workspace', workspaceId: '33333333-3333-4333-8333-333333333333' }
+
+  it('does not use an override of one industry workspace when resolving for another', async () => {
+    const h = harness()
+    const admin = adminContext()
+    h.targets.allowed.add('industry_workspace:22222222-2222-4222-8222-222222222222')
+    h.targets.allowed.add('industry_workspace:33333333-3333-4333-8333-333333333333')
+    const space = await h.connectionService.create({ descriptor: descriptor({ name: '空间默认' }), idempotencyKey: 'iso-a-space', credential: new SecretValue('sk-space') }, admin)
+    const workspaceA = await h.connectionService.create({ descriptor: descriptor({ name: '工作区 A 专用' }), idempotencyKey: 'iso-a-workspace', credential: new SecretValue('sk-workspace-a') }, admin)
+    await h.assignmentService.put({ scope: { kind: 'space' }, defaultSelection: { kind: 'connection', connectionId: space.connectionId }, capabilitySelections: [] }, admin)
+    await h.assignmentService.put({ scope: WORKSPACE, defaultSelection: { kind: 'connection', connectionId: workspaceA.connectionId }, capabilitySelections: [] }, admin)
+
+    const forA = await h.selectionService.resolve(TEST_SCOPE, { scope: WORKSPACE, capability: 'generation' }, admin)
+    expect(forA.resolvedFrom).toBe('object_default')
+    expect(forA.connectionId).toBe(workspaceA.connectionId)
+
+    // Workspace B inherits the space default; it never sees workspace A's override.
+    const forB = await h.selectionService.resolve(TEST_SCOPE, { scope: WORKSPACE_B, capability: 'generation' }, admin)
+    expect(forB.resolvedFrom).toBe('space_default')
+    expect(forB.connectionId).toBe(space.connectionId)
+    expect(forB.connectionId).not.toBe(workspaceA.connectionId)
+  })
+
+  it('keeps two same-named connections distinct by id, not by name', async () => {
+    const h = harness()
+    const admin = adminContext()
+    const first = await h.connectionService.create({ descriptor: descriptor({ name: '相同名称', providerModelName: 'vendor-first' }), idempotencyKey: 'same-name-first', credential: new SecretValue('sk-first') }, admin)
+    const second = await h.connectionService.create({ descriptor: descriptor({ name: '相同名称', providerModelName: 'vendor-second' }), idempotencyKey: 'same-name-second', credential: new SecretValue('sk-second') }, admin)
+    expect(first.connectionId).not.toBe(second.connectionId)
+
+    await h.assignmentService.put({ scope: { kind: 'space' }, defaultSelection: { kind: 'connection', connectionId: second.connectionId }, capabilitySelections: [] }, admin)
+    const bound = await h.bindingService.ensureBinding({ executionId: '55555555-5555-4555-8555-555555555555', scope: { kind: 'space' }, capability: 'generation' }, admin)
+    expect(bound.connectionId).toBe(second.connectionId)
+    expect(bound.connectionRevision).toBe(second.revision)
+
+    // Clearing the same-named twin's credential does not disturb the bound execution.
+    await h.connectionService.setCredential({ connectionId: first.connectionId, action: 'clear' }, admin)
+    expect(await h.bindingService.isUsable('55555555-5555-4555-8555-555555555555', 'generation', admin)).toBe(true)
+    // Deleting the unused twin leaves the assigned connection resolvable.
+    await h.connectionService.remove(first.connectionId, admin)
+    const stillResolved = await h.selectionService.resolve(TEST_SCOPE, { scope: { kind: 'space' }, capability: 'generation' }, admin)
+    expect(stillResolved.connectionId).toBe(second.connectionId)
+  })
+})
+

@@ -99,8 +99,8 @@ describe('professional product framework: real production host', () => {
     for (const width of [1440, 1024, 768, 390]) {
       const page = await newPage(width)
       try {
-        expect(await page.getByText('从一个清晰的业务边界开始').isVisible()).toBe(true)
-        expect(await page.getByText('还没有项目数据', { exact: true }).isVisible()).toBe(true)
+        expect(await page.getByText('Ontology 知识工作台', { exact: true }).isVisible()).toBe(true)
+        expect(await page.getByText('还没有任何工作', { exact: true }).isVisible()).toBe(true)
         expect(await page.evaluate(() => document.documentElement.scrollWidth <= window.innerWidth)).toBe(true)
         await record(`gap-017-layout-${width}`, [await page.locator('.app__skip').evaluate((element) => JSON.stringify({ position: getComputedStyle(element).position, transform: getComputedStyle(element).transform, focus: element === document.activeElement, scrollY: window.scrollY }))])
         await capture(page, `gap-017-overview-${width}`)
@@ -121,7 +121,7 @@ describe('professional product framework: real production host', () => {
     workspaceId = created.workspace.workspaceId
     const page = await newPage()
     try {
-      expect(await page.getByRole('table', { name: '当前本体工作区' }).textContent()).toContain('设备知识审核')
+      expect(await page.getByRole('table', { name: '最近工作' }).textContent()).toContain('设备知识审核')
       await page.getByTestId('context-workspace-select').selectOption(workspaceId)
       await openView(page, 'definitions')
       await page.waitForSelector('[data-testid="definition-workbench"]')
@@ -277,7 +277,8 @@ describe('professional product framework: real production host', () => {
       await page.goto(readOnlyWeb.origin)
       await page.waitForSelector('[data-testid="guide-home"]')
       expect(await page.getByTestId('core-deployment-mode').textContent()).toContain('只读')
-      expect(await page.getByText('当前为只读访问').isVisible()).toBe(true)
+      // The new IA also carries a readonly hint in the source section; the badge is the shell signal.
+      expect(await page.locator('.ui-status', { hasText: '当前为只读访问' }).first().isVisible()).toBe(true)
       await capture(page, 'gap-017-readonly-390')
       failingWeb = await startWebHost('http://127.0.0.1:1', { bindDefaultProfile: false })
       await page.goto(failingWeb.origin)

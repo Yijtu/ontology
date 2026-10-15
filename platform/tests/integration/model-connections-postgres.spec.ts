@@ -154,4 +154,50 @@ describe('PostgresModelAssignmentStore and bindings', () => {
     const readBack = await bindingService.readBack(executionId, 'generation', ctx)
     expect(readBack).toEqual(binding)
   })
+
+  it('serialises concurrent space-default writes: one winner, one row, no silent overwrite', async () => {
+    const { connectionService, assignmentService, selectionService } = services()
+    const scope = await createJobScope(harness.adminClient, `model-concurrent-${randomUUID().slice(0, 8)}`)
+    const scopeRef = { tenantId: scope.tenantId, spaceId: scope.spaceId }
+    const ctx = adminContext(scopeRef)
+    const first = await connectionService.create({
+      descriptor: descriptor({ name: `并发甲-${randomUUID().slice(0, 6)}` }),
+      idempotencyKey: `it-concurrent-a-${randomUUID()}`,
+      credential: new SecretValue('sk-concurrent-a'),
+      connectionId: randomUUID(),
+    }, ctx)
+    const second = await connectionService.create({
+      descriptor: descriptor({ name: `并发乙-${randomUUID().slice(0, 6)}` }),
+      idempotencyKey: `it-concurrent-b-${randomUUID()}`,
+      credential: new SecretValue('sk-concurrent-b'),
+      connectionId: randomUUID(),
+    }, ctx)
+
+    const attempts = await Promise.allSettled([
+      assignmentService.put({ scope: { kind: 'space' }, defaultSelection: { kind: 'connection', connectionId: first.connectionId }, capabilitySelections: [] }, ctx),
+      assignmentService.put({ scope: { kind: 'space' }, defaultSelection: { kind: 'connection', connectionId: second.connectionId }, capabilitySelections: [] }, ctx),
+      assignmentService.put({ scope: { kind: 'space' }, defaultSelection: { kind: 'disabled' }, capabilitySelections: [] }, ctx),
+    ])
+    const winners = attempts.filter((attempt) => attempt.status === 'fulfilled')
+    const losers = attempts.filter((attempt) => attempt.status === 'rejected') as PromiseRejectedResult[]
+    // Exactly one write wins; the others must fail closed (CAS conflict or the composite-key unique
+    // constraint), never silently overwrite the winner.
+    expect(winners).toHaveLength(1)
+    for (const loser of losers) {
+      expect(['VERSION_CONFLICT', '23505']).toContain((loser.reason as { code?: string }).code)
+    }
+
+    const rows = await harness.adminClient.query<{ count: string }>(
+      `SELECT count(*)::text AS count FROM agent_platform.model_assignment_sets
+        WHERE tenant_id = $1 AND space_id = $2 AND scope_kind = 'space'`,
+      [scopeRef.tenantId, scopeRef.spaceId],
+    )
+    expect(rows.rows[0]?.count).toBe('1')
+    const stored = await selectionService.resolve(scopeRef, { scope: { kind: 'space' }, capability: 'generation' }, ctx)
+    const winner = winners[0] as PromiseFulfilledResult<{ defaultSelection: { kind: string; connectionId?: string }; revision: string }>
+    expect(winner.value.revision).toBe('1')
+    expect(stored.assignmentRevision).toBe('1')
+    if (winner.value.defaultSelection.kind === 'connection') expect(stored.connectionId).toBe(winner.value.defaultSelection.connectionId)
+    else expect(stored.state).toBe('disabled')
+  })
 })

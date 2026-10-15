@@ -87,38 +87,51 @@ afterAll(async () => {
   if (errors.length) throw new AggregateError(errors, 'Model UI cleanup failed')
 })
 
-it('configures and probes a model through the normal App and activates the saved settings after a real host restart', async () => {
+it('configures, probes and assigns a model connection through the normal App and activates it after a real host restart', async () => {
   if (!browser || !web) throw new Error('Missing browser host')
   const page = await browser.newPage({ viewport: { width: 1440, height: 1050 } })
   const pageErrors: string[] = []; page.on('pageerror', (error) => pageErrors.push(error.message))
   try {
     await page.goto(web.origin)
     await page.getByTestId('open-model-settings').click()
+    await page.getByTestId('ai-settings').waitFor()
+    // The single-instance legacy surface is migrated to the catalogue once the host starts
+    // (design §5.3): the compatibility tab refuses the old write surface instead of editing it.
     await page.getByTestId('ai-tab-legacy').click()
-    await page.getByTestId('model-settings-form').waitFor()
-    await page.getByLabel('启用生成模型', { exact: true }).check()
+    await page.getByText('暂时无法读取配置', { exact: true }).waitFor()
+    expect(await page.getByTestId('model-settings-form').count()).toBe(0)
+    // The connection directory is the current configuration path.
+    await page.getByTestId('ai-tab-connections').click()
+    await page.getByTestId('connection-create').click()
+    await page.getByTestId('connection-editor-form').waitFor()
+    await page.getByLabel('连接名称 *', { exact: true }).fill('验收生成连接')
     await page.getByLabel('模型服务地址', { exact: true }).fill(probeUrl)
+    await page.getByLabel('API 端点', { exact: true }).fill('/v1/chat/completions')
+    await page.getByLabel('Core 平台模型 ID *', { exact: true }).fill('core-acceptance-generation')
     await page.getByLabel('服务商模型名称 *', { exact: true }).fill('controlled-probe-model')
     await page.getByLabel('API Key', { exact: true }).fill(key)
-    await page.getByTestId('model-settings-test').click()
-    await page.locator('[data-testid="model-settings-test-result"][data-reachable="true"]').waitFor()
+    await page.getByLabel('启用', { exact: true }).check()
+    await page.getByTestId('connection-editor-test').click()
+    await page.locator('[data-testid="connection-editor-test-result"][data-status="passed"]').waitFor()
     expect(probes).toBe(1)
-    await page.getByTestId('model-settings-save').click()
-    await page.getByText('配置已保存；当前进程尚未切换到新设置。重启 Core 后生效。', { exact: true }).waitFor()
-    expect(await page.getByLabel('API Key', { exact: true }).inputValue()).toBe('')
+    await page.getByTestId('connection-editor-save').click()
+    await page.locator('[data-testid="connection-row"]', { hasText: '验收生成连接' }).waitFor()
     expect(await page.locator('body').innerText()).not.toContain(key)
-    const saved = await (await fetch(`${web.origin}/api/v1/core/model-settings`)).text()
-    expect(saved).not.toContain(key)
-    expect(JSON.parse(saved)).toMatchObject({ data: { enabled: true, activeEnabled: false, restartRequired: true } })
-    await capture(page, 'model-ui-saved-restart-required-1440')
+    // Assign the saved connection as the space default, then confirm the effective projection.
+    await page.getByTestId('ai-tab-assignments').click()
+    await page.getByLabel('默认生成模型', { exact: true }).selectOption({ label: '验收生成连接' })
+    await page.getByTestId('assignments-save').click()
+    await page.getByText('分配已保存；新任务将使用新选择，进行中的任务保持原绑定。', { exact: true }).waitFor()
+    await capture(page, 'model-ui-connection-assigned-1440')
+    // Restart the real host; the catalogue and the assignment are durable, so generation is active.
     await api?.close(); await composition?.close()
     await boot(apiPort)
     await page.reload()
-    await page.getByTestId('model-settings-form').waitFor()
-    await page.locator('.model-settings__status .ui-status').filter({ hasText: '当前进程：模型已启用' }).waitFor()
+    await page.getByTestId('ai-settings').waitFor()
+    await page.getByTestId('ai-tab-effective').click()
+    await page.locator('[data-testid="effective-model"]').first().waitFor()
     const deployment = await (await fetch(`${web.origin}/api/v1/core/deployment`)).json() as unknown
     expect(deployment).toMatchObject({ data: { models: { generation: true, decision: false } } })
-    expect(await settings.read()).toMatchObject({ activeEnabled: true, restartRequired: false })
     for (const width of [1440, 1024, 768, 390, 320]) {
       await page.setViewportSize({ width, height: 1050 })
       expect(await page.evaluate(() => document.documentElement.scrollWidth <= innerWidth)).toBe(true)
@@ -126,7 +139,7 @@ it('configures and probes a model through the normal App and activates the saved
     }
     expect(pageErrors).toEqual([])
   } catch (error) {
-    await record('model-ui-config-failure', [JSON.stringify({ url: page.url(), body: await page.locator('body').innerText(), settings: await settings.read(), error: error instanceof Error ? error.message : String(error) })])
+    await record('model-ui-config-failure', [JSON.stringify({ url: page.url(), body: await page.locator('body').innerText(), error: error instanceof Error ? error.message : String(error) })])
     await capture(page, 'model-ui-config-failure')
     throw error
   } finally { await page.close() }

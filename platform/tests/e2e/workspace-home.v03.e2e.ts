@@ -155,7 +155,9 @@ describe('ontology workspace home in a real browser', () => {
       )
       expect(await page.textContent('[data-testid="workspace-detail-head-revision"]')).toBe('2')
       expect(await page.locator('[data-testid="workspace-draft"]').count()).toBe(2)
-      await page.getByRole('button', { name: '查看真实原文与片段', exact: true }).click()
+      // The source library (design §1.5/N06) publishes a second identical control; preview the
+      // original bytes from the workspace-source article this flow just uploaded into.
+      await page.locator('article').getByRole('button', { name: '查看真实原文与片段', exact: true }).click()
       const original = page.getByRole('dialog', { name: '原始资料预览' })
       await original.waitFor()
       expect(await original.textContent()).toContain('充电器')
