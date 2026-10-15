@@ -44,11 +44,17 @@ export interface ModelSettingsConnectionTest {
   readonly message: string
 }
 
-function isRecord(value: unknown): value is Record<string, unknown> {
+/** Shared structural guard used by the legacy and the AI-settings clients. */
+export function isRecord(value: unknown): value is Record<string, unknown> {
   return typeof value === 'object' && value !== null && !Array.isArray(value)
 }
 
-function malformed(message: string): never {
+/**
+ * A parse failure shared by the model-settings clients: a well-formed HTTP envelope whose body
+ * the UI cannot safely display. It never becomes a success or a guessed shape, so a credential
+ * accidentally embedded in a read response is rejected rather than rendered.
+ */
+export function malformed(message: string): never {
   throw new ApiError(502, {
     code: 'MALFORMED_RESPONSE',
     message,
