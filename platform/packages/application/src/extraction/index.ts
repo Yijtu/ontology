@@ -59,13 +59,33 @@ export {
 export { ExtractionPipeline, EXTRACTION_RESPONSE_SCHEMA_REF } from './extraction-service'
 export type { ExtractionGenerationExecution, ExtractionPipelineDependencies } from './extraction-service'
 
+export {
+  buildSchemaContext,
+  EXTRACTION_SCHEMA_PROMPT_VERSION,
+  SUPPORTED_RULE_GRAMMAR,
+} from './schema-context'
+export type { SchemaContext } from './schema-context'
+
+export { StructuredExtractionService } from './structured-extraction-service'
+export type {
+  StructuredExtractionResult,
+  StructuredExtractionRunContext,
+  StructuredExtractionServiceDependencies,
+} from './structured-extraction-service'
+
 export { InMemoryCandidateStore } from './in-memory-store'
 export { InMemoryIndustrySchemaSource } from './in-memory-schema-source'
 
 export {
   CandidateValidationStageHandler,
   ExtractionStageHandler,
+  ParsedStageDispatcher,
   ReviewHandoffStageHandler,
+  StructuredExtractionStageHandler,
   createExtractionHandlerRegistry,
 } from './stage-handlers'
-export type { ExtractionStageHandlerDependencies } from './stage-handlers'
+export type {
+  ExtractionHandlerRegistryOptions,
+  ExtractionStageHandlerDependencies,
+  StructuredExtractionStageHandlerDependencies,
+} from './stage-handlers'

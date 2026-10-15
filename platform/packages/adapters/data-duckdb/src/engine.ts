@@ -1,5 +1,5 @@
 import { DuckDBInstance } from '@duckdb/node-api'
-import type { DuckDBConnection } from '@duckdb/node-api'
+import type { DuckDBConnection, DuckDBResultReader } from '@duckdb/node-api'
 import { DuckDBTypeId } from '@duckdb/node-api'
 import type { ScalarValue } from '@ontology/contracts'
 import { DuckDbAdapterError } from './errors'
@@ -22,6 +22,8 @@ import { DuckDbAdapterError } from './errors'
 export interface DuckDbEngineOptions {
   readonly instancePath?: string
   readonly lockConfiguration?: boolean
+  /** Only the independent project snapshot writer may open a writable local projection. */
+  readonly writableProjection?: boolean
 }
 
 export interface SessionExecution {
@@ -60,7 +62,7 @@ export class DuckDbEngine {
     if (this.#options.lockConfiguration !== false) {
       config.lock_configuration = 'true'
     }
-    if (this.#options.instancePath !== undefined) {
+    if (this.#options.instancePath !== undefined && this.#options.writableProjection !== true) {
       config.access_mode = 'READ_ONLY'
     }
     try {
@@ -89,6 +91,12 @@ export class DuckDbEngine {
   async runTrusted(sql: string, params?: readonly ScalarValue[]): Promise<void> {
     const connection = this.#requireTrusted()
     await connection.run(sql, params === undefined ? undefined : [...params])
+  }
+
+  /** Read back the writer's uncommitted projection before activation. */
+  async readTrusted(sql: string, params: readonly ScalarValue[] = []): Promise<unknown[][]> {
+    const reader = await this.#requireTrusted().runAndReadAll(sql, [...params])
+    return reader.getRows()
   }
 
   async createSession(): Promise<DuckDbSession> {
@@ -139,11 +147,23 @@ export class DuckDbSession {
     sql: string,
     parameters: readonly ScalarValue[],
     maxRows: number,
+    lifecycle?: { readonly beforeExecute?: () => void; readonly onExecuting?: () => void },
   ): Promise<SessionExecution> {
     const connection = this.#connection
     await connection.run('BEGIN TRANSACTION READ ONLY')
     try {
-      const reader = await connection.streamAndReadUntil(sql, maxRows + 1, [...parameters])
+      const prepared = await connection.prepare(sql)
+      let reader: DuckDBResultReader
+      try {
+        prepared.bind([...parameters])
+        lifecycle?.beforeExecute?.()
+        // startStream initializes the pending query synchronously. Interrupting a merely
+        // queued connection.stream() can be cleared by its later prepare/start step.
+        const pending = prepared.startStream()
+        lifecycle?.onExecuting?.()
+        await pending.runAllTasks()
+        reader = await pending.readUntil(maxRows + 1)
+      } finally { prepared.destroySync() }
       const columnNames = reader.columnNames()
       const columnTypeIds = columnNames.map((_, index) => reader.columnTypeId(index))
       const rawRows: unknown[][] = reader.getRows()

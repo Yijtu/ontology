@@ -196,7 +196,7 @@ interface Harness {
   readonly publicationId: Uuid
 }
 
-function harness(pageSize?: number): Harness {
+function harness(pageSize?: number, publicationBatchSize?: number): Harness {
   const scopeRef: ScopeRef = {
     tenantId: '44444444-4444-4444-8444-444444444444',
     spaceId: '55555555-5555-4555-8555-555555555555',
@@ -220,6 +220,7 @@ function harness(pageSize?: number): Harness {
     outbox,
     materialization: store,
     ...(pageSize === undefined ? {} : { pageSize }),
+    ...(publicationBatchSize === undefined ? {} : { publicationBatchSize }),
   })
   return { store, materializer, view, outbox, consumer, ctx, scopeRef, publicationId }
 }
@@ -297,6 +298,47 @@ describe('materialization outbox consumer (LOCAL-069)', () => {
     )
     expect(advanced.status).toBe('materialized')
     expect(advanced.conclusions.find((entry) => entry.predicate === PREDICATE)?.value).toBe(true)
+  })
+
+  it('batches only publications whose complete change set has distinct pre-opened fences', async () => {
+    const h = harness(undefined, 8)
+    const statementFenceId = randomUUID(), ruleFenceId = randomUUID()
+    await h.store.openFence(h.scopeRef, { fenceId: statementFenceId, reason: 'publication committed', propositionKeys: [], openedAt: '2026-09-21T06:00:00Z' }, h.ctx)
+    await h.store.openFence(h.scopeRef, { fenceId: ruleFenceId, reason: 'publication committed', propositionKeys: [], openedAt: '2026-09-21T06:00:00Z' }, h.ctx)
+    await h.consumer.consume(messageOf(PUBLICATION_PUBLISHED_TOPIC, {
+      publicationId: h.publicationId,
+      materializationFences: [
+        { changeId: '11111111-1111-4111-8111-111111111111', fenceId: statementFenceId },
+        { changeId: '22222222-2222-4222-8222-222222222222', fenceId: ruleFenceId },
+      ],
+    }), h.ctx)
+    const requests = h.outbox.messages.filter((message) => message.topic === MATERIALIZATION_REQUESTED_TOPIC)
+    expect(requests).toHaveLength(1)
+    expect(requests[0]?.payload['changes']).toHaveLength(2)
+    await h.consumer.consume(requests[0]!, h.ctx)
+    expect(await h.store.listOpenFences(h.scopeRef, h.ctx)).toHaveLength(0)
+  })
+
+  it('rejects ambiguous or unordered batch request payloads', async () => {
+    const h = harness()
+    const request = (payload: Readonly<Record<string, unknown>>) => h.consumer.consume(messageOf(MATERIALIZATION_REQUESTED_TOPIC, payload), h.ctx)
+    const change = { changeId: randomUUID(), scopeRef: h.scopeRef, recordedSeq: '2', recordedAt: '2026-09-21T06:00:00Z', kind: 'rule_changed', ruleId: 'r', propositionKey: 'p' }
+    await expect(request({ fenceId: randomUUID(), change, changes: [{ fenceId: randomUUID(), change }] })).rejects.toMatchObject({ code: 'INVALID_MESSAGE' })
+    await expect(request({ changes: [
+      { fenceId: randomUUID(), change },
+      { fenceId: randomUUID(), change: { ...change, changeId: randomUUID(), recordedSeq: '1' } },
+    ] })).rejects.toMatchObject({ code: 'INVALID_MESSAGE' })
+  })
+
+  it('requires UUID identifiers in the new batch envelope', async () => {
+    const h = harness()
+    const valid = { changeId: randomUUID(), scopeRef: h.scopeRef, recordedSeq: '1', recordedAt: '2026-09-21T06:00:00Z', kind: 'rule_changed', ruleId: 'r', propositionKey: 'p' }
+    for (const item of [
+      { fenceId: 'bad-fence', change: valid },
+      { fenceId: randomUUID(), change: { ...valid, changeId: 'bad-change' } },
+      { fenceId: randomUUID(), change: { ...valid, changeId: randomUUID(), scopeRef: { ...h.scopeRef, tenantId: 'bad-tenant' } } },
+      { fenceId: randomUUID(), change: { ...valid, changeId: randomUUID(), scopeRef: { ...h.scopeRef, spaceId: 'bad-space' } } },
+    ]) await expect(h.consumer.consume(messageOf(MATERIALIZATION_REQUESTED_TOPIC, { changes: [item] }), h.ctx)).rejects.toMatchObject({ code: 'INVALID_MESSAGE' })
   })
 
   it('walks every bounded statement and rule publication page without repeating a cursor', async () => {

@@ -20,6 +20,7 @@ export {
   MaterializationOutboxError,
   MATERIALIZATION_REQUESTED_TOPIC,
   parseMaterializationChange,
+  parseMaterializationRequest,
   PUBLICATION_PUBLISHED_TOPIC,
   serializeMaterializationChange,
   STATEMENT_CORRECTED_TOPIC,
@@ -27,6 +28,7 @@ export {
 } from './materialization-consumer'
 export type {
   MaterializationOutboxConsumerDependencies,
+  MaterializationRequestEntry,
   MaterializationOutboxErrorCode,
   MaterializationOutboxWriter,
   MaterializationPublicationView,
@@ -36,3 +38,4 @@ export { SIMULATION_RESULT_MEDIA_TYPE, SimulationStageHandler, createWorkerStage
 export type { SimulationRunGuard, SimulationStageDependencies } from './simulation-stage'
 export { WorkflowDispatchWorker } from './workflow-dispatch-worker'
 export type { WorkflowDispatchWorkerOptions } from './workflow-dispatch-worker'
+export { ProjectEvolutionOutboxConsumer } from './project-evolution-consumer'

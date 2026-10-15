@@ -50,6 +50,8 @@ export interface FieldMapping {
   /** Physical → canonical encoding map for enums/flags. */
   readonly valueMap?: readonly ValueMapEntry[]
   readonly identityKey?: boolean
+  /** A canonical typed project projection must retain its stored decimal precision. */
+  readonly exactDecimal?: boolean
 }
 
 export interface ObjectMapping {
@@ -142,6 +144,7 @@ export interface CompiledProjection {
   readonly expression: CompiledExpression
   readonly columnType: ColumnType
   readonly unit?: UnitCode
+  readonly exactDecimal?: boolean
 }
 
 export interface CompiledPredicate {

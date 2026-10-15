@@ -1,5 +1,6 @@
 import type {
   DecimalQuantity,
+  DecimalString,
   DomainResultStatus,
   ProjectionState,
   Rfc3339UtcTimestamp,
@@ -38,7 +39,12 @@ import type { RuleComputationArtifact } from './rule-extraction'
  */
 
 /** An exact decimal, categorical string or boolean materialised value. Floats are never exact. */
-export type MaterializedValue = DecimalQuantity | string | boolean
+export interface ExactScalarDecimal {
+  readonly kind: 'scalar_decimal'
+  readonly amount: DecimalString
+}
+
+export type MaterializedValue = DecimalQuantity | ExactScalarDecimal | string | boolean
 
 /** A pinned reference to the exact fact version that supported a materialised conclusion. */
 export interface MaterializedFactRef {
@@ -190,6 +196,8 @@ export interface ReadProjectionSlicesRequest {
 export interface CommitProjectionInput {
   /** The fence this commit closes; `undefined` when no fence was opened. */
   readonly fenceId?: Uuid
+  /** Up to seven other fences closed atomically for one bounded worker batch. */
+  readonly additionalFenceIds?: readonly Uuid[]
   readonly expectedGeneration: RevisionString
   readonly recordedSeq: RevisionString
   readonly watermark: SourceWatermark

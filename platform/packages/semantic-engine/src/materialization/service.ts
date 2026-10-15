@@ -1,4 +1,4 @@
-import { isToolContext } from '@ontology/contracts'
+import { MaterializationStoreError, isToolContext } from '@ontology/contracts'
 import type {
   ControlReadProjectionRequest,
   MaterializationChange,
@@ -8,7 +8,6 @@ import type {
   ScopeRef,
   SourceWatermark,
   ToolContext,
-  Uuid,
   ValidityInterval,
   VersionRef,
 } from '@ontology/contracts'
@@ -132,11 +131,24 @@ function subIntervalsFor(
   change: MaterializationChange,
 ): readonly ValidityWindow[] {
   const predicates = new Set<string>()
-  for (const rule of rules) {
-    if (rule.conclusion.propositionKey !== propositionKey) continue
-    for (const group of rule.premiseGroups) predicates.add(group.filter.fieldRef)
+  const boundariesForRule = new Set<string>()
+  const visited = new Set<string>()
+  const pending = [propositionKey]
+  while (pending.length > 0) {
+    const key = pending.pop()
+    if (key === undefined || visited.has(key)) continue
+    visited.add(key)
+    for (const rule of rules) {
+      if (rule.conclusion.propositionKey !== key) continue
+      if (rule.publishedInstance?.validFrom !== undefined) boundariesForRule.add(rule.publishedInstance.validFrom)
+      if (rule.publishedInstance?.validTo !== undefined) boundariesForRule.add(rule.publishedInstance.validTo)
+      for (const group of rule.premiseGroups) {
+        predicates.add(group.filter.fieldRef)
+        for (const alternative of group.alternatives) if (alternative.propositionKey !== undefined) pending.push(alternative.propositionKey)
+      }
+    }
   }
-  const boundaries = new Set<string>()
+  const boundaries = new Set<string>(boundariesForRule)
   for (const fact of facts) {
     if (!predicates.has(fact.predicate)) continue
     // Only facts visible at the change's recorded version shape this view's intervals, so a
@@ -284,6 +296,7 @@ function incompleteReadResult(
 export class IncrementalMaterializer {
   readonly #publishedSource: MaterializationPublishedSource
   readonly #materialization: MaterializationServiceDependencies['materialization']
+  readonly #projectionRef: VersionRef
   readonly #evaluator: RuleEvaluator
   readonly #maxFanout: number
   readonly #now: () => string
@@ -293,6 +306,7 @@ export class IncrementalMaterializer {
   constructor(dependencies: MaterializationServiceDependencies) {
     this.#publishedSource = dependencies.publishedSource
     this.#materialization = dependencies.materialization
+    this.#projectionRef = dependencies.projectionRef ?? PROJECTION_REF
     this.#evaluator = dependencies.evaluator ?? new RuleEvaluator()
     this.#maxFanout = dependencies.maxFanout ?? DEFAULT_MAX_FANOUT
     this.#now = dependencies.now ?? (() => new Date().toISOString())
@@ -364,19 +378,44 @@ export class IncrementalMaterializer {
 
   /** Recompute the affected evaluations and commit the new projection generation. */
   async advance(ticket: MaterializationTicket, ctx: ToolContext): Promise<MaterializationAdvanceResult> {
+    return this.advanceBatch([ticket], ctx)
+  }
+
+  /** Share one authorized source read across up to eight ordered publication changes. */
+  async advanceBatch(tickets: readonly MaterializationTicket[], ctx: ToolContext): Promise<MaterializationAdvanceResult> {
     const scopeRef = scopeOf(ctx)
-    assertScope(ticket.change.scopeRef, scopeRef)
-    const existing = await this.#materialization.getProjectionState(scopeRef, ctx)
-    if (existing !== undefined && compareRevision(existing.watermark.value, ticket.change.recordedSeq) >= 0) {
-      // At-least-once delivery replayed a change that is already reflected; just release the fence.
-      await this.#closeFenceIfOpen(scopeRef, ticket.fenceId, ctx)
+    if (tickets.length === 0 || tickets.length > 8 || new Set(tickets.map((ticket) => ticket.fenceId)).size !== tickets.length || new Set(tickets.map((ticket) => ticket.change.changeId)).size !== tickets.length) {
+      throw new MaterializationError('MATERIALIZATION_FAILED', 'a materialization batch requires one to eight distinct changes and fences')
+    }
+    for (const [position, ticket] of tickets.entries()) {
+      assertScope(ticket.change.scopeRef, scopeRef)
+      const previous = tickets[position - 1]
+      if (previous !== undefined && compareRevision(previous.change.recordedSeq, ticket.change.recordedSeq) >= 0) {
+        throw new MaterializationError('MATERIALIZATION_FAILED', 'materialization batch source sequences must increase strictly')
+      }
+    }
+    const first = tickets[0], last = tickets.at(-1)
+    if (first === undefined || last === undefined) throw new MaterializationError('MATERIALIZATION_FAILED', 'the materialization batch is empty')
+    const [existing, openFences] = await Promise.all([
+      this.#materialization.getProjectionState(scopeRef, ctx), this.#materialization.listOpenFences(scopeRef, ctx),
+    ])
+    const openFenceIds = new Set(openFences.map((fence) => fence.fenceId))
+    // A later batch's watermark does not prove an earlier pending batch was
+    // applied. Its own durable open fences remain authoritative for replay.
+    const unapplied = tickets.filter((ticket) => openFenceIds.has(ticket.fenceId) || existing === undefined || compareRevision(existing.watermark.value, ticket.change.recordedSeq) < 0)
+    if (existing !== undefined && unapplied.length === 0) {
+      for (const ticket of tickets) {
+        const fence = await this.#materialization.getFence(scopeRef, ticket.fenceId, ctx)
+        if (fence === undefined) throw new MaterializationError('MATERIALIZATION_FAILED', 'a replayed materialization change has no actual scoped fence')
+        if (fence.state !== 'closed') throw new MaterializationError('GENERATION_CONFLICT', 'a materialization replay fence changed during capture')
+      }
       return {
         scopeRef,
         generation: existing.generation,
         recomputedRuleIds: [],
         recomputedPropositionKeys: [],
         appendedSlices: 0,
-        deferred: ticket.deferred,
+        deferred: tickets.some((ticket) => ticket.deferred),
       }
     }
 
@@ -390,55 +429,62 @@ export class IncrementalMaterializer {
       )
     }
     const index = MaterializationDependencyIndex.build(published)
-    const affectedRuleIds =
-      ticket.affectedRuleIds.length > 0 ? ticket.affectedRuleIds : index.affectedRuleIds(ticket.change)
-    const evaluationRuleIds = index.evaluationRuleIds(affectedRuleIds)
-    const affectedPropositionKeys =
-      ticket.affectedPropositionKeys.length > 0
-        ? ticket.affectedPropositionKeys
-        : index.affectedPropositionKeys(affectedRuleIds)
-    const evaluationRules = published.rules.filter((rule) => evaluationRuleIds.includes(rule.ruleId))
     const generation = nextGeneration(existing?.generation ?? '0')
-
     const slices: ProjectionSlice[] = []
-    for (const propositionKey of affectedPropositionKeys) {
-      const windows = subIntervalsFor(propositionKey, published.facts, published.rules, ticket.change)
-      for (const window of windows) {
-        const conclusion = this.#evaluateConclusion(
-          scopeRef,
-          ticket.change,
-          window,
-          published.facts,
-          evaluationRules,
-          propositionKey,
-          published.definitionRef,
-          published.complete,
-        )
-        if (conclusion === undefined) continue
-        slices.push({
-          scopeRef,
-          generation,
-          propositionKey,
-          qualifiedPropositionKey: conclusion.qualifiedPropositionKey,
-          predicate: conclusion.predicate,
-          domainStatus: conclusion.domainStatus,
-          ...(conclusion.value === undefined ? {} : { value: conclusion.value }),
-          validity: { validFrom: window.validFrom, ...(window.validTo === undefined ? {} : { validTo: window.validTo }) },
-          recordedSeq: ticket.change.recordedSeq,
-          conclusion,
-        })
+    const recomputedRuleIds = new Set<string>(), recomputedPropositionKeys = new Set<string>()
+    for (const ticket of unapplied) {
+      const affectedRuleIds = [...new Set([...ticket.affectedRuleIds, ...index.affectedRuleIds(ticket.change)])]
+      const evaluationRuleIds = index.evaluationRuleIds(affectedRuleIds)
+      const affectedPropositionKeys = [...new Set([...ticket.affectedPropositionKeys, ...index.affectedPropositionKeys(affectedRuleIds)])]
+      const evaluationRules = published.rules.filter((rule) => evaluationRuleIds.includes(rule.ruleId))
+      for (const ruleId of evaluationRuleIds) recomputedRuleIds.add(ruleId)
+      for (const propositionKey of affectedPropositionKeys) recomputedPropositionKeys.add(propositionKey)
+      for (const propositionKey of affectedPropositionKeys) {
+        const owners = published.partitions?.filter((part) => part.rules.some((rule) => rule.conclusion.propositionKey === propositionKey)) ?? []
+        if (owners.length > 1) throw new MaterializationError('MATERIALIZATION_FAILED', 'a proposition has ambiguous definition partition authority')
+        if (published.partitions !== undefined && owners.length === 0) throw new MaterializationError('MATERIALIZATION_FAILED', 'the affected proposition lost its definition partition; retain the invalidation fence')
+        const partition = owners[0] ?? published
+        const partitionRuleIds = new Set(partition.rules.map((rule) => rule.ruleId))
+        const windows = subIntervalsFor(propositionKey, partition.facts, partition.rules, ticket.change)
+        for (const window of windows) {
+          const conclusion = this.#evaluateConclusion(
+            scopeRef,
+            ticket.change,
+            window,
+            partition.facts,
+            evaluationRules.filter((rule) => partitionRuleIds.has(rule.ruleId)),
+            propositionKey,
+            partition.definitionRef,
+            partition.complete,
+            partition.premiseInput,
+          )
+          if (conclusion === undefined) continue
+          slices.push({
+            scopeRef,
+            generation,
+            propositionKey,
+            qualifiedPropositionKey: conclusion.qualifiedPropositionKey,
+            predicate: conclusion.predicate,
+            domainStatus: conclusion.domainStatus,
+            ...(conclusion.value === undefined ? {} : { value: conclusion.value }),
+            validity: { validFrom: window.validFrom, ...(window.validTo === undefined ? {} : { validTo: window.validTo }) },
+            recordedSeq: ticket.change.recordedSeq,
+            conclusion,
+          })
+        }
       }
     }
 
-    const watermark: SourceWatermark = { kind: 'sequence', value: ticket.change.recordedSeq }
+    const watermark: SourceWatermark = { kind: 'sequence', value: existing?.watermark.kind === 'sequence' && compareRevision(existing.watermark.value, last.change.recordedSeq) > 0 ? existing.watermark.value : last.change.recordedSeq }
     let committed
     try {
       committed = await this.#materialization.commitProjection(
         scopeRef,
         {
-          fenceId: ticket.fenceId,
+          fenceId: first.fenceId,
+          ...(tickets.length === 1 ? {} : { additionalFenceIds: tickets.slice(1).map((ticket) => ticket.fenceId) }),
           expectedGeneration: existing?.generation ?? '0',
-          recordedSeq: ticket.change.recordedSeq,
+          recordedSeq: last.change.recordedSeq,
           watermark,
           slices,
           committedAt: this.#now(),
@@ -446,6 +492,9 @@ export class IncrementalMaterializer {
         ctx,
       )
     } catch (error) {
+      if (error instanceof MaterializationStoreError && error.code !== 'GENERATION_CONFLICT') {
+        throw new MaterializationError('MATERIALIZATION_FAILED', 'the projection commit could not retain its materialization authority', { cause: error })
+      }
       throw new MaterializationError('GENERATION_CONFLICT', 'the projection advanced concurrently', {
         cause: error,
       })
@@ -454,10 +503,10 @@ export class IncrementalMaterializer {
     return {
       scopeRef,
       generation: committed.state.generation,
-      recomputedRuleIds: evaluationRuleIds,
-      recomputedPropositionKeys: affectedPropositionKeys,
+      recomputedRuleIds: [...recomputedRuleIds],
+      recomputedPropositionKeys: [...recomputedPropositionKeys],
       appendedSlices: committed.appendedSlices,
-      deferred: ticket.deferred,
+      deferred: tickets.some((ticket) => ticket.deferred),
     }
   }
 
@@ -833,10 +882,11 @@ export class IncrementalMaterializer {
     propositionKey: string,
     definitionRef: VersionRef | undefined,
     complete: boolean | undefined,
+    premiseInput: PublishedSemanticData['premiseInput'],
   ): MaterializedConclusion | undefined {
     const request: ControlReadProjectionRequest = {
       scopeRef,
-      projectionRef: PROJECTION_REF,
+      projectionRef: this.#projectionRef,
       validAt: window.validFrom,
       asOfRecordedSeq: change.recordedSeq,
     }
@@ -850,7 +900,9 @@ export class IncrementalMaterializer {
     })
     const conclusion = result.conclusions.find((entry) => entry.propositionKey === propositionKey)
     if (conclusion === undefined) return undefined
-    const artifacts = ruleComputationArtifactsOf(result.applicabilities, rules)
+    const artifacts = ruleComputationArtifactsOf(result.applicabilities, rules).map((artifact) => ({ ...artifact,
+      ...(premiseInput === undefined ? {} : { premiseInput: { ...premiseInput, request, evaluatedRuleIds: rules.map((rule) => rule.ruleId), complete: complete !== false } }),
+    }))
     return materializedConclusionOf(conclusion, artifactsForProposition(propositionKey, rules, artifacts))
   }
 
@@ -860,6 +912,10 @@ export class IncrementalMaterializer {
     request: MaterializationReadRequest,
     propositionKeys: readonly string[] | undefined,
   ): MaterializationEvaluation {
+    if (published.partitions !== undefined) {
+      const parts = published.partitions.map((part) => this.#evaluatePropositions(part, scopeRef, request, propositionKeys))
+      return { conclusions: parts.flatMap((part) => part.conclusions), applicabilities: parts.flatMap((part) => part.applicabilities), ruleArtifacts: parts.flatMap((part) => part.ruleArtifacts) }
+    }
     const evaluationRequest: ControlReadProjectionRequest = {
       scopeRef,
       projectionRef: request.projectionRef,
@@ -874,7 +930,9 @@ export class IncrementalMaterializer {
       ...(published.definitionRef === undefined ? {} : { definitionRef: published.definitionRef }),
       ...(published.complete === undefined ? {} : { complete: published.complete }),
     })
-    const ruleArtifacts = ruleComputationArtifactsOf(result.applicabilities, published.rules)
+    const ruleArtifacts = ruleComputationArtifactsOf(result.applicabilities, published.rules).map((artifact) => ({ ...artifact,
+      ...(published.premiseInput === undefined ? {} : { premiseInput: { ...published.premiseInput, request: evaluationRequest, evaluatedRuleIds: published.rules.map((rule) => rule.ruleId), complete: published.complete !== false } }),
+    }))
     const conclusions = result.conclusions.map((conclusion) =>
       materializedConclusionOf(
         conclusion,
@@ -896,9 +954,4 @@ export class IncrementalMaterializer {
     return { conclusions: filteredConclusions, applicabilities, ruleArtifacts: filteredArtifacts }
   }
 
-  async #closeFenceIfOpen(scopeRef: ScopeRef, fenceId: Uuid, ctx: ToolContext): Promise<void> {
-    const fence = await this.#materialization.getFence(scopeRef, fenceId, ctx)
-    if (fence === undefined || fence.state === 'closed') return
-    await this.#materialization.closeFence(scopeRef, fenceId, this.#now(), ctx)
-  }
 }

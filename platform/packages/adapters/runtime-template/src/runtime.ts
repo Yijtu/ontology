@@ -1,4 +1,4 @@
-import { isToolContext } from '@ontology/contracts'
+import { ERROR_CATALOG, isToolContext } from '@ontology/contracts'
 import { sha256DigestOf } from '@ontology/core'
 import type {
   AbandonedAttempt,
@@ -17,6 +17,7 @@ import type {
   ToolId,
   ToolResult,
   VersionRef,
+  ErrorCode,
 } from '@ontology/contracts'
 import {
   CHECKPOINT_SCHEMA_VERSION,
@@ -27,13 +28,22 @@ import {
 import type { CheckpointPayload } from './checkpoint'
 import { TemplateRuntimeError, platformErrorFor } from './errors'
 import { resolveArguments, validatePlan } from './plan'
-import type { PublishedPlan, StepOutput, TemplatePlanResolver, TemplateRuntimeConfig } from './types'
+import type {
+  PublishedPlan,
+  StepOutput,
+  TemplatePlanPreparation,
+  TemplatePlanPreparationRequest,
+  TemplatePlanResolver,
+  TemplateRuntimeConfig,
+} from './types'
 
 const RUNTIME_KIND = 'runtime-template'
 
 type StepStatus = 'pending' | 'running' | 'done' | 'failed'
 type StepOutcome = 'done' | 'failed' | 'aborted' | 'abort_run'
 type Emit = (event: RuntimeEvent) => void
+type PreparedPlan = { readonly kind: 'plan'; readonly published: PublishedPlan; readonly receiptBacked: boolean }
+  | (Extract<TemplatePlanPreparation, { readonly kind: 'clarification' }> & { readonly receiptBacked: true })
 
 interface Runnable {
   readonly step: PublishedPlan['spec']['steps'][number]
@@ -55,6 +65,8 @@ interface Session {
   readonly controller: AbortController
   /** Attempts that were running when the run was cancelled; quarantined, never revived. */
   readonly abandoned: AbandonedAttempt[]
+  /** A new prepare-capable resolver persisted the plan receipt before execution. */
+  readonly checkpointOnStart: boolean
   cancelReason: string | undefined
   parallelLimit: number
   sequence: number
@@ -93,8 +105,26 @@ export class TemplateRuntimeAdapter implements RuntimeAdapter {
     return this.#stream(async (emit) => {
       const ctx = this.#requireContext(deps)
       this.#assertRunId(input.runId, ctx)
-      const plan = await this.#resolvePlan(input.planRef, ctx)
-      const session = this.#open(input.runId, ctx, deps.signal, plan, input.remainingBudget, undefined)
+      const preparation = await this.#prepareOrFail({
+        mode: 'start',
+        input,
+        ...(input.planRef === undefined ? {} : { planRef: input.planRef }),
+        dependencies: deps,
+      }, emit)
+      if (preparation === undefined) return
+      if (preparation.kind === 'clarification') {
+        await this.#emitPreparationClarification(input.runId, preparation, deps, emit)
+        return
+      }
+      const session = this.#open(
+        input.runId,
+        ctx,
+        deps.signal,
+        preparation.published,
+        input.remainingBudget,
+        undefined,
+        preparation.receiptBacked,
+      )
       try {
         await this.#execute(session, deps, emit, undefined)
       } finally {
@@ -110,14 +140,25 @@ export class TemplateRuntimeAdapter implements RuntimeAdapter {
       this.#assertCheckpointCompatible(input.checkpointRef)
       const bytes = await deps.checkpoints.load(input.runId, input.checkpointRef, ctx)
       const restored = decodeCheckpoint(bytes, input.checkpointRef)
-      const plan = await this.#resolvePlan(restored.planRef, ctx)
+      const preparation = await this.#prepareOrFail({
+        mode: 'resume',
+        input,
+        planRef: restored.planRef,
+        dependencies: deps,
+      }, emit)
+      if (preparation === undefined) return
+      if (preparation.kind === 'clarification') {
+        await this.#emitPreparationClarification(input.runId, preparation, deps, emit)
+        return
+      }
       const session = this.#open(
         input.runId,
         ctx,
         deps.signal,
-        plan,
+        preparation.published,
         input.remainingBudget,
         input.clarificationResponse?.typedResponse,
+        preparation.receiptBacked,
       )
       try {
         await this.#execute(session, deps, emit, {
@@ -191,6 +232,11 @@ export class TemplateRuntimeAdapter implements RuntimeAdapter {
       if (!status.has(step.stepId)) status.set(step.stepId, 'pending')
     }
 
+    if (session.controller.signal.aborted) {
+      this.#emitCancelled(session, emit)
+      return
+    }
+
     emit({
       ...this.#base(session),
       type: 'plan_proposed',
@@ -198,6 +244,13 @@ export class TemplateRuntimeAdapter implements RuntimeAdapter {
       stepCount: steps.length,
       toolIds: uniqueToolIds(steps),
     })
+
+    // The receipt has already been archived by a prepare-capable host. Persist its exact ref
+    // before the first operation so a reclaimed run can load the same plan without another
+    // planner/model call. Legacy resolvers retain their previous checkpoint cadence.
+    if (restored === undefined && session.checkpointOnStart) {
+      await this.#saveCheckpoint(session, deps, outputs, evidence, emit)
+    }
 
     for (;;) {
       if (session.controller.signal.aborted) {
@@ -528,6 +581,97 @@ export class TemplateRuntimeAdapter implements RuntimeAdapter {
     return published
   }
 
+  async #preparePlan(
+    request: TemplatePlanPreparationRequest,
+  ): Promise<PreparedPlan> {
+    if (this.#plans.prepare === undefined) {
+      const published = await this.#resolvePlan(request.planRef, request.dependencies.ctx)
+      return { kind: 'plan', published, receiptBacked: false }
+    }
+
+    const preparation = await this.#plans.prepare(request)
+    if (request.planRef !== undefined && !sameResourceRef(preparation.sourceReceiptRef, request.planRef)) {
+      throw new TemplateRuntimeError('INVALID_PLAN', 'the requested plan receipt was not resolved by its full resource reference')
+    }
+    if (preparation.kind === 'clarification') {
+      if (preparation.receiptRef.kind !== 'plan' || !isResourceRef(preparation.receiptRef)) {
+        throw new TemplateRuntimeError('INVALID_PLAN', 'a route clarification requires a complete immutable plan receipt')
+      }
+      return { ...preparation, receiptBacked: true }
+    }
+
+    const published = preparation.published
+    if (
+      published.planRef.kind !== 'plan' ||
+      !sameResourceRef(published.planRef, published.spec.planRef)
+    ) {
+      throw new TemplateRuntimeError('INVALID_PLAN', 'the prepared plan and its immutable receipt reference do not match')
+    }
+    if (request.planRef !== undefined && !sameResourceRef(preparation.sourceReceiptRef, request.planRef)) {
+      throw new TemplateRuntimeError('INVALID_PLAN', 'the checkpoint plan receipt changed during preparation')
+    }
+    validatePlan(published.spec)
+    return { kind: 'plan', published, receiptBacked: true }
+  }
+
+  async #prepareOrFail(request: TemplatePlanPreparationRequest, emit: Emit): Promise<PreparedPlan | undefined> {
+    try { return await this.#preparePlan(request) } catch (error) {
+      // Recovery incompatibility retains its existing throw/unsafe-recovery contract. An
+      // aborted operation must not emit a late failure over an accepted cancellation.
+      if (request.dependencies.signal.aborted || typeof error !== 'object' || error === null || !('code' in error) || !isCanonicalErrorCode(error.code) || error.code === 'CHECKPOINT_INCOMPATIBLE') throw error
+      emit({ type: 'failed', runId: request.input.runId, eventId: this.#newId(), sequence: 0, occurredAt: this.#now(),
+        error: platformErrorFor(error.code, 'The task could not be planned with the current authorized inputs and capabilities.', request.dependencies.ctx.traceId) })
+      return undefined
+    }
+  }
+
+  async #emitPreparationClarification(
+    runId: string,
+    preparation: Extract<TemplatePlanPreparation, { readonly kind: 'clarification' }>,
+    deps: RuntimeDependencies,
+    emit: Emit,
+  ): Promise<void> {
+    if (deps.signal.aborted) return
+    const receiptRef = preparation.receiptRef
+    const payload: CheckpointPayload = {
+      schemaVersion: CHECKPOINT_SCHEMA_VERSION,
+      runtimeKind: this.manifest.id,
+      runtimeVersion: this.manifest.version,
+      planRef: receiptRef,
+      completedStepIds: [],
+      stepOutputs: [],
+      evidenceRefs: [],
+    }
+    const checkpointRef: RuntimeCheckpointRef = {
+      checkpointId: this.#newId(),
+      runId,
+      runtimeKind: this.manifest.id,
+      runtimeVersion: this.manifest.version,
+      stateDigest: checkpointDigest(payload),
+      createdAt: this.#now(),
+    }
+    const saved = await deps.checkpoints.save(runId, checkpointRef, encodeCheckpoint(payload), deps.ctx)
+    if (deps.signal.aborted) return
+    emit({
+      runId,
+      eventId: this.#newId(),
+      sequence: 0,
+      occurredAt: this.#now(),
+      type: 'checkpoint_ready',
+      checkpointRef: saved,
+    })
+    emit({
+      runId,
+      eventId: this.#newId(),
+      sequence: 1,
+      occurredAt: this.#now(),
+      type: 'clarification_requested',
+      clarificationId: preparation.clarificationId,
+      questionRef: preparation.clarification.questionRef,
+      questionType: preparation.clarification.questionType,
+    })
+  }
+
   #open(
     runId: string,
     ctx: ToolContext,
@@ -535,6 +679,7 @@ export class TemplateRuntimeAdapter implements RuntimeAdapter {
     plan: PublishedPlan,
     inputRemaining: BudgetRemaining,
     clarifications: Readonly<Record<string, unknown>> | undefined,
+    checkpointOnStart = false,
   ): Session {
     const controller = new AbortController()
     if (signal.aborted) controller.abort(signal.reason)
@@ -547,6 +692,7 @@ export class TemplateRuntimeAdapter implements RuntimeAdapter {
       clarifications,
       controller,
       abandoned: [],
+      checkpointOnStart,
       cancelReason: undefined,
       parallelLimit: 1,
       sequence: 0,
@@ -569,6 +715,24 @@ function uniqueToolIds(steps: readonly PublishedPlan['spec']['steps'][number][])
 
 function messageOf(error: unknown): string {
   return error instanceof Error ? error.message : 'unknown runtime failure'
+}
+
+function isCanonicalErrorCode(value: unknown): value is ErrorCode {
+  return typeof value === 'string' && Object.hasOwn(ERROR_CATALOG, value)
+}
+
+function isResourceRef(value: unknown): value is ResourceRef {
+  if (typeof value !== 'object' || value === null || Array.isArray(value)) return false
+  const record = value as Record<string, unknown>
+  return typeof record['id'] === 'string' && record['id'].length > 0 &&
+    typeof record['version'] === 'string' && record['version'].length > 0 &&
+    typeof record['digest'] === 'string' && /^sha256:[0-9a-f]{64}$/u.test(record['digest']) &&
+    typeof record['kind'] === 'string' && record['kind'].length > 0
+}
+
+function sameResourceRef(left: ResourceRef | undefined, right: ResourceRef): boolean {
+  return left !== undefined && left.id === right.id && left.version === right.version &&
+    left.digest === right.digest && left.kind === right.kind
 }
 
 /**

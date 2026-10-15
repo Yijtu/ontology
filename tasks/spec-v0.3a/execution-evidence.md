@@ -115,6 +115,14 @@ Run 响应保留 `runId/state/revision/resolvedProfileHash`，可选返回 `exec
 
 ### EX-2.2 澄清和参数变更
 
+当前 Core 规则任务的 renderer 只发布明确标注的 applicability 轴。显式请求 business_proposition 轴时返回 UNSUPPORTED_QUERY，不把“规则适用”值冒充业务命题值；完整业务后果仍保存在实际规则计算／前提工件中供有对应结果契约的任务使用。
+
+question 模式的受控提案只包含已启用任务的语义选择：查询对象／字段、规则名称／实体标识、实体／至多三段声明关系、文档检索词，或已注册计算任务名称／参数。提案 JSON 的字段集合封闭；不接收内部 ruleRef、digest、recorded point、实体 UUID、handler、脚本或函数。host 根据归档 allowlist、profile 的四工具与 compute bindings、真实注册项，以及可选已批准 CQ reader 返回的同定义问题，独立选择任务。未配置 generation binding 时拒绝 NL；显式任务和确定性表单沿用无模型路径。
+
+规则和关系的实体来自固定项目／定义下的正式发布事实与实际确认身份；完整身份可使用原生标识及声明的作用域维度。重名、缺少实体或规则时形成既有类型化澄清 receipt，同一 ledger 内恢复。规则版本来自真实已发布声明，记录点从实际物化历史中选择该实例最近的固定点；不使用项目 visibility epoch 代替规则记录序号。提案前后复核当前 active project revision、定义及正式来源 revision vector，变化则显式拒绝。查询在 admission 归档真实已激活的项目数据快照，后续按存储的 execution binding 和 activation receipt 使用该固定快照。当前 question admission 只选择当前 readiness target 的一个对象；多对象选择需要显式任务指定对象。
+
+可执行任务选择及服务端补齐的参数保存在现有不可变 plan receipt。question run 的 typed finalization 读取该实际 receipt，并再次核对创建时的 allowed task refs；不修改原 execution binding。relations 使用正式发布的项目边及确认端点，经过有界 PublishedRelationNavigator，写出并核验同一 answer@3；发布前重读实际边，撤回或端点变化阻止发布。公共模型工具仍固定四个，不新增任务选择／关系／函数工具。计划准备的 canonical 错误进入既有 failed RuntimeEvent；公共错误仅含稳定分类和安全提示，checkpoint incompatibility 与取消仍保留原严格行为。
+
 复用 `POST /runs/{id}/responses` 和 `If-Match`。拟新增 `TaskParameterConfirmation` 记录 `proposalRef/digest`、完整 prior receipt ref、clarificationId、run revision、字段 old/new 值及来源 ref、参数 Schema digest、确认决定。模型只能产生建议，不能覆盖已批准数据。
 
 同任务、同输入、同授权范围内的选项与操作参数澄清可在当前 run 追加 `clarification` entry，归档新计划 receipt，沿用 ledger。更改已批准行／字段、mapping、资料或行业版本，由项目服务产生新修订和输入 snapshot，再创建新 run；旧 binding 不修改。确认不能扩大 allowlist、项目范围或预算。冲突／旧 revision 返回 409；缺 `If-Match` 返回 428。

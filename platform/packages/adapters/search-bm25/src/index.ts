@@ -59,6 +59,15 @@ export { InMemoryKeywordIndexStore } from './memory-store'
 export { PostgresKeywordIndexStore } from './postgres-store'
 export type { PostgresKeywordIndexStoreConfig } from './postgres-store'
 
+export { InMemoryProjectDocumentStore } from './project-store-memory'
+export {
+  DEFAULT_MAX_CORPUS_DOCUMENTS,
+  DEFAULT_MAX_FRAGMENT_BYTES,
+  DEFAULT_MAX_FRAGMENTS,
+  ProjectDocumentIndexService,
+} from './project-index-service'
+export type { ProjectDocumentIndexDependencies } from './project-index-service'
+
 export { decodeCursor, encodeCursor } from './cursor'
 export type { SearchCursor, SearchCursorCollection } from './cursor'
 

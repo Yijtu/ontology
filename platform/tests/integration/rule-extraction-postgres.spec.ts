@@ -42,7 +42,7 @@ import type { ParsedDocument, RuleCandidate, RuleUnhandledCandidate } from '@ont
 import type { ToolContext, Uuid, VersionRef } from '@ontology/contracts'
 import { toolContext } from '../unit/component-registry-fixtures'
 import { sampleCoreDraft } from '../unit/semantic-definition-fixtures'
-import { CountingGenerationPort, MODEL_REF, generationResponse } from '../unit/extraction-fixtures'
+import { CountingGenerationPort, MODEL_REF, generationResponse, textSpan } from '../unit/extraction-fixtures'
 import { createJobScope, startJobDatabase } from './job-postgres-harness'
 import type { JobDbHarness, JobTestScope } from './job-postgres-harness'
 
@@ -281,13 +281,14 @@ describe('rule candidates against a real PostgreSQL', () => {
       if (rule.expression.op === 'all') {
         for (const operand of rule.expression.operands) {
           expect(operand.spans.length).toBeGreaterThan(0)
-          expect(chunkIds.has(operand.spans[0]?.chunkId ?? '')).toBe(true)
+          const operandSpan = operand.spans[0]
+          expect(operandSpan !== undefined && operandSpan.kind !== 'structured' && chunkIds.has(operandSpan.chunkId)).toBe(true)
         }
       }
     }
 
     // A span round-trips through the real parse store back to the exact chunk text.
-    const firstSpan = rules[0]?.sourceSpans[0]
+    const firstSpan = textSpan(rules[0]?.sourceSpans[0])
     expect(firstSpan).toBeDefined()
     const chunk = parsed.chunks.find((entry) => entry.chunkId === firstSpan?.chunkId)
     expect(chunk).toBeDefined()

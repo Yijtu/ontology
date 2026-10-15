@@ -1,0 +1,135 @@
+.function-guide {
+  display: grid;
+  gap: 8px;
+  margin: 0 0 16px;
+  padding: 12px 14px;
+  border: 1px solid var(--line, #d9e0e3);
+  border-inline-start: 3px solid var(--accent, #277c77);
+  border-radius: 8px;
+  background: var(--surface, #fff);
+  color: var(--text, #172126);
+  font-size: 13px;
+  line-height: 1.55;
+}
+
+.function-guide h3,
+.function-guide p {
+  margin: 0;
+}
+
+.function-guide__intro,
+.function-guide__facts {
+  display: grid;
+  gap: 6px;
+}
+
+.function-guide__intro h3 {
+  font-size: 14px;
+}
+
+.function-guide__facts {
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 8px 16px;
+}
+
+.function-guide__facts p {
+  color: var(--muted, #526168);
+}
+
+.function-guide__steps summary {
+  width: fit-content;
+  color: var(--accent, #277c77);
+  cursor: pointer;
+  font-weight: 600;
+}
+
+.function-guide__steps ol {
+  display: grid;
+  gap: 4px;
+  margin: 8px 0 0;
+  padding-inline-start: 22px;
+}
+
+.function-guide__actions,
+.guide-home-actions {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 8px;
+}
+
+.guide-home-actions {
+  justify-content: flex-end;
+}
+
+.query-guide {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto;
+  align-items: start;
+  gap: 10px 16px;
+  margin: 0 0 16px;
+  padding: 12px 14px;
+  border: 1px solid var(--line, #d9e0e3);
+  border-radius: 8px;
+  background: var(--surface, #fff);
+  color: var(--text, #172126);
+  font-size: 13px;
+  line-height: 1.55;
+}
+
+.query-guide h3,
+.query-guide p {
+  margin: 0;
+}
+
+.query-guide__copy {
+  display: grid;
+  gap: 6px;
+}
+
+.query-guide__copy h3 {
+  font-size: 14px;
+}
+
+.query-guide__copy p,
+.query-guide__model {
+  color: var(--muted, #526168);
+}
+
+.query-guide__model {
+  display: grid;
+  justify-items: start;
+  gap: 6px;
+}
+
+.query-guide__steps {
+  grid-column: 1 / -1;
+}
+
+.query-guide__steps summary {
+  width: fit-content;
+  color: var(--accent, #277c77);
+  cursor: pointer;
+  font-weight: 600;
+}
+
+.query-guide__steps ol {
+  display: grid;
+  gap: 4px;
+  margin: 8px 0 0;
+  padding-inline-start: 22px;
+}
+
+@media (max-width: 600px) {
+  .function-guide__facts {
+    grid-template-columns: minmax(0, 1fr);
+  }
+
+  .query-guide {
+    grid-template-columns: minmax(0, 1fr);
+  }
+
+  .query-guide__steps {
+    grid-column: auto;
+  }
+}

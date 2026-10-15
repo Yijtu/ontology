@@ -73,11 +73,13 @@ export function CandidateReviewPanel({ client, initialCandidateId }: CandidateRe
     dispatch({ type: 'loadStarted' })
     try {
       const candidates = await client.listCandidates()
-      dispatch({ type: 'loaded', candidates })
+      dispatch(initialCandidateId === undefined
+        ? { type: 'loaded', candidates }
+        : { type: 'candidatesLoaded', candidates })
     } catch (error) {
       dispatch(failureEvent(error))
     }
-  }, [client])
+  }, [client, initialCandidateId])
 
   const select = useCallback(
     async (candidateId: string) => {

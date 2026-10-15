@@ -53,5 +53,10 @@ Dependencies: #199, #200, #191, #203, #198
 
 ## 完成记录
 
-- 当前：未开工；验证未运行。GitHub Issue：[#205](https://github.com/Yijtu/ontology/issues/205)；文档提交不代表功能完成。
-- 实现后记录：提交/PR、适用命令结果、满足的验收、未验证/外部条件、迁移配置与兼容影响。
+- 当前：已实现；验证已运行。GitHub Issue：[#205](https://github.com/Yijtu/ontology/issues/205)；文档提交不代表功能完成。
+- 实现后记录：
+  - 分支 `feat/v03-034-typed-verifier`；能力：typed 断言按证据类型分派核验——`rule_judgement`（从归档 `rule-computation-artifact@1`/`rule-derivation-support-payload@1` 复算 applicability/business_proposition 轴、校验 ruleRef/subject/computationDigest、前提可解析且 complete）、`relation_ref`（端点方向、relation/definition/statement 版本）、`document_quote`（精确 quote 内容/locator/digest/document 版本）、结构化查询单元格（新增 `row_binding_mismatch`）。错判定/错数值/错引用/错行绑定均为 hard finding，阻断发布；文档问答引用缺失证据报 `evidence_not_found` 并经 `missingEvidence` 表达缺依据。
+  - 契约：`contracts/src/verification.ts` 新增 binding 指针与 finding code；`application/src/verification/typed-checkers.ts` 新增逐类型核验器；`assertions.ts`/`hard-checks.ts`/`templates.ts`/`service.ts`/`index.ts` 接线。未新增迁移（无持久化结构变更）。
+  - 验证：`pnpm run typecheck` 通过；`pnpm run lint` 通过；`pnpm run boundaries` 8/8 通过；`vitest run --project unit` 165 文件/1808 用例通过；`tests/unit/typed-evidence-verifier.spec.ts` 14 用例通过；`tests/integration/draft-verification-postgres.spec.ts`（真实 PG + blob + 证据归档）8 用例通过；composition 套件 24/25 通过，唯一失败 `x04-x06` “generic packages free of industry token” 为 HEAD 既有失败（`packages/tool-services/src/compute/example-operation.ts`，超出本卡范围，已用 `git stash` 复核）。
+  - 未验证/外部条件：无真实模型调用；错误码仅登记于 finding code，未改 error-catalog（finding 不是 HTTP 错误）。
+  - 兼容：旧 `@1/@2` 读取与既有断言行为保持；新增字段/字段指针均为可选，未削弱既有测试。

@@ -1,5 +1,10 @@
-import type { CreateRunContext, ProfileRef, RunPreferences } from '@ontology/contracts'
-import { tryParseSemver } from '@ontology/contracts'
+import type {
+  CreateRunContext,
+  ProfileRef,
+  RunExecutionRequest,
+  RunPreferences,
+} from '@ontology/contracts'
+import { isRunExecutionRequest, tryParseSemver } from '@ontology/contracts'
 import { RunServiceError } from './errors'
 
 export interface ParsedCreateRunRequest {
@@ -7,6 +12,26 @@ export interface ParsedCreateRunRequest {
   readonly question: string
   readonly context: CreateRunContext
   readonly preferences: RunPreferences
+  readonly execution?: RunExecutionRequest
+}
+
+/**
+ * Validate the optional `task` execution binding on the run request. The body is untrusted, so
+ * the shape is checked field by field and the canonical union guard is the final gate; scope and
+ * identity are deliberately absent (they come from the trusted context, never the request).
+ */
+function parseRunExecutionRequest(value: unknown): RunExecutionRequest | undefined {
+  if (value === undefined) return undefined
+  if (!isRecord(value)) {
+    throw new RunServiceError('INVALID_ARGUMENT', 'task must be an object')
+  }
+  if (!isRunExecutionRequest(value)) {
+    throw new RunServiceError(
+      'INVALID_ARGUMENT',
+      'task must be a question/task execution request pinning projectRevisionRef, inputSnapshotRef and inputSnapshotDigest',
+    )
+  }
+  return value
 }
 
 function isRunRoute(value: unknown): value is RunPreferences['route'] {
@@ -71,10 +96,12 @@ export function parseCreateRunRequest(body: unknown): ParsedCreateRunRequest {
   if (typeof context['siteRef'] === 'string' && context['siteRef'].length > 0) {
     parsedContext.siteRef = context['siteRef']
   }
+  const execution = parseRunExecutionRequest(body['task'])
   return {
     profileRef: { id: profileId, version: profileVersion },
     question,
     context: parsedContext,
     preferences: { route, allowWeb },
+    ...(execution === undefined ? {} : { execution }),
   }
 }

@@ -58,6 +58,13 @@ export function validateRuleConclusionBinding(
       if (typeof value !== 'object' || value === null || Array.isArray(value)) {
         return { reason: `numeric conclusion ${attribute.attributeId} requires an exact DecimalQuantity` }
       }
+      if (attribute.valueType === 'number' && attribute.unitCode === undefined && 'kind' in value && value.kind === 'scalar_decimal' && 'amount' in value) {
+        const amount = typeof value.amount === 'string' && /^-?(?:0|[1-9]\d*)(?:\.\d+)?$/.test(value.amount) ? canonicalDecimalString(value.amount) : undefined
+        if (amount === undefined || amount.length > 64 || Object.keys(value).some((key) => key !== 'kind' && key !== 'amount')) {
+          return { reason: `unitless conclusion ${attribute.attributeId} requires only a valid scalar_decimal kind and exact amount` }
+        }
+        return { binding: { predicate: attribute.attributeId, value: { kind: 'scalar_decimal', amount } } }
+      }
       const quantity = value as Record<string, unknown>
       if (Object.keys(quantity).some((key) => key !== 'amount' && key !== 'unit') || typeof quantity['amount'] !== 'string' || typeof quantity['unit'] !== 'string') {
         return { reason: `numeric conclusion ${attribute.attributeId} requires only string amount and unit fields` }

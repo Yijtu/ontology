@@ -14,6 +14,7 @@ const schema: IndustrySchema = {
         { attributeId: 'inspection_due', valueType: 'boolean', minCardinality: 0, maxCardinality: 1, identityKey: false },
         { attributeId: 'interval_hours', valueType: 'quantity', minCardinality: 0, maxCardinality: 1, identityKey: false, unitCode: 'h' },
         { attributeId: 'condition', valueType: 'enum', minCardinality: 0, maxCardinality: 1, identityKey: false, enumValues: ['good', 'poor'] },
+        { attributeId: 'reading', valueType: 'number', minCardinality: 0, maxCardinality: 1, identityKey: false },
       ],
     },
     {
@@ -61,5 +62,14 @@ describe('reviewed rule conclusion bindings', () => {
     expect(canonicalDecimalString('6e3')).toBe('6000')
     expect(canonicalDecimalString('NaN')).toBeUndefined()
     expect(canonicalDecimalString('Infinity')).toBeUndefined()
+  })
+
+  it('accepts a tagged unitless number only for its declared numeric attribute', () => {
+    const value = { kind: 'scalar_decimal', amount: '-9007199254740993.10000000000000001' }
+    expect(validateRuleConclusionBinding({ predicate: 'reading', value }, 'facility', schema).binding).toEqual({ predicate: 'reading', value })
+    expect(validateRuleConclusionBinding({ predicate: 'inspection_due', value }, 'facility', schema).reason).toContain('boolean')
+    expect(validateRuleConclusionBinding({ predicate: 'interval_hours', value }, 'facility', schema).reason).toContain('amount and unit')
+    expect(validateRuleConclusionBinding({ predicate: 'reading', value: { ...value, unit: 'kW' } }, 'facility', schema).reason).toContain('unitless')
+    expect(validateRuleConclusionBinding({ predicate: 'reading', value: { ...value, amount: '1e5' } }, 'facility', schema).reason).toContain('exact')
   })
 })

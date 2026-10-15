@@ -1,5 +1,6 @@
 import type {
   CandidateAttributeValue,
+  IndustryAttributeSchema,
   IndustryObjectSchema,
   IndustrySchema,
 } from '@ontology/contracts'
@@ -44,16 +45,35 @@ export function parseNativeRecord(text: string): Record<string, unknown> | undef
   return isRecord(parsed) ? parsed : undefined
 }
 
+const DECIMAL_TOKEN = /^-?(?:0|[1-9]\d*)(?:\.\d+)?$/
+
+function attributeValueOf(
+  attribute: IndustryAttributeSchema,
+  value: string | number | boolean,
+): CandidateAttributeValue {
+  const unit = attribute.unitCode === undefined ? {} : { unitCode: attribute.unitCode }
+  if (typeof value === 'string') {
+    // A quantity written as a canonical decimal string keeps the exact token, so it never
+    // passes through a lossy `Number` (A §5.3). A non-canonical string stays raw-only and is
+    // rejected by validation instead of being silently rewritten.
+    const decimal = attribute.valueType === 'quantity' && DECIMAL_TOKEN.test(value) ? value : undefined
+    return {
+      attributeId: attribute.attributeId,
+      value,
+      raw: value,
+      ...(decimal === undefined ? {} : { decimal }),
+      ...unit,
+    }
+  }
+  return { attributeId: attribute.attributeId, value, raw: String(value), ...unit }
+}
+
 function attributesOf(object: IndustryObjectSchema, record: Record<string, unknown>): CandidateAttributeValue[] {
   const attributes: CandidateAttributeValue[] = []
   for (const attribute of object.attributes) {
     const value = record[attribute.attributeId]
     if (!isScalar(value)) continue
-    attributes.push({
-      attributeId: attribute.attributeId,
-      value,
-      ...(attribute.unitCode === undefined ? {} : { unitCode: attribute.unitCode }),
-    })
+    attributes.push(attributeValueOf(attribute, value))
   }
   return attributes
 }

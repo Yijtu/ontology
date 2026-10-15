@@ -12,7 +12,7 @@ import {
 } from '@ontology/adapter-control-postgres'
 import type { ControlOperationHandler } from '@ontology/adapter-control-postgres'
 import { createToolContext } from '@ontology/contracts'
-import type { ToolContext } from '@ontology/contracts'
+import type { ControlAppendEventRequest, ToolContext } from '@ontology/contracts'
 import { startPostgresContainer } from './postgres-container'
 import type { PostgresContainer } from './postgres-container'
 
@@ -68,6 +68,27 @@ function toolContext(tenantId: string, spaceId: string): ToolContext {
     },
     traceId: 'trace-integration-1',
   })
+}
+
+function freshToolContext(tenantId: string, spaceId: string): ToolContext {
+  const now = new Date()
+  const grantedAt = now.toISOString()
+  const expiresAt = new Date(now.getTime() + 15 * 60_000).toISOString()
+  const runId = randomUUID()
+  return createToolContext({
+    principal: { tenantId, subjectId: 'integration-test', roles: ['platform-admin'], scopes: ['control:read', 'control:write'], authEpoch: 1 },
+    runId,
+    resolvedProfileHash: DIGEST,
+    policyVersion: '1.0.0',
+    deadline: expiresAt,
+    budgetReservation: { reservationId: randomUUID(), runId, grantedAt, expiresAt },
+    allowedResources: { tenantId, spaceId, resourceKinds: [], sourceRefs: [], collectionRefs: [], domains: [], maxRows: 100 },
+    traceId: randomUUID(),
+  })
+}
+
+function eventRequest(tenantId: string, spaceId: string, streamRef: string, idempotencyKey: string): ControlAppendEventRequest {
+  return { scopeRef: { tenantId, spaceId }, streamRef, payloadDigest: DIGEST, idempotencyKey }
 }
 
 const OPERATIONS = new Map<string, ControlOperationHandler>([
@@ -500,6 +521,111 @@ describe('appendEvent idempotency and monotonic sequence per scope', () => {
       contextB,
     )
     expect(otherTenant).toEqual({ recordedSeq: '1', appended: true })
+  })
+})
+
+describe('appendEvents bounded transactional batches', () => {
+  it('appends 64 keys once, replays them, then interleaves single and mixed replay appends in input order', async () => {
+    const ctxA = freshToolContext(TENANT_A, SPACE_A)
+    const ctxB = freshToolContext(TENANT_B, SPACE_B)
+    const streamRef = 'batch-' + randomUUID()
+    const requests = Array.from({ length: 64 }, (_, index) => eventRequest(TENANT_A, SPACE_A, streamRef, streamRef + ':key:' + String(index + 1)))
+
+    const appended = await repository.appendEvents(requests, ctxA)
+    expect(appended).toEqual(Array.from({ length: 64 }, (_, index) => ({ recordedSeq: String(index + 1), appended: true })))
+    const firstRows = await adminClient.query<{ idempotency_key: string; recorded_seq: string }>(
+      `SELECT idempotency_key, recorded_seq::text AS recorded_seq FROM agent_platform.semantic_events AS ledger
+        WHERE tenant_id=$1 AND space_id=$2 AND stream_ref=$3 ORDER BY ledger.recorded_seq`,
+      [TENANT_A, SPACE_A, streamRef],
+    )
+    expect(firstRows.rows).toEqual(requests.map((request, index) => ({ idempotency_key: request.idempotencyKey, recorded_seq: String(index + 1) })))
+    const firstCounter = await adminClient.query<{ last_seq: string }>(
+      `SELECT last_seq::text AS last_seq FROM agent_platform.event_streams WHERE tenant_id=$1 AND space_id=$2 AND stream_ref=$3`,
+      [TENANT_A, SPACE_A, streamRef],
+    )
+    expect(firstCounter.rows[0]?.last_seq).toBe('64')
+
+    const replay = await repository.appendEvents(requests, ctxA)
+    expect(replay).toEqual(Array.from({ length: 64 }, (_, index) => ({ recordedSeq: String(index + 1), appended: false })))
+    expect((await adminClient.query<{ count: string }>(
+      `SELECT count(*)::text AS count FROM agent_platform.semantic_events WHERE tenant_id=$1 AND space_id=$2 AND stream_ref=$3`,
+      [TENANT_A, SPACE_A, streamRef],
+    )).rows[0]?.count).toBe('64')
+    expect((await adminClient.query<{ last_seq: string }>(
+      `SELECT last_seq::text AS last_seq FROM agent_platform.event_streams WHERE tenant_id=$1 AND space_id=$2 AND stream_ref=$3`,
+      [TENANT_A, SPACE_A, streamRef],
+    )).rows[0]?.last_seq).toBe('64')
+
+    const next = await repository.appendEvent(eventRequest(TENANT_A, SPACE_A, streamRef, streamRef + ':single-next'), ctxA)
+    expect(next).toEqual({ recordedSeq: '65', appended: true })
+    const mixedKeys = [requests[10]!.idempotencyKey, streamRef + ':mixed-new', requests[0]!.idempotencyKey]
+    const mixed = await repository.appendEvents(mixedKeys.map((key) => eventRequest(TENANT_A, SPACE_A, streamRef, key)), ctxA)
+    expect(mixed).toEqual([
+      { recordedSeq: '11', appended: false },
+      { recordedSeq: '66', appended: true },
+      { recordedSeq: '1', appended: false },
+    ])
+    const finalRows = await adminClient.query<{ idempotency_key: string; recorded_seq: string }>(
+      `SELECT idempotency_key, recorded_seq::text AS recorded_seq FROM agent_platform.semantic_events AS ledger
+        WHERE tenant_id=$1 AND space_id=$2 AND stream_ref=$3 ORDER BY ledger.recorded_seq`,
+      [TENANT_A, SPACE_A, streamRef],
+    )
+    expect(finalRows.rows).toHaveLength(66)
+    expect(finalRows.rows[64]).toEqual({ idempotency_key: streamRef + ':single-next', recorded_seq: '65' })
+    expect(finalRows.rows[65]).toEqual({ idempotency_key: streamRef + ':mixed-new', recorded_seq: '66' })
+    expect((await adminClient.query<{ last_seq: string }>(
+      `SELECT last_seq::text AS last_seq FROM agent_platform.event_streams WHERE tenant_id=$1 AND space_id=$2 AND stream_ref=$3`,
+      [TENANT_A, SPACE_A, streamRef],
+    )).rows[0]?.last_seq).toBe('66')
+
+    const independentB = await repository.appendEvents([eventRequest(TENANT_B, SPACE_B, streamRef, requests[0]!.idempotencyKey)], ctxB)
+    expect(independentB).toEqual([{ recordedSeq: '1', appended: true }])
+    expect((await adminClient.query<{ last_seq: string }>(
+      `SELECT last_seq::text AS last_seq FROM agent_platform.event_streams WHERE tenant_id=$1 AND space_id=$2 AND stream_ref=$3`,
+      [TENANT_B, SPACE_B, streamRef],
+    )).rows[0]?.last_seq).toBe('1')
+    expect((await adminClient.query<{ last_seq: string }>(
+      `SELECT last_seq::text AS last_seq FROM agent_platform.event_streams WHERE tenant_id=$1 AND space_id=$2 AND stream_ref=$3`,
+      [TENANT_A, SPACE_A, streamRef],
+    )).rows[0]?.last_seq).toBe('66')
+  })
+
+  it('rejects scope, stream, duplicate-key, empty and over-limit batches before writing ledger rows', async () => {
+    const ctxA = freshToolContext(TENANT_A, SPACE_A)
+    const crossScopeStream = 'batch-cross-scope-' + randomUUID()
+    const firstStream = 'batch-one-stream-' + randomUUID()
+    const secondStream = 'batch-other-stream-' + randomUUID()
+    const duplicateStream = 'batch-duplicate-' + randomUUID()
+    const oversizedStream = 'batch-oversized-' + randomUUID()
+
+    await expect(repository.appendEvents([
+      eventRequest(TENANT_A, SPACE_A, crossScopeStream, 'cross-a'),
+      eventRequest(TENANT_B, SPACE_B, crossScopeStream, 'cross-b'),
+    ], ctxA)).rejects.toMatchObject({ code: 'SCOPE_MISMATCH' })
+    await expect(repository.appendEvents([
+      eventRequest(TENANT_A, SPACE_A, firstStream, 'stream-a'),
+      eventRequest(TENANT_A, SPACE_A, secondStream, 'stream-b'),
+    ], ctxA)).rejects.toMatchObject({ code: 'INVALID_OPERATION' })
+    await expect(repository.appendEvents([
+      eventRequest(TENANT_A, SPACE_A, duplicateStream, 'duplicate-key'),
+      eventRequest(TENANT_A, SPACE_A, duplicateStream, 'duplicate-key'),
+    ], ctxA)).rejects.toMatchObject({ code: 'INVALID_OPERATION' })
+    await expect(repository.appendEvents([], ctxA)).rejects.toMatchObject({ code: 'INVALID_OPERATION' })
+    await expect(repository.appendEvents(Array.from({ length: 65 }, (_, index) =>
+      eventRequest(TENANT_A, SPACE_A, oversizedStream, oversizedStream + ':key:' + String(index)),
+    ), ctxA)).rejects.toMatchObject({ code: 'INVALID_OPERATION' })
+
+    const unauthorizedStreams = [crossScopeStream, firstStream, secondStream, duplicateStream, oversizedStream]
+    const streamRows = await adminClient.query<{ count: string }>(
+      `SELECT count(*)::text AS count FROM agent_platform.event_streams WHERE stream_ref=ANY($1::text[])`,
+      [unauthorizedStreams],
+    )
+    const eventRows = await adminClient.query<{ count: string }>(
+      `SELECT count(*)::text AS count FROM agent_platform.semantic_events WHERE stream_ref=ANY($1::text[])`,
+      [unauthorizedStreams],
+    )
+    expect(streamRows.rows[0]?.count).toBe('0')
+    expect(eventRows.rows[0]?.count).toBe('0')
   })
 })
 

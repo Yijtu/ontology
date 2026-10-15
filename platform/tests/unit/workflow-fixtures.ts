@@ -29,7 +29,9 @@ import type {
   DraftWriterRequest,
   DraftWriterResult,
   GenerationPort,
+  ErrorCode,
   InputValidityPort,
+  PlatformError,
   ProfileRef,
   ResourceRef,
   ResumeInput,
@@ -49,6 +51,7 @@ import type {
   VerificationStorePort,
   VersionRef,
   WorkflowInputEntry,
+  WorkflowLimits,
 } from '@ontology/contracts'
 import { sha256DigestOf } from '@ontology/core'
 import { RecordingControlRepository, fixedClock, toolContext, RUN_A } from './component-registry-fixtures'
@@ -367,6 +370,8 @@ export class RecordingBudget implements BudgetLedgerPort {
 
 export interface WorkflowHarness {
   readonly controller: WorkflowController
+  /** Builds a second controller over the same stores, modelling a process restart. */
+  readonly newController: () => WorkflowController
   readonly service: RunService
   readonly store: InMemoryRunStore
   readonly budget: RecordingBudget
@@ -398,6 +403,8 @@ export function buildWorkflowHarness(options: {
   readonly verifier?: AnswerVerifierPort
   /** Wire the bounded question-rewriting pre-step into the actual controller run path. */
   readonly rewriter?: QuestionRewriter
+  /** Tighten the bounded workflow policy (e.g. a small `maxCollectionRounds`). */
+  readonly limits?: Partial<WorkflowLimits>
 }): WorkflowHarness {
   const probe = options.probe ?? options.runtime.probe
   const store = new InMemoryRunStore()
@@ -444,25 +451,29 @@ export function buildWorkflowHarness(options: {
       newId: () => randomUUID(),
     }),
   )
-  const controller = new WorkflowController({
-    runs: service,
-    phase,
-    budget,
-    manifests: workflowStore,
-    runtimes: selector,
-    capabilities,
-    draftWriter,
-    limited,
-    verifier,
-    verifications,
-    publisher,
-    validity,
-    ...(options.rewriter === undefined ? {} : { rewriter: options.rewriter }),
-    now: fixedClock(),
-    newId: () => randomUUID(),
-  })
+  const newController = (): WorkflowController =>
+    new WorkflowController({
+      runs: service,
+      phase,
+      budget,
+      manifests: workflowStore,
+      runtimes: selector,
+      capabilities,
+      draftWriter,
+      limited,
+      verifier,
+      verifications,
+      publisher,
+      validity,
+      ...(options.rewriter === undefined ? {} : { rewriter: options.rewriter }),
+      ...(options.limits === undefined ? {} : { limits: options.limits }),
+      now: fixedClock(),
+      newId: () => randomUUID(),
+    })
+  const controller = newController()
   return {
     controller,
+    newController,
     service,
     store,
     budget,
@@ -551,6 +562,14 @@ export function collectionCompleteEvent(runId: string, evidenceCount = 1): Runti
 
 export function cancelledEvent(runId: string, reason = 'runtime stopped'): RuntimeEvent {
   return { ...base(runId), type: 'cancelled', reason, abandonedAttempts: [] }
+}
+
+export function platformError(code: ErrorCode, message = `bounded stop: ${code}`): PlatformError {
+  return { code, message, retryable: false }
+}
+
+export function failedEvent(runId: string, error: PlatformError): RuntimeEvent {
+  return { ...base(runId), type: 'failed', error }
 }
 
 export function checkpointRef(

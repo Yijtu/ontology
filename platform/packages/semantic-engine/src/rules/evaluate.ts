@@ -1,8 +1,10 @@
+import { MAX_RULE_DEPENDENCY_DEPTH } from '@ontology/contracts'
 import type { DomainResultStatus, Sha256Digest } from '@ontology/contracts'
 import { sha256DigestOf } from '../definitions/canonical'
+import { evaluateFiniteCondition } from './boolean'
 import { RuleEvaluationError } from './errors'
 import { conclusionQualifiedKey, factQualifiedKey } from './proposition'
-import { assertSupportedFilter, evaluateFilter, isRuleDecimalValue } from './values'
+import { assertSupportedFilter, canonicalDecimalString, evaluateFilter, isRuleDecimalValue, isRuleScalarDecimalValue } from './values'
 import type {
   RuleAssertionValue,
   RuleConclusionResult,
@@ -12,6 +14,7 @@ import type {
   RuleFact,
   RuleFactRef,
   RuleApplicabilityResult,
+  RuleConditionPlan,
   RuleConditionState,
   RuleExceptionState,
   RulePremiseAlternative,
@@ -55,6 +58,7 @@ interface RuleOutcome {
 }
 
 interface EvaluationState {
+  readonly request: RuleEvaluationInput['request']
   readonly activeByLogical: ReadonlyMap<string, LogicalResolution>
   readonly factsById: ReadonlyMap<string, RuleFact>
   readonly conflictedAssertions: ReadonlySet<string>
@@ -66,6 +70,10 @@ interface EvaluationState {
 }
 
 const REFUTED_VALUE = false
+
+function logicalKey(fact: RuleFact): string {
+  return fact.projectId === undefined ? fact.logicalAssertionId : JSON.stringify([fact.projectId, fact.logicalAssertionId])
+}
 
 function covers(fact: RuleFact, validAt: string | undefined): boolean {
   if (validAt === undefined) return true
@@ -94,8 +102,9 @@ function resolveLogicalAssertions(
 ): Map<string, LogicalResolution> {
   const byLogical = new Map<string, RuleFact[]>()
   for (const fact of facts) {
-    const bucket = byLogical.get(fact.logicalAssertionId)
-    if (bucket === undefined) byLogical.set(fact.logicalAssertionId, [fact])
+    const key = logicalKey(fact)
+    const bucket = byLogical.get(key)
+    if (bucket === undefined) byLogical.set(key, [fact])
     else bucket.push(fact)
   }
   const asOf = asOfRecordedSeq === undefined ? undefined : Number(asOfRecordedSeq)
@@ -207,6 +216,8 @@ function factRefOf(fact: RuleFact): RuleFactRef {
       sourceStatementId: fact.sourceStatementId ?? null,
       sourceRefs: fact.sourceRefs ?? [],
       schemaRef: fact.schemaRef ?? null,
+      ...(fact.projectId === undefined ? {} : { projectId: fact.projectId }),
+      ...(fact.relation === undefined ? {} : { relation: fact.relation }),
     }),
     ...(fact.sourceStatementId === undefined ? {} : { sourceStatementId: fact.sourceStatementId }),
     ...(fact.sourceRefs === undefined ? {} : { sourceRefs: fact.sourceRefs }),
@@ -217,6 +228,7 @@ function validateRule(rule: SupportRule): void {
   if (rule.premiseGroups.length === 0) {
     throw new RuleEvaluationError('INVALID_RULE', `rule ${rule.ruleId} has no premise group`)
   }
+  if (rule.premiseGroups.filter((group) => group.relation !== undefined).length > 1) throw new RuleEvaluationError('INVALID_RULE', 'only one relation premise is supported')
   const groupIds = new Set<string>()
   for (const group of rule.premiseGroups) {
     if (groupIds.has(group.groupId)) {
@@ -239,6 +251,24 @@ function validateRule(rule: SupportRule): void {
     if (group.unitCode !== undefined && group.unitCode.length === 0) {
       throw new RuleEvaluationError('INVALID_RULE', `premise group ${group.groupId} has an empty unitCode`)
     }
+    if (group.relation !== undefined) {
+      if (group.polarity === 'negative') throw new RuleEvaluationError('UNSUPPORTED_NEGATION', 'relation premises cannot be negated')
+      const targetGroups = group.relation.targetGroups
+      if (targetGroups.some((target) => target.relation !== undefined || target.polarity === 'negative')) throw new RuleEvaluationError('INVALID_RULE', 'relation targets must use positive attribute conditions')
+      if (targetGroups.length > 0) validateRule({ ruleRef: rule.ruleRef, ruleId: `${rule.ruleId}:target`, premiseGroups: targetGroups, conclusion: rule.conclusion })
+      const targetIds = new Set(targetGroups.map((target) => target.groupId))
+      const targetKeys = new Set<string>()
+      for (const target of group.relation.targetConditions) {
+        if (targetKeys.has(target.targetKey)) throw new RuleEvaluationError('INVALID_RULE', 'relation repeats a target condition key')
+        targetKeys.add(target.targetKey)
+        const branchIds = new Set(target.groupIds)
+        if (branchIds.size !== target.groupIds.length || target.groupIds.some((id) => !targetIds.has(id))) throw new RuleEvaluationError('INVALID_RULE', 'relation condition references an unknown or repeated target group')
+        assertValidCondition({ ruleRef: rule.ruleRef, ruleId: `${rule.ruleId}:target`, premiseGroups: [], condition: target.condition, conclusion: rule.conclusion }, branchIds)
+      }
+      for (const branch of group.relation.branches) {
+        if (branch.targetKey !== undefined && !targetKeys.has(branch.targetKey)) throw new RuleEvaluationError('INVALID_RULE', 'relation edge references an unknown target condition')
+      }
+    }
     assertSupportedFilter(group.filter, `premise group ${group.groupId}`)
     const alternativeIds = new Set<string>()
     for (const alternative of group.alternatives) {
@@ -259,6 +289,38 @@ function validateRule(rule: SupportRule): void {
       }
     }
   }
+  assertValidCondition(rule, groupIds)
+}
+
+/** A condition tree must only reference declared groups and may not contain an empty AND/OR. */
+function assertValidCondition(rule: SupportRule, groupIds: ReadonlySet<string>): void {
+  const plan = rule.condition
+  if (plan === undefined) return
+  const visit = (node: RuleConditionPlan): void => {
+    switch (node.kind) {
+      case 'leaf':
+        if (!groupIds.has(node.leaf)) {
+          throw new RuleEvaluationError(
+            'INVALID_RULE',
+            `rule ${rule.ruleId} condition references unknown premise group ${node.leaf}`,
+          )
+        }
+        return
+      case 'all':
+        if (node.children.length === 0) {
+          throw new RuleEvaluationError('INVALID_RULE', `rule ${rule.ruleId} has an empty AND condition`)
+        }
+        for (const child of node.children) visit(child)
+        return
+      case 'any':
+        if (node.children.length === 0) {
+          throw new RuleEvaluationError('INVALID_RULE', `rule ${rule.ruleId} has an empty OR condition`)
+        }
+        for (const child of node.children) visit(child)
+        return
+    }
+  }
+  visit(plan)
 }
 
 /**
@@ -325,6 +387,26 @@ function topologicalOrder(rules: readonly SupportRule[]): SupportRule[] {
       `rule dependency cycle among: ${cycle.join(', ')}`,
     )
   }
+  // The finite ruleRef graph is bounded to MAX_RULE_DEPENDENCY_DEPTH edges. Because `ordered` is
+  // already topological, a single forward pass gives each rule's longest dependency chain: a rule
+  // that consumes only facts has depth 0 and every edge adds one level. An over-deep chain is a
+  // typed rejection, never a silent truncation or an unbounded fixpoint (SPEC §5.2/EX-4.1).
+  const depthByRule = new Map<string, number>()
+  for (const rule of ordered) {
+    let depth = 0
+    for (const dependency of dependencies.get(rule.ruleId) ?? []) {
+      depth = Math.max(depth, (depthByRule.get(dependency) ?? 0) + 1)
+    }
+    depthByRule.set(rule.ruleId, depth)
+  }
+  for (const [ruleId, depth] of depthByRule) {
+    if (depth > MAX_RULE_DEPENDENCY_DEPTH) {
+      throw new RuleEvaluationError(
+        'DEPENDENCY_DEPTH_EXCEEDED',
+        `rule ${ruleId} has a dependency chain of ${String(depth)} edges, more than the supported maximum of ${String(MAX_RULE_DEPENDENCY_DEPTH)}`,
+      )
+    }
+  }
   return ordered
 }
 
@@ -332,7 +414,7 @@ function evaluateAlternative(
   alternative: RulePremiseAlternative,
   group: RulePremiseGroup,
   state: EvaluationState,
-): { outcome: Outcome; value?: RuleAssertionValue; leaf?: SupportLeafNode; factRefs?: readonly RuleFactRef[] } {
+): { outcome: Outcome; value?: RuleAssertionValue; leaf?: SupportLeafNode; factRefs?: readonly RuleFactRef[]; withdrawn?: boolean } {
   if (alternative.assertionId !== undefined) {
     const fact = state.factsById.get(alternative.assertionId)
     if (fact === undefined) {
@@ -345,14 +427,14 @@ function evaluateAlternative(
       }
       return { outcome: 'unknown' }
     }
-    const resolution = state.activeByLogical.get(fact.logicalAssertionId)
+    const resolution = state.activeByLogical.get(logicalKey(fact))
     if (resolution?.reason === 'conflict' || state.conflictedAssertions.has(fact.assertionId)) {
       return {
         outcome: 'conflict',
         factRefs: (resolution?.conflicting ?? [fact]).map(factRefOf),
         leaf: {
           kind: 'fact',
-          nodeId: `fact:${fact.logicalAssertionId}`,
+          nodeId: `fact:${logicalKey(fact)}`,
           label: fact.logicalAssertionId,
           state: 'conflict',
         },
@@ -361,21 +443,21 @@ function evaluateAlternative(
     const active = resolution?.active
     if (active === undefined) {
       return resolution?.latest === undefined
-        ? { outcome: 'unknown' }
-        : { outcome: 'unknown', factRefs: [factRefOf(resolution.latest)] }
+        ? { outcome: 'unknown', ...(resolution === undefined ? {} : { withdrawn: true }) }
+        : { outcome: 'unknown', withdrawn: true, factRefs: [factRefOf(resolution.latest)] }
     }
     const value = active.value
     const factRefs = [factRefOf(active)]
     if (value === undefined) return { outcome: 'unknown', factRefs, leaf: {
       kind: 'fact',
-      nodeId: `fact:${active.logicalAssertionId}`,
+      nodeId: `fact:${logicalKey(active)}`,
       label: active.logicalAssertionId,
       state: 'unknown',
     } }
     const match = matchValue(group, value)
     const leaf: SupportLeafNode = {
       kind: 'fact',
-      nodeId: `fact:${active.logicalAssertionId}`,
+      nodeId: `fact:${logicalKey(active)}`,
       label: active.logicalAssertionId,
       state: match === undefined ? 'unknown' : match ? 'satisfied' : 'refuted',
       value,
@@ -391,12 +473,22 @@ function evaluateAlternative(
   const leaf: SupportLeafNode = {
     kind: 'fact',
     nodeId: `derived:${propositionKey}`,
+    upstreamConclusionNodeId: `conclusion:${propositionKey}`,
     label: propositionKey,
     state: combined.state,
     ...(combined.value === undefined ? {} : { value: combined.value }),
   }
-  if (combined.state === 'conflict') return { outcome: 'conflict', leaf }
-  if (combined.state === 'unknown' || combined.value === undefined) return { outcome: 'unknown', leaf }
+  if (combined.state === 'conflict') return { outcome: 'conflict', leaf, factRefs }
+  if (combined.state === 'unknown' || combined.value === undefined) return { outcome: 'unknown', leaf, factRefs }
+  // A derived business value must remain in its declared comparison domain; in particular a
+  // boolean observed through a string operand cannot manufacture `ne` support.
+  if ((typeof combined.value === 'boolean' || typeof combined.value === 'string') &&
+    (group.unitCode !== undefined || !['eq', 'ne', 'in', 'is_not_null'].includes(group.filter.op) || group.filter.values.some((value) => typeof value !== typeof combined.value))) {
+    return { outcome: 'unknown', leaf, factRefs }
+  }
+  if ((isRuleDecimalValue(combined.value) || isRuleScalarDecimalValue(combined.value)) &&
+    (isRuleDecimalValue(combined.value) && group.unitCode !== combined.value.unit || isRuleScalarDecimalValue(combined.value) && group.unitCode !== undefined ||
+      group.filter.values.some((value) => typeof value !== 'string' && typeof value !== 'number' || canonicalDecimalString(String(value)) === undefined))) return { outcome: 'unknown', leaf, factRefs }
   const match = matchValue(group, combined.value)
   const outcome: Outcome = match === undefined ? 'unknown' : match ? 'satisfied' : 'refuted'
   return { outcome, value: combined.value, leaf, factRefs }
@@ -443,7 +535,61 @@ function evaluateGroup(
   groupNode: SupportGroupNode
   leaves: SupportLeafNode[]
   factRefs: readonly RuleFactRef[]
+  nestedGroupNodes?: readonly SupportGroupNode[]
+  positiveFactRefs?: readonly RuleFactRef[]
 } {
+  if (group.relation !== undefined) {
+    const relation = group.relation
+    const conditions = new Map(relation.targetConditions.map((target) => [target.targetKey, target]))
+    const targetById = new Map(relation.targetGroups.map((target) => [target.groupId, target]))
+    const targetResults = new Map<string, ReturnType<typeof evaluateGroup>>()
+    const branchResults = relation.branches.map((branch) => {
+      const edge = evaluateAlternative(branch.edge, group, state)
+      const originalEdge = branch.edge.assertionId === undefined ? undefined : state.factsById.get(branch.edge.assertionId)
+      const activeEdge = originalEdge === undefined ? undefined : state.activeByLogical.get(logicalKey(originalEdge))?.active
+      const replaced = activeEdge !== undefined && originalEdge !== undefined &&
+        (activeEdge.subject !== originalEdge.subject || activeEdge.objectId !== originalEdge.objectId || activeEdge.relation?.targetEntityId !== originalEdge.relation?.targetEntityId)
+      const targetCondition = branch.targetKey === undefined ? undefined : conditions.get(branch.targetKey)
+      const targets = edge.outcome === 'satisfied' && branch.endpointResolved && !replaced ? (targetCondition?.groupIds ?? []).flatMap((groupId) => {
+        const target = targetById.get(groupId)
+        if (target === undefined) return []
+        let evaluated = targetResults.get(groupId)
+        if (evaluated === undefined) { evaluated = evaluateGroup(rule, target, state); targetResults.set(groupId, evaluated) }
+        return [evaluated]
+      }) : []
+      const targetStates = new Map(targets.map((target) => [target.groupNode.groupId, target.state]))
+      const targetOutcome = targetCondition === undefined ? 'satisfied' : planOutcome(targetCondition.condition, targetStates)
+      const outcome: Outcome = replaced ? 'refuted' : edge.outcome !== 'satisfied' ? edge.outcome : !branch.endpointResolved ? 'unknown' : targetOutcome
+      const supportingTargetIds = targetCondition === undefined ? [] : satisfiedGroupIdsOf(targetCondition.condition, targetStates)
+      return { outcome, edge, targets, condition: targetCondition?.condition, supportingTargetIds, alternativeId: branch.edge.alternativeId }
+    })
+    const complete = relation.completeness !== undefined && relation.completeness.validAt === state.request.validAt && relation.completeness.asOfRecordedSeq === state.request.asOfRecordedSeq
+    const outcomes = branchResults.map((branch) => branch.outcome)
+    const outcome: Outcome = outcomes.includes('conflict') ? 'conflict' : outcomes.includes('satisfied') ? 'satisfied' :
+      outcomes.includes('unknown') ? 'unknown' : outcomes.length > 0 || complete ? 'refuted' : 'unknown'
+    const evaluatedTargets = [...targetResults.values()]
+    const observed = [...branchResults.flatMap((branch) => branch.edge.factRefs ?? []), ...evaluatedTargets.flatMap((target) => target.factRefs)]
+    const leaves = [...branchResults.flatMap((branch) => branch.edge.leaf === undefined ? [] : [branch.edge.leaf]), ...evaluatedTargets.flatMap((target) => target.leaves)]
+    const supportingBranches = branchResults.filter((branch) => branch.outcome === 'satisfied')
+    const supportingTargets = new Set(supportingBranches.flatMap((branch) => branch.supportingTargetIds))
+    return {
+      state: outcome,
+      satisfiedAlternativeIds: branchResults.filter((branch) => branch.outcome === 'satisfied').map((branch) => branch.alternativeId).sort(),
+      groupNode: {
+        kind: 'group', nodeId: `group:${rule.ruleId}:${group.groupId}`, groupId: group.groupId, state: outcome,
+        alternativeNodeIds: [...new Set(branchResults.map((branch) => branch.edge.leaf?.nodeId ?? `fact:${branch.alternativeId}`))].sort(),
+        relationBranches: branchResults.map((branch) => ({
+          edgeNodeId: branch.edge.leaf?.nodeId ?? `fact:${branch.alternativeId}`, state: branch.outcome,
+          targetGroupNodeIds: branch.targets.map((target) => target.groupNode.nodeId),
+          ...(branch.condition === undefined ? {} : { targetCondition: branch.condition }),
+        })),
+      },
+      positiveFactRefs: dedupeFactRefs([...supportingBranches.flatMap((branch) => branch.edge.factRefs ?? []), ...evaluatedTargets.filter((target) => supportingTargets.has(target.groupNode.groupId)).flatMap((target) => target.factRefs)]),
+      nestedGroupNodes: evaluatedTargets.map((target) => target.groupNode),
+      leaves,
+      factRefs: dedupeFactRefs(observed),
+    }
+  }
   const polarity = group.polarity ?? 'positive'
   const leaves: SupportLeafNode[] = []
   const factRefs: RuleFactRef[] = []
@@ -453,12 +599,17 @@ function evaluateGroup(
   let anyRefuted = false
   let anyConflict = false
   let allRefuted = true
+  let observedAlternatives = 0
 
   for (const alternative of group.alternatives) {
     const evaluated = evaluateAlternative(alternative, group, state)
     factRefs.push(...(evaluated.factRefs ?? []))
     if (evaluated.leaf !== undefined) leaves.push(evaluated.leaf)
     alternativeNodeIds.push(evaluated.leaf?.nodeId ?? `fact:${alternative.assertionId ?? alternative.alternativeId}`)
+    // A withdrawn/out-of-range source is retained as provenance, but is not a live observation
+    // whose missing value defeats a surviving explicit false exception observation.
+    if (evaluated.withdrawn === true) continue
+    observedAlternatives += 1
     if (evaluated.outcome === 'satisfied') {
       anySatisfied = true
       satisfiedAlternativeIds.push(alternative.alternativeId)
@@ -472,7 +623,7 @@ function evaluateGroup(
   if (polarity === 'negative') {
     if (anyConflict) outcome = 'conflict'
     else if (anySatisfied) outcome = 'refuted'
-    else if (allRefuted) outcome = 'satisfied'
+    else if (allRefuted && observedAlternatives > 0) outcome = 'satisfied'
     else outcome = 'unknown'
   } else if (anyConflict) {
     outcome = 'conflict'
@@ -500,53 +651,132 @@ function evaluateGroup(
   }
 }
 
+function andOutcomes(states: readonly Outcome[]): Outcome {
+  if (states.includes('conflict')) return 'conflict'
+  if (states.includes('refuted')) return 'refuted'
+  if (states.includes('unknown')) return 'unknown'
+  return 'satisfied'
+}
+
+function outcomeOfConditionState(state: RuleConditionState): Outcome {
+  if (state === 'true') return 'satisfied'
+  if (state === 'false') return 'refuted'
+  return state
+}
+
+/** Evaluate a finite condition tree whose leaves are premise groups. */
+function planOutcome(plan: RuleConditionPlan, groupStates: ReadonlyMap<string, Outcome>): Outcome {
+  return outcomeOfConditionState(
+    evaluateFiniteCondition(plan, (groupId) => conditionStateOf(groupStates.get(groupId) ?? 'unknown')),
+  )
+}
+
+/**
+ * The group ids a satisfied condition tree actually rests on. For an OR only the branches that
+ * came out satisfied are kept, so support never claims a branch that is refuted or unknown.
+ */
+function satisfiedGroupIdsOf(plan: RuleConditionPlan, groupStates: ReadonlyMap<string, Outcome>): string[] {
+  const result: string[] = []
+  const visit = (node: RuleConditionPlan): void => {
+    switch (node.kind) {
+      case 'leaf':
+        if ((groupStates.get(node.leaf) ?? 'unknown') === 'satisfied') result.push(node.leaf)
+        return
+      case 'all':
+        if (planOutcome(node, groupStates) === 'satisfied') for (const child of node.children) visit(child)
+        return
+      case 'any':
+        for (const child of node.children) {
+          if (planOutcome(child, groupStates) === 'satisfied') visit(child)
+        }
+        return
+    }
+  }
+  visit(plan)
+  return result
+}
+
+/** Every group id referenced by a condition tree. */
+function conditionGroupIds(plan: RuleConditionPlan): Set<string> {
+  const ids = new Set<string>()
+  const visit = (node: RuleConditionPlan): void => {
+    switch (node.kind) {
+      case 'leaf':
+        ids.add(node.leaf)
+        return
+      case 'all':
+      case 'any':
+        for (const child of node.children) visit(child)
+        return
+    }
+  }
+  visit(plan)
+  return ids
+}
+
 function evaluateRule(rule: SupportRule, state: EvaluationState): RuleOutcome {
   const groupNodes: SupportGroupNode[] = []
   const leaves: SupportLeafNode[] = []
-  const satisfiedBy: RuleSatisfiedBy[] = []
   const factRefs: RuleFactRef[] = []
   const observedFactRefs: RuleFactRef[] = []
   const groupStates = new Map<string, Outcome>()
   const groupFactRefs = new Map<string, readonly RuleFactRef[]>()
-  let anyConflict = false
-  let anyRefuted = false
-  let anyUnknown = false
+  const groupPositiveFactRefs = new Map<string, readonly RuleFactRef[]>()
+  const satisfiedAlternatives = new Map<string, readonly string[]>()
 
   for (const group of rule.premiseGroups) {
     const evaluated = evaluateGroup(rule, group, state)
-    groupNodes.push(evaluated.groupNode)
+    groupNodes.push(evaluated.groupNode, ...(evaluated.nestedGroupNodes ?? []))
     leaves.push(...evaluated.leaves)
     groupStates.set(group.groupId, evaluated.state)
     groupFactRefs.set(group.groupId, evaluated.factRefs)
+    if (evaluated.positiveFactRefs !== undefined) groupPositiveFactRefs.set(group.groupId, evaluated.positiveFactRefs)
+    satisfiedAlternatives.set(group.groupId, evaluated.satisfiedAlternativeIds)
     observedFactRefs.push(...evaluated.factRefs)
-    if (evaluated.state === 'conflict') anyConflict = true
-    else if (evaluated.state === 'refuted') anyRefuted = true
-    else if (evaluated.state === 'unknown') anyUnknown = true
-    if (evaluated.state === 'satisfied') {
-      satisfiedBy.push({
-        groupId: group.groupId,
-        alternativeIds: evaluated.satisfiedAlternativeIds,
-      })
-      for (const alternative of group.alternatives) {
-        if (!evaluated.satisfiedAlternativeIds.includes(alternative.alternativeId)) continue
-        if (alternative.assertionId === undefined) continue
-        const fact = state.factsById.get(alternative.assertionId)
-        if (fact === undefined) continue
-        const active = state.activeByLogical.get(fact.logicalAssertionId)?.active
-        if (active !== undefined) factRefs.push(factRefOf(active))
-      }
+  }
+
+  // A rule is the AND of its condition tree and every premise group the tree does not reference
+  // (the explicit exceptions). `unknown`/`conflict` are never coerced to false.
+  const referenced = rule.condition === undefined ? undefined : conditionGroupIds(rule.condition)
+  const conditionOutcome: Outcome = rule.condition === undefined ? 'satisfied' : planOutcome(rule.condition, groupStates)
+  const otherGroups = rule.premiseGroups.filter((group) => referenced === undefined || !referenced.has(group.groupId))
+  const otherOutcomes = otherGroups.map((group) => groupStates.get(group.groupId) ?? 'unknown')
+  const outcome: Outcome = andOutcomes([conditionOutcome, ...otherOutcomes])
+
+  const satisfiedGroupIds =
+    outcome === 'satisfied'
+      ? [
+          ...(rule.condition === undefined ? [] : satisfiedGroupIdsOf(rule.condition, groupStates)),
+          ...otherGroups.filter((group) => groupStates.get(group.groupId) === 'satisfied').map((group) => group.groupId),
+        ]
+      : []
+  const uniqueSatisfiedGroupIds = [...new Set(satisfiedGroupIds)].sort()
+  const satisfiedBy: RuleSatisfiedBy[] = uniqueSatisfiedGroupIds.map((groupId) => ({
+    groupId,
+    alternativeIds: [...(satisfiedAlternatives.get(groupId) ?? [])].sort(),
+  }))
+  for (const groupId of uniqueSatisfiedGroupIds) {
+    const premise = rule.premiseGroups.find((group) => group.groupId === groupId)
+    if (premise === undefined) continue
+    const relationSupport = groupPositiveFactRefs.get(groupId)
+    if (relationSupport !== undefined) {
+      factRefs.push(...relationSupport)
+      continue
+    }
+    const satisfied = satisfiedAlternatives.get(groupId) ?? []
+    for (const alternative of premise.alternatives) {
+      if (!satisfied.includes(alternative.alternativeId)) continue
+      if (alternative.assertionId === undefined) continue
+      const fact = state.factsById.get(alternative.assertionId)
+      if (fact === undefined) continue
+      const active = state.activeByLogical.get(fact.logicalAssertionId)?.active
+      if (active !== undefined) factRefs.push(factRefOf(active))
     }
   }
 
-  let outcome: Outcome
-  if (anyConflict) outcome = 'conflict'
-  else if (anyRefuted) outcome = 'refuted'
-  else if (anyUnknown) outcome = 'unknown'
-  else outcome = 'satisfied'
-
   const result: RuleOutcome = {
     state: outcome,
-    satisfiedBy: satisfiedBy.sort((left, right) => left.groupId.localeCompare(right.groupId)),
+    satisfiedBy,
     factRefs: dedupeFactRefs(factRefs),
     groupNodes,
     leafNodes: dedupeLeaves(leaves),
@@ -714,9 +944,14 @@ function applicabilityFor(
     throw new RuleEvaluationError('INVALID_ARGUMENT', `published rule instance ${metadata.instanceKey} is not evaluated against its pinned definitionRef`)
   }
 
-  const conditionState = andConditionStates(
-    metadata.conditionGroupIds.map((groupId) => conditionStateOf(outcome.groupStates.get(groupId) ?? 'unknown')),
-  )
+  const conditionState =
+    rule.condition === undefined
+      ? andConditionStates(
+          metadata.conditionGroupIds.map((groupId) => conditionStateOf(outcome.groupStates.get(groupId) ?? 'unknown')),
+        )
+      : evaluateFiniteCondition(rule.condition, (groupId) =>
+          conditionStateOf(outcome.groupStates.get(groupId) ?? 'unknown'),
+        )
   const exceptionStates: RuleExceptionState[] = metadata.exceptions.map((exception) => {
     const states = exception.groupIds.map((groupId) =>
       negateConditionState(conditionStateOf(outcome.groupStates.get(groupId) ?? 'unknown')),
@@ -726,7 +961,7 @@ function applicabilityFor(
     return { exceptionId: exception.exceptionId, state, factRefs }
   })
   let state: RuleApplicabilityResult['state']
-  if (conditionState === 'false' || exceptionStates.some((exception) => exception.state === 'true')) {
+  if (!publishedRuleCovers(rule, input.request.validAt) || conditionState === 'false' || exceptionStates.some((exception) => exception.state === 'true')) {
     state = 'not_applicable'
   } else if (conditionState === 'conflict' || exceptionStates.some((exception) => exception.state === 'conflict')) {
     state = 'conflict'
@@ -772,8 +1007,17 @@ function applicabilityFor(
       factRefs,
     }),
     sourceSpans: metadata.sourceSpans,
+    ...(metadata.publishedPackRef === undefined ? {} : { publishedPackRef: metadata.publishedPackRef }),
+    ...(metadata.dependencyRefs === undefined ? {} : { dependencyRefs: metadata.dependencyRefs }),
+    ...(metadata.projectId === undefined ? {} : { projectId: metadata.projectId }),
     complete: input.complete ?? false,
   }
+}
+
+function publishedRuleCovers(rule: SupportRule, validAt: string | undefined): boolean {
+  if (validAt === undefined || rule.publishedInstance === undefined) return true
+  const at = Date.parse(validAt), from = rule.publishedInstance.validFrom, to = rule.publishedInstance.validTo
+  return (from === undefined || Date.parse(from) <= at) && (to === undefined || at < Date.parse(to))
 }
 
 function refutedPublishedOutcomeAsUnknown(outcome: RuleOutcome): RuleOutcome {
@@ -820,6 +1064,8 @@ export class RuleEvaluator {
     )
     const factsById = new Map<string, RuleFact>()
     for (const fact of input.facts) {
+      const existing = factsById.get(fact.assertionId)
+      if (existing !== undefined && existing.projectId !== fact.projectId) throw new RuleEvaluationError('INVALID_ARGUMENT', `assertionId ${fact.assertionId} is ambiguous across project scopes`)
       if (!factsById.has(fact.assertionId)) factsById.set(fact.assertionId, fact)
     }
     const conflicts = detectConflicts(activeByLogical, input.scopeRef)
@@ -827,6 +1073,7 @@ export class RuleEvaluator {
     const conflictedAssertions = new Set(conflicts.flatMap((conflict) => conflict.assertionIds))
 
     const state: EvaluationState = {
+      request: input.request,
       activeByLogical,
       factsById,
       conflictedAssertions,
@@ -841,7 +1088,8 @@ export class RuleEvaluator {
     const inputDigest = sha256DigestOf(canonicalInput(input))
     const applicabilities: RuleApplicabilityResult[] = []
     for (const rule of orderedRules) {
-      const outcome = evaluateRule(rule, state)
+      const evaluated = evaluateRule(rule, state)
+      const outcome: RuleOutcome = publishedRuleCovers(rule, input.request.validAt) ? evaluated : { ...evaluated, state: 'refuted', value: false }
       const applicability = applicabilityFor(rule, outcome, input, inputDigest)
       if (applicability !== undefined && rule.publishedInstance?.emitApplicabilityArtifact !== false) {
         applicabilities.push(applicability)
@@ -854,7 +1102,7 @@ export class RuleEvaluator {
         ruleId: rule.publishedInstance?.ruleId ?? rule.ruleId,
         ruleRef: rule.ruleRef,
         state: outcome.state,
-        groupNodeIds: outcome.groupNodes.map((group) => group.nodeId).sort(),
+        groupNodeIds: outcome.groupNodes.filter((group) => rule.premiseGroups.some((premise) => premise.groupId === group.groupId)).map((group) => group.nodeId).sort(),
       })
       const propositionOutcome =
         rule.publishedInstance !== undefined && outcome.state === 'refuted'
@@ -874,7 +1122,14 @@ export class RuleEvaluator {
       const rule = orderedRules.find((candidate) => candidate.conclusion.propositionKey === propositionKey)
       if (rule === undefined) continue
       const predicate = rule.conclusion.predicate ?? propositionKey
-      const combined = combineConclusion(outcomes, conflictedPredicates.has(predicate))
+      const instance = rule.publishedInstance
+      const scopedPredicateConflict = instance === undefined ? conflictedPredicates.has(predicate) : conflicts.some((conflict) =>
+        conflict.propositionKey === predicate && conflict.assertionIds.some((id) => {
+          const fact = factsById.get(id)
+          return fact?.subject === instance.subjectEntityId && fact.objectId === instance.objectId && fact.schemaRef?.id === instance.definitionRef.id &&
+            fact.schemaRef.version === instance.definitionRef.version && fact.schemaRef.digest === instance.definitionRef.digest && fact.projectId === instance.projectId
+        }))
+      const combined = combineConclusion(outcomes, scopedPredicateConflict)
       const supportNodeId = `conclusion:${propositionKey}`
       const ruleRefs = dedupeVersionRefs(
         orderedRules
@@ -993,7 +1248,7 @@ function buildGaps(
   }
   const referencedLogical = new Set<string>()
   for (const fact of input.facts) {
-    if (referencedAssertions.has(fact.assertionId)) referencedLogical.add(fact.logicalAssertionId)
+    if (referencedAssertions.has(fact.assertionId)) referencedLogical.add(logicalKey(fact))
   }
   for (const [logicalId, resolution] of activeByLogical) {
     if (

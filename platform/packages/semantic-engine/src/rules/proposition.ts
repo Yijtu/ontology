@@ -9,6 +9,7 @@ import { unitOf } from './values'
  * are distinct and must never be merged into one another.
  */
 export interface PropositionQualifiers {
+  readonly projectId?: string
   readonly predicate: string
   /** Stable rule/entity-qualified conclusion identity, when the caller already has one. */
   readonly propositionKey?: string
@@ -33,6 +34,7 @@ export function qualifiedPropositionKey(qualifiers: PropositionQualifiers): Sha2
     validTo: qualifiers.validTo ?? null,
     tenantId: qualifiers.scopeRef.tenantId,
     spaceId: qualifiers.scopeRef.spaceId,
+    ...(qualifiers.projectId === undefined ? {} : { projectId: qualifiers.projectId }),
   })
 }
 
@@ -42,6 +44,7 @@ export function factQualifiedKey(fact: RuleFact, scopeRef: ScopeRef): Sha256Dige
   return qualifiedPropositionKey({
     predicate: fact.predicate,
     subject: fact.subject,
+    ...(fact.projectId === undefined ? {} : { projectId: fact.projectId }),
     ...(fact.objectId === undefined ? {} : { objectId: fact.objectId }),
     ...(fact.schemaRef === undefined ? {} : { schemaRef: fact.schemaRef }),
     ...(unitCode === undefined ? {} : { unitCode }),

@@ -251,6 +251,7 @@ function tableOutcome(
   const payload: DataQueryOutput = {
     resultKind: 'table',
     table: { columns: [...response.columns], rows: [...response.rows] },
+    coverage: response.coverage,
   }
   return {
     payload,
@@ -574,6 +575,7 @@ export class DataQueryHandler implements ToolHandler {
     const payload: DataQueryOutput = {
       resultKind: 'table',
       table: { columns, rows },
+      coverage,
     }
     return {
       payload,

@@ -51,6 +51,15 @@ export class InMemorySemanticDefinitionStore implements SemanticDefinitionStore 
   readonly #versions = new Map<string, StoredVersion>()
   readonly #bindings = new Map<string, DefinitionBinding>()
 
+  async findVersionByRef(scopeRef: ScopeRef, ref: import('@ontology/contracts').VersionRef, ctx: ToolContext): Promise<SemanticDefinitionVersion | undefined> {
+    resolveStoreScope(scopeRef, ctx)
+    const prefix = scopePrefix(scopeRef)
+    const matching = [...this.#versions].filter(([key, stored]) => key.startsWith(prefix) && stored.version.ref.id === ref.id && stored.version.ref.version === ref.version && stored.version.ref.digest === ref.digest)
+    if (matching.length > 1) throw new SemanticDefinitionStoreError('VERSION_EXISTS', 'the exact immutable definition reference is ambiguous')
+    const row = matching[0]
+    return row === undefined ? undefined : structuredClone(row[1].version)
+  }
+
   async findVersion(
     namespace: string,
     definitionId: string,

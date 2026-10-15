@@ -4,6 +4,7 @@ import { BudgetService, InMemoryBudgetLedgerStore, sha256DigestOf } from '@ontol
 import type {
   BudgetLedgerPort,
   ConfirmedContext,
+  DecisionPort,
   GenerationEvent,
   GenerationPort,
   GenerationRequest,
@@ -23,10 +24,16 @@ import { RecordingControlRepository } from './component-registry-fixtures'
 import {
   CountingCompiler,
   PLANNING_RUN,
+  fixedPlan,
   multiHopPlanJson,
 } from './workflow-planning-fixtures'
 
-const CTX = gatewayContext({ runId: PLANNING_RUN })
+function planningContext() {
+  return gatewayContext({
+    runId: PLANNING_RUN,
+    deadline: new Date(Date.now() + 60_000).toISOString(),
+  })
+}
 const CONTEXT: ConfirmedContext = { timeZone: 'Asia/Shanghai', siteRef: 'site-demo-a' }
 const PREFERENCES: RunPreferences = { route: 'auto', allowWeb: false }
 const MODEL_REF = { modelId: 'rewrite-model', version: '1.0.0' }
@@ -50,6 +57,10 @@ function clarifyText(reason: string): GenerationEvent {
 
 function completed(): GenerationEvent {
   return { type: 'completed', stopReason: 'stop', candidateOnly: true }
+}
+
+function completedToolCall(): GenerationEvent {
+  return { type: 'completed', stopReason: 'tool_calls', candidateOnly: true }
 }
 
 function modelUnavailable(): GenerationEvent {
@@ -173,7 +184,7 @@ describe('question rewriting before SQL generation', () => {
           toolId: 'data_query',
           argumentsDelta: multiHopPlanJson(),
         },
-        completed(),
+        completedToolCall(),
       ],
     ])
     const rewriter = new BoundedQuestionRewriter({ generation, modelRef: MODEL_REF })
@@ -184,7 +195,7 @@ describe('question rewriting before SQL generation', () => {
       rewriter,
     })
 
-    const decision = await planner.route(request(), CTX)
+    const decision = await planner.route(request(), planningContext())
 
     expect(decision.route).toBe('small_plan')
     expect(decision.plan?.singleQuery).toBe(true)
@@ -198,7 +209,18 @@ describe('question rewriting before SQL generation', () => {
   })
 
   it('records a replayable original -> rewrite trace on the decision', async () => {
-    const generation = new ScriptedGeneration([[rewriteText(REWRITTEN), completed()]])
+    const generation = new ScriptedGeneration([
+      [rewriteText(REWRITTEN), completed()],
+      [
+        {
+          type: 'tool_call_delta',
+          callId: randomUUID(),
+          toolId: 'data_query',
+          argumentsDelta: multiHopPlanJson(),
+        },
+        completedToolCall(),
+      ],
+    ])
     const rewriter = new BoundedQuestionRewriter({ generation, modelRef: MODEL_REF })
     const planner = new RunPlanner({
       vocabulary: PLANNER_VOCABULARY,
@@ -207,7 +229,7 @@ describe('question rewriting before SQL generation', () => {
       rewriter,
     })
 
-    const decision = await planner.route(request(), CTX)
+    const decision = await planner.route(request(), planningContext())
     const rewrite = decision.rewrite
 
     expect(rewrite).toBeDefined()
@@ -222,6 +244,51 @@ describe('question rewriting before SQL generation', () => {
     expect(rewrite?.rewriteId.length).toBeGreaterThan(0)
   })
 
+  it('keeps fixed plans and deterministic ambiguity model-free even when a rewriter is configured', async () => {
+    const generation = new ScriptedGeneration([])
+    let rewriteCalls = 0
+    let decisionCalls = 0
+    const rewriter = {
+      async rewrite() {
+        rewriteCalls += 1
+        return {
+          status: 'failed' as const,
+          error: { code: 'MODEL_UNAVAILABLE' as const, message: 'unexpected rewrite', retryable: true },
+        }
+      },
+    }
+    const decision: DecisionPort = {
+      async decide() {
+        decisionCalls += 1
+        throw new Error('fixed route must not call JEV')
+      },
+    }
+    const planner = new RunPlanner({
+      vocabulary: PLANNER_VOCABULARY,
+      compiler: new CountingCompiler(),
+      generation,
+      decision,
+      decisionModelRef: MODEL_REF,
+      rewriter,
+    })
+
+    const fixed = await planner.route({
+      ...request(),
+      fixedPlan: fixedPlan(),
+      signals: { routeAmbiguous: true },
+    }, planningContext())
+    const ambiguous = await planner.route({
+      ...request(),
+      signals: { ambiguous: true, ambiguityReason: 'site is not specified' },
+    }, planningContext())
+
+    expect(fixed.route).toBe('fixed_path')
+    expect(ambiguous.route).toBe('clarify')
+    expect(rewriteCalls).toBe(0)
+    expect(decisionCalls).toBe(0)
+    expect(generation.calls).toHaveLength(0)
+  })
+
   it('clarifies an ambiguous question without guessing a value or proposing SQL', async () => {
     const generation = new ScriptedGeneration([
       [clarifyText('the billing period is not specified'), completed()],
@@ -234,7 +301,7 @@ describe('question rewriting before SQL generation', () => {
       rewriter,
     })
 
-    const decision = await planner.route(request('compare the energy strategies'), CTX)
+    const decision = await planner.route(request('compare the energy strategies'), planningContext())
 
     expect(decision.route).toBe('clarify')
     expect(decision.clarification?.prompt).toContain('billing period')
@@ -254,7 +321,7 @@ describe('question rewriting before SQL generation', () => {
       rewriter,
     })
 
-    await expect(planner.route(request(), CTX)).rejects.toMatchObject({ code: 'MODEL_UNAVAILABLE' })
+    await expect(planner.route(request(), planningContext())).rejects.toMatchObject({ code: 'MODEL_UNAVAILABLE' })
     // The original question is never passed through as if it had been rewritten.
     expect(generation.calls).toHaveLength(1)
   })
@@ -272,7 +339,7 @@ describe('question rewriting before SQL generation', () => {
       rewriter,
     })
 
-    await expect(planner.route(request(), CTX)).rejects.toMatchObject({ code: 'INVALID_SCHEMA' })
+    await expect(planner.route(request(), planningContext())).rejects.toMatchObject({ code: 'INVALID_SCHEMA' })
     // Bounded retries: exactly the configured attempts, then an explicit failure.
     expect(generation.calls).toHaveLength(2)
   })
@@ -287,7 +354,7 @@ describe('question rewriting before SQL generation', () => {
     const ledgerId = randomUUID()
     await budget.openLedger(
       { ledgerId, kind: 'run', runId: PLANNING_RUN, overrideLimits: { maxModelTokens: 4096 } },
-      CTX,
+      planningContext(),
     )
     const generation = new BudgetedGeneration(budget, ledgerId, [
       [{ type: 'text_delta', text: 'malformed' }, completed()],
@@ -299,7 +366,7 @@ describe('question rewriting before SQL generation', () => {
           toolId: 'data_query',
           argumentsDelta: multiHopPlanJson(),
         },
-        completed(),
+        completedToolCall(),
       ],
     ])
     const rewriter = new BoundedQuestionRewriter({ generation, modelRef: MODEL_REF, maxAttempts: 2 })
@@ -310,7 +377,7 @@ describe('question rewriting before SQL generation', () => {
       rewriter,
     })
 
-    const decision = await planner.route(request(), CTX)
+    const decision = await planner.route(request(), planningContext())
 
     expect(decision.route).toBe('small_plan')
     // rewrite (malformed), rewrite retry, SQL proposal: three calls on the same ledger.
@@ -330,7 +397,7 @@ describe('question rewriting before SQL generation', () => {
           toolId: 'data_query',
           argumentsDelta: multiHopPlanJson(),
         },
-        completed(),
+        completedToolCall(),
       ],
     ])
     const planner = new RunPlanner({
@@ -339,7 +406,7 @@ describe('question rewriting before SQL generation', () => {
       generation,
     })
 
-    const decision = await planner.route(request(), CTX)
+    const decision = await planner.route(request(), planningContext())
 
     expect(decision.route).toBe('small_plan')
     expect(decision.rewrite).toBeUndefined()

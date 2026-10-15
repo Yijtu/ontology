@@ -22,6 +22,8 @@ export {
   SUPPORTED_DATA_TYPES,
 } from './mapping'
 export type { BusinessObjectMapping, MappedColumn } from './mapping'
+export { POSTGRES_PROJECT_DATASET_BACKEND, PostgresProjectDatasetAdapter } from './project-dataset'
+export type { PostgresProjectDatasetConfig } from './project-dataset'
 export { validateReadOnlySql } from './sql-validator'
 export type {
   SqlValidationAccepted,

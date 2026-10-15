@@ -9,6 +9,7 @@ import type {
   RunEventInput,
   RunEventRecord,
   RunInsertResult,
+  ResourceRef,
   RunPreferences,
   RunRecord,
   RunState,
@@ -49,6 +50,7 @@ interface RunRow extends QueryResultRow {
   cancelled_at: Date | null
   pending_clarification_id: string | null
   question_rewrite: QuestionRewrite | null
+  execution_binding_ref: ResourceRef | null
   created_at: Date
   updated_at: Date
 }
@@ -116,6 +118,7 @@ function toRunRecord(row: RunRow): RunRecord {
       ? {}
       : { pendingClarificationId: row.pending_clarification_id }),
     ...(row.question_rewrite === null ? {} : { questionRewrite: row.question_rewrite }),
+    ...(row.execution_binding_ref === null ? {} : { executionBindingRef: row.execution_binding_ref }),
   }
 }
 
@@ -144,7 +147,8 @@ function toCheckpointRef(runId: string, row: CheckpointRefRow): RuntimeCheckpoin
 
 const RUN_COLUMNS = `run_id, owner_subject_id, profile_id, profile_version, resolved_profile_hash,
   runtime_ref, question, context, preferences, state, revision, idempotency_key, request_digest,
-  cancel_reason, cancelled_at, pending_clarification_id, question_rewrite, created_at, updated_at`
+  cancel_reason, cancelled_at, pending_clarification_id, question_rewrite, execution_binding_ref,
+  created_at, updated_at`
 
 /**
  * Real PostgreSQL implementation of the run store (C6/D7).
@@ -192,12 +196,12 @@ export class PostgresRunStore implements RunStore {
         `INSERT INTO agent_platform.runs
            (tenant_id, space_id, run_id, owner_subject_id, profile_id, profile_version,
             resolved_profile_hash, runtime_ref, question, context, preferences, state, revision,
-            idempotency_key, request_digest, created_at, updated_at)
+            idempotency_key, request_digest, execution_binding_ref, created_at, updated_at)
          VALUES (
            current_setting('app.tenant_id')::uuid,
            current_setting('app.space_id')::uuid,
            $1, $2, $3, $4, $5, $6::jsonb, $7, $8::jsonb, $9::jsonb, 'created', 1, $10, $11,
-           $12::timestamptz, $12::timestamptz
+           $13::jsonb, $12::timestamptz, $12::timestamptz
          )
          ON CONFLICT (tenant_id, space_id, idempotency_key) DO NOTHING
          RETURNING ${RUN_COLUMNS}`,
@@ -214,6 +218,7 @@ export class PostgresRunStore implements RunStore {
           record.idempotencyKey,
           record.requestDigest,
           record.createdAt,
+          record.executionBindingRef === undefined ? null : JSON.stringify(record.executionBindingRef),
         ],
       )
       const row = inserted.rows[0]

@@ -1,0 +1,22 @@
+{
+  "schemaVersion": "compute-build-artifact@1",
+  "format": "esm-bundle",
+  "target": "es2023",
+  "bundleDigest": "sha256:4b800f1b2f7a9c0071cdfc23b1482964f5ab96b36d1c957ffee89c6bfb7300a3",
+  "byteLength": 4079,
+  "dependencies": [
+    {
+      "sourceId": "packages/tool-services/src/compute/errors.ts",
+      "digest": "sha256:8ed718e4b2094a4e0ff227f9e99aecfd03bfb32d759a5c903011aed3124f0b34"
+    },
+    {
+      "sourceId": "packages/tool-services/src/compute/example-aggregation.ts",
+      "digest": "sha256:eb1c858f6f389af6e6c31808cfd4c52307f77d57b2696a2b8d4dd47232547939"
+    },
+    {
+      "sourceId": "packages/tool-services/src/compute/example-handler.ts",
+      "digest": "sha256:ece7c38bbe8d21d89a4a5809b5ad93b5bf3d656df2e4f45023f010a1a30b54a6"
+    }
+  ],
+  "handlerDigest": "sha256:01a19522bff1ea55e90a915174f529db6b0c39376139093fa05bf09948028521"
+}

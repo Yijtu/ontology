@@ -1,0 +1,2026 @@
+{
+  "ref": {
+    "id": "cq.transport.set",
+    "version": "1.1.0",
+    "digest": "sha256:d9e3977e8234f32a8896c7273dac1612e01166504e2b61c28238c9d68df7e85f"
+  },
+  "body": {
+    "schemaVersion": "competency-questions@1",
+    "classification": "synthetic_demo_not_an_industry_standard",
+    "execution": "not_run",
+    "industryId": "transport-synthetic",
+    "definitionRefs": [
+      {
+        "id": "cq.transport.definition",
+        "version": "1.0.0",
+        "digest": "sha256:f3c53c29d2c47ca81ab4393123576b33e4dc839c4c88617e9a4e7136dcb4bfc5"
+      }
+    ],
+    "ruleRefs": [
+      {
+        "id": "cq.transport.rule.inspection",
+        "version": "1.0.0",
+        "digest": "sha256:f610b7b144445b2745427d459083b7ac955d56ff21d2d5ee065a026f0fc2ca4e"
+      },
+      {
+        "id": "cq.transport.rule.district-watch",
+        "version": "1.0.0",
+        "digest": "sha256:e28d618a14ab6018abf16b555d184386b8f83e17bcdb548c5c1310bc6117ebdb"
+      }
+    ],
+    "sourceRefs": [
+      {
+        "id": "cq.transport.source",
+        "version": "1.0.0",
+        "digest": "sha256:0fa4b942c039c2afd5338cb2229262c2c036b5ba1af252a2d5c14a201f8baa37"
+      },
+      {
+        "id": "cq.transport.rows.source",
+        "version": "1.0.0",
+        "digest": "sha256:9e6c66ea6be52dea843669a49f21e069843c731a9f585778d8795f3120dbc1ca"
+      },
+      {
+        "id": "cq.transport.alternative.source",
+        "version": "1.0.0",
+        "digest": "sha256:23aff7344ed5ca5c8749336e9a5664ceb889877c2aadd472db20f7c8930f31b5"
+      },
+      {
+        "id": "cq.transport.exception.source",
+        "version": "1.0.0",
+        "digest": "sha256:5352580f46242b0b99e9992b221292877c2416e73edb54ca21850bd34773bdd9"
+      },
+      {
+        "id": "cq.transport.wrong-unit.source",
+        "version": "1.0.0",
+        "digest": "sha256:9e33e9746f2a46f12959e755531c29e497231e32928865a8637a3f3c3ff5054f"
+      },
+      {
+        "id": "cq.transport.district.source",
+        "version": "1.0.0",
+        "digest": "sha256:e2c1c7c90390ea8c57a730b8412100b1d1aef56458a02e09c3b5a3ff63293b18"
+      },
+      {
+        "id": "cq.transport.compute-input.source",
+        "version": "1.0.0",
+        "digest": "sha256:b47923f98920e020fc5263cd4aa38b201072c3b44c07db0fff3b0358e613f391"
+      }
+    ],
+    "allowedCapabilities": [
+      "semantic_read",
+      "relation_read",
+      "rule_evaluation",
+      "registered_compute",
+      "structured_query"
+    ],
+    "questions": [
+      {
+        "questionId": "transport-attribute",
+        "question": "F-01 的长度是多少？",
+        "taskKind": "published_facts",
+        "definitionRef": {
+          "id": "cq.transport.definition",
+          "version": "1.0.0",
+          "digest": "sha256:f3c53c29d2c47ca81ab4393123576b33e4dc839c4c88617e9a4e7136dcb4bfc5"
+        },
+        "ruleRefs": [],
+        "input": {
+          "dataMode": "synthetic",
+          "scopeRef": {
+            "tenantId": "11111111-1111-4111-8111-111111111111",
+            "spaceId": "aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa"
+          },
+          "projectId": "33333333-3333-4333-8333-333333333333",
+          "validAt": "2026-10-08T00:00:00Z",
+          "asOfRecordedSeq": "1",
+          "observations": [
+            {
+              "factId": "F-01-facility_code",
+              "entityId": "F-01",
+              "objectId": "facility",
+              "attributeId": "facility_code",
+              "value": "F-01",
+              "recordedSeq": "1",
+              "status": "active",
+              "source": {
+                "sourceRef": {
+                  "id": "cq.transport.rows.source",
+                  "version": "1.0.0",
+                  "digest": "sha256:9e6c66ea6be52dea843669a49f21e069843c731a9f585778d8795f3120dbc1ca"
+                },
+                "startOffset": 49,
+                "endOffset": 73,
+                "quoteDigest": "sha256:fa43adac88dcec98257b42669007c5552e99ec8c09108b28012859fd0bd24d01",
+                "offsetUnit": "utf8_byte"
+              }
+            },
+            {
+              "factId": "F-01-length",
+              "entityId": "F-01",
+              "objectId": "facility",
+              "attributeId": "length",
+              "value": {
+                "amount": "12.5",
+                "unit": "m"
+              },
+              "recordedSeq": "1",
+              "status": "active",
+              "source": {
+                "sourceRef": {
+                  "id": "cq.transport.rows.source",
+                  "version": "1.0.0",
+                  "digest": "sha256:9e6c66ea6be52dea843669a49f21e069843c731a9f585778d8795f3120dbc1ca"
+                },
+                "startOffset": 49,
+                "endOffset": 73,
+                "quoteDigest": "sha256:fa43adac88dcec98257b42669007c5552e99ec8c09108b28012859fd0bd24d01",
+                "offsetUnit": "utf8_byte"
+              }
+            }
+          ],
+          "relations": [],
+          "structuredSources": [
+            {
+              "sourceRef": {
+                "id": "cq.transport.rows.source",
+                "version": "1.0.0",
+                "digest": "sha256:9e6c66ea6be52dea843669a49f21e069843c731a9f585778d8795f3120dbc1ca"
+              },
+              "objectId": "facility",
+              "attributeIds": [
+                "facility_code",
+                "length"
+              ]
+            }
+          ]
+        },
+        "intent": {
+          "projectId": "33333333-3333-4333-8333-333333333333",
+          "kind": "attribute",
+          "objectId": "facility",
+          "subjectEntityId": "F-01",
+          "attributeId": "length"
+        },
+        "requiredCapabilities": [
+          "semantic_read"
+        ],
+        "requiredSources": [
+          {
+            "sourceRef": {
+              "id": "cq.transport.rows.source",
+              "version": "1.0.0",
+              "digest": "sha256:9e6c66ea6be52dea843669a49f21e069843c731a9f585778d8795f3120dbc1ca"
+            },
+            "startOffset": 49,
+            "endOffset": 73,
+            "quoteDigest": "sha256:fa43adac88dcec98257b42669007c5552e99ec8c09108b28012859fd0bd24d01",
+            "offsetUnit": "utf8_byte"
+          }
+        ],
+        "expected": {
+          "kind": "value",
+          "value": {
+            "amount": "12.5",
+            "unit": "m"
+          }
+        },
+        "goldOrigin": "authored_oracle",
+        "derivation": "原始合成行明确写12.5 m；读取单项不涉及推断或单位变换。",
+        "specRefs": [
+          "tasks/spec-v0.3a/execution-evidence.md#EX-11"
+        ]
+      },
+      {
+        "questionId": "transport-sum",
+        "question": "F-01 与 F-02 的总长度是多少？",
+        "taskKind": "structured_query",
+        "definitionRef": {
+          "id": "cq.transport.definition",
+          "version": "1.0.0",
+          "digest": "sha256:f3c53c29d2c47ca81ab4393123576b33e4dc839c4c88617e9a4e7136dcb4bfc5"
+        },
+        "ruleRefs": [],
+        "input": {
+          "dataMode": "synthetic",
+          "scopeRef": {
+            "tenantId": "11111111-1111-4111-8111-111111111111",
+            "spaceId": "aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa"
+          },
+          "projectId": "33333333-3333-4333-8333-333333333333",
+          "validAt": "2026-10-08T00:00:00Z",
+          "asOfRecordedSeq": "1",
+          "observations": [
+            {
+              "factId": "F-01-facility_code",
+              "entityId": "F-01",
+              "objectId": "facility",
+              "attributeId": "facility_code",
+              "value": "F-01",
+              "recordedSeq": "1",
+              "status": "active",
+              "source": {
+                "sourceRef": {
+                  "id": "cq.transport.rows.source",
+                  "version": "1.0.0",
+                  "digest": "sha256:9e6c66ea6be52dea843669a49f21e069843c731a9f585778d8795f3120dbc1ca"
+                },
+                "startOffset": 49,
+                "endOffset": 73,
+                "quoteDigest": "sha256:fa43adac88dcec98257b42669007c5552e99ec8c09108b28012859fd0bd24d01",
+                "offsetUnit": "utf8_byte"
+              }
+            },
+            {
+              "factId": "F-01-length",
+              "entityId": "F-01",
+              "objectId": "facility",
+              "attributeId": "length",
+              "value": {
+                "amount": "12.5",
+                "unit": "m"
+              },
+              "recordedSeq": "1",
+              "status": "active",
+              "source": {
+                "sourceRef": {
+                  "id": "cq.transport.rows.source",
+                  "version": "1.0.0",
+                  "digest": "sha256:9e6c66ea6be52dea843669a49f21e069843c731a9f585778d8795f3120dbc1ca"
+                },
+                "startOffset": 49,
+                "endOffset": 73,
+                "quoteDigest": "sha256:fa43adac88dcec98257b42669007c5552e99ec8c09108b28012859fd0bd24d01",
+                "offsetUnit": "utf8_byte"
+              }
+            },
+            {
+              "factId": "F-02-facility_code",
+              "entityId": "F-02",
+              "objectId": "facility",
+              "attributeId": "facility_code",
+              "value": "F-02",
+              "recordedSeq": "1",
+              "status": "active",
+              "source": {
+                "sourceRef": {
+                  "id": "cq.transport.rows.source",
+                  "version": "1.0.0",
+                  "digest": "sha256:9e6c66ea6be52dea843669a49f21e069843c731a9f585778d8795f3120dbc1ca"
+                },
+                "startOffset": 74,
+                "endOffset": 94,
+                "quoteDigest": "sha256:34f25f99e6881439ad0ad49aaeddfdfa60f234d0584cc4dbc8cc8b08bb39e869",
+                "offsetUnit": "utf8_byte"
+              }
+            },
+            {
+              "factId": "F-02-length",
+              "entityId": "F-02",
+              "objectId": "facility",
+              "attributeId": "length",
+              "value": {
+                "amount": "5.0",
+                "unit": "m"
+              },
+              "recordedSeq": "1",
+              "status": "active",
+              "source": {
+                "sourceRef": {
+                  "id": "cq.transport.rows.source",
+                  "version": "1.0.0",
+                  "digest": "sha256:9e6c66ea6be52dea843669a49f21e069843c731a9f585778d8795f3120dbc1ca"
+                },
+                "startOffset": 74,
+                "endOffset": 94,
+                "quoteDigest": "sha256:34f25f99e6881439ad0ad49aaeddfdfa60f234d0584cc4dbc8cc8b08bb39e869",
+                "offsetUnit": "utf8_byte"
+              }
+            }
+          ],
+          "relations": [],
+          "structuredSources": [
+            {
+              "sourceRef": {
+                "id": "cq.transport.rows.source",
+                "version": "1.0.0",
+                "digest": "sha256:9e6c66ea6be52dea843669a49f21e069843c731a9f585778d8795f3120dbc1ca"
+              },
+              "objectId": "facility",
+              "attributeIds": [
+                "facility_code",
+                "length"
+              ]
+            }
+          ]
+        },
+        "intent": {
+          "projectId": "33333333-3333-4333-8333-333333333333",
+          "kind": "quantity_sum",
+          "objectId": "facility",
+          "attributeId": "length"
+        },
+        "requiredCapabilities": [
+          "semantic_read",
+          "structured_query"
+        ],
+        "requiredSources": [
+          {
+            "sourceRef": {
+              "id": "cq.transport.rows.source",
+              "version": "1.0.0",
+              "digest": "sha256:9e6c66ea6be52dea843669a49f21e069843c731a9f585778d8795f3120dbc1ca"
+            },
+            "startOffset": 49,
+            "endOffset": 73,
+            "quoteDigest": "sha256:fa43adac88dcec98257b42669007c5552e99ec8c09108b28012859fd0bd24d01",
+            "offsetUnit": "utf8_byte"
+          },
+          {
+            "sourceRef": {
+              "id": "cq.transport.rows.source",
+              "version": "1.0.0",
+              "digest": "sha256:9e6c66ea6be52dea843669a49f21e069843c731a9f585778d8795f3120dbc1ca"
+            },
+            "startOffset": 74,
+            "endOffset": 94,
+            "quoteDigest": "sha256:34f25f99e6881439ad0ad49aaeddfdfa60f234d0584cc4dbc8cc8b08bb39e869",
+            "offsetUnit": "utf8_byte"
+          }
+        ],
+        "expected": {
+          "kind": "value",
+          "value": {
+            "amount": "17.5",
+            "unit": "m"
+          }
+        },
+        "goldOrigin": "authored_oracle",
+        "derivation": "两行分别12.5 m和5.0 m；人工十进制相加12.5+5.0=17.5 m。",
+        "specRefs": [
+          "tasks/spec-v0.3a/execution-evidence.md#EX-11"
+        ]
+      },
+      {
+        "questionId": "transport-inspection",
+        "question": "F-01 是否满足巡检规则？",
+        "taskKind": "rule_judgement",
+        "definitionRef": {
+          "id": "cq.transport.definition",
+          "version": "1.0.0",
+          "digest": "sha256:f3c53c29d2c47ca81ab4393123576b33e4dc839c4c88617e9a4e7136dcb4bfc5"
+        },
+        "ruleRefs": [
+          {
+            "id": "cq.transport.rule.inspection",
+            "version": "1.0.0",
+            "digest": "sha256:f610b7b144445b2745427d459083b7ac955d56ff21d2d5ee065a026f0fc2ca4e"
+          }
+        ],
+        "input": {
+          "dataMode": "synthetic",
+          "scopeRef": {
+            "tenantId": "11111111-1111-4111-8111-111111111111",
+            "spaceId": "aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa"
+          },
+          "projectId": "33333333-3333-4333-8333-333333333333",
+          "validAt": "2026-10-08T00:00:00Z",
+          "asOfRecordedSeq": "1",
+          "observations": [
+            {
+              "factId": "F-01-facility_code",
+              "entityId": "F-01",
+              "objectId": "facility",
+              "attributeId": "facility_code",
+              "value": "F-01",
+              "recordedSeq": "1",
+              "status": "active",
+              "source": {
+                "sourceRef": {
+                  "id": "cq.transport.rows.source",
+                  "version": "1.0.0",
+                  "digest": "sha256:9e6c66ea6be52dea843669a49f21e069843c731a9f585778d8795f3120dbc1ca"
+                },
+                "startOffset": 49,
+                "endOffset": 73,
+                "quoteDigest": "sha256:fa43adac88dcec98257b42669007c5552e99ec8c09108b28012859fd0bd24d01",
+                "offsetUnit": "utf8_byte"
+              }
+            },
+            {
+              "factId": "F-01-condition",
+              "entityId": "F-01",
+              "objectId": "facility",
+              "attributeId": "condition",
+              "value": "bad",
+              "recordedSeq": "1",
+              "status": "active",
+              "source": {
+                "sourceRef": {
+                  "id": "cq.transport.rows.source",
+                  "version": "1.0.0",
+                  "digest": "sha256:9e6c66ea6be52dea843669a49f21e069843c731a9f585778d8795f3120dbc1ca"
+                },
+                "startOffset": 49,
+                "endOffset": 73,
+                "quoteDigest": "sha256:fa43adac88dcec98257b42669007c5552e99ec8c09108b28012859fd0bd24d01",
+                "offsetUnit": "utf8_byte"
+              }
+            },
+            {
+              "factId": "F-01-closed",
+              "entityId": "F-01",
+              "objectId": "facility",
+              "attributeId": "closed",
+              "value": false,
+              "recordedSeq": "1",
+              "status": "active",
+              "source": {
+                "sourceRef": {
+                  "id": "cq.transport.rows.source",
+                  "version": "1.0.0",
+                  "digest": "sha256:9e6c66ea6be52dea843669a49f21e069843c731a9f585778d8795f3120dbc1ca"
+                },
+                "startOffset": 49,
+                "endOffset": 73,
+                "quoteDigest": "sha256:fa43adac88dcec98257b42669007c5552e99ec8c09108b28012859fd0bd24d01",
+                "offsetUnit": "utf8_byte"
+              }
+            }
+          ],
+          "relations": [],
+          "structuredSources": [
+            {
+              "sourceRef": {
+                "id": "cq.transport.rows.source",
+                "version": "1.0.0",
+                "digest": "sha256:9e6c66ea6be52dea843669a49f21e069843c731a9f585778d8795f3120dbc1ca"
+              },
+              "objectId": "facility",
+              "attributeIds": [
+                "facility_code",
+                "condition",
+                "closed"
+              ]
+            }
+          ]
+        },
+        "intent": {
+          "projectId": "33333333-3333-4333-8333-333333333333",
+          "kind": "rule",
+          "objectId": "facility",
+          "subjectEntityId": "F-01",
+          "ruleId": "inspection"
+        },
+        "requiredCapabilities": [
+          "semantic_read",
+          "rule_evaluation"
+        ],
+        "requiredSources": [
+          {
+            "sourceRef": {
+              "id": "cq.transport.source",
+              "version": "1.0.0",
+              "digest": "sha256:0fa4b942c039c2afd5338cb2229262c2c036b5ba1af252a2d5c14a201f8baa37"
+            },
+            "startOffset": 389,
+            "endOffset": 471,
+            "quoteDigest": "sha256:853e1f29a8f45bf45383dfd60b09ff573050318cbeea3f10da6707afa66564d2",
+            "offsetUnit": "utf8_byte"
+          },
+          {
+            "sourceRef": {
+              "id": "cq.transport.rows.source",
+              "version": "1.0.0",
+              "digest": "sha256:9e6c66ea6be52dea843669a49f21e069843c731a9f585778d8795f3120dbc1ca"
+            },
+            "startOffset": 49,
+            "endOffset": 73,
+            "quoteDigest": "sha256:fa43adac88dcec98257b42669007c5552e99ec8c09108b28012859fd0bd24d01",
+            "offsetUnit": "utf8_byte"
+          }
+        ],
+        "expected": {
+          "kind": "rule",
+          "conditionState": "true",
+          "applicability": "applicable",
+          "propositionState": "true"
+        },
+        "goldOrigin": "authored_oracle",
+        "derivation": "condition=bad满足前提；closed=false不触发例外，故规则可用并支持needs_inspection=true。",
+        "specRefs": [
+          "tasks/spec-v0.3a/execution-evidence.md#EX-11"
+        ]
+      },
+      {
+        "questionId": "transport-exception",
+        "question": "F-01 已关闭时巡检规则是否生效？",
+        "taskKind": "rule_judgement",
+        "definitionRef": {
+          "id": "cq.transport.definition",
+          "version": "1.0.0",
+          "digest": "sha256:f3c53c29d2c47ca81ab4393123576b33e4dc839c4c88617e9a4e7136dcb4bfc5"
+        },
+        "ruleRefs": [
+          {
+            "id": "cq.transport.rule.inspection",
+            "version": "1.0.0",
+            "digest": "sha256:f610b7b144445b2745427d459083b7ac955d56ff21d2d5ee065a026f0fc2ca4e"
+          }
+        ],
+        "input": {
+          "dataMode": "synthetic",
+          "scopeRef": {
+            "tenantId": "11111111-1111-4111-8111-111111111111",
+            "spaceId": "aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa"
+          },
+          "projectId": "33333333-3333-4333-8333-333333333333",
+          "validAt": "2026-10-08T00:00:00Z",
+          "asOfRecordedSeq": "1",
+          "observations": [
+            {
+              "factId": "F-01-facility_code",
+              "entityId": "F-01",
+              "objectId": "facility",
+              "attributeId": "facility_code",
+              "value": "F-01",
+              "recordedSeq": "1",
+              "status": "active",
+              "source": {
+                "sourceRef": {
+                  "id": "cq.transport.rows.source",
+                  "version": "1.0.0",
+                  "digest": "sha256:9e6c66ea6be52dea843669a49f21e069843c731a9f585778d8795f3120dbc1ca"
+                },
+                "startOffset": 49,
+                "endOffset": 73,
+                "quoteDigest": "sha256:fa43adac88dcec98257b42669007c5552e99ec8c09108b28012859fd0bd24d01",
+                "offsetUnit": "utf8_byte"
+              }
+            },
+            {
+              "factId": "F-01-condition",
+              "entityId": "F-01",
+              "objectId": "facility",
+              "attributeId": "condition",
+              "value": "bad",
+              "recordedSeq": "1",
+              "status": "active",
+              "source": {
+                "sourceRef": {
+                  "id": "cq.transport.rows.source",
+                  "version": "1.0.0",
+                  "digest": "sha256:9e6c66ea6be52dea843669a49f21e069843c731a9f585778d8795f3120dbc1ca"
+                },
+                "startOffset": 49,
+                "endOffset": 73,
+                "quoteDigest": "sha256:fa43adac88dcec98257b42669007c5552e99ec8c09108b28012859fd0bd24d01",
+                "offsetUnit": "utf8_byte"
+              }
+            },
+            {
+              "factId": "F-01-closed",
+              "entityId": "F-01",
+              "objectId": "facility",
+              "attributeId": "closed",
+              "value": true,
+              "recordedSeq": "1",
+              "status": "active",
+              "source": {
+                "sourceRef": {
+                  "id": "cq.transport.exception.source",
+                  "version": "1.0.0",
+                  "digest": "sha256:5352580f46242b0b99e9992b221292877c2416e73edb54ca21850bd34773bdd9"
+                },
+                "startOffset": 21,
+                "endOffset": 30,
+                "quoteDigest": "sha256:41b689c3cb940ffe6735d487c6a92525551d4b70e94d799d96a54748450a82ec",
+                "offsetUnit": "utf8_byte"
+              }
+            }
+          ],
+          "relations": [],
+          "structuredSources": [
+            {
+              "sourceRef": {
+                "id": "cq.transport.rows.source",
+                "version": "1.0.0",
+                "digest": "sha256:9e6c66ea6be52dea843669a49f21e069843c731a9f585778d8795f3120dbc1ca"
+              },
+              "objectId": "facility",
+              "attributeIds": [
+                "facility_code",
+                "condition"
+              ]
+            },
+            {
+              "sourceRef": {
+                "id": "cq.transport.exception.source",
+                "version": "1.0.0",
+                "digest": "sha256:5352580f46242b0b99e9992b221292877c2416e73edb54ca21850bd34773bdd9"
+              },
+              "objectId": "facility",
+              "attributeIds": [
+                "closed"
+              ]
+            }
+          ]
+        },
+        "intent": {
+          "projectId": "33333333-3333-4333-8333-333333333333",
+          "kind": "rule",
+          "objectId": "facility",
+          "subjectEntityId": "F-01",
+          "ruleId": "inspection"
+        },
+        "requiredCapabilities": [
+          "semantic_read",
+          "rule_evaluation"
+        ],
+        "requiredSources": [
+          {
+            "sourceRef": {
+              "id": "cq.transport.source",
+              "version": "1.0.0",
+              "digest": "sha256:0fa4b942c039c2afd5338cb2229262c2c036b5ba1af252a2d5c14a201f8baa37"
+            },
+            "startOffset": 389,
+            "endOffset": 471,
+            "quoteDigest": "sha256:853e1f29a8f45bf45383dfd60b09ff573050318cbeea3f10da6707afa66564d2",
+            "offsetUnit": "utf8_byte"
+          },
+          {
+            "sourceRef": {
+              "id": "cq.transport.rows.source",
+              "version": "1.0.0",
+              "digest": "sha256:9e6c66ea6be52dea843669a49f21e069843c731a9f585778d8795f3120dbc1ca"
+            },
+            "startOffset": 49,
+            "endOffset": 73,
+            "quoteDigest": "sha256:fa43adac88dcec98257b42669007c5552e99ec8c09108b28012859fd0bd24d01",
+            "offsetUnit": "utf8_byte"
+          },
+          {
+            "sourceRef": {
+              "id": "cq.transport.exception.source",
+              "version": "1.0.0",
+              "digest": "sha256:5352580f46242b0b99e9992b221292877c2416e73edb54ca21850bd34773bdd9"
+            },
+            "startOffset": 21,
+            "endOffset": 30,
+            "quoteDigest": "sha256:41b689c3cb940ffe6735d487c6a92525551d4b70e94d799d96a54748450a82ec",
+            "offsetUnit": "utf8_byte"
+          }
+        ],
+        "expected": {
+          "kind": "rule",
+          "conditionState": "true",
+          "applicability": "not_applicable",
+          "propositionState": "unknown"
+        },
+        "goldOrigin": "authored_oracle",
+        "derivation": "bad前提为真，但closed=true为明示例外；规则不适用，不能由此推出业务命题为假。",
+        "specRefs": [
+          "tasks/spec-v0.3a/execution-evidence.md#EX-11"
+        ]
+      },
+      {
+        "questionId": "transport-unknown",
+        "question": "缺少condition观察时能断定无需巡检吗？",
+        "taskKind": "rule_judgement",
+        "definitionRef": {
+          "id": "cq.transport.definition",
+          "version": "1.0.0",
+          "digest": "sha256:f3c53c29d2c47ca81ab4393123576b33e4dc839c4c88617e9a4e7136dcb4bfc5"
+        },
+        "ruleRefs": [
+          {
+            "id": "cq.transport.rule.inspection",
+            "version": "1.0.0",
+            "digest": "sha256:f610b7b144445b2745427d459083b7ac955d56ff21d2d5ee065a026f0fc2ca4e"
+          }
+        ],
+        "input": {
+          "dataMode": "synthetic",
+          "scopeRef": {
+            "tenantId": "11111111-1111-4111-8111-111111111111",
+            "spaceId": "aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa"
+          },
+          "projectId": "33333333-3333-4333-8333-333333333333",
+          "validAt": "2026-10-08T00:00:00Z",
+          "asOfRecordedSeq": "1",
+          "observations": [
+            {
+              "factId": "F-01-facility_code",
+              "entityId": "F-01",
+              "objectId": "facility",
+              "attributeId": "facility_code",
+              "value": "F-01",
+              "recordedSeq": "1",
+              "status": "active",
+              "source": {
+                "sourceRef": {
+                  "id": "cq.transport.rows.source",
+                  "version": "1.0.0",
+                  "digest": "sha256:9e6c66ea6be52dea843669a49f21e069843c731a9f585778d8795f3120dbc1ca"
+                },
+                "startOffset": 49,
+                "endOffset": 73,
+                "quoteDigest": "sha256:fa43adac88dcec98257b42669007c5552e99ec8c09108b28012859fd0bd24d01",
+                "offsetUnit": "utf8_byte"
+              }
+            },
+            {
+              "factId": "F-01-closed",
+              "entityId": "F-01",
+              "objectId": "facility",
+              "attributeId": "closed",
+              "value": false,
+              "recordedSeq": "1",
+              "status": "active",
+              "source": {
+                "sourceRef": {
+                  "id": "cq.transport.rows.source",
+                  "version": "1.0.0",
+                  "digest": "sha256:9e6c66ea6be52dea843669a49f21e069843c731a9f585778d8795f3120dbc1ca"
+                },
+                "startOffset": 49,
+                "endOffset": 73,
+                "quoteDigest": "sha256:fa43adac88dcec98257b42669007c5552e99ec8c09108b28012859fd0bd24d01",
+                "offsetUnit": "utf8_byte"
+              }
+            }
+          ],
+          "relations": [],
+          "structuredSources": [
+            {
+              "sourceRef": {
+                "id": "cq.transport.rows.source",
+                "version": "1.0.0",
+                "digest": "sha256:9e6c66ea6be52dea843669a49f21e069843c731a9f585778d8795f3120dbc1ca"
+              },
+              "objectId": "facility",
+              "attributeIds": [
+                "facility_code",
+                "closed"
+              ]
+            }
+          ]
+        },
+        "intent": {
+          "projectId": "33333333-3333-4333-8333-333333333333",
+          "kind": "rule",
+          "objectId": "facility",
+          "subjectEntityId": "F-01",
+          "ruleId": "inspection"
+        },
+        "requiredCapabilities": [
+          "semantic_read",
+          "rule_evaluation"
+        ],
+        "requiredSources": [
+          {
+            "sourceRef": {
+              "id": "cq.transport.source",
+              "version": "1.0.0",
+              "digest": "sha256:0fa4b942c039c2afd5338cb2229262c2c036b5ba1af252a2d5c14a201f8baa37"
+            },
+            "startOffset": 389,
+            "endOffset": 471,
+            "quoteDigest": "sha256:853e1f29a8f45bf45383dfd60b09ff573050318cbeea3f10da6707afa66564d2",
+            "offsetUnit": "utf8_byte"
+          },
+          {
+            "sourceRef": {
+              "id": "cq.transport.rows.source",
+              "version": "1.0.0",
+              "digest": "sha256:9e6c66ea6be52dea843669a49f21e069843c731a9f585778d8795f3120dbc1ca"
+            },
+            "startOffset": 49,
+            "endOffset": 73,
+            "quoteDigest": "sha256:fa43adac88dcec98257b42669007c5552e99ec8c09108b28012859fd0bd24d01",
+            "offsetUnit": "utf8_byte"
+          }
+        ],
+        "expected": {
+          "kind": "rule",
+          "conditionState": "unknown",
+          "applicability": "unknown",
+          "propositionState": "unknown"
+        },
+        "goldOrigin": "authored_oracle",
+        "derivation": "只有身份和closed=false，没有condition；缺观察不等于good，前提和业务结论保持unknown。",
+        "specRefs": [
+          "tasks/spec-v0.3a/execution-evidence.md#EX-11"
+        ]
+      },
+      {
+        "questionId": "transport-conflict",
+        "question": "两份资料同时称F-01为bad和good时能给确定巡检结论吗？",
+        "taskKind": "rule_judgement",
+        "definitionRef": {
+          "id": "cq.transport.definition",
+          "version": "1.0.0",
+          "digest": "sha256:f3c53c29d2c47ca81ab4393123576b33e4dc839c4c88617e9a4e7136dcb4bfc5"
+        },
+        "ruleRefs": [
+          {
+            "id": "cq.transport.rule.inspection",
+            "version": "1.0.0",
+            "digest": "sha256:f610b7b144445b2745427d459083b7ac955d56ff21d2d5ee065a026f0fc2ca4e"
+          }
+        ],
+        "input": {
+          "dataMode": "synthetic",
+          "scopeRef": {
+            "tenantId": "11111111-1111-4111-8111-111111111111",
+            "spaceId": "aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa"
+          },
+          "projectId": "33333333-3333-4333-8333-333333333333",
+          "validAt": "2026-10-08T00:00:00Z",
+          "asOfRecordedSeq": "1",
+          "observations": [
+            {
+              "factId": "F-01-facility_code",
+              "entityId": "F-01",
+              "objectId": "facility",
+              "attributeId": "facility_code",
+              "value": "F-01",
+              "recordedSeq": "1",
+              "status": "active",
+              "source": {
+                "sourceRef": {
+                  "id": "cq.transport.rows.source",
+                  "version": "1.0.0",
+                  "digest": "sha256:9e6c66ea6be52dea843669a49f21e069843c731a9f585778d8795f3120dbc1ca"
+                },
+                "startOffset": 49,
+                "endOffset": 73,
+                "quoteDigest": "sha256:fa43adac88dcec98257b42669007c5552e99ec8c09108b28012859fd0bd24d01",
+                "offsetUnit": "utf8_byte"
+              }
+            },
+            {
+              "factId": "F-01-condition",
+              "entityId": "F-01",
+              "objectId": "facility",
+              "attributeId": "condition",
+              "value": "bad",
+              "recordedSeq": "1",
+              "status": "active",
+              "source": {
+                "sourceRef": {
+                  "id": "cq.transport.rows.source",
+                  "version": "1.0.0",
+                  "digest": "sha256:9e6c66ea6be52dea843669a49f21e069843c731a9f585778d8795f3120dbc1ca"
+                },
+                "startOffset": 49,
+                "endOffset": 73,
+                "quoteDigest": "sha256:fa43adac88dcec98257b42669007c5552e99ec8c09108b28012859fd0bd24d01",
+                "offsetUnit": "utf8_byte"
+              }
+            },
+            {
+              "factId": "F-01-closed",
+              "entityId": "F-01",
+              "objectId": "facility",
+              "attributeId": "closed",
+              "value": false,
+              "recordedSeq": "1",
+              "status": "active",
+              "source": {
+                "sourceRef": {
+                  "id": "cq.transport.rows.source",
+                  "version": "1.0.0",
+                  "digest": "sha256:9e6c66ea6be52dea843669a49f21e069843c731a9f585778d8795f3120dbc1ca"
+                },
+                "startOffset": 49,
+                "endOffset": 73,
+                "quoteDigest": "sha256:fa43adac88dcec98257b42669007c5552e99ec8c09108b28012859fd0bd24d01",
+                "offsetUnit": "utf8_byte"
+              }
+            },
+            {
+              "factId": "f1-condition-survey",
+              "entityId": "F-01",
+              "objectId": "facility",
+              "attributeId": "condition",
+              "value": "good",
+              "recordedSeq": "1",
+              "status": "active",
+              "source": {
+                "sourceRef": {
+                  "id": "cq.transport.alternative.source",
+                  "version": "1.0.0",
+                  "digest": "sha256:23aff7344ed5ca5c8749336e9a5664ceb889877c2aadd472db20f7c8930f31b5"
+                },
+                "startOffset": 24,
+                "endOffset": 33,
+                "quoteDigest": "sha256:e51cbed211e48ff8d790ae75d30765b4841efafed0f563b5a6c238967b963bfe",
+                "offsetUnit": "utf8_byte"
+              }
+            }
+          ],
+          "relations": [],
+          "structuredSources": [
+            {
+              "sourceRef": {
+                "id": "cq.transport.rows.source",
+                "version": "1.0.0",
+                "digest": "sha256:9e6c66ea6be52dea843669a49f21e069843c731a9f585778d8795f3120dbc1ca"
+              },
+              "objectId": "facility",
+              "attributeIds": [
+                "facility_code",
+                "condition",
+                "closed"
+              ]
+            },
+            {
+              "sourceRef": {
+                "id": "cq.transport.alternative.source",
+                "version": "1.0.0",
+                "digest": "sha256:23aff7344ed5ca5c8749336e9a5664ceb889877c2aadd472db20f7c8930f31b5"
+              },
+              "objectId": "facility",
+              "attributeIds": [
+                "condition"
+              ]
+            }
+          ]
+        },
+        "intent": {
+          "projectId": "33333333-3333-4333-8333-333333333333",
+          "kind": "rule",
+          "objectId": "facility",
+          "subjectEntityId": "F-01",
+          "ruleId": "inspection"
+        },
+        "requiredCapabilities": [
+          "semantic_read",
+          "rule_evaluation"
+        ],
+        "requiredSources": [
+          {
+            "sourceRef": {
+              "id": "cq.transport.source",
+              "version": "1.0.0",
+              "digest": "sha256:0fa4b942c039c2afd5338cb2229262c2c036b5ba1af252a2d5c14a201f8baa37"
+            },
+            "startOffset": 389,
+            "endOffset": 471,
+            "quoteDigest": "sha256:853e1f29a8f45bf45383dfd60b09ff573050318cbeea3f10da6707afa66564d2",
+            "offsetUnit": "utf8_byte"
+          },
+          {
+            "sourceRef": {
+              "id": "cq.transport.rows.source",
+              "version": "1.0.0",
+              "digest": "sha256:9e6c66ea6be52dea843669a49f21e069843c731a9f585778d8795f3120dbc1ca"
+            },
+            "startOffset": 49,
+            "endOffset": 73,
+            "quoteDigest": "sha256:fa43adac88dcec98257b42669007c5552e99ec8c09108b28012859fd0bd24d01",
+            "offsetUnit": "utf8_byte"
+          },
+          {
+            "sourceRef": {
+              "id": "cq.transport.alternative.source",
+              "version": "1.0.0",
+              "digest": "sha256:23aff7344ed5ca5c8749336e9a5664ceb889877c2aadd472db20f7c8930f31b5"
+            },
+            "startOffset": 24,
+            "endOffset": 33,
+            "quoteDigest": "sha256:e51cbed211e48ff8d790ae75d30765b4841efafed0f563b5a6c238967b963bfe",
+            "offsetUnit": "utf8_byte"
+          }
+        ],
+        "expected": {
+          "kind": "rule",
+          "conditionState": "conflict",
+          "applicability": "conflict",
+          "propositionState": "conflict"
+        },
+        "goldOrigin": "authored_oracle",
+        "derivation": "同一单值condition有bad和good两项独立冲突观察，不能投票、丢弃或任选一项。",
+        "specRefs": [
+          "tasks/spec-v0.3a/execution-evidence.md#EX-11"
+        ]
+      },
+      {
+        "questionId": "transport-target",
+        "question": "F-01 所属地区处于watch状态时地区规则是否成立？",
+        "taskKind": "rule_judgement",
+        "definitionRef": {
+          "id": "cq.transport.definition",
+          "version": "1.0.0",
+          "digest": "sha256:f3c53c29d2c47ca81ab4393123576b33e4dc839c4c88617e9a4e7136dcb4bfc5"
+        },
+        "ruleRefs": [
+          {
+            "id": "cq.transport.rule.district-watch",
+            "version": "1.0.0",
+            "digest": "sha256:e28d618a14ab6018abf16b555d184386b8f83e17bcdb548c5c1310bc6117ebdb"
+          }
+        ],
+        "input": {
+          "dataMode": "synthetic",
+          "scopeRef": {
+            "tenantId": "11111111-1111-4111-8111-111111111111",
+            "spaceId": "aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa"
+          },
+          "projectId": "33333333-3333-4333-8333-333333333333",
+          "validAt": "2026-10-08T00:00:00Z",
+          "asOfRecordedSeq": "1",
+          "observations": [
+            {
+              "factId": "F-01-facility_code",
+              "entityId": "F-01",
+              "objectId": "facility",
+              "attributeId": "facility_code",
+              "value": "F-01",
+              "recordedSeq": "1",
+              "status": "active",
+              "source": {
+                "sourceRef": {
+                  "id": "cq.transport.rows.source",
+                  "version": "1.0.0",
+                  "digest": "sha256:9e6c66ea6be52dea843669a49f21e069843c731a9f585778d8795f3120dbc1ca"
+                },
+                "startOffset": 49,
+                "endOffset": 73,
+                "quoteDigest": "sha256:fa43adac88dcec98257b42669007c5552e99ec8c09108b28012859fd0bd24d01",
+                "offsetUnit": "utf8_byte"
+              }
+            },
+            {
+              "factId": "D-01-district_code",
+              "entityId": "D-01",
+              "objectId": "district",
+              "attributeId": "district_code",
+              "value": "D-01",
+              "recordedSeq": "1",
+              "status": "active",
+              "source": {
+                "sourceRef": {
+                  "id": "cq.transport.district.source",
+                  "version": "1.0.0",
+                  "digest": "sha256:e2c1c7c90390ea8c57a730b8412100b1d1aef56458a02e09c3b5a3ff63293b18"
+                },
+                "startOffset": 20,
+                "endOffset": 29,
+                "quoteDigest": "sha256:2f2100adae620cdbdbedf27631ba822851c21e8c2a5c0e78e6cefbba496c5946",
+                "offsetUnit": "utf8_byte"
+              }
+            },
+            {
+              "factId": "D-01-watch",
+              "entityId": "D-01",
+              "objectId": "district",
+              "attributeId": "watch",
+              "value": true,
+              "recordedSeq": "1",
+              "status": "active",
+              "source": {
+                "sourceRef": {
+                  "id": "cq.transport.district.source",
+                  "version": "1.0.0",
+                  "digest": "sha256:e2c1c7c90390ea8c57a730b8412100b1d1aef56458a02e09c3b5a3ff63293b18"
+                },
+                "startOffset": 20,
+                "endOffset": 29,
+                "quoteDigest": "sha256:2f2100adae620cdbdbedf27631ba822851c21e8c2a5c0e78e6cefbba496c5946",
+                "offsetUnit": "utf8_byte"
+              }
+            }
+          ],
+          "relations": [
+            {
+              "factId": "edge-f1-d1",
+              "relationId": "located_in",
+              "fromEntityId": "F-01",
+              "toEntityId": "D-01",
+              "endpointsResolved": true,
+              "recordedSeq": "1",
+              "status": "active",
+              "source": {
+                "sourceRef": {
+                  "id": "cq.transport.rows.source",
+                  "version": "1.0.0",
+                  "digest": "sha256:9e6c66ea6be52dea843669a49f21e069843c731a9f585778d8795f3120dbc1ca"
+                },
+                "startOffset": 49,
+                "endOffset": 73,
+                "quoteDigest": "sha256:fa43adac88dcec98257b42669007c5552e99ec8c09108b28012859fd0bd24d01",
+                "offsetUnit": "utf8_byte"
+              }
+            }
+          ],
+          "structuredSources": [
+            {
+              "sourceRef": {
+                "id": "cq.transport.rows.source",
+                "version": "1.0.0",
+                "digest": "sha256:9e6c66ea6be52dea843669a49f21e069843c731a9f585778d8795f3120dbc1ca"
+              },
+              "objectId": "facility",
+              "attributeIds": [
+                "facility_code"
+              ]
+            },
+            {
+              "sourceRef": {
+                "id": "cq.transport.district.source",
+                "version": "1.0.0",
+                "digest": "sha256:e2c1c7c90390ea8c57a730b8412100b1d1aef56458a02e09c3b5a3ff63293b18"
+              },
+              "objectId": "district",
+              "attributeIds": [
+                "district_code",
+                "watch"
+              ]
+            }
+          ]
+        },
+        "intent": {
+          "projectId": "33333333-3333-4333-8333-333333333333",
+          "kind": "rule",
+          "objectId": "facility",
+          "subjectEntityId": "F-01",
+          "ruleId": "district-watch"
+        },
+        "requiredCapabilities": [
+          "semantic_read",
+          "relation_read",
+          "rule_evaluation"
+        ],
+        "requiredSources": [
+          {
+            "sourceRef": {
+              "id": "cq.transport.source",
+              "version": "1.0.0",
+              "digest": "sha256:0fa4b942c039c2afd5338cb2229262c2c036b5ba1af252a2d5c14a201f8baa37"
+            },
+            "startOffset": 472,
+            "endOffset": 567,
+            "quoteDigest": "sha256:360ed7fd027fd1576254551e93bdb6d74d66ecee7884cfd08eacaafab6f79832",
+            "offsetUnit": "utf8_byte"
+          },
+          {
+            "sourceRef": {
+              "id": "cq.transport.rows.source",
+              "version": "1.0.0",
+              "digest": "sha256:9e6c66ea6be52dea843669a49f21e069843c731a9f585778d8795f3120dbc1ca"
+            },
+            "startOffset": 49,
+            "endOffset": 73,
+            "quoteDigest": "sha256:fa43adac88dcec98257b42669007c5552e99ec8c09108b28012859fd0bd24d01",
+            "offsetUnit": "utf8_byte"
+          },
+          {
+            "sourceRef": {
+              "id": "cq.transport.district.source",
+              "version": "1.0.0",
+              "digest": "sha256:e2c1c7c90390ea8c57a730b8412100b1d1aef56458a02e09c3b5a3ff63293b18"
+            },
+            "startOffset": 20,
+            "endOffset": 29,
+            "quoteDigest": "sha256:2f2100adae620cdbdbedf27631ba822851c21e8c2a5c0e78e6cefbba496c5946",
+            "offsetUnit": "utf8_byte"
+          }
+        ],
+        "expected": {
+          "kind": "rule",
+          "conditionState": "true",
+          "applicability": "applicable",
+          "propositionState": "true"
+        },
+        "goldOrigin": "authored_oracle",
+        "derivation": "有已解析F-01→D-01边，且目标D-01的watch=true；边与目标条件都成立。",
+        "specRefs": [
+          "tasks/spec-v0.3a/execution-evidence.md#EX-11"
+        ]
+      },
+      {
+        "questionId": "transport-target-unknown",
+        "question": "仅知道F-01属于D-01，缺少D-01的watch观察能判地区规则成立吗？",
+        "taskKind": "rule_judgement",
+        "definitionRef": {
+          "id": "cq.transport.definition",
+          "version": "1.0.0",
+          "digest": "sha256:f3c53c29d2c47ca81ab4393123576b33e4dc839c4c88617e9a4e7136dcb4bfc5"
+        },
+        "ruleRefs": [
+          {
+            "id": "cq.transport.rule.district-watch",
+            "version": "1.0.0",
+            "digest": "sha256:e28d618a14ab6018abf16b555d184386b8f83e17bcdb548c5c1310bc6117ebdb"
+          }
+        ],
+        "input": {
+          "dataMode": "synthetic",
+          "scopeRef": {
+            "tenantId": "11111111-1111-4111-8111-111111111111",
+            "spaceId": "aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa"
+          },
+          "projectId": "33333333-3333-4333-8333-333333333333",
+          "validAt": "2026-10-08T00:00:00Z",
+          "asOfRecordedSeq": "1",
+          "observations": [
+            {
+              "factId": "F-01-facility_code",
+              "entityId": "F-01",
+              "objectId": "facility",
+              "attributeId": "facility_code",
+              "value": "F-01",
+              "recordedSeq": "1",
+              "status": "active",
+              "source": {
+                "sourceRef": {
+                  "id": "cq.transport.rows.source",
+                  "version": "1.0.0",
+                  "digest": "sha256:9e6c66ea6be52dea843669a49f21e069843c731a9f585778d8795f3120dbc1ca"
+                },
+                "startOffset": 49,
+                "endOffset": 73,
+                "quoteDigest": "sha256:fa43adac88dcec98257b42669007c5552e99ec8c09108b28012859fd0bd24d01",
+                "offsetUnit": "utf8_byte"
+              }
+            },
+            {
+              "factId": "D-01-district_code",
+              "entityId": "D-01",
+              "objectId": "district",
+              "attributeId": "district_code",
+              "value": "D-01",
+              "recordedSeq": "1",
+              "status": "active",
+              "source": {
+                "sourceRef": {
+                  "id": "cq.transport.district.source",
+                  "version": "1.0.0",
+                  "digest": "sha256:e2c1c7c90390ea8c57a730b8412100b1d1aef56458a02e09c3b5a3ff63293b18"
+                },
+                "startOffset": 20,
+                "endOffset": 29,
+                "quoteDigest": "sha256:2f2100adae620cdbdbedf27631ba822851c21e8c2a5c0e78e6cefbba496c5946",
+                "offsetUnit": "utf8_byte"
+              }
+            }
+          ],
+          "relations": [
+            {
+              "factId": "edge-f1-d1",
+              "relationId": "located_in",
+              "fromEntityId": "F-01",
+              "toEntityId": "D-01",
+              "endpointsResolved": true,
+              "recordedSeq": "1",
+              "status": "active",
+              "source": {
+                "sourceRef": {
+                  "id": "cq.transport.rows.source",
+                  "version": "1.0.0",
+                  "digest": "sha256:9e6c66ea6be52dea843669a49f21e069843c731a9f585778d8795f3120dbc1ca"
+                },
+                "startOffset": 49,
+                "endOffset": 73,
+                "quoteDigest": "sha256:fa43adac88dcec98257b42669007c5552e99ec8c09108b28012859fd0bd24d01",
+                "offsetUnit": "utf8_byte"
+              }
+            }
+          ],
+          "structuredSources": [
+            {
+              "sourceRef": {
+                "id": "cq.transport.rows.source",
+                "version": "1.0.0",
+                "digest": "sha256:9e6c66ea6be52dea843669a49f21e069843c731a9f585778d8795f3120dbc1ca"
+              },
+              "objectId": "facility",
+              "attributeIds": [
+                "facility_code"
+              ]
+            },
+            {
+              "sourceRef": {
+                "id": "cq.transport.district.source",
+                "version": "1.0.0",
+                "digest": "sha256:e2c1c7c90390ea8c57a730b8412100b1d1aef56458a02e09c3b5a3ff63293b18"
+              },
+              "objectId": "district",
+              "attributeIds": [
+                "district_code"
+              ]
+            }
+          ]
+        },
+        "intent": {
+          "projectId": "33333333-3333-4333-8333-333333333333",
+          "kind": "rule",
+          "objectId": "facility",
+          "subjectEntityId": "F-01",
+          "ruleId": "district-watch"
+        },
+        "requiredCapabilities": [
+          "semantic_read",
+          "relation_read",
+          "rule_evaluation"
+        ],
+        "requiredSources": [
+          {
+            "sourceRef": {
+              "id": "cq.transport.source",
+              "version": "1.0.0",
+              "digest": "sha256:0fa4b942c039c2afd5338cb2229262c2c036b5ba1af252a2d5c14a201f8baa37"
+            },
+            "startOffset": 472,
+            "endOffset": 567,
+            "quoteDigest": "sha256:360ed7fd027fd1576254551e93bdb6d74d66ecee7884cfd08eacaafab6f79832",
+            "offsetUnit": "utf8_byte"
+          },
+          {
+            "sourceRef": {
+              "id": "cq.transport.rows.source",
+              "version": "1.0.0",
+              "digest": "sha256:9e6c66ea6be52dea843669a49f21e069843c731a9f585778d8795f3120dbc1ca"
+            },
+            "startOffset": 49,
+            "endOffset": 73,
+            "quoteDigest": "sha256:fa43adac88dcec98257b42669007c5552e99ec8c09108b28012859fd0bd24d01",
+            "offsetUnit": "utf8_byte"
+          },
+          {
+            "sourceRef": {
+              "id": "cq.transport.district.source",
+              "version": "1.0.0",
+              "digest": "sha256:e2c1c7c90390ea8c57a730b8412100b1d1aef56458a02e09c3b5a3ff63293b18"
+            },
+            "startOffset": 20,
+            "endOffset": 29,
+            "quoteDigest": "sha256:2f2100adae620cdbdbedf27631ba822851c21e8c2a5c0e78e6cefbba496c5946",
+            "offsetUnit": "utf8_byte"
+          }
+        ],
+        "expected": {
+          "kind": "rule",
+          "conditionState": "unknown",
+          "applicability": "unknown",
+          "propositionState": "unknown"
+        },
+        "goldOrigin": "authored_oracle",
+        "derivation": "边存在不能代替目标事实；缺少watch观察，目标条件unknown，整体不能判true或false。",
+        "specRefs": [
+          "tasks/spec-v0.3a/execution-evidence.md#EX-11"
+        ]
+      },
+      {
+        "questionId": "transport-project-denial",
+        "question": "能读取另一个未授权项目的F-01长度吗？",
+        "taskKind": "published_facts",
+        "definitionRef": {
+          "id": "cq.transport.definition",
+          "version": "1.0.0",
+          "digest": "sha256:f3c53c29d2c47ca81ab4393123576b33e4dc839c4c88617e9a4e7136dcb4bfc5"
+        },
+        "ruleRefs": [],
+        "input": {
+          "dataMode": "synthetic",
+          "scopeRef": {
+            "tenantId": "11111111-1111-4111-8111-111111111111",
+            "spaceId": "aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa"
+          },
+          "projectId": "33333333-3333-4333-8333-333333333333",
+          "validAt": "2026-10-08T00:00:00Z",
+          "asOfRecordedSeq": "1",
+          "observations": [
+            {
+              "factId": "F-01-facility_code",
+              "entityId": "F-01",
+              "objectId": "facility",
+              "attributeId": "facility_code",
+              "value": "F-01",
+              "recordedSeq": "1",
+              "status": "active",
+              "source": {
+                "sourceRef": {
+                  "id": "cq.transport.rows.source",
+                  "version": "1.0.0",
+                  "digest": "sha256:9e6c66ea6be52dea843669a49f21e069843c731a9f585778d8795f3120dbc1ca"
+                },
+                "startOffset": 49,
+                "endOffset": 73,
+                "quoteDigest": "sha256:fa43adac88dcec98257b42669007c5552e99ec8c09108b28012859fd0bd24d01",
+                "offsetUnit": "utf8_byte"
+              }
+            },
+            {
+              "factId": "F-01-length",
+              "entityId": "F-01",
+              "objectId": "facility",
+              "attributeId": "length",
+              "value": {
+                "amount": "12.5",
+                "unit": "m"
+              },
+              "recordedSeq": "1",
+              "status": "active",
+              "source": {
+                "sourceRef": {
+                  "id": "cq.transport.rows.source",
+                  "version": "1.0.0",
+                  "digest": "sha256:9e6c66ea6be52dea843669a49f21e069843c731a9f585778d8795f3120dbc1ca"
+                },
+                "startOffset": 49,
+                "endOffset": 73,
+                "quoteDigest": "sha256:fa43adac88dcec98257b42669007c5552e99ec8c09108b28012859fd0bd24d01",
+                "offsetUnit": "utf8_byte"
+              }
+            }
+          ],
+          "relations": [],
+          "structuredSources": [
+            {
+              "sourceRef": {
+                "id": "cq.transport.rows.source",
+                "version": "1.0.0",
+                "digest": "sha256:9e6c66ea6be52dea843669a49f21e069843c731a9f585778d8795f3120dbc1ca"
+              },
+              "objectId": "facility",
+              "attributeIds": [
+                "facility_code",
+                "length"
+              ]
+            }
+          ]
+        },
+        "intent": {
+          "projectId": "55555555-5555-4555-8555-555555555555",
+          "kind": "attribute",
+          "objectId": "facility",
+          "subjectEntityId": "F-01",
+          "attributeId": "length"
+        },
+        "requiredCapabilities": [
+          "semantic_read"
+        ],
+        "requiredSources": [
+          {
+            "sourceRef": {
+              "id": "cq.transport.rows.source",
+              "version": "1.0.0",
+              "digest": "sha256:9e6c66ea6be52dea843669a49f21e069843c731a9f585778d8795f3120dbc1ca"
+            },
+            "startOffset": 49,
+            "endOffset": 73,
+            "quoteDigest": "sha256:fa43adac88dcec98257b42669007c5552e99ec8c09108b28012859fd0bd24d01",
+            "offsetUnit": "utf8_byte"
+          }
+        ],
+        "expected": {
+          "kind": "refusal",
+          "reason": "cross_project"
+        },
+        "goldOrigin": "authored_oracle",
+        "derivation": "授权输入固定在transport项目；请求另一个projectId不得获得当前项目数据，也不能被默默改写为当前项目。",
+        "specRefs": [
+          "tasks/spec-v0.3a/execution-evidence.md#EX-11"
+        ]
+      },
+      {
+        "questionId": "transport-unit-denial",
+        "question": "长度字段被误报为12.5 h时能作为米数使用吗？",
+        "taskKind": "published_facts",
+        "definitionRef": {
+          "id": "cq.transport.definition",
+          "version": "1.0.0",
+          "digest": "sha256:f3c53c29d2c47ca81ab4393123576b33e4dc839c4c88617e9a4e7136dcb4bfc5"
+        },
+        "ruleRefs": [],
+        "input": {
+          "dataMode": "synthetic",
+          "scopeRef": {
+            "tenantId": "11111111-1111-4111-8111-111111111111",
+            "spaceId": "aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa"
+          },
+          "projectId": "33333333-3333-4333-8333-333333333333",
+          "validAt": "2026-10-08T00:00:00Z",
+          "asOfRecordedSeq": "1",
+          "observations": [
+            {
+              "factId": "F-01-facility_code",
+              "entityId": "F-01",
+              "objectId": "facility",
+              "attributeId": "facility_code",
+              "value": "F-01",
+              "recordedSeq": "1",
+              "status": "active",
+              "source": {
+                "sourceRef": {
+                  "id": "cq.transport.rows.source",
+                  "version": "1.0.0",
+                  "digest": "sha256:9e6c66ea6be52dea843669a49f21e069843c731a9f585778d8795f3120dbc1ca"
+                },
+                "startOffset": 49,
+                "endOffset": 73,
+                "quoteDigest": "sha256:fa43adac88dcec98257b42669007c5552e99ec8c09108b28012859fd0bd24d01",
+                "offsetUnit": "utf8_byte"
+              }
+            },
+            {
+              "factId": "F-01-length",
+              "entityId": "F-01",
+              "objectId": "facility",
+              "attributeId": "length",
+              "value": {
+                "amount": "12.5",
+                "unit": "h"
+              },
+              "recordedSeq": "1",
+              "status": "active",
+              "source": {
+                "sourceRef": {
+                  "id": "cq.transport.wrong-unit.source",
+                  "version": "1.0.0",
+                  "digest": "sha256:9e33e9746f2a46f12959e755531c29e497231e32928865a8637a3f3c3ff5054f"
+                },
+                "startOffset": 21,
+                "endOffset": 30,
+                "quoteDigest": "sha256:b61df5bbbb6dc715a89c7f321a29d46dd68e609773780ce9d44bc0c7fc74acb2",
+                "offsetUnit": "utf8_byte"
+              }
+            }
+          ],
+          "relations": [],
+          "structuredSources": [
+            {
+              "sourceRef": {
+                "id": "cq.transport.rows.source",
+                "version": "1.0.0",
+                "digest": "sha256:9e6c66ea6be52dea843669a49f21e069843c731a9f585778d8795f3120dbc1ca"
+              },
+              "objectId": "facility",
+              "attributeIds": [
+                "facility_code"
+              ]
+            },
+            {
+              "sourceRef": {
+                "id": "cq.transport.wrong-unit.source",
+                "version": "1.0.0",
+                "digest": "sha256:9e33e9746f2a46f12959e755531c29e497231e32928865a8637a3f3c3ff5054f"
+              },
+              "objectId": "facility",
+              "attributeIds": [
+                "length"
+              ]
+            }
+          ]
+        },
+        "intent": {
+          "projectId": "33333333-3333-4333-8333-333333333333",
+          "kind": "attribute",
+          "objectId": "facility",
+          "subjectEntityId": "F-01",
+          "attributeId": "length"
+        },
+        "requiredCapabilities": [
+          "semantic_read"
+        ],
+        "requiredSources": [
+          {
+            "sourceRef": {
+              "id": "cq.transport.rows.source",
+              "version": "1.0.0",
+              "digest": "sha256:9e6c66ea6be52dea843669a49f21e069843c731a9f585778d8795f3120dbc1ca"
+            },
+            "startOffset": 49,
+            "endOffset": 73,
+            "quoteDigest": "sha256:fa43adac88dcec98257b42669007c5552e99ec8c09108b28012859fd0bd24d01",
+            "offsetUnit": "utf8_byte"
+          },
+          {
+            "sourceRef": {
+              "id": "cq.transport.wrong-unit.source",
+              "version": "1.0.0",
+              "digest": "sha256:9e33e9746f2a46f12959e755531c29e497231e32928865a8637a3f3c3ff5054f"
+            },
+            "startOffset": 21,
+            "endOffset": 30,
+            "quoteDigest": "sha256:b61df5bbbb6dc715a89c7f321a29d46dd68e609773780ce9d44bc0c7fc74acb2",
+            "offsetUnit": "utf8_byte"
+          }
+        ],
+        "expected": {
+          "kind": "refusal",
+          "reason": "unit_mismatch"
+        },
+        "goldOrigin": "authored_oracle",
+        "derivation": "length定义的维度为长度、单位m；h是时间，不能转成m或忽略单位后接受12.5。",
+        "specRefs": [
+          "tasks/spec-v0.3a/execution-evidence.md#EX-11"
+        ]
+      },
+      {
+        "questionId": "transport-explicit-false",
+        "question": "明确观察F-02为good时巡检前提是什么状态？",
+        "taskKind": "rule_judgement",
+        "definitionRef": {
+          "id": "cq.transport.definition",
+          "version": "1.0.0",
+          "digest": "sha256:f3c53c29d2c47ca81ab4393123576b33e4dc839c4c88617e9a4e7136dcb4bfc5"
+        },
+        "ruleRefs": [
+          {
+            "id": "cq.transport.rule.inspection",
+            "version": "1.0.0",
+            "digest": "sha256:f610b7b144445b2745427d459083b7ac955d56ff21d2d5ee065a026f0fc2ca4e"
+          }
+        ],
+        "input": {
+          "dataMode": "synthetic",
+          "scopeRef": {
+            "tenantId": "11111111-1111-4111-8111-111111111111",
+            "spaceId": "aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa"
+          },
+          "projectId": "33333333-3333-4333-8333-333333333333",
+          "validAt": "2026-10-08T00:00:00Z",
+          "asOfRecordedSeq": "1",
+          "observations": [
+            {
+              "factId": "F-02-facility_code",
+              "entityId": "F-02",
+              "objectId": "facility",
+              "attributeId": "facility_code",
+              "value": "F-02",
+              "recordedSeq": "1",
+              "status": "active",
+              "source": {
+                "sourceRef": {
+                  "id": "cq.transport.rows.source",
+                  "version": "1.0.0",
+                  "digest": "sha256:9e6c66ea6be52dea843669a49f21e069843c731a9f585778d8795f3120dbc1ca"
+                },
+                "startOffset": 74,
+                "endOffset": 94,
+                "quoteDigest": "sha256:34f25f99e6881439ad0ad49aaeddfdfa60f234d0584cc4dbc8cc8b08bb39e869",
+                "offsetUnit": "utf8_byte"
+              }
+            },
+            {
+              "factId": "F-02-condition",
+              "entityId": "F-02",
+              "objectId": "facility",
+              "attributeId": "condition",
+              "value": "good",
+              "recordedSeq": "1",
+              "status": "active",
+              "source": {
+                "sourceRef": {
+                  "id": "cq.transport.rows.source",
+                  "version": "1.0.0",
+                  "digest": "sha256:9e6c66ea6be52dea843669a49f21e069843c731a9f585778d8795f3120dbc1ca"
+                },
+                "startOffset": 74,
+                "endOffset": 94,
+                "quoteDigest": "sha256:34f25f99e6881439ad0ad49aaeddfdfa60f234d0584cc4dbc8cc8b08bb39e869",
+                "offsetUnit": "utf8_byte"
+              }
+            },
+            {
+              "factId": "F-02-closed",
+              "entityId": "F-02",
+              "objectId": "facility",
+              "attributeId": "closed",
+              "value": false,
+              "recordedSeq": "1",
+              "status": "active",
+              "source": {
+                "sourceRef": {
+                  "id": "cq.transport.rows.source",
+                  "version": "1.0.0",
+                  "digest": "sha256:9e6c66ea6be52dea843669a49f21e069843c731a9f585778d8795f3120dbc1ca"
+                },
+                "startOffset": 74,
+                "endOffset": 94,
+                "quoteDigest": "sha256:34f25f99e6881439ad0ad49aaeddfdfa60f234d0584cc4dbc8cc8b08bb39e869",
+                "offsetUnit": "utf8_byte"
+              }
+            }
+          ],
+          "relations": [],
+          "structuredSources": [
+            {
+              "sourceRef": {
+                "id": "cq.transport.rows.source",
+                "version": "1.0.0",
+                "digest": "sha256:9e6c66ea6be52dea843669a49f21e069843c731a9f585778d8795f3120dbc1ca"
+              },
+              "objectId": "facility",
+              "attributeIds": [
+                "facility_code",
+                "condition",
+                "closed"
+              ]
+            }
+          ]
+        },
+        "intent": {
+          "projectId": "33333333-3333-4333-8333-333333333333",
+          "kind": "rule",
+          "objectId": "facility",
+          "subjectEntityId": "F-02",
+          "ruleId": "inspection"
+        },
+        "requiredCapabilities": [
+          "semantic_read",
+          "rule_evaluation"
+        ],
+        "requiredSources": [
+          {
+            "sourceRef": {
+              "id": "cq.transport.source",
+              "version": "1.0.0",
+              "digest": "sha256:0fa4b942c039c2afd5338cb2229262c2c036b5ba1af252a2d5c14a201f8baa37"
+            },
+            "startOffset": 389,
+            "endOffset": 471,
+            "quoteDigest": "sha256:853e1f29a8f45bf45383dfd60b09ff573050318cbeea3f10da6707afa66564d2",
+            "offsetUnit": "utf8_byte"
+          },
+          {
+            "sourceRef": {
+              "id": "cq.transport.rows.source",
+              "version": "1.0.0",
+              "digest": "sha256:9e6c66ea6be52dea843669a49f21e069843c731a9f585778d8795f3120dbc1ca"
+            },
+            "startOffset": 74,
+            "endOffset": 94,
+            "quoteDigest": "sha256:34f25f99e6881439ad0ad49aaeddfdfa60f234d0584cc4dbc8cc8b08bb39e869",
+            "offsetUnit": "utf8_byte"
+          }
+        ],
+        "expected": {
+          "kind": "rule",
+          "conditionState": "false",
+          "applicability": "not_applicable",
+          "propositionState": "unknown"
+        },
+        "goldOrigin": "authored_oracle",
+        "derivation": "资料明示condition=good，而规则要求bad；已知不相等使前提false且规则不适用。规则未生效不是对业务命题的独立反证，命题仍unknown。",
+        "specRefs": [
+          "tasks/spec-v0.3a/execution-evidence.md#EX-11"
+        ]
+      },
+      {
+        "questionId": "transport-relation",
+        "question": "F-01 的已确认所在行政区是哪一个？",
+        "taskKind": "relations",
+        "definitionRef": {
+          "id": "cq.transport.definition",
+          "version": "1.0.0",
+          "digest": "sha256:f3c53c29d2c47ca81ab4393123576b33e4dc839c4c88617e9a4e7136dcb4bfc5"
+        },
+        "ruleRefs": [],
+        "input": {
+          "dataMode": "synthetic",
+          "scopeRef": {
+            "tenantId": "11111111-1111-4111-8111-111111111111",
+            "spaceId": "aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa"
+          },
+          "projectId": "33333333-3333-4333-8333-333333333333",
+          "validAt": "2026-10-08T00:00:00Z",
+          "asOfRecordedSeq": "1",
+          "observations": [
+            {
+              "factId": "F-01-facility_code",
+              "entityId": "F-01",
+              "objectId": "facility",
+              "attributeId": "facility_code",
+              "value": "F-01",
+              "recordedSeq": "1",
+              "status": "active",
+              "source": {
+                "sourceRef": {
+                  "id": "cq.transport.rows.source",
+                  "version": "1.0.0",
+                  "digest": "sha256:9e6c66ea6be52dea843669a49f21e069843c731a9f585778d8795f3120dbc1ca"
+                },
+                "startOffset": 49,
+                "endOffset": 73,
+                "quoteDigest": "sha256:fa43adac88dcec98257b42669007c5552e99ec8c09108b28012859fd0bd24d01",
+                "offsetUnit": "utf8_byte"
+              }
+            },
+            {
+              "factId": "D-01-district_code",
+              "entityId": "D-01",
+              "objectId": "district",
+              "attributeId": "district_code",
+              "value": "D-01",
+              "recordedSeq": "1",
+              "status": "active",
+              "source": {
+                "sourceRef": {
+                  "id": "cq.transport.district.source",
+                  "version": "1.0.0",
+                  "digest": "sha256:e2c1c7c90390ea8c57a730b8412100b1d1aef56458a02e09c3b5a3ff63293b18"
+                },
+                "startOffset": 20,
+                "endOffset": 29,
+                "quoteDigest": "sha256:2f2100adae620cdbdbedf27631ba822851c21e8c2a5c0e78e6cefbba496c5946",
+                "offsetUnit": "utf8_byte"
+              }
+            },
+            {
+              "factId": "D-01-watch",
+              "entityId": "D-01",
+              "objectId": "district",
+              "attributeId": "watch",
+              "value": true,
+              "recordedSeq": "1",
+              "status": "active",
+              "source": {
+                "sourceRef": {
+                  "id": "cq.transport.district.source",
+                  "version": "1.0.0",
+                  "digest": "sha256:e2c1c7c90390ea8c57a730b8412100b1d1aef56458a02e09c3b5a3ff63293b18"
+                },
+                "startOffset": 20,
+                "endOffset": 29,
+                "quoteDigest": "sha256:2f2100adae620cdbdbedf27631ba822851c21e8c2a5c0e78e6cefbba496c5946",
+                "offsetUnit": "utf8_byte"
+              }
+            }
+          ],
+          "relations": [
+            {
+              "factId": "edge-f1-d1",
+              "relationId": "located_in",
+              "fromEntityId": "F-01",
+              "toEntityId": "D-01",
+              "endpointsResolved": true,
+              "recordedSeq": "1",
+              "status": "active",
+              "source": {
+                "sourceRef": {
+                  "id": "cq.transport.rows.source",
+                  "version": "1.0.0",
+                  "digest": "sha256:9e6c66ea6be52dea843669a49f21e069843c731a9f585778d8795f3120dbc1ca"
+                },
+                "startOffset": 49,
+                "endOffset": 73,
+                "quoteDigest": "sha256:fa43adac88dcec98257b42669007c5552e99ec8c09108b28012859fd0bd24d01",
+                "offsetUnit": "utf8_byte"
+              }
+            }
+          ],
+          "structuredSources": [
+            {
+              "sourceRef": {
+                "id": "cq.transport.rows.source",
+                "version": "1.0.0",
+                "digest": "sha256:9e6c66ea6be52dea843669a49f21e069843c731a9f585778d8795f3120dbc1ca"
+              },
+              "objectId": "facility",
+              "attributeIds": [
+                "facility_code"
+              ]
+            },
+            {
+              "sourceRef": {
+                "id": "cq.transport.district.source",
+                "version": "1.0.0",
+                "digest": "sha256:e2c1c7c90390ea8c57a730b8412100b1d1aef56458a02e09c3b5a3ff63293b18"
+              },
+              "objectId": "district",
+              "attributeIds": [
+                "district_code",
+                "watch"
+              ]
+            }
+          ]
+        },
+        "intent": {
+          "kind": "relation",
+          "projectId": "33333333-3333-4333-8333-333333333333",
+          "objectId": "facility",
+          "subjectEntityId": "F-01",
+          "relationId": "located_in"
+        },
+        "requiredCapabilities": [
+          "semantic_read",
+          "relation_read"
+        ],
+        "requiredSources": [
+          {
+            "sourceRef": {
+              "id": "cq.transport.rows.source",
+              "version": "1.0.0",
+              "digest": "sha256:9e6c66ea6be52dea843669a49f21e069843c731a9f585778d8795f3120dbc1ca"
+            },
+            "startOffset": 49,
+            "endOffset": 73,
+            "quoteDigest": "sha256:fa43adac88dcec98257b42669007c5552e99ec8c09108b28012859fd0bd24d01",
+            "offsetUnit": "utf8_byte"
+          },
+          {
+            "sourceRef": {
+              "id": "cq.transport.district.source",
+              "version": "1.0.0",
+              "digest": "sha256:e2c1c7c90390ea8c57a730b8412100b1d1aef56458a02e09c3b5a3ff63293b18"
+            },
+            "startOffset": 20,
+            "endOffset": 29,
+            "quoteDigest": "sha256:2f2100adae620cdbdbedf27631ba822851c21e8c2a5c0e78e6cefbba496c5946",
+            "offsetUnit": "utf8_byte"
+          }
+        ],
+        "expected": {
+          "kind": "relation",
+          "targetEntityIds": [
+            "D-01"
+          ],
+          "completeness": "complete"
+        },
+        "goldOrigin": "authored_oracle",
+        "derivation": "独立原始合成行明确写 F-01 located_in=D-01；返回确认边的目标标识，不由巡检结论反推关系。",
+        "specRefs": [
+          "tasks/spec-v0.3a/execution-evidence.md#EX-4.3"
+        ]
+      },
+      {
+        "questionId": "transport-registered-compute",
+        "question": "注册的合成汇总操作对验核件数输入给出的总件数是多少？",
+        "taskKind": "compute",
+        "definitionRef": {
+          "id": "cq.transport.definition",
+          "version": "1.0.0",
+          "digest": "sha256:f3c53c29d2c47ca81ab4393123576b33e4dc839c4c88617e9a4e7136dcb4bfc5"
+        },
+        "ruleRefs": [],
+        "input": {
+          "dataMode": "synthetic",
+          "scopeRef": {
+            "tenantId": "11111111-1111-4111-8111-111111111111",
+            "spaceId": "aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa"
+          },
+          "projectId": "33333333-3333-4333-8333-333333333333",
+          "validAt": "2026-10-08T00:00:00Z",
+          "asOfRecordedSeq": "1",
+          "observations": [],
+          "relations": []
+        },
+        "intent": {
+          "kind": "registered_compute",
+          "projectId": "33333333-3333-4333-8333-333333333333",
+          "operationRef": {
+            "id": "example.compute.aggregate",
+            "version": "1"
+          },
+          "inputSourceRef": {
+            "id": "cq.transport.compute-input.source",
+            "version": "1.0.0",
+            "digest": "sha256:b47923f98920e020fc5263cd4aa38b201072c3b44c07db0fff3b0358e613f391"
+          },
+          "metric": "total_quantity"
+        },
+        "requiredCapabilities": [
+          "registered_compute"
+        ],
+        "requiredSources": [
+          {
+            "sourceRef": {
+              "id": "cq.transport.compute-input.source",
+              "version": "1.0.0",
+              "digest": "sha256:b47923f98920e020fc5263cd4aa38b201072c3b44c07db0fff3b0358e613f391"
+            },
+            "startOffset": 0,
+            "endOffset": 103,
+            "quoteDigest": "sha256:e45f79d3a2fa0039b25610d7898252fdadd2166a885827cc40903b602e431415",
+            "offsetUnit": "utf8_byte"
+          }
+        ],
+        "expected": {
+          "kind": "value",
+          "value": {
+            "amount": "17.5",
+            "unit": "each"
+          }
+        },
+        "goldOrigin": "authored_oracle",
+        "derivation": "独立件数原始 JSON 仅有 12.5 each 和 5.0 each 两行；人工字面金标为 17.5 each，不是米数查询或行业计价公式。",
+        "specRefs": [
+          "tasks/spec-v0.3a/execution-evidence.md#EX-6"
+        ]
+      }
+    ],
+    "externalGold": {
+      "status": "missing_resources",
+      "acceptance": "unverified",
+      "missingResources": [
+        "authorised_quote_inputs",
+        "human_quote_gold",
+        "customer_compute_binding"
+      ]
+    }
+  }
+}

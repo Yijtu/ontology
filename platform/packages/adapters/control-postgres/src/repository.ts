@@ -190,6 +190,64 @@ export class ControlPostgresRepository implements ControlRepository {
     )
   }
 
+  async appendEvents(requests: readonly ControlAppendEventRequest[], ctx: ToolContext): Promise<readonly ControlAppendEventResponse[]> {
+    const first = requests[0]
+    if (first === undefined || requests.length > 64) throw new ControlStorageError('INVALID_OPERATION', 'an event batch requires one to 64 entries')
+    const scope = resolveControlScope(first.scopeRef, ctx)
+    const keys = new Set<string>()
+    for (const request of requests) {
+      resolveControlScope(request.scopeRef, ctx)
+      if (request.streamRef !== first.streamRef || keys.has(request.idempotencyKey)) throw new ControlStorageError('INVALID_OPERATION', 'an event batch requires one stream and distinct idempotency keys')
+      keys.add(request.idempotencyKey)
+    }
+    return this.#database.withIdentityScope(scope, async (client) => {
+      await client.query(
+        `INSERT INTO agent_platform.event_streams (tenant_id, space_id, stream_ref, last_seq)
+         VALUES ($1, $2, $3, 0) ON CONFLICT (tenant_id, space_id, stream_ref) DO NOTHING`,
+        [scope.tenantId, scope.spaceId, first.streamRef],
+      )
+      const locked = await client.query<{ last_seq: string }>(
+        `SELECT last_seq FROM agent_platform.event_streams
+         WHERE tenant_id=$1 AND space_id=$2 AND stream_ref=$3 FOR UPDATE`,
+        [scope.tenantId, scope.spaceId, first.streamRef],
+      )
+      const current = locked.rows[0]
+      if (current === undefined) throw new ControlStorageError('SCOPE_MISMATCH', 'the event stream is unavailable in this scope')
+      const existing = await client.query<{ idempotency_key: string; recorded_seq: string }>(
+        `SELECT idempotency_key, recorded_seq FROM agent_platform.semantic_events
+         WHERE tenant_id=$1 AND space_id=$2 AND stream_ref=$3 AND idempotency_key=ANY($4::text[])`,
+        [scope.tenantId, scope.spaceId, first.streamRef, [...keys]],
+      )
+      const recorded = new Map(existing.rows.map((row) => [row.idempotency_key, row.recorded_seq]))
+      const pending = requests.filter((request) => !recorded.has(request.idempotencyKey))
+      let sequence = BigInt(current.last_seq)
+      const newSequences = pending.map((request) => {
+        const allocated = String(++sequence)
+        recorded.set(request.idempotencyKey, allocated)
+        return allocated
+      })
+      if (pending.length > 0) {
+        await client.query(
+          `UPDATE agent_platform.event_streams SET last_seq=$4::bigint
+           WHERE tenant_id=$1 AND space_id=$2 AND stream_ref=$3`,
+          [scope.tenantId, scope.spaceId, first.streamRef, String(sequence)],
+        )
+        await client.query(
+          `INSERT INTO agent_platform.semantic_events (tenant_id,space_id,stream_ref,recorded_seq,payload_digest,idempotency_key)
+           SELECT $1,$2,$3,new_event.sequence,new_event.digest,new_event.key
+           FROM unnest($4::bigint[],$5::text[],$6::text[]) AS new_event(sequence,digest,key)`,
+          [scope.tenantId, scope.spaceId, first.streamRef, newSequences, pending.map((request) => request.payloadDigest), pending.map((request) => request.idempotencyKey)],
+        )
+      }
+      const appended = new Set(pending.map((request) => request.idempotencyKey))
+      return requests.map((request) => {
+        const recordedSeq = recorded.get(request.idempotencyKey)
+        if (recordedSeq === undefined) throw new ControlStorageError('INVALID_OPERATION', 'the event batch lost a source sequence')
+        return { recordedSeq, appended: appended.has(request.idempotencyKey) }
+      })
+    })
+  }
+
   async appendEvent(
     request: ControlAppendEventRequest,
     ctx: ToolContext,

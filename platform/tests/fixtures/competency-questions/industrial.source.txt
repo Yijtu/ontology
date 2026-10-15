@@ -1,0 +1,11 @@
+Synthetic industrial maintenance example; not an industry standard.
+A-01 asset_code=A-01; hours=120 h; exempt=false; alarm=true; in_workshop=W-01.
+A-02 asset_code=A-02; hours=30 h; exempt=false; alarm=false.
+W-01 shop_code=W-01; staffed=false.
+Service rule: hours>=100 h triggers stage_one=true, unless exempt=true.
+Second layer: stage_one=true from the service rule triggers stage_two=true.
+Third layer: stage_two=true from the second layer triggers ready=true.
+Alarm rule: alarm=true is an independent support for stage_one=true.
+Either hours>=100 h or alarm=true supports stage_one=true.
+Boundary sample A-03 asset_code=A-03; hours=100 h; exempt=false.
+Version two adds inspection_due; the version-two observation says A-01 inspection_due=true.

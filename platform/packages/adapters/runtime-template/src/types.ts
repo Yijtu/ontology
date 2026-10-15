@@ -1,9 +1,14 @@
 import type {
   ComponentManifest,
   PlanSpec,
+  PlanClarification,
   ResourceRef,
+  ResumeInput,
+  RuntimeDependencies,
+  RuntimeInput,
   ToolContext,
   ToolResultStatus,
+  Uuid,
 } from '@ontology/contracts'
 
 /**
@@ -24,7 +29,40 @@ export interface PublishedPlan {
  */
 export interface TemplatePlanResolver {
   resolve(planRef: ResourceRef | undefined, ctx: ToolContext): Promise<PublishedPlan>
+  /**
+   * New host seam for one run-bound route preparation. The runtime supplies the full input
+   * and its real capabilities so a resolver can use the exact question, cancellation signal,
+   * and already-bound shared-ledger model ports. Existing resolvers may keep using `resolve`.
+   */
+  prepare?(request: TemplatePlanPreparationRequest): Promise<TemplatePlanPreparation>
 }
+
+export interface TemplatePlanPreparationRequest {
+  readonly mode: 'start' | 'resume'
+  readonly input: RuntimeInput | ResumeInput
+  /** The exact ref requested by RuntimeInput or decoded from its private checkpoint. */
+  readonly planRef?: ResourceRef
+  readonly dependencies: RuntimeDependencies
+}
+
+export type TemplatePlanPreparation =
+  | {
+      readonly kind: 'plan'
+      readonly published: PublishedPlan
+      /** Required to prove that a supplied checkpoint/ref was loaded before preparing a result. */
+      readonly sourceReceiptRef?: ResourceRef
+    }
+  | {
+      readonly kind: 'clarification'
+      /** An immutable route receipt that a future resume can resolve without re-planning blindly. */
+      readonly receiptRef: ResourceRef
+      /** Stable across an idempotent route retry so the response binds to this receipt. */
+      readonly clarificationId: Uuid
+      readonly clarification: PlanClarification
+      readonly fallback?: string
+      /** Required when this clarification was derived from a prior receipt. */
+      readonly sourceReceiptRef?: ResourceRef
+    }
 
 export interface TemplateRuntimeConfig {
   readonly manifest: ComponentManifest

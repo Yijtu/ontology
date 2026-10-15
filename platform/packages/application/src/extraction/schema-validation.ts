@@ -47,7 +47,14 @@ function issue(
   out.push(field === undefined ? { code, message } : { code, message, field })
 }
 
-function valueTypeMatches(valueType: IndustryAttributeValueType, value: string | number | boolean): boolean {
+/** The canonical exact-decimal grammar (contracts `DecimalString`); exponent notation is refused. */
+const DECIMAL_STRING = /^-?(?:0|[1-9]\d*)(?:\.\d+)?$/
+
+function isExactDecimal(value: string): boolean {
+  return value.length <= 64 && DECIMAL_STRING.test(value)
+}
+
+function valueTypeMatches(valueType: IndustryAttributeValueType, value: string | number | boolean, mappedExactNumber = false): boolean {
   switch (valueType) {
     case 'string':
       return typeof value === 'string'
@@ -58,9 +65,13 @@ function valueTypeMatches(valueType: IndustryAttributeValueType, value: string |
     case 'enum':
       return typeof value === 'string'
     case 'number':
-      return typeof value === 'number' && Number.isFinite(value)
+      return (typeof value === 'number' && Number.isFinite(value)) ||
+        (mappedExactNumber && typeof value === 'string' && isExactDecimal(value))
     case 'quantity':
-      return typeof value === 'number' && Number.isFinite(value)
+      // A new quantity is the exact decimal string, so a value never passes through a lossy
+      // `Number`. A finite `number` is accepted only for a legacy historical candidate.
+      return (typeof value === 'string' && isExactDecimal(value)) ||
+        (typeof value === 'number' && Number.isFinite(value))
     case 'boolean':
       return typeof value === 'boolean'
   }
@@ -73,6 +84,7 @@ function validateAttributeValue(
   object: IndustryObjectSchema,
   value: CandidateAttributeValue,
   field: string,
+  mappedExactNumber = false,
 ): void {
   const attribute = attributeById(object, value.attributeId)
   if (attribute === undefined) {
@@ -88,7 +100,7 @@ function validateAttributeValue(
     }
     return
   }
-  if (!valueTypeMatches(attribute.valueType, value.value)) {
+  if (!valueTypeMatches(attribute.valueType, value.value, mappedExactNumber)) {
     issue(
       out,
       'TYPE_MISMATCH',
@@ -96,6 +108,28 @@ function validateAttributeValue(
       field,
     )
     return
+  }
+  if (attribute.valueType === 'quantity') {
+    // The declared decimal, when present, must itself be an exact canonical token; a value
+    // that claims a decimal but is not one is never silently rounded into shape.
+    if (value.decimal !== undefined && !isExactDecimal(value.decimal)) {
+      issue(
+        out,
+        'INVALID_DECIMAL',
+        `attribute ${value.attributeId} carries a decimal that is not an exact token`,
+        field,
+      )
+      return
+    }
+    if (typeof value.value === 'string' && !isExactDecimal(value.value)) {
+      issue(
+        out,
+        'INVALID_DECIMAL',
+        `attribute ${value.attributeId} expects an exact decimal string`,
+        field,
+      )
+      return
+    }
   }
   if (attribute.valueType === 'enum') {
     const allowed = attribute.enumValues ?? []
@@ -188,7 +222,7 @@ export function validateEntity(entity: EntityCandidate, schema: IndustrySchema):
     return out
   }
   entity.attributes.forEach((value, index) => {
-    validateAttributeValue(out, schema, object, value, `attributes[${String(index)}]`)
+    validateAttributeValue(out, schema, object, value, `attributes[${String(index)}]`, entity.inputVersion.projectFact !== undefined)
   })
   validateCardinality(out, object, entity.attributes)
   validateIdentity(out, schema, entity)
@@ -231,6 +265,17 @@ function validateEndpoint(
     return
   }
   if (endpoint.nativeId === undefined || endpoint.nativeId.length === 0) {
+    // A named entity that was not identified is pending confirmation (soft); a fabricated
+    // in-run reference is a hard dangling failure. The two are never collapsed.
+    if (endpoint.unresolvedReason === 'missing_reference') {
+      issue(
+        out,
+        'UNRESOLVED_ENDPOINT',
+        `relation ${relation.relationId} ${side} endpoint names an entity that was not identified`,
+        side,
+      )
+      return
+    }
     issue(
       out,
       'DANGLING_REFERENCE',
@@ -264,6 +309,11 @@ export function isHardIssue(candidateIssue: CandidateIssue): boolean {
   // the candidate must stay visible for a human decision, never be published.
   if (candidateIssue.code === 'RULE_UNSUPPORTED_EXPRESSION') return false
   if (candidateIssue.code === 'CONFLICTING_RULE') return false
+  // An unknown field and a named-but-unidentified relation endpoint are pending confirmation,
+  // not silent failures: they must stay visible for a human decision and are never published
+  // by the model (P.US-008.AC-03).
+  if (candidateIssue.code === 'UNKNOWN_ATTRIBUTE') return false
+  if (candidateIssue.code === 'UNRESOLVED_ENDPOINT') return false
   return true
 }
 
@@ -332,8 +382,16 @@ function validateRuleExpression(
       return
     }
     case 'relation': {
-      if (relationById(schema, expression.relationId) === undefined) {
+      const relation = relationById(schema, expression.relationId)
+      if (relation === undefined) {
         issue(out, 'UNKNOWN_RELATION', `rule relation ${expression.relationId} is not declared`, field)
+        return
+      }
+      if (relation.fromObjectId !== object.objectId) issue(out, 'ATTRIBUTE_NOT_ON_OBJECT', `relation ${expression.relationId} is not declared from ${object.objectId}`, field)
+      if (expression.targetCondition !== undefined) {
+        const target = objectById(schema, relation.toObjectId)
+        if (target === undefined) issue(out, 'UNKNOWN_OBJECT', `relation target ${relation.toObjectId} is not declared`, field)
+        else validateRuleExpression(out, schema, target, expression.targetCondition, `${field}.targetCondition`)
       }
       return
     }

@@ -1,5 +1,12 @@
-import type { DecimalQuantity, DocumentSpan, ResourceRef, RevisionString, ScopeRef, Sha256Digest, Uuid, VersionRef } from './generated/contracts'
-import type { SpanPrecision } from './document-parse'
+import type { ControlReadProjectionRequest, DecimalQuantity, DocumentSpan, ResourceRef, RevisionString, ScopeRef, Sha256Digest, SourceRef, Uuid, ValidityInterval, VersionRef } from './generated/contracts'
+import type { SemanticDefinitionVersion } from './semantic-definitions'
+import type { PublishedExecutableRule, PublishedStatement } from './semantic-publication'
+import type { IdentityPublishedBinding } from './identity-decisions'
+import type { ToolContext } from './trusted'
+import type { CandidateRecord, StructuredCandidateSourceSpan } from './extraction'
+import type { ParseCoverage, SpanPrecision } from './document-parse'
+import type { ExactScalarDecimal } from './materialization'
+import type { RuleDependencyReference } from './rule-action-candidates'
 
 /**
  * Bounded rule AST and rule-candidate contracts (SPEC D4.3/D5, US-013/US-015, FR-14/FR-15).
@@ -22,7 +29,7 @@ export type RuleComparisonOperator = 'eq' | 'ne' | 'lt' | 'lte' | 'gt' | 'gte'
 export interface RuleConclusionBinding {
   /** The exact attribute/predicate declared on the rule's scoped object. */
   readonly predicate: string
-  readonly value: DecimalQuantity | string | boolean
+  readonly value: DecimalQuantity | ExactScalarDecimal | string | boolean
 }
 
 export type RuleApplicabilityState = 'applicable' | 'not_applicable' | 'unknown' | 'conflict'
@@ -37,8 +44,82 @@ export interface RuleComputationFactRef {
   readonly sourceRefs?: readonly ResourceRef[]
 }
 
+/** Exact official observations consumed by a rule, including edge endpoints and tombstones. */
+export interface RulePremiseObservation {
+  readonly projectId?: string
+  readonly assertionId: string
+  readonly relation?: { readonly relationId: string; readonly targetEntityId?: string; readonly targetObjectId: string; readonly endpointResolved: boolean }
+  readonly logicalAssertionId: string
+  readonly recordedSeq: RevisionString
+  readonly op: 'assert' | 'correct' | 'retract'
+  readonly subject: string
+  readonly predicate: string
+  readonly value?: RuleConclusionBinding['value']
+  readonly sourceStatementId?: string
+  readonly objectId?: string
+  readonly attributeId?: string
+  readonly schemaRef?: VersionRef
+  readonly validity: ValidityInterval
+  readonly sourceRef: SourceRef
+  readonly sourceRefs?: readonly ResourceRef[]
+  readonly evidenceId?: string
+}
+
+/** Saved at materialization, before mutable publication heads can change. No compiled AST. */
+export interface RulePremiseReplayInput {
+  readonly request: ControlReadProjectionRequest
+  readonly definition?: SemanticDefinitionVersion
+  readonly declarations: readonly PublishedExecutableRule[]
+  readonly attributeStatements: readonly PublishedStatement[]
+  readonly relationStatements: readonly PublishedStatement[]
+  readonly identityBindings: readonly IdentityPublishedBinding[]
+  readonly subjects: readonly { readonly subjectEntityId: string; readonly objectId: string; readonly projectId?: string }[]
+  readonly facts: readonly RulePremiseObservation[]
+  readonly completeRangeAttributeIds: readonly string[]
+  readonly evaluatedRuleIds: readonly string[]
+  readonly complete: boolean
+}
+
+/** Independent archived-input verification, implemented by the semantic engine, injected by host. */
+export interface RulePremiseReplayPort {
+  verify(input: { readonly artifact: unknown; readonly payload: unknown }, ctx: ToolContext): Promise<boolean>
+}
+
+/** Authorized read of one real original row/cell using its stored mapping/parser pins. */
+export interface RuleStructuredPremiseSourcePort {
+  read(candidate: CandidateRecord, span: StructuredCandidateSourceSpan, ctx: ToolContext): Promise<{
+    readonly documentRef: ResourceRef
+    readonly documentVersionRef: ResourceRef
+    readonly parserVersion: string
+    /** The exact UTF-8 row fingerprint input, containing original raw tokens and cell kinds. */
+    readonly rowText: string
+  } | undefined>
+}
+
+/**
+ * Authorized read of one authored original row/cell used as a rule/action clause basis. Unlike a
+ * fact premise, the clause's source is a workspace-approved structured original that carries its own
+ * parse pin, so the reader resolves the row straight from the stored structured parse and returns
+ * the document/parser pins the verifier must compare (a structured parse never lives in the text
+ * `DocumentParseStore`). It reports `rowText`, whose sha256 is the span's `rowDigest`.
+ */
+export interface RuleStructuredPolicySourcePort {
+  read(span: StructuredRuleProvenanceSpan, ctx: ToolContext): Promise<{
+    readonly documentRef: ResourceRef
+    readonly documentVersionRef: ResourceRef
+    readonly parserVersion: string
+    readonly sourceCoverage?: ParseCoverage
+    /** The exact UTF-8 row fingerprint input, containing original raw tokens and cell kinds. */
+    readonly rowText: string
+  } | undefined>
+}
+
 /** The durable typed result of computing one published rule against one entity. */
 export interface RuleComputationArtifact {
+  readonly premiseInput?: RulePremiseReplayInput
+  readonly publishedPackRef?: VersionRef
+  readonly dependencyRefs?: readonly RuleDependencyReference[]
+  readonly projectId?: string
   readonly schemaVersion: 'rule-computation-artifact@1'
   readonly scopeRef: ScopeRef
   readonly definitionRef: VersionRef
@@ -78,13 +159,36 @@ export interface RuleComputationArtifact {
  * parse stage produced (LOCAL-023) so an element is traceable to the exact source location,
  * and `precision` stays `approximate` for an OCR span.
  */
-export interface RuleProvenanceSpan {
+export interface TextRuleProvenanceSpan {
+  readonly kind?: 'text'
   readonly parseId: Uuid
   readonly chunkId: Uuid
   readonly locator: DocumentSpan['locator']
   readonly spanKind: DocumentSpan['spanKind']
   readonly precision: SpanPrecision
   readonly quoteDigest: Sha256Digest
+}
+
+/**
+ * A rule or action clause grounded in one reconciled structured row/cell (a costing table, an item
+ * list, a quota) rather than a text chunk. `kind` is absent on a text span, so an already-persisted
+ * text rule JSON needs no migration. Like a text clause it is archived as a `document_span` and
+ * re-read at derivation time, so a table-only rule is traceable to its exact row.
+ */
+export type StructuredRuleProvenanceSpan = StructuredCandidateSourceSpan
+
+export type RuleProvenanceSpan = TextRuleProvenanceSpan | StructuredRuleProvenanceSpan
+
+/** A stable identity for a rule provenance span: a text chunk keys by chunk+quote, a row by record+row. */
+export function ruleProvenanceSpanKey(span: RuleProvenanceSpan): string {
+  return span.kind === 'structured'
+    ? `${span.parseId}:${span.recordId}:${span.rowDigest}`
+    : `${span.parseId}:${span.chunkId}:${span.quoteDigest}`
+}
+
+/** The content digest a rule provenance span is pinned by: the anchored quote for text, the row fingerprint for a row. */
+export function ruleProvenanceSpanDigest(span: RuleProvenanceSpan): Sha256Digest {
+  return span.kind === 'structured' ? span.rowDigest : span.quoteDigest
 }
 
 export interface RuleComparisonNode {
@@ -109,6 +213,8 @@ export interface RuleRangeNode {
 export interface RuleRelationNode {
   readonly op: 'relation'
   readonly relationId: string
+  /** Reviewed rule-specific condition on the schema-declared target; positive finite subset. */
+  readonly targetCondition?: RuleExpressionNode
   readonly spans: readonly RuleProvenanceSpan[]
 }
 
@@ -196,4 +302,6 @@ export interface DraftRule {
   readonly exceptions: readonly unknown[]
   /** Optional proposed consequence; it remains untrusted until schema validation and review. */
   readonly conclusion?: unknown
+  readonly ruleDependencies?: readonly string[]
+  readonly dependencyRefs?: readonly RuleDependencyReference[]
 }

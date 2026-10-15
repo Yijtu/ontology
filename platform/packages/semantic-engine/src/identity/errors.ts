@@ -37,12 +37,14 @@ const PLATFORM_CODE: Readonly<Record<IdentityRecallErrorCode, ErrorCode>> = {
 export class IdentityRecallError extends Error {
   readonly code: IdentityRecallErrorCode
   readonly platformCode: ErrorCode
+  readonly httpStatus: number
 
   constructor(code: IdentityRecallErrorCode, message: string, options?: ErrorOptions) {
     super(message, options?.cause === undefined ? undefined : { cause: options.cause })
     this.name = 'IdentityRecallError'
     this.code = code
     this.platformCode = PLATFORM_CODE[code]
+    this.httpStatus = code === 'SCOPE_MISMATCH' ? 403 : this.platformCode === 'CAPABILITY_NOT_CONFIGURED' ? 503 : this.platformCode === 'SOURCE_UNAVAILABLE' || this.platformCode === 'MODEL_UNAVAILABLE' ? 502 : this.platformCode === 'BUDGET_EXHAUSTED' ? 429 : 400
   }
 }
 

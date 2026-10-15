@@ -1,4 +1,4 @@
-import { sha256DigestOf } from '@ontology/core'
+import { canonicalJson as coreCanonicalJson, sha256DigestOf } from '@ontology/core'
 import type {
   ConsistencyLevel,
   DataMode,
@@ -107,6 +107,13 @@ export interface ToolExecutionOutcome {
   readonly usage?: Partial<ToolUsage>
   readonly dataMode?: DataMode
   readonly evidenceKind?: EvidenceKind
+  /**
+   * Already-archived evidence this result depends on, beyond the gateway's own result envelope.
+   * The gateway re-checks every reference (scope, archived existence, exact id/version/digest)
+   * before adding it to the returned `ToolResult` lineage, so a handler cannot smuggle an
+   * unauthorized evidence id through an unverified string.
+   */
+  readonly supportEvidenceRefs?: readonly ResourceRef[]
   /** Valid-time window shared by every business fact in this result, when the source provides one. */
   readonly validity?: ValidityInterval
 }
@@ -141,12 +148,7 @@ export interface EnabledTool {
  * regardless of property order.
  */
 export function canonicalJson(value: unknown): string {
-  if (value === null || typeof value !== 'object') return JSON.stringify(value) ?? 'null'
-  if (Array.isArray(value)) return `[${value.map((entry) => canonicalJson(entry)).join(',')}]`
-  const entries = Object.entries(value as Record<string, unknown>)
-    .filter(([, entry]) => entry !== undefined)
-    .sort(([left], [right]) => (left < right ? -1 : left > right ? 1 : 0))
-  return `{${entries.map(([key, entry]) => `${JSON.stringify(key)}:${canonicalJson(entry)}`).join(',')}}`
+  return coreCanonicalJson(value)
 }
 
 export function digestOfSchema(schema: Readonly<Record<string, unknown>>): string {

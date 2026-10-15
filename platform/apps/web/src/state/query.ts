@@ -2,6 +2,7 @@ import type { BudgetRemaining, PublishedAnswer, RunState, SseEventType } from '@
 import { isPublicSseEvent } from '../api/query'
 import type { QueryRunView, RunAnswerResult, RunEvent, RunScopeView } from '../api/query'
 import type { WorkbenchError } from './workbench'
+import { runStatusLabel } from './project-labels'
 
 /**
  * The business query reducer. It renders exactly one of the five explicit states at a time
@@ -11,22 +12,10 @@ import type { WorkbenchError } from './workbench'
  * hypothetical `unverified_answer.delta` carrying draft text — is recorded as rejected and
  * never becomes progress or an answer.
  */
-export type QueryPhase =
-  | 'loading'
-  | 'empty'
-  | 'not_configured'
-  | 'failure'
-  | 'permission_denied'
-  | 'ready'
+export type QueryPhase = 'loading' | 'empty' | 'not_configured' | 'failure' | 'permission_denied' | 'ready'
 
 export type QueryOutcome =
-  | 'pending'
-  | 'normal'
-  | 'limited'
-  | 'gap'
-  | 'conflict'
-  | 'tool_failure'
-  | 'cancelled'
+  'pending' | 'normal' | 'limited' | 'gap' | 'conflict' | 'tool_failure' | 'cancelled'
 
 export interface ClarificationView {
   readonly clarificationId: string
@@ -66,9 +55,10 @@ export type QueryEvent =
   | { readonly type: 'scopeLoadStarted' }
   | { readonly type: 'scopeLoaded'; readonly scope: RunScopeView }
   | { readonly type: 'askStarted' }
+  | { readonly type: 'restoreStarted' }
   | { readonly type: 'runLoaded'; readonly run: QueryRunView }
   | { readonly type: 'runEvents'; readonly events: readonly RunEvent[] }
-  | { readonly type: 'answerLoaded'; readonly result: RunAnswerResult }
+  | { readonly type: 'answerLoaded'; readonly runId: string; readonly result: RunAnswerResult }
   | { readonly type: 'cancelled'; readonly run: QueryRunView }
   | { readonly type: 'clarificationAnswered' }
   | { readonly type: 'streamState'; readonly state: QueryState['streamState'] }
@@ -100,11 +90,7 @@ export function initialQueryState(): QueryState {
   }
 }
 
-const GAP_CODES: ReadonlySet<string> = new Set([
-  'INSUFFICIENT_DATA',
-  'DATA_STALE',
-  'SNAPSHOT_UNAVAILABLE',
-])
+const GAP_CODES: ReadonlySet<string> = new Set(['INSUFFICIENT_DATA', 'DATA_STALE', 'SNAPSHOT_UNAVAILABLE'])
 const CONFLICT_CODES: ReadonlySet<string> = new Set(['DATA_CONFLICT', 'VERIFICATION_FAILED'])
 
 function outcomeForFailure(code: string | undefined): QueryOutcome {
@@ -130,11 +116,18 @@ function progressEntry(
 }
 
 function eventLabel(event: SseEventType, data: Readonly<Record<string, unknown>>): ProgressEntry {
+  const names: Readonly<Record<string, string>> = {
+    ontology_lookup: '核对已发布语义',
+    data_query: '查询与计算项目数据',
+    document_search: '查阅原始资料',
+    web_search: '检索公开网页',
+  }
+  const tool = typeof data['toolId'] === 'string' ? (names[data['toolId']] ?? '已登记操作') : '已登记操作'
   switch (event) {
     case 'run.state':
       return progressEntry(
         event,
-        `运行状态：${typeof data['state'] === 'string' ? data['state'] : '已更新'}`,
+        `运行状态：${typeof data['state'] === 'string' ? runStatusLabel(data['state']) : '已更新'}`,
         data,
       )
     case 'plan.summary':
@@ -142,20 +135,18 @@ function eventLabel(event: SseEventType, data: Readonly<Record<string, unknown>>
         event,
         '已生成执行计划',
         data,
-        Array.isArray(data['toolIds']) ? data['toolIds'].join(', ') : undefined,
+        Array.isArray(data['toolIds'])
+          ? data['toolIds']
+              .map((id: unknown) =>
+                typeof id === 'string' ? (names[id] ?? '已登记操作') : '操作信息无法识别',
+              )
+              .join('、')
+          : undefined,
       )
     case 'tool.started':
-      return progressEntry(
-        event,
-        `开始调用工具 ${typeof data['toolId'] === 'string' ? data['toolId'] : ''}`.trim(),
-        data,
-      )
+      return progressEntry(event, `开始${tool}`, data)
     case 'tool.completed':
-      return progressEntry(
-        event,
-        `工具完成 ${typeof data['toolId'] === 'string' ? data['toolId'] : ''}`.trim(),
-        data,
-      )
+      return progressEntry(event, `已完成${tool}`, data)
     case 'evidence.available':
       return progressEntry(
         event,
@@ -178,7 +169,10 @@ function failureCode(data: Readonly<Record<string, unknown>>): string | undefine
   return typeof code === 'string' ? code : undefined
 }
 
-function clarificationFrom(data: Readonly<Record<string, unknown>>, revision: string): ClarificationView | undefined {
+function clarificationFrom(
+  data: Readonly<Record<string, unknown>>,
+  revision: string,
+): ClarificationView | undefined {
   const clarificationId = data['clarificationId']
   if (typeof clarificationId !== 'string') return undefined
   const questionType = typeof data['questionType'] === 'string' ? data['questionType'] : 'clarification'
@@ -209,6 +203,7 @@ export function queryReducer(state: QueryState, event: QueryEvent): QueryState {
     case 'scopeLoaded':
       return { ...state, scope: event.scope, phase: 'empty', busy: false }
     case 'askStarted':
+    case 'restoreStarted':
       return {
         ...state,
         busy: true,
@@ -216,17 +211,36 @@ export function queryReducer(state: QueryState, event: QueryEvent): QueryState {
         notice: undefined,
         outcome: 'pending',
         rejectedEvents: [],
+        run: undefined,
+        answer: undefined,
+        answerState: 'none',
+        events: [],
+        lastEventId: undefined,
+        clarification: undefined,
+        budget: undefined,
+        streamState: 'closed',
       }
     case 'runLoaded': {
       const sameRun = state.run?.runId === event.run.runId
+      if (sameRun && state.outcome === 'cancelled') return state
       return {
         ...state,
         phase: 'ready',
         run: event.run,
         busy: false,
         streamState: state.streamState === 'idle' ? 'open' : state.streamState,
-        budget: event.run.budget ?? state.budget,
+        budget: event.run.budget ?? (sameRun ? state.budget : undefined),
         scope: event.run.scope ?? state.scope,
+        ...(sameRun
+          ? {}
+          : {
+              answer: undefined,
+              answerState: 'none',
+              events: [],
+              lastEventId: undefined,
+              clarification: undefined,
+              rejectedEvents: [],
+            }),
         // A refresh must not clobber a terminal outcome already learned from the event
         // stream (for example a conflict code that the run state alone cannot express).
         outcome: sameRun && state.outcome !== 'pending' ? state.outcome : outcomeFromRun(event.run),
@@ -235,7 +249,9 @@ export function queryReducer(state: QueryState, event: QueryEvent): QueryState {
     case 'runEvents':
       return applyEvents(state, event.events)
     case 'answerLoaded':
-      return applyAnswer(state, event.result)
+      return state.run?.runId !== event.runId || state.outcome === 'cancelled'
+        ? state
+        : applyAnswer(state, event.result)
     case 'cancelled':
       return {
         ...state,
@@ -244,6 +260,10 @@ export function queryReducer(state: QueryState, event: QueryEvent): QueryState {
         outcome: 'cancelled',
         busy: false,
         notice: '已取消运行；迟到的结果不会恢复运行或发布答案。',
+        answer: undefined,
+        answerState: 'none',
+        clarification: undefined,
+        streamState: 'closed',
       }
     case 'clarificationAnswered':
       return { ...state, clarification: undefined, busy: true, notice: '已提交澄清，沿用同一预算继续。' }
@@ -275,15 +295,17 @@ function outcomeFromRun(run: QueryRunView): QueryOutcome {
 }
 
 function applyEvents(state: QueryState, incoming: readonly RunEvent[]): QueryState {
+  if (state.outcome === 'cancelled') return state
   const rejected = [...state.rejectedEvents]
   const entries = [...state.events]
   const seen = new Set(entries.map((entry) => entry.id))
   let clarification = state.clarification
-  let outcome = state.outcome
+  let outcome: QueryOutcome = state.outcome
   let answerState = state.answerState
   let lastEventId = state.lastEventId
 
   for (const event of incoming) {
+    if (outcome === 'cancelled') break
     if (event.id !== '' && seen.has(event.id)) continue
     if (!isPublicSseEvent(event.event)) {
       // Defence in depth: an event outside the public surface (a draft delta, an internal
@@ -300,6 +322,14 @@ function applyEvents(state: QueryState, incoming: readonly RunEvent[]): QuerySta
       clarification = clarificationFrom(event.data, state.run?.revision ?? '0')
     }
     if (event.event === 'run.state' && event.data['state'] === 'collecting') {
+      clarification = undefined
+    }
+    if (
+      event.event === 'run.state' &&
+      (event.data['state'] === 'cancelled' || event.data['state'] === 'cancelling')
+    ) {
+      outcome = 'cancelled'
+      answerState = 'none'
       clarification = undefined
     }
     if (event.event === 'answer.published') {
@@ -320,6 +350,7 @@ function applyEvents(state: QueryState, incoming: readonly RunEvent[]): QuerySta
     answerState,
     outcome,
     rejectedEvents: rejected,
+    ...(outcome === 'cancelled' ? { answer: undefined, streamState: 'closed' } : {}),
   }
 }
 

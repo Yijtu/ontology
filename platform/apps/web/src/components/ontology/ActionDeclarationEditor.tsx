@@ -1,0 +1,29 @@
+import type { ActionDeclaration } from '@ontology/contracts'
+import type { EligibleOperationView } from '../../api/workspace-authoring'
+import { Button, Field } from '../ui'
+export function ActionDeclarationEditor({ value, onChange, operations, disabled, reason, onReason, onSave }: { readonly value: ActionDeclaration; readonly onChange: (value: ActionDeclaration) => void; readonly operations: readonly EligibleOperationView[]; readonly disabled: boolean; readonly reason: string; readonly onReason: (value: string) => void; readonly onSave: () => void }) {
+  const current = operations.find((op) => op.operationRef.id === value.suggestedOperationRef?.id && op.operationRef.version === value.suggestedOperationRef.version)
+  const useOperation = (op: EligibleOperationView) => onChange({ ...value, suggestedOperationRef: op.operationRef, inputSchemaRef: op.inputSchemaRef, outputSchemaRef: op.outputSchemaRef, permissions: [...new Set([...value.permissions, ...op.requiredPermissions])], readOnly: true, sideEffect: op.sideEffect })
+  const contractChanged = current !== undefined && (JSON.stringify(current.inputSchemaRef) !== JSON.stringify(value.inputSchemaRef) || JSON.stringify(current.outputSchemaRef) !== JSON.stringify(value.outputSchemaRef))
+  const lines = (text: string) => text.split('\n').filter((v) => v.trim() !== '')
+  return <form onSubmit={(e) => { e.preventDefault(); if (reason.trim()) onSave() }}><fieldset disabled={disabled} className="ontology-fields"><legend>编辑动作声明</legend><div className="ontology-form-grid"><Field label="业务动作名称">{(a) => <input {...a} required value={value.displayName} onChange={(e) => onChange({ ...value, displayName: e.target.value })} />}</Field><Field label="业务含义">{(a) => <textarea {...a} required value={value.businessMeaning} onChange={(e) => onChange({ ...value, businessMeaning: e.target.value })} />}</Field></div>
+    <Field label="选择当前环境授权的注册实现" hint="选择项来自服务端真实目录。输入、输出契约跟随该精确版本，不接受自填地址、代码或密钥。">{(a) => <select {...a} value={current === undefined ? '' : `${current.operationRef.id}@${current.operationRef.version}`} onChange={(e) => {
+      const op = operations.find((op) => `${op.operationRef.id}@${op.operationRef.version}` === e.target.value)
+      if (op !== undefined) useOperation(op)
+    }}><option value="">请选择真实注册实现</option>{operations.map((op) => <option key={`${op.operationRef.id}@${op.operationRef.version}`} value={`${op.operationRef.id}@${op.operationRef.version}`}>{op.displayName} · {op.operationRef.version}</option>)}</select>}</Field>
+    {operations.length === 0 ? <p className="ontology-notice">当前环境没有可授权选择的只读实现。已有声明完整保留，尚不能宣称可执行。</p> : null}
+    {contractChanged && current !== undefined ? <div className="ontology-notice"><p>已登记实现与当前声明的输入输出契约不一致。</p><Button onClick={() => useOperation(current)}>采用该精确实现版本的输入输出契约</Button></div> : null}
+    {current === undefined ? <p>原有绑定未出现在当前授权目录中。当前编辑可作为语义声明保存；在绑定通过验核之前保持不可执行。</p> : <><p>实际所需能力：{current.requiredCapabilities.join('、') || '无额外能力'}；权限：{current.requiredPermissions.join('、') || '无额外权限'}。</p><div className="ontology-form-grid"><section><h4>输入内容</h4><SchemaFields value={current.inputSchema} /></section><section><h4>输出内容</h4><SchemaFields value={current.outputSchema} /></section></div><details><summary>实现、契约、版本和执行上限</summary><pre>{JSON.stringify(current, null, 2)}</pre></details></>}
+    <Field label="执行前需要满足什么" hint="每行一个明确的业务前提。">{(a) => <textarea {...a} value={value.preconditions.join('\n')} onChange={(e) => onChange({ ...value, preconditions: lines(e.target.value) })} />}</Field>
+    <Field label="结果必须附带什么证据" hint="每行一个证据要求。">{(a) => <textarea {...a} value={value.evidenceRequirements.join('\n')} onChange={(e) => onChange({ ...value, evidenceRequirements: lines(e.target.value) })} />}</Field>
+    {value.requiredCapabilities.length === 0 ? null : <fieldset><legend>已声明的能力版本要求</legend><p className="ontology-hint">这是待审核的兼容要求，不能给当前环境增加能力或权限。原有版本约束完整保留。</p>{value.requiredCapabilities.map((capability, i) => <div className="ontology-form-grid" key={`${capability.name}:${i}`}><p>{capability.name}</p><Field label={`${capability.name} 最低版本要求`}>{(a) => <input {...a} value={capability.versionRange.min} onChange={(e) => onChange({ ...value, requiredCapabilities: value.requiredCapabilities.map((v, index) => index === i ? { ...v, versionRange: { ...v.versionRange, min: e.target.value } } : v) })} />}</Field><Field label={`${capability.name} 最高版本要求（可选）`}>{(a) => <input {...a} value={capability.versionRange.max ?? ''} onChange={(e) => { const versionRange = e.target.value === '' ? { min: capability.versionRange.min } : { ...capability.versionRange, max: e.target.value }; onChange({ ...value, requiredCapabilities: value.requiredCapabilities.map((v, index) => index === i ? { ...v, versionRange } : v) }) }} />}</Field></div>)}</fieldset>}
+    <p>声明权限：{value.permissions.join('、') || '未声明'}。声明与注册实现的能力、权限和副作用由服务端重新验核。</p>
+    <Field label="本次修改原因">{(a) => <textarea {...a} required value={reason} onChange={(e) => onReason(e.target.value)} />}</Field><p>保存产生新候选，须重新确认每项来源并由人批准。启用声明不代表已通过部署验核。</p><Button type="submit" variant="primary" disabled={disabled || !reason.trim()}>{current === undefined ? "保存为新动作声明（尚不可执行）" : "保存为新动作候选"}</Button>
+  </fieldset></form>
+}
+function SchemaFields({ value }: { readonly value: Readonly<Record<string, unknown>> }) {
+  const properties = value['properties']
+  if (typeof properties !== 'object' || properties === null || Array.isArray(properties)) return <p>此契约未提供可读字段列表，请查看高级契约。</p>
+  const required = Array.isArray(value['required']) ? value['required'] : []
+  return <ul>{Object.entries(properties).map(([name, field]) => <li key={name}>{typeof field === 'object' && field !== null && 'title' in field && typeof field.title === 'string' ? field.title : name}{required.includes(name) ? '（必填）' : '（可选）'}</li>)}</ul>
+}

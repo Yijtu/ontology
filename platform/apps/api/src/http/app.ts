@@ -22,6 +22,26 @@ import { registerAnswerRoutes } from './answers'
 import type { AnswerRouteDependencies } from './answers'
 import { registerFeedbackRoutes } from './feedback'
 import type { FeedbackRouteDependencies } from './feedback'
+import { registerIndustryWorkspaceRoutes } from './industry-workspaces'
+import type { IndustryWorkspaceRouteDependencies } from './industry-workspaces'
+import { registerAssetCandidateRoutes } from './asset-candidates'
+import type { AssetCandidateRouteDependencies } from './asset-candidates'
+import { registerCandidateSourceRoutes } from './candidate-sources'
+import type { CandidateSourceRouteDependencies } from './candidate-sources'
+import { registerDefinitionEditingRoutes } from './definition-editing'
+import type { DefinitionEditingRouteDependencies } from './definition-editing'
+import { registerRuleActionCandidateRoutes } from './rule-action-candidates'
+import type { RuleActionCandidateRouteDependencies } from './rule-action-candidates'
+import { registerInstanceReviewRoutes } from './instances'
+import type { InstanceReviewRouteDependencies } from './instances'
+import { registerSyntheticValidationRoutes } from './synthetic-validation'
+import { registerCompetencyQuestionRoutes } from './competency-questions'
+import type { CompetencyQuestionRouteDependencies } from './competency-questions'
+import type { SyntheticValidationRouteDependencies } from './synthetic-validation'
+import { registerProjectRoutes } from './projects'
+import type { ProjectRouteDependencies } from './projects'
+import { registerProjectDocumentRoutes } from './project-documents'
+import type { ProjectDocumentRouteDependencies } from './project-documents'
 import { installErrorHandler } from './shared'
 import type { RequestAuthenticator } from './shared'
 
@@ -38,6 +58,7 @@ export interface ApiServerOptions {
     readonly progress?: RunProgressReader
     readonly dispatch?: RunApiOptions['dispatch']
     readonly validateSubmission?: RunApiOptions['validateSubmission']
+    readonly resolveRequest?: RunApiOptions['resolveRequest']
     readonly submissionMode?: RunApiOptions['submissionMode']
   }
   /** Register the durable-job surface (`POST /ingestions`, `GET /jobs/{id}`, retry). */
@@ -58,12 +79,32 @@ export interface ApiServerOptions {
   readonly answers?: Omit<AnswerRouteDependencies, 'authenticate'>
   /** Register the append-only feedback surface (`POST/GET /runs/{id}/feedback`). */
   readonly feedback?: Omit<FeedbackRouteDependencies, 'authenticate'>
+  /** Register the industry-workspace draft management surface (`/industry-workspaces`). */
+  readonly industryWorkspaces?: Omit<IndustryWorkspaceRouteDependencies, 'authenticate'>
+  /** Register the definition-candidate generation surface (`/industry-workspaces/:id/generations`). */
+  readonly assetCandidates?: Omit<AssetCandidateRouteDependencies, 'authenticate'>
+  /** Register the candidate-source research and review surface (`/industry-workspaces/:id/sources`, `/research`). */
+  readonly candidateSources?: Omit<CandidateSourceRouteDependencies, 'authenticate'>
+  /** Register the definition editing/validation surface (`/industry-workspaces/:id/candidates/:id/edits`). */
+  readonly definitionEditing?: Omit<DefinitionEditingRouteDependencies, 'authenticate'>
+  /** Register the rule/action candidate surface (`/industry-workspaces/:id/rule-action-candidates`). */
+  readonly ruleActionCandidates?: Omit<RuleActionCandidateRouteDependencies, 'authenticate'>
+  /** Register the public instance review surface (`/projects/:id/instance-records`). */
+  readonly instanceReviews?: Omit<InstanceReviewRouteDependencies, 'authenticate'>
+  /** Register the synthetic sandbox / industry validation surface (`/industry-workspaces/:id/validations`). */
+  readonly syntheticValidation?: Omit<SyntheticValidationRouteDependencies, 'authenticate'>
+  readonly competencyQuestions?: Omit<CompetencyQuestionRouteDependencies, 'authenticate'>
+  /** Register the customer-project, pack-mounting and readiness surface (`/projects`). */
+  readonly projects?: Omit<ProjectRouteDependencies, 'authenticate'>
+  /** Register the project document corpus and search surface (`/projects/:id/document-*`). */
+  readonly projectDocuments?: Omit<ProjectDocumentRouteDependencies, 'authenticate'>
   readonly logger?: boolean
 }
 
 export function createApiServer(options: ApiServerOptions): FastifyInstance {
   const app = Fastify({ logger: options.logger ?? false })
   installErrorHandler(app)
+  if (options.competencyQuestions !== undefined) registerCompetencyQuestionRoutes(app, { ...options.competencyQuestions, authenticate: options.authenticate })
   if (options.runs !== undefined) {
     registerRunRoutes(app, {
       service: options.runs.service,
@@ -71,6 +112,7 @@ export function createApiServer(options: ApiServerOptions): FastifyInstance {
       ...(options.runs.progress === undefined ? {} : { progress: options.runs.progress }),
       ...(options.runs.dispatch === undefined ? {} : { dispatch: options.runs.dispatch }),
       ...(options.runs.validateSubmission === undefined ? {} : { validateSubmission: options.runs.validateSubmission }),
+      ...(options.runs.resolveRequest === undefined ? {} : { resolveRequest: options.runs.resolveRequest }),
       ...(options.runs.submissionMode === undefined ? {} : { submissionMode: options.runs.submissionMode }),
     })
   }
@@ -100,6 +142,60 @@ export function createApiServer(options: ApiServerOptions): FastifyInstance {
   }
   if (options.feedback !== undefined) {
     registerFeedbackRoutes(app, { ...options.feedback, authenticate: options.authenticate })
+  }
+  if (options.industryWorkspaces !== undefined) {
+    registerIndustryWorkspaceRoutes(app, {
+      ...options.industryWorkspaces,
+      authenticate: options.authenticate,
+    })
+  }
+  if (options.assetCandidates !== undefined) {
+    registerAssetCandidateRoutes(app, {
+      ...options.assetCandidates,
+      authenticate: options.authenticate,
+    })
+  }
+  if (options.candidateSources !== undefined) {
+    registerCandidateSourceRoutes(app, {
+      ...options.candidateSources,
+      authenticate: options.authenticate,
+    })
+  }
+  if (options.definitionEditing !== undefined) {
+    registerDefinitionEditingRoutes(app, {
+      ...options.definitionEditing,
+      authenticate: options.authenticate,
+    })
+  }
+  if (options.ruleActionCandidates !== undefined) {
+    registerRuleActionCandidateRoutes(app, {
+      ...options.ruleActionCandidates,
+      authenticate: options.authenticate,
+    })
+  }
+  if (options.instanceReviews !== undefined) {
+    registerInstanceReviewRoutes(app, {
+      ...options.instanceReviews,
+      authenticate: options.authenticate,
+    })
+  }
+  if (options.syntheticValidation !== undefined) {
+    registerSyntheticValidationRoutes(app, {
+      ...options.syntheticValidation,
+      authenticate: options.authenticate,
+    })
+  }
+  if (options.projects !== undefined) {
+    registerProjectRoutes(app, {
+      ...options.projects,
+      authenticate: options.authenticate,
+    })
+  }
+  if (options.projectDocuments !== undefined) {
+    registerProjectDocumentRoutes(app, {
+      ...options.projectDocuments,
+      authenticate: options.authenticate,
+    })
   }
   return app
 }

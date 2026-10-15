@@ -1,0 +1,3 @@
+facility_code,length,condition,closed,located_in
+F-01,12.5,bad,false,D-01
+F-02,5.0,good,false,

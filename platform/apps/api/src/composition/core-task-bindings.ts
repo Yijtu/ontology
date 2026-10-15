@@ -1,0 +1,259 @@
+import { exampleComputeArtifact } from './example-compute-artifact'
+import type {
+  OperationRef,
+  PublishedTaskBinding,
+  PublishedTaskBindingBody,
+  ScopeRef,
+  Sha256Digest,
+  TaskBindingStore,
+  TaskKind,
+  ToolContext,
+  VersionRef,
+} from '@ontology/contracts'
+import { sha256DigestOf } from '@ontology/core'
+import {
+  EXAMPLE_OPERATION_REF,
+  canonicalJson,
+  exampleRegisteredOperation,
+  registeredOperationDigest,
+} from '@ontology/tool-services'
+import type { CoreExampleScenario } from './core-example-loader'
+import { CORE_TYPED_RESULT_SCHEMA_REF } from './core-local-composition'
+
+/**
+ * The runnable task bindings the default Core host mounts for every scenario (SPEC v0.3a
+ * §EX-2.1/§EX-3.1). Each binding is a declarative record: it names the task kind, the exact
+ * parameter schema, the capabilities/readiness it needs and the registered result format the
+ * host can render. It carries no executable code, no endpoint and no industry token — the
+ * concrete handlers reach it only through the run's resolved profile and the shared gateway.
+ *
+ * The host always mounts one binding per (definition, kind). The binding digest covers the
+ * scenario definition, so two scenarios never collide in the store even though the id/version
+ * are shared. Mounting is idempotent: the exact same record is a no-op, a different body under
+ * the same ref is refused by the store.
+ */
+
+const BINDING_VERSION = '1.0.0'
+const CONTRACT_SCHEMA_BASE = 'https://ontology.local/schema'
+const CORE_TASK_ID = (kind: TaskKind): string => `core.task.${kind}`
+
+/**
+ * The registered compute operation the mounted compute task binding pins. The generic Core no
+ * longer hardcodes the example operation here: a deployment passes its own primary operation,
+ * and the sample deployment passes exactly the neutral example one.
+ */
+export interface CoreComputePrimary {
+  readonly operationRef: OperationRef
+  readonly registeredOperationDigest: Sha256Digest
+}
+
+function defaultComputePrimary(): CoreComputePrimary {
+  return {
+    operationRef: EXAMPLE_OPERATION_REF,
+    registeredOperationDigest: registeredOperationDigest(exampleRegisteredOperation(exampleComputeArtifact)),
+  }
+}
+
+function parameterSchemaOf(kind: TaskKind): Readonly<Record<string, unknown>> {
+  switch (kind) {
+    case 'published_facts':
+      return { type: 'object', additionalProperties: false, properties: {} }
+    case 'rule_judgement':
+      // A rule judgement names the exact already-materialized instance it must derive: the
+      // reviewed rule version, the mounted definition, the subject/object identity and the
+      // bitemporal point. Nothing here is model-authored at run time — the fixed plan copies
+      // these host-approved parameters into the typed lookup request.
+      return {
+        type: 'object',
+        additionalProperties: false,
+        properties: {
+          ruleRef: { $ref: `${CONTRACT_SCHEMA_BASE}/common.schema.json#/$defs/VersionRef` },
+          objectId: { type: 'string', minLength: 1 },
+          subjectEntityId: { type: 'string', minLength: 1 },
+          validAt: { $ref: `${CONTRACT_SCHEMA_BASE}/common.schema.json#/$defs/Rfc3339UtcTimestamp` },
+          asOfRecordedSeq: { type: 'string', minLength: 1 },
+          judgementAxis: { type: 'string', enum: ['applicability', 'business_proposition'] },
+          rule: { type: 'string', minLength: 1 },
+          entity: { type: 'string', minLength: 1 },
+          object: { type: 'string', minLength: 1 },
+        },
+        oneOf: [
+          { required: ['ruleRef', 'objectId', 'subjectEntityId', 'validAt', 'asOfRecordedSeq'], properties: { ruleRef: true, objectId: true, subjectEntityId: true, validAt: true, asOfRecordedSeq: true, rule: false, entity: false, object: false } },
+          { required: ['rule', 'entity'], properties: { rule: true, entity: true, ruleRef: false, subjectEntityId: false, validAt: false, asOfRecordedSeq: false, objectId: false, judgementAxis: false } },
+        ],
+      }
+    case 'relations':
+      return {
+        type: 'object',
+        additionalProperties: false,
+        properties: {
+          startEntityId: { type: 'string', minLength: 1 },
+          relationIds: { type: 'array', minItems: 1, maxItems: 3, items: { type: 'string', minLength: 1 } },
+          validAt: { $ref: `${CONTRACT_SCHEMA_BASE}/common.schema.json#/$defs/Rfc3339UtcTimestamp` },
+        },
+        required: ['startEntityId', 'relationIds', 'validAt'],
+      }
+    case 'structured_query':
+      return {
+        type: 'object',
+        additionalProperties: false,
+        properties: {
+          objectId: { type: 'string' },
+          fields: { type: 'array', items: { type: 'string' } },
+          limit: { type: 'integer' },
+        },
+        required: ['objectId', 'fields'],
+      }
+    case 'document_qa':
+      return {
+        type: 'object',
+        additionalProperties: false,
+        properties: { query: { type: 'string' }, limit: { type: 'integer' } },
+        required: ['query'],
+      }
+    case 'compute':
+      return { type: 'object', additionalProperties: false, properties: {} }
+    default: {
+      const exhaustive: never = kind
+      throw new Error(`unhandled task kind ${String(exhaustive)}`)
+    }
+  }
+}
+
+function requiredCapabilitiesOf(kind: TaskKind): readonly string[] {
+  switch (kind) {
+    case 'structured_query':
+      return ['structured_query']
+    case 'document_qa':
+      return ['document_search']
+    // `published_facts` reads through ontology_lookup, `rule_judgement` through the published
+    // rule definitions and `compute` through the registered operation pin; none declares a
+    // deployment capability the generic Core does not already resolve for every scenario.
+    case 'published_facts':
+    case 'rule_judgement':
+    case 'relations':
+    case 'compute':
+      return []
+    default: {
+      const exhaustive: never = kind
+      throw new Error(`unhandled task kind ${String(exhaustive)}`)
+    }
+  }
+}
+
+function requiredReadinessOf(kind: TaskKind): readonly ('published_semantics' | 'dataset' | 'document_index')[] {
+  switch (kind) {
+    case 'structured_query':
+      return ['dataset']
+    case 'document_qa':
+      return ['document_index']
+    case 'rule_judgement':
+    case 'relations':
+      return ['published_semantics']
+    case 'published_facts':
+    case 'compute':
+      return []
+    default: {
+      const exhaustive: never = kind
+      throw new Error(`unhandled task kind ${String(exhaustive)}`)
+    }
+  }
+}
+
+function bodyFor(
+  scenario: Pick<CoreExampleScenario, 'definitionRef'>,
+  kind: TaskKind,
+  primary: CoreComputePrimary = defaultComputePrimary(),
+): PublishedTaskBindingBody {
+  const parameterSchema = parameterSchemaOf(kind)
+  const operationRef = kind === 'compute' ? primary.operationRef : undefined
+  return {
+    schemaVersion: 'published-task-binding@1',
+    taskBindingIdentity: { id: CORE_TASK_ID(kind), version: BINDING_VERSION },
+    actionDefinitionRef: scenario.definitionRef,
+    kind,
+    parameterSchema: { ...parameterSchema },
+    parameterSchemaDigest: sha256DigestOf(canonicalJson(parameterSchema)),
+    requiredCapabilities: [...requiredCapabilitiesOf(kind)],
+    requiredReadiness: [...requiredReadinessOf(kind)],
+    resultSchemaRef: CORE_TYPED_RESULT_SCHEMA_REF,
+    ...(operationRef === undefined ? {} : { operationRef }),
+    ...(operationRef === undefined
+      ? {}
+      : { registeredOperationDigest: primary.registeredOperationDigest }),
+  }
+}
+
+/** Build one flat published-task-binding envelope from its canonical hash body. */
+function bindingOf(body: PublishedTaskBindingBody): PublishedTaskBinding {
+  return {
+    schemaVersion: body.schemaVersion,
+    taskBindingRef: {
+      id: body.taskBindingIdentity.id,
+      version: body.taskBindingIdentity.version,
+      digest: sha256DigestOf(canonicalJson(body)),
+    },
+    actionDefinitionRef: body.actionDefinitionRef,
+    kind: body.kind,
+    parameterSchema: body.parameterSchema,
+    parameterSchemaDigest: body.parameterSchemaDigest,
+    requiredCapabilities: [...body.requiredCapabilities],
+    requiredReadiness: [...body.requiredReadiness],
+    resultSchemaRef: body.resultSchemaRef,
+    ...(body.operationRef === undefined ? {} : { operationRef: body.operationRef }),
+    ...(body.registeredOperationDigest === undefined
+      ? {}
+      : { registeredOperationDigest: body.registeredOperationDigest }),
+    ...(body.validationPolicies === undefined ? {} : { validationPolicies: [...body.validationPolicies] }),
+    ...(body.fixedPlanRef === undefined ? {} : { fixedPlanRef: body.fixedPlanRef }),
+  }
+}
+
+/** The runnable task bindings mounted for one scenario, in a stable order. */
+export const CORE_MOUNTED_TASK_KINDS: readonly TaskKind[] = [
+  'published_facts',
+  'structured_query',
+  'document_qa',
+  'rule_judgement',
+  'relations',
+  'compute',
+]
+
+export function coreScenarioTaskBindings(scenario: CoreExampleScenario, primary: CoreComputePrimary = defaultComputePrimary()): readonly PublishedTaskBinding[] {
+  return CORE_MOUNTED_TASK_KINDS.map((kind) => bindingOf(bodyFor(scenario, kind, primary)))
+}
+
+/** Normal stored definitions use the same finite host handlers and canonical binding body. */
+export async function mountCoreDefinitionTaskBindings(store: TaskBindingStore, definitionRef: VersionRef, scopeRef: ScopeRef, ctx: ToolContext, primary: CoreComputePrimary = defaultComputePrimary()): Promise<void> {
+  for (const kind of CORE_MOUNTED_TASK_KINDS) {
+    const binding = bindingOf(bodyFor({ definitionRef }, kind, primary))
+    const current = await store.getBinding(scopeRef, binding.taskBindingRef, ctx)
+    if (current === undefined) await store.putBinding(scopeRef, binding, ctx)
+    else if (canonicalJson(current) !== canonicalJson(binding)) throw new Error('the stored definition task binding differs from the actual finite host contract')
+  }
+}
+
+/** The exact binding ref the host mounts for one (scenario, kind); deterministic and reusable. */
+export function coreTaskBindingRef(scenario: CoreExampleScenario, kind: TaskKind, primary: CoreComputePrimary = defaultComputePrimary()): VersionRef {
+  return bindingOf(bodyFor(scenario, kind, primary)).taskBindingRef
+}
+
+/**
+ * Mount every scenario's runnable task bindings. Idempotent per exact record; a conflicting
+ * body for an already-mounted ref is refused by the store rather than overwritten.
+ */
+export async function mountCoreTaskBindings(
+  store: TaskBindingStore,
+  scenarios: readonly CoreExampleScenario[],
+  scopeRef: ScopeRef,
+  ctx: ToolContext,
+  primary: CoreComputePrimary = defaultComputePrimary(),
+): Promise<void> {
+  for (const scenario of scenarios) {
+    for (const binding of coreScenarioTaskBindings(scenario, primary)) {
+      const existing = await store.getBinding(scopeRef, binding.taskBindingRef, ctx)
+      if (existing !== undefined) continue
+      await store.putBinding(scopeRef, binding, ctx)
+    }
+  }
+}

@@ -1,0 +1,1036 @@
+{
+  "version": 1,
+  "phase": "approved_execution",
+  "task": "ontology-core v0.3 A 能力补齐与前端升级 · 执行中",
+  "repo": "Yijtu/ontology",
+  "scope_revision": 3,
+  "source_review": "D:\\database\\工作项目\\sources\\项目\\ontology-core\\2026-10-08-ontology-core-v03a-progress-review.md",
+  "source_sha256": "0b537b85a12e3ff29e915fea1d5ed457242367ab6efc6ba5fbfda71391f37fc8",
+  "baseline": "43525bec74cd84255d39df9f6ebbff0995550f96",
+  "inspected_checkout": "D:\\work\\verify-main",
+  "max_concurrency": 3,
+  "updated_at": "2026-10-08T03:11:10+00:00",
+  "waves": [
+    [
+      1,
+      2,
+      17
+    ],
+    [
+      3,
+      4,
+      5
+    ],
+    [
+      6,
+      9,
+      10
+    ],
+    [
+      7,
+      11,
+      12
+    ],
+    [
+      8,
+      13,
+      14
+    ],
+    [
+      15,
+      16,
+      18
+    ],
+    [
+      19,
+      20,
+      21
+    ],
+    [
+      22
+    ],
+    [
+      23
+    ]
+  ],
+  "current_wave": 0,
+  "nodes": {
+    "1": {
+      "id": 1,
+      "slug": "source-grounding",
+      "title": "读取原文片段与表头，提供有界生成上下文",
+      "deps": [],
+      "type": "backend",
+      "priority": "P0",
+      "status": "in_progress",
+      "scope_hint": [
+        "platform/packages/contracts/src/source-grounding.ts（新增）",
+        "platform/packages/application/src/assets/source-grounding/（新增）",
+        "platform/packages/adapters/extraction-document/src/（来源读取适配）",
+        "platform/tests/unit/source-grounding.spec.ts（新增）"
+      ],
+      "criteria": [
+        "按可信 tenant/space、workspace documentSet、sourceRef/version/digest 读取已批准资料，拒绝跨域、错摘要、未完成解析；不让请求 body 替代授权上下文。",
+        "复用现有文档解析、结构化解析和 CandidateSourceSpan，返回文本/PDF 片段、CSV/XLSX 表头与有限样例行及可回读定位；缺原文或不支持的媒体类型显式拒绝。",
+        "片段数、字节、输入 token、分页、取消有共同预算；超限返回明确 coverage/截断原因，禁止把读取失败变成空 Sources。",
+        "可验证 quote/row digest 与原文定位；覆盖来源指令注入、近似 OCR、空表、超限、跨租户和已撤回资料，提供装配工厂供 #19 注入。"
+      ],
+      "evidence": [
+        "packages/application/src/assets/definition-candidates/service.ts:751",
+        "packages/adapters/extraction-document/src/span-reader.ts:58",
+        "packages/contracts/src/extraction.ts:118"
+      ],
+      "logic_owners": [
+        "source-grounding"
+      ],
+      "excludes": "不修改 TBox 与规则候选生成逻辑；不新增通用检索平台。",
+      "branch": "feat/v03a-gap-01-source-grounding",
+      "github_issue": 251,
+      "wave": 0,
+      "local_issue_file": ".autoresearch/batches/v03a-gap-closeout/issues/gap-001-source-grounding.md",
+      "github_issue_url": "https://github.com/Yijtu/ontology/issues/251",
+      "worktree": "D:/work/.graph-worktrees/v03a-gap-node-01",
+      "agent": "/root/gap_001"
+    },
+    "2": {
+      "id": 2,
+      "slug": "publication-gate",
+      "title": "用审核账本收紧发布门并统一版本差异",
+      "deps": [],
+      "type": "backend",
+      "priority": "P0",
+      "status": "in_progress",
+      "scope_hint": [
+        "platform/packages/application/src/assets/definition-candidates/validation.ts",
+        "platform/packages/application/src/assets/definition-candidates/editing-service.ts（发布验核部分）",
+        "platform/packages/application/src/assets/publication/",
+        "platform/packages/application/src/synthetic/validation-service.ts",
+        "platform/packages/contracts/src/definition-editing.ts",
+        "platform/tests/unit/asset-publication.spec.ts",
+        "platform/tests/integration/pack-publication-postgres.spec.ts",
+        "platform/packages/semantic-engine/src/publication/（reviewCandidate 内容摘要绑定）",
+        "platform/migrations/control/078_*.sql（现有审核账本增量字段）"
+      ],
+      "criteria": [
+        "复用 semantic_candidate_reviews/candidate_review_heads 与 CompositeReviewableCandidateReader；定义候选必须存在当前 candidateId + contentDigest 对应的 approve 决策，失败/拒绝/待确认候选不得进入包；不新增第二套审批状态表。",
+        "规则/动作仅纳入可发布且已显式启用的最新修订；编辑、重生成或替换后旧批准失效。发布前重核固定审核/工作区修订，竞态不能把未批准内容带入包。",
+        "编辑与发布调用同一完整 diff：身份、引用目标、属性归属、类型、单位、端点、基数收窄、删除的判定一致；草稿展示仍保留未批准候选，不复用发布过滤隐藏它们。",
+        "new_version/keep_independent/retire_previous 策略从验证输入贯穿报告与发布，策略与报告摘要绑定；无策略/错误策略拒绝，有策略且其余检查通过可发布，旧证据保持可读。"
+      ],
+      "evidence": [
+        "packages/contracts/src/candidate-review.ts:6",
+        "packages/contracts/src/asset-candidates.ts:49",
+        "packages/application/src/assets/definition-candidates/validation.ts:47",
+        "packages/application/src/synthetic/validation-service.ts:174",
+        "packages/application/src/assets/publication/industry-asset-publication-service.ts:197"
+      ],
+      "logic_owners": [
+        "publication-assembly",
+        "definition-publication-validation",
+        "synthetic-validation",
+        "candidate-review-ledger-pin"
+      ],
+      "excludes": "不重写生成服务，不把候选 state 直接扩展为独立审批真相；#16 后续拥有 CQ 发布集成。",
+      "branch": "feat/v03a-gap-02-publication-gate",
+      "github_issue": 252,
+      "wave": 0,
+      "local_issue_file": ".autoresearch/batches/v03a-gap-closeout/issues/gap-002-publication-gate.md",
+      "github_issue_url": "https://github.com/Yijtu/ontology/issues/252",
+      "worktree": "D:/work/.graph-worktrees/v03a-gap-node-02",
+      "agent": "/root/gap_002",
+      "reserved_migration": "078"
+    },
+    "3": {
+      "id": 3,
+      "slug": "relation-premises",
+      "title": "让已发布规则执行一跳关系前提与目标条件",
+      "deps": [],
+      "type": "backend",
+      "priority": "P0",
+      "status": "pending",
+      "scope_hint": [
+        "platform/packages/semantic-engine/src/rules/",
+        "platform/packages/semantic-engine/src/validation/synthetic-evaluator.ts",
+        "platform/packages/semantic-engine/src/materialization/published-source.ts（关系输入）",
+        "platform/packages/contracts/src/rule-action-candidates.ts（必要关系输入扩展）",
+        "platform/tests/unit/rule-relation-premise.spec.ts",
+        "platform/tests/integration/rule-evaluator-postgres.spec.ts"
+      ],
+      "criteria": [
+        "从固定 definition 中读取 relationPremises 声明，统一 support、合成评估、发布编译与运行求值；一条正向一跳关系条件走真实已发布关系，不用字段伪装 relation。",
+        "对已解析端点的目标属性 targetCondition 实际求值，支持该批有限 compare/range/all/any 子集；真、显式反驳、缺观测 unknown、冲突保持独立。",
+        "声明、目标事实、边事实均限定项目/definition/validAt/recorded point；关系缺失在无完备证明时保持 unknown，撤回边或目标支撑会更新结果与来源。",
+        "仍拒绝递归、多跳、负关系与多关系前提；真实 PostgreSQL 导入→审核→发布→编译→求值验收，覆盖跨项目同名实体、端点未解析与 targetCondition 未满足。"
+      ],
+      "evidence": [
+        "packages/semantic-engine/src/rules/compile.ts:451",
+        "packages/semantic-engine/src/rules/support.ts:291",
+        "packages/semantic-engine/src/validation/synthetic-evaluator.ts:109"
+      ],
+      "logic_owners": [
+        "rule-compiler",
+        "rule-evaluator",
+        "published-source-relations"
+      ],
+      "excludes": "#12 在本节点合入后修改同一编译器；不引入通用 Datalog 引擎。",
+      "branch": "feat/v03a-gap-03-relation-premises",
+      "github_issue": 253,
+      "wave": 1,
+      "local_issue_file": ".autoresearch/batches/v03a-gap-closeout/issues/gap-003-relation-premises.md",
+      "github_issue_url": "https://github.com/Yijtu/ontology/issues/253"
+    },
+    "4": {
+      "id": 4,
+      "slug": "compute-digest",
+      "title": "让 compute 版本锁绑定真实处理器产物",
+      "deps": [],
+      "type": "infra",
+      "priority": "P1",
+      "status": "pending",
+      "scope_hint": [
+        "platform/packages/tool-services/src/compute/",
+        "platform/packages/contracts/src/compute.ts（仅确需字段时）",
+        "platform/tests/unit/compute-execution.spec.ts",
+        "platform/tests/integration/compute-execution-postgres.spec.ts"
+      ],
+      "criteria": [
+        "handlerDigest 来自确定性构建产物及其被调用的受控领域代码依赖，禁止对固定标签字符串或仅函数 toString 求摘要。",
+        "改处理器或领域依赖而不改版本字符串时摘要变化；相同内容可重现。登记、任务 binding、执行工件和回读核验绑定同一真实摘要。",
+        "旧任务锁定旧摘要时不得执行新处理器；新注册版本才能采用新摘要，缺失产物/摘要不一致显式拒绝。",
+        "保留注册式 compute 与有限参数契约，覆盖依赖变更、旧 binding、跨作用域及取消；提供接客户函数所需的工厂，不调用客户报价服务。"
+      ],
+      "evidence": [
+        "packages/tool-services/src/compute/example-operation.ts:80"
+      ],
+      "logic_owners": [
+        "compute-handler-digest"
+      ],
+      "excludes": "",
+      "branch": "feat/v03a-gap-04-compute-digest",
+      "github_issue": 254,
+      "wave": 1,
+      "local_issue_file": ".autoresearch/batches/v03a-gap-closeout/issues/gap-004-compute-digest.md",
+      "github_issue_url": "https://github.com/Yijtu/ontology/issues/254"
+    },
+    "5": {
+      "id": 5,
+      "slug": "identity-recall",
+      "title": "接入服务端身份召回与人工裁决",
+      "deps": [],
+      "type": "backend",
+      "priority": "P0",
+      "status": "pending",
+      "scope_hint": [
+        "platform/apps/api/src/http/instances.ts",
+        "platform/packages/semantic-engine/src/identity/recall-service.ts",
+        "platform/packages/application/src/identity/（新增接线服务，如需要）",
+        "platform/tests/integration/identity-recall-postgres.spec.ts"
+      ],
+      "criteria": [
+        "生产实例身份流程调用 EntityCandidateRecallService，按 definition identityScope 使用 nativeId、规范名、别名和证据；前端无需自造候选全集。",
+        "召回有界、跨租户/项目隔离，返回排序与来源；零结果、截断、相似度未配置均显式呈现，禁止把置信度当成批准。",
+        "采用已有人工身份决策，重复确认幂等；同 nativeId、不同身份域及不一致候选必须冲突或待裁决，不静默合并。",
+        "用真实 PG 验证召回→人工绑定→发布读取及撤回；返回可注册路由/工厂，装配由 #19 完成。"
+      ],
+      "evidence": [
+        "apps/api/src/http/instances.ts:310",
+        "packages/semantic-engine/src/identity/recall-service.ts:111"
+      ],
+      "logic_owners": [
+        "identity-recall-endpoint"
+      ],
+      "excludes": "",
+      "branch": "feat/v03a-gap-05-identity-recall",
+      "github_issue": 255,
+      "wave": 1,
+      "local_issue_file": ".autoresearch/batches/v03a-gap-closeout/issues/gap-005-identity-recall.md",
+      "github_issue_url": "https://github.com/Yijtu/ontology/issues/255"
+    },
+    "6": {
+      "id": 6,
+      "slug": "competency-fixtures",
+      "title": "定义能力问题与独立合成金标",
+      "deps": [],
+      "type": "backend",
+      "priority": "P1",
+      "status": "pending",
+      "scope_hint": [
+        "platform/packages/contracts/src/competency-questions.ts（新增）",
+        "platform/schema/competency-questions.schema.json（新增）",
+        "platform/tests/fixtures/competency-questions/（新增）",
+        "tasks/spec-v0.3a/competency-questions.md（新增）"
+      ],
+      "criteria": [
+        "CQ 作为版本化声明包含 question、task kind、definition/规则引用、合成输入、预期值/四态/单位、必要来源定位与允许能力范围；不放客户原文、物理 SQL、脚本或秘密。",
+        "至少 12 个独立人工推导金标，覆盖属性查询、数量合计、一跳目标条件、三层规则、例外、unknown/conflict、撤回、跨项目拒绝与版本变更；不从被测算法反算预期。",
+        "使用至少两个合成行业配置，区分样例与行业标准；保留真实人工报价金标接口和缺资源标记，真实验收缺失不能记作通过。",
+        "运行时 schema 与生成契约校验通过，声明不等于执行结果；#7 可把已批准 CQ 加入生成上下文，#16 实现真实 runner 与发布门。"
+      ],
+      "evidence": [
+        "packages/application/src/assets/publication/pack-assembly.ts:343",
+        "tasks/spec-v0.3a/execution-evidence.md:474"
+      ],
+      "logic_owners": [
+        "competency-contract-and-fixtures"
+      ],
+      "excludes": "本节点不编辑 pack-assembly/validation-service，避免与 #2 冲突。",
+      "branch": "feat/v03a-gap-06-competency-fixtures",
+      "github_issue": 256,
+      "wave": 2,
+      "local_issue_file": ".autoresearch/batches/v03a-gap-closeout/issues/gap-006-competency-fixtures.md",
+      "github_issue_url": "https://github.com/Yijtu/ontology/issues/256"
+    },
+    "7": {
+      "id": 7,
+      "slug": "grounded-tbox",
+      "title": "按原文生成 TBox 并安全重生成",
+      "deps": [
+        1,
+        2,
+        6
+      ],
+      "type": "backend",
+      "priority": "P0",
+      "status": "pending",
+      "scope_hint": [
+        "platform/packages/application/src/assets/definition-candidates/service.ts",
+        "platform/packages/application/src/assets/definition-candidates/model-output.ts",
+        "platform/packages/contracts/src/asset-candidates.ts（来源输出必要扩展）",
+        "platform/apps/api/src/http/definition-candidates.ts",
+        "platform/tests/unit/definition-candidate-generation.spec.ts"
+      ],
+      "criteria": [
+        "调用 #1 真实读取源文本/表头，在受控模型捕获请求中证明内容已发送；输出候选必须引用有效片段且 span/digest 可回读，虚构引用进入失败/待确认而不能发布。",
+        "同 logicalId 重生成相对当前候选/已发布定义 rebase：完全相同幂等复用、变更追加 replacesCandidateId、冲突明确保留；保留人工改动，新的内容必须重新审核。",
+        "输出 token 上限与本次候选数匹配，有界分批、截断/异常 JSON/未 completed/取消显式失败；模型未配置在调用前提示未就绪，不存 model-not-configured 伪调用记录。",
+        "有限 CQ 与业务边界作为上下文；测试原文注入、缺来源、500 候选/预算、重复生成、人工编辑、租户隔离，增加真实 PG API 路径的受控模型验收。"
+      ],
+      "evidence": [
+        "packages/application/src/assets/definition-candidates/service.ts:642",
+        "packages/application/src/assets/definition-candidates/service.ts:751",
+        "apps/api/src/composition/core-local-composition.ts:2152"
+      ],
+      "logic_owners": [
+        "tbox-generation"
+      ],
+      "excludes": "",
+      "branch": "feat/v03a-gap-07-grounded-tbox",
+      "github_issue": 257,
+      "wave": 3,
+      "local_issue_file": ".autoresearch/batches/v03a-gap-closeout/issues/gap-007-grounded-tbox.md",
+      "github_issue_url": "https://github.com/Yijtu/ontology/issues/257"
+    },
+    "8": {
+      "id": 8,
+      "slug": "rule-action-generation",
+      "title": "平台生成带来源的规则与动作候选",
+      "deps": [
+        1,
+        2,
+        7
+      ],
+      "type": "backend",
+      "priority": "P0",
+      "status": "pending",
+      "scope_hint": [
+        "platform/packages/application/src/assets/rule-action-candidates/",
+        "platform/packages/contracts/src/rule-action-candidates.ts（生成请求与输出）",
+        "platform/apps/api/src/http/rule-action-candidates.ts",
+        "platform/tests/unit/rule-action-candidates.spec.ts",
+        "platform/tests/integration/rule-action-candidates-postgres.spec.ts"
+      ],
+      "criteria": [
+        "新增平台自有生成入口，调用模型端口并使用 #1 原文和已批准/选定的定义术语；rawOutput 摄入继续作为显式导入入口，不能冒充模型生成。",
+        "规则条件、例外、关系声明和依赖保留原意及逐条件来源；无匹配 span、不可执行形式或截断输出显式保留问题，禁止删条件以求通过。",
+        "动作只引用已登记 operation/schema/真实摘要，不允许模型生成处理器；候选生成和编辑均不能直接启用或发布。",
+        "幂等、版本冲突、取消、共同预算和模型未配置行为与 TBox 一致；受控模型的生成→审核/启用→验核→发布测试覆盖正反例，真实模型质量单独记未验证。"
+      ],
+      "evidence": [
+        "packages/application/src/assets/rule-action-candidates/service.ts:209",
+        "packages/application/src/assets/rule-action-candidates/service.ts:296"
+      ],
+      "logic_owners": [
+        "rule-action-generation"
+      ],
+      "excludes": "support/compile 逻辑由 #3/#12 拥有；只消费公开端口。",
+      "branch": "feat/v03a-gap-08-rule-action-generation",
+      "github_issue": 258,
+      "wave": 4,
+      "local_issue_file": ".autoresearch/batches/v03a-gap-closeout/issues/gap-008-rule-action-generation.md",
+      "github_issue_url": "https://github.com/Yijtu/ontology/issues/258"
+    },
+    "9": {
+      "id": 9,
+      "slug": "dynamic-terminology",
+      "title": "从动态发布包读取可复用术语",
+      "deps": [
+        2
+      ],
+      "type": "backend",
+      "priority": "P1",
+      "status": "pending",
+      "scope_hint": [
+        "platform/packages/application/src/assets/definition-candidates/terminology.ts",
+        "platform/packages/application/src/assets/definition-candidates/dynamic-terminology.ts（新增）",
+        "platform/tests/unit/dynamic-terminology.spec.ts（新增）"
+      ],
+      "criteria": [
+        "按 basePackRef 精确 id/version/digest 从授权 published catalogue/definition reader 加载对象、属性、关系、身份与单位声明；静态包与动态包使用同一端口。",
+        "声明来源保留版本，别名/显示名相同但业务意义不同时不自动合并；动态定义有术语，缺包/退役权限/错摘要显式失败，不回退为空术语。",
+        "从包 A 创建工作区 B 并生成增量候选，证明既有术语被正确引用、冲突可解释，跨租户私有包不可读取。",
+        "缓存如采用必须按 scope+完整 ref 分区、仅缓存不可变版本；不扩展多 basePack 合并、共享词表平台或类层次。"
+      ],
+      "evidence": [
+        "packages/application/src/assets/definition-candidates/terminology.ts:68"
+      ],
+      "logic_owners": [
+        "definition-terminology"
+      ],
+      "excludes": "",
+      "branch": "feat/v03a-gap-09-dynamic-terminology",
+      "github_issue": 259,
+      "wave": 2,
+      "local_issue_file": ".autoresearch/batches/v03a-gap-closeout/issues/gap-009-dynamic-terminology.md",
+      "github_issue_url": "https://github.com/Yijtu/ontology/issues/259"
+    },
+    "10": {
+      "id": 10,
+      "slug": "structured-facts",
+      "title": "将已确认结构化记录物化为语义事实",
+      "deps": [
+        2,
+        5
+      ],
+      "type": "backend",
+      "priority": "P0",
+      "status": "pending",
+      "scope_hint": [
+        "platform/packages/application/src/projects/project-mapping-service.ts",
+        "platform/packages/application/src/projects/project-fact-materialization-service.ts（新增）",
+        "platform/packages/application/src/publication/（复用事实发布管线的桥）",
+        "platform/packages/contracts/src/project-mapping.ts",
+        "platform/tests/integration/project-fact-materialization-postgres.spec.ts（新增）"
+      ],
+      "criteria": [
+        "CSV/XLSX 规范化项目记录只作为审核暂存；固定已确认 mapping/record revision、definition、单位因子与人工身份绑定后，通过既有候选审核/发布机制生成实体、属性、已解析关系事实。",
+        "已发布语义事实是问答/规则的唯一语义真相；不得在事实与查询表两边分别改业务值，未确认字段、未知身份、解析不完整不得自动升级为事实。",
+        "保留每条事实到原始单元格/row digest 的来源、精确十进制、valid/recorded 时间；分页批处理、幂等、事务/outbox、撤回多支撑、租户/项目隔离均覆盖。",
+        "真实 PG 导入→映射→人工确认→身份→发布→ontology_lookup/规则读取闭环，验证两种列名/单位映射产生相同语义值且保留不同物理来源；超上限显式拒绝。"
+      ],
+      "evidence": [
+        "packages/application/src/projects/project-mapping-service.ts:470",
+        "packages/semantic-engine/src/materialization/published-source.ts:127",
+        "packages/contracts/src/semantic-publication.ts:20"
+      ],
+      "logic_owners": [
+        "structured-fact-materialization"
+      ],
+      "excludes": "不修改 published-source 的关系求值逻辑（#3）；采用其公开事实读取/发布端口。",
+      "branch": "feat/v03a-gap-10-structured-facts",
+      "github_issue": 260,
+      "wave": 2,
+      "local_issue_file": ".autoresearch/batches/v03a-gap-closeout/issues/gap-010-structured-facts.md",
+      "github_issue_url": "https://github.com/Yijtu/ontology/issues/260"
+    },
+    "11": {
+      "id": 11,
+      "slug": "project-query",
+      "title": "接通固定项目事实快照与持久查询投影",
+      "deps": [
+        10
+      ],
+      "type": "backend",
+      "priority": "P0",
+      "status": "pending",
+      "scope_hint": [
+        "platform/packages/application/src/projects/project-materialization-service.ts",
+        "platform/packages/semantic-engine/src/project-query/",
+        "platform/packages/adapters/data-postgres/src/project-dataset.ts",
+        "platform/apps/api/src/composition/core-template-plan-resolver.ts（structuredQueryPlan）",
+        "platform/apps/api/src/composition/core-project-query-handler.ts（新增）",
+        "platform/tests/integration/project-semantic-sql.spec.ts"
+      ],
+      "criteria": [
+        "从 #10 已发布事实读视图生成项目投影，绑定 project revision、definition、mapping、fact recorded point 与 source digest；删除 structured_query 路径对 mappingRefs[0] 启动样例的依赖。",
+        "装配现有 PostgresProjectDatasetAdapter 为生产持久快照选项，独立业务数据库配置，不把查询表放进控制 schema；DuckDB 留作可重建/可替换投影。",
+        "任务/工具每次运行使用固定 snapshot descriptor，重启仍可读取同一 ready 快照；缺快照、已撤回/陈旧修订、换 definition 必须显式未就绪，禁止退回旧样例或最新数据。",
+        "真实 PG 与 DuckDB 同一契约套件验证精确 DECIMAL、分页、跨项目拒绝、1001 行、取消与 cell source；改变新输入改变正常任务结果，历史运行仍读旧固定快照。"
+      ],
+      "evidence": [
+        "apps/api/src/composition/core-template-plan-resolver.ts:766",
+        "apps/api/src/composition/core-local-composition.ts:2256",
+        "packages/semantic-engine/src/project-query/service.ts:26",
+        "packages/adapters/data-postgres/src/project-dataset.ts:63"
+      ],
+      "logic_owners": [
+        "project-query-projection",
+        "template-structured-query"
+      ],
+      "excludes": "不改通用 NL/规则任务路由（#15）；不升级到 Quack 或另建数据库服务。",
+      "branch": "feat/v03a-gap-11-project-query",
+      "github_issue": 261,
+      "wave": 3,
+      "local_issue_file": ".autoresearch/batches/v03a-gap-closeout/issues/gap-011-project-query.md",
+      "github_issue_url": "https://github.com/Yijtu/ontology/issues/261"
+    },
+    "12": {
+      "id": 12,
+      "slug": "published-rule-chain",
+      "title": "让已发布规则按真实依赖串联",
+      "deps": [
+        3
+      ],
+      "type": "backend",
+      "priority": "P0",
+      "status": "pending",
+      "scope_hint": [
+        "platform/packages/semantic-engine/src/rules/compile.ts",
+        "platform/packages/semantic-engine/src/rules/evaluate.ts",
+        "platform/packages/semantic-engine/src/materialization/（依赖索引与增量失效）",
+        "platform/packages/contracts/src/rule-action-candidates.ts（依赖明确引用）",
+        "platform/tests/integration/rule-dependency-materialization-postgres.spec.ts"
+      ],
+      "criteria": [
+        "基于已发布 ruleDependencies 与固定 ruleRef 编译 propositionKey 前提，用 subject/object/definition 限定上游结论；不把对象类型 label 误当同一实体命题。",
+        "三层规则由真实候选→审核/启用→发布→编译→拓扑求值产生，禁止手工构造 RuleDefinition 替代这一验收；多个独立支撑分别保留。",
+        "上游 unknown/conflict、例外及支撑撤回正确传播；撤一个替代支撑不删除仍被其它支撑支持的结论，历史 recorded point 可读。",
+        "循环明确 CYCLE_DETECTED，仍采用有限无环子集；覆盖跨实体/项目误串联、版本替换、依赖失效、深度上限与来源图。"
+      ],
+      "evidence": [
+        "packages/semantic-engine/src/rules/compile.ts:350",
+        "packages/semantic-engine/src/rules/evaluate.ts:320",
+        "tests/unit/rule-dependency-chain.spec.ts:71"
+      ],
+      "logic_owners": [
+        "rule-compiler",
+        "rule-evaluator",
+        "rule-dependency-materialization"
+      ],
+      "excludes": "与 #3 共用编译/求值逻辑，强制在 #3 合入之后实施。",
+      "branch": "feat/v03a-gap-12-published-rule-chain",
+      "github_issue": 262,
+      "wave": 3,
+      "local_issue_file": ".autoresearch/batches/v03a-gap-closeout/issues/gap-012-published-rule-chain.md",
+      "github_issue_url": "https://github.com/Yijtu/ontology/issues/262"
+    },
+    "13": {
+      "id": 13,
+      "slug": "ontology-evolution",
+      "title": "换本体版本后有界重提取与重物化",
+      "deps": [
+        2,
+        10,
+        11
+      ],
+      "type": "backend",
+      "priority": "P1",
+      "status": "pending",
+      "scope_hint": [
+        "platform/packages/application/src/projects/project-service.ts（evolve）",
+        "platform/packages/application/src/projects/project-evolution-service.ts（新增）",
+        "platform/apps/worker/src/（版本升级作业）",
+        "platform/packages/contracts/src/projects.ts",
+        "platform/tests/integration/project-api-postgres.spec.ts"
+      ],
+      "criteria": [
+        "evolve 按 #2 显式策略输出影响清单，并调度有界重新映射/抽取/审核/事实物化/投影；不能只改 definitionRef 使旧事实在新视图中无声消失。",
+        "支持追加属性、身份/类型/单位/关系变更的人工处理，无法迁移项明确待确认；keep_independent 保留旧版，retire_previous 只撤当前可见性不删历史。",
+        "旧版本在重建期间维持明确状态，新版完成审核、事实和快照 ready 后 CAS 激活；失败/取消/重试不复活撤回内容，旧绑定任务不得混用新数据。",
+        "真实 PG 新版同原文重提取并验证新增字段可查、旧 answer/evidence/recorded point 可回读；作业量、预算、幂等与并发换版失败路径有证据。"
+      ],
+      "evidence": [
+        "packages/application/src/projects/project-service.ts:622",
+        "packages/semantic-engine/src/materialization/published-source.ts:172"
+      ],
+      "logic_owners": [
+        "project-evolution",
+        "project-query-projection"
+      ],
+      "excludes": "依赖 #11 串行修改项目快照激活逻辑；不重写全局任务调度框架。",
+      "branch": "feat/v03a-gap-13-ontology-evolution",
+      "github_issue": 263,
+      "wave": 4,
+      "local_issue_file": ".autoresearch/batches/v03a-gap-closeout/issues/gap-013-ontology-evolution.md",
+      "github_issue_url": "https://github.com/Yijtu/ontology/issues/263"
+    },
+    "14": {
+      "id": 14,
+      "slug": "premise-verification",
+      "title": "核验规则前提事实与原文定位",
+      "deps": [
+        1,
+        3,
+        10,
+        12
+      ],
+      "type": "backend",
+      "priority": "P0",
+      "status": "pending",
+      "scope_hint": [
+        "platform/packages/application/src/answers/typed-draft-writer.ts",
+        "platform/packages/application/src/verification/typed-checkers.ts",
+        "platform/packages/semantic-engine/src/provenance/（规则派生来源读取）",
+        "platform/packages/provenance/src/（复用通用证据读取）",
+        "platform/tests/integration/rule-derivation-provenance-postgres.spec.ts",
+        "platform/tests/integration/answer-routes-postgres.spec.ts"
+      ],
+      "criteria": [
+        "rule_judgement 草稿带实际 premiseRefs，逐一绑定规则版本、属性/关系/上游支撑、固定 recorded point 与来源工件，而非 premiseRefs: []。",
+        "核验沿归档前提回读事实和 span/row digest，并按该批真实有限规则重算结果；不能只用归档 applicability 状态自证答案正确。",
+        "错误前提、错 span、错 ruleRef、丢边/丢上游支撑、跨 scope 和撤回竞态均不得核验通过；approximate OCR 或来源缺口按已有精度/coverage 语义保留限制。",
+        "复用既有 evidence/answer@3/发布有效性，不新增收据家族；覆盖一跳目标条件、三层链、多替代支撑及历史版本的真实 PG 来源闭环。"
+      ],
+      "evidence": [
+        "packages/application/src/answers/typed-draft-writer.ts:412",
+        "packages/application/src/verification/typed-checkers.ts:227",
+        "packages/semantic-engine/src/provenance/rule-derivation-producer.ts:322"
+      ],
+      "logic_owners": [
+        "typed-rule-draft",
+        "typed-premise-checker"
+      ],
+      "excludes": "",
+      "branch": "feat/v03a-gap-14-premise-verification",
+      "github_issue": 264,
+      "wave": 4,
+      "local_issue_file": ".autoresearch/batches/v03a-gap-closeout/issues/gap-014-premise-verification.md",
+      "github_issue_url": "https://github.com/Yijtu/ontology/issues/264"
+    },
+    "15": {
+      "id": 15,
+      "slug": "semantic-task-routing",
+      "title": "自然语言选择规则与关系任务并补齐内部绑定",
+      "deps": [
+        11,
+        12,
+        14
+      ],
+      "type": "backend",
+      "priority": "P0",
+      "status": "pending",
+      "scope_hint": [
+        "platform/packages/application/src/workflow/planning.ts",
+        "platform/apps/api/src/composition/core-template-plan-resolver.ts（规则/关系路径）",
+        "platform/apps/api/src/composition/core-task-bindings.ts",
+        "platform/apps/api/src/composition/core-rule-judgement-handler.ts",
+        "platform/apps/api/src/composition/core-relations-task-handler.ts（新增）",
+        "platform/tests/integration/core-rule-judgement-task-postgres.spec.ts"
+      ],
+      "criteria": [
+        "受控 NL 可以提出已启用的 structured_query、rule_judgement、relations、document_qa、已注册 compute 任务意图；host 基于 profile/CQ/注册项约束选择，模型不能提升权限或指定任意函数。",
+        "服务端从固定 project revision/definition/事实点解析 ruleRef/digest/asOfRecordedSeq/subject；用户只选择可理解的规则/实体或描述问题，歧义请求澄清，不让模型伪造内部摘要。",
+        "挂载 relations 任务，复用已发布有界导航器与 answer@3；规则路径经过 #14 前提核验，查询路径经过 #11 固定项目快照。",
+        "模型关闭可使用显式任务和确定性参数表单；模型配置开启才接受 NL；受控模型正常 HTTP 入口覆盖路由、能力缺失、歧义、取消和跨项目，并保持四个公共工具不变。"
+      ],
+      "evidence": [
+        "packages/application/src/workflow/planning.ts:546",
+        "apps/api/src/composition/core-task-bindings.ts:57",
+        "apps/api/src/composition/core-rule-judgement-handler.ts:109"
+      ],
+      "logic_owners": [
+        "semantic-intent-routing",
+        "template-semantic-tasks"
+      ],
+      "excludes": "",
+      "branch": "feat/v03a-gap-15-semantic-task-routing",
+      "github_issue": 265,
+      "wave": 5,
+      "local_issue_file": ".autoresearch/batches/v03a-gap-closeout/issues/gap-015-semantic-task-routing.md",
+      "github_issue_url": "https://github.com/Yijtu/ontology/issues/265"
+    },
+    "16": {
+      "id": 16,
+      "slug": "competency-release-gate",
+      "title": "用真实能力问题检验发布包",
+      "deps": [
+        4,
+        6,
+        8,
+        11,
+        12,
+        14
+      ],
+      "type": "backend",
+      "priority": "P1",
+      "status": "pending",
+      "scope_hint": [
+        "platform/packages/application/src/synthetic/competency-runner.ts（新增）",
+        "platform/packages/application/src/synthetic/validation-service.ts（CQ 扩展）",
+        "platform/packages/application/src/assets/publication/pack-assembly.ts（testSuite）",
+        "platform/packages/contracts/src/pack-assets.ts",
+        "platform/tests/integration/synthetic-validation-postgres.spec.ts"
+      ],
+      "criteria": [
+        "将 #6 的真实 question 和引用打包为可复用测试套件，替换 validation case ${caseId} 占位文本；CQ 不含客户原文。",
+        "runner 在隔离 synthetic project 经真实发布/事实/查询/规则/compute 管线执行，比较独立金标、单位/四态和来源覆盖；不把仅 schema 检查当能力验收。",
+        "发布报告固定 CQ/定义/规则/样本摘要，必选 CQ 失败阻断部署就绪；不支持的问题明确 not_yet_executable，不偷偷跳过或降级成通过。",
+        "至少两种合成行业与 12 个金标；真实人工报价与真实模型质量分别保持外部未验证，具备资源后才新增相应验收结果。"
+      ],
+      "evidence": [
+        "packages/application/src/assets/publication/pack-assembly.ts:343",
+        "packages/application/src/synthetic/validation-service.ts:328"
+      ],
+      "logic_owners": [
+        "publication-assembly",
+        "synthetic-validation"
+      ],
+      "excludes": "本节点与 #2 共用发布/验证逻辑，依赖路径已确保串行。",
+      "branch": "feat/v03a-gap-16-competency-release-gate",
+      "github_issue": 266,
+      "wave": 5,
+      "local_issue_file": ".autoresearch/batches/v03a-gap-closeout/issues/gap-016-competency-release-gate.md",
+      "github_issue_url": "https://github.com/Yijtu/ontology/issues/266"
+    },
+    "17": {
+      "id": 17,
+      "slug": "frontend-foundation",
+      "title": "重做信息架构、视觉系统与应用框架",
+      "deps": [],
+      "type": "frontend",
+      "priority": "P0",
+      "status": "in_progress",
+      "scope_hint": [
+        "platform/apps/web/src/components/App.tsx（导航/全局上下文）",
+        "platform/apps/web/src/components/GuideHome.tsx",
+        "platform/apps/web/src/components/ui/（新增公共组件）",
+        "platform/apps/web/src/styles.css（tokens/基础组件）",
+        "platform/apps/web/src/main.tsx（入口状态）",
+        "platform/tests/ui/（框架交互）"
+      ],
+      "criteria": [
+        "以已合入 PR #250 为基线，组织成本体建模、项目实践两条主路径，行业资产/运行历史为辅助入口，配置与原始 JSON 放高级区域；保留已有可到达路径和行业贡献入口。",
+        "实现统一字体、间距、配色、按钮/输入/表格/状态/空白/加载/抽屉体系，参考 frontend-design.md 与可交互视觉方案；使用实际数据与契约，不用固定数量或假入口撑页面。",
+        "统一项目/工作区/包版本上下文，切换与 URL 深链保持一致；脏表单/审核选择保留或明确提示，禁止跨项目继续采用旧结果。普通路径不用输入 UUID/digest/序号。",
+        "1440/1024/768/390px 可用，键盘能操作导航/表单/抽屉并回到触发位置，焦点与对比度满足 WCAG 2.2 AA；框架无窄屏溢出，加载与失败可恢复。"
+      ],
+      "evidence": [
+        "apps/web/src/components/App.tsx:79",
+        "apps/web/src/components/GuideHome.tsx:1",
+        "apps/web/src/styles.css:1",
+        "PR #250 已合入 main @ 43525be"
+      ],
+      "logic_owners": [
+        "public-shell",
+        "frontend-design-system"
+      ],
+      "excludes": "第一波与后端并行；本节点不改 Definition/Project/Business/Evidence 页面业务逻辑，也不重写客户场景组件。",
+      "branch": "feat/v03a-gap-17-frontend-foundation",
+      "github_issue": 267,
+      "wave": 0,
+      "local_issue_file": ".autoresearch/batches/v03a-gap-closeout/issues/gap-017-frontend-foundation.md",
+      "github_issue_url": "https://github.com/Yijtu/ontology/issues/267",
+      "worktree": "D:/work/.graph-worktrees/v03a-gap-node-17",
+      "agent": "/root/gap_017",
+      "followup_for_21": "ProjectWorkspacePanel/BusinessWorkbenchPanel 将选中项目回传 AppViewContext，通过可选回调共享唯一全局上下文，不引入第二个竞争选择器。"
+    },
+    "18": {
+      "id": 18,
+      "slug": "structured-document-index",
+      "title": "把结构化导入接入项目文档索引",
+      "deps": [
+        1,
+        10
+      ],
+      "type": "backend",
+      "priority": "P1",
+      "status": "pending",
+      "scope_hint": [
+        "platform/apps/api/src/composition/core-structured-import-service.ts（从装配根抽出新增叶模块）",
+        "platform/packages/adapters/extraction-document/src/structured/（文档投影桥）",
+        "platform/packages/adapters/search-bm25/src/（结构化 membership 桥）",
+        "platform/tests/integration/project-document-index-postgres.spec.ts"
+      ],
+      "criteria": [
+        "正常 structured import 将可授权解析投影注册到 ProjectDocumentIndexService，同一 project/documentSet/原文摘要与结构化 parse/cell 来源保持一致。",
+        "建立有限表头/行文本索引并保留表格定位与近似精度，覆盖 CSV/XLSX；不能将全部原文/客户资料复制进行业包或公共 fixture。",
+        "索引 ready 与确认事实 ready 独立且可见，撤回先 fence 后更新；迟到构建不能复活已撤回资料，document_qa 固定运行文档集合。",
+        "真实 PG/BM25 正常导入→索引→任务问答→单元格来源闭环，覆盖版本替换、跨项目、截断、失败重试与取消。"
+      ],
+      "evidence": [
+        "apps/api/src/composition/core-local-composition.ts:2230",
+        "apps/api/src/composition/core-local-composition.ts:1651"
+      ],
+      "logic_owners": [
+        "structured-import-index"
+      ],
+      "excludes": "不与 #10 共同修改 mapping/事实逻辑；装配根唯一逻辑改动由 #19 统一完成。",
+      "branch": "feat/v03a-gap-18-structured-document-index",
+      "github_issue": 268,
+      "wave": 5,
+      "local_issue_file": ".autoresearch/batches/v03a-gap-closeout/issues/gap-018-structured-document-index.md",
+      "github_issue_url": "https://github.com/Yijtu/ontology/issues/268"
+    },
+    "19": {
+      "id": 19,
+      "slug": "production-wiring",
+      "title": "统一生产装配并验收新能力入口",
+      "deps": [
+        4,
+        9,
+        13,
+        15,
+        16,
+        18
+      ],
+      "type": "infra",
+      "priority": "P0",
+      "status": "pending",
+      "scope_hint": [
+        "platform/apps/api/src/composition/core-local-composition.ts",
+        "platform/apps/api/src/composition/（本批叶模块装配）",
+        "platform/apps/worker/src/（必要注册）",
+        "platform/tests/composition/",
+        "platform/tests/e2e/",
+        "platform/docs/",
+        "README.md",
+        "本批 manifest/完成记录"
+      ],
+      "criteria": [
+        "唯一负责装配根接线：来源读取、审核发布、召回、事实写入、PG 投影、规则关系任务、索引、真实摘要和 CQ 均进入正常宿主；拆出本批叶模块，避免继续在 2428 行文件堆逻辑。",
+        "正常 HTTP/worker 宿主挂载全部叶模块，通过真实 PG composition 集成、typecheck/boundaries/受影响回归；故障、隔离、取消、未配置能力有明确结果。",
+        "向 #22 前端整栈验收提供真实 API 与已登记的两个合成行业、固定快照/规则/CQ/证据路径；不能由前端 mock API 代替生产接线。",
+        "记录迁移/配置/支持子集与装配证据；本节点不承担全批 release gate，#23 在 #22 通过后做最终主线验收。"
+      ],
+      "evidence": [
+        "AGENTS.md",
+        "platform/docs/v03-a-release-2026-09-30.md",
+        "apps/api/src/composition/core-local-composition.ts"
+      ],
+      "logic_owners": [
+        "composition-root"
+      ],
+      "excludes": "",
+      "branch": "feat/v03a-gap-19-production-wiring",
+      "github_issue": 269,
+      "wave": 6,
+      "local_issue_file": ".autoresearch/batches/v03a-gap-closeout/issues/gap-019-production-wiring.md",
+      "github_issue_url": "https://github.com/Yijtu/ontology/issues/269"
+    },
+    "20": {
+      "id": 20,
+      "slug": "ontology-workbench",
+      "title": "重做资料、候选审核与行业包发布体验",
+      "deps": [
+        7,
+        8,
+        9,
+        16,
+        17
+      ],
+      "type": "frontend",
+      "priority": "P0",
+      "status": "pending",
+      "scope_hint": [
+        "platform/apps/web/src/components/OntologyWorkspacePanel.tsx",
+        "platform/apps/web/src/components/WorkspaceSourcesPanel.tsx",
+        "platform/apps/web/src/components/DefinitionWorkbenchPanel.tsx",
+        "platform/apps/web/src/components/PackagePublicationPanel.tsx",
+        "platform/apps/web/src/components/ontology/（新增局部组件/样式）",
+        "platform/tests/ui/（本体流程）"
+      ],
+      "criteria": [
+        "按资料→生成→审核→验核→发布形成可理解流程，上传/解析覆盖、失败原因、来源定位、生成预算与工作区版本在对应步骤展示；无需在模块间反复寻找操作。",
+        "候选列表、定义详情、原文依据并排，搜索/筛选/批量操作/键盘切换可用；对象/属性/关系提供结构化编辑与拆分/合并预览，审核与编辑严格区分，切换后不丢草稿。",
+        "有限规则/例外通过条件编辑器与自然语言摘要展示，动作从真实登记列表选择；高级 JSON 折叠且有运行时校验，普通用户不必写 JSON 或摘要。未经批准的来源/候选不得显示已生效。",
+        "CQ 就绪、阻断项、完整 diff 与破坏性策略在发布前清晰呈现；版本比较能读懂变更对象及影响，所有按钮连接真实 API，权限/模型关闭/失败/取消/未知均可解释。"
+      ],
+      "evidence": [
+        "apps/web/src/components/DefinitionWorkbenchPanel.tsx:157",
+        "apps/web/src/components/PackagePublicationPanel.tsx:369",
+        "apps/web/src/components/WorkspaceSourcesPanel.tsx:1"
+      ],
+      "logic_owners": [
+        "ontology-ui"
+      ],
+      "excludes": "复用 #17 公共组件与 tokens；不修改 App/global styles，由 #22 最终挂载。",
+      "branch": "feat/v03a-gap-20-ontology-workbench",
+      "github_issue": 270,
+      "wave": 6,
+      "local_issue_file": ".autoresearch/batches/v03a-gap-closeout/issues/gap-020-ontology-workbench.md",
+      "github_issue_url": "https://github.com/Yijtu/ontology/issues/270"
+    },
+    "21": {
+      "id": 21,
+      "slug": "project-business-workbench",
+      "title": "重做项目导入、任务结果与来源阅读体验",
+      "deps": [
+        5,
+        11,
+        13,
+        14,
+        15,
+        17,
+        18
+      ],
+      "type": "frontend",
+      "priority": "P0",
+      "status": "pending",
+      "scope_hint": [
+        "platform/apps/web/src/components/ProjectWorkspacePanel.tsx",
+        "platform/apps/web/src/components/InstanceReviewPanel.tsx",
+        "platform/apps/web/src/components/BusinessWorkbenchPanel.tsx",
+        "platform/apps/web/src/components/QueryPanel.tsx",
+        "platform/apps/web/src/components/ResultWorkbenchPanel.tsx",
+        "platform/apps/web/src/components/EvidencePanel.tsx",
+        "platform/apps/web/src/components/project/（新增局部组件/样式）",
+        "platform/tests/ui/（项目/业务/证据流程）"
+      ],
+      "criteria": [
+        "结构化导入使用文件预览、列映射对照、单位/必需字段检查与未确认记录队列；身份候选由服务端召回，冲突与手工裁决可操作，后台任务状态与来源能直接打开。",
+        "任务首页展示真实已挂载任务和项目就绪条件，NL 与任务参数表单并存；无需填写 ruleRef/asOfRecordedSeq/inputSnapshot digest，参数变更可预览，歧义澄清与取消/重试状态稳定。",
+        "结果以结论、正式表格、依据层次呈现；分页/筛选保持固定已核验版本，未核验流式内容、unknown/conflict/不完整不得冒充正式答案；证据抽屉能逐级到原文/单元格。",
+        "换版影响与重提取进度、旧结果版本/当前有效性和运行历史可理解；桌面密集表格与 390px 主路径可用，loading/empty/error/permission/model-off/revoked 状态有独立验证。"
+      ],
+      "evidence": [
+        "apps/web/src/components/BusinessWorkbenchPanel.tsx:403",
+        "apps/web/src/components/ProjectWorkspacePanel.tsx:526",
+        "apps/web/src/components/EvidencePanel.tsx:1"
+      ],
+      "logic_owners": [
+        "project-business-ui"
+      ],
+      "excludes": "与 #20 文件/样式分开；不改 API/规则/compute 逻辑或场景专属报价表。",
+      "branch": "feat/v03a-gap-21-project-business-workbench",
+      "github_issue": 271,
+      "wave": 6,
+      "local_issue_file": ".autoresearch/batches/v03a-gap-closeout/issues/gap-021-project-business-workbench.md",
+      "github_issue_url": "https://github.com/Yijtu/ontology/issues/271"
+    },
+    "22": {
+      "id": 22,
+      "slug": "frontend-acceptance",
+      "title": "完成主应用接线与响应式前端验收",
+      "deps": [
+        17,
+        19,
+        20,
+        21
+      ],
+      "type": "frontend",
+      "priority": "P0",
+      "status": "pending",
+      "scope_hint": [
+        "platform/apps/web/src/components/App.tsx（新页面最终挂载）",
+        "platform/apps/web/src/main.tsx",
+        "platform/tests/e2e/（正常入口三管线）",
+        "platform/tests/ui/（公共可访问性）",
+        "platform/docs/frontend-acceptance.md（新增）"
+      ],
+      "criteria": [
+        "正常主应用 URL 进入全部更新页面；项目/工作区/行业包/运行深链可刷新、前进后退和切换，#250 已有入口不丢失；配置/JSON 等高级功能可达但不占据主流程。",
+        "真实 chromium + #19 正常宿主覆盖新建工作区→资料→模型受控生成→原文→审核→CQ→发布、项目→映射→身份→物化、规则/关系问答→核验结果→原文，禁止 harness/mock 全链路代替。",
+        "1440/1024/768/390px 截图验收，主流程无页面级横向溢出，长中文/数字/空数据能读；键盘、抽屉焦点、表单 label、对比度、非颜色状态及 reduced-motion 满足约定。",
+        "web build/typecheck/UI 与浏览器 E2E 通过，保留关键页面前后截图和失败状态证据；若视觉明显仍是零散表单/粗糙卡片堆叠必须迭代，功能与视觉两项均达标才完成。"
+      ],
+      "evidence": [
+        "apps/web/src/main.tsx:1",
+        "apps/web/src/components/App.tsx:79",
+        "platform/docs/v03-a-release-2026-09-30.md"
+      ],
+      "logic_owners": [
+        "public-shell",
+        "frontend-integration-acceptance"
+      ],
+      "excludes": "依赖 #17，串行修改 App/main；生产后端先由 #19 合入，避免 UI 验收与后端接线互相等待。",
+      "branch": "feat/v03a-gap-22-frontend-acceptance",
+      "github_issue": 272,
+      "wave": 7,
+      "local_issue_file": ".autoresearch/batches/v03a-gap-closeout/issues/gap-022-frontend-acceptance.md",
+      "github_issue_url": "https://github.com/Yijtu/ontology/issues/272"
+    },
+    "23": {
+      "id": 23,
+      "slug": "main-acceptance",
+      "title": "完成全批独立审查与主线交付门槛",
+      "deps": [
+        19,
+        22
+      ],
+      "type": "infra",
+      "priority": "P0",
+      "status": "pending",
+      "scope_hint": [
+        "platform/tests/（全批适用回归与金标）",
+        "platform/docs/（release 与限制）",
+        "README.md",
+        "本批 manifest/完成记录"
+      ],
+      "criteria": [
+        "lint、typecheck、boundaries、全套适用 tests、web build 与 chromium E2E 通过；真实 PG 测试并发受控且测试卷回收，未归属 error 必须定位。",
+        "至少两个合成行业、两查询后端、1001 行/固定历史快照，以及撤回/隔离/取消/版本重提取经过正常前后端闭环；CQ 独立预期与来源证据均成立。",
+        "独立 review-it 按 AGENTS 检查语义与用户体验，不允许宽化断言或能力子集掩盖缺陷；修复后复跑对应检查，视觉与功能验收记录可核对。",
+        "全部节点的实际提交/PR/最终 main SHA、迁移、支持范围、外部未验证项写入本批记录；受控机制不冒充真实模型质量，保留旧 manifest/工作区，不顺带关闭 #169 或启动 B。",
+        "用户追加：全部前置能力与前端合入 main 后，基于实际 main Core 重写根 README.md；简洁、生动，一个可运行真实例子和验证过的启动方法，详细契约放链接，不将规划功能写成已完成。"
+      ],
+      "evidence": [
+        "AGENTS.md",
+        "platform/docs/v03-a-release-2026-09-30.md"
+      ],
+      "logic_owners": [
+        "main-release-acceptance"
+      ],
+      "excludes": "",
+      "branch": "feat/v03a-gap-23-main-acceptance",
+      "github_issue": 273,
+      "wave": 8,
+      "local_issue_file": ".autoresearch/batches/v03a-gap-closeout/issues/gap-023-main-acceptance.md",
+      "github_issue_url": "https://github.com/Yijtu/ontology/issues/273"
+    }
+  },
+  "validation": {
+    "acyclic": true,
+    "dangling_dependencies": 0,
+    "wave_logic_collisions": 0,
+    "source_review_unchanged": true
+  },
+  "execution": {
+    "started": true,
+    "subagents_dispatched": 3,
+    "github_issues_created": 23,
+    "commits_created": 0,
+    "branches_created": 4,
+    "worktrees_created": 4
+  },
+  "external_conditions": [
+    "真实模型质量需授权端点/预算",
+    "真实报价 CQ 需授权人工样本；不阻断通用合成金标"
+  ],
+  "coordination_checkout": "D:\\work\\.graph-worktrees\\v03a-gap-coordination",
+  "approval": {
+    "source": "user",
+    "text": "看起来没什么问题，最后完成后基于main core重写readme文件，不要写的太复杂，写生动一点，可以去调研一下有没有相关skill",
+    "date": "2026-10-08"
+  },
+  "readme_requirement": {
+    "when": "#22 和所有前置能力已合入 main 之后，在 #23 最终交付节点完成",
+    "path": "README.md",
+    "style": "中文、简洁、生动；一个真实场景例子、经过验证的快速启动、能力边界和少量深入文档链接；不堆契约、任务号或提交履历",
+    "skill_research": "GitHub 官方 github/awesome-copilot create-readme，完整 SKILL 已读取，18.7K installs / 仓库 39,786 stars；以用户简洁要求优先，最终节点应用。"
+  },
+  "github_allowlist": [
+    251,
+    252,
+    253,
+    254,
+    255,
+    256,
+    257,
+    258,
+    259,
+    260,
+    261,
+    262,
+    263,
+    264,
+    265,
+    266,
+    267,
+    268,
+    269,
+    270,
+    271,
+    272,
+    273
+  ],
+  "review_execution": "codex review CLI 被当前账号不支持的已配置模型拒绝；不改用户模型，节点手工审查 + 主代理独立 PR diff/视觉复核后合入。"
+}

@@ -1,7 +1,7 @@
 import type { FastifyInstance, FastifyRequest } from 'fastify'
 import { RunServiceError, parseCreateRunRequest } from '@ontology/application'
 import type { RunService } from '@ontology/application'
-import type { CreateRunContext, CreateRunResponse, ProfileRef, RevisionString, ScopeRef, ToolContext } from '@ontology/contracts'
+import type { CreateRunContext, CreateRunResponse, ProfileRef, ResourceRef, RevisionString, RunExecutionRequest, ScopeRef, ToolContext } from '@ontology/contracts'
 import { createRequestToolContext } from './context'
 import { formatSseFrame, SSE_HEADERS } from './sse'
 import type { RunProgressReader } from './run-progress'
@@ -40,7 +40,10 @@ export interface RunApiOptions {
     readonly question: string
     readonly context: CreateRunContext
     readonly scopeRef: ScopeRef
+    /** The optional task execution request, so a fixed task path is not forced through the NL pre-checks. */
+    readonly task?: RunExecutionRequest
   }, ctx: ToolContext) => Promise<void>
+  readonly resolveRequest?: (body: unknown, ctx: ToolContext, idempotencyKey: string, signal: AbortSignal) => Promise<unknown>
   /** Explicit compatibility mode for tests/legacy records-only hosts. */
   readonly submissionMode?: 'durable' | 'records-only'
   readonly logger?: boolean
@@ -57,6 +60,7 @@ export interface RunRouteDependencies {
   readonly progress?: RunProgressReader
   readonly dispatch?: RunDispatchHooks
   readonly validateSubmission?: RunApiOptions['validateSubmission']
+  readonly resolveRequest?: RunApiOptions['resolveRequest']
   readonly submissionMode?: 'durable' | 'records-only'
 }
 
@@ -124,14 +128,28 @@ export function registerRunRoutes(app: FastifyInstance, dependencies: RunRouteDe
     if (dependencies.dispatch === undefined && dependencies.submissionMode !== 'records-only') {
       throw new CapabilityNotConfiguredError('durable workflow dispatch is required to accept a run')
     }
-    const fields = parseCreateRunRequest(request.body)
     const runId = globalThis.crypto.randomUUID()
+    const signal = new AbortController()
+    const aborted = () => signal.abort(new Error('the HTTP submission was cancelled'))
+    request.raw.once('aborted', aborted)
+    const closed = () => { if (!reply.raw.writableEnded) aborted() }
+    reply.raw.once('close', closed)
+    let body: unknown
+    try {
+      body = dependencies.resolveRequest === undefined ? request.body : await dependencies.resolveRequest(request.body, contextFor(auth, traceId, runId), idempotencyKey, signal.signal)
+      signal.signal.throwIfAborted()
+    } finally {
+      request.raw.removeListener('aborted', aborted)
+      reply.raw.removeListener('close', closed)
+    }
+    const fields = parseCreateRunRequest(body)
     await dependencies.validateSubmission?.(
       {
         profileRef: fields.profileRef,
         question: fields.question,
         context: fields.context,
         scopeRef: { tenantId: auth.principal.tenantId, spaceId: auth.spaceId },
+        ...(fields.execution === undefined ? {} : { task: fields.execution }),
       },
       contextFor(auth, traceId, runId),
     )
@@ -144,11 +162,14 @@ export function registerRunRoutes(app: FastifyInstance, dependencies: RunRouteDe
       'initial-drive',
       contextFor(auth, traceId, result.runId, result.resolvedProfileHash),
     )
-    const data: CreateRunResponse = {
+    const data: CreateRunResponse & { executionBindingRef?: ResourceRef } = {
       runId: result.runId,
       state: result.state,
       eventsUrl: `/api/v1/runs/${result.runId}/events`,
       resolvedProfileHash: result.resolvedProfileHash,
+      ...(result.executionBindingRef === undefined
+        ? {}
+        : { executionBindingRef: result.executionBindingRef }),
     }
     reply.status(202).send({ data, meta: { traceId, revision: result.revision } })
     return reply

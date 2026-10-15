@@ -1,5 +1,7 @@
 import { isToolContext } from '@ontology/contracts'
+import { isResourceRef } from '@ontology/contracts'
 import type {
+  AnswerDraft,
   AnswerVerifierPort,
   BlobGetAuthorizedRequest,
   BlobGetAuthorizedResponse,
@@ -20,6 +22,7 @@ import type {
   VerificationResult,
   VerifierRequest,
   WorkflowInputManifest,
+  RulePremiseReplayPort,
 } from '@ontology/contracts'
 import { answerDraftContentHash } from '../workflow/canonical'
 import { buildSemanticDecisionState, buildSemanticQuestion, interpretSemanticResult } from './decision-review'
@@ -28,6 +31,7 @@ import { checkClaims, sortFindings } from './hard-checks'
 import type { ResolvedEvidence } from './hard-checks'
 import { checkVerifiedAssertions } from './assertions'
 import { RestrictedExplanationTemplates } from './templates'
+import { rulePremiseHasSourceLimitation } from '../answers/rule-premise-bindings'
 
 /**
  * The narrow authorized byte-read capability the verifier needs. `blob-local` implements it
@@ -58,6 +62,7 @@ export interface DecisionStateRefProvider {
 }
 
 export interface DraftVerificationDependencies {
+  readonly rulePremises?: RulePremiseReplayPort
   readonly evidence: EvidenceStorePort
   readonly artifacts: VerificationArtifactStore
   readonly policy: VerificationPolicy
@@ -71,6 +76,7 @@ export interface DraftVerificationDependencies {
 
 const VERIFIED_LIMITATION_CODES = new Set<string>([
   'limited_factual_result',
+  'approximate_document_source',
   'no_supported_statements',
   'verification_never_passed',
   'unclassified_evidence_gap',
@@ -97,6 +103,25 @@ const VERIFIED_LIMITATION_CODES = new Set<string>([
   'assertion_mismatch',
   'document_quote_mismatch',
   'unverified_limitation',
+  'rule_judgement_mismatch',
+  'rule_premise_missing',
+  'relation_endpoint_mismatch',
+  'relation_version_mismatch',
+  'row_binding_mismatch',
+  'citation_locator_mismatch',
+  'result_truncated',
+  'result_incomplete',
+  'compute_output_not_inline',
+  'money_requires_table_manifest',
+  'structured_query_incomplete',
+  'structured_query_no_subject',
+  'numeric_cell_no_unit',
+  'evidence_unsupported',
+  'evidence_unreadable',
+  'relation_endpoint_missing',
+  'rule_artifact_unsupported',
+  'rule_artifact_incomplete',
+  'citation_incomplete',
 ])
 
 function verifiedLimitationCode(value: unknown): value is string {
@@ -119,6 +144,7 @@ function verifiedLimitationCode(value: unknown): value is string {
  * no answer id, publication or stream.
  */
 export class DraftVerificationService implements AnswerVerifierPort {
+  readonly #rulePremises: RulePremiseReplayPort | undefined
   readonly #evidence: EvidenceStorePort
   readonly #artifacts: VerificationArtifactStore
   readonly #policy: VerificationPolicy
@@ -130,6 +156,7 @@ export class DraftVerificationService implements AnswerVerifierPort {
   readonly #newId: () => Uuid
 
   constructor(dependencies: DraftVerificationDependencies) {
+    this.#rulePremises = dependencies.rulePremises
     this.#evidence = dependencies.evidence
     this.#artifacts = dependencies.artifacts
     this.#policy = dependencies.policy
@@ -150,16 +177,20 @@ export class DraftVerificationService implements AnswerVerifierPort {
 
     const findings: VerificationFinding[] = []
 
+    const typedV2 = draft.schemaVersion === 'answer-draft@2'
+    const typedV3 = draft.schemaVersion === 'answer-draft@3'
+    const hasTypedAssertions = typedV2 || typedV3
+
     // V1 did not hash typed assertions. Preserve old assertion-free drafts, but never
     // verify or publish a newly attached unbound V1 assertion under the legacy hash.
-    if (draft.schemaVersion !== 'answer-draft@2' && assertions.length > 0) {
+    if (!hasTypedAssertions && assertions.length > 0) {
       findings.push({ code: 'draft_hash_mismatch', axis: 'hard', field: 'assertions' })
     }
 
-    // V2 answer blocks are only references to deterministically rendered typed content. Any
-    // prose, hidden text field, unknown ID, or extra block property would be visible content
-    // that was not checked against evidence.
-    if (draft.schemaVersion === 'answer-draft@2') {
+    // V2/V3 answer blocks are only references to deterministically rendered typed content.
+    // Any prose, hidden text field, unknown ID, or extra block property would be visible
+    // content that was not checked against evidence.
+    if (hasTypedAssertions) {
       const claimIds = new Set(claims.map((claim) => claim.claimId))
       const assertionIds = new Set(assertions.map((assertion) => assertion.assertionId))
       if (draft.blocks.length === 0) findings.push({ code: 'visible_statement_unbound', axis: 'hard', field: 'blocks' })
@@ -178,13 +209,24 @@ export class DraftVerificationService implements AnswerVerifierPort {
       }
     }
 
+    // A V3 draft must carry the typed-manifest bindings; a body that claims to be @3 but
+    // omits them can never be hashed or verified (and is therefore never publishable).
+    const v3Bindings = typedV3 ? v3BindingsOf(draft) : undefined
+    if (typedV3 && v3Bindings === undefined) {
+      findings.push({ code: 'draft_hash_mismatch', axis: 'hard', field: 'resultManifestRef' })
+    }
+
     const recomputed = answerDraftContentHash(
       request.runId,
       draft.blocks,
       draft.evidenceManifestHash,
       claims,
       assertions,
-      ...(draft.schemaVersion === 'answer-draft@2' ? [{ schemaVersion: 'answer-draft@2' as const, limitations: draft.limitations }] : []),
+      typedV2
+        ? { schemaVersion: 'answer-draft@2', limitations: draft.limitations }
+        : v3Bindings === undefined
+          ? undefined
+          : { schemaVersion: 'answer-draft@3', limitations: draft.limitations, ...v3Bindings },
     )
     if (recomputed !== draft.contentHash) {
       findings.push({ code: 'draft_hash_mismatch', axis: 'hard', field: 'contentHash' })
@@ -203,6 +245,7 @@ export class DraftVerificationService implements AnswerVerifierPort {
     let supportedClaimIds: Uuid[] = []
     let supportedAssertionIds: Uuid[] = []
     let resolvedEvidence: ReadonlyMap<string, ResolvedEvidence> = new Map()
+    let limitedRuleSourceVerified = false
     if (claims.length + assertions.length === 0) {
       findings.push({ code: 'missing_claims', axis: 'hard', field: 'claims' })
     } else if (claims.length + assertions.length > this.#policy.maxClaims) {
@@ -216,12 +259,30 @@ export class DraftVerificationService implements AnswerVerifierPort {
     } else {
       resolvedEvidence = await this.#loadEvidence(claims, assertions, request.inputManifest, scopeRef, ctx)
       if (claims.length > 0) {
-        const outcome = checkClaims(claims, resolvedEvidence, now, draft.schemaVersion === 'answer-draft@2')
+        const outcome = checkClaims(claims, resolvedEvidence, now, hasTypedAssertions)
         hardFindings = outcome.findings
         supportedClaimIds = [...outcome.supportedClaimIds]
         findings.push(...hardFindings)
       }
-      const assertionOutcome = checkVerifiedAssertions(assertions, resolvedEvidence, ctx, now, draft.schemaVersion === 'answer-draft@2')
+      const replayedRules = new Set<string>()
+      const attemptedRules = new Set<string>()
+      for (const assertion of assertions) if (assertion.kind === 'rule_judgement') {
+        for (const reference of assertion.references) {
+          if (attemptedRules.has(reference.evidenceRef.id)) continue
+          attemptedRules.add(reference.evidenceRef.id)
+          const located = resolvedEvidence.get(reference.evidenceRef.id)
+          if (located?.payload === undefined || located.unreadable || this.#rulePremises === undefined) continue
+          const payload = located.payload
+          const artifact = typeof payload === 'object' && payload !== null && 'artifact' in payload ? payload.artifact : payload
+          try {
+            if (await this.#rulePremises.verify({ artifact, payload }, ctx)) {
+              replayedRules.add(reference.evidenceRef.id)
+              limitedRuleSourceVerified ||= rulePremiseHasSourceLimitation(payload)
+            }
+          } catch { /* An unavailable premise/source cannot establish a rule. */ }
+        }
+      }
+      const assertionOutcome = checkVerifiedAssertions(assertions, resolvedEvidence, ctx, now, hasTypedAssertions, replayedRules)
       supportedAssertionIds = [...assertionOutcome.supportedAssertionIds]
       findings.push(...assertionOutcome.findings)
     }
@@ -238,9 +299,10 @@ export class DraftVerificationService implements AnswerVerifierPort {
     })
     findings.push(...semantic.findings)
 
-    if (draft.schemaVersion === 'answer-draft@2') {
+    if (hasTypedAssertions) {
       const supportedCodes = new Set<string>(findings.map((finding) => finding.code))
       const trustedCodes = new Set(request.trustedLimitations ?? [])
+      if (limitedRuleSourceVerified) trustedCodes.add('limited_factual_result')
       const missingEvidenceIds = new Set(findings
         .filter((finding) => finding.code === 'evidence_not_found')
         .map((finding) => finding.evidenceRef?.id)
@@ -336,6 +398,18 @@ export class DraftVerificationService implements AnswerVerifierPort {
       if (record === undefined) continue
       resolved.set(ref.id, await this.#readEvidence(scopeRef, record, ctx))
     }
+    // Only a manifest-authorized rule archive can introduce premise reads. Model-authored
+    // premiseRefs alone never expand authority; the checker requires the exact archive set.
+    for (const located of [...resolved.values()]) {
+      if (located.unreadable || located.record.envelope.kind !== 'rule_derivation' || typeof located.payload !== 'object' || located.payload === null || !('premiseRefs' in located.payload)) continue
+      const refs = located.payload.premiseRefs
+      if (!Array.isArray(refs) || refs.length > 256 || !refs.every(isResourceRef)) continue
+      for (const ref of refs) {
+        if (ref.kind !== 'evidence' || resolved.has(ref.id)) continue
+        const record = await this.#evidence.get(scopeRef, ref.id, ctx)
+        if (record !== undefined) resolved.set(ref.id, await this.#readEvidence(scopeRef, record, ctx))
+      }
+    }
     return resolved
   }
 
@@ -429,6 +503,51 @@ export class DraftVerificationService implements AnswerVerifierPort {
         : findings,
       disposition: { status: 'not_run', reason },
     }
+  }
+}
+
+/**
+ * Resolve the exact V3 typed-manifest bindings a draft carries. A @3 draft that omits any
+ * required ref/digest cannot be hashed and is therefore never verifiable/publishable; the
+ * function returns `undefined` so the caller records a located hard finding instead of
+ * silently hashing a partial body.
+ */
+function v3BindingsOf(draft: AnswerDraft): {
+  readonly resultManifestRef: ResourceRef
+  readonly resultManifestDigest: Sha256Digest
+  readonly finalizationReceiptRef: ResourceRef
+  readonly finalizationReceiptDigest: Sha256Digest
+  readonly executionBindingRef: ResourceRef
+} | undefined {
+  const resultManifestRef = draft.resultManifestRef
+  const resultManifestDigest = draft.resultManifestDigest
+  const finalizationReceiptRef = draft.finalizationReceiptRef
+  const finalizationReceiptDigest = draft.finalizationReceiptDigest
+  const executionBindingRef = draft.executionBindingRef
+  if (
+    resultManifestRef === undefined ||
+    resultManifestDigest === undefined ||
+    finalizationReceiptRef === undefined ||
+    finalizationReceiptDigest === undefined ||
+    executionBindingRef === undefined
+  ) {
+    return undefined
+  }
+  if (
+    !isResourceRef(resultManifestRef) ||
+    !isResourceRef(finalizationReceiptRef) ||
+    !isResourceRef(executionBindingRef) ||
+    !/^sha256:[0-9a-f]{64}$/u.test(resultManifestDigest) ||
+    !/^sha256:[0-9a-f]{64}$/u.test(finalizationReceiptDigest)
+  ) {
+    return undefined
+  }
+  return {
+    resultManifestRef,
+    resultManifestDigest,
+    finalizationReceiptRef,
+    finalizationReceiptDigest,
+    executionBindingRef,
   }
 }
 

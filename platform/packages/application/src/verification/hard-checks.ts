@@ -31,7 +31,7 @@ export interface HardCheckOutcome {
 }
 
 /** Canonical exact decimal form. It never rounds through IEEE-754. */
-function canonicalDecimal(value: string): string | undefined {
+export function canonicalDecimal(value: string): string | undefined {
   if (value.length === 0 || value.length > 64) return undefined
   const match = /^(-?)(0|[1-9]\d*)(?:\.(\d+))?$/u.exec(value)
   if (match === null) return undefined
@@ -44,7 +44,8 @@ function canonicalDecimal(value: string): string | undefined {
   return `${match[1] === '-' ? '-' : ''}${significant}e${String(-scale)}`
 }
 
-function numericText(value: unknown): string | undefined {
+/** Canonicalize a JSON string/number as an exact decimal; numbers never regain lost digits. */
+export function numericText(value: unknown): string | undefined {
   if (typeof value === 'string') return canonicalDecimal(value)
   if (typeof value === 'number' && Number.isFinite(value)) return canonicalDecimal(String(value))
   return undefined
@@ -189,12 +190,65 @@ interface ResultFieldBinding {
   readonly timePointer?: string
 }
 
+function pointerTokens(pointer: string): string[] {
+  return pointer.split('/').slice(1).map((part) => part.replaceAll('~1', '/').replaceAll('~0', '~'))
+}
+
+function escapePointerToken(token: string): string {
+  return token.replaceAll('~', '~0').replaceAll('/', '~1')
+}
+
+/**
+ * Registered compute metrics have a typed record shape rather than a SQL table (SPEC v0.3a
+ * §EX-6, §EX-7.1). Accept only the exact pointer shape the compute writer emits: the amount is
+ * located at `/computation/metrics/<key>/amount`, the metric descriptor at
+ * `/computation/metrics/<key>`, the subject is the operation ref, and exactly one of `unit` or
+ * `currency` is bound. This never widens the table-cell path: it is a separate, closed shape.
+ */
+function computeMetricFieldBindingMatches(
+  payload: unknown,
+  binding: ResultFieldBinding,
+  predicate: string,
+): boolean {
+  if (typeof payload !== 'object' || payload === null || Array.isArray(payload)) return false
+  const payloadRecord = payload as Record<string, unknown>
+  if (payloadRecord['resultKind'] !== 'computation') return false
+  const computation = payloadRecord['computation']
+  if (typeof computation !== 'object' || computation === null || Array.isArray(computation)) return false
+  const computationRecord = computation as Record<string, unknown>
+  const operationRef = computationRecord['operationRef']
+  if (typeof operationRef !== 'object' || operationRef === null || Array.isArray(operationRef)) return false
+  if (typeof (operationRef as Record<string, unknown>)['id'] !== 'string') return false
+  const metrics = computationRecord['metrics']
+  if (typeof metrics !== 'object' || metrics === null || Array.isArray(metrics)) return false
+  const metricBag = metrics as Record<string, unknown>
+
+  const valueTokens = pointerTokens(binding.valuePointer)
+  if (valueTokens.length !== 4 || valueTokens[0] !== 'computation' || valueTokens[1] !== 'metrics' || valueTokens[3] !== 'amount') {
+    return false
+  }
+  const key = valueTokens[2]
+  if (key === undefined || key !== predicate) return false
+  const metric = metricBag[key]
+  if (typeof metric !== 'object' || metric === null || Array.isArray(metric)) return false
+  const metricRecord = metric as Record<string, unknown>
+  if (binding.subjectPointer !== '/computation/operationRef/id' || binding.timePointer !== undefined) return false
+  const escaped = escapePointerToken(key)
+  const fieldPointer = `/computation/metrics/${escaped}`
+  if (binding.fieldRefPointer !== fieldPointer) return false
+  if (typeof metricRecord['amount'] !== 'string' && typeof metricRecord['amount'] !== 'number') return false
+  if (binding.unitPointer === `${fieldPointer}/unit`) return typeof metricRecord['unit'] === 'string'
+  if (binding.unitPointer === `${fieldPointer}/currency`) return typeof metricRecord['currency'] === 'string'
+  return false
+}
+
 export function fieldBindingMatches(
   payload: unknown,
   binding: ResultFieldBinding,
   predicate: string,
 ): boolean {
   if (publishedFactFieldBindingMatches(payload, binding, predicate)) return true
+  if (computeMetricFieldBindingMatches(payload, binding, predicate)) return true
   if (binding.fieldRefPointer === undefined) return false
   const cell = queryCellLocation(binding.valuePointer)
   const field = fieldReferenceAt(payload, binding.fieldRefPointer)
@@ -203,6 +257,64 @@ export function fieldBindingMatches(
     (binding.unitPointer === undefined || binding.unitPointer === `${columnPointer}/unit`) &&
     sameRow(binding.valuePointer, binding.subjectPointer) &&
     (binding.timePointer === undefined || sameRow(binding.valuePointer, binding.timePointer))
+}
+
+/**
+ * The dedicated row/column binding check for a table-cell assertion. `fieldBindingMatches`
+ * returns a single boolean; this locates exactly which pointer escaped the row so the finding
+ * names the wrong row or column instead of a generic predicate mismatch. It applies only to
+ * real table cells; the published-facts shape is checked by `fieldBindingMatches`.
+ */
+export function rowBindingFinding(
+  binding: ResultFieldBinding,
+  input: { readonly claimId?: Uuid; readonly assertionId?: Uuid; readonly field?: string },
+): VerificationFinding | undefined {
+  const cell = queryCellLocation(binding.valuePointer)
+  if (cell === undefined) return undefined
+  const ids = {
+    ...(input.claimId === undefined ? {} : { claimId: input.claimId }),
+    ...(input.assertionId === undefined ? {} : { assertionId: input.assertionId }),
+    ...(input.field === undefined ? {} : { field: input.field }),
+  }
+  const subjectCell = queryCellLocation(binding.subjectPointer)
+  if (subjectCell === undefined || subjectCell.row !== cell.row) {
+    return {
+      code: 'row_binding_mismatch',
+      axis: 'hard',
+      ...ids,
+      pointer: binding.subjectPointer,
+      expected: `row ${String(cell.row)}`,
+      actual: subjectCell === undefined ? 'non-cell pointer' : `row ${String(subjectCell.row)}`,
+    }
+  }
+  if (binding.timePointer !== undefined) {
+    const timeCell = queryCellLocation(binding.timePointer)
+    if (timeCell === undefined || timeCell.row !== cell.row) {
+      return {
+        code: 'row_binding_mismatch',
+        axis: 'hard',
+        ...ids,
+        pointer: binding.timePointer,
+        expected: `row ${String(cell.row)}`,
+        actual: timeCell === undefined ? 'non-cell pointer' : `row ${String(timeCell.row)}`,
+      }
+    }
+  }
+  if (binding.fieldRefPointer !== undefined) {
+    const parts = binding.fieldRefPointer.split('/').slice(1).map((part) => part.replaceAll('~1', '/').replaceAll('~0', '~'))
+    const column = parts.length === 3 && parts[0] === 'table' && parts[1] === 'columns' ? indexOf(parts[2]) : undefined
+    if (column !== undefined && column !== cell.column) {
+      return {
+        code: 'row_binding_mismatch',
+        axis: 'hard',
+        ...ids,
+        pointer: binding.fieldRefPointer,
+        expected: `column ${String(cell.column)}`,
+        actual: `column ${String(column)}`,
+      }
+    }
+  }
+  return undefined
 }
 
 export function sourceValidityFinding(

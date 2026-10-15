@@ -439,7 +439,7 @@ describe('published rule instances', () => {
     expect(applicability(invalidEvaluation.result.applicabilities, subject.subjectEntityId).state).toBe('unknown')
   })
 
-  it('supports same-condition any and finite observed not, and reports mixed OR as unsupported', () => {
+  it('supports same-condition any, genuine different-condition any and finite observed not', () => {
     const subject = { subjectEntityId: 'facility-T-56', objectId: 'facility' }
     const sameCondition = publishedRule({
       expression: {
@@ -489,9 +489,18 @@ describe('published rule instances', () => {
         spans: [],
       },
     })
-    const mixed = compileAndEvaluate({ rules: [mixedAny], subjects: [subject], facts: [] })
-    expect(mixed.compilation.instances).toHaveLength(0)
-    expect(mixed.compilation.issues[0]?.code).toBe('UNSUPPORTED_FILTER')
+    const mixed = compileAndEvaluate({
+      rules: [mixedAny],
+      subjects: [subject],
+      facts: projected([
+        statement('00000000-0000-4000-8000-000000000258', subject.subjectEntityId, [
+          { attributeId: 'in_service', value: true },
+        ]),
+      ]),
+    })
+    expect(mixed.compilation.issues).toEqual([])
+    expect(mixed.compilation.instances).toHaveLength(1)
+    expect(applicability(mixed.result.applicabilities, subject.subjectEntityId).state).toBe('applicable')
   })
 
   it('reports unsupported rules per rule and keeps valid same-scope instances', () => {

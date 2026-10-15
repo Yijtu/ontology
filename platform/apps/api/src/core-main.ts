@@ -7,11 +7,13 @@ import type { DeploymentEnvironment, MappingRef, ProfileRef, ProfileSpec, ScopeR
 import { createApiServer } from './http/app'
 import type { ApiServerOptions } from './http/app'
 import type { RequestAuthenticator } from './http/shared'
-import { loadCoreExamples } from './composition/core-example-loader'
+import { emptyCoreExamples, loadCoreExamples } from './composition/core-example-loader'
 import type { LoadedCoreExamples } from './composition/core-example-loader'
 import { createCoreLocalComposition } from './composition/core-local-composition'
 import { resolve } from 'node:path'
 import { tmpdir } from 'node:os'
+import { CoreLocalModelSettings } from './composition/core-local-model-settings'
+import { registerCoreModelSettingsRoutes } from './http/core-model-settings'
 
 const DEFAULT_TENANT_ID = '11111111-1111-4111-8111-111111111111'
 const DEFAULT_SPACE_ID = 'aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa'
@@ -29,6 +31,8 @@ const CORE_OPERATOR_ROLES = [
 ] as const
 
 export interface CoreApiDependencies {
+  readonly modelSettings?: CoreLocalModelSettings
+  readonly webPort?: number
   readonly database: { queryUnscoped(statement: string): Promise<unknown> }
   readonly scopeRef: ScopeRef
   readonly examples: LoadedCoreExamples
@@ -48,6 +52,7 @@ export interface CoreApiDependencies {
     readonly sourceScenarioId: string
     readonly mappingRefs: readonly MappingRef[]
     readonly rawSourceRefs: readonly SourceRef[]
+    readonly models: { readonly generation: boolean; readonly decision: boolean }
   } | undefined>
   readonly api?: Omit<ApiServerOptions, 'authenticate' | 'logger'>
   readonly allowLocalOperator?: boolean
@@ -114,6 +119,7 @@ export function createCoreApi(dependencies: CoreApiDependencies): FastifyInstanc
     logger: dependencies.logger ?? false,
   })
   dependencies.registerRoutes?.(app, authenticate)
+  if (dependencies.modelSettings !== undefined) registerCoreModelSettingsRoutes(app, { settings: dependencies.modelSettings, authenticate, webPort: dependencies.webPort ?? 5174 })
 
   app.get('/healthz', async (_request, reply) => {
     try {
@@ -145,6 +151,7 @@ export function createCoreApi(dependencies: CoreApiDependencies): FastifyInstanc
         availableTasks: current?.availableTasks ?? dependencies.availableTasksByScenario?.[scenario.scenarioId] ?? dependencies.availableTaskIds ?? [],
         mappingRefs: current?.mappingRefs ?? scenario.physicalMappings.map((mapping) => mapping.ref),
         rawSourceRefs: current?.rawSourceRefs ?? scenario.rawSources.map((source) => source.sourceRef),
+        models: current?.models ?? dependencies.modelCapabilities ?? { generation: false, decision: false },
       }
     }))
     return reply.status(200).send({
@@ -160,26 +167,51 @@ export function createCoreApi(dependencies: CoreApiDependencies): FastifyInstanc
   return app
 }
 
+/**
+ * The synthetic example assembly is now optional. A kernel deployment starts with zero scenarios
+ * when examples are explicitly disabled (`CORE_LOAD_EXAMPLES=false`) or when no deployment config
+ * is supplied and the default example index is absent; an explicitly configured index must still
+ * load or the process fails fast.
+ */
+function resolveCoreExamples(scopeRef: ScopeRef): LoadedCoreExamples {
+  const configuredIndex = process.env['CORE_DEPLOYMENT_CONFIG']
+  if (process.env['CORE_LOAD_EXAMPLES'] === 'false') return emptyCoreExamples()
+  try {
+    return loadCoreExamples({
+      targetScopeRef: scopeRef,
+      ...(configuredIndex === undefined ? {} : { indexPath: configuredIndex }),
+    })
+  } catch (error) {
+    if (configuredIndex !== undefined) throw error
+    return emptyCoreExamples()
+  }
+}
+
 export async function startCoreApi(): Promise<void> {
   const scopeRef = scopeFromEnvironment()
   let composition: Awaited<ReturnType<typeof createCoreLocalComposition>> | undefined
   let app: FastifyInstance | undefined
   try {
-    const examples = loadCoreExamples({
-      targetScopeRef: scopeRef,
-      ...(process.env['CORE_DEPLOYMENT_CONFIG'] === undefined ? {} : { indexPath: process.env['CORE_DEPLOYMENT_CONFIG'] }),
-    })
+    const examples = resolveCoreExamples(scopeRef)
+    const objectDirectory = process.env['CORE_OBJECT_DIRECTORY'] ?? resolve(tmpdir(), 'ontology-core-local', scopeRef.tenantId, scopeRef.spaceId, 'objects')
+    const modelSettings = new CoreLocalModelSettings({ objectDirectory, scopeRef, environment: process.env })
+    const modelEnvironment = await modelSettings.loadEnvironment()
     composition = await createCoreLocalComposition({
       databaseUrl: requiredEnv('CORE_DATABASE_URL'),
-      objectDirectory: process.env['CORE_OBJECT_DIRECTORY'] ?? resolve(tmpdir(), 'ontology-core-local', scopeRef.tenantId, scopeRef.spaceId, 'objects'),
+      objectDirectory,
       scopeRef,
       examples,
       allowLocalOperator: process.env['CORE_ENABLE_OPERATOR_ROUTES'] === 'true',
-      modelsEnabled: process.env['CORE_ENABLE_MODELS'] === 'true',
+      modelsEnabled: modelEnvironment['CORE_ENABLE_MODELS'] === 'true',
       jevEnabled: process.env['CORE_ENABLE_JEV'] === 'true',
-      modelEnvironment: process.env,
+      modelEnvironment,
+      ...(process.env['PROJECT_BUSINESS_DATABASE_URL'] === undefined ? {} : { projectDataset: {
+        connectionString: requiredEnv('PROJECT_BUSINESS_DATABASE_URL'),
+        ...(process.env['PROJECT_BUSINESS_READONLY_DATABASE_URL'] === undefined ? {} : { readOnlyConnectionString: requiredEnv('PROJECT_BUSINESS_READONLY_DATABASE_URL') }),
+        ...(process.env['PROJECT_BUSINESS_SCHEMA'] === undefined ? {} : { schema: requiredEnv('PROJECT_BUSINESS_SCHEMA') }),
+      } }),
     })
-    app = createCoreApi({ ...composition.dependencies, logger: true })
+    app = createCoreApi({ ...composition.dependencies, modelSettings, webPort: Number(process.env['CORE_WEB_PORT'] ?? '5174'), logger: true })
     await app.listen({ host: '127.0.0.1', port: readPort(process.env['CORE_API_PORT']) })
     const shutdown = async (): Promise<void> => {
       await app?.close()

@@ -8,6 +8,9 @@ export type ControlStorageErrorCode =
   | 'UNSUPPORTED_OPERATION'
   | 'INVALID_OPERATION'
   | 'IDEMPOTENCY_CONFLICT'
+  | 'UNIQUE_VIOLATION'
+  | 'NOT_FOUND'
+  | 'READ_FAILED'
   | 'LOCAL_DEV_PRINCIPAL_NOT_ALLOWED'
 
 export class ControlStorageError extends Error {

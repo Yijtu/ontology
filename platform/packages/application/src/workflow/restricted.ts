@@ -255,7 +255,7 @@ export class RestrictedAnswerPublisher implements AnswerPublisherPort {
       publicationKind: 'verified',
       limitations: [...draft.limitations],
       body: {
-        schemaVersion: draft.schemaVersion ?? 'answer-draft@1',
+        schemaVersion: draft.schemaVersion === 'answer-draft@2' ? 'answer-draft@2' : 'answer-draft@1',
         blocks: structuredClone(draft.blocks),
         claims: structuredClone(draft.claims ?? []),
         assertions: structuredClone(draft.assertions ?? []),

@@ -3,6 +3,7 @@ export {
   createPostgresComponentRegistryStore,
 } from './composition/component-registry'
 export type { ComponentRegistryComposition, ComponentRegistryCompositionOptions } from './composition/component-registry'
+export { CoreProjectSemanticPartitions } from './composition/core-project-semantic-partitions'
 export {
   createPostgresSemanticDefinitionService,
   createPostgresSemanticDefinitionStore,
@@ -54,7 +55,7 @@ export type {
   ToolGatewayComposition,
   ToolGatewayCompositionOptions,
 } from './composition/tool-gateway'
-export { CoreExampleLoaderError, loadCoreExamples } from './composition/core-example-loader'
+export { CoreExampleLoaderError, emptyCoreExamples, loadCoreExamples } from './composition/core-example-loader'
 export type {
   CoreExampleLoaderErrorCode,
   CoreExamplePhysicalMapping,
@@ -100,12 +101,21 @@ export type {
 export { createToolHandlerSet } from './composition/tool-handlers'
 export type { ToolHandlerSetOptions } from './composition/tool-handlers'
 export { createApiServer, createJobApi, createRunApi } from './http/app'
+export type { ProjectDocumentRouteDependencies, ProjectDocumentService } from './http/project-documents'
 export type { ApiServerOptions } from './http/app'
-export { createCoreLocalComposition, createDuckDbSnapshot } from './composition/core-local-composition'
+export { CORE_TYPED_RESULT_SCHEMA_REF, createCoreLocalComposition, createDuckDbSnapshot } from './composition/core-local-composition'
 export type { CoreLocalComposition, CoreLocalCompositionOptions } from './composition/core-local-composition'
+export {
+  CORE_MOUNTED_TASK_KINDS,
+  coreScenarioTaskBindings,
+  coreTaskBindingRef,
+  mountCoreTaskBindings,
+} from './composition/core-task-bindings'
 export { createCoreApi, startCoreApi } from './core-main'
 export type { CoreApiDependencies } from './core-main'
 export { registerRunRoutes } from './http/server'
+export { CoreLocalModelSettings, LocalModelSettingsError } from './composition/core-local-model-settings'
+export type { CoreModelSettingsView } from './composition/core-local-model-settings'
 export type { AuthenticatedRequest, RequestAuthenticator, RunApiOptions, RunDispatchHooks } from './http/server'
 export { RunProgressService } from './http/run-progress'
 export type {
@@ -118,6 +128,25 @@ export type {
 } from './http/run-progress'
 export { registerJobRoutes } from './http/jobs'
 export type { JobApiOptions, JobRouteDependencies } from './http/jobs'
+export { registerAssetCandidateRoutes } from './http/asset-candidates'
+export { registerDefinitionEditingRoutes } from './http/definition-editing'
+export type { DefinitionEditingRouteDependencies } from './http/definition-editing'
+export { registerRuleActionCandidateRoutes } from './http/rule-action-candidates'
+export type { RuleActionCandidateRouteDependencies } from './http/rule-action-candidates'
+export { registerSyntheticValidationRoutes } from './http/synthetic-validation'
+export type { SyntheticValidationRouteDependencies } from './http/synthetic-validation'
+export { registerCompetencyQuestionRoutes } from './http/competency-questions'
+export type { CompetencyQuestionRouteDependencies } from './http/competency-questions'
+export { createCompetencyQuestionWorkflow, createCompetencyQuestionBoundary } from './composition/competency-questions'
+export { createCoreCompetencyExecution } from './composition/competency-execution'
+export { createCompetencyValidationTargetReader } from './composition/competency-validation-target'
+export type { CompetencyTargetTemplate, CompetencyValidationTargetReaderOptions } from './composition/competency-validation-target'
+export { createCompetencyProjectPreparer } from './composition/competency-project-preparer'
+export type { CompetencyTemplateBinding, CompetencyProjectPreparerOptions } from './composition/competency-project-preparer'
+export type { CoreCompetencyExecutionOptions, PreparedCompetencyCase, PreparedCompetencyInput } from './composition/competency-execution'
+export { registerProjectRoutes } from './http/projects'
+export type { ProjectRouteDependencies } from './http/projects'
+export type { AssetCandidateRouteDependencies } from './http/asset-candidates'
 export { registerWorkbenchRoutes } from './http/workbench'
 export type { WorkbenchApiOptions, WorkbenchRouteDependencies } from './http/workbench'
 export { registerDecisionRoutes } from './http/decisions'
@@ -142,7 +171,7 @@ export type { EvidenceReadSurface, EvidenceRouteDependencies } from './http/evid
 export { registerHistoryRoutes } from './http/history'
 export type { HistoryReadSurface, HistoryRouteDependencies } from './http/history'
 export { registerAnswerRoutes } from './http/answers'
-export type { AnswerReader, AnswerRouteDependencies } from './http/answers'
+export type { AnswerReader, AnswerResultReader, AnswerRouteDependencies, AnswerTableReader } from './http/answers'
 export { registerFeedbackRoutes } from './http/feedback'
 export type { FeedbackRouteDependencies, FeedbackWriter } from './http/feedback'
 export { registerSimulationRoutes } from './http/simulations'
@@ -165,3 +194,36 @@ export {
   readRevisionHeader,
   scopeRefFor,
 } from './http/shared'
+export { createInstanceIdentityWorkflow, InstanceIdentityWorkflow } from './composition/instance-identity'
+export type { InstanceIdentityWorkflowOptions, InstanceIdentityCreateInput } from './composition/instance-identity'
+export { registerInstanceReviewRoutes } from './http/instances'
+export type { InstanceReviewRouteDependencies } from './http/instances'
+export { createProjectFactWorkflow } from './composition/project-facts'
+export type { ProjectFactWorkflowOptions } from './composition/project-facts'
+export { createProjectEvolutionWorkflow } from './composition/project-evolution'
+export type { ProjectEvolutionWorkflowOptions } from './composition/project-evolution'
+export { createCoreProjectQueryWorkflow } from './composition/core-project-query-handler'
+export type { CoreProjectQueryOptions, CoreProjectQueryWorkflow } from './composition/core-project-query-handler'
+export { createCoreStructuredImportWorkflow } from './composition/core-structured-import-service'
+export type { CoreStructuredImportOptions } from './composition/core-structured-import-service'
+export { CoreSemanticTaskResolver, createCoreSemanticTaskSource } from './composition/core-semantic-task-resolver'
+export type { CoreSemanticTaskResolverOptions, CoreSemanticTaskSelection, CoreSemanticTaskResolution } from './composition/core-semantic-task-resolver'
+export { CoreRelationsTaskHandler } from './composition/core-relations-task-handler'
+export type { CoreRelationsTaskHandlerOptions } from './composition/core-relations-task-handler'
+export type { CompetencyExtractedRuleAlias, CompetencyPackRuleAlias, CompetencyRuleAlias, CompetencyTemplateRuleSource } from './composition/competency-rule-origins'
+export { createCoreSourceViewReader, CoreSourceViewError } from './composition/core-source-view'
+export type { CoreSourceViewOptions, CoreAnswerSourceView, CoreInstanceFieldSourceView, CoreSourceCell, CoreSourceFragment } from './composition/core-source-view'
+export { registerCoreSourceViewRoutes } from './http/core-source-views'
+export type { CoreSourceViewRouteDependencies } from './http/core-source-views'
+export { readSavedInputSources } from './composition/core-saved-input-sources'
+export type { SavedInputSourcePorts, SavedInputSources, SavedInputArtifactView, SourceReadCoverage } from './composition/core-saved-input-sources'
+export { readSavedCell } from './composition/core-saved-cell-reader'
+export type { SavedCellSelector, SavedCellRead, SavedCellPorts } from './composition/core-saved-cell-reader'
+export { createRequestNativeSourceReader } from './composition/core-native-source-reader'
+export { createCoreAuthoring } from './composition/core-authoring'
+export type { CoreAuthoringOptions } from './composition/core-authoring'
+export { createCoreProjectComputeInput, parseCoreComputeInputSelection } from './composition/core-project-compute-input'
+export type { CoreComputeInputSelection } from './composition/core-project-compute-input'
+export { createCoreApprovedInput } from './composition/core-approved-input'
+export { createCoreTableResults, CoreTableResultError } from './composition/core-table-results'
+export type { CoreTableResultsOptions, CoreTableResults, CoreTableBuildInput } from './composition/core-table-results'

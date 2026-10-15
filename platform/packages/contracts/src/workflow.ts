@@ -1,5 +1,6 @@
 import type {
   BudgetRemaining,
+  EvidenceKind,
   NonEmptyString,
   ResourceRef,
   ResolvedProfileRef,
@@ -20,6 +21,7 @@ import type {
 } from './ports'
 import type { ToolContext } from './trusted'
 import type { WorkflowDispatchFence } from './workflow-dispatch'
+import { isRecord, isResourceRef, isSha256Digest } from './asset-workspace'
 import type {
   ClaimExplanation,
   DraftClaim,
@@ -111,8 +113,13 @@ export interface WorkflowRunState {
 export interface AnswerDraft {
   readonly draftId: Uuid
   readonly runId: Uuid
-  /** V2 hashes bind assertions and limitations as well as blocks and numeric claims. */
-  readonly schemaVersion?: 'answer-draft@2'
+  /**
+   * V2 hashes bind assertions and limitations as well as blocks and numeric claims. V3
+   * additionally binds the archived typed result manifest and the pre-draft finalization
+   * receipt, so a published @3 body can never be detached from the exact typed result and
+   * evidence it was verified against.
+   */
+  readonly schemaVersion?: 'answer-draft@2' | 'answer-draft@3'
   readonly blocks: readonly unknown[]
   /**
    * The structured, result-bound claims of the draft (D7.4). A draft written by the
@@ -126,6 +133,17 @@ export interface AnswerDraft {
   readonly limitations: readonly string[]
   readonly producedInPhase: RunState
   readonly createdAt: Rfc3339UtcTimestamp
+  /**
+   * The V3 typed-manifest bindings. They are present exactly when `schemaVersion` is
+   * `answer-draft@3` (and absent for the legacy `@1`/`@2` drafts). They are part of the V3
+   * content hash, so a later edit to the referenced manifest/receipt or the body requires a
+   * new draft hash and therefore a fresh verification.
+   */
+  readonly resultManifestRef?: ResourceRef
+  readonly resultManifestDigest?: Sha256Digest
+  readonly finalizationReceiptRef?: ResourceRef
+  readonly finalizationReceiptDigest?: Sha256Digest
+  readonly executionBindingRef?: ResourceRef
 }
 
 /**
@@ -199,6 +217,14 @@ export interface DraftWriterResult {
   readonly usage?: ToolUsage
   /** Persisted artifact refs for the draft, when the writer archived it. */
   readonly evidenceRefs?: readonly ResourceRef[]
+  /**
+   * Trusted limitation codes the writer declares on the draft (for example a truncated result
+   * that was deliberately not rendered as complete). The controller forwards them to the
+   * verifier as `trustedLimitations`, so only codes the host actually produced are accepted;
+   * a model or request can never inject an arbitrary limitation. They must match
+   * `draft.limitations`.
+   */
+  readonly limitations?: readonly string[]
 }
 
 /**
@@ -293,6 +319,85 @@ export interface PublishedAnswerBody {
 }
 
 /**
+ * Runtime guard for the legacy `answer-draft@1`/`@2` published body. The body is archived
+ * bytes (JSONB round-trips through storage), so a reader validates the shape instead of
+ * trusting a TypeScript assertion.
+ */
+export function isPublishedAnswerBody(value: unknown): value is PublishedAnswerBody {
+  if (!isRecord(value)) return false
+  if (value['schemaVersion'] !== 'answer-draft@1' && value['schemaVersion'] !== 'answer-draft@2') return false
+  return Array.isArray(value['blocks']) && Array.isArray(value['claims']) && Array.isArray(value['assertions'])
+}
+
+/**
+ * Runtime guard for the `answer-draft@3` body. It pins the typed result manifest and the
+ * pre-draft finalization receipt by full ref and digest, and requires the narrative blocks,
+ * claims, assertions and limitations to be present.
+ */
+export function isAnswerDraftV3Body(value: unknown): value is AnswerDraftV3Body {
+  if (!isRecord(value)) return false
+  if (value['schemaVersion'] !== 'answer-draft@3') return false
+  if (!isResourceRef(value['resultManifestRef'])) return false
+  if (!isSha256Digest(value['resultManifestDigest'])) return false
+  if (!isResourceRef(value['finalizationReceiptRef'])) return false
+  if (!isSha256Digest(value['finalizationReceiptDigest'])) return false
+  if (!isResourceRef(value['executionBindingRef'])) return false
+  if (!Array.isArray(value['blocks'])) return false
+  if (!Array.isArray(value['claims'])) return false
+  if (!Array.isArray(value['assertions'])) return false
+  if (!Array.isArray(value['limitations']) || !value['limitations'].every((entry) => typeof entry === 'string')) {
+    return false
+  }
+  return true
+}
+
+/**
+ * The canonical hash body of an `answer-draft@3` (SPEC v0.3a §EX-7.1).
+ *
+ * It binds the verified typed result manifest, the finalization receipt archived *before* the
+ * draft, the execution binding and the narrative blocks/claims/assertions/limitations. It
+ * deliberately contains no `contentHash`, no `verificationId` and no table/verification
+ * receipt: those are produced after this body is hashed and live only on the read envelope
+ * `PublishedAnswerV3Envelope`. Counting them back into the body would make the draft hash
+ * depend on the verification that itself references the draft hash. `answer-draft@1`/`@2`
+ * bodies remain valid and are read unchanged through `PublishedAnswerBody`.
+ */
+export interface AnswerDraftV3Body {
+  readonly schemaVersion: 'answer-draft@3'
+  readonly resultManifestRef: ResourceRef
+  readonly resultManifestDigest: Sha256Digest
+  readonly finalizationReceiptRef: ResourceRef
+  readonly finalizationReceiptDigest: Sha256Digest
+  readonly executionBindingRef: ResourceRef
+  readonly blocks: readonly unknown[]
+  readonly claims: readonly DraftClaim[]
+  readonly assertions: readonly VerifiedAssertion[]
+  readonly limitations: readonly string[]
+}
+
+/**
+ * Read envelope for an `answer-draft@3`. `contentHash` is the digest of `body`; the
+ * verification and table-verification receipts are attached here, outside the hashed body, so
+ * a receipt may reference the draft hash without the draft depending on the receipt. Like
+ * `currentValidity`, this envelope metadata is never written back into the body.
+ */
+export interface PublishedAnswerV3Envelope {
+  readonly answerId: Uuid
+  readonly runId: Uuid
+  readonly contentHash: Sha256Digest
+  readonly verificationId: Uuid
+  readonly body: AnswerDraftV3Body
+  /** Archived after the draft; kept out of the body to avoid a draft↔verification cycle. */
+  readonly verificationReceiptRef?: ResourceRef
+  readonly tableVerificationReceiptRef?: ResourceRef
+  /** Current-world validity is envelope metadata; it never changes the body or its hash. */
+  readonly currentValidity?: {
+    readonly state: 'current' | 'superseded' | 'withdrawn' | 'unverifiable'
+    readonly reason?: string
+  }
+}
+
+/**
  * The final answer version. Its id binds the exact `draftHash`, `evidenceManifestHash`,
  * `verificationId` and scenario manifest the controller published, so a mismatched binding
  * can be detected instead of trusted (SPEC §4.1, INV-09).
@@ -315,6 +420,12 @@ export interface PublishedAnswer {
   readonly semanticReview?: SemanticReviewDisposition
   /** Absent only for legacy metadata-only rows; readers must display that body is unavailable. */
   readonly body?: PublishedAnswerBody
+  /**
+   * The verified `answer-draft@3` body. A @3 publication carries this instead of the legacy
+   * `body`; both are never set on one answer. It is the exact body the content hash was
+   * computed from, so reading it back returns the same verified version.
+   */
+  readonly v3Body?: AnswerDraftV3Body
   readonly bodyUnavailableReason?: 'legacy_metadata_only'
   readonly publishedAt: Rfc3339UtcTimestamp
 }
@@ -343,6 +454,13 @@ export interface RecordAnswerInput {
   readonly expectedRunState: RunState
   readonly expectedRunRevision: RevisionString
   readonly workflowDispatchFence?: WorkflowDispatchFence
+  /**
+   * The exact evidence versions the verified draft depended on. When present, the store
+   * re-reads each dependency row inside the same transaction as the answer insert, so a
+   * dependency that was retracted or edited between the validity check and the commit
+   * (the publication transaction fence) rejects the answer and nothing partial is written.
+   */
+  readonly dependencyPins?: readonly PublicationDependencyPin[]
 }
 
 export type AnswerStoreErrorCode =
@@ -365,6 +483,12 @@ export class AnswerStoreError extends Error {
 export interface AnswerStorePort {
   record(input: RecordAnswerInput, ctx: ToolContext): Promise<PublishedAnswer>
   findByRun(runId: Uuid, ctx: ToolContext): Promise<PublishedAnswer | undefined>
+  /**
+   * The published answer addressed by its immutable `answerId`, scoped to the caller's
+   * tenant/space. The typed-result read surface addresses an answer by id, not by run, and
+   * must never look a row up outside the trusted scope.
+   */
+  findByAnswer(answerId: Uuid, ctx: ToolContext): Promise<PublishedAnswer | undefined>
 }
 
 /** Why a post-verification publication check refused or downgraded a publication. */
@@ -374,6 +498,58 @@ export type PublicationBlockReason =
   | 'evidence_retracted'
   | 'evidence_unverifiable'
   | 'data_stale'
+  /** A dependency was edited after verification; its verified version no longer holds. */
+  | 'dependency_edited'
+  /** A formal table in the verified result has no earned full-table verification receipt. */
+  | 'table_verification_missing'
+  /** A registered validation-policy report is missing, failed, or bound to another revision. */
+  | 'policy_report_missing'
+
+/**
+ * One exact evidence version the verified draft depended on, pinned to the revision and
+ * digests it was verified against. It spans every evidence kind (observation, document span,
+ * rule derivation, computation, identity decision, model output, web page). A later edit to
+ * the archived version, or a retraction of it, makes the pin fail so only the same verified
+ * version can be published.
+ */
+export interface PublicationDependencyPin {
+  readonly evidenceRef: ResourceRef
+  readonly evidenceKind: EvidenceKind
+  readonly resultDigest: Sha256Digest
+  readonly envelopeDigest: Sha256Digest
+  readonly revision: RevisionString
+}
+
+/**
+ * One formal table of the verified result that must carry an earned full-table verification
+ * receipt before publication (SPEC v0.3a §EX-7.1). The receipt is bound to the draft hash and
+ * the exact result manifest digest, so a partial/truncated/tampered table can never publish.
+ */
+export interface PublicationTableVerificationRequirement {
+  readonly draftHash: Sha256Digest
+  readonly resultManifestRef: ResourceRef
+  readonly resultManifestDigest: Sha256Digest
+  readonly tableId: NonEmptyString
+  /** The archived `table-verification-receipt@1` the result must carry for this table. */
+  readonly receiptRef: ResourceRef
+}
+
+/**
+ * One registered task-validation-policy report the verified result depends on (SPEC v0.3a
+ * §EX-6.1). Publication re-reads the archived report and proves it is the same policy,
+ * registry revision and execution it was verified against, and that it passed; a
+ * `fail`/`unknown`/`incomplete` policy report or a missing one blocks publication.
+ */
+export interface PublicationPolicyReportRequirement {
+  readonly policyRef: VersionRef
+  readonly registryDigest: Sha256Digest
+  readonly executionBindingRef: ResourceRef
+  readonly inputSnapshotRef: ResourceRef
+  readonly inputSnapshotDigest: Sha256Digest
+  readonly parametersRef: ResourceRef
+  readonly parametersDigest: Sha256Digest
+  readonly reportRef: ResourceRef
+}
 
 /**
  * The post-verification validity check (D7.4: 发布前复核权限/当前有效性/fence). The evidence
@@ -387,13 +563,24 @@ export interface PublicationValidityRequest {
   readonly evidenceManifestHash: Sha256Digest
   readonly evidenceRefs: readonly ResourceRef[]
   readonly verifiedAt: Rfc3339UtcTimestamp
+  /**
+   * The exact versions the draft was verified against, when known. A request that names them
+   * gets a revision/digest re-check (later edits block as `dependency_edited`); a request that
+   * omits them still re-reads the referenced evidence for permission/visibility.
+   */
+  readonly dependencies?: readonly PublicationDependencyPin[]
+  /** Formal tables that must carry an earned full-table verification receipt. */
+  readonly tableVerifications?: readonly PublicationTableVerificationRequirement[]
+  /** Registered validation-policy reports the result must still be supported by. */
+  readonly policyReports?: readonly PublicationPolicyReportRequirement[]
 }
 
 /**
  * The result of the validity check. `historyLimited` is set only when the support still
  * exists but the world moved on, so the caller may publish the older result **explicitly
- * marked** with `asOf`. A retracted basis, a revoked permission or a cancelled run sets
- * `historyLimited` to `false`: those can never be published, not even historically.
+ * marked** with `asOf`. A retracted basis, a revoked permission, an edited dependency or a
+ * cancelled run sets `historyLimited` to `false`: those can never be published, not even
+ * historically.
  */
 export interface PublicationValidityReport {
   readonly publishable: boolean
@@ -401,6 +588,11 @@ export interface PublicationValidityReport {
   readonly historyLimited: boolean
   readonly asOf?: Rfc3339UtcTimestamp
   readonly details: readonly string[]
+  /**
+   * The exact pins the check actually re-read. A publisher forwards them to the answer store
+   * so the same dependency versions are re-checked inside the publication transaction fence.
+   */
+  readonly dependencies?: readonly PublicationDependencyPin[]
 }
 
 export interface PublicationValidityPort {
@@ -520,8 +712,18 @@ export interface WorkflowManifestStore {
 export interface WorkflowLimits {
   /** Maximum draft attempts (initial draft plus bounded repairs). */
   readonly maxDraftAttempts: number
+  /**
+   * Maximum times the controller may re-enter the collection loop before it stops with a
+   * persisted `NO_PROGRESS`. This is the outer safety bound for a runtime that keeps
+   * returning without a terminal event; the runtime still owns its own bounded
+   * round/budget/deadline stop. It never resets the shared ledger.
+   */
+  readonly maxCollectionRounds: number
 }
 
 export const DEFAULT_WORKFLOW_LIMITS: WorkflowLimits = {
   maxDraftAttempts: 2,
+  // SPEC §EX-10 caps the Pi loop at 6 rounds; the controller admits a small margin so a
+  // legitimate clarification/re-collection cycle does not collide with the hard stop.
+  maxCollectionRounds: 8,
 }

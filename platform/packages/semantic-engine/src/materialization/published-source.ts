@@ -1,5 +1,6 @@
 import type {
   PublishedRuleFilter,
+  SemanticDefinitionVersion,
   PublishedRuleVersion,
   PublishedStatement,
   PublishedStatementFilter,
@@ -8,15 +9,23 @@ import type {
   ToolContext,
   Uuid,
   VersionRef,
+  PublishedExecutableRule,
+  PublishedRuleDeclarationReader,
+  PublishedRuleDeclarationRequest,
 } from '@ontology/contracts'
 import type { IdentityDecisionStore, IdentityPublishedBindingSnapshot } from '@ontology/contracts'
+import { IndustryAssetPublicationError } from '@ontology/contracts'
 import { sha256DigestOf } from '../definitions/canonical'
 import {
   compilePublishedRuleInstances,
   projectPublishedAttributeFacts,
+  projectPublishedRelationFacts,
+  publishedStatementProjectId,
+  isRuleDecimalValue,
+  isRuleScalarDecimalValue,
 } from '../rules'
 import type { DependencyEntityBinding } from './dependency-index'
-import type { SupportRule } from '../rules'
+import type { SupportRule, PublishedRuleCompilation } from '../rules'
 import { readAllPublishedRules, readAllPublishedStatements, readAtStableRevision } from './published-pages'
 import type { PublishedPageLimits } from './published-pages'
 import type {
@@ -48,8 +57,14 @@ export interface PublishedSemanticReadView {
 }
 
 export interface PublishedSemanticSourceOptions extends PublishedPageLimits {
+  /** Reuse one complete read only while its source and live declaration authority remain exact. */
+  readonly cacheStableReads?: boolean
+  readonly publishedRules?: { readonly reader: PublishedRuleDeclarationReader; readonly request: PublishedRuleDeclarationRequest }
+  readonly projectId?: string
   /** The run/profile pin. A multi-schema scope must provide an exact definition version. */
   readonly definitionRef?: VersionRef
+  /** Exact immutable schema supplying executable relation declarations. */
+  readonly definition?: SemanticDefinitionVersion
   /** Required by the production worker; omission is retained for bounded unit fixtures. */
   readonly identity?: Pick<IdentityDecisionStore, 'latestReadRevision' | 'readPublishedBindings'>
   readonly completeRangeAttributeIds?: readonly string[]
@@ -59,6 +74,7 @@ const DEFAULT_PAGE_SIZE = 1_000
 const DEFAULT_MAX_RECORDS = 100_000
 const IDENTITY_BATCH_SIZE = 1_000
 const IDENTITY_READ_CONCURRENCY = 4
+const MAX_CACHED_JSON_BYTES = 8 * 1024 * 1024
 
 function sameVersion(left: VersionRef, right: VersionRef): boolean {
   return left.id === right.id && left.version === right.version && left.digest === right.digest
@@ -84,21 +100,46 @@ async function mapBounded<T, R>(items: readonly T[], width: number, visit: (item
   return output
 }
 
-function ruleKey(rule: PublishedRuleVersion): string {
+function ruleKey(rule: PublishedExecutableRule): string {
   return `${rule.ruleId}\u0000${rule.objectId}`
 }
 
-function businessPropositionKey(scopeRef: ScopeRef, definitionRef: VersionRef, subjectEntityId: string, predicate: string): string {
-  return `business-conclusion:${sha256DigestOf({ scopeRef, definitionRef, subjectEntityId, predicate })}`
+function businessPropositionKey(scopeRef: ScopeRef, definitionRef: VersionRef, subjectEntityId: string, objectId: string, predicate: string, projectId?: string): string {
+  return `business-conclusion:${sha256DigestOf({ scopeRef, definitionRef, subjectEntityId, objectId, predicate, ...(projectId === undefined ? {} : { projectId }) })}`
 }
 
-function hasValidStoredConclusion(rule: PublishedRuleVersion): boolean {
+function hasValidStoredConclusion(rule: PublishedExecutableRule): boolean {
   const binding = rule.conclusion
   if (binding === undefined) return true
   if (typeof binding.predicate !== 'string' || binding.predicate.length === 0) return false
   if (typeof binding.value === 'string' || typeof binding.value === 'boolean') return true
-  return typeof binding.value === 'object' && binding.value !== null &&
-    typeof binding.value.amount === 'string' && typeof binding.value.unit === 'string'
+  return isRuleDecimalValue(binding.value) || isRuleScalarDecimalValue(binding.value)
+}
+
+/** The same declaration compilation is used at admission and archived-input verification. */
+export function publishedSemanticComputationRules(
+  compiled: PublishedRuleCompilation,
+  declarations: readonly PublishedExecutableRule[],
+  scopeRef: ScopeRef,
+  definitionRef: VersionRef,
+  projectId?: string,
+): { readonly rules: readonly SupportRule[]; readonly invalidConclusionRules: readonly PublishedExecutableRule[] } {
+  const byVersion = new Map(declarations.map((rule) => [rule.ruleVersionId, rule]))
+  const invalidConclusionRules: PublishedExecutableRule[] = []
+  const rules = compiled.instances.flatMap((instance): SupportRule[] => {
+    const published = byVersion.get(instance.ruleVersionId)
+    if (published === undefined || published.conclusion === undefined) return [instance.supportRule]
+    if (!hasValidStoredConclusion(published) || !compiled.dependencyRules.some((rule) => rule.publishedInstance?.ruleVersionId === instance.ruleVersionId)) {
+      invalidConclusionRules.push(published)
+      return [instance.supportRule]
+    }
+    const binding = published.conclusion
+    return [instance.supportRule, { ...instance.supportRule, ruleId: `${instance.instanceKey}:consequence`,
+      ...(instance.supportRule.publishedInstance === undefined ? {} : { publishedInstance: { ...instance.supportRule.publishedInstance, emitApplicabilityArtifact: false } }),
+      conclusion: { propositionKey: businessPropositionKey(scopeRef, definitionRef, instance.subjectEntityId, instance.objectId, binding.predicate, projectId), predicate: binding.predicate, value: binding.value },
+    }]
+  })
+  return { rules: [...rules, ...compiled.dependencyRules], invalidConclusionRules }
 }
 
 /**
@@ -110,18 +151,27 @@ export class PublishedSemanticSource implements MaterializationPublishedSource {
   readonly #readView: PublishedSemanticReadView
   readonly #identity: Pick<IdentityDecisionStore, 'latestReadRevision' | 'readPublishedBindings'> | undefined
   readonly #definitionRef: VersionRef | undefined
+  readonly #definition: SemanticDefinitionVersion | undefined
   readonly #pageLimits: PublishedPageLimits
   readonly #completeRangeAttributeIds: readonly string[]
+  readonly #projectId: string | undefined
+  readonly #publishedRules: PublishedSemanticSourceOptions['publishedRules']
+  readonly #cacheStableReads: boolean
+  #cached: { readonly key: string; readonly value: PublishedSemanticData; readonly declarationsDigest?: string } | undefined
 
   constructor(readView: PublishedSemanticReadView, options: PublishedSemanticSourceOptions = {}) {
     this.#readView = readView
     this.#identity = options.identity
-    this.#definitionRef = options.definitionRef
+    this.#definition = options.definition
+    this.#definitionRef = options.definitionRef ?? options.definition?.ref
     this.#pageLimits = {
       pageSize: options.pageSize ?? DEFAULT_PAGE_SIZE,
       maxRecords: options.maxRecords ?? DEFAULT_MAX_RECORDS,
     }
     this.#completeRangeAttributeIds = options.completeRangeAttributeIds ?? []
+    this.#projectId = options.projectId
+    this.#publishedRules = options.publishedRules
+    this.#cacheStableReads = options.cacheStableReads === true
   }
 
   async load(scopeRef: ScopeRef, ctx: ToolContext): Promise<PublishedSemanticData> {
@@ -129,6 +179,30 @@ export class PublishedSemanticSource implements MaterializationPublishedSource {
     const readIdentityRevision = identity === undefined
       ? async (): Promise<RevisionString> => '0'
       : () => identity.latestReadRevision(scopeRef, ctx)
+    const fingerprint = () => sha256DigestOf({ scopeRef, principal: ctx.principal, allowedResources: ctx.allowedResources,
+      policyVersion: ctx.policyVersion, resolvedProfileHash: ctx.resolvedProfileHash, definition: this.#definition,
+      definitionRef: this.#definitionRef, projectId: this.#projectId, pageLimits: this.#pageLimits,
+      completeRangeAttributeIds: this.#completeRangeAttributeIds, publishedRuleRequest: this.#publishedRules?.request })
+    const cacheKey = this.#cacheStableReads ? fingerprint() : undefined
+    const cached = this.#cached
+    if (cacheKey !== undefined && cached?.key === cacheKey && cached.value.readRevision !== undefined) {
+      const [semantic, identityRevision] = await Promise.all([this.#readView.latestReadRevision(scopeRef, ctx), readIdentityRevision()])
+      if (semantic === cached.value.readRevision.semantic && identityRevision === cached.value.readRevision.identity) {
+        let declarationsDigest: string | undefined
+        let authorityValid = true
+        if (this.#publishedRules !== undefined) {
+          try { declarationsDigest = sha256DigestOf(await this.#publishedRules.reader.read(scopeRef, this.#publishedRules.request, ctx)) }
+          catch (error) {
+            if (!(error instanceof IndustryAssetPublicationError)) throw error
+            authorityValid = false
+          }
+        }
+        const [afterSemantic, afterIdentity] = await Promise.all([this.#readView.latestReadRevision(scopeRef, ctx), readIdentityRevision()])
+        if (authorityValid && declarationsDigest === cached.declarationsDigest && semantic === afterSemantic && identityRevision === afterIdentity && cacheKey === fingerprint()) return structuredClone(cached.value)
+      }
+      this.#cached = undefined
+    }
+    let declarationsDigest: string | undefined
     const snapshot = await readAtStableRevision(
       this.#readView,
       readIdentityRevision,
@@ -174,8 +248,9 @@ export class PublishedSemanticSource implements MaterializationPublishedSource {
           const publication = publications.get(record.publicationId)
           return publication !== undefined && sameVersion(publication.schemaRef, definitionRef)
         }
-        const scopedStatements = statements.filter(inDefinition)
-        const scopedRuleVersions = ruleVersions.filter(inDefinition)
+        const inProject = (statement: PublishedStatement): boolean => this.#projectId === undefined || publishedStatementProjectId(statement) === this.#projectId
+        const scopedStatements = statements.filter((statement) => inDefinition(statement) && inProject(statement))
+        const scopedRuleVersions = ruleVersions.filter((rule) => inDefinition(rule) && rule.projectId === this.#projectId)
         const identityBindings = await this.#readIdentityBindings(scopeRef, scopedStatements, ctx)
         if (identityBindings.issue !== undefined) issues.push(identityBindings.issue)
         const identityOf = new Map(identityBindings.bindings.map((binding) => [binding.candidateId, binding]))
@@ -226,8 +301,10 @@ export class PublishedSemanticSource implements MaterializationPublishedSource {
         const allEntityStatements = scopedStatements.filter((statement): statement is PublishedStatement & { readonly objectId: string; readonly subjectEntityId: string } =>
           statement.kind === 'entity' && statement.objectId !== undefined && statement.subjectEntityId !== undefined,
         )
-        const projection = projectPublishedAttributeFacts(validEntityStatements, { schemaRef: definitionRef })
-        const dependencyProjection = projectPublishedAttributeFacts(allEntityStatements, { schemaRef: definitionRef })
+        const definition = this.#definition !== undefined && this.#definition.scopeRef.tenantId === scopeRef.tenantId && this.#definition.scopeRef.spaceId === scopeRef.spaceId && sameVersion(this.#definition.ref, definitionRef) ? this.#definition : undefined
+        const projectionOptions = { schemaRef: definitionRef, scopeRef, ...(definition === undefined ? {} : { definition }), ...(this.#projectId === undefined ? {} : { projectId: this.#projectId }) }
+        const projection = projectPublishedAttributeFacts(validEntityStatements, projectionOptions)
+        const dependencyProjection = projectPublishedAttributeFacts(allEntityStatements, projectionOptions)
         for (const issue of dependencyProjection.issues) issues.push({
           code: issue.code,
           message: issue.message,
@@ -240,7 +317,7 @@ export class PublishedSemanticSource implements MaterializationPublishedSource {
           .map((statement) => `${statement.subjectEntityId ?? ''}\u0000${statement.objectId ?? ''}`)
           .map((key) => {
             const [subjectEntityId, objectId] = key.split('\u0000')
-            return subjectEntityId === undefined || objectId === undefined ? undefined : { subjectEntityId, objectId }
+            return subjectEntityId === undefined || objectId === undefined ? undefined : { subjectEntityId, objectId, ...(this.#projectId === undefined ? {} : { projectId: this.#projectId }) }
           })
           .filter((subject): subject is { readonly subjectEntityId: string; readonly objectId: string } => subject !== undefined))
         const latestRules = new Map<string, PublishedRuleVersion>()
@@ -249,10 +326,32 @@ export class PublishedSemanticSource implements MaterializationPublishedSource {
           const existing = latestRules.get(key)
           if (existing === undefined || compareRevision(rule.version, existing.version) > 0) latestRules.set(key, rule)
         }
-        const currentRules = [...latestRules.values()]
-        const compiled = compilePublishedRuleInstances(currentRules, projection.facts, {
+        const currentRules: PublishedExecutableRule[] = [...latestRules.values()]
+        const packRules = this.#publishedRules
+        if (packRules !== undefined) {
+          if (!sameVersion(packRules.request.definitionRef, definitionRef) || packRules.request.projectId !== this.#projectId) throw new Error('published pack rule reader must use the exact source project/definition')
+          let declarations
+          try { declarations = await packRules.reader.read(scopeRef, packRules.request, ctx) } catch (error) {
+            if (!(error instanceof IndustryAssetPublicationError)) throw error
+            issues.push({ code: 'PUBLISHED_RULE_DECLARATION_UNAVAILABLE', message: error.message })
+            return { facts: [], rules: [], entityBindings: [], definitionRef, historicalAsOfSupported: false, complete: false, issues }
+          }
+          declarationsDigest = sha256DigestOf(declarations)
+          const collisions = declarations.filter((rule) => currentRules.some((extracted) => ruleKey(extracted) === ruleKey(rule) || extracted.ruleVersionId === rule.ruleVersionId))
+          if (collisions.length > 0) {
+            issues.push({ code: 'PUBLISHED_RULE_ORIGIN_AMBIGUOUS', message: 'extracted and published-pack rules collide; an exact origin must be selected' })
+            return { facts: [], rules: [], entityBindings: [], definitionRef, historicalAsOfSupported: false, complete: false, issues }
+          }
+          currentRules.push(...declarations)
+        }
+        const relationProjection = definition === undefined ? { facts: [], issues: [] } : projectPublishedRelationFacts(scopedStatements, { definition, bindings: identityBindings.bindings })
+        issues.push(...relationProjection.issues)
+        const facts = [...projection.facts, ...relationProjection.facts]
+        const compiled = compilePublishedRuleInstances(currentRules, facts, {
           scopeRef,
           definitionRef,
+          ...(this.#projectId === undefined ? {} : { projectId: this.#projectId }),
+          ...(definition === undefined ? {} : { definition }),
           subjects,
           completeRangeAttributeIds: this.#completeRangeAttributeIds,
         })
@@ -260,7 +359,15 @@ export class PublishedSemanticSource implements MaterializationPublishedSource {
         // even when current identity verification excluded those facts from computation. It
         // lets a later identity split/review or parent-statement revision invalidate old rules.
         const sourceStatementById = new Map(allEntityStatements.map((statement) => [statement.statementId, statement]))
+        const publishedEntityByCandidate = new Map(allEntityStatements.map((statement) => [statement.sourceCandidateId, statement]))
+        const relationEndpointBindings: DependencyEntityBinding[] = scopedStatements.filter((statement) => statement.kind === 'relation').flatMap((statement) =>
+          [statement.value['from'], statement.value['to']].flatMap((endpoint) => {
+            if (typeof endpoint !== 'object' || endpoint === null || !('candidateId' in endpoint) || typeof endpoint.candidateId !== 'string') return []
+            const entity = publishedEntityByCandidate.get(endpoint.candidateId)
+            return entity === undefined ? [] : [{ entityId: entity.subjectEntityId, logicalAssertionId: statement.statementId, sourceStatementId: statement.statementId, sourceCandidateId: endpoint.candidateId, predicate: statement.predicate }]
+          }))
         const entityBindings: DependencyEntityBinding[] = [
+          ...relationEndpointBindings,
           ...allEntityStatements.map((statement) => ({
             entityId: statement.subjectEntityId,
             logicalAssertionId: statement.statementId,
@@ -279,40 +386,19 @@ export class PublishedSemanticSource implements MaterializationPublishedSource {
             }
           }),
         ]
-        const rulesByVersion = new Map(currentRules.map((rule) => [rule.ruleVersionId, rule]))
-        const computationRules: SupportRule[] = compiled.instances.flatMap((instance): SupportRule[] => {
-          const published = rulesByVersion.get(instance.ruleVersionId)
-          if (published === undefined || published.conclusion === undefined) return [instance.supportRule]
-          if (!hasValidStoredConclusion(published)) {
-            issues.push({
-              code: 'PUBLISHED_RULE_CONCLUSION_INVALID',
-              message: `published rule ${published.ruleId} has a malformed business conclusion; only applicability is retained`,
-            })
-            return [instance.supportRule]
-          }
-          const binding = published.conclusion
-          const consequenceRule = {
-            ...instance.supportRule,
-            ruleId: `${instance.instanceKey}:consequence`,
-            ...(instance.supportRule.publishedInstance === undefined
-              ? {}
-              : { publishedInstance: { ...instance.supportRule.publishedInstance, emitApplicabilityArtifact: false } }),
-            conclusion: {
-              propositionKey: businessPropositionKey(scopeRef, definitionRef, instance.subjectEntityId, binding.predicate),
-              predicate: binding.predicate,
-              value: binding.value,
-            },
-          }
-          return [instance.supportRule, consequenceRule]
-        })
+        const computation = publishedSemanticComputationRules(compiled, currentRules, scopeRef, definitionRef, this.#projectId)
+        for (const published of computation.invalidConclusionRules) issues.push({ code: 'PUBLISHED_RULE_CONCLUSION_INVALID', message: `published rule ${published.ruleId} has a malformed business conclusion; only applicability is retained` })
         return {
-          facts: [...projection.facts],
-          rules: computationRules,
+          facts,
+          premiseInput: { declarations: currentRules, subjects, facts, completeRangeAttributeIds: this.#completeRangeAttributeIds,
+            attributeStatements: validEntityStatements, relationStatements: scopedStatements.filter((statement) => statement.kind === 'relation'), identityBindings: identityBindings.bindings,
+            ...(definition === undefined ? {} : { definition }) },
+          rules: computation.rules,
           entityBindings,
           identityBindings: [...identityBindings.bindings],
           definitionRef,
           historicalAsOfSupported: false,
-          complete: identityBindings.complete && unconfirmedIdentityCount === 0 && dependencyProjection.issues.length === 0 &&
+          complete: relationProjection.issues.length === 0 && identityBindings.complete && unconfirmedIdentityCount === 0 && dependencyProjection.issues.length === 0 &&
             !issues.some((issue) => issue.code === 'PUBLISHED_RULE_CONCLUSION_INVALID') &&
             !issues.some((issue) => issue.code === 'PUBLICATION_NOT_FOUND'),
           ruleIssues: compiled.issues,
@@ -321,7 +407,13 @@ export class PublishedSemanticSource implements MaterializationPublishedSource {
         }
       },
     )
-    return { ...snapshot.value, readRevision: snapshot.readRevision }
+    const value = { ...snapshot.value, readRevision: snapshot.readRevision }
+    if (cacheKey !== undefined && cacheKey === fingerprint() && value.complete === true && value.readRevision !== undefined &&
+      new TextEncoder().encode(JSON.stringify(value)).byteLength <= MAX_CACHED_JSON_BYTES) {
+      this.#cached = { key: cacheKey, value: structuredClone(value), ...(declarationsDigest === undefined ? {} : { declarationsDigest }) }
+      return structuredClone(this.#cached.value)
+    }
+    return value
   }
 
   async #readIdentityBindings(
@@ -333,7 +425,13 @@ export class PublishedSemanticSource implements MaterializationPublishedSource {
     readonly complete: boolean
     readonly issue?: NonNullable<PublishedSemanticData['issues']>[number]
   }> {
-    const candidateIds = unique(statements.filter((statement) => statement.kind === 'entity').map((statement) => statement.sourceCandidateId))
+    const candidateIds = unique(statements.flatMap((statement) => {
+      if (statement.kind === 'entity') return [statement.sourceCandidateId]
+      return [statement.value['from'], statement.value['to']].flatMap((endpoint) => {
+        if (typeof endpoint !== 'object' || endpoint === null || !('candidateId' in endpoint) || typeof endpoint.candidateId !== 'string') return []
+        return [endpoint.candidateId]
+      })
+    }))
     if (candidateIds.length === 0) return { bindings: [], complete: true }
     const identity = this.#identity
     if (identity === undefined) {

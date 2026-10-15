@@ -601,6 +601,10 @@ export interface HarnessOptions {
     readonly evidence: EvidenceReadSurface
     readonly history: HistoryReadSurface
   }
+  /** Register extra routes (for example the verified typed-result/table read surface) before listen. */
+  readonly extraRoutes?: (app: ReturnType<typeof createApiServer>) => void
+  /** Seed the verified answer for a run as soon as the run is created (UI/E2E fixtures). */
+  readonly seedAnswerForRun?: (runId: string) => PublishedAnswer | undefined
   /** Wire the home-energy simulation surface (real compute handlers + blob-local). */
   readonly energy?: {
     /** Omit the registered operations so a plan request returns CAPABILITY_NOT_CONFIGURED. */
@@ -720,6 +724,7 @@ export async function startHarness(options: HarnessOptions = {}): Promise<Harnes
       ctx,
     )
   }
+  const answers = new Map<string, PublishedAnswer>()
   const runService = new HarnessRunService(
     {
       store: new InMemoryRunStore(),
@@ -727,10 +732,13 @@ export async function startHarness(options: HarnessOptions = {}): Promise<Harnes
       profiles: binder,
       now: () => HARNESS_NOW,
     },
-    openRunBudget,
+    async (runId, ctx) => {
+      await openRunBudget(runId, ctx)
+      const seeded = options.seedAnswerForRun?.(runId)
+      if (seeded !== undefined) answers.set(runId, seeded)
+    },
   )
   const progress = new RunProgressService({ profiles: profileStore, binder, manifests, budget })
-  const answers = new Map<string, PublishedAnswer>()
   const energy = options.energy === undefined ? undefined : await createEnergyHarness(options.energy)
 
   const app = createApiServer({
@@ -752,6 +760,7 @@ export async function startHarness(options: HarnessOptions = {}): Promise<Harnes
       await energy.cleanup()
     })
   }
+  options.extraRoutes?.(app)
   await app.listen({ host: '127.0.0.1', port: 0 })
   const address = app.server.address()
   if (address === null || typeof address === 'string') throw new Error('the API did not bind a TCP port')

@@ -19,11 +19,10 @@ const ARCHITECTURE_TEST_TIMEOUT_MS = 60_000
 const UNIT_TEST_TIMEOUT_MS = 30_000
 
 // Container-backed suites contend for the Docker daemon, host ports and child
-// processes. At the machine's default file parallelism they fight each other (and the
-// other worktrees sharing the host), which is what produced the intermittent timeouts.
-// Cap the integration project's workers and give it its own sequence group so the
-// unit/contracts/architecture projects keep running at full parallelism.
-const INTEGRATION_MAX_WORKERS = 4
+// processes. The required CI run showed timeouts with four concurrent integration
+// workers on its shared runner, so keep two workers while preserving every test and
+// each suite's existing timeout and budget.
+const INTEGRATION_MAX_WORKERS = 2
 const INTEGRATION_GROUP_ORDER = 1
 
 // The load/evaluation harness (LOCAL-050) starts its own PostgreSQL container, real stdio MCP

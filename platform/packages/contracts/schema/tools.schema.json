@@ -386,6 +386,74 @@
       "type": "string",
       "enum": ["definitions", "resolve", "relations", "rules", "facts"]
     },
+    "OntologyRuleJudgementRequest": {
+      "title": "OntologyRuleJudgementRequest",
+      "description": "A typed, bounded request to derive one rule judgement from an already-materialized computation artifact. It carries no SQL, endpoint or script; the host resolves the exact rule instance by its own execution binding.",
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "kind",
+        "ruleRef",
+        "definitionRef",
+        "objectId",
+        "subjectEntityId",
+        "validAt",
+        "asOfRecordedSeq"
+      ],
+      "properties": {
+        "kind": {
+          "type": "string",
+          "const": "rule_judgement"
+        },
+        "ruleRef": {
+          "$ref": "./common.schema.json#/$defs/VersionRef"
+        },
+        "definitionRef": {
+          "$ref": "./common.schema.json#/$defs/VersionRef"
+        },
+        "objectId": {
+          "$ref": "./common.schema.json#/$defs/NonEmptyString"
+        },
+        "subjectEntityId": {
+          "$ref": "./common.schema.json#/$defs/NonEmptyString"
+        },
+        "validAt": {
+          "$ref": "./common.schema.json#/$defs/Rfc3339UtcTimestamp"
+        },
+        "asOfRecordedSeq": {
+          "$ref": "./common.schema.json#/$defs/RevisionString"
+        },
+        "judgementAxis": {
+          "type": "string",
+          "enum": ["applicability", "business_proposition"]
+        }
+      }
+    },
+    "OntologyRelationNavigationRequest": {
+      "title": "OntologyRelationNavigationRequest",
+      "description": "A host-resolved finite published relation navigation within the run's fixed project. No mapping join, arbitrary function or authority selector.",
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["kind", "startEntityId", "relationIds", "validAt"],
+      "properties": {
+        "kind": { "const": "relation_navigation" },
+        "startEntityId": { "$ref": "common.schema.json#/$defs/NonEmptyString" },
+        "relationIds": { "type": "array", "minItems": 1, "maxItems": 3, "items": { "$ref": "common.schema.json#/$defs/NonEmptyString" } },
+        "validAt": { "$ref": "common.schema.json#/$defs/Rfc3339UtcTimestamp" }
+      }
+    },
+    "OntologyLookupRequest": {
+      "title": "OntologyLookupRequest",
+      "description": "Finite host-resolved rule judgement or published relation navigation; the legacy intent-only path is unchanged.",
+      "oneOf": [
+        {
+          "$ref": "#/$defs/OntologyRuleJudgementRequest"
+        },
+        {
+          "$ref": "#/$defs/OntologyRelationNavigationRequest"
+        }
+      ]
+    },
     "OntologyConceptRef": {
       "title": "OntologyConceptRef",
       "type": "object",
@@ -426,6 +494,9 @@
         },
         "intent": {
           "$ref": "#/$defs/OntologyLookupIntent"
+        },
+        "request": {
+          "$ref": "#/$defs/OntologyLookupRequest"
         },
         "timeContext": {
           "$ref": "#/$defs/TimeContext"
@@ -754,7 +825,8 @@
         "rows": {
           "type": "array",
           "items": {
-            "type": "array"
+            "type": "array",
+            "items": {}
           }
         }
       }
@@ -809,6 +881,9 @@
         },
         "computation": {
           "$ref": "#/$defs/ComputationData"
+        },
+        "coverage": {
+          "$ref": "#/$defs/ToolCoverage"
         }
       }
     }

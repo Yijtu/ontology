@@ -33,6 +33,7 @@ function clone<T>(value: T): T {
 export class InMemoryKeywordIndexStore implements KeywordIndexStore {
   readonly #generations = new Map<string, Map<RevisionString, StoredGeneration>>()
   readonly #active = new Map<string, RevisionString>()
+  readonly #counters = new Map<string, number>()
 
   async writeGeneration(
     scopeRef: ScopeRef,
@@ -126,6 +127,18 @@ export class InMemoryKeywordIndexStore implements KeywordIndexStore {
     return entry === undefined ? undefined : clone(entry.generation)
   }
 
+  async reserveGeneration(
+    scopeRef: ScopeRef,
+    collectionRef: string,
+    ctx: ToolContext,
+  ): Promise<RevisionString> {
+    const scope = resolveTrustedScope(scopeRef, ctx)
+    const key = generationKey(scope, collectionRef)
+    const next = (this.#counters.get(key) ?? 0) + 1
+    this.#counters.set(key, next)
+    return String(next)
+  }
+
   async activateGeneration(
     scopeRef: ScopeRef,
     collectionRef: string,
@@ -212,5 +225,6 @@ export class InMemoryKeywordIndexStore implements KeywordIndexStore {
   async close(): Promise<void> {
     this.#generations.clear()
     this.#active.clear()
+    this.#counters.clear()
   }
 }

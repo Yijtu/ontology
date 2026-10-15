@@ -27,6 +27,16 @@ export interface WebHost {
   close(): Promise<void>
 }
 
+export interface WebHostOptions {
+  /**
+   * Legacy fixture deployments need a fixed `profileId/profileVersion` because their API has no
+   * `/api/v1/core/deployment` metadata. A real Core host must NOT get that redirect: the product
+   * app must read the mounted scenarios from the Core deployment endpoint. Defaults to true so
+   * the existing harness suites are unaffected.
+   */
+  readonly bindDefaultProfile?: boolean
+}
+
 function send(
   res: import('node:http').ServerResponse,
   status: number,
@@ -54,7 +64,8 @@ async function serveStatic(pathname: string, res: import('node:http').ServerResp
   }
 }
 
-export async function startWebHost(apiOrigin: string): Promise<WebHost> {
+export async function startWebHost(apiOrigin: string, options: WebHostOptions = {}): Promise<WebHost> {
+  const bindDefaultProfile = options.bindDefaultProfile ?? true
   const api = new URL(apiOrigin)
   const server: Server = createServer((req, res) => {
     const url = req.url ?? '/'
@@ -74,7 +85,7 @@ export async function startWebHost(apiOrigin: string): Promise<WebHost> {
     // deployment-metadata endpoint. Bind that test deployment explicitly so the product
     // app can default to the scenario metadata supplied by a real Core host.
     const requested = new URL(url, 'http://127.0.0.1')
-    if (!requested.searchParams.has('profileId') && !requested.searchParams.has('profileVersion')) {
+    if (bindDefaultProfile && !requested.searchParams.has('profileId') && !requested.searchParams.has('profileVersion')) {
       requested.searchParams.set('profileId', 'home-energy-demo')
       requested.searchParams.set('profileVersion', '1.0.0')
       res.writeHead(302, {
@@ -84,7 +95,9 @@ export async function startWebHost(apiOrigin: string): Promise<WebHost> {
       res.end()
       return
     }
-    void serveStatic(url, res)
+    // Serve by pathname only; the query carries the deployment/case hints and must not leak
+    // into the filesystem lookup (otherwise a second HTML entry falls back to index.html).
+    void serveStatic(requested.pathname, res)
   })
   await new Promise<void>((done) => server.listen(0, '127.0.0.1', done))
   const address = server.address()

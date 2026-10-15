@@ -10,7 +10,7 @@ import { createCoreApi } from '@ontology/app-api'
 import { loadCoreExamples } from '@ontology/app-api'
 import { createCoreLocalComposition } from '@ontology/app-api'
 import type { CoreLocalComposition } from '@ontology/app-api'
-import type { ScopeRef } from '@ontology/contracts'
+import type { ScopeRef, VersionRef } from '@ontology/contracts'
 import { startPostgresContainer } from './postgres-container'
 import type { PostgresContainer } from './postgres-container'
 
@@ -81,7 +81,7 @@ async function waitForAnswer(runId: string): Promise<Record<string, unknown>> {
       const errorText = await response.text()
       const run = await request(`/api/v1/runs/${runId}`).then((result) => result.text())
       const events = await request(`/api/v1/runs/${runId}/events`).then((result) => result.text())
-      const causes = workerErrors.map((error) => `${error.name}: ${error.message}`).join('\n')
+      const causes = workerErrors.map((error) => error.stack ?? `${error.name}: ${error.message}`).join('\n')
       throw new Error(`answer route failed with ${String(response.status)}: ${errorText}; run=${run}; events=${events}; workerErrors=${causes}`)
     }
     await new Promise((resolve) => setTimeout(resolve, 100))
@@ -115,6 +115,82 @@ afterAll(async () => {
 })
 
 describe('the mounted local Core host through normal HTTP', () => {
+  it.each(['transport-facility-inspection', 'industrial-asset-maintenance'])('resolves the exact registered predecessor when authoring from %s', async (scenarioId) => {
+    const scenario = loadCoreExamples({ targetScopeRef: scopeRef }).scenarios.find((entry) => entry.scenarioId === scenarioId)
+    if (scenario === undefined) throw new Error('the registered synthetic scenario is unavailable')
+    const deploymentResponse = await request('/api/v1/core/deployment')
+    expect(deploymentResponse.status).toBe(200)
+    const deployment = await deploymentResponse.json() as { data: { scenarios: { scenarioId: string; baseProfileSpec: { industryRef: VersionRef } }[] } }
+    const packRef = deployment.data.scenarios.find((entry) => entry.scenarioId === scenarioId)?.baseProfileSpec.industryRef
+    expect(packRef).toBeDefined()
+    const createdResponse = await request('/api/v1/core/workspace-bootstrap', {
+      method: 'POST', headers: { 'content-type': 'application/json', 'idempotency-key': randomUUID() },
+      body: JSON.stringify({ namespace: `predecessor-${randomUUID()}`, displayName: '已有行业包修订', boundary: { goals: ['核对所选已发布版本'], included: ['合成资料'], excluded: [], applicability: {} } }),
+    })
+    expect(createdResponse.status, await createdResponse.clone().text()).toBe(201)
+    const created = await createdResponse.json() as { data: { workspace: { workspaceId: string; headRevision: string } } }
+    const workspace = created.data.workspace
+    const selected = await request(`/api/v1/industry-workspaces/${workspace.workspaceId}/draft-operations`, {
+      method: 'POST', headers: { 'content-type': 'application/json', 'idempotency-key': randomUUID(), 'if-match': workspace.headRevision },
+      body: JSON.stringify({ operation: 'edit', basePackRef: packRef, reason: '人工选择真实注册行业包作为前驱' }),
+    })
+    expect(selected.status, await selected.clone().text()).toBe(200)
+    const current = await request(`/api/v1/industry-workspaces/${workspace.workspaceId}`)
+    const head = (await current.json() as { data: { workspace: { headRevision: string } } }).data.workspace.headRevision
+    const validated = await request(`/api/v1/industry-workspaces/${workspace.workspaceId}/definition-validations`, {
+      method: 'POST', headers: { 'content-type': 'application/json', 'idempotency-key': randomUUID() },
+      body: JSON.stringify({ revision: head }),
+    })
+    expect(validated.status, await validated.clone().text()).toBe(200)
+    const result = await validated.json() as { data: { report: { compatibility: { publishedRef: VersionRef; requiresRevisionStrategy: boolean }; checkedCandidateIds: string[]; publishable: boolean } } }
+    expect(result.data.report.compatibility.publishedRef).toEqual(scenario.definitionRef)
+    expect(result.data.report.compatibility.requiresRevisionStrategy).toBe(true)
+    expect(result.data.report.checkedCandidateIds).toEqual([])
+    expect(result.data.report.publishable).toBe(false)
+  }, 60_000)
+
+  it('creates genuine empty authoring corpus and preserves native source selections through the normal host', async () => {
+    const key = `normal-authoring-${randomUUID()}`
+    const declaration = { namespace: `normal-${randomUUID()}`, displayName: '设备维护规则', boundary: { goals: ['检查规则条件'], included: ['设备维护'], excluded: ['外部控制'], applicability: {} } }
+    const create = () => request('/api/v1/core/workspace-bootstrap', { method: 'POST', headers: { 'content-type': 'application/json', 'idempotency-key': key }, body: JSON.stringify(declaration) })
+    const response = await create()
+    expect(response.status, await response.clone().text()).toBe(201)
+    const created = await response.json() as { data: { workspace: { workspaceId: string; headRevision: string }; draft: { documentSetRef: { id: string; digest: string } } } }
+    const replay = await create()
+    expect(replay.status).toBe(200)
+    expect((await replay.json() as typeof created).data.workspace.workspaceId).toBe(created.data.workspace.workspaceId)
+    const workspaceId = created.data.workspace.workspaceId
+    const empty = await request(`/api/v1/core/workspaces/${workspaceId}/sources`)
+    expect(empty.status, await empty.clone().text()).toBe(200)
+    expect((await empty.json() as { data: { sources: unknown[] } }).data.sources).toEqual([])
+    const uploadKey = `normal-source-${randomUUID()}`
+    const csv = '说明,说明\n设备,时长\nD01,17.500000000000000001\n'
+    const upload = (options: unknown, key = uploadKey) => request(`/api/v1/core/workspaces/${workspaceId}/sources`, { method: 'POST', headers: { 'content-type': 'application/json', 'idempotency-key': key, 'if-match': '1' }, body: JSON.stringify({ name: '维护台账.csv', mediaType: 'text/csv', contentEncoding: 'base64', content: Buffer.from(csv).toString('base64'), options }) })
+    const imported = await upload({ headerRow: 2 })
+    expect(imported.status, await imported.clone().text()).toBe(201)
+    const saved = await imported.json() as { data: { workspace: { headRevision: string }; source: { sourceRef: { id: string }; name: string; options: { headerRow: number }; tables: { columns: { header: string }[]; rows: { cells: { raw: string; locator: { row: number; column: number } }[] }[] }[] } } }
+    expect(saved.data.workspace.headRevision).toBe('2')
+    expect(saved.data.source.name).toBe('维护台账.csv')
+    expect(saved.data.source.options.headerRow).toBe(2)
+    expect(saved.data.source.tables[0]?.columns.map((column) => column.header)).toEqual(['设备', '时长'])
+    expect(saved.data.source.tables[0]?.rows[0]?.cells[1]).toMatchObject({ raw: '17.500000000000000001', locator: { row: 3, column: 2 } })
+    const retry = await upload({ headerRow: 2 })
+    expect(retry.status, await retry.clone().text()).toBe(201)
+    expect((await retry.json() as typeof saved).data.workspace.headRevision).toBe('2')
+    const mismatch = await upload({ headerRow: 1 }, `mismatch-${randomUUID()}`)
+    expect(mismatch.status).toBe(400)
+    const catalogue = await request(`/api/v1/core/workspaces/${workspaceId}/sources`)
+    expect((await catalogue.json() as { data: { sources: typeof saved.data.source[] } }).data.sources[0]).toMatchObject({ name: '维护台账.csv', options: { headerRow: 2 } })
+    const context = await request(`/api/v1/core/workspaces/${workspaceId}/authoring-context`)
+    expect(context.status, await context.clone().text()).toBe(200)
+    const actual = await context.json() as { data: { models: { generationEnabled: boolean }; generationPolicyRef: { id: string; digest: string }; operations: { inputSchemaRef: { id: string; digest: string }; inputSchemaDigest: string; sideEffect: string; requiredPermissions: string[] }[] } }
+    expect(actual.data.models.generationEnabled).toBe(false)
+    expect(actual.data.generationPolicyRef.id).toMatch(/^[0-9a-f-]{36}$/u)
+    expect(actual.data.operations[0]?.inputSchemaRef.digest).toBe(actual.data.operations[0]?.inputSchemaDigest)
+    expect(actual.data.operations[0]?.sideEffect).toBe('read_only')
+    expect(actual.data.operations[0]?.requiredPermissions).toEqual([])
+  }, 60_000)
+
   it('ingests real raw records, requires identity/review/publication, then publishes a verified facts answer', async () => {
     const health = await request('/healthz')
     expect(health.status).toBe(200)
@@ -302,6 +378,18 @@ describe('the mounted local Core host through normal HTTP', () => {
     expect(runResponse.status).toBe(202)
     const runBody = await runResponse.json() as { data: { runId: string } }
     const answerResponse = await waitForAnswer(runBody.data.runId)
+    if (admin === undefined) throw new Error('isolated PostgreSQL admin client is unavailable')
+    const fixedReceipt = await admin.query<{ receipt_payload: { kind: string; route: { route: string }; steps?: unknown[] }; receipt_digest: string }>(
+      `SELECT receipt_payload, receipt_digest
+         FROM agent_platform.core_plan_receipts
+        WHERE tenant_id = $1 AND space_id = $2 AND run_id = $3`,
+      [scopeRef.tenantId, scopeRef.spaceId, runBody.data.runId],
+    )
+    expect(fixedReceipt.rows).toHaveLength(1)
+    expect(fixedReceipt.rows[0]?.receipt_payload.kind).toBe('plan')
+    expect(fixedReceipt.rows[0]?.receipt_payload.route.route).toBe('fixed_path')
+    expect(fixedReceipt.rows[0]?.receipt_payload.steps).toHaveLength(1)
+    expect(fixedReceipt.rows[0]?.receipt_digest).toMatch(/^sha256:[0-9a-f]{64}$/u)
     persistedAnswerRunId = runBody.data.runId
     persistedAnswerPayload = JSON.stringify(answerResponse['data'])
     const answer = answerResponse['data'] as { body?: { assertions: { predicate: string; value: unknown; subject?: string; references: { evidenceRef: { id: string } }[] }[] }; semanticReview?: { status: string; reason?: string } }
@@ -327,8 +415,20 @@ describe('the mounted local Core host through normal HTTP', () => {
          (SELECT count(*)::text FROM agent_platform.workflow_dispatches WHERE tenant_id = $1 AND space_id = $2) AS dispatches`,
       [scopeRef.tenantId, scopeRef.spaceId],
     )
+    const unsupportedNaturalLanguage = await request('/api/v1/runs', {
+      method: 'POST',
+      headers: { 'content-type': 'application/json', 'idempotency-key': 'core-model-disabled-natural-language' },
+      body: JSON.stringify({
+        profileRef: { id: 'synthetic-transport-facility-demo', version: '1.0.0' },
+        question: 'Which facilities should be inspected?',
+        context: { timeZone: 'UTC' },
+        preferences: { route: 'template', allowWeb: false },
+      }),
+    })
+    expect(unsupportedNaturalLanguage.status).toBe(409)
+    expect((await unsupportedNaturalLanguage.json() as { error: { code: string } }).error.code).toBe('CAPABILITY_NOT_CONFIGURED')
+
     const invalidRequests = [
-      { id: 'natural-language', question: 'Which facilities should be inspected?', code: 'INVALID_QUESTION' },
       { id: 'unknown-property', question: 'facts:not_registered', code: 'UNKNOWN_PROPERTY' },
       { id: 'duplicate-property', question: 'facts:inspection_due,inspection_due', code: 'DUPLICATE_PROPERTY' },
       { id: 'too-many-properties', question: 'facts:inspection_due,inspection_exempt,inspection_required,facility_id', code: 'TOO_MANY_PROPERTIES' },
@@ -514,6 +614,16 @@ describe('the mounted local Core host through normal HTTP', () => {
     expect(createdRun.status).toBe(202)
     const createdData = await createdRun.json() as { data: { runId: string } }
     const answerResponse = await waitForAnswer(createdData.data.runId)
+    if (admin === undefined) throw new Error('isolated PostgreSQL admin client is unavailable')
+    const crossReceipt = await admin.query<{ receipt_payload: { kind: string; route: { route: string }; steps?: unknown[] }; receipt_digest: string }>(
+      `SELECT receipt_payload, receipt_digest
+         FROM agent_platform.core_plan_receipts
+        WHERE tenant_id = $1 AND space_id = $2 AND run_id = $3`,
+      [scopeRef.tenantId, scopeRef.spaceId, createdData.data.runId],
+    )
+    expect(crossReceipt.rows).toHaveLength(1)
+    expect(crossReceipt.rows[0]?.receipt_payload.kind).toBe('plan')
+    expect(crossReceipt.rows[0]?.receipt_payload.steps).toHaveLength(3)
     persistedCrossIndustryRunId = createdData.data.runId
     persistedCrossIndustryAnswerPayload = JSON.stringify(answerResponse['data'])
     const answer = answerResponse['data'] as {

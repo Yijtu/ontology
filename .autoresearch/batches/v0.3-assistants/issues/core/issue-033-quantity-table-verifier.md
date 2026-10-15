@@ -19,10 +19,10 @@ Dependencies: #203, #199, #201, #198
 
 ## 验收条件
 
-- [ ] 精确数值/单位/currency/subject/time/row/column 对授权结果 pointers 和 source refs 校验，禁止有损浮点恢复假精度。
-- [ ] 按照 bounded claim batches 完整核验所有声明表行，counts/digest/顺序/行绑定/完整性对账；不因128claim上限跳过后页。
-- [ ] 错误金额/单位/币种/交换行/缺行/篡改manifest/截断阻断完整发布；每批共享 budget/deadline，记录恢复进度。
-- [ ] 实际结果与证据写入完成记录；同步必要契约、使用说明和本批状态，不因源码存在或受控模型响应而虚报完成。
+- [x] 精确数值/单位/currency/subject/time/row/column 对授权结果 pointers 和 source refs 校验，禁止有损浮点恢复假精度。
+- [x] 按照 bounded claim batches 完整核验所有声明表行，counts/digest/顺序/行绑定/完整性对账；不因128claim上限跳过后页。
+- [x] 错误金额/单位/币种/交换行/缺行/篡改manifest/截断阻断完整发布；每批共享 budget/deadline，记录恢复进度。
+- [x] 实际结果与证据写入完成记录；同步必要契约、使用说明和本批状态，不因源码存在或受控模型响应而虚报完成。
 
 ## 需求与规格
 
@@ -52,5 +52,16 @@ Dependencies: #203, #199, #201, #198
 
 ## 完成记录
 
-- 当前：未开工；验证未运行。GitHub Issue：[#204](https://github.com/Yijtu/ontology/issues/204)；文档提交不代表功能完成。
-- 实现后记录：提交/PR、适用命令结果、满足的验收、未验证/外部条件、迁移配置与兼容影响。
+- 当前：已实现（分支 `feat/v03-033-quantity-verifier`）。GitHub Issue：[#204](https://github.com/Yijtu/ontology/issues/204)。
+- 实现：
+  - `packages/contracts/src/typed-results.ts` 新增 `table-hard-verification-report@1`、`table-verification-progress@1`、`TableHardVerificationPolicy`、findings/report/progress/request/outcome、收据与进度端口及运行时 guard；新增 `tableManifestContentDigest`（篡改 manifest 检测）；`TableArtifactRow` 增加可选 `subject` 行身份。
+  - `packages/application/src/answers/table-hard-verification-service.ts` 批处理全表硬核验：逐页逐行逐列核验 value/unit/currency/subject/time/row/column 到授权 evidence pointers；精确 Decimal（非整数 JSON number 记 `precision_unsupported`，不经 IEEE-754）；跨行/行身份/列映射/页 digest/顺序/计数/完整性对账；任何失败或 deadline/行/单元格超限都不产生收据（阻断）。`verification/hard-checks.ts` 导出 `canonicalDecimal`/`numericText` 复用。
+  - `in-memory-table-verification-store.ts`、`adapters/control-postgres/src/table-verification-store.ts` + `migrations/control/077_table_hard_verification.sql` 持久化不可变收据与 manifest-digest 绑定的恢复进度（RLS/scope 隔离、按 digest 幂等）。
+- 验证命令（platform/）：
+  - `pnpm run typecheck` → 通过（exit 0）。
+  - `pnpm run lint` → 通过（exit 0）。
+  - `pnpm run boundaries` → 8 passed。
+  - `vitest run tests/contracts/v03-table-hard-verification.spec.ts tests/unit/table-hard-verification.spec.ts tests/integration/table-hard-verification-postgres.spec.ts` → 19 passed（含 1001 行跨 5 页、子页批处理续跑；真实命名卷 PG）。
+  - 相关回归：`table-artifact-read`、`table-artifacts-postgres`、`draft-verification`、`verification-published-facts` 全通过。
+  - 全量 `pnpm run test`：2407 passed / 4 failed；4 个失败均为基线 `f17da70` 既有问题、与本卡无关：`question-rewriting-postgres`（2，模块加载期固定 `DEADLINE=2026-09-21T00:10:00Z` 时间炸弹）、`few-shot-retrieval-postgres`（同因）、`composition/x04-x06-industry-mapping-swap`（`tool-services/src/compute/example-operation.ts` 含 industry token，来自 #201）。
+- 未验证/边界：本卡仅提供硬核验服务与存储，未接线到 composition/publisher（发布 gate 属 V03-035）；无浏览器 E2E（属 US-016）。

@@ -1,10 +1,31 @@
 import type {
+  ResourceRef,
   RunManifest,
   Sha256Digest,
   Uuid,
   WorkflowInputManifest,
 } from '@ontology/contracts'
 import { canonicalJson, sha256DigestOf } from '../profiles/canonical'
+
+/**
+ * The versioned part of a draft body that enters the content hash. `@2` hashes the
+ * limitations alongside blocks/claims/assertions; `@3` additionally pins the typed result
+ * manifest, the pre-draft finalization receipt and the execution binding by full ref and
+ * digest (SPEC v0.3a §EX-7.1). The verification/table receipts are deliberately absent: they
+ * are produced after the draft and live on the read envelope, so they cannot feedback into a
+ * draft↔verification digest cycle.
+ */
+export type AnswerDraftVersionedBody =
+  | { readonly schemaVersion: 'answer-draft@2'; readonly limitations: readonly string[] }
+  | {
+      readonly schemaVersion: 'answer-draft@3'
+      readonly limitations: readonly string[]
+      readonly resultManifestRef: ResourceRef
+      readonly resultManifestDigest: Sha256Digest
+      readonly finalizationReceiptRef: ResourceRef
+      readonly finalizationReceiptDigest: Sha256Digest
+      readonly executionBindingRef: ResourceRef
+    }
 
 /**
  * Deterministic content hash of an answer draft. The draft writer and the verifier both use
@@ -22,7 +43,7 @@ export function answerDraftContentHash(
   evidenceManifestHash: Sha256Digest,
   claims: readonly unknown[] = [],
   assertions: readonly unknown[] = [],
-  versionedBody?: { readonly schemaVersion: 'answer-draft@2'; readonly limitations: readonly string[] },
+  versionedBody?: AnswerDraftVersionedBody,
 ): Sha256Digest {
   return sha256DigestOf(canonicalJson({
     runId,

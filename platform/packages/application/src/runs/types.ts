@@ -3,7 +3,10 @@ import type {
   ProfileRef,
   QuestionRewrite,
   ResolvedProfileRef,
+  ResourceRef,
   RevisionString,
+  RunExecutionBinding,
+  RunExecutionRequest,
   RunPreferences,
   RunState,
   RuntimeCheckpointRef,
@@ -11,6 +14,7 @@ import type {
   Semver,
   Sha256Digest,
   SseEventType,
+  TaskCapabilityStatus,
   Uuid,
   VersionRef,
 } from '@ontology/contracts'
@@ -51,6 +55,12 @@ export interface CreateRunInput {
   readonly context: CreateRunContext
   readonly preferences: RunPreferences
   readonly idempotencyKey: string
+  /**
+   * Optional fixed project/input/task binding (SPEC v0.3a §EX-2.1). When present the server
+   * resolves and archives an immutable execution binding before the run is created; when absent
+   * the existing question path is unchanged.
+   */
+  readonly execution?: RunExecutionRequest
 }
 
 export interface CreateRunResult {
@@ -59,6 +69,35 @@ export interface CreateRunResult {
   readonly revision: RevisionString
   readonly resolvedProfileHash: Sha256Digest
   readonly reused: boolean
+  /** The archived execution binding ref, when the run carried a task/input binding. */
+  readonly executionBindingRef?: ResourceRef
+}
+
+/** The server-side result of resolving one run execution binding. */
+export interface RunExecutionResolution {
+  readonly executionBindingRef: ResourceRef
+  readonly binding: RunExecutionBinding
+  /** Present for task mode; the explicit capability/readiness preflight outcome. */
+  readonly capability?: TaskCapabilityStatus
+}
+
+export interface RunExecutionBinderInput {
+  readonly runId: Uuid
+  readonly request: RunExecutionRequest
+  readonly profileBinding: RunProfileBinding
+}
+
+/**
+ * Resolves, validates and archives the immutable execution binding for a run. The composition
+ * root implements it with the preflight service; the run service receives it by injection so it
+ * never imports an adapter, a project store or a schema library.
+ */
+export interface RunExecutionBinder {
+  bindExecution(
+    input: RunExecutionBinderInput,
+    scopeRef: ScopeRef,
+    ctx: ToolContext,
+  ): Promise<RunExecutionResolution>
 }
 
 export interface RespondToClarificationInput {
@@ -119,6 +158,8 @@ export interface RunView {
   readonly pendingClarificationId?: Uuid
   /** Public checkpoint handle only; the private blob is never returned. */
   readonly checkpoint?: RuntimeCheckpointRef
+  /** The archived execution binding ref the run is pinned to, when it carried a task binding. */
+  readonly executionBindingRef?: ResourceRef
   /**
    * The persisted question-rewrite trace, when a bounded rewrite step ran before collection.
    * It lets the public run read surface replay original → rewrite → generated SQL (LOCAL-080).

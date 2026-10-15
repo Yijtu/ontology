@@ -1,57 +1,84 @@
-# Core local startup
+# 在本机跑起 Core
 
-This setup uses an isolated Docker Compose project, a loopback PostgreSQL port, and a non-superuser application connection. It does not use the existing ports 3000, 5173, or 54329. PostgreSQL migrations run only from the explicit preparation command; starting the API never migrates a database.
+需要 Node.js 22+、pnpm 和已启动的 Docker Desktop。从仓库的 `platform/` 目录运行。依赖版本以 `package.json` 和锁文件为准。
 
-## First start on Windows PowerShell
+> 启动与下列 CSV 示例已于 2026-10-11 在独立实例实测：54 个迁移、API/网页/代理就绪、人工发布与 A2 来源定位、进程重启后的数据保留均通过。相关修复已合入主线；本批生产基线为 `780a3b0`；完整批次进度见[验收记录](v03-a-core-acceptance-2026-10-11.md)。
 
-Run these commands from `platform/`. Replace the example server password with a local-only value and reuse that same value whenever you start this Compose project in a new shell. Do not use a password from chat or another environment.
+## 第一次启动
+
+下面使用一个独立的 Compose 项目。若已有同名环境，换一个项目名，并选择三个空闲端口；API、网页、数据库不能共用端口。
 
 ```powershell
-$env:CORE_PG_PORT = '54330'
-$env:CORE_POSTGRES_PASSWORD = 'replace-with-a-local-only-password'
-docker compose --project-name ontology-core-local --file deploy/core/compose.yaml up --detach
+pnpm install --frozen-lockfile
 
-$escapedPassword = [uri]::EscapeDataString($env:CORE_POSTGRES_PASSWORD)
-$env:CORE_CONTROL_DATABASE_URL = "postgresql://postgres:$escapedPassword@127.0.0.1:$($env:CORE_PG_PORT)/ontology_core"
+$coreProject = 'ontology-core-demo'
+$env:CORE_API_PORT = '3001'
+$env:CORE_WEB_PORT = '5174'
+$env:CORE_PG_PORT = '54330'
+$env:CORE_POSTGRES_PASSWORD = Read-Host '设置本机演示数据库密码'
+$env:CORE_ENABLE_OPERATOR_ROUTES = 'true'
+$env:CORE_ENABLE_MODELS = 'false'
+$env:CORE_ENABLE_JEV = 'false'
+$env:CORE_OBJECT_DIRECTORY = Join-Path (Get-Location) '.core-data/objects'
+
+docker compose --project-name $coreProject --file deploy/core/compose.yaml up --detach
+$corePassword = [uri]::EscapeDataString($env:CORE_POSTGRES_PASSWORD)
+$env:CORE_CONTROL_DATABASE_URL = "postgresql://postgres:$corePassword@127.0.0.1:$($env:CORE_PG_PORT)/ontology_core"
 pnpm exec tsx scripts/prepare-core-db.ts
 pnpm exec node scripts/dev-core.mjs
 ```
 
-Compose binds PostgreSQL to `127.0.0.1:54330` by default, checks it with `pg_isready`, and stores data in the Compose-named `core_pg_data` volume. The project name keeps its container and volume separate from other local databases.
+看到 API 和网页均已就绪后，打开 [http://127.0.0.1:5174](http://127.0.0.1:5174)。如果改过 `CORE_WEB_PORT`，使用对应端口。
 
-`prepare-core-db.ts` applies the existing control migrations, configures the migrated `ontology_app` role for login while keeping it non-superuser and `NOBYPASSRLS`, and creates only the demo tenant and space. It verifies an application-role connection, then writes `.env.core.local`. That ignored file contains the app DSN, app password, local ports, demo scope, and `CORE_ENABLE_MODELS=false`; the launcher defaults the independent JEV flag to false when it is absent. It does not contain the admin DSN or the PostgreSQL server password. Re-running preparation uses the app password already in the local file unless `CORE_APP_PASSWORD` is explicitly supplied.
+数据库准备命令负责迁移并生成忽略提交的 `.env.core.local`。其中保存的是非超级用户 `ontology_app` 的应用连接、端口和演示范围，不保存管理员连接或数据库服务器密码。API 启动本身不执行迁移。当前主线有 54 个迁移，数量会随开发变化。
 
-The launcher validates the loopback app DSN and distinct ports, probes the configured API and Web ports before spawning children, starts the API on `CORE_API_PORT` and Vite on `CORE_WEB_PORT`, and waits for `/healthz` and the web root with bounded timeouts. Occupied ports fail before startup so another local service cannot be mistaken for this Core instance. It passes `VITE_CORE_API_PORT` to Vite so the Core Vite config can proxy the browser's relative `/api` calls. Database credentials are sent only to the API process; Vite receives no database DSN, model credentials, or caller-supplied `VITE_` variables. If `apps/api/src/core-main.ts` has not been implemented, the launcher exits with a clear missing-entry error and starts no service. It never reports readiness without both services responding.
+`CORE_ENABLE_OPERATOR_ROUTES=true` 打开这台本机上的资料导入、审核和发布入口，便于走完整演示。模型和 JEV 分别关闭；导入结构化资料及人工审核无需调用外部模型。启动器检查端口占用、API 健康和网页就绪，并将网页的 `/api` 请求代理到此实例。
 
-## Restart, migrations, and stop
+## 从页面配置生成模型
 
-For a normal restart in a new PowerShell window, set the same server password and port, bring up the existing project, and run the launcher. The named volume is reused:
+打开顶部“模型设置”，填写服务地址（只含域名和端口）、API 端点、协议、服务商模型名称和 API Key。内部配置名称通常保留默认值即可。先“测试连接”，再“保存配置（重启生效）”。连接测试最多 16 个输出 token、8 秒和 64 KiB，只验证通信与协议，不验证业务答案质量。
+
+设置由本机服务端按租户和空间保存在对象目录的 `.core-settings/` 下，密钥不回传到页面，也不进入浏览器持久存储。相同服务地址留空会保留已存密钥；换服务地址必须重新填写或明确清除密钥。每次保存产生新修订，重启后使用新的模型组件标识，旧运行不会被静默改接到新配置。
+
+保存后停止并重新运行 `scripts/dev-core.mjs`，刷新页面，核对“当前进程”的启用状态。该窗口只配置生成模型，不会自动启用 JEV 决策模型，也不会替代项目正式事实、已发布规则或任务就绪条件。窗口保存的配置会在下次 Core 启动时加载。
+
+顶部“问答”与首页“开始业务问答”打开独立问答页面。先选项目、查看实际任务目录；自然语言能力仍受当前项目配置与注册任务范围约束。各功能页的“本页说明”列出了用途、开始前、完成后及可展开的操作步骤。
+
+## 试一份小资料
+
+把下面三行保存为 UTF-8 的 `assets.csv`：
+
+```csv
+asset_id,asset_network_code,asset_workshop_code
+DEMO-ASSET-001,DEMO-NET,WS-A
+DEMO-ASSET-002,DEMO-NET,WS-A
+```
+
+在首页选择工业资产维护场景，进入项目并新建项目。通过“导入资料”上传 CSV，确认映射后绑定记录。在项目记录中生成事实候选，再核对字段、确认身份、批准并发布实例记录；随后到候选审核页批准并发布语义事实。回到项目生成数据集，就能查看正式进入查询范围的行。
+
+点击字段来源可以回到原始单元格：第一条资产位于 `A2`。上传成功、记录发布和正式事实发布是不同步骤，未经批准的候选不会因为导入了文件就进入正式数据集。
+
+## 重启与停止
+
+以后从同一个 `platform/` 目录启动，保留原 `.env.core.local` 和 `.core-data/objects`。在新窗口重新设置同一个项目名、数据库密码、`CORE_PG_PORT`，以及本机操作开关和对象目录，再运行：
 
 ```powershell
-$env:CORE_PG_PORT = '54330'
-$env:CORE_POSTGRES_PASSWORD = 'the-same-local-only-password'
-docker compose --project-name ontology-core-local --file deploy/core/compose.yaml up --detach
+docker compose --project-name $coreProject --file deploy/core/compose.yaml up --detach
 pnpm exec node scripts/dev-core.mjs
 ```
 
-After changing migrations, set `CORE_CONTROL_DATABASE_URL` again using the same encoded-password command from the first-start section, then rerun `pnpm exec tsx scripts/prepare-core-db.ts`. The migration runner applies only unapplied migrations and rejects changed checksums for already-applied versions.
+API/Web 端口和租户/空间从 `.env.core.local` 读取；Compose 仍需设置相同的 `CORE_PG_PORT`。迁移有更新时，重新设置管理员连接并执行准备命令；已应用迁移不会重复运行，校验和变化会被拒绝。
 
-Press **Ctrl+C** in the launcher window to stop the API and Vite children. To stop PostgreSQL while preserving its data, run:
+在启动窗口按 **Ctrl+C** 关闭 API 和网页。保留数据库数据的停止命令是：
 
 ```powershell
-docker compose --project-name ontology-core-local --file deploy/core/compose.yaml stop
+docker compose --project-name $coreProject --file deploy/core/compose.yaml stop
 ```
 
-`docker compose down` without `--volumes` also retains the named data volume. Do not use `down --volumes`, `docker volume prune`, or broad Docker cleanup for routine shutdown.
+原始资料在对象目录，数据库在此 Compose 项目的命名卷中，两者需要一起保留。日常停止不删除卷或对象目录。
 
-## Models and the workbench
+## 独立实例与更多配置
 
-External model calls are disabled by default. `CORE_ENABLE_MODELS=true` enables the Company generation adapter; `CORE_ENABLE_JEV=true` independently enables JEV, so JEV-only operation does not require Company configuration. The launcher forwards each enabled adapter's `CORE_*` settings and only the environment variable named by its opaque `*_SECRET_REF`; it removes disabled-adapter settings and all unreferenced secrets. Vite receives neither adapter settings nor secrets. The launcher does not configure a profile or call a model by itself. Use only provider settings documented by the Core model capability module and deployment profile.
+同机运行第二套实例时，使用独立仓库工作区、Compose 项目名、三个空闲端口、对象目录，以及明确的 `CORE_TENANT_ID` / `CORE_SPACE_ID` UUID。每个工作区有自己的 `.env.core.local`。启动器拒绝历史服务端口 `3000/5173/54329`，也拒绝远程或非 `ontology_core` 数据库。
 
-The profile selection, source import, and query flow is described in [SPEC §8, Local deployment and usable UI](../../tasks/spec-main-core-product-2026-09-28.md#8-本地部署与可用-ui) and the [product README](../../README.md). The current browser obtains scenario metadata from `/api/v1/core/deployment`. Startup readiness does not imply every Workbench or query route is configured; the independent review records the remaining product checks.
-
-## Validation and current limits
-
-The preparation config unit tests cover app-role DSN creation, default scope/ports, exclusion of admin credentials from `.env.core.local`, and rejection of remote, wrong-database, and legacy-port targets. Node launcher tests cover both-models-off, generation-only, JEV-only, API-only referenced secrets, `VITE_` filtering, rejection of generic `DATABASE_URL`, missing-entry failure, and occupied-port detection. `dev-core.mjs` is also checked by Node syntax validation and focused ESLint. The compose file is validated with `docker compose config`; this does not create or restart a container.
-
-The initial prepare check used a temporary PostgreSQL instance with its own named volume: 25 migrations applied on the first run and none on the second; `ontology_app` was non-superuser, `NOBYPASSRLS`, and saw zero unscoped tenant rows. A later actual subprocess launcher check applied all 28 current migrations in a new temporary database. It found and fixed Vite's incorrect working-directory root and missing proxy; API/Web readiness and the same-origin deployment metadata request then succeeded. Browser import, identity confirmation, approval and fact publication also succeeded. The temporary database, volume, local environment and artifacts were removed afterward. Complete Workbench/query navigation, new-profile activation and independent process restart remain separate acceptance checks. See the [independent review](main-core-independent-review-2026-09-28.md).
+默认业务查询后端是 DuckDB。通过 `PROJECT_BUSINESS_DATABASE_URL` 等配置可接独立的 PostgreSQL 业务数据后端；这与控制库的 `CORE_DATABASE_URL` 是两种连接。模型提供方、生产认证和客户数据源接入属于另行配置的能力，参考 [Core 设计](../../tasks/spec-main-core-product-2026-09-28.md) 与 [本批验收记录](v03-a-core-acceptance-2026-10-11.md)。

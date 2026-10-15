@@ -1,9 +1,11 @@
-import type { FastifyInstance } from 'fastify'
+import type { FastifyInstance, FastifyRequest } from 'fastify'
 import type {
+  IndustryAssetPublicationService,
   IndustryPackExportService,
   IndustryPackUpgradeService,
 } from '@ontology/application'
 import { summarizePackCatalogEntry } from '@ontology/application'
+import { isDefinitionRevisionStrategy } from '@ontology/contracts'
 import type {
   ComponentKey,
   ComponentKind,
@@ -22,6 +24,8 @@ import { ForbiddenError, InvalidRequestFieldError } from './shared'
 import {
   authenticateRequest,
   isRecord,
+  readHeader,
+  readRevisionHeader,
   readTraceId,
   requireNonEmptyString,
   scopeRefFor,
@@ -55,6 +59,28 @@ export interface PackRouteDependencies {
   readonly catalogue: IndustryPackCatalogue
   readonly packExports: IndustryPackExportService
   readonly packUpgrades: IndustryPackUpgradeService
+  /**
+   * V03-015: publish a human-reviewed draft as an immutable, versioned pack. Optional so the
+   * read-only export/upgrade surface keeps working in a deployment that does not enable publishing.
+   */
+  readonly publication?: IndustryAssetPublicationService
+}
+
+function readIfMatch(request: FastifyRequest): string | undefined {
+  const header = readRevisionHeader(request)
+  if (header.kind === 'absent') return undefined
+  if (header.kind !== 'revision') {
+    throw new InvalidRequestFieldError('If-Match must be a decimal revision string')
+  }
+  return header.value
+}
+
+function requireIdempotencyKey(request: FastifyRequest): string {
+  const key = readHeader(request, 'idempotency-key')
+  if (key === undefined || key.length < 8) {
+    throw new InvalidRequestFieldError('an Idempotency-Key header (>= 8 chars) is required')
+  }
+  return key
 }
 
 export interface PackApiOptions extends PackRouteDependencies {
@@ -264,4 +290,44 @@ export function registerPackRoutes(
       return reply
     },
   )
+
+  if (dependencies.publication !== undefined) {
+    const publication = dependencies.publication
+    app.post<{ Params: { workspaceId: string } }>(
+      '/api/v1/industry-workspaces/:workspaceId/publications',
+      async (request, reply) => {
+        const traceId = readTraceId(request)
+        const auth = authenticateRequest(dependencies.authenticate, request, reply)
+        if (auth === undefined) return reply
+        const ctx = contextFor(auth, traceId)
+        requireRole(ctx, PROFILE_EDITOR_ROLES, 'publishing an industry pack')
+
+        const body = request.body
+        if (!isRecord(body)) throw new InvalidRequestFieldError('the request body must be a JSON object')
+        const strategy = body['strategy']
+        if (strategy !== undefined && !isDefinitionRevisionStrategy(strategy)) {
+          throw new InvalidRequestFieldError('strategy must carry a supported revision decision, reason and optional predecessor reference')
+        }
+        const asset = await publication.publish(
+          request.params.workspaceId,
+          {
+            ...(strategy === undefined ? {} : { strategy }),
+            packId: requireNonEmptyString(body['packId'], 'packId'),
+            version: requireNonEmptyString(body['version'], 'version'),
+            validationId: requireNonEmptyString(body['validationId'], 'validationId'),
+            expectedRevision: readIfMatch(request),
+            idempotencyKey: requireIdempotencyKey(request),
+            requireDeploymentExecutable: body['requireDeploymentExecutable'] === true,
+          },
+          auth.principal.subjectId,
+          ctx,
+        )
+        reply.status(201).send({
+          data: { pack: asset, packRef: asset.packRef, capabilityStatus: asset.capabilities },
+          meta: { traceId },
+        })
+        return reply
+      },
+    )
+  }
 }

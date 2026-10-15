@@ -205,6 +205,12 @@ export interface SemanticDefinitionVersion extends SemanticDefinitionVersionDraf
  */
 export type SemanticDefinitionRecord = Omit<SemanticDefinitionVersion, 'scopeRef'>
 
+/** The existing immutable declaration hash body; audit, scope and version identity stay outside. */
+export function semanticDefinitionContent(draft: Pick<SemanticDefinitionVersionDraft, 'namespace' | 'layer' | 'baseRef' | 'standardProvenance' | 'objects' | 'attributes' | 'relations' | 'identityScopes' | 'ruleConstraints'>): Record<string, unknown> {
+  return { namespace: draft.namespace, layer: draft.layer, baseRef: draft.baseRef, standardProvenance: draft.standardProvenance,
+    objects: draft.objects, attributes: draft.attributes, relations: draft.relations, identityScopes: draft.identityScopes, ruleConstraints: draft.ruleConstraints }
+}
+
 export function definitionRecordOf(version: SemanticDefinitionVersion): SemanticDefinitionRecord {
   return {
     ref: version.ref,
@@ -325,6 +331,7 @@ export class SemanticDefinitionStoreError extends Error {
  * contracts). It carries no driver type: `pg` stays inside the adapter.
  */
 export interface SemanticDefinitionStore {
+  findVersionByRef(scopeRef: ScopeRef, ref: VersionRef, ctx: ToolContext): Promise<SemanticDefinitionVersion | undefined>
   findVersion(
     namespace: string,
     definitionId: string,

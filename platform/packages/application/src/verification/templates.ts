@@ -68,6 +68,18 @@ const TEMPLATES: Readonly<Record<VerificationFindingCode, Template>> = Object.fr
   document_quote_mismatch: (finding) => `${locate(finding)} does not match the exact archived document span and digest`,
   evidence_reference_mismatch: (finding) => `${locate(finding)} uses a different evidence version than the archived result`,
   unverified_limitation: (finding) => `${locate(finding)} contains text that is not an approved limitation code`,
+  rule_judgement_mismatch: (finding) =>
+    `${locate(finding)} does not recompute to the asserted rule verdict from the archived computation${finding.expected === undefined ? '' : ` ${finding.expected}`}${finding.actual === undefined ? '' : ` (asserted ${finding.actual})`}`,
+  rule_premise_missing: (finding) =>
+    `${locate(finding)} depends on a premise that is missing, unreadable or from an incomplete computation`,
+  relation_endpoint_mismatch: (finding) =>
+    `${locate(finding)} does not match the endpoints of the cited published relation edge`,
+  relation_version_mismatch: (finding) =>
+    `${locate(finding)} does not match the pinned relation definition/statement version`,
+  row_binding_mismatch: (finding) =>
+    `${locate(finding)} binds a value from row ${finding.expected ?? '(unknown)'} but another bound pointer is on ${finding.actual ?? 'a different row'}`,
+  citation_locator_mismatch: (finding) =>
+    `${locate(finding)} does not resolve to the exact archived document version and locator it cites`,
 })
 
 export class RestrictedExplanationTemplates {

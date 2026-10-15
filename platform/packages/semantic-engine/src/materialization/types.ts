@@ -10,6 +10,7 @@ import type {
   VersionRef,
   Rfc3339UtcTimestamp,
   ToolContext,
+  RulePremiseReplayInput,
 } from '@ontology/contracts'
 import type { RuleCapabilityIssue, RuleEvaluator, RuleFact, SupportRule } from '../rules'
 import type { DependencyEntityBinding } from './dependency-index'
@@ -24,6 +25,9 @@ import type { AttributeProjectionIssue } from '../rules'
  */
 /** The pinned facts and rules one materialisation reads. Never the candidate store. */
 export interface PublishedSemanticData {
+  /** Distinct definition snapshots; combined indexing must preserve their evaluation authority. */
+  readonly partitions?: readonly PublishedSemanticData[]
+  readonly premiseInput?: Omit<RulePremiseReplayInput, 'request' | 'evaluatedRuleIds' | 'complete'>
   readonly facts: readonly RuleFact[]
   readonly rules: readonly SupportRule[]
   readonly entityBindings: readonly DependencyEntityBinding[]
@@ -53,6 +57,8 @@ export interface MaterializationServiceDependencies {
   readonly publishedSource: MaterializationPublishedSource
   /** Fence, dirty flag, projection state and append-only projection slices. */
   readonly materialization: MaterializationStore
+  /** Host-pinned projection configuration, archived by synthetic execution when supplied. */
+  readonly projectionRef?: VersionRef
   readonly evaluator?: RuleEvaluator
   /**
    * Above this many affected rules a change is conservatively deferred: the whole scope is

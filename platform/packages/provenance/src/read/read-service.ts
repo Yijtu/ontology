@@ -16,6 +16,8 @@ import type {
   EvidenceStorePort,
   ProvenanceEvidenceView,
   ProvenancePremiseGroupView,
+  ProvenanceSpecificationSpanView,
+  ProvenanceSupportAxisCoverage,
   ProvenanceSupportResolution,
   ProvenanceSourceView,
   ResourceRef,
@@ -70,6 +72,14 @@ const DEFAULT_DEPENDENCY_PAGE_SIZE = 50
 interface DependencyCursorPayload {
   readonly queue: readonly { readonly evidenceId: Uuid; readonly depth: number }[]
   readonly visited: readonly Uuid[]
+}
+
+interface DependencyReadResult {
+  readonly edges: readonly EvidenceDependencyEdge[]
+  readonly supportResolution: ProvenanceSupportResolution
+  readonly factSupport: ProvenanceSupportAxisCoverage
+  readonly policy?: ProvenanceSupportAxisCoverage
+  readonly policySpans?: readonly ProvenanceSpecificationSpanView[]
 }
 
 function scopeOf(ctx: ToolContext): ScopeRef {
@@ -160,6 +170,7 @@ export class ProvenanceReadService {
 
     const dependencyRead = await this.#readDependencies(scopeRef, record, ctx)
     const edges = dependencyRead.edges
+    const isRule = record.envelope.producedBy.ruleRef !== undefined
     const { sources, artifactFailed } = await this.#resolveSources(scopeRef, record, ctx)
     const archivedResult = await this.#verifyArtifact(scopeRef, record.envelope.payloadRef, ctx)
     const integrityVerified =
@@ -185,6 +196,18 @@ export class ProvenanceReadService {
       integrityVerified,
       ruleRefs: ruleRef === undefined ? [] : [ruleRef],
       supportResolution: dependencyRead.supportResolution,
+      ...(isRule
+        ? {
+            factSupport: dependencyRead.factSupport,
+            specification: {
+              coverage: dependencyRead.policy ?? {
+                complete: false,
+                reason: 'the dependency source did not report specification-text coverage',
+              },
+              spans: dependencyRead.policySpans ?? [],
+            },
+          }
+        : {}),
       premiseGroups: groupPremises(edges),
       sources,
       ...(archivedResult === undefined ? {} : { archivedResult }),
@@ -352,13 +375,17 @@ export class ProvenanceReadService {
     scopeRef: ScopeRef,
     record: EvidenceRecord,
     ctx: ToolContext,
-  ): Promise<{ readonly edges: readonly EvidenceDependencyEdge[]; readonly supportResolution: ProvenanceSupportResolution }> {
+  ): Promise<DependencyReadResult> {
     const detailedReader = this.#dependencies.dependenciesWithResolutionOf
     if (detailedReader !== undefined) {
       const result = await detailedReader.call(this.#dependencies, scopeRef, record, ctx)
+      const supportResolution = normalizedSupportResolution(result.supportResolution)
       return {
         edges: result.edges,
-        supportResolution: normalizedSupportResolution(result.supportResolution),
+        supportResolution,
+        factSupport: axisCoverageOf(supportResolution),
+        ...(result.supportResolution.policy === undefined ? {} : { policy: result.supportResolution.policy }),
+        ...(result.supportResolution.policySpans === undefined ? {} : { policySpans: result.supportResolution.policySpans }),
       }
     }
 
@@ -367,16 +394,15 @@ export class ProvenanceReadService {
       return {
         edges,
         supportResolution: { state: 'not_rule', complete: true },
+        factSupport: { complete: true },
       }
     }
-    return {
-      edges,
-      supportResolution: {
-        state: 'unknown',
-        complete: false,
-        reason: 'the dependency source does not report whether rule-support resolution was complete',
-      },
+    const supportResolution: ProvenanceSupportResolution = {
+      state: 'unknown',
+      complete: false,
+      reason: 'the dependency source does not report whether rule-support resolution was complete',
     }
+    return { edges, supportResolution, factSupport: axisCoverageOf(supportResolution) }
   }
 
   async #resolveSources(
@@ -546,6 +572,12 @@ function normalizedSupportResolution(
     complete: knownComplete && status.complete !== false,
     ...(status.reason === undefined ? {} : { reason: status.reason }),
   }
+}
+
+function axisCoverageOf(resolution: ProvenanceSupportResolution): ProvenanceSupportAxisCoverage {
+  return resolution.complete
+    ? { complete: true }
+    : { complete: false, ...(resolution.reason === undefined ? {} : { reason: resolution.reason }) }
 }
 
 function supportEntry(evidenceId: Uuid, resolution: ProvenanceSupportResolution): DependencySupportResolutionEntry {

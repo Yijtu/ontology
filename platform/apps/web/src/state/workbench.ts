@@ -24,6 +24,11 @@ export interface WorkbenchError {
   readonly message: string
   readonly traceId?: string
   readonly reasons?: readonly string[]
+  /** HTTP status when the failure came from the API; kept so the public notice can classify it. */
+  readonly status?: number
+  /** The server's retryability hint; a non-retryable family never offers a retry entry. */
+  readonly retryable?: boolean
+  readonly missingCapabilities?: readonly unknown[]
 }
 
 export interface WorkbenchState {

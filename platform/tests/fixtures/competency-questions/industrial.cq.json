@@ -1,0 +1,1980 @@
+{
+  "ref": {
+    "id": "cq.industrial.set",
+    "version": "1.1.0",
+    "digest": "sha256:4e1aa18b7e630a81a1e1df50b834671816f029ff24193d4f48bee6531c005770"
+  },
+  "body": {
+    "schemaVersion": "competency-questions@1",
+    "classification": "synthetic_demo_not_an_industry_standard",
+    "execution": "not_run",
+    "industryId": "industrial-synthetic",
+    "definitionRefs": [
+      {
+        "id": "cq.industrial.definition",
+        "version": "1.0.0",
+        "digest": "sha256:0ded79d1c8e5b003f8c5e460d77dccf3e9260dd8782cc25d198bc57fd24eb937"
+      },
+      {
+        "id": "cq.industrial.definition",
+        "version": "2.0.0",
+        "digest": "sha256:1027362dabc83dc228818acc4700d65e684494505a8bc842b58466d44ff58070"
+      }
+    ],
+    "ruleRefs": [
+      {
+        "id": "cq.industrial.rule.service",
+        "version": "1.0.0",
+        "digest": "sha256:64e42386a57a7d00f777548bda8ccd88b842a3928bf8f1508781abf210187878"
+      },
+      {
+        "id": "cq.industrial.rule.layer-two",
+        "version": "1.0.0",
+        "digest": "sha256:e94c2af5da592a7bd8a09eeb2b52f82296bb761c711a13444d998b75e0c930ef"
+      },
+      {
+        "id": "cq.industrial.rule.layer-three",
+        "version": "1.0.0",
+        "digest": "sha256:bee2e5aeb3fd47f9556993825d60ba8b4a920a39ec53927032bcb587be37f442"
+      },
+      {
+        "id": "cq.industrial.rule.alarm",
+        "version": "1.0.0",
+        "digest": "sha256:39eec34fa355cea8d3e90a19e0cd656df322bd57235c6f503eaa08fc550714f5"
+      },
+      {
+        "id": "cq.industrial.rule.service-any",
+        "version": "1.0.0",
+        "digest": "sha256:3ba52a7adeab5cfafa0a6015359a760f8d9fae404d13598c60644b4533d6a1f3"
+      }
+    ],
+    "sourceRefs": [
+      {
+        "id": "cq.industrial.source",
+        "version": "1.0.0",
+        "digest": "sha256:3f3eb751e3d27b03636bb2b7fd27c1736aa50605fafc6beec826b51a840a7ff2"
+      },
+      {
+        "id": "cq.industrial.rows.source",
+        "version": "1.0.0",
+        "digest": "sha256:8f372538efcf5d876b52b9db549dea5d53e59a828e66be9b6feae4495ed07dd3"
+      },
+      {
+        "id": "cq.industrial.alarm.source",
+        "version": "1.0.0",
+        "digest": "sha256:c0a0e82478a994e49f452b65c8195bf1e94741fb74a38a387a95ca95c2b11b00"
+      },
+      {
+        "id": "cq.industrial.boundary.source",
+        "version": "1.0.0",
+        "digest": "sha256:6a8fcbbecb38863e645e2005b9251df4dc05c32e2a75d21206e3e1af8b8d70dd"
+      },
+      {
+        "id": "cq.industrial.version-two.source",
+        "version": "1.0.0",
+        "digest": "sha256:a1d83c39d6212a73cec568c720c9acbf8a4a57618c258d89a90b81e1df0e12fb"
+      },
+      {
+        "id": "cq.industrial.workshop.source",
+        "version": "1.0.0",
+        "digest": "sha256:adaf170554ab1a661bb14c8c33b7d7b26620a12939126ee3aac2ae6452be58cf"
+      },
+      {
+        "id": "cq.industrial.compute-input.source",
+        "version": "1.0.0",
+        "digest": "sha256:84efdae6315e73d780c5329fed2b441f24f9e559763d391f9a28a4658be0f058"
+      }
+    ],
+    "allowedCapabilities": [
+      "semantic_read",
+      "relation_read",
+      "rule_evaluation",
+      "registered_compute",
+      "structured_query"
+    ],
+    "questions": [
+      {
+        "questionId": "industrial-attribute",
+        "question": "A-01 的运行时长是多少？",
+        "taskKind": "published_facts",
+        "definitionRef": {
+          "id": "cq.industrial.definition",
+          "version": "1.0.0",
+          "digest": "sha256:0ded79d1c8e5b003f8c5e460d77dccf3e9260dd8782cc25d198bc57fd24eb937"
+        },
+        "ruleRefs": [],
+        "input": {
+          "dataMode": "synthetic",
+          "scopeRef": {
+            "tenantId": "11111111-1111-4111-8111-111111111111",
+            "spaceId": "aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa"
+          },
+          "projectId": "44444444-4444-4444-8444-444444444444",
+          "validAt": "2026-10-08T00:00:00Z",
+          "asOfRecordedSeq": "1",
+          "observations": [
+            {
+              "factId": "A-01-asset_code",
+              "entityId": "A-01",
+              "objectId": "asset",
+              "attributeId": "asset_code",
+              "value": "A-01",
+              "recordedSeq": "1",
+              "status": "active",
+              "source": {
+                "sourceRef": {
+                  "id": "cq.industrial.rows.source",
+                  "version": "1.0.0",
+                  "digest": "sha256:8f372538efcf5d876b52b9db549dea5d53e59a828e66be9b6feae4495ed07dd3"
+                },
+                "startOffset": 36,
+                "endOffset": 55,
+                "quoteDigest": "sha256:fb45f5b8577db4f4b77e2449bf746824c979153f97676cc6ded56a998ba194a5",
+                "offsetUnit": "utf8_byte"
+              }
+            },
+            {
+              "factId": "A-01-hours",
+              "entityId": "A-01",
+              "objectId": "asset",
+              "attributeId": "hours",
+              "value": {
+                "amount": "120",
+                "unit": "h"
+              },
+              "recordedSeq": "1",
+              "status": "active",
+              "source": {
+                "sourceRef": {
+                  "id": "cq.industrial.rows.source",
+                  "version": "1.0.0",
+                  "digest": "sha256:8f372538efcf5d876b52b9db549dea5d53e59a828e66be9b6feae4495ed07dd3"
+                },
+                "startOffset": 36,
+                "endOffset": 55,
+                "quoteDigest": "sha256:fb45f5b8577db4f4b77e2449bf746824c979153f97676cc6ded56a998ba194a5",
+                "offsetUnit": "utf8_byte"
+              }
+            }
+          ],
+          "relations": [],
+          "structuredSources": [
+            {
+              "sourceRef": {
+                "id": "cq.industrial.rows.source",
+                "version": "1.0.0",
+                "digest": "sha256:8f372538efcf5d876b52b9db549dea5d53e59a828e66be9b6feae4495ed07dd3"
+              },
+              "objectId": "asset",
+              "attributeIds": [
+                "asset_code",
+                "hours"
+              ]
+            }
+          ]
+        },
+        "intent": {
+          "projectId": "44444444-4444-4444-8444-444444444444",
+          "kind": "attribute",
+          "objectId": "asset",
+          "subjectEntityId": "A-01",
+          "attributeId": "hours"
+        },
+        "requiredCapabilities": [
+          "semantic_read"
+        ],
+        "requiredSources": [
+          {
+            "sourceRef": {
+              "id": "cq.industrial.rows.source",
+              "version": "1.0.0",
+              "digest": "sha256:8f372538efcf5d876b52b9db549dea5d53e59a828e66be9b6feae4495ed07dd3"
+            },
+            "startOffset": 36,
+            "endOffset": 55,
+            "quoteDigest": "sha256:fb45f5b8577db4f4b77e2449bf746824c979153f97676cc6ded56a998ba194a5",
+            "offsetUnit": "utf8_byte"
+          }
+        ],
+        "expected": {
+          "kind": "value",
+          "value": {
+            "amount": "120",
+            "unit": "h"
+          }
+        },
+        "goldOrigin": "authored_oracle",
+        "derivation": "合成原行写明120 h；身份固定A-01，不能读取A-02的30 h。",
+        "specRefs": [
+          "tasks/spec-v0.3a/execution-evidence.md#EX-11"
+        ]
+      },
+      {
+        "questionId": "industrial-sum",
+        "question": "A-01 和 A-02 总共运行了多久？",
+        "taskKind": "structured_query",
+        "definitionRef": {
+          "id": "cq.industrial.definition",
+          "version": "1.0.0",
+          "digest": "sha256:0ded79d1c8e5b003f8c5e460d77dccf3e9260dd8782cc25d198bc57fd24eb937"
+        },
+        "ruleRefs": [],
+        "input": {
+          "dataMode": "synthetic",
+          "scopeRef": {
+            "tenantId": "11111111-1111-4111-8111-111111111111",
+            "spaceId": "aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa"
+          },
+          "projectId": "44444444-4444-4444-8444-444444444444",
+          "validAt": "2026-10-08T00:00:00Z",
+          "asOfRecordedSeq": "1",
+          "observations": [
+            {
+              "factId": "A-01-asset_code",
+              "entityId": "A-01",
+              "objectId": "asset",
+              "attributeId": "asset_code",
+              "value": "A-01",
+              "recordedSeq": "1",
+              "status": "active",
+              "source": {
+                "sourceRef": {
+                  "id": "cq.industrial.rows.source",
+                  "version": "1.0.0",
+                  "digest": "sha256:8f372538efcf5d876b52b9db549dea5d53e59a828e66be9b6feae4495ed07dd3"
+                },
+                "startOffset": 36,
+                "endOffset": 55,
+                "quoteDigest": "sha256:fb45f5b8577db4f4b77e2449bf746824c979153f97676cc6ded56a998ba194a5",
+                "offsetUnit": "utf8_byte"
+              }
+            },
+            {
+              "factId": "A-01-hours",
+              "entityId": "A-01",
+              "objectId": "asset",
+              "attributeId": "hours",
+              "value": {
+                "amount": "120",
+                "unit": "h"
+              },
+              "recordedSeq": "1",
+              "status": "active",
+              "source": {
+                "sourceRef": {
+                  "id": "cq.industrial.rows.source",
+                  "version": "1.0.0",
+                  "digest": "sha256:8f372538efcf5d876b52b9db549dea5d53e59a828e66be9b6feae4495ed07dd3"
+                },
+                "startOffset": 36,
+                "endOffset": 55,
+                "quoteDigest": "sha256:fb45f5b8577db4f4b77e2449bf746824c979153f97676cc6ded56a998ba194a5",
+                "offsetUnit": "utf8_byte"
+              }
+            },
+            {
+              "factId": "A-02-asset_code",
+              "entityId": "A-02",
+              "objectId": "asset",
+              "attributeId": "asset_code",
+              "value": "A-02",
+              "recordedSeq": "1",
+              "status": "active",
+              "source": {
+                "sourceRef": {
+                  "id": "cq.industrial.rows.source",
+                  "version": "1.0.0",
+                  "digest": "sha256:8f372538efcf5d876b52b9db549dea5d53e59a828e66be9b6feae4495ed07dd3"
+                },
+                "startOffset": 56,
+                "endOffset": 70,
+                "quoteDigest": "sha256:27ad9f877be5bf581b04ae181d2c9a0693cc71d93d90bbf6a2d0d69a48ccac92",
+                "offsetUnit": "utf8_byte"
+              }
+            },
+            {
+              "factId": "A-02-hours",
+              "entityId": "A-02",
+              "objectId": "asset",
+              "attributeId": "hours",
+              "value": {
+                "amount": "30",
+                "unit": "h"
+              },
+              "recordedSeq": "1",
+              "status": "active",
+              "source": {
+                "sourceRef": {
+                  "id": "cq.industrial.rows.source",
+                  "version": "1.0.0",
+                  "digest": "sha256:8f372538efcf5d876b52b9db549dea5d53e59a828e66be9b6feae4495ed07dd3"
+                },
+                "startOffset": 56,
+                "endOffset": 70,
+                "quoteDigest": "sha256:27ad9f877be5bf581b04ae181d2c9a0693cc71d93d90bbf6a2d0d69a48ccac92",
+                "offsetUnit": "utf8_byte"
+              }
+            }
+          ],
+          "relations": [],
+          "structuredSources": [
+            {
+              "sourceRef": {
+                "id": "cq.industrial.rows.source",
+                "version": "1.0.0",
+                "digest": "sha256:8f372538efcf5d876b52b9db549dea5d53e59a828e66be9b6feae4495ed07dd3"
+              },
+              "objectId": "asset",
+              "attributeIds": [
+                "asset_code",
+                "hours"
+              ]
+            }
+          ]
+        },
+        "intent": {
+          "projectId": "44444444-4444-4444-8444-444444444444",
+          "kind": "quantity_sum",
+          "objectId": "asset",
+          "attributeId": "hours"
+        },
+        "requiredCapabilities": [
+          "semantic_read",
+          "structured_query"
+        ],
+        "requiredSources": [
+          {
+            "sourceRef": {
+              "id": "cq.industrial.rows.source",
+              "version": "1.0.0",
+              "digest": "sha256:8f372538efcf5d876b52b9db549dea5d53e59a828e66be9b6feae4495ed07dd3"
+            },
+            "startOffset": 36,
+            "endOffset": 55,
+            "quoteDigest": "sha256:fb45f5b8577db4f4b77e2449bf746824c979153f97676cc6ded56a998ba194a5",
+            "offsetUnit": "utf8_byte"
+          },
+          {
+            "sourceRef": {
+              "id": "cq.industrial.rows.source",
+              "version": "1.0.0",
+              "digest": "sha256:8f372538efcf5d876b52b9db549dea5d53e59a828e66be9b6feae4495ed07dd3"
+            },
+            "startOffset": 56,
+            "endOffset": 70,
+            "quoteDigest": "sha256:27ad9f877be5bf581b04ae181d2c9a0693cc71d93d90bbf6a2d0d69a48ccac92",
+            "offsetUnit": "utf8_byte"
+          }
+        ],
+        "expected": {
+          "kind": "value",
+          "value": {
+            "amount": "150",
+            "unit": "h"
+          }
+        },
+        "goldOrigin": "authored_oracle",
+        "derivation": "人工相加120 h+30 h=150 h；两行来自不同资产，均属于同一授权项目。",
+        "specRefs": [
+          "tasks/spec-v0.3a/execution-evidence.md#EX-11"
+        ]
+      },
+      {
+        "questionId": "industrial-three-layer",
+        "question": "A-01 能沿三层维护规则推出ready吗？",
+        "taskKind": "rule_judgement",
+        "definitionRef": {
+          "id": "cq.industrial.definition",
+          "version": "1.0.0",
+          "digest": "sha256:0ded79d1c8e5b003f8c5e460d77dccf3e9260dd8782cc25d198bc57fd24eb937"
+        },
+        "ruleRefs": [
+          {
+            "id": "cq.industrial.rule.service",
+            "version": "1.0.0",
+            "digest": "sha256:64e42386a57a7d00f777548bda8ccd88b842a3928bf8f1508781abf210187878"
+          },
+          {
+            "id": "cq.industrial.rule.layer-two",
+            "version": "1.0.0",
+            "digest": "sha256:e94c2af5da592a7bd8a09eeb2b52f82296bb761c711a13444d998b75e0c930ef"
+          },
+          {
+            "id": "cq.industrial.rule.layer-three",
+            "version": "1.0.0",
+            "digest": "sha256:bee2e5aeb3fd47f9556993825d60ba8b4a920a39ec53927032bcb587be37f442"
+          }
+        ],
+        "input": {
+          "dataMode": "synthetic",
+          "scopeRef": {
+            "tenantId": "11111111-1111-4111-8111-111111111111",
+            "spaceId": "aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa"
+          },
+          "projectId": "44444444-4444-4444-8444-444444444444",
+          "validAt": "2026-10-08T00:00:00Z",
+          "asOfRecordedSeq": "1",
+          "observations": [
+            {
+              "factId": "A-01-asset_code",
+              "entityId": "A-01",
+              "objectId": "asset",
+              "attributeId": "asset_code",
+              "value": "A-01",
+              "recordedSeq": "1",
+              "status": "active",
+              "source": {
+                "sourceRef": {
+                  "id": "cq.industrial.rows.source",
+                  "version": "1.0.0",
+                  "digest": "sha256:8f372538efcf5d876b52b9db549dea5d53e59a828e66be9b6feae4495ed07dd3"
+                },
+                "startOffset": 36,
+                "endOffset": 55,
+                "quoteDigest": "sha256:fb45f5b8577db4f4b77e2449bf746824c979153f97676cc6ded56a998ba194a5",
+                "offsetUnit": "utf8_byte"
+              }
+            },
+            {
+              "factId": "A-01-hours",
+              "entityId": "A-01",
+              "objectId": "asset",
+              "attributeId": "hours",
+              "value": {
+                "amount": "120",
+                "unit": "h"
+              },
+              "recordedSeq": "1",
+              "status": "active",
+              "source": {
+                "sourceRef": {
+                  "id": "cq.industrial.rows.source",
+                  "version": "1.0.0",
+                  "digest": "sha256:8f372538efcf5d876b52b9db549dea5d53e59a828e66be9b6feae4495ed07dd3"
+                },
+                "startOffset": 36,
+                "endOffset": 55,
+                "quoteDigest": "sha256:fb45f5b8577db4f4b77e2449bf746824c979153f97676cc6ded56a998ba194a5",
+                "offsetUnit": "utf8_byte"
+              }
+            },
+            {
+              "factId": "A-01-exempt",
+              "entityId": "A-01",
+              "objectId": "asset",
+              "attributeId": "exempt",
+              "value": false,
+              "recordedSeq": "1",
+              "status": "active",
+              "source": {
+                "sourceRef": {
+                  "id": "cq.industrial.rows.source",
+                  "version": "1.0.0",
+                  "digest": "sha256:8f372538efcf5d876b52b9db549dea5d53e59a828e66be9b6feae4495ed07dd3"
+                },
+                "startOffset": 36,
+                "endOffset": 55,
+                "quoteDigest": "sha256:fb45f5b8577db4f4b77e2449bf746824c979153f97676cc6ded56a998ba194a5",
+                "offsetUnit": "utf8_byte"
+              }
+            }
+          ],
+          "relations": [],
+          "structuredSources": [
+            {
+              "sourceRef": {
+                "id": "cq.industrial.rows.source",
+                "version": "1.0.0",
+                "digest": "sha256:8f372538efcf5d876b52b9db549dea5d53e59a828e66be9b6feae4495ed07dd3"
+              },
+              "objectId": "asset",
+              "attributeIds": [
+                "asset_code",
+                "hours",
+                "exempt"
+              ]
+            }
+          ]
+        },
+        "intent": {
+          "projectId": "44444444-4444-4444-8444-444444444444",
+          "kind": "rule",
+          "objectId": "asset",
+          "subjectEntityId": "A-01",
+          "ruleId": "layer-three"
+        },
+        "requiredCapabilities": [
+          "semantic_read",
+          "rule_evaluation"
+        ],
+        "requiredSources": [
+          {
+            "sourceRef": {
+              "id": "cq.industrial.source",
+              "version": "1.0.0",
+              "digest": "sha256:3f3eb751e3d27b03636bb2b7fd27c1736aa50605fafc6beec826b51a840a7ff2"
+            },
+            "startOffset": 244,
+            "endOffset": 315,
+            "quoteDigest": "sha256:b469c19c6c0b09016225d42faa78d82a6295c5f6e08ad329549f776ac128ee3e",
+            "offsetUnit": "utf8_byte"
+          },
+          {
+            "sourceRef": {
+              "id": "cq.industrial.source",
+              "version": "1.0.0",
+              "digest": "sha256:3f3eb751e3d27b03636bb2b7fd27c1736aa50605fafc6beec826b51a840a7ff2"
+            },
+            "startOffset": 316,
+            "endOffset": 391,
+            "quoteDigest": "sha256:2d073b6c865de95e75d07d82c87492813269de7bf58a6a87950aebce1e0e255f",
+            "offsetUnit": "utf8_byte"
+          },
+          {
+            "sourceRef": {
+              "id": "cq.industrial.source",
+              "version": "1.0.0",
+              "digest": "sha256:3f3eb751e3d27b03636bb2b7fd27c1736aa50605fafc6beec826b51a840a7ff2"
+            },
+            "startOffset": 392,
+            "endOffset": 462,
+            "quoteDigest": "sha256:e5e6300fc7ac76c34d53251355fe05237f01e0572bf6ec10f734cb51b057bed7",
+            "offsetUnit": "utf8_byte"
+          },
+          {
+            "sourceRef": {
+              "id": "cq.industrial.rows.source",
+              "version": "1.0.0",
+              "digest": "sha256:8f372538efcf5d876b52b9db549dea5d53e59a828e66be9b6feae4495ed07dd3"
+            },
+            "startOffset": 36,
+            "endOffset": 55,
+            "quoteDigest": "sha256:fb45f5b8577db4f4b77e2449bf746824c979153f97676cc6ded56a998ba194a5",
+            "offsetUnit": "utf8_byte"
+          }
+        ],
+        "expected": {
+          "kind": "rule",
+          "conditionState": "true",
+          "applicability": "applicable",
+          "propositionState": "true"
+        },
+        "goldOrigin": "authored_oracle",
+        "derivation": "120>=100且exempt=false先支持stage_one；第二条人工规则由stage_one支持stage_two；第三条由stage_two支持ready，逐层成立。",
+        "specRefs": [
+          "tasks/spec-v0.3a/execution-evidence.md#EX-11"
+        ]
+      },
+      {
+        "questionId": "industrial-missing-hours",
+        "question": "没有hours观察时是否能判维护规则为false？",
+        "taskKind": "rule_judgement",
+        "definitionRef": {
+          "id": "cq.industrial.definition",
+          "version": "1.0.0",
+          "digest": "sha256:0ded79d1c8e5b003f8c5e460d77dccf3e9260dd8782cc25d198bc57fd24eb937"
+        },
+        "ruleRefs": [
+          {
+            "id": "cq.industrial.rule.service",
+            "version": "1.0.0",
+            "digest": "sha256:64e42386a57a7d00f777548bda8ccd88b842a3928bf8f1508781abf210187878"
+          }
+        ],
+        "input": {
+          "dataMode": "synthetic",
+          "scopeRef": {
+            "tenantId": "11111111-1111-4111-8111-111111111111",
+            "spaceId": "aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa"
+          },
+          "projectId": "44444444-4444-4444-8444-444444444444",
+          "validAt": "2026-10-08T00:00:00Z",
+          "asOfRecordedSeq": "1",
+          "observations": [
+            {
+              "factId": "A-01-asset_code",
+              "entityId": "A-01",
+              "objectId": "asset",
+              "attributeId": "asset_code",
+              "value": "A-01",
+              "recordedSeq": "1",
+              "status": "active",
+              "source": {
+                "sourceRef": {
+                  "id": "cq.industrial.rows.source",
+                  "version": "1.0.0",
+                  "digest": "sha256:8f372538efcf5d876b52b9db549dea5d53e59a828e66be9b6feae4495ed07dd3"
+                },
+                "startOffset": 36,
+                "endOffset": 55,
+                "quoteDigest": "sha256:fb45f5b8577db4f4b77e2449bf746824c979153f97676cc6ded56a998ba194a5",
+                "offsetUnit": "utf8_byte"
+              }
+            },
+            {
+              "factId": "A-01-exempt",
+              "entityId": "A-01",
+              "objectId": "asset",
+              "attributeId": "exempt",
+              "value": false,
+              "recordedSeq": "1",
+              "status": "active",
+              "source": {
+                "sourceRef": {
+                  "id": "cq.industrial.rows.source",
+                  "version": "1.0.0",
+                  "digest": "sha256:8f372538efcf5d876b52b9db549dea5d53e59a828e66be9b6feae4495ed07dd3"
+                },
+                "startOffset": 36,
+                "endOffset": 55,
+                "quoteDigest": "sha256:fb45f5b8577db4f4b77e2449bf746824c979153f97676cc6ded56a998ba194a5",
+                "offsetUnit": "utf8_byte"
+              }
+            }
+          ],
+          "relations": [],
+          "structuredSources": [
+            {
+              "sourceRef": {
+                "id": "cq.industrial.rows.source",
+                "version": "1.0.0",
+                "digest": "sha256:8f372538efcf5d876b52b9db549dea5d53e59a828e66be9b6feae4495ed07dd3"
+              },
+              "objectId": "asset",
+              "attributeIds": [
+                "asset_code",
+                "exempt"
+              ]
+            }
+          ]
+        },
+        "intent": {
+          "projectId": "44444444-4444-4444-8444-444444444444",
+          "kind": "rule",
+          "objectId": "asset",
+          "subjectEntityId": "A-01",
+          "ruleId": "service"
+        },
+        "requiredCapabilities": [
+          "semantic_read",
+          "rule_evaluation"
+        ],
+        "requiredSources": [
+          {
+            "sourceRef": {
+              "id": "cq.industrial.source",
+              "version": "1.0.0",
+              "digest": "sha256:3f3eb751e3d27b03636bb2b7fd27c1736aa50605fafc6beec826b51a840a7ff2"
+            },
+            "startOffset": 244,
+            "endOffset": 315,
+            "quoteDigest": "sha256:b469c19c6c0b09016225d42faa78d82a6295c5f6e08ad329549f776ac128ee3e",
+            "offsetUnit": "utf8_byte"
+          },
+          {
+            "sourceRef": {
+              "id": "cq.industrial.rows.source",
+              "version": "1.0.0",
+              "digest": "sha256:8f372538efcf5d876b52b9db549dea5d53e59a828e66be9b6feae4495ed07dd3"
+            },
+            "startOffset": 36,
+            "endOffset": 55,
+            "quoteDigest": "sha256:fb45f5b8577db4f4b77e2449bf746824c979153f97676cc6ded56a998ba194a5",
+            "offsetUnit": "utf8_byte"
+          }
+        ],
+        "expected": {
+          "kind": "rule",
+          "conditionState": "unknown",
+          "applicability": "unknown",
+          "propositionState": "unknown"
+        },
+        "goldOrigin": "authored_oracle",
+        "derivation": "阈值判断需要hours；只有exempt=false不能补出时长，所以不是false而是unknown。",
+        "specRefs": [
+          "tasks/spec-v0.3a/execution-evidence.md#EX-11"
+        ]
+      },
+      {
+        "questionId": "industrial-one-withdrawal",
+        "question": "撤回时长支撑但保留alarm=true后还有维护支撑吗？",
+        "taskKind": "rule_judgement",
+        "definitionRef": {
+          "id": "cq.industrial.definition",
+          "version": "1.0.0",
+          "digest": "sha256:0ded79d1c8e5b003f8c5e460d77dccf3e9260dd8782cc25d198bc57fd24eb937"
+        },
+        "ruleRefs": [
+          {
+            "id": "cq.industrial.rule.service-any",
+            "version": "1.0.0",
+            "digest": "sha256:3ba52a7adeab5cfafa0a6015359a760f8d9fae404d13598c60644b4533d6a1f3"
+          }
+        ],
+        "input": {
+          "dataMode": "synthetic",
+          "scopeRef": {
+            "tenantId": "11111111-1111-4111-8111-111111111111",
+            "spaceId": "aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa"
+          },
+          "projectId": "44444444-4444-4444-8444-444444444444",
+          "validAt": "2026-10-08T00:00:00Z",
+          "asOfRecordedSeq": "2",
+          "observations": [
+            {
+              "factId": "A-01-asset_code",
+              "entityId": "A-01",
+              "objectId": "asset",
+              "attributeId": "asset_code",
+              "value": "A-01",
+              "recordedSeq": "1",
+              "status": "active",
+              "source": {
+                "sourceRef": {
+                  "id": "cq.industrial.rows.source",
+                  "version": "1.0.0",
+                  "digest": "sha256:8f372538efcf5d876b52b9db549dea5d53e59a828e66be9b6feae4495ed07dd3"
+                },
+                "startOffset": 36,
+                "endOffset": 55,
+                "quoteDigest": "sha256:fb45f5b8577db4f4b77e2449bf746824c979153f97676cc6ded56a998ba194a5",
+                "offsetUnit": "utf8_byte"
+              }
+            },
+            {
+              "factId": "A-01-hours",
+              "entityId": "A-01",
+              "objectId": "asset",
+              "attributeId": "hours",
+              "value": {
+                "amount": "120",
+                "unit": "h"
+              },
+              "recordedSeq": "1",
+              "status": "active",
+              "source": {
+                "sourceRef": {
+                  "id": "cq.industrial.rows.source",
+                  "version": "1.0.0",
+                  "digest": "sha256:8f372538efcf5d876b52b9db549dea5d53e59a828e66be9b6feae4495ed07dd3"
+                },
+                "startOffset": 36,
+                "endOffset": 55,
+                "quoteDigest": "sha256:fb45f5b8577db4f4b77e2449bf746824c979153f97676cc6ded56a998ba194a5",
+                "offsetUnit": "utf8_byte"
+              }
+            },
+            {
+              "factId": "A-01-hours",
+              "entityId": "A-01",
+              "objectId": "asset",
+              "attributeId": "hours",
+              "value": {
+                "amount": "120",
+                "unit": "h"
+              },
+              "recordedSeq": "2",
+              "status": "retracted",
+              "source": {
+                "sourceRef": {
+                  "id": "cq.industrial.rows.source",
+                  "version": "1.0.0",
+                  "digest": "sha256:8f372538efcf5d876b52b9db549dea5d53e59a828e66be9b6feae4495ed07dd3"
+                },
+                "startOffset": 36,
+                "endOffset": 55,
+                "quoteDigest": "sha256:fb45f5b8577db4f4b77e2449bf746824c979153f97676cc6ded56a998ba194a5",
+                "offsetUnit": "utf8_byte"
+              }
+            },
+            {
+              "factId": "A-01-alarm",
+              "entityId": "A-01",
+              "objectId": "asset",
+              "attributeId": "alarm",
+              "value": true,
+              "recordedSeq": "1",
+              "status": "active",
+              "source": {
+                "sourceRef": {
+                  "id": "cq.industrial.alarm.source",
+                  "version": "1.0.0",
+                  "digest": "sha256:c0a0e82478a994e49f452b65c8195bf1e94741fb74a38a387a95ca95c2b11b00"
+                },
+                "startOffset": 17,
+                "endOffset": 26,
+                "quoteDigest": "sha256:8e0aebfebdefbc5824c9bebbb2ddb83cf80734a0329e32f51d270dbff73f8c99",
+                "offsetUnit": "utf8_byte"
+              }
+            }
+          ],
+          "relations": [],
+          "structuredSources": [
+            {
+              "sourceRef": {
+                "id": "cq.industrial.rows.source",
+                "version": "1.0.0",
+                "digest": "sha256:8f372538efcf5d876b52b9db549dea5d53e59a828e66be9b6feae4495ed07dd3"
+              },
+              "objectId": "asset",
+              "attributeIds": [
+                "asset_code",
+                "hours"
+              ]
+            },
+            {
+              "sourceRef": {
+                "id": "cq.industrial.alarm.source",
+                "version": "1.0.0",
+                "digest": "sha256:c0a0e82478a994e49f452b65c8195bf1e94741fb74a38a387a95ca95c2b11b00"
+              },
+              "objectId": "asset",
+              "attributeIds": [
+                "alarm"
+              ]
+            }
+          ]
+        },
+        "intent": {
+          "projectId": "44444444-4444-4444-8444-444444444444",
+          "kind": "rule",
+          "objectId": "asset",
+          "subjectEntityId": "A-01",
+          "ruleId": "service-any"
+        },
+        "requiredCapabilities": [
+          "semantic_read",
+          "rule_evaluation"
+        ],
+        "requiredSources": [
+          {
+            "sourceRef": {
+              "id": "cq.industrial.source",
+              "version": "1.0.0",
+              "digest": "sha256:3f3eb751e3d27b03636bb2b7fd27c1736aa50605fafc6beec826b51a840a7ff2"
+            },
+            "startOffset": 532,
+            "endOffset": 590,
+            "quoteDigest": "sha256:04818f47e23e2060bc802183553b5a9636053fe976898a8b24e3d31125f1d2bc",
+            "offsetUnit": "utf8_byte"
+          },
+          {
+            "sourceRef": {
+              "id": "cq.industrial.rows.source",
+              "version": "1.0.0",
+              "digest": "sha256:8f372538efcf5d876b52b9db549dea5d53e59a828e66be9b6feae4495ed07dd3"
+            },
+            "startOffset": 36,
+            "endOffset": 55,
+            "quoteDigest": "sha256:fb45f5b8577db4f4b77e2449bf746824c979153f97676cc6ded56a998ba194a5",
+            "offsetUnit": "utf8_byte"
+          },
+          {
+            "sourceRef": {
+              "id": "cq.industrial.alarm.source",
+              "version": "1.0.0",
+              "digest": "sha256:c0a0e82478a994e49f452b65c8195bf1e94741fb74a38a387a95ca95c2b11b00"
+            },
+            "startOffset": 17,
+            "endOffset": 26,
+            "quoteDigest": "sha256:8e0aebfebdefbc5824c9bebbb2ddb83cf80734a0329e32f51d270dbff73f8c99",
+            "offsetUnit": "utf8_byte"
+          }
+        ],
+        "expected": {
+          "kind": "rule",
+          "conditionState": "true",
+          "applicability": "applicable",
+          "propositionState": "true"
+        },
+        "goldOrigin": "authored_oracle",
+        "derivation": "记录点2撤回hours那一条支撑，但alarm=true仍独立满足OR分支，故结论仍有依据。",
+        "specRefs": [
+          "tasks/spec-v0.3a/execution-evidence.md#EX-11"
+        ]
+      },
+      {
+        "questionId": "industrial-last-withdrawal",
+        "question": "hours和alarm最后两条支撑都撤回后能继续保留确定结论吗？",
+        "taskKind": "rule_judgement",
+        "definitionRef": {
+          "id": "cq.industrial.definition",
+          "version": "1.0.0",
+          "digest": "sha256:0ded79d1c8e5b003f8c5e460d77dccf3e9260dd8782cc25d198bc57fd24eb937"
+        },
+        "ruleRefs": [
+          {
+            "id": "cq.industrial.rule.service-any",
+            "version": "1.0.0",
+            "digest": "sha256:3ba52a7adeab5cfafa0a6015359a760f8d9fae404d13598c60644b4533d6a1f3"
+          }
+        ],
+        "input": {
+          "dataMode": "synthetic",
+          "scopeRef": {
+            "tenantId": "11111111-1111-4111-8111-111111111111",
+            "spaceId": "aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa"
+          },
+          "projectId": "44444444-4444-4444-8444-444444444444",
+          "validAt": "2026-10-08T00:00:00Z",
+          "asOfRecordedSeq": "3",
+          "observations": [
+            {
+              "factId": "A-01-asset_code",
+              "entityId": "A-01",
+              "objectId": "asset",
+              "attributeId": "asset_code",
+              "value": "A-01",
+              "recordedSeq": "1",
+              "status": "active",
+              "source": {
+                "sourceRef": {
+                  "id": "cq.industrial.rows.source",
+                  "version": "1.0.0",
+                  "digest": "sha256:8f372538efcf5d876b52b9db549dea5d53e59a828e66be9b6feae4495ed07dd3"
+                },
+                "startOffset": 36,
+                "endOffset": 55,
+                "quoteDigest": "sha256:fb45f5b8577db4f4b77e2449bf746824c979153f97676cc6ded56a998ba194a5",
+                "offsetUnit": "utf8_byte"
+              }
+            },
+            {
+              "factId": "A-01-hours",
+              "entityId": "A-01",
+              "objectId": "asset",
+              "attributeId": "hours",
+              "value": {
+                "amount": "120",
+                "unit": "h"
+              },
+              "recordedSeq": "1",
+              "status": "active",
+              "source": {
+                "sourceRef": {
+                  "id": "cq.industrial.rows.source",
+                  "version": "1.0.0",
+                  "digest": "sha256:8f372538efcf5d876b52b9db549dea5d53e59a828e66be9b6feae4495ed07dd3"
+                },
+                "startOffset": 36,
+                "endOffset": 55,
+                "quoteDigest": "sha256:fb45f5b8577db4f4b77e2449bf746824c979153f97676cc6ded56a998ba194a5",
+                "offsetUnit": "utf8_byte"
+              }
+            },
+            {
+              "factId": "A-01-hours",
+              "entityId": "A-01",
+              "objectId": "asset",
+              "attributeId": "hours",
+              "value": {
+                "amount": "120",
+                "unit": "h"
+              },
+              "recordedSeq": "2",
+              "status": "retracted",
+              "source": {
+                "sourceRef": {
+                  "id": "cq.industrial.rows.source",
+                  "version": "1.0.0",
+                  "digest": "sha256:8f372538efcf5d876b52b9db549dea5d53e59a828e66be9b6feae4495ed07dd3"
+                },
+                "startOffset": 36,
+                "endOffset": 55,
+                "quoteDigest": "sha256:fb45f5b8577db4f4b77e2449bf746824c979153f97676cc6ded56a998ba194a5",
+                "offsetUnit": "utf8_byte"
+              }
+            },
+            {
+              "factId": "A-01-alarm",
+              "entityId": "A-01",
+              "objectId": "asset",
+              "attributeId": "alarm",
+              "value": true,
+              "recordedSeq": "1",
+              "status": "active",
+              "source": {
+                "sourceRef": {
+                  "id": "cq.industrial.alarm.source",
+                  "version": "1.0.0",
+                  "digest": "sha256:c0a0e82478a994e49f452b65c8195bf1e94741fb74a38a387a95ca95c2b11b00"
+                },
+                "startOffset": 17,
+                "endOffset": 26,
+                "quoteDigest": "sha256:8e0aebfebdefbc5824c9bebbb2ddb83cf80734a0329e32f51d270dbff73f8c99",
+                "offsetUnit": "utf8_byte"
+              }
+            },
+            {
+              "factId": "A-01-alarm",
+              "entityId": "A-01",
+              "objectId": "asset",
+              "attributeId": "alarm",
+              "value": true,
+              "recordedSeq": "3",
+              "status": "retracted",
+              "source": {
+                "sourceRef": {
+                  "id": "cq.industrial.alarm.source",
+                  "version": "1.0.0",
+                  "digest": "sha256:c0a0e82478a994e49f452b65c8195bf1e94741fb74a38a387a95ca95c2b11b00"
+                },
+                "startOffset": 17,
+                "endOffset": 26,
+                "quoteDigest": "sha256:8e0aebfebdefbc5824c9bebbb2ddb83cf80734a0329e32f51d270dbff73f8c99",
+                "offsetUnit": "utf8_byte"
+              }
+            }
+          ],
+          "relations": [],
+          "structuredSources": [
+            {
+              "sourceRef": {
+                "id": "cq.industrial.rows.source",
+                "version": "1.0.0",
+                "digest": "sha256:8f372538efcf5d876b52b9db549dea5d53e59a828e66be9b6feae4495ed07dd3"
+              },
+              "objectId": "asset",
+              "attributeIds": [
+                "asset_code",
+                "hours"
+              ]
+            },
+            {
+              "sourceRef": {
+                "id": "cq.industrial.alarm.source",
+                "version": "1.0.0",
+                "digest": "sha256:c0a0e82478a994e49f452b65c8195bf1e94741fb74a38a387a95ca95c2b11b00"
+              },
+              "objectId": "asset",
+              "attributeIds": [
+                "alarm"
+              ]
+            }
+          ]
+        },
+        "intent": {
+          "projectId": "44444444-4444-4444-8444-444444444444",
+          "kind": "rule",
+          "objectId": "asset",
+          "subjectEntityId": "A-01",
+          "ruleId": "service-any"
+        },
+        "requiredCapabilities": [
+          "semantic_read",
+          "rule_evaluation"
+        ],
+        "requiredSources": [
+          {
+            "sourceRef": {
+              "id": "cq.industrial.source",
+              "version": "1.0.0",
+              "digest": "sha256:3f3eb751e3d27b03636bb2b7fd27c1736aa50605fafc6beec826b51a840a7ff2"
+            },
+            "startOffset": 532,
+            "endOffset": 590,
+            "quoteDigest": "sha256:04818f47e23e2060bc802183553b5a9636053fe976898a8b24e3d31125f1d2bc",
+            "offsetUnit": "utf8_byte"
+          },
+          {
+            "sourceRef": {
+              "id": "cq.industrial.rows.source",
+              "version": "1.0.0",
+              "digest": "sha256:8f372538efcf5d876b52b9db549dea5d53e59a828e66be9b6feae4495ed07dd3"
+            },
+            "startOffset": 36,
+            "endOffset": 55,
+            "quoteDigest": "sha256:fb45f5b8577db4f4b77e2449bf746824c979153f97676cc6ded56a998ba194a5",
+            "offsetUnit": "utf8_byte"
+          },
+          {
+            "sourceRef": {
+              "id": "cq.industrial.alarm.source",
+              "version": "1.0.0",
+              "digest": "sha256:c0a0e82478a994e49f452b65c8195bf1e94741fb74a38a387a95ca95c2b11b00"
+            },
+            "startOffset": 17,
+            "endOffset": 26,
+            "quoteDigest": "sha256:8e0aebfebdefbc5824c9bebbb2ddb83cf80734a0329e32f51d270dbff73f8c99",
+            "offsetUnit": "utf8_byte"
+          }
+        ],
+        "expected": {
+          "kind": "rule",
+          "conditionState": "unknown",
+          "applicability": "unknown",
+          "propositionState": "unknown"
+        },
+        "goldOrigin": "authored_oracle",
+        "derivation": "记录点3两条正向支撑都已撤回；没有新的否定观察，不能沿用旧true或把缺支撑改成false。",
+        "specRefs": [
+          "tasks/spec-v0.3a/execution-evidence.md#EX-11"
+        ]
+      },
+      {
+        "questionId": "industrial-historical",
+        "question": "回读撤回发生前的记录点1是否仍有原维护支撑？",
+        "taskKind": "rule_judgement",
+        "definitionRef": {
+          "id": "cq.industrial.definition",
+          "version": "1.0.0",
+          "digest": "sha256:0ded79d1c8e5b003f8c5e460d77dccf3e9260dd8782cc25d198bc57fd24eb937"
+        },
+        "ruleRefs": [
+          {
+            "id": "cq.industrial.rule.service-any",
+            "version": "1.0.0",
+            "digest": "sha256:3ba52a7adeab5cfafa0a6015359a760f8d9fae404d13598c60644b4533d6a1f3"
+          }
+        ],
+        "input": {
+          "dataMode": "synthetic",
+          "scopeRef": {
+            "tenantId": "11111111-1111-4111-8111-111111111111",
+            "spaceId": "aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa"
+          },
+          "projectId": "44444444-4444-4444-8444-444444444444",
+          "validAt": "2026-10-08T00:00:00Z",
+          "asOfRecordedSeq": "1",
+          "observations": [
+            {
+              "factId": "A-01-asset_code",
+              "entityId": "A-01",
+              "objectId": "asset",
+              "attributeId": "asset_code",
+              "value": "A-01",
+              "recordedSeq": "1",
+              "status": "active",
+              "source": {
+                "sourceRef": {
+                  "id": "cq.industrial.rows.source",
+                  "version": "1.0.0",
+                  "digest": "sha256:8f372538efcf5d876b52b9db549dea5d53e59a828e66be9b6feae4495ed07dd3"
+                },
+                "startOffset": 36,
+                "endOffset": 55,
+                "quoteDigest": "sha256:fb45f5b8577db4f4b77e2449bf746824c979153f97676cc6ded56a998ba194a5",
+                "offsetUnit": "utf8_byte"
+              }
+            },
+            {
+              "factId": "A-01-hours",
+              "entityId": "A-01",
+              "objectId": "asset",
+              "attributeId": "hours",
+              "value": {
+                "amount": "120",
+                "unit": "h"
+              },
+              "recordedSeq": "1",
+              "status": "active",
+              "source": {
+                "sourceRef": {
+                  "id": "cq.industrial.rows.source",
+                  "version": "1.0.0",
+                  "digest": "sha256:8f372538efcf5d876b52b9db549dea5d53e59a828e66be9b6feae4495ed07dd3"
+                },
+                "startOffset": 36,
+                "endOffset": 55,
+                "quoteDigest": "sha256:fb45f5b8577db4f4b77e2449bf746824c979153f97676cc6ded56a998ba194a5",
+                "offsetUnit": "utf8_byte"
+              }
+            },
+            {
+              "factId": "A-01-hours",
+              "entityId": "A-01",
+              "objectId": "asset",
+              "attributeId": "hours",
+              "value": {
+                "amount": "120",
+                "unit": "h"
+              },
+              "recordedSeq": "2",
+              "status": "retracted",
+              "source": {
+                "sourceRef": {
+                  "id": "cq.industrial.rows.source",
+                  "version": "1.0.0",
+                  "digest": "sha256:8f372538efcf5d876b52b9db549dea5d53e59a828e66be9b6feae4495ed07dd3"
+                },
+                "startOffset": 36,
+                "endOffset": 55,
+                "quoteDigest": "sha256:fb45f5b8577db4f4b77e2449bf746824c979153f97676cc6ded56a998ba194a5",
+                "offsetUnit": "utf8_byte"
+              }
+            },
+            {
+              "factId": "A-01-alarm",
+              "entityId": "A-01",
+              "objectId": "asset",
+              "attributeId": "alarm",
+              "value": true,
+              "recordedSeq": "1",
+              "status": "active",
+              "source": {
+                "sourceRef": {
+                  "id": "cq.industrial.alarm.source",
+                  "version": "1.0.0",
+                  "digest": "sha256:c0a0e82478a994e49f452b65c8195bf1e94741fb74a38a387a95ca95c2b11b00"
+                },
+                "startOffset": 17,
+                "endOffset": 26,
+                "quoteDigest": "sha256:8e0aebfebdefbc5824c9bebbb2ddb83cf80734a0329e32f51d270dbff73f8c99",
+                "offsetUnit": "utf8_byte"
+              }
+            },
+            {
+              "factId": "A-01-alarm",
+              "entityId": "A-01",
+              "objectId": "asset",
+              "attributeId": "alarm",
+              "value": true,
+              "recordedSeq": "3",
+              "status": "retracted",
+              "source": {
+                "sourceRef": {
+                  "id": "cq.industrial.alarm.source",
+                  "version": "1.0.0",
+                  "digest": "sha256:c0a0e82478a994e49f452b65c8195bf1e94741fb74a38a387a95ca95c2b11b00"
+                },
+                "startOffset": 17,
+                "endOffset": 26,
+                "quoteDigest": "sha256:8e0aebfebdefbc5824c9bebbb2ddb83cf80734a0329e32f51d270dbff73f8c99",
+                "offsetUnit": "utf8_byte"
+              }
+            }
+          ],
+          "relations": [],
+          "structuredSources": [
+            {
+              "sourceRef": {
+                "id": "cq.industrial.rows.source",
+                "version": "1.0.0",
+                "digest": "sha256:8f372538efcf5d876b52b9db549dea5d53e59a828e66be9b6feae4495ed07dd3"
+              },
+              "objectId": "asset",
+              "attributeIds": [
+                "asset_code",
+                "hours"
+              ]
+            },
+            {
+              "sourceRef": {
+                "id": "cq.industrial.alarm.source",
+                "version": "1.0.0",
+                "digest": "sha256:c0a0e82478a994e49f452b65c8195bf1e94741fb74a38a387a95ca95c2b11b00"
+              },
+              "objectId": "asset",
+              "attributeIds": [
+                "alarm"
+              ]
+            }
+          ]
+        },
+        "intent": {
+          "projectId": "44444444-4444-4444-8444-444444444444",
+          "kind": "rule",
+          "objectId": "asset",
+          "subjectEntityId": "A-01",
+          "ruleId": "service-any"
+        },
+        "requiredCapabilities": [
+          "semantic_read",
+          "rule_evaluation"
+        ],
+        "requiredSources": [
+          {
+            "sourceRef": {
+              "id": "cq.industrial.source",
+              "version": "1.0.0",
+              "digest": "sha256:3f3eb751e3d27b03636bb2b7fd27c1736aa50605fafc6beec826b51a840a7ff2"
+            },
+            "startOffset": 532,
+            "endOffset": 590,
+            "quoteDigest": "sha256:04818f47e23e2060bc802183553b5a9636053fe976898a8b24e3d31125f1d2bc",
+            "offsetUnit": "utf8_byte"
+          },
+          {
+            "sourceRef": {
+              "id": "cq.industrial.rows.source",
+              "version": "1.0.0",
+              "digest": "sha256:8f372538efcf5d876b52b9db549dea5d53e59a828e66be9b6feae4495ed07dd3"
+            },
+            "startOffset": 36,
+            "endOffset": 55,
+            "quoteDigest": "sha256:fb45f5b8577db4f4b77e2449bf746824c979153f97676cc6ded56a998ba194a5",
+            "offsetUnit": "utf8_byte"
+          },
+          {
+            "sourceRef": {
+              "id": "cq.industrial.alarm.source",
+              "version": "1.0.0",
+              "digest": "sha256:c0a0e82478a994e49f452b65c8195bf1e94741fb74a38a387a95ca95c2b11b00"
+            },
+            "startOffset": 17,
+            "endOffset": 26,
+            "quoteDigest": "sha256:8e0aebfebdefbc5824c9bebbb2ddb83cf80734a0329e32f51d270dbff73f8c99",
+            "offsetUnit": "utf8_byte"
+          }
+        ],
+        "expected": {
+          "kind": "rule",
+          "conditionState": "true",
+          "applicability": "applicable",
+          "propositionState": "true"
+        },
+        "goldOrigin": "authored_oracle",
+        "derivation": "记录点1早于2/3的撤回事件；两项原观察当时有效，历史答案不能被当前撤回重写。",
+        "specRefs": [
+          "tasks/spec-v0.3a/execution-evidence.md#EX-11"
+        ]
+      },
+      {
+        "questionId": "industrial-version-two",
+        "question": "定义v2新增的inspection_due能被读取吗？",
+        "taskKind": "published_facts",
+        "definitionRef": {
+          "id": "cq.industrial.definition",
+          "version": "2.0.0",
+          "digest": "sha256:1027362dabc83dc228818acc4700d65e684494505a8bc842b58466d44ff58070"
+        },
+        "ruleRefs": [],
+        "input": {
+          "dataMode": "synthetic",
+          "scopeRef": {
+            "tenantId": "11111111-1111-4111-8111-111111111111",
+            "spaceId": "aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa"
+          },
+          "projectId": "44444444-4444-4444-8444-444444444444",
+          "validAt": "2026-10-08T00:00:00Z",
+          "asOfRecordedSeq": "2",
+          "observations": [
+            {
+              "factId": "A-01-asset_code",
+              "entityId": "A-01",
+              "objectId": "asset",
+              "attributeId": "asset_code",
+              "value": "A-01",
+              "recordedSeq": "1",
+              "status": "active",
+              "source": {
+                "sourceRef": {
+                  "id": "cq.industrial.rows.source",
+                  "version": "1.0.0",
+                  "digest": "sha256:8f372538efcf5d876b52b9db549dea5d53e59a828e66be9b6feae4495ed07dd3"
+                },
+                "startOffset": 36,
+                "endOffset": 55,
+                "quoteDigest": "sha256:fb45f5b8577db4f4b77e2449bf746824c979153f97676cc6ded56a998ba194a5",
+                "offsetUnit": "utf8_byte"
+              }
+            },
+            {
+              "factId": "a1-inspection-v2",
+              "entityId": "A-01",
+              "objectId": "asset",
+              "attributeId": "inspection_due",
+              "value": true,
+              "recordedSeq": "2",
+              "status": "active",
+              "source": {
+                "sourceRef": {
+                  "id": "cq.industrial.version-two.source",
+                  "version": "1.0.0",
+                  "digest": "sha256:a1d83c39d6212a73cec568c720c9acbf8a4a57618c258d89a90b81e1df0e12fb"
+                },
+                "startOffset": 26,
+                "endOffset": 35,
+                "quoteDigest": "sha256:8e0aebfebdefbc5824c9bebbb2ddb83cf80734a0329e32f51d270dbff73f8c99",
+                "offsetUnit": "utf8_byte"
+              }
+            }
+          ],
+          "relations": [],
+          "structuredSources": [
+            {
+              "sourceRef": {
+                "id": "cq.industrial.rows.source",
+                "version": "1.0.0",
+                "digest": "sha256:8f372538efcf5d876b52b9db549dea5d53e59a828e66be9b6feae4495ed07dd3"
+              },
+              "objectId": "asset",
+              "attributeIds": [
+                "asset_code"
+              ]
+            },
+            {
+              "sourceRef": {
+                "id": "cq.industrial.version-two.source",
+                "version": "1.0.0",
+                "digest": "sha256:a1d83c39d6212a73cec568c720c9acbf8a4a57618c258d89a90b81e1df0e12fb"
+              },
+              "objectId": "asset",
+              "attributeIds": [
+                "inspection_due"
+              ]
+            }
+          ]
+        },
+        "intent": {
+          "projectId": "44444444-4444-4444-8444-444444444444",
+          "kind": "attribute",
+          "objectId": "asset",
+          "subjectEntityId": "A-01",
+          "attributeId": "inspection_due"
+        },
+        "requiredCapabilities": [
+          "semantic_read"
+        ],
+        "requiredSources": [
+          {
+            "sourceRef": {
+              "id": "cq.industrial.rows.source",
+              "version": "1.0.0",
+              "digest": "sha256:8f372538efcf5d876b52b9db549dea5d53e59a828e66be9b6feae4495ed07dd3"
+            },
+            "startOffset": 36,
+            "endOffset": 55,
+            "quoteDigest": "sha256:fb45f5b8577db4f4b77e2449bf746824c979153f97676cc6ded56a998ba194a5",
+            "offsetUnit": "utf8_byte"
+          },
+          {
+            "sourceRef": {
+              "id": "cq.industrial.version-two.source",
+              "version": "1.0.0",
+              "digest": "sha256:a1d83c39d6212a73cec568c720c9acbf8a4a57618c258d89a90b81e1df0e12fb"
+            },
+            "startOffset": 26,
+            "endOffset": 35,
+            "quoteDigest": "sha256:8e0aebfebdefbc5824c9bebbb2ddb83cf80734a0329e32f51d270dbff73f8c99",
+            "offsetUnit": "utf8_byte"
+          }
+        ],
+        "expected": {
+          "kind": "value",
+          "value": true
+        },
+        "goldOrigin": "authored_oracle",
+        "derivation": "v2明示新增inspection_due，固定v2观察为true；读取必须绑定v2，不能借用v1的缺字段结果。",
+        "specRefs": [
+          "tasks/spec-v0.3a/execution-evidence.md#EX-11"
+        ]
+      },
+      {
+        "questionId": "industrial-version-one-denial",
+        "question": "拿v1定义去读仅v2声明的inspection_due能成功吗？",
+        "taskKind": "published_facts",
+        "definitionRef": {
+          "id": "cq.industrial.definition",
+          "version": "1.0.0",
+          "digest": "sha256:0ded79d1c8e5b003f8c5e460d77dccf3e9260dd8782cc25d198bc57fd24eb937"
+        },
+        "ruleRefs": [],
+        "input": {
+          "dataMode": "synthetic",
+          "scopeRef": {
+            "tenantId": "11111111-1111-4111-8111-111111111111",
+            "spaceId": "aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa"
+          },
+          "projectId": "44444444-4444-4444-8444-444444444444",
+          "validAt": "2026-10-08T00:00:00Z",
+          "asOfRecordedSeq": "2",
+          "observations": [
+            {
+              "factId": "A-01-asset_code",
+              "entityId": "A-01",
+              "objectId": "asset",
+              "attributeId": "asset_code",
+              "value": "A-01",
+              "recordedSeq": "1",
+              "status": "active",
+              "source": {
+                "sourceRef": {
+                  "id": "cq.industrial.rows.source",
+                  "version": "1.0.0",
+                  "digest": "sha256:8f372538efcf5d876b52b9db549dea5d53e59a828e66be9b6feae4495ed07dd3"
+                },
+                "startOffset": 36,
+                "endOffset": 55,
+                "quoteDigest": "sha256:fb45f5b8577db4f4b77e2449bf746824c979153f97676cc6ded56a998ba194a5",
+                "offsetUnit": "utf8_byte"
+              }
+            },
+            {
+              "factId": "a1-inspection-v2",
+              "entityId": "A-01",
+              "objectId": "asset",
+              "attributeId": "inspection_due",
+              "value": true,
+              "recordedSeq": "2",
+              "status": "active",
+              "source": {
+                "sourceRef": {
+                  "id": "cq.industrial.version-two.source",
+                  "version": "1.0.0",
+                  "digest": "sha256:a1d83c39d6212a73cec568c720c9acbf8a4a57618c258d89a90b81e1df0e12fb"
+                },
+                "startOffset": 26,
+                "endOffset": 35,
+                "quoteDigest": "sha256:8e0aebfebdefbc5824c9bebbb2ddb83cf80734a0329e32f51d270dbff73f8c99",
+                "offsetUnit": "utf8_byte"
+              }
+            }
+          ],
+          "relations": [],
+          "structuredSources": [
+            {
+              "sourceRef": {
+                "id": "cq.industrial.rows.source",
+                "version": "1.0.0",
+                "digest": "sha256:8f372538efcf5d876b52b9db549dea5d53e59a828e66be9b6feae4495ed07dd3"
+              },
+              "objectId": "asset",
+              "attributeIds": [
+                "asset_code"
+              ]
+            },
+            {
+              "sourceRef": {
+                "id": "cq.industrial.version-two.source",
+                "version": "1.0.0",
+                "digest": "sha256:a1d83c39d6212a73cec568c720c9acbf8a4a57618c258d89a90b81e1df0e12fb"
+              },
+              "objectId": "asset",
+              "attributeIds": [
+                "inspection_due"
+              ]
+            }
+          ]
+        },
+        "intent": {
+          "projectId": "44444444-4444-4444-8444-444444444444",
+          "kind": "attribute",
+          "objectId": "asset",
+          "subjectEntityId": "A-01",
+          "attributeId": "inspection_due"
+        },
+        "requiredCapabilities": [
+          "semantic_read"
+        ],
+        "requiredSources": [
+          {
+            "sourceRef": {
+              "id": "cq.industrial.rows.source",
+              "version": "1.0.0",
+              "digest": "sha256:8f372538efcf5d876b52b9db549dea5d53e59a828e66be9b6feae4495ed07dd3"
+            },
+            "startOffset": 36,
+            "endOffset": 55,
+            "quoteDigest": "sha256:fb45f5b8577db4f4b77e2449bf746824c979153f97676cc6ded56a998ba194a5",
+            "offsetUnit": "utf8_byte"
+          },
+          {
+            "sourceRef": {
+              "id": "cq.industrial.version-two.source",
+              "version": "1.0.0",
+              "digest": "sha256:a1d83c39d6212a73cec568c720c9acbf8a4a57618c258d89a90b81e1df0e12fb"
+            },
+            "startOffset": 26,
+            "endOffset": 35,
+            "quoteDigest": "sha256:8e0aebfebdefbc5824c9bebbb2ddb83cf80734a0329e32f51d270dbff73f8c99",
+            "offsetUnit": "utf8_byte"
+          }
+        ],
+        "expected": {
+          "kind": "refusal",
+          "reason": "definition_version_mismatch"
+        },
+        "goldOrigin": "authored_oracle",
+        "derivation": "v1未声明inspection_due；不能将v2事实静默解释成v1字段，必须拒绝版本/字段绑定。",
+        "specRefs": [
+          "tasks/spec-v0.3a/execution-evidence.md#EX-11"
+        ]
+      },
+      {
+        "questionId": "industrial-threshold",
+        "question": "A-03 恰好100 h且无例外时满足维护阈值吗？",
+        "taskKind": "rule_judgement",
+        "definitionRef": {
+          "id": "cq.industrial.definition",
+          "version": "1.0.0",
+          "digest": "sha256:0ded79d1c8e5b003f8c5e460d77dccf3e9260dd8782cc25d198bc57fd24eb937"
+        },
+        "ruleRefs": [
+          {
+            "id": "cq.industrial.rule.service",
+            "version": "1.0.0",
+            "digest": "sha256:64e42386a57a7d00f777548bda8ccd88b842a3928bf8f1508781abf210187878"
+          }
+        ],
+        "input": {
+          "dataMode": "synthetic",
+          "scopeRef": {
+            "tenantId": "11111111-1111-4111-8111-111111111111",
+            "spaceId": "aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa"
+          },
+          "projectId": "44444444-4444-4444-8444-444444444444",
+          "validAt": "2026-10-08T00:00:00Z",
+          "asOfRecordedSeq": "1",
+          "observations": [
+            {
+              "factId": "A-03-asset_code",
+              "entityId": "A-03",
+              "objectId": "asset",
+              "attributeId": "asset_code",
+              "value": "A-03",
+              "recordedSeq": "1",
+              "status": "active",
+              "source": {
+                "sourceRef": {
+                  "id": "cq.industrial.boundary.source",
+                  "version": "1.0.0",
+                  "digest": "sha256:6a8fcbbecb38863e645e2005b9251df4dc05c32e2a75d21206e3e1af8b8d70dd"
+                },
+                "startOffset": 24,
+                "endOffset": 38,
+                "quoteDigest": "sha256:66a4899831ae05393e9357baa735533b1ac1709cbce9b357cba4de4ac8536fe3",
+                "offsetUnit": "utf8_byte"
+              }
+            },
+            {
+              "factId": "A-03-hours",
+              "entityId": "A-03",
+              "objectId": "asset",
+              "attributeId": "hours",
+              "value": {
+                "amount": "100",
+                "unit": "h"
+              },
+              "recordedSeq": "1",
+              "status": "active",
+              "source": {
+                "sourceRef": {
+                  "id": "cq.industrial.boundary.source",
+                  "version": "1.0.0",
+                  "digest": "sha256:6a8fcbbecb38863e645e2005b9251df4dc05c32e2a75d21206e3e1af8b8d70dd"
+                },
+                "startOffset": 24,
+                "endOffset": 38,
+                "quoteDigest": "sha256:66a4899831ae05393e9357baa735533b1ac1709cbce9b357cba4de4ac8536fe3",
+                "offsetUnit": "utf8_byte"
+              }
+            },
+            {
+              "factId": "A-03-exempt",
+              "entityId": "A-03",
+              "objectId": "asset",
+              "attributeId": "exempt",
+              "value": false,
+              "recordedSeq": "1",
+              "status": "active",
+              "source": {
+                "sourceRef": {
+                  "id": "cq.industrial.boundary.source",
+                  "version": "1.0.0",
+                  "digest": "sha256:6a8fcbbecb38863e645e2005b9251df4dc05c32e2a75d21206e3e1af8b8d70dd"
+                },
+                "startOffset": 24,
+                "endOffset": 38,
+                "quoteDigest": "sha256:66a4899831ae05393e9357baa735533b1ac1709cbce9b357cba4de4ac8536fe3",
+                "offsetUnit": "utf8_byte"
+              }
+            }
+          ],
+          "relations": [],
+          "structuredSources": [
+            {
+              "sourceRef": {
+                "id": "cq.industrial.boundary.source",
+                "version": "1.0.0",
+                "digest": "sha256:6a8fcbbecb38863e645e2005b9251df4dc05c32e2a75d21206e3e1af8b8d70dd"
+              },
+              "objectId": "asset",
+              "attributeIds": [
+                "asset_code",
+                "hours",
+                "exempt"
+              ]
+            }
+          ]
+        },
+        "intent": {
+          "projectId": "44444444-4444-4444-8444-444444444444",
+          "kind": "rule",
+          "objectId": "asset",
+          "subjectEntityId": "A-03",
+          "ruleId": "service"
+        },
+        "requiredCapabilities": [
+          "semantic_read",
+          "rule_evaluation"
+        ],
+        "requiredSources": [
+          {
+            "sourceRef": {
+              "id": "cq.industrial.source",
+              "version": "1.0.0",
+              "digest": "sha256:3f3eb751e3d27b03636bb2b7fd27c1736aa50605fafc6beec826b51a840a7ff2"
+            },
+            "startOffset": 244,
+            "endOffset": 315,
+            "quoteDigest": "sha256:b469c19c6c0b09016225d42faa78d82a6295c5f6e08ad329549f776ac128ee3e",
+            "offsetUnit": "utf8_byte"
+          },
+          {
+            "sourceRef": {
+              "id": "cq.industrial.boundary.source",
+              "version": "1.0.0",
+              "digest": "sha256:6a8fcbbecb38863e645e2005b9251df4dc05c32e2a75d21206e3e1af8b8d70dd"
+            },
+            "startOffset": 24,
+            "endOffset": 38,
+            "quoteDigest": "sha256:66a4899831ae05393e9357baa735533b1ac1709cbce9b357cba4de4ac8536fe3",
+            "offsetUnit": "utf8_byte"
+          }
+        ],
+        "expected": {
+          "kind": "rule",
+          "conditionState": "true",
+          "applicability": "applicable",
+          "propositionState": "true"
+        },
+        "goldOrigin": "authored_oracle",
+        "derivation": "人工规则用>=100而不是>100；精确100 h在闭边界内，exempt=false不阻断。",
+        "specRefs": [
+          "tasks/spec-v0.3a/execution-evidence.md#EX-11"
+        ]
+      },
+      {
+        "questionId": "industrial-relation",
+        "question": "A-01 的已确认维护车间是哪一个？",
+        "taskKind": "relations",
+        "definitionRef": {
+          "id": "cq.industrial.definition",
+          "version": "1.0.0",
+          "digest": "sha256:0ded79d1c8e5b003f8c5e460d77dccf3e9260dd8782cc25d198bc57fd24eb937"
+        },
+        "ruleRefs": [],
+        "input": {
+          "dataMode": "synthetic",
+          "scopeRef": {
+            "tenantId": "11111111-1111-4111-8111-111111111111",
+            "spaceId": "aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa"
+          },
+          "projectId": "44444444-4444-4444-8444-444444444444",
+          "validAt": "2026-10-08T00:00:00Z",
+          "asOfRecordedSeq": "1",
+          "observations": [
+            {
+              "factId": "relation-asset-code",
+              "entityId": "A-01",
+              "objectId": "asset",
+              "attributeId": "asset_code",
+              "value": "A-01",
+              "recordedSeq": "1",
+              "status": "active",
+              "source": {
+                "sourceRef": {
+                  "id": "cq.industrial.rows.source",
+                  "version": "1.0.0",
+                  "digest": "sha256:8f372538efcf5d876b52b9db549dea5d53e59a828e66be9b6feae4495ed07dd3"
+                },
+                "startOffset": 36,
+                "endOffset": 55,
+                "quoteDigest": "sha256:fb45f5b8577db4f4b77e2449bf746824c979153f97676cc6ded56a998ba194a5",
+                "offsetUnit": "utf8_byte"
+              }
+            },
+            {
+              "factId": "relation-shop-code",
+              "entityId": "W-01",
+              "objectId": "workshop",
+              "attributeId": "shop_code",
+              "value": "W-01",
+              "recordedSeq": "1",
+              "status": "active",
+              "source": {
+                "sourceRef": {
+                  "id": "cq.industrial.workshop.source",
+                  "version": "1.0.0",
+                  "digest": "sha256:adaf170554ab1a661bb14c8c33b7d7b26620a12939126ee3aac2ae6452be58cf"
+                },
+                "startOffset": 18,
+                "endOffset": 28,
+                "quoteDigest": "sha256:84962322b6260dd43057af03ee9244c92c106789a82a56959ab652134655f082",
+                "offsetUnit": "utf8_byte"
+              }
+            }
+          ],
+          "relations": [
+            {
+              "factId": "A-01-in-workshop",
+              "relationId": "in_workshop",
+              "fromEntityId": "A-01",
+              "toEntityId": "W-01",
+              "endpointsResolved": true,
+              "recordedSeq": "1",
+              "status": "active",
+              "source": {
+                "sourceRef": {
+                  "id": "cq.industrial.rows.source",
+                  "version": "1.0.0",
+                  "digest": "sha256:8f372538efcf5d876b52b9db549dea5d53e59a828e66be9b6feae4495ed07dd3"
+                },
+                "startOffset": 36,
+                "endOffset": 55,
+                "quoteDigest": "sha256:fb45f5b8577db4f4b77e2449bf746824c979153f97676cc6ded56a998ba194a5",
+                "offsetUnit": "utf8_byte"
+              }
+            }
+          ],
+          "structuredSources": [
+            {
+              "sourceRef": {
+                "id": "cq.industrial.rows.source",
+                "version": "1.0.0",
+                "digest": "sha256:8f372538efcf5d876b52b9db549dea5d53e59a828e66be9b6feae4495ed07dd3"
+              },
+              "objectId": "asset",
+              "attributeIds": [
+                "asset_code"
+              ]
+            },
+            {
+              "sourceRef": {
+                "id": "cq.industrial.workshop.source",
+                "version": "1.0.0",
+                "digest": "sha256:adaf170554ab1a661bb14c8c33b7d7b26620a12939126ee3aac2ae6452be58cf"
+              },
+              "objectId": "workshop",
+              "attributeIds": [
+                "shop_code"
+              ]
+            }
+          ]
+        },
+        "intent": {
+          "kind": "relation",
+          "projectId": "44444444-4444-4444-8444-444444444444",
+          "objectId": "asset",
+          "subjectEntityId": "A-01",
+          "relationId": "in_workshop"
+        },
+        "requiredCapabilities": [
+          "semantic_read",
+          "relation_read"
+        ],
+        "requiredSources": [
+          {
+            "sourceRef": {
+              "id": "cq.industrial.rows.source",
+              "version": "1.0.0",
+              "digest": "sha256:8f372538efcf5d876b52b9db549dea5d53e59a828e66be9b6feae4495ed07dd3"
+            },
+            "startOffset": 36,
+            "endOffset": 55,
+            "quoteDigest": "sha256:fb45f5b8577db4f4b77e2449bf746824c979153f97676cc6ded56a998ba194a5",
+            "offsetUnit": "utf8_byte"
+          },
+          {
+            "sourceRef": {
+              "id": "cq.industrial.workshop.source",
+              "version": "1.0.0",
+              "digest": "sha256:adaf170554ab1a661bb14c8c33b7d7b26620a12939126ee3aac2ae6452be58cf"
+            },
+            "startOffset": 18,
+            "endOffset": 28,
+            "quoteDigest": "sha256:84962322b6260dd43057af03ee9244c92c106789a82a56959ab652134655f082",
+            "offsetUnit": "utf8_byte"
+          }
+        ],
+        "expected": {
+          "kind": "relation",
+          "targetEntityIds": [
+            "W-01"
+          ],
+          "completeness": "complete"
+        },
+        "goldOrigin": "authored_oracle",
+        "derivation": "独立资产原始行明确写 A-01 in_workshop=W-01；车间是否有人值守不改变已确认的关系目标。",
+        "specRefs": [
+          "tasks/spec-v0.3a/execution-evidence.md#EX-4.3"
+        ]
+      },
+      {
+        "questionId": "industrial-registered-compute",
+        "question": "注册的合成汇总操作对验核金额输入给出的总金额是多少？",
+        "taskKind": "compute",
+        "definitionRef": {
+          "id": "cq.industrial.definition",
+          "version": "1.0.0",
+          "digest": "sha256:0ded79d1c8e5b003f8c5e460d77dccf3e9260dd8782cc25d198bc57fd24eb937"
+        },
+        "ruleRefs": [],
+        "input": {
+          "dataMode": "synthetic",
+          "scopeRef": {
+            "tenantId": "11111111-1111-4111-8111-111111111111",
+            "spaceId": "aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa"
+          },
+          "projectId": "44444444-4444-4444-8444-444444444444",
+          "validAt": "2026-10-08T00:00:00Z",
+          "asOfRecordedSeq": "1",
+          "observations": [],
+          "relations": []
+        },
+        "intent": {
+          "kind": "registered_compute",
+          "projectId": "44444444-4444-4444-8444-444444444444",
+          "operationRef": {
+            "id": "example.compute.aggregate",
+            "version": "1"
+          },
+          "inputSourceRef": {
+            "id": "cq.industrial.compute-input.source",
+            "version": "1.0.0",
+            "digest": "sha256:84efdae6315e73d780c5329fed2b441f24f9e559763d391f9a28a4658be0f058"
+          },
+          "metric": "total_cost"
+        },
+        "requiredCapabilities": [
+          "registered_compute"
+        ],
+        "requiredSources": [
+          {
+            "sourceRef": {
+              "id": "cq.industrial.compute-input.source",
+              "version": "1.0.0",
+              "digest": "sha256:84efdae6315e73d780c5329fed2b441f24f9e559763d391f9a28a4658be0f058"
+            },
+            "startOffset": 0,
+            "endOffset": 191,
+            "quoteDigest": "sha256:fff6e86462eb2bcd49369cdc7f8dc8b987b139f4ffbef2c2e5dbc7dd9789fc76",
+            "offsetUnit": "utf8_byte"
+          }
+        ],
+        "expected": {
+          "kind": "value",
+          "value": {
+            "amount": "39",
+            "currency": "CNY"
+          }
+        },
+        "goldOrigin": "authored_oracle",
+        "derivation": "独立金额原始 JSON 仅 35 CNY 和 4 CNY 两行计入货币轴；3 each 与 4 each 是另一个单位轴，人工金标为 39 CNY。真实客户报价仍未验证。",
+        "specRefs": [
+          "tasks/spec-v0.3a/execution-evidence.md#EX-6"
+        ]
+      }
+    ],
+    "externalGold": {
+      "status": "missing_resources",
+      "acceptance": "unverified",
+      "missingResources": [
+        "authorised_quote_inputs",
+        "human_quote_gold",
+        "customer_compute_binding"
+      ]
+    }
+  }
+}

@@ -20,11 +20,11 @@ Dependencies: #181
 
 ## 验收条件
 
-- [ ] 支持编辑、拒绝、同义合并/异义保留及拆分建议，展示受影响的属性、端点、身份和规则。
-- [ ] 重复标识、悬空端点、错单位与非法类型/基数阻断发布；记录修订差异和裁决理由。
-- [ ] 破坏兼容的定义采用新版本与明确迁移策略；旧运行、实例和历史不静默改写。
-- [ ] 通过ReviewableCandidateReader复用现有review tables/routes审核TBox；编辑生成新candidate revision，原approve不沿用，不新建另一份决定表。
-- [ ] 实际结果与证据写入完成记录；同步必要契约、使用说明和本批状态，不因源码存在或受控模型响应而虚报完成。
+- [x] 支持编辑、拒绝、同义合并/异义保留及拆分建议，展示受影响的属性、端点、身份和规则。
+- [x] 重复标识、悬空端点、错单位与非法类型/基数阻断发布；记录修订差异和裁决理由。
+- [x] 破坏兼容的定义采用新版本与明确迁移策略；旧运行、实例和历史不静默改写。
+- [x] 通过ReviewableCandidateReader复用现有review tables/routes审核TBox；编辑生成新candidate revision，原approve不沿用，不新建另一份决定表。
+- [x] 实际结果与证据写入完成记录；同步必要契约、使用说明和本批状态，不因源码存在或受控模型响应而虚报完成。
 
 ## 需求与规格
 
@@ -54,5 +54,14 @@ Dependencies: #181
 
 ## 完成记录
 
-- 当前：未开工；验证未运行。GitHub Issue：[#183](https://github.com/Yijtu/ontology/issues/183)；文档提交不代表功能完成。
-- 实现后记录：提交/PR、适用命令结果、满足的验收、未验证/外部条件、迁移配置与兼容影响。
+- 当前：已在分支 `feat/v03-009-definition-edit` 实现，提交 `feat: definition editing, disambiguation and compatibility validation (#183)`。GitHub Issue：[#183](https://github.com/Yijtu/ontology/issues/183)。
+- 实现：`packages/contracts`（`definition-editing.ts`、`candidate-review.ts`，新增 `ReviewableCandidateReader` 与编辑/裁决/兼容契约）；`packages/application/assets/definition-candidates`（`editing-service.ts`、`validation.ts`、`in-memory-editing-store.ts`、`reviewable-reader.ts`）；`packages/semantic-engine/publication`（复用现有 review 表/路由审核 TBox，发布端显式拒绝 definition 候选）；`apps/api/src/http/definition-editing.ts` + `app.ts`/`index.ts` 路由；迁移 `migrations/control/063_definition_edit_adjudications.sql`。
+- 命令与结果（在 `platform/` 执行）：
+  - `npx vitest run tests/unit/definition-candidate-editing.spec.ts`：14 passed。
+  - `npx vitest run tests/integration/definition-editing-postgres.spec.ts`（真实 PostgreSQL，迁移 063 + RLS + 非执行约束）：6 passed。
+  - `npx vitest run tests/unit`：116 files / 1336 passed；`tests/contracts`：12 files / 151 passed。
+  - 回归：`definition-candidate-generation.spec.ts`、`asset-candidates-postgres.spec.ts`、`semantic-publications-postgres.spec.ts` 全通过。
+  - `pnpm run typecheck`、`pnpm run lint`、`pnpm run boundaries`：通过。
+- 满足验收：编辑/拒绝/同义合并/异义保留/拆分及影响面展示；重复标识、悬空端点、错单位、非法基数类型阻断发布；与已发布版本差异及破坏性变更需显式修订策略；不支持规则保存为非执行；TBox 经 `ReviewableCandidateReader` 复用现有审核表/路由，编辑生成新 candidate revision，原 approve 不沿用，不新增决定表。
+- 未验证/外部条件：生产装配（`core-local-composition`）尚未注入 `CompositeReviewableCandidateReader`，且裁决表 `asset_definition_adjudications` 暂无 PG 适配器（当前由 `InMemoryDefinitionEditingStore` 提供；迁移 063 已用真实 PG 校验 schema/RLS/约束）。作为后续工作记录，不在本卡虚报完成。
+

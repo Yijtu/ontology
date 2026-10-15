@@ -1,4 +1,4 @@
-import { isToolContext } from '@ontology/contracts'
+import { isToolContext, ReviewableCandidateReadError } from '@ontology/contracts'
 import type {
   AppendCandidateReviewInput,
   CandidateRecord,
@@ -12,6 +12,8 @@ import type {
   PublicationCandidateRef,
   PublicationIdentityBinding,
   PublicationMaterializationFence,
+  PublicationRuleProjectPin,
+  ProjectFactPublicationFence,
   PublishedRuleFilter,
   PublishedRuleVersion,
   PublishedStatement,
@@ -29,12 +31,13 @@ import type {
   Uuid,
   VersionRef,
 } from '@ontology/contracts'
-import { SemanticPublicationStoreError } from '@ontology/contracts'
+import { SemanticPublicationStoreError, assertProjectFactInputShape, assertRuleDependencyShape, candidateSourceRef } from '@ontology/contracts'
 import { validateRuleConclusionBinding } from '@ontology/core'
 import { sha256DigestOf } from '../definitions/canonical'
 import { SemanticPublicationError } from './errors'
 import type { PublicationRejectionReason } from './errors'
 import type { SemanticPublicationServiceDependencies } from './types'
+import { publishedRuleRef } from '../rules/dependencies'
 
 const REVIEWER_ROLES: readonly string[] = ['semantic-reviewer', 'platform-admin']
 const PUBLISHER_ROLES: readonly string[] = ['semantic-publisher', 'platform-admin']
@@ -96,6 +99,9 @@ export class SemanticPublicationService {
   readonly #candidates: SemanticPublicationServiceDependencies['candidates']
   readonly #schemaSource: SemanticPublicationServiceDependencies['schemaSource']
   readonly #identity: SemanticPublicationServiceDependencies['identity']
+  readonly #instanceRecords: SemanticPublicationServiceDependencies['instanceRecords']
+  readonly #projects: SemanticPublicationServiceDependencies['projects']
+  readonly #reviewableCandidates: SemanticPublicationServiceDependencies['reviewableCandidates']
   readonly #now: () => string
   readonly #newId: () => string
 
@@ -104,6 +110,9 @@ export class SemanticPublicationService {
     this.#candidates = dependencies.candidates
     this.#schemaSource = dependencies.schemaSource
     this.#identity = dependencies.identity
+    this.#instanceRecords = dependencies.instanceRecords
+    this.#projects = dependencies.projects
+    this.#reviewableCandidates = dependencies.reviewableCandidates
     this.#now = dependencies.now ?? (() => new Date().toISOString())
     this.#newId = dependencies.newId ?? (() => globalThis.crypto.randomUUID())
   }
@@ -118,15 +127,34 @@ export class SemanticPublicationService {
     if (!nonEmpty(request.reason)) {
       throw new SemanticPublicationError('INVALID_ARGUMENT', 'a review requires a reason')
     }
-    const candidate = await this.#requireCandidate(scopeRef, request.candidateId, ctx)
+    // A TBox candidate is reviewed through exactly this store/route; the reader only proves the
+    // candidate is visible (instance OR definition) in the scope. No second decision table.
+    let contentDigest: CandidateReviewRecord['contentDigest']
+    if (this.#reviewableCandidates === undefined) {
+      const candidate = await this.#requireCandidate(scopeRef, request.candidateId, ctx)
+      if (candidate.inputVersion.projectFact !== undefined || candidate.kind === 'rule' && candidate.projectId !== undefined) contentDigest = candidate.idempotencyKey
+    } else {
+      const view = await this.#reviewableCandidates.readCandidate(scopeRef, request.candidateId, ctx).catch((error: unknown) => {
+        if (error instanceof ReviewableCandidateReadError) throw new SemanticPublicationError('CANDIDATE_DOMAIN_UNPUBLISHABLE', error.message, { cause: error })
+        throw error
+      })
+      if (view === undefined) {
+        throw new SemanticPublicationError(
+          'CANDIDATE_NOT_FOUND',
+          `candidate ${request.candidateId} is not visible in this scope`,
+        )
+      }
+      contentDigest = view.contentDigest
+    }
     const draft: CandidateReviewDraft = {
       reviewId: this.#newId(),
-      candidateId: candidate.candidateId,
+      candidateId: request.candidateId,
       decision: request.decision,
       reason: request.reason,
       evidenceRefs: request.evidenceRefs ?? [],
       recordedAt: this.#now(),
       actor: ctx.principal.subjectId,
+      ...(contentDigest === undefined ? {} : { contentDigest }),
     }
     const input: AppendCandidateReviewInput = { expectedRevision: request.expectedRevision, draft }
     return this.#mapStoreError(() => this.#store.appendReview(scopeRef, input, ctx))
@@ -170,9 +198,21 @@ export class SemanticPublicationService {
     const statements: PublishedStatement[] = []
     const ruleVersions: PublishedRuleVersion[] = []
     const identityBindings: PublicationIdentityBinding[] = []
+    const projectFactFences: ProjectFactPublicationFence[] = []
+    const ruleProjectPins: PublicationRuleProjectPin[] = []
     let outboxJobId: Uuid | undefined
 
     for (const ref of request.approvedCandidateRefs) {
+      if (this.#reviewableCandidates !== undefined) {
+        const view = await this.#reviewableCandidates.readCandidate(scopeRef, ref.candidateId, ctx)
+        if (view !== undefined && view.domain === 'definition') {
+          throw new SemanticPublicationError(
+            'CANDIDATE_DOMAIN_UNPUBLISHABLE',
+            `candidate ${ref.candidateId} is a definition candidate and was not published as a fact or rule`,
+            { reasons: [{ candidateId: ref.candidateId, code: 'DEFINITION_DOMAIN', message: 'definition candidates publish through the definition publication flow' }] },
+          )
+        }
+      }
       const candidate = await this.#requireCandidate(scopeRef, ref.candidateId, ctx)
       if (candidate.kind !== ref.kind) {
         throw new SemanticPublicationError(
@@ -183,6 +223,9 @@ export class SemanticPublicationService {
       await this.#requireApproved(scopeRef, candidate, ctx)
       this.#assertSource(candidate)
       this.#assertSchemaPin(candidate, request.schemaRef)
+      const mapped = await this.#mappedFences(scopeRef, candidate, ctx)
+      projectFactFences.push(...mapped)
+      for (const fence of mapped) identityBindings.push({ candidateId: fence.source.entityCandidateId, entityId: fence.entityId })
       outboxJobId ??= candidate.jobId
 
       if (candidate.kind === 'entity') {
@@ -190,8 +233,11 @@ export class SemanticPublicationService {
         identityBindings.push(binding)
         statements.push(this.#statementOfEntity(candidate, binding.entityId, publicationId, publishedAt))
       } else if (candidate.kind === 'relation') {
-        statements.push(this.#statementOfRelation(candidate, publicationId, publishedAt))
+        statements.push(this.#statementOfRelation(candidate, publicationId, publishedAt, mapped))
       } else if (candidate.kind === 'rule') {
+        const projectPin = await this.#ruleProjectPin(scopeRef, candidate, request.schemaRef, ctx)
+        if (projectPin !== undefined) ruleProjectPins.push(projectPin)
+        await this.#assertRuleDependencies(scopeRef, candidate, request.schemaRef, ctx)
         if (candidate.conflicts.length > 0) {
           throw new SemanticPublicationError(
             'CANDIDATE_CONFLICTED',
@@ -254,7 +300,8 @@ export class SemanticPublicationService {
       ...ruleVersions.map((rule) => this.#fenceFor(rule.ruleVersionId, 'rule_changed', publishedAt)),
     ]
 
-    const contentDigest = sha256DigestOf({ schemaRef: request.schemaRef, statements, ruleVersions })
+    const projectPins = ruleProjectPins.length === 0 ? {} : { ruleProjectPins }
+    const contentDigest = sha256DigestOf({ schemaRef: request.schemaRef, statements, ruleVersions, ...projectPins })
     const versionRef: VersionRef = { id: publicationId, version: '1.0.0', digest: contentDigest }
     const outbox: NewOutboxMessage = {
       outboxId: this.#newId(),
@@ -280,6 +327,7 @@ export class SemanticPublicationService {
       approvedCandidateRefs: [...request.approvedCandidateRefs].sort((left, right) =>
         left.candidateId < right.candidateId ? -1 : 1,
       ),
+      ...projectPins,
     })
     const input: PublishSemanticPublicationInput = {
       expectedRevision: request.expectedRevision,
@@ -293,6 +341,7 @@ export class SemanticPublicationService {
         outboxId: outbox.outboxId,
         publishedAt,
         actor: ctx.principal.subjectId,
+        ...projectPins,
       },
       idempotencyKey: request.idempotencyKey,
       requestDigest,
@@ -300,6 +349,8 @@ export class SemanticPublicationService {
       outbox,
       outboxJobId,
       materializationFences,
+      projectFactFences,
+      ...projectPins,
     }
     const result = await this.#mapStoreError(() => this.#store.publish(scopeRef, input, ctx))
     return result.publication
@@ -512,6 +563,60 @@ export class SemanticPublicationService {
         `candidate ${candidate.candidateId} was rejected by review ${latest.reviewId}: ${latest.reason}`,
       )
     }
+    if ((candidate.inputVersion.projectFact !== undefined || candidate.kind === 'rule' && candidate.projectId !== undefined) && latest.contentDigest !== candidate.idempotencyKey) {
+      throw new SemanticPublicationError('CANDIDATE_NOT_APPROVED', 'project facts and tagged rules require approval of the exact stored candidate content')
+    }
+  }
+
+  async #mappedFences(scopeRef: ScopeRef, candidate: CandidateRecord, ctx: ToolContext): Promise<ProjectFactPublicationFence[]> {
+    const mapped = candidate.inputVersion.projectFact
+    if (mapped === undefined) return []
+    assertProjectFactInputShape(mapped)
+    const projectId = mapped.sources[0]?.projectRevisionRef.projectId
+    if ((candidate.kind === 'entity' && (mapped.sources.length !== 1 || mapped.sources[0]?.entityCandidateId !== candidate.candidateId)) ||
+      (candidate.kind === 'relation' && (mapped.sources.length !== 2 || mapped.sources[0]?.entityCandidateId !== candidate.from.candidateId || mapped.sources[1]?.entityCandidateId !== candidate.to.candidateId)) ||
+      (candidate.kind !== 'entity' && candidate.kind !== 'relation') ||
+      mapped.sources.some((source) => source.projectRevisionRef.projectId !== projectId || !sameRef(source.definitionRef, candidate.inputVersion.definitionRef))) {
+      throw new SemanticPublicationError('CANDIDATE_NOT_APPROVED', 'mapped source pins must describe this entity or both same-project relation endpoints')
+    }
+    if (this.#instanceRecords === undefined || mapped.sources.length === 0 || mapped.sources.length > 2) {
+      throw new SemanticPublicationError('CANDIDATE_NOT_APPROVED', 'mapped fact publication requires bounded stored human field confirmations')
+    }
+    const fences: ProjectFactPublicationFence[] = []
+    for (const source of mapped.sources) {
+      const entityCandidate = await this.#requireCandidate(scopeRef, source.entityCandidateId, ctx)
+      const schema = await this.#requireSchema(scopeRef, source.definitionRef, ctx)
+      const record = await this.#instanceRecords.getRecord(scopeRef, source.projectRevisionRef.projectId, source.entityCandidateId, ctx)
+      const binding = record?.identity.binding
+      if (entityCandidate.kind !== 'entity' || record === undefined || binding?.candidateId !== entityCandidate.candidateId || binding.documentId !== source.documentId || binding.projectRevisionRef.projectId !== source.projectRevisionRef.projectId ||
+        binding.projectRevisionRef.revision !== source.projectRevisionRef.revision || binding.projectRevisionRef.digest !== source.projectRevisionRef.digest ||
+        !sameRef(binding.definitionRef, source.definitionRef) || binding.membershipRevision !== source.membershipRevision || binding.visibilityEpoch !== source.visibilityEpoch ||
+        (record.identity.state !== 'matched' && record.identity.state !== 'created') || record.identity.matchedEntityId === undefined ||
+        record.fields.length !== entityCandidate.attributes.length || record.fields.some((field) => {
+          const value = entityCandidate.attributes.find((attribute) => attribute.attributeId === field.fieldId)
+          const span = entityCandidate.sourceSpans[entityCandidate.attributes.findIndex((attribute) => attribute.attributeId === field.fieldId)]
+          return field.status !== 'confirmed' || field.actor === undefined || field.confirmedAt === undefined || value === undefined ||
+            field.rawValue !== value.raw || span?.kind !== 'structured' || field.source.parseId !== span.parseId || field.source.textDigest !== span.rowDigest || sha256DigestOf(field.source.locator) !== sha256DigestOf(span.locator) ||
+            (schema.objects.find((object) => object.objectId === entityCandidate.objectId)?.attributes.find((attribute) => attribute.attributeId === field.fieldId)?.valueType === 'reference'
+              ? field.normalizedValue?.kind !== 'reference' || field.normalizedValue.entityId !== value.value || value.unitCode !== undefined
+              : field.normalizedValue?.kind === 'quantity' ? field.normalizedValue.value !== value.value || field.normalizedValue.unitCode !== value.unitCode : field.normalizedValue?.kind !== 'scalar' || field.normalizedValue.value !== value.value)
+        })) {
+        throw new SemanticPublicationError('CANDIDATE_NOT_APPROVED', 'mapped fields or authoritative human identity are missing, edited or stale')
+      }
+      for (const field of record.fields) if (field.normalizedValue?.kind === 'reference') {
+        const attribute = schema.objects.find((object) => object.objectId === entityCandidate.objectId)?.attributes.find((attribute) => attribute.attributeId === field.fieldId)
+        const targetObject = schema.objects.find((object) => object.objectId === attribute?.referencesObjectId)
+        const targetScope = targetObject === undefined ? undefined : schema.identityScopes.find((identity) => identity.identityScopeId === targetObject.identityScopeId && identity.objectId === targetObject.objectId)
+        const target = await this.#identity.getEntity(scopeRef, field.normalizedValue.entityId, ctx)
+        if (attribute?.valueType !== 'reference' || targetObject === undefined || targetScope === undefined || !targetScope.scopeDimensions.includes('project') || target?.state !== 'confirmed' || target.objectId !== targetObject.objectId || target.identityScopeId !== targetScope.identityScopeId || target.scopeDimensions['project'] !== source.projectRevisionRef.projectId || targetScope.scopeDimensions.some((dimension) => typeof target.scopeDimensions[dimension] !== 'string' || target.scopeDimensions[dimension].length === 0)) throw new SemanticPublicationError('IDENTITY_CONSTRAINT_BLOCKED', 'the mapped reference must retain its exact original value and a confirmed target in the declared project identity domain')
+      }
+      const entity = await this.#identity.getEntity(scopeRef, record.identity.matchedEntityId, ctx)
+      if (entity?.state !== 'confirmed' || entity.scopeDimensions['project'] !== source.projectRevisionRef.projectId || entity.objectId !== entityCandidate.objectId || entity.identityScopeId !== binding.identityScopeId) {
+        throw new SemanticPublicationError('IDENTITY_CONSTRAINT_BLOCKED', 'mapped identity must be confirmed in the same project/domain')
+      }
+      fences.push({ candidateId: candidate.candidateId, candidateDigest: candidate.idempotencyKey, source, instanceRevision: record.recordRevision, entityId: entity.entityId })
+    }
+    return fences
   }
 
   #assertSource(candidate: CandidateRecord): void {
@@ -563,7 +668,8 @@ export class SemanticPublicationService {
       kind: 'entity',
       subjectEntityId: entityId,
       objectId: candidate.objectId,
-      attributes,
+      ...(candidate.inputVersion.projectFact === undefined ? {} : { definitionRef: candidate.inputVersion.definitionRef }),
+      attributes: candidate.inputVersion.projectFact === undefined ? attributes : attributes.map(({ attributeId, value, unitCode }) => ({ attributeId, value, ...(unitCode === undefined ? {} : { unitCode }) })),
     })
     return {
       statementId: candidate.candidateId,
@@ -572,15 +678,14 @@ export class SemanticPublicationService {
       objectId: candidate.objectId,
       subjectEntityId: entityId,
       predicate: candidate.objectId,
-      value: { attributes },
+      value: { attributes, ...(candidate.inputVersion.projectFact === undefined ? {} : { provenance: { ...candidate.inputVersion.projectFact, sourceSpans: candidate.sourceSpans } }) },
+      ...(candidate.inputVersion.projectFact?.validFrom === undefined ? {} : { validFrom: candidate.inputVersion.projectFact.validFrom }),
+      ...(candidate.inputVersion.projectFact?.validTo === undefined ? {} : { validTo: candidate.inputVersion.projectFact.validTo }),
       recordedAt,
       sourceCandidateId: candidate.candidateId,
-      sourceRefs: candidate.sourceSpans.map((span) => ({
-        id: span.chunkId,
-        version: candidate.inputVersion.parserVersion,
-        digest: span.quoteDigest,
-        kind: 'chunk',
-      })),
+      sourceRefs: candidate.sourceSpans.map((span) =>
+        candidateSourceRef(span, candidate.inputVersion.parserVersion),
+      ),
       publicationId,
       version: '1',
       status: 'active',
@@ -591,12 +696,16 @@ export class SemanticPublicationService {
     candidate: CandidateRecord & { readonly kind: 'relation' },
     publicationId: Uuid,
     recordedAt: string,
+    mapped: readonly ProjectFactPublicationFence[],
   ): PublishedStatement {
     const propositionKey = sha256DigestOf({
       kind: 'relation',
       relationId: candidate.relationId,
-      from: candidate.from,
-      to: candidate.to,
+      ...(candidate.inputVersion.projectFact === undefined ? { from: candidate.from, to: candidate.to } : {
+        definitionRef: candidate.inputVersion.definitionRef,
+        from: { objectId: candidate.from.objectId, entityId: mapped.find((fence) => fence.source.entityCandidateId === candidate.from.candidateId)?.entityId },
+        to: { objectId: candidate.to.objectId, entityId: mapped.find((fence) => fence.source.entityCandidateId === candidate.to.candidateId)?.entityId },
+      }),
     })
     return {
       statementId: candidate.candidateId,
@@ -604,15 +713,14 @@ export class SemanticPublicationService {
       kind: 'relation',
       relationId: candidate.relationId,
       predicate: candidate.relationId,
-      value: { from: candidate.from, to: candidate.to },
+      value: { from: candidate.from, to: candidate.to, ...(candidate.inputVersion.projectFact === undefined ? {} : { provenance: { ...candidate.inputVersion.projectFact, sourceSpans: candidate.sourceSpans } }) },
+      ...(candidate.inputVersion.projectFact?.validFrom === undefined ? {} : { validFrom: candidate.inputVersion.projectFact.validFrom }),
+      ...(candidate.inputVersion.projectFact?.validTo === undefined ? {} : { validTo: candidate.inputVersion.projectFact.validTo }),
       recordedAt,
       sourceCandidateId: candidate.candidateId,
-      sourceRefs: candidate.sourceSpans.map((span) => ({
-        id: span.chunkId,
-        version: candidate.inputVersion.parserVersion,
-        digest: span.quoteDigest,
-        kind: 'chunk',
-      })),
+      sourceRefs: candidate.sourceSpans.map((span) =>
+        candidateSourceRef(span, candidate.inputVersion.parserVersion),
+      ),
       publicationId,
       version: '1',
       status: 'active',
@@ -635,9 +743,43 @@ export class SemanticPublicationService {
       expression: candidate.expression,
       exceptions: candidate.exceptions,
       ...(conclusion === undefined ? {} : { conclusion }),
+      ...((candidate.ruleDependencies?.length ?? 0) === 0 ? {} : { ruleDependencies: candidate.ruleDependencies, dependencyRefs: candidate.dependencyRefs }),
+      ...(candidate.projectId === undefined ? {} : { projectId: candidate.projectId }),
       recordedAt,
       sourceCandidateId: candidate.candidateId,
       publicationId,
+    }
+  }
+
+  async #ruleProjectPin(scope: ScopeRef, candidate: CandidateRecord & { readonly kind: 'rule' }, definitionRef: VersionRef, ctx: ToolContext): Promise<PublicationRuleProjectPin | undefined> {
+    if (candidate.projectId === undefined) return undefined
+    const project = await this.#projects?.getProject(scope, candidate.projectId, ctx)
+    const revision = project === undefined ? undefined : await this.#projects?.getRevision(scope, candidate.projectId, project.headRevision, ctx)
+    const reviewRevision = await this.#store.latestReviewRevision(scope, candidate.candidateId, ctx)
+    const review = await this.#store.getReview(scope, candidate.candidateId, reviewRevision, ctx)
+    if (project === undefined || project.state === 'archived' || revision === undefined || revision.ref.projectId !== candidate.projectId || revision.ref.revision !== project.headRevision ||
+      !sameRef(revision.definitionRef, definitionRef) || review?.decision !== 'approve' || review.contentDigest !== candidate.idempotencyKey) {
+      throw new SemanticPublicationError('CANDIDATE_NOT_APPROVED', 'tagged rules require their current stored project/definition and exact content-pinned human approval')
+    }
+    return { candidateId: candidate.candidateId, candidateDigest: candidate.idempotencyKey, reviewRevision, projectRevisionRef: revision.ref, definitionRef }
+  }
+
+  async #assertRuleDependencies(scopeRef: ScopeRef, candidate: CandidateRecord & { readonly kind: 'rule' }, definitionRef: VersionRef, ctx: ToolContext): Promise<void> {
+    const refs = candidate.dependencyRefs ?? []
+    try { assertRuleDependencyShape(candidate.ruleDependencies ?? [], refs) } catch (error) {
+      throw new SemanticPublicationError('CANDIDATE_FAILED', 'every rule dependency needs an exact reviewed version', { cause: error })
+    }
+    for (const ref of refs) {
+      if (ref.scopeRef.tenantId !== scopeRef.tenantId || ref.scopeRef.spaceId !== scopeRef.spaceId || !sameRef(ref.definitionRef, definitionRef) ||
+        ref.objectId !== candidate.objectId || ref.projectId !== candidate.projectId || ref.publishedPackRef !== undefined) {
+        throw new SemanticPublicationError('CANDIDATE_FAILED', 'rule dependencies must bind the same object, project and definition')
+      }
+      const versions = await this.#store.listRuleVersions(scopeRef, { sourceCandidateId: ref.ruleRef.id, limit: 1_000 }, ctx)
+      if (versions.length === 1_000) throw new SemanticPublicationError('CANDIDATE_FAILED', 'rule dependency version lookup exceeded its bounded page')
+      const upstream = versions.find((rule) => rule.ruleVersionId === ref.ruleRef.id && sameRef(publishedRuleRef(rule), ref.ruleRef) &&
+        rule.ruleId === ref.ruleId && rule.objectId === ref.objectId && rule.projectId === ref.projectId && rule.conclusion?.predicate === ref.predicate)
+      const publication = upstream === undefined ? undefined : await this.#store.getPublication(scopeRef, upstream.publicationId, ctx)
+      if (publication === undefined || !sameRef(publication.schemaRef, definitionRef)) throw new SemanticPublicationError('CANDIDATE_FAILED', 'rule dependency does not resolve to its fixed published consequence')
     }
   }
 

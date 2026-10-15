@@ -1,4 +1,4 @@
-import type { PublishedStatement, ResourceRef, SourceRef, VersionRef } from '@ontology/contracts'
+import type { IdentityPublishedBindingSnapshot, ScopeRef, SemanticDefinitionVersion, PublishedStatement, ResourceRef, SourceRef, VersionRef } from '@ontology/contracts'
 import type {
   AttributeProjectionIssue,
   PublishedAttributeProjection,
@@ -6,15 +6,30 @@ import type {
   RuleFact,
 } from './types'
 import { canonicalDecimalString } from './values'
+import { definitionVersionDigest } from '../definitions/validate'
+import { assertProjectFactInputShape } from '@ontology/contracts'
 
 export interface PublishedAttributeProjectionOptions {
+  readonly projectId?: string
   /** The schema pinned by the publication page; statements currently do not repeat this field. */
   readonly schemaRef: VersionRef
+  /** Exact definition and trusted read scope are required for mapped scalar typing. */
+  readonly definition?: SemanticDefinitionVersion
+  readonly scopeRef?: ScopeRef
 }
 
 function recordOf(value: unknown): Record<string, unknown> | undefined {
   if (typeof value !== 'object' || value === null || Array.isArray(value)) return undefined
   return value as Record<string, unknown>
+}
+
+/** The original mapped project pin is the authority; a request cannot relabel a published fact. */
+export function publishedStatementProjectId(statement: PublishedStatement): string | undefined {
+  const provenance = recordOf(statement.value['provenance'])
+  if (provenance?.['sources'] === undefined) return undefined
+  try { assertProjectFactInputShape(provenance) } catch { return undefined }
+  const id = provenance.sources[0]?.projectRevisionRef.projectId
+  return id !== undefined && provenance.sources.every((source) => source.projectRevisionRef.projectId === id) ? id : undefined
 }
 
 function unitCodeOf(value: unknown): string | undefined {
@@ -42,6 +57,7 @@ function operationOf(statement: PublishedStatement): RuleFact['op'] {
 
 function exactValueOf(value: unknown, unitCode: unknown): { value?: RuleAssertionValue; issue?: string } {
   const nested = recordOf(value)
+  if (nested !== undefined && Object.keys(nested).some((key) => key !== 'amount' && key !== 'unit')) return { issue: 'physical quantities may contain only amount and unit' }
   if (nested !== undefined && typeof nested['amount'] === 'string') {
     const amount = canonicalDecimalString(nested['amount'])
     const unit = unitCodeOf(nested['unit'])
@@ -90,12 +106,21 @@ function factId(statementId: string, attributeId: string, version: string, occur
 function projectFacts(
   statements: readonly PublishedStatement[],
   schemaRef?: VersionRef,
+  options?: Partial<PublishedAttributeProjectionOptions>,
 ): PublishedAttributeProjection {
   const facts: RuleFact[] = []
   const issues: AttributeProjectionIssue[] = []
+  const definition = options?.definition
+  const scope = options?.scopeRef
+  const exactDefinition = definition !== undefined && schemaRef !== undefined && scope !== undefined &&
+    definition.scopeRef.tenantId === scope.tenantId && definition.scopeRef.spaceId === scope.spaceId &&
+    definition.ref.id === schemaRef.id && definition.ref.version === schemaRef.version && definition.ref.digest === schemaRef.digest && definitionVersionDigest(definition) === schemaRef.digest
+    ? definition : undefined
 
   for (const statement of statements) {
     const valueRecord = recordOf(statement.value)
+    const projectId = publishedStatementProjectId(statement)
+    if (options?.projectId !== undefined && projectId !== options.projectId) continue
     const rawAttributes = valueRecord?.['attributes']
     if (Array.isArray(rawAttributes)) {
       const parsed = rawAttributes.map((entry, index) => ({ entry: recordOf(entry), index }))
@@ -125,7 +150,23 @@ function projectFacts(
           })
         }
 
-        const converted = exactValueOf(entry?.['value'], entry?.['unitCode'])
+        let converted: { value?: RuleAssertionValue; issue?: string }
+        const mapped = recordOf(valueRecord?.['provenance'])?.['sources'] !== undefined
+        if (mapped) {
+          const attribute = exactDefinition?.attributes.find((item) => item.objectId === statement.objectId && item.id === attributeId)
+          const value = entry?.['value']
+          const unit = entry?.['unitCode']
+          if (attribute === undefined) converted = { issue: 'mapped scalar requires its exact scoped definition/attribute pin' }
+          else if (attribute.valueType === 'quantity') {
+            converted = typeof value !== 'string' || unit !== attribute.unit?.unitCode ? { issue: 'mapped quantity disagrees with the fixed canonical unit/type' } : exactValueOf(value, unit)
+          }
+          else if (attribute.valueType === 'number') {
+            const amount = typeof value === 'string' && /^-?(?:0|[1-9]\d*)(?:\.\d+)?$/.test(value) ? canonicalDecimalString(value) : undefined
+            converted = amount === undefined || unit !== undefined ? { issue: 'mapped number requires an exact unitless lexical decimal' } : { value: { kind: 'scalar_decimal', amount } }
+          } else if (unit !== undefined || attribute.valueType === 'boolean' && typeof value !== 'boolean' || ['string', 'timestamp', 'enum', 'reference'].includes(attribute.valueType) && typeof value !== 'string') {
+            converted = { issue: 'mapped scalar value disagrees with the fixed definition type' }
+          } else converted = exactValueOf(value, undefined)
+        } else converted = exactValueOf(entry?.['value'], entry?.['unitCode'])
         if (converted.issue !== undefined) {
           issues.push({
             statementId: statement.statementId,
@@ -144,6 +185,7 @@ function projectFacts(
           recordedSeq: statement.version,
           op: operationOf(statement),
           subject,
+          ...(projectId === undefined ? {} : { projectId }),
           predicate: attributeId,
           ...(converted.value === undefined ? {} : { value: converted.value }),
           sourceStatementId: statement.statementId,
@@ -186,6 +228,7 @@ function projectFacts(
       recordedSeq: statement.version,
       op: operationOf(statement),
       subject: statement.subjectEntityId ?? statement.objectId ?? statement.relationId ?? '',
+      ...(projectId === undefined ? {} : { projectId }),
       predicate: statement.predicate,
       ...(scalar.value === undefined ? {} : { value: scalar.value }),
       sourceStatementId: statement.statementId,
@@ -214,7 +257,7 @@ export function projectPublishedAttributeFacts(
   statements: readonly PublishedStatement[],
   options: PublishedAttributeProjectionOptions,
 ): PublishedAttributeProjection {
-  return projectFacts(statements, options.schemaRef)
+  return projectFacts(statements, options.schemaRef, options)
 }
 
 /** Compatibility name for callers that only need facts; diagnostics are available above. */
@@ -222,5 +265,55 @@ export function ruleFactsFromStatements(
   statements: readonly PublishedStatement[],
   options?: Partial<PublishedAttributeProjectionOptions>,
 ): RuleFact[] {
-  return [...projectFacts(statements, options?.schemaRef).facts]
+  return [...projectFacts(statements, options?.schemaRef, options).facts]
+}
+
+/** Resolve real published candidate endpoints against the scoped, confirmed identity snapshot. */
+export function projectPublishedRelationFacts(statements: readonly PublishedStatement[], options: {
+  readonly definition: SemanticDefinitionVersion
+  readonly bindings: IdentityPublishedBindingSnapshot['bindings']
+}): { readonly facts: readonly RuleFact[]; readonly issues: readonly { readonly statementId: string; readonly code: string; readonly message: string }[] } {
+  const facts: RuleFact[] = []
+  const issues: { statementId: string; code: string; message: string }[] = []
+  const declarations = new Map(options.definition.relations.map((relation) => [relation.id, relation]))
+  const bindings = new Map(options.bindings.map((binding) => [binding.candidateId, binding]))
+  const resolve = (endpoint: Record<string, unknown>): string | undefined => {
+    const candidateId = endpoint['candidateId']
+    if (typeof candidateId !== 'string') return undefined
+    const binding = bindings.get(candidateId)
+    const [assertion] = binding?.openAssertions ?? []
+    if (assertion === undefined || binding?.openAssertions.length !== 1 || assertion.objectId !== endpoint['objectId'] ||
+        binding.cannotLinkEntityIds.includes(assertion.entityId)) return undefined
+    return assertion.entityId
+  }
+  for (const statement of statements) {
+    if (statement.kind !== 'relation') continue
+    const projectId = publishedStatementProjectId(statement)
+    const declaration = statement.relationId === undefined ? undefined : declarations.get(statement.relationId)
+    const from = recordOf(statement.value['from'])
+    const to = recordOf(statement.value['to'])
+    if (declaration === undefined || from === undefined || to === undefined ||
+        from['objectId'] !== declaration.fromObjectId || to['objectId'] !== declaration.toObjectId) {
+      issues.push({ statementId: statement.statementId, code: 'RELATION_ENDPOINT_MISMATCH', message: 'published relation endpoints do not match the pinned definition' })
+      continue
+    }
+    const subject = resolve(from)
+    const target = resolve(to)
+    if (subject === undefined || target === undefined) {
+      issues.push({ statementId: statement.statementId, code: 'RELATION_ENDPOINT_UNRESOLVED', message: 'published relation has no unique confirmed endpoint binding' })
+    }
+    if (subject === undefined) continue
+    facts.push({
+      assertionId: `${statement.statementId}@${statement.version}`,
+      logicalAssertionId: statement.statementId, recordedSeq: statement.version, op: operationOf(statement),
+      subject, objectId: declaration.fromObjectId, predicate: declaration.id, value: true,
+      ...(projectId === undefined ? {} : { projectId }),
+      relation: { relationId: declaration.id, targetObjectId: declaration.toObjectId, endpointResolved: target !== undefined,
+        ...(target === undefined ? {} : { targetEntityId: target }) },
+      schemaRef: options.definition.ref, sourceStatementId: statement.statementId,
+      sourceRef: sourceRefOf(statement), sourceRefs: sourceRefsOf(statement),
+      validity: { validFrom: statement.validFrom ?? '1970-01-01T00:00:00Z', ...(statement.validTo === undefined ? {} : { validTo: statement.validTo }) },
+    })
+  }
+  return { facts, issues }
 }

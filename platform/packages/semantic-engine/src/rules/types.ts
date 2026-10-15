@@ -1,5 +1,6 @@
 import type {
   DecimalQuantity,
+  ExactScalarDecimal,
   ControlReadProjectionRequest,
   DomainResultStatus,
   RevisionString,
@@ -11,7 +12,9 @@ import type {
   SourceRef,
   ValidityInterval,
   VersionRef,
+  RuleDependencyReference,
 } from '@ontology/contracts'
+import type { FiniteConditionPlan } from './boolean'
 import type { RuleEvaluationErrorCode } from './errors'
 
 /**
@@ -35,11 +38,17 @@ import type { RuleEvaluationErrorCode } from './errors'
 /** An exact decimal quantity, categorical string or boolean assertion value. */
 export type RuleDecimalValue = DecimalQuantity
 
-export type RuleAssertionValue = DecimalQuantity | string | boolean
+/** A definition-declared unitless number, kept exact without inventing a physical unit. */
+export type RuleScalarDecimalValue = ExactScalarDecimal
+
+export type RuleAssertionValue = DecimalQuantity | RuleScalarDecimalValue | string | boolean
 
 /** One version of a logical assertion as published into the append-only event stream (D3.1). */
 export interface RuleFact {
+  readonly projectId?: string
   readonly assertionId: string
+  /** Explicit relation edge metadata; these facts are never attribute observations. */
+  readonly relation?: { readonly relationId: string; readonly targetEntityId?: string; readonly targetObjectId: string; readonly endpointResolved: boolean }
   readonly logicalAssertionId: string
   readonly recordedSeq: RevisionString
   readonly op: 'assert' | 'correct' | 'retract'
@@ -57,6 +66,16 @@ export interface RuleFact {
   readonly sourceRef: SourceRef
   readonly sourceRefs?: readonly ResourceRef[]
   readonly evidenceId?: string
+}
+
+/** An explicit closed-world relation proof tied to one exact project, definition and bitemporal read. */
+export interface RuleRelationReadCompleteness {
+  readonly scopeRef: ScopeRef
+  readonly definitionRef: VersionRef
+  readonly subjectEntityId: string
+  readonly relationId: string
+  readonly validAt: string
+  readonly asOfRecordedSeq: RevisionString
 }
 
 /**
@@ -89,7 +108,27 @@ export interface RulePremiseGroup {
   readonly explicitObservation?: boolean
   /** Expected quantity unit; incompatible observations remain unknown instead of comparing amounts. */
   readonly unitCode?: string
+  /** One-hop existential branches, each requiring its own edge AND target condition. */
+  readonly relation?: {
+    readonly relationId: string
+    readonly completeness?: Pick<RuleRelationReadCompleteness, 'validAt' | 'asOfRecordedSeq'>
+    readonly targetGroups: readonly RulePremiseGroup[]
+    readonly targetConditions: readonly { readonly targetKey: string; readonly groupIds: readonly string[]; readonly condition: RuleConditionPlan }[]
+    readonly branches: readonly {
+      readonly edge: RulePremiseAlternative
+      readonly endpointResolved: boolean
+      readonly targetKey?: string
+    }[]
+  }
 }
+
+/**
+ * The rule's boolean condition as a finite tree over premise-group ids. When absent, the rule is
+ * the AND of every premise group (backward compatible). An `any` node is a genuine
+ * different-condition OR: each branch is its own condition and its own group, never a same-filter
+ * alternative set (SPEC v0.3a EX-4.1/EX-4.2).
+ */
+export type RuleConditionPlan = FiniteConditionPlan<string>
 
 /** The proposition a rule derives. The predicate defaults to the proposition key. */
 export interface RuleConclusionSpec {
@@ -103,12 +142,19 @@ export interface SupportRule {
   readonly ruleRef: VersionRef
   readonly ruleId: string
   readonly premiseGroups: readonly RulePremiseGroup[]
+  /** Finite boolean tree over group ids; absent means the AND of all premise groups. */
+  readonly condition?: RuleConditionPlan
   readonly conclusion: RuleConclusionSpec
   /** Published instances contribute positive support only; a refuted condition is not proposition=false. */
   readonly publishedInstance?: PublishedRuleInstanceMetadata
 }
 
 export interface PublishedRuleInstanceMetadata {
+  readonly validFrom?: string
+  readonly validTo?: string
+  readonly publishedPackRef?: VersionRef
+  readonly dependencyRefs?: readonly RuleDependencyReference[]
+  readonly projectId?: string
   readonly ruleId: string
   readonly ruleVersionId: string
   readonly publishedRevision: RevisionString
@@ -141,6 +187,9 @@ export interface RuleExceptionState {
 
 /** One published rule × subject result. It deliberately describes support, not business negation. */
 export interface RuleApplicabilityResult {
+  readonly publishedPackRef?: VersionRef
+  readonly dependencyRefs?: readonly RuleDependencyReference[]
+  readonly projectId?: string
   readonly scopeRef: ScopeRef
   readonly definitionRef: VersionRef
   readonly ruleRef: VersionRef
@@ -179,6 +228,7 @@ export interface RuleCapabilityIssue {
 }
 
 export interface PublishedRuleSubject {
+  readonly projectId?: string
   readonly subjectEntityId: string
   readonly objectId: string
 }
@@ -198,6 +248,8 @@ export interface CompiledPublishedRuleInstance {
 
 export interface PublishedRuleCompilation {
   readonly instances: readonly CompiledPublishedRuleInstance[]
+  /** Pinned, per-rule consequences consumed by dependencies; aggregate business outputs remain separate. */
+  readonly dependencyRules: readonly SupportRule[]
   readonly issues: readonly RuleCapabilityIssue[]
 }
 
@@ -227,6 +279,8 @@ export type SupportNodeState = 'satisfied' | 'refuted' | 'unknown' | 'conflict'
 
 /** A shared leaf: one fact version, or one derived proposition, referenced by alternatives. */
 export interface SupportLeafNode {
+  /** Derived leaves link to the shared upstream conclusion in the source DAG. */
+  readonly upstreamConclusionNodeId?: string
   readonly kind: 'fact'
   readonly nodeId: string
   /** `assertionId` for an explicit fact, `propositionKey` for a derived one. */
@@ -242,6 +296,13 @@ export interface SupportGroupNode {
   readonly groupId: string
   readonly state: SupportNodeState
   readonly alternativeNodeIds: readonly string[]
+  /** Existential OR of branches; each branch requires its edge AND finite target condition. */
+  readonly relationBranches?: readonly {
+    readonly edgeNodeId: string
+    readonly state: SupportNodeState
+    readonly targetGroupNodeIds: readonly string[]
+    readonly targetCondition?: RuleConditionPlan
+  }[]
 }
 
 /** One rule node: the AND of its group nodes. */

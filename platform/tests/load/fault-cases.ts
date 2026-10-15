@@ -472,10 +472,12 @@ export async function projectionFence(env: LoadEnvironment): Promise<FaultCaseRe
     baseline.status === 'materialized' &&
     baselineConclusion?.domainStatus === 'known' &&
     baselineConclusion.value === true &&
-    ticket.affectedRuleIds.length === 2 &&
+    ticket.affectedRuleIds.length === 3 &&
+    ticket.affectedRuleIds.filter((ruleId) => ruleId.endsWith(':dependency-consequence')).length === 1 &&
     ticket.affectedRuleIds.every((ruleId) => ruleId.startsWith('rule-instance:')) &&
     fenced.status === 'fenced' &&
     fenced.conclusions.length === 0 &&
+    fenced.blockedPropositionKeys.length === 3 &&
     baselineConclusion !== undefined &&
     fenced.blockedPropositionKeys.includes(baselineConclusion.propositionKey) &&
     advanced.status === 'materialized' &&

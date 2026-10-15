@@ -12,6 +12,11 @@ export { RuleEvaluationError, isRuleEvaluationError } from './errors'
 export type { RuleEvaluationErrorCode } from './errors'
 export { compilePublishedRuleInstances, supportRuleFromPublishedRule } from './compile'
 export type { PublishedRuleCompilerOptions } from './compile'
+export { FiniteGrammarRuleSupportValidator, validateRuleSupport } from './support'
+export { lowerConditionLeaves, lowerConditionPlan } from './support'
+export type { LoweredCondition, LoweredConditionLeaf, LoweredConditionPlan } from './support'
+export { andConditionStates, collectConditionBranches, evaluateFiniteCondition } from './boolean'
+export type { FiniteConditionPlan } from './boolean'
 export { projectPublishedAttributeFacts, ruleFactsFromStatements } from './from-published'
 export type { PublishedAttributeProjectionOptions } from './from-published'
 export { conclusionQualifiedKey, factQualifiedKey, qualifiedPropositionKey } from './proposition'
@@ -24,6 +29,7 @@ export {
   filterMatches,
   isDecimalQuantity,
   isRuleDecimalValue,
+  isRuleScalarDecimalValue,
 } from './values'
 export type {
   AttributeProjectionIssue,
@@ -34,6 +40,7 @@ export type {
   RuleApplicabilityResult,
   RuleApplicabilityState,
   RuleAssertionValue,
+  RuleScalarDecimalValue,
   RuleConclusionResult,
   RuleConclusionSpec,
   RuleConflictResult,
@@ -42,6 +49,7 @@ export type {
   RuleFact,
   RuleFactRef,
   RuleCapabilityIssue,
+  RuleConditionPlan,
   RuleConditionState,
   RuleDecimalValue,
   RuleExceptionState,
@@ -59,3 +67,10 @@ export type {
   SupportRule,
   SupportRuleNode,
 } from './types'
+
+export { projectPublishedRelationFacts } from './from-published'
+export type { RuleRelationReadCompleteness } from './types'
+export { publishedRuleRef, publishedRuleConsequenceKey, publishedRuleDependencyRef, publishedRuleApplicabilityKey } from './dependencies'
+export { publishedStatementProjectId } from './from-published'
+
+export type { PublishedRuleInstanceIdentity } from './dependencies'

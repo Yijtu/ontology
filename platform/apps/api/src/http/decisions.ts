@@ -17,6 +17,7 @@ import type {
   IdentityStrongIdentity,
   ResourceRef,
   RevisionString,
+  SourceLocator,
 } from '@ontology/contracts'
 import { createRequestToolContext } from './context'
 import {
@@ -75,6 +76,13 @@ export type CandidateSpanSource =
     }
   | { readonly status: 'missing'; readonly chunkId: string; readonly reason: string }
   | { readonly status: 'mismatch'; readonly chunkId: string; readonly reason: string }
+  | {
+      /** A structured-row span: located in the immutable original, not a text chunk. */
+      readonly status: 'structured'
+      readonly recordId: string
+      readonly sourceRowKey: string
+      readonly locator: SourceLocator
+    }
 
 export interface CandidateSourceView {
   readonly candidateId: string
@@ -435,6 +443,14 @@ export function registerDecisionRoutes(app: FastifyInstance, dependencies: Decis
         }
       }
       const spans: CandidateSpanSource[] = candidate.sourceSpans.map((span) => {
+        if (span.kind === 'structured') {
+          return {
+            status: 'structured',
+            recordId: span.recordId,
+            sourceRowKey: span.sourceRowKey,
+            locator: span.locator,
+          }
+        }
         const chunk = chunks.get(span.chunkId)
         if (chunk === undefined) {
           return {

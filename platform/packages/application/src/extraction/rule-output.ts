@@ -1,5 +1,6 @@
 import type { DraftRule, DraftRuleException, RuleImpact } from '@ontology/contracts'
 import { ExtractionError } from './errors'
+import { assertRuleDependencyShape } from '@ontology/contracts'
 
 /**
  * Structured rule drafts from one untrusted generation response (SPEC D4.2, US-013).
@@ -52,6 +53,11 @@ function parseRule(entry: unknown, index: number): DraftRule {
   if (!Array.isArray(rawExceptions)) {
     throw new ExtractionError('INVALID_MODEL_OUTPUT', `model output ${at}.exceptions must be an array`)
   }
+  const dependencies = entry['ruleDependencies'] ?? []
+  const refs = entry['dependencyRefs'] ?? []
+  try { assertRuleDependencyShape(dependencies, refs) } catch (error) {
+    throw new ExtractionError('INVALID_MODEL_OUTPUT', `${at} has invalid fixed rule dependencies`, { cause: error })
+  }
   return {
     ruleId: requireString(entry['ruleId'], `${at}.ruleId`),
     objectId: requireString(entry['objectId'], `${at}.objectId`),
@@ -60,6 +66,7 @@ function parseRule(entry: unknown, index: number): DraftRule {
     expression: entry['expression'],
     exceptions: rawExceptions,
     ...(entry['conclusion'] === undefined ? {} : { conclusion: entry['conclusion'] }),
+    ...(entry['ruleDependencies'] === undefined && entry['dependencyRefs'] === undefined ? {} : { ruleDependencies: dependencies as readonly string[], dependencyRefs: refs }),
   }
 }
 

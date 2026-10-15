@@ -98,6 +98,8 @@ ReviewedRuleProposal 使用执行分册的有限规则 AST、显式例外、结�
 
 ActionDeclaration 保存语义名称、输入／输出 SchemaRef、前置条件、所需能力、权限、readOnly／副作用类别及 TaskBindingRef。其实际 operationRef／handlerRef 由受信部署装配，未绑定可保存／发布声明，但执行能力状态必须为不可用。A 仅启用有受控实现的只读示例动作；不自动注册模型生成代码。
 
+GAP-008 的平台生成、逐条件原文定位、共同预算／CAS，以及人工编辑后的来源确认接口见 [规则与动作生成契约](../../platform/docs/rule-action-generation.md)。人工确认必须回读实际批准资料并追加新的未审核候选；旧批准、模型生成调用和旧来源状态不得继承为新修订的依据。
+
 草稿状态与候选状态分开。一次生成保存独立 candidate versions 和生成调用记录，完成后只生成“应用建议”差异，不覆盖期间发生的人工编辑。用户接受建议、编辑、合并术语或拆分类型均追加新草稿修订；涉及内容改变的候选产生新 candidateId，之前的 approve 不能沿用。仅改变显示排序不改变定义内容，但仍记录草稿操作。
 
 TBox 候选内容由新 asset_candidate_versions 保存，审核继续写现有 semantic_candidate_reviews／candidate_review_heads。抽出可注入的 ReviewableCandidateReader，使现有审核服务可读取实例或 TBox 的 candidateId／state／digest／source；审核路由、角色、reason、evidenceRefs、If-Match 和历史算法共用。事实发布端显式拒绝 domain=definition 的候选，行业包发布端显式拒绝 instance 候选。这里新增的是审核对象，没有另一套 approve 真值或第二份决定表。
@@ -158,6 +160,14 @@ snapshot manifest 自身不包含自身 digest，避免循环 hash；ApprovedInp
 datasetSnapshotRef 指向从批准行、映射、物理 Schema 和行顺序构成的不可变逻辑数据快照 manifest。documentIndexRef 指向 BM25 corpus／parser／tokenizer 固定版本的不可变索引快照 manifest，其 receipt 包含既有 collectionRef、generation、indexRef:VersionRef 及 indexDigest。ResourceRef 包装不会代替 BM25 既有 generation 协议。
 
 项目头可变，修订不可变。字段、资料、身份绑定、mapping 或行业版本变化产生新修订；当前任务使用明确 ProjectRevisionRef，旧 run 不更换 inputSnapshotRef。语义／SQL／文档索引 readiness 独立：属性任务无需强制等待 BM25，文档任务必须等待该 corpus 的索引，规则任务必须等待所需语义 fence。只允许依 taskBinding 所需能力判定 ready。
+
+换本体版本使用 `POST /projects/:id/evolutions`（`/evolve` 为同一严格入口），须有 If-Match、Idempotency-Key、确切已发布行业包、`new_version / keep_independent / retire_previous` 策略和逐个原始导入映射的人工对应关系。配置演化的宿主拒绝旧 pack-mount 瞬时改定义入口；PG 也拒绝已有记录／项目规则的项目仅替换 definitionRef。项目可变读 envelope 的 `headRevision` 固定新的待审核修订，`activeRevision` 固定当前已激活修订。当前普通查询／已发布项目规则读 active；新候选、字段确认、身份裁决与事实发布仍校验 staging head。`stagingWritable=false` 拒绝取消后的迟到写入。旧 run 继续使用归档绑定和不可变的已激活快照，不用当前 readiness 代替历史授权。
+
+演化协调复用 topic outbox，保留原始资料／parse／映射／全部贡献语句版本和已发布原始 recordId 集合。原文重新读取、绑定新映射、200 个 selector 一批的候选抽取和 pending 实例创建均有界；不复制原审核或身份决定。最多 10 个来源、20,000 个原始记录／次、3 个尝试，重试共享累计 recordOperations／batches，不重新获得预算。缺失／冲突类型等不可迁移记录保持 `needs_human`，关系变更须有真实的新端点候选、当前人工审核和关系发布。已撤回的原始记录不会因为重读同一字节而再次成为支撑。
+
+所有重建实体经既有字段确认、身份裁决、审核账本和事实发布后，官方事实 reader 复核完整原始记录覆盖及新增字段，再建立各对象的确切业务快照。实际后端 activation receipt、当前源／语句／人工决定和 readiness 在最终项目事务再次校验；只有 staging head 与旧 active 同时满足 CAS 时才更新 activeRevision。`keep_independent` 保留旧 readiness；`retire_previous` 仅撤旧版当前 readiness，保留所有历史事实、语句版本、旧快照与凭据。失败／取消／撤回／并发换版均不能让旧尝试重新激活。`dataset_materialization` 演化作业由其专属 outbox consumer 和有限 CAS 协调处理，通用 ingestion worker 不重复执行它。
+
+新版输入由真实已激活业务快照中的官方记录分页归档；独立 confirmation manifest 保存既有字段确认事件、真实身份绑定及内容固定的审核账本记录。`ApprovedInputSnapshot` 使用这些真实页、明确排除项及实际已确认／已批准计数，不能只写一个批准 marker。最终 CAS 将其不可变 `inputSnapshotRef` 与各对象快照一起封存在演化激活记录中，不回填 staging ProjectRevision。普通任务 preflight 在修订本身没有旧 approvedInputRef 时，通过宿主 `projectApprovedInput` 端口读取实际工件字节并重核数据页、激活快照与人工证据；仅接受同一实际输入 ref/digest。配置了 ProfileStore 的演化同时要求确切的目标 ResolvedProfileRef，复算实际已解析 manifest hash 并核对目标 industryRef；新版普通任务必须使用该项目修订固定的实际 profile。旧输入／旧 profile 不得借新版 ready 绕过这些固定引用。
 
 ### 3.3 字段确认与记录修订
 
@@ -301,6 +311,14 @@ ImportMappingVersion 保存文件选择、header digest、fieldRef→column inde
 7. 业务库提交成功、control CAS失败时 retry读回相同 snapshot digest并补 receipt；worker不得将过期 job的 ready pointer切到新项目头。行/Schema digest不一致返回 MATERIALIZATION_MISMATCH，绝不使用旧启动资料回退。
 
 ## 7. BM25 文档索引修订、撤回与就绪
+
+结构化导入叶服务使用真实不可变原文及现有 structured parse。CSV/XLSX 的表头与行、JSON 的记录生成有界文本投影：最多 1000 行、每行 8 KiB、文本 1 MiB、来源映射 4 MiB，超限显式记录 skipped/truncated，不改变解析器或业务查询的默认上限。文本导入沿用原始 byte-offset 的精确引用。表格/JSON 投影偏移只定位派生文本，来源映射另存实际 parseId、recordId、rowDigest、每个原始 cell/JSON locator 和 rawDigest；不能把该偏移称为原文件内的精确文本位置。
+
+`POST /projects/:id/structured-imports` 除既有 parse 信息外返回 host 生成的 documentId、documentSetRef 与 documentIndexState。成员只引用授权原文及投影 artifacts；同一原文的并发重试收敛到现有 parse/member，撤回后导入不能重新激活同一成员。调用方通过既有项目修订流程固定返回的真实 documentSetRef，索引 ready 不表示字段、身份、事实或 dataset 已批准。普通 document_qa 的 admission 在既有 RunExecutionBinding 中保存 host 生成的 projectDocumentIndexSnapshotRef，固定项目修订、documentSet、generation 和 visibility epoch，检索与最终发布均重新检查；请求不能携带历史开关或自行声明该证明。
+
+近似投影问答使用既有 artifact_summary，绑定实际派生 artifact 及原始 cell 来源，保留 approximate_document_source/limited_factual_result；不冒充精确逐字引用。原文/来源位置/固定索引失效或撤回阻止新的发布，已核验历史答案和其归档证据仍按原有授权读取。结构化投影的不同定位行保留为不同检索片段，重复文件中的同定位 quote 按 lineage 折叠；普通 text/PDF 仍按原文 lineage 只计一个最佳片段。
+
+成员、structured parse 和文档投影使用同一原始 parseId，使映射、事实及演进的现有来源 fence 保持一致；投影 parser/version 与原始 parser/version 分开记录。迁移 086 保存实际 native parse_options，immutable map 固定可回放 selection。NULL 历史记录不能猜默认 sheet/header，仅允许从 scoped、当前修订固定的实际确认 mapping 恢复唯一选择，并核验 mapping 内容摘要、原始表头、持久化行及每个 cell。未知字段和脚本不是 selection。问答来源验证按实际 gateway envelope 身份、keyword 来源及 QA schema 分流；规则/政策 document_span 保留既有来源验证及真实 premise replay。最终 readiness 写入或状态读取期间的取消不得晚回成功，也不能全局撤销其他有效并发构建。
 
 collectionRef 由 host 生成 project:<projectId>，客户端／模型只能通过项目任务请求其可用文档能力。corpus 是固定 DocumentSet 中授权 active memberships及完整 parse refs，不是全空间 listParses；索引 digests包括 tokenizer/parser版本、成员documentRef/parseRef/textDigest与visibility epoch。
 

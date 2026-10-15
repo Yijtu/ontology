@@ -43,5 +43,17 @@ jobs:
       - name: Typecheck
         run: pnpm run typecheck
 
+      - name: Preload PostgreSQL 17 test image
+        shell: bash
+        run: |
+          docker pull public.ecr.aws/docker/library/postgres:17
+          docker tag public.ecr.aws/docker/library/postgres:17 postgres:17
+          postgres_version="$(docker run --rm --tmpfs /var/lib/postgresql/data --entrypoint postgres postgres:17 --version)"
+          printf '%s\n' "$postgres_version"
+          case "$postgres_version" in
+            "postgres (PostgreSQL) 17."*) ;;
+            *) echo "expected PostgreSQL 17 test image, received: $postgres_version" >&2; exit 1 ;;
+          esac
+
       - name: Test
         run: pnpm run test

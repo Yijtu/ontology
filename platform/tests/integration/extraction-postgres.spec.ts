@@ -46,6 +46,7 @@ import {
   CountingGenerationPort,
   MODEL_REF,
   generationResponse,
+  textSpan,
 } from '../unit/extraction-fixtures'
 import { createJobScope, startJobDatabase } from './job-postgres-harness'
 import type { JobDbHarness, JobTestScope } from './job-postgres-harness'
@@ -286,7 +287,7 @@ describe('extraction candidates against a real PostgreSQL', () => {
       expect(candidate.sourceSpans.length).toBeGreaterThan(0)
       expect(candidate.sourceSpans[0]?.parseId).toBe(parsed.parseId)
       const chunkIds = parsed.chunks.map((chunk) => chunk.chunkId)
-      expect(chunkIds).toContain(candidate.sourceSpans[0]?.chunkId)
+      expect(chunkIds.includes(textSpan(candidate.sourceSpans[0])?.chunkId ?? '')).toBe(true)
       expect(candidate.inputVersion.definitionRef.digest).toBe(definitionRef.digest)
     }
     const entities = candidates.filter((candidate) => candidate.kind === 'entity')
@@ -305,7 +306,7 @@ describe('extraction candidates against a real PostgreSQL', () => {
     expect(reread.ref.digest).toBe(definitionRef.digest)
 
     // A span round-trips through the real parse store to the exact chunk text.
-    const firstChunkId = candidates[0]?.sourceSpans[0]?.chunkId
+    const firstChunkId = textSpan(candidates[0]?.sourceSpans[0])?.chunkId
     const chunk = parsed.chunks.find((entry) => entry.chunkId === firstChunkId)
     expect(chunk).toBeDefined()
     if (chunk === undefined) return

@@ -9,6 +9,7 @@ import {
   FileSystemObjectStore,
   LocalImmutableBlobStore,
   PostgresArtifactRegistry,
+  sha256Digest,
 } from '@ontology/adapter-blob-local'
 import {
   ControlPostgresDatabase,
@@ -21,7 +22,14 @@ import { createToolGatewayComposition } from '@ontology/app-api'
 import { DraftVerificationService } from '@ontology/application'
 import { BudgetService } from '@ontology/core'
 import { type RunToolBinding } from '@ontology/tool-services'
-import type { ResourceRef, ToolCall } from '@ontology/contracts'
+import type {
+  EvidenceEnvelope,
+  ResourceRef,
+  Sha256Digest,
+  ToolCall,
+  VerifiedAssertion,
+  VersionRef,
+} from '@ontology/contracts'
 import { startPostgresContainer } from './postgres-container'
 import type { PostgresContainer } from './postgres-container'
 import {
@@ -38,6 +46,7 @@ import {
   SCOPE_A,
   buildClaim,
   buildDraft,
+  buildEvidence,
   buildInputManifest,
   modelRef,
   ownerContext,
@@ -292,5 +301,211 @@ describe('DraftVerificationService against real PostgreSQL, blob store and tool 
     )
     expect(authorized.integrityVerified).toBe(true)
     expect(record.envelope.payloadRef.kind).toBe('artifact')
+  })
+})
+
+/** A text digest helper for the integration fixtures (content-addressed, never rounded). */
+function digestOf(text: string): Sha256Digest {
+  return sha256Digest(new TextEncoder().encode(text))
+}
+
+/**
+ * Archive one typed evidence payload through the real blob store and control-Postgres evidence
+ * archive, then return the exact evidence record the verifier must read back.
+ */
+async function archiveTypedEvidence(
+  kind: EvidenceEnvelope['kind'],
+  payload: unknown,
+  ctx = ownerContext(),
+): Promise<{ readonly ref: ResourceRef; readonly resultDigest: Sha256Digest; readonly recordedAt: string }> {
+  const bytes = new TextEncoder().encode(JSON.stringify(payload))
+  const contentDigest = sha256Digest(bytes)
+  await blobStore.stage(bytes, { scopeRef: SCOPE_A }, ctx)
+  const published = await blobStore.publish(
+    { scopeRef: SCOPE_A, contentDigest, mediaType: 'application/json', byteSize: bytes.byteLength, purpose: 'artifact' },
+    ctx,
+  )
+  const envelope = buildEvidence({
+    evidenceId: randomUUID(),
+    payloadRef: published.blobRef,
+    resultDigest: published.blobRef.digest,
+    kind,
+  })
+  const record = await evidenceStore.record(SCOPE_A, envelope, ctx)
+  return { ref: record.evidenceRef, resultDigest: record.envelope.resultDigest, recordedAt: record.recordedAt }
+}
+
+describe('typed evidence verifier against real PostgreSQL, blob store and evidence archive', () => {
+  const RULE_REF: VersionRef = { id: 'rule.maintenance', version: '1.0.0', digest: digestOf('rule-maintenance') }
+  const DEFINITION_REF: VersionRef = { id: 'def.transport', version: '2.0.0', digest: digestOf('def-transport') }
+  const DOCUMENT: ResourceRef = { id: 'd1111111-1111-4111-8111-111111111111', version: '1.0.0', digest: digestOf('document'), kind: 'artifact' }
+
+  function serviceFor(now: string): DraftVerificationService {
+    return new DraftVerificationService({
+      evidence: evidenceStore,
+      artifacts: blobStore,
+      policy: verificationPolicy({ semanticReview: 'disabled' }),
+      now: () => now,
+    })
+  }
+
+  it('blocks a wrong rule verdict recomputed from the real archived rule artifact', async () => {
+    const ctx = ownerContext()
+    const artifact = {
+      schemaVersion: 'rule-computation-artifact@1',
+      scopeRef: SCOPE_A,
+      definitionRef: DEFINITION_REF,
+      ruleRef: RULE_REF,
+      ruleId: 'rule.maintenance',
+      ruleVersionId: randomUUID(),
+      publishedRevision: '4',
+      instanceKey: 'I-04',
+      objectId: 'transport_facility',
+      subjectEntityId: 'I-04',
+      predicate: 'maintenance_applicability',
+      applicability: { state: 'applicable', conditionState: 'true', exceptionStates: [], positiveSupport: true },
+      factRefs: [],
+      sourceStatementIds: [],
+      inputDigest: digestOf('input'),
+      computationDigest: digestOf('computation'),
+      sourceSpans: [],
+      complete: true,
+    }
+    const support = {
+      schemaVersion: 'rule-derivation-support-payload@1',
+      artifact,
+      sourceEvidenceMappings: [],
+      policySourceEvidenceMappings: [],
+    }
+    const evidence = await archiveTypedEvidence('rule_derivation', support, ctx)
+    const assertion: VerifiedAssertion = {
+      assertionId: randomUUID(),
+      kind: 'rule_judgement',
+      subject: 'I-04',
+      predicate: 'maintenance_applicability',
+      value: 'false',
+      ruleRef: RULE_REF,
+      premiseRefs: [],
+      judgementAxis: 'applicability',
+      references: [{
+        evidenceRef: evidence.ref,
+        resultDigest: evidence.resultDigest,
+        valuePointer: '/artifact',
+        subjectPointer: '/artifact/subjectEntityId',
+        rulePointer: '/artifact',
+      }],
+    }
+    const manifest = buildInputManifest([evidence.ref])
+    const draft = buildDraft({
+      evidenceManifestHash: manifest.digest,
+      claims: [],
+      assertions: [assertion],
+      schemaVersion: 'answer-draft@2',
+      blocks: [{ kind: 'assertion', assertionId: assertion.assertionId }],
+    })
+    const result = await serviceFor(evidence.recordedAt).verify(
+      { runId: RUN_ID, draft, inputManifest: manifest },
+      ctx,
+    )
+    expect(result.verdict).toBe('fail')
+    expect(result.failedChecks).toContain('rule_judgement_mismatch')
+  })
+
+  it('blocks a swapped relation endpoint against the real archived edge', async () => {
+    const ctx = ownerContext()
+    const edge = {
+      statementId: 'stmt-1',
+      statementVersion: '4',
+      relationId: 'feeds',
+      definitionRef: DEFINITION_REF,
+      fromEntityId: 'E-A',
+      toEntityId: 'E-B',
+      fromCandidateId: 'c-a',
+      toCandidateId: 'c-b',
+      sourceRefs: [],
+    }
+    const evidence = await archiveTypedEvidence('observation', { resultKind: 'relations', edges: [edge] }, ctx)
+    const ref = (id: string): ResourceRef => ({ id, version: '1.0.0', digest: digestOf(id), kind: 'artifact' })
+    const assertion: VerifiedAssertion = {
+      assertionId: randomUUID(),
+      kind: 'relation_ref',
+      subject: 'E-A',
+      predicate: 'feeds',
+      value: { type: 'feeds', from: ref('E-B'), to: ref('E-A') },
+      statementId: 'stmt-1',
+      definitionRef: DEFINITION_REF,
+      references: [{
+        evidenceRef: evidence.ref,
+        resultDigest: evidence.resultDigest,
+        valuePointer: '/edges/0',
+        subjectPointer: '/edges/0/fromEntityId',
+        relationPointer: '/edges/0',
+      }],
+    }
+    const manifest = buildInputManifest([evidence.ref])
+    const draft = buildDraft({
+      evidenceManifestHash: manifest.digest,
+      claims: [],
+      assertions: [assertion],
+      schemaVersion: 'answer-draft@2',
+      blocks: [{ kind: 'assertion', assertionId: assertion.assertionId }],
+    })
+    const result = await serviceFor(evidence.recordedAt).verify(
+      { runId: RUN_ID, draft, inputManifest: manifest },
+      ctx,
+    )
+    expect(result.verdict).toBe('fail')
+    expect(result.failedChecks).toContain('relation_endpoint_mismatch')
+  })
+
+  it('blocks a citation whose locator does not match the real archived document span', async () => {
+    const ctx = ownerContext()
+    const quote = 'the inspection interval is 90 days'
+    const locator = { kind: 'page', page: 4 }
+    const payload = {
+      subject: 'entity.device-17',
+      quote,
+      quoteDigest: digestOf(quote),
+      textDigest: digestOf('full-document-text'),
+      locator,
+      documentRef: DOCUMENT,
+    }
+    const evidence = await archiveTypedEvidence('document_span', payload, ctx)
+    const assertion: VerifiedAssertion = {
+      assertionId: randomUUID(),
+      kind: 'document_quote',
+      subject: 'entity.device-17',
+      predicate: 'inspection_note',
+      quote,
+      documentRef: DOCUMENT,
+      locator: { kind: 'page', page: 5 },
+      quoteDigest: digestOf(quote),
+      textDigest: digestOf('full-document-text'),
+      precision: 'exact',
+      references: [{
+        evidenceRef: evidence.ref,
+        resultDigest: evidence.resultDigest,
+        valuePointer: '/quote',
+        subjectPointer: '/subject',
+        documentPointer: '/documentRef',
+        locatorPointer: '/locator',
+        quoteDigestPointer: '/quoteDigest',
+        textDigestPointer: '/textDigest',
+      }],
+    }
+    const manifest = buildInputManifest([evidence.ref])
+    const draft = buildDraft({
+      evidenceManifestHash: manifest.digest,
+      claims: [],
+      assertions: [assertion],
+      schemaVersion: 'answer-draft@2',
+      blocks: [{ kind: 'assertion', assertionId: assertion.assertionId }],
+    })
+    const result = await serviceFor(evidence.recordedAt).verify(
+      { runId: RUN_ID, draft, inputManifest: manifest },
+      ctx,
+    )
+    expect(result.verdict).toBe('fail')
+    expect(result.failedChecks).toContain('citation_locator_mismatch')
   })
 })

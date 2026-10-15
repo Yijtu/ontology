@@ -79,6 +79,7 @@ function emptyState(): ScopeState {
 }
 
 export interface InMemorySemanticPublicationStoreOptions {
+  readonly ruleProjectGuard?: (scope: ScopeRef, input: PublishSemanticPublicationInput, ctx: ToolContext) => Promise<void>
   /**
    * When supplied, the fences carried by a publication/revision are opened through it, so the
    * reference composition observes the same atomic fence-before-advance behaviour as the
@@ -97,9 +98,11 @@ export interface InMemorySemanticPublicationStoreOptions {
 export class InMemorySemanticPublicationStore implements SemanticPublicationStore {
   readonly #scopes = new Map<string, ScopeState>()
   readonly #materialization: MaterializationStore | undefined
+  readonly #ruleProjectGuard: InMemorySemanticPublicationStoreOptions['ruleProjectGuard']
 
   constructor(options?: InMemorySemanticPublicationStoreOptions) {
     this.#materialization = options?.materialization
+    this.#ruleProjectGuard = options?.ruleProjectGuard
   }
 
   #state(scopeRef: ScopeRef): ScopeState {
@@ -239,6 +242,10 @@ export class InMemorySemanticPublicationStore implements SemanticPublicationStor
         )
       }
       return { publication: clone(existing), created: false }
+    }
+    if (input.publication.ruleVersions.some((rule) => rule.projectId !== undefined)) {
+      if (this.#ruleProjectGuard === undefined) throw new SemanticPublicationStoreError('IDENTITY_CONSTRAINT_BLOCKED', 'project-tagged rules require an atomic project commit guard')
+      await this.#ruleProjectGuard(scopeRef, input, ctx)
     }
     if (String(state.publicationHead) !== input.expectedRevision) {
       throw new SemanticPublicationStoreError(

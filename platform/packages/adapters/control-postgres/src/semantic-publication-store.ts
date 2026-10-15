@@ -1,4 +1,4 @@
-import { SemanticPublicationStoreError, isToolContext } from '@ontology/contracts'
+import { SemanticPublicationStoreError, assertRuleDependencyShape, isToolContext } from '@ontology/contracts'
 import type {
   AppendCandidateReviewInput,
   CandidateReviewDecision,
@@ -22,6 +22,8 @@ import type {
 import type { QueryResultRow } from 'pg'
 import { ControlPostgresDatabase } from './database'
 import { MATERIALIZED_PROJECTION_REF } from './materialization-store'
+import { assertProjectFactPublicationFences } from './project-fact-publication-fence'
+import { assertRuleProjectPublicationFences } from './rule-project-publication-fence'
 
 interface ScopedQuery {
   query<Row extends QueryResultRow>(
@@ -36,11 +38,15 @@ interface ScopedQuery {
  * throw here leaves no publication, statement, rule or outbox row behind.
  */
 export interface PublicationFaultInjection {
-  readonly beforeCommit?: () => void
+  readonly beforeCommit?: () => void | Promise<void>
 }
 
 export interface PostgresSemanticPublicationStoreOptions {
   readonly faultInjection?: PublicationFaultInjection
+  /** Host-only business read view; exclusion runs before keyset paging and finite source limits. */
+  readonly excludeSyntheticValidationProjects?: boolean
+  /** Host-selected physical projection; public publication inputs cannot select this. */
+  readonly materializationProjectionRef?: string
 }
 
 interface ReviewRow extends QueryResultRow {
@@ -53,6 +59,7 @@ interface ReviewRow extends QueryResultRow {
   recorded_at: Date
   actor: string
   supersedes_revision: string | null
+  content_digest: string | null
 }
 
 interface PublicationRow extends QueryResultRow {
@@ -94,6 +101,9 @@ interface RuleRow extends QueryResultRow {
   expression: PublishedRuleVersion['expression']
   exceptions: PublishedRuleVersion['exceptions']
   conclusion: NonNullable<PublishedRuleVersion['conclusion']> | null
+  rule_dependencies: readonly string[]
+  dependency_refs: NonNullable<PublishedRuleVersion['dependencyRefs']>
+  project_id: string | null
   valid_from: Date | null
   valid_to: Date | null
   recorded_at: Date
@@ -120,11 +130,11 @@ const STATEMENT_COLUMNS = `statement_id, proposition_key, kind, object_id, relat
   predicate, value, unit_code, valid_from, valid_to, recorded_at, source_candidate_id, source_refs,
   publication_id, version, status`
 const RULE_COLUMNS = `rule_version_id, rule_id, version, object_id, severity, impact, expression,
-  exceptions, conclusion, valid_from, valid_to, recorded_at, source_candidate_id, publication_id`
+  exceptions, conclusion, rule_dependencies, dependency_refs, project_id, valid_from, valid_to, recorded_at, source_candidate_id, publication_id`
 const REVISION_COLUMNS = `revision_id, statement_id, version, kind, reason, corrected_value, valid_from,
   valid_to, recorded_at, actor, supersedes_version, invalidation_outbox_id`
 const REVIEW_COLUMNS = `review_id, candidate_id, revision, decision, reason, evidence_refs, recorded_at,
-  actor, supersedes_revision`
+  actor, supersedes_revision, content_digest`
 
 function toReview(row: ReviewRow): CandidateReviewRecord {
   return {
@@ -136,6 +146,7 @@ function toReview(row: ReviewRow): CandidateReviewRecord {
     evidenceRefs: row.evidence_refs,
     recordedAt: row.recorded_at.toISOString(),
     actor: row.actor,
+    ...(row.content_digest == null ? {} : { contentDigest: row.content_digest }),
     ...(row.supersedes_revision === null ? {} : { supersedesRevision: row.supersedes_revision }),
   }
 }
@@ -163,6 +174,7 @@ function toStatement(row: StatementRow): PublishedStatement {
 }
 
 function toRuleVersion(row: RuleRow): PublishedRuleVersion {
+  assertRuleDependencyShape(row.rule_dependencies, row.dependency_refs)
   return {
     ruleVersionId: row.rule_version_id,
     ruleId: row.rule_id,
@@ -173,6 +185,8 @@ function toRuleVersion(row: RuleRow): PublishedRuleVersion {
     expression: row.expression,
     exceptions: row.exceptions,
     ...(row.conclusion === null ? {} : { conclusion: row.conclusion }),
+    ...(row.rule_dependencies.length === 0 ? {} : { ruleDependencies: row.rule_dependencies, dependencyRefs: row.dependency_refs }),
+    ...(row.project_id === null ? {} : { projectId: row.project_id }),
     ...(row.valid_from === null ? {} : { validFrom: row.valid_from.toISOString() }),
     ...(row.valid_to === null ? {} : { validTo: row.valid_to.toISOString() }),
     recordedAt: row.recorded_at.toISOString(),
@@ -212,10 +226,14 @@ function toRevision(row: RevisionRow): StatementRevisionRecord {
 export class PostgresSemanticPublicationStore implements SemanticPublicationStore {
   readonly #database: ControlPostgresDatabase
   readonly #faultInjection: PublicationFaultInjection | undefined
+  readonly #excludeSyntheticValidationProjects: boolean
+  readonly #materializationProjectionRef: string
 
   constructor(database: ControlPostgresDatabase, options?: PostgresSemanticPublicationStoreOptions) {
     this.#database = database
     this.#faultInjection = options?.faultInjection
+    this.#excludeSyntheticValidationProjects = options?.excludeSyntheticValidationProjects === true
+    this.#materializationProjectionRef = options?.materializationProjectionRef ?? MATERIALIZED_PROJECTION_REF
   }
 
   async latestReviewRevision(
@@ -273,11 +291,11 @@ export class PostgresSemanticPublicationStore implements SemanticPublicationStor
       const inserted = await query.query<ReviewRow>(
         `INSERT INTO agent_platform.semantic_candidate_reviews
            (tenant_id, space_id, review_id, candidate_id, revision, decision, reason, evidence_refs,
-            recorded_at, actor, supersedes_revision)
+            recorded_at, actor, supersedes_revision, content_digest)
          VALUES (
            current_setting('app.tenant_id')::uuid,
            current_setting('app.space_id')::uuid,
-           $1, $2, $3, $4, $5, $6::jsonb, $7::timestamptz, $8, $9)
+           $1, $2, $3, $4, $5, $6::jsonb, $7::timestamptz, $8, $9, $10)
          RETURNING ${REVIEW_COLUMNS}`,
         [
           draft.reviewId,
@@ -289,6 +307,7 @@ export class PostgresSemanticPublicationStore implements SemanticPublicationStor
           draft.recordedAt,
           draft.actor,
           revisionNumber === 1 ? null : head.revision,
+          draft.contentDigest ?? null,
         ],
       )
       const row = inserted.rows[0]
@@ -377,6 +396,15 @@ export class PostgresSemanticPublicationStore implements SemanticPublicationStor
     ctx: ToolContext,
   ): Promise<PublicationPublishResult> {
     return this.#withScope(scopeRef, ctx, async (query) => {
+      // Replay first; a committed receipt remains readable after later source withdrawal.
+      const prior = await query.query<ReplayRow>(
+        `SELECT revision::text AS revision,payload,request_digest FROM agent_platform.semantic_publications
+         WHERE tenant_id=current_setting('app.tenant_id')::uuid AND space_id=current_setting('app.space_id')::uuid AND idempotency_key=$1`, [input.idempotencyKey],
+      )
+      if (prior.rows[0] === undefined) {
+        await assertRuleProjectPublicationFences(query, input)
+        await assertProjectFactPublicationFences(query, input)
+      }
       await query.query(
         `INSERT INTO agent_platform.semantic_publication_heads (tenant_id, space_id, revision)
          VALUES (current_setting('app.tenant_id')::uuid, current_setting('app.space_id')::uuid, 0)
@@ -535,16 +563,17 @@ export class PostgresSemanticPublicationStore implements SemanticPublicationStor
       }
 
       for (const rule of publication.ruleVersions) {
+        assertRuleDependencyShape(rule.ruleDependencies ?? [], rule.dependencyRefs ?? [])
         await query.query(
           `INSERT INTO agent_platform.published_rule_versions
              (tenant_id, space_id, rule_version_id, rule_id, version, object_id, severity, impact,
               expression, exceptions, conclusion, valid_from, valid_to, recorded_at, source_candidate_id,
-              publication_id)
+              publication_id, rule_dependencies, dependency_refs, project_id)
            VALUES (
              current_setting('app.tenant_id')::uuid,
              current_setting('app.space_id')::uuid,
              $1, $2, $3::bigint, $4, $5, $6, $7::jsonb, $8::jsonb, $9::jsonb,
-             $10::timestamptz, $11::timestamptz, $12::timestamptz, $13, $14)`,
+             $10::timestamptz, $11::timestamptz, $12::timestamptz, $13, $14, $15::jsonb, $16::jsonb, $17::uuid)`,
           [
             rule.ruleVersionId,
             rule.ruleId,
@@ -560,6 +589,9 @@ export class PostgresSemanticPublicationStore implements SemanticPublicationStor
             rule.recordedAt,
             rule.sourceCandidateId,
             rule.publicationId,
+            JSON.stringify(rule.ruleDependencies ?? []),
+            JSON.stringify(rule.dependencyRefs ?? []),
+            rule.projectId ?? null,
           ],
         )
       }
@@ -593,7 +625,7 @@ export class PostgresSemanticPublicationStore implements SemanticPublicationStor
 
       await this.#openMaterializationFences(query, input.materializationFences ?? [])
 
-      this.#faultInjection?.beforeCommit?.()
+      await this.#faultInjection?.beforeCommit?.()
       return { publication, created: true }
     })
   }
@@ -663,6 +695,12 @@ export class PostgresSemanticPublicationStore implements SemanticPublicationStor
         `space_id = current_setting('app.space_id')::uuid`,
       ]
       const values: unknown[] = []
+      if (this.#excludeSyntheticValidationProjects) clauses.push(`NOT EXISTS (
+        SELECT 1 FROM jsonb_array_elements(CASE WHEN jsonb_typeof(published_statements.value#>'{provenance,sources}')='array'
+          THEN published_statements.value#>'{provenance,sources}' ELSE '[]'::jsonb END) source
+        JOIN agent_platform.project_revisions pr ON pr.tenant_id=published_statements.tenant_id AND pr.space_id=published_statements.space_id
+          AND pr.project_id::text=source#>>'{projectRevisionRef,projectId}' AND pr.revision::text=source#>>'{projectRevisionRef,revision}'
+        WHERE pr.body->>'executionPurpose'='synthetic_validation')`)
       if (filter.propositionKey !== undefined) {
         values.push(filter.propositionKey)
         clauses.push(`proposition_key = $${String(values.length)}`)
@@ -710,6 +748,9 @@ export class PostgresSemanticPublicationStore implements SemanticPublicationStor
         `space_id = current_setting('app.space_id')::uuid`,
       ]
       const values: unknown[] = []
+      if (this.#excludeSyntheticValidationProjects) clauses.push(`NOT EXISTS (
+        SELECT 1 FROM agent_platform.project_revisions pr WHERE pr.tenant_id=published_rule_versions.tenant_id AND pr.space_id=published_rule_versions.space_id
+          AND pr.project_id=published_rule_versions.project_id AND pr.body->>'executionPurpose'='synthetic_validation')`)
       if (filter.objectId !== undefined) {
         values.push(filter.objectId)
         clauses.push(`object_id = $${String(values.length)}`)
@@ -864,7 +905,7 @@ export class PostgresSemanticPublicationStore implements SemanticPublicationStor
         WHERE tenant_id = current_setting('app.tenant_id')::uuid
           AND space_id = current_setting('app.space_id')::uuid
           AND projection_ref = $1`,
-      [MATERIALIZED_PROJECTION_REF],
+      [this.#materializationProjectionRef],
     )
     const generation = state.rows[0]?.generation ?? '0'
     for (const fence of fences) {
@@ -877,7 +918,7 @@ export class PostgresSemanticPublicationStore implements SemanticPublicationStor
            current_setting('app.space_id')::uuid,
            $1, $2, $3::bigint, $4, $5::jsonb, 'open', $6::timestamptz)`,
         [
-          MATERIALIZED_PROJECTION_REF,
+          this.#materializationProjectionRef,
           fence.fenceId,
           generation,
           fence.reason,

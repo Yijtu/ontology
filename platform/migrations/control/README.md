@@ -19,6 +19,43 @@ holds a PostgreSQL advisory lock, records every applied version plus a SHA-256
 checksum in `agent_platform.control_schema_migrations`, skips already-applied
 versions and fails if an applied migration's contents changed.
 
+## v0.3 A and subsequent migrations (058–087)
+
+The v0.3 A release ([`../../docs/v03-a-release-2026-09-30.md`](../../docs/v03-a-release-2026-09-30.md)) appended
+`058–077`; later fixes and features appended `078–087`. None of `001..057`
+were edited:
+
+```text
+058_industry_workspace_project_revisions.sql
+059_structured_ingestion.sql
+060_structured_extraction_candidates.sql
+061_asset_definition_candidates.sql
+062_instance_review.sql
+063_definition_edit_adjudications.sql
+064_asset_rule_action_candidates.sql
+065_synthetic_validation.sql
+066_published_pack_assets.sql
+067_project_readiness.sql
+068_project_mapping_records.sql
+069_project_document_index.sql
+070_task_execution_bindings.sql
+071_core_plan_receipts.sql
+073_task_validation_policies.sql
+075_compute_execution.sql
+076_table_artifacts.sql
+077_table_hard_verification.sql
+078_pack_review_content_pins.sql
+079_exact_scalar_decimals.sql
+080_published_rule_dependencies.sql
+081_definition_generation_reuse.sql
+082_rule_action_generation.sql
+083_project_evolution.sql
+086_structured_parse_selection.sql
+087_optional_table_verification_receipt.sql
+```
+
+Unused numbers in this sequence include `072`, `074`, `084`, and `085`.
+
 ## Adding a migration
 
 1. Add `NNN_snake_case.sql` with the next free numeric version.

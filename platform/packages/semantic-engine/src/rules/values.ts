@@ -1,7 +1,7 @@
 import type { DecimalQuantity, ScalarValue, SemanticFilter } from '@ontology/contracts'
 import { canonicalDecimalString } from '@ontology/core'
 import { RuleEvaluationError } from './errors'
-import type { RuleAssertionValue } from './types'
+import type { RuleAssertionValue, RuleScalarDecimalValue } from './types'
 
 export { canonicalDecimalString }
 
@@ -56,13 +56,13 @@ export function compareDecimal(left: string, right: string): -1 | 0 | 1 {
 }
 
 export function isDecimalQuantity(value: unknown): value is DecimalQuantity {
-  if (typeof value !== 'object' || value === null) return false
-  const candidate = value as Record<string, unknown>
-  return typeof candidate['amount'] === 'string' && typeof candidate['unit'] === 'string'
+  return isRuleDecimalValue(value)
 }
 
 export function isRuleDecimalValue(value: unknown): value is DecimalQuantity {
   if (typeof value !== 'object' || value === null || Array.isArray(value)) return false
+  const keys = Object.keys(value)
+  if (keys.length !== 2 || keys.some((key) => key !== 'amount' && key !== 'unit')) return false
   const candidate = value as Record<string, unknown>
   return (
     typeof candidate['amount'] === 'string' &&
@@ -71,10 +71,18 @@ export function isRuleDecimalValue(value: unknown): value is DecimalQuantity {
   )
 }
 
+export function isRuleScalarDecimalValue(value: unknown): value is RuleScalarDecimalValue {
+  if (typeof value !== 'object' || value === null || Array.isArray(value)) return false
+  const keys = Object.keys(value)
+  return keys.length === 2 && keys.every((key) => key === 'kind' || key === 'amount') && 'kind' in value && value.kind === 'scalar_decimal' && 'amount' in value &&
+    typeof value.amount === 'string' && value.amount.length <= 64 && /^-?(?:0|[1-9]\d*)(?:\.\d+)?$/.test(value.amount) && canonicalDecimalString(value.amount) !== undefined
+}
+
 /** The exact decimal amount of a quantity or number value, `undefined` for non-numerics. */
 export function decimalAmountOf(value: RuleAssertionValue | undefined): string | undefined {
   if (value === undefined) return undefined
   if (isRuleDecimalValue(value)) return value.amount
+  if (isRuleScalarDecimalValue(value)) return value.amount
   return undefined
 }
 
@@ -85,7 +93,7 @@ export function unitOf(value: RuleAssertionValue | undefined): string | undefine
 
 function scalarEquals(value: RuleAssertionValue, scalar: ScalarValue): boolean | undefined {
   if (scalar === null) return false
-  if (isRuleDecimalValue(value)) {
+  if (isRuleDecimalValue(value) || isRuleScalarDecimalValue(value)) {
     if (typeof scalar !== 'number' && typeof scalar !== 'string') return false
     const amount = canonicalDecimalString(typeof scalar === 'number' ? String(scalar) : scalar)
     if (amount === undefined) return undefined

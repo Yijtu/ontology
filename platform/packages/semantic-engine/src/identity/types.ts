@@ -213,6 +213,8 @@ export interface SimilarityBackend {
 
 /** One extracted entity mention to recall known identities for. */
 export interface EntityRecallRequest {
+  /** Host-pinned project isolation; the index must have a confirmed `project` dimension mapping. */
+  readonly projectId?: Uuid
   /** The published definition version the candidate was extracted under. */
   readonly definitionRef: VersionRef
   readonly candidate: EntityCandidate
@@ -307,6 +309,8 @@ export interface IdentityRecallResult {
 }
 
 export interface EntityCandidateRecallDependencies {
+  /** Host-minted id for each actual similarity comparison attempt on the same shared ledger. */
+  readonly newId?: () => Uuid
   /** Published definitions; the identity scope is resolved from here, never from a name. */
   readonly schemaSource: IndustrySchemaSource
   /** Bounded identity-index reader (production: StructuredQueryPort; tests: in-memory). */

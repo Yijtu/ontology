@@ -110,12 +110,14 @@ describe('Core deployment picker', () => {
       scenarioPicker!.dispatchEvent(new Event('change', { bubbles: true }))
       await Promise.resolve()
     })
+    const discard = container.querySelector('[data-testid="shell-discard-changes"]')
+    if (discard !== null) await act(async () => { discard.dispatchEvent(new MouseEvent('click', { bubbles: true })) })
     expect(container.querySelector('[data-testid="scope-profile"]')?.textContent).toContain('industrial-profile@1.0.0')
     expect(requestedProfiles).toContain('industrial-profile')
     expect(container.querySelector('[data-testid="query-registered-task"]')?.textContent).toContain('facts:operating_hours')
     expect(container.querySelector('[data-testid="tab-energy"]')).toBeNull()
     expect(container.querySelector('[data-testid="core-deployment-classification"]')?.textContent).toBe('合成演示数据（非行业标准）')
-    expect(container.querySelector('[data-testid="query-capability-note"]')?.textContent).toContain('Company生成未启用')
+    expect(container.querySelector('[data-testid="query-capability-note"]')?.textContent).toContain('文本生成未启用')
   })
 
   it('passes the mounted base profile spec into the shared Workbench publication flow', async () => {

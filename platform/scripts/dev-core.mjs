@@ -166,6 +166,8 @@ export function resolveCoreDevEnvironment(
     if (/(?:API_KEY|SECRET|TOKEN|PASSWORD)$/iu.test(name)) delete webEnvironment[name]
   }
   delete webEnvironment['CORE_DATABASE_URL']
+  delete webEnvironment['PROJECT_BUSINESS_DATABASE_URL']
+  delete webEnvironment['PROJECT_BUSINESS_READONLY_DATABASE_URL']
   Object.assign(webEnvironment, {
     CORE_WEB_PORT: String(webPort),
     VITE_CORE_API_PORT: String(apiPort),

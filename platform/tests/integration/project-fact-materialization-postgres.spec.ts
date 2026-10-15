@@ -1,0 +1,902 @@
+import { randomUUID } from 'node:crypto'
+import { mkdtemp, rm } from 'node:fs/promises'
+import { tmpdir } from 'node:os'
+import { join } from 'node:path'
+import { afterAll, beforeAll, describe, expect, it, vi } from 'vitest'
+import { Client } from 'pg'
+import { FileSystemObjectStore, LocalImmutableBlobStore, PostgresArtifactRegistry } from '@ontology/adapter-blob-local'
+import { DocumentSpanReader, LocalDocumentExtractionService, LocalStructuredIngestionService, PostgresDocumentParseStore, PostgresStructuredIngestionStore, StructuredDocumentParser, StructuredPremiseSourceReader } from '@ontology/adapter-extraction-document'
+import {
+  ControlPostgresDatabase, PostgresCandidateStore, PostgresIdentityDecisionStore,
+  PostgresInstanceReviewStore, PostgresJobStore, PostgresProjectDocumentStore,
+  PostgresProjectMappingStore, PostgresProjectReadinessStore, PostgresProjectRecordStore,
+  PostgresProjectStore, PostgresSemanticPublicationStore,
+  PostgresMaterializationStore, PostgresEvidenceStore,
+  ControlPostgresRepository, PostgresSemanticDefinitionStore,
+} from '@ontology/adapter-control-postgres'
+import { DraftVerificationService, TypedEvidenceDraftWriter, InMemoryIndustrySchemaSource, InstanceReviewService, JobService, ProjectMappingService, ProjectService, encodeStructuredExtractionRef } from '@ontology/application'
+import { createBlobArtifactWriter, createProjectFactWorkflow, createInstanceIdentityWorkflow, createCoreStructuredImportWorkflow } from '@ontology/app-api'
+import { PostgresKeywordIndexStore } from '@ontology/adapter-search-bm25'
+import { PostgresRunExecutionBindingStore } from '@ontology/adapter-control-postgres'
+import {
+  IdentityDecisionService, InMemoryIdentityIndexReader, PublishedSemanticSource,
+  PublishedFactsReferenceProvider, OntologyLookupService, SemanticDefinitionService,
+  SemanticPublicationService,
+  InMemorySemanticDefinitionStore, RuleEvaluator,
+  definitionVersionDigest, projectIndustrySchema, projectPublishedAttributeFacts, sha256DigestOf,
+  ArchivedRulePremiseReplayVerifier, IncrementalMaterializer, MaterializedRuleDerivationEvidenceProducer,
+} from '@ontology/semantic-engine'
+import type { EntityCandidate, ColumnMappingEntry, ResourceRef, RuleCandidate, StructuredParseOptions, ToolContext, ScopeRef, PublishSemanticPublicationInput } from '@ontology/contracts'
+import { createJobScope, startJobDatabase } from './job-postgres-harness'
+import type { JobDbHarness } from './job-postgres-harness'
+import { seedIdentityProject } from './instance-identity-fixtures'
+import { toolContext } from '../unit/component-registry-fixtures'
+import { RecordingControlRepository } from '../unit/semantic-definition-fixtures'
+import { relationDefinition, targetCondition } from '../unit/rule-relation-fixtures'
+import { buildXlsx, buildZip, numberCellXml, rowXml, sharedStringCell, worksheetOf } from '../fixtures/structured/xlsx'
+import { buildInputManifest, RUN_ID, verificationPolicy } from '../unit/verification-fixtures'
+import { isRecord } from '@ontology/contracts'
+
+vi.setConfig({ testTimeout: 120_000 })
+let harness: JobDbHarness
+let db: ControlPostgresDatabase
+let candidates: PostgresCandidateStore
+let identities: PostgresIdentityDecisionStore
+let instanceStore: PostgresInstanceReviewStore
+let publicationStore: PostgresSemanticPublicationStore
+let projects: PostgresProjectStore
+let documents: PostgresProjectDocumentStore
+let records: PostgresProjectRecordStore
+let mappings: PostgresProjectMappingStore
+let jobs: PostgresJobStore
+let structured: PostgresStructuredIngestionStore
+let registry: PostgresArtifactRegistry
+let blobs: LocalImmutableBlobStore
+let objectDir = ''
+let documentParses: PostgresDocumentParseStore
+
+beforeAll(async () => {
+  harness = await startJobDatabase()
+  db = new ControlPostgresDatabase({ connectionString: harness.appUrl, maxPoolSize: 8 })
+  candidates = new PostgresCandidateStore(db)
+  identities = new PostgresIdentityDecisionStore(db)
+  instanceStore = new PostgresInstanceReviewStore(db)
+  publicationStore = new PostgresSemanticPublicationStore(db)
+  projects = new PostgresProjectStore(db)
+  documents = new PostgresProjectDocumentStore(db)
+  records = new PostgresProjectRecordStore(db)
+  mappings = new PostgresProjectMappingStore(db)
+  jobs = new PostgresJobStore(db)
+  structured = new PostgresStructuredIngestionStore({ connectionString: harness.appUrl, maxPoolSize: 2 })
+  registry = new PostgresArtifactRegistry({ connectionString: harness.appUrl, maxPoolSize: 2 })
+  documentParses = new PostgresDocumentParseStore({ connectionString: harness.appUrl, maxPoolSize: 2 })
+  objectDir = await mkdtemp(join(tmpdir(), 'project-facts-'))
+  const objects = new FileSystemObjectStore(objectDir)
+  await objects.init()
+  blobs = new LocalImmutableBlobStore({ objectStore: objects, registry })
+}, 300_000)
+
+afterAll(async () => {
+  await structured?.close()
+  await documentParses?.close()
+  await registry?.close()
+  await db?.close()
+  if (objectDir !== '') await rm(objectDir, { recursive: true, force: true })
+  await harness?.stop()
+})
+
+async function setup(label: string, store = publicationStore, numeric = false, reference = false) {
+  const scope = await createJobScope(harness.adminClient, label)
+  const ctx = toolContext(scope.tenantId, scope.spaceId, ['platform-admin', 'profile-editor', 'semantic-reviewer', 'semantic-publisher'])
+  const projectId = randomUUID()
+  const base = relationDefinition(scope.scopeRef)
+  const extended = { ...base, attributes: [...base.attributes,
+    { namespace: base.namespace, standardProvenance: [], kind: 'attribute' as const, id: 'reading', objectId: 'meter', valueType: 'number' as const, cardinality: { min: 1, max: 1 } },
+    { namespace: base.namespace, standardProvenance: [], kind: 'attribute' as const, id: 'label', objectId: 'meter', valueType: 'string' as const, cardinality: { min: 1, max: 1 } },
+  ] }
+  let definition = numeric ? { ...extended, ref: { ...base.ref, digest: definitionVersionDigest(extended) } } : base
+  if (reference) {
+    const policy = await blobs.stage(new TextEncoder().encode('Synthetic declaration: meter.target references one confirmed meter in the same project identity domain.'), { scopeRef: scope.scopeRef }, ctx)
+    const original = await blobs.publish({ scopeRef: scope.scopeRef, contentDigest: policy.contentDigest, byteSize: policy.byteSize, mediaType: 'text/plain', purpose: 'document' }, ctx)
+    const standardProvenance = [{ standardRef: { id: original.blobRef.id, version: original.blobRef.version, digest: original.blobRef.digest }, provenanceKind: 'synthetic_assumption' as const }]
+    definition = await new SemanticDefinitionService({ control: new ControlPostgresRepository(db), store: new PostgresSemanticDefinitionStore(db) }).publish({ scopeRef: scope.scopeRef,
+      namespace: base.namespace, definitionId: base.definitionId, version: base.version, layer: base.layer, standardProvenance,
+      objects: base.objects.map((object) => ({ ...object, standardProvenance })),
+      attributes: [...base.attributes.map((attribute) => ({ ...attribute, standardProvenance })), { kind: 'attribute', namespace: base.namespace, standardProvenance, id: 'target', objectId: 'meter', valueType: 'reference', referencesObjectId: 'meter', cardinality: { min: 0, max: 1 } }],
+      identityScopes: base.identityScopes.map((identity) => ({ ...identity, standardProvenance })), relations: base.relations.map((relation) => ({ ...relation, standardProvenance })), ruleConstraints: [] }, ctx)
+  }
+  await seedIdentityProject(harness.adminClient, scope.scopeRef, projectId, definition.ref)
+  const schemas = new InMemoryIndustrySchemaSource([{ ref: definition.ref, schema: projectIndustrySchema(definition) }])
+  const originals = { read: async (request: { approvedInputRefs: readonly ResourceRef[] }, context: ToolContext) => {
+    const ref = request.approvedInputRefs[0]
+    if (ref === undefined) throw new Error('missing original')
+    return blobs.readAuthorized({ scopeRef: { tenantId: context.principal.tenantId, spaceId: context.allowedResources.spaceId }, blobRef: ref }, context)
+  } }
+  const mapping = new ProjectMappingService({ projects, revisions: projects, mappings, records, ingestion: structured, originals, parser: new StructuredDocumentParser(), schemaSource: schemas })
+  const instances = new InstanceReviewService({ store: instanceStore })
+  const sourceJobs = new Map<string, string>()
+  const deps = { projects, mappings, records, projectDocuments: documents, ingestion: structured, candidates, schemaSource: schemas, jobs, resolveSourceJob: async (_scope: unknown, parseId: string) => sourceJobs.get(parseId) }
+  const workflow = createProjectFactWorkflow({ materialization: deps, publication: { store, identity: identities }, instanceRecords: instanceStore })
+  const identity = createInstanceIdentityWorkflow({ service: instances, projects, projectDocuments: documents, candidates, identityStore: identities, schemaSource: schemas, identityMappingRef: definition.ref, index: new InMemoryIdentityIndexReader([]) })
+  const projectService = new ProjectService({ projects, readiness: new PostgresProjectReadinessStore(db), jobs, catalogue: { listEntries: async () => [], findPack: async () => undefined } })
+  return { scope, ctx, projectId, definition, schemas, mapping, instances, workflow, identity, sourceJobs, projectService, numeric }
+}
+type Fixture = Awaited<ReturnType<typeof setup>>
+
+async function imported(p: Fixture, format: 'csv' | 'xlsx', objectId = 'meter', raw = '12000.000000000001', options: Omit<StructuredParseOptions, 'mediaType'> = { headerRow: 1 }, extraRow = false, reading = '9007199254740993', referenceValue?: string, nativeId = 'M-1') {
+  const csv = objectId === 'site' ? 'site_label\nS-1\n' : `device_label,watts,on${p.numeric ? ',reading,label' : ''}${referenceValue === undefined ? '' : ',target_id'}\n${nativeId},${raw},true${p.numeric ? `,${reading},${reading}` : ''}${referenceValue === undefined ? '' : `,${referenceValue}`}\n${extraRow ? 'M-2,20000,true\n' : ''}`
+  const bytes = format === 'csv' ? new TextEncoder().encode(csv) : buildXlsx({ sharedStrings: ['enabled', 'kilowatts', 'code', 'true', 'M-1'], sheetXml: worksheetOf([
+    rowXml(1, [sharedStringCell('A1', 0), sharedStringCell('B1', 1), sharedStringCell('C1', 2)]),
+    rowXml(2, [sharedStringCell('A2', 3), numberCellXml('B2', '12.000000000000001'), sharedStringCell('C2', 4)]),
+  ]) })
+  const mediaType = format === 'csv' ? 'text/csv' : 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet'
+  const staged = await blobs.stage(bytes, { scopeRef: p.scope.scopeRef }, p.ctx)
+  const original = await blobs.publish({ scopeRef: p.scope.scopeRef, contentDigest: staged.contentDigest, byteSize: staged.byteSize, mediaType, purpose: 'document' }, p.ctx)
+  const parsed = await new LocalStructuredIngestionService({ blobs, store: structured }).parse({ scopeRef: p.scope.scopeRef, originalRef: original.blobRef, options }, p.ctx)
+  const jobId = randomUUID()
+  await new JobService({ store: jobs }).createJob({ jobId, kind: 'ingestion', sourceRef: 'project-fact-test', documentRef: encodeStructuredExtractionRef({ kind: 'structured_extraction', parseId: parsed.parse.parseId, parserVersion: parsed.parse.parserVersion, definitionRef: p.definition.ref, format, originalRef: original.blobRef, originalMediaType: mediaType, options }), pipelineVersion: '1.0.0', idempotencyKey: `fact-job-${jobId}` }, p.ctx)
+  p.sourceJobs.set(parsed.parse.parseId, jobId)
+  const table = new StructuredDocumentParser().parse(bytes, { ...options, mediaType }).tables[0]
+  if (table === undefined) throw new Error('no parsed table')
+  const fieldIds = objectId === 'site' ? ['site_id'] : format === 'csv' ? ['meter_id', 'power', 'active', ...(p.numeric ? ['reading', 'label'] : []), ...(referenceValue === undefined ? [] : ['target'])] : ['active', 'power', 'meter_id']
+  const entries: ColumnMappingEntry[] = table.columns.map((column, index) => ({ fieldRef: fieldIds[index] ?? '', header: column.header, headerDigest: column.headerDigest, columnIndex: column.index,
+    ...(fieldIds[index] === 'power' ? { sourceUnitCode: format === 'csv' ? 'W' : 'kW', canonicalUnitCode: 'kW', ...(format === 'csv' ? { unitConversion: { fromUnitCode: 'W', toUnitCode: 'kW', numerator: '1', denominator: '1000' } } : {}) } : {}),
+  }))
+  const confirmation = await p.mapping.confirmMapping(p.projectId, { format, parseId: parsed.parse.parseId, originalRef: original.blobRef, originalMediaType: mediaType, options, objectId, entries }, `confirm-${jobId}`, p.ctx.principal.subjectId, p.ctx)
+  const documentId: string = randomUUID()
+  await documents.registerDocument(p.scope.scopeRef, p.projectId, { documentId, documentRef: original.blobRef, documentDigest: original.blobRef.digest, parseId: parsed.parse.parseId, parseRef: { id: parsed.parse.parseId, version: '1.0.0', digest: original.blobRef.digest, kind: 'artifact' }, textDigest: original.blobRef.digest, precision: 'exact', actor: p.ctx.principal.subjectId, recordedAt: new Date().toISOString() }, p.ctx)
+  return { mapping: confirmation.mapping, parse: parsed.parse, documentId }
+}
+type Imported = Awaited<ReturnType<typeof imported>>
+
+async function mount(p: Fixture, sources: readonly Imported[]) {
+  await p.projectService.appendRevision(p.projectId, { expectedRevision: '1', reason: 'human confirmed import mappings', mappingRefs: [...(await projects.getRevision(p.scope.scopeRef, p.projectId, '1', p.ctx))?.mappingRefs ?? [], ...sources.map((source) => source.mapping.ref)] }, `mount-${p.projectId}`, p.ctx.principal.subjectId, p.ctx)
+}
+async function stage(p: Fixture, source: Imported) {
+  const bound = await p.mapping.bindRecords(p.projectId, { parseId: source.parse.parseId, mappingId: source.mapping.mappingId, mappingVersion: source.mapping.version }, `bind-${source.documentId}`, p.ctx.principal.subjectId, p.ctx)
+  const entities = await p.workflow.materialization.stageRecords(p.projectId, { documentId: source.documentId, recordRefs: bound.records.map((record) => ({ recordId: record.recordId, revision: record.revision })), validFrom: '2026-10-01T00:00:00Z', validTo: '2027-01-01T00:00:00Z' }, p.ctx)
+  const entity = entities[0]
+  if (entity === undefined) throw new Error('missing mapped candidate')
+  return entity
+}
+async function confirmed(p: Fixture, candidate: EntityCandidate, documentId: string, targetEntityId?: string) {
+  const target = targetEntityId === undefined ? undefined : await identities.getEntity(p.scope.scopeRef, targetEntityId, p.ctx)
+  const nativeId = candidate.attributes.find((attribute) => attribute.attributeId === 'meter_id')?.value
+  const identity = target === undefined ? p.identity : createInstanceIdentityWorkflow({
+    service: p.instances, projects, projectDocuments: documents, candidates, identityStore: identities,
+    schemaSource: p.schemas, identityMappingRef: p.definition.ref,
+    // Controlled bounded recall over real PG identity metadata; the human decision remains PG authority.
+    index: new InMemoryIdentityIndexReader([{ tenantId: p.scope.tenantId, spaceId: p.scope.spaceId, entityId: target.entityId, objectId: target.objectId, identityScopeId: target.identityScopeId, displayName: 'M-1', normalizedName: 'm-1', ...(typeof nativeId === 'string' ? { nativeId } : {}), aliasConfirmed: false, dimensions: target.scopeDimensions }]),
+  })
+  const created = await identity.createRecord(p.scope.scopeRef, p.projectId, { candidateId: candidate.candidateId, documentId, relations: [], idempotencyKey: `instance-${candidate.candidateId}` }, p.ctx)
+  expect(created.record.fields.every((field) => field.status === 'pending')).toBe(true)
+  const reviewer = toolContext(p.scope.tenantId, p.scope.spaceId, ['semantic-reviewer'], 'mapped-field-reviewer')
+  let record = (await p.instances.confirmFields(p.scope.scopeRef, p.projectId, candidate.candidateId, { expectedRevision: created.record.recordRevision, decisions: created.record.fields.map((field) => ({ fieldId: field.fieldId, decision: 'confirm' })), idempotencyKey: `fields-${candidate.candidateId}` }, reviewer)).record
+  expect(record.fields.every((field) => field.actor === 'mapped-field-reviewer')).toBe(true)
+  expect((await p.instances.listConfirmations(p.scope.scopeRef, p.projectId, candidate.candidateId, p.ctx)).every((event) => event.actor === 'mapped-field-reviewer')).toBe(true)
+  if (targetEntityId === undefined) record = await identity.adjudicateIdentity(p.scope.scopeRef, p.projectId, candidate.candidateId, { expectedRevision: record.recordRevision, kind: 'create', reason: 'human verified exact row identity', idempotencyKey: `identity-${candidate.candidateId}` }, p.ctx)
+  else {
+    record = await identity.adjudicateIdentity(p.scope.scopeRef, p.projectId, candidate.candidateId, { expectedRevision: record.recordRevision, kind: 'match', targetEntityId, reason: 'human reviewed both source records as same device', idempotencyKey: `identity-${candidate.candidateId}` }, p.ctx)
+    expect(record.identity.state).toBe('matched')
+  }
+  await p.workflow.publication.reviewCandidate({ candidateId: candidate.candidateId, expectedRevision: '0', decision: 'approve', reason: 'human reviewed mapped candidate and exact source' }, p.ctx)
+  return record
+}
+async function publish(p: Fixture, selected: readonly { candidateId: string; kind: 'entity' | 'relation' | 'rule' }[], key: string = randomUUID()) {
+  return p.workflow.publication.publish({ approvedCandidateRefs: selected, schemaRef: p.definition.ref, expectedRevision: await publicationStore.latestPublicationRevision(p.scope.scopeRef, p.ctx), idempotencyKey: key }, p.ctx)
+}
+
+class ReferenceCapturingStore extends PostgresSemanticPublicationStore {
+  captured: PublishSemanticPublicationInput | undefined
+  beforeWrite: (() => Promise<void>) | undefined
+  override async publish(scope: ScopeRef, input: PublishSemanticPublicationInput, ctx: ToolContext) {
+    this.captured = input
+    await this.beforeWrite?.()
+    return super.publish(scope, input, ctx)
+  }
+}
+
+async function referenceFixture(label: string, self = false) {
+  const store = new ReferenceCapturingStore(db)
+  const p = await setup(label, store, false, true)
+  const original = await imported(p, 'csv')
+  await mount(p, [original])
+  const targetCandidate = await stage(p, original)
+  const targetRecord = await confirmed(p, targetCandidate, original.documentId)
+  const targetId = targetRecord.identity.matchedEntityId
+  if (targetId === undefined) throw new Error('real human target identity was not confirmed')
+  const source = await imported(p, 'csv', 'meter', '12000.000000000001', { headerRow: 1 }, false, '9007199254740993', targetId, self ? 'M-1' : 'M-2')
+  const current = await projects.getProject(p.scope.scopeRef, p.projectId, p.ctx)
+  const revision = current === undefined ? undefined : await projects.getRevision(p.scope.scopeRef, p.projectId, current.headRevision, p.ctx)
+  if (revision === undefined) throw new Error('the real reference project revision is missing')
+  await p.projectService.appendRevision(p.projectId, { expectedRevision: revision.ref.revision, reason: 'human confirmed exact reference source mapping', mappingRefs: [...revision.mappingRefs, source.mapping.ref] }, `reference-mount-${p.projectId}`, p.ctx.principal.subjectId, p.ctx)
+  const candidate = await stage(p, source)
+  const record = await confirmed(p, candidate, source.documentId, self ? targetId : undefined)
+  const edited = await p.instances.editField(p.scope.scopeRef, p.projectId, candidate.candidateId, { expectedRevision: record.recordRevision, fieldId: 'target',
+    normalizedValue: { kind: 'reference', entityId: targetId }, reason: 'human selected the exact original canonical reference', idempotencyKey: `reference-edit-${candidate.candidateId}` }, p.ctx)
+  const typed = await p.instances.confirmFields(p.scope.scopeRef, p.projectId, candidate.candidateId, { expectedRevision: edited.recordRevision,
+    decisions: [{ fieldId: 'target', decision: 'confirm' }], idempotencyKey: `typed-reference-${candidate.candidateId}` }, p.ctx)
+  expect(candidate.attributes.find((attribute) => attribute.attributeId === 'target')?.value).toBe(targetId)
+  expect(typed.record.fields.find((field) => field.fieldId === 'target')?.normalizedValue).toEqual({ kind: 'reference', entityId: targetId })
+  return { p, store, candidate, targetId }
+}
+
+async function waitForReferenceHeadLock(): Promise<void> {
+  const deadline = Date.now() + 15_000
+  while (Date.now() < deadline) {
+    const waiting = await harness.adminClient.query<{ count: string }>("SELECT count(*)::text AS count FROM pg_stat_activity WHERE datname=current_database() AND wait_event_type='Lock' AND query LIKE '%identity_decision_heads%candidate_id=ANY%FOR SHARE%'")
+    if (waiting.rows[0]?.count !== '0') return
+    await new Promise((resolve) => setTimeout(resolve, 100))
+  }
+  throw new Error('the actual publisher did not wait on the identity head within its fixed barrier bound')
+}
+
+async function waitForProjectAppendLock(): Promise<void> {
+  const deadline = Date.now() + 15_000
+  while (Date.now() < deadline) {
+    const waiting = await harness.adminClient.query<{ count: string }>("SELECT count(*)::text AS count FROM pg_stat_activity WHERE datname=current_database() AND wait_event_type='Lock' AND query LIKE '%FROM agent_platform.projects%' AND query LIKE '%FOR UPDATE%'")
+    if (waiting.rows[0]?.count !== '0') return
+    await new Promise((resolve) => setTimeout(resolve, 100))
+  }
+  const blocked = await harness.adminClient.query<{ query: string; wait_event_type: string | null; wait_event: string | null }>("SELECT query,wait_event_type,wait_event FROM pg_stat_activity WHERE datname=current_database() AND wait_event_type='Lock'")
+  throw new Error(`the actual mapping append did not wait on the publisher project lock within its fixed barrier bound: ${JSON.stringify(blocked.rows)}`)
+}
+
+async function prepareOneHopPremiseReplay(label: string) {
+  const p = await setup(label), a = await imported(p, 'csv'), b = await imported(p, 'xlsx'), s = await imported(p, 'csv', 'site')
+  await mount(p, [a, b, s])
+  const ca = await stage(p, a), cb = await stage(p, b), cs = await stage(p, s)
+  const identity = await confirmed(p, ca, a.documentId)
+  await confirmed(p, cb, b.documentId, identity.identity.matchedEntityId)
+  await confirmed(p, cs, s.documentId)
+  const edge = await p.workflow.materialization.stageRelation(p.projectId, { relationId: 'meter_of', fromCandidateId: cs.candidateId, toCandidateId: ca.candidateId }, p.ctx)
+  await p.workflow.publication.reviewCandidate({ candidateId: edge.candidateId, decision: 'approve', expectedRevision: '0', reason: 'human confirmed the exact typed edge' }, p.ctx)
+  const policyBytes = new TextEncoder().encode('A site is ready when meter_of has a confirmed meter endpoint with active=true AND (power between 10 and 20 kW OR alarm=true).')
+  const staged = await blobs.stage(policyBytes, { scopeRef: p.scope.scopeRef }, p.ctx)
+  const policy = await blobs.publish({ scopeRef: p.scope.scopeRef, contentDigest: staged.contentDigest, byteSize: staged.byteSize, mediaType: 'text/plain', purpose: 'document' }, p.ctx)
+  const parsed = await new LocalDocumentExtractionService({ blobs, store: documentParses }).parse({ scopeRef: p.scope.scopeRef, originalRef: policy.blobRef, documentVersionRef: policy.blobRef }, p.ctx)
+  const chunk = parsed.chunks[0]
+  if (chunk === undefined) throw new Error('missing real rule policy source')
+  const policySpan = { parseId: parsed.parseId, chunkId: chunk.chunkId, locator: chunk.locator, spanKind: chunk.spanKind, precision: chunk.precision, quoteDigest: chunk.quoteDigest }
+  const job = await new JobService({ store: jobs }).createJob({ jobId: randomUUID(), kind: 'ingestion', sourceRef: policy.blobRef.id, documentRef: policy.blobRef.id, pipelineVersion: '1.0.0', idempotencyKey: `policy-${randomUUID()}` }, p.ctx)
+  const condition: RuleCandidate['expression'] = { op: 'relation', relationId: 'meter_of', targetCondition, spans: [policySpan] }
+  const rule: RuleCandidate = { candidateId: randomUUID(), kind: 'rule', ruleId: 'actual-site-ready', objectId: 'site', projectId: p.projectId, jobId: job.jobId,
+    sourceSpans: [{ ...policySpan, textDigest: chunk.textDigest }], deterministic: true, state: 'pending_review', issues: [],
+    inputVersion: { definitionRef: p.definition.ref, parseId: parsed.parseId, parserVersion: parsed.parserVersion, pipelineVersion: '1.0.0', documentVersionRef: policy.blobRef },
+    expression: condition, exceptions: [], conflicts: [], severity: 'soft', impact: 'low', reviewRequirement: 'required', idempotencyKey: sha256DigestOf({ projectId: p.projectId, condition }), recordedAt: new Date().toISOString() }
+  await candidates.insertCandidates(p.scope.scopeRef, [rule], p.ctx)
+  await p.workflow.publication.reviewCandidate({ candidateId: rule.candidateId, expectedRevision: '0', decision: 'approve', reason: 'human reviewed complete one-hop AND/OR declaration against original policy' }, p.ctx)
+  await publish(p, [ca, cb, cs, edge, rule])
+  const source = new PublishedSemanticSource(publicationStore, { definition: p.definition, identity: identities, projectId: p.projectId })
+  const materialization = new PostgresMaterializationStore(db), evidence = new PostgresEvidenceStore(db)
+  await new IncrementalMaterializer({ publishedSource: source, materialization }).applyChange({ changeId: randomUUID(), scopeRef: p.scope.scopeRef, recordedSeq: '1', recordedAt: new Date().toISOString(), kind: 'assertion_published',
+    logicalAssertionId: edge.candidateId, predicate: 'meter_of', validity: { validFrom: '2026-10-01T00:00:00Z', validTo: '2027-01-01T00:00:00Z' } }, p.ctx)
+  const slices = await materialization.readSlices(p.scope.scopeRef, { validAt: '2026-10-08T00:00:00Z', asOfRecordedSeq: '1', limit: 100 }, p.ctx)
+  const artifact = slices.flatMap((slice) => slice.conclusion.ruleArtifacts ?? []).find((row) => row.ruleId === rule.ruleId && row.applicability.state === 'applicable')
+  if (artifact?.validAt === undefined || artifact.asOfRecordedSeq === undefined) throw new Error('missing actual one-hop computation')
+  expect(artifact.factRefs.map((fact) => fact.sourceStatementId)).toEqual(expect.arrayContaining([edge.candidateId, ca.candidateId, cb.candidateId]))
+  const documentSpans = new DocumentSpanReader({ blobs, store: documentParses })
+  const structuredSources = new StructuredPremiseSourceReader({ artifacts: blobs, mappings, ingestion: structured })
+  const deps = { materialization, evidence, artifacts: blobs, candidates, identity: identities, projects, projectDocuments: documents, records, documentParses, documentSpans, structuredSources, publications: publicationStore }
+  const producer = new MaterializedRuleDerivationEvidenceProducer({ ...deps, artifacts: createBlobArtifactWriter(blobs), componentRef: { id: 'mapped-premise-reader', version: '1.0.0', digest: sha256DigestOf('mapped-premise-reader') } })
+  const record = await producer.record({ scopeRef: p.scope.scopeRef, ruleRef: artifact.ruleRef, definitionRef: p.definition.ref, subjectEntityId: artifact.subjectEntityId, objectId: 'site', validAt: artifact.validAt,
+    asOfRecordedSeq: artifact.asOfRecordedSeq, observedAt: new Date().toISOString(), sourceSnapshots: [], dataMode: 'synthetic' }, p.ctx)
+  if (record.envelope.payloadRef === undefined) throw new Error('missing premise archive')
+  const payload: unknown = JSON.parse(new TextDecoder().decode(await blobs.readAuthorized({ scopeRef: p.scope.scopeRef, blobRef: record.envelope.payloadRef }, p.ctx)))
+  if (!isRecord(payload) || !Array.isArray(payload['sourceEvidenceMappings'])) throw new Error('missing exact cell evidence')
+  expect(payload['sourceEvidenceMappings'].some((mapping: unknown) => isRecord(mapping) && isRecord(mapping['sourceSpan']) && isRecord(mapping['sourceSpan']['locator']) && mapping['sourceSpan']['locator']['kind'] === 'table_cell'), JSON.stringify(record.envelope.limitations)).toBe(true)
+  return { p, a, b, s, ca, cb, cs, edge, rule, artifact, payload, record, deps, structuredSources }
+}
+
+describe('confirmed structured records → official facts (real PostgreSQL)', () => {
+  it('publishes only exact declared references and rechecks actual target authority at the physical fence', async () => {
+    const healthy = await referenceFixture('reference-healthy')
+    const positive = await publish(healthy.p, [{ candidateId: healthy.candidate.candidateId, kind: 'entity' }])
+    expect(positive.statements[0]?.value['attributes']).toContainEqual(expect.objectContaining({ attributeId: 'target', value: healthy.targetId }))
+    const { p, store, candidate, targetId } = await referenceFixture('reference-negative')
+    const baseline = await publicationStore.latestPublicationRevision(p.scope.scopeRef, p.ctx)
+    const original = await identities.getEntity(p.scope.scopeRef, targetId, p.ctx)
+    if (original === undefined) throw new Error('the actual reference target is missing')
+    store.beforeWrite = async () => { throw new Error('capture genuine app-checked request before commit') }
+    await expect(publish(p, [{ candidateId: candidate.candidateId, kind: 'entity' }])).rejects.toThrow('capture genuine app-checked request')
+    const actual = store.captured
+    if (actual === undefined) throw new Error('the genuine checked publication was not captured')
+    for (const mutation of [
+      { state: 'pending', objectId: original.objectId, dimensions: original.scopeDimensions },
+      { state: 'confirmed', objectId: 'site', dimensions: original.scopeDimensions },
+      { state: 'confirmed', objectId: original.objectId, dimensions: { ...original.scopeDimensions, project: randomUUID() } },
+    ]) {
+      await harness.adminClient.query('UPDATE agent_platform.identity_entities SET state=$4,object_id=$5,scope_dimensions=$6::jsonb WHERE tenant_id=$1 AND space_id=$2 AND entity_id=$3', [p.scope.tenantId, p.scope.spaceId, targetId, mutation.state, mutation.objectId, JSON.stringify(mutation.dimensions)])
+      await expect(publish(p, [{ candidateId: candidate.candidateId, kind: 'entity' }])).rejects.toMatchObject({ code: 'IDENTITY_CONSTRAINT_BLOCKED' })
+      await expect(publicationStore.publish(p.scope.scopeRef, actual, p.ctx)).rejects.toMatchObject({ code: 'IDENTITY_CONSTRAINT_BLOCKED' })
+      expect(await publicationStore.latestPublicationRevision(p.scope.scopeRef, p.ctx)).toBe(baseline)
+      const outbox = await harness.adminClient.query<{ count: string }>('SELECT count(*)::text AS count FROM agent_platform.job_outbox WHERE tenant_id=$1 AND space_id=$2 AND outbox_id=$3', [p.scope.tenantId, p.scope.spaceId, actual.outbox.outboxId])
+      expect(outbox.rows[0]?.count).toBe('0')
+    }
+    await harness.adminClient.query('UPDATE agent_platform.identity_entities SET state=$4,object_id=$5,scope_dimensions=$6::jsonb WHERE tenant_id=$1 AND space_id=$2 AND entity_id=$3', [p.scope.tenantId, p.scope.spaceId, targetId, original.state, original.objectId, JSON.stringify(original.scopeDimensions)])
+    store.beforeWrite = async () => {
+      await harness.adminClient.query("UPDATE agent_platform.identity_entities SET state='pending' WHERE tenant_id=$1 AND space_id=$2 AND entity_id=$3", [p.scope.tenantId, p.scope.spaceId, targetId])
+    }
+    await expect(publish(p, [{ candidateId: candidate.candidateId, kind: 'entity' }])).rejects.toMatchObject({ code: 'IDENTITY_CONSTRAINT_BLOCKED' })
+    expect(await publicationStore.latestPublicationRevision(p.scope.scopeRef, p.ctx)).toBe(baseline)
+    await harness.adminClient.query("UPDATE agent_platform.identity_entities SET state='confirmed' WHERE tenant_id=$1 AND space_id=$2 AND entity_id=$3", [p.scope.tenantId, p.scope.spaceId, targetId])
+    const record = await p.instances.getRecord(p.scope.scopeRef, p.projectId, candidate.candidateId, p.ctx)
+    const edited = await p.instances.editField(p.scope.scopeRef, p.projectId, candidate.candidateId, { expectedRevision: record.recordRevision, fieldId: 'target',
+      normalizedValue: { kind: 'reference', entityId: 'different-from-original' }, reason: 'negative test: differs from the original mapped target', idempotencyKey: `changed-ref-edit-${candidate.candidateId}` }, p.ctx)
+    const changed = await p.instances.confirmFields(p.scope.scopeRef, p.projectId, candidate.candidateId, { expectedRevision: edited.recordRevision,
+      decisions: [{ fieldId: 'target', decision: 'confirm' }], idempotencyKey: `changed-reference-${candidate.candidateId}` }, p.ctx)
+    expect(changed.record.fields.find((field) => field.fieldId === 'target')?.normalizedValue).toEqual({ kind: 'reference', entityId: 'different-from-original' })
+    await expect(publish(p, [{ candidateId: candidate.candidateId, kind: 'entity' }])).rejects.toMatchObject({ code: 'CANDIDATE_NOT_APPROVED' })
+    expect(await publicationStore.latestPublicationRevision(p.scope.scopeRef, p.ctx)).toBe(baseline)
+  })
+
+  it('locks all identity heads before a self-reference target so an actual concurrent identity writer can finish', async () => {
+    const { p, candidate, targetId } = await referenceFixture('self-reference-lock-order', true)
+    const blocker = new Client({ connectionString: harness.adminUrl, application_name: 'reference-lock-blocker' })
+    await blocker.connect()
+    await blocker.query('BEGIN')
+    let pending: ReturnType<typeof publish> | undefined
+    try {
+      await blocker.query('SELECT revision FROM agent_platform.identity_decision_heads WHERE tenant_id=$1 AND space_id=$2 AND candidate_id=$3 FOR UPDATE', [p.scope.tenantId, p.scope.spaceId, candidate.candidateId])
+      pending = publish(p, [{ candidateId: candidate.candidateId, kind: 'entity' }])
+      void pending.catch(() => undefined)
+      await waitForReferenceHeadLock()
+      await blocker.query("SET LOCAL lock_timeout='3s'")
+      const target = await blocker.query('SELECT entity_id FROM agent_platform.identity_entities WHERE tenant_id=$1 AND space_id=$2 AND entity_id=$3 FOR UPDATE', [p.scope.tenantId, p.scope.spaceId, targetId])
+      expect(target.rowCount).toBe(1)
+    } finally { await blocker.query('ROLLBACK'); await blocker.end() }
+    if (pending === undefined) throw new Error('the actual publisher was not started')
+    const saved = await pending
+    expect(saved.statements[0]?.subjectEntityId).toBe(targetId)
+    expect(saved.statements[0]?.value['attributes']).toContainEqual(expect.objectContaining({ attributeId: 'target', value: targetId }))
+  })
+
+  it('delegates actual structured rule source evidence under the index leaf and still rejects forged premise cells (#268)', async () => {
+    const { p, artifact, payload, record, deps } = await prepareOneHopPremiseReplay('indexed-rule-source-dispatch')
+    const keyword = new PostgresKeywordIndexStore({ connectionString: harness.appUrl, maxPoolSize: 2 })
+    try {
+      const bridge = createCoreStructuredImportWorkflow({ blobs, parses: documentParses, ingestion: structured, projects, documents, mappings, indexStore: keyword,
+        readiness: new PostgresProjectReadinessStore(db), executionBindings: new PostgresRunExecutionBindingStore(db) })
+      const replay = new ArchivedRulePremiseReplayVerifier(deps)
+      expect(await replay.verify({ artifact, payload }, p.ctx)).toBe(true)
+      const sourceMappings = payload['sourceEvidenceMappings']
+      if (!Array.isArray(sourceMappings)) throw new Error('actual mapped rule source mappings are missing')
+      let structuredSources = 0
+      for (const item of sourceMappings) {
+        if (!isRecord(item) || !isRecord(item['evidenceRef']) || typeof item['evidenceRef']['id'] !== 'string') throw new Error('actual source evidence ref is missing')
+        const source = await deps.evidence.get(p.scope.scopeRef, item['evidenceRef']['id'], p.ctx)
+        if (source?.envelope.payloadRef === undefined) throw new Error('actual original source evidence is missing')
+        const sourcePayload: unknown = JSON.parse(new TextDecoder().decode(await blobs.readAuthorized({ scopeRef: p.scope.scopeRef, blobRef: source.envelope.payloadRef }, p.ctx)))
+        expect((await bridge.publicationValidator.validate({ record: source, payload: sourcePayload, ctx: p.ctx, now: new Date().toISOString() })).state).toBe('current')
+        expect((await bridge.publicationValidator.validate({ record: source, payload: { spans: [], indexVersion: {} }, ctx: p.ctx, now: new Date().toISOString() })).state).toBe('blocked')
+        if (isRecord(item['sourceSpan']) && item['sourceSpan']['kind'] === 'structured') structuredSources += 1
+      }
+      expect(structuredSources).toBeGreaterThan(0)
+      const forged = structuredClone(payload)
+      const changed = forged['sourceEvidenceMappings']
+      if (!Array.isArray(changed)) throw new Error('actual source mapping archive disappeared')
+      const row = changed.find((item: unknown) => isRecord(item) && isRecord(item['sourceSpan']) && item['sourceSpan']['kind'] === 'structured')
+      if (!isRecord(row) || !isRecord(row['sourceSpan']) || !isRecord(row['sourceSpan']['locator'])) throw new Error('actual cell mapping is missing')
+      row['sourceSpan']['locator']['column'] = 127
+      expect(await replay.verify({ artifact, payload: forged }, p.ctx)).toBe(false)
+      // The final rule gate retains the actual replay, rather than blessing the
+      // source-family dispatch as a replacement for independent premise checks.
+      expect(record.envelope.kind).toBe('rule_derivation')
+    } finally { await keyword.close() }
+  })
+  it('preserves cached Chosen/header2 native selection through real indexing, mapping, human approval and official facts (#268)', async () => {
+    for (const legacy of [false, true]) {
+      const p = await setup(`indexed-selected-${legacy}`)
+      const inline = (address: string, value: string) => `<c r="${address}" t="inlineStr"><is><t>${value}</t></is></c>`
+      const first = worksheetOf([rowXml(1, [inline('A1', 'enabled'), inline('B1', 'kilowatts'), inline('C1', 'code')]), rowXml(2, [inline('A2', 'false'), numberCellXml('B2', '1'), inline('C2', 'WRONG-FIRST')])])
+      const chosen = worksheetOf([rowXml(1, [inline('A1', 'Maintenance source')]), rowXml(2, [inline('A2', 'enabled'), inline('B2', 'kilowatts'), inline('C2', 'code')]), rowXml(3, [inline('A3', 'true'), numberCellXml('B3', '12.5'), inline('C3', 'M-CHOSEN')])])
+      const bytes = buildZip([
+        { name: 'xl/workbook.xml', data: '<workbook xmlns="http://schemas.openxmlformats.org/spreadsheetml/2006/main" xmlns:r="http://schemas.openxmlformats.org/officeDocument/2006/relationships"><sheets><sheet name="First" sheetId="1" r:id="rId1"/><sheet name="Chosen" sheetId="2" r:id="rId2"/></sheets></workbook>' },
+        { name: 'xl/_rels/workbook.xml.rels', data: '<Relationships xmlns="http://schemas.openxmlformats.org/package/2006/relationships"><Relationship Id="rId1" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/worksheet" Target="worksheets/sheet1.xml"/><Relationship Id="rId2" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/worksheet" Target="worksheets/sheet2.xml"/></Relationships>' },
+        { name: 'xl/worksheets/sheet1.xml', data: first }, { name: 'xl/worksheets/sheet2.xml', data: chosen },
+      ])
+      const mediaType = 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet'
+      const options = { sheetName: 'Chosen', headerRow: 2 }
+      const staged = await blobs.stage(bytes, { scopeRef: p.scope.scopeRef }, p.ctx)
+      const original = await blobs.publish({ scopeRef: p.scope.scopeRef, contentDigest: staged.contentDigest, byteSize: staged.byteSize, mediaType, purpose: 'document' }, p.ctx)
+      const parsed = await new LocalStructuredIngestionService({ blobs, store: structured }).parse({ scopeRef: p.scope.scopeRef, originalRef: original.blobRef, options }, p.ctx)
+      expect(parsed.parse.parseOptions).toEqual(options)
+      const actual = new StructuredDocumentParser().parse(bytes, { ...options, mediaType }).tables[0]
+      if (actual === undefined) throw new Error('the actual selected native sheet was not parsed')
+      const fieldIds = ['active', 'power', 'meter_id']
+      const entries = actual.columns.map((column, index) => ({ fieldRef: fieldIds[index] ?? '', header: column.header, headerDigest: column.headerDigest, columnIndex: column.index,
+        ...(index === 1 ? { sourceUnitCode: 'kW', canonicalUnitCode: 'kW' } : {}) }))
+      const mapped = await p.mapping.confirmMapping(p.projectId, { format: 'xlsx', parseId: parsed.parse.parseId, originalRef: original.blobRef, originalMediaType: mediaType, options, sheetId: '2', sheetName: 'Chosen', objectId: 'meter', entries }, `mapped-index-${randomUUID()}`, p.ctx.principal.subjectId, p.ctx)
+      await p.projectService.appendRevision(p.projectId, { expectedRevision: '1', reason: 'human confirmed actual selected source headers', mappingRefs: [...(await projects.getRevision(p.scope.scopeRef, p.projectId, '1', p.ctx))?.mappingRefs ?? [], mapped.mapping.ref] }, `mount-index-${randomUUID()}`, p.ctx.principal.subjectId, p.ctx)
+      const jobId = randomUUID()
+      await new JobService({ store: jobs }).createJob({ jobId, kind: 'ingestion', sourceRef: original.blobRef.id, pipelineVersion: '1.0.0', idempotencyKey: `indexed-source-${jobId}`,
+        documentRef: encodeStructuredExtractionRef({ kind: 'structured_extraction', parseId: parsed.parse.parseId, parserVersion: parsed.parse.parserVersion, definitionRef: p.definition.ref, format: 'xlsx', originalRef: original.blobRef, originalMediaType: mediaType, options }) }, p.ctx)
+      p.sourceJobs.set(parsed.parse.parseId, jobId)
+      if (legacy) await harness.adminClient.query('UPDATE agent_platform.document_structured_parses SET parse_options=NULL WHERE tenant_id=$1 AND space_id=$2 AND parse_id=$3', [p.scope.tenantId, p.scope.spaceId, parsed.parse.parseId])
+      const keyword = new PostgresKeywordIndexStore({ connectionString: harness.appUrl, maxPoolSize: 2 })
+      try {
+        const bridge = createCoreStructuredImportWorkflow({ blobs, parses: documentParses, ingestion: structured, projects, documents, mappings, indexStore: keyword,
+          readiness: new PostgresProjectReadinessStore(db), executionBindings: new PostgresRunExecutionBindingStore(db) })
+        const imported = await bridge.imports.importStructuredSource(p.projectId, { format: 'xlsx', mediaType, content: bytes }, p.ctx)
+        if (imported.documentId === undefined) throw new Error('the source bridge did not register the actual source')
+        expect(imported.reused).toBe(true)
+        await expect(bridge.imports.importStructuredSource(p.projectId, { format: 'xlsx', mediaType, content: bytes, options: { sheetName: 'First', headerRow: 1 } }, p.ctx))
+          .rejects.toMatchObject({ message: expect.stringContaining('already has a different native sheet/header selection') })
+        const member = await documents.getMembership(p.scope.scopeRef, p.projectId, imported.documentId, p.ctx)
+        expect(member?.parseId).toBe(parsed.parse.parseId)
+        expect((await bridge.index.buildIndex(p.projectId, p.ctx)).state).toBe('ready')
+        const fragment = (await bridge.index.search({ projectId: p.projectId, query: 'M-CHOSEN' }, p.ctx)).fragments[0]
+        if (fragment === undefined) throw new Error('the real selected row was not indexed')
+        expect(fragment.text).toContain('12.5')
+        expect(fragment.text).not.toContain('WRONG-FIRST')
+        const origin = await bridge.spanReader.readOrigin({ documentRef: fragment.documentRef, locator: fragment.locator }, p.ctx)
+        expect(origin?.parseId).toBe(parsed.parse.parseId)
+        expect(origin?.headerRow).toBe(2)
+        expect(origin?.cells[1]?.locator).toMatchObject({ sheetId: '2', sheetName: 'Chosen', row: 3, column: 2, address: 'B3' })
+        const source = { mapping: mapped.mapping, parse: parsed.parse, documentId: imported.documentId }
+        const candidate = await stage(p, source)
+        expect(candidate.inputVersion.parseId).toBe(member?.parseId)
+        expect(await publicationStore.listStatements(p.scope.scopeRef, {}, p.ctx)).toEqual([])
+        await confirmed(p, candidate, source.documentId)
+        await publish(p, [candidate])
+        const official = await new PublishedSemanticSource(publicationStore, { definition: p.definition, identity: identities, projectId: p.projectId }).load(p.scope.scopeRef, p.ctx)
+        expect(official.facts.some((fact) => fact.predicate === 'power')).toBe(true)
+        const span = candidate.sourceSpans.find((span) => span.kind === 'structured' && span.locator.kind === 'table_cell' && span.locator.column === 2)
+        if (span?.kind !== 'structured') throw new Error('the published fact lost its actual cell span')
+        expect(await new StructuredPremiseSourceReader({ artifacts: blobs, mappings, ingestion: structured }).read(candidate, span, p.ctx)).toMatchObject({ documentRef: original.blobRef, parserVersion: parsed.parse.parserVersion })
+      } finally { await keyword.close() }
+    }
+  })
+  it('reads the normally confirmed second-sheet XLSX premise and refuses a first-sheet locator with the same row ordinal (#264)', async () => {
+    const p = await setup('premise-second-sheet')
+    const inline = (address: string, value: string) => `<c r="${address}" t="inlineStr"><is><t>${value}</t></is></c>`
+    const sheet = (code: string, power: string, enabled: string) => worksheetOf([
+      rowXml(1, [inline('A1', 'enabled'), inline('B1', 'kilowatts'), inline('C1', 'code')]),
+      rowXml(2, [inline('A2', enabled), numberCellXml('B2', power), inline('C2', code)]),
+    ])
+    const bytes = buildZip([
+      { name: 'xl/workbook.xml', data: '<workbook xmlns="http://schemas.openxmlformats.org/spreadsheetml/2006/main" xmlns:r="http://schemas.openxmlformats.org/officeDocument/2006/relationships"><sheets><sheet name="First" sheetId="1" r:id="rId1"/><sheet name="Chosen" sheetId="2" r:id="rId2"/></sheets></workbook>' },
+      { name: 'xl/_rels/workbook.xml.rels', data: '<Relationships xmlns="http://schemas.openxmlformats.org/package/2006/relationships"><Relationship Id="rId1" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/worksheet" Target="worksheets/sheet1.xml"/><Relationship Id="rId2" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/worksheet" Target="worksheets/sheet2.xml"/></Relationships>' },
+      { name: 'xl/worksheets/sheet1.xml', data: sheet('wrong-first-sheet', '1', 'false') },
+      { name: 'xl/worksheets/sheet2.xml', data: sheet('M-SECOND', '12.5', 'true') },
+    ])
+    const mediaType = 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet'
+    const options = { headerRow: 1, sheetName: 'Chosen' }
+    const staged = await blobs.stage(bytes, { scopeRef: p.scope.scopeRef }, p.ctx)
+    const original = await blobs.publish({ scopeRef: p.scope.scopeRef, contentDigest: staged.contentDigest, byteSize: staged.byteSize, mediaType, purpose: 'document' }, p.ctx)
+    const parsed = await new LocalStructuredIngestionService({ blobs, store: structured }).parse({ scopeRef: p.scope.scopeRef, originalRef: original.blobRef, options }, p.ctx)
+    const actual = new StructuredDocumentParser().parse(bytes, { ...options, mediaType })
+    expect(actual.tables).toHaveLength(1)
+    const table = actual.tables[0]
+    if (table === undefined) throw new Error('missing actual selected worksheet')
+    expect(table.sheetId).toBe('2')
+    const fieldIds = ['active', 'power', 'meter_id']
+    const entries = table.columns.map((column, index) => ({ fieldRef: fieldIds[index] ?? '', header: column.header, headerDigest: column.headerDigest, columnIndex: column.index,
+      ...(index === 1 ? { sourceUnitCode: 'kW', canonicalUnitCode: 'kW' } : {}) }))
+    const confirmation = await p.mapping.confirmMapping(p.projectId, { format: 'xlsx', parseId: parsed.parse.parseId, originalRef: original.blobRef, originalMediaType: mediaType,
+      options, sheetId: '2', sheetName: 'Chosen', objectId: 'meter', entries }, `second-sheet-map-${randomUUID()}`, p.ctx.principal.subjectId, p.ctx)
+    const jobId = randomUUID()
+    await new JobService({ store: jobs }).createJob({ jobId, kind: 'ingestion', sourceRef: 'real-second-sheet-original', pipelineVersion: '1.0.0', idempotencyKey: `second-sheet-job-${jobId}`,
+      documentRef: encodeStructuredExtractionRef({ kind: 'structured_extraction', parseId: parsed.parse.parseId, parserVersion: parsed.parse.parserVersion, definitionRef: p.definition.ref,
+        format: 'xlsx', originalRef: original.blobRef, originalMediaType: mediaType, options }) }, p.ctx)
+    p.sourceJobs.set(parsed.parse.parseId, jobId)
+    const documentId = randomUUID()
+    await documents.registerDocument(p.scope.scopeRef, p.projectId, { documentId, documentRef: original.blobRef, documentDigest: original.blobRef.digest, parseId: parsed.parse.parseId,
+      parseRef: { id: parsed.parse.parseId, version: parsed.parse.parserVersion, digest: original.blobRef.digest, kind: 'artifact' }, textDigest: original.blobRef.digest, precision: 'exact',
+      actor: p.ctx.principal.subjectId, recordedAt: new Date().toISOString() }, p.ctx)
+    const source = { mapping: confirmation.mapping, parse: parsed.parse, documentId }
+    await mount(p, [source])
+    const candidate = await stage(p, source)
+    await confirmed(p, candidate, documentId)
+    await publish(p, [candidate])
+    expect(candidate.attributes.find((attribute) => attribute.attributeId === 'meter_id')?.value).toBe('M-SECOND')
+    const span = candidate.sourceSpans[0]
+    if (span?.kind !== 'structured' || span.locator.kind !== 'table_cell') throw new Error('missing actual second-sheet cell')
+    expect(span.locator).toMatchObject({ sheetId: '2', sheetName: 'Chosen', row: 2, recordIndex: 1 })
+    const reader = new StructuredPremiseSourceReader({ artifacts: blobs, mappings, ingestion: structured })
+    const read = await reader.read(candidate, span, p.ctx)
+    expect(read?.rowText).toContain('M-SECOND')
+    expect(read?.rowText).not.toContain('wrong-first-sheet')
+    expect(await reader.read(candidate, { ...span, locator: { ...span.locator, sheetId: '1', sheetName: 'First' } }, p.ctx)).toBeUndefined()
+  })
+  it('blocks a real mapped record head change during source read while retaining its original historical proof (#264)', async () => {
+    const { p, cb, artifact, payload, deps, structuredSources } = await prepareOneHopPremiseReplay('mapped-record-head-race')
+    const source = cb.inputVersion.projectFact?.sources[0]
+    if (source === undefined) throw new Error('missing original record source')
+    const original = await records.getRecord(p.scope.scopeRef, p.projectId, source.recordId, p.ctx)
+    if (original === undefined) throw new Error('missing actual original record')
+    let changed = false
+    const replay = new ArchivedRulePremiseReplayVerifier({ ...deps, structuredSources: { read: async (candidate, span, ctx) => {
+      const read = await structuredSources.read(candidate, span, ctx)
+      if (!changed) {
+        changed = true
+        const fields = original.fields.map((field, index) => index === 0 ? { ...field, status: 'pending' as const } : field)
+        const contentDigest = sha256DigestOf({ objectId: original.objectId, fields, mappingRef: source.mappingRef, sourceDigest: original.sourceDigest, sourceRowKey: original.sourceRowKey })
+        const { revision: omitted, ...body } = original
+        void omitted
+        await records.appendRecords(p.scope.scopeRef, p.projectId, [{ ...body, fields, contentDigest, status: 'pending' }],
+          { idempotencyKey: `head-race-${randomUUID()}`, requestDigest: contentDigest }, p.ctx)
+      }
+      return read
+    } } })
+    expect(await replay.verify({ artifact, payload }, p.ctx)).toBe(false)
+    expect(changed).toBe(true)
+    expect((await records.getRecord(p.scope.scopeRef, p.projectId, source.recordId, p.ctx))?.revision).toBe('2')
+    expect(await new ArchivedRulePremiseReplayVerifier({ ...deps, readMode: 'published_snapshot' }).verify({ artifact, payload }, p.ctx)).toBe(true)
+  })
+
+  it('blocks a real membership/visibility withdrawal during source read while preserving archived original cells (#264)', async () => {
+    const { p, a, artifact, payload, deps, structuredSources } = await prepareOneHopPremiseReplay('mapped-visibility-race')
+    let changed = false
+    const replay = new ArchivedRulePremiseReplayVerifier({ ...deps, structuredSources: { read: async (candidate, span, ctx) => {
+      const read = await structuredSources.read(candidate, span, ctx)
+      if (!changed) {
+        changed = true
+        await documents.reviseDocument(p.scope.scopeRef, p.projectId, { documentId: a.documentId, op: 'retract', reason: 'source membership withdrawn during original cell read',
+          actor: p.ctx.principal.subjectId, recordedAt: new Date().toISOString() }, p.ctx)
+      }
+      return read
+    } } })
+    expect(await replay.verify({ artifact, payload }, p.ctx)).toBe(false)
+    expect(changed).toBe(true)
+    expect((await documents.getMembership(p.scope.scopeRef, p.projectId, a.documentId, p.ctx))?.state).toBe('retracted')
+    expect(await new ArchivedRulePremiseReplayVerifier({ ...deps, readMode: 'published_snapshot' }).verify({ artifact, payload }, p.ctx)).toBe(true)
+  })
+
+  it('independently verifies a published one-hop edge AND typed target with CSV/XLSX alternatives and original cell/row readback (#264)', async () => {
+    const { p, ca, artifact, payload, record, deps, structuredSources } = await prepareOneHopPremiseReplay('mapped-premise-replay')
+    const { evidence } = deps
+    const replay = new ArchivedRulePremiseReplayVerifier(deps)
+    expect(await replay.verify({ artifact, payload }, p.ctx)).toBe(true)
+    await p.projectService.appendRevision(p.projectId, { expectedRevision: '2', reason: 'later compatible input/profile revision retains definition and mappings' }, `compatible-${randomUUID()}`, p.ctx.principal.subjectId, p.ctx)
+    expect(await replay.verify({ artifact, payload }, p.ctx)).toBe(true)
+    const manifest = buildInputManifest([record.evidenceRef])
+    const result = await new TypedEvidenceDraftWriter({ evidence, artifacts: blobs }).writeDraft({ runId: RUN_ID, inputManifest: manifest, question: 'Is this site ready?', deficits: [], attempt: 1,
+      remainingBudget: { deadline: '2030-01-01T00:00:00Z', toolCallsRemaining: 100, repairAttemptsRemaining: 4, parallelToolLimit: 4, tokensRemaining: 1000 } }, p.ctx)
+    const verified = await new DraftVerificationService({ evidence, artifacts: blobs, policy: verificationPolicy({ semanticReview: 'disabled' }), rulePremises: replay, now: () => artifact.validAt ?? '' })
+      .verify({ runId: RUN_ID, draft: result.draft, inputManifest: manifest }, p.ctx)
+    expect(verified.verdict, JSON.stringify(verified.failedChecks)).toBe('pass')
+    const wrongRow = structuredClone(payload)
+    if (!Array.isArray(wrongRow['sourceEvidenceMappings']) || !isRecord(wrongRow['sourceEvidenceMappings'][0]) || !isRecord(wrongRow['sourceEvidenceMappings'][0]['sourceSpan'])) throw new Error('missing mapped span')
+    wrongRow['sourceEvidenceMappings'][0]['sourceSpan']['rowDigest'] = sha256DigestOf('wrong source row')
+    expect(await replay.verify({ artifact, payload: wrongRow }, p.ctx)).toBe(false)
+    const missingEdge = { ...artifact, premiseInput: artifact.premiseInput === undefined ? undefined : { ...artifact.premiseInput, facts: artifact.premiseInput.facts.filter((fact) => fact.relation === undefined) } }
+    expect(await replay.verify({ artifact: missingEdge, payload }, p.ctx)).toBe(false)
+    let withdrew = false
+    const race = new ArchivedRulePremiseReplayVerifier({ ...deps, structuredSources: { read: async (candidate, span, ctx) => {
+      const read = await structuredSources.read(candidate, span, ctx)
+      if (!withdrew) { withdrew = true; await p.workflow.publication.reviseStatement({ statementId: ca.candidateId, kind: 'retraction', reason: 'withdraw during independent premise source read', expectedRevision: '1', idempotencyKey: `premise-race-${randomUUID()}` }, p.ctx) }
+      return read
+    } } })
+    expect(await race.verify({ artifact, payload }, p.ctx)).toBe(false)
+    expect(withdrew).toBe(true)
+    expect(await new ArchivedRulePremiseReplayVerifier({ ...deps, readMode: 'published_snapshot' }).verify({ artifact, payload }, p.ctx)).toBe(true)
+    const historical = await new DraftVerificationService({ evidence, artifacts: blobs, policy: verificationPolicy({ semanticReview: 'disabled' }),
+      rulePremises: new ArchivedRulePremiseReplayVerifier({ ...deps, readMode: 'published_snapshot' }), now: () => '2028-01-01T00:00:00Z' })
+      .verify({ runId: RUN_ID, draft: result.draft, inputManifest: manifest }, p.ctx)
+    expect(historical.verdict, JSON.stringify(historical.failedChecks)).toBe('pass')
+  })
+  it('requires stored project authority for tagged rules and rejects a project revision race at commit', async () => {
+    class MovingProjectStore extends PostgresSemanticPublicationStore {
+      beforeCommit: (() => Promise<void>) | undefined
+      override async publish(...args: Parameters<PostgresSemanticPublicationStore['publish']>) {
+        await this.beforeCommit?.()
+        return super.publish(...args)
+      }
+    }
+    const moving = new MovingProjectStore(db)
+    const p = await setup('tagged-rule-project-race', moving)
+    const a = await imported(p, 'csv'); await mount(p, [a]); const c = await stage(p, a); await confirmed(p, c, a.documentId)
+    const rule: RuleCandidate = { candidateId: randomUUID(), kind: 'rule', ruleId: 'scoped-rule', objectId: 'meter', projectId: p.projectId, jobId: c.jobId,
+      sourceSpans: c.sourceSpans, deterministic: true, state: 'pending_review', issues: [], inputVersion: { definitionRef: c.inputVersion.definitionRef, parseId: c.inputVersion.parseId, parserVersion: c.inputVersion.parserVersion, pipelineVersion: c.inputVersion.pipelineVersion },
+      expression: { op: 'compare', attributeId: 'active', operator: 'eq', value: true, spans: [] }, exceptions: [], conflicts: [], severity: 'soft', impact: 'low', reviewRequirement: 'required', idempotencyKey: sha256DigestOf({ projectId: p.projectId, source: c.candidateId, rule: 'scoped-rule' }), recordedAt: new Date().toISOString() }
+    await candidates.insertCandidates(p.scope.scopeRef, [rule], p.ctx)
+    await p.workflow.publication.reviewCandidate({ candidateId: rule.candidateId, decision: 'approve', expectedRevision: '0', reason: 'human approved the exact tagged rule source and project' }, p.ctx)
+    const request = { schemaRef: p.definition.ref, approvedCandidateRefs: [{ kind: 'rule' as const, candidateId: rule.candidateId }], expectedRevision: '0', idempotencyKey: `tag-rule-${randomUUID()}` }
+    const unqualified = new SemanticPublicationService({ store: moving, candidates, schemaSource: p.schemas, identity: identities })
+    await expect(unqualified.publish(request, p.ctx)).rejects.toMatchObject({ code: 'CANDIDATE_NOT_APPROVED' })
+    moving.beforeCommit = async () => { await p.projectService.appendRevision(p.projectId, { expectedRevision: '2', reason: 'human changed the project while rule publication was prepared' }, `project-race-${randomUUID()}`, p.ctx.principal.subjectId, p.ctx) }
+    await expect(p.workflow.publication.publish(request, p.ctx)).rejects.toMatchObject({ code: 'IDENTITY_CONSTRAINT_BLOCKED' })
+    expect(await publicationStore.listRuleVersions(p.scope.scopeRef, {}, p.ctx)).toEqual([])
+    expect(await publicationStore.latestPublicationRevision(p.scope.scopeRef, p.ctx)).toBe('0')
+  }, 120_000)
+
+  it('publishes CSV/XLSX equivalent decimals with distinct cells, reads official lookup/rules and retains alternate support', async () => {
+    const p = await setup('fact-equivalent')
+    const a = await imported(p, 'csv')
+    const b = await imported(p, 'xlsx')
+    const s = await imported(p, 'csv', 'site')
+    await mount(p, [a, b, s])
+    const ca = await stage(p, a), cb = await stage(p, b), cs = await stage(p, s)
+    expect(ca.attributes.find((field) => field.attributeId === 'power')?.value).toBe('12.000000000000001')
+    expect(cb.attributes.find((field) => field.attributeId === 'power')?.value).toBe('12.000000000000001')
+    const ar = await confirmed(p, ca, a.documentId)
+    await confirmed(p, cb, b.documentId, ar.identity.matchedEntityId)
+    await confirmed(p, cs, s.documentId)
+    expect(ar.fields.find((field) => field.fieldId === 'power')?.source.locator).toMatchObject({ kind: 'table_cell', row: 2, column: 2 })
+    const relation = await p.workflow.materialization.stageRelation(p.projectId, { relationId: 'meter_of', fromCandidateId: cs.candidateId, toCandidateId: ca.candidateId }, p.ctx)
+    const otherProjectId = randomUUID()
+    await seedIdentityProject(harness.adminClient, p.scope.scopeRef, otherProjectId, p.definition.ref)
+    await expect(p.workflow.materialization.stageRelation(otherProjectId, { relationId: 'meter_of', fromCandidateId: cs.candidateId, toCandidateId: ca.candidateId }, p.ctx)).rejects.toMatchObject({ code: 'INVALID_ARGUMENT' })
+    await p.workflow.publication.reviewCandidate({ candidateId: relation.candidateId, decision: 'approve', expectedRevision: '0', reason: 'human confirmed these source endpoints' }, p.ctx)
+    const rule: RuleCandidate = {
+      candidateId: randomUUID(), kind: 'rule', ruleId: 'meter-ready', objectId: 'meter', projectId: p.projectId,
+      jobId: ca.jobId, sourceSpans: ca.sourceSpans, deterministic: true, state: 'pending_review', issues: [],
+      inputVersion: { definitionRef: ca.inputVersion.definitionRef, parseId: ca.inputVersion.parseId, parserVersion: ca.inputVersion.parserVersion, pipelineVersion: ca.inputVersion.pipelineVersion },
+      expression: targetCondition, exceptions: [], conflicts: [], severity: 'soft', impact: 'low', reviewRequirement: 'required',
+      idempotencyKey: sha256DigestOf({ projectId: p.projectId, expression: targetCondition }), recordedAt: new Date().toISOString(),
+    }
+    await candidates.insertCandidates(p.scope.scopeRef, [rule], p.ctx)
+    await p.workflow.publication.reviewCandidate({ candidateId: rule.candidateId, expectedRevision: '0', decision: 'approve', reason: 'human reviewed deterministic rule against pinned definition' }, p.ctx)
+    expect(await publicationStore.listStatements(p.scope.scopeRef, {}, p.ctx)).toEqual([])
+    const key = 'equivalent-official-publication'
+    const pub = await publish(p, [ca, cb, cs, relation, rule], key)
+    expect(pub.ruleProjectPins).toEqual([expect.objectContaining({ candidateId: rule.candidateId, candidateDigest: rule.idempotencyKey, projectRevisionRef: expect.objectContaining({ projectId: p.projectId, revision: '2' }) })])
+    expect((await candidates.getCandidate(p.scope.scopeRef, rule.candidateId, p.ctx))).toMatchObject({ projectId: p.projectId })
+    expect((await publicationStore.listRuleVersions(p.scope.scopeRef, {}, p.ctx))[0]?.projectId).toBe(p.projectId)
+    const replay = await publish(p, [ca, cb, cs, relation, rule], key)
+    expect(replay.publicationId).toBe(pub.publicationId)
+    const sa = pub.statements.find((statement) => statement.statementId === ca.candidateId), sb = pub.statements.find((statement) => statement.statementId === cb.candidateId)
+    expect(sa?.propositionKey).toBe(sb?.propositionKey)
+    expect(sa?.sourceRefs).not.toEqual(sb?.sourceRefs)
+    expect(sa?.value['provenance']).toMatchObject({ sources: [{ sourceDigest: ca.sourceSpans[0]?.kind === 'structured' ? ca.sourceSpans[0].rowDigest : '' }], sourceSpans: expect.arrayContaining([expect.objectContaining({ locator: expect.objectContaining({ column: 2 }) })]) })
+    expect(sa).toMatchObject({ validFrom: '2026-10-01T00:00:00Z', validTo: '2027-01-01T00:00:00Z' })
+    const source = new PublishedSemanticSource(publicationStore, { definition: p.definition, identity: identities, projectId: p.projectId })
+    const data = await source.load(p.scope.scopeRef, p.ctx)
+    expect(await p.workflow.publication.listRuleVersions({}, p.ctx)).toHaveLength(1)
+    const result = new RuleEvaluator().evaluate({ scopeRef: p.scope.scopeRef, definitionRef: p.definition.ref, facts: data.facts, rules: data.rules, request: { scopeRef: p.scope.scopeRef, projectionRef: p.definition.ref, validAt: '2026-10-08T00:00:00Z' } })
+    expect(result.applicabilities.find((item) => item.ruleId === 'meter-ready')?.conditionState).toBe('true')
+    const lookup = new OntologyLookupService({ definitions: new SemanticDefinitionService({ store: new InMemorySemanticDefinitionStore(), control: new RecordingControlRepository() }), facts: new PublishedFactsReferenceProvider({ source, namespace: p.definition.namespace, definitionRef: p.definition.ref }) })
+    const page = await lookup.lookup({ scopeRef: p.scope.scopeRef, intent: 'facts', concepts: [{ namespace: p.definition.namespace, conceptId: 'power', definitionVersion: '1.0.0' }] }, p.ctx)
+    expect(page.output.items).toHaveLength(2)
+    expect(page.output.items.every((item) => item.kind === 'fact')).toBe(true)
+    if (sa === undefined) throw new Error('missing statement')
+    await p.workflow.publication.reviseStatement({ statementId: sa.statementId, kind: 'retraction', expectedRevision: '1', idempotencyKey: 'withdraw-first-mapped-source', reason: 'first physical source withdrawn' }, p.ctx)
+    expect((await p.workflow.publication.getPropositionView(sa.propositionKey, p.ctx)).status).toBe('supported')
+    expect((await p.workflow.publication.getPublication(pub.publicationId, p.ctx)).statements[0]?.status).toBe('active')
+    const outbox = await harness.adminClient.query<{ count: string }>(`SELECT count(*)::text FROM agent_platform.job_outbox WHERE tenant_id=$1 AND topic='semantic.publication.published'`, [p.scope.tenantId])
+    expect(outbox.rows[0]?.count).toBe('1')
+  })
+
+  it('requires human field confirmation and current identity, and refuses cross tenant/project and overbound selections', async () => {
+    const p = await setup('fact-blockers'), a = await imported(p, 'csv')
+    await mount(p, [a]); const c = await stage(p, a)
+    await p.workflow.publication.reviewCandidate({ candidateId: c.candidateId, expectedRevision: '0', decision: 'approve', reason: 'source reviewed' }, p.ctx)
+    await expect(publish(p, [c])).rejects.toMatchObject({ code: 'CANDIDATE_NOT_APPROVED' })
+    const other = await setup('fact-other')
+    await expect(other.workflow.materialization.stageRecords(other.projectId, { documentId: a.documentId, recordRefs: [{ recordId: c.candidateId, revision: '1' }] }, other.ctx)).rejects.toMatchObject({ code: 'SOURCE_UNREADABLE' })
+    await expect(p.workflow.materialization.stageRecords(p.projectId, { documentId: a.documentId, recordRefs: Array.from({ length: 201 }, () => ({ recordId: randomUUID(), revision: '1' })) }, p.ctx)).rejects.toMatchObject({ code: 'INVALID_ARGUMENT' })
+    expect(await candidates.getCandidate(other.scope.scopeRef, c.candidateId, other.ctx)).toBeUndefined()
+    expect(await publicationStore.listStatements(p.scope.scopeRef, {}, p.ctx)).toEqual([])
+  })
+
+  it('fails closed at commit when a source is withdrawn after the service read', async () => {
+    const p = await setup('fact-fence'), a = await imported(p, 'csv')
+    await mount(p, [a]); const c = await stage(p, a); await confirmed(p, c, a.documentId)
+    const originalGet = instanceStore.getRecord.bind(instanceStore)
+    let withdrawn = false
+    vi.spyOn(instanceStore, 'getRecord').mockImplementation(async (...args) => {
+      const result = await originalGet(...args)
+      if (!withdrawn) {
+        withdrawn = true
+        await documents.reviseDocument(p.scope.scopeRef, p.projectId, { documentId: a.documentId, op: 'retract', reason: 'race withdrawal', actor: p.ctx.principal.subjectId, recordedAt: new Date().toISOString() }, p.ctx)
+      }
+      return result
+    })
+    try { await expect(publish(p, [c])).rejects.toMatchObject({ code: 'PROJECT_FENCE_STALE' }) } finally { vi.restoreAllMocks() }
+    expect(await publicationStore.listStatements(p.scope.scopeRef, {}, p.ctx)).toEqual([])
+  })
+
+  it('serializes a real published-fact commit against a direct input-remount append', async () => {
+    let enterCommit!: () => void
+    let releaseCommit!: () => void
+    const entered = new Promise<void>((resolve) => { enterCommit = resolve })
+    const released = new Promise<void>((resolve) => { releaseCommit = resolve })
+    const barrier = new PostgresSemanticPublicationStore(db, { faultInjection: { beforeCommit: async () => { enterCommit(); await released } } })
+    const p = await setup('atomic-published-remount-race', barrier)
+    const original = await imported(p, 'csv')
+    await mount(p, [original])
+    const remounted = await imported(p, 'csv', 'meter', '9000')
+    const candidate = await stage(p, original)
+    expect(candidate.inputVersion.projectFact).toBeDefined()
+    await confirmed(p, candidate, original.documentId)
+
+    const guardedProjects = new PostgresProjectStore(db, { requirePublishedInputEvolution: true })
+    const guardedService = new ProjectService({ projects: guardedProjects, readiness: new PostgresProjectReadinessStore(db), jobs,
+      catalogue: { listEntries: async () => [], findPack: async () => undefined } })
+    const current = await guardedProjects.getProject(p.scope.scopeRef, p.projectId, p.ctx)
+    if (current === undefined) throw new Error('the actual remount race project is unavailable')
+    const currentRevision = await guardedProjects.getRevision(p.scope.scopeRef, p.projectId, current.headRevision, p.ctx)
+    if (currentRevision === undefined) throw new Error('the actual remount race revision is unavailable')
+    const append = () => guardedService.appendRevision(p.projectId, { expectedRevision: current.headRevision,
+      reason: 'directly remount changed business input before explicit evolution', mappingRefs: [...currentRevision.mappingRefs, remounted.mapping.ref] }, `atomic-remount-${p.projectId}`, p.ctx.principal.subjectId, p.ctx)
+      .then(() => ({ code: 'UNEXPECTED_SUCCESS' }), (error: unknown) => error)
+
+    let publishing: ReturnType<typeof publish> | undefined
+    try {
+      publishing = publish(p, [{ candidateId: candidate.candidateId, kind: 'entity' }], `atomic-fact-${p.projectId}`)
+      await entered
+      const remounting = append()
+      await waitForProjectAppendLock()
+      releaseCommit()
+      const publication = await publishing
+      expect(publication.statements).toHaveLength(1)
+      expect(await remounting).toMatchObject({ code: 'VERSION_CONFLICT' })
+      const after = await guardedProjects.getProject(p.scope.scopeRef, p.projectId, p.ctx)
+      expect(after?.headRevision).toBe(current.headRevision)
+      const revision = await guardedProjects.getRevision(p.scope.scopeRef, p.projectId, current.headRevision, p.ctx)
+      expect(revision?.mappingRefs).toEqual((await projects.getRevision(p.scope.scopeRef, p.projectId, current.headRevision, p.ctx))?.mappingRefs)
+      expect((await publicationStore.listStatements(p.scope.scopeRef, {}, p.ctx)).map((statement) => statement.statementId)).toContain(candidate.candidateId)
+    } finally {
+      releaseCommit()
+      await publishing?.catch(() => undefined)
+    }
+  })
+
+  it('rolls back facts/publication/outbox together and retries without duplicate truth', async () => {
+    let fail = true
+    const faulty = new PostgresSemanticPublicationStore(db, { faultInjection: { beforeCommit: () => { if (fail) throw new Error('transaction test failure') } } })
+    const p = await setup('fact-rollback', faulty), a = await imported(p, 'csv')
+    await mount(p, [a]); const c = await stage(p, a); await confirmed(p, c, a.documentId)
+    await expect(publish(p, [c], 'mapped-atomic-retry')).rejects.toThrow('transaction test failure')
+    expect(await faulty.listStatements(p.scope.scopeRef, {}, p.ctx)).toEqual([])
+    expect(await faulty.latestPublicationRevision(p.scope.scopeRef, p.ctx)).toBe('0')
+    fail = false
+    const published = await publish(p, [c], 'mapped-atomic-retry')
+    expect(published.statements).toHaveLength(1)
+    expect((await publish(p, [c], 'mapped-atomic-retry')).publicationId).toBe(published.publicationId)
+  })
+
+  it('keeps incomplete parses, unpinned mappings and unresolved field values out of candidate review', async () => {
+    const p = await setup('fact-incomplete')
+    const partial = await imported(p, 'csv', 'meter', '12000', { headerRow: 1, caps: { maxRows: 1 }, capBreachMode: 'truncate' }, true)
+    const invalid = await imported(p, 'csv', 'meter', 'unparsed')
+    expect(partial.parse.status).toBe('incomplete')
+    await expect(stage(p, invalid)).rejects.toMatchObject({ code: 'INVALID_ARGUMENT' })
+    await mount(p, [partial, invalid])
+    await expect(stage(p, partial)).rejects.toMatchObject({ code: 'SOURCE_UNREADABLE' })
+    expect(await candidates.listCandidates(p.scope.scopeRef, {}, p.ctx)).toEqual([])
+    const fresh = await setup('fact-unpinned'), a = await imported(fresh, 'csv')
+    await expect(stage(fresh, a)).rejects.toMatchObject({ code: 'VERSION_CONFLICT' })
+  })
+
+  it('refuses a previously approved candidate after a mapping factor creates a new record revision', async () => {
+    const p = await setup('fact-factor'), a = await imported(p, 'csv')
+    await mount(p, [a]); const c = await stage(p, a); await confirmed(p, c, a.documentId)
+    const mapping = a.mapping
+    const changed = await p.mapping.confirmMapping(p.projectId, { ...mapping, mappingId: mapping.mappingId, entries: mapping.entries.map((entry) => entry.fieldRef !== 'power' ? entry : { ...entry, unitConversion: { fromUnitCode: 'W', toUnitCode: 'kW', numerator: '1', denominator: '2000' } }) }, `factor-${mapping.mappingId}`, p.ctx.principal.subjectId, p.ctx)
+    const rebound = await p.mapping.bindRecords(p.projectId, { parseId: mapping.parseId, mappingId: mapping.mappingId, mappingVersion: changed.mapping.version }, `rebind-${mapping.mappingId}`, p.ctx.principal.subjectId, p.ctx)
+    expect(rebound.records[0]?.revision).toBe('2')
+    await expect(publish(p, [c])).rejects.toMatchObject({ code: 'IDENTITY_CONSTRAINT_BLOCKED' })
+    expect(await publicationStore.listStatements(p.scope.scopeRef, {}, p.ctx)).toEqual([])
+  })
+
+  it('refuses field/review and identity changes between the service read and transaction commit', async () => {
+    for (const change of ['field', 'review', 'identity', 'project'] as const) {
+      const p = await setup(`fact-race-${change}`), a = await imported(p, 'csv')
+      await mount(p, [a]); const c = await stage(p, a); const record = await confirmed(p, c, a.documentId)
+      const originalGet = instanceStore.getRecord.bind(instanceStore)
+      let changed = false
+      vi.spyOn(instanceStore, 'getRecord').mockImplementation(async (...args) => {
+        const result = await originalGet(...args)
+        if (!changed) {
+          changed = true
+          if (change === 'field') await p.instances.editField(p.scope.scopeRef, p.projectId, c.candidateId, { expectedRevision: record.recordRevision, fieldId: 'power', normalizedValue: { kind: 'quantity', value: '999', unitCode: 'kW' }, reason: 'human correction', idempotencyKey: `edit-${c.candidateId}` }, p.ctx)
+          if (change === 'review') await p.workflow.publication.reviewCandidate({ candidateId: c.candidateId, expectedRevision: '1', decision: 'reject', reason: 'human withdrew approval' }, p.ctx)
+          if (change === 'identity') {
+            const source = c.inputVersion.projectFact?.sources[0]
+            if (source === undefined || record.identity.matchedEntityId === undefined) throw new Error('missing identity pin')
+            const decision = new IdentityDecisionService({ store: identities, candidates, schemaSource: p.schemas })
+            await decision.decide({ candidateId: c.candidateId, kind: 'split', projectId: p.projectId, projectFence: source, targetEntityId: record.identity.matchedEntityId, expectedRevision: '2', justification: 'human reversed identity' }, p.ctx)
+            await decision.decide({ candidateId: c.candidateId, kind: 'reject', projectId: p.projectId, projectFence: source, targetEntityId: record.identity.matchedEntityId, expectedRevision: '3', justification: 'hard negative identity link' }, p.ctx)
+          }
+          if (change === 'project') await p.projectService.appendRevision(p.projectId, { expectedRevision: '2', reason: 'project pin changed', sourceVisibilityEpoch: '99' }, `project-switch-${p.projectId}`, p.ctx.principal.subjectId, p.ctx)
+        }
+        return result
+      })
+      try { await expect(publish(p, [c])).rejects.toBeDefined() } finally { vi.restoreAllMocks() }
+      expect(await publicationStore.listStatements(p.scope.scopeRef, {}, p.ctx)).toEqual([])
+    }
+  })
+
+  it('refuses direct-store attempts to omit source fences or replace reviewed business values/provenance', async () => {
+    for (const alteration of ['fences', 'value', 'provenance'] as const) {
+      const p = await setup(`fact-direct-${alteration}`), a = await imported(p, 'csv')
+      await mount(p, [a]); const c = await stage(p, a); await confirmed(p, c, a.documentId)
+      const originalPublish = publicationStore.publish.bind(publicationStore)
+      vi.spyOn(publicationStore, 'publish').mockImplementation(async (scope, input, ctx) => originalPublish(scope, {
+        ...input,
+        ...(alteration === 'fences' ? { projectFactFences: [] } : {}),
+        publication: {
+          ...input.publication,
+          statements: input.publication.statements.map((statement) => ({ ...statement, value: {
+            ...statement.value,
+            ...(alteration === 'value' ? { attributes: [{ attributeId: 'power', value: '999', decimal: '999', unitCode: 'kW' }] } : {}),
+            ...(alteration === 'provenance' ? { provenance: { sources: [], sourceSpans: [] } } : {}),
+          } })),
+        },
+      }, ctx))
+      try { await expect(publish(p, [c])).rejects.toMatchObject({ code: 'IDENTITY_CONSTRAINT_BLOCKED' }) } finally { vi.restoreAllMocks() }
+      expect(await publicationStore.listStatements(p.scope.scopeRef, {}, p.ctx)).toEqual([])
+      expect(await publicationStore.latestPublicationRevision(p.scope.scopeRef, p.ctx)).toBe('0')
+    }
+  })
+
+  it('keeps the mapped parser revision usable after the same bytes receive a newer parse', async () => {
+    const p = await setup('fact-parser-pin'), a = await imported(p, 'csv')
+    await mount(p, [a])
+    const newer = await new LocalStructuredIngestionService({ blobs, store: structured }).parse({ scopeRef: p.scope.scopeRef, originalRef: a.mapping.originalRef, options: a.mapping.options, parserVersion: '2.0.0' }, p.ctx)
+    expect(newer.parse.parseId).not.toBe(a.parse.parseId)
+    expect((await structured.findParseByDigest(p.scope.scopeRef, a.mapping.originalRef.digest, undefined, p.ctx))?.parseId).toBe(newer.parse.parseId)
+    const candidate = await stage(p, a)
+    expect(candidate.inputVersion.parseId).toBe(a.parse.parseId)
+    expect(candidate.inputVersion.parserVersion).toBe(a.parse.parserVersion)
+    await confirmed(p, candidate, a.documentId)
+    expect((await publish(p, [candidate])).statements).toHaveLength(1)
+  })
+
+  it('reads schema-declared exact unitless numbers into ordered rules without guessing numeric-looking strings', async () => {
+    for (const [amount, operator, boundary, expected] of [
+      ['9007199254740993', 'gt', '9007199254740992', 'true'],
+      ['-0.10000000000000001', 'lt', '-0.1', 'true'],
+      ['0.10000000000000001', 'gte', '0.10000000000000002', 'false'],
+    ] as const) {
+      const p = await setup(`fact-number-${operator}`, publicationStore, true)
+      const a = await imported(p, 'csv', 'meter', '12000', { headerRow: 1 }, false, amount)
+      await mount(p, [a]); const c = await stage(p, a); await confirmed(p, c, a.documentId)
+      const rule: RuleCandidate = {
+        candidateId: randomUUID(), kind: 'rule', ruleId: 'number-boundary', objectId: 'meter', jobId: c.jobId, projectId: p.projectId,
+        sourceSpans: c.sourceSpans, deterministic: true, state: 'pending_review', issues: [],
+        inputVersion: { definitionRef: c.inputVersion.definitionRef, parseId: c.inputVersion.parseId, parserVersion: c.inputVersion.parserVersion, pipelineVersion: c.inputVersion.pipelineVersion },
+        expression: { op: 'compare', attributeId: 'reading', operator, value: boundary, spans: [] }, conclusion: { predicate: 'reading', value: { kind: 'scalar_decimal', amount } }, exceptions: [], conflicts: [], severity: 'soft', impact: 'low', reviewRequirement: 'required',
+        idempotencyKey: sha256DigestOf({ projectId: p.projectId, amount, operator, boundary }), recordedAt: new Date().toISOString(),
+      }
+      await candidates.insertCandidates(p.scope.scopeRef, [rule], p.ctx)
+      await p.workflow.publication.reviewCandidate({ candidateId: rule.candidateId, expectedRevision: '0', decision: 'approve', reason: 'human verified exact numeric boundary rule' }, p.ctx)
+      const pub = await publish(p, [c, rule])
+      expect(pub.ruleProjectPins?.[0]?.projectRevisionRef.projectId).toBe(p.projectId)
+      expect((await p.workflow.publication.listRuleVersions({}, p.ctx))[0]?.conclusion).toEqual({ predicate: 'reading', value: { kind: 'scalar_decimal', amount } })
+      const source = new PublishedSemanticSource(publicationStore, { definition: p.definition, identity: identities, projectId: p.projectId })
+      const data = await source.load(p.scope.scopeRef, p.ctx)
+      expect(data.facts.find((fact) => fact.predicate === 'reading')?.value).toEqual({ kind: 'scalar_decimal', amount })
+      expect(data.facts.find((fact) => fact.predicate === 'label')?.value).toBe(amount)
+      expect(data.facts.find((fact) => fact.predicate === 'active')?.value).toBe(true)
+      const result = new RuleEvaluator().evaluate({ scopeRef: p.scope.scopeRef, definitionRef: p.definition.ref, facts: data.facts, rules: data.rules, request: { scopeRef: p.scope.scopeRef, projectionRef: p.definition.ref, validAt: '2026-10-08T00:00:00Z' } })
+      expect(result.applicabilities.find((item) => item.ruleId === 'number-boundary')?.conditionState).toBe(expected)
+      if (expected === 'true') expect(result.conclusions.find((item) => item.predicate === 'reading')?.value).toEqual({ kind: 'scalar_decimal', amount })
+      const wrongDefinition = { ...p.definition, attributes: p.definition.attributes.map((field) => field.id === 'reading' ? { ...field, valueType: 'string' as const } : field) }
+      const wrong = projectPublishedAttributeFacts(pub.statements, { scopeRef: p.scope.scopeRef, schemaRef: p.definition.ref, definition: wrongDefinition })
+      expect(wrong.facts.find((fact) => fact.predicate === 'reading')?.value).toBeUndefined()
+      expect(wrong.issues.some((issue) => issue.attributeId === 'reading' && issue.code === 'INVALID_VALUE')).toBe(true)
+      const crossScope = projectPublishedAttributeFacts(pub.statements, { scopeRef: { tenantId: randomUUID(), spaceId: randomUUID() }, schemaRef: p.definition.ref, definition: p.definition })
+      expect(crossScope.facts.find((fact) => fact.predicate === 'reading')?.value).toBeUndefined()
+      const missing = projectPublishedAttributeFacts(pub.statements, { schemaRef: p.definition.ref })
+      expect(missing.facts.find((fact) => fact.predicate === 'reading')?.value).toBeUndefined()
+      for (const value of [true, 'not-a-number']) {
+        const confused = projectPublishedAttributeFacts(pub.statements.map((statement) => ({ ...statement, value: { ...statement.value, attributes: c.attributes.map((attribute) => attribute.attributeId === 'reading' ? { ...attribute, value } : attribute) } })), { scopeRef: p.scope.scopeRef, schemaRef: p.definition.ref, definition: p.definition })
+        expect(confused.facts.find((fact) => fact.predicate === 'reading')?.value).toBeUndefined()
+        expect(confused.issues.some((issue) => issue.attributeId === 'reading' && issue.code === 'INVALID_VALUE')).toBe(true)
+      }
+      for (const value of [
+        { kind: 'wrong_tag', amount: '1' }, { kind: 'wrong_tag', amount: '1', unit: 'kW' }, { kind: 'scalar_decimal', amount: true },
+        { kind: 'scalar_decimal', amount: '1e5' }, { kind: 'scalar_decimal', amount: '9'.repeat(65) },
+        { kind: 'scalar_decimal', amount: '1', extra: true }, { kind: 'scalar_decimal', amount: '1', unit: 'kW' },
+      ]) {
+        await expect(harness.adminClient.query(`UPDATE agent_platform.published_rule_versions SET conclusion=$1::jsonb WHERE tenant_id=$2::uuid AND rule_version_id=$3::uuid`, [JSON.stringify({ predicate: 'reading', value }), p.scope.tenantId, rule.candidateId])).rejects.toMatchObject({ code: '23514' })
+      }
+      for (const conclusion of [{ value: { kind: 'scalar_decimal', amount: '1' } }, { predicate: 'reading' }]) {
+        await expect(harness.adminClient.query(`UPDATE agent_platform.published_rule_versions SET conclusion=$1::jsonb WHERE tenant_id=$2::uuid AND rule_version_id=$3::uuid`, [JSON.stringify(conclusion), p.scope.tenantId, rule.candidateId])).rejects.toMatchObject({ code: '23514' })
+      }
+      // Roll back low-level legacy-shape probes; the actual reviewed consequence is retained.
+      await harness.adminClient.query('BEGIN')
+      try {
+        for (const conclusion of [null, { predicate: 'legacy', value: true }, { predicate: 'legacy', value: 'text' }, { predicate: 'legacy', value: { amount: '12.5', unit: 'kW' } }]) {
+          await harness.adminClient.query(`UPDATE agent_platform.published_rule_versions SET conclusion=$1::jsonb WHERE tenant_id=$2::uuid AND rule_version_id=$3::uuid`, [conclusion === null ? null : JSON.stringify(conclusion), p.scope.tenantId, rule.candidateId])
+          const result = await harness.adminClient.query<{ conclusion: unknown }>(`SELECT conclusion FROM agent_platform.published_rule_versions WHERE tenant_id=$1::uuid AND rule_version_id=$2::uuid`, [p.scope.tenantId, rule.candidateId])
+          expect(result.rows[0]?.conclusion).toEqual(conclusion)
+        }
+      } finally { await harness.adminClient.query('ROLLBACK') }
+      expect((await p.workflow.publication.listRuleVersions({}, p.ctx))[0]?.conclusion).toEqual({ predicate: 'reading', value: { kind: 'scalar_decimal', amount } })
+    }
+  })
+})

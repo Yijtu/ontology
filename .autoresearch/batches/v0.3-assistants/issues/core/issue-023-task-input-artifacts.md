@@ -65,5 +65,17 @@ Dependencies: #173, #184, #189, #192
 
 ## 完成记录
 
-- 当前：未开工；验证未运行。GitHub Issue：[#194](https://github.com/Yijtu/ontology/issues/194)；文档提交不代表功能完成。
-- 实现后记录：提交/PR、适用命令结果、满足的验收、未验证/外部条件、迁移配置与兼容影响。
+- 当前：已实现并通过验证（本分支）。GitHub Issue：[#194](https://github.com/Yijtu/ontology/issues/194)。
+- 实现：
+  - contracts：`packages/contracts/src/tasks.ts` 新增 `TaskBindingStore`、`TaskInputSnapshotStore`、`RunExecutionBindingStore` 端口、`TaskInputSnapshot`/body 与运行时守卫（`assertPublishedTaskBindingShape`/`assertRunExecutionBindingShape`/`assertTaskInputSnapshotShape`/`isRunExecutionRequest`）；`run-store.ts` 的 `NewRunRecord` 增加可选 `executionBindingRef`。
+  - application：`tasks/task-capability.ts` 纯函数能力预检（缺能力/未就绪/未绑定operation/结果格式未配置 → 显式 blocker，`available`/`not_ready`/`unavailable`）；`tasks/run-execution-preflight.ts` 服务端核实 project revision digest、input snapshot（approved-input 或 pin 该 revision 的受信派生 input）、task binding/参数 Schema、能力预检，构建并归档不可变 `RunExecutionBinding`；`runs/{types,parse,service}.ts` 让 `POST /runs` 可选携带 `task`，幂等键/旧 facts 路径不变。
+  - adapters：`control-postgres` 新增 `PostgresPublishedTaskBindingStore`/`PostgresTaskInputSnapshotStore`/`PostgresRunExecutionBindingStore`，`PostgresRunStore` 读写 `execution_binding_ref`；迁移 `070_task_execution_bindings.sql`（新增表 + RLS + `runs.execution_binding_ref` 列），未改动 001–069。
+  - api/composition：默认 host 装配三存储与预检服务并注入 `RunService`；`POST /api/v1/runs` 响应可选返回 `executionBindingRef`。
+- 验证命令与结果：
+  - `pnpm run typecheck` 通过；`pnpm run lint` 通过；`pnpm run boundaries` 8 passed。
+  - `vitest run tests/unit/task-execution-preflight.spec.ts`：17 passed；`tests/unit/run-task-binding.spec.ts`：8 passed。
+  - `vitest run tests/integration/task-execution-postgres.spec.ts`：5 passed（真实 PostgreSQL，迁移含 070）。
+  - `vitest run tests/integration/core-composition-chain-postgres.spec.ts tests/integration/run-events-api.spec.ts tests/unit/run-service.spec.ts tests/unit/run-dispatch-required.spec.ts tests/contracts/v03-public-contracts.spec.ts tests/contracts/schema-type-consistency.spec.ts`：69 passed。
+  - `vitest run tests/integration/core-local-host-postgres.spec.ts tests/unit/core-main.spec.ts tests/unit/core-local-startup.spec.ts`：11 passed。
+- 未验证/边界：能力预检的 blocker 码（`PROJECT_DATA_NOT_READY`/`INDEX_NOT_READY`/`COMPUTE_CONTRACT_MISMATCH`）作为 `TaskCapabilityStatus.blockers[].code` 载荷返回；HTTP/异常码复用既有分类（`TASK_NOT_BOUND`/`TASK_NOT_READY`/`TASK_UNAVAILABLE`/`INPUT_SNAPSHOT_INVALID`），其 canonical error-catalog 登记与 question 模式 planner/参数确认留待依赖的后续卡。
+- 迁移与兼容：迁移 070（`070_task_execution_bindings.sql`）；旧无 `task` 的 runs/facts 调用保持兼容；`runs.execution_binding_ref` 为可空新增列。

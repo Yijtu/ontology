@@ -2,5 +2,9 @@
   "name": "@ontology/app-api",
   "version": "0.0.0",
   "private": true,
-  "type": "module"
+  "type": "module",
+  "dependencies": {
+    "@ontology/adapter-data-postgres": "workspace:*",
+    "@ontology/core": "workspace:*"
+  }
 }

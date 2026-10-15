@@ -136,6 +136,18 @@ export interface KeywordIndexStore {
     collectionRef: string,
     ctx: ToolContext,
   ): Promise<KeywordIndexGeneration | undefined>
+  /**
+   * Allocate the next immutable generation number for a collection. The counter
+   * is a scope+collection bigint lock, so concurrent builds cannot collide on a
+   * number and a build never derives the next id by re-reading every generation
+   * (which raced and lost precision above 2^53). A reserved number that is never
+   * written is simply skipped, which keeps the sequence monotonic.
+   */
+  reserveGeneration(
+    scopeRef: ScopeRef,
+    collectionRef: string,
+    ctx: ToolContext,
+  ): Promise<RevisionString>
   activateGeneration(
     scopeRef: ScopeRef,
     collectionRef: string,

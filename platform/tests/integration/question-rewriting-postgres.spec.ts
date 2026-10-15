@@ -212,7 +212,7 @@ describe('question rewriting against a real PostgreSQL budget ledger', () => {
           toolId: 'data_query',
           argumentsDelta: multiHopPlanJson(),
         },
-        completed(),
+        { type: 'completed', stopReason: 'tool_calls', candidateOnly: true },
       ],
     ])
     const rewriter = new BoundedQuestionRewriter({ generation, modelRef: MODEL_REF, maxAttempts: 2 })

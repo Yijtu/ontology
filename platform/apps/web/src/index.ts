@@ -7,7 +7,10 @@
 export { Workbench } from './components/Workbench'
 export type { WorkbenchProps } from './components/Workbench'
 export { App } from './components/App'
-export type { AppProps, AppView } from './components/App'
+export type { AppProps, AppView, CoreAppView } from './components/App'
+export { GuideHome } from './components/GuideHome'
+export type { GuideCard, GuideHomeProps, GuideStep } from './components/GuideHome'
+export { deriveProjectBinding, isMappingRef as isProjectMappingRef } from './project-binding'
 export { JobProgressPanel } from './components/JobProgressPanel'
 export type { JobProgressPanelProps } from './components/JobProgressPanel'
 export { CandidateReviewPanel } from './components/CandidateReviewPanel'
@@ -161,3 +164,233 @@ export { initialReviewState, reviewReducer, selectionStillPresent } from './stat
 export type { ReviewError, ReviewEvent, ReviewPhase, ReviewState } from './state/review'
 export { NARROW_MAX_WIDTH, viewportOf } from './components/useViewport'
 export type { Viewport } from './components/useViewport'
+export { AssistantShell, ASSISTANT_DEFINITIONS } from './components/AssistantShell'
+export type {
+  AssistantDefinition,
+  AssistantId,
+  AssistantModuleDeclarations,
+  AssistantShellProps,
+} from './components/AssistantShell'
+export { ScenarioErrorBoundary } from './components/ScenarioErrorBoundary'
+export type { ScenarioErrorBoundaryProps } from './components/ScenarioErrorBoundary'
+export { OntologyWorkspacePanel, EMPTY_CREATE_FIELDS, boundaryOf, validateCreateFields } from './components/OntologyWorkspacePanel'
+export type { OntologyWorkspacePanelProps, WorkspaceCreateFields } from './components/OntologyWorkspacePanel'
+export {
+  DefinitionWorkbenchPanel,
+  buildEditedPayload,
+  candidateDetailLabel,
+  candidateSourceLabel,
+  editFieldsOf,
+  isCandidateStale,
+  parseJsonText,
+} from './components/DefinitionWorkbenchPanel'
+export type {
+  DefinitionEditFields,
+  DefinitionWorkbenchPanelProps,
+  JsonParseResult,
+} from './components/DefinitionWorkbenchPanel'
+export { definitionGuard } from './api/definitions'
+export type {
+  ActionCandidateDraft,
+  CandidateLifecycleView,
+  DefinitionCandidateFilter,
+  EditActionCandidateRequest,
+  EditDefinitionCandidateRequest,
+  EditRuleCandidateRequest,
+  EnableRuleActionCandidateRequest,
+  KeepDefinitionsSeparateRequest,
+  MergeDefinitionCandidatesRequest,
+  RecordUnsupportedRuleRequest,
+  RejectDefinitionCandidateRequest,
+  RuleActionCandidateFilter,
+  RuleActionCandidateView,
+  RuleCandidateDraft,
+  ValidateDefinitionsRequest,
+} from './api/definitions'
+export { WorkspaceSourcesPanel } from './components/WorkspaceSourcesPanel'
+export type {
+  SupportedSourceType,
+  WorkspaceSource,
+  WorkspaceSourcesPanelProps,
+} from './components/WorkspaceSourcesPanel'
+export { webWorkspaceIdentity } from './workspace-identity'
+export type { WorkspaceIdentity } from './workspace-identity'
+export type {
+  AppendIndustryWorkspaceDraftRequest,
+  AssetDraftRef,
+  CreateIndustryWorkspaceRequest,
+  EditIndustryWorkspaceRequest,
+  IndustryWorkspaceListFilter,
+  IndustryWorkspaceWriteView,
+} from './api/workspaces'
+export { ScenarioModuleRegistry, isLegalUiCapabilityMetadata } from './mount/registry'
+export type { MountContext, ScenarioMount } from './mount/registry'
+export type {
+  FrontendScenarioModule,
+  ScenarioDraftStore,
+  ScenarioExporter,
+  ScenarioFieldChange,
+  ScenarioModuleView,
+  ScenarioParameterProps,
+  ScenarioResultProps,
+  ScenarioTaskEntry,
+  ScenarioVerifiedResult,
+} from './mount/contract'
+export { createScenarioRegistry, registerBuiltInScenarioModules } from './scenarios/composition'
+export { InstanceReviewPanel } from './components/InstanceReviewPanel'
+export type { InstanceReviewPanelProps } from './components/InstanceReviewPanel'
+export {
+  PackagePublicationPanel,
+  coveredCaseKinds,
+  expectationSummary,
+  gateLabel,
+  publicationBlocked,
+} from './components/PackagePublicationPanel'
+export type { PackageMountBinding, PackagePublicationPanelProps } from './components/PackagePublicationPanel'
+export {
+  isIndustryValidationReportView,
+  isPackCapabilityStatusView,
+  isPackExportBundleView,
+  isPublishedPackResult,
+  isSyntheticExampleSetView,
+  isVersionRef as isPackageVersionRef,
+  SYNTHETIC_CASE_KINDS,
+  SYNTHETIC_CASE_KIND_LABELS,
+} from './api/package-publication'
+export type {
+  IndustryValidationGate,
+  IndustryValidationIssueView,
+  IndustryValidationReportView,
+  PackCapabilityStatusView,
+  PackExportBundleView,
+  PackVersionDiffView,
+  PublishedPackResultView,
+  PublishPackRequest,
+  RunValidationRequest,
+  SyntheticCaseKind,
+  SyntheticCaseView,
+  SyntheticExampleSetView,
+  SyntheticExpectationView,
+  ValidationSurfaceGateView,
+} from './api/package-publication'
+export { ProjectWorkspacePanel } from './components/ProjectWorkspacePanel'
+export { ProjectFactStaging } from './components/project/ProjectFactStaging'
+export type {
+  ProjectBinding,
+  ProjectSourceCandidate,
+  ProjectSourceColumn,
+  ProjectSourceField,
+  ProjectSourceObject,
+  ProjectWorkspacePanelProps,
+} from './components/ProjectWorkspacePanel'
+export {
+  isIndustryPackSummary,
+  isImportMappingVersion,
+  isMappingPreview,
+  isProjectDatasetStatus,
+  isProjectDocumentIndexStatus,
+  isProjectEvolutionView,
+  isProjectReadinessView,
+  isProjectRecord,
+  isProjectRecordPageView,
+  isProjectRecordVersion,
+  isProjectRevision,
+  isProjectRevisionView,
+  isReadinessProjection,
+} from './api/projects'
+export type {
+  ColumnMappingRequestView,
+  CreateProjectRequest,
+  IndustryPackSummary,
+  MountProjectPackRequest,
+  ProjectDatasetStatusView,
+  ProjectDocumentIndexState,
+  ProjectDocumentIndexStatusView,
+  ProjectEvolutionView,
+  ProjectReadinessView,
+  ProjectRecordPageView,
+  ProjectRevisionView,
+} from './api/projects'
+export {
+  isInstanceConfirmationEvent,
+  isInstanceConfirmationOutcome,
+  isInstanceRecordView,
+} from './api/instances'
+export type {
+  ConfirmInstanceFieldsRequest,
+  CreateInstanceFieldInput,
+  CreateInstanceRecordRequest,
+  CreateInstanceRelationInput,
+  EditInstanceFieldRequest,
+  InstanceConfirmationEvent,
+  InstanceConfirmationOutcomeView,
+  InstanceFieldDecisionInput,
+  InstanceIdentityDecisionRequest,
+  InstanceRecordFilter,
+  InstanceRevisionRequest,
+} from './api/instances'
+export {
+  createWorkbenchResultSource,
+  isColumnDescriptor,
+  isDigest as isResultDigest,
+  isResourceRef as isResultResourceRef,
+  isTablePageReadView,
+  isVerifiedResultView,
+  isVersionRef as isResultVersionRef,
+} from './api/results'
+export type {
+  ResultSource,
+  ResultSourceClient,
+  VerifiedResultLoad,
+  VerifiedResultView,
+  VerifiedTablePageView,
+  VerifiedTableSummary,
+} from './api/results'
+export { ResultWorkbenchPanel } from './components/ResultWorkbenchPanel'
+export type { ResultWorkbenchPanelProps, ResultWorkbenchTab } from './components/ResultWorkbenchPanel'
+export { BusinessWorkbenchPanel } from './components/BusinessWorkbenchPanel'
+export type {
+  BusinessUnavailableTask,
+  BusinessViewTask,
+  BusinessWorkbenchPanelProps,
+  ParameterChangePreview,
+} from './components/BusinessWorkbenchPanel'
+export { classifyPublicError, publicRecoveryLabel } from './state/public-errors'
+export type { PublicErrorFamily, PublicFailure, PublicRecovery } from './state/public-errors'
+export { PublicEmptyState, PublicStateNotice } from './components/PublicStateNotice'
+export type { PublicEmptyStateProps, PublicStateNoticeProps } from './components/PublicStateNotice'
+
+export { Button, Panel, Field, StatusBadge, StateFeedback, DataTable, Drawer } from './components/ui'
+export type { AppViewContext, AppViewContribution } from './components/App'
+export { bootstrapProject, importProjectFile, readProjectSources, readProjectTasks, isProjectSourceCatalogue, isProjectTaskCatalogue } from './api/project-workbench'
+export type { ProjectBootstrapView, ProjectSourceCatalogue, ProjectNativeSource, NativeSourceTable, ProjectCanonicalObject, ProjectTaskItem, ProjectTaskCatalogue, StructuredProjectImportView } from './api/project-workbench'
+export { readAnswerSource, isAnswerSourceView, isSourceLocator, isProvenanceView, sameSourceLocator } from './api/source-views'
+export type { AnswerSourceView, AnswerSourceLoader } from './api/source-views'
+export { TaskRunForm } from './components/project/TaskRunForm'
+export { PublishedAnswerBody } from './components/PublishedAnswerBody'
+export type { PublishedAnswerBodyProps, PublishedAnswerLabelKind } from './components/PublishedAnswerBody'
+export { instanceValueDraft, normalizedInstanceValue } from './components/project/InstanceValueEditor'
+export { ProjectFileImport } from './components/project/ProjectFileImport'
+export { ProjectEvolutionPanel } from './components/project/ProjectEvolutionPanel'
+export { stageProjectFacts } from './api/project-facts'
+export type { StagedProjectCandidate } from './api/project-facts'
+export { readEvolutionTarget, startProjectEvolution, readProjectEvolution, operateProjectEvolution, isProjectEvolutionRecord } from './api/project-evolution'
+export { readInstanceFieldSource, isInstanceFieldSourceView } from './api/source-views'
+export type { AnswerSourceFragment, SourceCellView, InstanceFieldSourceView } from './api/source-views'
+
+export { parseGrounding } from './api/ontology'
+export { encodeOriginalBytes, parseWorkspaceAuthoring, parseWorkspaceCorpus } from './api/workspace-authoring'
+export { canonicalBody, parseCompetencyDeclaration, replaceOriginalRef, selectCompetencyQuestions, expectationText } from './api/competency'
+export { DefinitionEditor } from './components/ontology/DefinitionEditor'
+export { ConditionEditor, conditionSummary, clausePaths } from './components/ontology/ConditionEditor'
+export { parseFormalDefinition, parseTermLabels, formalAttributeLabel } from './api/semantic-authoring'
+export type { FormalDefinitionView, FormalAttributeView, FormalObjectView, FormalRelationView, TermLabelsView } from './api/semantic-authoring'
+export { parseExecutionPreview } from './api/execution-preview'
+export type { ExecutionPreviewView, ExecutionRuleChoice } from './api/execution-preview'
+export { prepareHumanRuleInput, buildHumanRuleQuestion, humanQuestionSet, appendHumanQuestion, canAppendHumanQuestion } from './api/competency-authoring'
+export { CompetencyQuestionWorkbench } from './components/ontology/CompetencyQuestionWorkbench'
+export type { WorkspaceAuthoringContext, WorkspaceSourceCatalogue, WorkspaceSourceView, EligibleOperationView } from './api/workspace-authoring'
+export { VerifiedCell } from './components/project/VerifiedCell'
+export { AnswerSourceContent } from './components/project/AnswerSourceContent'
+export type { SavedCellSelector, SourceReadCoverage, SavedInputArtifactView } from './api/source-views'
+export type { ProjectComputeInputSelection } from './api/query'

@@ -19,6 +19,9 @@ import type {
 } from '@ontology/contracts'
 
 export interface CreateJobInput {
+  /** Internal host seam; the public ingestion request never accepts this field. */
+  readonly initialStage?: 'awaiting_review'
+  readonly initialCounts?: JobStageCounts
   /** Pre-allocated id, so the request-scoped trusted context can name the job. */
   readonly jobId: Uuid
   readonly kind: JobKind

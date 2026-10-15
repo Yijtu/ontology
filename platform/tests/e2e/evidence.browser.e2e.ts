@@ -65,6 +65,7 @@ describe('provenance and history in a real browser', () => {
     expect(html).not.toContain(OTHER_TENANT_TEXT)
     await capture(page, 'evidence-basis')
 
+    await page.getByText('依赖关系与完整性详情', { exact: true }).click()
     await page.click('[data-testid="load-graph"]')
     await page.waitForSelector('[data-testid="graph-truncated"]')
     expect(await page.locator('[data-testid="load-more-graph"]').count()).toBe(1)

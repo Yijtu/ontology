@@ -1,0 +1,33 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://ontology.local/schema/mount.schema.json",
+  "title": "MountContracts",
+  "$comment": "SPEC v0.3a asset-data-ui §9.3 and spec-generic §4.3: the data-only half of the public UI scenario mount contract. React ComponentType, props and bundle/module paths stay in apps/web; contracts only stores version refs and capability declarations. A module is registered by the trusted web composition, never loaded from an API, an industry pack or uploaded content.",
+  "$defs": {
+    "UiCapabilityMetadata": {
+      "title": "UiCapabilityMetadata",
+      "description": "Data-only deployment/industry declaration of a mountable scenario module: the registered module ref, the task bindings it offers and the capabilities it needs. It never contains React, HTML, JS paths or a remote dynamic import. An unregistered module renders the generic verified result instead of a professional view.",
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["moduleRef", "taskBindingRefs", "requiredCapabilities"],
+      "properties": {
+        "moduleRef": {
+          "$ref": "./common.schema.json#/$defs/VersionRef"
+        },
+        "taskBindingRefs": {
+          "type": "array",
+          "items": {
+            "$ref": "./common.schema.json#/$defs/VersionRef"
+          }
+        },
+        "requiredCapabilities": {
+          "type": "array",
+          "items": {
+            "$ref": "./common.schema.json#/$defs/NonEmptyString"
+          },
+          "uniqueItems": true
+        }
+      }
+    }
+  }
+}

@@ -253,4 +253,9 @@ export interface ControlRepository {
     request: ControlAppendEventRequest,
     ctx: ToolContext,
   ): Promise<ControlAppendEventResponse>
+  /** Optional bounded append for up to 64 events in one trusted scope and stream. */
+  appendEvents?(
+    requests: readonly ControlAppendEventRequest[],
+    ctx: ToolContext,
+  ): Promise<readonly ControlAppendEventResponse[]>
 }
