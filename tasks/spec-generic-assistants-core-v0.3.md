@@ -2,7 +2,7 @@
 
 日期：2026-09-29。状态：实施规格；本轮只生成规格和任务，不表示新增能力已经交付。
 
-输入：[A 通用 PRD](prd-generic-assistants-core-v0.3.md)，覆盖 A.US-001～016、A.FR-1～22，以及[总体 PRD](prd-ontology-and-business-assistants-v0.3.md)中归 A 的机制。A 与总体 PRD 的相同数字采用不同命名空间，不混用。
+输入：[A 通用 PRD](prd-generic-assistants-core-v0.3.md)，覆盖 A.US-001～016、A.FR-1～22。A 的数字命名空间与其它 PRD 不混用。
 
 核对基线：main／origin/main 为 19c411e8db444e289e8c3ec0395ae909f2534601；文档所在工作区为 feat/electrical-costing-poc@b339b8f6a1167218becdd7b33d144c02660f43ce。通用研发工作线为 feat/core-planning-provenance@d17c7b520298703feb65f86761f34f1557927aca，存在未提交工作。以上为文档编写时快照，开工重新核对，不按目录名称推断分支。
 
@@ -13,9 +13,6 @@
 | 本文 | 总体架构、职责、兼容策略、阶段门槛、测试和任务索引 |
 | [资产、数据与公共前端](spec-v0.3a/asset-data-ui.md) | 工作区／项目修订、候选、发布包、mapping、解析／索引就绪、公共 UI 和挂载契约 |
 | [执行、语义与证据](spec-v0.3a/execution-evidence.md) | task binding／输入与结果工件、规则／关系、runtime、typed 答案、核验、发布有效性与生命周期 |
-| [B 造价 SPEC](spec-electrical-costing-mvp-v0.3.md) | 造价声明、客户价格与函数适配、专业 UI 和业务验收；引用 A 的通用契约 |
-| [v0.3 任务批次](../.autoresearch/batches/v0.3-assistants/INDEX.md) | 本批任务、依赖、阶段、就绪与真实远程编号映射 |
-| [逐项需求覆盖](../.autoresearch/batches/v0.3-assistants/coverage.md) | 两份 PRD 的每项验收条件／FR → SPEC、计划测试与任务 |
 
 两个 A 分册都是规范组成，不能只按本文概述实施。既有 v0.2 SPEC 的依赖、授权、四工具、预算和核验原则继续有效；本版对新增行为和有限范围的明确定义优先，旧非目标不成为禁止用户新需求的理由。
 
@@ -228,7 +225,7 @@ compute handler 只收到固定输入引用、限定 reader／writer、operation
 
 ### 8.1 任务依赖
 
-权威依赖是[本批 manifest](../.autoresearch/batches/v0.3-assistants/manifest.json)。本批 A 为 V03-001～047，B 为 V03-048～072；V03 本地 ID 不等于 GitHub issue 数字。旧 .autoresearch/issues 和现有 .loop-state.json 不被覆盖。任务卡给出范围、具体输出、失败行为、验证命令、复用检查及逐项 PRD AC。
+权威依赖是 A 阶段任务批次。A 为 V03-001～047，已交付并合入 main；批次清单与 manifest 随规划批次维护于规划分支，不放在 main。V03 本地 ID 不等于 GitHub issue 数字。旧 .autoresearch/issues 和现有 .loop-state.json 不被覆盖。任务卡给出范围、具体输出、失败行为、验证命令、复用检查及逐项 PRD AC。
 
 先执行 V03-001 的主线／WIP／旧任务核对，再固定公共契约。资料／建模／项目就绪、查询／规则／动作／typed 发布、公共 UI 依依赖交付。不存在“整个实验分支都完成”这个隐含依赖；每张卡开工先核对已经合入的能力，能复用则只做缺口。
 
