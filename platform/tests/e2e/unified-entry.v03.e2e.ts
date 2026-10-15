@@ -50,12 +50,19 @@ describe('unified default web entry in a real browser', () => {
       for (const view of ['start', 'ontology', 'projects', 'definitions', 'instances', 'packages', 'business', 'workbench', 'query', 'jobs', 'review', 'evidence']) {
         expect(await page.locator(`[data-testid="tab-${view}"]`).count()).toBe(1)
       }
-      expect(await page.textContent('[data-testid="tab-ontology"]')).toBe('本体工作区')
+      // New IA (design §1.1/N02): the two workbenches are top-level assistants and the hosting
+      // views were renamed to the product page names; the guarantees below are unchanged.
+      expect(await page.textContent('[data-testid="tab-ontology"]')).toBe('概览')
+      expect(await page.textContent('[data-testid="assistant-tab-ontology"]')).toBe('行业工作台')
+      expect(await page.textContent('[data-testid="assistant-tab-business"]')).toBe('项目工作台')
       expect(await page.locator('[data-testid="guide-path-step"]').count()).toBe(6)
-      expect(await page.getByText('本体建模', { exact: true }).count()).toBeGreaterThan(0)
+      expect(await page.getByText('资料导入', { exact: true }).count()).toBeGreaterThan(0)
+      for (const entry of ['research', 'upload', 'structured']) {
+        expect(await page.locator(`[data-testid="source-entry-${entry}"]`).count()).toBe(1)
+      }
 
       await capture(page, 'v03-unified-entry-guide')
-      await record('v03-unified-entry-guide', ['defaultView=start', 'v03Tabs=ontology,projects,definitions,instances,packages,business'])
+      await record('v03-unified-entry-guide', ['defaultView=start', 'topLevelAssistants=start,ontology,business', 'sourceEntries=research,upload,structured'])
     } finally {
       await context.close()
     }

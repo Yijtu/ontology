@@ -589,13 +589,15 @@ describe('current instance field original source (real mapping, native parser, c
 describe('fully approved paged native input capture (actual human services and PostgreSQL)', () => {
   let prepared: Awaited<ReturnType<typeof humanFixture>> | undefined
   beforeAll(async () => {
-    // Individual human actions are fixture preparation, not one task execution.
-    // Keep the existing harness setup bound and each source request's 120s budget.
+    // Individual human actions are fixture preparation, not one task execution. Approving 1001
+    // mapped records is genuine work that sits around 200s in isolation but exceeds 300s whenever
+    // the integration project's second container worker runs a peer heavy suite, so keep an
+    // explicit bound with headroom instead of relying on the generic hook budget.
     const controller = new AbortController()
-    const stop = setTimeout(() => controller.abort(new Error('the actual1001 fixture reached its unchanged setup bound')), 295_000)
+    const stop = setTimeout(() => controller.abort(new Error('the actual1001 fixture reached its explicit setup bound')), 870_000)
     try { prepared = await humanFixture(await fieldFixture('csv', 1001, 'query', true, controller.signal), 4, controller.signal) }
     finally { clearTimeout(stop) }
-  }, 300_000)
+  }, 900_000)
   afterAll(() => prepared?.backend.close())
   it('captures and reuses all 1001 approved rows in real bounded pages and replays a record after the first 1000 without a latest or ordinal fallback', async () => {
     if (prepared === undefined) throw new Error('actual approved fixture unavailable')
@@ -655,5 +657,9 @@ describe('fully approved paged native input capture (actual human services and P
     await expect(read()).rejects.toThrow()
     await objects.publish(lastPage['ref'].digest, bytes)
     console.info('actual approved input pages', JSON.stringify({ approved: 1001, recordPages: 11, physicalPages: 11, humanPages: 11, maxPageBytes }))
-  }, 120_000)
+    // The 1001-row capture body validates 33 bounded page blobs (11 physical + 11 confirmation +
+    // 11 record pages) with per-blob digests and then pages the activated snapshot on top of the
+    // 900s human fixture. Under the integration project's two container workers that genuine work
+    // exceeds the generic 120s budget, so give this one test the same explicit bound as its fixture.
+  }, 600_000)
 })

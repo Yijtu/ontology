@@ -914,15 +914,18 @@ describe('V03-045 generic dual-assistant full-stack E2E (real chromium, real hos
       const actualPolicySourceRef = actualPolicyUploadBody.data.source.sourceRef
       expect(actualPolicySourceRef.id).toBeTruthy()
       expect(actualPolicySourceRef.digest).toMatch(/^sha256:[0-9a-f]{64}$/u)
-      await page.getByRole('button', { name: '查看真实原文与片段' }).waitFor()
-      await page.getByRole('button', { name: '查看真实原文与片段' }).click()
+      // The source library (design §1.5/N06) renders a second "查看真实原文与片段" control; the
+      // workspace-source article is the one this draft flow uploads into.
+      const originalSourceButton = page.locator('article').getByRole('button', { name: '查看真实原文与片段', exact: true })
+      await originalSourceButton.waitFor()
+      await originalSourceButton.click()
       const originalDialog = page.getByRole('dialog', { name: '原始资料预览' })
       await originalDialog.waitFor()
       expect(await originalDialog.textContent()).toContain('inspection_due is a condition')
       await capture(page, 'gap22-flow1-original-source-1440')
       await page.keyboard.press('Escape')
       await originalDialog.waitFor({ state: 'hidden' })
-      expect(await page.getByRole('button', { name: '查看真实原文与片段' }).evaluate((element) => element === document.activeElement)).toBe(true)
+      expect(await originalSourceButton.evaluate((element) => element === document.activeElement)).toBe(true)
 
       for (const width of [1440, 1024, 768, 390]) {
         await page.setViewportSize({ width, height: width === 390 ? 844 : 900 })
@@ -1479,7 +1482,9 @@ describe('V03-045 generic dual-assistant full-stack E2E (real chromium, real hos
       const mappedIdentity = page.getByTestId('mapping-preview-asset_code')
       expect(await mappedIdentity.locator('td:nth-child(2)').textContent()).toBe('GAP22-ASSET-001')
       expect(await mappedIdentity.locator('td:nth-child(3)').textContent()).toBe('GAP22-ASSET-001')
-      expect(await mappedIdentity.locator('td:nth-child(4)').textContent()).toBe('A2')
+      // Preview columns are 规范字段 | 原始值 | 规范值 | 单位 | 实际定位 (design §1.5/N07).
+      expect(await mappedIdentity.locator('td:nth-child(4)').textContent()).toBe('—')
+      expect(await mappedIdentity.locator('td:nth-child(5)').textContent()).toContain('A2')
       const confirmMapping = page.waitForResponse((response) => response.request().method() === 'POST' && new URL(response.url()).pathname === `/api/v1/projects/${projectId}/mappings`)
       await page.getByTestId('mapping-confirm-button').click()
       const confirmedMappingResponse = await confirmMapping

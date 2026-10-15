@@ -40,6 +40,14 @@ export function createCoreProjectSemanticReadiness(options: {
           inventory = await options.selectors.readCurrentInventory(projectId,new Set(profile.resolved.toolBindings.filter((entry) => entry.enabled).map((entry) => entry.toolId)),new Set(profile.resolved.computeBindings.filter((entry) => entry.enabled).map((entry) => `${entry.operationRef.id}@${entry.operationRef.version}`)),ctx)
         } catch (error) {
           if (error instanceof WorkflowControllerError && error.code === 'CAPABILITY_NOT_CONFIGURED') break
+          // A concurrent publication/evolution can move the project while the catalogue is being
+          // read; `readCurrentInventory` reports that as VERSION_CONFLICT. Treat it like the other
+          // pin rechecks below: re-read on the bounded retry instead of failing the worker, and
+          // only surface it once the bounded attempts are exhausted.
+          if (error instanceof WorkflowControllerError && error.code === 'VERSION_CONFLICT') {
+            if (captureAttempt < 2) continue
+            throw error
+          }
           throw error
         }
         const [state, outstandingFences] = await Promise.all([options.materialization.getProjectionState(scope,ctx),options.materialization.listOpenFences(scope,ctx)])

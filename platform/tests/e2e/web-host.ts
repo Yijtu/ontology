@@ -113,7 +113,10 @@ export async function startWebHost(apiOrigin: string, options: WebHostOptions = 
 
 export async function capture(page: Page, name: string): Promise<void> {
   await mkdir(ARTIFACTS_DIR, { recursive: true })
-  await page.screenshot({ path: join(ARTIFACTS_DIR, `${name}.png`), fullPage: true })
+  // The full E2E suite runs many real hosts and containers back-to-back; a busy machine can make
+  // the default 30s screenshot budget too tight for a full-page capture. The capture is only an
+  // artifact, so give it headroom rather than failing an otherwise-passing assertion.
+  await page.screenshot({ path: join(ARTIFACTS_DIR, `${name}.png`), fullPage: true, timeout: 60_000 })
 }
 
 export async function record(name: string, lines: readonly string[]): Promise<void> {
