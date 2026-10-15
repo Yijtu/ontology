@@ -12,6 +12,7 @@ import { classifyPublicError } from '../state/public-errors'
 import { PublicStateNotice } from './PublicStateNotice'
 import { ResultWorkbenchPanel } from './ResultWorkbenchPanel'
 import { ProjectContextPicker, useProjectContext } from './project/ProjectContextPicker'
+import { ProjectModelCoverage } from './project/ProjectModelCoverage'
 import { readProjectTasks } from '../api/project-workbench'
 import type { ProjectTaskCatalogue } from '../api/project-workbench'
 import { TaskRunForm } from './project/TaskRunForm'
@@ -293,6 +294,10 @@ export function BusinessWorkbenchPanel({
                 else onSelectProject(id)
               }}
             />
+            <ProjectModelCoverage
+              client={client}
+              {...(selectedProjectId === undefined ? {} : { projectId: selectedProjectId })}
+            />
             {catalogueError === undefined ? null : <ProjectNotice error={catalogueError} />}
             {selectedProjectId === undefined ? (
               <TaskList
@@ -465,6 +470,10 @@ export function BusinessWorkbenchPanel({
                   <p>修订 {run.revision}</p>
                   <p>{run.state}</p>
                 </details>
+                <p className="project-source-note" data-testid="business-model-binding-note">
+                  模型绑定：本任务固定其执行时解析的模型与配置版本，恢复或重试都沿用原绑定，不因默认变化换模型；
+                  上方「本项目生效模型」只影响以后的新任务。历史结果按原绑定保留，不回写为当前默认。
+                </p>
                 <ol data-testid="business-progress" data-count={state.events.length}>
                   {state.events.map((entry, index) => (
                     <li
