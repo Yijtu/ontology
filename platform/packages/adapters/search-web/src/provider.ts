@@ -8,8 +8,12 @@ import type {
   WebSearchProviderResult,
 } from '@ontology/contracts'
 import { WebSearchProviderError, providerErrorForHttpStatus } from './errors'
+import { hostAllowed } from './host'
 import { SearchHttpClient } from './http-client'
 import { mapSearchResponse } from './mapping'
+import type { WebPageSnapshotArchiver } from './snapshot-archive'
+
+export { hostAllowed } from './host'
 
 export interface HttpWebSearchProviderConfig {
   /** Base address of the search endpoint, e.g. a controlled fixture server or the vendor host. */
@@ -20,6 +24,12 @@ export interface HttpWebSearchProviderConfig {
   readonly now?: () => string
   /** Upper bound for a single call even when the propagated deadline is further out. */
   readonly maxTimeoutMs?: number
+  /**
+   * The controlled snapshot archiver. When present, every permitted page is retrieved and archived
+   * so its `snapshotRef` names immutable bytes a research flow can cite. When absent the provider
+   * returns links only and marks each page `archive_not_configured` — never a fake snapshot.
+   */
+  readonly snapshotArchive?: WebPageSnapshotArchiver
 }
 
 const DEFAULT_ENDPOINT = '/v1/search'
@@ -39,6 +49,12 @@ const PROVIDER_REF: VersionRef = {
  * the approved set) and again on every returned URL (a page whose host is not approved
  * is dropped and counted, never silently widened). It performs no persistence, holds no
  * credentials and applies no budget or permission rule — those belong to the gateway.
+ *
+ * When a `snapshotArchive` is configured it also retrieves and archives the *actual page
+ * bytes* behind each permitted result (design §2.3): the returned `contentDigest` then
+ * describes the archived bytes, not the search summary, and `snapshotRef` names the
+ * immutable snapshot. A page it cannot archive is returned as a link only with an explicit
+ * `snapshotUnavailableReason`.
  */
 export class HttpWebSearchProvider implements WebSearchProvider {
   readonly providerRef: VersionRef = PROVIDER_REF
@@ -47,6 +63,7 @@ export class HttpWebSearchProvider implements WebSearchProvider {
   readonly #client: SearchHttpClient
   readonly #now: () => string
   readonly #maxTimeoutMs: number
+  readonly #snapshotArchive: WebPageSnapshotArchiver | undefined
 
   constructor(config: HttpWebSearchProviderConfig) {
     this.#baseUrl = config.baseUrl
@@ -56,13 +73,13 @@ export class HttpWebSearchProvider implements WebSearchProvider {
     )
     this.#now = config.now ?? (() => new Date().toISOString())
     this.#maxTimeoutMs = config.maxTimeoutMs ?? DEFAULT_MAX_TIMEOUT_MS
+    this.#snapshotArchive = config.snapshotArchive
   }
 
   async search(
     request: WebSearchProviderRequest,
     ctx: ToolContext,
   ): Promise<WebSearchProviderResult> {
-    void ctx
     if (request.allowedDomains.length === 0) {
       throw new WebSearchProviderError(
         'FORBIDDEN',
@@ -85,13 +102,53 @@ export class HttpWebSearchProvider implements WebSearchProvider {
     }
 
     const capped = permitted.slice(0, request.limit)
+    const archived: WebSearchProviderPage[] = []
+    for (const page of capped) {
+      archived.push(await this.#archivePage(page, request, ctx))
+    }
+
     const truncated = mapped.truncated || permitted.length > request.limit
     return {
-      pages: capped,
+      pages: archived,
       truncated,
       excludedCount,
       ...(mapped.nextCursor === undefined ? {} : { nextCursor: mapped.nextCursor }),
       ...(mapped.knownTotal === undefined ? {} : { knownTotal: mapped.knownTotal }),
+    }
+  }
+
+  /**
+   * Retrieve and archive one permitted page. A configured archiver either yields a snapshot or an
+   * explicit link-only reason; with no archiver every page is link only. Either way the page is
+   * returned, never dropped and never presented as citable without a snapshot.
+   */
+  async #archivePage(
+    page: WebSearchProviderPage,
+    request: WebSearchProviderRequest,
+    ctx: ToolContext,
+  ): Promise<WebSearchProviderPage> {
+    const archive = this.#snapshotArchive
+    if (archive === undefined) return { ...page, snapshotUnavailableReason: 'archive_not_configured' }
+
+    const outcome = await archive.archive(
+      {
+        url: page.url,
+        allowedDomains: request.allowedDomains,
+        deadline: request.deadline,
+        signal: request.signal,
+        providerRef: this.providerRef,
+      },
+      ctx,
+    )
+    if (outcome.status === 'discovery_only') {
+      return { ...page, snapshotUnavailableReason: outcome.reason }
+    }
+    return {
+      ...page,
+      fetchedAt: outcome.fetchedAt,
+      contentDigest: outcome.contentDigest,
+      snapshotRef: outcome.snapshotRef,
+      snapshotManifestRef: outcome.manifestRef,
     }
   }
 
@@ -152,18 +209,4 @@ function deadlineExceeded(): WebSearchProviderError {
     'the search provider did not answer before the propagated deadline',
     { remoteStateUnknown: true },
   )
-}
-
-/**
- * A result is inside the allowlist when its host equals an approved domain or is a
- * subdomain of one. Anything else is outside and is dropped.
- */
-export function hostAllowed(pageUrl: string, allowedDomains: readonly string[]): boolean {
-  let host: string
-  try {
-    host = new URL(pageUrl).hostname.toLowerCase()
-  } catch {
-    return false
-  }
-  return allowedDomains.some((domain) => host === domain || host.endsWith(`.${domain}`))
 }

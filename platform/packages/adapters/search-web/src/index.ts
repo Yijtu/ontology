@@ -19,3 +19,11 @@ export { mapSearchResponse } from './mapping'
 export type { MappedSearchResponse } from './mapping'
 export { HttpWebSearchProvider, hostAllowed } from './provider'
 export type { HttpWebSearchProviderConfig } from './provider'
+export { WebPageSnapshotArchiver } from './snapshot-archive'
+export type {
+  ArchivedPageSnapshot,
+  UnarchivedPage,
+  WebPageSnapshotArchiveConfig,
+  WebPageSnapshotArchiveOutcome,
+  WebPageSnapshotArchiveRequest,
+} from './snapshot-archive'
