@@ -6,6 +6,7 @@ import type { StructuredProjectImportView } from '../../api/project-workbench'
 import { Button, Field } from '../ui'
 import { ProjectNotice } from './ProjectNotice'
 import { useRequestFence } from './useRequestFence'
+import { StructuredIntakeNotice } from '../structured/StructuredIntakeNotice'
 
 const MEDIA: Readonly<Record<StructuredFormat, string>> = {
   csv: 'text/csv',
@@ -121,6 +122,7 @@ export function ProjectFileImport({
       <p className="project-source-note">
         系统保存原始字节并解析实际行列。导入与字段确认、数据发布分别进行。
       </p>
+      <StructuredIntakeNotice testId="project-import-intake" />
       <div className="project-form-grid">
         <Field label="原始文件" hint="CSV、XLSX、JSON 或 UTF-8 文本；最多 20 MiB。">
           {(attributes) => (

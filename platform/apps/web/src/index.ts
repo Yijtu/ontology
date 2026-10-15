@@ -17,6 +17,16 @@ export { CandidateReviewPanel } from './components/CandidateReviewPanel'
 export type { CandidateReviewPanelProps } from './components/CandidateReviewPanel'
 export { CoreImportPanel } from './components/CoreImportPanel'
 export type { CoreImportPanelProps } from './components/CoreImportPanel'
+export {
+  StructuredIntakeNotice,
+  STRUCTURED_INTAKE_STAGE_LABEL,
+  structuredIntakeStage,
+} from './components/structured/StructuredIntakeNotice'
+export type {
+  StructuredIntakeNoticeProps,
+  StructuredIntakeStage,
+  StructuredIntakeStageInput,
+} from './components/structured/StructuredIntakeNotice'
 export { QueryPanel } from './components/QueryPanel'
 export type { QueryContextField, QueryPanelProps } from './components/QueryPanel'
 export { EvidencePanel } from './components/EvidencePanel'

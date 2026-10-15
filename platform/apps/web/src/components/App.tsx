@@ -158,7 +158,7 @@ function coreTabOf(view: AppView): NavTab | undefined {
  * top-level assistant, so refresh, forward/back and shared links all resolve the same surface.
  * Shell-level views (overview, settings, configuration) carry no assistant.
  */
-function applyAssistantParams(url: URL, view: AppView): void {
+function applyAssistantParams(url: URL, view: AppView, tabOverride?: string): void {
   const assistant = assistantOfView(view)
   if (assistant === undefined) {
     url.searchParams.delete('assistant')
@@ -166,7 +166,7 @@ function applyAssistantParams(url: URL, view: AppView): void {
     return
   }
   url.searchParams.set('assistant', assistant)
-  url.searchParams.set('tab', tabOfView(view) ?? 'overview')
+  url.searchParams.set('tab', tabOverride ?? tabOfView(view) ?? 'overview')
 }
 
 export function App({
@@ -253,15 +253,15 @@ export function App({
     setSourceReference(undefined)
     for (const param of ['run', 'job', 'candidate', 'evidence', 'object']) writeParam(param, undefined)
   }, [])
-  const navigate = useCallback((next: AppView, before?: () => void) => {
-    if (next === view && before === undefined) { setMenuOpen(false); return }
+  const navigate = useCallback((next: AppView, before?: () => void, tabOverride?: string) => {
+    if (next === view && before === undefined && tabOverride === undefined) { setMenuOpen(false); return }
     guard(() => {
       before?.()
       setView(next)
       setMenuOpen(false)
       const url = new URL(window.location.href)
       url.searchParams.set('view', next)
-      applyAssistantParams(url, next)
+      applyAssistantParams(url, next, tabOverride)
       historyIndex.current += 1
       window.history.pushState(indexedHistoryState(historyIndex.current), '', `${url.pathname}${url.search}${url.hash}`)
 
@@ -594,6 +594,7 @@ export function App({
           {...(projectId === undefined ? {} : { selectedProjectId: projectId })}
           onCreateWorkspace={() => navigate('ontology')}
           onCreateProject={() => navigate('projects')}
+          onStructuredIntake={() => navigate('projects', undefined, 'data')}
         />
       ) : null}
       {view === 'workbench' ? (
@@ -664,7 +665,7 @@ export function App({
             nextStep="先在上方场景下拉中选择一个已绑定配置的场景；若仍不可用，请确认该部署已发布行业包。"
           />
         ) : (
-          <ProjectWorkspacePanel client={client} projectBinding={projectBinding} profileRef={activeProfileRef} packs={packs} readOnly={readOnly} {...(projectId === undefined ? {} : { initialProjectId: projectId })} onSelectProject={selectProject} onProjectCreated={adoptCreatedProject} />
+          <ProjectWorkspacePanel client={client} projectBinding={projectBinding} profileRef={activeProfileRef} packs={packs} readOnly={readOnly} {...(projectId === undefined ? {} : { initialProjectId: projectId })} initialStep={readParam('tab') === 'data' ? 'import' : 'overview'} onSelectProject={selectProject} onProjectCreated={adoptCreatedProject} />
         )
       ) : null}
 
