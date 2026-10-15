@@ -224,6 +224,35 @@ export type {
   WorkspaceSource,
   WorkspaceSourcesPanelProps,
 } from './components/WorkspaceSourcesPanel'
+export { ResearchPanel } from './components/ResearchPanel'
+export type { ResearchPanelProps } from './components/ResearchPanel'
+export {
+  FRESHNESS_LABELS,
+  RESEARCH_STAGES,
+  RESEARCH_STAGE_LABELS,
+  RESEARCH_STATUSES,
+  RESEARCH_STATUS_LABELS,
+  RESEARCH_STOP_REASON_LABELS,
+  RESEARCH_TARGET_KIND_LABELS,
+  RESEARCH_TARGET_KINDS,
+  buildResearchRequest,
+  cancelResearchRun,
+  hasNoArchivedSnapshot,
+  isResearchActive,
+  isResearchSurfaceMissing,
+  parseDomains,
+  readResearchRun,
+  researchFailureReason,
+  researchOutcome,
+  startResearchRun,
+  validateAuthorizationDraft,
+} from './api/research'
+export type {
+  ResearchAuthorizationDraft,
+  ResearchDraftValidation,
+  ResearchOutcome,
+  ResearchRunRequest,
+} from './api/research'
 export { SourceIntakeEntries } from './components/SourceIntakeEntries'
 export type { SourceIntakeEntriesProps, SourceIntakeEntryView } from './components/SourceIntakeEntries'
 export { SourceLibraryList } from './components/SourceLibraryList'
