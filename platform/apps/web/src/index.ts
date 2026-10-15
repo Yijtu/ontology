@@ -28,6 +28,7 @@ export type {
   StructuredIntakeStageInput,
 } from './components/structured/StructuredIntakeNotice'
 export { QueryPanel } from './components/QueryPanel'
+export { TaskReadinessList } from './components/QueryPanel'
 export type { QueryContextField, QueryPanelProps } from './components/QueryPanel'
 export { EvidencePanel } from './components/EvidencePanel'
 export type { EvidencePanelProps } from './components/EvidencePanel'
@@ -427,5 +428,7 @@ export { CompetencyQuestionWorkbench } from './components/ontology/CompetencyQue
 export type { WorkspaceAuthoringContext, WorkspaceSourceCatalogue, WorkspaceSourceView, EligibleOperationView } from './api/workspace-authoring'
 export { VerifiedCell } from './components/project/VerifiedCell'
 export { AnswerSourceContent } from './components/project/AnswerSourceContent'
+export { EvidenceSummary, sourceReadabilityNotice } from './components/project/EvidenceSummary'
+export { ProjectModelCoverage } from './components/project/ProjectModelCoverage'
 export type { SavedCellSelector, SourceReadCoverage, SavedInputArtifactView } from './api/source-views'
 export type { ProjectComputeInputSelection } from './api/query'

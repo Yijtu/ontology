@@ -9,9 +9,10 @@ import { FixedAnswerSource } from './project/FixedAnswerSource'
 import type { AnswerSourceLoader } from '../api/source-views'
 import { ProjectContextPicker, useProjectContext } from './project/ProjectContextPicker'
 import { readProjectTasks } from '../api/project-workbench'
-import type { ProjectTaskCatalogue } from '../api/project-workbench'
+import type { ProjectTaskCatalogue, ProjectTaskItem } from '../api/project-workbench'
 import { useRequestFence } from './project/useRequestFence'
 import { ProjectNotice } from './project/ProjectNotice'
+import { ProjectModelCoverage } from './project/ProjectModelCoverage'
 import { runStatusLabel } from '../state/project-labels'
 import { StatePanel } from './StatePanel'
 import { useViewport } from './useViewport'
@@ -123,6 +124,83 @@ function contextFromFields(
 
 function isTerminal(state: string): boolean {
   return state === 'published' || state === 'cancelled' || state === 'failed' || state === 'blocked'
+}
+
+const READINESS_LABELS: Readonly<Record<string, string>> = {
+  published_semantics: '语义已发布',
+  dataset: '查询数据',
+  document_index: '文档索引',
+}
+
+/**
+ * The project's real task readiness, shown in the same place as the natural-language entry (design
+ * §1.5/§3 N10): each task names the readiness it needs and why it is not yet startable. A task is
+ * startable only when the server marks it available; a missing model never blocks a task whose own
+ * conditions are met, nor existing sources, history or document reads.
+ */
+export function TaskReadinessList({
+  tasks,
+  readOnly,
+  onUse,
+}: {
+  readonly tasks: ProjectTaskCatalogue['tasks']
+  readonly readOnly: boolean
+  readonly onUse: (task: ProjectTaskItem) => void
+}) {
+  const available = tasks.filter((task) => task.available).length
+  return (
+    <section className="query__tasks" data-testid="query-task-readiness" data-count={tasks.length}>
+      <h4>
+        项目任务就绪 · {available}/{tasks.length} 可发起
+      </h4>
+      {tasks.length === 0 ? (
+        <p className="project-source-note" data-testid="query-task-readiness-empty">
+          当前项目尚无就绪的任务。上传、映射与字段确认仍可用；满足条件的确定性路径不会因缺少模型而停用。
+        </p>
+      ) : (
+        <ul>
+          {tasks.map((task) => {
+            const key = `${task.bindingRef.id}:${task.bindingRef.version}:${task.bindingRef.digest}`
+            return (
+              <li
+                key={key}
+                data-testid="query-task-readiness-item"
+                data-task-id={task.bindingRef.id}
+                data-available={task.available}
+              >
+                <span
+                  className={`project-state project-state--${task.available ? 'ready' : 'pending'}`}
+                  data-testid="query-task-state"
+                >
+                  {task.available ? '已就绪' : '尚未就绪'}
+                </span>
+                <strong>{task.displayName}</strong>
+                <small data-testid="query-task-requires">
+                  需要：
+                  {task.requiredReadiness.length === 0
+                    ? '无特殊就绪要求'
+                    : task.requiredReadiness.map((kind) => READINESS_LABELS[kind] ?? kind).join('、')}
+                </small>
+                {task.available ? null : (
+                  <small data-testid="query-task-blockers">
+                    阻断：{task.unavailableReasons.length === 0 ? '条件未满足' : task.unavailableReasons.join('；')}
+                  </small>
+                )}
+                <button
+                  type="button"
+                  data-testid="query-task-use"
+                  disabled={readOnly || !task.available}
+                  onClick={() => onUse(task)}
+                >
+                  使用此任务
+                </button>
+              </li>
+            )
+          })}
+        </ul>
+      )}
+    </section>
+  )
 }
 
 const OUTCOME_LABEL: Readonly<Record<QueryOutcome, string>> = {
@@ -398,8 +476,8 @@ export function QueryPanel({
   const run = state.run
   const modelNeedsSetup = modelCapabilities === undefined || !modelCapabilities.generation || !modelCapabilities.decision
   const modelStatus = modelCapabilities === undefined
-    ? '当前模型能力状态未知；是否可提问以项目任务目录和运行状态为准。'
-    : `文本生成${modelCapabilities.generation ? '已启用' : '未启用'}，智能路由${modelCapabilities.decision ? '已启用' : '未启用'}。确定支持范围仍以项目任务目录为准。`
+    ? '当前模型能力状态未知；是否可提问以项目任务目录和运行状态为准。缺少生成模型不会停用已有资料、历史与满足原条件的确定性任务。'
+    : `文本生成${modelCapabilities.generation ? '已启用' : '未启用'}，智能路由${modelCapabilities.decision ? '已启用' : '未启用'}。确定支持范围仍以项目任务目录为准；缺少生成模型不会停用已有资料、历史与满足原条件的确定性任务。`
 
   return (
     <section
@@ -487,14 +565,17 @@ export function QueryPanel({
                 }}
               />
               {catalogueError === undefined ? null : <ProjectNotice error={catalogueError} />}
+              <ProjectModelCoverage
+                client={client}
+                {...(projectContext.selectedId === undefined ? {} : { projectId: projectContext.selectedId })}
+                {...(onConfigureModel === undefined ? {} : { onConfigure: onConfigureModel })}
+              />
               {actualCatalogue === undefined ? null : (
-                <p className="project-source-note">
-                  可查询：
-                  {actualCatalogue.tasks
-                    .filter((task) => task.available)
-                    .map((task) => task.displayName)
-                    .join('、') || '当前项目尚无就绪的任务'}
-                </p>
+                <TaskReadinessList
+                  tasks={actualCatalogue.tasks}
+                  readOnly={readOnly}
+                  onUse={(task) => setQuestion(task.displayName)}
+                />
               )}
               {availableTasks.length === 0 ? null : (
                 <details className="project-audit">
@@ -626,6 +707,10 @@ export function QueryPanel({
                   <code>{run.runId}</code>
                   <p>{run.state}</p>
                 </details>
+                <p className="project-source-note" data-testid="run-model-binding-note">
+                  模型绑定：本任务固定其执行时解析的模型与配置版本，恢复或重试都沿用原绑定，不因默认变化换模型；
+                  上方「本项目生效模型」只影响以后的新任务。历史结果按原绑定保留，不回写为当前默认。
+                </p>
 
                 <BudgetPanel budget={state.budget ?? run.budget} />
 
