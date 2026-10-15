@@ -169,7 +169,7 @@ describe('candidate source research and review API (real PostgreSQL)', () => {
     const proposed = source()
     await store.putSource(scope.scopeRef, { source: proposed, idempotencyKey: `cs-${randomUUID().slice(0, 12)}` }, ctx)
     const reviewed = await post(`/api/v1/industry-workspaces/${workspaceId}/sources/${proposed.sourceId}/reviews`, {
-      ifMatch: '1', body: { reviewState: 'approved', trustTier: 'public_standard' },
+      ifMatch: '1', body: { reviewState: 'approved', trustTier: 'public_standard', reason: '原文为公开规范，人工确认版本与适用范围' },
     })
     expect(reviewed.statusCode).toBe(201)
     const body = reviewed.json() as { data: { source: { trustTier: string; reviewState: string } }; meta: { revision: string } }
@@ -180,9 +180,9 @@ describe('candidate source research and review API (real PostgreSQL)', () => {
   it('rejects a stale review revision and a non-reviewer role', async () => {
     const proposed = source()
     await store.putSource(scope.scopeRef, { source: proposed, idempotencyKey: `cs-${randomUUID().slice(0, 12)}` }, ctx)
-    const stale = await post(`/api/v1/industry-workspaces/${workspaceId}/sources/${proposed.sourceId}/reviews`, { ifMatch: '9', body: { reviewState: 'rejected' } })
+    const stale = await post(`/api/v1/industry-workspaces/${workspaceId}/sources/${proposed.sourceId}/reviews`, { ifMatch: '9', body: { reviewState: 'rejected', reason: '与厂商文档重复，作为研究参考保留' } })
     expect(stale.statusCode).toBe(409)
-    const forbidden = await post(`/api/v1/industry-workspaces/${workspaceId}/sources/${proposed.sourceId}/reviews`, { roles: 'business-user', ifMatch: '1', body: { reviewState: 'rejected' } })
+    const forbidden = await post(`/api/v1/industry-workspaces/${workspaceId}/sources/${proposed.sourceId}/reviews`, { roles: 'business-user', ifMatch: '1', body: { reviewState: 'rejected', reason: '无审核权限' } })
     expect(forbidden.statusCode).toBe(403)
   })
 

@@ -3,7 +3,6 @@ import {
   IndustryWorkspaceStoreError,
   JobStoreError,
   assertIndustryWorkspaceShape,
-  assetDraftContent,
   isToolContext,
 } from '@ontology/contracts'
 import type {
@@ -22,13 +21,13 @@ import type {
   RevisionString,
   Rfc3339UtcTimestamp,
   ScopeRef,
-  Sha256Digest,
   ToolContext,
   Uuid,
   VersionRef,
 } from '@ontology/contracts'
 import { canonicalJson, sha256DigestOf } from '../profiles/canonical'
 import { IndustryWorkspaceError } from './errors'
+import { buildAssetDraft } from './workspace-draft'
 
 const EDITOR_ROLES: readonly string[] = ['profile-editor', 'platform-admin']
 
@@ -176,11 +175,6 @@ function sortedCandidateRefs(refs: readonly AssetDraftCandidateRef[]): AssetDraf
   return [...refs].sort((left, right) =>
     left.logicalId < right.logicalId ? -1 : left.logicalId > right.logicalId ? 1 : 0,
   )
-}
-
-/** Content digest of one immutable draft revision, excluding the digest field itself. */
-function draftDigest(draft: Omit<AssetDraftVersion, 'digest'>): Sha256Digest {
-  return sha256DigestOf(canonicalJson(assetDraftContent(draft)))
 }
 
 function changesOf(
@@ -506,18 +500,7 @@ export class IndustryWorkspaceService {
       readonly validationRef?: ResourceRef
     },
   ): AssetDraftVersion {
-    const content = {
-      workspaceId,
-      revision,
-      documentSetRef: fields.documentSetRef,
-      candidateRefs: sortedCandidateRefs(fields.candidateRefs ?? []),
-      ...(fields.basePackRef === undefined ? {} : { basePackRef: fields.basePackRef }),
-      ...(fields.syntheticExampleSetRef === undefined
-        ? {}
-        : { syntheticExampleSetRef: fields.syntheticExampleSetRef }),
-      ...(fields.validationRef === undefined ? {} : { validationRef: fields.validationRef }),
-    }
-    return { ...content, digest: draftDigest(content) }
+    return buildAssetDraft(workspaceId, revision, fields)
   }
 
   async #ensureAnchorJob(
