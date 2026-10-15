@@ -116,6 +116,7 @@ export type { CoreApiDependencies } from './core-main'
 export { registerRunRoutes } from './http/server'
 export { CoreLocalModelSettings, LocalModelSettingsError } from './composition/core-local-model-settings'
 export type { CoreModelSettingsView } from './composition/core-local-model-settings'
+export { CoreModelSettingsMigration, MODEL_SETTINGS_MIGRATED } from './composition/core-model-settings-migration'
 export type { AuthenticatedRequest, RequestAuthenticator, RunApiOptions, RunDispatchHooks } from './http/server'
 export { RunProgressService } from './http/run-progress'
 export type {

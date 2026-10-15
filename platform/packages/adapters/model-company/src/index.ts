@@ -6,8 +6,8 @@
  * provider type becomes a platform contract or leaks into `contracts`/`core`.
  */
 export { CompanyGenerationAdapter } from './adapter'
-export { probeCompanyModel } from './probe'
-export type { CompanyModelProbeInput } from './probe'
+export { probeCompanyModel, probeCompanyModelConnection } from './probe'
+export type { CompanyModelProbeInput, CompanyModelConnectionProbeResult, CompanyModelProbeReason } from './probe'
 export { ModelAdapterError, isModelAdapterError, httpStatusForModelError } from './errors'
 export type { ModelAdapterErrorCode, ModelAdapterErrorOptions } from './errors'
 export type {
