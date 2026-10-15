@@ -2,7 +2,7 @@
 
 日期：2026-09-29。状态：实施规格；本轮只生成规格和任务，不表示新增能力已经交付。
 
-输入：[A 通用 PRD](prd-generic-assistants-core-v0.3.md)，覆盖 A.US-001～016、A.FR-1～22，以及[总体 PRD](prd-ontology-and-business-assistants-v0.3.md)中归 A 的机制。A 与总体 PRD 的相同数字采用不同命名空间，不混用。
+输入：[A 通用 PRD](prd-generic-assistants-core-v0.3.md)，覆盖 A.US-001～016、A.FR-1～22。A 的数字命名空间与其它 PRD 不混用。
 
 核对基线：main／origin/main 为 19c411e8db444e289e8c3ec0395ae909f2534601；文档所在工作区为 feat/electrical-costing-poc@b339b8f6a1167218becdd7b33d144c02660f43ce。通用研发工作线为 feat/core-planning-provenance@d17c7b520298703feb65f86761f34f1557927aca，存在未提交工作。以上为文档编写时快照，开工重新核对，不按目录名称推断分支。
 
@@ -228,7 +228,7 @@ compute handler 只收到固定输入引用、限定 reader／writer、operation
 
 ### 8.1 任务依赖
 
-权威依赖是[本批 manifest](../.autoresearch/batches/v0.3-assistants/manifest.json)。本批 A 为 V03-001～047，B 为 V03-048～072；V03 本地 ID 不等于 GitHub issue 数字。旧 .autoresearch/issues 和现有 .loop-state.json 不被覆盖。任务卡给出范围、具体输出、失败行为、验证命令、复用检查及逐项 PRD AC。
+权威依赖是 A 阶段任务批次。A 为 V03-001～047，已交付并合入 main；批次清单与 manifest 随规划批次维护于规划分支，不放在 main。V03 本地 ID 不等于 GitHub issue 数字。旧 .autoresearch/issues 和现有 .loop-state.json 不被覆盖。任务卡给出范围、具体输出、失败行为、验证命令、复用检查及逐项 PRD AC。
 
 先执行 V03-001 的主线／WIP／旧任务核对，再固定公共契约。资料／建模／项目就绪、查询／规则／动作／typed 发布、公共 UI 依依赖交付。不存在“整个实验分支都完成”这个隐含依赖；每张卡开工先核对已经合入的能力，能复用则只做缺口。
 

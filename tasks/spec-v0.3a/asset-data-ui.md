@@ -2,7 +2,7 @@
 
 日期：2026-09-29。状态：技术规格；本文所述新增表、接口和页面尚未实现。本文只做静态源码核对和设计，没有运行服务、测试、模型、迁移或分支操作。
 
-来源：[阶段 A PRD](../prd-generic-assistants-core-v0.3.md)、[总体及阶段 B PRD](../prd-ontology-and-business-assistants-v0.3.md)、[既有 SPEC](../spec-industry-semantic-agent-v0.2.md)。本分册是阶段 A 主 SPEC 的规范组成；执行、任务绑定、规则语义、类型化结果与发布核验以 [execution-evidence.md](execution-evidence.md) 为权威，本文不再定义另一套运行控制器或证据协议。
+来源：[阶段 A PRD](../prd-generic-assistants-core-v0.3.md)、[既有 SPEC](../spec-industry-semantic-agent-v0.2.md)。本分册是阶段 A 主 SPEC 的规范组成；执行、任务绑定、规则语义、类型化结果与发布核验以 [execution-evidence.md](execution-evidence.md) 为权威，本文不再定义另一套运行控制器或证据协议。
 
 ## 1. 覆盖与边界
 
