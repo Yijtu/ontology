@@ -2,6 +2,8 @@ import type { FastifyInstance } from 'fastify'
 import {
   assertModelingBriefShape,
   CandidateSourceError,
+  ModelSelectionError,
+  ResearchError,
   SourceAdmissionError,
 } from '@ontology/contracts'
 import type {
@@ -9,13 +11,23 @@ import type {
   CandidateSourceReviewState,
   CandidateSourceRetractionStore,
   CandidateSourceStore,
+  DefinitionCandidateKind,
+  ModelingBrief,
+  ResearchRequest,
   SourceAdmissionCommand,
   SourceAdmissionTableOptions,
   SourceRetractionCommand,
   SourceTrustTier,
+  WebSearchFreshnessHint,
 } from '@ontology/contracts'
-import { CandidateSourceReviewService, WebResearchError, WorkspaceSourceAdmissionService } from '@ontology/application'
-import type { WebResearchService } from '@ontology/application'
+import {
+  CandidateSourceReviewService,
+  DEFAULT_RESEARCH_BUDGET_REF,
+  DEFAULT_RESEARCH_POLICY_REF,
+  WebResearchError,
+  WorkspaceSourceAdmissionService,
+} from '@ontology/application'
+import type { ResearchWorkflowService, WebResearchService } from '@ontology/application'
 import { createRequestToolContext } from './context'
 import {
   authenticateRequest,
@@ -41,6 +53,8 @@ export interface CandidateSourceRouteDependencies {
   readonly sources: CandidateSourceStore
   /** Present only when a web search provider is configured for this deployment. */
   readonly research?: WebResearchService
+  /** The bounded, durable research orchestration; present only when web search is configured. */
+  readonly researchWorkflow?: ResearchWorkflowService
   /** The append-only review/retraction surface; built from `sources` when absent. */
   readonly review?: CandidateSourceReviewService
   /** The retraction store, when it is not the same object as `sources`. */
@@ -73,6 +87,14 @@ function readCursor(request: Parameters<RequestAuthenticator>[0]): string | unde
   return readQueryString(request, 'cursor')
 }
 
+function readBoundedCount(value: unknown, fallback: number, max: number, field: string): number {
+  if (value === undefined) return fallback
+  if (!Number.isSafeInteger(value) || (value as number) < 1 || (value as number) > max) {
+    throw new InvalidRequestFieldError(`${field} must be an integer in 1..${max}`)
+  }
+  return value as number
+}
+
 /** Render a store/research/admission failure as its classified HTTP status instead of a bare 500. */
 function classifiedFrom(error: unknown): never {
   if (error instanceof CandidateSourceError) {
@@ -92,6 +114,16 @@ function classifiedFrom(error: unknown): never {
   if (error instanceof WebResearchError) {
     const httpStatus = error.code === 'FORBIDDEN' ? 403 : error.code === 'INVALID_REQUEST' ? 400 : 502
     throw Object.assign(new Error(error.message), { code: error.code, httpStatus })
+  }
+  if (error instanceof ResearchError) {
+    const httpStatus = error.code === 'NOT_FOUND' ? 404
+      : error.code === 'SCOPE_MISMATCH' ? 403
+        : error.code === 'INVALID_REQUEST' ? 400
+          : error.code === 'STORE_FAILED' ? 500 : 409
+    throw Object.assign(new Error(error.message), { code: error.code, httpStatus })
+  }
+  if (error instanceof ModelSelectionError) {
+    throw Object.assign(new Error(error.message), { code: error.code, httpStatus: error.httpStatus })
   }
   throw error
 }
@@ -338,6 +370,86 @@ export function registerCandidateSourceRoutes(
           idempotencyKey: requireIdempotencyKey(request),
         }, ctx).catch((error: unknown) => classifiedFrom(error))
         reply.status(201).send({ data: { sources: result.sources, skippedWithoutSnapshot: result.skippedWithoutSnapshot }, meta: { traceId } })
+        return reply
+      },
+    )
+  }
+
+  if (dependencies.researchWorkflow !== undefined) {
+    const workflow = dependencies.researchWorkflow
+    // The async entry point: it pins the brief/policy/budget, creates the durable research job and
+    // returns 202 with the run. The existing synchronous `POST .../research` above keeps its 201.
+    app.post<{ Params: { workspaceId: string } }>(
+      '/api/v1/industry-workspaces/:workspaceId/research-runs',
+      async (request, reply) => {
+        const traceId = readTraceId(request)
+        const auth = authenticateRequest(dependencies.authenticate, request, reply)
+        if (auth === undefined) return reply
+        const body = request.body
+        if (!isRecord(body)) throw new InvalidRequestFieldError('the request body must be a JSON object')
+        rejectUnknownFields(body, ['goal', 'allowedResearchDomains', 'freshnessHint', 'targetKinds', 'mustCover', 'sourceLimit', 'candidateLimit', 'deadline'])
+        const workspaceId = request.params.workspaceId
+        const sourceLimit = readBoundedCount(body['sourceLimit'], 10, 200, 'sourceLimit')
+        const candidateLimit = readBoundedCount(body['candidateLimit'], sourceLimit, 500, 'candidateLimit')
+        const deadline = typeof body['deadline'] === 'string' ? body['deadline'] : new Date(Date.now() + 10 * 60 * 1000).toISOString()
+        const briefUnknown: unknown = {
+          schemaVersion: 'modeling-brief@1',
+          workspaceId,
+          goal: body['goal'],
+          allowedResearchDomains: body['allowedResearchDomains'],
+          ...(body['freshnessHint'] === undefined ? {} : { freshnessHint: body['freshnessHint'] as WebSearchFreshnessHint }),
+          targetKinds: body['targetKinds'] as readonly DefinitionCandidateKind[],
+          ...(body['mustCover'] === undefined ? {} : { mustCover: body['mustCover'] }),
+          sourceLimit,
+          candidateLimit,
+        }
+        try {
+          assertModelingBriefShape(briefUnknown)
+        } catch (error) {
+          throw new InvalidRequestFieldError(error instanceof Error ? error.message : 'the modeling brief is invalid')
+        }
+        const brief: ModelingBrief = briefUnknown
+        const researchRequest: ResearchRequest = {
+          schemaVersion: 'research-request@1',
+          workspaceId,
+          brief,
+          limits: { sourceLimit, candidateLimit, deadline },
+          allowedDomains: brief.allowedResearchDomains,
+          policyRef: DEFAULT_RESEARCH_POLICY_REF,
+          budgetRef: DEFAULT_RESEARCH_BUDGET_REF,
+          idempotencyKey: requireIdempotencyKey(request),
+        }
+        const execution = await workflow.start(researchRequest, contextFor(auth, traceId, workspaceId, brief.allowedResearchDomains))
+          .catch((error: unknown) => classifiedFrom(error))
+        reply.status(202).send({ data: { researchId: execution.researchId, jobId: execution.jobId, execution }, meta: { traceId } })
+        return reply
+      },
+    )
+
+    app.get<{ Params: { workspaceId: string; researchId: string } }>(
+      '/api/v1/industry-workspaces/:workspaceId/research-runs/:researchId',
+      async (request, reply) => {
+        const traceId = readTraceId(request)
+        const auth = authenticateRequest(dependencies.authenticate, request, reply)
+        if (auth === undefined) return reply
+        const workspaceId = request.params.workspaceId
+        const view = await workflow.get(request.params.researchId, contextFor(auth, traceId, workspaceId, []))
+          .catch((error: unknown) => classifiedFrom(error))
+        reply.status(200).send({ data: view, meta: { traceId } })
+        return reply
+      },
+    )
+
+    app.post<{ Params: { workspaceId: string; researchId: string } }>(
+      '/api/v1/industry-workspaces/:workspaceId/research-runs/:researchId/cancel',
+      async (request, reply) => {
+        const traceId = readTraceId(request)
+        const auth = authenticateRequest(dependencies.authenticate, request, reply)
+        if (auth === undefined) return reply
+        const workspaceId = request.params.workspaceId
+        const execution = await workflow.cancel(request.params.researchId, contextFor(auth, traceId, workspaceId, []))
+          .catch((error: unknown) => classifiedFrom(error))
+        reply.status(200).send({ data: { execution }, meta: { traceId } })
         return reply
       },
     )

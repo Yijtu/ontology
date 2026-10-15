@@ -1,6 +1,7 @@
 import { JobStoreError, isToolContext } from '@ontology/contracts'
 import type {
   JobAttemptRecord,
+  JobKind,
   JobStore,
   LogicalJobRecord,
   RevisionString,
@@ -23,6 +24,8 @@ import type {
 
 const EDITOR_ROLES: readonly string[] = ['data-editor', 'platform-admin']
 const READER_ROLES: readonly string[] = ['scoped-reader', 'operator', 'platform-admin']
+/** A research job is created by the host for a run; the requester role is the researcher. */
+const RESEARCH_ROLES: readonly string[] = ['researcher', 'platform-admin']
 
 function isNonEmptyString(value: unknown): value is string {
   return typeof value === 'string' && value.trim().length > 0
@@ -40,8 +43,9 @@ function scopeOf(ctx: ToolContext): ScopeRef {
   return { tenantId, spaceId }
 }
 
-function assertEditor(ctx: ToolContext): void {
+function assertEditor(ctx: ToolContext, kind: JobKind = 'ingestion'): void {
   if (EDITOR_ROLES.some((role) => ctx.principal.roles.includes(role))) return
+  if (kind === 'research' && RESEARCH_ROLES.some((role) => ctx.principal.roles.includes(role))) return
   throw new JobServiceError('FORBIDDEN', 'only a data-editor may manage ingestion jobs')
 }
 
@@ -131,7 +135,7 @@ export class JobService {
     if (input.initialStage !== undefined && input.initialStage !== 'awaiting_review' || input.initialCounts !== undefined && input.initialStage === undefined ||
         input.initialCounts !== undefined && (Object.keys(input.initialCounts).some((key) => !['total','processed','failed','skipped'].includes(key)) || [input.initialCounts.total,input.initialCounts.processed,input.initialCounts.failed,input.initialCounts.skipped].some((count) => !Number.isSafeInteger(count) || count < 0 || count > 20_000) || input.initialCounts.processed + input.initialCounts.failed + input.initialCounts.skipped > input.initialCounts.total)) throw new JobServiceError('INVALID_ARGUMENT', 'the trusted manual source handoff requires bounded actual parsed counts and an awaiting-review stage')
     const scopeRef = scopeOf(ctx)
-    assertEditor(ctx)
+    assertEditor(ctx, input.kind)
     if (
       !isNonEmptyString(input.idempotencyKey) ||
       input.idempotencyKey.length < 8 ||

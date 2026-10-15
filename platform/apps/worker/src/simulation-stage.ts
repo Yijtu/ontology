@@ -166,12 +166,24 @@ export class SimulationStageHandler implements JobStageHandler {
  */
 export function createWorkerStageRegistry(options: {
   readonly ingestion: JobStageHandlerRegistry
-  readonly simulation: JobStageHandler
+  readonly simulation?: JobStageHandler
+  readonly research?: JobStageHandler
 }): JobStageHandlerRegistry {
   const router: JobStageHandler = {
     stage: 'received',
     async run(context: JobStageContext): Promise<JobStageOutcome> {
-      if (context.job.kind === 'simulation') return options.simulation.run(context)
+      if (context.job.kind === 'simulation') {
+        if (options.simulation === undefined) {
+          throw new JobStageFailure('CAPABILITY_NOT_CONFIGURED', 'no simulation handler is mounted for this deployment', false)
+        }
+        return options.simulation.run(context)
+      }
+      if (context.job.kind === 'research') {
+        if (options.research === undefined) {
+          throw new JobStageFailure('CAPABILITY_NOT_CONFIGURED', 'no research handler is mounted for this deployment', false)
+        }
+        return options.research.run(context)
+      }
       const handler = options.ingestion.get(context.job.stage)
       if (handler === undefined) {
         throw new JobStageFailure(

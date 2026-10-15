@@ -1,16 +1,16 @@
 import { createHash } from 'node:crypto'
-import { PostgresTableArtifactStore, PostgresTableVerificationStore, PostgresTaskPolicyReportStore } from '@ontology/adapter-control-postgres'
+import { PostgresCandidateSourceStore, PostgresResearchExecutionStore, PostgresTableArtifactStore, PostgresTableVerificationStore, PostgresTaskPolicyReportStore } from '@ontology/adapter-control-postgres'
 import { LocalDocumentExtractionService, LocalStructuredIngestionService, StructuredDocumentParser } from '@ontology/adapter-extraction-document'
 import { PiRuntimeAdapter } from '@ontology/adapter-runtime-pi'
 import { TemplateRuntimeAdapter } from '@ontology/adapter-runtime-template'
 import {
-  AnswerPublicationService, CandidateValidationStageHandler, DraftVerificationService, ExtractionPipeline, ExtractionStageHandler,
-  IndustryWorkspaceService, JobService, JobWorker, OutboxDispatcher, RestrictedLimitedAnswerComposer, RunExecutionPreflightService, RunPhaseDriver,
+  AnswerPublicationService, CandidateSourceIngestionService, CandidateValidationStageHandler, DraftVerificationService, ExtractionPipeline, ExtractionStageHandler,
+  IndustryWorkspaceService, JobService, JobWorker, OutboxDispatcher, RestrictedLimitedAnswerComposer, ResearchWorkflowService, RunExecutionPreflightService, RunPhaseDriver,
   RunService, RunTypedResultContextSource, StructuredExtractionService, StructuredExtractionStageHandler, TableHardVerificationService,
-  TypedEvidenceDraftWriter, WorkflowController, createRunCheckpointPort, ReviewHandoffStageHandler,
+  TypedEvidenceDraftWriter, WebResearchService, WorkflowController, createRunCheckpointPort, ReviewHandoffStageHandler,
 } from '@ontology/application'
 import { IncrementalMaterializer } from '@ontology/semantic-engine'
-import { JobWorkerLoop, MaterializationOutboxConsumer, ProjectEvolutionOutboxConsumer, TopicOutboxConsumerRouter, WorkflowDispatchWorker, controlRecordSequence, createIngestionHandlerRegistry } from '@ontology/app-worker'
+import { JobWorkerLoop, MaterializationOutboxConsumer, ProjectEvolutionOutboxConsumer, ResearchStageHandler, TopicOutboxConsumerRouter, WorkflowDispatchWorker, controlRecordSequence, createIngestionHandlerRegistry, createWorkerStageRegistry } from '@ontology/app-worker'
 import { DEFAULT_VERIFICATION_POLICY, SCHEMA_DOCUMENTS, TOOL_CATALOGUE, projectCollectionRef } from '@ontology/contracts'
 import type { DocumentParserPort, ProjectRevision, RuntimeAdapter, RuntimeCapabilityContext, RuntimeCapabilityFactoryPort, RuntimeCapabilitySet, RuntimeSelectorPort, ScopeRef, ToolContext, Uuid, VersionRef, WorkflowDispatchFence } from '@ontology/contracts'
 import type { RunProfileBinder } from '@ontology/application'
@@ -297,8 +297,25 @@ export async function assembleRuntimePipeline(
       new ReviewHandoffStageHandler(),
     ],
   })
+  // Bounded research orchestration (design §2.3, A-R02). When the deployment configures a web
+  // search provider it also wires the research workflow and its worker stage, so a durable
+  // `research` job runs the fixed chain. When no provider is configured the research capability
+  // is simply absent — selecting a research model never enables `web_search` on its own.
+  const researchExecutionStore = new PostgresResearchExecutionStore(database)
+  const researchWorkflow = options.webSearch === undefined ? undefined : new ResearchWorkflowService({
+    jobs: jobService,
+    executions: researchExecutionStore,
+    research: new WebResearchService({
+      webSearch: options.webSearch,
+      ingestion: new CandidateSourceIngestionService({ artifacts: gatewayComposition.artifacts, sources: new PostgresCandidateSourceStore(database) }),
+    }),
+    budget: state.budget,
+    ...(modelBindingService === undefined ? {} : { modelBinding: modelBindingService }),
+  })
+  const researchHandler = researchWorkflow === undefined ? undefined : new ResearchStageHandler({ workflow: researchWorkflow })
+  const routedHandlers = createWorkerStageRegistry({ ingestion: handlers, ...(researchHandler === undefined ? {} : { research: researchHandler }) })
   const jobWorker = new JobWorker({
-    store: jobStore, handlers, budget: state.budget, workerId: 'core-local-ingestion-worker', now: () => hostClock().toISOString(),
+    store: jobStore, handlers: routedHandlers, budget: state.budget, workerId: 'core-local-ingestion-worker', now: () => hostClock().toISOString(),
     contextForJob: (job) => {
       const scenario = examples.scenarios.find((candidate) => candidate.rawSources.some((source) => `${source.sourceRef.namespace}/${source.sourceRef.sourceId}` === job.sourceRef))
       return workerContext(scopeRef, scenario === undefined ? [] : sourceRefsOf(scenario), job.jobId, scenario?.definitionRef.digest ?? sha256DigestOf(`unmounted-ingestion-job:${job.jobId}`), hostClock)
@@ -348,5 +365,6 @@ export async function assembleRuntimePipeline(
     runProfileBinder, runProgress, executionPreflight, runs, phase, planResolver, termLabels, authoring, tableArtifactStore,
     tableVerificationStore, tableResults, draftVerifier, workflowDispatchWorker, jobService, industryWorkspaceService, parser,
     pipeline, structuredExtractionService, handlers, jobWorker, currentProjectRevisions, materializer, outboxConsumer, dispatcher, provenanceRead,
+    researchWorkflow,
   }
 }
