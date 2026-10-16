@@ -2,15 +2,12 @@ import { assetCandidateCommitPin, AssetCandidateStoreError, isResourceRef, isSha
 import type {
   AssetCandidateBatch,
   AssetCandidateBatchCounts,
-  AssetCandidateIssue,
   AssetCandidateState,
   AssetCandidateStore,
   AssetCandidateVersion,
   AssetDraftVersion,
-  DefinitionCandidateConflict,
   DefinitionCandidateInputDraftRef,
   DefinitionCandidateKind,
-  DefinitionCandidatePayload,
   GenerationOutputLimit,
   GenerationPort,
   GenerationRequest,
@@ -34,8 +31,8 @@ import type {
 } from '@ontology/contracts'
 import { candidateIdFor, canonicalJson, sha256DigestOf } from '../../extraction/canonical'
 import { readLatestWorkspaceDraft } from '../workspace-draft'
-import { definitionGeneratedContentDigest } from '../candidate-content-digests'
 import { SourceGroundingBudget } from '../source-grounding/budget'
+import { buildDefinitionCandidate, knownObjectsOf } from './build'
 import { groundingContext, groundingFragments, selectedGrounding, sameResourcePin } from './grounding'
 import type { DefinitionGroundingFragment } from './grounding'
 import { semanticDraftContext } from './generation-context'
@@ -77,12 +74,6 @@ export const DEFINITION_SOURCE_CONFIRMATION_SCHEMA_REF: VersionRef = {
 const EDITOR_ROLES: readonly string[] = ['profile-editor', 'platform-admin']
 const MAX_SOURCE_REFS = 64
 const MAX_CANDIDATES = 500
-const HARD_ISSUES: readonly AssetCandidateIssue['code'][] = [
-  'KIND_NOT_ALLOWED',
-  'LOGICAL_ID_COLLISION',
-  'ENDPOINT_UNRESOLVED',
-  'INVALID_MODEL_OUTPUT',
-]
 
 export interface DefinitionGenerationInput {
   readonly workspaceId: Uuid
@@ -202,54 +193,6 @@ function requireIdempotencyKey(key: string): string {
 function throwIfAborted(signal: AbortSignal): void {
   if (signal.aborted) {
     throw new DefinitionCandidateError('CANCELLED', 'the definition generation was cancelled')
-  }
-}
-
-function knownObjects(
-  terminology: MountedDefinitionTerminology,
-  drafts: readonly DraftDefinitionCandidate[],
-): Set<string> {
-  const known = new Set(terminology.objectLogicalIds)
-  for (const draft of drafts) if (draft.kind === 'object') known.add(draft.logicalId)
-  return known
-}
-
-function payloadOf(draft: DraftDefinitionCandidate, displayName: string): DefinitionCandidatePayload {
-  const common = {
-    logicalId: draft.logicalId,
-    displayName,
-    businessMeaning: draft.businessMeaning,
-    suggestedReason: draft.suggestedReason,
-  }
-  if (draft.kind === 'object') {
-    return { kind: 'object', ...common, conflicts: [], identityAttributeIds: draft.identityAttributeIds ?? [],
-      ...(draft.identityScopeDimensions === undefined ? {} : { identityScopeDimensions: draft.identityScopeDimensions }) }
-  }
-  if (draft.kind === 'attribute') {
-    return {
-      kind: 'attribute',
-      ...common,
-      conflicts: [],
-      objectLogicalId: draft.objectLogicalId ?? '',
-      valueType: draft.valueType ?? 'string',
-      ...(draft.unitCode === undefined ? {} : { unitCode: draft.unitCode }),
-      ...(draft.dimension === undefined ? {} : { dimension: draft.dimension }),
-      ...(draft.enumValues === undefined ? {} : { enumValues: draft.enumValues }),
-      ...(draft.referencesObjectLogicalId === undefined
-        ? {}
-        : { referencesObjectLogicalId: draft.referencesObjectLogicalId }),
-      minCardinality: draft.minCardinality ?? 0,
-      maxCardinality: draft.maxCardinality ?? 1,
-    }
-  }
-  return {
-    kind: 'relation',
-    ...common,
-    conflicts: [],
-    fromObjectLogicalId: draft.fromObjectLogicalId ?? '',
-    toObjectLogicalId: draft.toObjectLogicalId ?? '',
-    minCardinality: draft.minCardinality ?? 0,
-    maxCardinality: draft.maxCardinality ?? 'unbounded',
   }
 }
 
@@ -710,172 +653,47 @@ export class DefinitionCandidateGenerationService {
       )
     }
     const allowed = new Set(args.input.kinds)
-    const newObjects = knownObjects(args.terminology, args.drafts)
+    const newObjects = knownObjectsOf(args.terminology, args.drafts)
     for (const candidate of args.existing) if (candidate.kind === 'object' && candidate.state !== 'failed' && candidate.state !== 'rejected') newObjects.add(candidate.logicalId)
     const logicalIdCounts = new Map<string, number>()
     for (const draft of args.drafts) {
       logicalIdCounts.set(draft.logicalId, (logicalIdCounts.get(draft.logicalId) ?? 0) + 1)
     }
-    const mountedDisplay = args.terminology.displayNames
-    const mountedAttributes = new Map(args.terminology.attributes.map((attribute) => [attribute.logicalId, attribute]))
     const inputDraftRef: DefinitionCandidateInputDraftRef = {
       workspaceId: args.input.workspaceId,
       revision: args.draft.revision,
       digest: args.draft.digest,
       contextDigest: args.schemaDigest,
     }
+    const generationCallRef: ResourceRef = {
+      id: args.batchId,
+      version: '1.0.0',
+      digest: sha256DigestOf(canonicalJson({ modelRef: this.#modelRef, responseSchemaRef: this.#responseSchemaRef })),
+      kind: 'artifact',
+    }
 
     return args.drafts.map((draft, ordinal) => {
-      const issues: AssetCandidateIssue[] = []
-      const conflicts: DefinitionCandidateConflict[] = []
-
-      if (!allowed.has(draft.kind)) {
-        issues.push({
-          code: 'KIND_NOT_ALLOWED',
-          message: `the model proposed a ${draft.kind} candidate that this generation did not allow`,
-          path: 'kind',
-        })
-      }
-      if ((logicalIdCounts.get(draft.logicalId) ?? 0) > 1) {
-        issues.push({
-          code: 'LOGICAL_ID_COLLISION',
-          message: `logicalId "${draft.logicalId}" is used by more than one candidate in this batch`,
-          path: 'logicalId',
-        })
-        conflicts.push({
-          kind: 'logical_id_collision',
-          message: `logicalId "${draft.logicalId}" collides with another candidate`,
-          relatedLogicalIds: [draft.logicalId],
-        })
-      }
-
-      // Professional terminology is taken from the mounted asset when the logical id already
-      // exists; a differing model name is a reviewable conflict, not a silent overwrite.
-      const mountedName = mountedDisplay[draft.logicalId]
-      if (mountedName !== undefined && mountedName !== draft.displayName) {
-        conflicts.push({
-          kind: 'terminology_mismatch',
-          message: `the mounted asset names "${draft.logicalId}" as "${mountedName}", not "${draft.displayName}"`,
-          relatedLogicalIds: [draft.logicalId],
-        })
-      }
-      const displayName = mountedName ?? draft.displayName
-
-      if (draft.kind === 'attribute') {
-        this.#checkEndpoint(issues, conflicts, draft.objectLogicalId, 'objectLogicalId', draft.logicalId, newObjects)
-        if (draft.referencesObjectLogicalId !== undefined) {
-          this.#checkEndpoint(
-            issues,
-            conflicts,
-            draft.referencesObjectLogicalId,
-            'referencesObjectLogicalId',
-            draft.logicalId,
-            newObjects,
-          )
-        }
-        const mountedAttribute = mountedAttributes.get(draft.logicalId)
-        if (mountedAttribute !== undefined) {
-          if (mountedAttribute.valueType !== draft.valueType) {
-            issues.push({
-              code: 'TERMINOLOGY_MISMATCH',
-              message: `attribute "${draft.logicalId}" is mounted as ${mountedAttribute.valueType}, not ${String(draft.valueType)}`,
-              path: 'payload.valueType',
-            })
-            conflicts.push({
-              kind: 'terminology_mismatch',
-              message: `mounted attribute type is ${mountedAttribute.valueType}`,
-              relatedLogicalIds: [draft.logicalId],
-            })
-          }
-          const mountedUnit = mountedAttribute.unitCode
-          if (mountedUnit !== undefined && draft.unitCode !== undefined && mountedUnit !== draft.unitCode) {
-            issues.push({
-              code: 'UNIT_CONFLICT',
-              message: `attribute "${draft.logicalId}" is mounted with unit ${mountedUnit}, not ${draft.unitCode}`,
-              path: 'payload.unitCode',
-            })
-            conflicts.push({
-              kind: 'unit_conflict',
-              message: `mounted unit is ${mountedUnit}`,
-              relatedLogicalIds: [draft.logicalId],
-            })
-          }
-        }
-      } else if (draft.kind === 'relation') {
-        this.#checkEndpoint(issues, conflicts, draft.fromObjectLogicalId, 'fromObjectLogicalId', draft.logicalId, newObjects)
-        this.#checkEndpoint(issues, conflicts, draft.toObjectLogicalId, 'toObjectLogicalId', draft.logicalId, newObjects)
-      }
-
       const selected = selectedGrounding(args.fragments, draft.sourceIndex, draft.fragmentIndex)
-      const sourceRefs = selected === undefined ? [] : [selected.sourceRef]
-      const sourceSpans = selected === undefined ? [] : [selected.sourceSpan]
-      const provenanceMissing = selected === undefined
-      const trustBlocked = selected !== undefined && !sourceTrustTierGroundsPublication(selected.trustTier)
-      if (provenanceMissing) issues.push({ code: 'MISSING_PROVENANCE', message: 'no valid read-back source fragment was selected; human confirmation is required', path: 'sourceSpans' })
-      if (trustBlocked) issues.push({ code: 'SOURCE_TRUST_BLOCKED', message: `the selected ${selected.trustTier} source may not ground a publishable candidate until a human promotes it`, path: 'sourceSpans' })
-
-      const hard = issues.some((issue) => HARD_ISSUES.includes(issue.code))
-      const state: AssetCandidateState = hard ? 'failed' : provenanceMissing || trustBlocked ? 'pending_confirmation' : 'produced'
-      const payload: DefinitionCandidatePayload = { ...payloadOf(draft, displayName), conflicts }
-      const contentDigest = definitionGeneratedContentDigest({
+      return buildDefinitionCandidate({
         workspaceId: args.input.workspaceId,
-        logicalId: draft.logicalId,
-        kind: draft.kind,
-        payload,
-        inputDraftRef,
-        sourceRefs,
-        sourceSpans,
-        issues,
-      })
-      const idempotencyKey = sha256DigestOf(
-        canonicalJson({ batchKey: args.input.idempotencyKey, logicalId: draft.logicalId, ordinal, contentDigest }),
-      )
-      return {
-        candidateId: candidateIdFor(idempotencyKey),
         batchId: args.batchId,
-        workspaceId: args.input.workspaceId,
-        logicalId: draft.logicalId,
-        domain: 'definition',
-        kind: draft.kind,
-        payload,
-        inputDraftRef,
-        sourceRefs,
-        sourceSpans,
-        state,
-        issues,
-        pendingConfirmation: provenanceMissing || trustBlocked,
-        generationCallRef: {
-          id: args.batchId,
-          version: '1.0.0',
-          digest: sha256DigestOf(canonicalJson({ modelRef: this.#modelRef, responseSchemaRef: this.#responseSchemaRef })),
-          kind: 'artifact',
-        },
-        contentDigest,
-        idempotencyKey,
         recordedAt: args.recordedAt,
-      }
-    })
-  }
-
-  #checkEndpoint(
-    issues: AssetCandidateIssue[],
-    conflicts: DefinitionCandidateConflict[],
-    logicalId: string | undefined,
-    field: string,
-    ownerLogicalId: string,
-    known: ReadonlySet<string>,
-  ): void {
-    const value = logicalId ?? ''
-    if (known.has(value)) return
-    issues.push({
-      code: 'ENDPOINT_UNRESOLVED',
-      message: `"${ownerLogicalId}" references object "${value}" that is neither mounted nor proposed in this batch`,
-      path: `payload.${field}`,
-    })
-    conflicts.push({
-      kind: 'endpoint_unresolved',
-      message: `${field} ${value} is unresolved`,
-      relatedLogicalIds: [value],
+        inputDraftRef,
+        terminology: args.terminology,
+        knownObjectIds: newObjects,
+        logicalIdCounts,
+        kindAllowed: allowed.has(draft.kind),
+        draft,
+        evidence: {
+          sourceRefs: selected === undefined ? [] : [selected.sourceRef],
+          sourceSpans: selected === undefined ? [] : [selected.sourceSpan],
+          provenanceMissing: selected === undefined,
+          trustBlocked: selected !== undefined && !sourceTrustTierGroundsPublication(selected.trustTier),
+        },
+        generationCallRef,
+        idempotencyNamespace: args.input.idempotencyKey,
+        ordinal,
+      })
     })
   }
 

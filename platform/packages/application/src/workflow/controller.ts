@@ -889,6 +889,7 @@ export class WorkflowController {
       generation: capability.generation,
       decision: capability.decision,
       checkpoints: capability.checkpoints,
+      ...(capability.commandGateway === undefined ? {} : { commandGateway: capability.commandGateway }),
       budget: this.#runtimeBudget(manifest.budgetLedgerId, ctx),
       signal,
     }

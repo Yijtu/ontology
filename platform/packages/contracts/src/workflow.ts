@@ -20,6 +20,7 @@ import type {
   ToolGateway,
 } from './ports'
 import type { ToolContext } from './trusted'
+import type { AuthoringCommandGateway } from './authoring-command'
 import type { WorkflowDispatchFence } from './workflow-dispatch'
 import { isRecord, isResourceRef, isSha256Digest } from './asset-workspace'
 import type {
@@ -688,6 +689,12 @@ export interface RuntimeCapabilitySet {
   readonly generation: GenerationPort
   readonly decision: DecisionPort
   readonly checkpoints: RuntimeCheckpointPort
+  /**
+   * The controlled authoring-command gateway (design §5). It is present only when the run may
+   * author; a plain data-tool run leaves it absent, so a runtime never routes a candidate write
+   * without the host's explicit authorization.
+   */
+  readonly commandGateway?: AuthoringCommandGateway
 }
 
 export interface RuntimeCapabilityFactoryPort {
