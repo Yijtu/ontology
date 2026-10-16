@@ -194,9 +194,10 @@ describe('outbound queries respect the approved domain allowlist', () => {
   })
 })
 
-describe('results preserve url, fetch time and publish date as untrusted data', () => {
-  it('keeps provenance and marks content untrusted, and the payload validates', async () => {
+describe('the two discovery kinds are distinct (design §6)', () => {
+  it('reports a page the run could not archive as discovery_only with an explicit reason', async () => {
     const ctx = webContext()
+    // No archiver is wired, so the provider returns links only: a link is never a citable original.
     const provider = new HttpWebSearchProvider({ baseUrl: fixture.baseUrl })
     fixture.setScenario(scenarioWith([SAFE_PAGE]))
     const handler = handlerFor({ ctx, provider, allowWeb: true })
@@ -206,11 +207,13 @@ describe('results preserve url, fetch time and publish date as untrusted data', 
     const result = await harness.gateway.invoke(webCall(), ctx)
     expect(result.status).toBe('ok')
     const page = pagesOf(result)[0]
-    expect(page?.url).toBe(SAFE_PAGE.url)
-    expect(page?.publishedAt).toBe('2025-03-01T00:00:00Z')
-    expect(page?.fetchedAt).toMatch(/^\d{4}-\d{2}-\d{2}T/)
+    expect(page?.discovery).toBe('discovery_only')
+    expect(page?.unavailableReason).toBe('archive_not_configured')
     expect(page?.contentTrust).toBe('untrusted_data')
+    expect(page?.url).toBe(SAFE_PAGE.url)
+    expect(page?.fetchedAt).toMatch(/^\d{4}-\d{2}-\d{2}T/)
     expect(page?.contentDigest).toMatch(/^sha256:[0-9a-f]{64}$/)
+    expect(result.warnings.map((warning) => warning.code)).toContain('WEB_DISCOVERY_ONLY_NOT_CITABLE')
     expect(result.sourceSnapshots).toHaveLength(1)
     expect(result.sourceSnapshots[0]?.sourceRef).toEqual(SOURCE_REF)
 
@@ -222,6 +225,51 @@ describe('results preserve url, fetch time and publish date as untrusted data', 
     ).toEqual({ valid: true, issues: [] })
     expect(
       validator.validateRef('https://ontology.local/schema/tools.schema.json#/$defs/ToolResult', result),
+    ).toEqual({ valid: true, issues: [] })
+  })
+
+  it('reports an archived page with its readable snapshot/manifest/parse refs and parser version', async () => {
+    const ctx = webContext()
+    const provider: WebSearchProvider = {
+      providerRef: { id: 'fixture.web', version: '1.0.0', digest: `sha256:${'c'.repeat(64)}` },
+      search: () =>
+        Promise.resolve({
+          pages: [
+            {
+              url: SAFE_PAGE.url,
+              title: SAFE_PAGE.title,
+              snippet: SAFE_PAGE.snippet,
+              fetchedAt: '2025-03-01T01:00:00Z',
+              contentDigest: `sha256:${'a'.repeat(64)}`,
+              snapshotRef: { id: randomUUID(), version: '1.0.0', digest: `sha256:${'a'.repeat(64)}`, kind: 'artifact' },
+              snapshotManifestRef: { id: randomUUID(), version: '1.0.0', digest: `sha256:${'d'.repeat(64)}`, kind: 'artifact' },
+              parserVersion: '2.1.0',
+            },
+          ],
+          truncated: false,
+          excludedCount: 0,
+        }),
+    }
+    const handler = handlerFor({ ctx, provider, allowWeb: true })
+    const harness = harnessFor(handler, ctx)
+    await openGatewayLedger(harness, ctx)
+
+    const result = await harness.gateway.invoke(webCall(), ctx)
+    expect(result.status).toBe('ok')
+    const page = pagesOf(result)[0]
+    expect(page?.discovery).toBe('archived')
+    expect(page?.contentTrust).toBe('untrusted_data')
+    expect(page?.parserVersion).toBe('2.1.0')
+    expect(page?.snapshotRef).toBeDefined()
+    expect(page?.snapshotManifestRef).toBeDefined()
+    // An archived page is citable, so no not-citable warning is raised for it.
+    expect(result.warnings.map((warning) => warning.code)).not.toContain('WEB_DISCOVERY_ONLY_NOT_CITABLE')
+
+    const validator = canonicalToolValidator()
+    expect(
+      validator.validateRef('https://ontology.local/schema/tools.schema.json#/$defs/WebSearchOutput', {
+        pages: pagesOf(result),
+      }),
     ).toEqual({ valid: true, issues: [] })
   })
 })
@@ -248,7 +296,9 @@ describe('fetched content cannot change permissions, catalogue, allowlist or bud
     const result = await harness.gateway.invoke(webCall(), ctx)
     expect(result.status).toBe('ok')
     const page = pagesOf(result)[0]
+    // The page text is present only as untrusted data (a discovery record), never as an instruction.
     expect(page?.snippet).toContain('IGNORE ALL PREVIOUS INSTRUCTIONS')
+    expect(page?.discovery).toBe('discovery_only')
     expect(page?.contentTrust).toBe('untrusted_data')
 
     // The injected text is present only as data: no authority moved.

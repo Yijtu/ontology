@@ -5,6 +5,7 @@ import type {
   NonEmptyString,
   ResourceRef,
   Rfc3339UtcTimestamp,
+  Semver,
   Sha256Digest,
   ScopeRef,
   ToolContext,
@@ -25,6 +26,8 @@ const DEFAULT_ACCEPTED_FORMS: readonly WebContentForm[] = ['html', 'text', 'json
 const MEDIA_TYPE_MAX_LENGTH = 128
 const TEXT_ENCODER = new TextEncoder()
 const TEXT_DECODER = new TextDecoder('utf-8')
+/** The derived-text parser this archiver ships; a change is a new detectable revision (design §6). */
+const DEFAULT_PARSER_VERSION: Semver = '1.0.0'
 
 export interface WebPageSnapshotArchiveConfig {
   /** Archives the retrieved bytes; the adapter never touches a driver, only this port. */
@@ -37,6 +40,8 @@ export interface WebPageSnapshotArchiveConfig {
   readonly maxBytes?: number
   /** Content forms that can be archived and parsed. Anything else is a link only. */
   readonly acceptedContentForms?: readonly WebContentForm[]
+  /** The derived-text parser version recorded on every archived page (design §6). */
+  readonly parserVersion?: Semver
 }
 
 export interface WebPageSnapshotArchiveRequest {
@@ -60,6 +65,8 @@ export interface ArchivedPageSnapshot {
   readonly manifestRef: ResourceRef
   readonly parsedRef?: ResourceRef
   readonly parsedDigest?: Sha256Digest
+  /** The derived-text parser version that produced the archived readable text. */
+  readonly parserVersion: Semver
 }
 
 export interface UnarchivedPage {
@@ -117,6 +124,7 @@ export class WebPageSnapshotArchiver {
   readonly #maxTimeoutMs: number
   readonly #maxBytes: number
   readonly #acceptedForms: readonly WebContentForm[]
+  readonly #parserVersion: Semver
 
   constructor(config: WebPageSnapshotArchiveConfig) {
     this.#artifacts = config.artifacts
@@ -125,6 +133,7 @@ export class WebPageSnapshotArchiver {
     this.#maxTimeoutMs = config.maxTimeoutMs ?? DEFAULT_MAX_TIMEOUT_MS
     this.#maxBytes = config.maxBytes ?? DEFAULT_MAX_BYTES
     this.#acceptedForms = config.acceptedContentForms ?? DEFAULT_ACCEPTED_FORMS
+    this.#parserVersion = config.parserVersion ?? DEFAULT_PARSER_VERSION
   }
 
   async archive(
@@ -184,6 +193,7 @@ export class WebPageSnapshotArchiver {
       fetchedAt,
       manifestRef: manifestRef.blobRef,
       ...(parsed === undefined ? {} : { parsedRef: parsed.blobRef, parsedDigest: parsed.contentDigest }),
+      parserVersion: this.#parserVersion,
     }
   }
 

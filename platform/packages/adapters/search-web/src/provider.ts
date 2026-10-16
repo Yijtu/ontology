@@ -149,6 +149,9 @@ export class HttpWebSearchProvider implements WebSearchProvider {
       contentDigest: outcome.contentDigest,
       snapshotRef: outcome.snapshotRef,
       snapshotManifestRef: outcome.manifestRef,
+      parserVersion: outcome.parserVersion,
+      contentForm: outcome.contentForm,
+      ...(outcome.parsedRef === undefined ? {} : { parsedRef: outcome.parsedRef }),
     }
   }
 

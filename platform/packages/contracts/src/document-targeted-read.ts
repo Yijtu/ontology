@@ -8,6 +8,7 @@ import type {
   Uuid,
 } from './generated/contracts'
 import { isRecord, isResourceRef, isSha256Digest, isUuid } from './asset-workspace'
+import type { ToolContext } from './trusted'
 
 /**
  * The versioned targeted-read mode of `document_search` (design §6).
@@ -79,6 +80,17 @@ export interface DocumentTargetedReadResult {
   readonly nextCursor?: OpaqueCursor
   readonly truncated: boolean
   readonly usage: DocumentTargetedReadUsage
+}
+
+/**
+ * The versioned targeted-read port (design §6). An implementation resolves each already-authorized
+ * selection to its exact parse, returns span text bound to its document version/locator/quote
+ * digest/parser version, and — crucially — reports whether a selection came from the ready index
+ * or a direct read of the archived parse. When the index is not built yet the archived parse is
+ * still readable, so "not indexed" is never reported as "no content".
+ */
+export interface DocumentTargetedReaderPort {
+  read(request: DocumentTargetedReadRequest, ctx: ToolContext): Promise<DocumentTargetedReadResult>
 }
 
 export type DocumentTargetedReadErrorCode = 'INVALID_REQUEST' | 'SCOPE_MISMATCH' | 'NOT_FOUND' | 'READ_FAILED'

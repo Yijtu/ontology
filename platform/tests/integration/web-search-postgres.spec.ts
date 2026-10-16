@@ -197,12 +197,12 @@ function webCall(query = 'heat pump tariff'): ToolCall {
   }
 }
 
-function pagesOf(inlineData: unknown): { snippet?: string; contentTrust?: string }[] {
+function pagesOf(inlineData: unknown): { snippet?: string; discovery?: string; contentTrust?: string }[] {
   if (typeof inlineData !== 'object' || inlineData === null || Array.isArray(inlineData)) return []
   const pages = (inlineData as Record<string, unknown>).pages
   if (!Array.isArray(pages)) return []
   return pages.filter(
-    (entry): entry is { snippet?: string; contentTrust?: string } =>
+    (entry): entry is { snippet?: string; discovery?: string; contentTrust?: string } =>
       typeof entry === 'object' && entry !== null,
   )
 }
@@ -242,13 +242,15 @@ describe('real end-to-end web_search against PostgreSQL and blob-local', () => {
     const authorized = await blobStore.getAuthorized({ scopeRef: SCOPE_A, blobRef }, CONTEXT_A)
     expect(authorized.integrityVerified).toBe(true)
 
-    // The archived bytes really hold the preserved page URL and untrusted content trust.
+    // The archived bytes really hold the discovery record: with no archiver wired the page is a
+    // link only (`discovery_only`) with the preserved URL, fetch time and an explicit reason.
     const archived = JSON.parse(new TextDecoder().decode(await objectStore.read(blobRef.digest))) as {
-      pages: { url: string; fetchedAt: string; publishedAt?: string; contentTrust: string }[]
+      pages: { url: string; fetchedAt: string; discovery: string; unavailableReason: string; contentTrust: string }[]
     }
     expect(archived.pages[0]?.url).toBe(SAFE_PAGE.url)
-    expect(archived.pages[0]?.publishedAt).toBe('2025-03-01T00:00:00Z')
     expect(archived.pages[0]?.fetchedAt).toMatch(/^\d{4}-\d{2}-\d{2}T/)
+    expect(archived.pages[0]?.discovery).toBe('discovery_only')
+    expect(archived.pages[0]?.unavailableReason).toBe('archive_not_configured')
     expect(archived.pages[0]?.contentTrust).toBe('untrusted_data')
 
     const evidenceRef = result.evidenceRefs[0]
@@ -272,6 +274,7 @@ describe('real end-to-end web_search against PostgreSQL and blob-local', () => {
     expect(result.status).toBe('ok')
 
     const pages = pagesOf(result.inlineData)
+    expect(pages[0]?.discovery).toBe('discovery_only')
     expect(pages[0]?.contentTrust).toBe('untrusted_data')
     expect(pages[0]?.snippet).toContain('IGNORE ALL PREVIOUS INSTRUCTIONS')
 
