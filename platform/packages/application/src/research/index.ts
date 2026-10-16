@@ -8,3 +8,5 @@ export type {
   StageSkippedDiscovery,
 } from './research-document-set-service'
 export { InMemoryResearchDocumentSetStore } from './in-memory-store'
+export { WorkspaceResearchRunConfigService, resolvedWorkspaceResearchProfileDigest } from './workspace-research-run-config-service'
+export type { WorkspaceResearchRunConfigDependencies } from './workspace-research-run-config-service'

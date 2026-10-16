@@ -27,6 +27,7 @@ export type {
   RunProfileBinder,
   RunProfileBinding,
   RunView,
+  RunWorkspaceResearchBinder,
   RuntimeEventResult,
   SaveCheckpointInput,
 } from './types'

@@ -93,7 +93,6 @@ export class PiRuntimeAdapter implements RuntimeAdapter {
   readonly manifest: ComponentManifest
   readonly #toolIds: readonly ToolId[]
   readonly #authoringCommands: readonly AuthoringCommandKind[]
-  readonly #exposed: ReadonlySet<string>
   readonly #model: Model<Api>
   readonly #modelRef: ModelRef
   readonly #generationRole: GenerationRole
@@ -114,7 +113,6 @@ export class PiRuntimeAdapter implements RuntimeAdapter {
     this.manifest = config.manifest
     this.#toolIds = [...config.toolIds]
     this.#authoringCommands = [...(config.authoringCommands ?? [])]
-    this.#exposed = new Set<string>([...this.#toolIds, ...this.#authoringCommands])
     this.#modelRef = config.modelRef
     this.#model = buildModel(config)
     this.#generationRole = config.generationRole ?? 'planner'
@@ -262,7 +260,7 @@ export class PiRuntimeAdapter implements RuntimeAdapter {
   ): Agent {
     const tools = createGatewayTools({
       toolIds: this.#toolIds,
-      authoringCommands: this.#authoringCommands,
+      authoringCommands: deps.authorizedAuthoringCommands ?? this.#authoringCommands,
       gateway: deps.gateway,
       ...(deps.commandGateway === undefined ? {} : { commandGateway: deps.commandGateway }),
       ctx: session.ctx,
@@ -354,6 +352,17 @@ export class PiRuntimeAdapter implements RuntimeAdapter {
   }
 
   /**
+   * The model-proposable surface for one run: the canonical data tools plus the authoring
+   * commands the *host authorized for this run*. The adapter's own `#authoringCommands` is only a
+   * fallback for hosts that do not mount per-run authorization, so a command is never opened to
+   * every run by static adapter configuration (design §5, S04).
+   */
+  #exposedFor(deps: RuntimeDependencies): ReadonlySet<string> {
+    const commands = deps.authorizedAuthoringCommands ?? this.#authoringCommands
+    return new Set<string>([...this.#toolIds, ...commands])
+  }
+
+  /**
    * Pre-flight only: it keeps the loop from proposing tools outside the host-authorized
    * surface or after the shared budget/deadline is spent. It is never the authorization
    * decision — the gateway still validates, reserves and authorizes each call.
@@ -367,7 +376,7 @@ export class PiRuntimeAdapter implements RuntimeAdapter {
       return { block: true, reason: 'the run is cancelled' }
     }
     const name = context.toolCall.name
-    if (!this.#exposed.has(name)) {
+    if (!this.#exposedFor(deps).has(name)) {
       return { block: true, reason: `${name} is not enabled for this run` }
     }
     const denial = await this.#budgetGate(session, deps)

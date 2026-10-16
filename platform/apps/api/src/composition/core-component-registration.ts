@@ -20,6 +20,7 @@ import type {
   ResourceRef,
   ScopeRef,
   SourceRef,
+  ToolBinding,
   ToolContext,
   VersionRef,
 } from '@ontology/contracts'
@@ -297,8 +298,22 @@ export function componentRegistrationInput(record: ComponentVersionRecord, now: 
   }
 }
 
-export function profileModelBindingEnabled(
-  binding: ModelBinding | undefined,
+/**
+ * The public data tools a workspace-research run may call (design §5/§8). `web_search` is enabled
+ * (the actual provider is pinned per run from the catalogue), `document_search`/`ontology_lookup`
+ * let the agent read authorized material and existing definitions. `data_query` stays disabled:
+ * a research run has no project mapping or backend. This is a *declared* surface; the gateway and
+ * the run's pinned execution bindings still authorize every call.
+ */
+export function researchToolBindings(): ToolBinding[] {
+  return TOOL_CATALOGUE.map((tool) => ({
+    toolId: tool.toolId,
+    enabled: tool.toolId === 'ontology_lookup' || tool.toolId === 'document_search' || tool.toolId === 'web_search',
+    ...(tool.toolId === 'ontology_lookup' ? { maxCallsPerRun: 4 } : {}),
+  }))
+}
+
+export function profileModelBindingEnabled(  binding: ModelBinding | undefined,
   availableRef: VersionRef | undefined,
 ): boolean {
   return binding?.enabled === true && availableRef !== undefined && sameVersionRef(binding.modelRef, availableRef)

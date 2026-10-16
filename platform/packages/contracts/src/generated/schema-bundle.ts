@@ -6485,6 +6485,176 @@ export const SCHEMA_DOCUMENTS: readonly JsonSchemaObject[] = [
   },
   {
     "$schema": "https://json-schema.org/draft/2020-12/schema",
+    "$id": "https://ontology.local/schema/research-run-config.schema.json",
+    "title": "ResearchRunConfigContracts",
+    "$comment": "C1/A-R04: an agentic research run against an industry workspace is configured without a project, a scenario or a published industry pack. A *run* binds only the public execution config it actually needs (the enabled public data tools and registered compute), so the common tool gateway depends on PublicExecutionConfig rather than a full scenario ResolvedProfile. The workspace-research profile is a separate, versioned branch that pins the exact workspace draft revision/digest it models and can never be mistaken for an industry-pack profile.",
+    "$defs": {
+      "PublicExecutionConfig": {
+        "title": "PublicExecutionConfig",
+        "description": "The narrow public execution config the tool gateway and the runtime actually consume: the enabled public data tools and the registered compute operations the run may call. A scenario ResolvedProfile satisfies this structurally (it carries both arrays), so the gateway never has to depend on an industry-pack profile it does not use.",
+        "type": "object",
+        "additionalProperties": false,
+        "required": [
+          "toolBindings",
+          "computeBindings"
+        ],
+        "properties": {
+          "toolBindings": {
+            "type": "array",
+            "items": {
+              "$ref": "./industry.schema.json#/$defs/ToolBinding"
+            }
+          },
+          "computeBindings": {
+            "type": "array",
+            "items": {
+              "$ref": "./industry.schema.json#/$defs/ComputeBinding"
+            }
+          }
+        }
+      },
+      "WorkspaceResearchProfileSpec": {
+        "title": "WorkspaceResearchProfileSpec",
+        "description": "The versioned workspace-research run-config spec. It fixes the real workspace and the exact immutable draft revision it models (workspaceId + draftRevision + draftRef) and the public execution config, and deliberately has no industryRef and no mappingRefs: a research run starts from an empty workspace, before any industry pack is published. The model is bound per-execution (industry_workspace + research), never here.",
+        "type": "object",
+        "additionalProperties": false,
+        "required": [
+          "schemaVersion",
+          "workspaceId",
+          "draftRevision",
+          "draftRef",
+          "runtimeRef",
+          "modelBindings",
+          "toolBindings",
+          "computeBindings",
+          "policyRef"
+        ],
+        "properties": {
+          "schemaVersion": {
+            "const": "workspace-research-profile-spec@1"
+          },
+          "workspaceId": {
+            "$ref": "./common.schema.json#/$defs/Uuid"
+          },
+          "draftRevision": {
+            "$ref": "./common.schema.json#/$defs/RevisionString"
+          },
+          "draftRef": {
+            "$ref": "./common.schema.json#/$defs/ResourceRef"
+          },
+          "runtimeRef": {
+            "$ref": "./common.schema.json#/$defs/VersionRef"
+          },
+          "modelBindings": {
+            "type": "object",
+            "propertyNames": {
+              "$ref": "./industry.schema.json#/$defs/ModelRole"
+            },
+            "additionalProperties": {
+              "$ref": "./industry.schema.json#/$defs/ModelBinding"
+            }
+          },
+          "toolBindings": {
+            "type": "array",
+            "items": {
+              "$ref": "./industry.schema.json#/$defs/ToolBinding"
+            }
+          },
+          "computeBindings": {
+            "type": "array",
+            "items": {
+              "$ref": "./industry.schema.json#/$defs/ComputeBinding"
+            }
+          },
+          "policyRef": {
+            "$ref": "./common.schema.json#/$defs/VersionRef"
+          }
+        }
+      },
+      "ResolvedWorkspaceResearchProfile": {
+        "title": "ResolvedWorkspaceResearchProfile",
+        "description": "WorkspaceResearchProfileSpec plus the exact resolved component versions, the explicit degradations and a deterministic snapshot hash. It is written once for one (workspaceId, draftRevision) and never rewritten, so editing the workspace draft later can never retarget an in-flight run's configuration.",
+        "type": "object",
+        "additionalProperties": false,
+        "required": [
+          "schemaVersion",
+          "workspaceId",
+          "draftRevision",
+          "draftRef",
+          "runtimeRef",
+          "modelBindings",
+          "toolBindings",
+          "computeBindings",
+          "policyRef",
+          "resolvedVersions",
+          "explicitDegradations",
+          "snapshotHash",
+          "resolvedAt"
+        ],
+        "properties": {
+          "schemaVersion": {
+            "const": "workspace-research-profile-spec@1"
+          },
+          "workspaceId": {
+            "$ref": "./common.schema.json#/$defs/Uuid"
+          },
+          "draftRevision": {
+            "$ref": "./common.schema.json#/$defs/RevisionString"
+          },
+          "draftRef": {
+            "$ref": "./common.schema.json#/$defs/ResourceRef"
+          },
+          "runtimeRef": {
+            "$ref": "./common.schema.json#/$defs/VersionRef"
+          },
+          "modelBindings": {
+            "type": "object",
+            "propertyNames": {
+              "$ref": "./industry.schema.json#/$defs/ModelRole"
+            },
+            "additionalProperties": {
+              "$ref": "./industry.schema.json#/$defs/ModelBinding"
+            }
+          },
+          "toolBindings": {
+            "type": "array",
+            "items": {
+              "$ref": "./industry.schema.json#/$defs/ToolBinding"
+            }
+          },
+          "computeBindings": {
+            "type": "array",
+            "items": {
+              "$ref": "./industry.schema.json#/$defs/ComputeBinding"
+            }
+          },
+          "policyRef": {
+            "$ref": "./common.schema.json#/$defs/VersionRef"
+          },
+          "resolvedVersions": {
+            "type": "array",
+            "items": {
+              "$ref": "./common.schema.json#/$defs/VersionRef"
+            }
+          },
+          "explicitDegradations": {
+            "type": "array",
+            "items": {
+              "$ref": "./industry.schema.json#/$defs/ExplicitDegradation"
+            }
+          },
+          "snapshotHash": {
+            "$ref": "./common.schema.json#/$defs/Sha256Digest"
+          },
+          "resolvedAt": {
+            "$ref": "./common.schema.json#/$defs/Rfc3339UtcTimestamp"
+          }
+        }
+      }
+    }
+  },
+  {
+    "$schema": "https://json-schema.org/draft/2020-12/schema",
     "$id": "https://ontology.local/schema/runtime.schema.json",
     "title": "RuntimeContracts",
     "$comment": "C2 runtime contract. RuntimeDependencies is a restricted closure injected by the host and is never deserialized from model-serializable parameters. Every RuntimeEvent carries runId/eventId/sequence. 'collection_complete' only means a draft may be attempted; it does not mean the answer passed verification.",

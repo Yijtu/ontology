@@ -1,4 +1,5 @@
 import type {
+  AuthoringCommandKind,
   BlobGetAuthorizedRequest,
   BlobGetAuthorizedResponse,
   BlobPutImmutableRequest,
@@ -89,6 +90,13 @@ export interface RuntimeDependencies {
    * this port routes it as `deferred` instead of writing anything.
    */
   readonly commandGateway?: AuthoringCommandGateway
+  /**
+   * The authoring commands this *run* is authorized to propose (design §5, S04). The runtime
+   * offers exactly these, so a command is never opened to every run by the adapter's own static
+   * configuration: a plain project-Q&A run carries none. Absent means the adapter's own default
+   * (used only by hosts that do not mount per-run authorization).
+   */
+  readonly authorizedAuthoringCommands?: readonly AuthoringCommandKind[]
   readonly signal: AbortSignal
 }
 

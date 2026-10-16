@@ -5,6 +5,7 @@ import {
   isToolContext,
   preflightProfile,
   tryParseSemver,
+  workspaceResearchProfileRef,
 } from '@ontology/contracts'
 import type {
   ActiveProfileRecord,
@@ -23,6 +24,7 @@ import type {
   ScopeRef,
   Sha256Digest,
   ToolContext,
+  WorkspaceResearchRunRequest,
 } from '@ontology/contracts'
 import { canonicalJson, profileSpecDigest, refKey, resolvedProfileDigest, sha256DigestOf } from './canonical'
 import { availableComponentKeys, capabilitiesFromComponents, computeExplicitDegradations } from './degradations'
@@ -36,6 +38,7 @@ import type {
 } from './types'
 import type { RunProfileBinding } from '../runs/types'
 import type { ProfileSpecValidator } from './validator'
+import type { WorkspaceResearchRunConfigService } from '../research/workspace-research-run-config-service'
 
 export interface ProfileResolverDependencies {
   /** Durable, monotonic, idempotent event ledger (C1/D2). */
@@ -48,6 +51,12 @@ export interface ProfileResolverDependencies {
   readonly industry: IndustryManifestSource
   /** Canonical JSON-Schema validator for the ProfileSpec boundary, supplied by the host. */
   readonly validator: ProfileSpecValidator
+  /**
+   * The versioned workspace-research run-config resolver (design §8, S04). When present a run can
+   * bind a workspace-research profile that fixes the exact workspace draft revision, without a
+   * project, scenario or published industry pack. When absent, binding one is refused.
+   */
+  readonly workspaceResearch?: WorkspaceResearchRunConfigService
   readonly now?: () => string
 }
 
@@ -149,6 +158,7 @@ export class ProfileResolver {
   readonly #registry: ComponentRegistryStore
   readonly #industry: IndustryManifestSource
   readonly #validator: ProfileSpecValidator
+  readonly #workspaceResearch: WorkspaceResearchRunConfigService | undefined
   readonly #now: () => string
 
   constructor(dependencies: ProfileResolverDependencies) {
@@ -157,6 +167,7 @@ export class ProfileResolver {
     this.#registry = dependencies.registry
     this.#industry = dependencies.industry
     this.#validator = dependencies.validator
+    this.#workspaceResearch = dependencies.workspaceResearch
     this.#now = dependencies.now ?? (() => new Date().toISOString())
   }
 
@@ -368,6 +379,33 @@ export class ProfileResolver {
         snapshotHash: resolved.snapshotHash,
       },
       runtimeRef: resolved.runtimeRef,
+    }
+  }
+
+  /**
+   * Resolve (and persist) the versioned workspace-research run config a run binds (design §8, S04).
+   * Unlike a scenario profile it needs no project, scenario or published industry pack; it fixes
+   * the exact workspace draft revision it models. The returned `profileRef` encodes the workspace
+   * and the frozen draft so the run record can never point at a moving head. A host that has not
+   * mounted the resolver refuses the bind rather than fabricating a scenario profile.
+   */
+  async bindWorkspaceResearchRun(
+    request: WorkspaceResearchRunRequest,
+    scopeRef: ScopeRef,
+    ctx: ToolContext,
+  ): Promise<RunProfileBinding> {
+    resolveTrustedScope(scopeRef, ctx)
+    const resolver = this.#workspaceResearch
+    if (resolver === undefined) {
+      throw new ProfileResolverError('CAPABILITY_NOT_CONFIGURED', 'this host cannot resolve a workspace-research run config')
+    }
+    const config = await resolver.resolveForRun(request, ctx)
+    const profileRef = workspaceResearchProfileRef(config.workspaceId, config.draftRevision)
+    return {
+      profileRef,
+      resolvedProfileHash: config.snapshotHash,
+      resolvedProfileRef: { id: profileRef.id, version: profileRef.version, snapshotHash: config.snapshotHash },
+      runtimeRef: config.runtimeRef,
     }
   }
 
