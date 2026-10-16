@@ -6,6 +6,7 @@ import { initialReviewState, reviewReducer } from '../state/review'
 import type { ReviewEvent } from '../state/review'
 import type { WorkbenchError } from '../state/workbench'
 import { StatePanel } from './StatePanel'
+import { Button } from './ui'
 
 /**
  * The candidate review surface. It shows each candidate against the original text it was
@@ -20,6 +21,8 @@ import { StatePanel } from './StatePanel'
 export interface CandidateReviewPanelProps {
   readonly client: WorkbenchClient
   readonly initialCandidateId?: string
+  /** Opens the validation-and-publication surface, which has no separate navigation entry. */
+  readonly onOpenPackages?: () => void
 }
 
 function toError(error: unknown): WorkbenchError {
@@ -62,7 +65,7 @@ const DECISION_LABEL: Readonly<Record<IdentityDecisionKind, string>> = {
   split: '拆分',
 }
 
-export function CandidateReviewPanel({ client, initialCandidateId }: CandidateReviewPanelProps) {
+export function CandidateReviewPanel({ client, initialCandidateId, onOpenPackages }: CandidateReviewPanelProps) {
   const [state, dispatch] = useReducer(reviewReducer, undefined, initialReviewState)
   const [targetEntity, setTargetEntity] = useState('')
   const [justification, setJustification] = useState('')
@@ -248,6 +251,11 @@ export function CandidateReviewPanel({ client, initialCandidateId }: CandidateRe
         <p className="panel__hint">
           候选可对照原文匹配 / 新建待确认 / 拒绝 / 澄清 / 批准。冲突与并发版本变化显式展示，不静默覆盖。
         </p>
+        {onOpenPackages === undefined ? null : (
+          <div className="review__buttons">
+            <Button variant="quiet" data-testid="review-open-packages" onClick={onOpenPackages}>前往验证与发布</Button>
+          </div>
+        )}
       </header>
 
       {state.phase === 'loading' || state.phase === 'empty' || state.phase === 'not_configured' || state.phase === 'failure' || state.phase === 'permission_denied' ? (

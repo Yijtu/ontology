@@ -47,14 +47,17 @@ describe('unified default web entry in a real browser', () => {
       expect(await page.textContent('[data-testid="guide-mode"]')).toContain('只读')
       expect(await page.locator('[data-testid="guide-disclaimer"]').count()).toBe(0)
 
-      for (const view of ['start', 'ontology', 'projects', 'definitions', 'instances', 'packages', 'business', 'workbench', 'query', 'jobs', 'review', 'evidence']) {
+      for (const view of ['start', 'jobs', 'definitions', 'review', 'instances', 'query', 'evidence', 'models', 'workbench']) {
         expect(await page.locator(`[data-testid="tab-${view}"]`).count()).toBe(1)
       }
-      // New IA (design §1.1/N02): the two workbenches are top-level assistants and the hosting
-      // views were renamed to the product page names; the guarantees below are unchanged.
-      expect(await page.textContent('[data-testid="tab-ontology"]')).toBe('概览')
+      // Simplified IA: the two workbenches are top-level assistants and their overview pages are
+      // reached from the top-level buttons, so the hosting tabs for those views are gone.
+      for (const removed of ['ontology', 'projects', 'packages', 'business']) {
+        expect(await page.locator(`[data-testid="tab-${removed}"]`).count()).toBe(0)
+      }
       expect(await page.textContent('[data-testid="assistant-tab-ontology"]')).toBe('行业工作台')
       expect(await page.textContent('[data-testid="assistant-tab-business"]')).toBe('项目工作台')
+      expect(await page.textContent('[data-testid="tab-review"]')).toBe('审核与发布')
       expect(await page.locator('[data-testid="guide-path-step"]').count()).toBe(6)
       expect(await page.getByText('资料导入', { exact: true }).count()).toBeGreaterThan(0)
       for (const entry of ['research', 'upload', 'structured']) {
@@ -73,7 +76,7 @@ describe('unified default web entry in a real browser', () => {
     const page = await context.newPage()
     try {
       await openApp(page)
-      await page.click('[data-testid="tab-ontology"]')
+      await page.click('[data-testid="assistant-tab-ontology"]')
       await page.waitForSelector('[data-testid="ontology-workspace"]')
       expect(await page.getAttribute('[data-testid="ontology-workspace"]', 'data-phase')).not.toBeNull()
       await capture(page, 'v03-unified-entry-ontology')

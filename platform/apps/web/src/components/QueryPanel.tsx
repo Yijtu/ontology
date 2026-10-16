@@ -46,6 +46,8 @@ export interface QueryPanelProps {
   readonly onEvidenceReference?: (ref: ResourceRef) => void
   /** Opens the deployment-owned model settings surface. */
   readonly onConfigureModel?: () => void
+  /** Opens the registered-task workbench, which has no separate navigation entry. */
+  readonly onOpenBusiness?: () => void
 }
 
 export type QueryContextField =
@@ -383,6 +385,7 @@ export function QueryPanel({
   initialRunId,
   onEvidenceReference,
   onConfigureModel,
+  onOpenBusiness,
   readOnly = false,
   projectId,
   onSelectProject,
@@ -502,6 +505,9 @@ export function QueryPanel({
             </p>
           )}
         </div>
+        {onOpenBusiness === undefined ? null : (
+          <Button variant="quiet" data-testid="query-open-business" onClick={onOpenBusiness}>任务工作台</Button>
+        )}
         {readOnly ? <span className="project-state">只读</span> : null}
       </header>
 
