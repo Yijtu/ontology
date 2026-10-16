@@ -1,8 +1,9 @@
 import type { JobStageContext, JobStageHandler, JobStageHandlerRegistry, JobStageOutcome } from '@ontology/application'
-import { JobStageFailure, nextPipelineStage } from '@ontology/application'
+import { JobStageFailure, decodeResearchJobRequest, isAgentResearchJobRequest, nextPipelineStage } from '@ontology/application'
 import type {
   ComputeOperationHandler,
   ImmutableArtifactWriter,
+  LogicalJobRecord,
   OperationRegistry,
   ScopeRef,
   ScopedArtifactReader,
@@ -163,6 +164,11 @@ export class SimulationStageHandler implements JobStageHandler {
 /**
  * Route the generic runnable stages by job kind: a simulation job runs the simulation handler,
  * any other job delegates to the ingestion registry. The durable stage machine is unchanged.
+ *
+ * A research job whose version is the agentic scheduling handoff (`ResearchJobRequestAgent`, design
+ * §8) declares that it needs **no** background ledger: the job only enqueues an already-accepted run
+ * for the controller, so the worker must not open a second ledger for it — every execution consumes
+ * the run's one manifest ledger.
  */
 export function createWorkerStageRegistry(options: {
   readonly ingestion: JobStageHandlerRegistry
@@ -195,5 +201,16 @@ export function createWorkerStageRegistry(options: {
       return handler.run(context)
     },
   }
-  return { get: () => router }
+  return {
+    get: () => router,
+    requiresBackgroundLedger: (job: LogicalJobRecord): boolean => {
+      if (job.kind !== 'research') return true
+      try {
+        return !isAgentResearchJobRequest(decodeResearchJobRequest(job.datasetRef))
+      } catch {
+        // A malformed reference is handled by the research handler; keep the historical ledger here.
+        return true
+      }
+    },
+  }
 }

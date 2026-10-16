@@ -136,6 +136,13 @@ export interface JobStageHandler {
 
 export interface JobStageHandlerRegistry {
   get(stage: PipelineStage): JobStageHandler | undefined
+  /**
+   * Whether the claimed job needs a `background` budget ledger. A scheduling-handoff job (design
+   * §8: the research job only dispatches an already-accepted run) declares `false`: the worker never
+   * opens a background ledger for it, so the run's one manifest ledger stays the single ledger the
+   * execution consumes. Absent means `true` (the historical ingestion/simulation behaviour).
+   */
+  requiresBackgroundLedger?(job: LogicalJobRecord): boolean
 }
 
 /**

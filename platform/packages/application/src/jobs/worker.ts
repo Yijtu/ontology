@@ -104,11 +104,16 @@ export class JobWorker {
     const attempt = lease.attempt
     const handlerContext = this.#contextForJob?.(job, ctx) ?? ctx
     // A background ledger is opened once per claimed job; `ensureLedger` is idempotent, so a
-    // reclaimed attempt reuses the same ledger rather than resetting the budget.
-    const ledger = await this.#budget.openLedger(
-      { ledgerId: job.jobId, kind: 'background', runId: job.jobId },
-      ctx,
-    )
+    // reclaimed attempt reuses the same ledger rather than resetting the budget. A
+    // scheduling-handoff job (design §8: the research job only dispatches an accepted run) declares
+    // that it needs no background ledger, so one is never created for it and the run's manifest
+    // ledger stays the single ledger the execution consumes. The job id is still passed as the
+    // context ledger id (it is the same value the ledger would have carried) so a handler type
+    // never has to branch on its absence.
+    const opensBackgroundLedger = this.#handlers.requiresBackgroundLedger?.(job) ?? true
+    const ledgerId = opensBackgroundLedger
+      ? (await this.#budget.openLedger({ ledgerId: job.jobId, kind: 'background', runId: job.jobId }, ctx)).ledgerId
+      : job.jobId
     const reclaimed =
       lease.reclaimedAttemptId === undefined
         ? {}
@@ -173,7 +178,7 @@ export class JobWorker {
           job,
           attempt,
           budget: this.#budget,
-          ledgerId: ledger.ledgerId,
+          ledgerId,
           ctx: handlerContext,
           signal: controller.signal,
         })

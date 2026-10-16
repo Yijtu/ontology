@@ -34,6 +34,7 @@ const STAGE_LABEL: Readonly<Record<PipelineStage, string>> = {
   validated: '已校验',
   awaiting_review: '待审核',
   published: '已发布',
+  dispatched: '已交接调度',
   failed: '失败',
   cancelled: '已取消',
   rejected: '已拒绝',

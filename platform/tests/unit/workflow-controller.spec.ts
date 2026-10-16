@@ -497,7 +497,10 @@ describe('research completion branch (design §4/§8)', () => {
     const runtime = new ScriptedRuntime({ scripts: [[]] })
     runtime.block()
     const harness = buildWorkflowHarness({ runtime })
-    const pending = harness.controller.startRun(startInput(), OWNER)
+    const pending = harness.controller.startRun(
+      startInput({ goal: { kind: 'industry_workspace_research', workspaceId: randomUUID(), draftRevision: '1' } }),
+      OWNER,
+    )
     await waitFor(() => runtime.startCalls.length === 1)
 
     const delivery = await harness.controller.completeResearch(RUN_A, OWNER)
@@ -573,7 +576,10 @@ describe('research completion branch (design §4/§8)', () => {
         }]),
       },
     })
-    const pending = harness.controller.startRun(startInput(), OWNER)
+    const pending = harness.controller.startRun(
+      startInput({ goal: { kind: 'industry_workspace_research', workspaceId: randomUUID(), draftRevision: '1' } }),
+      OWNER,
+    )
     await waitFor(() => runtime.startCalls.length === 1)
 
     const delivery = await harness.controller.completeResearch(RUN_A, OWNER)

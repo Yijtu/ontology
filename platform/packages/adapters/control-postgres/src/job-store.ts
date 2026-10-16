@@ -551,7 +551,7 @@ export class PostgresJobStore implements JobStore {
       if (existing.rows[0] !== undefined) {
         return toJobRecord(job)
       }
-      if (!canAdvanceJobStage(job.stage, advance.stage)) {
+      if (!canAdvanceJobStage(job.stage, advance.stage, { kind: job.kind, pipelineVersion: job.pipeline_version })) {
         throw new JobStoreError(
           'STAGE_CONFLICT',
           `job ${jobId} cannot advance from ${job.stage} to ${advance.stage}`,
@@ -630,7 +630,7 @@ export class PostgresJobStore implements JobStore {
         [completion.completedAt, jobId, attemptId],
       )
       if (completion.finalStage === job.stage) return toJobRecord(job)
-      if (!canAdvanceJobStage(job.stage, completion.finalStage)) {
+      if (!canAdvanceJobStage(job.stage, completion.finalStage, { kind: job.kind, pipelineVersion: job.pipeline_version })) {
         throw new JobStoreError(
           'STAGE_CONFLICT',
           `job ${jobId} cannot advance from ${job.stage} to ${completion.finalStage}`,

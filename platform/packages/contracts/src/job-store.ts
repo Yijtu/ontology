@@ -31,7 +31,15 @@ import type { ToolContext } from './trusted'
  * construction injection and never imports an adapter or driver.
  */
 
-/** D6 pipeline: `received → parsed → extracted → validated → awaiting_review → published`. */
+/**
+ * D6 pipeline: `received → parsed → extracted → validated → awaiting_review → published`.
+ *
+ * `dispatched` is the **scheduling-handoff terminal** for a job whose only work is to hand an
+ * already-accepted controller run to the durable dispatch queue (design §8: research job 调度既有运行,
+ * Job 只负责调度). It is a stop stage of its own: it must never be confused with the ingestion
+ * `parsed`/`extracted` progress of a document job, and a job that reached it is finished — the run
+ * itself is tracked by the run record and its dispatch, never by the job stage.
+ */
 export type PipelineStage =
   | 'received'
   | 'parsed'
@@ -39,6 +47,7 @@ export type PipelineStage =
   | 'validated'
   | 'awaiting_review'
   | 'published'
+  | 'dispatched'
   | 'failed'
   | 'cancelled'
   | 'rejected'
@@ -47,9 +56,12 @@ export type PipelineStage =
 export const RUNNABLE_JOB_STAGES = ['received', 'parsed', 'extracted', 'validated'] as const
 export type RunnableJobStage = (typeof RUNNABLE_JOB_STAGES)[number]
 
-/** Stages where a worker stops: the job is waiting on a human or is already terminal. */
-export const STOP_JOB_STAGES = ['awaiting_review', 'published', 'failed', 'cancelled', 'rejected'] as const
+/** Stages where a worker stops: the job handed off, is waiting on a human, or is already terminal. */
+export const STOP_JOB_STAGES = ['awaiting_review', 'published', 'dispatched', 'failed', 'cancelled', 'rejected'] as const
 export type StopJobStage = (typeof STOP_JOB_STAGES)[number]
+
+/** The terminal stage of a job whose only work was the scheduling handoff (design §8). */
+export const DISPATCH_HANDOFF_STAGE = 'dispatched' as const
 
 export function isRunnableJobStage(stage: PipelineStage): stage is RunnableJobStage {
   return (RUNNABLE_JOB_STAGES as readonly PipelineStage[]).includes(stage)
@@ -75,16 +87,36 @@ export function nextPipelineStage(stage: PipelineStage): PipelineStage | undefin
  * True when `from → to` is a legal advance. Re-applying the same stage is allowed and treated
  * as an idempotent checkpoint. `validated → awaiting_review` is the worker stop,
  * `awaiting_review → published` is the human-approved publication step, and
- * `→ failed/cancelled/rejected` is allowed from every non-terminal stage. A terminal job can
+ * `→ failed/cancelled/rejected` is allowed from every non-terminal stage. `→ dispatched` is the
+ * scheduling-handoff stop allowed from any non-terminal stage (design §8), so a reclaimed attempt
+ * that re-runs the handoff is an idempotent checkpoint rather than a conflict. A terminal job can
  * never be advanced again, which is what stops a human-pending or failed job from being
  * re-run forever.
  */
-export function canAdvanceJobStage(from: PipelineStage, to: PipelineStage): boolean {
+export function canAdvanceJobStage(from: PipelineStage, to: PipelineStage, identity?: JobStageIdentity): boolean {
   if (from === to) return true
   if (isTerminalJobStage(from)) return false
   if (to === 'failed' || to === 'cancelled' || to === 'rejected') return true
+  // The scheduling handoff is legal only for the agentic research job (design §8): it may never appear
+  // as an ingestion/simulation progress stage.
+  if (to === DISPATCH_HANDOFF_STAGE) {
+    return identity?.kind === 'research' && identity.pipelineVersion === RESEARCH_DISPATCH_HANDOFF_PIPELINE_VERSION
+  }
   return NEXT_STAGE[from] === to
 }
+
+/**
+ * The job identity that governs a version-specific stage transition. Passed to `canAdvanceJobStage`
+ * so the `dispatched` handoff is legal only for the agentic research job and never for an ingestion
+ * or simulation job.
+ */
+export interface JobStageIdentity {
+  readonly kind: JobKind
+  readonly pipelineVersion: Semver
+}
+
+/** The research job pipeline version whose only work is the dispatch handoff (design §8). */
+export const RESEARCH_DISPATCH_HANDOFF_PIPELINE_VERSION = '2.0.0'
 
 /** Only a failed runnable stage can be retried. */
 export function isRetryableStage(stage: PipelineStage): stage is RunnableJobStage {
@@ -92,7 +124,7 @@ export function isRetryableStage(stage: PipelineStage): stage is RunnableJobStag
 }
 
 export function isTerminalJobStage(stage: PipelineStage): boolean {
-  return stage === 'published' || stage === 'failed' || stage === 'cancelled' || stage === 'rejected'
+  return stage === 'published' || stage === 'dispatched' || stage === 'failed' || stage === 'cancelled' || stage === 'rejected'
 }
 
 export type JobKind = 'ingestion' | 'simulation' | 'dataset_materialization' | 'research'
