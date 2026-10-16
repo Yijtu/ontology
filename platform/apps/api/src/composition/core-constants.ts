@@ -13,6 +13,8 @@ export const CORE_POLICY_REF: VersionRef = {
 export const WORKER_RUN_ID = 'ffffffff-ffff-4fff-8fff-ffffffffffff'
 export const MAX_IMPORTED_BYTES = 1_048_576
 export const FACTS_SOURCE_REF: SourceRef = { namespace: 'ontology-core-local', sourceId: 'published-semantic-read' }
+/** The registered public-web source `web_search` reads; used for the run evidence snapshot. */
+export const WEB_SEARCH_SOURCE_REF: SourceRef = { namespace: 'public-web', sourceId: 'search' }
 export const CORE_EFFECTIVE_LIMITS_REF: VersionRef = {
   id: 'core-local-effective-limits',
   version: COMPONENT_VERSION,

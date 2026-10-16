@@ -11,6 +11,7 @@ import {
   assertResearchExecutionShape,
   assertResearchExecutionV2Shape,
   assertResearchRunManifestShape,
+  assertResearchPreflightShape,
   assertSubmitCandidatesCommandShape,
   assertSubmitCandidatesReceiptShape,
   assertWebSearchToolOutputShape,
@@ -403,5 +404,32 @@ describe('document_search targeted read is versioned and bounded', () => {
       truncated: false,
       usage: { bytes: 0, documents: 0 },
     })).toThrow()
+  })
+})
+
+describe('ResearchPreflight (design §2/§10)', () => {
+  const preflight = {
+    schemaVersion: 'research-preflight@1' as const,
+    workspaceId: WORKSPACE,
+    generatedAt: '2026-10-16T00:00:00Z',
+    recipient: { state: 'available' as const, toolId: 'web_search' as const, connectionId: RUN, connectionName: '兼容网关', adapterType: 'http_compat' as const, connectionRevision: '3' },
+    requestedDomains: ['example.com'],
+    effectiveDomains: ['example.com'],
+    limits: { sourceLimit: 5, candidateLimit: 5, deadline: '2026-10-16T01:00:00Z' },
+    policyRef: versionRef,
+    budgetRef: versionRef,
+    blocked: [],
+    authorization: { roles: ['researcher'], deadline: '2026-10-16T01:00:00Z', note: '只读预检' },
+  }
+
+  it('accepts an available and a blocked preflight', () => {
+    expect(() => assertResearchPreflightShape(preflight)).not.toThrow()
+    expect(() => assertResearchPreflightShape({ ...preflight, recipient: { state: 'blocked', toolId: 'web_search', blockedReason: 'CREDENTIAL_MISSING' }, blocked: [{ code: 'CREDENTIAL_MISSING', message: '缺凭据' }] })).not.toThrow()
+  })
+
+  it('rejects a wrong schema version, a bad recipient state and a credential-shaped reply', () => {
+    expect(() => assertResearchPreflightShape({ ...preflight, schemaVersion: 'research-preflight@2' })).toThrow()
+    expect(() => assertResearchPreflightShape({ ...preflight, recipient: { state: 'ready', toolId: 'web_search' } })).toThrow()
+    expect(() => assertResearchPreflightShape({ ...preflight, recipient: { ...preflight.recipient, apiKey: 'tvly' } })).toThrow(/credential/i)
   })
 })

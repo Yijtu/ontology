@@ -36,6 +36,12 @@ export type { MappedTavilyResponse } from './tavily-mapping'
 export { HttpWebSearchProvider, HTTP_WEB_SEARCH_PROVIDER_REF, hostAllowed } from './provider'
 export type { HttpWebSearchProviderConfig } from './provider'
 
+export {
+  createWebSearchProviderFromConnection,
+  providerRefForAdapter,
+} from './connection-provider'
+export type { WebSearchProviderFromConnectionConfig } from './connection-provider'
+
 export { NativeTavilySearchProvider, NATIVE_TAVILY_PROVIDER_REF } from './tavily'
 export type {
   NativeTavilySearchProviderConfig,

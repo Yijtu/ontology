@@ -40,8 +40,14 @@ export interface ToolGatewayCompositionOptions {
 export interface ToolGatewayComposition {
   readonly evidence: PostgresEvidenceStore
   readonly artifacts: ImmutableArtifactWriter
-  /** Bind a gateway to exactly one run's ledger, resolved profile and operations. */
-  forRun(binding: RunToolBinding): ToolGateway
+  /**
+   * Bind a gateway to exactly one run's ledger, resolved profile and operations.
+   *
+   * `handlers` are run-scoped handlers the composition resolved after the base set (e.g. a
+   * `web_search` handler built from the run's pinned tool connection). They are appended, never
+   * substituted, so the deployment-wide tool set is never shadowed by a per-run one.
+   */
+  forRun(binding: RunToolBinding, handlers?: readonly ToolHandler[]): ToolGateway
 }
 
 /**
@@ -92,6 +98,12 @@ export function createToolGatewayComposition(
   return {
     evidence,
     artifacts,
-    forRun: (binding: RunToolBinding): ToolGateway => createRunToolGateway(dependencies, binding),
+    forRun: (binding: RunToolBinding, handlers?: readonly ToolHandler[]): ToolGateway =>
+      createRunToolGateway(
+        handlers === undefined || handlers.length === 0
+          ? dependencies
+          : { ...dependencies, handlers: [...dependencies.handlers, ...handlers] },
+        binding,
+      ),
   }
 }

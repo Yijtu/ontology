@@ -17,12 +17,14 @@ import { ArchivedRulePremiseReplayVerifier, FiniteGrammarRuleSupportValidator, F
 import type { ActionCapabilityBindingInput, GenerationPort, ProfileRef, ProjectRevision, ScopeRef, ToolContext, VerifiedTableManifestSource, WorkbenchCapability } from '@ontology/contracts'
 import { createRequestToolContext } from '../http/context'
 import type { CoreApiDependencies } from '../core-main'
-import { COMPONENT_VERSION, CORE_TYPED_RESULT_SCHEMA_REF } from './core-constants'
+import { COMPONENT_VERSION, CORE_TYPED_RESULT_SCHEMA_REF, WORKER_RUN_ID } from './core-constants'
 import { CoreCapabilityError } from './core-errors'
 import { sameVersionRef } from './core-composition-shared'
+import { sha256DigestOf } from '@ontology/core'
 import { createAjv, manifestValidator, taskParameterValidator } from './core-validators'
 import { capability, componentRef } from './core-component-ref'
-import { profileModelBindingEnabled, resolvedCapabilitiesFrom, resolveScenarioProfile, scenarioForIndustryRef, schemasByScenario } from './core-component-registration'
+import { profileModelBindingEnabled, resolvedCapabilitiesFrom, resolveScenarioProfile, scenarioForIndustryRef, schemasByScenario, workerContext } from './core-component-registration'
+import { createCoreResearchPreflight } from './core-research-preflight'
 import { validateCoreFactsRequest } from './core-facts-providers'
 import { registerCoreSourceViewRoutes } from '../http/core-source-views'
 import { registerCoreImportRoute, registerCoreRelationNavigationRoute } from '../http/core-core-routes'
@@ -72,7 +74,7 @@ export async function assembleDeployment(
     publishedProjectDatasetSource, normalApprovedInputs, projectDatasetService, profileResolver, sources, coreModelRefs, componentRecords,
     profileRefsByScenario, profileSpecsByScenario, availableTasksByScenario, terminology, executionPreview, projectEvolutionCell, hostClock, componentStore,
     aiSettings, modelSettings, modelSettingsMigration, deploymentModelCapabilities, modelBindingRuntime,
-    toolSettings,
+    toolSettings, allSourceRefs,
   } = state
   const { structuredImports, documentSpanReader, projectDocumentIndexService, structuredPremiseSources, structuredClauseSources, semanticTasks, computeResultStore, computeOutputBindingsStore, computeInvocationStore, gatewayComposition } = query
   const { runProgress, runs, termLabels, authoring, tableArtifactStore, tableVerificationStore, workflowDispatchWorker, jobService, industryWorkspaceService, provenanceRead, webSearch } = runtime
@@ -330,6 +332,15 @@ export async function assembleDeployment(
       ],
     },
   })
+  // The read-only research preflight reads the effective `web_search` selection with a host-minted
+  // context (the read is not the requester's write permission), so a researcher sees the real
+  // recipient and an honest block without being able to edit the catalogue.
+  const researchPreflight = createCoreResearchPreflight({
+    selection: toolSettings.selection,
+    scopeRef,
+    systemContext: () => workerContext(scopeRef, allSourceRefs, WORKER_RUN_ID, sha256DigestOf('core-research-preflight'), hostClock),
+    now: () => hostClock().toISOString(),
+  })
   const dependencies: CoreApiDependencies = {
     database,
     scopeRef,
@@ -367,7 +378,8 @@ export async function assembleDeployment(
       assetCandidates: { generation: definitionGenerationService },
       candidateSources: { sources: candidateSourceStore, review: candidateSourceReview, retractions: candidateSourceStore,
         admissions: sourceAdmissionService, ...(candidateSourceResearch === undefined ? {} : { research: candidateSourceResearch }),
-        ...(runtime.researchWorkflow === undefined ? {} : { researchWorkflow: runtime.researchWorkflow }) },
+        ...(runtime.researchWorkflow === undefined ? {} : { researchWorkflow: runtime.researchWorkflow }),
+        researchPreflight: (input) => researchPreflight.preflight(input) },
       definitionEditing: { service: definitionEditingService },
       ruleActionCandidates: { service: ruleActionCandidateService, generation: ruleActionGenerationService, bindingContext: actionBindingContext },
       competencyQuestions: { service: competencyQuestions.service, uploadSource: competencyQuestions.uploadSource },
