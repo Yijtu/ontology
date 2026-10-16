@@ -69,7 +69,7 @@ export interface AppViewContext {
 export interface AppViewContribution {
   readonly view: string
   readonly label: string
-  readonly navigationGroup?: 'modeling' | 'practice' | 'assets'
+  readonly navigationGroup?: 'modeling' | 'practice'
   render(input: { readonly client: WorkbenchClient; readonly profileRef: ProfileRef; readonly context: AppViewContext }): ReactNode
 }
 
@@ -103,14 +103,14 @@ const CORE_TABS: readonly NavTab[] = [
   { view: 'ontology', label: '概览' },
   { view: 'jobs', label: '来源' },
   { view: 'definitions', label: '资产' },
-  { view: 'review', label: '审核' },
+  { view: 'review', label: '审核与发布' },
   { view: 'packages', label: '验证与发布' },
   { view: 'projects', label: '概览' },
   { view: 'instances', label: '待确认' },
   { view: 'business', label: '问答与任务' },
-  { view: 'query', label: '业务问答' },
-  { view: 'evidence', label: '结果与历史' },
-  { view: 'workbench', label: '配置工作台' },
+  { view: 'query', label: '问答' },
+  { view: 'evidence', label: '结果' },
+  { view: 'workbench', label: '高级' },
   { view: 'models', label: 'AI 设置' },
 ]
 const SETTINGS_TABS: readonly CoreAppView[] = ['models', 'workbench']
@@ -118,10 +118,9 @@ const EMPTY_DEPLOYMENT_SCENARIOS: readonly CoreDeploymentScenario[] = []
 const EMPTY_WORKSPACES: readonly IndustryWorkspace[] = []
 const EMPTY_PROJECTS: readonly ProjectRecord[] = []
 const EMPTY_PACKS: readonly IndustryPackSummary[] = []
-const NAV_GROUPS: readonly { readonly key: string; readonly label: string; readonly views: readonly CoreAppView[]; readonly contribution: 'modeling' | 'practice' | 'assets' }[] = [
-  { key: 'industry', label: '行业工作台', views: ['ontology', 'jobs', 'definitions', 'review', 'packages'], contribution: 'modeling' },
-  { key: 'business', label: '项目工作台', views: ['projects', 'instances', 'business', 'query', 'evidence'], contribution: 'practice' },
-  { key: 'assets', label: '资产与历史', views: [], contribution: 'assets' },
+const NAV_GROUPS: readonly { readonly key: string; readonly label: string; readonly views: readonly CoreAppView[]; readonly contribution: 'modeling' | 'practice' }[] = [
+  { key: 'industry', label: '行业工作台', views: ['jobs', 'definitions', 'review'], contribution: 'modeling' },
+  { key: 'business', label: '项目工作台', views: ['instances', 'query', 'evidence'], contribution: 'practice' },
 ]
 const TOP_LEVEL_TABS: readonly { readonly key: WorkbenchAssistant | 'start'; readonly label: string; readonly target: AppView }[] = [
   { key: 'start', label: '工作概览', target: 'start' },
@@ -554,8 +553,6 @@ export function App({
           <Button variant="quiet" className="app__menu-button" onClick={() => setMenuOpen(true)} aria-label="打开主导航" aria-expanded={menuOpen}>☰ 导航</Button>
           <div className="app__breadcrumb">工作空间 <span aria-hidden="true">/</span> <strong>{viewLabel}</strong></div>
           <div className="app__topbar-actions"><StatusBadge tone={readOnly ? 'warning' : 'neutral'}><span data-testid="core-deployment-mode">{readOnly ? '只读业务模式' : '本地操作员模式'}</span></StatusBadge>
-            <Button variant="quiet" data-testid="open-question-page" onClick={() => navigate('query')}>问答</Button>
-            <Button variant="quiet" data-testid="open-model-settings" onClick={() => navigate('models')}>模型设置</Button>
             <Button variant="quiet" onClick={() => setContextOpen(true)}>查看上下文</Button></div>
         </header>
         <section className="app__context" data-testid="context-bar" aria-label="工作区与项目上下文">{contextFields}</section>
@@ -620,6 +617,7 @@ export function App({
           {...(deploymentModels === undefined ? {} : { modelCapabilities: deploymentModels })}
           onEvidenceReference={openSourceReference}
           {...(queryContextFields === undefined ? {} : { contextFields: queryContextFields })}
+          onOpenBusiness={() => navigate('business')}
           {...(projectId === undefined ? {} : { projectId })}
           onSelectProject={selectProject}
           {...(activeRunId === undefined ? {} : { initialRunId: activeRunId })}
@@ -644,7 +642,7 @@ export function App({
         </>
       ) : null}
       {view === 'review' ? (
-        <CandidateReviewPanel client={client} {...(candidateId === undefined ? {} : { initialCandidateId: candidateId })} />
+        <CandidateReviewPanel client={client} {...(candidateId === undefined ? {} : { initialCandidateId: candidateId })} onOpenPackages={() => navigate('packages')} />
       ) : null}
       {view === 'evidence' ? (
         <EvidencePanel

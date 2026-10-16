@@ -196,7 +196,7 @@ describe('GAP-022 normal App project source-to-publication pipeline', () => {
       const selectedScenario = await scenario.locator('option:checked').textContent()
       expect(selectedScenario).toContain('工业资产维护')
 
-      await page.getByTestId('tab-projects').click()
+      await page.getByTestId('assistant-tab-business').click()
       await page.waitForSelector('[data-testid="project-workspace"]')
       await page.waitForSelector('[data-testid="project-create-title"]')
       const initialAccessibility = await collectRealAppAccessibilityEvidence(page, {
@@ -407,7 +407,7 @@ describe('GAP-022 normal App project source-to-publication pipeline', () => {
       await capture(page, 'gap22-project-fact-semantics-published-1440')
 
       // Materialize the just-published record using the user-facing project action.
-      await page.getByTestId('tab-projects').click()
+      await page.getByTestId('assistant-tab-business').click()
       const returnPrompt = page.getByRole('dialog', { name: '离开当前工作内容？' })
       if (await returnPrompt.isVisible()) await page.getByTestId('shell-discard-changes').click()
       await page.waitForFunction(() => new URL(window.location.href).searchParams.get('view') === 'projects')

@@ -45,7 +45,7 @@ async function openCoreHome(page: Page): Promise<void> {
   await page.goto(core.origin)
   await page.getByTestId('guide-home').waitFor()
   await page.getByTestId('context-workspace-loading').waitFor({ state: 'hidden' })
-  await page.getByTestId('tab-ontology').click()
+  await page.getByTestId('assistant-tab-ontology').click()
   await page.waitForSelector('[data-testid="ontology-workspace"]:is([data-phase="ready"],[data-phase="empty"])')
   const disclosure = page.getByTestId('workspace-create-disclosure')
   if (await disclosure.getAttribute('open') === null) await disclosure.locator('summary').click()
@@ -96,7 +96,7 @@ describe('ontology workspace home in a real browser', () => {
 
       // Ordinary refresh reads the same workspace back from the server.
       await page.reload()
-      await page.getByTestId('tab-ontology').click()
+      await page.getByTestId('assistant-tab-ontology').click()
       await page.waitForSelector('[data-testid="workspace-list-item"]')
       expect(await page.textContent('[data-testid="workspace-detail-name"]')).toBe('桥架本体工作区')
       expect(await page.textContent('[data-testid="workspace-detail-head-revision"]')).toBe('1')

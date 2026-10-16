@@ -1417,7 +1417,7 @@ describe('V03-045 generic dual-assistant full-stack E2E (real chromium, real hos
     })
       await page.goto(web.origin)
       await page.waitForSelector('[data-testid="guide-home"]')
-      await page.getByTestId('tab-projects').click()
+      await page.getByTestId('assistant-tab-business').click()
       await page.waitForSelector('[data-testid="project-workspace"]:is([data-phase="ready"], [data-phase="empty"])')
       const projectCreate = page.locator('.project-create-disclosure')
       if (await projectCreate.getAttribute('open') === null) await projectCreate.locator('summary').click()
@@ -1587,7 +1587,7 @@ describe('V03-045 generic dual-assistant full-stack E2E (real chromium, real hos
       expect((await semanticPublication).status()).toBe(201)
       await page.waitForSelector('[data-testid="statement-current"][data-status="active"]')
 
-      await page.getByTestId('tab-projects').click()
+      await page.getByTestId('assistant-tab-business').click()
       await discardIfNeeded(page)
       await page.waitForSelector(`[data-testid="project-detail"][data-project-id="${projectId}"]`)
       await page.getByRole('button', { name: '项目记录', exact: true }).click()
@@ -1617,7 +1617,9 @@ describe('V03-045 generic dual-assistant full-stack E2E (real chromium, real hos
           envelope.data.tasks.some((task) => task.bindingRef.id === 'core.task.rule_judgement' && task.available)
       }, projectId, { polling: 500, timeout: 30_000 })
 
-      await page.getByTestId('tab-business').click()
+      await page.getByTestId('tab-query').click()
+      await discardIfNeeded(page)
+      await page.getByTestId('query-open-business').click()
       await discardIfNeeded(page)
       expect(await page.getByTestId('business-project').inputValue()).toBe(projectId)
       expect(await page.getByTestId('context-project-select').inputValue()).toBe(projectId)
@@ -2008,7 +2010,7 @@ describe('V03-045 generic dual-assistant full-stack E2E (real chromium, real hos
       expect(semanticPublicationReadback.data).toEqual(semanticPublicationBody.data)
       await page.waitForSelector('[data-testid="statement-current"][data-status="active"]')
 
-      await page.getByTestId('tab-projects').click()
+      await page.getByTestId('assistant-tab-business').click()
       await discardIfNeeded(page)
       await page.waitForSelector(`[data-testid="project-detail"][data-project-id="${gap22FlowProjectId}"]`)
       await page.getByRole('button', { name: '版本演进', exact: true }).click()

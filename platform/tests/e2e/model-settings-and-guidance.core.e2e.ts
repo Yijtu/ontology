@@ -93,7 +93,8 @@ it('configures, probes and assigns a model connection through the normal App and
   const pageErrors: string[] = []; page.on('pageerror', (error) => pageErrors.push(error.message))
   try {
     await page.goto(web.origin)
-    await page.getByTestId('open-model-settings').click()
+    await page.locator('.app__advanced summary').click()
+    await page.getByTestId('tab-models').click()
     await page.getByTestId('ai-settings').waitFor()
     // The single-instance legacy surface is migrated to the catalogue once the host starts
     // (design §5.3): the compatibility tab refuses the old write surface instead of editing it.
@@ -150,15 +151,19 @@ it('opens the dedicated question page and explains each core feature without byp
   const page = await browser.newPage({ viewport: { width: 1440, height: 1050 } })
   try {
     await page.goto(web.origin)
-    await page.getByTestId('open-question-page').click()
+    await page.getByTestId('tab-query').click()
     await page.getByTestId('query-panel').waitFor()
     expect(new URL(page.url()).searchParams.get('view')).toBe('query')
-    expect(await page.getByTestId('function-guide').innerText()).toContain('项目正式数据')
+    // The per-page note is collapsed by default; open it before asserting its explanation.
+    const queryGuide = page.getByTestId('function-guide')
+    await queryGuide.locator('.function-guide__disclosure > summary').click()
+    expect(await queryGuide.innerText()).toContain('项目正式数据')
     await capture(page, 'model-ui-question-window-1440')
     for (const view of ['start', 'ontology', 'projects', 'definitions', 'instances', 'packages', 'business', 'workbench', 'query', 'jobs', 'review', 'evidence', 'models']) {
       await page.goto(`${web.origin}/?view=${view}`)
       const guide = page.locator(`[data-testid="function-guide"][data-view="${view}"]`)
       await guide.waitFor()
+      await guide.locator('.function-guide__disclosure > summary').click()
       expect(await guide.innerText()).toContain('用途')
       expect(await guide.innerText()).toContain('开始前')
       expect(await guide.innerText()).toContain('完成后')
