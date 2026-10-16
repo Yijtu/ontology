@@ -1,15 +1,15 @@
 import { createHash } from 'node:crypto'
-import { PostgresCandidateSourceStore, PostgresResearchExecutionStore, PostgresTableArtifactStore, PostgresTableVerificationStore, PostgresTaskPolicyReportStore } from '@ontology/adapter-control-postgres'
-import { LocalDocumentExtractionService, LocalStructuredIngestionService, StructuredDocumentParser } from '@ontology/adapter-extraction-document'
+import { PostgresCandidateSourceStore, PostgresCandidateSubmissionStore, PostgresResearchDocumentSetStore, PostgresResearchExecutionStore, PostgresTableArtifactStore, PostgresTableVerificationStore, PostgresTaskPolicyReportStore } from '@ontology/adapter-control-postgres'
+import { ArtifactGroundingDocumentSetReader, LocalDocumentExtractionService, LocalStructuredIngestionService, ParsedSourceGroundingReader, StructuredDocumentParser } from '@ontology/adapter-extraction-document'
 import { PiRuntimeAdapter } from '@ontology/adapter-runtime-pi'
 import { TemplateRuntimeAdapter } from '@ontology/adapter-runtime-template'
 import {
-  AnswerPublicationService, CandidateSourceIngestionService, CandidateValidationStageHandler, DraftVerificationService, ExtractionPipeline, ExtractionStageHandler,
-  IndustryWorkspaceService, JobService, JobWorker, OutboxDispatcher, RestrictedLimitedAnswerComposer, ResearchWorkflowService, RunExecutionPreflightService, RunPhaseDriver,
+  AnswerPublicationService, CandidateAuthoringCommandGateway, CandidateSourceIngestionService, CandidateSubmissionService, CandidateValidationStageHandler, DraftVerificationService, ExtractionPipeline, ExtractionStageHandler,
+  IndustryWorkspaceService, JobService, JobWorker, OutboxDispatcher, ResearchMaterialReadService, RestrictedLimitedAnswerComposer, ResearchWorkflowService, RuleActionCandidateService, RunExecutionPreflightService, RunPhaseDriver,
   RunService, RunTypedResultContextSource, StructuredExtractionService, StructuredExtractionStageHandler, TableHardVerificationService,
-  TypedEvidenceDraftWriter, WebResearchService, WorkflowController, createRunCheckpointPort, ReviewHandoffStageHandler,
+  TypedEvidenceDraftWriter, WebResearchService, WorkflowController, createRunCheckpointPort, createSourceGroundingService, ReviewHandoffStageHandler,
 } from '@ontology/application'
-import { IncrementalMaterializer } from '@ontology/semantic-engine'
+import { FiniteGrammarRuleSupportValidator, IncrementalMaterializer } from '@ontology/semantic-engine'
 import { JobWorkerLoop, MaterializationOutboxConsumer, ProjectEvolutionOutboxConsumer, ResearchStageHandler, TopicOutboxConsumerRouter, WorkflowDispatchWorker, controlRecordSequence, createIngestionHandlerRegistry, createWorkerStageRegistry } from '@ontology/app-worker'
 import { DEFAULT_VERIFICATION_POLICY, SCHEMA_DOCUMENTS, TOOL_CATALOGUE, projectCollectionRef } from '@ontology/contracts'
 import type { DocumentParserPort, ProjectRevision, RuntimeAdapter, RuntimeCapabilityContext, RuntimeCapabilityFactoryPort, RuntimeCapabilitySet, RuntimeSelectorPort, ScopeRef, ToolContext, Uuid, VersionRef, WorkflowDispatchFence } from '@ontology/contracts'
@@ -135,6 +135,7 @@ export async function assembleRuntimePipeline(
       provider: 'ontology',
     },
     generationRole: 'planner',
+    authoringCommands: ['submit_candidates'],
   })
   const runtimeAdapterByRef = new Map<string, RuntimeAdapter>([
     [versionRefKey(templateRuntimeRecord.manifestRef), templateRuntime],
@@ -177,6 +178,31 @@ export async function assembleRuntimePipeline(
     verifier: new TableHardVerificationService({ pages: tableArtifactStore, receipts: tableVerificationStore, progress: tableVerificationStore, artifacts: blobStore, evidence: evidenceStore }) })
   const draftVerifier = new DraftVerificationService({ evidence: evidenceStore, artifacts: blobStore, rulePremises: rulePremiseVerifier, decisionStateRefProvider: state.decisionStateRefProvider,
     policy: { ...DEFAULT_VERIFICATION_POLICY, semanticReview: 'disabled' } })
+  // The controlled candidate-submission path (design §5/§7). The model proposes through the
+  // authoring-command gateway; the service owns identity/trust/publication state and re-reads the
+  // archived evidence before writing. It is wired into every run's capabilities, but the Pi runtime
+  // only exposes the command surface for a run whose profile authorizes candidate authoring.
+  const candidateSubmissionService = new CandidateSubmissionService({
+    workspaces: workspaceStore,
+    definitionCandidates: assetCandidateStore,
+    terminology,
+    evidence: new ResearchMaterialReadService({
+      members: new PostgresResearchDocumentSetStore(database),
+      content: { read: async (ref, ctx) => {
+        const bytes = await blobStore.readAuthorized({ blobRef: ref, scopeRef: { tenantId: ctx.principal.tenantId, spaceId: ctx.allowedResources.spaceId } }, ctx)
+        return { bytes, contentDigest: `sha256:${createHash('sha256').update(bytes).digest('hex')}` }
+      } },
+    }),
+    receipts: new PostgresCandidateSubmissionStore(database),
+    ruleActions: new RuleActionCandidateService({ workspaces: workspaceStore, candidates: ruleActionCandidateStore, support: new FiniteGrammarRuleSupportValidator() }),
+    sourceIngestion: new CandidateSourceIngestionService({ artifacts: gatewayComposition.artifacts, sources: new PostgresCandidateSourceStore(database) }),
+    sourceGrounding: createSourceGroundingService({ workspaces: workspaceStore, documentSets: new ArtifactGroundingDocumentSetReader(blobStore),
+      reader: new ParsedSourceGroundingReader({ blobs: blobStore, documents: parseStore, tables: structuredStore }) }),
+    // Re-check the run's dispatch fence (cancel/revoke) before the write transaction; a cancelled
+    // run has its fence removed, so a late `submit_candidates` is a FENCE_STALE rejection.
+    fence: { isCancelled: async (runId: Uuid) => !dispatchFences.has(runId) },
+  })
+  const candidateCommandGateway = new CandidateAuthoringCommandGateway(candidateSubmissionService)
   const controllerDependencies = {
     runs,
     phase,
@@ -212,6 +238,7 @@ export async function assembleRuntimePipeline(
             ? bound.decision ?? (bound.decisionBlocked ? disabledDecision() : modelExecution.decision ?? disabledDecision())
             : disabledDecision(),
           checkpoints: createRunCheckpointPort(runStore),
+          commandGateway: candidateCommandGateway,
         } satisfies RuntimeCapabilitySet
       },
     } satisfies RuntimeCapabilityFactoryPort,
