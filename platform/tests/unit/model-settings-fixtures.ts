@@ -2,6 +2,7 @@ import {
   CONTRACT_VERSION,
   ModelSelectionError,
   SecretValue,
+  ToolConnectionError,
   createToolContext,
 } from '@ontology/contracts'
 import type {
@@ -19,11 +20,15 @@ import type {
   ModelConnectionTestRecord,
   ModelConnectionTestResult,
   ModelCredentialCustodian,
+  ModelExecutionConnectionSnapshot,
+  ModelExecutionSnapshotStore,
   ModelTargetDirectory,
   ModelTargetScope,
   ResourceRef,
   ScopeRef,
   ToolContext,
+  ToolExecutionConnectionSnapshot,
+  ToolExecutionSnapshotStore,
   Uuid,
 } from '@ontology/contracts'
 
@@ -248,6 +253,53 @@ export class InMemoryModelAssignmentStore implements ModelAssignmentStore {
     const next: ModelAssignmentSet = { ...input.set, revision: '1' }
     this.rows.set(key, next)
     return next
+  }
+}
+
+/**
+ * In-memory execution-config snapshot store (S02): write-once per (kind, connection, revision), so a
+ * pinned snapshot can never be rewritten under a running execution.
+ */
+export class InMemoryExecutionConnectionSnapshotStore implements ToolExecutionSnapshotStore, ModelExecutionSnapshotStore {
+  readonly toolSnapshots = new Map<string, ToolExecutionConnectionSnapshot>()
+  readonly modelSnapshots = new Map<string, ModelExecutionConnectionSnapshot>()
+
+  #key(scopeRef: ScopeRef, connectionId: string, revision: string): string {
+    return `${scopeKey(scopeRef)}:${connectionId}:${revision}`
+  }
+
+  async putToolSnapshot(_scopeRef: ScopeRef, snapshot: ToolExecutionConnectionSnapshot): Promise<ToolExecutionConnectionSnapshot> {
+    const key = this.#key(_scopeRef, snapshot.connectionId, snapshot.connectionRevision)
+    const existing = this.toolSnapshots.get(key)
+    if (existing !== undefined) {
+      if (JSON.stringify(existing) !== JSON.stringify(snapshot)) {
+        throw new ToolConnectionError('VERSION_CONFLICT', 'the snapshot for this revision is already fixed and differs')
+      }
+      return existing
+    }
+    this.toolSnapshots.set(key, snapshot)
+    return snapshot
+  }
+
+  async getToolSnapshot(scopeRef: ScopeRef, connectionId: Uuid, revision: string): Promise<ToolExecutionConnectionSnapshot | undefined> {
+    return this.toolSnapshots.get(this.#key(scopeRef, connectionId, revision))
+  }
+
+  async putModelSnapshot(_scopeRef: ScopeRef, snapshot: ModelExecutionConnectionSnapshot): Promise<ModelExecutionConnectionSnapshot> {
+    const key = this.#key(_scopeRef, snapshot.connectionId, snapshot.revision)
+    const existing = this.modelSnapshots.get(key)
+    if (existing !== undefined) {
+      if (JSON.stringify(existing) !== JSON.stringify(snapshot)) {
+        throw new ModelSelectionError('VERSION_CONFLICT', 'the snapshot for this revision is already fixed and differs')
+      }
+      return existing
+    }
+    this.modelSnapshots.set(key, snapshot)
+    return snapshot
+  }
+
+  async getModelSnapshot(scopeRef: ScopeRef, connectionId: Uuid, revision: string): Promise<ModelExecutionConnectionSnapshot | undefined> {
+    return this.modelSnapshots.get(this.#key(scopeRef, connectionId, revision))
   }
 }
 

@@ -7,14 +7,17 @@ import type {
   ExecutionToolBindingStore,
   ToolConnectionCapability,
   ToolConnectionStore,
+  ToolExecutionSnapshotStore,
   ToolSelectionResolver,
   ToolTargetScope,
   ToolContext,
   Uuid,
+  VersionRef,
 } from '@ontology/contracts'
 import { canonicalJson, sha256DigestOf } from '../extraction/canonical'
 import { assertToolTargetEditor, scopeOf } from './guards'
 import { toolAdapterRequiresCredential, toolAdapterSupportsCapability } from './tool-adapter-capabilities'
+import { toolExecutionSnapshotOf } from './tool-connection-service'
 
 export interface ExecutionToolBindingServiceDependencies {
   readonly bindings: ExecutionToolBindingStore
@@ -24,6 +27,12 @@ export interface ExecutionToolBindingServiceDependencies {
    * host that does not mount the catalogue keeps the bind/read-back behaviour.
    */
   readonly connections?: ToolConnectionStore
+  /**
+   * The immutable execution-config snapshot store (S02). When mounted, `bind` captures the pinned
+   * revision's non-secret config and records a `snapshotRef`, so the runtime reads that snapshot
+   * instead of today's catalogue row. Requires `connections` so the snapshot can be captured.
+   */
+  readonly snapshots?: ToolExecutionSnapshotStore
   readonly now?: () => string
 }
 
@@ -38,12 +47,14 @@ export class ExecutionToolBindingService {
   readonly #bindings: ExecutionToolBindingStore
   readonly #resolver: ToolSelectionResolver
   readonly #connections: ToolConnectionStore | undefined
+  readonly #snapshots: ToolExecutionSnapshotStore | undefined
   readonly #now: () => string
 
   constructor(dependencies: ExecutionToolBindingServiceDependencies) {
     this.#bindings = dependencies.bindings
     this.#resolver = dependencies.resolver
     this.#connections = dependencies.connections
+    this.#snapshots = dependencies.snapshots
     this.#now = dependencies.now ?? (() => new Date().toISOString())
   }
 
@@ -64,6 +75,7 @@ export class ExecutionToolBindingService {
     if (connectionRevision === undefined) {
       throw new ToolConnectionError('TOOL_NOT_CONFIGURED', 'the resolved connection has no revision to pin')
     }
+    const snapshotRef = await this.#captureSnapshot(scopeRef, effective.connectionId, connectionRevision, ctx)
     const binding: ExecutionToolBinding = {
       schemaVersion: 'execution-tool-binding@1',
       executionId: input.executionId,
@@ -75,12 +87,46 @@ export class ExecutionToolBindingService {
         version: `${connectionRevision}.0.0`,
         digest: sha256DigestOf(canonicalJson({ connectionId: effective.connectionId, revision: connectionRevision })),
       },
+      ...(snapshotRef === undefined ? {} : { snapshotRef }),
       assignmentRevision: effective.assignmentRevision ?? '0',
       resolvedFrom: effective.resolvedFrom,
       boundAt: this.#now(),
     }
     assertExecutionToolBindingShape(binding)
     return this.#bindings.putBinding(scopeRef, binding, ctx)
+  }
+
+  /**
+   * Capture the pinned revision's immutable, non-secret config snapshot and return its ref (S02).
+   * When no snapshot store is mounted the binding keeps the legacy revision-only shape. The catalogue
+   * is read here only to copy the config; a revision that moved between resolve and read is refused
+   * rather than silently pinned to the newer config.
+   */
+  async #captureSnapshot(
+    scopeRef: ReturnType<typeof scopeOf>,
+    connectionId: Uuid,
+    connectionRevision: string,
+    ctx: ToolContext,
+  ): Promise<VersionRef | undefined> {
+    const snapshots = this.#snapshots
+    if (snapshots === undefined) return undefined
+    const connections = this.#connections
+    if (connections === undefined) {
+      throw new ToolConnectionError('TOOL_NOT_CONFIGURED', 'a snapshot store requires the connection catalogue to capture the pinned revision')
+    }
+    const connection = await connections.getConnection(scopeRef, connectionId, ctx)
+    if (connection === undefined) {
+      throw new ToolConnectionError('TOOL_NOT_CONFIGURED', 'the resolved connection is no longer visible in this scope')
+    }
+    if (connection.revision !== connectionRevision) {
+      throw new ToolConnectionError('VERSION_CONFLICT', 'the connection moved while the binding was being fixed; re-resolve')
+    }
+    const stored = await snapshots.putToolSnapshot(scopeRef, toolExecutionSnapshotOf(connection), ctx)
+    return {
+      id: `tool-connection-snapshot:${connection.connectionId}`,
+      version: `${connection.revision}.0.0`,
+      digest: sha256DigestOf(canonicalJson(stored)),
+    }
   }
 
   /**

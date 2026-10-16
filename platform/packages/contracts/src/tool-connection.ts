@@ -6,10 +6,12 @@ import type {
   ToolId,
   Uuid,
   VersionRef,
+  WebContentForm,
 } from './generated/contracts'
 import type { SecretValue } from './source-bindings'
 import type { ToolContext } from './trusted'
 import { isRecord, isRevisionString, isUuid, isVersionRef } from './asset-workspace'
+import { WEB_CONTENT_FORMS } from './web-search'
 
 /**
  * AI settings: the tool-connection catalogue, per-tool assignment and per-execution binding
@@ -192,6 +194,44 @@ export interface EffectiveToolSelection {
   readonly resolvedAt: Rfc3339UtcTimestamp
 }
 
+/** The fixed native/compat search strategy a pinned tool connection was captured with (design §9). */
+export interface ToolSearchStrategy {
+  readonly searchDepth?: 'basic' | 'advanced'
+  readonly topic?: 'general' | 'news'
+  /** The compat gateway's search path; defaults to `/v1/search`. */
+  readonly compatEndpointPath?: string
+  /** Upper bound for one search call, fixed at bind time. */
+  readonly maxTimeoutMs?: number
+}
+
+/** The archive bounds a pinned tool connection was captured with; never a credential. */
+export interface ToolArchiveLimits {
+  readonly maxBytes?: number
+  readonly maxTimeoutMs?: number
+  readonly acceptedContentForms?: readonly WebContentForm[]
+}
+
+/**
+ * The immutable, non-secret execution-config snapshot of one tool connection revision (design §9,
+ * S02). It is written once at bind time and the binding references it, so changing today's catalogue
+ * row (endpoint, adapter, strategy) can never retarget an in-flight execution: the run keeps the
+ * config it was pinned with. The current catalogue is consulted only for the revoke/disable/permission
+ * fence. A snapshot carries no credential — the key continues to resolve through custody, so rotation
+ * takes effect while a cleared/revoked credential blocks through the fence.
+ */
+export interface ToolExecutionConnectionSnapshot {
+  readonly schemaVersion: 'tool-execution-connection-snapshot@1'
+  readonly connectionId: Uuid
+  readonly connectionRevision: RevisionString
+  readonly name: string
+  readonly adapterType: ToolAdapterType
+  readonly capabilities: readonly ToolConnectionCapability[]
+  readonly enabled: boolean
+  readonly endpoint?: string
+  readonly searchStrategy?: ToolSearchStrategy
+  readonly archiveLimits?: ToolArchiveLimits
+}
+
 /** One execution's immutable tool binding. A retry/resume reuses it unchanged (design §9). */
 export interface ExecutionToolBinding {
   readonly schemaVersion: 'execution-tool-binding@1'
@@ -200,6 +240,12 @@ export interface ExecutionToolBinding {
   readonly connectionId?: Uuid
   readonly connectionRevision?: RevisionString
   readonly connectionRef: VersionRef
+  /**
+   * The immutable, non-secret snapshot this binding pins (S02). When present the runtime builds the
+   * tool from the snapshot rather than today's catalogue row. A binding created before snapshots
+   * existed carries none and must be blocked rather than run on the current descriptor.
+   */
+  readonly snapshotRef?: VersionRef
   readonly assignmentRevision: RevisionString
   readonly resolvedFrom: ToolSelectionSource
   readonly boundAt: Rfc3339UtcTimestamp
@@ -212,6 +258,7 @@ export type ToolConnectionErrorCode =
   | 'CREDENTIAL_MISSING'
   | 'TOOL_IN_USE'
   | 'TOOL_BINDING_REVOKED'
+  | 'TOOL_BINDING_INCOMPLETE'
   | 'NOT_FOUND'
   | 'VERSION_CONFLICT'
   | 'SCOPE_MISMATCH'
@@ -226,6 +273,7 @@ const TOOL_CONNECTION_HTTP_STATUS: Readonly<Record<ToolConnectionErrorCode, numb
   CREDENTIAL_MISSING: 409,
   TOOL_IN_USE: 409,
   TOOL_BINDING_REVOKED: 409,
+  TOOL_BINDING_INCOMPLETE: 409,
   NOT_FOUND: 404,
   VERSION_CONFLICT: 409,
   SCOPE_MISMATCH: 403,
@@ -324,6 +372,25 @@ export interface ExecutionToolBindingStore {
 }
 
 /**
+ * Persist and read back an immutable, non-secret tool execution-config snapshot, keyed by the exact
+ * connection revision (S02). `putToolSnapshot` is idempotent per revision: a revision already stored
+ * is returned unchanged, so the snapshot for a given revision can never be rewritten in place.
+ */
+export interface ToolExecutionSnapshotStore {
+  putToolSnapshot(
+    scopeRef: ScopeRef,
+    snapshot: ToolExecutionConnectionSnapshot,
+    ctx: ToolContext,
+  ): Promise<ToolExecutionConnectionSnapshot>
+  getToolSnapshot(
+    scopeRef: ScopeRef,
+    connectionId: Uuid,
+    revision: RevisionString,
+    ctx: ToolContext,
+  ): Promise<ToolExecutionConnectionSnapshot | undefined>
+}
+
+/**
  * Host credential custody for tool connections. It is the same custody boundary the model
  * connections use: the plaintext is written once and never read back into a domain entity.
  */
@@ -362,6 +429,8 @@ const SELECTION_SOURCES: readonly ToolSelectionSource[] = [
 const TOOL_CAPABILITIES: readonly ToolConnectionCapability[] = [
   'ontology_lookup', 'data_query', 'document_search', 'web_search',
 ]
+const SEARCH_DEPTHS: readonly string[] = ['basic', 'advanced']
+const SEARCH_TOPICS: readonly string[] = ['general', 'news']
 
 function isNonEmptyString(value: unknown): value is string {
   return typeof value === 'string' && value.length > 0
@@ -489,12 +558,55 @@ export function assertEffectiveToolSelectionShape(value: unknown): asserts value
   }
 }
 
+function assertToolSearchStrategyShape(value: unknown): void {
+  if (!isRecord(value)
+    || (value['searchDepth'] !== undefined && !SEARCH_DEPTHS.includes(value['searchDepth'] as string))
+    || (value['topic'] !== undefined && !SEARCH_TOPICS.includes(value['topic'] as string))
+    || (value['compatEndpointPath'] !== undefined && !isNonEmptyString(value['compatEndpointPath']))
+    || (value['maxTimeoutMs'] !== undefined && (!Number.isSafeInteger(value['maxTimeoutMs']) || (value['maxTimeoutMs'] as number) < 1))) {
+    throw new ToolConnectionError('INVALID_ARGUMENT', 'invalid tool search strategy snapshot')
+  }
+}
+
+function assertToolArchiveLimitsShape(value: unknown): void {
+  if (!isRecord(value)
+    || (value['maxBytes'] !== undefined && (!Number.isSafeInteger(value['maxBytes']) || (value['maxBytes'] as number) < 1))
+    || (value['maxTimeoutMs'] !== undefined && (!Number.isSafeInteger(value['maxTimeoutMs']) || (value['maxTimeoutMs'] as number) < 1))
+    || (value['acceptedContentForms'] !== undefined
+      && (!Array.isArray(value['acceptedContentForms']) || value['acceptedContentForms'].length === 0
+        || !value['acceptedContentForms'].every((form) => WEB_CONTENT_FORMS.includes(form as WebContentForm))))) {
+    throw new ToolConnectionError('INVALID_ARGUMENT', 'invalid tool archive limits snapshot')
+  }
+}
+
+/**
+ * Runtime validation of an immutable tool execution-config snapshot. It rejects any credential-shaped
+ * field, so a pinned snapshot can never become a second place a key is stored (design §9).
+ */
+export function assertToolExecutionSnapshotShape(value: unknown): asserts value is ToolExecutionConnectionSnapshot {
+  if (!isRecord(value) || value['schemaVersion'] !== 'tool-execution-connection-snapshot@1'
+    || !isUuid(value['connectionId']) || !isRevisionString(value['connectionRevision'])
+    || !isNonEmptyString(value['name'])
+    || !ADAPTER_TYPES.includes(value['adapterType'] as ToolAdapterType)
+    || !isCapabilityArray(value['capabilities'])
+    || typeof value['enabled'] !== 'boolean'
+    || (value['endpoint'] !== undefined && !isNonEmptyString(value['endpoint']))) {
+    throw new ToolConnectionError('INVALID_ARGUMENT', 'invalid tool execution snapshot')
+  }
+  if ('apiKey' in value || 'credential' in value || 'secret' in value || 'credentialRef' in value) {
+    throw new ToolConnectionError('INVALID_ARGUMENT', 'a tool execution snapshot must never carry a credential')
+  }
+  if (value['searchStrategy'] !== undefined) assertToolSearchStrategyShape(value['searchStrategy'])
+  if (value['archiveLimits'] !== undefined) assertToolArchiveLimitsShape(value['archiveLimits'])
+}
+
 export function assertExecutionToolBindingShape(value: unknown): asserts value is ExecutionToolBinding {
   if (!isRecord(value) || value['schemaVersion'] !== 'execution-tool-binding@1' || !isUuid(value['executionId'])
     || !TOOL_CAPABILITIES.includes(value['toolId'] as ToolConnectionCapability)
     || (value['connectionId'] !== undefined && !isUuid(value['connectionId']))
     || (value['connectionRevision'] !== undefined && !isRevisionString(value['connectionRevision']))
     || !isVersionRef(value['connectionRef'])
+    || (value['snapshotRef'] !== undefined && !isVersionRef(value['snapshotRef']))
     || !isRevisionString(value['assignmentRevision'])
     || !SELECTION_SOURCES.includes(value['resolvedFrom'] as ToolSelectionSource)
     || !isNonEmptyString(value['boundAt'])) {

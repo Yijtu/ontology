@@ -87,3 +87,4 @@ export { PostgresExecutionModelBindingStore } from './model-execution-binding-st
 export { PostgresToolConnectionStore } from './tool-connection-store'
 export { PostgresToolAssignmentStore } from './tool-assignment-store'
 export { PostgresExecutionToolBindingStore } from './tool-execution-binding-store'
+export { PostgresExecutionConnectionSnapshotStore } from './execution-connection-snapshot-store'

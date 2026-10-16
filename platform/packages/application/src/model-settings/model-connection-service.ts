@@ -13,6 +13,7 @@ import type {
   ModelConnectionSummary,
   ModelConnectionTestResult,
   ModelCredentialCustodian,
+  ModelExecutionConnectionSnapshot,
   ScopeRef,
   SecretValue,
   ToolContext,
@@ -67,6 +68,29 @@ export function descriptorOf(view: ModelConnectionAdminView): ModelConnectionDes
     protocol: view.protocol,
     capabilities: view.capabilities,
     enabled: view.enabled,
+    platformModelId: view.platformModelId,
+    providerModelName: view.providerModelName,
+    ...(view.baseUrl === undefined ? {} : { baseUrl: view.baseUrl }),
+    ...(view.endpoint === undefined ? {} : { endpoint: view.endpoint }),
+  }
+}
+
+/**
+ * Capture the immutable, non-secret execution-config snapshot of one model connection revision (S02).
+ *
+ * It records exactly what the runtime needs to build the generation/decision adapter, so a later edit
+ * to the catalogue row cannot retarget an in-flight execution. It never carries a credential; a key
+ * stays an opaque custody reference, so rotation takes effect and a cleared/revoked credential blocks
+ * through the binding fence rather than by rewriting a snapshot.
+ */
+export function modelExecutionSnapshotOf(view: ModelConnectionAdminView): ModelExecutionConnectionSnapshot {
+  return {
+    schemaVersion: 'model-execution-connection-snapshot@1',
+    connectionId: view.connectionId,
+    revision: view.revision,
+    adapterType: view.adapterType,
+    protocol: view.protocol,
+    capabilities: [...view.capabilities],
     platformModelId: view.platformModelId,
     providerModelName: view.providerModelName,
     ...(view.baseUrl === undefined ? {} : { baseUrl: view.baseUrl }),

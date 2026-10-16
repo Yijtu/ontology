@@ -4,7 +4,7 @@ import { DATA_DUCKDB_ADAPTER_REF, DuckDbProjectDatasetAdapter } from '@ontology/
 import { DATA_POSTGRES_ADAPTER_REF, PostgresProjectDatasetAdapter } from '@ontology/adapter-data-postgres'
 import { PostgresDocumentParseStore, PostgresStructuredIngestionStore } from '@ontology/adapter-extraction-document'
 import { PostgresKeywordIndexStore } from '@ontology/adapter-search-bm25'
-import { ControlPostgresDatabase, PostgresExecutionModelBindingStore, PostgresExecutionToolBindingStore, PostgresModelAssignmentStore, PostgresModelConnectionStore, PostgresToolAssignmentStore, PostgresToolConnectionStore } from '@ontology/adapter-control-postgres'
+import { ControlPostgresDatabase, PostgresExecutionConnectionSnapshotStore, PostgresExecutionModelBindingStore, PostgresExecutionToolBindingStore, PostgresModelAssignmentStore, PostgresModelConnectionStore, PostgresToolAssignmentStore, PostgresToolConnectionStore } from '@ontology/adapter-control-postgres'
 import { ExecutionModelBindingService, ExecutionToolBindingService, ModelAssignmentService, ModelConnectionService, ModelSelectionService, ProfileResolver, ProjectDataMaterializationService, SourceRegistry, StoreBackedIndustryManifestSource, ToolAssignmentService, ToolConnectionService, ToolSelectionService } from '@ontology/application'
 import { definitionVersionDigest, projectIndustrySchema, PublishedProjectDatasetSource, SemanticDefinitionService } from '@ontology/semantic-engine'
 import { canonicalJson, sha256DigestOf } from '@ontology/core'
@@ -201,6 +201,9 @@ export async function assembleInfrastructure(options: CoreLocalCompositionOption
   const modelConnectionStore = new PostgresModelConnectionStore(database)
   const modelAssignmentStore = new PostgresModelAssignmentStore(database)
   const modelBindingStore = new PostgresExecutionModelBindingStore(database)
+  // The immutable execution-config snapshots a binding pins (S02). One store serves the tool and
+  // model catalogues; a run is built from the pinned snapshot, never from today's catalogue row.
+  const executionSnapshotStore = new PostgresExecutionConnectionSnapshotStore(database)
   const modelCredentialCustodian = new LocalModelCredentialCustodian({ objectDirectory: options.objectDirectory })
   const modelTargetDirectory = createModelTargetDirectory({ workspaces: stores.workspaceStore, projects: stores.projectStore })
   const modelSelectionService = new ModelSelectionService({
@@ -212,6 +215,7 @@ export async function assembleInfrastructure(options: CoreLocalCompositionOption
     bindings: modelBindingStore,
     resolver: modelSelectionService,
     connections: modelConnectionStore,
+    snapshots: executionSnapshotStore,
   })
   const jevFallbackPolicy = jevFallbackPolicyOf(modelEnvironment)
   const modelBindingRuntime = createExecutionModelBindingRuntime({
@@ -219,6 +223,7 @@ export async function assembleInfrastructure(options: CoreLocalCompositionOption
     bindings: modelBindingStore,
     connections: modelConnectionStore,
     credentials: modelCredentialCustodian,
+    snapshots: executionSnapshotStore,
     isUsable: (executionId, capability, ctx) => modelBindingService.isUsable(executionId, capability, ctx),
     capabilityDependencies: {
       budget: stores.budget,
@@ -288,6 +293,7 @@ export async function assembleInfrastructure(options: CoreLocalCompositionOption
     bindings: toolBindingStore,
     resolver: toolSelectionService,
     connections: toolConnectionStore,
+    snapshots: executionSnapshotStore,
   })
   const toolSettings = {
     connections: new ToolConnectionService({
@@ -391,6 +397,7 @@ export async function assembleInfrastructure(options: CoreLocalCompositionOption
     modelSettings, modelSettingsMigration, deploymentModelCapabilities,
     toolConnectionStore, toolAssignmentStore, toolBindingStore, toolCredentialCustodian,
     toolSelectionService, toolBindingService, toolSettings, toolSettingsMigration,
+    executionSnapshotStore,
     schemaSource, semanticDefinitions, projectDatasetAdapter, publishedProjectDatasetSource, projectEvolutionCell, normalApprovedInputs,
     evolutionGuard, projectDatasetService, profileResolver, sources, coreModelRefs, componentRecords, bootstrapProfileSpecsByScenario,
     profileRefsByScenario, profileSpecsByScenario, availableTasksByScenario, terminology, executionPreview,

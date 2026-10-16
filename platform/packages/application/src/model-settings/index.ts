@@ -9,6 +9,7 @@
 export {
   ModelConnectionService,
   descriptorOf,
+  modelExecutionSnapshotOf,
 } from './model-connection-service'
 export type {
   ModelConnectionServiceDependencies,

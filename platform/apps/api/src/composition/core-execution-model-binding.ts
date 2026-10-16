@@ -23,6 +23,8 @@ import type {
   ModelConnectionAdminView,
   ModelConnectionStore,
   ModelCredentialCustodian,
+  ModelExecutionConfig,
+  ModelExecutionSnapshotStore,
   ModelTargetScope,
   ScopeRef,
   SecretResolver,
@@ -130,7 +132,7 @@ export interface ExecutionModelCapabilityContext {
  */
 export function createExecutionModelCapabilities(input: {
   readonly binding: ExecutionModelBinding
-  readonly connection: ModelConnectionAdminView
+  readonly connection: ModelExecutionConfig
   readonly dependencies: ExecutionModelCapabilityDependencies
   /** Resolves the pinned connection's credential through custody; never a value or reference. */
   readonly secrets: SecretResolver
@@ -202,6 +204,12 @@ export function createExecutionModelBindingRuntime(input: {
   readonly bindings: ExecutionModelBindingStore
   readonly connections: ModelConnectionStore
   readonly credentials: ModelCredentialCustodian
+  /**
+   * The immutable execution-config snapshots (S02). When mounted, the port is built from the pinned
+   * snapshot, never from today's catalogue row, and a binding that carries no snapshot fails closed
+   * rather than being run on the current descriptor.
+   */
+  readonly snapshots?: ModelExecutionSnapshotStore
   readonly isUsable: (executionId: Uuid, capability: ModelCapability, ctx: ToolContext) => Promise<boolean>
   readonly capabilityDependencies: ExecutionModelCapabilityDependencies
 }) {
@@ -220,10 +228,10 @@ export function createExecutionModelBindingRuntime(input: {
     if (binding === undefined) return { kind: 'absent' }
     if (!(await input.isUsable(executionId, capability, ctx))) return { kind: 'blocked' }
     if (binding.connectionId === undefined) return { kind: 'blocked' }
-    const connection = await input.connections.getConnection(input.scopeRef, binding.connectionId, ctx)
-    if (connection === undefined) return { kind: 'blocked' }
+    const config = await resolveExecutionModelConfig(input, binding, ctx)
+    if (config === undefined) return { kind: 'blocked' }
     const secrets = createCatalogueModelSecretResolver({ connections: input.connections, credentials: input.credentials, scopeRef: input.scopeRef })
-    const built = createExecutionModelCapabilities({ binding, connection, dependencies: input.capabilityDependencies, secrets, context })
+    const built = createExecutionModelCapabilities({ binding, connection: config, dependencies: input.capabilityDependencies, secrets, context })
     const port = capability === 'decision_jev' ? built.decision : built.generation
     return port === undefined ? { kind: 'blocked' } : { kind: 'ready', port: port as T }
   }
@@ -248,11 +256,39 @@ export function createExecutionModelBindingRuntime(input: {
   }
 }
 
-function requiredBaseUrl(connection: ModelConnectionAdminView): string {
+function requiredBaseUrl(connection: ModelExecutionConfig): string {
   if (connection.baseUrl === undefined || connection.baseUrl.length === 0) {
     throw new ModelSelectionError('MODEL_NOT_CONFIGURED', 'the pinned model connection has no base URL')
   }
   return connection.baseUrl
+}
+
+/**
+ * Resolve the non-secret config a pinned model binding must be built from (S02). With snapshots
+ * mounted the snapshot is authoritative and a missing/digest-mismatched snapshot blocks (returns
+ * `undefined`, so the port fails closed). Without snapshots the current catalogue row is used, which
+ * is the pre-S02 behaviour a host that does not mount snapshots keeps.
+ */
+async function resolveExecutionModelConfig(
+  input: {
+    readonly scopeRef: ScopeRef
+    readonly connections: ModelConnectionStore
+    readonly snapshots?: ModelExecutionSnapshotStore
+  },
+  binding: ExecutionModelBinding,
+  ctx: ToolContext,
+): Promise<ModelExecutionConfig | undefined> {
+  const connectionId = binding.connectionId
+  if (connectionId === undefined) return undefined
+  const snapshots = input.snapshots
+  if (snapshots !== undefined) {
+    const revision = binding.connectionRevision
+    if (binding.snapshotRef === undefined || revision === undefined) return undefined
+    const snapshot = await snapshots.getModelSnapshot(input.scopeRef, connectionId, revision, ctx)
+    if (snapshot === undefined || sha256DigestOf(canonicalJson(snapshot)) !== binding.snapshotRef.digest) return undefined
+    return snapshot
+  }
+  return input.connections.getConnection(input.scopeRef, connectionId, ctx)
 }
 
 function missingGenerationEvidence(): ModelCallEvidenceRecorder {
