@@ -80,6 +80,11 @@ export type WorkflowDispatchErrorCode =
   | 'LEASE_LOST'
   | 'INVALID_ARGUMENT'
   | 'CORRUPT_RECORD'
+  /**
+   * A research run whose acceptance has not reached the dispatch-ready barrier. A run in this state
+   * is never dispatched or reconciled; the caller must retry the admission, not the dispatch.
+   */
+  | 'RUN_NOT_READY'
 
 export class WorkflowDispatchError extends Error {
   readonly code: WorkflowDispatchErrorCode

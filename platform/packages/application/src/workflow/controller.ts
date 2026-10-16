@@ -24,7 +24,7 @@ import type {
   WorkflowInputManifest,
   WorkflowRunState,
 } from '@ontology/contracts'
-import { createToolContext, DEFAULT_WORKFLOW_LIMITS, DRAFT_WRITER_REQUEST_VERSION, isToolContext } from '@ontology/contracts'
+import { createToolContext, DEFAULT_WORKFLOW_LIMITS, DRAFT_WRITER_REQUEST_VERSION, isToolContext, isWorkspaceResearchProfileRef } from '@ontology/contracts'
 import { inputManifestDigest, scenarioManifestHash } from './canonical'
 import { sha256DigestOf } from '../profiles/canonical'
 import { PublicationRejectedError, WorkflowControllerError } from './errors'
@@ -997,6 +997,17 @@ export class WorkflowController {
   ): Promise<RunManifest> {
     const existing = await this.#deps.manifests.getRunManifest(run.runId, ctx)
     if (existing !== undefined) return existing
+
+    // A workspace-research run may only run on the complete research manifest its admission
+    // committed (design §8, S05). It must never fall back to a default, goal-less manifest here: an
+    // absent manifest means the acceptance did not commit, so the run is refused (retryable via a
+    // new admission) rather than executed half-prepared.
+    if (isWorkspaceResearchProfileRef(run.profileRef)) {
+      throw new WorkflowControllerError(
+        'MANIFEST_NOT_FOUND',
+        `research run ${run.runId} has no complete research manifest; the run admission did not commit`,
+      )
+    }
 
     const inputManifest = await this.#createInputManifest(run, ctx)
     const ledger = await this.#deps.budget.openLedger(

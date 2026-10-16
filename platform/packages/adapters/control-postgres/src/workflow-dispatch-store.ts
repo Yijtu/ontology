@@ -255,13 +255,35 @@ export class PostgresWorkflowDispatchStore implements WorkflowDispatchPort {
     const payload: WorkflowDispatchPayload = { runId }
     const payloadDigest = workflowDispatchPayloadDigest(runId)
     return this.#db.withIdentityScope(trusted, async (client) => {
-      const run = await client.query<{ run_id: string } & QueryResultRow>(
-        `SELECT run_id FROM agent_platform.runs
-         WHERE tenant_id = $1::uuid AND space_id = $2::uuid AND run_id = $3::uuid`,
+      const run = await client.query<{ run_id: string; profile_id: string; admission_pending: boolean; admission_ready: boolean } & QueryResultRow>(
+        `SELECT run.run_id, run.profile_id,
+                EXISTS (
+                  SELECT 1 FROM agent_platform.research_run_admission AS admission
+                   WHERE admission.tenant_id = run.tenant_id AND admission.space_id = run.space_id
+                     AND admission.run_id = run.run_id AND admission.state <> 'ready'
+                ) AS admission_pending,
+                EXISTS (
+                  SELECT 1 FROM agent_platform.research_run_admission AS admission
+                   WHERE admission.tenant_id = run.tenant_id AND admission.space_id = run.space_id
+                     AND admission.run_id = run.run_id AND admission.state = 'ready'
+                ) AS admission_ready
+           FROM agent_platform.runs AS run
+          WHERE run.tenant_id = $1::uuid AND run.space_id = $2::uuid AND run.run_id = $3::uuid`,
         [trusted.tenantId, trusted.spaceId, runId],
       )
-      if (run.rows[0] === undefined) {
+      const row = run.rows[0]
+      if (row === undefined) {
         throw new WorkflowDispatchError('RUN_NOT_FOUND', 'the run is not visible in this tenant/space')
+      }
+      // The dispatch-ready barrier (design §4/§8, S05): a research run may only be dispatched once
+      // its acceptance is complete. A run with a still-preparing admission, or a research-profile
+      // run with no ready admission at all, is refused with a stable `RUN_NOT_READY` instead of
+      // being scheduled half-prepared.
+      if (row.admission_pending || (row.profile_id.startsWith('workspace-research:') && !row.admission_ready)) {
+        throw new WorkflowDispatchError(
+          'RUN_NOT_READY',
+          'the research run acceptance has not reached the dispatch-ready barrier',
+        )
       }
       const inserted = await client.query<DispatchRow>(
         `INSERT INTO agent_platform.workflow_dispatches
@@ -329,6 +351,22 @@ export class PostgresWorkflowDispatchStore implements WorkflowDispatchPort {
                WHERE active.tenant_id = run.tenant_id AND active.space_id = run.space_id
                  AND active.run_id = run.run_id AND active.state IN ('pending', 'leased')
             )
+            -- The dispatch-ready barrier (design §4/§8, S05): a research run whose acceptance is
+            -- still preparing, or a research-profile run that has no ready admission at all, is
+            -- never taken over here, so reconciliation can never dispatch a half-prepared run.
+            AND NOT EXISTS (
+              SELECT 1 FROM agent_platform.research_run_admission AS pending
+               WHERE pending.tenant_id = run.tenant_id AND pending.space_id = run.space_id
+                 AND pending.run_id = run.run_id AND pending.state <> 'ready'
+            )
+            AND (
+              run.profile_id NOT LIKE 'workspace-research:%'
+              OR EXISTS (
+                SELECT 1 FROM agent_platform.research_run_admission AS ready
+                 WHERE ready.tenant_id = run.tenant_id AND ready.space_id = run.space_id
+                   AND ready.run_id = run.run_id AND ready.state = 'ready'
+              )
+            )
           ORDER BY run.updated_at, run.run_id
           FOR UPDATE OF run SKIP LOCKED
           LIMIT 100`,
@@ -388,6 +426,23 @@ export class PostgresWorkflowDispatchStore implements WorkflowDispatchPort {
            WHERE tenant_id = $1::uuid AND space_id = $2::uuid
              AND ((state = 'pending' AND available_at <= clock_timestamp())
                OR (state = 'leased' AND lease_expires_at <= clock_timestamp()))
+             -- The dispatch-ready barrier (design §4/§8, S05): a research-profile run is claimable
+             -- only once its admission reached the ready state, so a dirty dispatch row can never
+             -- execute a half-prepared research run.
+             AND EXISTS (
+               SELECT 1 FROM agent_platform.runs AS run
+                WHERE run.tenant_id = agent_platform.workflow_dispatches.tenant_id
+                  AND run.space_id = agent_platform.workflow_dispatches.space_id
+                  AND run.run_id = agent_platform.workflow_dispatches.run_id
+                  AND (
+                    run.profile_id NOT LIKE 'workspace-research:%'
+                    OR EXISTS (
+                      SELECT 1 FROM agent_platform.research_run_admission AS ready
+                       WHERE ready.tenant_id = run.tenant_id AND ready.space_id = run.space_id
+                         AND ready.run_id = run.run_id AND ready.state = 'ready'
+                    )
+                  )
+             )
            ORDER BY COALESCE(lease_expires_at, available_at), created_at, dispatch_id
            FOR UPDATE SKIP LOCKED
            LIMIT 1

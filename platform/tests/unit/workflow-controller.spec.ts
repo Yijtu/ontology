@@ -14,8 +14,10 @@ import type {
   RuntimeEvent,
   VerificationResult,
 } from '@ontology/contracts'
+import { workspaceResearchProfileRef } from '@ontology/contracts'
 import {
   DIGEST,
+  NOW,
   RUN_A,
   ScriptedRuntime,
   buildWorkflowHarness,
@@ -580,5 +582,37 @@ describe('research completion branch (design §4/§8)', () => {
 
     runtime.release()
     await pending
+  })
+})
+
+describe('research run admission barrier (S05)', () => {
+  it('refuses to synthesize a goal-less default manifest for a research run', async () => {
+    const harness = buildWorkflowHarness({ runtime: new ScriptedRuntime({ scripts: [] }) })
+    const runId = 'aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa'
+    const workspaceId = randomUUID()
+    await harness.store.insertRun(
+      SCOPE_A,
+      {
+        runId,
+        ownerSubjectId: 'owner-a',
+        profileRef: workspaceResearchProfileRef(workspaceId, '1'),
+        resolvedProfileHash: DIGEST,
+        runtimeRef: { id: 'runtime-template', version: '1.0.0', digest: DIGEST },
+        question: 'research goal',
+        context: { timeZone: 'UTC' },
+        preferences: { route: 'pi', allowWeb: true },
+        idempotencyKey: 'research-run-admission-0001',
+        requestDigest: DIGEST,
+        createdAt: NOW,
+      },
+      ownerContext(runId),
+    )
+
+    await expect(harness.controller.drivePersistedRun(runId, ownerContext(runId)))
+      .rejects.toMatchObject({ code: 'MANIFEST_NOT_FOUND' })
+    // No default manifest was written and the runtime never started: the half-prepared run is not executed.
+    await expect(harness.workflowStore.getRunManifest(runId, ownerContext(runId))).resolves.toBeUndefined()
+    expect(harness.runtime.startCalls).toHaveLength(0)
+    expect(harness.budget.openLedgerCalls).toHaveLength(0)
   })
 })
