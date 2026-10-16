@@ -1295,8 +1295,11 @@ dd { overflow-wrap: anywhere; } details > summary { cursor: pointer; padding: 8p
 .model-settings__status p { flex-basis: 100%; margin: 0; }
 .model-settings__actions { display: flex; gap: 12px; align-items: center; flex-wrap: wrap; }
 @media (max-width: 767px) { .model-settings__fields { grid-template-columns: minmax(0, 1fr); } }
-.app__context { max-width: none; margin: 0; padding: 20px 32px; background: var(--surface); display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)) minmax(120px, .7fr); align-items: start; gap: 16px; border-bottom: 1px solid var(--line); }
-.app__version { border-left: 1px solid var(--line); padding-left: 20px; display: flex; flex-direction: column; gap: 4px; font-size: 13px; color: var(--ink); }.app__version > span, .app__version small { color: var(--muted); font-size: 12px; }.app__version strong { font-weight: 600; }
+.app__context { max-width: none; margin: 0; padding: 8px 32px; background: var(--surface); display: flex; flex-wrap: wrap; align-items: center; gap: 8px 18px; font-size: 12px; border-bottom: 1px solid var(--line); }
+.app__context .ui-field { display: flex; align-items: center; gap: 6px; }
+.app__context .ui-field > label { font-size: 12px; font-weight: 500; white-space: nowrap; }
+.app__context :is(select) { width: auto; }
+.app__version { border-left: 1px solid var(--line); padding-left: 14px; display: flex; flex-wrap: wrap; align-items: baseline; gap: 2px 10px; font-size: 12px; color: var(--ink); }.app__version > span, .app__version small { color: var(--muted); font-size: 12px; }.app__version strong { font-weight: 600; }
 .app__context-status { padding: 0 32px; color: var(--muted); font-size: 12px; display: flex; flex-wrap: wrap; gap: 8px; align-items: center; background: white; }.app__context-status:empty { display: none; }
 .app__context-status :is([data-testid="context-workspace-failure"], [data-testid="context-project-failure"]) { color: var(--danger); }
 .app__content { min-width: 0; padding: 32px; max-width: 1600px; margin: 0 auto; }.app__content > div, .app__content section { min-width: 0; }
@@ -1339,10 +1342,10 @@ dd { overflow-wrap: anywhere; } details > summary { cursor: pointer; padding: 8p
 @media (max-width: 1199px) { .guide-source-grid { grid-template-columns: repeat(2, minmax(0, 1fr)); } }
 @media (max-width: 719px) { .guide-source-grid { grid-template-columns: minmax(0, 1fr); } .app__guide-current { flex-direction: column; align-items: flex-start; } }
 .app--startup { display: block; min-height: 100vh; padding: 10vh 24px; }.app--startup > .ui-panel { max-width: 620px; margin: auto; }.app--startup .ui-feedback { min-height: 0; }.app--startup details { color: var(--muted); font-size: 12px; }
-@media (max-width: 1199px) { .app { grid-template-columns: 192px minmax(0, 1fr); }.app__content { padding: 24px; }.app__topbar, .app__context { padding-left: 24px; padding-right: 24px; }.app__context { grid-template-columns: repeat(2, minmax(0, 1fr)); }.app__guide-grid { grid-template-columns: minmax(0, 1fr); }.app__guide-path ol { grid-template-columns: repeat(2, minmax(0, 1fr)); }.app__guide-header { flex-wrap: wrap; } }
+@media (max-width: 1199px) { .app { grid-template-columns: 192px minmax(0, 1fr); }.app__content { padding: 24px; }.app__topbar, .app__context { padding-left: 24px; padding-right: 24px; }.app__guide-grid { grid-template-columns: minmax(0, 1fr); }.app__guide-path ol { grid-template-columns: repeat(2, minmax(0, 1fr)); }.app__guide-header { flex-wrap: wrap; } }
 @media (max-width: 719px) {
   .app { display: block; }.app__sidebar { display: none; }.app__menu-button { display: inline-flex; }.app__breadcrumb { display: none; }.app__topbar { padding: 12px 16px; gap: 8px; }.app__topbar-actions { gap: 4px; }.app__topbar-actions .ui-status { font-size: 12px; }
-  .app__context { padding: 16px; gap: 12px; }.app__version { padding-left: 0; border: 0; }.app__context-status { padding: 0 16px; }.app__content { padding: 24px 16px; }
+  .app__context { padding: 8px 16px; gap: 6px 12px; }.app__version { padding-left: 0; border: 0; }.app__context-status { padding: 0 16px; }.app__content { padding: 24px 16px; }
   .app__guide-header h1 { font-size: 24px; }.app__guide-context { gap: 16px; }.app__guide-grid { gap: 16px; }.ui-panel__head { padding: 16px; flex-wrap: wrap; gap: 8px; }.ui-panel__body { padding: 16px; }.app__guide-grid .ui-panel__head, .app__guide-grid .ui-panel__body { padding: 16px; }
   .app__guide-path ol { grid-template-columns: minmax(0, 1fr); gap: 12px; }.app__guide-footer { flex-wrap: wrap; }
   .ui-drawer__head, .ui-drawer__body { padding: 16px; }.ui-feedback { padding: 16px 0; gap: 12px; }
