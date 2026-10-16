@@ -1,30 +1,59 @@
 .function-guide {
-  display: grid;
-  gap: 8px;
   margin: 0 0 16px;
-  padding: 12px 14px;
-  border: 1px solid var(--line, #d9e0e3);
-  border-inline-start: 3px solid var(--accent, #277c77);
-  border-radius: 8px;
-  background: var(--surface, #fff);
   color: var(--text, #172126);
   font-size: 13px;
   line-height: 1.55;
 }
 
-.function-guide h3,
 .function-guide p {
   margin: 0;
+}
+
+.function-guide__summary {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: baseline;
+  gap: 4px 8px;
+  width: fit-content;
+  padding: 2px 0;
+  color: var(--muted, #526168);
+  font-size: 12px;
+  cursor: pointer;
+}
+
+.function-guide__summary-title {
+  font-weight: 600;
+  color: var(--accent, #277c77);
+}
+
+.function-guide__summary-title::before {
+  content: '▸';
+  margin-inline-end: 6px;
+  font-size: 10px;
+}
+
+.function-guide__disclosure[open] > .function-guide__summary .function-guide__summary-title::before {
+  content: '▾';
+}
+
+.function-guide__summary-hint {
+  color: var(--muted, #526168);
+}
+
+.function-guide__details {
+  display: grid;
+  gap: 8px;
+  margin: 6px 0 0;
+  padding: 10px 12px;
+  border: 1px solid var(--line, #d9e0e3);
+  border-radius: 8px;
+  background: var(--surface, #fff);
 }
 
 .function-guide__intro,
 .function-guide__facts {
   display: grid;
   gap: 6px;
-}
-
-.function-guide__intro h3 {
-  font-size: 14px;
 }
 
 .function-guide__facts {

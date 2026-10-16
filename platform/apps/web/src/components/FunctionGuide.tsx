@@ -122,28 +122,35 @@ export function FunctionGuide({ view, onNavigate, onConfigureModel }: FunctionGu
 
   return (
     <section className="function-guide" data-testid="function-guide" data-view={view} aria-labelledby="function-guide-title">
-      <div className="function-guide__intro">
-        <h3 id="function-guide-title">本页说明</h3>
-        <p><strong>用途</strong> {guide.purpose}</p>
-      </div>
-      <div className="function-guide__facts">
-        <p><strong>开始前</strong> {guide.before}</p>
-        <p><strong>完成后</strong> {guide.outcome}</p>
-      </div>
-      <details className="function-guide__steps">
-        <summary>查看操作步骤</summary>
-        <ol>{guide.steps.map((step, index) => <li key={`${view}-${index}`}>{step}</li>)}</ol>
-      </details>
-      {!canNavigate && !canConfigureModel ? null : (
-        <div className="function-guide__actions">
-          {!canNavigate || next === undefined || onNavigate === undefined ? null : (
-            <Button variant="quiet" onClick={() => onNavigate(next.view)}>{next.label}</Button>
-          )}
-          {!canConfigureModel || onConfigureModel === undefined ? null : (
-            <Button variant="quiet" data-testid="function-guide-configure-model" onClick={onConfigureModel}>生成模型设置</Button>
+      <details className="function-guide__disclosure">
+        <summary className="function-guide__summary">
+          <span className="function-guide__summary-title" id="function-guide-title">本页说明</span>
+          <span className="function-guide__summary-hint" aria-hidden="true">点开查看</span>
+        </summary>
+        <div className="function-guide__details">
+          <div className="function-guide__intro">
+            <p><strong>用途</strong> {guide.purpose}</p>
+          </div>
+          <div className="function-guide__facts">
+            <p><strong>开始前</strong> {guide.before}</p>
+            <p><strong>完成后</strong> {guide.outcome}</p>
+          </div>
+          <details className="function-guide__steps">
+            <summary>查看操作步骤</summary>
+            <ol>{guide.steps.map((step, index) => <li key={`${view}-${index}`}>{step}</li>)}</ol>
+          </details>
+          {!canNavigate && !canConfigureModel ? null : (
+            <div className="function-guide__actions">
+              {!canNavigate || next === undefined || onNavigate === undefined ? null : (
+                <Button variant="quiet" onClick={() => onNavigate(next.view)}>{next.label}</Button>
+              )}
+              {!canConfigureModel || onConfigureModel === undefined ? null : (
+                <Button variant="quiet" data-testid="function-guide-configure-model" onClick={onConfigureModel}>生成模型设置</Button>
+              )}
+            </div>
           )}
         </div>
-      )}
+      </details>
     </section>
   )
 }

@@ -29,17 +29,23 @@ describe('plain-language core feature guides', () => {
     return container
   }
 
-  it('explains all core views without repeating their page headings', async () => {
+  it('keeps the per-page note collapsed by default and reveals its content on demand', async () => {
     const views = ['start', 'ontology', 'projects', 'definitions', 'instances', 'packages', 'business', 'workbench', 'query', 'jobs', 'review', 'evidence', 'models']
     for (const view of views) {
       const page = await render(createElement(FunctionGuide, { view }))
       const guide = page.querySelector<HTMLElement>('[data-testid="function-guide"]')
       expect(guide?.getAttribute('data-view')).toBe(view)
-      expect(guide?.querySelector('h3')?.textContent).toBe('本页说明')
-      expect(guide?.textContent).toContain('用途')
-      expect(guide?.textContent).toContain('开始前')
-      expect(guide?.textContent).toContain('完成后')
-      expect(guide?.querySelector('details ol li')).not.toBeNull()
+      expect(guide?.querySelector('.function-guide__summary-title')?.textContent).toBe('本页说明')
+      const disclosure = guide?.querySelector<HTMLDetailsElement>('.function-guide__disclosure')
+      if (disclosure === undefined || disclosure === null) throw new Error('function guide disclosure is missing')
+      expect(disclosure.open).toBe(false)
+      await act(async () => { disclosure.open = true })
+      expect(disclosure.open).toBe(true)
+      const revealed = disclosure.querySelector('.function-guide__details')
+      expect(revealed?.textContent).toContain('用途')
+      expect(revealed?.textContent).toContain('开始前')
+      expect(revealed?.textContent).toContain('完成后')
+      expect(revealed?.querySelector('details ol li')).not.toBeNull()
       await act(async () => root?.unmount())
       root = undefined
       page.remove()
@@ -51,6 +57,9 @@ describe('plain-language core feature guides', () => {
     const onNavigate = vi.fn()
     const onConfigureModel = vi.fn()
     const page = await render(createElement(FunctionGuide, { view: 'business', onNavigate, onConfigureModel }))
+    const disclosure = page.querySelector<HTMLDetailsElement>('.function-guide__disclosure')
+    if (disclosure === null) throw new Error('function guide disclosure is missing')
+    await act(async () => { disclosure.open = true })
     const navigation = page.querySelector<HTMLButtonElement>('.function-guide__actions button')
     const configure = page.querySelector<HTMLButtonElement>('[data-testid="function-guide-configure-model"]')
     if (navigation === null || configure === null) throw new Error('query guide actions are missing')
