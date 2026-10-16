@@ -205,6 +205,26 @@ export class PostgresCandidateSubmissionStore implements CandidateSubmissionStor
     })
   }
 
+  async listByRun(
+    scopeRef: ScopeRef,
+    runId: Uuid,
+    ctx: ToolContext,
+  ): Promise<readonly CandidateSubmissionRecord[]> {
+    return this.#withScope(scopeRef, ctx, async (query) => {
+      const result = await query.query<ReceiptRow>(
+        `SELECT ${RECEIPT_COLUMNS} FROM agent_platform.candidate_submission_receipts
+          WHERE tenant_id = current_setting('app.tenant_id')::uuid
+            AND space_id = current_setting('app.space_id')::uuid
+            AND run_id = $1::uuid
+          ORDER BY recorded_at ASC, idempotency_key ASC`,
+        [runId],
+      )
+      const out: CandidateSubmissionRecord[] = []
+      for (const row of result.rows) out.push(toRecord(row, await this.#linksForRecord(query, row)))
+      return out
+    })
+  }
+
   async #receiptByKey(query: ScopedQuery, runId: Uuid, idempotencyKey: string): Promise<ReceiptRow | undefined> {
     const result = await query.query<ReceiptRow>(
       `SELECT ${RECEIPT_COLUMNS} FROM agent_platform.candidate_submission_receipts

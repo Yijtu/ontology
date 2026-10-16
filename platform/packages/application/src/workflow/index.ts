@@ -50,6 +50,7 @@ export { repairFeedbackOf } from './repair-feedback'
 export type {
   CancelWorkflowInput,
   RespondWorkflowInput,
+  ResearchCandidateReceiptReader,
   ResearchDelivery,
   ResearchDeliveryCandidateReceipt,
   StartWorkflowInput,

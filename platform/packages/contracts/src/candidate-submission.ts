@@ -138,6 +138,16 @@ export interface CandidateSubmissionStore {
     workspaceId: Uuid,
     ctx: ToolContext,
   ): Promise<readonly CandidateSubmissionRecord[]>
+  /**
+   * Every candidate-submission receipt a run produced, in recorded order (design §8: 持久候选回执).
+   * The run-completion projection reads this instead of an in-memory list, so a resumed or
+   * restarted run still reports the candidates it actually wrote.
+   */
+  listByRun?(
+    scopeRef: ScopeRef,
+    runId: Uuid,
+    ctx: ToolContext,
+  ): Promise<readonly CandidateSubmissionRecord[]>
 }
 
 export type CandidateSubmissionStoreErrorCode =

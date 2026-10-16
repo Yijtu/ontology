@@ -13,7 +13,8 @@ import { FiniteGrammarRuleSupportValidator, IncrementalMaterializer } from '@ont
 import { JobWorkerLoop, MaterializationOutboxConsumer, ProjectEvolutionOutboxConsumer, ResearchStageHandler, TopicOutboxConsumerRouter, WorkflowDispatchWorker, controlRecordSequence, createIngestionHandlerRegistry, createWorkerStageRegistry } from '@ontology/app-worker'
 import { DEFAULT_VERIFICATION_POLICY, SCHEMA_DOCUMENTS, TOOL_CATALOGUE, projectCollectionRef } from '@ontology/contracts'
 import type { DocumentParserPort, ProjectRevision, RuntimeAdapter, RuntimeCapabilityContext, RuntimeCapabilityFactoryPort, RuntimeCapabilitySet, RuntimeSelectorPort, ScopeRef, ToolContext, Uuid, VersionRef, WorkflowDispatchFence } from '@ontology/contracts'
-import type { RunProfileBinder } from '@ontology/application'
+import type { CandidateSubmissionRecord } from '@ontology/contracts'
+import type { ResearchDeliveryCandidateReceipt, RunProfileBinder } from '@ontology/application'
 import { canonicalJson } from '@ontology/tool-services'
 import { WebSearchHandler } from '@ontology/tool-services'
 import type { ToolHandler } from '@ontology/tool-services'
@@ -296,6 +297,16 @@ export async function assembleRuntimePipeline(
       }),
     }),
     validity: new CoreInputValidity(evidenceStore, scopeRef),
+    // The research delivery reads the candidate write receipts from the same durable store the
+    // controlled submission path wrote (design §8: 持久候选回执), so a completed research run reports
+    // the candidates it actually wrote even across a resume/restart — never an in-memory list.
+    researchReceipts: {
+      listForRun: async (runId: Uuid, ctx: ToolContext) => {
+        const scopeFor = { tenantId: ctx.principal.tenantId, spaceId: ctx.allowedResources.spaceId }
+        const records = await candidateSubmissionStore.listByRun?.(scopeFor, runId, ctx)
+        return (records ?? []).map(deliveryReceiptOf)
+      },
+    },
     publicationFence: async (runId: Uuid) => dispatchFences.get(runId),
   }
   host.controller = new WorkflowController(controllerDependencies)
@@ -434,4 +445,37 @@ export async function assembleRuntimePipeline(
     researchWorkflow, webSearch, searchBinding,
     candidateSubmissionStore, candidateSubmissionService,
   }
+}
+
+/**
+ * Project one durable candidate-submission record onto the research delivery list (design §8). The
+ * recorded receipt already carries the server-assigned state/issue codes, so this only reshapes it —
+ * it never re-derives a trusted field from the model. `callId` is derived deterministically from the
+ * host idempotency key, so the same submission yields the same delivery entry across a restart.
+ */
+function deliveryReceiptOf(record: CandidateSubmissionRecord): ResearchDeliveryCandidateReceipt {
+  const accepted = record.receipt.accepted
+  const rejected = record.receipt.rejected
+  const pending = accepted.some((entry) => entry.pendingConfirmation)
+  const status: ResearchDeliveryCandidateReceipt['status'] =
+    accepted.length === 0 && rejected.length > 0
+      ? 'rejected'
+      : pending ? 'pending_confirmation' : 'accepted'
+  const issueCodes = [
+    ...accepted.flatMap((entry) => entry.issues.map((issue) => issue.code)),
+    ...rejected.map((entry) => entry.code),
+  ]
+  return {
+    callId: stableReceiptId(record.idempotencyKey),
+    commandKind: 'submit_candidates',
+    status,
+    candidateIds: accepted.map((entry) => entry.candidateId),
+    issueCodes,
+  }
+}
+
+/** A stable, RFC 4122 v5-shaped uuid for one host idempotency key (never a random id). */
+function stableReceiptId(idempotencyKey: string): Uuid {
+  const hex = createHash('sha256').update(`candidate-delivery:${idempotencyKey}`).digest('hex')
+  return `${hex.slice(0, 8)}-${hex.slice(8, 12)}-5${hex.slice(13, 16)}-8${hex.slice(17, 20)}-${hex.slice(20, 32)}`
 }
