@@ -123,6 +123,13 @@ export interface ResearchExecution {
   /** The candidate sources this run proposed, so the sources are readable back from the run. */
   readonly sources?: readonly ResearchSourceRef[]
   readonly stopReason?: ResearchStopReason
+  /**
+   * When this run was started as an explicit continuation of an earlier **ended** run, the run it
+   * was grounded on (design §3/§10). It is informational linkage, never a budget/authorization
+   * reuse: the continuation starts a new execution with its own authorization, budget and id, and
+   * the previous run stays frozen. Absent for an ordinary run.
+   */
+  readonly continuedFromResearchId?: Uuid
   readonly recordedAt: Rfc3339UtcTimestamp
 }
 
@@ -228,6 +235,7 @@ export function assertResearchExecutionShape(value: unknown): asserts value is R
     || !isResourceRef(value.briefRef) || !isVersionRef(value.policyRef) || !isVersionRef(value.budgetRef)
     || !isCount(value.sourceCount, Number.MAX_SAFE_INTEGER) || !isCount(value.candidateCount, Number.MAX_SAFE_INTEGER)
     || !isNonEmptyString(value.recordedAt)
+    || (value.continuedFromResearchId !== undefined && !isUuid(value.continuedFromResearchId))
     || (value.stopReason !== undefined && !RESEARCH_STOP_REASONS.includes(value.stopReason as ResearchStopReason))
     || (value['sources'] !== undefined && !isSourceRefs(value['sources']))) {
     throw new ResearchError('INVALID_REQUEST', 'invalid research execution')

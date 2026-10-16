@@ -36,11 +36,12 @@ interface ExecutionRow extends QueryResultRow {
   candidate_count: number
   sources: ResearchSourceRef[]
   stop_reason: ResearchStopReason | null
+  continued_from: string | null
   recorded_at: Date
 }
 
 const EXECUTION_COLUMNS = `workspace_id, research_id, job_id, status, stage, brief_ref, policy_ref, budget_ref,
-  limits, coverage, source_count, candidate_count, sources, stop_reason, recorded_at`
+  limits, coverage, source_count, candidate_count, sources, stop_reason, continued_from, recorded_at`
 
 const TERMINAL_STATUSES = `('completed', 'cancelled', 'failed')`
 
@@ -61,6 +62,7 @@ function toExecution(row: ExecutionRow): ResearchExecution {
     candidateCount: row.candidate_count,
     ...(row.sources.length === 0 ? {} : { sources: row.sources }),
     ...(row.stop_reason === null ? {} : { stopReason: row.stop_reason }),
+    ...(row.continued_from === null ? {} : { continuedFromResearchId: row.continued_from }),
     recordedAt: row.recorded_at.toISOString(),
   }
 }
@@ -115,11 +117,11 @@ export class PostgresResearchExecutionStore implements ResearchExecutionStore {
         `INSERT INTO agent_platform.workspace_research_runs
            (tenant_id, space_id, workspace_id, research_id, job_id, status, stage, brief_ref, policy_ref,
             budget_ref, limits, coverage, source_count, candidate_count, sources, stop_reason,
-            request_idempotency_key, request_digest, recorded_at, updated_at)
+            request_idempotency_key, request_digest, recorded_at, updated_at, continued_from)
          VALUES (
            current_setting('app.tenant_id')::uuid, current_setting('app.space_id')::uuid,
            $1::uuid, $2::uuid, $3::uuid, $4, $5, $6::jsonb, $7::jsonb, $8::jsonb, $9::jsonb, $10::jsonb,
-           $11, $12, $13::jsonb, $14, $2, $15, $16::timestamptz, $16::timestamptz)
+           $11, $12, $13::jsonb, $14, $2, $15, $16::timestamptz, $16::timestamptz, $17::uuid)
          ON CONFLICT (tenant_id, space_id, research_id) DO UPDATE SET
            status = EXCLUDED.status,
            stage = EXCLUDED.stage,
@@ -136,6 +138,7 @@ export class PostgresResearchExecutionStore implements ResearchExecutionStore {
           JSON.stringify(execution.briefRef), JSON.stringify(execution.policyRef), JSON.stringify(execution.budgetRef),
           JSON.stringify(execution.limits), JSON.stringify(execution.coverage), execution.sourceCount, execution.candidateCount,
           JSON.stringify(execution.sources ?? []), execution.stopReason ?? null, requestDigest, execution.recordedAt,
+          execution.continuedFromResearchId ?? null,
         ],
       )
       const row = inserted.rows[0]

@@ -217,6 +217,19 @@ describe('a deployment without a configured search still serves the research ent
     expect(read.status).toBe(409)
     expect((await read.json() as { error: { code: string } }).error.code).toBe('CAPABILITY_NOT_CONFIGURED')
 
+    // The lifecycle entries exist too and answer a stable 409, never a 404 (design §10).
+    const resume = await bareRequest(`/api/v1/industry-workspaces/${encodeURIComponent(workspaceId)}/research-runs/${randomUUID()}/resume`, { method: 'POST', headers: { 'content-type': 'application/json', 'idempotency-key': `bare-resume-${randomUUID()}` }, body: '{}' })
+    expect(resume.status, await resume.clone().text()).toBe(409)
+    expect((await resume.json() as { error: { code: string } }).error.code).toBe('CAPABILITY_NOT_CONFIGURED')
+
+    const continuation = await bareRequest(`/api/v1/industry-workspaces/${encodeURIComponent(workspaceId)}/research-runs/${randomUUID()}/continuations`, {
+      method: 'POST',
+      headers: { 'content-type': 'application/json', 'idempotency-key': `bare-continuation-${randomUUID()}` },
+      body: JSON.stringify({ goal: '继续整理规则', allowedResearchDomains: ['standards.example.org'], targetKinds: ['object'] }),
+    })
+    expect(continuation.status, await continuation.clone().text()).toBe(409)
+    expect((await continuation.json() as { error: { code: string } }).error.code).toBe('CAPABILITY_NOT_CONFIGURED')
+
     const preflight = await bareRequest(`/api/v1/industry-workspaces/${encodeURIComponent(workspaceId)}/research-preflights`, {
       method: 'POST',
       headers: { 'content-type': 'application/json' },

@@ -233,3 +233,47 @@ describe('bounded research runs (real PostgreSQL)', () => {
     expect(otherScopeRead).toBeUndefined()
   })
 })
+
+describe('research resume and continuations (real PostgreSQL)', () => {
+  it('resumes a non-terminal run and refuses to resume a terminal one', async () => {
+    const accepted = await post(`/api/v1/industry-workspaces/${workspaceId}/research-runs`, body)
+    const { researchId } = (accepted.json() as { data: { researchId: string } }).data
+
+    const resumed = await post(`/api/v1/industry-workspaces/${workspaceId}/research-runs/${researchId}/resume`, {})
+    expect(resumed.statusCode, resumed.body).toBe(200)
+    expect((resumed.json() as { data: { execution: { status: string; researchId: string } } }).data.execution)
+      .toMatchObject({ status: 'queued', researchId })
+
+    const cancelled = await post(`/api/v1/industry-workspaces/${workspaceId}/research-runs/${researchId}/cancel`, {})
+    expect(cancelled.statusCode).toBe(200)
+
+    const refused = await post(`/api/v1/industry-workspaces/${workspaceId}/research-runs/${researchId}/resume`, {})
+    expect(refused.statusCode, refused.body).toBe(409)
+    expect((refused.json() as { error: { code: string } }).error.code).toBe('VERSION_CONFLICT')
+  })
+
+  it('appends a continuation grounded in an ended run as a new linked execution', async () => {
+    const accepted = await post(`/api/v1/industry-workspaces/${workspaceId}/research-runs`, body)
+    const { researchId } = (accepted.json() as { data: { researchId: string } }).data
+    await post(`/api/v1/industry-workspaces/${workspaceId}/research-runs/${researchId}/cancel`, {})
+
+    const next = await post(`/api/v1/industry-workspaces/${workspaceId}/research-runs/${researchId}/continuations`, body)
+    expect(next.statusCode, next.body).toBe(202)
+    const payload = next.json() as { data: { researchId: string; execution: { status: string; continuedFromResearchId?: string } } }
+    expect(payload.data.researchId).not.toBe(researchId)
+    expect(payload.data.execution.continuedFromResearchId).toBe(researchId)
+    expect(payload.data.execution.status).toBe('queued')
+
+    // The predecessor is never resurrected: its frozen cancellation stands.
+    const frozen = await executions.getExecution(scope.scopeRef, researchId, ctx)
+    expect(frozen?.status).toBe('cancelled')
+  })
+
+  it('refuses to continue an active run with a conflict', async () => {
+    const accepted = await post(`/api/v1/industry-workspaces/${workspaceId}/research-runs`, body)
+    const { researchId } = (accepted.json() as { data: { researchId: string } }).data
+    const refused = await post(`/api/v1/industry-workspaces/${workspaceId}/research-runs/${researchId}/continuations`, body)
+    expect(refused.statusCode, refused.body).toBe(409)
+    expect((refused.json() as { error: { code: string } }).error.code).toBe('VERSION_CONFLICT')
+  })
+})

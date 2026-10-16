@@ -141,6 +141,46 @@ function classifiedFrom(error: unknown): never {
 }
 
 /**
+ * Build the pinned `ResearchRequest` from the flat research-run body. The two counts and the
+ * deadline are bounded here; the policy/budget refs are host-mounted constants, so a caller can
+ * never widen the budget or move the deadline policy by editing the body. Shared by the async run
+ * entry point and the continuation entry point so both pin a run identically.
+ */
+function readResearchRequest(workspaceId: string, body: Record<string, unknown>, idempotencyKey: string): ResearchRequest {
+  rejectUnknownFields(body, ['goal', 'allowedResearchDomains', 'freshnessHint', 'targetKinds', 'mustCover', 'sourceLimit', 'candidateLimit', 'deadline'])
+  const sourceLimit = readBoundedCount(body['sourceLimit'], 10, 200, 'sourceLimit')
+  const candidateLimit = readBoundedCount(body['candidateLimit'], sourceLimit, 500, 'candidateLimit')
+  const deadline = typeof body['deadline'] === 'string' ? body['deadline'] : new Date(Date.now() + 10 * 60 * 1000).toISOString()
+  const briefUnknown: unknown = {
+    schemaVersion: 'modeling-brief@1',
+    workspaceId,
+    goal: body['goal'],
+    allowedResearchDomains: body['allowedResearchDomains'],
+    ...(body['freshnessHint'] === undefined ? {} : { freshnessHint: body['freshnessHint'] as WebSearchFreshnessHint }),
+    targetKinds: body['targetKinds'] as readonly DefinitionCandidateKind[],
+    ...(body['mustCover'] === undefined ? {} : { mustCover: body['mustCover'] }),
+    sourceLimit,
+    candidateLimit,
+  }
+  try {
+    assertModelingBriefShape(briefUnknown)
+  } catch (error) {
+    throw new InvalidRequestFieldError(error instanceof Error ? error.message : 'the modeling brief is invalid')
+  }
+  const brief: ModelingBrief = briefUnknown
+  return {
+    schemaVersion: 'research-request@1',
+    workspaceId,
+    brief,
+    limits: { sourceLimit, candidateLimit, deadline },
+    allowedDomains: brief.allowedResearchDomains,
+    policyRef: DEFAULT_RESEARCH_POLICY_REF,
+    budgetRef: DEFAULT_RESEARCH_BUDGET_REF,
+    idempotencyKey,
+  }
+}
+
+/**
  * A stable, classifiable "the research capability is not configured" refusal. The run entry exists
  * even without a search provider, so it answers 409 with a named reason instead of 404.
  */
@@ -416,39 +456,9 @@ export function registerCandidateSourceRoutes(
         const active = requireWorkflow()
         const body = request.body
         if (!isRecord(body)) throw new InvalidRequestFieldError('the request body must be a JSON object')
-        rejectUnknownFields(body, ['goal', 'allowedResearchDomains', 'freshnessHint', 'targetKinds', 'mustCover', 'sourceLimit', 'candidateLimit', 'deadline'])
         const workspaceId = request.params.workspaceId
-        const sourceLimit = readBoundedCount(body['sourceLimit'], 10, 200, 'sourceLimit')
-        const candidateLimit = readBoundedCount(body['candidateLimit'], sourceLimit, 500, 'candidateLimit')
-        const deadline = typeof body['deadline'] === 'string' ? body['deadline'] : new Date(Date.now() + 10 * 60 * 1000).toISOString()
-        const briefUnknown: unknown = {
-          schemaVersion: 'modeling-brief@1',
-          workspaceId,
-          goal: body['goal'],
-          allowedResearchDomains: body['allowedResearchDomains'],
-          ...(body['freshnessHint'] === undefined ? {} : { freshnessHint: body['freshnessHint'] as WebSearchFreshnessHint }),
-          targetKinds: body['targetKinds'] as readonly DefinitionCandidateKind[],
-          ...(body['mustCover'] === undefined ? {} : { mustCover: body['mustCover'] }),
-          sourceLimit,
-          candidateLimit,
-        }
-        try {
-          assertModelingBriefShape(briefUnknown)
-        } catch (error) {
-          throw new InvalidRequestFieldError(error instanceof Error ? error.message : 'the modeling brief is invalid')
-        }
-        const brief: ModelingBrief = briefUnknown
-        const researchRequest: ResearchRequest = {
-          schemaVersion: 'research-request@1',
-          workspaceId,
-          brief,
-          limits: { sourceLimit, candidateLimit, deadline },
-          allowedDomains: brief.allowedResearchDomains,
-          policyRef: DEFAULT_RESEARCH_POLICY_REF,
-          budgetRef: DEFAULT_RESEARCH_BUDGET_REF,
-          idempotencyKey: requireIdempotencyKey(request),
-        }
-        const execution = await active.start(researchRequest, contextFor(auth, traceId, workspaceId, brief.allowedResearchDomains))
+        const researchRequest = readResearchRequest(workspaceId, body, requireIdempotencyKey(request))
+        const execution = await active.start(researchRequest, contextFor(auth, traceId, workspaceId, researchRequest.allowedDomains))
           .catch((error: unknown) => classifiedFrom(error))
         reply.status(202).send({ data: { researchId: execution.researchId, jobId: execution.jobId, execution }, meta: { traceId } })
         return reply
@@ -481,6 +491,44 @@ export function registerCandidateSourceRoutes(
         const execution = await active.cancel(request.params.researchId, contextFor(auth, traceId, workspaceId, []))
           .catch((error: unknown) => classifiedFrom(error))
         reply.status(200).send({ data: { execution }, meta: { traceId } })
+        return reply
+      },
+    )
+
+    // Resume only a non-terminal run, reusing its original binding and budget (design §3/§10). A
+    // terminal run is refused with 409; the caller appends a continuation instead.
+    app.post<{ Params: { workspaceId: string; researchId: string } }>(
+      '/api/v1/industry-workspaces/:workspaceId/research-runs/:researchId/resume',
+      async (request, reply) => {
+        const traceId = readTraceId(request)
+        const auth = authenticateRequest(dependencies.authenticate, request, reply)
+        if (auth === undefined) return reply
+        const active = requireWorkflow()
+        const workspaceId = request.params.workspaceId
+        const execution = await active.resume(request.params.researchId, contextFor(auth, traceId, workspaceId, []))
+          .catch((error: unknown) => classifiedFrom(error))
+        reply.status(200).send({ data: { execution }, meta: { traceId } })
+        return reply
+      },
+    )
+
+    // Append research grounded in an already-ended run: a new execution with a new authorization and
+    // budget, linked to the previous products (design §3/§10). It reuses the same pinned-body shape
+    // as the initial run so the two entries cannot drift.
+    app.post<{ Params: { workspaceId: string; researchId: string } }>(
+      '/api/v1/industry-workspaces/:workspaceId/research-runs/:researchId/continuations',
+      async (request, reply) => {
+        const traceId = readTraceId(request)
+        const auth = authenticateRequest(dependencies.authenticate, request, reply)
+        if (auth === undefined) return reply
+        const active = requireWorkflow()
+        const body = request.body
+        if (!isRecord(body)) throw new InvalidRequestFieldError('the request body must be a JSON object')
+        const workspaceId = request.params.workspaceId
+        const researchRequest = readResearchRequest(workspaceId, body, requireIdempotencyKey(request))
+        const execution = await active.continuations(request.params.researchId, researchRequest, contextFor(auth, traceId, workspaceId, researchRequest.allowedDomains))
+          .catch((error: unknown) => classifiedFrom(error))
+        reply.status(202).send({ data: { researchId: execution.researchId, jobId: execution.jobId, execution }, meta: { traceId } })
         return reply
       },
     )
