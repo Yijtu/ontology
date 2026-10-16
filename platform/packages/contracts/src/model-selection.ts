@@ -185,6 +185,36 @@ export interface EffectiveModelSelection {
   readonly resolvedAt: Rfc3339UtcTimestamp
 }
 
+/**
+ * The non-secret execution config of a model connection: exactly what the generation/decision
+ * adapter is built from. Both a live `ModelConnectionAdminView` and a pinned
+ * `ModelExecutionConnectionSnapshot` satisfy it, so a runtime can build the adapter from either.
+ */
+export interface ModelExecutionConfig {
+  readonly connectionId: Uuid
+  readonly revision: RevisionString
+  readonly adapterType: ModelAdapterType
+  readonly protocol: ModelProtocol
+  readonly capabilities: readonly ModelCapability[]
+  readonly baseUrl?: string
+  readonly endpoint?: string
+  readonly platformModelId: string
+  /** The provider's own model name; the vendor wire vocabulary itself stays in the adapter. */
+  readonly providerModelName: string
+}
+
+/**
+ * The immutable, non-secret execution-config snapshot of one model connection revision (design §5.3,
+ * S02). It is written once at bind time and the binding references it, so changing today's catalogue
+ * row (base URL, endpoint, protocol, provider model) can never retarget an in-flight execution. The
+ * current catalogue is consulted only for the revoke/disable/permission fence. A snapshot carries no
+ * credential — the key continues to resolve through custody, so rotation takes effect while a
+ * cleared/revoked credential blocks through the fence.
+ */
+export interface ModelExecutionConnectionSnapshot extends ModelExecutionConfig {
+  readonly schemaVersion: 'model-execution-connection-snapshot@1'
+}
+
 /** One execution's immutable model binding. A retry/resume/parallel run reuses it unchanged. */
 export interface ExecutionModelBinding {
   readonly schemaVersion: 'execution-model-binding@1'
@@ -194,6 +224,12 @@ export interface ExecutionModelBinding {
   readonly connectionRevision?: RevisionString
   readonly modelRef: ModelRef
   readonly componentRef: VersionRef
+  /**
+   * The immutable, non-secret snapshot this binding pins (S02). When present the runtime builds the
+   * model from the snapshot rather than today's catalogue row. A binding created before snapshots
+   * existed carries none and must be blocked rather than run on the current descriptor.
+   */
+  readonly snapshotRef?: VersionRef
   readonly assignmentRevision: RevisionString
   readonly resolvedFrom: ModelSelectionSource
   readonly boundAt: Rfc3339UtcTimestamp
@@ -220,6 +256,7 @@ export type ModelSelectionErrorCode =
   | 'CREDENTIAL_MISSING'
   | 'MODEL_IN_USE'
   | 'MODEL_BINDING_REVOKED'
+  | 'MODEL_BINDING_INCOMPLETE'
   | 'NOT_FOUND'
   | 'VERSION_CONFLICT'
   | 'SCOPE_MISMATCH'
@@ -234,6 +271,7 @@ const MODEL_SELECTION_HTTP_STATUS: Readonly<Record<ModelSelectionErrorCode, numb
   CREDENTIAL_MISSING: 409,
   MODEL_IN_USE: 409,
   MODEL_BINDING_REVOKED: 409,
+  MODEL_BINDING_INCOMPLETE: 409,
   NOT_FOUND: 404,
   VERSION_CONFLICT: 409,
   SCOPE_MISMATCH: 403,
@@ -351,6 +389,25 @@ export interface ExecutionModelBindingStore {
     capability: ModelCapability,
     ctx: ToolContext,
   ): Promise<ExecutionModelBinding | undefined>
+}
+
+/**
+ * Persist and read back an immutable, non-secret model execution-config snapshot, keyed by the exact
+ * connection revision (S02). `putModelSnapshot` is idempotent per revision: a revision already stored
+ * is returned unchanged, so the snapshot for a given revision can never be rewritten in place.
+ */
+export interface ModelExecutionSnapshotStore {
+  putModelSnapshot(
+    scopeRef: ScopeRef,
+    snapshot: ModelExecutionConnectionSnapshot,
+    ctx: ToolContext,
+  ): Promise<ModelExecutionConnectionSnapshot>
+  getModelSnapshot(
+    scopeRef: ScopeRef,
+    connectionId: Uuid,
+    revision: RevisionString,
+    ctx: ToolContext,
+  ): Promise<ModelExecutionConnectionSnapshot | undefined>
 }
 
 /**
@@ -525,6 +582,7 @@ export function assertExecutionModelBindingShape(value: unknown): asserts value 
     || (value['connectionId'] !== undefined && !isUuid(value['connectionId']))
     || (value['connectionRevision'] !== undefined && !isRevisionString(value['connectionRevision']))
     || !isModelRef(value['modelRef']) || !isVersionRef(value['componentRef'])
+    || (value['snapshotRef'] !== undefined && !isVersionRef(value['snapshotRef']))
     || !isRevisionString(value['assignmentRevision'])
     || !SELECTION_SOURCES.includes(value['resolvedFrom'] as ModelSelectionSource)
     || !isNonEmptyString(value['boundAt'])) {
@@ -532,6 +590,27 @@ export function assertExecutionModelBindingShape(value: unknown): asserts value 
   }
   if (isRecord(value) && ('apiKey' in value || 'credential' in value || 'secret' in value)) {
     throw new ModelSelectionError('INVALID_ARGUMENT', 'an execution model binding must never carry a credential')
+  }
+}
+
+/**
+ * Runtime validation of an immutable model execution-config snapshot. It rejects any credential-shaped
+ * field, so a pinned snapshot can never become a second place a key is stored (design §5.3).
+ */
+export function assertModelExecutionSnapshotShape(value: unknown): asserts value is ModelExecutionConnectionSnapshot {
+  if (!isRecord(value) || value['schemaVersion'] !== 'model-execution-connection-snapshot@1'
+    || !isUuid(value['connectionId']) || !isRevisionString(value['revision'])
+    || !ADAPTER_TYPES.includes(value['adapterType'] as ModelAdapterType)
+    || !MODEL_PROTOCOLS.includes(value['protocol'] as ModelProtocol)
+    || !Array.isArray(value['capabilities']) || value['capabilities'].length === 0
+    || !value['capabilities'].every((capability) => MODEL_CAPABILITIES.includes(capability as ModelCapability))
+    || !isNonEmptyString(value['platformModelId']) || !isNonEmptyString(value['providerModelName'])
+    || (value['baseUrl'] !== undefined && !isNonEmptyString(value['baseUrl']))
+    || (value['endpoint'] !== undefined && !isNonEmptyString(value['endpoint']))) {
+    throw new ModelSelectionError('INVALID_ARGUMENT', 'invalid model execution snapshot')
+  }
+  if ('apiKey' in value || 'credential' in value || 'secret' in value || 'credentialRef' in value) {
+    throw new ModelSelectionError('INVALID_ARGUMENT', 'a model execution snapshot must never carry a credential')
   }
 }
 

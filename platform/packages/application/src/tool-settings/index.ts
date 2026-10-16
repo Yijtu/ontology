@@ -10,6 +10,8 @@
 export {
   ToolConnectionService,
   toolDescriptorOf,
+  toolDescriptorOfSnapshot,
+  toolExecutionSnapshotOf,
 } from './tool-connection-service'
 export type {
   ToolConnectionServiceDependencies,

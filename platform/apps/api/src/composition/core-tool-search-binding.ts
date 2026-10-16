@@ -5,17 +5,20 @@ import type {
   ScopeRef,
   SecretValue,
   ToolConnectionAdminView,
+  ToolConnectionDescriptor,
   ToolConnectionErrorCode,
   ToolConnectionStore,
   ToolContext,
   ToolCredentialCustodian,
+  ToolExecutionSnapshotStore,
   ToolTargetScope,
   Uuid,
   WebSearchProvider,
 } from '@ontology/contracts'
 import { WebPageSnapshotArchiver, createWebSearchProviderFromConnection } from '@ontology/adapter-search-web'
 import type { ExecutionToolBindingService } from '@ontology/application'
-import { toolDescriptorOf } from '@ontology/application'
+import { toolDescriptorOf, toolDescriptorOfSnapshot } from '@ontology/application'
+import { canonicalJson, sha256DigestOf } from '@ontology/core'
 
 /** The model-visible tool a research run reads public pages through. A tool, never a model. */
 export const SEARCH_TOOL_ID = 'web_search' as const
@@ -67,11 +70,30 @@ function blockedFromError(error: unknown): ToolSearchResolution {
   }
 }
 
+/**
+ * A binding created before execution-config snapshots existed (or whose snapshot row is missing or
+ * digest-mismatched) cannot be restored to its pinned config, so it is blocked instead of being run
+ * on today's descriptor (S02, design §9: 配置撤销/运行版本不兼容 | 明确阻断原因).
+ */
+function incomplete(runId: Uuid): ToolSearchResolution {
+  return {
+    state: 'blocked',
+    reason: 'TOOL_BINDING_INCOMPLETE',
+    message: `execution ${runId} pinned a ${SEARCH_TOOL_ID} revision whose config snapshot is unavailable; it must not run on the current descriptor`,
+  }
+}
+
 export interface CoreSearchBindingDependencies {
   /** Pins the search connection to an execution exactly once, then reads it back unchanged. */
   readonly bindings: ExecutionToolBindingService
   readonly connections: ToolConnectionStore
   readonly credentials: ToolCredentialCustodian
+  /**
+   * The immutable execution-config snapshots (S02). When mounted, the run is built from the pinned
+   * snapshot, never from today's catalogue row, and a binding that carries no snapshot is a stable
+   * `TOOL_BINDING_INCOMPLETE` block rather than a silent fall-through to the current descriptor.
+   */
+  readonly snapshots?: ToolExecutionSnapshotStore
   /** The trusted scope the catalogue is read from. Never a request body value. */
   readonly scopeRef: ScopeRef
   /** Archives the actual page bytes through the same immutable writer the run gateway uses. */
@@ -127,11 +149,31 @@ export function createCoreSearchBinding(dependencies: CoreSearchBindingDependenc
         return blockedFromError(error)
       }
       const connectionId = binding.connectionId
-      const connection = connectionId === undefined
-        ? undefined
-        : await dependencies.connections.getConnection(dependencies.scopeRef, connectionId, ctx)
+      if (connectionId === undefined) {
+        return { state: 'blocked', reason: 'TOOL_NOT_CONFIGURED', message: `the pinned ${SEARCH_TOOL_ID} connection is missing` }
+      }
+      const connection = await dependencies.connections.getConnection(dependencies.scopeRef, connectionId, ctx)
       if (connection === undefined) {
         return { state: 'blocked', reason: 'TOOL_NOT_CONFIGURED', message: `the pinned ${SEARCH_TOOL_ID} connection is no longer visible in this scope` }
+      }
+      // Build the provider from the pinned snapshot (S02), never from today's catalogue row. The
+      // catalogue above was consulted only for the revoke/disable/permission fence. A binding that
+      // carries no snapshot was created before snapshots existed: it must be blocked rather than run
+      // on the current descriptor, which could be a different service address.
+      let descriptor: ToolConnectionDescriptor
+      const snapshots = dependencies.snapshots
+      if (snapshots !== undefined) {
+        const revision = binding.connectionRevision
+        if (binding.snapshotRef === undefined || revision === undefined) {
+          return incomplete(runId)
+        }
+        const snapshot = await snapshots.getToolSnapshot(dependencies.scopeRef, connectionId, revision, ctx)
+        if (snapshot === undefined || sha256DigestOf(canonicalJson(snapshot)) !== binding.snapshotRef.digest) {
+          return incomplete(runId)
+        }
+        descriptor = toolDescriptorOfSnapshot(snapshot)
+      } else {
+        descriptor = toolDescriptorOf(connection)
       }
       const archiver = new WebPageSnapshotArchiver({
         artifacts: dependencies.artifacts,
@@ -140,7 +182,7 @@ export function createCoreSearchBinding(dependencies: CoreSearchBindingDependenc
       })
       const credential = await credentialFor(connection.connectionId, ctx)
       const provider = createWebSearchProviderFromConnection({
-        descriptor: toolDescriptorOf(connection),
+        descriptor,
         ...(credential === undefined ? {} : { credential }),
         snapshotArchive: archiver,
         ...(fetchImpl === undefined ? {} : { fetchImpl }),

@@ -4,13 +4,16 @@ import type {
   ExecutionModelBindingStore,
   ModelCapability,
   ModelConnectionStore,
+  ModelExecutionSnapshotStore,
   ModelSelectionResolver,
   ModelTargetScope,
   ToolContext,
   Uuid,
+  VersionRef,
 } from '@ontology/contracts'
 import { canonicalJson, sha256DigestOf } from '../extraction/canonical'
 import { assertTargetEditor, scopeOf } from './guards'
+import { modelExecutionSnapshotOf } from './model-connection-service'
 
 export interface ExecutionModelBindingServiceDependencies {
   readonly bindings: ExecutionModelBindingStore
@@ -20,6 +23,12 @@ export interface ExecutionModelBindingServiceDependencies {
    * optional so a host that does not mount the catalogue keeps the N15 bind/read-back behaviour.
    */
   readonly connections?: ModelConnectionStore
+  /**
+   * The immutable execution-config snapshot store (S02). When mounted, `bind` captures the pinned
+   * revision's non-secret config and records a `snapshotRef`, so the runtime reads that snapshot
+   * instead of today's catalogue row. Requires `connections` so the snapshot can be captured.
+   */
+  readonly snapshots?: ModelExecutionSnapshotStore
   readonly now?: () => string
 }
 
@@ -34,12 +43,14 @@ export class ExecutionModelBindingService {
   readonly #bindings: ExecutionModelBindingStore
   readonly #resolver: ModelSelectionResolver
   readonly #connections: ModelConnectionStore | undefined
+  readonly #snapshots: ModelExecutionSnapshotStore | undefined
   readonly #now: () => string
 
   constructor(dependencies: ExecutionModelBindingServiceDependencies) {
     this.#bindings = dependencies.bindings
     this.#resolver = dependencies.resolver
     this.#connections = dependencies.connections
+    this.#snapshots = dependencies.snapshots
     this.#now = dependencies.now ?? (() => new Date().toISOString())
   }
 
@@ -60,6 +71,7 @@ export class ExecutionModelBindingService {
     if (connectionRevision === undefined) {
       throw new ModelSelectionError('MODEL_NOT_CONFIGURED', 'the resolved connection has no revision to pin')
     }
+    const snapshotRef = await this.#captureSnapshot(scopeRef, effective.connectionId, connectionRevision, ctx)
     const binding: ExecutionModelBinding = {
       schemaVersion: 'execution-model-binding@1',
       executionId: input.executionId,
@@ -72,12 +84,46 @@ export class ExecutionModelBindingService {
         version: `${connectionRevision}.0.0`,
         digest: sha256DigestOf(canonicalJson({ connectionId: effective.connectionId, revision: connectionRevision })),
       },
+      ...(snapshotRef === undefined ? {} : { snapshotRef }),
       assignmentRevision: effective.assignmentRevision ?? '0',
       resolvedFrom: effective.resolvedFrom,
       boundAt: this.#now(),
     }
     assertExecutionModelBindingShape(binding)
     return this.#bindings.putBinding(scopeRef, binding, ctx)
+  }
+
+  /**
+   * Capture the pinned revision's immutable, non-secret config snapshot and return its ref (S02).
+   * When no snapshot store is mounted the binding keeps the legacy revision-only shape. The catalogue
+   * is read here only to copy the config; a revision that moved between resolve and read is refused
+   * rather than silently pinned to the newer config.
+   */
+  async #captureSnapshot(
+    scopeRef: ReturnType<typeof scopeOf>,
+    connectionId: Uuid,
+    connectionRevision: string,
+    ctx: ToolContext,
+  ): Promise<VersionRef | undefined> {
+    const snapshots = this.#snapshots
+    if (snapshots === undefined) return undefined
+    const connections = this.#connections
+    if (connections === undefined) {
+      throw new ModelSelectionError('MODEL_NOT_CONFIGURED', 'a snapshot store requires the connection catalogue to capture the pinned revision')
+    }
+    const connection = await connections.getConnection(scopeRef, connectionId, ctx)
+    if (connection === undefined) {
+      throw new ModelSelectionError('MODEL_NOT_CONFIGURED', 'the resolved connection is no longer visible in this scope')
+    }
+    if (connection.revision !== connectionRevision) {
+      throw new ModelSelectionError('VERSION_CONFLICT', 'the connection moved while the binding was being fixed; re-resolve')
+    }
+    const stored = await snapshots.putModelSnapshot(scopeRef, modelExecutionSnapshotOf(connection), ctx)
+    return {
+      id: `model-connection-snapshot:${connection.connectionId}`,
+      version: `${connection.revision}.0.0`,
+      digest: sha256DigestOf(canonicalJson(stored)),
+    }
   }
 
   /**

@@ -488,12 +488,15 @@ export async function budgetHarness(options?: {
   readonly maxToolCalls?: number
   readonly deadlineMs?: number
   readonly deadlineOffsetMs?: number
+  /** The trusted scope the ledger is opened under; defaults to the fixture scope. */
+  readonly scope?: { readonly tenantId: string; readonly spaceId: string }
 }): Promise<BudgetHarness> {
   const store = new InMemoryBudgetLedgerStore()
   const service = new BudgetService({ store, control: new RecordingControlRepository() })
   const ledgerId = randomUUID()
   const ctx = modelContext(
     new Date(Date.now() + (options?.deadlineOffsetMs ?? 60_000)).toISOString(),
+    options?.scope,
   )
   const limits = {
     ...(options?.maxModelTokens === undefined ? {} : { maxModelTokens: options.maxModelTokens }),
@@ -518,10 +521,15 @@ export function remainingOf(harness: BudgetHarness): Promise<import('@ontology/c
   return harness.budget.remaining(harness.ledgerId, harness.ctx)
 }
 
-export function modelContext(deadline = new Date(Date.now() + 60_000).toISOString()): ToolContext {
+export function modelContext(
+  deadline = new Date(Date.now() + 60_000).toISOString(),
+  scope?: { readonly tenantId: string; readonly spaceId: string },
+): ToolContext {
+  const tenantId = scope?.tenantId ?? TENANT_A
+  const spaceId = scope?.spaceId ?? SPACE_A
   return createToolContext({
     principal: {
-      tenantId: TENANT_A,
+      tenantId,
       subjectId: 'model-test',
       roles: ['business-user'],
       scopes: [],
@@ -538,8 +546,8 @@ export function modelContext(deadline = new Date(Date.now() + 60_000).toISOStrin
       expiresAt: deadline,
     },
     allowedResources: {
-      tenantId: TENANT_A,
-      spaceId: SPACE_A,
+      tenantId,
+      spaceId,
       resourceKinds: [],
       sourceRefs: [],
       collectionRefs: [],

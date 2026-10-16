@@ -18,6 +18,7 @@ import type {
   ToolConnectionSummary,
   ToolContext,
   ToolCredentialCustodian,
+  ToolExecutionConnectionSnapshot,
   Uuid,
 } from '@ontology/contracts'
 import { assertToolAdministrator, requireIdempotencyKey, scopeOf } from './guards'
@@ -71,6 +72,38 @@ export function toolDescriptorOf(view: ToolConnectionAdminView): ToolConnectionD
     capabilities: view.capabilities,
     enabled: view.enabled,
     ...(view.endpoint === undefined ? {} : { endpoint: view.endpoint }),
+  }
+}
+
+/**
+ * Capture the immutable, non-secret execution-config snapshot of one connection revision (S02).
+ *
+ * The snapshot records exactly what the runtime needs to build the tool provider, so a later edit to
+ * the catalogue row cannot retarget an in-flight execution. It never carries a credential; a key stays
+ * an opaque custody reference, so rotation takes effect and a cleared/revoked credential blocks
+ * through the binding fence rather than by rewriting a snapshot.
+ */
+export function toolExecutionSnapshotOf(view: ToolConnectionAdminView): ToolExecutionConnectionSnapshot {
+  return {
+    schemaVersion: 'tool-execution-connection-snapshot@1',
+    connectionId: view.connectionId,
+    connectionRevision: view.revision,
+    name: view.name,
+    adapterType: view.adapterType,
+    capabilities: [...view.capabilities],
+    enabled: view.enabled,
+    ...(view.endpoint === undefined ? {} : { endpoint: view.endpoint }),
+  }
+}
+
+/** Rebuild the provider descriptor from a pinned snapshot; never reads today's catalogue row. */
+export function toolDescriptorOfSnapshot(snapshot: ToolExecutionConnectionSnapshot): ToolConnectionDescriptor {
+  return {
+    name: snapshot.name,
+    adapterType: snapshot.adapterType,
+    capabilities: snapshot.capabilities,
+    enabled: snapshot.enabled,
+    ...(snapshot.endpoint === undefined ? {} : { endpoint: snapshot.endpoint }),
   }
 }
 

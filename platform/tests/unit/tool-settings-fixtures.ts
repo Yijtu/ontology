@@ -23,7 +23,7 @@ import type {
 } from '@ontology/contracts'
 
 export { TEST_SCOPE, adminContext, editorContext, context } from './model-settings-fixtures'
-export { RecordingTargetDirectory } from './model-settings-fixtures'
+export { RecordingTargetDirectory, InMemoryExecutionConnectionSnapshotStore } from './model-settings-fixtures'
 
 function scopeKey(scopeRef: ScopeRef): string {
   return `${scopeRef.tenantId}:${scopeRef.spaceId}`

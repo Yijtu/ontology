@@ -63,7 +63,7 @@ export async function assembleRuntimePipeline(
     terminology, normalApprovedInputs, projectEvolutionCell, modelCapabilities, modelEnvironment, hostClock, allSourceRefs,
     profileResolver, semanticDefinitions, modelBindingRuntime, runModelBinder, modelBindingService, modelBindingStore, modelConnectionStore,
     deploymentModelCapabilities,
-    toolBindingService, toolConnectionStore, toolCredentialCustodian,
+    toolBindingService, toolConnectionStore, toolCredentialCustodian, executionSnapshotStore,
   } = state
   const { mappings, structuredImports, rulePremiseVerifier, semanticTasks, relationsTask, facts, multiSchemaSource, projectQuery, gatewayComposition } = query
 
@@ -192,6 +192,7 @@ export async function assembleRuntimePipeline(
     bindings: toolBindingService,
     connections: toolConnectionStore,
     credentials: toolCredentialCustodian,
+    snapshots: executionSnapshotStore,
     scopeRef,
     artifacts: gatewayComposition.artifacts,
     targetScope: { kind: 'space' },
