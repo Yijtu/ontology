@@ -37,6 +37,7 @@ import type { RunService } from '../runs/service'
 import { canonicalJson, sha256DigestOf } from '../profiles/canonical'
 import { inputManifestDigest } from '../workflow/canonical'
 import type { WorkspaceResearchRunConfigService } from './workspace-research-run-config-service'
+import { deterministicUuid, runBudgetLedgerId } from './run-ledger'
 
 /** Roles allowed to admit a research run. */
 const RESEARCH_ROLES: readonly string[] = ['researcher', 'platform-admin']
@@ -102,16 +103,6 @@ function assertAdmitter(ctx: ToolContext): void {
   if (!ctx.principal.roles.some((role) => RESEARCH_ROLES.includes(role))) {
     throw new ResearchRunAdmissionError('FORBIDDEN', 'admitting a research run requires a researcher or platform-admin role')
   }
-}
-
-/** A deterministic, RFC 4122 v5-shaped uuid for one seed; the same seed always yields the same id. */
-function deterministicUuid(namespace: string, seed: string): Uuid {
-  const digest = sha256DigestOf(`${namespace}:${seed}`).slice('sha256:'.length)
-  const chars = [...digest.slice(0, 32)]
-  chars[12] = '5'
-  chars[16] = ((Number.parseInt(chars[16] ?? '0', 16) & 0x3) | 0x8).toString(16)
-  const joined = chars.join('')
-  return `${joined.slice(0, 8)}-${joined.slice(8, 12)}-${joined.slice(12, 16)}-${joined.slice(16, 20)}-${joined.slice(20)}` as Uuid
 }
 
 function encodeJson(value: unknown): Uint8Array {
@@ -292,7 +283,7 @@ export class WorkspaceResearchRunService {
 
     // Persist the one complete research manifest over the one shared ledger and input manifest. This
     // is the "complete research manifest" the controller requires; it is never synthesized later.
-    await this.#writeResearchManifest(admission, created.resolvedProfileHash, config.runtimeRef, ctx)
+    await this.#writeResearchManifest(admission, request, created.resolvedProfileHash, config.runtimeRef, ctx)
 
     // Flip the dispatch-ready barrier, then enqueue. An incomplete admission is never dispatched.
     const ready = await this.#admissions.markReady(scopeRef, runId, ctx)
@@ -353,6 +344,7 @@ export class WorkspaceResearchRunService {
 
   async #writeResearchManifest(
     admission: ResearchRunAdmission,
+    request: ResearchRunAdmissionRequest,
     resolvedProfileHash: Sha256Digest,
     runtimeRef: VersionRef,
     ctx: ToolContext,
@@ -361,8 +353,20 @@ export class WorkspaceResearchRunService {
     const draftRevision = admission.goal.kind === 'industry_workspace_research' ? admission.goal.draftRevision : admission.draftRevision
     const workspaceId = admission.goal.kind === 'industry_workspace_research' ? admission.goal.workspaceId : admission.workspaceId
     const profileRef = workspaceResearchProfileRef(workspaceId, draftRevision)
-    const ledgerId = deterministicUuid('run-budget-ledger', runId)
-    await this.#budget.openLedger({ ledgerId, kind: 'run', runId }, ctx)
+    const ledgerId = runBudgetLedgerId(runId)
+    // Fix the run's **absolute** deadline and its source/candidate ceilings on the one ledger at
+    // accept time. The ledger open is idempotent (it re-reads the stored row), so a replay or a
+    // resume reuses the original deadline and quota instead of sliding them to "now".
+    await this.#budget.openLedger({
+      ledgerId,
+      kind: 'run',
+      runId,
+      deadline: request.limits.deadline,
+      overrideLimits: {
+        maxSources: request.limits.sourceLimit,
+        maxCandidates: request.limits.candidateLimit,
+      },
+    }, ctx)
     const inputManifest = await this.#manifests.saveInputManifest(this.#inputManifest(admission), ctx)
     const manifest: RunManifest = {
       runId,

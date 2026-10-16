@@ -12,6 +12,7 @@ import type {
   AssetCandidateInsertGuard,
   AssetCandidateStore,
   AssetCandidateVersion,
+  BudgetLedgerPort,
   CandidateSubmission,
   CandidateSubmissionPort,
   CandidateSubmissionRecord,
@@ -77,6 +78,15 @@ export interface CandidateSubmissionDependencies {
   /** The approved grounding reader used only by re-grounding after a source review. */
   readonly sourceGrounding?: SourceGroundingPort
   readonly fence?: CandidateSubmissionFence
+  /**
+   * The run's one shared budget ledger (design §8, S06). When mounted, each submission
+   * reserves its candidate units on that ledger before writing, so `candidateLimit` is
+   * enforced atomically across separate commands and concurrent runs instead of only
+   * bounding one batch.
+   */
+  readonly budget?: BudgetLedgerPort
+  /** The ledger a run's candidates must charge, derived from the run id. Required with `budget`. */
+  readonly ledgerIdFor?: (runId: Uuid) => Uuid
   readonly maxCandidates?: number
   readonly maxLinksPerCandidate?: number
   readonly now?: () => string
@@ -165,6 +175,8 @@ export class CandidateSubmissionService implements CandidateSubmissionPort {
   readonly #maxLinks: number
   readonly #now: () => string
   readonly #newId: () => string
+  readonly #budget: BudgetLedgerPort | undefined
+  readonly #ledgerIdFor: ((runId: Uuid) => Uuid) | undefined
 
   constructor(dependencies: CandidateSubmissionDependencies) {
     this.#deps = dependencies
@@ -172,6 +184,11 @@ export class CandidateSubmissionService implements CandidateSubmissionPort {
     this.#maxLinks = dependencies.maxLinksPerCandidate ?? DEFAULT_MAX_LINKS
     this.#now = dependencies.now ?? (() => new Date().toISOString())
     this.#newId = dependencies.newId ?? (() => globalThis.crypto.randomUUID())
+    this.#budget = dependencies.budget
+    this.#ledgerIdFor = dependencies.ledgerIdFor
+    if (this.#budget !== undefined && this.#ledgerIdFor === undefined) {
+      throw new SubmitCandidatesError('INVALID_COMMAND', 'a candidate budget needs a ledger-id resolver')
+    }
   }
 
   async findReceipt(scopeRef: ScopeRef, runId: Uuid, idempotencyKey: string, ctx: ToolContext): Promise<SubmitCandidatesReceipt | undefined> {
@@ -238,6 +255,11 @@ export class CandidateSubmissionService implements CandidateSubmissionPort {
     if (draft === undefined) throw new SubmitCandidatesError('SCOPE_MISMATCH', 'the workspace has no pinned document set')
     const recordedAt = this.#now()
 
+    // Reserve this submission's candidate units on the run's one ledger before any write. The
+    // reservation is keyed by the host idempotency key, so a replay reuses it and two separate
+    // submissions cannot jointly exceed `candidateLimit`.
+    const candidateReservationId = await this.#reserveCandidates(request, command.candidates.length, ctx)
+
     const accepted: ReceiptEntry[] = []
     const links: CandidateSubmissionRecord['links'][number][] = []
 
@@ -287,7 +309,52 @@ export class CandidateSubmissionService implements CandidateSubmissionPort {
       recordedAt,
     }
     const stored = await this.#deps.receipts.record(scope, { record }, ctx)
+    await this.#settleCandidates(request.runId, candidateReservationId, accepted, command.candidates.length, ctx)
     return stored.replayed ? { ...structuredClone(stored.record.receipt), replayed: true } : receipt
+  }
+
+  /**
+   * Reserve the submission's candidate units on the run ledger. `candidateLimit` is a hard
+   * ceiling on the *same* ledger as every other research dimension, so paging/retriage/resume
+   * cannot bypass it and two concurrent submissions for the last units resolve to one winner.
+   */
+  async #reserveCandidates(request: SubmitCandidatesRequest, candidates: number, ctx: ToolContext): Promise<Uuid | undefined> {
+    if (this.#budget === undefined || this.#ledgerIdFor === undefined) return undefined
+    const ledgerId = this.#ledgerIdFor(request.runId)
+    const outcome = await this.#budget.reserve({
+      ledgerId,
+      idempotencyKey: `research-candidates:${request.runId}:${sha256DigestOf(request.idempotencyKey)}`,
+      toolCalls: 0,
+      candidates,
+    }, ctx)
+    if (!outcome.granted || outcome.reservation === undefined) {
+      throw new SubmitCandidatesError(
+        'CANDIDATE_LIMIT_EXCEEDED',
+        outcome.denial?.message ?? 'the run candidate budget is exhausted',
+      )
+    }
+    return outcome.reservation.reservationId
+  }
+
+  /** Close the candidate reservation with the real evidence of what was written. */
+  async #settleCandidates(
+    runId: Uuid,
+    reservationId: Uuid | undefined,
+    accepted: readonly ReceiptEntry[],
+    submitted: number,
+    ctx: ToolContext,
+  ): Promise<void> {
+    if (this.#budget === undefined || this.#ledgerIdFor === undefined || reservationId === undefined) return
+    const ledgerId = this.#ledgerIdFor(runId)
+    const refs = [...new Map(accepted.flatMap((entry) => entry.sourceRefs).map((ref) => [ref.id, ref])).values()]
+    await this.#budget.settle({
+      ledgerId,
+      reservationId,
+      status: refs.length === 0 ? 'failed' : 'completed',
+      usage: { durationMs: 0 },
+      measured: { candidates: submitted },
+      evidenceRefs: refs,
+    }, ctx).catch(() => undefined)
   }
 
   /**

@@ -45,6 +45,12 @@ interface LedgerRow extends QueryResultRow {
   rows_consumed: string
   bytes_consumed: string
   model_tokens_consumed: string
+  searches_consumed: number
+  model_rounds_consumed: number
+  sources_consumed: number
+  candidates_consumed: number
+  download_bytes_consumed: string
+  read_bytes_consumed: string
   run_id: string | null
   revision: string
   created_at: Date
@@ -63,10 +69,22 @@ interface ReservationRow extends QueryResultRow {
   reserved_rows: string
   reserved_bytes: string
   reserved_model_tokens: string
+  searches: number
+  model_rounds: number
+  sources: number
+  candidates: number
+  reserved_download_bytes: string
+  reserved_read_bytes: string
   actual_tool_calls: number | null
   actual_rows: string | null
   actual_bytes: string | null
   actual_model_tokens: string | null
+  actual_searches: number | null
+  actual_model_rounds: number | null
+  actual_sources: number | null
+  actual_candidates: number | null
+  actual_download_bytes: string | null
+  actual_read_bytes: string | null
   usage_unknown: boolean
   evidence_refs: ResourceRef[]
   deadline: Date
@@ -94,12 +112,16 @@ interface ParallelRow extends QueryResultRow {
 }
 
 const LEDGER_COLUMNS = `ledger_id, kind, limits, deadline, tool_calls_consumed, repair_attempts_consumed,
-  rows_consumed, bytes_consumed, model_tokens_consumed, run_id, revision, created_at, updated_at`
+  rows_consumed, bytes_consumed, model_tokens_consumed, searches_consumed, model_rounds_consumed,
+  sources_consumed, candidates_consumed, download_bytes_consumed, read_bytes_consumed, run_id,
+  revision, created_at, updated_at`
 
 const RESERVATION_COLUMNS = `reservation_id, ledger_id, idempotency_key, status, intent_required,
   tool_calls, repair_attempts, parallel_tools, reserved_rows, reserved_bytes, reserved_model_tokens,
-  actual_tool_calls, actual_rows, actual_bytes, actual_model_tokens, usage_unknown, evidence_refs,
-  run_id, deadline, granted_at, expires_at, settled_at`
+  searches, model_rounds, sources, candidates, reserved_download_bytes, reserved_read_bytes,
+  actual_tool_calls, actual_rows, actual_bytes, actual_model_tokens, actual_searches,
+  actual_model_rounds, actual_sources, actual_candidates, actual_download_bytes, actual_read_bytes,
+  usage_unknown, evidence_refs, run_id, deadline, granted_at, expires_at, settled_at`
 
 const INTENT_COLUMNS = `intent_id, ledger_id, reservation_id, call_id, tool_id, arguments_digest,
   attempt, retry_reason, recorded_at`
@@ -123,6 +145,12 @@ function toLedgerRecord(row: LedgerRow): BudgetLedgerRecord {
       rows: num(row.rows_consumed),
       bytes: num(row.bytes_consumed),
       modelTokens: num(row.model_tokens_consumed),
+      searches: row.searches_consumed,
+      modelRounds: row.model_rounds_consumed,
+      sources: row.sources_consumed,
+      candidates: row.candidates_consumed,
+      downloadBytes: num(row.download_bytes_consumed),
+      readBytes: num(row.read_bytes_consumed),
     },
     revision: row.revision,
     createdAt: row.created_at.toISOString(),
@@ -138,6 +166,12 @@ function toReservationRecord(row: ReservationRow): BudgetReservationRecord {
     rows: num(row.reserved_rows),
     bytes: num(row.reserved_bytes),
     modelTokens: num(row.reserved_model_tokens),
+    searches: row.searches,
+    modelRounds: row.model_rounds,
+    sources: row.sources,
+    candidates: row.candidates,
+    downloadBytes: num(row.reserved_download_bytes),
+    readBytes: num(row.reserved_read_bytes),
   }
   const actual: BudgetConsumption | undefined =
     row.actual_tool_calls === null
@@ -148,6 +182,12 @@ function toReservationRecord(row: ReservationRow): BudgetReservationRecord {
           rows: num(row.actual_rows),
           bytes: num(row.actual_bytes),
           modelTokens: num(row.actual_model_tokens),
+          searches: row.actual_searches ?? 0,
+          modelRounds: row.actual_model_rounds ?? 0,
+          sources: row.actual_sources ?? 0,
+          candidates: row.actual_candidates ?? 0,
+          downloadBytes: num(row.actual_download_bytes),
+          readBytes: num(row.actual_read_bytes),
         }
   return {
     reservationId: row.reservation_id,
@@ -237,7 +277,7 @@ export class PostgresBudgetLedgerStore implements BudgetLedgerStore {
           ledger.ledgerId,
           ledger.kind,
           JSON.stringify(ledger.limits),
-          new Date(Date.parse(ledger.openedAt) + ledger.limits.deadlineMs).toISOString(),
+          ledger.deadline ?? new Date(Date.parse(ledger.openedAt) + ledger.limits.deadlineMs).toISOString(),
           ledger.runId ?? null,
           ledger.openedAt,
         ],
@@ -340,6 +380,12 @@ export class PostgresBudgetLedgerStore implements BudgetLedgerStore {
           rows: request.consumption.rows,
           bytes: request.consumption.bytes,
           modelTokens: request.consumption.modelTokens,
+          searches: request.consumption.searches,
+          modelRounds: request.consumption.modelRounds,
+          sources: request.consumption.sources,
+          candidates: request.consumption.candidates,
+          downloadBytes: request.consumption.downloadBytes,
+          readBytes: request.consumption.readBytes,
         },
         ...(request.requestedDeadline === undefined
           ? {}
@@ -358,12 +404,13 @@ export class PostgresBudgetLedgerStore implements BudgetLedgerStore {
         `INSERT INTO agent_platform.budget_reservations
            (tenant_id, space_id, ledger_id, reservation_id, idempotency_key, status, intent_required,
             tool_calls, repair_attempts, parallel_tools, reserved_rows, reserved_bytes,
-            reserved_model_tokens, run_id, deadline, granted_at, expires_at)
+            reserved_model_tokens, searches, model_rounds, sources, candidates,
+            reserved_download_bytes, reserved_read_bytes, run_id, deadline, granted_at, expires_at)
          VALUES (
            current_setting('app.tenant_id')::uuid,
            current_setting('app.space_id')::uuid,
-           $1, $2, $3, 'reserved', $4, $5, $6, $7, $8, $9, $10, $11, $12::timestamptz, $13::timestamptz,
-           $12::timestamptz
+           $1, $2, $3, 'reserved', $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16,
+           $17, $18::timestamptz, $19::timestamptz, $18::timestamptz
          )`,
         [
           request.ledgerId,
@@ -376,6 +423,12 @@ export class PostgresBudgetLedgerStore implements BudgetLedgerStore {
           plan.consumption.rows,
           plan.consumption.bytes,
           plan.consumption.modelTokens,
+          plan.consumption.searches,
+          plan.consumption.modelRounds,
+          plan.consumption.sources,
+          plan.consumption.candidates,
+          plan.consumption.downloadBytes,
+          plan.consumption.readBytes,
           ledger.runId ?? null,
           plan.deadline,
           request.now,
@@ -396,8 +449,14 @@ export class PostgresBudgetLedgerStore implements BudgetLedgerStore {
                 rows_consumed = $4,
                 bytes_consumed = $5,
                 model_tokens_consumed = $6,
+                searches_consumed = $7,
+                model_rounds_consumed = $8,
+                sources_consumed = $9,
+                candidates_consumed = $10,
+                download_bytes_consumed = $11,
+                read_bytes_consumed = $12,
                 revision = revision + 1,
-                updated_at = $7::timestamptz
+                updated_at = $13::timestamptz
           WHERE tenant_id = current_setting('app.tenant_id')::uuid
             AND space_id = current_setting('app.space_id')::uuid
             AND ledger_id = $1`,
@@ -408,6 +467,12 @@ export class PostgresBudgetLedgerStore implements BudgetLedgerStore {
           consumed.rows,
           consumed.bytes,
           consumed.modelTokens,
+          consumed.searches,
+          consumed.modelRounds,
+          consumed.sources,
+          consumed.candidates,
+          consumed.downloadBytes,
+          consumed.readBytes,
           request.now,
         ],
       )
@@ -617,6 +682,7 @@ export class PostgresBudgetLedgerStore implements BudgetLedgerStore {
         consumed: ledger.consumed,
         status: request.status,
         usage: request.usage,
+        ...(request.measured === undefined ? {} : { measured: request.measured }),
       })
       if (plan.kind === 'conflict') {
         throw new BudgetLedgerError('SETTLEMENT_CONFLICT', plan.message)
@@ -642,8 +708,14 @@ export class PostgresBudgetLedgerStore implements BudgetLedgerStore {
                 rows_consumed = $4,
                 bytes_consumed = $5,
                 model_tokens_consumed = $6,
+                searches_consumed = $7,
+                model_rounds_consumed = $8,
+                sources_consumed = $9,
+                candidates_consumed = $10,
+                download_bytes_consumed = $11,
+                read_bytes_consumed = $12,
                 revision = revision + 1,
-                updated_at = $7::timestamptz
+                updated_at = $13::timestamptz
           WHERE tenant_id = current_setting('app.tenant_id')::uuid
             AND space_id = current_setting('app.space_id')::uuid
             AND ledger_id = $1`,
@@ -654,6 +726,12 @@ export class PostgresBudgetLedgerStore implements BudgetLedgerStore {
           plan.consumed.rows,
           plan.consumed.bytes,
           plan.consumed.modelTokens,
+          plan.consumed.searches,
+          plan.consumed.modelRounds,
+          plan.consumed.sources,
+          plan.consumed.candidates,
+          plan.consumed.downloadBytes,
+          plan.consumed.readBytes,
           request.now,
         ],
       )
@@ -664,9 +742,15 @@ export class PostgresBudgetLedgerStore implements BudgetLedgerStore {
                 actual_rows = $5,
                 actual_bytes = $6,
                 actual_model_tokens = $7,
-                usage_unknown = $8,
-                evidence_refs = $9::jsonb,
-                settled_at = $10::timestamptz
+                actual_searches = $8,
+                actual_model_rounds = $9,
+                actual_sources = $10,
+                actual_candidates = $11,
+                actual_download_bytes = $12,
+                actual_read_bytes = $13,
+                usage_unknown = $14,
+                evidence_refs = $15::jsonb,
+                settled_at = $16::timestamptz
           WHERE tenant_id = current_setting('app.tenant_id')::uuid
             AND space_id = current_setting('app.space_id')::uuid
             AND ledger_id = $1 AND reservation_id = $2`,
@@ -678,6 +762,12 @@ export class PostgresBudgetLedgerStore implements BudgetLedgerStore {
           plan.actual.rows,
           plan.actual.bytes,
           plan.actual.modelTokens,
+          plan.actual.searches,
+          plan.actual.modelRounds,
+          plan.actual.sources,
+          plan.actual.candidates,
+          plan.actual.downloadBytes,
+          plan.actual.readBytes,
           plan.usageUnknown,
           JSON.stringify(request.evidenceRefs),
           request.now,

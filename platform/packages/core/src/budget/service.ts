@@ -60,7 +60,18 @@ function validateReserveInput(input: BudgetReserveInput): void {
       'Idempotency-Key must be between 8 and 256 characters',
     )
   }
-  const amounts = [input.toolCalls ?? 1, input.rows ?? 0, input.bytes ?? 0, input.modelTokens ?? 0]
+  const amounts = [
+    input.toolCalls ?? 1,
+    input.rows ?? 0,
+    input.bytes ?? 0,
+    input.modelTokens ?? 0,
+    input.searches ?? 0,
+    input.modelRounds ?? 0,
+    input.sources ?? 0,
+    input.candidates ?? 0,
+    input.downloadBytes ?? 0,
+    input.readBytes ?? 0,
+  ]
   if (!amounts.every(isNonNegativeInteger)) {
     throw new BudgetLedgerError(
       'INVALID_BUDGET_REQUEST',
@@ -109,6 +120,7 @@ export class BudgetService implements BudgetLedgerPort {
         kind: input.kind,
         limits,
         openedAt: this.#now(),
+        ...(input.deadline === undefined ? {} : { deadline: input.deadline }),
         ...(input.runId === undefined ? {} : { runId: input.runId }),
       },
       ctx,
@@ -129,6 +141,12 @@ export class BudgetService implements BudgetLedgerPort {
         rows: input.rows ?? 0,
         bytes: input.bytes ?? 0,
         modelTokens: input.modelTokens ?? 0,
+        searches: input.searches ?? 0,
+        modelRounds: input.modelRounds ?? 0,
+        sources: input.sources ?? 0,
+        candidates: input.candidates ?? 0,
+        downloadBytes: input.downloadBytes ?? 0,
+        readBytes: input.readBytes ?? 0,
       },
       parallelTools: input.parallel === true ? 1 : 0,
       requiresIntent: input.requiresIntent === true,
@@ -218,6 +236,7 @@ export class BudgetService implements BudgetLedgerPort {
         now,
         status: input.status,
         usage: input.usage,
+        ...(input.measured === undefined ? {} : { measured: input.measured }),
         evidenceRefs: input.evidenceRefs,
       },
       ctx,
@@ -254,6 +273,12 @@ export class BudgetService implements BudgetLedgerPort {
       rows: reservation.reserved.rows,
       bytes: reservation.reserved.bytes,
       modelTokens: reservation.reserved.modelTokens,
+      searches: reservation.reserved.searches,
+      modelRounds: reservation.reserved.modelRounds,
+      sources: reservation.reserved.sources,
+      candidates: reservation.reserved.candidates,
+      downloadBytes: reservation.reserved.downloadBytes,
+      readBytes: reservation.reserved.readBytes,
       usageUnknown: reservation.usageUnknown,
       deadline: reservation.deadline,
     }

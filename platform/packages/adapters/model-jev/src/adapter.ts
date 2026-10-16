@@ -489,6 +489,7 @@ export class JevDecisionAdapter implements DecisionPort {
           idempotencyKey: reservationKey(decisionId, attempt),
           parallel: true,
           modelTokens: estimatedTokens,
+          modelRounds: 1,
           requestedDeadline: ctx.deadline,
         },
         ctx,

@@ -1,4 +1,8 @@
-import type { BudgetLedgerKind, BudgetLedgerLimits } from '@ontology/contracts'
+import type {
+  BudgetLedgerKind,
+  BudgetLedgerLimits,
+  ResearchBudgetLimits,
+} from '@ontology/contracts'
 
 /**
  * Initial adjustable budgets (SPEC §9).
@@ -67,5 +71,21 @@ export function tightenBudgetLimits(
     deadlineMs: Math.min(base.deadlineMs, override.deadlineMs ?? base.deadlineMs),
   }
   const maxModelTokens = minOptional(base.maxModelTokens, override.maxModelTokens)
-  return maxModelTokens === undefined ? tightened : { ...tightened, maxModelTokens }
+  const maxSearches = minOptional(base.maxSearches, override.maxSearches)
+  const maxModelRounds = minOptional(base.maxModelRounds, override.maxModelRounds)
+  const maxSources = minOptional(base.maxSources, override.maxSources)
+  const maxCandidates = minOptional(base.maxCandidates, override.maxCandidates)
+  const maxDownloadBytes = minOptional(base.maxDownloadBytes, override.maxDownloadBytes)
+  const maxReadBytes = minOptional(base.maxReadBytes, override.maxReadBytes)
+  const tightenedResearch: ResearchBudgetLimits = {
+    ...(maxSearches === undefined ? {} : { maxSearches }),
+    ...(maxModelRounds === undefined ? {} : { maxModelRounds }),
+    ...(maxSources === undefined ? {} : { maxSources }),
+    ...(maxCandidates === undefined ? {} : { maxCandidates }),
+    ...(maxDownloadBytes === undefined ? {} : { maxDownloadBytes }),
+    ...(maxReadBytes === undefined ? {} : { maxReadBytes }),
+  }
+  return maxModelTokens === undefined
+    ? { ...tightened, ...tightenedResearch }
+    : { ...tightened, ...tightenedResearch, maxModelTokens }
 }

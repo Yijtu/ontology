@@ -84,7 +84,7 @@ class FakeBudget implements BudgetLedgerPort {
   async openLedger(input: { readonly ledgerId: string; readonly kind: 'run' | 'background'; readonly runId?: string }): Promise<BudgetLedgerRecord> {
     return {
       ledgerId: input.ledgerId, kind: input.kind, limits: { maxToolCalls: 10, maxRepairAttempts: 1, maxParallelTools: 2, maxRows: 100, maxBytes: 100000, deadlineMs: 600000 },
-      deadline: '2099-01-01T00:00:00Z', consumed: { toolCalls: 0, repairAttempts: 0, rows: 0, bytes: 0, modelTokens: 0 }, revision: '1', createdAt: RECORDED_AT, updatedAt: RECORDED_AT,
+      deadline: '2099-01-01T00:00:00Z', consumed: { toolCalls: 0, repairAttempts: 0, rows: 0, bytes: 0, modelTokens: 0, searches: 0, modelRounds: 0, sources: 0, candidates: 0, downloadBytes: 0, readBytes: 0 }, revision: '1', createdAt: RECORDED_AT, updatedAt: RECORDED_AT,
       ...(input.runId === undefined ? {} : { runId: input.runId }),
     }
   }
@@ -96,12 +96,12 @@ class FakeBudget implements BudgetLedgerPort {
     this.#reservations.set(input.idempotencyKey, existing)
     return {
       granted: true, remaining: this.#snapshot(input.ledgerId),
-      reservation: { reservationId: existing, ledgerId: input.ledgerId, idempotencyKey: input.idempotencyKey, status: 'reserved', intentRequired: false, reserved: { toolCalls: 1, repairAttempts: 0, rows: 0, bytes: 0, modelTokens: 0 }, parallelTools: 0, usageUnknown: false, evidenceRefs: [], deadline: input.requestedDeadline ?? '2099-01-01T00:00:00Z', grantedAt: RECORDED_AT, expiresAt: '2099-01-01T00:00:00Z' },
+      reservation: { reservationId: existing, ledgerId: input.ledgerId, idempotencyKey: input.idempotencyKey, status: 'reserved', intentRequired: false, reserved: { toolCalls: 1, repairAttempts: 0, rows: 0, bytes: 0, modelTokens: 0, searches: 0, modelRounds: 0, sources: 0, candidates: 0, downloadBytes: 0, readBytes: 0 }, parallelTools: 0, usageUnknown: false, evidenceRefs: [], deadline: input.requestedDeadline ?? '2099-01-01T00:00:00Z', grantedAt: RECORDED_AT, expiresAt: '2099-01-01T00:00:00Z' },
     }
   }
   async recordIntent(): Promise<never> { throw new Error('not used') }
   async settle(input: BudgetSettlementInput): Promise<AtomicSettleOutcome> {
-    return { reservation: { reservationId: input.reservationId, ledgerId: input.ledgerId, idempotencyKey: 'x', status: 'settled', intentRequired: false, reserved: { toolCalls: 1, repairAttempts: 0, rows: 0, bytes: 0, modelTokens: 0 }, parallelTools: 0, usageUnknown: false, evidenceRefs: [], deadline: '2099-01-01T00:00:00Z', grantedAt: RECORDED_AT, expiresAt: '2099-01-01T00:00:00Z' }, applied: true, remaining: this.#snapshot(input.ledgerId) }
+    return { reservation: { reservationId: input.reservationId, ledgerId: input.ledgerId, idempotencyKey: 'x', status: 'settled', intentRequired: false, reserved: { toolCalls: 1, repairAttempts: 0, rows: 0, bytes: 0, modelTokens: 0, searches: 0, modelRounds: 0, sources: 0, candidates: 0, downloadBytes: 0, readBytes: 0 }, parallelTools: 0, usageUnknown: false, evidenceRefs: [], deadline: '2099-01-01T00:00:00Z', grantedAt: RECORDED_AT, expiresAt: '2099-01-01T00:00:00Z' }, applied: true, remaining: this.#snapshot(input.ledgerId) }
   }
   async remaining(ledgerId: string): Promise<BudgetLedgerSnapshot> { return this.#snapshot(ledgerId) }
 }

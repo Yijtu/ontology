@@ -13,6 +13,7 @@ import type {
   Uuid,
 } from '@ontology/contracts'
 import type { ExecutionModelBindingService } from '../../model-settings/execution-model-binding-service'
+import { sha256DigestOf } from '../../extraction/canonical'
 import { WebResearchError, WebResearchService } from './web-research-service'
 import type { CandidateSourceIngestionService } from './ingestion-service'
 import type { ResearchSearchResolver } from './research-search-resolver'
@@ -126,11 +127,13 @@ export class LegacyResearchExecutor {
     await this.#executions.putExecution(scope, { ...execution, status: 'running', stage: 'searching' }, ctx)
 
     // The ledger is reopened per attempt but `reserve` is idempotent on the run's key, so a
-    // reclaimed attempt draws from the same reservation instead of resetting the budget.
+    // reclaimed attempt draws from the same reservation instead of resetting the budget. The search
+    // is one `searches` unit charged on the one run ledger at the run's original deadline.
     const reserve = await this.#budget.reserve({
       ledgerId,
       idempotencyKey: `research:${input.researchId}:search`,
       toolCalls: 1,
+      searches: 1,
       requestedDeadline: input.request.limits.deadline,
     }, ctx)
     if (!reserve.granted) {
@@ -153,6 +156,9 @@ export class LegacyResearchExecutor {
     }
 
     const startedAt = Date.now()
+    // One ledger for the whole run: each archived page reserves exactly one `sources` unit, keyed by
+    // the page URL so a re-page is idempotent and the source ceiling cannot be bypassed.
+    const sourceReservations = new Map<string, Uuid>()
     let result
     try {
       result = await research.research({
@@ -162,6 +168,30 @@ export class LegacyResearchExecutor {
         signal,
         idempotencyKey: `research:${input.researchId}`,
         admit: () => this.#stillAdmitting(scope, input.researchId, ctx),
+        reserveSource: async (url) => {
+          const outcome = await this.#budget.reserve({
+            ledgerId,
+            idempotencyKey: `research:${input.researchId}:source:${sha256DigestOf(url)}`,
+            toolCalls: 0,
+            sources: 1,
+            requestedDeadline: input.request.limits.deadline,
+          }, ctx)
+          if (!outcome.granted || outcome.reservation === undefined) return false
+          sourceReservations.set(url, outcome.reservation.reservationId)
+          return true
+        },
+        recordSource: async (url, contentRef) => {
+          const reservationId = sourceReservations.get(url)
+          if (reservationId === undefined) return
+          await this.#budget.settle({
+            ledgerId,
+            reservationId,
+            status: 'completed',
+            usage: { durationMs: 0 },
+            measured: { sources: 1 },
+            evidenceRefs: [contentRef],
+          }, ctx).catch(() => undefined)
+        },
       }, ctx)
     } catch (error) {
       await this.#settle(ledgerId, reservationId, 'failed', Date.now() - startedAt, ctx)
@@ -176,7 +206,7 @@ export class LegacyResearchExecutor {
       await this.#finalize(scope, latest, { status: stopReason === 'cancelled' ? 'cancelled' : 'failed', stage: 'searching', stopReason }, ctx)
       throw error
     }
-    await this.#settle(ledgerId, reservationId, 'completed', Date.now() - startedAt, ctx)
+    await this.#settle(ledgerId, reservationId, 'completed', Date.now() - startedAt, ctx, { searches: 1 })
 
     // A cancel that landed while the provider was running fences the run: the terminal write is
     // refused by the store, so the late result is never admitted.
@@ -250,12 +280,13 @@ export class LegacyResearchExecutor {
     return latest !== undefined && !isTerminal(latest.status)
   }
 
-  async #settle(ledgerId: Uuid, reservationId: Uuid, status: 'completed' | 'failed', durationMs: number, ctx: ToolContext): Promise<void> {
+  async #settle(ledgerId: Uuid, reservationId: Uuid, status: 'completed' | 'failed', durationMs: number, ctx: ToolContext, measured?: { readonly searches?: number }): Promise<void> {
     await this.#budget.settle({
       ledgerId,
       reservationId,
       status,
       usage: { durationMs: Math.max(0, durationMs), calls: status === 'completed' ? 1 : 0 },
+      ...(measured === undefined ? {} : { measured }),
       evidenceRefs: [],
     }, ctx).catch(() => undefined)
   }
