@@ -497,3 +497,120 @@ describe('real-PostgreSQL quota separation and isolation', () => {
     expect(events.rows[0]?.count).toBe('2')
   })
 })
+
+describe('real-PostgreSQL research budget dimensions', () => {
+  it('adds the research columns without disturbing the existing background ledger', async () => {
+    const columns = await adminClient.query<{ column_name: string; is_nullable: string; column_default: string }>(
+      `SELECT column_name, is_nullable, column_default
+         FROM information_schema.columns
+        WHERE table_schema = 'agent_platform' AND table_name IN ('budget_ledgers', 'budget_reservations')
+          AND column_name IN (
+            'searches_consumed', 'model_rounds_consumed', 'sources_consumed', 'candidates_consumed',
+            'download_bytes_consumed', 'read_bytes_consumed', 'searches', 'candidates',
+            'reserved_download_bytes', 'actual_sources')`,
+    )
+    expect(columns.rows.length).toBeGreaterThanOrEqual(10)
+    expect(columns.rows.filter((row) => row.column_name.endsWith('_consumed')).every((row) => row.is_nullable === 'NO')).toBe(true)
+    expect(columns.rows.every((row) => row.is_nullable === 'NO' ? row.column_default !== null : true)).toBe(true)
+
+    const ledgerId = randomUUID()
+    await service.openLedger(
+      { ledgerId, kind: 'background', overrideLimits: { maxToolCalls: 2 } },
+      CONTEXT_A,
+    )
+    const snapshot = await service.remaining(ledgerId, CONTEXT_A)
+    // A background/ingestion ledger was not given a research ceiling, so those dimensions stay
+    // unbounded and zero — its behaviour is exactly what it was before migration 104.
+    expect(snapshot.searchesRemaining).toBeUndefined()
+    expect(snapshot.sourcesRemaining).toBeUndefined()
+    expect(snapshot.candidatesRemaining).toBeUndefined()
+
+    await service.reserve({ ledgerId, idempotencyKey: 'pg-104-bg-0001' }, CONTEXT_A)
+    await service.reserve({ ledgerId, idempotencyKey: 'pg-104-bg-0002' }, CONTEXT_A)
+    const denied = await service.reserve({ ledgerId, idempotencyKey: 'pg-104-bg-0003' }, CONTEXT_A)
+    expect(denied.granted).toBe(false)
+    expect(denied.denial?.code).toBe('BUDGET_EXHAUSTED')
+
+    const row = await adminClient.query<{ sources_consumed: number; candidates_consumed: number }>(
+      `SELECT sources_consumed, candidates_consumed
+         FROM agent_platform.budget_ledgers
+        WHERE tenant_id = $1 AND space_id = $2 AND ledger_id = $3`,
+      [SCOPE_A.tenantId, SCOPE_A.spaceId, ledgerId],
+    )
+    expect(row.rows[0]?.sources_consumed).toBe(0)
+    expect(row.rows[0]?.candidates_consumed).toBe(0)
+  })
+
+  it('grants exactly one reservation when parallel requests contend for the last source', async () => {
+    const ledgerId = randomUUID()
+    await service.openLedger(
+      { ledgerId, kind: 'run', overrideLimits: { maxSources: 1 }, runId: RUN_A },
+      CONTEXT_A,
+    )
+    const outcomes = await Promise.all(
+      Array.from({ length: 16 }, (_, index) =>
+        service.reserve(
+          { ledgerId, idempotencyKey: `pg-src-${String(index).padStart(4, '0')}`, toolCalls: 0, sources: 1 },
+          CONTEXT_A,
+        ),
+      ),
+    )
+    expect(outcomes.filter((outcome) => outcome.granted)).toHaveLength(1)
+    expect(
+      outcomes.filter((outcome) => !outcome.granted).every((outcome) => outcome.denial?.code === 'BUDGET_EXHAUSTED'),
+    ).toBe(true)
+
+    const row = await adminClient.query<{ sources_consumed: number }>(
+      `SELECT sources_consumed
+         FROM agent_platform.budget_ledgers
+        WHERE tenant_id = $1 AND space_id = $2 AND ledger_id = $3`,
+      [SCOPE_A.tenantId, SCOPE_A.spaceId, ledgerId],
+    )
+    expect(row.rows[0]?.sources_consumed).toBe(1)
+  })
+
+  it('cannot bypass candidateLimit across two separate committed submissions', async () => {
+    const ledgerId = randomUUID()
+    await service.openLedger(
+      { ledgerId, kind: 'run', overrideLimits: { maxCandidates: 2 }, runId: RUN_A },
+      CONTEXT_A,
+    )
+    const first = requireReservation(
+      await service.reserve({ ledgerId, idempotencyKey: 'pg-cand-commit-0001', toolCalls: 0, candidates: 1 }, CONTEXT_A),
+    )
+    await service.settle(
+      { ledgerId, reservationId: first.reservationId, status: 'completed', usage: { durationMs: 1 }, measured: { candidates: 1 }, evidenceRefs: [evidenceRef()] },
+      CONTEXT_A,
+    )
+    const second = requireReservation(
+      await service.reserve({ ledgerId, idempotencyKey: 'pg-cand-commit-0002', toolCalls: 0, candidates: 1 }, CONTEXT_A),
+    )
+    await service.settle(
+      { ledgerId, reservationId: second.reservationId, status: 'completed', usage: { durationMs: 1 }, measured: { candidates: 1 }, evidenceRefs: [evidenceRef()] },
+      CONTEXT_A,
+    )
+
+    const third = await service.reserve({ ledgerId, idempotencyKey: 'pg-cand-commit-0003', toolCalls: 0, candidates: 1 }, CONTEXT_A)
+    expect(third.granted).toBe(false)
+    expect(third.denial?.code).toBe('BUDGET_EXHAUSTED')
+    expect((await service.remaining(ledgerId, CONTEXT_A)).candidatesRemaining).toBe(0)
+  })
+
+  it('pins the accepted absolute deadline and never slides it on a later open', async () => {
+    const ledgerId = randomUUID()
+    const deadline = '2030-06-01T00:00:00Z'
+    await service.openLedger({ ledgerId, kind: 'run', runId: RUN_A, deadline }, CONTEXT_A)
+    const row = await adminClient.query<{ deadline: Date }>(
+      `SELECT deadline
+         FROM agent_platform.budget_ledgers
+        WHERE tenant_id = $1 AND space_id = $2 AND ledger_id = $3`,
+      [SCOPE_A.tenantId, SCOPE_A.spaceId, ledgerId],
+    )
+    expect(row.rows[0]?.deadline.toISOString()).toBe('2030-06-01T00:00:00.000Z')
+
+    // A resume/replay re-opens the same ledger with a different requested deadline; the stored
+    // absolute deadline must win so it never becomes "now + the original duration".
+    await service.openLedger({ ledgerId, kind: 'run', runId: RUN_A, deadline: '2031-01-01T00:00:00Z' }, CONTEXT_A)
+    expect((await service.remaining(ledgerId, CONTEXT_A)).deadline).toBe('2030-06-01T00:00:00.000Z')
+  })
+})

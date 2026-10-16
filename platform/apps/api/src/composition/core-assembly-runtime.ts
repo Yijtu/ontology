@@ -9,6 +9,7 @@ import {
   RunService, RunTypedResultContextSource, StructuredExtractionService, StructuredExtractionStageHandler, TableHardVerificationService,
   TypedEvidenceDraftWriter, WebResearchService, WorkflowController, createRunCheckpointPort, createSourceGroundingService, ReviewHandoffStageHandler, LegacyResearchExecutor,
   WorkspaceResearchRunService,
+  runBudgetLedgerId,
 } from '@ontology/application'
 import type { ResearchAdmissionArtifactPort } from '@ontology/application'
 import { FiniteGrammarRuleSupportValidator, IncrementalMaterializer } from '@ontology/semantic-engine'
@@ -226,6 +227,10 @@ export async function assembleRuntimePipeline(
     // Re-check the run's dispatch fence (cancel/revoke) before the write transaction; a cancelled
     // run has its fence removed, so a late `submit_candidates` is a FENCE_STALE rejection.
     fence: { isCancelled: async (runId: Uuid) => !dispatchFences.has(runId) },
+    // Charge the run's one shared ledger for the candidate units, so `candidateLimit` is enforced
+    // across separate submissions and resumes instead of bounding only a single batch (design §8).
+    budget: state.budget,
+    ledgerIdFor: runBudgetLedgerId,
   })
   const candidateCommandGateway = new CandidateAuthoringCommandGateway(candidateSubmissionService)
   const controllerDependencies = {

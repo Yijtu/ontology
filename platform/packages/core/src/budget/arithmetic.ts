@@ -7,6 +7,7 @@ import type {
   BudgetRemaining,
   BudgetReservationStatus,
   BudgetSettlementStatus,
+  ResearchUsageDimensions,
   Rfc3339UtcTimestamp,
   ToolUsage,
 } from '@ontology/contracts'
@@ -22,8 +23,30 @@ import type {
 
 export const MIN_RATE_LIMIT_BACKOFF_MS = 1_000
 
+/** The research dimensions a consumption record always carries, at zero when unused. */
+export const ZERO_RESEARCH_DIMENSIONS: ResearchUsageDimensions = {
+  searches: 0,
+  modelRounds: 0,
+  sources: 0,
+  candidates: 0,
+  downloadBytes: 0,
+  readBytes: 0,
+}
+
+/**
+ * Dimensions whose consumption is never refunded: a search/model round/source/candidate
+ * that happened stays charged even if the call is reconciled to a smaller measured value.
+ * The byte dimensions reconcile (an over-estimate is released once) like rows/bytes.
+ */
+export const MONOTONIC_RESEARCH_DIMENSIONS: readonly (keyof ResearchUsageDimensions)[] = [
+  'searches',
+  'modelRounds',
+  'sources',
+  'candidates',
+]
+
 export function emptyConsumption(): BudgetConsumption {
-  return { toolCalls: 0, repairAttempts: 0, rows: 0, bytes: 0, modelTokens: 0 }
+  return { toolCalls: 0, repairAttempts: 0, rows: 0, bytes: 0, modelTokens: 0, ...ZERO_RESEARCH_DIMENSIONS }
 }
 
 export function addConsumption(
@@ -36,6 +59,12 @@ export function addConsumption(
     rows: left.rows + right.rows,
     bytes: left.bytes + right.bytes,
     modelTokens: left.modelTokens + right.modelTokens,
+    searches: left.searches + right.searches,
+    modelRounds: left.modelRounds + right.modelRounds,
+    sources: left.sources + right.sources,
+    candidates: left.candidates + right.candidates,
+    downloadBytes: left.downloadBytes + right.downloadBytes,
+    readBytes: left.readBytes + right.readBytes,
   }
 }
 
@@ -51,6 +80,12 @@ export interface ReservationRequestAmounts {
   readonly rows: number
   readonly bytes: number
   readonly modelTokens: number
+  readonly searches: number
+  readonly modelRounds: number
+  readonly sources: number
+  readonly candidates: number
+  readonly downloadBytes: number
+  readonly readBytes: number
 }
 
 export interface ReservationPlanInput {
@@ -136,6 +171,36 @@ export function planReservation(input: ReservationPlanInput): ReservationPlan {
   ) {
     return denial('BUDGET_EXHAUSTED', 'the run model-token budget is exhausted')
   }
+  if (limits.maxSearches !== undefined && consumed.searches + request.searches > limits.maxSearches) {
+    return denial('BUDGET_EXHAUSTED', 'the research search budget is exhausted')
+  }
+  if (
+    limits.maxModelRounds !== undefined &&
+    consumed.modelRounds + request.modelRounds > limits.maxModelRounds
+  ) {
+    return denial('BUDGET_EXHAUSTED', 'the research model-round budget is exhausted')
+  }
+  if (limits.maxSources !== undefined && consumed.sources + request.sources > limits.maxSources) {
+    return denial('BUDGET_EXHAUSTED', 'the research source budget is exhausted')
+  }
+  if (
+    limits.maxCandidates !== undefined &&
+    consumed.candidates + request.candidates > limits.maxCandidates
+  ) {
+    return denial('BUDGET_EXHAUSTED', 'the research candidate budget is exhausted')
+  }
+  if (
+    limits.maxDownloadBytes !== undefined &&
+    consumed.downloadBytes + request.downloadBytes > limits.maxDownloadBytes
+  ) {
+    return denial('BUDGET_EXHAUSTED', 'the research download-byte budget is exhausted')
+  }
+  if (
+    limits.maxReadBytes !== undefined &&
+    consumed.readBytes + request.readBytes > limits.maxReadBytes
+  ) {
+    return denial('BUDGET_EXHAUSTED', 'the research read-byte budget is exhausted')
+  }
   if (input.activeParallelTools + request.parallelTools > limits.maxParallelTools) {
     return denial(
       'RATE_LIMITED',
@@ -155,6 +220,12 @@ export function planReservation(input: ReservationPlanInput): ReservationPlan {
       rows: request.rows,
       bytes: request.bytes,
       modelTokens: request.modelTokens,
+      searches: request.searches,
+      modelRounds: request.modelRounds,
+      sources: request.sources,
+      candidates: request.candidates,
+      downloadBytes: request.downloadBytes,
+      readBytes: request.readBytes,
     },
   }
 }
@@ -165,6 +236,8 @@ export interface SettlementPlanInput {
   readonly consumed: BudgetConsumption
   readonly status: BudgetSettlementStatus
   readonly usage: ToolUsage
+  /** Measured research dimensions; `ToolUsage` cannot carry them. */
+  readonly measured?: Partial<ResearchUsageDimensions>
 }
 
 export type SettlementPlan =
@@ -211,13 +284,23 @@ function isDefinitiveTerminal(status: BudgetReservationStatus): boolean {
 export function consumptionFromUsage(
   usage: ToolUsage,
   reserved: BudgetConsumption,
+  measured?: Partial<ResearchUsageDimensions>,
 ): BudgetConsumption {
+  const count = (dimension: keyof ResearchUsageDimensions): number =>
+    measured?.[dimension] ?? reserved[dimension]
+  const bytesOf = (dimension: keyof ResearchUsageDimensions): number => measured?.[dimension] ?? 0
   return {
     toolCalls: usage.calls ?? reserved.toolCalls,
     repairAttempts: reserved.repairAttempts,
     rows: usage.rows ?? 0,
     bytes: usage.bytes ?? 0,
     modelTokens: usage.modelTokens ?? 0,
+    searches: count('searches'),
+    modelRounds: count('modelRounds'),
+    sources: count('sources'),
+    candidates: count('candidates'),
+    downloadBytes: bytesOf('downloadBytes'),
+    readBytes: bytesOf('readBytes'),
   }
 }
 
@@ -233,6 +316,14 @@ export function reconcileConsumption(
     rows: nonNegative(consumed.rows + (actual.rows - reserved.rows)),
     bytes: nonNegative(consumed.bytes + (actual.bytes - reserved.bytes)),
     modelTokens: nonNegative(consumed.modelTokens + (actual.modelTokens - reserved.modelTokens)),
+    // A search/model round/source/candidate is monotonic: it was spent and is never
+    // refunded, so an under-measurement cannot free the reservation.
+    searches: consumed.searches + Math.max(0, actual.searches - reserved.searches),
+    modelRounds: consumed.modelRounds + Math.max(0, actual.modelRounds - reserved.modelRounds),
+    sources: consumed.sources + Math.max(0, actual.sources - reserved.sources),
+    candidates: consumed.candidates + Math.max(0, actual.candidates - reserved.candidates),
+    downloadBytes: nonNegative(consumed.downloadBytes + (actual.downloadBytes - reserved.downloadBytes)),
+    readBytes: nonNegative(consumed.readBytes + (actual.readBytes - reserved.readBytes)),
   }
 }
 
@@ -259,7 +350,7 @@ export function planSettlement(input: SettlementPlanInput): SettlementPlan {
     if (usageUnknown) {
       return { kind: 'noop', status: 'usage_unknown', usageUnknown: true }
     }
-    const actual = consumptionFromUsage(input.usage, input.reserved)
+    const actual = consumptionFromUsage(input.usage, input.reserved, input.measured)
     return {
       kind: 'apply',
       status: reservationStatusFor(input.status, false),
@@ -281,7 +372,7 @@ export function planSettlement(input: SettlementPlanInput): SettlementPlan {
     }
   }
 
-  const actual = consumptionFromUsage(input.usage, input.reserved)
+  const actual = consumptionFromUsage(input.usage, input.reserved, input.measured)
   return {
     kind: 'apply',
     status: reservationStatusFor(input.status, false),
@@ -313,5 +404,23 @@ export function deriveRemaining(
     rowsRemaining: nonNegative(limits.maxRows - consumed.rows),
     bytesRemaining: nonNegative(limits.maxBytes - consumed.bytes),
     parallelToolsRemaining: nonNegative(limits.maxParallelTools - activeParallelTools),
+    ...(limits.maxSearches === undefined
+      ? {}
+      : { searchesRemaining: nonNegative(limits.maxSearches - consumed.searches) }),
+    ...(limits.maxModelRounds === undefined
+      ? {}
+      : { modelRoundsRemaining: nonNegative(limits.maxModelRounds - consumed.modelRounds) }),
+    ...(limits.maxSources === undefined
+      ? {}
+      : { sourcesRemaining: nonNegative(limits.maxSources - consumed.sources) }),
+    ...(limits.maxCandidates === undefined
+      ? {}
+      : { candidatesRemaining: nonNegative(limits.maxCandidates - consumed.candidates) }),
+    ...(limits.maxDownloadBytes === undefined
+      ? {}
+      : { downloadBytesRemaining: nonNegative(limits.maxDownloadBytes - consumed.downloadBytes) }),
+    ...(limits.maxReadBytes === undefined
+      ? {}
+      : { readBytesRemaining: nonNegative(limits.maxReadBytes - consumed.readBytes) }),
   }
 }

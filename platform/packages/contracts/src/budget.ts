@@ -21,6 +21,21 @@ import type { ToolContext } from './trusted'
  * background/import job has its own ledger of a different `kind`, so an ingestion
  * backlog cannot starve an online question or borrow from its quota.
  *
+ * The one research ledger also carries the research-specific dimensions — public
+ * searches, model rounds, discovered sources, submitted candidates, downloaded and read
+ * bytes — so a run cannot buy more of any of them by retrying, paging, resuming or
+ * splitting a write into several commands. Every dimension accumulates on the same row
+ * as the classic tool/row/byte counters.
+ *
+ * Settlement ownership (design §8, node S06 — one writer per dimension, never two):
+ *  * `toolCalls`/`rows`/`bytes`  — settled by the tool **gateway** for data-tool calls.
+ *  * `modelTokens`/`modelRounds` — settled by the **model adapter** for each attempt.
+ *  * `searches`/`sources`/`downloadBytes` — settled by the research executor that owns
+ *    the search/paging loop (the adapter only reports a provider usage *signal*).
+ *  * `candidates` — settled by the controlled candidate-submission service.
+ * An adapter must never also settle a dimension the gateway already owns, which is what
+ * would double-charge one call.
+ *
  * This module only defines the port, the persisted record shapes and the classified
  * failure. The pure arithmetic lives in `@ontology/core` and the PostgreSQL
  * implementation in `@ontology/adapter-control-postgres`.
@@ -48,8 +63,38 @@ export type BudgetDenialCode =
   | 'RATE_LIMITED'
   | 'NO_PROGRESS'
 
+/**
+ * The research dimensions a run spends on the one shared ledger (design §8). They are
+ * always present on a consumption/reservation record; a run that never touches one
+ * simply leaves it at zero.
+ */
+export interface ResearchUsageDimensions {
+  /** Public `web_search` calls the run performed (one per provider search). */
+  readonly searches: number
+  /** Model rounds/turns the run spent (one per model attempt, including retries). */
+  readonly modelRounds: number
+  /** Public sources the run discovered and archived. */
+  readonly sources: number
+  /** Candidate assets the run proposed through the controlled command. */
+  readonly candidates: number
+  /** Bytes downloaded while archiving public pages. */
+  readonly downloadBytes: ByteSize
+  /** Bytes read back from authorized/archived documents. */
+  readonly readBytes: ByteSize
+}
+
+/** The optional research ceilings. Absent means that dimension is not capped for this ledger. */
+export interface ResearchBudgetLimits {
+  readonly maxSearches?: number
+  readonly maxModelRounds?: number
+  readonly maxSources?: number
+  readonly maxCandidates?: number
+  readonly maxDownloadBytes?: ByteSize
+  readonly maxReadBytes?: ByteSize
+}
+
 /** Consumption in the units the run budget is expressed in (SPEC §9). */
-export interface BudgetConsumption {
+export interface BudgetConsumption extends ResearchUsageDimensions {
   readonly toolCalls: number
   readonly repairAttempts: number
   readonly rows: number
@@ -62,7 +107,7 @@ export interface BudgetConsumption {
  * values; a model may never loosen them, so an override is always intersected with
  * the deployment base by `tightenBudgetLimits` in `@ontology/core`.
  */
-export interface BudgetLedgerLimits {
+export interface BudgetLedgerLimits extends ResearchBudgetLimits {
   readonly maxToolCalls: number
   readonly maxRepairAttempts: number
   readonly maxParallelTools: number
@@ -90,6 +135,12 @@ export interface NewBudgetLedger {
   readonly kind: BudgetLedgerKind
   readonly limits: BudgetLedgerLimits
   readonly openedAt: Rfc3339UtcTimestamp
+  /**
+   * The fixed absolute deadline this ledger must honour. When present it is stored verbatim
+   * at first open, so accepting/replaying a research run can never slide the deadline to
+   * "five minutes from now". When absent the deadline is `openedAt + limits.deadlineMs`.
+   */
+  readonly deadline?: Rfc3339UtcTimestamp
   readonly runId?: Uuid
 }
 
@@ -148,6 +199,13 @@ export interface BudgetLedgerSnapshot {
   readonly rowsRemaining: number
   readonly bytesRemaining: ByteSize
   readonly parallelToolsRemaining: number
+  /** Research dimensions that are capped on this ledger; absent when unbounded. */
+  readonly searchesRemaining?: number
+  readonly modelRoundsRemaining?: number
+  readonly sourcesRemaining?: number
+  readonly candidatesRemaining?: number
+  readonly downloadBytesRemaining?: ByteSize
+  readonly readBytesRemaining?: ByteSize
 }
 
 /** Explicit refusal. A denied reservation never touched the counters. */
@@ -181,6 +239,13 @@ export interface AtomicSettleRequest {
   readonly now: Rfc3339UtcTimestamp
   readonly status: BudgetSettlementStatus
   readonly usage: ToolUsage
+  /**
+   * Measured research dimensions. `ToolUsage` only carries the tool/gateway units; a
+   * reservation that reserved searches/sources/candidates/download/read bytes reports
+   * the measured amounts here. An omitted dimension is treated as "no measured amount"
+   * (the count dimensions keep their reserved amount; the byte dimensions release it).
+   */
+  readonly measured?: Partial<ResearchUsageDimensions>
   readonly evidenceRefs: readonly ResourceRef[]
 }
 
@@ -260,6 +325,11 @@ export interface OpenBudgetLedgerInput {
   readonly ledgerId: Uuid
   readonly kind: BudgetLedgerKind
   readonly overrideLimits?: Partial<BudgetLedgerLimits>
+  /**
+   * A fixed absolute deadline to pin at first open. A research acceptance fixes the run's
+   * original deadline here; a replay re-reads the stored ledger so it never slides.
+   */
+  readonly deadline?: Rfc3339UtcTimestamp
   readonly runId?: Uuid
 }
 
@@ -272,6 +342,13 @@ export interface BudgetReserveInput {
   readonly rows?: number
   readonly bytes?: ByteSize
   readonly modelTokens?: number
+  /** Research dimensions reserved by this call (search/paging/model-round/candidate). */
+  readonly searches?: number
+  readonly modelRounds?: number
+  readonly sources?: number
+  readonly candidates?: number
+  readonly downloadBytes?: ByteSize
+  readonly readBytes?: ByteSize
   readonly requestedDeadline?: Rfc3339UtcTimestamp
   readonly requiresIntent?: boolean
 }
@@ -289,6 +366,7 @@ export interface BudgetSettlementInput {
   readonly reservationId: Uuid
   readonly status: BudgetSettlementStatus
   readonly usage: ToolUsage
+  readonly measured?: Partial<ResearchUsageDimensions>
   readonly evidenceRefs: readonly ResourceRef[]
 }
 

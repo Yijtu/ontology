@@ -137,12 +137,12 @@ class FakeExecutionStore implements ResearchExecutionStore {
   }
 }
 
-const ZERO_USAGE: BudgetConsumption = { toolCalls: 0, repairAttempts: 0, rows: 0, bytes: 0, modelTokens: 0 }
+const ZERO_USAGE: BudgetConsumption = { toolCalls: 0, repairAttempts: 0, rows: 0, bytes: 0, modelTokens: 0, searches: 0, modelRounds: 0, sources: 0, candidates: 0, downloadBytes: 0, readBytes: 0 }
 const LIMITS: BudgetLedgerLimits = { maxToolCalls: 20, maxRepairAttempts: 2, maxParallelTools: 2, maxRows: 1000, maxBytes: 1_000_000, deadlineMs: 600_000 }
 
 class FakeBudget implements BudgetLedgerPort {
   readonly ledgers = new Map<string, { record: BudgetLedgerRecord; reservations: Map<string, BudgetReservationRecord> }>()
-  reserveCalls: { ledgerId: string; idempotencyKey: string }[] = []
+  reserveCalls: { ledgerId: string; idempotencyKey: string; sources: number; searches: number; requestedDeadline?: string }[] = []
   deny = false
   async openLedger(input: OpenBudgetLedgerInput): Promise<BudgetLedgerRecord> {
     const existing = this.ledgers.get(input.ledgerId)
@@ -165,7 +165,7 @@ class FakeBudget implements BudgetLedgerPort {
     }
   }
   async reserve(input: BudgetReserveInput): Promise<AtomicReserveOutcome> {
-    this.reserveCalls.push({ ledgerId: input.ledgerId, idempotencyKey: input.idempotencyKey })
+    this.reserveCalls.push({ ledgerId: input.ledgerId, idempotencyKey: input.idempotencyKey, sources: input.sources ?? 0, searches: input.searches ?? 0, ...(input.requestedDeadline === undefined ? {} : { requestedDeadline: input.requestedDeadline }) })
     const ledger = this.ledgers.get(input.ledgerId)
     if (ledger === undefined) throw new Error('LEDGER_NOT_FOUND')
     const remaining = this.#snapshot(input.ledgerId)
@@ -488,6 +488,34 @@ describe('catalogue-pinned research (S03)', () => {
     )).rejects.toMatchObject({ code: 'CAPABILITY_NOT_CONFIGURED' })
     expect(sources.size).toBe(0)
     expect(executions.rows.get(queued.researchId)?.status).toBe('failed')
+  })
+
+  it('reserves the search and each archived page on the one run ledger at the original deadline', async () => {
+    const withSnapshots: WebSearchProviderResult = {
+      pages: [
+        { url: 'https://standards.example.org/a', title: 'a', snippet: 'a', fetchedAt: NOW, contentDigest: digestOf('page-a'),
+          snapshotRef: { id: '00000000-0000-4000-8000-0000000000aa', version: '1.0.0', digest: digestOf('page-a'), kind: 'artifact' } },
+        { url: 'https://standards.example.org/b', title: 'b', snippet: 'b', fetchedAt: NOW, contentDigest: digestOf('page-b'),
+          snapshotRef: { id: '00000000-0000-4000-8000-0000000000bb', version: '1.0.0', digest: digestOf('page-b'), kind: 'artifact' } },
+      ],
+      truncated: false,
+      excludedCount: 0,
+    }
+    const h = build(withSnapshots)
+    const input = request({ limits: { sourceLimit: 5, candidateLimit: 5, deadline: '2099-01-01T00:00:00Z' } })
+    const { queued, executed } = await runOnce(h, input)
+    expect(executed.status).toBe('awaiting_confirmation')
+
+    const ledgerId = jobIdOf(queued)
+    const search = h.budget.reserveCalls.filter((call) => call.idempotencyKey.endsWith(':search'))
+    const pages = h.budget.reserveCalls.filter((call) => call.idempotencyKey.includes(':source:'))
+    expect(search).toHaveLength(1)
+    expect(search[0]?.searches).toBe(1)
+    expect(pages).toHaveLength(2)
+    expect(pages.every((call) => call.sources === 1)).toBe(true)
+    // Pagination draws from the same ledger and the run's original deadline, never a fresh one.
+    expect([...search, ...pages].every((call) => call.ledgerId === ledgerId)).toBe(true)
+    expect([...search, ...pages].every((call) => call.requestedDeadline === input.limits.deadline)).toBe(true)
   })
 })
 

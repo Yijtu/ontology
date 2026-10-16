@@ -8,8 +8,10 @@ import {
   ResearchMaterialReadService,
   StaticDefinitionTerminologySource,
 } from '@ontology/application'
+import { BudgetService, InMemoryBudgetLedgerStore } from '@ontology/core'
 import type {
   AssetDraftVersion,
+  BudgetLedgerPort,
   CreateIndustryWorkspaceInput,
   IndustryWorkspace,
   IndustryWorkspaceListFilter,
@@ -27,6 +29,7 @@ import type {
   Uuid,
 } from '@ontology/contracts'
 import { toolContext } from './component-registry-fixtures'
+import { RecordingControlRepository } from './component-registry-fixtures'
 
 const TENANT = '11111111-1111-4111-8111-111111111111'
 const SPACE = 'aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa'
@@ -171,7 +174,7 @@ function definitionCandidate(evidence: readonly CandidateSubmission['evidence'][
   } satisfies CandidateSubmission
 }
 
-async function harness(overrides: { grounding?: SourceGroundingPort; withArchive?: boolean; withAuthorized?: boolean } = {}) {
+async function harness(overrides: { grounding?: SourceGroundingPort; withArchive?: boolean; withAuthorized?: boolean; budget?: { readonly port: BudgetLedgerPort; readonly ledgerId: Uuid } } = {}) {
   const workspaces = new FixtureWorkspaceStore()
   workspaces.seed(makeWorkspace(), [makeDraft()])
   const members = new InMemoryResearchDocumentSetStore()
@@ -186,6 +189,7 @@ async function harness(overrides: { grounding?: SourceGroundingPort; withArchive
     evidence: new ResearchMaterialReadService({ members }),
     receipts,
     ...(overrides.grounding === undefined ? {} : { sourceGrounding: overrides.grounding }),
+    ...(overrides.budget === undefined ? {} : { budget: overrides.budget.port, ledgerIdFor: () => overrides.budget!.ledgerId }),
     now: () => '2026-10-16T01:00:00Z',
     newId: () => randomUUID(),
   })
@@ -298,5 +302,26 @@ describe('controlled candidate submission', () => {
     const receipt = await service.submit(SCOPE, request(command([definitionCandidate([webEvidence])], WORKSPACE)), RESEARCHER)
     expect(receipt.accepted).toHaveLength(0)
     expect(receipt.rejected[0]?.code).toBe('PERMISSION_DENIED')
+  })
+})
+
+describe('candidate budget on the run ledger', () => {
+  it('cannot bypass candidateLimit across two separate submissions', async () => {
+    const ledgerId = '0a0a0a0a-0a0a-4a0a-8a0a-0a0a0a0a0a0a'
+    const port: BudgetLedgerPort = new BudgetService({
+      store: new InMemoryBudgetLedgerStore(),
+      control: new RecordingControlRepository(),
+      newId: () => randomUUID(),
+    })
+    await port.openLedger({ ledgerId, kind: 'run', runId: RUN, overrideLimits: { maxCandidates: 1 } }, EDITOR)
+    const { service } = await harness({ budget: { port, ledgerId } })
+
+    const first = await service.submit(SCOPE, request(command([definitionCandidate([webEvidence])]), 'candidate-budget-0001'), EDITOR)
+    expect(first.accepted).toHaveLength(1)
+
+    // A second, distinct submission for the same run cannot buy the last candidate again.
+    await expect(
+      service.submit(SCOPE, request(command([definitionCandidate([webEvidence])]), 'candidate-budget-0002'), EDITOR),
+    ).rejects.toMatchObject({ code: 'CANDIDATE_LIMIT_EXCEEDED' })
   })
 })

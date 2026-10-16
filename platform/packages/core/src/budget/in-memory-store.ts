@@ -70,9 +70,9 @@ export class InMemoryBudgetLedgerStore implements BudgetLedgerStore {
       ledgerId: ledger.ledgerId,
       kind: ledger.kind,
       limits: ledger.limits,
-      deadline: new Date(
-        Date.parse(ledger.openedAt) + ledger.limits.deadlineMs,
-      ).toISOString(),
+      deadline: ledger.deadline === undefined
+        ? new Date(Date.parse(ledger.openedAt) + ledger.limits.deadlineMs).toISOString()
+        : new Date(Date.parse(ledger.deadline)).toISOString(),
       consumed: emptyConsumption(),
       revision: '1',
       createdAt: ledger.openedAt,
@@ -127,6 +127,12 @@ export class InMemoryBudgetLedgerStore implements BudgetLedgerStore {
         rows: request.consumption.rows,
         bytes: request.consumption.bytes,
         modelTokens: request.consumption.modelTokens,
+        searches: request.consumption.searches,
+        modelRounds: request.consumption.modelRounds,
+        sources: request.consumption.sources,
+        candidates: request.consumption.candidates,
+        downloadBytes: request.consumption.downloadBytes,
+        readBytes: request.consumption.readBytes,
       },
       ...(request.requestedDeadline === undefined
         ? {}
@@ -244,6 +250,7 @@ export class InMemoryBudgetLedgerStore implements BudgetLedgerStore {
       consumed: ledger.consumed,
       status: request.status,
       usage: request.usage,
+      ...(request.measured === undefined ? {} : { measured: request.measured }),
     })
     if (plan.kind === 'conflict') {
       throw new BudgetLedgerError('SETTLEMENT_CONFLICT', plan.message)

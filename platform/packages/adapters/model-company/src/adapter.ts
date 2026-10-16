@@ -426,6 +426,7 @@ export class CompanyGenerationAdapter implements GenerationPort {
           // before it starts (D7.2). It does not consume the data-tool call counter.
           parallel: true,
           modelTokens: request.outputLimit.maxTokens,
+          modelRounds: 1,
           requestedDeadline: ctx.deadline,
         },
         ctx,

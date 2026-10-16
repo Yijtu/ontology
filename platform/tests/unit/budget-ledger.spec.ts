@@ -671,6 +671,146 @@ describe('separate background and online quotas', () => {
   })
 })
 
+describe('research budget dimensions', () => {
+  it('tightens the research ceilings like every other limit', () => {
+    const tightened = tightenBudgetLimits(DEFAULT_RUN_BUDGET_LIMITS, {
+      maxSources: 3,
+      maxCandidates: 2,
+      maxSearches: 4,
+    })
+    expect(tightened.maxSources).toBe(3)
+    expect(tightened.maxCandidates).toBe(2)
+    expect(tightened.maxSearches).toBe(4)
+    // A dimension no one set stays unbounded rather than defaulting to zero.
+    expect(tightened.maxDownloadBytes).toBeUndefined()
+  })
+
+  it('cannot oversubscribe the last source slot under contention', async () => {
+    const { service } = makeService()
+    await service.openLedger(
+      { ledgerId: LEDGER_RUN, kind: 'run', overrideLimits: { maxSources: 1 }, runId: RUN_A },
+      CONTEXT_A,
+    )
+    const outcomes = await Promise.all(
+      Array.from({ length: 4 }, (_, index) =>
+        service.reserve(
+          { ledgerId: LEDGER_RUN, idempotencyKey: `source-contend-${String(index).padStart(4, '0')}`, toolCalls: 0, sources: 1 },
+          CONTEXT_A,
+        ),
+      ),
+    )
+    expect(outcomes.filter((outcome) => outcome.granted)).toHaveLength(1)
+    expect(
+      outcomes.filter((outcome) => !outcome.granted).every((outcome) => outcome.denial?.code === 'BUDGET_EXHAUSTED'),
+    ).toBe(true)
+    expect((await service.remaining(LEDGER_RUN, CONTEXT_A)).sourcesRemaining).toBe(0)
+  })
+
+  it('cannot bypass candidateLimit across two separate commands', async () => {
+    const { service } = makeService()
+    await service.openLedger(
+      { ledgerId: LEDGER_RUN, kind: 'run', overrideLimits: { maxCandidates: 2 }, runId: RUN_A },
+      CONTEXT_A,
+    )
+    expect((await service.reserve({ ledgerId: LEDGER_RUN, idempotencyKey: 'cand-commit-0001', toolCalls: 0, candidates: 1 }, CONTEXT_A)).granted).toBe(true)
+    expect((await service.reserve({ ledgerId: LEDGER_RUN, idempotencyKey: 'cand-commit-0002', toolCalls: 0, candidates: 1 }, CONTEXT_A)).granted).toBe(true)
+    const third = await service.reserve({ ledgerId: LEDGER_RUN, idempotencyKey: 'cand-commit-0003', toolCalls: 0, candidates: 1 }, CONTEXT_A)
+    expect(third.granted).toBe(false)
+    expect(third.denial?.code).toBe('BUDGET_EXHAUSTED')
+  })
+
+  it('keeps a count dimension charged when a settlement measures less', async () => {
+    const { service, store } = makeService()
+    await service.openLedger(
+      { ledgerId: LEDGER_RUN, kind: 'run', overrideLimits: { maxSources: 5 }, runId: RUN_A },
+      CONTEXT_A,
+    )
+    const reserved = await service.reserve(
+      { ledgerId: LEDGER_RUN, idempotencyKey: 'source-monotonic-0001', toolCalls: 0, sources: 1 },
+      CONTEXT_A,
+    )
+    const reservation = reserved.reservation
+    if (reservation === undefined) throw new Error('the source reservation was not granted')
+    await service.settle(
+      {
+        ledgerId: LEDGER_RUN,
+        reservationId: reservation.reservationId,
+        status: 'completed',
+        usage: { durationMs: 1 },
+        measured: { sources: 0 },
+        evidenceRefs: [evidenceRef()],
+      },
+      CONTEXT_A,
+    )
+    const ledger = await store.getLedger(SCOPE_A, LEDGER_RUN, CONTEXT_A)
+    expect(ledger?.consumed.sources).toBe(1)
+    expect((await service.remaining(LEDGER_RUN, CONTEXT_A)).sourcesRemaining).toBe(4)
+  })
+
+  it('releases an over-estimated download-byte reservation once', async () => {
+    const { service } = makeService()
+    await service.openLedger(
+      { ledgerId: LEDGER_RUN, kind: 'run', overrideLimits: { maxDownloadBytes: 1_000 }, runId: RUN_A },
+      CONTEXT_A,
+    )
+    const reserved = await service.reserve(
+      { ledgerId: LEDGER_RUN, idempotencyKey: 'download-reconcile-0001', toolCalls: 0, downloadBytes: 400 },
+      CONTEXT_A,
+    )
+    const reservation = reserved.reservation
+    if (reservation === undefined) throw new Error('the download reservation was not granted')
+    await service.settle(
+      {
+        ledgerId: LEDGER_RUN,
+        reservationId: reservation.reservationId,
+        status: 'completed',
+        usage: { durationMs: 1 },
+        measured: { downloadBytes: 120 },
+        evidenceRefs: [evidenceRef()],
+      },
+      CONTEXT_A,
+    )
+    expect((await service.remaining(LEDGER_RUN, CONTEXT_A)).downloadBytesRemaining).toBe(880)
+  })
+
+  it('holds an unknown-billed search as usage_unknown instead of freeing it', async () => {
+    const { service } = makeService()
+    await service.openLedger(
+      { ledgerId: LEDGER_RUN, kind: 'run', overrideLimits: { maxSearches: 1 }, runId: RUN_A },
+      CONTEXT_A,
+    )
+    const reserved = await service.reserve(
+      { ledgerId: LEDGER_RUN, idempotencyKey: 'search-unknown-0001', toolCalls: 0, searches: 1 },
+      CONTEXT_A,
+    )
+    const reservation = reserved.reservation
+    if (reservation === undefined) throw new Error('the search reservation was not granted')
+    await service.settle(
+      {
+        ledgerId: LEDGER_RUN,
+        reservationId: reservation.reservationId,
+        status: 'usage_unknown',
+        usage: { durationMs: 1, usageUnknown: true },
+        evidenceRefs: [],
+      },
+      CONTEXT_A,
+    )
+    const over = await service.reserve({ ledgerId: LEDGER_RUN, idempotencyKey: 'search-unknown-0002', toolCalls: 0, searches: 1 }, CONTEXT_A)
+    expect(over.granted).toBe(false)
+    expect(over.denial?.code).toBe('BUDGET_EXHAUSTED')
+  })
+
+  it('pins an absolute deadline at first open and never slides it on a later open', async () => {
+    const { service, clock } = makeService()
+    const deadline = '2030-01-01T00:00:00Z'
+    await service.openLedger({ ledgerId: LEDGER_RUN, kind: 'run', runId: RUN_A, deadline }, CONTEXT_A)
+    expect((await service.remaining(LEDGER_RUN, CONTEXT_A)).deadline).toBe('2030-01-01T00:00:00.000Z')
+    clock.set('2026-09-21T00:05:00Z')
+    await service.openLedger({ ledgerId: LEDGER_RUN, kind: 'run', runId: RUN_A, deadline: '2031-01-01T00:00:00Z' }, CONTEXT_A)
+    expect((await service.remaining(LEDGER_RUN, CONTEXT_A)).deadline).toBe('2030-01-01T00:00:00.000Z')
+  })
+})
+
 describe('tenant isolation and audit', () => {
   it('hides a ledger from another tenant/space', async () => {
     const { service } = makeService()

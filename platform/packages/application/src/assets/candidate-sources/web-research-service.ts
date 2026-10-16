@@ -2,6 +2,7 @@ import { assertModelingBriefShape, CandidateSourceError } from '@ontology/contra
 import type {
   CandidateSource,
   ModelingBrief,
+  ResourceRef,
   Rfc3339UtcTimestamp,
   ToolContext,
   WebSearchProvider,
@@ -39,6 +40,19 @@ export interface WebResearchInput {
    * readable and the remaining ones are simply never registered.
    */
   readonly admit?: () => Promise<boolean>
+  /**
+   * Reserves the run's source budget for one page **before** it is ingested, on the run's one
+   * shared ledger and original deadline. A `false` result stops pagination (the source ceiling was
+   * reached); it is an idempotent reservation keyed by the page URL, so a re-page of the same URL
+   * neither double-charges nor bypasses the ceiling.
+   */
+  readonly reserveSource?: (url: string) => Promise<boolean>
+  /**
+   * Settles a reserved source against the exact archived content it produced. Called once per
+   * successfully ingested page so the reservation closes with the real evidence ref instead of
+   * staying open until the ledger deadline.
+   */
+  readonly recordSource?: (url: string, contentRef: ResourceRef) => Promise<void>
 }
 
 export interface WebResearchDependencies {
@@ -117,8 +131,11 @@ export class WebResearchService {
         skippedWithoutSnapshot += 1
         continue
       }
+      // Reserve the source budget on the run's one ledger before ingesting: a page beyond the
+      // source ceiling is never registered, and a concurrent/re-paged run cannot oversubscribe.
+      if (input.reserveSource !== undefined && !(await input.reserveSource(page.url))) break
       try {
-        sources.push(await this.dependencies.ingestion.ingestArchivedWebSnapshot({
+        const source = await this.dependencies.ingestion.ingestArchivedWebSnapshot({
           workspaceId: input.brief.workspaceId,
           url: page.url,
           title: page.title,
@@ -127,7 +144,9 @@ export class WebResearchService {
           contentRef: page.snapshotRef,
           contentDigest: page.contentDigest,
           idempotencyKey: `${input.idempotencyKey}:${page.url}`,
-        }, ctx))
+        }, ctx)
+        if (input.recordSource !== undefined) await input.recordSource(page.url, source.contentRef)
+        sources.push(source)
       } catch (error) {
         if (!(error instanceof CandidateSourceError)) throw error
         // A systemic scope/store failure must not be swallowed into a count; only a page-level
