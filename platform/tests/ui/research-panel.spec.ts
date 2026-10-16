@@ -10,12 +10,14 @@ env.IS_REACT_ACT_ENVIRONMENT = true
 
 const W = '11111111-1111-4111-8111-111111111111'
 const R = '22222222-2222-4222-8222-222222222222'
+const R2 = '22222222-2222-4222-8222-222222222223'
 const J = '33333333-3333-4333-8333-333333333333'
 const GEN = '44444444-4444-4444-8444-444444444444'
 const digest = `sha256:${'a'.repeat(64)}`
 
 const json = (data: unknown, status = 200) => new Response(JSON.stringify({ data }), { status, headers: { 'content-type': 'application/json' } })
 const errorResponse = (status: number, code: string) => new Response(JSON.stringify({ error: { code, message: 'private', retryable: false, reasons: [], missingCapabilities: [] } }), { status, headers: { 'content-type': 'application/json' } })
+const ref = (id: string) => ({ id, version: '1.0.0', digest, kind: 'artifact' })
 
 function effectiveResearch(state: 'available' | 'blocked' | 'unconfigured' = 'available') {
   return {
@@ -39,34 +41,92 @@ function effectiveResearch(state: 'available' | 'blocked' | 'unconfigured' = 'av
   }
 }
 
-interface ExecutionOverrides {
+function effectiveSearch(state: 'available' | 'blocked' = 'available') {
+  return {
+    schemaVersion: 'effective-tool-selection@1',
+    scope: { kind: 'industry_workspace', workspaceId: W },
+    toolId: 'web_search',
+    selection: { kind: 'connection', connectionId: GEN },
+    resolvedFrom: 'space_default',
+    state,
+    ...(state === 'available' ? {
+      connectionId: GEN,
+      connectionSummary: {
+        connectionId: GEN, name: '公共搜索', revision: '5', adapterType: 'native_tavily',
+        capabilities: ['web_search'], enabled: true, credentialState: 'present', updatedAt: '2026-10-15T00:00:00Z',
+      },
+    } : { connectionId: GEN, blockedReason: 'TOOL_DISABLED' }),
+    assignmentRevision: '1',
+    resolvedAt: '2026-10-15T00:00:00Z',
+  }
+}
+
+const coverage = (overrides: { archivedSnapshots?: number; skippedWithoutSnapshot?: number } = {}) => ({
+  queriesPlanned: 2, searchCalls: 3, pagesDiscovered: 8,
+  archivedSnapshots: overrides.archivedSnapshots ?? 5,
+  skippedWithoutSnapshot: overrides.skippedWithoutSnapshot ?? 3,
+  excludedCount: 0, failedCount: 1, truncated: false,
+})
+
+interface V2Overrides {
+  readonly researchId?: string
   readonly status?: string
   readonly stage?: string
   readonly stopReason?: string
   readonly sourceCount?: number
   readonly candidateCount?: number
   readonly archivedSnapshots?: number
-  readonly skippedWithoutSnapshot?: number
-  readonly noResults?: boolean
+  readonly gapState?: string
+  readonly includeGaps?: boolean
+  readonly includeReceipts?: boolean
+  readonly humanTodos?: boolean
 }
 
-function execution(overrides: ExecutionOverrides = {}) {
-  const stopReason = overrides.stopReason ?? (overrides.noResults === true ? 'no_results' : undefined)
+function executionV2(overrides: V2Overrides = {}) {
+  const status = overrides.status ?? 'running'
+  return {
+    schemaVersion: 'research-execution@2', researchId: overrides.researchId ?? R, workspaceId: W, runId: J,
+    goal: { kind: 'industry_workspace_research', workspaceId: W, draftRevision: '1' },
+    status, stage: overrides.stage ?? 'searching',
+    briefRef: ref(J), policyRef: { id: 'policy', version: '1.0.0', digest }, budgetRef: { id: 'budget', version: '1.0.0', digest },
+    budget: {
+      maxTotalCalls: 40, maxSearchCalls: 20, maxModelTokens: 200_000, maxModelTurns: 30, maxSources: 20,
+      maxCandidates: 25, maxDownloadBytes: 8_000_000, maxReadBytes: 4_000_000, maxConcurrency: 2, maxRepairAttempts: 3,
+      deadline: '2026-10-15T00:30:00Z',
+    },
+    limits: { sourceLimit: 20, candidateLimit: 25, deadline: '2026-10-15T00:30:00Z' },
+    coverage: coverage({ ...(overrides.archivedSnapshots === undefined ? {} : { archivedSnapshots: overrides.archivedSnapshots }) }),
+    coverageGaps: overrides.includeGaps === false ? [] : [
+      { kind: 'must_cover', name: '停机条件的适用版本', state: overrides.gapState ?? 'unresearched', evidenceCount: 0 },
+      { kind: 'must_cover', name: '点检频次的正式依据', state: 'pending_confirmation', evidenceCount: 2 },
+    ],
+    humanTodos: overrides.humanTodos === true
+      ? [{ todoId: J, kind: 'source_review', message: '请审核 AI 调研来源', createdAt: '2026-10-15T00:10:00Z' }]
+      : [],
+    evidence: [{ sourceRef: ref(GEN), locatorKind: 'web_page', digest, parserVersion: '1.2.0', archived: true }],
+    candidateReceipts: overrides.includeReceipts === false ? [] : [
+      { candidateId: J, kind: 'definition', state: 'pending_confirmation', pendingConfirmation: true, issueCodes: ['SOURCE_TRUST_BLOCKED'] },
+    ],
+    sourceCount: overrides.sourceCount ?? 5, candidateCount: overrides.candidateCount ?? 0,
+    usage: {
+      searchCalls: 3, archivedSnapshots: 5, modelTokens: 12000, modelTurns: 4, candidatesSubmitted: 1,
+      bytesDownloaded: 900000, bytesRead: 300000, repairAttempts: 0, usageUnknown: false,
+    },
+    ...(overrides.stopReason === undefined ? {} : { stopReason: overrides.stopReason }),
+    sources: [{ sourceId: GEN, url: 'https://example.com/a' }],
+    recordedAt: '2026-10-15T00:10:00Z',
+  }
+}
+
+function executionV1(overrides: { status?: string; stage?: string; stopReason?: string; sourceCount?: number; archivedSnapshots?: number } = {}) {
   return {
     schemaVersion: 'research-execution@1', researchId: R, workspaceId: W, jobId: J,
     status: overrides.status ?? 'running', stage: overrides.stage ?? 'searching',
-    briefRef: { id: J, version: '1.0.0', digest, kind: 'artifact' },
-    policyRef: { id: 'policy', version: '1.0.0', digest },
-    budgetRef: { id: 'budget', version: '1.0.0', digest },
+    briefRef: ref(J), policyRef: { id: 'policy', version: '1.0.0', digest }, budgetRef: { id: 'budget', version: '1.0.0', digest },
     limits: { sourceLimit: 20, candidateLimit: 25, deadline: '2026-10-15T00:30:00Z' },
-    coverage: {
-      queriesPlanned: 2, searchCalls: 3, pagesDiscovered: 8,
-      archivedSnapshots: overrides.archivedSnapshots ?? 5,
-      skippedWithoutSnapshot: overrides.skippedWithoutSnapshot ?? 3,
-      excludedCount: 0, failedCount: 1, truncated: false,
-    },
-    sourceCount: overrides.sourceCount ?? 5, candidateCount: overrides.candidateCount ?? 0,
-    ...(stopReason === undefined ? {} : { stopReason }),
+    coverage: coverage({ archivedSnapshots: overrides.archivedSnapshots ?? 5 }),
+    sourceCount: overrides.sourceCount ?? 5, candidateCount: 0,
+    ...(overrides.stopReason === undefined ? {} : { stopReason: overrides.stopReason }),
     recordedAt: '2026-10-15T00:10:00Z',
   }
 }
@@ -89,75 +149,82 @@ async function setText(container: HTMLElement, selector: string, value: string) 
     node.dispatchEvent(new Event('input', { bubbles: true }))
   })
 }
-async function fillValid(container: HTMLElement) {
-  await setText(container, '[data-testid="research-goal"]', '整理设备维护规则及其依据')
-  await setText(container, '[data-testid="research-domains"]', 'example.com, standard.example.org')
-}
 
-function client(fetchImpl: (input: RequestInfo | URL, init?: RequestInit) => Promise<Response>) {
+type Responder = (input: RequestInfo | URL, init?: RequestInit) => Promise<Response>
+function client(fetchImpl: Responder) {
   return new WorkbenchClient({ baseUrl: 'http://ui-unit.test', fetchImpl: fetchImpl as typeof fetch })
 }
+/** The default surface: the tool-connection route is not served yet, so the search service is named honestly. */
+function withDefaults(responder: Responder): Responder {
+  return async (input, init) => {
+    const path = new URL(String(input)).pathname
+    if (path.endsWith('/effective-tools')) return errorResponse(404, 'NOT_FOUND')
+    return responder(input, init)
+  }
+}
 
-describe('research authorization and progress (N11)', () => {
-  it('states the outbound scope, caps and the actual model receiver before starting', async () => {
-    const clientImpl = client(async (input) => {
+describe('goal-first research entry and activity (R07)', () => {
+  it('inherits the workspace goal once and shows a compact task confirmation without a long form', async () => {
+    const clientImpl = client(withDefaults(async (input) => {
       const path = new URL(String(input)).pathname
       if (path.endsWith('/effective-models')) return json([effectiveResearch('available')])
       throw new Error(`unexpected ${path}`)
+    }))
+    const { container, unmount } = await render(clientImpl, {
+      workspaceGoal: '整理设备维护规则及其依据',
+      mustCover: [{ kind: 'workspace_goal_1', name: '停机条件的适用版本' }],
     })
-    const { container, unmount } = await render(clientImpl)
     try {
-      expect(container.querySelector('[data-testid="research-scope-notice"]')?.textContent).toContain('不会随研究一并外发')
-      expect(container.querySelector('[data-testid="research-domain-notice"]')?.textContent).toContain('不构成授权')
-      expect(container.querySelector('[data-testid="research-candidate-notice"]')?.textContent).toContain('需人工确认')
+      expect(container.querySelector('[data-testid="research-confirm"]')).not.toBeNull()
+      expect(container.querySelector<HTMLTextAreaElement>('[data-testid="research-goal"]')?.value).toBe('整理设备维护规则及其依据')
+      expect(container.querySelector('[data-testid="research-must-cover-item"]')?.textContent).toContain('停机条件的适用版本')
       expect(container.querySelector('[data-testid="effective-model-name"]')?.textContent).toBe('空间研究模型')
-      expect(container.querySelector('[data-testid="research-cap-receiver"]')?.textContent).toContain('空间研究模型')
-      expect(container.querySelector('[data-testid="research-cost"]')?.textContent).toContain('当前无法估算')
-      expect(container.querySelector('[data-testid="research-progress"]')).toBeNull()
+      expect(container.querySelector('[data-testid="research-outbound"]')?.textContent).toContain('不随研究外发')
+      expect(container.querySelector('[data-testid="research-search-service"]')?.getAttribute('data-state')).toBe('unavailable')
+      expect(container.querySelector('[data-testid="research-search-service"]')?.textContent).toContain('未接入 AI 工具连接目录')
       expect(container.querySelector<HTMLButtonElement>('[data-testid="research-start"]')?.disabled).toBe(true)
-      await fillValid(container)
+      await setText(container, '[data-testid="research-domains"]', 'example.com, standard.example.org')
       expect(container.querySelector<HTMLButtonElement>('[data-testid="research-start"]')?.disabled).toBe(false)
     } finally { await unmount() }
   })
 
-  it('sends only the submitted public brief, never a project record or credential', async () => {
+  it('sends only the submitted public brief with the goal and must-cover, never a record or credential', async () => {
     let captured: { body: Record<string, unknown>; key: string | null } | undefined
-    const clientImpl = client(async (input, init) => {
+    const clientImpl = client(withDefaults(async (input, init) => {
       const path = new URL(String(input)).pathname
       if (path.endsWith('/effective-models')) return json([effectiveResearch('available')])
       if (init?.method === 'POST' && path.endsWith('/research-runs')) {
         captured = { body: JSON.parse(String(init.body)) as Record<string, unknown>, key: new Headers(init.headers).get('idempotency-key') }
-        return json({ research: execution({ status: 'running' }) }, 202)
+        return json({ research: executionV2({ status: 'running' }) }, 202)
       }
       throw new Error(`unexpected ${path}`)
+    }))
+    const { container, unmount } = await render(clientImpl, {
+      workspaceGoal: '整理设备维护规则及其依据',
+      mustCover: [{ kind: 'workspace_goal_1', name: '停机条件的适用版本' }],
     })
-    const { container, unmount } = await render(clientImpl)
     try {
-      await fillValid(container)
+      await setText(container, '[data-testid="research-domains"]', 'example.com')
       await click(container, '[data-testid="research-start"]')
       expect(captured).toBeDefined()
-      expect(Object.keys(captured?.body ?? {}).sort()).toEqual(['allowedResearchDomains', 'candidateLimit', 'deadline', 'freshnessHint', 'goal', 'sourceLimit', 'targetKinds'])
-      expect(captured?.key).not.toBeNull()
       expect(captured?.body['goal']).toBe('整理设备维护规则及其依据')
-      expect(captured?.body['allowedResearchDomains']).toEqual(['example.com', 'standard.example.org'])
-      expect(captured?.body['targetKinds']).toEqual(['object'])
-      expect(captured?.body['sourceLimit']).toBe(20)
-      expect(captured?.body['candidateLimit']).toBe(25)
-      expect(typeof captured?.body['deadline']).toBe('string')
+      expect(captured?.body['allowedResearchDomains']).toEqual(['example.com'])
+      expect(captured?.body['mustCover']).toEqual([{ kind: 'workspace_goal_1', name: '停机条件的适用版本' }])
+      expect(captured?.key).not.toBeNull()
       expect(JSON.stringify(captured?.body)).not.toMatch(/project|record|apiKey|credential|history/iu)
     } finally { await unmount() }
   })
 
   it('shows an explicit unavailable reason when the orchestration surface is not wired', async () => {
-    const clientImpl = client(async (input, init) => {
+    const clientImpl = client(withDefaults(async (input, init) => {
       const path = new URL(String(input)).pathname
       if (path.endsWith('/effective-models')) return json([effectiveResearch('available')])
       if (init?.method === 'POST' && path.endsWith('/research-runs')) return errorResponse(404, 'NOT_FOUND')
       throw new Error(`unexpected ${path}`)
-    })
-    const { container, unmount } = await render(clientImpl)
+    }))
+    const { container, unmount } = await render(clientImpl, { workspaceGoal: '整理设备维护规则及其依据' })
     try {
-      await fillValid(container)
+      await setText(container, '[data-testid="research-domains"]', 'example.com')
       await click(container, '[data-testid="research-start"]')
       expect(container.querySelector('[data-testid="research-unavailable"]')?.getAttribute('data-unavailable')).toBe('true')
       expect(container.querySelector('[data-testid="research-unavailable"]')?.textContent).toContain('未接入受控的研究编排服务')
@@ -165,33 +232,40 @@ describe('research authorization and progress (N11)', () => {
     } finally { await unmount() }
   })
 
-  it('renders real progress, refreshes by re-reading, and guides to generation after confirmation', async () => {
+  it('renders persisted activity, mustCover gaps, receipts and the three product groups without hidden reasoning', async () => {
     let status = 'running'
-    const clientImpl = client(async (input, init) => {
+    const clientImpl = client(withDefaults(async (input, init) => {
       const path = new URL(String(input)).pathname
       if (path.endsWith('/effective-models')) return json([effectiveResearch('available')])
-      if (init?.method === 'POST' && path.endsWith('/research-runs')) return json({ research: execution({ status: 'running' }) }, 202)
+      if (init?.method === 'POST' && path.endsWith('/research-runs')) return json({ research: executionV2({ status: 'running' }) }, 202)
       if (path.includes('/research-runs/')) {
-        return json({ research: status === 'running' ? execution({ status: 'running' }) : execution({ status: 'awaiting_confirmation', stage: 'awaiting_source_review', sourceCount: 5 }) })
+        return json({ research: status === 'running' ? executionV2({ status: 'running' }) : executionV2({ status: 'awaiting_confirmation', stage: 'awaiting_source_review', humanTodos: true }) })
       }
       throw new Error(`unexpected ${path}`)
-    })
-    const { container, unmount } = await render(clientImpl, { onOpenGeneration: () => { generated = true } })
+    }))
+    const { container, unmount } = await render(clientImpl, { workspaceGoal: '整理设备维护规则及其依据', onOpenGeneration: () => { generated = true } })
     let generated = false
     try {
-      await fillValid(container)
+      await setText(container, '[data-testid="research-domains"]', 'example.com')
       await click(container, '[data-testid="research-start"]')
+      expect(container.querySelector('[data-testid="research-progress"]')?.getAttribute('data-version')).toBe('research-execution@2')
       expect(container.querySelector('[data-testid="research-progress"]')?.getAttribute('data-outcome')).toBe('active')
-      expect(container.querySelector('[data-testid="research-source-count"]')?.textContent).toBe('5')
-      expect(container.querySelector('[data-testid="research-candidate-count"]')?.textContent).toBe('0')
-      expect(container.querySelector('[data-testid="research-skipped-without-snapshot"]')?.textContent).toBe('3')
-      expect(container.querySelector('[data-testid="research-links-only"]')?.textContent).toContain('仅发现链接')
+      expect(container.querySelector('[data-testid="research-activity"]')?.textContent).toContain('已完成检索 3 次')
+      expect(container.querySelector('[data-testid="research-no-thinking"]')?.textContent).toContain('不展示模型的隐藏思维过程')
+      const gaps = container.querySelectorAll('[data-testid="research-coverage-gap"]')
+      expect(Array.from(gaps).map((node) => node.getAttribute('data-state'))).toEqual(['unresearched', 'pending_confirmation'])
+      expect(container.querySelector('[data-testid="research-candidate-receipt"]')).not.toBeNull()
+      expect(container.querySelector('[data-testid="research-products"]')).not.toBeNull()
+      expect(container.querySelector('[data-testid="research-unresolved"]')?.textContent).toContain('停机条件的适用版本')
+      expect(container.querySelector('[data-testid="research-evidence-item"]')?.textContent).toContain('已归档')
+      expect(container.querySelector('[data-testid="research-usage"]')?.textContent).toContain('12000')
       expect(container.querySelector<HTMLButtonElement>('[data-testid="research-generate"]')).toBeNull()
+      expect(container.querySelector('[data-testid="research-continue"]')).toBeNull()
 
       status = 'confirmed'
       await click(container, '[data-testid="research-refresh"]')
       expect(container.querySelector('[data-testid="research-progress"]')?.getAttribute('data-outcome')).toBe('awaiting_confirmation')
-      expect(container.querySelector('[data-testid="research-ending"]')?.textContent).toContain('等待人工确认来源')
+      expect(container.querySelector('[data-testid="research-human-todo"]')?.getAttribute('data-kind')).toBe('source_review')
       const generate = container.querySelector<HTMLButtonElement>('[data-testid="research-generate"]')
       expect(generate?.disabled).toBe(false)
       await act(async () => { generate?.click() })
@@ -199,54 +273,92 @@ describe('research authorization and progress (N11)', () => {
     } finally { await unmount() }
   })
 
-  it('distinguishes cancelled, no-results, partial and failed endings, and flags no archived snapshot', async () => {
-    const cases: readonly { readonly overrides: ExecutionOverrides; readonly outcome: string; readonly text: string }[] = [
-      { overrides: { status: 'cancelled', stopReason: 'cancelled' }, outcome: 'cancelled', text: '已取消' },
-      { overrides: { status: 'completed', stage: 'completed', stopReason: 'no_results', sourceCount: 0, archivedSnapshots: 0, skippedWithoutSnapshot: 4 }, outcome: 'no_results', text: '无结果' },
-      { overrides: { status: 'completed', stage: 'completed', stopReason: 'partial_results', sourceCount: 3 }, outcome: 'partial', text: '部分结果' },
-      { overrides: { status: 'failed', stopReason: 'provider_failed' }, outcome: 'failed', text: '失败' },
-    ]
-    for (const testCase of cases) {
-      const clientImpl = client(async (input) => {
-        const path = new URL(String(input)).pathname
-        if (path.endsWith('/effective-models')) return json([effectiveResearch('available')])
-        return json({ research: execution(testCase.overrides) })
-      })
-      const { container, unmount } = await render(clientImpl, { initialResearchId: R })
-      try {
-        expect(container.querySelector('[data-testid="research-progress"]')?.getAttribute('data-outcome')).toBe(testCase.outcome)
-        expect(container.querySelector('[data-testid="research-ending"]')?.textContent).toContain(testCase.text)
-        if (testCase.outcome === 'no_results') {
-          expect(container.querySelector('[data-testid="research-no-snapshot"]')?.textContent).toContain('没有任何已归档快照')
-        }
-      } finally { await unmount() }
-    }
-  })
-
-  it('keeps the start disabled and names the reason when the research model is blocked', async () => {
-    const clientImpl = client(async (input) => {
-      const path = new URL(String(input)).pathname
-      if (path.endsWith('/effective-models')) return json([effectiveResearch('blocked')])
-      throw new Error(`unexpected ${path}`)
-    })
-    const { container, unmount } = await render(clientImpl)
+  it('keeps a legacy @1 record readable and honest about the missing groups', async () => {
+    const clientImpl = client(withDefaults(async () => json({ research: executionV1({ status: 'completed', stage: 'completed', stopReason: 'no_results', sourceCount: 0, archivedSnapshots: 0 }) })))
+    const { container, unmount } = await render(clientImpl, { initialResearchId: R })
     try {
-      await fillValid(container)
-      expect(container.querySelector('[data-testid="effective-model"]')?.getAttribute('data-state')).toBe('blocked')
-      expect(container.querySelector('[data-testid="research-model-blocked"]')?.textContent).toContain('研究模型不可用')
-      expect(container.querySelector<HTMLButtonElement>('[data-testid="research-start"]')?.disabled).toBe(true)
+      expect(container.querySelector('[data-testid="research-progress"]')?.getAttribute('data-version')).toBe('research-execution@1')
+      expect(container.querySelector('[data-testid="research-progress"]')?.getAttribute('data-outcome')).toBe('no_results')
+      expect(container.querySelector('[data-testid="research-coverage-empty"]')?.textContent).toContain('旧版记录')
+      expect(container.querySelector('[data-testid="research-evidence-legacy"]')).not.toBeNull()
+      expect(container.querySelector('[data-testid="research-assets-legacy"]')).not.toBeNull()
+      expect(container.querySelector('[data-testid="research-no-snapshot"]')?.textContent).toContain('没有任何已归档快照')
     } finally { await unmount() }
   })
 
+  it('offers a grounded continuation only for a non-revivable ending, never for a live run', async () => {
+    const posts: string[] = []
+    const clientImpl = client(withDefaults(async (input, init) => {
+      const path = new URL(String(input)).pathname
+      if (path.endsWith('/effective-models')) return json([effectiveResearch('available')])
+      if (init?.method === 'POST' && path.endsWith('/research-runs')) return json({ research: executionV2({ status: 'running' }) }, 202)
+      if (init?.method === 'POST' && path.endsWith('/continuations')) {
+        posts.push(path)
+        return json({ research: executionV2({ researchId: R2, status: 'running' }) }, 202)
+      }
+      if (path.includes('/research-runs/')) return json({ research: executionV2({ status: 'completed', stage: 'completed', stopReason: 'budget_exhausted', sourceCount: 4 }) })
+      throw new Error(`unexpected ${path}`)
+    }))
+    const { container, unmount } = await render(clientImpl, { initialResearchId: R, workspaceGoal: '整理设备维护规则及其依据' })
+    try {
+      expect(container.querySelector('[data-testid="research-continue"]')).not.toBeNull()
+      expect(container.querySelector('[data-testid="research-continue-hint"]')?.textContent).toContain('额度已用尽')
+      await click(container, '[data-testid="research-continue"]')
+      expect(container.querySelector('[data-testid="research-confirm"]')?.getAttribute('data-mode')).toBe('continuation')
+      expect(container.querySelector('[data-testid="research-continuation-of"]')?.textContent).toContain(R)
+      await setText(container, '[data-testid="research-domains"]', 'example.com')
+      await click(container, '[data-testid="research-start"]')
+      expect(posts).toHaveLength(1)
+      expect(posts[0]).toContain(`/research-runs/${R}/continuations`)
+    } finally { await unmount() }
+  })
+
+  it('only shows the stop control while the run is active', async () => {
+    const clientImpl = client(withDefaults(async () => json({ research: executionV2({ status: 'cancelled', stopReason: 'cancelled' }) })))
+    const { container, unmount } = await render(clientImpl, { initialResearchId: R })
+    try {
+      expect(container.querySelector('[data-testid="research-cancel"]')).toBeNull()
+      expect(container.querySelector('[data-testid="research-ending"]')?.textContent).toContain('已取消')
+    } finally { await unmount() }
+  })
+
+  it('keeps the start disabled and names the reason when the research model or search service is blocked', async () => {
+    const modelBlocked = client(withDefaults(async (input) => {
+      const path = new URL(String(input)).pathname
+      if (path.endsWith('/effective-models')) return json([effectiveResearch('blocked')])
+      throw new Error(`unexpected ${path}`)
+    }))
+    const first = await render(modelBlocked)
+    try {
+      await setText(first.container, '[data-testid="research-domains"]', 'example.com')
+      expect(first.container.querySelector('[data-testid="research-blockers"]')?.textContent).toContain('研究模型不可用')
+      expect(first.container.querySelector<HTMLButtonElement>('[data-testid="research-start"]')?.disabled).toBe(true)
+    } finally { await first.unmount() }
+
+    const searchBlocked = client(async (input) => {
+      const path = new URL(String(input)).pathname
+      if (path.endsWith('/effective-models')) return json([effectiveResearch('available')])
+      if (path.endsWith('/effective-tools')) return json([effectiveSearch('blocked')])
+      throw new Error(`unexpected ${path}`)
+    })
+    const second = await render(searchBlocked)
+    try {
+      await setText(second.container, '[data-testid="research-domains"]', 'example.com')
+      expect(second.container.querySelector('[data-testid="research-search-service"]')?.getAttribute('data-state')).toBe('blocked')
+      expect(second.container.querySelector('[data-testid="research-blockers"]')?.textContent).toContain('公共搜索服务不可用')
+      expect(second.container.querySelector<HTMLButtonElement>('[data-testid="research-start"]')?.disabled).toBe(true)
+    } finally { await second.unmount() }
+  })
+
   it('disables starting for a read-only member', async () => {
-    const clientImpl = client(async (input) => {
+    const clientImpl = client(withDefaults(async (input) => {
       const path = new URL(String(input)).pathname
       if (path.endsWith('/effective-models')) return json([effectiveResearch('available')])
       throw new Error(`unexpected ${path}`)
-    })
+    }))
     const { container, unmount } = await render(clientImpl, { readOnly: true })
     try {
-      await fillValid(container)
+      await setText(container, '[data-testid="research-domains"]', 'example.com')
       expect(container.querySelector('[data-testid="research-readonly"]')).not.toBeNull()
       expect(container.querySelector<HTMLButtonElement>('[data-testid="research-start"]')?.disabled).toBe(true)
     } finally { await unmount() }
