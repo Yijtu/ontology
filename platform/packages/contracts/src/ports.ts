@@ -53,6 +53,7 @@ import type {
   ToolUsage,
 } from './generated/contracts'
 import type { ToolContext } from './trusted'
+import type { AuthoringCommandGateway } from './authoring-command'
 
 /**
  * C2/C3 port contracts. These are type-only interfaces: this package contains no
@@ -82,6 +83,12 @@ export interface RuntimeDependencies {
   readonly decision: DecisionPort
   readonly checkpoints: RuntimeCheckpointPort
   readonly budget: BudgetPort
+  /**
+   * The controlled authoring-command gateway (design §5). It is absent for a run that may not
+   * author (a plain data-tool session), so a runtime that exposes an authoring command without
+   * this port routes it as `deferred` instead of writing anything.
+   */
+  readonly commandGateway?: AuthoringCommandGateway
   readonly signal: AbortSignal
 }
 

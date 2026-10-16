@@ -1,5 +1,5 @@
 import { TOOL_CATALOGUE } from '@ontology/contracts'
-import type { GenerationMessage, ResourceRef, ToolId, VersionRef } from '@ontology/contracts'
+import type { AuthoringCommandKind, GenerationMessage, ResourceRef, ToolId, VersionRef } from '@ontology/contracts'
 import { iterateSseData } from './sse'
 import type { CompanyWireMessage, CompanyWireRequest, CompanyWireToolDeclaration } from './vendor/company-wire'
 
@@ -15,6 +15,8 @@ export interface CompanyHttpRequest {
   readonly messages: readonly GenerationMessage[]
   readonly evidenceRefs: readonly ResourceRef[]
   readonly toolIds?: readonly ToolId[]
+  /** Controlled authoring commands declared alongside the four data tools (design §5). */
+  readonly authoringCommands?: readonly AuthoringCommandKind[]
   readonly responseSchemaRef?: VersionRef
   readonly maxTokens: number
   readonly temperature?: number
@@ -49,6 +51,10 @@ export class CompanyHttpClient {
   }
 
   async send(request: CompanyHttpRequest): Promise<CompanyHttpResponse> {
+    const tools = [
+      ...(request.toolIds === undefined ? [] : declarationsFor(request.toolIds)),
+      ...(request.authoringCommands === undefined ? [] : commandDeclarationsFor(request.authoringCommands)),
+    ]
     const body: CompanyWireRequest = {
       model: request.vendorModel,
       messages: request.messages.map(
@@ -57,9 +63,7 @@ export class CompanyHttpClient {
       max_tokens: request.maxTokens,
       stream: true,
       ...(request.temperature === undefined ? {} : { temperature: request.temperature }),
-      ...(request.toolIds === undefined || request.toolIds.length === 0
-        ? {}
-        : { tools: declarationsFor(request.toolIds) }),
+      ...(tools.length === 0 ? {} : { tools }),
       ...(request.responseSchemaRef === undefined
         ? {}
         : { response_format: { type: 'json_object' as const } }),
@@ -128,6 +132,38 @@ function declarationsFor(toolIds: readonly ToolId[]): readonly CompanyWireToolDe
       },
     }
   })
+}
+
+/**
+ * Declare the controlled authoring commands to the vendor as callable functions. They share
+ * the vendor `tools` channel with the data tools but are never executed by this adapter: the
+ * runtime routes a proposed command to its own command gateway, keeping the write path
+ * separate from the read tools. `submit_candidates` declares its real top-level fields
+ * (schemaVersion/commandKind/workspaceId/candidates/note); the command gateway remains the
+ * authority that validates the full body.
+ */
+function commandDeclarationsFor(
+  commandKinds: readonly AuthoringCommandKind[],
+): readonly CompanyWireToolDeclaration[] {
+  return commandKinds.map((commandKind): CompanyWireToolDeclaration => ({
+    type: 'function',
+    function: {
+      name: commandKind,
+      description:
+        'Propose a controlled workspace write command. The platform fixes identity/review/publication state; supply evidence and a reason only.',
+      parameters: {
+        type: 'object',
+        additionalProperties: true,
+        properties: {
+          schemaVersion: { type: 'string' },
+          commandKind: { type: 'string', const: commandKind },
+          workspaceId: { type: 'string' },
+          candidates: { type: 'array' },
+          note: { type: 'string' },
+        },
+      },
+    },
+  }))
 }
 
 /** Pass a self-contained object schema through; otherwise fall back to a permissive one. */

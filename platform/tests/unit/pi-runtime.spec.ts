@@ -12,7 +12,9 @@ import {
   BLOCK,
   RUN_ID,
   SCOPE,
+  ScriptedCommandGateway,
   buildPiDependencies,
+  commandDelta,
   completedEvent,
   events,
   piConfig,
@@ -386,5 +388,119 @@ describe('PiRuntimeAdapter — gateway cancellation receipt', () => {
     expect(cancelled[0]?.abandonedAttempts).toHaveLength(1)
     expect(harness.gateway.cancellations).toHaveLength(1)
     expect(runtimeEvents.some((event) => event.type === 'collection_complete')).toBe(false)
+  })
+})
+
+const WORKSPACE = '3f1a2b4c-5d6e-4f70-8a9b-0c1d2e3f4a5b'
+
+function submitCandidatesBody(overrides?: Record<string, unknown>): Record<string, unknown> {
+  return {
+    schemaVersion: 'submit-candidates@1',
+    commandKind: 'submit_candidates',
+    workspaceId: WORKSPACE,
+    candidates: [
+      {
+        kind: 'source',
+        origin: { url: 'https://example.com/standard', publisher: 'Example' },
+        evidence: [
+          {
+            kind: 'web_page',
+            url: 'https://example.com/standard',
+            snapshotRef: { id: WORKSPACE, version: '1.0.0', digest: `sha256:${'a'.repeat(64)}`, kind: 'artifact' },
+            snapshotManifestRef: { id: WORKSPACE, version: '1.0.0', digest: `sha256:${'a'.repeat(64)}`, kind: 'artifact' },
+            contentDigest: `sha256:${'a'.repeat(64)}`,
+            fetchedAt: '2026-10-16T00:00:00Z',
+            parserVersion: '1.0.0',
+          },
+        ],
+        reason: '疑似官方规范',
+      },
+    ],
+    ...overrides,
+  }
+}
+
+describe('PiRuntimeAdapter — authoring command routing (design §5)', () => {
+  it('exposes submit_candidates as a command and routes it through the command gateway', async () => {
+    const commandGateway = new ScriptedCommandGateway().on('submit_candidates', (call) => ({
+      callId: call.callId,
+      commandKind: 'submit_candidates',
+      status: 'accepted',
+      candidateIds: [WORKSPACE],
+      issueCodes: [],
+      receiptDigest: `sha256:${'b'.repeat(64)}`,
+      recordedAt: '2026-10-16T00:00:00Z',
+    }))
+    const harness = buildPiDependencies({
+      commandGateway,
+      scripts: [
+        events(commandDelta('cmd-1', 'submit_candidates', submitCandidatesBody()), completedEvent('tool_calls')),
+        events(completedEvent('stop')),
+      ],
+    })
+
+    const runtimeEvents = await collect(
+      adapterFor({ authoringCommands: ['submit_candidates'] }).start(runtimeInput(), harness.dependencies),
+    )
+
+    // The command was declared to the generation port and routed to the command gateway.
+    expect(harness.generation.requests[0]?.authoringCommands).toEqual(['submit_candidates'])
+    expect(commandGateway.calls).toHaveLength(1)
+    expect(commandGateway.calls[0]?.commandKind).toBe('submit_candidates')
+    // A command never goes through the data tool gateway and never produces evidence.
+    expect(harness.gateway.calls).toHaveLength(0)
+    expect(eventsOfType(runtimeEvents, 'evidence_added')).toHaveLength(0)
+
+    const receipts = eventsOfType(runtimeEvents, 'command_receipt')
+    expect(receipts).toHaveLength(1)
+    expect(receipts[0]?.status).toBe('accepted')
+    expect(receipts[0]?.candidateCount).toBe(1)
+    expect(receipts[0]?.candidateIds).toEqual([WORKSPACE])
+    expect(runtimeEvents.at(-1)?.type).toBe('collection_complete')
+  })
+
+  it('does not expose a command that the host did not authorize', async () => {
+    const harness = buildPiDependencies({
+      commandGateway: new ScriptedCommandGateway(),
+      scripts: [
+        events(commandDelta('cmd-1', 'submit_candidates', submitCandidatesBody()), completedEvent('tool_calls')),
+        events(completedEvent('stop')),
+      ],
+    })
+    const runtimeEvents = await collect(adapterFor().start(runtimeInput(), harness.dependencies))
+    expect(harness.commandGateway?.calls).toHaveLength(0)
+    expect(eventsOfType(runtimeEvents, 'command_receipt')).toHaveLength(0)
+  })
+
+  it('routes a command without a gateway as deferred and a malformed command as rejected', async () => {
+    const deferred = buildPiDependencies({
+      scripts: [
+        events(commandDelta('cmd-1', 'submit_candidates', submitCandidatesBody()), completedEvent('tool_calls')),
+        events(completedEvent('stop')),
+      ],
+    })
+    const deferredEvents = await collect(
+      adapterFor({ authoringCommands: ['submit_candidates'] }).start(runtimeInput(), deferred.dependencies),
+    )
+    const deferredReceipt = eventsOfType(deferredEvents, 'command_receipt')[0]
+    expect(deferredReceipt?.status).toBe('deferred')
+    expect(deferredReceipt?.issueCodes).toContain('NO_COMMAND_GATEWAY')
+
+    const commandGateway = new ScriptedCommandGateway()
+    const malformed = buildPiDependencies({
+      commandGateway,
+      scripts: [
+        events(commandDelta('cmd-1', 'submit_candidates', { schemaVersion: 'submit-candidates@1' }), completedEvent('tool_calls')),
+        events(completedEvent('stop')),
+      ],
+    })
+    const malformedEvents = await collect(
+      adapterFor({ authoringCommands: ['submit_candidates'] }).start(runtimeInput(), malformed.dependencies),
+    )
+    const rejected = eventsOfType(malformedEvents, 'command_receipt')[0]
+    expect(rejected?.status).toBe('rejected')
+    expect(rejected?.issueCodes).toContain('INVALID_COMMAND_CALL')
+    // A malformed proposal never reaches the gateway write path.
+    expect(commandGateway.calls).toHaveLength(0)
   })
 })

@@ -1,8 +1,12 @@
 import { describe, expect, it } from 'vitest'
 import {
+  AUTHORING_COMMAND_KINDS,
+  COMMAND_RECEIPT_STATUSES,
   PUBLIC_DATA_TOOL_IDS,
   agentActionKindOf,
   assertAgentActionShape,
+  assertCommandCallShape,
+  assertCommandReceiptShape,
   assertResearchExecutionAnyShape,
   assertResearchExecutionShape,
   assertResearchExecutionV2Shape,
@@ -14,6 +18,7 @@ import {
   assertDocumentTargetedReadResultShape,
   findForbiddenModelFields,
   isAgentAction,
+  isCommandCall,
   isResearchExecutionV2,
   researchExecutionSchemaVersion,
   toWebSearchToolPage,
@@ -294,6 +299,41 @@ describe('research-execution@2 is a run projection and @1 stays readable', () =>
     }
     expect(() => assertResearchRunManifestShape(manifest)).not.toThrow()
     expect(() => assertResearchRunManifestShape({ ...manifest, purpose: 'project_qa' })).toThrow()
+  })
+})
+
+describe('authoring command call/receipt keeps the write separate from the four data tools', () => {
+  const call = {
+    commandKind: 'submit_candidates',
+    callId: RUN,
+    command: validCommand,
+  }
+  const receipt = {
+    callId: RUN,
+    commandKind: 'submit_candidates',
+    status: 'accepted',
+    candidateIds: [WORKSPACE],
+    issueCodes: [],
+    receiptDigest: DIGEST,
+    recordedAt: '2026-10-16T00:00:00Z',
+  }
+
+  it('exposes exactly submit_candidates and the four receipt statuses', () => {
+    expect(AUTHORING_COMMAND_KINDS).toEqual(['submit_candidates'])
+    expect(COMMAND_RECEIPT_STATUSES).toEqual(['accepted', 'rejected', 'pending_confirmation', 'deferred'])
+  })
+
+  it('validates a well-formed command call and rejects an unknown kind or a malformed body', () => {
+    expect(() => assertCommandCallShape(call)).not.toThrow()
+    expect(isCommandCall(call)).toBe(true)
+    expect(isCommandCall({ ...call, commandKind: 'delete_everything' })).toBe(false)
+    expect(isCommandCall({ ...call, command: { schemaVersion: 'submit-candidates@1' } })).toBe(false)
+  })
+
+  it('validates a receipt and rejects a malformed one', () => {
+    expect(() => assertCommandReceiptShape(receipt)).not.toThrow()
+    expect(() => assertCommandReceiptShape({ ...receipt, status: 'maybe' })).toThrow()
+    expect(() => assertCommandReceiptShape({ ...receipt, receiptDigest: 'not-a-digest' })).toThrow()
   })
 })
 

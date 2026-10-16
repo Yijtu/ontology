@@ -1,5 +1,6 @@
 import type { AgentMessage } from '@earendil-works/pi-agent-core'
-import type { ResourceRef, RuntimeCheckpointRef, ToolId } from '@ontology/contracts'
+import type { AuthoringCommandKind, ResourceRef, RuntimeCheckpointRef, ToolId } from '@ontology/contracts'
+import { AUTHORING_COMMAND_KINDS } from '@ontology/contracts'
 import { sha256DigestOf } from '@ontology/core'
 import { PiRuntimeError } from './errors'
 
@@ -27,6 +28,8 @@ export interface CheckpointPayload {
   readonly messages: readonly AgentMessage[]
   readonly evidenceRefs: readonly ResourceRef[]
   readonly toolIds: readonly ToolId[]
+  /** The controlled authoring commands this run exposed; empty for a data-tool-only run. */
+  readonly authoringCommands: readonly AuthoringCommandKind[]
   readonly completedTurns: number
 }
 
@@ -103,6 +106,10 @@ function isToolId(value: unknown): value is ToolId {
   )
 }
 
+function isAuthoringCommandKind(value: unknown): value is AuthoringCommandKind {
+  return AUTHORING_COMMAND_KINDS.includes(value as AuthoringCommandKind)
+}
+
 /**
  * Shallow guard for a persisted Pi message. The Agent itself validates message structure
  * when it replays the transcript, so the checkpoint only needs to refuse a blob that is not
@@ -126,6 +133,9 @@ function isCheckpointPayload(value: unknown): value is CheckpointPayload {
   if (!Array.isArray(value.messages) || !value.messages.every(isAgentMessage)) return false
   if (!Array.isArray(value.evidenceRefs) || !value.evidenceRefs.every(isResourceRef)) return false
   if (!Array.isArray(value.toolIds) || !value.toolIds.every(isToolId)) return false
+  if (!Array.isArray(value.authoringCommands) || !value.authoringCommands.every(isAuthoringCommandKind)) {
+    return false
+  }
   if (typeof value.completedTurns !== 'number' || !Number.isInteger(value.completedTurns)) {
     return false
   }

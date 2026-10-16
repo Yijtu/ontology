@@ -32,6 +32,8 @@ import { repairFeedbackOf } from './repair-feedback'
 import type {
   CancelWorkflowInput,
   RespondWorkflowInput,
+  ResearchDelivery,
+  ResearchDeliveryCandidateReceipt,
   StartWorkflowInput,
   WorkflowControllerDependencies,
   WorkflowView,
@@ -73,6 +75,12 @@ export class WorkflowController {
   readonly #maxCollectionRounds: number
   readonly #selectedRuntimes = new Map<Uuid, RuntimeAdapter>()
   readonly #active = new Map<Uuid, ActiveLoop>()
+  /**
+   * Candidate write receipts observed for a run, keyed by run id, so the research completion
+   * branch can compile the delivery list without re-deriving it from the model transcript. A
+   * receipt is only ever added from a routed `command_receipt` runtime event.
+   */
+  readonly #researchReceipts = new Map<Uuid, ResearchDeliveryCandidateReceipt[]>()
 
   constructor(dependencies: WorkflowControllerDependencies) {
     this.#deps = dependencies
@@ -240,6 +248,40 @@ export class WorkflowController {
   /** The published answer, or `undefined` when nothing has been verified and published. */
   async getAnswer(runId: Uuid, ctx: ToolContext): Promise<PublishedAnswer | undefined> {
     return this.#deps.publisher.findAnswer(runId, ctx)
+  }
+
+  /**
+   * The research completion branch (design §4/§8). It compiles the bounded delivery list a
+   * research run hands to the workbench — candidate write receipts, the evidence collected and
+   * the single ledger's usage — and moves the run to wait on a human (source/admission review).
+   *
+   * It deliberately **never** drafts, verifies or publishes an answer: a research run's end is
+   * not an answer publication, and a user-facing factual summary, if produced, must still pass
+   * the same-draft verification step. Only a run still in `collecting` may be completed.
+   */
+  async completeResearch(runId: Uuid, ctx: ToolContext): Promise<ResearchDelivery> {
+    const runContext = contextForCanonicalRun(ctx, runId)
+    const manifest = await this.#requireRunManifest(runId, runContext)
+    const run = await this.#deps.phase.requireRun(runId, runContext)
+    if (run.state !== 'collecting') {
+      throw new WorkflowControllerError(
+        'INVALID_ARGUMENT',
+        `run ${runId} is ${run.state} and cannot complete research delivery`,
+      )
+    }
+    const inputManifest = await this.#requireInputManifest(manifest.inputManifestId, runContext)
+    const usage = await this.#remaining(manifest.budgetLedgerId, runContext)
+    const candidateReceipts = this.#researchReceipts.get(runId) ?? []
+    const delivery: ResearchDelivery = {
+      runId,
+      candidateReceipts: [...candidateReceipts],
+      evidenceRefs: evidenceRefsOf(inputManifest),
+      stopReason: 'completed',
+      usage,
+    }
+    this.#active.delete(runId)
+    await this.#advance(run, 'awaiting_input', { cancelReason: 'research_delivery_ready' }, runContext)
+    return delivery
   }
 
   /**
@@ -504,6 +546,17 @@ export class WorkflowController {
         runId,
         ctx,
       )
+    }
+    if (event.type === 'command_receipt') {
+      const receipts = this.#researchReceipts.get(runId) ?? []
+      receipts.push({
+        callId: event.callId,
+        commandKind: event.commandKind,
+        status: event.status,
+        candidateIds: [...event.candidateIds],
+        issueCodes: [...event.issueCodes],
+      })
+      this.#researchReceipts.set(runId, receipts)
     }
     if (event.type === 'failed' && event.error.remoteStateUnknown === true) {
       await this.#markUsageUnknown(runId, ctx)

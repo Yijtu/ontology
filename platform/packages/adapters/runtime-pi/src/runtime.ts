@@ -10,7 +10,10 @@ import type { Api, Model } from '@earendil-works/pi-ai'
 import { isToolContext } from '@ontology/contracts'
 import type {
   AbandonedAttempt,
+  AuthoringCommandKind,
   BudgetRemaining,
+  CommandCall,
+  CommandReceipt,
   ComponentManifest,
   GenerationRole,
   ModelRef,
@@ -60,7 +63,7 @@ interface Session {
   readonly controller: AbortController
   readonly evidenceRefs: ResourceRef[]
   /** In-flight gateway calls, keyed by call id, so cancel can name each abandoned attempt. */
-  readonly inFlight: Map<string, ToolId>
+  readonly inFlight: Map<string, { readonly kind: 'data_tool'; readonly toolId: ToolId } | { readonly kind: 'command'; readonly commandKind: AuthoringCommandKind }>
   /** Attempts that were running when the run was cancelled; quarantined, never revived. */
   readonly abandoned: AbandonedAttempt[]
   agent: Agent | undefined
@@ -89,6 +92,7 @@ interface Session {
 export class PiRuntimeAdapter implements RuntimeAdapter {
   readonly manifest: ComponentManifest
   readonly #toolIds: readonly ToolId[]
+  readonly #authoringCommands: readonly AuthoringCommandKind[]
   readonly #exposed: ReadonlySet<string>
   readonly #model: Model<Api>
   readonly #modelRef: ModelRef
@@ -109,7 +113,8 @@ export class PiRuntimeAdapter implements RuntimeAdapter {
     }
     this.manifest = config.manifest
     this.#toolIds = [...config.toolIds]
-    this.#exposed = new Set(this.#toolIds)
+    this.#authoringCommands = [...(config.authoringCommands ?? [])]
+    this.#exposed = new Set<string>([...this.#toolIds, ...this.#authoringCommands])
     this.#modelRef = config.modelRef
     this.#model = buildModel(config)
     this.#generationRole = config.generationRole ?? 'planner'
@@ -257,12 +262,15 @@ export class PiRuntimeAdapter implements RuntimeAdapter {
   ): Agent {
     const tools = createGatewayTools({
       toolIds: this.#toolIds,
+      authoringCommands: this.#authoringCommands,
       gateway: deps.gateway,
+      ...(deps.commandGateway === undefined ? {} : { commandGateway: deps.commandGateway }),
       ctx: session.ctx,
       newId: this.#newId,
+      now: this.#now,
       hooks: {
         onCall: (call) => {
-          session.inFlight.set(call.callId, call.toolId)
+          session.inFlight.set(call.callId, { kind: 'data_tool', toolId: call.toolId })
         },
         onResult: (call, result) => {
           session.inFlight.delete(call.callId)
@@ -274,6 +282,24 @@ export class PiRuntimeAdapter implements RuntimeAdapter {
               evidenceRefs: [...result.evidenceRefs],
             })
           }
+        },
+        onCommandCall: (call: CommandCall) => {
+          session.inFlight.set(call.callId, { kind: 'command', commandKind: call.commandKind })
+        },
+        onCommandReceipt: (receipt: CommandReceipt) => {
+          session.inFlight.delete(receipt.callId)
+          emit({
+            ...this.#base(session),
+            type: 'command_receipt',
+            callId: receipt.callId,
+            commandKind: receipt.commandKind,
+            status: receipt.status,
+            candidateCount: receipt.candidateIds.length,
+            candidateIds: [...receipt.candidateIds],
+            issueCodes: [...receipt.issueCodes],
+            receiptDigest: receipt.receiptDigest,
+            recordedAt: receipt.recordedAt,
+          })
         },
       },
     })
@@ -291,6 +317,7 @@ export class PiRuntimeAdapter implements RuntimeAdapter {
         role: this.#generationRole,
         maxTokens: this.#maxTokens,
         toolIds: this.#toolIds,
+        authoringCommands: this.#authoringCommands,
         evidenceRefs: () => session.evidenceRefs,
         now: this.#now,
       }),
@@ -411,6 +438,7 @@ export class PiRuntimeAdapter implements RuntimeAdapter {
       messages,
       evidenceRefs: session.evidenceRefs.map((ref) => ({ ...ref })),
       toolIds: [...this.#toolIds],
+      authoringCommands: [...this.#authoringCommands],
       completedTurns: session.completedTurns,
     }
     const ref: RuntimeCheckpointRef = {
@@ -436,16 +464,21 @@ export class PiRuntimeAdapter implements RuntimeAdapter {
   }
 
   #abandonInFlight(session: Session, reason: string): void {
-    for (const [callId, toolId] of session.inFlight) {
+    for (const [callId, entry] of session.inFlight) {
       session.abandoned.push({
         attemptId: this.#newId(),
         callId,
-        toolId,
+        ...(entry.kind === 'data_tool' ? { toolId: entry.toolId } : {}),
         abandonedAt: this.#now(),
         lateResultPolicy: 'quarantined',
         reason,
       })
-      void session.gateway.cancel(callId, reason, session.ctx).catch(() => undefined)
+      // The data-tool gateway can cancel an in-flight read; the command gateway exposes no
+      // cancel because a workspace write is not revocable here — it is recorded as abandoned
+      // and its late receipt is quarantined.
+      if (entry.kind === 'data_tool') {
+        void session.gateway.cancel(callId, reason, session.ctx).catch(() => undefined)
+      }
     }
     session.inFlight.clear()
   }
