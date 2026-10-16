@@ -11,6 +11,7 @@ import {
   CandidateSourceIngestionService,
   JobService,
   JobWorker,
+  LegacyResearchExecutor,
   ResearchWorkflowService,
   WebResearchService,
 } from '@ontology/application'
@@ -49,6 +50,10 @@ let workspaceId: Uuid
 let worker: JobWorker
 let executions: PostgresResearchExecutionStore
 let sourceStore: PostgresCandidateSourceStore
+/** A façade mounted with no execution engine, to prove history reads never depend on search. */
+let readOnlyWorkflow: ResearchWorkflowService
+/** A `@2` projection fixture written by a foreign producer (raw SQL, never by this step's store). */
+let v2Fixture: { readonly researchId: Uuid; readonly runId: Uuid }
 
 function sha(seed: string): string {
   return `sha256:${seed.repeat(64).slice(0, 64)}`
@@ -156,22 +161,87 @@ beforeAll(async () => {
   }
   await workspaceStore.createWorkspace(createInput, scope.scopeRef, ctx)
 
+  const fixtureJobId = randomUUID()
+  v2Fixture = { researchId: randomUUID(), runId: randomUUID() }
+  await jobService.createJob({ jobId: fixtureJobId, kind: 'research', sourceRef: 'workbench.research', datasetRef: 'v2-fixture-job', pipelineVersion: '2.0.0', idempotencyKey: `fixture-job-${fixtureJobId.slice(0, 12)}` }, ctx)
+  // A foreign producer's `@2` projection: inserted through a run row and raw SQL so the store's
+  // read path — not its writer — is what is exercised. The store is rebuilt before reading it.
+  const profileId = `fixture-profile-${randomUUID().slice(0, 8)}`
+  const admin = harness.adminClient
+  await admin.query(
+    `INSERT INTO agent_platform.profile_versions
+       (tenant_id, space_id, profile_id, version, digest, environment, spec, created_at, created_by)
+     VALUES ($1, $2, $3, '1.0.0', $4, 'local_dev', '{}'::jsonb, $5::timestamptz, 'fixture')`,
+    [scope.tenantId, scope.spaceId, profileId, sha('f'), RECORDED_AT],
+  )
+  await admin.query(
+    `INSERT INTO agent_platform.resolved_profiles
+       (tenant_id, space_id, profile_id, version, snapshot_hash, output_version, output_digest,
+        resolved_profile, checked_at, resolved_at)
+     VALUES ($1, $2, $3, '1.0.0', $4, '1.0.0', $4, '{}'::jsonb, $5::timestamptz, $5::timestamptz)`,
+    [scope.tenantId, scope.spaceId, profileId, sha('f'), RECORDED_AT],
+  )
+  await admin.query(
+    `INSERT INTO agent_platform.runs
+       (tenant_id, space_id, run_id, owner_subject_id, profile_id, profile_version, resolved_profile_hash,
+        runtime_ref, question, context, preferences, state, revision, idempotency_key, request_digest,
+        created_at, updated_at)
+     VALUES ($1, $2, $3, 'fixture-owner', $4, '1.0.0', $5, '{}'::jsonb, 'research v2 fixture', '{}'::jsonb,
+        '{}'::jsonb, 'drafting', 1, $6, $5, $7::timestamptz, $7::timestamptz)`,
+    [scope.tenantId, scope.spaceId, v2Fixture.runId, profileId, sha('f'), `fixture-run-${v2Fixture.runId.slice(0, 12)}`, RECORDED_AT],
+  )
+  const coverage = { queriesPlanned: 3, searchCalls: 2, pagesDiscovered: 9, archivedSnapshots: 6, skippedWithoutSnapshot: 3, excludedCount: 0, failedCount: 0, truncated: false }
+  const limits = { sourceLimit: 5, candidateLimit: 5, deadline: '2099-01-01T00:00:00Z' }
+  const briefRef = resourceRef()
+  const versionRef = { id: 'research-policy.core', version: '1.0.0', digest: sha('c') }
+  const projection = {
+    budget: { maxTotalCalls: 100, maxSearchCalls: 20, maxModelTokens: 100000, maxModelTurns: 30, maxSources: 40, maxCandidates: 60, maxDownloadBytes: 1048576, maxReadBytes: 2097152, maxConcurrency: 2, maxRepairAttempts: 4, deadline: '2099-01-01T00:00:00Z' },
+    coverageGaps: [{ kind: 'must_cover', name: '停机条件版本', state: 'pending_confirmation', evidenceCount: 2 }],
+    humanTodos: [{ todoId: randomUUID(), kind: 'source_review', message: '待审核来源', createdAt: RECORDED_AT }],
+    evidence: [{ sourceRef: resourceRef(), locatorKind: 'document_span', digest: sha('e'), archived: true }],
+    candidateReceipts: [{ candidateId: randomUUID(), kind: 'definition', state: 'pending_confirmation', pendingConfirmation: true, issueCodes: ['SOURCE_TRUST_BLOCKED'] }],
+    usage: { searchCalls: 2, archivedSnapshots: 6, modelTokens: 5000, modelTurns: 4, candidatesSubmitted: 3, bytesDownloaded: 50000, bytesRead: 12000, repairAttempts: 0, usageUnknown: false },
+  }
+  await admin.query(
+    `INSERT INTO agent_platform.workspace_research_runs
+       (tenant_id, space_id, workspace_id, research_id, job_id, schema_version, run_id, goal, projection,
+        status, stage, brief_ref, policy_ref, budget_ref, limits, coverage, source_count, candidate_count,
+        sources, request_idempotency_key, request_digest, recorded_at, updated_at)
+     VALUES ($1, $2, $3, $4, $5, 'research-execution@2', $6, $7::jsonb, $8::jsonb,
+        'running', 'searching', $9::jsonb, $10::jsonb, $10::jsonb, $11::jsonb, $12::jsonb, 0, 0,
+        '[]'::jsonb, $13, $14, $15::timestamptz, $15::timestamptz)`,
+    [
+      scope.tenantId, scope.spaceId, workspaceId, v2Fixture.researchId, fixtureJobId, v2Fixture.runId,
+      JSON.stringify({ kind: 'industry_workspace_research', workspaceId, draftRevision: '1' }),
+      JSON.stringify(projection), JSON.stringify(briefRef), JSON.stringify(versionRef),
+      JSON.stringify(limits), JSON.stringify(coverage), v2Fixture.researchId, sha('d'), RECORDED_AT,
+    ],
+  )
+
   const provider = new FakeProvider({
     pages: [{ url: 'https://standards.example.org/gb50500', title: 'GB50500', snippet: 'load tables', fetchedAt: RECORDED_AT,
       contentDigest: digestOf('page-a'), snapshotRef: { id: randomUUID(), version: '1.0.0', digest: digestOf('page-a'), kind: 'artifact' } }],
     truncated: false, excludedCount: 0,
   })
-  const workflow = new ResearchWorkflowService({
-    jobs: jobService,
+  const executor = new LegacyResearchExecutor({
     executions,
     research: new WebResearchService({ webSearch: provider, ingestion: new CandidateSourceIngestionService({ artifacts: new FakeWriter(), sources: sourceStore, now: () => RECORDED_AT }) }),
     budget: new FakeBudget(),
     now: () => RECORDED_AT,
   })
+  const workflow = new ResearchWorkflowService({
+    jobs: jobService,
+    executions,
+    budget: new FakeBudget(),
+    now: () => RECORDED_AT,
+  })
+  // The same facade with no execution engine mounted, mirroring a deployment with no search
+  // provider: its reads/cancel/resume still work, only a new run needs the missing engine.
+  readOnlyWorkflow = new ResearchWorkflowService({ jobs: jobService, executions, budget: new FakeBudget(), executionAvailable: false })
   // The worker is driven directly in this test; the real host mounts the same router.
   worker = new JobWorker({
     store: jobStore,
-    handlers: createWorkerStageRegistry({ ingestion: { get: () => undefined }, research: new ResearchStageHandler({ workflow }) }),
+    handlers: createWorkerStageRegistry({ ingestion: { get: () => undefined }, research: new ResearchStageHandler({ executor }) }),
     budget: new FakeBudget(),
     workerId: 'research-test-worker',
     now: () => '2099-01-01T00:00:00Z',
@@ -275,5 +345,63 @@ describe('research resume and continuations (real PostgreSQL)', () => {
     const refused = await post(`/api/v1/industry-workspaces/${workspaceId}/research-runs/${researchId}/continuations`, body)
     expect(refused.statusCode, refused.body).toBe(409)
     expect((refused.json() as { error: { code: string } }).error.code).toBe('VERSION_CONFLICT')
+  })
+})
+
+describe('dual-version research execution reads (real PostgreSQL)', () => {
+  it('reads a legacy @1 record and a foreign @2 projection after the store is rebuilt', async () => {
+    const accepted = await post(`/api/v1/industry-workspaces/${workspaceId}/research-runs`, body)
+    expect(accepted.statusCode).toBe(202)
+    const legacyId = (accepted.json() as { data: { researchId: string } }).data.researchId
+
+    // Rebuild the store from the connection string: nothing is carried in memory between the write
+    // and the read, so both projection versions are proven durable and self-describing.
+    const rebuilt = new PostgresResearchExecutionStore(database)
+    const legacy = await rebuilt.getExecution(scope.scopeRef, legacyId, ctx)
+    expect(legacy?.schemaVersion).toBe('research-execution@1')
+    expect(legacy?.researchId).toBe(legacyId)
+
+    const projection = await rebuilt.getExecution(scope.scopeRef, v2Fixture.researchId, ctx)
+    expect(projection?.schemaVersion).toBe('research-execution@2')
+    if (projection?.schemaVersion !== 'research-execution@2') throw new Error('expected the @2 projection')
+    expect(projection.runId).toBe(v2Fixture.runId)
+    expect(projection.goal).toMatchObject({ kind: 'industry_workspace_research', workspaceId })
+    expect(projection.coverageGaps).toHaveLength(1)
+    expect(projection.usage.modelTokens).toBe(5000)
+    expect(projection.candidateReceipts[0]?.issueCodes).toContain('SOURCE_TRUST_BLOCKED')
+
+    const page = await rebuilt.listExecutions(scope.scopeRef, workspaceId, { limit: 50 }, ctx)
+    const versions = new Map(page.executions.map((entry) => [entry.researchId, entry.schemaVersion]))
+    expect(versions.get(legacyId)).toBe('research-execution@1')
+    expect(versions.get(v2Fixture.researchId)).toBe('research-execution@2')
+  })
+
+  it('reads history through a facade mounted without an execution engine', async () => {
+    const accepted = await post(`/api/v1/industry-workspaces/${workspaceId}/research-runs`, body)
+    const legacyId = (accepted.json() as { data: { researchId: string } }).data.researchId
+
+    expect(readOnlyWorkflow.executionAvailable).toBe(false)
+    const view = await readOnlyWorkflow.get(legacyId, ctx)
+    expect(view.execution.researchId).toBe(legacyId)
+    expect(view.execution.schemaVersion).toBe('research-execution@1')
+
+    const projection = await readOnlyWorkflow.get(v2Fixture.researchId, ctx)
+    expect(projection.execution.schemaVersion).toBe('research-execution@2')
+  })
+
+  it('advances a @2 projection on a non-terminal update', async () => {
+    const rebuilt = new PostgresResearchExecutionStore(database)
+    const current = await rebuilt.getExecution(scope.scopeRef, v2Fixture.researchId, ctx)
+    if (current?.schemaVersion !== 'research-execution@2') throw new Error('expected the @2 projection')
+
+    const updated = await rebuilt.putExecution(scope.scopeRef, { ...current, usage: { ...current.usage, modelTokens: 9999 } }, ctx)
+    if (updated.schemaVersion !== 'research-execution@2') throw new Error('expected the @2 projection back')
+    expect(updated.usage.modelTokens).toBe(9999)
+
+    const reread = await rebuilt.getExecution(scope.scopeRef, v2Fixture.researchId, ctx)
+    if (reread?.schemaVersion !== 'research-execution@2') throw new Error('expected the @2 projection')
+    expect(reread.usage.modelTokens).toBe(9999)
+    // The legacy record is untouched by the @2 advance.
+    expect((await rebuilt.listExecutions(scope.scopeRef, workspaceId, { limit: 50 }, ctx)).executions.some((entry) => entry.schemaVersion === 'research-execution@1')).toBe(true)
   })
 })

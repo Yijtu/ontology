@@ -7,7 +7,7 @@ import {
   AnswerPublicationService, CandidateAuthoringCommandGateway, CandidateSourceIngestionService, CandidateSubmissionService, CandidateValidationStageHandler, DraftVerificationService, ExtractionPipeline, ExtractionStageHandler,
   IndustryWorkspaceService, JobService, JobWorker, OutboxDispatcher, ResearchMaterialReadService, RestrictedLimitedAnswerComposer, ResearchWorkflowService, RuleActionCandidateService, RunExecutionPreflightService, RunPhaseDriver,
   RunService, RunTypedResultContextSource, StructuredExtractionService, StructuredExtractionStageHandler, TableHardVerificationService,
-  TypedEvidenceDraftWriter, WebResearchService, WorkflowController, createRunCheckpointPort, createSourceGroundingService, ReviewHandoffStageHandler,
+  TypedEvidenceDraftWriter, WebResearchService, WorkflowController, createRunCheckpointPort, createSourceGroundingService, ReviewHandoffStageHandler, LegacyResearchExecutor,
 } from '@ontology/application'
 import { FiniteGrammarRuleSupportValidator, IncrementalMaterializer } from '@ontology/semantic-engine'
 import { JobWorkerLoop, MaterializationOutboxConsumer, ProjectEvolutionOutboxConsumer, ResearchStageHandler, TopicOutboxConsumerRouter, WorkflowDispatchWorker, controlRecordSequence, createIngestionHandlerRegistry, createWorkerStageRegistry } from '@ontology/app-worker'
@@ -370,17 +370,22 @@ export async function assembleRuntimePipeline(
       new ReviewHandoffStageHandler(),
     ],
   })
-  // Bounded research orchestration (design §2.3, A-R02). When the deployment configures a web
-  // search provider it also wires the research workflow and its worker stage, so a durable
-  // `research` job runs the fixed chain. When no provider is configured the research capability
-  // is simply absent — selecting a research model never enables `web_search` on its own.
-  // A normal start discovers research by constructing the controlled, snapshot-archiving search
-  // provider from deployment configuration; a test host may still inject its own provider. With
-  // neither configured, research is explicitly absent (never a fabricated capability).
+  // The bounded research orchestration facade is always mounted so its run history stays readable
+  // even when no search provider is configured; the fixed execution engine (and its durable worker
+  // handler) is mounted only when a provider exists. A normal start discovers research by
+  // constructing the controlled, snapshot-archiving search provider from deployment configuration;
+  // a test host may still inject its own provider. With neither configured the facade still reads
+  // history and reports a stable capability reason for a new run (never a fabricated capability).
   const webSearch = options.webSearch ?? createCoreWebSearchProvider({ env: modelEnvironment, artifacts: gatewayComposition.artifacts })
   const researchExecutionStore = new PostgresResearchExecutionStore(database)
-  const researchWorkflow = webSearch === undefined ? undefined : new ResearchWorkflowService({
+  const researchWorkflow = new ResearchWorkflowService({
     jobs: jobService,
+    executions: researchExecutionStore,
+    budget: state.budget,
+    ...(modelBindingService === undefined ? {} : { modelBinding: modelBindingService }),
+    ...(webSearch === undefined ? { executionAvailable: false } : {}),
+  })
+  const researchExecutor = webSearch === undefined ? undefined : new LegacyResearchExecutor({
     executions: researchExecutionStore,
     research: new WebResearchService({
       webSearch,
@@ -389,7 +394,7 @@ export async function assembleRuntimePipeline(
     budget: state.budget,
     ...(modelBindingService === undefined ? {} : { modelBinding: modelBindingService }),
   })
-  const researchHandler = researchWorkflow === undefined ? undefined : new ResearchStageHandler({ workflow: researchWorkflow })
+  const researchHandler = researchExecutor === undefined ? undefined : new ResearchStageHandler({ executor: researchExecutor })
   const routedHandlers = createWorkerStageRegistry({ ingestion: handlers, ...(researchHandler === undefined ? {} : { research: researchHandler }) })
   const jobWorker = new JobWorker({
     store: jobStore, handlers: routedHandlers, budget: state.budget, workerId: 'core-local-ingestion-worker', now: () => hostClock().toISOString(),
@@ -442,7 +447,7 @@ export async function assembleRuntimePipeline(
     runProfileBinder, runProgress, executionPreflight, runs, phase, planResolver, termLabels, authoring, tableArtifactStore,
     tableVerificationStore, tableResults, draftVerifier, workflowDispatchWorker, jobService, industryWorkspaceService, parser,
     pipeline, structuredExtractionService, handlers, jobWorker, currentProjectRevisions, materializer, outboxConsumer, dispatcher, provenanceRead,
-    researchWorkflow, webSearch, searchBinding,
+    researchWorkflow, researchExecutor, webSearch, searchBinding,
     candidateSubmissionStore, candidateSubmissionService,
   }
 }

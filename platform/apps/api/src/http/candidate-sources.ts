@@ -514,7 +514,9 @@ export function registerCandidateSourceRoutes(
   }
 
   // The async research-run entry exists even when no search provider is configured, so a caller
-  // always learns *why* it cannot run instead of a misleading 404 (design §10).
+  // always learns *why* it cannot run instead of a misleading 404 (design §10). The orchestration
+  // facade is mounted whenever it is wired; starting/appending a run additionally needs a wired
+  // execution engine, while reads/cancel/resume never do — so history stays readable without search.
   {
     const workflow = dependencies.researchWorkflow
     const requireWorkflow = (): ResearchWorkflowService => {
@@ -522,6 +524,12 @@ export function registerCandidateSourceRoutes(
         capabilityNotConfigured('公共搜索/研究编排未配置，无法创建或读取研究任务。')
       }
       return workflow
+    }
+    /** Creating or appending a run needs the fixed execution engine; reads/cancel/resume do not. */
+    const requireExecution = (active: ResearchWorkflowService): void => {
+      if (!active.executionAvailable) {
+        capabilityNotConfigured('公共搜索/研究执行引擎未配置，无法创建或追加研究任务。')
+      }
     }
     // The async entry point: it pins the brief/policy/budget, creates the durable research job and
     // returns 202 with the run. The existing synchronous `POST .../research` above keeps its 201.
@@ -532,6 +540,7 @@ export function registerCandidateSourceRoutes(
         const auth = authenticateRequest(dependencies.authenticate, request, reply)
         if (auth === undefined) return reply
         const active = requireWorkflow()
+        requireExecution(active)
         const body = request.body
         if (!isRecord(body)) throw new InvalidRequestFieldError('the request body must be a JSON object')
         const workspaceId = request.params.workspaceId
@@ -600,6 +609,7 @@ export function registerCandidateSourceRoutes(
         const auth = authenticateRequest(dependencies.authenticate, request, reply)
         if (auth === undefined) return reply
         const active = requireWorkflow()
+        requireExecution(active)
         const body = request.body
         if (!isRecord(body)) throw new InvalidRequestFieldError('the request body must be a JSON object')
         const workspaceId = request.params.workspaceId

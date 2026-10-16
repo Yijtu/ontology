@@ -22,15 +22,25 @@ export {
   ResearchWorkflowService,
 } from './research-workflow-service'
 export type {
-  ExecuteResearchInput,
   ResearchContinuationLinkage,
   ResearchRunView,
   ResearchWorkflowDependencies,
 } from './research-workflow-service'
+export { LegacyResearchExecutor } from './legacy-research-executor'
+export type { ExecuteResearchInput, LegacyResearchExecutorDependencies } from './legacy-research-executor'
 export {
   RESEARCH_JOB_REQUEST_KIND,
+  RESEARCH_JOB_VERSION_AGENT,
+  RESEARCH_JOB_VERSION_LEGACY,
+  RESEARCH_JOB_VERSIONS,
   decodeResearchJobRequest,
   encodeResearchJobRequest,
+  isAgentResearchJobRequest,
+  isLegacyResearchJobRequest,
   isResearchJobRef,
 } from './research-job-ref'
-export type { ResearchJobRequest } from './research-job-ref'
+export type {
+  ResearchJobRequest,
+  ResearchJobRequestAgent,
+  ResearchJobRequestLegacy,
+} from './research-job-ref'
