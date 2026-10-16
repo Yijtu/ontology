@@ -1,5 +1,7 @@
 import type { AgentTool } from '@earendil-works/pi-agent-core'
 import type {
+  AuthoringCommandKind,
+  CommandReceipt,
   ComponentManifest,
   GenerationRole,
   ModelRef,
@@ -30,6 +32,21 @@ export interface GatewayToolDetails {
 
 export type GatewayTool = AgentTool<GatewayToolParameters, GatewayToolDetails>
 
+/** The bounded, JSON-safe result the model sees back from a routed authoring command. */
+export interface CommandToolDetails {
+  readonly status: ToolResultStatus
+  readonly receipt: CommandReceipt
+}
+
+export type CommandTool = AgentTool<GatewayToolParameters, CommandToolDetails>
+
+/**
+ * A model-proposable capability of either kind. The runtime registers data tools and (when a
+ * run may author) controlled commands on the same Pi tool surface; the union keeps both under
+ * one `AgentTool` type so the array needs no cast.
+ */
+export type PiTool = AgentTool<GatewayToolParameters, GatewayToolDetails | CommandToolDetails>
+
 /**
  * Construction-time configuration for the Pi runtime adapter (SPEC C2, §4.2).
  *
@@ -44,6 +61,13 @@ export interface PiRuntimeConfig {
    * so this list is a surface limit, never the authorization decision.
    */
   readonly toolIds: readonly ToolId[]
+  /**
+   * The controlled authoring commands the model may propose (design §5). They are NOT data
+   * tools: the four-tool `ToolId` catalogue stays closed, and each command is routed through
+   * the injected `AuthoringCommandGateway` (identity/schema/budget/intent/fence/audit). Absent
+   * by default, so a plain data-tool run cannot author.
+   */
+  readonly authoringCommands?: readonly AuthoringCommandKind[]
   /** Platform model reference sent to `GenerationPort`; never a vendor model id. */
   readonly modelRef: ModelRef
   /** Generation role label for the collection-loop model calls. Defaults to `planner`. */

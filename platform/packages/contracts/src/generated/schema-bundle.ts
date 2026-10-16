@@ -5199,6 +5199,14 @@ export const SCHEMA_DOCUMENTS: readonly JsonSchemaObject[] = [
           "repair"
         ]
       },
+      "AuthoringCommandKind": {
+        "title": "AuthoringCommandKind",
+        "description": "The controlled authoring commands a runtime may route (design §5). They are deliberately NOT model-visible data tools: the public ToolId catalogue stays exactly four, and a candidate write is a separate, controlled command. `submit_candidates` is currently the only member.",
+        "type": "string",
+        "enum": [
+          "submit_candidates"
+        ]
+      },
       "GenerationMessageRole": {
         "title": "GenerationMessageRole",
         "type": "string",
@@ -5282,6 +5290,14 @@ export const SCHEMA_DOCUMENTS: readonly JsonSchemaObject[] = [
             },
             "uniqueItems": true
           },
+          "authoringCommands": {
+            "description": "The controlled authoring commands the runtime exposes to the model for this call (design §5). A command is not a ToolId; a shift to it never widens the four-tool catalogue.",
+            "type": "array",
+            "items": {
+              "$ref": "#/$defs/AuthoringCommandKind"
+            },
+            "uniqueItems": true
+          },
           "modelRef": {
             "$ref": "#/$defs/ModelRef"
           },
@@ -5310,6 +5326,14 @@ export const SCHEMA_DOCUMENTS: readonly JsonSchemaObject[] = [
             "properties": {
               "toolSchemas": {}
             }
+          },
+          {
+            "required": [
+              "authoringCommands"
+            ],
+            "properties": {
+              "authoringCommands": {}
+            }
           }
         ]
       },
@@ -5319,6 +5343,7 @@ export const SCHEMA_DOCUMENTS: readonly JsonSchemaObject[] = [
         "enum": [
           "text_delta",
           "tool_call_delta",
+          "authoring_command_delta",
           "usage",
           "completed",
           "error"
@@ -5383,6 +5408,32 @@ export const SCHEMA_DOCUMENTS: readonly JsonSchemaObject[] = [
           },
           "toolId": {
             "$ref": "./tools.schema.json#/$defs/ToolId"
+          },
+          "argumentsDelta": {
+            "type": "string"
+          }
+        }
+      },
+      "GenerationAuthoringCommandDelta": {
+        "title": "GenerationAuthoringCommandDelta",
+        "description": "A proposed controlled authoring command (design §5). Like a tool call, the runtime must route it through the host command gateway; the model cannot execute or authorize it directly, and it is never smuggled into a data tool.",
+        "type": "object",
+        "additionalProperties": false,
+        "required": [
+          "type",
+          "callId",
+          "commandKind",
+          "argumentsDelta"
+        ],
+        "properties": {
+          "type": {
+            "const": "authoring_command_delta"
+          },
+          "callId": {
+            "$ref": "./common.schema.json#/$defs/Uuid"
+          },
+          "commandKind": {
+            "$ref": "#/$defs/AuthoringCommandKind"
           },
           "argumentsDelta": {
             "type": "string"
@@ -5462,6 +5513,9 @@ export const SCHEMA_DOCUMENTS: readonly JsonSchemaObject[] = [
           },
           {
             "$ref": "#/$defs/GenerationToolCallDelta"
+          },
+          {
+            "$ref": "#/$defs/GenerationAuthoringCommandDelta"
           },
           {
             "$ref": "#/$defs/GenerationUsageEvent"
@@ -6441,12 +6495,24 @@ export const SCHEMA_DOCUMENTS: readonly JsonSchemaObject[] = [
         "enum": [
           "plan_proposed",
           "step_started",
+          "command_receipt",
           "evidence_added",
           "clarification_requested",
           "collection_complete",
           "checkpoint_ready",
           "cancelled",
           "failed"
+        ]
+      },
+      "AuthoringCommandReceiptStatus": {
+        "title": "AuthoringCommandReceiptStatus",
+        "description": "The outcome of one routed authoring command (design §5/§7). `accepted` records written candidates, `rejected` a refused command, `pending_confirmation` a write held behind a source/terminology fence, and `deferred` a command the run could not route (e.g. no command gateway is configured).",
+        "type": "string",
+        "enum": [
+          "accepted",
+          "rejected",
+          "pending_confirmation",
+          "deferred"
         ]
       },
       "BudgetRemaining": {
@@ -6746,6 +6812,76 @@ export const SCHEMA_DOCUMENTS: readonly JsonSchemaObject[] = [
           }
         }
       },
+      "AuthoringCommandReceiptEvent": {
+        "title": "AuthoringCommandReceiptEvent",
+        "description": "One routed authoring command's receipt, projected onto the runtime event stream (design §5). It carries only the recorded outcome — never the command body, the model's raw arguments or a trusted attribute — so a consumer can list what was written without re-deriving it from the model.",
+        "type": "object",
+        "additionalProperties": false,
+        "required": [
+          "type",
+          "runId",
+          "eventId",
+          "sequence",
+          "occurredAt",
+          "callId",
+          "commandKind",
+          "status",
+          "candidateCount",
+          "candidateIds",
+          "issueCodes",
+          "receiptDigest",
+          "recordedAt"
+        ],
+        "properties": {
+          "type": {
+            "const": "command_receipt"
+          },
+          "runId": {
+            "$ref": "./common.schema.json#/$defs/Uuid"
+          },
+          "eventId": {
+            "$ref": "./common.schema.json#/$defs/Uuid"
+          },
+          "sequence": {
+            "type": "integer",
+            "minimum": 0
+          },
+          "occurredAt": {
+            "$ref": "./common.schema.json#/$defs/Rfc3339UtcTimestamp"
+          },
+          "callId": {
+            "$ref": "./common.schema.json#/$defs/Uuid"
+          },
+          "commandKind": {
+            "$ref": "./model.schema.json#/$defs/AuthoringCommandKind"
+          },
+          "status": {
+            "$ref": "#/$defs/AuthoringCommandReceiptStatus"
+          },
+          "candidateCount": {
+            "type": "integer",
+            "minimum": 0
+          },
+          "candidateIds": {
+            "type": "array",
+            "items": {
+              "$ref": "./common.schema.json#/$defs/Uuid"
+            }
+          },
+          "issueCodes": {
+            "type": "array",
+            "items": {
+              "$ref": "./common.schema.json#/$defs/NonEmptyString"
+            }
+          },
+          "receiptDigest": {
+            "$ref": "./common.schema.json#/$defs/Sha256Digest"
+          },
+          "recordedAt": {
+            "$ref": "./common.schema.json#/$defs/Rfc3339UtcTimestamp"
+          }
+        }
+      },
       "EvidenceAddedEvent": {
         "title": "EvidenceAddedEvent",
         "type": "object",
@@ -6984,6 +7120,9 @@ export const SCHEMA_DOCUMENTS: readonly JsonSchemaObject[] = [
           },
           {
             "$ref": "#/$defs/StepStartedEvent"
+          },
+          {
+            "$ref": "#/$defs/AuthoringCommandReceiptEvent"
           },
           {
             "$ref": "#/$defs/EvidenceAddedEvent"

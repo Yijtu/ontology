@@ -1,5 +1,6 @@
-import { TOOL_IDS } from '@ontology/contracts'
+import { AUTHORING_COMMAND_KINDS, TOOL_IDS } from '@ontology/contracts'
 import type {
+  AuthoringCommandKind,
   GenerationCompleted,
   GenerationEvent,
   GenerationUsage,
@@ -19,6 +20,7 @@ export interface VendorChunkOutcome {
   readonly events: readonly GenerationEvent[]
   readonly textDelta?: string
   readonly toolDelta?: { readonly callId: Uuid; readonly argumentsDelta: string }
+  readonly commandDelta?: { readonly callId: Uuid; readonly argumentsDelta: string }
   readonly usage?: GenerationUsage
   readonly completed?: GenerationCompleted
   readonly failure?: ModelAdapterError
@@ -26,6 +28,7 @@ export interface VendorChunkOutcome {
 
 const UUID_PATTERN = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/
 const TOOL_ID_SET: ReadonlySet<string> = new Set(TOOL_IDS)
+const COMMAND_KIND_SET: ReadonlySet<string> = new Set(AUTHORING_COMMAND_KINDS)
 
 export function mapVendorChunk(
   chunk: CompanyWireChunk,
@@ -47,6 +50,24 @@ export function mapVendorChunk(
           ),
         }
       }
+      const argumentsDelta = redact(chunk.args_delta)
+      const callId = chunk.call_id as Uuid
+      // A controlled authoring command is proposed on the same vendor tool-call channel but is
+      // surfaced as a distinct canonical event, so a reader can always tell a data read from a
+      // controlled write and the command never enters the four-tool catalogue.
+      if (COMMAND_KIND_SET.has(chunk.tool)) {
+        return {
+          events: [
+            {
+              type: 'authoring_command_delta',
+              callId,
+              commandKind: chunk.tool as AuthoringCommandKind,
+              argumentsDelta,
+            },
+          ],
+          commandDelta: { callId, argumentsDelta },
+        }
+      }
       if (!TOOL_ID_SET.has(chunk.tool)) {
         return {
           events: [],
@@ -56,11 +77,8 @@ export function mapVendorChunk(
           ),
         }
       }
-      const argumentsDelta = redact(chunk.args_delta)
-      const callId = chunk.call_id as Uuid
-      const toolId = chunk.tool as ToolId
       return {
-        events: [{ type: 'tool_call_delta', callId, toolId, argumentsDelta }],
+        events: [{ type: 'tool_call_delta', callId, toolId: chunk.tool as ToolId, argumentsDelta }],
         toolDelta: { callId, argumentsDelta },
       }
     }

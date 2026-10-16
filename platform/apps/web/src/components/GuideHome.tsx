@@ -140,8 +140,9 @@ export function GuideHome({
           <Button variant="quiet" data-testid="guide-continue-work" onClick={currentWork.open}>继续工作 →</Button></>}
     </section>
 
-    <section className="app__guide-start" aria-labelledby="guide-start-title">
+    <section className="app__guide-start" data-testid="guide-goal-prompt" aria-labelledby="guide-start-title">
       <h2 id="guide-start-title">希望整理哪个领域，或解决什么问题？</h2>
+      <p className="app__guide-hint" data-testid="guide-goal-hint">这个目标会直接成为该工作区建模助手的任务；进入工作区后无需再次填写研究表单，只需确认一次范围与额度。</p>
       <Field label="业务目标" hint="例如“整理设备维护规则及其依据”。新建行业工作区的第一步只需要名称和业务目标。">
         {(attributes) => <textarea {...attributes} data-testid="guide-goal-input" rows={2} value={goal} placeholder="输入领域或问题" onChange={(event) => setGoal(event.target.value)} />}
       </Field>

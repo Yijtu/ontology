@@ -1,14 +1,18 @@
 import type {
   AnswerPublisherPort,
   AnswerVerifierPort,
+  AuthoringCommandKind,
+  AuthoringCommandReceiptStatus,
   BudgetLedgerLimits,
   BudgetLedgerPort,
+  BudgetRemaining,
   CreateRunContext,
   DraftWriterPort,
   InputValidityPort,
   LimitedAnswerPort,
   ProfileRef,
   PublishedAnswer,
+  ResourceRef,
   RevisionString,
   ToolContext,
   RunPreferences,
@@ -108,4 +112,28 @@ export interface WorkflowView {
   readonly pendingClarificationId?: Uuid
   readonly cancelReason?: string
   readonly answer?: PublishedAnswer
+}
+
+/** One candidate write receipt the run produced, projected onto the research delivery list. */
+export interface ResearchDeliveryCandidateReceipt {
+  readonly callId: Uuid
+  readonly commandKind: AuthoringCommandKind
+  readonly status: AuthoringCommandReceiptStatus
+  readonly candidateIds: readonly Uuid[]
+  readonly issueCodes: readonly string[]
+}
+
+/**
+ * The bounded outcome of a research run (design §8: 候选回执/证据清单/用量). It is **not** a
+ * published answer or an industry pack — a research run never maps its completion to an answer
+ * publication. The single ledger's remaining projection is reported as usage. When the run also
+ * produces a user-facing factual summary, that summary must still pass the same-draft
+ * verification step; this delivery list carries no such prose.
+ */
+export interface ResearchDelivery {
+  readonly runId: Uuid
+  readonly candidateReceipts: readonly ResearchDeliveryCandidateReceipt[]
+  readonly evidenceRefs: readonly ResourceRef[]
+  readonly stopReason: string
+  readonly usage: BudgetRemaining
 }

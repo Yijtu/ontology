@@ -15,6 +15,7 @@ import type {
 } from '@earendil-works/pi-ai'
 import type { StreamFn } from '@earendil-works/pi-agent-core'
 import type {
+  AuthoringCommandKind,
   GenerationCompleted,
   GenerationEvent,
   GenerationMessage,
@@ -45,6 +46,8 @@ export interface ControlledStreamInput {
   readonly role: GenerationRole
   readonly maxTokens: number
   readonly toolIds: readonly ToolId[]
+  /** Controlled authoring commands the model may propose for this call (design §5). */
+  readonly authoringCommands?: readonly AuthoringCommandKind[]
   /** Evidence collected so far, attached to each generation request. */
   readonly evidenceRefs: () => readonly ResourceRef[]
   readonly now: () => string
@@ -90,11 +93,14 @@ async function runControlledStream(
     messages: context.messages.map(toGenerationMessage),
     evidenceRefs: [...input.evidenceRefs()],
     toolSchemas: [...input.toolIds],
+    ...(input.authoringCommands === undefined || input.authoringCommands.length === 0
+      ? {}
+      : { authoringCommands: [...input.authoringCommands] }),
     modelRef: input.modelRef,
     outputLimit: { maxTokens: input.maxTokens },
   }
 
-  const toolCalls = new Map<string, { readonly toolId: ToolId; argsText: string }>()
+  const toolCalls = new Map<string, { readonly name: string; argsText: string }>()
   let text = ''
   let usage: GenerationUsage | undefined
   let completed: GenerationCompleted | undefined
@@ -118,7 +124,18 @@ async function runControlledStream(
         case 'tool_call_delta': {
           const existing = toolCalls.get(event.callId)
           toolCalls.set(event.callId, {
-            toolId: event.toolId,
+            name: event.toolId,
+            argsText: (existing?.argsText ?? '') + event.argumentsDelta,
+          })
+          break
+        }
+        case 'authoring_command_delta': {
+          // A controlled command is a proposal like a tool call: it is folded into the Pi
+          // transcript as an assistant tool call named by its command kind, then routed by
+          // the command tool through the host command gateway.
+          const existing = toolCalls.get(event.callId)
+          toolCalls.set(event.callId, {
+            name: event.commandKind,
             argsText: (existing?.argsText ?? '') + event.argumentsDelta,
           })
           break
@@ -167,7 +184,7 @@ async function runControlledStream(
   const proposed: ToolCall[] = [...toolCalls.entries()].map(([id, entry]) => ({
     type: 'toolCall',
     id,
-    name: entry.toolId,
+    name: entry.name,
     arguments: parseArguments(entry.argsText),
   }))
   const stopReason: StopReason =

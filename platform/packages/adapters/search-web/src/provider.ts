@@ -7,6 +7,7 @@ import type {
   WebSearchProviderRequest,
   WebSearchProviderResult,
 } from '@ontology/contracts'
+import { archivePermittedPage } from './archive-page'
 import { WebSearchProviderError, providerErrorForHttpStatus } from './errors'
 import { hostAllowed } from './host'
 import { SearchHttpClient } from './http-client'
@@ -35,14 +36,23 @@ export interface HttpWebSearchProviderConfig {
 const DEFAULT_ENDPOINT = '/v1/search'
 const DEFAULT_MAX_TIMEOUT_MS = 30_000
 
-const PROVIDER_REF: VersionRef = {
+/** The compatibility-gateway adapter's stable version ref; exported so a probe can pin it. */
+export const HTTP_WEB_SEARCH_PROVIDER_REF: VersionRef = {
   id: 'web-search.http',
   version: '1.0.0',
   digest: sha256DigestOf('web-search.http@1.0.0'),
 }
 
+const PROVIDER_REF: VersionRef = HTTP_WEB_SEARCH_PROVIDER_REF
+
 /**
- * Reference HTTP web-search provider (SPEC C4/C5, US-020/024).
+ * Compatibility HTTP web-search provider — the "兼容网关" adapter (design §9).
+ *
+ * It speaks the platform's own HTTP search dialect (`GET /v1/search?query=&domains=&limit=`) for an
+ * existing deployment that already runs a self-built search gateway, so such a deployment keeps
+ * working. New deployments that must not build a gateway use the native provider
+ * (`NativeTavilySearchProvider`) instead; the two share the same `WebSearchProvider` port and the
+ * same platform-controlled archiving (design §9).
  *
  * It owns the transport and the vendor response mapping, and it enforces the approved
  * domain allowlist before the request leaves (the `domains` query parameter is exactly
@@ -104,7 +114,9 @@ export class HttpWebSearchProvider implements WebSearchProvider {
     const capped = permitted.slice(0, request.limit)
     const archived: WebSearchProviderPage[] = []
     for (const page of capped) {
-      archived.push(await this.#archivePage(page, request, ctx))
+      archived.push(
+        await archivePermittedPage(page, request, ctx, this.#snapshotArchive, this.providerRef),
+      )
     }
 
     const truncated = mapped.truncated || permitted.length > request.limit
@@ -114,44 +126,6 @@ export class HttpWebSearchProvider implements WebSearchProvider {
       excludedCount,
       ...(mapped.nextCursor === undefined ? {} : { nextCursor: mapped.nextCursor }),
       ...(mapped.knownTotal === undefined ? {} : { knownTotal: mapped.knownTotal }),
-    }
-  }
-
-  /**
-   * Retrieve and archive one permitted page. A configured archiver either yields a snapshot or an
-   * explicit link-only reason; with no archiver every page is link only. Either way the page is
-   * returned, never dropped and never presented as citable without a snapshot.
-   */
-  async #archivePage(
-    page: WebSearchProviderPage,
-    request: WebSearchProviderRequest,
-    ctx: ToolContext,
-  ): Promise<WebSearchProviderPage> {
-    const archive = this.#snapshotArchive
-    if (archive === undefined) return { ...page, snapshotUnavailableReason: 'archive_not_configured' }
-
-    const outcome = await archive.archive(
-      {
-        url: page.url,
-        allowedDomains: request.allowedDomains,
-        deadline: request.deadline,
-        signal: request.signal,
-        providerRef: this.providerRef,
-      },
-      ctx,
-    )
-    if (outcome.status === 'discovery_only') {
-      return { ...page, snapshotUnavailableReason: outcome.reason }
-    }
-    return {
-      ...page,
-      fetchedAt: outcome.fetchedAt,
-      contentDigest: outcome.contentDigest,
-      snapshotRef: outcome.snapshotRef,
-      snapshotManifestRef: outcome.manifestRef,
-      parserVersion: outcome.parserVersion,
-      contentForm: outcome.contentForm,
-      ...(outcome.parsedRef === undefined ? {} : { parsedRef: outcome.parsedRef }),
     }
   }
 

@@ -123,6 +123,25 @@ export function projectRuntimeEvent(event: RuntimeEvent): RuntimeEventProjection
       // Runtime-private: the public handle is exposed through the run record, never as a
       // business SSE event.
       return { nextState: undefined, publicEvent: undefined, pendingClarificationId: undefined }
+    case 'command_receipt':
+      // A routed authoring command's receipt. It never changes run state and never publishes:
+      // it only records that a controlled write was accepted/rejected/pending. The data is a
+      // sanitised summary — the command body and the model's raw arguments are never exposed.
+      return {
+        nextState: undefined,
+        publicEvent: {
+          type: 'tool.completed',
+          data: {
+            commandKind: event.commandKind,
+            callId: event.callId,
+            status: event.status,
+            candidateCount: event.candidateCount,
+            candidateIds: event.candidateIds,
+            issueCodes: event.issueCodes,
+          },
+        },
+        pendingClarificationId: undefined,
+      }
     case 'cancelled':
       return {
         nextState: 'cancelled',

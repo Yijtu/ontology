@@ -590,7 +590,7 @@ export function App({
           onSelectProject={selectProject}
           {...(workspaceId === undefined ? {} : { selectedWorkspaceId: workspaceId })}
           {...(projectId === undefined ? {} : { selectedProjectId: projectId })}
-          onCreateWorkspace={() => navigate('ontology')}
+          onCreateWorkspace={(goal) => { writeParam('goal', goal.trim().length === 0 ? undefined : goal.trim()); navigate('ontology') }}
           onCreateProject={() => navigate('projects')}
           onStructuredIntake={() => navigate('projects', undefined, 'data')}
         />
@@ -653,7 +653,7 @@ export function App({
         />
       ) : null}
 
-      {view === 'ontology' ? <OntologyWorkspacePanel client={client} readOnly={readOnly} {...(workspaceId === undefined ? {} : { initialWorkspaceId: workspaceId })} onSelectWorkspace={selectWorkspace} onWorkspaceCreated={adoptCreatedWorkspace} /> : null}
+      {view === 'ontology' ? <OntologyWorkspacePanel client={client} readOnly={readOnly} {...(workspaceId === undefined ? {} : { initialWorkspaceId: workspaceId })} onSelectWorkspace={selectWorkspace} onWorkspaceCreated={adoptCreatedWorkspace} onConfigureModel={() => navigate('models')} /> : null}
 
       {view === 'projects' ? (
         bindingPhase === 'loading' || bindingStale ? <StateFeedback tone="loading" title="正在准备项目工作台" description="读取当前场景的配置与映射。" /> : bindingPhase === 'failure' ? <StateFeedback tone="error" title="项目工作台准备失败" description="当前配置未能读取，请重试。" action={<Button onClick={() => setContextReload((count) => count + 1)}>重试</Button>} /> : activeScenario === undefined || projectBinding === undefined ? (

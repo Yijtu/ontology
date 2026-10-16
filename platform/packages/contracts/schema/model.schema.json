@@ -26,6 +26,12 @@
       "type": "string",
       "enum": ["planner", "extractor", "draft_writer", "sql_proposer", "classifier", "repair"]
     },
+    "AuthoringCommandKind": {
+      "title": "AuthoringCommandKind",
+      "description": "The controlled authoring commands a runtime may route (design §5). They are deliberately NOT model-visible data tools: the public ToolId catalogue stays exactly four, and a candidate write is a separate, controlled command. `submit_candidates` is currently the only member.",
+      "type": "string",
+      "enum": ["submit_candidates"]
+    },
     "GenerationMessageRole": {
       "title": "GenerationMessageRole",
       "type": "string",
@@ -93,6 +99,14 @@
           },
           "uniqueItems": true
         },
+        "authoringCommands": {
+          "description": "The controlled authoring commands the runtime exposes to the model for this call (design §5). A command is not a ToolId; a shift to it never widens the four-tool catalogue.",
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/AuthoringCommandKind"
+          },
+          "uniqueItems": true
+        },
         "modelRef": {
           "$ref": "#/$defs/ModelRef"
         },
@@ -117,13 +131,19 @@
           "properties": {
             "toolSchemas": {}
           }
+        },
+        {
+          "required": ["authoringCommands"],
+          "properties": {
+            "authoringCommands": {}
+          }
         }
       ]
     },
     "GenerationEventType": {
       "title": "GenerationEventType",
       "type": "string",
-      "enum": ["text_delta", "tool_call_delta", "usage", "completed", "error"]
+      "enum": ["text_delta", "tool_call_delta", "authoring_command_delta", "usage", "completed", "error"]
     },
     "GenerationUsage": {
       "title": "GenerationUsage",
@@ -173,6 +193,27 @@
         },
         "toolId": {
           "$ref": "./tools.schema.json#/$defs/ToolId"
+        },
+        "argumentsDelta": {
+          "type": "string"
+        }
+      }
+    },
+    "GenerationAuthoringCommandDelta": {
+      "title": "GenerationAuthoringCommandDelta",
+      "description": "A proposed controlled authoring command (design §5). Like a tool call, the runtime must route it through the host command gateway; the model cannot execute or authorize it directly, and it is never smuggled into a data tool.",
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["type", "callId", "commandKind", "argumentsDelta"],
+      "properties": {
+        "type": {
+          "const": "authoring_command_delta"
+        },
+        "callId": {
+          "$ref": "./common.schema.json#/$defs/Uuid"
+        },
+        "commandKind": {
+          "$ref": "#/$defs/AuthoringCommandKind"
         },
         "argumentsDelta": {
           "type": "string"
@@ -237,6 +278,9 @@
         },
         {
           "$ref": "#/$defs/GenerationToolCallDelta"
+        },
+        {
+          "$ref": "#/$defs/GenerationAuthoringCommandDelta"
         },
         {
           "$ref": "#/$defs/GenerationUsageEvent"

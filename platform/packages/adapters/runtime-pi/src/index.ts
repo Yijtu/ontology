@@ -26,8 +26,11 @@ export {
 export type { CheckpointPayload } from './checkpoint'
 export { PI_AGENT_CORE_VERSION } from './types'
 export type {
+  CommandTool,
+  CommandToolDetails,
   GatewayTool,
   GatewayToolDetails,
   GatewayToolParameters,
   PiRuntimeConfig,
+  PiTool,
 } from './types'
