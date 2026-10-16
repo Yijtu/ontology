@@ -3,6 +3,7 @@ import type {
   OpaqueCursor,
   ResourceRef,
   Rfc3339UtcTimestamp,
+  Semver,
   Sha256Digest,
   VersionRef,
   WebSearchFreshnessHint,
@@ -200,4 +201,114 @@ export function assertWebPageSnapshotManifestShape(value: unknown): asserts valu
     throw new Error('invalid web page snapshot manifest')
   }
   assertLimits(value['limits'])
+}
+
+/* ----------------------------------------------------------------------------------------- */
+/* Tool-result discovery: archived vs discovery-only (design §6)                              */
+/* ----------------------------------------------------------------------------------------- */
+
+/**
+ * A page this run **archived**: the original snapshot is readable and citable. It names the
+ * snapshot, its manifest (the parse/derived-text record), the fetch time and the content digest, so
+ * the agent can read the real page instead of trusting a snippet.
+ */
+export interface ArchivedPageDiscovery {
+  readonly discovery: 'archived'
+  readonly url: string
+  readonly title: NonEmptyString
+  readonly snippet: string
+  readonly fetchedAt: Rfc3339UtcTimestamp
+  readonly publishedAt?: Rfc3339UtcTimestamp
+  readonly contentDigest: Sha256Digest
+  /** The archive parser version the manifest was produced by. */
+  readonly parserVersion: Semver
+  readonly snapshotRef: ResourceRef
+  readonly snapshotManifestRef: ResourceRef
+  /** The separately archived derived text, when the archiver produced one. */
+  readonly parsedRef?: ResourceRef
+  /** The archived bytes' form, when the manifest was already read; the manifest is authoritative. */
+  readonly contentForm?: WebContentForm
+}
+
+/**
+ * A page this run **discovered but could not archive**: a link, a snippet and an explicit reason.
+ * It can never ground a candidate that claims the original text supports it.
+ */
+export interface DiscoveryOnlyPage {
+  readonly discovery: 'discovery_only'
+  readonly url: string
+  readonly title: NonEmptyString
+  readonly snippet: string
+  readonly fetchedAt: Rfc3339UtcTimestamp
+  readonly contentDigest: Sha256Digest
+  readonly unavailableReason: WebSnapshotSkipReason
+}
+
+export type WebSearchToolPage = ArchivedPageDiscovery | DiscoveryOnlyPage
+
+export interface WebSearchToolOutput {
+  readonly pages: readonly WebSearchToolPage[]
+}
+
+/**
+ * Map one provider page to the tool-result discovery union. A page with a snapshot and manifest and
+ * no unavailable reason is `archived`; every other page is `discovery_only` with the reason the
+ * provider gave (or `archive_not_configured` when it named none), so a snippet can never be read as
+ * an archived original.
+ */
+export function toWebSearchToolPage(
+  page: WebSearchProviderPage,
+  parserVersion: Semver,
+): WebSearchToolPage {
+  if (page.snapshotRef !== undefined && page.snapshotManifestRef !== undefined && page.snapshotUnavailableReason === undefined) {
+    return {
+      discovery: 'archived',
+      url: page.url,
+      title: page.title,
+      snippet: page.snippet,
+      fetchedAt: page.fetchedAt,
+      ...(page.publishedAt === undefined ? {} : { publishedAt: page.publishedAt }),
+      contentDigest: page.contentDigest,
+      parserVersion,
+      snapshotRef: page.snapshotRef,
+      snapshotManifestRef: page.snapshotManifestRef,
+    }
+  }
+  return {
+    discovery: 'discovery_only',
+    url: page.url,
+    title: page.title,
+    snippet: page.snippet,
+    fetchedAt: page.fetchedAt,
+    contentDigest: page.contentDigest,
+    unavailableReason: page.snapshotUnavailableReason ?? 'archive_not_configured',
+  }
+}
+
+/** Runtime validation of the tool-result discovery union. */
+export function assertWebSearchToolOutputShape(value: unknown): asserts value is WebSearchToolOutput {
+  if (!isRecord(value) || !Array.isArray(value['pages'])) {
+    throw new Error('invalid web search tool output')
+  }
+  for (const page of value['pages']) {
+    if (!isRecord(page) || typeof page['url'] !== 'string' || !page['url'].startsWith('https://')
+      || !isNonEmptyString(page['title']) || typeof page['snippet'] !== 'string'
+      || typeof page['contentDigest'] !== 'string' || !SHA256_PATTERN.test(page['contentDigest'])) {
+      throw new Error('invalid web search tool page')
+    }
+    if (page['discovery'] === 'archived') {
+      if (!isResourceRef(page['snapshotRef']) || !isResourceRef(page['snapshotManifestRef'])
+        || !isNonEmptyString(page['parserVersion'])) {
+        throw new Error('an archived page must name its snapshot and manifest')
+      }
+      continue
+    }
+    if (page['discovery'] === 'discovery_only') {
+      if (!WEB_SNAPSHOT_SKIP_REASONS.includes(page['unavailableReason'] as WebSnapshotSkipReason)) {
+        throw new Error('a discovery-only page must name why it could not be archived')
+      }
+      continue
+    }
+    throw new Error('unknown web search page discovery kind')
+  }
 }
