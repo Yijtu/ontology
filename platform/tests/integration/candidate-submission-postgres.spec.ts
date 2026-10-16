@@ -7,14 +7,18 @@ import { FileSystemObjectStore, LocalImmutableBlobStore, PostgresArtifactRegistr
 import {
   ControlPostgresDatabase,
   PostgresAssetWorkspaceStore,
+  PostgresCandidateSourceStore,
   PostgresCandidateSubmissionStore,
   PostgresJobStore,
+  PostgresSourceAdmissionStore,
 } from '@ontology/adapter-control-postgres'
 import { publishGroundingDocumentSet } from '@ontology/adapter-extraction-document'
-import { IndustryWorkspaceService } from '@ontology/application'
+import { CandidateReviewHandoffService, IndustryWorkspaceService } from '@ontology/application'
 import type {
+  CandidateSource,
   CandidateSourceLink,
   CandidateSubmissionRecord,
+  ResourceRef,
   ScopeRef,
   SubmitCandidatesReceipt,
   ToolContext,
@@ -126,5 +130,46 @@ describe('candidate submission receipt store (PostgreSQL, migration 095)', () =>
 
     const other = toolContext('99999999-9999-4999-8999-999999999999', '88888888-8888-4888-8888-888888888888', ['platform-admin'], 'other')
     await expect(f.store.findByKey(f.scopeRef, { runId, idempotencyKey: 'idem-key-0002' }, other)).rejects.toMatchObject({ code: 'SCOPE_MISMATCH' })
+  })
+
+  it('projects a pending candidate and each cited source separately, staying blocked until review + admission', async () => {
+    const f = await fixture('submission_handoff')
+    const sources = new PostgresCandidateSourceStore(database)
+    const runId = randomUUID()
+    const candidateId = randomUUID()
+    const sourceRef: ResourceRef = { id: randomUUID(), version: '1.0.0', digest: DIGEST_B, kind: 'document' }
+    const source: CandidateSource = {
+      schemaVersion: 'candidate-source@1', sourceId: randomUUID(), workspaceId: f.workspaceId, kind: 'web_fetch',
+      trustTier: 'agent_researched', origin: { url: 'https://example.test/handoff' }, contentRef: sourceRef, contentDigest: DIGEST_B,
+      reviewState: 'proposed', proposedBy: 'researcher', recordedAt: '2026-10-16T01:00:00Z',
+    }
+    await sources.putSource(f.scopeRef, { source, idempotencyKey: `cs-${randomUUID().slice(0, 12)}` }, f.ctx)
+    const receipt: SubmitCandidatesReceipt = {
+      schemaVersion: 'submit-candidates-receipt@1', runId, workspaceId: f.workspaceId, commandDigest: DIGEST_A,
+      accepted: [{ submissionIndex: 0, candidateId, kind: 'definition', state: 'pending_confirmation', pendingConfirmation: true, issues: [{ code: 'SOURCE_TRUST_BLOCKED', message: 'x', path: 'sourceSpans' }], sourceRefs: [sourceRef] }],
+      rejected: [], replayed: false, recordedAt: '2026-10-16T01:00:00Z',
+    }
+    await f.store.record(f.scopeRef, { record: {
+      schemaVersion: 'candidate-submission-record@1', runId, workspaceId: f.workspaceId, idempotencyKey: 'idem-handoff-1',
+      commandDigest: DIGEST_A, receipt,
+      links: [{ candidateId, candidateKind: 'definition', submissionIndex: 0, evidenceIndex: 0, sourceRef,
+        trustTier: 'agent_researched', parserVersion: '1.0.0', pendingConfirmation: true, recordedAt: '2026-10-16T01:00:00Z' }],
+      createdBy: f.ctx.principal.subjectId, recordedAt: '2026-10-16T01:00:00Z',
+    } }, f.ctx)
+
+    const handoff = new CandidateReviewHandoffService({ receipts: f.store, sources, admissions: new PostgresSourceAdmissionStore(database) })
+    const before = await handoff.readHandoff(f.workspaceId, f.ctx)
+    const target = before.candidates.find((entry) => entry.candidateId === candidateId)
+    expect(target?.blocked).toBe(true)
+    expect(target?.links).toHaveLength(1)
+    expect(target?.links[0]).toMatchObject({ reviewState: 'proposed', admitted: false, groundsPublication: false, pendingConfirmation: true, blockReason: 'SOURCE_TRUST_BLOCKED' })
+
+    // Accepting the source changes only its review state; it is still not admitted, so the candidate stays blocked.
+    await sources.reviewSourceCommand(f.scopeRef, { schemaVersion: 'candidate-source-review@1', sourceId: source.sourceId, workspaceId: f.workspaceId,
+      reviewState: 'approved', reviewedBy: f.ctx.principal.subjectId, reason: 'accepted', expectedRevision: '1', basisRefs: [], idempotencyKey: 'rev-handoff-1' }, f.ctx)
+    const after = await handoff.readHandoff(f.workspaceId, f.ctx)
+    const reviewed = after.candidates.find((entry) => entry.candidateId === candidateId)
+    expect(reviewed?.links[0]).toMatchObject({ reviewState: 'approved', trustTier: 'agent_researched', admitted: false, pendingConfirmation: true, blockReason: 'SOURCE_NOT_ADMITTED' })
+    expect(reviewed?.blocked).toBe(true)
   })
 })

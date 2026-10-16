@@ -140,7 +140,6 @@ export async function readCandidateSources(client: WorkbenchClient, workspaceId:
 export interface CandidateSourceReviewRequest {
   readonly sourceId: string
   readonly reviewState: CandidateSourceReviewState
-  readonly trustTier?: SourceTrustTier
   readonly reason: string
   readonly expectedRevision: string
   readonly basisRefs: readonly ResourceRef[]
@@ -155,9 +154,10 @@ export interface CandidateSourceReviewResult {
 }
 
 /**
- * Submit one versioned review (accept / reject / re-tier). It carries the mandatory reason and basis
- * references the design adds, pins the revision with `If-Match` and is idempotent by key. The service
- * owns `reviewedBy`, the workspace check and the audit event; the browser never asserts identity here.
+ * Submit one versioned review (accept / reject). It carries the mandatory reason and basis references
+ * the design adds, pins the revision with `If-Match` and is idempotent by key. It deliberately does
+ * **not** carry a `trustTier`: accepting a source never changes its provenance tier (design §7), so
+ * an agent-researched proposal stays agent-researched until a separate promotion.
  */
 export async function reviewCandidateSource(
   client: WorkbenchClient,
@@ -170,7 +170,6 @@ export async function reviewCandidateSource(
     ...options,
     body: {
       reviewState: request.reviewState,
-      ...(request.trustTier === undefined ? {} : { trustTier: request.trustTier }),
       reason: request.reason,
       basisRefs: request.basisRefs,
     },
@@ -189,6 +188,150 @@ export async function reviewCandidateSource(
     sourceId: source['sourceId'], revision: source['revision'],
     reviewState: source['reviewState'] as CandidateSourceReviewState, trustTier: source['trustTier'],
     replayed: receipt['replayed'] === true,
+  }
+}
+
+export interface CandidateSourcePromotionRequest {
+  readonly sourceId: string
+  readonly nextTrustTier: SourceTrustTier
+  readonly reason: string
+  readonly expectedRevision: string
+  readonly basisRefs: readonly ResourceRef[]
+  readonly idempotencyKey: string
+}
+export interface CandidateSourcePromotionResult {
+  readonly sourceId: string
+  readonly revision: string
+  readonly reviewState: CandidateSourceReviewState
+  readonly trustTier: SourceTrustTier
+  readonly replayed: boolean
+}
+
+/**
+ * Promote a source's provenance tier (design §7). This is a separate, platform-admin operation: it
+ * raises an `agent_researched` proposal to a publishable tier without changing the review decision.
+ * A server that refuses the caller returns 403 and the error is surfaced, never swallowed.
+ */
+export async function promoteCandidateSourceTier(
+  client: WorkbenchClient,
+  workspaceId: string,
+  request: CandidateSourcePromotionRequest,
+  options: RequestOptions = {},
+): Promise<CandidateSourcePromotionResult> {
+  const path = `/api/v1/industry-workspaces/${encodeURIComponent(workspaceId)}/sources/${encodeURIComponent(request.sourceId)}/tier-promotions`
+  const value = await client.requestJson('POST', path, {
+    ...options,
+    body: {
+      nextTrustTier: request.nextTrustTier,
+      reason: request.reason,
+      basisRefs: request.basisRefs,
+    },
+    ifMatch: request.expectedRevision,
+    idempotencyKey: request.idempotencyKey,
+  })
+  if (!isRecord(value)) return invalidWire()
+  const promotion = isRecord(value['promotion']) ? value['promotion'] : value
+  if (!isRecord(promotion) || !isUuid(promotion['sourceId']) || promotion['sourceId'] !== request.sourceId
+    || !isRevisionString(promotion['revision']) || !isTrustTier(promotion['trustTier'])
+    || !CANDIDATE_SOURCE_REVIEW_STATES.includes(promotion['reviewState'] as CandidateSourceReviewState)) {
+    return invalidWire()
+  }
+  return {
+    sourceId: promotion['sourceId'], revision: promotion['revision'],
+    reviewState: promotion['reviewState'] as CandidateSourceReviewState, trustTier: promotion['trustTier'],
+    replayed: promotion['replayed'] === true,
+  }
+}
+
+/** One source cited by a candidate in the read-only hand-off projection (design §3/§4/§7). */
+export interface ReviewHandoffLinkView {
+  readonly index: number
+  readonly sourceRef: ResourceRef
+  readonly reviewState: CandidateSourceReviewState | 'unknown'
+  readonly trustTier: SourceTrustTier
+  readonly admitted: boolean
+  readonly groundsPublication: boolean
+  readonly pendingConfirmation: boolean
+  readonly blockReason?: string
+}
+export interface ReviewHandoffCandidateView {
+  readonly candidateId: string
+  readonly candidateKind: 'source' | 'definition' | 'rule' | 'action'
+  readonly state: string
+  readonly blocked: boolean
+  readonly blockCodes: readonly string[]
+  readonly pendingConfirmation: boolean
+  readonly readiness: 'ready_for_review' | 'pending_sources' | 'regrounding_required' | 'unknown'
+  readonly regroundedCandidateId?: string
+  readonly links: readonly ReviewHandoffLinkView[]
+  readonly allSourcesConfirmed: boolean
+}
+
+/**
+ * The source→asset review hand-off read (design §3/§4/§7). It lists every candidate an agent
+ * submitted whose sources are not all confirmed, keeping each source separate so the UI can show
+ * exactly which one still blocks the candidate. A deployment without the projection reports
+ * `unavailable` with a concrete reason instead of fabricating candidate rows.
+ */
+export type ReviewHandoffReadResult =
+  | { readonly availability: 'ready'; readonly workspaceId: string; readonly candidates: readonly ReviewHandoffCandidateView[]; readonly asOf: string }
+  | { readonly availability: 'unavailable'; readonly reason: string }
+
+export async function readReviewHandoff(client: WorkbenchClient, workspaceId: string, signal?: AbortSignal): Promise<ReviewHandoffReadResult> {
+  let value: unknown
+  try {
+    value = await client.requestJson('GET', `/api/v1/industry-workspaces/${encodeURIComponent(workspaceId)}/review-handoff`, { ...(signal === undefined ? {} : { signal }) })
+  } catch (error) {
+    return { availability: 'unavailable', reason: error instanceof Error ? error.message : '来源与资产审核衔接接口未能读取。' }
+  }
+  if (!isRecord(value) || !Array.isArray(value['candidates'])) {
+    return { availability: 'unavailable', reason: '当前部署未提供来源与资产审核衔接接口；资产工作台只显示已提交候选。' }
+  }
+  try {
+    const candidates = value['candidates'].map(parseHandoffCandidate)
+    const asOf = typeof value['asOf'] === 'string' ? value['asOf'] : ''
+    return { availability: 'ready', workspaceId, candidates, asOf }
+  } catch {
+    return { availability: 'unavailable', reason: '来源与资产审核衔接接口返回了无法确认的格式。' }
+  }
+}
+
+function parseHandoffCandidate(value: unknown): ReviewHandoffCandidateView {
+  if (!isRecord(value) || !isUuid(value['candidateId'])
+    || !['source', 'definition', 'rule', 'action'].includes(String(value['candidateKind']))
+    || typeof value['state'] !== 'string' || typeof value['blocked'] !== 'boolean'
+    || !Array.isArray(value['blockCodes']) || typeof value['pendingConfirmation'] !== 'boolean'
+    || !['ready_for_review', 'pending_sources', 'regrounding_required', 'unknown'].includes(String(value['readiness']))
+    || !Array.isArray(value['links']) || typeof value['allSourcesConfirmed'] !== 'boolean') {
+    return invalidWire()
+  }
+  const links = value['links'].map(parseHandoffLink)
+  const regroundedCandidateId = isUuid(value['regroundedCandidateId']) ? value['regroundedCandidateId'] : undefined
+  return {
+    candidateId: value['candidateId'], candidateKind: value['candidateKind'] as ReviewHandoffCandidateView['candidateKind'],
+    state: value['state'], blocked: value['blocked'],
+    blockCodes: value['blockCodes'].filter((code): code is string => typeof code === 'string'),
+    pendingConfirmation: value['pendingConfirmation'], readiness: value['readiness'] as ReviewHandoffCandidateView['readiness'],
+    ...(regroundedCandidateId === undefined ? {} : { regroundedCandidateId }),
+    links, allSourcesConfirmed: value['allSourcesConfirmed'],
+  }
+}
+
+function parseHandoffLink(value: unknown): ReviewHandoffLinkView {
+  if (!isRecord(value) || !Number.isSafeInteger(value['index'])
+    || !isResourceRef(value['sourceRef']) || !isTrustTier(value['trustTier'])
+    || !['proposed', 'approved', 'rejected', 'unknown'].includes(String(value['reviewState']))
+    || typeof value['admitted'] !== 'boolean' || typeof value['groundsPublication'] !== 'boolean'
+    || typeof value['pendingConfirmation'] !== 'boolean') {
+    return invalidWire()
+  }
+  const blockReason = optionalText(value['blockReason'])
+  return {
+    index: Number(value['index']), sourceRef: value['sourceRef'],
+    reviewState: value['reviewState'] as ReviewHandoffLinkView['reviewState'], trustTier: value['trustTier'],
+    admitted: value['admitted'], groundsPublication: value['groundsPublication'],
+    pendingConfirmation: value['pendingConfirmation'],
+    ...(blockReason === undefined ? {} : { blockReason }),
   }
 }
 

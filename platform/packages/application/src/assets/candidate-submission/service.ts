@@ -21,6 +21,7 @@ import type {
   IndustryWorkspaceBoundary,
   IndustryWorkspaceStore,
   ResolvedCandidateEvidence,
+  ResourceRef,
   Rfc3339UtcTimestamp,
   ScopeRef,
   SourceGroundingPort,
@@ -295,7 +296,7 @@ export class CandidateSubmissionService implements CandidateSubmissionPort {
    * candidate version and drops the block. It never edits the earlier candidate, so the old block is
    * not washed away in place, and a review that did not actually admit the source cannot pass.
    */
-  async reground(workspaceId: Uuid, candidateId: Uuid, expectedContentDigest: string, idempotencyKey: string, ctx: ToolContext): Promise<{ readonly candidateId: Uuid; readonly newCandidateId: Uuid; readonly sourceRefs: readonly string[]; readonly replayed: boolean }> {
+  async reground(workspaceId: Uuid, candidateId: Uuid, expectedContentDigest: string, idempotencyKey: string, ctx: ToolContext): Promise<{ readonly candidateId: Uuid; readonly newCandidateId: Uuid; readonly sourceRefs: readonly ResourceRef[]; readonly replayed: boolean }> {
     const scope = scopeOf(ctx)
     if (!isUuid(workspaceId) || !isUuid(candidateId)) throw new SubmitCandidatesError('INVALID_COMMAND', 're-grounding requires a workspace and candidate id')
     const original = await this.#deps.definitionCandidates.getCandidate(scope, candidateId, ctx)
@@ -307,11 +308,21 @@ export class CandidateSubmissionService implements CandidateSubmissionPort {
     if (grounding === undefined) throw new SubmitCandidatesError('SOURCE_TRUST_BLOCKED', 'source grounding is not configured for re-grounding')
     const draft = await readLatestWorkspaceDraft(this.#deps.workspaces, scope, workspaceId, ctx)
     if (draft === undefined) throw new SubmitCandidatesError('SCOPE_MISMATCH', 'the workspace has no pinned document set')
-    const sourceRefs = storedLinks.map((link) => link.sourceRef)
+    // Deduplicate by identity so a source cited by several evidence items is not sent to grounding
+    // twice (grounding requires unique references) while keeping every distinct cited source.
+    const sourceRefs = [...new Map(storedLinks.map((link) => [link.sourceRef.id, link.sourceRef])).values()]
     const read = await grounding.read({ workspaceId, sourceRefs,
       inputDraftRef: { workspaceId: draft.workspaceId, revision: draft.revision, digest: draft.digest } }, ctx, new SourceGroundingBudget(new AbortController().signal))
     const fragments = groundingFragments(read.sources)
     if (fragments.length === 0) throw new SubmitCandidatesError('SOURCE_TRUST_BLOCKED', 'no approved source fragment is available to re-ground the candidate')
+    // Every cited source must now be reviewed, admitted and grounding. Checking that all linked
+    // sources produced a fragment (not merely that the fragments that exist are fine) is what stops
+    // a partially-reviewed candidate from being unblocked: approving one of two sources is not enough.
+    const groundedRefIds = new Set(fragments.map((fragment) => fragment.sourceRef.id))
+    const missing = sourceRefs.filter((sourceRef) => !groundedRefIds.has(sourceRef.id))
+    if (missing.length > 0) {
+      throw new SubmitCandidatesError('SOURCE_TRUST_BLOCKED', `every cited source must be reviewed and admitted before re-grounding (${String(missing.length)} still unresolved)`)
+    }
     if (fragments.some((fragment) => !sourceTrustTierGroundsPublication(fragment.trustTier))) {
       throw new SubmitCandidatesError('SOURCE_TRUST_BLOCKED', 'the source is still not approved for publication')
     }
@@ -343,7 +354,7 @@ export class CandidateSubmissionService implements CandidateSubmissionPort {
       createdBy: ctx.principal.subjectId, recordedAt: this.#now(),
     }
     const inserted = await this.#deps.definitionCandidates.insertBatch(scope, batch, [next], ctx, guard)
-    return { candidateId, newCandidateId: next.candidateId, sourceRefs: next.sourceRefs.map((ref) => ref.id), replayed: !inserted.created }
+    return { candidateId, newCandidateId: next.candidateId, sourceRefs: next.sourceRefs, replayed: !inserted.created }
   }
 
   async #submitDefinitions(

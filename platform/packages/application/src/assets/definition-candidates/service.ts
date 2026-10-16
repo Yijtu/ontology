@@ -27,6 +27,7 @@ import type {
   SourceLocator,
   WorkspaceSourceGroundingView,
   AssetCandidateInsertGuard,
+  CandidateSubmissionStore,
   ApprovedCompetencyQuestionReader,
 } from '@ontology/contracts'
 import { candidateIdFor, canonicalJson, sha256DigestOf } from '../../extraction/canonical'
@@ -130,6 +131,8 @@ export interface DefinitionCandidateGenerationDependencies {
   readonly modelRef: ModelRef
   readonly outputLimit: GenerationOutputLimit
   readonly responseSchemaRef?: VersionRef
+  /** Present only when candidate↔source links are persisted; used to close the multi-source bypass. */
+  readonly candidateLinks?: Pick<CandidateSubmissionStore, 'listLinksForCandidate'>
   readonly now?: () => string
   readonly newId?: () => string
 }
@@ -249,6 +252,7 @@ export class DefinitionCandidateGenerationService {
   readonly #modelRef: ModelRef
   readonly #outputLimit: GenerationOutputLimit
   readonly #responseSchemaRef: VersionRef
+  readonly #candidateLinks: Pick<CandidateSubmissionStore, 'listLinksForCandidate'> | undefined
   readonly #now: () => string
   readonly #newId: () => string
 
@@ -262,6 +266,7 @@ export class DefinitionCandidateGenerationService {
     this.#modelRef = dependencies.modelRef
     this.#outputLimit = dependencies.outputLimit
     this.#responseSchemaRef = dependencies.responseSchemaRef ?? TBOX_RESPONSE_SCHEMA_REF
+    this.#candidateLinks = dependencies.candidateLinks
     this.#now = dependencies.now ?? (() => new Date().toISOString())
     this.#newId = dependencies.newId ?? (() => globalThis.crypto.randomUUID())
   }
@@ -503,6 +508,14 @@ export class DefinitionCandidateGenerationService {
     const heads = candidateHeads(history)
     if (!heads.some((candidate) => candidate.candidateId === original.candidateId)) throw new DefinitionCandidateError('VERSION_CONFLICT', 'candidate was replaced before confirmation')
     if (!original.pendingConfirmation || original.state === 'failed' || original.state === 'rejected') throw new DefinitionCandidateError('VALIDATION_BLOCKED', 'only an unresolved source suggestion can be confirmed')
+    // A candidate that cites several sources may not be unblocked one source at a time (design §4/§7):
+    // confirming a single source would let a partially-reviewed candidate reach asset review. Such a
+    // candidate must be re-grounded only after every source is reviewed + admitted.
+    if (this.#candidateLinks !== undefined) {
+      const links = await this.#candidateLinks.listLinksForCandidate(scope, original.candidateId, ctx)
+      if (links.length > 1) throw new DefinitionCandidateError('VALIDATION_BLOCKED', 'a candidate that cites several sources must be re-grounded after every source is reviewed, not confirmed one at a time')
+      if (links.length === 1 && links[0]?.sourceRef.id !== input.sourceRef.id) throw new DefinitionCandidateError('VALIDATION_BLOCKED', 'the confirmation must name the source the candidate actually cites')
+    }
     if (this.#sourceGrounding === undefined) throw new DefinitionCandidateError('SCHEMA_NOT_FOUND', 'source grounding is not configured')
     const read = await this.#sourceGrounding.read({ workspaceId: input.workspaceId, sourceRefs: [input.sourceRef],
       inputDraftRef: { workspaceId: draft.workspaceId, revision: draft.revision, digest: draft.digest },

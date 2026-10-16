@@ -165,16 +165,38 @@ describe('candidate source research and review API (real PostgreSQL)', () => {
     expect(found).toMatchObject({ trustTier: 'agent_researched', revision: '1' })
   })
 
-  it('promotes a source with a compare-and-swap revision and reflects it on read', async () => {
+  it('accepts a source without changing its tier, then promotes it through a separate admin operation', async () => {
     const proposed = source()
     await store.putSource(scope.scopeRef, { source: proposed, idempotencyKey: `cs-${randomUUID().slice(0, 12)}` }, ctx)
+    // Accepting the source is a review only: the tier stays agent_researched.
     const reviewed = await post(`/api/v1/industry-workspaces/${workspaceId}/sources/${proposed.sourceId}/reviews`, {
-      ifMatch: '1', body: { reviewState: 'approved', trustTier: 'public_standard', reason: '原文为公开规范，人工确认版本与适用范围' },
+      ifMatch: '1', body: { reviewState: 'approved', reason: '已对照原文确认来源与适用范围' },
     })
     expect(reviewed.statusCode).toBe(201)
-    const body = reviewed.json() as { data: { source: { trustTier: string; reviewState: string } }; meta: { revision: string } }
-    expect(body.data.source).toMatchObject({ trustTier: 'public_standard', reviewState: 'approved' })
-    expect(body.meta.revision).toBe('2')
+    const reviewedBody = reviewed.json() as { data: { source: { trustTier: string; reviewState: string } }; meta: { revision: string } }
+    expect(reviewedBody.data.source).toMatchObject({ trustTier: 'agent_researched', reviewState: 'approved' })
+    expect(reviewedBody.meta.revision).toBe('2')
+    // Promoting the tier is a distinct, platform-admin operation that preserves the review state.
+    const forbidden = await post(`/api/v1/industry-workspaces/${workspaceId}/sources/${proposed.sourceId}/tier-promotions`, {
+      roles: 'profile-editor', ifMatch: '2', body: { nextTrustTier: 'public_standard', reason: '试图由编辑提升' },
+    })
+    expect(forbidden.statusCode).toBe(403)
+    const promoted = await post(`/api/v1/industry-workspaces/${workspaceId}/sources/${proposed.sourceId}/tier-promotions`, {
+      roles: 'platform-admin', ifMatch: '2', body: { nextTrustTier: 'public_standard', reason: '原文为公开规范，人工确认版本与适用范围' },
+    })
+    expect(promoted.statusCode).toBe(201)
+    const promotedBody = promoted.json() as { data: { promotion: { trustTier: string; reviewState: string } }; meta: { revision: string } }
+    expect(promotedBody.data.promotion).toMatchObject({ trustTier: 'public_standard', reviewState: 'approved' })
+    expect(promotedBody.meta.revision).toBe('3')
+  })
+
+  it('refuses a review that tries to change the source trust tier', async () => {
+    const proposed = source()
+    await store.putSource(scope.scopeRef, { source: proposed, idempotencyKey: `cs-${randomUUID().slice(0, 12)}` }, ctx)
+    const refused = await post(`/api/v1/industry-workspaces/${workspaceId}/sources/${proposed.sourceId}/reviews`, {
+      ifMatch: '1', body: { reviewState: 'approved', trustTier: 'public_standard', reason: '试图在审核里提升类别' },
+    })
+    expect(refused.statusCode).toBe(403)
   })
 
   it('rejects a stale review revision and a non-reviewer role', async () => {

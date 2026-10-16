@@ -199,6 +199,7 @@ export async function assembleRuntimePipeline(
   // authoring-command gateway; the service owns identity/trust/publication state and re-reads the
   // archived evidence before writing. It is wired into every run's capabilities, but the Pi runtime
   // only exposes the command surface for a run whose profile authorizes candidate authoring.
+  const candidateSubmissionStore = new PostgresCandidateSubmissionStore(database)
   const candidateSubmissionService = new CandidateSubmissionService({
     workspaces: workspaceStore,
     definitionCandidates: assetCandidateStore,
@@ -210,7 +211,7 @@ export async function assembleRuntimePipeline(
         return { bytes, contentDigest: `sha256:${createHash('sha256').update(bytes).digest('hex')}` }
       } },
     }),
-    receipts: new PostgresCandidateSubmissionStore(database),
+    receipts: candidateSubmissionStore,
     ruleActions: new RuleActionCandidateService({ workspaces: workspaceStore, candidates: ruleActionCandidateStore, support: new FiniteGrammarRuleSupportValidator() }),
     sourceIngestion: new CandidateSourceIngestionService({ artifacts: gatewayComposition.artifacts, sources: new PostgresCandidateSourceStore(database) }),
     sourceGrounding: createSourceGroundingService({ workspaces: workspaceStore, documentSets: new ArtifactGroundingDocumentSetReader(blobStore),
@@ -431,5 +432,6 @@ export async function assembleRuntimePipeline(
     tableVerificationStore, tableResults, draftVerifier, workflowDispatchWorker, jobService, industryWorkspaceService, parser,
     pipeline, structuredExtractionService, handlers, jobWorker, currentProjectRevisions, materializer, outboxConsumer, dispatcher, provenanceRead,
     researchWorkflow, webSearch, searchBinding,
+    candidateSubmissionStore, candidateSubmissionService,
   }
 }
