@@ -1,11 +1,18 @@
 import type {
+  ByteSize,
+  NonEmptyString,
   ResourceRef,
+  RevisionString,
   Rfc3339UtcTimestamp,
+  Semver,
   ScopeRef,
+  Sha256Digest,
   Uuid,
   VersionRef,
 } from './generated/contracts'
+import type { AssetCandidateState } from './asset-candidates'
 import type { ModelingBrief } from './modeling-brief'
+import type { CandidateSubmissionKind } from './submit-candidates'
 import type { ToolContext } from './trusted'
 import { isRecord, isResourceRef, isUuid, isVersionRef } from './asset-workspace'
 
@@ -233,4 +240,349 @@ function isSourceRefs(value: unknown): boolean {
   return Array.isArray(value)
     && value.length <= 200
     && value.every((entry) => isRecord(entry) && isUuid(entry['sourceId']) && isNonEmptyString(entry['url']))
+}
+
+/* ----------------------------------------------------------------------------------------- */
+/* research-execution@2: the agentic-research run projection (design §8)                      */
+/* ----------------------------------------------------------------------------------------- */
+
+/**
+ * The run goal is a discriminated union: a bounded project Q&A, or an industry-workspace research
+ * run pinned to a fixed workspace draft revision. A research run is not an answer publication, so
+ * the goal is modelled explicitly instead of reusing the project question field.
+ */
+export type ResearchExecutionGoal =
+  | { readonly kind: 'project_qa'; readonly projectId?: Uuid; readonly question: NonEmptyString }
+  | {
+      readonly kind: 'industry_workspace_research'
+      readonly workspaceId: Uuid
+      /** The fixed draft revision the run models; it never tracks a moving head. */
+      readonly draftRevision: RevisionString
+    }
+
+/** One human action a research run is waiting on; the run itself never blocks a worker on it. */
+export type ResearchHumanTodoKind =
+  | 'source_review'
+  | 'candidate_review'
+  | 'terminology_confirmation'
+  | 'external_wait'
+
+export interface ResearchHumanTodo {
+  readonly todoId: Uuid
+  readonly kind: ResearchHumanTodoKind
+  readonly message: NonEmptyString
+  readonly targetRef?: ResourceRef
+  readonly createdAt: Rfc3339UtcTimestamp
+}
+
+/**
+ * The per-`mustCover` coverage state (design §3). `material_found` explicitly does **not** mean the
+ * proposition is proven; it means material was located. A conflict and a pending human confirmation
+ * stay separate from "nothing found".
+ */
+export type ResearchCoverageGapState =
+  | 'unresearched'
+  | 'material_found'
+  | 'conflicting'
+  | 'pending_confirmation'
+
+export interface ResearchCoverageGap {
+  readonly kind: string
+  readonly name: string
+  readonly state: ResearchCoverageGapState
+  readonly evidenceCount: number
+  readonly note?: string
+}
+
+/** One evidence item the run collected; `archived` is false for a link-only discovery. */
+export interface ResearchEvidenceItem {
+  readonly sourceRef: ResourceRef
+  readonly locatorKind: 'web_page' | 'document_span' | 'table_row' | 'ontology_definition'
+  readonly digest: Sha256Digest
+  readonly parserVersion?: Semver
+  readonly archived: boolean
+}
+
+/** The candidate write receipts a run produced, projected for the run view. */
+export interface ResearchCandidateReceiptSummary {
+  readonly candidateId: Uuid
+  readonly kind: CandidateSubmissionKind
+  readonly state: AssetCandidateState | 'proposed' | 'approved' | 'rejected'
+  readonly pendingConfirmation: boolean
+  readonly issueCodes: readonly string[]
+}
+
+/** The bounded usage the run actually consumed (design §8: one ledger, honest usage). */
+export interface ResearchUsage {
+  readonly searchCalls: number
+  readonly archivedSnapshots: number
+  readonly modelTokens: number
+  readonly modelTurns: number
+  readonly candidatesSubmitted: number
+  readonly bytesDownloaded: ByteSize
+  readonly bytesRead: ByteSize
+  readonly repairAttempts: number
+  readonly usageUnknown: boolean
+}
+
+/**
+ * The pinned budget dimensions (design §8). A deployment research policy is the ceiling; a user may
+ * only tighten it. Archive downloads, pagination and retries all draw from the single ledger.
+ */
+export interface ResearchBudgetDimensions {
+  readonly maxTotalCalls: number
+  readonly maxSearchCalls: number
+  readonly maxModelTokens: number
+  readonly maxModelTurns: number
+  readonly maxSources: number
+  readonly maxCandidates: number
+  readonly maxDownloadBytes: ByteSize
+  readonly maxReadBytes: ByteSize
+  readonly maxConcurrency: number
+  readonly maxRepairAttempts: number
+  readonly deadline: Rfc3339UtcTimestamp
+}
+
+/**
+ * The agentic-research run projection. It keeps the execution status, the human todos, the stop
+ * reason, the candidate receipts, the evidence list, the per-`mustCover` gaps and the usage
+ * **separate**, so a reader never re-derives one from another and never reads a plan step as
+ * progress. `research-execution@1` records stay readable unchanged.
+ */
+export interface ResearchExecutionV2 {
+  readonly schemaVersion: 'research-execution@2'
+  readonly researchId: Uuid
+  readonly workspaceId: Uuid
+  /** The controller run this projection belongs to. */
+  readonly runId: Uuid
+  readonly jobId?: Uuid
+  readonly goal: ResearchExecutionGoal
+  readonly status: ResearchStatus
+  readonly stage: ResearchStage
+  readonly briefRef: ResourceRef
+  readonly policyRef: VersionRef
+  readonly budgetRef: VersionRef
+  readonly budget: ResearchBudgetDimensions
+  readonly limits: ResearchLimits
+  readonly coverage: ResearchCoverage
+  readonly coverageGaps: readonly ResearchCoverageGap[]
+  readonly humanTodos: readonly ResearchHumanTodo[]
+  readonly evidence: readonly ResearchEvidenceItem[]
+  readonly candidateReceipts: readonly ResearchCandidateReceiptSummary[]
+  readonly sourceCount: number
+  readonly candidateCount: number
+  readonly usage: ResearchUsage
+  readonly stopReason?: ResearchStopReason
+  /** The candidate sources this run proposed, so the sources are readable back from the run. */
+  readonly sources?: readonly ResearchSourceRef[]
+  readonly recordedAt: Rfc3339UtcTimestamp
+}
+
+/** Either supported execution projection version. An `@1` record is never rewritten into `@2`. */
+export type ResearchExecutionAny = ResearchExecution | ResearchExecutionV2
+
+/**
+ * The run manifest a research run is created under (design §8): it fixes the brief, the purpose,
+ * the runtime, the model binding, the tool bindings, the authorization receipt, the single ledger
+ * and the input manifest. It is the research extension of the core `RunManifest`, not a second
+ * controller.
+ */
+export interface ResearchRunManifest {
+  readonly schemaVersion: 'research-run-manifest@1'
+  readonly runId: Uuid
+  readonly purpose: ResearchExecutionGoal['kind']
+  readonly goal: ResearchExecutionGoal
+  readonly briefRef: ResourceRef
+  readonly runtimeRef: VersionRef
+  /** The archived `ExecutionModelBinding` the run is pinned to. */
+  readonly modelBindingRef: ResourceRef
+  /** The archived `ExecutionToolBinding` refs the run is pinned to. */
+  readonly toolBindingRefs: readonly ResourceRef[]
+  /** The authorization receipt (effective range/limits/recipients) fixed before the run. */
+  readonly authorizationReceiptRef: ResourceRef
+  readonly budgetLedgerId: Uuid
+  readonly inputManifestId: Uuid
+  readonly createdAt: Rfc3339UtcTimestamp
+}
+
+export const RESEARCH_EXECUTION_GOAL_KINDS: readonly ResearchExecutionGoal['kind'][] = [
+  'project_qa',
+  'industry_workspace_research',
+]
+
+export const RESEARCH_COVERAGE_GAP_STATES: readonly ResearchCoverageGapState[] = [
+  'unresearched',
+  'material_found',
+  'conflicting',
+  'pending_confirmation',
+]
+
+export const RESEARCH_HUMAN_TODO_KINDS: readonly ResearchHumanTodoKind[] = [
+  'source_review',
+  'candidate_review',
+  'terminology_confirmation',
+  'external_wait',
+]
+
+/** The projection version of a research execution, or `undefined` when it is not one. */
+export function researchExecutionSchemaVersion(
+  value: unknown,
+): 'research-execution@1' | 'research-execution@2' | undefined {
+  if (!isRecord(value)) return undefined
+  return value['schemaVersion'] === 'research-execution@1' || value['schemaVersion'] === 'research-execution@2'
+    ? value['schemaVersion']
+    : undefined
+}
+
+export function isResearchExecutionV2(value: unknown): value is ResearchExecutionV2 {
+  return researchExecutionSchemaVersion(value) === 'research-execution@2'
+}
+
+/**
+ * Accept either projection version, so a legacy `@1` research record and a `@2` run projection are
+ * both readable without a migration. The caller branches on `schemaVersion` for the richer `@2`
+ * fields.
+ */
+export function assertResearchExecutionAnyShape(value: unknown): asserts value is ResearchExecutionAny {
+  const version = researchExecutionSchemaVersion(value)
+  if (version === 'research-execution@1') {
+    assertResearchExecutionShape(value)
+    return
+  }
+  if (version === 'research-execution@2') {
+    assertResearchExecutionV2Shape(value)
+    return
+  }
+  throw new ResearchError('INVALID_REQUEST', 'invalid research execution')
+}
+
+function assertGoal(value: unknown): asserts value is ResearchExecutionGoal {
+  if (!isRecord(value)) throw new ResearchError('INVALID_REQUEST', 'a research goal must be an object')
+  if (value['kind'] === 'project_qa') {
+    if (!isNonEmptyString(value['question']) || (value['projectId'] !== undefined && !isUuid(value['projectId']))) {
+      throw new ResearchError('INVALID_REQUEST', 'a project qa goal requires a question')
+    }
+    return
+  }
+  if (value['kind'] === 'industry_workspace_research') {
+    if (!isUuid(value['workspaceId']) || typeof value['draftRevision'] !== 'string' || !/^(0|[1-9]\d*)$/.test(value['draftRevision'])) {
+      throw new ResearchError('INVALID_REQUEST', 'an industry workspace research goal requires a workspace and a draft revision')
+    }
+    return
+  }
+  throw new ResearchError('INVALID_REQUEST', 'unknown research goal kind')
+}
+
+function assertBudgetDimensions(value: unknown): void {
+  if (!isRecord(value)) throw new ResearchError('INVALID_REQUEST', 'research budget must be an object')
+  const counts = [
+    'maxTotalCalls', 'maxSearchCalls', 'maxModelTokens', 'maxModelTurns',
+    'maxSources', 'maxCandidates', 'maxDownloadBytes', 'maxReadBytes',
+    'maxConcurrency', 'maxRepairAttempts',
+  ] as const
+  for (const key of counts) {
+    if (!isCount(value[key], Number.MAX_SAFE_INTEGER)) {
+      throw new ResearchError('INVALID_REQUEST', `research budget ${key} must be a non-negative integer`)
+    }
+  }
+  if (!isNonEmptyString(value['deadline'])) throw new ResearchError('INVALID_REQUEST', 'research budget requires a deadline')
+}
+
+function assertUsage(value: unknown): void {
+  if (!isRecord(value)) throw new ResearchError('INVALID_REQUEST', 'research usage must be an object')
+  for (const key of ['searchCalls', 'archivedSnapshots', 'modelTokens', 'modelTurns', 'candidatesSubmitted', 'bytesDownloaded', 'bytesRead', 'repairAttempts'] as const) {
+    if (!isCount(value[key], Number.MAX_SAFE_INTEGER)) throw new ResearchError('INVALID_REQUEST', `research usage ${key} must be a non-negative integer`)
+  }
+  if (typeof value['usageUnknown'] !== 'boolean') throw new ResearchError('INVALID_REQUEST', 'research usage requires a usageUnknown flag')
+}
+
+function assertCoverageGaps(value: unknown): void {
+  if (!Array.isArray(value) || value.length > 200) throw new ResearchError('INVALID_REQUEST', 'research coverage gaps must be a bounded array')
+  for (const gap of value) {
+    if (!isRecord(gap) || typeof gap['kind'] !== 'string' || !isNonEmptyString(gap['name'])
+      || !RESEARCH_COVERAGE_GAP_STATES.includes(gap['state'] as ResearchCoverageGapState)
+      || !isCount(gap['evidenceCount'], Number.MAX_SAFE_INTEGER)) {
+      throw new ResearchError('INVALID_REQUEST', 'a research coverage gap needs a kind, name, state and evidence count')
+    }
+  }
+}
+
+function assertHumanTodos(value: unknown): void {
+  if (!Array.isArray(value) || value.length > 200) throw new ResearchError('INVALID_REQUEST', 'research human todos must be a bounded array')
+  for (const todo of value) {
+    if (!isRecord(todo) || !isUuid(todo['todoId'])
+      || !RESEARCH_HUMAN_TODO_KINDS.includes(todo['kind'] as ResearchHumanTodoKind)
+      || !isNonEmptyString(todo['message']) || !isNonEmptyString(todo['createdAt'])
+      || (todo['targetRef'] !== undefined && !isResourceRef(todo['targetRef']))) {
+      throw new ResearchError('INVALID_REQUEST', 'a research human todo needs an id, kind, message and timestamp')
+    }
+  }
+}
+
+function assertEvidenceItems(value: unknown): void {
+  if (!Array.isArray(value) || value.length > 1000) throw new ResearchError('INVALID_REQUEST', 'research evidence must be a bounded array')
+  for (const item of value) {
+    if (!isRecord(item) || !isResourceRef(item['sourceRef'])
+      || !['web_page', 'document_span', 'table_row', 'ontology_definition'].includes(String(item['locatorKind']))
+      || typeof item['digest'] !== 'string' || !/^sha256:[0-9a-f]{64}$/.test(item['digest'])
+      || typeof item['archived'] !== 'boolean'
+      || (item['parserVersion'] !== undefined && typeof item['parserVersion'] !== 'string')) {
+      throw new ResearchError('INVALID_REQUEST', 'a research evidence item is malformed')
+    }
+  }
+}
+
+function assertCandidateReceipts(value: unknown): void {
+  if (!Array.isArray(value) || value.length > 500) throw new ResearchError('INVALID_REQUEST', 'research candidate receipts must be a bounded array')
+  for (const receipt of value) {
+    if (!isRecord(receipt) || !isUuid(receipt['candidateId'])
+      || !['source', 'definition', 'rule', 'action'].includes(String(receipt['kind']))
+      || !isNonEmptyString(receipt['state'])
+      || typeof receipt['pendingConfirmation'] !== 'boolean'
+      || !Array.isArray(receipt['issueCodes']) || !receipt['issueCodes'].every((code) => typeof code === 'string')) {
+      throw new ResearchError('INVALID_REQUEST', 'a research candidate receipt is malformed')
+    }
+  }
+}
+
+/** Runtime validation of a persisted `research-execution@2` run projection. */
+export function assertResearchExecutionV2Shape(value: unknown): asserts value is ResearchExecutionV2 {
+  if (!isRecord(value) || value['schemaVersion'] !== 'research-execution@2' || !isUuid(value['researchId'])
+    || !isUuid(value['workspaceId']) || !isUuid(value['runId'])
+    || (value['jobId'] !== undefined && !isUuid(value['jobId']))
+    || !RESEARCH_STATUSES.includes(value['status'] as ResearchStatus)
+    || !RESEARCH_STAGES.includes(value['stage'] as ResearchStage)
+    || !isResourceRef(value['briefRef']) || !isVersionRef(value['policyRef']) || !isVersionRef(value['budgetRef'])
+    || !isCount(value['sourceCount'], Number.MAX_SAFE_INTEGER) || !isCount(value['candidateCount'], Number.MAX_SAFE_INTEGER)
+    || !isNonEmptyString(value['recordedAt'])
+    || (value['stopReason'] !== undefined && !RESEARCH_STOP_REASONS.includes(value['stopReason'] as ResearchStopReason))
+    || (value['sources'] !== undefined && !isSourceRefs(value['sources']))) {
+    throw new ResearchError('INVALID_REQUEST', 'invalid research execution @2')
+  }
+  assertGoal(value['goal'])
+  assertResearchLimits(value['limits'])
+  assertCoverage(value['coverage'])
+  assertBudgetDimensions(value['budget'])
+  assertUsage(value['usage'])
+  assertCoverageGaps(value['coverageGaps'])
+  assertHumanTodos(value['humanTodos'])
+  assertEvidenceItems(value['evidence'])
+  assertCandidateReceipts(value['candidateReceipts'])
+}
+
+/** Runtime validation of a research run manifest before a run is created from it. */
+export function assertResearchRunManifestShape(value: unknown): asserts value is ResearchRunManifest {
+  if (!isRecord(value) || value['schemaVersion'] !== 'research-run-manifest@1' || !isUuid(value['runId'])
+    || !isResourceRef(value['briefRef']) || !isVersionRef(value['runtimeRef'])
+    || !isResourceRef(value['modelBindingRef']) || !Array.isArray(value['toolBindingRefs'])
+    || value['toolBindingRefs'].length > 16 || !value['toolBindingRefs'].every(isResourceRef)
+    || !isResourceRef(value['authorizationReceiptRef'])
+    || !isUuid(value['budgetLedgerId']) || !isUuid(value['inputManifestId'])
+    || !isNonEmptyString(value['createdAt'])) {
+    throw new ResearchError('INVALID_REQUEST', 'invalid research run manifest')
+  }
+  assertGoal(value['goal'])
+  if (value['purpose'] !== value['goal'].kind) {
+    throw new ResearchError('INVALID_REQUEST', 'a research run manifest purpose must match its goal kind')
+  }
 }
