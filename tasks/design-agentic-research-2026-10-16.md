@@ -72,6 +72,13 @@ flowchart TD
 
 "研究 agent"和"建模 agent"是**同一助手的两种任务配置**，不是相互调用的两个自主 agent：从空工作区开始以公共研究为主；建模中发现缺依据，用同一运行中的研究工具集补查；同一执行内检索/阅读/提取/修复共享预算，不嵌套再起 `research-runs`；人工审核后继续建模是**新的明确操作**（可关联前次执行与候选，不伪装成失败重试）。已有生成服务保留为有界操作；agent 已产生结构化候选时复用其解析/校验/接地/提交逻辑，不额外重生成。
 
+**多来源组合（本方案核心能力）**：同一次研究在**同一个证据集**上工作，可组合——
+- **公共检索归档**（研究暂存文档集）；
+- **已上传/已授权资料**（`document_search` 定向读取既有语料）；
+- **已有定义与资产**（`ontology_lookup`）。
+
+`submit_candidates` 的**一个候选可携带多条来源证据**（各自 locator / digest / parser version），不要求单一来源；同一规则的前提也可分别落到不同来源。**来源审核按来源分别进行**：候选在任一相关来源未确认时保留 `pending_confirmation + SOURCE_TRUST_BLOCKED`，全部相关来源审核+纳入+重新接地后才进入正式资产审核。三料源入口**互不排斥**，共享同一个来源/资产/审核管道（上传资料、AI 研究来源、结构化映射的记录可共同支撑同一批候选）。
+
 ## 5. 四个公共数据工具不变，候选提交单独建模为受控命令
 
 不能只向 SDK 塞一个字符串 `submit_candidates`，也不能把写候选藏进 `data_query`/compute。建议新增版本化运行时动作联合：
@@ -143,13 +150,13 @@ Pi 需获得真实参数 Schema、用途、结果引用与限制说明（当前�
 | R00 固定研究与命令契约 | infra/docs | — | A 设计/SPEC、contracts Schema 与生成物 | 明确四工具与命令边界；@1/@2 兼容；状态/预算/来源语义无歧义 |
 | R01 工具连接目录与执行绑定 | backend | R00 | application 设置服务、PG、凭据、AI HTTP | CAS/分配/撤销/固定版本/env 幂等迁移；跨范围不可见 |
 | R02 原生搜索与双层探测 | backend | R00 | search-web、probe 适配器 | 原生服务无需自建网关；分类错误/取消/usage；搜索与归档分别测试 |
-| R03 研究快照与可读文档集 | backend | R00 | web handler、解析/索引、研究成员存储 | 搜索后能读真实片段；link-only 不可引用；暂存与正式 corpus 隔离 |
+| R03 研究快照与可读文档集 | backend | R00 | web handler、解析/索引、研究成员存储 | 搜索后能读真实片段；link-only 不可引用；暂存与正式 corpus 隔离；研究与上传/授权资料可组合进同一证据集 |
 | R04 工作区运行与控制器 | backend | R00 | runs/workflow、Pi/Template、generation 协议、dispatch | 一个循环与账本；工作区上下文；候选完成分支；checkpoint/取消正确 |
-| R05 受控候选提交与重新接地 | backend | R03 | definition/rule-action/source services、命令端口、回执 | 重用校验；低信任待确认；伪证据拒绝；重复提交幂等；审核后新版本接地 |
+| R05 受控候选提交与重新接地 | backend | R03 | definition/rule-action/source services、命令端口、回执 | 重用校验；低信任待确认；**一个候选可带多来源证据**；伪证据拒绝；重复提交幂等；审核后新版本接地 |
 | R06 搜索执行装配与能力预检 | backend | R01,R02,R03,R04 | composition、gateway factory、研究 API | runtime 能调绑定搜索；权限/域名交集；未配置有稳定原因；不静默回退 |
 | R07 目标入口与研究活动界面 | frontend | R00 | 首页、工作区助手、ResearchPanel 拆分、API client | 目标一次输入；事件/用量/缺口；停止/刷新/恢复；三料源同入口 |
 | R08 AI 工具设置界面 | frontend | R01,R02 | AiSettingsPanel、连接编辑/分配/探测 | UI 配测搜索；权限可见性；草稿结果失效；密钥清理；生效版本解释 |
-| R09 来源与资产审核衔接 | fullstack | R05,R07 | 来源/资产工作台、审核状态投影 | 待确认产物可回看；来源审核≠可信提升；重新接地保留内容与历史 |
+| R09 来源与资产审核衔接 | fullstack | R05,R07 | 来源/资产工作台、审核状态投影 | 待确认产物可回看；来源审核≠可信提升；**多来源分别审核、全部确认后才进正式资产审核**；重新接地保留内容与历史 |
 | R10 主入口切换与迁移验证 | fullstack | R05,R06,R07,R08 | Core/worker 总装配、旧入口桥接、迁移验证 | 普通启动走 agent 链；新旧记录可读；运行中不换引擎；无模型/搜索可退化 |
 | R11 整栈与可替换性验收 | infra/docs | R09,R10 | integration/conformance/E2E/部署说明 | 真实 PG/runtime/搜索切片；审核到发布；取消/越权/预算/迁移故障验证 |
 
