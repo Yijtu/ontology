@@ -520,4 +520,65 @@ describe('research completion branch (design §4/§8)', () => {
     await expect(harness.controller.completeResearch(RUN_A, OWNER))
       .rejects.toMatchObject({ code: 'INVALID_ARGUMENT' })
   })
+
+  it('auto-routes a research-goal run to the delivery list, never drafting or publishing', async () => {
+    const listed: string[] = []
+    const candidateId = randomUUID()
+    const harness = buildWorkflowHarness({
+      runtime: new ScriptedRuntime({ scripts: [completedScript()] }),
+      researchReceipts: {
+        listForRun: (runId) => {
+          listed.push(runId)
+          return Promise.resolve([{
+            callId: randomUUID(),
+            commandKind: 'submit_candidates' as const,
+            status: 'pending_confirmation' as const,
+            candidateIds: [candidateId],
+            issueCodes: ['SOURCE_TRUST_BLOCKED'],
+          }])
+        },
+      },
+    })
+    const view = await harness.controller.startRun(
+      startInput({ goal: { kind: 'industry_workspace_research', workspaceId: randomUUID(), draftRevision: '1' } }),
+      OWNER,
+    )
+    // The research run waits on a human source/admission review; it is not an answer.
+    expect(view.state).toBe('awaiting_input')
+    expect(view.answer).toBeUndefined()
+    expect(harness.draftWriter.calls).toHaveLength(0)
+    expect(harness.verifier.calls).toHaveLength(0)
+    expect(harness.publisher.publishCalls).toHaveLength(0)
+    // The durable receipt reader was consulted for this run.
+    expect(listed).toEqual([RUN_A])
+    const manifest = await harness.workflowStore.getRunManifest(RUN_A, OWNER)
+    expect(manifest?.goal?.kind).toBe('industry_workspace_research')
+  })
+
+  it('reads the durable candidate receipts into the delivery list', async () => {
+    const candidateId = randomUUID()
+    const runtime = new ScriptedRuntime({ scripts: [[]] })
+    runtime.block()
+    const harness = buildWorkflowHarness({
+      runtime,
+      researchReceipts: {
+        listForRun: () => Promise.resolve([{
+          callId: randomUUID(),
+          commandKind: 'submit_candidates' as const,
+          status: 'accepted' as const,
+          candidateIds: [candidateId],
+          issueCodes: [],
+        }]),
+      },
+    })
+    const pending = harness.controller.startRun(startInput(), OWNER)
+    await waitFor(() => runtime.startCalls.length === 1)
+
+    const delivery = await harness.controller.completeResearch(RUN_A, OWNER)
+    expect(delivery.candidateReceipts).toHaveLength(1)
+    expect(delivery.candidateReceipts[0]?.candidateIds).toEqual([candidateId])
+
+    runtime.release()
+    await pending
+  })
 })

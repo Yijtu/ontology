@@ -31,6 +31,7 @@ import { PublicationRejectedError, WorkflowControllerError } from './errors'
 import { repairFeedbackOf } from './repair-feedback'
 import type {
   CancelWorkflowInput,
+  ResearchCandidateReceiptReader,
   RespondWorkflowInput,
   ResearchDelivery,
   ResearchDeliveryCandidateReceipt,
@@ -76,16 +77,17 @@ export class WorkflowController {
   readonly #selectedRuntimes = new Map<Uuid, RuntimeAdapter>()
   readonly #active = new Map<Uuid, ActiveLoop>()
   /**
-   * Candidate write receipts observed for a run, keyed by run id, so the research completion
-   * branch can compile the delivery list without re-deriving it from the model transcript. A
-   * receipt is only ever added from a routed `command_receipt` runtime event.
+   * The durable candidate-receipt reader, when the host mounts a candidate-submission store. A
+   * research delivery reads its candidate receipts from here — never from an in-memory transcript —
+   * so a resumed/restarted run reports exactly the candidates that were written (design §8).
    */
-  readonly #researchReceipts = new Map<Uuid, ResearchDeliveryCandidateReceipt[]>()
+  readonly #durableReceipts: ResearchCandidateReceiptReader | undefined
 
   constructor(dependencies: WorkflowControllerDependencies) {
     this.#deps = dependencies
     this.#now = dependencies.now ?? (() => new Date().toISOString())
     this.#newId = dependencies.newId ?? (() => globalThis.crypto.randomUUID())
+    this.#durableReceipts = dependencies.researchReceipts
     this.#maxDraftAttempts =
       dependencies.limits?.maxDraftAttempts ?? DEFAULT_WORKFLOW_LIMITS.maxDraftAttempts
     this.#maxCollectionRounds =
@@ -114,7 +116,10 @@ export class WorkflowController {
       const recoveryResult = await this.#recoverPersistedRun(run, runContext)
       if (recoveryResult !== undefined) return recoveryResult
     }
-    const manifest = await this.#ensureRunManifest(run, runContext, input.budgetOverrides)
+    const manifest = await this.#ensureRunManifest(run, runContext, input.budgetOverrides, {
+      ...(input.goal === undefined ? {} : { goal: input.goal }),
+      ...(input.authorizationReceiptRef === undefined ? {} : { authorizationReceiptRef: input.authorizationReceiptRef }),
+    })
     return this.#drive(manifest.runId, runContext)
   }
 
@@ -269,19 +274,40 @@ export class WorkflowController {
         `run ${runId} is ${run.state} and cannot complete research delivery`,
       )
     }
-    const inputManifest = await this.#requireInputManifest(manifest.inputManifestId, runContext)
-    const usage = await this.#remaining(manifest.budgetLedgerId, runContext)
-    const candidateReceipts = this.#researchReceipts.get(runId) ?? []
+    return this.#deliverResearch(run, runContext, manifest)
+  }
+
+  /**
+   * Compile and record the bounded delivery list of a research run, then park it on a human. The
+   * candidate receipts are read from the durable store the controlled write path persisted to
+   * (design §8: 持久候选回执), so a resumed/restarted run reports the candidates it actually wrote.
+   * It advances the run to `awaiting_input`, never to a draft.
+   */
+  async #deliverResearch(run: RunRecord, ctx: ToolContext, manifest: RunManifest): Promise<ResearchDelivery> {
+    const inputManifest = await this.#requireInputManifest(manifest.inputManifestId, ctx)
+    const usage = await this.#remaining(manifest.budgetLedgerId, ctx)
+    const candidateReceipts = await this.#deliveryReceipts(run.runId, ctx)
     const delivery: ResearchDelivery = {
-      runId,
-      candidateReceipts: [...candidateReceipts],
+      runId: run.runId,
+      candidateReceipts,
       evidenceRefs: evidenceRefsOf(inputManifest),
       stopReason: 'completed',
       usage,
     }
-    this.#active.delete(runId)
-    await this.#advance(run, 'awaiting_input', { cancelReason: 'research_delivery_ready' }, runContext)
+    this.#active.delete(run.runId)
+    await this.#advance(run, 'awaiting_input', { cancelReason: 'research_delivery_ready' }, ctx)
     return delivery
+  }
+
+  /**
+   * The candidate write receipts of a run, read from the durable candidate-submission store the
+   * controlled write path persisted to (design §8: 持久候选回执). The durable store is the single
+   * truth: an empty result means the run wrote no candidates, never "fall back to a memory list".
+   * A host that mounts no reader reports no receipts (not a fabricated candidate).
+   */
+  async #deliveryReceipts(runId: Uuid, ctx: ToolContext): Promise<readonly ResearchDeliveryCandidateReceipt[]> {
+    if (this.#durableReceipts === undefined) return []
+    return this.#durableReceipts.listForRun(runId, ctx)
   }
 
   /**
@@ -318,8 +344,17 @@ export class WorkflowController {
           }
           await this.#collect(runId, ctx)
           continue
-        case 'drafting':
+        case 'drafting': {
+          // A research run does not draft or publish an answer: its collection end is a candidate
+          // delivery that waits on a human source/admission review (design §4/§8). The goal is read
+          // from the run's own manifest, so an ordinary project run keeps the answer route.
+          const manifest = await this.#requireRunManifest(runId, ctx)
+          if (manifest.goal?.kind === 'industry_workspace_research') {
+            await this.#deliverResearch(run, ctx, manifest)
+            return this.#view(runId, ctx)
+          }
           return this.#draftAndVerify(runId, ctx)
+        }
         case 'verifying':
           // A recovered mid-verify run returns to the bounded drafting step.
           await this.#advance(run, 'drafting', {}, ctx)
@@ -546,17 +581,6 @@ export class WorkflowController {
         runId,
         ctx,
       )
-    }
-    if (event.type === 'command_receipt') {
-      const receipts = this.#researchReceipts.get(runId) ?? []
-      receipts.push({
-        callId: event.callId,
-        commandKind: event.commandKind,
-        status: event.status,
-        candidateIds: [...event.candidateIds],
-        issueCodes: [...event.issueCodes],
-      })
-      this.#researchReceipts.set(runId, receipts)
     }
     if (event.type === 'failed' && event.error.remoteStateUnknown === true) {
       await this.#markUsageUnknown(runId, ctx)
@@ -965,6 +989,10 @@ export class WorkflowController {
     run: RunRecord,
     ctx: ToolContext,
     budgetOverrides?: StartWorkflowInput['budgetOverrides'],
+    research?: {
+      readonly goal?: RunManifest['goal']
+      readonly authorizationReceiptRef?: RunManifest['authorizationReceiptRef']
+    },
   ): Promise<RunManifest> {
     const existing = await this.#deps.manifests.getRunManifest(run.runId, ctx)
     if (existing !== undefined) return existing
@@ -991,6 +1019,8 @@ export class WorkflowController {
         budgetLedgerId: ledger.ledgerId,
         inputManifestId: inputManifest.manifestId,
         createdAt: run.createdAt,
+        ...(research?.goal === undefined ? {} : { goal: research.goal }),
+        ...(research?.authorizationReceiptRef === undefined ? {} : { authorizationReceiptRef: research.authorizationReceiptRef }),
       },
       ctx,
     )

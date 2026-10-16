@@ -121,6 +121,22 @@ describe('candidate submission receipt store (PostgreSQL, migration 095)', () =>
     expect(links.map((link) => link.trustTier)).toEqual(['agent_researched'])
   })
 
+  it('lists every receipt a run produced, scoped to the run', async () => {
+    const f = await fixture('submission_by_run')
+    const runId = randomUUID()
+    const otherRunId = randomUUID()
+    await f.store.record(f.scopeRef, { record: record(f, runId, 'idem-run-0001', DIGEST_A, randomUUID()) }, f.ctx)
+    await f.store.record(f.scopeRef, { record: record(f, runId, 'idem-run-0002', DIGEST_B, randomUUID()) }, f.ctx)
+    await f.store.record(f.scopeRef, { record: record(f, otherRunId, 'idem-run-0003', DIGEST_A, randomUUID()) }, f.ctx)
+
+    const receipts = await f.store.listByRun(f.scopeRef, runId, f.ctx)
+    expect(receipts.map((entry) => entry.idempotencyKey).sort()).toEqual(['idem-run-0001', 'idem-run-0002'])
+    expect(receipts.every((entry) => entry.runId === runId)).toBe(true)
+
+    const other = toolContext('99999999-9999-4999-8999-999999999999', '88888888-8888-4888-8888-888888888888', ['platform-admin'], 'other')
+    await expect(f.store.listByRun(f.scopeRef, runId, other)).rejects.toMatchObject({ code: 'SCOPE_MISMATCH' })
+  })
+
   it('reports unconfirmed candidates for the workspace and keeps tenant/space isolation', async () => {
     const f = await fixture('submission_b')
     const runId = randomUUID()

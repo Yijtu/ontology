@@ -94,4 +94,16 @@ export class InMemoryCandidateSubmissionStore implements CandidateSubmissionStor
       .filter((record) => record.workspaceId === workspaceId && record.links.some((link) => link.pendingConfirmation))
       .map(clone)
   }
+
+  async listByRun(
+    scopeRef: ScopeRef,
+    runId: Uuid,
+    ctx: ToolContext,
+  ): Promise<readonly CandidateSubmissionRecord[]> {
+    resolveScope(scopeRef, ctx)
+    const prefix = `${scopeKey(scopeRef)}\u0000${runId}\u0000`
+    return [...this.#records.entries()]
+      .filter(([key]) => key.startsWith(prefix))
+      .map(([, record]) => clone(record))
+  }
 }

@@ -12,6 +12,7 @@ import type {
   LimitedAnswerPort,
   ProfileRef,
   PublishedAnswer,
+  ResearchExecutionGoal,
   ResourceRef,
   RevisionString,
   ToolContext,
@@ -69,6 +70,14 @@ export interface WorkflowControllerDependencies {
    * explicitly. When absent the run path is unchanged.
    */
   readonly rewriter?: QuestionRewriter
+  /**
+   * The durable candidate-submission receipts of a research run (design §8: 持久候选回执). When
+   * present the controller reads the candidates a research run actually wrote from storage, so a
+   * resumed or restarted run reports the same delivery. It is the single truth: an empty result
+   * means the run wrote no candidates. When absent the controller reports no receipts (not a
+   * fabricated candidate).
+   */
+  readonly researchReceipts?: ResearchCandidateReceiptReader
   readonly now?: () => string
   readonly newId?: () => string
   readonly limits?: Partial<WorkflowLimits>
@@ -83,6 +92,14 @@ export interface StartWorkflowInput {
   readonly idempotencyKey: string
   /** Deployment/scenario budget tightening; it can only make the budget stricter. */
   readonly budgetOverrides?: Partial<BudgetLedgerLimits>
+  /**
+   * The research goal this run is created under (design §4/§8). Its presence turns the run into a
+   * research run whose completion is a delivery list, not a published answer. Absent for the
+   * ordinary project-Q&A route.
+   */
+  readonly goal?: ResearchExecutionGoal
+  /** The authorization receipt fixed before a research run (design §8). Absent for non-research. */
+  readonly authorizationReceiptRef?: ResourceRef
 }
 
 export interface RespondWorkflowInput {
@@ -121,6 +138,16 @@ export interface ResearchDeliveryCandidateReceipt {
   readonly status: AuthoringCommandReceiptStatus
   readonly candidateIds: readonly Uuid[]
   readonly issueCodes: readonly string[]
+}
+
+/**
+ * The durable candidate write receipts of one run (design §8). The run-completion projection reads
+ * these from storage rather than from the in-memory transcript, so a resumed/restarted run reports
+ * the candidates it actually wrote. The implementation lives in the composition/adapters; the
+ * controller only sees the port.
+ */
+export interface ResearchCandidateReceiptReader {
+  listForRun(runId: Uuid, ctx: ToolContext): Promise<readonly ResearchDeliveryCandidateReceipt[]>
 }
 
 /**

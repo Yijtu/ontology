@@ -22,6 +22,7 @@ import type {
 import type { ToolContext } from './trusted'
 import type { AuthoringCommandGateway } from './authoring-command'
 import type { WorkflowDispatchFence } from './workflow-dispatch'
+import type { ResearchExecutionGoal } from './research-execution'
 import { isRecord, isResourceRef, isSha256Digest } from './asset-workspace'
 import type {
   ClaimExplanation,
@@ -60,6 +61,18 @@ export interface RunManifest {
   /** The one input manifest shared across phases and re-collection. */
   readonly inputManifestId: Uuid
   readonly createdAt: Rfc3339UtcTimestamp
+  /**
+   * The research goal the run was created under, when it is a research run (design §4/§8). An
+   * ordinary project-Q&A run leaves it absent, so an old manifest stays valid and the controller
+   * keeps its answer route. When it is `industry_workspace_research` the controller completes the
+   * run as a research delivery (candidate receipts, evidence, usage) instead of drafting an answer.
+   */
+  readonly goal?: ResearchExecutionGoal
+  /**
+   * The authorization receipt fixed before the research run started (design §8: 授权回执). Absent
+   * for a non-research run; never fabricated.
+   */
+  readonly authorizationReceiptRef?: ResourceRef
 }
 
 export type WorkflowInputKind = 'confirmed_context' | 'evidence' | 'clarification'

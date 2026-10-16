@@ -18,6 +18,7 @@ import {
 } from '@ontology/application'
 import type { RunProfileBinder, RunProfileBinding } from '@ontology/application'
 import type { QuestionRewriter } from '@ontology/application'
+import type { ResearchCandidateReceiptReader } from '@ontology/application'
 import type {
   AnswerPublisherPort,
   AnswerVerifierPort,
@@ -34,6 +35,7 @@ import type {
   PlatformError,
   ProfileRef,
   ResourceRef,
+  ResearchExecutionGoal,
   ResumeInput,
   RuntimeAdapter,
   RuntimeCancelReceipt,
@@ -405,6 +407,8 @@ export function buildWorkflowHarness(options: {
   readonly rewriter?: QuestionRewriter
   /** Tighten the bounded workflow policy (e.g. a small `maxCollectionRounds`). */
   readonly limits?: Partial<WorkflowLimits>
+  /** Mount a durable candidate-receipt reader (the research delivery reads it when present). */
+  readonly researchReceipts?: ResearchCandidateReceiptReader
 }): WorkflowHarness {
   const probe = options.probe ?? options.runtime.probe
   const store = new InMemoryRunStore()
@@ -467,6 +471,7 @@ export function buildWorkflowHarness(options: {
       validity,
       ...(options.rewriter === undefined ? {} : { rewriter: options.rewriter }),
       ...(options.limits === undefined ? {} : { limits: options.limits }),
+      ...(options.researchReceipts === undefined ? {} : { researchReceipts: options.researchReceipts }),
       now: fixedClock(),
       newId: () => randomUUID(),
     })
@@ -508,6 +513,8 @@ export function startInput(overrides?: {
   readonly runId?: string
   readonly idempotencyKey?: string
   readonly budgetOverrides?: { readonly maxRepairAttempts?: number; readonly maxToolCalls?: number }
+  readonly goal?: ResearchExecutionGoal
+  readonly authorizationReceiptRef?: ResourceRef
 }): Parameters<WorkflowController['startRun']>[0] {
   return {
     runId: overrides?.runId ?? RUN_A,
@@ -519,6 +526,10 @@ export function startInput(overrides?: {
     ...(overrides?.budgetOverrides === undefined
       ? {}
       : { budgetOverrides: overrides.budgetOverrides }),
+    ...(overrides?.goal === undefined ? {} : { goal: overrides.goal }),
+    ...(overrides?.authorizationReceiptRef === undefined
+      ? {}
+      : { authorizationReceiptRef: overrides.authorizationReceiptRef }),
   }
 }
 
