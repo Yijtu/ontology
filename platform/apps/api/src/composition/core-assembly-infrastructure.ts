@@ -4,8 +4,8 @@ import { DATA_DUCKDB_ADAPTER_REF, DuckDbProjectDatasetAdapter } from '@ontology/
 import { DATA_POSTGRES_ADAPTER_REF, PostgresProjectDatasetAdapter } from '@ontology/adapter-data-postgres'
 import { PostgresDocumentParseStore, PostgresStructuredIngestionStore } from '@ontology/adapter-extraction-document'
 import { PostgresKeywordIndexStore } from '@ontology/adapter-search-bm25'
-import { ControlPostgresDatabase, PostgresExecutionModelBindingStore, PostgresModelAssignmentStore, PostgresModelConnectionStore } from '@ontology/adapter-control-postgres'
-import { ExecutionModelBindingService, ModelAssignmentService, ModelConnectionService, ModelSelectionService, ProfileResolver, ProjectDataMaterializationService, SourceRegistry, StoreBackedIndustryManifestSource } from '@ontology/application'
+import { ControlPostgresDatabase, PostgresExecutionModelBindingStore, PostgresExecutionToolBindingStore, PostgresModelAssignmentStore, PostgresModelConnectionStore, PostgresToolAssignmentStore, PostgresToolConnectionStore } from '@ontology/adapter-control-postgres'
+import { ExecutionModelBindingService, ExecutionToolBindingService, ModelAssignmentService, ModelConnectionService, ModelSelectionService, ProfileResolver, ProjectDataMaterializationService, SourceRegistry, StoreBackedIndustryManifestSource, ToolAssignmentService, ToolConnectionService, ToolSelectionService } from '@ontology/application'
 import { definitionVersionDigest, projectIndustrySchema, PublishedProjectDatasetSource, SemanticDefinitionService } from '@ontology/semantic-engine'
 import { canonicalJson, sha256DigestOf } from '@ontology/core'
 import type { IndustrySchemaSource, ProfileRef, ProfileSpec, ScopeRef, ToolContext, Uuid, VersionRef } from '@ontology/contracts'
@@ -39,6 +39,8 @@ import {
 import { createCoreModelProbe } from './core-model-probe'
 import { CoreModelSettingsMigration } from './core-model-settings-migration'
 import { CoreLocalModelSettings } from './core-local-model-settings'
+import { LocalToolCredentialCustodian } from './core-tool-credential-custodian'
+import { CoreToolSettingsMigration } from './core-tool-settings-migration'
 import type { EffectiveModelSelection } from '@ontology/contracts'
 import type { JevFallbackPolicy } from '@ontology/adapter-model-jev'
 import { createPostgresSourceStore, createStaticProbeAdapterResolver } from './source-registry'
@@ -269,6 +271,50 @@ export async function assembleInfrastructure(options: CoreLocalCompositionOption
   })
   await modelSettingsMigration.migrate()
 
+  // Tool connections (design §9): a separate catalogue from model connections. It shares the model
+  // target directory (same target scope shape) and the local custody boundary, but keeps its own
+  // stores, credential namespace and per-tool assignment. The optional probe is wired by R02, so a
+  // deployment without it still lists/edits connections and fails testing closed.
+  const toolConnectionStore = new PostgresToolConnectionStore(database)
+  const toolAssignmentStore = new PostgresToolAssignmentStore(database)
+  const toolBindingStore = new PostgresExecutionToolBindingStore(database)
+  const toolCredentialCustodian = new LocalToolCredentialCustodian({ objectDirectory: options.objectDirectory })
+  const toolSelectionService = new ToolSelectionService({
+    assignments: toolAssignmentStore,
+    connections: toolConnectionStore,
+    targets: modelTargetDirectory,
+  })
+  const toolBindingService = new ExecutionToolBindingService({
+    bindings: toolBindingStore,
+    resolver: toolSelectionService,
+    connections: toolConnectionStore,
+  })
+  const toolSettings = {
+    connections: new ToolConnectionService({
+      connections: toolConnectionStore,
+      credentials: toolCredentialCustodian,
+      assignments: toolAssignmentStore,
+    }),
+    assignments: new ToolAssignmentService({
+      assignments: toolAssignmentStore,
+      connections: toolConnectionStore,
+      targets: modelTargetDirectory,
+    }),
+    selection: toolSelectionService,
+    bindings: toolBindingService,
+  }
+  // The one-time legacy `CORE_WEB_SEARCH_*` bridge runs on the normal start path *before* the
+  // deployment reads tool capabilities, so an old compat-gateway deployment becomes a catalogue
+  // connection first. Once the marker is written the environment is no longer a second truth.
+  const toolSettingsMigration = new CoreToolSettingsMigration({
+    connections: toolSettings.connections,
+    assignments: toolSettings.assignments,
+    scopeRef,
+    objectDirectory: options.objectDirectory,
+    environment: modelEnvironment,
+  })
+  await toolSettingsMigration.migrate()
+
   // The deployment capability projection and the startup model component registration are derived
   // from the actual model directory, never a static env flag (design §5.3). An empty directory
   // degrades explicitly to "not configured" with a reason; a named-but-broken connection is
@@ -343,6 +389,8 @@ export async function assembleInfrastructure(options: CoreLocalCompositionOption
     modelConnectionStore, modelAssignmentStore, modelBindingStore, modelCredentialCustodian, modelTargetDirectory,
     modelSelectionService, modelBindingService, modelBindingRuntime, runModelBinder, aiSettings,
     modelSettings, modelSettingsMigration, deploymentModelCapabilities,
+    toolConnectionStore, toolAssignmentStore, toolBindingStore, toolCredentialCustodian,
+    toolSelectionService, toolBindingService, toolSettings, toolSettingsMigration,
     schemaSource, semanticDefinitions, projectDatasetAdapter, publishedProjectDatasetSource, projectEvolutionCell, normalApprovedInputs,
     evolutionGuard, projectDatasetService, profileResolver, sources, coreModelRefs, componentRecords, bootstrapProfileSpecsByScenario,
     profileRefsByScenario, profileSpecsByScenario, availableTasksByScenario, terminology, executionPreview,

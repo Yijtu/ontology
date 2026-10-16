@@ -27,6 +27,7 @@ import { validateCoreFactsRequest } from './core-facts-providers'
 import { registerCoreSourceViewRoutes } from '../http/core-source-views'
 import { registerCoreImportRoute, registerCoreRelationNavigationRoute } from '../http/core-core-routes'
 import { registerModelConnectionRoutes } from '../http/core-model-connections'
+import { registerToolConnectionRoutes } from '../http/core-tool-connections'
 import { registerProjectImportRoute } from '../http/project-imports'
 import { createCompetencyQuestionWorkflow } from './competency-questions'
 import { createCompetencyValidationTargetReader } from './competency-validation-target'
@@ -71,6 +72,7 @@ export async function assembleDeployment(
     publishedProjectDatasetSource, normalApprovedInputs, projectDatasetService, profileResolver, sources, coreModelRefs, componentRecords,
     profileRefsByScenario, profileSpecsByScenario, availableTasksByScenario, terminology, executionPreview, projectEvolutionCell, hostClock, componentStore,
     aiSettings, modelSettings, modelSettingsMigration, deploymentModelCapabilities, modelBindingRuntime,
+    toolSettings,
   } = state
   const { structuredImports, documentSpanReader, projectDocumentIndexService, structuredPremiseSources, structuredClauseSources, semanticTasks, computeResultStore, computeOutputBindingsStore, computeInvocationStore, gatewayComposition } = query
   const { runProgress, runs, termLabels, authoring, tableArtifactStore, tableVerificationStore, workflowDispatchWorker, jobService, industryWorkspaceService, provenanceRead, webSearch } = runtime
@@ -384,6 +386,7 @@ export async function assembleDeployment(
       registerCoreImportRoute({ app: api, authenticate, scopeRef, examples, service: jobService, objectStore, registry: artifactRegistry, generationEnabled: deploymentModelCapabilities.generation })
       registerCoreRelationNavigationRoute({ app: api, authenticate, examples, publications: publicationStore, identity: identityStore })
       registerModelConnectionRoutes(api, { ...aiSettings, authenticate, webPort: Number(process.env['CORE_WEB_PORT'] ?? '5174') })
+      registerToolConnectionRoutes(api, { ...toolSettings, authenticate, webPort: Number(process.env['CORE_WEB_PORT'] ?? '5174') })
       registerProjectImportRoute(api, { authenticate, scopeRef, service: projectStructuredImportService })
     },
     ...(options.logger === undefined ? {} : { logger: options.logger }),
