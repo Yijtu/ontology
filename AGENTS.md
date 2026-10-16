@@ -83,4 +83,9 @@ pnpm run test
     或改用 Docker Desktop 的稀疏磁盘设置。压缩前先确认 `docker system df` 已无可回收空间。
 - **并行测试的固定超时与模块加载期时间**：容器密集并行时 5s 默认超时会误报（见 LOCAL-065/068）。集成测试用显式超时与受控并发；时间相关的测试上下文必须在 `beforeAll`/用例内**相对当前时刻**构造，不要在模块加载时算固定偏移。
 
+- **UI 测试 harness 的 teardown 与 vitest hook 预算（2026-10，main CI 反复红）**：`tests/ui/*.spec.ts` 的 afterEach 会 `unmount` 再 `await app.close()`；harness 起的 Fastify app 与用全局 fetch 的 client 之间的 **keep-alive 连接会让 `app.close()` 卡住**，表现为 `Hook timed out in Nms`。本机单文件常通过、CI 满载时触发，**不要据此只当 flaky 去加超时**。
+  - 规则：① `vitest.config.ts` 的 `unit` 项目（含 `tests/ui`）也要显式设 `hookTimeout`，与 integration/load/acceptance 一致，不依赖 vitest 默认 10s；② 测试 harness 用 `createApiServer({ forceCloseConnections: true })`，让 `app.close()` 直接关闭活连接（仅测试 harness，生产默认不变）。
+  - 排查：CI 出现 `tests/ui/query.spec.ts > … Hook timed out` 时，先确认是不是 `app.close()` 被 keep-alive 卡住，而不是单纯调大超时。
+- **CI 的 `Preload PostgreSQL 17 test image` 失败（2026-10）**：步骤从 `public.ecr.aws` 拉 `postgres:17`，出现 `toomanyrequests` / `Rate exceeded` / `Data limit exceeded` 时是镜像仓库限流，与代码无关；等限流恢复后重跑即可，不要改代码或测试去"修"。
+
 本文件随工程约束演进，只保留稳定规则。只有模块出现长期独有要求时才增加局部 `AGENTS.md`，不重复整份 PRD/SPEC，也不维护多份相同约定。
