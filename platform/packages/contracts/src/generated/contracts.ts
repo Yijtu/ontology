@@ -592,6 +592,13 @@ export type PreflightStatus = 'resolved' | 'missing_capabilities' | 'incompatibl
 export type GenerationRole =
   'planner' | 'extractor' | 'draft_writer' | 'sql_proposer' | 'classifier' | 'repair'
 /**
+ * The controlled authoring commands a runtime may route (design §5). They are deliberately NOT model-visible data tools: the public ToolId catalogue stays exactly four, and a candidate write is a separate, controlled command. `submit_candidates` is currently the only member.
+ *
+ * This interface was referenced by `OntologyContracts`'s JSON-Schema
+ * via the `definition` "AuthoringCommandKind".
+ */
+export type AuthoringCommandKind = 'submit_candidates'
+/**
  * This interface was referenced by `OntologyContracts`'s JSON-Schema
  * via the `definition` "GenerationMessageRole".
  */
@@ -612,11 +619,16 @@ export type GenerationRequest1 =
       toolSchemas: unknown
       [k: string]: unknown | undefined
     }
+  | {
+      authoringCommands: unknown
+      [k: string]: unknown | undefined
+    }
 /**
  * This interface was referenced by `OntologyContracts`'s JSON-Schema
  * via the `definition` "GenerationEventType".
  */
-export type GenerationEventType = 'text_delta' | 'tool_call_delta' | 'usage' | 'completed' | 'error'
+export type GenerationEventType =
+  'text_delta' | 'tool_call_delta' | 'authoring_command_delta' | 'usage' | 'completed' | 'error'
 /**
  * This interface was referenced by `OntologyContracts`'s JSON-Schema
  * via the `definition` "GenerationEvent".
@@ -624,6 +636,7 @@ export type GenerationEventType = 'text_delta' | 'tool_call_delta' | 'usage' | '
 export type GenerationEvent =
   | GenerationTextDelta
   | GenerationToolCallDelta
+  | GenerationAuthoringCommandDelta
   | GenerationUsageEvent
   | GenerationCompleted
   | GenerationErrorEvent
@@ -667,12 +680,21 @@ export type ReadinessTargetRef = ResourceRef | VersionRef
 export type RuntimeEventType =
   | 'plan_proposed'
   | 'step_started'
+  | 'command_receipt'
   | 'evidence_added'
   | 'clarification_requested'
   | 'collection_complete'
   | 'checkpoint_ready'
   | 'cancelled'
   | 'failed'
+/**
+ * The outcome of one routed authoring command (design §5/§7). `accepted` records written candidates, `rejected` a refused command, `pending_confirmation` a write held behind a source/terminology fence, and `deferred` a command the run could not route (e.g. no command gateway is configured).
+ *
+ * This interface was referenced by `OntologyContracts`'s JSON-Schema
+ * via the `definition` "AuthoringCommandReceiptStatus".
+ */
+export type AuthoringCommandReceiptStatus =
+  'accepted' | 'rejected' | 'pending_confirmation' | 'deferred'
 /**
  * The fixed runtime event union. Each member carries runId, eventId and sequence so the event log is replayable and de-duplicable.
  *
@@ -682,6 +704,7 @@ export type RuntimeEventType =
 export type RuntimeEvent =
   | PlanProposedEvent
   | StepStartedEvent
+  | AuthoringCommandReceiptEvent
   | EvidenceAddedEvent
   | ClarificationRequestedEvent
   | CollectionCompleteEvent
@@ -2495,6 +2518,10 @@ export interface GenerationRequest2 {
   evidenceRefs: ResourceRef[]
   responseSchemaRef?: VersionRef
   toolSchemas?: ToolId[]
+  /**
+   * The controlled authoring commands the runtime exposes to the model for this call (design §5). A command is not a ToolId; a shift to it never widens the four-tool catalogue.
+   */
+  authoringCommands?: AuthoringCommandKind[]
   modelRef: ModelRef
   outputLimit: GenerationOutputLimit
   temperature?: number
@@ -2526,6 +2553,18 @@ export interface GenerationToolCallDelta {
   type: 'tool_call_delta'
   callId: Uuid
   toolId: ToolId
+  argumentsDelta: string
+}
+/**
+ * A proposed controlled authoring command (design §5). Like a tool call, the runtime must route it through the host command gateway; the model cannot execute or authorize it directly, and it is never smuggled into a data tool.
+ *
+ * This interface was referenced by `OntologyContracts`'s JSON-Schema
+ * via the `definition` "GenerationAuthoringCommandDelta".
+ */
+export interface GenerationAuthoringCommandDelta {
+  type: 'authoring_command_delta'
+  callId: Uuid
+  commandKind: AuthoringCommandKind
   argumentsDelta: string
 }
 /**
@@ -2998,6 +3037,27 @@ export interface StepStartedEvent {
   stepId: NonEmptyString
   toolId: ToolId
   attempt: number
+}
+/**
+ * One routed authoring command's receipt, projected onto the runtime event stream (design §5). It carries only the recorded outcome — never the command body, the model's raw arguments or a trusted attribute — so a consumer can list what was written without re-deriving it from the model.
+ *
+ * This interface was referenced by `OntologyContracts`'s JSON-Schema
+ * via the `definition` "AuthoringCommandReceiptEvent".
+ */
+export interface AuthoringCommandReceiptEvent {
+  type: 'command_receipt'
+  runId: Uuid
+  eventId: Uuid
+  sequence: number
+  occurredAt: Rfc3339UtcTimestamp
+  callId: Uuid
+  commandKind: AuthoringCommandKind
+  status: AuthoringCommandReceiptStatus
+  candidateCount: number
+  candidateIds: Uuid[]
+  issueCodes: NonEmptyString[]
+  receiptDigest: Sha256Digest
+  recordedAt: Rfc3339UtcTimestamp
 }
 /**
  * This interface was referenced by `OntologyContracts`'s JSON-Schema

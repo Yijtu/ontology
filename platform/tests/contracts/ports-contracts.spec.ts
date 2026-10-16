@@ -207,6 +207,18 @@ describe('RuntimeEvent is a fixed union', () => {
   const events: Record<string, unknown> = {
     plan_proposed: { ...base, type: 'plan_proposed', planRef: resourceRef, stepCount: 2, toolIds: ['data_query', 'document_search'] },
     step_started: { ...base, type: 'step_started', stepId: 'step-1', toolId: 'data_query', attempt: 0 },
+    command_receipt: {
+      ...base,
+      type: 'command_receipt',
+      callId: CHECKPOINT,
+      commandKind: 'submit_candidates',
+      status: 'accepted',
+      candidateCount: 1,
+      candidateIds: [CHECKPOINT],
+      issueCodes: [],
+      receiptDigest: DIGEST,
+      recordedAt: TS,
+    },
     evidence_added: { ...base, type: 'evidence_added', evidenceRefs: [resourceRef] },
     clarification_requested: {
       ...base,
@@ -236,7 +248,7 @@ describe('RuntimeEvent is a fixed union', () => {
     },
   }
 
-  it('accepts exactly the eight event types', () => {
+  it('accepts exactly the nine event types', () => {
     const validate = v('runtime.schema.json', 'RuntimeEvent')
     const types = readSchemaDocument('runtime.schema.json').$defs?.RuntimeEventType as { enum: string[] }
     expect(types.enum).toEqual(Object.keys(events))

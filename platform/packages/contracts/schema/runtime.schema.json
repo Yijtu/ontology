@@ -10,6 +10,7 @@
       "enum": [
         "plan_proposed",
         "step_started",
+        "command_receipt",
         "evidence_added",
         "clarification_requested",
         "collection_complete",
@@ -17,6 +18,12 @@
         "cancelled",
         "failed"
       ]
+    },
+    "AuthoringCommandReceiptStatus": {
+      "title": "AuthoringCommandReceiptStatus",
+      "description": "The outcome of one routed authoring command (design §5/§7). `accepted` records written candidates, `rejected` a refused command, `pending_confirmation` a write held behind a source/terminology fence, and `deferred` a command the run could not route (e.g. no command gateway is configured).",
+      "type": "string",
+      "enum": ["accepted", "rejected", "pending_confirmation", "deferred"]
     },
     "BudgetRemaining": {
       "title": "BudgetRemaining",
@@ -272,6 +279,76 @@
         }
       }
     },
+    "AuthoringCommandReceiptEvent": {
+      "title": "AuthoringCommandReceiptEvent",
+      "description": "One routed authoring command's receipt, projected onto the runtime event stream (design §5). It carries only the recorded outcome — never the command body, the model's raw arguments or a trusted attribute — so a consumer can list what was written without re-deriving it from the model.",
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "type",
+        "runId",
+        "eventId",
+        "sequence",
+        "occurredAt",
+        "callId",
+        "commandKind",
+        "status",
+        "candidateCount",
+        "candidateIds",
+        "issueCodes",
+        "receiptDigest",
+        "recordedAt"
+      ],
+      "properties": {
+        "type": {
+          "const": "command_receipt"
+        },
+        "runId": {
+          "$ref": "./common.schema.json#/$defs/Uuid"
+        },
+        "eventId": {
+          "$ref": "./common.schema.json#/$defs/Uuid"
+        },
+        "sequence": {
+          "type": "integer",
+          "minimum": 0
+        },
+        "occurredAt": {
+          "$ref": "./common.schema.json#/$defs/Rfc3339UtcTimestamp"
+        },
+        "callId": {
+          "$ref": "./common.schema.json#/$defs/Uuid"
+        },
+        "commandKind": {
+          "$ref": "./model.schema.json#/$defs/AuthoringCommandKind"
+        },
+        "status": {
+          "$ref": "#/$defs/AuthoringCommandReceiptStatus"
+        },
+        "candidateCount": {
+          "type": "integer",
+          "minimum": 0
+        },
+        "candidateIds": {
+          "type": "array",
+          "items": {
+            "$ref": "./common.schema.json#/$defs/Uuid"
+          }
+        },
+        "issueCodes": {
+          "type": "array",
+          "items": {
+            "$ref": "./common.schema.json#/$defs/NonEmptyString"
+          }
+        },
+        "receiptDigest": {
+          "$ref": "./common.schema.json#/$defs/Sha256Digest"
+        },
+        "recordedAt": {
+          "$ref": "./common.schema.json#/$defs/Rfc3339UtcTimestamp"
+        }
+      }
+    },
     "EvidenceAddedEvent": {
       "title": "EvidenceAddedEvent",
       "type": "object",
@@ -464,6 +541,9 @@
         },
         {
           "$ref": "#/$defs/StepStartedEvent"
+        },
+        {
+          "$ref": "#/$defs/AuthoringCommandReceiptEvent"
         },
         {
           "$ref": "#/$defs/EvidenceAddedEvent"

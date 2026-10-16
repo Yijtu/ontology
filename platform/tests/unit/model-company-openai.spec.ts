@@ -101,6 +101,41 @@ describe('company generation adapter — OpenAI-compatible codec', () => {
     })
   })
 
+  it('surfaces a proposed authoring command as an authoring_command_delta, never a data tool call', async () => {
+    const api = await server()
+    const harness = await budgetHarness({ maxModelTokens: 1_000 })
+    const adapter = makeAdapter({
+      server: api,
+      fixture: 'openai_authoring_command',
+      harness,
+      protocol: 'openai-compatible',
+    })
+
+    const events = await collect(
+      adapter.generate(generationRequest({ authoringCommands: ['submit_candidates'] }), harness.ctx),
+    )
+
+    const commands = events.filter(
+      (event): event is Extract<GenerationEvent, { type: 'authoring_command_delta' }> =>
+        event.type === 'authoring_command_delta',
+    )
+    expect(commands).toHaveLength(1)
+    expect(commands[0]?.commandKind).toBe('submit_candidates')
+    expect(commands[0]?.argumentsDelta).toBe('{"schemaVersion":"submit-candidates@1"}')
+    // It is never smuggled into a data tool call.
+    expect(toolCallEvents(events)).toHaveLength(0)
+    expect(events.at(-1)).toMatchObject({ type: 'completed', stopReason: 'tool_calls' })
+    for (const event of events) expectValid(validateEvent, event, `canonical event ${event.type}`)
+
+    // The command is declared to the gateway with its real top-level fields.
+    const declared = api.requests[0]?.body['tools']
+    expect(Array.isArray(declared)).toBe(true)
+    const names = (Array.isArray(declared) ? declared : []).map(
+      (entry) => (entry as { function: { name: string } }).function.name,
+    )
+    expect(names).toContain('submit_candidates')
+  })
+
   it('maps distinct non-UUID ids to distinct, stable UUIDs ordered by tool-call index', async () => {
     const first = await server()
     const harnessA = await budgetHarness({ maxModelTokens: 1_000 })

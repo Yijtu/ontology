@@ -1,9 +1,14 @@
 import { createToolContext } from '@ontology/contracts'
 import type {
+  AuthoringCommandGateway,
+  AuthoringCommandKind,
   BudgetRemaining,
+  CommandCall,
+  CommandReceipt,
   ComponentManifest,
   DecisionPort,
   DecisionResult,
+  GenerationAuthoringCommandDelta,
   GenerationCompleted,
   GenerationEvent,
   GenerationPort,
@@ -16,6 +21,7 @@ import type {
   ToolContext,
   ToolId,
 } from '@ontology/contracts'
+import { sha256DigestOf } from '@ontology/core'
 import type { PiRuntimeConfig } from '@ontology/adapter-runtime-pi'
 import {
   DEADLINE,
@@ -107,6 +113,14 @@ export function toolCallDelta(
   return { type: 'tool_call_delta', callId, toolId, argumentsDelta: JSON.stringify(args) }
 }
 
+export function commandDelta(
+  callId: string,
+  commandKind: AuthoringCommandKind,
+  args: Readonly<Record<string, unknown>>,
+): GenerationAuthoringCommandDelta {
+  return { type: 'authoring_command_delta', callId, commandKind, argumentsDelta: JSON.stringify(args) }
+}
+
 export function usageEvent(inputTokens: number, outputTokens: number): GenerationUsageEvent {
   return { type: 'usage', usage: { inputTokens, outputTokens } }
 }
@@ -175,6 +189,36 @@ export const forbiddenDecision: DecisionPort = {
   },
 }
 
+/**
+ * A scripted authoring-command gateway: it records every routed command and delegates to a
+ * handler registered per command kind. It stands in for the real command gateway so the Pi
+ * command routing can be exercised without a workspace write path.
+ */
+export class ScriptedCommandGateway implements AuthoringCommandGateway {
+  readonly calls: CommandCall[] = []
+  readonly #handlers = new Map<AuthoringCommandKind, (call: CommandCall) => CommandReceipt>()
+
+  on(commandKind: AuthoringCommandKind, handler: (call: CommandCall) => CommandReceipt): this {
+    this.#handlers.set(commandKind, handler)
+    return this
+  }
+
+  invoke(command: CommandCall): Promise<CommandReceipt> {
+    this.calls.push(command)
+    const handler = this.#handlers.get(command.commandKind)
+    if (handler !== undefined) return Promise.resolve(handler(command))
+    return Promise.resolve({
+      callId: command.callId,
+      commandKind: command.commandKind,
+      status: 'accepted',
+      candidateIds: [],
+      issueCodes: [],
+      receiptDigest: sha256DigestOf(`receipt:${command.callId}`),
+      recordedAt: NOW,
+    })
+  }
+}
+
 export interface PiDependencyHarness {
   readonly gateway: ScriptedGateway
   readonly budget: FakeBudget
@@ -183,6 +227,7 @@ export interface PiDependencyHarness {
   readonly ctx: ToolContext
   readonly controller: AbortController
   readonly dependencies: RuntimeDependencies
+  readonly commandGateway?: ScriptedCommandGateway
 }
 
 export function buildPiDependencies(options?: {
@@ -192,6 +237,7 @@ export function buildPiDependencies(options?: {
   readonly checkpoints?: InMemoryCheckpoints
   readonly scripts?: readonly ScriptEntry[]
   readonly controller?: AbortController
+  readonly commandGateway?: ScriptedCommandGateway
 }): PiDependencyHarness {
   const ctx = options?.ctx ?? piContext()
   const gateway = options?.gateway ?? new ScriptedGateway()
@@ -199,6 +245,7 @@ export function buildPiDependencies(options?: {
   const checkpoints = options?.checkpoints ?? new InMemoryCheckpoints()
   const controller = options?.controller ?? new AbortController()
   const generation = new ScriptedGeneration(options?.scripts ?? [], { signal: controller.signal })
+  const commandGateway = options?.commandGateway
   const dependencies: RuntimeDependencies = {
     ctx,
     gateway,
@@ -206,9 +253,10 @@ export function buildPiDependencies(options?: {
     decision: forbiddenDecision,
     checkpoints,
     budget,
+    ...(commandGateway === undefined ? {} : { commandGateway }),
     signal: controller.signal,
   }
-  return { gateway, budget, checkpoints, generation, ctx, controller, dependencies }
+  return { gateway, budget, checkpoints, generation, ctx, controller, dependencies, ...(commandGateway === undefined ? {} : { commandGateway }) }
 }
 
 function waitForAbort(signal: AbortSignal | undefined): Promise<void> {

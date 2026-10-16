@@ -489,3 +489,35 @@ describe('usage_unknown handling', () => {
     expect(events.some((event) => event.event === 'answer.published')).toBe(false)
   })
 })
+
+describe('research completion branch (design §4/§8)', () => {
+  it('completes a collecting research run as a delivery list and never drafts or publishes', async () => {
+    const runtime = new ScriptedRuntime({ scripts: [[]] })
+    runtime.block()
+    const harness = buildWorkflowHarness({ runtime })
+    const pending = harness.controller.startRun(startInput(), OWNER)
+    await waitFor(() => runtime.startCalls.length === 1)
+
+    const delivery = await harness.controller.completeResearch(RUN_A, OWNER)
+    expect(delivery.runId).toBe(RUN_A)
+    expect(delivery.stopReason).toBe('completed')
+    expect(delivery.candidateReceipts).toHaveLength(0)
+
+    runtime.release()
+    const view = await pending
+    // Research completion waits on a human (source/admission review); it is not an answer.
+    expect(view.state).toBe('awaiting_input')
+    expect(view.answer).toBeUndefined()
+    expect(harness.draftWriter.calls).toHaveLength(0)
+    expect(harness.verifier.calls).toHaveLength(0)
+    expect(harness.publisher.publishCalls).toHaveLength(0)
+    const events = await harness.service.listEvents(RUN_A, undefined, OWNER)
+    expect(events.some((event) => event.event === 'answer.published')).toBe(false)
+  })
+
+  it('refuses to complete research for a run that is not collecting', async () => {
+    const harness = await runToPublished()
+    await expect(harness.controller.completeResearch(RUN_A, OWNER))
+      .rejects.toMatchObject({ code: 'INVALID_ARGUMENT' })
+  })
+})

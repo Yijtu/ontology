@@ -335,6 +335,31 @@ function respond(
         openAiChunk([], { prompt_tokens: 15, completion_tokens: 6 }),
       ])
       return
+    case 'openai_authoring_command':
+      // The model proposes a controlled authoring command on the same vendor tool channel.
+      // The adapter must surface it as an `authoring_command_delta`, never a data tool call.
+      writeOpenAiSse(response, [
+        openAiChunk([
+          {
+            index: 0,
+            delta: {
+              role: 'assistant',
+              tool_calls: [
+                {
+                  index: 0,
+                  id: 'call_cmd_1',
+                  type: 'function',
+                  function: { name: 'submit_candidates', arguments: '{"schemaVersion":"submit-candidates@1"}' },
+                },
+              ],
+            },
+            finish_reason: null,
+          },
+        ]),
+        openAiChunk([{ index: 0, delta: {}, finish_reason: 'tool_calls' }]),
+        openAiChunk([], { prompt_tokens: 15, completion_tokens: 6 }),
+      ])
+      return
     case 'openai_two_tool_calls':
       writeOpenAiSse(response, [
         openAiChunk([
@@ -565,6 +590,7 @@ export function generationRequest(overrides: {
   readonly evidenceRefs?: ResourceRef[]
   readonly responseSchemaRef?: VersionRef
   readonly toolSchemas?: ToolId[]
+  readonly authoringCommands?: import('@ontology/contracts').AuthoringCommandKind[]
   readonly modelRef?: ModelRef
   readonly outputLimit?: { readonly maxTokens: number }
   readonly temperature?: number
@@ -579,6 +605,13 @@ export function generationRequest(overrides: {
   }
   if (overrides.responseSchemaRef !== undefined) {
     return { ...base, responseSchemaRef: overrides.responseSchemaRef }
+  }
+  if (overrides.authoringCommands !== undefined) {
+    return {
+      ...base,
+      toolSchemas: overrides.toolSchemas ?? ['data_query'],
+      authoringCommands: overrides.authoringCommands,
+    }
   }
   return { ...base, toolSchemas: overrides.toolSchemas ?? ['data_query'] }
 }

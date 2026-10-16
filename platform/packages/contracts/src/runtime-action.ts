@@ -35,8 +35,6 @@ export type AgentAction = DataToolAction | AuthoringCommandAction
 /** The public data tool ids, straight from the canonical catalogue — never widened here. */
 export const PUBLIC_DATA_TOOL_IDS: readonly string[] = TOOL_IDS
 
-export const AUTHORING_COMMAND_KINDS: readonly string[] = ['submit_candidates']
-
 export class AgentActionError extends Error {
   constructor(readonly code: 'INVALID_ACTION', message: string, options?: ErrorOptions) {
     super(message, options)

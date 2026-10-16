@@ -146,6 +146,7 @@ export class CompanyGenerationAdapter implements GenerationPort {
         let completed: GenerationCompleted | undefined
         let candidateText = ''
         let toolCallText = ''
+        let commandCallText = ''
         let emitted = false
         let failure: ModelAdapterError | undefined
         let billingUnknown = false
@@ -161,6 +162,9 @@ export class CompanyGenerationAdapter implements GenerationPort {
             signal: controller.signal,
             ...(request.temperature === undefined ? {} : { temperature: request.temperature }),
             ...(request.toolSchemas === undefined ? {} : { toolIds: request.toolSchemas }),
+            ...(request.authoringCommands === undefined
+              ? {}
+              : { authoringCommands: request.authoringCommands }),
             ...(request.responseSchemaRef === undefined
               ? {}
               : { responseSchemaRef: request.responseSchemaRef }),
@@ -188,6 +192,8 @@ export class CompanyGenerationAdapter implements GenerationPort {
                   candidateText += event.text
                 } else if (event.type === 'tool_call_delta') {
                   toolCallText += event.argumentsDelta
+                } else if (event.type === 'authoring_command_delta') {
+                  commandCallText += event.argumentsDelta
                 } else if (event.type === 'usage') {
                   usage = event.usage
                   usageEmitted = true
@@ -337,7 +343,7 @@ export class CompanyGenerationAdapter implements GenerationPort {
           return
         }
 
-        const outputDigest = sha256DigestOf(candidateText + toolCallText)
+        const outputDigest = sha256DigestOf(candidateText + toolCallText + commandCallText)
         let evidenceRef
         try {
           evidenceRef = await this.#config.evidence.record(
