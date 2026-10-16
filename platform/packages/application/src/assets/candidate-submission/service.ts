@@ -1,4 +1,5 @@
 import {
+  CandidateCommitError,
   SubmitCandidatesError,
   assetCandidateCommitPin,
   assertSubmitCandidatesCommandShape,
@@ -7,12 +8,19 @@ import {
   sourceTrustTierGroundsPublication,
 } from '@ontology/contracts'
 import type {
+  ActionCandidateVersion,
   AssetCandidateBatch,
   AssetCandidateBatchCounts,
   AssetCandidateInsertGuard,
+  AssetCandidateInsertResult,
   AssetCandidateStore,
   AssetCandidateVersion,
   BudgetLedgerPort,
+  CandidateCommitPort,
+  CandidateCommitTransaction,
+  CandidateDispatchFence,
+  CandidateRunBinding,
+  CandidateRunBindingPort,
   CandidateSubmission,
   CandidateSubmissionPort,
   CandidateSubmissionRecord,
@@ -24,6 +32,7 @@ import type {
   ResolvedCandidateEvidence,
   ResourceRef,
   Rfc3339UtcTimestamp,
+  RuleCandidateVersion,
   ScopeRef,
   SourceGroundingPort,
   SubmitCandidatesReceipt,
@@ -42,8 +51,8 @@ import type { DraftDefinitionCandidate } from '../definition-candidates/model-ou
 import { groundingFragments } from '../definition-candidates/grounding'
 import { SourceGroundingBudget } from '../source-grounding/budget'
 import type { CandidateEvidencePort } from '@ontology/contracts'
-import type { RuleActionCandidateService } from '../rule-action-candidates/service'
-import type { CandidateSourceIngestionService } from '../candidate-sources/ingestion-service'
+import type { RuleActionCandidateService, SaveActionCandidateInput, SaveRuleCandidateInput } from '../rule-action-candidates/service'
+import type { ArchivedWebSnapshotInput, CandidateSourceIngestionService } from '../candidate-sources/ingestion-service'
 
 const RESEARCHER_ROLES: readonly string[] = ['researcher']
 const EDITOR_ROLES: readonly string[] = ['profile-editor', 'platform-admin']
@@ -79,6 +88,19 @@ export interface CandidateSubmissionDependencies {
   readonly sourceGrounding?: SourceGroundingPort
   readonly fence?: CandidateSubmissionFence
   /**
+   * The run's frozen binding (design §7, S08). When mounted with `commit`, the submit path resolves
+   * the target workspace and the pinned draft from the run's admission — never from the model's
+   * `command.workspaceId` and never from "the latest draft" — and refuses a command whose workspace
+   * or draft no longer matches the binding.
+   */
+  readonly runBinding?: CandidateRunBindingPort
+  /**
+   * The narrow atomic commit boundary (design §7, S08). When mounted, the candidate, its links and
+   * its receipt are written in one fence-checked PostgreSQL transaction, so a cancel/lost-lease race
+   * or a crash between the candidate and the receipt can never leave an orphan candidate.
+   */
+  readonly commit?: CandidateCommitPort
+  /**
    * The run's one shared budget ledger (design §8, S06). When mounted, each submission
    * reserves its candidate units on that ledger before writing, so `candidateLimit` is
    * enforced atomically across separate commands and concurrent runs instead of only
@@ -96,6 +118,22 @@ export interface CandidateSubmissionDependencies {
 interface PreparedCandidate {
   readonly submissionIndex: number
   readonly submission: CandidateSubmission
+}
+
+/**
+ * The persistence surface the domain build writes through. The legacy path writes to the standalone
+ * stores; the atomic path writes to the same stores on the commit transaction's own connection, so
+ * the build logic is identical and only the transaction boundary differs (design §7, S08).
+ */
+interface CandidateWriter {
+  insertDefinitions(
+    batch: AssetCandidateBatch,
+    candidates: readonly AssetCandidateVersion[],
+    guard: AssetCandidateInsertGuard,
+  ): Promise<AssetCandidateInsertResult>
+  ingestSource(input: ArchivedWebSnapshotInput): Promise<{ readonly sourceId: Uuid; readonly reviewState: string }>
+  saveRule(workspaceId: Uuid, input: SaveRuleCandidateInput): Promise<RuleCandidateVersion>
+  saveAction(workspaceId: Uuid, input: SaveActionCandidateInput): Promise<ActionCandidateVersion>
 }
 
 type ReceiptEntry = SubmitCandidatesReceipt['accepted'][number]
@@ -177,6 +215,8 @@ export class CandidateSubmissionService implements CandidateSubmissionPort {
   readonly #newId: () => string
   readonly #budget: BudgetLedgerPort | undefined
   readonly #ledgerIdFor: ((runId: Uuid) => Uuid) | undefined
+  readonly #runBinding: CandidateRunBindingPort | undefined
+  readonly #commit: CandidateCommitPort | undefined
 
   constructor(dependencies: CandidateSubmissionDependencies) {
     this.#deps = dependencies
@@ -186,8 +226,13 @@ export class CandidateSubmissionService implements CandidateSubmissionPort {
     this.#newId = dependencies.newId ?? (() => globalThis.crypto.randomUUID())
     this.#budget = dependencies.budget
     this.#ledgerIdFor = dependencies.ledgerIdFor
+    this.#runBinding = dependencies.runBinding
+    this.#commit = dependencies.commit
     if (this.#budget !== undefined && this.#ledgerIdFor === undefined) {
       throw new SubmitCandidatesError('INVALID_COMMAND', 'a candidate budget needs a ledger-id resolver')
+    }
+    if (this.#commit !== undefined && this.#runBinding === undefined) {
+      throw new SubmitCandidatesError('INVALID_COMMAND', 'the atomic commit port needs the run binding port')
     }
   }
 
@@ -198,7 +243,12 @@ export class CandidateSubmissionService implements CandidateSubmissionPort {
     return record?.receipt
   }
 
-  async submit(scopeRef: ScopeRef, request: SubmitCandidatesRequest, ctx: ToolContext): Promise<SubmitCandidatesReceipt> {
+  async submit(
+    scopeRef: ScopeRef,
+    request: SubmitCandidatesRequest,
+    ctx: ToolContext,
+    options: { readonly fence?: CandidateDispatchFence } = {},
+  ): Promise<SubmitCandidatesReceipt> {
     const scope = scopeOf(ctx)
     assertScope(scope, scopeRef)
     const command = request.command
@@ -219,8 +269,17 @@ export class CandidateSubmissionService implements CandidateSubmissionPort {
       return { ...structuredClone(existing.receipt), replayed: true }
     }
 
-    const workspace = await this.#deps.workspaces.getWorkspace(scope, command.workspaceId, ctx)
-    if (workspace === undefined) throw new SubmitCandidatesError('SCOPE_MISMATCH', `workspace ${command.workspaceId} is not visible in this scope`)
+    // ① Resolve the run's frozen binding (design §7, S08). When the atomic commit port is mounted the
+    // target workspace and the pinned draft come from the run — never from the model's command and
+    // never from "the latest draft". A command aimed at another workspace, or a moved draft, is
+    // refused rather than retargeted.
+    const binding = await this.#resolveBinding(scope, request, ctx)
+    const workspaceId = binding?.workspaceId ?? command.workspaceId
+    if (binding !== undefined && command.workspaceId !== binding.workspaceId) {
+      throw new SubmitCandidatesError('SCOPE_MISMATCH', 'a candidate command must target the run-bound workspace')
+    }
+    const workspace = await this.#deps.workspaces.getWorkspace(scope, workspaceId, ctx)
+    if (workspace === undefined) throw new SubmitCandidatesError('SCOPE_MISMATCH', `workspace ${workspaceId} is not visible in this scope`)
     if (workspace.state === 'archived') throw new SubmitCandidatesError('SCOPE_MISMATCH', 'an archived workspace cannot receive candidates')
     await this.#assertFence(request.runId, ctx)
 
@@ -238,7 +297,7 @@ export class CandidateSubmissionService implements CandidateSubmissionPort {
     for (const candidate of prepared) {
       try {
         const evidence = await this.#deps.evidence.resolve(
-          { workspaceId: command.workspaceId, runId: request.runId, evidence: candidate.submission.evidence },
+          { workspaceId, runId: request.runId, evidence: candidate.submission.evidence },
           ctx,
         )
         resolvedByIndex.set(candidate.submissionIndex, evidence)
@@ -251,8 +310,9 @@ export class CandidateSubmissionService implements CandidateSubmissionPort {
       }
     }
 
-    const draft = await readLatestWorkspaceDraft(this.#deps.workspaces, scope, command.workspaceId, ctx)
-    if (draft === undefined) throw new SubmitCandidatesError('SCOPE_MISMATCH', 'the workspace has no pinned document set')
+    // ② continued: the fixed draft the run was admitted against (or, on the legacy path, the latest
+    // draft). The build below never re-reads a newer draft to replace the run input.
+    const draft = await this.#resolveDraft(scope, workspaceId, binding, ctx)
     const recordedAt = this.#now()
 
     // Reserve this submission's candidate units on the run's one ledger before any write. The
@@ -260,37 +320,84 @@ export class CandidateSubmissionService implements CandidateSubmissionPort {
     // submissions cannot jointly exceed `candidateLimit`.
     const candidateReservationId = await this.#reserveCandidates(request, command.candidates.length, ctx)
 
-    const accepted: ReceiptEntry[] = []
-    const links: CandidateSubmissionRecord['links'][number][] = []
-
-    const definitionEntries = prepared.filter((candidate) => candidate.submission.kind === 'definition' && resolvedByIndex.has(candidate.submissionIndex))
-    if (definitionEntries.length > 0) {
-      const built = await this.#submitDefinitions(workspace, draft, definitionEntries, resolvedByIndex, request, recordedAt, ctx)
-      accepted.push(...built.accepted)
-      links.push(...built.links)
+    const build = async (writer: CandidateWriter): Promise<{ accepted: ReceiptEntry[]; links: CandidateSubmissionRecord['links'][number][] }> => {
+      const accepted: ReceiptEntry[] = []
+      const links: CandidateSubmissionRecord['links'][number][] = []
+      const definitionEntries = prepared.filter((candidate) => candidate.submission.kind === 'definition' && resolvedByIndex.has(candidate.submissionIndex))
+      if (definitionEntries.length > 0) {
+        const built = await this.#submitDefinitions(writer, workspace, draft, definitionEntries, resolvedByIndex, request, recordedAt, ctx)
+        accepted.push(...built.accepted)
+        links.push(...built.links)
+      }
+      for (const candidate of prepared) {
+        const evidence = resolvedByIndex.get(candidate.submissionIndex)
+        if (evidence === undefined || candidate.submission.kind === 'definition') continue
+        try {
+          const result = await this.#submitNonDefinition(writer, candidate, evidence, workspace, draft, request, recordedAt)
+          accepted.push(result.entry)
+          links.push(...result.links)
+        } catch (error) {
+          rejected.push({
+            submissionIndex: candidate.submissionIndex,
+            code: error instanceof SubmitCandidatesError ? error.code : 'STORE_FAILED',
+            message: error instanceof Error ? error.message : 'the candidate could not be written',
+          })
+        }
+      }
+      return { accepted, links }
     }
 
-    for (const candidate of prepared) {
-      const evidence = resolvedByIndex.get(candidate.submissionIndex)
-      if (evidence === undefined || candidate.submission.kind === 'definition') continue
+    // ⑤ Atomic path: one fence-checked transaction writes the candidates, their links and the
+    // receipt, so a cancel/lease race or a crash between them can never leave an orphan candidate.
+    if (this.#commit !== undefined && binding !== undefined) {
+      const ledgerId = this.#ledgerIdFor?.(request.runId)
+      const commitRequest = {
+        runId: request.runId,
+        idempotencyKey: request.idempotencyKey,
+        commandDigest,
+        binding,
+        ...(options.fence === undefined ? {} : { fence: options.fence }),
+        ...(ledgerId === undefined || candidateReservationId === undefined ? {} : { ledgerId, reservationId: candidateReservationId }),
+      }
       try {
-        const result = await this.#submitNonDefinition(candidate, evidence, workspace, draft, request, recordedAt, ctx)
-        accepted.push(result.entry)
-        links.push(...result.links)
-      } catch (error) {
-        rejected.push({
-          submissionIndex: candidate.submissionIndex,
-          code: error instanceof SubmitCandidatesError ? error.code : 'STORE_FAILED',
-          message: error instanceof Error ? error.message : 'the candidate could not be written',
+        const stored = await this.#commit.commit(scope, commitRequest, ctx, async (tx) => {
+          const { accepted, links } = await build(this.#commitWriter(tx, ctx))
+          const record: CandidateSubmissionRecord = {
+            schemaVersion: 'candidate-submission-record@1',
+            runId: request.runId,
+            workspaceId: binding.workspaceId,
+            idempotencyKey: request.idempotencyKey,
+            commandDigest,
+            receipt: {
+              schemaVersion: 'submit-candidates-receipt@1', runId: request.runId, workspaceId: binding.workspaceId,
+              commandDigest, accepted, rejected: [...rejected], replayed: false, recordedAt,
+            },
+            links,
+            createdBy: ctx.principal.subjectId,
+            recordedAt,
+          }
+          await tx.record(record)
+          return record
         })
+        await this.#settleCandidates(request.runId, candidateReservationId, stored.record.receipt.accepted, command.candidates.length, ctx)
+        return stored.replayed ? { ...structuredClone(stored.record.receipt), replayed: true } : stored.record.receipt
+      } catch (error) {
+        // The transaction rolled back, so no candidate was left behind; release the reservation
+        // instead of leaking it, then surface the classified reason.
+        await this.#settleCandidates(request.runId, candidateReservationId, [], command.candidates.length, ctx)
+        if (error instanceof CandidateCommitError) {
+          throw new SubmitCandidatesError(commitDenialCode(error.code), error.message, { cause: error })
+        }
+        throw error
       }
     }
 
     await this.#assertFence(request.runId, ctx)
+    const { accepted, links } = await build(this.#legacyWriter(scope, ctx))
     const receipt: SubmitCandidatesReceipt = {
       schemaVersion: 'submit-candidates-receipt@1',
       runId: request.runId,
-      workspaceId: command.workspaceId,
+      workspaceId,
       commandDigest,
       accepted,
       rejected,
@@ -300,7 +407,7 @@ export class CandidateSubmissionService implements CandidateSubmissionPort {
     const record: CandidateSubmissionRecord = {
       schemaVersion: 'candidate-submission-record@1',
       runId: request.runId,
-      workspaceId: command.workspaceId,
+      workspaceId,
       idempotencyKey: request.idempotencyKey,
       commandDigest,
       receipt,
@@ -311,6 +418,73 @@ export class CandidateSubmissionService implements CandidateSubmissionPort {
     const stored = await this.#deps.receipts.record(scope, { record }, ctx)
     await this.#settleCandidates(request.runId, candidateReservationId, accepted, command.candidates.length, ctx)
     return stored.replayed ? { ...structuredClone(stored.record.receipt), replayed: true } : receipt
+  }
+
+  /** Resolve the run's frozen binding, refusing a run that is not an admitted research run. */
+  async #resolveBinding(scope: ScopeRef, request: SubmitCandidatesRequest, ctx: ToolContext): Promise<CandidateRunBinding | undefined> {
+    if (this.#runBinding === undefined) return undefined
+    const binding = await this.#runBinding.resolve(scope, request.runId, ctx)
+    if (binding === undefined || binding.runId !== request.runId) {
+      throw new SubmitCandidatesError('SCOPE_MISMATCH', 'the run has no frozen research binding and cannot author candidates')
+    }
+    return binding
+  }
+
+  /** The fixed draft the run was admitted against; on the legacy path, the latest draft. */
+  async #resolveDraft(scope: ScopeRef, workspaceId: Uuid, binding: CandidateRunBinding | undefined, ctx: ToolContext): Promise<Draft> {
+    if (binding === undefined) {
+      const latest = await readLatestWorkspaceDraft(this.#deps.workspaces, scope, workspaceId, ctx)
+      if (latest === undefined) throw new SubmitCandidatesError('SCOPE_MISMATCH', 'the workspace has no pinned document set')
+      return latest
+    }
+    const pinned = await this.#deps.workspaces.getDraft(scope, workspaceId, binding.draftRevision, ctx)
+    if (pinned === undefined || pinned.digest !== binding.draftDigest) {
+      throw new SubmitCandidatesError('FENCE_STALE', 'the run draft moved since the run was admitted; reopen the run instead of submitting again')
+    }
+    return pinned
+  }
+
+  #legacyWriter(scope: ScopeRef, ctx: ToolContext): CandidateWriter {
+    const deps = this.#deps
+    return {
+      insertDefinitions: (batch, candidates, guard) => deps.definitionCandidates.insertBatch(scope, batch, candidates, ctx, guard),
+      ingestSource: async (input) => {
+        if (deps.sourceIngestion === undefined) throw new SubmitCandidatesError('STORE_FAILED', 'source proposal is not configured')
+        const source = await deps.sourceIngestion.ingestArchivedWebSnapshot(input, ctx)
+        return { sourceId: source.sourceId, reviewState: source.reviewState }
+      },
+      saveRule: async (workspaceId, input) => {
+        if (deps.ruleActions === undefined) throw new SubmitCandidatesError('STORE_FAILED', 'rule/action submission is not configured')
+        return deps.ruleActions.saveRuleCandidate(workspaceId, input, ctx.principal.subjectId, ctx)
+      },
+      saveAction: async (workspaceId, input) => {
+        if (deps.ruleActions === undefined) throw new SubmitCandidatesError('STORE_FAILED', 'rule/action submission is not configured')
+        return deps.ruleActions.saveActionCandidate(workspaceId, input, ctx.principal.subjectId, ctx)
+      },
+    }
+  }
+
+  #commitWriter(tx: CandidateCommitTransaction, ctx: ToolContext): CandidateWriter {
+    const deps = this.#deps
+    return {
+      insertDefinitions: (batch, candidates, guard) => tx.insertDefinitionBatch(batch, candidates, guard),
+      ingestSource: async (input) => {
+        if (deps.sourceIngestion === undefined) throw new SubmitCandidatesError('STORE_FAILED', 'source proposal is not configured')
+        const source = deps.sourceIngestion.prepareArchivedWebSnapshot(input, ctx)
+        const stored = await tx.putSource({ source, idempotencyKey: input.idempotencyKey })
+        return { sourceId: stored.sourceId, reviewState: stored.reviewState }
+      },
+      saveRule: async (workspaceId, input) => {
+        if (deps.ruleActions === undefined) throw new SubmitCandidatesError('STORE_FAILED', 'rule/action submission is not configured')
+        const version = await deps.ruleActions.prepareRuleCandidate(workspaceId, input, ctx.principal.subjectId, ctx)
+        return tx.insertRuleCandidate(version)
+      },
+      saveAction: async (workspaceId, input) => {
+        if (deps.ruleActions === undefined) throw new SubmitCandidatesError('STORE_FAILED', 'rule/action submission is not configured')
+        const version = await deps.ruleActions.prepareActionCandidate(workspaceId, input, ctx.principal.subjectId, ctx)
+        return tx.insertActionCandidate(version)
+      },
+    }
   }
 
   /**
@@ -425,6 +599,7 @@ export class CandidateSubmissionService implements CandidateSubmissionPort {
   }
 
   async #submitDefinitions(
+    writer: CandidateWriter,
     workspace: { readonly workspaceId: Uuid; readonly boundary: IndustryWorkspaceBoundary; readonly latestPublishedPackRef?: VersionRef },
     draft: Draft,
     entries: readonly PreparedCandidate[],
@@ -469,7 +644,7 @@ export class CandidateSubmissionService implements CandidateSubmissionPort {
       createdBy: ctx.principal.subjectId, recordedAt,
     }
     const guard: AssetCandidateInsertGuard = { expectedWorkspaceRevision: draft.revision, currentCandidatePins: pinsOf(history) }
-    const inserted = await this.#deps.definitionCandidates.insertBatch(scope, batch, built, ctx, guard)
+    const inserted = await writer.insertDefinitions(batch, built, guard)
     const accepted = built.map((candidate, ordinal) => ({
       submissionIndex: entries[ordinal]?.submissionIndex ?? ordinal,
       candidateId: candidate.candidateId,
@@ -484,20 +659,19 @@ export class CandidateSubmissionService implements CandidateSubmissionPort {
   }
 
   async #submitNonDefinition(
+    writer: CandidateWriter,
     candidate: PreparedCandidate,
     evidence: readonly ResolvedCandidateEvidence[],
     workspace: { readonly workspaceId: Uuid },
     draft: Draft,
     request: SubmitCandidatesRequest,
     recordedAt: Rfc3339UtcTimestamp,
-    ctx: ToolContext,
   ): Promise<{ entry: ReceiptEntry; links: CandidateSubmissionRecord['links'][number][] }> {
     const submission = candidate.submission
     if (submission.kind === 'source') {
-      if (this.#deps.sourceIngestion === undefined) throw new SubmitCandidatesError('STORE_FAILED', 'source proposal is not configured')
       const page = evidence.find((item) => item.url !== undefined)
       if (page === undefined || page.url === undefined) throw new SubmitCandidatesError('EVIDENCE_NOT_AUTHORIZED', 'a source candidate requires an archived web page evidence')
-      const source = await this.#deps.sourceIngestion.ingestArchivedWebSnapshot({
+      const source = await writer.ingestSource({
         workspaceId: workspace.workspaceId,
         url: page.url,
         ...(submission.title === undefined ? {} : { title: submission.title }),
@@ -508,20 +682,19 @@ export class CandidateSubmissionService implements CandidateSubmissionPort {
         contentRef: page.sourceRef,
         contentDigest: page.contentDigest,
         idempotencyKey: bound(request.idempotencyKey, `#source:${String(candidate.submissionIndex)}`),
-      }, ctx)
+      })
       return {
         entry: { submissionIndex: candidate.submissionIndex, candidateId: source.sourceId, kind: 'source', state: source.reviewState, pendingConfirmation: true, issues: [], sourceRefs: evidence.map((item) => item.sourceRef) },
         links: this.#links(source.sourceId, 'source', candidate.submissionIndex, evidence, recordedAt),
       }
     }
-    if (this.#deps.ruleActions === undefined) throw new SubmitCandidatesError('STORE_FAILED', 'rule/action submission is not configured')
     if (evidence.some((item) => !sourceTrustTierGroundsPublication(item.trustTier))) {
       throw new SubmitCandidatesError('SOURCE_TRUST_BLOCKED', 'a rule/action candidate requires every source to be approved before it can be proposed')
     }
     const sourceRefs = evidence.map((item) => item.sourceRef)
     const sourceSpans = evidence.flatMap((item) => (item.sourceSpan === undefined ? [] : [item.sourceSpan]))
     if (submission.kind === 'rule') {
-      const version = await this.#deps.ruleActions.saveRuleCandidate(workspace.workspaceId, {
+      const version = await writer.saveRule(workspace.workspaceId, {
         displayName: submission.payload.ruleId, businessMeaning: submission.reason, suggestedReason: submission.reason,
         ruleId: submission.payload.ruleId, applicability: submission.payload.applicability,
         condition: submission.payload.condition, exceptions: submission.payload.exceptions,
@@ -530,17 +703,17 @@ export class CandidateSubmissionService implements CandidateSubmissionPort {
         ...(submission.payload.dependencyRefs === undefined ? {} : { dependencyRefs: submission.payload.dependencyRefs }),
         sourceRefs, sourceSpans, expectedRevision: draft.revision,
         idempotencyKey: bound(request.idempotencyKey, `#rule:${String(candidate.submissionIndex)}`),
-      }, ctx.principal.subjectId, ctx)
+      })
       return {
         entry: { submissionIndex: candidate.submissionIndex, candidateId: version.candidateId, kind: 'rule', state: version.lifecycle, pendingConfirmation: false, issues: [], sourceRefs },
         links: this.#links(version.candidateId, 'rule', candidate.submissionIndex, evidence, recordedAt),
       }
     }
     if (submission.kind !== 'action') throw new SubmitCandidatesError('INVALID_COMMAND', 'the submission is not an action candidate')
-    const version = await this.#deps.ruleActions.saveActionCandidate(workspace.workspaceId, {
+    const version = await writer.saveAction(workspace.workspaceId, {
       declaration: submission.declaration, sourceRefs, sourceSpans, expectedRevision: draft.revision,
       idempotencyKey: bound(request.idempotencyKey, `#action:${String(candidate.submissionIndex)}`),
-    }, ctx.principal.subjectId, ctx)
+    })
     return {
       entry: { submissionIndex: candidate.submissionIndex, candidateId: version.candidateId, kind: 'action', state: version.lifecycle, pendingConfirmation: false, issues: [], sourceRefs },
       links: this.#links(version.candidateId, 'action', candidate.submissionIndex, evidence, recordedAt),
@@ -595,6 +768,23 @@ function permissionDenial(submission: CandidateSubmission, roles: readonly strin
   return roles.some((role) => EDITOR_ROLES.includes(role))
     ? undefined
     : `proposing a ${submission.kind} candidate requires an editor or platform-admin role`
+}
+
+/** Project an atomic-commit fence denial onto the command's stable rejection code. */
+function commitDenialCode(code: CandidateCommitError['code']): SubmitCandidatesError['code'] {
+  switch (code) {
+    case 'RUN_CANCELLED':
+    case 'LEASE_LOST':
+    case 'AUTHORIZATION_REVOKED':
+    case 'DRAFT_CHANGED':
+      return 'FENCE_STALE'
+    case 'BUDGET_EXHAUSTED':
+      return 'CANDIDATE_LIMIT_EXCEEDED'
+    case 'SCOPE_MISMATCH':
+      return 'SCOPE_MISMATCH'
+    case 'STORE_FAILED':
+      return 'STORE_FAILED'
+  }
 }
 
 function assertScope(scope: ScopeRef, scopeRef: ScopeRef): void {

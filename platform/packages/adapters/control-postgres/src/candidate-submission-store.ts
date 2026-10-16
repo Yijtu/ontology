@@ -1,4 +1,4 @@
-import type { QueryResultRow } from 'pg'
+import type { PoolClient, QueryResultRow } from 'pg'
 import { CandidateSubmissionStoreError, isToolContext } from '@ontology/contracts'
 import type {
   CandidateSourceLink,
@@ -96,19 +96,26 @@ export class PostgresCandidateSubmissionStore implements CandidateSubmissionStor
     scopeRef: ScopeRef,
     input: { readonly runId: Uuid; readonly idempotencyKey: string },
     ctx: ToolContext,
+    client?: PoolClient,
   ): Promise<CandidateSubmissionRecord | undefined> {
     return this.#withScope(scopeRef, ctx, async (query) => {
       const row = await this.#receiptByKey(query, input.runId, input.idempotencyKey)
       if (row === undefined) return undefined
       const links = await this.#linksForRecord(query, row)
       return toRecord(row, links)
-    })
+    }, client)
   }
 
+  /**
+   * Persist the idempotent receipt and its candidate↔source links. When `client` is supplied the
+   * write joins that already-open transaction (the atomic candidate commit), so the receipt and the
+   * candidate rows are all-or-nothing; otherwise it opens its own scoped transaction.
+   */
   async record(
     scopeRef: ScopeRef,
     input: { readonly record: CandidateSubmissionRecord },
     ctx: ToolContext,
+    client?: PoolClient,
   ): Promise<{ readonly record: CandidateSubmissionRecord; readonly replayed: boolean }> {
     return this.#withScope(scopeRef, ctx, async (query) => {
       const record = input.record
@@ -155,7 +162,7 @@ export class PostgresCandidateSubmissionStore implements CandidateSubmissionStor
         )
       }
       return { record, replayed: false }
-    })
+    }, client)
   }
 
   async listLinksForCandidate(
@@ -250,20 +257,27 @@ export class PostgresCandidateSubmissionStore implements CandidateSubmissionStor
     return result.rows.map(toLink)
   }
 
-  async #withScope<T>(scopeRef: ScopeRef, ctx: ToolContext, run: (query: ScopedQuery) => Promise<T>): Promise<T> {
+  async #withScope<T>(
+    scopeRef: ScopeRef,
+    ctx: ToolContext,
+    run: (query: ScopedQuery) => Promise<T>,
+    client?: PoolClient,
+  ): Promise<T> {
     if (!isToolContext(ctx)) throw new CandidateSubmissionStoreError('SCOPE_MISMATCH', 'a host-minted trusted tool context is required')
     if (ctx.allowedResources.tenantId !== ctx.principal.tenantId) throw new CandidateSubmissionStoreError('SCOPE_MISMATCH', 'trusted context carries inconsistent tenant scope')
     if (scopeRef.tenantId !== ctx.principal.tenantId || scopeRef.spaceId !== ctx.allowedResources.spaceId) {
       throw new CandidateSubmissionStoreError('SCOPE_MISMATCH', 'request scope does not match the trusted principal scope')
     }
-    return this.#database.withIdentityScope({ tenantId: scopeRef.tenantId, spaceId: scopeRef.spaceId }, async (client) => {
-      await client.query("SELECT set_config('app.trace_id', $1, true)", [ctx.traceId])
-      return run({
-        query: async <Row extends QueryResultRow>(text: string, values?: readonly unknown[]) => {
-          const result = await client.query<Row>(text, values === undefined ? undefined : [...values])
-          return { rows: result.rows, rowCount: result.rowCount ?? 0 }
-        },
-      })
+    const scoped = (target: PoolClient): ScopedQuery => ({
+      query: async <Row extends QueryResultRow>(text: string, values?: readonly unknown[]) => {
+        const result = await target.query<Row>(text, values === undefined ? undefined : [...values])
+        return { rows: result.rows, rowCount: result.rowCount ?? 0 }
+      },
+    })
+    if (client !== undefined) return run(scoped(client))
+    return this.#database.withIdentityScope({ tenantId: scopeRef.tenantId, spaceId: scopeRef.spaceId }, async (connection) => {
+      await connection.query("SELECT set_config('app.trace_id', $1, true)", [ctx.traceId])
+      return run(scoped(connection))
     })
   }
 }

@@ -1,4 +1,4 @@
-import type { QueryResultRow } from 'pg'
+import type { PoolClient, QueryResultRow } from 'pg'
 import {
   AssetCandidateStoreError,
   assertAssetCandidateBatchShape,
@@ -141,6 +141,7 @@ export class PostgresAssetCandidateStore implements AssetCandidateStore {
     candidates: readonly AssetCandidateVersion[],
     ctx: ToolContext,
     guard?: AssetCandidateInsertGuard,
+    client?: PoolClient,
   ): Promise<AssetCandidateInsertResult> {
     assertAssetCandidateBatchShape(batch)
     for (const candidate of candidates) assertAssetCandidateVersionShape(candidate)
@@ -269,7 +270,7 @@ export class PostgresAssetCandidateStore implements AssetCandidateStore {
       }
       const stored = await this.#candidatesOfBatch(query, batch.batchId)
       return { batch, candidates: stored, created: true }
-    })
+    }, client)
   }
 
   async getBatch(
@@ -434,6 +435,7 @@ export class PostgresAssetCandidateStore implements AssetCandidateStore {
     scopeRef: ScopeRef,
     ctx: ToolContext,
     run: (query: ScopedQuery) => Promise<T>,
+    client?: PoolClient,
   ): Promise<T> {
     if (!isToolContext(ctx)) {
       throw new AssetCandidateStoreError('SCOPE_MISMATCH', 'a host-minted trusted tool context is required')
@@ -447,13 +449,13 @@ export class PostgresAssetCandidateStore implements AssetCandidateStore {
     ) {
       throw new AssetCandidateStoreError('SCOPE_MISMATCH', 'request scope does not match the trusted principal scope')
     }
-    return this.#database.withIdentityScope({ tenantId, spaceId }, async (client) =>
-      run({
-        query: async <Row extends QueryResultRow>(text: string, values?: readonly unknown[]) => {
-          const result = await client.query<Row>(text, values === undefined ? undefined : [...values])
-          return { rows: result.rows, rowCount: result.rowCount ?? 0 }
-        },
-      }),
-    )
+    const scoped = (target: PoolClient): ScopedQuery => ({
+      query: async <Row extends QueryResultRow>(text: string, values?: readonly unknown[]) => {
+        const result = await target.query<Row>(text, values === undefined ? undefined : [...values])
+        return { rows: result.rows, rowCount: result.rowCount ?? 0 }
+      },
+    })
+    if (client !== undefined) return run(scoped(client))
+    return this.#database.withIdentityScope({ tenantId, spaceId }, (connection) => run(scoped(connection)))
   }
 }

@@ -1,6 +1,7 @@
 import { AuthoringCommandError, assertCommandCallShape } from '@ontology/contracts'
 import type {
   AuthoringCommandGateway,
+  CandidateDispatchFence,
   CommandCall,
   CommandReceipt,
   ScopeRef,
@@ -16,9 +17,15 @@ import type { CandidateSubmissionService } from './service'
  * outcome. It mints the host envelope — the run id, the logical action and the idempotency key —
  * from trusted context + the command content digest, never from the model, so a crash-replay of the
  * same command returns the original receipt instead of writing a second candidate (design §7).
+ *
+ * When the host supplies a durable dispatch fence, the gateway forwards it so the atomic commit can
+ * reject a worker that lost its lease before it writes a candidate (design §7, S08).
  */
 export class CandidateAuthoringCommandGateway implements AuthoringCommandGateway {
-  constructor(readonly service: CandidateSubmissionService) {}
+  constructor(
+    readonly service: CandidateSubmissionService,
+    readonly fenceFor?: (ctx: ToolContext) => CandidateDispatchFence | undefined,
+  ) {}
 
   async invoke(command: CommandCall, ctx: ToolContext): Promise<CommandReceipt> {
     try {
@@ -29,12 +36,13 @@ export class CandidateAuthoringCommandGateway implements AuthoringCommandGateway
     const scope: ScopeRef = { tenantId: ctx.principal.tenantId, spaceId: ctx.allowedResources.spaceId }
     const commandDigest = sha256DigestOf(canonicalJson(command.command))
     const idempotencyKey = `submit:${sha256DigestOf(canonicalJson({ runId: ctx.runId, commandDigest }))}`
+    const fence = this.fenceFor?.(ctx)
     const receipt = await this.service.submit(scope, {
       command: command.command,
       runId: ctx.runId,
       logicalActionId: command.callId,
       idempotencyKey,
-    }, ctx)
+    }, ctx, fence === undefined ? {} : { fence })
     return toCommandReceipt(command.callId, command.commandKind, receipt)
   }
 }
