@@ -36,6 +36,8 @@ export interface OntologyWorkspacePanelProps {
   readonly initialWorkspaceId?: string
   readonly onSelectWorkspace?: (workspaceId: string | undefined) => void
   readonly onWorkspaceCreated?: (workspace: IndustryWorkspace) => void
+  /** Jumps to AI settings so the first-screen guidance can point at a missing model/search config. */
+  readonly onConfigureModel?: () => void
 }
 
 export interface WorkspaceCreateFields {
@@ -167,6 +169,7 @@ export function OntologyWorkspacePanel({
   initialWorkspaceId,
   onSelectWorkspace,
   onWorkspaceCreated,
+  onConfigureModel,
 }: OntologyWorkspacePanelProps) {
   const [stage, setStage] = useState('sources')
   const [stageRefresh, setStageRefresh] = useState(0)
@@ -201,7 +204,13 @@ export function OntologyWorkspacePanel({
   const [error, setError] = useState<WorkbenchError | undefined>(undefined)
   const [selectedId, setSelectedId] = useState<string | undefined>(undefined)
   const [drafts, setDrafts] = useState<readonly AssetDraftVersion[]>([])
-  const [fields, setFields] = useState<WorkspaceCreateFields>(EMPTY_CREATE_FIELDS)
+  // The first screen already asked for the business goal; it arrives as `?goal=` and pre-fills the
+  // create form so the user never retypes it, then becomes the modelling-assistant task.
+  const [fields, setFields] = useState<WorkspaceCreateFields>(() => {
+    if (typeof window === 'undefined') return EMPTY_CREATE_FIELDS
+    const goal = new URLSearchParams(window.location.search).get('goal')
+    return goal === null || goal.trim().length === 0 ? EMPTY_CREATE_FIELDS : { ...EMPTY_CREATE_FIELDS, goals: goal }
+  })
   const [moreSettingsOpen, setMoreSettingsOpen] = useState(false)
   const namespaceTouched = useRef(false)
   const [fieldErrors, setFieldErrors] = useState<Readonly<Record<string, string>>>({})
@@ -678,7 +687,10 @@ export function OntologyWorkspacePanel({
               client={client}
               workspaceId={selected.workspaceId}
               readOnly={readOnly}
+              workspaceGoal={selected.boundary.goals.join('；')}
+              mustCover={selected.boundary.goals.map((name, index) => ({ kind: `workspace_goal_${index + 1}`, name }))}
               {...(researchId === undefined ? {} : { initialResearchId: researchId })}
+              {...(onConfigureModel === undefined ? {} : { onConfigureModel, onConfigureSearch: onConfigureModel })}
               onResearchChanged={syncResearchId}
               onOpenGeneration={() => { setResearchOpen(false); openStage("review") }}
             />
