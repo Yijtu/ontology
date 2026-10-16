@@ -108,6 +108,23 @@ export type { CoreLocalComposition, CoreLocalCompositionOptions } from './compos
 export { createCoreWebSearchProvider } from './composition/core-web-search'
 export type { CoreWebSearchOptions } from './composition/core-web-search'
 export {
+  SEARCH_TOOL_ID,
+  createCoreSearchBinding,
+  intersectAllowedDomains,
+} from './composition/core-tool-search-binding'
+export type {
+  CoreSearchBinding,
+  CoreSearchBindingDependencies,
+  ToolSearchBlockedReason,
+  ToolSearchResolution,
+} from './composition/core-tool-search-binding'
+export { createCoreResearchPreflight } from './composition/core-research-preflight'
+export type {
+  CoreResearchPreflight,
+  CoreResearchPreflightDependencies,
+  ResearchPreflightInput,
+} from './composition/core-research-preflight'
+export {
   CORE_MOUNTED_TASK_KINDS,
   coreScenarioTaskBindings,
   coreTaskBindingRef,

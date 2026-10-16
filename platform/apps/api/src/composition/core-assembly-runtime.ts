@@ -15,8 +15,12 @@ import { DEFAULT_VERIFICATION_POLICY, SCHEMA_DOCUMENTS, TOOL_CATALOGUE, projectC
 import type { DocumentParserPort, ProjectRevision, RuntimeAdapter, RuntimeCapabilityContext, RuntimeCapabilityFactoryPort, RuntimeCapabilitySet, RuntimeSelectorPort, ScopeRef, ToolContext, Uuid, VersionRef, WorkflowDispatchFence } from '@ontology/contracts'
 import type { RunProfileBinder } from '@ontology/application'
 import { canonicalJson } from '@ontology/tool-services'
+import { WebSearchHandler } from '@ontology/tool-services'
+import type { ToolHandler } from '@ontology/tool-services'
 import { RunProgressService } from '../http/run-progress'
-import { COMPONENT_VERSION, CORE_EFFECTIVE_LIMITS_REF, CORE_TYPED_RESULT_SCHEMA_REF, WORKER_RUN_ID } from './core-constants'
+import { COMPONENT_VERSION, CORE_EFFECTIVE_LIMITS_REF, CORE_TYPED_RESULT_SCHEMA_REF, WEB_SEARCH_SOURCE_REF, WORKER_RUN_ID } from './core-constants'
+import { createCoreSearchBinding } from './core-tool-search-binding'
+import type { CoreSearchBinding } from './core-tool-search-binding'
 import { CoreCapabilityError, DISABLED_GENERATION, disabledDecision } from './core-errors'
 import { versionRefKey } from './core-composition-shared'
 import { sha256DigestOf } from '@ontology/core'
@@ -58,6 +62,7 @@ export async function assembleRuntimePipeline(
     terminology, normalApprovedInputs, projectEvolutionCell, modelCapabilities, modelEnvironment, hostClock, allSourceRefs,
     profileResolver, semanticDefinitions, modelBindingRuntime, runModelBinder, modelBindingService, modelBindingStore, modelConnectionStore,
     deploymentModelCapabilities,
+    toolBindingService, toolConnectionStore, toolCredentialCustodian,
   } = state
   const { mappings, structuredImports, rulePremiseVerifier, semanticTasks, relationsTask, facts, multiSchemaSource, projectQuery, gatewayComposition } = query
 
@@ -177,6 +182,18 @@ export async function assembleRuntimePipeline(
     verifier: new TableHardVerificationService({ pages: tableArtifactStore, receipts: tableVerificationStore, progress: tableVerificationStore, artifacts: blobStore, evidence: evidenceStore }) })
   const draftVerifier = new DraftVerificationService({ evidence: evidenceStore, artifacts: blobStore, rulePremises: rulePremiseVerifier, decisionStateRefProvider: state.decisionStateRefProvider,
     policy: { ...DEFAULT_VERIFICATION_POLICY, semanticReview: 'disabled' } })
+  // The effective `web_search` tool connection is resolved and pinned per run, then assembled into
+  // the run's *actual* gateway (design §4/§9). A run whose search is unconfigured/disabled/revoked
+  // gets no provider: the handler reports a stable `CAPABILITY_NOT_CONFIGURED` instead of a 404 or a
+  // silent fall-through to another connection.
+  const searchBinding: CoreSearchBinding = createCoreSearchBinding({
+    bindings: toolBindingService,
+    connections: toolConnectionStore,
+    credentials: toolCredentialCustodian,
+    scopeRef,
+    artifacts: gatewayComposition.artifacts,
+    targetScope: { kind: 'space' },
+  })
   const controllerDependencies = {
     runs,
     phase,
@@ -194,7 +211,20 @@ export async function assembleRuntimePipeline(
         if (binding.signal === undefined) throw new CoreCapabilityError('runtime capabilities require the controller execution AbortSignal')
         const run = await runs.getRun(binding.runId, ctx)
         const resolved = await profileResolver.getResolvedProfile({ scopeRef: { tenantId: scopeRef.tenantId, spaceId: scopeRef.spaceId }, profileRef: run.profileRef, snapshotHash: binding.resolvedProfileRef.snapshotHash }, ctx)
-        const gateway = gatewayComposition.forRun({ runId: binding.runId, ledgerId: binding.budgetLedgerId, resolvedProfile: resolved.resolved, operations: compute.registry })
+        // Resolve the run's pinned public search and mount it on this run's gateway. A blocked or
+        // failed resolution yields a handler with no provider (a stable capability error), never a
+        // 404 and never another connection.
+        const search = await searchBinding.resolveForRun(binding.runId, ctx).catch((): { state: 'blocked' } => ({ state: 'blocked' }))
+        const webSearchHandler: ToolHandler = new WebSearchHandler({
+          ...(search.state === 'available' ? { provider: search.provider } : {}),
+          allowWeb: run.preferences.allowWeb,
+          resolvedProfile: resolved.resolved,
+          sourceRef: WEB_SEARCH_SOURCE_REF,
+        })
+        const gateway = gatewayComposition.forRun(
+          { runId: binding.runId, ledgerId: binding.budgetLedgerId, resolvedProfile: resolved.resolved, operations: compute.registry },
+          [webSearchHandler],
+        )
         // A run's model is the one fixed at accept time (design §5.3): read the persisted binding
         // back, never re-resolve a default. A revoked binding fails closed (`blocked` disables the
         // port) instead of falling through to another model; with no binding at all the legacy
@@ -373,6 +403,6 @@ export async function assembleRuntimePipeline(
     runProfileBinder, runProgress, executionPreflight, runs, phase, planResolver, termLabels, authoring, tableArtifactStore,
     tableVerificationStore, tableResults, draftVerifier, workflowDispatchWorker, jobService, industryWorkspaceService, parser,
     pipeline, structuredExtractionService, handlers, jobWorker, currentProjectRevisions, materializer, outboxConsumer, dispatcher, provenanceRead,
-    researchWorkflow, webSearch,
+    researchWorkflow, webSearch, searchBinding,
   }
 }

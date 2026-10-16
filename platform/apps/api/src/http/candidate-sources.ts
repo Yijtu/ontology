@@ -13,11 +13,14 @@ import type {
   CandidateSourceStore,
   DefinitionCandidateKind,
   ModelingBrief,
+  ResearchLimits,
+  ResearchPreflight,
   ResearchRequest,
   SourceAdmissionCommand,
   SourceAdmissionTableOptions,
   SourceRetractionCommand,
   SourceTrustTier,
+  VersionRef,
   WebSearchFreshnessHint,
 } from '@ontology/contracts'
 import {
@@ -53,8 +56,17 @@ export interface CandidateSourceRouteDependencies {
   readonly sources: CandidateSourceStore
   /** Present only when a web search provider is configured for this deployment. */
   readonly research?: WebResearchService
-  /** The bounded, durable research orchestration; present only when web search is configured. */
+  /** The bounded, durable research orchestration; absent when web search is not configured. */
   readonly researchWorkflow?: ResearchWorkflowService
+  /** The read-only research capability preflight; reports the actual recipient, scope and blocks. */
+  readonly researchPreflight?: (input: {
+    readonly workspaceId: string
+    readonly requestedDomains: readonly string[]
+    readonly limits: ResearchLimits
+    readonly policyRef: VersionRef
+    readonly budgetRef: VersionRef
+    readonly requesterRoles: readonly string[]
+  }) => Promise<ResearchPreflight>
   /** The append-only review/retraction surface; built from `sources` when absent. */
   readonly review?: CandidateSourceReviewService
   /** The retraction store, when it is not the same object as `sources`. */
@@ -126,6 +138,14 @@ function classifiedFrom(error: unknown): never {
     throw Object.assign(new Error(error.message), { code: error.code, httpStatus: error.httpStatus })
   }
   throw error
+}
+
+/**
+ * A stable, classifiable "the research capability is not configured" refusal. The run entry exists
+ * even without a search provider, so it answers 409 with a named reason instead of 404.
+ */
+function capabilityNotConfigured(message: string): never {
+  throw Object.assign(new Error(message), { code: 'CAPABILITY_NOT_CONFIGURED', httpStatus: 409 })
 }
 
 /**
@@ -375,8 +395,16 @@ export function registerCandidateSourceRoutes(
     )
   }
 
-  if (dependencies.researchWorkflow !== undefined) {
+  // The async research-run entry exists even when no search provider is configured, so a caller
+  // always learns *why* it cannot run instead of a misleading 404 (design §10).
+  {
     const workflow = dependencies.researchWorkflow
+    const requireWorkflow = (): ResearchWorkflowService => {
+      if (workflow === undefined) {
+        capabilityNotConfigured('公共搜索/研究编排未配置，无法创建或读取研究任务。')
+      }
+      return workflow
+    }
     // The async entry point: it pins the brief/policy/budget, creates the durable research job and
     // returns 202 with the run. The existing synchronous `POST .../research` above keeps its 201.
     app.post<{ Params: { workspaceId: string } }>(
@@ -385,6 +413,7 @@ export function registerCandidateSourceRoutes(
         const traceId = readTraceId(request)
         const auth = authenticateRequest(dependencies.authenticate, request, reply)
         if (auth === undefined) return reply
+        const active = requireWorkflow()
         const body = request.body
         if (!isRecord(body)) throw new InvalidRequestFieldError('the request body must be a JSON object')
         rejectUnknownFields(body, ['goal', 'allowedResearchDomains', 'freshnessHint', 'targetKinds', 'mustCover', 'sourceLimit', 'candidateLimit', 'deadline'])
@@ -419,7 +448,7 @@ export function registerCandidateSourceRoutes(
           budgetRef: DEFAULT_RESEARCH_BUDGET_REF,
           idempotencyKey: requireIdempotencyKey(request),
         }
-        const execution = await workflow.start(researchRequest, contextFor(auth, traceId, workspaceId, brief.allowedResearchDomains))
+        const execution = await active.start(researchRequest, contextFor(auth, traceId, workspaceId, brief.allowedResearchDomains))
           .catch((error: unknown) => classifiedFrom(error))
         reply.status(202).send({ data: { researchId: execution.researchId, jobId: execution.jobId, execution }, meta: { traceId } })
         return reply
@@ -432,8 +461,9 @@ export function registerCandidateSourceRoutes(
         const traceId = readTraceId(request)
         const auth = authenticateRequest(dependencies.authenticate, request, reply)
         if (auth === undefined) return reply
+        const active = requireWorkflow()
         const workspaceId = request.params.workspaceId
-        const view = await workflow.get(request.params.researchId, contextFor(auth, traceId, workspaceId, []))
+        const view = await active.get(request.params.researchId, contextFor(auth, traceId, workspaceId, []))
           .catch((error: unknown) => classifiedFrom(error))
         reply.status(200).send({ data: view, meta: { traceId } })
         return reply
@@ -446,10 +476,43 @@ export function registerCandidateSourceRoutes(
         const traceId = readTraceId(request)
         const auth = authenticateRequest(dependencies.authenticate, request, reply)
         if (auth === undefined) return reply
+        const active = requireWorkflow()
         const workspaceId = request.params.workspaceId
-        const execution = await workflow.cancel(request.params.researchId, contextFor(auth, traceId, workspaceId, []))
+        const execution = await active.cancel(request.params.researchId, contextFor(auth, traceId, workspaceId, []))
           .catch((error: unknown) => classifiedFrom(error))
         reply.status(200).send({ data: { execution }, meta: { traceId } })
+        return reply
+      },
+    )
+  }
+
+  if (dependencies.researchPreflight !== undefined) {
+    const preflight = dependencies.researchPreflight
+    app.post<{ Params: { workspaceId: string } }>(
+      '/api/v1/industry-workspaces/:workspaceId/research-preflights',
+      async (request, reply) => {
+        const traceId = readTraceId(request)
+        const auth = authenticateRequest(dependencies.authenticate, request, reply)
+        if (auth === undefined) return reply
+        const body = request.body
+        if (!isRecord(body)) throw new InvalidRequestFieldError('the request body must be a JSON object')
+        rejectUnknownFields(body, ['allowedResearchDomains', 'sourceLimit', 'candidateLimit', 'deadline'])
+        const workspaceId = request.params.workspaceId
+        const requestedDomains = Array.isArray(body['allowedResearchDomains'])
+          ? body['allowedResearchDomains'].filter((entry): entry is string => typeof entry === 'string' && entry.length > 0)
+          : []
+        const sourceLimit = readBoundedCount(body['sourceLimit'], 10, 200, 'sourceLimit')
+        const candidateLimit = readBoundedCount(body['candidateLimit'], sourceLimit, 500, 'candidateLimit')
+        const deadline = typeof body['deadline'] === 'string' ? body['deadline'] : new Date(Date.now() + 10 * 60 * 1000).toISOString()
+        const result = await preflight({
+          workspaceId,
+          requestedDomains,
+          limits: { sourceLimit, candidateLimit, deadline },
+          policyRef: DEFAULT_RESEARCH_POLICY_REF,
+          budgetRef: DEFAULT_RESEARCH_BUDGET_REF,
+          requesterRoles: auth.principal.roles,
+        }).catch((error: unknown) => classifiedFrom(error))
+        reply.status(200).send({ data: { preflight: result }, meta: { traceId } })
         return reply
       },
     )
