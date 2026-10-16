@@ -6,32 +6,13 @@ import type {
   Semver,
   Sha256Digest,
   VersionRef,
+  WebContentForm,
   WebSearchFreshnessHint,
+  WebSearchToolPage,
+  WebSnapshotSkipReason,
 } from './generated/contracts'
 import { isRecord, isResourceRef } from './asset-workspace'
 import type { ToolContext } from './trusted'
-
-/**
- * The archived form of the retrieved page bytes. `binary` is a legitimate *discovered* form but
- * not one this reference archiver can derive readable text from, so it is reported as a link
- * only rather than stored as a citable snapshot.
- */
-export type WebContentForm = 'html' | 'text' | 'json' | 'xml' | 'binary'
-
-/**
- * Why a discovered page is a link only and cannot be a formal basis. `archive_not_configured`
- * is set by a provider that has no archiver wired; the rest are per-page retrieval outcomes.
- */
-export type WebSnapshotSkipReason =
-  | 'archive_not_configured'
-  | 'domain_not_allowed'
-  | 'redirect_forbidden'
-  | 'unsupported_content_type'
-  | 'empty_body'
-  | 'download_exceeded'
-  | 'fetch_timeout'
-  | 'http_error'
-  | 'fetch_failed'
 
 /**
  * The enforced bounds and scope of one snapshot archive. These are recorded with the snapshot so
@@ -135,11 +116,21 @@ export interface WebSearchProviderPage {
    * derived text as well as the original bytes.
    */
   readonly snapshotManifestRef?: ResourceRef
+  /** The separately archived derived readable text, when the archiver produced one. */
+  readonly parsedRef?: ResourceRef
+  /** The archived bytes' form, when the archiver reported it. */
+  readonly contentForm?: WebContentForm
   /**
    * Why this discovered page could not be archived (a link only, never a formal basis). Present
    * only when there is no `snapshotRef`, so "found a link" is never mistaken for "can cite it".
    */
   readonly snapshotUnavailableReason?: WebSnapshotSkipReason
+  /**
+   * The archiver's derived-text parser version, present only when the page was archived. It binds
+   * the readable parse to the exact parser revision that produced it (design §6), so a later
+   * parser change is detectable rather than silently applied to an old snapshot.
+   */
+  readonly parserVersion?: Semver
 }
 
 /**
@@ -223,44 +214,11 @@ export function assertWebPageSnapshotManifestShape(value: unknown): asserts valu
 /* ----------------------------------------------------------------------------------------- */
 
 /**
- * A page this run **archived**: the original snapshot is readable and citable. It names the
- * snapshot, its manifest (the parse/derived-text record), the fetch time and the content digest, so
- * the agent can read the real page instead of trusting a snippet.
+ * The tool-result discovery union (`ArchivedPageDiscovery | DiscoveryOnlyPage`, generated from
+ * `schema/tools.schema.json`). An `archived` page names the readable snapshot/manifest/parse the
+ * agent may read as the original; a `discovery_only` page is a link with an explicit reason that
+ * can never ground a candidate claiming the original text supports it.
  */
-export interface ArchivedPageDiscovery {
-  readonly discovery: 'archived'
-  readonly url: string
-  readonly title: NonEmptyString
-  readonly snippet: string
-  readonly fetchedAt: Rfc3339UtcTimestamp
-  readonly publishedAt?: Rfc3339UtcTimestamp
-  readonly contentDigest: Sha256Digest
-  /** The archive parser version the manifest was produced by. */
-  readonly parserVersion: Semver
-  readonly snapshotRef: ResourceRef
-  readonly snapshotManifestRef: ResourceRef
-  /** The separately archived derived text, when the archiver produced one. */
-  readonly parsedRef?: ResourceRef
-  /** The archived bytes' form, when the manifest was already read; the manifest is authoritative. */
-  readonly contentForm?: WebContentForm
-}
-
-/**
- * A page this run **discovered but could not archive**: a link, a snippet and an explicit reason.
- * It can never ground a candidate that claims the original text supports it.
- */
-export interface DiscoveryOnlyPage {
-  readonly discovery: 'discovery_only'
-  readonly url: string
-  readonly title: NonEmptyString
-  readonly snippet: string
-  readonly fetchedAt: Rfc3339UtcTimestamp
-  readonly contentDigest: Sha256Digest
-  readonly unavailableReason: WebSnapshotSkipReason
-}
-
-export type WebSearchToolPage = ArchivedPageDiscovery | DiscoveryOnlyPage
-
 export interface WebSearchToolOutput {
   readonly pages: readonly WebSearchToolPage[]
 }
@@ -284,9 +242,12 @@ export function toWebSearchToolPage(
       fetchedAt: page.fetchedAt,
       ...(page.publishedAt === undefined ? {} : { publishedAt: page.publishedAt }),
       contentDigest: page.contentDigest,
+      contentTrust: 'untrusted_data',
       parserVersion,
       snapshotRef: page.snapshotRef,
       snapshotManifestRef: page.snapshotManifestRef,
+      ...(page.parsedRef === undefined ? {} : { parsedRef: page.parsedRef }),
+      ...(page.contentForm === undefined ? {} : { contentForm: page.contentForm }),
     }
   }
   return {
@@ -296,6 +257,7 @@ export function toWebSearchToolPage(
     snippet: page.snippet,
     fetchedAt: page.fetchedAt,
     contentDigest: page.contentDigest,
+    contentTrust: 'untrusted_data',
     unavailableReason: page.snapshotUnavailableReason ?? 'archive_not_configured',
   }
 }
@@ -308,7 +270,8 @@ export function assertWebSearchToolOutputShape(value: unknown): asserts value is
   for (const page of value['pages']) {
     if (!isRecord(page) || typeof page['url'] !== 'string' || !page['url'].startsWith('https://')
       || !isNonEmptyString(page['title']) || typeof page['snippet'] !== 'string'
-      || typeof page['contentDigest'] !== 'string' || !SHA256_PATTERN.test(page['contentDigest'])) {
+      || typeof page['contentDigest'] !== 'string' || !SHA256_PATTERN.test(page['contentDigest'])
+      || page['contentTrust'] !== 'untrusted_data') {
       throw new Error('invalid web search tool page')
     }
     if (page['discovery'] === 'archived') {

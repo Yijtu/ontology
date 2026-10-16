@@ -756,8 +756,144 @@
         }
       }
     },
+    "WebSnapshotSkipReason": {
+      "title": "WebSnapshotSkipReason",
+      "description": "Why a discovered page is a link only and cannot be a formal basis (design §6).",
+      "type": "string",
+      "enum": [
+        "archive_not_configured",
+        "domain_not_allowed",
+        "redirect_forbidden",
+        "unsupported_content_type",
+        "empty_body",
+        "download_exceeded",
+        "fetch_timeout",
+        "http_error",
+        "fetch_failed"
+      ]
+    },
+    "WebContentForm": {
+      "title": "WebContentForm",
+      "description": "The archived form of the retrieved page bytes. `binary` is discovered but not readable as a citable snapshot.",
+      "type": "string",
+      "enum": ["html", "text", "json", "xml", "binary"]
+    },
+    "ArchivedPageDiscovery": {
+      "title": "ArchivedPageDiscovery",
+      "description": "design §6: a page this run archived. The original snapshot is readable and citable, so the agent reads the real page, never the snippet.",
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "discovery",
+        "url",
+        "title",
+        "snippet",
+        "fetchedAt",
+        "contentDigest",
+        "contentTrust",
+        "parserVersion",
+        "snapshotRef",
+        "snapshotManifestRef"
+      ],
+      "properties": {
+        "discovery": {
+          "const": "archived"
+        },
+        "url": {
+          "type": "string",
+          "format": "uri",
+          "pattern": "^https://",
+          "maxLength": 2048
+        },
+        "title": {
+          "$ref": "./common.schema.json#/$defs/NonEmptyString"
+        },
+        "snippet": {
+          "type": "string",
+          "maxLength": 8192
+        },
+        "publishedAt": {
+          "$ref": "./common.schema.json#/$defs/Rfc3339UtcTimestamp"
+        },
+        "fetchedAt": {
+          "$ref": "./common.schema.json#/$defs/Rfc3339UtcTimestamp"
+        },
+        "contentDigest": {
+          "$ref": "./common.schema.json#/$defs/Sha256Digest"
+        },
+        "contentTrust": {
+          "description": "INV-07: a discovered page has no instruction authority; the readable original is still untrusted data.",
+          "const": "untrusted_data"
+        },
+        "parserVersion": {
+          "$ref": "./common.schema.json#/$defs/Semver"
+        },
+        "snapshotRef": {
+          "$ref": "./common.schema.json#/$defs/ResourceRef"
+        },
+        "snapshotManifestRef": {
+          "$ref": "./common.schema.json#/$defs/ResourceRef"
+        },
+        "parsedRef": {
+          "$ref": "./common.schema.json#/$defs/ResourceRef"
+        },
+        "contentForm": {
+          "$ref": "#/$defs/WebContentForm"
+        }
+      }
+    },
+    "DiscoveryOnlyPage": {
+      "title": "DiscoveryOnlyPage",
+      "description": "design §6: a page this run discovered but could not archive — a link, a snippet and an explicit reason. It can never ground a candidate.",
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["discovery", "url", "title", "snippet", "fetchedAt", "contentDigest", "contentTrust", "unavailableReason"],
+      "properties": {
+        "discovery": {
+          "const": "discovery_only"
+        },
+        "url": {
+          "type": "string",
+          "format": "uri",
+          "pattern": "^https://",
+          "maxLength": 2048
+        },
+        "title": {
+          "$ref": "./common.schema.json#/$defs/NonEmptyString"
+        },
+        "snippet": {
+          "type": "string",
+          "maxLength": 8192
+        },
+        "fetchedAt": {
+          "$ref": "./common.schema.json#/$defs/Rfc3339UtcTimestamp"
+        },
+        "contentDigest": {
+          "$ref": "./common.schema.json#/$defs/Sha256Digest"
+        },
+        "contentTrust": {
+          "description": "INV-07: a link-only discovery has no instruction authority; it is untrusted data.",
+          "const": "untrusted_data"
+        },
+        "unavailableReason": {
+          "$ref": "#/$defs/WebSnapshotSkipReason"
+        }
+      }
+    },
+    "WebSearchToolPage": {
+      "title": "WebSearchToolPage",
+      "oneOf": [
+        {
+          "$ref": "#/$defs/ArchivedPageDiscovery"
+        },
+        {
+          "$ref": "#/$defs/DiscoveryOnlyPage"
+        }
+      ]
+    },
     "WebSearchOutput": {
       "title": "WebSearchOutput",
+      "description": "design §6: web_search returns two discovery kinds. An `archived` page names the readable snapshot/manifest/parse the agent may read as the original; a `discovery_only` page is a link that can never be a formal basis.",
       "type": "object",
       "additionalProperties": false,
       "required": ["pages"],
@@ -765,7 +901,7 @@
         "pages": {
           "type": "array",
           "items": {
-            "$ref": "#/$defs/WebPageEvidence"
+            "$ref": "#/$defs/WebSearchToolPage"
           }
         }
       }

@@ -49,5 +49,8 @@ export async function archivePermittedPage(
     contentDigest: outcome.contentDigest,
     snapshotRef: outcome.snapshotRef,
     snapshotManifestRef: outcome.manifestRef,
+    parserVersion: outcome.parserVersion,
+    contentForm: outcome.contentForm,
+    ...(outcome.parsedRef === undefined ? {} : { parsedRef: outcome.parsedRef }),
   }
 }

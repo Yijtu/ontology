@@ -1,16 +1,18 @@
-import { ERROR_CATALOG } from '@ontology/contracts'
+import { ERROR_CATALOG, toWebSearchToolPage } from '@ontology/contracts'
 import type {
   ErrorCode,
   ResolvedProfile,
   Rfc3339UtcTimestamp,
+  Semver,
   SourceRef,
   ToolContext,
   ToolId,
   ToolWarning,
-  WebPageEvidence,
   WebSearchFreshnessHint,
   WebSearchProvider,
   WebSearchProviderPage,
+  WebSearchToolOutput,
+  WebSearchToolPage,
 } from '@ontology/contracts'
 import { ToolGatewayError } from './errors'
 import type {
@@ -60,6 +62,11 @@ export interface WebSearchHandlerOptions {
   readonly resolvedProfile: ResolvedProfile
   /** The registered public-web source this tool reads, used for the evidence snapshot. */
   readonly sourceRef: SourceRef
+  /**
+   * The derived-text parser version bound to every archived page whose provider did not name one.
+   * The archived snapshot's own parser version is authoritative when the provider supplies it.
+   */
+  readonly parserVersion?: Semver
   readonly schemaVersion?: string
 }
 
@@ -89,9 +96,10 @@ function readStringArray(value: unknown): string[] | undefined {
  *
  * It is registered through the existing gateway catalogue; there is no second tool
  * registry. The handler owns the platform semantics: the disable gate, the bounded
- * argument projection, the mapping of provider pages into untrusted `WebPageEvidence`
- * (URL, fetch time, publish date when present) and the distinct `ok`/`partial`/`empty`
- * outcome. It never mutates permissions, the tool catalogue, the allowlist or the budget,
+ * argument projection, the mapping of provider pages into the two discovery kinds of
+ * design §6 (`archived` carrying the readable snapshot/manifest/parse references, or
+ * `discovery_only` carrying a link and an explicit reason) and the distinct
+ * `ok`/`partial`/`empty` outcome. It never mutates permissions, the tool catalogue, the allowlist or the budget,
  * and it never widens the approved domain set: pages outside it are dropped.
  */
 export class WebSearchHandler implements ToolHandler {
@@ -99,6 +107,7 @@ export class WebSearchHandler implements ToolHandler {
   readonly #provider: WebSearchProvider | undefined
   readonly #enablement: WebSearchEnablement
   readonly #sourceRef: SourceRef
+  readonly #parserVersion: Semver
   readonly #schemaVersion: string
 
   constructor(options: WebSearchHandlerOptions) {
@@ -109,6 +118,7 @@ export class WebSearchHandler implements ToolHandler {
       providerConfigured: options.provider !== undefined,
     })
     this.#sourceRef = options.sourceRef
+    this.#parserVersion = options.parserVersion ?? '1.0.0'
     this.#schemaVersion = options.schemaVersion ?? options.provider?.providerRef.version ?? '1.0.0'
   }
 
@@ -154,8 +164,12 @@ export class WebSearchHandler implements ToolHandler {
       request.ctx,
     )
 
-    const pages: WebPageEvidence[] = []
+    // design §6: the two discovery kinds are kept distinct. An `archived` page names the readable
+    // snapshot/manifest/parse the agent may read as the original; a `discovery_only` page is a link
+    // that can never ground a candidate claiming the original text supports it.
+    const pages: WebSearchToolPage[] = []
     let excluded = result.excludedCount
+    let discoveryOnly = 0
     for (const page of result.pages) {
       if (!hostAllowed(page, allowedDomains)) {
         // Defence in depth: a provider that returned an unapproved host is filtered here
@@ -163,7 +177,9 @@ export class WebSearchHandler implements ToolHandler {
         excluded += 1
         continue
       }
-      pages.push(toEvidence(page))
+      const discovery = toWebSearchToolPage(page, page.parserVersion ?? this.#parserVersion)
+      if (discovery.discovery === 'discovery_only') discoveryOnly += 1
+      pages.push(discovery)
     }
 
     const warnings: ToolWarning[] = []
@@ -171,6 +187,12 @@ export class WebSearchHandler implements ToolHandler {
       warnings.push({
         code: 'WEB_RESULTS_EXCLUDED',
         message: `${String(excluded)} result(s) were outside the approved domain allowlist and were dropped`,
+      })
+    }
+    if (discoveryOnly > 0) {
+      warnings.push({
+        code: 'WEB_DISCOVERY_ONLY_NOT_CITABLE',
+        message: `${String(discoveryOnly)} result(s) are link-only discoveries and cannot be cited as an archived original`,
       })
     }
     if (result.truncated) {
@@ -191,8 +213,9 @@ export class WebSearchHandler implements ToolHandler {
       },
     ]
 
+    const payload: WebSearchToolOutput = { pages }
     return {
-      payload: { pages },
+      payload,
       status,
       coverage: {
         returned: pages.length,
@@ -269,19 +292,7 @@ function hostAllowed(page: WebSearchProviderPage, allowedDomains: readonly strin
   )
 }
 
-function toEvidence(page: WebSearchProviderPage): WebPageEvidence {
-  return {
-    url: page.url,
-    title: page.title,
-    snippet: page.snippet,
-    fetchedAt: page.fetchedAt,
-    contentTrust: 'untrusted_data',
-    contentDigest: page.contentDigest,
-    ...(page.publishedAt === undefined ? {} : { publishedAt: page.publishedAt }),
-  }
-}
-
-function latestFetchedAt(pages: readonly WebPageEvidence[]): Rfc3339UtcTimestamp | undefined {
+function latestFetchedAt(pages: readonly WebSearchToolPage[]): Rfc3339UtcTimestamp | undefined {
   let latest: Rfc3339UtcTimestamp | undefined
   for (const page of pages) {
     if (latest === undefined || Date.parse(page.fetchedAt) > Date.parse(latest)) latest = page.fetchedAt

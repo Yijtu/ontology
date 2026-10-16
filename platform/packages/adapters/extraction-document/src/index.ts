@@ -25,6 +25,10 @@ export {
 export type { NormalizedTextArtifact } from './normalized-artifact'
 
 export { DocumentSpanReader } from './span-reader'
+export { DocumentTargetedReader } from './targeted-reader'
+export type { DocumentIndexPresencePort, DocumentTargetedReaderDependencies } from './targeted-reader'
+export { ResearchArchiveParser } from './research-archive-parse'
+export type { ResearchArchiveParserDependencies } from './research-archive-parse'
 export { StructuredPremiseSourceReader } from './structured/premise-source'
 export type { StructuredPremiseSourceReaderDependencies } from './structured/premise-source'
 export { StructuredClauseSourceReader } from './structured/clause-source'

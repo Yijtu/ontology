@@ -798,6 +798,34 @@ export type DataQueryInput =
  * via the `definition` "WebSearchFreshnessHint".
  */
 export type WebSearchFreshnessHint = 'any' | 'day' | 'week' | 'month' | 'year'
+/**
+ * Why a discovered page is a link only and cannot be a formal basis (design §6).
+ *
+ * This interface was referenced by `OntologyContracts`'s JSON-Schema
+ * via the `definition` "WebSnapshotSkipReason".
+ */
+export type WebSnapshotSkipReason =
+  | 'archive_not_configured'
+  | 'domain_not_allowed'
+  | 'redirect_forbidden'
+  | 'unsupported_content_type'
+  | 'empty_body'
+  | 'download_exceeded'
+  | 'fetch_timeout'
+  | 'http_error'
+  | 'fetch_failed'
+/**
+ * The archived form of the retrieved page bytes. `binary` is discovered but not readable as a citable snapshot.
+ *
+ * This interface was referenced by `OntologyContracts`'s JSON-Schema
+ * via the `definition` "WebContentForm".
+ */
+export type WebContentForm = 'html' | 'text' | 'json' | 'xml' | 'binary'
+/**
+ * This interface was referenced by `OntologyContracts`'s JSON-Schema
+ * via the `definition` "WebSearchToolPage".
+ */
+export type WebSearchToolPage = ArchivedPageDiscovery | DiscoveryOnlyPage
 
 /**
  * Canonical cross-process contract set, version 0.2.0.
@@ -3743,11 +3771,56 @@ export interface WebPageEvidence {
   contentDigest: Sha256Digest
 }
 /**
+ * design §6: a page this run archived. The original snapshot is readable and citable, so the agent reads the real page, never the snippet.
+ *
+ * This interface was referenced by `OntologyContracts`'s JSON-Schema
+ * via the `definition` "ArchivedPageDiscovery".
+ */
+export interface ArchivedPageDiscovery {
+  discovery: 'archived'
+  url: string
+  title: NonEmptyString
+  snippet: string
+  publishedAt?: Rfc3339UtcTimestamp
+  fetchedAt: Rfc3339UtcTimestamp
+  contentDigest: Sha256Digest
+  /**
+   * INV-07: a discovered page has no instruction authority; the readable original is still untrusted data.
+   */
+  contentTrust: 'untrusted_data'
+  parserVersion: Semver
+  snapshotRef: ResourceRef
+  snapshotManifestRef: ResourceRef
+  parsedRef?: ResourceRef
+  contentForm?: WebContentForm
+}
+/**
+ * design §6: a page this run discovered but could not archive — a link, a snippet and an explicit reason. It can never ground a candidate.
+ *
+ * This interface was referenced by `OntologyContracts`'s JSON-Schema
+ * via the `definition` "DiscoveryOnlyPage".
+ */
+export interface DiscoveryOnlyPage {
+  discovery: 'discovery_only'
+  url: string
+  title: NonEmptyString
+  snippet: string
+  fetchedAt: Rfc3339UtcTimestamp
+  contentDigest: Sha256Digest
+  /**
+   * INV-07: a link-only discovery has no instruction authority; it is untrusted data.
+   */
+  contentTrust: 'untrusted_data'
+  unavailableReason: WebSnapshotSkipReason
+}
+/**
+ * design §6: web_search returns two discovery kinds. An `archived` page names the readable snapshot/manifest/parse the agent may read as the original; a `discovery_only` page is a link that can never be a formal basis.
+ *
  * This interface was referenced by `OntologyContracts`'s JSON-Schema
  * via the `definition` "WebSearchOutput".
  */
 export interface WebSearchOutput {
-  pages: WebPageEvidence[]
+  pages: WebSearchToolPage[]
 }
 /**
  * This interface was referenced by `OntologyContracts`'s JSON-Schema

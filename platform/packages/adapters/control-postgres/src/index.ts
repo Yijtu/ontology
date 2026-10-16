@@ -55,6 +55,7 @@ export { PostgresProjectRecordStore } from './project-record-store'
 export { PostgresInstanceReviewStore } from './instance-review-store'
 export { PostgresCandidateSourceStore } from './candidate-source-store'
 export { PostgresResearchExecutionStore } from './research-execution-store'
+export { PostgresResearchDocumentSetStore } from './research-document-set-store'
 export { PostgresSourceAdmissionStore } from './source-admission-store'
 export {
   PostgresSyntheticExampleSetStore,
