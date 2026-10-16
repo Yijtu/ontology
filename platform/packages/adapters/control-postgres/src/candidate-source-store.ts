@@ -1,5 +1,5 @@
 import { createHash, randomUUID } from 'node:crypto'
-import type { QueryResultRow } from 'pg'
+import type { PoolClient, QueryResultRow } from 'pg'
 import { CandidateSourceError, isToolContext } from '@ontology/contracts'
 import type {
   CandidateSource,
@@ -181,6 +181,7 @@ export class PostgresCandidateSourceStore implements CandidateSourceStore, Candi
     scopeRef: ScopeRef,
     input: { readonly source: CandidateSource; readonly idempotencyKey: string },
     ctx: ToolContext,
+    client?: PoolClient,
   ): Promise<CandidateSourceRecord> {
     return this.#withScope(scopeRef, ctx, async (query) => {
       const requestDigest = digestOf(input.source)
@@ -224,7 +225,7 @@ export class PostgresCandidateSourceStore implements CandidateSourceStore, Candi
         }
         throw error
       }
-    })
+    }, client)
   }
 
   async getSource(scopeRef: ScopeRef, sourceId: Uuid, ctx: ToolContext): Promise<CandidateSourceRecord | undefined> {
@@ -515,20 +516,22 @@ export class PostgresCandidateSourceStore implements CandidateSourceStore, Candi
     return result.rows[0]
   }
 
-  async #withScope<T>(scopeRef: ScopeRef, ctx: ToolContext, run: (query: ScopedQuery) => Promise<T>): Promise<T> {
+  async #withScope<T>(scopeRef: ScopeRef, ctx: ToolContext, run: (query: ScopedQuery) => Promise<T>, client?: PoolClient): Promise<T> {
     if (!isToolContext(ctx)) throw new CandidateSourceError('SCOPE_MISMATCH', 'a host-minted trusted tool context is required')
     if (ctx.allowedResources.tenantId !== ctx.principal.tenantId) throw new CandidateSourceError('SCOPE_MISMATCH', 'trusted context carries inconsistent tenant scope')
     if (scopeRef.tenantId !== ctx.principal.tenantId || scopeRef.spaceId !== ctx.allowedResources.spaceId) {
       throw new CandidateSourceError('SCOPE_MISMATCH', 'request scope does not match the trusted principal scope')
     }
-    return this.#database.withIdentityScope({ tenantId: scopeRef.tenantId, spaceId: scopeRef.spaceId }, async (client) => {
-      await client.query("SELECT set_config('app.trace_id', $1, true)", [ctx.traceId])
-      return run({
-        query: async <Row extends QueryResultRow>(text: string, values?: readonly unknown[]) => {
-          const result = await client.query<Row>(text, values === undefined ? undefined : [...values])
-          return { rows: result.rows, rowCount: result.rowCount ?? 0 }
-        },
-      })
+    const scoped = (target: PoolClient): ScopedQuery => ({
+      query: async <Row extends QueryResultRow>(text: string, values?: readonly unknown[]) => {
+        const result = await target.query<Row>(text, values === undefined ? undefined : [...values])
+        return { rows: result.rows, rowCount: result.rowCount ?? 0 }
+      },
+    })
+    if (client !== undefined) return run(scoped(client))
+    return this.#database.withIdentityScope({ tenantId: scopeRef.tenantId, spaceId: scopeRef.spaceId }, async (connection) => {
+      await connection.query("SELECT set_config('app.trace_id', $1, true)", [ctx.traceId])
+      return run(scoped(connection))
     })
   }
 }

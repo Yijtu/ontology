@@ -226,6 +226,7 @@ export interface CandidateSubmissionPort {
     scopeRef: ScopeRef,
     request: SubmitCandidatesRequest,
     ctx: ToolContext,
+    options?: { readonly fence?: import('./candidate-commit').CandidateDispatchFence },
   ): Promise<SubmitCandidatesReceipt>
   /** Resolve a prior receipt by its host idempotency key, so a crash-replay returns the same one. */
   findReceipt?(

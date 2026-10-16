@@ -1,5 +1,5 @@
 import { createHash } from 'node:crypto'
-import { PostgresCandidateSourceStore, PostgresCandidateSubmissionStore, PostgresResearchDocumentSetStore, PostgresResearchExecutionStore, PostgresResearchRunAdmissionStore, PostgresTableArtifactStore, PostgresTableVerificationStore, PostgresTaskPolicyReportStore } from '@ontology/adapter-control-postgres'
+import { PostgresCandidateCommitStore, PostgresCandidateRunBindingStore, PostgresCandidateSourceStore, PostgresCandidateSubmissionStore, PostgresResearchDocumentSetStore, PostgresResearchExecutionStore, PostgresResearchRunAdmissionStore, PostgresTableArtifactStore, PostgresTableVerificationStore, PostgresTaskPolicyReportStore } from '@ontology/adapter-control-postgres'
 import { ArtifactGroundingDocumentSetReader, DocumentTargetedReader, LocalDocumentExtractionService, LocalStructuredIngestionService, ParsedSourceGroundingReader, ResearchArchiveParser, StructuredDocumentParser } from '@ontology/adapter-extraction-document'
 import { PiRuntimeAdapter } from '@ontology/adapter-runtime-pi'
 import { TemplateRuntimeAdapter } from '@ontology/adapter-runtime-template'
@@ -240,6 +240,20 @@ export async function assembleRuntimePipeline(
   // archived evidence before writing. It is wired into every run's capabilities, but the Pi runtime
   // only exposes the command surface for a run whose profile authorizes candidate authoring.
   const candidateSubmissionStore = new PostgresCandidateSubmissionStore(database)
+  const candidateSourceStore = new PostgresCandidateSourceStore(database)
+  const ruleActionService = new RuleActionCandidateService({ workspaces: workspaceStore, candidates: ruleActionCandidateStore, support: new FiniteGrammarRuleSupportValidator() })
+  // The atomic candidate-commit boundary (design §7, S08): one fence-checked transaction writes the
+  // candidate, its links and the receipt, so a cancel/lease race or a crash between them can never
+  // leave an orphan candidate. The binding is resolved from the run's durable admission, never from
+  // the model's command or "the latest draft".
+  const candidateRunBinding = new PostgresCandidateRunBindingStore(database)
+  const candidateCommit = new PostgresCandidateCommitStore({
+    database,
+    assetCandidates: assetCandidateStore,
+    sources: candidateSourceStore,
+    ruleActions: ruleActionCandidateStore,
+    receipts: candidateSubmissionStore,
+  })
   const candidateSubmissionService = new CandidateSubmissionService({
     workspaces: workspaceStore,
     definitionCandidates: assetCandidateStore,
@@ -252,8 +266,8 @@ export async function assembleRuntimePipeline(
       } },
     }),
     receipts: candidateSubmissionStore,
-    ruleActions: new RuleActionCandidateService({ workspaces: workspaceStore, candidates: ruleActionCandidateStore, support: new FiniteGrammarRuleSupportValidator() }),
-    sourceIngestion: new CandidateSourceIngestionService({ artifacts: gatewayComposition.artifacts, sources: new PostgresCandidateSourceStore(database) }),
+    ruleActions: ruleActionService,
+    sourceIngestion: new CandidateSourceIngestionService({ artifacts: gatewayComposition.artifacts, sources: candidateSourceStore }),
     sourceGrounding: createSourceGroundingService({ workspaces: workspaceStore, documentSets: new ArtifactGroundingDocumentSetReader(blobStore),
       reader: new ParsedSourceGroundingReader({ blobs: blobStore, documents: parseStore, tables: structuredStore }) }),
     // Re-check the run's dispatch fence (cancel/revoke) before the write transaction; a cancelled
@@ -263,8 +277,13 @@ export async function assembleRuntimePipeline(
     // across separate submissions and resumes instead of bounding only a single batch (design §8).
     budget: state.budget,
     ledgerIdFor: runBudgetLedgerId,
+    // The run binding + atomic commit (S08): the target workspace and pinned draft come from the
+    // run, and the candidate + links + receipt are written in one fence-checked transaction.
+    runBinding: candidateRunBinding,
+    commit: candidateCommit,
   })
-  const candidateCommandGateway = new CandidateAuthoringCommandGateway(candidateSubmissionService)
+  // The gateway forwards the live dispatch fence so a worker that lost its lease cannot commit.
+  const candidateCommandGateway = new CandidateAuthoringCommandGateway(candidateSubmissionService, (ctx) => dispatchFences.get(ctx.runId))
   const controllerDependencies = {
     runs,
     phase,

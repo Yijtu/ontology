@@ -117,6 +117,21 @@ export class CandidateSourceIngestionService {
     return this.#persist(input, ctx)
   }
 
+  /**
+   * Build the same proposed `CandidateSource` as `ingestArchivedWebSnapshot` without persisting it,
+   * so the atomic candidate-commit port can write it inside the fence-checked transaction
+   * (design §7, S08). The server-fixed kind/tier/state and id derivation are unchanged.
+   */
+  prepareArchivedWebSnapshot(input: ArchivedWebSnapshotInput, ctx: ToolContext): CandidateSource {
+    this.#assertContext(ctx)
+    if (!isUuid(input.workspaceId)) throw new CandidateSourceError('INVALID_SOURCE', 'a workspace UUID is required')
+    if (!isResourceRef(input.contentRef) || typeof input.contentDigest !== 'string' || !/^sha256:[0-9a-f]{64}$/.test(input.contentDigest)) {
+      throw new CandidateSourceError('INVALID_SOURCE', 'an archived web snapshot requires an immutable content ref and digest')
+    }
+    this.#assertProvenance(input)
+    return this.#build(input, ctx)
+  }
+
   #assertContext(ctx: ToolContext): void {
     if (!isToolContext(ctx) || ctx.principal.tenantId !== ctx.allowedResources.tenantId) {
       throw new CandidateSourceError('SCOPE_MISMATCH', 'a consistent host-minted context is required')
@@ -134,6 +149,11 @@ export class CandidateSourceIngestionService {
 
   async #persist(input: ArchivedWebSnapshotInput, ctx: ToolContext): Promise<CandidateSource> {
     const scope = scopeOf(ctx)
+    const source = this.#build(input, ctx)
+    return this.dependencies.sources.putSource(scope, { source, idempotencyKey: input.idempotencyKey }, ctx)
+  }
+
+  #build(input: ArchivedWebSnapshotInput, ctx: ToolContext): CandidateSource {
     const sourceId = candidateIdFor(sha256DigestOf(canonicalJson({
       workspaceId: input.workspaceId, url: input.url, contentDigest: input.contentDigest, idempotencyKey: input.idempotencyKey,
     })))
@@ -158,6 +178,6 @@ export class CandidateSourceIngestionService {
       recordedAt,
     }
     assertCandidateSourceShape(source)
-    return this.dependencies.sources.putSource(scope, { source, idempotencyKey: input.idempotencyKey }, ctx)
+    return source
   }
 }

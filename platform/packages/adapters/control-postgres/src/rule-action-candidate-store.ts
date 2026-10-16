@@ -1,4 +1,4 @@
-import type { QueryResultRow } from 'pg'
+import type { PoolClient, QueryResultRow } from 'pg'
 import {
   RuleActionCandidateStoreError,
   assertRuleActionCandidateShape,
@@ -105,6 +105,7 @@ export class PostgresRuleActionCandidateStore implements RuleActionCandidateStor
     scopeRef: ScopeRef,
     candidate: RuleActionCandidateVersion,
     ctx: ToolContext,
+    client?: PoolClient,
   ): Promise<RuleActionCandidateVersion> {
     assertRuleActionCandidateShape(candidate)
     return this.#withScope(scopeRef, ctx, async (query) => {
@@ -157,7 +158,7 @@ export class PostgresRuleActionCandidateStore implements RuleActionCandidateStor
         )
       }
       return toCandidate(existing)
-    })
+    }, client)
   }
 
   async get(
@@ -249,6 +250,7 @@ export class PostgresRuleActionCandidateStore implements RuleActionCandidateStor
     scopeRef: ScopeRef,
     ctx: ToolContext,
     run: (query: ScopedQuery) => Promise<T>,
+    client?: PoolClient,
   ): Promise<T> {
     if (!isToolContext(ctx)) {
       throw new RuleActionCandidateStoreError('SCOPE_MISMATCH', 'a host-minted trusted tool context is required')
@@ -259,16 +261,18 @@ export class PostgresRuleActionCandidateStore implements RuleActionCandidateStor
     if (scopeRef.tenantId !== ctx.principal.tenantId || scopeRef.spaceId !== ctx.allowedResources.spaceId) {
       throw new RuleActionCandidateStoreError('SCOPE_MISMATCH', 'request scope does not match the trusted principal scope')
     }
+    const scoped = (target: PoolClient): ScopedQuery => ({
+      query: async <Row extends QueryResultRow>(text: string, values?: readonly unknown[]) => {
+        const result = await target.query<Row>(text, values === undefined ? undefined : [...values])
+        return { rows: result.rows, rowCount: result.rowCount ?? 0 }
+      },
+    })
+    if (client !== undefined) return run(scoped(client))
     return this.#database.withIdentityScope(
       { tenantId: scopeRef.tenantId, spaceId: scopeRef.spaceId },
-      async (client) => {
-        await client.query("SELECT set_config('app.trace_id', $1, true)", [ctx.traceId])
-        return run({
-          query: async <Row extends QueryResultRow>(text: string, values?: readonly unknown[]) => {
-            const result = await client.query<Row>(text, values === undefined ? undefined : [...values])
-            return { rows: result.rows, rowCount: result.rowCount ?? 0 }
-          },
-        })
+      async (connection) => {
+        await connection.query("SELECT set_config('app.trace_id', $1, true)", [ctx.traceId])
+        return run(scoped(connection))
       },
     )
   }

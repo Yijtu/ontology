@@ -200,6 +200,23 @@ export class RuleActionCandidateService {
     return this.#persistRule(prepared, input, key, actor, ctx)
   }
 
+  /**
+   * Build a rule candidate with the same domain validation as `saveRuleCandidate` but without
+   * persisting it, so a caller can hand the built row to the atomic candidate-commit port and have
+   * it written inside the fence-checked transaction (design §7, S08).
+   */
+  async prepareRuleCandidate(
+    workspaceId: Uuid,
+    input: SaveRuleCandidateInput,
+    actor: string,
+    ctx: ToolContext,
+  ): Promise<RuleCandidateVersion> {
+    assertEditor(ctx)
+    const key = requireIdempotencyKey(input.idempotencyKey)
+    const prepared = await this.#prepare(workspaceId, input.expectedRevision, ctx, 'save a rule candidate')
+    return this.#persistRule(prepared, input, key, actor, ctx, undefined, false)
+  }
+
   async saveActionCandidate(
     workspaceId: Uuid,
     input: SaveActionCandidateInput,
@@ -210,6 +227,19 @@ export class RuleActionCandidateService {
     const key = requireIdempotencyKey(input.idempotencyKey)
     const prepared = await this.#prepare(workspaceId, input.expectedRevision, ctx, 'save an action candidate')
     return this.#persistAction(prepared, input, key, actor, ctx, input.bindingContext)
+  }
+
+  /** Build an action candidate without persisting it; the counterpart to `prepareRuleCandidate`. */
+  async prepareActionCandidate(
+    workspaceId: Uuid,
+    input: SaveActionCandidateInput,
+    actor: string,
+    ctx: ToolContext,
+  ): Promise<ActionCandidateVersion> {
+    assertEditor(ctx)
+    const key = requireIdempotencyKey(input.idempotencyKey)
+    const prepared = await this.#prepare(workspaceId, input.expectedRevision, ctx, 'save an action candidate')
+    return this.#persistAction(prepared, input, key, actor, ctx, input.bindingContext, undefined, false)
   }
 
   /**
