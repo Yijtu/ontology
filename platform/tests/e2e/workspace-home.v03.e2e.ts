@@ -76,11 +76,11 @@ describe('ontology workspace home in a real browser', () => {
       await openCoreHome(page)
       await page.waitForSelector('[data-testid="workspace-empty"]')
 
-      // Missing required fields are localised and do not create a workspace.
+      // Missing required fields are localised and do not create a workspace. The namespace error
+      // lives in the collapsed "更多设置" area, so it must be revealed automatically.
       await page.click('[data-testid="workspace-create-submit"]')
       await page.waitForSelector('[data-testid="workspace-create-error-displayName"]')
       expect(await page.textContent('[data-testid="workspace-create-error-namespace"]')).toContain('命名空间')
-      expect(await page.textContent('[data-testid="workspace-create-error-goals"]')).toContain('业务目标')
       expect(await page.locator('[data-testid="workspace-list-item"]').count()).toBe(0)
 
       await page.fill('[data-testid="workspace-create-display-name"]', '桥架本体工作区')
@@ -120,6 +120,8 @@ describe('ontology workspace home in a real browser', () => {
       await openCoreHome(page)
       await page.waitForSelector('[data-testid="workspace-create-display-name"]')
       await page.fill('[data-testid="workspace-create-display-name"]', '导入测试工作区')
+      const more = page.getByTestId('workspace-create-more')
+      if (await more.getAttribute('open') === null) await more.locator('summary').click()
       await page.fill('[data-testid="workspace-create-namespace"]', 'ingest-ontology')
       await page.fill('[data-testid="workspace-create-goals"]', '导入清单')
       const readNewWorkspace = (suffix: string) => page.waitForResponse(async (response) => {

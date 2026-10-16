@@ -7,6 +7,8 @@ import {
   OntologyWorkspacePanel,
   boundaryOf,
   EMPTY_CREATE_FIELDS,
+  isValidNamespace,
+  namespaceFromName,
   validateCreateFields,
 } from '@ontology/app-web'
 import type { WorkspaceIdentity } from '@ontology/app-web'
@@ -32,25 +34,39 @@ function isRecord(value: unknown): value is Record<string, unknown> {
 }
 
 describe('ontology workspace create validation', () => {
-  it('localises each missing required field and accepts a filled boundary', () => {
+  it('requires only the name and namespace, and treats goals as optional', () => {
     const empty = validateCreateFields(EMPTY_CREATE_FIELDS)
     expect(empty['displayName']).toContain('名称')
     expect(empty['namespace']).toContain('命名空间')
-    expect(empty['goals']).toContain('业务目标')
+    expect(empty['goals']).toBeUndefined()
 
     const filled = validateCreateFields({
       ...EMPTY_CREATE_FIELDS,
       displayName: '  桥架  ',
       namespace: 'bridge',
-      goals: '\n 目标A \n\n 目标B\n',
     })
     expect(Object.keys(filled)).toHaveLength(0)
+    expect(validateCreateFields({ ...EMPTY_CREATE_FIELDS, displayName: '桥架', namespace: 'bridge', goals: '' })).toEqual({})
+    expect(validateCreateFields({ ...EMPTY_CREATE_FIELDS, displayName: '桥架', namespace: 'Bridge' })['namespace']).toBeDefined()
+    expect(validateCreateFields({ ...EMPTY_CREATE_FIELDS, displayName: '桥架', namespace: 'bridge_ontology' })['namespace']).toBeDefined()
     expect(boundaryOf({ ...EMPTY_CREATE_FIELDS, goals: ' A \nB', included: 'C', excluded: '' })).toEqual({
       goals: ['A', 'B'],
       included: ['C'],
       excluded: [],
       applicability: {},
     })
+  })
+
+  it('derives a legal namespace slug from the workspace name', () => {
+    expect(namespaceFromName('Bridge Ontology')).toBe('bridge-ontology')
+    expect(namespaceFromName('  Bridge  Ontology  ')).toBe('bridge-ontology')
+    expect(namespaceFromName('桥架本体工作区')).toBe('ws')
+    expect(namespaceFromName('')).toBe('ws')
+    expect(namespaceFromName('123 Bridge')).toBe('ws-123-bridge')
+    expect(namespaceFromName('Bridge--Ontology!!')).toBe('bridge-ontology')
+    expect(namespaceFromName('b'.repeat(80))).toHaveLength(64)
+    expect(isValidNamespace(namespaceFromName('Bridge Ontology'))).toBe(true)
+    expect(isValidNamespace('Bridge')).toBe(false)
   })
 })
 
@@ -146,6 +162,111 @@ describe('ontology workspace panel', () => {
       expect(container.querySelector('[data-testid="workspace-detail-name"]')?.textContent).toBe('桥架本体工作区')
       expect(container.querySelector('[data-testid="workspace-detail-head-revision"]')?.textContent).toBe('1')
       expect(container.querySelectorAll('[data-testid="workspace-draft"]')).toHaveLength(1)
+    } finally {
+      await act(async () => root.unmount())
+      container.remove()
+    }
+  })
+
+  it('creates with only the name, auto-deriving the namespace and keeping more settings collapsed', async () => {
+    const created: IndustryWorkspace = {
+      workspaceId: WORKSPACE_ID,
+      namespace: 'bridge-ontology',
+      displayName: 'Bridge Ontology',
+      boundary: { goals: [], included: [], excluded: [], applicability: {} },
+      headRevision: '1',
+      state: 'draft',
+    }
+    const draft = {
+      workspaceId: WORKSPACE_ID,
+      revision: '1',
+      digest: DIGEST,
+      documentSetRef: { id: WORKSPACE_ID, version: '1.0.0', digest: DIGEST, kind: 'artifact' },
+      candidateRefs: [],
+    }
+    let postedBody: Record<string, unknown> | undefined
+    const client = new WorkbenchClient({
+      baseUrl: 'http://api.test',
+      fetchImpl: (input, init) => {
+        const url = String(input)
+        const method = init?.method ?? 'GET'
+        if (url.includes('/drafts')) return Promise.resolve(jsonResponse({ data: { drafts: [draft] } }))
+        if (url.includes('/industry-workspaces') && method === 'GET') {
+          return Promise.resolve(jsonResponse({ data: { workspaces: [] } }))
+        }
+        if (url.endsWith('/core/workspace-bootstrap') && method === 'POST') {
+          const parsed = isRecord(init?.body) ? init.body : JSON.parse(String(init?.body)) as unknown
+          if (isRecord(parsed)) postedBody = parsed
+          return Promise.resolve(jsonResponse({ data: { workspace: created, draftRef: {
+            workspaceId: WORKSPACE_ID, revision: '1', digest: DIGEST,
+          }, draft, created: true } }))
+        }
+        return Promise.resolve(jsonResponse({ data: {} }, 404))
+      },
+    })
+    const container = document.createElement('div')
+    document.body.appendChild(container)
+    const root = createRoot(container)
+    try {
+      await act(async () => {
+        root.render(createElement(OntologyWorkspacePanel, { client, identity }))
+      })
+      const more = container.querySelector<HTMLDetailsElement>('[data-testid="workspace-create-more"]')
+      expect(more?.open).toBe(false)
+      const nameInput = container.querySelector<HTMLInputElement>('[data-testid="workspace-create-display-name"]')
+      if (nameInput === null) throw new Error('the create form is missing the name field')
+      await act(async () => {
+        setInputValue(nameInput, 'Bridge Ontology')
+      })
+      expect(container.querySelector<HTMLInputElement>('[data-testid="workspace-create-namespace"]')?.value).toBe('bridge-ontology')
+      await act(async () => {
+        container.querySelector<HTMLFormElement>('[data-testid="workspace-create-form"]')?.dispatchEvent(
+          new Event('submit', { bubbles: true, cancelable: true }),
+        )
+      })
+      expect(postedBody?.['namespace']).toBe('bridge-ontology')
+      expect(postedBody?.['boundary']).toEqual({ goals: [], included: [], excluded: [], applicability: {} })
+      expect(container.querySelector('[data-testid="workspace-detail-name"]')?.textContent).toBe('Bridge Ontology')
+    } finally {
+      await act(async () => root.unmount())
+      container.remove()
+    }
+  })
+
+  it('reveals more settings when the namespace is cleared so the error stays visible', async () => {
+    const client = new WorkbenchClient({
+      baseUrl: 'http://api.test',
+      fetchImpl: (input) => {
+        if (String(input).includes('/industry-workspaces')) {
+          return Promise.resolve(jsonResponse({ data: { workspaces: [] } }))
+        }
+        return Promise.resolve(jsonResponse({ data: {} }, 404))
+      },
+    })
+    const container = document.createElement('div')
+    document.body.appendChild(container)
+    const root = createRoot(container)
+    try {
+      await act(async () => {
+        root.render(createElement(OntologyWorkspacePanel, { client, identity }))
+      })
+      const nameInput = container.querySelector<HTMLInputElement>('[data-testid="workspace-create-display-name"]')
+      const namespaceInput = container.querySelector<HTMLInputElement>('[data-testid="workspace-create-namespace"]')
+      if (nameInput === null || namespaceInput === null) throw new Error('the create form is missing a field')
+      await act(async () => {
+        setInputValue(nameInput, 'Bridge Ontology')
+      })
+      await act(async () => {
+        setInputValue(namespaceInput, '')
+      })
+      await act(async () => {
+        container.querySelector<HTMLFormElement>('[data-testid="workspace-create-form"]')?.dispatchEvent(
+          new Event('submit', { bubbles: true, cancelable: true }),
+        )
+      })
+      expect(container.querySelector('[data-testid="workspace-create-error-namespace"]')).not.toBeNull()
+      expect(container.querySelector<HTMLDetailsElement>('[data-testid="workspace-create-more"]')?.open).toBe(true)
+      expect(container.querySelector('[data-testid="workspace-list-item"]')).toBeNull()
     } finally {
       await act(async () => root.unmount())
       container.remove()
