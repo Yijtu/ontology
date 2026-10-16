@@ -90,3 +90,4 @@ export { PostgresExecutionToolBindingStore } from './tool-execution-binding-stor
 export { PostgresExecutionConnectionSnapshotStore } from './execution-connection-snapshot-store'
 export { PostgresToolSettingsMigrationStore } from './tool-settings-migration-store'
 export { PostgresWorkspaceResearchRunConfigStore } from './workspace-research-run-config-store'
+export { PostgresResearchRunAdmissionStore } from './research-run-admission-store'

@@ -10,3 +10,9 @@ export type {
 export { InMemoryResearchDocumentSetStore } from './in-memory-store'
 export { WorkspaceResearchRunConfigService, resolvedWorkspaceResearchProfileDigest } from './workspace-research-run-config-service'
 export type { WorkspaceResearchRunConfigDependencies } from './workspace-research-run-config-service'
+export { WorkspaceResearchRunService } from './workspace-research-run-service'
+export type {
+  ResearchAdmissionArtifactPort,
+  ResearchRunAdmissionResult,
+  WorkspaceResearchRunServiceDependencies,
+} from './workspace-research-run-service'

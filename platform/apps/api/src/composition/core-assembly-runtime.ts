@@ -1,5 +1,5 @@
 import { createHash } from 'node:crypto'
-import { PostgresCandidateSourceStore, PostgresCandidateSubmissionStore, PostgresResearchDocumentSetStore, PostgresResearchExecutionStore, PostgresTableArtifactStore, PostgresTableVerificationStore, PostgresTaskPolicyReportStore } from '@ontology/adapter-control-postgres'
+import { PostgresCandidateSourceStore, PostgresCandidateSubmissionStore, PostgresResearchDocumentSetStore, PostgresResearchExecutionStore, PostgresResearchRunAdmissionStore, PostgresTableArtifactStore, PostgresTableVerificationStore, PostgresTaskPolicyReportStore } from '@ontology/adapter-control-postgres'
 import { ArtifactGroundingDocumentSetReader, LocalDocumentExtractionService, LocalStructuredIngestionService, ParsedSourceGroundingReader, StructuredDocumentParser } from '@ontology/adapter-extraction-document'
 import { PiRuntimeAdapter } from '@ontology/adapter-runtime-pi'
 import { TemplateRuntimeAdapter } from '@ontology/adapter-runtime-template'
@@ -8,7 +8,9 @@ import {
   IndustryWorkspaceService, JobService, JobWorker, OutboxDispatcher, ResearchMaterialReadService, RestrictedLimitedAnswerComposer, ResearchWorkflowService, RuleActionCandidateService, RunExecutionPreflightService, RunPhaseDriver,
   RunService, RunTypedResultContextSource, StructuredExtractionService, StructuredExtractionStageHandler, TableHardVerificationService,
   TypedEvidenceDraftWriter, WebResearchService, WorkflowController, createRunCheckpointPort, createSourceGroundingService, ReviewHandoffStageHandler, LegacyResearchExecutor,
+  WorkspaceResearchRunService,
 } from '@ontology/application'
+import type { ResearchAdmissionArtifactPort } from '@ontology/application'
 import { FiniteGrammarRuleSupportValidator, IncrementalMaterializer } from '@ontology/semantic-engine'
 import { JobWorkerLoop, MaterializationOutboxConsumer, ProjectEvolutionOutboxConsumer, ResearchStageHandler, TopicOutboxConsumerRouter, WorkflowDispatchWorker, controlRecordSequence, createIngestionHandlerRegistry, createWorkerStageRegistry } from '@ontology/app-worker'
 import { DEFAULT_VERIFICATION_POLICY, SCHEMA_DOCUMENTS, TOOL_CATALOGUE, projectCollectionRef } from '@ontology/contracts'
@@ -439,6 +441,30 @@ export async function assembleRuntimePipeline(
     ...(modelBindingService === undefined ? {} : { modelBinding: modelBindingService }),
   })
   const researchHandler = new ResearchStageHandler({ executor: researchExecutor })
+  // The research run admission entry (design §4/§8, S05): it fixes the brief / frozen draft /
+  // authorization receipt / model snapshot / original deadline / one ledger / input manifest, commits
+  // the complete research manifest, flips the durable dispatch-ready barrier and only then enqueues
+  // the existing durable dispatch. It reuses `runs`, the manifest store, the budget ledger and the
+  // dispatch store — no second controller.
+  const researchRunAdmissionStore = new PostgresResearchRunAdmissionStore(database)
+  const researchAdmissionArtifacts: ResearchAdmissionArtifactPort = {
+    write: (identity, bytes, mediaType, ctx) => authoring.stableWrite(identity, bytes, mediaType, 'artifact', ctx),
+    read: async (blobRef, ctx) => {
+      const scope = { tenantId: ctx.principal.tenantId, spaceId: ctx.allowedResources.spaceId }
+      const bytes = await blobStore.readAuthorized({ scopeRef: scope, blobRef }, ctx)
+      return { bytes, contentDigest: `sha256:${createHash('sha256').update(bytes).digest('hex')}` }
+    },
+  }
+  const workspaceResearchRunService = new WorkspaceResearchRunService({
+    admissions: researchRunAdmissionStore,
+    runs,
+    configs: state.workspaceResearchConfigService,
+    manifests: workflowStore,
+    budget: state.budget,
+    dispatch: dispatchStore,
+    artifacts: researchAdmissionArtifacts,
+    modelBindings: modelBindingStore,
+  })
   const routedHandlers = createWorkerStageRegistry({ ingestion: handlers, research: researchHandler })
   const jobWorker = new JobWorker({
     store: jobStore, handlers: routedHandlers, budget: state.budget, workerId: 'core-local-ingestion-worker', now: () => hostClock().toISOString(),
@@ -493,6 +519,7 @@ export async function assembleRuntimePipeline(
     pipeline, structuredExtractionService, handlers, jobWorker, currentProjectRevisions, materializer, outboxConsumer, dispatcher, provenanceRead,
     researchWorkflow, researchExecutor, webSearch, searchBinding,
     candidateSubmissionStore, candidateSubmissionService,
+    researchRunAdmissionStore, workspaceResearchRunService,
   }
 }
 

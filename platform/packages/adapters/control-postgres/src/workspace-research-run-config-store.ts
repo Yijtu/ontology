@@ -62,10 +62,12 @@ export class PostgresWorkspaceResearchRunConfigStore {
       const row = inserted.rows[0]
       if (row !== undefined) return this.#validate(row.config)
       // The row already exists: a draft revision's config is immutable, so re-read it instead of
-      // rewriting it. A *different* config for the same draft revision is a conflict, never an overwrite.
+      // rewriting it. Two concurrent first-resolves of the same draft can differ only in their
+      // non-semantic `resolvedAt`, so the conflict test compares the deterministic `snapshotHash`
+      // (which covers the whole frozen config content) rather than the raw JSON.
       const existing = await this.#byKey(query, config.workspaceId, config.draftRevision)
       if (existing === undefined) throw new WorkspaceResearchConfigError('STORE_FAILED', 'the workspace-research run config could not be written')
-      if (canonicalJson(existing.config) !== canonicalJson(config)) {
+      if (existing.config.snapshotHash !== config.snapshotHash) {
         throw new WorkspaceResearchConfigError('VERSION_CONFLICT', 'the workspace-research run config for this draft revision is already fixed and differs')
       }
       return this.#validate(existing.config)
