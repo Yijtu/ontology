@@ -1629,6 +1629,33 @@ export interface DocumentSearchRequest {
   mode: DocumentSearchMode
   cursor?: OpaqueCursor
   limit?: number
+  targetedRead?: DocumentTargetedReadSelection
+}
+/**
+ * design §6: the versioned targeted-read branch of the single `document_search` tool. It names already-authorized documents/spans to continue reading (instead of re-searching) and is bounded by a cursor, a page size and a byte cap. The gateway authorizes the call and the run's evidence set authorizes each selection; this shape only carries the request.
+ *
+ * This interface was referenced by `OntologyContracts`'s JSON-Schema
+ * via the `definition` "DocumentTargetedReadSelection".
+ */
+export interface DocumentTargetedReadSelection {
+  /**
+   * @minItems 1
+   * @maxItems 16
+   */
+  selections: {
+    documentRef: ResourceRef
+    locator?: {
+      kind: 'page' | 'offset' | 'approximate_locator'
+      page?: number
+      startOffset?: number
+      endOffset?: number
+      normalizationMapRef?: NonEmptyString
+    }
+    parseId?: Uuid
+  }[]
+  cursor?: OpaqueCursor
+  maxBytes?: number
+  limit?: number
 }
 /**
  * D3.2: locates a document_version plus page or offset, with the quote digest. OCR text that cannot be located precisely is marked approximate_locator and enters review.

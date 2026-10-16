@@ -45,7 +45,14 @@ export class ResearchArchiveParser implements ResearchArchiveParsePort {
     ctx: ToolContext,
   ): Promise<ResearchArchivedDocumentBinding> {
     const scope = scopeOf(ctx)
-    const parsed = await this.#parser.parse({ scopeRef: scope, originalRef: input.documentRef }, ctx)
+    // The archiver publishes the readable bytes as an immutable artifact; a document parse is
+    // recorded against a logical document, so the original ref is normalised to `kind: 'document'`
+    // (the id/version/digest are unchanged) before the real document parser reads it. Without this
+    // the parse store would reject the row on read as an unexpected original kind.
+    const documentRef: ResourceRef = input.documentRef.kind === 'document'
+      ? input.documentRef
+      : { ...input.documentRef, kind: 'document' }
+    const parsed = await this.#parser.parse({ scopeRef: scope, originalRef: documentRef }, ctx)
     return {
       documentRef: parsed.originalRef,
       parseId: parsed.parseId,

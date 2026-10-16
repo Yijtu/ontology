@@ -1,11 +1,11 @@
 import { createHash } from 'node:crypto'
 import { PostgresCandidateSourceStore, PostgresCandidateSubmissionStore, PostgresResearchDocumentSetStore, PostgresResearchExecutionStore, PostgresResearchRunAdmissionStore, PostgresTableArtifactStore, PostgresTableVerificationStore, PostgresTaskPolicyReportStore } from '@ontology/adapter-control-postgres'
-import { ArtifactGroundingDocumentSetReader, LocalDocumentExtractionService, LocalStructuredIngestionService, ParsedSourceGroundingReader, StructuredDocumentParser } from '@ontology/adapter-extraction-document'
+import { ArtifactGroundingDocumentSetReader, DocumentTargetedReader, LocalDocumentExtractionService, LocalStructuredIngestionService, ParsedSourceGroundingReader, ResearchArchiveParser, StructuredDocumentParser } from '@ontology/adapter-extraction-document'
 import { PiRuntimeAdapter } from '@ontology/adapter-runtime-pi'
 import { TemplateRuntimeAdapter } from '@ontology/adapter-runtime-template'
 import {
-  AnswerPublicationService, CandidateAuthoringCommandGateway, CandidateSourceIngestionService, CandidateSubmissionService, CandidateValidationStageHandler, DraftVerificationService, ExtractionPipeline, ExtractionStageHandler,
-  IndustryWorkspaceService, JobService, JobWorker, OutboxDispatcher, ResearchMaterialReadService, RestrictedLimitedAnswerComposer, ResearchWorkflowService, RuleActionCandidateService, RunExecutionPreflightService, RunPhaseDriver,
+  AnswerPublicationService, CandidateAuthoringCommandGateway, CandidateSourceIngestionService, CandidateSubmissionService, CandidateValidationStageHandler, DocumentTargetedReadService, DraftVerificationService, ExtractionPipeline, ExtractionStageHandler,
+  IndustryWorkspaceService, JobService, JobWorker, OutboxDispatcher, ResearchDocumentSetService, ResearchMaterialReadService, RestrictedLimitedAnswerComposer, ResearchWorkflowService, RuleActionCandidateService, RunExecutionPreflightService, RunPhaseDriver,
   RunService, RunTypedResultContextSource, StructuredExtractionService, StructuredExtractionStageHandler, TableHardVerificationService,
   TypedEvidenceDraftWriter, WebResearchService, WorkflowController, createRunCheckpointPort, createSourceGroundingService, ReviewHandoffStageHandler, LegacyResearchExecutor,
   WorkspaceResearchRunService,
@@ -37,6 +37,8 @@ import { createCoreTableResults } from './core-table-results'
 import { createBusinessMaterializationConsumer, createCompetencyPreviewOutboxConsumer } from './core-business-materialization'
 import { createCoreProjectSemanticReadiness } from './core-project-semantic-readiness'
 import { createCoreWebSearchProvider } from './core-web-search'
+import { createWorkspaceResearchContextResolver } from './core-workspace-research-context'
+import { createResearchDocumentSearchHandler, createResearchOntologyLookupHandler, createResearchWebSearchHandler } from './core-research-tools'
 import { CoreProjectSemanticPartitions } from './core-project-semantic-partitions'
 import { CorePublicationValidity, CoreInputValidity } from './core-publication-validity'
 import { CoreFactsOutboxFallback, IndustryWorkspaceOutboxConsumer, PackPublicationOutboxConsumer, ProjectRevisionOutboxConsumer, UnsupportedOutboxConsumer } from './core-outbox-consumers'
@@ -69,7 +71,7 @@ export async function assembleRuntimePipeline(
     deploymentModelCapabilities,
     toolBindingService, toolConnectionStore, toolCredentialCustodian, executionSnapshotStore, toolSelectionService,
   } = state
-  const { mappings, structuredImports, rulePremiseVerifier, semanticTasks, relationsTask, facts, multiSchemaSource, projectQuery, gatewayComposition } = query
+  const { mappings, structuredImports, rulePremiseVerifier, semanticTasks, relationsTask, facts, multiSchemaSource, projectQuery, gatewayComposition, ontologyLookupHandler } = query
 
   const runProfileBinder = {
     bindProfileForRun: (profileRef: import('@ontology/contracts').ProfileRef, trustedScope: ScopeRef, ctx: ToolContext) =>
@@ -166,6 +168,36 @@ export async function assembleRuntimePipeline(
   }
   const termLabels = createCoreDefinitionLabelReader({ packs: publishedPackStore, candidates: assetCandidateStore, ruleActions: ruleActionCandidateStore })
   const authoring = createCoreAuthoring({ blobs: blobStore, registry: artifactRegistry, objectStore, workspaces: workspaceStore, jobs: jobStore, parses: parseStore, structured: structuredStore, operations: compute.registry, models: { generationEnabled: deploymentModelCapabilities.generation, decisionEnabled: deploymentModelCapabilities.decision }, terminology: { getTerminology: (...args) => terminology.getTerminology(...args) }, termLabels })
+  // S05/S07: the research admission façade and the receipt-derived context it feeds. The context
+  // resolver rebuilds a run's authorization from the persisted receipt (never the worker context),
+  // intersected with the current state, and is read by the research tool handlers at dispatch time.
+  const researchRunAdmissionStore = new PostgresResearchRunAdmissionStore(database)
+  const researchAdmissionArtifacts: ResearchAdmissionArtifactPort = {
+    write: (identity, bytes, mediaType, ctx) => authoring.stableWrite(identity, bytes, mediaType, 'artifact', ctx),
+    read: async (blobRef, ctx) => {
+      const scope = { tenantId: ctx.principal.tenantId, spaceId: ctx.allowedResources.spaceId }
+      const bytes = await blobStore.readAuthorized({ scopeRef: scope, blobRef }, ctx)
+      return { bytes, contentDigest: `sha256:${createHash('sha256').update(bytes).digest('hex')}` }
+    },
+  }
+  const workspaceResearchRunService = new WorkspaceResearchRunService({
+    admissions: researchRunAdmissionStore,
+    runs,
+    configs: state.workspaceResearchConfigService,
+    manifests: workflowStore,
+    budget: state.budget,
+    dispatch: dispatchStore,
+    artifacts: researchAdmissionArtifacts,
+    modelBindings: modelBindingStore,
+  })
+  const researchContextResolver = createWorkspaceResearchContextResolver({
+    readReceipt: (runId, ctx) => workspaceResearchRunService.readAuthorizationReceipt(runId, ctx),
+    revocations: async (receipt, ctx) => {
+      const scope = { tenantId: ctx.principal.tenantId, spaceId: ctx.allowedResources.spaceId }
+      const draft = await workspaceStore.getDraft(scope, receipt.workspaceId, receipt.draftRevision, ctx).catch(() => undefined)
+      return draft === undefined ? ['AUTHORIZATION_REVOKED'] : []
+    },
+  })
   const tableArtifactStore = new PostgresTableArtifactStore(database, { writer: gatewayComposition.artifacts, reader: state.scopedOriginals })
   const tableVerificationStore = new PostgresTableVerificationStore(database)
   const tableSchema = SCHEMA_DOCUMENTS.find((schema) => schema['$id'] === 'https://ontology.local/schema/tools.schema.json')
@@ -259,6 +291,7 @@ export async function assembleRuntimePipeline(
         let executionConfig: PublicExecutionConfig
         let generationCapability: ModelCapability = 'generation'
         let authoringCommands: readonly AuthoringCommandKind[] = []
+        let researchExecutionCtx: ToolContext | undefined
         if (isResearch) {
           const config = await state.workspaceResearchConfigService.resolveForRun(
             { workspaceId: researchWorkspaceId, draftRevision: researchDraftRevision },
@@ -269,6 +302,9 @@ export async function assembleRuntimePipeline(
           // The controlled candidate write is authorized per run, not by the adapter's static config
           // (design §5, S04): only a workspace-research run may propose candidates.
           authoringCommands = ['submit_candidates']
+          // S07: the run executes under its receipt-derived context (authorized domains, material,
+          // roles and original deadline), never the wide worker context; the controller forwards it.
+          researchExecutionCtx = (await researchContextResolver.resolve(binding.runId, ctx)).ctx
         } else {
           const resolved = await profileResolver.getResolvedProfile({ scopeRef: { tenantId: scopeRef.tenantId, spaceId: scopeRef.spaceId }, profileRef: run.profileRef, snapshotHash: binding.resolvedProfileRef.snapshotHash }, ctx)
           resolvedProfile = resolved.resolved
@@ -287,9 +323,24 @@ export async function assembleRuntimePipeline(
           resolvedProfile: executionConfig,
           sourceRef: WEB_SEARCH_SOURCE_REF,
         })
+        // S07 (design §4/§6): a workspace-research run mounts the receipt-derived research tool set.
+        // Its `web_search` stages every archived page into the run's evidence set, its
+        // `document_search` branches into the versioned targeted read over that set, and its
+        // `ontology_lookup` is bound to the admitted workspace. Ordinary runs keep the base handlers.
+        const researchHandlers: readonly ToolHandler[] = isResearch
+          ? (() => {
+              const context = researchContextResolver
+              if (context === undefined) throw new CoreCapabilityError('the workspace-research context resolver is not initialized')
+              return [
+                createResearchWebSearchHandler({ inner: webSearchHandler, runId: binding.runId, workspaceId: researchWorkspaceId, context, staging: researchStaging }),
+                createResearchDocumentSearchHandler({ runId: binding.runId, workspaceId: researchWorkspaceId, context, members: researchStaging, targetedRead: researchTargetedRead }),
+                createResearchOntologyLookupHandler({ inner: ontologyLookupHandler, runId: binding.runId, context }),
+              ]
+            })()
+          : []
         const gateway = gatewayComposition.forRun(
           { runId: binding.runId, ledgerId: binding.budgetLedgerId, resolvedProfile: executionConfig, operations: compute.registry },
-          [webSearchHandler],
+          [webSearchHandler, ...researchHandlers],
         )
         // A run's model is the one fixed at accept time (design §5.3): read the persisted binding
         // back, never re-resolve a default. A revoked binding fails closed (`blocked` disables the
@@ -313,6 +364,7 @@ export async function assembleRuntimePipeline(
             ? bound.decision ?? (bound.decisionBlocked ? disabledDecision() : modelExecution.decision ?? disabledDecision())
             : disabledDecision(),
           checkpoints: createRunCheckpointPort(runStore),
+          ...(researchExecutionCtx === undefined ? {} : { ctx: researchExecutionCtx }),
           ...(isResearch ? { commandGateway: candidateCommandGateway, authorizedAuthoringCommands: authoringCommands } : {}),
         } satisfies RuntimeCapabilitySet
       },
@@ -381,6 +433,13 @@ export async function assembleRuntimePipeline(
   const jobService = new JobService({ store: jobStore })
   const industryWorkspaceService = new IndustryWorkspaceService({ store: workspaceStore, jobs: jobStore })
   const parser: DocumentParserPort = new LocalDocumentExtractionService({ blobs: blobStore, store: parseStore })
+  // S07: the research read chain — archived pages are parsed through the same document parser as
+  // uploads and staged into the run's research evidence set (migration 094); the versioned targeted
+  // reader reads an un-indexed staged document's real text. Both are shared; the per-run handlers
+  // are built in `capabilities.forRun` where the run's workspace is known.
+  const researchDocumentSetStore = new PostgresResearchDocumentSetStore(database)
+  const researchStaging = new ResearchDocumentSetService({ members: researchDocumentSetStore, parser: new ResearchArchiveParser({ parser }) })
+  const researchTargetedRead = new DocumentTargetedReadService({ reader: new DocumentTargetedReader({ blobs: blobStore, store: parseStore }) })
   const pipeline = new ExtractionPipeline({
     schemaSource: state.schemaSource,
     accountingOwner: 'adapter',
@@ -451,25 +510,6 @@ export async function assembleRuntimePipeline(
   // the complete research manifest, flips the durable dispatch-ready barrier and only then enqueues
   // the existing durable dispatch. It reuses `runs`, the manifest store, the budget ledger and the
   // dispatch store — no second controller.
-  const researchRunAdmissionStore = new PostgresResearchRunAdmissionStore(database)
-  const researchAdmissionArtifacts: ResearchAdmissionArtifactPort = {
-    write: (identity, bytes, mediaType, ctx) => authoring.stableWrite(identity, bytes, mediaType, 'artifact', ctx),
-    read: async (blobRef, ctx) => {
-      const scope = { tenantId: ctx.principal.tenantId, spaceId: ctx.allowedResources.spaceId }
-      const bytes = await blobStore.readAuthorized({ scopeRef: scope, blobRef }, ctx)
-      return { bytes, contentDigest: `sha256:${createHash('sha256').update(bytes).digest('hex')}` }
-    },
-  }
-  const workspaceResearchRunService = new WorkspaceResearchRunService({
-    admissions: researchRunAdmissionStore,
-    runs,
-    configs: state.workspaceResearchConfigService,
-    manifests: workflowStore,
-    budget: state.budget,
-    dispatch: dispatchStore,
-    artifacts: researchAdmissionArtifacts,
-    modelBindings: modelBindingStore,
-  })
   const routedHandlers = createWorkerStageRegistry({ ingestion: handlers, research: researchHandler })
   const jobWorker = new JobWorker({
     store: jobStore, handlers: routedHandlers, budget: state.budget, workerId: 'core-local-ingestion-worker', now: () => hostClock().toISOString(),

@@ -131,7 +131,11 @@ export class ResearchDocumentSetService {
       }
       const binding = await this.#dependencies.parser.parseArchivedPage(
         {
-          documentRef: page.snapshotRef,
+          // Parse the readable form the archiver actually produced. An HTML page is archived as
+          // original bytes plus a separately-derived `text/plain` view; the document parser only
+          // understands text/pdf, so the derived readable ref is parsed when present and the raw
+          // snapshot only when it is the readable form (design §6: 归档页面必须能读).
+          documentRef: page.parsedRef ?? page.snapshotRef,
           provenanceRef: page.snapshotManifestRef,
           ...(page.contentForm === undefined ? {} : { contentForm: page.contentForm }),
         },

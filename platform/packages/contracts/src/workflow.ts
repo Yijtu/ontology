@@ -704,6 +704,13 @@ export interface RuntimeCapabilitySet {
   readonly decision: DecisionPort
   readonly checkpoints: RuntimeCheckpointPort
   /**
+   * The run's **effective** trusted context, when the host rebuilds it per run (design §4/§6, S07).
+   * A workspace-research run is executed under its receipt-derived context (the authorized domains,
+   * material, roles and original deadline), not the wide worker context; the controller forwards it
+   * to the runtime. Absent means "use the controller's run context unchanged".
+   */
+  readonly ctx?: ToolContext
+  /**
    * The controlled authoring-command gateway (design §5). It is present only when the run may
    * author; a plain data-tool run leaves it absent, so a runtime never routes a candidate write
    * without the host's explicit authorization.
