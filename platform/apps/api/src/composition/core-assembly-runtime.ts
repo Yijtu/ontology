@@ -16,9 +16,9 @@ import { FiniteGrammarRuleSupportValidator, IncrementalMaterializer } from '@ont
 import { JobWorkerLoop, MaterializationOutboxConsumer, ProjectEvolutionOutboxConsumer, ResearchStageHandler, TopicOutboxConsumerRouter, WorkflowDispatchWorker, controlRecordSequence, createIngestionHandlerRegistry, createWorkerStageRegistry } from '@ontology/app-worker'
 import { DEFAULT_VERIFICATION_POLICY, SCHEMA_DOCUMENTS, TOOL_CATALOGUE, projectCollectionRef } from '@ontology/contracts'
 import type { DocumentParserPort, ProjectRevision, RuntimeAdapter, RuntimeCapabilityContext, RuntimeCapabilityFactoryPort, RuntimeCapabilitySet, RuntimeSelectorPort, ScopeRef, ToolContext, Uuid, VersionRef, WorkflowDispatchFence, AuthoringCommandKind, ModelCapability, PublicExecutionConfig, ResolvedProfile } from '@ontology/contracts'
-import type { CandidateSubmissionRecord } from '@ontology/contracts'
+import type { CandidateSubmissionRecord, ResearchCandidateReceiptSummary } from '@ontology/contracts'
 import { draftRevisionOfResearchProfileVersion, workspaceIdOfResearchProfileRef } from '@ontology/contracts'
-import type { ResearchDeliveryCandidateReceipt, RunProfileBinder } from '@ontology/application'
+import type { ResearchDelivery, ResearchDeliveryCandidateReceipt, RunProfileBinder } from '@ontology/application'
 import { canonicalJson } from '@ontology/tool-services'
 import { WebSearchHandler } from '@ontology/tool-services'
 import type { ToolHandler } from '@ontology/tool-services'
@@ -172,6 +172,10 @@ export async function assembleRuntimePipeline(
   // resolver rebuilds a run's authorization from the persisted receipt (never the worker context),
   // intersected with the current state, and is read by the research tool handlers at dispatch time.
   const researchRunAdmissionStore = new PostgresResearchRunAdmissionStore(database)
+  // S09: the durable job service and the research-execution projection store are constructed early so
+  // the research admission façade can create the agentic scheduler job and persist the V2 projection.
+  const jobService = new JobService({ store: jobStore })
+  const researchExecutionStore = new PostgresResearchExecutionStore(database)
   const researchAdmissionArtifacts: ResearchAdmissionArtifactPort = {
     write: (identity, bytes, mediaType, ctx) => authoring.stableWrite(identity, bytes, mediaType, 'artifact', ctx),
     read: async (blobRef, ctx) => {
@@ -189,6 +193,21 @@ export async function assembleRuntimePipeline(
     dispatch: dispatchStore,
     artifacts: researchAdmissionArtifacts,
     modelBindings: modelBindingStore,
+    jobs: jobService,
+    executions: researchExecutionStore,
+    candidateSummaries: async (runId: Uuid, ctx: ToolContext): Promise<readonly ResearchCandidateReceiptSummary[]> => {
+      const scopeFor = { tenantId: ctx.principal.tenantId, spaceId: ctx.allowedResources.spaceId }
+      const records = await candidateSubmissionStore.listByRun?.(scopeFor, runId, ctx)
+      return (records ?? []).flatMap((record) =>
+        record.receipt.accepted.map((entry) => ({
+          candidateId: entry.candidateId,
+          kind: entry.kind,
+          state: (entry.pendingConfirmation ? 'pending_confirmation' : entry.state) as ResearchCandidateReceiptSummary['state'],
+          pendingConfirmation: entry.pendingConfirmation,
+          issueCodes: entry.issues.map((issue) => issue.code),
+        })),
+      )
+    },
   })
   const researchContextResolver = createWorkspaceResearchContextResolver({
     readReceipt: (runId, ctx) => workspaceResearchRunService.readAuthorizationReceipt(runId, ctx),
@@ -421,6 +440,12 @@ export async function assembleRuntimePipeline(
         return (records ?? []).map(deliveryReceiptOf)
       },
     },
+    // S09: persist the bounded delivery and the goal-aware research-execution@2 projection from the
+    // durable admission/receipts/evidence/ledger, before the run parks on a human review.
+    researchProjection: {
+      recordDelivery: (runId: Uuid, delivery: ResearchDelivery, ctx: ToolContext) =>
+        workspaceResearchRunService.recordDelivery(runId, delivery, ctx),
+    },
     publicationFence: async (runId: Uuid) => dispatchFences.get(runId),
   }
   host.controller = new WorkflowController(controllerDependencies)
@@ -449,7 +474,6 @@ export async function assembleRuntimePipeline(
     onError(error) { options.onWorkerError?.(error); process.stderr.write('[core-worker] workflow dispatch cycle failed\n') },
   })
 
-  const jobService = new JobService({ store: jobStore })
   const industryWorkspaceService = new IndustryWorkspaceService({ store: workspaceStore, jobs: jobStore })
   const parser: DocumentParserPort = new LocalDocumentExtractionService({ blobs: blobStore, store: parseStore })
   // S07: the research read chain — archived pages are parsed through the same document parser as
@@ -498,7 +522,6 @@ export async function assembleRuntimePipeline(
   // a test host may still inject its own provider. With neither configured the facade still reads
   // history and reports a stable capability reason for a new run (never a fabricated capability).
   const webSearch = options.webSearch ?? createCoreWebSearchProvider({ env: modelEnvironment, artifacts: gatewayComposition.artifacts })
-  const researchExecutionStore = new PostgresResearchExecutionStore(database)
   // New research resolves its public search from the catalogue (S03): the same `searchBinding` the
   // preflight and the capability projection read, pinned at the run's workspace scope. The legacy
   // environment provider is kept only for historical `@1` (env) jobs.
@@ -523,7 +546,7 @@ export async function assembleRuntimePipeline(
     budget: state.budget,
     ...(modelBindingService === undefined ? {} : { modelBinding: modelBindingService }),
   })
-  const researchHandler = new ResearchStageHandler({ executor: researchExecutor })
+  const researchHandler = new ResearchStageHandler({ executor: researchExecutor, dispatch: dispatchStore })
   // The research run admission entry (design §4/§8, S05): it fixes the brief / frozen draft /
   // authorization receipt / model snapshot / original deadline / one ledger / input manifest, commits
   // the complete research manifest, flips the durable dispatch-ready barrier and only then enqueues

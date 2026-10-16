@@ -100,7 +100,7 @@ function toExecutionV2(row: ExecutionRow): ResearchExecutionV2 {
     researchId: row.research_id,
     workspaceId: row.workspace_id,
     runId: row.run_id,
-    jobId: row.job_id,
+    ...(row.job_id === null ? {} : { jobId: row.job_id }),
     goal: row.goal,
     status: row.status,
     stage: row.stage,

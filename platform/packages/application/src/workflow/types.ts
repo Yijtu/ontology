@@ -78,6 +78,12 @@ export interface WorkflowControllerDependencies {
    * fabricated candidate).
    */
   readonly researchReceipts?: ResearchCandidateReceiptReader
+  /**
+   * The durable completion projection of a research run (design §8, S09). When present the
+   * controller persists the bounded delivery and the goal-aware `research-execution@2` projection
+   * over the run's durable cancellation/dispatch fence, before it parks the run on a human.
+   */
+  readonly researchProjection?: ResearchDeliveryProjectionPort
   readonly now?: () => string
   readonly newId?: () => string
   readonly limits?: Partial<WorkflowLimits>
@@ -163,4 +169,15 @@ export interface ResearchDelivery {
   readonly evidenceRefs: readonly ResourceRef[]
   readonly stopReason: string
   readonly usage: BudgetRemaining
+}
+
+/**
+ * Persists the goal-aware completion projection of a research run (design §8, S09). The controller
+ * calls it once at the collection-end boundary, before the run parks on a human: it commits the
+ * delivery and the `research-execution@2` projection from the durable receipts/evidence/ledger. A
+ * host that mounts no projection store leaves it absent, and the in-memory delivery is still
+ * returned.
+ */
+export interface ResearchDeliveryProjectionPort {
+  recordDelivery(runId: Uuid, delivery: ResearchDelivery, ctx: ToolContext): Promise<void>
 }

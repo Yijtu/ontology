@@ -3,12 +3,17 @@ import type {
   BudgetLedgerPort,
   ExecutionModelBinding,
   ExecutionModelBindingStore,
+  ModelingBriefMustCover,
   ProfileRef,
   ResearchAuthorizationReceipt,
+  ResearchCandidateReceiptSummary,
   ResearchExecutionGoal,
+  ResearchExecutionStore,
+  ResearchLimits,
   ResearchRunAdmission,
   ResearchRunAdmissionRequest,
   ResearchRunAdmissionStore,
+  ResearchStopReason,
   ResourceRef,
   RevisionString,
   RunManifest,
@@ -26,17 +31,27 @@ import type {
 import {
   ResearchRunAdmissionError,
   assertModelingBriefShape,
+  isRecord,
   isToolContext,
   isUuid,
   workspaceResearchProfileRef,
 } from '@ontology/contracts'
 import type { CreateRunResult } from '../runs/types'
+import type { ResearchDelivery } from '../workflow/types'
 import { ProfileResolverError } from '../profiles/errors'
 import { RunServiceError } from '../runs/errors'
 import type { RunService } from '../runs/service'
+import type { JobService } from '../jobs/service'
+import {
+  RESEARCH_JOB_REQUEST_KIND,
+  RESEARCH_JOB_VERSION_AGENT,
+  encodeResearchJobRequest,
+} from '../assets/candidate-sources/research-job-ref'
+import { DEFAULT_RESEARCH_BUDGET_REF } from '../assets/candidate-sources/research-workflow-service'
 import { canonicalJson, sha256DigestOf } from '../profiles/canonical'
 import { inputManifestDigest } from '../workflow/canonical'
 import type { WorkspaceResearchRunConfigService } from './workspace-research-run-config-service'
+import { buildResearchExecutionProjection, candidateSummaryOf } from './research-run-projection'
 import { deterministicUuid, runBudgetLedgerId } from './run-ledger'
 
 /** Roles allowed to admit a research run. */
@@ -75,6 +90,25 @@ export interface WorkspaceResearchRunServiceDependencies {
    * the run's pinned `research` binding was fixed to, so a reader can see the exact model config.
    */
   readonly modelBindings?: ExecutionModelBindingStore
+  /**
+   * The durable job service (S09, design §8). When mounted, an accepted run also gets its agentic
+   * research **scheduler** job (`research` kind, `2.0.0`): the job only hands the already-accepted run
+   * to the durable dispatch queue and finishes at the `dispatched` stage. The `WorkflowDispatchWorker`
+   * stays the only controller driver. Absent for a host that schedules through the dispatch store
+   * alone (the S05 behaviour), which is why the field is optional.
+   */
+  readonly jobs?: JobService
+  /**
+   * The research-execution projection store (S09, design §8). When mounted, completing a run persists
+   * a goal-aware `research-execution@2` projection. Absent means the host keeps only the S05 delivery.
+   */
+  readonly executions?: ResearchExecutionStore
+  /**
+   * The per-candidate summaries of a run, read from the durable candidate-submission receipts (design
+   * §8). When mounted it is preferred over the lossy per-call delivery summary, so a candidate is
+   * projected with its real kind.
+   */
+  readonly candidateSummaries?: (runId: Uuid, ctx: ToolContext) => Promise<readonly ResearchCandidateReceiptSummary[]>
   readonly now?: () => string
 }
 
@@ -139,6 +173,10 @@ export class WorkspaceResearchRunService {
   readonly #dispatch: WorkflowDispatchPort
   readonly #artifacts: ResearchAdmissionArtifactPort
   readonly #modelBindings: ExecutionModelBindingStore | undefined
+  readonly #jobs: JobService | undefined
+  readonly #executions: ResearchExecutionStore | undefined
+  readonly #candidateSummaries: ((runId: Uuid, ctx: ToolContext) => Promise<readonly ResearchCandidateReceiptSummary[]>) | undefined
+  readonly #now: () => string
 
   constructor(dependencies: WorkspaceResearchRunServiceDependencies) {
     this.#admissions = dependencies.admissions
@@ -149,6 +187,10 @@ export class WorkspaceResearchRunService {
     this.#dispatch = dependencies.dispatch
     this.#artifacts = dependencies.artifacts
     this.#modelBindings = dependencies.modelBindings
+    this.#jobs = dependencies.jobs
+    this.#executions = dependencies.executions
+    this.#candidateSummaries = dependencies.candidateSummaries
+    this.#now = dependencies.now ?? (() => new Date().toISOString())
   }
 
   /**
@@ -283,10 +325,33 @@ export class WorkspaceResearchRunService {
 
     // Persist the one complete research manifest over the one shared ledger and input manifest. This
     // is the "complete research manifest" the controller requires; it is never synthesized later.
-    await this.#writeResearchManifest(admission, request, created.resolvedProfileHash, config.runtimeRef, ctx)
+    const manifest = await this.#writeResearchManifest(admission, request, created.resolvedProfileHash, config.runtimeRef, ctx)
 
     // Flip the dispatch-ready barrier, then enqueue. An incomplete admission is never dispatched.
     const ready = await this.#admissions.markReady(scopeRef, runId, ctx)
+    // S09 (design §8): also create the agentic research **scheduler** job. Its handler only hands this
+    // accepted run to the durable dispatch queue (idempotently, on the same `initial-drive` action the
+    // direct enqueue below uses) and finishes at `dispatched`; `WorkflowDispatchWorker` stays the only
+    // controller driver. `createJob` is idempotent on its key, so a replay reuses the same job.
+    if (this.#jobs !== undefined) {
+      await this.#jobs.createJob(
+        {
+          jobId: researchId,
+          kind: 'research',
+          sourceRef: 'workbench.research',
+          datasetRef: encodeResearchJobRequest({
+            kind: RESEARCH_JOB_REQUEST_KIND,
+            version: RESEARCH_JOB_VERSION_AGENT,
+            researchId,
+            runId,
+            manifestRef: manifestRefFor(runId, manifest),
+          }),
+          pipelineVersion: RESEARCH_JOB_VERSION_AGENT,
+          idempotencyKey: `research-dispatch-handoff:${runId}`,
+        },
+        ctx,
+      )
+    }
     await this.#dispatch.enqueue({ runId, logicalActionId: 'initial-drive' }, ctx)
     return { runId, researchId, state: runView.state, revision: runView.revision, reused: created.reused, admission: ready }
   }
@@ -309,6 +374,80 @@ export class WorkspaceResearchRunService {
     const decoded = decodeJson(read.bytes)
     assertAuthorizationReceiptShape(decoded, admission)
     return decoded
+  }
+
+  /**
+   * Persist the goal-aware completion projection of an ended research run (design §8, S09). The
+   * controller hands its bounded `ResearchDelivery`; this reads the durable admission, the archived
+   * brief/frozen config, the single ledger and (when mounted) the persisted candidate receipts, and
+   * commits a `research-execution@2` projection. It is idempotent per run: a replay rebuilds the same
+   * deterministic projection. Runs not admitted as workspace research (and hosts with no projection
+   * store) are a no-op.
+   */
+  async recordDelivery(runId: Uuid, delivery: ResearchDelivery, ctx: ToolContext): Promise<void> {
+    const executions = this.#executions
+    if (executions === undefined) return
+    const scopeRef = scopeOf(ctx)
+
+    // Read the admission first; a run with no workspace-research admission is not one of ours.
+    const admission = await this.#admissions.get(scopeRef, runId, ctx)
+    if (admission === undefined) return
+    const manifest = await this.#manifests.getRunManifest(runId, ctx)
+    if (manifest === undefined || manifest.goal?.kind !== 'industry_workspace_research') return
+
+    const brief = await this.#readBrief(admission.briefRef, ctx)
+    const policyRef = await this.#readPolicyRef(admission.configSnapshotRef, ctx)
+    // Re-open the run's one ledger (idempotent): the projection reports the ledger's real ceilings and
+    // measured consumption, never a fabricated zero.
+    const ledger = await this.#budget.openLedger({ ledgerId: manifest.budgetLedgerId, kind: 'run', runId }, ctx)
+    const runState = await this.#manifests.getRunState(runId, ctx)
+    const candidateReceipts = this.#candidateSummaries === undefined
+      ? delivery.candidateReceipts.flatMap(candidateSummaryOf)
+      : await this.#candidateSummaries(runId, ctx)
+
+    const projection = buildResearchExecutionProjection({
+      researchId: admission.researchId,
+      workspaceId: admission.workspaceId,
+      runId,
+      goal: manifest.goal,
+      briefRef: admission.briefRef,
+      policyRef,
+      budgetRef: DEFAULT_RESEARCH_BUDGET_REF,
+      limits: brief.limits,
+      mustCover: brief.mustCover,
+      budgetLimits: ledger.limits,
+      ledgerDeadline: ledger.deadline,
+      consumed: ledger.consumed,
+      usageUnknown: runState?.usageUnknown ?? false,
+      candidateReceipts,
+      evidenceRefs: delivery.evidenceRefs,
+      stopReason: normaliseStopReason(delivery.stopReason),
+      recordedAt: this.#now(),
+    })
+    await executions.putExecution(scopeRef, projection, ctx)
+  }
+
+  async #readBrief(
+    ref: ResourceRef,
+    ctx: ToolContext,
+  ): Promise<{ readonly limits: ResearchLimits; readonly mustCover: readonly ModelingBriefMustCover[] }> {
+    const read = await this.#artifacts.read(ref, ctx)
+    const decoded = decodeJson(read.bytes)
+    if (!isRecord(decoded) || !isRecord(decoded['limits']) || !isRecord(decoded['brief'])) {
+      throw new ResearchRunAdmissionError('STORE_FAILED', 'the archived research brief is malformed')
+    }
+    assertModelingBriefShape(decoded['brief'])
+    const mustCover = decoded['brief'].mustCover ?? []
+    return { limits: decoded['limits'] as unknown as ResearchLimits, mustCover }
+  }
+
+  async #readPolicyRef(ref: ResourceRef, ctx: ToolContext): Promise<VersionRef> {
+    const read = await this.#artifacts.read(ref, ctx)
+    const decoded = decodeJson(read.bytes)
+    if (isRecord(decoded) && isRecord(decoded['policyRef'])) {
+      return decoded['policyRef'] as unknown as VersionRef
+    }
+    throw new ResearchRunAdmissionError('STORE_FAILED', 'the archived research run config is missing its policy reference')
   }
 
   async #createRun(runId: Uuid, profileRef: ProfileRef, request: ResearchRunAdmissionRequest, ctx: ToolContext): Promise<CreateRunResult> {
@@ -348,7 +487,7 @@ export class WorkspaceResearchRunService {
     resolvedProfileHash: Sha256Digest,
     runtimeRef: VersionRef,
     ctx: ToolContext,
-  ): Promise<void> {
+  ): Promise<RunManifest> {
     const runId = admission.runId
     const draftRevision = admission.goal.kind === 'industry_workspace_research' ? admission.goal.draftRevision : admission.draftRevision
     const workspaceId = admission.goal.kind === 'industry_workspace_research' ? admission.goal.workspaceId : admission.workspaceId
@@ -378,7 +517,7 @@ export class WorkspaceResearchRunService {
       goal: admission.goal,
       authorizationReceiptRef: admission.authorizationReceiptRef,
     }
-    await this.#manifests.saveRunManifest(manifest, ctx)
+    return this.#manifests.saveRunManifest(manifest, ctx)
   }
 
   #inputManifest(admission: ResearchRunAdmission): WorkflowInputManifest {
@@ -410,6 +549,32 @@ export class WorkspaceResearchRunService {
       entries,
       digest: inputManifestDigest(runId, entries),
     }
+  }
+}
+
+const RESEARCH_STOP_REASONS: readonly ResearchStopReason[] = [
+  'completed', 'partial_results', 'cancelled', 'deadline_exceeded',
+  'budget_exhausted', 'no_results', 'provider_failed',
+]
+
+/** Map a delivery stop reason onto the canonical contract, never inventing an unknown reason. */
+function normaliseStopReason(value: string): ResearchStopReason {
+  return (RESEARCH_STOP_REASONS as readonly string[]).includes(value)
+    ? (value as ResearchStopReason)
+    : 'completed'
+}
+
+/**
+ * The content-addressed reference of the persisted run manifest, carried by the agentic scheduler
+ * job so a reader can pin exactly which manifest the accepted run was scheduled against. It is a
+ * reference only; the manifest bytes live in the workflow store.
+ */
+function manifestRefFor(runId: Uuid, manifest: RunManifest): ResourceRef {
+  return {
+    id: deterministicUuid('run-manifest', runId),
+    version: '1.0.0',
+    digest: sha256DigestOf(canonicalJson(manifest)),
+    kind: 'artifact',
   }
 }
 

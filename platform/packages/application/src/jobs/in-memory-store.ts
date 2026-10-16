@@ -257,7 +257,7 @@ export class InMemoryJobStore implements JobStore {
       // Idempotent checkpoint: the stage was already committed by an earlier attempt.
       return clone(job)
     }
-    if (!canAdvanceJobStage(job.stage, advance.stage)) {
+    if (!canAdvanceJobStage(job.stage, advance.stage, { kind: job.kind, pipelineVersion: job.pipelineVersion })) {
       throw new JobStoreError(
         'STAGE_CONFLICT',
         `job ${jobId} cannot advance from ${job.stage} to ${advance.stage}`,
@@ -294,7 +294,7 @@ export class InMemoryJobStore implements JobStore {
     attempt.finishedAt = completion.completedAt
     delete attempt.leaseExpiresAt
     if (completion.finalStage !== job.stage) {
-      if (!canAdvanceJobStage(job.stage, completion.finalStage)) {
+      if (!canAdvanceJobStage(job.stage, completion.finalStage, { kind: job.kind, pipelineVersion: job.pipelineVersion })) {
         throw new JobStoreError(
           'STAGE_CONFLICT',
           `job ${jobId} cannot advance from ${job.stage} to ${completion.finalStage}`,

@@ -32,6 +32,7 @@ import { repairFeedbackOf } from './repair-feedback'
 import type {
   CancelWorkflowInput,
   ResearchCandidateReceiptReader,
+  ResearchDeliveryProjectionPort,
   RespondWorkflowInput,
   ResearchDelivery,
   ResearchDeliveryCandidateReceipt,
@@ -82,12 +83,18 @@ export class WorkflowController {
    * so a resumed/restarted run reports exactly the candidates that were written (design §8).
    */
   readonly #durableReceipts: ResearchCandidateReceiptReader | undefined
+  /**
+   * The durable completion projection (design §8, S09). When mounted, a research run's collection end
+   * commits the delivery and the goal-aware V2 projection from persisted receipts/evidence/ledger.
+   */
+  readonly #researchProjection: ResearchDeliveryProjectionPort | undefined
 
   constructor(dependencies: WorkflowControllerDependencies) {
     this.#deps = dependencies
     this.#now = dependencies.now ?? (() => new Date().toISOString())
     this.#newId = dependencies.newId ?? (() => globalThis.crypto.randomUUID())
     this.#durableReceipts = dependencies.researchReceipts
+    this.#researchProjection = dependencies.researchProjection
     this.#maxDraftAttempts =
       dependencies.limits?.maxDraftAttempts ?? DEFAULT_WORKFLOW_LIMITS.maxDraftAttempts
     this.#maxCollectionRounds =
@@ -267,6 +274,14 @@ export class WorkflowController {
   async completeResearch(runId: Uuid, ctx: ToolContext): Promise<ResearchDelivery> {
     const runContext = contextForCanonicalRun(ctx, runId)
     const manifest = await this.#requireRunManifest(runId, runContext)
+    // Only a run created under a research goal completes as a delivery list: an ordinary project-Q&A
+    // run must reach its answer through the drafting/verification route, never through here.
+    if (manifest.goal?.kind !== 'industry_workspace_research') {
+      throw new WorkflowControllerError(
+        'INVALID_ARGUMENT',
+        `run ${runId} is not an industry-workspace research run`,
+      )
+    }
     const run = await this.#deps.phase.requireRun(runId, runContext)
     if (run.state !== 'collecting') {
       throw new WorkflowControllerError(
@@ -293,6 +308,12 @@ export class WorkflowController {
       evidenceRefs: evidenceRefsOf(inputManifest),
       stopReason: 'completed',
       usage,
+    }
+    // Persist the delivery and the goal-aware V2 projection from the durable receipts/evidence/ledger
+    // before the run parks on a human (design §8, S09). It is idempotent per run, so a crash-and-replay
+    // re-commits the same projection; the run then waits on source/admission review.
+    if (this.#researchProjection !== undefined) {
+      await this.#researchProjection.recordDelivery(run.runId, delivery, ctx)
     }
     this.#active.delete(run.runId)
     await this.#advance(run, 'awaiting_input', { cancelReason: 'research_delivery_ready' }, ctx)
@@ -569,6 +590,8 @@ export class WorkflowController {
   /** Returns `true` when the collection loop must stop (terminal or hand-off phase). */
   async #applyRuntimeEvent(runId: Uuid, event: RuntimeEvent, ctx: ToolContext): Promise<boolean> {
     const result = await this.#deps.runs.recordRuntimeEvent(runId, event, ctx)
+    // A late event after cancellation is quarantined: it must not be admitted into the input manifest.
+    if (result.disposition === 'abandoned') return true
     if (event.type === 'evidence_added') {
       const manifest = await this.#requireRunManifest(runId, ctx)
       await this.#appendEntries(
@@ -585,7 +608,6 @@ export class WorkflowController {
     if (event.type === 'failed' && event.error.remoteStateUnknown === true) {
       await this.#markUsageUnknown(runId, ctx)
     }
-    if (result.disposition === 'abandoned') return true
     return (
       event.type === 'collection_complete' ||
       event.type === 'clarification_requested' ||

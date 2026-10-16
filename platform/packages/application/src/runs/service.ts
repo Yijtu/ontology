@@ -73,6 +73,13 @@ export interface RunServiceDependencies {
 const OPERATOR_ROLES: readonly string[] = ['operator', 'platform-admin']
 const READER_ROLES: readonly string[] = ['scoped-reader', 'operator', 'platform-admin']
 
+/**
+ * The `cancelReason` the controller records when a research run's delivery list is ready: the
+ * execution has ended and the run waits on a human source/admission review. Such a run is final for
+ * resume purposes — only a new authorized continuation advances it (design §8, S09).
+ */
+const RESEARCH_DELIVERY_READY_REASON = 'research_delivery_ready'
+
 function isNonEmptyString(value: unknown): value is string {
   return typeof value === 'string' && value.trim().length > 0
 }
@@ -403,6 +410,15 @@ export class RunService {
     if (run.state !== 'awaiting_input') {
       throw new RunServiceError('VERSION_CONFLICT', `run is in state ${run.state}, not awaiting_input`)
     }
+    // A research run whose delivery list is ready has already ended: it waits on a human source/
+    // admission review, not on a clarification, and a continuation starts a new authorized run. It is
+    // never revived through the clarification path (design §8, S09).
+    if (run.cancelReason === RESEARCH_DELIVERY_READY_REASON) {
+      throw new RunServiceError(
+        'VERSION_CONFLICT',
+        'the research run has ended and awaits human review; append a continuation instead',
+      )
+    }
     if (run.pendingClarificationId !== input.clarificationId) {
       throw new RunServiceError(
         'CLARIFICATION_NOT_FOUND',
@@ -513,6 +529,15 @@ export class RunService {
       throw new RunServiceError(
         'VERSION_CONFLICT',
         `run is in state ${run.state}; only awaiting_input or blocked runs can resume`,
+      )
+    }
+    // A research run whose delivery list is ready has ended; it waits on human source/admission
+    // review and cannot be re-driven by a checkpoint resume. A continuation is a new authorized run
+    // (design §8, S09).
+    if (run.cancelReason === RESEARCH_DELIVERY_READY_REASON) {
+      throw new RunServiceError(
+        'VERSION_CONFLICT',
+        'the research run has ended and awaits human review; append a continuation instead',
       )
     }
 
