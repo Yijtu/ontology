@@ -889,6 +889,8 @@ describe('V03-045 generic dual-assistant full-stack E2E (real chromium, real hos
       await page.getByTestId('workspace-create-display-name').waitFor({ state: 'visible' })
       const namespace = `gap22-flow1-${randomUUID().slice(0, 8)}`
       await page.getByTestId('workspace-create-display-name').fill('检修要求规则工作区')
+      const moreSettings = page.getByTestId('workspace-create-more')
+      if (await moreSettings.getAttribute('open') === null) await moreSettings.locator('summary').click()
       await page.getByTestId('workspace-create-namespace').fill(namespace)
       await page.getByTestId('workspace-create-goals').fill('核对检修要求并保留原始依据')
       const workspaceResponse = page.waitForResponse((response) => response.request().method() === 'POST' && new URL(response.url()).pathname === '/api/v1/core/workspace-bootstrap')

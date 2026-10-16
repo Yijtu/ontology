@@ -80,18 +80,53 @@ export function boundaryOf(fields: WorkspaceCreateFields): IndustryWorkspaceBoun
   }
 }
 
+export const NAMESPACE_PATTERN = /^[a-z][a-z0-9-]*$/
+export const NAMESPACE_MAX_LENGTH = 64
+
 /**
- * Required-field validation (P.US-002.AC-01). Each missing field is localised so the form can
- * point at it; a boundary with no goals is rejected here even though the server schema is lenient
- * about an empty array.
+ * The create form only asks for a display name; the namespace is a slug of it that satisfies the
+ * server contract `^[a-z][a-z0-9-]*$` within 64 characters. Chinese or otherwise unrepresentable
+ * names collapse to the fallback `ws` so the pre-filled value is always valid without extra input.
+ */
+export function namespaceFromName(name: string): string {
+  const slug = name
+    .toLowerCase()
+    .replace(/[^a-z0-9]+/g, '-')
+    .replace(/-+/g, '-')
+    .replace(/^-|-$/g, '')
+  if (slug.length === 0) return 'ws'
+  const prefixed = /^[a-z]/.test(slug) ? slug : `ws-${slug}`
+  return prefixed.slice(0, NAMESPACE_MAX_LENGTH).replace(/-+$/, '')
+}
+
+export function isValidNamespace(namespace: string): boolean {
+  return namespace.length > 0 && namespace.length <= NAMESPACE_MAX_LENGTH && NAMESPACE_PATTERN.test(namespace)
+}
+
+/**
+ * Create validation (P.US-002.AC-01). Only the display name is required; the namespace must satisfy
+ * the server contract (it is auto-derived from the name, so it is legal unless the operator clears
+ * it). Goals are optional — the server accepts an empty array.
  */
 export function validateCreateFields(fields: WorkspaceCreateFields): Readonly<Record<string, string>> {
   const errors: Record<string, string> = {}
   if (fields.displayName.trim().length === 0) errors['displayName'] = '请填写工作区名称。'
-  if (fields.namespace.trim().length === 0) errors['namespace'] = '请填写行业命名空间。'
-  if (linesOf(fields.goals).length === 0) errors['goals'] = '请至少填写一个业务目标。'
+  const namespace = fields.namespace.trim()
+  if (namespace.length === 0) errors['namespace'] = '请填写行业命名空间。'
+  else if (!isValidNamespace(namespace)) errors['namespace'] = '行业命名空间需以小写字母开头，仅含小写字母、数字或连字符，且不超过 64 个字符。'
   return errors
 }
+
+/** Create fields that live behind the collapsed "更多设置" disclosure. */
+const CREATE_MORE_FIELDS: readonly (keyof WorkspaceCreateFields)[] = [
+  'namespace',
+  'goals',
+  'included',
+  'excluded',
+  'region',
+  'validFrom',
+  'validTo',
+]
 
 function toError(error: unknown): WorkbenchError {
   if (error instanceof ApiError) {
@@ -167,6 +202,8 @@ export function OntologyWorkspacePanel({
   const [selectedId, setSelectedId] = useState<string | undefined>(undefined)
   const [drafts, setDrafts] = useState<readonly AssetDraftVersion[]>([])
   const [fields, setFields] = useState<WorkspaceCreateFields>(EMPTY_CREATE_FIELDS)
+  const [moreSettingsOpen, setMoreSettingsOpen] = useState(false)
+  const namespaceTouched = useRef(false)
   const [fieldErrors, setFieldErrors] = useState<Readonly<Record<string, string>>>({})
   const [createFailure, setCreateFailure] = useState<PublicFailure | undefined>(undefined)
   const [busy, setBusy] = useState(false)
@@ -278,6 +315,10 @@ export function OntologyWorkspacePanel({
     const errors = validateCreateFields(fields)
     setFieldErrors(errors)
     if (Object.keys(errors).length > 0) {
+      // Any error in a collapsed field must be visible, so reveal "更多设置" before reporting.
+      if (Object.keys(errors).some((key) => CREATE_MORE_FIELDS.includes(key as keyof WorkspaceCreateFields))) {
+        setMoreSettingsOpen(true)
+      }
       setCreateFailure(classifyPublicError({ code: 'INVALID_ARGUMENT', message: '请先修正标记的必填项。' }))
       return
     }
@@ -296,6 +337,8 @@ export function OntologyWorkspacePanel({
       if (abort.signal.aborted || token !== createEpoch.current) return
       createPending.current = undefined
       setFields(EMPTY_CREATE_FIELDS)
+      namespaceTouched.current = false
+      setMoreSettingsOpen(false)
       setWorkspaces((previous) => [view.workspace, ...previous])
       onWorkspaceCreated?.(view.workspace)
       setCreateOpen(false)
@@ -340,7 +383,14 @@ export function OntologyWorkspacePanel({
   }
 
   const setField = (key: keyof WorkspaceCreateFields, value: string): void => {
-    setFields((previous) => ({ ...previous, [key]: value }))
+    if (key === 'namespace') namespaceTouched.current = true
+    setFields((previous) => {
+      // The namespace mirrors the name until the operator edits it by hand; then their value wins.
+      if (key === 'displayName' && !namespaceTouched.current) {
+        return { ...previous, displayName: value, namespace: namespaceFromName(value) }
+      }
+      return { ...previous, [key]: value }
+    })
   }
 
   const setEditField = (key: keyof WorkspaceCreateFields, value: string): void => {
@@ -368,7 +418,7 @@ export function OntologyWorkspacePanel({
           testId="workspace-empty"
           title="尚无本体工作区"
           requirement="业务范围说明，以及要纳入的资料来源。"
-          nextStep="填写下方表单的显示名、命名空间与目标，创建第一个工作区。"
+          nextStep="填写工作区名称即可创建第一个工作区，命名空间会自动生成。"
         />
       ) : null}
 
@@ -424,79 +474,88 @@ export function OntologyWorkspacePanel({
               <small data-testid="workspace-create-error-displayName">{fieldErrors['displayName']}</small>
             )}
           </label>
-          <label className="ontology-workspace__field">
-            <span>行业命名空间</span>
-            <input
-              type="text"
-              data-testid="workspace-create-namespace"
-              value={fields.namespace}
-              disabled={busy}
-              onChange={(event) => setField('namespace', event.target.value)}
-            />
-            {fieldErrors['namespace'] === undefined ? null : (
-              <small data-testid="workspace-create-error-namespace">{fieldErrors['namespace']}</small>
-            )}
-          </label>
-          <label className="ontology-workspace__field ontology-workspace__field--wide">
-            <span>业务目标（每行一个）</span>
-            <textarea
-              data-testid="workspace-create-goals"
-              value={fields.goals}
-              disabled={busy}
-              onChange={(event) => setField('goals', event.target.value)}
-            />
-            {fieldErrors['goals'] === undefined ? null : (
-              <small data-testid="workspace-create-error-goals">{fieldErrors['goals']}</small>
-            )}
-          </label>
-          <label className="ontology-workspace__field">
-            <span>包含范围（每行一个）</span>
-            <textarea
-              data-testid="workspace-create-included"
-              value={fields.included}
-              disabled={busy}
-              onChange={(event) => setField('included', event.target.value)}
-            />
-          </label>
-          <label className="ontology-workspace__field">
-            <span>排除范围（每行一个）</span>
-            <textarea
-              data-testid="workspace-create-excluded"
-              value={fields.excluded}
-              disabled={busy}
-              onChange={(event) => setField('excluded', event.target.value)}
-            />
-          </label>
-          <label className="ontology-workspace__field">
-            <span>适用地区</span>
-            <input
-              type="text"
-              data-testid="workspace-create-region"
-              value={fields.region}
-              disabled={busy}
-              onChange={(event) => setField('region', event.target.value)}
-            />
-          </label>
-          <label className="ontology-workspace__field">
-            <span>生效时间</span>
-            <input
-              type="text"
-              data-testid="workspace-create-valid-from"
-              value={fields.validFrom}
-              disabled={busy}
-              onChange={(event) => setField('validFrom', event.target.value)}
-            />
-          </label>
-          <label className="ontology-workspace__field">
-            <span>失效时间</span>
-            <input
-              type="text"
-              data-testid="workspace-create-valid-to"
-              value={fields.validTo}
-              disabled={busy}
-              onChange={(event) => setField('validTo', event.target.value)}
-            />
-          </label>
+          <details
+            className="ontology-workspace__create-more"
+            data-testid="workspace-create-more"
+            open={moreSettingsOpen}
+            onToggle={(event) => setMoreSettingsOpen(event.currentTarget.open)}
+          >
+            <summary>更多设置（可选）</summary>
+            <label className="ontology-workspace__field">
+              <span>行业命名空间（由名称自动生成，可修改）</span>
+              <input
+                type="text"
+                data-testid="workspace-create-namespace"
+                value={fields.namespace}
+                maxLength={NAMESPACE_MAX_LENGTH}
+                disabled={busy}
+                onChange={(event) => setField('namespace', event.target.value)}
+              />
+              {fieldErrors['namespace'] === undefined ? null : (
+                <small data-testid="workspace-create-error-namespace">{fieldErrors['namespace']}</small>
+              )}
+            </label>
+            <label className="ontology-workspace__field ontology-workspace__field--wide">
+              <span>业务目标（每行一个，可选）</span>
+              <textarea
+                data-testid="workspace-create-goals"
+                value={fields.goals}
+                disabled={busy}
+                onChange={(event) => setField('goals', event.target.value)}
+              />
+              {fieldErrors['goals'] === undefined ? null : (
+                <small data-testid="workspace-create-error-goals">{fieldErrors['goals']}</small>
+              )}
+            </label>
+            <label className="ontology-workspace__field">
+              <span>包含范围（每行一个）</span>
+              <textarea
+                data-testid="workspace-create-included"
+                value={fields.included}
+                disabled={busy}
+                onChange={(event) => setField('included', event.target.value)}
+              />
+            </label>
+            <label className="ontology-workspace__field">
+              <span>排除范围（每行一个）</span>
+              <textarea
+                data-testid="workspace-create-excluded"
+                value={fields.excluded}
+                disabled={busy}
+                onChange={(event) => setField('excluded', event.target.value)}
+              />
+            </label>
+            <label className="ontology-workspace__field">
+              <span>适用地区</span>
+              <input
+                type="text"
+                data-testid="workspace-create-region"
+                value={fields.region}
+                disabled={busy}
+                onChange={(event) => setField('region', event.target.value)}
+              />
+            </label>
+            <label className="ontology-workspace__field">
+              <span>生效时间</span>
+              <input
+                type="text"
+                data-testid="workspace-create-valid-from"
+                value={fields.validFrom}
+                disabled={busy}
+                onChange={(event) => setField('validFrom', event.target.value)}
+              />
+            </label>
+            <label className="ontology-workspace__field">
+              <span>失效时间</span>
+              <input
+                type="text"
+                data-testid="workspace-create-valid-to"
+                value={fields.validTo}
+                disabled={busy}
+                onChange={(event) => setField('validTo', event.target.value)}
+              />
+            </label>
+          </details>
           <button type="submit" data-testid="workspace-create-submit" disabled={busy}>
             {busy ? '保存中…' : '创建工作区'}
           </button>

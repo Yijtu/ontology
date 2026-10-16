@@ -184,7 +184,7 @@ export type {
 } from './components/AssistantShell'
 export { ScenarioErrorBoundary } from './components/ScenarioErrorBoundary'
 export type { ScenarioErrorBoundaryProps } from './components/ScenarioErrorBoundary'
-export { OntologyWorkspacePanel, EMPTY_CREATE_FIELDS, boundaryOf, validateCreateFields } from './components/OntologyWorkspacePanel'
+export { OntologyWorkspacePanel, EMPTY_CREATE_FIELDS, boundaryOf, validateCreateFields, namespaceFromName, isValidNamespace } from './components/OntologyWorkspacePanel'
 export type { OntologyWorkspacePanelProps, WorkspaceCreateFields } from './components/OntologyWorkspacePanel'
 export {
   DefinitionWorkbenchPanel,
