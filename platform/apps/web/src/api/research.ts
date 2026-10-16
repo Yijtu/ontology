@@ -286,6 +286,27 @@ export async function cancelResearchRun(
   return researchFromEnvelope(value)
 }
 
+/**
+ * Resume a non-terminal run (design §3/§10): the server re-arms the same execution, reusing its
+ * original binding and budget. It never revives a terminal run — that is what `continueResearchRun`
+ * is for. When the route is not served the caller classifies the failure and never fabricates a run.
+ */
+export async function resumeResearchRun(
+  client: Pick<WorkbenchClient, 'requestJson'>,
+  workspaceId: string,
+  researchId: string,
+  idempotencyKey: string,
+  signal?: AbortSignal,
+): Promise<ResearchExecutionView> {
+  const path = `/api/v1/industry-workspaces/${encodeURIComponent(workspaceId)}/research-runs/${encodeURIComponent(researchId)}/resume`
+  const value = await client.requestJson<unknown>('POST', path, {
+    body: {},
+    idempotencyKey,
+    ...(signal === undefined ? {} : { signal }),
+  })
+  return researchFromEnvelope(value)
+}
+
 /** A user-facing reason for a research failure; a missing route names the missing capability. */
 export function researchFailureReason(error: unknown): string {
   if (isResearchSurfaceMissing(error)) {
@@ -446,7 +467,7 @@ export async function readEffectiveSearchService(
   workspaceId: string,
   signal?: AbortSignal,
 ): Promise<SearchServiceAvailability> {
-  const query = new URLSearchParams({ scope: `workspace:${workspaceId}`, toolIds: SEARCH_SERVICE_TOOL_ID })
+  const query = new URLSearchParams({ scope: `workspace:${workspaceId}`, tools: SEARCH_SERVICE_TOOL_ID })
   try {
     const value = await client.requestJson<unknown>('GET', `/api/v1/core/ai/effective-tools?${query.toString()}`, signal === undefined ? {} : { signal })
     if (!Array.isArray(value)) return { state: 'unavailable', reason: '公共搜索服务的生效选择无法识别（响应格式不符）。' }

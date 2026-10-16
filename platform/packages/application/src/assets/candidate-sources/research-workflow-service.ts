@@ -25,7 +25,7 @@ import type { JobService } from '../../jobs/service'
 import type { ExecutionModelBindingService } from '../../model-settings/execution-model-binding-service'
 import { WebResearchError } from './web-research-service'
 import type { WebResearchService } from './web-research-service'
-import { RESEARCH_JOB_REQUEST_KIND, encodeResearchJobRequest } from './research-job-ref'
+import { RESEARCH_JOB_REQUEST_KIND, decodeResearchJobRequest, encodeResearchJobRequest } from './research-job-ref'
 
 const RESEARCH_ROLES: readonly string[] = ['researcher', 'platform-admin']
 const RESEARCH_PIPELINE_VERSION = '1.0.0'
@@ -68,6 +68,14 @@ export interface ResearchRunView {
 export interface ExecuteResearchInput {
   readonly researchId: Uuid
   readonly request: ResearchRequest
+}
+
+/**
+ * Optional linkage for a run that continues an earlier one (design §3/§10). It is informational:
+ * the continuation still gets its own id, authorization, budget and ledger.
+ */
+export interface ResearchContinuationLinkage {
+  readonly continuedFromResearchId: Uuid
 }
 
 function isTerminal(status: ResearchExecution['status']): boolean {
@@ -136,7 +144,7 @@ export class ResearchWorkflowService {
    * durable job and the budget-backed execution record, and return the queued run. Idempotent on
    * the request key: a replay reuses the same logical job and returns the same execution.
    */
-  async start(request: ResearchRequest, ctx: ToolContext): Promise<ResearchExecution> {
+  async start(request: ResearchRequest, ctx: ToolContext, linkage?: ResearchContinuationLinkage): Promise<ResearchExecution> {
     assertResearcher(ctx)
     assertResearchRequestShape(request)
     assertModelingBriefShape(request.brief)
@@ -192,6 +200,7 @@ export class ResearchWorkflowService {
       },
       sourceCount: 0,
       candidateCount: 0,
+      ...(linkage === undefined ? {} : { continuedFromResearchId: linkage.continuedFromResearchId }),
       recordedAt: this.#now(),
     }
     return this.#executions.putExecution(scope, execution, ctx)
@@ -336,6 +345,61 @@ export class ResearchWorkflowService {
     const execution = await this.#requireExecution(scope, researchId, ctx)
     if (isTerminal(execution.status)) return execution
     return this.#executions.putExecution(scope, { ...execution, status: 'cancelled', stopReason: 'cancelled' }, ctx)
+  }
+
+  /**
+   * Resume a non-terminal run (design §3/§10). It reuses the run's exact pinned binding and its one
+   * shared budget ledger: the durable job is re-armed by its deterministic key (a no-op when the job
+   * is already queued/running), never replaced by a second job or a fresh budget. A terminal run —
+   * cancelled, completed or failed — can never be revived here; the user must append a
+   * `continuations` run instead. The engine/runtime and the model/tool bindings are unchanged, so a
+   * resume never switches engine mid-run.
+   */
+  async resume(researchId: Uuid, ctx: ToolContext): Promise<ResearchExecution> {
+    assertResearcher(ctx)
+    const scope = scopeOf(ctx)
+    const execution = await this.#requireExecution(scope, researchId, ctx)
+    if (isTerminal(execution.status)) {
+      throw new ResearchError('VERSION_CONFLICT', `research run ${researchId} is ${execution.status} and cannot be resumed; append a continuation instead`)
+    }
+    // Re-arm the same logical job from the frozen `datasetRef`, so the worker resumes the exact
+    // authorized request on the same job id / ledger. `createJob` is idempotent on the key.
+    const job = await this.#jobs.getJob(execution.jobId, ctx)
+    const ref = decodeResearchJobRequest(job.datasetRef)
+    await this.#jobs.createJob({
+      jobId: execution.jobId,
+      kind: 'research',
+      sourceRef: 'workbench.research',
+      datasetRef: encodeResearchJobRequest(ref),
+      pipelineVersion: RESEARCH_PIPELINE_VERSION,
+      idempotencyKey: `research-run:${ref.request.idempotencyKey}`,
+    }, ctx)
+    return execution
+  }
+
+  /**
+   * Append research grounded in an already-ended run (design §3/§10). It creates a **new** execution
+   * with a new authorization, budget and id, linked to the previous run through
+   * `continuedFromResearchId`; the previous run stays frozen and is never revived or retried. An
+   * active run cannot be continued (its own result is not yet a product to build on).
+   */
+  async continuations(previousResearchId: Uuid, request: ResearchRequest, ctx: ToolContext): Promise<ResearchExecution> {
+    assertResearcher(ctx)
+    assertResearchRequestShape(request)
+    assertModelingBriefShape(request.brief)
+    const scope = scopeOf(ctx)
+    const previous = await this.#requireExecution(scope, previousResearchId, ctx)
+    if (!isTerminal(previous.status)) {
+      throw new ResearchError('VERSION_CONFLICT', `research run ${previousResearchId} is ${previous.status} and is still active; a continuation requires an ended run`)
+    }
+    if (previous.workspaceId !== request.workspaceId) {
+      throw new ResearchError('SCOPE_MISMATCH', 'a continuation must target the same workspace as the run it continues')
+    }
+    const continuedRequest: ResearchRequest = {
+      ...request,
+      idempotencyKey: `continuation:${previousResearchId}:${request.idempotencyKey}`,
+    }
+    return this.start(continuedRequest, ctx, { continuedFromResearchId: previousResearchId })
   }
 
   /** Between-page admission gate: once cancelled, no further page is registered. */

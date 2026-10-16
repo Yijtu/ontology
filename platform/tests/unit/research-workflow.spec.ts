@@ -350,5 +350,48 @@ describe('research workflow orchestration', () => {
     expect(executed.stopReason).toBe('no_results')
     expect(executed.sourceCount).toBe(0)
   })
+
+  it('resumes a non-terminal run by re-arming the same job on the same ledger', async () => {
+    const h = build(WITH_SNAPSHOT)
+    const context = ctx()
+    const queued = await h.workflow.start(request(), context)
+    const resumed = await h.workflow.resume(queued.researchId, context)
+    expect(resumed.researchId).toBe(queued.researchId)
+    expect(resumed.jobId).toBe(queued.jobId)
+    expect(resumed.status).toBe('queued')
+    // Re-arming reuses the one logical job: no second run/ledger is created.
+    expect(h.executions.rows.size).toBe(1)
+  })
+
+  it('refuses to resume a terminal run (cancelled/completed/failed cannot be revived)', async () => {
+    const h = build(WITH_SNAPSHOT)
+    const context = ctx()
+    const queued = await h.workflow.start(request(), context)
+    await h.workflow.cancel(queued.researchId, context)
+    await expect(h.workflow.resume(queued.researchId, context)).rejects.toMatchObject({ code: 'VERSION_CONFLICT' })
+  })
+
+  it('continues an ended run with a new linked execution and its own budget', async () => {
+    const h = build(WITH_SNAPSHOT)
+    const context = ctx()
+    const first = await h.workflow.start(request(), context)
+    await h.workflow.cancel(first.researchId, context)
+    const next = await h.workflow.continuations(first.researchId, request({ idempotencyKey: 'continuation-source-key' }), context)
+    expect(next.researchId).not.toBe(first.researchId)
+    expect(next.jobId).not.toBe(first.jobId)
+    expect(next.continuedFromResearchId).toBe(first.researchId)
+    expect(next.status).toBe('queued')
+    expect(h.executions.rows.size).toBe(2)
+    // The predecessor is untouched: the continuation never rewrites the frozen run.
+    expect(h.executions.rows.get(first.researchId)?.status).toBe('cancelled')
+  })
+
+  it('refuses to continue an active run', async () => {
+    const h = build(WITH_SNAPSHOT)
+    const context = ctx()
+    const first = await h.workflow.start(request(), context)
+    await expect(h.workflow.continuations(first.researchId, request({ idempotencyKey: 'continuation-source-key' }), context))
+      .rejects.toMatchObject({ code: 'VERSION_CONFLICT' })
+  })
 })
 

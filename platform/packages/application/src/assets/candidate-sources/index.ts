@@ -23,6 +23,7 @@ export {
 } from './research-workflow-service'
 export type {
   ExecuteResearchInput,
+  ResearchContinuationLinkage,
   ResearchRunView,
   ResearchWorkflowDependencies,
 } from './research-workflow-service'
