@@ -4,6 +4,7 @@ import {
   CandidateSourceError,
   ModelSelectionError,
   ResearchError,
+  ReviewHandoffError,
   SourceAdmissionError,
 } from '@ontology/contracts'
 import type {
@@ -19,9 +20,11 @@ import type {
   SourceAdmissionCommand,
   SourceAdmissionTableOptions,
   SourceRetractionCommand,
+  SourceTierPromotionCommand,
   SourceTrustTier,
   VersionRef,
   WebSearchFreshnessHint,
+  WorkspaceReviewHandoffReader,
 } from '@ontology/contracts'
 import {
   CandidateSourceReviewService,
@@ -73,6 +76,8 @@ export interface CandidateSourceRouteDependencies {
   readonly retractions?: CandidateSourceRetractionStore
   /** Present only when the deployment can admit a reviewed source into a corpus. */
   readonly admissions?: WorkspaceSourceAdmissionService
+  /** Present only when candidate↔source links are persisted; projects the source→asset hand-off. */
+  readonly handoff?: WorkspaceReviewHandoffReader
   readonly authenticate: RequestAuthenticator
 }
 
@@ -128,6 +133,13 @@ function classifiedFrom(error: unknown): never {
     throw Object.assign(new Error(error.message), { code: error.code, httpStatus })
   }
   if (error instanceof ResearchError) {
+    const httpStatus = error.code === 'NOT_FOUND' ? 404
+      : error.code === 'SCOPE_MISMATCH' ? 403
+        : error.code === 'INVALID_REQUEST' ? 400
+          : error.code === 'STORE_FAILED' ? 500 : 409
+    throw Object.assign(new Error(error.message), { code: error.code, httpStatus })
+  }
+  if (error instanceof ReviewHandoffError) {
     const httpStatus = error.code === 'NOT_FOUND' ? 404
       : error.code === 'SCOPE_MISMATCH' ? 403
         : error.code === 'INVALID_REQUEST' ? 400
@@ -268,6 +280,72 @@ export function registerCandidateSourceRoutes(
       return reply
     },
   )
+
+  // Promoting a source's provenance tier is separate from reviewing it (design §7): the review route
+  // above never changes the tier, and this route is restricted to a platform-admin. A regular editor
+  // may accept a source but may not raise an agent-researched proposal to a publishable standard.
+  app.post<{ Params: { workspaceId: string; sourceId: string } }>(
+    '/api/v1/industry-workspaces/:workspaceId/sources/:sourceId/tier-promotions',
+    async (request, reply) => {
+      const traceId = readTraceId(request)
+      const auth = authenticateRequest(dependencies.authenticate, request, reply)
+      if (auth === undefined) return reply
+      if (!auth.principal.roles.includes('platform-admin')) {
+        throw new ForbiddenError('promoting a source trust tier requires a platform-admin role')
+      }
+      const body = request.body
+      if (!isRecord(body)) throw new InvalidRequestFieldError('the request body must be a JSON object')
+      rejectUnknownFields(body, ['nextTrustTier', 'reason', 'basisRefs'])
+      if (typeof body['nextTrustTier'] !== 'string' || !(TRUST_TIERS as readonly string[]).includes(body['nextTrustTier'])) {
+        throw new InvalidRequestFieldError(`nextTrustTier must be one of ${TRUST_TIERS.join(', ')}`)
+      }
+      if (typeof body['reason'] !== 'string' || body['reason'].length === 0) {
+        throw new InvalidRequestFieldError('a promotion reason is required')
+      }
+      if (body['basisRefs'] !== undefined && !Array.isArray(body['basisRefs'])) {
+        throw new InvalidRequestFieldError('basisRefs must be an array of resource references')
+      }
+      const header = readRevisionHeader(request)
+      if (header.kind !== 'revision') throw new InvalidRequestFieldError('If-Match must be the source revision being promoted')
+      const workspaceId = request.params.workspaceId
+      const command: SourceTierPromotionCommand = {
+        schemaVersion: 'source-tier-promotion@1',
+        workspaceId,
+        sourceId: request.params.sourceId,
+        expectedRevision: header.value,
+        nextTrustTier: body['nextTrustTier'] as SourceTrustTier,
+        reason: body['reason'],
+        basisRefs: (body['basisRefs'] ?? []) as SourceTierPromotionCommand['basisRefs'],
+        promotedBy: auth.principal.subjectId,
+        idempotencyKey: requireIdempotencyKey(request),
+      }
+      const receipt = await review.promoteTier(command, contextFor(auth, traceId, workspaceId, []))
+        .catch((error: unknown) => classifiedFrom(error))
+      reply.status(receipt.replayed ? 200 : 201).send({ data: { promotion: receipt }, meta: { traceId, revision: receipt.revision } })
+      return reply
+    },
+  )
+
+  // The source→asset review hand-off projection (design §3/§4/§7): every candidate an agent
+  // submitted with open sources, each source shown separately with its review/admission status so a
+  // reader can see exactly which source still blocks the candidate. Read-only; only served when the
+  // deployment persists candidate↔source links.
+  if (dependencies.handoff !== undefined) {
+    const handoff = dependencies.handoff
+    app.get<{ Params: { workspaceId: string } }>(
+      '/api/v1/industry-workspaces/:workspaceId/review-handoff',
+      async (request, reply) => {
+        const traceId = readTraceId(request)
+        const auth = authenticateRequest(dependencies.authenticate, request, reply)
+        if (auth === undefined) return reply
+        const workspaceId = request.params.workspaceId
+        const view = await handoff.readHandoff(workspaceId, contextFor(auth, traceId, workspaceId, []))
+          .catch((error: unknown) => classifiedFrom(error))
+        reply.status(200).send({ data: view, meta: { traceId } })
+        return reply
+      },
+    )
+  }
 
   if (dependencies.admissions !== undefined) {
     const admissions = dependencies.admissions

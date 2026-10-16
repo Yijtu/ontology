@@ -6,6 +6,8 @@ export type {
 } from './ingestion-service'
 export { CandidateSourceReviewService } from './review-service'
 export type { CandidateSourceReviewServiceDependencies } from './review-service'
+export { CandidateReviewHandoffService } from './review-handoff-service'
+export type { CandidateReviewHandoffDependencies } from './review-handoff-service'
 export { WebResearchError, WebResearchService } from './web-research-service'
 export type {
   WebResearchCoverage,

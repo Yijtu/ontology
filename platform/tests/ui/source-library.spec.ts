@@ -110,34 +110,85 @@ describe('workspace source library and intake (N06)', () => {
     } finally { await unmount() }
   })
 
-  it('submits a versioned review (accept + re-tier) with reason and If-Match, then refreshes from the server', async () => {
-    let revision = '1'; let captured: { body: unknown; ifMatch: string | null; key: string | null } | undefined
+  it('keeps source review and tier promotion separate: review never carries a tier, promotion is its own control', async () => {
+    let revision = '1'
+    const reviewCaptured: { body: unknown; ifMatch: string | null }[] = []
+    const promotionCaptured: { body: unknown; ifMatch: string | null }[] = []
     const base = candidateSource('44444444-4444-4444-8444-444444444444', { contentRefId: S, title: '设备维护标准（网页归档）', trustTier: 'agent_researched', reviewState: 'proposed', kind: 'web_fetch' })
+    const approved = { ...base, revision: '2', reviewState: 'approved' }
+    const promoted = { ...base, revision: '3', reviewState: 'approved', trustTier: 'public_standard' }
     const client = new WorkbenchClient({ baseUrl: 'http://ui-unit.test', fetchImpl: async (input, init) => {
       const path = new URL(String(input)).pathname
-      if (init?.method === 'POST' && path.endsWith('/reviews')) {
-        captured = { body: JSON.parse(String(init.body)), ifMatch: new Headers(init.headers).get('if-match'), key: new Headers(init.headers).get('idempotency-key') }
-        revision = '2'
-        return json({ source: { ...base, revision, reviewState: 'approved', trustTier: 'public_standard' } }, 201)
+      if (init?.method === 'POST' && path.endsWith('/tier-promotions')) {
+        promotionCaptured.push({ body: JSON.parse(String(init.body)), ifMatch: new Headers(init.headers).get('if-match') })
+        revision = '3'
+        return json({ promotion: { sourceId: base.sourceId, revision, reviewState: 'approved', trustTier: 'public_standard', replayed: false } }, 201)
       }
+      if (init?.method === 'POST' && path.endsWith('/reviews')) {
+        reviewCaptured.push({ body: JSON.parse(String(init.body)), ifMatch: new Headers(init.headers).get('if-match') })
+        revision = '2'
+        return json({ source: approved, receipt: { replayed: false } }, 201)
+      }
+      if (path.endsWith('/review-handoff')) return json({ schemaVersion: 'review-handoff@1', workspaceId: W, candidates: [], asOf: '2026-10-01T00:00:00Z' })
       if (path.endsWith('/authoring-context')) return authoring('1')
       if (path.endsWith('/candidates')) return json({ candidates: [] })
-      if (path.includes('/industry-workspaces/')) return json({ sources: [revision === '2' ? { ...base, revision, reviewState: 'approved', trustTier: 'public_standard' } : base] })
+      if (path.includes('/industry-workspaces/')) return json({ sources: [revision === '3' ? promoted : revision === '2' ? approved : base] })
       return json({ workspace: workspace(), draft: draft('1'), sources: [corpusSource(S, '原始台账')] })
     } })
     const { container, unmount } = await render(client)
     try {
       const sid = '44444444-4444-4444-8444-444444444444'
       await clickRadio(container, `input[name="review-state-${sid}"][value="approved"]`)
-      await setSelect(container, `[data-testid="source-review-${sid}"] select`, 'public_standard')
-      const reason = container.querySelector<HTMLInputElement>(`[data-testid="source-review-${sid}"] input[type="text"], [data-testid="source-review-${sid}"] input:not([type])`)
-      if (reason === null) throw new Error('Missing reason input')
-      await act(async () => { Object.getOwnPropertyDescriptor(HTMLInputElement.prototype, 'value')?.set?.call(reason, '依据公开标准的第 4 章'); reason.dispatchEvent(new Event('input', { bubbles: true })) })
+      const reason = container.querySelector<HTMLInputElement>(`[data-testid="source-review-${sid}"] input:not([type="radio"]):not([type="checkbox"])`)
+      if (reason === null) throw new Error('Missing review reason input')
+      await act(async () => { Object.getOwnPropertyDescriptor(HTMLInputElement.prototype, 'value')?.set?.call(reason, '已对照原文确认'); reason.dispatchEvent(new Event('input', { bubbles: true })) })
       await click(container, `[data-testid="source-review-submit-${sid}"]`)
-      expect(captured?.ifMatch).toBe('1'); expect(captured?.key).toBeTruthy()
-      expect(captured?.body).toEqual({ reviewState: 'approved', trustTier: 'public_standard', reason: '依据公开标准的第 4 章', basisRefs: [] })
+      expect(reviewCaptured[0]?.ifMatch).toBe('1')
+      expect(reviewCaptured[0]?.body).toEqual({ reviewState: 'approved', reason: '已对照原文确认', basisRefs: [] })
       expect(container.querySelector('[data-testid="source-review-notice"]')?.textContent).toContain('来源审核已记录')
-      expect(entry(container, '设备维护标准（网页归档）').querySelector('[data-testid="entry-review"]')?.textContent).toBe('已接受')
+      // Let the refresh after the review settle so the promotion control is enabled again.
+      for (let i = 0; i < 5; i += 1) await act(async () => { await new Promise((resolve) => setTimeout(resolve, 0)) })
+
+      // The promotion is a distinct control, and its request names the new tier explicitly.
+      await setSelect(container, `[data-testid="source-promotion-${sid}"] select`, 'public_standard')
+      const promotionReason = container.querySelector<HTMLInputElement>(`[data-testid="source-promotion-${sid}"] input:not([type])`)
+      if (promotionReason === null) throw new Error('Missing promotion reason input')
+      await act(async () => { Object.getOwnPropertyDescriptor(HTMLInputElement.prototype, 'value')?.set?.call(promotionReason, '原文为公开规范'); promotionReason.dispatchEvent(new Event('input', { bubbles: true })) })
+      await click(container, `[data-testid="source-promotion-submit-${sid}"]`)
+      expect(promotionCaptured[0]?.body).toEqual({ nextTrustTier: 'public_standard', reason: '原文为公开规范', basisRefs: [] })
+      expect(container.querySelector('[data-testid="source-promotion-notice"]')?.textContent).toContain('来源类别已提升')
+    } finally { await unmount() }
+  })
+
+  it('shows each pending product with each cited source kept separate and the blocking reason explicit', async () => {
+    const client = new WorkbenchClient({ baseUrl: 'http://ui-unit.test', fetchImpl: async (input) => {
+      const path = new URL(String(input)).pathname
+      if (path.endsWith('/review-handoff')) return json({
+        schemaVersion: 'review-handoff@1', workspaceId: W, asOf: '2026-10-01T00:00:00Z',
+        candidates: [{ candidateId: U, candidateKind: 'definition', state: 'pending_confirmation', blocked: true, blockCodes: ['SOURCE_TRUST_BLOCKED'],
+          pendingConfirmation: true, readiness: 'pending_sources', allSourcesConfirmed: false,
+          links: [
+            { index: 0, sourceRef: { id: S, version: '1.0.0', digest, kind: 'document' }, reviewState: 'approved', trustTier: 'public_standard', admitted: true, groundsPublication: true, pendingConfirmation: false },
+            { index: 1, sourceRef: { id: T, version: '1.0.0', digest, kind: 'document' }, reviewState: 'proposed', trustTier: 'agent_researched', admitted: false, groundsPublication: false, pendingConfirmation: true, blockReason: 'SOURCE_TRUST_BLOCKED' },
+          ] }],
+      })
+      if (path.endsWith('/authoring-context')) return authoring('1')
+      if (path.endsWith('/candidates')) return json({ candidates: [] })
+      if (path.includes('/industry-workspaces/')) return json({ sources: [] })
+      return json({ workspace: workspace(), draft: draft('1'), sources: [] })
+    } })
+    const { container, unmount } = await render(client)
+    try {
+      const section = container.querySelector('[data-testid="review-handoff"]')
+      expect(section?.getAttribute('data-availability')).toBe('ready')
+      const card = container.querySelector('[data-testid="review-handoff-candidate"]')
+      expect(card?.getAttribute('data-blocked')).toBe('true')
+      expect(card?.getAttribute('data-readiness')).toBe('pending_sources')
+      const links = container.querySelectorAll('[data-testid="review-handoff-link"]')
+      expect(links).toHaveLength(2)
+      expect(container.querySelector('[data-testid="review-handoff-readiness"]')?.textContent).toContain('仍有来源未确认')
+      expect(section?.textContent).toContain('AI 调研，待确认')
+      expect(section?.textContent).toContain('已接受')
     } finally { await unmount() }
   })
 

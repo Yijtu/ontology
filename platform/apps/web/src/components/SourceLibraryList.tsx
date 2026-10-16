@@ -10,10 +10,19 @@ import './ontology/ontology.css'
  * (four-level trust tier), 审核状态, 解析状态 and 纳入状态 — so a source that merely parsed, or merely
  * passed a web review, is never presented as an authoritative business fact. The review form is
  * local-state so a server conflict or a reload keeps the reviewer's in-progress reason and choice.
+ *
+ * Accepting a source and raising its 来源类别 are deliberately two separate controls (design §7):
+ * the review only records 审核状态, while a promotion is a distinct, platform-admin operation. The
+ * promotion control is shown but the server refuses a caller without the role, so the UI never
+ * pretends the reviewer may promote.
  */
 export interface SourceReviewSubmission {
   readonly reviewState: CandidateSourceReviewState
-  readonly trustTier: SourceTrustTier
+  readonly reason: string
+}
+
+export interface SourcePromotionSubmission {
+  readonly nextTrustTier: SourceTrustTier
   readonly reason: string
 }
 
@@ -23,6 +32,7 @@ export interface SourceLibraryListProps {
   readonly busy: boolean
   readonly reviewBusyId: string | undefined
   readonly onReview: (entry: SourceLibraryEntry, submission: SourceReviewSubmission) => void
+  readonly onPromote: (entry: SourceLibraryEntry, submission: SourcePromotionSubmission) => void
   readonly onPreview: (ref: ResourceRef) => void
 }
 
@@ -33,14 +43,13 @@ function SourceReviewForm({ entry, busy, onSubmit }: {
 }) {
   const candidate = entry.candidate
   const [reviewState, setReviewState] = useState<CandidateSourceReviewState>('approved')
-  const [trustTier, setTrustTier] = useState<SourceTrustTier>(candidate?.trustTier ?? 'agent_researched')
   const [reason, setReason] = useState('')
   if (candidate === undefined) return null
   const submit = busy || reason.trim().length === 0
   return (
     <fieldset className="ontology-checks" data-testid={`source-review-${candidate.sourceId}`}>
       <legend>来源审核 · {candidate.sourceId}</legend>
-      <p className="ontology-hint">审核通过与提升来源类别是两件事：接受一份网页不会让它自动成为公共标准。请分别说明依据。</p>
+      <p className="ontology-hint">审核只记录审核状态，不会改变来源类别：接受一份网页不会让它自动成为公共标准。类别提升是下方单独的、需管理员权限的操作。</p>
       <label>
         <input type="radio" name={`review-state-${candidate.sourceId}`} value="approved" checked={reviewState === 'approved'} disabled={busy}
           onChange={() => setReviewState('approved')} />
@@ -51,26 +60,49 @@ function SourceReviewForm({ entry, busy, onSubmit }: {
           onChange={() => setReviewState('rejected')} />
         <span>拒绝，不纳入建模</span>
       </label>
-      <Field label="来源类别（改类别）" hint="只列出契约允许的四级；模型不能代替人工确认。">
+      <Field label="审核理由" hint="必填；作为追加的审核事件记录，不覆盖历史。">
+        {(attributes) => <input {...attributes} value={reason} disabled={busy} onChange={(event) => setReason(event.target.value)} />}
+      </Field>
+      <Button variant="primary" disabled={submit} data-testid={`source-review-submit-${candidate.sourceId}`}
+        onClick={() => onSubmit({ reviewState, reason: reason.trim() })}>提交来源审核</Button>
+    </fieldset>
+  )
+}
+
+function SourcePromotionForm({ entry, busy, onSubmit }: {
+  readonly entry: SourceLibraryEntry
+  readonly busy: boolean
+  readonly onSubmit: (submission: SourcePromotionSubmission) => void
+}) {
+  const candidate = entry.candidate
+  const [nextTrustTier, setNextTrustTier] = useState<SourceTrustTier>(candidate?.trustTier ?? 'agent_researched')
+  const [reason, setReason] = useState('')
+  if (candidate === undefined) return null
+  const submit = busy || reason.trim().length === 0 || nextTrustTier === candidate.trustTier
+  return (
+    <fieldset className="ontology-checks" data-testid={`source-promotion-${candidate.sourceId}`}>
+      <legend>提升来源类别（需管理员）· {candidate.sourceId}</legend>
+      <p className="ontology-hint">提升来源类别是单独、需平台管理员权限且可审计的操作；它不改变审核状态。只列出契约允许的四级，模型不能代替人工确认。</p>
+      <Field label="目标来源类别">
         {(attributes) => (
-          <select {...attributes} value={trustTier} disabled={busy || reviewState !== 'approved'}
-            onChange={(event) => setTrustTier(event.target.value as SourceTrustTier)}>
+          <select {...attributes} value={nextTrustTier} disabled={busy}
+            onChange={(event) => setNextTrustTier(event.target.value as SourceTrustTier)}>
             {(Object.keys(TRUST_TIER_LABELS) as SourceTrustTier[]).map((tier) => (
               <option key={tier} value={tier}>{TRUST_TIER_LABELS[tier]}</option>
             ))}
           </select>
         )}
       </Field>
-      <Field label="审核理由" hint="必填；作为追加的审核事件记录，不覆盖历史。">
+      <Field label="提升理由" hint="必填；记录为一条追加事件，保留何时、由谁提升类别。">
         {(attributes) => <input {...attributes} value={reason} disabled={busy} onChange={(event) => setReason(event.target.value)} />}
       </Field>
-      <Button variant="primary" disabled={submit} data-testid={`source-review-submit-${candidate.sourceId}`}
-        onClick={() => onSubmit({ reviewState, trustTier, reason: reason.trim() })}>提交来源审核</Button>
+      <Button variant="secondary" disabled={submit} data-testid={`source-promotion-submit-${candidate.sourceId}`}
+        onClick={() => onSubmit({ nextTrustTier, reason: reason.trim() })}>提升来源类别</Button>
     </fieldset>
   )
 }
 
-export function SourceLibraryList({ entries, readOnly, busy, reviewBusyId, onReview, onPreview }: SourceLibraryListProps) {
+export function SourceLibraryList({ entries, readOnly, busy, reviewBusyId, onReview, onPromote, onPreview }: SourceLibraryListProps) {
   if (entries.length === 0) return null
   return (
     <ul className="ontology-library" data-testid="source-library-list">
@@ -94,8 +126,12 @@ export function SourceLibraryList({ entries, readOnly, busy, reviewBusyId, onRev
             ? <p className="ontology-hint">尚未归档可读原文；审核不改变这一事实。</p>
             : <Button disabled={busy} onClick={() => { if (entry.previewRef !== undefined) onPreview(entry.previewRef) }}>查看真实原文与片段</Button>}
           {readOnly || entry.candidate === undefined ? null : (
-            <SourceReviewForm entry={entry} busy={busy || reviewBusyId !== undefined}
-              onSubmit={(submission) => onReview(entry, submission)} />
+            <>
+              <SourceReviewForm entry={entry} busy={busy || reviewBusyId !== undefined}
+                onSubmit={(submission) => onReview(entry, submission)} />
+              <SourcePromotionForm entry={entry} busy={busy || reviewBusyId !== undefined}
+                onSubmit={(submission) => onPromote(entry, submission)} />
+            </>
           )}
         </li>
       ))}

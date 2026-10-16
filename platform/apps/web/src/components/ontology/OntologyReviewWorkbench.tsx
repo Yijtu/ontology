@@ -9,7 +9,10 @@ import { invalidWire, readGrounding, readHumanReviews } from '../../api/ontology
 import { editorAttributeChoices, editorObjectChoices, editorRelationChoices } from '../../api/semantic-authoring'
 import { classifyPublicError } from '../../state/public-errors'
 import type { PublicFailure } from '../../state/public-errors'
+import { readReviewHandoff } from '../../api/source-library'
+import type { ReviewHandoffReadResult } from '../../api/source-library'
 import { PublicStateNotice } from '../PublicStateNotice'
+import { ReviewHandoffList } from '../ReviewHandoffList'
 import { Button, Drawer, Field, StatusBadge, StateFeedback } from '../ui'
 import { ConditionEditor, conditionSummary, clausePaths } from './ConditionEditor'
 import { DefinitionEditor } from './DefinitionEditor'
@@ -57,6 +60,7 @@ export function OntologyReviewWorkbench({ client, workspaceId, readOnly = false,
   const [failure, setFailure] = useState<PublicFailure>()
   const [notice, setNotice] = useState('')
   const [buffers, setBuffers] = useState<ReadonlyMap<string, EditBuffer>>(new Map())
+  const [handoff, setHandoff] = useState<ReviewHandoffReadResult>()
   const [authoring, setAuthoring] = useState<WorkspaceAuthoringContext>()
   const [authoringFailure, setAuthoringFailure] = useState<PublicFailure>()
   const [actionDraft, setActionDraft] = useState<ActionDeclaration>()
@@ -125,6 +129,8 @@ export function OntologyReviewWorkbench({ client, workspaceId, readOnly = false,
       const head = drafts.reduce<AssetDraftVersion | undefined>((a, b) => a === undefined || BigInt(b.revision) > BigInt(a.revision) ? b : a, undefined)
       setDefinitions(ds); setRules(rs); setDraft(head); setBatches(batchList); setUnsupported(unsupportedList); setAdjudications(adjudicationList)
       setSelectedId((old) => [...currentHeads(ds), ...currentHeads(rs)].some((c) => c.candidateId === (preferred ?? old)) ? preferred ?? old : currentHeads(ds)[0]?.candidateId ?? currentHeads(rs)[0]?.candidateId ?? '')
+      const handoffRead = await readReviewHandoff(client, workspaceId)
+      if (epoch.current === token && currentWorkspace.current === workspaceId) setHandoff(handoffRead)
       if (head !== undefined) {
         const result = await client.getDefinitionCompatibility(workspaceId, head.revision)
         if (epoch.current === token) setDiff(result)
@@ -261,6 +267,7 @@ export function OntologyReviewWorkbench({ client, workspaceId, readOnly = false,
     <ol className="ontology-stepper" aria-label="工作流程"><li>1 资料准备</li><li>2 生成候选</li><li aria-current="step">3 编辑与审核</li><li>4 能力验核</li><li>5 版本发布</li></ol>
     {readOnly ? <p role="status" className="ontology-notice">当前为只读角色，可查看定义、原始依据和审核记录。</p> : null}
     {failure === undefined ? null : <PublicStateNotice failure={failure} onRecover={() => void load()} />}{notice ? <p role="status" className="ontology-notice">{notice}</p> : null}
+    <ReviewHandoffList handoff={handoff} title="待确认产物（候选来源 / 候选资产 / 未解决）" />
     {loading && all.length === 0 ? <StateFeedback title="正在读取候选" description="读取当前工作区的真实草稿与候选版本。" tone="loading" /> : <>
     <div className="ontology-mobile-tabs" role="tablist" aria-label="工作区面板" onKeyDown={(event) => { if (!['ArrowLeft', 'ArrowRight', 'Home', 'End'].includes(event.key)) return; event.preventDefault(); const current = PANES.findIndex((item) => item.key === pane); const next = event.key === 'Home' ? PANES[0] : event.key === 'End' ? PANES[2] : PANES[(current + (event.key === 'ArrowRight' ? 1 : 2)) % 3]; if (next !== undefined) { setPane(next.key); event.currentTarget.querySelector<HTMLButtonElement>(`[data-ontology-pane="${next.key}"]`)?.focus() } }}>{PANES.map(({ key, label }) => <Button key={key} id={`${panelId}-tab-${key}`} data-ontology-pane={key} role="tab" aria-controls={`${panelId}-pane-${key}`} tabIndex={pane === key ? 0 : -1} aria-selected={pane === key} onClick={() => setPane(key)}>{label}</Button>)}</div>
     <div className="ontology-three-pane" data-pane={pane}><aside className="ontology-queue" id={`${panelId}-pane-list`} role="tabpanel" aria-labelledby={`${panelId}-tab-list`}><h3>待处理候选</h3><Field label="搜索业务名称或含义">{(a) => <input {...a} type="search" value={search} onChange={(e) => setSearch(e.target.value)} />}</Field><Field label="筛选类别">{(a) => <select {...a} value={filter} onChange={(e) => setFilter(e.target.value)}><option value="all">全部</option><option value="needs_source">待确认来源</option>{Object.entries(labelKind).map(([key, label]) => <option key={key} value={key}>{label}</option>)}</select>}</Field>

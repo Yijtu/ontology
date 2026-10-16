@@ -2,6 +2,7 @@ import {
   CandidateSourceError,
   assertCandidateSourceReviewCommandShape,
   assertSourceRetractionCommandShape,
+  assertSourceTierPromotionCommandShape,
   isToolContext,
   SourceAdmissionError,
 } from '@ontology/contracts'
@@ -15,11 +16,14 @@ import type {
   SourceRetraction,
   SourceRetractionCommand,
   SourceRetractionReceipt,
+  SourceTierPromotionCommand,
+  SourceTierPromotionReceipt,
   ToolContext,
   Uuid,
 } from '@ontology/contracts'
 
 const EDITOR_ROLES: readonly string[] = ['profile-editor', 'platform-admin']
+const PROMOTION_ROLES: readonly string[] = ['platform-admin']
 
 export interface CandidateSourceReviewServiceDependencies {
   readonly sources: CandidateSourceStore
@@ -61,10 +65,63 @@ export class CandidateSourceReviewService {
     if (source.workspaceId !== command.workspaceId) {
       throw new CandidateSourceError('SCOPE_MISMATCH', 'the candidate source belongs to another workspace')
     }
+    // Accepting/rejecting a source never changes its provenance tier (design §7): a review only
+    // records the review state. Raising `agent_researched` to a publishable tier is a separate,
+    // permissioned promotion (`promoteTier`), so review and promotion cannot be conflated.
+    if (command.trustTier !== undefined && command.trustTier !== source.trustTier) {
+      throw new CandidateSourceError('FORBIDDEN', 'changing a source trust tier is a separate promotion operation, not a review')
+    }
     if (this.#sources.reviewSourceCommand === undefined) {
       throw new CandidateSourceError('STORE_FAILED', 'the store does not support append-only review events')
     }
     return this.#sources.reviewSourceCommand(scope, command, ctx)
+  }
+
+  /**
+   * Promote a source's provenance tier (design §7). This is deliberately separate from a review and
+   * requires a `platform-admin` role: accepting a source for modelling never by itself promotes an
+   * agent-researched proposal to `public_standard`/`customer_authoritative`. The promotion appends
+   * an auditable review event that keeps the review state and records the tier change, so the review
+   * history still shows exactly when (and by whom) the tier moved.
+   */
+  async promoteTier(command: SourceTierPromotionCommand, ctx: ToolContext): Promise<SourceTierPromotionReceipt> {
+    const scope = scopeOf(ctx)
+    this.#assertPromoter(ctx)
+    assertSourceTierPromotionCommandShape(command)
+    if (command.promotedBy !== ctx.principal.subjectId) {
+      throw new CandidateSourceError('SCOPE_MISMATCH', 'the promotedBy must be the trusted subject')
+    }
+    const source = await this.#sources.getSource(scope, command.sourceId, ctx)
+    if (source === undefined) throw new CandidateSourceError('NOT_FOUND', `candidate source ${command.sourceId} is not visible in this scope`)
+    if (source.workspaceId !== command.workspaceId) {
+      throw new CandidateSourceError('SCOPE_MISMATCH', 'the candidate source belongs to another workspace')
+    }
+    if (source.trustTier === command.nextTrustTier) {
+      throw new CandidateSourceError('INVALID_SOURCE', 'the promotion does not change the source trust tier')
+    }
+    if (this.#sources.reviewSourceCommand === undefined) {
+      throw new CandidateSourceError('STORE_FAILED', 'the store does not support append-only review events')
+    }
+    const receipt = await this.#sources.reviewSourceCommand(scope, {
+      schemaVersion: 'candidate-source-review@1',
+      sourceId: command.sourceId,
+      workspaceId: command.workspaceId,
+      reviewState: source.reviewState,
+      trustTier: command.nextTrustTier,
+      reviewedBy: command.promotedBy,
+      reason: command.reason,
+      expectedRevision: command.expectedRevision,
+      basisRefs: command.basisRefs,
+      idempotencyKey: command.idempotencyKey,
+    }, ctx)
+    return {
+      sourceId: receipt.sourceId,
+      revision: receipt.revision,
+      reviewState: receipt.reviewState,
+      trustTier: receipt.trustTier,
+      eventId: receipt.eventId,
+      replayed: receipt.replayed,
+    }
   }
 
   async listReviewEvents(workspaceId: Uuid, sourceId: Uuid,
@@ -123,5 +180,10 @@ export class CandidateSourceReviewService {
   #assertEditor(ctx: ToolContext): void {
     if (ctx.principal.roles.some((role) => EDITOR_ROLES.includes(role))) return
     throw new CandidateSourceError('FORBIDDEN', 'a source review requires an editor or platform-admin role')
+  }
+
+  #assertPromoter(ctx: ToolContext): void {
+    if (ctx.principal.roles.some((role) => PROMOTION_ROLES.includes(role))) return
+    throw new CandidateSourceError('FORBIDDEN', 'promoting a source trust tier requires a platform-admin role')
   }
 }

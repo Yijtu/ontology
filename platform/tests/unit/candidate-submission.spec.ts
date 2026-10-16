@@ -260,6 +260,33 @@ describe('controlled candidate submission', () => {
     expect((await definitionCandidates.getCandidate(SCOPE, original.candidateId, EDITOR))?.pendingConfirmation).toBe(true)
   })
 
+  it('refuses to re-ground while any cited source is still unapproved (partial review cannot unblock)', async () => {
+    const grounding: SourceGroundingPort = {
+      read: async (request, _ctx, budget) => ({
+        documentSetRef: makeDraft().documentSetRef,
+        coverage: 'partial',
+        usage: budget.usage(),
+        sources: request.sourceRefs.map((sourceRef, index) => index === 0
+          ? { sourceRef, trust: 'untrusted_source_data' as const, trustTier: 'agent_researched' as const, status: 'failed' as const, reasons: ['NOT_APPROVED' as const], contents: [] }
+          : { sourceRef, trust: 'untrusted_source_data' as const, trustTier: 'customer_authoritative' as const, status: 'complete' as const, reasons: [],
+              contents: [{ kind: 'text' as const, text: 'Approved tariff text.', sourceSpan: {
+                parseId: AUTH_PARSE_ID, chunkId: '88888888-8888-4888-8888-888888888888',
+                locator: { kind: 'offset' as const, startOffset: 0, endOffset: 20 }, spanKind: 'verbatim' as const, precision: 'exact' as const,
+                quoteDigest: DIGEST_A, textDigest: DIGEST_A } }] }),
+      }),
+    }
+    const { service, definitionCandidates } = await harness({ grounding, withAuthorized: true })
+    const submitted = await service.submit(SCOPE, request(command([definitionCandidate([webEvidence, locatedEvidence])])), EDITOR)
+    const original = submitted.accepted[0]!
+    expect(original.pendingConfirmation).toBe(true)
+    const originalCandidate = await definitionCandidates.getCandidate(SCOPE, original.candidateId, EDITOR)
+    await expect(service.reground(WORKSPACE, original.candidateId, originalCandidate!.contentDigest, 'reground-partial-0001', EDITOR))
+      .rejects.toMatchObject({ code: 'SOURCE_TRUST_BLOCKED' })
+    // The blocked candidate is untouched; no unblocked successor was written.
+    expect((await definitionCandidates.getCandidate(SCOPE, original.candidateId, EDITOR))?.pendingConfirmation).toBe(true)
+    expect((await definitionCandidates.listCandidates(SCOPE, WORKSPACE, {}, EDITOR)).length).toBe(1)
+  })
+
   it('refuses a submission aimed at a workspace outside the trusted scope', async () => {
     const { service } = await harness()
     await expect(service.submit(SCOPE, request(command([definitionCandidate([webEvidence])], '00000000-0000-4000-8000-000000000000')), EDITOR))

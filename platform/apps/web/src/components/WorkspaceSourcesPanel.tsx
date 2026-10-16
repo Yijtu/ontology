@@ -16,9 +16,10 @@ import { PublicEmptyState, PublicStateNotice } from './PublicStateNotice'
 import { SourceIntakeEntries } from './SourceIntakeEntries'
 import type { SourceIntakeEntryView } from './SourceIntakeEntries'
 import { SourceLibraryList } from './SourceLibraryList'
-import type { SourceReviewSubmission } from './SourceLibraryList'
-import { mergeSourceLibrary, readCandidateSources, REVIEW_STATE_LABELS, reviewCandidateSource, TRUST_TIER_LABELS } from '../api/source-library'
-import type { CandidateSourceReadResult, SourceIntakePurpose, SourceLibraryEntry } from '../api/source-library'
+import type { SourcePromotionSubmission, SourceReviewSubmission } from './SourceLibraryList'
+import { mergeSourceLibrary, promoteCandidateSourceTier, readCandidateSources, readReviewHandoff, REVIEW_STATE_LABELS, reviewCandidateSource, TRUST_TIER_LABELS } from '../api/source-library'
+import type { CandidateSourceReadResult, ReviewHandoffReadResult, SourceIntakePurpose, SourceLibraryEntry } from '../api/source-library'
+import { ReviewHandoffList } from './ReviewHandoffList'
 import { Button, DataTable, Drawer, Field, StatusBadge } from './ui'
 import './ontology/ontology.css'
 
@@ -54,9 +55,13 @@ export function WorkspaceSourcesPanel({ client, workspace, readOnly = false, onW
   const [purpose, setPurpose] = useState<SourceIntakePurpose>('industry_basis')
   const [activeEntry, setActiveEntry] = useState<SourceEntryPoint>()
   const [library, setLibrary] = useState<CandidateSourceReadResult>()
+  const [handoff, setHandoff] = useState<ReviewHandoffReadResult>()
   const [reviewBusyId, setReviewBusyId] = useState<string>()
   const [reviewNotice, setReviewNotice] = useState('')
   const [reviewFailure, setReviewFailure] = useState<PublicFailure>()
+  const [promotionBusyId, setPromotionBusyId] = useState<string>()
+  const [promotionNotice, setPromotionNotice] = useState('')
+  const [promotionFailure, setPromotionFailure] = useState<PublicFailure>()
   const [selected, setSelected] = useState<readonly string[]>([])
   const [ruleTerms, setRuleTerms] = useState<readonly AssetCandidateVersion[]>([])
   const [selectedRuleTermIds, setSelectedRuleTermIds] = useState<readonly string[]>([])
@@ -98,6 +103,9 @@ export function WorkspaceSourcesPanel({ client, workspace, readOnly = false, onW
       const candidateLibrary = await readCandidateSources(client, workspace.workspaceId, abort.signal)
       if (abort.signal.aborted || epoch.current !== token) return
       setLibrary(candidateLibrary)
+      const handoffView = await readReviewHandoff(client, workspace.workspaceId, abort.signal)
+      if (abort.signal.aborted || epoch.current !== token) return
+      setHandoff(handoffView)
     } catch (error) { if (!abort.signal.aborted && epoch.current === token) { setFailure(classifyPublicError(error)); setRuleTermsPhase('failure') } }
   }, [client, workspace.workspaceId, workspace.headRevision])
   useEffect(() => {
@@ -156,17 +164,35 @@ export function WorkspaceSourcesPanel({ client, workspace, readOnly = false, onW
     try {
       const result = await reviewCandidateSource(client, workspace.workspaceId, {
         sourceId: candidate.sourceId, reviewState: submission.reviewState,
-        ...(submission.reviewState === 'approved' ? { trustTier: submission.trustTier } : {}),
         reason: submission.reason, expectedRevision: candidate.revision, basisRefs: [], idempotencyKey: client.newRequestKey(),
       }, { signal: abort.signal })
       if (abort.signal.aborted || token !== epoch.current) return
-      setReviewNotice(`来源审核已记录（${REVIEW_STATE_LABELS[result.reviewState]} · ${TRUST_TIER_LABELS[result.trustTier]}）${result.replayed ? '（幂等回执，未重复追加事件）' : ''}。审核通过与提升来源类别是两件事。`)
+      setReviewNotice(`来源审核已记录（${REVIEW_STATE_LABELS[result.reviewState]}）。审核只改审核状态；若需提升来源类别，请使用单独的提升操作（需管理员权限）。${result.replayed ? '（幂等回执，未重复追加事件）' : ''}`)
       await load()
     } catch (error) {
       if (token !== epoch.current) return
       if (abort.signal.aborted) setReviewNotice('已停止等待审核结果；服务端记录状态以重新读取为准，本次输入保留在表单中。')
       else setReviewFailure(classifyPublicError(error))
-    } finally { if (token === epoch.current) setReviewBusyId(undefined) }
+    } finally { setReviewBusyId(undefined) }
+  }
+  const submitPromotion = async (entry: SourceLibraryEntry, submission: SourcePromotionSubmission) => {
+    const candidate = entry.candidate
+    if (readOnly || busy || promotionBusyId !== undefined || candidate === undefined) return
+    const token = epoch.current; const abort = new AbortController(); controller.current = abort
+    setPromotionBusyId(candidate.sourceId); setPromotionNotice(''); setPromotionFailure(undefined)
+    try {
+      const result = await promoteCandidateSourceTier(client, workspace.workspaceId, {
+        sourceId: candidate.sourceId, nextTrustTier: submission.nextTrustTier,
+        reason: submission.reason, expectedRevision: candidate.revision, basisRefs: [], idempotencyKey: client.newRequestKey(),
+      }, { signal: abort.signal })
+      if (abort.signal.aborted || token !== epoch.current) return
+      setPromotionNotice(`来源类别已提升为「${TRUST_TIER_LABELS[result.trustTier]}」。提升不改变审核状态。${result.replayed ? '（幂等回执，未重复追加事件）' : ''}`)
+      await load()
+    } catch (error) {
+      if (token !== epoch.current) return
+      if (abort.signal.aborted) setPromotionNotice('已停止等待提升结果；服务端记录状态以重新读取为准，本次输入保留在表单中。')
+      else setPromotionFailure(classifyPublicError(error))
+    } finally { setPromotionBusyId(undefined) }
   }
   const generate = async () => {
     if (readOnly || busy || context === undefined || catalogue === undefined || selected.length === 0) return
@@ -205,11 +231,14 @@ export function WorkspaceSourcesPanel({ client, workspace, readOnly = false, onW
     <p className="ontology-hint">来源库把每条来源的四件事分开显示：来源类别（四级）、审核状态、解析状态、纳入状态。接受一份来源不等于把它提升为公共标准。</p>
     {reviewFailure === undefined ? null : <PublicStateNotice testId="source-review-failure" failure={reviewFailure} onRecover={() => void load()} />}
     {reviewNotice ? <p role="status" className="ontology-notice" data-testid="source-review-notice">{reviewNotice}</p> : null}
+    {promotionFailure === undefined ? null : <PublicStateNotice testId="source-promotion-failure" failure={promotionFailure} onRecover={() => void load()} />}
+    {promotionNotice ? <p role="status" className="ontology-notice" data-testid="source-promotion-notice">{promotionNotice}</p> : null}
     {library === undefined ? <p className="ontology-empty" data-testid="source-library-loading">正在读取来源审核记录…</p> : <>
       {library.availability === 'unavailable' ? <p className="ontology-empty" data-testid="source-library-unavailable">{library.reason}</p> : null}
       {libraryEmpty ? <PublicEmptyState testId="source-library-empty" title="还没有来源记录" requirement="至少一条真实来源：上传并读取的资料，或经 AI 搜寻后确认来源。" nextStep="使用上方的三料源入口开始；上传或确认后会在这里显示真实的类别、审核、解析与纳入状态。" /> : null}
-      <SourceLibraryList entries={libraryEntries} readOnly={readOnly} busy={busy} reviewBusyId={reviewBusyId} onReview={(entry, submission) => void submitReview(entry, submission)} onPreview={(ref) => void previewSource(ref)} />
+      <SourceLibraryList entries={libraryEntries} readOnly={readOnly} busy={busy} reviewBusyId={reviewBusyId ?? promotionBusyId} onReview={(entry, submission) => void submitReview(entry, submission)} onPromote={(entry, submission) => void submitPromotion(entry, submission)} onPreview={(ref) => void previewSource(ref)} />
     </>}
+    <ReviewHandoffList handoff={handoff} />
     <Drawer open={previewOpen} title="原始资料预览" onClose={() => setPreviewOpen(false)}><SourceEvidencePane value={preview} selected={fragment} onSelect={setFragment} /></Drawer>
     <section className="ontology-generation"><h3>生成候选</h3>{context === undefined ? <p>尚未取得当前环境的真实生成配置。</p> : <><p>{context.models.generationEnabled ? '生成模型已配置。' : '生成模型未配置；仍可读取资料、手动编辑已有候选并确认真实来源。'} 决策模型{context.models.decisionEnabled ? '已配置' : '未配置'}。</p><p className="ontology-hint">每次最多生成 {context.generationLimits.maxCandidatesPerCall} 个候选；最多读取 {context.generationLimits.maxSources} 份资料与 {context.generationLimits.sourceFragments} 个片段。输入上下文上限 {context.generationLimits.sourceContextBytes / 1024} KiB，原始读取上限 {context.generationLimits.sourceReadBytes / 1024} KiB，模型输出长度预算 {context.generationLimits.maxOutputTokens} tokens。剩余额度未提供，不显示推测进度或模型正确率。</p>{!readOnly ? <div className="ontology-actions"><Field label="生成范围">{(a) => <select {...a} value={generationKind} disabled={busy} onChange={(e) => { const next = e.target.value; setGenerationKind(next); if (next === 'rules') void load() }}><option value="definitions">对象、属性与关系</option><option value="rules">规则候选</option><option value="actions">动作声明候选</option></select>}</Field><Button variant="primary" disabled={busy || !context.models.generationEnabled || selected.length === 0 || selected.length > context.generationLimits.maxSources || generationKind === 'rules' && (selectedRuleTermIds.length === 0 || ruleTermsPhase !== 'ready')} onClick={() => void generate()}>从所选真实资料生成候选</Button></div> : null}{generationKind === 'rules' && !readOnly ? <fieldset data-testid="rule-generation-terms" data-phase={ruleTermsPhase}><legend>从已审核定义中选择规则术语</legend>{ruleTermsPhase === 'loading' ? <p role="status">正在读取来源确认和当前内容的审核记录…</p> : ruleTermsPhase === 'failure' ? <p role="alert">术语审核记录读取失败。刷新本页后可以重试。</p> : ruleTerms.length === 0 ? <p>当前没有来源已确认且内容已人工批准的对象、属性或关系候选。先完成定义审核后再生成规则。</p> : ruleTerms.map((candidate) => <label key={candidate.candidateId}><input type="checkbox" data-testid="rule-generation-term" checked={selectedRuleTermIds.includes(candidate.candidateId)} disabled={busy} onChange={(event) => setSelectedRuleTermIds((previous) => event.target.checked ? [...previous, candidate.candidateId] : previous.filter((id) => id !== candidate.candidateId))} />{candidate.payload.displayName} · {candidate.kind}</label>)}</fieldset> : null}<details><summary>实际生成策略与工作区固定版本</summary><pre>{JSON.stringify({ generationPolicyRef: context.generationPolicyRef, draft: context.draft }, null, 2)}</pre></details></>}{batch === undefined ? null : <section><h4>当前生成批次</h4><StatusBadge tone={batch.state === 'failed' ? 'danger' : batch.state === 'pending_confirmation' ? 'warning' : 'neutral'}>{batch.state === 'failed' ? '生成失败' : batch.state === 'pending_confirmation' ? '生成结束，来源仍待确认' : '生成结束，候选尚需审核'}</StatusBadge><p>实际候选 {batch.counts.total} 项 · 来源待确认 {batch.counts.pendingConfirmation} 项 · 待人工审核 {batch.counts.pendingReview} 项 · 失败 {batch.counts.failed} 项。</p><p>工作区修订：{batch.inputDraftRef.revision}。来源覆盖与失败原因以实际原文读取及本批次记录为准，候选数不代表发布数。</p>{batch.error === undefined ? null : <PublicStateNotice failure={classifyPublicError(batch.error)} />}<details><summary>高级：服务端记录的完整生成批次</summary><pre>{JSON.stringify(batch, null, 2)}</pre></details></section>}{onContinue === undefined ? null : <Button disabled={busy} onClick={onContinue}>继续编辑与审核候选 →</Button>}</section>{busy ? <Button onClick={() => controller.current?.abort()}>停止等待并保留当前输入</Button> : null}
   </section>

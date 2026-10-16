@@ -191,6 +191,10 @@ export class PostgresCandidateSubmissionStore implements CandidateSubmissionStor
               SELECT 1 FROM agent_platform.candidate_source_links l
                WHERE l.tenant_id = r.tenant_id AND l.space_id = r.space_id
                  AND l.workspace_id = r.workspace_id AND l.pending_confirmation = true
+                 AND l.candidate_id IN (
+                   SELECT (entry->>'candidateId')::uuid
+                     FROM jsonb_array_elements(r.receipt->'accepted') AS entry
+                 )
             )
           ORDER BY r.recorded_at ASC`,
         [workspaceId],

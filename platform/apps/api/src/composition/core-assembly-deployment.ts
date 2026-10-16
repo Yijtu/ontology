@@ -4,6 +4,7 @@ import { ArtifactGroundingDocumentSetReader, ParsedSourceGroundingReader, Struct
 import { DATA_DUCKDB_ADAPTER_REF } from '@ontology/adapter-data-duckdb'
 import { DATA_POSTGRES_ADAPTER_REF } from '@ontology/adapter-data-postgres'
 import {
+  CandidateReviewHandoffService,
   CandidateSourceIngestionService, CandidateSourceReviewService, ComponentRegistry, CompositeReviewableCandidateReader, DefinitionCandidateEditingService, DefinitionCandidateGenerationService,
   IndustryAssetPublicationService, IndustryPackExportService, IndustryPackUpgradeService,
   IndustryValidationService, InMemoryIndustryPackCatalogue, InstanceReviewService, JobService,
@@ -77,7 +78,7 @@ export async function assembleDeployment(
     toolSettings, allSourceRefs,
   } = state
   const { structuredImports, documentSpanReader, projectDocumentIndexService, structuredPremiseSources, structuredClauseSources, semanticTasks, computeResultStore, computeOutputBindingsStore, computeInvocationStore, gatewayComposition } = query
-  const { runProgress, runs, termLabels, authoring, tableArtifactStore, tableVerificationStore, workflowDispatchWorker, jobService, industryWorkspaceService, provenanceRead, webSearch } = runtime
+  const { runProgress, runs, termLabels, authoring, tableArtifactStore, tableVerificationStore, workflowDispatchWorker, jobService, industryWorkspaceService, provenanceRead, webSearch, candidateSubmissionStore } = runtime
 
   const runValidation = async (
     submission: { readonly profileRef: ProfileRef; readonly question: string; readonly scopeRef: ScopeRef; readonly task?: import('@ontology/contracts').RunExecutionRequest },
@@ -195,6 +196,7 @@ export async function assembleDeployment(
     sourceGrounding, competencyQuestions: competencyQuestions.service, workspaces: state.workspaceStore, candidates: assetCandidateStore, terminology, generationForRun,
     modelRef: { modelId: workspaceGenerationModelId(), version: COMPONENT_VERSION },
     outputLimit: { maxTokens: 16_384 },
+    candidateLinks: candidateSubmissionStore,
   })
   const ruleActionGenerationService = new RuleActionCandidateGenerationService({
     workspaces: state.workspaceStore, definitionCandidates: assetCandidateStore, candidates: ruleActionCandidateStore, batches: ruleActionGenerationStore,
@@ -303,6 +305,7 @@ export async function assembleDeployment(
     ingestion: new CandidateSourceIngestionService({ artifacts: createBlobArtifactWriter(blobStore), sources: candidateSourceStore }),
   })
   const candidateSourceReview = new CandidateSourceReviewService({ sources: candidateSourceStore, retractions: candidateSourceStore })
+  const sourceAdmissionStore = new PostgresSourceAdmissionStore(database)
   const sourceAdmissionPorts = createSourceAdmissionPorts({ blobs: blobStore, objectStore, registry: artifactRegistry, parses: parseStore, structured: structuredStore })
   const sourceAdmissionService = new WorkspaceSourceAdmissionService({
     sources: candidateSourceStore,
@@ -311,8 +314,17 @@ export async function assembleDeployment(
     content: sourceAdmissionPorts.content,
     parser: sourceAdmissionPorts.parser,
     writer: sourceAdmissionPorts.writer,
-    admissions: new PostgresSourceAdmissionStore(database),
+    admissions: sourceAdmissionStore,
     jobs: state.jobStore,
+  })
+  // The source→asset review hand-off projection (design §3/§4/§7): it reads the persisted
+  // candidate↔source links, the source review states and the admissions to show which source still
+  // blocks a candidate, and whether a candidate's sources are all approved (so it awaits re-grounding).
+  const candidateReviewHandoff = new CandidateReviewHandoffService({
+    receipts: candidateSubmissionStore,
+    sources: candidateSourceStore,
+    admissions: sourceAdmissionStore,
+    definitionCandidates: assetCandidateStore,
   })
   const controller = host.controller
   if (controller === undefined) throw new CoreCapabilityError('the Core controller is not mounted')
@@ -377,7 +389,7 @@ export async function assembleDeployment(
       packs: { catalogue: packCatalogue, packExports: packExportService, packUpgrades: packUpgradeService, publication: industryAssetPublicationService },
       assetCandidates: { generation: definitionGenerationService },
       candidateSources: { sources: candidateSourceStore, review: candidateSourceReview, retractions: candidateSourceStore,
-        admissions: sourceAdmissionService, ...(candidateSourceResearch === undefined ? {} : { research: candidateSourceResearch }),
+        admissions: sourceAdmissionService, handoff: candidateReviewHandoff, ...(candidateSourceResearch === undefined ? {} : { research: candidateSourceResearch }),
         ...(runtime.researchWorkflow === undefined ? {} : { researchWorkflow: runtime.researchWorkflow }),
         researchPreflight: (input) => researchPreflight.preflight(input) },
       definitionEditing: { service: definitionEditingService },
