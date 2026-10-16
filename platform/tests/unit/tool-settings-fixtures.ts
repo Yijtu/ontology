@@ -18,6 +18,8 @@ import type {
   ToolConnectionSummary,
   ToolCredentialCustodian,
   ToolContext,
+  ToolSettingsMigrationRecord,
+  ToolSettingsMigrationStore,
   ToolTargetScope,
   Uuid,
 } from '@ontology/contracts'
@@ -100,6 +102,8 @@ export class InMemoryToolConnectionStore implements ToolConnectionStore {
       enabled: input.descriptor.enabled,
       credentialState: existing?.view.credentialState ?? 'missing',
       ...(input.descriptor.endpoint === undefined ? {} : { endpoint: input.descriptor.endpoint }),
+      ...(input.descriptor.searchStrategy === undefined ? {} : { searchStrategy: input.descriptor.searchStrategy }),
+      ...(input.descriptor.archiveLimits === undefined ? {} : { archiveLimits: input.descriptor.archiveLimits }),
       updatedAt: new Date().toISOString(),
     }
     this.rows.set(key, { view, descriptor: input.descriptor, ...(existing?.credentialRef === undefined ? {} : { credentialRef: existing.credentialRef }) })
@@ -161,6 +165,23 @@ export function summaryOf(view: ToolConnectionAdminView): ToolConnectionSummary 
     credentialState: view.credentialState,
     ...(view.probeSummary === undefined ? {} : { probeSummary: view.probeSummary }),
     updatedAt: view.updatedAt,
+  }
+}
+
+/** In-memory durable idempotency record for the one-time tool-settings migration (S03). */
+export class InMemoryToolSettingsMigrationStore implements ToolSettingsMigrationStore {
+  readonly records = new Map<string, ToolSettingsMigrationRecord>()
+
+  #key(scopeRef: ScopeRef, migrationKey: string): string {
+    return `${scopeKey(scopeRef)}:${migrationKey}`
+  }
+
+  async isApplied(scopeRef: ScopeRef, migrationKey: string): Promise<boolean> {
+    return this.records.has(this.#key(scopeRef, migrationKey))
+  }
+
+  async record(scopeRef: ScopeRef, record: ToolSettingsMigrationRecord): Promise<void> {
+    this.records.set(this.#key(scopeRef, record.migrationKey), record)
   }
 }
 

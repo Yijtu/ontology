@@ -11,13 +11,24 @@ export const RESEARCH_JOB_REQUEST_KIND = 'workbench.research-job'
 export const RESEARCH_JOB_VERSION_LEGACY = '1.0.0'
 
 /**
+ * The catalogue research job version (S03). It carries the same authorized `ResearchRequest` as the
+ * legacy payload, but it is executed by the fixed chain that resolves its public search from the
+ * pinned tool-connection catalogue (`web_search` at the run's workspace scope) rather than from the
+ * deployment environment. It is deliberately a distinct version so a durable job written before
+ * migration keeps its legacy environment execution path and is never silently re-pointed.
+ */
+export const RESEARCH_JOB_VERSION_CATALOGUE = '1.1.0'
+
+/**
  * The agentic research job version. A `@2` job carries only the run identity — the research id, the
  * controller run id and the archived run manifest reference — never a re-encodable request, so a
  * durable job cannot be retargeted by editing defaults.
  */
 export const RESEARCH_JOB_VERSION_AGENT = '2.0.0'
 
-export const RESEARCH_JOB_VERSIONS: readonly string[] = [RESEARCH_JOB_VERSION_LEGACY, RESEARCH_JOB_VERSION_AGENT]
+export const RESEARCH_JOB_VERSIONS: readonly string[] = [
+  RESEARCH_JOB_VERSION_LEGACY, RESEARCH_JOB_VERSION_CATALOGUE, RESEARCH_JOB_VERSION_AGENT,
+]
 
 /**
  * The bounded legacy research payload encoded into the durable job's opaque `datasetRef`.
@@ -30,6 +41,18 @@ export const RESEARCH_JOB_VERSIONS: readonly string[] = [RESEARCH_JOB_VERSION_LE
 export interface ResearchJobRequestLegacy {
   readonly kind: typeof RESEARCH_JOB_REQUEST_KIND
   readonly version: typeof RESEARCH_JOB_VERSION_LEGACY
+  readonly researchId: Uuid
+  readonly request: ResearchRequest
+}
+
+/**
+ * The catalogue research payload (S03). Shape-identical to the legacy payload (the same authorized
+ * request), but the worker resolves the public search from the pinned catalogue binding. The version
+ * discriminator is the only difference, so a legacy job is never re-pointed by a reader.
+ */
+export interface ResearchJobRequestCatalogue {
+  readonly kind: typeof RESEARCH_JOB_REQUEST_KIND
+  readonly version: typeof RESEARCH_JOB_VERSION_CATALOGUE
   readonly researchId: Uuid
   readonly request: ResearchRequest
 }
@@ -49,7 +72,10 @@ export interface ResearchJobRequestAgent {
 }
 
 /** Either supported research job payload, discriminated by `version`. */
-export type ResearchJobRequest = ResearchJobRequestLegacy | ResearchJobRequestAgent
+export type ResearchJobRequest =
+  | ResearchJobRequestLegacy
+  | ResearchJobRequestCatalogue
+  | ResearchJobRequestAgent
 
 export function encodeResearchJobRequest(request: ResearchJobRequest): string {
   return canonicalJson(request)
@@ -57,6 +83,11 @@ export function encodeResearchJobRequest(request: ResearchJobRequest): string {
 
 export function isLegacyResearchJobRequest(ref: ResearchJobRequest): ref is ResearchJobRequestLegacy {
   return ref.version === RESEARCH_JOB_VERSION_LEGACY
+}
+
+/** A catalogue job carries the request but resolves its search from the pinned catalogue binding. */
+export function isCatalogueResearchJobRequest(ref: ResearchJobRequest): ref is ResearchJobRequestCatalogue {
+  return ref.version === RESEARCH_JOB_VERSION_CATALOGUE
 }
 
 export function isAgentResearchJobRequest(ref: ResearchJobRequest): ref is ResearchJobRequestAgent {
@@ -102,6 +133,10 @@ export function decodeResearchJobRequest(datasetRef: string | undefined): Resear
   if (version === RESEARCH_JOB_VERSION_LEGACY) {
     assertResearchRequestShape(parsed['request'])
     return { kind: RESEARCH_JOB_REQUEST_KIND, version: RESEARCH_JOB_VERSION_LEGACY, researchId, request: parsed['request'] }
+  }
+  if (version === RESEARCH_JOB_VERSION_CATALOGUE) {
+    assertResearchRequestShape(parsed['request'])
+    return { kind: RESEARCH_JOB_REQUEST_KIND, version: RESEARCH_JOB_VERSION_CATALOGUE, researchId, request: parsed['request'] }
   }
   if (version === RESEARCH_JOB_VERSION_AGENT) {
     if (!isUuid(parsed['runId']) || !isResourceRef(parsed['manifestRef'])) {

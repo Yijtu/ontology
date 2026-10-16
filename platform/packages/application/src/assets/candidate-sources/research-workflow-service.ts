@@ -17,13 +17,18 @@ import type { JobService } from '../../jobs/service'
 import type { ExecutionModelBindingService } from '../../model-settings/execution-model-binding-service'
 import {
   RESEARCH_JOB_REQUEST_KIND,
+  RESEARCH_JOB_VERSION_AGENT,
+  RESEARCH_JOB_VERSION_CATALOGUE,
   RESEARCH_JOB_VERSION_LEGACY,
   decodeResearchJobRequest,
   encodeResearchJobRequest,
 } from './research-job-ref'
+import type { ResearchSearchBinder } from './research-search-resolver'
 import { assertResearcher, canPinModel, isTerminal, scopeOf } from './research-scope'
 
 const RESEARCH_PIPELINE_VERSION = RESEARCH_JOB_VERSION_LEGACY
+/** The explicit catalogue pipeline version, distinct from the historical environment job version. */
+const RESEARCH_PIPELINE_VERSION_CATALOGUE = RESEARCH_JOB_VERSION_CATALOGUE
 
 /**
  * The fixed research policy and budget the reference host pins for a run (design §1.4: 固定
@@ -55,6 +60,13 @@ export interface ResearchWorkflowDependencies {
    * defaults to `true` so a host that wires the executor keeps the historical behavior.
    */
   readonly executionAvailable?: boolean
+  /**
+   * The catalogue search binder (S03). When present a new run pins its public search from the
+   * tool-connection catalogue at its workspace scope and is written as a catalogue job; when a run
+   * cannot be pinned the start is refused with a stable capability reason instead of falling back to
+   * the deployment environment. When absent the facade keeps the legacy environment job path.
+   */
+  readonly searchBinding?: ResearchSearchBinder
   readonly now?: () => string
 }
 
@@ -71,6 +83,20 @@ export interface ResearchRunView {
  */
 export interface ResearchContinuationLinkage {
   readonly continuedFromResearchId: Uuid
+}
+
+/** The deterministic run id for a request; a replay with the same key maps to the same run. */
+function researchIdFor(request: ResearchRequest): Uuid {
+  return candidateIdFor(sha256DigestOf(canonicalJson({
+    kind: 'research-run@1',
+    workspaceId: request.workspaceId,
+    brief: request.brief,
+    limits: request.limits,
+    allowedDomains: request.allowedDomains,
+    policyRef: request.policyRef,
+    budgetRef: request.budgetRef,
+    idempotencyKey: request.idempotencyKey,
+  })))
 }
 
 function briefRefFor(researchId: Uuid, request: ResearchRequest): ResourceRef {
@@ -99,6 +125,7 @@ export class ResearchWorkflowService {
   readonly #executions: ResearchExecutionStore
   readonly #budget: BudgetLedgerPort
   readonly #modelBinding: ExecutionModelBindingService | undefined
+  readonly #searchBinding: ResearchSearchBinder | undefined
   readonly #executionAvailable: boolean
   readonly #now: () => string
 
@@ -107,6 +134,7 @@ export class ResearchWorkflowService {
     this.#executions = dependencies.executions
     this.#budget = dependencies.budget
     this.#modelBinding = dependencies.modelBinding
+    this.#searchBinding = dependencies.searchBinding
     this.#executionAvailable = dependencies.executionAvailable ?? true
     this.#now = dependencies.now ?? (() => new Date().toISOString())
   }
@@ -117,25 +145,33 @@ export class ResearchWorkflowService {
   }
 
   /**
-   * Preflight and authorize one run: pin the research model (when the host mounts one), create the
-   * durable job and the budget-backed execution record, and return the queued run. Idempotent on
-   * the request key: a replay reuses the same logical job and returns the same execution.
+   * Preflight and authorize one run: pin the catalogue public search (S03) at the run's workspace
+   * scope, pin the research model (when the host mounts one), create the durable job and the
+   * budget-backed execution record, and return the queued run. Idempotent on the request key: a
+   * replay reuses the same logical job and returns the same execution.
    */
   async start(request: ResearchRequest, ctx: ToolContext, linkage?: ResearchContinuationLinkage): Promise<ResearchExecutionAny> {
     assertResearcher(ctx)
     assertResearchRequestShape(request)
     assertModelingBriefShape(request.brief)
     const scope = scopeOf(ctx)
-    const researchId = candidateIdFor(sha256DigestOf(canonicalJson({
-      kind: 'research-run@1',
-      workspaceId: request.workspaceId,
-      brief: request.brief,
-      limits: request.limits,
-      allowedDomains: request.allowedDomains,
-      policyRef: request.policyRef,
-      budgetRef: request.budgetRef,
-      idempotencyKey: request.idempotencyKey,
-    })))
+    const researchId = researchIdFor(request)
+
+    // Fix the public search for this execution from the tool-connection catalogue at the run's
+    // workspace scope (S03) *first*: it is the primary research capability, and a run whose search
+    // cannot be pinned is refused now with a stable capability reason, never falling through to the
+    // deployment environment. Doing it before the model fence means an unconfigured host reports the
+    // search capability, not a model error.
+    const catalogueJob = this.#searchBinding !== undefined
+    if (this.#searchBinding !== undefined) {
+      const pinned = await this.#searchBinding.bindSearchForResearch(
+        { researchId, workspaceId: request.workspaceId },
+        ctx,
+      )
+      if (pinned.state === 'blocked') {
+        throw new ResearchError('CAPABILITY_NOT_CONFIGURED', pinned.message)
+      }
+    }
 
     // Fix the model for this execution before it is queued (design §5.3): a named-but-broken model
     // is refused rather than silently switching vendor, and the same binding is read back on retry.
@@ -152,8 +188,12 @@ export class ResearchWorkflowService {
       jobId: researchId,
       kind: 'research',
       sourceRef: 'workbench.research',
-      datasetRef: encodeResearchJobRequest({ kind: RESEARCH_JOB_REQUEST_KIND, version: RESEARCH_JOB_VERSION_LEGACY, researchId, request }),
-      pipelineVersion: RESEARCH_PIPELINE_VERSION,
+      datasetRef: encodeResearchJobRequest(
+        catalogueJob
+          ? { kind: RESEARCH_JOB_REQUEST_KIND, version: RESEARCH_JOB_VERSION_CATALOGUE, researchId, request }
+          : { kind: RESEARCH_JOB_REQUEST_KIND, version: RESEARCH_JOB_VERSION_LEGACY, researchId, request },
+      ),
+      pipelineVersion: catalogueJob ? RESEARCH_PIPELINE_VERSION_CATALOGUE : RESEARCH_PIPELINE_VERSION,
       idempotencyKey: `research-run:${request.idempotencyKey}`,
     }, ctx)
 
@@ -243,15 +283,19 @@ export class ResearchWorkflowService {
     if (jobId === undefined) throw new ResearchError('STORE_FAILED', `research run ${researchId} has no durable job to resume`)
     const job = await this.#jobs.getJob(jobId, ctx)
     const ref = decodeResearchJobRequest(job.datasetRef)
-    const idempotencyKey = ref.version === RESEARCH_JOB_VERSION_LEGACY
-      ? `research-run:${ref.request.idempotencyKey}`
-      : `research-run:${ref.runId}`
+    // A resume re-arms the exact frozen job: a request-carrying job (legacy or catalogue) resumes on
+    // its own idempotency key and keeps its pipeline version, so an engine/version is never switched
+    // mid-run; an agent job resumes on its run id.
+    const idempotencyKey = ref.version === RESEARCH_JOB_VERSION_AGENT
+      ? `research-run:${ref.runId}`
+      : `research-run:${ref.request.idempotencyKey}`
+    const pipelineVersion = ref.version === RESEARCH_JOB_VERSION_AGENT ? RESEARCH_PIPELINE_VERSION : ref.version
     await this.#jobs.createJob({
       jobId,
       kind: 'research',
       sourceRef: 'workbench.research',
       datasetRef: encodeResearchJobRequest(ref),
-      pipelineVersion: RESEARCH_PIPELINE_VERSION,
+      pipelineVersion,
       idempotencyKey,
     }, ctx)
     return execution
@@ -268,16 +312,28 @@ export class ResearchWorkflowService {
     assertResearchRequestShape(request)
     assertModelingBriefShape(request.brief)
     const scope = scopeOf(ctx)
+    const continuedRequest: ResearchRequest = {
+      ...request,
+      idempotencyKey: `continuation:${previousResearchId}:${request.idempotencyKey}`,
+    }
+    // A continuation is a new catalogue run, so it must be able to pin a public search before it is
+    // judged against the run it continues: an unconfigured/disabled catalogue is a stable capability
+    // reason, not a misleading "the previous run is unknown".
+    if (this.#searchBinding !== undefined) {
+      const pinned = await this.#searchBinding.bindSearchForResearch(
+        { researchId: researchIdFor(continuedRequest), workspaceId: request.workspaceId },
+        ctx,
+      )
+      if (pinned.state === 'blocked') {
+        throw new ResearchError('CAPABILITY_NOT_CONFIGURED', pinned.message)
+      }
+    }
     const previous = await this.#requireExecution(scope, previousResearchId, ctx)
     if (!isTerminal(previous.status)) {
       throw new ResearchError('VERSION_CONFLICT', `research run ${previousResearchId} is ${previous.status} and is still active; a continuation requires an ended run`)
     }
     if (previous.workspaceId !== request.workspaceId) {
       throw new ResearchError('SCOPE_MISMATCH', 'a continuation must target the same workspace as the run it continues')
-    }
-    const continuedRequest: ResearchRequest = {
-      ...request,
-      idempotencyKey: `continuation:${previousResearchId}:${request.idempotencyKey}`,
     }
     return this.start(continuedRequest, ctx, { continuedFromResearchId: previousResearchId })
   }

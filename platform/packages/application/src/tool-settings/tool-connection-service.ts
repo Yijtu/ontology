@@ -72,6 +72,8 @@ export function toolDescriptorOf(view: ToolConnectionAdminView): ToolConnectionD
     capabilities: view.capabilities,
     enabled: view.enabled,
     ...(view.endpoint === undefined ? {} : { endpoint: view.endpoint }),
+    ...(view.searchStrategy === undefined ? {} : { searchStrategy: view.searchStrategy }),
+    ...(view.archiveLimits === undefined ? {} : { archiveLimits: view.archiveLimits }),
   }
 }
 
@@ -93,6 +95,8 @@ export function toolExecutionSnapshotOf(view: ToolConnectionAdminView): ToolExec
     capabilities: [...view.capabilities],
     enabled: view.enabled,
     ...(view.endpoint === undefined ? {} : { endpoint: view.endpoint }),
+    ...(view.searchStrategy === undefined ? {} : { searchStrategy: view.searchStrategy }),
+    ...(view.archiveLimits === undefined ? {} : { archiveLimits: view.archiveLimits }),
   }
 }
 
@@ -104,6 +108,8 @@ export function toolDescriptorOfSnapshot(snapshot: ToolExecutionConnectionSnapsh
     capabilities: snapshot.capabilities,
     enabled: snapshot.enabled,
     ...(snapshot.endpoint === undefined ? {} : { endpoint: snapshot.endpoint }),
+    ...(snapshot.searchStrategy === undefined ? {} : { searchStrategy: snapshot.searchStrategy }),
+    ...(snapshot.archiveLimits === undefined ? {} : { archiveLimits: snapshot.archiveLimits }),
   }
 }
 

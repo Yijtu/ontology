@@ -13,19 +13,41 @@ import type {
   Uuid,
 } from '@ontology/contracts'
 import type { ExecutionModelBindingService } from '../../model-settings/execution-model-binding-service'
-import { WebResearchError } from './web-research-service'
-import type { WebResearchService } from './web-research-service'
+import { WebResearchError, WebResearchService } from './web-research-service'
+import type { CandidateSourceIngestionService } from './ingestion-service'
+import type { ResearchSearchResolver } from './research-search-resolver'
 import { assertResearcher, isTerminal, scopeOf } from './research-scope'
 
-/** The decoded legacy job: the run to execute and the exact request it was authorized with. */
+/**
+ * Where a run's public search comes from. A `catalogue` run resolves it from the pinned tool
+ * connection at its workspace scope (S03); an `env` run is a historical job that keeps the legacy
+ * deployment-environment provider. The distinction is explicit so a legacy job is never re-pointed.
+ */
+export type ResearchProviderSource = 'env' | 'catalogue'
+
+/** The decoded job: the run to execute, the exact authorized request and its provider source. */
 export interface ExecuteResearchInput {
   readonly researchId: Uuid
   readonly request: ResearchRequest
+  /** Defaults to `env` so a caller that predates S03 keeps the legacy environment path. */
+  readonly providerSource?: ResearchProviderSource
 }
 
 export interface LegacyResearchExecutorDependencies {
   readonly executions: ResearchExecutionStore
-  readonly research: WebResearchService
+  /**
+   * The legacy environment-search path. Present on a deployment that configured
+   * `CORE_WEB_SEARCH_*`; used only for historical `@1` (env) jobs, never for a new catalogue run.
+   */
+  readonly research?: WebResearchService
+  /**
+   * The catalogue-search path (S03). When present the executor resolves the run's public search from
+   * the pinned tool-connection binding at its workspace scope and runs the same fixed chain.
+   */
+  readonly catalogue?: {
+    readonly search: ResearchSearchResolver
+    readonly ingestion: CandidateSourceIngestionService
+  }
   /** The shared budget ledger; the durable job's own background ledger is reused, never reset. */
   readonly budget: BudgetLedgerPort
   /**
@@ -51,14 +73,19 @@ export interface LegacyResearchExecutorDependencies {
  */
 export class LegacyResearchExecutor {
   readonly #executions: ResearchExecutionStore
-  readonly #research: WebResearchService
+  readonly #research: WebResearchService | undefined
+  readonly #catalogue: LegacyResearchExecutorDependencies['catalogue']
   readonly #budget: BudgetLedgerPort
   readonly #modelBinding: ExecutionModelBindingService | undefined
   readonly #now: () => string
 
   constructor(dependencies: LegacyResearchExecutorDependencies) {
+    if (dependencies.research === undefined && dependencies.catalogue === undefined) {
+      throw new ResearchError('STORE_FAILED', 'a research executor needs a catalogue or an environment search path')
+    }
     this.#executions = dependencies.executions
     this.#research = dependencies.research
+    this.#catalogue = dependencies.catalogue
     this.#budget = dependencies.budget
     this.#modelBinding = dependencies.modelBinding
     this.#now = dependencies.now ?? (() => new Date().toISOString())
@@ -113,10 +140,22 @@ export class LegacyResearchExecutor {
     if (reservation === undefined) throw new ResearchError('STORE_FAILED', 'a granted research reservation carried no reservation record')
     const reservationId = reservation.reservationId
 
+    // Resolve the run's public search before any search call: a catalogue run reads its pinned
+    // binding, a historical env job keeps the deployment provider. A blocked binding fails the run;
+    // it never falls back to another connection or to the environment.
+    let research: WebResearchService
+    try {
+      research = await this.#researchFor(input, execution, ctx)
+    } catch (error) {
+      await this.#settle(ledgerId, reservationId, 'failed', 0, ctx)
+      await this.#finalize(scope, execution, { status: 'failed', stage: 'searching', stopReason: 'provider_failed' }, ctx)
+      throw error
+    }
+
     const startedAt = Date.now()
     let result
     try {
-      result = await this.#research.research({
+      result = await research.research({
         brief: input.request.brief,
         retrievedAt: this.#now(),
         deadline: input.request.limits.deadline,
@@ -173,6 +212,36 @@ export class LegacyResearchExecutor {
       coverage,
       sources,
     }, ctx)
+  }
+
+  /**
+   * Build the `WebResearchService` for one run from the correct provider source.
+   *
+   * A `catalogue` run resolves its pinned `web_search` binding; a blocked binding is a stable
+   * `ResearchError('CAPABILITY_NOT_CONFIGURED')`, so the run fails closed instead of reaching the
+   * legacy environment provider. An `env` run is a historical job and keeps the deployment provider.
+   */
+  async #researchFor(input: ExecuteResearchInput, execution: ResearchExecution, ctx: ToolContext): Promise<WebResearchService> {
+    const source: ResearchProviderSource = input.providerSource ?? 'env'
+    if (source === 'catalogue') {
+      const catalogue = this.#catalogue
+      if (catalogue === undefined) {
+        throw new ResearchError('CAPABILITY_NOT_CONFIGURED', 'this deployment has no catalogue search path to run a catalogue research job')
+      }
+      const resolution = await catalogue.search.resolveForResearch(
+        { researchId: input.researchId, workspaceId: execution.workspaceId },
+        ctx,
+      )
+      if (resolution.state !== 'available') {
+        throw new ResearchError('CAPABILITY_NOT_CONFIGURED', `the pinned public search is unavailable: ${resolution.message}`)
+      }
+      return new WebResearchService({ webSearch: resolution.provider, ingestion: catalogue.ingestion })
+    }
+    const legacy = this.#research
+    if (legacy === undefined) {
+      throw new ResearchError('CAPABILITY_NOT_CONFIGURED', 'this deployment has no environment search path for a legacy research job')
+    }
+    return legacy
   }
 
   /** Between-page admission gate: once cancelled, no further page is registered. */

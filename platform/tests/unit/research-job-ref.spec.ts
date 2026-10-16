@@ -6,10 +6,12 @@ import {
   DEFAULT_RESEARCH_POLICY_REF,
   RESEARCH_JOB_REQUEST_KIND,
   RESEARCH_JOB_VERSION_AGENT,
+  RESEARCH_JOB_VERSION_CATALOGUE,
   RESEARCH_JOB_VERSION_LEGACY,
   decodeResearchJobRequest,
   encodeResearchJobRequest,
   isAgentResearchJobRequest,
+  isCatalogueResearchJobRequest,
   isLegacyResearchJobRequest,
   isResearchJobRef,
 } from '@ontology/application'
@@ -54,6 +56,19 @@ describe('research job reference version union', () => {
     expect(isLegacyResearchJobRequest(decoded)).toBe(true)
     expect(isAgentResearchJobRequest(decoded)).toBe(false)
     if (!isLegacyResearchJobRequest(decoded)) throw new Error('expected a legacy job payload')
+    expect(decoded.researchId).toBe(researchId)
+    expect(decoded.request.brief.goal).toBe('按 GB50500 建桥架计价本体')
+  })
+
+  it('round-trips the catalogue request-bearing payload and distinguishes it from the legacy version', () => {
+    const researchId = randomUUID()
+    const encoded = encodeResearchJobRequest({ kind: RESEARCH_JOB_REQUEST_KIND, version: RESEARCH_JOB_VERSION_CATALOGUE, researchId, request: request() })
+    const decoded = decodeResearchJobRequest(encoded)
+    expect(decoded.version).toBe(RESEARCH_JOB_VERSION_CATALOGUE)
+    expect(isCatalogueResearchJobRequest(decoded)).toBe(true)
+    expect(isLegacyResearchJobRequest(decoded)).toBe(false)
+    expect(isAgentResearchJobRequest(decoded)).toBe(false)
+    if (!isCatalogueResearchJobRequest(decoded)) throw new Error('expected a catalogue job payload')
     expect(decoded.researchId).toBe(researchId)
     expect(decoded.request.brief.goal).toBe('按 GB50500 建桥架计价本体')
   })

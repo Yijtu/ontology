@@ -26,6 +26,8 @@ import { createAjv, manifestValidator, taskParameterValidator } from './core-val
 import { capability, componentRef } from './core-component-ref'
 import { profileModelBindingEnabled, resolvedCapabilitiesFrom, resolveScenarioProfile, scenarioForIndustryRef, schemasByScenario, workerContext } from './core-component-registration'
 import { createCoreResearchPreflight } from './core-research-preflight'
+import { createCatalogueSyncSearchProvider } from './core-tool-search-binding'
+import { HTTP_WEB_SEARCH_PROVIDER_REF } from '@ontology/adapter-search-web'
 import { validateCoreFactsRequest } from './core-facts-providers'
 import { registerCoreSourceViewRoutes } from '../http/core-source-views'
 import { registerCoreImportRoute, registerCoreRelationNavigationRoute } from '../http/core-core-routes'
@@ -75,10 +77,10 @@ export async function assembleDeployment(
     publishedProjectDatasetSource, normalApprovedInputs, projectDatasetService, profileResolver, sources, coreModelRefs, componentRecords,
     profileRefsByScenario, profileSpecsByScenario, availableTasksByScenario, terminology, executionPreview, projectEvolutionCell, hostClock, componentStore,
     aiSettings, modelSettings, modelSettingsMigration, deploymentModelCapabilities, modelBindingRuntime,
-    toolSettings, allSourceRefs,
+    toolSettings, toolSelectionService, allSourceRefs,
   } = state
   const { structuredImports, documentSpanReader, projectDocumentIndexService, structuredPremiseSources, structuredClauseSources, semanticTasks, computeResultStore, computeOutputBindingsStore, computeInvocationStore, gatewayComposition } = query
-  const { runProgress, runs, termLabels, authoring, tableArtifactStore, tableVerificationStore, workflowDispatchWorker, jobService, industryWorkspaceService, provenanceRead, webSearch, candidateSubmissionStore } = runtime
+  const { runProgress, runs, termLabels, authoring, tableArtifactStore, tableVerificationStore, workflowDispatchWorker, jobService, industryWorkspaceService, provenanceRead, candidateSubmissionStore, searchBinding } = runtime
 
   const runValidation = async (
     submission: { readonly profileRef: ProfileRef; readonly question: string; readonly scopeRef: ScopeRef; readonly task?: import('@ontology/contracts').RunExecutionRequest },
@@ -300,8 +302,15 @@ export async function assembleDeployment(
   const verifiedResultExportService = new VerifiedResultExportService({ reads: verifiedResultReadService, answers: answerStore, tables: verifiedTableManifests })
   const resultHistoryService = new ResultHistoryService({ answers: answerStore, bindings: runExecutionBindingStore, history: answerStore })
   const candidateSourceStore = new PostgresCandidateSourceStore(database)
-  const candidateSourceResearch = webSearch === undefined ? undefined : new WebResearchService({
-    webSearch,
+  // The synchronous `/research` compatibility path (S03) resolves its public search from the same
+  // catalogue the async path uses, under a host-minted server context, so it never falls back to the
+  // deployment environment. The brief's approved domains still restrict what may be fetched.
+  const candidateSourceResearch = new WebResearchService({
+    webSearch: createCatalogueSyncSearchProvider({
+      binding: searchBinding,
+      serverContext: () => workerContext(scopeRef, allSourceRefs, WORKER_RUN_ID, sha256DigestOf('core-sync-research-provider'), hostClock),
+      providerRef: HTTP_WEB_SEARCH_PROVIDER_REF,
+    }),
     ingestion: new CandidateSourceIngestionService({ artifacts: createBlobArtifactWriter(blobStore), sources: candidateSourceStore }),
   })
   const candidateSourceReview = new CandidateSourceReviewService({ sources: candidateSourceStore, retractions: candidateSourceStore })
@@ -332,16 +341,31 @@ export async function assembleDeployment(
   // The deterministic overview derives its next step and counts from persisted state only (design
   // §2.5). Capabilities are read fresh so a disabled/unconfigured ability always carries a reason;
   // the model abilities project the *deployment's model directory*, not a static env flag.
+  // The research/archive capabilities are read from the *catalogue* selection — the same resolution
+  // the preflight and the executor use — never from a static env flag (S03). The archive ability
+  // additionally requires a page-archive probe that passed for the pinned revision, so a connection
+  // that merely exists never claims "any page can be archived".
+  const toolCapabilityContext = (): ToolContext => workerContext(scopeRef, allSourceRefs, WORKER_RUN_ID, sha256DigestOf('core-tool-capability-projection'), hostClock)
   const workbenchOverview = new WorkbenchOverviewService({
     state: new PostgresWorkbenchStateReader(database),
     capabilities: {
-      readCapabilities: async (): Promise<readonly WorkbenchCapability[]> => [
-        { ability: 'generation', available: deploymentModelCapabilities.generation, ...(deploymentModelCapabilities.generation || deploymentModelCapabilities.generationReason === undefined ? {} : { unavailableReason: deploymentModelCapabilities.generationReason }) },
-        { ability: 'research', available: webSearch !== undefined, ...(webSearch === undefined ? { unavailableReason: '未配置公共搜索服务' } : {}) },
-        { ability: 'decision_jev', available: deploymentModelCapabilities.decision, ...(deploymentModelCapabilities.decision || deploymentModelCapabilities.decisionReason === undefined ? {} : { unavailableReason: deploymentModelCapabilities.decisionReason }) },
-        { ability: 'archive', available: webSearch !== undefined, ...(webSearch === undefined ? { unavailableReason: '未配置可归档的搜索适配器' } : {}) },
-        { ability: 'structured_ingestion', available: true },
-      ],
+      readCapabilities: async (): Promise<readonly WorkbenchCapability[]> => {
+        const webSelection = await toolSelectionService
+          .resolve(scopeRef, { scope: { kind: 'space' }, toolId: 'web_search' }, toolCapabilityContext())
+          .catch(() => undefined)
+        const researchAvailable = webSelection?.state === 'available'
+        const summary = webSelection?.connectionSummary
+        const archiveProbe = summary?.probeSummary
+        const archiveAvailable = researchAvailable && archiveProbe?.archive.status === 'passed'
+          && (summary?.revision === undefined || archiveProbe.connectionRevision === summary.revision)
+        return [
+          { ability: 'generation', available: deploymentModelCapabilities.generation, ...(deploymentModelCapabilities.generation || deploymentModelCapabilities.generationReason === undefined ? {} : { unavailableReason: deploymentModelCapabilities.generationReason }) },
+          { ability: 'research', available: researchAvailable, ...(researchAvailable ? {} : { unavailableReason: researchUnavailableReason(webSelection?.blockedReason) }) },
+          { ability: 'decision_jev', available: deploymentModelCapabilities.decision, ...(deploymentModelCapabilities.decision || deploymentModelCapabilities.decisionReason === undefined ? {} : { unavailableReason: deploymentModelCapabilities.decisionReason }) },
+          { ability: 'archive', available: archiveAvailable, ...(archiveAvailable ? {} : { unavailableReason: '尚未通过页面归档探测，不能宣称任意网页均可归档' }) },
+          { ability: 'structured_ingestion', available: true },
+        ]
+      },
     },
   })
   // The read-only research preflight reads the effective `web_search` selection with a host-minted
@@ -389,7 +413,7 @@ export async function assembleDeployment(
       packs: { catalogue: packCatalogue, packExports: packExportService, packUpgrades: packUpgradeService, publication: industryAssetPublicationService },
       assetCandidates: { generation: definitionGenerationService },
       candidateSources: { sources: candidateSourceStore, review: candidateSourceReview, retractions: candidateSourceStore,
-        admissions: sourceAdmissionService, handoff: candidateReviewHandoff, ...(candidateSourceResearch === undefined ? {} : { research: candidateSourceResearch }),
+        admissions: sourceAdmissionService, handoff: candidateReviewHandoff, research: candidateSourceResearch,
         researchWorkflow: runtime.researchWorkflow,
         researchPreflight: (input) => researchPreflight.preflight(input) },
       definitionEditing: { service: definitionEditingService },
@@ -417,6 +441,19 @@ export async function assembleDeployment(
   }
 
   return { dependencies }
+}
+
+/** An honest, stable reason a research capability is not available; defaults to "not configured". */
+function researchUnavailableReason(reason: string | undefined): string {
+  switch (reason) {
+    case 'TOOL_DISABLED': return '公共搜索服务已停用'
+    case 'TOOL_CAPABILITY_MISMATCH': return '所选连接不提供网页搜索能力'
+    case 'CREDENTIAL_MISSING': return '公共搜索服务的凭据缺失'
+    case 'TOOL_BINDING_REVOKED': return '绑定的搜索连接已被撤销'
+    case 'SCOPE_MISMATCH': return '当前目标不在可信租户/空间范围内'
+    case 'STORE_FAILED': return '读取搜索服务配置失败'
+    default: return '未配置公共搜索服务'
+  }
 }
 
 /** Keep the injected import agent type available to callers that hint `projectStructuredImports`. */

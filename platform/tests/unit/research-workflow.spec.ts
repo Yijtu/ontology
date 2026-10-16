@@ -32,8 +32,20 @@ import type {
   WebSearchProviderRequest,
   WebSearchProviderResult,
 } from '@ontology/contracts'
-import { CandidateSourceIngestionService, InMemoryJobStore, JobService, LegacyResearchExecutor, ResearchWorkflowService, WebResearchService } from '@ontology/application'
-import { DEFAULT_RESEARCH_BUDGET_REF, DEFAULT_RESEARCH_POLICY_REF } from '@ontology/application'
+import {
+  CandidateSourceIngestionService,
+  DEFAULT_RESEARCH_BUDGET_REF,
+  DEFAULT_RESEARCH_POLICY_REF,
+  InMemoryJobStore,
+  JobService,
+  LegacyResearchExecutor,
+  RESEARCH_JOB_VERSION_CATALOGUE,
+  ResearchWorkflowService,
+  WebResearchService,
+  decodeResearchJobRequest,
+  isCatalogueResearchJobRequest,
+} from '@ontology/application'
+import type { ResearchSearchBinder, ResearchSearchResolver } from '@ontology/application'
 
 const TENANT = '00000000-0000-4000-8000-000000000001'
 const SPACE = '00000000-0000-4000-8000-000000000002'
@@ -399,6 +411,83 @@ describe('research workflow orchestration', () => {
     const first = await h.workflow.start(request(), context)
     await expect(h.workflow.continuations(first.researchId, request({ idempotencyKey: 'continuation-source-key' }), context))
       .rejects.toMatchObject({ code: 'VERSION_CONFLICT' })
+  })
+})
+
+describe('catalogue-pinned research (S03)', () => {
+  function catalogueWorkflow(h: ReturnType<typeof build>, searchBinding: ResearchSearchBinder): ResearchWorkflowService {
+    return new ResearchWorkflowService({ jobs: h.jobs, executions: h.executions, budget: h.budget, now: () => NOW, searchBinding })
+  }
+
+  it('pins the search binding at accept time and writes a catalogue-version job', async () => {
+    const h = build(WITH_SNAPSHOT)
+    const pinned: { researchId: string; workspaceId: string }[] = []
+    const workflow = catalogueWorkflow(h, {
+      async bindSearchForResearch(input) { pinned.push(input); return { state: 'available' } },
+    })
+    const context = ctx()
+    const queued = await workflow.start(request(), context)
+    expect(pinned).toHaveLength(1)
+    expect(pinned[0]?.workspaceId).toBe(WORKSPACE)
+    const job = await h.jobs.getJob(jobIdOf(queued), context)
+    expect(job.pipelineVersion).toBe(RESEARCH_JOB_VERSION_CATALOGUE)
+    expect(isCatalogueResearchJobRequest(decodeResearchJobRequest(job.datasetRef))).toBe(true)
+  })
+
+  it('refuses a new run when the catalogue search cannot be pinned', async () => {
+    const h = build(WITH_SNAPSHOT)
+    const workflow = catalogueWorkflow(h, {
+      async bindSearchForResearch() { return { state: 'blocked', reason: 'TOOL_DISABLED', message: '公共搜索服务已停用' } },
+    })
+    await expect(workflow.start(request(), ctx())).rejects.toMatchObject({ code: 'CAPABILITY_NOT_CONFIGURED' })
+    expect(h.executions.rows.size).toBe(0)
+  })
+
+  it('runs a catalogue job through the resolved provider', async () => {
+    const sources = new FakeStore()
+    const executions = new FakeExecutionStore()
+    const budget = new FakeBudget()
+    const provider = new FakeSearchProvider(WITH_SNAPSHOT)
+    const ingestion = new CandidateSourceIngestionService({ artifacts: new FakeWriter(), sources, now: () => NOW })
+    const resolver: ResearchSearchResolver = {
+      async resolveForResearch({ workspaceId }) {
+        expect(workspaceId).toBe(WORKSPACE)
+        return { state: 'available', provider, connectionName: '兼容网关', adapterType: 'http_compat' }
+      },
+    }
+    const executor = new LegacyResearchExecutor({ executions, budget, now: () => NOW, catalogue: { search: resolver, ingestion } })
+    const context = ctx()
+    const jobs = new JobService({ store: new InMemoryJobStore(), newId: () => randomUUID() })
+    const queued = await new ResearchWorkflowService({ jobs, executions, budget, now: () => NOW }).start(request(), context)
+    await budget.openLedger({ ledgerId: jobIdOf(queued), kind: 'background', runId: jobIdOf(queued) })
+    const executed = await executor.execute(
+      { researchId: queued.researchId, request: request(), providerSource: 'catalogue' },
+      context, jobIdOf(queued), new AbortController().signal,
+    )
+    expect(executed.status).toBe('awaiting_confirmation')
+    expect(provider.lastRequest).toBeDefined()
+    expect(sources.size).toBe(1)
+  })
+
+  it('fails a catalogue job closed when the pinned search is blocked, admitting no page', async () => {
+    const sources = new FakeStore()
+    const executions = new FakeExecutionStore()
+    const budget = new FakeBudget()
+    const ingestion = new CandidateSourceIngestionService({ artifacts: new FakeWriter(), sources, now: () => NOW })
+    const resolver: ResearchSearchResolver = {
+      async resolveForResearch() { return { state: 'blocked', reason: 'TOOL_DISABLED', message: 'disabled' } },
+    }
+    const executor = new LegacyResearchExecutor({ executions, budget, now: () => NOW, catalogue: { search: resolver, ingestion } })
+    const context = ctx()
+    const jobs = new JobService({ store: new InMemoryJobStore(), newId: () => randomUUID() })
+    const queued = await new ResearchWorkflowService({ jobs, executions, budget, now: () => NOW }).start(request(), context)
+    await budget.openLedger({ ledgerId: jobIdOf(queued), kind: 'background', runId: jobIdOf(queued) })
+    await expect(executor.execute(
+      { researchId: queued.researchId, request: request(), providerSource: 'catalogue' },
+      context, jobIdOf(queued), new AbortController().signal,
+    )).rejects.toMatchObject({ code: 'CAPABILITY_NOT_CONFIGURED' })
+    expect(sources.size).toBe(0)
+    expect(executions.rows.get(queued.researchId)?.status).toBe('failed')
   })
 })
 
