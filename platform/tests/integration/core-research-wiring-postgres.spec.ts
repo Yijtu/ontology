@@ -213,14 +213,17 @@ describe('a deployment without a configured search still serves the research ent
     expect(started.status, await started.clone().text()).toBe(409)
     expect((await started.json() as { error: { code: string } }).error.code).toBe('CAPABILITY_NOT_CONFIGURED')
 
+    // Reading history never depends on a configured search: the façade is always mounted, so an
+    // unknown run is an honest 404 — not a capability block.
     const read = await bareRequest(`/api/v1/industry-workspaces/${encodeURIComponent(workspaceId)}/research-runs/${randomUUID()}`)
-    expect(read.status).toBe(409)
-    expect((await read.json() as { error: { code: string } }).error.code).toBe('CAPABILITY_NOT_CONFIGURED')
+    expect(read.status).toBe(404)
+    expect((await read.json() as { error: { code: string } }).error.code).toBe('NOT_FOUND')
 
-    // The lifecycle entries exist too and answer a stable 409, never a 404 (design §10).
+    // The resume entry reads the run through the same façade, so it too answers 404 (not 409) for
+    // an unknown run while a new run/append still needs the missing engine (409). (design §10).
     const resume = await bareRequest(`/api/v1/industry-workspaces/${encodeURIComponent(workspaceId)}/research-runs/${randomUUID()}/resume`, { method: 'POST', headers: { 'content-type': 'application/json', 'idempotency-key': `bare-resume-${randomUUID()}` }, body: '{}' })
-    expect(resume.status, await resume.clone().text()).toBe(409)
-    expect((await resume.json() as { error: { code: string } }).error.code).toBe('CAPABILITY_NOT_CONFIGURED')
+    expect(resume.status, await resume.clone().text()).toBe(404)
+    expect((await resume.json() as { error: { code: string } }).error.code).toBe('NOT_FOUND')
 
     const continuation = await bareRequest(`/api/v1/industry-workspaces/${encodeURIComponent(workspaceId)}/research-runs/${randomUUID()}/continuations`, {
       method: 'POST',

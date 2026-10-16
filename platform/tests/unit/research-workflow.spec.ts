@@ -20,7 +20,7 @@ import type {
   ImmutableArtifactWriter,
   ModelingBrief,
   OpenBudgetLedgerInput,
-  ResearchExecution,
+  ResearchExecutionAny,
   ResearchExecutionPage,
   ResearchExecutionStore,
   ResearchRequest,
@@ -32,7 +32,7 @@ import type {
   WebSearchProviderRequest,
   WebSearchProviderResult,
 } from '@ontology/contracts'
-import { CandidateSourceIngestionService, InMemoryJobStore, JobService, ResearchWorkflowService, WebResearchService } from '@ontology/application'
+import { CandidateSourceIngestionService, InMemoryJobStore, JobService, LegacyResearchExecutor, ResearchWorkflowService, WebResearchService } from '@ontology/application'
 import { DEFAULT_RESEARCH_BUDGET_REF, DEFAULT_RESEARCH_POLICY_REF } from '@ontology/application'
 
 const TENANT = '00000000-0000-4000-8000-000000000001'
@@ -103,15 +103,21 @@ class FakeSearchProvider implements WebSearchProvider {
 
 const TERMINAL = ['completed', 'cancelled', 'failed']
 
+/** The legacy orchestration always carries a job id; narrow the dual-version execution for a test. */
+function jobIdOf(execution: ResearchExecutionAny): Uuid {
+  if (execution.jobId === undefined) throw new Error('expected the legacy run to carry a job id')
+  return execution.jobId
+}
+
 class FakeExecutionStore implements ResearchExecutionStore {
-  readonly rows = new Map<string, ResearchExecution>()
-  async putExecution(_scope: ScopeRef, execution: ResearchExecution): Promise<ResearchExecution> {
+  readonly rows = new Map<string, ResearchExecutionAny>()
+  async putExecution(_scope: ScopeRef, execution: ResearchExecutionAny): Promise<ResearchExecutionAny> {
     const existing = this.rows.get(execution.researchId)
     if (existing !== undefined && TERMINAL.includes(existing.status)) return existing
     this.rows.set(execution.researchId, { ...execution })
     return execution
   }
-  async getExecution(_scope: ScopeRef, researchId: Uuid): Promise<ResearchExecution | undefined> {
+  async getExecution(_scope: ScopeRef, researchId: Uuid): Promise<ResearchExecutionAny | undefined> {
     return this.rows.get(researchId)
   }
   async listExecutions(_scope: ScopeRef, workspaceId: Uuid): Promise<ResearchExecutionPage> {
@@ -212,11 +218,12 @@ function build(result: WebSearchProviderResult, fail = false) {
   const jobs = new JobService({ store: new InMemoryJobStore(), newId: () => randomUUID() })
   const provider = new FakeSearchProvider(result, fail)
   const ingestion = new CandidateSourceIngestionService({ artifacts: new FakeWriter(), sources, now: () => NOW })
-  const workflow = new ResearchWorkflowService({
-    jobs, executions, budget, now: () => NOW,
+  const executor = new LegacyResearchExecutor({
+    executions, budget, now: () => NOW,
     research: new WebResearchService({ webSearch: provider, ingestion }),
   })
-  return { workflow, sources, executions, budget, jobs, provider }
+  const workflow = new ResearchWorkflowService({ jobs, executions, budget, now: () => NOW })
+  return { workflow, executor, sources, executions, budget, jobs, provider }
 }
 
 const WITH_SNAPSHOT: WebSearchProviderResult = {
@@ -232,11 +239,11 @@ const WITH_SNAPSHOT: WebSearchProviderResult = {
 async function runOnce(h: ReturnType<typeof build>, input = request()) {
   const context = ctx()
   const queued = await h.workflow.start(input, context)
-  await h.budget.openLedger({ ledgerId: queued.jobId, kind: 'background', runId: queued.jobId })
-  const executed = await h.workflow.execute(
+  await h.budget.openLedger({ ledgerId: jobIdOf(queued), kind: 'background', runId: jobIdOf(queued) })
+  const executed = await h.executor.execute(
     { researchId: queued.researchId, request: input },
     context,
-    queued.jobId,
+    jobIdOf(queued),
     new AbortController().signal,
   )
   return { context, queued, executed }
@@ -249,9 +256,9 @@ describe('research workflow orchestration', () => {
     const input = request()
     const first = await h.workflow.start(input, context)
     expect(first.status).toBe('queued')
-    expect(first.jobId).toBe(first.researchId)
+    expect(jobIdOf(first)).toBe(first.researchId)
     expect(first.coverage.archivedSnapshots).toBe(0)
-    const job = await h.jobs.getJob(first.jobId, context)
+    const job = await h.jobs.getJob(jobIdOf(first), context)
     expect(job.kind).toBe('research')
 
     const replay = await h.workflow.start(input, context)
@@ -284,8 +291,8 @@ describe('research workflow orchestration', () => {
     const input = request()
     const queued = await h.workflow.start(input, context)
     await h.workflow.cancel(queued.researchId, context)
-    await h.budget.openLedger({ ledgerId: queued.jobId, kind: 'background', runId: queued.jobId })
-    const executed = await h.workflow.execute({ researchId: queued.researchId, request: input }, context, queued.jobId, new AbortController().signal)
+    await h.budget.openLedger({ ledgerId: jobIdOf(queued), kind: 'background', runId: jobIdOf(queued) })
+    const executed = await h.executor.execute({ researchId: queued.researchId, request: input }, context, jobIdOf(queued), new AbortController().signal)
     expect(executed.status).toBe('cancelled')
     expect(executed.stopReason).toBe('cancelled')
     expect(executed.sourceCount).toBe(0)
@@ -297,9 +304,9 @@ describe('research workflow orchestration', () => {
     const context = ctx()
     const input = request()
     const queued = await h.workflow.start(input, context)
-    await h.budget.openLedger({ ledgerId: queued.jobId, kind: 'background', runId: queued.jobId })
+    await h.budget.openLedger({ ledgerId: jobIdOf(queued), kind: 'background', runId: jobIdOf(queued) })
     h.provider.onSearch = async () => { await h.workflow.cancel(queued.researchId, context) }
-    const executed = await h.workflow.execute({ researchId: queued.researchId, request: input }, context, queued.jobId, new AbortController().signal)
+    const executed = await h.executor.execute({ researchId: queued.researchId, request: input }, context, jobIdOf(queued), new AbortController().signal)
     expect(executed.status).toBe('cancelled')
     expect(executed.sourceCount).toBe(0)
     expect(h.sources.size).toBe(0)
@@ -310,9 +317,9 @@ describe('research workflow orchestration', () => {
     const input = request()
     const context = ctx()
     const queued = await h.workflow.start(input, context)
-    await h.budget.openLedger({ ledgerId: queued.jobId, kind: 'background', runId: queued.jobId })
-    await h.workflow.execute({ researchId: queued.researchId, request: input }, context, queued.jobId, new AbortController().signal)
-    const replay = await h.workflow.execute({ researchId: queued.researchId, request: input }, context, queued.jobId, new AbortController().signal)
+    await h.budget.openLedger({ ledgerId: jobIdOf(queued), kind: 'background', runId: jobIdOf(queued) })
+    await h.executor.execute({ researchId: queued.researchId, request: input }, context, jobIdOf(queued), new AbortController().signal)
+    const replay = await h.executor.execute({ researchId: queued.researchId, request: input }, context, jobIdOf(queued), new AbortController().signal)
     expect(replay.status).toBe('awaiting_confirmation')
     expect(h.sources.size).toBe(1)
   })
@@ -321,9 +328,9 @@ describe('research workflow orchestration', () => {
     const h = build(WITH_SNAPSHOT)
     const { queued } = await runOnce(h)
     expect(h.budget.reserveCalls.length).toBeGreaterThan(0)
-    expect(h.budget.reserveCalls.every((call) => call.ledgerId === queued.jobId)).toBe(true)
+    expect(h.budget.reserveCalls.every((call) => call.ledgerId === jobIdOf(queued))).toBe(true)
     // The same ledger is reused: opening it again returns the same record rather than a fresh budget.
-    expect(await h.budget.openLedger({ ledgerId: queued.jobId, kind: 'background' })).toMatchObject({ ledgerId: queued.jobId })
+    expect(await h.budget.openLedger({ ledgerId: jobIdOf(queued), kind: 'background' })).toMatchObject({ ledgerId: jobIdOf(queued) })
   })
 
   it('stops on an exhausted budget without calling the provider', async () => {
@@ -357,7 +364,7 @@ describe('research workflow orchestration', () => {
     const queued = await h.workflow.start(request(), context)
     const resumed = await h.workflow.resume(queued.researchId, context)
     expect(resumed.researchId).toBe(queued.researchId)
-    expect(resumed.jobId).toBe(queued.jobId)
+    expect(resumed.jobId).toBe(jobIdOf(queued))
     expect(resumed.status).toBe('queued')
     // Re-arming reuses the one logical job: no second run/ledger is created.
     expect(h.executions.rows.size).toBe(1)
@@ -378,7 +385,7 @@ describe('research workflow orchestration', () => {
     await h.workflow.cancel(first.researchId, context)
     const next = await h.workflow.continuations(first.researchId, request({ idempotencyKey: 'continuation-source-key' }), context)
     expect(next.researchId).not.toBe(first.researchId)
-    expect(next.jobId).not.toBe(first.jobId)
+    expect(next.jobId).not.toBe(jobIdOf(first))
     expect(next.continuedFromResearchId).toBe(first.researchId)
     expect(next.status).toBe('queued')
     expect(h.executions.rows.size).toBe(2)

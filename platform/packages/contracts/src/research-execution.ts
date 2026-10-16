@@ -134,7 +134,7 @@ export interface ResearchExecution {
 }
 
 export interface ResearchExecutionPage {
-  readonly executions: readonly ResearchExecution[]
+  readonly executions: readonly ResearchExecutionAny[]
   readonly nextCursor?: string
 }
 
@@ -152,10 +152,14 @@ export class ResearchError extends Error {
 /**
  * Control persistence for research executions. It stores no secrets and no provider body; the
  * archived bytes live in immutable artifacts referenced by the registered candidate sources.
+ *
+ * The store keeps both projection versions: a legacy `@1` record and an agentic `@2` run
+ * projection. Writes and reads use the discriminated `ResearchExecutionAny`, so a reader branches
+ * on `schemaVersion` without a migration; a legacy `@1` record is never rewritten into `@2`.
  */
 export interface ResearchExecutionStore {
-  putExecution(scopeRef: ScopeRef, execution: ResearchExecution, ctx: ToolContext): Promise<ResearchExecution>
-  getExecution(scopeRef: ScopeRef, researchId: Uuid, ctx: ToolContext): Promise<ResearchExecution | undefined>
+  putExecution(scopeRef: ScopeRef, execution: ResearchExecutionAny, ctx: ToolContext): Promise<ResearchExecutionAny>
+  getExecution(scopeRef: ScopeRef, researchId: Uuid, ctx: ToolContext): Promise<ResearchExecutionAny | undefined>
   listExecutions(
     scopeRef: ScopeRef,
     workspaceId: Uuid,
@@ -383,6 +387,12 @@ export interface ResearchExecutionV2 {
   readonly stopReason?: ResearchStopReason
   /** The candidate sources this run proposed, so the sources are readable back from the run. */
   readonly sources?: readonly ResearchSourceRef[]
+  /**
+   * When this `@2` run was started as an explicit continuation of an earlier ended run, the run it
+   * was grounded on (design §3/§10). Like the `@1` linkage it is informational: the continuation
+   * keeps its own authorization, budget and id, and the predecessor stays frozen.
+   */
+  readonly continuedFromResearchId?: Uuid
   readonly recordedAt: Rfc3339UtcTimestamp
 }
 
@@ -564,6 +574,7 @@ export function assertResearchExecutionV2Shape(value: unknown): asserts value is
     || !isCount(value['sourceCount'], Number.MAX_SAFE_INTEGER) || !isCount(value['candidateCount'], Number.MAX_SAFE_INTEGER)
     || !isNonEmptyString(value['recordedAt'])
     || (value['stopReason'] !== undefined && !RESEARCH_STOP_REASONS.includes(value['stopReason'] as ResearchStopReason))
+    || (value['continuedFromResearchId'] !== undefined && !isUuid(value['continuedFromResearchId']))
     || (value['sources'] !== undefined && !isSourceRefs(value['sources']))) {
     throw new ResearchError('INVALID_REQUEST', 'invalid research execution @2')
   }

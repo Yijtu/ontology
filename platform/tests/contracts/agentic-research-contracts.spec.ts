@@ -275,6 +275,12 @@ describe('research-execution@2 is a run projection and @1 stays readable', () =>
     expect(isResearchExecutionV2(v2)).toBe(true)
   })
 
+  it('validates a @2 continuation link and rejects a malformed one', () => {
+    expect(() => assertResearchExecutionV2Shape({ ...v2, continuedFromResearchId: RUN })).not.toThrow()
+    expect(() => assertResearchExecutionAnyShape({ ...v2, continuedFromResearchId: RUN })).not.toThrow()
+    expect(() => assertResearchExecutionV2Shape({ ...v2, continuedFromResearchId: 'not-a-uuid' })).toThrow()
+  })
+
   it('rejects a @2 with an unknown goal, gap state or missing budget dimension', () => {
     expect(() => assertResearchExecutionV2Shape({ ...v2, goal: { kind: 'freeform' } })).toThrow()
     expect(() => assertResearchExecutionV2Shape({ ...v2, coverageGaps: [{ kind: 'x', name: 'y', state: 'maybe', evidenceCount: 0 }] })).toThrow()

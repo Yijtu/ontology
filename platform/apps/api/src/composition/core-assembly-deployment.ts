@@ -390,7 +390,7 @@ export async function assembleDeployment(
       assetCandidates: { generation: definitionGenerationService },
       candidateSources: { sources: candidateSourceStore, review: candidateSourceReview, retractions: candidateSourceStore,
         admissions: sourceAdmissionService, handoff: candidateReviewHandoff, ...(candidateSourceResearch === undefined ? {} : { research: candidateSourceResearch }),
-        ...(runtime.researchWorkflow === undefined ? {} : { researchWorkflow: runtime.researchWorkflow }),
+        researchWorkflow: runtime.researchWorkflow,
         researchPreflight: (input) => researchPreflight.preflight(input) },
       definitionEditing: { service: definitionEditingService },
       ruleActionCandidates: { service: ruleActionCandidateService, generation: ruleActionGenerationService, bindingContext: actionBindingContext },
