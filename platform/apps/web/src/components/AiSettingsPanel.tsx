@@ -5,11 +5,13 @@ import { EffectiveModelsPanel } from './EffectiveModelsPanel'
 import { ModelAssignmentsPanel } from './ModelAssignmentsPanel'
 import { ModelConnectionsPanel } from './ModelConnectionsPanel'
 import { ModelSettingsPanel } from './ModelSettingsPanel'
+import { ToolSettingsPanel } from './ToolSettingsPanel'
 
-export type AiSettingsTab = 'connections' | 'assignments' | 'effective' | 'legacy'
+export type AiSettingsTab = 'connections' | 'tools' | 'assignments' | 'effective' | 'legacy'
 
 const TABS: readonly { readonly id: AiSettingsTab; readonly label: string }[] = [
   { id: 'connections', label: '模型连接' },
+  { id: 'tools', label: '能力与工具' },
   { id: 'assignments', label: '默认与分配' },
   { id: 'effective', label: '生效详情' },
   { id: 'legacy', label: '单实例兼容配置' },
@@ -69,6 +71,7 @@ export function AiSettingsPanel({ client, readOnly = false, workspaceId, project
     </nav>
 
     {tab === 'connections' ? <ModelConnectionsPanel client={client} readOnly={readOnly} {...(objectScope === undefined ? {} : { scope: objectScope })} {...(onDirtyChange === undefined ? {} : { onDirtyChange })} /> : null}
+    {tab === 'tools' ? <ToolSettingsPanel client={client} readOnly={readOnly} {...(objectScope === undefined ? {} : { objectScope })} {...(onDirtyChange === undefined ? {} : { onDirtyChange })} /> : null}
     {tab === 'assignments' ? <ModelAssignmentsPanel client={client} readOnly={readOnly} {...(objectScope === undefined ? {} : { objectScope })} {...(onDirtyChange === undefined ? {} : { onDirtyChange })} /> : null}
     {tab === 'effective' ? <EffectiveModelsPanel client={client} {...(objectScope === undefined ? {} : { objectScope })} onOpenSettings={() => select('assignments')} /> : null}
     {tab === 'legacy' ? <div className="ai-settings__legacy">

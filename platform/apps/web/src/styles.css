@@ -1386,6 +1386,11 @@ dd { overflow-wrap: anywhere; } details > summary { cursor: pointer; padding: 8p
 .model-effective__list { display: grid; gap: 16px; }
 .model-assignments__before { margin-top: 20px; display: grid; gap: 12px; }
 .model-assignments__before h3 { margin: 0; font-size: 15px; }
+/* Tool connections (design §9): search and archive probes are always shown as two items. */
+.tool-settings { display: flex; flex-direction: column; gap: 20px; min-width: 0; }
+.tool-probe { display: flex; flex-wrap: wrap; gap: 6px 16px; align-items: center; font-size: 13px; }
+.tool-probe__item { display: inline-flex; align-items: center; gap: 6px; min-width: 0; }
+.tool-probe__item small { display: block; }
 @media (max-width: 719px) {
   .model-effective__details { grid-template-columns: minmax(0, 1fr); }
   .model-effective__source { margin-left: 0; }
