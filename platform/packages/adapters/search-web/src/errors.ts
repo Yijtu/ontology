@@ -36,6 +36,12 @@ export interface WebSearchProviderErrorOptions extends ErrorOptions {
    * `usage_unknown` budget hold rather than a free failure.
    */
   readonly remoteStateUnknown?: boolean
+  /**
+   * True when the failure is a *decodable* response the adapter could not map (a shape/JSON
+   * mismatch) rather than an unreachable host. A probe reports it as `invalid_response` instead
+   * of `unreachable`, so an operator can tell "the service answered wrongly" from "I cannot reach it".
+   */
+  readonly malformedResponse?: boolean
   readonly fieldErrors?: readonly FieldError[]
   readonly traceId?: string
 }
@@ -50,6 +56,7 @@ export class WebSearchProviderError extends Error {
   readonly retryable: boolean
   readonly retryAfterMs: number | undefined
   readonly remoteStateUnknown: boolean
+  readonly malformedResponse: boolean
   readonly fieldErrors: readonly FieldError[] | undefined
   readonly traceId: string | undefined
 
@@ -61,6 +68,7 @@ export class WebSearchProviderError extends Error {
     this.retryable = isRetryableProviderError(code)
     this.retryAfterMs = options?.retryAfterMs
     this.remoteStateUnknown = options?.remoteStateUnknown ?? false
+    this.malformedResponse = options?.malformedResponse ?? false
     this.fieldErrors = options?.fieldErrors
     this.traceId = options?.traceId
   }
