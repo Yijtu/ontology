@@ -8,6 +8,17 @@
 export interface SearchHttpRequest {
   readonly url: string
   readonly signal: AbortSignal
+  /** Defaults to `GET`; a JSON search API such as Tavily is queried with `POST`. */
+  readonly method?: 'GET' | 'POST'
+  /**
+   * Extra request headers. A credential must be supplied here by the caller (the adapter never
+   * logs or persists it); the transport itself is credential-agnostic.
+   */
+  readonly headers?: Readonly<Record<string, string>>
+  /** JSON request body; when present `content-type: application/json` is set by default. */
+  readonly body?: string
+  /** Redirect policy. Defaults to `follow`; a call that must not be bounced passes `error`. */
+  readonly redirect?: 'follow' | 'error' | 'manual'
 }
 
 export interface SearchHttpResponse {
@@ -30,8 +41,14 @@ export class SearchHttpClient {
 
   async send(request: SearchHttpRequest): Promise<SearchHttpResponse> {
     const response = await this.#fetch(request.url, {
-      method: 'GET',
-      headers: { accept: 'application/json' },
+      method: request.method ?? 'GET',
+      headers: {
+        accept: 'application/json',
+        ...(request.body === undefined ? {} : { 'content-type': 'application/json' }),
+        ...request.headers,
+      },
+      ...(request.body === undefined ? {} : { body: request.body }),
+      ...(request.redirect === undefined ? {} : { redirect: request.redirect }),
       signal: request.signal,
     })
     const retryAfterMs = parseRetryAfter(response.headers.get('retry-after'))

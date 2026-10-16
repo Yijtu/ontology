@@ -143,10 +143,24 @@ export interface WebSearchProviderPage {
 }
 
 /**
+ * What one search call consumed at the provider, when the provider reports it (design §9).
+ *
+ * It is deliberately a *billing signal, not a budget*: the run ledger owns the hard ceiling and
+ * classifies an unknown remote state as a hold. A provider that cannot account for a call leaves
+ * `creditsUsed` unset rather than guessing `0`, and an unparsable cost never becomes "free".
+ */
+export interface WebSearchProviderUsage {
+  /** Vendor credits/settled units the call consumed, when the vendor reports them. */
+  readonly creditsUsed?: number
+  /** The vendor-reported server-side latency, when present. */
+  readonly responseTimeMs?: number
+}
+
+/**
  * A provider response. `truncated` distinguishes a bounded recall range from a complete
  * one; `excludedCount` reports pages the provider dropped because their host was outside
  * the approved allowlist (a non-zero value is surfaced as a warning, never as a silently
- * widened result).
+ * widened result). `usage` is present only when the provider can account for the call.
  */
 export interface WebSearchProviderResult {
   readonly pages: readonly WebSearchProviderPage[]
@@ -154,6 +168,7 @@ export interface WebSearchProviderResult {
   readonly nextCursor?: OpaqueCursor | null
   readonly knownTotal?: number
   readonly excludedCount: number
+  readonly usage?: WebSearchProviderUsage
 }
 
 export interface WebSearchProvider {

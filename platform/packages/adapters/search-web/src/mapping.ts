@@ -24,7 +24,11 @@ function isRecord(value: unknown): value is Record<string, unknown> {
 }
 
 function malformed(detail: string): WebSearchProviderError {
-  return new WebSearchProviderError('SOURCE_UNAVAILABLE', `the search provider returned a malformed response: ${detail}`)
+  return new WebSearchProviderError(
+    'SOURCE_UNAVAILABLE',
+    `the search provider returned a malformed response: ${detail}`,
+    { malformedResponse: true },
+  )
 }
 
 function requireString(value: unknown, field: string): string {
