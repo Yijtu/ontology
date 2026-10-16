@@ -908,7 +908,7 @@ export class WorkflowController {
       ctx,
     )
     return {
-      ctx,
+      ctx: capability.ctx ?? ctx,
       gateway: capability.gateway,
       generation: capability.generation,
       decision: capability.decision,

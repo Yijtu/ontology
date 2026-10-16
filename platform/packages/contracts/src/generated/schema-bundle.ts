@@ -2675,6 +2675,85 @@ export const SCHEMA_DOCUMENTS: readonly JsonSchemaObject[] = [
             "type": "integer",
             "minimum": 1,
             "maximum": 1000
+          },
+          "targetedRead": {
+            "$ref": "#/$defs/DocumentTargetedReadSelection"
+          }
+        }
+      },
+      "DocumentTargetedReadSelection": {
+        "title": "DocumentTargetedReadSelection",
+        "description": "design §6: the versioned targeted-read branch of the single `document_search` tool. It names already-authorized documents/spans to continue reading (instead of re-searching) and is bounded by a cursor, a page size and a byte cap. The gateway authorizes the call and the run's evidence set authorizes each selection; this shape only carries the request.",
+        "type": "object",
+        "additionalProperties": false,
+        "required": [
+          "selections"
+        ],
+        "properties": {
+          "selections": {
+            "type": "array",
+            "minItems": 1,
+            "maxItems": 16,
+            "items": {
+              "type": "object",
+              "additionalProperties": false,
+              "required": [
+                "documentRef"
+              ],
+              "properties": {
+                "documentRef": {
+                  "$ref": "./common.schema.json#/$defs/ResourceRef"
+                },
+                "locator": {
+                  "type": "object",
+                  "additionalProperties": false,
+                  "required": [
+                    "kind"
+                  ],
+                  "properties": {
+                    "kind": {
+                      "type": "string",
+                      "enum": [
+                        "page",
+                        "offset",
+                        "approximate_locator"
+                      ]
+                    },
+                    "page": {
+                      "type": "integer",
+                      "minimum": 1
+                    },
+                    "startOffset": {
+                      "type": "integer",
+                      "minimum": 0
+                    },
+                    "endOffset": {
+                      "type": "integer",
+                      "minimum": 0
+                    },
+                    "normalizationMapRef": {
+                      "$ref": "./common.schema.json#/$defs/NonEmptyString"
+                    }
+                  }
+                },
+                "parseId": {
+                  "$ref": "./common.schema.json#/$defs/Uuid"
+                }
+              }
+            }
+          },
+          "cursor": {
+            "$ref": "./common.schema.json#/$defs/OpaqueCursor"
+          },
+          "maxBytes": {
+            "type": "integer",
+            "minimum": 1,
+            "maximum": 65536
+          },
+          "limit": {
+            "type": "integer",
+            "minimum": 1,
+            "maximum": 64
           }
         }
       },

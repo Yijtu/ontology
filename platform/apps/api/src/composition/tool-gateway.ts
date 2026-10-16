@@ -44,8 +44,10 @@ export interface ToolGatewayComposition {
    * Bind a gateway to exactly one run's ledger, resolved profile and operations.
    *
    * `handlers` are run-scoped handlers the composition resolved after the base set (e.g. a
-   * `web_search` handler built from the run's pinned tool connection). They are appended, never
-   * substituted, so the deployment-wide tool set is never shadowed by a per-run one.
+   * `web_search` handler built from the run's pinned tool connection, or — for a workspace-research
+   * run — the receipt-bound `web_search`/`document_search`/`ontology_lookup` set, design §4/§6).
+   * They are appended, so the deployment-wide default for a tool stays in place unless the run
+   * explicitly mounts its own handler for the *same* `toolId`, in which case the later one wins.
    */
   forRun(binding: RunToolBinding, handlers?: readonly ToolHandler[]): ToolGateway
 }
