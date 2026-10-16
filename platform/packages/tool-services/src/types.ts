@@ -5,10 +5,10 @@ import type {
   DomainResultStatus,
   EvidenceKind,
   OperationRegistry,
+  PublicExecutionConfig,
   Rfc3339UtcTimestamp,
   ResourceRef,
   ResultLimits,
-  ResolvedProfile,
   SourceRef,
   SourceSnapshot,
   SourceWatermark,
@@ -133,7 +133,13 @@ export interface ToolHandler {
 export interface RunToolBinding {
   readonly runId: Uuid
   readonly ledgerId: Uuid
-  readonly resolvedProfile: ResolvedProfile
+  /**
+   * The public execution config the gateway actually consumes (the enabled public data tools and
+   * registered compute). A scenario `ResolvedProfile` satisfies it structurally, and so does a
+   * workspace-research run config: the gateway never depends on an industry-pack field it does not
+   * use, so a research run can be configured before any industry pack is published (S04).
+   */
+  readonly resolvedProfile: PublicExecutionConfig
   readonly operations: OperationRegistry
 }
 

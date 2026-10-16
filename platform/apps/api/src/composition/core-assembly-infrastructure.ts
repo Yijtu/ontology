@@ -4,8 +4,8 @@ import { DATA_DUCKDB_ADAPTER_REF, DuckDbProjectDatasetAdapter } from '@ontology/
 import { DATA_POSTGRES_ADAPTER_REF, PostgresProjectDatasetAdapter } from '@ontology/adapter-data-postgres'
 import { PostgresDocumentParseStore, PostgresStructuredIngestionStore } from '@ontology/adapter-extraction-document'
 import { PostgresKeywordIndexStore } from '@ontology/adapter-search-bm25'
-import { ControlPostgresDatabase, PostgresExecutionConnectionSnapshotStore, PostgresExecutionModelBindingStore, PostgresExecutionToolBindingStore, PostgresModelAssignmentStore, PostgresModelConnectionStore, PostgresToolAssignmentStore, PostgresToolConnectionStore, PostgresToolSettingsMigrationStore } from '@ontology/adapter-control-postgres'
-import { ExecutionModelBindingService, ExecutionToolBindingService, ModelAssignmentService, ModelConnectionService, ModelSelectionService, ProfileResolver, ProjectDataMaterializationService, SourceRegistry, StoreBackedIndustryManifestSource, ToolAssignmentService, ToolConnectionService, ToolSelectionService } from '@ontology/application'
+import { ControlPostgresDatabase, PostgresExecutionConnectionSnapshotStore, PostgresExecutionModelBindingStore, PostgresExecutionToolBindingStore, PostgresModelAssignmentStore, PostgresModelConnectionStore, PostgresToolAssignmentStore, PostgresToolConnectionStore, PostgresToolSettingsMigrationStore, PostgresWorkspaceResearchRunConfigStore } from '@ontology/adapter-control-postgres'
+import { ExecutionModelBindingService, ExecutionToolBindingService, ModelAssignmentService, ModelConnectionService, ModelSelectionService, ProfileResolver, ProjectDataMaterializationService, SourceRegistry, StoreBackedIndustryManifestSource, ToolAssignmentService, ToolConnectionService, ToolSelectionService, WorkspaceResearchRunConfigService } from '@ontology/application'
 import { definitionVersionDigest, projectIndustrySchema, PublishedProjectDatasetSource, SemanticDefinitionService } from '@ontology/semantic-engine'
 import { canonicalJson, sha256DigestOf } from '@ontology/core'
 import type { IndustrySchemaSource, ProfileRef, ProfileSpec, ScopeRef, ToolContext, Uuid, VersionRef } from '@ontology/contracts'
@@ -15,11 +15,11 @@ import type { WorkflowController } from '@ontology/application'
 import type { createCoreApprovedInput } from './core-approved-input'
 import type { createCoreExecutionPreview } from './core-execution-preview'
 import type { CoreLocalCompositionOptions } from './core-local-composition'
-import { COMPONENT_VERSION, WORKER_RUN_ID } from './core-constants'
+import { COMPONENT_VERSION, CORE_POLICY_REF, WORKER_RUN_ID } from './core-constants'
 import { CoreCapabilityError } from './core-errors'
 import { sameVersionRef, sourceKey } from './core-composition-shared'
 import { createAjv, profileValidator, terminologySourceFor } from './core-validators'
-import { componentRecord, industrySourceFor, profileSpecFor, registerComponents, registerProfiles, scenarioComponentRecords, scenarioForIndustryRef, schemasByScenario, sourceRefsOf, workerContext } from './core-component-registration'
+import { componentRecord, industrySourceFor, profileSpecFor, registerComponents, registerProfiles, researchToolBindings, scenarioComponentRecords, scenarioForIndustryRef, schemasByScenario, sourceRefsOf, workerContext } from './core-component-registration'
 import type { CoreModelComponentRefs } from './core-template-plan-resolver'
 import { componentRef } from './core-component-ref'
 import { createCoreControlStores } from './core-control-stores'
@@ -191,7 +191,19 @@ export async function assembleInfrastructure(options: CoreLocalCompositionOption
   })
   const profileValidatorImpl = profileValidator(createAjv())
   const industrySource = new StoreBackedIndustryManifestSource({ store: stores.publishedPackStore, fallback: industrySourceFor(examples.scenarios) })
-  const profileResolver = new ProfileResolver({ control: stores.control, store: stores.profileStore, registry: stores.componentStore, industry: industrySource, validator: profileValidatorImpl })
+  // The versioned workspace-research run config (design §8, S04): a research run against a workspace
+  // with no project/scenario/published pack binds this instead of a scenario profile. It fixes the
+  // exact draft revision and the public execution config, and is immutable per draft revision.
+  const workspaceResearchConfigStore = new PostgresWorkspaceResearchRunConfigStore(database)
+  const workspaceResearchConfigService = new WorkspaceResearchRunConfigService({
+    workspaces: stores.workspaceStore,
+    configs: workspaceResearchConfigStore,
+    runtimeRef: componentRef('runtime', 'runtime-pi', 'pi-runtime@1.0.0'),
+    policyRef: CORE_POLICY_REF,
+    toolBindings: researchToolBindings(),
+    now: () => hostClock().toISOString(),
+  })
+  const profileResolver = new ProfileResolver({ control: stores.control, store: stores.profileStore, registry: stores.componentStore, industry: industrySource, validator: profileValidatorImpl, workspaceResearch: workspaceResearchConfigService })
   const sources = new SourceRegistry({ control: stores.control, store: createPostgresSourceStore(database), secrets: createEnvSecretResolver(), adapters: createStaticProbeAdapterResolver([]) })
 
   // Execution model binding (design §5.3): the shared catalogue/binding stores, the credential
@@ -403,5 +415,6 @@ export async function assembleInfrastructure(options: CoreLocalCompositionOption
     schemaSource, semanticDefinitions, projectDatasetAdapter, publishedProjectDatasetSource, projectEvolutionCell, normalApprovedInputs,
     evolutionGuard, projectDatasetService, profileResolver, sources, coreModelRefs, componentRecords, bootstrapProfileSpecsByScenario,
     profileRefsByScenario, profileSpecsByScenario, availableTasksByScenario, terminology, executionPreview,
+    workspaceResearchConfigStore, workspaceResearchConfigService,
   }
 }

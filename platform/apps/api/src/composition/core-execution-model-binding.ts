@@ -11,7 +11,7 @@ import type {
   JevActualStateResolver,
   JevFallbackPolicy,
 } from '@ontology/adapter-model-jev'
-import { ModelSelectionError, SecretValue } from '@ontology/contracts'
+import { ModelSelectionError, SecretValue, workspaceIdOfResearchProfileRef } from '@ontology/contracts'
 import type {
   BudgetLedgerPort,
   ComponentVersionRecord,
@@ -242,9 +242,16 @@ export function createExecutionModelBindingRuntime(input: {
       readonly ledgerId: Uuid
       readonly signal: AbortSignal
       readonly ctx: ToolContext
+      /**
+       * Which model capability supplies the generation port. A workspace-research run binds
+       * `research` at its `industry_workspace` scope (design §5.3/§8, S04); every other run uses
+       * `generation`. The runtime never falls back to the space's generation binding for a
+       * research run whose research binding is missing/revoked — it fails closed instead.
+       */
+      readonly generationCapability?: ModelCapability
     }): Promise<ExecutionModelCapabilities> {
       const context: ExecutionModelCapabilityContext = { ledgerId: request.ledgerId, signal: request.signal }
-      const generation = await capabilitiesFor<GenerationPort>('generation', request.executionId, context, request.ctx)
+      const generation = await capabilitiesFor<GenerationPort>(request.generationCapability ?? 'generation', request.executionId, context, request.ctx)
       const decision = await capabilitiesFor<DecisionPort>('decision_jev', request.executionId, context, request.ctx)
       return {
         ...(generation.kind === 'ready' ? { generation: generation.port } : {}),
@@ -319,6 +326,17 @@ export function createRunModelBinder(input: {
       // server context. `ctx` is accepted only to satisfy the injected port signature.
       void ctx
       const serverCtx = input.serverContext(request.runId)
+      // A workspace-research run binds its model at the **workspace** scope under the **research**
+      // capability (design §5.3/§8, S04) — never the space's generation binding. The generation
+      // port is later built from exactly that research binding, so a run can never be retargeted
+      // by a space-level model change.
+      const researchWorkspaceId = workspaceIdOfResearchProfileRef(request.profileBinding.profileRef)
+      if (researchWorkspaceId !== undefined) {
+        const scope: ModelTargetScope = { kind: 'industry_workspace', workspaceId: researchWorkspaceId }
+        const effective = await input.selection.resolve(scopeRef, { scope, capability: 'research' }, serverCtx)
+        if (effective.state !== 'available') return undefined
+        return input.bindings.ensureBinding({ executionId: request.runId, scope, capability: 'research' }, serverCtx)
+      }
       const scope: ModelTargetScope = request.execution === undefined
         ? { kind: 'space' }
         : { kind: 'project', projectId: request.execution.projectRevisionRef.projectId }

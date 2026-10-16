@@ -12,8 +12,9 @@ import {
 import { FiniteGrammarRuleSupportValidator, IncrementalMaterializer } from '@ontology/semantic-engine'
 import { JobWorkerLoop, MaterializationOutboxConsumer, ProjectEvolutionOutboxConsumer, ResearchStageHandler, TopicOutboxConsumerRouter, WorkflowDispatchWorker, controlRecordSequence, createIngestionHandlerRegistry, createWorkerStageRegistry } from '@ontology/app-worker'
 import { DEFAULT_VERIFICATION_POLICY, SCHEMA_DOCUMENTS, TOOL_CATALOGUE, projectCollectionRef } from '@ontology/contracts'
-import type { DocumentParserPort, ProjectRevision, RuntimeAdapter, RuntimeCapabilityContext, RuntimeCapabilityFactoryPort, RuntimeCapabilitySet, RuntimeSelectorPort, ScopeRef, ToolContext, Uuid, VersionRef, WorkflowDispatchFence } from '@ontology/contracts'
+import type { DocumentParserPort, ProjectRevision, RuntimeAdapter, RuntimeCapabilityContext, RuntimeCapabilityFactoryPort, RuntimeCapabilitySet, RuntimeSelectorPort, ScopeRef, ToolContext, Uuid, VersionRef, WorkflowDispatchFence, AuthoringCommandKind, ModelCapability, PublicExecutionConfig, ResolvedProfile } from '@ontology/contracts'
 import type { CandidateSubmissionRecord } from '@ontology/contracts'
+import { draftRevisionOfResearchProfileVersion, workspaceIdOfResearchProfileRef } from '@ontology/contracts'
 import type { ResearchDeliveryCandidateReceipt, RunProfileBinder } from '@ontology/application'
 import { canonicalJson } from '@ontology/tool-services'
 import { WebSearchHandler } from '@ontology/tool-services'
@@ -88,7 +89,7 @@ export async function assembleRuntimePipeline(
     questionQuerySnapshot: projectQuery.resolveQuestionForCreation,
     projectApprovedInput: async (scope: ScopeRef, revision: ProjectRevision, ctx: ToolContext) => (await projectEvolutionCell.current?.resolveApprovedInput(scope, revision, ctx)) ?? await normalApprovedInputs.current?.resolve(scope, revision, ctx),
   })
-  const runs = new RunService({ store: runStore, control: state.control, profiles: runProfileBinder, execution: executionPreflight, modelBinding: runModelBinder })
+  const runs = new RunService({ store: runStore, control: state.control, profiles: runProfileBinder, workspaceResearch: { bindWorkspaceResearchForRun: (request, trustedScope, ctx) => profileResolver.bindWorkspaceResearchRun(request, trustedScope, ctx) }, execution: executionPreflight, modelBinding: runModelBinder })
   const phase = new RunPhaseDriver({ store: runStore, control: state.control })
   const dispatchFences = new Map<Uuid, WorkflowDispatchFence>()
   // Both real runtimes are assembled here at the normal Core entry: the deterministic Template
@@ -141,7 +142,8 @@ export async function assembleRuntimePipeline(
       provider: 'ontology',
     },
     generationRole: 'planner',
-    authoringCommands: ['submit_candidates'],
+    // The authoring command is NOT enabled here: it is authorized per run in the runtime capability
+    // closure (design §5, S04), so a project-Q&A run can never propose a candidate write.
   })
   const runtimeAdapterByRef = new Map<string, RuntimeAdapter>([
     [versionRefKey(templateRuntimeRecord.manifestRef), templateRuntime],
@@ -240,29 +242,61 @@ export async function assembleRuntimePipeline(
       async forRun(binding: RuntimeCapabilityContext, ctx: ToolContext) {
         if (binding.signal === undefined) throw new CoreCapabilityError('runtime capabilities require the controller execution AbortSignal')
         const run = await runs.getRun(binding.runId, ctx)
-        const resolved = await profileResolver.getResolvedProfile({ scopeRef: { tenantId: scopeRef.tenantId, spaceId: scopeRef.spaceId }, profileRef: run.profileRef, snapshotHash: binding.resolvedProfileRef.snapshotHash }, ctx)
-        // Resolve the run's pinned public search and mount it on this run's gateway. A blocked or
+        // A workspace-research run has no scenario profile: it carries a versioned workspace-research
+        // run config that fixes its draft revision and the public execution config the gateway needs.
+        // The model is bound from that run's `research` binding, never the space's generation binding.
+        const researchWorkspaceId = workspaceIdOfResearchProfileRef(run.profileRef)
+        const researchDraftRevision = draftRevisionOfResearchProfileVersion(run.profileRef.version)
+        const isResearch = researchWorkspaceId !== undefined && researchDraftRevision !== undefined
+        let resolvedProfile: ResolvedProfile | undefined
+        let executionConfig: PublicExecutionConfig
+        let generationCapability: ModelCapability = 'generation'
+        let authoringCommands: readonly AuthoringCommandKind[] = []
+        if (isResearch) {
+          const config = await state.workspaceResearchConfigService.resolveForRun(
+            { workspaceId: researchWorkspaceId, draftRevision: researchDraftRevision },
+            ctx,
+          )
+          executionConfig = config
+          generationCapability = 'research'
+          // The controlled candidate write is authorized per run, not by the adapter's static config
+          // (design §5, S04): only a workspace-research run may propose candidates.
+          authoringCommands = ['submit_candidates']
+        } else {
+          const resolved = await profileResolver.getResolvedProfile({ scopeRef: { tenantId: scopeRef.tenantId, spaceId: scopeRef.spaceId }, profileRef: run.profileRef, snapshotHash: binding.resolvedProfileRef.snapshotHash }, ctx)
+          resolvedProfile = resolved.resolved
+          executionConfig = resolved.resolved
+        }
+        // Resolve the run's pinned public search and mount it on this run's gateway. A research run
+        // resolves at its workspace scope (S03); an ordinary run at its profile's scope. A blocked or
         // failed resolution yields a handler with no provider (a stable capability error), never a
         // 404 and never another connection.
-        const search = await searchBinding.resolveForRun(binding.runId, ctx).catch((): { state: 'blocked' } => ({ state: 'blocked' }))
+        const search = isResearch
+          ? await searchBinding.resolveForScope(binding.runId, { kind: 'industry_workspace', workspaceId: researchWorkspaceId }, ctx).catch((): { state: 'blocked' } => ({ state: 'blocked' }))
+          : await searchBinding.resolveForRun(binding.runId, ctx).catch((): { state: 'blocked' } => ({ state: 'blocked' }))
         const webSearchHandler: ToolHandler = new WebSearchHandler({
           ...(search.state === 'available' ? { provider: search.provider } : {}),
           allowWeb: run.preferences.allowWeb,
-          resolvedProfile: resolved.resolved,
+          resolvedProfile: executionConfig,
           sourceRef: WEB_SEARCH_SOURCE_REF,
         })
         const gateway = gatewayComposition.forRun(
-          { runId: binding.runId, ledgerId: binding.budgetLedgerId, resolvedProfile: resolved.resolved, operations: compute.registry },
+          { runId: binding.runId, ledgerId: binding.budgetLedgerId, resolvedProfile: executionConfig, operations: compute.registry },
           [webSearchHandler],
         )
         // A run's model is the one fixed at accept time (design §5.3): read the persisted binding
         // back, never re-resolve a default. A revoked binding fails closed (`blocked` disables the
         // port) instead of falling through to another model; with no binding at all the legacy
-        // environment-configured adapter stays in place.
-        const bound = await modelBindingRuntime.capabilitiesForExecution({ executionId: binding.runId, ledgerId: binding.budgetLedgerId, signal: binding.signal, ctx })
+        // environment-configured adapter stays in place. A workspace-research run reads its
+        // `research` binding; every other run its `generation` binding.
+        const bound = await modelBindingRuntime.capabilitiesForExecution({ executionId: binding.runId, ledgerId: binding.budgetLedgerId, signal: binding.signal, ctx, generationCapability })
         const modelExecution = modelCapabilities.forExecution({ ledgerId: binding.budgetLedgerId, signal: binding.signal })
-        const generationBound = profileModelBindingEnabled(resolved.resolved.modelBindings['generation'], coreModelRefs.generation) || bound.generation !== undefined || bound.generationBlocked
-        const decisionBound = profileModelBindingEnabled(resolved.resolved.modelBindings['decision'], coreModelRefs.decision) || bound.decision !== undefined || bound.decisionBlocked
+        const generationBound = isResearch
+          ? bound.generation !== undefined || bound.generationBlocked
+          : profileModelBindingEnabled(resolvedProfile?.modelBindings['generation'], coreModelRefs.generation) || bound.generation !== undefined || bound.generationBlocked
+        const decisionBound = isResearch
+          ? bound.decision !== undefined || bound.decisionBlocked
+          : profileModelBindingEnabled(resolvedProfile?.modelBindings['decision'], coreModelRefs.decision) || bound.decision !== undefined || bound.decisionBlocked
         return {
           gateway,
           generation: generationBound
@@ -272,7 +306,7 @@ export async function assembleRuntimePipeline(
             ? bound.decision ?? (bound.decisionBlocked ? disabledDecision() : modelExecution.decision ?? disabledDecision())
             : disabledDecision(),
           checkpoints: createRunCheckpointPort(runStore),
-          commandGateway: candidateCommandGateway,
+          ...(isResearch ? { commandGateway: candidateCommandGateway, authorizedAuthoringCommands: authoringCommands } : {}),
         } satisfies RuntimeCapabilitySet
       },
     } satisfies RuntimeCapabilityFactoryPort,

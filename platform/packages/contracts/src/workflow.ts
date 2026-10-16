@@ -1,4 +1,5 @@
 import type {
+  AuthoringCommandKind,
   BudgetRemaining,
   EvidenceKind,
   NonEmptyString,
@@ -708,6 +709,12 @@ export interface RuntimeCapabilitySet {
    * without the host's explicit authorization.
    */
   readonly commandGateway?: AuthoringCommandGateway
+  /**
+   * The authoring commands the run's host authorization exposes (design §5, S04). It is the
+   * per-run decision, so the adapter never opens a command for every run from its own static
+   * config: a project-Q&A run carries none, a workspace-research run carries `submit_candidates`.
+   */
+  readonly authorizedAuthoringCommands?: readonly AuthoringCommandKind[]
 }
 
 export interface RuntimeCapabilityFactoryPort {

@@ -1,8 +1,9 @@
-import { isToolContext, RunStoreError } from '@ontology/contracts'
+import { WorkspaceResearchConfigError, isToolContext, isWorkspaceResearchProfileRef, RunStoreError, workspaceIdOfResearchProfileRef, draftRevisionOfResearchProfileVersion } from '@ontology/contracts'
 import type {
   AbandonedAttemptRecord,
   ControlAppendEventRequest,
   ControlRepository,
+  ProfileRef,
   QuestionRewrite,
   ResourceRef,
   RevisionString,
@@ -16,6 +17,7 @@ import type {
   SseEventType,
   ToolContext,
   Uuid,
+  WorkspaceResearchRunRequest,
 } from '@ontology/contracts'
 import { ProfileResolverError } from '../profiles/errors'
 import { RunServiceError } from './errors'
@@ -33,6 +35,7 @@ import type {
   RunProfileBinder,
   RunProfileBinding,
   RunView,
+  RunWorkspaceResearchBinder,
   RuntimeEventResult,
   SaveCheckpointInput,
 } from './types'
@@ -46,6 +49,12 @@ export interface RunServiceDependencies {
   readonly control: ControlRepository
   /** Resolves and persists the manifest a run binds to; supplied by the composition root. */
   readonly profiles: RunProfileBinder
+  /**
+   * Resolves the versioned workspace-research run config (design §8, S04). When present a run whose
+   * profile ref is in the reserved workspace-research namespace is bound through this instead of the
+   * scenario profile binder; when absent such a run is rejected with `CAPABILITY_NOT_CONFIGURED`.
+   */
+  readonly workspaceResearch?: RunWorkspaceResearchBinder
   /**
    * Resolves, validates and archives the optional execution binding (SPEC v0.3a §EX-2.1).
    * Supplied by the composition root; when absent a request carrying `task` is rejected with
@@ -182,6 +191,7 @@ export class RunService {
   readonly #store: RunStore
   readonly #control: ControlRepository
   readonly #profiles: RunProfileBinder
+  readonly #workspaceResearch: RunWorkspaceResearchBinder | undefined
   readonly #execution: RunExecutionBinder | undefined
   readonly #modelBinding: RunModelBinder | undefined
   readonly #now: () => string
@@ -191,6 +201,7 @@ export class RunService {
     this.#store = dependencies.store
     this.#control = dependencies.control
     this.#profiles = dependencies.profiles
+    this.#workspaceResearch = dependencies.workspaceResearch
     this.#execution = dependencies.execution
     this.#modelBinding = dependencies.modelBinding
     this.#now = dependencies.now ?? (() => new Date().toISOString())
@@ -244,10 +255,14 @@ export class RunService {
     }
 
     let binding: RunProfileBinding
-    try {
-      binding = await this.#profiles.bindProfileForRun(fields.profileRef, scopeRef, ctx)
-    } catch (error) {
-      mapBinderError(error, `${fields.profileRef.id}@${fields.profileRef.version}`)
+    if (isWorkspaceResearchProfileRef(fields.profileRef)) {
+      binding = await this.#bindWorkspaceResearchForRun(fields.profileRef, scopeRef, ctx)
+    } else {
+      try {
+        binding = await this.#profiles.bindProfileForRun(fields.profileRef, scopeRef, ctx)
+      } catch (error) {
+        mapBinderError(error, `${fields.profileRef.id}@${fields.profileRef.version}`)
+      }
     }
 
     let executionBindingRef: ResourceRef | undefined
@@ -764,6 +779,52 @@ export class RunService {
     const run = await this.#requireRun(scopeRef, runId, ctx)
     assertRunReader(run, ctx)
     return this.#store.listAbandonedAttempts(scopeRef, runId, ctx)
+  }
+
+  /**
+   * Bind a run whose profile ref is in the reserved workspace-research namespace (design §8, S04).
+   * The workspace and the exact draft revision are decoded from the ref itself, so the request body
+   * can never name a different draft than the ref the run locks. A host without the binder rejects
+   * the run explicitly instead of falling back to a scenario profile.
+   */
+  async #bindWorkspaceResearchForRun(
+    profileRef: ProfileRef,
+    scopeRef: ScopeRef,
+    ctx: ToolContext,
+  ): Promise<RunProfileBinding> {
+    const workspaceId = workspaceIdOfResearchProfileRef(profileRef)
+    const draftRevision = draftRevisionOfResearchProfileVersion(profileRef.version)
+    if (workspaceId === undefined || draftRevision === undefined) {
+      throw new RunServiceError(
+        'INVALID_ARGUMENT',
+        'a workspace-research profile ref must name a workspace uuid and a draft revision version',
+      )
+    }
+    if (this.#workspaceResearch === undefined) {
+      throw new RunServiceError(
+        'CAPABILITY_NOT_CONFIGURED',
+        'this host cannot resolve a workspace-research run config',
+      )
+    }
+    const request: WorkspaceResearchRunRequest = { workspaceId, draftRevision }
+    try {
+      return await this.#workspaceResearch.bindWorkspaceResearchForRun(request, scopeRef, ctx)
+    } catch (error) {
+      if (error instanceof WorkspaceResearchConfigError) {
+        const code: RunServiceErrorCode =
+          error.code === 'SCOPE_MISMATCH'
+            ? 'SCOPE_MISMATCH'
+            : error.code === 'DRAFT_NOT_FOUND' || error.code === 'NOT_FOUND'
+              ? 'WORKSPACE_RESEARCH_DRAFT_NOT_FOUND'
+              : error.code === 'VERSION_CONFLICT'
+                ? 'VERSION_CONFLICT'
+                : error.code === 'INVALID_CONFIG'
+                  ? 'INVALID_ARGUMENT'
+                  : 'STORAGE_FAILURE'
+        throw new RunServiceError(code, `could not bind the workspace-research run config: ${error.message}`, { cause: error })
+      }
+      throw error
+    }
   }
 
   #validateCreateIdentity(input: CreateRunInput): void {

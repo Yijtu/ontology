@@ -18,6 +18,7 @@ import type {
   TaskCapabilityStatus,
   Uuid,
   VersionRef,
+  WorkspaceResearchRunRequest,
 } from '@ontology/contracts'
 import type { ToolContext } from '@ontology/contracts'
 
@@ -43,6 +44,22 @@ export interface RunProfileBinding {
 export interface RunProfileBinder {
   bindProfileForRun(
     profileRef: ProfileRef,
+    scopeRef: ScopeRef,
+    ctx: ToolContext,
+  ): Promise<RunProfileBinding>
+}
+
+/**
+ * Resolves (and persists) the immutable run config for a workspace-research run (design §8, S04).
+ * A workspace-research run has no project/scenario/published industry pack to resolve a scenario
+ * profile from; it binds a versioned workspace-research profile fixing the exact draft revision.
+ * The composition root implements it; the run service receives it by injection so it never imports
+ * the workspace store or a config adapter. A host that cannot resolve one rejects such a run with
+ * `CAPABILITY_NOT_CONFIGURED` rather than silently running a scenario profile.
+ */
+export interface RunWorkspaceResearchBinder {
+  bindWorkspaceResearchForRun(
+    request: WorkspaceResearchRunRequest,
     scopeRef: ScopeRef,
     ctx: ToolContext,
   ): Promise<RunProfileBinding>

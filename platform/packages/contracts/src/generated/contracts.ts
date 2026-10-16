@@ -2942,6 +2942,58 @@ export interface ReadinessProjection {
   error?: ReadinessError
 }
 /**
+ * The narrow public execution config the tool gateway and the runtime actually consume: the enabled public data tools and the registered compute operations the run may call. A scenario ResolvedProfile satisfies this structurally (it carries both arrays), so the gateway never has to depend on an industry-pack profile it does not use.
+ *
+ * This interface was referenced by `OntologyContracts`'s JSON-Schema
+ * via the `definition` "PublicExecutionConfig".
+ */
+export interface PublicExecutionConfig {
+  toolBindings: ToolBinding[]
+  computeBindings: ComputeBinding[]
+}
+/**
+ * The versioned workspace-research run-config spec. It fixes the real workspace and the exact immutable draft revision it models (workspaceId + draftRevision + draftRef) and the public execution config, and deliberately has no industryRef and no mappingRefs: a research run starts from an empty workspace, before any industry pack is published. The model is bound per-execution (industry_workspace + research), never here.
+ *
+ * This interface was referenced by `OntologyContracts`'s JSON-Schema
+ * via the `definition` "WorkspaceResearchProfileSpec".
+ */
+export interface WorkspaceResearchProfileSpec {
+  schemaVersion: 'workspace-research-profile-spec@1'
+  workspaceId: Uuid
+  draftRevision: RevisionString
+  draftRef: ResourceRef
+  runtimeRef: VersionRef
+  modelBindings: {
+    [k: string]: ModelBinding | undefined
+  }
+  toolBindings: ToolBinding[]
+  computeBindings: ComputeBinding[]
+  policyRef: VersionRef
+}
+/**
+ * WorkspaceResearchProfileSpec plus the exact resolved component versions, the explicit degradations and a deterministic snapshot hash. It is written once for one (workspaceId, draftRevision) and never rewritten, so editing the workspace draft later can never retarget an in-flight run's configuration.
+ *
+ * This interface was referenced by `OntologyContracts`'s JSON-Schema
+ * via the `definition` "ResolvedWorkspaceResearchProfile".
+ */
+export interface ResolvedWorkspaceResearchProfile {
+  schemaVersion: 'workspace-research-profile-spec@1'
+  workspaceId: Uuid
+  draftRevision: RevisionString
+  draftRef: ResourceRef
+  runtimeRef: VersionRef
+  modelBindings: {
+    [k: string]: ModelBinding | undefined
+  }
+  toolBindings: ToolBinding[]
+  computeBindings: ComputeBinding[]
+  policyRef: VersionRef
+  resolvedVersions: VersionRef[]
+  explicitDegradations: ExplicitDegradation[]
+  snapshotHash: Sha256Digest
+  resolvedAt: Rfc3339UtcTimestamp
+}
+/**
  * Remaining run budget. One shared ledger for the whole run: replanning, repair, runtime turns and transport retries all draw from it and never reset it.
  *
  * This interface was referenced by `OntologyContracts`'s JSON-Schema

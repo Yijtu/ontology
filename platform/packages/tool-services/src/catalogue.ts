@@ -2,8 +2,8 @@ import { CONTROLLER_SERVICE_IDS, TOOL_CATALOGUE, findRegisteredOperation } from 
 import type {
   OperationRef,
   OperationRegistry,
+  PublicExecutionConfig,
   RegisteredOperation,
-  ResolvedProfile,
   ToolDefinition,
   ToolId,
 } from '@ontology/contracts'
@@ -43,7 +43,7 @@ export function assertCatalogueExcludesControllerServices(
  * only narrow it, so an unlisted or disabled tool is rejected rather than added.
  */
 export function resolveEnabledTools(
-  profile: ResolvedProfile,
+  profile: PublicExecutionConfig,
   catalogue: readonly ToolDefinition[] = TOOL_CATALOGUE,
 ): readonly EnabledTool[] {
   assertCatalogueExcludesControllerServices(catalogue)
@@ -63,7 +63,7 @@ export function resolveEnabledTools(
 }
 
 export function findEnabledTool(
-  profile: ResolvedProfile,
+  profile: PublicExecutionConfig,
   toolId: ToolId,
   catalogue: readonly ToolDefinition[] = TOOL_CATALOGUE,
 ): EnabledTool | undefined {
@@ -77,7 +77,7 @@ export function findEnabledTool(
  * that the profile did not bind (or bound with `enabled: false`) cannot execute even
  * with correct parameters (C4/ADR-11).
  */
-export function isEnabledOperation(profile: ResolvedProfile, ref: OperationRef): boolean {
+export function isEnabledOperation(profile: PublicExecutionConfig, ref: OperationRef): boolean {
   return profile.computeBindings.some(
     (binding) => binding.enabled && operationKey(binding.operationRef) === operationKey(ref),
   )
@@ -96,7 +96,7 @@ export { operationKey }
  */
 export function resolveComputeOperation(
   args: Readonly<Record<string, unknown>>,
-  profile: ResolvedProfile,
+  profile: PublicExecutionConfig,
   registry: OperationRegistry,
   validator: ToolSchemaValidator,
 ): RegisteredOperation {

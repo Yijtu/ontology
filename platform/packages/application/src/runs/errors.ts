@@ -24,6 +24,7 @@ export type RunServiceErrorCode =
   | 'TASK_UNAVAILABLE'
   | 'TASK_PARAMETER_INVALID'
   | 'INPUT_SNAPSHOT_INVALID'
+  | 'WORKSPACE_RESEARCH_DRAFT_NOT_FOUND'
 
 const EXTRA_HTTP_STATUS: Readonly<Record<string, number>> = {
   SCOPE_MISMATCH: 403,
@@ -38,6 +39,7 @@ const EXTRA_HTTP_STATUS: Readonly<Record<string, number>> = {
   TASK_UNAVAILABLE: 409,
   TASK_PARAMETER_INVALID: 422,
   INPUT_SNAPSHOT_INVALID: 409,
+  WORKSPACE_RESEARCH_DRAFT_NOT_FOUND: 404,
 }
 
 const CATALOGUE_HTTP_STATUS: Readonly<Record<string, number>> = Object.fromEntries(

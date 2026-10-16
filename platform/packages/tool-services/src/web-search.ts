@@ -1,7 +1,7 @@
 import { ERROR_CATALOG, toWebSearchToolPage } from '@ontology/contracts'
 import type {
   ErrorCode,
-  ResolvedProfile,
+  PublicExecutionConfig,
   Rfc3339UtcTimestamp,
   Semver,
   SourceRef,
@@ -40,7 +40,7 @@ export interface WebSearchEnablement {
  * that found nothing.
  */
 export function resolveWebSearchEnablement(input: {
-  readonly resolvedProfile: ResolvedProfile
+  readonly resolvedProfile: PublicExecutionConfig
   readonly allowWeb: boolean
   readonly providerConfigured: boolean
 }): WebSearchEnablement {
@@ -59,7 +59,7 @@ export interface WebSearchHandlerOptions {
   /** The run's `preferences.allowWeb`. False emits no provider request at all. */
   readonly allowWeb: boolean
   /** The run's resolved profile, so a profile-disabled tool is refused here too. */
-  readonly resolvedProfile: ResolvedProfile
+  readonly resolvedProfile: PublicExecutionConfig
   /** The registered public-web source this tool reads, used for the evidence snapshot. */
   readonly sourceRef: SourceRef
   /**

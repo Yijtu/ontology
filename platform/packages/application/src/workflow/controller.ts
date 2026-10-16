@@ -914,6 +914,7 @@ export class WorkflowController {
       decision: capability.decision,
       checkpoints: capability.checkpoints,
       ...(capability.commandGateway === undefined ? {} : { commandGateway: capability.commandGateway }),
+      ...(capability.authorizedAuthoringCommands === undefined ? {} : { authorizedAuthoringCommands: capability.authorizedAuthoringCommands }),
       budget: this.#runtimeBudget(manifest.budgetLedgerId, ctx),
       signal,
     }
