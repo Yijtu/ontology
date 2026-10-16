@@ -37,6 +37,8 @@ interface ConnectionRow extends QueryResultRow {
   capabilities: ToolConnectionCapability[]
   enabled: boolean
   endpoint: string | null
+  /** The stored descriptor jsonb; carries the optional search strategy / archive limits (S03). */
+  descriptor: ToolConnectionDescriptor | null
   credential_ref: ResourceRef | null
   credential_state: ToolCredentialState
   probe_summary: ToolConnectionProbeResult | null
@@ -44,7 +46,7 @@ interface ConnectionRow extends QueryResultRow {
 }
 
 const CONNECTION_COLUMNS = `connection_id, revision::text AS revision, name, adapter_type,
-  capabilities, enabled, endpoint, credential_ref, credential_state, probe_summary,
+  capabilities, enabled, endpoint, descriptor, credential_ref, credential_state, probe_summary,
   to_char(updated_at AT TIME ZONE 'UTC', 'YYYY-MM-DD"T"HH24:MI:SS.MS"Z"') AS updated_at`
 
 function toSummary(row: ConnectionRow): ToolConnectionSummary {
@@ -62,9 +64,15 @@ function toSummary(row: ConnectionRow): ToolConnectionSummary {
 }
 
 function toAdminView(row: ConnectionRow): ToolConnectionAdminView {
+  // The search strategy / archive limits are read back from the stored descriptor jsonb, so the
+  // imported endpoint path, timeout and archive byte bound survive a restart (S03).
+  const strategy = row.descriptor?.searchStrategy
+  const limits = row.descriptor?.archiveLimits
   return {
     ...toSummary(row),
     ...(row.endpoint === null ? {} : { endpoint: row.endpoint }),
+    ...(strategy === undefined ? {} : { searchStrategy: strategy }),
+    ...(limits === undefined ? {} : { archiveLimits: limits }),
   }
 }
 

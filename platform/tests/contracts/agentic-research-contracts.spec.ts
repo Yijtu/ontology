@@ -426,16 +426,18 @@ describe('ResearchPreflight (design §2/§10)', () => {
     budgetRef: versionRef,
     blocked: [],
     authorization: { roles: ['researcher'], deadline: '2026-10-16T01:00:00Z', note: '只读预检' },
+    archive: { state: 'unverified' as const, connectionRevision: '3', note: '连接已配置但未探测' },
   }
 
   it('accepts an available and a blocked preflight', () => {
     expect(() => assertResearchPreflightShape(preflight)).not.toThrow()
-    expect(() => assertResearchPreflightShape({ ...preflight, recipient: { state: 'blocked', toolId: 'web_search', blockedReason: 'CREDENTIAL_MISSING' }, blocked: [{ code: 'CREDENTIAL_MISSING', message: '缺凭据' }] })).not.toThrow()
+    expect(() => assertResearchPreflightShape({ ...preflight, recipient: { state: 'blocked', toolId: 'web_search', blockedReason: 'CREDENTIAL_MISSING' }, archive: { state: 'unavailable', note: '无连接' }, blocked: [{ code: 'CREDENTIAL_MISSING', message: '缺凭据' }] })).not.toThrow()
   })
 
   it('rejects a wrong schema version, a bad recipient state and a credential-shaped reply', () => {
     expect(() => assertResearchPreflightShape({ ...preflight, schemaVersion: 'research-preflight@2' })).toThrow()
     expect(() => assertResearchPreflightShape({ ...preflight, recipient: { state: 'ready', toolId: 'web_search' } })).toThrow()
     expect(() => assertResearchPreflightShape({ ...preflight, recipient: { ...preflight.recipient, apiKey: 'tvly' } })).toThrow(/credential/i)
+    expect(() => assertResearchPreflightShape({ ...preflight, archive: { state: 'maybe', note: 'x' } })).toThrow(/archive/i)
   })
 })

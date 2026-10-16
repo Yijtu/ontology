@@ -54,20 +54,28 @@ export function createWebSearchProviderFromConnection(
     ...(config.maxTimeoutMs === undefined ? {} : { maxTimeoutMs: config.maxTimeoutMs }),
     ...(config.snapshotArchive === undefined ? {} : { snapshotArchive: config.snapshotArchive }),
   }
+  // The pinned search strategy (S03) is part of the descriptor, so an imported compat gateway keeps
+  // its endpoint path/timeout and a native connection keeps its fixed vendor depth/topic.
+  const strategy = config.descriptor.searchStrategy
+  const searchDepth = config.searchDepth ?? strategy?.searchDepth
+  const topic = config.topic ?? strategy?.topic
+  const compatEndpointPath = config.compatEndpointPath ?? strategy?.compatEndpointPath
+  const maxTimeoutMs = config.maxTimeoutMs ?? strategy?.maxTimeoutMs
+  const withTimeout = maxTimeoutMs === undefined ? shared : { ...shared, maxTimeoutMs }
   if (config.descriptor.adapterType === 'native_tavily') {
     // The native service authenticates every call; without a credential it cannot be used.
     if (config.credential === undefined) return undefined
     return new NativeTavilySearchProvider({
       baseUrl: endpoint,
       apiKey: config.credential,
-      ...(config.searchDepth === undefined ? {} : { searchDepth: config.searchDepth }),
-      ...(config.topic === undefined ? {} : { topic: config.topic }),
-      ...shared,
+      ...(searchDepth === undefined ? {} : { searchDepth }),
+      ...(topic === undefined ? {} : { topic }),
+      ...withTimeout,
     })
   }
   return new HttpWebSearchProvider({
     baseUrl: endpoint,
-    ...(config.compatEndpointPath === undefined ? {} : { endpoint: config.compatEndpointPath }),
-    ...shared,
+    ...(compatEndpointPath === undefined ? {} : { endpoint: compatEndpointPath }),
+    ...withTimeout,
   })
 }

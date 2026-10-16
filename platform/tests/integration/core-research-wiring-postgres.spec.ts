@@ -118,14 +118,18 @@ afterAll(async () => {
 })
 
 describe('a normal Core start discovers the research surface (N12)', () => {
-  it('projects the research/archive capabilities as available from the configured search endpoint', async () => {
+  it('projects research as available from the catalogue, but archive only after a passed probe', async () => {
     const response = await request('/api/v1/workbench/overview')
     expect(response.status).toBe(200)
     const body = await response.json() as { data: { capabilities: { ability: string; available: boolean; unavailableReason?: string }[] } }
     const byAbility = new Map(body.data.capabilities.map((entry) => [entry.ability, entry]))
+    // The imported catalogue connection makes research available…
     expect(byAbility.get('research')?.available).toBe(true)
-    expect(byAbility.get('archive')?.available).toBe(true)
     expect(byAbility.get('research')?.unavailableReason).toBeUndefined()
+    // …but a connection that merely exists never claims every page can be archived (S03): the
+    // archive ability requires a page-archive probe that passed, so it is honestly unavailable here.
+    expect(byAbility.get('archive')?.available).toBe(false)
+    expect(byAbility.get('archive')?.unavailableReason).toContain('归档')
   })
 
   it('mounts the durable research-run route and accepts a bounded run with 202', async () => {

@@ -3,6 +3,7 @@ import type {
   EffectiveToolSelection,
   ResearchLimits,
   ResearchPreflight,
+  ResearchPreflightArchive,
   ResearchPreflightBlock,
   ResearchPreflightRecipient,
   ToolContext,
@@ -63,6 +64,28 @@ function recipientOf(selection: EffectiveToolSelection): ResearchPreflightRecipi
   }
 }
 
+/**
+ * Distinguish "an available configuration" from "a proven page-archive result" (design §9). A
+ * connection that merely exists is `unverified`: the platform can archive through its controlled
+ * archiver, but it has not proven a real page read-back for this exact revision. Only a passed
+ * archive probe makes it `available` — a connection alone never claims "any page can be archived".
+ */
+function archiveOf(selection: EffectiveToolSelection): ResearchPreflightArchive {
+  const summary = selection.connectionSummary
+  if (selection.state !== 'available' || summary === undefined) {
+    return { state: 'unavailable', note: '未配置可用的公共搜索连接，无法归档页面。' }
+  }
+  const probe = summary.probeSummary
+  if (probe !== undefined && probe.archive.status === 'passed' && probe.connectionRevision === summary.revision) {
+    return { state: 'available', connectionRevision: summary.revision, note: '该连接的页面归档探测已针对当前修订通过。' }
+  }
+  return {
+    state: 'unverified',
+    connectionRevision: summary.revision,
+    note: '连接已配置，但尚未通过页面归档探测；不能据此宣称任意页面均可归档。',
+  }
+}
+
 const RECIPIENT_BLOCK_MESSAGE: Readonly<Record<string, string>> = {
   TOOL_NOT_CONFIGURED: '尚未配置公共搜索服务，研究无法开始。',
   TOOL_DISABLED: '公共搜索服务已停用，研究无法开始。',
@@ -85,6 +108,7 @@ export function createCoreResearchPreflight(
       const ctx = dependencies.systemContext()
       const blocked: ResearchPreflightBlock[] = []
       let recipient: ResearchPreflightRecipient
+      let archive: ResearchPreflightArchive = { state: 'unavailable', note: '未配置可用的公共搜索连接，无法归档页面。' }
       try {
         const selection = await dependencies.selection.resolve(
           dependencies.scopeRef,
@@ -92,6 +116,7 @@ export function createCoreResearchPreflight(
           ctx,
         )
         recipient = recipientOf(selection)
+        archive = archiveOf(selection)
       } catch (error) {
         const reason = error instanceof ToolConnectionError ? error.code : 'STORE_FAILED'
         recipient = { state: 'blocked', toolId: 'web_search', blockedReason: reason }
@@ -127,6 +152,7 @@ export function createCoreResearchPreflight(
           deadline: input.limits.deadline,
           note: '本次预检为只读；开始研究时服务端会按此范围与额度固定实际绑定。',
         },
+        archive,
       }
     },
   }

@@ -2,7 +2,13 @@ import { createHash } from 'node:crypto'
 import { mkdir, stat, writeFile } from 'node:fs/promises'
 import { dirname, join } from 'node:path'
 import { CONTRACT_VERSION, SecretValue, createToolContext } from '@ontology/contracts'
-import type { ScopeRef, ToolContext } from '@ontology/contracts'
+import type {
+  ScopeRef,
+  ToolArchiveLimits,
+  ToolContext,
+  ToolSearchStrategy,
+  ToolSettingsMigrationStore,
+} from '@ontology/contracts'
 import type { ToolAssignmentService, ToolConnectionService } from '@ontology/application'
 import { envVarNameOf } from './secret-resolver'
 
@@ -10,6 +16,10 @@ const BASE_URL_SETTING = 'CORE_WEB_SEARCH_BASE_URL'
 const ENDPOINT_SETTING = 'CORE_WEB_SEARCH_ENDPOINT'
 const API_KEY_SETTING = 'CORE_WEB_SEARCH_API_KEY'
 const SECRET_REF_SETTING = 'CORE_WEB_SEARCH_SECRET_REF'
+const MAX_TIMEOUT_SETTING = 'CORE_WEB_SEARCH_MAX_TIMEOUT_MS'
+const MAX_BYTES_SETTING = 'CORE_WEB_SEARCH_MAX_BYTES'
+/** The durable migration record key; one import per scope, independent of any local marker. */
+export const WEB_SEARCH_MIGRATION_KEY = 'web-search-compat-import:v1'
 
 /**
  * One-time bridge from the legacy `CORE_WEB_SEARCH_*` deployment environment to the tool-connection
@@ -32,6 +42,7 @@ export class CoreToolSettingsMigration {
   readonly #scopeRef: ScopeRef
   readonly #markerPath: string
   readonly #env: Readonly<Record<string, string | undefined>>
+  readonly #migrationStore: ToolSettingsMigrationStore | undefined
 
   constructor(input: {
     readonly connections: ToolConnectionService
@@ -39,6 +50,12 @@ export class CoreToolSettingsMigration {
     readonly scopeRef: ScopeRef
     readonly objectDirectory: string
     readonly environment: Readonly<Record<string, string | undefined>>
+    /**
+     * The durable idempotency record (S03). When mounted it is authoritative: a local marker file is
+     * not enough, because a lost file would silently re-import the environment after the catalogue
+     * was edited. A host without it keeps the legacy local-marker behaviour (unit/test hosts).
+     */
+    readonly migrationStore?: ToolSettingsMigrationStore
   }) {
     this.#connections = input.connections
     this.#assignments = input.assignments
@@ -48,10 +65,15 @@ export class CoreToolSettingsMigration {
       'tool-connections-migrated.flag',
     )
     this.#env = input.environment
+    this.#migrationStore = input.migrationStore
   }
 
   /** True once the one-time bridge to the tool-connection catalogue has run for this scope. */
   async isMigrated(): Promise<boolean> {
+    if (this.#migrationStore !== undefined) {
+      const ctx = systemContext(this.#scopeRef)
+      return this.#migrationStore.isApplied(this.#scopeRef, WEB_SEARCH_MIGRATION_KEY, ctx)
+    }
     try { await stat(this.#markerPath); return true } catch { return false }
   }
 
@@ -70,6 +92,12 @@ export class CoreToolSettingsMigration {
     const connectionId = deterministicUuid(`tool-connection:web-search:${scopeRef.tenantId}:${scopeRef.spaceId}`)
     const credential = this.#legacyApiKey()
 
+    // The legacy base URL and endpoint path are preserved **separately**: the descriptor keeps the
+    // base address and the path/timeout travel in the search strategy, so `connection-provider.ts`
+    // does not overwrite the imported path with its `/v1/search` default. The archive byte bound and
+    // timeout travel in the archive limits.
+    const searchStrategy = searchStrategyOf(this.#env)
+    const archiveLimits = archiveLimitsOf(this.#env)
     await this.#connections.create({
       connectionId,
       idempotencyKey: `migrate-web-search:${scopeRef.tenantId}:${scopeRef.spaceId}:v1`,
@@ -78,7 +106,9 @@ export class CoreToolSettingsMigration {
         adapterType: 'http_compat',
         capabilities: ['web_search'],
         enabled: true,
-        endpoint: compatAddress(baseUrl, this.#env[ENDPOINT_SETTING]?.trim()),
+        endpoint: baseUrl,
+        ...(searchStrategy === undefined ? {} : { searchStrategy }),
+        ...(archiveLimits === undefined ? {} : { archiveLimits }),
       },
       ...(credential === undefined ? {} : { credential }),
     }, ctx)
@@ -108,23 +138,51 @@ export class CoreToolSettingsMigration {
   }
 
   async #markMigrated(): Promise<void> {
+    const migratedAt = new Date().toISOString()
+    if (this.#migrationStore !== undefined) {
+      await this.#migrationStore.record(this.#scopeRef, {
+        migrationKey: WEB_SEARCH_MIGRATION_KEY,
+        detail: { baseUrl: this.#env[BASE_URL_SETTING]?.trim() ?? null, migratedAt },
+        migratedAt,
+      }, systemContext(this.#scopeRef))
+    }
     await mkdir(dirname(this.#markerPath), { recursive: true, mode: 0o700 })
-    await writeFile(this.#markerPath, JSON.stringify({ migratedAt: new Date().toISOString() }), { flag: 'w', mode: 0o600 })
+    await writeFile(this.#markerPath, JSON.stringify({ migratedAt }), { flag: 'w', mode: 0o600 })
   }
 }
 
 /**
- * The tool descriptor carries one `endpoint`; combine the legacy base URL and path into the full
- * service address. A malformed base URL is kept verbatim (the UI can repair it) rather than failing
- * host startup.
+ * The search strategy preserved from the legacy environment: the compat endpoint path and the search
+ * timeout. A path is kept verbatim only when present, so an unset path falls back to the adapter's
+ * `/v1/search` default without being written into the address.
  */
-function compatAddress(baseUrl: string, path: string | undefined): string {
-  if (path === undefined || path.length === 0) return baseUrl
-  try {
-    return new URL(path, baseUrl).toString()
-  } catch {
-    return baseUrl
+function searchStrategyOf(env: Readonly<Record<string, string | undefined>>): ToolSearchStrategy | undefined {
+  const path = env[ENDPOINT_SETTING]?.trim()
+  const maxTimeoutMs = optionalPositiveInteger(env, MAX_TIMEOUT_SETTING)
+  if ((path === undefined || path.length === 0) && maxTimeoutMs === undefined) return undefined
+  return {
+    ...(path === undefined || path.length === 0 ? {} : { compatEndpointPath: path }),
+    ...(maxTimeoutMs === undefined ? {} : { maxTimeoutMs }),
   }
+}
+
+/** The archive bounds preserved from the legacy environment (byte cap and read timeout). */
+function archiveLimitsOf(env: Readonly<Record<string, string | undefined>>): ToolArchiveLimits | undefined {
+  const maxBytes = optionalPositiveInteger(env, MAX_BYTES_SETTING)
+  const maxTimeoutMs = optionalPositiveInteger(env, MAX_TIMEOUT_SETTING)
+  if (maxBytes === undefined && maxTimeoutMs === undefined) return undefined
+  return {
+    ...(maxBytes === undefined ? {} : { maxBytes }),
+    ...(maxTimeoutMs === undefined ? {} : { maxTimeoutMs }),
+  }
+}
+
+/** A positive integer setting, or `undefined`; a malformed value fails host startup rather than silently dropping. */
+function optionalPositiveInteger(env: Readonly<Record<string, string | undefined>>, setting: string): number | undefined {
+  const raw = env[setting]?.trim()
+  if (raw === undefined || raw.length === 0) return undefined
+  if (!/^[1-9]\d*$/u.test(raw)) throw new Error(`${setting} must be a positive integer`)
+  return Number(raw)
 }
 
 /** Deterministic UUID (RFC 4122 v5-shaped) so a repeated migration reuses the same ids. */

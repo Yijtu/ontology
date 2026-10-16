@@ -101,15 +101,28 @@ export interface ToolConnectionSummary {
 /** The administrator connection view: adds the endpoint, still no secret value. */
 export interface ToolConnectionAdminView extends ToolConnectionSummary {
   readonly endpoint?: string
+  /**
+   * The non-secret search policy captured on the connection (compat path, timeout, vendor depth).
+   * It is part of the connection config, so a snapshot pins exactly what the run was built with.
+   */
+  readonly searchStrategy?: ToolSearchStrategy
+  /** The non-secret archive bounds captured on the connection (max bytes, timeout). */
+  readonly archiveLimits?: ToolArchiveLimits
 }
 
-/** A create/edit descriptor. It never carries a credential; that is a separate write. */
+/**
+ * A create/edit descriptor. It never carries a credential; that is a separate write. The optional
+ * `searchStrategy`/`archiveLimits` preserve a compat gateway's endpoint path, timeout and archive
+ * byte bound, so importing a legacy `CORE_WEB_SEARCH_*` deployment does not drop those semantics.
+ */
 export interface ToolConnectionDescriptor {
   readonly name: string
   readonly adapterType: ToolAdapterType
   readonly capabilities: readonly ToolConnectionCapability[]
   readonly enabled: boolean
   readonly endpoint?: string
+  readonly searchStrategy?: ToolSearchStrategy
+  readonly archiveLimits?: ToolArchiveLimits
 }
 
 /** An opaque credential reference; the host resolves it and never returns the value. */
@@ -390,6 +403,26 @@ export interface ToolExecutionSnapshotStore {
   ): Promise<ToolExecutionConnectionSnapshot | undefined>
 }
 
+/** One durable, idempotent record that a one-time tool-settings migration ran for a scope. */
+export interface ToolSettingsMigrationRecord {
+  readonly migrationKey: string
+  readonly detail: Record<string, unknown>
+  readonly migratedAt: Rfc3339UtcTimestamp
+}
+
+/**
+ * Durable idempotency for the one-time legacy-settings bridge (S03, design §10).
+ *
+ * A local marker file is not authoritative: it can be lost when the deployment moves or the
+ * process/user changes, silently re-importing after the catalogue has been edited in the UI. The
+ * record is written once per (tenant, space, migration key) and is consulted before any import, so
+ * the environment can never become a second source of truth again.
+ */
+export interface ToolSettingsMigrationStore {
+  isApplied(scopeRef: ScopeRef, migrationKey: string, ctx: ToolContext): Promise<boolean>
+  record(scopeRef: ScopeRef, record: ToolSettingsMigrationRecord, ctx: ToolContext): Promise<void>
+}
+
 /**
  * Host credential custody for tool connections. It is the same custody boundary the model
  * connections use: the plaintext is written once and never read back into a domain entity.
@@ -521,6 +554,11 @@ export function assertToolConnectionDescriptorShape(value: unknown): asserts val
     || (value['endpoint'] !== undefined && !isNonEmptyString(value['endpoint']))) {
     throw new ToolConnectionError('INVALID_ARGUMENT', 'invalid tool connection descriptor')
   }
+  if ('apiKey' in value || 'credential' in value || 'secret' in value || 'credentialRef' in value) {
+    throw new ToolConnectionError('INVALID_ARGUMENT', 'a tool connection descriptor must never carry a credential')
+  }
+  if (value['searchStrategy'] !== undefined) assertToolSearchStrategyShape(value['searchStrategy'])
+  if (value['archiveLimits'] !== undefined) assertToolArchiveLimitsShape(value['archiveLimits'])
 }
 
 export function assertToolAssignmentSetShape(value: unknown): asserts value is ToolAssignmentSet {

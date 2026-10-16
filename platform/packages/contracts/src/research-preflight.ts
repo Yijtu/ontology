@@ -38,6 +38,22 @@ export interface ResearchPreflightAuthorization {
   readonly note: string
 }
 
+export type ResearchPreflightArchiveState = 'available' | 'unverified' | 'unavailable'
+
+/**
+ * The page-archive assessment (design §9: 能力展示区分"可用配置"与"探测结果").
+ *
+ * A configured search connection is an *available configuration*; it is not proof that a page can be
+ * retrieved and read back. `available` requires a page-archive probe that passed for the exact
+ * pinned connection revision; a connection that merely exists is `unverified`, so the preflight never
+ * claims "any page can be archived" just because a connection is present.
+ */
+export interface ResearchPreflightArchive {
+  readonly connectionRevision?: RevisionString
+  readonly state: ResearchPreflightArchiveState
+  readonly note: string
+}
+
 export interface ResearchPreflight {
   readonly schemaVersion: 'research-preflight@1'
   readonly workspaceId: Uuid
@@ -54,11 +70,15 @@ export interface ResearchPreflight {
   /** Everything that would block the run; empty means the run may start. */
   readonly blocked: readonly ResearchPreflightBlock[]
   readonly authorization: ResearchPreflightAuthorization
+  /** The page-archive assessment, distinct from the search recipient's availability. */
+  readonly archive: ResearchPreflightArchive
 }
 
 const RECIPIENT_STATES: readonly ResearchPreflightRecipientState[] = [
   'available', 'unconfigured', 'disabled', 'blocked',
 ]
+
+const ARCHIVE_STATES: readonly ResearchPreflightArchiveState[] = ['available', 'unverified', 'unavailable']
 
 function isVersionRef(value: unknown): boolean {
   return isRecord(value) && typeof value['id'] === 'string' && typeof value['version'] === 'string' && typeof value['digest'] === 'string'
@@ -103,6 +123,13 @@ export function assertResearchPreflightShape(value: unknown): asserts value is R
   }
   assertRecipient(value['recipient'])
   assertLimits(value['limits'])
+  const archive = value['archive']
+  if (!isRecord(archive)
+    || !ARCHIVE_STATES.includes(archive['state'] as ResearchPreflightArchiveState)
+    || typeof archive['note'] !== 'string'
+    || (archive['connectionRevision'] !== undefined && !isRevisionString(archive['connectionRevision']))) {
+    throw new Error('invalid research preflight archive assessment')
+  }
   const authorization = value['authorization']
   if (!isRecord(authorization) || !Array.isArray(authorization['roles']) || !authorization['roles'].every((role) => typeof role === 'string')
     || typeof authorization['deadline'] !== 'string' || typeof authorization['note'] !== 'string') {

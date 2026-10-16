@@ -4,7 +4,7 @@ import { DATA_DUCKDB_ADAPTER_REF, DuckDbProjectDatasetAdapter } from '@ontology/
 import { DATA_POSTGRES_ADAPTER_REF, PostgresProjectDatasetAdapter } from '@ontology/adapter-data-postgres'
 import { PostgresDocumentParseStore, PostgresStructuredIngestionStore } from '@ontology/adapter-extraction-document'
 import { PostgresKeywordIndexStore } from '@ontology/adapter-search-bm25'
-import { ControlPostgresDatabase, PostgresExecutionConnectionSnapshotStore, PostgresExecutionModelBindingStore, PostgresExecutionToolBindingStore, PostgresModelAssignmentStore, PostgresModelConnectionStore, PostgresToolAssignmentStore, PostgresToolConnectionStore } from '@ontology/adapter-control-postgres'
+import { ControlPostgresDatabase, PostgresExecutionConnectionSnapshotStore, PostgresExecutionModelBindingStore, PostgresExecutionToolBindingStore, PostgresModelAssignmentStore, PostgresModelConnectionStore, PostgresToolAssignmentStore, PostgresToolConnectionStore, PostgresToolSettingsMigrationStore } from '@ontology/adapter-control-postgres'
 import { ExecutionModelBindingService, ExecutionToolBindingService, ModelAssignmentService, ModelConnectionService, ModelSelectionService, ProfileResolver, ProjectDataMaterializationService, SourceRegistry, StoreBackedIndustryManifestSource, ToolAssignmentService, ToolConnectionService, ToolSelectionService } from '@ontology/application'
 import { definitionVersionDigest, projectIndustrySchema, PublishedProjectDatasetSource, SemanticDefinitionService } from '@ontology/semantic-engine'
 import { canonicalJson, sha256DigestOf } from '@ontology/core'
@@ -312,12 +312,14 @@ export async function assembleInfrastructure(options: CoreLocalCompositionOption
   // The one-time legacy `CORE_WEB_SEARCH_*` bridge runs on the normal start path *before* the
   // deployment reads tool capabilities, so an old compat-gateway deployment becomes a catalogue
   // connection first. Once the marker is written the environment is no longer a second truth.
+  const toolSettingsMigrationStore = new PostgresToolSettingsMigrationStore(database)
   const toolSettingsMigration = new CoreToolSettingsMigration({
     connections: toolSettings.connections,
     assignments: toolSettings.assignments,
     scopeRef,
     objectDirectory: options.objectDirectory,
     environment: modelEnvironment,
+    migrationStore: toolSettingsMigrationStore,
   })
   await toolSettingsMigration.migrate()
 
@@ -396,7 +398,7 @@ export async function assembleInfrastructure(options: CoreLocalCompositionOption
     modelSelectionService, modelBindingService, modelBindingRuntime, runModelBinder, aiSettings,
     modelSettings, modelSettingsMigration, deploymentModelCapabilities,
     toolConnectionStore, toolAssignmentStore, toolBindingStore, toolCredentialCustodian,
-    toolSelectionService, toolBindingService, toolSettings, toolSettingsMigration,
+    toolSelectionService, toolBindingService, toolSettings, toolSettingsMigration, toolSettingsMigrationStore,
     executionSnapshotStore,
     schemaSource, semanticDefinitions, projectDatasetAdapter, publishedProjectDatasetSource, projectEvolutionCell, normalApprovedInputs,
     evolutionGuard, projectDatasetService, profileResolver, sources, coreModelRefs, componentRecords, bootstrapProfileSpecsByScenario,

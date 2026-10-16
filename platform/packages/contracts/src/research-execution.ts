@@ -141,6 +141,8 @@ export interface ResearchExecutionPage {
 export type ResearchErrorCode =
   | 'INVALID_REQUEST' | 'NOT_FOUND' | 'SCOPE_MISMATCH' | 'VERSION_CONFLICT'
   | 'IDEMPOTENCY_CONFLICT' | 'BUDGET_EXHAUSTED' | 'STORE_FAILED'
+  /** The catalogue has no usable public-search binding for this run (stable capability reason). */
+  | 'CAPABILITY_NOT_CONFIGURED'
 
 export class ResearchError extends Error {
   constructor(readonly code: ResearchErrorCode, message: string, options?: ErrorOptions) {

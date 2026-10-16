@@ -2,7 +2,7 @@ import { mkdtemp, unlink } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { describe, expect, it } from 'vitest'
-import { CoreToolSettingsMigration } from '@ontology/app-api'
+import { CoreToolSettingsMigration, WEB_SEARCH_MIGRATION_KEY } from '@ontology/app-api'
 import { ToolAssignmentService, ToolConnectionService, ToolSelectionService } from '@ontology/application'
 import {
   TEST_SCOPE,
@@ -10,6 +10,7 @@ import {
   InMemoryToolAssignmentStore,
   InMemoryToolConnectionStore,
   InMemoryToolCredentialCustodian,
+  InMemoryToolSettingsMigrationStore,
   RecordingTargetDirectory,
 } from './tool-settings-fixtures'
 
@@ -30,13 +31,19 @@ function build() {
   return { connections, assignments, custodian, connectionService, assignmentService, selectionService }
 }
 
-function migration(directory: string, h: ReturnType<typeof build>, environment: Readonly<Record<string, string | undefined>>) {
+function migration(
+  directory: string,
+  h: ReturnType<typeof build>,
+  environment: Readonly<Record<string, string | undefined>>,
+  migrationStore?: InMemoryToolSettingsMigrationStore,
+) {
   return new CoreToolSettingsMigration({
     connections: h.connectionService,
     assignments: h.assignmentService,
     scopeRef: TEST_SCOPE,
     objectDirectory: directory,
     environment,
+    ...(migrationStore === undefined ? {} : { migrationStore }),
   })
 }
 
@@ -56,7 +63,10 @@ describe('CoreToolSettingsMigration', () => {
     expect(list[0]?.adapterType).toBe('http_compat')
     expect(list[0]?.capabilities).toEqual(['web_search'])
     expect(list[0]?.enabled).toBe(true)
-    expect(list[0]?.endpoint).toBe('https://search.example.com/v1/search')
+    // The base address and the endpoint path are preserved **separately** (S03): the address is not
+    // merged with the path, so the adapter's `/v1/search` default never overwrites an imported path.
+    expect(list[0]?.endpoint).toBe('https://search.example.com')
+    expect(list[0]?.searchStrategy?.compatEndpointPath).toBe('/v1/search')
     expect(list[0]?.credentialState).toBe('present')
     expect(JSON.stringify(list)).not.toContain('tvly-legacy-secret')
 
@@ -95,7 +105,7 @@ describe('CoreToolSettingsMigration', () => {
     if (imported === undefined) return
     await h.connectionService.update({
       connectionId: imported.connectionId,
-      descriptor: { name: '管理员改名', adapterType: 'http_compat', capabilities: ['web_search'], enabled: true, endpoint: 'https://search.example.com/v1/search' },
+      descriptor: { name: '管理员改名', adapterType: 'http_compat', capabilities: ['web_search'], enabled: true, endpoint: 'https://search.example.com' },
       expectedRevision: imported.revision,
       idempotencyKey: 'tool-migration-ui-edit',
     }, admin)
@@ -130,5 +140,44 @@ describe('CoreToolSettingsMigration', () => {
     const selection = await h.selectionService.resolve(TEST_SCOPE, { scope: { kind: 'space' }, toolId: 'web_search' }, adminContext())
     expect(selection.state).toBe('available')
     expect(selection.resolvedFrom).toBe('space_tool')
+  })
+
+  it('preserves the legacy search timeout and archive byte cap on the imported connection', async () => {
+    const directory = await mkdtemp(join(tmpdir(), 'tool-migration-'))
+    const h = build()
+    await migration(directory, h, {
+      ...LEGACY_ENV,
+      CORE_WEB_SEARCH_MAX_TIMEOUT_MS: '1234',
+      CORE_WEB_SEARCH_MAX_BYTES: '4096',
+    }).migrate()
+
+    const imported = (await h.connections.listConnections(TEST_SCOPE, {}))[0]
+    expect(imported?.searchStrategy).toEqual({ compatEndpointPath: '/v1/search', maxTimeoutMs: 1234 })
+    expect(imported?.archiveLimits).toEqual({ maxBytes: 4096, maxTimeoutMs: 1234 })
+  })
+
+  it('records a durable idempotency marker so a lost local flag cannot re-import the environment', async () => {
+    const directory = await mkdtemp(join(tmpdir(), 'tool-migration-'))
+    const h = build()
+    const store = new InMemoryToolSettingsMigrationStore()
+    await migration(directory, h, { ...LEGACY_ENV }, store).migrate()
+    expect(await store.isApplied(TEST_SCOPE, WEB_SEARCH_MIGRATION_KEY)).toBe(true)
+
+    const imported = (await h.connections.listConnections(TEST_SCOPE, {}))[0]
+    if (imported === undefined) throw new Error('expected the imported connection')
+    await h.connectionService.update({
+      connectionId: imported.connectionId,
+      descriptor: { name: '管理员改名', adapterType: 'http_compat', capabilities: ['web_search'], enabled: true, endpoint: 'https://search.example.com' },
+      expectedRevision: imported.revision,
+      idempotencyKey: 'tool-migration-durable-edit',
+    }, adminContext())
+
+    // Delete the *local* marker file: the durable record is what prevents a re-import after the edit.
+    await unlink(join(directory, '.core-settings', TEST_SCOPE.tenantId, TEST_SCOPE.spaceId, 'tool-connections-migrated.flag')).catch(() => undefined)
+    await migration(directory, h, { ...LEGACY_ENV }, store).migrate()
+
+    const list = await h.connections.listConnections(TEST_SCOPE, {})
+    expect(list).toHaveLength(1)
+    expect(list[0]?.name).toBe('管理员改名')
   })
 })

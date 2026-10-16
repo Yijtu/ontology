@@ -20,7 +20,7 @@ import { WebSearchHandler } from '@ontology/tool-services'
 import type { ToolHandler } from '@ontology/tool-services'
 import { RunProgressService } from '../http/run-progress'
 import { COMPONENT_VERSION, CORE_EFFECTIVE_LIMITS_REF, CORE_TYPED_RESULT_SCHEMA_REF, WEB_SEARCH_SOURCE_REF, WORKER_RUN_ID } from './core-constants'
-import { createCoreSearchBinding } from './core-tool-search-binding'
+import { createCoreSearchBinding, createResearchSearchBinder, createResearchSearchResolver } from './core-tool-search-binding'
 import type { CoreSearchBinding } from './core-tool-search-binding'
 import { CoreCapabilityError, DISABLED_GENERATION, disabledDecision } from './core-errors'
 import { versionRefKey } from './core-composition-shared'
@@ -63,7 +63,7 @@ export async function assembleRuntimePipeline(
     terminology, normalApprovedInputs, projectEvolutionCell, modelCapabilities, modelEnvironment, hostClock, allSourceRefs,
     profileResolver, semanticDefinitions, modelBindingRuntime, runModelBinder, modelBindingService, modelBindingStore, modelConnectionStore,
     deploymentModelCapabilities,
-    toolBindingService, toolConnectionStore, toolCredentialCustodian, executionSnapshotStore,
+    toolBindingService, toolConnectionStore, toolCredentialCustodian, executionSnapshotStore, toolSelectionService,
   } = state
   const { mappings, structuredImports, rulePremiseVerifier, semanticTasks, relationsTask, facts, multiSchemaSource, projectQuery, gatewayComposition } = query
 
@@ -196,6 +196,7 @@ export async function assembleRuntimePipeline(
     scopeRef,
     artifacts: gatewayComposition.artifacts,
     targetScope: { kind: 'space' },
+    selection: toolSelectionService,
   })
   // The controlled candidate-submission path (design §5/§7). The model proposes through the
   // authoring-command gateway; the service owns identity/trust/publication state and re-reads the
@@ -379,24 +380,32 @@ export async function assembleRuntimePipeline(
   // history and reports a stable capability reason for a new run (never a fabricated capability).
   const webSearch = options.webSearch ?? createCoreWebSearchProvider({ env: modelEnvironment, artifacts: gatewayComposition.artifacts })
   const researchExecutionStore = new PostgresResearchExecutionStore(database)
+  // New research resolves its public search from the catalogue (S03): the same `searchBinding` the
+  // preflight and the capability projection read, pinned at the run's workspace scope. The legacy
+  // environment provider is kept only for historical `@1` (env) jobs.
+  const researchIngestion = new CandidateSourceIngestionService({ artifacts: gatewayComposition.artifacts, sources: new PostgresCandidateSourceStore(database) })
+  const researchSearchBinder = createResearchSearchBinder({
+    bindings: toolBindingService,
+    selection: toolSelectionService,
+    scopeRef,
+    serverContext: (researchId) => workerContext(scopeRef, allSourceRefs, researchId, sha256DigestOf(`core-research-search-binding:${researchId}`), hostClock),
+  })
   const researchWorkflow = new ResearchWorkflowService({
     jobs: jobService,
     executions: researchExecutionStore,
     budget: state.budget,
     ...(modelBindingService === undefined ? {} : { modelBinding: modelBindingService }),
-    ...(webSearch === undefined ? { executionAvailable: false } : {}),
+    searchBinding: researchSearchBinder,
   })
-  const researchExecutor = webSearch === undefined ? undefined : new LegacyResearchExecutor({
+  const researchExecutor = new LegacyResearchExecutor({
     executions: researchExecutionStore,
-    research: new WebResearchService({
-      webSearch,
-      ingestion: new CandidateSourceIngestionService({ artifacts: gatewayComposition.artifacts, sources: new PostgresCandidateSourceStore(database) }),
-    }),
+    ...(webSearch === undefined ? {} : { research: new WebResearchService({ webSearch, ingestion: researchIngestion }) }),
+    catalogue: { search: createResearchSearchResolver(searchBinding), ingestion: researchIngestion },
     budget: state.budget,
     ...(modelBindingService === undefined ? {} : { modelBinding: modelBindingService }),
   })
-  const researchHandler = researchExecutor === undefined ? undefined : new ResearchStageHandler({ executor: researchExecutor })
-  const routedHandlers = createWorkerStageRegistry({ ingestion: handlers, ...(researchHandler === undefined ? {} : { research: researchHandler }) })
+  const researchHandler = new ResearchStageHandler({ executor: researchExecutor })
+  const routedHandlers = createWorkerStageRegistry({ ingestion: handlers, research: researchHandler })
   const jobWorker = new JobWorker({
     store: jobStore, handlers: routedHandlers, budget: state.budget, workerId: 'core-local-ingestion-worker', now: () => hostClock().toISOString(),
     contextForJob: (job) => {
