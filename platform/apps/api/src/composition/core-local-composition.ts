@@ -38,6 +38,20 @@ export interface CoreLocalCompositionOptions {
   readonly modelSettings?: import('./core-local-model-settings').CoreLocalModelSettings
   /** Enables the modelling research surface; web_search stays disabled when it is omitted. */
   readonly webSearch?: import('@ontology/contracts').WebSearchProvider
+  /**
+   * S10 entry switch: when `true`, the default async research entry admits **new** requests to the
+   * V2 agentic run (design §4/§8). It only affects newly-accepted requests — a replay of an
+   * already-admitted/legacy request keeps the engine it was accepted under. Default `false` keeps
+   * the legacy fixed chain.
+   */
+  readonly researchAgentEntry?: boolean
+  /**
+   * Test/host seam for the controlled public-page transport (design §6). The real archiver still
+   * enforces https + the approved-domain allowlist and refuses redirects before this substitute is
+   * used; production leaves it unset and the platform `fetch` is used. It reaches both the search
+   * provider and the page archiver.
+   */
+  readonly webPageFetchImpl?: typeof fetch
   /** Injectable host clock for deadline/recovery verification; production defaults to wall time. */
   readonly clock?: () => Date
   /** Test/host observer. The default logs no payload text. */

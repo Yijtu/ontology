@@ -24,6 +24,7 @@ import {
   encodeResearchJobRequest,
 } from './research-job-ref'
 import type { ResearchSearchBinder } from './research-search-resolver'
+import type { ResearchRunEntry } from './research-entry'
 import { assertResearcher, canPinModel, isTerminal, scopeOf } from './research-scope'
 
 const RESEARCH_PIPELINE_VERSION = RESEARCH_JOB_VERSION_LEGACY
@@ -86,7 +87,7 @@ export interface ResearchContinuationLinkage {
 }
 
 /** The deterministic run id for a request; a replay with the same key maps to the same run. */
-function researchIdFor(request: ResearchRequest): Uuid {
+export function researchIdForRequest(request: ResearchRequest): Uuid {
   return candidateIdFor(sha256DigestOf(canonicalJson({
     kind: 'research-run@1',
     workspaceId: request.workspaceId,
@@ -120,7 +121,7 @@ function briefRefFor(researchId: Uuid, request: ResearchRequest): ResourceRef {
  * existing review/admission gate. A retry or a crash-restart neither resets the budget nor admits a
  * late page; a cancelled run is frozen and cannot be resurrected by a later write.
  */
-export class ResearchWorkflowService {
+export class ResearchWorkflowService implements ResearchRunEntry {
   readonly #jobs: JobService
   readonly #executions: ResearchExecutionStore
   readonly #budget: BudgetLedgerPort
@@ -155,7 +156,7 @@ export class ResearchWorkflowService {
     assertResearchRequestShape(request)
     assertModelingBriefShape(request.brief)
     const scope = scopeOf(ctx)
-    const researchId = researchIdFor(request)
+    const researchId = researchIdForRequest(request)
 
     // Fix the public search for this execution from the tool-connection catalogue at the run's
     // workspace scope (S03) *first*: it is the primary research capability, and a run whose search
@@ -321,7 +322,7 @@ export class ResearchWorkflowService {
     // reason, not a misleading "the previous run is unknown".
     if (this.#searchBinding !== undefined) {
       const pinned = await this.#searchBinding.bindSearchForResearch(
-        { researchId: researchIdFor(continuedRequest), workspaceId: request.workspaceId },
+        { researchId: researchIdForRequest(continuedRequest), workspaceId: request.workspaceId },
         ctx,
       )
       if (pinned.state === 'blocked') {
