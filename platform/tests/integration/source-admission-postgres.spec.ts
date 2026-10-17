@@ -26,6 +26,7 @@ import type {
   CandidateSourceReviewCommand,
   ScopeRef,
   SourceAdmissionCommand,
+  SourceTierPromotionCommand,
   ToolContext,
   Uuid,
 } from '@ontology/contracts'
@@ -70,6 +71,7 @@ afterAll(async () => {
 interface Fixture {
   readonly scope: JobTestScope
   readonly ctx: ToolContext
+  readonly promoter: ToolContext
   readonly scopeRef: ScopeRef
   readonly sources: PostgresCandidateSourceStore
   readonly review: CandidateSourceReviewService
@@ -81,7 +83,8 @@ interface Fixture {
 
 async function fixture(prefix: string): Promise<Fixture> {
   const scope = await createJobScope(db.adminClient, prefix)
-  const ctx = toolContext(scope.tenantId, scope.spaceId, ['profile-editor', 'platform-admin'], `${prefix}-editor`)
+  const ctx = toolContext(scope.tenantId, scope.spaceId, ['profile-editor'], `${prefix}-editor`)
+  const promoter = toolContext(scope.tenantId, scope.spaceId, ['platform-admin'], `${prefix}-promoter`)
   const sources = new PostgresCandidateSourceStore(database)
   const admissions = new PostgresSourceAdmissionStore(database)
   const workspaces = new PostgresAssetWorkspaceStore(database)
@@ -97,7 +100,7 @@ async function fixture(prefix: string): Promise<Fixture> {
   const editor = new IndustryWorkspaceService({ store: workspaces, jobs, newId: () => ids.shift() ?? randomUUID() })
   await editor.createWorkspace({ namespace: `admission_${workspaceId.replaceAll('-', '')}`, displayName: 'Admission',
     boundary: { goals: ['model'], included: [], excluded: [], applicability: {} }, documentSetRef: setRef }, randomUUID(), 'integration', ctx)
-  return { scope, ctx, scopeRef: scope.scopeRef, sources, review, admissions, admissionService, workspaces, workspaceId }
+  return { scope, ctx, promoter, scopeRef: scope.scopeRef, sources, review, admissions, admissionService, workspaces, workspaceId }
 }
 
 async function proposedArtifact(f: Fixture, text: string, mediaType: string): Promise<CandidateSourceRecord> {
@@ -113,12 +116,22 @@ async function proposedArtifact(f: Fixture, text: string, mediaType: string): Pr
   return f.sources.putSource(f.scopeRef, { source, idempotencyKey: `cs-${randomUUID().slice(0, 12)}` }, f.ctx)
 }
 
-function reviewCommand(f: Fixture, source: CandidateSourceRecord, reviewState: 'approved' | 'rejected', trustTier?: CandidateSource['trustTier'], key = `rv-${randomUUID().slice(0, 12)}`): CandidateSourceReviewCommand {
+// A review only records the review state; it never carries a `trustTier` (design §7). Raising a
+// source to a publishable tier is a separate `promoteTier` command run by a platform-admin.
+function reviewCommand(f: Fixture, source: CandidateSourceRecord, reviewState: 'approved' | 'rejected', key = `rv-${randomUUID().slice(0, 12)}`): CandidateSourceReviewCommand {
   return {
     schemaVersion: 'candidate-source-review@1', sourceId: source.sourceId, workspaceId: source.workspaceId,
-    reviewState, ...(trustTier === undefined ? {} : { trustTier }), reviewedBy: f.ctx.principal.subjectId,
+    reviewState, reviewedBy: f.ctx.principal.subjectId,
     reason: '人工核对公开规范版本与适用范围', expectedRevision: String(source.revision), basisRefs: [],
     idempotencyKey: key,
+  }
+}
+
+function promotionCommand(f: Fixture, source: CandidateSourceRecord, nextTrustTier: CandidateSource['trustTier'], key = `tp-${randomUUID().slice(0, 12)}`): SourceTierPromotionCommand {
+  return {
+    schemaVersion: 'source-tier-promotion@1', workspaceId: source.workspaceId, sourceId: source.sourceId,
+    expectedRevision: String(source.revision), nextTrustTier, promotedBy: f.promoter.principal.subjectId,
+    reason: '原文为公开规范，人工确认版本与适用范围', basisRefs: [], idempotencyKey: key,
   }
 }
 
@@ -136,27 +149,45 @@ describe('source review, admission and retraction (real PostgreSQL)', () => {
     const f = await fixture('admission-review')
     const source = await proposedArtifact(f, '1.1 Warranty applies only to active accounts.', 'text/plain')
     const key = `rv-${randomUUID().slice(0, 12)}`
-    const reviewed = await f.review.review(reviewCommand(f, source, 'approved', 'public_standard', key), f.ctx)
-    expect(reviewed).toMatchObject({ trustTier: 'public_standard', reviewState: 'approved', replayed: false, revision: '2' })
-    const replay = await f.review.review(reviewCommand(f, source, 'approved', 'public_standard', key), f.ctx)
+    const reviewed = await f.review.review(reviewCommand(f, source, 'approved', key), f.ctx)
+    expect(reviewed).toMatchObject({ trustTier: 'agent_researched', reviewState: 'approved', replayed: false, revision: '2' })
+    const replay = await f.review.review(reviewCommand(f, source, 'approved', key), f.ctx)
     expect(replay.replayed).toBe(true)
     const events = await f.review.listReviewEvents(f.workspaceId, source.sourceId, { limit: 10 }, f.ctx)
     expect(events.events).toHaveLength(1)
-    expect(events.events[0]).toMatchObject({ nextState: 'approved', nextTrustTier: 'public_standard', actor: 'admission-review-editor' })
+    expect(events.events[0]).toMatchObject({ nextState: 'approved', nextTrustTier: 'agent_researched', actor: 'admission-review-editor' })
 
     const other = await fixture('admission-review-other')
     await expect(f.review.review({ ...reviewCommand(f, source, 'approved'), workspaceId: other.workspaceId }, f.ctx))
       .rejects.toMatchObject({ code: 'SCOPE_MISMATCH' })
   })
 
-  it('admits a reviewed source with its reviewed tier, appends a draft and replays idempotently', async () => {
+  it('promotes a source tier as a separate platform-admin operation and records it in the review history', async () => {
+    const f = await fixture('admission-promote')
+    const source = await proposedArtifact(f, 'GB/T 公开规范正文。', 'text/plain')
+    await f.review.review(reviewCommand(f, source, 'approved'), f.ctx)
+    const approved = { ...source, revision: '2' }
+    // A review-only editor may not raise the tier; only a platform-admin may.
+    await expect(f.review.promoteTier(promotionCommand(f, approved, 'public_standard'), f.ctx))
+      .rejects.toMatchObject({ code: 'FORBIDDEN' })
+    const promoted = await f.review.promoteTier(promotionCommand(f, approved, 'public_standard'), f.promoter)
+    expect(promoted).toMatchObject({ trustTier: 'public_standard', reviewState: 'approved', replayed: false, revision: '3' })
+    const events = await f.review.listReviewEvents(f.workspaceId, source.sourceId, { limit: 10 }, f.ctx)
+    expect(events.events).toHaveLength(2)
+    expect(events.events[1]).toMatchObject({
+      nextState: 'approved', previousTrustTier: 'agent_researched', nextTrustTier: 'public_standard', actor: 'admission-promote-promoter',
+    })
+  })
+
+  it('admits a reviewed source with its promoted tier, appends a draft and replays idempotently', async () => {
     const f = await fixture('admission-happy')
     const source = await proposedArtifact(f, 'GB 50500 load tables apply to this scope.', 'text/plain')
-    const approved = await f.review.review(reviewCommand(f, source, 'approved', 'public_standard'), f.ctx)
-    expect(approved.revision).toBe('2')
+    await f.review.review(reviewCommand(f, source, 'approved'), f.ctx)
+    const promoted = await f.review.promoteTier(promotionCommand(f, { ...source, revision: '2' }, 'public_standard'), f.promoter)
+    expect(promoted.revision).toBe('3')
     const key = `ad-${randomUUID().slice(0, 12)}`
-    const receipt = await f.admissionService.admit(admissionCommand(f, { ...source, revision: '2' }, '1', { key }), f.ctx)
-    expect(receipt).toMatchObject({ sourceRevision: '2', trustTier: 'public_standard', draftRevision: '2', replayed: false })
+    const receipt = await f.admissionService.admit(admissionCommand(f, { ...source, revision: '3' }, '1', { key }), f.ctx)
+    expect(receipt).toMatchObject({ sourceRevision: '3', trustTier: 'public_standard', draftRevision: '2', replayed: false })
     const workspace = await f.workspaces.getWorkspace(f.scopeRef, f.workspaceId, f.ctx)
     expect(workspace?.headRevision).toBe('2')
     const draft = await f.workspaces.getDraft(f.scopeRef, f.workspaceId, '2', f.ctx)
@@ -165,7 +196,7 @@ describe('source review, admission and retraction (real PostgreSQL)', () => {
     expect(manifest.sources).toHaveLength(1)
     expect(manifest.sources[0]).toMatchObject({ state: 'approved', kind: 'document', trustTier: 'public_standard' })
 
-    const replay = await f.admissionService.admit(admissionCommand(f, { ...source, revision: '2' }, '2', { key }), f.ctx)
+    const replay = await f.admissionService.admit(admissionCommand(f, { ...source, revision: '3' }, '2', { key }), f.ctx)
     expect(replay.replayed).toBe(true)
     expect((await f.workspaces.getWorkspace(f.scopeRef, f.workspaceId, f.ctx))?.headRevision).toBe('2')
   })
@@ -173,8 +204,9 @@ describe('source review, admission and retraction (real PostgreSQL)', () => {
   it('admits a CSV table with an explicit parse selection and refuses an unconfirmed tier default', async () => {
     const f = await fixture('admission-table')
     const source = await proposedArtifact(f, 'name,cost\nA,0.10\nB,0.20', 'text/csv')
-    await f.review.review(reviewCommand(f, source, 'approved', 'public_standard'), f.ctx)
-    const receipt = await f.admissionService.admit(admissionCommand(f, { ...source, revision: '2' }, '1', { parseOptions: { headerRow: 1 } }), f.ctx)
+    await f.review.review(reviewCommand(f, source, 'approved'), f.ctx)
+    await f.review.promoteTier(promotionCommand(f, { ...source, revision: '2' }, 'public_standard'), f.promoter)
+    const receipt = await f.admissionService.admit(admissionCommand(f, { ...source, revision: '3' }, '1', { parseOptions: { headerRow: 1 } }), f.ctx)
     const manifest = await new ArtifactGroundingDocumentSetReader(blobs).read(f.scopeRef, receipt.documentSetRef, f.ctx, budget())
     expect(manifest.sources[0]).toMatchObject({ kind: 'table', trustTier: 'public_standard', tableOptions: { headerRow: 1 } })
   })
@@ -196,7 +228,7 @@ describe('source review, admission and retraction (real PostgreSQL)', () => {
   it('retracts with an event and a fence, preserves history and blocks re-admission', async () => {
     const f = await fixture('admission-retract')
     const source = await proposedArtifact(f, 'Superseded standard.', 'text/plain')
-    await f.review.review(reviewCommand(f, source, 'approved', 'public_standard'), f.ctx)
+    await f.review.review(reviewCommand(f, source, 'approved'), f.ctx)
     const approved = { ...source, revision: '2' }
 
     const retraction = await f.review.retract({ schemaVersion: 'source-retraction-command@1', workspaceId: f.workspaceId,
@@ -218,7 +250,7 @@ describe('source review, admission and retraction (real PostgreSQL)', () => {
   it('isolates review history and admissions across scopes', async () => {
     const f = await fixture('admission-rls')
     const source = await proposedArtifact(f, 'Tenant-only source.', 'text/plain')
-    await f.review.review(reviewCommand(f, source, 'approved', 'public_standard'), f.ctx)
+    await f.review.review(reviewCommand(f, source, 'approved'), f.ctx)
     const other = await fixture('admission-rls-other')
     expect(await other.sources.getSource(other.scopeRef, source.sourceId, other.ctx)).toBeUndefined()
     const result = await other.admissions.listAdmissions(other.scopeRef, f.workspaceId, { limit: 10 }, other.ctx)
