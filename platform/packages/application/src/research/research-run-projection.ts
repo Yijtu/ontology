@@ -167,6 +167,65 @@ function coverageOf(consumed: BudgetConsumption | undefined, archivedCount: numb
   }
 }
 
+/**
+ * The initial, in-flight `research-execution@2` projection written at accept time (design §8/§10).
+ *
+ * It gives the run a durable, readable projection the moment it is admitted — status `queued`,
+ * stage `planning`, no evidence/candidates yet — so the research entry can answer a read (or a
+ * cancel/resume) by `researchId` without a second source of truth. It carries the exact frozen
+ * goal, brief, config policy and the ledger's real ceilings/deadline; nothing is fabricated and
+ * the completion `recordDelivery` simply advances the same row (a monotonic upsert).
+ */
+export interface InitialResearchProjectionInput {
+  readonly researchId: Uuid
+  readonly workspaceId: Uuid
+  readonly runId: Uuid
+  readonly jobId?: Uuid
+  readonly goal: ResearchExecutionGoal
+  readonly briefRef: ResourceRef
+  readonly policyRef: VersionRef
+  readonly budgetRef: VersionRef
+  readonly limits: ResearchLimits
+  readonly mustCover: readonly ModelingBriefMustCover[]
+  readonly budgetLimits: BudgetLedgerLimits | undefined
+  readonly ledgerDeadline: Rfc3339UtcTimestamp
+  readonly recordedAt: Rfc3339UtcTimestamp
+}
+
+/** Build the queued `research-execution@2` projection of a freshly-admitted run. */
+export function initialResearchExecutionProjection(input: InitialResearchProjectionInput): ResearchExecutionV2 {
+  return {
+    schemaVersion: 'research-execution@2',
+    researchId: input.researchId,
+    workspaceId: input.workspaceId,
+    runId: input.runId,
+    ...(input.jobId === undefined ? {} : { jobId: input.jobId }),
+    goal: input.goal,
+    status: 'queued',
+    stage: 'planning',
+    briefRef: input.briefRef,
+    policyRef: input.policyRef,
+    budgetRef: input.budgetRef,
+    budget: budgetDimensions(input.budgetLimits, input.ledgerDeadline),
+    limits: input.limits,
+    coverage: coverageOf(undefined, 0),
+    coverageGaps: input.mustCover.map((item) => ({
+      kind: item.kind,
+      name: item.name,
+      state: 'unresearched' as const,
+      evidenceCount: 0,
+      ...(item.note === undefined ? {} : { note: item.note }),
+    })),
+    humanTodos: [],
+    evidence: [],
+    candidateReceipts: [],
+    sourceCount: 0,
+    candidateCount: 0,
+    usage: usageOf(undefined, 0, false),
+    recordedAt: input.recordedAt,
+  }
+}
+
 /** Build the deterministic `research-execution@2` projection of a completed run. */
 export function buildResearchExecutionProjection(input: ResearchProjectionInput): ResearchExecutionV2 {
   const evidence = evidenceOf(input.evidenceRefs)

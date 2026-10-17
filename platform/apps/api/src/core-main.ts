@@ -211,6 +211,7 @@ export async function startCoreApi(): Promise<void> {
       allowLocalOperator: process.env['CORE_ENABLE_OPERATOR_ROUTES'] === 'true',
       modelsEnabled: modelEnvironment['CORE_ENABLE_MODELS'] === 'true',
       jevEnabled: process.env['CORE_ENABLE_JEV'] === 'true',
+      researchAgentEntry: process.env['CORE_RESEARCH_AGENT_ENTRY'] === 'true',
       modelEnvironment,
       modelSettings,
       ...(process.env['PROJECT_BUSINESS_DATABASE_URL'] === undefined ? {} : { projectDataset: {

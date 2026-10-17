@@ -51,7 +51,7 @@ import { DEFAULT_RESEARCH_BUDGET_REF } from '../assets/candidate-sources/researc
 import { canonicalJson, sha256DigestOf } from '../profiles/canonical'
 import { inputManifestDigest } from '../workflow/canonical'
 import type { WorkspaceResearchRunConfigService } from './workspace-research-run-config-service'
-import { buildResearchExecutionProjection, candidateSummaryOf } from './research-run-projection'
+import { buildResearchExecutionProjection, candidateSummaryOf, initialResearchExecutionProjection } from './research-run-projection'
 import { deterministicUuid, runBudgetLedgerId } from './run-ledger'
 
 /** Roles allowed to admit a research run. */
@@ -351,6 +351,28 @@ export class WorkspaceResearchRunService {
         },
         ctx,
       )
+    }
+    // Persist the initial in-flight `@2` run projection from the durable inputs (design §8/§10), so
+    // the research entry can read/cancel/resume the run by its research id immediately instead of
+    // only after completion. It is written **after** the scheduler job exists so its `jobId` link is
+    // valid; the completion `recordDelivery` advances this same row.
+    if (this.#executions !== undefined) {
+      const ledger = await this.#budget.openLedger({ ledgerId: manifest.budgetLedgerId, kind: 'run', runId }, ctx)
+      await this.#executions.putExecution(scopeRef, initialResearchExecutionProjection({
+        researchId,
+        workspaceId: request.workspaceId,
+        runId,
+        jobId: researchId,
+        goal,
+        briefRef: admission.briefRef,
+        policyRef: config.policyRef,
+        budgetRef: DEFAULT_RESEARCH_BUDGET_REF,
+        limits: request.limits,
+        mustCover: request.brief.mustCover ?? [],
+        budgetLimits: ledger.limits,
+        ledgerDeadline: ledger.deadline,
+        recordedAt: this.#now(),
+      }), ctx)
     }
     await this.#dispatch.enqueue({ runId, logicalActionId: 'initial-drive' }, ctx)
     return { runId, researchId, state: runView.state, revision: runView.revision, reused: created.reused, admission: ready }

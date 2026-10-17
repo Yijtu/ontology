@@ -9,12 +9,13 @@ import {
   RunService, RunTypedResultContextSource, StructuredExtractionService, StructuredExtractionStageHandler, TableHardVerificationService,
   TypedEvidenceDraftWriter, WebResearchService, WorkflowController, createRunCheckpointPort, createSourceGroundingService, ReviewHandoffStageHandler, LegacyResearchExecutor,
   WorkspaceResearchRunService,
+  AgentResearchRunEntry,
   runBudgetLedgerId,
 } from '@ontology/application'
-import type { ResearchAdmissionArtifactPort } from '@ontology/application'
+import type { ResearchAdmissionArtifactPort, ResearchRunEntry } from '@ontology/application'
 import { FiniteGrammarRuleSupportValidator, IncrementalMaterializer } from '@ontology/semantic-engine'
 import { JobWorkerLoop, MaterializationOutboxConsumer, ProjectEvolutionOutboxConsumer, ResearchStageHandler, TopicOutboxConsumerRouter, WorkflowDispatchWorker, controlRecordSequence, createIngestionHandlerRegistry, createWorkerStageRegistry } from '@ontology/app-worker'
-import { DEFAULT_VERIFICATION_POLICY, SCHEMA_DOCUMENTS, TOOL_CATALOGUE, projectCollectionRef } from '@ontology/contracts'
+import { DEFAULT_VERIFICATION_POLICY, ResearchError, SCHEMA_DOCUMENTS, TOOL_CATALOGUE, projectCollectionRef } from '@ontology/contracts'
 import type { DocumentParserPort, ProjectRevision, RuntimeAdapter, RuntimeCapabilityContext, RuntimeCapabilityFactoryPort, RuntimeCapabilitySet, RuntimeSelectorPort, ScopeRef, ToolContext, Uuid, VersionRef, WorkflowDispatchFence, AuthoringCommandKind, ModelCapability, PublicExecutionConfig, ResolvedProfile } from '@ontology/contracts'
 import type { CandidateSubmissionRecord, ResearchCandidateReceiptSummary } from '@ontology/contracts'
 import { draftRevisionOfResearchProfileVersion, workspaceIdOfResearchProfileRef } from '@ontology/contracts'
@@ -70,6 +71,7 @@ export async function assembleRuntimePipeline(
     profileResolver, semanticDefinitions, modelBindingRuntime, runModelBinder, modelBindingService, modelBindingStore, modelConnectionStore,
     deploymentModelCapabilities,
     toolBindingService, toolConnectionStore, toolCredentialCustodian, executionSnapshotStore, toolSelectionService,
+    modelSelectionService,
   } = state
   const { mappings, structuredImports, rulePremiseVerifier, semanticTasks, relationsTask, facts, multiSchemaSource, projectQuery, gatewayComposition, ontologyLookupHandler } = query
 
@@ -253,6 +255,7 @@ export async function assembleRuntimePipeline(
     artifacts: gatewayComposition.artifacts,
     targetScope: { kind: 'space' },
     selection: toolSelectionService,
+    ...(options.webPageFetchImpl === undefined ? {} : { fetchImpl: options.webPageFetchImpl }),
   })
   // The controlled candidate-submission path (design §5/§7). The model proposes through the
   // authoring-command gateway; the service owns identity/trust/publication state and re-reads the
@@ -459,6 +462,13 @@ export async function assembleRuntimePipeline(
     contextForRun: async (runId) => {
       const runContext = workerDispatchContextForOperation()
       const run = await runs.getRun(runId, runContext)
+      // A workspace-research run has no scenario profile: its execution context is rebuilt from the
+      // signed authorization receipt by the capability factory, so the durable dispatch only needs a
+      // trusted canonical context to read the run/manifest stores. Resolving a scenario profile here
+      // would wrongly require a resolved-profile snapshot a research run never has.
+      if (workspaceIdOfResearchProfileRef(run.profileRef) !== undefined) {
+        return workerContext(scopeRef, [], runId, run.resolvedProfileHash, hostClock)
+      }
       const profile = await profileResolver.getResolvedProfile({ scopeRef, profileRef: run.profileRef, snapshotHash: run.resolvedProfileHash }, runContext)
       const scenario = scenarioForIndustryRef(examples.scenarios, profile.resolved.industryRef)
       const archived = await runExecutionBindingStore.getBindingByRun(scopeRef, runId, runContext)
@@ -539,6 +549,37 @@ export async function assembleRuntimePipeline(
     ...(modelBindingService === undefined ? {} : { modelBinding: modelBindingService }),
     searchBinding: researchSearchBinder,
   })
+  // S10 (design §10): the default async entry switches to the V2 agentic run only when enabled, and
+  // only for NEWLY-accepted requests. A replay of an already-admitted/legacy request keeps its engine.
+  const researchEntry: ResearchRunEntry = options.researchAgentEntry === true
+    ? new AgentResearchRunEntry({
+        legacy: researchWorkflow,
+        agent: workspaceResearchRunService,
+        workspaces: workspaceStore,
+        executions: researchExecutionStore,
+        admissions: researchRunAdmissionStore,
+        dispatch: dispatchStore,
+        cancelRun: async (runId, ctx) => {
+          const run = await runs.getRun(runId, ctx)
+          if (run.state !== 'cancelled' && run.state !== 'published' && run.state !== 'failed') {
+            await runs.cancelRun({ runId, reason: 'user_cancelled_research', expectedRevision: run.revision }, ctx)
+          }
+          await workflowDispatchWorker.cancelRun(runId, ctx)
+        },
+        assertCapabilities: async (workspaceId) => {
+          const serverCtx = workerContext(scopeRef, allSourceRefs, workspaceId, sha256DigestOf(`core-research-capability:${workspaceId}`), hostClock)
+          const scope: import('@ontology/contracts').ToolTargetScope = { kind: 'industry_workspace', workspaceId }
+          const search = await toolSelectionService.resolve(scopeRef, { scope, toolId: 'web_search' }, serverCtx).catch(() => undefined)
+          if (search?.state !== 'available') {
+            throw new ResearchError('CAPABILITY_NOT_CONFIGURED', `公共搜索服务不可用（${search?.blockedReason ?? 'TOOL_NOT_CONFIGURED'}），研究无法开始。`)
+          }
+          const model = await modelSelectionService.resolve(scopeRef, { scope, capability: 'research' }, serverCtx).catch(() => undefined)
+          if (model?.state !== 'available') {
+            throw new ResearchError('CAPABILITY_NOT_CONFIGURED', `研究模型未配置或不可用，研究无法开始。`)
+          }
+        },
+      })
+    : researchWorkflow
   const researchExecutor = new LegacyResearchExecutor({
     executions: researchExecutionStore,
     ...(webSearch === undefined ? {} : { research: new WebResearchService({ webSearch, ingestion: researchIngestion }) }),
@@ -604,7 +645,7 @@ export async function assembleRuntimePipeline(
     runProfileBinder, runProgress, executionPreflight, runs, phase, planResolver, termLabels, authoring, tableArtifactStore,
     tableVerificationStore, tableResults, draftVerifier, workflowDispatchWorker, jobService, industryWorkspaceService, parser,
     pipeline, structuredExtractionService, handlers, jobWorker, currentProjectRevisions, materializer, outboxConsumer, dispatcher, provenanceRead,
-    researchWorkflow, researchExecutor, webSearch, searchBinding,
+    researchWorkflow, researchEntry, researchExecutor, webSearch, searchBinding,
     candidateSubmissionStore, candidateSubmissionService,
     researchRunAdmissionStore, workspaceResearchRunService,
   }

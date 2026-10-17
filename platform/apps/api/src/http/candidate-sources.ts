@@ -33,7 +33,7 @@ import {
   WebResearchError,
   WorkspaceSourceAdmissionService,
 } from '@ontology/application'
-import type { ResearchWorkflowService, WebResearchService } from '@ontology/application'
+import type { ResearchRunEntry, WebResearchService } from '@ontology/application'
 import { createRequestToolContext } from './context'
 import {
   authenticateRequest,
@@ -60,7 +60,7 @@ export interface CandidateSourceRouteDependencies {
   /** Present only when a web search provider is configured for this deployment. */
   readonly research?: WebResearchService
   /** The bounded, durable research orchestration; absent when web search is not configured. */
-  readonly researchWorkflow?: ResearchWorkflowService
+  readonly researchWorkflow?: ResearchRunEntry
   /** The read-only research capability preflight; reports the actual recipient, scope and blocks. */
   readonly researchPreflight?: (input: {
     readonly workspaceId: string
@@ -519,14 +519,14 @@ export function registerCandidateSourceRoutes(
   // execution engine, while reads/cancel/resume never do — so history stays readable without search.
   {
     const workflow = dependencies.researchWorkflow
-    const requireWorkflow = (): ResearchWorkflowService => {
+    const requireWorkflow = (): ResearchRunEntry => {
       if (workflow === undefined) {
         capabilityNotConfigured('公共搜索/研究编排未配置，无法创建或读取研究任务。')
       }
       return workflow
     }
     /** Creating or appending a run needs the fixed execution engine; reads/cancel/resume do not. */
-    const requireExecution = (active: ResearchWorkflowService): void => {
+    const requireExecution = (active: ResearchRunEntry): void => {
       if (!active.executionAvailable) {
         capabilityNotConfigured('公共搜索/研究执行引擎未配置，无法创建或追加研究任务。')
       }

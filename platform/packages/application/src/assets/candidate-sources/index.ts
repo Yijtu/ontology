@@ -20,12 +20,16 @@ export {
   DEFAULT_RESEARCH_BUDGET_REF,
   DEFAULT_RESEARCH_POLICY_REF,
   ResearchWorkflowService,
+  researchIdForRequest,
 } from './research-workflow-service'
 export type {
   ResearchContinuationLinkage,
   ResearchRunView,
   ResearchWorkflowDependencies,
 } from './research-workflow-service'
+export type { ResearchRunEntry } from './research-entry'
+export { AgentResearchRunEntry } from './agent-research-entry'
+export type { AgentResearchRunEntryDependencies } from './agent-research-entry'
 export { LegacyResearchExecutor } from './legacy-research-executor'
 export type {
   ExecuteResearchInput,
