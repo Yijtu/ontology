@@ -110,12 +110,13 @@ function briefRefFor(researchId: Uuid, request: ResearchRequest): ResourceRef {
 }
 
 /**
- * The bounded research orchestration facade (design §2.3/§2.4, §8, A-R02).
+ * The bounded research orchestration facade (design §2.3/§2.4, §8, A-R02; S11).
  *
  * It owns the durable lifecycle only — start, read, cancel, resume and append — over the research
- * execution store and the shared budget ledger. The fixed execution chain lives in
- * `LegacyResearchExecutor`, which the durable `research` job handler drives; the facade never
- * imports a provider, so a deployment without a search provider still reads and lists its history.
+ * execution store and the shared budget ledger. S11 retired the fixed research execution chain: the
+ * facade no longer pairs with any provider-holding engine, so it is retained as the read/cancel
+ * compatibility surface over historical `@1` records and never executes a search itself. New
+ * research runs are accepted by the agentic entry (`AgentResearchRunEntry` → V2).
  *
  * It never publishes: a run only proposes `agent_researched`/`proposed` sources that need the
  * existing review/admission gate. A retry or a crash-restart neither resets the budget nor admits a

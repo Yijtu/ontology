@@ -36,15 +36,6 @@ export interface CoreLocalCompositionOptions {
   readonly modelEnvironment?: Readonly<Record<string, string | undefined>>
   /** The legacy local model-settings store the one-time catalogue migration reads. */
   readonly modelSettings?: import('./core-local-model-settings').CoreLocalModelSettings
-  /** Enables the modelling research surface; web_search stays disabled when it is omitted. */
-  readonly webSearch?: import('@ontology/contracts').WebSearchProvider
-  /**
-   * S10 entry switch: when `true`, the default async research entry admits **new** requests to the
-   * V2 agentic run (design §4/§8). It only affects newly-accepted requests — a replay of an
-   * already-admitted/legacy request keeps the engine it was accepted under. Default `false` keeps
-   * the legacy fixed chain.
-   */
-  readonly researchAgentEntry?: boolean
   /**
    * Test/host seam for the controlled public-page transport (design §6). The real archiver still
    * enforces https + the approved-domain allowlist and refuses redirects before this substitute is

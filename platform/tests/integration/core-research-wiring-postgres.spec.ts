@@ -278,7 +278,6 @@ beforeAll(async () => {
     allowLocalOperator: true,
     modelsEnabled: true,
     jevEnabled: false,
-    researchAgentEntry: true,
     webPageFetchImpl,
     modelEnvironment: modelEnvironment(),
     onWorkerError(error) { if (error instanceof Error) workerErrors.push(error) },
@@ -300,7 +299,6 @@ beforeAll(async () => {
     allowLocalOperator: true,
     modelsEnabled: false,
     jevEnabled: false,
-    researchAgentEntry: true,
     modelEnvironment: { CORE_ENABLE_MODELS: 'false' },
   })
   bareApi = createCoreApi(bareComposition.dependencies)

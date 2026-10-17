@@ -16,7 +16,7 @@ import type {
   WebSearchProvider,
 } from '@ontology/contracts'
 import { WebPageSnapshotArchiver, createWebSearchProviderFromConnection } from '@ontology/adapter-search-web'
-import type { ExecutionToolBindingService, ResearchSearchBinder, ResearchSearchResolver } from '@ontology/application'
+import type { ExecutionToolBindingService, ResearchSearchBinder } from '@ontology/application'
 import { toolDescriptorOf, toolDescriptorOfSnapshot } from '@ontology/application'
 import type { ToolSelectionResolver } from '@ontology/contracts'
 import { canonicalJson, sha256DigestOf } from '@ontology/core'
@@ -345,24 +345,6 @@ export function createCatalogueSyncSearchProvider(input: {
         throw new ToolConnectionError(code, resolution.message)
       }
       return resolution.provider.search(request, ctx)
-    },
-  }
-}
-
-/** Adapt the pinned search binding to the application's research resolver port (S03). */
-export function createResearchSearchResolver(searchBinding: CoreSearchBinding): ResearchSearchResolver {
-  return {
-    async resolveForResearch({ researchId, workspaceId }, ctx) {
-      const resolution = await searchBinding.resolveForScope(researchId, { kind: 'industry_workspace', workspaceId }, ctx)
-      if (resolution.state !== 'available') {
-        return { state: 'blocked', reason: resolution.reason, message: resolution.message }
-      }
-      return {
-        state: 'available',
-        provider: resolution.provider,
-        connectionName: resolution.connection.name,
-        adapterType: resolution.connection.adapterType,
-      }
     },
   }
 }
