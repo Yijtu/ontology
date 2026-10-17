@@ -1,6 +1,7 @@
 import { randomUUID } from 'node:crypto'
 import { mkdtemp, rm } from 'node:fs/promises'
 import { createServer } from 'node:http'
+import type { IncomingMessage, Server, ServerResponse } from 'node:http'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import type { AddressInfo } from 'node:net'
@@ -40,9 +41,42 @@ const MODEL_ENV = {
   CORE_COMPANY_MODEL_PROTOCOL: 'openai-compatible',
 } as const
 
+/** A controlled OpenAI-compatible model that issues exactly one `web_search` and then stops. */
+let modelServer: Server | undefined
+
+async function startControlledModelServer(): Promise<string> {
+  modelServer = createServer(async (request: IncomingMessage, response: ServerResponse) => {
+    const chunks: Buffer[] = []
+    for await (const chunk of request) chunks.push(chunk as Buffer)
+    let toolMessages = 0
+    try {
+      const body = JSON.parse(Buffer.concat(chunks).toString('utf8')) as { messages?: readonly { role?: string }[] }
+      toolMessages = (body.messages ?? []).filter((message) => message.role === 'tool').length
+    } catch {
+      toolMessages = 0
+    }
+    const call = toolMessages === 0
+      ? { id: 'call_search', type: 'function', function: { name: 'web_search', arguments: JSON.stringify({ query: '设备维护规程', allowedDomains: ['standards.example.org'], limit: 3 }) } }
+      : undefined
+    response.writeHead(200, { 'content-type': 'text/event-stream', 'cache-control': 'no-cache' })
+    const base = { id: 'chatcmpl-s03', object: 'chat.completion.chunk', created: 1, model: 's03-vendor' }
+    if (call !== undefined) {
+      response.write(`data: ${JSON.stringify({ ...base, choices: [{ index: 0, delta: { tool_calls: [{ index: 0, id: call.id, type: 'function', function: call.function }] }, finish_reason: null }], usage: null })}\n\n`)
+    }
+    response.write(`data: ${JSON.stringify({ ...base, choices: [{ index: 0, delta: {}, finish_reason: call === undefined ? 'stop' : 'tool_calls' }], usage: null })}\n\n`)
+    response.write(`data: ${JSON.stringify({ ...base, choices: [], usage: { prompt_tokens: 12, completion_tokens: 8 } })}\n\n`)
+    response.write('data: [DONE]\n\n')
+    response.end()
+  })
+  await new Promise<void>((resolve) => modelServer?.listen(0, '127.0.0.1', resolve))
+  const { port } = modelServer.address() as AddressInfo
+  return `http://127.0.0.1:${String(port)}`
+}
+
 let container: PostgresContainer | undefined
 let admin: Client | undefined
 let appUrl = ''
+let modelBaseUrl = ''
 const tempDirs: string[] = []
 
 /** A controlled search server that records the paths it actually received and returns no results. */
@@ -91,7 +125,7 @@ async function startHost(scopeRef: ScopeRef, env: Readonly<Record<string, string
     allowLocalOperator: true,
     modelsEnabled: true,
     jevEnabled: false,
-    modelEnvironment: { ...MODEL_ENV, ...env },
+    modelEnvironment: { ...MODEL_ENV, CORE_COMPANY_MODEL_BASE_URL: modelBaseUrl, ...env },
   })
   const api = createCoreApi(composition.dependencies)
   const address = await api.listen({ host: '127.0.0.1', port: 0 })
@@ -138,7 +172,7 @@ async function waitForRunTerminal(baseUrl: string, workspaceId: string, research
     if (read.status !== 200) throw new Error(`reading run ${researchId} returned ${String(read.status)}`)
     const body = await read.json() as { data: { execution: { status: string } } }
     const status = body.data.execution.status
-    if (['completed', 'failed', 'cancelled'].includes(status)) return status
+    if (['completed', 'awaiting_confirmation', 'failed', 'cancelled'].includes(status)) return status
     await new Promise((resolve) => setTimeout(resolve, 250))
   }
   throw new Error('the research run did not reach a terminal state')
@@ -151,6 +185,7 @@ function newScope(): ScopeRef {
 beforeAll(async () => {
   container = await startPostgresContainer()
   await runControlMigrations({ connectionString: container.adminUrl, migrationsDir: MIGRATIONS_DIR })
+  modelBaseUrl = await startControlledModelServer()
   admin = new Client({ connectionString: container.adminUrl })
   await admin.connect()
   const statement = await admin.query<{ statement: string }>("SELECT format('ALTER ROLE ontology_app LOGIN PASSWORD %L', $1::text) AS statement", [APP_PASSWORD])
@@ -166,6 +201,7 @@ beforeAll(async () => {
 afterAll(async () => {
   await admin?.end().catch(() => undefined)
   for (const dir of tempDirs) await rm(dir, { recursive: true, force: true }).catch(() => undefined)
+  await new Promise<void>((resolve) => { if (modelServer === undefined) resolve(); else modelServer.close(() => resolve()) })
   await container?.stop()
 })
 
@@ -196,7 +232,7 @@ describe('S03 research request destinations', () => {
       const started = await startResearchRun(host.baseUrl, workspaceId)
       expect(started.status, await started.clone().text()).toBe(202)
       const researchId = (await started.json() as { data: { researchId: string } }).data.researchId
-      expect(await waitForRunTerminal(host.baseUrl, workspaceId, researchId)).toBe('completed')
+      expect(['completed', 'awaiting_confirmation']).toContain(await waitForRunTerminal(host.baseUrl, workspaceId, researchId))
       expect(server.requests.some((path) => path.startsWith('/v1/search'))).toBe(true)
 
       // The synchronous compatibility path keeps its 201 and also goes through the catalogue.
@@ -225,7 +261,7 @@ describe('S03 research request destinations', () => {
       const started = await startResearchRun(host.baseUrl, workspaceId)
       expect(started.status, await started.clone().text()).toBe(202)
       const researchId = (await started.json() as { data: { researchId: string } }).data.researchId
-      expect(await waitForRunTerminal(host.baseUrl, workspaceId, researchId)).toBe('completed')
+      expect(['completed', 'awaiting_confirmation']).toContain(await waitForRunTerminal(host.baseUrl, workspaceId, researchId))
       expect(server.requests.some((path) => path.startsWith('/v1/search'))).toBe(true)
     } finally {
       await host.close()
@@ -276,7 +312,7 @@ describe('S03 research request destinations', () => {
       const started = await startResearchRun(second.baseUrl, workspaceId)
       expect(started.status, await started.clone().text()).toBe(202)
       const researchId = (await started.json() as { data: { researchId: string } }).data.researchId
-      expect(await waitForRunTerminal(second.baseUrl, workspaceId, researchId)).toBe('completed')
+      expect(['completed', 'awaiting_confirmation']).toContain(await waitForRunTerminal(second.baseUrl, workspaceId, researchId))
       expect(serverB.requests.some((path) => path.startsWith('/v1/search'))).toBe(true)
       expect(serverA.requests).toHaveLength(0)
     } finally {
@@ -330,3 +366,4 @@ describe('S03 research request destinations', () => {
     }
   }, 120_000)
 })
+

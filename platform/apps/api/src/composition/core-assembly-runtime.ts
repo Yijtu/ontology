@@ -7,7 +7,7 @@ import {
   AnswerPublicationService, CandidateAuthoringCommandGateway, CandidateSourceIngestionService, CandidateSubmissionService, CandidateValidationStageHandler, DocumentTargetedReadService, DraftVerificationService, ExtractionPipeline, ExtractionStageHandler,
   IndustryWorkspaceService, JobService, JobWorker, OutboxDispatcher, ResearchDocumentSetService, ResearchMaterialReadService, RestrictedLimitedAnswerComposer, ResearchWorkflowService, RuleActionCandidateService, RunExecutionPreflightService, RunPhaseDriver,
   RunService, RunTypedResultContextSource, StructuredExtractionService, StructuredExtractionStageHandler, TableHardVerificationService,
-  TypedEvidenceDraftWriter, WebResearchService, WorkflowController, createRunCheckpointPort, createSourceGroundingService, ReviewHandoffStageHandler, LegacyResearchExecutor,
+  TypedEvidenceDraftWriter, WorkflowController, createRunCheckpointPort, createSourceGroundingService, ReviewHandoffStageHandler,
   WorkspaceResearchRunService,
   AgentResearchRunEntry,
   runBudgetLedgerId,
@@ -25,7 +25,8 @@ import { WebSearchHandler } from '@ontology/tool-services'
 import type { ToolHandler } from '@ontology/tool-services'
 import { RunProgressService } from '../http/run-progress'
 import { COMPONENT_VERSION, CORE_EFFECTIVE_LIMITS_REF, CORE_TYPED_RESULT_SCHEMA_REF, WEB_SEARCH_SOURCE_REF, WORKER_RUN_ID } from './core-constants'
-import { createCoreSearchBinding, createResearchSearchBinder, createResearchSearchResolver } from './core-tool-search-binding'
+import { createCoreSearchBinding, createResearchSearchBinder } from './core-tool-search-binding'
+import { assertLegacyResearchDrained } from './core-research-drain'
 import type { CoreSearchBinding } from './core-tool-search-binding'
 import { CoreCapabilityError, DISABLED_GENERATION, disabledDecision } from './core-errors'
 import { versionRefKey } from './core-composition-shared'
@@ -37,7 +38,6 @@ import { createCoreDefinitionLabelReader } from './core-definition-labels'
 import { createCoreTableResults } from './core-table-results'
 import { createBusinessMaterializationConsumer, createCompetencyPreviewOutboxConsumer } from './core-business-materialization'
 import { createCoreProjectSemanticReadiness } from './core-project-semantic-readiness'
-import { createCoreWebSearchProvider } from './core-web-search'
 import { createWorkspaceResearchContextResolver } from './core-workspace-research-context'
 import { createResearchDocumentSearchHandler, createResearchOntologyLookupHandler, createResearchWebSearchHandler } from './core-research-tools'
 import { CoreProjectSemanticPartitions } from './core-project-semantic-partitions'
@@ -74,6 +74,11 @@ export async function assembleRuntimePipeline(
     modelSelectionService,
   } = state
   const { mappings, structuredImports, rulePremiseVerifier, semanticTasks, relationsTask, facts, multiSchemaSource, projectQuery, gatewayComposition, ontologyLookupHandler } = query
+
+  // S11 (design §10): this build retires the legacy research chain, so it must not start while a
+  // request-carrying research job is still in flight — such a job can only be finished or explicitly
+  // cancelled by the original compatible engine, never rebuilt or reassigned here.
+  await assertLegacyResearchDrained(database, scopeRef)
 
   const runProfileBinder = {
     bindProfileForRun: (profileRef: import('@ontology/contracts').ProfileRef, trustedScope: ScopeRef, ctx: ToolContext) =>
@@ -525,17 +530,12 @@ export async function assembleRuntimePipeline(
       new ReviewHandoffStageHandler(),
     ],
   })
-  // The bounded research orchestration facade is always mounted so its run history stays readable
-  // even when no search provider is configured; the fixed execution engine (and its durable worker
-  // handler) is mounted only when a provider exists. A normal start discovers research by
-  // constructing the controlled, snapshot-archiving search provider from deployment configuration;
-  // a test host may still inject its own provider. With neither configured the facade still reads
-  // history and reports a stable capability reason for a new run (never a fabricated capability).
-  const webSearch = options.webSearch ?? createCoreWebSearchProvider({ env: modelEnvironment, artifacts: gatewayComposition.artifacts })
-  // New research resolves its public search from the catalogue (S03): the same `searchBinding` the
-  // preflight and the capability projection read, pinned at the run's workspace scope. The legacy
-  // environment provider is kept only for historical `@1` (env) jobs.
-  const researchIngestion = new CandidateSourceIngestionService({ artifacts: gatewayComposition.artifacts, sources: new PostgresCandidateSourceStore(database) })
+  // S11 (design §8/§10): the bounded research orchestration facade is retained as the read/cancel
+  // compatibility surface over historical `@1` records, but it no longer drives a fixed execution
+  // chain. New research resolves its public search from the catalogue (S03) — the same `searchBinding`
+  // the preflight and the capability projection read, pinned at the run's workspace scope — and runs
+  // one V2 agentic run. The deployment environment is now only the one-time directory-import input
+  // (migration), never a research execution provider.
   const researchSearchBinder = createResearchSearchBinder({
     bindings: toolBindingService,
     selection: toolSelectionService,
@@ -549,45 +549,42 @@ export async function assembleRuntimePipeline(
     ...(modelBindingService === undefined ? {} : { modelBinding: modelBindingService }),
     searchBinding: researchSearchBinder,
   })
-  // S10 (design §10): the default async entry switches to the V2 agentic run only when enabled, and
-  // only for NEWLY-accepted requests. A replay of an already-admitted/legacy request keeps its engine.
-  const researchEntry: ResearchRunEntry = options.researchAgentEntry === true
-    ? new AgentResearchRunEntry({
-        legacy: researchWorkflow,
-        agent: workspaceResearchRunService,
-        workspaces: workspaceStore,
-        executions: researchExecutionStore,
-        admissions: researchRunAdmissionStore,
-        dispatch: dispatchStore,
-        cancelRun: async (runId, ctx) => {
-          const run = await runs.getRun(runId, ctx)
-          if (run.state !== 'cancelled' && run.state !== 'published' && run.state !== 'failed') {
-            await runs.cancelRun({ runId, reason: 'user_cancelled_research', expectedRevision: run.revision }, ctx)
-          }
-          await workflowDispatchWorker.cancelRun(runId, ctx)
-        },
-        assertCapabilities: async (workspaceId) => {
-          const serverCtx = workerContext(scopeRef, allSourceRefs, workspaceId, sha256DigestOf(`core-research-capability:${workspaceId}`), hostClock)
-          const scope: import('@ontology/contracts').ToolTargetScope = { kind: 'industry_workspace', workspaceId }
-          const search = await toolSelectionService.resolve(scopeRef, { scope, toolId: 'web_search' }, serverCtx).catch(() => undefined)
-          if (search?.state !== 'available') {
-            throw new ResearchError('CAPABILITY_NOT_CONFIGURED', `公共搜索服务不可用（${search?.blockedReason ?? 'TOOL_NOT_CONFIGURED'}），研究无法开始。`)
-          }
-          const model = await modelSelectionService.resolve(scopeRef, { scope, capability: 'research' }, serverCtx).catch(() => undefined)
-          if (model?.state !== 'available') {
-            throw new ResearchError('CAPABILITY_NOT_CONFIGURED', `研究模型未配置或不可用，研究无法开始。`)
-          }
-        },
-      })
-    : researchWorkflow
-  const researchExecutor = new LegacyResearchExecutor({
+  // S10/S11 (design §10): the async entry always runs the V2 agentic run for a NEW request. It only
+  // delegates to the retained facade for a replay of an already-accepted `@1` record (read/cancel) —
+  // it never starts a new fixed-chain job. A replay of an already-admitted agent run re-arms its
+  // dispatch rather than starting a second run.
+  const researchEntry: ResearchRunEntry = new AgentResearchRunEntry({
+    legacy: researchWorkflow,
+    agent: workspaceResearchRunService,
+    workspaces: workspaceStore,
     executions: researchExecutionStore,
-    ...(webSearch === undefined ? {} : { research: new WebResearchService({ webSearch, ingestion: researchIngestion }) }),
-    catalogue: { search: createResearchSearchResolver(searchBinding), ingestion: researchIngestion },
-    budget: state.budget,
-    ...(modelBindingService === undefined ? {} : { modelBinding: modelBindingService }),
+    admissions: researchRunAdmissionStore,
+    dispatch: dispatchStore,
+    cancelRun: async (runId, ctx) => {
+      const run = await runs.getRun(runId, ctx)
+      if (run.state !== 'cancelled' && run.state !== 'published' && run.state !== 'failed') {
+        await runs.cancelRun({ runId, reason: 'user_cancelled_research', expectedRevision: run.revision }, ctx)
+      }
+      await workflowDispatchWorker.cancelRun(runId, ctx)
+    },
+    assertCapabilities: async (workspaceId) => {
+      const serverCtx = workerContext(scopeRef, allSourceRefs, workspaceId, sha256DigestOf(`core-research-capability:${workspaceId}`), hostClock)
+      const scope: import('@ontology/contracts').ToolTargetScope = { kind: 'industry_workspace', workspaceId }
+      const search = await toolSelectionService.resolve(scopeRef, { scope, toolId: 'web_search' }, serverCtx).catch(() => undefined)
+      if (search?.state !== 'available') {
+        throw new ResearchError('CAPABILITY_NOT_CONFIGURED', `公共搜索服务不可用（${search?.blockedReason ?? 'TOOL_NOT_CONFIGURED'}），研究无法开始。`)
+      }
+      const model = await modelSelectionService.resolve(scopeRef, { scope, capability: 'research' }, serverCtx).catch(() => undefined)
+      if (model?.state !== 'available') {
+        throw new ResearchError('CAPABILITY_NOT_CONFIGURED', `研究模型未配置或不可用，研究无法开始。`)
+      }
+    },
   })
-  const researchHandler = new ResearchStageHandler({ executor: researchExecutor, dispatch: dispatchStore })
+  // S11: the weak legacy async fixed chain is retired. The research job handler now **only** schedules
+  // an already-accepted agentic run; a historical request-carrying job is never executed here and is
+  // never reassigned to the agentic runtime (see `ResearchStageHandler`). The drain check at startup
+  // guarantees no such job is still in flight before this build accepts traffic.
+  const researchHandler = new ResearchStageHandler({ dispatch: dispatchStore })
   // The research run admission entry (design §4/§8, S05): it fixes the brief / frozen draft /
   // authorization receipt / model snapshot / original deadline / one ledger / input manifest, commits
   // the complete research manifest, flips the durable dispatch-ready barrier and only then enqueues
@@ -645,7 +642,7 @@ export async function assembleRuntimePipeline(
     runProfileBinder, runProgress, executionPreflight, runs, phase, planResolver, termLabels, authoring, tableArtifactStore,
     tableVerificationStore, tableResults, draftVerifier, workflowDispatchWorker, jobService, industryWorkspaceService, parser,
     pipeline, structuredExtractionService, handlers, jobWorker, currentProjectRevisions, materializer, outboxConsumer, dispatcher, provenanceRead,
-    researchWorkflow, researchEntry, researchExecutor, webSearch, searchBinding,
+    researchWorkflow, researchEntry, searchBinding,
     candidateSubmissionStore, candidateSubmissionService,
     researchRunAdmissionStore, workspaceResearchRunService,
   }

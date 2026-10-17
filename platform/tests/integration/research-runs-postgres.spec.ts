@@ -1,4 +1,4 @@
-import { createHash, randomUUID } from 'node:crypto'
+import { randomUUID } from 'node:crypto'
 import { afterAll, beforeAll, describe, expect, it } from 'vitest'
 import {
   ControlPostgresDatabase,
@@ -8,12 +8,9 @@ import {
   PostgresResearchExecutionStore,
 } from '@ontology/adapter-control-postgres'
 import {
-  CandidateSourceIngestionService,
   JobService,
   JobWorker,
-  LegacyResearchExecutor,
   ResearchWorkflowService,
-  WebResearchService,
 } from '@ontology/application'
 import { createWorkerStageRegistry, ResearchStageHandler } from '@ontology/app-worker'
 import { createApiServer } from '@ontology/app-api'
@@ -27,12 +24,9 @@ import type {
   BudgetReserveInput,
   BudgetSettlementInput,
   CreateIndustryWorkspaceInput,
-  ImmutableArtifactWriter,
   ResourceRef,
   ToolContext,
   Uuid,
-  WebSearchProvider,
-  WebSearchProviderResult,
 } from '@ontology/contracts'
 import { toolContext } from '../unit/component-registry-fixtures'
 import { createJobScope, startJobDatabase } from './job-postgres-harness'
@@ -59,24 +53,8 @@ function sha(seed: string): string {
   return `sha256:${seed.repeat(64).slice(0, 64)}`
 }
 
-function digestOf(text: string): `sha256:${string}` {
-  return `sha256:${createHash('sha256').update(text).digest('hex')}`
-}
-
 function resourceRef(): ResourceRef {
   return { id: randomUUID(), version: '1.0.0', digest: sha('a'), kind: 'artifact' }
-}
-
-class FakeWriter implements ImmutableArtifactWriter {
-  async putBytes(): Promise<{ blobRef: ResourceRef; contentDigest: `sha256:${string}`; integrity: { algorithm: 'sha256'; digest: `sha256:${string}` } }> {
-    throw new Error('archived snapshots must not re-archive bytes')
-  }
-}
-
-class FakeProvider implements WebSearchProvider {
-  readonly providerRef = { id: 'web-search.fake', version: '1.0.0', digest: digestOf('fake') }
-  constructor(readonly result: WebSearchProviderResult) {}
-  async search(): Promise<WebSearchProviderResult> { return this.result }
 }
 
 class FakeBudget implements BudgetLedgerPort {
@@ -218,17 +196,6 @@ beforeAll(async () => {
     ],
   )
 
-  const provider = new FakeProvider({
-    pages: [{ url: 'https://standards.example.org/gb50500', title: 'GB50500', snippet: 'load tables', fetchedAt: RECORDED_AT,
-      contentDigest: digestOf('page-a'), snapshotRef: { id: randomUUID(), version: '1.0.0', digest: digestOf('page-a'), kind: 'artifact' } }],
-    truncated: false, excludedCount: 0,
-  })
-  const executor = new LegacyResearchExecutor({
-    executions,
-    research: new WebResearchService({ webSearch: provider, ingestion: new CandidateSourceIngestionService({ artifacts: new FakeWriter(), sources: sourceStore, now: () => RECORDED_AT }) }),
-    budget: new FakeBudget(),
-    now: () => RECORDED_AT,
-  })
   const workflow = new ResearchWorkflowService({
     jobs: jobService,
     executions,
@@ -238,10 +205,11 @@ beforeAll(async () => {
   // The same facade with no execution engine mounted, mirroring a deployment with no search
   // provider: its reads/cancel/resume still work, only a new run needs the missing engine.
   readOnlyWorkflow = new ResearchWorkflowService({ jobs: jobService, executions, budget: new FakeBudget(), executionAvailable: false })
-  // The worker is driven directly in this test; the real host mounts the same router.
+  // S11: the worker's research handler only schedules agentic `2.0.0` runs. It has no fixed chain,
+  // so a historical request-carrying job is refused rather than executed or reassigned.
   worker = new JobWorker({
     store: jobStore,
-    handlers: createWorkerStageRegistry({ ingestion: { get: () => undefined }, research: new ResearchStageHandler({ executor }) }),
+    handlers: createWorkerStageRegistry({ ingestion: { get: () => undefined }, research: new ResearchStageHandler({}) }),
     budget: new FakeBudget(),
     workerId: 'research-test-worker',
     now: () => '2099-01-01T00:00:00Z',
@@ -257,27 +225,45 @@ afterAll(async () => {
 })
 
 describe('bounded research runs (real PostgreSQL)', () => {
-  it('accepts an async run with 202, returns the queued execution, and runs it in the worker', async () => {
+  it('accepts an async run with 202 and returns the queued execution', async () => {
     const accepted = await post(`/api/v1/industry-workspaces/${workspaceId}/research-runs`, body)
     expect(accepted.statusCode).toBe(202)
     const payload = accepted.json() as { data: { researchId: string; jobId: string; execution: { status: string } } }
     expect(payload.data.execution.status).toBe('queued')
     expect(payload.data.researchId).toBe(payload.data.jobId)
 
+    const read = await get(`/api/v1/industry-workspaces/${workspaceId}/research-runs/${payload.data.researchId}`)
+    expect(read.statusCode).toBe(200)
+  })
+
+  // S11: the legacy async fixed chain is retired. An old request-carrying job must not be executed
+  // by this build (and never reassigned to the agentic runtime); the drain check is what guarantees
+  // none is in flight, and if one somehow reaches the worker it fails closed with a stable reason.
+  it('refuses a historical request-carrying job instead of running it', async () => {
+    const accepted = await post(`/api/v1/industry-workspaces/${workspaceId}/research-runs`, body)
+    const { researchId } = (accepted.json() as { data: { researchId: string } }).data
+
     for (let i = 0; i < 8; i += 1) {
       const result = await worker.runOnce(scope.scopeRef, ctx)
       if (result.disposition === 'idle') break
     }
 
-    const read = await get(`/api/v1/industry-workspaces/${workspaceId}/research-runs/${payload.data.researchId}`)
-    expect(read.statusCode).toBe(200)
-    const view = read.json() as { data: { execution: { status: string; stage: string; stopReason: string; sourceCount: number; sources?: { url: string }[] }; usage?: unknown } }
-    expect(view.data.execution).toMatchObject({ status: 'awaiting_confirmation', stage: 'awaiting_source_review', stopReason: 'completed', sourceCount: 1 })
-    expect(view.data.execution.sources?.[0]?.url).toBe('https://standards.example.org/gb50500')
-    expect(view.data.usage).toBeDefined()
+    const job = await harness.adminClient.query<{ kind: string; pipeline_version: string; stage: string; last_error: { code?: string; message?: string } | null }>(
+      'SELECT kind, pipeline_version, stage, last_error FROM agent_platform.jobs WHERE job_id = $1::uuid AND tenant_id = $2::uuid AND space_id = $3::uuid',
+      [researchId, scope.tenantId, scope.spaceId],
+    )
+    const row = job.rows[0]
+    expect(row?.kind).toBe('research')
+    expect(row?.pipeline_version).toBe('1.0.0')
+    expect(row?.stage).toBe('failed')
+    expect(row?.last_error?.code).toBe('CAPABILITY_NOT_CONFIGURED')
+    expect(row?.last_error?.message ?? '').toContain('retired')
 
+    // Neither the frozen execution nor the source store moved: the retired chain never ran.
+    const execution = await executions.getExecution(scope.scopeRef, researchId, ctx)
+    expect(execution?.status).toBe('queued')
     const listed = await sourceStore.listSources(scope.scopeRef, workspaceId, {}, ctx)
-    expect(listed.some((source) => source.trustTier === 'agent_researched' && source.reviewState === 'proposed')).toBe(true)
+    expect(listed).toHaveLength(0)
   })
 
   it('cancels a run and freezes it: a later terminal write cannot resurrect it', async () => {

@@ -30,17 +30,9 @@ export type {
 export type { ResearchRunEntry } from './research-entry'
 export { AgentResearchRunEntry } from './agent-research-entry'
 export type { AgentResearchRunEntryDependencies } from './agent-research-entry'
-export { LegacyResearchExecutor } from './legacy-research-executor'
-export type {
-  ExecuteResearchInput,
-  LegacyResearchExecutorDependencies,
-  ResearchProviderSource,
-} from './legacy-research-executor'
 export type {
   ResearchSearchBinder,
   ResearchSearchBindingResult,
-  ResearchSearchResolution,
-  ResearchSearchResolver,
 } from './research-search-resolver'
 export {
   RESEARCH_JOB_REQUEST_KIND,

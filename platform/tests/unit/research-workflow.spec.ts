@@ -1,4 +1,4 @@
-import { createHash, randomUUID } from 'node:crypto'
+import { randomUUID } from 'node:crypto'
 import { describe, expect, it } from 'vitest'
 import { createToolContext } from '@ontology/contracts'
 import type {
@@ -12,12 +12,6 @@ import type {
   BudgetReservationRecord,
   BudgetReserveInput,
   BudgetSettlementInput,
-  CandidateSource,
-  CandidateSourceListFilter,
-  CandidateSourceRecord,
-  CandidateSourceReviewState,
-  CandidateSourceStore,
-  ImmutableArtifactWriter,
   ModelingBrief,
   OpenBudgetLedgerInput,
   ResearchExecutionAny,
@@ -25,27 +19,20 @@ import type {
   ResearchExecutionStore,
   ResearchRequest,
   ScopeRef,
-  SourceTrustTier,
   ToolContext,
   Uuid,
-  WebSearchProvider,
-  WebSearchProviderRequest,
-  WebSearchProviderResult,
 } from '@ontology/contracts'
 import {
-  CandidateSourceIngestionService,
   DEFAULT_RESEARCH_BUDGET_REF,
   DEFAULT_RESEARCH_POLICY_REF,
   InMemoryJobStore,
   JobService,
-  LegacyResearchExecutor,
   RESEARCH_JOB_VERSION_CATALOGUE,
   ResearchWorkflowService,
-  WebResearchService,
   decodeResearchJobRequest,
   isCatalogueResearchJobRequest,
 } from '@ontology/application'
-import type { ResearchSearchBinder, ResearchSearchResolver } from '@ontology/application'
+import type { ResearchSearchBinder } from '@ontology/application'
 
 const TENANT = '00000000-0000-4000-8000-000000000001'
 const SPACE = '00000000-0000-4000-8000-000000000002'
@@ -65,57 +52,9 @@ function ctx(roles: readonly string[] = ['researcher', 'platform-admin']): ToolC
   })
 }
 
-function digestOf(text: string): `sha256:${string}` {
-  return `sha256:${createHash('sha256').update(text).digest('hex')}`
-}
-
-class FakeStore implements CandidateSourceStore {
-  #byKey = new Map<string, CandidateSourceRecord>()
-  get size(): number { return this.#byKey.size }
-  async putSource(_scope: ScopeRef, input: { readonly source: CandidateSource; readonly idempotencyKey: string }): Promise<CandidateSourceRecord> {
-    const existing = this.#byKey.get(input.idempotencyKey)
-    if (existing !== undefined) return existing
-    const record: CandidateSourceRecord = { ...input.source, revision: '1' }
-    this.#byKey.set(input.idempotencyKey, record)
-    return record
-  }
-  async getSource(_scope: ScopeRef, sourceId: Uuid): Promise<CandidateSourceRecord | undefined> {
-    return [...this.#byKey.values()].find((source) => source.sourceId === sourceId)
-  }
-  async listSources(_scope: ScopeRef, workspaceId: Uuid, filter: CandidateSourceListFilter): Promise<readonly CandidateSourceRecord[]> {
-    return [...this.#byKey.values()].filter((source) => source.workspaceId === workspaceId
-      && (filter.reviewState === undefined || source.reviewState === filter.reviewState)
-      && (filter.trustTier === undefined || source.trustTier === filter.trustTier))
-  }
-  async reviewSource(_scope: ScopeRef, input: { readonly sourceId: Uuid; readonly reviewState: CandidateSourceReviewState; readonly trustTier?: SourceTrustTier; readonly reviewedBy: string }): Promise<CandidateSourceRecord> {
-    const current = [...this.#byKey.values()].find((source) => source.sourceId === input.sourceId)
-    if (current === undefined) throw new Error('missing source')
-    return { ...current, reviewState: input.reviewState, trustTier: input.trustTier ?? current.trustTier, reviewedBy: input.reviewedBy }
-  }
-}
-
-class FakeWriter implements ImmutableArtifactWriter {
-  async putBytes(): Promise<{ blobRef: CandidateSource['contentRef']; contentDigest: `sha256:${string}`; integrity: { algorithm: 'sha256'; digest: `sha256:${string}` } }> {
-    throw new Error('archived snapshots must not re-archive bytes')
-  }
-}
-
-class FakeSearchProvider implements WebSearchProvider {
-  readonly providerRef = { id: 'web-search.fake', version: '1.0.0', digest: digestOf('fake') }
-  lastRequest: WebSearchProviderRequest | undefined
-  onSearch: (() => Promise<void>) | undefined
-  constructor(readonly result: WebSearchProviderResult, readonly fail = false) {}
-  async search(request: WebSearchProviderRequest): Promise<WebSearchProviderResult> {
-    this.lastRequest = request
-    if (this.onSearch !== undefined) await this.onSearch()
-    if (this.fail) throw new Error('provider unavailable')
-    return this.result
-  }
-}
-
 const TERMINAL = ['completed', 'cancelled', 'failed']
 
-/** The legacy orchestration always carries a job id; narrow the dual-version execution for a test. */
+/** The retained compatibility facade always carries a job id for a `@1` record. */
 function jobIdOf(execution: ResearchExecutionAny): Uuid {
   if (execution.jobId === undefined) throw new Error('expected the legacy run to carry a job id')
   return execution.jobId
@@ -142,8 +81,6 @@ const LIMITS: BudgetLedgerLimits = { maxToolCalls: 20, maxRepairAttempts: 2, max
 
 class FakeBudget implements BudgetLedgerPort {
   readonly ledgers = new Map<string, { record: BudgetLedgerRecord; reservations: Map<string, BudgetReservationRecord> }>()
-  reserveCalls: { ledgerId: string; idempotencyKey: string; sources: number; searches: number; requestedDeadline?: string }[] = []
-  deny = false
   async openLedger(input: OpenBudgetLedgerInput): Promise<BudgetLedgerRecord> {
     const existing = this.ledgers.get(input.ledgerId)
     if (existing !== undefined) return existing.record
@@ -165,11 +102,9 @@ class FakeBudget implements BudgetLedgerPort {
     }
   }
   async reserve(input: BudgetReserveInput): Promise<AtomicReserveOutcome> {
-    this.reserveCalls.push({ ledgerId: input.ledgerId, idempotencyKey: input.idempotencyKey, sources: input.sources ?? 0, searches: input.searches ?? 0, ...(input.requestedDeadline === undefined ? {} : { requestedDeadline: input.requestedDeadline }) })
     const ledger = this.ledgers.get(input.ledgerId)
     if (ledger === undefined) throw new Error('LEDGER_NOT_FOUND')
     const remaining = this.#snapshot(input.ledgerId)
-    if (this.deny) return { granted: false, remaining, denial: { code: 'BUDGET_EXHAUSTED', message: 'budget exhausted' } }
     const existing = ledger.reservations.get(input.idempotencyKey)
     if (existing !== undefined) return { granted: true, remaining, reservation: existing }
     const reservation: BudgetReservationRecord = {
@@ -223,47 +158,21 @@ function request(overrides: Partial<ResearchRequest> = {}): ResearchRequest {
   }
 }
 
-function build(result: WebSearchProviderResult, fail = false) {
-  const sources = new FakeStore()
+function build() {
   const executions = new FakeExecutionStore()
   const budget = new FakeBudget()
   const jobs = new JobService({ store: new InMemoryJobStore(), newId: () => randomUUID() })
-  const provider = new FakeSearchProvider(result, fail)
-  const ingestion = new CandidateSourceIngestionService({ artifacts: new FakeWriter(), sources, now: () => NOW })
-  const executor = new LegacyResearchExecutor({
-    executions, budget, now: () => NOW,
-    research: new WebResearchService({ webSearch: provider, ingestion }),
-  })
   const workflow = new ResearchWorkflowService({ jobs, executions, budget, now: () => NOW })
-  return { workflow, executor, sources, executions, budget, jobs, provider }
+  return { workflow, executions, budget, jobs }
 }
 
-const WITH_SNAPSHOT: WebSearchProviderResult = {
-  pages: [
-    { url: 'https://standards.example.org/gb50500', title: 'GB50500', snippet: 'load tables', fetchedAt: NOW,
-      contentDigest: digestOf('page-a'), snapshotRef: { id: '00000000-0000-4000-8000-0000000000aa', version: '1.0.0', digest: digestOf('page-a'), kind: 'artifact' } },
-    { url: 'https://standards.example.org/more', title: 'more', snippet: 'no snapshot', fetchedAt: NOW, contentDigest: digestOf('page-b') },
-  ],
-  truncated: true,
-  excludedCount: 2,
-}
-
-async function runOnce(h: ReturnType<typeof build>, input = request()) {
-  const context = ctx()
-  const queued = await h.workflow.start(input, context)
-  await h.budget.openLedger({ ledgerId: jobIdOf(queued), kind: 'background', runId: jobIdOf(queued) })
-  const executed = await h.executor.execute(
-    { researchId: queued.researchId, request: input },
-    context,
-    jobIdOf(queued),
-    new AbortController().signal,
-  )
-  return { context, queued, executed }
-}
-
-describe('research workflow orchestration', () => {
+/**
+ * S11 retired the fixed execution chain, so the facade is a start/read/cancel/resume compatibility
+ * surface only: it owns the durable job + execution lifecycle and never executes a provider call.
+ */
+describe('research workflow orchestration (S11 compatibility facade)', () => {
   it('starts a durable research job + queued execution and replays idempotently', async () => {
-    const h = build(WITH_SNAPSHOT)
+    const h = build()
     const context = ctx()
     const input = request()
     const first = await h.workflow.start(input, context)
@@ -278,100 +187,26 @@ describe('research workflow orchestration', () => {
     expect(h.executions.rows.size).toBe(1)
   })
 
-  it('runs the bounded chain into proposed sources with honest coverage', async () => {
-    const h = build(WITH_SNAPSHOT)
-    const { executed } = await runOnce(h)
-    expect(h.provider.lastRequest?.limit).toBe(5)
-    expect(h.provider.lastRequest?.allowedDomains).toEqual(['standards.example.org'])
-    expect(executed.status).toBe('awaiting_confirmation')
-    expect(executed.stage).toBe('awaiting_source_review')
-    expect(executed.stopReason).toBe('partial_results')
-    expect(executed.sourceCount).toBe(1)
-    expect(executed.coverage).toMatchObject({ pagesDiscovered: 2, archivedSnapshots: 1, skippedWithoutSnapshot: 1, excludedCount: 2, truncated: true })
-    expect(executed.sources).toHaveLength(1)
-    expect(h.sources.size).toBe(1)
-  })
-
   it('refuses research for a principal without the researcher role', async () => {
-    const h = build(WITH_SNAPSHOT)
+    const h = build()
     await expect(h.workflow.start(request(), ctx(['business-user']))).rejects.toMatchObject({ code: 'SCOPE_MISMATCH' })
   })
 
-  it('cancels a queued run and admits no late result', async () => {
-    const h = build(WITH_SNAPSHOT)
+  it('cancels a queued run and freezes it against a later terminal write', async () => {
+    const h = build()
     const context = ctx()
     const input = request()
     const queued = await h.workflow.start(input, context)
-    await h.workflow.cancel(queued.researchId, context)
-    await h.budget.openLedger({ ledgerId: jobIdOf(queued), kind: 'background', runId: jobIdOf(queued) })
-    const executed = await h.executor.execute({ researchId: queued.researchId, request: input }, context, jobIdOf(queued), new AbortController().signal)
-    expect(executed.status).toBe('cancelled')
-    expect(executed.stopReason).toBe('cancelled')
-    expect(executed.sourceCount).toBe(0)
-    expect(h.sources.size).toBe(0)
-  })
-
-  it('stops mid-run when cancelled during the provider call and admits no page', async () => {
-    const h = build(WITH_SNAPSHOT)
-    const context = ctx()
-    const input = request()
-    const queued = await h.workflow.start(input, context)
-    await h.budget.openLedger({ ledgerId: jobIdOf(queued), kind: 'background', runId: jobIdOf(queued) })
-    h.provider.onSearch = async () => { await h.workflow.cancel(queued.researchId, context) }
-    const executed = await h.executor.execute({ researchId: queued.researchId, request: input }, context, jobIdOf(queued), new AbortController().signal)
-    expect(executed.status).toBe('cancelled')
-    expect(executed.sourceCount).toBe(0)
-    expect(h.sources.size).toBe(0)
-  })
-
-  it('is restart-safe: replaying execute does not register a second source', async () => {
-    const h = build(WITH_SNAPSHOT)
-    const input = request()
-    const context = ctx()
-    const queued = await h.workflow.start(input, context)
-    await h.budget.openLedger({ ledgerId: jobIdOf(queued), kind: 'background', runId: jobIdOf(queued) })
-    await h.executor.execute({ researchId: queued.researchId, request: input }, context, jobIdOf(queued), new AbortController().signal)
-    const replay = await h.executor.execute({ researchId: queued.researchId, request: input }, context, jobIdOf(queued), new AbortController().signal)
-    expect(replay.status).toBe('awaiting_confirmation')
-    expect(h.sources.size).toBe(1)
-  })
-
-  it('shares one budget ledger and never resets it on a reclaimed attempt', async () => {
-    const h = build(WITH_SNAPSHOT)
-    const { queued } = await runOnce(h)
-    expect(h.budget.reserveCalls.length).toBeGreaterThan(0)
-    expect(h.budget.reserveCalls.every((call) => call.ledgerId === jobIdOf(queued))).toBe(true)
-    // The same ledger is reused: opening it again returns the same record rather than a fresh budget.
-    expect(await h.budget.openLedger({ ledgerId: jobIdOf(queued), kind: 'background' })).toMatchObject({ ledgerId: jobIdOf(queued) })
-  })
-
-  it('stops on an exhausted budget without calling the provider', async () => {
-    const h = build(WITH_SNAPSHOT)
-    h.budget.deny = true
-    const { executed } = await runOnce(h)
-    expect(executed.status).toBe('failed')
-    expect(executed.stopReason).toBe('budget_exhausted')
-    expect(h.provider.lastRequest).toBeUndefined()
-  })
-
-  it('classifies a provider failure instead of returning an empty saved list', async () => {
-    const h = build(WITH_SNAPSHOT, true)
-    const { executed } = await runOnce(h)
-    expect(executed.status).toBe('failed')
-    expect(executed.stopReason).toBe('provider_failed')
-    expect(h.sources.size).toBe(0)
-  })
-
-  it('reports no_results honestly when the provider returns nothing', async () => {
-    const h = build({ pages: [], truncated: false, excludedCount: 0 })
-    const { executed } = await runOnce(h)
-    expect(executed.status).toBe('completed')
-    expect(executed.stopReason).toBe('no_results')
-    expect(executed.sourceCount).toBe(0)
+    const cancelled = await h.workflow.cancel(queued.researchId, context)
+    expect(cancelled.status).toBe('cancelled')
+    expect(cancelled.stopReason).toBe('cancelled')
+    // A late write cannot resurrect the frozen run.
+    const revived = await h.workflow.get(queued.researchId, context)
+    expect(revived.execution.status).toBe('cancelled')
   })
 
   it('resumes a non-terminal run by re-arming the same job on the same ledger', async () => {
-    const h = build(WITH_SNAPSHOT)
+    const h = build()
     const context = ctx()
     const queued = await h.workflow.start(request(), context)
     const resumed = await h.workflow.resume(queued.researchId, context)
@@ -383,7 +218,7 @@ describe('research workflow orchestration', () => {
   })
 
   it('refuses to resume a terminal run (cancelled/completed/failed cannot be revived)', async () => {
-    const h = build(WITH_SNAPSHOT)
+    const h = build()
     const context = ctx()
     const queued = await h.workflow.start(request(), context)
     await h.workflow.cancel(queued.researchId, context)
@@ -391,7 +226,7 @@ describe('research workflow orchestration', () => {
   })
 
   it('continues an ended run with a new linked execution and its own budget', async () => {
-    const h = build(WITH_SNAPSHOT)
+    const h = build()
     const context = ctx()
     const first = await h.workflow.start(request(), context)
     await h.workflow.cancel(first.researchId, context)
@@ -406,7 +241,7 @@ describe('research workflow orchestration', () => {
   })
 
   it('refuses to continue an active run', async () => {
-    const h = build(WITH_SNAPSHOT)
+    const h = build()
     const context = ctx()
     const first = await h.workflow.start(request(), context)
     await expect(h.workflow.continuations(first.researchId, request({ idempotencyKey: 'continuation-source-key' }), context))
@@ -420,7 +255,7 @@ describe('catalogue-pinned research (S03)', () => {
   }
 
   it('pins the search binding at accept time and writes a catalogue-version job', async () => {
-    const h = build(WITH_SNAPSHOT)
+    const h = build()
     const pinned: { researchId: string; workspaceId: string }[] = []
     const workflow = catalogueWorkflow(h, {
       async bindSearchForResearch(input) { pinned.push(input); return { state: 'available' } },
@@ -435,87 +270,11 @@ describe('catalogue-pinned research (S03)', () => {
   })
 
   it('refuses a new run when the catalogue search cannot be pinned', async () => {
-    const h = build(WITH_SNAPSHOT)
+    const h = build()
     const workflow = catalogueWorkflow(h, {
       async bindSearchForResearch() { return { state: 'blocked', reason: 'TOOL_DISABLED', message: '公共搜索服务已停用' } },
     })
     await expect(workflow.start(request(), ctx())).rejects.toMatchObject({ code: 'CAPABILITY_NOT_CONFIGURED' })
     expect(h.executions.rows.size).toBe(0)
   })
-
-  it('runs a catalogue job through the resolved provider', async () => {
-    const sources = new FakeStore()
-    const executions = new FakeExecutionStore()
-    const budget = new FakeBudget()
-    const provider = new FakeSearchProvider(WITH_SNAPSHOT)
-    const ingestion = new CandidateSourceIngestionService({ artifacts: new FakeWriter(), sources, now: () => NOW })
-    const resolver: ResearchSearchResolver = {
-      async resolveForResearch({ workspaceId }) {
-        expect(workspaceId).toBe(WORKSPACE)
-        return { state: 'available', provider, connectionName: '兼容网关', adapterType: 'http_compat' }
-      },
-    }
-    const executor = new LegacyResearchExecutor({ executions, budget, now: () => NOW, catalogue: { search: resolver, ingestion } })
-    const context = ctx()
-    const jobs = new JobService({ store: new InMemoryJobStore(), newId: () => randomUUID() })
-    const queued = await new ResearchWorkflowService({ jobs, executions, budget, now: () => NOW }).start(request(), context)
-    await budget.openLedger({ ledgerId: jobIdOf(queued), kind: 'background', runId: jobIdOf(queued) })
-    const executed = await executor.execute(
-      { researchId: queued.researchId, request: request(), providerSource: 'catalogue' },
-      context, jobIdOf(queued), new AbortController().signal,
-    )
-    expect(executed.status).toBe('awaiting_confirmation')
-    expect(provider.lastRequest).toBeDefined()
-    expect(sources.size).toBe(1)
-  })
-
-  it('fails a catalogue job closed when the pinned search is blocked, admitting no page', async () => {
-    const sources = new FakeStore()
-    const executions = new FakeExecutionStore()
-    const budget = new FakeBudget()
-    const ingestion = new CandidateSourceIngestionService({ artifacts: new FakeWriter(), sources, now: () => NOW })
-    const resolver: ResearchSearchResolver = {
-      async resolveForResearch() { return { state: 'blocked', reason: 'TOOL_DISABLED', message: 'disabled' } },
-    }
-    const executor = new LegacyResearchExecutor({ executions, budget, now: () => NOW, catalogue: { search: resolver, ingestion } })
-    const context = ctx()
-    const jobs = new JobService({ store: new InMemoryJobStore(), newId: () => randomUUID() })
-    const queued = await new ResearchWorkflowService({ jobs, executions, budget, now: () => NOW }).start(request(), context)
-    await budget.openLedger({ ledgerId: jobIdOf(queued), kind: 'background', runId: jobIdOf(queued) })
-    await expect(executor.execute(
-      { researchId: queued.researchId, request: request(), providerSource: 'catalogue' },
-      context, jobIdOf(queued), new AbortController().signal,
-    )).rejects.toMatchObject({ code: 'CAPABILITY_NOT_CONFIGURED' })
-    expect(sources.size).toBe(0)
-    expect(executions.rows.get(queued.researchId)?.status).toBe('failed')
-  })
-
-  it('reserves the search and each archived page on the one run ledger at the original deadline', async () => {
-    const withSnapshots: WebSearchProviderResult = {
-      pages: [
-        { url: 'https://standards.example.org/a', title: 'a', snippet: 'a', fetchedAt: NOW, contentDigest: digestOf('page-a'),
-          snapshotRef: { id: '00000000-0000-4000-8000-0000000000aa', version: '1.0.0', digest: digestOf('page-a'), kind: 'artifact' } },
-        { url: 'https://standards.example.org/b', title: 'b', snippet: 'b', fetchedAt: NOW, contentDigest: digestOf('page-b'),
-          snapshotRef: { id: '00000000-0000-4000-8000-0000000000bb', version: '1.0.0', digest: digestOf('page-b'), kind: 'artifact' } },
-      ],
-      truncated: false,
-      excludedCount: 0,
-    }
-    const h = build(withSnapshots)
-    const input = request({ limits: { sourceLimit: 5, candidateLimit: 5, deadline: '2099-01-01T00:00:00Z' } })
-    const { queued, executed } = await runOnce(h, input)
-    expect(executed.status).toBe('awaiting_confirmation')
-
-    const ledgerId = jobIdOf(queued)
-    const search = h.budget.reserveCalls.filter((call) => call.idempotencyKey.endsWith(':search'))
-    const pages = h.budget.reserveCalls.filter((call) => call.idempotencyKey.includes(':source:'))
-    expect(search).toHaveLength(1)
-    expect(search[0]?.searches).toBe(1)
-    expect(pages).toHaveLength(2)
-    expect(pages.every((call) => call.sources === 1)).toBe(true)
-    // Pagination draws from the same ledger and the run's original deadline, never a fresh one.
-    expect([...search, ...pages].every((call) => call.ledgerId === ledgerId)).toBe(true)
-    expect([...search, ...pages].every((call) => call.requestedDeadline === input.limits.deadline)).toBe(true)
-  })
 })
-
