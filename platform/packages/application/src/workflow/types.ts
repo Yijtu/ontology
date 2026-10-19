@@ -180,4 +180,11 @@ export interface ResearchDelivery {
  */
 export interface ResearchDeliveryProjectionPort {
   recordDelivery(runId: Uuid, delivery: ResearchDelivery, ctx: ToolContext): Promise<void>
+  /**
+   * Advance the projection to a terminal stop that produced **no** delivery: the worker died, the
+   * user cancelled, or the shared deadline/budget ran out (design ��3/��8). Without it the row would
+   * stay `queued`/`running` for a run no worker owns. Optional so a host that mounts only the
+   * completion path keeps working.
+   */
+  recordTerminal?(runId: Uuid, state: 'cancelled' | 'failed', reason: string | undefined, ctx: ToolContext): Promise<void>
 }

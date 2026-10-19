@@ -14,6 +14,7 @@ import type {
   RuntimeEvent,
   VerificationResult,
 } from '@ontology/contracts'
+import type { ResearchDeliveryProjectionPort } from '@ontology/application'
 import { workspaceResearchProfileRef } from '@ontology/contracts'
 import {
   DIGEST,
@@ -365,6 +366,58 @@ describe('cancellation is terminal', () => {
     expect(late.disposition).toBe('abandoned')
     const view = await harness.controller.getRun(RUN_A, OWNER)
     expect(view.state).toBe('cancelled')
+  })
+})
+
+describe('research projection terminal stop', () => {
+  function recordingPort(): {
+    readonly port: ResearchDeliveryProjectionPort
+    readonly terminals: { state: 'cancelled' | 'failed'; reason: string | undefined }[]
+  } {
+    const terminals: { state: 'cancelled' | 'failed'; reason: string | undefined }[] = []
+    return {
+      terminals,
+      port: {
+        recordDelivery: () => Promise.resolve(),
+        recordTerminal: (_runId, state, reason) => {
+          terminals.push({ state, reason })
+          return Promise.resolve()
+        },
+      },
+    }
+  }
+
+  it('records a cancellation on the research projection', async () => {
+    const runtime = new ScriptedRuntime({ scripts: [completedScript()] })
+    runtime.block()
+    const { port, terminals } = recordingPort()
+    const harness = buildWorkflowHarness({ runtime, researchProjection: port })
+
+    const running = harness.controller.startRun(startInput(), OWNER)
+    await waitFor(() => runtime.startCalls.length === 1)
+    const before = await harness.service.getRun(RUN_A, OWNER)
+    await harness.controller.cancel(
+      { runId: RUN_A, reason: 'user cancelled', expectedRevision: before.revision },
+      OWNER,
+    )
+    runtime.release()
+    await running
+
+    expect(terminals).toEqual([{ state: 'cancelled', reason: 'user cancelled' }])
+  })
+
+  it('records a worker failure on the research projection', async () => {
+    const { port, terminals } = recordingPort()
+    const harness = buildWorkflowHarness({
+      runtime: new ScriptedRuntime({ scripts: [completedScript()] }),
+      researchProjection: port,
+    })
+    const started = await harness.controller.startRun(startInput(), OWNER)
+    expect(started.state).toBe('published')
+
+    // A published run is already terminal: the port must not be told it failed.
+    await harness.controller.failPersistedRun(RUN_A, 'workflow_failed', OWNER)
+    expect(terminals).toEqual([])
   })
 })
 

@@ -51,7 +51,13 @@ import { DEFAULT_RESEARCH_BUDGET_REF } from '../assets/candidate-sources/researc
 import { canonicalJson, sha256DigestOf } from '../profiles/canonical'
 import { inputManifestDigest } from '../workflow/canonical'
 import type { WorkspaceResearchRunConfigService } from './workspace-research-run-config-service'
-import { buildResearchExecutionProjection, candidateSummaryOf, initialResearchExecutionProjection } from './research-run-projection'
+import {
+  buildResearchExecutionProjection,
+  candidateSummaryOf,
+  initialResearchExecutionProjection,
+  stopReasonOfTerminalRun,
+  terminalResearchExecutionProjection,
+} from './research-run-projection'
 import { deterministicUuid, runBudgetLedgerId } from './run-ledger'
 
 /** Roles allowed to admit a research run. */
@@ -447,6 +453,46 @@ export class WorkspaceResearchRunService {
       recordedAt: this.#now(),
     })
     await executions.putExecution(scopeRef, projection, ctx)
+  }
+
+  /**
+   * Advance the run's `@2` projection to a terminal stop that produced no delivery: the worker died,
+   * the user cancelled, or the shared deadline/budget ran out (design §3/§8). A completion delivery
+   * keeps its own path (`recordDelivery`); this is only for an ending that never reached it, so a
+   * reader never sees a live projection for a run no worker owns.
+   *
+   * It is idempotent and non-destructive: the frozen goal/brief/policy/budget, the evidence and the
+   * candidate receipts already persisted are carried over unchanged, and a run that already reached
+   * a terminal projection is left as it is. A run that is not workspace research, or a host with no
+   * projection store, is a no-op.
+   */
+  async recordTerminal(
+    runId: Uuid,
+    state: 'cancelled' | 'failed',
+    reason: string | undefined,
+    ctx: ToolContext,
+  ): Promise<void> {
+    const executions = this.#executions
+    if (executions === undefined) return
+    const scopeRef = scopeOf(ctx)
+    const admission = await this.#admissions.get(scopeRef, runId, ctx)
+    if (admission === undefined) return
+    const manifest = await this.#manifests.getRunManifest(runId, ctx)
+    if (manifest === undefined || manifest.goal?.kind !== 'industry_workspace_research') return
+    const existing = await executions.getExecution(scopeRef, admission.researchId, ctx)
+    // A legacy `@1` record is never rewritten into `@2`, and a run that already handed its material
+    // to a human keeps that verdict (its `awaiting_confirmation` is not a failure).
+    if (existing === undefined || existing.schemaVersion !== 'research-execution@2') return
+    if (existing.status === 'completed' || existing.status === 'awaiting_confirmation') return
+    // Already frozen at a stop verdict: `putExecution` refuses a terminal write, and a replay must
+    // not try to overwrite the first honest reason.
+    if (existing.status === 'cancelled' || existing.status === 'failed') return
+    await executions.putExecution(scopeRef, terminalResearchExecutionProjection({
+      projection: existing,
+      status: state,
+      stopReason: stopReasonOfTerminalRun(state, reason),
+      recordedAt: this.#now(),
+    }), ctx)
   }
 
   async #readBrief(

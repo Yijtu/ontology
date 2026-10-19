@@ -17,5 +17,11 @@ export type {
   ResearchRunAdmissionResult,
   WorkspaceResearchRunServiceDependencies,
 } from './workspace-research-run-service'
-export { buildResearchExecutionProjection, candidateSummaryOf } from './research-run-projection'
-export type { ResearchProjectionInput } from './research-run-projection'
+export {
+  buildResearchExecutionProjection,
+  candidateSummaryOf,
+  initialResearchExecutionProjection,
+  stopReasonOfTerminalRun,
+  terminalResearchExecutionProjection,
+} from './research-run-projection'
+export type { ResearchProjectionInput, TerminalResearchProjectionInput } from './research-run-projection'

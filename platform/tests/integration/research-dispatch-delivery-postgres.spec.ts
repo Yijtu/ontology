@@ -300,4 +300,66 @@ describe('research dispatch handoff and delivery projection (real PostgreSQL, S0
     expect(reread?.schemaVersion).toBe('research-execution@2')
     await expect(countScoped('workspace_research_runs', result.runId)).resolves.toBe(1)
   }, 30_000)
+
+  it('advances an admitted run to a terminal verdict when it never delivers', async () => {
+    const { scope, ctx } = await freshScope('terminal')
+    const workspaceId = await bootstrapWorkspace(ctx)
+    const result = await built.service.accept(requestFor(workspaceId, `terminal-${randomUUID().slice(0, 12)}`), ctx)
+
+    // The accept path writes the queued projection, so a reader sees a live run immediately.
+    const admitted = await built.executions.getExecution(scope.scopeRef, result.researchId, ctx)
+    if (admitted?.schemaVersion !== 'research-execution@2') throw new Error('expected the @2 projection')
+    expect(admitted.status).toBe('queued')
+
+    await built.service.recordTerminal(result.runId, 'failed', 'DEADLINE_EXCEEDED', ctx)
+    const stopped = await built.executions.getExecution(scope.scopeRef, result.researchId, ctx)
+    if (stopped?.schemaVersion !== 'research-execution@2') throw new Error('expected the @2 projection')
+    expect(stopped.status).toBe('failed')
+    expect(stopped.stopReason).toBe('deadline_exceeded')
+    // The frozen admission inputs are carried over, never rebuilt from a stop verdict.
+    expect(stopped.goal).toEqual(admitted.goal)
+    expect(stopped.briefRef).toEqual(admitted.briefRef)
+    expect(stopped.budget).toEqual(admitted.budget)
+    await expect(countScoped('workspace_research_runs', result.runId)).resolves.toBe(1)
+  }, 30_000)
+
+  it('records a cancellation as cancelled and never overwrites the first terminal verdict', async () => {
+    const { scope, ctx } = await freshScope('terminal-cancel')
+    const workspaceId = await bootstrapWorkspace(ctx)
+    const result = await built.service.accept(requestFor(workspaceId, `cancel-${randomUUID().slice(0, 12)}`), ctx)
+
+    await built.service.recordTerminal(result.runId, 'cancelled', 'user_cancelled_research', ctx)
+    const cancelled = await built.executions.getExecution(scope.scopeRef, result.researchId, ctx)
+    if (cancelled?.schemaVersion !== 'research-execution@2') throw new Error('expected the @2 projection')
+    expect(cancelled.status).toBe('cancelled')
+    expect(cancelled.stopReason).toBe('cancelled')
+
+    // A late worker failure must not rewrite the stored stop verdict (the row is frozen).
+    await built.service.recordTerminal(result.runId, 'failed', 'workflow_failed', ctx)
+    const reread = await built.executions.getExecution(scope.scopeRef, result.researchId, ctx)
+    if (reread?.schemaVersion !== 'research-execution@2') throw new Error('expected the @2 projection')
+    expect(reread.status).toBe('cancelled')
+    expect(reread.stopReason).toBe('cancelled')
+  }, 30_000)
+
+  it('leaves a delivered run awaiting review when a terminal write arrives afterwards', async () => {
+    const { scope, ctx } = await freshScope('terminal-after-delivery')
+    const workspaceId = await bootstrapWorkspace(ctx)
+    const result = await built.service.accept(requestFor(workspaceId, `delivered-${randomUUID().slice(0, 12)}`), ctx)
+
+    const evidenceRef: ResourceRef = { id: randomUUID(), version: '1.0.0', digest: `sha256:${'e'.repeat(64)}`, kind: 'artifact' }
+    await built.service.recordDelivery(result.runId, {
+      runId: result.runId,
+      candidateReceipts: [],
+      evidenceRefs: [evidenceRef],
+      stopReason: 'completed',
+      usage: { deadline: '2030-01-01T00:00:00Z', toolCallsRemaining: 4, repairAttemptsRemaining: 1, parallelToolLimit: 1 },
+    }, ctx)
+
+    await built.service.recordTerminal(result.runId, 'failed', 'workflow_failed', ctx)
+    const reread = await built.executions.getExecution(scope.scopeRef, result.researchId, ctx)
+    if (reread?.schemaVersion !== 'research-execution@2') throw new Error('expected the @2 projection')
+    expect(reread.status).toBe('awaiting_confirmation')
+    expect(reread.stopReason).toBe('completed')
+  }, 30_000)
 })

@@ -78,6 +78,12 @@ export class WorkflowController {
   readonly #selectedRuntimes = new Map<Uuid, RuntimeAdapter>()
   readonly #active = new Map<Uuid, ActiveLoop>()
   /**
+   * Runs whose research projection already received a terminal verdict from this controller. It
+   * keeps `cancel()` and the drive loop's terminal case from reporting the same stop twice; a
+   * restarted process re-records it, which the projection store treats idempotently.
+   */
+  readonly #terminalRecorded = new Set<Uuid>()
+  /**
    * The durable candidate-receipt reader, when the host mounts a candidate-submission store. A
    * research delivery reads its candidate receipts from here — never from an in-memory transcript —
    * so a resumed/restarted run reports exactly the candidates that were written (design §8).
@@ -187,7 +193,6 @@ export class WorkflowController {
     const safeReason = /^[A-Za-z0-9_.-]{1,64}$/u.test(reason) ? reason : 'workflow_execution_failed'
     return this.#failUnsafeRecovery(run, safeReason, runContext)
   }
-
   /**
    * Answer a pending clarification. Permission and revision are re-checked by `RunService`;
    * the controller additionally re-checks that the referenced inputs are still valid. A
@@ -250,6 +255,9 @@ export class WorkflowController {
       active.controller.abort(new Error(input.reason))
       await active.adapter.cancel(input.runId, input.reason).catch(() => undefined)
     }
+    // A cancelled research run stops without a delivery; advance its `@2` projection to `cancelled`
+    // so a reader never sees a live run that no worker owns (design §3).
+    await this.#recordTerminalResearch(input.runId, 'cancelled', input.reason, ctx)
     return this.#view(input.runId, ctx)
   }
 
@@ -383,8 +391,13 @@ export class WorkflowController {
         case 'awaiting_input':
         case 'blocked':
         case 'cancelling':
+          return this.#view(runId, ctx)
         case 'cancelled':
         case 'failed':
+          // The runtime ended the run without a delivery (cancelled / budget / deadline / provider
+          // failure). Record the same terminal verdict on the research projection before parking.
+          await this.#recordTerminalResearch(runId, run.state, run.cancelReason, ctx)
+          return this.#view(runId, ctx)
         case 'published':
           return this.#view(runId, ctx)
       }
@@ -1092,7 +1105,27 @@ export class WorkflowController {
 
   async #failUnsafeRecovery(run: RunRecord, reason: string, ctx: ToolContext): Promise<WorkflowView> {
     await this.#advance(run, 'failed', { cancelReason: reason }, ctx)
+    // A research run that dies here never reaches the completion delivery, so advance its `@2`
+    // projection to an honest terminal verdict instead of leaving it `running` forever (design §3).
+    await this.#recordTerminalResearch(run.runId, 'failed', reason, ctx)
     return this.#view(run.runId, ctx)
+  }
+
+  /**
+   * Advance the research projection of a run that ended without a delivery. It is a no-op for a
+   * non-research run or a host without the projection port, and it never overwrites a completion.
+   */
+  async #recordTerminalResearch(
+    runId: Uuid,
+    state: 'cancelled' | 'failed',
+    reason: string | undefined,
+    ctx: ToolContext,
+  ): Promise<void> {
+    const recordTerminal = this.#researchProjection?.recordTerminal
+    if (recordTerminal === undefined) return
+    if (this.#terminalRecorded.has(runId)) return
+    this.#terminalRecorded.add(runId)
+    await recordTerminal.call(this.#researchProjection, runId, state, reason, ctx)
   }
 
   async #appendEntries(

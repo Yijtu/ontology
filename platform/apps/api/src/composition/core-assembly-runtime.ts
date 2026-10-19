@@ -453,6 +453,10 @@ export async function assembleRuntimePipeline(
     researchProjection: {
       recordDelivery: (runId: Uuid, delivery: ResearchDelivery, ctx: ToolContext) =>
         workspaceResearchRunService.recordDelivery(runId, delivery, ctx),
+      // A run that dies in the worker or is cancelled never reaches `recordDelivery`; advance its
+      // `@2` projection to the same honest terminal verdict (design §3).
+      recordTerminal: (runId: Uuid, state: 'cancelled' | 'failed', reason: string | undefined, ctx: ToolContext) =>
+        workspaceResearchRunService.recordTerminal(runId, state, reason, ctx),
     },
     publicationFence: async (runId: Uuid) => dispatchFences.get(runId),
   }
