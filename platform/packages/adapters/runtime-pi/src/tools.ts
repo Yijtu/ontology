@@ -252,6 +252,16 @@ function renderResult(result: ToolResult): string {
   }
   const inline =
     result.inlineData === undefined ? '(no inline payload; read the archived dataRef)' : JSON.stringify(result.inlineData)
-  const preview = inline.length > INLINE_PREVIEW_CHARS ? `${inline.slice(0, INLINE_PREVIEW_CHARS)}…` : inline
-  return `status=${result.status} returned=${String(result.coverage.returned)} truncated=${String(result.coverage.truncated)}\n${preview}`
+  // A preview is not the payload. When it is cut, say so explicitly and name the way to page the
+  // rest, so the model never treats a truncated preview as the whole result (design §6: a truncation
+  // is always explicit, never silently read as complete).
+  const truncated = inline.length > INLINE_PREVIEW_CHARS
+  const preview = truncated ? inline.slice(0, INLINE_PREVIEW_CHARS) : inline
+  const header = `status=${result.status} returned=${String(result.coverage.returned)} truncated=${String(result.coverage.truncated)}`
+  const pageHint = truncated
+    ? `\npreview_truncated=true preview_chars=${String(preview.length)} payload_chars=${String(inline.length)};`
+      + ' the full payload is in the archived dataRef. Page further with document_search targetedRead'
+      + ' (cursor) for documents, or re-issue web_search with cursor for web results.'
+    : ''
+  return `${header}${pageHint}\n${preview}`
 }

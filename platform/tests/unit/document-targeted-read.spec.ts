@@ -143,6 +143,42 @@ describe('every returned span is bound to its locator and digests', () => {
     expect(item?.truncated).toBe(false)
     expect(item?.quoteDigest).toBe(sha256DigestOfText(clause.text))
     expect(item?.textDigest).toBe(item?.quoteDigest)
+    // A whole-chunk read exposes the exact staged span a candidate may cite, so the model never has
+    // to invent a chunk id/digest (design §6/§7).
+    expect(item?.candidateSpan).toEqual({
+      kind: 'text',
+      parseId: parsed.parseId,
+      chunkId: clause.chunkId,
+      locator: clause.locator,
+      spanKind: clause.spanKind,
+      precision: clause.precision,
+      quoteDigest: clause.quoteDigest,
+      textDigest: clause.textDigest,
+    })
+    expect(item?.textCoversChunk).toBe(true)
+  })
+
+  it('does not let a partial read claim the whole chunk as its evidence', async () => {
+    const harnessed = harness()
+    const parsed = await parsedTextDocument(harnessed)
+    const clause = parsed.chunks.find((chunk) => chunk.text.startsWith('3.1 '))
+    expect(clause).toBeDefined()
+    if (clause === undefined) return
+
+    const result = await harnessed.reader.read(
+      {
+        schemaVersion: 'document-targeted-read@1',
+        workspaceId: WORKSPACE,
+        // Read only the first 20 bytes of the chunk.
+        selections: [{ documentRef: parsed.originalRef, locator: { ...clause.locator, endOffset: (clause.locator.startOffset ?? 0) + 20 }, parseId: parsed.parseId }],
+        maxBytes: 4096,
+        limit: 4,
+      },
+      CTX,
+    )
+    const item = result.items[0]
+    expect(item?.candidateSpan?.chunkId).toBe(clause.chunkId)
+    expect(item?.textCoversChunk).toBe(false)
   })
 
   it('reports an unavailable selection explicitly rather than as empty success', async () => {

@@ -8,6 +8,7 @@ import type {
   Uuid,
 } from './generated/contracts'
 import { isRecord, isResourceRef, isSha256Digest, isUuid } from './asset-workspace'
+import type { TextCandidateSourceSpan } from './extraction'
 import type { ToolContext } from './trusted'
 
 /**
@@ -67,6 +68,18 @@ export interface DocumentTargetedReadItem {
   readonly truncated: boolean
   readonly indexState: DocumentTargetedReadIndexState
   readonly unavailableReason?: DocumentTargetedReadReason
+  /**
+   * The staged chunk that **contains** the returned text, shaped exactly like the
+   * `located_span` evidence a `submit_candidates` call may cite (design §6/§7). It lets the model
+   * reference a real chunk id/locator/digest it actually read instead of inventing one.
+   *
+   * `textCoversChunk` states whether the returned text is the whole chunk: when it is `false` the
+   * model has only read part of it, so citing the chunk claims more than it has seen and it must
+   * page the rest first. Absent when no staged chunk contains the returned span (for example a
+   * document whose parse has no chunks), never fabricated from a locator alone.
+   */
+  readonly candidateSpan?: TextCandidateSourceSpan
+  readonly textCoversChunk?: boolean
 }
 
 export interface DocumentTargetedReadUsage {

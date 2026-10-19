@@ -19,6 +19,7 @@ import {
 import type { RunProfileBinder, RunProfileBinding } from '@ontology/application'
 import type { QuestionRewriter } from '@ontology/application'
 import type { ResearchCandidateReceiptReader } from '@ontology/application'
+import type { ResearchDeliveryProjectionPort } from '@ontology/application'
 import type {
   AnswerPublisherPort,
   AnswerVerifierPort,
@@ -409,6 +410,8 @@ export function buildWorkflowHarness(options: {
   readonly limits?: Partial<WorkflowLimits>
   /** Mount a durable candidate-receipt reader (the research delivery reads it when present). */
   readonly researchReceipts?: ResearchCandidateReceiptReader
+  /** Mount the research projection port (completion delivery + terminal stop). */
+  readonly researchProjection?: ResearchDeliveryProjectionPort
 }): WorkflowHarness {
   const probe = options.probe ?? options.runtime.probe
   const store = new InMemoryRunStore()
@@ -472,6 +475,7 @@ export function buildWorkflowHarness(options: {
       ...(options.rewriter === undefined ? {} : { rewriter: options.rewriter }),
       ...(options.limits === undefined ? {} : { limits: options.limits }),
       ...(options.researchReceipts === undefined ? {} : { researchReceipts: options.researchReceipts }),
+      ...(options.researchProjection === undefined ? {} : { researchProjection: options.researchProjection }),
       now: fixedClock(),
       newId: () => randomUUID(),
     })

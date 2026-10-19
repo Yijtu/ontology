@@ -341,6 +341,8 @@ export function buildGateway(options: {
     artifacts,
     handlers: options.handlers.map((handler) => ({
       toolId: handler.toolId,
+      // Forward the declared research dimension so the harness exercises the real reservation path.
+      ...(handler.researchReservation === undefined ? {} : { researchReservation: handler.researchReservation }),
       execute: (request) => {
         log.push('execute')
         return handler.execute(request)
@@ -369,7 +371,13 @@ export function buildGateway(options: {
 export async function openGatewayLedger(
   harness: GatewayHarness,
   ctx: ToolContext,
-  overrideLimits?: { readonly maxToolCalls?: number; readonly maxRows?: number },
+  overrideLimits?: {
+    readonly maxToolCalls?: number
+    readonly maxRows?: number
+    readonly maxSearches?: number
+    readonly maxSources?: number
+    readonly maxCandidates?: number
+  },
 ): Promise<void> {
   await harness.budget.openLedger(
     {

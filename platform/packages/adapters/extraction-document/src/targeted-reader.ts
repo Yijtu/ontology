@@ -1,5 +1,6 @@
 import { isToolContext } from '@ontology/contracts'
 import type {
+  DocumentChunkRecord,
   DocumentParseRecord,
   DocumentParseStore,
   DocumentSpan,
@@ -10,6 +11,7 @@ import type {
   DocumentTargetedReaderPort,
   DocumentTargetedSelection,
   ScopeRef,
+  TextCandidateSourceSpan,
   ToolContext,
   Uuid,
 } from '@ontology/contracts'
@@ -220,6 +222,7 @@ export class DocumentTargetedReader implements DocumentTargetedReaderPort {
     }
     if (encoded.byteLength > maxBytes) {
       const preview = new TextDecoder('utf-8', { fatal: false }).decode(encoded.subarray(0, maxBytes))
+      const staged = await this.#candidateSpanFor(scope, record, locator, preview, ctx)
       return {
         item: {
           documentRef,
@@ -230,10 +233,12 @@ export class DocumentTargetedReader implements DocumentTargetedReaderPort {
           text: preview,
           truncated: true,
           indexState: await this.#indexState(scope, record, ctx),
+          ...(staged === undefined ? {} : { candidateSpan: staged.span, textCoversChunk: staged.coversChunk }),
         },
         continuedOffset: offset + preview.length,
       }
     }
+    const staged = await this.#candidateSpanFor(scope, record, locator, sliced, ctx)
     return {
       item: {
         documentRef,
@@ -244,8 +249,56 @@ export class DocumentTargetedReader implements DocumentTargetedReaderPort {
         text: sliced,
         truncated: false,
         indexState: await this.#indexState(scope, record, ctx),
+        ...(staged === undefined ? {} : { candidateSpan: staged.span, textCoversChunk: staged.coversChunk }),
       },
       continuedOffset: offset + sliced.length,
+    }
+  }
+
+  /**
+   * The staged chunk containing the returned text, shaped as the `located_span` evidence a
+   * `submit_candidates` call may cite (design §6/§7). It is resolved from the parse's real chunk
+   * records, never synthesised from a locator, so a model cannot cite a chunk id that does not
+   * exist. `coversChunk` is false when the returned text is only part of the chunk: the model must
+   * page the rest before claiming the whole chunk as its evidence.
+   */
+  async #candidateSpanFor(
+    scope: ScopeRef,
+    record: DocumentParseRecord,
+    locator: DocumentSpan['locator'],
+    text: string,
+    ctx: ToolContext,
+  ): Promise<{ readonly span: TextCandidateSourceSpan; readonly coversChunk: boolean } | undefined> {
+    if (text.length === 0) return undefined
+    let chunks: readonly DocumentChunkRecord[]
+    try {
+      chunks = await this.#store.listChunks(scope, record.parseId, ctx)
+    } catch {
+      // A chunk listing failure must not turn a readable span into an unreadable one; the caller
+      // simply gets no citable chunk instead of an invented one.
+      return undefined
+    }
+    const start = locator.startOffset ?? 0
+    const end = locator.endOffset ?? start + text.length
+    const chunk = chunks.find((entry) => {
+      const chunkStart = entry.locator.startOffset
+      const chunkEnd = entry.locator.endOffset
+      if (chunkStart === undefined || chunkEnd === undefined) return false
+      return start >= chunkStart && start < chunkEnd && end <= chunkEnd
+    })
+    if (chunk === undefined) return undefined
+    return {
+      span: {
+        kind: 'text',
+        parseId: record.parseId,
+        chunkId: chunk.chunkId,
+        locator: chunk.locator,
+        spanKind: chunk.spanKind,
+        precision: chunk.precision,
+        quoteDigest: chunk.quoteDigest,
+        textDigest: chunk.textDigest,
+      },
+      coversChunk: chunk.text === text,
     }
   }
 

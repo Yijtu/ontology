@@ -53,6 +53,7 @@ export type {
   ResearchCandidateReceiptReader,
   ResearchDelivery,
   ResearchDeliveryCandidateReceipt,
+  ResearchDeliveryProjectionPort,
   StartWorkflowInput,
   WorkflowControllerDependencies,
   WorkflowView,

@@ -226,6 +226,54 @@ export function initialResearchExecutionProjection(input: InitialResearchProject
   }
 }
 
+/**
+ * Advance an existing `@2` projection to a terminal stop that produced **no** delivery
+ * (design §3/§8: failed, cancelled, deadline/budget exhaustion).
+ *
+ * The completion path (`buildResearchExecutionProjection`) describes a run that ended by handing
+ * material to a human. A run that died in the worker, was cancelled by the user, or ran out of
+ * deadline/budget never reaches it — without this the row would stay `queued/running` forever and a
+ * reader would see a live run that no worker owns. The projection is *not* rebuilt from scratch:
+ * the frozen goal/brief/policy/budget/limits and whatever evidence and candidates were already
+ * persisted stay exactly as they were. Only the honest stop verdict changes, and the stage is kept
+ * at the phase the run actually died in rather than being relabelled `completed`.
+ */
+export interface TerminalResearchProjectionInput {
+  readonly projection: ResearchExecutionV2
+  readonly status: 'cancelled' | 'failed'
+  readonly stopReason: ResearchStopReason
+  readonly recordedAt: Rfc3339UtcTimestamp
+}
+
+export function terminalResearchExecutionProjection(input: TerminalResearchProjectionInput): ResearchExecutionV2 {
+  const { projection } = input
+  const humanTodos = projection.humanTodos.filter((todo) => todo.kind !== 'source_review' && todo.kind !== 'candidate_review')
+  return {
+    ...projection,
+    status: input.status,
+    // The run stopped where it stopped; a terminal failure is not the `completed` stage.
+    stage: projection.stage === 'completed' ? 'planning' : projection.stage,
+    humanTodos,
+    stopReason: input.stopReason,
+    recordedAt: input.recordedAt,
+  }
+}
+
+/**
+ * Map a terminal controller run onto the canonical research stop reason. The controller records a
+ * bounded, canonical reason on the run (`cancelReason`); an unrecognised value stays honest as
+ * `provider_failed` rather than being reported as a successful completion.
+ */
+export function stopReasonOfTerminalRun(state: 'cancelled' | 'failed', reason: string | undefined): ResearchStopReason {
+  if (state === 'cancelled') return 'cancelled'
+  const value = reason ?? ''
+  if (/deadline/i.test(value)) return 'deadline_exceeded'
+  if (/budget|quota|exhaust/i.test(value)) return 'budget_exhausted'
+  // Anything else is an unmapped execution failure. Reporting it as `partial_results` or
+  // `completed` would claim material the run never delivered.
+  return 'provider_failed'
+}
+
 /** Build the deterministic `research-execution@2` projection of a completed run. */
 export function buildResearchExecutionProjection(input: ResearchProjectionInput): ResearchExecutionV2 {
   const evidence = evidenceOf(input.evidenceRefs)

@@ -335,7 +335,10 @@ export class ToolGatewayService implements ToolGateway {
     const now = this.#now()
     const deadline = this.#deadline(ctx, limits, now)
 
-    // 3. atomic budget reservation (before any execution).
+    // 3. atomic budget reservation (before any execution). A research handler declares the research
+    // dimensions it is about to spend (a search, an archived source, read bytes) so they are reserved
+    // on the same ledger atomically and cannot be overspent by a retry or a second call (design §8).
+    const researchReservation = this.#handlerFor(definition.toolId).researchReservation?.(args) ?? {}
     const outcome = await this.#deps.budget.reserve(
       {
         ledgerId: this.#binding.ledgerId,
@@ -343,6 +346,7 @@ export class ToolGatewayService implements ToolGateway {
         toolCalls: 1,
         parallel: true,
         rows: estimatedReservationRows(args, limits),
+        ...researchReservation,
         requiresIntent: true,
         requestedDeadline: deadline,
       },
@@ -487,7 +491,9 @@ export class ToolGatewayService implements ToolGateway {
       bytes: payloadBytes.byteLength,
       calls: 1,
     }
-    // 7. settle with the persisted evidence references.
+    // 7. settle with the persisted evidence references and the measured research dimensions. A
+    // dimension the handler did not report keeps its reserved amount; the count dimensions are
+    // monotonic, so a replayed/restarted call can never buy more of one.
     try {
       await this.#deps.budget.settle(
         {
@@ -495,6 +501,7 @@ export class ToolGatewayService implements ToolGateway {
           reservationId: reservation.reservationId,
           status: 'completed',
           usage,
+          ...(result.researchUsage === undefined ? {} : { measured: result.researchUsage }),
           evidenceRefs: lineageRefs,
         },
         ctx,

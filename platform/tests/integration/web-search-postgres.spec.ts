@@ -266,6 +266,16 @@ describe('real end-to-end web_search against PostgreSQL and blob-local', () => {
       [TENANT_A, SPACE_A, LEDGER_A],
     )
     expect(reservation.rows[0]?.status).toBe('settled')
+
+    // The call really metered its research dimensions on the one ledger: one search was spent, and
+    // a link-only discovery was never charged as an archived source (design §8, S06).
+    const dimensions = await adminClient.query<{ searches_consumed: number; sources_consumed: number }>(
+      `SELECT searches_consumed, sources_consumed FROM agent_platform.budget_ledgers
+        WHERE tenant_id = $1 AND space_id = $2 AND ledger_id = $3`,
+      [TENANT_A, SPACE_A, LEDGER_A],
+    )
+    expect(dimensions.rows[0]?.searches_consumed).toBe(1)
+    expect(dimensions.rows[0]?.sources_consumed).toBe(0)
   })
 
   it('archives an injection page as untrusted evidence without changing authority', async () => {
