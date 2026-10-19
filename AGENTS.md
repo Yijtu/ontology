@@ -86,6 +86,6 @@ pnpm run test
 - **UI 测试 harness 的 teardown 与 vitest hook 预算（2026-10，main CI 反复红）**：`tests/ui/*.spec.ts` 的 afterEach 会 `unmount` 再 `await app.close()`；harness 起的 Fastify app 与用全局 fetch 的 client 之间的 **keep-alive 连接会让 `app.close()` 卡住**，表现为 `Hook timed out in Nms`。本机单文件常通过、CI 满载时触发，**不要据此只当 flaky 去加超时**。
   - 规则：① `vitest.config.ts` 的 `unit` 项目（含 `tests/ui`）也要显式设 `hookTimeout`，与 integration/load/acceptance 一致，不依赖 vitest 默认 10s；② 测试 harness 用 `createApiServer({ forceCloseConnections: true })`，让 `app.close()` 直接关闭活连接（仅测试 harness，生产默认不变）。
   - 排查：CI 出现 `tests/ui/query.spec.ts > … Hook timed out` 时，先确认是不是 `app.close()` 被 keep-alive 卡住，而不是单纯调大超时。
-- **CI 的 `Preload PostgreSQL 17 test image` 失败（2026-10）**：步骤从 `public.ecr.aws` 拉 `postgres:17`，出现 `toomanyrequests` / `Rate exceeded` / `Data limit exceeded` 时是镜像仓库限流，与代码无关；等限流恢复后重跑即可，不要改代码或测试去"修"。
+- **CI 的 `Preload PostgreSQL 17 test image` 失败（2026-10）**：镜像仓库匿名拉取有配额，`toomanyrequests` / `Rate exceeded` / `Data limit exceeded` 属于仓库限流，与代码无关。步骤现在按 `mirror.gcr.io` → `public.ecr.aws` → `docker.io` 依次回退，每个源重试 3 次并退避，全部失败才报错——限流会被自动吸收，不必改代码或测试去"修"。若三个源同时被限流仍然红，等配额恢复后重跑即可。
 
 本文件随工程约束演进，只保留稳定规则。只有模块出现长期独有要求时才增加局部 `AGENTS.md`，不重复整份 PRD/SPEC，也不维护多份相同约定。
