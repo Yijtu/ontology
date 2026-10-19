@@ -46,9 +46,33 @@ jobs:
       - name: Preload PostgreSQL 17 test image
         shell: bash
         run: |
-          docker pull public.ecr.aws/docker/library/postgres:17
-          docker tag public.ecr.aws/docker/library/postgres:17 postgres:17
-          postgres_version="$(docker run --rm --tmpfs /var/lib/postgresql/data --entrypoint postgres postgres:17 --version)"
+          set -uo pipefail
+          target='postgres:17'
+          sources=(
+            'mirror.gcr.io/library/postgres:17'
+            'public.ecr.aws/docker/library/postgres:17'
+            'docker.io/library/postgres:17'
+          )
+          max_attempts=3
+          pulled=''
+          for source in "${sources[@]}"; do
+            for attempt in $(seq 1 "$max_attempts"); do
+              printf 'pulling %s (attempt %d/%d)\n' "$source" "$attempt" "$max_attempts"
+              if docker pull "$source"; then
+                pulled="$source"
+                break 2
+              fi
+              sleep $((attempt * 15))
+            done
+            printf '::warning::failed to pull %s from every attempt; trying next source\n' "$source"
+          done
+          if [ -z "$pulled" ]; then
+            echo 'unable to pull postgres:17 from any known registry' >&2
+            exit 1
+          fi
+          printf 'using %s as %s\n' "$pulled" "$target"
+          docker tag "$pulled" "$target"
+          postgres_version="$(docker run --rm --tmpfs /var/lib/postgresql/data --entrypoint postgres "$target" --version)"
           printf '%s\n' "$postgres_version"
           case "$postgres_version" in
             "postgres (PostgreSQL) 17."*) ;;
