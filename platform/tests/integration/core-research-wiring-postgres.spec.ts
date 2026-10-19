@@ -427,6 +427,31 @@ describe('the default research entry runs the real agentic chain (S10)', () => {
     const background = await admin!.query<{ count: string }>("SELECT count(*)::text AS count FROM agent_platform.budget_ledgers WHERE run_id = $1::uuid AND kind = 'background'", [body.data.researchId])
     expect(background.rows[0]?.count).toBe('0')
 
+    // The real run spent the research dimensions on that one ledger (design §8, S06): the search
+    // call, the model round and the archived source are metered, not just reported in the projection.
+    const dimensions = await admin!.query<{
+      searches_consumed: number
+      model_rounds_consumed: number
+      sources_consumed: number
+      candidates_consumed: number
+    }>(
+      `SELECT searches_consumed, model_rounds_consumed, sources_consumed, candidates_consumed
+         FROM agent_platform.budget_ledgers WHERE run_id = $1::uuid`,
+      [runId],
+    )
+    const metered = dimensions.rows[0]
+    expect(metered?.searches_consumed).toBeGreaterThanOrEqual(1)
+    expect(metered?.model_rounds_consumed).toBeGreaterThanOrEqual(1)
+    expect(metered?.sources_consumed).toBeGreaterThanOrEqual(1)
+    expect(metered?.candidates_consumed).toBeGreaterThanOrEqual(1)
+    // The projection's usage reports the ledger's measured dimensions, not a separately invented
+    // number (archived snapshots stay the evidence count, which the source ceiling also bounds).
+    expect(delivered['usage']).toMatchObject({
+      searchCalls: metered?.searches_consumed,
+      modelTurns: metered?.model_rounds_consumed,
+      candidatesSubmitted: metered?.candidates_consumed,
+    })
+
     // The run used the workspace research model binding and the workspace web_search tool binding.
     const modelBindings = await admin!.query<{ capability: string }>('SELECT capability FROM agent_platform.execution_model_bindings WHERE execution_id = $1::uuid', [runId])
     expect(modelBindings.rows.map((row) => row.capability)).toContain('research')

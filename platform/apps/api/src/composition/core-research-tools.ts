@@ -240,6 +240,9 @@ export function createResearchDocumentSearchHandler(
           sources: [{ sourceRef, schemaVersion: RESEARCH_SET_SOURCE_SCHEMA, consistency: 'read_time' }],
           dataMode: 'observed',
           usage: { bytes: result.usage.bytes },
+          // The targeted read's bytes are a research dimension of their own (`maxReadBytes`); the
+          // classic `bytes` ceiling above is charged by the gateway separately, never twice.
+          researchUsage: { readBytes: result.usage.bytes },
         }
       }
 
@@ -301,6 +304,7 @@ export function createResearchDocumentSearchHandler(
         sources: [{ sourceRef, schemaVersion: RESEARCH_SET_SOURCE_SCHEMA, consistency: 'read_time' }],
         dataMode: 'observed',
         usage: { bytes: scannedBytes },
+        researchUsage: { readBytes: scannedBytes },
       }
     },
   }
@@ -332,6 +336,11 @@ export interface ResearchWebSearchHandlerDependencies {
 export function createResearchWebSearchHandler(dependencies: ResearchWebSearchHandlerDependencies): ToolHandler {
   return {
     toolId: 'web_search',
+    // The wrapper is what the gateway registers, so it must declare the same research dimension the
+    // inner handler spends; otherwise the search would never be reserved on the run's ledger.
+    ...(dependencies.inner.researchReservation === undefined
+      ? {}
+      : { researchReservation: dependencies.inner.researchReservation }),
     async execute(request: ToolExecutionRequest): Promise<ToolExecutionOutcome> {
       const resolution = await dependencies.context.resolve(dependencies.runId, request.ctx).catch((error: unknown) => {
         throw blockedContextError(error)

@@ -7,6 +7,7 @@ import type {
   OperationRegistry,
   PublicExecutionConfig,
   Rfc3339UtcTimestamp,
+  ResearchUsageDimensions,
   ResourceRef,
   ResultLimits,
   SourceRef,
@@ -116,6 +117,13 @@ export interface ToolExecutionOutcome {
   readonly supportEvidenceRefs?: readonly ResourceRef[]
   /** Valid-time window shared by every business fact in this result, when the source provides one. */
   readonly validity?: ValidityInterval
+  /**
+   * Research dimensions this call actually spent, measured after execution (design §8, S06).
+   * The gateway reserves `ToolHandler.reservationResearchUsage` before the call and settles these
+   * measured amounts afterwards, so a dimension is charged to the one shared ledger by the call
+   * that spent it. An omitted dimension keeps its reserved amount.
+   */
+  readonly researchUsage?: Partial<ResearchUsageDimensions>
 }
 
 /**
@@ -126,6 +134,15 @@ export interface ToolExecutionOutcome {
  */
 export interface ToolHandler {
   readonly toolId: ToolId
+  /**
+   * Research dimensions this handler will spend, computed from the call's arguments, declared
+   * before the call so the gateway can reserve them atomically on the run's one ledger (design §8,
+   * S06). Only a research dimension a handler actually owns belongs here; `toolCalls`/`rows`/`bytes`/
+   * model units keep their own existing owner, so nothing is double-charged.
+   */
+  readonly researchReservation?: (
+    callArguments: Readonly<Record<string, unknown>>,
+  ) => Partial<ResearchUsageDimensions>
   execute(request: ToolExecutionRequest): Promise<ToolExecutionOutcome>
 }
 

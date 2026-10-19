@@ -416,4 +416,39 @@ describe('budget is shared and monotonic across attempts', () => {
     expect(afterSecond?.consumed.toolCalls).toBe(2)
     expect(afterSecond?.consumed.toolCalls).toBeGreaterThan(afterFirst?.consumed.toolCalls ?? 0)
   })
+
+  it('meters one search per call and only archived pages as sources', async () => {
+    const ctx = webContext()
+    const provider = new HttpWebSearchProvider({ baseUrl: fixture.baseUrl })
+    // The fixture has no archiver wired, so its page is a link-only discovery.
+    fixture.setScenario(scenarioWith([SAFE_PAGE]))
+    const handler = handlerFor({ ctx, provider, allowWeb: true })
+    const harness = harnessFor(handler, ctx)
+    await openGatewayLedger(harness, ctx)
+    const scope = { tenantId: ctx.principal.tenantId, spaceId: ctx.allowedResources.spaceId }
+
+    await harness.gateway.invoke(webCall(), ctx)
+    const ledger = await harness.ledgerStore.getLedger(scope, GATEWAY_LEDGER, ctx)
+    expect(ledger?.consumed.searches).toBe(1)
+    // A discovery-only link was never downloaded, so it must not be charged as a source.
+    expect(ledger?.consumed.sources).toBe(0)
+  })
+
+  it('refuses a search that would exceed the run search ceiling', async () => {
+    const ctx = webContext()
+    const provider = new HttpWebSearchProvider({ baseUrl: fixture.baseUrl })
+    fixture.setScenario(scenarioWith([SAFE_PAGE]))
+    const handler = handlerFor({ ctx, provider, allowWeb: true })
+    const harness = harnessFor(handler, ctx)
+    await openGatewayLedger(harness, ctx, { maxSearches: 1 })
+    const requestsBefore = fixture.requests.length
+
+    const first = await harness.gateway.invoke(webCall(), ctx)
+    expect(first.status).toBe('ok')
+    // A second call would spend a second search; the ledger denies it before the provider runs.
+    const second = await harness.gateway.invoke(webCall({ query: 'heat pump tariff 2026' }), ctx)
+    expect(second.status).toBe('error')
+    expect(second.error?.code).toBe('BUDGET_EXHAUSTED')
+    expect(fixture.requests.length).toBe(requestsBefore + 1)
+  })
 })

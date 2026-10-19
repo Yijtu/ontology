@@ -2,6 +2,7 @@ import { ERROR_CATALOG, toWebSearchToolPage } from '@ontology/contracts'
 import type {
   ErrorCode,
   PublicExecutionConfig,
+  ResearchUsageDimensions,
   Rfc3339UtcTimestamp,
   Semver,
   SourceRef,
@@ -104,6 +105,12 @@ function readStringArray(value: unknown): string[] | undefined {
  */
 export class WebSearchHandler implements ToolHandler {
   readonly toolId: ToolId = 'web_search'
+  /**
+   * One `web_search` call spends exactly one public search. The search is reserved before the
+   * provider is called so a run cannot exceed `maxSearches` by retrying; the archived-source count is
+   * measured after the call and reconciled on settlement.
+   */
+  readonly researchReservation = (): Partial<ResearchUsageDimensions> => ({ searches: 1 })
   readonly #provider: WebSearchProvider | undefined
   readonly #enablement: WebSearchEnablement
   readonly #sourceRef: SourceRef
@@ -214,6 +221,11 @@ export class WebSearchHandler implements ToolHandler {
     ]
 
     const payload: WebSearchToolOutput = { pages }
+    // Only archived pages become sources on the one ledger; a discovery-only link was never
+    // downloaded, so it is never charged as a source. Downloaded bytes stay at their reserved
+    // amount: the provider page does not report archived byte sizes, so inventing one would be a
+    // fabricated measurement rather than an honest zero.
+    const archived = pages.filter((page) => page.discovery === 'archived').length
     return {
       payload,
       status,
@@ -229,6 +241,7 @@ export class WebSearchHandler implements ToolHandler {
       sources: observations,
       evidenceKind: 'web_page',
       dataMode: 'observed',
+      researchUsage: { searches: 1, sources: archived },
       ...(warnings.length === 0 ? {} : { warnings }),
     }
   }
