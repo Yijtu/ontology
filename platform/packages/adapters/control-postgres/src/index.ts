@@ -94,3 +94,4 @@ export { PostgresExecutionConnectionSnapshotStore } from './execution-connection
 export { PostgresToolSettingsMigrationStore } from './tool-settings-migration-store'
 export { PostgresWorkspaceResearchRunConfigStore } from './workspace-research-run-config-store'
 export { PostgresResearchRunAdmissionStore } from './research-run-admission-store'
+export { PostgresResearchAcceptanceJournal } from './research-acceptance-journal'

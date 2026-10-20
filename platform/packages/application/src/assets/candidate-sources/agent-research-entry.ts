@@ -2,8 +2,11 @@ import {
   ResearchError,
   isToolContext,
 } from '@ontology/contracts'
+import { canonicalJson } from '../../profiles/canonical'
+import { sha256DigestOf } from '../../profiles/canonical'
 import type {
   IndustryWorkspaceStore,
+  ResearchAcceptanceJournal,
   ResearchExecutionAny,
   ResearchExecutionStore,
   ResearchRequest,
@@ -57,6 +60,13 @@ export interface AgentResearchRunEntryDependencies {
    * gate before admitting a new agentic run so a half-configured host never starts one.
    */
   readonly assertCapabilities: (workspaceId: Uuid, ctx: ToolContext) => Promise<void>
+  /**
+   * The durable acceptance journal (design §10). When mounted, the engine that accepted a research
+   * request is a recorded fact rather than something inferred from "an `@1` projection exists", so
+   * two concurrent submissions — including across a restart/switch — resolve to exactly one engine
+   * and the loser reuses the winner's run instead of starting a second one.
+   */
+  readonly journal?: ResearchAcceptanceJournal
   readonly now?: () => string
 }
 
@@ -77,6 +87,20 @@ export class AgentResearchRunEntry implements ResearchRunEntry {
 
   async start(request: ResearchRequest, ctx: ToolContext, linkage?: ResearchContinuationLinkage): Promise<ResearchExecutionAny> {
     const scope = scopeOf(ctx)
+    // (0) The acceptance journal is the single engine-ownership fact (design §10). A request this
+    // host already accepted is replayed on the engine that accepted it — never migrated onto the
+    // other engine by a switch flip, and never accepted twice by two concurrent submissions.
+    const journal = this.#deps.journal
+    if (journal !== undefined) {
+      const accepted = await journal.findByIdempotencyKey(scope, request.idempotencyKey, ctx)
+      if (accepted !== undefined) {
+        if (accepted.engine === 'legacy') return this.#deps.legacy.start(request, ctx, linkage)
+        if (accepted.runId !== undefined) {
+          await this.#deps.dispatch.enqueue({ runId: accepted.runId, logicalActionId: 'initial-drive' }, ctx)
+        }
+        return this.#requireExecution(scope, accepted.researchId, ctx)
+      }
+    }
     // (1) A replay of an already-admitted agentic run: re-arm the same dispatch, never a second run.
     const admitted = await this.#deps.admissions.findByIdempotencyKey(scope, request.idempotencyKey, ctx)
     if (admitted !== undefined) {
@@ -86,10 +110,33 @@ export class AgentResearchRunEntry implements ResearchRunEntry {
     // (2) A replay of a request already accepted by the legacy engine keeps the legacy engine.
     const legacyId = researchIdForRequest(request)
     const legacy = await this.#deps.executions.getExecution(scope, legacyId, ctx)
-    if (legacy !== undefined) return this.#deps.legacy.start(request, ctx, linkage)
+    if (legacy !== undefined) {
+      if (journal !== undefined) {
+        await journal.record(scope, {
+          researchId: legacyId,
+          engine: 'legacy',
+          requestDigest: sha256DigestOf(canonicalJson({ kind: 'research-acceptance@1', request, legacy: true })),
+          idempotencyKey: request.idempotencyKey,
+          acceptedAt: this.#now(),
+        }, ctx)
+      }
+      return this.#deps.legacy.start(request, ctx, linkage)
+    }
     // (3) A genuinely new request: confirm the capabilities, then admit it to V2.
     await this.#deps.assertCapabilities(request.workspaceId, ctx)
     const result = await this.#deps.agent.accept(await this.#admissionRequestFor(request, ctx), ctx)
+    if (journal !== undefined) {
+      // Written after the admission exists: the journal names the engine that actually owns the run.
+      // A concurrent loser gets `created: false` with the winner's row and reuses the same run.
+      await journal.record(scope, {
+        researchId: result.researchId,
+        runId: result.runId,
+        engine: 'agentic',
+        requestDigest: sha256DigestOf(canonicalJson({ kind: 'research-acceptance@1', request, legacy: false })),
+        idempotencyKey: request.idempotencyKey,
+        acceptedAt: this.#now(),
+      }, ctx)
+    }
     return this.#requireExecution(scope, result.researchId, ctx)
   }
 

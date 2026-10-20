@@ -123,7 +123,13 @@ export function createSourceAdmissionPorts(options: CoreSourceAdmissionOptions):
     async bind(input, ctx): Promise<SourceAdmissionBinding> {
       const scope = scopeOf(ctx)
       const digest = sha256DigestOfBytes(input.bytes)
-      const documentRef = await stableDocument(`source-document:${digest}`, input.bytes, input.mediaType, ctx)
+      // A reviewed source that already pins a readable `document` keeps that identity: admission is
+      // not a second document. Re-minting a deterministic id for the same bytes would make the
+      // admitted source ref differ from the ref every candidate already cites, so a candidate could
+      // never be re-grounded against the corpus it was actually built from (R09).
+      const documentRef = input.contentRef.kind === 'document'
+        ? input.contentRef
+        : await stableDocument(`source-document:${digest}`, input.bytes, input.mediaType, ctx)
       if (TABLE_MEDIA_TYPES.includes(input.mediaType)) {
         const parsed = await new LocalStructuredIngestionService({ blobs, store: options.structured })
           .parse({ scopeRef: scope, originalRef: documentRef, options: input.parseOptions ?? {} }, ctx)

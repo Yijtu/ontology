@@ -596,6 +596,60 @@ describe('real-PostgreSQL research budget dimensions', () => {
     expect((await service.remaining(ledgerId, CONTEXT_A)).candidatesRemaining).toBe(0)
   })
 
+  it('returns unused candidate units to the same ledger when the caller measured exactly', async () => {
+    const ledgerId = randomUUID()
+    await service.openLedger(
+      { ledgerId, kind: 'run', overrideLimits: { maxCandidates: 3 }, runId: RUN_A },
+      CONTEXT_A,
+    )
+    // A command reserves three units but only one candidate is written.
+    const reserved = requireReservation(
+      await service.reserve({ ledgerId, idempotencyKey: 'pg-cand-refund-0001', toolCalls: 0, candidates: 3 }, CONTEXT_A),
+    )
+    await service.settle(
+      {
+        ledgerId, reservationId: reserved.reservationId, status: 'completed',
+        usage: { durationMs: 1 }, measured: { candidates: 1 }, refundUnused: true, evidenceRefs: [evidenceRef()],
+      },
+      CONTEXT_A,
+    )
+    const row = await adminClient.query<{ candidates_consumed: number }>(
+      `SELECT candidates_consumed FROM agent_platform.budget_ledgers
+        WHERE tenant_id = $1 AND space_id = $2 AND ledger_id = $3`,
+      [SCOPE_A.tenantId, SCOPE_A.spaceId, ledgerId],
+    )
+    expect(row.rows[0]?.candidates_consumed).toBe(1)
+    expect((await service.remaining(ledgerId, CONTEXT_A)).candidatesRemaining).toBe(2)
+  })
+
+  it('gives back a rolled-back reservation in full and frees the ceiling', async () => {
+    const ledgerId = randomUUID()
+    await service.openLedger(
+      { ledgerId, kind: 'run', overrideLimits: { maxCandidates: 2 }, runId: RUN_A },
+      CONTEXT_A,
+    )
+    const reserved = requireReservation(
+      await service.reserve({ ledgerId, idempotencyKey: 'pg-cand-release-0001', toolCalls: 1, candidates: 2 }, CONTEXT_A),
+    )
+    const settled = await service.settle(
+      {
+        ledgerId, reservationId: reserved.reservationId, status: 'cancelled',
+        usage: { durationMs: 0 }, evidenceRefs: [], release: true,
+      },
+      CONTEXT_A,
+    )
+    expect(settled.reservation.status).toBe('abandoned')
+    const row = await adminClient.query<{ candidates_consumed: number; tool_calls_consumed: number }>(
+      `SELECT candidates_consumed, tool_calls_consumed FROM agent_platform.budget_ledgers
+        WHERE tenant_id = $1 AND space_id = $2 AND ledger_id = $3`,
+      [SCOPE_A.tenantId, SCOPE_A.spaceId, ledgerId],
+    )
+    expect(row.rows[0]?.candidates_consumed).toBe(0)
+    expect(row.rows[0]?.tool_calls_consumed).toBe(0)
+    // The released ceiling is usable again: two new candidates fit.
+    expect((await service.reserve({ ledgerId, idempotencyKey: 'pg-cand-release-0002', toolCalls: 0, candidates: 2 }, CONTEXT_A)).granted).toBe(true)
+  })
+
   it('pins the accepted absolute deadline and never slides it on a later open', async () => {
     const ledgerId = randomUUID()
     const deadline = '2030-06-01T00:00:00Z'

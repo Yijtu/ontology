@@ -14,6 +14,8 @@ export {
   planSettlement,
   propagateDeadline,
   reconcileConsumption,
+  reconcileMeasured,
+  releaseConsumption,
 } from './arithmetic'
 export type {
   ReservationPlan,

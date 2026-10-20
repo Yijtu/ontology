@@ -203,7 +203,10 @@ export class PostgresRunStore implements RunStore {
            $1, $2, $3, $4, $5, $6::jsonb, $7, $8::jsonb, $9::jsonb, 'created', 1, $10, $11,
            $13::jsonb, $12::timestamptz, $12::timestamptz
          )
-         ON CONFLICT (tenant_id, space_id, idempotency_key) DO NOTHING
+         -- A deterministic research run id is derived from the request digest, so two concurrent
+         -- submissions of one request collide on the PRIMARY KEY as well as on the idempotency key.
+         -- Both are the same logical claim, so either conflict resolves to the stored run.
+         ON CONFLICT DO NOTHING
          RETURNING ${RUN_COLUMNS}`,
         [
           record.runId,
@@ -224,22 +227,24 @@ export class PostgresRunStore implements RunStore {
       const row = inserted.rows[0]
       if (row !== undefined) return { run: toRunRecord(row), inserted: true }
 
+      // The row already exists under this idempotency key or this deterministic run id. Both name the
+      // same logical run, so read it back by either and refuse only a genuinely different payload.
       const existing = await query.query<RunRow>(
         `SELECT ${RUN_COLUMNS}
            FROM agent_platform.runs
           WHERE tenant_id = current_setting('app.tenant_id')::uuid
             AND space_id = current_setting('app.space_id')::uuid
-            AND idempotency_key = $1`,
-        [record.idempotencyKey],
+            AND (idempotency_key = $1 OR run_id = $2::uuid)`,
+        [record.idempotencyKey, record.runId],
       )
       const existingRow = existing.rows[0]
       if (existingRow === undefined) {
         throw new RunStoreError('RUN_NOT_FOUND', 'the idempotency claim references a missing run')
       }
-      if (existingRow.request_digest !== record.requestDigest) {
+      if (existingRow.request_digest !== record.requestDigest || existingRow.idempotency_key !== record.idempotencyKey) {
         throw new RunStoreError(
           'IDEMPOTENCY_CONFLICT',
-          'the idempotency key was already used with a different payload',
+          'the idempotency key or run id was already used with a different payload',
         )
       }
       return { run: toRunRecord(existingRow), inserted: false }

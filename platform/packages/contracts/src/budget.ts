@@ -247,6 +247,10 @@ export interface AtomicSettleRequest {
    */
   readonly measured?: Partial<ResearchUsageDimensions>
   readonly evidenceRefs: readonly ResourceRef[]
+  /** See {@link BudgetSettlementInput.release}: return a still-`reserved` reservation untouched. */
+  readonly release?: boolean
+  /** See {@link BudgetSettlementInput.refundUnused}: reconcile the measured count dimensions down. */
+  readonly refundUnused?: boolean
 }
 
 export interface AtomicSettleOutcome {
@@ -368,6 +372,25 @@ export interface BudgetSettlementInput {
   readonly usage: ToolUsage
   readonly measured?: Partial<ResearchUsageDimensions>
   readonly evidenceRefs: readonly ResourceRef[]
+  /**
+   * Release the whole reservation as if it was never taken.
+   *
+   * Only valid while the reservation is still `reserved`: it exists for a write that was reserved
+   * and then rolled back (an atomic commit that failed before writing anything), where charging the
+   * count dimensions would permanently burn quota for a candidate/source that does not exist.
+   * A reservation that already started (`running`) or reached a terminal state is never released —
+   * an unknown remote effect keeps its hold.
+   */
+  readonly release?: boolean
+  /**
+   * Reconcile the count dimensions **down** to the measured amount.
+   *
+   * The default is monotonic: a search/round/source/candidate that happened stays charged even if
+   * the settlement measures less. A caller that knows exactly how many rows it wrote (the candidate
+   * commit) sets this so units it reserved but never wrote are returned instead of burning the
+   * ceiling. It never applies to a dimension the caller did not measure.
+   */
+  readonly refundUnused?: boolean
 }
 
 /**
