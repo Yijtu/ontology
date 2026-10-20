@@ -81,6 +81,11 @@ pnpm run test
     diskpart /s compact.txt   # compact.txt: select vdisk file="...\docker_data.vhdx" / attach vdisk readonly / compact vdisk / detach vdisk
     ```
     或改用 Docker Desktop 的稀疏磁盘设置。压缩前先确认 `docker system df` 已无可回收空间。
+- **测试容器在中断后残留（2026-10，残留 22 个容器，Docker 近乎无响应）**：`docker run --rm` 只在**容器自身退出**时删除；vitest 进程被 Ctrl+C、超时或强杀后，容器会一直运行。反复中断长测试会累积 Postgres 实例，占满内存并把 Docker 拖到每次调用都卡住。
+  - 规则：测试容器必须在**进程退出**时也清理，不能只依赖 `--rm` 或 `afterAll`（被杀的进程不会跑 `afterAll`）。
+  - 现状：`platform/tests/integration/postgres-container.ts` 维护 `liveContainers` 并在 `exit`/`SIGINT`/`SIGTERM`/`SIGHUP` 钩子里同步 `docker rm -f -v` + `docker volume rm -f`。
+  - 排查：`docker ps --format "{{.Names}}" | Select-String "ontology-pg-"`；清理时**保留** `ontology-core-demo-postgres-1`、`ai-cost-engineer-db-1` 等真实服务容器，只删 `^ontology-pg-` 与 `^aice-pg-` 前缀的测试容器。
+  - 另：容器密集的用例在并行负载下会贴着超时线，单测超时给足（competency 25-gold、core-first-active-evolution 用 600s），且预算账本要按**宿主执行死线**开户，不要用默认 120s。
 - **并行测试的固定超时与模块加载期时间**：容器密集并行时 5s 默认超时会误报（见 LOCAL-065/068）。集成测试用显式超时与受控并发；时间相关的测试上下文必须在 `beforeAll`/用例内**相对当前时刻**构造，不要在模块加载时算固定偏移。
 
 - **UI 测试 harness 的 teardown 与 vitest hook 预算（2026-10，main CI 反复红）**：`tests/ui/*.spec.ts` 的 afterEach 会 `unmount` 再 `await app.close()`；harness 起的 Fastify app 与用全局 fetch 的 client 之间的 **keep-alive 连接会让 `app.close()` 卡住**，表现为 `Hook timed out in Nms`。本机单文件常通过、CI 满载时触发，**不要据此只当 flaky 去加超时**。

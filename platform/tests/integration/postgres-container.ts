@@ -1,4 +1,4 @@
-import { execFile } from 'node:child_process'
+import { execFile, execFileSync } from 'node:child_process'
 import { randomBytes } from 'node:crypto'
 import { setTimeout as delay } from 'node:timers/promises'
 import { promisify } from 'node:util'
@@ -23,7 +23,48 @@ const execFileAsync = promisify(execFile)
  */
 const HARNESS_LABEL = 'ontology.test-harness=postgres'
 
+/**
+ * Containers this process started and has not torn down yet.
+ *
+ * PITFALL (observed 2026-10, 22 leaked containers + ~4 GB volumes, Docker almost unresponsive):
+ * `docker run --rm` only removes a container when the container *itself* stops. If the vitest
+ * process is killed (Ctrl+C, an interrupted run, a hard timeout) the container keeps running
+ * forever, so repeated interrupted runs pile up Postgres instances until the daemon and the host
+ * memory are exhausted. Tracking them lets a process-exit hook tear down whatever a killed run
+ * left behind.
+ */
+const liveContainers = new Map<string, string>()
+
+let exitHookInstalled = false
+
+function installExitHook(): void {
+  if (exitHookInstalled) return
+  exitHookInstalled = true
+  const teardown = (): void => {
+    for (const [containerName, volumeName] of liveContainers) {
+      // Synchronous and best-effort: the process is already exiting, so nothing may await here.
+      // `docker rm -f -v` also removes the named volume's container attachment; the volume itself
+      // is removed by the next `sweepOrphanedPostgresVolumes` or by `stop()`.
+      try {
+        execFileSync('docker', ['rm', '-f', '-v', containerName], { stdio: 'ignore' })
+        execFileSync('docker', ['volume', 'rm', '-f', volumeName], { stdio: 'ignore' })
+      } catch {
+        // Best-effort only; the labelled volume is still reclaimable by the sweep.
+      }
+    }
+    liveContainers.clear()
+  }
+  process.once('exit', teardown)
+  for (const signal of ['SIGINT', 'SIGTERM', 'SIGHUP'] as const) {
+    process.once(signal, () => {
+      teardown()
+      process.exit(130)
+    })
+  }
+}
+
 async function removeContainerAndVolume(containerName: string, volumeName: string): Promise<void> {
+  liveContainers.delete(containerName)
   await execFileAsync('docker', ['rm', '-f', '-v', containerName]).catch(() => undefined)
   await execFileAsync('docker', ['volume', 'rm', '-f', volumeName]).catch(() => undefined)
 }
@@ -142,6 +183,7 @@ async function selectImage(): Promise<string> {
  * and live only in this process.
  */
 export async function startPostgresContainer(): Promise<PostgresContainer> {
+  installExitHook()
   const image = await selectImage()
   const suffix = `${process.pid}-${randomBytes(4).toString('hex')}`
   const containerName = `ontology-pg-${suffix}`
@@ -172,6 +214,7 @@ export async function startPostgresContainer(): Promise<PostgresContainer> {
       `${host}::5432`,
       image,
     ])
+    liveContainers.set(containerName, volumeName)
   } catch (error) {
     await removeContainerAndVolume(containerName, volumeName)
     throw new Error('could not start the throwaway PostgreSQL container (is Docker running?)', {

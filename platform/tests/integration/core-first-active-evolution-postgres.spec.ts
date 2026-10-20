@@ -82,7 +82,7 @@ describe('normal first query during a genuine staged ontology upgrade (real PG/H
       expect(fragment['cells']).toContainEqual(expect.objectContaining({ raw: expectedRaw, columnLabel: column['semanticPredicate'], locator: expect.objectContaining({ address }) }))
     }
     expect(f.workerErrors).toEqual([])
-  }, 300_000)
+  }, 600_000)
 
   it('seals P1 before staging without any prior query, keeps first old-active formal output and later activates independently reviewed P2', async () => {
     const project = await createFirstActiveProject(f, p1, '首次旧生效查询的合成证明'), upgrade = await startUpgrade(project)
@@ -135,7 +135,7 @@ describe('normal first query during a genuine staged ontology upgrade (real PG/H
     const history = await f.call(`/api/v1/runs/${old.runId}/answer/history`)
     expect(actualArray(history['entries'])).toContainEqual(expect.objectContaining({ answerId: old.answer['answerId'], contentHash: old.answer['contentHash'] }))
     expect(f.workerErrors).toEqual([])
-  }, 300_000)
+  }, 600_000)
 
   it('refuses the real old seal after current human approval withdrawal and separately after actual source retraction, without a pre-staging query', async () => {
     const project = await createFirstActiveProject(f, p1, '旧封存输入当前人工裁决拒绝证明'), upgrade = await startUpgrade(project)
@@ -177,5 +177,5 @@ describe('normal first query during a genuine staged ontology upgrade (real PG/H
     expect(actualText(actualObject(sourceBody['error'])['message'])).toMatch(/source|membership|visibility|corpus|document/iu)
     const finalCount = await f.harness.adminClient.query<{ count: string }>(`SELECT count(*)::text AS count FROM agent_platform.run_execution_bindings WHERE tenant_id=$1 AND space_id=$2 AND binding#>>'{request,projectRevisionRef,projectId}'=$3`, [f.scope.tenantId, f.scope.spaceId, project.projectId])
     expect(finalCount.rows[0]?.count).toBe('0')
-  }, 300_000)
+  }, 600_000)
 })
