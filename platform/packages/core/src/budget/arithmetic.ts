@@ -238,6 +238,22 @@ export interface SettlementPlanInput {
   readonly usage: ToolUsage
   /** Measured research dimensions; `ToolUsage` cannot carry them. */
   readonly measured?: Partial<ResearchUsageDimensions>
+  /**
+   * Release the reservation as if it was never taken. Only honoured while the reservation is
+   * `reserved`: a write that reserved quota and then rolled back before doing anything must not
+   * burn that quota. A `running`/terminal reservation is never released, so an uncertain remote
+   * effect keeps its hold.
+   */
+  readonly release?: boolean
+  /**
+   * Let the count dimensions be reconciled **down** to the measured amount.
+   *
+   * The default is monotonic: a search/round/source/candidate that happened stays charged even if
+   * the settlement measures less. A caller that knows exactly how many rows it wrote (the candidate
+   * commit) sets this so units it reserved but never wrote are returned instead of burning the
+   * ceiling. It never applies to a dimension the caller did not measure.
+   */
+  readonly refundUnused?: boolean
 }
 
 export type SettlementPlan =
@@ -328,6 +344,30 @@ export function reconcileConsumption(
 }
 
 /**
+ * Give a never-executed reservation back. Unlike {@link reconcileConsumption}, every dimension —
+ * including the monotonic research counts — returns to its pre-reservation value, because nothing
+ * was spent: the caller reserved quota and then rolled its write back.
+ */
+export function releaseConsumption(
+  consumed: BudgetConsumption,
+  reserved: BudgetConsumption,
+): BudgetConsumption {
+  return {
+    toolCalls: Math.max(0, consumed.toolCalls - reserved.toolCalls),
+    repairAttempts: Math.max(0, consumed.repairAttempts - reserved.repairAttempts),
+    rows: Math.max(0, consumed.rows - reserved.rows),
+    bytes: Math.max(0, consumed.bytes - reserved.bytes),
+    modelTokens: Math.max(0, consumed.modelTokens - reserved.modelTokens),
+    searches: Math.max(0, consumed.searches - reserved.searches),
+    modelRounds: Math.max(0, consumed.modelRounds - reserved.modelRounds),
+    sources: Math.max(0, consumed.sources - reserved.sources),
+    candidates: Math.max(0, consumed.candidates - reserved.candidates),
+    downloadBytes: Math.max(0, consumed.downloadBytes - reserved.downloadBytes),
+    readBytes: Math.max(0, consumed.readBytes - reserved.readBytes),
+  }
+}
+
+/**
  * Settlement is idempotent: a duplicate callback is a no-op. A `usage_unknown`
  * reservation is held until reconciliation; a later definitive settlement is the
  * only thing allowed to release the held allowance. Contradictory terminals are a
@@ -360,6 +400,19 @@ export function planSettlement(input: SettlementPlanInput): SettlementPlan {
     }
   }
 
+  if (input.release === true && input.reservationStatus === 'reserved') {
+    // The reserved write never happened (a rolled-back atomic commit), so nothing it reserved was
+    // actually spent. Give the whole reservation back — including the count dimensions, which a
+    // normal settlement deliberately keeps charged — and close it as `abandoned`.
+    return {
+      kind: 'apply',
+      status: 'abandoned',
+      usageUnknown: false,
+      actual: emptyConsumption(),
+      consumed: releaseConsumption(input.consumed, input.reserved),
+    }
+  }
+
   if (usageUnknown) {
     // The remote may have been billed: conservatively hold the full estimate and
     // never release it as free allowance.
@@ -378,7 +431,42 @@ export function planSettlement(input: SettlementPlanInput): SettlementPlan {
     status: reservationStatusFor(input.status, false),
     usageUnknown: false,
     actual,
-    consumed: reconcileConsumption(input.consumed, input.reserved, actual),
+    consumed: input.refundUnused === true
+      ? reconcileMeasured(input.consumed, input.reserved, actual, input.measured)
+      : reconcileConsumption(input.consumed, input.reserved, actual),
+  }
+}
+
+/**
+ * Reconcile a settlement whose caller measured the count dimensions exactly: an unused reserved
+ * unit is returned instead of staying charged. Only the dimensions present in `measured` are
+ * reconciled down; every other dimension keeps the monotonic rule, so a caller cannot accidentally
+ * refund a search it really spent.
+ */
+export function reconcileMeasured(
+  consumed: BudgetConsumption,
+  reserved: BudgetConsumption,
+  actual: BudgetConsumption,
+  measured: Partial<ResearchUsageDimensions> | undefined,
+): BudgetConsumption {
+  const strict = reconcileConsumption(consumed, reserved, actual)
+  if (measured === undefined) return strict
+  const reconcile = (dimension: keyof ResearchUsageDimensions): number =>
+    measured[dimension] === undefined
+      ? strict[dimension]
+      : nonNegative(consumed[dimension] + (actual[dimension] - reserved[dimension]))
+  return {
+    toolCalls: strict.toolCalls,
+    repairAttempts: strict.repairAttempts,
+    rows: strict.rows,
+    bytes: strict.bytes,
+    modelTokens: strict.modelTokens,
+    searches: reconcile('searches'),
+    modelRounds: reconcile('modelRounds'),
+    sources: reconcile('sources'),
+    candidates: reconcile('candidates'),
+    downloadBytes: strict.downloadBytes,
+    readBytes: strict.readBytes,
   }
 }
 

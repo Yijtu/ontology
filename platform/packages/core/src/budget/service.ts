@@ -237,6 +237,8 @@ export class BudgetService implements BudgetLedgerPort {
         status: input.status,
         usage: input.usage,
         ...(input.measured === undefined ? {} : { measured: input.measured }),
+        ...(input.release === true ? { release: true } : {}),
+        ...(input.refundUnused === true ? { refundUnused: true } : {}),
         evidenceRefs: input.evidenceRefs,
       },
       ctx,

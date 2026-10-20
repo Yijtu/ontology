@@ -379,12 +379,12 @@ export class CandidateSubmissionService implements CandidateSubmissionPort {
           await tx.record(record)
           return record
         })
-        await this.#settleCandidates(request.runId, candidateReservationId, stored.record.receipt.accepted, command.candidates.length, ctx)
+        await this.#settleCandidates(request.runId, candidateReservationId, stored.record.receipt.accepted, ctx)
         return stored.replayed ? { ...structuredClone(stored.record.receipt), replayed: true } : stored.record.receipt
       } catch (error) {
         // The transaction rolled back, so no candidate was left behind; release the reservation
         // instead of leaking it, then surface the classified reason.
-        await this.#settleCandidates(request.runId, candidateReservationId, [], command.candidates.length, ctx)
+        await this.#settleCandidates(request.runId, candidateReservationId, [], ctx, { release: true })
         if (error instanceof CandidateCommitError) {
           throw new SubmitCandidatesError(commitDenialCode(error.code), error.message, { cause: error })
         }
@@ -416,7 +416,7 @@ export class CandidateSubmissionService implements CandidateSubmissionPort {
       recordedAt,
     }
     const stored = await this.#deps.receipts.record(scope, { record }, ctx)
-    await this.#settleCandidates(request.runId, candidateReservationId, accepted, command.candidates.length, ctx)
+    await this.#settleCandidates(request.runId, candidateReservationId, accepted, ctx)
     return stored.replayed ? { ...structuredClone(stored.record.receipt), replayed: true } : receipt
   }
 
@@ -510,23 +510,50 @@ export class CandidateSubmissionService implements CandidateSubmissionPort {
     return outcome.reservation.reservationId
   }
 
-  /** Close the candidate reservation with the real evidence of what was written. */
+  /**
+   * Close the candidate reservation with the real evidence of what was written.
+   *
+   * The measured amount is the number of candidates the receipt actually **accepted**, not the
+   * number submitted: a submission whose candidate was rejected (permission, evidence, schema)
+   * wrote nothing, and charging it would permanently burn `candidateLimit` for a candidate that
+   * does not exist. Count dimensions are monotonic, so this is the only point where the real
+   * amount can be established.
+   */
   async #settleCandidates(
     runId: Uuid,
     reservationId: Uuid | undefined,
     accepted: readonly ReceiptEntry[],
-    submitted: number,
     ctx: ToolContext,
+    outcome: { readonly release: boolean } = { release: false },
   ): Promise<void> {
     if (this.#budget === undefined || this.#ledgerIdFor === undefined || reservationId === undefined) return
     const ledgerId = this.#ledgerIdFor(runId)
     const refs = [...new Map(accepted.flatMap((entry) => entry.sourceRefs).map((ref) => [ref.id, ref])).values()]
+    if (outcome.release) {
+      // The commit rolled back: no candidate, link or receipt was written, so give the whole
+      // reservation back instead of charging quota for a write that never happened.
+      await this.#budget.settle({
+        ledgerId,
+        reservationId,
+        status: 'cancelled',
+        usage: { durationMs: 0 },
+        evidenceRefs: [],
+        release: true,
+      }, ctx).catch(() => undefined)
+      return
+    }
     await this.#budget.settle({
       ledgerId,
       reservationId,
+      // `completed` needs at least one persisted evidence reference; a candidate that wrote no
+      // source link (or none at all) is settled as failed, and the measured count still tells the
+      // truth about how many candidates this command actually created.
       status: refs.length === 0 ? 'failed' : 'completed',
       usage: { durationMs: 0 },
-      measured: { candidates: submitted },
+      measured: { candidates: accepted.length },
+      // This service knows exactly how many candidates it wrote, so units it reserved for rejected
+      // submissions are returned instead of permanently burning `candidateLimit`.
+      refundUnused: true,
       evidenceRefs: refs,
     }, ctx).catch(() => undefined)
   }

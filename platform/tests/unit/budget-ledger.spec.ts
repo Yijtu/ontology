@@ -747,6 +747,114 @@ describe('research budget dimensions', () => {
     expect((await service.remaining(LEDGER_RUN, CONTEXT_A)).sourcesRemaining).toBe(4)
   })
 
+  it('returns unused count units when the caller measured exactly what it wrote', async () => {
+    const { service, store } = makeService()
+    await service.openLedger(
+      { ledgerId: LEDGER_RUN, kind: 'run', overrideLimits: { maxCandidates: 3 }, runId: RUN_A },
+      CONTEXT_A,
+    )
+    // Reserve three candidate units, then write only one (the other two were rejected).
+    const reserved = await service.reserve(
+      { ledgerId: LEDGER_RUN, idempotencyKey: 'cand-refund-0001', toolCalls: 0, candidates: 3 },
+      CONTEXT_A,
+    )
+    const reservation = reserved.reservation
+    if (reservation === undefined) throw new Error('the candidate reservation was not granted')
+    await service.settle(
+      {
+        ledgerId: LEDGER_RUN,
+        reservationId: reservation.reservationId,
+        status: 'completed',
+        usage: { durationMs: 1 },
+        measured: { candidates: 1 },
+        refundUnused: true,
+        evidenceRefs: [evidenceRef()],
+      },
+      CONTEXT_A,
+    )
+    const ledger = await store.getLedger(SCOPE_A, LEDGER_RUN, CONTEXT_A)
+    expect(ledger?.consumed.candidates).toBe(1)
+    // The two units that were never written are still available.
+    expect((await service.remaining(LEDGER_RUN, CONTEXT_A)).candidatesRemaining).toBe(2)
+  })
+
+  it('releases a never-executed reservation in full, including count dimensions', async () => {
+    const { service, store } = makeService()
+    await service.openLedger(
+      { ledgerId: LEDGER_RUN, kind: 'run', overrideLimits: { maxCandidates: 2, maxSearches: 2 }, runId: RUN_A },
+      CONTEXT_A,
+    )
+    const reserved = await service.reserve(
+      { ledgerId: LEDGER_RUN, idempotencyKey: 'cand-release-0001', toolCalls: 1, candidates: 2, searches: 1 },
+      CONTEXT_A,
+    )
+    const reservation = reserved.reservation
+    if (reservation === undefined) throw new Error('the reservation was not granted')
+    expect((await service.remaining(LEDGER_RUN, CONTEXT_A)).candidatesRemaining).toBe(0)
+
+    // The atomic commit rolled back before writing anything, so nothing was spent.
+    const settled = await service.settle(
+      {
+        ledgerId: LEDGER_RUN,
+        reservationId: reservation.reservationId,
+        status: 'cancelled',
+        usage: { durationMs: 0 },
+        evidenceRefs: [],
+        release: true,
+      },
+      CONTEXT_A,
+    )
+    expect(settled.reservation.status).toBe('abandoned')
+    const ledger = await store.getLedger(SCOPE_A, LEDGER_RUN, CONTEXT_A)
+    expect(ledger?.consumed.candidates).toBe(0)
+    expect(ledger?.consumed.searches).toBe(0)
+    expect(ledger?.consumed.toolCalls).toBe(0)
+    const remaining = await service.remaining(LEDGER_RUN, CONTEXT_A)
+    expect(remaining.candidatesRemaining).toBe(2)
+    expect(remaining.searchesRemaining).toBe(2)
+    expect(remaining.remaining.toolCallsRemaining).toBe(DEFAULT_RUN_BUDGET_LIMITS.maxToolCalls)
+  })
+
+  it('never releases a reservation that already settled', async () => {
+    const { service, store } = makeService()
+    await service.openLedger(
+      { ledgerId: LEDGER_RUN, kind: 'run', overrideLimits: { maxCandidates: 2 }, runId: RUN_A },
+      CONTEXT_A,
+    )
+    const reserved = await service.reserve(
+      { ledgerId: LEDGER_RUN, idempotencyKey: 'cand-release-settled-0001', toolCalls: 0, candidates: 1 },
+      CONTEXT_A,
+    )
+    const reservation = reserved.reservation
+    if (reservation === undefined) throw new Error('the reservation was not granted')
+    // Settle it normally first: the candidate really was written.
+    await service.settle(
+      {
+        ledgerId: LEDGER_RUN,
+        reservationId: reservation.reservationId,
+        status: 'completed',
+        usage: { durationMs: 1 },
+        measured: { candidates: 1 },
+        evidenceRefs: [evidenceRef()],
+      },
+      CONTEXT_A,
+    )
+    // A late release cannot undo a terminal settlement (idempotent no-op, never a refund).
+    const settled = await service.settle(
+      {
+        ledgerId: LEDGER_RUN,
+        reservationId: reservation.reservationId,
+        status: 'cancelled',
+        usage: { durationMs: 0 },
+        evidenceRefs: [],
+        release: true,
+      },
+      CONTEXT_A,
+    )
+    expect(settled.applied).toBe(false)
+    expect((await store.getLedger(SCOPE_A, LEDGER_RUN, CONTEXT_A))?.consumed.candidates).toBe(1)
+  })
+
   it('releases an over-estimated download-byte reservation once', async () => {
     const { service } = makeService()
     await service.openLedger(

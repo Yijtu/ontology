@@ -251,6 +251,8 @@ export class InMemoryBudgetLedgerStore implements BudgetLedgerStore {
       status: request.status,
       usage: request.usage,
       ...(request.measured === undefined ? {} : { measured: request.measured }),
+      ...(request.release === true ? { release: true } : {}),
+      ...(request.refundUnused === true ? { refundUnused: true } : {}),
     })
     if (plan.kind === 'conflict') {
       throw new BudgetLedgerError('SETTLEMENT_CONFLICT', plan.message)

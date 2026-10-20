@@ -144,7 +144,14 @@ export async function competencyRunnerHarness(input: { db: ControlPostgresDataba
     const profile = await new PostgresProfileStore(db).findResolvedProfile(input.profileRef, input.profileRef.snapshotHash, scope, context)
     if (profile === undefined || profile.resolved.explicitDegradations.some((item) => item.capability.startsWith('compute:'))) throw new Error('actual compute profile/build binding is unavailable')
     let ledgerId = ledgers.get(context.runId)
-    if (ledgerId === undefined) { ledgerId = randomUUID(); await budget.openLedger({ ledgerId, kind: 'run', runId: context.runId }, context); ledgers.set(context.runId, ledgerId) }
+    if (ledgerId === undefined) {
+      ledgerId = randomUUID()
+      // Open the ledger on the host's explicit execution deadline. The default run budget is 120s,
+      // which the 25-gold suite can exceed on a loaded machine; the compute admission would then be
+      // refused for a reason that has nothing to do with the competency being measured.
+      await budget.openLedger({ ledgerId, kind: 'run', runId: context.runId, deadline: context.deadline }, context)
+      ledgers.set(context.runId, ledgerId)
+    }
     const admitted = await budget.reserve({ ledgerId, idempotencyKey: `cq-host-bind-${input.project.ref.projectId}`, toolCalls: 0, rows: 0, bytes: 0, requestedDeadline: context.deadline }, context)
     const reservation = admitted.reservation
     if (!admitted.granted || reservation === undefined) throw new Error('actual compute host admission budget was refused')

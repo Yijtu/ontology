@@ -399,6 +399,6 @@ describe('all canonical independent competency golds through real originals and 
           await expect(reader.query('CREATE TABLE competency_business.forbidden_write (id int)')).rejects.toMatchObject({ code: '25006' })
         } finally { await reader.end() }
       }
-    }, 300_000)
+    }, 600_000)
   }
 })

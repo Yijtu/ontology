@@ -1,5 +1,5 @@
 import { createHash } from 'node:crypto'
-import { PostgresCandidateCommitStore, PostgresCandidateRunBindingStore, PostgresCandidateSourceStore, PostgresCandidateSubmissionStore, PostgresResearchDocumentSetStore, PostgresResearchExecutionStore, PostgresResearchRunAdmissionStore, PostgresTableArtifactStore, PostgresTableVerificationStore, PostgresTaskPolicyReportStore } from '@ontology/adapter-control-postgres'
+import { PostgresCandidateCommitStore, PostgresCandidateRunBindingStore, PostgresCandidateSourceStore, PostgresCandidateSubmissionStore, PostgresResearchDocumentSetStore, PostgresResearchAcceptanceJournal, PostgresResearchExecutionStore, PostgresResearchRunAdmissionStore, PostgresTableArtifactStore, PostgresTableVerificationStore, PostgresTaskPolicyReportStore } from '@ontology/adapter-control-postgres'
 import { ArtifactGroundingDocumentSetReader, DocumentTargetedReader, LocalDocumentExtractionService, LocalStructuredIngestionService, ParsedSourceGroundingReader, ResearchArchiveParser, StructuredDocumentParser } from '@ontology/adapter-extraction-document'
 import { PiRuntimeAdapter } from '@ontology/adapter-runtime-pi'
 import { TemplateRuntimeAdapter } from '@ontology/adapter-runtime-template'
@@ -179,6 +179,7 @@ export async function assembleRuntimePipeline(
   // resolver rebuilds a run's authorization from the persisted receipt (never the worker context),
   // intersected with the current state, and is read by the research tool handlers at dispatch time.
   const researchRunAdmissionStore = new PostgresResearchRunAdmissionStore(database)
+  const researchAcceptanceJournal = new PostgresResearchAcceptanceJournal(database)
   // S09: the durable job service and the research-execution projection store are constructed early so
   // the research admission façade can create the agentic scheduler job and persist the V2 projection.
   const jobService = new JobService({ store: jobStore })
@@ -564,6 +565,7 @@ export async function assembleRuntimePipeline(
     executions: researchExecutionStore,
     admissions: researchRunAdmissionStore,
     dispatch: dispatchStore,
+    journal: researchAcceptanceJournal,
     cancelRun: async (runId, ctx) => {
       const run = await runs.getRun(runId, ctx)
       if (run.state !== 'cancelled' && run.state !== 'published' && run.state !== 'failed') {
