@@ -1,0 +1,7 @@
+# This desktop client is deliberately its own pnpm project, outside `platform/`, so the Core
+# workspace install never pulls a ~100 MB Electron runtime into CI.
+#
+# pnpm 11 records build-script approvals here. Electron's postinstall is what downloads the runtime
+# binary, so it must be allowed; without it `electron .` has no executable and `pnpm run dist` fails.
+allowBuilds:
+  electron: true

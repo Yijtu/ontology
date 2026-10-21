@@ -68,6 +68,8 @@ pnpm exec node scripts/dev-core.mjs
 
 客户端请求带 `Authorization: Bearer <令牌>`；`/healthz` 保持免认证，便于客户端先探活。**令牌作用于整个租户/空间**，是部署级共享凭据，只适合受信网络；对外暴露前需要接入 OIDC。TLS 由反向代理终止，客户端不会忽略证书错误。设计见[Electron 客户端 + 远程服务端](tasks/design-electron-client-2026-10-21.md)。
 
+桌面客户端在 [`client/desktop`](client/desktop/README.md)：它加载的就是上面这份服务端托管的 UI，只负责窗口、地址配置、令牌（系统凭据存储）与断线提示。
+
 ## 现在能做什么
 
 - **读资料，建业务知识。** 把一份资料按用途登记为行业依据或项目记录，为定义与规则候选绑定真实来源，经人工审核和独立题集验核后发布固定版本。
