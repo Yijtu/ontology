@@ -53,6 +53,15 @@ export function validateServerUrl(input: unknown): ServerUrlResult {
   return { ok: true, url: `${parsed.protocol}//${parsed.host}${pathname}` }
 }
 
+/** True when the address points at this machine, where the server may run without a token. */
+export function isLoopbackUrl(url: string): boolean {
+  try {
+    return isLoopbackHostname(new URL(url).hostname)
+  } catch {
+    return false
+  }
+}
+
 /** The origin a request belongs to, or `undefined` when it is not an absolute http(s) URL. */
 export function originOf(target: string): string | undefined {
   try {

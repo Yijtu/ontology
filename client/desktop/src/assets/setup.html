@@ -38,7 +38,7 @@
   <label for="serverUrl">服务端地址</label>
   <input id="serverUrl" type="url" spellcheck="false" placeholder="https://core.example.com" />
 
-  <label for="token">访问令牌</label>
+  <label for="token">访问令牌（本机服务端可留空）</label>
   <input id="token" type="password" spellcheck="false" placeholder="部署访问令牌" />
 
   <div class="actions">
@@ -48,7 +48,7 @@
   <div id="status" role="status" aria-live="polite"></div>
 
   <p class="hint">
-    远程服务端必须使用 https；只有本机地址允许 http。证书错误不会被忽略。
+    远程服务端必须使用 https 并填写访问令牌；本机地址允许 http，若服务端未配置 CORE_API_TOKEN 可以留空。证书错误不会被忽略。
   </p>
 
   <script src="setup.js"></script>

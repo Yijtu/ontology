@@ -4,15 +4,31 @@
 
 设计见 [`tasks/design-electron-client-2026-10-21.md`](../../tasks/design-electron-client-2026-10-21.md)。
 
-## 先决条件
+## 打开方式
 
-服务端必须已经按 README 的「作为服务端共享（远程客户端）」段落启动：
+**双击仓库根目录的 `start-client.cmd`**（或本目录的 `start.cmd`）。脚本会自动安装依赖、编译并启动；出错时窗口会停住并显示原因，不会一闪而过。
 
-- `CORE_API_HOST` 放开监听（例如 `0.0.0.0`）
-- `CORE_API_TOKEN` 配置好访问令牌
-- 已执行 `pnpm run build:web`（API 会托管 UI）
+首次启动会打开「连接 Ontology Core」：
 
-## 运行
+| 场景 | 地址 | 令牌 |
+|---|---|---|
+| 本机演示（服务端未配置 `CORE_API_TOKEN`） | `http://127.0.0.1:3001` | **留空** |
+| 本机演示（服务端配了令牌） | `http://127.0.0.1:3001` | 填该令牌 |
+| 远程/内网服务端 | `https://…` | 必填 |
+
+命令行方式：在本目录执行 `pnpm install` → `pnpm start`。
+
+## 服务端要先准备好
+
+客户端加载的是**服务端托管的 UI**。在仓库 `platform/` 下：
+
+```powershell
+pnpm run build:web
+```
+
+然后用 `CORE_API_HOST`（本机演示保持默认回环即可）与可选的 `CORE_API_TOKEN` 启动 Core。详见根 README 的「作为服务端共享（远程客户端）」。服务端没构建过 web 产物时，客户端会连不上 UI（`/healthz` 仍可能正常）。
+
+## 本机开发
 
 本目录是**独立的 pnpm 项目**，不在 `platform/` 的 workspace 里——这样 Core 的 CI 不会为了跑测试下载约 100 MB 的 Electron 运行时。
 
@@ -20,15 +36,11 @@
 cd client\desktop
 pnpm install
 pnpm start          # 编译后启动
+pnpm test           # 编译 + node --test（URL 规则）
+pnpm run dist       # 打 Windows 安装包到 release/
 ```
 
-首次启动会打开「连接 Ontology Core」：填服务端地址与访问令牌，可先「测试连接」。连接成功后令牌加密保存到系统凭据存储（Windows DPAPI），之后直接进入工作台。
-
-打包 Windows 安装包：
-
-```powershell
-pnpm run dist       # 输出到 release/
-```
+首次连接成功后，地址写入 `config.json`，令牌用系统凭据存储（Windows DPAPI）加密保存；之后直接进入工作台。
 
 ## 安全边界（不要在后续修改中放宽）
 
@@ -41,6 +53,7 @@ pnpm run dist       # 输出到 release/
 ## 结构
 
 ```
+start.cmd / start.ps1  双击启动（安装依赖、编译、拉起 Electron）
 src/main.ts            主进程：窗口、菜单、令牌注入、导航守卫、探活与重试
 src/config.ts          服务端地址（明文配置，不含令牌）
 src/token.ts           safeStorage 加密的令牌
