@@ -332,8 +332,10 @@ export class PostgresDocumentParseStore implements DocumentParseStore {
            source_namespace, source_id, document_version_ref, created_at)
          VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14::jsonb,
                  $15::jsonb, $16, $17, $18, $19, $20, $21, $22, $23, $24, $25::jsonb, $26)
-         ON CONFLICT (tenant_id, space_id, original_content_digest, parser_version)
-         DO NOTHING
+         -- The parse id is deterministic from the content digest, so two concurrent imports of the
+         -- same bytes collide on the PRIMARY KEY as well as on the digest/parser unique key. Both
+         -- name the same logical parse, so either conflict resolves to the stored row.
+         ON CONFLICT DO NOTHING
          RETURNING parse_id`,
         [
           scope.tenantId,

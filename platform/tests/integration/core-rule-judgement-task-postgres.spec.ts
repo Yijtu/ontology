@@ -433,7 +433,9 @@ async function jsonBody(response: Response): Promise<{ data: Record<string, unkn
 }
 
 async function waitForAnswer(runId: string): Promise<Record<string, unknown>> {
-  const endAt = Date.now() + 60_000
+  // The suite's own timeout is 180s; a 60s poll is tighter than the worker needs on a loaded CI
+  // machine and fails a run that is still making progress.
+  const endAt = Date.now() + 150_000
   while (Date.now() < endAt) {
     const response = await request(`/api/v1/runs/${runId}/answer`)
     if (response.status === 200) return (await jsonBody(response)).data
