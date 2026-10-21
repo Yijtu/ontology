@@ -3,7 +3,7 @@ import { join } from 'node:path'
 import { clearConfig, loadConfig, saveConfig } from './config'
 import type { DesktopConfig } from './config'
 import { probeServer } from './health'
-import { isAllowedNavigation, isExternalWebUrl, shouldAttachToken, validateServerUrl } from './shared'
+import { isAllowedNavigation, isExternalWebUrl, isLoopbackUrl, shouldAttachToken, validateServerUrl } from './shared'
 import { clearToken, loadToken, saveToken } from './token'
 
 /**
@@ -183,14 +183,17 @@ function openSetup(options: { replaceMain: boolean }): void {
   }
 }
 
-async function enterMain(serverUrl: string, credential: string): Promise<void> {
+async function enterMain(serverUrl: string, credential: string | undefined): Promise<void> {
   const result = await probeServer(serverUrl, credential)
   if (!result.ok) throw new Error(result.message)
 
   saveConfig({ serverUrl })
-  saveToken(credential)
+  // A loopback server started without `CORE_API_TOKEN` needs no credential; remember "none" by
+  // clearing the stored secret rather than sealing an empty string.
+  if (credential === undefined || credential.length === 0) clearToken()
+  else saveToken(credential)
   config = { serverUrl }
-  token = credential
+  token = credential === undefined || credential.length === 0 ? undefined : credential
 
   if (setupWindow !== undefined && !setupWindow.isDestroyed()) {
     setupWindow.destroy()
@@ -204,6 +207,17 @@ async function enterMain(serverUrl: string, credential: string): Promise<void> {
   await loadRemote()
 }
 
+/**
+ * Normalize the setup token. Returns `undefined` for "no credential" (allowed only for a loopback
+ * server, where Core may run without `CORE_API_TOKEN`), or `null` when a credential is required but
+ * missing — so the caller can tell "leave it empty" apart from "reject".
+ */
+function readSetupToken(serverUrl: string, value: unknown): string | undefined | null {
+  const token = typeof value === 'string' ? value.trim() : ''
+  if (token.length > 0) return token
+  return isLoopbackUrl(serverUrl) ? undefined : null
+}
+
 function registerIpc(): void {
   ipcMain.handle('setup:current', () => ({ serverUrl: config?.serverUrl }))
 
@@ -211,21 +225,19 @@ function registerIpc(): void {
     const input = payload as { serverUrl?: unknown; token?: unknown }
     const validated = validateServerUrl(input.serverUrl)
     if (!validated.ok || validated.url === undefined) return { ok: false, message: validated.reason ?? '地址无效' }
-    if (typeof input.token !== 'string' || input.token.trim().length === 0) {
-      return { ok: false, message: '请输入访问令牌' }
-    }
-    return probeServer(validated.url, input.token.trim())
+    const credential = readSetupToken(validated.url, input.token)
+    if (credential === null) return { ok: false, message: '请输入访问令牌（本机服务端可留空）' }
+    return probeServer(validated.url, credential)
   })
 
   ipcMain.handle('setup:connect', async (_event, payload: unknown) => {
     const input = payload as { serverUrl?: unknown; token?: unknown }
     const validated = validateServerUrl(input.serverUrl)
     if (!validated.ok || validated.url === undefined) return { ok: false, message: validated.reason ?? '地址无效' }
-    if (typeof input.token !== 'string' || input.token.trim().length === 0) {
-      return { ok: false, message: '请输入访问令牌' }
-    }
+    const credential = readSetupToken(validated.url, input.token)
+    if (credential === null) return { ok: false, message: '请输入访问令牌（本机服务端可留空）' }
     try {
-      await enterMain(validated.url, input.token.trim())
+      await enterMain(validated.url, credential)
       return { ok: true, message: '已连接' }
     } catch (error) {
       return { ok: false, message: error instanceof Error ? error.message : '连接失败' }

@@ -3,6 +3,10 @@
  *
  * `/healthz` is deliberately unauthenticated on the server, so a reachable-but-wrong-token server is
  * reported as an authentication problem rather than as "offline". The probe never prints the token.
+ *
+ * `token` may be empty for a loopback server: a local Core instance started without
+ * `CORE_API_TOKEN` accepts the loopback development identity, so a developer does not have to invent
+ * a token just to open the client on the same machine.
  */
 export interface ProbeResult {
   readonly ok: boolean
@@ -27,7 +31,7 @@ async function fetchWithTimeout(url: string, init?: RequestInit): Promise<Respon
   }
 }
 
-export async function probeServer(serverUrl: string, token: string): Promise<ProbeResult> {
+export async function probeServer(serverUrl: string, token: string | undefined): Promise<ProbeResult> {
   const base = trimSlash(serverUrl)
   try {
     const health = await fetchWithTimeout(`${base}/healthz`)
@@ -41,7 +45,9 @@ export async function probeServer(serverUrl: string, token: string): Promise<Pro
   let deployment: Response
   try {
     deployment = await fetchWithTimeout(`${base}/api/v1/core/deployment`, {
-      headers: { authorization: `Bearer ${token}` },
+      ...(token === undefined || token.length === 0
+        ? {}
+        : { headers: { authorization: `Bearer ${token}` } }),
     })
   } catch {
     return { ok: false, kind: 'unreachable', message: '服务端可达，但业务接口请求失败' }
