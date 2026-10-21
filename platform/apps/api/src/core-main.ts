@@ -6,11 +6,18 @@ import {
 import type { DeploymentEnvironment, MappingRef, ProfileRef, ProfileSpec, ScopeRef, SourceRef, VersionRef } from '@ontology/contracts'
 import { createApiServer } from './http/app'
 import type { ApiServerOptions } from './http/app'
+import {
+  createBearerTokenAuthenticator,
+  registerSecurityHeaders,
+  registerWebApp,
+} from './http/deployment-access'
 import type { RequestAuthenticator } from './http/shared'
 import { emptyCoreExamples, loadCoreExamples } from './composition/core-example-loader'
 import type { LoadedCoreExamples } from './composition/core-example-loader'
 import { createCoreLocalComposition } from './composition/core-local-composition'
+import { existsSync } from 'node:fs'
 import { resolve } from 'node:path'
+import { fileURLToPath } from 'node:url'
 import { tmpdir } from 'node:os'
 import { CoreLocalModelSettings } from './composition/core-local-model-settings'
 import { registerCoreModelSettingsRoutes } from './http/core-model-settings'
@@ -88,6 +95,20 @@ function readPort(value: string | undefined): number {
   return port
 }
 
+/**
+ * The interface the API binds to. Loopback by default so a local run is never exposed by accident;
+ * a deployment sets `CORE_API_HOST=0.0.0.0` deliberately (and configures `CORE_API_TOKEN`).
+ */
+function resolveListenHost(): string {
+  const host = process.env['CORE_API_HOST']
+  return host === undefined || host.trim().length === 0 ? '127.0.0.1' : host.trim()
+}
+
+/** The repository root, resolved from this file's location (`platform/apps/api/src`). */
+function platformRoot(): string {
+  return resolve(fileURLToPath(new URL('../../../', import.meta.url)))
+}
+
 function scopeFromEnvironment(): ScopeRef {
   const tenantId = process.env['CORE_TENANT_ID'] ?? DEFAULT_TENANT_ID
   const spaceId = process.env['CORE_SPACE_ID'] ?? DEFAULT_SPACE_ID
@@ -115,16 +136,30 @@ function authenticateLocalRequest(request: FastifyRequest, scopeRef: ScopeRef, a
 
 /** Build the local Core API using only its explicit deployment scope and validated example declarations. */
 export function createCoreApi(dependencies: CoreApiDependencies): FastifyInstance {
-  const authenticate = (request: FastifyRequest) => authenticateLocalRequest(
+  const localDev = (request: FastifyRequest) => authenticateLocalRequest(
     request,
     dependencies.scopeRef,
     dependencies.allowLocalOperator ?? false,
   )
+  // A deployment token, when configured, is the ONLY way in. Keeping the loopback bypass alongside
+  // it would let any local process on the server host act with full roles without the token, which
+  // is exactly the bypass a deployment must not have. Without a token the behavior is unchanged
+  // (loopback development only).
+  const deploymentToken = process.env['CORE_API_TOKEN']
+  const authenticate = deploymentToken === undefined || deploymentToken.length === 0
+    ? localDev
+    : createBearerTokenAuthenticator({
+      token: deploymentToken,
+      scopeRef: dependencies.scopeRef,
+      roles: [...CORE_BUSINESS_ROLES, ...((dependencies.allowLocalOperator ?? false) ? CORE_OPERATOR_ROLES : [])],
+      subjectId: process.env['CORE_API_TOKEN_SUBJECT'] ?? 'deployment-token',
+    })
   const app = createApiServer({
     ...(dependencies.api ?? {}),
     authenticate,
     logger: dependencies.logger ?? false,
   })
+  registerSecurityHeaders(app)
   dependencies.registerRoutes?.(app, authenticate)
   if (dependencies.modelSettings !== undefined) registerCoreModelSettingsRoutes(app, { settings: dependencies.modelSettings, authenticate, webPort: dependencies.webPort ?? 5174, ...(dependencies.modelSettingsMigration === undefined ? {} : { migration: dependencies.modelSettingsMigration }) })
 
@@ -170,6 +205,13 @@ export function createCoreApi(dependencies: CoreApiDependencies): FastifyInstanc
       },
     })
   })
+
+  // Serve the built web app from this origin when a build exists, so a remote client loads the UI
+  // and calls the API same-origin (no CORS relaxation). Absent a build, the dev flow is unchanged.
+  const webRoot = resolve(
+    process.env['CORE_WEB_DIST'] ?? resolve(platformRoot(), 'apps', 'web', 'dist'),
+  )
+  if (existsSync(resolve(webRoot, 'index.html'))) registerWebApp(app, { root: webRoot })
 
   return app
 }
@@ -223,7 +265,9 @@ export async function startCoreApi(): Promise<void> {
     // composition (before component registration), so this entry point no longer mutates the
     // catalogue itself; it only serves the legacy settings route with the shared instance.
     app = createCoreApi({ ...composition.dependencies, webPort: Number(process.env['CORE_WEB_PORT'] ?? '5174'), logger: true })
-    await app.listen({ host: '127.0.0.1', port: readPort(process.env['CORE_API_PORT']) })
+    // Defaults to loopback: an operator must opt in before the instance is reachable from the
+    // network, and a token (CORE_API_TOKEN) must be configured for those clients to authenticate.
+    await app.listen({ host: resolveListenHost(), port: readPort(process.env['CORE_API_PORT']) })
     const shutdown = async (): Promise<void> => {
       await app?.close()
       await composition?.close()

@@ -51,6 +51,23 @@ pnpm exec node scripts/dev-core.mjs
 
 就绪后打开 **[http://127.0.0.1:5174](http://127.0.0.1:5174)**。准备命令应用当前迁移并生成本地配置；原件保存在 `.core-data/objects`。停止、重启、独立实例和更多配置见[本机启动指南](platform/docs/core-local-startup-2026-09-28.md)。已有同名演示环境时，先按指南选择独立项目与端口。
 
+### 作为服务端共享（远程客户端）
+
+本机默认只监听回环地址，且默认只接受回环开发身份。要让另一台机器上的客户端访问，需要显式放开监听、配置访问令牌，并先构建前端产物——API 会同时托管这份 UI，客户端因此与服务端同源，不需要开放 CORS：
+
+```powershell
+pnpm run build:web
+
+$env:CORE_API_HOST = '0.0.0.0'                                   # 默认 127.0.0.1
+$env:CORE_API_TOKEN = '<长随机令牌>'                              # 设置后只接受 Bearer 令牌
+$env:CORE_API_TOKEN_SUBJECT = 'deployment-token'
+$env:CORE_WEB_DIST = (Join-Path (Get-Location) 'apps/web/dist')  # 可选，默认同路径
+
+pnpm exec node scripts/dev-core.mjs
+```
+
+客户端请求带 `Authorization: Bearer <令牌>`；`/healthz` 保持免认证，便于客户端先探活。**令牌作用于整个租户/空间**，是部署级共享凭据，只适合受信网络；对外暴露前需要接入 OIDC。TLS 由反向代理终止，客户端不会忽略证书错误。设计见[Electron 客户端 + 远程服务端](tasks/design-electron-client-2026-10-21.md)。
+
 ## 现在能做什么
 
 - **读资料，建业务知识。** 把一份资料按用途登记为行业依据或项目记录，为定义与规则候选绑定真实来源，经人工审核和独立题集验核后发布固定版本。

@@ -53,7 +53,7 @@
 3. **认证（分两步）**
    - **阶段 1（A1，部署级令牌）**：`CORE_API_TOKEN` 设了才启用。请求需带 `Authorization: Bearer <token>`；校验通过后用 `CORE_TENANT_ID` / `CORE_SPACE_ID` 与固定角色集（与本地开发一致：业务角色 + 可选 operator）构造 `Principal`。
      - 令牌比较必须常数时间；日志、错误、健康检查都不得回显令牌。
-     - 保留回环开发认证：`CORE_API_TOKEN` 未设时行为与现在完全一致。
+     - 设置令牌后**只接受令牌**：不再保留回环旁路，否则服务器本机上的任意进程无需令牌即可获得全部角色。`CORE_API_TOKEN` 未设时行为与现在完全一致（仅回环开发身份）。
    - **阶段 2（A2，OIDC）**：授权码 + PKCE，系统浏览器登录、回环回调换会话；主体映射到 `Principal`。多用户与按用户隔离在这一步解决。
 4. **审计与限制**：认证失败返回稳定 `UNAUTHENTICATED`；记录主体与 traceId（不含令牌）；对认证失败做限流留给反代。
 5. **CSP 与安全响应头**：为 Electron 渲染进程准备 `Content-Security-Policy`（`default-src 'self'`、禁止 `unsafe-eval`、仅允许必要的 `connect-src`）、`X-Content-Type-Options`、`Referrer-Policy`。
