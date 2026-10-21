@@ -1,0 +1,56 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+  <meta charset="utf-8" />
+  <meta http-equiv="Content-Security-Policy" content="default-src 'none'; script-src 'self'; style-src 'self' 'unsafe-inline'; connect-src 'none'; img-src 'self' data:; base-uri 'none'; form-action 'none'" />
+  <title>连接 Ontology Core</title>
+  <style>
+    :root { color-scheme: dark; }
+    body {
+      margin: 0; padding: 32px; font-family: "Segoe UI", system-ui, sans-serif;
+      background: #0f172a; color: #e2e8f0;
+    }
+    h1 { margin: 0 0 8px; font-size: 20px; font-weight: 600; }
+    p.lead { margin: 0 0 24px; color: #94a3b8; font-size: 13px; line-height: 1.6; }
+    label { display: block; margin: 16px 0 6px; font-size: 13px; color: #cbd5e1; }
+    input {
+      width: 100%; box-sizing: border-box; padding: 10px 12px; font-size: 14px;
+      background: #111c33; color: #e2e8f0; border: 1px solid #24324d; border-radius: 8px;
+    }
+    input:focus { outline: 2px solid #2563eb; border-color: #2563eb; }
+    .actions { display: flex; gap: 10px; margin-top: 24px; }
+    button {
+      padding: 10px 16px; font-size: 13px; border-radius: 8px; border: 1px solid #24324d;
+      background: #1b2942; color: #e2e8f0; cursor: pointer;
+    }
+    button.primary { background: #2563eb; border-color: #2563eb; color: #fff; font-weight: 600; }
+    button:disabled { opacity: .55; cursor: default; }
+    #status { margin-top: 18px; font-size: 13px; min-height: 20px; line-height: 1.5; }
+    #status.ok { color: #34d399; }
+    #status.error { color: #f87171; }
+    .hint { margin-top: 20px; font-size: 12px; color: #64748b; line-height: 1.6; }
+  </style>
+</head>
+<body>
+  <h1>连接 Ontology Core</h1>
+  <p class="lead">输入服务端地址和部署访问令牌。令牌会加密保存到系统凭据存储，客户端不会把它交给页面。</p>
+
+  <label for="serverUrl">服务端地址</label>
+  <input id="serverUrl" type="url" spellcheck="false" placeholder="https://core.example.com" />
+
+  <label for="token">访问令牌</label>
+  <input id="token" type="password" spellcheck="false" placeholder="部署访问令牌" />
+
+  <div class="actions">
+    <button id="test" type="button">测试连接</button>
+    <button id="connect" class="primary" type="button">连接</button>
+  </div>
+  <div id="status" role="status" aria-live="polite"></div>
+
+  <p class="hint">
+    远程服务端必须使用 https；只有本机地址允许 http。证书错误不会被忽略。
+  </p>
+
+  <script src="setup.js"></script>
+</body>
+</html>

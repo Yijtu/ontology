@@ -1,0 +1,38 @@
+{
+  "name": "ontology-core-desktop",
+  "version": "0.1.0",
+  "private": true,
+  "description": "Ontology Core desktop client (Electron shell for a deployed Core server)",
+  "main": "dist/main.js",
+  "scripts": {
+    "build": "tsc -p tsconfig.json && node scripts/copy-assets.mjs",
+    "typecheck": "tsc -p tsconfig.json --noEmit",
+    "test": "pnpm run build && node --test test/*.test.cjs",
+    "start": "pnpm run build && electron .",
+    "dist": "pnpm run build && electron-builder"
+  },
+  "devDependencies": {
+    "@types/node": "^22.10.0",
+    "electron": "^33.2.0",
+    "electron-builder": "^25.1.8",
+    "typescript": "^5.9.3"
+  },
+  "build": {
+    "appId": "com.ontology.core.desktop",
+    "productName": "Ontology Core",
+    "files": [
+      "dist/**/*",
+      "package.json"
+    ],
+    "directories": {
+      "output": "release"
+    },
+    "win": {
+      "target": "nsis"
+    },
+    "nsis": {
+      "oneClick": false,
+      "allowToChangeInstallationDirectory": true
+    }
+  }
+}
