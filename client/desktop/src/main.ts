@@ -1,4 +1,5 @@
 import { BrowserWindow, Menu, app, dialog, ipcMain, session, shell } from 'electron'
+import { appendFileSync } from 'node:fs'
 import { join } from 'node:path'
 import { clearConfig, loadConfig, saveConfig } from './config'
 import type { DesktopConfig } from './config'
@@ -195,14 +196,18 @@ async function enterMain(serverUrl: string, credential: string | undefined): Pro
   config = { serverUrl }
   token = credential === undefined || credential.length === 0 ? undefined : credential
 
-  if (setupWindow !== undefined && !setupWindow.isDestroyed()) {
-    setupWindow.destroy()
-    setupWindow = undefined
-  }
+  // Create the main window BEFORE closing setup. Closing the only window emits
+  // `window-all-closed`, which quits the app: doing it in the other order raced with that event and
+  // made the shell exit the moment "connect" was pressed.
   if (mainWindow === undefined || mainWindow.isDestroyed()) {
     mainWindow = createMainWindow()
   } else {
     mainWindow.show()
+  }
+  if (setupWindow !== undefined && !setupWindow.isDestroyed()) {
+    const closing = setupWindow
+    setupWindow = undefined
+    closing.destroy()
   }
   await loadRemote()
 }
@@ -277,12 +282,36 @@ function bootstrap(): void {
   openSetup({ replaceMain: false })
 }
 
+/**
+ * Last-resort diagnostics. A crash in the main process closes the window with no message otherwise,
+ * which is indistinguishable from "the app just disappeared". The log deliberately records only the
+ * stack: never the token, never request headers.
+ */
+function logCrash(kind: string, error: unknown): void {
+  try {
+    const message = error instanceof Error ? (error.stack ?? error.message) : String(error)
+    appendFileSync(
+      join(app.getPath('userData'), 'crash.log'),
+      `[${new Date().toISOString()}] ${kind}: ${message}\n`,
+      'utf8',
+    )
+  } catch {
+    // Diagnostics must never become a second failure.
+  }
+}
+
+process.on('uncaughtException', (error) => logCrash('uncaughtException', error))
+process.on('unhandledRejection', (reason) => logCrash('unhandledRejection', reason))
+
 app.whenReady().then(bootstrap).catch((error: unknown) => {
   void dialog.showErrorBox('无法启动', error instanceof Error ? error.message : String(error))
   app.quit()
 })
 
 app.on('window-all-closed', () => {
+  // Only quit when the app really has no windows left: during a healthy "connect" the setup window
+  // closes while the main window exists, and an unconditional quit here closes the whole app.
+  if (BrowserWindow.getAllWindows().length > 0) return
   if (process.platform !== 'darwin') app.quit()
 })
 
